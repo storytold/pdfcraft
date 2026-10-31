@@ -407,6 +407,12 @@ pub(crate) fn render(args: &[String]) -> Result<(), CliError> {
                 let _ =
                     writeln!(std::io::stderr().lock(), "warning: page {page}: a colour that could not be computed was painted in a fallback colour");
             }
+            pdfcraft_render::RenderWarning::PatternTruncated => {
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "warning: page {page}: a tiling pattern could not be fully drawn within its raster safety budget"
+                );
+            }
         }
     }
     Ok(())

@@ -2393,21 +2393,24 @@ trailer << /Root 1 0 R >>
 #[test]
 fn tiling_pattern_form_cycles_are_bounded_and_finite_nesting_paints() {
     let cases = [
-        ("self-cycle", "/Pattern cs /P1 scn 0 0 10 10 re f 0 0 1 rg 0 0 10 10 re f"),
-        ("pattern-form-cycle", "/F Do 0 0 1 rg 0 0 10 10 re f"),
-        ("finite-nesting", "/Pattern cs /P2 scn 0 0 10 10 re f"),
+        ("self-cycle", "0 0 10 10", "/Pattern cs /P1 scn 0 0 10 10 re f 0 0 1 rg 0 0 10 10 re f"),
+        ("pattern-form-cycle", "0 0 10 10", "/F Do 0 0 1 rg 0 0 10 10 re f"),
+        ("finite-nesting", "0 0 10 10", "/Pattern cs /P2 scn 0 0 10 10 re f"),
+        ("wide-self-cycle", "0 0 80 80", "/Pattern cs /P1 scn 0 0 10 10 re f 0 0 1 rg 0 0 10 10 re f"),
+        ("wide-pattern-form-cycle", "0 0 80 80", "/F Do 0 0 1 rg 0 0 10 10 re f"),
+        ("wide-finite-nesting", "0 0 80 80", "/Pattern cs /P2 scn 0 0 10 10 re f"),
     ];
     let pattern_b = "0 0 1 rg 0 0 10 10 re f";
     let form = "/Pattern cs /P1 scn 0 0 10 10 re f";
     let page_content = "/Pattern cs /P1 scn 0 0 40 40 re f 1 0 0 rg 32 32 8 8 re f";
-    for (case, pattern_a) in cases {
+    for (case, bbox, pattern_a) in cases {
         let pdf = format!(
             "%PDF-1.7\n\
                  1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
                  2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 40 40] >> endobj\n\
                  3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Pattern << /P1 5 0 R /P2 6 0 R >> /XObject << /F 7 0 R >> >> >> endobj\n\
                  4 0 obj << /Length {} >> stream\n{page_content}\nendstream endobj\n\
-                 5 0 obj << /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Length {} >> stream\n{pattern_a}\nendstream endobj\n\
+                 5 0 obj << /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [{bbox}] /XStep 10 /YStep 10 /Length {} >> stream\n{pattern_a}\nendstream endobj\n\
                  6 0 obj << /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Length {} >> stream\n{pattern_b}\nendstream endobj\n\
                  7 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length {} >> stream\n{form}\nendstream endobj\n\
                  trailer << /Root 1 0 R >>\n%%EOF",
@@ -2505,11 +2508,11 @@ trailer << /Root 1 0 R >>
 #[test]
 fn tiling_cells_stay_small_whatever_the_step() {
     assert_eq!(hayro::tiling_cell_scale(2.0, 10.0, 3000.0), 2.0, "ordinary cells keep their scale");
-    for step in [1.0e5f32, -1.0e5, 4.0e9] {
+    for step in [1.0e5f64, -1.0e5, 4.0e9] {
         let s = hayro::tiling_cell_scale(2.0, step, 3000.0);
         assert!(s * step.abs() <= 3000.5, "{step}: {s}");
     }
-    assert_eq!(hayro::tiling_cell_scale(2.0, f32::INFINITY, 3000.0), 2.0);
+    assert_eq!(hayro::tiling_cell_scale(2.0, f64::INFINITY, 3000.0), 2.0);
     assert_eq!(hayro::tiling_cell_scale(2.0, 0.0, 3000.0), 2.0);
     // End to end: such a pattern renders, and the page's other content still draws.
     let content = "/Pattern cs /P1 scn 0 0 40 40 re f 1 0 0 rg 0 0 4 4 re f";
@@ -2560,6 +2563,459 @@ trailer << /Root 1 0 R >>
     page.rgba.to_vec()
 }
 
+/// Contributor-original, font-free PDF with an optional colored tiling pattern.
+/// The page and its fill rectangle match the CLI reproduction of #1770's residual clipping.
+fn tiling_artwork_pdf(content: &str, pattern: Option<(&str, &str)>) -> Vec<u8> {
+    tiling_artwork_config_pdf(content, pattern.map(|(bbox, cell)| TilingArtwork::new(bbox, cell)))
+}
+
+struct TilingArtwork<'a> {
+    bbox: &'a str,
+    steps: (f64, f64),
+    matrix: &'a str,
+    cell: &'a str,
+    uncolored: bool,
+    resources: &'a str,
+}
+
+impl<'a> TilingArtwork<'a> {
+    fn new(bbox: &'a str, cell: &'a str) -> Self {
+        Self { bbox, steps: (15.0, 15.0), matrix: "1 0 0 1 0 0", cell, uncolored: false, resources: "" }
+    }
+}
+
+fn tiling_artwork_config_pdf(content: &str, pattern: Option<TilingArtwork<'_>>) -> Vec<u8> {
+    tiling_artwork_config_page_pdf(content, pattern, (612, 792))
+}
+
+fn tiling_artwork_config_page_pdf(content: &str, pattern: Option<TilingArtwork<'_>>, (width, height): (u32, u32)) -> Vec<u8> {
+    let resources = match pattern.as_ref() {
+        Some(p) if p.uncolored => "/ColorSpace << /PC [/Pattern /DeviceRGB] >> /Pattern << /P1 5 0 R >>",
+        Some(_) => "/ColorSpace << /PC /Pattern >> /Pattern << /P1 5 0 R >>",
+        None => "",
+    };
+    let mut objects = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] /Resources << {resources} >> /Contents 4 0 R >>").into_bytes(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()).into_bytes(),
+    ];
+    if let Some(TilingArtwork { bbox, steps: (x_step, y_step), matrix, cell, uncolored, resources }) = pattern {
+        let paint_type = if uncolored { 2 } else { 1 };
+        objects.push(
+            format!(
+                "<< /Type /Pattern /PatternType 1 /PaintType {paint_type} /TilingType 1 /BBox [{bbox}] /XStep {x_step} /YStep {y_step} /Matrix [{matrix}] /Resources << {resources} >> /Length {} >>\nstream\n{cell}\nendstream",
+                cell.len()
+            )
+            .into_bytes(),
+        );
+    }
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n", index + 1).as_bytes());
+        pdf.extend_from_slice(object);
+        pdf.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    pdf
+}
+
+fn render_tiling_artwork(bytes: Vec<u8>, scale: f32) -> RenderedPage {
+    let mut renderer = PageRenderer::new(Arc::new(bytes), RenderConfig::default());
+    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale, ..Default::default() });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    page
+}
+
+/// Equal decimal extents must not become an over-budget cell after coordinate conversion.
+/// These are the tiny-page CLI reproduction and controls, with visible ink and a later sentinel.
+#[test]
+fn decimal_tiling_extents_equal_to_steps_render_without_truncation() {
+    let cases = [
+        ("zero-origin", "0 0 7.1 7.1", "0 0 7.1 7.1", "500 0 0 500 0 0", (7.1, 7.1)),
+        ("translated", "0.2 0.2 7.3 7.3", "0.2 0.2 7.1 7.1", "500 0 0 500 -100 -100", (7.1, 7.1)),
+        ("translated-x", "0.2 0 7.3 7.1", "0.2 0 7.1 7.1", "500 0 0 500 -100 0", (7.1, 7.1)),
+        ("translated-y", "0 0.2 7.1 7.3", "0 0.2 7.1 7.1", "500 0 0 500 0 -100", (7.1, 7.1)),
+        ("negative-x", "0.2 0.2 7.3 7.3", "0.2 0.2 7.1 7.1", "500 0 0 500 -100 -100", (-7.1, 7.1)),
+        ("negative-y", "0.2 0.2 7.3 7.3", "0.2 0.2 7.1 7.1", "500 0 0 500 -100 -100", (7.1, -7.1)),
+        ("extra-bbox-entry", "0.2 0.2 7.3 7.3 42", "0.2 0.2 7.1 7.1", "500 0 0 500 -100 -100", (7.1, 7.1)),
+    ];
+    for scale in [1.0, 2.0] {
+        let mut reference = None;
+        for (name, bbox, rect, matrix, steps) in cases {
+            let body = format!("0 0 1 rg {rect} re f");
+            let mut pattern = TilingArtwork::new(bbox, &body);
+            pattern.steps = steps;
+            pattern.matrix = matrix;
+            let pdf = tiling_artwork_config_page_pdf("q /PC cs /P1 scn 0 0 20 20 re f Q 1 0 0 rg 18 18 1 1 re f", Some(pattern), (20, 20));
+            let page = render_tiling_artwork(pdf, scale);
+            let pixels = page.rgba.as_chunks::<4>().0;
+            let blue = pixels.iter().filter(|p| p[0] < 64 && p[1] < 64 && p[2] > 192 && p[3] > 200).count();
+            let red = pixels.iter().filter(|p| p[0] > 192 && p[1] < 64 && p[2] < 64 && p[3] > 200).count();
+            assert!(blue > 100 && red > 0, "{name} at {scale}: actual pattern ink and later sentinel must paint");
+            assert!(page.warnings.is_empty(), "equal decimal BBox/step must not warn: {name} at {scale}: {:?}", page.warnings);
+            if let Some(expected) = &reference {
+                assert!(&page.rgba == expected, "{name} at {scale}: equal geometry must match the control pixels");
+            } else {
+                reference = Some(page.rgba);
+            }
+        }
+    }
+}
+
+/// A large finite Repeat phase is equivalent modulo the actual texture period.
+/// This is the fresh CLI reproduction: blue artwork and a later red sentinel.
+#[test]
+fn tiling_repeat_large_translation_matches_lattice_control() {
+    let content = "q /PC cs /P1 scn 0 0 20 20 re f Q 1 0 0 rg 18 18 1 1 re f";
+    for scale in [1.0, 2.0] {
+        let vector = render_tiling_artwork(tiling_artwork_config_page_pdf("0 0 1 rg 0 0 20 20 re f 1 0 0 rg 18 18 1 1 re f", None, (20, 20)), scale);
+        for matrix in ["1 0 0 1 -6 0", "1 0 0 1 -117440504 0"] {
+            let mut pattern = TilingArtwork::new("0 0 7 7", "0 0 1 rg 0 0 7 7 re f");
+            pattern.steps = (7.0, 7.0);
+            pattern.matrix = matrix;
+            let page = render_tiling_artwork(tiling_artwork_config_page_pdf(content, Some(pattern), (20, 20)), scale);
+            let pixels = page.rgba.as_chunks::<4>().0;
+            let blue = pixels.iter().filter(|p| p[0] < 64 && p[1] < 64 && p[2] > 192 && p[3] > 200).count();
+            assert_eq!(blue, if scale == 1.0 { 399 } else { 1596 }, "Repeat phase {matrix} at {scale} must paint");
+            assert!(page.warnings.is_empty(), "lattice-equivalent Repeat phase must not warn: {:?}", page.warnings);
+            assert_eq!(page.rgba, vector.rgba, "Repeat phase must match the independent vector control");
+        }
+    }
+}
+
+/// Positive source overlap must survive both f32 narrowing and final raster multiplication.
+#[test]
+fn tiling_precision_preserves_small_true_overlaps_and_the_budget_warning() {
+    for extent in [7.30000005, f64::from_bits(7.3_f64.to_bits() + 1)] {
+        for scale in [1.0, 2.0] {
+            let bbox = format!("0 0 {extent} 7.3");
+            let cell = format!("0 0 1 rg 0 0 {extent} 7.3 re f");
+            let mut pattern = TilingArtwork::new(&bbox, &cell);
+            pattern.steps = (7.3, 7.3);
+            pattern.matrix = "500 0 0 500 0 0";
+            let page = render_tiling_artwork(
+                tiling_artwork_config_page_pdf("q /PC cs /P1 scn 0 0 20 20 re f Q 1 0 0 rg 18 18 1 1 re f", Some(pattern), (20, 20)),
+                scale,
+            );
+            assert_eq!(
+                page.warnings,
+                vec![RenderWarning::PatternTruncated],
+                "actual overlap {extent} at {scale} needs an extra column beyond the 9m budget"
+            );
+            let pixels = page.rgba.as_chunks::<4>().0;
+            assert!(
+                pixels.iter().filter(|p| p[0] < 64 && p[1] < 64 && p[2] > 192 && p[3] > 200).count() > 100,
+                "bounded fallback must retain actual ink"
+            );
+            assert!(pixels.iter().any(|p| p[0] > 192 && p[1] < 64 && p[2] < 64 && p[3] > 200), "later sentinel must paint");
+        }
+    }
+}
+
+/// A narrow non-overlap axis must not spend a whole repeat period of transparent pixels.
+/// Translate its solid interior over the page, away from the filtered texture boundary.
+#[test]
+fn tiling_precision_keeps_narrow_axis_with_other_axis_overlap_within_budget() {
+    for (bbox, rect, matrix) in [("0 0 0.01 30000", "0 0 0.01 1", "300000 0 0 1 -1000 0"), ("0 0 30000 0.01", "0 0 1 0.01", "1 0 0 300000 0 -1000")] {
+        for scale in [1.0, 2.0] {
+            let cell = format!("0 0 1 rg {rect} re f");
+            let mut pattern = TilingArtwork::new(bbox, &cell);
+            pattern.steps = (1.0, 1.0);
+            pattern.matrix = matrix;
+            let page = render_tiling_artwork(
+                tiling_artwork_config_page_pdf("q /PC cs /P1 scn 0 0 20 20 re f Q 1 0 0 rg 18 18 1 1 re f", Some(pattern), (20, 20)),
+                scale,
+            );
+            assert!(page.warnings.is_empty(), "narrow complete source fits raw/padded budgets: {bbox} at {scale}: {:?}", page.warnings);
+            let pixels = page.rgba.as_chunks::<4>().0;
+            let blue = pixels.iter().filter(|p| p[0] < 64 && p[1] < 64 && p[2] > 192 && p[3] > 200).count();
+            let red = pixels.iter().filter(|p| p[0] > 192 && p[1] < 64 && p[2] < 64 && p[3] > 200).count();
+            assert_eq!(blue, if scale == 1.0 { 399 } else { 1596 }, "complete narrow artwork must remain visible");
+            assert_eq!(red, if scale == 1.0 { 1 } else { 4 }, "later sentinel must paint");
+        }
+    }
+}
+
+/// Hostile numeric geometry is bounded and observable, while later page paint survives.
+#[test]
+fn tiling_precision_extreme_geometry_preserves_later_content() {
+    let huge = format!("{:.0}", 1e308);
+    let wide = format!("{:.0}", 1e40);
+    let tiny = format!("0.{}1", "0".repeat(319));
+    let matrix_tiny = format!("0.{}1 0 0 0.{}1 0 0", "0".repeat(99), "0".repeat(99));
+    let matrix_wide = format!("0.{}1 0 0 1 0 0", "0".repeat(37));
+    let cases = [
+        (format!("-{huge} 0 {huge} 1"), (15.0, 15.0), "1 0 0 1 0 0".to_owned(), true, false),
+        (format!("0 -{huge} 1 {huge}"), (15.0, 15.0), "1 0 0 1 0 0".to_owned(), true, false),
+        (format!("-{huge} -{huge} {huge} {huge}"), (15.0, 15.0), "1 0 0 1 0 0".to_owned(), true, false),
+        // The number reader underflows this token to zero; retain its existing silent
+        // zero-area rejection. Reciprocal overflow is tested directly in hayro.
+        (format!("0 0 {tiny} 1"), (1.0, 1.0), "1 0 0 1 0 0".to_owned(), false, false),
+        ("0 0 1 1".to_owned(), (1.0, 1.0), matrix_tiny, true, false),
+        (format!("0 0 {wide} 1"), (1e40, 1.0), matrix_wide, false, false),
+        ("0 0 10 10".to_owned(), (1e40, 1e40), "1 0 0 1 0 0".to_owned(), false, true),
+        ("0 0 10 10".to_owned(), (-1e40, -1e40), "1 0 0 1 0 0".to_owned(), false, true),
+    ];
+    for (bbox, steps, matrix, warns, visible) in cases {
+        for scale in [1.0, 2.0] {
+            let mut pattern = TilingArtwork::new(&bbox, "0 0 1 rg 0 0 10 10 re f");
+            pattern.steps = steps;
+            pattern.matrix = &matrix;
+            let page = render_tiling_artwork(
+                tiling_artwork_config_page_pdf("q /PC cs /P1 scn 0 0 20 20 re f Q 1 0 0 rg 18 18 1 1 re f", Some(pattern), (20, 20)),
+                scale,
+            );
+            assert_eq!(page.warnings, if warns { vec![RenderWarning::PatternTruncated] } else { vec![] }, "numeric range case {bbox} at {scale}");
+            let pixels = page.rgba.as_chunks::<4>().0;
+            assert_eq!(
+                pixels.iter().filter(|p| p[0] > 192 && p[1] < 64 && p[2] < 64 && p[3] > 200).count(),
+                if scale == 1.0 { 1 } else { 4 },
+                "later sentinel must paint: {bbox}"
+            );
+            if visible {
+                assert!(
+                    pixels.iter().filter(|p| p[0] < 64 && p[1] < 64 && p[2] > 192 && p[3] > 200).count() > 40,
+                    "huge signed steps retain the visible first cell"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn wide_bbox_pattern_artwork_repeats_at_step_spacing() {
+    let render = |bytes| {
+        let mut renderer = PageRenderer::new(Arc::new(bytes), RenderConfig::default());
+        let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!((page.width, page.height), (612, 792));
+        page.rgba.to_vec()
+    };
+    let fill = "q /PC cs /P1 scn 50 50 500 500 re f Q";
+    let wide = render(tiling_artwork_pdf(fill, Some(("0 0 80 80", "0 0 1 rg 0 64 8 8 re f"))));
+    let equal = render(tiling_artwork_pdf(fill, Some(("0 0 15 15", "0 0 1 rg 0 4 8 8 re f"))));
+    let mut vectors = String::from("q 50 50 500 500 re W n 0 0 1 rg ");
+    for x in 3..37 {
+        for y in 3..37 {
+            vectors.push_str(&format!("{} {} 8 8 re ", x * 15, y * 15 + 4));
+        }
+    }
+    vectors.push_str("f Q");
+    let explicit = render(tiling_artwork_pdf(&vectors, None));
+    let blue = |pixels: &[u8]| pixels.as_chunks::<4>().0.iter().filter(|p| p[0] < 64 && p[1] < 64 && p[2] > 192 && p[3] > 200).count();
+    assert!(blue(&equal) > 5000, "the equal-BBox pattern control must paint blue");
+    assert!(blue(&explicit) > 5000, "the independent vector control must paint blue");
+    assert!(equal == explicit, "the two controls must agree on the complete RGBA image");
+    assert!(wide == equal, "wide-BBox artwork outside the repeat step must remain visible: wide blue={}, control blue={}", blue(&wide), blue(&equal));
+}
+
+/// Independent vector cells, clipped before translation, are the oracle for BBox and phase.
+/// Compare stable interiors: a rasterized cell and vectors can antialias an edge differently.
+#[test]
+fn wide_bbox_patterns_keep_clipping_phase_and_signed_steps() {
+    let cases = [
+        ("x-only", "0 0 80 15", "0 0 1 rg 64 2 8 7 re f", (15.0, 15.0), "1 0 0 1 0 0"),
+        ("y-only", "0 0 15 80", "0 0 1 rg 2 64 7 8 re f", (15.0, 15.0), "1 0 0 1 0 0"),
+        ("both-and-boundary", "0 0 80 80", "0 0 1 rg 58 58 8 8 re f", (15.0, 15.0), "1 0 0 1 0 0"),
+        ("bbox-clips", "0 0 20 20", "0 0 1 rg 18 18 8 8 re f", (15.0, 15.0), "1 0 0 1 0 0"),
+        ("gaps", "0 0 8 8", "0 0 1 rg 0 0 8 8 re f", (15.0, 15.0), "1 0 0 1 0 0"),
+        ("negative-equal", "0 0 15 15", "0 0 1 rg 2 4 7 7 re f", (-15.0, -15.0), "1 0 0 1 0 0"),
+        ("negative-gap", "0 0 8 8", "0 0 1 rg 0 0 7 7 re f", (-15.0, 15.0), "1 0 0 1 0 0"),
+        ("origin", "2 3 82 83", "0 0 1 rg 64 65 7 7 re f 1 0 0 rg 64 72 3 5 re f", (15.0, 15.0), "1 0 0 1 0 0"),
+        ("fractional-origin", "-2.25 3.5 77.75 83.5", "0 0 1 rg 60 65 7 7 re f", (15.0, 15.0), "1 0 0 1 0.25 0.5"),
+        ("negative-x", "0 0 80 80", "0 0 1 rg 61 64 7 7 re f 1 0 0 rg 61 71 3 5 re f", (-15.0, 15.0), "1 0 0 1 0 0"),
+        ("negative-y", "0 0 80 80", "0 0 1 rg 61 64 7 7 re f 1 0 0 rg 61 71 3 5 re f", (15.0, -15.0), "1 0 0 1 0 0"),
+        ("negative-both", "0 0 80 80", "0 0 1 rg 61 64 7 7 re f 1 0 0 rg 61 71 3 5 re f", (-15.0, -15.0), "1 0 0 1 0 0"),
+        ("turned", "0 0 80 80", "0 0 1 rg 61 64 11 11 re f", (15.0, 15.0), "0 1 -1 0 200 0"),
+        ("reflected", "0 0 80 80", "0 0 1 rg 61 64 11 11 re f", (15.0, 15.0), "-1 0 0 1 200 0"),
+        ("skewed", "0 0 80 80", "0 0 1 rg 61 64 11 11 re f", (15.0, 15.0), "1.2 0.3 -0.2 0.8 15 5"),
+        ("fractional-step", "0 0 80 80", "0 0 1 rg 64 64 11 11 re f", (15.5, 14.5), "1 0 0 1 0 0"),
+    ];
+    for (name, bbox, cell, steps, matrix) in cases {
+        for scale in [1.0, 2.0] {
+            let mut pattern = TilingArtwork::new(bbox, cell);
+            pattern.steps = steps;
+            pattern.matrix = matrix;
+            let actual = render_tiling_artwork(tiling_artwork_config_pdf("q /PC cs /P1 scn 50 50 100 100 re f Q", Some(pattern)), scale);
+            assert!(actual.warnings.is_empty(), "{name}: {:?}", actual.warnings);
+            assert!(
+                actual.rgba.as_chunks::<4>().0.iter().filter(|p| p[0] < 64 && p[1] < 64 && p[2] > 192).count() > 20,
+                "{name}: artwork must remain visible"
+            );
+            let b: Vec<f64> = bbox.split_whitespace().map(|v| v.parse().unwrap()).collect();
+            let mut vectors = format!("q 50 50 100 100 re W n {matrix} cm ");
+            for y in -15..20 {
+                for x in -15..20 {
+                    vectors.push_str(&format!(
+                        "q 1 0 0 1 {} {} cm {} {} {} {} re W n {cell} Q ",
+                        f64::from(x) * steps.0.abs(),
+                        f64::from(y) * steps.1.abs(),
+                        b[0],
+                        b[1],
+                        b[2] - b[0],
+                        b[3] - b[1]
+                    ));
+                }
+            }
+            vectors.push('Q');
+            let expected = render_tiling_artwork(tiling_artwork_pdf(&vectors, None), scale);
+            let px = |p: &RenderedPage, x: usize, y: usize| p.rgba[(y * p.width as usize + x) * 4..][..4].to_vec();
+            let mut checked_ink = 0;
+            let s = scale as usize;
+            for y in 644 * s..740 * s {
+                for x in 52 * s..148 * s {
+                    let color = px(&expected, x, y);
+                    // Rounded fractional periods can filter across an extra pixel.
+                    // Compare interiors beyond that footprint, rather than raster edges.
+                    let radius = if name == "fractional-step" { 3 } else { 2 };
+                    if !(y - radius..=y + radius).all(|ny| (x - radius..=x + radius).all(|nx| px(&expected, nx, ny) == color)) {
+                        continue;
+                    }
+                    if color[..3] != [255, 255, 255] {
+                        checked_ink += 1;
+                    }
+                    assert!(
+                        px(&actual, x, y).iter().zip(&color).all(|(a, b)| a.abs_diff(*b) <= 1),
+                        "{name} scale{scale} pixel{x},{y}: actual {:?}, vector {color:?}",
+                        px(&actual, x, y)
+                    );
+                }
+            }
+            // Tiny clipped marks have no interior at 1x, but all other cases do.
+            if name != "bbox-clips" {
+                assert!(checked_ink > 20, "{name} scale{scale}: oracle must contain stable ink");
+            }
+        }
+    }
+}
+
+/// An isolated CMYK group declines patterns during its ink pass and replays in RGB.
+/// The wide cell must survive that fallback, and the group's paint state must be restored.
+#[test]
+fn wide_bbox_pattern_in_cmyk_group_falls_back_with_artwork_intact() {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let pdf = |space: &str| {
+        let bytes = tiling_artwork_pdf("/PC cs /P1 scn 50 50 100 100 re f", Some(("0 0 80 80", "0 0 1 rg 0 64 8 8 re f")));
+        let mut doc = Document::load_mem(&bytes).unwrap();
+        let resources = doc.get_object((3, 0)).unwrap().as_dict().unwrap().get(b"Resources").unwrap().clone();
+        let content = doc.get_object((4, 0)).unwrap().as_stream().unwrap().content.clone();
+        let group = doc.add_object(Stream::new(
+            dictionary! {
+                "Type" => "XObject", "Subtype" => "Form",
+                "BBox" => Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]),
+                "Group" => dictionary! { "S" => "Transparency", "CS" => Object::Name(space.as_bytes().to_vec()), "I" => true },
+                "Resources" => resources,
+            },
+            content,
+        ));
+        doc.get_object_mut((3, 0)).unwrap().as_dict_mut().unwrap().set("Resources", dictionary! { "XObject" => dictionary! { "G" => group } });
+        doc.set_object((4, 0), Stream::new(lopdf::Dictionary::new(), b"q /G Do Q 1 0 0 rg 170 170 10 10 re f".to_vec()));
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).unwrap();
+        bytes
+    };
+    for scale in [1.0, 2.0] {
+        let cmyk = render_tiling_artwork(pdf("DeviceCMYK"), scale);
+        let rgb = render_tiling_artwork(pdf("DeviceRGB"), scale);
+        let blue = cmyk.rgba.as_chunks::<4>().0.iter().filter(|p| p[0] < 64 && p[1] < 64 && p[2] > 192).count();
+        assert!(blue > 100, "CMYK fallback must retain the wide-BBox pattern ink: scale{scale}, blue={blue}");
+        assert!(cmyk.rgba == rgb.rgba, "pattern fallback must match the RGB group at scale{scale}");
+        assert!(cmyk.warnings.is_empty() && rgb.warnings.is_empty(), "a small valid cell needs no resource fallback");
+        let s = scale as usize;
+        let offset = ((617 * s) * cmyk.width as usize + 175 * s) * 4;
+        assert_eq!(&cmyk.rgba[offset..][..4], &[255, 0, 0, 255], "later paint survives the group");
+    }
+}
+
+#[test]
+fn wide_bbox_pattern_overlap_composites_premultiplied_alpha() {
+    let mut pattern = TilingArtwork::new("0 0 30 15", "/A gs 0 0 1 rg 2 2 8 8 re f 17 2 8 8 re f");
+    pattern.resources = "/ExtGState << /A << /ca 0.5 >> >>";
+    let page = render_tiling_artwork(tiling_artwork_config_pdf("/PC cs /P1 scn 50 50 100 100 re f", Some(pattern)), 1.0);
+    let offset = (727 * page.width as usize + 65) * 4;
+    let color = &page.rgba[offset..][..4];
+    assert!(
+        (62..=65).contains(&color[0]) && (62..=65).contains(&color[1]) && color[2] == 255 && color[3] == 255,
+        "two half-alpha blue copies over white must be 3/4 blue: {color:?}"
+    );
+}
+
+#[test]
+fn wide_bbox_stencil_patterns_keep_base_color_and_stroke_clip() {
+    for (base, expected) in [("0 0 1", [0, 0, 255]), ("1 0 0", [255, 0, 0])] {
+        for content in [
+            format!("q 50 50 100 100 re W n /PC cs {base} /P1 scn 0 0 200 200 re f Q"),
+            format!("q 50 50 100 100 re W n /PC CS {base} /P1 SCN 100 w 50 100 m 150 100 l S Q"),
+        ] {
+            let mut pattern = TilingArtwork::new("0 0 80 80", "0 64 8 8 re f");
+            pattern.uncolored = true;
+            let page = render_tiling_artwork(tiling_artwork_config_pdf(&(content + " 0 1 0 rg 170 170 10 10 re f"), Some(pattern)), 1.0);
+            let at = |x: usize, y: usize| page.rgba[(y * page.width as usize + x) * 4..][..3].to_vec();
+            assert_eq!(at(65, 726), expected);
+            assert_eq!(at(49, 726), [255, 255, 255], "caller clip is retained");
+            assert_eq!(at(175, 617), [0, 255, 0], "later content has no pattern/clip/color leak");
+        }
+    }
+}
+
+#[test]
+fn wide_bbox_raster_plans_are_bounded_after_step_rounding() {
+    assert_eq!(hayro::tiling_bbox_pixels(0.01, 0.01), Some((1, 1)));
+    assert_eq!(hayro::tiling_bbox_pixels(80.01, 15.5), Some((81, 16)));
+    assert_eq!(hayro::tiling_bbox_pixels(3000.0, 3000.0), Some((3000, 3000)));
+    let (_, scale) = hayro::tiling_cell_pixels(0.03, 10.0, 3000.0);
+    assert_eq!(hayro::tiling_bbox_pixels(100000.0 * scale, 10.0), Some((10000, 10)));
+    assert_eq!(hayro::tiling_bbox_pixels(65280.0, 4.0), Some((65280, 4)));
+    assert_eq!(hayro::tiling_bbox_pixels(4.0, 65532.0), None, "backend padding exceeds the area cap");
+    assert_eq!(hayro::tiling_bbox_pixels(1.0, 36000.0), Some((1, 36000)));
+    for (w, h) in [
+        (65281.0, 4.0),
+        (4.0, 65533.0),
+        (3001.0, 3000.0),
+        (1.0, 36001.0),
+        (10000.0, 10000.0),
+        (f64::MAX, 1.0),
+        (f64::NAN, 1.0),
+        (1.0, f64::INFINITY),
+        (0.0, 1.0),
+        (-1.0, 1.0),
+    ] {
+        assert_eq!(hayro::tiling_bbox_pixels(w, h), None, "{w} by {h}");
+    }
+}
+
+#[test]
+fn wide_bbox_long_thin_cell_uses_the_checked_backend_dimensions() {
+    let mut pattern = TilingArtwork::new("0 0 100000 10", "0 0 1 rg 90000 2 8 6 re f");
+    pattern.steps.0 = 10.0;
+    let page = render_tiling_artwork(tiling_artwork_config_pdf("/PC cs /P1 scn 50 50 100 100 re f", Some(pattern)), 1.0);
+    assert!(page.warnings.is_empty(), "{:?}", page.warnings);
+    let offset = (727 * page.width as usize + 65) * 4;
+    let color = &page.rgba[offset..][..4];
+    assert!(color[0] < 64 && color[1] < 64 && color[2] == 255, "artwork beyond the first step paints from a 10000-by-10 source: {color:?}");
+}
+
+#[test]
+fn wide_bbox_over_budget_warns_once_and_later_content_paints() {
+    let mut pattern = TilingArtwork::new("0 0 100000 80", "0 0 1 rg 0 0 0.005 8 re f");
+    pattern.steps.0 = 0.01;
+    let page = render_tiling_artwork(
+        tiling_artwork_config_pdf("/PC cs /P1 scn 50 50 10 10 re f 70 70 10 10 re f 1 0 0 rg 170 170 10 10 re f", Some(pattern)),
+        1.0,
+    );
+    assert_eq!(page.warnings, vec![RenderWarning::PatternTruncated]);
+    let offset = (617 * page.width as usize + 175) * 4;
+    assert_eq!(&page.rgba[offset..][..4], &[255, 0, 0, 255]);
+}
+
 /// #3349: PowerPoint (PDFMaker) writes a picture fill as a tiling pattern drawn once, with
 /// `/XStep 2147480100 /YStep 2147480100` and a matrix that flips y. Fitting such a step into
 /// a cell pixmap shrank the picture below a pixel, so it vanished. The cell's `/BBox` is drawn
@@ -2584,13 +3040,13 @@ fn a_tiling_pattern_drawn_once_shows_its_cell() {
     assert_eq!(at(&tiled, 40, 25, 35), blue, "a step of 20 repeats the cell");
 }
 
-/// #3356 review: a `/BBox` too thin to divide by (not zero, which is refused, but 1e-40
-/// wide) makes the cell scale infinite; it keeps the old path, so no infinite or NaN
-/// geometry reaches the cell renderer, the page renders and what follows still draws.
+/// #3356 review: a 1e-40-wide BBox must not pass unsupported transforms to the sampler.
+/// The f64 estimate remains finite, but the final sampling range is unsupported;
+/// the page and its later solid paint must survive without changing the old pixels.
 #[test]
-fn a_tiling_cell_too_thin_to_scale_keeps_the_old_path() {
+fn a_tiling_cell_too_thin_to_sample_keeps_later_paint() {
     assert!(hayro::usable_cell_scale(2.0, 1.0));
-    for (xs, ys) in [(f32::INFINITY, 1.0), (1.0, f32::NAN), (0.0, 1.0), (1.0, -2.0)] {
+    for (xs, ys) in [(f64::INFINITY, 1.0), (1.0, f64::NAN), (0.0, 1.0), (1.0, -2.0)] {
         assert!(!hayro::usable_cell_scale(xs, ys), "{xs} {ys}");
     }
     let thin = "0.0000000000000000000000000000000000000001";

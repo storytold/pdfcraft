@@ -8,15 +8,13 @@ use crate::font::Glyph;
 use crate::interpret::state::{ActiveTransferFunction, State};
 use crate::shading::Shading;
 use crate::soft_mask::SoftMask;
-use crate::util::{Float32Ext, RectExt, hash128};
+use crate::util::{Float64Ext, hash128};
 use crate::{BlendMode, CacheKey, ClipPath, GlyphDrawMode, Image, PathDrawMode};
 use crate::{FillRule, InterpreterSettings, Paint, interpret};
 use hayro_syntax::content::TypedIter;
-use hayro_syntax::object::Dict;
 use hayro_syntax::object::Stream;
-use hayro_syntax::object::dict::keys::{
-    BBOX, EXT_G_STATE, MATRIX, PAINT_TYPE, RESOURCES, SHADING, X_STEP, Y_STEP,
-};
+use hayro_syntax::object::dict::keys::{BBOX, EXT_G_STATE, MATRIX, PAINT_TYPE, RESOURCES, SHADING, X_STEP, Y_STEP};
+use hayro_syntax::object::{Array, Dict};
 use hayro_syntax::object::{Object, dict_or_stream};
 use hayro_syntax::page::Resources;
 use hayro_syntax::xref::XRef;
@@ -160,9 +158,9 @@ pub struct TilingPattern<'a> {
     /// The bbox of the tiling pattern.
     pub bbox: Rect,
     /// The step in the x direction.
-    pub x_step: f32,
+    pub x_step: f64,
     /// The step in the y direction.
-    pub y_step: f32,
+    pub y_step: f64,
     /// A transformation to apply prior to rendering.
     pub matrix: Affine,
     stream: Stream<'a>,
@@ -183,6 +181,11 @@ impl Debug for TilingPattern<'_> {
 }
 
 impl<'a> TilingPattern<'a> {
+    /// PdfCraft patch (71): expose a renderer's bounded cell fallback to the page warning sink.
+    pub fn report_raster_limit(&self) {
+        (self.settings.warning_sink)(crate::InterpreterWarning::PatternTruncated);
+    }
+
     pub(crate) fn new(
         stream: Stream<'a>,
         ctx: &Context<'a>,
@@ -191,9 +194,25 @@ impl<'a> TilingPattern<'a> {
         let cache_key = stream.cache_key();
         let dict = stream.dict();
 
-        let bbox = dict.get::<hayro_syntax::object::Rect>(BBOX)?.to_kurbo();
-        let x_step = dict.get::<f32>(X_STEP)?;
-        let y_step = dict.get::<f32>(Y_STEP)?;
+        // PdfCraft patch (71): retain the number parser's precision for both endpoints
+        // and steps. The shared Rect reader narrows each endpoint independently to f32,
+        // so an equal decimal width can otherwise become larger than its repeat step.
+        let array = dict.get::<Array<'_>>(BBOX)?;
+        let mut coordinates = array.iter::<f64>();
+        let (x0, y0, x1, y1) = (coordinates.next()?, coordinates.next()?, coordinates.next()?, coordinates.next()?);
+        let x_step = dict.get::<f64>(X_STEP)?;
+        let y_step = dict.get::<f64>(Y_STEP)?;
+        if ![x0, y0, x1, y1, x_step, y_step].iter().all(|v| v.is_finite()) {
+            (ctx.settings.warning_sink)(crate::InterpreterWarning::PatternTruncated);
+            return None;
+        }
+        // As with the shared reader, normalize the first four coordinates and allow
+        // extra entries. Changing the shared Rect parser would affect unrelated data.
+        let bbox = Rect::new(x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1));
+        if !bbox.width().is_finite() || !bbox.height().is_finite() {
+            (ctx.settings.warning_sink)(crate::InterpreterWarning::PatternTruncated);
+            return None;
+        }
 
         if x_step.is_nearly_zero() || y_step.is_nearly_zero() || bbox.is_zero_area() {
             return None;

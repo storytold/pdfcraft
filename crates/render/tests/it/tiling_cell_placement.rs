@@ -165,21 +165,21 @@ fn a_cell_pixmap_spans_exactly_one_step() {
     // 110 dpi, a step of 20: 30.56 pixels, drawn at 31 / 20.
     assert_eq!(hayro::tiling_cell_pixels(110.0 / 72.0, 20.0, 3000.0), (31, 31.0 / 20.0));
     assert_eq!(hayro::tiling_cell_pixels(110.0 / 72.0, -20.0, 3000.0), (31, 31.0 / 20.0), "a negative step");
-    for (scale, step) in [(1.0_f32, 7.3_f32), (2.37, 0.9), (0.013, 1234.5), (3.0, 999.9), (1.0, 2.0e9)] {
+    for (scale, step) in [(1.0_f64, 7.3_f64), (2.37, 0.9), (0.013, 1234.5), (3.0, 999.9), (1.0, 2.0e9)] {
         let (side, drawn) = hayro::tiling_cell_pixels(scale, step, 3000.0);
         assert!((1..=3000).contains(&side), "{scale} {step}: {side}");
-        let span = drawn * f64::from(step);
+        let span = drawn * step;
         assert!((span - f64::from(side)).abs() < 1e-9 * f64::from(side), "{scale} {step}: a step spans {span}, not {side}");
-        if f64::from(scale) * f64::from(step) <= 3000.0 {
-            assert!((span - f64::from(scale) * f64::from(step)).abs() <= 0.5 + 1e-9, "{scale} {step}: drawn {drawn}");
+        if scale * step <= 3000.0 {
+            assert!((span - scale * step).abs() <= 0.5 + 1e-9, "{scale} {step}: drawn {drawn}");
         }
     }
     // A step under half a pixel still gets one pixel (a 0 × N pixmap can't be sampled).
     assert_eq!(hayro::tiling_cell_pixels(0.03, 10.0, 3000.0), (1, 0.1));
     // Steps and scales that aren't finite and positive: the side is bounded, the scale kept.
-    assert_eq!(hayro::tiling_cell_pixels(2.0, f32::INFINITY, 3000.0), (3000, 2.0));
+    assert_eq!(hayro::tiling_cell_pixels(2.0, f64::INFINITY, 3000.0), (3000, 2.0));
     assert_eq!(hayro::tiling_cell_pixels(2.0, 0.0, 3000.0), (1, 2.0));
-    let (side, drawn) = hayro::tiling_cell_pixels(f32::NAN, 20.0, 3000.0);
+    let (side, drawn) = hayro::tiling_cell_pixels(f64::NAN, 20.0, 3000.0);
     assert!(side == 1 && drawn.is_nan());
     // A cap past u16::MAX is lowered to it, and the scale follows the side the pixmap gets.
     let (side, drawn) = hayro::tiling_cell_pixels(2.0, 1.0e6, 1.0e9);
@@ -187,5 +187,5 @@ fn a_cell_pixmap_spans_exactly_one_step() {
     assert!((drawn * 1.0e6 - f64::from(u16::MAX)).abs() < 1e-6, "a step spans the side: {drawn}");
     // A cap that is not a whole number, or not a number, is a whole number of pixels.
     assert_eq!(hayro::tiling_cell_pixels(1.0, 100.0, 30.7), (30, 0.3));
-    assert_eq!(hayro::tiling_cell_pixels(1.0, 100.0, f32::NAN), (1, 0.01));
+    assert_eq!(hayro::tiling_cell_pixels(1.0, 100.0, f64::NAN), (1, 0.01));
 }
