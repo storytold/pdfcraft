@@ -1,3 +1,10 @@
 # Minimum cargo-nextest for this repository: GHSA-vc25-qg58-w57c is fixed in 0.9.150 and CI
 # installs exactly that version, so an older nextest refuses to run (exit 92 REQUIRED_VERSION_NOT_MET).
 nextest-version = "0.9.150"
+
+[profile.default]
+# A test process that never exits would hold `cargo xtask ci` forever: on Windows one has spun at
+# exit while unloading d3d11.dll after its test had passed (#5261). After 10 minutes it is killed
+# and reported as TIMEOUT, by name. The slowest test takes about 25 s on a 12-core machine running
+# the whole suite, so the limit leaves room for much slower runners.
+slow-timeout = { period = "60s", terminate-after = 10 }
