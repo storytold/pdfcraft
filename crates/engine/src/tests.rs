@@ -6694,6 +6694,29 @@ fn xfa_scripts_initialize_calculate_validate_toggle_and_add_rows() {
     assert!(!d2.dirty);
 }
 
+/// An XFA button's click returns only what the click produced. The alerts and errors of the
+/// scripts that ran on open stay in the document's output.
+#[test]
+fn an_xfa_click_returns_only_its_own_script_output() {
+    let template = pdfcraft_xfa::fixtures::scripted_template()
+        .replace("if (qty.rawValue === null) qty.rawValue = 2;", "qty.rawValue = 2; xfa.host.messageBox('opened'); throw new Error('open failed');");
+    let mut s = Session::new();
+    let id = s.open("xfa.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    let o = s.run_javascript(id, "", Some("hello")).unwrap();
+    assert_eq!(o.alerts.iter().map(|a| a.text.as_str()).collect::<Vec<_>>(), ["Hello 2"]);
+    assert!(o.error.is_none(), "{o:?}");
+    let out = s.take_js_output(id);
+    assert_eq!(out.alerts.iter().map(|a| a.text.as_str()).collect::<Vec<_>>(), ["opened"]);
+    assert!(out.errors.iter().any(|e| e.contains("open failed")), "{out:?}");
+    // A click whose script fails returns that error, and the next click does not repeat it.
+    let broken =
+        pdfcraft_xfa::fixtures::scripted_template().replace(r#"xfa.host.messageBox("Hello " + qty.rawValue);"#, "throw new Error('click failed');");
+    let id = s.open("broken.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&broken)), None).unwrap();
+    s.take_js_output(id);
+    assert!(s.run_javascript(id, "", Some("hello")).unwrap().error.is_some_and(|e| e.contains("click failed")));
+    assert!(s.run_javascript(id, "", Some("legacy")).unwrap().error.is_none());
+}
+
 /// A repeating table inside an area of a positioned page (as in real Designer forms): every
 /// row is laid out, the values Adobe wrote (under the area's parent: areas are
 /// not data scopes) are read, a FormCalc total over all rows computes, and what is filled here

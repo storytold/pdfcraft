@@ -8007,6 +8007,94 @@ fn measurement_snap_tool_covers_all_targets() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// An XFA button click through js_run returns only what the click produced, not the
+/// alerts of an earlier fill.
+#[test]
+fn an_xfa_click_through_js_run_does_not_return_an_earlier_fills_alerts() {
+    let dir = workdir("xfa-click-output");
+    std::fs::write(dir.join("scripted.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template())).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "scripted.pdf" }))["doc"].as_u64().unwrap();
+    // 500 fails qty's validation, which shows its message.
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "qty": "500" } }));
+    let r = ok(&mut a, "js_run", json!({ "doc": doc, "script": "", "field": "hello" }));
+    assert_eq!(r["alerts"], json!([{ "message": "Hello 500", "title": null, "icon": "error", "buttons": "ok" }]), "{r}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// form_set_script returns only the console lines its own edit produced, not those of an
+/// earlier fill.
+#[test]
+fn form_set_script_does_not_return_an_earlier_fills_console_lines() {
+    let dir = workdir("set-script-output");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    for (i, name) in ["a", "b"].into_iter().enumerate() {
+        let y = 20 + 30 * i;
+        ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "text", "rect": [20, y, 180, y + 22], "name": name }));
+    }
+    ok(&mut a, "form_set_script", json!({ "doc": doc, "field": "a", "event": "validate", "script": "console.println('validated ' + event.value);" }));
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "a": "7" } }));
+    let r = ok(&mut a, "form_set_script", json!({ "doc": doc, "field": "b", "event": "format", "script": "event.value = event.value;" }));
+    assert_eq!(r["console"], json!([]), "{r}");
+    assert_eq!(r["errors"], json!([]), "{r}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// js_run returns the output of the field scripts that its field changes ran, with the
+/// script's own.
+#[test]
+fn js_run_returns_the_output_of_the_calculations_its_changes_ran() {
+    let dir = workdir("js-run-calc-output");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    for (i, name) in ["a", "b"].into_iter().enumerate() {
+        let y = 20 + 30 * i;
+        ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "text", "rect": [20, y, 180, y + 22], "name": name }));
+    }
+    let calc = "console.println('calculated ' + getField('a').value); event.value = getField('a').value;";
+    ok(&mut a, "form_set_script", json!({ "doc": doc, "field": "b", "event": "calculate", "script": calc }));
+    let r = ok(&mut a, "js_run", json!({ "doc": doc, "script": "getField('a').value = '4'; console.println('set');" }));
+    let console: Vec<&str> = r["console"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    assert!(console.first().is_some_and(|l| l.starts_with("set")), "{r}");
+    assert!(console.iter().any(|l| l.starts_with("calculated 4")), "{r}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The tools that edit a document without going through form_fill's path report the values of
+/// an XFA form that could not be written to its data in `warnings`, once, and leave nothing for
+/// the next tool to report as its own.
+#[test]
+fn edits_report_the_xfa_data_they_could_not_write_once() {
+    let dir = workdir("xfa-data-warnings");
+    // The data holds structured content where the price goes, so its value can't be written.
+    let tpl = pdfcraft_xfa::fixtures::scripted_template().replace(
+        "</xdp:xdp>",
+        "<xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data><form><page1><price><p>7</p></price></page1></form></xfa:data></xfa:datasets>\n</xdp:xdp>",
+    );
+    std::fs::write(dir.join("data.pdf"), pdfcraft_xfa::fixtures::shell(&tpl)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "data.pdf" }))["doc"].as_u64().unwrap();
+    let structured = |out: &Value, key: &str| {
+        out[key].as_array().map_or(0, |w| w.iter().filter(|w| w.as_str().is_some_and(|w| w.contains("structured content"))).count())
+    };
+    let r = ok(&mut a, "js_set_document_script", json!({ "doc": doc, "name": "init", "script": "var ready = true;" }));
+    assert_eq!(structured(&r, "warnings"), 1, "{r}");
+    assert_eq!(r["scripts"][0]["name"], "init", "{r}");
+    let r = ok(
+        &mut a,
+        "form_set_actions",
+        json!({ "doc": doc, "field": "hello", "actions": [{ "trigger": "mouse_enter", "javascript": "var entered = true;" }] }),
+    );
+    assert_eq!(structured(&r, "warnings"), 1, "{r}");
+    let r = ok(&mut a, "js_run", json!({ "doc": doc, "script": "getField('qty').value = 3;" }));
+    assert_eq!(structured(&r, "warnings"), 1, "{r}");
+    // form_set_script lists its edit's own warning in errors, and the earlier tools' are not repeated.
+    let r = ok(&mut a, "form_set_script", json!({ "doc": doc, "field": "qty", "event": "format", "script": "event.value = event.value;" }));
+    assert_eq!(structured(&r, "errors"), 1, "{r}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn growable_xfa_text_paginates_after_fill_save_and_print() {
     let dir = workdir("xfa-growable-text");

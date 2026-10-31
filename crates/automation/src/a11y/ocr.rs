@@ -1,4 +1,4 @@
-use super::{Args, Automation, Result, ToolError, Value, child, failed, json, write_atomic};
+use super::{Args, Automation, Result, ToolError, Value, child, failed, json, with_warnings, write_atomic};
 
 impl Automation {
     /// Recognition settings from the arguments: `dpi` (clamped to 72–600), `language` (refused
@@ -74,7 +74,9 @@ impl Automation {
         // Recognizing needs only permission to change the document; the words it found are
         // returned only when copying is allowed too.
         let (id, copy) = (doc.id, doc.allows_copying());
+        let mark = self.session.js_output_mark(id);
         let found = self.session.recognize_text(id, &pages, settings).map_err(failed)?;
+        let warnings = self.session.take_js_output_since(id, mark).errors;
         let list: Vec<Value> = found
             .iter()
             .map(|p| match &p.skipped {
@@ -83,7 +85,7 @@ impl Automation {
                 None => json!({ "page": p.page + 1, "words": p.words.len(), "already_on_page": p.already_on_page }),
             })
             .collect();
-        Ok(json!({ "words": found.iter().map(|p| p.words.len()).sum::<usize>(), "pages": list }))
+        Ok(with_warnings(json!({ "words": found.iter().map(|p| p.words.len()).sum::<usize>(), "pages": list }), warnings))
     }
 
     /// Whether text recognition's models are installed, the directories searched for them (in
