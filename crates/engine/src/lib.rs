@@ -46,6 +46,7 @@ mod protection;
 mod scan_colours;
 mod scan_fields;
 mod session;
+mod sign_steps;
 pub mod signature_image;
 pub mod signature_scan;
 mod sources;
