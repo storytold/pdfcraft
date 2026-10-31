@@ -186,6 +186,30 @@ fn escape_leaves_the_fill_and_sign_tools() {
     assert_eq!(h.state().quick_tool, QuickTool::Select);
 }
 
+/// A box opened while a comment is selected deselects it: two presses of Escape still close the
+/// box and leave the tool.
+#[test]
+fn escape_leaves_the_text_tool_in_two_presses_after_a_selection() {
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.text");
+    click(&mut h, 50.0, 250.0);
+    h.event(egui::Event::Text("Ada".into()));
+    h.run_steps(1);
+    commit_typed_text(&mut h);
+    assert_eq!(items(&h).len(), 1, "{:?}", items(&h));
+    h.state_mut().views[0].fill_text = None;
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    click(&mut h, 50.0, 150.0);
+    assert!(h.state().views[0].fill_text.is_some(), "a box is open");
+    assert_eq!(h.state().views[0].comments.selected, None, "the new box deselected the comment");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().views[0].fill_text.is_none(), "the first Escape closes the box");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Select, "the second Escape leaves the tool");
+}
+
 #[test]
 fn fill_text_size_controls_new_text_and_survives_settings_restore() {
     let mut h = harness();

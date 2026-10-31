@@ -485,7 +485,10 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, input: PageInput<'_>, free: bo
     match tool {
         FillTool::Text => {
             // Clicking away from an open box commits it: the page sees this click before the box
-            // sees its lost focus, so replacing the box first would drop what was typed.
+            // sees its lost focus, so replacing the box first would drop what was typed. A new box
+            // deselects, as a comment tool's note or text box does: Escape then closes the box and
+            // leaves the tool in two presses.
+            view.comments.selected = None;
             let open = view.fill_text.replace(TypeBox { page, at: top, text: String::new(), size: text_size, color: text_color, focus: true });
             open.filter(|tb| !tb.text.trim().is_empty()).map(|tb| {
                 FillAction::Edit(Box::new(typed_with_color(
