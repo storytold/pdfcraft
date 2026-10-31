@@ -1,4 +1,5 @@
 use super::geometry::{HANDLES, grabs_points, handle_pos, is_markup, reshapable, reshaped, resizable};
+use super::popups::paint_connectors;
 use super::state::{Gesture, PageCx, SETTLE_SECS};
 use super::{
     Annotation, Color32, CommentTool, CornerRadius, DocInfo, DocView, Edit, LineEnding, NewAnnotation, Pos2, QuickTool, Rect, SELECT_BLUE, Shape,
@@ -57,6 +58,7 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
             }
         }
     }
+    paint_connectors(painter, cx, view, pointer);
     paint_gesture(painter, cx, view);
 }
 

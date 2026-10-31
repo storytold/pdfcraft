@@ -222,6 +222,14 @@ pub enum Edit {
         index: usize,
         points: Vec<[f64; 2]>,
     },
+    /// Open, close or move a comment's pop-up window (`rect` in user space; a comment without a
+    /// pop-up gets one).
+    SetAnnotationPopup {
+        page: usize,
+        index: usize,
+        rect: Option<[f64; 4]>,
+        open: Option<bool>,
+    },
     /// Resize a rectangle, oval or text box.
     ResizeAnnotation {
         page: usize,

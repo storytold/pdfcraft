@@ -10190,3 +10190,29 @@ fn simple_rule_scan_drawn(content: &[u8]) -> Vec<u8> {
     }
     write_full(&doc, &SaveOptions::default()).unwrap()
 }
+
+/// comment_popup opens, closes and moves a comment's pop-up, comment_list reports it, and each
+/// change is one undo step with its own label.
+#[test]
+fn comment_popups_are_opened_moved_and_listed() {
+    let dir = workdir("popup");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "note", "at": [30.0, 40.0], "contents": "Look here" }));
+    let listed = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    let note = &listed["comments"][0];
+    assert_eq!(note["popup"]["open"], json!(false), "{listed}");
+    let id = note["id"].as_str().unwrap().to_string();
+    let opened = ok(&mut a, "comment_popup", json!({ "doc": doc, "id": id, "open": true }));
+    assert_eq!(opened["undo"], json!("Open comment pop-up"), "{opened}");
+    let listed = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    assert_eq!(listed["comments"][0]["popup"]["open"], json!(true));
+    let moved = ok(&mut a, "comment_popup", json!({ "doc": doc, "id": id, "rect": [60.0, 60.0, 180.0, 140.0] }));
+    assert_eq!(moved["undo"], json!("Move comment pop-up"));
+    let listed = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    assert_eq!(listed["comments"][0]["popup"]["rect"], json!([60.0, 60.0, 180.0, 140.0]), "{listed}");
+    let closed = ok(&mut a, "comment_popup", json!({ "doc": doc, "id": id, "open": false }));
+    assert_eq!(closed["undo"], json!("Close comment pop-up"));
+    assert!(matches!(err(&mut a, "comment_popup", json!({ "doc": doc, "id": id })), ToolError::InvalidArgs(_)));
+    let _ = std::fs::remove_dir_all(&dir);
+}

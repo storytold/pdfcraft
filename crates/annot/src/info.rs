@@ -38,6 +38,29 @@ pub struct Summary {
     /// A line's two ends (`/L`), or the corners of connected lines, a polygon or a cloud
     /// (`/Vertices`), in user space; empty for other comments.
     pub points: Vec<[f32; 2]>,
+    /// The comment's pop-up window (`/Popup`), when it has one.
+    pub popup: Option<PopupInfo>,
+}
+
+/// A comment's pop-up window (ISO 32000-2 §12.5.6.14): where it sits on the page and whether it
+/// is shown open.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PopupInfo {
+    /// `/Rect` of the `/Popup` annotation, in user space.
+    pub rect: [f32; 4],
+    /// `/Open` of the `/Popup` annotation.
+    pub open: bool,
+}
+
+/// The pop-up `annot` names, as [`PopupInfo`]: `None` when it has none or it is unreadable.
+fn popup_info(doc: &Document, annot: &Dict) -> Option<PopupInfo> {
+    let r = annot.reference(b"Popup")?;
+    let p = doc.get(r);
+    let p = p.as_dict()?;
+    let rect: Vec<f32> = doc.resolve(p.get(b"Rect")?).as_array()?.iter().filter_map(|v| doc.resolve(v).as_f64().map(|x| x as f32)).collect();
+    let [x0, y0, x1, y1] = rect[..] else { return None };
+    let open = p.get(b"Open").map(|o| doc.resolve(o)).is_some_and(|o| matches!(&*o, Object::Bool(true)));
+    Some(PopupInfo { rect: [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)], open })
 }
 
 pub(crate) fn text_value(doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
@@ -145,6 +168,7 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 fill_sign: is_fill_sign(doc, d),
                 no_rotate: drawn_upright(doc, d),
                 points,
+                popup: popup_info(doc, d),
             });
         }
     }

@@ -139,6 +139,15 @@ pub struct CommentView {
     pub editing: Option<(usize, usize, String)>,
     /// The panel should scroll the selected card into view.
     pub reveal: bool,
+    /// A pop-up window's title bar being dragged: the comment, and where the window's top-left
+    /// corner is now on screen.
+    pub popup_drag: Option<(usize, usize, Pos2)>,
+    /// Text being typed in a pop-up window: (page, index, text).
+    pub popup_text: Option<(usize, usize, String)>,
+    /// Where each open pop-up was drawn last frame, for the connector lines and hit-testing.
+    pub popup_rects: Vec<((usize, usize), Rect)>,
+    /// The pop-up the pointer was over last frame.
+    pub popup_hovered: Option<(usize, usize)>,
     /// The "Add a comment" box at the top of the Comments panel.
     pub add_box: String,
     /// The Comments panel's search query (`None`: search closed).

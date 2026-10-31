@@ -1,5 +1,5 @@
 use super::core::{limited_pdf_string, pretty_date, spend};
-use super::model::{Annotation, AttachmentSource, DestView, Field, FieldKind, LayerOp, Link, LinkTarget, RemoteDestination, link_replies};
+use super::model::{Annotation, AttachmentSource, DestView, Field, FieldKind, LayerOp, Link, LinkTarget, Popup, RemoteDestination, link_replies};
 use super::navigation::text_string;
 use super::{Dictionary, DocInfo, Entry, HashMap, HashSet, Inspector, Object, ObjectId};
 
@@ -158,6 +158,13 @@ impl<'a> Inspector<'a> {
                 }
                 _ => Vec::new(),
             };
+            let popup = d.get(b"Popup").ok().and_then(|o| self.dict(o)).map(|p| {
+                let [x0, y0, x1, y1] = rect4(self.resolve(p.get(b"Rect").unwrap_or(&Object::Null)));
+                Popup {
+                    rect: [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)],
+                    open: p.get(b"Open").ok().and_then(|o| self.resolve(o).as_bool().ok()).unwrap_or(false),
+                }
+            });
             let annotation = Annotation {
                 page,
                 subtype,
@@ -180,6 +187,7 @@ impl<'a> Inspector<'a> {
                 fill_sign,
                 no_rotate: d.get(b"F").is_ok_and(|f| draw_flags(self.resolve(f)) & 16 != 0),
                 points,
+                popup,
             };
             kept = kept.saturating_add(retained(&annotation));
             if kept > MAX_ANNOTATION_BYTES {

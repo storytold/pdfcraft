@@ -20,6 +20,11 @@ impl DocView {
     pub(crate) fn page_xform(&self, page: usize) -> Option<PageXform> {
         self.screen_xforms.iter().find(|(p, _)| *p == page).map(|(_, xf)| *xf)
     }
+
+    /// Where the pages are on screen this frame, with their transforms.
+    pub(crate) fn page_xforms(&self) -> Vec<(usize, PageXform)> {
+        self.screen_xforms.iter().map(|(p, xf)| (*p, *xf)).collect()
+    }
 }
 
 /// `r` moved so its corner lies on a whole physical pixel, so that a raster drawn from there
