@@ -205,6 +205,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                 items: &[
                     item("Set page boxes", "square-dashed-mouse-pointer", "page.boxes", Ready),
                     item("Crop pages", "crop", "page.crop", Ready),
+                    item("Bulk crop pages", "crop", "page.bulk_crop", Ready),
                     item("Duplicate pages", "copy-plus", "page.duplicate", Ready),
                     item("Reverse pages", "arrow-up-down", "page.reverse", Ready),
                     item("Page labels", "tag", "page.number", Ready),

@@ -990,6 +990,24 @@ pub fn tools() -> Vec<ToolDef> {
             &["doc"],
         )),
         t(
+            "page_bulk_crop",
+            "Bulk crop pages",
+            "Bulk crop pages with blended, odd/even, or individual margins, plus content-aware auto-crop. Specify margins [left, bottom, right, top], or odd_margins and even_margins, or auto_crop: true with optional padding (default 18 pt / 0.25 in). Undoable.",
+        )
+        .cmd("page.bulk_crop")
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "pages": pages("to crop (default: all)"),
+                "margins": { "type": "array", "items": { "type": "number", "minimum": 0 }, "minItems": 4, "maxItems": 4 },
+                "odd_margins": { "type": "array", "items": { "type": "number", "minimum": 0 }, "minItems": 4, "maxItems": 4 },
+                "even_margins": { "type": "array", "items": { "type": "number", "minimum": 0 }, "minItems": 4, "maxItems": 4 },
+                "auto_crop": { "type": "boolean" },
+                "padding": { "type": "number", "minimum": 0 },
+            }),
+            &["doc"],
+        )),
+        t(
             "doc_header_footer",
             "Add header and footer",
             "Add a header and/or footer to pages. Text boxes: header_left/center/right, footer_left/center/right. Tokens: <<1>> page number, <<n>> page count, <<1 of n>>, <<Page 1 of n>>, <<1/n>>, dates <<m/d/yyyy>> <<yyyy-mm-dd>> <<mmmm d, yyyy>> <<dd.mm.yyyy>> (and more), Bates <<Bates Number#6#1#PREFIX#SUFFIX>>. shrink: true scales the page content down evenly into the room the header and footer leave free, so they don't cover it. font: Helvetica (default), Times or Courier. replace: true swaps out existing ones (Update). Undoable.",

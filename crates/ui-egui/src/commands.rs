@@ -427,6 +427,10 @@ impl PdfCraftApp {
                 self.boxes_draft.seeded = None;
                 self.dialog = Some(Dialog::PageBoxes);
             }
+            "page.bulk_crop" => {
+                self.bulk_crop_draft.seeded = false;
+                self.dialog = Some(Dialog::BulkCrop);
+            }
             "page.extract" => self.open_extract_dialog(),
             "page.rotate_dialog" => {
                 if let Some(i) = active {
