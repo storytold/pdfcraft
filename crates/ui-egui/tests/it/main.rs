@@ -55,6 +55,7 @@ mod object_selection;
 mod ocr;
 mod open_action;
 mod organize_drag;
+mod organize_keys;
 mod pageboxes;
 mod panel_snapshots;
 mod pdf_links;

@@ -64,6 +64,62 @@ impl DocView {
         }
     }
 
+    /// The arrow keys in the organize grid: ← / → go to the previous / next page and ↑ / ↓ a
+    /// row up or down, selecting only that page; with ⇧ the selection runs from the anchor to
+    /// it instead (#3436). ⌘/Ctrl with an arrow is left to the other page keys.
+    pub(crate) fn grid_arrow_keys(&mut self, ctx: &egui::Context) {
+        use egui::{Event, Key, Modifiers};
+        // Every arrow press this frame, in order, each with the Shift it was pressed with: the
+        // frame's modifier state can differ from a press's when Shift changes mid-frame.
+        let presses: Vec<(Key, bool)> = ctx.input_mut(|i| {
+            let mut presses = Vec::new();
+            i.events.retain(|event| match event {
+                Event::Key { key, pressed: true, modifiers, .. }
+                    if matches!(key, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown)
+                        && modifiers.matches_logically(Modifiers::NONE) =>
+                {
+                    presses.push((*key, modifiers.shift));
+                    false
+                }
+                _ => true,
+            });
+            presses
+        });
+        for (key, shift) in presses {
+            self.grid_arrow(key, shift);
+        }
+    }
+
+    /// One arrow press in the organize grid (see [`Self::grid_arrow_keys`]).
+    fn grid_arrow(&mut self, key: egui::Key, shift: bool) {
+        use egui::Key;
+        let Some(last) = self.page_count.checked_sub(1) else { return };
+        let cols = self.grid_cols.max(1);
+        let current = self.current.min(last);
+        let (forward, step) = match key {
+            Key::ArrowLeft => (false, 1),
+            Key::ArrowRight => (true, 1),
+            Key::ArrowUp => (false, cols),
+            _ => (true, cols),
+        };
+        let target = if forward {
+            // ↓ on the row above a short last row goes to the last page.
+            current.checked_add(step).map(|t| t.min(last)).filter(|t| *t != current && (step == 1 || t / cols > current / cols))
+        } else {
+            current.checked_sub(step)
+        };
+        let Some(target) = target else { return };
+        if shift {
+            let anchor = self.select_anchor.filter(|a| *a <= last).unwrap_or(current);
+            self.selected = (anchor.min(target)..=anchor.max(target)).collect();
+            self.select_anchor = Some(anchor);
+        } else {
+            self.clear_page_selection(Some(target));
+        }
+        self.go_to_page(target);
+        self.grid_follow = Some(target);
+    }
+
     /// Drop the page selection; a later ⇧-click ranges from `anchor`.
     pub fn clear_page_selection(&mut self, anchor: Option<usize>) {
         self.selected.clear();
@@ -215,6 +271,33 @@ fn gap_button(ui: &mut egui::Ui, gap: usize, at: Pos2, height: f32, label: Strin
 
 /// Middle-button auto-scroll: its delta scrolls the grid, and the page controls under it are
 /// disabled (but not dimmed) while the gesture lasts.
+/// Where the grid's cells are: its rect, the margin left of the first column, the columns and
+/// the cell size.
+#[derive(Clone, Copy)]
+struct GridLayout {
+    grid: Rect,
+    left: f32,
+    cols: usize,
+    cell: Vec2,
+}
+
+/// Scroll the page Organize opened on to the middle (`reveal`), or the page an arrow key moved
+/// to into view if it is out of view (`follow`). Either may lie in a row the virtualized grid
+/// has not laid out, so its cell is computed rather than found.
+fn scroll_to_page(ui: &egui::Ui, layout: GridLayout, pages: usize, reveal: Option<usize>, follow: Option<usize>) {
+    let GridLayout { grid, left, cols, cell } = layout;
+    let cols = cols.max(1);
+    let cell_of = |page: usize| {
+        let (row, col) = (page / cols, page % cols);
+        Rect::from_min_size(pos2(grid.left() + left + col as f32 * cell.x, grid.top() + row as f32 * cell.y), cell)
+    };
+    if let Some(page) = reveal.filter(|p| *p < pages) {
+        ui.scroll_to_rect_animation(cell_of(page), Some(egui::Align::Center), egui::style::ScrollAnimation::none());
+    } else if let Some(page) = follow.filter(|p| *p < pages) {
+        ui.scroll_to_rect_animation(cell_of(page), None, egui::style::ScrollAnimation::none());
+    }
+}
+
 fn apply_auto_scroll(ui: &mut egui::Ui, middle_gesture: bool, auto_delta: Vec2) {
     if middle_gesture {
         let opacity = ui.opacity();
@@ -271,8 +354,12 @@ pub(super) fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, 
     let ppp = ui.ctx().pixels_per_point();
     // The page image scales with the zoom; the padding and the page number don't.
     let cell = vec2(146.0 * view.grid_zoom + 44.0, 194.0 * view.grid_zoom + 88.0);
-    let anchor = view.grid_anchor.take();
     let reveal = view.grid_reveal.take();
+    let follow = view.grid_follow.take();
+    // A page to reveal or follow wins over the zoom anchor: both set egui's one scroll target,
+    // and the anchor's, set later, would leave that page off screen (#4993 review).
+    let pages = info.pages.len();
+    let anchor = view.grid_anchor.take().filter(|_| !reveal.or(follow).is_some_and(|p| p < pages));
     let mut open_page = None;
     organize_toolbar(view, info, editable, dirty, unobstructed, ui, t);
     let viewport = ui.available_rect_before_wrap();
@@ -294,17 +381,15 @@ pub(super) fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, 
         apply_auto_scroll(ui, middle_gesture, auto_delta);
         ui.add_space(20.0);
         let cols = ((ui.available_width() - 40.0) / cell.x).floor().max(1.0) as usize;
+        view.grid_cols = cols;
         let rows = info.pages.len().div_ceil(cols);
         let left = (ui.available_width() - cols as f32 * cell.x) / 2.0;
-        let (grid, _) = ui.allocate_exact_size(vec2(ui.available_width(), rows as f32 * cell.y), Sense::hover());
-        // The page Organize opened on may lie in a row the virtualized grid has not laid out,
-        // so its cell is computed rather than found.
-        if let Some(page) = reveal.filter(|p| *p < info.pages.len()) {
-            let row = page / cols;
-            let col = page % cols;
-            let c = Rect::from_min_size(pos2(grid.left() + left + col as f32 * cell.x, grid.top() + row as f32 * cell.y), cell);
-            ui.scroll_to_rect_animation(c, Some(egui::Align::Center), egui::style::ScrollAnimation::none());
+        // Clicked where there is no page: the selection goes (the pages are on top of it).
+        let (grid, background) = ui.allocate_exact_size(vec2(ui.available_width(), rows as f32 * cell.y), Sense::click());
+        if background.clicked() {
+            view.clear_page_selection(Some(view.current));
         }
+        scroll_to_page(ui, GridLayout { grid, left, cols, cell }, info.pages.len(), reveal, follow);
         for row in thumbnail_rows(clip.top() - 20.0, clip.bottom() - 20.0, cell.y, rows) {
             let row_rect = Rect::from_min_size(grid.min + vec2(0.0, row as f32 * cell.y), vec2(grid.width(), cell.y));
             for col in 0..cols {
@@ -537,7 +622,12 @@ pub(super) fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, 
     if let Some(zoom) = view.grid_zoom_request.take() {
         let before = view.grid_zoom;
         view.set_grid_zoom(zoom);
-        if view.grid_zoom != before {
+        if let Some(page) = follow.filter(|p| *p < pages).filter(|_| view.grid_zoom != before) {
+            // An arrow moved to `page` this frame: bring it into view again at the new size
+            // instead of anchoring another page (#4993 review).
+            view.grid_follow = Some(page);
+            ui.ctx().request_repaint();
+        } else if view.grid_zoom != before {
             // Keep the page under the pointer (or else the first one in view) where it is.
             let under = pointer.and_then(|p| cells.iter().find(|(_, r)| r.contains(p)));
             let anchor = under.or_else(|| cells.iter().find(|(_, r)| r.bottom() > viewport.top()));

@@ -368,6 +368,10 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
     if pressed(KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Minus)) {
         view.rotate_view(false);
     }
+    // The arrows move through the page grid there, ahead of the page keys below (#3436).
+    if view.organize && arrows {
+        view.grid_arrow_keys(ctx);
+    }
     zoom_shortcuts(view, &pressed);
     // Alt+← / Alt+→ (⌥ on macOS) too, as in Acrobat and browsers, back to where a link was
     // followed from (#3632). Consumed here, before ← / → turn the page. egui matches the pattern
