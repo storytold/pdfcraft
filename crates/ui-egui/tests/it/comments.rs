@@ -1035,9 +1035,6 @@ fn alt_arrows_navigate_instead_of_nudging_the_selected_comment() {
     assert!(comments(&h)[0].rect[0] > before[0], "→ nudged it");
 }
 
-/// Shift holds a new line or arrow level or plumb with where it starts, and each new side of
-/// connected lines or a polygon with the corner before (a CAD drawing's ortho mode). Without
-/// Shift they go where the pointer is.
 /// Over the first corner, where a click closes the polygon, the rubber band runs to that corner
 /// with Shift held too: the closing side the click will make, not a level or plumb one.
 #[test]
@@ -1062,6 +1059,9 @@ fn the_rubber_band_shows_the_closing_side_with_shift_held() {
     h.run_steps(1);
 }
 
+/// Shift holds a new line or arrow level or plumb with where it starts, and each new side of
+/// connected lines or a polygon with the corner before (a CAD drawing's ortho mode). Without
+/// Shift they go where the pointer is.
 #[test]
 fn shift_holds_new_lines_and_sides_level_or_plumb() {
     let mut h = harness(|app| app.set_option("quick", "line").unwrap());
