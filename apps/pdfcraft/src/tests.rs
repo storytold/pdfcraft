@@ -138,6 +138,22 @@ fn the_desktop_frame_is_turned_off_only_when_the_app_draws_one() {
 }
 
 #[test]
+fn the_window_and_windows_taskbar_icons_load_from_the_bundled_png() {
+    let icon = super::native_options(false, false, eframe::Renderer::Glow).viewport.icon.expect("the bundled PNG decodes as the window icon");
+    assert!(icon.width > 0 && icon.height > 0);
+    assert_eq!(icon.rgba.len(), (icon.width as usize) * (icon.height as usize) * 4);
+    #[cfg(target_os = "windows")]
+    {
+        let mut installed = None;
+        super::install_taskbar_icon(super::APP_ICON_PNG, |icon| installed = Some(icon));
+        assert!(installed.is_some(), "issue #3818: ICON_BIG loads and installs from APP_ICON_PNG");
+        let mut bad = None;
+        super::install_taskbar_icon(b"not a png", |icon| bad = Some(icon));
+        assert!(bad.is_none());
+    }
+}
+
+#[test]
 fn a_software_renderer_is_shown_to_the_user() {
     use eframe::wgpu::DeviceType;
     // Issue #519: WARP or llvmpipe is announced in the app, not just in pdfcraft.log.

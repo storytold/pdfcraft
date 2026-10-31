@@ -394,6 +394,43 @@ fn native_wayland(_: &eframe::CreationContext<'_>) -> bool {
     false
 }
 
+/// Decode `png` as a [`winit::window::Icon`] for the Windows taskbar and Alt+Tab (`ICON_BIG`).
+#[cfg(target_os = "windows")]
+fn taskbar_icon(png: &[u8]) -> Option<winit::window::Icon> {
+    let icon = match eframe::icon_data::from_png_bytes(png) {
+        Ok(icon) => icon,
+        Err(e) => {
+            log::warn!("taskbar icon: {e}");
+            return None;
+        }
+    };
+    match winit::window::Icon::from_rgba(icon.rgba, icon.width, icon.height) {
+        Ok(icon) => Some(icon),
+        Err(e) => {
+            log::warn!("taskbar icon: {e}");
+            None
+        }
+    }
+}
+
+/// Install the decoded [`winit::window::Icon`] from `png` via `set` when decoding succeeds.
+#[cfg(target_os = "windows")]
+fn install_taskbar_icon(png: &[u8], set: impl FnOnce(winit::window::Icon)) {
+    if let Some(icon) = taskbar_icon(png) {
+        set(icon);
+    }
+}
+
+/// Windows shows a window's big icon (`ICON_BIG`) in the taskbar and Alt+Tab; `ViewportBuilder::with_icon`
+/// only sets the small icon (`ICON_SMALL`, used by the title bar), so the taskbar and Alt+Tab otherwise
+/// show a generic icon (#3818).
+#[cfg(target_os = "windows")]
+fn set_taskbar_icon(window: &winit::window::Window) {
+    use winit::platform::windows::WindowExtWindows as _;
+    install_taskbar_icon(APP_ICON_PNG, |icon| window.set_taskbar_icon(Some(icon)));
+}
+
+/// Build the [`eframe::AppCreator`] closure that initializes [`PdfCraftApp`] once the window and renderer are ready.
 fn app_creator<'a>(
     launch: Launch,
     started: Rc<Cell<bool>>,
@@ -421,6 +458,9 @@ fn app_creator<'a>(
         // it is set to On or Off.
         #[cfg(target_os = "windows")]
         {
+            if let Some(window) = cc.winit_window() {
+                set_taskbar_icon(window);
+            }
             app.motion.source = Some(motion::source());
         }
         app.set_startup_update_check(true);
