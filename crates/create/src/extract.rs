@@ -100,114 +100,14 @@ fn filters(s: &Stream) -> Vec<Vec<u8>> {
     }
 }
 
-/// The samples of image `s`, decoded: through its filters, with a `/DecodeParms` dictionary given
-/// by reference, or as an array's entry, or with numbers inside by reference, read too (a predictor
-/// given so would otherwise be lost), or, for a JBIG2 image
-/// (its only filter), through a JBIG2 decoder with its `/JBIG2Globals`, as rows of one-bit samples
-/// each starting on a byte, with black as 0, as `JBIG2Decode` gives them (ISO 32000-2 §7.4.7).
+/// The samples of image `s`, decoded ([`Document::decoded_image`]): through its filters, with a
+/// `/DecodeParms` dictionary given by reference, or as an array's entry, or with numbers inside by
+/// reference, read too (a predictor given so would otherwise be lost); a CCITT fax or JBIG2 image
+/// through its decoder too, behind other filters as well, a JBIG2 image with its `/JBIG2Globals`.
+/// A JBIG2 page has to be the image's size, which the caller checked against the export's limit,
+/// before the page is decoded.
 fn decoded(doc: &Document, s: &Stream) -> Result<Vec<u8>, String> {
-    match filters(s).as_slice() {
-        [f] if f == b"JBIG2Decode" => jbig2(doc, s),
-        _ => doc.decoded_image(s).map_err(|e| e.to_string()),
-    }
-}
-
-/// The `/DecodeParms` of a stream with one filter: a dictionary, or the one in an array (7.4.2).
-fn decode_parms(doc: &Document, s: &Stream) -> Dict {
-    let Some(p) = s.dict.get(b"DecodeParms").map(|p| doc.resolve(p)) else { return Dict::default() };
-    let p = match &*p {
-        Object::Array(a) => match a.first() {
-            Some(first) => doc.resolve(first),
-            None => return Dict::default(),
-        },
-        _ => p,
-    };
-    p.as_dict().cloned().unwrap_or_default()
-}
-
-/// The most an image's `/JBIG2Globals` decode to: the symbol and pattern dictionaries an encoder
-/// shares between pages, themselves coded, so far less than any stream may decode to
-/// ([`pdfcraft_cos::MAX_DECODED`], 1 GiB). Globals past it refuse the image.
-const MAX_GLOBALS: usize = 32 << 20;
-
-/// [`decoded`] for a JBIG2 image. Its JBIG2 page has to be the image's width, which the caller
-/// checked against the export's size limit, and within that limit itself: the decoder decodes the
-/// whole page, rows past the image's height too, so a small `/Height` over a far taller page
-/// would cost more than the limit allows. Rows past the image's height are dropped, and too few
-/// rows are refused by the caller. Globals that can't be read refuse the image, rather than
-/// decoding it without them. They are decoded before the page's size is known, so the page's
-/// limit can't bound them; they have [`MAX_GLOBALS`] of their own.
-fn jbig2(doc: &Document, s: &Stream) -> Result<Vec<u8>, String> {
-    let globals = match decode_parms(doc, s).get(b"JBIG2Globals").map(|g| doc.resolve(g)).as_deref() {
-        Some(Object::Stream(g)) => {
-            Some(doc.with_direct_parms(g).decoded_within(MAX_GLOBALS).map_err(|e| format!("the JBIG2 globals can't be read: {e}"))?)
-        }
-        _ => None,
-    };
-    let image = hayro_jbig2::Image::new_embedded(&s.raw, globals.as_deref()).map_err(|e| format!("the JBIG2 image can't be read: {e}"))?;
-    if s.dict.int(b"Width") != Some(i64::from(image.width())) {
-        return Err("the JBIG2 image's width isn't the image's width".into());
-    }
-    if u64::from(image.width()).saturating_mul(u64::from(image.height())) > MAX_PIXELS {
-        return Err(format!("the JBIG2 page, {} × {}, is too large to export", image.width(), image.height()));
-    }
-    let height = s.dict.int(b"Height").and_then(|h| usize::try_from(h).ok()).unwrap_or(0);
-    let mut rows = Rows::new(image.width() as usize, height);
-    image.decode(&mut rows).map_err(|e| format!("the JBIG2 image can't be decoded: {e}"))?;
-    Ok(rows.out)
-}
-
-/// Rows of one-bit samples, each starting on a byte, filled from a decoder's pixels: `columns`
-/// a row and at most `rows` rows. Pixels past a row's end and rows past the last are dropped, so
-/// the output is bounded by the size the caller gave.
-struct Rows {
-    out: Vec<u8>,
-    row: Vec<u8>,
-    x: usize,
-    columns: usize,
-    rows: usize,
-    done: usize,
-}
-
-impl Rows {
-    fn new(columns: usize, rows: usize) -> Self {
-        Rows { out: Vec::new(), row: vec![0; columns.div_ceil(8)], x: 0, columns, rows, done: 0 }
-    }
-
-    /// `count` pixels, as 1 samples when `one`.
-    fn push(&mut self, one: bool, count: usize) {
-        let end = self.x.saturating_add(count);
-        if one {
-            for x in self.x..end.min(self.columns) {
-                if let Some(b) = self.row.get_mut(x / 8) {
-                    *b |= 0x80 >> (x % 8);
-                }
-            }
-        }
-        self.x = end;
-    }
-
-    fn end_row(&mut self) {
-        if self.done < self.rows {
-            self.out.extend_from_slice(&self.row);
-            self.done += 1;
-        }
-        self.row.fill(0);
-        self.x = 0;
-    }
-}
-
-/// JBIG2 codes black as 1, which `JBIG2Decode` gives as 0.
-impl hayro_jbig2::Decoder for Rows {
-    fn push_pixel(&mut self, black: bool) {
-        self.push(!black, 1);
-    }
-    fn push_pixel_chunk(&mut self, black: bool, chunks: u32) {
-        self.push(!black, (chunks as usize).saturating_mul(8));
-    }
-    fn next_line(&mut self) {
-        self.end_row();
-    }
+    doc.decoded_image(s).map_err(|e| e.to_string())
 }
 
 /// The file for one image: its JPEG data as is, or a PNG. An image with transparency (a soft
@@ -218,7 +118,6 @@ fn image(doc: &Document, s: &Stream) -> Result<(&'static str, Vec<u8>), String> 
     let jpeg = matches!(f.last().map(Vec::as_slice), Some(b"DCTDecode" | b"DCT")) && f.len() == 1;
     match f.last().map(Vec::as_slice) {
         Some(b"JPXDecode") => return Err("JPEG 2000 images can't be exported yet".into()),
-        Some(b"JBIG2Decode") if f.len() > 1 => return Err("JBIG2 images inside other filters can't be exported yet".into()),
         Some(b"DCTDecode" | b"DCT") if !jpeg => return Err("JPEG images inside other filters can't be exported yet".into()),
         _ => {}
     }

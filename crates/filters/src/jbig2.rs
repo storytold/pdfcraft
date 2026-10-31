@@ -2,9 +2,12 @@
 //! a generic region, template 0 with its nominal adaptive pixels, typical prediction on, MQ
 //! arithmetic coding ([`crate::mq`]); or the image's marks as symbols ([`symbols`]). Written from
 //! the standard's 6.2.5 (coding a generic region), 7.2 (segment headers), 7.4.1, 7.4.6 and 7.4.8
-//! (the segments) and D.3 (the embedded organisation PDF uses).
+//! (the segments) and D.3 (the embedded organisation PDF uses). Decoding is in [`decode`].
 
+mod decode;
 mod symbols;
+
+pub use decode::{MAX_JBIG2_PIXELS, decode_jbig2};
 
 use crate::FilterError;
 use crate::mq::{Context, MqEncoder};

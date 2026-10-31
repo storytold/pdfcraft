@@ -2044,6 +2044,58 @@ fn rendered_text_becomes_jbig2_symbols() {
     assert!(render(&doc) == before, "the page looks the same");
 }
 
+/// A JBIG2 image is left as it is above 450 ppi, whatever the compression asked for, and so is one
+/// behind another filter: `Document::decoded_image` reads JBIG2, but the monochrome step doesn't
+/// take it yet (a resampled one would come out Flate under Retain). The same picture stored with
+/// Flate is averaged down under each, so it is the JBIG2 that stops it.
+#[test]
+fn jbig2_images_are_left_as_they_are() {
+    // Black squares 16 samples a side on even rows and columns: at 600 ppi, halving leaves no new
+    // pixel covering both samples, so nothing keeps the picture at its resolution.
+    let (w, h) = (1200u32, 480u32);
+    let stride = (w as usize).div_ceil(8);
+    let mut squares = vec![0xFFu8; stride * h as usize];
+    for (top, left) in (0..h as usize / 32).flat_map(|r| (0..w as usize / 32).map(move |c| (r * 32 + 8, c * 32 + 8))) {
+        for y in top..top + 16 {
+            for x in left..left + 16 {
+                squares[y * stride + x / 8] &= !(0x80 >> (x % 8));
+            }
+        }
+    }
+    let coded = pdfcraft_filters::encode_jbig2_generic(&squares, w, h).unwrap();
+    let hex: Vec<u8> = coded.iter().flat_map(|b| format!("{b:02x}").into_bytes()).chain(*b">").collect();
+    let grey = [("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))];
+    for compression in [MonoCompression::CcittG4, MonoCompression::Jbig2, MonoCompression::Retain] {
+        let settings = Settings { mono: MonoSettings { compression, ..MonoSettings::REDUCE }, ..Settings::default() };
+        // 144 × 57.6 pt is 600 ppi.
+        let content = "q 144 0 0 57.6 20 600 cm /Im Do Q";
+        let mut doc = Document::new_empty();
+        let im = mono_image(&mut doc, w, h, &squares, None, &grey);
+        page(&mut doc, &[("Im", im)], content);
+        let r = optimize(&mut doc, &settings).unwrap();
+        assert_eq!(r.images_resampled, 1, "Flate, {compression:?}: {r:?}");
+        for (filters, data) in
+            [(vec![Object::name("JBIG2Decode")], &coded), (vec![Object::name("ASCIIHexDecode"), Object::name("JBIG2Decode")], &hex)]
+        {
+            let mut doc = Document::new_empty();
+            let mut d = Dict::new();
+            d.set(b"Subtype".to_vec(), Object::name("Image"));
+            d.set(b"Width".to_vec(), Object::Int(w.into()));
+            d.set(b"Height".to_vec(), Object::Int(h.into()));
+            for (k, v) in &grey {
+                d.set(k.as_bytes().to_vec(), v.clone());
+            }
+            d.set(b"Filter".to_vec(), Object::Array(filters.clone()));
+            let im = doc.add(Object::Stream(Stream::from_raw(d, data.clone())));
+            page(&mut doc, &[("Im", im)], content);
+            let before = stream(&doc, im);
+            let r = optimize(&mut doc, &settings).unwrap();
+            assert_eq!((r.images_resampled, r.images_recompressed), (0, 0), "{filters:?}, {compression:?}: {r:?}");
+            assert_eq!(stream(&doc, im), before, "{filters:?}, {compression:?}");
+        }
+    }
+}
+
 /// A whole 300 dpi letter page of rendered text, more marks than one JBIG2 text region of the
 /// decoder PdfCraft renders with takes, still looks the same as JBIG2 symbols.
 #[test]
