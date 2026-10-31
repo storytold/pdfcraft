@@ -1732,11 +1732,14 @@ fn monochrome_images_keep_what_they_should() {
         seed ^= seed << 17;
         seed
     };
-    // Twelve dark bands a row, their edges ragged by up to five samples, as a scan's are.
+    // Twelve dark bands a row, their edges ragged by up to four samples, as a scan's are. Group 4
+    // (5,468 bytes) is then smaller than Flate from either of flate2's backends: miniz_oxide (7,187)
+    // and zlib-rs (6,238), which a Windows build of the whole workspace uses because craft-update's
+    // zip turns it on. Ragged by five, Group 4 (7,557) fell between them (8,300 and 7,345).
     let mut ragged = vec![0xFFu8; stride * h as usize];
     for y in 0..h as usize {
         for band in 0..12 {
-            let (x0, x1) = (band * 100 + (next() % 5) as usize, band * 100 + 50 + (next() % 5) as usize);
+            let (x0, x1) = (band * 100 + (next() % 4) as usize, band * 100 + 50 + (next() % 4) as usize);
             for x in x0..x1.min(w as usize) {
                 ragged[y * stride + x / 8] &= !(0x80 >> (x % 8));
             }
