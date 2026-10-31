@@ -690,6 +690,8 @@ pub fn move_bookmark(doc: &mut Document, from: &[usize], to_parent: &[usize], in
         return Err(OutlineError::IntoItself);
     }
     let (r, old_parent) = resolve_path(doc, from)?;
+    // Validate the target before touching the old parent, so an error leaves the outline intact.
+    let parent = container(doc, to_parent)?;
     let mut old = children_of(doc, old_parent, &mut HashSet::from([old_parent]));
     old.retain(|k| *k != r);
     relink(doc, old_parent, &old)?;
@@ -699,7 +701,6 @@ pub fn move_bookmark(doc: &mut Document, from: &[usize], to_parent: &[usize], in
     if to_parent.len() > depth && to_parent[..depth] == from[..depth] && to_parent[depth] > from[depth] {
         to_parent[depth] -= 1;
     }
-    let parent = container(doc, &to_parent)?;
     let mut kids = children_of(doc, parent, &mut HashSet::from([parent]));
     let at = index.min(kids.len());
     kids.insert(at, r);

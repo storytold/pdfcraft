@@ -1732,6 +1732,15 @@ fn count_of(doc: &Document, r: ObjRef) -> Option<i64> {
 }
 
 #[test]
+fn move_bookmark_to_missing_parent_keeps_outline() {
+    let mut d = doc_a();
+    crate::add_bookmark(&mut d, &[], 0, "Intro", 0).unwrap();
+    crate::add_bookmark(&mut d, &[], 9, "Results", 2).unwrap();
+    assert!(crate::move_bookmark(&mut d, &[0], &[7], 0).is_err());
+    assert_eq!(titles(&crate::bookmarks(&d)), ["Intro", "Results"]);
+}
+
+#[test]
 fn bookmarks_add_rename_move_delete() {
     let mut d = doc_a();
     assert!(crate::bookmarks(&d).is_empty());
