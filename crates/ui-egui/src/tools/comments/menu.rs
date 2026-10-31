@@ -1,8 +1,8 @@
 use super::paint::edit_anchor;
 use super::state::{Composer, ComposerKind};
 use super::{
-    Annotation, Color32, CommentPrefs, CommentTool, DocInfo, DocView, Edit, Rect, ReviewState, Rgb, SELECT_BLUE, SWATCHES, Sense, Stroke, color32,
-    icons, theme, tool_for, vec2,
+    Annotation, Color32, CommentPrefs, CommentTool, DocInfo, DocView, Edit, Rect, ReviewState, Rgb, SELECT_BLUE, SWATCHES, Sense, Stroke,
+    bulk_delete_counts, color32, icons, theme, tool_for, vec2,
 };
 
 /// Save attachment… and, for a PDF, Open in a new tab, first in a file attachment comment's
@@ -124,6 +124,17 @@ pub(crate) fn context_menu(
     // or reviewed pages whose comments should no longer move.
     if !info.annotations.is_empty() {
         ui.separator();
+        let target_page = selected.map(|a| a.page).or_else(|| view.comments.context_at.map(|(page, _)| page));
+        // Shown when the page has comments the command counts, enabled when one of them can go.
+        let counts = target_page.map(|page| (page, bulk_delete_counts(&info.annotations, Some(page))));
+        if let Some((page, (total, unlocked))) = counts
+            && total > 0
+            && ui.add_enabled(allowed && unlocked > 0, egui::Button::new(tl!("Delete comments on this page"))).clicked()
+        {
+            view.comments.selected = None;
+            action = Some(CanvasAction::Edit(Box::new(Edit::DeleteAnnotations { pages: Some(vec![page]) })));
+            ui.close();
+        }
         if ui.add_enabled(can_modify, egui::Button::new(tl!("Flatten comments"))).clicked() {
             view.comments.selected = None;
             action = Some(CanvasAction::Edit(Box::new(Edit::Flatten { comments: true, fields: false })));
