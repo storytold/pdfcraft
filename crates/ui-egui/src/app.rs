@@ -132,7 +132,13 @@ impl PdfCraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             pending_opens: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
+            pending_os_opens: std::collections::VecDeque::new(),
+            #[cfg(not(target_arch = "wasm32"))]
             next_open_token: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            native_open_retry_at: None,
+            #[cfg(all(test, not(target_arch = "wasm32")))]
+            open_worker_start_failures: 0,
             #[cfg(all(test, not(target_arch = "wasm32")))]
             open_prepare_gate: None,
             pinned: Default::default(),
@@ -479,13 +485,20 @@ impl eframe::App for PdfCraftApp {
             self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &e)]);
         }
         let os_events = self.os_events.as_mut().map(|poll| poll()).unwrap_or_default();
+        // Coalesce only paths still waiting for admission, preserving their first occurrence.
+        // Idle frames do not copy a queue held behind a long-lived modal.
+        #[cfg(not(target_arch = "wasm32"))]
+        let mut queued_paths: std::collections::HashSet<String> =
+            if os_events.iter().any(|event| matches!(event, OsEvent::Open(paths) if !paths.is_empty())) {
+                self.pending_os_opens.iter().cloned().collect()
+            } else {
+                std::collections::HashSet::new()
+            };
         for e in os_events {
             match e {
                 #[cfg(not(target_arch = "wasm32"))]
                 OsEvent::Open(paths) => {
-                    paths.iter().for_each(|p| {
-                        self.open_path(p);
-                    });
+                    self.pending_os_opens.extend(paths.into_iter().filter(|path| queued_paths.insert(path.clone())));
                     // Files handed to the running app (Finder, or another launch): bring its
                     // window to the front, also when minimized or full screen on another Space.
                     ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
@@ -497,6 +510,8 @@ impl eframe::App for PdfCraftApp {
                 OsEvent::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             }
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_os_opens();
         if let Some((_, id)) = self.active_ids() {
             let out = self.session.take_js_output(id);
             self.handle_js(id, out);

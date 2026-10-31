@@ -262,9 +262,9 @@ impl PdfCraftApp {
         for Picked { target, paths, then } in self.pickers.take() {
             // The pick is in hand: the next picker may show, including one `then` asks for.
             self.pickers.showing.store(false, Ordering::SeqCst);
-            // Opens were polled before this pick was consumed. Wake their retained replies
-            // once, including after cancellation, without polling while a picker waits.
-            if !self.pending_opens.is_empty()
+            // Opens were polled before this pick was consumed. Wake retained replies and
+            // OS paths once, including after cancellation, without polling while a picker waits.
+            if (!self.pending_opens.is_empty() || !self.pending_os_opens.is_empty())
                 && let Some(ctx) = &self.ctx
             {
                 ctx.request_repaint();
@@ -388,6 +388,49 @@ mod tests {
         assert!(ctx.has_requested_repaint(), "cancellation must wake the earlier blocked open poll");
         app.poll_pending_opens();
         assert!(app.pending_opens.is_empty(), "the retained ready reply is consumed on the next poll");
+    }
+
+    #[test]
+    fn cancellation_wakes_a_queued_os_open_without_a_worker_reply() {
+        let mut app = PdfCraftApp::new();
+        let bytes = app.session.create_from_text("recipient", "Unchanged recipient").unwrap();
+        app.open_bytes("a.pdf", Some("/native-picker-wake-a.pdf".into()), bytes.as_ref().clone()).unwrap();
+        app.open_bytes("b.pdf", Some("/native-picker-wake-b.pdf".into()), bytes.as_ref().clone()).unwrap();
+        app.active = Some(0);
+        let a = app.views[0].id;
+        let b = app.views[1].id;
+        let ctx = egui::Context::default();
+        app.ctx = Some(ctx.clone());
+        for _ in 0..2 {
+            let _ = ctx.run_logic(&egui::RawInput::default(), |_| {});
+        }
+        assert!(!ctx.has_requested_repaint());
+        let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let requested = wakes.clone();
+        ctx.set_request_repaint_callback(move |_| {
+            requested.fetch_add(1, Ordering::SeqCst);
+        });
+        app.pending_os_opens.push_back("/native-picker-wake-b.pdf".into());
+        app.pickers.showing.store(true, Ordering::SeqCst);
+        app.poll_os_opens();
+        assert_eq!(app.active_ids().map(|(_, id)| id), Some(a));
+        assert!(app.pending_opens.is_empty(), "no worker result can supply a later wake");
+        assert_eq!(wakes.load(Ordering::SeqCst), 0);
+        let got = Arc::new(Mutex::new(Vec::new()));
+        app.pickers.deliver(None, vec![], record(&got));
+        app.process_picked();
+        assert!(got.lock().unwrap().is_empty(), "Cancel never runs the picker continuation");
+        assert!(ctx.has_requested_repaint());
+        assert_eq!(wakes.load(Ordering::SeqCst), 1, "Cancel requests one follow-up frame");
+        app.poll_os_opens();
+        assert!(app.pending_os_opens.is_empty());
+        assert_eq!(app.active_ids().map(|(_, id)| id), Some(b));
+        assert_eq!(app.views.len(), 2);
+        for id in [a, b] {
+            let doc = app.session.get(id).unwrap();
+            assert_eq!(doc.bytes.as_slice(), bytes.as_slice());
+            assert!(!doc.dirty && doc.can_undo().is_none() && doc.can_redo().is_none());
+        }
     }
 
     #[test]

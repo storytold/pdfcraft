@@ -58,5 +58,9 @@ impl PdfCraftApp {
         if allow && self.session.get(id).is_some() {
             self.set_full_screen(ctx, true);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        if !self.pending_os_opens.is_empty() || !self.pending_opens.is_empty() {
+            ctx.request_repaint();
+        }
     }
 }

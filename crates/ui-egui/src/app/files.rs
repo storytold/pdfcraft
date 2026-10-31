@@ -91,6 +91,11 @@ impl PdfCraftApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn schedule_open(&mut self, request: OpenRequest) -> Result<u64, String> {
         if self.open_worker.is_none() {
+            #[cfg(test)]
+            if self.open_worker_start_failures > 0 {
+                self.open_worker_start_failures -= 1;
+                return Err("couldn't start the document-open worker: injected thread creation failure".into());
+            }
             self.open_worker = Some(
                 open_worker::OpenWorker::new(
                     #[cfg(test)]
@@ -129,7 +134,7 @@ impl PdfCraftApp {
         while let Some(pending) = remaining.next() {
             // A tool, password prompt or file picker belongs to the document just admitted.
             // Keep later replies queued so another open cannot change its recipient.
-            if self.modal_open() || self.pickers.pending() {
+            if self.modal_open() || self.pending_full_screen.is_some() || self.pickers.pending() {
                 waiting.push(pending);
                 waiting.extend(remaining);
                 break;
@@ -147,6 +152,32 @@ impl PdfCraftApp {
         // earlier waiting replies, without consuming a blocked receiver's result.
         waiting.append(&mut self.pending_opens);
         self.pending_opens = waiting;
+    }
+
+    /// OS requests also include already-open tabs, which focus without worker preparation.
+    /// Admit them in order only after the current document interaction has finished.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn poll_os_opens(&mut self) {
+        let now = self.ctx.as_ref().map_or(0.0, |ctx| ctx.input(|i| i.time));
+        while !self.modal_open() && self.pending_full_screen.is_none() && !self.pickers.pending() && self.pending_opens.is_empty() {
+            if self.native_open_retry_at.is_some_and(|deadline| now < deadline) {
+                break;
+            }
+            let Some(path) = self.pending_os_opens.front().cloned() else { break };
+            match self.try_open_path_then(&path, None) {
+                Ok(_) => {
+                    self.pending_os_opens.pop_front();
+                    self.native_open_retry_at = None;
+                }
+                Err(error) => {
+                    if self.native_open_retry_at.is_none() {
+                        self.notify_error(error);
+                    }
+                    self.native_open_retry_at = Some(now + 1.0);
+                    break;
+                }
+            }
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -416,6 +447,13 @@ impl PdfCraftApp {
             if let Some(meta) = p.recovered {
                 self.recoverable.push(meta);
             }
+            // Native intake ran before this prompt closed; resume retained paths next frame.
+            #[cfg(not(target_arch = "wasm32"))]
+            if !self.pending_os_opens.is_empty()
+                && let Some(ctx) = &self.ctx
+            {
+                ctx.request_repaint();
+            }
             return;
         };
         #[cfg(not(target_arch = "wasm32"))]
@@ -533,6 +571,18 @@ impl PdfCraftApp {
     /// the file opened, focused its tab, was handed to the background worker, or failed.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn open_path_then(&mut self, path: &str, then: Option<&'static str>) -> OpenOutcome {
+        match self.try_open_path_then(path, then) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                self.notify_error(error);
+                OpenOutcome::Failed
+            }
+        }
+    }
+
+    /// Only scheduling rejection is retryable. Read and document errors are terminal outcomes.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn try_open_path_then(&mut self, path: &str, then: Option<&'static str>) -> Result<OpenOutcome, String> {
         // One file, one tab (#2166): a file that is open already comes to the front instead,
         // and the tool it was opened for runs on it. One still being opened is left to that.
         if let Some(i) = self.tab_showing(path) {
@@ -541,10 +591,10 @@ impl PdfCraftApp {
             if let Some(command) = then {
                 self.execute(command);
             }
-            return OpenOutcome::Focused;
+            return Ok(OpenOutcome::Focused);
         }
         if self.pending_opens.iter().any(|p| p.path.as_deref().is_some_and(|p| same_file(p, path))) {
-            return OpenOutcome::Pending;
+            return Ok(OpenOutcome::Pending);
         }
         let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
         // Taken before reading: a build that rewrites the file meanwhile still counts as a change.
@@ -553,12 +603,12 @@ impl PdfCraftApp {
         // deterministic inline startup and test flows. Once live, reading and preparation use
         // the bounded worker and commit on the UI thread.
         if self.ctx.is_none() || self.run_inline {
-            match std::fs::read(path) {
+            Ok(match std::fs::read(path) {
                 Ok(bytes) => {
                     let before = self.views.len();
                     if let Err(error) = self.open_bytes(&name, Some(path.to_string()), bytes) {
                         self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &error)]);
-                        return OpenOutcome::Failed;
+                        return Ok(OpenOutcome::Failed);
                     }
                     if let Some(prompt) = self.password_prompt.as_mut().filter(|p| p.path.as_deref() == Some(path)) {
                         // Encrypted: the tool runs once the password is in.
@@ -573,7 +623,7 @@ impl PdfCraftApp {
                     } else {
                         // Open reported success but added no tab and raised no prompt; the
                         // control channel answers this as a failure to open.
-                        return OpenOutcome::Failed;
+                        return Ok(OpenOutcome::Failed);
                     }
                     OpenOutcome::Opened
                 }
@@ -581,7 +631,7 @@ impl PdfCraftApp {
                     self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &error.to_string())]);
                     OpenOutcome::Failed
                 }
-            }
+            })
         } else {
             self.startup_superseded = true;
             match self.schedule_open(OpenRequest {
@@ -595,11 +645,8 @@ impl PdfCraftApp {
                 recovered: None,
                 then,
             }) {
-                Ok(_) => OpenOutcome::Pending,
-                Err(error) => {
-                    self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &error)]);
-                    OpenOutcome::Failed
-                }
+                Ok(_) => Ok(OpenOutcome::Pending),
+                Err(error) => Err(i18n::fmt(tl!("Couldn't open {name}: {e}"), &[("name", &name), ("e", &error)])),
             }
         }
     }
