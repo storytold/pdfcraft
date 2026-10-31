@@ -1759,6 +1759,238 @@ fn truetype_without_an_encoding_reads_its_codes_as_win_ansi() {
     assert_eq!(ocr_layer_text(4, false), expected, "symbolic, no /ToUnicode");
     assert_eq!(ocr_layer_text(32, true), expected, "nonsymbolic, /ToUnicode for ASCII only");
 }
+/// Three columns of upright CJK glyphs placed one per baseline, right to left, as OCR text
+/// layers and some converters write vertical Chinese (#3712).
+fn stacked_vertical_columns(columns: &[&str], spacing: f32) -> Vec<TextGlyph> {
+    let mut glyphs = Vec::new();
+    for (i, column) in columns.iter().enumerate() {
+        for (j, ch) in column.chars().enumerate() {
+            let x = 500.0 - spacing * i as f32;
+            let y = 740.0 + 12.0 * j as f32;
+            glyphs.push(em_box(&ch.to_string(), x, y, x + 12.0, y + 12.0));
+        }
+    }
+    glyphs
+}
+
+#[test]
+fn stacked_vertical_cjk_copies_column_by_column_right_to_left() {
+    let columns = ["春天來得很早，", "山上開滿櫻花。", "遊客慢慢上山。"];
+    let text = layout(stacked_vertical_columns(&columns, 18.0));
+    assert_eq!(text.plain_text(), columns.join("\n"));
+    // A drag down the rightmost column copies just that column.
+    assert_eq!(text.text_of(0..7), columns[0]);
+    // Search finds the columns as the lines they are.
+    assert_eq!(text.find("春天來得很早"), vec![0..6]);
+    assert_eq!(text.find("慢慢上山"), vec![16..20]);
+    // Three lines, one per column.
+    assert_eq!(text.line_of, [0; 7].iter().copied().chain([1; 7]).chain([2; 7]).collect::<Vec<u32>>());
+    // A rectangle around all three columns copies them in reading order, not as one row.
+    let all = text.glyphs_in([460.0, 735.0, 516.0, 830.0]);
+    assert_eq!(all, (0..21).collect::<Vec<_>>());
+    assert_eq!(text.column_text(&all), columns.join("\n"));
+    // A rectangle around the rightmost column copies just that column.
+    let right = text.glyphs_in([494.0, 735.0, 516.0, 830.0]);
+    assert_eq!(text.column_text(&right), columns[0]);
+}
+
+#[test]
+fn a_shallow_rectangle_copies_stacked_columns_in_column_order() {
+    // A rectangle that catches only the top glyph of each column selects three columns, not
+    // the row those glyphs happen to share: the line's whole sequence says it is a column.
+    let columns = ["春天來得很早，", "山上開滿櫻花。", "遊客慢慢上山。"];
+    let text = layout(stacked_vertical_columns(&columns, 18.0));
+    let top = text.glyphs_in([460.0, 738.0, 516.0, 752.0]);
+    assert_eq!(top, vec![0, 7, 14], "one glyph from each column, in content order");
+    assert_eq!(text.column_text(&top), "春\n山\n遊");
+}
+
+#[test]
+fn stacked_vertical_columns_do_not_join_rows_or_each_other() {
+    let columns = ["春天來得很早，", "山上開滿櫻花。", "遊客慢慢上山。"];
+    for spacing in [24.0, 36.0, 48.0] {
+        let text = layout(stacked_vertical_columns(&columns, spacing));
+        assert_eq!(text.plain_text(), columns.join("\n"), "spacing {spacing}");
+        // Never the row-by-row order the columns used to read as.
+        assert_ne!(text.plain_text(), "春客上天慢開來慢滿得上櫻很山花早。。，");
+    }
+}
+
+#[test]
+fn a_vertical_column_keeps_its_glyph_order_whatever_the_x_offsets() {
+    // A converter's text layer can put the glyphs of one column a point or two off each
+    // other's x; the column still reads top to bottom, in drawing order, not left to right.
+    let column = "見出本文";
+    let offsets = [0.0, 2.0, 1.0, 3.0];
+    let mut glyphs = Vec::new();
+    for (j, (ch, dx)) in column.chars().zip(offsets).enumerate() {
+        let (x, y) = (200.0 + dx, 100.0 + 12.0 * j as f32);
+        glyphs.push(em_box(&ch.to_string(), x, y, x + 12.0, y + 12.0));
+    }
+    let text = layout(glyphs);
+    assert_eq!(text.plain_text(), column);
+    assert!(text.line_of.iter().all(|l| *l == 0));
+}
+
+#[test]
+fn horizontal_cjk_text_stays_horizontal() {
+    // Adjacent CJK glyphs on one baseline are not a vertical stack, even when they kern into
+    // each other, and a paragraph of them keeps its lines in order.
+    let line = "春天來得很早";
+    let mut glyphs = Vec::new();
+    for (j, ch) in line.chars().enumerate() {
+        let x = 72.0 + 11.0 * j as f32;
+        glyphs.push(em_box(&ch.to_string(), x, 100.0, x + 12.0, 112.0));
+    }
+    let text = layout(glyphs);
+    assert_eq!(text.plain_text(), line);
+    assert!(text.line_of.iter().all(|l| *l == 0));
+}
+
+#[test]
+fn a_vertical_column_below_horizontal_text_keeps_both_orders() {
+    let mut glyphs = Vec::new();
+    for (j, ch) in "見出し".chars().enumerate() {
+        let x = 200.0 + 12.0 * j as f32;
+        glyphs.push(em_box(&ch.to_string(), x, 100.0, x + 12.0, 112.0));
+    }
+    // A column of six characters, under the heading and to the right of the page's left edge.
+    for (j, ch) in "縦書き本文".chars().enumerate() {
+        let y = 300.0 + 12.0 * j as f32;
+        glyphs.push(em_box(&ch.to_string(), 200.0, y, 212.0, y + 12.0));
+    }
+    let text = layout(glyphs);
+    assert_eq!(text.plain_text(), "見出し\n縦書き本文");
+}
+
+/// Layout under a hang guard: a block order that takes the block it just took leaves
+/// `remaining` unchanged, so the test fails at the guard instead of exhausting memory.
+fn layout_bounded(glyphs: Vec<TextGlyph>) -> PageText {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(layout(glyphs));
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(10)).expect("layout finishes: each block is taken exactly once")
+}
+
+#[test]
+fn a_vertical_column_above_horizontal_text_ends_the_walk() {
+    // Two upright CJK glyphs stacked near the top of the page, then a horizontal line well
+    // below them. The column is taken first; the line shares no vertical space with it, so
+    // no successor is left of the column while a block remains.
+    let mut glyphs = Vec::new();
+    for (j, ch) in "縦書".chars().enumerate() {
+        let y = 100.0 + 12.0 * j as f32;
+        glyphs.push(em_box(&ch.to_string(), 200.0, y, 212.0, y + 12.0));
+    }
+    for (j, ch) in "本文".chars().enumerate() {
+        let x = 72.0 + 12.0 * j as f32;
+        glyphs.push(em_box(&ch.to_string(), x, 400.0, x + 12.0, 412.0));
+    }
+    let text = layout_bounded(glyphs);
+    assert_eq!(text.plain_text(), "縦書\n本文");
+    assert_eq!(text.glyphs.len(), 4, "each glyph is emitted exactly once");
+    assert_eq!(text.line_of, [0, 0, 1, 1]);
+}
+
+#[test]
+fn two_vertically_disjoint_vertical_columns_both_end() {
+    // Two groups of stacked upright CJK glyphs with no vertical space between them. After
+    // the first group is taken nothing is left of it, but the second group still remains.
+    let mut glyphs = Vec::new();
+    for (j, ch) in "上組".chars().enumerate() {
+        let y = 100.0 + 12.0 * j as f32;
+        glyphs.push(em_box(&ch.to_string(), 300.0, y, 312.0, y + 12.0));
+    }
+    for (j, ch) in "下組".chars().enumerate() {
+        let y = 400.0 + 12.0 * j as f32;
+        glyphs.push(em_box(&ch.to_string(), 300.0, y, 312.0, y + 12.0));
+    }
+    let text = layout_bounded(glyphs);
+    assert_eq!(text.plain_text(), "上組\n下組");
+    assert_eq!(text.glyphs.len(), 4, "each glyph is emitted exactly once");
+    assert_eq!(text.line_of, [0, 0, 1, 1]);
+}
+
+#[test]
+fn a_vertical_column_that_starts_lower_is_read_in_its_turn() {
+    // Four columns right to left, the third starting 30 pt lower than the others, as an
+    // indented or ragged column does. The walk follows each column to its left neighbour.
+    let columns = ["春夏秋冬梅雨", "東西南北中央", "山川草木鳥獣", "日月星辰天地"];
+    let mut glyphs = Vec::new();
+    for (i, column) in columns.iter().enumerate() {
+        let x = 500.0 - 18.0 * i as f32;
+        let down = if i == 2 { 30.0 } else { 0.0 };
+        for (j, ch) in column.chars().enumerate() {
+            let y = 100.0 + down + 12.0 * j as f32;
+            glyphs.push(em_box(&ch.to_string(), x, y, x + 12.0, y + 12.0));
+        }
+    }
+    let text = layout_bounded(glyphs);
+    assert_eq!(text.plain_text(), columns.join("\n"));
+}
+
+/// The page from #3712: three columns of upright Traditional Chinese glyphs placed one per
+/// baseline, right to left, the way OCR text layers and some converters write vertical text.
+/// The extractor (which selection copy and search read) puts them in column order.
+#[test]
+fn stacked_vertical_cjk_from_a_pdf_copies_in_reading_order() {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let columns = ["春天來得很早，", "山上開滿櫻花。", "遊客慢慢上山。"];
+    let mut chars: Vec<char> = columns.iter().flat_map(|c| c.chars()).collect();
+    chars.sort_unstable();
+    chars.dedup();
+    let cid: std::collections::HashMap<char, u16> = chars.iter().enumerate().map(|(i, c)| (*c, i as u16 + 1)).collect();
+    let mut body = String::new();
+    for (i, column) in columns.iter().enumerate() {
+        for (j, ch) in column.chars().enumerate() {
+            body.push_str(&format!("1 0 0 1 {} {} Tm <{:04X}> Tj ", 500 - 18 * i, 740 - 12 * j, cid[&ch]));
+        }
+    }
+    let operators = format!("/P << /MCID 0 >> BDC BT /CH 12 Tf {body}ET EMC");
+    let mut cmap = String::from(
+        "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def /CMapName /Adobe-Identity-UCS def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange\n",
+    );
+    cmap.push_str(&format!("{} beginbfchar\n", cid.len()));
+    for (ch, code) in &cid {
+        cmap.push_str(&format!("<{code:04X}> <{:04X}>\n", *ch as u32));
+    }
+    cmap.push_str("endbfchar endcmap CMapName currentdict /CMap defineresource pop end end");
+    let mut doc = Document::with_version("1.7");
+    let unicode = doc.add_object(Stream::new(dictionary! {}, cmap.into_bytes()));
+    let descendant = doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "CIDFontType2", "BaseFont" => "CraftMing",
+        "CIDSystemInfo" => dictionary! { "Registry" => Object::string_literal("Adobe"), "Ordering" => Object::string_literal("Identity"), "Supplement" => 0 },
+        "DW" => 1000, "CIDToGIDMap" => "Identity"
+    });
+    let font = doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "Type0", "BaseFont" => "CraftMing", "Encoding" => "Identity-H",
+        "DescendantFonts" => vec![Object::Reference(descendant)], "ToUnicode" => unicode
+    });
+    let content = doc.add_object(Stream::new(dictionary! {}, operators.into_bytes()));
+    let pages = doc.new_object_id();
+    let page = doc.add_object(dictionary! {
+        "Type" => "Page", "Parent" => pages,
+        "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(595), Object::Integer(842)],
+        "Resources" => dictionary! { "Font" => dictionary! { "CH" => font } }, "Contents" => content
+    });
+    doc.objects.insert(pages, dictionary! { "Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1 }.into());
+    let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages });
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+    let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap();
+    let expected = columns.join("\n");
+    assert_eq!(text.plain_text(), expected);
+    // A drag down the rightmost column selects just that column, and search finds each one.
+    let glyphs = columns[0].chars().count();
+    assert_eq!(text.text_of(0..glyphs), columns[0]);
+    assert_eq!(text.find("春天來得很早"), vec![0..6]);
+    assert_eq!(text.find("遊客慢慢上山"), vec![14..20]);
+    // Three lines, one per column, and no line reads across the page.
+    assert_eq!(text.line_of, [0; 7].iter().copied().chain([1; 7]).chain([2; 7]).collect::<Vec<u32>>());
+}
 
 /// Issue #2929: a footnote reference (superscript) on a line stays in that line instead of
 /// splitting out as a raised segment that steals the block's tail and pushes the host line

@@ -1,6 +1,6 @@
 # PdfCraft roadmap
 
-> **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; estimates unchanged)
+> **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; M2, #3712: vertical CJK text placed one upright glyph per baseline is laid out as columns for selection, copy and search; horizontal and Identity-V text unchanged; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: integrate main fa5f9f8c; retain CJK viewer and upstream raster regressions, restore explicit display_config imports; estimates unchanged)
 > **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** patch (M2, PR #4172: integrate main 5af10276; retain both roadmap histories and viewer-only CJK font policy; estimates unchanged)
 > **Last reviewed:** 2026-10-27 · **Last updated:** 2026-10-27 · **Change:** patch (M2, PR #4172: integrate main 1dd2737b; preserve viewer-only CJK fallback and regression coverage across engine, renderer and Combine module splits; estimates unchanged)
@@ -299,6 +299,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-20 (M3, #3541/#3620):** Comment hover follows the individual marked lines instead of the enclosing multiline rectangle, and overlapping comments follow paint order. Synthetic UI regressions cover all four text-markup kinds, page/view rotations, neighboring highlights, legacy rectangle fallback and unchanged PDF bytes. Estimates unchanged.
 - **2026-10-20 (M10, #3532 partial):** Vector printing retains existing widget artwork when its appearance lacks Subtype. A print-owned copy adds Form dispatch metadata. The source stream and all explicit subtypes stay unchanged. Synthetic source/output raster checks cover resources, selected/shared appearances, placement, flags and content modes. Appearance regeneration and physical printer validation remain outside this fix. Estimates unchanged.
 
+- **2026-10-22 (M2, #3712):** Selection and copy read vertical Chinese and Japanese correctly when the text is written without a vertical font: one upright glyph placed on its own, top to bottom, columns right to left (the way OCR text layers and some converters write vertical text). Reading-order layout now groups consecutive upright CJK glyphs that stack with the same x into one vertical column before it forms horizontal segments, so it no longer lays out rows across the columns. Columns read top to bottom and are ordered right to left, which fixes copy, selection and search; text drawn with a vertical font (Identity-V) or a turned baseline and ordinary horizontal text are unchanged. Synthetic PDF regressions cover the reported page (copy, column selection, search hits), column spacing from 24 to 48 pt, a horizontal CJK paragraph and a vertical column under a heading. Estimates unchanged.
 - **2026-10-20 (M5, arrow keys move comments):** With a comment selected, the arrow keys move it a screen pixel and ⌘/Ctrl or Shift and an arrow ten, instead of scrolling the view or turning the page; up is up on screen at any zoom and rotation, and each press is one undo step. Text markup and locked comments stay put. Estimates unchanged.
 
 - **2026-10-19 (M14, #3373):** The main menu and its long submenus scroll in short windows, keeping their commands reachable. Estimates unchanged.
@@ -721,6 +722,7 @@ Newest first: the date, what moved, and the new overall estimate.
 ## Revision history
 
 **2026-10-25 · minor:** M14 localization current state: Arabic catalogs stay logical, Arabic/Kurdish labels take an explicit RTL direction, and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native Simplified Chinese uses LXGW WenKai Lite; the web build has no Hans face. Estimates unchanged.
+**2026-10-22 · minor:** M2/#3712: reading-order layout groups upright CJK glyphs stacked one per baseline into vertical columns (top to bottom, columns right to left), so selection, copy and search follow vertical Chinese and Japanese instead of row-by-row order. Horizontal text, Identity-V text and turned baselines are unchanged. Estimates unchanged.
 
 **2026-10-15 · minor:** M14/#2383 candidate: GPU device requests clamp unsupported limits while retaining the adapter texture extent. Synthetic V3D/downlevel regressions and Windows GPU-required tests pass; Raspberry Pi hardware remains unverified. Estimates unchanged.
 
@@ -735,6 +737,7 @@ Newest first: the date, what moved, and the new overall estimate.
 | 2026-10-23 | minor | M10: Export all images and Save Image As apply soft-mask Decode intervals to PNG alpha before resizing, including inverted/subrange, indirect, packed and JPEG masks. Estimates unchanged. |
 | 2026-10-23 | minor | M10: annotation appearances use unoccupied XObject names, preserving original page artwork and distinct appearances through inherited resources and print/reopen. Estimates unchanged. |
 | 2026-10-22 | minor | M4, #3916 partial: document edits and Undo/Redo cancel Organize drags. Pointer-release and save/reopen regressions check page order. Estimates unchanged. |
+| 2026-10-22 | minor | M2/#3712: vertical CJK written with one upright glyph per baseline is laid out as columns (top to bottom, right to left) for selection, copy and search; horizontal, Identity-V and turned text unchanged. Estimates unchanged. |
 | 2026-10-20 | minor | M4: initial-view window and interface options resolve indirect boolean ViewerPreferences values; synthetic true/false and save/reopen regressions retain defaults for malformed entries. Estimates unchanged. |
 | 2026-10-20 | minor | M6, #3502: form detection preserves comments across content streams; estimates unchanged. |
 | 2026-10-20 | minor | M10, #3532 partial: vector printing retains existing appearances with absent Subtype; estimates unchanged. |
