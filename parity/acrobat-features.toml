@@ -5248,8 +5248,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["tools.js_console"]
 tools = ["js_run"]
-evidence = ["crates/ui-egui/tests/it/javascript.rs::console_runs_scripts_against_the_document", "crates/automation/tests/it/automation.rs::javascript_through_tools"]
-notes = "\u2318J: run JavaScript against the document, with console output, results and errors."
+evidence = ["crates/ui-egui/tests/it/javascript.rs::console_runs_scripts_against_the_document", "crates/automation/tests/it/automation.rs::javascript_through_tools", "crates/ui-egui/tests/it/javascript.rs::a_failing_button_script_says_so_with_a_way_to_the_console", "crates/ui-egui/tests/it/javascript.rs::a_script_that_only_prints_or_shows_a_message_raises_no_failure_notice"]
+notes = "\u2318J: run JavaScript against the document, with console output, results and errors. A form script that fails (a button's click and the calculations it sets off, a field change, an XFA form's opening; everything that hands the app script output, so a signing step's scripts too once they run, #4517) writes its error to the console and says so in one notice for that action, quoting the first error, with a button to the console; it waits behind the scripts' own messages and doesn't take focus. Console prints and messages raise none. A design choice, not measured: another viewer shows the console on errors when its preference says to; this points to the console instead. Headless, js_run reports a button's or the console's error and the failing document scripts' errors; form_fill doesn't report the field scripts' errors its changes set off."
 
 [[feature]]
 id = "form.js-debugger"

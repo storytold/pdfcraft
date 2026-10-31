@@ -456,9 +456,14 @@ impl PdfCraftApp {
                 if let (Some(view), Some(doc)) = (self.views.get_mut(i), self.session.get(id)) {
                     view.document_replaced(&doc.info);
                 }
-                // What the form's scripts said while it opened, as on opening.
-                let out = self.session.take_js_output(id);
-                self.handle_js(id, out);
+                // What the form's scripts said while it opened, as on opening. A tab in the
+                // background keeps it until it is shown, as its other script output waits (the
+                // frame hands on only the active document's): its messages and a failure's
+                // notice aren't said over another document.
+                if self.active == Some(i) {
+                    let out = self.session.take_js_output(id);
+                    self.handle_js(id, out);
+                }
             }
             Err(e) => {
                 let name = self.session.get(id).map(|d| d.name.clone()).unwrap_or_default();
@@ -606,6 +611,28 @@ mod tests {
         app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
         assert!(!app.save_active(SaveTarget::InPlace));
         assert!(matches!(app.dialog, Some(crate::Dialog::OverwriteChanged)));
+    }
+
+    /// A tab in the background reloaded from disk with a form script that fails says so once
+    /// it is brought forward, not over the tab in front: its scripts' output waits for it, as a
+    /// background document's always does.
+    #[test]
+    fn a_background_reload_whose_script_fails_says_so_when_its_tab_is_shown() {
+        let (_dir, path) = TempDir::new("reload-script-failure", &fixture(2));
+        let mut h = harness(&path);
+        // An XFA form whose initialize script, run on opening, throws.
+        let template = pdfcraft_xfa::fixtures::growable_text_template(true).replacen("0;", "throw new Error('boom');", 1);
+        let failing = pdfcraft_xfa::fixtures::shell(&template);
+        let app = h.state_mut();
+        app.open_bytes("front.pdf", None, fixture(1)).unwrap();
+        h.run_steps(2);
+        let app = h.state_mut();
+        assert_eq!(app.active, Some(1), "the new document is in front");
+        app.reload_view(0, Arc::new(failing));
+        assert!(app.toast_failure.is_none(), "nothing said over the tab in front");
+        app.active = Some(0);
+        h.run_steps(2);
+        assert!(h.state().toast_failure.as_deref().is_some_and(|e| e.contains("boom")), "said once its tab is shown: {:?}", h.state().toast_failure);
     }
 
     /// #1802: the watcher found version B of the file, then the user saved version C over it

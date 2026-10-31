@@ -155,6 +155,139 @@ fn every_message_a_script_shows_takes_the_toast_in_turn() {
     assert!(!h.state_mut().next_script_message());
 }
 
+/// A form whose scripts fail and don't: a `broken` button fills `greeting` and then calls a
+/// function that doesn't exist, and `total`'s calculation, which that change sets off, fails as
+/// well; `printer` only prints to the console and `notify` only shows a message; `name` is a
+/// plain text field to type into.
+fn failing_form() -> Vec<u8> {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R 9 0 R] /CO [5 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 10 0 R >> >> >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R 9 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (greeting) /Rect [20 250 280 270] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (total) /Rect [20 160 280 180] /P 3 0 R /F 4 /AA << /C << /S /JavaScript /JS (alsoMissing\\(\\);) >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (broken) /Rect [20 200 90 230] /P 3 0 R /F 4 /A << /S /JavaScript /JS (getField\\('greeting'\\).value = 'half done'; nosuchfunction\\(\\);) >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (printer) /Rect [110 200 180 230] /P 3 0 R /F 4 /A << /S /JavaScript /JS (console.println\\('Just a note'\\);) >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (notify) /Rect [200 200 270 230] /P 3 0 R /F 4 /A << /S /JavaScript /JS (app.alert\\('Noted'\\);) >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Rect [20 100 280 120] /P 3 0 R /F 4 >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// The app with [`failing_form`] open at a zoom where every field is on screen.
+fn failing_harness() -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("failing.pdf", None, failing_form()).unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    h.run_steps(6);
+    h
+}
+
+/// Click field `name`'s widget on the page, as the pointer does.
+fn click_field(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
+    let p = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let f = doc.form.iter().find(|f| f.name == name).unwrap();
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen").center()
+    };
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(3);
+}
+
+/// What the toast says now, if anything.
+fn toast_text(h: &Harness<'static, PdfCraftApp>) -> Option<String> {
+    h.state().toast.clone().map(|t| t.0)
+}
+
+/// A button whose script fails says so once for the click, with a button to the JavaScript
+/// console, where the error otherwise only went: the calculation the click set off failing too
+/// makes no second notice, nor does clicking again, typing goes on while the notice shows, and
+/// its button opens the console with both errors.
+#[test]
+fn a_failing_button_script_says_so_with_a_way_to_the_console() {
+    let mut h = failing_harness();
+    click_field(&mut h, "broken");
+    let notice = toast_text(&h).unwrap_or_default();
+    assert!(notice.starts_with("A script in this form failed: ") && notice.contains("nosuchfunction"), "{notice}");
+    let log = h.state().js_console.log.clone();
+    assert!(log.iter().any(|l| l.contains("nosuchfunction")), "{log:?}");
+    assert!(log.iter().any(|l| l.contains("alsoMissing")), "the calculation the click set off failed too: {log:?}");
+    assert_eq!(h.state().script_failure, None, "one notice for the click: nothing waits after it");
+    h.get_by_label("JavaScript Console");
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        h.render().unwrap().save(format!("{dir}/script-failure-notice.png")).unwrap();
+        h.state_mut().set_option("theme", "dark").unwrap();
+        h.run_steps(3);
+        h.render().unwrap().save(format!("{dir}/script-failure-notice-dark.png")).unwrap();
+        h.state_mut().set_option("theme", "light").unwrap();
+        h.run_steps(3);
+    }
+    // Clicking again fails again: the notice says so from its start, still one.
+    click_field(&mut h, "broken");
+    assert_eq!(toast_text(&h), Some(notice.clone()));
+    assert_eq!(h.state().script_failure, None);
+    // Typing into a field goes on while the notice shows: it takes no focus.
+    click_field(&mut h, "name");
+    h.event(egui::Event::Text("Ada".into()));
+    h.run_steps(2);
+    let typing = h.state().views[0].forms.focus.as_ref().map(|f| (f.name.clone(), f.text.clone()));
+    assert_eq!(typing, Some(("name".into(), "Ada".into())));
+    assert_eq!(toast_text(&h), Some(notice), "the notice is still up");
+    // Its button opens the console, which has the errors.
+    h.get_by_label("JavaScript Console").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::JsConsole));
+    assert_eq!(h.state().toast, None, "the notice did its job");
+    assert!(h.query_all_by_label_contains("nosuchfunction").next().is_some(), "the console shows the error");
+}
+
+/// Scripts that only print to the console or show a message raise no failure notice: the line
+/// stays in the console, and the message takes the toast as it is, without a console button. A
+/// failing script in the same form does raise one, after the message, so the absence is the
+/// scripts' doing.
+#[test]
+fn a_script_that_only_prints_or_shows_a_message_raises_no_failure_notice() {
+    let mut h = failing_harness();
+    click_field(&mut h, "printer");
+    assert!(h.state().js_console.log.iter().any(|l| l == "Just a note"), "{:?}", h.state().js_console.log);
+    assert_eq!(toast_text(&h), None);
+    assert_eq!((h.state().toast_failure.clone(), h.state().script_failure.clone()), (None, None));
+    assert!(h.query_by_label("JavaScript Console").is_none());
+    click_field(&mut h, "notify");
+    assert_eq!(toast_text(&h).as_deref(), Some("Noted"));
+    assert_eq!((h.state().toast_failure.clone(), h.state().script_failure.clone()), (None, None));
+    assert!(h.query_by_label("JavaScript Console").is_none(), "a message has no console button");
+    // A failure waits for the message to go, then takes the toast.
+    click_field(&mut h, "broken");
+    assert_eq!(toast_text(&h).as_deref(), Some("Noted"));
+    assert!(h.state().script_failure.as_deref().is_some_and(|e| e.contains("nosuchfunction")), "{:?}", h.state().script_failure);
+    h.state_mut().toast = None;
+    h.run_steps(2);
+    assert!(toast_text(&h).is_some_and(|t| t.starts_with("A script in this form failed: ")), "{:?}", toast_text(&h));
+}
+
 #[test]
 fn document_scripts_and_preferences() {
     let mut h = harness();

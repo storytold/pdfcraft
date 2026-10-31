@@ -384,6 +384,12 @@ pub struct PdfCraftApp {
     /// The left-out count the toast is saying now ([`Self::next_script_message`]): put back to be
     /// said again if another notice replaces the toast before it has been shown its time.
     pub toast_dropped: u64,
+    /// The notice that a form script failed, waiting for the toast: the latest action's first
+    /// error, clipped ([`Self::note_script_failure`]).
+    pub script_failure: Option<String>,
+    /// The error the toast's failure notice quotes, while it shows one (with a button to the
+    /// JavaScript console): put back to wait if another notice replaces it before its time.
+    pub toast_failure: Option<String>,
     /// Whether the macOS title bar is drawn by us (traffic lights over our tab strip).
     pub integrated_titlebar: bool,
     /// Set when the desktop leaves the window frame to the app (GNOME on Wayland): the tab strip
