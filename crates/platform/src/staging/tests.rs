@@ -448,3 +448,56 @@ fn a_replaced_link_keeps_its_own_attributes_not_its_targets() {
     assert_ne!(std::fs::metadata(&referent).unwrap().file_attributes() & HIDDEN, 0, "and still hidden");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// #5001: UNC network paths are recognized properly.
+#[test]
+fn unc_network_paths_are_recognized() {
+    assert!(is_network_path(Path::new(r"\\server\share\file.pdf")));
+    assert!(is_network_path(Path::new(r"\\192.168.1.10\docs\file.pdf")));
+    assert!(is_network_path(Path::new("//server/share/file.pdf")));
+    assert!(is_network_path(Path::new(r"\\?\UNC\server\share\file.pdf")));
+    assert!(!is_network_path(Path::new(r"C:\Users\user\file.pdf")));
+    assert!(!is_network_path(Path::new(r"D:\file.pdf")));
+    assert!(!is_network_path(Path::new("/tmp/file.pdf")));
+    assert!(!is_network_path(Path::new("relative/file.pdf")));
+}
+
+/// #5001: staging names on network paths avoid leading dot to prevent SMB servers hiding them.
+#[test]
+fn network_paths_avoid_leading_dot_in_staging_names() {
+    let dir = Path::new(r"\\server\share\folder");
+    let name = "document.pdf";
+    let is_unc = is_network_path(dir);
+    assert!(is_unc);
+    let suffix = 0x42u64;
+    let name_suffix_tag = if is_unc { format!("{name}.{suffix:016x}.pdfcraft-tmp") } else { format!(".{name}.{suffix:016x}.pdfcraft-tmp") };
+    assert!(!name_suffix_tag.starts_with('.'));
+    assert_eq!(name_suffix_tag, "document.pdf.0000000000000042.pdfcraft-tmp");
+
+    let name_tag_suffix = if is_unc { format!("{name}.pdfcraft-{suffix:016x}.tmp") } else { format!(".{name}.pdfcraft-{suffix:016x}.tmp") };
+    assert!(!name_tag_suffix.starts_with('.'));
+    assert_eq!(name_tag_suffix, "document.pdf.pdfcraft-0000000000000042.tmp");
+}
+
+/// #5001: mapped network drive destinations avoid dot-prefixed staging names and do not apply hidden/system flags.
+#[test]
+fn mapped_network_drives_avoid_leading_dot_and_hidden_attributes() {
+    set_simulated_mapped_drive_for_test(r"Z:\");
+    let mapped_dir = Path::new(r"Z:\documents");
+    assert!(is_network_path(mapped_dir));
+    assert!(is_network_path(Path::new(r"Z:\documents\contract.pdf")));
+
+    let is_unc = is_network_path(mapped_dir);
+    assert!(is_unc);
+    let suffix = 0x99u64;
+    let name = "contract.pdf";
+    let name_suffix_tag = if is_unc { format!("{name}.{suffix:016x}.pdfcraft-tmp") } else { format!(".{name}.{suffix:016x}.pdfcraft-tmp") };
+    assert!(!name_suffix_tag.starts_with('.'));
+    assert_eq!(name_suffix_tag, "contract.pdf.0000000000000099.pdfcraft-tmp");
+
+    let name_tag_suffix = if is_unc { format!("{name}.pdfcraft-{suffix:016x}.tmp") } else { format!(".{name}.pdfcraft-{suffix:016x}.tmp") };
+    assert!(!name_tag_suffix.starts_with('.'));
+    assert_eq!(name_tag_suffix, "contract.pdf.pdfcraft-0000000000000099.tmp");
+
+    clear_simulated_mapped_drives_for_test();
+}

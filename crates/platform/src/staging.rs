@@ -16,6 +16,59 @@ pub enum StagingName {
     TagThenSuffix,
 }
 
+// Thread-local storage for testing mapped network drives (#5001).
+#[cfg(test)]
+thread_local! {
+    static MAPPED_DRIVES_FOR_TEST: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Registers a drive prefix (e.g. `"Z:\\"`) as a simulated mapped network drive for tests (#5001).
+#[cfg(test)]
+pub(crate) fn set_simulated_mapped_drive_for_test(drive_prefix: &str) {
+    MAPPED_DRIVES_FOR_TEST.with(|cell| cell.borrow_mut().push(drive_prefix.to_string()));
+}
+
+/// Clears simulated mapped network drives registered for tests (#5001).
+#[cfg(test)]
+pub(crate) fn clear_simulated_mapped_drives_for_test() {
+    MAPPED_DRIVES_FOR_TEST.with(|cell| cell.borrow_mut().clear());
+}
+
+/// Whether `path` is a Windows network/UNC path or mapped network drive (#5001).
+///
+/// On Windows SMB shares (direct UNC paths or drives mapped to network shares),
+/// dotfiles are often automatically hidden by server configurations, which can
+/// hide the target directory or file after an atomic rename.
+pub fn is_network_path(path: &Path) -> bool {
+    let s = path.to_string_lossy();
+    if s.starts_with(r"\\") || s.starts_with("//") || s.starts_with(r"\\?\UNC\") {
+        return true;
+    }
+    #[cfg(test)]
+    {
+        let matched = MAPPED_DRIVES_FOR_TEST.with(|cell| cell.borrow().iter().any(|prefix| s.starts_with(prefix)));
+        if matched {
+            return true;
+        }
+    }
+    #[cfg(windows)]
+    {
+        // On Windows, canonicalize resolves mapped network drives (e.g. Z:\) to \\?\UNC\...
+        if let Ok(canonical) = std::fs::canonicalize(path)
+            && canonical.to_string_lossy().starts_with(r"\\?\UNC\")
+        {
+            return true;
+        }
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty())
+            && let Ok(canonical) = std::fs::canonicalize(parent)
+            && canonical.to_string_lossy().starts_with(r"\\?\UNC\")
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// Create a new, empty staging file in `dir` for the file `name`, one name per suffix. It is
 /// opened with `create_new`, which fails if anything already has the name (a file, a hard link,
 /// a symbolic link even when dangling, a folder), on Windows as everywhere else; such a name is
@@ -52,10 +105,13 @@ fn create_staging_as(
         }
         stem.push(c);
     }
+    let is_unc = is_network_path(dir);
     for suffix in suffixes.into_iter().take(STAGING_ATTEMPTS) {
-        let tmp = dir.join(match form {
-            StagingName::SuffixThenTag => format!(".{stem}.{suffix:016x}.pdfcraft-tmp"),
-            StagingName::TagThenSuffix => format!(".{stem}.pdfcraft-{suffix:016x}.tmp"),
+        let tmp = dir.join(match (is_unc, form) {
+            (true, StagingName::SuffixThenTag) => format!("{stem}.{suffix:016x}.pdfcraft-tmp"),
+            (true, StagingName::TagThenSuffix) => format!("{stem}.pdfcraft-{suffix:016x}.tmp"),
+            (false, StagingName::SuffixThenTag) => format!(".{stem}.{suffix:016x}.pdfcraft-tmp"),
+            (false, StagingName::TagThenSuffix) => format!(".{stem}.pdfcraft-{suffix:016x}.tmp"),
         });
         let mut options = std::fs::OpenOptions::new();
         options.write(true).create_new(true);
@@ -68,7 +124,14 @@ fn create_staging_as(
         #[cfg(windows)]
         if let Some(keep) = keep {
             use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
-            options.attributes(keep.file_attributes() & KEPT_ATTRIBUTES);
+            let mut attrs = keep.file_attributes() & KEPT_ATTRIBUTES;
+            // On network shares (UNC), do not propagate hidden/system flags (#5001).
+            if is_unc {
+                attrs &= !KEPT_ATTRIBUTES;
+            }
+            if attrs != 0 {
+                options.attributes(attrs);
+            }
         }
         match options.open(&tmp) {
             Ok(file) => {
