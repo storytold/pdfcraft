@@ -1418,8 +1418,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["edit.find"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/ui.rs::find_counts_matches_across_pages"]
-notes = ""
+evidence = ["crates/ui-egui/tests/it/ui.rs::find_counts_matches_across_pages", "crates/ui-egui/tests/it/search_position.rs::every_match_is_shown_after_zooming", "crates/ui-egui/tests/it/search_position.rs::zooming_and_stepping_in_any_order_shows_the_match", "crates/ui-egui/tests/it/search_position.rs::a_step_during_a_wheel_zoom_keeps_the_match_on_screen", "crates/ui-egui/tests/it/search_position.rs::every_page_display_shows_the_match_after_zooming"]
+notes = "Each step (⌘G, ⇧⌘G, Enter, a Search panel result) centres the match in the window on both axes at any zoom, view rotation and page display, as far as the content's ends allow (#3530); a zoom still easing on, or one in the same frame, anchors on the match instead of the pointer. A word wider than the window shows its middle."
 
 [[feature]]
 id = "view.find-options"

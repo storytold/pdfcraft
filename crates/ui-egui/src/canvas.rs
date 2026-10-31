@@ -377,8 +377,8 @@ pub struct DocView {
     viewport_w: f32,
     viewport_h: f32,
     page_count: usize,
-    /// Page heights in points (view space), for mapping text positions to scroll offsets.
-    page_heights: Vec<f32>,
+    /// Page sizes (width, height) in points (view space), for mapping text positions to scroll offsets.
+    page_sizes: Vec<(f32, f32)>,
     /// Screen rects of the pages drawn last frame (hit-testing, tests, automation).
     screen_rects: Vec<(usize, Rect)>,
     screen_xforms: Vec<(usize, PageXform)>,
@@ -386,6 +386,11 @@ pub struct DocView {
     viewport_screen: Rect,
     /// Pending zoom anchor: page, fractional position (also in gutters), and viewport offset.
     zoom_anchor: Option<(usize, f32, f32, Vec2)>,
+    /// The match a find step just went to: its page and its centre as fractions of the displayed
+    /// page. A zoom before the step has been laid out, or the rest of an eased ⌘-wheel zoom
+    /// still arriving, keeps it at the window's centre instead of the point under the pointer
+    /// (#3530). Let go in the first frame without a zoom gesture once the step is laid out.
+    find_hold: Option<(usize, f32, f32)>,
     /// The page view has been shown, so its scroll offset in egui's memory is this document's.
     shown: bool,
     /// Pages that Edit already tried to turn into editable text (once each, so Undo sticks).
@@ -666,11 +671,12 @@ impl DocView {
             viewport_w: 800.0,
             viewport_h: 600.0,
             page_count: info.pages.len(),
-            page_heights: info.pages.iter().map(|p| p.height).collect(),
+            page_sizes: info.pages.iter().map(|p| (p.width, p.height)).collect(),
             screen_rects: Vec::new(),
             screen_xforms: Vec::new(),
             viewport_screen: Rect::NOTHING,
             zoom_anchor: None,
+            find_hold: None,
             shown: false,
             auto_ocr_tried: Default::default(),
             auto_ocr_skipped: Default::default(),
@@ -747,7 +753,7 @@ impl DocView {
         self.invalidate_content();
         self.frame_geometry_changed = true;
         self.page_count = info.pages.len();
-        self.page_heights = info.pages.iter().map(|p| p.height).collect();
+        self.page_sizes = info.pages.iter().map(|p| (p.width, p.height)).collect();
         let last = self.page_count.saturating_sub(1);
         self.current = self.current.min(last);
         self.selected.retain(|p| *p <= last);
@@ -761,6 +767,7 @@ impl DocView {
         self.goto = None;
         self.goto_point = None;
         self.zoom_anchor = None;
+        self.find_hold = None;
         self.flash = None;
         // Thumbnail drags hold page indexes from before the change.
         self.panel_drag = None;
@@ -2255,8 +2262,10 @@ fn draw_pages(
     (wanted, visible_now)
 }
 
-/// A zoom the fit mode changed keeps the page at the top of the view in place.
-fn anchor_zoom_change(view: &mut DocView, avail_width: f32, old_zoom: f32) {
+/// A zoom the fit mode changed keeps the page at the top of the view in place, or, just after a
+/// find step, the match in the middle of the view (`avail` is the view's size).
+fn anchor_zoom_change(view: &mut DocView, avail: Vec2, old_zoom: f32) {
+    let avail_width = avail.x;
     if view.shown && view.zoom_anchor.is_none() && view.goto.is_none() && view.goto_point.is_none() && (view.zoom - old_zoom).abs() > 1e-4 {
         let prev_viewport = view.viewport_screen;
         let top_y = prev_viewport.min.y;
@@ -2270,7 +2279,10 @@ fn anchor_zoom_change(view: &mut DocView, avail_width: f32, old_zoom: f32) {
             })
             .or_else(|| view.screen_rects.iter().find(|(_, r)| r.min.y >= top_y).map(|(p, r)| (*p, 0.0f32, (r.min.y - top_y).max(0.0))))
             .or_else(|| view.screen_rects.last().map(|(p, r)| (*p, 1.0f32, (r.max.y - top_y).max(0.0))));
-        if let Some((page, fy, rel_y)) = anchor {
+        if let Some((page, fx, fy)) = view.find_hold {
+            // A fit zoom that changes just after a find step keeps the match in the middle too.
+            view.zoom_anchor = Some((page, fx, fy, avail / 2.0));
+        } else if let Some((page, fy, rel_y)) = anchor {
             view.zoom_anchor = Some((page, 0.5, fy, vec2(avail_width / 2.0, rel_y)));
         } else {
             view.zoom_anchor = Some((view.current, 0.5, 0.0, vec2(avail_width / 2.0, MARGIN)));
@@ -2868,6 +2880,12 @@ fn pinch_zoom(ui: &egui::Ui, view: &mut DocView, zoom_delta: f32, navigation_rec
             Some(p) => view.zoom_at(z, p),
             None => view.set_zoom(z),
         }
+    } else if view.goto_point.is_none() && zoom_delta == 1.0 {
+        // The find step has been laid out and no zoom is easing on: zoom at the pointer again.
+        // egui spreads a ⌘/Ctrl-wheel notch over about a quarter of a second; while the pointer
+        // is off the page view that zoom waits, and the hold must outlast it, or the rest of it
+        // anchors on the pointer once it is back and the match drifts off the middle.
+        view.find_hold = None;
     }
 }
 
@@ -3059,7 +3077,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     view.viewport_h = avail.height();
     let old_zoom = view.zoom;
     view.fit_zoom(info);
-    anchor_zoom_change(view, avail.width(), old_zoom);
+    anchor_zoom_change(view, avail.size(), old_zoom);
 
     // Pinch / ctrl+scroll zoom, anchored on the current page.
     let zoom_delta = crate::motion::zoom_delta(ui.ctx());
