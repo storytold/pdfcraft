@@ -480,6 +480,89 @@ fn parse_items(n: XmlNode, warnings: &mut Vec<String>) -> (Vec<String>, Vec<Stri
     (shown, saved)
 }
 
+/// The items a `<bindItems>` element takes from the data (XFA 3.3, "Dynamic Properties"):
+/// one per data node its `ref` names, shown as what `labelRef` names under that node and
+/// saved as what `valueRef` does, each the node's own value (`$`) when missing. The ref is
+/// read from the XDP the template sits in: `xfa.datasets.`, `$datasets.` or `!` start at the
+/// datasets packet (where Designer's forms keep lists beside `xfa:data`), `$data.` at
+/// `xfa:data` and `$record.` at its record. `None` for a ref this reader cannot follow
+/// (relative to the field's data, or a SOM predicate) or when there is no datasets packet;
+/// the template's own items then stay.
+fn bind_items(n: XmlNode, b: XmlNode, warnings: &mut Vec<String>) -> Option<(Vec<String>, Vec<String>)> {
+    let field = || n.attribute("name").map_or_else(|| "a choice list".to_string(), |name| format!("the choice list {name}"));
+    let reference = b.attribute("ref").map(str::trim).unwrap_or_default();
+    let Some(nodes) = bound_nodes(n, reference) else {
+        if warnings.len() < 100 {
+            warnings
+                .push(format!("{} takes its items from data PdfCraft cannot follow ({reference}); it lists the template's items instead", field()));
+        }
+        return None;
+    };
+    if nodes.len() > MAX_ITEMS && warnings.len() < 100 {
+        warnings.push(format!("{} has more than {MAX_ITEMS} items; the rest are left out", field()));
+    }
+    // `$` (or nothing) is the node's own value; a name is its attribute or else its child.
+    let read = |node: XmlNode, r: Option<&str>| -> String {
+        let r = r.map(str::trim).map(|r| r.strip_prefix("$.").unwrap_or(r)).unwrap_or("$");
+        let r = r.strip_prefix('@').unwrap_or(r);
+        if r == "$" || r.is_empty() {
+            return text_of(node).trim().to_string();
+        }
+        node.attribute(r).map(str::to_string).or_else(|| child(node, r).map(|c| text_of(c).trim().to_string())).unwrap_or_default()
+    };
+    let (labels, values): (Vec<String>, Vec<String>) =
+        nodes.into_iter().take(MAX_ITEMS).map(|node| (read(node, b.attribute("labelRef")), read(node, b.attribute("valueRef")))).unzip();
+    // Saved values are kept only when some differ from the shown text, as for `<items>`.
+    let values = if labels == values { Vec::new() } else { values };
+    Some((labels, values))
+}
+
+/// The data nodes a `<bindItems>` ref names (see [`bind_items`]), at most one past the item cap;
+/// `None` when the ref is not one this reader follows.
+fn bound_nodes<'a, 'd>(n: XmlNode<'a, 'd>, reference: &'a str) -> Option<Vec<XmlNode<'a, 'd>>> {
+    let datasets = n.document().root_element().children().find(|c| c.is_element() && c.tag_name().name() == "datasets");
+    let data = datasets.and_then(|d| child(d, "data"));
+    let prefixes: [(&str, Option<XmlNode<'a, 'd>>); 6] = [
+        ("xfa.datasets.data.", data),
+        ("xfa.datasets.", datasets),
+        ("$datasets.", datasets),
+        ("!", datasets),
+        ("$data.", data),
+        ("$record.", data.and_then(|d| d.children().find(|c| c.is_element()))),
+    ];
+    let (start, path) = prefixes.into_iter().find_map(|(prefix, start)| reference.strip_prefix(prefix).map(|path| (start, path)))?;
+    let mut nodes = vec![start?];
+    for seg in path.split('.') {
+        let (name, index) = match seg.split_once('[') {
+            Some((name, rest)) => (name, Some(rest.strip_suffix(']')?.trim())),
+            None => (seg, None),
+        };
+        // A class name (`#dataGroup`) or an empty step is not followed.
+        if name.is_empty() || name.starts_with('#') {
+            return None;
+        }
+        let index = match index {
+            Some("*") => None,
+            Some(i) => Some(i.parse::<usize>().ok()?),
+            // No index is the first of the name.
+            None => Some(0),
+        };
+        let mut next = Vec::new();
+        for node in &nodes {
+            let mut same = children(*node, name);
+            match index {
+                None => next.extend(same.take((MAX_ITEMS + 1).saturating_sub(next.len()))),
+                Some(i) => next.extend(same.nth(i)),
+            }
+            if next.len() > MAX_ITEMS {
+                break;
+            }
+        }
+        nodes = next;
+    }
+    Some(nodes)
+}
+
 /// A `<field>` element as the model's [`Field`]: its widget kind, caption, value, items,
 /// pictures (edit and data), scripts and access.
 fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
@@ -510,7 +593,12 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
     let scripts = parse_events(n);
     let numeric = matches!(kind, Ui::NumericEdit)
         || value_el.is_some_and(|v| v.children().any(|c| c.is_element() && matches!(c.tag_name().name(), "decimal" | "integer" | "float")));
-    let (items, item_values) = parse_items(n, warnings);
+    let (mut items, mut item_values) = parse_items(n, warnings);
+    if kind == Ui::ChoiceList
+        && let Some((bound, bound_values)) = child(n, "bindItems").and_then(|b| bind_items(n, b, warnings))
+    {
+        (items, item_values) = (bound, bound_values);
+    }
     let choice = match (kind == Ui::ChoiceList, ui_el) {
         (true, Some(e)) => {
             let open = e.attribute("open").unwrap_or("onEntry");
