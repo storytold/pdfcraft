@@ -9909,6 +9909,19 @@ fn saved_selection_indices(path: &Path, name: &str) -> Option<Vec<i64>> {
     f.get(b"I").map(|i| d.resolve(i).as_array().unwrap().iter().map(|o| o.as_int().unwrap()).collect())
 }
 
+/// `/MaxLen` directly stored on the top-level field `name` in the saved file `path`.
+fn saved_field_max_len(path: &Path, name: &str) -> Option<i64> {
+    let d = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(path).unwrap())).unwrap();
+    let root = d.get(d.root().unwrap()).as_dict().cloned().unwrap();
+    let form = d.resolve(root.get(b"AcroForm").unwrap()).as_dict().cloned().unwrap();
+    let all = d.resolve(form.get(b"Fields").unwrap()).as_array().cloned().unwrap();
+    let field = all
+        .iter()
+        .filter_map(|o| d.resolve(o).as_dict().cloned())
+        .find(|field| field.get(b"T").and_then(|t| d.resolve(t).as_string().map(|s| s.to_text())).as_deref() == Some(name))?;
+    field.int(b"MaxLen")
+}
+
 #[test]
 fn changing_a_lists_options_through_tools_keeps_its_saved_selection_on_the_same_items() {
     let dir = workdir("choice-index");
@@ -10189,4 +10202,92 @@ fn simple_rule_scan_drawn(content: &[u8]) -> Vec<u8> {
         doc.set(reference, Object::Stream(Stream::flate(image.dict.clone(), &data)));
     }
     write_full(&doc, &SaveOptions::default()).unwrap()
+}
+#[test]
+fn javascript_current_value_indices_persist_through_tools() {
+    let dir = workdir("js-current-value-indices");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(
+        &mut a,
+        "form_add_field",
+        json!({ "doc": doc, "page": 1, "type": "combo", "rect": [20, 50, 180, 72], "name": "Size", "options": ["s", "m", "l"] }),
+    );
+    ok(
+        &mut a,
+        "form_add_field",
+        json!({ "doc": doc, "page": 1, "type": "list", "rect": [20, 80, 180, 102], "name": "Choices", "options": ["a", "b", "c"], "multi_select": true }),
+    );
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "Size": "s", "Choices": ["a"] } }));
+    let result = ok(
+        &mut a,
+        "js_run",
+        json!({
+            "doc": doc,
+            "script": "getField('Size').currentValueIndices=2; getField('Choices').currentValueIndices=[0,2]; console.println([getField('Size').value,getField('Choices').value].join('|'));"
+        }),
+    );
+    assert_eq!(result["console"][0], "l|a,c");
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let field = |name: &str| fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == name).unwrap().clone();
+    assert_eq!(field("Size")["value"], "l");
+    assert_eq!(field("Choices")["value"], json!(["a", "c"]));
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    let undone = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    assert_eq!(undone["fields"].as_array().unwrap().iter().find(|f| f["name"] == "Size").unwrap()["value"], "s");
+    ok(&mut a, "edit_redo", json!({ "doc": doc }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "setters.pdf" }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "setters.pdf" }))["doc"].as_u64().unwrap();
+    let readback = ok(
+        &mut a,
+        "js_run",
+        json!({ "doc": reopened, "script": "console.println([getField('Size').currentValueIndices,getField('Choices').currentValueIndices].join('|'))" }),
+    );
+    assert_eq!(readback["console"][0], "2|0,2");
+}
+
+#[test]
+fn javascript_default_value_persists_and_resets_through_tools() {
+    let dir = workdir("js-default-value");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "text", "rect": [20, 20, 180, 42], "name": "Qty" }));
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "Qty": "4" } }));
+    let result = ok(
+        &mut a,
+        "js_run",
+        json!({ "doc": doc, "script": "getField('Qty').defaultValue='9'; console.println(getField('Qty').defaultValue+'|'+getField('Qty').value)" }),
+    );
+    assert_eq!(result["console"][0], "9|4");
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "default.pdf" }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "default.pdf" }))["doc"].as_u64().unwrap();
+    let readback =
+        ok(&mut a, "js_run", json!({ "doc": reopened, "script": "console.println(getField('Qty').defaultValue+'|'+getField('Qty').value)" }));
+    assert_eq!(readback["console"][0], "9|4");
+    ok(&mut a, "form_reset", json!({ "doc": reopened }));
+    assert_eq!(ok(&mut a, "form_fields", json!({ "doc": reopened }))["fields"][0]["value"], "9");
+}
+
+#[test]
+fn javascript_char_limit_persists_and_is_enforced_through_tools() {
+    let dir = workdir("js-char-limit");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "text", "rect": [20, 20, 180, 42], "name": "Qty" }));
+    let result = ok(&mut a, "js_run", json!({ "doc": doc, "script": "getField('Qty').charLimit=3; console.println(getField('Qty').charLimit)" }));
+    assert_eq!(result["console"][0], "3");
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "Qty": "123" } }));
+    assert!(a.call("form_fill", &json!({ "doc": doc, "values": { "Qty": "1234" } })).is_err());
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "limit.pdf" }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "limit.pdf" }))["doc"].as_u64().unwrap();
+    let readback = ok(&mut a, "js_run", json!({ "doc": reopened, "script": "console.println(getField('Qty').charLimit)" }));
+    assert_eq!(readback["console"][0], "3");
+    ok(&mut a, "js_run", json!({ "doc": reopened, "script": "getField('Qty').charLimit=0" }));
+    ok(&mut a, "doc_save", json!({ "doc": reopened, "path": "unlimited.pdf" }));
+    let unlimited = ok(&mut a, "doc_open", json!({ "path": "unlimited.pdf" }))["doc"].as_u64().unwrap();
+    let unlimited_readback = ok(&mut a, "js_run", json!({ "doc": unlimited, "script": "console.println(getField('Qty').charLimit)" }));
+    assert_eq!(unlimited_readback["console"][0], "0");
+    let cleared = ok(&mut a, "js_run", json!({ "doc": reopened, "script": "console.println(getField('Qty').charLimit)" }));
+    assert_eq!(cleared["console"][0], "0");
+    assert_eq!(saved_field_max_len(&dir.join("unlimited.pdf"), "Qty"), Some(0));
 }

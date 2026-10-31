@@ -28,6 +28,14 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
         _ => f.value.join(","),
     }));
     let default = getter!(ctx, n, |f, _c| s(&f.default.first().cloned().unwrap_or_default()));
+    let default_set = {
+        fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+            let v = text(&arg(args, 0), c)?;
+            write(c, name, |f| f.default = vec![v])?;
+            Ok(JsValue::undefined())
+        }
+        function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
+    };
     let kind = getter!(ctx, n, |f, _c| s(f.kind.name()));
     let fname = getter!(ctx, n, |f, _c| s(&f.name));
     let readonly_get = getter!(ctx, n, |f, _c| JsValue::from(f.readonly));
@@ -68,6 +76,25 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
     };
     let num_items = getter!(ctx, n, |f, _c| JsValue::from(f.options.len() as f64));
     let char_limit = getter!(ctx, n, |f, _c| JsValue::from(f.char_limit.unwrap_or(0) as f64));
+    let char_limit_set = {
+        fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+            let f = read(c, name)?;
+            if f.kind != FieldType::Text {
+                return Err(error("charLimit applies only to text fields"));
+            }
+            let n = arg(args, 0).to_number(c)?;
+            if f.is_comb && n == 0.0 {
+                return Err(error("charLimit cannot be zero for comb fields"));
+            }
+            if !n.is_finite() || n < 0.0 || n.fract() != 0.0 || n > i32::MAX as f64 {
+                return Err(error("charLimit must be an integer from 0 to 2147483647"));
+            }
+            let limit = (n > 0.0).then_some(n as usize);
+            write(c, name, |f| f.char_limit = limit)?;
+            Ok(JsValue::undefined())
+        }
+        function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
+    };
     let export_values = getter!(ctx, n, |f, c| {
         let vals: Vec<JsValue> = f.options.iter().map(|o| s(&o.0)).collect();
         JsArray::from_iter(vals, c).into()
@@ -76,6 +103,51 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
         let idx: Vec<JsValue> = f.options.iter().enumerate().filter(|(_, o)| f.value.contains(&o.0)).map(|(i, _)| JsValue::from(i as f64)).collect();
         if idx.len() == 1 { idx[0].clone() } else { JsArray::from_iter(idx, c).into() }
     });
+    let indices_set = {
+        fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+            let f = read(c, name)?;
+            if !matches!(f.kind, FieldType::ComboBox | FieldType::ListBox) {
+                return Err(error("currentValueIndices applies only to choice fields"));
+            }
+            let raw = arg(args, 0);
+            let mut indices = Vec::new();
+            if let Some(o) = raw.as_object().filter(|o| o.is_array()) {
+                let a = JsArray::from_object(o.clone())?;
+                let len = a.length(c)?;
+                if f.kind == FieldType::ComboBox && len > 1 {
+                    return Err(error("a combo box can select only one item"));
+                }
+                if len > u64::try_from(f.options.len()).unwrap_or(u64::MAX) {
+                    return Err(error("too many currentValueIndices"));
+                }
+                for i in 0..len {
+                    let v = a.get(i, c)?.to_number(c)?;
+                    if !v.is_finite() || v < 0.0 || v.fract() != 0.0 {
+                        return Err(error("currentValueIndices must be non-negative integers"));
+                    }
+                    let index = v as usize;
+                    if index >= f.options.len() || indices.contains(&index) {
+                        return Err(error("currentValueIndices contains an invalid or duplicate option index"));
+                    }
+                    indices.push(index);
+                }
+            } else {
+                let v = raw.to_number(c)?;
+                if !v.is_finite() || v < 0.0 || v.fract() != 0.0 {
+                    return Err(error("currentValueIndices must be non-negative integers"));
+                }
+                let index = v as usize;
+                if index >= f.options.len() {
+                    return Err(error("currentValueIndices contains an invalid option index"));
+                }
+                indices.push(index);
+            }
+            let values = indices.into_iter().filter_map(|i| f.options.get(i).map(|o| o.0.clone())).collect();
+            write(c, name, |f| set_value(f, values))?;
+            Ok(JsValue::undefined())
+        }
+        function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
+    };
     let text_color_get = getter!(ctx, n, |f, c| colour(&f.text_color, c));
     let text_color_set = {
         fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
@@ -137,7 +209,7 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
     ObjectInitializer::new(ctx)
         .accessor(js_string!("value"), Some(value_get), Some(value_set), rw)
         .accessor(js_string!("valueAsString"), Some(as_string), None, rw)
-        .accessor(js_string!("defaultValue"), Some(default), None, rw)
+        .accessor(js_string!("defaultValue"), Some(default), Some(default_set), rw)
         .accessor(js_string!("type"), Some(kind), None, rw)
         .accessor(js_string!("name"), Some(fname), None, rw)
         .accessor(js_string!("readonly"), Some(readonly_get), Some(readonly_set), rw)
@@ -145,9 +217,9 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
         .accessor(js_string!("display"), Some(display_get), Some(display_set), rw)
         .accessor(js_string!("hidden"), Some(hidden_get), Some(hidden_set), rw)
         .accessor(js_string!("numItems"), Some(num_items), None, rw)
-        .accessor(js_string!("charLimit"), Some(char_limit), None, rw)
+        .accessor(js_string!("charLimit"), Some(char_limit), Some(char_limit_set), rw)
         .accessor(js_string!("exportValues"), Some(export_values), None, rw)
-        .accessor(js_string!("currentValueIndices"), Some(indices), None, rw)
+        .accessor(js_string!("currentValueIndices"), Some(indices), Some(indices_set), rw)
         .accessor(js_string!("textColor"), Some(text_color_get), Some(text_color_set), rw)
         .accessor(js_string!("fillColor"), Some(fill_color_get), Some(fill_color_set), rw)
         .function(get_item_at, js_string!("getItemAt"), 2)

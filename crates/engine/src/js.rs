@@ -119,6 +119,7 @@ fn field_state_with_display(f: &Field, display: i32) -> pdfcraft_js::FieldState 
     s.required = f.has(pdfcraft_forms::flags::REQUIRED);
     s.display = display;
     s.char_limit = f.max_len;
+    s.is_comb = f.is_comb();
     s.options = match f.kind {
         FieldKind::CheckBox | FieldKind::Radio => f.widgets.iter().filter_map(|w| w.on_state.clone()).map(|o| (o.clone(), o)).collect(),
         _ => f.options.clone(),
@@ -147,8 +148,17 @@ fn changes(before: &[pdfcraft_js::FieldState], after: &[pdfcraft_js::FieldState]
                 read_only: (a.readonly != b.readonly).then_some(a.readonly),
                 required: (a.required != b.required).then_some(a.required),
                 display: (a.display != b.display).then_some(a.display),
+                default_value: (a.default != b.default).then(|| a.default.first().cloned()),
+                // `/MaxLen 0` overrides an inherited limit while remaining unlimited.
+                max_len: (a.char_limit != b.char_limit).then_some(Some(a.char_limit.unwrap_or(0))),
             };
-            (c.value.is_some() || c.read_only.is_some() || c.required.is_some() || c.display.is_some()).then_some(c)
+            (c.value.is_some()
+                || c.read_only.is_some()
+                || c.required.is_some()
+                || c.display.is_some()
+                || c.default_value.is_some()
+                || c.max_len.is_some())
+            .then_some(c)
         })
         .collect()
 }

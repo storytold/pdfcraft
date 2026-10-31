@@ -4679,8 +4679,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.prepare"]
 tools = ["form_set_script"]
-evidence = ["crates/engine/src/tests.rs::form_javascript_validates_calculates_and_formats", "crates/automation/tests/it/automation.rs::javascript_through_tools"]
-notes = "Custom keystroke (commit), validate, calculate and format scripts run in Acrobat's event order; AF calls still run natively."
+evidence = ["crates/engine/src/tests.rs::form_javascript_validates_calculates_and_formats", "crates/automation/tests/it/automation.rs::javascript_current_value_indices_persist_through_tools", "crates/automation/tests/it/automation.rs::javascript_default_value_persists_and_resets_through_tools", "crates/automation/tests/it/automation.rs::javascript_char_limit_persists_and_is_enforced_through_tools"]
+notes = "Custom keystroke (commit), validate, calculate and format scripts run in Acrobat's event order; AF calls still run natively. Field scripts can change choice currentValueIndices, defaultValue and text-field charLimit; setters update persisted choice values/indices, /DV and /MaxLen. Other Acrobat Field methods and properties remain outside this slice."
 
 [[feature]]
 id = "form.calculation-order"

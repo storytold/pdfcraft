@@ -9409,3 +9409,41 @@ fn repeated_backdrop_artwork_survives_background_undo_redo_and_both_save_modes()
     s.apply(rewritten, Edit::RemoveMarks { kind: MarkKind::Background }).unwrap();
     black(&s, rewritten);
 }
+#[test]
+fn script_default_value_is_written_without_changing_the_value() {
+    use pdfcraft_forms::{FieldEvent, Scripts};
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(synthetic_acroform(2, 0))).unwrap();
+    let fields = pdfcraft_forms::fields(&cos);
+    let target = fields.iter().find(|f| f.name == "ranks").unwrap();
+    let mut runner = crate::js::JsRunner::new(&cos, "synthetic.pdf");
+    let result = runner.run(FieldEvent::Calculate, "getField('ranks').defaultValue='9';", target, "", &fields);
+    assert!(runner.output.errors.is_empty());
+    assert_eq!(result.changes.len(), 1);
+    pdfcraft_forms::apply_script_changes(&mut cos, &result.changes, &mut pdfcraft_forms::NoScripts).unwrap();
+    let field = pdfcraft_forms::fields(&cos).into_iter().find(|f| f.name == "ranks").unwrap();
+    assert_eq!(field.default, ["9"]);
+    assert_eq!(field.value, ["0"]);
+}
+
+#[test]
+fn script_char_limit_is_written_to_the_field() {
+    use pdfcraft_forms::{FieldEvent, Scripts};
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(synthetic_acroform(2, 0))).unwrap();
+    let fields = pdfcraft_forms::fields(&cos);
+    let target = fields.iter().find(|f| f.name == "ranks").unwrap();
+    let mut runner = crate::js::JsRunner::new(&cos, "synthetic.pdf");
+    let result = runner.run(FieldEvent::Calculate, "getField('ranks').charLimit=3;", target, "", &fields);
+    assert!(runner.output.errors.is_empty());
+    assert_eq!(result.changes.len(), 1);
+    pdfcraft_forms::apply_script_changes(&mut cos, &result.changes, &mut pdfcraft_forms::NoScripts).unwrap();
+    let field = pdfcraft_forms::fields(&cos).into_iter().find(|f| f.name == "ranks").unwrap();
+    assert_eq!(field.max_len, Some(3));
+    let mut runner = crate::js::JsRunner::new(&cos, "synthetic.pdf");
+    let result = runner.run(FieldEvent::Calculate, "getField('ranks').charLimit=0;", &field, "", &pdfcraft_forms::fields(&cos));
+    assert!(runner.output.errors.is_empty());
+    assert_eq!(result.changes.first().and_then(|change| change.max_len), Some(Some(0)));
+    pdfcraft_forms::apply_script_changes(&mut cos, &result.changes, &mut pdfcraft_forms::NoScripts).unwrap();
+    let field = pdfcraft_forms::fields(&cos).into_iter().find(|f| f.name == "ranks").unwrap();
+    assert_eq!(field.max_len, None);
+    assert_eq!(cos.get(field.obj).as_dict().unwrap().int(b"MaxLen"), Some(0));
+}
