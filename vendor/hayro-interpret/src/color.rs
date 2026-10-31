@@ -1683,17 +1683,6 @@ pub(crate) enum InkUse {
     Nothing,
 }
 
-/// PdfCraft patch (53): DeviceCMYK to sRGB as pages are drawn (the bundled CGATS-compatible
-/// profile), to compose separations back into a preview. `cmyk` holds whole pixels of four
-/// bytes and `rgb` the same number of three-byte pixels; `None` when the lengths disagree or
-/// the transform fails.
-pub fn cmyk_to_srgb8(cmyk: &[u8], rgb: &mut [u8]) -> Option<()> {
-    if cmyk.len() % 4 != 0 || (cmyk.len() / 4).checked_mul(3)? != rgb.len() {
-        return None;
-    }
-    CMYK_TRANSFORM.convert_u8(cmyk, rgb)
-}
-
 /// A component as a tint: clamped to `0.0..=1.0`, NaN read as no ink.
 fn unit(value: f32) -> f32 {
     clamp_component(value, 0.0, 1.0)
@@ -2025,12 +2014,6 @@ impl ColorSpace {
             to_cmyk.transform(rgb, cmyk).ok()?;
         }
         Some(())
-    }
-
-    /// PdfCraft patch (53): DeviceCMYK itself (`CalCMYK` reads as it too), where the nonzero
-    /// overprint mode applies.
-    pub(crate) fn is_device_cmyk(&self) -> bool {
-        matches!(self.0.as_ref(), ColorSpaceType::DeviceCmyk)
     }
 
     /// PdfCraft patch (53): spaces whose colours are converted to sRGB before separation

@@ -146,7 +146,7 @@ impl Shading {
             .color_space
             .plate(plate.ink.clone(), plate.simulation.clone());
         let simulation = plate.simulation.as_ref().map(|s| s.digest());
-        self.cache_key = crate::util::hash128(&(self.cache_key, &plate.ink, simulation));
+        self.cache_key = hash128(&(self.cache_key, &plate.ink, simulation));
     }
 
     /// PdfCraft patch (38): a shading in a device space is drawn in its default colour space
