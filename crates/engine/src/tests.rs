@@ -2759,6 +2759,36 @@ fn form_edits_refresh_field_values_without_a_full_inspection() {
     assert_eq!(values(&d.info.fields), [("name".to_string(), Some("Ada".to_string())), ("ok".to_string(), Some("Yes".to_string()))]);
 }
 
+/// AcroForm fields and Fill & Sign typewriter annotations with Central European characters render without question marks in the engine.
+#[test]
+fn polish_typewriter_and_form_field_work_without_question_marks() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("form.pdf", None, Arc::new(form_fixture()), None).unwrap();
+    // 1. Fill AcroForm field with Polish text
+    s.apply(id, Edit::SetFieldValue { name: "name".into(), value: FieldValue::Text("Płock".into()) }).unwrap();
+    assert!(s.get(id).unwrap().edit_notices.is_empty(), "form field with Polish text produces no undrawn notices");
+    // 2. Add Fill & Sign / Typewriter text with Polish text
+    let typed = Shape::Typewriter { rect: [20.0, 100.0, 150.0, 120.0], font_size: 11.0 };
+    let style = Style::default_for(&typed);
+    s.apply(
+        id,
+        Edit::AddAnnotation(NewAnnotation {
+            page: 0,
+            shape: typed,
+            style,
+            contents: "Gdańsk, Kraków i Poznań: 123 zł".into(),
+            author: "Marek".into(),
+        }),
+    )
+    .unwrap();
+    let d = s.get(id).unwrap();
+    assert!(d.edit_notices.is_empty(), "typewriter annotation with Polish text produces no undrawn notices");
+    let texts = page_texts(&s, id);
+    assert!(texts[0].contains("Płock"), "rendered text contains Płock: {:?}", texts);
+    assert!(texts[0].contains("Gdańsk"), "rendered text contains Gdańsk: {:?}", texts);
+    assert!(!texts[0].contains('?'), "rendered text contains no question marks: {:?}", texts);
+}
+
 #[test]
 fn form_refresh_keeps_first_value_when_field_names_repeat() {
     // Two widgets share one name; the refresh reads the first.

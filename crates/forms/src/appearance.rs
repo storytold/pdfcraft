@@ -331,6 +331,7 @@ impl FontText {
         }
     }
 
+    /// The text width in points for string `s` in this font at size `size`.
     fn width(&self, s: &str, size: f64) -> f64 {
         match self {
             Self::WinAnsi => helvetica_width(s, size),
@@ -355,9 +356,15 @@ fn dr_font(doc: &Document, name: &str) -> Option<(Object, FontText)> {
     match fd.name(b"Subtype") {
         Some(b"Type1" | b"TrueType" | b"MMType1") => {}
         // Japanese, Chinese and Korean forms: a CID font addressed by Unicode (a non-embedded
-        // `/HeiseiMin-W3` with `/UniJIS-UCS2-H`, say). Embedded CMap streams and Identity-H need
-        // the font's own mapping, so those still fall back to Helvetica.
-        Some(b"Type0") => return Some((entry, FontText::Unicode(UnicodeCMap::from_name(fd.name(b"Encoding")?)?))),
+        // `/HeiseiMin-W3` with `/UniJIS-UCS2-H`, say). Predefined CMaps take precedence; other
+        // Type0 fonts (e.g. Identity-H with ToUnicode) fall through to Metrics::from_dict.
+        Some(b"Type0") => {
+            if let Some(cmap_name) = fd.name(b"Encoding")
+                && let Some(cmap) = UnicodeCMap::from_name(cmap_name)
+            {
+                return Some((entry, FontText::Unicode(cmap)));
+            }
+        }
         _ => return None,
     }
     // Symbolic fonts (ZapfDingbats, Symbol) can't show WinAnsi text.
@@ -776,7 +783,13 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
     };
     let (font_name, font_obj, enc) = match dr_font(doc, &da.font).filter(|(_, enc)| can_show(enc)) {
         Some((o, enc)) => (da.font.clone(), o, enc),
-        None => ("Helv".to_string(), helvetica(), FontText::WinAnsi),
+        None => {
+            if let Some((o, enc)) = dr_font(doc, crate::author::FALLBACK_FONT_NAME).filter(|(_, enc)| can_show(enc)) {
+                (crate::author::FALLBACK_FONT_NAME.to_string(), o, enc)
+            } else {
+                ("Helv".to_string(), helvetica(), FontText::WinAnsi)
+            }
+        }
     };
     let width_of = |text: &str, size: f64| enc.width(text, size);
     let (mut c, bw) = frame(doc, &wd, width, height);

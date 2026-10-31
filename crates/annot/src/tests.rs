@@ -591,6 +591,150 @@ fn fill_and_sign_items_are_drawn() {
     assert!(set_style(&mut doc, 1, 0, StyleChange::new(Some([0.0; 3]), None, None, None), &meta("")).is_err());
 }
 
+/// Central European characters in typewriter and text box comments use the fallback font (/PCFallback) without question marks or undrawn marks.
+#[test]
+fn polish_characters_in_typewriter_and_text_box_use_fallback_font_without_question_marks() {
+    let mut doc = fixture();
+    let value = "Płock, Gdańsk, Kraków i Poznań: 123 zł";
+    let typed = Shape::Typewriter { rect: [100.0, 700.0, 300.0, 720.0], font_size: 11.0 };
+    let t = add_annotation(
+        &mut doc,
+        &NewAnnotation { page: 1, style: Style::default_for(&typed), shape: typed, contents: value.into(), author: "Marek".into() },
+        &meta("pl"),
+    )
+    .unwrap();
+    let mut doc = reopen(&doc);
+    let all = list(&doc, 1);
+    assert_eq!(text(&all[t], b"Contents"), value);
+    assert_eq!(pdfcraft_fonts::undrawn_mark(&all[t]), None, "no undrawn marks on Polish text");
+    assert_eq!(props(&doc, 1, t).unwrap().font, Some(AnnotFont::Inter));
+    assert!(pdfcraft_fonts::embedding::fallback_font_ref(&doc).is_some(), "fallback font registered in AcroForm /DR");
+    let content = ap_content(&doc, &all[t]);
+    assert!(content.contains("/PCFallback 11 Tf"), "uses embedded fallback font, got: {content}");
+    assert!(!content.contains('?'), "no question marks in content stream");
+
+    // Explicitly changing font to Times on text containing unsupported chars produces '?' and undrawn mark
+    set_font(&mut doc, 1, t, AnnotFont::Times, &meta("times")).unwrap();
+    let d = &list(&doc, 1)[t];
+    assert_eq!(props(&doc, 1, t).unwrap().font, Some(AnnotFont::Times));
+    assert_eq!(pdfcraft_fonts::undrawn_mark(d), Some('ł'));
+    let ap = ap_content(&doc, d);
+    assert!(ap.contains("/TiRo 11 Tf"));
+    assert!(ap.contains('?'), "question mark appears in appearance for unsupported character");
+
+    // Changing font back to Inter clears '?' and undrawn mark
+    set_font(&mut doc, 1, t, AnnotFont::Inter, &meta("inter")).unwrap();
+    let d = &list(&doc, 1)[t];
+    assert_eq!(props(&doc, 1, t).unwrap().font, Some(AnnotFont::Inter));
+    assert_eq!(pdfcraft_fonts::undrawn_mark(d), None);
+    let ap = ap_content(&doc, d);
+    assert!(ap.contains("/PCFallback 11 Tf"));
+    assert!(!ap.contains('?'));
+
+    // A text box created with Latin text defaults to Helvetica, but editing contents to Polish promotes it to Inter
+    let tb = add_annotation(
+        &mut doc,
+        &NewAnnotation {
+            page: 1,
+            style: Style::default_for(&Shape::TextBox { rect: [100.0, 600.0, 300.0, 640.0], font_size: 12.0 }),
+            shape: Shape::TextBox { rect: [100.0, 600.0, 300.0, 640.0], font_size: 12.0 },
+            contents: "Hello".into(),
+            author: "Marek".into(),
+        },
+        &meta("tb"),
+    )
+    .unwrap();
+    assert_eq!(props(&doc, 1, tb).unwrap().font, Some(AnnotFont::Helvetica));
+    set_contents(&mut doc, 1, tb, "Płock", &meta("edit")).unwrap();
+    assert_eq!(props(&doc, 1, tb).unwrap().font, Some(AnnotFont::Inter));
+    assert_eq!(pdfcraft_fonts::undrawn_mark(&list(&doc, 1)[tb]), None);
+    let ap = ap_content(&doc, &list(&doc, 1)[tb]);
+    assert!(ap.contains("/PCFallback 12 Tf"));
+    assert!(!ap.contains('?'));
+}
+
+/// Comments containing characters not covered by the fallback font (such as CJK) preserve Helvetica rather than switching to Inter.
+#[test]
+fn cjk_text_in_typewriter_and_text_box_preserves_helvetica() {
+    let mut doc = fixture();
+    let typed = Shape::Typewriter { rect: [100.0, 700.0, 300.0, 720.0], font_size: 11.0 };
+    let t = add_annotation(
+        &mut doc,
+        &NewAnnotation { page: 1, style: Style::default_for(&typed), shape: typed, contents: "日本語テキスト".into(), author: "Test".into() },
+        &meta("cjk"),
+    )
+    .unwrap();
+    assert_eq!(props(&doc, 1, t).unwrap().font, Some(AnnotFont::Helvetica));
+    let tb = add_annotation(
+        &mut doc,
+        &NewAnnotation {
+            page: 1,
+            style: Style::default_for(&Shape::TextBox { rect: [100.0, 600.0, 300.0, 640.0], font_size: 12.0 }),
+            shape: Shape::TextBox { rect: [100.0, 600.0, 300.0, 640.0], font_size: 12.0 },
+            contents: "Hello".into(),
+            author: "Test".into(),
+        },
+        &meta("tb"),
+    )
+    .unwrap();
+    set_contents(&mut doc, 1, tb, "中文文本", &meta("cjk_edit")).unwrap();
+    assert_eq!(props(&doc, 1, tb).unwrap().font, Some(AnnotFont::Helvetica));
+}
+
+/// Changing a text box comment's font updates /DA, refits the bounding box, and redraws the appearance stream.
+#[test]
+fn text_box_font_changes_the_da_and_appearance() {
+    let mut doc = fixture();
+    let t = add_annotation(
+        &mut doc,
+        &NewAnnotation {
+            page: 0,
+            style: Style { color: [1.0, 0.0, 0.0], ..Style::default() },
+            shape: Shape::TextBox { rect: [10.0, 100.0, 150.0, 130.0], font_size: 12.0 },
+            contents: "Hello world".into(),
+            author: "Ada".into(),
+        },
+        &meta("t"),
+    )
+    .unwrap();
+
+    let p = props(&doc, 0, t).unwrap();
+    assert_eq!(p.font, Some(AnnotFont::Helvetica));
+    assert_eq!(p.font_size, Some(12.0));
+
+    // Change font to Times
+    set_font(&mut doc, 0, t, AnnotFont::Times, &meta("")).unwrap();
+    let d = &list(&doc, 0)[t];
+    assert_eq!(text(d, b"DA"), "1 0 0 rg /TiRo 12 Tf");
+    assert!(text(d, b"DS").contains("font: Times-Roman 12pt"));
+    assert!(text(d, b"RC").contains("font-family:Times-Roman"));
+    let ap = ap_content(&doc, d);
+    assert!(ap.contains("/TiRo 12 Tf"), "appearance uses /TiRo: {ap}");
+    assert_eq!(props(&doc, 0, t).unwrap().font, Some(AnnotFont::Times));
+
+    // Change font to Courier
+    set_font(&mut doc, 0, t, AnnotFont::Courier, &meta("")).unwrap();
+    let d = &list(&doc, 0)[t];
+    assert_eq!(text(d, b"DA"), "1 0 0 rg /Cour 12 Tf");
+    assert!(text(d, b"DS").contains("font: Courier 12pt"));
+    assert!(text(d, b"RC").contains("font-family:Courier"));
+    let ap = ap_content(&doc, d);
+    assert!(ap.contains("/Cour 12 Tf"), "appearance uses /Cour: {ap}");
+    assert_eq!(props(&doc, 0, t).unwrap().font, Some(AnnotFont::Courier));
+
+    // Change size: font is preserved as Courier!
+    set_font_size(&mut doc, 0, t, 16.0, &meta("")).unwrap();
+    let d = &list(&doc, 0)[t];
+    assert_eq!(text(d, b"DA"), "1 0 0 rg /Cour 16 Tf");
+    assert_eq!(props(&doc, 0, t).unwrap().font, Some(AnnotFont::Courier));
+
+    // Change color: font and size are preserved!
+    set_style(&mut doc, 0, t, StyleChange::new(Some([0.0, 0.5, 1.0]), None, None, None), &meta("")).unwrap();
+    let d = &list(&doc, 0)[t];
+    assert_eq!(text(d, b"DA"), "0 0.5 1 rg /Cour 16 Tf");
+    assert_eq!(props(&doc, 0, t).unwrap().font, Some(AnnotFont::Courier));
+}
+
 #[test]
 fn author_subject_and_note_icon_change() {
     let mut doc = fixture();

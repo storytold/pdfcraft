@@ -5,8 +5,8 @@ use super::draw::{draw_appearance, redraw_or_restore, set_appearance};
 use super::info::{line_endings_of, text_value};
 use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, page_ref, set_annots};
 use super::types::{
-    FLAG_HIDDEN, FLAG_LOCKED, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NewAnnotation, ReviewState, Rgb, Shape, Style,
-    StyleChange, TextReplacement,
+    AnnotFont, FLAG_HIDDEN, FLAG_LOCKED, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NewAnnotation, ReviewState, Rgb, Shape,
+    Style, StyleChange, TextReplacement,
 };
 use super::{AnnotError, Dict, Document, HashMap, HashSet, ObjRef, Object, PdfString, appearance};
 
@@ -38,7 +38,7 @@ pub(crate) fn n(v: f64) -> String {
 /// plain `/Contents`, `/DA` and `/Q`, so viewers that edit rich text show the same thing.
 pub(crate) fn rich_text(d: &mut Dict) {
     let text = d.get(b"Contents").and_then(|c| c.as_string()).map(PdfString::to_text).unwrap_or_default();
-    let (col, size) = appearance::parse_da(d);
+    let (col, size, font) = appearance::parse_da(d);
     let hex = format!(
         "#{:02X}{:02X}{:02X}",
         (col[0].clamp(0.0, 1.0) * 255.0).round() as u8,
@@ -52,14 +52,15 @@ pub(crate) fn rich_text(d: &mut Dict) {
     };
     let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;");
     let body: String = text.split('\n').map(|line| format!("<p dir=\"ltr\">{}</p>", esc(line.trim_end_matches('\r')))).collect();
+    let font_name = font.rich_text_font();
     let style = format!(
-        "font-size:{}pt;text-align:{align};color:{hex};font-weight:normal;font-style:normal;font-family:Helvetica;font-stretch:normal",
+        "font-size:{}pt;text-align:{align};color:{hex};font-weight:normal;font-style:normal;font-family:{font_name};font-stretch:normal",
         n(size)
     );
     let rc = format!(
         "<?xml version=\"1.0\"?><body xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\" xfa:spec=\"2.0.2\" style=\"{style}\">{body}</body>"
     );
-    d.set(b"DS".to_vec(), PdfString::text(&format!("font: Helvetica {}pt; text-align:{align}; color:{hex}", n(size))));
+    d.set(b"DS".to_vec(), PdfString::text(&format!("font: {font_name} {}pt; text-align:{align}; color:{hex}", n(size))));
     d.set(b"RC".to_vec(), PdfString::text(&rc));
 }
 
@@ -163,6 +164,25 @@ pub fn with_replies_and_popups(doc: &Document, list: &[Object], doomed: impl Int
 pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, meta: &Meta) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     let free_text = annot_dict(doc, r).name(b"Subtype") == Some(b"FreeText");
+    if free_text {
+        let needs_fallback =
+            text.chars().any(|c| !pdfcraft_fonts::win_ansi_encodable(c) && !matches!(c, '\n' | '\r') && pdfcraft_fonts::fallback_has_char(c));
+        let (col, size, font) = appearance::parse_da(&annot_dict(doc, r));
+        if font == AnnotFont::Helvetica && needs_fallback {
+            if pdfcraft_fonts::embedding::ensure_fallback_font(doc).is_ok() {
+                doc.update_dict(r, |d| {
+                    d.set(
+                        b"DA".to_vec(),
+                        PdfString::literal(
+                            format!("{} {} {} rg /{} {} Tf", n(col[0]), n(col[1]), n(col[2]), AnnotFont::Inter.resource(), n(size)).into_bytes(),
+                        ),
+                    );
+                })?;
+            }
+        } else if font == AnnotFont::Inter {
+            pdfcraft_fonts::embedding::ensure_fallback_font(doc).map_err(AnnotError::Invalid)?;
+        }
+    }
     doc.update_dict(r, |d| {
         d.set(b"Contents".to_vec(), PdfString::text(text));
         // The rich-text version follows the new plain text (text boxes), or would contradict it.
@@ -192,7 +212,7 @@ pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, m
 fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
     let d = annot_dict(doc, r);
     let nums = |key: &[u8]| -> Option<Vec<f64>> { d.get(key)?.as_array()?.iter().map(|o| o.as_f64()).collect() };
-    let (_, size) = appearance::parse_da(&d);
+    let (_, size, font) = appearance::parse_da(&d);
     let pad = 2.0 + border_width_of(&d);
     let rect = nums(b"Rect").filter(|v| v.len() == 4 && v.iter().all(|x| x.is_finite()))?;
     let rect = [rect[0], rect[1], rect[2], rect[3]];
@@ -204,15 +224,17 @@ fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
         rect
     };
     let (x0, top) = (tb[0].min(tb[2]), tb[1].max(tb[3]));
+    let fallback_info = appearance::fallback_font_info(Some(doc), font);
+    let measure = |s: &str, sz: f64| appearance::measure_text(font, fallback_info.as_ref().map(|(_, m)| m), s, sz);
     let w = tb[2] - tb[0];
     let w = if w.is_finite() && w >= 1.0 {
         w
     } else {
         // No usable old width: fall back to the creation-time width (at most 300 pt).
-        let longest = text.lines().map(|l| appearance::text_width(l, size)).fold(0.0, f64::max);
+        let longest = text.lines().map(|l| measure(l, size)).fold(0.0, f64::max);
         (longest + 2.0 * pad + 4.0).clamp(40.0, 300.0)
     };
-    let lines = appearance::wrap(text, size, (w - 2.0 * pad).max(1.0)).len().max(1) as f64;
+    let lines = pdfcraft_fonts::wrap_with(text, size, (w - 2.0 * pad).max(1.0), measure).len().max(1) as f64;
     Some([x0, top - lines * size * 1.2 - 2.0 * pad - 2.0, x0 + w, top])
 }
 
@@ -559,9 +581,9 @@ pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleCha
     doc.update_dict(r, |d| {
         if let Some(c) = color {
             if free_text {
-                let (_, size) = appearance::parse_da(d);
+                let (_, size, font) = appearance::parse_da(d);
                 let [r, g, b] = c.map(|x| x.clamp(0.0, 1.0));
-                d.set(b"DA".to_vec(), PdfString::literal(format!("{} {} {} rg /Helv {} Tf", n(r), n(g), n(b), n(size)).into_bytes()));
+                d.set(b"DA".to_vec(), PdfString::literal(format!("{} {} {} rg /{} {} Tf", n(r), n(g), n(b), font.resource(), n(size)).into_bytes()));
                 rich_text(d);
             } else {
                 d.set(b"C".to_vec(), rgb(c));
@@ -612,11 +634,45 @@ pub fn set_font_size(doc: &mut Document, page: usize, index: usize, size: f64, m
     refuse_foreign_text(doc, &d)?;
     let before = d;
     doc.update_dict(r, |d| {
-        let (col, _) = appearance::parse_da(d);
-        d.set(b"DA".to_vec(), PdfString::literal(format!("{} {} {} rg /Helv {} Tf", n(col[0]), n(col[1]), n(col[2]), n(size)).into_bytes()));
+        let (col, _, font) = appearance::parse_da(d);
+        d.set(
+            b"DA".to_vec(),
+            PdfString::literal(format!("{} {} {} rg /{} {} Tf", n(col[0]), n(col[1]), n(col[2]), font.resource(), n(size)).into_bytes()),
+        );
         rich_text(d);
         touch(d, meta);
     })?;
+    refit_box(doc, r, meta, before, false)
+}
+
+/// Change the font of a text box, typewriter text or callout (`/DA` keeps its colour and size;
+/// rich-text strings follow) and redraw it. The box grows to hold the wrapped text at the new
+/// size and never shrinks.
+pub fn set_font(doc: &mut Document, page: usize, index: usize, font: AnnotFont, meta: &Meta) -> Result<(), AnnotError> {
+    let (_, r) = annot_ref(doc, page, index)?;
+    unlocked(doc, r)?;
+    let d = annot_dict(doc, r);
+    if d.name(b"Subtype") != Some(b"FreeText") {
+        return Err(AnnotError::Invalid("only text boxes, typewriter text and callouts have a font".into()));
+    }
+    refuse_foreign_text(doc, &d)?;
+    let before = d;
+    if font == AnnotFont::Inter {
+        pdfcraft_fonts::embedding::ensure_fallback_font(doc).map_err(AnnotError::Invalid)?;
+    }
+    doc.update_dict(r, |d| {
+        let (col, size, _) = appearance::parse_da(d);
+        d.set(
+            b"DA".to_vec(),
+            PdfString::literal(format!("{} {} {} rg /{} {} Tf", n(col[0]), n(col[1]), n(col[2]), font.resource(), n(size)).into_bytes()),
+        );
+        rich_text(d);
+        touch(d, meta);
+    })?;
+    refit_box(doc, r, meta, before, true)
+}
+
+fn refit_box(doc: &mut Document, r: ObjRef, meta: &Meta, before: Dict, new_text: bool) -> Result<(), AnnotError> {
     let text = text_value(doc, &annot_dict(doc, r), b"Contents").unwrap_or_default();
     let result = match fitted_box(doc, r, &text) {
         Some(fit) => {
@@ -625,11 +681,17 @@ pub fn set_font_size(doc: &mut Document, page: usize, index: usize, size: f64, m
                 cur.get(b"Rect").and_then(|o| o.as_array()).map(|a| a.iter().filter_map(|x| x.as_f64()).collect()).unwrap_or_default();
             // Keep the top and sides; only the bottom edge moves, and only downwards.
             match four(&nums).map(normalize) {
-                Some(old) if !cur.contains(b"CL") => apply_text_box(doc, r, [fit[0], fit[1].min(old[1]), fit[2], fit[3]], meta, false),
-                _ => apply_text_box(doc, r, fit, meta, false),
+                Some(old) if !cur.contains(b"CL") => apply_text_box(doc, r, [fit[0], fit[1].min(old[1]), fit[2], fit[3]], meta, new_text),
+                _ => apply_text_box(doc, r, fit, meta, new_text),
             }
         }
-        None => redraw_or_restore(doc, r, before.clone()),
+        None => {
+            if new_text {
+                draw_appearance(doc, r)
+            } else {
+                redraw_or_restore(doc, r, before.clone())
+            }
+        }
     };
     if result.is_err() {
         doc.set(r, Object::Dict(before));

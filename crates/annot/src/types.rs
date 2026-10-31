@@ -493,6 +493,91 @@ impl Shape {
     }
 }
 
+/// The standard fonts of text boxes, typewriter text and callouts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AnnotFont {
+    #[default]
+    Helvetica,
+    Times,
+    Courier,
+    Inter,
+}
+
+impl AnnotFont {
+    pub const ALL: [AnnotFont; 4] = [AnnotFont::Helvetica, AnnotFont::Times, AnnotFont::Courier, AnnotFont::Inter];
+
+    /// The human-readable name of the font.
+    pub fn name(self) -> &'static str {
+        match self {
+            AnnotFont::Helvetica => "Helvetica",
+            AnnotFont::Times => "Times Roman",
+            AnnotFont::Courier => "Courier",
+            AnnotFont::Inter => "Inter",
+        }
+    }
+
+    /// The `/DA` font resource name (Acrobat's form font names).
+    pub fn resource(self) -> &'static str {
+        match self {
+            AnnotFont::Helvetica => "Helv",
+            AnnotFont::Times => "TiRo",
+            AnnotFont::Courier => "Cour",
+            AnnotFont::Inter => "PCFallback",
+        }
+    }
+
+    /// The PDF BaseFont name.
+    pub fn base_font(self) -> &'static str {
+        match self {
+            AnnotFont::Helvetica => "Helvetica",
+            AnnotFont::Times => "Times-Roman",
+            AnnotFont::Courier => "Courier",
+            AnnotFont::Inter => "Inter-Regular",
+        }
+    }
+
+    /// The CSS/rich-text font name for `/RC` and `/DS`.
+    pub fn rich_text_font(self) -> &'static str {
+        match self {
+            AnnotFont::Helvetica => "Helvetica",
+            AnnotFont::Times => "Times-Roman",
+            AnnotFont::Courier => "Courier",
+            AnnotFont::Inter => "Inter",
+        }
+    }
+
+    /// Resolve an [`AnnotFont`] from a `/DA` font resource name or base font.
+    pub fn from_resource(n: &str) -> AnnotFont {
+        match n {
+            "TiRo" | "Times-Roman" | "TimesRoman" | "Times" => AnnotFont::Times,
+            "Cour" | "Courier" => AnnotFont::Courier,
+            "PCFallback" | "Inter-Regular" | "Inter" => AnnotFont::Inter,
+            _ => AnnotFont::Helvetica,
+        }
+    }
+
+    /// Resolve an [`AnnotFont`] from a case-insensitive user or tool font name.
+    pub fn from_name(n: &str) -> Option<AnnotFont> {
+        match n.trim().to_ascii_lowercase().as_str() {
+            "helvetica" | "helv" => Some(AnnotFont::Helvetica),
+            "times roman" | "times-roman" | "times" | "tiro" => Some(AnnotFont::Times),
+            "courier" | "cour" => Some(AnnotFont::Courier),
+            "inter" | "pcfallback" => Some(AnnotFont::Inter),
+            _ => None,
+        }
+    }
+
+    /// Calculate text width in points for string `s` in this font at size `size`.
+    pub fn text_width(self, s: &str, size: f64) -> f64 {
+        match self {
+            AnnotFont::Helvetica => pdfcraft_fonts::helvetica_width(s, size),
+            AnnotFont::Times => pdfcraft_fonts::Std14::TimesRoman.text_width(s, size),
+            AnnotFont::Courier => pdfcraft_fonts::Std14::Courier.text_width(s, size),
+            AnnotFont::Inter => pdfcraft_fonts::inter_width(s, size),
+        }
+    }
+}
+
 /// The standard fonts of redaction overlay text.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum OverlayFont {

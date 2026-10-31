@@ -53,7 +53,8 @@ pub fn cjk_width(s: &str, size: f64) -> f64 {
         .sum()
 }
 
-/// Approximate advance of `s` in Inter Regular at `size` points.
+/// Approximate advance of `s` in Inter Regular at `size` points. Characters not present in Inter
+/// fall back to Helvetica's advance.
 pub fn inter_width(s: &str, size: f64) -> f64 {
     use skrifa::MetadataProvider as _;
     let Ok(font) = skrifa::FontRef::new(INTER_REGULAR) else { return helvetica_width(s, size) };
@@ -62,7 +63,16 @@ pub fn inter_width(s: &str, size: f64) -> f64 {
     let scale = size / upem;
     let charmap = font.charmap();
     let advances = font.glyph_metrics(skrifa::instance::Size::unscaled(), loc);
-    s.chars().map(|c| charmap.map(c).and_then(|gid| advances.advance_width(gid)).unwrap_or(0.0) as f64 * scale).sum()
+    let mut buf = [0u8; 4];
+    s.chars()
+        .map(|c| {
+            if let Some(gid) = charmap.map(c) {
+                advances.advance_width(gid).unwrap_or(0.0) as f64 * scale
+            } else {
+                helvetica_width(c.encode_utf8(&mut buf), size)
+            }
+        })
+        .sum()
 }
 
 /// East Asian wide and full-width characters (Unicode UAX #11 W and F, by block).
@@ -238,6 +248,17 @@ pub fn first_non_win_ansi(s: &str) -> Option<char> {
 /// [`undrawable_message`] instead of writing `?` (AGENTS.md §4: never lose work silently).
 pub fn first_undrawable(s: &str) -> Option<char> {
     s.chars().find(|c| !matches!(c, '\n' | '\r') && !win_ansi_encodable(*c))
+}
+
+/// Whether the bundled fallback font (`INTER_REGULAR`) has a glyph for `c`.
+pub fn fallback_has_char(c: char) -> bool {
+    use skrifa::MetadataProvider;
+    skrifa::FontRef::new(INTER_REGULAR).ok().and_then(|f| f.charmap().map(c)).is_some()
+}
+
+/// The first character of `s` that neither the standard fonts nor the fallback font can draw.
+pub fn first_undrawable_with_fallback(s: &str) -> Option<char> {
+    s.chars().find(|c| !matches!(c, '\n' | '\r') && !win_ansi_encodable(*c) && !fallback_has_char(*c))
 }
 
 /// The error for text the standard fonts can't draw ([`first_undrawable`]): which character, in
