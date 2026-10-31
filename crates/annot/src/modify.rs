@@ -2,7 +2,7 @@ use super::create::{
     add_annotation, base_dict, bounds, callout_attach, ending_draws, ending_pair, finite, grow, normalize, num_array, rect_for, rgb,
 };
 use super::draw::{draw_appearance, redraw_or_restore, set_appearance};
-use super::info::{is_comment_subtype, line_endings_of, text_value};
+use super::info::{is_comment_subtype, line_endings_of, own_popup, text_value};
 use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, is_fill_sign, page_ref, set_annots};
 use super::types::{
     FLAG_HIDDEN, FLAG_LOCKED, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NewAnnotation, ReviewState, Rgb, Shape, Style,
@@ -312,10 +312,7 @@ pub fn set_popup(doc: &mut Document, page: usize, index: usize, rect: Option<[f6
     let _ = meta;
     // Only a pop-up that is this comment's: `/Popup` naming another annotation (or a pop-up
     // whose `/Parent` is another comment) would move or open that one, so it gets its own.
-    let own_popup = |pr: &ObjRef| {
-        doc.get(*pr).as_dict().is_some_and(|pd| pd.name(b"Subtype") == Some(b"Popup") && pd.reference(b"Parent").is_none_or(|parent| parent == r))
-    };
-    match d.reference(b"Popup").filter(own_popup) {
+    match own_popup(doc, Some(r), &d) {
         Some(pr) => doc.update_dict(pr, |p| {
             if let Some(rect) = rect {
                 p.set(b"Rect".to_vec(), num_array(&rect));

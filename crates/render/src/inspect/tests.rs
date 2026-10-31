@@ -1861,6 +1861,20 @@ fn a_comments_pop_up_is_read_with_its_place_and_state() {
     let square = info.annotations.iter().find(|a| a.subtype == "Square").expect("the square");
     assert_eq!(square.popup, None);
     assert!(info.annotations.iter().all(|a| a.subtype != "Popup"), "the pop-up is not a comment of its own");
+
+    // #2137 review: a /Popup naming another annotation, a pop-up of another comment, or one
+    // whose /Parent isn't a reference isn't this comment's pop-up; one without /Parent is.
+    for (target, extra, own) in [
+        ("6 0 R", "", false),
+        ("7 0 R", "7 0 obj << /Type /Annot /Subtype /Popup /Rect [0 0 50 50] /Parent 6 0 R >> endobj\n", false),
+        ("7 0 R", "7 0 obj << /Type /Annot /Subtype /Popup /Rect [0 0 50 50] /Parent << >> >> endobj\n", false),
+        ("7 0 R", "7 0 obj << /Type /Annot /Subtype /Popup /Rect [0 0 50 50] >> endobj\n", true),
+    ] {
+        let text = String::from_utf8_lossy(bytes).replace("/Popup 5 0 R", &format!("/Popup {target}")).replace("trailer", &format!("{extra}trailer"));
+        let info = inspect(Arc::new(text.into_bytes()), None).expect("opens");
+        let note = info.annotations.iter().find(|a| a.subtype == "Text").expect("the note");
+        assert_eq!(note.popup.is_some(), own, "/Popup {target} {extra}");
+    }
 }
 
 #[test]

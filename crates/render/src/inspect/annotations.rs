@@ -158,7 +158,14 @@ impl<'a> Inspector<'a> {
                 }
                 _ => Vec::new(),
             };
-            let popup = d.get(b"Popup").ok().and_then(|o| self.dict(o)).map(|p| {
+            // Only the comment's own pop-up: a pop-up annotation whose /Parent, if any, is a
+            // reference to this comment (keep in step with `pdfcraft_annot::summaries`).
+            let own = a.as_reference().ok();
+            let is_own = |p: &&Dictionary| {
+                self.name(p, b"Subtype").as_deref() == Some("Popup")
+                    && p.get(b"Parent").map_or(true, |parent| parent.as_reference().ok().is_some_and(|id| Some(id) == own))
+            };
+            let popup = d.get(b"Popup").ok().and_then(|o| self.dict(o)).filter(is_own).map(|p| {
                 let [x0, y0, x1, y1] = rect4(self.resolve(p.get(b"Rect").unwrap_or(&Object::Null)));
                 Popup {
                     rect: [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)],

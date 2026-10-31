@@ -2240,6 +2240,12 @@ fn pop_ups_open_close_and_move_and_are_reported() {
     let own = annot_dict(&doc, mr).reference(b"Popup").expect("a pop-up of its own");
     assert_ne!(own, r);
     assert_eq!(doc.get(own).as_dict().and_then(|p| p.reference(b"Parent")), Some(mr));
+    // Its own pop-up, with /Parent naming it, is the one moved next time.
+    set_popup(&mut doc, 0, mark, Some([12.0, 10.0, 112.0, 60.0]), None, &meta("h1")).unwrap();
+    assert_eq!(annot_dict(&doc, mr).reference(b"Popup"), Some(own), "the same pop-up");
+
+    // #2137 review: nor is it reported as the comment's (see the helper).
+    foreign_pop_ups_are_not_the_marks(&mut doc, r, mark, mr);
 
     // None of their own.
     let text_box = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: [10.0, 10.0, 110.0, 40.0], font_size: 12.0 }), &meta("t1")).unwrap();
@@ -2249,4 +2255,39 @@ fn pop_ups_open_close_and_move_and_are_reported() {
     assert!(matches!(set_popup(&mut doc, 0, note, Some([0.0, 0.0, 0.5, 0.5]), None, &meta("n1")), Err(AnnotError::Invalid(_))));
     assert!(matches!(set_popup(&mut doc, 0, note, Some([f64::NAN, 0.0, 10.0, 10.0]), None, &meta("n1")), Err(AnnotError::Invalid(_))));
     assert!(matches!(set_popup(&mut doc, 0, 99, None, Some(true), &meta("n1")), Err(AnnotError::NoSuchAnnotation { .. })));
+}
+
+/// #2137 review: a pop-up that is not the mark's own is neither reported as its pop-up nor
+/// changed through it (part of `pop_ups_open_close_and_move_and_are_reported`).
+fn foreign_pop_ups_are_not_the_marks(doc: &mut Document, note: ObjRef, mark: usize, mr: ObjRef) {
+    // #2137 review: nor is it reported as the comment's. A /Popup naming the note, or the note's
+    // own pop-up (its /Parent is the note), gives the mark no pop-up in the summaries.
+    let popup_of_mark = |doc: &Document| summaries(doc).into_iter().find(|s| s.index == mark).unwrap().popup;
+    let notes_popup = annot_dict(doc, note).reference(b"Popup").expect("the note's pop-up");
+    for foreign in [note, notes_popup] {
+        doc.update_dict(mr, |m| m.set(b"Popup".to_vec(), Object::Ref(foreign))).unwrap();
+        assert_eq!(popup_of_mark(doc), None, "{foreign:?} isn't the mark's");
+    }
+    // A pop-up whose /Parent isn't a reference (it must be one) isn't the mark's either: it is
+    // neither reported nor changed, and the mark gets one of its own.
+    let mut bad = Dict::new();
+    bad.set(b"Type".to_vec(), Object::name("Annot"));
+    bad.set(b"Subtype".to_vec(), Object::name("Popup"));
+    bad.set(b"Rect".to_vec(), Object::Array([0.0, 0.0, 50.0, 50.0].iter().map(|v| Object::Real(*v)).collect()));
+    bad.set(b"Parent".to_vec(), Object::Dict(Dict::new()));
+    let bad = doc.add(Object::Dict(bad));
+    doc.update_dict(mr, |m| m.set(b"Popup".to_vec(), Object::Ref(bad))).unwrap();
+    assert_eq!(popup_of_mark(doc), None, "a direct /Parent");
+    let bad_before = doc.get(bad).as_dict().cloned();
+    set_popup(doc, 0, mark, None, Some(true), &meta("h1")).unwrap();
+    assert_eq!(doc.get(bad).as_dict().cloned(), bad_before, "left alone");
+    assert_ne!(annot_dict(doc, mr).reference(b"Popup"), Some(bad));
+    // A pop-up with no /Parent at all is taken as the comment's.
+    let mut orphan = Dict::new();
+    orphan.set(b"Type".to_vec(), Object::name("Annot"));
+    orphan.set(b"Subtype".to_vec(), Object::name("Popup"));
+    orphan.set(b"Rect".to_vec(), Object::Array([0.0, 0.0, 50.0, 50.0].iter().map(|v| Object::Real(*v)).collect()));
+    let orphan = doc.add(Object::Dict(orphan));
+    doc.update_dict(mr, |m| m.set(b"Popup".to_vec(), Object::Ref(orphan))).unwrap();
+    assert_eq!(popup_of_mark(doc), Some(PopupInfo { rect: [0.0, 0.0, 50.0, 50.0], open: false }), "no /Parent");
 }
