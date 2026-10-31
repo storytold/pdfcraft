@@ -60,6 +60,7 @@ pub use added::{
 };
 
 mod apply;
+mod mark_font;
 mod marks;
 mod place;
 

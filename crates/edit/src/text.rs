@@ -29,7 +29,7 @@ pub use session::TextSession;
 
 mod blocks;
 mod editor;
-mod fallback;
+pub(crate) mod fallback;
 mod interp;
 mod lines;
 mod rewrite;

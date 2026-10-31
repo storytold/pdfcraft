@@ -4377,6 +4377,7 @@ dependencies = [
  "sha2 0.11.1",
  "thiserror 2.0.21",
  "unicode-bidi",
+ "unicode-normalization",
 ]
 
 [[package]]
@@ -4691,6 +4692,7 @@ dependencies = [
  "sys-locale",
  "toml",
  "unicode-bidi",
+ "unicode-normalization",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
