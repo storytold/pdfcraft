@@ -891,7 +891,7 @@ struct PageEnv<'a> {
 #[derive(Default)]
 struct PageOut {
     canvas_action: Option<comments::CanvasAction>,
-    clicked_link: Option<LinkTarget>,
+    clicked_link: Option<pdfcraft_render::Link>,
     copy_selected: bool,
     field_menu: Option<FieldMenu>,
     field_placed: bool,
@@ -1757,7 +1757,7 @@ fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_
         && pointer.and_then(|p| link_hit(info, &xf, i, p)).is_some_and(|h| h.owner == owner)
         && let Some(l) = info.links.get(index)
     {
-        frame.out.clicked_link = Some(l.target.clone());
+        frame.out.clicked_link = Some(l.clone());
     }
     // Comments say what they are with any tool, beside its cursor, as Acrobat's do.
     comments::describe(&pcx, view);
@@ -1906,7 +1906,9 @@ fn link_hit(info: &DocInfo, xf: &PageXform, page: usize, p: Pos2) -> Option<crat
         LinkTarget::Uri(u) => u.clone(),
         LinkTarget::SetLayers { .. } => tl!("Set layer visibility").to_string(),
         LinkTarget::RemoteGoTo { file, .. } => file.clone(),
-        LinkTarget::Other(s) => crate::i18n::fmt(tl!("{s} action"), &[("s", s)]),
+        LinkTarget::Named(s) | LinkTarget::Other(s) => crate::i18n::fmt(tl!("{s} action"), &[("s", s)]),
+        LinkTarget::Hide { .. } => crate::i18n::fmt(tl!("{s} action"), &[("s", "Hide")]),
+        LinkTarget::ResetForm { .. } => crate::i18n::fmt(tl!("{s} action"), &[("s", "ResetForm")]),
     };
     let owner = crate::page_router::Owner::Link { index };
     Some(crate::page_router::Hit { tip: Some(label), ..crate::page_router::Hit::new(owner, Layer::Link, egui::CursorIcon::PointingHand) })
@@ -2774,27 +2776,78 @@ fn schedule_presentation_turn(ui: &egui::Ui, view: &mut DocView, click: Option<b
     }
 }
 
-/// Follows the link that was clicked. A link to another file comes back, to be opened once the
-/// document is no longer borrowed.
-fn follow_link(
-    app: &mut PdfCraftApp,
-    index: usize,
-    target: Option<LinkTarget>,
-) -> Option<(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination)> {
-    let view_id = app.views[index].id;
-    match target? {
+/// A local PDF a link opens: the source document, the file it names, and where to go in it.
+type RemoteOpen = (DocId, String, pdfcraft_render::RemoteDestination);
+
+/// Follows the link that was clicked: its action, then each one its `/Next` entries chain after
+/// it (ISO 32000-2 §12.6.2), in order. The document edits among them (a hide, a form reset) are
+/// applied together as one undoable step. A link to another file comes back, to be opened once
+/// the document is no longer borrowed.
+fn follow_link(app: &mut PdfCraftApp, index: usize, link: Option<pdfcraft_render::Link>) -> Option<RemoteOpen> {
+    let link = link?;
+    let view = app.views.get_mut(index)?;
+    // An edit already waiting (a field's typed value) is applied first, in the same step.
+    let mut edits: Vec<Edit> = view.pending_edit.take().into_iter().collect();
+    let mut remote_open = None;
+    for target in std::iter::once(link.target).chain(link.next) {
+        follow_link_action(app, index, target, &mut remote_open);
+        if let Some(e) = app.views.get_mut(index).and_then(|v| v.pending_edit.take()) {
+            edits.push(e);
+        }
+    }
+    let edit = match edits.len() {
+        0 | 1 => edits.pop(),
+        _ => Some(Edit::Batch { label: "Link actions".into(), edits }),
+    };
+    if let Some(view) = app.views.get_mut(index) {
+        view.pending_edit = edit;
+    }
+    remote_open
+}
+
+/// One action of a link. Hide and reset-form actions, and the named actions, run as a push
+/// button's do.
+fn follow_link_action(app: &mut PdfCraftApp, index: usize, target: LinkTarget, remote_open: &mut Option<RemoteOpen>) {
+    use pdfcraft_engine::form_scripts::ButtonAction as B;
+    let Some(id) = app.views.get(index).map(|v| v.id) else { return };
+    match target {
         LinkTarget::Page(p, dest) => {
-            let view = &mut app.views[index];
-            if let Some(doc) = app.session.get(view.id) {
+            if let (Some(doc), Some(view)) = (app.session.get(id), app.views.get_mut(index)) {
                 view.go_to_dest(p, dest, &doc.info);
             }
         }
         LinkTarget::Uri(u) => app.request_document_url(&u, crate::LinkOrigin::Link),
         LinkTarget::SetLayers { changes, preserve_rb } => set_layers(app, index, &changes, preserve_rb),
-        LinkTarget::RemoteGoTo { file, destination, .. } => return Some((view_id, file, destination)),
+        // The first local PDF a click names is the one opened.
+        LinkTarget::RemoteGoTo { file, destination, .. } => {
+            if remote_open.is_none() {
+                *remote_open = Some((id, file, destination));
+            }
+        }
+        LinkTarget::Named(name) => match name.as_str() {
+            // §12.6.4.12, Table 215: the named actions every processor supports. Past either end
+            // of the document, NextPage and PrevPage stay put.
+            "NextPage" | "PrevPage" | "FirstPage" | "LastPage" => run_button(app, index, "", B::Named(name)),
+            // Nonstandard names (the Table 215 NOTE allows them) that documents widely use:
+            // back to the previous view, as View ▸ Previous view does (nothing without one), and
+            // the Print dialog, never printing without it.
+            "GoBack" => {
+                if let Some(view) = app.views.get_mut(index) {
+                    view.view_history(false);
+                }
+            }
+            "Print" => {
+                app.execute("print.dialog");
+            }
+            // "If the PDF processor encounters a named action that is inappropriate for a
+            // viewing platform, or if the viewer does not recognise the name, it shall take no
+            // action."
+            other => log::info!("link: named action {other:?} not recognised; no action taken"),
+        },
+        LinkTarget::Hide { fields, hide } => run_button(app, index, "", B::ShowHide { fields, hide }),
+        LinkTarget::ResetForm { fields, exclude } => run_button(app, index, "", B::Reset { fields, exclude }),
         LinkTarget::Other(s) => app.notify_fmt("This PDF uses the unsupported {s} action.", &[("s", &s)]),
     }
-    None
 }
 
 /// A finished marquee zoom, a signature rectangle drawn, or an empty signature field clicked.

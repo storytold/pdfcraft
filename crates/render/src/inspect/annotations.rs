@@ -11,6 +11,12 @@ pub(super) const MAX_REMOTE_FILE_SPEC_BYTES: usize = 4096;
 
 const MAX_REMOTE_DESTINATION_NAME_BYTES: usize = 1024;
 
+/// Actions one link runs at most: its own and those its `/Next` entries chain.
+pub(super) const MAX_LINK_ACTIONS: usize = 256;
+
+/// Fields one hide or reset-form action names at most.
+const MAX_ACTION_FIELDS: usize = 1024;
+
 /// Text and geometry `DocInfo::annotations` keeps, as counted by [`retained`]. Past it the rest
 /// are not listed: real comments stay far below, many small ones sharing one long string do not.
 pub(super) const MAX_ANNOTATION_BYTES: usize = 64 << 20;
@@ -194,31 +200,170 @@ impl<'a> Inspector<'a> {
 
     fn link(&self, page: usize, index: usize, d: &Dictionary, text_budget: &mut usize) -> Option<Link> {
         let rect = rect4(self.resolve(d.get(b"Rect").ok()?));
-        let target = if let Ok(dest) = d.get(b"Dest") {
-            let (page, view) = self.dest(dest, 0)?;
-            LinkTarget::Page(page, view)
-        } else {
-            let a = d.get(b"A").ok().and_then(|a| self.dict(a))?;
-            match self.name(a, b"S").as_deref() {
-                Some("GoTo") => {
-                    let (page, view) = self.dest(a.get(b"D").ok()?, 0)?;
-                    LinkTarget::Page(page, view)
+        if let Ok(dest) = d.get(b"Dest") {
+            let (to, view) = self.dest(dest, 0)?;
+            return Some(Link { page, index, rect, target: LinkTarget::Page(to, view), next: Vec::new() });
+        }
+        let action = d.get(b"A").ok()?;
+        let a = self.dict(action)?;
+        let target = self.action(a, text_budget)?;
+        let next = self.next_actions(action, a, text_budget);
+        Some(Link { page, index, rect, target, next })
+    }
+
+    /// What one action dictionary does; `None` when it has no type, or when a Go-To's
+    /// destination or a URI action's address is unusable.
+    fn action(&self, a: &Dictionary, text_budget: &mut usize) -> Option<LinkTarget> {
+        Some(match self.name(a, b"S").as_deref()? {
+            "GoTo" => {
+                let (page, view) = self.dest(a.get(b"D").ok()?, 0)?;
+                LinkTarget::Page(page, view)
+            }
+            "URI" => {
+                let uri = a.get(b"URI").ok().and_then(|u| self.resolve(u).as_str().ok())?;
+                match spend(uri, text_budget, |b| String::from_utf8_lossy(b).into_owned()) {
+                    Some(uri) => LinkTarget::Uri(uri),
+                    None => LinkTarget::Other("URI".into()),
                 }
-                Some("URI") => {
-                    let uri = a.get(b"URI").ok().and_then(|u| self.resolve(u).as_str().ok())?;
-                    match spend(uri, text_budget, |b| String::from_utf8_lossy(b).into_owned()) {
-                        Some(uri) => LinkTarget::Uri(uri),
-                        None => LinkTarget::Other("URI".into()),
-                    }
-                }
-                Some("SetOCGState") => self.layer_state(a),
-                Some("GoToR") => self.remote_go_to(a).unwrap_or_else(|| LinkTarget::Other("GoToR".into())),
-                Some("Launch") => self.launch_pdf(a).unwrap_or_else(|| LinkTarget::Other("Launch".into())),
-                Some(other) => LinkTarget::Other(other.to_string()),
-                None => return None,
+            }
+            "SetOCGState" => self.layer_state(a),
+            "GoToR" => self.remote_go_to(a).unwrap_or_else(|| LinkTarget::Other("GoToR".into())),
+            "Launch" => self.launch_pdf(a).unwrap_or_else(|| LinkTarget::Other("Launch".into())),
+            "Named" => LinkTarget::Named(match a.get(b"N").map(|n| self.resolve(n)) {
+                Ok(Object::Name(n)) if n.len() <= MAX_REMOTE_DESTINATION_NAME_BYTES => String::from_utf8_lossy(n).into_owned(),
+                _ => String::new(),
+            }),
+            "Hide" => self.hide(a, text_budget),
+            "ResetForm" => self.reset_form(a, text_budget),
+            other => LinkTarget::Other(other.to_string()),
+        })
+    }
+
+    /// The actions `/Next` chains after `first` (whose own object is `first_ref`), depth first:
+    /// each action, then its own `/Next`, before the action after it (§12.6.2, Table 196 Note 1).
+    /// An action object is run once however often it is chained, so a cycle ends, and at most
+    /// [`MAX_LINK_ACTIONS`] run in all. An entry that isn't an action, or whose operands are
+    /// unusable, is skipped and its own chain with it.
+    fn next_actions(&self, first_ref: &'a Object, first: &'a Dictionary, text_budget: &mut usize) -> Vec<LinkTarget> {
+        let mut seen: HashSet<ObjectId> = self.resolved_id(first_ref).into_iter().collect();
+        let mut out = Vec::new();
+        // The entries still to run, the next one last.
+        let mut todo: Vec<&'a Object> = Vec::new();
+        let push_next = |d: &'a Dictionary, todo: &mut Vec<&'a Object>, left: usize| {
+            let Ok(next) = d.get(b"Next") else { return };
+            match self.resolve(next) {
+                Object::Array(items) => todo.extend(items.iter().take(left).rev()),
+                _ => todo.push(next),
+            }
+            // Only the top `left` entries can still be reached: each step takes one.
+            if let Some(extra) = todo.len().checked_sub(left)
+                && extra > 0
+            {
+                todo.drain(..extra);
             }
         };
-        Some(Link { page, index, rect, target })
+        let mut steps = 1usize;
+        push_next(first, &mut todo, MAX_LINK_ACTIONS - steps);
+        while let Some(o) = todo.pop() {
+            if steps >= MAX_LINK_ACTIONS {
+                break;
+            }
+            steps += 1;
+            if let Some(id) = self.resolved_id(o)
+                && !seen.insert(id)
+            {
+                continue;
+            }
+            let Some(d) = self.dict(o) else { continue };
+            let Some(target) = self.action(d, text_budget) else { continue };
+            out.push(target);
+            push_next(d, &mut todo, MAX_LINK_ACTIONS.saturating_sub(steps));
+        }
+        out
+    }
+
+    /// A text-string operand, spent from `text_budget`; `None` past it or when not a string.
+    fn budgeted_string(&self, o: &Object, text_budget: &mut usize) -> Option<String> {
+        let Object::String(bytes, _) = self.resolve(o) else { return None };
+        spend(bytes, text_budget, text_string).filter(|s| !s.is_empty())
+    }
+
+    /// The fully qualified name of the field `id` (a field or one of its widgets) belongs to,
+    /// from the partial names (`/T`) up its `/Parent` chain (§12.7.4.2). `None` for an
+    /// annotation that belongs to no field.
+    fn qualified_field_name(&self, id: ObjectId, text_budget: &mut usize) -> Option<String> {
+        let mut parts = Vec::new();
+        let mut seen = HashSet::new();
+        let mut cur = Some(id);
+        while let Some(c) = cur {
+            if seen.len() > 64 || !seen.insert(c) {
+                break;
+            }
+            let Ok(d) = self.doc.get_dictionary(c) else { break };
+            if let Some(t) = d.get(b"T").ok().and_then(|t| self.budgeted_string(t, text_budget)) {
+                parts.push(t);
+            }
+            cur = d.get(b"Parent").ok().and_then(|p| self.resolved_id(p));
+        }
+        parts.reverse();
+        (!parts.is_empty()).then(|| parts.join("."))
+    }
+
+    /// A hide action (§12.6.4.11). An annotation reference that belongs to no form field is not
+    /// run (only fields can be hidden yet); when nothing is left, the action reads as one
+    /// PdfCraft doesn't run. So does a `/T` array longer than [`MAX_ACTION_FIELDS`], rather than
+    /// hiding only its first fields.
+    fn hide(&self, a: &Dictionary, text_budget: &mut usize) -> LinkTarget {
+        let mut fields = Vec::new();
+        let target = |o: &Object, budget: &mut usize| match o {
+            Object::Reference(_) => match self.resolved_id(o) {
+                Some(id) => self.qualified_field_name(id, budget),
+                None => None,
+            },
+            other => self.budgeted_string(other, budget),
+        };
+        if let Ok(t) = a.get(b"T") {
+            match self.resolve(t) {
+                Object::Array(items) if items.len() <= MAX_ACTION_FIELDS => fields.extend(items.iter().filter_map(|o| target(o, text_budget))),
+                // Past the cap the action is not run, as an oversized reset-form one isn't:
+                // hiding only the first fields would leave the rest showing.
+                Object::Array(_) => return LinkTarget::Other("Hide".into()),
+                _ => fields.extend(target(t, text_budget)),
+            }
+        }
+        if fields.is_empty() {
+            return LinkTarget::Other("Hide".into());
+        }
+        let hide = !matches!(a.get(b"H").map(|h| self.resolve(h)), Ok(Object::Boolean(false)));
+        LinkTarget::Hide { fields, hide }
+    }
+
+    /// A reset-form action (§12.7.6.3), read as a push button's is (`pdfcraft_forms`): a field
+    /// reference names the field by its fully qualified name, as [`Self::hide`] reads one. An
+    /// entry that names no field, or one past [`MAX_ACTION_FIELDS`], leaves the action unrun
+    /// rather than resetting fields it didn't name: with the Include flag, dropping it could
+    /// leave an empty list, which resets them all. So does a `/Fields` that is present but not an
+    /// array (Table 241 makes it one); only a missing or null one means the whole form.
+    fn reset_form(&self, a: &Dictionary, text_budget: &mut usize) -> LinkTarget {
+        let fields = match a.get(b"Fields").map(|f| self.resolve(f)) {
+            Ok(Object::Array(items)) if items.len() <= MAX_ACTION_FIELDS => {
+                let read: Option<Vec<String>> = items
+                    .iter()
+                    .map(|o| match o {
+                        Object::Reference(_) => self.resolved_id(o).and_then(|id| self.qualified_field_name(id, text_budget)),
+                        other => self.budgeted_string(other, text_budget),
+                    })
+                    .collect();
+                match read {
+                    Some(fields) => fields,
+                    None => return LinkTarget::Other("ResetForm".into()),
+                }
+            }
+            Err(_) | Ok(Object::Null) => Vec::new(),
+            Ok(_) => return LinkTarget::Other("ResetForm".into()),
+        };
+        let flags = a.get(b"Flags").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0);
+        LinkTarget::ResetForm { fields, exclude: flags & 1 != 0 }
     }
 
     fn remote_go_to(&self, action: &Dictionary) -> Option<LinkTarget> {
