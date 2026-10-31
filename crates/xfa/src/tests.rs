@@ -4145,3 +4145,40 @@ fn clear_password_values_clears_static_xfa_password_fields() {
     let packets = read_packets(&doc).unwrap().unwrap();
     assert!(!packets.xdp.contains("hunter2"), "{}", packets.xdp);
 }
+
+/// A `<breakBefore/>` without a targetType breaks nothing: its default is `auto`, layout goes on
+/// in the current container (XFA 3.3 p. 638), as a public form's last section expects. One to a
+/// page area, or a content area, still starts a new page; so does a `breakAfter` to one.
+#[test]
+fn a_break_before_without_a_target_type_does_not_start_a_page() {
+    let page_of = |brk: &str| {
+        let xml = format!(
+            r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="first" w="2in" h="0.3in"/><subform name="last" layout="tb">{brk}<field name="f" w="2in" h="0.3in"/></subform>
+</subform></template>"#
+        );
+        let t = crate::parse(&xml).unwrap().0;
+        let form = crate::layout::layout(&t, None).unwrap();
+        form.pages.iter().position(|p| widgets(p).iter().any(|w| w.som == "form[0].last[0].f[0]"))
+    };
+    assert_eq!(page_of("<breakBefore/>"), Some(0), "auto: no break");
+    assert_eq!(page_of(r#"<breakBefore targetType="auto"/>"#), Some(0));
+    assert_eq!(page_of(r#"<breakBefore targetType="pageArea"/>"#), Some(1));
+    assert_eq!(page_of(r#"<breakBefore targetType="contentArea"/>"#), Some(1));
+    // A breakAfter acts after its subform: the field that follows shows whether it broke.
+    let page_after = |brk: &str| {
+        let xml = format!(
+            r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="first" w="2in" h="0.3in"/><subform name="last" layout="tb"><field name="f" w="2in" h="0.3in"/>{brk}</subform><field name="after" w="2in" h="0.3in"/>
+</subform></template>"#
+        );
+        let t = crate::parse(&xml).unwrap().0;
+        let form = crate::layout::layout(&t, None).unwrap();
+        form.pages.iter().position(|p| widgets(p).iter().any(|w| w.som == "form[0].after[0]"))
+    };
+    assert_eq!(page_after("<breakAfter/>"), Some(0), "auto: no break");
+    assert_eq!(page_after(r#"<breakAfter targetType="auto"/>"#), Some(0));
+    assert_eq!(page_after(r#"<breakAfter targetType="pageArea"/>"#), Some(1));
+}
