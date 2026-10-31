@@ -101,23 +101,35 @@ fn no_flags_means_no_confinement() {
     assert!(!stderr.contains("confined"), "{stderr}");
 }
 
-fn fails(args: &[&str]) -> String {
+/// A malformed root is a usage error (exit 2) when clap refuses it, a failure (exit 1) when the
+/// folder cannot be opened; either way the server never starts.
+fn fails_with(code: i32, args: &[&str]) -> String {
     let out: Output = Command::new(BIN).arg("mcp").args(args).stdin(Stdio::null()).output().unwrap();
-    assert_eq!(out.status.code(), Some(1), "{args:?} should fail");
+    assert_eq!(out.status.code(), Some(code), "{args:?} should fail");
     assert!(out.stdout.is_empty(), "{args:?} must not start a server");
     String::from_utf8(out.stderr).unwrap()
+}
+
+fn fails(args: &[&str]) -> String {
+    fails_with(2, args)
 }
 
 #[test]
 fn malformed_flags_are_errors_not_a_missing_root() {
     let dir = s(&std::env::temp_dir());
-    assert!(fails(&["--automation-read-root"]).contains("--automation-read-root needs a folder"));
-    assert!(fails(&["--automation-write-root", "--compact"]).contains("--automation-write-root needs a folder; use --automation-write-root=<dir>"));
-    assert!(fails(&["--automation-read-root="]).contains("--automation-read-root needs a non-empty folder"));
-    assert!(fails(&["--automation-read-root", &dir, "--automation-read-root", &dir]).contains("--automation-read-root given twice"));
-    assert!(fails(&["--automation-write-root", &dir, &format!("--automation-write-root={dir}")]).contains("--automation-write-root given twice"));
-    let missing = fails(&["--automation-read-root", "/definitely/not/a/folder"]);
+    assert!(fails(&["--automation-read-root"]).contains("a value is required for '--automation-read-root <DIR>'"));
+    assert!(fails(&["--automation-write-root", "--compact"]).contains("a value is required for '--automation-write-root <DIR>'"));
+    assert!(fails(&["--automation-read-root="]).contains("a path cannot be empty"));
+    assert!(
+        fails(&["--automation-read-root", &dir, "--automation-read-root", &dir])
+            .contains("the argument '--automation-read-root <DIR>' cannot be used multiple times")
+    );
+    assert!(
+        fails(&["--automation-write-root", &dir, &format!("--automation-write-root={dir}")])
+            .contains("the argument '--automation-write-root <DIR>' cannot be used multiple times")
+    );
+    let missing = fails_with(1, &["--automation-read-root", "/definitely/not/a/folder"]);
     assert!(missing.contains("mcp: cannot open the automation read root"), "{missing}");
     let file = std::env::current_exe().unwrap();
-    assert!(fails(&["--automation-write-root", &s(&file)]).contains("cannot open the automation write root"));
+    assert!(fails_with(1, &["--automation-write-root", &s(&file)]).contains("cannot open the automation write root"));
 }

@@ -84,12 +84,9 @@ fn a_non_positive_or_unparseable_every_is_refused_before_the_file_is_opened() {
     for value in ["0", "abc"] {
         let out_dir = dir.join("parts");
         let out = Command::new(BIN).args(["split", "missing.pdf", "--every", value, "--out-dir", out_dir.to_str().unwrap()]).output().unwrap();
-        assert_eq!(out.status.code(), Some(1), "--every {value}");
-        assert_eq!(
-            out.stderr,
-            format!("pdfcraft-cli: bad --every: expected a positive whole number of pages, got {value:?}\n").as_bytes(),
-            "--every {value}"
-        );
+        assert_eq!(out.status.code(), Some(2), "--every {value}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.starts_with(&format!("error: invalid value '{value}' for '--every <N>'")), "--every {value}: {stderr}");
         assert!(!out_dir.exists(), "--every {value}: nothing may be written");
     }
     let _ = std::fs::remove_dir_all(&dir);

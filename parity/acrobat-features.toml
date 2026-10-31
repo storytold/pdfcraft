@@ -9533,7 +9533,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/automation/tests/it/automation.rs::tool_table_is_well_formed", "crates/automation/tests/it/automation.rs::edit_undo_redo_and_save_round_trip", "apps/pdfcraft-cli/tests/it/stdout.rs::output_commands_exit_cleanly_when_the_reader_has_closed", "apps/pdfcraft-cli/tests/it/run_report.rs::a_failing_step_is_named_and_the_rest_are_skipped"]
-notes = "CLI stdout exits cleanly if a pipe reader closes early; other output errors and command failures remain errors. `run --script --report` prints one JSON document with a status per step (#1891); without it the output is unchanged."
+notes = "CLI stdout exits cleanly if a pipe reader closes early; other output errors and command failures remain errors. `run --script --report` prints one JSON document with a status per step (#1891); without it the output is unchanged. The argument parser is clap derive (RFC-0012, #4881): unknown or repeated flags, bad values and conflicting flags are usage errors (exit 2) before any file is opened; a command that fails exits 1 as `error: <message>`; completions and man pages come from `cargo run -p pdfcraft-cli --example man-and-completions -- DIR` (not yet installed by the packages)."
 
 [[feature]]
 id = "misc.cli-completeness"

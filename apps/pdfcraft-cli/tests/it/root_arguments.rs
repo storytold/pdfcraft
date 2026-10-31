@@ -43,19 +43,20 @@ fn malformed_root_fails_before_a_script_can_overwrite_a_file() {
     std::fs::write(&destination, CANARY).unwrap();
 
     for (flags, diagnostic) in [
-        (vec!["--root"], "--root needs a directory value"),
-        (vec!["--root", ""], "--root needs a directory value"),
-        (vec!["--root", "--out", "escaped.png"], "--root needs a directory value"),
-        (vec!["--out", "--root"], "--root needs a directory value"),
-        (vec!["--root", ".", "--root"], "--root may only be supplied once"),
-        (vec!["--root", ".", "--root", "."], "--root may only be supplied once"),
-        (vec!["--root", ".", "--out", "--root"], "--root may only be supplied once"),
+        (vec!["--root"], "a value is required for '--root <DIR>'"),
+        (vec!["--root", ""], "a path cannot be empty"),
+        (vec!["--root", "--out", "escaped.png"], "a value is required for '--root <DIR>'"),
+        (vec!["--out", "--root"], "a value is required for '--out <FILE>'"),
+        (vec!["--root", ".", "--root"], "a value is required for '--root <DIR>'"),
+        (vec!["--root", ".", "--root", "."], "the argument '--root <DIR>' cannot be used multiple times"),
+        (vec!["--root", ".", "--out", "--root"], "a value is required for '--out <FILE>'"),
     ] {
         // Both a valid script and a missing one: argument validation precedes script I/O.
         for script_name in ["steps.json", "missing.json"] {
             let out = Command::new(BIN).current_dir(&dir.0).args(["run", "--script", script_name]).args(&flags).output().unwrap();
-            assert_eq!(out.status.code(), Some(1), "{script_name} {flags:?} unexpectedly succeeded");
-            assert_eq!(String::from_utf8(out.stderr).unwrap().trim(), format!("pdfcraft-cli: run: {diagnostic}"));
+            assert_eq!(out.status.code(), Some(2), "{script_name} {flags:?} unexpectedly succeeded");
+            let stderr = String::from_utf8(out.stderr).unwrap();
+            assert!(stderr.starts_with("error: ") && stderr.contains(diagnostic), "{flags:?}: {stderr}");
             assert!(out.stdout.is_empty(), "a refused command must not execute or report tool results");
             assert_eq!(std::fs::read(&destination).unwrap(), CANARY);
             assert!(!dir.0.join("escaped.png").exists());
@@ -67,8 +68,10 @@ fn malformed_root_fails_before_a_script_can_overwrite_a_file() {
 #[test]
 fn malformed_root_fails_before_direct_tool_argument_validation() {
     let out = Command::new(BIN).args(["run", "doc_open", "not-key-value", "--root"]).output().unwrap();
-    assert_eq!(out.status.code(), Some(1));
-    assert_eq!(String::from_utf8(out.stderr).unwrap().trim(), "pdfcraft-cli: run: --root needs a directory value");
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    // Both mistakes are usage errors now, found before either is acted on.
+    assert!(stderr.contains("expected key=value") || stderr.contains("a value is required for '--root <DIR>'"), "{stderr}");
     assert!(out.stdout.is_empty());
 }
 
@@ -78,11 +81,25 @@ fn a_directory_name_starting_with_a_single_hyphen_remains_valid() {
     std::fs::create_dir(dir.0.join("-documents")).unwrap();
     let out = Command::new(BIN)
         .current_dir(&dir.0)
-        .args(["run", "doc_create", "from=blank", "width=100", "height=100", "--root", "-documents"])
+        .args(["run", "doc_create", "from=blank", "width=100", "height=100", "--root=-documents"])
         .output()
         .unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(serde_json::from_slice::<serde_json::Value>(&out.stdout).is_ok());
+    // Written as `./-documents` it is the same folder.
+    let out = Command::new(BIN)
+        .current_dir(&dir.0)
+        .args(["run", "doc_create", "from=blank", "width=100", "height=100", "--root", "./-documents"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    // Bare, it is a flag: RFC-0012 §1.4 (a value flag never takes the next flag as its value).
+    let out = Command::new(BIN)
+        .current_dir(&dir.0)
+        .args(["run", "doc_create", "from=blank", "width=100", "height=100", "--root", "-documents"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
 }
 
 #[cfg(feature = "mcp")]
@@ -95,12 +112,12 @@ fn malformed_root_never_starts_or_initializes_an_mcp_server() {
     // Even if a directory matches the next option's name, it is not a root operand.
     std::fs::create_dir(dir.0.join("--compact")).unwrap();
     for (flags, diagnostic) in [
-        (vec!["--root"], "--root needs a directory value"),
-        (vec!["--root", ""], "--root needs a directory value"),
-        (vec!["--root", "--compact"], "--root needs a directory value"),
-        (vec!["--compact", "--root"], "--root needs a directory value"),
-        (vec!["--root", ".", "--root"], "--root may only be supplied once"),
-        (vec!["--root", ".", "--root", "./--compact"], "--root may only be supplied once"),
+        (vec!["--root"], "a value is required for '--root <DIR>'"),
+        (vec!["--root", ""], "a path cannot be empty"),
+        (vec!["--root", "--compact"], "a value is required for '--root <DIR>'"),
+        (vec!["--compact", "--root"], "a value is required for '--root <DIR>'"),
+        (vec!["--root", ".", "--root"], "a value is required for '--root <DIR>'"),
+        (vec!["--root", ".", "--root", "./--compact"], "the argument '--root <DIR>' cannot be used multiple times"),
     ] {
         let mut child = Command::new(BIN)
             .current_dir(&dir.0)
@@ -114,8 +131,9 @@ fn malformed_root_never_starts_or_initializes_an_mcp_server() {
         // Early rejection may close stdin before this write; that is the intended behavior.
         let _ = child.stdin.take().unwrap().write_all(b"{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\",\"params\":{}}\n");
         let out = child.wait_with_output().unwrap();
-        assert_eq!(out.status.code(), Some(1), "{flags:?} unexpectedly started the server");
-        assert_eq!(String::from_utf8(out.stderr).unwrap().trim(), format!("pdfcraft-cli: mcp: {diagnostic}"));
+        assert_eq!(out.status.code(), Some(2), "{flags:?} unexpectedly started the server");
+        let stderr = String::from_utf8(out.stderr).unwrap();
+        assert!(stderr.starts_with("error: ") && stderr.contains(diagnostic), "{flags:?}: {stderr}");
         assert!(out.stdout.is_empty(), "a refused server must not answer initialize");
     }
 }

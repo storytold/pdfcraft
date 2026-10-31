@@ -1,47 +1,19 @@
-use super::commands::{parse_dpi, read};
-use super::options::{AUDIT_OPTIONS, CHECK_ONE_OPTIONS, CHECK_OPTIONS, flag, positional, validate_options};
-use super::{
-    Arc, CliError, Command, Duration, Instant, PageRenderer, Path, PathBuf, RenderConfig, RenderRequest, RequestKind, Stdio, inspect, stdout_line,
-};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-/// Audit a document for faux redactions. Prints the findings as JSON; fails when any are
-/// found so scripts and CI can gate on it, and when the audit itself cannot run.
-pub(crate) fn audit(args: &[String]) -> Result<(), CliError> {
-    validate_options("audit", args, AUDIT_OPTIONS)?;
-    let path = *positional(args, AUDIT_OPTIONS).first().ok_or("audit: missing file")?;
-    let bytes = read(path)?;
-    let password = flag(args, "--password");
-    let doc = pdfcraft_cos::Document::open_with_password(bytes.clone(), password).map_err(|e| format!("{path}: {e}"))?;
-    let findings = pdfcraft_audit::audit_redactions(&doc).map_err(|e| format!("{path}: {e}"))?;
-    // Rectangles in points from the top-left of the displayed page, as `doc_audit_redactions`
-    // reports them; the page geometry is read only when there is something to place.
-    let info = if findings.is_empty() {
-        None
-    } else {
-        let render_password = pdfcraft_engine::render_password_for(bytes.clone(), password);
-        Some(inspect(bytes, render_password.as_deref()).map_err(|e| format!("{path}: {e}"))?)
-    };
-    let items: Vec<serde_json::Value> = findings
-        .into_iter()
-        .map(|f| {
-            let rect = f.rect.map(|v| v as f32);
-            serde_json::json!({
-                "page": f.page + 1,
-                "kind": f.kind.id(),
-                "rect": info.as_ref().map_or(rect, |i| pdfcraft_automation::view_rect(i, f.page, rect)),
-                "covered_text": f.covered_text,
-            })
-        })
-        .collect();
-    println!("{}", serde_json::json!({ "file": path, "findings": items, "count": items.len() }));
-    if items.is_empty() { Ok(()) } else { Err(format!("audit: {} faux redaction(s) found", items.len()).into()) }
-}
+use pdfcraft_render::{PageRenderer, RenderConfig, RenderRequest, RequestKind, inspect};
+
+use crate::cli::{CheckArgs, CheckOneArgs};
+use crate::commands::read;
+use crate::error::CliError;
+use crate::{Io, stdout_line};
 
 /// Child-process body for `check`: prints one JSON line.
-pub(crate) fn check_one(args: &[String]) -> Result<(), CliError> {
-    validate_options("check-one", args, CHECK_ONE_OPTIONS)?;
-    let path = *positional(args, CHECK_ONE_OPTIONS).first().ok_or("check-one: missing file")?;
-    let dpi = parse_dpi(flag(args, "--dpi").unwrap_or("36"))?;
+pub(crate) fn check_one(args: &CheckOneArgs, io: &mut Io) -> Result<(), CliError> {
+    let path = args.file.as_path();
+    let dpi = args.dpi;
     let start = Instant::now();
     let bytes = read(path)?;
     let (status, pages, failed, detail, warnings) = match inspect(bytes.clone(), None) {
@@ -64,13 +36,12 @@ pub(crate) fn check_one(args: &[String]) -> Result<(), CliError> {
     };
     // `--edit` (fuzzing): also run our own object layer end to end, with no panic safety net,
     // so a panic in cos shows up as a crash of this process.
-    if args.iter().any(|a| a == "--edit") {
-        edit_round_trip(&std::fs::read(path).map_err(|e| e.to_string())?);
+    if args.edit {
+        edit_round_trip(&std::fs::read(path).map_err(|e| CliError::file(path, e))?);
     }
-    let line = serde_json::json!({ "file": path, "status": status, "pages": pages, "failed_pages": failed, "warnings": warnings,
+    let line = serde_json::json!({ "file": path.to_string_lossy(), "status": status, "pages": pages, "failed_pages": failed, "warnings": warnings,
         "ms": start.elapsed().as_millis() as u64, "detail": detail.chars().take(400).collect::<String>() });
-    stdout_line(format_args!("{line}"))?;
-    Ok(())
+    stdout_line(io, format_args!("{line}"))
 }
 
 /// Open with cos, touch every object, edit the catalog, save incrementally and in full (both
@@ -103,9 +74,9 @@ fn short(s: &str) -> String {
     s.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).take(4).collect::<Vec<_>>().join("-").to_lowercase()
 }
 
-fn collect(paths: &[&str]) -> Vec<PathBuf> {
+fn collect(paths: &[PathBuf], io: &mut Io) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    let mut stack: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
+    let mut stack: Vec<PathBuf> = paths.to_vec();
     let mut visited = std::collections::HashSet::new();
     while let Some(p) = stack.pop() {
         if p.is_dir() {
@@ -113,7 +84,7 @@ fn collect(paths: &[&str]) -> Vec<PathBuf> {
             let identity = match p.canonicalize() {
                 Ok(identity) => identity,
                 Err(error) => {
-                    eprintln!("{}: could not resolve directory: {error}", p.display());
+                    let _ = writeln!(io.err, "{}: could not resolve directory: {error}", p.display());
                     continue;
                 }
             };
@@ -131,34 +102,24 @@ fn collect(paths: &[&str]) -> Vec<PathBuf> {
     out
 }
 
-pub(crate) fn check(args: &[String]) -> Result<(), CliError> {
-    validate_options("check", args, CHECK_OPTIONS)?;
-    // Every option is checked before the inputs are scanned, so a bad value is one message,
-    // not one problem per file: a zero timeout used to make every file time out, and a bad
-    // dpi used to reach each child, which printed nothing and was reported as a crash.
-    let timeout_value = flag(args, "--timeout").unwrap_or("20");
-    let timeout = Duration::from_secs(
-        timeout_value
-            .parse::<u64>()
-            .ok()
-            .filter(|secs| *secs > 0)
-            .ok_or_else(|| format!("bad --timeout: expected a positive whole number of seconds, got {timeout_value:?}"))?,
-    );
-    let dpi = flag(args, "--dpi").unwrap_or("36").to_string();
-    parse_dpi(&dpi)?;
-    let files = collect(&positional(args, CHECK_OPTIONS));
+/// Runs each file in a child process of the running executable, so a hang or crash in any
+/// dependency is observed and reported instead of taking the harness down.
+pub(crate) fn check(args: &CheckArgs, io: &mut Io) -> Result<(), CliError> {
+    let timeout = Duration::from_secs(args.timeout);
+    let files = collect(&args.paths, io);
     if files.is_empty() {
-        return Err("check: no PDF files found".into());
+        return Err(CliError::NoPdfFiles);
     }
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe = std::env::current_exe().map_err(|e| CliError::command("check", e.to_string()))?;
     let mut results = Vec::new();
     let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
     for (n, f) in files.iter().enumerate() {
-        let r = run_child(&exe, f, &dpi, timeout);
+        let r = run_child(&exe, f, args.dpi, timeout);
         let status = r["status"].as_str().unwrap_or("?").to_string();
         *counts.entry(status.split(':').next().unwrap_or("?").to_string()).or_default() += 1;
         if status != "ok" {
-            eprintln!(
+            let _ = writeln!(
+                io.err,
                 "[{}/{}] {status:<28} {}  {}",
                 n + 1,
                 files.len(),
@@ -168,16 +129,16 @@ pub(crate) fn check(args: &[String]) -> Result<(), CliError> {
         }
         results.push(r);
     }
-    eprintln!("\nchecked {} files: {:?}", files.len(), counts);
-    if let Some(out) = flag(args, "--json") {
-        std::fs::write(out, serde_json::to_string_pretty(&results).unwrap_or_default()).map_err(|e| e.to_string())?;
+    let _ = writeln!(io.err, "\nchecked {} files: {:?}", files.len(), counts);
+    if let Some(out) = &args.json {
+        std::fs::write(out, serde_json::to_string_pretty(&results).unwrap_or_default()).map_err(|e| CliError::file(out, e))?;
     }
     Ok(())
 }
 
-fn run_child(exe: &Path, file: &Path, dpi: &str, timeout: Duration) -> serde_json::Value {
+fn run_child(exe: &Path, file: &Path, dpi: f32, timeout: Duration) -> serde_json::Value {
     let file_s = file.to_string_lossy().to_string();
-    let child = Command::new(exe).args(["check-one", &file_s, "--dpi", dpi]).stdout(Stdio::piped()).stderr(Stdio::null()).spawn();
+    let child = Command::new(exe).arg("check-one").arg(file).arg("--dpi").arg(dpi.to_string()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn();
     let mut child = match child {
         Ok(c) => c,
         Err(e) => return serde_json::json!({ "file": file_s, "status": "harness-error", "detail": e.to_string() }),

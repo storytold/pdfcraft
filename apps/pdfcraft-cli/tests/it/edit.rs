@@ -49,8 +49,9 @@ fn a_misspelled_option_fails_and_writes_nothing() {
     let out = Command::new(BIN).args(["edit", input.to_str().unwrap(), "--out", output.to_str().unwrap(), "--rotat", "1:90"]).output().unwrap();
     assert!(!out.status.success(), "an unknown option must not exit 0");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("unknown option") && stderr.contains("--rotat"), "the option must be named: {stderr}");
-    assert!(stderr.contains("--rotate"), "the accepted options must be listed: {stderr}");
+    assert_eq!(out.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("unexpected argument '--rotat'"), "the option must be named: {stderr}");
+    assert!(stderr.contains("--rotate"), "the close option is suggested: {stderr}");
     assert!(!output.exists(), "no output may be written for a rejected command line");
 }
 
@@ -61,7 +62,8 @@ fn an_option_without_its_value_fails() {
     let output = tmp("novalue", "out.pdf");
     let out = Command::new(BIN).args(["edit", input.to_str().unwrap(), "--out", output.to_str().unwrap(), "--title"]).output().unwrap();
     assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("--title needs a value"));
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("a value is required for '--title <T>'"));
     assert!(!output.exists());
 }
 
@@ -72,7 +74,7 @@ fn a_second_input_file_fails() {
     let output = tmp("stray", "out.pdf");
     let out = Command::new(BIN).args(["edit", input.to_str().unwrap(), "other.pdf", "--out", output.to_str().unwrap()]).output().unwrap();
     assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("unexpected argument \"other.pdf\""));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("unexpected argument 'other.pdf'"));
     assert!(!output.exists());
 }
 
@@ -141,13 +143,19 @@ mod one_based_arguments {
             for destination in ["output.pam", "new.pam", "input.pdf"] {
                 std::fs::write(dir.0.join("output.pam"), b"keep destination").unwrap();
                 for (command, option, value, diagnostic) in [
-                    ("render", "--page", "0", "bad --page: expected a positive page number"),
-                    ("edit", "--move", "1:0", "bad --move target: expected a page number of at least 1, got \"0\""),
-                    ("edit", "--insert-blank", "0", "bad --insert-blank position: expected a page position of at least 1, got \"0\""),
+                    ("render", "--page", "0", "expected a positive page number"),
+                    ("edit", "--move", "1:0", "expected a page number of at least 1, got \"0\""),
+                    ("edit", "--insert-blank", "0", "expected a positive page number"),
                 ] {
+                    // `render` writes images: a `.pdf` destination is refused for its name instead.
+                    if command == "render" && destination == "input.pdf" {
+                        continue;
+                    }
                     let out = Command::new(BIN).current_dir(&dir.0).args([command, input, "--out", destination, option, value]).output().unwrap();
-                    assert_eq!(out.status.code(), Some(1), "{command} {input} {option} {value}");
-                    assert_eq!(out.stderr, format!("pdfcraft-cli: {diagnostic}\n").as_bytes());
+                    assert_eq!(out.status.code(), Some(2), "{command} {input} {option} {value}");
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    assert!(stderr.starts_with(&format!("error: invalid value '{value}' for '{option} ")), "{stderr}");
+                    assert!(stderr.contains(diagnostic), "{stderr}");
                     assert!(out.stdout.is_empty());
                     assert_eq!(std::fs::read(dir.0.join("input.pdf")).unwrap(), source);
                     assert_eq!(std::fs::read(dir.0.join("output.pam")).unwrap(), b"keep destination");
@@ -200,17 +208,19 @@ mod one_based_arguments {
 fn a_value_an_option_cannot_hold_is_named_before_the_file_is_opened() {
     let dir = tmp("values", "");
     for (option, value, diagnostic) in [
-        ("--rotate", "1:abc", "bad --rotate degrees: expected a whole number of degrees, got \"abc\""),
-        ("--rotate", "1:45", "bad --rotate degrees: expected a multiple of 90 (such as 90, -90 or 180), got 45"),
-        ("--rotate", "1:-45", "bad --rotate degrees: expected a multiple of 90 (such as 90, -90 or 180), got -45"),
-        ("--move", "1:abc", "bad --move target: expected a page number of at least 1, got \"abc\""),
-        ("--move", "1:0", "bad --move target: expected a page number of at least 1, got \"0\""),
-        ("--insert-blank", "abc", "bad --insert-blank position: expected a page position of at least 1, got \"abc\""),
-        ("--insert-blank", "0", "bad --insert-blank position: expected a page position of at least 1, got \"0\""),
+        ("--rotate", "1:abc", "expected a whole number of degrees, got \"abc\""),
+        ("--rotate", "1:45", "expected a multiple of 90 (such as 90, -90 or 180), got 45"),
+        ("--rotate", "1:-45", "expected a multiple of 90 (such as 90, -90 or 180), got -45"),
+        ("--move", "1:abc", "expected a page number of at least 1, got \"abc\""),
+        ("--move", "1:0", "expected a page number of at least 1, got \"0\""),
+        ("--insert-blank", "abc", "expected a positive page number"),
+        ("--insert-blank", "0", "expected a positive page number"),
     ] {
         let out = Command::new(BIN).current_dir(&dir).args(["edit", "missing.pdf", "--out", "out.pdf", option, value]).output().unwrap();
-        assert_eq!(out.status.code(), Some(1), "{option} {value}");
-        assert_eq!(out.stderr, format!("pdfcraft-cli: {diagnostic}\n").as_bytes(), "{option} {value}");
+        assert_eq!(out.status.code(), Some(2), "{option} {value}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.starts_with(&format!("error: invalid value '{value}' for '{option} ")), "{option} {value}: {stderr}");
+        assert!(stderr.contains(diagnostic), "{option} {value}: {stderr}");
         assert!(out.stdout.is_empty(), "{option} {value}");
         assert!(!dir.join("out.pdf").exists(), "{option} {value}: no output may be written");
     }
@@ -235,7 +245,7 @@ fn a_destination_past_the_end_fails_and_writes_nothing() {
     ] {
         let out = Command::new(BIN).args(["edit", input.to_str().unwrap(), "--out", output.to_str().unwrap(), option, value]).output().unwrap();
         assert_eq!(out.status.code(), Some(1), "{option} {value}");
-        assert_eq!(String::from_utf8_lossy(&out.stderr), format!("pdfcraft-cli: {diagnostic}\n"), "{option} {value}");
+        assert_eq!(String::from_utf8_lossy(&out.stderr), format!("error: {diagnostic}\n"), "{option} {value}");
         assert!(!output.exists(), "{option} {value}: no output may be written");
     }
 }
@@ -358,7 +368,7 @@ fn a_page_tree_is_not_rebuilt_when_the_reader_shows_other_pages() {
     let output = tmp("scan-disagrees", "out.pdf");
     let out = Command::new(BIN).args(["edit", input.to_str().unwrap(), "--out", output.to_str().unwrap(), "--delete", "2"]).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
-    assert_eq!(String::from_utf8_lossy(&out.stderr), "pdfcraft-cli: the document's page tree lists no pages: the file is damaged\n");
+    assert_eq!(String::from_utf8_lossy(&out.stderr), "error: the document's page tree lists no pages: the file is damaged\n");
     assert!(!output.exists(), "no page may be deleted");
 }
 

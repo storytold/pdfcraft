@@ -773,3 +773,7 @@ PR #2133 retains document-local Pages sidebar focus for Ctrl/Cmd+A and Escape af
 ## Button export-value refresh (2026-10-30)
 
 PR #1952 retains per-widget checkbox/radio export-value editing in the split form-authoring and Prepare modules. Caption editing remains supported. Tests cover preserved appearances and selection, invalid/locked refusals, data-format round trips, and Apply/Cancel/Undo. Current-head hosted validation is pending; feature estimates are unchanged.
+
+## CLI on clap (2026-10-30)
+
+`pdfcraft-cli` parses its arguments with clap derive and reports failures through thiserror enums, per RFC-0012 (#4881): a library `run(args, out, err)` behind a shim `main`, unknown and repeated flags and bad values are usage errors (exit 2), `error: <message>` on stderr for a failed command (exit 1), generated help, `-V`/`--version`, and a completions and man-page example. A value starting with `-` is written `--flag=-value`. ast-grep rules are not added (the CI change belongs in its own PR). Feature counts and estimates are unchanged.
