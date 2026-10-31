@@ -612,7 +612,13 @@ fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize) -> Option<Vec<u8>>
         return Some(px);
     }
     let img = image::GrayImage::from_raw(mw as u32, mh as u32, px)?;
-    Some(image::imageops::resize(&img, w as u32, h as u32, image::imageops::FilterType::Triangle).into_raw())
+    let filter = image::imageops::FilterType::Triangle;
+    // `resize` scales the height first, through a buffer of the mask's width × the image's height
+    // (16 bytes a pixel). Each is at most `MAX_PIXELS`, but a mask wide where its image is tall
+    // makes that product far larger; the allocation then fails and aborts. Such a mask is scaled
+    // to the image's width first, so both steps stay within `MAX_PIXELS`.
+    let img = if (mw as u64).saturating_mul(h as u64) > MAX_PIXELS { image::imageops::resize(&img, w as u32, mh as u32, filter) } else { img };
+    Some(image::imageops::resize(&img, w as u32, h as u32, filter).into_raw())
 }
 
 fn png(w: u32, h: u32, rgb: &[u8], alpha: Option<&[u8]>) -> Result<Vec<u8>, String> {
