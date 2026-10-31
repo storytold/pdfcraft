@@ -649,6 +649,7 @@ impl Automation {
             }
             "form_fields" => self.form_fields(&a)?,
             "form_fill" => self.form_fill(&a)?,
+            "form_focus" => self.form_focus(&a)?,
             "form_set_image" => {
                 let path = self.resolve(a.str("path")?, false)?;
                 let bytes = read_input(&path)?;
