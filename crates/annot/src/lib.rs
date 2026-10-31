@@ -18,6 +18,7 @@ use std::collections::{HashMap, HashSet};
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
+mod callout;
 mod create;
 mod draw;
 mod info;
@@ -25,9 +26,10 @@ mod lookup;
 mod modify;
 mod types;
 
+pub use callout::{CALLOUT_KNEE_LINE, Side, callout_attach, callout_knee, callout_side};
 #[cfg(test)]
 use create::num_array;
-pub use create::{add_annotation, callout_attach, orient_image_stamp};
+pub use create::{add_annotation, orient_image_stamp};
 pub use draw::{AppearanceCache, set_appearance, with_missing_appearances, with_missing_appearances_cached};
 pub use info::{Props, Summary, is_comment_subtype, props, set_info, summaries};
 #[cfg(test)]

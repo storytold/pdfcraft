@@ -1,3 +1,4 @@
+use super::callout::{callout_line, callout_text_box};
 use super::create::finite;
 use super::draw::set_appearance;
 use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, drawn_upright, is_fill_sign, page_ref, page_refs};
@@ -35,9 +36,12 @@ pub struct Summary {
     pub fill_sign: bool,
     /// The NoRotate flag (`/F` bit 5), as `pdfcraft_render::Annotation::no_rotate`.
     pub no_rotate: bool,
-    /// A line's two ends (`/L`), or the corners of connected lines, a polygon or a cloud
-    /// (`/Vertices`), in user space; empty for other comments.
+    /// A line's two ends (`/L`), the corners of connected lines, a polygon or a cloud
+    /// (`/Vertices`), or a callout's arrow point and knee (`/CL` without its end, which follows
+    /// the text box), in user space; empty for other comments.
     pub points: Vec<[f32; 2]>,
+    /// A callout's text box (`/Rect` inset by `/RD`), in user space; `None` for other comments.
+    pub text_box: Option<[f32; 4]>,
 }
 
 pub(crate) fn text_value(doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
@@ -114,12 +118,20 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 }
             }
             let quads = nums(b"QuadPoints").as_chunks::<8>().0.to_vec();
-            // Keep in step with `pdfcraft_render::inspect`.
+            // Keep in step with `pdfcraft_render::inspect`: a callout gives its points only with a
+            // readable text box, without which they can't be changed either.
+            let callout = (subtype == "FreeText").then(|| callout_line(doc, d).zip(callout_text_box(doc, d))).flatten();
             let points = match subtype.as_str() {
                 "Line" => Some(nums(b"L")).filter(|l| l.len() == 4).map(|l| l.as_chunks::<2>().0.to_vec()).unwrap_or_default(),
                 "PolyLine" | "Polygon" => nums(b"Vertices").as_chunks::<2>().0.to_vec(),
+                "FreeText" => callout
+                    .as_ref()
+                    .and_then(|(line, _)| line.split_last())
+                    .map(|(_, lead)| lead.iter().map(|p| [p[0] as f32, p[1] as f32]).collect())
+                    .unwrap_or_default(),
                 _ => Vec::new(),
             };
+            let text_box = callout.map(|(_, t)| t.map(|v| v as f32));
             let irt = d.get(b"IRT").map(|o| o.as_ref().map_or_else(|| doc.resolve(o), |r| doc.get(final_ref(doc, r))));
             let in_reply_to = irt.and_then(|o| o.as_dict().cloned()).and_then(|p| text_value(doc, &p, b"NM"));
             let parent = d.get(b"IRT").and_then(Object::as_ref).and_then(|r| slots.get(&final_ref(doc, r)).copied());
@@ -145,6 +157,7 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 fill_sign: is_fill_sign(doc, d),
                 no_rotate: drawn_upright(doc, d),
                 points,
+                text_box,
             });
         }
     }

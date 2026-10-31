@@ -24,6 +24,7 @@ pub(crate) fn comment_list(doc: &pdfcraft_cos::Document) -> Vec<pdfcraft_render:
             fill_sign: s.fill_sign,
             no_rotate: s.no_rotate,
             points: s.points,
+            text_box: s.text_box,
         })
         .collect();
     pdfcraft_render::link_replies(&mut list);

@@ -739,7 +739,7 @@ pub fn tools() -> Vec<ToolDef> {
             .ro().cmd("measure.snap").with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"at":point(),"tolerance":{"type":"number","minimum":0,"maximum":10000},"endpoints":{"type":"boolean"},"midpoints":{"type":"boolean"},"intersections":{"type":"boolean"},"paths":{"type":"boolean"}}), &["doc","page","at"])),
         t("measure_export", "Export measurements as CSV", "Atomically write saved measurement values, labels, authors and scale ratios as spreadsheet-safe CSV. Returns how many unsupported measurements were left out.")
             .cmd("measure.export").with(schema(json!({"doc":doc(),"out":path_arg()}), &["doc","out"])),
-        t("comment_list", "List comments", "Every comment (annotation other than links, form widgets and pop-ups) with its page, index, id, type, author, text, date, rectangle, colour, review status, checkmark and replies (each with its own status and checkmark).")
+        t("comment_list", "List comments", "Every comment (annotation other than links, form widgets and pop-ups) with its page, index, id, type, author, text, date, rectangle, colour, review status, checkmark and replies (each with its own status and checkmark); the points that shape a line, polygon or callout, and a callout's text box.")
             .ro()
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1, "description": "Only this page." } }), &["doc"])),
         t(
@@ -906,7 +906,7 @@ pub fn tools() -> Vec<ToolDef> {
                 json!({ "doc": doc(), "sort": { "type": "string", "enum": ["page", "author", "date", "type"] }, "out": save_out, "open": open }),
                 &["doc"],
             )),
-        t("comment_edit", "Edit a comment", "Change a comment's text, colour, opacity, line width, font size (text box/typewriter/callout), fill (rectangle/oval/polygon/text box/callout; \"none\" removes it), rectangle (rectangle/oval/text box/stamp), position (`move` [dx, dy] in points) or shape (`points`: a line's two ends, or the corners of connected lines, a polygon or a cloud). Stamps keep their original appearance when resized. One undo step.").with(schema(
+        t("comment_edit", "Edit a comment", "Change a comment's text, colour, opacity, line width, font size (text box/typewriter/callout), fill (rectangle/oval/polygon/text box/callout; \"none\" removes it), rectangle (rectangle/oval/text box/stamp, or a callout's text box: its arrow point stays and its leader line re-attaches), position (`move` [dx, dy] in points) or shape (`points`: a line's two ends, the corners of connected lines, a polygon or a cloud, or a callout's arrow point and knee, as comment_list gives them). Stamps keep their original appearance when resized. One undo step.").with(schema(
             comment_ref(json!({
                 "contents": { "type": "string" },
                 "color": color(),
@@ -916,7 +916,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "font_size": { "type": "number", "minimum": 1, "maximum": 400, "description": "Font size in points of a text box, typewriter text or callout; the box grows to hold the text." },
                 "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
                 "move": point(),
-                "points": { "type": "array", "items": point(), "minItems": 2, "description": "A line's two ends, or every corner of connected lines, a polygon or a cloud, in page coordinates." },
+                "points": { "type": "array", "items": point(), "minItems": 1, "description": "A line's two ends, every corner of connected lines, a polygon or a cloud, or a callout's arrow point and (optionally) knee, in page coordinates." },
             })),
             &["doc"],
         )),

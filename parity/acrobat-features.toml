@@ -3726,9 +3726,9 @@ tier = "P1"
 milestone = "M5"
 status = "shipped"
 commands = ["comment.callout"]
-tools = ["comment_add"]
-evidence = ["crates/annot/src/tests.rs::polygons_clouds_connected_lines_callouts_and_carets_are_drawn", "crates/annot/src/tests.rs::editing_a_callout_refits_the_box_and_keeps_the_leader", "crates/ui-egui/tests/it/comments.rs::polygons_clouds_connected_lines_callouts_and_inserted_text", "crates/automation/tests/it/automation.rs::drawing_comments_through_tools"]
-notes = "drag from the target to the box; resizing re-attaches the leader, and so does editing the text"
+tools = ["comment_add", "comment_edit", "comment_list"]
+evidence = ["crates/annot/src/tests.rs::polygons_clouds_connected_lines_callouts_and_carets_are_drawn", "crates/annot/src/tests.rs::editing_a_callout_refits_the_box_and_keeps_the_leader", "crates/annot/src/tests.rs::a_callouts_arrow_point_and_knee_move_on_their_own", "crates/annot/src/tests.rs::a_callouts_box_moves_around_its_arrow_and_keeps_the_knee_beside_it", "crates/annot/src/tests.rs::a_callout_without_a_knee_keeps_its_line", "crates/annot/src/tests.rs::a_callout_is_laid_out_again_when_its_end_leaves_the_box", "crates/annot/src/tests.rs::a_new_callouts_knee_line_is_twelve_points", "crates/ui-egui/tests/it/comments.rs::polygons_clouds_connected_lines_callouts_and_inserted_text", "crates/ui-egui/tests/it/comments.rs::a_callouts_arrow_knee_and_text_box_are_dragged_on_their_own", "crates/automation/tests/it/automation.rs::drawing_comments_through_tools", "crates/automation/tests/it/automation.rs::a_callouts_parts_are_listed_and_changed_through_the_tools"]
+notes = "Drag from the target to the box. A new callout's knee line is 12 pt, level or upright, out from the middle of the side facing the arrow. Selected, the arrow point, knee and text box move on their own (#1152): the knee only along its knee line and no nearer than 12 pt; resizing the box keeps the line while the side it meets stays; dragging the box from inside moves the box and the knee, and the arrow stays; dragging the leader moves the whole callout. When that side moves, or the knee is dragged into the box, the line is laid out again with a 12 pt knee and the box stays where it was put (Acrobat also moves the box next to the arrow). Only the page handles hold the knee to one direction; comment_edit accepts any knee (ISO 32000-2 Table 177)."
 
 [[feature]]
 id = "comment.pencil"

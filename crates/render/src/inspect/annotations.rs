@@ -158,6 +158,12 @@ impl<'a> Inspector<'a> {
                 }
                 _ => Vec::new(),
             };
+            // A callout: its arrow point and knee, and its text box (keep in step with
+            // `pdfcraft_annot::summaries`).
+            let (points, text_box) = match self.callout(d, rect) {
+                Some((lead, text_box)) if subtype == "FreeText" => (lead, Some(text_box)),
+                _ => (points, None),
+            };
             let annotation = Annotation {
                 page,
                 subtype,
@@ -180,6 +186,7 @@ impl<'a> Inspector<'a> {
                 fill_sign,
                 no_rotate: d.get(b"F").is_ok_and(|f| draw_flags(self.resolve(f)) & 16 != 0),
                 points,
+                text_box,
             };
             kept = kept.saturating_add(retained(&annotation));
             if kept > MAX_ANNOTATION_BYTES {
@@ -190,6 +197,28 @@ impl<'a> Inspector<'a> {
         }
         info.annotations.sort_by(|a, b| a.page.cmp(&b.page).then(b.rect[3].total_cmp(&a.rect[3])));
         link_replies(&mut info.annotations);
+    }
+
+    /// A callout's arrow point and knee (`/CL`, four or six numbers, without the end that meets
+    /// the text box) and its text box (`rect` inset by `/RD`); ISO 32000-2 Table 177. `None` when
+    /// either is missing or unusable.
+    fn callout(&self, d: &Dictionary, rect: [f32; 4]) -> Option<(Vec<[f32; 2]>, [f32; 4])> {
+        let nums = |key: &[u8]| -> Option<Vec<f32>> {
+            match self.resolve(d.get(key).ok()?) {
+                // Four or six numbers (Table 177). A longer array is not a callout line, and is
+                // not read.
+                Object::Array(v) if v.len() <= 6 => v.iter().map(|o| self.resolve(o).as_float().ok()).collect(),
+                _ => None,
+            }
+        };
+        let cl = nums(b"CL").filter(|l| matches!(l.len(), 4 | 6) && l.iter().all(|x| x.is_finite()))?;
+        let rd = nums(b"RD").filter(|v| v.len() == 4 && v.iter().all(|x| x.is_finite() && *x >= 0.0))?;
+        let tb = [rect[0] + rd[0], rect[1] + rd[1], rect[2] - rd[2], rect[3] - rd[3]];
+        if tb[2] - tb[0] < 1.0 || tb[3] - tb[1] < 1.0 {
+            return None;
+        }
+        let (_, lead) = cl.as_chunks::<2>().0.split_last()?;
+        Some((lead.to_vec(), tb))
     }
 
     fn link(&self, page: usize, index: usize, d: &Dictionary, text_budget: &mut usize) -> Option<Link> {

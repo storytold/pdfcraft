@@ -1,6 +1,5 @@
-use super::create::{
-    add_annotation, base_dict, bounds, callout_attach, ending_draws, ending_pair, finite, grow, normalize, num_array, rect_for, rgb,
-};
+use super::callout::{callout_line, callout_text_box, place_text_box};
+use super::create::{add_annotation, base_dict, bounds, ending_draws, ending_pair, finite, grow, normalize, num_array, rect_for, rgb};
 use super::draw::{draw_appearance, redraw_or_restore, set_appearance};
 use super::info::{line_endings_of, text_value};
 use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, page_ref, set_annots};
@@ -394,10 +393,12 @@ pub fn set_rect(doc: &mut Document, page: usize, index: usize, rect: [f64; 4], m
 /// At most this many points reshape a comment (a drawn polygon has a handful).
 const MAX_POINTS: usize = 100_000;
 
-/// Reshape a line, connected lines, a polygon or a cloud: its points in user space (a line's two
-/// ends, the others' corners), as dragging the comment's handles sets them. `/Rect` follows the
-/// points with room for the line's width and endings, as when the comment was drawn, and the
-/// appearance is redrawn. A measurement keeps the points it measured.
+/// Reshape a line, connected lines, a polygon, a cloud or a callout: its points in user space (a
+/// line's two ends, the others' corners; a callout's arrow point and, if it has one, its knee), as
+/// dragging the comment's handles sets them. `/Rect` follows the points with room for the line's
+/// width and endings, as when the comment was drawn, and the appearance is redrawn. A callout's
+/// text box stays where it is and its leader line re-attaches. A measurement keeps the points it
+/// measured.
 pub fn set_points(doc: &mut Document, page: usize, index: usize, points: &[[f64; 2]], meta: &Meta) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     unlocked(doc, r)?;
@@ -407,6 +408,15 @@ pub fn set_points(doc: &mut Document, page: usize, index: usize, points: &[[f64;
     }
     if points.len() > MAX_POINTS {
         return Err(AnnotError::Invalid(format!("at most {MAX_POINTS} points")));
+    }
+    if d.name(b"Subtype") == Some(b"FreeText") && callout_line(doc, &d).is_some() {
+        // A callout's points: its arrow point, then optionally its knee (a four-number `/CL`
+        // gains one; ISO 32000-2 Table 177 allows both forms).
+        if !matches!(points.len(), 1 | 2) || !finite(&points.concat()) {
+            return Err(AnnotError::Invalid("a callout has an arrow point and, optionally, a knee".into()));
+        }
+        let text_box = callout_text_box(doc, &d).ok_or_else(|| AnnotError::Invalid("the callout's text box (/RD) can't be read".into()))?;
+        return place_text_box(doc, r, text_box, Some(points), meta, false);
     }
     let style = Style { width: border_width_of(&d), ..Style::default() };
     let ends = line_endings_of(&d).unwrap_or_default();
@@ -483,52 +493,10 @@ fn resize_ink(doc: &mut Document, r: ObjRef, rect: [f64; 4], meta: &Meta) -> Res
 /// leader line re-attaches and `/Rect` grows to hold it, and the appearance is redrawn
 /// (`new_text`: for changed contents, see [`set_appearance`] and `draw_appearance`).
 fn apply_text_box(doc: &mut Document, r: ObjRef, rect: [f64; 4], meta: &Meta, new_text: bool) -> Result<(), AnnotError> {
-    let rect = normalize(rect);
-    if !finite(&rect) || rect[2] - rect[0] < 1.0 || rect[3] - rect[1] < 1.0 {
-        return Err(AnnotError::Invalid("invalid rectangle (too small)".into()));
-    }
-    let d = annot_dict(doc, r);
-    if !new_text {
-        refuse_foreign_text(doc, &d)?;
-    }
-    // A callout's rectangle is its text box: the leader line re-attaches and `/Rect` grows to hold it.
-    let callout = d.get(b"CL").and_then(|o| o.as_array()).map(|a| a.iter().filter_map(|x| x.as_f64()).collect::<Vec<f64>>()).filter(|l| l.len() == 6);
-    let (outer, cl) = match callout {
-        Some(mut l) => {
-            let attach = callout_attach(rect, [l[2], l[3]]);
-            (l[4], l[5]) = (attach[0], attach[1]);
-            let pad = border_width_of(&d) / 2.0 + appearance::arrow_size(border_width_of(&d)) + 1.0;
-            let lead = grow(bounds([[l[0], l[1]], [l[2], l[3]]].into_iter()).unwrap_or_default(), pad);
-            ([rect[0].min(lead[0]), rect[1].min(lead[1]), rect[2].max(lead[2]), rect[3].max(lead[3])], Some(l))
-        }
-        None => (rect, None),
-    };
-    doc.update_dict(r, |d| {
-        d.set(b"Rect".to_vec(), num_array(&outer));
-        match &cl {
-            Some(l) => {
-                d.set(b"CL".to_vec(), num_array(l));
-                d.set(b"RD".to_vec(), num_array(&[rect[0] - outer[0], rect[1] - outer[1], outer[2] - rect[2], outer[3] - rect[3]]));
-            }
-            None => {
-                d.remove(b"RD");
-            }
-        }
-        touch(d, meta);
-    })?;
-    let before = d;
-    if new_text {
-        if let Err(e) = draw_appearance(doc, r) {
-            doc.set(r, Object::Dict(before));
-            return Err(e);
-        }
-        Ok(())
-    } else {
-        redraw_or_restore(doc, r, before)
-    }
+    place_text_box(doc, r, rect, None, meta, new_text)
 }
 
-fn border_width_of(d: &Dict) -> f64 {
+pub(crate) fn border_width_of(d: &Dict) -> f64 {
     d.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(|w| w.as_f64()).unwrap_or(1.0).max(0.0)
 }
 

@@ -5,19 +5,68 @@ pub(super) fn is_markup(subtype: &str) -> bool {
     matches!(subtype, "Highlight" | "Underline" | "StrikeOut" | "Squiggly")
 }
 
-/// Rectangles, ovals, text boxes, stamps and drawings (drawn signatures among them). A callout's
-/// `/Rect` also holds its leader line, so it only moves.
+/// Rectangles, ovals, text boxes, stamps and drawings (drawn signatures among them). A callout
+/// resizes its text box ([`frame`]); one whose box can't be read (no `/RD`) only moves, since its
+/// `/Rect` also holds its leader line.
 pub(super) fn resizable(a: &Annotation) -> bool {
-    matches!(a.subtype.as_str(), "Square" | "Circle" | "FreeText" | "Stamp" | "Ink") && a.intent.as_deref() != Some("FreeTextCallout")
+    matches!(a.subtype.as_str(), "Square" | "Circle" | "FreeText" | "Stamp" | "Ink")
+        && (a.intent.as_deref() != Some("FreeTextCallout") || a.text_box.is_some())
 }
 
-/// Lines, connected lines, polygons and clouds: their ends and corners have handles of their own
-/// (measurements keep the points they measured, and a locked comment its shape).
+/// Lines, connected lines, polygons, clouds and callouts: their ends, corners, or a callout's
+/// arrow point and knee have handles of their own (measurements keep the points they measured,
+/// and a locked comment its shape).
 pub(super) fn reshapable(a: &Annotation) -> bool {
-    matches!(a.subtype.as_str(), "Line" | "PolyLine" | "Polygon")
+    (matches!(a.subtype.as_str(), "Line" | "PolyLine" | "Polygon") || is_callout(a))
         && !a.points.is_empty()
         && !a.locked
         && !a.intent.as_deref().is_some_and(|i| i.ends_with("Dimension"))
+}
+
+/// A callout whose text box and leader line PdfCraft can read.
+pub(super) fn is_callout(a: &Annotation) -> bool {
+    a.subtype == "FreeText" && a.text_box.is_some()
+}
+
+/// The rectangle a comment's selection frame and resize handles go around, in user space: a
+/// callout's text box, otherwise where the comment is drawn (`/Rect`, or a sticky note kept
+/// upright on a page turned `rotation` degrees).
+pub(super) fn frame(a: &Annotation, rotation: u16) -> [f32; 4] {
+    a.text_box.unwrap_or_else(|| a.shown_rect(rotation))
+}
+
+/// A callout's points while one is dragged to `to`. Its knee moves along its knee line only
+/// (Acrobat: "The knee line can be resized in one direction only; horizontal knee lines can be
+/// resized horizontally only; vertical knee lines can be resized vertically only", Acrobat DC Help,
+/// 11/28/2019, p. 357), and no nearer the box than [`pdfcraft_engine::CALLOUT_KNEE_LINE`]. Its
+/// arrow point moves freely, with Shift held to 45° from the knee.
+pub(super) fn callout_reshaped(points: &[[f64; 2]], text_box: [f32; 4], i: usize, to: [f64; 2], shift: bool) -> Vec<[f64; 2]> {
+    let tb = text_box.map(f64::from);
+    let gap = pdfcraft_engine::CALLOUT_KNEE_LINE;
+    match (i, points.get(1)) {
+        (1, Some(knee)) => {
+            let to = match pdfcraft_engine::callout_side(tb, *knee) {
+                pdfcraft_engine::CalloutSide::Left => [to[0].min(tb[0] - gap), knee[1]],
+                pdfcraft_engine::CalloutSide::Right => [to[0].max(tb[2] + gap), knee[1]],
+                pdfcraft_engine::CalloutSide::Top => [knee[0], to[1].max(tb[3] + gap)],
+                pdfcraft_engine::CalloutSide::Bottom => [knee[0], to[1].min(tb[1] - gap)],
+            };
+            let mut out = points.to_vec();
+            if let Some(k) = out.get_mut(1) {
+                *k = to;
+            }
+            out
+        }
+        _ => reshaped(points, i, to, shift),
+    }
+}
+
+/// A selected comment's points moved as handle `i` is dragged to `to`.
+pub(super) fn reshape_for(a: &Annotation, points: &[[f64; 2]], i: usize, to: [f64; 2], shift: bool) -> Vec<[f64; 2]> {
+    match a.text_box.filter(|_| is_callout(a)) {
+        Some(tb) => callout_reshaped(points, tb, i, to, shift),
+        None => reshaped(points, i, to, shift),
+    }
 }
 
 /// Whether `tool` picks up a line's end and corner handles: the Select and Fill & Sign tools.
