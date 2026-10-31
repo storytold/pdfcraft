@@ -17,6 +17,12 @@ impl ImageColorSpace {
     }
 }
 
+/// PdfCraft patch (29): the most pixels a codestream may decode to (2^28, the renderer's
+/// `MAX_IMAGE_PIXELS` and hayro-interpret's `image_size_ok`). Its size comes from the SIZ marker,
+/// not the image dictionary, and the decoder allocates it infallibly: a tiny file could ask for
+/// tens of gigabytes and abort the process (#5078).
+const MAX_PIXELS: u64 = 1 << 28;
+
 pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams) -> Option<FilterResult<'static>> {
     use crate::object::stream::ImageColorSpace;
 
@@ -36,13 +42,29 @@ pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams) -> Option<FilterRe
     // decoder refuses (CIEJab, enum 19, in a veraPDF fixture; YCbCr, PhotoYCC, …) made the whole
     // image fail, so the page drew blank (#3306). Then it is decoded as if it had no colour
     // specification, as MuPDF and Poppler draw it: grey, RGB or CMYK by its component count.
+    //
+    // PdfCraft patch (29): the header is read at full resolution first, because
+    // `target_resolution` shrinks `width()` and `height()` but each tile's coefficients are still
+    // allocated at full size (review on #5086); see `MAX_PIXELS`.
+    let full_resolution = DecodeSettings {
+        target_resolution: None,
+        ..settings
+    };
     let repaired;
-    let image = match hayro_jpeg2000::Image::new(data, &settings) {
-        Ok(image) => image,
+    let (source, full) = match hayro_jpeg2000::Image::new(data, &full_resolution) {
+        Ok(image) => (data, image),
         Err(_) => {
             repaired = without_refused_enumerated_colour(data)?;
-            hayro_jpeg2000::Image::new(&repaired, &settings).ok()?
+            let image = hayro_jpeg2000::Image::new(&repaired, &full_resolution).ok()?;
+            (repaired.as_slice(), image)
         }
+    };
+    if u64::from(full.width()) * u64::from(full.height()) > MAX_PIXELS {
+        return None;
+    }
+    let image = match settings.target_resolution {
+        Some(_) => hayro_jpeg2000::Image::new(source, &settings).ok()?,
+        None => full,
     };
 
     let width = image.width();
