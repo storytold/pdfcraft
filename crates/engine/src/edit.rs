@@ -549,6 +549,8 @@ pub enum Edit {
     Flatten {
         comments: bool,
         fields: bool,
+        /// With `fields`, leave signature fields as fields (to sign them afterwards).
+        keep_signature_fields: bool,
     },
     /// Bake Fill & Sign text, marks and signatures into the page. Other comments and fields stay.
     /// A no-op (no undo step) when the document has none.

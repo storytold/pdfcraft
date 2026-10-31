@@ -126,7 +126,7 @@ pub(crate) fn context_menu(
         ui.separator();
         if ui.add_enabled(can_modify, egui::Button::new(tl!("Flatten comments"))).clicked() {
             view.comments.selected = None;
-            action = Some(CanvasAction::Edit(Box::new(Edit::Flatten { comments: true, fields: false })));
+            action = Some(CanvasAction::Edit(Box::new(Edit::Flatten { comments: true, fields: false, keep_signature_fields: false })));
             ui.close();
         }
     }

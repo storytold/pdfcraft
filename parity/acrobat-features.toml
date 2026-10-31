@@ -4823,8 +4823,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.flatten"]
 tools = ["doc_flatten"]
-evidence = ["crates/edit/src/tests.rs::flattening_draws_appearances_into_the_page_and_removes_the_comments", "crates/edit/src/tests.rs::flattening_keeps_a_valued_widget_it_cannot_draw", "crates/engine/src/tests.rs::flattening_keeps_the_look_and_drops_the_objects", "crates/automation/tests/it/automation.rs::flattening_through_tools"]
-notes = "widgets drawn into content and pruned from the field tree; a widget with no appearance to draw (none stored, or none for its selected state) stays a live field rather than losing its value, so a form with such fields is not fully flattened — Acrobat regenerates appearances first, which PdfCraft does not yet do here"
+evidence = ["crates/edit/src/tests.rs::flattening_draws_appearances_into_the_page_and_removes_the_comments", "crates/edit/src/tests.rs::flattening_keeps_a_valued_widget_it_cannot_draw", "crates/engine/src/tests.rs::flattening_keeps_the_look_and_drops_the_objects", "crates/automation/tests/it/automation.rs::flattening_through_tools", "crates/edit/src/tests.rs::flattening_fields_can_keep_signature_fields", "crates/automation/tests/it/automation.rs::flattening_a_form_can_keep_its_signature_field_to_sign"]
+notes = "widgets drawn into content and pruned from the field tree; a widget with no appearance to draw (none stored, or none for its selected state) stays a live field rather than losing its value, so a form with such fields is not fully flattened — Acrobat regenerates appearances first, which PdfCraft does not yet do here. doc_flatten keep_signature_fields leaves signature fields (signed or not) in place, so a filled and flattened form can still be signed in its prepared field; the interface's Flatten form fields does not offer that choice yet"
 
 [[feature]]
 id = "form.prepare-form-mode"

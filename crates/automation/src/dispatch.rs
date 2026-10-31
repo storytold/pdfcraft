@@ -288,7 +288,8 @@ impl Automation {
                 if !comments && !fields {
                     return Err(ToolError::InvalidArgs("nothing to flatten".into()));
                 }
-                self.apply(&a, Edit::Flatten { comments, fields })?
+                let keep_signature_fields = a.opt_bool("keep_signature_fields")?.unwrap_or(false);
+                self.apply(&a, Edit::Flatten { comments, fields, keep_signature_fields })?
             }
             "doc_reduce" => {
                 let id = self.doc(&a)?.id;

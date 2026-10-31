@@ -4092,6 +4092,36 @@ fn flattening_through_tools() {
     assert!(matches!(a.call("doc_flatten", &json!({ "doc": doc, "comments": false, "fields": false })), Err(ToolError::InvalidArgs(_))));
 }
 
+/// Fill a form, flatten it so the answers can't change, then sign in the signature field it was
+/// prepared with: `keep_signature_fields` leaves that field for `sign_document`.
+#[test]
+fn flattening_a_form_can_keep_its_signature_field_to_sign() {
+    let dir = workdir("flatten-keep-signature");
+    let mut a = auto(&dir);
+    ok(&mut a, "sign_id_create", json!({ "name": "Ada Lovelace", "key": "p256", "password": "secret12", "path": "ada.p12" }));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let name = ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "text", "rect": [20, 100, 180, 120] }))["field"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let sig = ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "signature", "rect": [20, 200, 180, 250] }))["field"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { name.clone(): "Jordan Example" } }));
+    ok(&mut a, "doc_flatten", json!({ "doc": doc, "comments": false, "keep_signature_fields": true }));
+    let fields: Vec<String> = ok(&mut a, "form_fields", json!({ "doc": doc }))["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(fields, std::slice::from_ref(&sig), "only the signature field is left");
+    assert!(page_text(&mut a, doc)[0].contains("Jordan Example"), "the answer is page content now");
+    let r = ok(&mut a, "sign_document", json!({ "doc": doc, "id": "ada.p12", "password": "secret12", "field": sig, "out": "signed.pdf" }));
+    assert_eq!(r["signature"]["signer"], "Ada Lovelace", "{r}");
+}
+
 /// Inserting a file's pages brings its bookmarks too, under one named after the file, at the
 /// pages' place among the document's own bookmarks.
 #[test]

@@ -3542,7 +3542,7 @@ fn flattening_keeps_the_look_and_drops_the_objects() {
     s.apply(id, Edit::SetFieldValue { name: "name".into(), value: FieldValue::Text("Ada".into()) }).unwrap();
     s.apply(id, rect_comment(0, [80.0, 80.0, 120.0, 120.0])).unwrap();
     let red_before = pixel(&s, id, 0, 100, 100);
-    s.apply(id, Edit::Flatten { comments: true, fields: true }).unwrap();
+    s.apply(id, Edit::Flatten { comments: true, fields: true, keep_signature_fields: false }).unwrap();
     let d = s.get(id).unwrap();
     assert!(d.info.annotations.is_empty() && d.form.is_empty(), "no comments or fields remain");
     assert_eq!(pixel(&s, id, 0, 100, 100), red_before, "the rectangle is now page content");
@@ -6804,7 +6804,7 @@ fn flattening_an_xfa_form_bakes_its_pages_and_takes_the_xfa_out() {
     let id = s.open("fields.pdf", None, bytes, None).expect("opens");
     assert_eq!(s.get(id).unwrap().info.xfa, Some(pdfcraft_render::Xfa::Dynamic));
     s.apply(id, Edit::SetFieldValue { name: "other".into(), value: FieldValue::Text("typed here".into()) }).unwrap();
-    s.apply(id, Edit::Flatten { comments: false, fields: true }).unwrap();
+    s.apply(id, Edit::Flatten { comments: false, fields: true, keep_signature_fields: false }).unwrap();
     let d = s.get(id).unwrap();
     assert!(d.form.is_empty(), "no fields remain");
     assert_eq!(d.info.xfa, None, "no longer an XFA form: Adobe's viewers show the baked pages");
@@ -6827,7 +6827,7 @@ fn flattening_an_xfa_form_bakes_its_pages_and_takes_the_xfa_out() {
     assert_eq!(d.info.xfa, Some(pdfcraft_render::Xfa::Dynamic));
     assert_eq!(d.form.iter().find(|f| f.name == "other").unwrap().value, vec!["typed here".to_string()]);
     // Flattening comments alone leaves the XFA form as it is.
-    s.apply(id, Edit::Flatten { comments: true, fields: false }).unwrap();
+    s.apply(id, Edit::Flatten { comments: true, fields: false, keep_signature_fields: false }).unwrap();
     assert_eq!(s.get(id).unwrap().info.xfa, Some(pdfcraft_render::Xfa::Dynamic));
 }
 
@@ -6840,7 +6840,7 @@ fn a_dynamic_xfa_form_that_was_never_laid_out_keeps_its_xfa_and_the_user_is_told
     assert_eq!(s.get(id).unwrap().info.xfa, Some(pdfcraft_render::Xfa::Dynamic));
     assert!(s.get(id).unwrap().xfa.is_none(), "not laid out");
     assert!(s.apply(id, Edit::XfaToStatic).is_err(), "nothing to keep");
-    s.apply(id, Edit::Flatten { comments: false, fields: true }).unwrap();
+    s.apply(id, Edit::Flatten { comments: false, fields: true, keep_signature_fields: false }).unwrap();
     let d = s.get(id).unwrap();
     assert_eq!(d.info.xfa, Some(pdfcraft_render::Xfa::Dynamic), "the XFA stays: Adobe can still render the form");
     assert!(d.info.warnings.iter().any(|w| w.contains("The XFA was kept")), "{:?}", d.info.warnings);
