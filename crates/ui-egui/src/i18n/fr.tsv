@@ -2841,6 +2841,13 @@ certificate	Version	Version
 	Extract the selected pages…	Extraire les pages sélectionnées…
 	Delete the selected pages	Supprimer les pages sélectionnées
 
+# Advanced search: pages whose text couldn't be read (#4334) (AI-assisted, not separately native-reviewed)
+	Pages whose text couldn't be read: {n}. A match on them isn't listed.	Pages dont le texte n'a pas pu être lu : {n}. Les correspondances qu'elles contiennent ne sont pas listées.
+
+# Search results: select or copy the pages with a match (#4334) (AI-assisted, not separately native-reviewed)
+	Copy page numbers	Copier les numéros de page
+	Copy the pages with a match as a list such as 1-3, 7	Copier les pages avec une correspondance sous forme de liste, par exemple 1-3, 7
+	Select the {n} pages with a match, for Extract, Print or Delete	Sélectionner les {n} pages avec une correspondance, pour extraire, imprimer ou supprimer
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Options de cette réponse
 	Export value	Valeur d’exportation

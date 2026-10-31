@@ -2484,6 +2484,13 @@ animation effects	Off	ఆఫ్
 	Extract the selected pages…	ఎంచుకున్న పేజీలను సంగ్రహించు…
 	Delete the selected pages	ఎంచుకున్న పేజీలను తొలగించు
 
+# Advanced search: pages whose text couldn't be read (#4334) (AI-assisted, not separately native-reviewed)
+	Pages whose text couldn't be read: {n}. A match on them isn't listed.	పాఠాన్ని చదవలేకపోయిన పేజీలు: {n}. వాటిలోని సరిపోలికలు జాబితాలో లేవు.
+
+# Search results: select or copy the pages with a match (#4334) (AI-assisted, not separately native-reviewed)
+	Copy page numbers	పేజీ సంఖ్యలను కాపీ చేయి
+	Copy the pages with a match as a list such as 1-3, 7	సరిపోలిక ఉన్న పేజీలను 1-3, 7 వంటి జాబితాగా కాపీ చేయి
+	Select the {n} pages with a match, for Extract, Print or Delete	సంగ్రహించడానికి, ముద్రించడానికి లేదా తొలగించడానికి సరిపోలిక ఉన్న {n} పేజీలను ఎంచుకో
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	ఈ ప్రత్యుత్తరం ఎంపికలు
 	Export value	ఎగుమతి విలువ

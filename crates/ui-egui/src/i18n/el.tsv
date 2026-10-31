@@ -2581,6 +2581,13 @@ animation effects	Off	Ανενεργά
 	Extract the selected pages…	Εξαγωγή των επιλεγμένων σελίδων…
 	Delete the selected pages	Διαγραφή των επιλεγμένων σελίδων
 
+# Advanced search: pages whose text couldn't be read (#4334) (AI-assisted, not separately native-reviewed)
+	Pages whose text couldn't be read: {n}. A match on them isn't listed.	Σελίδες των οποίων το κείμενο δεν ήταν δυνατό να διαβαστεί: {n}. Αντιστοιχίες σε αυτές δεν εμφανίζονται.
+
+# Search results: select or copy the pages with a match (#4334) (AI-assisted, not separately native-reviewed)
+	Copy page numbers	Αντιγραφή αριθμών σελίδων
+	Copy the pages with a match as a list such as 1-3, 7	Αντιγραφή των σελίδων με αποτέλεσμα ως λίστα, π.χ. 1-3, 7
+	Select the {n} pages with a match, for Extract, Print or Delete	Επιλογή των {n} σελίδων με αποτέλεσμα, για εξαγωγή, εκτύπωση ή διαγραφή
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Επιλογές για αυτήν την απάντηση
 	Export value	Τιμή εξαγωγής

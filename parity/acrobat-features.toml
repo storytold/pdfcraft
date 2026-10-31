@@ -1454,8 +1454,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["edit.advanced_search"]
 tools = ["text_find"]
-evidence = ["crates/ui-egui/tests/it/viewer.rs::advanced_search_lists_results_with_context"]
-notes = "Search panel (⇧⌘F): every match grouped by page with its context, whole words / case options, click to go; shares the find bar's search (closing the panel moves it to the bar)"
+evidence = ["crates/ui-egui/tests/it/viewer.rs::advanced_search_lists_results_with_context", "crates/ui-egui/tests/it/viewer.rs::advanced_search_selects_or_copies_the_pages_with_a_match", "crates/automation/tests/it/automation.rs::text_find_lists_the_pages_with_a_match_for_extracting_them"]
+notes = "Search panel (⇧⌘F): every match grouped by page with its context, whole words / case options, click to go; shares the find bar's search (closing the panel moves it to the bar). Once every page is searched, Select pages selects the pages with a match (Extract, Print and Delete act on them) and Copy page numbers copies them as a page list such as 1-3, 7; text_find returns them as pages (#4334). Beyond Acrobat, which has neither"
 
 [[feature]]
 id = "view.advanced-search"

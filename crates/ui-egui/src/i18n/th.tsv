@@ -2727,6 +2727,13 @@ theme	Appearance	ลักษณะที่ปรากฏ
 	Extract the selected pages…	แยกหน้าที่เลือกออก…
 	Delete the selected pages	ลบหน้าที่เลือก
 
+# Advanced search: pages whose text couldn't be read (#4334) (AI-assisted, not separately native-reviewed)
+	Pages whose text couldn't be read: {n}. A match on them isn't listed.	หน้าที่อ่านข้อความไม่ได้: {n} หน้า ผลที่ตรงกันในหน้าเหล่านั้นจะไม่แสดงในรายการ
+
+# Search results: select or copy the pages with a match (#4334) (AI-assisted, not separately native-reviewed)
+	Copy page numbers	คัดลอกหมายเลขหน้า
+	Copy the pages with a match as a list such as 1-3, 7	คัดลอกหน้าที่ตรงกันเป็นรายการ เช่น 1-3, 7
+	Select the {n} pages with a match, for Extract, Print or Delete	เลือก {n} หน้าที่ตรงกัน เพื่อแยก พิมพ์ หรือลบ
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	ตัวเลือกของการตอบกลับนี้
 # Untranslated: English text until a translator fills these in.

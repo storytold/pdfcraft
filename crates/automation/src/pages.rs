@@ -279,7 +279,10 @@ impl Automation {
             first = end;
             batch = batch.saturating_mul(2).min(FIND_MAX_BATCH);
         }
-        let mut out = json!({ "query": query, "count": matches.len(), "complete": next.is_none() && warning_count == 0, "matches": matches,
+        // The pages with a match (1-based, each once, in order), for extracting or printing them
+        // (#4334). Like the matches, they cover only what this call found.
+        let pages: std::collections::BTreeSet<u64> = matches.iter().filter_map(|m| m["page"].as_u64()).collect();
+        let mut out = json!({ "query": query, "count": matches.len(), "complete": next.is_none() && warning_count == 0, "matches": matches, "pages": pages,
             "warnings_truncated": warning_count > warnings.len(), "warning_count": warning_count, "warnings": warnings });
         if let (Some(next), Some(o)) = (next, out.as_object_mut()) {
             o.insert("next".into(), next);

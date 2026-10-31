@@ -40,7 +40,8 @@ pub(crate) fn parse(text: &str, count: usize) -> Result<Vec<usize>, PrintError> 
     Ok(pages.into_iter().collect())
 }
 
-fn formatted(pages: &BTreeSet<usize>) -> String {
+/// `pages` (0-based) as a 1-based page list with runs joined: "1-3, 7" (what the page fields read).
+pub(crate) fn formatted(pages: &BTreeSet<usize>) -> String {
     let mut parts = Vec::new();
     let mut it = pages.iter().copied().peekable();
     while let Some(first) = it.next() {

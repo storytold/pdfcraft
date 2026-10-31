@@ -2807,5 +2807,12 @@ theme	Appearance	모양
 	Extract the selected pages…	선택한 페이지 추출…
 	Delete the selected pages	선택한 페이지 삭제
 
+# Advanced search: pages whose text couldn't be read (#4334) (AI-assisted, not separately native-reviewed)
+	Pages whose text couldn't be read: {n}. A match on them isn't listed.	텍스트를 읽을 수 없는 페이지: {n}. 해당 페이지의 일치 항목은 목록에 없습니다.
+
+# Search results: select or copy the pages with a match (#4334) (AI-assisted, not separately native-reviewed)
+	Copy page numbers	페이지 번호 복사
+	Copy the pages with a match as a list such as 1-3, 7	일치 항목이 있는 페이지를 1-3, 7 같은 목록으로 복사
+	Select the {n} pages with a match, for Extract, Print or Delete	추출, 인쇄 또는 삭제할 수 있도록 일치 항목이 있는 {n}개 페이지 선택
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	이 답글의 옵션

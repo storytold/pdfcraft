@@ -1928,6 +1928,26 @@ fn parallel_text_extraction_keeps_page_order_and_follows_edits() {
     assert_eq!(page_text(&mut a, doc)[2], "Page 4");
 }
 
+/// #4334: text_find lists the pages with a match, each once and in order, so they can be
+/// extracted; page_extract with them keeps exactly those pages.
+#[test]
+fn text_find_lists_the_pages_with_a_match_for_extracting_them() {
+    let dir = workdir("find-pages");
+    std::fs::write(dir.join("long.pdf"), fixture(40)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "long.pdf" }))["doc"].as_u64().unwrap();
+    let found = ok(&mut a, "text_find", json!({ "doc": doc, "query": "page 3" }));
+    let pages: Vec<u64> = found["pages"].as_array().unwrap().iter().map(|p| p.as_u64().unwrap()).collect();
+    assert_eq!(pages, [3, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39]);
+    assert_eq!(ok(&mut a, "text_find", json!({ "doc": doc, "query": "absent" }))["pages"], json!([]));
+    // A limit lists only the pages of the matches returned.
+    assert_eq!(ok(&mut a, "text_find", json!({ "doc": doc, "query": "page 3", "limit": 2 }))["pages"], json!([3, 30]));
+    ok(&mut a, "page_extract", json!({ "doc": doc, "pages": pages, "out": "found.pdf" }));
+    let out = ok(&mut a, "doc_open", json!({ "path": "found.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(page_text(&mut a, out)[..2], ["Page 3", "Page 30"]);
+    assert_eq!(page_text(&mut a, out).len(), 11);
+}
+
 #[test]
 fn bookmarks_through_tools() {
     let dir = workdir("bookmarks");

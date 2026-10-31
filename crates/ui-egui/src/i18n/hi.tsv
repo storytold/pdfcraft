@@ -2807,5 +2807,12 @@ theme	Appearance	स्वरूप
 	Extract the selected pages…	चयनित पृष्ठ निकालें…
 	Delete the selected pages	चयनित पृष्ठ हटाएँ
 
+# Advanced search: pages whose text couldn't be read (#4334) (AI-assisted, not separately native-reviewed)
+	Pages whose text couldn't be read: {n}. A match on them isn't listed.	ऐसे पृष्ठ जिनका पाठ पढ़ा नहीं जा सका: {n}। उन पर कोई मिलान सूचीबद्ध नहीं है।
+
+# Search results: select or copy the pages with a match (#4334) (AI-assisted, not separately native-reviewed)
+	Copy page numbers	पृष्ठ संख्याएँ कॉपी करें
+	Copy the pages with a match as a list such as 1-3, 7	मिलान वाले पृष्ठों को 1-3, 7 जैसी सूची के रूप में कॉपी करें
+	Select the {n} pages with a match, for Extract, Print or Delete	निकालने, प्रिंट करने या हटाने के लिए मिलान वाले {n} पृष्ठ चुनें
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	इस जवाब के विकल्प
