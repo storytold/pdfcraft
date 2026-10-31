@@ -596,6 +596,9 @@ fn write_control_file(path: &str, port: u16, token: &str) -> std::io::Result<()>
 ///   is being resized, Windows stretched the window's swap chain, still at the old size, to the
 ///   new one, so the text shimmered and the left panel's width bounced for as long as the drag
 ///   lasted (issue #2738). A visual's last frame is shown at its own size instead.
+/// - Ask for at most [`MAX_NON_SAMPLER_BINDINGS`] live bindings, not wgpu's million: Direct3D 12
+///   sets aside room for all of them when the device is created (issue #5355).
+/// - Favour memory over speed in GPU allocations ([`MEMORY_HINTS`], issue #5400).
 fn configure_gpu(native: &mut eframe::NativeOptions) {
     let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut native.wgpu_options.wgpu_setup else { return };
     // Nothing draws or dispatches indirectly, so wgpu's check of indirect arguments only costs a
@@ -610,7 +613,8 @@ fn configure_gpu(native: &mut eframe::NativeOptions) {
     let device_descriptor = std::sync::Arc::clone(&setup.device_descriptor);
     setup.device_descriptor = std::sync::Arc::new(move |adapter| {
         let mut descriptor = device_descriptor(adapter);
-        descriptor.required_limits = surface_texture_limits(descriptor.required_limits, &adapter.limits());
+        descriptor.required_limits = binding_limits(surface_texture_limits(descriptor.required_limits, &adapter.limits()));
+        descriptor.memory_hints = MEMORY_HINTS;
         descriptor
     });
     if std::env::var_os("WGPU_POWER_PREF").is_none() {
@@ -659,6 +663,29 @@ fn dx12_presentation(asked: Option<eframe::wgpu::Dx12SwapchainKind>) -> eframe::
 fn surface_texture_limits(mut required: eframe::wgpu::Limits, supported: &eframe::wgpu::Limits) -> eframe::wgpu::Limits {
     required = required.or_worse_values_from(supported);
     required.max_texture_dimension_2d = supported.max_texture_dimension_2d;
+    required
+}
+
+/// The most bindings (a texture view, a buffer) the device keeps live at once; each texture egui
+/// draws holds one. Direct3D 12 allocates a descriptor heap of this many when the device is
+/// created, and wgpu's default of 1,000,000 cost about 85 MiB of private memory at startup on an
+/// AMD integrated GPU and about 30 MiB on a discrete one (issue #5355). Running out is fatal, since wgpu treats it as out of
+/// memory, so this leaves wide room: paging through all 2,000 pages of a document in the Organize
+/// grid at its smallest size stayed under 1,024.
+const MAX_NON_SAMPLER_BINDINGS: u32 = 65_536;
+
+/// How the device sizes the memory blocks it suballocates from (Direct3D 12 and Vulkan; other
+/// backends ignore it). wgpu's default, `Performance`, starts with 128 MiB blocks for GPU memory and
+/// 64 MiB for upload memory, mostly empty at startup; `MemoryUsage` starts at 8 and 4 MiB and lets
+/// them grow to 64 and 32 MiB as they fill. On Direct3D 12 that took about 128 MiB of private memory
+/// off startup on both an AMD integrated and a discrete GPU, and about 150 MiB after paging through
+/// 2,000 pages in the Organize grid, with no slower rendering when zoomed into scans (issue #5400).
+const MEMORY_HINTS: eframe::wgpu::MemoryHints = eframe::wgpu::MemoryHints::MemoryUsage;
+
+/// `required` with at most [`MAX_NON_SAMPLER_BINDINGS`] live bindings. Only Direct3D 12 sizes
+/// anything by this limit, and asking for less than the adapter offers is always allowed.
+fn binding_limits(mut required: eframe::wgpu::Limits) -> eframe::wgpu::Limits {
+    required.max_non_sampler_bindings = required.max_non_sampler_bindings.min(MAX_NON_SAMPLER_BINDINGS);
     required
 }
 

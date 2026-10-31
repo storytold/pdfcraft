@@ -217,6 +217,22 @@ fn surface_limits_preserve_other_requirements_and_never_overrequest() {
 }
 
 #[test]
+fn the_device_asks_for_far_fewer_bindings_than_wgpu_offers() {
+    // Issue #5355: Direct3D 12 allocates a descriptor for every binding the device may hold,
+    // and the adapter (like wgpu's default request) offers a million.
+    let required = eframe::wgpu::Limits::default();
+    let supported = eframe::wgpu::Limits { max_texture_dimension_2d: 16384, ..required.clone() };
+    assert!(supported.max_non_sampler_bindings > super::MAX_NON_SAMPLER_BINDINGS);
+    let enabled = super::binding_limits(super::surface_texture_limits(required.clone(), &supported));
+    assert!(enabled.check_limits(&supported), "unsupported device limits: {enabled:?}");
+    let expected = eframe::wgpu::Limits { max_texture_dimension_2d: 16384, max_non_sampler_bindings: super::MAX_NON_SAMPLER_BINDINGS, ..required };
+    assert_eq!(enabled, expected, "only the bindings and the texture extent change");
+    // An adapter that offers fewer keeps its own number.
+    let few = eframe::wgpu::Limits { max_non_sampler_bindings: 4096, ..eframe::wgpu::Limits::default() };
+    assert_eq!(super::binding_limits(few.clone()), few);
+}
+
+#[test]
 fn surface_limits_fit_v3d_shader_variable_limit() {
     // Issue #2383: V3D supports 15 variables, below the default request of 16.
     let required = eframe::wgpu::Limits::default();
@@ -370,6 +386,28 @@ fn vendor_provenance_egui_wgpu_catch_errors_identity() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     assert_window_stack_graph(&root, "egui-wgpu", "0.37.0");
     assert!(root.join("vendor/egui-wgpu/src/winit.rs").exists(), "the vendor copy and its provenance stay until the fork revision is pinned");
+}
+
+#[test]
+fn the_configured_device_asks_a_real_adapter_for_capped_bindings_and_small_memory_blocks() {
+    // Issues #5355 and #5400: the descriptor `configure_gpu` installs, not just `binding_limits`
+    // on its own. Direct3D 12 adapters offer a million bindings; one that offers fewer keeps its
+    // own number.
+    use eframe::wgpu;
+    let _gpu = gpu();
+    let native = super::native_options(false, false, eframe::Renderer::Wgpu);
+    let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &native.wgpu_options.wgpu_setup else { panic!("default setup creates its own instance") };
+    let instance = pollster::block_on(native.wgpu_options.wgpu_setup.new_instance());
+    let options = wgpu::RequestAdapterOptions { power_preference: setup.power_preference, ..Default::default() };
+    let Ok(adapter) = pollster::block_on(instance.request_adapter(&options)) else {
+        eprintln!("skipping: no GPU adapter on this machine");
+        return;
+    };
+    let offered = adapter.limits().max_non_sampler_bindings;
+    let descriptor = (setup.device_descriptor)(&adapter);
+    let requested = descriptor.required_limits.max_non_sampler_bindings;
+    assert_eq!(requested, offered.min(super::MAX_NON_SAMPLER_BINDINGS), "the adapter offers {offered}");
+    assert!(matches!(descriptor.memory_hints, wgpu::MemoryHints::MemoryUsage), "{:?}", descriptor.memory_hints);
 }
 
 #[test]
