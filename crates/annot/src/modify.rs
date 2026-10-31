@@ -2,7 +2,7 @@ use super::create::{
     add_annotation, base_dict, bounds, callout_attach, ending_draws, ending_pair, finite, grow, normalize, num_array, rect_for, rgb,
 };
 use super::draw::{draw_appearance, redraw_or_restore, set_appearance};
-use super::info::{MAX_GROUP_DEPTH, group_primary, is_group_subordinate, line_endings_of, text_value};
+use super::info::{is_group_subordinate, line_endings_of, text_value};
 use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, page_ref, set_annots};
 use super::types::{
     FLAG_HIDDEN, FLAG_LOCKED, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NewAnnotation, ReviewState, Rgb, Shape, Style,
@@ -70,11 +70,11 @@ pub(crate) fn touch(d: &mut Dict, meta: &Meta) {
 }
 
 /// Delete a comment together with its pop-up and its replies (and theirs), as Acrobat does.
-/// Refused while it, or a reply that would go with it, is locked. A comment in a group
-/// (`/RT /Group`) takes the whole group with it: deleting a subordinate deletes its primary, and
-/// with it every member (ISO 32000-2 §12.5.6.2). A subordinate whose primary is too far up its
-/// `/IRT` chain to find is refused rather than deleted with only part of its group, and so is a
-/// group with a locked member.
+/// Refused while it, or a reply that would go with it, is locked. A member of a group (`/RT
+/// /Group`), its primary included, goes alone, as Acrobat deletes the member clicked and keeps the
+/// rest of its group, although ISO 32000-2 §12.5.6.2 lists deletion among the operations that act
+/// on the entire group; a subordinate left without its primary is a comment of its own. Replace
+/// Text's strikeout and caret are one comment and go together from either ([`own_deletion`]).
 pub fn delete_annotation(doc: &mut Document, page: usize, index: usize) -> Result<(), AnnotError> {
     let index = deleted_index(doc, page, index)?;
     lift_annotation(doc, page, index)
@@ -82,41 +82,42 @@ pub fn delete_annotation(doc: &mut Document, page: usize, index: usize) -> Resul
 
 /// Whether [`delete_annotation`] deletes the annotation at `(page, index)`, or why not, without
 /// changing anything: what a Delete command asks before it is offered. It is refused while the
-/// annotation is locked, or a reply (or group member) that would go with it is.
+/// annotation is locked, or a reply that would go with it is.
 pub fn deletable(doc: &Document, page: usize, index: usize) -> Result<(), AnnotError> {
     deleted_index(doc, page, index).map(|_| ())
 }
 
-/// [`deletable`], returning the index [`delete_annotation`] deletes from: the group's primary for
-/// a group subordinate, else `index`.
+/// [`deletable`], returning the index [`delete_annotation`] deletes from: the caret for Replace
+/// Text's strikeout, else `index`.
 fn deleted_index(doc: &Document, page: usize, index: usize) -> Result<usize, AnnotError> {
     let list = annots(doc, page_ref(doc, page)?);
     let mut target = list.get(index).ok_or(AnnotError::NoSuchAnnotation { page, index })?;
     let mut index = index;
     if let Some(r) = target.as_ref() {
         unlocked(doc, r)?;
-        let Some(primary) = group_primary(doc, &list, r) else {
-            return Err(AnnotError::Invalid(format!(
-                "this comment can't be deleted: its group's primary is more than {MAX_GROUP_DEPTH} comments up its chain"
-            )));
-        };
-        if primary != r
-            && let Some((i, e)) = list.iter().enumerate().find(|(_, e)| e.as_ref() == Some(primary))
-        {
-            unlocked(doc, primary)?;
-            (target, index) = (e, i);
-        }
+    }
+    // Replace Text is one comment: its strikeout goes with its caret, the group's primary, and
+    // the caret with it, as Acrobat deletes the pair from either.
+    let caret = doc
+        .resolve(target)
+        .as_dict()
+        .filter(|d| is_group_subordinate(d) && !own_deletion(doc, d))
+        .and_then(|d| d.reference(b"IRT"))
+        .and_then(|irt| list.iter().enumerate().find(|(_, e)| e.as_ref() == Some(irt)));
+    if let Some((i, e)) = caret {
+        (target, index) = (e, i);
     }
     let doomed = with_replies_and_popups(doc, &list, seed(target));
     // A locked reply can't be deleted on its own, so it doesn't go with the comment or reply it
-    // answers either; nor does a locked group member keep its place while its group goes
-    // (ISO 32000-2 §12.5.3, Table 167: Locked). Pop-ups follow their comment.
-    for (_, e) in list.iter().enumerate().filter(|(i, e)| *i != index && goes_with(e, &doomed)) {
+    // answers either (ISO 32000-2 §12.5.3, Table 167: Locked); nor does the other half of Replace
+    // Text. Pop-ups follow their comment.
+    for (i, e) in list.iter().enumerate().filter(|(i, e)| (*i != index || caret.is_some()) && goes_with(doc, e, &doomed)) {
         let obj = doc.resolve(e);
         if let Some(d) = obj.as_dict().filter(|d| d.name(b"Subtype") != Some(b"Popup".as_slice()))
             && annotation_flags(doc, d) & FLAG_LOCKED != 0
         {
-            let what = if is_group_subordinate(d) { "a comment in its group is locked" } else { "a reply to it is locked" };
+            let grouped = is_group_subordinate(d) || caret.is_some_and(|(c, _)| c == i);
+            let what = if grouped { "a comment in its group is locked" } else { "a reply to it is locked" };
             return Err(AnnotError::Invalid(what.into()));
         }
     }
@@ -131,7 +132,7 @@ pub fn lift_annotation(doc: &mut Document, page: usize, index: usize) -> Result<
     let list = annots(doc, p);
     let target = list.get(index).ok_or(AnnotError::NoSuchAnnotation { page, index })?;
     let doomed = with_replies_and_popups(doc, &list, seed(target));
-    let kept: Vec<Object> = list.iter().enumerate().filter(|(i, e)| *i != index && !goes_with(e, &doomed)).map(|(_, e)| e.clone()).collect();
+    let kept: Vec<Object> = list.iter().enumerate().filter(|(i, e)| *i != index && !goes_with(doc, e, &doomed)).map(|(_, e)| e.clone()).collect();
     Ok(set_annots(doc, p, kept)?)
 }
 
@@ -145,16 +146,35 @@ fn seed(target: &Object) -> Option<ObjRef> {
 /// one of them, or it is written inline (a file can, though the standard asks for references) and
 /// replies to (`/IRT`) or pops up for (`/Parent`) one of them. An inline entry has no reference
 /// for the walk to collect, so it is matched here.
-pub fn goes_with(entry: &Object, going: &HashSet<ObjRef>) -> bool {
+pub fn goes_with(doc: &Document, entry: &Object, going: &HashSet<ObjRef>) -> bool {
     match entry.as_ref() {
         Some(r) => going.contains(&r),
-        None => entry.as_dict().is_some_and(|d| [d.reference(b"IRT"), d.reference(b"Parent")].into_iter().flatten().any(|r| going.contains(&r))),
+        None => entry.as_dict().is_some_and(|d| hangs_off(doc, d).into_iter().flatten().any(|r| going.contains(&r))),
     }
+}
+
+/// What the annotation `d` goes with when it is deleted: what it replies to (`/IRT`) and what it
+/// pops up for (`/Parent`). A group subordinate (`/RT /Group`) is deleted on its own
+/// ([`own_deletion`]), so its `/IRT` doesn't count.
+fn hangs_off(doc: &Document, d: &Dict) -> [Option<ObjRef>; 2] {
+    [d.reference(b"IRT").filter(|_| !own_deletion(doc, d)), d.reference(b"Parent")]
+}
+
+/// Whether the annotation `d` stays when its group's primary is deleted: a group subordinate
+/// (`/RT /Group`) does, as Acrobat deletes only the member clicked, unless it is half of Replace
+/// Text, which Acrobat deletes as one comment: the strikeout (`/IT /StrikeOutTextEdit`) under its
+/// caret, or a caret under such a strikeout, as earlier PdfCraft builds wrote the pair.
+fn own_deletion(doc: &Document, d: &Dict) -> bool {
+    let edit = |d: &Dict| d.name(b"IT") == Some(b"StrikeOutTextEdit".as_slice());
+    let under_edit =
+        || d.name(b"Subtype") == Some(b"Caret".as_slice()) && d.reference(b"IRT").is_some_and(|r| doc.get(r).as_dict().is_some_and(edit));
+    is_group_subordinate(d) && !edit(d) && !under_edit()
 }
 
 /// `doomed` and what goes with it, as Acrobat deletes a comment: the entries of `list` (one or
 /// more pages' `/Annots`) that reply to (`/IRT`) or pop up for (`/Parent`) anything going, their
-/// own replies, and the pop-ups going annotations name (`/Popup`). An inline reply has no
+/// own replies, and the pop-ups going annotations name (`/Popup`). A group subordinate stays
+/// ([`own_deletion`]). An inline reply has no
 /// reference to collect, but the pop-up it names is. Each annotation is visited once, so a long or
 /// cyclic chain costs no more than its length. Filter a list with [`goes_with`], which also
 /// matches inline entries.
@@ -166,7 +186,7 @@ pub fn with_replies_and_popups(doc: &Document, list: &[Object], doomed: impl Int
         // What goes with the annotation this entry hangs off: the entry, or for an inline one the
         // pop-up it names.
         let Some(goes) = e.as_ref().or_else(|| d.reference(b"Popup")) else { continue };
-        for on in [d.reference(b"IRT"), d.reference(b"Parent")].into_iter().flatten() {
+        for on in hangs_off(doc, d).into_iter().flatten() {
             hanging.entry(on).or_default().push(goes);
         }
     }

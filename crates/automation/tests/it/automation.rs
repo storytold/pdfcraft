@@ -2382,11 +2382,17 @@ fn a_group_lists_as_its_primary() {
     check(&json!({ "count": 1, "comments": [primary] }), "edited");
     assert_eq!(after["count"], 2, "{after}");
 
-    // Deleting a member deletes the group (one undo step), as deleting the primary does.
+    // Deleting a member deletes just it, as Acrobat does: the subordinate, or the primary, which
+    // leaves the subordinate a comment of its own. One undo step each.
     ok(&mut a, "comment_delete", json!({ "doc": doc, "id": "circ-sub" }));
     let left = ok(&mut a, "comment_list", json!({ "doc": doc }));
-    assert_eq!(left["count"], 1, "only the new note is left: {left}");
-    assert!(!left.to_string().contains("sq-primary") && !left.to_string().contains("circ-sub"), "{left}");
+    assert_eq!(left["count"], 2, "the primary and the new note are left: {left}");
+    assert!(left.to_string().contains("sq-primary") && !left.to_string().contains("circ-sub"), "{left}");
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    ok(&mut a, "comment_delete", json!({ "doc": doc, "id": "sq-primary" }));
+    let left = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    let ids: Vec<&str> = left["comments"].as_array().unwrap().iter().filter_map(|c| c["id"].as_str()).collect();
+    assert!(ids.contains(&"circ-sub") && !ids.contains(&"sq-primary") && ids.len() == 2, "the new note and the Circle, on its own: {left}");
     ok(&mut a, "edit_undo", json!({ "doc": doc }));
     let back = ok(&mut a, "comment_list", json!({ "doc": doc }));
     let primary = back["comments"].as_array().unwrap().iter().find(|c| c["id"] == "sq-primary").cloned().unwrap();
@@ -2426,12 +2432,18 @@ fn looping_groups_end_and_chained_groups_reach_their_primary() {
     let group: Vec<&str> = top["group"].as_array().unwrap().iter().filter_map(|m| m["id"].as_str()).collect();
     assert_eq!(group, ["mid", "low"], "{list}");
     assert_eq!(top["replies"], json!([]), "{list}");
-    // Deleting a looping member ends too, and takes its loop with it.
+    // Deleting a looping member ends too and takes just it, as any group member goes alone; so
+    // does the lowest subordinate of the chain.
     ok(&mut a, "comment_delete", json!({ "doc": doc, "id": "a" }));
     ok(&mut a, "comment_delete", json!({ "doc": doc, "id": "self" }));
     ok(&mut a, "comment_delete", json!({ "doc": doc, "id": "low" }));
-    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
-    assert_eq!(ok(&mut a, "comment_list", json!({ "doc": doc }))["count"], 0, "{info}");
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    let mut ids: Vec<&str> = list["comments"].as_array().unwrap().iter().filter_map(|c| c["id"].as_str()).collect();
+    ids.sort_unstable();
+    assert_eq!(ids, ["b", "top"], "{list}");
+    let top = list["comments"].as_array().unwrap().iter().find(|c| c["id"] == "top").cloned().unwrap_or_default();
+    let group: Vec<&str> = top["group"].as_array().into_iter().flatten().filter_map(|m| m["id"].as_str()).collect();
+    assert_eq!(group, ["mid"], "{list}");
 }
 
 // Contributor-original PDF: a Replace Text group as earlier PdfCraft builds wrote it, the
@@ -2495,6 +2507,15 @@ fn replace_text_lists_its_replacement() {
         assert_eq!(list["count"], 2, "{path}: {list}");
         let c = list["comments"].as_array().unwrap().iter().find(|c| c["type"] == primary).cloned().unwrap();
         assert_eq!(c["contents"], text, "{path} after an edit: {list}");
+        // Replace Text is one comment: deleting either half deletes both, as Acrobat does, in
+        // either orientation.
+        for id in [c["id"].clone(), c["group"][0]["id"].clone()] {
+            ok(&mut b, "comment_delete", json!({ "doc": doc, "id": id }));
+            let left = ok(&mut b, "comment_list", json!({ "doc": doc }));
+            assert_eq!(left["count"], 1, "{path}: deleting {id} leaves only the note: {left}");
+            assert!(!left.to_string().contains("StrikeOut") && !left.to_string().contains("Caret"), "{path}: {left}");
+            ok(&mut b, "edit_undo", json!({ "doc": doc }));
+        }
     }
 }
 

@@ -33,6 +33,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
         cv.context_at = Some((cx.page, cx.to_user(p)));
         // On a group subordinate, its group (the primary), so the menu offers the comment's actions.
         cv.selected = cx.click_hit(p).map(|a| (cx.page, a.index));
+        cv.member = cx.picked(p, cv.selected);
     }
     let gestures = Gestures { ui, resp, cx, pointer, origin, page_rect, pressed_here, over_page };
     match cx.tool {
@@ -264,6 +265,7 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
         match owner {
             Some((a, _)) => {
                 cv.selected = Some((cx.page, a.index));
+                cv.member = pointer.and_then(|p| cx.picked(p, cv.selected));
                 cv.reveal = true;
                 consumed = true;
             }
@@ -599,7 +601,7 @@ pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, tool: &mut QuickTool
         }
     }
     if allowed
-        && let Some((page, index)) = cv.selected
+        && let Some((page, index)) = cv.target()
         && ctx.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
     {
         cv.selected = None;

@@ -913,7 +913,8 @@ fn replace_text_groups_a_strikeout_and_a_caret() {
     assert!(r[0] < 200.0 && r[2] > 200.0 && r[1] < 706.0, "at the end of the line, below its baseline: {r:?}");
     let summary = summaries(&doc);
     assert_eq!(summary.iter().filter(|s| s.page == 0 && !s.is_group_member()).count(), 2, "the fixture's Square and the caret: {summary:?}");
-    // Deleting either member deletes the group.
+    // Replace Text is one comment: deleting either the caret or the strikeout deletes both, as
+    // Acrobat does.
     for member in [i, a.iter().position(|d| d.name(b"Subtype") == Some(b"StrikeOut")).unwrap()] {
         let mut doc = doc.clone();
         delete_annotation(&mut doc, 0, member).unwrap();
@@ -942,9 +943,11 @@ fn replace_text_groups_a_strikeout_and_a_caret() {
 
 /// ISO 32000-2 §12.5.6.2: `/RT /Group` makes an annotation a subordinate of the group its
 /// `/IRT` annotation is primary of. Another `/RT` reads as a reply, and so does a bare `/IRT`.
-/// Deleting a subordinate deletes the whole group, with the primary's replies.
+/// Deleting a member deletes just it, as Acrobat does, although §12.5.6.2 lists deletion among the
+/// operations that act on the entire group: the subordinate goes alone, and the primary goes with
+/// its replies and leaves its subordinate, which reads as a comment of its own.
 #[test]
-fn a_group_reads_as_one_and_deletes_as_one() {
+fn a_group_reads_as_one_and_deletes_by_member() {
     let mut doc = fixture();
     let square = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [100.0, 100.0, 200.0, 200.0] }), &meta("sq")).unwrap();
     let (_, sr) = annot_ref(&mut doc, 0, square).unwrap();
@@ -972,21 +975,23 @@ fn a_group_reads_as_one_and_deletes_as_one() {
         [("member".into(), true), ("reply".into(), false), ("explicit".into(), false), ("odd".into(), false)],
         "only /RT /Group groups"
     );
+    let mut alone = doc.clone();
+    delete_annotation(&mut alone, 0, member).unwrap();
+    assert_eq!(list(&alone, 0).len(), list(&doc, 0).len() - 1, "the subordinate goes alone");
     let mut doc = doc;
-    delete_annotation(&mut doc, 0, member).unwrap();
-    let left = list(&doc, 0);
-    assert_eq!(left.len(), 1, "the group, its primary and the primary's replies are gone; the unrelated Square stays");
-    assert_eq!(left[0].name(b"Subtype"), Some(&b"Square"[..]));
-    assert!(left[0].get(b"NM").is_none());
+    delete_annotation(&mut doc, 0, square).unwrap();
+    let left: Vec<Option<String>> = list(&doc, 0).iter().map(|d| d.get(b"NM").map(|_| text(d, b"NM"))).collect();
+    assert_eq!(left, [None, Some("member".into())], "the primary and its replies are gone; the fixture's Square and the subordinate stay");
+    let summary = summaries(&doc);
+    let member = summary.iter().find(|s| s.name.as_deref() == Some("member")).unwrap();
+    assert!(member.parent.is_none() && !member.is_group_member(), "left without its primary, it is a comment of its own: {member:?}");
 }
 
-/// A subordinate whose `/IRT` chain reaches its primary within the 64 annotations the listing
-/// follows deletes the whole group; one whose chain runs past them is refused, and the file
-/// keeps every member, rather than losing only the part of the group below the cut
-/// (ISO 32000-2 §12.5.6.2).
+/// A subordinate deep in a chain of subordinates, within the 64 annotations the listing follows
+/// up a chain or past them, is deleted alone: the chain above it stays.
 #[test]
-fn a_group_chain_past_the_depth_limit_is_not_deleted_in_part() {
-    for (subordinates, deletes) in [(63, true), (64, false), (65, false)] {
+fn a_subordinate_deep_in_a_chain_is_deleted_alone() {
+    for subordinates in [63, 64, 65] {
         let mut doc = fixture();
         let top = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [100.0, 100.0, 200.0, 200.0] }), &meta("top")).unwrap();
         let (_, mut up) = annot_ref(&mut doc, 0, top).unwrap();
@@ -1002,23 +1007,15 @@ fn a_group_chain_past_the_depth_limit_is_not_deleted_in_part() {
             up = r;
         }
         let before = list(&doc, 0).len();
-        let result = delete_annotation(&mut doc, 0, last);
-        let left = list(&doc, 0).len();
-        if deletes {
-            result.unwrap();
-            assert_eq!(left, 1, "{subordinates}: the group is gone, the fixture's Square stays");
-        } else {
-            assert!(matches!(result, Err(AnnotError::Invalid(_))), "{subordinates}: {result:?}");
-            assert_eq!(left, before, "{subordinates}: nothing is deleted");
-        }
+        delete_annotation(&mut doc, 0, last).unwrap();
+        assert_eq!(list(&doc, 0).len(), before - 1, "{subordinates}: the subordinate is gone, the rest of its group stays");
     }
 }
 
-/// Deleting an unlocked subordinate takes every member of its group, so one locked member,
-/// even one that is neither the subordinate nor the primary, refuses the whole deletion
-/// (ISO 32000-2 §12.5.3, Table 167: Locked).
+/// A locked member doesn't hold back the deletion of another, the primary included: each goes
+/// alone (ISO 32000-2 §12.5.3, Table 167: Locked).
 #[test]
-fn a_locked_group_member_keeps_its_group() {
+fn a_locked_group_member_holds_back_no_other_deletion() {
     let mut doc = fixture();
     let top = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [100.0, 100.0, 200.0, 200.0] }), &meta("top")).unwrap();
     let (_, tr) = annot_ref(&mut doc, 0, top).unwrap();
@@ -1035,13 +1032,13 @@ fn a_locked_group_member_keeps_its_group() {
     }
     set_locked(&mut doc, 0, members[1], true).unwrap();
     let before = list(&doc, 0).len();
-    let result = delete_annotation(&mut doc, 0, members[0]);
-    assert!(matches!(result, Err(AnnotError::Invalid(_))), "{result:?}");
-    assert_eq!(list(&doc, 0).len(), before, "nothing is deleted");
-
-    set_locked(&mut doc, 0, members[1], false).unwrap();
-    delete_annotation(&mut doc, 0, members[0]).unwrap();
-    assert_eq!(list(&doc, 0).len(), 1, "unlocked, the group goes; the fixture's Square stays");
+    let mut alone = doc.clone();
+    delete_annotation(&mut alone, 0, members[0]).unwrap();
+    assert_eq!(list(&alone, 0).len(), before - 1, "the unlocked subordinate goes alone");
+    delete_annotation(&mut doc, 0, top).unwrap();
+    assert_eq!(list(&doc, 0).len(), before - 1, "the primary goes alone too");
+    let locked = list(&doc, 0).iter().filter(|d| d.get(b"F").and_then(|f| f.as_int()).is_some_and(|f| f & 128 != 0)).count();
+    assert_eq!(locked, 1, "the locked member stays");
 }
 
 #[test]

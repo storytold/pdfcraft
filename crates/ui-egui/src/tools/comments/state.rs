@@ -126,6 +126,10 @@ impl CommentView {
 pub struct CommentView {
     /// The selected comment: (page, index in `/Annots`).
     pub selected: Option<(usize, usize)>,
+    /// The group subordinate a click on the page picked, with the selection (its group's primary)
+    /// it was picked under: Delete acts on it while that group stays selected, as Acrobat deletes
+    /// the member clicked ([`Self::target`]).
+    pub(crate) member: Option<((usize, usize), (usize, usize))>,
     pub gesture: Option<Gesture>,
     /// Drawings just released: shown from their points until the page raster that includes the
     /// committed annotation arrives, so the stroke never vanishes in between (#1858).
@@ -186,6 +190,15 @@ pub(crate) enum EditorFocus {
 }
 
 impl CommentView {
+    /// What Delete acts on: the group member clicked, while its group is still the selection,
+    /// else the selected comment.
+    pub(crate) fn target(&self) -> Option<(usize, usize)> {
+        match self.member {
+            Some((member, group)) if Some(group) == self.selected => Some(member),
+            _ => self.selected,
+        }
+    }
+
     /// Takes back the last point of a polygon, cloud or connected lines being drawn; the first
     /// point's removal cancels the drawing. Returns whether there was such a drawing.
     pub fn undo_point(&mut self) -> bool {
@@ -410,8 +423,20 @@ impl PageCx<'_> {
     /// The comment a click at `p` selects: the topmost one under it or, on a group subordinate,
     /// the group's primary, which stands for the group.
     pub(super) fn click_hit(&self, p: Pos2) -> Option<&Annotation> {
-        self.hit(p)
-            .or_else(|| self.group_members().into_iter().rev().find(|(m, _)| self.screen_rects(m).any(|r| r.expand(3.0).contains(p))).map(|(_, p)| p))
+        self.hit(p).or_else(|| self.member_at(p).map(|(_, p)| p))
+    }
+
+    /// The group subordinate under `p`, where no comment is, with its group's primary.
+    fn member_at(&self, p: Pos2) -> Option<(&Annotation, &Annotation)> {
+        self.group_members().into_iter().rev().find(|(m, _)| self.screen_rects(m).any(|r| r.expand(3.0).contains(p)))
+    }
+
+    /// The group member a click at `p` picked when it selects `selected`, its group's primary
+    /// ([`CommentView::member`]): the subordinate under the pointer.
+    pub(super) fn picked(&self, p: Pos2, selected: Option<(usize, usize)>) -> Option<((usize, usize), (usize, usize))> {
+        let (m, primary) = self.hit(p).is_none().then(|| self.member_at(p)).flatten()?;
+        let group = (primary.page, primary.index);
+        (Some(group) == selected).then_some(((self.page, m.index), group))
     }
 
     pub(crate) fn rect_to_user(&self, r: Rect) -> [f64; 4] {

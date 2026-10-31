@@ -3079,3 +3079,31 @@ fn a_group_is_one_comment_in_the_panel_and_on_the_page() {
     let composer = h.state().views[0].comments.composer.as_ref().map(|c| c.text.clone());
     assert_eq!(composer.as_deref(), Some("Primary"), "a double-click on the Circle edits its group's text");
 }
+
+/// As in Acrobat desktop, Delete deletes the group member clicked and keeps the rest of its
+/// group, although ISO 32000-2 §12.5.6.2 lists deletion among the operations that act on the
+/// entire group. The Circle goes with its reply and the Square stays; the Square goes with its
+/// reply and the Circle stays, a comment of its own.
+#[test]
+fn delete_deletes_the_group_member_clicked() {
+    let shapes = |h: &Harness<'static, PdfCraftApp>| -> Vec<(String, bool)> {
+        let mut out: Vec<(String, bool)> = comments(h).iter().filter(|a| a.subtype != "Text").map(|a| (a.subtype.clone(), a.is_comment())).collect();
+        out.sort();
+        out
+    };
+    let mut h = harness_with_bytes(GROUP_FIXTURE.to_vec(), |_| {});
+    click_pt(&mut h, (220.0, 150.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the group is selected");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert_eq!(shapes(&h), [("Square".to_string(), true)], "the Circle goes, the Square stays");
+    let texts: Vec<String> = comments(&h).iter().filter_map(|a| a.contents.clone()).collect();
+    assert!(!texts.iter().any(|c| c == "Reply to the subordinate") && texts.iter().any(|c| c == "Plain reply"), "{texts:?}");
+    h.state_mut().undo();
+    h.run_steps(3);
+
+    click_pt(&mut h, (60.0, 50.0));
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert_eq!(shapes(&h), [("Circle".to_string(), true)], "the Square goes, the Circle stays as a comment of its own");
+}

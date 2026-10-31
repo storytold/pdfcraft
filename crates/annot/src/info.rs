@@ -89,29 +89,6 @@ pub fn is_group_subordinate(d: &Dict) -> bool {
     d.name(b"RT") == Some(b"Group") && d.reference(b"IRT").is_some()
 }
 
-/// How far a group subordinate's `/IRT` chain is followed to its primary.
-pub(crate) const MAX_GROUP_DEPTH: usize = 64;
-
-/// The primary of the group `r` belongs to: up the `/IRT` chain while it leads to another
-/// subordinate in `list` (one page's `/Annots`). `r` itself when it is not a subordinate, or
-/// when its primary is not on the page; the chain stops at a loop. `None` when it is still
-/// on a subordinate after [`MAX_GROUP_DEPTH`] annotations: the group's primary is unknown, as
-/// `pdfcraft_render::inspect::group_primaries` reads it (keep the two in step).
-pub(crate) fn group_primary(doc: &Document, list: &[Object], r: ObjRef) -> Option<ObjRef> {
-    let mut seen = vec![r];
-    let mut at = r;
-    for _ in 0..MAX_GROUP_DEPTH {
-        let obj = doc.get(at);
-        let Some(next) = obj.as_dict().filter(|d| is_group_subordinate(d)).and_then(|d| d.reference(b"IRT")) else { return Some(at) };
-        if seen.contains(&next) || !list.iter().any(|e| e.as_ref() == Some(next)) {
-            return Some(at);
-        }
-        seen.push(next);
-        at = next;
-    }
-    None
-}
-
 /// Every comment (see [`is_comment_subtype`]), ordered by page and then top edge.
 pub fn summaries(doc: &Document) -> Vec<Summary> {
     let mut out = Vec::new();
