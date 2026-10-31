@@ -1201,6 +1201,40 @@ pub fn tools() -> Vec<ToolDef> {
             .ro()
             .cmd("standards.pdfa")
             .with(schema(json!({ "doc": doc(), "level": { "type": "string", "enum": ["2b", "3b"], "description": "Default 2b." } }), &["doc"])),
+        t("pdfx_verify", "Verify PDF/X", "Standards ▸ Verify PDF/X compliance: the PDF/X-1a:2001, PDF/X-1a:2003, PDF/X-3:2002, PDF/X-3:2003 or PDF/X-4 (ISO 15930) rules the document breaks: rule id, where the rule is described, message, page and object, plus what the document declares. Without level, the level the document declares, else PDF/X-4. Verification only; nothing is changed or fixed.")
+            .ro()
+            .cmd("standards.pdfx")
+            .with(schema(
+                json!({ "doc": doc(), "level": { "type": "string", "enum": ["x1a:2001", "x1a:2003", "x3:2002", "x3:2003", "x4"], "description": "Default: the declared level, else x4." } }),
+                &["doc"],
+            )),
+        t("preflight_profiles", "Preflight profiles", "Preflight: the built-in profiles (commercial print, PDF/X-1a/3/4, PDF/A-2b/3b, accessibility), one single-check profile per print check (id check:<check>), and the fixups. Each profile lists its checks with their parameters and severity, as the JSON a custom profile is written in.")
+            .ro()
+            .cmd("preflight.run")
+            .with(schema(json!({}), &[])),
+        t("preflight_run", "Preflight", "Preflight ▸ Analyze: run a profile over the document and return the results by check (severity, status, parameters, fixups) with each hit's message, 1-based page, object, box in user space, rule and details. profile is a built-in id from preflight_profiles (check:<check> for a single check) or a whole profile object. Verification only; nothing is changed.")
+            .ro()
+            .cmd("preflight.run")
+            .with(schema(json!({ "doc": doc(), "profile": { "description": "A profile id, or a profile object { id, name, description, checks: [{ check, severity, ...parameters }] }." } }), &["doc", "profile"])),
+        t("preflight_report", "Preflight report", "Run a profile and write the preflight report to path as plain text, JSON or PDF (written with PdfCraft's own text-to-PDF), in English. Returns the summary. The document is not changed.")
+            .destructive()
+            .cmd("preflight.run")
+            .with(schema(
+                json!({ "doc": doc(), "profile": { "description": "A profile id or a profile object, as for preflight_run." }, "path": { "type": "string" }, "format": { "type": "string", "enum": ["text", "json", "pdf"], "description": "Default text." } }),
+                &["doc", "profile", "path"],
+            )),
+        t("preflight_fix", "Preflight fix", "Preflight ▸ Fix: apply one fixup (set-trim-box: a TrimBox from the CropBox on pages with neither a TrimBox nor an ArtBox; set-trapped: Trapped /False, or /True with trapped; remove-scripts: document JavaScript, additional actions and JavaScript or Launch actions, keeping links to pages and web addresses), or with profile and no fixup every fixup that addresses what the profile finds (Analyze and fix), then return the profile's results again. One undoable step; fails when there is nothing to fix. No colour conversion or output intents.")
+            .destructive()
+            .cmd("preflight.run")
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "fixup": { "type": "string", "enum": ["set-trim-box", "set-trapped", "remove-scripts"] },
+                    "trapped": { "type": "boolean", "description": "For set-trapped: true for /True. Default false." },
+                    "profile": { "description": "A profile id or object: with no fixup, apply what addresses its results; the results after fixing are returned." },
+                }),
+                &["doc"],
+            )),
         t("print_readiness", "Print readiness", "Verification only. Reports effective image resolution where each image is drawn (not against the page size), page boxes and bleed past the trim, output intents, fonts that are not embedded, and the PDF/A-2b structural result. Does not modify the document, embed fonts, invent a press profile, or check PDF/X.")
             .ro()
             .with(schema(json!({ "doc": doc() }), &["doc"])),

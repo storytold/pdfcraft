@@ -162,6 +162,77 @@
 	Error	Eroare
 	Warning	Avertisment
 	Information	Informații
+	Single checks	Verificări individuale
+	This check needs the Accessibility Checker, which isn't available here	Această verificare necesită verificatorul de accesibilitate, care nu este disponibil aici
+	Commercial print (CMYK)	Tipar comercial (CMYK)
+	Checks a file for CMYK printing: fonts, colour, image resolution, hairlines, transparency, page boxes, encryption, JavaScript, annotations, Trapped and the PDF version	Verifică un fișier pentru imprimarea CMYK: fonturi, culoare, rezoluția imaginilor, linii foarte subțiri, transparență, casetele paginii, criptare, JavaScript, adnotări, Trapped și versiunea PDF
+	Verifies the file against the standard, without changing it	Verifică fișierul față de standard, fără a-l modifica
+	Runs the Accessibility Checker's rules	Rulează regulile verificatorului de accesibilitate
+	Fonts not embedded	Fonturi neîncorporate
+	Colour the profile doesn't allow	Culoare pe care profilul nu o permite
+	Spot colours	Culori spot
+	Image resolution	Rezoluția imaginilor
+	Hairlines	Linii foarte subțiri
+	Transparency	Transparență
+	Pages without a TrimBox	Pagini fără TrimBox
+	Bleed	Bleed
+	JavaScript and actions	JavaScript și acțiuni
+	Annotations inside the trim	Adnotări în interiorul formatului tăiat
+	Trapped key	Cheia Trapped
+	{} compliance	Conformitate {}
+	Accessibility Checker rules	Regulile verificatorului de accesibilitate
+	Most spot colours	Număr maxim de culori spot
+	Colour images	Imagini color
+	Gray images	Imagini în tonuri de gri
+	Bitmap images	Imagini bitmap
+	Thinnest line	Cea mai subțire linie
+	Least bleed	Bleed minim
+	Highest version	Cea mai nouă versiune
+	Font type	Tip de font
+	Pixels	Pixeli
+	Placed size	Dimensiune plasată
+	Least resolution	Rezoluție minimă
+	Line width	Lățimea liniei
+	Flags	Indicatori
+	Security handler	Handler de securitate
+	Clause	Clauză
+	Rule	Regulă
+	Content uses {} colour	Conținutul folosește culoare {}
+	An image uses {} colour	O imagine folosește culoare {}
+	An inline image uses {} colour	O imagine inline folosește culoare {}
+	A shading uses {} colour	O umbrire folosește culoare {}
+	Spot colour {}	Culoare spot {}
+	The pages use {} spot colours	Paginile folosesc {} culori spot
+	A colour image is drawn at {} ppi	O imagine color este desenată la {} ppi
+	A gray image is drawn at {} ppi	O imagine în tonuri de gri este desenată la {} ppi
+	A bitmap image is drawn at {} ppi	O imagine bitmap este desenată la {} ppi
+	The resolution of an image can't be measured	Rezoluția unei imagini nu poate fi măsurată
+	A line is {} pt wide	O linie are lățimea de {} pt
+	A line has width 0, the thinnest the printer can draw	O linie are lățimea 0, cea mai subțire pe care o poate desena imprimanta
+	… and {} more on this page	… și încă {} pe această pagină
+	The page is a transparency group	Pagina este un grup de transparență
+	A form XObject is a transparency group	Un XObject de formular este un grup de transparență
+	The page has no BleedBox	Pagina nu are BleedBox
+	The bleed is {} mm on its narrowest side	Bleedul are {} mm pe latura cea mai îngustă
+	An object has additional actions (/AA)	Un obiect are acțiuni suplimentare (/AA)
+	A {} annotation lies inside the trim	O adnotare {} se află în interiorul formatului tăiat
+	The file is PDF {}	Fișierul este PDF {}
+	The file is PDF {}, newer than the profile allows	Fișierul este PDF {}, mai nou decât permite profilul
+	Set missing TrimBoxes from the CropBox	Setare TrimBox lipsă din CropBox
+	Set Trapped to False	Setare Trapped la False
+	Set Trapped to True	Setare Trapped la True
+	Remove JavaScript and actions	Eliminare JavaScript și acțiuni
+	Preflight report	Raport de verificare preliminară
+	Document: {name}	Document: {name}
+	Profile: {profile}	Profil: {profile}
+	Date: {date}	Data: {date}
+	Summary: {errors} errors, {warnings} warnings, {info} information	Rezumat: {errors} erori, {warnings} avertismente, {info} informații
+	No problems found	Nu s-au găsit probleme
+	Checks passed	Verificări trecute
+	Checks not run	Verificări nerulate
+	Fixup: {fixup}	Remediere: {fixup}
+	Content not read to the end on pages: {pages}	Conținut necitit până la capăt pe paginile: {pages}
+	Apply preflight fixups	Aplicare remedieri de verificare preliminară
 	Success	Reușit
 	Failed	Eșuat
 	File	Fișier
@@ -1513,6 +1584,7 @@
 	Output preview	Previzualizare ieșire
 	Oval	Oval
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	Page grid	Grilă pagină
 	Page labels	Etichete pagini
 	Page options	Opțiuni pagină
@@ -1562,6 +1634,7 @@
 	Save as PDF/A	Salvare ca PDF/A
 	Save as PDF/UA	Salvare ca PDF/UA
 	Save as PDF/X	Salvare ca PDF/X
+	Verify PDF/X	Verificare PDF/X
 	Scan & OCR	Scanare și OCR
 	Security properties	Proprietăți de securitate
 	Select files to compare	Selectați fișierele de comparat
@@ -1875,6 +1948,45 @@ comment menu	Edit	Editare
 	Alternate text that will never be read	Text alternativ care nu va fi citit niciodată
 	An action is already running	O acțiune rulează deja
 	An embedded file has no AFRelationship	Un fișier încorporat nu are AFRelationship
+	The document information doesn't identify the file as {}	Informațiile documentului nu identifică fișierul ca {}
+	The metadata has no {}	Metadatele nu au {}
+	The document information and the metadata name different PDF/X versions	Informațiile documentului și metadatele indică versiuni PDF/X diferite
+	The file trailer has no document ID	Trailerul fișierului nu are ID de document
+	The document doesn't say whether it is trapped (Trapped)	Documentul nu precizează dacă are trapping (Trapped)
+	Trapped is {}, but it must be /True or /False	Trapped este {}, dar trebuie să fie /True sau /False
+	The Trapped key and the metadata's pdf:Trapped disagree	Cheia Trapped și pdf:Trapped din metadate nu concordă
+	There is no PDF/X output intent (GTS_PDFX)	Nu există nicio intenție de ieșire PDF/X (GTS_PDFX)
+	There is more than one PDF/X output intent	Există mai multe intenții de ieșire PDF/X
+	The PDF/X output intent has no OutputConditionIdentifier	Intenția de ieșire PDF/X nu are OutputConditionIdentifier
+	The PDF/X output intent has no embedded profile (DestOutputProfile)	Intenția de ieșire PDF/X nu are profil încorporat (DestOutputProfile)
+	The PDF/X output intent has neither an embedded profile nor a characterization in the ICC registry	Intenția de ieșire PDF/X nu are nici un profil încorporat, nici o caracterizare din registrul ICC
+	The output intent's profile isn't a valid ICC profile	Profilul intenției de ieșire nu este un profil ICC valid
+	The output intent's profile isn't an output (printer) profile	Profilul intenției de ieșire nu este un profil de ieșire (de imprimantă)
+	The output intent's profile describes {} colour, but PDF/X-1a needs a CMYK printing condition	Profilul intenției de ieșire descrie culoare {}, dar PDF/X-1a necesită o condiție de imprimare CMYK
+	The output intent's profile describes {} colour; it must be gray, RGB or CMYK	Profilul intenției de ieșire descrie culoare {}; trebuie să fie gri, RGB sau CMYK
+	The output intent's profile has /N {}, which doesn't match its colour space	Profilul intenției de ieșire are /N {}, care nu corespunde spațiului său de culoare
+	The output intent's profile has no device-to-PCS transform (AToB1 or grayTRC)	Profilul intenției de ieșire nu are transformare din dispozitiv în PCS (AToB1 sau grayTRC)
+	The page has no valid MediaBox	Pagina nu are un MediaBox valid
+	The page has neither a TrimBox nor an ArtBox	Pagina nu are nici TrimBox, nici ArtBox
+	The page has both a TrimBox and an ArtBox	Pagina are atât TrimBox, cât și ArtBox
+	The {} extends beyond the BleedBox	{} depășește BleedBox
+	The {} extends beyond the CropBox	{} depășește CropBox
+	The {} extends beyond the MediaBox	{} depășește MediaBox
+	A {} annotation lies within the BleedBox	O adnotare {} se află în BleedBox
+	A PrinterMark annotation overlaps the TrimBox or ArtBox	O adnotare PrinterMark se suprapune peste TrimBox sau ArtBox
+	A stream uses JBIG2 compression	Un flux folosește compresia JBIG2
+	A form XObject refers to a page of another file (reference XObject)	Un XObject de formular face referire la o pagină din alt fișier (XObject de referință)
+	An image or form has OPI information	O imagine sau un formular are informații OPI
+	A graphics state uses a soft mask	O stare grafică folosește o mască soft
+	A graphics state sets an opacity below 1	O stare grafică setează o opacitate sub 1
+	A graphics state uses the {} blend mode	O stare grafică folosește modul de amestecare {}
+	An image has a soft mask	O imagine are o mască soft
+	The {} colour space isn't allowed: PDF/X-1a allows only CMYK, gray and spot colour	Spațiul de culoare {} nu este permis: PDF/X-1a permite doar CMYK, gri și culori spot
+	Content uses DeviceRGB colour: PDF/X-1a allows only CMYK, gray and spot colour	Conținutul folosește culoare DeviceRGB: PDF/X-1a permite doar CMYK, gri și culori spot
+	{} colour doesn't match the output intent's colour space	Culoarea {} nu corespunde spațiului de culoare al intenției de ieșire
+	Content uses {} colour, which doesn't match the output intent's colour space	Conținutul folosește culoare {}, care nu corespunde spațiului de culoare al intenției de ieșire
+	Device-independent colour is used, so the output intent needs an embedded profile	Se folosește culoare independentă de dispozitiv, deci intenția de ieșire necesită un profil încorporat
+	Errors	Erori
 	An image asks to be interpolated	O imagine cere interpolare
 	An image has alternates or OPI information	O imagine are alternative sau informații OPI
 	Animation that flashes can cause seizures. Check scripts and media for flicker.	Animațiile care clipesc pot provoca crize. Verificați scripturile și conținutul media pentru pâlpâiri.

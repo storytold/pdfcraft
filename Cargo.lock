@@ -4555,8 +4555,11 @@ dependencies = [
  "flate2",
  "pdfcraft-content",
  "pdfcraft-cos",
+ "pdfcraft-filters",
  "pdfcraft-model",
  "roxmltree 0.21.2",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

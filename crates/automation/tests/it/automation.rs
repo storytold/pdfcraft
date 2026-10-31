@@ -813,6 +813,8 @@ fn file_writing_tools_are_not_read_only() {
         assert!(!t.read_only, "{name} writes a file but advertises read-only");
         assert!(t.destructive, "{name} overwrites its path but advertises non-destructive");
     }
+    // remove-scripts deletes document JavaScript and actions.
+    assert!(tools().into_iter().find(|t| t.name == "preflight_fix").unwrap().destructive);
 }
 
 #[test]

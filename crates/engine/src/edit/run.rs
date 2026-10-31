@@ -137,6 +137,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::AddOcrText { .. }
         | Edit::SetDocumentScript { .. }
         | Edit::SetFieldScript { .. }
+        | Edit::PreflightFix { .. }
         | Edit::RemoveStandardId { .. }
         | Edit::EditTextLine { .. }
         | Edit::EditTextBlock { .. }
@@ -519,6 +520,16 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::ConvertPdfA { level } => {
             pdfcraft_preflight::convert(doc, *level).map_err(|e| EditError::Invalid(e.to_string()))?;
+        }
+        Edit::PreflightFix { fixups } => {
+            let mut changed = 0usize;
+            for fixup in fixups {
+                changed = changed.saturating_add(crate::preflight::fix(doc, *fixup).map_err(|e| EditError::Invalid(e.to_string()))?);
+            }
+            // An edit that changes nothing would only leave an empty step in the history.
+            if changed == 0 {
+                return Err(EditError::Invalid("there is nothing for these fixups to fix".into()));
+            }
         }
         Edit::RemoveStandardId { standard } => pdfcraft_organize::remove_standard_id(doc, *standard)?,
         Edit::SetDocumentScript { name, script } => pdfcraft_forms::set_document_script(doc, name, script.as_deref())?,

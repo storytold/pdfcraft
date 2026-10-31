@@ -1,6 +1,6 @@
 [package]
 name = "pdfcraft-preflight"
-description = "Standards: verify PDF/A (ISO 19005) conformance and convert documents to PDF/A-2b or 3b"
+description = "Standards and Preflight: verify PDF/A and PDF/X, convert to PDF/A-2b or 3b, and run preflight profiles with reports and fixups"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,7 +13,10 @@ workspace = true
 [dependencies]
 pdfcraft-content = { workspace = true }
 pdfcraft-cos = { workspace = true }
+pdfcraft-filters = { workspace = true }
 pdfcraft-model = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 roxmltree = "0.21"
 
 [dev-dependencies]

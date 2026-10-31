@@ -345,6 +345,7 @@ key	Space	Mezerník
 	Import form data…	Importovat data formuláře…
 	Export form data…	Exportovat data formuláře…
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	Action Wizard…	Průvodce akcemi…
 	Prepare for distribution…	Připravit k distribuci…
 	Optimize scanned documents…	Optimalizovat skenované dokumenty…
@@ -562,6 +563,7 @@ key	Space	Mezerník
 	Standards	Standardy
 	Save as PDF/A	Uložit jako PDF/A
 	Save as PDF/X	Uložit jako PDF/X
+	Verify PDF/X	Ověřit PDF/X
 	Save as PDF/UA	Uložit jako PDF/UA
 	Add search index	Přidat vyhledávací index
 	Index	Index
@@ -1994,6 +1996,46 @@ key	Space	Mezerník
 	PostScript XObjects aren't allowed	Objekty PostScript XObject nejsou povoleny
 	Embedded files must be PDF/A files themselves (use PDF/A-3 for others)	Vložené soubory musí být samy soubory PDF/A (pro ostatní použijte PDF/A-3)
 	An embedded file has no AFRelationship	Vložený soubor nemá AFRelationship
+	The document information doesn't identify the file as {}	Informace o dokumentu neoznačují soubor jako {}
+	The metadata has no {}	Metadata nemají {}
+	The document information and the metadata name different PDF/X versions	Informace o dokumentu a metadata uvádějí různé verze PDF/X
+	The file trailer has no document ID	Trailer souboru nemá ID dokumentu
+	The document doesn't say whether it is trapped (Trapped)	Dokument neuvádí, zda má přesahy (Trapped)
+	Trapped is {}, but it must be /True or /False	Trapped je {}, ale musí být /True nebo /False
+	The Trapped key and the metadata's pdf:Trapped disagree	Klíč Trapped a pdf:Trapped v metadatech se neshodují
+	There is no PDF/X output intent (GTS_PDFX)	Chybí výstupní záměr PDF/X (GTS_PDFX)
+	There is more than one PDF/X output intent	Existuje více než jeden výstupní záměr PDF/X
+	The PDF/X output intent has no OutputConditionIdentifier	Výstupní záměr PDF/X nemá OutputConditionIdentifier
+	The PDF/X output intent has no embedded profile (DestOutputProfile)	Výstupní záměr PDF/X nemá vložený profil (DestOutputProfile)
+	The PDF/X output intent has neither an embedded profile nor a characterization in the ICC registry	Výstupní záměr PDF/X nemá vložený profil ani charakterizaci z registru ICC
+	The output intent's profile isn't a valid ICC profile	Profil výstupního záměru není platný profil ICC
+	The output intent's profile isn't an output (printer) profile	Profil výstupního záměru není výstupní (tiskárenský) profil
+	The output intent's profile describes {} colour, but PDF/X-1a needs a CMYK printing condition	Profil výstupního záměru popisuje barvu {}, ale PDF/X-1a potřebuje tiskovou podmínku CMYK
+	The output intent's profile describes {} colour; it must be gray, RGB or CMYK	Profil výstupního záměru popisuje barvu {}; musí být šedá, RGB nebo CMYK
+	The output intent's profile has /N {}, which doesn't match its colour space	Profil výstupního záměru má /N {}, což neodpovídá jeho barevnému prostoru
+	The output intent's profile has no device-to-PCS transform (AToB1 or grayTRC)	Profil výstupního záměru nemá převod ze zařízení do PCS (AToB1 nebo grayTRC)
+	The page has no valid MediaBox	Stránka nemá platný MediaBox
+	The page has neither a TrimBox nor an ArtBox	Stránka nemá TrimBox ani ArtBox
+	The page has both a TrimBox and an ArtBox	Stránka má TrimBox i ArtBox
+	The {} extends beyond the BleedBox	{} přesahuje BleedBox
+	The {} extends beyond the CropBox	{} přesahuje CropBox
+	The {} extends beyond the MediaBox	{} přesahuje MediaBox
+	A {} annotation lies within the BleedBox	Anotace {} leží uvnitř BleedBox
+	A PrinterMark annotation overlaps the TrimBox or ArtBox	Anotace PrinterMark zasahuje do TrimBox nebo ArtBox
+	A stream uses JBIG2 compression	Proud používá kompresi JBIG2
+	A form XObject refers to a page of another file (reference XObject)	Formulářový XObject odkazuje na stránku jiného souboru (referenční XObject)
+	An image or form has OPI information	Obrázek nebo formulář obsahuje informace OPI
+	A graphics state uses a soft mask	Grafický stav používá měkkou masku
+	A graphics state sets an opacity below 1	Grafický stav nastavuje krytí menší než 1
+	A graphics state uses the {} blend mode	Grafický stav používá režim prolnutí {}
+	An image has a soft mask	Obrázek má měkkou masku
+	The {} colour space isn't allowed: PDF/X-1a allows only CMYK, gray and spot colour	Barevný prostor {} není povolen: PDF/X-1a povoluje jen CMYK, šedou a přímé barvy
+	A colour space is nested too deeply for the spaces under it to be checked	Barevný prostor je vnořen příliš hluboko, takže prostory pod ním nelze zkontrolovat
+	Content uses DeviceRGB colour: PDF/X-1a allows only CMYK, gray and spot colour	Obsah používá barvu DeviceRGB: PDF/X-1a povoluje jen CMYK, šedou a přímé barvy
+	{} colour doesn't match the output intent's colour space	Barva {} neodpovídá barevnému prostoru výstupního záměru
+	Content uses {} colour, which doesn't match the output intent's colour space	Obsah používá barvu {}, která neodpovídá barevnému prostoru výstupního záměru
+	Device-independent colour is used, so the output intent needs an embedded profile	Používá se barva nezávislá na zařízení, takže výstupní záměr potřebuje vložený profil
+	Errors	Chyby
 	Select Icon	Vybrat ikonu
 	Choose images	Vyberte obrázky
 	{dpi} pixels/inch	{dpi} pixelů/palec
@@ -2778,6 +2820,77 @@ animation effects	Off	Vypnuto
 	Help…	Nápověda…
 	Import	Importovat
 	Information	Informace
+	Single checks	Jednotlivé kontroly
+	This check needs the Accessibility Checker, which isn't available here	Tato kontrola potřebuje kontrolu přístupnosti, která tu není k dispozici
+	Commercial print (CMYK)	Komerční tisk (CMYK)
+	Checks a file for CMYK printing: fonts, colour, image resolution, hairlines, transparency, page boxes, encryption, JavaScript, annotations, Trapped and the PDF version	Kontroluje soubor pro tisk CMYK: písma, barvy, rozlišení obrázků, vlasové čáry, průhlednost, rámečky stránky, šifrování, JavaScript, anotace, Trapped a verzi PDF
+	Verifies the file against the standard, without changing it	Ověří soubor podle normy, aniž by ho měnil
+	Runs the Accessibility Checker's rules	Spustí pravidla kontroly přístupnosti
+	Fonts not embedded	Nevložená písma
+	Colour the profile doesn't allow	Barva, kterou profil nepovoluje
+	Spot colours	Přímé barvy
+	Image resolution	Rozlišení obrázků
+	Hairlines	Vlasové čáry
+	Transparency	Průhlednost
+	Pages without a TrimBox	Stránky bez TrimBox
+	Bleed	Spadávka
+	JavaScript and actions	JavaScript a akce
+	Annotations inside the trim	Anotace uvnitř ořezu
+	Trapped key	Klíč Trapped
+	{} compliance	Shoda s {}
+	Accessibility Checker rules	Pravidla kontroly přístupnosti
+	Most spot colours	Nejvíce přímých barev
+	Colour images	Barevné obrázky
+	Gray images	Šedé obrázky
+	Bitmap images	Bitmapové obrázky
+	Thinnest line	Nejtenčí čára
+	Least bleed	Nejmenší spadávka
+	Highest version	Nejvyšší verze
+	Font type	Typ písma
+	Pixels	Pixely
+	Placed size	Umístěná velikost
+	Least resolution	Nejmenší rozlišení
+	Line width	Šířka čáry
+	Flags	Příznaky
+	Security handler	Obslužná rutina zabezpečení
+	Clause	Klauzule
+	Rule	Pravidlo
+	Content uses {} colour	Obsah používá barvu {}
+	An image uses {} colour	Obrázek používá barvu {}
+	An inline image uses {} colour	Vložený obrázek používá barvu {}
+	A shading uses {} colour	Stínování používá barvu {}
+	Spot colour {}	Přímá barva {}
+	The pages use {} spot colours	Stránky používají přímých barev: {}
+	A colour image is drawn at {} ppi	Barevný obrázek se kreslí v {} ppi
+	A gray image is drawn at {} ppi	Šedý obrázek se kreslí v {} ppi
+	A bitmap image is drawn at {} ppi	Bitmapový obrázek se kreslí v {} ppi
+	The resolution of an image can't be measured	Rozlišení obrázku nelze změřit
+	A line is {} pt wide	Čára je široká {} pt
+	A line has width 0, the thinnest the printer can draw	Čára má šířku 0, nejtenčí, jakou tiskárna dokáže nakreslit
+	… and {} more on this page	… a dalších {} na této stránce
+	The page is a transparency group	Stránka je skupina průhlednosti
+	A form XObject is a transparency group	Formulářový XObject je skupina průhlednosti
+	The page has no BleedBox	Stránka nemá BleedBox
+	The bleed is {} mm on its narrowest side	Spadávka má na nejužší straně {} mm
+	An object has additional actions (/AA)	Objekt má další akce (/AA)
+	A {} annotation lies inside the trim	Anotace {} leží uvnitř ořezu
+	The file is PDF {}	Soubor je PDF {}
+	The file is PDF {}, newer than the profile allows	Soubor je PDF {}, novější, než profil povoluje
+	Set missing TrimBoxes from the CropBox	Doplnit chybějící TrimBox podle CropBox
+	Set Trapped to False	Nastavit Trapped na False
+	Set Trapped to True	Nastavit Trapped na True
+	Remove JavaScript and actions	Odebrat JavaScript a akce
+	Preflight report	Protokol předtiskové kontroly
+	Document: {name}	Dokument: {name}
+	Profile: {profile}	Profil: {profile}
+	Date: {date}	Datum: {date}
+	Summary: {errors} errors, {warnings} warnings, {info} information	Souhrn: chyby {errors}, upozornění {warnings}, informace {info}
+	No problems found	Nebyly nalezeny žádné problémy
+	Checks passed	Úspěšné kontroly
+	Checks not run	Nespuštěné kontroly
+	Fixup: {fixup}	Oprava: {fixup}
+	Content not read to the end on pages: {pages}	Obsah nepřečtený do konce na stránkách: {pages}
+	Apply preflight fixups	Použít opravy předtiskové kontroly
 	Loading…	Načítání…
 	Mouse wheel scroll speed	Rychlost posouvání kolečkem myši
 	Move	Přesunout

@@ -1,0 +1,8 @@
+Label = "Preflight"
+Button "Close" [off]
+ComboBox "Preflight profile" = "Commercial print (CMYK)"
+Label = "Checks a file for CMYK printing: fonts, colour, image resolution, hairlines, transparency, page boxes, encryption, JavaScript, annotations, Trapped and the PDF version"
+Button "Run"
+Button "Report" [disabled]
+Image
+Label = "This document hasn't been checked yet."

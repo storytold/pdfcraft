@@ -52,6 +52,8 @@ pub enum RightPanel {
     Search,
     /// Compare files: the differences.
     Compare,
+    /// Print production ▸ Preflight: profiles, results and fixups.
+    Preflight,
 }
 
 /// Quick-action bar tools (the vertical floating strip).
@@ -178,6 +180,8 @@ pub enum Dialog {
     ActionWizard,
     /// Standards ▸ PDF/A.
     PdfA,
+    /// Standards ▸ PDF/X.
+    PdfX,
     /// Custom stamps ▸ Create.
     CreateStamp,
     /// Prepare for accessibility ▸ Add alternate text.

@@ -539,6 +539,7 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let Some(doc) = app.session.get(id) else { return };
     let has_signatures = doc.is_signed();
     let has_check = app.a11y.report.as_ref().is_some_and(|(d, _)| *d == id);
+    let has_preflight = app.preflight.results.as_ref().is_some_and(|(d, _)| *d == id);
     let (has_comments, has_outline, has_fields, has_layers, has_files) = (
         !doc.info.annotations.is_empty(),
         !doc.info.outline.is_empty(),
@@ -567,6 +568,9 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     ];
     if has_check {
         items.push(item(RightPanel::Accessibility, "accessibility", "Accessibility Checker", None));
+    }
+    if has_preflight {
+        items.push(item(RightPanel::Preflight, "file-check", "Preflight", None));
     }
     items.push(item(RightPanel::Tags, "tag", "Tags", None));
     let view = &mut app.views[index];
