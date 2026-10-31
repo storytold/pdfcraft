@@ -121,8 +121,8 @@ pub struct InterpreterSettings {
     /// render (tiles, whole pages, print, export).
     pub preview: bool,
     /// PdfCraft patch (73): the steps of JBIG2 decoding a page's images may take between them
-    /// ([`hayro_syntax::MAX_PAGE_JBIG2_WORK`] by default). Images past it aren't drawn, each with
-    /// [`InterpreterWarning::ImageDecodeFailure`].
+    /// ([`hayro_syntax::MAX_PAGE_JBIG2_WORK`] by default). Images past it aren't drawn, nor images
+    /// whose masks are past it, each with [`InterpreterWarning::ContentTruncated`].
     pub jbig2_work: u64,
 }
 

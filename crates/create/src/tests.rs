@@ -2302,3 +2302,14 @@ fn an_image_whose_jbig2_mask_is_past_the_allowance_is_left_out() {
     let refused = crate::extract::image_file_within(&doc, image, &mut ImageBudget::with_work(0)).unwrap_err();
     assert!(refused.contains("more JBIG2 decoding than"), "{refused}");
 }
+
+/// A large honest file keeps its images: what an export may hold grows with the file past the fixed
+/// part, and a file too long to double doesn't wrap round to nothing.
+#[test]
+fn an_export_may_hold_twice_a_large_file() {
+    let fixed = crate::extract::export_bytes(0);
+    assert_eq!(fixed, 2 << 30);
+    assert_eq!(crate::extract::export_bytes(fixed / 2), fixed);
+    assert_eq!(crate::extract::export_bytes(fixed / 2 + 1), fixed + 2);
+    assert_eq!(crate::extract::export_bytes(usize::MAX), usize::MAX);
+}

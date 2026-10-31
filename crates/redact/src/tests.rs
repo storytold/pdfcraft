@@ -751,7 +751,7 @@ fn jbig2_globals(secret: &[u8]) -> Vec<u8> {
 /// can't be read, it would take what no mark covers with it without a word, so the run stops there,
 /// and [`apply`] leaves the document as it was.
 #[test]
-fn a_jbig2_image_past_the_runs_allowance_is_removed_whole() {
+fn a_jbig2_image_past_the_runs_allowance_stops_the_run() {
     let mut dict = Dict::new();
     dict.set(b"Width".to_vec(), Object::Int(16));
     dict.set(b"Height".to_vec(), Object::Int(2));

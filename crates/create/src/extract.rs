@@ -31,15 +31,20 @@ pub struct ImageExport {
 /// Images larger than this many pixels are skipped (memory).
 const MAX_PIXELS: u64 = 100_000_000;
 
-/// What one export may hold of the files it makes, or twice the file if that is more, so that a file
-/// of large images is exported whole: they are all in memory until it ends, and a file of a few KB
-/// can make gigabytes of PNG. Images past it are left out, with the reason.
+/// What one export may hold of the files it makes: they are all in memory until it ends, and a file
+/// of a few KB can make gigabytes of PNG. Images past it are left out, with the reason.
 const MAX_EXPORT_BYTES: usize = 2 << 30;
+
+/// What an export of a file of `file_bytes` may hold: twice the file if that is more than
+/// [`MAX_EXPORT_BYTES`], so that a file of large images is exported whole.
+pub(crate) fn export_bytes(file_bytes: usize) -> usize {
+    MAX_EXPORT_BYTES.max(file_bytes.saturating_mul(2))
+}
 
 /// The images of `pages` (0-based; each image once, on the first page using it), skipping
 /// those with fewer than `min_side` pixels on their shorter side.
 pub fn extract_images(doc: &Document, pages: &[usize], min_side: u32) -> ImageExport {
-    extract_images_within(doc, pages, min_side, &mut ImageBudget::new(doc), MAX_EXPORT_BYTES.max(doc.bytes().len().saturating_mul(2)))
+    extract_images_within(doc, pages, min_side, &mut ImageBudget::new(doc), export_bytes(doc.bytes().len()))
 }
 
 /// [`extract_images`] within `budget`, and holding `max_bytes` of files. An image past either is

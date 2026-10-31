@@ -3672,6 +3672,50 @@ fn the_jbig2_images_of_a_page_share_one_allowance() {
     assert!(black(&usual, 10) && black(&usual, 30), "the usual allowance is far above a page like this");
 }
 
+/// Without its mask a picture would show what the mask hides, so a JBIG2 mask past the page's
+/// allowance takes the picture with it, and the page says so. A mask that can't be read for any
+/// other reason leaves the picture, as it did.
+#[test]
+fn a_picture_whose_jbig2_mask_is_past_the_pages_allowance_is_not_drawn() {
+    let draw = |entry: &str, mask: &[u8], work: u64| {
+        let content = b"q 20 0 0 20 5 5 cm /Im1 Do Q";
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n".to_vec();
+        pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n", content.len()).as_bytes());
+        pdf.extend_from_slice(content);
+        pdf.extend_from_slice(b"\nendstream endobj\n");
+        pdf.extend_from_slice(
+            format!("5 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceGray {entry} 6 0 R /Length 1 >> stream\n\0\nendstream endobj\n").as_bytes(),
+        );
+        let kind = if entry == "/Mask" { "/ImageMask true" } else { "/ColorSpace /DeviceGray" };
+        pdf.extend_from_slice(
+            format!("6 0 obj << /Type /XObject /Subtype /Image /Width 16 /Height 2 /BitsPerComponent 1 {kind} /Filter /JBIG2Decode /Length {} >> stream\n", mask.len()).as_bytes(),
+        );
+        pdf.extend_from_slice(mask);
+        pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+        let config = RenderConfig { jbig2_work: Some(work), ..RenderConfig::default() };
+        let page = PageRenderer::new(Arc::new(pdf), config).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            ..Default::default()
+        });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        let shown = match &page.rgba[((25 * 40 + 15) * 4)..][..4] {
+            [0, 0, 0, 255] => true,
+            [255, 255, 255, 255] => false,
+            other => panic!("neither the picture nor the page: {other:?}"),
+        };
+        (shown, page.warnings.contains(&RenderWarning::ContentTruncated))
+    };
+    let mask = black_jbig2_page();
+    assert_eq!(draw("/SMask", &mask, u64::MAX), (false, false), "the mask hides all of it");
+    assert_eq!(draw("/SMask", &mask, 0), (false, true), "past the allowance a soft mask hides it too");
+    assert_eq!(draw("/Mask", &mask, 0), (false, true), "and so does a stencil mask");
+    assert_eq!(draw("/SMask", b"no JBIG2 here", 1 << 20), (true, false), "any other bad mask is no mask");
+}
+
 /// An image that can't be decoded has still cost its reading, which a page repeats for each time
 /// it draws one, since such an image isn't kept. So what it reads comes out of the page's allowance,
 /// and an image after it has less. Allowed exactly what the good one takes, it isn't drawn behind

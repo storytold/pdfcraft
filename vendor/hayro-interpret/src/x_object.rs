@@ -1016,6 +1016,17 @@ fn decode_raster(
         .flatten()
     };
 
+    // PdfCraft patch (73): a bad mask leaves the image as it is, but one left out for the page's
+    // allowance takes the image with it. Both are reported, and only here is the file not to blame
+    // for what the mask would have hidden being shown.
+    let dict = obj.stream.dict();
+    if alpha.is_none()
+        && hayro_syntax::page_jbig2_work_spent()
+        && (dict.contains_key(SMASK) || dict.contains_key(MASK))
+    {
+        return None;
+    }
+
     Some(DecodedRaster { image, alpha })
 }
 
