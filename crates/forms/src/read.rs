@@ -4,12 +4,17 @@ use super::{DecodeBudget, Dict, Document, Field, FieldKind, ObjRef, Object, PdfS
 /// At most this many `/State` entries of a set-layer-visibility action are read.
 const MAX_LAYER_STATE: usize = 1024;
 
+enum ButtonRead {
+    Ready(af::ButtonAction),
+    Reset(Object),
+}
+
 /// A push button's mouse-up action (`/A`, or `/AA /U`, on the field or its widget).
-fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut DecodeBudget) -> Option<af::ButtonAction> {
+fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut DecodeBudget) -> Option<ButtonRead> {
     // A button PdfCraft generated for an XFA image field (`/PCXfaImage true`, no PDF action):
     // clicking it picks a picture, as `buttonImportIcon()` does.
     if matches!(d.get(b"PCXfaImage").map(|o| doc.resolve(o)).as_deref(), Some(Object::Bool(true))) {
-        return Some(af::ButtonAction::ImportIcon);
+        return Some(ButtonRead::Ready(af::ButtonAction::ImportIcon));
     }
     let pick = |dict: &Dict| -> Option<Object> {
         dict.get(b"A").cloned().or_else(|| dict.get(b"AA").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().and_then(|aa| aa.get(b"U").cloned())))
@@ -18,22 +23,8 @@ fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Dec
     let a = doc.resolve(&action);
     let a = a.as_dict()?;
     let s = |k: &[u8]| a.get(k).and_then(|v| text_of(&doc.resolve(v)));
-    Some(match a.name(b"S")? {
-        b"ResetForm" => {
-            let fields = a
-                .get(b"Fields")
-                .map(|f| doc.resolve(f))
-                .and_then(|f| f.as_array().cloned())
-                .unwrap_or_default()
-                .iter()
-                .filter_map(|o| match o {
-                    Object::Ref(r) => doc.get(*r).as_dict().and_then(|fd| fd.get(b"T").and_then(|t| text_of(&doc.resolve(t)))),
-                    other => text_of(&doc.resolve(other)),
-                })
-                .collect();
-            let exclude = a.get(b"Flags").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0) & 1 != 0;
-            af::ButtonAction::Reset { fields, exclude }
-        }
+    Some(ButtonRead::Ready(match a.name(b"S")? {
+        b"ResetForm" => return Some(ButtonRead::Reset(action)),
         b"Named" => af::ButtonAction::Named(String::from_utf8_lossy(a.name(b"N")?).into_owned()),
         b"URI" => af::ButtonAction::Uri(s(b"URI")?),
         b"SubmitForm" => af::ButtonAction::Submit(
@@ -88,17 +79,49 @@ fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Dec
         }
         b"JavaScript" => af::button_script(&script(doc, &action, scripts)?),
         _ => return None,
-    })
+    }))
+}
+
+// Only explicit ResetForm actions wait for complete imported ownership.
+fn reset_button_action(
+    doc: &Document,
+    action: &Object,
+    imported_names: &std::collections::HashMap<ObjRef, Option<String>>,
+) -> Option<af::ButtonAction> {
+    let action = doc.resolve(action);
+    let a = action.as_dict()?;
+    let fields = a
+        .get(b"Fields")
+        .map(|f| doc.resolve(f))
+        .and_then(|f| f.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .map(|o| match o {
+            Object::Ref(r) => qualified_name_with_completion(doc, *r, true)
+                .filter(|name| imported_names.get(r).and_then(|owned| owned.as_deref()) == Some(name.as_str()))
+                .or_else(|| text_of(&doc.resolve(o))),
+            other => text_of(&doc.resolve(other)),
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let exclude = a.get(b"Flags").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0) & 1 != 0;
+    Some(af::ButtonAction::Reset { fields, exclude })
 }
 
 /// The fully qualified name of the field that `r` (a field or one of its widgets) belongs to,
 /// from the partial names (`/T`) up its `/Parent` chain.
-fn qualified_name(doc: &Document, r: ObjRef) -> Option<String> {
+pub(super) fn qualified_name(doc: &Document, r: ObjRef) -> Option<String> {
+    qualified_name_with_completion(doc, r, false)
+}
+
+pub(super) fn qualified_name_with_completion(doc: &Document, r: ObjRef, require_complete: bool) -> Option<String> {
     let mut parts = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut cur = Some(r);
     while let Some(c) = cur {
         if seen.len() > 64 || !seen.insert(c) {
+            if require_complete {
+                return None;
+            }
             break;
         }
         let obj = doc.get(c);
@@ -109,7 +132,9 @@ fn qualified_name(doc: &Document, r: ObjRef) -> Option<String> {
         cur = d.get(b"Parent").and_then(|p| p.as_ref());
     }
     parts.reverse();
-    (!parts.is_empty()).then(|| parts.join("."))
+    // Match walk: leading empty partial names leave the accumulated name empty.
+    let first = parts.iter().position(|part| !part.is_empty()).unwrap_or(parts.len());
+    (!parts.is_empty()).then(|| parts.get(first..).unwrap_or_default().join("."))
 }
 
 /// JavaScript streams one reading of the form (its fields, or its document scripts) may decode
@@ -345,7 +370,13 @@ pub(crate) fn enumerate(doc: &Document) -> (Vec<Field>, usize) {
         None => Inherited::default(),
     };
     let mut out = Vec::new();
-    let mut seen = Seen { fields: std::collections::HashSet::new(), widgets: std::collections::HashSet::new(), scripts: script_budget() };
+    let mut seen = Seen {
+        fields: std::collections::HashSet::new(),
+        widgets: std::collections::HashSet::new(),
+        scripts: script_budget(),
+        names: std::collections::HashMap::new(),
+        reset_buttons: Vec::new(),
+    };
     if let Some(af) = &af {
         for f in af.get(b"Fields").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default() {
             if let Some(r) = f.as_ref() {
@@ -356,6 +387,12 @@ pub(crate) fn enumerate(doc: &Document) -> (Vec<Field>, usize) {
     let listed = out.len();
     adopt_page_fields(doc, &pages, &base, &page_of, &mut seen, &mut out);
     let adopted = out.len() - listed;
+    // Resolve only the selected ResetForm actions; other actions already consumed scripts in walk order.
+    for (index, action) in seen.reset_buttons {
+        if let Some(field) = out.get_mut(index) {
+            field.button = reset_button_action(doc, &action, &seen.names);
+        }
+    }
     rank_tabs(doc, &pages, &annot_index, &mut out);
     (out, adopted)
 }
@@ -423,6 +460,22 @@ struct Seen {
     /// A widget belongs to the first field that lists it, however often it is listed.
     widgets: std::collections::HashSet<ObjRef>,
     scripts: DecodeBudget,
+    // Names accepted by the same traversal that constructs fields. Conflicting ownership is None.
+    names: std::collections::HashMap<ObjRef, Option<String>>,
+    reset_buttons: Vec<(usize, Object)>,
+}
+
+impl Seen {
+    fn remember(&mut self, r: ObjRef, name: &str) {
+        self.names
+            .entry(r)
+            .and_modify(|owned| {
+                if owned.as_deref() != Some(name) {
+                    *owned = None;
+                }
+            })
+            .or_insert_with(|| Some(name.to_owned()));
+    }
 }
 
 /// Read the field at `r` and the fields under it into `out`, with what they inherit from
@@ -473,8 +526,12 @@ fn walk(
     // Kids with /T are fields; kids without are this field's widgets.
     let field_kids: Vec<ObjRef> = kids.iter().copied().filter(|k| doc.get(*k).as_dict().is_some_and(|kd| kd.contains(b"T"))).collect();
     if !field_kids.is_empty() {
+        let before = out.len();
         for k in field_kids {
             walk(doc, k, &inh, page_of, seen, out, depth + 1);
+        }
+        if out.len() > before {
+            seen.remember(r, &inh.name);
         }
         return;
     }
@@ -497,7 +554,12 @@ fn walk(
     let button = (inh.ft.as_deref() == Some(b"Btn") && inh.ff.unwrap_or(0) & flags::PUSH_BUTTON != 0)
         .then(|| button_action(doc, d, &widget_refs, &mut seen.scripts))
         .flatten();
-    let widgets = widget_refs
+    let (button, reset) = match button {
+        Some(ButtonRead::Ready(button)) => (Some(button), None),
+        Some(ButtonRead::Reset(action)) => (None, Some(action)),
+        None => (None, None),
+    };
+    let widgets: Vec<Widget> = widget_refs
         .into_iter()
         .filter_map(|w| {
             let wo = doc.get(w);
@@ -545,6 +607,11 @@ fn walk(
             other => text_of(other).map(|t| (t.clone(), t)),
         })
         .collect();
+    seen.remember(r, &inh.name);
+    for widget in &widgets {
+        seen.remember(widget.obj, &inh.name);
+    }
+    let field_index = out.len();
     out.push(Field {
         name: inh.name.clone(),
         obj: r,
@@ -561,6 +628,9 @@ fn walk(
         actions,
         button,
     });
+    if let Some(action) = reset {
+        seen.reset_buttons.push((field_index, action));
+    }
 }
 
 pub(crate) fn field_flags(doc: &Document, dict: &Dict) -> Option<u32> {

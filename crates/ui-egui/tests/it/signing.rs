@@ -543,7 +543,21 @@ fn the_signature_labels_follow_the_interface_language() {
     for (code, labels, in_english) in [("de", ["(Digital", "(Grund:", "(Datum:"], false), ("zh-hans", ["(Digitally", "(Reason:", "(Date:"], true)] {
         let dir = dir().join(code);
         std::fs::create_dir_all(&dir).unwrap();
-        let mut h = harness(dir.clone());
+        // Optional Chinese UI fonts are not required to check the exported signature's labels.
+        let mut h = {
+            let dir = dir.clone();
+            let mut h = Harness::builder().allow_missing_glyphs().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+                let mut app = PdfCraftApp::new();
+                app.set_option("language", "en").unwrap();
+                app.open_bytes("contract.pdf", None, FIXTURE.to_vec()).expect("opens");
+                app.set_option("left", "closed").unwrap();
+                app.export_dir_override = Some(dir.to_string_lossy().into_owned());
+                app.save_override = Some(dir.join("contract_signed.pdf").to_string_lossy().into_owned());
+                app
+            });
+            h.run_steps(6);
+            h
+        };
         let lang = Lang::from_code(code).unwrap();
         h.state_mut().set_option("language", code).unwrap();
         h.state_mut().start_signing(0, Some([20.0, 110.0, 280.0, 180.0]), None, None);
