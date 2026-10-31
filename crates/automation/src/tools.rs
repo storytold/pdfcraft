@@ -142,7 +142,7 @@ pub fn tools() -> Vec<ToolDef> {
             .cmd("file.open")
             .with(schema(json!({ "path": { "type": "string" }, "password": { "type": "string", "description": "User or owner password for encrypted files." } }), &["path"])),
         t("doc_list", "List open documents", "List the open documents with their ids, page counts and unsaved state.").ro().with(schema(json!({}), &[])),
-        t("doc_info", "Inspect a document", "Metadata, page sizes and labels, bookmarks, annotations, form fields, links, layers, page transitions and display times, the destination it opens at, attachments, fonts, security and repair notes.")
+        t("doc_info", "Inspect a document", "Metadata, page sizes and labels, page boxes (media, crop, bleed, trim, art: `boxes` as points from the top-left of the displayed page, the same rect page_set_box takes; `boxes_user` in PDF user space, as stored), bookmarks, annotations, form fields, links, layers, page transitions and display times, the destination it opens at, attachments, fonts, security and repair notes.")
             .ro()
             .cmd("file.properties")
             .with(schema(json!({ "doc": doc() }), &["doc"])),

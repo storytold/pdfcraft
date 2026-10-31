@@ -3182,9 +3182,9 @@ tier = "P1"
 milestone = "M4"
 status = "shipped"
 commands = ["page.boxes"]
-tools = ["page_set_box"]
-evidence = ["crates/ui-egui/tests/it/pageboxes.rs::set_page_boxes_dialog_applies_margins_to_the_chosen_pages", "crates/organize/src/tests.rs::page_boxes_default_inherit_and_set"]
-notes = "crop/trim/bleed/art/media, margins in pt/in/mm, page ranges, preview; no Remove white margins yet"
+tools = ["page_set_box", "doc_info"]
+evidence = ["crates/ui-egui/tests/it/pageboxes.rs::set_page_boxes_dialog_applies_margins_to_the_chosen_pages", "crates/organize/src/tests.rs::page_boxes_default_inherit_and_set", "crates/automation/tests/it/automation.rs::doc_info_reports_the_five_page_boxes"]
+notes = "crop/trim/bleed/art/media, margins in pt/in/mm, page ranges, preview; doc_info reads the five boxes back per page (displayed-page coordinates as page_set_box takes them, and user space); no Remove white margins yet"
 
 [[feature]]
 id = "organize.crop-tool"
