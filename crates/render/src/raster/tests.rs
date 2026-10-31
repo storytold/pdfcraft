@@ -3527,6 +3527,788 @@ fn jbig2_regions_of_billions_of_pixels_are_refused() {
     assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "the rest of the page draws");
 }
 
+/// One embedded JBIG2 segment (ISO 14492 §7.2) of page 1. More than four references take the long
+/// form, whose retention flags are left clear.
+fn jbig2_segment(out: &mut Vec<u8>, number: u32, kind: u8, refs: &[u8], data: &[u8]) {
+    out.extend_from_slice(&number.to_be_bytes());
+    out.push(kind);
+    if refs.len() <= 4 {
+        out.push(u8::try_from(refs.len()).unwrap() << 5);
+    } else {
+        out.extend_from_slice(&(0xE000_0000u32 | u32::try_from(refs.len()).unwrap()).to_be_bytes());
+        out.extend(std::iter::repeat_n(0u8, (refs.len() + 1).div_ceil(8)));
+    }
+    out.extend_from_slice(refs);
+    out.push(1);
+    out.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
+    out.extend_from_slice(data);
+}
+
+/// The page information of a 16 × 2 JBIG2 page whose default pixel is black, so that the image, if
+/// it decodes, draws black whatever its other segments hold.
+fn black_jbig2_page() -> Vec<u8> {
+    let mut page = Vec::new();
+    page.extend_from_slice(&16u32.to_be_bytes());
+    page.extend_from_slice(&2u32.to_be_bytes());
+    page.extend_from_slice(&[0; 8]); // resolution
+    page.extend_from_slice(&[4, 0, 0]); // flags (default pixel black), striping
+    let mut stream = Vec::new();
+    jbig2_segment(&mut stream, 0, 48, &[], &page);
+    stream
+}
+
+/// A region's information field, at the page's corner.
+fn jbig2_region_info(width: u32, height: u32) -> Vec<u8> {
+    let mut region = Vec::new();
+    region.extend_from_slice(&width.to_be_bytes());
+    region.extend_from_slice(&height.to_be_bytes());
+    region.extend_from_slice(&[0; 9]); // x, y, combination operator
+    region
+}
+
+/// Whether a 16 × 2 JBIG2 image decodes: drawn at 5..25 both ways, it draws black, and refused it
+/// leaves the page white. The red square beside it shows the rest of the page drew either way.
+fn jbig2_image_draws(stream: &[u8]) -> bool {
+    jbig2_image_draws_in(stream, "/DeviceGray")
+}
+
+/// [`jbig2_image_draws`], for an image in colour space `space`.
+fn jbig2_image_draws_in(stream: &[u8], space: &str) -> bool {
+    jbig2_image_draws_with(stream, space, "", b"")
+}
+
+/// [`jbig2_image_draws_in`], with entries for the image's dictionary and more objects, from 6 up.
+fn jbig2_image_draws_with(stream: &[u8], space: &str, entries: &str, objects: &[u8]) -> bool {
+    let content = b"q 20 0 0 20 5 5 cm /Im1 Do Q 1 0 0 rg 0 0 4 4 re f";
+    let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n".to_vec();
+    pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n", content.len()).as_bytes());
+    pdf.extend_from_slice(content);
+    pdf.extend_from_slice(b"\nendstream endobj\n");
+    pdf.extend_from_slice(
+        format!("5 0 obj << /Type /XObject /Subtype /Image /Width 16 /Height 2 /BitsPerComponent 1 /ColorSpace {space} {entries} /Filter /JBIG2Decode /Length {} >> stream\n", stream.len())
+            .as_bytes(),
+    );
+    pdf.extend_from_slice(stream);
+    pdf.extend_from_slice(b"\nendstream endobj\n");
+    pdf.extend_from_slice(objects);
+    pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
+    let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+    let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "the rest of the page draws");
+    // Inside the image: top-down rows 15..35.
+    match &page.rgba[((25 * 40 + 15) * 4)..][..4] {
+        [0, 0, 0, 255] => true,
+        [255, 255, 255, 255] => false,
+        other => panic!("neither the image nor the page: {other:?}"),
+    }
+}
+
+/// Bits written from the top of each byte, as JBIG2's Huffman-coded data is.
+#[derive(Default)]
+struct Bits {
+    bytes: Vec<u8>,
+    used: u32,
+}
+
+impl Bits {
+    fn put(&mut self, value: u32, count: u32) {
+        for i in (0..count).rev() {
+            if self.used.is_multiple_of(8) {
+                self.bytes.push(0);
+            }
+            if (value >> i) & 1 != 0 {
+                *self.bytes.last_mut().unwrap() |= 0x80 >> (self.used % 8);
+            }
+            self.used += 1;
+        }
+    }
+
+    fn align(&mut self) {
+        self.used = self.used.div_ceil(8) * 8;
+    }
+
+    /// `value` in table B.1 (ISO 14492 Annex B).
+    fn table_b1(&mut self, value: u32) {
+        match value {
+            0..=15 => {
+                self.put(0, 1);
+                self.put(value, 4);
+            }
+            16..=271 => {
+                self.put(0b10, 2);
+                self.put(value - 16, 8);
+            }
+            272..=65807 => {
+                self.put(0b110, 3);
+                self.put(value - 272, 16);
+            }
+            _ => {
+                self.put(0b111, 3);
+                self.put(value - 65808, 32);
+            }
+        }
+    }
+}
+
+/// A Huffman-coded symbol dictionary of `symbols` symbols of width 0 and height 1, exported or not:
+/// each holds no pixels, and costs a bitmap's header all the same.
+fn zero_width_jbig2_dictionary(symbols: u32, exported: bool) -> Vec<u8> {
+    let mut dictionary = vec![0x00, 0x01]; // Huffman, tables B.4, B.2, B.1, B.1
+    dictionary.extend_from_slice(&(if exported { symbols } else { 0 }).to_be_bytes());
+    dictionary.extend_from_slice(&symbols.to_be_bytes()); // new
+    let mut bits = Bits::default();
+    bits.put(0, 1); // height class delta 1 (B.4)
+    for _ in 0..symbols {
+        bits.put(0, 1); // width delta 0 (B.2)
+    }
+    bits.put(0b111111, 6); // end of the class (B.2)
+    bits.put(0, 5); // BMSIZE 0, uncompressed (B.1)
+    bits.align();
+    if exported {
+        bits.table_b1(0); // the first export run isn't exported
+    }
+    bits.table_b1(symbols);
+    dictionary.extend_from_slice(&bits.bytes);
+    dictionary
+}
+
+/// A Huffman-coded symbol dictionary of `symbols` white symbols of width 1 and `height` rows, none
+/// exported, for `height` from 76 up.
+fn narrow_jbig2_dictionary(symbols: u32, height: u32) -> Vec<u8> {
+    let mut bits = Bits::default();
+    bits.put(0b11111, 5); // height class delta, the upper line of table B.4
+    bits.put(height - 76, 32);
+    bits.put(0b10, 2); // width delta 1 (B.2)
+    for _ in 1..symbols {
+        bits.put(0, 1); // width delta 0 (B.2)
+    }
+    bits.put(0b111111, 6); // end of the class (B.2)
+    let rows = height.div_ceil(8) + 1; // an MMR-coded white bitmap: one bit a row
+    bits.table_b1(rows); // BMSIZE (B.1)
+    bits.align();
+    for _ in 0..rows {
+        bits.put(0xFF, 8);
+    }
+    bits.table_b1(symbols); // the first export run, not exported, is all of them
+    let mut dictionary = vec![0x00, 0x01]; // Huffman, tables B.4, B.2, B.1, B.1
+    dictionary.extend_from_slice(&0u32.to_be_bytes()); // exported
+    dictionary.extend_from_slice(&symbols.to_be_bytes()); // new
+    dictionary.extend_from_slice(&bits.bytes);
+    dictionary
+}
+
+/// An intermediate generic region, white, every row typical: it decodes in a few bytes however
+/// large it is.
+fn jbig2_white_region(width: u32, height: u32) -> Vec<u8> {
+    let mut region = jbig2_region_info(width, height);
+    region.push(0x08); // arithmetic coding, template 0, typical prediction
+    region.extend_from_slice(&[3, 0xff, 0xfd, 0xff, 2, 0xfe, 0xfe, 0xfe]); // AT pixels
+    // Every row typical, the first white: pdfcraft-filters' coding of a white 16,384 square.
+    region.extend_from_slice(&[0xb6, 0xc2, 0x1f, 0xff, 0x7f, 0xff, 0xac]);
+    region
+}
+
+/// A pattern dictionary of `patterns` patterns of width 1 and `height` rows, with nothing coded.
+fn jbig2_pattern_dictionary(height: u8, patterns: u32) -> Vec<u8> {
+    let mut dictionary = vec![0, 1, height];
+    dictionary.extend_from_slice(&(patterns - 1).to_be_bytes());
+    dictionary
+}
+
+/// A 1 × 1 halftone region over a grid of `width` × `height` cells, all at the region's corner,
+/// coded by MMR or arithmetically.
+fn jbig2_halftone(width: u32, height: u32, mmr: bool) -> Vec<u8> {
+    jbig2_halftone_of(1, width, height, mmr)
+}
+
+/// [`jbig2_halftone`] for a square region of `side` pixels.
+fn jbig2_halftone_of(side: u32, width: u32, height: u32, mmr: bool) -> Vec<u8> {
+    let mut halftone = jbig2_region_info(side, side);
+    halftone.push(u8::from(mmr)); // template 0
+    halftone.extend_from_slice(&width.to_be_bytes());
+    halftone.extend_from_slice(&height.to_be_bytes());
+    halftone.extend_from_slice(&[0; 12]); // grid offset and vector
+    halftone
+}
+
+/// Each JBIG2 segment's bitmaps are bounded, but nothing bounded what a page's segments hold for
+/// later ones: a stream of a few dozen bytes an intermediate region (16,384 samples a side, every
+/// row typical) held 33 MB each, so a few kilobytes could exhaust memory. Vendored hayro-jbig2
+/// patch: what regions, dictionaries and tables hold is at most 64 MiB (`MAX_RETAINED_WORDS`), two
+/// such squares, which are exactly the bound.
+#[test]
+fn jbig2_regions_held_past_a_pages_bound_are_refused() {
+    let stream = |regions: u32| {
+        let mut stream = black_jbig2_page();
+        for number in 1..=regions {
+            jbig2_segment(&mut stream, number, 36, &[], &jbig2_white_region(16384, 16384));
+        }
+        stream
+    };
+    assert!(jbig2_image_draws(&stream(2)), "two such squares fit");
+    assert!(!jbig2_image_draws(&stream(3)), "a third doesn't");
+}
+
+/// A symbol of width 0 holds no pixels, and still costs a bitmap's header: 5 KB of dictionaries of
+/// them held 781 MB, with the bound counting pixels only.
+#[test]
+fn jbig2_symbols_without_pixels_count_towards_a_pages_bound() {
+    let stream = |dictionaries: u32| {
+        let mut stream = black_jbig2_page();
+        let dictionary = zero_width_jbig2_dictionary(32767, true);
+        for number in 1..=dictionaries {
+            jbig2_segment(&mut stream, number, 0, &[], &dictionary);
+        }
+        stream
+    };
+    assert!(jbig2_image_draws(&stream(1)), "one dictionary fits");
+    assert!(!jbig2_image_draws(&stream(44)), "44 × 32,767 headers are past the bound");
+}
+
+/// A symbol dictionary may retain its coding contexts for a later one, 73,728 bytes each time, and
+/// 1.1 MB of dictionaries with no symbols, 103 KB behind Flate, held 2.89 GB.
+#[test]
+fn jbig2_retained_contexts_count_towards_a_pages_bound() {
+    let stream = |dictionaries: u32| {
+        let mut dictionary = vec![0x02, 0x00]; // arithmetic coding, contexts retained
+        dictionary.extend_from_slice(&[3, 0xff, 0xfd, 0xff, 2, 0xfe, 0xfe, 0xfe]); // AT pixels
+        dictionary.extend_from_slice(&[0; 8]); // exported, new
+        let mut stream = black_jbig2_page();
+        for number in 1..=dictionaries {
+            jbig2_segment(&mut stream, number, 0, &[], &dictionary);
+        }
+        stream
+    };
+    assert!(jbig2_image_draws(&stream(1)), "one dictionary fits");
+    assert!(!jbig2_image_draws(&stream(1000)), "a thousand don't");
+}
+
+/// Huffman tables are held for later segments too, each taking some 586 bytes however small it
+/// is, so 200,000 of them are past the bound, and they were held to it at 4 times that.
+#[test]
+fn jbig2_huffman_tables_count_towards_a_pages_bound() {
+    let stream = |tables: u32| {
+        // One-bit prefix and range lengths, values 0 to 1: a table line, then the lower range.
+        let mut table = vec![0];
+        table.extend_from_slice(&0i32.to_be_bytes());
+        table.extend_from_slice(&1i32.to_be_bytes());
+        table.push(0b1010_0000);
+        let mut stream = black_jbig2_page();
+        for number in 1..=tables {
+            jbig2_segment(&mut stream, number, 53, &[], &table);
+        }
+        stream
+    };
+    assert!(jbig2_image_draws(&stream(1)), "one table fits");
+    assert!(!jbig2_image_draws(&stream(200_000)), "200,000 don't");
+}
+
+/// New symbols count as they are decoded, whatever the dictionary exports: rows take a word at
+/// least, so symbols of one column held 270 MiB within the bound on a dictionary's pixels, and
+/// exporting none of them they were never counted at all.
+#[test]
+fn jbig2_new_symbols_count_towards_a_pages_bound() {
+    let stream = |height: u32| {
+        let mut stream = black_jbig2_page();
+        jbig2_segment(&mut stream, 1, 0, &[], &narrow_jbig2_dictionary(65534, height));
+        stream
+    };
+    assert!(jbig2_image_draws(&stream(100)), "65,534 symbols of 100 rows fit");
+    assert!(!jbig2_image_draws(&stream(300)), "of 300 rows they don't");
+}
+
+/// New symbols are held to what the page has left, headers included, not to the whole bound. These
+/// two regions leave it 512 words, and the dictionary after them exports nothing, so only that
+/// check can refuse it.
+#[test]
+fn jbig2_new_symbols_are_held_to_what_a_page_has_left() {
+    let stream = |dictionary: &[u8]| {
+        let mut stream = black_jbig2_page();
+        jbig2_segment(&mut stream, 1, 36, &[], &jbig2_white_region(16384, 16384));
+        jbig2_segment(&mut stream, 2, 36, &[], &jbig2_white_region(16384, 16383));
+        jbig2_segment(&mut stream, 3, 0, &[], dictionary);
+        stream
+    };
+    assert!(jbig2_image_draws(&stream(&narrow_jbig2_dictionary(1, 100))), "100 rows fit");
+    assert!(!jbig2_image_draws(&stream(&narrow_jbig2_dictionary(1, 1000))), "1,000 rows don't");
+    assert!(jbig2_image_draws(&stream(&zero_width_jbig2_dictionary(10, false))), "10 headers fit");
+    assert!(!jbig2_image_draws(&stream(&zero_width_jbig2_dictionary(100, false))), "100 headers don't");
+}
+
+/// Pattern dictionaries count towards the bound, with no shifted copies to do it for them: at 44
+/// words a pattern, 6 of these are past it.
+#[test]
+fn jbig2_pattern_dictionaries_count_towards_a_pages_bound() {
+    let stream = |dictionaries: u32| {
+        let mut stream = black_jbig2_page();
+        for number in 1..=dictionaries {
+            jbig2_segment(&mut stream, number, 16, &[], &jbig2_pattern_dictionary(32, 65535));
+        }
+        stream
+    };
+    assert!(jbig2_image_draws(&stream(5)), "5 fit");
+    assert!(!jbig2_image_draws(&stream(6)), "6 don't");
+}
+
+/// Shifted copies are only a speed-up, so they are never what gets an image refused: each of these
+/// tables is within its own limit, and the fourth won't fit what the page has left, so it is left
+/// out, where counting it refused the image.
+#[test]
+fn jbig2_shifted_patterns_never_refuse_an_image() {
+    let mut stream = black_jbig2_page();
+    for number in 1..=4 {
+        jbig2_segment(&mut stream, number, 16, &[], &jbig2_pattern_dictionary(32, 2048));
+    }
+    assert!(jbig2_image_draws(&stream));
+}
+
+/// Ordinary globals still reach the decoder, with a filter on them or without: here they hold the
+/// page information, so the image draws only if they are read.
+#[test]
+fn jbig2_globals_are_read() {
+    let globals = black_jbig2_page();
+    let hex: String = globals.iter().map(|b| format!("{b:02x}")).collect();
+    let mut stream = Vec::new();
+    jbig2_segment(&mut stream, 1, 62, &[], &[]); // an extension, which decoders skip
+    for (filter, data) in [("", globals.clone()), ("/Filter /ASCIIHexDecode", hex.into_bytes())] {
+        let mut objects = format!("6 0 obj << {filter} /Length {} >> stream\n", data.len()).into_bytes();
+        objects.extend_from_slice(&data);
+        objects.extend_from_slice(b"\nendstream endobj\n");
+        assert!(jbig2_image_draws_with(&stream, "/DeviceGray", "/DecodeParms << /JBIG2Globals 6 0 R >>", &objects), "{filter}");
+    }
+}
+
+/// Globals are raw segments, but a `/JBIG2Globals` stream could itself be JBIG2, naming the next
+/// such stream, and each read decoded the next: 4,000 of them, here on a test thread's 2 MiB stack,
+/// overflowed it, which aborts the process. Vendored hayro-syntax patch: such a stream reads as
+/// globals that can't be decoded, so the image decodes without them.
+#[test]
+fn jbig2_globals_that_are_jbig2_themselves_are_not_decoded() {
+    let links = 4000;
+    let mut objects = Vec::new();
+    for number in 0..links {
+        let link = 6 + number;
+        let next = link + 1;
+        let parms = if number + 1 < links { format!("/DecodeParms << /JBIG2Globals {next} 0 R >>") } else { String::new() };
+        objects.extend_from_slice(format!("{link} 0 obj << /Filter /JBIG2Decode {parms} /Length 0 >> stream\n\nendstream endobj\n").as_bytes());
+    }
+    assert!(jbig2_image_draws_with(&black_jbig2_page(), "/DeviceGray", "/DecodeParms << /JBIG2Globals 6 0 R >>", &objects));
+}
+
+/// A Huffman-coded symbol dictionary of one white symbol, `side` from 76 up, exported or not.
+fn square_jbig2_dictionary(side: u32, exported: bool) -> Vec<u8> {
+    let mut bits = Bits::default();
+    bits.put(0b11111, 5); // height class delta, the upper line of table B.4
+    bits.put(side - 76, 32);
+    bits.put(0b111110, 6); // width delta, the upper line of table B.2
+    bits.put(side - 75, 32);
+    bits.put(0b111111, 6); // end of the class (B.2)
+    let bytes = side.div_ceil(8) + 1; // an MMR-coded white bitmap: one bit a row
+    bits.table_b1(bytes); // BMSIZE (B.1)
+    bits.align();
+    for _ in 0..bytes {
+        bits.put(0xFF, 8);
+    }
+    if exported {
+        bits.table_b1(0);
+    }
+    bits.table_b1(1);
+    let mut dictionary = vec![0x00, 0x01]; // Huffman, tables B.4, B.2, B.1, B.1
+    dictionary.extend_from_slice(&u32::from(exported).to_be_bytes());
+    dictionary.extend_from_slice(&1u32.to_be_bytes()); // new
+    dictionary.extend_from_slice(&bits.bytes);
+    dictionary
+}
+
+/// A text region of `width` × `height` placing symbol 0 of one, Huffman-coded, `instances` of 0 or 1.
+fn jbig2_text_region(width: u32, height: u32, instances: u32) -> Vec<u8> {
+    let mut text = jbig2_region_info(width, height);
+    text.extend_from_slice(&[0x00, 0x11, 0, 0]); // Huffman, top left; tables B.6, B.8, B.11
+    text.extend_from_slice(&instances.to_be_bytes());
+    let mut bits = Bits::default();
+    for code in 0..35 {
+        bits.put(u32::from(code == 1), 4); // only run code 1, one bit long
+    }
+    bits.put(0, 1); // symbol 0 is one bit long
+    bits.align();
+    bits.put(0, 1); // the first strip's T (B.11)
+    if instances > 0 {
+        bits.put(0, 1); // delta T 1 (B.11)
+        bits.put(0, 9); // first S 0 (B.6)
+        bits.put(0, 1); // symbol 0
+        bits.put(0b01, 2); // end of the strip (B.8)
+    }
+    text.extend_from_slice(&bits.bytes);
+    text
+}
+
+/// A 1 × 1 text region placing one instance of symbol 0 of one, refined, Huffman-coded.
+fn jbig2_refined_text_region() -> Vec<u8> {
+    let mut text = jbig2_region_info(1, 1);
+    text.extend_from_slice(&[0x80, 0x13, 0, 0]); // Huffman, refined by template 1, top left
+    text.extend_from_slice(&1u32.to_be_bytes());
+    let mut bits = Bits::default();
+    for code in 0..35 {
+        bits.put(u32::from(code == 1), 4); // only run code 1, one bit long
+    }
+    bits.put(0, 1); // symbol 0 is one bit long
+    bits.align();
+    bits.put(0, 1); // the first strip's T (B.11)
+    bits.put(0, 1); // delta T 1 (B.11)
+    bits.put(0, 9); // first S 0 (B.6)
+    bits.put(0, 1); // symbol 0
+    bits.put(1, 1); // refined
+    bits.put(0, 4); // no change of width, height or offset (B.14)
+    bits.table_b1(0); // no refinement data (B.1)
+    bits.align();
+    bits.put(0b01, 2); // end of the strip (B.8)
+    text.extend_from_slice(&bits.bytes);
+    text
+}
+
+/// A generic refinement region of 1 × 1, with whatever its data decodes to.
+fn jbig2_refinement_region() -> Vec<u8> {
+    let mut region = jbig2_region_info(1, 1);
+    region.push(1); // template 1, no typical prediction
+    region.extend_from_slice(&[0; 4]);
+    region
+}
+
+/// Each item a JBIG2 stream decodes costs its work, and the stream may ask for 2^30: four of the
+/// largest pages, some 6 s to 17 s. Each bitmap is bounded on its own, but nothing bounded how many
+/// there were, so 1,140 bytes of generic regions took over 40 s, and a 795-byte PDF's one halftone
+/// 265 s. Vendored hayro-jbig2 patch: `MAX_WORK`. A row costs 4 pixels, even in a bitmap of no
+/// width, and a copy goes by the word and the row, so a tall thin one costs its rows. Here regions
+/// of typical rows, cheap to decode though charged like any, spend all but exactly what the item
+/// costs, so it draws with that left and is refused with one less, for each item at its own cost.
+#[test]
+fn jbig2_decoding_work_is_counted_item_by_item() {
+    struct Item {
+        what: &'static str,
+        /// What comes first, and what it costs.
+        before: Vec<(u8, Vec<u8>)>,
+        spent: u64,
+        kind: u8,
+        refs: &'static [u8],
+        data: Vec<u8>,
+        cost: u64,
+    }
+    let stream = |item: &Item, left: u64| {
+        let mut stream = black_jbig2_page();
+        let mut number = 0;
+        for (kind, data) in &item.before {
+            number += 1;
+            jbig2_segment(&mut stream, number, *kind, &[], data);
+        }
+        // A square costs 16,384 rows of 16,388, and a single row what it has and 4 more.
+        let work = (1u64 << 30) - item.spent - left;
+        let (row, square) = (16388u64, 16384 * 16388u64);
+        let mut squares = work / square;
+        let mut rest = work % square;
+        if rest > 0 && rest < 5 {
+            squares -= 1;
+            rest += square;
+        }
+        let mut rows = rest / row;
+        let mut last = rest % row;
+        if last > 0 && last < 5 {
+            rows -= 1;
+            last += row;
+        }
+        let regions = std::iter::repeat_n((16384, 16384), usize::try_from(squares).unwrap())
+            .chain((rows > 0).then_some((16384, rows)))
+            .chain((last > 0).then_some((last - 4, 1)));
+        for (width, height) in regions {
+            number += 1;
+            let region = jbig2_white_region(u32::try_from(width).unwrap(), u32::try_from(height).unwrap());
+            jbig2_segment(&mut stream, number, 38, &[], &region); // immediate generic region
+        }
+        jbig2_segment(&mut stream, number + 1, item.kind, item.refs, &item.data);
+        stream
+    };
+    let symbol = || vec![(0, zero_width_jbig2_dictionary(1, true))];
+    let patterns = || vec![(16, jbig2_pattern_dictionary(1, 2))];
+    let exporting_none = {
+        let mut dictionary = vec![0x00, 0x01];
+        dictionary.extend_from_slice(&[0; 8]); // exported, new
+        let mut bits = Bits::default();
+        bits.table_b1(1); // the first export run, not exported, is the one it refers to
+        dictionary.extend_from_slice(&bits.bytes);
+        dictionary
+    };
+    let zero = |height: u32| {
+        let mut bits = Bits::default();
+        bits.put(0b11111, 5); // height class delta, the upper line of table B.4
+        bits.put(height - 76, 32);
+        bits.put(0, 1); // width delta 0 (B.2)
+        bits.put(0b111111, 6); // end of the class (B.2)
+        bits.table_b1(0); // BMSIZE 0, stored (B.1)
+        bits.align();
+        bits.table_b1(1); // the first export run, not exported, is the symbol
+        let mut dictionary = vec![0x00, 0x01];
+        dictionary.extend_from_slice(&0u32.to_be_bytes()); // exported
+        dictionary.extend_from_slice(&1u32.to_be_bytes()); // new
+        dictionary.extend_from_slice(&bits.bytes);
+        dictionary
+    };
+    // The cost of a pattern dictionary of two patterns: rows of them side by side, then each taken out.
+    let two_patterns = |width: u64, height: u64| height * (2 * width + 4) + 2 * height * (width.div_ceil(32) + 1);
+    let thin_region = |side: u32| {
+        let mut region = jbig2_white_region(1, 1);
+        region.splice(0..8, [0u32.to_be_bytes(), side.to_be_bytes()].concat());
+        region
+    };
+    let items = vec![
+        Item { what: "immediate generic", before: vec![], spent: 0, kind: 38, refs: &[], data: jbig2_white_region(1, 1), cost: 5 },
+        Item { what: "intermediate generic", before: vec![], spent: 0, kind: 36, refs: &[], data: jbig2_white_region(1, 1), cost: 5 },
+        Item { what: "a region of no width", before: vec![], spent: 0, kind: 38, refs: &[], data: thin_region(1000), cost: 4000 },
+        Item { what: "immediate refinement", before: vec![], spent: 0, kind: 42, refs: &[], data: jbig2_refinement_region(), cost: 5 },
+        Item { what: "intermediate refinement", before: vec![], spent: 0, kind: 40, refs: &[], data: jbig2_refinement_region(), cost: 5 },
+        Item {
+            what: "pattern dictionary",
+            before: vec![],
+            spent: 0,
+            kind: 16,
+            refs: &[],
+            data: jbig2_pattern_dictionary(1, 2),
+            cost: two_patterns(1, 1),
+        },
+        Item {
+            what: "tall patterns",
+            before: vec![],
+            spent: 0,
+            kind: 16,
+            refs: &[],
+            data: jbig2_pattern_dictionary(32, 2),
+            cost: two_patterns(1, 32),
+        },
+        // Rows cost in a symbol of no pixels too.
+        Item { what: "symbols without pixels", before: vec![], spent: 0, kind: 0, refs: &[], data: zero_width_jbig2_dictionary(3, false), cost: 12 },
+        Item { what: "a tall symbol of no width", before: vec![], spent: 0, kind: 0, refs: &[], data: zero(1000), cost: 4000 },
+        Item { what: "new symbols", before: vec![], spent: 0, kind: 0, refs: &[], data: square_jbig2_dictionary(80, false), cost: 6720 },
+        Item { what: "referred symbols", before: symbol(), spent: 4, kind: 0, refs: &[1], data: exporting_none, cost: 1 },
+        // Its symbol, and its one row and word; Huffman-coded, a table line for the symbol.
+        Item { what: "immediate text", before: symbol(), spent: 4, kind: 6, refs: &[1], data: jbig2_text_region(1, 1, 0), cost: 13 },
+        Item { what: "intermediate text", before: symbol(), spent: 4, kind: 4, refs: &[1], data: jbig2_text_region(1, 1, 0), cost: 13 },
+        Item { what: "a text region's pixels", before: symbol(), spent: 4, kind: 6, refs: &[1], data: jbig2_text_region(32, 32, 0), cost: 75 },
+        Item {
+            what: "an intermediate text region's pixels",
+            before: symbol(),
+            spent: 4,
+            kind: 4,
+            refs: &[1],
+            data: jbig2_text_region(32, 32, 0),
+            cost: 75,
+        },
+        // The region's 13, a copy of the symbol's row and the round of the loop.
+        Item { what: "an instance", before: symbol(), spent: 4, kind: 6, refs: &[1], data: jbig2_text_region(1, 1, 1), cost: 15 },
+        // The region's 13, 80 rows of 4 words copied, the round of the loop.
+        Item {
+            what: "an instance of a large symbol",
+            before: vec![(0, square_jbig2_dictionary(80, true))],
+            spent: 6720,
+            kind: 6,
+            refs: &[1],
+            data: jbig2_text_region(1, 1, 1),
+            cost: 334,
+        },
+        // And decoded as well as copied.
+        Item {
+            what: "a refined instance",
+            before: vec![(0, square_jbig2_dictionary(80, true))],
+            spent: 6720,
+            kind: 6,
+            refs: &[1],
+            data: jbig2_refined_text_region(),
+            cost: 7054,
+        },
+        // A bit plane, a cell's copy and the region's.
+        Item {
+            what: "immediate halftone",
+            before: patterns(),
+            spent: two_patterns(1, 1),
+            kind: 22,
+            refs: &[1],
+            data: jbig2_halftone(1, 1, false),
+            cost: 9,
+        },
+        Item {
+            what: "intermediate halftone",
+            before: patterns(),
+            spent: two_patterns(1, 1),
+            kind: 20,
+            refs: &[1],
+            data: jbig2_halftone(1, 1, false),
+            cost: 9,
+        },
+        // A plane of 2 cells, each a copy of 32 rows of 2 words' cost, and the region's.
+        Item {
+            what: "a halftone's cells",
+            before: vec![(16, jbig2_pattern_dictionary(32, 2))],
+            spent: two_patterns(1, 32),
+            kind: 22,
+            refs: &[1],
+            data: jbig2_halftone(2, 1, false),
+            cost: 136,
+        },
+        Item {
+            what: "a grid of no width",
+            before: patterns(),
+            spent: two_patterns(1, 1),
+            kind: 22,
+            refs: &[1],
+            data: jbig2_halftone(0, 1000, false),
+            cost: 4002,
+        },
+        Item {
+            what: "a halftone's pixels",
+            before: patterns(),
+            spent: two_patterns(1, 1),
+            kind: 22,
+            refs: &[1],
+            data: jbig2_halftone_of(32, 1, 1, false),
+            cost: 71,
+        },
+    ];
+    for item in &items {
+        assert!(jbig2_image_draws(&stream(item, item.cost)), "{}: with its cost left it draws", item.what);
+        assert!(!jbig2_image_draws(&stream(item, item.cost - 1)), "{}: with one less it's refused", item.what);
+    }
+}
+
+/// An image's page header can claim any size, and the Indexed path reserves its output from it
+/// before the page bitmap is sized: a 743-byte PDF asked for 137 GB, which aborts the process.
+/// Vendored hayro-jbig2 patch: a page past the bounds is refused when the stream is opened.
+#[test]
+fn jbig2_pages_past_the_bounds_are_refused_before_anything_is_sized_from_them() {
+    let indexed = "[/Indexed /DeviceGray 1 <00FF>]";
+    assert!(jbig2_image_draws_in(&black_jbig2_page(), indexed), "a page within the bounds");
+    let mut page = Vec::new();
+    page.extend_from_slice(&(1u32 << 20).to_be_bytes());
+    page.extend_from_slice(&(1u32 << 20).to_be_bytes());
+    page.extend_from_slice(&[0; 11]); // resolution, flags, striping
+    let mut stream = Vec::new();
+    jbig2_segment(&mut stream, 0, 48, &[], &page);
+    assert!(!jbig2_image_draws_in(&stream, indexed), "the page draws without it");
+}
+
+/// One custom Huffman table could grow without bound as it was read, before anything counted it:
+/// a line takes 2 bits of input and 8 bytes here, so 250 MiB behind nested Flate, in a 1,297-byte
+/// PDF, was killed at 8 GiB. Vendored hayro-jbig2 patch: at most 2^16 lines.
+#[test]
+fn jbig2_huffman_tables_of_too_many_lines_are_refused() {
+    let stream = |lines: i32| {
+        // One-bit prefix and range lengths, all zero: a line per value.
+        let mut table = vec![0];
+        table.extend_from_slice(&0i32.to_be_bytes());
+        table.extend_from_slice(&lines.to_be_bytes());
+        table.resize(table.len() + usize::try_from(lines).unwrap().div_ceil(4) + 1, 0);
+        let mut stream = black_jbig2_page();
+        jbig2_segment(&mut stream, 1, 53, &[], &table);
+        stream
+    };
+    assert!(jbig2_image_draws(&stream(1 << 16)), "2^16 lines are allowed");
+    assert!(!jbig2_image_draws(&stream((1 << 16) + 1)), "one more isn't");
+}
+
+/// A stream's segments are all parsed and sorted before the first is decoded: 11 bytes of input took
+/// 64 here, so behind nested Flate a 4,765-byte PDF reached 5 GB, and failed only afterwards.
+/// Vendored hayro-jbig2 patch: at most 2^20 segments.
+#[test]
+fn jbig2_streams_of_too_many_segments_are_refused() {
+    let stream = |segments: u32| {
+        let mut stream = black_jbig2_page();
+        for number in 1..segments {
+            jbig2_segment(&mut stream, number, 62, &[], &[]); // an extension, which decoders skip
+        }
+        stream
+    };
+    assert!(jbig2_image_draws(&stream(1 << 20)), "2^20 segments are allowed");
+    assert!(!jbig2_image_draws(&stream((1 << 20) + 1)), "one more isn't");
+}
+
+/// References take 4 bytes each for 1 of input, a stream's total as much as a segment's.
+/// Vendored hayro-jbig2 patch: at most 2^22 in a stream, which is 64 × 65,535 + 64.
+#[test]
+fn jbig2_streams_of_too_many_references_are_refused() {
+    let stream = |last: usize| {
+        let mut stream = black_jbig2_page();
+        for number in 1..=64 {
+            jbig2_segment(&mut stream, number, 62, &vec![0u8; 65535], &[]);
+        }
+        jbig2_segment(&mut stream, 65, 62, &vec![0u8; last], &[]);
+        stream
+    };
+    assert!(jbig2_image_draws(&stream(64)), "2^22 references are allowed");
+    assert!(!jbig2_image_draws(&stream(65)), "one more isn't");
+}
+
+/// One segment may refer to the same dictionary again and again, and collecting its symbols took a
+/// pointer each: 65,535 references to a dictionary of 32,767 symbols, in a 78 KB stream, asked for
+/// 17 GB. Vendored hayro-jbig2 patch: at most 2^20 symbols per segment, and 32 × 32,767 + 32 is
+/// exactly that. All three segment kinds that take symbols are held to it: the text regions, whether
+/// immediate or intermediate, and a dictionary that refers to others.
+#[test]
+fn jbig2_segments_referring_to_too_many_symbols_are_refused() {
+    let mut text = jbig2_region_info(1, 1);
+    text.extend_from_slice(&[0, 0]); // arithmetic coding, no refinement
+    text.extend_from_slice(&[0; 4]); // no instances
+    // A dictionary of no symbols of its own, exporting none of those it refers to.
+    let dictionary = |symbols: u32| {
+        let mut dictionary = vec![0x00, 0x01]; // Huffman, tables B.4, B.2, B.1, B.1
+        dictionary.extend_from_slice(&[0; 8]); // exported, new
+        let mut bits = Bits::default();
+        bits.table_b1(symbols); // the first export run, not exported, is all of them
+        dictionary.extend_from_slice(&bits.bytes);
+        dictionary
+    };
+    let stream = |kind: u8, small: usize, data: &[u8]| {
+        let mut stream = black_jbig2_page();
+        jbig2_segment(&mut stream, 1, 0, &[], &zero_width_jbig2_dictionary(32767, true));
+        jbig2_segment(&mut stream, 2, 0, &[], &zero_width_jbig2_dictionary(32, true));
+        let mut refs = vec![1u8; 32];
+        refs.extend(std::iter::repeat_n(2u8, small));
+        jbig2_segment(&mut stream, 3, kind, &refs, data);
+        stream
+    };
+    let limit = 1 << 20;
+    for (what, kind, allowed, past) in [
+        ("immediate text region", 6, text.clone(), text.clone()),
+        ("intermediate text region", 4, text.clone(), text.clone()),
+        ("symbol dictionary", 0, dictionary(limit), dictionary(limit + 32)),
+    ] {
+        assert!(jbig2_image_draws(&stream(kind, 1, &allowed)), "{what}: 2^20 symbols are allowed");
+        assert!(!jbig2_image_draws(&stream(kind, 2, &past)), "{what}: 32 more aren't");
+    }
+}
+
+/// A halftone grid takes a 4-byte value per cell while it decodes, so the bound of 2^28 cells let a
+/// 98-byte segment take 1 GiB. Vendored hayro-jbig2 patch: at most 2^25 cells, however it's coded.
+#[test]
+fn jbig2_halftone_grids_past_their_bound_are_refused() {
+    let stream = |width: u32, height: u32, mmr: bool| {
+        let mut stream = black_jbig2_page();
+        jbig2_segment(&mut stream, 1, 16, &[], &jbig2_pattern_dictionary(1, 2));
+        jbig2_segment(&mut stream, 2, 22, &[1], &jbig2_halftone(width, height, mmr));
+        stream
+    };
+    assert!(jbig2_image_draws(&stream(8192, 4096, false)), "2^25 cells are allowed");
+    assert!(!jbig2_image_draws(&stream(8193, 4096, false)), "one more column isn't");
+    assert!(!jbig2_image_draws(&stream(8193, 4096, true)), "nor when it is MMR-coded");
+}
+
+/// A pattern dictionary's shifted copies only speed up drawing, and 48 bytes could ask for 539 MB
+/// of them, past what a page may hold. Vendored hayro-jbig2 patch: past 16 MiB they are left out,
+/// so such a dictionary is drawn the slow way rather than refused.
+#[test]
+fn jbig2_pattern_dictionaries_too_large_to_shift_still_draw() {
+    let mut stream = black_jbig2_page();
+    jbig2_segment(&mut stream, 1, 16, &[], &jbig2_pattern_dictionary(32, 65535));
+    jbig2_segment(&mut stream, 2, 22, &[1], &jbig2_halftone(1, 1, false));
+    assert!(jbig2_image_draws(&stream));
+}
+
 /// From `cargo xtask fuzz`: one changed byte in a symbol dictionary's arithmetic-coded data
 /// hung the renderer. Two of its loops can stop advancing: an export run of length 0, and a
 /// height class whose first width is already the end-of-class marker. Past the end of its

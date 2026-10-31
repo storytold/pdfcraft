@@ -11,7 +11,7 @@ use super::{
 use super::{RegionBitmap, generic_refinement};
 use crate::ScratchBuffers;
 use crate::arithmetic_decoder::{ArithmeticDecoder, ArithmeticDecoderContext};
-use crate::bitmap::Bitmap;
+use crate::bitmap::{Bitmap, copy_work, decode_work};
 use crate::error::{HuffmanError, OverflowError, ParseError, Result, SymbolError, bail};
 use crate::huffman_table::{HuffmanTable, StandardHuffmanTables, TableLine};
 use crate::integer_decoder::IntegerDecoder;
@@ -25,6 +25,7 @@ pub(crate) fn decode(
     referred_tables: &[HuffmanTable],
     standard_tables: &StandardHuffmanTables,
     scratch: &mut ScratchBuffers,
+    work_left: &mut u64,
 ) -> Result<RegionBitmap> {
     let mut bitmap = Bitmap::new_with(
         header.region_info.width,
@@ -41,6 +42,7 @@ pub(crate) fn decode(
         standard_tables,
         &mut bitmap,
         scratch,
+        work_left,
     )?;
 
     Ok(RegionBitmap {
@@ -56,12 +58,13 @@ pub(crate) fn decode_into(
     standard_tables: &StandardHuffmanTables,
     bitmap: &mut Bitmap,
     scratch: &mut ScratchBuffers,
+    work_left: &mut u64,
 ) -> Result<()> {
     if header.flags.use_huffman {
         let mut reader = Reader::new(header.data);
         let ctx =
             DecodeContext::new_huffman(&mut reader, header, referred_tables, standard_tables)?;
-        decode_with(ctx, symbols, header, bitmap)?;
+        decode_with(ctx, symbols, header, bitmap, work_left)?;
     } else {
         let mut decoder = ArithmeticDecoder::new(header.data);
 
@@ -76,7 +79,7 @@ pub(crate) fn decode_into(
             .resize(num_gr_contexts, ArithmeticDecoderContext::default());
 
         let ctx = DecodeContext::new_arithmetic(&mut decoder, &mut contexts, &mut scratch.contexts);
-        decode_with(ctx, symbols, header, bitmap)?;
+        decode_with(ctx, symbols, header, bitmap, work_left)?;
     }
 
     Ok(())
@@ -88,6 +91,7 @@ pub(crate) fn decode_with(
     symbols: &[&Bitmap],
     header: &TextRegionHeader<'_>,
     region: &mut Bitmap,
+    work_left: &mut u64,
 ) -> Result<()> {
     let strip_size = header.strip_size();
 
@@ -155,6 +159,17 @@ pub(crate) fn decode_with(
             };
             let symbol_width = symbol_bitmap_ref.width as i32;
             let symbol_height = symbol_bitmap_ref.height as i32;
+
+            // PdfCraft patch: see `bitmap::MAX_WORK`. An instance of a large symbol costs its copy,
+            // and 10,000 of one took 64 s. A refined one was decoded as well. Even one with no
+            // pixels goes round this loop.
+            let (width, height) = (symbol_bitmap_ref.width, symbol_bitmap_ref.height);
+            let copied = copy_work(width, height).saturating_add(1);
+            let work = match &symbol_bitmap {
+                SymbolBitmap::Reference(_) => copied,
+                SymbolBitmap::Owned(_) => copied.saturating_add(decode_work(width, height)),
+            };
+            *work_left = work_left.checked_sub(work).ok_or(OverflowError::DecodingWork)?;
 
             if !header.flags.transposed
                 && (header.flags.reference_corner == ReferenceCorner::TopRight
