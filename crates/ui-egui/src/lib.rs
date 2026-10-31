@@ -71,8 +71,8 @@ use theme::{ThemeKind, ThemePreference};
 
 mod app;
 mod hooks;
-mod persist;
 mod output_preview_ui;
+mod persist;
 mod platform;
 mod state;
 mod tools;
