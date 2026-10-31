@@ -7004,6 +7004,9 @@ mod default_colour_spaces;
 // (vendored hayro-syntax patch 28, hayro-interpret patch 55).
 mod devicen_inks;
 
+// #5430: PNG-predicted Flate images are undone byte by byte (vendored hayro-syntax patch 29).
+mod png_predicted_images;
+
 // #3776: isolated DeviceCMYK groups blend in CMYK (vendored hayro-interpret patch 70, hayro
 // patch 27).
 mod isolated_cmyk_groups;
