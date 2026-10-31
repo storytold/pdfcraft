@@ -414,3 +414,59 @@ fn malformed_resources_and_direct_ocg_stay_unchanged_before_appearance_generatio
     let doc = Document::open(Arc::new(saved(&doc))).unwrap();
     assert_eq!(paint_memberships(&doc), vec![(ObjRef::new(7, 0), Some(Object::Ref(ObjRef::new(4, 0))))]);
 }
+
+/// Inline replies and inline popups pointing to a retained annotation are kept in /Annots.
+#[test]
+fn unsupported_membership_keeps_inline_replies_and_popups_after_save_and_reopen() {
+    let mut doc = fixture("/OC null", 4, "");
+    let root = ObjRef::new(8, 0);
+
+    let mut inline_reply = doc.get(root).as_dict().unwrap().clone();
+    inline_reply.remove(b"OC");
+    inline_reply.set(b"IRT".to_vec(), Object::Ref(root));
+
+    let mut indirect_reply = doc.get(root).as_dict().unwrap().clone();
+    indirect_reply.remove(b"OC");
+    indirect_reply.set(b"IRT".to_vec(), Object::Ref(root));
+    let indirect_reply = doc.add(Object::Dict(indirect_reply));
+
+    let mut inline_grandchild = doc.get(root).as_dict().unwrap().clone();
+    inline_grandchild.remove(b"OC");
+    inline_grandchild.set(b"IRT".to_vec(), Object::Ref(indirect_reply));
+
+    let mut inline_popup = pdfcraft_cos::Dict::new();
+    inline_popup.set(b"Subtype".to_vec(), Object::Name(b"Popup".to_vec()));
+    inline_popup.set(b"Parent".to_vec(), Object::Ref(root));
+
+    let mut drawable = doc.get(root).as_dict().unwrap().clone();
+    drawable.remove(b"OC");
+    let drawable = doc.add(Object::Dict(drawable));
+
+    doc.update_dict(ObjRef::new(3, 0), |d| {
+        d.set(
+            b"Annots".to_vec(),
+            Object::Array(vec![
+                Object::Dict(inline_reply.clone()),
+                Object::Ref(root),
+                Object::Ref(indirect_reply),
+                Object::Dict(inline_grandchild.clone()),
+                Object::Dict(inline_popup.clone()),
+                Object::Ref(drawable),
+            ]),
+        )
+    })
+    .unwrap();
+
+    assert_eq!(pdfcraft_edit::flatten(&mut doc, &[0], true, false).unwrap(), 1);
+
+    let doc = Document::open(Arc::new(saved(&doc))).unwrap();
+    let page = pdfcraft_model::pages(&doc).remove(0);
+    let annots = doc.resolve(page.dict.get(b"Annots").unwrap()).as_array().unwrap().clone();
+
+    assert_eq!(annots.len(), 5);
+    assert_eq!(annots[0], Object::Dict(inline_reply));
+    assert_eq!(annots[1], Object::Ref(root));
+    assert_eq!(annots[2], Object::Ref(indirect_reply));
+    assert_eq!(annots[3], Object::Dict(inline_grandchild));
+    assert_eq!(annots[4], Object::Dict(inline_popup));
+}

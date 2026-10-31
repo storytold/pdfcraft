@@ -206,33 +206,74 @@ fn transferable(doc: &Document, annotation: &Dict, usable_properties: bool) -> b
     }
 }
 
-/// Retained annotations keep their replies and pop-ups, including transitive reply chains.
-fn retained_annotations(doc: &Document, list: &[Object], usable_properties: bool) -> HashSet<ObjRef> {
-    let mut children: HashMap<ObjRef, Vec<ObjRef>> = HashMap::new();
-    let mut pending = Vec::new();
-    for entry in list {
-        let Some(reference) = entry.as_ref() else { continue };
-        let object = doc.resolve(entry);
-        let Some(annotation) = object.as_dict() else { continue };
-        if !transferable(doc, annotation, usable_properties) {
-            pending.push(reference);
-        }
-        if let Some(parent) = annotation.reference(b"IRT") {
-            children.entry(parent).or_default().push(reference);
-        }
-        if annotation.name(b"Subtype") == Some(b"Popup")
-            && let Some(parent) = annotation.reference(b"Parent")
-        {
-            children.entry(parent).or_default().push(reference);
+#[derive(Default)]
+struct Retained {
+    refs: HashSet<ObjRef>,
+    inline: HashSet<usize>,
+}
+
+impl Retained {
+    fn contains(&self, index: usize, entry: &Object) -> bool {
+        self.inline.contains(&index) || entry.as_ref().is_some_and(|r| self.refs.contains(&r))
+    }
+
+    fn insert(&mut self, index: usize, entry: &Object) {
+        if let Some(r) = entry.as_ref() {
+            self.refs.insert(r);
+        } else {
+            self.inline.insert(index);
         }
     }
-    let mut retained = HashSet::new();
+}
+
+/// Retained annotations keep their replies and pop-ups, including transitive reply chains.
+///
+/// Retention is strictly downward (parent -> child/reply/popup). A non-transferable child does not
+/// keep its transferable parent, matching the engine invariant for undrawn children (#1794).
+fn retained_annotations(doc: &Document, list: &[Object], usable_properties: bool) -> Retained {
+    let mut children: HashMap<ObjRef, Vec<ObjRef>> = HashMap::new();
+    let mut inline_children: HashMap<ObjRef, Vec<usize>> = HashMap::new();
+    let mut pending = Vec::new();
+    let mut retained = Retained::default();
+    for (k, entry) in list.iter().enumerate() {
+        let object = doc.resolve(entry);
+        let Some(annotation) = object.as_dict() else { continue };
+        let not_transferable = !transferable(doc, annotation, usable_properties);
+        if let Some(reference) = entry.as_ref() {
+            if not_transferable {
+                pending.push(reference);
+            }
+            if let Some(parent) = annotation.reference(b"IRT") {
+                children.entry(parent).or_default().push(reference);
+            }
+            if annotation.name(b"Subtype") == Some(b"Popup")
+                && let Some(parent) = annotation.reference(b"Parent")
+            {
+                children.entry(parent).or_default().push(reference);
+            }
+        } else {
+            if not_transferable {
+                retained.inline.insert(k);
+            }
+            if let Some(parent) = annotation.reference(b"IRT") {
+                inline_children.entry(parent).or_default().push(k);
+            }
+            if annotation.name(b"Subtype") == Some(b"Popup")
+                && let Some(parent) = annotation.reference(b"Parent")
+            {
+                inline_children.entry(parent).or_default().push(k);
+            }
+        }
+    }
     while let Some(current) = pending.pop() {
-        if !retained.insert(current) {
+        if !retained.refs.insert(current) {
             continue;
         }
         if let Some(kids) = children.get(&current) {
             pending.extend(kids.iter().copied());
+        }
+        if let Some(inline_kids) = inline_children.get(&current) {
+            retained.inline.extend(inline_kids.iter().copied());
         }
     }
     retained
@@ -272,9 +313,8 @@ fn undrawn_on(doc: &Document, all: &[pdfcraft_model::Page], pages: &[usize], whi
         let list = all.get(i)?.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
         let usable_properties = properties(doc, &all[i].dict).is_some();
         let retained = retained_annotations(doc, &list, usable_properties);
-        for entry in &list {
-            let Some(r) = entry.as_ref() else { continue };
-            if retained.contains(&r) {
+        for (k, entry) in list.iter().enumerate() {
+            if retained.contains(k, entry) {
                 continue;
             }
             let Some(d) = doc.resolve(entry).as_dict().cloned() else { continue };
@@ -364,16 +404,14 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
         // A viewer draws many comments from their dictionary even when the file stores no
         // appearance (notes, FreeText, ink, stamps…). Build the appearance it would show, so
         // flattening keeps a comment that still has ink on screen instead of deleting it.
-        prepare_appearances(doc, &list, which, &retained, existing_properties.is_some());
+        prepare_appearances(doc, &list, which, &retained.refs, existing_properties.is_some());
         for (k, entry) in list.iter().enumerate() {
             let obj = doc.resolve(entry);
             let Some(d) = obj.as_dict() else { continue };
             let subtype = d.name(b"Subtype").unwrap_or_default();
             let widget = subtype == b"Widget";
-            if entry.as_ref().is_some_and(|r| retained.contains(&r)) || !transferable(doc, d, existing_properties.is_some()) {
-                if let Some(r) = entry.as_ref() {
-                    retained.insert(r);
-                }
+            if retained.contains(k, entry) || !transferable(doc, d, existing_properties.is_some()) {
+                retained.insert(k, entry);
                 continue;
             }
             if !selected(doc, d, which) {
@@ -392,9 +430,7 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
                     if let Some(membership) = d.get(b"OC") {
                         let Some(existing) = existing_properties.as_ref() else { continue };
                         let Some(name) = property_name(existing, &added_properties, &mut property_n) else {
-                            if let Some(r) = entry.as_ref() {
-                                retained.insert(r);
-                            }
+                            retained.insert(k, entry);
                             continue;
                         };
                         content.push_str(&format!("/OC /{name} BDC\n"));
@@ -445,7 +481,7 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
         // it could not be drawn: its content would go with nothing in its place.
         for entry in &list {
             let Some(r) = entry.as_ref() else { continue };
-            if undrawn.contains(&r) || retained.contains(&r) {
+            if undrawn.contains(&r) || retained.refs.contains(&r) {
                 continue;
             }
             let obj = doc.get(r);
