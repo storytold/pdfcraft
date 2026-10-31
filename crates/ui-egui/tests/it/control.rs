@@ -1977,6 +1977,81 @@ fn click_and_drag_refuse_coordinates_that_overflow_like_move() {
     ok(&mut h, &c, "ui.drag", json!({ "from": [x, y], "to": [x + 10.0, y], "steps": 2 }));
 }
 
+/// `tool.call` runs a tool on the window's own documents through the runner the desktop app
+/// provides; the window then shows what changed: an edited document is drawn again, a new one
+/// gets a tab behind the person's.
+#[test]
+fn control_tool_call_runs_on_the_windows_documents_and_shows_the_change() {
+    let (mut h, c) = harness_pages(1);
+    let e = call(&mut h, &c, "tool.call", json!({ "name": "doc_list" })).unwrap_err();
+    assert!(e.contains("can't run automation tools"), "{e}");
+    type ToolCalls = Arc<Mutex<Vec<(String, Value, Option<String>)>>>;
+    let seen: ToolCalls = Arc::default();
+    let log = seen.clone();
+    h.state_mut().tool_runner = Some(Box::new(move |session, name, args, root| {
+        log.lock().unwrap().push((name.to_string(), args.clone(), root.map(|r| r.display().to_string())));
+        let doc = session.docs().first().map(|d| d.id).ok_or("no document")?;
+        match name {
+            "page_insert_blank" => {
+                session.apply(doc, pdfcraft_engine::Edit::InsertBlankPage { at: 1, width: 200.0, height: 300.0 }).map_err(|e| e.to_string())?
+            }
+            "doc_create" => {
+                session.open_new("Untitled.pdf", Arc::new(fixture(1))).map_err(|e| e.to_string())?;
+            }
+            _ => return Err(format!("{name}: refused")),
+        }
+        Ok(json!({ "content": [{ "type": "json", "value": { "ran": name } }] }))
+    }));
+    let before = ok(&mut h, &c, "ui.state", json!({}));
+    assert_eq!(before["active"]["pages_on_screen"].as_array().unwrap().len(), 1, "{before}");
+    let r = ok(&mut h, &c, "tool.call", json!({ "name": "page_insert_blank", "arguments": { "doc": 1, "at": 2 }, "root": "/work" }));
+    assert_eq!(r["content"][0]["value"]["ran"], "page_insert_blank", "{r}");
+    assert_eq!(seen.lock().unwrap()[0], ("page_insert_blank".into(), json!({ "doc": 1, "at": 2 }), Some("/work".into())));
+    h.run_steps(4);
+    let after = ok(&mut h, &c, "ui.state", json!({}));
+    assert_eq!(after["documents"][0]["pages"], 2, "{after}");
+    assert_eq!(after["active"]["page"], 1, "the person's reading position is kept");
+    ok(&mut h, &c, "ui.set", json!({"key":"page","value":2}));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["page"], 2, "the new page can be viewed");
+    ok(&mut h, &c, "ui.set", json!({"key":"page","value":1}));
+    // A document the tool makes gets a tab; the person's stays active.
+    ok(&mut h, &c, "tool.call", json!({ "name": "doc_create", "arguments": {} }));
+    h.run_steps(2);
+    let tabs = ok(&mut h, &c, "ui.state", json!({}));
+    assert_eq!(tabs["documents"].as_array().unwrap().len(), 2, "{tabs}");
+    assert_eq!(tabs["documents"][0]["active"], true, "{tabs}");
+    // The runner's refusal is the client's error; junk parameters are refused before it runs.
+    let e = call(&mut h, &c, "tool.call", json!({ "name": "sign_document", "arguments": { "doc": 1 } })).unwrap_err();
+    assert!(e.contains("refused"), "{e}");
+    for junk in [json!({}), json!({ "name": 3 }), json!({ "name": "doc_list", "root": 1 }), json!({ "name": "doc_list", "extra": true })] {
+        assert!(call(&mut h, &c, "tool.call", junk.clone()).is_err(), "{junk}");
+    }
+    assert_eq!(seen.lock().unwrap().len(), 3, "junk never reached the runner");
+}
+
+#[test]
+fn control_tool_call_refused_while_modal_open() {
+    let (mut h, c) = harness();
+    h.state_mut().tool_runner = Some(Box::new(|_, _, _, _| Ok(json!({}))));
+    h.state_mut().close_request = Some(pdfcraft_ui_egui::CloseRequest::Quit);
+    let e = call(&mut h, &c, "tool.call", json!({ "name": "doc_list" })).unwrap_err();
+    assert!(e.contains("close the open dialog in the window before running a document tool"), "{e}");
+}
+
+#[test]
+fn control_does_not_expose_private_dialogs() {
+    let (mut h, c) = harness();
+    for dialog in [pdfcraft_ui_egui::Dialog::Signature, pdfcraft_ui_egui::Dialog::Sign, pdfcraft_ui_egui::Dialog::Protect] {
+        for method in ["tool.inspect", "ui.screenshot"] {
+            h.state_mut().dialog = Some(dialog);
+            let e = call(&mut h, &c, method, json!({})).unwrap_err();
+            assert!(e.contains("private"), "{e}");
+        }
+        assert!(ok(&mut h, &c, "ui.state", json!({})).is_object());
+        h.state_mut().dialog = None;
+    }
+}
+
 #[test]
 fn page_size_shows_while_the_pointer_is_in_the_bottom_left_quadrant() {
     let (mut h, _c) = harness();

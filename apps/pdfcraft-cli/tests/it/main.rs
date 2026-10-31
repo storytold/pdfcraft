@@ -9,6 +9,7 @@ mod extract;
 mod help;
 mod info_standards;
 mod mcp_compact;
+mod mcp_connect;
 mod options;
 mod owner_password;
 mod render;

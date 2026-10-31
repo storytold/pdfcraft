@@ -15,6 +15,12 @@ pub enum Content {
 impl Automation {
     /// Run the tool `name` with JSON `args` (an object; `null` means no arguments).
     pub fn call(&mut self, name: &str, args: &Value) -> Result<Vec<Content>> {
+        #[cfg(feature = "mcp")]
+        if self.window_policy
+            && let Some(why) = super::window::refused_in_window(name, args)
+        {
+            return Err(failed(why));
+        }
         let empty = json!({});
         let args = if args.is_null() { &empty } else { args };
         if !args.is_object() {

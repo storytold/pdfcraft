@@ -163,6 +163,14 @@ impl Control {
         for pending in std::mem::take(&mut self.pending) {
             let kept = match pending {
                 Pending::Frames { until_pass, batches, since, reply, value } => finisher.resolve_frames(until_pass, batches, since, reply, value),
+                Pending::Screenshot { slot, reply, reserved, .. } if host.private_dialog() || finisher.passes < self.private_until_pass => {
+                    slot.cancel();
+                    finisher.release_reservation(reserved);
+                    let _ = reply.send(Err(
+                        "ui.screenshot: a private signing or password dialog is open; close it yourself before inspecting the window".into(),
+                    ));
+                    None
+                }
                 Pending::Screenshot { slot, callback, region, reply, since, geometry, reserved, attempts } => {
                     finisher.finish_capture(ctx, PendingCapture { slot, callback, region, reply, since, geometry, reserved, attempts })
                 }

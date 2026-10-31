@@ -582,6 +582,9 @@ pub struct PdfCraftApp {
     pub page_title: String,
     /// The UI control channel, when enabled (`--control`; off by default).
     control: Option<control::Control>,
+    /// Runs an automation tool on this window's documents, for the control channel's
+    /// `tool.call` (the desktop app sets it; this crate doesn't depend on the tool table).
+    pub tool_runner: Option<control::ToolRunner>,
     /// A bookmark being renamed in the Bookmarks panel: (path, text so far).
     pub bookmark_rename: Option<(Vec<usize>, String)>,
     /// Number pages dialog settings (1-based pages).

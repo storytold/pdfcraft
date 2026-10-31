@@ -90,7 +90,9 @@ Every user-facing feature is reachable headlessly (`AGENTS.md` §3):
 - the **automation tool table** (`crates/automation`, 141 tools) is shared by `pdfcraft-cli run`
   and the opt-in **MCP server** (stdio only; `pdfcraft-cli mcp`), confined to `--root`;
 - the opt-in **UI control channel** (`pdfcraft --control FILE`; loopback, per-launch token) lets an
-  agent inspect, click, type, run commands and take screenshots of the real interface.
+  agent inspect, click, type, run commands and take screenshots of the real interface, and run
+  the automation tools on the window's documents (`tool.call`; `pdfcraft-cli mcp --connect FILE`).
+  The app hands ui-egui the tool runner, so ui-egui doesn't depend on the tool table.
 
 ## Safety
 

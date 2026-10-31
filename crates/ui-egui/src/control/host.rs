@@ -185,4 +185,88 @@ impl Host for crate::PdfCraftApp {
     fn open(&mut self, _path: &str) -> Reply {
         Err("ui.open needs a file system; on the web, drop the file on the page".into())
     }
+
+    fn private_dialog(&self) -> bool {
+        self.password_prompt.is_some()
+            || matches!(
+                self.dialog,
+                Some(
+                    crate::Dialog::Sign
+                        | crate::Dialog::Signature
+                        | crate::Dialog::Protect
+                        | crate::Dialog::Preferences
+                        | crate::Dialog::CertificateViewer
+                )
+            )
+            || matches!(
+                self.quick_tool,
+                crate::QuickTool::Fill(crate::fill_sign::FillTool::Signature | crate::fill_sign::FillTool::Initials)
+                    | crate::QuickTool::SignArea { .. }
+            )
+            || ((self.signature.is_some() || self.initials.is_some())
+                && (self.mode == crate::Mode::Sign
+                    || (self.left_open && self.left == crate::LeftPanel::Tool("fill_sign"))
+                    || self.ctx.as_ref().is_some_and(egui::Popup::is_any_open)))
+    }
+
+    fn tool(&mut self, name: &str, args: &Value, root: Option<&str>) -> Reply {
+        // An agent must not overwrite an editor's draft, save an older value, or leave stale
+        // field/object indexes after changing the document. The person commits typing first.
+        if self.modal_open()
+            || self.bookmark_rename.is_some()
+            || self.views.iter().any(|v| {
+                v.comments.composer.is_some()
+                    || !v.comments.reply.is_empty()
+                    || v.comments.editing.is_some()
+                    || !v.comments.add_box.is_empty()
+                    || v.pending_edit.is_some()
+                    || v.content.draft.is_some()
+                    || v.forms.committed.is_some()
+                    || v.forms
+                        .focus
+                        .as_ref()
+                        .is_some_and(|f| self.session.get(v.id).is_some_and(|d| crate::forms_ui::draft_edit(f, &d.form).is_some()))
+                    || v.fill_text.as_ref().is_some_and(|t| !t.text.trim().is_empty())
+                    || v.line_editor.as_ref().is_some_and(|ed| ed.has_unsaved_text())
+            })
+        {
+            return Err(
+                "tool.call: finish typing and close the open dialog in the window before running a document tool; your draft has been kept".into()
+            );
+        }
+        let Some(runner) = self.tool_runner.as_mut() else {
+            return Err("tool.call: this build of PdfCraft can't run automation tools in the window".into());
+        };
+        let before: Vec<(pdfcraft_engine::DocId, u64)> = self.session.docs().iter().map(|d| (d.id, d.edit_generation())).collect();
+        let result = runner(&mut self.session, name, args, root.map(std::path::Path::new));
+        self.show_tool_changes(&before);
+        result
+    }
+}
+
+impl crate::PdfCraftApp {
+    /// Show what a tool run through `tool.call` changed: documents it edited are drawn again, the
+    /// ones it opened or made get a tab (behind the person's, which stays active), and tabs whose
+    /// document it closed go. `before` is each document's edit generation before the tool ran.
+    fn show_tool_changes(&mut self, before: &[(pdfcraft_engine::DocId, u64)]) {
+        let active = self.active_ids().map(|(_, id)| id);
+        for view in &mut self.views {
+            let Some(doc) = self.session.get(view.id) else { continue };
+            if before.iter().any(|(id, generation)| *id == view.id && *generation != doc.edit_generation()) {
+                view.document_replaced(&doc.info);
+            }
+        }
+        for doc in self.session.docs() {
+            if !before.iter().any(|(id, _)| *id == doc.id) && !self.views.iter().any(|v| v.id == doc.id) {
+                self.views.push(crate::DocView::new(doc.id, &doc.info, self.view_defaults));
+            }
+        }
+        let session = &self.session;
+        self.views.retain(|v| session.get(v.id).is_some() || !before.iter().any(|(id, _)| *id == v.id));
+        // The person's tab stays active; Home (no active tab) stays Home.
+        self.active = match active {
+            Some(id) => self.views.iter().position(|v| v.id == id).or_else(|| self.views.len().checked_sub(1)),
+            None => None,
+        };
+    }
 }
