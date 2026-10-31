@@ -21,6 +21,12 @@ pub fn reference(certificate: &Certificate) -> String {
     backend::reference(certificate)
 }
 
+// Missing device identity cannot bind an operation to the selected card. Preserve
+// nonblank serials exactly; trimming is only a missingness check.
+fn require_token_serial(serial: &str) -> Result<(), SignError> {
+    if serial.trim().is_empty() { Err(SignError::TokenChanged) } else { Ok(()) }
+}
+
 /// Enumerate signing certificates without authentication.
 pub fn list() -> Result<Vec<DigitalId>, SignError> {
     records(false)?.into_iter().map(|record| signing_id(record, None)).collect()
@@ -47,9 +53,7 @@ impl SigningIdentity {
         if pin.is_some_and(|p| p.len() > 256) {
             return Err(SignError::Malformed("the token PIN must not exceed 256 UTF-8 bytes".into()));
         }
-        if self.record.serial.trim().is_empty() {
-            return Err(SignError::TokenChanged);
-        }
+        require_token_serial(&self.record.serial)?;
         signing_id(self.record.clone(), pin)
     }
 }
@@ -165,13 +169,22 @@ impl RsaDecryptionIdentity {
     }
     /// Perform one RSA operation in a helper. Errors never trigger an automatic retry.
     pub fn decrypt_key(&self, encrypted: &[u8], pin: Option<&str>) -> Result<Zeroizing<Vec<u8>>, SignError> {
+        self.decrypt_key_using(encrypted, pin, process::request)
+    }
+    fn decrypt_key_using(
+        &self,
+        encrypted: &[u8],
+        pin: Option<&str>,
+        request: impl FnOnce(&Request, Option<&str>) -> Result<Zeroizing<Vec<u8>>, SignError>,
+    ) -> Result<Zeroizing<Vec<u8>>, SignError> {
+        require_token_serial(&self.record.serial)?;
         let crate::PublicKey::Rsa { n, .. } = &self.certificate.public_key else {
             return Err(SignError::Unsupported("recipient decryption requires RSA".into()));
         };
         if encrypted.len() != n.len() || encrypted.len() > 1024 {
             return Err(SignError::Malformed("recipient RSA ciphertext has an invalid length".into()));
         }
-        let key = process::request(&Request::Decrypt { identity: self.record.clone(), ciphertext: encrypted.to_vec() }, pin)?;
+        let key = request(&Request::Decrypt { identity: self.record.clone(), ciphertext: encrypted.to_vec() }, pin)?;
         if !matches!(key.len(), 16 | 24 | 32) {
             return Err(SignError::Crypto("the token returned an invalid CMS content key length".into()));
         }
@@ -220,6 +233,51 @@ mod selection_tests {
             },
             certificate: id.certificate,
         }
+    }
+    fn decryption_selection(serial: &str) -> RsaDecryptionIdentity {
+        let id = crate::pkcs12::open(include_bytes!("../tests/data/rsa-aes.p12"), "test").unwrap();
+        RsaDecryptionIdentity {
+            record: Identity { certificate: id.certificate.raw.clone(), chain: Vec::new(), label: None, serial: serial.into() },
+            certificate: id.certificate,
+        }
+    }
+    fn ciphertext(id: &RsaDecryptionIdentity) -> Vec<u8> {
+        let crate::PublicKey::Rsa { n, .. } = &id.certificate.public_key else { panic!("RSA fixture") };
+        vec![1; n.len()]
+    }
+    #[test]
+    fn decryption_rejects_missing_serial_before_dispatch() {
+        for serial in ["", "   ", "\t\r\n", "\u{2003}\u{a0}"] {
+            let id = decryption_selection(serial);
+            for pin in [Some("disposable-test-pin"), None] {
+                let called = std::cell::Cell::new(false);
+                let result = id.decrypt_key_using(&ciphertext(&id), pin, |_, _| {
+                    called.set(true);
+                    Ok(Zeroizing::new(vec![7; 16]))
+                });
+                assert!(!called.get(), "missing serial must not send a PIN or start a PIN-pad operation");
+                assert!(matches!(result, Err(SignError::TokenChanged)));
+            }
+        }
+    }
+    #[test]
+    fn decryption_preserves_serial_credentials_and_key_validation() {
+        let id = decryption_selection(" card-A ");
+        let encrypted = ciphertext(&id);
+        for pin in [Some("disposable-test-pin"), None] {
+            for length in [16, 24, 32, 31] {
+                let result = id.decrypt_key_using(&encrypted, pin, |request, sent_pin| {
+                    let Request::Decrypt { identity, ciphertext } = request else { panic!("decrypt request") };
+                    assert_eq!(identity.serial, " card-A ", "nonblank serials remain exact");
+                    assert_eq!(identity.certificate, id.certificate.raw);
+                    assert_eq!(ciphertext, &encrypted);
+                    assert_eq!(sent_pin, pin);
+                    Ok(Zeroizing::new(vec![7; length]))
+                });
+                assert_eq!(result.is_ok(), length != 31);
+            }
+        }
+        assert!(matches!(id.decrypt_key_using(&[], None, |_, _| panic!("invalid ciphertext dispatched")), Err(SignError::Malformed(_))));
     }
     #[test]
     fn a_bound_identity_keeps_its_discovery_record_and_one_use_pin() {

@@ -70,3 +70,25 @@ fn worker_stops_if_its_owning_process_exits() {
     }
     assert!(!survived, "the signing helper must not survive the process that owned it");
 }
+
+#[test]
+fn worker_rejects_missing_decryption_serial_before_provider_access() {
+    for serial in ["", "   ", "\t\r\n", "\u{2003}\u{a0}"] {
+        let json = serde_json::to_vec(&serde_json::json!({"Decrypt": {
+            "identity": {"certificate": [], "chain": [], "label": null, "serial": serial}, "ciphertext": []
+        }}))
+        .unwrap();
+        for pin in [b"disposable-test-pin".as_slice(), b"".as_slice()] {
+            let mut input = Vec::new();
+            input.extend_from_slice(&(json.len() as u32).to_be_bytes());
+            input.extend_from_slice(&json);
+            input.extend_from_slice(&(pin.len() as u32).to_be_bytes());
+            input.extend_from_slice(pin);
+            let output = worker(&input);
+            assert!(output.status.success());
+            assert!(output.stderr.is_empty());
+            assert_eq!(output.stdout.first(), Some(&2), "missing serial fails before the nonexistent provider is accessed");
+            assert!(!String::from_utf8_lossy(&output.stdout).contains("disposable-test-pin"));
+        }
+    }
+}
