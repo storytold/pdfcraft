@@ -430,7 +430,8 @@ fn drag_preview(
             let y = if start.y < fixed.y { fixed.y - h } else { fixed.y };
             Rect::from_min_size(Pos2::new(x, y), egui::vec2(w, h))
         }
-        None => b.translate(p - start),
+        // A move keeps the picture on its page, like a paragraph (#5264).
+        None => b.translate(super::super::object_ui::keep_on_page(b, xf.rect, p - start)),
     };
     // Move/resize the full placement by the visible frame's change. The engine
     // transforms an isolated crop together with its image, preserving its contents.
