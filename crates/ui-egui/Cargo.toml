@@ -45,7 +45,7 @@ base64 = "0.23"
 unicode-bidi = "0.3"
 # Checks that an installed fallback font parses and has the glyphs, and reads the vertical metrics
 # that put fallback faces on the interface's baseline (#1676); the same skrifa egui uses.
-skrifa = "0.44"
+skrifa = "0.47"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 craft-update = { workspace = true }
@@ -95,7 +95,7 @@ egui_kittest = { workspace = true, features = ["eframe", "wgpu"] }
 egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 # Glyph-coverage test of the interface fonts; the same skrifa pdfcraft-fonts already uses.
-skrifa = "0.44"
+skrifa = "0.47"
 
 [build-dependencies]
 serde_json = { workspace = true }
