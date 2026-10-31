@@ -226,6 +226,9 @@ impl PdfCraftApp {
             && let Some(view) = self.views.iter_mut().find(|v| v.id == id)
         {
             view.document_changed(&doc.info);
+            // The marks left the comments: a selected one is gone, and its (page, index) could
+            // now name another comment.
+            view.comments.selected = None;
         }
         true
     }

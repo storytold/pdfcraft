@@ -1895,6 +1895,22 @@ fn placing_a_signature_offers_to_lock_it_now() {
     assert!(h.query_by_label(NOTICE).is_none(), "a signed document isn't offered the lock");
 }
 
+/// #2348 review: locking takes the placed signature out of the comments, so its selection goes
+/// too; a stale (page, index) would point at nothing, or at another comment.
+#[test]
+fn locking_a_signature_clears_the_comment_selection() {
+    let mut h = harness();
+    h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
+    h.state_mut().execute("sign.fill.signature");
+    h.run_steps(2);
+    click(&mut h, 40.0, 300.0);
+    h.run_steps(2);
+    assert!(h.state().views[0].comments.selected.is_some(), "the placed signature is selected");
+    h.get_by_label("Lock now").click();
+    h.run_steps(3);
+    assert!(h.state().views[0].comments.selected.is_none(), "nothing left to select");
+}
+
 /// #2348 review: when locking the signature fails (here the document's security allows comments
 /// but not changes), nothing is lost: the next save asks again, and "Don't ask again" isn't
 /// remembered.
