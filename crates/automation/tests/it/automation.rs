@@ -7671,6 +7671,31 @@ fn xfa_forms_flatten_and_convert_to_static_through_tools() {
     assert!(text.to_string().contains("Japan"), "{text}");
 }
 
+/// A check box whose change script shows a section that needs a second page: the tools see
+/// the new page and the new fields' places, and the form saves and reopens with both pages.
+#[test]
+fn an_xfa_script_that_adds_a_page_is_seen_and_saved_through_tools() {
+    let dir = workdir("xfa-script-page");
+    std::fs::write(dir.join("grow.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::presence_growth_template(false, "", "", "")))
+        .unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "grow.pdf" }))["doc"].as_u64().unwrap();
+    let pages_of = |a: &mut Automation, doc: u64| {
+        let list = ok(a, "doc_list", json!({}));
+        list["documents"].as_array().unwrap().iter().find(|d| d["doc"] == doc).unwrap()["pages"].as_u64().unwrap()
+    };
+    assert_eq!(pages_of(&mut a, doc), 1);
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "more": true } }));
+    assert_eq!(pages_of(&mut a, doc), 2);
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let d2 = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "d2").unwrap().clone();
+    assert_eq!(d2["page"], 2, "{d2}");
+    assert!(d2["rect"].is_array(), "{d2}");
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "saved.pdf" }));
+    let again = ok(&mut a, "doc_open", json!({ "path": "saved.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(pages_of(&mut a, again), 2);
+}
+
 #[test]
 fn xfa_data_files_export_and_import_through_tools() {
     let dir = workdir("xfa-data");

@@ -6595,6 +6595,153 @@ fn filling_growable_xfa_text_reflows_and_undo_restores_the_layout() {
     }
 }
 
+/// What the last edit (the top of the undo stack) said it changed.
+fn last_scope(s: &Session, id: DocId) -> crate::history::Scope {
+    s.get(id).unwrap().editor.as_ref().unwrap().undo.last().unwrap().3
+}
+
+/// The view's entry for field `name`: its page index and first widget's rectangle.
+fn field_place(s: &Session, id: DocId, name: &str) -> (Option<usize>, Option<[f32; 4]>) {
+    let f = s.get(id).unwrap().info.fields.iter().find(|f| f.name == name).unwrap_or_else(|| panic!("no field {name}")).clone();
+    (f.page, f.rect)
+}
+
+/// Bytes that save and reopen as the document the session shows (the save check of #1698).
+fn saves_and_reopens(s: &mut Session, id: DocId, pages: usize) {
+    let bytes = s.save_bytes(id).unwrap();
+    s.check_save(id, &bytes).unwrap();
+    let again = s.open("saved.pdf", None, bytes, None).unwrap();
+    assert_eq!(s.get(again).unwrap().info.pages.len(), pages);
+    s.close(again);
+}
+
+/// A check box's change script that shows a hidden section lays the form out onto a second
+/// page: the view's pages and fields are rebuilt, the file saves and reopens, undo and redo
+/// rebuild them too, and hiding the section again takes the page away.
+#[test]
+fn an_xfa_script_that_shows_a_section_adds_its_page_and_undo_takes_it_away() {
+    let template = pdfcraft_xfa::fixtures::presence_growth_template(false, "", "", "");
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("grow.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    let pages = |s: &Session| s.get(id).unwrap().info.pages.len();
+    let fields = |s: &Session| s.get(id).unwrap().info.fields.len();
+    assert_eq!(pages(&s), 1);
+    let before = fields(&s);
+    assert!(s.get(id).unwrap().info.fields.iter().all(|f| f.name != "d1"), "a hidden section has no widgets");
+    s.apply(id, Edit::SetFieldValue { name: "more".into(), value: FieldValue::Check(true) }).unwrap();
+    let out = s.take_js_output(id);
+    assert_eq!(pages(&s), 2, "{:?}", out.errors);
+    assert_eq!(last_scope(&s, id), crate::history::Scope::Full);
+    assert_eq!(fields(&s), s.get(id).unwrap().form.len(), "the field list is the form's");
+    assert!(fields(&s) > before);
+    for name in ["d1", "d2"] {
+        let (page, rect) = field_place(&s, id, name);
+        assert_eq!(page, Some(1), "{name}");
+        assert!(rect.is_some(), "{name}");
+    }
+    saves_and_reopens(&mut s, id, 2);
+    // A value typed into the new section lays nothing out: only the values are refreshed.
+    s.apply(id, Edit::SetFieldValue { name: "d1".into(), value: FieldValue::Text("typed".into()) }).unwrap();
+    assert_eq!(last_scope(&s, id), crate::history::Scope::Form);
+    assert_eq!(pages(&s), 2);
+    s.undo(id).unwrap();
+    s.undo(id).unwrap();
+    assert_eq!(pages(&s), 1);
+    assert_eq!(fields(&s), before);
+    saves_and_reopens(&mut s, id, 1);
+    s.redo(id).unwrap();
+    assert_eq!(pages(&s), 2);
+    assert_eq!(field_place(&s, id, "d2").0, Some(1));
+    saves_and_reopens(&mut s, id, 2);
+    // Hidden again: the form shrinks back to one page.
+    s.apply(id, Edit::SetFieldValue { name: "more".into(), value: FieldValue::Check(false) }).unwrap();
+    assert_eq!(pages(&s), 1);
+    assert_eq!(fields(&s), before);
+    saves_and_reopens(&mut s, id, 1);
+}
+
+/// A relayout that keeps the page count still replaces the pages: a field the shown section
+/// pushes onto the second page is placed there in the view.
+#[test]
+fn an_xfa_script_relayout_that_keeps_the_page_count_moves_fields_in_the_view() {
+    let after = r#"<field name="late" w="3in" h="0.5in"><ui><textEdit/></ui></field><draw name="tail" w="7.5in" h="2in"><value><text>Tail</text></value></draw>"#;
+    let template = pdfcraft_xfa::fixtures::presence_growth_template(false, "", after, "");
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("moves.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 2);
+    assert_eq!(field_place(&s, id, "late").0, Some(0));
+    s.apply(id, Edit::SetFieldValue { name: "more".into(), value: FieldValue::Check(true) }).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 2, "{:?}", s.take_js_output(id).errors);
+    let (page, rect) = field_place(&s, id, "late");
+    assert_eq!(page, Some(1));
+    let widget = s.get(id).unwrap().form.iter().find(|f| f.name == "late").unwrap().widgets[0].rect;
+    assert_eq!(rect, Some(widget.map(|v| v as f32)), "the view has the new widget's place");
+    s.undo(id).unwrap();
+    assert_eq!(field_place(&s, id, "late").0, Some(0));
+    saves_and_reopens(&mut s, id, 2);
+}
+
+/// A reset whose calculations hide the section lays the form out again too.
+#[test]
+fn an_xfa_reset_whose_calculations_hide_a_section_takes_its_page_away() {
+    let template = pdfcraft_xfa::fixtures::presence_growth_template(true, "", "", "");
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("reset.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 1);
+    s.apply(id, Edit::SetFieldValue { name: "more".into(), value: FieldValue::Check(true) }).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 2, "{:?}", s.take_js_output(id).errors);
+    s.apply(id, Edit::ResetForm { names: None }).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 1, "{:?}", s.take_js_output(id).errors);
+    assert_eq!(last_scope(&s, id), crate::history::Scope::Full);
+    saves_and_reopens(&mut s, id, 1);
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 2);
+}
+
+/// Two relayouts in one event, and a script that fails after them: the form was still laid
+/// out again, so the view is rebuilt.
+#[test]
+fn an_xfa_event_that_lays_out_twice_then_fails_still_rebuilds_the_view() {
+    let template = pdfcraft_xfa::fixtures::presence_growth_template(false, "", "", r#"xfa.layout.relayout(); throw new Error("late failure");"#);
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("twice.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "more".into(), value: FieldValue::Check(true) }).unwrap();
+    let out = s.take_js_output(id);
+    assert!(out.errors.iter().any(|e| e.contains("late failure")), "{:?}", out.errors);
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 2);
+    assert_eq!(last_scope(&s, id), crate::history::Scope::Full);
+    saves_and_reopens(&mut s, id, 2);
+}
+
+/// A picture chosen for an image field lays the form out again from its data.
+#[test]
+fn an_xfa_picture_lays_the_form_out_again_and_rebuilds_the_view() {
+    let after = r#"<field name="photo" w="1in" h="1in"><ui><imageEdit/></ui></field>"#;
+    let template = pdfcraft_xfa::fixtures::presence_growth_template(false, "", after, "");
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("photo.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    s.apply(id, Edit::SetFieldImage { name: "photo".into(), image: Arc::new(pdfcraft_xfa::fixtures::TINY_GIF.to_vec()) }).unwrap();
+    assert_eq!(last_scope(&s, id), crate::history::Scope::Full, "{:?}", s.take_js_output(id).errors);
+    saves_and_reopens(&mut s, id, 1);
+}
+
+/// Text growth, then a script: each lays the form out onto one more page, and it saves.
+#[test]
+fn xfa_text_growth_then_a_script_relayout_both_add_pages() {
+    let before = r#"<field name="notes" w="7.5in" minH="0.5in"><ui><textEdit multiLine="1"/></ui></field>"#;
+    let template = pdfcraft_xfa::fixtures::presence_growth_template(false, before, "", "");
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("mixed.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 1);
+    let notes: String = (1..=60).map(|i| format!("line {i}\n")).collect();
+    s.apply(id, Edit::SetFieldValue { name: "notes".into(), value: FieldValue::Text(notes) }).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 2);
+    saves_and_reopens(&mut s, id, 2);
+    s.apply(id, Edit::SetFieldValue { name: "more".into(), value: FieldValue::Check(true) }).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 3, "{:?}", s.take_js_output(id).errors);
+    saves_and_reopens(&mut s, id, 3);
+}
+
 #[test]
 fn xfa_text_growth_refreshes_widget_geometry_but_fixed_height_fields_keep_their_widgets() {
     for fixed in [false, true] {

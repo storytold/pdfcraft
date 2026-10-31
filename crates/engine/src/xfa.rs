@@ -132,6 +132,9 @@ pub(crate) struct XfaRun<'a> {
     /// start and each script's own): 1, unless the session was given another
     /// ([`crate::Session::with_xfa_time_scale`]).
     pub time_scale: u32,
+    /// The form was laid out again: its pages, widgets and fields were replaced, so the edit
+    /// must rebuild the document's page and field lists, not only refresh their values.
+    pub relaid: bool,
 }
 
 /// The live form node `n`, with its descendants, as the script engine's snapshot of it.
@@ -521,6 +524,8 @@ impl<'a, 'b> Runner<'a, 'b> {
         }
         self.relayouts += 1;
         self.flush()?;
+        // Set before the layout: one that fails part way may already have replaced fields.
+        self.run.relaid = true;
         let report = pdfcraft_xfa::rerender(self.doc, self.tpl).map_err(|e| e.to_string())?;
         self.console(report.warnings);
         crate::xfa_redraw(self.doc)?;

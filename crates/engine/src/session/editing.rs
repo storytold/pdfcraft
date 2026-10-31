@@ -128,6 +128,7 @@ impl Session {
                     datasets: cx.xfa_datasets,
                     ran_away: false,
                     time_scale: cx.xfa_time_scale,
+                    relaid: false,
                 };
                 // Every changed field's scripts, then the calculations once (after a reset,
                 // only those).
@@ -135,10 +136,18 @@ impl Session {
                     .unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
                 cx.xfa_datasets = run.datasets;
                 cx.xfa_ran_away |= run.ran_away;
+                cx.xfa_relaid |= run.relaid;
                 if let Err(e) = ran {
                     cx.xfa_out.errors.push(e);
                 }
             }
+        }
+        // The form's scripts (a check box showing a section) or its new data (a picture) laid
+        // it out again, even if a later script then failed: as with text growth below, its
+        // pages, widgets and fields were replaced, whether or not the page count changed. The
+        // view and undo/redo rebuild them instead of refreshing only field values.
+        if cx.xfa_relaid {
+            scope = Scope::Full;
         }
         // XFA forms keep their values in the datasets packet too, for Adobe's viewers.
         let mut xfa_notes = Vec::new();

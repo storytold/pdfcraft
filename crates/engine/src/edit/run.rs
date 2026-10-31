@@ -168,6 +168,8 @@ pub(crate) struct EditCtx {
     pub(crate) xfa_ran_away: bool,
     /// What the XFA scripts' time limits are multiplied by ([`Session::with_xfa_time_scale`]).
     pub(crate) xfa_time_scale: u32,
+    /// The form's scripts or new data laid it out again: its pages and widgets were replaced.
+    pub(crate) xfa_relaid: bool,
     /// The edit took the XFA out of the form: what went with it, for the document's warnings.
     pub(crate) xfa_removed: Vec<String>,
     /// Pages in the document, for `xfa.layout.pageCount()`.
@@ -205,6 +207,7 @@ impl EditCtx {
             xfa_datasets: None,
             xfa_ran_away: false,
             xfa_time_scale: 1,
+            xfa_relaid: false,
             xfa_removed: Vec::new(),
             pages: 0,
             date: now.map(pdfcraft_cos::pdf_date),
@@ -422,11 +425,18 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         },
         Edit::XfaEvent { som, activity } => {
             let tpl = cx.xfa.clone().ok_or_else(|| EditError::Invalid("this is not a laid-out XFA form, or JavaScript is off".into()))?;
-            let mut run =
-                xfa::XfaRun { page_count: cx.pages, out: &mut cx.xfa_out, datasets: cx.xfa_datasets, ran_away: false, time_scale: cx.xfa_time_scale };
+            let mut run = xfa::XfaRun {
+                page_count: cx.pages,
+                out: &mut cx.xfa_out,
+                datasets: cx.xfa_datasets,
+                ran_away: false,
+                time_scale: cx.xfa_time_scale,
+                relaid: false,
+            };
             let ran = xfa::on_event(doc, &tpl, som, activity, &mut run);
             cx.xfa_datasets = run.datasets;
             cx.xfa_ran_away |= run.ran_away;
+            cx.xfa_relaid |= run.relaid;
             ran.map_err(EditError::Invalid)?;
         }
         Edit::SetFieldImage { name, image } => {
