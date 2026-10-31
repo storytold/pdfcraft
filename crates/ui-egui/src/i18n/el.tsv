@@ -2584,3 +2584,94 @@ animation effects	Off	Ανενεργά
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Επιλογές για αυτήν την απάντηση
 	Export value	Τιμή εξαγωγής
+# OCR: the Correct recognized text command (the Verify screen's other strings come with the screen).
+# OCR: the Verify screen, the batch options and the engine choice.
+	+ Dictionary	+ Λεξικό
+	; cancelled — {n} files were not run	; ακυρώθηκε — {n} αρχεία δεν επεξεργάστηκαν
+	; {n} files already had text	; {n} αρχεία είχαν ήδη κείμενο
+	A 3×3 median filter against scan speckle	Φίλτρο διάμεσου 3×3 κατά των κηλίδων σάρωσης
+	A folder is asked for when a multiple-file run starts	Ο φάκελος ζητείται όταν ξεκινά επεξεργασία πολλών αρχείων
+	AVG CONFIDENCE	ΜΕΣΗ ΑΞΙΟΠΙΣΤΙΑ
+	Accept	Αποδοχή
+	Accept entire page	Αποδοχή ολόκληρης σελίδας
+	Add a second engine's reading when the first is unsure	Προσθέτει την ανάγνωση δεύτερης μηχανής όταν η πρώτη δεν είναι βέβαιη
+	Always read with both engines and merge the words	Διαβάζει πάντα και με τις δύο μηχανές και συγχωνεύει τις λέξεις
+	Auto-rotate	Αυτόματη περιστροφή
+	Automatic	Αυτόματα
+	Binarize	Δυαδικοποίηση
+	Both engines, combined as the Strategy says	Και οι δύο μηχανές, συνδυασμένες κατά τη στρατηγική
+	CONFIDENCE	ΑΞΙΟΠΙΣΤΙΑ
+	Cancelled — {n} words were read on {m} of {t} pages; the rest were not read	Ακυρώθηκε — διαβάστηκαν {n} λέξεις σε {m} από {t} σελίδες· οι υπόλοιπες δεν διαβάστηκαν
+	Click a word to inspect it; drag a rectangle to re-read part of the page	Κάντε κλικ σε μια λέξη για να την εξετάσετε· σύρετε ένα ορθογώνιο για να ξαναδιαβάσετε μέρος της σελίδας
+	Confidence weighted	Σταθμισμένη κατά αξιοπιστία
+	Corrected text (Enter commits)	Διορθωμένο κείμενο (το Enter επιβεβαιώνει)
+	Denoise	Αποθορυβοποίηση
+	Deskew	Ίσιωμα
+	ENGINE · STRATEGY	ΜΗΧΑΝΗ · ΣΤΡΑΤΗΓΙΚΗ
+	Editable text	Επεξεργάσιμο κείμενο
+	Exit	Έξοδος
+	F8: next word to review; Shift+F8 goes back	F8: επόμενη λέξη για έλεγχο· το Shift+F8 πηγαίνει πίσω
+	Force OCR (override skip options)	Αναγκαστικό OCR (παράκαμψη των επιλογών παράλειψης)
+	HIGH (>= 90%)	ΥΨΗΛΗ (>= 90%)
+	In multiple files: a file with any text is its own skipped bucket, and nothing is written for it	Σε πολλά αρχεία: ένα αρχείο με κείμενο μετρά χωριστά ως παραλειπόμενο και δεν γράφεται τίποτα γι' αυτό
+	LOW (< 70%)	ΧΑΜΗΛΗ (< 70%)
+	LOW-CONFIDENCE WORDS	ΛΕΞΕΙΣ ΧΑΜΗΛΗΣ ΑΞΙΟΠΙΣΤΙΑΣ
+	MEDIUM (70-89%)	ΜΕΣΑΙΑ (70-89%)
+	Mark this page as reviewed (Ctrl+T)	Σήμανση αυτής της σελίδας ως ελεγμένης (Ctrl+T)
+	Next uncertain	Επόμενη αβέβαιη
+	OCR complete — no text recognized on this page.	Το OCR ολοκληρώθηκε — δεν αναγνωρίστηκε κείμενο σε αυτή τη σελίδα.
+	OCR results rejected.	Τα αποτελέσματα OCR απορρίφθηκαν.
+	PAGE	ΣΕΛΙΔΑ
+	Page verified	Η σελίδα ελέγχθηκε
+	Pages with renderable text are left alone and reported as skipped	Οι σελίδες με κείμενο που αποδίδεται μένουν ως έχουν και αναφέρονται ως παραλειπόμενες
+	Previous uncertain	Προηγούμενη αβέβαιη
+	Primary only	Μόνο η κύρια
+	ROVER vote	Ψηφοφορία ROVER
+	Re-OCR entire page	Νέο OCR ολόκληρης σελίδας
+	Re-OCR this region	Νέο OCR αυτής της περιοχής
+	Read {n} words on {m} of {t} pages	Διαβάστηκαν {n} λέξεις σε {m} από {t} σελίδες
+	Reads pages and files even where the skip options would leave them alone	Διαβάζει σελίδες και αρχεία ακόμη κι εκεί όπου οι επιλογές παράλειψης θα τα παρέλειπαν
+	Recognized text	Αναγνωρισμένο κείμενο
+	Recognized text applied ({n} words, one undoable step)	Το αναγνωρισμένο κείμενο εφαρμόστηκε ({n} λέξεις, ένα βήμα που αναιρείται)
+	Reject	Απόρριψη
+	Reject entire page	Απόρριψη ολόκληρης σελίδας
+	Run OCR	Εκτέλεση OCR
+	Sauvola binarization: ink to black, paper to white	Δυαδικοποίηση Sauvola: το μελάνι μαύρο, το χαρτί λευκό
+	Select a word on the page to inspect it	Επιλέξτε μια λέξη στη σελίδα για να την εξετάσετε
+	Several files have the same name, so their results would overwrite each other; nothing was written: {list}	Πολλά αρχεία έχουν το ίδιο όνομα, οπότε τα αποτελέσματά τους θα αντικαθιστούσαν το ένα το άλλο· δεν γράφτηκε τίποτα: {list}
+	Shift+F8: the previous word to review	Shift+F8: η προηγούμενη λέξη για έλεγχο
+	Skip files that already have text	Παράλειψη αρχείων που έχουν ήδη κείμενο
+	Skip pages that already have text	Παράλειψη σελίδων που έχουν ήδη κείμενο
+	Source page	Σελίδα προέλευσης
+	Straightens skewed text lines before reading	Ισιώνει τις κεκλιμένες γραμμές κειμένου πριν από την ανάγνωση
+	Suggestions	Προτάσεις
+	That is the source file; choose another destination	Αυτό είναι το αρχείο προέλευσης· επιλέξτε άλλο προορισμό
+	The built-in engine (pure Rust)	Η ενσωματωμένη μηχανή (καθαρή Rust)
+	The output folder already holds files of these names; nothing was written: {list}	Ο φάκελος εξόδου περιέχει ήδη αρχεία με αυτά τα ονόματα· δεν γράφτηκε τίποτα: {list}
+	The page was read again; its words were replaced (undo in the panel)	Η σελίδα διαβάστηκε ξανά· οι λέξεις της αντικαταστάθηκαν (αναίρεση στο πλαίσιο)
+	The page's words were applied as one undoable step ({n} words)	Οι λέξεις της σελίδας εφαρμόστηκαν ως ένα βήμα που αναιρείται ({n} λέξεις)
+	The page's words were cleared (undo in the panel)	Οι λέξεις της σελίδας διαγράφηκαν (αναίρεση στο πλαίσιο)
+	The re-read found no text; the existing words are unchanged	Η νέα ανάγνωση δεν βρήκε κείμενο· οι υπάρχουσες λέξεις μένουν ως έχουν
+	The region was read again; its words were replaced (undo in the panel)	Η περιοχή διαβάστηκε ξανά· οι λέξεις της αντικαταστάθηκαν (αναίρεση στο πλαίσιο)
+	The searchable copies are written here under the source names	Τα αντίγραφα με δυνατότητα αναζήτησης γράφονται εδώ με τα ονόματα των αρχείων προέλευσης
+	The selected word is gone; choose another	Η επιλεγμένη λέξη δεν υπάρχει πια· επιλέξτε άλλη
+	The tesseract program, run as an external process	Το πρόγραμμα tesseract, που εκτελείται ως εξωτερική διεργασία
+	Turns pages scanned sideways or upside down upright before reading	Ισιώνει σελίδες που σαρώθηκαν πλάγια ή ανάποδα πριν από την ανάγνωση
+	Undo the last review change (Ctrl+Z)	Αναίρεση της τελευταίας αλλαγής ελέγχου (Ctrl+Z)
+	Use the chosen engine's reading alone	Χρήση μόνο της ανάγνωσης της επιλεγμένης μηχανής
+	VERIFIED %	ΕΛΕΓΜΕΝΑ %
+	Verified	Ελέγχθηκε
+	Word	Λέξη
+	Writes a new document of visible text; the scan is not changed	Γράφει νέο έγγραφο με ορατό κείμενο· η σάρωση δεν αλλάζει
+	Wrote {name}	Γράφτηκε το {name}
+	corrected	διορθώθηκε
+	removed	αφαιρέθηκε
+	skipped	παραλείφθηκε
+	unreviewed	μη ελεγμένη
+	verified	ελέγχθηκε
+	{name}: {n} low-confidence word(s) on pages {pages}	{name}: {n} λέξεις χαμηλής αξιοπιστίας στις σελίδες {pages}
+	{n} word(s) to review	{n} λέξεις για έλεγχο
+	Correct recognized text…	Διόρθωση αναγνωρισμένου κειμένου…
+	the tesseract program was not found (install it, or add it to the PATH)	δεν βρέθηκε το πρόγραμμα tesseract (εγκαταστήστε το ή προσθέστε το στο PATH)
+	still checking whether the tesseract program can run; try again in a moment	ελέγχεται ακόμη αν μπορεί να εκτελεστεί το πρόγραμμα tesseract· δοκιμάστε ξανά σε λίγο
+	the tesseract engine is not available in the web build	η μηχανή tesseract δεν είναι διαθέσιμη στην έκδοση web

@@ -2863,3 +2863,94 @@ theme	Appearance	Aparência
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opções desta resposta
 	Export value	Valor de exportação
+# OCR: the Correct recognized text command (the Verify screen's other strings come with the screen).
+# OCR: the Verify screen, the batch options and the engine choice.
+	+ Dictionary	+ Dicionário
+	; cancelled — {n} files were not run	; cancelado — {n} arquivos não foram processados
+	; {n} files already had text	; {n} arquivos já tinham texto
+	A 3×3 median filter against scan speckle	Filtro de mediana 3×3 contra sujeira da digitalização
+	A folder is asked for when a multiple-file run starts	Uma pasta é solicitada ao iniciar uma execução de vários arquivos
+	AVG CONFIDENCE	CONFIANÇA MÉDIA
+	Accept	Aceitar
+	Accept entire page	Aceitar a página inteira
+	Add a second engine's reading when the first is unsure	Adiciona a leitura de um segundo mecanismo quando o primeiro não tem certeza
+	Always read with both engines and merge the words	Sempre lê com os dois mecanismos e combina as palavras
+	Auto-rotate	Rotação automática
+	Automatic	Automático
+	Binarize	Binarizar
+	Both engines, combined as the Strategy says	Os dois mecanismos, combinados conforme a estratégia escolhida
+	CONFIDENCE	CONFIANÇA
+	Cancelled — {n} words were read on {m} of {t} pages; the rest were not read	Cancelado — {n} palavras lidas em {m} de {t} páginas; o restante não foi lido
+	Click a word to inspect it; drag a rectangle to re-read part of the page	Clique em uma palavra para inspecioná-la; arraste um retângulo para reler parte da página
+	Confidence weighted	Ponderado pela confiança
+	Corrected text (Enter commits)	Texto corrigido (Enter confirma)
+	Denoise	Reduzir ruído
+	Deskew	Corrigir inclinação
+	ENGINE · STRATEGY	MECANISMO · ESTRATÉGIA
+	Editable text	Texto editável
+	Exit	Sair
+	F8: next word to review; Shift+F8 goes back	F8: próxima palavra a revisar; Shift+F8 volta
+	Force OCR (override skip options)	Forçar OCR (sobrepõe as opções de pular)
+	HIGH (>= 90%)	ALTA (≥ 90%)
+	In multiple files: a file with any text is its own skipped bucket, and nothing is written for it	Em vários arquivos: um arquivo com qualquer texto conta à parte como pulado e nada é gravado para ele
+	LOW (< 70%)	BAIXA (< 70%)
+	LOW-CONFIDENCE WORDS	PALAVRAS DE BAIXA CONFIANÇA
+	MEDIUM (70-89%)	MÉDIA (70-89%)
+	Mark this page as reviewed (Ctrl+T)	Marcar esta página como revisada (Ctrl+T)
+	Next uncertain	Próxima duvidosa
+	OCR complete — no text recognized on this page.	OCR concluído — nenhum texto reconhecido nesta página.
+	OCR results rejected.	Resultados do OCR rejeitados.
+	PAGE	PÁGINA
+	Page verified	Página revisada
+	Pages with renderable text are left alone and reported as skipped	Páginas com texto renderizável ficam como estão e são relatadas como puladas
+	Previous uncertain	Anterior duvidosa
+	Primary only	Só o mecanismo principal
+	ROVER vote	Votação ROVER
+	Re-OCR entire page	Reconhecer a página inteira novamente
+	Re-OCR this region	Reconhecer esta região novamente
+	Read {n} words on {m} of {t} pages	{n} palavras lidas em {m} de {t} páginas
+	Reads pages and files even where the skip options would leave them alone	Lê páginas e arquivos mesmo onde as opções de pular os deixariam de fora
+	Recognized text	Texto reconhecido
+	Recognized text applied ({n} words, one undoable step)	Texto reconhecido aplicado ({n} palavras, uma única etapa reversível)
+	Reject	Rejeitar
+	Reject entire page	Rejeitar a página inteira
+	Run OCR	Executar OCR
+	Sauvola binarization: ink to black, paper to white	Binarização de Sauvola: tinta para preto, papel para branco
+	Select a word on the page to inspect it	Selecione uma palavra na página para inspecioná-la
+	Several files have the same name, so their results would overwrite each other; nothing was written: {list}	Vários arquivos têm o mesmo nome, então seus resultados se sobrescreveriam; nada foi gravado: {list}
+	Shift+F8: the previous word to review	Shift+F8: a palavra anterior a revisar
+	Skip files that already have text	Pular arquivos que já têm texto
+	Skip pages that already have text	Pular páginas que já têm texto
+	Source page	Página de origem
+	Straightens skewed text lines before reading	Endireita linhas de texto tortas antes de ler
+	Suggestions	Sugestões
+	That is the source file; choose another destination	Esse é o arquivo de origem; escolha outro destino
+	The built-in engine (pure Rust)	O mecanismo integrado (Rust puro)
+	The output folder already holds files of these names; nothing was written: {list}	A pasta de saída já contém arquivos com esses nomes; nada foi gravado: {list}
+	The page was read again; its words were replaced (undo in the panel)	A página foi lida novamente; suas palavras foram substituídas (desfaça no painel)
+	The page's words were applied as one undoable step ({n} words)	As palavras da página foram aplicadas como uma única etapa reversível ({n} palavras)
+	The page's words were cleared (undo in the panel)	As palavras da página foram apagadas (desfaça no painel)
+	The re-read found no text; the existing words are unchanged	A releitura não encontrou texto; as palavras existentes ficam inalteradas
+	The region was read again; its words were replaced (undo in the panel)	A região foi lida novamente; suas palavras foram substituídas (desfaça no painel)
+	The searchable copies are written here under the source names	As cópias pesquisáveis são gravadas aqui com os nomes de origem
+	The selected word is gone; choose another	A palavra selecionada não existe mais; escolha outra
+	The tesseract program, run as an external process	O programa tesseract, executado como processo externo
+	Turns pages scanned sideways or upside down upright before reading	Endireita antes de ler páginas digitalizadas de lado ou de cabeça para baixo
+	Undo the last review change (Ctrl+Z)	Desfazer a última alteração da revisão (Ctrl+Z)
+	Use the chosen engine's reading alone	Usa apenas a leitura do mecanismo escolhido
+	VERIFIED %	REVISADO %
+	Verified	Revisada
+	Word	Palavra
+	Writes a new document of visible text; the scan is not changed	Grava um novo documento de texto visível; a digitalização não é alterada
+	Wrote {name}	{name} gravado
+	corrected	corrigida
+	removed	removida
+	skipped	pulada
+	unreviewed	sem revisão
+	verified	revisada
+	{name}: {n} low-confidence word(s) on pages {pages}	{name}: {n} palavra(s) de baixa confiança nas páginas {pages}
+	{n} word(s) to review	{n} palavra(s) a revisar
+	Correct recognized text…	Corrigir texto reconhecido…
+	the tesseract program was not found (install it, or add it to the PATH)	o programa tesseract não foi encontrado (instale-o ou adicione-o ao PATH)
+	still checking whether the tesseract program can run; try again in a moment	ainda verificando se o programa tesseract pode ser executado; tente novamente em instantes
+	the tesseract engine is not available in the web build	o mecanismo tesseract não está disponível na versão web

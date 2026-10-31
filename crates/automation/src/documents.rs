@@ -120,6 +120,7 @@ impl Automation {
         self.texts.remove(&id);
         self.listed.retain(|(d, _), _| *d != id);
         self.evicted.remove(&id);
+        self.ocr_reviews.remove(&id);
         Ok(json!({ "closed": id.0 }))
     }
 

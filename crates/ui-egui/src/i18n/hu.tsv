@@ -2577,3 +2577,94 @@ animation effects	Off	Ki
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	A válasz beállításai
 	Export value	Exportérték
+# OCR: the Correct recognized text command (the Verify screen's other strings come with the screen).
+# OCR: the Verify screen, the batch options and the engine choice.
+	+ Dictionary	+ Szótár
+	; cancelled — {n} files were not run	; megszakítva — {n} fájl feldolgozása elmaradt
+	; {n} files already had text	; {n} fájl már tartalmazott szöveget
+	A 3×3 median filter against scan speckle	3×3-as mediánszűrő a beolvasási foltok ellen
+	A folder is asked for when a multiple-file run starts	A mappát több fájl feldolgozásának indításakor kérdezi meg
+	AVG CONFIDENCE	ÁTLAGOS MEGBÍZHATÓSÁG
+	Accept	Elfogadás
+	Accept entire page	Teljes oldal elfogadása
+	Add a second engine's reading when the first is unsure	Hozzáadja egy második motor olvasatát, ha az első bizonytalan
+	Always read with both engines and merge the words	Mindig mindkét motorral olvas, és egyesíti a szavakat
+	Auto-rotate	Automatikus forgatás
+	Automatic	Automatikus
+	Binarize	Binarizálás
+	Both engines, combined as the Strategy says	Mindkét motor, a választott stratégia szerint egyesítve
+	CONFIDENCE	MEGBÍZHATÓSÁG
+	Cancelled — {n} words were read on {m} of {t} pages; the rest were not read	Megszakítva — {n} szó beolvasva {t} oldalból {m} oldalon; a többi nem lett beolvasva
+	Click a word to inspect it; drag a rectangle to re-read part of the page	Kattintson egy szóra a vizsgálatához; húzzon egy téglalapot az oldal egy részének újraolvasásához
+	Confidence weighted	Megbízhatósággal súlyozott
+	Corrected text (Enter commits)	Javított szöveg (az Enter jóváhagyja)
+	Denoise	Zajszűrés
+	Deskew	Kiegyenesítés
+	ENGINE · STRATEGY	MOTOR · STRATÉGIA
+	Editable text	Szerkeszthető szöveg
+	Exit	Kilépés
+	F8: next word to review; Shift+F8 goes back	F8: a következő ellenőrizendő szó; Shift+F8 vissza
+	Force OCR (override skip options)	OCR kényszerítése (a kihagyási beállítások felülbírálása)
+	HIGH (>= 90%)	MAGAS (>= 90%)
+	In multiple files: a file with any text is its own skipped bucket, and nothing is written for it	Több fájlnál: a szöveget tartalmazó fájl külön, kihagyottként számít, és nem íródik ki hozzá semmi
+	LOW (< 70%)	ALACSONY (< 70%)
+	LOW-CONFIDENCE WORDS	ALACSONY MEGBÍZHATÓSÁGÚ SZAVAK
+	MEDIUM (70-89%)	KÖZEPES (70–89%)
+	Mark this page as reviewed (Ctrl+T)	Az oldal megjelölése ellenőrzöttként (Ctrl+T)
+	Next uncertain	Következő bizonytalan
+	OCR complete — no text recognized on this page.	Az OCR kész — ezen az oldalon nem ismert fel szöveget.
+	OCR results rejected.	Az OCR eredményei elvetve.
+	PAGE	OLDAL
+	Page verified	Oldal ellenőrizve
+	Pages with renderable text are left alone and reported as skipped	A megjeleníthető szöveget tartalmazó oldalak változatlanok maradnak, és kihagyottként jelennek meg
+	Previous uncertain	Előző bizonytalan
+	Primary only	Csak az elsődleges
+	ROVER vote	ROVER-szavazás
+	Re-OCR entire page	Teljes oldal újra-OCR-ezése
+	Re-OCR this region	Ennek a területnek az újra-OCR-ezése
+	Read {n} words on {m} of {t} pages	{n} szó beolvasva {t} oldalból {m} oldalon
+	Reads pages and files even where the skip options would leave them alone	Az oldalakat és fájlokat ott is beolvassa, ahol a kihagyási beállítások kihagynák őket
+	Recognized text	Felismert szöveg
+	Recognized text applied ({n} words, one undoable step)	A felismert szöveg alkalmazva ({n} szó, egy visszavonható lépés)
+	Reject	Elvetés
+	Reject entire page	Teljes oldal elvetése
+	Run OCR	OCR futtatása
+	Sauvola binarization: ink to black, paper to white	Sauvola-binarizálás: a tinta fekete, a papír fehér lesz
+	Select a word on the page to inspect it	Jelöljön ki egy szót az oldalon a vizsgálatához
+	Several files have the same name, so their results would overwrite each other; nothing was written: {list}	Több fájlnak ugyanaz a neve, így az eredményeik felülírnák egymást; semmi sem íródott ki: {list}
+	Shift+F8: the previous word to review	Shift+F8: az előző ellenőrizendő szó
+	Skip files that already have text	A már szöveget tartalmazó fájlok kihagyása
+	Skip pages that already have text	A már szöveget tartalmazó oldalak kihagyása
+	Source page	Forrásoldal
+	Straightens skewed text lines before reading	Olvasás előtt kiegyenesíti a ferde szövegsorokat
+	Suggestions	Javaslatok
+	That is the source file; choose another destination	Ez a forrásfájl; válasszon másik célt
+	The built-in engine (pure Rust)	A beépített motor (tiszta Rust)
+	The output folder already holds files of these names; nothing was written: {list}	A kimeneti mappában már vannak ilyen nevű fájlok; semmi sem íródott ki: {list}
+	The page was read again; its words were replaced (undo in the panel)	Az oldal újra be lett olvasva; a szavait lecserélte (visszavonás a panelen)
+	The page's words were applied as one undoable step ({n} words)	Az oldal szavai egyetlen visszavonható lépésként alkalmazva ({n} szó)
+	The page's words were cleared (undo in the panel)	Az oldal szavai törölve (visszavonás a panelen)
+	The re-read found no text; the existing words are unchanged	Az újraolvasás nem talált szöveget; a meglévő szavak változatlanok
+	The region was read again; its words were replaced (undo in the panel)	A terület újra be lett olvasva; a szavait lecserélte (visszavonás a panelen)
+	The searchable copies are written here under the source names	A kereshető másolatok ide íródnak, a forrásfájlok nevével
+	The selected word is gone; choose another	A kijelölt szó már nem létezik; válasszon másikat
+	The tesseract program, run as an external process	A tesseract program, külső folyamatként futtatva
+	Turns pages scanned sideways or upside down upright before reading	Olvasás előtt állóra fordítja az oldalra fektetve vagy fejjel lefelé beolvasott oldalakat
+	Undo the last review change (Ctrl+Z)	Az utolsó ellenőrzési módosítás visszavonása (Ctrl+Z)
+	Use the chosen engine's reading alone	Csak a választott motor olvasatának használata
+	VERIFIED %	ELLENŐRIZVE %
+	Verified	Ellenőrizve
+	Word	Szó
+	Writes a new document of visible text; the scan is not changed	Új, látható szöveget tartalmazó dokumentumot ír; a beolvasott kép nem változik
+	Wrote {name}	Kiírva: {name}
+	corrected	javítva
+	removed	eltávolítva
+	skipped	kihagyva
+	unreviewed	nincs ellenőrizve
+	verified	ellenőrizve
+	{name}: {n} low-confidence word(s) on pages {pages}	{name}: {n} alacsony megbízhatóságú szó a következő oldalakon: {pages}
+	{n} word(s) to review	{n} ellenőrizendő szó
+	Correct recognized text…	Felismert szöveg javítása…
+	the tesseract program was not found (install it, or add it to the PATH)	a tesseract program nem található (telepítse, vagy vegye fel a PATH-ba)
+	still checking whether the tesseract program can run; try again in a moment	még folyik annak ellenőrzése, hogy a tesseract program futtatható-e; próbálja újra egy pillanat múlva
+	the tesseract engine is not available in the web build	a tesseract motor nem érhető el a webes változatban

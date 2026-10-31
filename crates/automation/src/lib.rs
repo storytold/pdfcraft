@@ -72,6 +72,12 @@ pub(crate) use paths::{read_input, read_input_bytes};
 #[cfg(test)]
 use paths::{write_atomic_synced, write_atomic_with};
 
+struct OcrReview {
+    handle: u64,
+    guard: pdfcraft_engine::ocr::OcrGuard,
+    pages: Vec<pdfcraft_engine::ocr::OcrPage>,
+}
+
 /// A headless PdfCraft session driven by tool calls.
 pub struct Automation {
     session: Session,
@@ -88,6 +94,9 @@ pub struct Automation {
     /// Documents that lost a listing to the cap. A page of one with no listing is refused rather
     /// than read as "a number is a position", which the page may no longer match.
     evicted: HashSet<DocId>,
+    /// Review sessions held for `ocr_words` (a guard and the pages read), by document.
+    ocr_reviews: HashMap<DocId, OcrReview>,
+    next_ocr_review: u64,
 }
 
 impl Default for Automation {
@@ -106,6 +115,8 @@ impl Automation {
             texts: TextCache::default(),
             listed: HashMap::new(),
             evicted: HashSet::new(),
+            ocr_reviews: HashMap::new(),
+            next_ocr_review: 0,
         }
     }
 

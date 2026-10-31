@@ -2576,3 +2576,94 @@ animation effects	Off	Өшірулі
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Осы жауаптың параметрлері
 	Export value	Экспорт мәні
+# OCR: the Correct recognized text command (the Verify screen's other strings come with the screen).
+# OCR: the Verify screen, the batch options and the engine choice.
+	+ Dictionary	+ Сөздік
+	; cancelled — {n} files were not run	; бас тартылды — {n} файл өңделмеді
+	; {n} files already had text	; {n} файлда мәтін бұрыннан болған
+	A 3×3 median filter against scan speckle	Скан дақтарына қарсы 3×3 медиандық сүзгі
+	A folder is asked for when a multiple-file run starts	Қалта бірнеше файлды өңдеу басталғанда сұралады
+	AVG CONFIDENCE	ОРТАША СЕНІМДІЛІК
+	Accept	Қабылдау
+	Accept entire page	Бүкіл бетті қабылдау
+	Add a second engine's reading when the first is unsure	Бірінші қозғалтқыш сенімсіз болғанда екінші қозғалтқыштың оқуын қосады
+	Always read with both engines and merge the words	Әрқашан екі қозғалтқышпен оқып, сөздерді біріктіреді
+	Auto-rotate	Автоматты бұру
+	Automatic	Автоматты
+	Binarize	Бинарлау
+	Both engines, combined as the Strategy says	Екі қозғалтқыш та, таңдалған стратегия бойынша біріктірілген
+	CONFIDENCE	СЕНІМДІЛІК
+	Cancelled — {n} words were read on {m} of {t} pages; the rest were not read	Бас тартылды — {t} беттің {m} бетінде {n} сөз оқылды; қалғаны оқылмады
+	Click a word to inspect it; drag a rectangle to re-read part of the page	Сөзді тексеру үшін оны басыңыз; беттің бір бөлігін қайта оқу үшін тіктөртбұрыш сызыңыз
+	Confidence weighted	Сенімділікпен өлшенген
+	Corrected text (Enter commits)	Түзетілген мәтін (Enter растайды)
+	Denoise	Шуды азайту
+	Deskew	Қисықтықты түзету
+	ENGINE · STRATEGY	ҚОЗҒАЛТҚЫШ · СТРАТЕГИЯ
+	Editable text	Өңделетін мәтін
+	Exit	Шығу
+	F8: next word to review; Shift+F8 goes back	F8: тексерілетін келесі сөз; Shift+F8 артқа қайтарады
+	Force OCR (override skip options)	OCR-ды мәжбүрлеу (өткізіп жіберу параметрлерін елемеу)
+	HIGH (>= 90%)	ЖОҒАРЫ (>= 90%)
+	In multiple files: a file with any text is its own skipped bucket, and nothing is written for it	Бірнеше файлда: мәтіні бар файл бөлек өткізілген ретінде есептеледі және ол үшін ештеңе жазылмайды
+	LOW (< 70%)	ТӨМЕН (< 70%)
+	LOW-CONFIDENCE WORDS	СЕНІМДІЛІГІ ТӨМЕН СӨЗДЕР
+	MEDIUM (70-89%)	ОРТАША (70-89%)
+	Mark this page as reviewed (Ctrl+T)	Бұл бетті тексерілген деп белгілеу (Ctrl+T)
+	Next uncertain	Келесі күмәнді
+	OCR complete — no text recognized on this page.	OCR аяқталды — бұл бетте мәтін танылмады.
+	OCR results rejected.	OCR нәтижелері қабылданбады.
+	PAGE	БЕТ
+	Page verified	Бет тексерілді
+	Pages with renderable text are left alone and reported as skipped	Көрсетілетін мәтіні бар беттер өзгертілмейді және өткізілген деп хабарланады
+	Previous uncertain	Алдыңғы күмәнді
+	Primary only	Тек негізгі
+	ROVER vote	ROVER дауыс беруі
+	Re-OCR entire page	Бүкіл бетке OCR-ды қайталау
+	Re-OCR this region	Осы аймаққа OCR-ды қайталау
+	Read {n} words on {m} of {t} pages	{t} беттің {m} бетінде {n} сөз оқылды
+	Reads pages and files even where the skip options would leave them alone	Өткізіп жіберу параметрлері өткізетін жерде де беттер мен файлдарды оқиды
+	Recognized text	Танылған мәтін
+	Recognized text applied ({n} words, one undoable step)	Танылған мәтін қолданылды ({n} сөз, болдырмауға болатын бір қадам)
+	Reject	Қабылдамау
+	Reject entire page	Бүкіл бетті қабылдамау
+	Run OCR	OCR іске қосу
+	Sauvola binarization: ink to black, paper to white	Sauvola бинарлауы: сия қара, қағаз ақ болады
+	Select a word on the page to inspect it	Тексеру үшін беттегі сөзді таңдаңыз
+	Several files have the same name, so their results would overwrite each other; nothing was written: {list}	Бірнеше файлдың аты бірдей, сондықтан олардың нәтижелері бірін-бірі қайта жазар еді; ештеңе жазылмады: {list}
+	Shift+F8: the previous word to review	Shift+F8: тексерілетін алдыңғы сөз
+	Skip files that already have text	Мәтіні бар файлдарды өткізіп жіберу
+	Skip pages that already have text	Мәтіні бар беттерді өткізіп жіберу
+	Source page	Бастапқы бет
+	Straightens skewed text lines before reading	Оқу алдында қисайған мәтін жолдарын түзейді
+	Suggestions	Ұсыныстар
+	That is the source file; choose another destination	Бұл — бастапқы файл; басқа орынды таңдаңыз
+	The built-in engine (pure Rust)	Кірістірілген қозғалтқыш (таза Rust)
+	The output folder already holds files of these names; nothing was written: {list}	Шығыс қалтасында осындай аттары бар файлдар бар; ештеңе жазылмады: {list}
+	The page was read again; its words were replaced (undo in the panel)	Бет қайта оқылды; оның сөздері ауыстырылды (панельде болдырмауға болады)
+	The page's words were applied as one undoable step ({n} words)	Беттің сөздері болдырмауға болатын бір қадам ретінде қолданылды ({n} сөз)
+	The page's words were cleared (undo in the panel)	Беттің сөздері тазартылды (панельде болдырмауға болады)
+	The re-read found no text; the existing words are unchanged	Қайта оқу мәтін таппады; бар сөздер өзгертілмеді
+	The region was read again; its words were replaced (undo in the panel)	Аймақ қайта оқылды; оның сөздері ауыстырылды (панельде болдырмауға болады)
+	The searchable copies are written here under the source names	Іздеуге болатын көшірмелер осында бастапқы файлдардың аттарымен жазылады
+	The selected word is gone; choose another	Таңдалған сөз енді жоқ; басқасын таңдаңыз
+	The tesseract program, run as an external process	Сыртқы процесс ретінде іске қосылатын tesseract бағдарламасы
+	Turns pages scanned sideways or upside down upright before reading	Бүйірінен немесе төңкеріліп сканерленген беттерді оқу алдында тік қояды
+	Undo the last review change (Ctrl+Z)	Соңғы тексеру өзгерісін болдырмау (Ctrl+Z)
+	Use the chosen engine's reading alone	Тек таңдалған қозғалтқыштың оқуын пайдалану
+	VERIFIED %	ТЕКСЕРІЛДІ %
+	Verified	Тексерілді
+	Word	Сөз
+	Writes a new document of visible text; the scan is not changed	Көрінетін мәтіні бар жаңа құжат жазады; скан өзгермейді
+	Wrote {name}	{name} жазылды
+	corrected	түзетілді
+	removed	жойылды
+	skipped	өткізілді
+	unreviewed	тексерілмеген
+	verified	тексерілді
+	{name}: {n} low-confidence word(s) on pages {pages}	{name}: {pages} беттерінде сенімділігі төмен {n} сөз
+	{n} word(s) to review	Тексерілетін сөздер: {n}
+	Correct recognized text…	Танылған мәтінді түзету…
+	the tesseract program was not found (install it, or add it to the PATH)	tesseract бағдарламасы табылмады (оны орнатыңыз немесе PATH-қа қосыңыз)
+	still checking whether the tesseract program can run; try again in a moment	tesseract бағдарламасы іске қосыла ала ма, әлі тексерілуде; біраздан кейін қайталап көріңіз
+	the tesseract engine is not available in the web build	tesseract қозғалтқышы веб нұсқасында қолжетімді емес

@@ -2578,3 +2578,94 @@ animation effects	Off	オフ
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	この返信のオプション
 	Export value	書き出し値
+# OCR: the Correct recognized text command (the Verify screen's other strings come with the screen).
+# OCR: the Verify screen, the batch options and the engine choice.
+	+ Dictionary	+ 辞書
+	; cancelled — {n} files were not run	；キャンセル — {n} 個のファイルは実行されませんでした
+	; {n} files already had text	；すでにテキストがあるファイル {n} 個
+	A 3×3 median filter against scan speckle	スキャンのノイズを取る 3×3 メディアンフィルタ
+	A folder is asked for when a multiple-file run starts	複数ファイルの実行を開始するときにフォルダを確認します
+	AVG CONFIDENCE	平均信頼度
+	Accept	承認
+	Accept entire page	ページ全体を承認
+	Add a second engine's reading when the first is unsure	1 つ目のエンジンが不確かなときに 2 つ目のエンジンの読み取りを追加します
+	Always read with both engines and merge the words	常に両方のエンジンで読み取り、単語をマージします
+	Auto-rotate	自動回転
+	Automatic	自動
+	Binarize	二値化
+	Both engines, combined as the Strategy says	両方のエンジン（選んだ戦略で組み合わせ）
+	CONFIDENCE	信頼度
+	Cancelled — {n} words were read on {m} of {t} pages; the rest were not read	キャンセルされました — {t} ページ中 {m} ページで {n} 語を読み取りました。残りは読み取っていません
+	Click a word to inspect it; drag a rectangle to re-read part of the page	単語をクリックして調べます。ドラッグで長方形を囲むと、その部分を再読み取りします
+	Confidence weighted	信頼度で重み付け
+	Corrected text (Enter commits)	修正後のテキスト（Enter で確定）
+	Denoise	ノイズ除去
+	Deskew	傾き補正
+	ENGINE · STRATEGY	エンジン · 結合方式
+	Editable text	編集可能なテキスト
+	Exit	終了
+	F8: next word to review; Shift+F8 goes back	F8: 次の確認対象の単語。Shift+F8 で前の単語
+	Force OCR (override skip options)	OCR を強制（スキップ設定を無視）
+	HIGH (>= 90%)	高（≥ 90%）
+	In multiple files: a file with any text is its own skipped bucket, and nothing is written for it	複数ファイルの場合: テキストを含むファイルはスキップとして数え、何も書き込みません
+	LOW (< 70%)	低（< 70%）
+	LOW-CONFIDENCE WORDS	低信頼度の単語
+	MEDIUM (70-89%)	中（70-89%）
+	Mark this page as reviewed (Ctrl+T)	このページを確認済みにします（Ctrl+T）
+	Next uncertain	次の要確認単語
+	OCR complete — no text recognized on this page.	OCR 完了 — このページではテキストを認識しませんでした。
+	OCR results rejected.	OCR の結果を却下しました。
+	PAGE	ページ
+	Page verified	ページ確認済み
+	Pages with renderable text are left alone and reported as skipped	描画可能なテキストがあるページはそのまま残し、スキップとして報告します
+	Previous uncertain	前の要確認単語
+	Primary only	主エンジンのみ
+	ROVER vote	ROVER 投票
+	Re-OCR entire page	ページ全体を再認識
+	Re-OCR this region	この範囲を再認識
+	Read {n} words on {m} of {t} pages	{t} ページ中 {m} ページで {n} 語を読み取りました
+	Reads pages and files even where the skip options would leave them alone	スキップ設定で対象外になるページやファイルも読み取ります
+	Recognized text	認識したテキスト
+	Recognized text applied ({n} words, one undoable step)	認識したテキストを適用しました（{n} 語、取り消しは 1 ステップ）
+	Reject	拒否
+	Reject entire page	ページ全体を拒否
+	Run OCR	OCR を実行
+	Sauvola binarization: ink to black, paper to white	Sauvola 二値化: 線画を黒、地を白に
+	Select a word on the page to inspect it	ページ上の単語を選択して調べます
+	Several files have the same name, so their results would overwrite each other; nothing was written: {list}	同じ名前のファイルが複数あるため、結果が互いに上書きされます。何も書き込んでいません: {list}
+	Shift+F8: the previous word to review	Shift+F8: 前の確認対象の単語
+	Skip files that already have text	テキストがあるファイルをスキップ
+	Skip pages that already have text	テキストがあるページをスキップ
+	Source page	元のページ
+	Straightens skewed text lines before reading	読み取り前に行の傾きを補正します
+	Suggestions	修正候補
+	That is the source file; choose another destination	それは元のファイルです。別の保存先を選んでください
+	The built-in engine (pure Rust)	内蔵エンジン（純 Rust）
+	The output folder already holds files of these names; nothing was written: {list}	出力フォルダに同じ名前のファイルがあります。何も書き込んでいません: {list}
+	The page was read again; its words were replaced (undo in the panel)	ページを読み直し、単語を置き換えました（パネルで元に戻せます）
+	The page's words were applied as one undoable step ({n} words)	このページの単語を 1 つの取り消し可能なステップとして適用しました（{n} 語）
+	The page's words were cleared (undo in the panel)	ページの単語を消去しました（パネルで元に戻せます）
+	The re-read found no text; the existing words are unchanged	再読み取りではテキストが見つからず、既存の単語は変更されていません
+	The region was read again; its words were replaced (undo in the panel)	領域を読み直し、単語を置き換えました（パネルで元に戻せます）
+	The searchable copies are written here under the source names	検索可能なコピーを元の名前でここに書き込みます
+	The selected word is gone; choose another	選択した単語はなくなりました。別の単語を選んでください
+	The tesseract program, run as an external process	tesseract プログラムを外部プロセスとして実行します
+	Turns pages scanned sideways or upside down upright before reading	横向きや逆向きのスキャンページを読み取り前に正立させます
+	Undo the last review change (Ctrl+Z)	最後の確認変更を取り消します（Ctrl+Z）
+	Use the chosen engine's reading alone	選択したエンジンの読み取りだけを使います
+	VERIFIED %	確認済み %
+	Verified	確認済み
+	Word	単語
+	Writes a new document of visible text; the scan is not changed	表示テキストの新しい文書を書き出します。スキャン画像は変更しません
+	Wrote {name}	{name} を書き込みました
+	corrected	修正済み
+	removed	削除済み
+	skipped	スキップ
+	unreviewed	未確認
+	verified	確認済み
+	{name}: {n} low-confidence word(s) on pages {pages}	{name}: {pages} ページに低信頼度の単語 {n} 個
+	{n} word(s) to review	確認対象の単語 {n} 個
+	Correct recognized text…	認識したテキストを修正…
+	the tesseract program was not found (install it, or add it to the PATH)	tesseract プログラムが見つかりません（インストールするか PATH に追加してください）
+	still checking whether the tesseract program can run; try again in a moment	tesseract プログラムを実行できるか確認中です。しばらくしてからもう一度お試しください
+	the tesseract engine is not available in the web build	Web 版では tesseract エンジンを使用できません

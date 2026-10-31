@@ -51,6 +51,7 @@ use fallback::{
 };
 #[cfg(test)]
 use fallback::{add_type3_font, is_type3_fallback};
+pub(crate) use fallback::{glyph_path, type3_font_dict, unique_font_name};
 use interp::{Origin, Paint, union};
 use lines::page_dict;
 pub(crate) use lines::{FormBudget, content_streams, content_streams_within, form_call, rewritten_contents, splice};

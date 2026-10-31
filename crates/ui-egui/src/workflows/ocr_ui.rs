@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use egui::{Align, Layout};
 use pdfcraft_engine::DocId;
-use pdfcraft_engine::ocr::{LANGUAGES, OcrPage, OcrSettings};
+use pdfcraft_engine::ocr::{EngineChoice, LANGUAGES, MergeStrategy, OcrPage, OcrSettings, OutputMode};
 
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, widgets};
@@ -19,7 +19,10 @@ pub enum OcrPages {
     Range,
 }
 
-/// The dialog's choices (kept between runs, as in Acrobat).
+/// The dialog's choices (kept between runs, as in Acrobat). The Recognize Text dialog, the OCR
+/// Verify screen and the batch options all read and write this one draft, and it is what the
+/// preferences persist: language, output mode, the four preprocessing flags, engine, strategy
+/// and the three skip flags — never review edits, verified flags or the selection.
 #[derive(Clone, Debug, PartialEq)]
 pub struct OcrDraft {
     pub pages: OcrPages,
@@ -30,18 +33,135 @@ pub struct OcrDraft {
     pub dpi: u32,
     /// Also recognize pages that already have text (pictures on them; their text isn't added again).
     pub text_pages: bool,
+    /// Which engine reads the pages.
+    pub engine: EngineChoice,
+    /// How two engines' readings combine.
+    pub strategy: MergeStrategy,
+    /// Preprocessing flags, all off by default.
+    pub auto_rotate: bool,
+    pub deskew: bool,
+    pub denoise: bool,
+    pub binarize: bool,
+    /// What Accept produces.
+    pub output_mode: OutputMode,
+    /// Batch: leave files that already contain text alone.
+    pub skip_text_files: bool,
+    /// Batch: leave pages that already contain text alone.
+    pub skip_text_pages: bool,
+    /// Batch: read everything, overriding both skips.
+    pub force_ocr: bool,
+    /// Batch: where the searchable copies go (None: ask each time). Remembered from the last
+    /// batch's folder pick, so a repeated export into the same place does not re-ask.
+    pub output_folder: Option<String>,
 }
 
 impl Default for OcrDraft {
     fn default() -> Self {
-        OcrDraft { pages: OcrPages::All, from: 1, to: 1, language: "en".into(), dpi: 300, text_pages: false }
+        OcrDraft {
+            pages: OcrPages::All,
+            from: 1,
+            to: 1,
+            language: "en".into(),
+            dpi: 300,
+            text_pages: false,
+            engine: EngineChoice::default(),
+            strategy: MergeStrategy::default(),
+            auto_rotate: false,
+            deskew: false,
+            denoise: false,
+            binarize: false,
+            output_mode: OutputMode::default(),
+            skip_text_files: false,
+            skip_text_pages: true,
+            force_ocr: false,
+            output_folder: None,
+        }
     }
 }
 
 impl OcrDraft {
     /// The recognition settings these choices make.
     pub fn settings(&self) -> OcrSettings {
-        OcrSettings { dpi: self.dpi as f32, language: self.language.clone(), skip_text_pages: !self.text_pages, ..Default::default() }
+        OcrSettings {
+            dpi: self.dpi as f32,
+            language: self.language.clone(),
+            engine: self.engine,
+            strategy: self.strategy,
+            auto_rotate: self.auto_rotate,
+            deskew: self.deskew,
+            denoise: self.denoise,
+            binarize: self.binarize,
+            output_mode: self.output_mode,
+            skip_text_files: self.skip_text_files,
+            skip_text_pages: self.skip_text_pages && !self.text_pages,
+            force_ocr: self.force_ocr,
+            ..Default::default()
+        }
+    }
+
+    /// Restore from the preferences JSON (`ocr` object); unknown or malformed values keep the
+    /// defaults, like every other restored setting.
+    pub fn apply_pref(&mut self, v: &serde_json::Value) {
+        if let Some(l) = v["language"].as_str().filter(|l| LANGUAGES.iter().any(|x| x.0 == *l)) {
+            self.language = l.to_string();
+        }
+        if let Some(e) = v["engine"].as_str() {
+            self.engine = EngineChoice::parse(e);
+        }
+        if let Some(s) = v["strategy"].as_str() {
+            self.strategy = match s.trim().to_ascii_lowercase().as_str() {
+                "confidence" | "confidence-weighted" | "confidence_weighted" => MergeStrategy::ConfidenceWeighted,
+                "rover" | "rover-vote" | "vote" => MergeStrategy::RoverVote,
+                "primary" | "primary-only" => MergeStrategy::PrimaryOnly,
+                _ => MergeStrategy::PrimaryOnly,
+            };
+        } else if self.engine == EngineChoice::Auto {
+            // No strategy was saved with "Automatic": it reads the way Automatic reads by
+            // default, not as "Primary only" (which would never bring in the second engine).
+            self.strategy = self.engine.default_strategy();
+        }
+        if let Some(m) = v["output_mode"].as_str() {
+            self.output_mode = OutputMode::parse(m);
+        }
+        for (key, flag) in
+            [("auto_rotate", &mut self.auto_rotate), ("deskew", &mut self.deskew), ("denoise", &mut self.denoise), ("binarize", &mut self.binarize)]
+        {
+            if let Some(on) = v[key].as_bool() {
+                *flag = on;
+            }
+        }
+        for (key, flag) in
+            [("skip_text_files", &mut self.skip_text_files), ("skip_text_pages", &mut self.skip_text_pages), ("force_ocr", &mut self.force_ocr)]
+        {
+            if let Some(on) = v[key].as_bool() {
+                *flag = on;
+            }
+        }
+        if let Some(f) = v["output_folder"].as_str().filter(|f| !f.is_empty()) {
+            self.output_folder = Some(f.to_string());
+        }
+    }
+
+    /// The preferences JSON for `persist`.
+    pub fn to_pref(&self) -> serde_json::Value {
+        serde_json::json!({
+            "language": self.language,
+            "engine": self.engine.name(),
+            "strategy": match self.strategy {
+                MergeStrategy::PrimaryOnly => "primary",
+                MergeStrategy::ConfidenceWeighted => "confidence",
+                MergeStrategy::RoverVote => "rover",
+            },
+            "output_mode": self.output_mode.name(),
+            "auto_rotate": self.auto_rotate,
+            "deskew": self.deskew,
+            "denoise": self.denoise,
+            "binarize": self.binarize,
+            "skip_text_files": self.skip_text_files,
+            "skip_text_pages": self.skip_text_pages,
+            "force_ocr": self.force_ocr,
+            "output_folder": self.output_folder,
+        })
     }
 }
 
@@ -54,12 +174,14 @@ pub struct OcrProgress {
     pub cancel: bool,
 }
 
-/// Recognize text in multiple files: files done, total, and the summary once finished.
+/// Recognize text in multiple files: files done, total, and the summary once finished. Cancel
+/// is asked for between files: the file in flight finishes, the rest are counted as not run.
 #[derive(Default)]
 pub struct BatchProgress {
     pub done: usize,
     pub total: usize,
     pub message: Option<String>,
+    pub cancel: bool,
 }
 
 /// A page Edit should read now (see [`PdfCraftApp::scan_to_read`]).
@@ -74,10 +196,16 @@ struct ScanToRead {
 pub struct OcrRun {
     pub doc: DocId,
     pub progress: Arc<Mutex<OcrProgress>>,
+    /// What the document looked like when the job started: a result is applied only while it
+    /// still does (the dialog closes on Go, so the user can edit, or redact, while this runs).
+    pub guard: pdfcraft_engine::ocr::OcrGuard,
     /// Set for a run Edit started on a scanned page, not asked for: it shows no progress, says nothing
     /// when it found no words (a page with text of its own is skipped, and Edit must not make noise),
     /// and its result waits for Read mode and dialogs and is dropped if the document changed.
     pub automatic: Option<AutoOcr>,
+    /// The dialog promised an editable document: the result goes to the OCR Verify screen
+    /// (whose Accept produces the editable document), not to an invisible layer.
+    pub editable: bool,
 }
 
 /// What an Edit-started run needs to know to refuse a result that no longer fits its document.
@@ -90,9 +218,16 @@ pub struct AutoOcr {
     pub generation: u64,
 }
 
+/// The Tesseract probe runs in the background (the interface never waits on a process): while
+/// it runs, an engine choice reads as "still checking", so look again soon.
+pub(crate) fn keep_asking_while_probing(ctx: &egui::Context) {
+    if pdfcraft_engine::ocr::engine_probe_running() {
+        ctx.request_repaint_after(std::time::Duration::from_millis(200));
+    }
+}
+
 pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
     let pages = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(1, |d| d.info.pages.len().max(1));
-    let available = pdfcraft_engine::ocr::available();
     let d = &mut app.ocr_draft;
     d.to = d.to.clamp(1, pages);
     d.from = d.from.clamp(1, d.to);
@@ -127,11 +262,55 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                 }
             });
             ui.end_row();
+            ui.label(tl!("Engine"));
+            let engine_name = match d.engine {
+                EngineChoice::Auto => tl!("Automatic"),
+                EngineChoice::Ocrs => tl!("Built-in"),
+                EngineChoice::Tesseract => tl!("Tesseract"),
+            };
+            craft_ui::ComboBox::from_id_salt("ocr-engine").selected_text(engine_name).width(220.0).show_ui(ui, |ui| {
+                let choices: [(EngineChoice, &str); 3] =
+                    [(EngineChoice::Auto, "Automatic"), (EngineChoice::Ocrs, "Built-in"), (EngineChoice::Tesseract, "Tesseract")];
+                for (choice, name) in choices {
+                    ui.selectable_value(&mut d.engine, choice, tl!(name));
+                }
+            });
+            ui.end_row();
+            ui.label(tl!("Combine engines"));
+            let strategy_name = match d.strategy {
+                MergeStrategy::PrimaryOnly => tl!("Primary only"),
+                MergeStrategy::ConfidenceWeighted => tl!("Confidence weighted"),
+                MergeStrategy::RoverVote => tl!("ROVER vote"),
+            };
+            craft_ui::ComboBox::from_id_salt("ocr-strategy").selected_text(strategy_name).width(220.0).show_ui(ui, |ui| {
+                let choices: [(MergeStrategy, &str); 3] = [
+                    (MergeStrategy::PrimaryOnly, "Primary only"),
+                    (MergeStrategy::ConfidenceWeighted, "Confidence weighted"),
+                    (MergeStrategy::RoverVote, "ROVER vote"),
+                ];
+                for (choice, name) in choices {
+                    ui.selectable_value(&mut d.strategy, choice, tl!(name));
+                }
+            });
+            ui.end_row();
             ui.label(tl!("Output"));
-            craft_ui::ComboBox::from_id_salt("ocr-output").selected_text(tl!("Searchable Image (Exact)")).width(220.0).show_ui(ui, |ui| {
-                let _ = ui
-                    .selectable_label(true, tl!("Searchable Image (Exact)"))
+            let mode_name = match d.output_mode {
+                OutputMode::Searchable => tl!("Searchable Image (Exact)"),
+                OutputMode::EditableText => tl!("Editable text"),
+            };
+            craft_ui::ComboBox::from_id_salt("ocr-output").selected_text(mode_name).width(220.0).show_ui(ui, |ui| {
+                let s = ui
+                    .selectable_label(d.output_mode == OutputMode::Searchable, tl!("Searchable Image (Exact)"))
                     .on_hover_text(tl!("Adds invisible text over each word; the page image is not changed"));
+                if s.clicked() {
+                    d.output_mode = OutputMode::Searchable;
+                }
+                let e = ui
+                    .selectable_label(d.output_mode == OutputMode::EditableText, tl!("Editable text"))
+                    .on_hover_text(tl!("Writes a new document of visible text; the scan is not changed"));
+                if e.clicked() {
+                    d.output_mode = OutputMode::EditableText;
+                }
             });
             ui.end_row();
             ui.label(tl!("Downsample to"));
@@ -145,20 +324,50 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         ui.add_space(4.0);
         ui.add(crate::widgets::checkbox(&mut d.text_pages, tl!("Also recognize pages that already have text")))
             .on_hover_text(tl!("Pictures on those pages are recognized too; words already in the page's text are not added again"));
+        ui.add(crate::widgets::checkbox(&mut d.auto_rotate, tl!("Straighten pages scanned sideways or upside down")));
+        ui.add(crate::widgets::checkbox(&mut d.deskew, tl!("Straighten skewed text lines")));
+        ui.add(crate::widgets::checkbox(&mut d.denoise, tl!("Remove scan speckle")));
+        ui.add(crate::widgets::checkbox(&mut d.binarize, tl!("Black and white (binarize)")));
     });
-    if !available {
-        ui.label(
-            egui::RichText::new(tl!("Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them."))
-                .small()
-                .color(t.text_muted),
-        );
+    group(ui, "Skip", &mut |ui| {
+        ui.add(crate::widgets::checkbox(&mut d.skip_text_pages, tl!("Skip pages that already have text")))
+            .on_hover_text(tl!("Pages with renderable text are left alone and reported as skipped"));
+        ui.add(crate::widgets::checkbox(&mut d.skip_text_files, tl!("Skip files that already have text")))
+            .on_hover_text(tl!("In multiple files: a file with any text is its own skipped bucket, and nothing is written for it"));
+        ui.add(crate::widgets::checkbox(&mut d.force_ocr, tl!("Force OCR (override skip options)")))
+            .on_hover_text(tl!("Reads pages and files even where the skip options would leave them alone"));
+    });
+    group(ui, "Output folder", &mut |ui| {
+        ui.horizontal(|ui| match &d.output_folder {
+            Some(f) => {
+                ui.monospace(f).on_hover_text(tl!("The searchable copies are written here under the source names"));
+                if ui.small_button(tl!("Clear")).clicked() {
+                    d.output_folder = None;
+                }
+            }
+            None => {
+                ui.label(tl!("Automatic")).on_hover_text(tl!("A folder is asked for when a multiple-file run starts"));
+            }
+        });
+    });
+    keep_asking_while_probing(ui.ctx());
+    if let Some(why) = pdfcraft_engine::ocr::engine_unavailable_reason(d.engine) {
+        // Said in the interface's language: the built-in engine's missing models get the
+        // notice users know; Tesseract's reasons are catalog keys of their own.
+        let text = match d.engine {
+            pdfcraft_engine::ocr::EngineChoice::Tesseract => crate::i18n::t(&why).to_string(),
+            _ => tl!("Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.")
+                .to_string(),
+        };
+        ui.label(egui::RichText::new(text).small().color(t.text_muted));
         ui.add_space(6.0);
     }
     ui.add_space(6.0);
     let (mut go, mut cancel) = (false, false);
+    let can_run = pdfcraft_engine::ocr::engine_unavailable_reason(d.engine).is_none();
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.add_enabled_ui(available, |ui| widgets::pill_button(ui, tl!("Recognize text"), true)).inner.clicked() {
+            if ui.add_enabled_ui(can_run, |ui| widgets::pill_button(ui, tl!("Recognize text"), true)).inner.clicked() {
                 go = true;
             }
             if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
@@ -201,7 +410,7 @@ impl PdfCraftApp {
     /// is one undoable step, "Recognize text", and is not run again for that page after Undo.
     pub(crate) fn auto_ocr_scanned_page(&mut self) {
         let Some(scan) = self.scan_to_read() else { return };
-        if !pdfcraft_engine::ocr::available() {
+        if pdfcraft_engine::ocr::engine_unavailable_reason(pdfcraft_engine::ocr::EngineChoice::Ocrs).is_some() {
             self.views[scan.view].auto_ocr_skipped.insert(scan.page, scan.generation);
             return;
         }
@@ -267,7 +476,9 @@ impl PdfCraftApp {
         } else {
             None
         };
-        let Some(job) = self.session.ocr_job(id, pages, settings) else { return };
+        let Some(job) = self.session.ocr_job(id, pages, settings.clone()) else { return };
+        let guard = job.guard.clone();
+        let editable = settings.output_mode == OutputMode::EditableText;
         let progress = Arc::new(Mutex::new(OcrProgress { total: job.pages.len(), ..Default::default() }));
         let p = progress.clone();
         // A failure is written on the worker thread: in the UI's language.
@@ -275,8 +486,8 @@ impl PdfCraftApp {
         let work = move || {
             crate::i18n::set_current(lang);
             let result = recognize_guarded(|| {
-                pdfcraft_engine::ocr::engine().map(|ocr| {
-                    job.run(&ocr, |done, total| {
+                pdfcraft_engine::ocr::recognizers(&settings).map(|r| {
+                    job.run(&r, |done, total| {
                         let Ok(mut s) = p.lock() else { return false };
                         s.done = done;
                         s.total = total;
@@ -296,7 +507,7 @@ impl PdfCraftApp {
         }
         #[cfg(target_arch = "wasm32")]
         work();
-        self.ocr_run = Some(OcrRun { doc: id, progress, automatic: auto });
+        self.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: auto, editable });
         self.poll_ocr();
     }
 
@@ -307,10 +518,11 @@ impl PdfCraftApp {
             self.notify_tr("Text recognition is already running");
             return;
         }
-        // The settings showing now, not when the folder arrives.
+        // The settings showing now, not when the folder arrives. A remembered folder (the last
+        // batch's pick, persisted with the preferences) is reused; otherwise the user is asked.
         let settings = self.ocr_draft.settings();
         #[cfg(not(target_arch = "wasm32"))]
-        match self.export_dir_override.clone() {
+        match self.export_dir_override.clone().or_else(|| self.ocr_draft.output_folder.clone()) {
             Some(d) => self.ocr_files_into(files, settings, d.into()),
             None => {
                 let dialog = rfd::AsyncFileDialog::new().set_title(tl!("Choose a folder for the searchable files").to_string());
@@ -328,21 +540,66 @@ impl PdfCraftApp {
             self.notify_tr("Text recognition is already running");
             return;
         }
+        // The folder is remembered (the next batch reuses it; the dialog's Clear un-remembers).
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.ocr_draft.output_folder = Some(dir.to_string_lossy().into_owned());
+        }
+        // Two inputs of one file name (from different folders) would write the same output
+        // (or download under the same name): refused before anything is read.
+        let twice = pdfcraft_engine::ocr::duplicate_output_names(files.iter().map(|(name, _)| name.as_str()));
+        if !twice.is_empty() {
+            self.notify_error(crate::i18n::fmt(
+                tl!("Several files have the same name, so their results would overwrite each other; nothing was written: {list}"),
+                &[("list", &twice.join(", "))],
+            ));
+            return;
+        }
+        // Collision pre-flight: a searchable copy never silently overwrites. Every target is
+        // checked before the first page is read; a collision stops the batch here.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let hits: Vec<String> = files
+                .iter()
+                .filter_map(|(name, _)| {
+                    let target = dir.join(name);
+                    target.exists().then(|| target.to_string_lossy().into_owned())
+                })
+                .take(5)
+                .collect();
+            if !hits.is_empty() {
+                self.notify_error(crate::i18n::fmt(
+                    tl!("The output folder already holds files of these names; nothing was written: {list}"),
+                    &[("list", &hits.join(", "))],
+                ));
+                return;
+            }
+        }
+        // The engines are built (and named if they cannot be) before anything starts.
+        let recognizers = match pdfcraft_engine::ocr::recognizers(&settings) {
+            Ok(r) => r,
+            Err(why) => {
+                self.notify_error(why);
+                return;
+            }
+        };
         let progress = Arc::new(Mutex::new(BatchProgress { total: files.len(), ..Default::default() }));
         let p = progress.clone();
         // The summary is written on the worker thread: draw it in the UI's language.
         let lang = crate::i18n::current();
         let work = move || {
             crate::i18n::set_current(lang);
-            // A panic in the recognizer still ends the batch with a summary (#3919).
             #[cfg(not(target_arch = "wasm32"))]
-            let summary = pdfcraft_engine::guard(|| recognize_files(files, &settings, &p, &dir));
+            let write = move |name: &str, r: &pdfcraft_engine::ocr::FileResult| {
+                crate::editing::write_atomically(&dir.join(name).to_string_lossy(), &r.bytes).map_err(|e| e.to_string())
+            };
             #[cfg(target_arch = "wasm32")]
-            let summary = pdfcraft_engine::guard(|| recognize_files(files, &settings, &p));
-            let summary = summary.unwrap_or_else(|panic| failed(&panic));
+            let write = move |name: &str, r: &pdfcraft_engine::ocr::FileResult| crate::editing::download(name, &r.bytes);
+            // A panic in the recognizer still ends the batch with a summary (#3919).
+            let msg = pdfcraft_engine::guard(|| run_batch_files(files, settings, &recognizers, &p, write)).unwrap_or_else(|panic| failed(&panic));
             if let Ok(mut s) = p.lock() {
                 s.done = s.total;
-                s.message = Some(summary);
+                s.message = Some(msg);
             }
         };
         #[cfg(not(target_arch = "wasm32"))]
@@ -356,54 +613,17 @@ impl PdfCraftApp {
         self.ocr_batch = Some(progress);
         self.poll_ocr();
     }
-}
 
-/// Recognize each file and write its searchable copy into `dir`; returns the summary to show.
-fn recognize_files(
-    files: Vec<(String, Vec<u8>)>,
-    settings: &OcrSettings,
-    p: &Mutex<BatchProgress>,
-    #[cfg(not(target_arch = "wasm32"))] dir: &std::path::Path,
-) -> String {
-    let (mut ok, mut words, mut failed) = (0, 0, Vec::new());
-    match pdfcraft_engine::ocr::engine() {
-        Err(e) => failed.push(e),
-        Ok(ocr) => {
-            for (i, (name, bytes)) in files.into_iter().enumerate() {
-                if let Ok(mut s) = p.lock() {
-                    s.done = i;
-                }
-                let r = pdfcraft_engine::ocr::recognize_file(&name, Arc::new(bytes), None, settings.clone(), &ocr, |_, _| true);
-                let saved = r.and_then(|r| {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    crate::editing::write_atomically(&dir.join(&name).to_string_lossy(), &r.bytes).map_err(|e| e.to_string())?;
-                    #[cfg(target_arch = "wasm32")]
-                    crate::editing::download(&name, &r.bytes)?;
-                    Ok(r.words())
-                });
-                match saved {
-                    Ok(n) => {
-                        ok += 1;
-                        words += n;
-                    }
-                    Err(e) => failed.push(format!("{name}: {}", e)),
-                }
-            }
+    /// Ask the running batch to stop: the file in flight finishes, the rest are counted as not
+    /// run.
+    pub fn cancel_ocr_batch(&mut self) {
+        if let Some(b) = &self.ocr_batch
+            && let Ok(mut s) = b.lock()
+        {
+            s.cancel = true;
         }
     }
-    let done = if ok == 1 {
-        crate::i18n::fmt(tl!("Recognized {w} words in 1 file"), &[("w", &words.to_string())])
-    } else {
-        crate::i18n::fmt(tl!("Recognized {w} words in {n} files"), &[("w", &words.to_string()), ("n", &ok.to_string())])
-    };
-    let mut msg = done;
-    if !failed.is_empty() {
-        msg.push_str(&crate::i18n::fmt(tl!("; failed: {list}"), &[("list", &failed.join("; "))]));
-    }
-    msg
-}
 
-impl PdfCraftApp {
     /// Stop a running recognition (the pages read so far are kept).
     pub fn cancel_ocr(&mut self) {
         if let Some(r) = &self.ocr_run
@@ -442,7 +662,7 @@ impl PdfCraftApp {
             }
         }
         let Some(run) = self.ocr_run.as_ref() else { return };
-        let (doc, progress, auto) = (run.doc, run.progress.clone(), run.automatic);
+        let (doc, progress, auto, guard, editable) = (run.doc, run.progress.clone(), run.automatic, run.guard.clone(), run.editable);
         let automatic = auto.is_some();
         let mut s = match progress.lock() {
             Ok(s) => s,
@@ -498,9 +718,20 @@ impl PdfCraftApp {
                 return;
             }
         };
+        // The dialog's "Editable text" choice is honored: the recognition is not written as an
+        // invisible layer here. It opens in the OCR Verify screen, whose Accept produces the
+        // editable document (a NEW file) the choice promises.
+        if editable && !automatic {
+            self.ocr_verify.load(doc, guard, found);
+            self.ocr_verify.open = true;
+            self.notify_tr("Review the recognition, then Accept to write the editable document");
+            return;
+        }
         let read = found.iter().filter(|p| p.skipped.is_none()).count();
         let skipped = found.len() - read;
-        match self.session.apply_ocr(doc, &found) {
+        // The guard refuses a result that no longer fits its document (the user edited, or
+        // redacted, while the worker was out); its reason says so.
+        match self.session.apply_ocr_checked(doc, &found, &guard) {
             Ok(words) => {
                 if let Some(info) = self.session.get(doc).map(|d| d.info.clone())
                     && let Some(view) = self.views.iter_mut().find(|v| v.id == doc)
@@ -525,11 +756,88 @@ impl PdfCraftApp {
                         crate::i18n::fmt(tl!("; {n} pages already had text"), &[("n", &skipped.to_string())])
                     });
                 }
+                // The pages' own notes (the editable output's unrenderable-character warning,
+                // for one) are part of the result: said here, not dropped.
+                for note in found.iter().flat_map(|p| p.notes.iter()) {
+                    msg.push_str("; ");
+                    msg.push_str(note);
+                }
                 self.notify(msg);
             }
             Err(e) => self.notify_error(e),
         }
     }
+}
+
+/// The batch's worker: read each file, hand the searchable copy to `write` (the output folder,
+/// or the web's download), count the buckets, and compose the summary. A file the skip-files
+/// option passes over is its own bucket and `write` is never called for it. A cancel is asked
+/// for between files: the file in flight finishes, the rest are counted as not run.
+pub(crate) fn run_batch_files(
+    files: Vec<(String, Vec<u8>)>,
+    settings: OcrSettings,
+    recognizers: &pdfcraft_engine::ocr::Recognizers,
+    progress: &Mutex<BatchProgress>,
+    mut write: impl FnMut(&str, &pdfcraft_engine::ocr::FileResult) -> Result<(), String>,
+) -> String {
+    let total = files.len();
+    let (mut ok, mut skipped, mut words, mut failed, mut notes) = (0usize, 0usize, 0usize, Vec::new(), Vec::new());
+    let mut not_run: Option<usize> = None;
+    for (i, (name, bytes)) in files.into_iter().enumerate() {
+        if progress.lock().map(|s| s.cancel).unwrap_or(false) {
+            not_run = Some(total - i);
+            break;
+        }
+        if let Ok(mut s) = progress.lock() {
+            s.done = i;
+        }
+        let r = pdfcraft_engine::ocr::recognize_file(&name, Arc::new(bytes), None, settings.clone(), recognizers, |_, _| true);
+        match r {
+            Ok(res) if res.skipped() => skipped += 1,
+            Ok(res) => match write(&name, &res) {
+                Ok(()) => {
+                    ok += 1;
+                    words += res.words();
+                    // The batch's low-confidence note: at or under the settings' threshold (60 by
+                    // default), on 1-based sorted pages.
+                    if let Some((count, pages)) = pdfcraft_engine::ocr::low_confidence_pages(&res.pages, settings.low_confidence_threshold) {
+                        let list = pages.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ");
+                        notes.push(crate::i18n::fmt(
+                            tl!("{name}: {n} low-confidence word(s) on pages {pages}"),
+                            &[("name", &name), ("n", &count.to_string()), ("pages", &list)],
+                        ));
+                    }
+                }
+                Err(e) => failed.push(format!("{name}: {e}")),
+            },
+            Err(e) => failed.push(format!("{name}: {e}")),
+        }
+    }
+    batch_summary(ok, words, skipped, &failed, &notes, not_run)
+}
+
+/// The batch summary: what was read, the skipped files as their own bucket, the failures, the
+/// low-confidence notes and (on a cancel) how many files were not run.
+fn batch_summary(ok: usize, words: usize, skipped: usize, failed: &[String], notes: &[String], not_run: Option<usize>) -> String {
+    let mut msg = if ok == 1 {
+        crate::i18n::fmt(tl!("Recognized {w} words in 1 file"), &[("w", &words.to_string())])
+    } else {
+        crate::i18n::fmt(tl!("Recognized {w} words in {n} files"), &[("w", &words.to_string()), ("n", &ok.to_string())])
+    };
+    if skipped > 0 {
+        msg.push_str(&crate::i18n::fmt(tl!("; {n} files already had text"), &[("n", &skipped.to_string())]));
+    }
+    if !failed.is_empty() {
+        msg.push_str(&crate::i18n::fmt(tl!("; failed: {list}"), &[("list", &failed.join("; "))]));
+    }
+    if let Some(rest) = not_run {
+        msg.push_str(&crate::i18n::fmt(tl!("; cancelled — {n} files were not run"), &[("n", &rest.to_string())]));
+    }
+    for note in notes {
+        msg.push_str("; ");
+        msg.push_str(note);
+    }
+    msg
 }
 
 /// "Recognize text failed: {e}", in the current language.
@@ -547,6 +855,7 @@ fn recognize_guarded<T>(recognize: impl FnOnce() -> Result<T, String>) -> Result
 mod tests {
     use super::*;
     use crate::{Dialog, LeftPanel, Mode, QuickTool};
+    use pdfcraft_engine::ocr::{Recognizer, Recognizers};
     use pdfcraft_engine::{Edit, Session};
 
     /// A one-page PDF that is one picture covering the page.
@@ -629,12 +938,26 @@ mod tests {
     /// asked for is applied at once. The result is made up, so no OCR models are needed.
     #[test]
     fn the_result_of_an_automatic_run_waits_for_read_mode_and_dialogs() {
-        let word = || pdfcraft_engine::ocr::PlacedWord { text: "scanned".into(), origin: [72.0, 700.0], across: [60.0, 0.0], up: [0.0, 12.0] };
+        let word = || pdfcraft_engine::ocr::PlacedWord {
+            text: "scanned".into(),
+            origin: [72.0, 700.0],
+            across: [60.0, 0.0],
+            up: [0.0, 12.0],
+            confidence: None,
+            source: "ocrs".into(),
+        };
         let finished = |app: &PdfCraftApp, automatic: bool| {
             let generation = app.session.get(app.active_ids().unwrap().1).unwrap().edit_generation();
-            let page = pdfcraft_engine::ocr::OcrPage { page: 0, words: vec![word()], already_on_page: 0, skipped: None };
+            let page = pdfcraft_engine::ocr::OcrPage { page: 0, words: vec![word()], already_on_page: 0, skipped: None, notes: Vec::new() };
             let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
-            OcrRun { doc: app.active_ids().unwrap().1, progress, automatic: automatic.then_some(AutoOcr { page: 0, generation }) }
+            let guard = app.session.ocr_guard(app.active_ids().unwrap().1).unwrap();
+            OcrRun {
+                doc: app.active_ids().unwrap().1,
+                progress,
+                guard,
+                automatic: automatic.then_some(AutoOcr { page: 0, generation }),
+                editable: false,
+            }
         };
         let label = |app: &PdfCraftApp| app.session.get(app.active_ids().unwrap().1).unwrap().can_undo().map(String::from);
 
@@ -669,12 +992,21 @@ mod tests {
         let generation = app.session.get(id).unwrap().edit_generation();
         let page = pdfcraft_engine::ocr::OcrPage {
             page: 0,
-            words: vec![pdfcraft_engine::ocr::PlacedWord { text: "scanned".into(), origin: [72.0, 700.0], across: [60.0, 0.0], up: [0.0, 12.0] }],
+            words: vec![pdfcraft_engine::ocr::PlacedWord {
+                text: "scanned".into(),
+                origin: [72.0, 700.0],
+                across: [60.0, 0.0],
+                up: [0.0, 12.0],
+                confidence: None,
+                source: "ocrs".into(),
+            }],
             already_on_page: 0,
             skipped: None,
+            notes: Vec::new(),
         };
         let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
-        app.ocr_run = Some(OcrRun { doc: id, progress, automatic: Some(AutoOcr { page: 0, generation }) });
+        let guard = app.session.ocr_guard(id).unwrap();
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: Some(AutoOcr { page: 0, generation }), editable: false });
         app.views[0].auto_ocr_tried.insert(0);
         // The document changes while the run is out.
         let mut png = std::io::Cursor::new(Vec::new());
@@ -712,9 +1044,13 @@ mod tests {
     fn a_run_whose_worker_died_ends_instead_of_waiting_forever() {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
+        let pdf = pdfcraft_engine::Session::new().create_from_text("t", "guard fixture").unwrap();
+        app.open_bytes("a.pdf", None, pdf.to_vec()).unwrap();
+        let id = app.active_ids().unwrap().1;
+        let guard = app.session.ocr_guard(id).unwrap();
         let progress = Arc::new(Mutex::new(OcrProgress { total: 3, ..Default::default() }));
         poison(&progress);
-        app.ocr_run = Some(OcrRun { doc: DocId(1), progress, automatic: None });
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false });
         app.poll_ocr();
         assert!(app.ocr_run.is_none(), "the next run isn't refused as already running");
         let toast = app.toast.take().map(|t| t.0).unwrap_or_default();
@@ -727,5 +1063,268 @@ mod tests {
         assert!(app.ocr_batch.is_none());
         let toast = app.toast.take().map(|t| t.0).unwrap_or_default();
         assert!(toast.starts_with("Recognize text failed"), "{toast}");
+    }
+
+    /// A fake engine: one confident word per call, no filesystem, no models needed.
+    struct Fake {
+        confidence: f32,
+    }
+
+    impl Recognizer for Fake {
+        fn id(&self) -> &'static str {
+            "fake"
+        }
+        fn available(&self) -> bool {
+            true
+        }
+        fn languages(&self) -> Vec<(String, String)> {
+            vec![("en".into(), "English".into())]
+        }
+        fn recognize(
+            &self,
+            _image: &pdfcraft_ocr::OcrImage,
+            _options: &pdfcraft_ocr::RecognizeOptions,
+        ) -> Result<Vec<pdfcraft_ocr::Line>, pdfcraft_engine::ocr::OcrError> {
+            Ok(vec![pdfcraft_ocr::Line {
+                words: vec![pdfcraft_ocr::Word::new("word", [1.0, 1.0, 9.0, 9.0], "fake").with_confidence(self.confidence)],
+            }])
+        }
+    }
+
+    /// A batch over two text files (the engine never runs on them: they are skipped files):
+    /// the summary counts them in their own bucket, nothing is written, and a cancel before
+    /// the first file leaves the rest not run.
+    #[test]
+    fn batch_counts_skipped_files_and_honours_a_cancel() {
+        let s = pdfcraft_engine::Session::new();
+        let pdf = s.create_from_text("t", "Already typed here").expect("fixture");
+        let files = vec![("a.pdf".into(), pdf.to_vec()), ("b.pdf".into(), pdf.to_vec())];
+        let progress = Mutex::new(BatchProgress { total: files.len(), cancel: true, ..Default::default() });
+        let recognizers = Recognizers { primary: Arc::new(Fake { confidence: 95.0 }), secondary: None };
+        let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let w = writes.clone();
+        let msg = run_batch_files(files, OcrSettings { skip_text_files: true, ..Default::default() }, &recognizers, &progress, move |_, _| {
+            w.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        });
+        assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 0, "nothing is written for skipped files, and the cancel came first");
+        assert!(msg.contains("cancelled — 2 files were not run"), "{msg}");
+        // Without the cancel, the skipped bucket is named and still nothing is written.
+        let files = vec![("a.pdf".into(), pdf.to_vec()), ("b.pdf".into(), pdf.to_vec())];
+        let progress = Mutex::new(BatchProgress { total: files.len(), ..Default::default() });
+        let w = writes.clone();
+        let msg = run_batch_files(files, OcrSettings { skip_text_files: true, ..Default::default() }, &recognizers, &progress, move |_, _| {
+            w.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        });
+        assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(msg.contains("; 2 files already had text"), "{msg}");
+        assert!(msg.contains("Recognized 0 words in 0 files"), "{msg}");
+    }
+
+    /// A batch over scanned files: the words are counted, and a low-confidence reading lands
+    /// in the summary as a note with its 1-based sorted pages.
+    #[test]
+    fn batch_notes_low_confidence_pages() {
+        let s = pdfcraft_engine::Session::new();
+        let pdf = s.create_from_text("t", "fake scan").expect("fixture");
+        let files = vec![("scan.pdf".into(), pdf.to_vec()), ("clean.pdf".into(), pdf.to_vec())];
+        let progress = Mutex::new(BatchProgress { total: files.len(), ..Default::default() });
+        let recognizers = Recognizers { primary: Arc::new(Fake { confidence: 40.0 }), secondary: None };
+        // The fixtures are text PDFs standing in for scans; the default skip-text-pages option
+        // would (correctly) leave them alone, so the batch here reads everything.
+        let settings = OcrSettings { skip_text_pages: false, ..Default::default() };
+        let msg = run_batch_files(files, settings.clone(), &recognizers, &progress, |_, _| Ok(()));
+        assert!(msg.contains("Recognized 2 words in 2 files"), "{msg}");
+        assert!(msg.contains("scan.pdf: 1 low-confidence word(s) on pages 1"), "{msg}");
+        // The write failing is a per-file failure, named in the summary.
+        let files = vec![("scan.pdf".into(), pdf.to_vec())];
+        let progress = Mutex::new(BatchProgress { total: files.len(), ..Default::default() });
+        let msg = run_batch_files(files, settings, &recognizers, &progress, |_, _| Err("disk full".into()));
+        assert!(msg.contains("; failed: scan.pdf: disk full"), "{msg}");
+    }
+
+    /// The batch note follows the settings' low-confidence threshold (60 by default), not a
+    /// number of its own: a 40% word is flagged under 60 and under 40, and not under 30.
+    #[test]
+    fn the_batch_note_uses_the_settings_threshold() {
+        let s = pdfcraft_engine::Session::new();
+        let pdf = s.create_from_text("t", "fake scan").expect("fixture");
+        let recognizers = Recognizers { primary: Arc::new(Fake { confidence: 40.0 }), secondary: None };
+        let run = |threshold: f32| {
+            let files = vec![("scan.pdf".into(), pdf.to_vec())];
+            let progress = Mutex::new(BatchProgress { total: files.len(), ..Default::default() });
+            let settings = OcrSettings { skip_text_pages: false, low_confidence_threshold: threshold, ..Default::default() };
+            run_batch_files(files, settings, &recognizers, &progress, |_, _| Ok(()))
+        };
+        assert!(run(OcrSettings::default().low_confidence_threshold).contains("1 low-confidence word(s)"), "the default flags a 40% word");
+        assert!(run(40.0).contains("1 low-confidence word(s)"), "at the threshold counts");
+        assert!(!run(30.0).contains("low-confidence"), "a lower threshold leaves the word alone: {}", run(30.0));
+    }
+
+    /// The remembered output folder survives the preferences round trip; an absent or empty
+    /// value keeps the default (ask each time).
+    #[test]
+    fn the_output_folder_is_persisted_with_the_draft() {
+        let mut d = OcrDraft::default();
+        assert_eq!(d.output_folder, None, "by default the folder is asked for");
+        d.output_folder = Some("out".into());
+        let mut r = OcrDraft::default();
+        r.apply_pref(&d.to_pref());
+        assert_eq!(r.output_folder.as_deref(), Some("out"));
+        let mut e = OcrDraft::default();
+        e.apply_pref(&serde_json::json!({}));
+        assert_eq!(e.output_folder, None, "an absent value keeps the default");
+        e.output_folder = Some("kept".into());
+        e.apply_pref(&serde_json::json!({ "output_folder": "" }));
+        assert_eq!(e.output_folder.as_deref(), Some("kept"), "an empty value is not a folder");
+    }
+
+    /// "Automatic" saved without a strategy reads the way Automatic reads by default (the
+    /// second engine joins when the first is unsure); an explicit choice always stands.
+    #[test]
+    fn an_automatic_engine_without_a_saved_strategy_is_confidence_weighted() {
+        let mut d = OcrDraft::default();
+        d.apply_pref(&serde_json::json!({ "engine": "auto" }));
+        assert_eq!((d.engine, d.strategy), (EngineChoice::Auto, MergeStrategy::ConfidenceWeighted));
+        let mut named = OcrDraft::default();
+        named.apply_pref(&serde_json::json!({ "engine": "tesseract" }));
+        assert_eq!(named.strategy, MergeStrategy::PrimaryOnly, "a named engine reads alone");
+        let mut explicit = OcrDraft::default();
+        explicit.apply_pref(&serde_json::json!({ "engine": "auto", "strategy": "primary" }));
+        assert_eq!((explicit.engine, explicit.strategy), (EngineChoice::Auto, MergeStrategy::PrimaryOnly));
+    }
+
+    /// Two inputs of one file name (from different folders, or differing only in case) would
+    /// write the same output: the batch stops before anything is read or written.
+    #[test]
+    fn inputs_that_share_a_file_name_are_refused_before_anything_is_read() {
+        let mut app = PdfCraftApp::new();
+        app.run_inline = true;
+        let dir = std::env::temp_dir().join(format!("pdfcraft-ocr-same-name-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("fixture");
+        app.ocr_draft.output_folder = Some(dir.to_string_lossy().into_owned());
+        let s = pdfcraft_engine::Session::new();
+        let pdf = s.create_from_text("t", "scanned words here").expect("fixture");
+        app.ocr_files(vec![("scan.pdf".into(), pdf.to_vec()), ("other.pdf".into(), pdf.to_vec()), ("Scan.PDF".into(), pdf.to_vec())]);
+        assert!(app.ocr_batch.is_none(), "the batch never starts");
+        let toast = app.toast.clone().map(|t| t.0).unwrap_or_default();
+        assert!(toast.contains("same name") && toast.contains("Scan.PDF"), "{toast}");
+        assert_eq!(std::fs::read_dir(&dir).expect("fixture").count(), 0, "nothing was written");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A remembered output folder is used without asking, is remembered again after the run,
+    /// and its collision pre-flight still stops the batch before the first page is read.
+    #[test]
+    fn a_remembered_output_folder_is_used_and_still_preflights_collisions() {
+        let mut app = PdfCraftApp::new();
+        app.run_inline = true;
+        let dir = std::env::temp_dir().join(format!("pdfcraft-ocr-folder-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("fixture");
+        std::fs::write(dir.join("a.pdf"), b"would be overwritten").expect("fixture");
+        app.ocr_draft.output_folder = Some(dir.to_string_lossy().into_owned());
+        let s = pdfcraft_engine::Session::new();
+        let pdf = s.create_from_text("t", "scanned words here").expect("fixture");
+        app.ocr_files(vec![("a.pdf".into(), pdf.to_vec()), ("b.pdf".into(), pdf.to_vec())]);
+        assert!(app.ocr_batch.is_none(), "the collision stops the batch before anything is read");
+        let toast = app.toast.clone().map(|t| t.0).unwrap_or_default();
+        assert!(toast.contains("already holds files of these names"), "{toast}");
+        assert!(toast.contains("a.pdf"), "the colliding names are in the error: {toast}");
+        assert_eq!(app.ocr_draft.output_folder.as_deref(), Some(dir.to_string_lossy().as_ref()), "the folder stays remembered for the next batch");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A result that arrives after the document changed (here: a page turned while the worker was
+    /// reading; the same applies to a redaction applied meanwhile) is refused with the reason and
+    /// writes nothing, so words read before a redaction cannot come back as invisible text.
+    #[test]
+    fn a_result_that_arrives_after_the_document_changed_is_refused() {
+        let mut app = PdfCraftApp::new();
+        let pdf = pdfcraft_engine::Session::new().create_from_text("t", "Typed text").expect("fixture");
+        app.open_bytes("a.pdf", None, pdf.to_vec()).expect("opens");
+        let id = app.active_ids().expect("a document").1;
+        let guard = app.session.ocr_guard(id).expect("a guard");
+        app.session.apply(id, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).expect("an edit while the worker runs");
+        let after_edit = app.session.get(id).and_then(|d| d.can_undo().map(str::to_owned));
+        let word = pdfcraft_engine::ocr::PlacedWord {
+            text: "123-45-6789".into(),
+            origin: [40.0, 40.0],
+            across: [50.0, 0.0],
+            up: [0.0, 12.0],
+            confidence: Some(95.0),
+            source: "fake".into(),
+        };
+        let page = OcrPage { page: 0, words: vec![word], already_on_page: 0, skipped: None, notes: Vec::new() };
+        let progress = Arc::new(Mutex::new(OcrProgress { total: 1, done: 1, result: Some(Ok(vec![page])), cancel: false }));
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false });
+        app.poll_ocr();
+        assert!(app.ocr_run.is_none(), "the run is over");
+        let toast = app.toast.clone().map(|t| t.0).unwrap_or_default();
+        assert!(toast.contains("changed since recognition started"), "{toast}");
+        assert_eq!(
+            app.session.get(id).and_then(|d| d.can_undo().map(str::to_owned)),
+            after_edit,
+            "nothing was written: the last undoable step is still the edit"
+        );
+    }
+
+    /// A page's notes survive to the result the user sees: the editable output's
+    /// unrenderable-character warning ("N characters had no font … appear as ?") is said in
+    /// the run's summary, not dropped. The result is fabricated, so no models are needed.
+    #[test]
+    fn the_result_summary_names_the_substituted_characters() {
+        let mut app = app_with(scan());
+        let id = app.active_ids().unwrap().1;
+        let word = pdfcraft_engine::ocr::PlacedWord {
+            text: "scanned".into(),
+            origin: [72.0, 700.0],
+            across: [60.0, 0.0],
+            up: [0.0, 12.0],
+            confidence: Some(95.0),
+            source: "ocrs".into(),
+        };
+        let page = pdfcraft_engine::ocr::OcrPage {
+            page: 0,
+            words: vec![word],
+            already_on_page: 0,
+            skipped: None,
+            notes: vec!["3 characters had no font that could show them and appear as ? in the output".into()],
+        };
+        let guard = app.session.ocr_guard(id).unwrap();
+        let progress = Arc::new(Mutex::new(OcrProgress { total: 1, done: 1, result: Some(Ok(vec![page])), cancel: false }));
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false });
+        app.poll_ocr();
+        let toast = app.toast.take().map(|t| t.0).unwrap_or_default();
+        assert!(toast.contains("3 characters had no font"), "{toast}");
+    }
+
+    /// The dialog's "Editable text" output is honored: a run that promised an editable document
+    /// does not quietly write the invisible searchable layer — its result opens in the OCR
+    /// Verify screen, whose Accept produces the editable document. The result is fabricated,
+    /// so no models are needed.
+    #[test]
+    fn an_editable_output_run_opens_the_review_instead_of_applying() {
+        let mut app = app_with(scan());
+        app.run_inline = true;
+        let id = app.active_ids().unwrap().1;
+        let word = pdfcraft_engine::ocr::PlacedWord {
+            text: "scanned".into(),
+            origin: [72.0, 700.0],
+            across: [60.0, 0.0],
+            up: [0.0, 12.0],
+            confidence: Some(95.0),
+            source: "ocrs".into(),
+        };
+        let page = OcrPage { page: 0, words: vec![word], already_on_page: 0, skipped: None, notes: Vec::new() };
+        let guard = app.session.ocr_guard(id).unwrap();
+        let progress = Arc::new(Mutex::new(OcrProgress { total: 1, done: 1, result: Some(Ok(vec![page])), cancel: false }));
+        app.ocr_draft.output_mode = pdfcraft_engine::ocr::OutputMode::EditableText;
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: true });
+        app.poll_ocr();
+        assert!(app.ocr_run.is_none(), "the run is over");
+        assert_eq!(app.session.get(id).unwrap().can_undo(), None, "no invisible layer was written");
+        assert!(app.ocr_verify.open, "the review opens, to accept as an editable document");
+        assert_eq!(app.ocr_verify.phase, crate::workflows::ocr_verify::Phase::ReviewReady);
     }
 }

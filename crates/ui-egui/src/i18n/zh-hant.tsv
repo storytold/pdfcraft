@@ -2528,3 +2528,94 @@ animation effects	Off	關
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	此回覆的選項
 	Export value	匯出值
+# OCR: the Correct recognized text command (the Verify screen's other strings come with the screen).
+# OCR: the Verify screen, the batch options and the engine choice.
+	+ Dictionary	+ 字典
+	; cancelled — {n} files were not run	；已取消——{n} 個檔案未執行
+	; {n} files already had text	；{n} 個檔案已包含文字
+	A 3×3 median filter against scan speckle	3×3 中值濾波，去除掃描雜點
+	A folder is asked for when a multiple-file run starts	多檔案執行開始時會詢問資料夾
+	AVG CONFIDENCE	平均信心度
+	Accept	接受
+	Accept entire page	接受整頁
+	Add a second engine's reading when the first is unsure	當第一個引擎沒有把握時，加入第二個引擎的讀取結果
+	Always read with both engines and merge the words	一律用兩個引擎讀取並合併單詞
+	Auto-rotate	自動旋轉
+	Automatic	自動
+	Binarize	二值化
+	Both engines, combined as the Strategy says	兩個引擎，依所選策略組合
+	CONFIDENCE	信心度
+	Cancelled — {n} words were read on {m} of {t} pages; the rest were not read	已取消——已讀取 {t} 頁中的 {m} 頁共 {n} 個單詞，其餘頁面未讀取
+	Click a word to inspect it; drag a rectangle to re-read part of the page	點擊單詞可檢查；拖出矩形可重新辨識頁面的一部分
+	Confidence weighted	依信心度加權
+	Corrected text (Enter commits)	修正後的文字（按 Enter 提交）
+	Denoise	降噪
+	Deskew	矯正傾斜
+	ENGINE · STRATEGY	引擎 · 策略
+	Editable text	可編輯文字
+	Exit	結束
+	F8: next word to review; Shift+F8 goes back	F8：下一個待校對單詞；Shift+F8 上一個
+	Force OCR (override skip options)	強制 OCR（覆寫跳過選項）
+	HIGH (>= 90%)	高（≥ 90%）
+	In multiple files: a file with any text is its own skipped bucket, and nothing is written for it	用於多檔案：已含文字的檔案單獨計入跳過，不為其寫入任何內容
+	LOW (< 70%)	低（< 70%）
+	LOW-CONFIDENCE WORDS	低信心度單詞
+	MEDIUM (70-89%)	中（70-89%）
+	Mark this page as reviewed (Ctrl+T)	將此頁標記為已校對（Ctrl+T）
+	Next uncertain	下一個可疑詞
+	OCR complete — no text recognized on this page.	OCR 完成——此頁未辨識出文字。
+	OCR results rejected.	已拒絕 OCR 結果。
+	PAGE	頁碼
+	Page verified	整頁已校對
+	Pages with renderable text are left alone and reported as skipped	已含可呈現文字的頁面保持原樣，並報告為已跳過
+	Previous uncertain	上一個可疑詞
+	Primary only	僅主要引擎
+	ROVER vote	ROVER 表決
+	Re-OCR entire page	重新辨識整頁
+	Re-OCR this region	重新辨識此區域
+	Read {n} words on {m} of {t} pages	在 {t} 頁中的 {m} 頁上讀取了 {n} 個單詞
+	Reads pages and files even where the skip options would leave them alone	即使跳過選項會放過這些頁面和檔案，也照樣讀取
+	Recognized text	辨識的文字
+	Recognized text applied ({n} words, one undoable step)	辨識文字已套用（{n} 個單詞，可一步復原）
+	Reject	放棄
+	Reject entire page	放棄整頁
+	Run OCR	執行 OCR
+	Sauvola binarization: ink to black, paper to white	Sauvola 二值化：墨跡變黑，紙面變白
+	Select a word on the page to inspect it	在頁面上選取一個單詞以進行檢查
+	Several files have the same name, so their results would overwrite each other; nothing was written: {list}	多個檔案名稱相同，其結果會互相覆寫；未寫入任何內容：{list}
+	Shift+F8: the previous word to review	Shift+F8：上一個待校對單詞
+	Skip files that already have text	跳過已包含文字的檔案
+	Skip pages that already have text	跳過已包含文字的頁面
+	Source page	來源頁面
+	Straightens skewed text lines before reading	讀取前矯正傾斜的文字行
+	Suggestions	建議
+	That is the source file; choose another destination	這是來源檔案；請選擇其他目的地
+	The built-in engine (pure Rust)	內建引擎（純 Rust）
+	The output folder already holds files of these names; nothing was written: {list}	輸出資料夾中已存在這些名稱的檔案；未寫入任何內容：{list}
+	The page was read again; its words were replaced (undo in the panel)	已重新讀取頁面；其文字已取代（可在面板中復原）
+	The page's words were applied as one undoable step ({n} words)	此頁的單詞已作為一步可復原的修改套用（{n} 個單詞）
+	The page's words were cleared (undo in the panel)	已清除頁面的文字（可在面板中復原）
+	The re-read found no text; the existing words are unchanged	重新讀取未發現文字；現有單詞保持不變
+	The region was read again; its words were replaced (undo in the panel)	已重新讀取區域；其文字已取代（可在面板中復原）
+	The searchable copies are written here under the source names	可搜尋副本以來源檔名寫入此資料夾
+	The selected word is gone; choose another	所選單詞已不存在；請另選一個
+	The tesseract program, run as an external process	tesseract 程式，作為外部處理程序執行
+	Turns pages scanned sideways or upside down upright before reading	讀取前把橫放或倒放的掃描頁轉正
+	Undo the last review change (Ctrl+Z)	復原上一次校對變更（Ctrl+Z）
+	Use the chosen engine's reading alone	只使用所選引擎的讀取結果
+	VERIFIED %	已校對 %
+	Verified	已校對
+	Word	單詞
+	Writes a new document of visible text; the scan is not changed	寫入一份可見文字的新文件；掃描件不變
+	Wrote {name}	已寫入 {name}
+	corrected	已修正
+	removed	已刪除
+	skipped	已跳過
+	unreviewed	未校對
+	verified	已校對
+	{name}: {n} low-confidence word(s) on pages {pages}	{name}：第 {pages} 頁上有 {n} 個低信心度單詞
+	{n} word(s) to review	{n} 個單詞待校對
+	Correct recognized text…	修正辨識文字…
+	the tesseract program was not found (install it, or add it to the PATH)	找不到 tesseract 程式（請安裝，或將其加入 PATH）
+	still checking whether the tesseract program can run; try again in a moment	仍在檢查 tesseract 程式能否執行；請稍後再試
+	the tesseract engine is not available in the web build	網頁版不提供 tesseract 引擎

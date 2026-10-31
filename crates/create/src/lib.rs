@@ -71,6 +71,24 @@ pub fn blank(width: f64, height: f64, pages: usize) -> Result<Document, CreateEr
     Ok(doc)
 }
 
+/// A document whose pages hold ready-made content: one `(width, height, resources, content)`
+/// tuple per page, in page order. Empty content vectors make blank pages. The OCR Verify
+/// screen's editable-text output builds its pages this way.
+pub fn from_contents(pages: &[(f64, f64, Dict, Vec<u8>)]) -> Result<Document, CreateError> {
+    if pages.is_empty() || pages.len() > 10_000 {
+        return Err(CreateError::Invalid("invalid page count".into()));
+    }
+    if pages.iter().any(|(w, h, _, _)| !(w.is_finite() && h.is_finite() && (3.0..=MAX_SIDE).contains(w) && (3.0..=MAX_SIDE).contains(h))) {
+        return Err(CreateError::Invalid("invalid page size".into()));
+    }
+    let mut doc = Document::new_empty();
+    for (w, h, resources, content) in pages {
+        let content = if content.is_empty() { None } else { Some(content.clone()) };
+        add_page(&mut doc, *w, *h, resources.clone(), content)?;
+    }
+    Ok(doc)
+}
+
 // ── images ──────────────────────────────────────────────────────────────────────────────────
 
 /// An image ready to embed: its XObject dictionary, encoded data, optional soft mask, the ICC

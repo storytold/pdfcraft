@@ -254,3 +254,26 @@ navigation-history tool; use the opt-in UI control channel to navigate the displ
 (`#RRGGBB`, default black) for `text` and `date`. The colour is saved in the
 FreeText appearance and survives reopening. Other mark/signature types reject
 `color`; their appearance controls are separate.
+
+## Reviewing OCR headlessly
+
+`ocr_words {doc, retain_review: true}` reads words without editing the document and returns
+`review`, plus pages and word boxes/confidences. Page and word positions are 1-based.
+`region` can restrict recognition to one named page, using displayed-page points. Without
+`retain_review`, word inspection remains stateless.
+
+Apply reviewed text with `ocr_review_apply {doc, review, corrections: [{page: 1, word: 1,
+text: "Corrected"}]}`. Omitted words keep their text; empty text removes a word. Geometry
+comes from the retained recognition, never caller input. The captured document guard rejects
+stale/foreign results. Successful application consumes the handle and is one undoable step.
+Use `output_mode: "editable", out: "reviewed.pdf"` to write a separate editable document,
+or `discard: true` to release the result without applying it. Failed validation preserves the
+review for correction or discard. A new retained recognition replaces that document's prior
+handle; closing the document releases it. At most eight documents may retain reviews, with
+65,536-word/4-MiB input bounds and a 65,536-page cap.
+
+`ocr_dictionary {path: "ocr-dictionary-en.txt", add: ["Quartz"], remove: ["old"]}` atomically
+updates the same one-word-per-UTF-8-line format OCR Verify uses. Omit add/remove to read it.
+The explicit path honors `--root`, including symlink confinement; choose the appropriate
+per-language file used by the UI. Entries are case-insensitive and duplicate-free. Invalid
+or oversized inputs fail before writing (65,536 words, 4 MiB, at most 1,024 bytes per word).

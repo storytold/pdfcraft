@@ -2487,3 +2487,94 @@ animation effects	Off	ఆఫ్
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	ఈ ప్రత్యుత్తరం ఎంపికలు
 	Export value	ఎగుమతి విలువ
+# OCR: the Correct recognized text command (the Verify screen's other strings come with the screen).
+# OCR: the Verify screen, the batch options and the engine choice.
+	+ Dictionary	+ నిఘంటువు
+	; cancelled — {n} files were not run	; రద్దు చేయబడింది — {n} ఫైళ్లు ప్రాసెస్ కాలేదు
+	; {n} files already had text	; {n} ఫైళ్లలో ఇప్పటికే టెక్స్ట్ ఉంది
+	A 3×3 median filter against scan speckle	స్కాన్ మచ్చలను తొలగించే 3×3 మీడియన్ ఫిల్టర్
+	A folder is asked for when a multiple-file run starts	అనేక ఫైళ్ల ప్రాసెసింగ్ మొదలైనప్పుడు ఫోల్డర్ అడుగుతుంది
+	AVG CONFIDENCE	సగటు విశ్వసనీయత
+	Accept	అంగీకరించు
+	Accept entire page	మొత్తం పేజీని అంగీకరించు
+	Add a second engine's reading when the first is unsure	మొదటి ఇంజిన్‌కు ఖచ్చితత లేనప్పుడు రెండవ ఇంజిన్ రీడింగ్‌ను జోడిస్తుంది
+	Always read with both engines and merge the words	ఎల్లప్పుడూ రెండు ఇంజిన్లతో చదివి పదాలను కలుపుతుంది
+	Auto-rotate	ఆటో-తిప్పు
+	Automatic	ఆటోమేటిక్
+	Binarize	బైనరీకరించు
+	Both engines, combined as the Strategy says	రెండు ఇంజిన్లు, ఎంచుకున్న వ్యూహం ప్రకారం కలిపి
+	CONFIDENCE	విశ్వసనీయత
+	Cancelled — {n} words were read on {m} of {t} pages; the rest were not read	రద్దు చేయబడింది — {t} పేజీలలో {m} పేజీలలో {n} పదాలు చదవబడ్డాయి; మిగతావి చదవబడలేదు
+	Click a word to inspect it; drag a rectangle to re-read part of the page	పదాన్ని పరిశీలించడానికి దానిపై క్లిక్ చేయండి; పేజీలో కొంత భాగాన్ని మళ్లీ చదవడానికి దీర్ఘచతురస్రం గీయండి
+	Confidence weighted	విశ్వసనీయత ఆధారిత
+	Corrected text (Enter commits)	సరిదిద్దిన టెక్స్ట్ (Enter నిర్ధారిస్తుంది)
+	Denoise	నాయిస్ తొలగించు
+	Deskew	వంపు సరిచేయి
+	ENGINE · STRATEGY	ఇంజిన్ · వ్యూహం
+	Editable text	సవరించదగిన టెక్స్ట్
+	Exit	నిష్క్రమించు
+	F8: next word to review; Shift+F8 goes back	F8: సమీక్షించవలసిన తదుపరి పదం; Shift+F8 వెనక్కి వెళ్తుంది
+	Force OCR (override skip options)	OCR‌ను బలవంతంగా అమలు చేయి (దాటవేత ఎంపికలను విస్మరించు)
+	HIGH (>= 90%)	అధికం (>= 90%)
+	In multiple files: a file with any text is its own skipped bucket, and nothing is written for it	అనేక ఫైళ్లలో: టెక్స్ట్ ఉన్న ఫైల్ వేరుగా దాటవేసినదిగా లెక్కించబడుతుంది, దానికి ఏమీ రాయబడదు
+	LOW (< 70%)	తక్కువ (< 70%)
+	LOW-CONFIDENCE WORDS	తక్కువ విశ్వసనీయత గల పదాలు
+	MEDIUM (70-89%)	మధ్యస్థం (70-89%)
+	Mark this page as reviewed (Ctrl+T)	ఈ పేజీని సమీక్షించినట్లు గుర్తించు (Ctrl+T)
+	Next uncertain	తదుపరి అనిశ్చిత
+	OCR complete — no text recognized on this page.	OCR పూర్తయింది — ఈ పేజీలో టెక్స్ట్ గుర్తించబడలేదు.
+	OCR results rejected.	OCR ఫలితాలు తిరస్కరించబడ్డాయి.
+	PAGE	పేజీ
+	Page verified	పేజీ ధృవీకరించబడింది
+	Pages with renderable text are left alone and reported as skipped	చూపదగిన టెక్స్ట్ ఉన్న పేజీలు మార్చబడవు, దాటవేసినవిగా నివేదించబడతాయి
+	Previous uncertain	మునుపటి అనిశ్చిత
+	Primary only	ప్రధానమైనది మాత్రమే
+	ROVER vote	ROVER ఓటింగ్
+	Re-OCR entire page	మొత్తం పేజీకి మళ్లీ OCR
+	Re-OCR this region	ఈ ప్రాంతానికి మళ్లీ OCR
+	Read {n} words on {m} of {t} pages	{t} పేజీలలో {m} పేజీలలో {n} పదాలు చదవబడ్డాయి
+	Reads pages and files even where the skip options would leave them alone	దాటవేత ఎంపికలు వదిలేసే చోట కూడా పేజీలను, ఫైళ్లను చదువుతుంది
+	Recognized text	గుర్తించిన టెక్స్ట్
+	Recognized text applied ({n} words, one undoable step)	గుర్తించిన టెక్స్ట్ వర్తింపజేయబడింది ({n} పదాలు, రద్దు చేయగల ఒకే దశ)
+	Reject	తిరస్కరించు
+	Reject entire page	మొత్తం పేజీని తిరస్కరించు
+	Run OCR	OCR అమలు చేయి
+	Sauvola binarization: ink to black, paper to white	Sauvola బైనరీకరణ: సిరా నలుపుగా, కాగితం తెలుపుగా
+	Select a word on the page to inspect it	పరిశీలించడానికి పేజీలో ఒక పదాన్ని ఎంచుకోండి
+	Several files have the same name, so their results would overwrite each other; nothing was written: {list}	అనేక ఫైళ్లకు ఒకే పేరు ఉంది, కాబట్టి వాటి ఫలితాలు ఒకదానిపై ఒకటి రాయబడతాయి; ఏమీ రాయబడలేదు: {list}
+	Shift+F8: the previous word to review	Shift+F8: సమీక్షించవలసిన మునుపటి పదం
+	Skip files that already have text	ఇప్పటికే టెక్స్ట్ ఉన్న ఫైళ్లను దాటవేయి
+	Skip pages that already have text	ఇప్పటికే టెక్స్ట్ ఉన్న పేజీలను దాటవేయి
+	Source page	మూల పేజీ
+	Straightens skewed text lines before reading	చదవడానికి ముందు వంగిన టెక్స్ట్ పంక్తులను సరిచేస్తుంది
+	Suggestions	సూచనలు
+	That is the source file; choose another destination	ఇది మూల ఫైల్; మరో గమ్యాన్ని ఎంచుకోండి
+	The built-in engine (pure Rust)	అంతర్నిర్మిత ఇంజిన్ (స్వచ్ఛమైన Rust)
+	The output folder already holds files of these names; nothing was written: {list}	అవుట్‌పుట్ ఫోల్డర్‌లో ఈ పేర్లతో ఫైళ్లు ఇప్పటికే ఉన్నాయి; ఏమీ రాయబడలేదు: {list}
+	The page was read again; its words were replaced (undo in the panel)	పేజీ మళ్లీ చదవబడింది; దాని పదాలు భర్తీ చేయబడ్డాయి (ప్యానెల్‌లో రద్దు చేయవచ్చు)
+	The page's words were applied as one undoable step ({n} words)	పేజీ పదాలు రద్దు చేయగల ఒకే దశగా వర్తింపజేయబడ్డాయి ({n} పదాలు)
+	The page's words were cleared (undo in the panel)	పేజీ పదాలు తొలగించబడ్డాయి (ప్యానెల్‌లో రద్దు చేయవచ్చు)
+	The re-read found no text; the existing words are unchanged	మళ్లీ చదవడంలో టెక్స్ట్ కనబడలేదు; ఉన్న పదాలు మారలేదు
+	The region was read again; its words were replaced (undo in the panel)	ప్రాంతం మళ్లీ చదవబడింది; దాని పదాలు భర్తీ చేయబడ్డాయి (ప్యానెల్‌లో రద్దు చేయవచ్చు)
+	The searchable copies are written here under the source names	శోధించదగిన కాపీలు మూల ఫైళ్ల పేర్లతో ఇక్కడ రాయబడతాయి
+	The selected word is gone; choose another	ఎంచుకున్న పదం ఇక లేదు; మరొకటి ఎంచుకోండి
+	The tesseract program, run as an external process	బాహ్య ప్రాసెస్‌గా అమలయ్యే tesseract ప్రోగ్రామ్
+	Turns pages scanned sideways or upside down upright before reading	పక్కకు లేదా తలకిందులుగా స్కాన్ చేసిన పేజీలను చదవడానికి ముందు నిటారుగా చేస్తుంది
+	Undo the last review change (Ctrl+Z)	చివరి సమీక్ష మార్పును రద్దు చేయి (Ctrl+Z)
+	Use the chosen engine's reading alone	ఎంచుకున్న ఇంజిన్ రీడింగ్‌ను మాత్రమే ఉపయోగించు
+	VERIFIED %	ధృవీకరించినవి %
+	Verified	ధృవీకరించబడింది
+	Word	పదం
+	Writes a new document of visible text; the scan is not changed	కనిపించే టెక్స్ట్‌తో కొత్త డాక్యుమెంట్‌ను రాస్తుంది; స్కాన్ మారదు
+	Wrote {name}	{name} రాయబడింది
+	corrected	సరిదిద్దబడింది
+	removed	తొలగించబడింది
+	skipped	దాటవేయబడింది
+	unreviewed	సమీక్షించలేదు
+	verified	ధృవీకరించబడింది
+	{name}: {n} low-confidence word(s) on pages {pages}	{name}: {pages} పేజీలలో తక్కువ విశ్వసనీయత గల {n} పదాలు
+	{n} word(s) to review	సమీక్షించవలసిన పదాలు: {n}
+	Correct recognized text…	గుర్తించిన టెక్స్ట్‌ను సరిదిద్దు…
+	the tesseract program was not found (install it, or add it to the PATH)	tesseract ప్రోగ్రామ్ కనబడలేదు (దాన్ని ఇన్‌స్టాల్ చేయండి లేదా PATH‌కు జోడించండి)
+	still checking whether the tesseract program can run; try again in a moment	tesseract ప్రోగ్రామ్ అమలవుతుందో లేదో ఇంకా తనిఖీ చేస్తోంది; కొద్దిసేపటి తర్వాత మళ్లీ ప్రయత్నించండి
+	the tesseract engine is not available in the web build	వెబ్ వెర్షన్‌లో tesseract ఇంజిన్ అందుబాటులో లేదు

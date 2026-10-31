@@ -2839,3 +2839,94 @@ theme	Appearance	Išvaizda
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Šio atsakymo parinktys
 	Export value	Eksporto reikšmė
+# OCR: the Correct recognized text command (the Verify screen's other strings come with the screen).
+# OCR: the Verify screen, the batch options and the engine choice.
+	+ Dictionary	+ Žodynas
+	; cancelled — {n} files were not run	; atšaukta — nevykdytų failų: {n}
+	; {n} files already had text	; failų, kuriuose jau buvo teksto: {n}
+	A 3×3 median filter against scan speckle	3×3 medianos filtras nuo nuskaitymo triukšmo
+	A folder is asked for when a multiple-file run starts	Aplanko bus paprašyta, kai prasidės kelių failų apdorojimas
+	AVG CONFIDENCE	VID. PATIKIMUMAS
+	Accept	Priimti
+	Accept entire page	Priimti visą puslapį
+	Add a second engine's reading when the first is unsure	Pridėti antrojo variklio rezultatą, kai pirmasis neužtikrintas
+	Always read with both engines and merge the words	Visada skaityti abiem varikliais ir sujungti žodžius
+	Auto-rotate	Automatiškai pasukti
+	Automatic	Automatinis
+	Binarize	Binarizuoti
+	Both engines, combined as the Strategy says	Abu varikliai, sujungiami pagal pasirinktą strategiją
+	CONFIDENCE	PATIKIMUMAS
+	Cancelled — {n} words were read on {m} of {t} pages; the rest were not read	Atšaukta — perskaityta žodžių: {n}, puslapių: {m} iš {t}; likusieji neskaityti
+	Click a word to inspect it; drag a rectangle to re-read part of the page	Spustelėkite žodį, kad jį apžiūrėtumėte; vilkite stačiakampį, kad iš naujo perskaitytumėte puslapio dalį
+	Confidence weighted	Svertinis pagal patikimumą
+	Corrected text (Enter commits)	Pataisytas tekstas (Enter patvirtina)
+	Denoise	Šalinti triukšmą
+	Deskew	Ištiesinti
+	ENGINE · STRATEGY	VARIKLIS · STRATEGIJA
+	Editable text	Redaguojamas tekstas
+	Exit	Išeiti
+	F8: next word to review; Shift+F8 goes back	F8: kitas peržiūrėtinas žodis; Shift+F8 grįžta atgal
+	Force OCR (override skip options)	Priverstinis OCR (nepaisyti praleidimo parinkčių)
+	HIGH (>= 90%)	DIDELIS (>= 90%)
+	In multiple files: a file with any text is its own skipped bucket, and nothing is written for it	Keliuose failuose: failas su bet kokiu tekstu patenka į atskirą praleistų grupę ir jam nieko neįrašoma
+	LOW (< 70%)	MAŽAS (< 70%)
+	LOW-CONFIDENCE WORDS	MAŽO PATIKIMUMO ŽODŽIAI
+	MEDIUM (70-89%)	VIDUTINIS (70-89%)
+	Mark this page as reviewed (Ctrl+T)	Pažymėti šį puslapį kaip peržiūrėtą (Ctrl+T)
+	Next uncertain	Kitas abejotinas
+	OCR complete — no text recognized on this page.	OCR baigtas — šiame puslapyje tekstas neatpažintas.
+	OCR results rejected.	OCR rezultatai atmesti.
+	PAGE	PUSLAPIS
+	Page verified	Puslapis patikrintas
+	Pages with renderable text are left alone and reported as skipped	Puslapiai su atvaizduojamu tekstu paliekami nepakeisti ir nurodomi kaip praleisti
+	Previous uncertain	Ankstesnis abejotinas
+	Primary only	Tik pagrindinis
+	ROVER vote	ROVER balsavimas
+	Re-OCR entire page	Iš naujo atpažinti visą puslapį
+	Re-OCR this region	Iš naujo atpažinti šią sritį
+	Read {n} words on {m} of {t} pages	Perskaityta žodžių: {n}, puslapių: {m} iš {t}
+	Reads pages and files even where the skip options would leave them alone	Skaito puslapius ir failus net ten, kur praleidimo parinktys jų neliestų
+	Recognized text	Atpažintas tekstas
+	Recognized text applied ({n} words, one undoable step)	Atpažintas tekstas pritaikytas (žodžių: {n}, vienas anuliuojamas veiksmas)
+	Reject	Atmesti
+	Reject entire page	Atmesti visą puslapį
+	Run OCR	Vykdyti OCR
+	Sauvola binarization: ink to black, paper to white	Sauvola binarizacija: rašalas tampa juodas, popierius – baltas
+	Select a word on the page to inspect it	Pasirinkite puslapyje žodį, kad jį apžiūrėtumėte
+	Several files have the same name, so their results would overwrite each other; nothing was written: {list}	Keli failai turi tą patį pavadinimą, todėl jų rezultatai perrašytų vienas kitą; nieko neįrašyta: {list}
+	Shift+F8: the previous word to review	Shift+F8: ankstesnis peržiūrėtinas žodis
+	Skip files that already have text	Praleisti failus, kuriuose jau yra teksto
+	Skip pages that already have text	Praleisti puslapius, kuriuose jau yra teksto
+	Source page	Šaltinio puslapis
+	Straightens skewed text lines before reading	Prieš skaitant ištiesina pasvirusias teksto eilutes
+	Suggestions	Pasiūlymai
+	That is the source file; choose another destination	Tai šaltinio failas; pasirinkite kitą paskirties vietą
+	The built-in engine (pure Rust)	Integruotas variklis (gryna Rust)
+	The output folder already holds files of these names; nothing was written: {list}	Išvesties aplanke jau yra tokių pavadinimų failų; nieko neįrašyta: {list}
+	The page was read again; its words were replaced (undo in the panel)	Puslapis perskaitytas iš naujo; jo žodžiai pakeisti (anuliuoti galima skydelyje)
+	The page's words were applied as one undoable step ({n} words)	Puslapio žodžiai pritaikyti vienu anuliuojamu veiksmu (žodžių: {n})
+	The page's words were cleared (undo in the panel)	Puslapio žodžiai išvalyti (anuliuoti galima skydelyje)
+	The re-read found no text; the existing words are unchanged	Pakartotinis skaitymas teksto nerado; esami žodžiai nepakeisti
+	The region was read again; its words were replaced (undo in the panel)	Sritis perskaityta iš naujo; jos žodžiai pakeisti (anuliuoti galima skydelyje)
+	The searchable copies are written here under the source names	Ieškomos kopijos įrašomos čia, šaltinių pavadinimais
+	The selected word is gone; choose another	Pasirinkto žodžio nebėra; pasirinkite kitą
+	The tesseract program, run as an external process	Programa „Tesseract“, vykdoma kaip išorinis procesas
+	Turns pages scanned sideways or upside down upright before reading	Prieš skaitant pasuka šonu ar aukštyn kojomis nuskaitytus puslapius stačiai
+	Undo the last review change (Ctrl+Z)	Anuliuoti paskutinį peržiūros pakeitimą (Ctrl+Z)
+	Use the chosen engine's reading alone	Naudoti tik pasirinkto variklio rezultatą
+	VERIFIED %	PATIKRINTA %
+	Verified	Patikrinta
+	Word	Žodis
+	Writes a new document of visible text; the scan is not changed	Įrašo naują dokumentą su matomu tekstu; nuskaitytas vaizdas nekeičiamas
+	Wrote {name}	Įrašyta: {name}
+	corrected	pataisyta
+	removed	pašalinta
+	skipped	praleista
+	unreviewed	neperžiūrėta
+	verified	patikrinta
+	{name}: {n} low-confidence word(s) on pages {pages}	{name}: mažo patikimumo žodžių: {n}, puslapiuose {pages}
+	{n} word(s) to review	Peržiūrėtinų žodžių: {n}
+	Correct recognized text…	Taisyti atpažintą tekstą…
+	the tesseract program was not found (install it, or add it to the PATH)	programa „Tesseract“ nerasta (įdiekite ją arba pridėkite prie PATH)
+	still checking whether the tesseract program can run; try again in a moment	tikrinama, ar programa „Tesseract“ gali veikti; pabandykite po akimirkos
+	the tesseract engine is not available in the web build	variklis „Tesseract“ žiniatinklio versijoje nepasiekiamas

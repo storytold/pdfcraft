@@ -2600,3 +2600,94 @@ animation effects	Off	Вимкнено
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Параметри цієї відповіді
 	Export value	Значення експорту
+# OCR: the Correct recognized text command (the Verify screen's other strings come with the screen).
+# OCR: the Verify screen, the batch options and the engine choice.
+	+ Dictionary	+ Словник
+	; cancelled — {n} files were not run	; скасовано — {n} файлів не оброблено
+	; {n} files already had text	; у {n} файлах уже був текст
+	A 3×3 median filter against scan speckle	Медіанний фільтр 3×3 проти плям скану
+	A folder is asked for when a multiple-file run starts	Теку запитують під час запуску обробки кількох файлів
+	AVG CONFIDENCE	СЕРЕДНЯ ДОСТОВІРНІСТЬ
+	Accept	Прийняти
+	Accept entire page	Прийняти всю сторінку
+	Add a second engine's reading when the first is unsure	Додає розпізнавання другого рушія, коли перший не впевнений
+	Always read with both engines and merge the words	Завжди розпізнає обома рушіями й об'єднує слова
+	Auto-rotate	Автоповорот
+	Automatic	Автоматично
+	Binarize	Бінаризація
+	Both engines, combined as the Strategy says	Обидва рушії, поєднані за вибраною стратегією
+	CONFIDENCE	ДОСТОВІРНІСТЬ
+	Cancelled — {n} words were read on {m} of {t} pages; the rest were not read	Скасовано — прочитано {n} слів на {m} з {t} сторінок; решту не прочитано
+	Click a word to inspect it; drag a rectangle to re-read part of the page	Клацніть слово, щоб перевірити його; виділіть прямокутник, щоб заново розпізнати частину сторінки
+	Confidence weighted	З урахуванням достовірності
+	Corrected text (Enter commits)	Виправлений текст (Enter підтверджує)
+	Denoise	Зменшення шуму
+	Deskew	Вирівнювання нахилу
+	ENGINE · STRATEGY	РУШІЙ · СТРАТЕГІЯ
+	Editable text	Редагований текст
+	Exit	Вийти
+	F8: next word to review; Shift+F8 goes back	F8: наступне слово для перевірки; Shift+F8 — назад
+	Force OCR (override skip options)	Примусове OCR (ігнорувати параметри пропуску)
+	HIGH (>= 90%)	ВИСОКА (>= 90%)
+	In multiple files: a file with any text is its own skipped bucket, and nothing is written for it	Для кількох файлів: файл із текстом враховується окремо як пропущений, і для нього нічого не записується
+	LOW (< 70%)	НИЗЬКА (< 70%)
+	LOW-CONFIDENCE WORDS	СЛОВА З НИЗЬКОЮ ДОСТОВІРНІСТЮ
+	MEDIUM (70-89%)	СЕРЕДНЯ (70-89%)
+	Mark this page as reviewed (Ctrl+T)	Позначити цю сторінку як перевірену (Ctrl+T)
+	Next uncertain	Наступне сумнівне
+	OCR complete — no text recognized on this page.	OCR завершено — на цій сторінці текст не розпізнано.
+	OCR results rejected.	Результати OCR відхилено.
+	PAGE	СТОРІНКА
+	Page verified	Сторінку перевірено
+	Pages with renderable text are left alone and reported as skipped	Сторінки з текстом, що відображається, не змінюються й позначаються як пропущені
+	Previous uncertain	Попереднє сумнівне
+	Primary only	Лише основний
+	ROVER vote	Голосування ROVER
+	Re-OCR entire page	Повторити OCR для всієї сторінки
+	Re-OCR this region	Повторити OCR для цієї області
+	Read {n} words on {m} of {t} pages	Прочитано {n} слів на {m} з {t} сторінок
+	Reads pages and files even where the skip options would leave them alone	Розпізнає сторінки й файли, навіть якщо параметри пропуску їх би пропустили
+	Recognized text	Розпізнаний текст
+	Recognized text applied ({n} words, one undoable step)	Розпізнаний текст застосовано ({n} слів, одна дія, яку можна скасувати)
+	Reject	Відхилити
+	Reject entire page	Відхилити всю сторінку
+	Run OCR	Запустити OCR
+	Sauvola binarization: ink to black, paper to white	Бінаризація Саувола: чорнило в чорний, папір у білий
+	Select a word on the page to inspect it	Виберіть слово на сторінці, щоб перевірити його
+	Several files have the same name, so their results would overwrite each other; nothing was written: {list}	Кілька файлів мають однакову назву, тож їхні результати перезаписали б одне одного; нічого не записано: {list}
+	Shift+F8: the previous word to review	Shift+F8: попереднє слово для перевірки
+	Skip files that already have text	Пропускати файли, що вже містять текст
+	Skip pages that already have text	Пропускати сторінки, що вже містять текст
+	Source page	Вихідна сторінка
+	Straightens skewed text lines before reading	Вирівнює нахилені рядки тексту перед розпізнаванням
+	Suggestions	Пропозиції
+	That is the source file; choose another destination	Це вихідний файл; виберіть інше місце
+	The built-in engine (pure Rust)	Вбудований рушій (чистий Rust)
+	The output folder already holds files of these names; nothing was written: {list}	У теці виводу вже є файли з такими назвами; нічого не записано: {list}
+	The page was read again; its words were replaced (undo in the panel)	Сторінку розпізнано заново; її слова замінено (скасування на панелі)
+	The page's words were applied as one undoable step ({n} words)	Слова сторінки застосовано однією дією, яку можна скасувати ({n} слів)
+	The page's words were cleared (undo in the panel)	Слова сторінки видалено (скасування на панелі)
+	The re-read found no text; the existing words are unchanged	Повторне розпізнавання не знайшло тексту; наявні слова не змінено
+	The region was read again; its words were replaced (undo in the panel)	Область розпізнано заново; її слова замінено (скасування на панелі)
+	The searchable copies are written here under the source names	Копії з пошуком записуються сюди під назвами вихідних файлів
+	The selected word is gone; choose another	Вибраного слова більше немає; виберіть інше
+	The tesseract program, run as an external process	Програма tesseract, що запускається як зовнішній процес
+	Turns pages scanned sideways or upside down upright before reading	Повертає сторінки, відскановані боком або догори дриґом, перед розпізнаванням
+	Undo the last review change (Ctrl+Z)	Скасувати останню зміну перевірки (Ctrl+Z)
+	Use the chosen engine's reading alone	Використовувати лише розпізнавання вибраного рушія
+	VERIFIED %	ПЕРЕВІРЕНО %
+	Verified	Перевірено
+	Word	Слово
+	Writes a new document of visible text; the scan is not changed	Створює новий документ із видимим текстом; скан не змінюється
+	Wrote {name}	Записано: {name}
+	corrected	виправлено
+	removed	видалено
+	skipped	пропущено
+	unreviewed	не перевірено
+	verified	перевірено
+	{name}: {n} low-confidence word(s) on pages {pages}	{name}: слів із низькою достовірністю — {n}, сторінки {pages}
+	{n} word(s) to review	Слів для перевірки: {n}
+	Correct recognized text…	Виправити розпізнаний текст…
+	the tesseract program was not found (install it, or add it to the PATH)	програму tesseract не знайдено (установіть її або додайте до PATH)
+	still checking whether the tesseract program can run; try again in a moment	триває перевірка, чи може запуститися програма tesseract; спробуйте ще раз за мить
+	the tesseract engine is not available in the web build	рушій tesseract недоступний у веб-версії

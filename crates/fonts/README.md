@@ -59,7 +59,12 @@ set). Without that variable `CRAFT_FONTS` is empty and everything below copes:
   and shaped Thai Add Text content. Harfrust positions stacked vowel/tone marks and decomposes
   Sara Am; cluster ToUnicode entries preserve the original text. The shared Type 3 writer
   embeds outlines, so reopening does not depend on installed fonts.
+- `craft_glyph(face, ch)` and `face_has(bytes, ch)`: bounded outlines and glyph coverage for any bundled face.
 - `SHIPPORI_MINCHO`: Shippori Mincho's bytes, or `None`.
+- `TextPlan::for_words`: how the OCR output writes text beyond WinAnsi — per word the first
+  face (document face first) whose glyphs cover it, planned once per page into Type 3 fonts
+  (codes, advances, `?` stand-ins) that `pdfcraft-edit` registers and the `pdfcraft-ocr` layers
+  draw with; characters no face has are counted (`missing`) so the output reports them.
 
 Generated Japanese Type 3 fonts record the fallback face's family and style in an indirect
 `FontDescriptor`. `pdf::Metrics::base_font` uses its `FontName` when the Type 3 dictionary has

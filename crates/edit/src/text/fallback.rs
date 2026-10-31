@@ -493,6 +493,92 @@ pub(super) fn add_type3_font(doc: &mut Document, fonts_res: &mut Dict, face: &Cr
     name
 }
 
+/// A glyph's CharProc body at 1000 units per em, with a six-operand `d1` and its actual ink box.
+pub(crate) fn glyph_path(glyph: &pdfcraft_fonts::GlyphOutline) -> Vec<u8> {
+    let scale = 1000.0;
+    let b = if glyph.contours.is_empty() { [0.0; 4] } else { glyph.bbox };
+    let mut out = format!(
+        "{} 0 {} {} {} {} d1\n",
+        pdf_num(glyph.width * scale),
+        pdf_num((b[0] * scale).floor()),
+        pdf_num((b[1] * scale).floor()),
+        pdf_num((b[2] * scale).ceil()),
+        pdf_num((b[3] * scale).ceil())
+    )
+    .into_bytes();
+    for contour in &glyph.contours {
+        let Some(first) = contour.first() else { continue };
+        out.extend_from_slice(format!("{} {} m\n", pdf_num(first[0] * scale), pdf_num(first[1] * scale)).as_bytes());
+        for p in contour.iter().skip(1) {
+            out.extend_from_slice(format!("{} {} l\n", pdf_num(p[0] * scale), pdf_num(p[1] * scale)).as_bytes());
+        }
+        out.extend_from_slice(b"h\n");
+    }
+    out.extend_from_slice(b"f\n");
+    out
+}
+
+/// A resource name free in `fonts_res`: `base`, then `base1`, `base2`, … (a page that was
+/// OCR'd twice keeps both layers' fonts distinct).
+pub(crate) fn unique_font_name(fonts_res: &Dict, base: &str) -> String {
+    let mut name = String::from(base);
+    let mut suffix = 0usize;
+    while fonts_res.contains(name.as_bytes()) {
+        suffix = suffix.saturating_add(1);
+        name = format!("{base}{suffix}");
+    }
+    name
+}
+
+/// The Type3 font dictionary for `(character, CharProc body, advance in em)` glyphs, codes from
+/// 1: one CharProc per code, `/Differences` glyph names, real `/Widths`, and a `/ToUnicode` CMap
+/// so the text extracts back (this is what makes the output Unicode-correct, not just visible).
+pub(crate) fn type3_font_dict(doc: &mut Document, glyphs: &[(char, Vec<u8>, f64)]) -> Result<Dict, EditError> {
+    let mut charprocs = Dict::new();
+    let mut differences = vec![Object::Int(1)];
+    let mut widths = Vec::with_capacity(glyphs.len());
+    let mut cmap = String::from(
+        "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapType 2 def\n1 begincodespacerange\n<01> <FF>\nendcodespacerange\n",
+    );
+    cmap.push_str(&format!("{} beginbfchar\n", glyphs.len()));
+    let mut codes = Vec::with_capacity(glyphs.len());
+    for (i, (ch, path, width)) in glyphs.iter().enumerate() {
+        let code = u8::try_from(i + 1).map_err(|_| EditError::Invalid("too many unique characters for one font".into()))?;
+        let glyph_name = format!("g{code:02X}");
+        let mut pd = Dict::new();
+        pd.set(b"Length".to_vec(), path.len() as i64);
+        let proc_ref = doc.add(Object::Stream(Stream::from_raw(pd, path.clone())));
+        charprocs.set(glyph_name.as_bytes().to_vec(), Object::Ref(proc_ref));
+        differences.push(Object::name(&glyph_name));
+        widths.push(Object::Real((width * 1000.0).round()));
+        cmap.push_str(&format!("<{code:02X}> <{}>\n", unicode_hex(*ch)));
+        codes.push((*ch, code, *width));
+    }
+    cmap.push_str("endbfchar\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
+    let mut cmap_dict = Dict::new();
+    cmap_dict.set(b"Length".to_vec(), cmap.len() as i64);
+    let cmap_ref = doc.add(Object::Stream(Stream::from_raw(cmap_dict, cmap.into_bytes())));
+    let mut encoding = Dict::new();
+    encoding.set(b"Type".to_vec(), Object::name("Encoding"));
+    encoding.set(b"Differences".to_vec(), Object::Array(differences));
+    let mut font = Dict::new();
+    font.set(b"Type".to_vec(), Object::name("Font"));
+    font.set(b"Subtype".to_vec(), Object::name("Type3"));
+    font.set(b"Name".to_vec(), Object::name("PCFallback"));
+    font.set(b"FontBBox".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(-300), Object::Int(1000), Object::Int(1000)]));
+    font.set(
+        b"FontMatrix".to_vec(),
+        Object::Array(vec![Object::Real(0.001), Object::Int(0), Object::Int(0), Object::Real(0.001), Object::Int(0), Object::Int(0)]),
+    );
+    font.set(b"FirstChar".to_vec(), Object::Int(1));
+    font.set(b"LastChar".to_vec(), Object::Int(codes.len() as i64));
+    font.set(b"Widths".to_vec(), Object::Array(widths));
+    font.set(b"Encoding".to_vec(), Object::Dict(encoding));
+    font.set(b"CharProcs".to_vec(), Object::Dict(charprocs));
+    font.set(b"ToUnicode".to_vec(), Object::Ref(cmap_ref));
+    Ok(font)
+}
+
 /// The runs that show `text` in the fallback: consecutive characters in one font form one run, so
 /// a font is switched only where the text moves to another font. `None` if a character has no code.
 pub(super) fn type3_encode(fallback: &Type3Fallback, text: &str) -> Option<Vec<(String, Vec<u8>)>> {

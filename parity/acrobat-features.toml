@@ -6568,7 +6568,7 @@ milestone = "M10"
 status = "shipped"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize", "ocr_status"]
-evidence = ["crates/ocr/src/lib.rs::model_discovery_prefers_the_complete_onnx_pair", "crates/ocr/src/lib.rs::model_discovery_falls_back_to_legacy_when_the_onnx_pair_is_incomplete", "crates/ocr/src/lib.rs::model_discovery_refuses_mixed_format_pairs", "crates/ocr/src/lib.rs::model_discovery_keeps_legacy_only_installations", "crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable", "crates/automation/tests/it/automation.rs::ocr_tools_make_a_scan_searchable", "crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text"]
+evidence = ["crates/ocr/src/ocrs.rs::model_discovery_prefers_the_complete_onnx_pair", "crates/ocr/src/ocrs.rs::model_discovery_falls_back_to_legacy_when_the_onnx_pair_is_incomplete", "crates/ocr/src/ocrs.rs::model_discovery_refuses_mixed_format_pairs", "crates/ocr/src/ocrs.rs::model_discovery_keeps_legacy_only_installations", "crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable", "crates/automation/tests/it/automation.rs::ocr_tools_make_a_scan_searchable", "crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text"]
 notes = "ocrs engine (MIT/Apache) with CC-BY-SA ONNX models fetched and SHA-256 checked by `cargo xtask models`; within each search directory, a complete ONNX pair takes precedence over a complete legacy RTEN pair, incomplete and mixed-format pairs are not combined, and directory precedence is unchanged; the desktop release packages ship them (#103; packaging/env.sh stage_models), the web build does not yet; runs on a worker thread with progress; one undoable step; pages with text are skipped unless asked (ocr.skip-renderable-text)."
 
 [[feature]]
@@ -6593,7 +6593,7 @@ status = "shipped"
 commands = ["ocr.recognize_batch"]
 tools = ["ocr_recognize_files"]
 evidence = ["crates/automation/tests/it/automation.rs::ocr_recognize_files_writes_searchable_copies", "crates/ui-egui/tests/it/ocr.rs::recognize_text_in_multiple_files_writes_searchable_copies"]
-notes = "Pick PDFs, then an output folder; copies are saved incrementally under the same names, in the background with progress."
+notes = "Pick PDFs, then an output folder (the last folder is remembered and reused; Clear asks again); copies are saved incrementally under the same names, in the background with progress. Output names are pre-flighted (a collision aborts before the first page is read), files that already have text are skipped whole only when that option is on (skip_text_files, off by default; Force OCR overrides), and the summary counts recognized words, the skipped bucket, per-file failures, low-confidence notes and what a cancel left unrun."
 
 [[feature]]
 id = "ocr.ocr-languages"
@@ -6604,8 +6604,8 @@ milestone = "M10"
 status = "partial"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize"]
-evidence = ["crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text"]
-notes = "Language choice exists, but the models read only the Latin alphabet without accents (English)."
+evidence = ["crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text", "crates/ocr/src/tesseract.rs::language_table_maps_and_falls_back"]
+notes = "The choice feeds both engines: ocrs reads only unaccented Latin (its model table holds English); tesseract maps 12 allow-listed codes (the language enum comes from the engine's own table) but only as far as the installed language packs cover. Recognition quality beyond the tested English set is unproven."
 
 [[feature]]
 id = "ocr.searchable-image"
@@ -6616,8 +6616,8 @@ milestone = "M10"
 status = "partial"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize"]
-evidence = ["crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable"]
-notes = "Invisible text (Tr 3) fitted to each word box; the image is not deskewed or downsampled (exact mode only)."
+evidence = ["crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable", "crates/engine/src/ocr.rs::searchable_layer_round_trips_non_win_ansi_words", "crates/engine/src/ocr.rs::preprocessing_flags_flow_through_the_job"]
+notes = "Invisible text (Tr 3) fitted to each word box. The page's own image object is left untouched; the raster the engines read can be cleaned first (opt-in rotate/deskew/denoise/binarize), with word boxes mapped back to the original raster. Words beyond WinAnsi are written in Type3 fonts with empty character programs and a ToUnicode CMap, so extraction reads them back while nothing needs a display font (no craft-fonts input, and no character is ever substituted with '?'; those substitutions belong to the editable output). Missing: the downsampled Searchable Image variant (ocr.ocr-downsample)."
 
 [[feature]]
 id = "ocr.searchable-image-exact"
@@ -6638,10 +6638,10 @@ area = "I"
 tier = "P1"
 milestone = "M10"
 status = "partial"
-commands = ["edit.edit_text"]
-tools = ["text_edit"]
-evidence = ["crates/engine/tests/it/ocr_edit.rs::editing_an_ocr_word_covers_the_scan_and_shows_the_new_text", "crates/engine/tests/it/ocr_edit.rs::an_explicit_colour_is_kept_for_the_new_text", "crates/engine/tests/it/ocr_edit.rs::ocr_words_group_into_phrases_that_edit_in_place", "crates/engine/tests/it/ocr_edit.rs::a_longer_ocr_phrase_grows_rightwards", "crates/engine/tests/it/ocr_edit.rs::a_rewritten_ocr_phrase_keeps_its_word_widths", "crates/ui-egui/tests/it/ocr.rs::an_ocr_word_opens_for_editing_and_stays_open", "crates/ui-egui/tests/it/ocr.rs::editing_a_scanned_page_recognizes_its_text_first_and_only_once"]
-notes = "On demand, per edit: in Edit text & images, recognised text (the invisible OCR layer over a scan) is grouped into phrases (words across a word space; a wider gap such as a table cell, and each scanned line, stay separate) and opens for editing on a click. Applying draws the new text visibly in the scan's sampled ink colour (or the chosen one) and first covers the old words with the paper colour sampled around them, so the scanned word no longer shows; the phrase keeps each word's position and width and grows rightwards instead of wrapping. Turning Edit text & images on for a scanned page (an image covering at least half of a page that has no text of its own, once per page per window; comments and text boxes over it do not count as text, a page with real text and a background picture is left alone; one undoable \"Recognize text\" step) now recognizes its words first, as Acrobat's \"Converting scanned page to Editable Text and Images\" does (English only until more OCR languages exist, gap 7). Still missing: separating the photographs on the page from the lettering, matching the scanned typeface (the layer's Helvetica is used), and covering on a textured or patterned background (one flat colour is used)."
+commands = ["edit.edit_text", "ocr.correct"]
+tools = ["text_edit", "ocr_recognize"]
+evidence = ["crates/engine/tests/it/ocr_edit.rs::editing_an_ocr_word_covers_the_scan_and_shows_the_new_text", "crates/engine/tests/it/ocr_edit.rs::an_explicit_colour_is_kept_for_the_new_text", "crates/engine/tests/it/ocr_edit.rs::ocr_words_group_into_phrases_that_edit_in_place", "crates/engine/tests/it/ocr_edit.rs::a_longer_ocr_phrase_grows_rightwards", "crates/engine/tests/it/ocr_edit.rs::a_rewritten_ocr_phrase_keeps_its_word_widths", "crates/ui-egui/tests/it/ocr.rs::an_ocr_word_opens_for_editing_and_stays_open", "crates/engine/src/ocr.rs::editable_writer_refuses_empty_and_writes_visible_words", "crates/engine/src/ocr.rs::editable_output_round_trips_non_win_ansi_words", "crates/engine/src/ocr.rs::editable_writer_maps_rotated_pages", "crates/automation/tests/it/automation.rs::ocr_recognize_editable_output_writes_visible_text"]
+notes = "On demand, per edit: in Edit text & images, recognised text (the invisible OCR layer over a scan) is grouped into phrases (words across a word space; a wider gap such as a table cell, and each scanned line, stay separate) and opens for editing on a click. Applying draws the new text visibly in the scan's sampled ink colour (or the chosen one) and first covers the old words with the paper colour sampled around them, so the scanned word no longer shows; the phrase keeps each word's position and width and grows rightwards instead of wrapping. Whole document at once (ocr_recognize output_mode \"editable\"): a NEW <name>_ocr.pdf whose pages carry the recognised words as visible text at their original boxes (horizontal scaling from the real advances of the drawing font as an explicit Tz percentage — Helvetica for WinAnsi words, Type3 faces from craft-fonts beyond), blank pages stay blank, the scan image is not carried over, the source is never overwritten, and a recognition that found no words is refused. Still missing: keeping the scan's images in the editable output, matching the scanned typeface (Helvetica or the Type3 faces are used), and covering on a textured or patterned background (one flat colour is used)."
 
 [[feature]]
 id = "ocr.ocr-downsample"
@@ -6664,8 +6664,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize"]
-evidence = ["crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable", "crates/automation/tests/it/automation.rs::ocr_tools_make_a_scan_searchable", "crates/engine/src/tests.rs::recognize_text_reads_a_picture_on_a_page_that_has_text", "crates/automation/tests/it/automation.rs::ocr_recognize_reads_pictures_on_pages_with_text", "crates/ui-egui/tests/it/ocr.rs::recognize_text_can_read_pictures_on_pages_with_text"]
-notes = "Pages that already have text are skipped and reported by default. The dialog's \"Also recognize pages that already have text\" (skip_text_pages false, also for multiple files) reads pictures on such pages (#1028); a recognised word at least half covered by the page's own text (an earlier OCR layer included) is left out and counted (already_on_page). Missing: recognising only the image areas (the whole page is still read, so it takes as long as a scan), and a word in a picture that sits under real text is treated as that text."
+evidence = ["crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable", "crates/automation/tests/it/automation.rs::ocr_tools_make_a_scan_searchable", "crates/engine/src/tests.rs::recognize_text_reads_a_picture_on_a_page_that_has_text", "crates/automation/tests/it/automation.rs::ocr_recognize_reads_pictures_on_pages_with_text", "crates/ui-egui/tests/it/ocr.rs::recognize_text_can_read_pictures_on_pages_with_text", "crates/automation/tests/it/automation.rs::ocr_recognize_files_writes_searchable_copies"]
+notes = "Text pages are skipped by default; skip_text_pages false or Force OCR reads pictures on them while omitting words overlapping existing text (already_on_page). Batch skip_text_files reports skipped files without writing them; Force OCR overrides both skips. Recognition still reads the whole page, and image text under real text can be omitted."
 
 [[feature]]
 id = "ocr.rotation-detection"
@@ -6673,11 +6673,11 @@ title = "Detect and fix page rotation"
 area = "I"
 tier = "P1"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["ocr.recognize"]
+tools = ["ocr_recognize"]
+evidence = ["crates/ocr/src/preprocess.rs::quarter_turns_are_detected_corrected_and_mapped_back", "crates/ocr/src/preprocess.rs::realistic_letter_pages_are_left_upright"]
+notes = "Opt-in preprocessing: 0/90/180/270 detected from projection-profile banding (conservative: under 32 px, blank, or without a clear margin it is a no-op); word boxes map back to the scanned raster through the exact inverse. Correction is proven at the preprocessing layer and the flag flows through the job (needs the models), but correction of a genuinely rotated page through the workflow is not yet covered by a cited end-to-end test."
 
 [[feature]]
 id = "ocr.deskew"
@@ -6685,11 +6685,11 @@ title = "Deskew"
 area = "I"
 tier = "P1"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["ocr.recognize"]
+tools = ["ocr_recognize"]
+evidence = ["crates/ocr/src/preprocess.rs::skew_is_estimated_and_straight_pages_are_left_alone", "crates/ocr/src/preprocess.rs::deskew_inverse_maps_off_centre_points_back_onto_the_source_line"]
+notes = "Opt-in: skew estimated over +/-5 degrees by a shear-scored projection profile; conservative no-ops (under 64 px, blank, below 0.1 degrees, no clear winner); boxes map back off-centre-exact through the composed inverse. Correction is proven at the preprocessing layer; a cited end-to-end test of a skewed page through the workflow is still owed."
 
 [[feature]]
 id = "ocr.despeckle"
@@ -6698,10 +6698,10 @@ area = "I"
 tier = "P1"
 milestone = "M10"
 status = "partial"
-commands = ["ocr.enhance_camera"]
-tools = ["page_enhance_camera"]
-evidence = ["crates/engine/src/camera_clean.rs::a_shadow_and_a_yellow_cast_become_white_paper", "crates/engine/src/tests.rs::enhance_camera_page_at_a_level_whitens_a_shadowed_sheet", "crates/ui-egui/tests/it/camera.rs::the_clean_up_level_enhances_again_from_the_photo_and_keeps_the_turn"]
-notes = "Camera images only: from clean-up level 60, isolated dark pixels are removed. Missing: for scanned pages and as an OCR option."
+commands = ["ocr.enhance_camera", "ocr.recognize"]
+tools = ["page_enhance_camera", "ocr_recognize"]
+evidence = ["crates/engine/src/camera_clean.rs::a_shadow_and_a_yellow_cast_become_white_paper", "crates/engine/src/tests.rs::enhance_camera_page_at_a_level_whitens_a_shadowed_sheet", "crates/ui-egui/tests/it/camera.rs::the_clean_up_level_enhances_again_from_the_photo_and_keeps_the_turn", "crates/ocr/src/preprocess.rs::denoise_removes_specks_and_keeps_dimensions"]
+notes = "Camera clean-up removes isolated dark pixels from level 60; OCR offers an opt-in 3x3 median filter. Arbitrary-size isolated-speck removal remains unproven."
 
 [[feature]]
 id = "ocr.background-removal"
@@ -6781,11 +6781,11 @@ title = "Correct recognized text (low-confidence suspects)"
 area = "I"
 tier = "P2"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["ocr.correct"]
+tools = ["ocr_words", "ocr_review_apply", "ocr_dictionary"]
+evidence = ["crates/ui-egui/src/workflows/ocr_verify.rs::dictionary_uses_recognition_language_instead_of_interface_locale", "crates/ui-egui/src/workflows/ocr_verify.rs::dictionary_limit_and_normalization_failures_preserve_file_and_review", "crates/ui-egui/src/workflows/ocr_verify.rs::dictionary_undo_persists_and_failed_undo_keeps_history", "crates/ui-egui/src/workflows/ocr_verify.rs::rereading_keeps_captured_language_when_the_draft_changes", "crates/automation/tests/it/automation.rs::ocr_review_corrections_keep_boxes_are_guarded_and_apply_once", "crates/automation/tests/it/automation.rs::ocr_dictionary_updates_are_atomic_bounded_and_confined", "crates/automation/tests/it/automation.rs::ocr_retained_reviews_have_eight_document_cap_and_close_releases_slot", "crates/ui-egui/src/workflows/ocr_verify.rs::accept_zero_words_fails_and_a_live_review_applies_once", "crates/ui-egui/src/workflows/ocr_verify.rs::legend_rows_carry_the_classifier_thresholds", "crates/ui-egui/src/workflows/ocr_verify.rs::suggestions_are_near_dictionary_and_page_words", "crates/ui-egui/tests/it/ocr.rs::ocr_verify_screen_controls_keyboard_and_accept", "crates/ui-egui/src/workflows/ocr_verify.rs::accepting_pages_one_by_one_then_the_review_applies_every_page_once", "crates/ui-egui/src/workflows/ocr_verify.rs::rereading_a_region_remaps_marks_and_selects_the_first_new_word"]
+notes = "The OCR Verify screen: page list, source page with confidence-coloured word boxes (click-select, drag a region), recognised-text preview, zoom + word inspector; corrections commit on Enter (an empty commit removes), Remove/Restore, +Dictionary (a per-language user file), per-word Verified, suggestions within edit distance 2; F8/Shift+F8 walk the low-confidence suspects, Ctrl+T marks the page reviewed, Ctrl+Tab moves the pane focus; Re-OCR of a region or a page; Accept/Reject entire page; a real Cancel keeps the pages already read; a stale session is refused with its reason; review edits are undoable in the panel; Accept (searchable) is one undoable step through the guard path, and pages accepted one by one each apply once (the guard follows each accepted page); a re-read keeps every review mark on the word it was made for. Headless: ocr_words (retain_review) returns the words and a review handle, ocr_review_apply applies corrections at the stored boxes (an empty one removes the word) through the same stale-document guard, or discards the review, and ocr_dictionary edits the dictionary file. Still missing: suggestions, per-word Verified marks and region re-reads are UI-only, and Acrobat's suspect walk across a whole saved document (outside one review) is not offered."
 
 [[feature]]
 id = "ocr.adaptive-compression"
@@ -6817,11 +6817,11 @@ title = "Pluggable OCR engines (ocrs default; tesseract optional)"
 area = "I"
 tier = "P1"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["ocr.recognize"]
+tools = ["ocr_recognize"]
+evidence = ["crates/engine/src/ocr.rs::selector_names_the_missing_engine", "crates/ocr/src/tesseract.rs::recognize_runs_the_installed_binary", "crates/ocr/src/merge.rs::rover_vote_always_runs_both_and_degrades_without_a_secondary", "crates/ocr/src/merge.rs::confidence_weighted_runs_the_secondary_on_an_unknown_primary", "crates/ocr/src/merge.rs::an_unknown_primary_word_yields_only_to_a_confident_secondary", "crates/ocr/src/tesseract.rs::an_invalid_configured_program_fails_closed", "crates/ocr/src/tesseract.rs::list_langs_come_from_stderr_when_stdout_has_none", "crates/engine/src/ocr.rs::automatic_defaults_to_the_confidence_weighted_strategy"]
+notes = "ocrs (pure Rust, MIT/Apache, CC-BY-SA models fetched by `cargo xtask models`) is the default; an installed tesseract binary runs as an external process (fixed argv, allow-listed language codes, private temp dir, timeout and output cap, a user-validated PDFCRAFT_TESSERACT path or the PATH); Automatic is an ensemble (ROVER and confidence-weighted merge; a failing partner degrades to the primary with a note). Partial, because part of the evidence is conditional: `recognize_runs_the_installed_binary` runs only where tesseract is installed and skips elsewhere, so a build machine without it proves nothing about the process path, the absent-binary paths are exercised only on machines without tesseract, and the process-level tests (timeout, output cap, minimal environment) are Unix-only (fake scripts). What always runs: location validation and the fail-closed rule, the --list-langs parsing (stdout or stderr), the engine selector, the merge rules and the default strategy. Automatic defaults to the confidence-weighted strategy (Primary only would never run the second engine)."
 
 [[feature]]
 id = "ocr.ocr-web"

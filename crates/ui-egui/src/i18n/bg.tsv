@@ -2541,3 +2541,94 @@ animation effects	Off	Изключени
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Опции за този отговор
 	Export value	Стойност за експортиране
+# OCR: the Correct recognized text command (the Verify screen's other strings come with the screen).
+# OCR: the Verify screen, the batch options and the engine choice.
+	+ Dictionary	+ Речник
+	; cancelled — {n} files were not run	; отменено — {n} файла не бяха обработени
+	; {n} files already had text	; {n} файла вече съдържаха текст
+	A 3×3 median filter against scan speckle	Медианен филтър 3×3 срещу петна от сканирането
+	A folder is asked for when a multiple-file run starts	Папката се избира при стартиране на обработка на няколко файла
+	AVG CONFIDENCE	СРЕДНА ДОСТОВЕРНОСТ
+	Accept	Приеми
+	Accept entire page	Приеми цялата страница
+	Add a second engine's reading when the first is unsure	Добавя разпознаване от втори механизъм, когато първият не е сигурен
+	Always read with both engines and merge the words	Винаги разпознава с двата механизма и обединява думите
+	Auto-rotate	Автоматично завъртане
+	Automatic	Автоматично
+	Binarize	Бинаризиране
+	Both engines, combined as the Strategy says	Двата механизма, съчетани според избраната стратегия
+	CONFIDENCE	ДОСТОВЕРНОСТ
+	Cancelled — {n} words were read on {m} of {t} pages; the rest were not read	Отменено — прочетени {n} думи на {m} от {t} страници; останалото не е прочетено
+	Click a word to inspect it; drag a rectangle to re-read part of the page	Щракнете върху дума, за да я прегледате; изтеглете правоъгълник, за да разпознаете отново част от страницата
+	Confidence weighted	Претеглено по достоверност
+	Corrected text (Enter commits)	Коригиран текст (Enter потвърждава)
+	Denoise	Премахване на шум
+	Deskew	Изправяне
+	ENGINE · STRATEGY	МЕХАНИЗЪМ · СТРАТЕГИЯ
+	Editable text	Редактируем текст
+	Exit	Изход
+	F8: next word to review; Shift+F8 goes back	F8: следваща дума за преглед; Shift+F8 връща назад
+	Force OCR (override skip options)	Принудително OCR (пренебрегва опциите за пропускане)
+	HIGH (>= 90%)	ВИСОКА (>= 90%)
+	In multiple files: a file with any text is its own skipped bucket, and nothing is written for it	При няколко файла: файл с текст се отчита отделно като пропуснат и за него не се записва нищо
+	LOW (< 70%)	НИСКА (< 70%)
+	LOW-CONFIDENCE WORDS	ДУМИ С НИСКА ДОСТОВЕРНОСТ
+	MEDIUM (70-89%)	СРЕДНА (70-89%)
+	Mark this page as reviewed (Ctrl+T)	Отбележи тази страница като прегледана (Ctrl+T)
+	Next uncertain	Следваща несигурна
+	OCR complete — no text recognized on this page.	OCR завърши — на тази страница не е разпознат текст.
+	OCR results rejected.	Резултатите от OCR са отхвърлени.
+	PAGE	СТРАНИЦА
+	Page verified	Страницата е проверена
+	Pages with renderable text are left alone and reported as skipped	Страниците с показваем текст остават непроменени и се отчитат като пропуснати
+	Previous uncertain	Предишна несигурна
+	Primary only	Само основният
+	ROVER vote	Гласуване ROVER
+	Re-OCR entire page	Повторно OCR на цялата страница
+	Re-OCR this region	Повторно OCR на тази област
+	Read {n} words on {m} of {t} pages	Прочетени {n} думи на {m} от {t} страници
+	Reads pages and files even where the skip options would leave them alone	Разпознава страници и файлове дори там, където опциите за пропускане биха ги пропуснали
+	Recognized text	Разпознат текст
+	Recognized text applied ({n} words, one undoable step)	Разпознатият текст е приложен ({n} думи, една стъпка, която може да се отмени)
+	Reject	Отхвърли
+	Reject entire page	Отхвърли цялата страница
+	Run OCR	Стартирай OCR
+	Sauvola binarization: ink to black, paper to white	Бинаризиране по Саувола: мастилото става черно, хартията бяла
+	Select a word on the page to inspect it	Изберете дума на страницата, за да я прегледате
+	Several files have the same name, so their results would overwrite each other; nothing was written: {list}	Няколко файла имат едно и също име, затова резултатите им биха се презаписали; нищо не е записано: {list}
+	Shift+F8: the previous word to review	Shift+F8: предишната дума за преглед
+	Skip files that already have text	Пропускай файлове, които вече съдържат текст
+	Skip pages that already have text	Пропускай страници, които вече съдържат текст
+	Source page	Изходна страница
+	Straightens skewed text lines before reading	Изправя наклонените редове текст преди разпознаването
+	Suggestions	Предложения
+	That is the source file; choose another destination	Това е изходният файл; изберете друго място
+	The built-in engine (pure Rust)	Вграденият механизъм (чист Rust)
+	The output folder already holds files of these names; nothing was written: {list}	Изходната папка вече съдържа файлове с тези имена; нищо не е записано: {list}
+	The page was read again; its words were replaced (undo in the panel)	Страницата е прочетена отново; думите в нея са заменени (отмяна в панела)
+	The page's words were applied as one undoable step ({n} words)	Думите на страницата са приложени като една стъпка, която може да се отмени ({n} думи)
+	The page's words were cleared (undo in the panel)	Думите на страницата са изчистени (отмяна в панела)
+	The re-read found no text; the existing words are unchanged	Повторното разпознаване не намери текст; съществуващите думи са непроменени
+	The region was read again; its words were replaced (undo in the panel)	Областта е прочетена отново; думите в нея са заменени (отмяна в панела)
+	The searchable copies are written here under the source names	Копията с възможност за търсене се записват тук под имената на изходните файлове
+	The selected word is gone; choose another	Избраната дума вече я няма; изберете друга
+	The tesseract program, run as an external process	Програмата tesseract, стартирана като външен процес
+	Turns pages scanned sideways or upside down upright before reading	Изправя страници, сканирани настрани или наобратно, преди разпознаването
+	Undo the last review change (Ctrl+Z)	Отмени последната промяна в прегледа (Ctrl+Z)
+	Use the chosen engine's reading alone	Използвай само разпознаването на избрания механизъм
+	VERIFIED %	ПРОВЕРЕНИ %
+	Verified	Проверено
+	Word	Дума
+	Writes a new document of visible text; the scan is not changed	Записва нов документ с видим текст; сканираното изображение не се променя
+	Wrote {name}	Записан е {name}
+	corrected	коригирана
+	removed	премахната
+	skipped	пропусната
+	unreviewed	непрегледана
+	verified	проверена
+	{name}: {n} low-confidence word(s) on pages {pages}	{name}: {n} дума(и) с ниска достоверност на страници {pages}
+	{n} word(s) to review	{n} дума(и) за преглед
+	Correct recognized text…	Коригиране на разпознатия текст…
+	the tesseract program was not found (install it, or add it to the PATH)	програмата tesseract не е намерена (инсталирайте я или я добавете в PATH)
+	still checking whether the tesseract program can run; try again in a moment	все още се проверява дали програмата tesseract може да работи; опитайте отново след малко
+	the tesseract engine is not available in the web build	механизмът tesseract не е наличен в уеб версията

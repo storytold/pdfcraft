@@ -136,6 +136,7 @@ impl PdfCraftApp {
             "combine_zoom": self.combine_zoom,
             "comments_panel_closed": self.comments_panel_closed,
             "right_panel_closed": self.right_panel_closed,
+            "ocr": self.ocr_draft.to_pref(),
         });
         // Set apart: one more key inside the macro above passes serde_json's recursion limit.
         v["default_page_gaps"] = serde_json::Value::Bool(self.view_defaults.show_page_gaps);
@@ -250,6 +251,9 @@ impl PdfCraftApp {
         if let Some(closed) = v["right_panel_closed"].as_bool() {
             self.right_panel_closed = closed;
         }
+        // Scan & OCR choices (language, engine, strategy, output mode, preprocessing and skip
+        // flags); unknown or malformed values keep the defaults.
+        self.ocr_draft.apply_pref(&v["ocr"]);
         if let Some(defaults) = v["default_zoom"].as_str().and_then(|zoom| self.view_defaults.with_zoom(zoom)) {
             self.view_defaults = defaults;
         }

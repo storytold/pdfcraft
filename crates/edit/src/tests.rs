@@ -8576,3 +8576,83 @@ fn styled_existing_justification_is_refused_instead_of_silently_left_aligning() 
     assert_eq!(page_content_bytes(&doc, 0), before);
     assert_eq!(page_content_bytes(&reopen(&doc), 0), before);
 }
+
+/// The OCR stamp path registers the plan's Type3 faces (a free `PCOcr…` name per stamp, so a
+/// page that is OCR'd twice keeps both layers' fonts), and the stamped codes extract back
+/// through the font's ToUnicode CMap.
+#[test]
+fn stamp_with_fonts_registers_the_planned_type3_faces() {
+    if without_craft_fonts("stamp_with_fonts_registers_the_planned_type3_faces") {
+        return;
+    }
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    let mut plan = pdfcraft_fonts::TextPlan::for_words(["日本"]);
+    assert_eq!(plan.missing(), 0);
+    stamp_with_fonts(&mut doc, 0, "OCR", &mut plan, |p| {
+        let codes: Vec<u8> = p.encoding(0).iter().map(|&(_, c)| c).collect();
+        let mut c = format!("BT 3 Tr /PCHelv 1 Tf\n/{} 1 Tf 100 700 Td ", p.fonts[0].name).into_bytes();
+        c.extend_from_slice(&pdfcraft_fonts::literal(&codes));
+        c.extend_from_slice(b" Tj ET");
+        c
+    })
+    .unwrap();
+    assert!(plan.fonts[0].name.starts_with("PCOcr"), "{:?}", plan.fonts[0].name);
+    // The registered font carries a ToUnicode CMap; the engine's own reader decodes the run.
+    let reopened = Document::open(Arc::new(write_incremental(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    let lines = text::text_lines(&reopened, 0).unwrap();
+    assert!(lines.iter().any(|l| l.text.contains("日本")), "{lines:?}");
+    // A second stamp on the same page takes the next free name; the first layer's font stands.
+    let mut second = pdfcraft_fonts::TextPlan::for_words(["語"]);
+    stamp_with_fonts(&mut doc, 0, "OCR", &mut second, |p| format!("BT 3 Tr /{} 1 Tf 100 600 Td (\u{1}) Tj ET", p.fonts[0].name).into_bytes())
+        .unwrap();
+    assert_eq!(second.fonts[0].name, format!("{}1", plan.fonts[0].name));
+}
+
+/// A Type3 face built for page 1 is reused on page 2, but page 2 already has a font under the
+/// name page 1 gave it: page 2's own font keeps its name, and the shared face is registered on
+/// page 2 under a free one that the plan carries for page 2's content. (The plan is written out
+/// by hand, so this runs without the craft-fonts build input.)
+#[test]
+fn a_reused_type3_face_never_replaces_a_later_page_s_font_of_the_same_name() {
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 5 0 R >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 6 0 R /Resources << /Font << /PCOcr 7 0 R >> >> >>",
+        &stream("", ""),
+        &stream("", "BT /PCOcr 12 Tf 72 700 Td (own) Tj ET"),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ]);
+    let glyph = pdfcraft_fonts::GlyphOutline { contours: vec![vec![[0.1, 0.0], [0.9, 0.0], [0.5, 0.8]]], width: 1.0, bbox: [0.1, 0.0, 0.9, 0.8] };
+    let mut plan = pdfcraft_fonts::TextPlan::default();
+    plan.fonts.push(pdfcraft_fonts::PlannedType3 { family: "Test", glyphs: vec![('日', glyph)], name: String::new(), object: None });
+    let draw = |p: &pdfcraft_fonts::TextPlan| format!("BT 3 Tr /{} 1 Tf 100 600 Td (\u{1}) Tj ET", p.fonts[0].name).into_bytes();
+    stamp_with_fonts(&mut doc, 0, "OCR", &mut plan, draw).unwrap();
+    assert_eq!(plan.fonts[0].name, "PCOcr", "free on page 1");
+    let face = plan.fonts[0].object.expect("built once");
+    stamp_with_fonts(&mut doc, 1, "OCR", &mut plan, draw).unwrap();
+    assert_ne!(plan.fonts[0].name, "PCOcr", "page 2 already has a PCOcr");
+    let page2 = &pdfcraft_model::pages(&doc)[1];
+    let res = doc.resolve(page2.dict.get(b"Resources").unwrap());
+    let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap());
+    let fonts = fonts.as_dict().unwrap();
+    assert_eq!(fonts.get(b"PCOcr").and_then(|o| o.as_ref()), Some(pdfcraft_cos::ObjRef::new(7, 0)), "page 2's own font keeps its name");
+    assert_eq!(fonts.get(plan.fonts[0].name.as_bytes()).and_then(|o| o.as_ref()), Some(face), "the shared face, under a free name");
+    assert_eq!(plan.fonts[0].object, Some(face), "still built once");
+}
+
+#[test]
+fn planned_type3_charproc_has_valid_metrics_and_encloses_its_ink() {
+    let glyph = pdfcraft_fonts::GlyphOutline {
+        contours: vec![vec![[-0.1001, -0.2001], [0.9001, 1.1001]]],
+        width: 0.8,
+        bbox: [-0.1001, -0.2001, 0.9001, 1.1001],
+    };
+    let parsed = pdfcraft_content::parse(&text::glyph_path(&glyph));
+    assert_eq!(parsed.skipped, 0);
+    let metrics = &parsed.ops[0];
+    assert!(metrics.is("d1"));
+    assert_eq!(metrics.operands.len(), 6);
+    assert_eq!((metrics.num(0), metrics.num(1)), (Some(800.0), Some(0.0)));
+    assert_eq!((metrics.num(2), metrics.num(3), metrics.num(4), metrics.num(5)), (Some(-101.0), Some(-201.0), Some(901.0), Some(1101.0)));
+}

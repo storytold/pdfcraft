@@ -2491,3 +2491,94 @@ animation effects	Off	Выкл
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Параметры этого ответа
 	Export value	Значение экспорта
+# OCR: the Correct recognized text command (the Verify screen's other strings come with the screen).
+# OCR: the Verify screen, the batch options and the engine choice.
+	+ Dictionary	+ Словарь
+	; cancelled — {n} files were not run	; отменено — {n} файлов не обработано
+	; {n} files already had text	; в {n} файлах уже был текст
+	A 3×3 median filter against scan speckle	Медианный фильтр 3×3 против пятен скана
+	A folder is asked for when a multiple-file run starts	Папка запрашивается при запуске обработки нескольких файлов
+	AVG CONFIDENCE	СРЕДНЯЯ ДОСТОВЕРНОСТЬ
+	Accept	Принять
+	Accept entire page	Принять всю страницу
+	Add a second engine's reading when the first is unsure	Добавляет распознавание второго движка, когда первый не уверен
+	Always read with both engines and merge the words	Всегда распознаёт обоими движками и объединяет слова
+	Auto-rotate	Автоповорот
+	Automatic	Автоматически
+	Binarize	Бинаризация
+	Both engines, combined as the Strategy says	Оба движка, объединённые по выбранной стратегии
+	CONFIDENCE	ДОСТОВЕРНОСТЬ
+	Cancelled — {n} words were read on {m} of {t} pages; the rest were not read	Отменено — прочитано {n} слов на {m} из {t} страниц; остальное не прочитано
+	Click a word to inspect it; drag a rectangle to re-read part of the page	Щёлкните слово, чтобы проверить его; выделите прямоугольник, чтобы заново распознать часть страницы
+	Confidence weighted	С учётом достоверности
+	Corrected text (Enter commits)	Исправленный текст (Enter подтверждает)
+	Denoise	Шумоподавление
+	Deskew	Выравнивание наклона
+	ENGINE · STRATEGY	ДВИЖОК · СТРАТЕГИЯ
+	Editable text	Редактируемый текст
+	Exit	Выйти
+	F8: next word to review; Shift+F8 goes back	F8: следующее слово для проверки; Shift+F8 — назад
+	Force OCR (override skip options)	Принудительное OCR (игнорировать параметры пропуска)
+	HIGH (>= 90%)	ВЫСОКАЯ (>= 90%)
+	In multiple files: a file with any text is its own skipped bucket, and nothing is written for it	Для нескольких файлов: файл с текстом учитывается отдельно как пропущенный, и для него ничего не записывается
+	LOW (< 70%)	НИЗКАЯ (< 70%)
+	LOW-CONFIDENCE WORDS	СЛОВА С НИЗКОЙ ДОСТОВЕРНОСТЬЮ
+	MEDIUM (70-89%)	СРЕДНЯЯ (70-89%)
+	Mark this page as reviewed (Ctrl+T)	Отметить эту страницу как проверенную (Ctrl+T)
+	Next uncertain	Следующее сомнительное
+	OCR complete — no text recognized on this page.	OCR завершено — на этой странице текст не распознан.
+	OCR results rejected.	Результаты OCR отклонены.
+	PAGE	СТРАНИЦА
+	Page verified	Страница проверена
+	Pages with renderable text are left alone and reported as skipped	Страницы с отображаемым текстом не изменяются и отмечаются как пропущенные
+	Previous uncertain	Предыдущее сомнительное
+	Primary only	Только основной
+	ROVER vote	Голосование ROVER
+	Re-OCR entire page	Повторить OCR для всей страницы
+	Re-OCR this region	Повторить OCR для этой области
+	Read {n} words on {m} of {t} pages	Прочитано {n} слов на {m} из {t} страниц
+	Reads pages and files even where the skip options would leave them alone	Распознаёт страницы и файлы, даже если параметры пропуска их бы пропустили
+	Recognized text	Распознанный текст
+	Recognized text applied ({n} words, one undoable step)	Распознанный текст применён ({n} слов, одно отменяемое действие)
+	Reject	Отклонить
+	Reject entire page	Отклонить всю страницу
+	Run OCR	Запустить OCR
+	Sauvola binarization: ink to black, paper to white	Бинаризация Саувола: чернила в чёрный, бумага в белый
+	Select a word on the page to inspect it	Выберите слово на странице, чтобы проверить его
+	Several files have the same name, so their results would overwrite each other; nothing was written: {list}	У нескольких файлов одинаковое имя, и их результаты перезаписали бы друг друга; ничего не записано: {list}
+	Shift+F8: the previous word to review	Shift+F8: предыдущее слово для проверки
+	Skip files that already have text	Пропускать файлы, в которых уже есть текст
+	Skip pages that already have text	Пропускать страницы, на которых уже есть текст
+	Source page	Исходная страница
+	Straightens skewed text lines before reading	Выравнивает наклонённые строки текста перед распознаванием
+	Suggestions	Варианты
+	That is the source file; choose another destination	Это исходный файл; выберите другое место
+	The built-in engine (pure Rust)	Встроенный движок (чистый Rust)
+	The output folder already holds files of these names; nothing was written: {list}	В папке вывода уже есть файлы с этими именами; ничего не записано: {list}
+	The page was read again; its words were replaced (undo in the panel)	Страница распознана заново; её слова заменены (отмена на панели)
+	The page's words were applied as one undoable step ({n} words)	Слова страницы применены одним отменяемым действием ({n} слов)
+	The page's words were cleared (undo in the panel)	Слова страницы удалены (отмена на панели)
+	The re-read found no text; the existing words are unchanged	Повторное распознавание не нашло текста; существующие слова не изменены
+	The region was read again; its words were replaced (undo in the panel)	Область распознана заново; её слова заменены (отмена на панели)
+	The searchable copies are written here under the source names	Копии с поиском записываются сюда под именами исходных файлов
+	The selected word is gone; choose another	Выбранного слова больше нет; выберите другое
+	The tesseract program, run as an external process	Программа tesseract, запускаемая как внешний процесс
+	Turns pages scanned sideways or upside down upright before reading	Поворачивает страницы, отсканированные боком или вверх ногами, перед распознаванием
+	Undo the last review change (Ctrl+Z)	Отменить последнее изменение проверки (Ctrl+Z)
+	Use the chosen engine's reading alone	Использовать только распознавание выбранного движка
+	VERIFIED %	ПРОВЕРЕНО %
+	Verified	Проверено
+	Word	Слово
+	Writes a new document of visible text; the scan is not changed	Создаёт новый документ с видимым текстом; скан не изменяется
+	Wrote {name}	Записано: {name}
+	corrected	исправлено
+	removed	удалено
+	skipped	пропущено
+	unreviewed	не проверено
+	verified	проверено
+	{name}: {n} low-confidence word(s) on pages {pages}	{name}: слов с низкой достоверностью — {n}, страницы {pages}
+	{n} word(s) to review	Слов для проверки: {n}
+	Correct recognized text…	Исправить распознанный текст…
+	the tesseract program was not found (install it, or add it to the PATH)	программа tesseract не найдена (установите её или добавьте в PATH)
+	still checking whether the tesseract program can run; try again in a moment	идёт проверка, может ли запуститься программа tesseract; повторите попытку через мгновение
+	the tesseract engine is not available in the web build	движок tesseract недоступен в веб-версии

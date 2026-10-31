@@ -2885,3 +2885,94 @@ certificate	Version	Verze
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Možnosti této odpovědi
 	Export value	Exportní hodnota
+# OCR: the Correct recognized text command (the Verify screen's other strings come with the screen).
+# OCR: the Verify screen, the batch options and the engine choice.
+	+ Dictionary	+ Slovník
+	; cancelled — {n} files were not run	; zrušeno — {n} souborů nebylo zpracováno
+	; {n} files already had text	; {n} souborů už obsahovalo text
+	A 3×3 median filter against scan speckle	Mediánový filtr 3×3 proti skvrnám ze skenu
+	A folder is asked for when a multiple-file run starts	Složka se vybere při spuštění běhu přes více souborů
+	AVG CONFIDENCE	PRŮMĚRNÁ SPOLEHLIVOST
+	Accept	Přijmout
+	Accept entire page	Přijmout celou stránku
+	Add a second engine's reading when the first is unsure	Přidá čtení druhého enginu, když si první není jistý
+	Always read with both engines and merge the words	Vždy čte oběma enginy a sloučí slova
+	Auto-rotate	Automatické otočení
+	Automatic	Automaticky
+	Binarize	Binarizovat
+	Both engines, combined as the Strategy says	Oba enginy, kombinované podle zvolené strategie
+	CONFIDENCE	SPOLEHLIVOST
+	Cancelled — {n} words were read on {m} of {t} pages; the rest were not read	Zrušeno — načteno {n} slov na {m} z {t} stránek; zbytek nebyl načten
+	Click a word to inspect it; drag a rectangle to re-read part of the page	Kliknutím na slovo ho prozkoumáte; tažením obdélníku znovu načtete část stránky
+	Confidence weighted	Podle spolehlivosti
+	Corrected text (Enter commits)	Opravený text (Enter potvrdí)
+	Denoise	Potlačit šum
+	Deskew	Vyrovnat náklon
+	ENGINE · STRATEGY	ENGINE · STRATEGIE
+	Editable text	Upravitelný text
+	Exit	Ukončit
+	F8: next word to review; Shift+F8 goes back	F8: další slovo ke kontrole; Shift+F8 zpět
+	Force OCR (override skip options)	Vynutit OCR (ignoruje volby přeskočení)
+	HIGH (>= 90%)	VYSOKÁ (≥ 90 %)
+	In multiple files: a file with any text is its own skipped bucket, and nothing is written for it	U více souborů: soubor s jakýmkoli textem jde zvlášť do přeskočených a nic se pro něj neukládá
+	LOW (< 70%)	NÍZKÁ (< 70 %)
+	LOW-CONFIDENCE WORDS	SLOVA S NÍZKOU SPOLEHLIVOSTÍ
+	MEDIUM (70-89%)	STŘEDNÍ (70-89 %)
+	Mark this page as reviewed (Ctrl+T)	Označit tuto stránku jako zkontrolovanou (Ctrl+T)
+	Next uncertain	Další nejisté
+	OCR complete — no text recognized on this page.	OCR hotovo — na této stránce nebyl rozpoznán žádný text.
+	OCR results rejected.	Výsledky OCR byly zamítnuty.
+	PAGE	STRÁNKA
+	Page verified	Stránka zkontrolována
+	Pages with renderable text are left alone and reported as skipped	Stránky s vykreslitelným textem zůstanou nedotčené a hlásí se jako přeskočené
+	Previous uncertain	Předchozí nejisté
+	Primary only	Jen hlavní engine
+	ROVER vote	Hlasování ROVER
+	Re-OCR entire page	Znovu rozpoznat celou stránku
+	Re-OCR this region	Znovu rozpoznat tuto oblast
+	Read {n} words on {m} of {t} pages	Načteno {n} slov na {m} z {t} stránek
+	Reads pages and files even where the skip options would leave them alone	Čte stránky a soubory i tam, kde by volby přeskočení nechaly být
+	Recognized text	Rozpoznaný text
+	Recognized text applied ({n} words, one undoable step)	Rozpoznaný text byl použit ({n} slov, vratké jedním krokem)
+	Reject	Zamítnout
+	Reject entire page	Zamítnout celou stránku
+	Run OCR	Spustit OCR
+	Sauvola binarization: ink to black, paper to white	Sauvolova binarizace: inkoust do černa, papír do bíla
+	Select a word on the page to inspect it	Vyberte na stránce slovo, které chcete prozkoumat
+	Several files have the same name, so their results would overwrite each other; nothing was written: {list}	Několik souborů má stejný název, takže by se jejich výsledky navzájem přepsaly; nic nebylo zapsáno: {list}
+	Shift+F8: the previous word to review	Shift+F8: předchozí slovo ke kontrole
+	Skip files that already have text	Přeskočit soubory, které už mají text
+	Skip pages that already have text	Přeskočit stránky, které už mají text
+	Source page	Zdrojová stránka
+	Straightens skewed text lines before reading	Před čtením vyrovná nakloněné řádky textu
+	Suggestions	Návrhy
+	That is the source file; choose another destination	To je zdrojový soubor; zvolte jiné umístění
+	The built-in engine (pure Rust)	Vestavěný engine (čisté Rust)
+	The output folder already holds files of these names; nothing was written: {list}	Výstupní složka už obsahuje soubory těchto názvů; nic nebylo uloženo: {list}
+	The page was read again; its words were replaced (undo in the panel)	Stránka byla přečtena znovu; její slova byla nahrazena (vrátit lze v panelu)
+	The page's words were applied as one undoable step ({n} words)	Slova stránky byla použita jako jedna vratká úprava ({n} slov)
+	The page's words were cleared (undo in the panel)	Slova stránky byla vymazána (vrátit lze v panelu)
+	The re-read found no text; the existing words are unchanged	Znovunačtení nenašlo žádný text; stávající slova zůstávají
+	The region was read again; its words were replaced (undo in the panel)	Oblast byla přečtena znovu; její slova byla nahrazena (vrátit lze v panelu)
+	The searchable copies are written here under the source names	Prohledávatelné kopie se ukládají sem pod původními názvy
+	The selected word is gone; choose another	Vybrané slovo už není; vyberte jiné
+	The tesseract program, run as an external process	Program tesseract, spouštěný jako externí proces
+	Turns pages scanned sideways or upside down upright before reading	Před čtením narovná stránky naskenované bokem nebo vzhůru nohama
+	Undo the last review change (Ctrl+Z)	Vrátí poslední změnu kontroly (Ctrl+Z)
+	Use the chosen engine's reading alone	Použije jen čtení zvoleného enginu
+	VERIFIED %	ZKONTROLOVÁNO %
+	Verified	Zkontrolováno
+	Word	Slovo
+	Writes a new document of visible text; the scan is not changed	Vytvoří nový dokument s viditelným textem; sken se nemění
+	Wrote {name}	Uloženo {name}
+	corrected	opraveno
+	removed	odebráno
+	skipped	přeskočeno
+	unreviewed	nezkontrolováno
+	verified	zkontrolováno
+	{name}: {n} low-confidence word(s) on pages {pages}	{name}: {n} slov s nízkou spolehlivostí na stránkách {pages}
+	{n} word(s) to review	{n} slov ke kontrole
+	Correct recognized text…	Opravit rozpoznaný text…
+	the tesseract program was not found (install it, or add it to the PATH)	program tesseract nebyl nalezen (nainstalujte ho nebo ho přidejte do PATH)
+	still checking whether the tesseract program can run; try again in a moment	stále se ověřuje, zda lze program tesseract spustit; zkuste to za chvíli znovu
+	the tesseract engine is not available in the web build	engine tesseract není ve webové verzi k dispozici

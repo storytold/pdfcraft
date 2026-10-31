@@ -122,10 +122,14 @@ impl Session {
         if !ocr::available() {
             return Vec::new();
         }
-        let (Ok(engine), Some(job)) = (ocr::engine(), self.ocr_job(id, &[page], ocr::OcrSettings::default())) else {
+        let settings = ocr::OcrSettings::default();
+        let Some(job) = self.ocr_job(id, &[page], settings.clone()) else {
             return Vec::new();
         };
-        job.run(&engine, |_, _| true)
+        let Ok(recognizers) = ocr::recognizers(&settings) else {
+            return Vec::new();
+        };
+        job.run(&recognizers, |_, _| true)
             .into_iter()
             .flat_map(|p| p.words)
             .filter_map(|w| {

@@ -2854,3 +2854,94 @@ certificate	Version	الإصدار
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	خيارات هذا الرد
 	Export value	قيمة التصدير
+# OCR: the Correct recognized text command (the Verify screen's other strings come with the screen).
+# OCR: the Verify screen, the batch options and the engine choice.
+	+ Dictionary	+ القاموس
+	; cancelled — {n} files were not run	؛ أُلغي — لم تُعالج {n} من الملفات
+	; {n} files already had text	؛ كانت {n} من الملفات تحتوي على نص بالفعل
+	A 3×3 median filter against scan speckle	مرشح وسيط 3×3 لإزالة بقع المسح الضوئي
+	A folder is asked for when a multiple-file run starts	يُطلب اختيار المجلد عند بدء معالجة عدة ملفات
+	AVG CONFIDENCE	متوسط الثقة
+	Accept	قبول
+	Accept entire page	قبول الصفحة بأكملها
+	Add a second engine's reading when the first is unsure	يضيف قراءة محرك ثانٍ عندما لا يكون الأول متأكدًا
+	Always read with both engines and merge the words	يقرأ دائمًا بكلا المحركين ويدمج الكلمات
+	Auto-rotate	تدوير تلقائي
+	Automatic	تلقائي
+	Binarize	تحويل إلى أبيض وأسود
+	Both engines, combined as the Strategy says	كلا المحركين، يُجمعان وفق الاستراتيجية المختارة
+	CONFIDENCE	الثقة
+	Cancelled — {n} words were read on {m} of {t} pages; the rest were not read	أُلغي — قُرئت {n} كلمة في {m} من {t} صفحة؛ ولم يُقرأ الباقي
+	Click a word to inspect it; drag a rectangle to re-read part of the page	انقر كلمة لفحصها؛ واسحب مستطيلًا لإعادة قراءة جزء من الصفحة
+	Confidence weighted	مرجّح بالثقة
+	Corrected text (Enter commits)	النص المصحَّح (يعتمده Enter)
+	Denoise	إزالة التشويش
+	Deskew	تقويم الميل
+	ENGINE · STRATEGY	المحرك · الاستراتيجية
+	Editable text	نص قابل للتحرير
+	Exit	خروج
+	F8: next word to review; Shift+F8 goes back	F8: الكلمة التالية للمراجعة؛ وShift+F8 يعود للخلف
+	Force OCR (override skip options)	فرض التعرف الضوئي (تجاوز خيارات التخطي)
+	HIGH (>= 90%)	مرتفعة (>= 90%)
+	In multiple files: a file with any text is its own skipped bucket, and nothing is written for it	في عدة ملفات: يُحسب الملف الذي يحتوي على نص ضمن المتخطاة على حدة، ولا يُكتب له شيء
+	LOW (< 70%)	منخفضة (< 70%)
+	LOW-CONFIDENCE WORDS	كلمات منخفضة الثقة
+	MEDIUM (70-89%)	متوسطة (70-89%)
+	Mark this page as reviewed (Ctrl+T)	وضع علامة على هذه الصفحة بأنها رُوجعت (Ctrl+T)
+	Next uncertain	الكلمة غير المؤكدة التالية
+	OCR complete — no text recognized on this page.	اكتمل التعرف الضوئي — لم يُتعرف على أي نص في هذه الصفحة.
+	OCR results rejected.	رُفضت نتائج التعرف الضوئي.
+	PAGE	الصفحة
+	Page verified	تم التحقق من الصفحة
+	Pages with renderable text are left alone and reported as skipped	تُترك الصفحات التي تحتوي على نص قابل للعرض كما هي ويُبلَّغ عنها كمتخطاة
+	Previous uncertain	الكلمة غير المؤكدة السابقة
+	Primary only	المحرك الأساسي فقط
+	ROVER vote	تصويت ROVER
+	Re-OCR entire page	إعادة التعرف الضوئي على الصفحة بأكملها
+	Re-OCR this region	إعادة التعرف الضوئي على هذه المنطقة
+	Read {n} words on {m} of {t} pages	قُرئت {n} كلمة في {m} من {t} صفحة
+	Reads pages and files even where the skip options would leave them alone	يقرأ الصفحات والملفات حتى حيث كانت خيارات التخطي ستتركها
+	Recognized text	النص المتعرَّف عليه
+	Recognized text applied ({n} words, one undoable step)	طُبِّق النص المتعرَّف عليه ({n} كلمة، خطوة واحدة قابلة للتراجع)
+	Reject	رفض
+	Reject entire page	رفض الصفحة بأكملها
+	Run OCR	تشغيل التعرف الضوئي
+	Sauvola binarization: ink to black, paper to white	تحويل Sauvola إلى أبيض وأسود: الحبر أسود والورق أبيض
+	Select a word on the page to inspect it	حدد كلمة في الصفحة لفحصها
+	Several files have the same name, so their results would overwrite each other; nothing was written: {list}	لعدة ملفات الاسم نفسه، فستكتب نتائجها فوق بعضها؛ لم يُكتب شيء: {list}
+	Shift+F8: the previous word to review	Shift+F8: الكلمة السابقة للمراجعة
+	Skip files that already have text	تخطي الملفات التي تحتوي على نص بالفعل
+	Skip pages that already have text	تخطي الصفحات التي تحتوي على نص بالفعل
+	Source page	الصفحة المصدر
+	Straightens skewed text lines before reading	يقوّم أسطر النص المائلة قبل القراءة
+	Suggestions	اقتراحات
+	That is the source file; choose another destination	هذا هو الملف المصدر؛ اختر وجهة أخرى
+	The built-in engine (pure Rust)	المحرك المدمج (Rust خالص)
+	The output folder already holds files of these names; nothing was written: {list}	يحتوي مجلد الإخراج بالفعل على ملفات بهذه الأسماء؛ لم يُكتب شيء: {list}
+	The page was read again; its words were replaced (undo in the panel)	أُعيدت قراءة الصفحة؛ واستُبدلت كلماتها (يمكن التراجع من اللوحة)
+	The page's words were applied as one undoable step ({n} words)	طُبِّقت كلمات الصفحة كخطوة واحدة قابلة للتراجع ({n} كلمة)
+	The page's words were cleared (undo in the panel)	مُسحت كلمات الصفحة (يمكن التراجع من اللوحة)
+	The re-read found no text; the existing words are unchanged	لم تجد إعادة القراءة أي نص؛ والكلمات الموجودة لم تتغير
+	The region was read again; its words were replaced (undo in the panel)	أُعيدت قراءة المنطقة؛ واستُبدلت كلماتها (يمكن التراجع من اللوحة)
+	The searchable copies are written here under the source names	تُكتب النسخ القابلة للبحث هنا بأسماء الملفات المصدر
+	The selected word is gone; choose another	الكلمة المحددة لم تعد موجودة؛ اختر غيرها
+	The tesseract program, run as an external process	برنامج tesseract، يعمل كعملية خارجية
+	Turns pages scanned sideways or upside down upright before reading	يعدّل الصفحات الممسوحة جانبيًا أو مقلوبة قبل القراءة
+	Undo the last review change (Ctrl+Z)	التراجع عن آخر تغيير في المراجعة (Ctrl+Z)
+	Use the chosen engine's reading alone	استخدام قراءة المحرك المختار وحدها
+	VERIFIED %	نسبة التحقق %
+	Verified	تم التحقق
+	Word	كلمة
+	Writes a new document of visible text; the scan is not changed	يكتب مستندًا جديدًا من نص مرئي؛ ولا يتغير المسح الضوئي
+	Wrote {name}	كُتب {name}
+	corrected	مصحَّحة
+	removed	محذوفة
+	skipped	متخطاة
+	unreviewed	لم تُراجع
+	verified	تم التحقق منها
+	{name}: {n} low-confidence word(s) on pages {pages}	{name}: {n} كلمة منخفضة الثقة في الصفحات {pages}
+	{n} word(s) to review	{n} كلمة للمراجعة
+	Correct recognized text…	تصحيح النص المتعرَّف عليه…
+	the tesseract program was not found (install it, or add it to the PATH)	لم يُعثر على برنامج tesseract (ثبّته أو أضفه إلى PATH)
+	still checking whether the tesseract program can run; try again in a moment	لا يزال التحقق جاريًا من إمكانية تشغيل برنامج tesseract؛ أعد المحاولة بعد لحظة
+	the tesseract engine is not available in the web build	محرك tesseract غير متاح في إصدار الويب

@@ -2579,3 +2579,94 @@ animation effects	Off	Aus
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Optionen für diese Antwort
 	Export value	Exportwert
+# OCR: the Correct recognized text command (the Verify screen's other strings come with the screen).
+# OCR: the Verify screen, the batch options and the engine choice.
+	+ Dictionary	+ Wörterbuch
+	; cancelled — {n} files were not run	; abgebrochen — {n} Dateien wurden nicht verarbeitet
+	; {n} files already had text	; {n} Dateien enthielten bereits Text
+	A 3×3 median filter against scan speckle	Ein 3×3-Medianfilter gegen Scanflecken
+	A folder is asked for when a multiple-file run starts	Der Ordner wird abgefragt, wenn ein Lauf über mehrere Dateien beginnt
+	AVG CONFIDENCE	MITTLERE ZUVERLÄSSIGKEIT
+	Accept	Übernehmen
+	Accept entire page	Ganze Seite übernehmen
+	Add a second engine's reading when the first is unsure	Holt eine zweite Erkennung hinzu, wenn die erste unsicher ist
+	Always read with both engines and merge the words	Liest immer mit beiden Engines und führt die Wörter zusammen
+	Auto-rotate	Automatisch drehen
+	Automatic	Automatisch
+	Binarize	Binarisieren
+	Both engines, combined as the Strategy says	Beide Engines, kombiniert nach der gewählten Strategie
+	CONFIDENCE	ZUVERLÄSSIGKEIT
+	Cancelled — {n} words were read on {m} of {t} pages; the rest were not read	Abgebrochen — {n} Wörter auf {m} von {t} Seiten gelesen; der Rest wurde nicht gelesen
+	Click a word to inspect it; drag a rectangle to re-read part of the page	Klicken Sie auf ein Wort, um es zu prüfen; ziehen Sie ein Rechteck, um einen Teil der Seite neu zu lesen
+	Confidence weighted	Nach Zuverlässigkeit gewichtet
+	Corrected text (Enter commits)	Korrigierter Text (Eingabetaste übernimmt)
+	Denoise	Entrauschen
+	Deskew	Gerade ausrichten
+	ENGINE · STRATEGY	ENGINE · STRATEGIE
+	Editable text	Bearbeitbarer Text
+	Exit	Beenden
+	F8: next word to review; Shift+F8 goes back	F8: nächstes zu prüfendes Wort; Umschalt+F8 geht zurück
+	Force OCR (override skip options)	OCR erzwingen (Überspringen-Optionen übergehen)
+	HIGH (>= 90%)	HOCH (>= 90 %)
+	In multiple files: a file with any text is its own skipped bucket, and nothing is written for it	Bei mehreren Dateien: Eine Datei mit Text wird gesondert als übersprungen gezählt, und für sie wird nichts geschrieben
+	LOW (< 70%)	NIEDRIG (< 70 %)
+	LOW-CONFIDENCE WORDS	WÖRTER MIT NIEDRIGER ZUVERLÄSSIGKEIT
+	MEDIUM (70-89%)	MITTEL (70–89 %)
+	Mark this page as reviewed (Ctrl+T)	Diese Seite als geprüft markieren (Strg+T)
+	Next uncertain	Nächstes unsicheres
+	OCR complete — no text recognized on this page.	OCR abgeschlossen — auf dieser Seite wurde kein Text erkannt.
+	OCR results rejected.	OCR-Ergebnisse verworfen.
+	PAGE	SEITE
+	Page verified	Seite geprüft
+	Pages with renderable text are left alone and reported as skipped	Seiten mit darstellbarem Text bleiben unverändert und werden als übersprungen gemeldet
+	Previous uncertain	Vorheriges unsicheres
+	Primary only	Nur primäre Engine
+	ROVER vote	ROVER-Abstimmung
+	Re-OCR entire page	Ganze Seite neu erkennen
+	Re-OCR this region	Diesen Bereich neu erkennen
+	Read {n} words on {m} of {t} pages	{n} Wörter auf {m} von {t} Seiten gelesen
+	Reads pages and files even where the skip options would leave them alone	Liest Seiten und Dateien auch dort, wo die Überspringen-Optionen sie auslassen würden
+	Recognized text	Erkannter Text
+	Recognized text applied ({n} words, one undoable step)	Erkannter Text übernommen ({n} Wörter, ein rückgängig machbarer Schritt)
+	Reject	Verwerfen
+	Reject entire page	Ganze Seite verwerfen
+	Run OCR	OCR ausführen
+	Sauvola binarization: ink to black, paper to white	Sauvola-Binarisierung: Tinte wird schwarz, Papier weiß
+	Select a word on the page to inspect it	Wählen Sie ein Wort auf der Seite aus, um es zu prüfen
+	Several files have the same name, so their results would overwrite each other; nothing was written: {list}	Mehrere Dateien haben denselben Namen, ihre Ergebnisse würden sich gegenseitig überschreiben; es wurde nichts geschrieben: {list}
+	Shift+F8: the previous word to review	Umschalt+F8: das vorherige zu prüfende Wort
+	Skip files that already have text	Dateien überspringen, die bereits Text enthalten
+	Skip pages that already have text	Seiten überspringen, die bereits Text enthalten
+	Source page	Quellseite
+	Straightens skewed text lines before reading	Richtet schräge Textzeilen vor dem Lesen gerade aus
+	Suggestions	Vorschläge
+	That is the source file; choose another destination	Das ist die Quelldatei; wählen Sie ein anderes Ziel
+	The built-in engine (pure Rust)	Die eingebaute Engine (reines Rust)
+	The output folder already holds files of these names; nothing was written: {list}	Der Ausgabeordner enthält bereits Dateien mit diesen Namen; es wurde nichts geschrieben: {list}
+	The page was read again; its words were replaced (undo in the panel)	Die Seite wurde neu gelesen; ihre Wörter wurden ersetzt (im Bereich rückgängig machbar)
+	The page's words were applied as one undoable step ({n} words)	Die Wörter der Seite wurden als ein rückgängig machbarer Schritt übernommen ({n} Wörter)
+	The page's words were cleared (undo in the panel)	Die Wörter der Seite wurden entfernt (im Bereich rückgängig machbar)
+	The re-read found no text; the existing words are unchanged	Beim erneuten Lesen wurde kein Text gefunden; die vorhandenen Wörter bleiben unverändert
+	The region was read again; its words were replaced (undo in the panel)	Der Bereich wurde neu gelesen; seine Wörter wurden ersetzt (im Bereich rückgängig machbar)
+	The searchable copies are written here under the source names	Die durchsuchbaren Kopien werden hier unter den Namen der Quelldateien gespeichert
+	The selected word is gone; choose another	Das ausgewählte Wort existiert nicht mehr; wählen Sie ein anderes
+	The tesseract program, run as an external process	Das Programm tesseract, als externer Prozess ausgeführt
+	Turns pages scanned sideways or upside down upright before reading	Richtet seitlich oder kopfüber gescannte Seiten vor dem Lesen auf
+	Undo the last review change (Ctrl+Z)	Letzte Prüfungsänderung rückgängig machen (Strg+Z)
+	Use the chosen engine's reading alone	Nur die Erkennung der gewählten Engine verwenden
+	VERIFIED %	GEPRÜFT %
+	Verified	Geprüft
+	Word	Wort
+	Writes a new document of visible text; the scan is not changed	Schreibt ein neues Dokument mit sichtbarem Text; der Scan bleibt unverändert
+	Wrote {name}	{name} geschrieben
+	corrected	korrigiert
+	removed	entfernt
+	skipped	übersprungen
+	unreviewed	ungeprüft
+	verified	geprüft
+	{name}: {n} low-confidence word(s) on pages {pages}	{name}: {n} Wort/Wörter mit niedriger Zuverlässigkeit auf den Seiten {pages}
+	{n} word(s) to review	{n} Wort/Wörter zu prüfen
+	Correct recognized text…	Erkannten Text korrigieren…
+	the tesseract program was not found (install it, or add it to the PATH)	das Programm tesseract wurde nicht gefunden (installieren Sie es oder nehmen Sie es in den PATH auf)
+	still checking whether the tesseract program can run; try again in a moment	es wird noch geprüft, ob das Programm tesseract ausgeführt werden kann; versuchen Sie es gleich noch einmal
+	the tesseract engine is not available in the web build	die Engine tesseract ist in der Web-Version nicht verfügbar

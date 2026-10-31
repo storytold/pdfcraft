@@ -184,7 +184,27 @@ impl RecoveryStore {
     pub fn dir(&self) -> &Path {
         &self.dir
     }
+}
 
+/// The OCR Verify screen's per-language user dictionary folder, next to the recovery store:
+/// the portable data folder's `Dictionary` in portable mode ([`crate::portable`]), otherwise
+/// `…/PdfCraft/Dictionary` in the platform's per-user data folder. `None` where files are not
+/// kept (the web build).
+pub fn default_dictionary_dir() -> Option<PathBuf> {
+    if let Some(dir) = crate::portable::data_dir() {
+        return Some(dir.join("Dictionary"));
+    }
+    let env = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
+    if cfg!(target_os = "macos") {
+        env("HOME").map(|h| h.join("Library/Application Support/PdfCraft/Dictionary"))
+    } else if cfg!(windows) {
+        env("LOCALAPPDATA").map(|d| d.join("PdfCraft").join("Dictionary"))
+    } else {
+        env("XDG_DATA_HOME").or_else(|| env("HOME").map(|h| h.join(".local/share"))).map(|d| d.join("pdfcraft/dictionary"))
+    }
+}
+
+impl RecoveryStore {
     /// Write (or replace) an entry. The PDF is written before its metadata, both atomically, so
     /// a listed entry always has complete bytes.
     pub fn write(&self, meta: &RecoveryMeta, bytes: &[u8]) -> std::io::Result<()> {

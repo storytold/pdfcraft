@@ -447,6 +447,8 @@ fn app_creator<'a>(
         if let Some(dir) = pdfcraft_ui_egui::RecoveryStore::default_dir() {
             app.enable_recovery(pdfcraft_ui_egui::RecoveryStore::new(dir));
         }
+        // The OCR Verify screen stores its per-language dictionary beside recovery data.
+        app.ocr_verify.dictionary_dir = pdfcraft_ui_egui::default_dictionary_dir();
         if let Some(state) = &cc.wgpu_render_state {
             let adapter = state.adapter.get_info();
             let max_texture_dimension_2d = state.device.limits().max_texture_dimension_2d;

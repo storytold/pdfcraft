@@ -73,7 +73,7 @@ help/docs polish (catalog and script work are already done), not missing UI stri
 | Slovenian | `sl` | 2,536 entries | partial | no |
 | Greek | `el` | 2,545 entries | partial | no |
 | Turkish | `tr` | 2,525 entries | partial | yes |
-| Lithuanian | `lt` | 2,798 (100% of current key union) | partial; community native-speaker review ([#1401](https://github.com/storytold/pdfcraft/pull/1401)) | no |
+| Lithuanian | `lt` | 2,798 (100% of current key union) | partial; community native-speaker review ([#1401](https://github.com/storytold/pdfcraft/pull/1401)); the Scan & OCR review strings (M10) were added without native review | no |
 | Finnish | `fi` | 2,798 entries (every current key) | partial; AI-assisted, native proofreading pending | yes |
 | Albanian | `sq` | 2,524 entries | partial; not yet reviewed by a native speaker | no |
 | Catalan | `ca` | 2,798 entries | partial: no translated help, engine error details in English; native-speaker review by the contributor | no |

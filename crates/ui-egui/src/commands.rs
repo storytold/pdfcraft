@@ -521,6 +521,7 @@ impl PdfCraftApp {
             "export.text" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::Text)),
             "ocr.recognize" => self.dialog = Some(Dialog::RecognizeText),
             "ocr.recognize_batch" => self.ocr_files_dialog(),
+            "ocr.correct" => self.ocr_verify.open = true,
             "edit.edit_text" => {
                 self.quick_tool = crate::QuickTool::EditText;
                 self.left = crate::LeftPanel::Tool("edit");

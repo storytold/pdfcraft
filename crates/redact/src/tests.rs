@@ -3285,3 +3285,38 @@ fn a_reply_on_another_page_to_a_removed_popup_goes_too() {
         assert!(!bytes.windows(gone.len()).any(|w| w == gone), "{} survived", String::from_utf8_lossy(gone));
     }
 }
+
+/// An invisible OCR-style text layer drawn in a Type3 font (what the OCR output writes for
+/// characters beyond WinAnsi) is redacted like any other text: its glyphs are hit-tested by
+/// their real advances, removed, and the verifier passes.
+#[test]
+fn a_type3_text_layer_is_redacted_like_any_other() {
+    // One glyph (code 1): a filled box, 500 units wide, with a ToUnicode CMap that reads it
+    // back as U+3042.
+    let t3 = b"<< /Type /Font /Subtype /Type3 /Name /PCOcr /FontBBox [0 0 700 700] /FontMatrix [0.001 0 0 0.001 0 0] \
+        /FirstChar 1 /LastChar 1 /Widths [500] /Encoding << /Type /Encoding /Differences [1 /g01] >> \
+        /CharProcs << /g01 8 0 R >> /ToUnicode 9 0 R >>";
+    let charproc = b"500 0 0 0 0 700 700 d1\n0 0 700 700 re f\n";
+    let cmap = b"/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapType 2 def\n1 begincodespacerange\n<01> <01>\nendcodespacerange\n1 beginbfchar\n<01> <3042>\nendbfchar\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n";
+    let layer = b"BT 3 Tr /T3 10 Tf 100 100 Td (\x01) Tj ET";
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /T3 5 0 R >> >> >>".to_vec(),
+        stream("", layer),
+        t3.to_vec(),
+        FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        widths(),
+        stream("", charproc),
+        stream("", cmap),
+    ]);
+    // The glyph box at size 10: 5 pt wide, from the font's descent to its ascent.
+    assert_eq!(under(&mut doc, 0, &[[98.0, 96.0, 112.0, 110.0]]), 1, "the Type3 glyph is found under the mark");
+    assert_eq!(under(&mut doc, 0, &[[200.0, 200.0, 250.0, 250.0]]), 0, "elsewhere the page is clean");
+    mark(&mut doc, 0, &[[98.0, 96.0, 112.0, 110.0]], "");
+    let report = apply(&mut doc, None).unwrap();
+    assert_eq!(report.glyphs, 1, "{report:?}");
+    // The verified apply left no text-showing operator: the re-read page is empty of them.
+    assert!(!content(&doc, 0).contains("Tj"), "{}", content(&doc, 0));
+    assert_eq!(under(&mut doc, 0, &[[98.0, 96.0, 112.0, 110.0]]), 0, "nothing is left under the mark");
+}

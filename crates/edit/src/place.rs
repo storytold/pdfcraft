@@ -383,12 +383,77 @@ pub(crate) fn place_inside_wrapper(doc: &mut Document, page: &pdfcraft_model::Pa
 /// it away); the original content is wrapped in q/Q first. Used for applied redaction boxes.
 /// Returns the new content stream.
 pub fn stamp(doc: &mut Document, page: usize, tag: &str, content: Vec<u8>) -> Result<ObjRef, EditError> {
+    stamp_with_fonts(doc, page, tag, &mut pdfcraft_fonts::TextPlan::default(), |_| content)
+}
+
+/// Draw the content `make` builds on top of a page, with standard Helvetica as `/PCHelv` and
+/// the plan's Type3 fonts added to the page's resources first (so the content can reference
+/// them by the names the plan carries). The original content is wrapped in q/Q first; the
+/// stream is tagged `tag` (not a mark kind, so Remove never takes it away). This is how the
+/// OCR text layers get their Unicode faces (see [`add_type3_fonts`]). Returns the new content
+/// stream.
+pub fn stamp_with_fonts(
+    doc: &mut Document,
+    page: usize,
+    tag: &str,
+    plan: &mut pdfcraft_fonts::TextPlan,
+    make: impl FnOnce(&pdfcraft_fonts::TextPlan) -> Vec<u8>,
+) -> Result<ObjRef, EditError> {
     let all = page_list(doc);
     check(&[page], all.len())?;
     check_on_top(doc, &all[page])?;
+    add_type3_fonts(doc, page, plan)?;
+    let content = make(plan);
+    let all = page_list(doc);
     add_resources(doc, &all[page], None, Some(&content))?;
     let p = page_list(doc).swap_remove(page);
     place_tagged(doc, &p, tag, content, false)
+}
+
+/// Add the plan's Type3 fonts to a page's (0-based) resources, building each font once and
+/// sharing the object with every page that uses it. Fills in each planned font's resource name
+/// (`PCOcr`, `PCOcr1`, … — a name free on the page being registered: a font built for an
+/// earlier page keeps its name only where that name is free or already that font) and object;
+/// the content generators read the names from the plan, so this must run before they are
+/// called for each page.
+pub fn add_type3_fonts(doc: &mut Document, page: usize, plan: &mut pdfcraft_fonts::TextPlan) -> Result<(), EditError> {
+    if plan.fonts.is_empty() {
+        return Ok(());
+    }
+    let all = page_list(doc);
+    check(&[page], all.len())?;
+    let p = &all[page];
+    let mut res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
+    let mut fonts = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
+    for i in 0..plan.fonts.len() {
+        let object = match plan.fonts[i].object {
+            Some(r) => {
+                // Built for an earlier page under a name that was free THERE. On this page the
+                // name may already be another font (the page's own, or an earlier OCR layer's):
+                // then this page gets a free name of its own, and the plan carries it for the
+                // content written next.
+                let taken = fonts.get(plan.fonts[i].name.as_bytes()).is_some_and(|o| o.as_ref() != Some(r));
+                if taken {
+                    plan.fonts[i].name = super::text::unique_font_name(&fonts, "PCOcr");
+                }
+                r
+            }
+            None => {
+                let glyphs = plan.fonts[i].glyphs.iter().map(|(ch, g)| (*ch, super::text::glyph_path(g), g.width)).collect::<Vec<_>>();
+                let dict = super::text::type3_font_dict(doc, &glyphs)?;
+                let r = doc.add(Object::Dict(dict));
+                plan.fonts[i].name = super::text::unique_font_name(&fonts, "PCOcr");
+                plan.fonts[i].object = Some(r);
+                r
+            }
+        };
+        fonts.set(plan.fonts[i].name.as_bytes().to_vec(), Object::Ref(object));
+    }
+    res.set(b"Font".to_vec(), Object::Dict(fonts));
+    // The page gets its own (possibly copied) resources; shared dictionaries stay untouched.
+    let obj = p.obj;
+    doc.update_dict(obj, |d| d.set(b"Resources".to_vec(), Object::Dict(res)))?;
+    Ok(())
 }
 
 pub(crate) fn begin(kind: MarkKind, subtype: &str, matrix: [f64; 6]) -> String {

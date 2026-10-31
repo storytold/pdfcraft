@@ -805,10 +805,11 @@ fn arabic_ligature_actual_text_is_one_editable_word_through_save_reopen() {
 }
 
 /// Each of these writes to its required `path` and replaces an existing file there, so the MCP
-/// annotations must not tell clients the call is read-only or harmless (#130).
+/// annotations must not tell clients the call is read-only or harmless (#130). The OCR
+/// dictionary's updates rewrite the file in place (lower-cased and sorted), so it counts too.
 #[test]
 fn file_writing_tools_are_not_read_only() {
-    for name in ["doc_export_data", "accessibility_report", "image_save"] {
+    for name in ["doc_export_data", "accessibility_report", "image_save", "ocr_dictionary"] {
         let t = tools().into_iter().find(|t| t.name == name).unwrap();
         assert!(!t.read_only, "{name} writes a file but advertises read-only");
         assert!(t.destructive, "{name} overwrites its path but advertises non-destructive");
@@ -2404,6 +2405,16 @@ fn copy_restricted_text_stays_in_the_document() {
     }
     let restyled = ok(&mut a, "text_edit", json!({ "doc": re, "page": 1, "paragraph": 1, "size": 30 }));
     assert!(!restyled.to_string().contains("Page"), "{restyled}");
+    // A path that would carry the page's words OUT of the document — the editable output, or
+    // the review word list — is refused on a copy-restricted document (no engines needed).
+    match a.call("ocr_recognize", &json!({ "doc": re, "output_mode": "editable", "out": "copy.pdf" })) {
+        Err(ToolError::Failed(m)) => assert!(m.contains("don't allow copying"), "{m}"),
+        other => panic!("the editable output is refused: {other:?}"),
+    }
+    match a.call("ocr_words", &json!({ "doc": re })) {
+        Err(ToolError::Failed(m)) => assert!(m.contains("don't allow copying"), "{m}"),
+        other => panic!("ocr_words is refused: {other:?}"),
+    }
     if ok(&mut a, "ocr_status", json!({}))["available"] != true {
         eprintln!("skipped the OCR part: OCR models not installed");
         return;
@@ -6966,6 +6977,8 @@ fn ocr_tools_make_a_scan_searchable() {
     let mut a = auto(&dir);
     let status = ok(&mut a, "ocr_status", json!({}));
     assert_eq!(status["languages"][0]["code"], "en");
+    assert_eq!(status["engines"][0]["id"], "ocrs", "{status}");
+    assert!(status["engines"][1]["id"] == "tesseract" && status["engines"][1]["available"].is_boolean(), "{status}");
     if status["available"] != true {
         eprintln!("skipped: OCR models not installed");
         return;
@@ -6980,6 +6993,64 @@ fn ocr_tools_make_a_scan_searchable() {
     let again = ok(&mut a, "ocr_recognize", json!({ "doc": scan, "pages": [1] }));
     assert!(again["pages"][0]["skipped"].is_string(), "{again}");
     assert!(matches!(a.call("ocr_recognize", &json!({ "doc": scan, "language": "xx" })), Err(ToolError::InvalidArgs(_))));
+    // An engine that cannot run is named up front, before anything is read.
+    if status["engines"][1]["available"] != true {
+        let why = a.call("ocr_recognize", &json!({ "doc": scan, "engine": "tesseract", "skip_text_pages": false })).unwrap_err();
+        assert!(matches!(why, ToolError::Failed(_)), "{why}");
+        assert!(why.to_string().contains("tesseract"), "{why}");
+    }
+    // ocr_words: the recognition's words with confidence, band and suspects, changing nothing.
+    // ocrs reports no confidences, so `auto` + a confidence merge is asked for when the second
+    // engine is there to supply them; without it confidence and band are honestly null.
+    ok(&mut a, "doc_close", json!({ "doc": scan, "discard_changes": true }));
+    let scan = ok(&mut a, "doc_create", json!({ "from": "images", "paths": [png.to_string_lossy()] }))["doc"].as_u64().unwrap();
+    let mut args = json!({ "doc": scan });
+    if status["engines"][1]["available"] == true {
+        args["engine"] = json!("auto");
+        args["strategy"] = json!("confidence");
+    }
+    let words = ok(&mut a, "ocr_words", args);
+    assert!(words["words"].as_u64().unwrap() >= 4, "{words}");
+    let first = &words["pages"][0]["words"][0];
+    assert!(first["text"].is_string() && first["box"].as_array().is_some_and(|b| b.len() == 4), "{words}");
+    if status["engines"][1]["available"] == true {
+        let with_confidence = words["pages"][0]["words"]
+            .as_array()
+            .expect("words")
+            .iter()
+            .filter(|w| w["confidence"].is_number() && w["band"].as_str().is_some())
+            .count();
+        assert!(with_confidence >= 4, "the second engine's confidences arrive: {words}");
+    } else {
+        assert!(first["confidence"].is_null() && first["band"].is_null() && first["suspect"] == false, "{words}");
+    }
+    assert!(a.call("edit_undo", &json!({ "doc": scan })).is_err(), "ocr_words changes nothing, so there is no undo");
+}
+
+/// An editable-text recognition writes a NEW file of visible text, never the source.
+#[test]
+fn ocr_recognize_editable_output_writes_visible_text() {
+    let dir = workdir("ocr-editable");
+    let mut a = auto(&dir);
+    if ok(&mut a, "ocr_status", json!({}))["available"] != true {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    let text = ok(&mut a, "doc_create", json!({ "from": "text", "text": "Editable output words" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_images", json!({ "doc": text, "folder": "scan", "dpi": 150, "pages": [1] }));
+    let png = std::fs::read_dir(dir.join("scan")).unwrap().next().unwrap().unwrap().path();
+    let scan = ok(&mut a, "doc_create", json!({ "from": "images", "paths": [png.to_string_lossy()] }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_save", json!({ "doc": scan, "path": "src/scan.pdf" }));
+    // The output never lands on the source.
+    let why = a.call("ocr_recognize", &json!({ "doc": scan, "pages": [1], "output_mode": "editable", "out": "src/scan.pdf" })).unwrap_err();
+    assert!(why.to_string().contains("source"), "{why}");
+    let r = ok(&mut a, "ocr_recognize", json!({ "doc": scan, "pages": [1], "output_mode": "editable", "out": "out/ocr.pdf" }));
+    assert!(r["words"].as_u64().unwrap() >= 3, "{r}");
+    let ocr = ok(&mut a, "doc_open", json!({ "path": "out/ocr.pdf" }))["doc"].as_u64().unwrap();
+    // The text is visible (the engine may misread a letter at this dpi — look for a word that
+    // survives).
+    let found = ok(&mut a, "text_find", json!({ "doc": ocr, "query": "output" }));
+    assert!(found["count"].as_u64() >= Some(1), "the new file's text is visible: {found}");
 }
 
 /// #1028: `skip_text_pages: false` reads a picture on a page that has its own text, and the
@@ -7022,6 +7093,46 @@ fn ocr_recognize_files_refuses_paths_outside_the_root() {
     assert!(!dir.join("out").exists(), "nothing was started");
 }
 
+/// Two inputs of one file name from different folders would write the same output in the
+/// batch folder: the batch is refused up front, with or without the OCR engines, naming the
+/// file, and nothing is written.
+#[test]
+fn ocr_recognize_files_refuses_inputs_that_share_a_file_name() {
+    let dir = workdir("ocr-files-same-name");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "one/scan.pdf" }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "two/scan.pdf" }));
+    let r = a.call("ocr_recognize_files", &json!({ "paths": ["one/scan.pdf", "two/scan.pdf"], "folder": "out" }));
+    assert!(matches!(&r, Err(ToolError::InvalidArgs(m)) if m.contains("scan.pdf") && m.contains("overwrite")), "{r:?}");
+    assert!(std::fs::read_dir(dir.join("out")).map_or(true, |mut d| d.next().is_none()), "nothing was written");
+}
+
+/// `out` belongs to the editable output. A searchable run (the default) writes into the open
+/// document, so an `out` is refused rather than silently ignored, with or without the engines.
+#[test]
+fn ocr_recognize_refuses_an_out_that_nothing_would_use() {
+    let dir = workdir("ocr-out-ignored");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let r = a.call("ocr_recognize", &json!({ "doc": doc, "out": "../outside.pdf" }));
+    assert!(matches!(&r, Err(ToolError::InvalidArgs(m)) if m.contains("editable")), "{r:?}");
+    assert!(!dir.join("../outside.pdf").exists());
+}
+
+/// The editable output is a NEW file: an existing `out` is refused before anything runs (with
+/// or without the engines), and the file is left as it was.
+#[test]
+fn ocr_recognize_editable_output_never_replaces_an_existing_file() {
+    let dir = workdir("ocr-editable-exists");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    std::fs::write(dir.join("taken.pdf"), b"keep me").unwrap();
+    let r = a.call("ocr_recognize", &json!({ "doc": doc, "output_mode": "editable", "out": "taken.pdf" }));
+    assert!(matches!(&r, Err(e) if e.to_string().contains("already exists")), "{r:?}");
+    assert_eq!(std::fs::read(dir.join("taken.pdf")).unwrap(), b"keep me");
+}
+
 #[test]
 fn ocr_recognize_files_writes_searchable_copies() {
     let dir = workdir("ocr-files");
@@ -7035,9 +7146,22 @@ fn ocr_recognize_files_writes_searchable_copies() {
     let png = std::fs::read_dir(dir.join("scan")).unwrap().next().unwrap().unwrap().path();
     let scan = ok(&mut a, "doc_create", json!({ "from": "images", "paths": [png.to_string_lossy()] }))["doc"].as_u64().unwrap();
     ok(&mut a, "doc_save", json!({ "doc": scan, "path": "in/scan.pdf" }));
+    // A file that already has text: the skip-files option passes it over as its own bucket.
+    let typed = ok(&mut a, "doc_create", json!({ "from": "text", "text": "Already typed" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_save", json!({ "doc": typed, "path": "in/typed.pdf" }));
+    // Collision pre-flight: the existing out/scan.pdf (written below) stops a rerun.
     let r = ok(&mut a, "ocr_recognize_files", json!({ "paths": ["in/scan.pdf", "missing.pdf"], "folder": "out" }));
     assert!(r["files"][0]["words"].as_u64().unwrap() >= 3, "{r}");
     assert!(r["files"][1]["error"].is_string(), "{r}");
+    let why = a.call("ocr_recognize_files", &json!({ "paths": ["in/scan.pdf"], "folder": "out" })).unwrap_err();
+    assert!(matches!(why, ToolError::Failed(_)), "{why}");
+    assert!(why.to_string().contains("scan.pdf"), "{why}");
+    // The skip-files bucket and the low-confidence note.
+    let r = ok(&mut a, "ocr_recognize_files", json!({ "paths": ["in/typed.pdf", "in/scan.pdf"], "folder": "out2", "skip_text_files": true }));
+    assert_eq!(r["skipped_files"].as_u64(), Some(1), "{r}");
+    assert!(r["files"][0]["skipped"].is_string(), "{r}");
+    assert_eq!(r["recognized"].as_u64(), Some(1), "{r}");
+    assert!(r["files"][1]["output"].is_string(), "{r}");
     let out = ok(&mut a, "doc_open", json!({ "path": "out/scan.pdf" }))["doc"].as_u64().unwrap();
     let found = ok(&mut a, "text_find", json!({ "doc": out, "query": "recognition" }));
     assert!(found.to_string().contains("\"page\""), "{found}");
@@ -7047,18 +7171,6 @@ fn ocr_recognize_files_writes_searchable_copies() {
 /// the second output replaces the first while both results report success. The batch is refused
 /// up front, naming the file, before the folder is created, anything is read or the OCR engines
 /// load, so the outcome is the same with or without the models installed.
-#[test]
-fn ocr_recognize_files_refuses_inputs_that_share_a_file_name() {
-    let dir = workdir("ocr-files-same-name");
-    let mut a = auto(&dir);
-    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
-    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "one/scan.pdf" }));
-    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "two/scan.pdf" }));
-    let r = a.call("ocr_recognize_files", &json!({ "paths": ["one/scan.pdf", "two/scan.pdf"], "folder": "out" }));
-    assert!(matches!(&r, Err(ToolError::InvalidArgs(m)) if m.contains("scan.pdf")), "{r:?}");
-    assert!(!dir.join("out").exists(), "nothing was started: the output folder was not created");
-}
-
 /// File names are compared without regard to case on Windows and macOS (`scan.pdf` and `Scan.PDF`
 /// are one file there), and exactly elsewhere, where they are two files and the batch is not
 /// refused.
@@ -10189,4 +10301,160 @@ fn simple_rule_scan_drawn(content: &[u8]) -> Vec<u8> {
         doc.set(reference, Object::Stream(Stream::flate(image.dict.clone(), &data)));
     }
     write_full(&doc, &SaveOptions::default()).unwrap()
+}
+
+/// Reviewing headlessly: corrections keep the boxes, a stale or foreign review is refused, and
+/// applying consumes the handle (the pages already accepted were applied once).
+#[test]
+fn ocr_review_corrections_keep_boxes_are_guarded_and_apply_once() {
+    fn render(a: &mut Automation, doc: u64) -> Vec<u8> {
+        let mut result = a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72 })).unwrap();
+        match result.remove(0) {
+            Content::Png { data, .. } => data,
+            other => panic!("expected a rendered page, got {other:?}"),
+        }
+    }
+    let dir = workdir("ocr-review");
+    let mut a = auto(&dir);
+    if ok(&mut a, "ocr_status", json!({}))["available"] != true {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    let text = ok(&mut a, "doc_create", json!({ "from": "text", "text": "Review these original words" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_images", json!({ "doc": text, "folder": "scan", "dpi": 150, "pages": [1] }));
+    let png = std::fs::read_dir(dir.join("scan")).unwrap().next().unwrap().unwrap().path();
+    let scan = ok(&mut a, "doc_create", json!({ "from": "images", "paths": [png.to_string_lossy()] }))["doc"].as_u64().unwrap();
+    let before = render(&mut a, scan);
+    let found = ok(&mut a, "ocr_words", json!({ "doc": scan, "retain_review": true }));
+    assert!(found["words"].as_u64().unwrap() >= 3, "{found}");
+    let review = found["review"].as_u64().unwrap();
+    assert!(page_text(&mut a, scan).iter().all(String::is_empty));
+    for args in [
+        json!({ "doc": text, "review": review }),
+        json!({ "doc": scan, "review": review, "corrections": [{"page":1,"word":999999,"text":"bad"}] }),
+        json!({ "doc": scan, "review": review, "corrections": [{"page":1,"word":1,"text":"bad","origin":[0,0]}] }),
+        json!({ "doc": scan, "review": review, "corrections": [{"page":1,"word":1,"text":"a".repeat(4*1024*1024+1)}] }),
+        json!({ "doc": scan, "review": review, "corrections": [{"page":1,"word":1,"text":"a"},{"page":1,"word":1,"text":"b"}] }),
+    ] {
+        assert!(a.call("ocr_review_apply", &args).is_err());
+        assert!(page_text(&mut a, scan).iter().all(String::is_empty));
+    }
+    let result = ok(
+        &mut a,
+        "ocr_review_apply",
+        json!({ "doc": scan, "review": review, "corrections": [{"page":1,"word":1,"text":"日本語"},{"page":1,"word":2,"text":""}] }),
+    );
+    assert!(result["applied"].as_u64().unwrap() >= 2);
+    let extracted = page_text(&mut a, scan).join("\n");
+    assert!(extracted.contains("日本語"), "{extracted}");
+    assert_eq!(render(&mut a, scan), before, "corrected text remains invisible at its original geometry");
+    assert!(a.call("ocr_review_apply", &json!({ "doc": scan, "review": review })).is_err(), "consumed reviews cannot be replayed");
+    ok(&mut a, "edit_undo", json!({ "doc": scan }));
+    assert!(page_text(&mut a, scan).iter().all(String::is_empty));
+    assert!(a.call("edit_undo", &json!({ "doc": scan })).is_err(), "review acceptance is one undo step");
+
+    let found = ok(&mut a, "ocr_words", json!({ "doc": scan, "retain_review": true }));
+    let stale = found["review"].as_u64().unwrap();
+    ok(&mut a, "page_rotate", json!({ "doc": scan, "pages": [1], "degrees": 90 }));
+    let error = a.call("ocr_review_apply", &json!({ "doc": scan, "review": stale })).unwrap_err().to_string();
+    assert!(error.contains("changed since recognition"), "{error}");
+    assert!(page_text(&mut a, scan).iter().all(String::is_empty));
+    ok(&mut a, "ocr_review_apply", json!({ "doc": scan, "review": stale, "discard": true }));
+    assert!(a.call("ocr_review_apply", &json!({ "doc": scan, "review": stale })).is_err());
+    ok(&mut a, "edit_undo", json!({ "doc": scan }));
+
+    let first = ok(&mut a, "ocr_words", json!({ "doc": scan, "retain_review": true }))["review"].as_u64().unwrap();
+    let second = ok(&mut a, "ocr_words", json!({ "doc": scan, "retain_review": true }))["review"].as_u64().unwrap();
+    assert_ne!(first, second);
+    assert!(a.call("ocr_review_apply", &json!({ "doc": scan, "review": first })).is_err());
+    ok(
+        &mut a,
+        "ocr_review_apply",
+        json!({ "doc": scan, "review": second, "output_mode": "editable", "out": "reviewed.pdf", "corrections": [{"page":1,"word":1,"text":"Corrected"}] }),
+    );
+    assert!(page_text(&mut a, scan).iter().all(String::is_empty));
+    let output = ok(&mut a, "doc_open", json!({ "path": "reviewed.pdf" }))["doc"].as_u64().unwrap();
+    assert!(page_text(&mut a, output).join("\n").contains("Corrected"));
+    // The editable output is a new file: an existing one is refused and the review is kept.
+    let third = ok(&mut a, "ocr_words", json!({ "doc": scan, "retain_review": true }))["review"].as_u64().unwrap();
+    let again = a.call("ocr_review_apply", &json!({ "doc": scan, "review": third, "output_mode": "editable", "out": "reviewed.pdf" }));
+    assert!(matches!(&again, Err(e) if e.to_string().contains("already exists")), "{again:?}");
+    ok(&mut a, "ocr_review_apply", json!({ "doc": scan, "review": third, "discard": true }));
+}
+
+#[test]
+fn ocr_dictionary_updates_are_atomic_bounded_and_confined() {
+    let dir = workdir("ocr-dictionary");
+    let mut a = auto(&dir);
+    let path = "ocr-dictionary-en.txt";
+    let out = ok(&mut a, "ocr_dictionary", json!({ "path": path, "add": ["Quartz", "quartz", "日本語"] }));
+    assert_eq!(out["count"], 2);
+    assert_eq!(pdfcraft_engine::ocr::dictionary::words(&std::fs::read_to_string(dir.join(path)).unwrap()).unwrap().len(), 2);
+    let before = std::fs::read(dir.join(path)).unwrap();
+    for args in [
+        json!({ "path": path, "add": ["a\nb"] }),
+        json!({ "path": path, "add": ["x".repeat(1025)] }),
+        json!({ "path": path, "add": ["İ".repeat(512)] }),
+        json!({ "path": path, "add": vec!["x"; 65537] }),
+        json!({ "path": "../outside-ocr-dictionary.txt", "add": ["x"] }),
+    ] {
+        assert!(a.call("ocr_dictionary", &args).is_err());
+    }
+    assert_eq!(std::fs::read(dir.join(path)).unwrap(), before);
+    assert_eq!(ok(&mut a, "ocr_dictionary", json!({ "path": path, "remove": ["QUARTZ"] }))["words"], json!(["日本語"]));
+    assert_eq!(ok(&mut a, "ocr_dictionary", json!({ "path": path }))["count"], 1);
+    std::fs::write(dir.join("ocr-dictionary-large.txt"), vec![b'a'; 4 * 1024 * 1024 + 1]).unwrap();
+    let too_big = a.call("ocr_dictionary", &json!({ "path": "ocr-dictionary-large.txt", "add": ["x"] })).unwrap_err().to_string();
+    assert!(!too_big.contains("must name a dictionary file"), "refused for its size, not its name: {too_big}");
+    assert_eq!(std::fs::metadata(dir.join("ocr-dictionary-large.txt")).unwrap().len(), 4 * 1024 * 1024 + 1);
+}
+
+/// The tool rewrites what it is pointed at (lower-cased, sorted), so it only takes dictionary file
+/// names: another small text file under the root is neither read nor changed.
+#[test]
+fn ocr_dictionary_refuses_files_that_are_not_dictionaries() {
+    let dir = workdir("ocr-dictionary-names");
+    let mut a = auto(&dir);
+    let env = b"TOKEN=Zebra
+APPLE=1
+";
+    for name in [".env", "notes.txt", "ocr-dictionary-en.md", "ocr-dictionary-e n.txt", "sub/readme.txt"] {
+        if let Some(parent) = std::path::Path::new(name).parent() {
+            std::fs::create_dir_all(dir.join(parent)).unwrap();
+        }
+        std::fs::write(dir.join(name), env).unwrap();
+        for args in [json!({ "path": name }), json!({ "path": name, "add": [] }), json!({ "path": name, "add": ["x"] })] {
+            let err = a.call("ocr_dictionary", &args).unwrap_err().to_string();
+            assert!(err.contains("must name a dictionary file"), "{name} {args}: {err}");
+        }
+        assert_eq!(std::fs::read(dir.join(name)).unwrap(), env, "{name} is untouched");
+    }
+}
+
+#[test]
+fn ocr_retained_reviews_have_eight_document_cap_and_close_releases_slot() {
+    let dir = workdir("ocr-review-cap");
+    let mut a = auto(&dir);
+    if ok(&mut a, "ocr_status", json!({}))["available"] != true {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    let mut docs = Vec::new();
+    let mut handles = Vec::new();
+    for _ in 0..9 {
+        let doc = ok(&mut a, "doc_create", json!({"from":"text", "text":"Already recognized text"}))["doc"].as_u64().unwrap();
+        docs.push(doc);
+    }
+    for doc in docs.iter().take(8) {
+        handles.push(ok(&mut a, "ocr_words", json!({"doc":doc,"retain_review":true}))["review"].as_u64().unwrap());
+    }
+    let error = a.call("ocr_words", &json!({"doc":docs[8],"retain_review":true})).unwrap_err().to_string();
+    assert!(error.contains("at most 8"), "{error}");
+    let replacement = ok(&mut a, "ocr_words", json!({"doc":docs[0],"retain_review":true}))["review"].as_u64().unwrap();
+    assert_ne!(replacement, handles[0]);
+    assert!(a.call("ocr_review_apply", &json!({"doc":docs[0],"review":handles[0],"discard":true})).is_err());
+    ok(&mut a, "doc_close", json!({"doc":docs[0],"discard_changes":true}));
+    assert!(a.call("ocr_review_apply", &json!({"doc":docs[0],"review":replacement})).is_err());
+    let final_handle = ok(&mut a, "ocr_words", json!({"doc":docs[8],"retain_review":true}))["review"].as_u64().unwrap();
+    ok(&mut a, "ocr_review_apply", json!({"doc":docs[8],"review":final_handle,"discard":true}));
 }

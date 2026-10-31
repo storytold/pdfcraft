@@ -39,6 +39,7 @@ pub const SCENES: &[(&str, &str, &str, &[&str])] = &[
         "README: layouts",
         &["--layout", "two-up", "--mode", "read", "--page", "4", "--theme", "dark", "--notice", "off"],
     ),
+    ("pdfcraft-ocr-verify", "OCR Verify screen", "README: OCR review", &["--size", "1680x1000", "--ocr-verify", "on"]),
 ];
 
 const PDF: &str = "dist/demo/pdfcraft-showcase.pdf";
@@ -109,7 +110,10 @@ fn update_attribution(root: &Path) -> Result<()> {
         // The home screen shows the ArtCraft mark: say so (it is a Storyteller trademark, not open
         // source; AGENTS.md §1.2), so the screenshot's licence is not read as covering it.
         let shows_home = scene.is_some_and(|(.., args)| args.windows(2).any(|w| w[0] == "--home" && w[1] == "on"));
-        let contents = if shows_home {
+        let shows_ocr = scene.is_some_and(|(.., args)| args.windows(2).any(|w| w[0] == "--ocr-verify" && w[1] == "on"));
+        let contents = if shows_ocr {
+            "Shows only PdfCraft UI, its Lucide icons and a synthetic scanned page built from the embedded fonts, with a real recognition (the OCR models) loaded into the Verify screen"
+        } else if shows_home {
             "Shows PdfCraft UI, Lucide icons, the showcase PDF built from the [[fetched]] OFL fonts, and the ArtCraft mark (Storyteller trademark from docs/brand/, not covered by this licence)"
         } else {
             "Shows only PdfCraft UI, Lucide icons and the showcase PDF built from the [[fetched]] OFL fonts"

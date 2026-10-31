@@ -2542,3 +2542,94 @@ animation effects	Off	关
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	此回复的选项
 	Export value	导出值
+# OCR: the Correct recognized text command (the Verify screen's other strings come with the screen).
+# OCR: the Verify screen, the batch options and the engine choice.
+	+ Dictionary	+ 词典
+	; cancelled — {n} files were not run	；已取消——{n} 个文件未运行
+	; {n} files already had text	；{n} 个文件已包含文本
+	A 3×3 median filter against scan speckle	3×3 中值滤波，去除扫描噪点
+	A folder is asked for when a multiple-file run starts	多文件运行开始时会询问文件夹
+	AVG CONFIDENCE	平均置信度
+	Accept	接受
+	Accept entire page	接受整页
+	Add a second engine's reading when the first is unsure	当第一个引擎没有把握时，加入第二个引擎的读取结果
+	Always read with both engines and merge the words	始终用两个引擎读取并合并词语
+	Auto-rotate	自动旋转
+	Automatic	自动
+	Binarize	二值化
+	Both engines, combined as the Strategy says	两个引擎，按所选策略组合
+	CONFIDENCE	置信度
+	Cancelled — {n} words were read on {m} of {t} pages; the rest were not read	已取消——已读取 {t} 页中的 {m} 页共 {n} 个词，其余页面未读取
+	Click a word to inspect it; drag a rectangle to re-read part of the page	点击词语可检查；拖出矩形可重新识别页面的一部分
+	Confidence weighted	按置信度加权
+	Corrected text (Enter commits)	更正后的文本（按 Enter 提交）
+	Denoise	降噪
+	Deskew	纠偏
+	ENGINE · STRATEGY	引擎 · 策略
+	Editable text	可编辑文本
+	Exit	退出
+	F8: next word to review; Shift+F8 goes back	F8：下一个待校对词；Shift+F8 上一个
+	Force OCR (override skip options)	强制 OCR（覆盖跳过选项）
+	HIGH (>= 90%)	高（≥ 90%）
+	In multiple files: a file with any text is its own skipped bucket, and nothing is written for it	用于多文件：已含文本的文件单独计入跳过，不为其写入任何内容
+	LOW (< 70%)	低（< 70%）
+	LOW-CONFIDENCE WORDS	低置信度词语
+	MEDIUM (70-89%)	中（70-89%）
+	Mark this page as reviewed (Ctrl+T)	将此页标记为已校对（Ctrl+T）
+	Next uncertain	下一个可疑词
+	OCR complete — no text recognized on this page.	OCR 完成——此页未识别出文本。
+	OCR results rejected.	已放弃 OCR 结果。
+	PAGE	页码
+	Page verified	整页已校对
+	Pages with renderable text are left alone and reported as skipped	已含可渲染文本的页面保持原样，并报告为已跳过
+	Previous uncertain	上一个可疑词
+	Primary only	仅主引擎
+	ROVER vote	ROVER 表决
+	Re-OCR entire page	重新识别整页
+	Re-OCR this region	重新识别此区域
+	Read {n} words on {m} of {t} pages	在 {t} 页中的 {m} 页上读取了 {n} 个词
+	Reads pages and files even where the skip options would leave them alone	即使跳过选项会放过这些页面和文件，也照样读取
+	Recognized text	识别的文本
+	Recognized text applied ({n} words, one undoable step)	识别文本已应用（{n} 个词，可一步撤销）
+	Reject	放弃
+	Reject entire page	放弃整页
+	Run OCR	运行 OCR
+	Sauvola binarization: ink to black, paper to white	Sauvola 二值化：墨迹变黑，纸面变白
+	Select a word on the page to inspect it	在页面上选择一个词语以进行检查
+	Several files have the same name, so their results would overwrite each other; nothing was written: {list}	多个文件同名，其结果会相互覆盖；未写入任何内容：{list}
+	Shift+F8: the previous word to review	Shift+F8：上一个待校对词
+	Skip files that already have text	跳过已包含文本的文件
+	Skip pages that already have text	跳过已包含文本的页面
+	Source page	源页面
+	Straightens skewed text lines before reading	读取前校正倾斜的文本行
+	Suggestions	建议
+	That is the source file; choose another destination	这是源文件；请选择其他保存位置
+	The built-in engine (pure Rust)	内置引擎（纯 Rust）
+	The output folder already holds files of these names; nothing was written: {list}	输出文件夹中已存在这些名称的文件；未写入任何内容：{list}
+	The page was read again; its words were replaced (undo in the panel)	此页已重新读取；其词语已替换（可在面板中撤销）
+	The page's words were applied as one undoable step ({n} words)	此页的词语已作为一步可撤销的修改应用（{n} 个词）
+	The page's words were cleared (undo in the panel)	此页的词语已清除（可在面板中撤销）
+	The re-read found no text; the existing words are unchanged	重新读取未发现文本；现有词语保持不变
+	The region was read again; its words were replaced (undo in the panel)	此区域已重新读取；其词语已替换（可在面板中撤销）
+	The searchable copies are written here under the source names	可检索副本以源文件名写入此文件夹
+	The selected word is gone; choose another	所选词语已不存在；请另选一个
+	The tesseract program, run as an external process	tesseract 程序，作为外部进程运行
+	Turns pages scanned sideways or upside down upright before reading	读取前把横放或倒放的扫描页转正
+	Undo the last review change (Ctrl+Z)	撤销上一次校对修改（Ctrl+Z）
+	Use the chosen engine's reading alone	只使用所选引擎的读取结果
+	VERIFIED %	已校对 %
+	Verified	已校对
+	Word	词语
+	Writes a new document of visible text; the scan is not changed	写入一个可见文本的新文档；扫描件不变
+	Wrote {name}	已写入 {name}
+	corrected	已更正
+	removed	已删除
+	skipped	已跳过
+	unreviewed	未校对
+	verified	已校对
+	{name}: {n} low-confidence word(s) on pages {pages}	{name}：第 {pages} 页上有 {n} 个低置信度词语
+	{n} word(s) to review	{n} 个词待校对
+	Correct recognized text…	更正识别文本…
+	the tesseract program was not found (install it, or add it to the PATH)	未找到 tesseract 程序（请安装，或将其加入 PATH）
+	still checking whether the tesseract program can run; try again in a moment	仍在检查 tesseract 程序能否运行；请稍后重试
+	the tesseract engine is not available in the web build	网页版不提供 tesseract 引擎

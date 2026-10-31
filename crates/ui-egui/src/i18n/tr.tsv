@@ -2574,3 +2574,94 @@ animation effects	Off	Kapalı
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Bu yanıtın seçenekleri
 	Export value	Dışa aktarma değeri
+# OCR: the Correct recognized text command (the Verify screen's other strings come with the screen).
+# OCR: the Verify screen, the batch options and the engine choice.
+	+ Dictionary	+ Sözlük
+	; cancelled — {n} files were not run	; iptal edildi — {n} dosya işlenmedi
+	; {n} files already had text	; {n} dosyada zaten metin vardı
+	A 3×3 median filter against scan speckle	Tarama lekelerine karşı 3×3 medyan filtresi
+	A folder is asked for when a multiple-file run starts	Klasör, çoklu dosya işlemi başlarken sorulur
+	AVG CONFIDENCE	ORTALAMA GÜVEN
+	Accept	Kabul et
+	Accept entire page	Tüm sayfayı kabul et
+	Add a second engine's reading when the first is unsure	İlk motor emin olmadığında ikinci bir motorun okumasını ekler
+	Always read with both engines and merge the words	Her zaman iki motorla okur ve sözcükleri birleştirir
+	Auto-rotate	Otomatik döndür
+	Automatic	Otomatik
+	Binarize	İkili hâle getir
+	Both engines, combined as the Strategy says	İki motor, seçilen stratejiye göre birleştirilir
+	CONFIDENCE	GÜVEN
+	Cancelled — {n} words were read on {m} of {t} pages; the rest were not read	İptal edildi — {t} sayfanın {m} sayfasında {n} sözcük okundu; geri kalanı okunmadı
+	Click a word to inspect it; drag a rectangle to re-read part of the page	İncelemek için bir sözcüğe tıklayın; sayfanın bir bölümünü yeniden okumak için dikdörtgen çizin
+	Confidence weighted	Güvene göre ağırlıklı
+	Corrected text (Enter commits)	Düzeltilmiş metin (Enter onaylar)
+	Denoise	Gürültü gider
+	Deskew	Eğikliği düzelt
+	ENGINE · STRATEGY	MOTOR · STRATEJİ
+	Editable text	Düzenlenebilir metin
+	Exit	Çık
+	F8: next word to review; Shift+F8 goes back	F8: incelenecek sonraki sözcük; Shift+F8 geri gider
+	Force OCR (override skip options)	OCR'yi zorla (atlama seçeneklerini yok say)
+	HIGH (>= 90%)	YÜKSEK (>= %90)
+	In multiple files: a file with any text is its own skipped bucket, and nothing is written for it	Birden çok dosyada: metin içeren bir dosya ayrıca atlanmış sayılır ve onun için hiçbir şey yazılmaz
+	LOW (< 70%)	DÜŞÜK (< %70)
+	LOW-CONFIDENCE WORDS	DÜŞÜK GÜVENLİ SÖZCÜKLER
+	MEDIUM (70-89%)	ORTA (%70-89)
+	Mark this page as reviewed (Ctrl+T)	Bu sayfayı incelendi olarak işaretle (Ctrl+T)
+	Next uncertain	Sonraki belirsiz
+	OCR complete — no text recognized on this page.	OCR tamamlandı — bu sayfada metin tanınmadı.
+	OCR results rejected.	OCR sonuçları reddedildi.
+	PAGE	SAYFA
+	Page verified	Sayfa doğrulandı
+	Pages with renderable text are left alone and reported as skipped	Görüntülenebilir metin içeren sayfalara dokunulmaz ve atlandı olarak bildirilir
+	Previous uncertain	Önceki belirsiz
+	Primary only	Yalnızca birincil
+	ROVER vote	ROVER oylaması
+	Re-OCR entire page	Tüm sayfaya yeniden OCR uygula
+	Re-OCR this region	Bu bölgeye yeniden OCR uygula
+	Read {n} words on {m} of {t} pages	{t} sayfanın {m} sayfasında {n} sözcük okundu
+	Reads pages and files even where the skip options would leave them alone	Atlama seçenekleri atlayacak olsa bile sayfaları ve dosyaları okur
+	Recognized text	Tanınan metin
+	Recognized text applied ({n} words, one undoable step)	Tanınan metin uygulandı ({n} sözcük, geri alınabilir tek adım)
+	Reject	Reddet
+	Reject entire page	Tüm sayfayı reddet
+	Run OCR	OCR çalıştır
+	Sauvola binarization: ink to black, paper to white	Sauvola ikili hâle getirme: mürekkep siyaha, kâğıt beyaza
+	Select a word on the page to inspect it	İncelemek için sayfada bir sözcük seçin
+	Several files have the same name, so their results would overwrite each other; nothing was written: {list}	Birkaç dosya aynı ada sahip, bu yüzden sonuçları birbirinin üzerine yazılırdı; hiçbir şey yazılmadı: {list}
+	Shift+F8: the previous word to review	Shift+F8: incelenecek önceki sözcük
+	Skip files that already have text	Zaten metin içeren dosyaları atla
+	Skip pages that already have text	Zaten metin içeren sayfaları atla
+	Source page	Kaynak sayfa
+	Straightens skewed text lines before reading	Okumadan önce eğik metin satırlarını düzeltir
+	Suggestions	Öneriler
+	That is the source file; choose another destination	Bu kaynak dosya; başka bir hedef seçin
+	The built-in engine (pure Rust)	Yerleşik motor (saf Rust)
+	The output folder already holds files of these names; nothing was written: {list}	Çıktı klasöründe bu adlara sahip dosyalar zaten var; hiçbir şey yazılmadı: {list}
+	The page was read again; its words were replaced (undo in the panel)	Sayfa yeniden okundu; sözcükleri değiştirildi (panelde geri alınabilir)
+	The page's words were applied as one undoable step ({n} words)	Sayfanın sözcükleri geri alınabilir tek adım olarak uygulandı ({n} sözcük)
+	The page's words were cleared (undo in the panel)	Sayfanın sözcükleri temizlendi (panelde geri alınabilir)
+	The re-read found no text; the existing words are unchanged	Yeniden okuma metin bulamadı; mevcut sözcükler değişmedi
+	The region was read again; its words were replaced (undo in the panel)	Bölge yeniden okundu; sözcükleri değiştirildi (panelde geri alınabilir)
+	The searchable copies are written here under the source names	Aranabilir kopyalar buraya kaynak adlarıyla yazılır
+	The selected word is gone; choose another	Seçili sözcük artık yok; başka birini seçin
+	The tesseract program, run as an external process	Harici işlem olarak çalıştırılan tesseract programı
+	Turns pages scanned sideways or upside down upright before reading	Yan veya ters taranmış sayfaları okumadan önce düzeltir
+	Undo the last review change (Ctrl+Z)	Son inceleme değişikliğini geri al (Ctrl+Z)
+	Use the chosen engine's reading alone	Yalnızca seçilen motorun okumasını kullan
+	VERIFIED %	DOĞRULANAN %
+	Verified	Doğrulandı
+	Word	Sözcük
+	Writes a new document of visible text; the scan is not changed	Görünür metinden oluşan yeni bir belge yazar; tarama değiştirilmez
+	Wrote {name}	{name} yazıldı
+	corrected	düzeltildi
+	removed	kaldırıldı
+	skipped	atlandı
+	unreviewed	incelenmedi
+	verified	doğrulandı
+	{name}: {n} low-confidence word(s) on pages {pages}	{name}: {pages} sayfalarında {n} düşük güvenli sözcük
+	{n} word(s) to review	İncelenecek {n} sözcük
+	Correct recognized text…	Tanınan metni düzelt…
+	the tesseract program was not found (install it, or add it to the PATH)	tesseract programı bulunamadı (yükleyin veya PATH'e ekleyin)
+	still checking whether the tesseract program can run; try again in a moment	tesseract programının çalışıp çalışamayacağı hâlâ denetleniyor; birazdan yeniden deneyin
+	the tesseract engine is not available in the web build	tesseract motoru web sürümünde kullanılamaz

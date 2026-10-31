@@ -2583,3 +2583,94 @@ animation effects	Off	Izklopljeni
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Možnosti tega odgovora
 	Export value	Izvozna vrednost
+# OCR: the Correct recognized text command (the Verify screen's other strings come with the screen).
+# OCR: the Verify screen, the batch options and the engine choice.
+	+ Dictionary	+ Slovar
+	; cancelled — {n} files were not run	; preklicano — {n} datotek ni bilo obdelanih
+	; {n} files already had text	; {n} datotek je že vsebovalo besedilo
+	A 3×3 median filter against scan speckle	Medianski filter 3×3 proti madežem skeniranja
+	A folder is asked for when a multiple-file run starts	Mapa se izbere ob zagonu obdelave več datotek
+	AVG CONFIDENCE	POVPREČNA ZANESLJIVOST
+	Accept	Sprejmi
+	Accept entire page	Sprejmi celo stran
+	Add a second engine's reading when the first is unsure	Doda branje drugega pogona, ko prvi ni prepričan
+	Always read with both engines and merge the words	Vedno bere z obema pogonoma in združi besede
+	Auto-rotate	Samodejno sukanje
+	Automatic	Samodejno
+	Binarize	Binarizacija
+	Both engines, combined as the Strategy says	Oba pogona, združena po izbrani strategiji
+	CONFIDENCE	ZANESLJIVOST
+	Cancelled — {n} words were read on {m} of {t} pages; the rest were not read	Preklicano — prebranih {n} besed na {m} od {t} strani; preostanek ni bil prebran
+	Click a word to inspect it; drag a rectangle to re-read part of the page	Kliknite besedo, da jo pregledate; povlecite pravokotnik, da znova preberete del strani
+	Confidence weighted	Uteženo z zanesljivostjo
+	Corrected text (Enter commits)	Popravljeno besedilo (Enter potrdi)
+	Denoise	Odstranjevanje šuma
+	Deskew	Poravnava
+	ENGINE · STRATEGY	POGON · STRATEGIJA
+	Editable text	Urejevalno besedilo
+	Exit	Izhod
+	F8: next word to review; Shift+F8 goes back	F8: naslednja beseda za pregled; Shift+F8 nazaj
+	Force OCR (override skip options)	Vsili OCR (prezri možnosti preskoka)
+	HIGH (>= 90%)	VISOKA (>= 90 %)
+	In multiple files: a file with any text is its own skipped bucket, and nothing is written for it	Pri več datotekah: datoteka z besedilom se šteje posebej kot preskočena in zanjo se nič ne zapiše
+	LOW (< 70%)	NIZKA (< 70 %)
+	LOW-CONFIDENCE WORDS	BESEDE Z NIZKO ZANESLJIVOSTJO
+	MEDIUM (70-89%)	SREDNJA (70–89 %)
+	Mark this page as reviewed (Ctrl+T)	Označi to stran kot pregledano (Ctrl+T)
+	Next uncertain	Naslednja negotova
+	OCR complete — no text recognized on this page.	OCR končan — na tej strani ni bilo prepoznano besedilo.
+	OCR results rejected.	Rezultati OCR so zavrnjeni.
+	PAGE	STRAN
+	Page verified	Stran preverjena
+	Pages with renderable text are left alone and reported as skipped	Strani z besedilom za prikaz ostanejo nespremenjene in so sporočene kot preskočene
+	Previous uncertain	Prejšnja negotova
+	Primary only	Samo glavni
+	ROVER vote	Glasovanje ROVER
+	Re-OCR entire page	Ponovni OCR cele strani
+	Re-OCR this region	Ponovni OCR tega območja
+	Read {n} words on {m} of {t} pages	Prebranih {n} besed na {m} od {t} strani
+	Reads pages and files even where the skip options would leave them alone	Bere strani in datoteke tudi tam, kjer bi jih možnosti preskoka izpustile
+	Recognized text	Prepoznano besedilo
+	Recognized text applied ({n} words, one undoable step)	Prepoznano besedilo uporabljeno ({n} besed, en korak, ki ga je mogoče razveljaviti)
+	Reject	Zavrni
+	Reject entire page	Zavrni celo stran
+	Run OCR	Zaženi OCR
+	Sauvola binarization: ink to black, paper to white	Binarizacija Sauvola: črnilo v črno, papir v belo
+	Select a word on the page to inspect it	Izberite besedo na strani, da jo pregledate
+	Several files have the same name, so their results would overwrite each other; nothing was written: {list}	Več datotek ima isto ime, zato bi njihovi rezultati prepisali drug drugega; nič ni bilo zapisano: {list}
+	Shift+F8: the previous word to review	Shift+F8: prejšnja beseda za pregled
+	Skip files that already have text	Preskoči datoteke, ki že vsebujejo besedilo
+	Skip pages that already have text	Preskoči strani, ki že vsebujejo besedilo
+	Source page	Izvorna stran
+	Straightens skewed text lines before reading	Pred branjem poravna nagnjene vrstice besedila
+	Suggestions	Predlogi
+	That is the source file; choose another destination	To je izvorna datoteka; izberite drug cilj
+	The built-in engine (pure Rust)	Vgrajeni pogon (čisti Rust)
+	The output folder already holds files of these names; nothing was written: {list}	Izhodna mapa že vsebuje datoteke s temi imeni; nič ni bilo zapisano: {list}
+	The page was read again; its words were replaced (undo in the panel)	Stran je bila znova prebrana; njene besede so zamenjane (razveljavitev v podoknu)
+	The page's words were applied as one undoable step ({n} words)	Besede strani so bile uporabljene kot en korak, ki ga je mogoče razveljaviti ({n} besed)
+	The page's words were cleared (undo in the panel)	Besede strani so bile počiščene (razveljavitev v podoknu)
+	The re-read found no text; the existing words are unchanged	Ponovno branje ni našlo besedila; obstoječe besede ostanejo nespremenjene
+	The region was read again; its words were replaced (undo in the panel)	Območje je bilo znova prebrano; njegove besede so zamenjane (razveljavitev v podoknu)
+	The searchable copies are written here under the source names	Kopije z iskanjem se zapišejo sem pod imeni izvornih datotek
+	The selected word is gone; choose another	Izbrane besede ni več; izberite drugo
+	The tesseract program, run as an external process	Program tesseract, zagnan kot zunanji proces
+	Turns pages scanned sideways or upside down upright before reading	Pred branjem obrne strani, skenirane postrani ali na glavo
+	Undo the last review change (Ctrl+Z)	Razveljavi zadnjo spremembo pregleda (Ctrl+Z)
+	Use the chosen engine's reading alone	Uporabi samo branje izbranega pogona
+	VERIFIED %	PREVERJENO %
+	Verified	Preverjeno
+	Word	Beseda
+	Writes a new document of visible text; the scan is not changed	Zapiše nov dokument z vidnim besedilom; skeniranje ostane nespremenjeno
+	Wrote {name}	Zapisano: {name}
+	corrected	popravljeno
+	removed	odstranjeno
+	skipped	preskočeno
+	unreviewed	nepregledano
+	verified	preverjeno
+	{name}: {n} low-confidence word(s) on pages {pages}	{name}: besede z nizko zanesljivostjo ({n}) na straneh {pages}
+	{n} word(s) to review	Besede za pregled: {n}
+	Correct recognized text…	Popravi prepoznano besedilo…
+	the tesseract program was not found (install it, or add it to the PATH)	programa tesseract ni bilo mogoče najti (namestite ga ali ga dodajte v PATH)
+	still checking whether the tesseract program can run; try again in a moment	še preverjam, ali se program tesseract lahko zažene; poskusite znova čez trenutek
+	the tesseract engine is not available in the web build	pogon tesseract v spletni različici ni na voljo

@@ -2674,3 +2674,94 @@ animation effects	Off	Wyłączone
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opcje tej odpowiedzi
 	Export value	Wartość eksportowa
+# OCR: the Correct recognized text command (the Verify screen's other strings come with the screen).
+# OCR: the Verify screen, the batch options and the engine choice.
+	+ Dictionary	+ Słownik
+	; cancelled — {n} files were not run	; anulowano — {n} plików nie zostało przetworzonych
+	; {n} files already had text	; {n} plików zawierało już tekst
+	A 3×3 median filter against scan speckle	Filtr medianowy 3×3 usuwający plamki ze skanu
+	A folder is asked for when a multiple-file run starts	Folder jest wybierany przy uruchomieniu przetwarzania wielu plików
+	AVG CONFIDENCE	ŚREDNIA PEWNOŚĆ
+	Accept	Akceptuj
+	Accept entire page	Akceptuj całą stronę
+	Add a second engine's reading when the first is unsure	Dodaje odczyt drugiego silnika, gdy pierwszy nie jest pewny
+	Always read with both engines and merge the words	Zawsze czyta oboma silnikami i scala słowa
+	Auto-rotate	Automatyczny obrót
+	Automatic	Automatycznie
+	Binarize	Binaryzacja
+	Both engines, combined as the Strategy says	Oba silniki, łączone zgodnie z wybraną strategią
+	CONFIDENCE	PEWNOŚĆ
+	Cancelled — {n} words were read on {m} of {t} pages; the rest were not read	Anulowano — odczytano {n} słów na {m} z {t} stron; reszta nie została odczytana
+	Click a word to inspect it; drag a rectangle to re-read part of the page	Kliknij słowo, aby je sprawdzić; przeciągnij prostokąt, aby ponownie odczytać część strony
+	Confidence weighted	Ważona pewnością
+	Corrected text (Enter commits)	Poprawiony tekst (Enter zatwierdza)
+	Denoise	Odszumianie
+	Deskew	Prostowanie
+	ENGINE · STRATEGY	SILNIK · STRATEGIA
+	Editable text	Tekst edytowalny
+	Exit	Zakończ
+	F8: next word to review; Shift+F8 goes back	F8: następne słowo do sprawdzenia; Shift+F8 cofa
+	Force OCR (override skip options)	Wymuś OCR (pomiń opcje pomijania)
+	HIGH (>= 90%)	WYSOKA (>= 90%)
+	In multiple files: a file with any text is its own skipped bucket, and nothing is written for it	Przy wielu plikach: plik zawierający tekst jest liczony osobno jako pominięty i nic nie jest dla niego zapisywane
+	LOW (< 70%)	NISKA (< 70%)
+	LOW-CONFIDENCE WORDS	SŁOWA O NISKIEJ PEWNOŚCI
+	MEDIUM (70-89%)	ŚREDNIA (70-89%)
+	Mark this page as reviewed (Ctrl+T)	Oznacz tę stronę jako sprawdzoną (Ctrl+T)
+	Next uncertain	Następne niepewne
+	OCR complete — no text recognized on this page.	OCR zakończony — na tej stronie nie rozpoznano tekstu.
+	OCR results rejected.	Odrzucono wyniki OCR.
+	PAGE	STRONA
+	Page verified	Strona sprawdzona
+	Pages with renderable text are left alone and reported as skipped	Strony z tekstem do wyświetlenia pozostają bez zmian i są zgłaszane jako pominięte
+	Previous uncertain	Poprzednie niepewne
+	Primary only	Tylko główny
+	ROVER vote	Głosowanie ROVER
+	Re-OCR entire page	Ponowny OCR całej strony
+	Re-OCR this region	Ponowny OCR tego obszaru
+	Read {n} words on {m} of {t} pages	Odczytano {n} słów na {m} z {t} stron
+	Reads pages and files even where the skip options would leave them alone	Czyta strony i pliki także tam, gdzie opcje pomijania by je pominęły
+	Recognized text	Rozpoznany tekst
+	Recognized text applied ({n} words, one undoable step)	Zastosowano rozpoznany tekst ({n} słów, jeden krok do cofnięcia)
+	Reject	Odrzuć
+	Reject entire page	Odrzuć całą stronę
+	Run OCR	Uruchom OCR
+	Sauvola binarization: ink to black, paper to white	Binaryzacja Sauvoli: tusz na czarno, papier na biało
+	Select a word on the page to inspect it	Zaznacz słowo na stronie, aby je sprawdzić
+	Several files have the same name, so their results would overwrite each other; nothing was written: {list}	Kilka plików ma tę samą nazwę, więc ich wyniki nadpisałyby się nawzajem; nic nie zostało zapisane: {list}
+	Shift+F8: the previous word to review	Shift+F8: poprzednie słowo do sprawdzenia
+	Skip files that already have text	Pomiń pliki, które już zawierają tekst
+	Skip pages that already have text	Pomiń strony, które już zawierają tekst
+	Source page	Strona źródłowa
+	Straightens skewed text lines before reading	Prostuje przekrzywione wiersze tekstu przed odczytem
+	Suggestions	Sugestie
+	That is the source file; choose another destination	To jest plik źródłowy; wybierz inne miejsce docelowe
+	The built-in engine (pure Rust)	Wbudowany silnik (czysty Rust)
+	The output folder already holds files of these names; nothing was written: {list}	Folder wyjściowy zawiera już pliki o tych nazwach; nic nie zostało zapisane: {list}
+	The page was read again; its words were replaced (undo in the panel)	Stronę odczytano ponownie; jej słowa zostały zastąpione (cofnij w panelu)
+	The page's words were applied as one undoable step ({n} words)	Słowa strony zastosowano jako jeden krok do cofnięcia ({n} słów)
+	The page's words were cleared (undo in the panel)	Słowa strony zostały usunięte (cofnij w panelu)
+	The re-read found no text; the existing words are unchanged	Ponowny odczyt nie znalazł tekstu; istniejące słowa pozostają bez zmian
+	The region was read again; its words were replaced (undo in the panel)	Obszar odczytano ponownie; jego słowa zostały zastąpione (cofnij w panelu)
+	The searchable copies are written here under the source names	Kopie z możliwością wyszukiwania są zapisywane tutaj pod nazwami plików źródłowych
+	The selected word is gone; choose another	Zaznaczone słowo już nie istnieje; wybierz inne
+	The tesseract program, run as an external process	Program tesseract uruchamiany jako proces zewnętrzny
+	Turns pages scanned sideways or upside down upright before reading	Obraca do pionu strony zeskanowane bokiem lub do góry nogami przed odczytem
+	Undo the last review change (Ctrl+Z)	Cofnij ostatnią zmianę przeglądu (Ctrl+Z)
+	Use the chosen engine's reading alone	Użyj tylko odczytu wybranego silnika
+	VERIFIED %	SPRAWDZONE %
+	Verified	Sprawdzone
+	Word	Słowo
+	Writes a new document of visible text; the scan is not changed	Zapisuje nowy dokument z widocznym tekstem; skan pozostaje bez zmian
+	Wrote {name}	Zapisano {name}
+	corrected	poprawione
+	removed	usunięte
+	skipped	pominięte
+	unreviewed	niesprawdzone
+	verified	sprawdzone
+	{name}: {n} low-confidence word(s) on pages {pages}	{name}: {n} słów o niskiej pewności na stronach {pages}
+	{n} word(s) to review	Słowa do sprawdzenia: {n}
+	Correct recognized text…	Popraw rozpoznany tekst…
+	the tesseract program was not found (install it, or add it to the PATH)	nie znaleziono programu tesseract (zainstaluj go lub dodaj do zmiennej PATH)
+	still checking whether the tesseract program can run; try again in a moment	trwa sprawdzanie, czy program tesseract może działać; spróbuj ponownie za chwilę
+	the tesseract engine is not available in the web build	silnik tesseract nie jest dostępny w wersji internetowej
