@@ -55,11 +55,17 @@ impl PdfString {
     /// Lenient beyond the spec, as readers are: invalid sequences after a BOM decode lossily
     /// instead of dropping the string, a BOM-less string whose bytes are valid UTF-8 with
     /// non-ASCII bytes (written by some producers) is read as UTF-8 rather than as
-    /// PDFDocEncoding mojibake, and stray leading U+FEFF (doubled BOMs) are removed.
+    /// PDFDocEncoding mojibake, UTF-16LE under an `FF FE` BOM (written by some GIS software,
+    /// such as GeoPDF layer names) is read as UTF-16LE, and stray leading U+FEFF (doubled BOMs)
+    /// are removed.
     pub fn to_text(&self) -> String {
         let s = match self.bytes.as_slice() {
             [0xFE, 0xFF, rest @ ..] => {
                 let units: Vec<u16> = rest.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes(*c)).collect();
+                String::from_utf16_lossy(&units)
+            }
+            [0xFF, 0xFE, rest @ ..] => {
+                let units: Vec<u16> = rest.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
                 String::from_utf16_lossy(&units)
             }
             [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
@@ -550,6 +556,10 @@ mod tests {
         let mut utf16 = vec![0xFE, 0xFF];
         utf16.extend("第一章 概述".encode_utf16().flat_map(u16::to_be_bytes));
         assert_eq!(PdfString::literal(utf16).to_text(), "第一章 概述");
+        // UTF-16LE under an FF FE BOM, as GIS software writes GeoPDF layer names: no BOM text, no NULs.
+        let mut utf16le = vec![0xFF, 0xFE];
+        utf16le.extend("Other 3".encode_utf16().flat_map(u16::to_le_bytes));
+        assert_eq!(PdfString::literal(utf16le).to_text(), "Other 3");
         // UTF-8 with BOM (PDF 2.0): the BOM is not part of the text.
         let mut utf8 = vec![0xEF, 0xBB, 0xBF];
         utf8.extend_from_slice("第一章".as_bytes());
