@@ -128,8 +128,14 @@ neither the MSI nor the portable zip needs the Visual C++ redistributable.
   this.
 - `installer-ui.wxs` supplies native welcome, maintenance, progress, files-in-use and outcome
   dialogs. Full UI confirms success with Finish; failures and cancellations have distinct messages.
-  The welcome dialog has a "Create a desktop shortcut" checkbox and an "Edit with PdfCraft"
-  right-click menu checkbox, both ticked by default. `/qn` and `/qb` stay unattended and create
+  The welcome dialog has an "Install to" row (a `PathEdit`, and Browse… into `BrowseFolder`, a
+  native folder browser: drive list, folder list, Up, New folder, typed path; #1139), a "Create a
+  desktop shortcut" checkbox and an "Edit with PdfCraft" right-click menu checkbox, both ticked by
+  default. Install sets the folder (`SetTargetPath`) before the dialog closes. `INSTALLFOLDER` is
+  secure, so the choice reaches the elevated install, and `INSTALLFOLDER=<path>` works on the
+  command line. The row starts on the folder `install-policy.wxi` chose for the scope picked on the
+  first page (the recorded folder on an update), and an update installs into the recorded folder
+  unless the command line gives one (`INSTALLATION.md`). `/qn` and `/qb` stay unattended and create
   both unless `INSTALLDESKTOPSHORTCUT=0` or `INSTALLPDFCONTEXTMENU=0` is passed;
   `INSTALLIMAGECONTEXTMENU=0` (no checkbox) leaves out the image menu. An update (the launcher runs
   `msiexec /passive` with no properties) keeps the desktop shortcut only if `PdfCraft.lnk` is still
