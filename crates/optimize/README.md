@@ -102,6 +102,13 @@ then this, then merges identical objects and writes a full, compressed save
 progress bar). JPEG decoding comes from `zune-jpeg` (the decoder behind `image` and the
 renderer), JPEG encoding and resampling from the `image` crate.
 
+Discard embedded search index (`discard_search_index`, off by default) removes the entries of
+the catalog's `/PieceInfo` whose application name contains "index" in any letter case, such as
+`IBM-ODIndexes`, and removes `/PieceInfo` when no other entry is left. An indirect `/PieceInfo`
+is copied into the catalog without those entries, and the original object is not changed. The
+full save leaves out the objects that only the removed entries refer to. Pages keep their own
+`/PieceInfo`.
+
 ## Target PDF version: partial compatibility
 
 The target selects the header version, clears the catalog `/Version`, controls object
