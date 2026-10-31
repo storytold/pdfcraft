@@ -17,6 +17,8 @@ use std::sync::mpsc::SyncSender;
 use std::sync::mpsc::{Receiver, sync_channel};
 
 #[cfg(test)]
+mod no_zoom_tests;
+#[cfg(test)]
 mod radial_softmask_tests;
 mod work_queue;
 use std::sync::{Arc, Mutex};
@@ -206,6 +208,12 @@ pub struct RenderRequest {
     /// few device pixels are skipped. Never set it for a final render (tiles, whole pages,
     /// print, export): previews may differ by those pixels.
     pub preview: bool,
+    /// The view's zoom for an on-screen page (1.0 = 100%), not device pixels per point: a HiDPI
+    /// factor or an export resolution is no magnification. Annotations with the NoZoom flag, and
+    /// text annotations, keep the size they have at 100% about the upper-left corner of their
+    /// `/Rect` (ISO 32000-2 §12.5.3, §12.5.6.4). `None` (print, export, thumbnails, the CLI)
+    /// scales every annotation with the page.
+    pub magnification: Option<f32>,
 }
 
 /// The tag bit of a print-preview raster. Such requests always render the document's true
@@ -436,6 +444,7 @@ fn render_page<'a>(
         // Previews render at low detail (tiny images are skipped); finals always draw all.
         let mut preview_settings = settings.clone();
         preview_settings.preview = req.preview;
+        preview_settings.magnification = req.magnification;
         render_into(page, cache, &preview_settings, &rs, pixels.bytes_mut());
         Ok((w.into(), h.into(), pixels, None))
     }));

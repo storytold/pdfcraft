@@ -5,6 +5,46 @@ pub(super) fn is_markup(subtype: &str) -> bool {
     matches!(subtype, "Highlight" | "Underline" | "StrikeOut" | "Squiggly")
 }
 
+/// Where `a`, with its `/Rect` at `rect`, is drawn in user space on a page shown at
+/// `magnification` (the view's zoom, 1.0 = 100%): `rect`, or for a comment that keeps its size on
+/// the screen ([`Annotation::no_zoom`]) `rect` scaled by `1/magnification` about its upper-left
+/// corner, which stays where it is on the page (ISO 32000-2 §12.5.3). The renderer draws it there
+/// (hayro-interpret patch 54). A magnification that isn't finite and greater than zero leaves
+/// `rect` as it is, as the renderer does.
+pub(crate) fn zoomed_rect(a: &Annotation, rect: [f64; 4], magnification: f32) -> [f64; 4] {
+    let s = 1.0 / f64::from(magnification);
+    if !(a.no_zoom && magnification.is_finite() && magnification > 0.0 && s.is_finite()) {
+        return rect;
+    }
+    let [x0, y0, x1, y1] = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
+    [x0, y1 - (y1 - y0) * s, x0 + (x1 - x0) * s, y1]
+}
+
+/// Where the user-space box `bounds` (a text markup quadrilateral's) of `a` is drawn on a page
+/// shown at `magnification`: for a comment that keeps its size on the screen, scaled by
+/// `1/magnification` about the upper-left corner of `a`'s `/Rect`, as the renderer scales its
+/// appearance (hayro-interpret patch 54), and as it is otherwise. The guards are
+/// [`zoomed_rect`]'s, and a scaled box that isn't finite leaves `bounds` as it is.
+pub(crate) fn zoomed_quad(a: &Annotation, bounds: [f64; 4], magnification: f32) -> [f64; 4] {
+    let s = 1.0 / f64::from(magnification);
+    if !(a.no_zoom && magnification.is_finite() && magnification > 0.0 && s.is_finite()) {
+        return bounds;
+    }
+    let r = a.rect.map(f64::from);
+    let (px, py) = (r[0].min(r[2]), r[1].max(r[3]));
+    let scaled = [px + (bounds[0] - px) * s, py + (bounds[1] - py) * s, px + (bounds[2] - px) * s, py + (bounds[3] - py) * s];
+    if scaled.iter().all(|v| v.is_finite()) { scaled } else { bounds }
+}
+
+/// The `/Rect` that [`zoomed_rect`] draws in the user-space box `shown`: its inverse, for a box
+/// resized as drawn. The upper-left corner stays, and the sides grow by `magnification`.
+pub(crate) fn rect_for_zoomed(a: &Annotation, shown: [f64; 4], magnification: f32) -> [f64; 4] {
+    let m = f64::from(magnification);
+    let [x0, y0, x1, y1] = [shown[0].min(shown[2]), shown[1].min(shown[3]), shown[0].max(shown[2]), shown[1].max(shown[3])];
+    let rect = [x0, y1 - (y1 - y0) * m, x0 + (x1 - x0) * m, y1];
+    if a.no_zoom && m.is_finite() && m > 0.0 && rect.iter().all(|v| v.is_finite()) { rect } else { shown }
+}
+
 /// Rectangles, ovals, text boxes, stamps and drawings (drawn signatures among them). A callout's
 /// `/Rect` also holds its leader line, so it only moves.
 pub(super) fn resizable(a: &Annotation) -> bool {

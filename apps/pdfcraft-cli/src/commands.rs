@@ -113,7 +113,7 @@ pub(crate) fn text(args: &[String]) -> Result<(), CliError> {
     };
     let mut failed: Vec<usize> = Vec::new();
     for (n, p) in pages.iter().enumerate() {
-        let out = r.render(RenderRequest { page: *p, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false });
+        let out = r.render(RenderRequest { page: *p, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false, magnification: None });
         if let Some(e) = out.error {
             let _ = writeln!(std::io::stderr().lock(), "page {}: {e}", p + 1);
             failed.push(p + 1);
@@ -382,7 +382,15 @@ pub(crate) fn render(args: &[String]) -> Result<(), CliError> {
     };
     let mut r =
         PageRenderer::new(display, RenderConfig { password: render_password.as_deref().map(Arc::from), reject_oversize: true, ..Default::default() });
-    let p = r.render(RenderRequest { page: page_index, kind: RequestKind::Pixels, tile: None, scale: dpi / 72.0, tag: 0, preview: false });
+    let p = r.render(RenderRequest {
+        page: page_index,
+        kind: RequestKind::Pixels,
+        tile: None,
+        scale: dpi / 72.0,
+        tag: 0,
+        preview: false,
+        magnification: None,
+    });
     if let Some(e) = p.error {
         return Err(e.into());
     }

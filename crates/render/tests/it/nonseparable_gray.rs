@@ -50,7 +50,8 @@ fn gray_ramp(mode: &str, alpha: f32, cell: impl Fn(u8, &str) -> String) -> Vec<(
         ),
     ];
     let mut renderer = PageRenderer::new(Arc::new(pdf(&objects)), RenderConfig::default());
-    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    let page =
+        renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false, magnification: None });
     assert!(page.error.is_none(), "{:?}", page.error);
     (0..=255_u8)
         .map(|level| {

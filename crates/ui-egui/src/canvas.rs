@@ -342,6 +342,9 @@ pub struct DocView {
     stale_tiles: HashSet<(usize, u64, u32, u32)>,
     /// Scale tag of the current zoom level, as last drawn.
     current_scale_tag: u64,
+    /// Display pixels per point the cached page rasters and tiles were asked for at (0 before
+    /// the first frame). See [`DocView::note_pixel_density`].
+    raster_ppp: f32,
     /// Print dialog: the current sheet's pages at the preview pane's device resolution.
     print_pages: HashMap<usize, (u64, TextureHandle)>,
     /// Print dialog: preview rasters become luminance when Print ▸ Print in grayscale is on.
@@ -647,6 +650,7 @@ impl DocView {
             stale_thumbs: HashSet::new(),
             stale_tiles: HashSet::new(),
             current_scale_tag: 0,
+            raster_ppp: 0.0,
             print_pages: HashMap::new(),
             grayscale: false,
             tiles: HashMap::new(),
@@ -2489,6 +2493,9 @@ fn plan_renders(ui: &egui::Ui, view: &mut DocView, info: &DocInfo, renders: Page
             // It is the whole-page request whose scale is not the current one; sharp tiles
             // and whole-page finals always draw everything.
             preview: tile.is_none() && (wanted_scale != scale || wanted_tag != tag),
+            // The page is on screen at the view's zoom: NoZoom comments and notes keep their
+            // size (ISO 32000-2 §12.5.3), and `comments::zoomed_rect` hit-tests them there.
+            magnification: Some(view.zoom),
         })
         .collect();
     // While the zoom or pan is settling, hold back sharp re-renders of pages that already
@@ -2539,6 +2546,7 @@ fn plan_renders(ui: &egui::Ui, view: &mut DocView, info: &DocInfo, renders: Page
         scale: 1.0,
         tag: TEXT_TAG,
         preview: false,
+        magnification: None,
     }));
     view.frame_queue = queue;
     view.frame_visible = visible_now.iter().copied().collect();
@@ -3117,6 +3125,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let ppp = ui.ctx().pixels_per_point();
     let scale = view.render_scale(ppp);
     let tag = scale_tag(scale);
+    view.note_pixel_density(ppp, tag);
     // Hold sharp re-renders while the zoom is still moving: a new scale every frame would
     // cancel the in-flight full-page interpret and restart it, so on a heavy page (a CAD
     // plot with ~1000 images renders for seconds) the sharp raster never arrives and the

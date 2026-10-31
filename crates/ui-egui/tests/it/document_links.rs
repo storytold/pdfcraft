@@ -697,7 +697,10 @@ fn other_annotations_over_links_keep_select_click() {
     let _gpu = gpu();
     for subtype in ["Text", "Square"] {
         let mut h = overlapping_annotation_harness(overlapping_annotation_fixture(subtype, false));
-        click_link(&mut h);
+        // Over the link and inside the comment as drawn: at 150% a note (which keeps its size on
+        // screen, ISO 32000-2 §12.5.6.4) covers only the left two thirds of its /Rect.
+        let r = h.state().views[0].page_screen_rect(0).unwrap();
+        click_at(&mut h, egui::pos2(r.min.x + r.width() * (110.0 / 300.0), r.min.y + r.height() * (1.0 - 325.0 / 400.0)));
         assert_eq!(h.state().views[0].comments.selected, Some((0, 1)), "{subtype}");
         assert_eq!(h.state().pending_link, None, "{subtype}");
         assert_eq!(h.state().last_opened_url, None, "{subtype}");
