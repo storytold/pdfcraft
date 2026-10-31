@@ -58,10 +58,43 @@ fn paper_named(name: Option<&str>) -> Result<(usize, (f64, f64))> {
     })
 }
 
+/// The sheet a job is laid out on, in points, and the `media` option its job names.
+type PaperChoice = ((f64, f64), Option<(String, String)>);
+
+/// The sheet `doc_print` lays out on and the `media` its job names, for `name` among the standard
+/// sizes and the printer's own (`own`, from [`spool::printer_papers`]). A standard size is named by
+/// the printer's own keyword for that size when it has one, else by its CUPS name
+/// ([`print::media_option`]); one of the printer's own sizes by its keyword. With none named, the
+/// printer's default size when its driver reports one, else US Letter.
+fn paper_choice(name: Option<&str>, own: &[spool::PrinterPaper]) -> Result<PaperChoice> {
+    let media = |key: &str| ("media".to_string(), key.to_string());
+    if name.is_none()
+        && let Some(q) = own.iter().find(|q| q.default)
+    {
+        return Ok((q.size, Some(media(&q.key))));
+    }
+    match paper_named(name) {
+        Ok((index, size)) => {
+            let named = spool::paper_of_size(own, size).and_then(|i| own.get(i)).map(|q| media(&q.key));
+            Ok((size, named.or_else(|| print::media_option(index))))
+        }
+        Err(e) => {
+            let p = name.unwrap_or_default();
+            match own.iter().find(|q| q.key.eq_ignore_ascii_case(p) || q.label.eq_ignore_ascii_case(p)) {
+                Some(q) => Ok((q.size, Some(media(&q.key)))),
+                None => Err(match e {
+                    ToolError::InvalidArgs(m) => bad(format!("{m}, or one of the printer's own sizes (printer_papers)")),
+                    other => other,
+                }),
+            }
+        }
+    }
+}
+
 /// The spooler job for `doc_print` to `printer`. It feeds the paper the PDF was laid out on
-/// (`PAPERS[paper]`, as `media` after the driver's `options`) rather than the queue's default
+/// (`media`, from [`paper_choice`], after the driver's `options`) rather than the queue's default
 /// paper, which a job naming none got (A4 under Letter sheets on the queue in #3752).
-fn spool_job(a: &Args, printer: &str, title: String, duplex: Option<spool::Duplex>, paper: usize) -> Result<spool::Job> {
+fn spool_job(a: &Args, printer: &str, title: String, duplex: Option<spool::Duplex>, media: Option<(String, String)>) -> Result<spool::Job> {
     let options = match a.get("options") {
         None => Vec::new(),
         Some(Value::Object(m)) => m
@@ -81,7 +114,7 @@ fn spool_job(a: &Args, printer: &str, title: String, duplex: Option<spool::Duple
         scaling: spool::Scaling::Exact,
         grayscale: a.opt_bool("grayscale")?.unwrap_or(false),
         title,
-        options: options.into_iter().chain(print::media_option(paper)).collect(),
+        options: options.into_iter().chain(media).collect(),
     })
 }
 
@@ -100,6 +133,15 @@ impl Automation {
             })
             .collect();
         Ok(json!({ "count": list.len(), "printers": list }))
+    }
+
+    pub(crate) fn printer_papers(&self, a: &Args) -> Result<Value> {
+        let printer = a.str("printer")?;
+        let list: Vec<Value> = spool::printer_papers(printer)
+            .into_iter()
+            .map(|p| json!({ "key": p.key, "label": p.label, "width": p.size.0, "height": p.size.1, "default": p.default }))
+            .collect();
+        Ok(json!({ "printer": printer, "count": list.len(), "papers": list }))
     }
 
     pub(crate) fn printer_options(&self, a: &Args) -> Result<Value> {
@@ -188,7 +230,15 @@ impl Automation {
             "form-fields-only" => Content::FormFieldsOnly,
             c => return Err(bad(format!("unknown comments_forms {c:?}"))),
         };
-        let (paper_index, paper) = paper_named(a.opt_str("paper")?)?;
+        // The printer's own paper sizes (its PPD's, on CUPS): a paper may be one of them, by
+        // keyword or label. "default" is the default queue's (the job itself still goes to the
+        // spooler's default).
+        let own = match a.opt_str("printer")? {
+            Some("default") => spool::printers().into_iter().find(|p| p.default).map(|p| spool::printer_papers(&p.name)).unwrap_or_default(),
+            Some(printer) => spool::printer_papers(printer),
+            None => Vec::new(),
+        };
+        let (paper, media) = paper_choice(a.opt_str("paper")?, &own)?;
         // Print as image (Acrobat's Advanced Print Setup): pictures at `dpi`, grey when
         // `grayscale` is also asked for.
         let raster = if a.opt_bool("as_image")?.unwrap_or(false) {
@@ -212,7 +262,7 @@ impl Automation {
                 out["path"] = json!(path.to_string_lossy());
             }
             (None, Some(printer)) => {
-                let job = spool_job(a, printer, self.doc(a)?.name.clone(), duplex, paper_index)?;
+                let job = spool_job(a, printer, self.doc(a)?.name.clone(), duplex, media)?;
                 out["job"] = json!(spool::submit(&bytes, &job).map_err(|e| failed(e.to_string()))?);
             }
             _ => return Err(bad("pass either path (save the print-ready PDF) or printer (a name from printers, or \"default\")")),
@@ -257,7 +307,7 @@ mod tests {
     fn printing_to_a_printer_feeds_the_laid_out_paper() {
         let job = |args: Value, paper_name: Option<&str>| {
             let (index, _) = paper_named(paper_name).unwrap();
-            spool_job(&Args(&args), "Office", "a.pdf".into(), None, index).unwrap()
+            spool_job(&Args(&args), "Office", "a.pdf".into(), None, print::media_option(index)).unwrap()
         };
         let media = |m: &str| ("media".to_string(), m.to_string());
         // US Letter when no paper is asked for, after the driver's own options.
@@ -273,7 +323,29 @@ mod tests {
         assert_eq!(job(json!({}), Some("letter")).options, [media("Letter")]);
         assert_eq!(job(json!({}), Some("ARCH D")).options, [media("na_arch-d_24x36in")]);
         assert!(matches!(paper_named(Some("Quarto")), Err(ToolError::InvalidArgs(m)) if m.contains("US Letter")));
-        assert_eq!(spool_job(&Args(&json!({})), "default", String::new(), None, 0).ok().map(|j| j.printer), Some(None));
-        assert!(spool_job(&Args(&json!({ "options": { "InputSlot": 3 } })), "Office", String::new(), None, 0).is_err());
+        assert_eq!(spool_job(&Args(&json!({})), "default", String::new(), None, print::media_option(0)).ok().map(|j| j.printer), Some(None));
+        assert!(spool_job(&Args(&json!({ "options": { "InputSlot": 3 } })), "Office", String::new(), None, print::media_option(0)).is_err());
+    }
+
+    /// `doc_print`'s paper among the printer's own sizes: with none named, the printer's default
+    /// when its driver reports one; a standard size by the printer's own keyword for it; one of the
+    /// printer's own by key or label.
+    #[test]
+    fn the_printers_own_sizes_are_offered_to_doc_print() {
+        let paper =
+            |key: &str, label: &str, size: (f64, f64), default: bool| spool::PrinterPaper { key: key.into(), label: label.into(), size, default };
+        let media = |m: &str| Some(("media".to_string(), m.to_string()));
+        let label = vec![paper("Letter", "US Letter", (612.0, 792.0), false), paper("w162h90", "2.25 x 1.25 in", (162.0, 90.0), true)];
+        assert_eq!(paper_choice(None, &label).unwrap(), ((162.0, 90.0), media("w162h90")), "the printer's default");
+        assert_eq!(paper_choice(Some("2.25 x 1.25 in"), &label).unwrap(), ((162.0, 90.0), media("w162h90")), "by label");
+        assert_eq!(paper_choice(Some("W162H90"), &label).unwrap(), ((162.0, 90.0), media("w162h90")), "by key");
+        assert_eq!(paper_choice(Some("Letter"), &label).unwrap(), ((612.0, 792.0), media("Letter")), "a standard size the printer has");
+        // A standard size the printer doesn't list goes out under its CUPS name.
+        let (a4, a4_size) = paper_named(Some("A4")).unwrap();
+        assert_eq!(paper_choice(Some("A4"), &label).unwrap(), (a4_size, print::media_option(a4)));
+        // Without the printer's sizes (Save as PDF, no PPD): US Letter, as before.
+        assert_eq!(paper_choice(None, &[]).unwrap(), (PAPERS[0].1, print::media_option(0)));
+        let unknown = paper_choice(Some("Quarto"), &label).unwrap_err().to_string();
+        assert!(unknown.contains("US Letter") && unknown.contains("printer_papers"), "{unknown}");
     }
 }
