@@ -1,6 +1,6 @@
 [package]
 name = "pdfcraft-preflight"
-description = "Standards: verify PDF/A (ISO 19005) conformance and convert documents to PDF/A-2b or 3b"
+description = "Standards: verify PDF/A (ISO 19005) and PDF/X (ISO 15930) conformance and convert documents to them"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,8 +13,20 @@ workspace = true
 [dependencies]
 pdfcraft-content = { workspace = true }
 pdfcraft-cos = { workspace = true }
+pdfcraft-filters = { workspace = true }
+pdfcraft-fonts = { workspace = true }
 pdfcraft-model = { workspace = true }
 roxmltree = "0.21"
+# ICC colour transforms (RGB to CMYK through the output profile); already in the tree via
+# hayro-interpret, at the same version. `options` gives table transforms 16-bit interpolation
+# weights: with the default 8-bit ones a transform steps every 1/255 of its input, which 16-bit
+# pictures and resampled functions would show.
+moxcms = { version = "0.8.1", features = ["options"] }
+# JPEG decoding of RGB pictures to convert; already in the tree via pdfcraft-optimize.
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 
 [dev-dependencies]
 flate2 = { workspace = true }
+pdfcraft-crypt = { workspace = true }
+pdfcraft-oracle = { workspace = true }
+pdfcraft-testkit = { workspace = true }

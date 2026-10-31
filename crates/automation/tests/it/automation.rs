@@ -7385,14 +7385,21 @@ fn pdfa_through_tools() {
     let r = ok(&mut a, "pdfa_verify", json!({ "doc": doc }));
     assert_eq!(r["compliant"], false);
     assert!(r["issues"].as_array().unwrap().iter().any(|i| i["clause"] == "6.6.2.1"), "{r}");
+    // Its text is drawn in a font that isn't embedded: the conversion says so and changes nothing,
+    // rather than leaving a file that claims PDF/A and fails it.
     let r = ok(&mut a, "pdfa_convert", json!({ "doc": doc, "level": "3b" }));
-    assert_eq!(r["declared"]["pdfa"], "PDF/A-3b", "{r}");
-    assert!(r["issues"].as_array().unwrap().iter().all(|i| i["fixable"] == false), "{r}");
+    assert_eq!(r["converted"], false, "{r}");
+    assert!(r["blockers"].as_array().unwrap().iter().any(|b| b["message"].as_str().unwrap().ends_with("isn't embedded")), "{r}");
+    assert!(r["declared"]["pdfa"].is_null(), "{r}");
     assert!(a.call("pdfa_verify", &json!({ "doc": doc, "level": "9z" })).is_err());
-    ok(&mut a, "standards_remove_id", json!({ "doc": doc, "standard": "pdfa" }));
-    let r = ok(&mut a, "pdfa_verify", json!({ "doc": doc }));
+    // A page without text converts, and its identification can be removed again.
+    let blank = ok(&mut a, "doc_create", json!({ "from": "blank", "width": 200, "height": 300 }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "pdfa_convert", json!({ "doc": blank, "level": "3b" }));
+    assert_eq!(r["declared"]["pdfa"], "PDF/A-3b", "{r}");
+    ok(&mut a, "standards_remove_id", json!({ "doc": blank, "standard": "pdfa" }));
+    let r = ok(&mut a, "pdfa_verify", json!({ "doc": blank }));
     assert!(r["declared"]["pdfa"].is_null() && !r["declared"]["output_intents"].as_array().unwrap().is_empty(), "{r}");
-    assert!(matches!(a.call("standards_remove_id", &json!({ "doc": doc, "standard": "pdfa" })), Err(ToolError::Failed(_))), "nothing left");
+    assert!(matches!(a.call("standards_remove_id", &json!({ "doc": blank, "standard": "pdfa" })), Err(ToolError::Failed(_))), "nothing left");
 }
 
 #[test]

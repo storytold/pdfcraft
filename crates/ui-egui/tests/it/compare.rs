@@ -202,17 +202,16 @@ fn pdfa_dialog_verifies_and_converts() {
     h.get_by_label("Verify").click();
     h.run_steps(3);
     h.get_by_label("The document has no XMP metadata");
+    // Its text is drawn in a font that isn't embedded: Save as PDF/A says so and changes nothing,
+    // rather than leaving a document that claims PDF/A-2b and fails it.
     h.get_by_label("Save as PDF/A").click();
     h.run_steps(3);
-    h.get_by_label("Declared conformance: PDF/A-2b");
-    let issues = h.state().pdfa.issues.clone().unwrap();
-    assert!(issues.iter().all(|i| !i.fixable), "{issues:?}");
-    let id = h.state().active_ids().unwrap().1;
-    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Save as PDF/A-2b"));
-    h.get_by_label("Remove PDF/A identification").click();
-    h.run_steps(3);
+    h.get_by_label("Can't save as PDF/A-2b; nothing was changed:");
     h.get_by_label("Declared conformance: none");
-    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Remove PDF/A identification"));
+    let refusal = h.state().pdfa.refusal.clone().unwrap();
+    assert!(refusal.blockers.iter().any(|b| b.message.ends_with("isn't embedded")), "{refusal:?}");
+    let id = h.state().active_ids().unwrap().1;
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), None);
 }
 
 /// A one-page PDF whose XMP declares the given `pdfaid`/`pdfuaid` attributes.
@@ -261,6 +260,28 @@ fn pdfa_dialog_shows_a_declared_pdfua() {
         h.run_steps(2);
         h.get_by_label(shown);
     }
+}
+
+#[test]
+fn pdfa_dialog_removes_a_declared_identification() {
+    // Save as PDF/A refuses the text document above (its font isn't embedded), so the removal is
+    // tried on a document that declares PDF/A-2b already.
+    let doc = declaring("pdfaid:part=\"2\" pdfaid:conformance=\"B\"");
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("declared.pdf", None, doc.clone()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("standards.pdfa"));
+    h.run_steps(2);
+    h.get_by_label("Declared conformance: PDF/A-2b");
+    h.get_by_label("Remove PDF/A identification").click();
+    h.run_steps(3);
+    h.get_by_label("Declared conformance: none");
+    let id = h.state().active_ids().unwrap().1;
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Remove PDF/A identification"));
 }
 
 #[test]

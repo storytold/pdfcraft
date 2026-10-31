@@ -443,9 +443,11 @@ fn spanish_is_registered() {
 #[test]
 fn spanish_keeps_the_holes_in_what_the_engine_says() {
     let es = Lang::from_code("es").expect("es registered");
-    let lists: [&[&str]; 5] = [
+    let lists: [&[&str]; 7] = [
         pdfcraft_engine::a11y::WORDINGS,
         pdfcraft_engine::pdfa::WORDINGS,
+        pdfcraft_engine::pdfx::WORDINGS,
+        pdfcraft_engine::pdfa::conform::WORDINGS,
         pdfcraft_engine::sign::pdf::WORDINGS,
         pdfcraft_engine::print::WORDINGS,
         pdfcraft_engine::field_table::WORDINGS,
@@ -1149,10 +1151,12 @@ fn translation_gaps_report() {
         }
     }
     pdfcraft_engine::catalog::TOOL_CATEGORIES.iter().for_each(|category| add(category.label));
-    let engine: [&[&str]; 9] = [
+    let engine: [&[&str]; 11] = [
         pdfcraft_engine::a11y::WORDINGS,
         pdfcraft_engine::a11y::REPORT_WORDS,
         pdfcraft_engine::pdfa::WORDINGS,
+        pdfcraft_engine::pdfx::WORDINGS,
+        pdfcraft_engine::pdfa::conform::WORDINGS,
         pdfcraft_engine::sign::pdf::WORDINGS,
         pdfcraft_engine::sign::pdf::kind::ALL,
         pdfcraft_engine::print::WORDINGS,
