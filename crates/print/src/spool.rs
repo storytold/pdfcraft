@@ -128,17 +128,116 @@ pub(crate) fn printer_options_via_within(
         f.take(PPD_CAP).read_to_end(&mut bytes).ok().map(|_| bytes)
     });
     let mut options = ppd.as_deref().map(|b| parse_ppd(&ppd_text(b))).unwrap_or_default();
+    let lpoptions_out = output_within(lpoptions.args(["-p", printer, "-l"]), limit).ok();
+    let current = lpoptions_out.as_deref().map(|out| parse_lpoptions(&String::from_utf8_lossy(out))).unwrap_or_default();
+    if options.is_empty() {
+        // The PPD is missing or unreadable (#4699). The same `lpoptions -l` listing carries every
+        // option with its choices and default; build a fallback list from it.
+        if let Some(out) = &lpoptions_out {
+            options = parse_lpoptions_list(&String::from_utf8_lossy(out));
+        }
+    }
+    // After the fallback: a readable PPD whose `*OpenUI` blocks yielded nothing still supplies the
+    // translations, and `localize` leaves options it cannot translate untouched.
     if let Some(b) = &ppd {
         localize(&mut options, b, lang);
     }
-    let current =
-        output_within(lpoptions.args(["-p", printer, "-l"]), limit).map(|out| parse_lpoptions(&String::from_utf8_lossy(&out))).unwrap_or_default();
     for (key, value) in current {
         if let Some(o) = options.iter_mut().find(|o| o.key == key)
             && o.choices.iter().any(|(c, _)| *c == value)
         {
             o.default = value;
         }
+    }
+    options
+}
+
+/// Caps that match [`craft_print::parse_ppd`]: a malformed spooler answer is not allowed to
+/// dominate memory or the dialog.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+const MAX_LPOPTIONS_OPTIONS: usize = 400;
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+const MAX_LPOPTIONS_CHOICES: usize = 400;
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+const MAX_LPOPTIONS_LABEL: usize = 256;
+
+/// A PPD keyword: printable ASCII without spaces, `/`, `:`, `=` or `"`.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+// The three name helpers below mirror `is_ppd_keyword`, `name_label` and `ppd_label` in craft-print,
+// which are private there: keep them in step with that crate, or they will accept in one reader what
+// the other refuses.
+fn is_lpoptions_keyword(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 64 && s.bytes().all(|b| b.is_ascii_graphic() && !matches!(b, b'/' | b':' | b'=' | b'"'))
+}
+
+/// `Name/Label` → (`Name`, `Label`), the label falling back to the name.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn lpoptions_name_label(s: &str) -> (&str, &str) {
+    match s.split_once('/') {
+        Some((n, l)) if !l.trim().is_empty() => (n.trim(), l.trim()),
+        Some((n, _)) => (n.trim(), n.trim()),
+        None => (s.trim(), s.trim()),
+    }
+}
+
+/// `label`, cut to [`MAX_LPOPTIONS_LABEL`] characters.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn lpoptions_label(label: &str) -> String {
+    label.chars().take(MAX_LPOPTIONS_LABEL).collect()
+}
+
+/// Whether `choice` is a custom-value template. For a choice the user has to type, `lpoptions -l`
+/// prints `Custom`, `Custom.<TYPE>` (`Custom.PASSCODE`, `Custom.STRING`, …) or `Custom.WIDTHxHEIGHT`
+/// in place of the choices, and the value is not something Craft can collect: it would be sent to
+/// the driver as the literal text. The prefix is reserved by CUPS, case-insensitively.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn is_lpoptions_custom_template(choice: &str) -> bool {
+    match choice.split_once('.') {
+        Some((name, _)) => name.eq_ignore_ascii_case("Custom"),
+        None => choice.eq_ignore_ascii_case("Custom"),
+    }
+}
+
+/// Build [`PrinterOption`]s from the `lpoptions -p NAME -l` listing (`Key/Label: a *b c`). This is
+/// the fallback when the PPD cannot be read, so there is no group information: every option lands in
+/// one unnamed group, and the listing cannot say which options sit under `InstallableOptions`, so an
+/// optional-hardware entry that [`parse_ppd`] drops may appear here. The starred choice is the
+/// driver's default. Options Craft handles itself ([`HANDLED_OPTIONS`]) and custom-value templates
+/// ([`is_lpoptions_custom_template`]) are skipped.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn parse_lpoptions_list(out: &str) -> Vec<PrinterOption> {
+    let mut options = Vec::new();
+    for line in out.lines() {
+        let line = line.trim_end_matches('\r');
+        let Some((head, choices)) = line.split_once(':') else {
+            continue;
+        };
+        let (key, label) = lpoptions_name_label(head);
+        if !is_lpoptions_keyword(key) || HANDLED_OPTIONS.contains(&key) {
+            continue;
+        }
+        let mut choice_list = Vec::new();
+        let mut default = String::new();
+        for token in choices.split_whitespace() {
+            let starred = token.strip_prefix('*').unwrap_or(token);
+            let (choice_key, choice_label) = lpoptions_name_label(starred);
+            if !is_lpoptions_keyword(choice_key) || is_lpoptions_custom_template(choice_key) {
+                continue;
+            }
+            if token.starts_with('*') {
+                default = choice_key.to_string();
+            }
+            if choice_list.len() < MAX_LPOPTIONS_CHOICES && choice_list.iter().all(|(c, _)| c != choice_key) {
+                choice_list.push((choice_key.to_string(), lpoptions_label(choice_label)));
+            }
+        }
+        if choice_list.is_empty() || options.len() >= MAX_LPOPTIONS_OPTIONS {
+            continue;
+        }
+        if !choice_list.iter().any(|(c, _)| *c == default) {
+            default = choice_list.first().map(|(c, _)| c.clone()).unwrap_or_default();
+        }
+        options.push(PrinterOption { key: key.to_string(), label: lpoptions_label(label), group: String::new(), choices: choice_list, default });
     }
     options
 }
@@ -164,7 +263,9 @@ pub fn open_printer_preferences(printer: &str) -> Result<(), crate::PrintError> 
 fn ppd_languages(lang: &str) -> Vec<String> {
     let lang = lang.to_ascii_lowercase();
     let mut parts = lang.split(['-', '_']).filter(|p| !p.is_empty());
-    let Some(primary) = parts.next() else { return Vec::new() };
+    let Some(primary) = parts.next() else {
+        return Vec::new();
+    };
     let region = match (primary, parts.next()) {
         ("zh", Some("hans")) => Some("CN".to_string()),
         ("zh", Some("hant")) => Some("TW".to_string()),
@@ -196,7 +297,9 @@ pub(crate) fn localize(options: &mut [PrinterOption], ppd: &[u8], lang: &str) {
     let mut choices: HashMap<(String, String), String> = HashMap::new();
     let mut groups: HashMap<String, String> = HashMap::new();
     for line in ppd.split(|b| *b == b'\n') {
-        let Some(text) = std::str::from_utf8(line).ok() else { continue };
+        let Some(text) = std::str::from_utf8(line).ok() else {
+            continue;
+        };
         let text = text.trim_end_matches('\r');
         if let Some(rest) = text.strip_prefix("*OpenGroup:") {
             // Group label → keyword, since options carry their group's label.
@@ -206,10 +309,18 @@ pub(crate) fn localize(options: &mut [PrinterOption], ppd: &[u8], lang: &str) {
             }
             continue;
         }
-        let Some(rest) = text.strip_prefix(prefix.as_str()) else { continue };
-        let Some((head, _)) = rest.split_once(':') else { continue };
-        let Some((main, spec)) = head.split_once(' ') else { continue };
-        let Some((key, label)) = spec.split_once('/') else { continue };
+        let Some(rest) = text.strip_prefix(prefix.as_str()) else {
+            continue;
+        };
+        let Some((head, _)) = rest.split_once(':') else {
+            continue;
+        };
+        let Some((main, spec)) = head.split_once(' ') else {
+            continue;
+        };
+        let Some((key, label)) = spec.split_once('/') else {
+            continue;
+        };
         let label = label.trim();
         if label.is_empty() {
             continue;

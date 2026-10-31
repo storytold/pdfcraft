@@ -521,7 +521,9 @@ mod cups_options {
     /// The child process stands in for lpoptions, recording its real arguments.
     #[test]
     fn stand_in_for_lpoptions() {
-        let Some(record) = std::env::var_os(RECORD) else { return };
+        let Some(record) = std::env::var_os(RECORD) else {
+            return;
+        };
         let args: Vec<String> = std::env::args().skip_while(|a| a != "--").skip(1).collect();
         std::fs::write(std::path::Path::new(&record).join("args"), args.join("\n")).unwrap();
         let answer = std::env::var(ANSWER).unwrap();
@@ -646,6 +648,102 @@ mod cups_options {
             );
             assert!(!dir.join("args").exists(), "{destination:?}: rejected before spawning");
         }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// #4699: when the queue's PPD is not readable, build the option list from `lpoptions -l`
+    /// instead of returning an empty dialog.
+    #[test]
+    fn unreadable_ppd_falls_back_to_lpoptions_list() {
+        let dir = folder();
+        // No PPD file: the PPD path is unreadable, just as on Arch where cupsd keeps it at
+        // 0640 root:cups.
+        let lpoptions_out = "MediaType/Media Type: *Stationery PhotographicGlossy StationeryInkjet Com.brotherBp71\ncupsPrintQuality/cupsPrintQuality: Draft *Normal High\nPageSize/Page Size: A4 Letter\nDuplex/Duplex: *None DuplexNoTumble\nno colon on this line\nEmpty/Empty:\n";
+        let options = spool::printer_options_via_within("Office", &dir, command(&dir, lpoptions_out), LIMIT, "en");
+        let keys: Vec<&str> = options.iter().map(|o| o.key.as_str()).collect();
+        assert_eq!(keys, ["MediaType", "cupsPrintQuality"], "PageSize is handled by the dialog and must be skipped");
+
+        let media_type = options.iter().find(|o| o.key == "MediaType").unwrap();
+        assert_eq!(media_type.label, "Media Type");
+        assert_eq!(media_type.default, "Stationery");
+        assert_eq!(
+            media_type.choices,
+            [
+                ("Stationery".into(), "Stationery".into()),
+                ("PhotographicGlossy".into(), "PhotographicGlossy".into()),
+                ("StationeryInkjet".into(), "StationeryInkjet".into()),
+                ("Com.brotherBp71".into(), "Com.brotherBp71".into()),
+            ]
+        );
+
+        let quality = options.iter().find(|o| o.key == "cupsPrintQuality").unwrap();
+        assert_eq!(quality.label, "cupsPrintQuality");
+        assert_eq!(quality.default, "Normal");
+        assert_eq!(quality.choices, [("Draft".into(), "Draft".into()), ("Normal".into(), "Normal".into()), ("High".into(), "High".into())]);
+
+        // The starring decides the fallback default, wherever the starred choice sits.
+        let lpoptions_out = "MediaType/Media Type: Plain *Glossy Matte\n";
+        let options = spool::printer_options_via_within("Office", &dir, command(&dir, lpoptions_out), LIMIT, "en");
+        assert_eq!(options.len(), 1);
+        assert_eq!(options[0].default, "Glossy", "the starred choice is the fallback default");
+        assert_eq!(options[0].choices, [("Plain".into(), "Plain".into()), ("Glossy".into(), "Glossy".into()), ("Matte".into(), "Matte".into())]);
+
+        // A PPD path that exists but cannot be opened at all, for a reason other than NotFound:
+        // ENOTDIR fails for root as well, where a 0o000 file would still be readable.
+        let blocker = dir.join("not-a-directory");
+        std::fs::write(&blocker, b"x").unwrap();
+        let options = spool::printer_options_via_within("Office", &blocker, command(&dir, lpoptions_out), LIMIT, "en");
+        assert_eq!(options.len(), 1, "an unopenable PPD falls back as an unreadable one does");
+
+        // A readable PPD whose *OpenUI blocks yield nothing (driverless queues): the fallback still
+        // fills the list, and the PPD's translations apply to it.
+        std::fs::write(dir.join("Empty.ppd"), b"*PPD-Adobe: \"4.3\"\n*cupsLanguages: \"it\"\n*it.Translation MediaType/Tipo di supporto: \"\"\n")
+            .unwrap();
+        let options = spool::printer_options_via_within("Empty", &dir, command(&dir, lpoptions_out), LIMIT, "it");
+        assert_eq!(options.len(), 1, "a readable PPD without options falls back too");
+        assert_eq!(options[0].label, "Tipo di supporto", "the readable PPD still translates the fallback list");
+
+        // A queue instance reaches lpoptions as the destination, and falls back the same way.
+        let options = spool::printer_options_via_within("Office/Instance", &dir, command(&dir, lpoptions_out), LIMIT, "en");
+        assert_eq!(options.len(), 1);
+        let recorded = std::fs::read_to_string(dir.join("args")).unwrap();
+        assert!(recorded.contains("Office/Instance"), "the instance is the destination: {recorded}");
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// CUPS prints a custom option's template instead of its choices — `Custom`, `Custom.PASSCODE`,
+    /// `Custom.STRING`, `Custom.WIDTHxHEIGHT`: the dialog has no field to collect the value, so
+    /// offering the template would send that literal text to the driver.
+    #[test]
+    fn custom_value_templates_are_not_offered() {
+        let dir = folder();
+        let lpoptions_out = "Pin/Pin: *Custom.PASSCODE\nJobPassword/Job Password: 1234 *5678 Custom.PASSWORD\nScale/Scale: *Custom.REAL\nSolo/Solo: *Custom\nMediaType/Media Type: *Plain Custom.Glossy Matte\n";
+        let options = spool::printer_options_via_within("Office", &dir, command(&dir, lpoptions_out), LIMIT, "en");
+        let keys: Vec<&str> = options.iter().map(|o| o.key.as_str()).collect();
+        assert_eq!(keys, ["JobPassword", "MediaType"], "an option whose choices are all templates is dropped");
+
+        let password = options.iter().find(|o| o.key == "JobPassword").unwrap();
+        assert_eq!(password.choices, [("1234".into(), "1234".into()), ("5678".into(), "5678".into())]);
+        assert_eq!(password.default, "5678", "a template is never a choice");
+
+        let media_type = options.iter().find(|o| o.key == "MediaType").unwrap();
+        assert_eq!(media_type.choices, [("Plain".into(), "Plain".into()), ("Matte".into(), "Matte".into())]);
+        assert_eq!(media_type.default, "Plain");
+
+        // A starred template must not become the default either: the first real choice takes over.
+        let options = spool::printer_options_via_within("Office", &dir, command(&dir, "Pin/Pin: *Custom.PASSCODE 1234\n"), LIMIT, "en");
+        assert_eq!(options.len(), 1);
+        assert_eq!(options[0].default, "1234");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_listing_is_capped_the_way_the_ppd_is() {
+        let dir = folder();
+        let listing: String = (0..500).map(|i| format!("Option{i}/Option {i}: *A B\n")).collect();
+        let options = spool::printer_options_via_within("Office", &dir, command(&dir, &listing), LIMIT, "en");
+        assert_eq!(options.len(), 400, "the fallback honours the same cap as parse_ppd");
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
