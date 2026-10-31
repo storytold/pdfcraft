@@ -125,8 +125,13 @@ impl PdfCraftApp {
             "signature_image": match &self.signature { Some(s @ fill_sign::SavedSig::Image(_)) => Some(s), _ => None },
             "initials": self.initials,
             "sign_graphic": self.sign_graphic,
-            // macOS Keychain and Windows store identities are read from their OS key stores each time.
-            "digital_ids": self.digital_ids.iter().filter(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:")).collect::<Vec<_>>(),
+            // macOS Keychain and Windows store identities are read from their OS key stores each time;
+            // a file held in memory (web) is gone with the session.
+            "digital_ids": self
+                .digital_ids
+                .iter()
+                .filter(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:") && !web_sign::in_memory(&e.path))
+                .collect::<Vec<_>>(),
             "trusted": trusted,
             "custom_stamps": stamps_ui::encode(&self.custom_stamps),
             "javascript": self.session.javascript(),

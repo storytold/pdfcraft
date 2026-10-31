@@ -80,8 +80,8 @@ config works across the suite) keep the agent to the folders you give it:
   `page_extract`, `doc_combine`, `doc_create_multiple`, `doc_split`, `doc_reduce`, `doc_optimize`,
   `doc_print` to a file, the `doc_export_*` tools, `image_save`, `measure_export`,
   `comments_summarize`, the accessibility report and review record, `doc_compare_report`,
-  `form_merge_data`, the output folders of `action_run` and `ocr_recognize_files`, `sign_id_create`
-  and `sign_document`.
+  `form_merge_data`, the output folders of `action_run` and `ocr_recognize_files`, `sign_id_create`,
+  `sign_document` and `sign_finish`.
 - Read and write access are separate. Give the same folder twice for both. A root left out grants
   none of its access: with only `--automation-read-root`, nothing can be written to disk, though
   tools that give their result back instead of a path still do. Without either flag nothing changes.

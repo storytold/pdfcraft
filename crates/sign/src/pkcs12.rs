@@ -301,6 +301,15 @@ enum BagKind {
     Cert(Vec<u8>),
 }
 
+/// A key bag holds the private key in the clear once decrypted: wiped when the bag goes.
+impl Drop for Bag {
+    fn drop(&mut self) {
+        if let BagKind::Key(key) = &mut self.kind {
+            zeroize::Zeroize::zeroize(key);
+        }
+    }
+}
+
 fn bags(safe_contents: &[u8], password: &str, out: &mut Vec<Bag>, budget: &mut Budget) -> Result<(), SignError> {
     for bag in Tlv::parse_all_ber(safe_contents)?.children()? {
         let f = bag.children()?;
@@ -440,7 +449,8 @@ pub fn open(bytes: &[u8], password: &str) -> Result<DigitalId, SignError> {
                     }
                     _ => return Err(bad("encryptedContent")),
                 };
-                let plain = pbe_decrypt(alg, password, &ct, &mut budget)?;
+                // Decrypted contents can hold a key bag in the clear: wiped once read.
+                let plain = zeroize::Zeroizing::new(pbe_decrypt(alg, password, &ct, &mut budget)?);
                 bags(&plain, password, &mut all, &mut budget)?;
             }
             _ => {}

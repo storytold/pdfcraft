@@ -1,5 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (gap 10: the web build signs with a PKCS#12 file; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (gap 3: #2517 a blank line stays a paragraph break; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
@@ -212,8 +213,9 @@ update the numbers.
 
 - **Missing:** PKCS #11 tokens and smart cards on macOS and Linux; timestamp-server preferences;
   fetching OCSP/CRL online for LTV; FieldMDP and locking fields on signing; the OS trust store; EU
-  Trusted Lists; signature graphics and saved appearances; compare signed version; signing in the
-  browser.
+  Trusted Lists; signature graphics and saved appearances; compare signed version. The web build
+  signs with a .p12/.pfx file (`sign.web-signing`), but not with tokens or OS key stores, which a
+  browser can't reach.
 - **Evidence:** `sign.pkcs11`, `sign.timestamp-servers`, `sign.field-mdp`, `sign.os-trust`,
   `sign.eutl` planned; `sign.pades-bt`, `sign.ltv`, `sign.ocsp-crl` partial (caller-supplied
   evidence). Users ask for Acrobat-like validation
@@ -419,6 +421,7 @@ update the numbers.
 | 2026-10-15 | minor | Gap 21: the side-by-side view had already shipped; the Compare panel filters text changes and visual differences. Estimate 10–20 h → 8–16 h |
 | 2026-10-20 | minor | Gap 6 #3673: Character encoding accepts Identity-H/V with Adobe CJK collections, or a predefined non-Identity CMap; negative and indirect-reference regressions and a read-only automation test passed after failing before the fix. Per-glyph validation and embedded-font extraction remain separate. Scores and estimates unchanged. |
 | 2026-10-17 | minor | Gap 6: the redaction audit counts a cover over one word of a long line instead of a clean bill (#2662, fixed by #2698). Estimates unchanged. |
+| 2026-10-15 | minor | Gap 10: the web build signs with a PKCS#12 file (ECDSA in Rust, RSA through the browser's Web Crypto in two steps); signing in the browser leaves the missing list. Estimates unchanged. |
 | 2026-10-15 | minor | Gap 12: the text oracle scores reading order as well as word F1, which is a bag of words and cannot see order; the first measurement separated 18 improvements from 6 regressions in a change F1 called unchanged on 26 of 29 files. Estimates unchanged. |
 | 2026-10-14 | minor | M1: raw-deflate fallback preserves decoding-limit errors in strict and tolerant decoding; synthetic filter and COS stream regressions. Estimates unchanged. |
 | 2026-10-15 | patch | Gap 24: record localization and installers as partial (unusable Chinese, Telugu and Arabic; unsigned Linux packages) |

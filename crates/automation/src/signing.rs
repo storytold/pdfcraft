@@ -2,14 +2,53 @@
 //! document, and manage trusted certificates. Rectangles are points from the top-left of the
 //! displayed page.
 
+use std::path::Path;
+use std::sync::Arc;
+
 use pdfcraft_engine::sign::{self, Certificate, DigitalId, Modification, Name, PrivateKey};
-use pdfcraft_engine::{SignOptions, SignatureInfo, SignatureStatus};
+use pdfcraft_engine::{DocId, EditError, SignOptions, SignatureInfo, SignatureStatus};
 use serde_json::{Value, json};
 
 use crate::{Args, Automation, Result, ToolError, failed, write_atomic};
 
 fn bad(m: impl Into<String>) -> ToolError {
     ToolError::InvalidArgs(m.into())
+}
+
+/// A signing error, as the caller's to fix when it is about what they passed: a graphic the signer
+/// refuses, a key PdfCraft can't sign with, a signature that doesn't verify.
+fn sign_error(e: EditError) -> ToolError {
+    const CALLERS: [&str; 3] = ["the signature graphic", "PdfCraft can't sign with", "the signature doesn't match"];
+    match e {
+        EditError::Sign(m) if CALLERS.iter().any(|c| m.starts_with(c)) => bad(m),
+        e => failed(e),
+    }
+}
+
+/// The longest signature value sign_finish takes, in hex digits (a 16384-bit RSA value is 2048 bytes).
+const MAX_SIGNATURE_HEX: usize = 4096;
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// `signature`: hex digits, two per byte, in either case.
+fn unhex(text: &str) -> Result<Vec<u8>> {
+    let too_long = || bad(format!("signature is longer than {MAX_SIGNATURE_HEX} hex digits"));
+    // Room for a separator after each pair, checked before anything is copied.
+    if text.len() > MAX_SIGNATURE_HEX * 2 {
+        return Err(too_long());
+    }
+    // Whitespace and colons between the pairs are ignored.
+    let digits: Vec<u8> = text.bytes().filter(|b| !b.is_ascii_whitespace() && *b != b':').collect();
+    if digits.len() > MAX_SIGNATURE_HEX {
+        return Err(too_long());
+    }
+    let not_hex = || bad("signature must be hex digits, two per byte");
+    if digits.is_empty() || !digits.len().is_multiple_of(2) || !digits.iter().all(u8::is_ascii_hexdigit) {
+        return Err(not_hex());
+    }
+    digits.chunks(2).map(|pair| std::str::from_utf8(pair).ok().and_then(|p| u8::from_str_radix(p, 16).ok()).ok_or_else(not_hex)).collect()
 }
 
 /// Seconds since 1970 → a DER time.
@@ -196,10 +235,10 @@ impl Automation {
         })
     }
 
-    pub(crate) fn sign_document(&mut self, a: &Args) -> Result<Value> {
-        let id = self.open_id(a)?;
+    /// The signature `a` asks for (sign_document, sign_prepare): an existing empty field, or a new
+    /// one on `page` at `rect`; its reason, location, certification and appearance.
+    fn sign_options(&self, a: &Args) -> Result<SignOptions> {
         let doc = self.doc(a)?;
-        let doc_id = doc.id;
         let field = a.opt_str("field")?.map(str::to_string);
         let page = match a.opt_int("page")? {
             Some(p) if p >= 1 && (p as usize) <= doc.info.pages.len() => p as usize - 1,
@@ -244,8 +283,7 @@ impl Automation {
             Some(_) if !visible => return Err(bad("labels needs a visible signature: pass rect or field")),
             Some(v) => labels_arg(v)?,
         };
-        let out = self.resolve(a.str("out")?, true)?;
-        let opts = SignOptions {
+        Ok(SignOptions {
             field,
             page,
             rect,
@@ -257,13 +295,61 @@ impl Automation {
             appearance_labels,
             graphic,
             ..SignOptions::default()
-        };
-        let signed = self.session.sign(doc_id, &id, opts).map_err(|e| match e {
-            // A graphic the signer refuses is the caller's to fix.
-            pdfcraft_engine::EditError::Sign(m) if m.starts_with("the signature graphic") => bad(m),
-            e => failed(e),
-        })?;
-        write_atomic(&out, &signed)?;
+        })
+    }
+
+    pub(crate) fn sign_document(&mut self, a: &Args) -> Result<Value> {
+        let id = self.open_id(a)?;
+        let doc_id = self.doc(a)?.id;
+        let opts = self.sign_options(a)?;
+        let out = self.resolve(a.str("out")?, true)?;
+        let signed = self.session.sign(doc_id, &id, opts).map_err(sign_error)?;
+        self.save_signed(a, doc_id, &out, signed)
+    }
+
+    /// sign_prepare: the first of two signing steps, for a key PdfCraft can't use itself (a
+    /// hardware module, a signing service, the browser's Web Crypto). The request waits for
+    /// sign_finish; preparing the document again replaces it.
+    pub(crate) fn sign_prepare(&mut self, a: &Args) -> Result<Value> {
+        let doc_id = self.doc(a)?.id;
+        let path = self.resolve(a.str("certificate")?, false)?;
+        let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+        let mut certs = sign::x509::load_certificates(&bytes).map_err(|e| bad(format!("certificate: {e}")))?.into_iter();
+        let certificate = certs.next().ok_or_else(|| bad("certificate: the file holds no certificate"))?;
+        let opts = self.sign_options(a)?;
+        let request = self.session.signing_request(doc_id, certificate, certs.collect(), opts).map_err(sign_error)?;
+        let scheme = if matches!(request.certificate().public_key, sign::PublicKey::Rsa { .. }) { "RSA PKCS #1 v1.5" } else { "ECDSA" };
+        let prepared = json!({
+            "to_sign": hex(request.message()),
+            "digest": request.digest().name(),
+            "scheme": scheme,
+            "date": request.date(),
+            "certificate": cert_json(request.certificate()),
+        });
+        // One request per open document: those of closed documents go.
+        self.signing.retain(|doc, _| self.session.get(*doc).is_some());
+        self.signing.insert(doc_id, request);
+        Ok(prepared)
+    }
+
+    /// sign_finish: sign with the value the key made over sign_prepare's bytes, and save.
+    pub(crate) fn sign_finish(&mut self, a: &Args) -> Result<Value> {
+        let doc_id = self.doc(a)?.id;
+        let signature = unhex(a.str("signature")?)?;
+        let out = self.resolve(a.str("out")?, true)?;
+        let request = self.signing.get(&doc_id).ok_or_else(|| bad("this document has no prepared signature: call sign_prepare first"))?;
+        let signed = self.session.complete_signing(request, &signature).map_err(sign_error)?;
+        // The request goes once the file is written: if `out` can't be written, the same
+        // signature can be sent again with another `out`.
+        let saved = self.save_signed(a, doc_id, &out, signed)?;
+        self.signing.remove(&doc_id);
+        Ok(saved)
+    }
+
+    /// Write the signed file to `out` and show it as the document's saved state (signing always
+    /// saves, as in Acrobat); returns the file and its newest signature.
+    fn save_signed(&mut self, a: &Args, doc_id: DocId, out: &Path, signed: Arc<Vec<u8>>) -> Result<Value> {
+        write_atomic(out, &signed)?;
         let path = out.to_string_lossy().into_owned();
         self.session.mark_signed(doc_id, signed.clone(), Some(path.clone())).map_err(failed)?;
         let doc = self.doc(a)?;
@@ -336,5 +422,152 @@ impl Automation {
         }
         self.session.set_trusted_certificates(certs);
         Ok(json!({ "trusted": self.session.trusted_certificates().iter().map(cert_json).collect::<Vec<_>>() }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use pdfcraft_engine::sign::DigestAlg;
+
+    use super::*;
+    use crate::Content;
+
+    const PDF: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+    fn id(file: &str) -> DigitalId {
+        let path = format!("{}/../sign/tests/data/{file}", env!("CARGO_MANIFEST_DIR"));
+        sign::pkcs12::open(&std::fs::read(path).unwrap(), "test").unwrap()
+    }
+
+    /// A folder with a.pdf, the RSA test ID and its certificate, and the P-256 test certificate.
+    fn workdir(test: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-sign-steps-{test}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.pdf"), PDF).unwrap();
+        let data = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../sign/tests/data");
+        std::fs::copy(data.join("rsa-aes.p12"), dir.join("rsa.p12")).unwrap();
+        std::fs::copy(data.join("rsa.crt.pem"), dir.join("rsa.crt.pem")).unwrap();
+        std::fs::write(dir.join("ec.cer"), &id("ec-p256.p12").certificate.raw).unwrap();
+        dir
+    }
+
+    /// After the test certificates' start date (2026-10-02).
+    fn automation(dir: &Path) -> Automation {
+        Automation::new().with_root(dir).unwrap().with_clock(|| 1_800_000_000)
+    }
+
+    fn ok(a: &mut Automation, tool: &str, args: Value) -> Value {
+        match a.call(tool, &args) {
+            Ok(content) => match content.into_iter().next() {
+                Some(Content::Json(v)) => v,
+                other => panic!("{tool}: {other:?}"),
+            },
+            Err(e) => panic!("{tool}: {e}"),
+        }
+    }
+
+    fn open(a: &mut Automation) -> u64 {
+        ok(a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap()
+    }
+
+    /// What the outside key does: sign `to_sign` with the digest it names.
+    fn outside_sign(key: &PrivateKey, prepared: &Value) -> Vec<u8> {
+        let digest = match prepared["digest"].as_str() {
+            Some("SHA-384") => DigestAlg::Sha384,
+            _ => DigestAlg::Sha256,
+        };
+        key.sign(digest, &unhex(prepared["to_sign"].as_str().unwrap()).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn an_outside_rsa_key_signs_in_two_steps_the_file_sign_document_writes() {
+        let dir = workdir("rsa");
+        let mut a = automation(&dir);
+        let doc = open(&mut a);
+        let options = json!({ "doc": doc, "page": 1, "rect": [20, 20, 180, 60], "reason": "Approved" });
+        let mut prepare = options.clone();
+        prepare["certificate"] = json!("rsa.crt.pem");
+        let prepared = ok(&mut a, "sign_prepare", prepare);
+        assert_eq!((prepared["digest"].as_str(), prepared["scheme"].as_str()), (Some("SHA-256"), Some("RSA PKCS #1 v1.5")));
+        assert_eq!(prepared["certificate"]["name"], "Test Signer RSA");
+        assert!(!dir.join("signed.pdf").exists(), "preparing writes nothing");
+        let signature = hex(&outside_sign(&id("rsa-aes.p12").key, &prepared));
+        let r = ok(&mut a, "sign_finish", json!({ "doc": doc, "signature": signature, "out": "signed.pdf" }));
+        assert_eq!((r["signature"]["signer"].as_str(), r["signature"]["reason"].as_str()), (Some("Test Signer RSA"), Some("Approved")));
+        // The same options and clock through sign_document, with the key in a .p12: the same bytes.
+        let mut b = automation(&dir);
+        let other = open(&mut b);
+        let mut document = options;
+        (document["doc"], document["id"], document["password"], document["out"]) =
+            (json!(other), json!("rsa.p12"), json!("test"), json!("one-step.pdf"));
+        ok(&mut b, "sign_document", document);
+        assert_eq!(std::fs::read(dir.join("signed.pdf")).unwrap(), std::fs::read(dir.join("one-step.pdf")).unwrap());
+        ok(&mut a, "sign_trust", json!({ "paths": ["rsa.crt.pem"] }));
+        let list = ok(&mut a, "sign_list", json!({ "doc": doc }));
+        assert_eq!((list["all_valid"].as_bool(), list["signatures"][0]["status"].as_str()), (Some(true), Some("valid")), "{list}");
+    }
+
+    #[test]
+    fn an_outside_ecdsa_key_may_answer_with_raw_r_and_s() {
+        let dir = workdir("ecdsa");
+        let mut a = automation(&dir);
+        let doc = open(&mut a);
+        let prepared = ok(&mut a, "sign_prepare", json!({ "doc": doc, "certificate": "ec.cer" }));
+        assert_eq!((prepared["digest"].as_str(), prepared["scheme"].as_str()), (Some("SHA-256"), Some("ECDSA")));
+        let der = outside_sign(&id("ec-p256.p12").key, &prepared);
+        let parts = sign::der::Tlv::parse_all(&der).unwrap().children().unwrap();
+        let raw: Vec<u8> =
+            parts.iter().flat_map(|i| std::iter::repeat_n(0u8, 32 - i.uint_bytes().len()).chain(i.uint_bytes().iter().copied())).collect();
+        // Spaced and in upper case, as tools print it.
+        let spaced: Vec<String> = raw.iter().map(|b| format!("{b:02X}")).collect();
+        ok(&mut a, "sign_finish", json!({ "doc": doc, "signature": spaced.join(" "), "out": "signed.pdf" }));
+        ok(&mut a, "sign_trust", json!({ "paths": ["ec.cer"] }));
+        assert_eq!(ok(&mut a, "sign_list", json!({ "doc": doc }))["all_valid"], true);
+    }
+
+    #[test]
+    fn a_wrong_signature_or_a_changed_document_is_refused_and_nothing_is_written() {
+        let dir = workdir("refused");
+        let mut a = automation(&dir);
+        let doc = open(&mut a);
+        let finish = |a: &mut Automation, signature: &str| a.call("sign_finish", &json!({ "doc": doc, "signature": signature, "out": "signed.pdf" }));
+        let refused = |r: Result<Vec<Content>>| match r {
+            Err(ToolError::InvalidArgs(m) | ToolError::Failed(m)) => m,
+            other => panic!("expected a refusal: {other:?}"),
+        };
+        assert!(refused(finish(&mut a, "00")).contains("call sign_prepare first"));
+        let prepared = ok(&mut a, "sign_prepare", json!({ "doc": doc, "certificate": "rsa.crt.pem" }));
+        let by_another_key = hex(&outside_sign(&id("chain.p12").key, &prepared));
+        for (signature, why) in [(by_another_key.as_str(), "doesn't match"), ("abc", "two per byte"), ("zz", "two per byte"), ("", "two per byte")] {
+            let m = refused(finish(&mut a, signature));
+            assert!(m.contains(why), "{signature:?}: {m}");
+        }
+        assert!(refused(finish(&mut a, &"00".repeat(MAX_SIGNATURE_HEX))).contains("longer than"));
+        assert!(!dir.join("signed.pdf").exists());
+        // The request survives a wrong answer, until the document changes.
+        let right = hex(&outside_sign(&id("rsa-aes.p12").key, &prepared));
+        ok(&mut a, "page_rotate", json!({ "doc": doc, "degrees": 90 }));
+        assert!(refused(finish(&mut a, &right)).contains("changed while it was being signed"));
+        assert!(!dir.join("signed.pdf").exists());
+        // Prepared again, it signs. An `out` that can't be written (a folder) leaves the request,
+        // so the same signature signs to another `out`.
+        let prepared = ok(&mut a, "sign_prepare", json!({ "doc": doc, "certificate": "rsa.crt.pem" }));
+        let signature = hex(&outside_sign(&id("rsa-aes.p12").key, &prepared));
+        std::fs::create_dir_all(dir.join("a-folder")).unwrap();
+        assert!(a.call("sign_finish", &json!({ "doc": doc, "signature": signature, "out": "a-folder" })).is_err());
+        ok(&mut a, "sign_finish", json!({ "doc": doc, "signature": signature, "out": "signed.pdf" }));
+        assert!(dir.join("signed.pdf").exists());
+        // A file with no certificate in it.
+        std::fs::write(dir.join("empty.pem"), b"no certificate here").unwrap();
+        let m = refused(a.call("sign_prepare", &json!({ "doc": doc, "certificate": "empty.pem" })));
+        assert!(m.contains("certificate"), "{m}");
     }
 }

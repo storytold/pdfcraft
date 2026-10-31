@@ -82,6 +82,8 @@ pub struct Automation {
     renderers: HashMap<DocId, (Arc<Vec<u8>>, PageRenderer)>,
     /// Extracted page text, under one memory budget across all open documents.
     texts: TextCache,
+    /// Signatures sign_prepare made ready, waiting for sign_finish (one per document).
+    signing: HashMap<DocId, pdfcraft_engine::SigningRequest>,
     /// The paragraphs of the last `text_paragraphs` listing of each page, so a paragraph number
     /// keeps naming that paragraph after edits regroup the page (#2516).
     listed: HashMap<(DocId, usize), Vec<BlockKey>>,
@@ -106,6 +108,7 @@ impl Automation {
             texts: TextCache::default(),
             listed: HashMap::new(),
             evicted: HashSet::new(),
+            signing: HashMap::new(),
         }
     }
 

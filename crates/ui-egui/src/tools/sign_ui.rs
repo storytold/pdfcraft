@@ -69,22 +69,27 @@ pub struct NewIdDraft {
     /// Use a Digital ID from a file: its path and password.
     pub file: String,
     pub file_password: String,
+    /// The file the browser's picker read (web; `file` is then its name).
+    pub picked: Option<crate::web_sign::IdFile>,
 }
 
 impl Default for NewIdDraft {
     fn default() -> Self {
         Self {
-            create: true,
+            // Browsers sign with an ID from a file first; a new one there is a P-256 key (RSA keys
+            // are made on the desktop only, ADR-0009).
+            create: !cfg!(target_arch = "wasm32"),
             name: String::new(),
             unit: String::new(),
             organization: String::new(),
             email: String::new(),
             country: String::new(),
-            key: 0,
+            key: if cfg!(target_arch = "wasm32") { 3 } else { 0 },
             password: String::new(),
             confirm: String::new(),
             file: String::new(),
             file_password: String::new(),
+            picked: None,
         }
     }
 }
@@ -363,7 +368,8 @@ impl PdfCraftApp {
         if self.digital_ids.get(index).is_none_or(|e| e.path.starts_with("keychain:") || e.path.starts_with("windows:")) {
             return false;
         }
-        self.digital_ids.remove(index);
+        let removed = self.digital_ids.remove(index);
+        self.id_files.retain(|f| f.path() != removed.path);
         if let Some(d) = self.sign_draft.as_mut() {
             d.confirm_remove = None;
             d.selected = match d.selected {
@@ -406,13 +412,24 @@ impl PdfCraftApp {
         let cert = Certificate::self_signed(&dn, &key, sign::Time::from_unix(now), 5, &serial).map_err(|e| e.to_string())?;
         let id = DigitalId { key, certificate: cert.clone(), chain: Vec::new(), friendly_name: Some(d.name.trim().to_string()) };
         let p12 = sign::pkcs12::write(&id, &d.password).map_err(|e| e.to_string())?;
+        let stem: String = d.name.trim().chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect();
+        // A browser has no folder to keep it in: it downloads, and is held in memory for the session.
+        #[cfg(target_arch = "wasm32")]
+        if self.export_dir_override.is_none() {
+            let file = crate::web_sign::IdFile { name: format!("{stem}.p12"), bytes: std::sync::Arc::new(p12) };
+            if let Err(e) = crate::editing::download_as(&file.name, &file.bytes, "application/x-pkcs12") {
+                self.notify_fmt("Couldn't download {name}: {e}", &[("name", &file.name), ("e", &e)]);
+                return Err(String::new());
+            }
+            self.notify_fmt("Downloaded {name}", &[("name", &file.name)]);
+            return Ok(self.add_id_file(file, &cert));
+        }
         let dir = match &self.export_dir_override {
             Some(p) => Some(PathBuf::from(p)),
             None => id_dir(),
         }
         .ok_or("There is no folder to save the digital ID in.")?;
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let stem: String = d.name.trim().chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect();
         let path = save_new_id_file(&dir, &stem, &p12).map_err(|e| e.to_string())?;
         Ok(self.add_digital_id(&path.to_string_lossy(), &cert))
     }
@@ -420,11 +437,22 @@ impl PdfCraftApp {
     /// Configure New Digital ID ▸ Use a Digital ID from a file.
     fn import_digital_id(&mut self) -> Result<usize, String> {
         let Some(d) = self.sign_draft.as_ref().map(|d| d.new_id.clone()) else { return Err("nothing to import".into()) };
+        let open = |bytes: &[u8]| {
+            sign::pkcs12::open(bytes, &d.file_password).map_err(|e| match e {
+                sign::SignError::WrongPassword => "The password is incorrect.".to_string(),
+                e => e.to_string(),
+            })
+        };
+        // A file the browser read is kept in memory for the session (web_sign).
+        if let Some(file) = d.picked {
+            let id = open(&file.bytes)?;
+            return Ok(self.add_id_file(file, &id.certificate));
+        }
+        if d.file.trim().is_empty() {
+            return Err("Choose a digital ID file.".into());
+        }
         let bytes = std::fs::read(&d.file).map_err(|e| format!("{}: {e}", d.file))?;
-        let id = sign::pkcs12::open(&bytes, &d.file_password).map_err(|e| match e {
-            sign::SignError::WrongPassword => "The password is incorrect.".to_string(),
-            e => e.to_string(),
-        })?;
+        let id = open(&bytes)?;
         Ok(self.add_digital_id(&d.file, &id.certificate))
     }
 
@@ -443,7 +471,7 @@ impl PdfCraftApp {
         } else if entry.path.starts_with("windows:") {
             windows_id(&entry.path)?
         } else {
-            let bytes = std::fs::read(&entry.path).map_err(|e| format!("{}: {e}", entry.path))?;
+            let bytes = self.id_file_bytes(&entry.path)?;
             sign::pkcs12::open(&bytes, &d.password).map_err(|e| match e {
                 sign::SignError::WrongPassword => "The password is incorrect.".to_string(),
                 e => e.to_string(),
@@ -475,6 +503,11 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         let folder = self.session.get(doc_id).and_then(|d| d.path.clone());
         let stem = name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
+        // A browser hands the signed file to the embedding page or downloads it (web_sign).
+        #[cfg(target_arch = "wasm32")]
+        if self.save_override.is_none() {
+            return self.sign_in_browser(doc_id, id, opts, format!("{stem}_signed.pdf"), choice);
+        }
         let sign_and_save = move |app: &mut Self, path: PathBuf| -> Result<(), String> {
             // Sign what was typed while the save panel was open, too (#166); a refused value
             // has said why already.
@@ -516,6 +549,7 @@ impl PdfCraftApp {
                 });
                 if asked { Ok(()) } else { Err(String::new()) }
             }
+            // Signed in the browser above.
             #[cfg(target_arch = "wasm32")]
             None => {
                 let _ = (stem, sign_and_save);
