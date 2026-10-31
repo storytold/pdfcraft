@@ -155,6 +155,7 @@ mod tests {
             QuickTool::Link,
             QuickTool::SignArea { certify: false },
             QuickTool::MarqueeZoom,
+            QuickTool::DynamicZoom,
             QuickTool::Snapshot,
             QuickTool::ColumnSelect,
         ];
@@ -176,6 +177,7 @@ mod tests {
                 | QuickTool::Link
                 | QuickTool::SignArea { .. }
                 | QuickTool::MarqueeZoom
+                | QuickTool::DynamicZoom
                 | QuickTool::Snapshot
                 | QuickTool::ColumnSelect => {}
             }
