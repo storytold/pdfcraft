@@ -524,7 +524,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::PreflightFix { fixups } => {
             let mut changed = 0usize;
             for fixup in fixups {
-                changed = changed.saturating_add(preflight::fix(doc, *fixup).map_err(|e| EditError::Invalid(e.to_string()))?);
+                changed = changed.saturating_add(crate::preflight::fix(doc, *fixup).map_err(|e| EditError::Invalid(e.to_string()))?);
             }
             // An edit that changes nothing would only leave an empty step in the history.
             if changed == 0 {

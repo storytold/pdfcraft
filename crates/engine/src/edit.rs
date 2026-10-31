@@ -369,7 +369,7 @@ pub enum Edit {
     /// remove JavaScript and actions), applied in order as one step. Fails when none of them has
     /// anything to fix.
     PreflightFix {
-        fixups: Vec<preflight::Fixup>,
+        fixups: Vec<crate::preflight::Fixup>,
     },
     /// Remove what identifies the document as meeting `standard` (PDF/A or PDF/X).
     RemoveStandardId {
