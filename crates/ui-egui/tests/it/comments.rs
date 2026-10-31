@@ -3063,6 +3063,34 @@ trailer << /Root 1 0 R >>
     assert_eq!(note.popup.map(|p| p.open), Some(false), "closed");
 }
 
+/// #2137 review: a pop-up lists the comment's text replies only, as the Comments panel does. A
+/// review status (`/StateModel /Review`) and a checkmark (`/StateModel /Marked`, the private
+/// reply Mark writes) are replies too, but not ones to read in the thread.
+#[test]
+fn a_pop_up_lists_text_replies_but_not_status_or_checkmark_replies() {
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [20 150 40 170] /T (Ada) /NM (note-1) /Contents (Please check) /Popup 5 0 R >> endobj
+5 0 obj << /Type /Annot /Subtype /Popup /Parent 4 0 R /Rect [60 40 260 160] /Open true >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [20 150 40 170] /F 32 /T (Bob) /NM (reply-1) /IRT 4 0 R /Contents (Agreed with this) >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [20 150 40 170] /F 32 /T (Bob) /NM (reply-2) /IRT 4 0 R /State /Accepted /StateModel /Review /Contents (Accepted set by Bob) >> endobj
+8 0 obj << /Type /Annot /Subtype /Text /Rect [20 150 40 170] /F 32 /T (Ada) /NM (reply-3) /IRT 4 0 R /State /Marked /StateModel /Marked /Contents (Marked set by Ada) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let mut h = harness(move |app| {
+        app.open_bytes("thread.pdf", None, pdf.to_vec()).expect("opens");
+        app.close_tab(0);
+    });
+    h.run_steps(6);
+    let (_, window) = h.state().views[0].comments.popup_rects.first().copied().expect("the open pop-up shows");
+    let in_window = |label: &str| h.query_all_by_label(label).any(|n| window.contains(n.rect().center()));
+    assert!(in_window("Agreed with this"), "the text reply");
+    assert!(!in_window("Accepted set by Bob"), "not the review status");
+    assert!(!in_window("Marked set by Ada"), "not the checkmark");
+}
+
 /// A double-click on a sticky note opens its pop-up window on the page, where its text is read
 /// and edited; the title bar drags it (saved as the pop-up's place, one undo step); × closes it
 /// (comment.popups, comment.connector-lines).

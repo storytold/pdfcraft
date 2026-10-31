@@ -167,9 +167,14 @@ pub(crate) fn popups(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, hi
                         } else {
                             ui.label(a.contents.as_deref().unwrap_or_default());
                         }
-                        // Replies, as the thread reads.
-                        let replies: Vec<&Annotation> =
-                            info.annotations.iter().filter(|r| r.page == page && r.in_reply_to.is_some() && r.in_reply_to == a.name).collect();
+                        // Replies, as the thread reads: text replies only, as in the Comments
+                        // panel. A review status or a checkmark (`/State`) is a reply too, but
+                        // not one to read here.
+                        let replies: Vec<&Annotation> = info
+                            .annotations
+                            .iter()
+                            .filter(|r| r.page == page && r.in_reply_to.is_some() && r.in_reply_to == a.name && r.state.is_none())
+                            .collect();
                         for r in replies {
                             ui.add_space(4.0);
                             ui.horizontal_wrapped(|ui| {
