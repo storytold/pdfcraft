@@ -53,6 +53,11 @@ rustls-cng = { version = "0.7.1", default-features = false }
 # Signing with Keychain identities (MIT OR Apache-2.0).
 security-framework = "3.7"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Signing with PKCS #11 token keys — Rutoken, JaCarta and friends (Apache-2.0/MIT).
+# A safe wrapper over the C API, in the same spirit as rustls-cng and security-framework.
+cryptoki = "0.12.1"
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # crypto-bigint asks for randomness; in the browser it comes from Web Crypto.
 getrandom = { version = "0.4", features = ["wasm_js"] }
