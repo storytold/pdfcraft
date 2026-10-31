@@ -371,6 +371,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("edit.background", "Add background…", None, None, Modification, "palette"),
     c("edit.background.update", "Update background…", None, None, Marks(crate::MarkKind::Background), "palette"),
     c("edit.background.remove", "Remove background", None, None, Marks(crate::MarkKind::Background), "palette"),
+    c("protect.certificate", "Encrypt with certificate…", FILE, None, Security, "file-lock-2"),
     c("protect.password", "Protect using password…", FILE, None, Security, "lock"),
     c("protect.remove", "Remove security", FILE, None, ProtectedSecurity, "lock-open"),
     c("protect.unlock", "Enter permissions password…", None, None, Unlock, "lock-open"),
@@ -415,6 +416,9 @@ pub fn menu(menu: &str) -> impl Iterator<Item = &'static CommandSpec> + '_ {
 
 /// Whether `spec` can run now, for the document `active` (the focused tab).
 pub fn is_enabled(spec: &CommandSpec, session: &Session, active: Option<DocId>) -> bool {
+    if cfg!(target_arch = "wasm32") && spec.id == "protect.certificate" {
+        return false;
+    }
     let doc = active.and_then(|id| session.get(id));
     match spec.needs {
         Nothing => true,

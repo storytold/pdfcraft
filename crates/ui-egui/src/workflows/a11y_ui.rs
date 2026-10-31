@@ -542,7 +542,11 @@ fn figure_picture(ctx: &egui::Context, doc: &pdfcraft_engine::Document, f: &pdfc
         w: (w * scale).ceil().max(1.0) as u32,
         h: (h * scale).ceil().max(1.0) as u32,
     };
-    let config = pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..Default::default() };
+    let config = pdfcraft_render::RenderConfig {
+        password: doc.password.as_deref().map(std::sync::Arc::from),
+        authenticated: doc.render_config().authenticated,
+        ..Default::default()
+    };
     let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
     let out = r.render(pdfcraft_render::RenderRequest {
         page,

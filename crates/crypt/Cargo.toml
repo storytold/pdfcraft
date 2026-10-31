@@ -14,6 +14,8 @@ workspace = true
 aes = "0.9"
 md-5 = "0.11"
 sha2 = "0.11"
+sha1 = "0.11"
+zeroize = "1.8"
 stringprep = "0.1"
 thiserror.workspace = true
 

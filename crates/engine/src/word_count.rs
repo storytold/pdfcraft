@@ -127,7 +127,7 @@ type Exclusions = HashMap<usize, HashSet<i32>>;
 /// expose: retain their page's MCID-tagged text instead of excluding an unrelated same-numbered
 /// span. Explicit Table/Code/Figure marked-content tags still work on those pages.
 fn exclusions(source: &ExportSource, options: Options) -> Result<(Exclusions, bool), String> {
-    let doc = pdfcraft_cos::Document::open_with_password(source.bytes.clone(), source.config.password.as_deref()).map_err(|e| e.to_string())?;
+    let doc = source.config.open_document(source.bytes.clone()).map_err(|e| e.to_string())?;
     let catalog = doc.root().and_then(|id| doc.get(id).as_dict().cloned()).unwrap_or_default();
     let Some(root) = catalog.get(b"StructTreeRoot").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()) else {
         return Ok((HashMap::new(), options.exclude_tables || options.exclude_code));

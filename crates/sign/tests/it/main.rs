@@ -5,5 +5,8 @@ mod ber;
 mod chain;
 mod cms;
 mod crypto;
+mod envelope;
 mod pdf;
+#[cfg(target_os = "linux")]
+mod pkcs11;
 mod store_keys;

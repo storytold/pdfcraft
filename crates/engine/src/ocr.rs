@@ -98,6 +98,7 @@ pub fn available() -> bool {
 pub struct OcrJob {
     bytes: Arc<Vec<u8>>,
     password: Option<String>,
+    authenticated: Option<pdfcraft_render::AuthenticatedDocument>,
     infos: Vec<PageInfo>,
     /// Per page: the render scale (pixels per point) that shows its images at their own
     /// resolution, if it has any.
@@ -110,8 +111,12 @@ impl OcrJob {
     /// Read the pages. `progress(done, total)` is called before each page; returning `false`
     /// stops (the pages read so far are returned).
     pub fn run(self, ocr: &Ocr, mut progress: impl FnMut(usize, usize) -> bool) -> Vec<OcrPage> {
-        let config =
-            RenderConfig { password: self.password.as_deref().map(Arc::from), hide_comments: self.settings.native_text_only, ..Default::default() };
+        let config = RenderConfig {
+            password: self.password.as_deref().map(Arc::from),
+            authenticated: self.authenticated.clone(),
+            hide_comments: self.settings.native_text_only,
+            ..Default::default()
+        };
         let mut r = PageRenderer::new(self.bytes.clone(), config);
         let mut out = Vec::new();
         let total = self.pages.len();
@@ -193,7 +198,15 @@ impl Session {
                     .reduce(f32::max)
             })
             .collect();
-        Some(OcrJob { bytes: doc.bytes.clone(), password: doc.password.clone(), infos: doc.info.pages.clone(), native, pages, settings })
+        Some(OcrJob {
+            bytes: doc.bytes.clone(),
+            password: doc.password.clone(),
+            authenticated: doc.config.authenticated.clone(),
+            infos: doc.info.pages.clone(),
+            native,
+            pages,
+            settings,
+        })
     }
 
     /// Add the words found by [`OcrJob::run`] as one undoable step. Returns the number of words.

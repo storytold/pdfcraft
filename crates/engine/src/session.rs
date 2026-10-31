@@ -3,7 +3,7 @@
 use std::sync::{Arc, OnceLock};
 
 use pdfcraft_cos::{SaveOptions, write_full, write_incremental};
-use pdfcraft_render::{LayerOp, OpenError, ReadingColors, RenderConfig, RenderPool, inspect};
+use pdfcraft_render::{LayerOp, OpenError, ReadingColors, RenderConfig, RenderPool};
 
 #[cfg(test)]
 use crate::check_refresh_panic;
@@ -21,6 +21,7 @@ use crate::{
 mod editing;
 mod files;
 mod save;
+pub use save::SigningJob;
 mod view;
 
 #[derive(Default)]

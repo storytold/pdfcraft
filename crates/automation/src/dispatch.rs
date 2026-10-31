@@ -24,6 +24,9 @@ impl Automation {
         tools::check_args(def, args)?;
         let a = Args(args);
         let out = match name {
+            "doc_open_token" => self.doc_open_token(&a)?,
+            "encryption_token_ids" => self.encryption_token_ids()?,
+            "doc_protect_certificates" => self.doc_protect_certificates(&a)?,
             "doc_open" => self.doc_open(&a)?,
             "doc_batch" => self.doc_batch(&a)?,
             "doc_list" => json!({ "documents": self.session.docs().iter().map(summary).collect::<Vec<_>>() }),
@@ -801,6 +804,19 @@ impl Automation {
                 #[cfg(not(target_os = "windows"))]
                 let (ids, unusable): (Vec<Value>, Vec<Value>) = (Vec::new(), Vec::new());
                 json!({ "count": ids.len(), "ids": ids, "unusable": unusable })
+            }
+            "sign_token_ids" => {
+                #[cfg(target_os = "linux")]
+                let ids: Vec<Value> = match pdfcraft_engine::sign::pkcs11::list() {
+                    Ok(ids) => ids
+                        .iter()
+                        .map(|id| json!({ "id": pdfcraft_engine::sign::pkcs11::reference(&id.certificate), "certificate": super::signing::cert_json(&id.certificate) }))
+                        .collect(),
+                    Err(e) => return Err(failed(e)),
+                };
+                #[cfg(not(target_os = "linux"))]
+                let ids: Vec<Value> = Vec::new();
+                json!({ "count": ids.len(), "ids": ids })
             }
             "sign_trust" => self.sign_trust(&a)?,
             "comment_mark" => self.comment_mark(&a)?,

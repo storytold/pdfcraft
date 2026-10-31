@@ -254,3 +254,62 @@ navigation-history tool; use the opt-in UI control channel to navigate the displ
 (`#RRGGBB`, default black) for `text` and `date`. The colour is saved in the
 FreeText appearance and survives reopening. Other mark/signature types reject
 `color`; their appearance controls are separate.
+
+## Certificate encryption and Linux smartcards
+
+`doc_protect_certificates` is an undoable engine edit. It accepts 1–64 recipients, each
+with a DER X.509 certificate path or an exact `pkcs11:` reference from
+`encryption_token_ids`. It uses public keys and does not need a PIN. Certificates must
+allow RSA key encipherment and be valid at the session clock. AES-256 is the default;
+AES-128 is also supported. Saving rewrites the file to remove the clear original.
+
+```json
+{"tool":"doc_protect_certificates","args":{"doc":1,"recipients":[{"certificate":"recipient.der","permissions":-1}]}}
+```
+
+Each `permissions` value is a signed 32-bit ISO 32000-2 Table 24 mask. The default,
+`-1`, grants every right. Bit 2 grants security control. At least one recipient must
+have that right. Duplicate certificates and duplicate issuer/serial identities are
+refused. Certificate file reads obey the read root and stop at 64 KiB.
+
+On Linux, `encryption_token_ids` lists public encryption certificates without a PIN.
+It includes expired certificates so an old document can still be opened. These are
+separate from the signing identities returned by `sign_token_ids`.
+
+`doc_open_token {path, id}` opens a PDF with one exact fingerprint from that listing.
+Configure `PDFCRAFT_PKCS11_MODULE` and, when required, `PDFCRAFT_PKCS11_PIN` in the host
+process. A card with a PIN pad can use its protected authentication path instead.
+Never put the PIN in tool arguments or a saved script. Missing, ambiguous or malformed
+recipients fail before private-key use. Authentication failures do not retry.
+The session retains the document key for edits and saves, without keeping the card or PIN.
+
+The ignored `certificate_tools_round_trip_through_softhsm` integration test provisions
+its own encryption-only key with per-use authentication. Run it only with a disposable
+`SOFTHSM2_CONF` store, `PDFCRAFT_SOFTHSM_UTIL`, `PDFCRAFT_PKCS11_MODULE`, and the public
+test PIN in `PDFCRAFT_PKCS11_PIN=1234`. Set `PDFCRAFT_PKCS11_HELPER` to a built
+`pdfcraft-cli` executable when running this library test.
+
+The desktop exposes **Protect → Encrypt with certificate…** and the matching item under
+**All tools → Protect a PDF**. Add DER certificate files or select a public certificate from
+a connected card, set each recipient's rights, then Apply and Save. At least one recipient
+must retain full control. The change can be undone.
+
+Opening a certificate-protected PDF raises a separate card prompt. Choose **Refresh cards**,
+select the intended encryption certificate and enter the PIN, or leave it empty for a PIN pad.
+A failed attempt clears the PIN and waits for another explicit action. Cancel keeps existing
+unsaved documents. Replacing the selected card requires refreshing the list before trying again.
+PIN editor state contains only bullets; PINs are not saved with settings or digital IDs.
+
+Linux discovery, signing and decryption run in separate worker processes. The CLI launches
+itself; library hosts and test harnesses must set `PDFCRAFT_PKCS11_HELPER` to a built PdfCraft
+executable or dispatch `pkcs11::worker_if_requested` before normal startup. Workers receive
+PINs through pipes and do not inherit `PDFCRAFT_PKCS11_PIN`. Discovery times out after
+15 seconds; private-key operations after 120 seconds. Failures never retry automatically.
+Linux desktop signing and identity discovery run on background jobs. The signing modal
+has Cancel. A late result cannot replace a changed document or destination file.
+An authentication error restores the dialog with an empty PIN field for an explicit retry.
+`Session::prepare_sign` exposes the snapshot API used by the desktop. Headless
+`sign_document` uses the same signing path and returns its result synchronously.
+A contributor reports successful signing and encrypted PDF opening with a physical
+card and reader PIN pad (2026-10-30). Broader hardware qualification remains unfinished.
+Certificate-security parity stays partial.

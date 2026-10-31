@@ -6,7 +6,7 @@ use crate::{
     AddedContent, AddedText, Background, BoxSpec, EditError, FieldProps, FieldValue, FillMark, HeaderFooter, Hidden, ImageEdit, InitialView, Label,
     LineEnding, LinkAction, LinkStyle, MarkFile, MarkKind, Markup, NewAnnotation, NewField, NoteIcon, ObjectTarget, PageBox, Protection, ReviewState,
     Rgb, Shape, Standard, Style, TabOrder, TransitionSpec, Watermark, a11y, copy_image, decode_data_file, embed_image, field_table, fit_picture,
-    image_content_type, is_xfa_data_file, js, mark_source, measure, open_source, strip_xfa, unrestricted, xfa, xfa_after_data_change,
+    image_content_type, is_xfa_data_file, js, mark_source, measure, open_source, strip_xfa, xfa, xfa_after_data_change,
 };
 
 mod labels;
@@ -555,6 +555,8 @@ pub enum Edit {
     FlattenFillSign,
     /// Protect with passwords and permissions (written by the next save, which is a full rewrite).
     Protect(Protection),
+    /// Encrypt for public certificate recipients. A full rewrite on save; undoable.
+    ProtectCertificates(crate::certificate_security::CertificateProtection),
     /// Remove password security (needs the owner password).
     RemoveProtection,
     /// Several edits applied as one undoable step (all or nothing).

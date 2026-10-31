@@ -188,6 +188,20 @@ impl Automation {
             #[cfg(not(target_os = "windows"))]
             return Err(failed(format!("windows:{r}: Windows certificate store identities are only available on Windows")));
         }
+        // Token PINs come only from the host environment, never a persisted script.
+        if let Some(r) = a.str("id")?.strip_prefix("pkcs11:") {
+            let reference = format!("pkcs11:{r}");
+            if a.opt_str("password")?.is_some() {
+                return Err(bad("token PINs must not appear in tool arguments; configure PDFCRAFT_PKCS11_PIN in the host environment"));
+            }
+            #[cfg(target_os = "linux")]
+            {
+                let pin = std::env::var("PDFCRAFT_PKCS11_PIN").ok().map(zeroize::Zeroizing::new);
+                return sign::pkcs11::find_with_pin(&reference, pin.as_ref().map(|p| p.as_str())).map_err(failed);
+            }
+            #[cfg(not(target_os = "linux"))]
+            return Err(failed(format!("{reference}: PKCS #11 token identities are only available on Linux")));
+        }
         let path = self.resolve(a.str("id")?, false)?;
         let bytes = crate::read_input(&path)?;
         sign::pkcs12::open(&bytes, a.opt_str("password")?.unwrap_or("")).map_err(|e| match e {

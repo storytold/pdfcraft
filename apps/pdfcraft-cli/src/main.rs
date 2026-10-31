@@ -98,6 +98,10 @@ help and feedback: https://discord.gg/artcraft"
 );
 
 fn main() -> ExitCode {
+    #[cfg(target_os = "linux")]
+    if let Some(code) = pdfcraft_engine::sign::pkcs11::worker_if_requested() {
+        return code;
+    }
     // `std::env::args` panics on an argument that is not UTF-8 ("called `Result::unwrap()` on an
     // `Err` value"), which a Latin-1 file name is, and it panics while collecting them: even
     // `--help` ended that way. Such a name cannot be passed on either, since the paths here are

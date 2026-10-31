@@ -6168,7 +6168,7 @@ fn decoded_images_with_identical_dictionaries_keep_their_own_pixels() {
     assert_eq!(rgb_at(&out.rgba, w, 35, 35), [0, 0, 255], "the second image drew the first one's pixels");
     assert_eq!(rgb_at(&out.rgba, w, 100, 35), [255, 0, 0]);
     // One cache across a preview and then a final render, as a render worker keeps it.
-    let pdf = parse(&Arc::new(pdf), None).expect("parses");
+    let pdf = parse(&Arc::new(pdf), &RenderConfig::default()).expect("parses");
     let cache = RenderCache::new();
     let settings = InterpreterSettings::default();
     let preview = render_page(&pdf, &cache, &settings, &RenderConfig::default(), req(true)).expect("preview renders");

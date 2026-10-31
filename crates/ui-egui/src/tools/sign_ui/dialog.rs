@@ -5,12 +5,36 @@ use super::{
 
 /// Draw the signing dialogs; returns `true` when the dialog should close.
 pub(crate) fn dialog(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
+    #[cfg(target_os = "linux")]
+    if !app.os_key_store_ids && ui.button(tl!("Use a smart card or token")).clicked() {
+        app.os_key_store_ids = true;
+        app.refresh_os_key_store_ids();
+        if let Some(draft) = app.sign_draft.as_mut() {
+            draft.step = SignStep::Choose;
+            draft.selected = app.digital_ids.iter().position(|entry| entry.unusable.is_none());
+        }
+    }
+    #[cfg(target_os = "linux")]
+    if app.os_key_store_ids {
+        let busy = app.token_discovery.is_some();
+        if busy {
+            ui.spinner();
+            ui.label(tl!("Looking for signing identities…"));
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(30));
+        } else if app.sign_draft.as_ref().is_some_and(|d| d.step == SignStep::Choose) && ui.button(tl!("Refresh smartcards")).clicked() {
+            app.refresh_os_key_store_ids();
+        }
+    }
     let Some(step) = app.sign_draft.as_ref().map(|d| d.step) else { return true };
-    match step {
+    let close = match step {
         SignStep::Choose => choose(ui, app, t),
         SignStep::Configure => configure(ui, app, t),
         SignStep::SignAs => sign_as(ui, app, t),
+    };
+    if close {
+        app.sign_draft = None;
     }
+    close
 }
 
 pub(super) fn title(ui: &mut egui::Ui, text: &str) {
@@ -64,6 +88,11 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
                 tl!("Keychain  ·  ").to_string()
             } else if e.path.starts_with("windows:") {
                 tl!("Windows store  ·  ").to_string()
+            } else if e.path.starts_with("pkcs11:") {
+                match &e.token {
+                    Some(token) => format!("{}«{token}»  ·  ", tl!("PKCS #11 token")),
+                    None => tl!("PKCS #11 token  ·  ").to_string(),
+                }
             } else {
                 String::new()
             };
@@ -87,6 +116,12 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
                 continue;
             }
             if resp.clicked() {
+                // A PIN typed for the previous selection must not reach another token: it
+                // could burn a failed-login attempt or lock it on the last one.
+                if d.selected != Some(i) {
+                    d.password.clear();
+                    d.pin.clear();
+                }
                 d.selected = Some(i);
                 d.confirm_remove = None;
             }
@@ -113,7 +148,9 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         });
         ui.add_space(10.0);
     }
-    let removable = d.selected.filter(|&i| ids.get(i).is_some_and(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:")));
+    let removable = d.selected.filter(|&i| {
+        ids.get(i).is_some_and(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:") && !e.path.starts_with("pkcs11:"))
+    });
     ui.horizontal(|ui| {
         if widgets::pill_button(ui, tl!("Configure New Digital ID"), false).clicked() {
             d.step = SignStep::Configure;
@@ -205,6 +242,7 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     ui.horizontal(|ui| {
         if !app.digital_ids.is_empty() && widgets::pill_button(ui, tl!("Back"), false).clicked() {
             d.step = SignStep::Choose;
+            d.pin.clear();
             d.error = None;
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -357,7 +395,7 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             &[("verb", if d.certify.is_some() { tl!("Certify") } else { tl!("Sign") }), ("name", &entry.name)],
         ),
     );
-    let in_os_key_store = entry.path.starts_with("keychain:") || entry.path.starts_with("windows:");
+    let in_os_key_store = entry.path.starts_with("keychain:") || entry.path.starts_with("windows:") || entry.path.starts_with("pkcs11:");
     let mut close = false;
     let mut go = false;
     #[cfg(not(target_arch = "wasm32"))]
@@ -432,7 +470,18 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         let l = ui.label(tl!("Location"));
         ui.add(crate::widgets::line(&mut d.location).hint_text(tl!("Optional")).desired_width(260.0)).labelled_by(l.id);
         ui.end_row();
-        if in_os_key_store {
+        if entry.path.starts_with("pkcs11:") {
+            let l = ui.label(tl!("Token PIN"));
+            let r = d.pin.field(ui, "sign-token-pin").labelled_by(l.id);
+            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                go = true;
+            }
+            ui.end_row();
+            ui.label("");
+            ui.label(
+                egui::RichText::new(tl!("The key stays on your smartcard. Leave the PIN empty to use its PIN pad.")).small().color(t.text_muted),
+            );
+        } else if in_os_key_store {
             ui.label("");
             ui.label(
                 egui::RichText::new(if entry.path.starts_with("windows:") {
@@ -457,6 +506,7 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     ui.horizontal(|ui| {
         if widgets::pill_button(ui, tl!("Back"), false).clicked() {
             d.step = SignStep::Choose;
+            d.pin.clear();
             d.error = None;
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

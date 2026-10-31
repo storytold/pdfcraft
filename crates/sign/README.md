@@ -51,8 +51,66 @@ for s in signatures(&doc, &bytes, &trust) {                                // li
   CertID hash matching, validity windows); validation checks embedded evidence against the
   signer's chain and a verified revocation invalidates the signature.
 
+The native `envelope` module builds and opens CMS recipient envelopes for certificate
+security. It writes RSA PKCS #1 v1.5 key transport with AES-256-CBC envelope content.
+It reads AES-128/256-CBC and 3DES-CBC content, including streaming BER from OpenSSL.
+`RecipientPayload` keeps the PDF seed in a zeroizing buffer and hides it from debug output.
+The Linux `pkcs11::decryption_identities` API lists RSA key-management certificates,
+including certificates that cannot sign. Its `decrypt_key` method performs RSA decryption
+on the token, with per-use PIN authentication when the key requires it.
+
+The COS object layer now reads and writes the document-wide s5 profile with AES-128/256.
+Tests connect these PDF dictionaries to real CMS envelopes and verify decryption with pyHanko.
+The engine and renderer can retain an authenticated context across edits and saves.
+The native engine and headless tools can encrypt for certificate recipients and open with
+an explicitly selected Linux token. Desktop dialogs also support these workflows.
+The contributor reports successful signing and encrypted PDF opening with a physical
+smartcard and a reader PIN pad (2026-10-30). Card, reader and module details were not
+recorded. Broader hardware qualification remains unfinished.
+Certificate-security parity remains partial. Set `PDFCRAFT_PYHANKO_PYTHON` to a Python interpreter with pyHanko installed to
+run the independent PDF oracle in the object-layer envelope test.
+
+Linux provider calls run in a fresh worker process for each discovery, signature, or
+key decryption. The desktop and CLI launch their own executable in a private mode before
+normal startup. Drivers never load in the caller. Discovery has a 15-second deadline;
+private-key operations have a 120-second deadline to allow PIN-pad entry. A failure or
+timeout returns an error without retrying. Each operation rechecks the public certificate
+and the token's reported serial before authentication. The caller also verifies signatures.
+
+The worker receives PIN bytes through a private pipe. It does not inherit
+`PDFCRAFT_PKCS11_PIN`, write credential files, or produce core dumps. Pipe buffers are
+bounded and sensitive application buffers are zeroized. This isolates driver failures;
+the worker still runs with the user's operating-system permissions.
+`pkcs11::Cancellation::run` lets an owning job cancel synchronous card calls. Dropping the
+card-open or recipient-discovery dialog stops its running helper. Linux signing and
+signing-identity discovery also run on background jobs. A signing job uses an immutable
+document snapshot. Cancel discards its result. Before writing, the UI checks the document,
+its active tab, and the destination file. Authentication errors restore the signing dialog
+with an empty PIN field. The helper also stops when its owning process exits.
+
+Library hosts must call `pkcs11::worker_if_requested` before normal startup, or set
+`PDFCRAFT_PKCS11_HELPER` to a built PdfCraft desktop or CLI executable. Test harnesses use
+the latter. For example, build `cargo build -p pdfcraft-cli -j 2`, then add
+`PDFCRAFT_PKCS11_HELPER="$PWD/target/debug/pdfcraft-cli"` to the SoftHSM commands below.
+The ignored `isolated_worker_signs_rsa_and_ecdsa_without_loading_the_provider_in_the_parent`
+test provisions RSA, P-256, and P-384 keys with per-use authentication. It verifies their
+signatures and checks that the provider is absent from the calling process's memory maps.
+
+The disposable SoftHSM test provisions its own test key and certificate. Run it only with
+an isolated, disposable token store. The paths below refer to your local test tools and
+configuration file. The test leaves its public test credentials in that store.
+
+```sh
+SOFTHSM2_CONF=/path/to/disposable/softhsm2.conf \
+PDFCRAFT_PKCS11_MODULE=/path/to/libsofthsm2.so \
+PDFCRAFT_SOFTHSM_UTIL=/path/to/softhsm2-util \
+cargo test -p pdfcraft-sign envelope::software_token_decrypts_an_encryption_only_certificate_envelope -- --ignored --exact
+```
+
 Not yet: revocation fetching (AIA/CRLDP extraction and a fetcher), timestamp-server
-configuration, FieldMDP locks, certificate security, direct PKCS #11 access to tokens.
+configuration, FieldMDP locks, and complete user workflows for certificate security.
+Linux PKCS #11 signing and decryption remain under development pending broader
+card, reader and module qualification.
 macOS Keychain and Windows Current User Personal (My) store identities sign through
 `ExternalKey` without exporting private keys. Windows CNG supports RSA PKCS #1 v1.5 and
 ECDSA P-256/P-384; the store integration is tested with software-backed keys. A smart card
@@ -120,3 +178,14 @@ needs a prompt to open is listed and asks at signing (issue #179).
 
 Oracles: poppler's `pdfsig` reports our signatures valid; OpenSSL reads our `.p12` files and
 verifies our CMS; `tests/data/openssl-signed.pdf` is a signature OpenSSL made, which we validate.
+
+Desktop signing uses `pkcs11::signing_identities()` and retains a `SigningIdentity`
+from discovery through the file picker and signing job. `with_pin` binds the one-use
+PIN to that selection; card changes require refresh and clear the input. Legacy
+`list` and `find_with_pin` calls keep their certificate-selection semantics. Token
+serials are provider-reported identifiers, not hardware attestation. Decryption
+discovery skips unavailable modules and readers while retaining healthy cards.
+
+Token decryption requires a nonblank reported serial before helper dispatch and
+backend authentication. Empty and whitespace-only serials return `TokenChanged`,
+including for PIN-pad operations. Public certificate discovery is still available.

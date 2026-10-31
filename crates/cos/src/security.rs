@@ -9,14 +9,18 @@
 
 use pdfcraft_crypt::{EncryptDict, Method, SecurityHandler, StreamKind};
 
-use crate::{Dict, Document, Object, PdfString, Stream};
+use crate::{CosError, Dict, Document, Object, PdfString, Stream};
+mod public_key;
 
 fn bytes_of(doc: &Document, d: &Dict, key: &[u8]) -> Vec<u8> {
     d.get(key).map(|v| doc.resolve(v)).and_then(|v| v.as_string().map(|s| s.bytes.clone())).unwrap_or_default()
 }
 
 /// Read the handler parameters from an `/Encrypt` dictionary.
-pub(crate) fn encrypt_dict(doc: &Document, d: &Dict) -> EncryptDict {
+pub(crate) fn encrypt_dict(doc: &Document, d: &Dict) -> Result<EncryptDict, CosError> {
+    if d.name(b"Filter") == Some(b"Adobe.PubSec") {
+        return public_key::read(doc, d);
+    }
     let int = |k: &[u8], default: i64| d.get(k).map(|v| doc.resolve(v)).and_then(|v| v.as_int()).unwrap_or(default);
     let name = |k: &[u8]| d.get(k).and_then(|v| v.as_name()).map(|n| n.to_vec()).unwrap_or_else(|| b"Identity".to_vec());
     let mut crypt_filters = Vec::new();
@@ -49,7 +53,7 @@ pub(crate) fn encrypt_dict(doc: &Document, d: &Dict) -> EncryptDict {
         (4, None) => 128,
         _ => int(b"Length", 40),
     };
-    EncryptDict {
+    Ok(EncryptDict {
         filter: d.name(b"Filter").map(|n| n.to_vec()).unwrap_or_default(),
         v,
         r: int(b"R", 0),
@@ -65,7 +69,8 @@ pub(crate) fn encrypt_dict(doc: &Document, d: &Dict) -> EncryptDict {
         stm_f: name(b"StmF"),
         str_f: name(b"StrF"),
         ef_f: d.get(b"EFF").and_then(|v| v.as_name()).map(|n| n.to_vec()).unwrap_or_default(),
-    }
+        public_key: None,
+    })
 }
 
 /// The crypt filter a stream names in its `/Filter` chain (`/Crypt` + `/DecodeParms /Name`).

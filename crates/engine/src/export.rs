@@ -83,7 +83,7 @@ impl Document {
 /// Export all images: the images `pages` (0-based) use, each once, skipping those under
 /// `min_side` pixels on their shorter side. JPEGs come out unchanged, other images as PNG.
 pub fn extract_images(src: &ExportSource, pages: &[usize], min_side: u32) -> Result<pdfcraft_create::ImageExport, String> {
-    let doc = pdfcraft_cos::Document::open_with_password(src.bytes.clone(), src.config.password.as_deref()).map_err(|e| e.to_string())?;
+    let doc = src.config.open_document(src.bytes.clone()).map_err(|e| e.to_string())?;
     Ok(pdfcraft_create::extract_images(&doc, pages, min_side))
 }
 

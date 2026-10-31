@@ -402,7 +402,11 @@ impl Session {
     fn detect_fields_turned(&self, id: DocId, pages: &[usize]) -> Vec<(usize, pdfcraft_forms::detect::Candidate, i64)> {
         let Some(doc) = self.get(id) else { return Vec::new() };
         let Some(cos) = doc.editor.as_ref().map(|e| &e.cos) else { return Vec::new() };
-        let config = pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..Default::default() };
+        let config = pdfcraft_render::RenderConfig {
+            password: doc.password.as_deref().map(std::sync::Arc::from),
+            authenticated: doc.config.authenticated.clone(),
+            ..Default::default()
+        };
         let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
         let mut taken: Vec<String> = doc.form.iter().map(|f| f.name.clone()).collect();
         let all = doc.info.pages.len();

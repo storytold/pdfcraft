@@ -98,7 +98,8 @@ impl Session {
         let doc = self.get(id)?;
         let info = doc.info.pages.get(page)?;
         let scale = (DETECT_SIDE / info.width.max(info.height).max(1.0)).clamp(0.05, MAX_SCALE);
-        let config = RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() };
+        let config =
+            RenderConfig { password: doc.password.as_deref().map(Arc::from), authenticated: doc.config.authenticated.clone(), ..Default::default() };
         let shot = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config).render(RenderRequest { page, scale, ..Default::default() });
         if shot.error.is_some() {
             return None;
@@ -149,7 +150,8 @@ impl Session {
         let cap = (MAX_PIXELS / area).sqrt() as f32;
         let scale = native.unwrap_or(DEFAULT_SCALE).clamp(1.0, MAX_SCALE).min(cap).max(0.01);
 
-        let config = RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() };
+        let config =
+            RenderConfig { password: doc.password.as_deref().map(Arc::from), authenticated: doc.config.authenticated.clone(), ..Default::default() };
         let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
         let shot = r.render(RenderRequest { page, scale, ..Default::default() });
         if let Some(e) = shot.error {

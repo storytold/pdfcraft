@@ -5,6 +5,8 @@ use crate::EditError;
 /// Document Properties ▸ Security.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SecuritySummary {
+    /// Public-key certificate security, rather than password security.
+    pub certificate: bool,
     /// "AES, 256-bit" etc.
     pub method: String,
     /// Opened with the owner password (no restrictions apply).

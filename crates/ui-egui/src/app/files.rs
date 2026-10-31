@@ -191,10 +191,15 @@ impl PdfCraftApp {
                     }
                     Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error)]),
                 },
-                Err(error @ (pdfcraft_render::OpenError::NeedsPassword | pdfcraft_render::OpenError::WrongPassword)) => {
+                Err(
+                    error @ (pdfcraft_render::OpenError::NeedsPassword
+                    | pdfcraft_render::OpenError::WrongPassword
+                    | pdfcraft_render::OpenError::NeedsCertificate),
+                ) => {
                     let password_error =
                         matches!(error, pdfcraft_render::OpenError::WrongPassword).then(|| "Incorrect password. Try again.".to_string());
-                    self.password_prompt = Some(PasswordPrompt {
+                    let certificate = matches!(error, pdfcraft_render::OpenError::NeedsCertificate);
+                    let prompt = PasswordPrompt {
                         name: pending.name,
                         path: pending.path,
                         bytes,
@@ -205,7 +210,8 @@ impl PdfCraftApp {
                         recovered: pending.recovered,
                         then: pending.then,
                         after_open: pending.after_open,
-                    });
+                    };
+                    self.set_opening_prompt(prompt, certificate);
                 }
                 Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error.to_string())]),
             },
@@ -223,11 +229,12 @@ impl PdfCraftApp {
         use pdfcraft_render::OpenError;
         let prepared = match self.session.prepare_open(name, path.clone(), bytes.clone(), password) {
             Ok(prepared) => prepared,
-            Err(e @ (OpenError::NeedsPassword | OpenError::WrongPassword)) => {
+            Err(e @ (OpenError::NeedsPassword | OpenError::WrongPassword | OpenError::NeedsCertificate)) => {
                 let error = matches!(e, OpenError::WrongPassword).then(|| "Incorrect password. Try again.".to_string());
                 #[cfg(not(target_arch = "wasm32"))]
                 let stamp = path.as_deref().and_then(file_watch::Stamp::at);
-                self.password_prompt = Some(PasswordPrompt {
+                let certificate = matches!(e, OpenError::NeedsCertificate);
+                let prompt = PasswordPrompt {
                     name: name.to_string(),
                     path,
                     bytes,
@@ -239,7 +246,8 @@ impl PdfCraftApp {
                     recovered: None,
                     then: None,
                     after_open: None,
-                });
+                };
+                self.set_opening_prompt(prompt, certificate);
                 return Ok(());
             }
             Err(e) => return Err(e.to_string()),
@@ -373,7 +381,7 @@ impl PdfCraftApp {
     pub fn attachment_action(&mut self, doc: DocId, index: usize, open: bool) {
         let Some(d) = self.session.get(doc) else { return };
         let Some(att) = d.info.attachments.get(index).cloned() else { return };
-        let data = pdfcraft_render::attachment_data(&d.bytes, d.password.as_deref(), &att);
+        let data = d.attachment_data(&att);
         match (data, open) {
             (Err(e), _) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]),
             (Ok(bytes), true) => {
@@ -405,6 +413,45 @@ impl PdfCraftApp {
         if let Some(i) = self.session.get(doc).and_then(|d| d.info.attachments.iter().position(|a| a.source == source)) {
             self.attachment_action(doc, i, open);
         }
+    }
+
+    fn set_opening_prompt(&mut self, prompt: PasswordPrompt, certificate: bool) {
+        if certificate {
+            self.certificate_prompt = Some(crate::certificate_ui::OpenPrompt::new(prompt));
+        } else {
+            self.password_prompt = Some(prompt);
+        }
+    }
+
+    pub(crate) fn opening_prompt_mut(&mut self) -> Option<&mut PasswordPrompt> {
+        match self.password_prompt.as_mut() {
+            Some(p) => Some(p),
+            None => self.certificate_prompt.as_mut().map(|p| &mut p.pending),
+        }
+    }
+    pub(crate) fn cancel_certificate_open(&mut self, prompt: PasswordPrompt) {
+        if let Some(meta) = prompt.recovered {
+            self.recoverable.push(meta);
+        }
+    }
+    pub(crate) fn finish_certificate_open(&mut self, prompt: PasswordPrompt, prepared: pdfcraft_engine::PreparedDocument) -> Result<(), String> {
+        let id = self.finish_open(&prompt.name, prompt.path.clone(), prompt.bytes.len(), prepared, prompt.activate)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        if prompt.path.is_some() {
+            self.watch.known_as(id, prompt.stamp);
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = id;
+        if let Some(destination) = prompt.after_open {
+            self.apply_remote_destination(destination);
+        }
+        if let Some(meta) = &prompt.recovered {
+            self.finish_recovery(meta);
+        }
+        if let Some(command) = prompt.then {
+            self.execute(command);
+        }
+        Ok(())
     }
 
     /// Answer the password prompt (`None` cancels).
@@ -560,7 +607,7 @@ impl PdfCraftApp {
                         self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &error)]);
                         return OpenOutcome::Failed;
                     }
-                    if let Some(prompt) = self.password_prompt.as_mut().filter(|p| p.path.as_deref() == Some(path)) {
+                    if let Some(prompt) = self.opening_prompt_mut().filter(|p| p.path.as_deref() == Some(path)) {
                         // Encrypted: the tool runs once the password is in.
                         prompt.then = then;
                     } else if self.views.len() > before {

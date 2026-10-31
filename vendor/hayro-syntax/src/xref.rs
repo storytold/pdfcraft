@@ -1,6 +1,6 @@
 //! Reading and querying the xref table of a PDF file.
 
-use crate::crypto::{DecryptionError, DecryptionTarget, Decryptor, get};
+use crate::crypto::{Credentials, DecryptionError, DecryptionTarget, Decryptor, get};
 use crate::data::Data;
 use crate::metadata::Metadata;
 use crate::object::Name;
@@ -38,7 +38,7 @@ pub(crate) enum XRefError {
 }
 
 /// Parse the "root" xref from the PDF.
-pub(crate) fn root_xref(data: PdfData, password: &[u8]) -> Result<XRef, XRefError> {
+pub(crate) fn root_xref(data: PdfData, credentials: &Credentials) -> Result<XRef, XRefError> {
     let mut xref_map = FxHashMap::default();
     let xref_pos = find_last_xref_pos(data.as_ref()).ok_or(XRefError::Unknown)?;
     let trailer =
@@ -49,19 +49,19 @@ pub(crate) fn root_xref(data: PdfData, password: &[u8]) -> Result<XRef, XRefErro
         xref_map,
         XRefInput::TrailerDictData(trailer),
         false,
-        password,
+        credentials,
     )
 }
 
 /// Try to manually parse the PDF to build an xref table and trailer dictionary.
-pub(crate) fn fallback(data: PdfData, password: &[u8]) -> Option<XRef> {
+pub(crate) fn fallback(data: PdfData, credentials: &Credentials) -> Option<XRef> {
     warn!("xref table was invalid, trying to manually build xref table");
-    let (xref_map, xref_input) = fallback_xref_map(&data, password);
+    let (xref_map, xref_input) = fallback_xref_map(&data, credentials);
 
     if let Some(xref_input) = xref_input {
         warn!("rebuild xref table with {} entries", xref_map.len());
 
-        XRef::new(data.clone(), xref_map, xref_input, true, password).ok()
+        XRef::new(data.clone(), xref_map, xref_input, true, credentials).ok()
     } else {
         warn!("couldn't find trailer dictionary, failed to rebuild xref table");
 
@@ -69,15 +69,15 @@ pub(crate) fn fallback(data: PdfData, password: &[u8]) -> Option<XRef> {
     }
 }
 
-fn fallback_xref_map<'a>(data: &'a PdfData, password: &[u8]) -> (XrefMap, Option<XRefInput<'a>>) {
-    fallback_xref_map_inner(data, ReaderContext::dummy(), true, password)
+fn fallback_xref_map<'a>(data: &'a PdfData, credentials: &Credentials) -> (XrefMap, Option<XRefInput<'a>>) {
+    fallback_xref_map_inner(data, ReaderContext::dummy(), true, credentials)
 }
 
 fn fallback_xref_map_inner<'a>(
     data: &'a PdfData,
     mut dummy_ctx: ReaderContext<'a>,
     recurse: bool,
-    password: &[u8],
+    credentials: &Credentials,
 ) -> (XrefMap, Option<XRefInput<'a>>) {
     let mut xref_map = FxHashMap::default();
     let mut trailer_dicts = vec![];
@@ -247,10 +247,10 @@ fn fallback_xref_map_inner<'a>(
             xref_map.clone(),
             XRefInput::TrailerDictData(trailer_dict.as_ref().map(|d| d.data()).unwrap()),
             true,
-            password,
+            credentials,
         ) {
             let ctx = ReaderContext::new(&xref, false);
-            let (patched_map, _) = fallback_xref_map_inner(data, ctx, false, password);
+            let (patched_map, _) = fallback_xref_map_inner(data, ctx, false, credentials);
             xref_map = patched_map;
         }
     }
@@ -316,7 +316,7 @@ impl XRef {
         xref_map: XrefMap,
         input: XRefInput<'_>,
         repaired: bool,
-        password: &[u8],
+        credentials: &Credentials,
     ) -> Result<Self, XRefError> {
         // This is a bit hacky, but the problem is we can't read the resolved trailer dictionary
         // before we actually created the xref struct. So we first create it using dummy data
@@ -330,7 +330,7 @@ impl XRef {
             has_ocgs: false,
             metadata: Arc::new(Metadata::default()),
             trailer_data,
-            password: password.to_vec(),
+            credentials: credentials.clone(),
             dict_cache: Arc::new(Mutex::new(DictCache::default())),
             object_stream_indexes: Arc::new(Mutex::new(ObjectStreamIndexes::default())),
         })));
@@ -348,7 +348,7 @@ impl XRef {
                         .read_with_context::<Dict<'_>>(&ReaderContext::new(&xref, false))
                         .ok_or(XRefError::Unknown)?;
 
-                    get_decryptor(&trailer_dict, password)?
+                    get_decryptor(&trailer_dict, credentials)?
                 }
                 XRefInput::RootRef(_) => Decryptor::None,
             }
@@ -521,7 +521,7 @@ impl XRef {
         // Set first so an unwinding fallback cannot trigger a reparse storm.
         // Assignment below publishes a complete replacement atomically.
         locked.repaired = true;
-        let (xref_map, _) = fallback_xref_map(r.data.get(), &r.password);
+        let (xref_map, _) = fallback_xref_map(r.data.get(), &r.credentials);
         locked.xref_map = xref_map;
     }
 
@@ -537,6 +537,11 @@ impl XRef {
                 }
             }
         }
+    }
+
+    /// PdfCraft patch: only external authentication consumes explicit stream Crypt filters.
+    pub(crate) fn external_decryption(&self) -> bool {
+        matches!(&self.0, Inner::Some(r) if matches!(r.decryptor.as_ref(), Decryptor::External(_)))
     }
 
     #[inline]
@@ -752,7 +757,7 @@ struct SomeRepr {
     metadata: Arc<Metadata>,
     decryptor: Arc<Decryptor>,
     has_ocgs: bool,
-    password: Vec<u8>,
+    credentials: Credentials,
     trailer_data: TrailerData,
 }
 
@@ -1145,8 +1150,16 @@ fn read_xref_table_trailer<'a>(
     reader.read_with_context::<Dict<'_>>(ctx)
 }
 
-fn get_decryptor(trailer_dict: &Dict<'_>, password: &[u8]) -> Result<Decryptor, XRefError> {
+fn get_decryptor(trailer_dict: &Dict<'_>, credentials: &Credentials) -> Result<Decryptor, XRefError> {
     if let Some(encryption_dict) = trailer_dict.get::<Dict<'_>>(ENCRYPT) {
+        // PdfCraft patch: reuse an authenticated object decryptor through xref repairs.
+        if let Some(external) = &credentials.external {
+            if encryption_dict.get::<Name<'_>>(b"Filter").as_deref() != Some(b"Adobe.PubSec".as_slice()) {
+                return Err(XRefError::Encryption(DecryptionError::UnsupportedAlgorithm));
+            }
+            return Ok(Decryptor::External(external.clone()));
+        }
+
         let id = if let Some(id) = trailer_dict
             .get::<Array<'_>>(ID)
             .and_then(|a| a.flex_iter().next::<object::String<'_>>())
@@ -1157,7 +1170,7 @@ fn get_decryptor(trailer_dict: &Dict<'_>, password: &[u8]) -> Result<Decryptor, 
             vec![]
         };
 
-        get(&encryption_dict, &id, password).map_err(XRefError::Encryption)
+        get(&encryption_dict, &id, &credentials.password).map_err(XRefError::Encryption)
     } else {
         Ok(Decryptor::None)
     }

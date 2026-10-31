@@ -64,17 +64,28 @@ impl Document {
         Self::open_as(data, Credentials::Password(password), stream_limit)
     }
 
+    /// Open with a caller-owned authentication resolver. The callback runs at most once.
+    /// A reconstructed trailer with different security parameters requires a fresh open.
+    pub fn open_with_security_resolver(data: Arc<Vec<u8>>, resolver: &dyn crate::SecurityResolver) -> Result<Self, CosError> {
+        Self::open_as(data, Credentials::Resolver { resolver, cached: std::cell::RefCell::new(None) }, crate::object::MAX_DECODED)
+    }
+
     /// Open `data`, an earlier revision of this file (the bytes a signature covers) or another
     /// save of it, with this document's credentials: an encrypted one must have the same
     /// `/Encrypt` dictionary and `/ID` as this document, whose file key is then reused, so no
     /// password is needed or kept; unencrypted data opens as [`open`](Self::open) does. Data
     /// encrypted differently fails with `NeedsPassword`.
     pub fn open_with_same_credentials(&self, data: Arc<Vec<u8>>) -> Result<Self, CosError> {
+        self.open_with_same_credentials_and_limit(data, self.stream_limit)
+    }
+
+    /// Reuse this credential with a tighter decompression bound (for read-only inspection).
+    pub fn open_with_same_credentials_and_limit(&self, data: Arc<Vec<u8>>, limit: usize) -> Result<Self, CosError> {
         let credentials = match &self.security {
             Some(handler) => Credentials::Handler { handler, id0: self.first_id() },
             None => Credentials::Password(None),
         };
-        Self::open_as(data, credentials, self.stream_limit)
+        Self::open_as(data, credentials, limit.min(self.stream_limit))
     }
 
     fn open_as(data: Arc<Vec<u8>>, credentials: Credentials<'_>, stream_limit: usize) -> Result<Self, CosError> {
@@ -181,9 +192,27 @@ impl Document {
             self.trailer.remove(b"Encrypt");
             return Ok(());
         };
-        let params = crate::security::encrypt_dict(self, &dict);
+        let params = crate::security::encrypt_dict(self, &dict)?;
         let id0 = self.first_id();
         let handler = match credentials {
+            Credentials::Resolver { resolver, cached } => {
+                let known = cached.try_borrow().map_err(|_| CosError::Poisoned)?.clone();
+                if let Some((handler, known_id)) = known {
+                    if *handler.dict() != params || known_id != id0 {
+                        return Err(CosError::Security("the recovered trailer changes encryption; reopen with the matching credential".into()));
+                    }
+                    handler
+                } else {
+                    let handler = resolver.authenticate(&params, &id0)?;
+                    if *handler.dict() != params {
+                        return Err(CosError::Security("the credential resolver returned a handler for different encryption parameters".into()));
+                    }
+                    let handler = Arc::new(handler);
+                    *cached.try_borrow_mut().map_err(|_| CosError::Poisoned)? = Some((handler.clone(), id0.clone()));
+                    handler
+                }
+            }
+            Credentials::Password(_) if params.filter == b"Adobe.PubSec" => return Err(CosError::NeedsCertificate),
             Credentials::Password(password) => Arc::new(pdfcraft_crypt::SecurityHandler::open(params, &id0, *password).map_err(|e| match e {
                 pdfcraft_crypt::CryptError::WrongPassword if password.is_none() => CosError::NeedsPassword,
                 pdfcraft_crypt::CryptError::WrongPassword => CosError::WrongPassword,
@@ -191,7 +220,9 @@ impl Document {
             })?),
             // The same encryption as the document whose key this is: that key opens it.
             Credentials::Handler { handler, id0: known } if *handler.dict() == params && *known == id0 => Arc::clone(handler),
-            Credentials::Handler { .. } => return Err(CosError::NeedsPassword),
+            Credentials::Handler { .. } => {
+                return Err(if params.filter == b"Adobe.PubSec" { CosError::NeedsCertificate } else { CosError::NeedsPassword });
+            }
         };
         self.security = Some(handler);
         self.encrypt_num = num;
@@ -319,6 +350,15 @@ impl Document {
         self.out_encrypt_num = Some(r.num);
         self.encryption_changed = true;
         Ok(())
+    }
+
+    pub(crate) fn set_public_output(&mut self, handler: pdfcraft_crypt::SecurityHandler, number: u32) {
+        self.out_security = Some(Arc::new(handler));
+        self.out_encrypt_num = Some(number);
+        self.encryption_changed = true;
+        if self.version.as_str() < "2.0" {
+            self.version = "2.0".into();
+        }
     }
 
     /// Remove password protection (requires the document to be open — any authenticated

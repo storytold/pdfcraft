@@ -27,17 +27,21 @@ impl Host for crate::PdfCraftApp {
     fn capture_epoch(&self) -> u64 {
         use std::hash::{Hash as _, Hasher as _};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.token_signing_busy().hash(&mut hasher);
+        #[cfg(target_os = "linux")]
+        self.token_signing.as_ref().map(|j| j.epoch()).hash(&mut hasher);
         let doc = self.active.and_then(|i| self.views.get(i)).map(|v| v.id.0);
         doc.hash(&mut hasher);
         format!(
             "{:?}/{:?}/{:?}/{:?}/{:?}",
             self.dialog,
-            self.password_prompt.is_some(),
+            self.password_prompt.is_some() || self.certificate_prompt.is_some(),
             self.palette_open,
             self.close_request.is_some(),
             self.active.and_then(|i| self.views.get(i)).and_then(|v| v.find.as_ref().map(|_| true)),
         )
         .hash(&mut hasher);
+        self.certificate_prompt.as_ref().map(|p| (std::sync::Arc::as_ptr(&p.pending.bytes), p.cards.selected.as_deref())).hash(&mut hasher);
         hasher.finish()
     }
 
@@ -145,6 +149,8 @@ impl Host for crate::PdfCraftApp {
             "notice": self.toast.as_ref().map(|t| t.0.clone()),
             "progress": self.progress_notice.as_ref().map(|p| json!({ "label": p.label, "fraction": p.fraction })),
             "password_prompt": self.password_prompt.is_some(),
+            "certificate_prompt": self.certificate_prompt.is_some(),
+            "smartcard_signing": self.token_signing_busy(),
             "close_prompt": self.close_request.is_some(),
         })
     }

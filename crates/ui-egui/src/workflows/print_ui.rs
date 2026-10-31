@@ -188,7 +188,11 @@ impl PdfCraftApp {
             return;
         }
         let up = self.session.print_text_up(id, &pages);
-        let config = pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..Default::default() };
+        let config = pdfcraft_render::RenderConfig {
+            password: doc.password.as_deref().map(std::sync::Arc::from),
+            authenticated: doc.render_config().authenticated,
+            ..Default::default()
+        };
         let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
         self.print_draft.crops = doc
             .info

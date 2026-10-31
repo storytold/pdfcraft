@@ -49,6 +49,7 @@ use file_access::foreign_share;
 use text_cache::TextCache;
 
 mod assemble;
+mod certificate_security;
 mod dispatch;
 mod documents;
 mod error;

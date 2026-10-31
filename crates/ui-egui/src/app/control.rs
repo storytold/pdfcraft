@@ -91,6 +91,10 @@ impl PdfCraftApp {
                     "shortcuts" => Some(Dialog::Shortcuts),
                     "split" => Some(Dialog::Split),
                     "protect" => Some(Dialog::Protect),
+                    "protect-certificate" => {
+                        self.execute("protect.certificate");
+                        self.dialog
+                    }
                     "page-boxes" => Some(Dialog::PageBoxes),
                     "header-footer" => Some(Dialog::Marks(pdfcraft_engine::MarkKind::HeaderFooter)),
                     "watermark" => Some(Dialog::Marks(pdfcraft_engine::MarkKind::Watermark)),

@@ -353,7 +353,7 @@ proptest! {
         data in payloads(),
         iv in prop::collection::vec(any::<u8>(), 16..24),
     ) {
-        let iv: [u8; 16] = *iv.as_slice().first_chunk::<16>().expect("the iv strategy draws at least 16 bytes; a silent zero fallback would hide a generator change");
+        let iv: [u8; 16] = *iv.first_chunk::<16>().expect("the iv strategy draws at least 16 bytes; a silent zero fallback would hide a generator change");
 
         let enc = aes_cbc_encrypt(&key, &iv, &data, true);
         prop_assert_eq!(aes_cbc_decrypt(&key, &iv, &enc, true), &data[..], "padded AES round trip at {} bytes", data.len());

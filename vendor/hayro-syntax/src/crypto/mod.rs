@@ -65,18 +65,48 @@ impl DecryptorTag {
         }
     }
 }
+/// PdfCraft patch: an authenticated object decryptor supplied by the document owner.
+/// The caller must validate the encryption parameters before constructing a PDF with it.
+pub trait ExternalDecryptor: core::fmt::Debug + Send + Sync {
+    /// Decrypt one indirect object value, or reject unsupported input.
+    fn decrypt(&self, id: ObjectIdentifier, data: &[u8], target: DecryptionTarget) -> Option<Vec<u8>>;
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct Credentials {
+    pub password: Vec<u8>,
+    pub external: Option<crate::sync::Arc<dyn ExternalDecryptor>>,
+}
+
+impl core::fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Credentials").field("external", &self.external.is_some()).finish_non_exhaustive()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum Decryptor {
     None,
+    External(crate::sync::Arc<dyn ExternalDecryptor>),
     Rc4 { key: Vec<u8> },
     Aes128 { key: Vec<u8>, dict: DecryptorData },
     Aes256 { key: Vec<u8>, dict: DecryptorData },
 }
 
-#[derive(Debug, Copy, Clone)]
-pub(crate) enum DecryptionTarget {
+/// The kind of value being decrypted, including stream crypt-filter overrides.
+#[derive(Debug, Clone)]
+pub enum DecryptionTarget {
+    /// A string outside an object stream.
     String,
-    Stream,
+    /// Encoded stream bytes, before compression filters are applied.
+    Stream {
+        /// This is an XML metadata stream.
+        metadata: bool,
+        /// This is an embedded-file stream.
+        embedded_file: bool,
+        /// An explicit Crypt decode-parameter filter name, when present.
+        filter: Option<Vec<u8>>,
+    },
 }
 
 impl Decryptor {
@@ -88,11 +118,12 @@ impl Decryptor {
     ) -> Option<Vec<u8>> {
         match self {
             Self::None => Some(data.to_vec()),
+            Self::External(external) => external.decrypt(id, data, target),
             Self::Rc4 { key } => decrypt_rc4(key, data, id),
             Self::Aes128 { key, dict } | Self::Aes256 { key, dict } => {
                 let crypt_dict = match target {
                     DecryptionTarget::String => dict.string_filter,
-                    DecryptionTarget::Stream => dict.stream_filter,
+                    _ => dict.stream_filter,
                 };
 
                 match crypt_dict.cfm {

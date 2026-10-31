@@ -254,6 +254,8 @@ pub(crate) fn security(d: &Document) -> Value {
             json!({
                 "protected": true,
                 "method": s.method,
+                "certificate": s.certificate,
+                "security_control": d.allows_security_change(),
                 "pending": s.pending,
                 "printing": if !p.print() { "none" } else if p.print_high_quality() { "high" } else { "low" },
                 "modify": p.modify(), "assemble": p.assemble(), "copy": p.copy(), "annotate": p.annotate(),

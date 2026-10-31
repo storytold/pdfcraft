@@ -39,7 +39,11 @@ impl crate::Document {
 
     /// Every word of the document in reading order, with page and box.
     pub fn words(&self) -> Vec<pdfcraft_compare::Word> {
-        let config = pdfcraft_render::RenderConfig { password: self.password.as_deref().map(Arc::from), ..Default::default() };
+        let config = pdfcraft_render::RenderConfig {
+            password: self.password.as_deref().map(Arc::from),
+            authenticated: self.config.authenticated.clone(),
+            ..Default::default()
+        };
         let mut r = pdfcraft_render::PageRenderer::new(self.bytes.clone(), config);
         let mut out = Vec::new();
         for (page, info) in self.info.pages.iter().enumerate() {
@@ -71,7 +75,11 @@ impl Session {
         let renderer = |d: &crate::Document| {
             pdfcraft_render::PageRenderer::new(
                 d.bytes.clone(),
-                pdfcraft_render::RenderConfig { password: d.password.as_deref().map(Arc::from), ..Default::default() },
+                pdfcraft_render::RenderConfig {
+                    password: d.password.as_deref().map(Arc::from),
+                    authenticated: d.config.authenticated.clone(),
+                    ..Default::default()
+                },
             )
         };
         let (mut ra, mut rb) = (renderer(a), renderer(b));
