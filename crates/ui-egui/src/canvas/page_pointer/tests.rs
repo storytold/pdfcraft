@@ -263,13 +263,11 @@ fn uses(line: &str, name: &str) -> bool {
     line.match_indices(name).any(|(at, _)| name.starts_with('.') || !line[..at].ends_with(|c: char| c.is_alphanumeric() || c == '_'))
 }
 
-/// Each use of one of `names` in the page modules' code (their tests left out) outside the
-/// functions `allowed` to, as "src/file:line: `name` why"; then each allowed function that uses
-/// none of them any more, as "src/file: fn function unused".
-fn misuses(names: &[&str], allowed: &[(&str, &str, &str)], why: &str, unused: &str) -> Vec<String> {
+/// Each name `find` finds in a line of the page modules' code (their tests left out), as (file,
+/// the top-level function or `impl` method it is in, line, name).
+fn page_module_matches(find: impl Fn(&str) -> Vec<String>) -> Vec<(&'static str, Option<String>, usize, String)> {
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut problems = Vec::new();
-    let mut needed = vec![false; allowed.len()];
+    let mut found = Vec::new();
     for file in PAGE_MODULES {
         let source = std::fs::read_to_string(src.join(file)).expect("page module").replace("\r\n", "\n");
         // Tests drive egui's input and read its output themselves.
@@ -287,12 +285,34 @@ fn misuses(names: &[&str], allowed: &[(&str, &str, &str)], why: &str, unused: &s
             if line.trim_start().starts_with("//") {
                 continue;
             }
-            for name in names.iter().filter(|name| uses(line, name)) {
-                match allowed.iter().position(|(f, function_name, _)| *f == file && function == Some(*function_name)) {
-                    Some(k) => needed[k] = true,
-                    None => problems.push(format!("src/{file}:{}: `{name}` {why}", n + 1)),
-                }
+            for name in find(line) {
+                found.push((file, function.map(str::to_owned), n + 1, name));
             }
+        }
+    }
+    found
+}
+
+/// Each use of one of `names` in the page modules' code (their tests left out).
+fn page_module_uses(names: &[&str]) -> Vec<(&'static str, Option<String>, usize, String)> {
+    page_module_matches(|line| names.iter().filter(|name| uses(line, name)).map(|name| (*name).to_owned()).collect())
+}
+
+/// Each use of one of `names` in the page modules' code (their tests left out) outside the
+/// functions `allowed` to, as "src/file:line: `name` why"; then each allowed function that uses
+/// none of them any more, as "src/file: fn function unused".
+fn misuses(names: &[&str], allowed: &[(&str, &str, &str)], why: &str, unused: &str) -> Vec<String> {
+    misuses_in(page_module_uses(names), allowed, why, unused)
+}
+
+/// [`misuses`], of what was `found`.
+fn misuses_in(found: Vec<(&str, Option<String>, usize, String)>, allowed: &[(&str, &str, &str)], why: &str, unused: &str) -> Vec<String> {
+    let mut problems = Vec::new();
+    let mut needed = vec![false; allowed.len()];
+    for (file, function, n, name) in found {
+        match allowed.iter().position(|(f, function_name, _)| *f == file && function.as_deref() == Some(*function_name)) {
+            Some(k) => needed[k] = true,
+            None => problems.push(format!("src/{file}:{n}: `{name}` {why}")),
         }
     }
     for ((file, name, _), needed) in allowed.iter().zip(needed) {
@@ -362,18 +382,68 @@ fn page_modules_claim_the_cursor_and_never_set_it() {
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
 
-/// Hit producers are called only by the central routing table, not again by an input handler.
-const PAGE_HIT_CALLS: [&str; 8] = [
+/// What decides, keeps or drops the press the pages hold.
+const ROUTER_WRITES: [&str; 3] = ["router.press(", "router.settle(", "router.cancel("];
+
+/// The functions that decide, keep or drop the press the pages hold: (file, function, why).
+const ROUTER_WRITERS: [(&str, &str, &str); 3] = [
+    ("canvas.rs", "page_tool_input", "the hits at the press point decide its owner, once per press"),
+    ("canvas.rs", "draw_pages", "the press is over once the button is up and its release seen, and a new one drops the last owner"),
+    ("canvas.rs", "cancel_pointer_gestures", "every pointer gesture's cancel: Escape, a dialog, automation's cancel"),
+];
+
+/// Ways to make a `Hit`.
+const HIT_BUILDS: [&str; 2] = ["Hit::new(", "Hit {"];
+
+/// Whether `name` is a hit test's: `hit`, or `…_hit`.
+fn is_hit_test(name: &str) -> bool {
+    name == "hit" || name.ends_with("_hit")
+}
+
+/// The hit tests `line` calls, by path or bare. A method, after its `.`, is left out:
+/// `PageCx::hit` finds the comment under a point, not a `Hit`.
+fn hit_test_calls(line: &str) -> Vec<String> {
+    line.match_indices("hit(")
+        .filter_map(|(at, _)| {
+            let end = at + "hit".len();
+            let start = line[..end].char_indices().rev().find(|(_, c)| !(c.is_alphanumeric() || *c == '_')).map_or(0, |(i, c)| i + c.len_utf8());
+            let (before, name) = (&line[..start], &line[start..end]);
+            (is_hit_test(name) && !before.ends_with('.') && !before.ends_with("fn ")).then(|| name.to_owned())
+        })
+        .collect()
+}
+
+/// The functions that call a hit test: (file, function, why). Only `PageHits::at` asks at the
+/// press point; the others ask where the pointer is.
+const HIT_TESTERS: [(&str, &str, &str); 4] = [
+    ("canvas.rs", "at", "`PageHits::at`: every module's hits at a point, for the pointer's cursor and tip and, once, the press's owner"),
+    ("canvas.rs", "page_overlays", "a link's click counts only released over the link its press was on"),
+    ("tools/forms_ui.rs", "page_input", "the field's tooltip under the pointer, and a click counts only released over the widget its press was on"),
+    ("tools/comments/input.rs", "grabs", "with no button down, whether a comment would take a press under the pointer, for hover painting"),
+];
+
+/// What ignores the press the pages hold until the button is up.
+const PRESS_IGNORES: [&str; 1] = ["press_cancelled = true"];
+
+/// The one function that ignores a press until the button is up: (file, function, why).
+const PRESS_IGNORERS: [(&str, &str, &str); 1] = [("canvas.rs", "cancel_on_escape", "Escape abandons the gesture the press drives, whichever tool's")];
+
+/// The module hit tests, called by path: a press handler calls none of them (HIT_TESTERS says who
+/// may).
+const PAGE_HIT_CALLS: [&str; 9] = [
     "prepare::hit(",
     "forms_ui::hit(",
     "comments::hit(",
     "edit_text_ui::hit(",
     "edit_text_ui::picture_hit(",
     "edit_text_ui::picture_handle_hit(",
+    "edit_text_ui::crop_hit(",
     "object_ui::hit(",
     "content_ui::hit(",
 ];
 
+/// Whether a press handler's `code` acts on the owner the router captured, and calls no hit test
+/// of its own to choose one.
 fn routed_press_handler(code: &str) -> bool {
     let code = code.lines().filter(|line| !line.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
     code.contains("router.owner(")
@@ -383,21 +453,30 @@ fn routed_press_handler(code: &str) -> bool {
         && !uses(&code, "handle_hit(")
 }
 
-/// Source-level guard for the Page presses rule, alongside the raw-pointer and cursor guards.
-/// Runtime routing, capture lifetime and Escape behavior have separate behavioral tests.
+/// Page modules act on a press only when the router says it is theirs. The hits at the press
+/// point decide its owner once, in one place, and a `Hit` comes only from a module's hit test,
+/// so what the cursor promised is what the press does. Where each module tested the press
+/// point again, or asked another whether it wanted the press, the answers disagreed: a press on
+/// one check box released over the next ticked the second, and a drag could be taken over
+/// halfway. Only `PageHits::at` asks the hit tests at the press point. Escape is the one way to
+/// drop a press and ignore it until the button is up.
 #[test]
-fn page_modules_take_presses_from_the_router_without_repeating_hit_tests() {
+fn page_modules_act_on_a_press_only_through_the_router() {
     let mut problems = misuses(
-        &PAGE_HIT_CALLS,
-        &[("canvas.rs", "at", "the central PageHits table")],
-        "repeats a module hit test outside PageHits::at; use the captured router owner",
-        "no longer collects module hits",
+        &ROUTER_WRITES,
+        &ROUTER_WRITERS,
+        "decides, keeps or drops the press the pages hold. Only the hits at the press point decide its owner, once \
+         (src/canvas/page_router.rs): a page module reads `view.router.owner(page)`. Drop a press with \
+         `DocView::cancel_pointer_gestures`. A new place that must? Add the function to ROUTER_WRITERS in \
+         src/canvas/page_pointer/tests.rs, with why.",
+        "no longer decides, keeps or drops the press: remove it from ROUTER_WRITERS.",
     );
     problems.extend(misuses(
-        &["router.press("],
-        &[("canvas.rs", "page_tool_input", "the central press capture")],
-        "captures a page press outside the central routing path",
-        "no longer captures page presses",
+        &PRESS_IGNORES,
+        &PRESS_IGNORERS,
+        "ignores the press the pages hold. Escape cancels a press, in `cancel_on_escape`: drop a gesture with \
+         `DocView::cancel_pointer_gestures` instead.",
+        "no longer ignores a press: remove it from PRESS_IGNORERS.",
     ));
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     for (file, function) in [
@@ -425,6 +504,25 @@ fn page_modules_take_presses_from_the_router_without_repeating_hit_tests() {
             problems.push(format!("src/{file}: {function} must consume the captured router owner without repeating a hit test"));
         }
     }
+    // A hit test is a function named `hit` or `…_hit`: one answer to "what of mine is here?",
+    // which gives the module's cursor, its tip and its press.
+    problems.extend(misuses_in(
+        page_module_matches(hit_test_calls),
+        &HIT_TESTERS,
+        "calls a hit test. The hits at the press point decide its owner once, in `PageHits::at`: act on the press when \
+         `view.router.owner(page)` says it is yours, rather than testing its point again. Testing where the pointer \
+         is (a tooltip, a click released over what it was pressed on)? Add the function to HIT_TESTERS in \
+         src/canvas/page_pointer/tests.rs, with why.",
+        "calls no hit test any more: remove it from HIT_TESTERS.",
+    ));
+    let builds = page_module_uses(&HIT_BUILDS);
+    assert!(!builds.is_empty(), "no page module makes a `Hit` any more: update HIT_BUILDS");
+    problems.extend(builds.into_iter().filter(|(_, function, _, _)| !function.as_deref().is_some_and(is_hit_test)).map(|(file, _, n, name)| {
+        format!(
+            "src/{file}:{n}: `{name}` makes a hit outside a hit test. A page module answers \"what of mine is \
+                     here?\" in one function, named `hit` or `…_hit`, so its cursor, its tip and its press agree."
+        )
+    }));
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
 
