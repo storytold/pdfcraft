@@ -2,6 +2,12 @@ use super::*;
 
 /// Whether `a` and `b` name the same file: equal, or equal once made absolute against the
 /// current directory (links are not resolved, as in `last_session`).
+/// The size of a file just prepared: a file on disk leaves no bytes to measure.
+#[cfg(not(target_arch = "wasm32"))]
+fn opened_size(bytes: &[u8], prepared: &pdfcraft_engine::PreparedDocument) -> usize {
+    if bytes.is_empty() { prepared.file_size() } else { bytes.len() }
+}
+
 pub(crate) fn same_file(a: &str, b: &str) -> bool {
     a == b || matches!((std::path::absolute(a), std::path::absolute(b)), (Ok(x), Ok(y)) if x == y)
 }
@@ -118,6 +124,7 @@ impl PdfCraftApp {
             recovered: request.recovered,
             then: request.then,
             display_override: None,
+            replaces: request.replaces,
         });
         Ok(token)
     }
@@ -176,29 +183,36 @@ impl PdfCraftApp {
                 None => {}
             },
             open_worker::ResultKind::Prepared { bytes, result } => match *result {
-                Ok(prepared) => match self.finish_open(&pending.name, pending.path.clone(), bytes.len(), prepared, pending.activate) {
-                    Ok(id) => {
-                        if pending.path.is_some() {
-                            self.watch.known_as(id, pending.stamp);
-                        }
-                        if let Some(destination) = pending.after_open {
-                            self.apply_remote_destination(destination);
-                        }
-                        if let Some((layout, continuous)) = pending.display_override
-                            && let Some(view) = self.views.iter_mut().find(|view| view.id == id)
-                        {
-                            view.set_display(layout, continuous);
-                            self.launch_display_target = Some(id);
-                        }
-                        if let Some(meta) = &pending.recovered {
-                            self.finish_recovery(meta);
-                        }
-                        if let Some(command) = pending.then {
-                            self.execute(command);
-                        }
+                Ok(prepared) if pending.replaces.is_some() => {
+                    if let Some(id) = pending.replaces {
+                        self.finish_load_whole(id, prepared, pending.stamp);
                     }
-                    Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error)]),
-                },
+                }
+                Ok(prepared) => {
+                    match self.finish_open(&pending.name, pending.path.clone(), opened_size(&bytes, &prepared), prepared, pending.activate) {
+                        Ok(id) => {
+                            if pending.path.is_some() {
+                                self.watch.known_as(id, pending.stamp);
+                            }
+                            if let Some(destination) = pending.after_open {
+                                self.apply_remote_destination(destination);
+                            }
+                            if let Some((layout, continuous)) = pending.display_override
+                                && let Some(view) = self.views.iter_mut().find(|view| view.id == id)
+                            {
+                                view.set_display(layout, continuous);
+                                self.launch_display_target = Some(id);
+                            }
+                            if let Some(meta) = &pending.recovered {
+                                self.finish_recovery(meta);
+                            }
+                            if let Some(command) = pending.then {
+                                self.execute(command);
+                            }
+                        }
+                        Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error)]),
+                    }
+                }
                 Err(error @ (pdfcraft_render::OpenError::NeedsPassword | pdfcraft_render::OpenError::WrongPassword)) => {
                     let password_error =
                         matches!(error, pdfcraft_render::OpenError::WrongPassword).then(|| "Incorrect password. Try again.".to_string());
@@ -379,11 +393,69 @@ impl PdfCraftApp {
         }
     }
 
+    /// Read the whole of a document that stayed on disk, in its place, so that it can be edited.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn load_whole(&mut self, id: DocId) {
+        let Some((name, path)) = self.session.get(id).and_then(|d| Some((d.name.clone(), d.path.clone()?))) else { return };
+        if self.pending_opens.iter().any(|p| p.replaces == Some(id)) {
+            return;
+        }
+        let stamp = file_watch::Stamp::at(&path);
+        if self.ctx.is_none() || self.run_inline {
+            match std::fs::read(&path) {
+                Ok(bytes) => {
+                    if let Some(i) = self.views.iter().position(|v| v.id == id) {
+                        self.watch.known_as(id, stamp);
+                        self.reload_view(i, std::sync::Arc::new(bytes));
+                    }
+                }
+                Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e.to_string())]),
+            }
+            return;
+        }
+        let input = open_worker::Input::WholePath(std::path::PathBuf::from(&path));
+        let request = OpenRequest {
+            name: name.clone(),
+            path: Some(path),
+            stamp,
+            input,
+            password: None,
+            activate: false,
+            after_open: None,
+            recovered: None,
+            then: None,
+            replaces: Some(id),
+        };
+        match self.schedule_open(request) {
+            Ok(_) => self.notify_fmt("Loading {name}…", &[("name", &name)]),
+            Err(e) => self.notify_fmt("Couldn't open {name}: {reason}", &[("name", &name), ("reason", &e)]),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn finish_load_whole(&mut self, id: DocId, prepared: pdfcraft_engine::PreparedDocument, stamp: Option<file_watch::Stamp>) {
+        match self.session.replace_with(id, prepared) {
+            Ok(()) => {
+                self.watch.known_as(id, stamp);
+                if let Some(i) = self.views.iter().position(|v| v.id == id) {
+                    self.document_reloaded(i);
+                }
+            }
+            Err(e) => {
+                let name = self.session.get(id).map(|d| d.name.clone()).unwrap_or_default();
+                self.notify_fmt("Couldn't reload {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
+            }
+        }
+    }
+
     /// Save an attachment to disk, or open a PDF attachment in a new tab.
     pub fn attachment_action(&mut self, doc: DocId, index: usize, open: bool) {
         let Some(d) = self.session.get(doc) else { return };
         let Some(att) = d.info.attachments.get(index).cloned() else { return };
-        let data = pdfcraft_render::attachment_data(&d.bytes, d.password.as_deref(), &att);
+        let data = match &d.on_disk {
+            Some(file) => pdfcraft_render::attachment_on_disk(file, &att),
+            None => pdfcraft_render::attachment_data(&d.bytes, d.password.as_deref(), &att),
+        };
         match (data, open) {
             (Err(e), _) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]),
             (Ok(bytes), true) => {
@@ -442,6 +514,7 @@ impl PdfCraftApp {
                 after_open: p.after_open.clone(),
                 recovered: p.recovered.clone(),
                 then: p.then,
+                replaces: None,
             });
             if let Ok(token) = &result
                 && let Some(pending) = self.pending_opens.iter_mut().find(|pending| pending.token == *token)
@@ -603,6 +676,29 @@ impl PdfCraftApp {
         // the bounded worker and commit on the UI thread.
         // Keep flagged launch files behind an existing password prompt or picker.
         if (self.ctx.is_none() || self.run_inline) && !(display_override.is_some() && (self.modal_open() || self.pickers.pending())) {
+            if let Some(prepared) = self.session.open_context().prepare_on_disk(name.as_str(), std::path::Path::new(path)) {
+                self.startup_superseded = true;
+                let size = prepared.file_size();
+                return match self.finish_open(&name, Some(path.to_string()), size, prepared, true) {
+                    Ok(id) => {
+                        if let Some((layout, continuous)) = display_override
+                            && let Some(view) = self.views.iter_mut().find(|view| view.id == id)
+                        {
+                            view.set_display(layout, continuous);
+                            self.launch_display_target = Some(id);
+                        }
+                        self.watch.known_as(id, stamp);
+                        if let Some(command) = then {
+                            self.execute(command);
+                        }
+                        OpenOutcome::Opened
+                    }
+                    Err(error) => {
+                        self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &error)]);
+                        OpenOutcome::Failed
+                    }
+                };
+            }
             match std::fs::read(path) {
                 Ok(bytes) => {
                     let before = self.views.len();
@@ -649,6 +745,7 @@ impl PdfCraftApp {
                 path: Some(path.to_string()),
                 stamp,
                 input: open_worker::Input::Path(std::path::PathBuf::from(path)),
+                replaces: None,
                 password: None,
                 activate: true,
                 after_open: None,

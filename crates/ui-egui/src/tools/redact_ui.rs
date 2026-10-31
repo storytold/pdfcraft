@@ -304,7 +304,7 @@ impl PdfCraftApp {
             return 0;
         }
         let config = pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..Default::default() };
-        let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
+        let mut r = pdfcraft_render::PageRenderer::new(doc.source(), config);
         let mut edits = Vec::new();
         let author = self.comment_prefs.author.clone();
         for (page, page_info) in doc.info.pages.iter().enumerate() {

@@ -409,9 +409,14 @@ impl PdfCraftApp {
     /// stay out (#1356). The same document, not the same name: two files called alike are two.
     pub(crate) fn add_open_documents(&mut self, tabs: &[usize]) {
         let mut incoming = Vec::new();
+        let mut unreadable = None;
         for &i in tabs {
             let Some(doc) = self.views.get(i).and_then(|v| self.session.get(v.id)) else { continue };
             if self.combine_draft.iter().any(|f| f.open_doc == Some(doc.id)) {
+                continue;
+            }
+            if let Err(e) = doc.whole() {
+                unreadable = Some(e);
                 continue;
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -421,6 +426,9 @@ impl PdfCraftApp {
             let note = doc.dirty.then(|| tl!("Includes unsaved changes").to_string());
             let name = if doc.name.to_ascii_lowercase().ends_with(".pdf") { doc.name.clone() } else { format!("{}.pdf", doc.name) };
             incoming.push(Incoming { name, bytes: doc.bytes.clone(), modified, note, open_doc: Some(doc.id) });
+        }
+        if let Some(e) = unreadable {
+            self.notify_error(e);
         }
         self.stage_combine_with(incoming);
     }

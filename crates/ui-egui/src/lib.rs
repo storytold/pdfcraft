@@ -247,6 +247,7 @@ struct PendingOpen {
     recovered: Option<RecoveryMeta>,
     then: Option<&'static str>,
     display_override: Option<(canvas::PageLayout, bool)>,
+    replaces: Option<DocId>,
 }
 
 pub struct PdfCraftApp {

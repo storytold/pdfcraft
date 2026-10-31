@@ -3030,6 +3030,14 @@ fn apply_notice(app: &mut PdfCraftApp, index: usize, notice: Option<Notice>) {
         Some(Notice::Console) => app.dialog = Some(crate::Dialog::JsConsole),
         // Back on in Preferences ▸ General.
         Some(Notice::HideSecured) => app.show_secured_notice = false,
+        #[cfg(not(target_arch = "wasm32"))]
+        Some(Notice::LoadWhole) => {
+            if let Some(id) = app.views.get(index).map(|view| view.id) {
+                app.load_whole(id);
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        Some(Notice::LoadWhole) => {}
         None => {}
     }
 }

@@ -59,6 +59,8 @@ pub(super) enum Notice {
     Close,
     /// Stop showing the secured-document notice, in every document (#4035).
     HideSecured,
+    /// Load the whole of a file that is being read from disk, to edit it.
+    LoadWhole,
 }
 
 /// The notice bar above the pages: a file changed on disk first, then what a historical
@@ -139,6 +141,7 @@ pub(super) fn notices(
     let mut hide_secured = false;
     let mut open_repairs = false;
     let mut open_console = false;
+    let mut load_whole = false;
     let mut toggled = None;
     // A form whose scripts were turned off no longer calculates or answers its buttons: that
     // comes before what else there is to say about the document.
@@ -182,7 +185,14 @@ pub(super) fn notices(
     } else {
         None
     };
-    let msg = if scripts_off {
+    let on_disk = doc.on_disk.is_some();
+    let msg = if on_disk {
+        Some((
+            "info",
+            tl!("This large file is being read from disk to save memory, so it can't be edited, filled in or signed yet.").to_string(),
+            false,
+        ))
+    } else if scripts_off {
         Some(("triangle-alert", crate::js_ui::scripts_off_notice(), true))
     } else if secured {
         // A secured form still says what it is, and keeps Highlight fields: the security
@@ -203,8 +213,12 @@ pub(super) fn notices(
     };
     let (icon, text, fields) = msg?;
     notice_bar(ui, t, icon, t.accent_text, text, |ui| {
-        if icons::button(ui, "x", 22.0, false, tl!("Dismiss")).clicked() {
+        // Its button is the only way to load the file, so that notice stays.
+        if !on_disk && icons::button(ui, "x", 22.0, false, tl!("Dismiss")).clicked() {
             view.notice_dismissed = true;
+        }
+        if on_disk && crate::widgets::pill_button(ui, tl!("Load to edit"), true).clicked() {
+            load_whole = true;
         }
         if fields {
             let label = if view.highlight_fields { tl!("Hide field highlights") } else { tl!("Highlight fields") };
@@ -230,6 +244,9 @@ pub(super) fn notices(
             open_repairs = true;
         }
     });
+    if load_whole {
+        return Some(Notice::LoadWhole);
+    }
     if open_repairs {
         return Some(Notice::Repairs);
     }
