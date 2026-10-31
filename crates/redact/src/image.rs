@@ -10,7 +10,7 @@ use pdfcraft_content::{Matrix, overlaps};
 use pdfcraft_cos::{Document, Object, Stream};
 
 /// Most pixels an image may have to be cleared in place (larger ones are removed).
-const MAX_PIXELS: u64 = 64 << 20;
+pub(crate) const MAX_PIXELS: u64 = 64 << 20;
 
 fn components(doc: &Document, s: &Stream) -> Option<usize> {
     let cs = doc.resolve(s.dict.get(b"ColorSpace")?);
