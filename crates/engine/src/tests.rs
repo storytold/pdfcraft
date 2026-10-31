@@ -6110,6 +6110,192 @@ fn static_xfa_forms_take_their_values_from_the_datasets_and_write_them_back() {
     assert!(!d2.info.warnings.iter().any(|w| w.contains("taken from this form's XFA data")), "nothing was rewritten");
 }
 
+/// A packet-array datasets declaration must not let an accepted field edit diverge from the
+/// serialized XFA value. Exercise the inherited namespace with a leading declaration, plus
+/// local-namespace, no-declaration, and single-XDP-stream controls through save and reopen.
+#[test]
+fn packet_array_dataset_declaration_preserves_edited_value_through_save_and_reopen() {
+    const DECL: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>";
+    const OPEN: &str = "<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\" xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\">";
+    const CLOSE: &str = "</xdp:xdp>";
+    const TEMPLATE: &str = r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="36pt" y="36pt" w="540pt" h="720pt"/>
+  <medium short="612pt" long="792pt"/></pageArea></pageSet>
+ <field name="entry" w="200pt" h="20pt"><ui><textEdit/></ui><value><text>template-fallback</text></value></field>
+</subform></template>"#;
+    const INITIAL: &str = "synthetic-initial";
+    const REPLACEMENT: &str = "synthetic-replacement";
+
+    /// Build a one-field dynamic XFA PDF from synthetic packet streams or one XDP stream.
+    fn fixture(dataset: &str, single_stream: bool) -> Vec<u8> {
+        let mut cos = pdfcraft_cos::Document::open(Arc::new(pdfcraft_xfa::fixtures::shell(""))).expect("synthetic PDF shell");
+        let xfa = if single_stream {
+            let xdp = format!("{DECL}{OPEN}{TEMPLATE}{dataset}{CLOSE}");
+            pdfcraft_cos::Object::Ref(cos.add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::flate(pdfcraft_cos::Dict::new(), xdp.as_bytes()))))
+        } else {
+            let mut items = Vec::new();
+            for (name, text) in [
+                ("preamble", format!("{DECL}{OPEN}")),
+                ("template", format!("{DECL}{TEMPLATE}")),
+                ("datasets", dataset.to_string()),
+                ("postamble", CLOSE.to_string()),
+            ] {
+                let stream = cos.add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::flate(pdfcraft_cos::Dict::new(), text.as_bytes())));
+                items.extend([
+                    pdfcraft_cos::Object::String(pdfcraft_cos::PdfString::literal(name.as_bytes().to_vec())),
+                    pdfcraft_cos::Object::Ref(stream),
+                ]);
+            }
+            pdfcraft_cos::Object::Array(items)
+        };
+        let root = cos.root().expect("synthetic catalog");
+        cos.update_dict(root, |catalog| {
+            catalog.set(b"NeedsRendering".to_vec(), pdfcraft_cos::Object::Bool(true));
+            let mut acro = catalog.get(b"AcroForm").and_then(pdfcraft_cos::Object::as_dict).cloned().unwrap_or_default();
+            acro.set(b"Fields".to_vec(), pdfcraft_cos::Object::Array(Vec::new()));
+            acro.set(b"XFA".to_vec(), xfa);
+            catalog.set(b"AcroForm".to_vec(), pdfcraft_cos::Object::Dict(acro));
+        })
+        .expect("install synthetic XFA packets");
+        pdfcraft_cos::write_incremental(&cos, &pdfcraft_cos::SaveOptions::default()).expect("serialize synthetic fixture")
+    }
+
+    /// Read the synthetic field's bound dataset value from a serialized document snapshot.
+    fn data_value(bytes: Arc<Vec<u8>>) -> Option<String> {
+        let cos = pdfcraft_cos::Document::open(bytes).ok()?;
+        let packets = pdfcraft_xfa::read_packets(&cos).ok()??;
+        let data = pdfcraft_xfa::parse_datasets(&packets.xdp)?;
+        data.text_at(&pdfcraft_xfa::som_to_path("form[0].entry[0]")).map(str::to_owned)
+    }
+
+    /// Read the exact datasets stream bytes (or the single XDP stream) from a PDF snapshot.
+    fn packet_text(bytes: Arc<Vec<u8>>) -> Option<String> {
+        let cos = pdfcraft_cos::Document::open(bytes).ok()?;
+        let root = cos.root()?;
+        let catalog = cos.get(root);
+        let acro = catalog.as_dict()?.get(b"AcroForm").map(|object| cos.resolve(object))?;
+        let xfa = acro.as_dict()?.get(b"XFA").map(|object| cos.resolve(object))?;
+        let stream = match &*xfa {
+            pdfcraft_cos::Object::Array(items) => {
+                let index = items
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .position(|pair| pair.first().and_then(pdfcraft_cos::Object::as_string).is_some_and(|name| name.to_text() == "datasets"))?;
+                let object = items.get(index.checked_mul(2)?.checked_add(1)?)?;
+                cos.resolve(object)
+            }
+            pdfcraft_cos::Object::Stream(_) => xfa,
+            _ => return None,
+        };
+        let pdfcraft_cos::Object::Stream(stream) = &*stream else { return None };
+        String::from_utf8(stream.decoded_within(64 << 20).ok()?).ok()
+    }
+
+    let cases = [
+        (
+            "inherited_namespace_with_packet_declaration",
+            format!("{DECL}<xfa:datasets><xfa:data><form><entry>{INITIAL}</entry></form></xfa:data></xfa:datasets>"),
+            false,
+        ),
+        (
+            "local_namespace_with_packet_declaration",
+            format!(
+                "{DECL}<xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data><form><entry>{INITIAL}</entry></form></xfa:data></xfa:datasets>"
+            ),
+            false,
+        ),
+        (
+            "inherited_namespace_without_packet_declaration",
+            format!("<xfa:datasets><xfa:data><form><entry>{INITIAL}</entry></form></xfa:data></xfa:datasets>"),
+            false,
+        ),
+        ("single_xdp_stream", format!("<xfa:datasets><xfa:data><form><entry>{INITIAL}</entry></form></xfa:data></xfa:datasets>"), true),
+    ];
+    let evidence_dir = std::env::var_os("PDFCRAFT_XFA_PERSISTENCE_EVIDENCE").map(std::path::PathBuf::from);
+    let mut observations = Vec::new();
+    for (case, datasets, single_stream) in cases {
+        let bytes = fixture(&datasets, single_stream);
+        if let Some(dir) = &evidence_dir {
+            std::fs::write(dir.join(format!("{case}-input.pdf")), &bytes).expect("preserve synthetic input PDF");
+        }
+        let mut session = Session::new().with_clock(|| 1_700_000_000);
+        let id = session.open("synthetic-xfa.pdf", None, Arc::new(bytes), None).expect("synthetic XFA opens");
+        let opened = session.get(id).expect("opened document");
+        assert_eq!(opened.info.xfa, Some(pdfcraft_render::Xfa::Dynamic), "{case} classification");
+        assert!(opened.xfa.is_some(), "{case} must enter dynamic layout");
+        let initial = opened.form.iter().find(|field| field.name == "entry").expect("generated entry field").value.clone();
+        assert_eq!(initial, [INITIAL], "{case} data binding before edit");
+
+        session
+            .apply(id, Edit::SetFieldValue { name: "entry".into(), value: FieldValue::Text(REPLACEMENT.into()) })
+            .expect("synthetic user field edit");
+        let edited = session.get(id).expect("edited document");
+        let visible_after_edit = edited.form.iter().find(|field| field.name == "entry").expect("entry after edit").value.first().cloned();
+        let data_after_edit = data_value(edited.bytes.clone());
+        let packet_after_edit = packet_text(edited.bytes.clone());
+        let warning_count = edited.xfa_warnings.len();
+        let warning_category = if edited.xfa_warnings.iter().any(|warning| warning.contains("could not be read")) {
+            "dataset_parse_failure"
+        } else if edited.xfa_warnings.iter().any(|warning| warning.contains("not written")) {
+            "dataset_write_skipped"
+        } else {
+            "none"
+        };
+
+        assert_eq!(visible_after_edit.as_deref(), Some(REPLACEMENT), "{case} visible field value after edit");
+        assert_eq!(data_after_edit.as_deref(), Some(REPLACEMENT), "{case} parsed dataset value after edit");
+        assert!(
+            packet_after_edit.as_deref().is_some_and(|text| text.contains(REPLACEMENT)),
+            "{case} serialized dataset packet must contain the replacement value; packet available={}",
+            packet_after_edit.is_some()
+        );
+        assert!(edited.xfa_warnings.is_empty(), "{case} expected no XFA warnings after edit: {:?}", edited.xfa_warnings);
+
+        let saved = session.save_bytes(id).expect("save synthetic edit");
+        let saved_for_reopen = if let Some(dir) = &evidence_dir {
+            let path = dir.join(format!("{case}-saved.pdf"));
+            std::fs::write(&path, saved.as_slice()).expect("preserve synthetic saved PDF");
+            Arc::new(std::fs::read(path).expect("read synthetic saved PDF for reopen"))
+        } else {
+            saved.clone()
+        };
+        let saved_data = data_value(saved.clone());
+        let saved_packet = packet_text(saved.clone());
+        assert_eq!(saved_data.as_deref(), Some(REPLACEMENT), "{case} parsed dataset value in saved bytes");
+        assert!(
+            saved_packet.as_deref().is_some_and(|text| text.contains(REPLACEMENT)),
+            "{case} saved dataset packet must contain the replacement value; packet available={}",
+            saved_packet.is_some()
+        );
+        let reopened_id = session.open("synthetic-xfa-reopened.pdf", None, saved_for_reopen, None).expect("reopen saved synthetic XFA");
+        let reopened = session.get(reopened_id).expect("reopened document");
+        let visible_after_reopen = reopened.form.iter().find(|field| field.name == "entry").and_then(|field| field.value.first()).cloned();
+        let data_after_reopen = data_value(reopened.bytes.clone());
+        assert_eq!(reopened.info.xfa, Some(pdfcraft_render::Xfa::Dynamic), "{case} reopened classification");
+        assert_eq!(visible_after_reopen.as_deref(), Some(REPLACEMENT), "{case} visible field value after reopen");
+        assert_eq!(data_after_reopen.as_deref(), Some(REPLACEMENT), "{case} parsed dataset value after reopen");
+        assert!(reopened.xfa_warnings.is_empty(), "{case} expected no XFA warnings after reopen: {:?}", reopened.xfa_warnings);
+
+        observations.push(format!(
+            "{case}: dynamic_layout=true, initial_bound={}, edit_accepted={}, visible_after_edit={:?}, packet_after_edit_has_initial={}, packet_after_edit_has_replacement={}, dataset_after_edit={:?}, warning_count={warning_count}, warning_category={warning_category}, saved_packet_has_initial={}, saved_packet_has_replacement={}, saved_dataset={:?}, visible_after_reopen={:?}, reopened_dataset={:?}",
+            initial == [INITIAL],
+            visible_after_edit.as_deref() == Some(REPLACEMENT),
+            visible_after_edit,
+            packet_after_edit.as_deref().is_some_and(|text| text.contains(INITIAL)),
+            packet_after_edit.as_deref().is_some_and(|text| text.contains(REPLACEMENT)),
+            data_after_edit,
+            saved_packet.as_deref().is_some_and(|text| text.contains(INITIAL)),
+            saved_packet.as_deref().is_some_and(|text| text.contains(REPLACEMENT)),
+            saved_data,
+            visible_after_reopen,
+            data_after_reopen,
+        ));
+    }
+    eprintln!("synthetic_xfa_dataset_observations: {observations:#?}");
+}
+
 /// A static XFA form whose values are only in its datasets takes every one on opening, as
 /// filling the fields one at a time would leave it: values, appearances and the note; a
 /// read-only field keeps its own value.

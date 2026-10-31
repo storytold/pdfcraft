@@ -93,6 +93,17 @@ pub(super) const WRAP_OPEN: &str = "<pdfcraft-wrap xmlns:xfa=\"http://www.xfa.or
 
 pub(super) const WRAP_CLOSE: &str = "</pdfcraft-wrap>";
 
+/// Supply inherited packet namespaces after any validated leading declaration. The returned
+/// offset locates the wrapper opening tag, so edits keep the declaration outside that tag.
+/// Malformed declarations return `None`; allocation adds only the fixed wrapper to the
+/// caller's size-bounded packet, without changing the packet body or declaration bytes.
+fn wrapped_packet(text: &str) -> Option<(String, usize)> {
+    let body = crate::packets::after_declaration(text).ok()?;
+    let declaration_len = text.len().checked_sub(body.len())?;
+    let declaration = text.get(..declaration_len)?;
+    Some((format!("{declaration}{WRAP_OPEN}{body}{WRAP_CLOSE}"), declaration_len))
+}
+
 /// Write `wants` into the data of the datasets packet in `text`, changing only what has to
 /// change: values go into the data nodes they bind to, missing nodes are added, and everything
 /// else (data no field binds to, other namespaces, attributes, comments, layout) stays as
@@ -103,6 +114,8 @@ fn xfa_prefix(n: roxmltree::Node) -> Option<String> {
     n.namespaces().find(|ns| ns.uri() == XFA_DATA_NS).and_then(|ns| ns.name()).filter(|p| !p.is_empty()).map(str::to_string)
 }
 
+/// Merge one operation using parser byte coordinates, then remove only synthetic wrapper
+/// tags. Parse or coordinate failures leave the original packet untouched with a warning.
 fn merge(text: &str, within: Within, op: Op, warnings: &mut Vec<String>) -> Merged {
     let wants: &[Want] = match op {
         Op::Values(w) => w,
@@ -121,13 +134,16 @@ fn merge(text: &str, within: Within, op: Op, warnings: &mut Vec<String>) -> Merg
     // A packet of an array may use the prefixes the XDP envelope declares: read it inside
     // an element declaring the usual ones.
     let wrapped;
-    let (src, shift, parsed) = match roxmltree::Document::parse_with_options(text, opts()) {
-        Ok(d) => (text, 0, d),
+    let (src, wrapper_start, parsed) = match roxmltree::Document::parse_with_options(text, opts()) {
+        Ok(d) => (text, None, d),
         Err(first) => {
-            wrapped = format!("{WRAP_OPEN}{text}{WRAP_CLOSE}");
-            match (within, roxmltree::Document::parse_with_options(&wrapped, opts())) {
-                (Within::Packet, Ok(d)) => (wrapped.as_str(), WRAP_OPEN.len(), d),
-                _ => {
+            wrapped = (within == Within::Packet).then(|| wrapped_packet(text)).flatten();
+            match wrapped
+                .as_ref()
+                .and_then(|(src, start)| roxmltree::Document::parse_with_options(src, opts()).ok().map(|parsed| (src.as_str(), Some(*start), parsed)))
+            {
+                Some(parsed) => parsed,
+                None => {
                     warnings.push(format!("The XFA data could not be read ({first}); the field values were not written to it"));
                     return Merged::Failed;
                 }
@@ -262,10 +278,18 @@ fn merge(text: &str, within: Within, op: Op, warnings: &mut Vec<String>) -> Merg
         }
         out.replace_range(e.start..e.end, &e.text);
     }
-    if shift > 0 {
-        match out.get(shift..out.len().saturating_sub(WRAP_CLOSE.len())) {
-            Some(inner) => out = inner.to_string(),
-            None => return Merged::Failed,
+    if let Some(start) = wrapper_start {
+        let end = start.checked_add(WRAP_OPEN.len());
+        let close = out.len().checked_sub(WRAP_CLOSE.len());
+        match (end, close) {
+            (Some(end), Some(close)) if end <= close && out.get(start..end) == Some(WRAP_OPEN) && out.get(close..) == Some(WRAP_CLOSE) => {
+                out.truncate(close);
+                out.replace_range(start..end, "");
+            }
+            _ => {
+                warnings.push("The XFA data could not be updated; the field values were not written to it".into());
+                return Merged::Failed;
+            }
         }
     }
     Merged::Changed(out)
@@ -391,9 +415,121 @@ pub(super) fn readable(text: &str, within: Within, warnings: &mut Vec<String>) -
     }
     let opts = || roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
     let ok = roxmltree::Document::parse_with_options(text, opts()).is_ok()
-        || (within == Within::Packet && roxmltree::Document::parse_with_options(&format!("{WRAP_OPEN}{text}{WRAP_CLOSE}"), opts()).is_ok());
+        || (within == Within::Packet
+            && wrapped_packet(text).is_some_and(|(wrapped, _)| {
+                roxmltree::Document::parse_with_options(
+                    &wrapped,
+                    roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() },
+                )
+                .is_ok()
+            }));
     if !ok {
         warnings.push("The XFA data would not be well-formed XML after this change; it was not written".into());
     }
     ok
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::packets::{Encoding, decode, encode};
+    use pdfcraft_cos::{Dict, Document, Object, PdfString, SaveOptions, Stream, write_incremental};
+    use std::sync::Arc;
+
+    /// Install one synthetic datasets stream under an envelope that supplies its namespace.
+    fn packet_document(bytes: &[u8]) -> (Document, pdfcraft_cos::ObjRef) {
+        let mut doc = Document::open(Arc::new(crate::fixtures::shell(""))).unwrap();
+        let mut items = Vec::new();
+        let mut data_ref = None;
+        for (name, data) in [
+            ("preamble", b"<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\" xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\">".as_slice()),
+            ("template", b"<template><subform name='form'/></template>".as_slice()),
+            ("datasets", bytes),
+            ("postamble", b"</xdp:xdp>".as_slice()),
+        ] {
+            let stream = doc.add(Object::Stream(Stream::flate(Dict::new(), data)));
+            if name == "datasets" {
+                data_ref = Some(stream);
+            }
+            items.extend([Object::String(PdfString::text(name)), Object::Ref(stream)]);
+        }
+        doc.update_dict(doc.root().unwrap(), |catalog| {
+            let mut acro = Dict::new();
+            acro.set(b"XFA".to_vec(), Object::Array(items));
+            catalog.set(b"AcroForm".to_vec(), Object::Dict(acro));
+        })
+        .unwrap();
+        let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+        (Document::open(Arc::new(bytes)).unwrap(), data_ref.unwrap())
+    }
+
+    /// Preserve declaration spelling, unedited markup, encoding, BOM and original stream bytes
+    /// while writing through the inherited-namespace fallback and reading the saved data back.
+    #[test]
+    fn dataset_declaration_writer_preserves_xml_and_encoding() {
+        for encoding in [
+            Encoding::Utf8 { bom: false },
+            Encoding::Utf8 { bom: true },
+            Encoding::Utf16Le { bom: false },
+            Encoding::Utf16Le { bom: true },
+            Encoding::Utf16Be { bom: false },
+            Encoding::Utf16Be { bom: true },
+        ] {
+            let label = if matches!(encoding, Encoding::Utf8 { .. }) { "UTF-8" } else { "UTF-16" };
+            let original = format!(
+                "<?xml version = '1.0' encoding='{label}' standalone = 'yes'?>\r\n<!--kept--><?keep data?><xfa:datasets><xfa:data><form><entry a='x>y'>old-é</entry><other><![CDATA[<?xml literal?>]]></other></form></xfa:data></xfa:datasets>\n"
+            );
+            let bytes = encode(&original, encoding);
+            let (mut doc, old_ref) = packet_document(&bytes);
+            let report = crate::write_data_value(&mut doc, &crate::som_to_path("form[0].entry[0]"), "new-é").unwrap();
+            assert!(report.written && report.warnings.is_empty(), "{encoding:?}: {report:?}");
+            let Object::Stream(stream) = &*doc.get(report.stream.unwrap()) else { panic!("datasets stream") };
+            let (text, actual_encoding) = decode(&stream.decoded().unwrap()).unwrap();
+            assert_eq!(actual_encoding, encoding);
+            assert_eq!(text, original.replace("old-é", "new-é"));
+            assert!(!text.contains("pdfcraft-wrap") && !text.contains("xmlns:xfa"));
+            let Object::Stream(old) = &*doc.get(old_ref) else { panic!("original stream") };
+            assert_eq!(old.decoded().unwrap(), bytes);
+            let saved = Document::open(Arc::new(write_incremental(&doc, &SaveOptions::default()).unwrap())).unwrap();
+            let xdp = crate::read_packets(&saved).unwrap().unwrap().xdp;
+            assert_eq!(crate::parse_datasets(&xdp).unwrap().text_at(&crate::som_to_path("form[0].entry[0]")), Some("new-é"));
+        }
+    }
+
+    /// Invalid declarations, misplaced declarations and broken markup must warn and retain the
+    /// original stream; the final validation must also refuse each packet.
+    #[test]
+    fn dataset_declaration_writer_rejects_invalid_packets_without_replacing_stream() {
+        for text in [
+            "<?xml?><xfa:datasets/>",
+            "<?xml version='1.0' encoding='bad encoding'?><xfa:datasets/>",
+            "<?xml version='1.0'<xfa:datasets/>",
+            " <!--comment--><?xml version='1.0'?><xfa:datasets/>",
+            "<?xml version='1.0'?><xfa:datasets><broken></xfa:datasets>",
+        ] {
+            let (mut doc, original) = packet_document(text.as_bytes());
+            let report = crate::write_data_value(&mut doc, &crate::som_to_path("form[0].entry[0]"), "new").unwrap();
+            assert!(!report.written && report.stream.is_none() && !report.warnings.is_empty());
+            assert_eq!(super::super::write::datasets_stream_ref(&doc), Some(original));
+            let Object::Stream(stream) = &*doc.get(original) else { panic!("original stream") };
+            assert_eq!(stream.decoded().unwrap(), text.as_bytes());
+            assert!(!readable(text, Within::Packet, &mut Vec::new()));
+        }
+    }
+
+    /// Refuse oversized output before allocating a namespace wrapper or parsing it.
+    #[test]
+    fn dataset_declaration_writer_rejects_oversized_output() {
+        let text = " ".repeat(MAX_PACKET_WRITE + 1);
+        let mut warnings = Vec::new();
+        assert!(!readable(&text, Within::Packet, &mut warnings));
+        assert_eq!(warnings.len(), 1);
+        let original = b"<?xml version='1.0'?><xfa:datasets><xfa:data><form><entry>old</entry></form></xfa:data></xfa:datasets>";
+        let (mut doc, original_ref) = packet_document(original);
+        let report = crate::write_data_value(&mut doc, &crate::som_to_path("form[0].entry[0]"), &text).unwrap();
+        assert!(!report.written && report.stream.is_none() && !report.warnings.is_empty());
+        assert_eq!(super::super::write::datasets_stream_ref(&doc), Some(original_ref));
+        let Object::Stream(stream) = &*doc.get(original_ref) else { panic!("original stream") };
+        assert_eq!(stream.decoded().unwrap(), original);
+    }
 }

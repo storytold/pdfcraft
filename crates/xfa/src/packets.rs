@@ -142,7 +142,7 @@ fn to_text(bytes: &[u8]) -> String {
 /// declaration returns `XfaError::Malformed`. The grammar follows XML 1.0 §2.8/§4.3.3: ordered
 /// pseudo-attributes, XML whitespace, and literal values without entity references. This borrows
 /// the input, allocates no declaration buffer, and performs no recursive XML parsing.
-fn after_declaration(text: &str) -> Result<&str, XfaError> {
+pub(crate) fn after_declaration(text: &str) -> Result<&str, XfaError> {
     const SPACE: [char; 4] = [' ', '\t', '\r', '\n'];
     let Some(mut rest) = text.strip_prefix("<?xml") else { return Ok(text) };
     if !rest.is_empty() && !rest.starts_with(SPACE) && !rest.starts_with("?>") {
