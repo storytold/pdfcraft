@@ -222,13 +222,103 @@ const CHECKBOX_RADIUS: u8 = 3;
 
 /// A checkbox whose box is an outlined rounded square, never mistaken for a radio button. Every
 /// checkbox goes through here: clippy.toml disallows `ui.checkbox` and `egui::Checkbox`.
+///
+/// A press on it and a drag over the checkboxes next to it sets them all (#1662, as in the other
+/// Craft apps): see [`drag_across`].
 pub fn checkbox<'a>(checked: &'a mut bool, atoms: impl egui::IntoAtoms<'a>) -> impl egui::Widget + 'a {
-    #[expect(clippy::disallowed_methods, reason = "the one place that styles the box")]
-    let widget = egui::Checkbox::new(checked, atoms);
-    toggle(widget, Some(CHECKBOX_RADIUS))
+    // `Checkbox::new` gives the label the lifetime of the borrow of `checked`, which is lent to
+    // it only for the frame's `ui.add`.
+    let atoms = atoms.into_atoms();
+    move |ui: &mut egui::Ui| {
+        #[expect(clippy::disallowed_methods, reason = "the one place that styles the box")]
+        let widget = egui::Checkbox::new(&mut *checked, atoms);
+        let response = ui.add(toggle(widget, Some(CHECKBOX_RADIUS)));
+        drag_across(ui, response, checked)
+    }
 }
 
-/// [`checkbox`] without a label: the selection box on Organize Pages thumbnails.
+/// Where a drag across checkboxes keeps the box it started on and the state it gives every box
+/// it goes over (#1662).
+fn drag_target_id() -> egui::Id {
+    egui::Id::unique("checkbox-drag-target")
+}
+
+/// Drag across checkboxes (#1662). A press on a checkbox and a drag toggle it, and every other
+/// checkbox the pointer then goes over takes its new state, until the button is released. A
+/// click still toggles one box (egui's own click). `response` is the checkbox's, `checked` its
+/// value; a box the drag changes is marked changed, as a click marks it.
+///
+/// The checkbox senses drags too, so the drag is the checkbox's: inside a scroll area it doesn't
+/// scroll the panel, and a press that moves before its release toggles the box once, not as a
+/// click as well. A disabled box, one clipped out of view and one under another layer (a menu
+/// open over a dialog) are left alone. The state counts only while the box the drag started on
+/// is still being dragged, so it ends with the drag even when no checkbox is drawn on the frame
+/// the button comes up (a dialog that closes then).
+fn drag_across(ui: &egui::Ui, response: Response, checked: &mut bool) -> Response {
+    if !response.enabled() {
+        return response;
+    }
+    // `interact` gives a new response: keep the change a click just made, which the callers
+    // that act on `changed()` read.
+    let clicked_changed = response.changed();
+    let mut response = response.interact(Sense::drag());
+    if clicked_changed {
+        response.mark_changed();
+    }
+    let ctx = ui.ctx();
+    if response.drag_started_by(egui::PointerButton::Primary) {
+        *checked = !*checked;
+        let target = (response.id, *checked);
+        ctx.data_mut(|d| d.insert_temp(drag_target_id(), target));
+        response.mark_changed();
+        return response;
+    }
+    let Some((started_on, target)) = ctx.data(|d| d.get_temp::<(egui::Id, bool)>(drag_target_id())) else { return response };
+    if !ctx.is_being_dragged(started_on) {
+        ctx.data_mut(|d| d.remove::<(egui::Id, bool)>(drag_target_id()));
+        return response;
+    }
+    // The way the pointer came this frame, not only where it is: a fast drag jumps over boxes
+    // between two frames. The box counts where that way first meets it.
+    let over = ctx
+        .input(|i| i.pointer.latest_pos().map(|p| (p - i.pointer.delta(), p)))
+        .and_then(|(from, to)| segment_entry(response.rect, from, to))
+        .is_some_and(|p| ui.clip_rect().contains(p) && ctx.layer_id_at(p) == Some(response.layer_id));
+    if over && *checked != target {
+        *checked = target;
+        response.mark_changed();
+    }
+    response
+}
+
+/// Where the segment from `from` to `to` first enters `rect` (`from` itself when it starts
+/// inside); `None` when it misses. Non-finite points miss.
+fn segment_entry(rect: Rect, from: egui::Pos2, to: egui::Pos2) -> Option<egui::Pos2> {
+    if !(from.x.is_finite() && from.y.is_finite() && to.x.is_finite() && to.y.is_finite()) {
+        return None;
+    }
+    // Liang–Barsky: clip the parameter range [0, 1] against each side in turn.
+    let d = to - from;
+    let (mut t0, mut t1) = (0.0f32, 1.0f32);
+    for (p, q) in [(-d.x, from.x - rect.min.x), (d.x, rect.max.x - from.x), (-d.y, from.y - rect.min.y), (d.y, rect.max.y - from.y)] {
+        if p == 0.0 {
+            if q < 0.0 {
+                return None;
+            }
+        } else {
+            let t = q / p;
+            if p < 0.0 {
+                t0 = t0.max(t);
+            } else {
+                t1 = t1.min(t);
+            }
+        }
+    }
+    (t0 <= t1).then(|| from + d * t0)
+}
+
+/// [`checkbox`] without a label: the selection box on Organize Pages thumbnails. It takes clicks
+/// only: a drag that starts on it moves the page, as a drag on the rest of the thumbnail does.
 pub fn checkbox_without_text(checked: &mut bool) -> impl egui::Widget + '_ {
     #[expect(clippy::disallowed_methods, reason = "the one place that styles the box")]
     let widget = egui::Checkbox::without_text(checked);
@@ -966,5 +1056,213 @@ mod tests {
         assert!(long.starts_with(fitted.trim_end_matches('\u{2026}')));
         assert_eq!(fit_line(long, 0.0, width), "");
         assert_eq!(fit_line("ééé", 2.0, width), "é\u{2026}");
+    }
+}
+
+#[cfg(test)]
+mod drag_across_tests {
+    use super::*;
+    use egui::{Event, PointerButton, Pos2};
+
+    /// One frame of a column of checkboxes over `state`, the box at `disabled` greyed out, with
+    /// `events`. Returns each row's rect and whether its response said it changed.
+    fn frame(ctx: &egui::Context, state: &mut [bool], disabled: Option<usize>, events: Vec<Event>) -> (Vec<Rect>, Vec<bool>) {
+        let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0))), events, ..Default::default() };
+        let (mut rects, mut changed) = (vec![], vec![]);
+        let output = ctx.run_ui(input, |ui| {
+            for (i, v) in state.iter_mut().enumerate() {
+                let r = ui.add_enabled(disabled != Some(i), checkbox(v, "Show the grid"));
+                rects.push(r.rect);
+                changed.push(r.changed());
+            }
+        });
+        output.drop_without_applying_deltas();
+        (rects, changed)
+    }
+
+    fn button(at: Pos2, pressed: bool) -> Event {
+        Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE }
+    }
+
+    /// Moves the pointer from `a` to `b` in eight steps, one frame each; returns which rows said
+    /// they changed in any of them.
+    fn sweep(ctx: &egui::Context, state: &mut [bool], disabled: Option<usize>, a: Pos2, b: Pos2) -> Vec<bool> {
+        let mut any = vec![false; state.len()];
+        for step in 1..=8 {
+            let (_, changed) = frame(ctx, state, disabled, vec![Event::PointerMoved(a + (b - a) * (step as f32 / 8.0))]);
+            for (seen, c) in any.iter_mut().zip(changed) {
+                *seen |= c;
+            }
+        }
+        any
+    }
+
+    /// #1662: a press on a checkbox and a drag over the boxes below it sets them all to the state
+    /// the first one switched to, each saying it changed. A box past the drag stays as it is,
+    /// and so does a disabled one the drag crosses.
+    #[test]
+    fn a_drag_across_checkboxes_sets_them_like_the_first() {
+        let ctx = egui::Context::default();
+        let mut state = [false, true, false, false, false];
+        let (rects, _) = frame(&ctx, &mut state, Some(2), vec![]);
+        let at = |i: usize| rects[i].left_center() + vec2(6.0, 0.0);
+        frame(&ctx, &mut state, Some(2), vec![Event::PointerMoved(at(0)), button(at(0), true)]);
+        let changed = sweep(&ctx, &mut state, Some(2), at(0), at(3));
+        frame(&ctx, &mut state, Some(2), vec![button(at(3), false)]);
+        frame(&ctx, &mut state, Some(2), vec![]);
+        assert_eq!(state, [true, true, false, true, false]);
+        assert_eq!(changed, [true, false, false, true, false], "the boxes the drag changed say so, the others don't");
+        // After the release, moving over a box changes nothing.
+        sweep(&ctx, &mut state, Some(2), at(3), at(4));
+        assert!(!state[4]);
+    }
+
+    /// A click still toggles one box; a drag from a ticked box clears the boxes it goes over.
+    #[test]
+    fn a_click_toggles_one_box_and_a_drag_from_a_ticked_box_clears() {
+        let ctx = egui::Context::default();
+        let mut state = [true, true, false, true];
+        let (rects, _) = frame(&ctx, &mut state, None, vec![]);
+        let at = |i: usize| rects[i].left_center() + vec2(6.0, 0.0);
+        frame(&ctx, &mut state, None, vec![Event::PointerMoved(at(2)), button(at(2), true)]);
+        let (_, changed) = frame(&ctx, &mut state, None, vec![button(at(2), false)]);
+        frame(&ctx, &mut state, None, vec![]);
+        assert_eq!(state, [true, true, true, true], "a click toggles only the box clicked");
+        // Callers act on `changed()` (the comment filters, the field properties).
+        assert_eq!(changed, [false, false, true, false], "the clicked box says it changed");
+        frame(&ctx, &mut state, None, vec![Event::PointerMoved(at(3)), button(at(3), true)]);
+        sweep(&ctx, &mut state, None, at(3), at(1));
+        frame(&ctx, &mut state, None, vec![button(at(1), false)]);
+        frame(&ctx, &mut state, None, vec![]);
+        assert_eq!(state, [true, false, false, false], "the drag up cleared the boxes it went over and stopped there");
+    }
+
+    /// The segment test behind a fast drag: where the way first meets the box, nothing when it
+    /// passes by, and nothing for a non-finite point.
+    #[test]
+    fn segment_entry_finds_where_the_way_meets_the_box() {
+        let r = Rect::from_min_max(Pos2::new(10.0, 10.0), Pos2::new(20.0, 20.0));
+        assert_eq!(segment_entry(r, Pos2::new(15.0, 0.0), Pos2::new(15.0, 40.0)), Some(Pos2::new(15.0, 10.0)), "through it");
+        assert_eq!(segment_entry(r, Pos2::new(12.0, 12.0), Pos2::new(50.0, 50.0)), Some(Pos2::new(12.0, 12.0)), "starting inside");
+        assert_eq!(segment_entry(r, Pos2::new(0.0, 0.0), Pos2::new(0.0, 40.0)), None, "beside it");
+        assert_eq!(segment_entry(r, Pos2::new(15.0, 0.0), Pos2::new(15.0, 5.0)), None, "short of it");
+        assert_eq!(segment_entry(r, Pos2::new(f32::NAN, 0.0), Pos2::new(15.0, 15.0)), None);
+    }
+
+    /// CodeRabbit on #4552: a fast drag that jumps over boxes between two frames sets them too,
+    /// not only the box the pointer lands on.
+    #[test]
+    fn a_fast_drag_sets_the_boxes_it_jumps_over() {
+        let ctx = egui::Context::default();
+        let mut state = [false, false, false, false, false];
+        let (rects, _) = frame(&ctx, &mut state, None, vec![]);
+        let at = |i: usize| rects[i].left_center() + vec2(6.0, 0.0);
+        frame(&ctx, &mut state, None, vec![Event::PointerMoved(at(0)), button(at(0), true)]);
+        // Far enough in one frame to start the drag, then straight to the fourth row.
+        frame(&ctx, &mut state, None, vec![Event::PointerMoved(at(0) + vec2(20.0, 0.0))]);
+        frame(&ctx, &mut state, None, vec![Event::PointerMoved(at(3))]);
+        frame(&ctx, &mut state, None, vec![button(at(3), false)]);
+        frame(&ctx, &mut state, None, vec![]);
+        assert_eq!(state, [true, true, true, true, false]);
+    }
+
+    /// A press that drags and comes back to its own box before the release toggles that box
+    /// once: the drag toggled it, so the release is not a click that toggles it back.
+    #[test]
+    fn a_drag_that_returns_to_its_box_toggles_it_once() {
+        let ctx = egui::Context::default();
+        let mut state = [false, false];
+        let (rects, _) = frame(&ctx, &mut state, None, vec![]);
+        let at = |i: usize| rects[i].left_center() + vec2(6.0, 0.0);
+        frame(&ctx, &mut state, None, vec![Event::PointerMoved(at(0)), button(at(0), true)]);
+        sweep(&ctx, &mut state, None, at(0), at(0) + vec2(40.0, 0.0));
+        sweep(&ctx, &mut state, None, at(0) + vec2(40.0, 0.0), at(0));
+        frame(&ctx, &mut state, None, vec![button(at(0), false)]);
+        frame(&ctx, &mut state, None, vec![]);
+        assert_eq!(state, [true, false]);
+    }
+
+    /// A drag released on a frame that draws no checkbox (its dialog closed) is over: a later
+    /// press elsewhere, held down and moved over a checkbox, doesn't set it.
+    #[test]
+    fn a_drag_ends_with_its_release_even_when_no_checkbox_is_drawn() {
+        let ctx = egui::Context::default();
+        let mut state = [false, false, false, false];
+        let (rects, _) = frame(&ctx, &mut state, None, vec![]);
+        let at = |i: usize| rects[i].left_center() + vec2(6.0, 0.0);
+        frame(&ctx, &mut state, None, vec![Event::PointerMoved(at(0)), button(at(0), true)]);
+        sweep(&ctx, &mut state, None, at(0), at(1));
+        assert_eq!(state, [true, true, false, false]);
+        let output = ctx.run_ui(egui::RawInput { events: vec![button(at(1), false)], ..Default::default() }, |_| {});
+        output.drop_without_applying_deltas();
+        let empty = Pos2::new(380.0, at(3).y);
+        frame(&ctx, &mut state, None, vec![Event::PointerMoved(empty), button(empty, true)]);
+        sweep(&ctx, &mut state, None, empty, at(3));
+        frame(&ctx, &mut state, None, vec![button(at(3), false)]);
+        assert_eq!(state, [true, true, false, false], "the press beside the boxes started no drag across them");
+    }
+
+    /// Preferences and dialogs put their checkboxes in a scroll area, which scrolls when a drag
+    /// on something that doesn't take drags moves over it. The drag is the checkbox's, so the
+    /// panel stays where it is and the boxes are set.
+    #[test]
+    fn a_drag_in_a_scroll_area_sets_the_boxes_without_scrolling() {
+        let ctx = egui::Context::default();
+        let mut state = vec![false; 30];
+        let run = |state: &mut Vec<bool>, events: Vec<Event>| {
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 200.0))), events, ..Default::default() };
+            let mut rects = vec![];
+            let mut offset = 0.0;
+            let output = ctx.run_ui(input, |ui| {
+                offset = egui::ScrollArea::vertical()
+                    .show(ui, |ui| {
+                        for v in state.iter_mut() {
+                            rects.push(ui.add(checkbox(v, "Show the grid")).rect);
+                        }
+                    })
+                    .state
+                    .clamped_offset()
+                    .y;
+            });
+            output.drop_without_applying_deltas();
+            (rects, offset)
+        };
+        let (rects, _) = run(&mut state, vec![]);
+        let at = |i: usize| rects[i].left_center() + vec2(6.0, 0.0);
+        let (a, b) = (at(4), at(1));
+        run(&mut state, vec![Event::PointerMoved(a), button(a, true)]);
+        let mut offset = 0.0;
+        for step in 1..=8 {
+            offset = run(&mut state, vec![Event::PointerMoved(a + (b - a) * (step as f32 / 8.0))]).1;
+        }
+        run(&mut state, vec![button(b, false)]);
+        assert_eq!(offset, 0.0, "the drag didn't scroll the panel");
+        assert_eq!(&state[..6], [false, true, true, true, true, false]);
+    }
+
+    /// The page checkbox on Organize Pages thumbnails takes clicks only: a drag that starts on it
+    /// belongs to the thumbnail under it, which moves the page.
+    #[test]
+    fn the_thumbnail_checkbox_leaves_a_drag_to_the_thumbnail() {
+        let ctx = egui::Context::default();
+        let (mut checked, mut dragged) = (false, false);
+        let run = |checked: &mut bool, dragged: &mut bool, events: Vec<Event>| {
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0))), events, ..Default::default() };
+            let output = ctx.run_ui(input, |ui| {
+                let cell = Rect::from_min_size(Pos2::new(10.0, 10.0), vec2(150.0, 200.0));
+                let thumbnail = ui.interact(cell, ui.scope_id().with("thumbnail"), Sense::click_and_drag());
+                ui.put(Rect::from_min_size(cell.min + vec2(8.0, 8.0), egui::Vec2::splat(20.0)), checkbox_without_text(checked));
+                *dragged |= thumbnail.drag_started();
+            });
+            output.drop_without_applying_deltas();
+        };
+        let (a, b) = (Pos2::new(28.0, 28.0), Pos2::new(120.0, 150.0));
+        run(&mut checked, &mut dragged, vec![]);
+        run(&mut checked, &mut dragged, vec![Event::PointerMoved(a), button(a, true)]);
+        for step in 1..=8 {
+            run(&mut checked, &mut dragged, vec![Event::PointerMoved(a + (b - a) * (step as f32 / 8.0))]);
+        }
+        run(&mut checked, &mut dragged, vec![button(b, false)]);
+        assert!(dragged && !checked, "the thumbnail took the drag, the checkbox stayed as it was");
     }
 }
