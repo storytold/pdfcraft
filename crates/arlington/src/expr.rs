@@ -521,54 +521,73 @@ impl Eval<'_> {
                     Some(Val::Bool(true))
                 }
             }
-            ("ArrayLength", 1) => match self.found(arg(0)?)?? {
-                Object::Array(a) => i64::try_from(a.len()).ok().map(Val::Int),
-                _ => None,
-            },
-            ("StringLength", 1) => match self.found(arg(0)?)?? {
-                Object::String { bytes, .. } => i64::try_from(bytes.len()).ok().map(Val::Int),
-                _ => None,
-            },
-            ("RectWidth" | "RectHeight", 1) => {
-                let Object::Array(a) = self.found(arg(0)?)?? else { return None };
+            ("ArrayLength" | "StringLength" | "RectWidth" | "RectHeight", 1) => self.measure(name, arg(0)?),
+            ("Contains", 2) => self.contains(arg(0)?, arg(1)?, depth),
+            ("BitSet" | "BitClear", 1) | ("BitsSet" | "BitsClear", 2) => self.bit_test(name, args),
+            ("FileSize" | "NumberOfPages" | "IsPDFTagged" | "NotStandard14Font" | "IsHexString", 0) => self.document_fact(name),
+            _ => {
+                self.env.unsupported(name);
+                None
+            }
+        }
+    }
+
+    /// `ArrayLength`, `StringLength`, `RectWidth` and `RectHeight` of the object at `path`.
+    fn measure(&self, name: &str, path: &Expr) -> Option<Val> {
+        match (name, self.found(path)??) {
+            ("ArrayLength", Object::Array(a)) => i64::try_from(a.len()).ok().map(Val::Int),
+            ("StringLength", Object::String { bytes, .. }) => i64::try_from(bytes.len()).ok().map(Val::Int),
+            ("RectWidth" | "RectHeight", Object::Array(a)) => {
                 let n: Vec<f64> = a.iter().map(number).collect::<Option<_>>()?;
                 let [x0, y0, x1, y1] = n.as_slice() else { return None };
                 Some(Val::Real(if name == "RectWidth" { (x1 - x0).abs() } else { (y1 - y0).abs() }))
             }
-            ("Contains", 2) => {
-                let wanted = self.operand(arg(1)?, depth)?;
-                match self.found(arg(0)?)?? {
-                    Object::Array(items) => {
-                        let mut unknown = false;
-                        for item in &items {
-                            match Val::of(item) {
-                                Some(v) if v == wanted => return Some(Val::Bool(true)),
-                                Some(_) => {}
-                                None => unknown = true,
-                            }
-                        }
-                        if unknown { None } else { Some(Val::Bool(false)) }
+            _ => None,
+        }
+    }
+
+    /// `Contains`: whether the array at `path` holds `wanted` (or the value there is it).
+    fn contains(&self, path: &Expr, wanted: &Expr, depth: usize) -> Option<Val> {
+        let wanted = self.operand(wanted, depth)?;
+        match self.found(path)?? {
+            Object::Array(items) => {
+                let mut unknown = false;
+                for item in &items {
+                    match Val::of(item) {
+                        Some(v) if v == wanted => return Some(Val::Bool(true)),
+                        Some(_) => {}
+                        None => unknown = true,
                     }
-                    other => Some(Val::Bool(Val::of(&other)? == wanted)),
                 }
+                if unknown { None } else { Some(Val::Bool(false)) }
             }
-            ("BitSet" | "BitClear", 1) => {
-                let bit = self.bit(arg(0)?)?;
-                let set = self.bits()? & (1u32 << (bit - 1)) != 0;
-                Some(Val::Bool(set == (name == "BitSet")))
-            }
-            ("BitsSet" | "BitsClear", 2) => {
-                let (lo, hi) = (self.bit(arg(0)?)?, self.bit(arg(1)?)?);
-                if lo > hi {
-                    return None;
-                }
-                let bits = self.bits()?;
-                let all = (lo..=hi).all(|b| (bits & (1u32 << (b - 1)) != 0) == (name == "BitsSet"));
-                Some(Val::Bool(all))
-            }
-            ("FileSize", 0) => self.env.file_size().and_then(|s| i64::try_from(s).ok()).map(Val::Int),
-            ("NumberOfPages", 0) => self.env.page_count().and_then(|s| i64::try_from(s).ok()).map(Val::Int),
-            ("IsPDFTagged", 0) => {
+            other => Some(Val::Bool(Val::of(&other)? == wanted)),
+        }
+    }
+
+    /// `BitSet` and `BitClear` of one bit, `BitsSet` and `BitsClear` of a range.
+    fn bit_test(&self, name: &str, args: &[Expr]) -> Option<Val> {
+        if let [one] = args {
+            let bit = self.bit(one)?;
+            let set = self.bits()? & (1u32 << (bit - 1)) != 0;
+            return Some(Val::Bool(set == (name == "BitSet")));
+        }
+        let [lo, hi] = args else { return None };
+        let (lo, hi) = (self.bit(lo)?, self.bit(hi)?);
+        if lo > hi {
+            return None;
+        }
+        let bits = self.bits()?;
+        let all = (lo..=hi).all(|b| (bits & (1u32 << (b - 1)) != 0) == (name == "BitsSet"));
+        Some(Val::Bool(all))
+    }
+
+    /// The functions of no argument, about the file or the object being checked.
+    fn document_fact(&self, name: &str) -> Option<Val> {
+        match name {
+            "FileSize" => self.env.file_size().and_then(|s| i64::try_from(s).ok()).map(Val::Int),
+            "NumberOfPages" => self.env.page_count().and_then(|s| i64::try_from(s).ok()).map(Val::Int),
+            "IsPDFTagged" => {
                 let path: Vec<String> = ["trailer", "Root", "MarkInfo", "Marked"].iter().map(|s| s.to_string()).collect();
                 match self.env.find(&path) {
                     Found::Present(Object::Bool(b)) => Some(Val::Bool(b)),
@@ -576,7 +595,7 @@ impl Eval<'_> {
                     _ => None,
                 }
             }
-            ("NotStandard14Font", 0) => {
+            "NotStandard14Font" => {
                 let (Object::Dict(d) | Object::Stream(d)) = self.env.holder()? else { return None };
                 let get = |k: &[u8]| d.iter().find(|(n, _)| n.as_slice() == k).map(|(_, v)| v);
                 match (get(b"Subtype"), get(b"BaseFont")) {
@@ -587,14 +606,10 @@ impl Eval<'_> {
                     _ => None,
                 }
             }
-            ("IsHexString", 0) => match self.env.current()? {
+            _ => match self.env.current()? {
                 Object::String { hex, .. } => Some(Val::Bool(*hex)),
                 _ => None,
             },
-            _ => {
-                self.env.unsupported(name);
-                None
-            }
         }
     }
 
