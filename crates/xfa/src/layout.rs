@@ -43,8 +43,17 @@ const MAX_DEPTH: usize = 64;
 /// Most size measurements of one layout. Measurements of containers are memoized, so a real
 /// form stays far below this; it bounds the work a hostile template can cause.
 const MAX_MEASURES: usize = 2_000_000;
-/// Most initial instances of one repeating subform.
-const MAX_INSTANCES: usize = 50;
+/// Most instances of one repeating subform laid out (a row the data adds, or the template's
+/// initial count). `occur max="-1"` sets no upper boundary (XFA 3.3, "The occur element",
+/// p. 786), so this only bounds the work of a hostile or runaway form: a long list or table
+/// is laid out whole up to here, and the rows past it are reported ([`Layouter::warn_truncated`]).
+/// It matches the largest `occur` count the parser reads and the most rows one script run may
+/// add (`MAX_ADDED` in pdfcraft-js). Laying out and listing the fields grows faster than the
+/// row count (one text field a row: 1,000 rows open in about 3 s in a debug build, 2,000 in
+/// about 13 s), so a much larger bound would let one list stall the app. The layout budgets
+/// ([`MAX_MEASURES`], [`MAX_ITEMS`], [`MAX_PAGES`]) still bound the form as a whole, however
+/// its repeats nest.
+pub(crate) const MAX_INSTANCES: usize = 1_000;
 /// Largest picture taken from the data (decoded bytes), as for template pictures.
 const MAX_DATA_IMAGE: usize = 32 << 20;
 /// Most picture bytes one layout keeps, all copies together. Each laid-out picture holds its
@@ -81,8 +90,9 @@ impl Ctx {
     }
 }
 
-/// (address of a subform or area in the template, available width bits, depth).
-type MeasureKey = (usize, u64, usize);
+/// (address of a subform or area in the template, available width bits, depth, SOM path of the
+/// instance measured when data drives the layout).
+type MeasureKey = (usize, u64, usize, String);
 
 /// A cached size, with the inherited text defaults it was measured with.
 struct Measured {

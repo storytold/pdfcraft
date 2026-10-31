@@ -1,36 +1,42 @@
 use super::common::clamp_opt;
 use super::field::auto_check_reserve;
 use super::{
-    Access, Area, Ctx, ExclGroup, Face, Field, Font, Layout, Layouter, MAX_DEPTH, MAX_MEASURES, Measured, Node, Para, Placement, Rect, Subform, Ui,
-    Value, data_path, text,
+    Access, Area, Ctx, ExclGroup, Face, Field, Font, Layout, Layouter, MAX_DEPTH, MAX_MEASURES, Measured, Node, Para, Placement, Rect, SomIndices,
+    Subform, Ui, Value, data_path, text,
 };
 
 impl Layouter<'_> {
-    /// The width and height `node` takes in `avail_w`: its own size, else what its content needs
-    /// (containers are measured once per width and depth, and measuring stops at its caps).
-    pub(super) fn size_of(&self, node: &Node, avail_w: f64, ctx: &Ctx, depth: usize) -> (f64, f64) {
+    /// The width and height instance `index` of `node` under `ctx` takes in `avail_w`: its own
+    /// size, else what its content needs (containers are measured once per width, depth and
+    /// instance, and measuring stops at its caps). Instances differ when the data gives each its
+    /// own rows (XFA 3.3, "Tables", p. 327; Chapter 9, p. 336), so with data each is measured
+    /// under its own SOM path.
+    pub(super) fn size_at(&self, node: &Node, avail_w: f64, ctx: &Ctx, depth: usize, index: usize) -> (f64, f64) {
         let c = node.common();
         let spent = self.measures.get().saturating_add(1);
         self.measures.set(spent);
         if depth > MAX_DEPTH || spent > MAX_MEASURES {
             return (c.w.unwrap_or(avail_w), c.h.unwrap_or(0.0));
         }
+        let own = ctx.with_som(c, index);
         // Only containers recurse; their addresses are stable for the whole layout (the
-        // template is borrowed, the root and page areas are held by the layouter).
+        // template is borrowed, the root and page areas are held by the layouter). Without data
+        // every instance is alike, so one measurement serves them all.
+        let som = || if self.data.is_some() { own.som.clone() } else { String::new() };
         let key = match node {
-            Node::Subform(s) => Some((&**s as *const Subform as usize, avail_w.to_bits(), depth)),
-            Node::Area(a) => Some((&**a as *const Area as usize, avail_w.to_bits(), depth)),
+            Node::Subform(s) => Some((&**s as *const Subform as usize, avail_w.to_bits(), depth, som())),
+            Node::Area(a) => Some((&**a as *const Area as usize, avail_w.to_bits(), depth, som())),
             _ => None,
         };
-        if let Some(key) = key
+        if let Some(key) = &key
             && let Ok(cache) = self.measured.try_borrow()
-            && let Some(m) = cache.get(&key)
+            && let Some(m) = cache.get(key)
             && m.font == ctx.font
             && m.para == ctx.para
         {
             return m.size;
         }
-        let size = self.measure(node, avail_w, ctx, depth);
+        let size = self.measure(node, avail_w, &own, depth);
         if let Some(key) = key
             && let Ok(mut cache) = self.measured.try_borrow_mut()
         {
@@ -39,15 +45,13 @@ impl Layouter<'_> {
         size
     }
 
-    /// The size (width, height) of `node` within `avail_w`, uncached ([`Self::size_of`] caches it).
+    /// The size (width, height) of `node` within `avail_w`, uncached ([`Self::size_at`] caches it).
     /// Without a width, a container, a text draw or a button is as wide as its content (at most
     /// `avail_w`) and anything else takes `avail_w`; without a height, it is as tall as its content.
+    /// `ctx` holds the SOM path of the instance measured: its repeating children count their
+    /// instances under it, and a growing text field finds its value at it.
     fn measure(&self, node: &Node, avail_w: f64, ctx: &Ctx, depth: usize) -> (f64, f64) {
         let c = node.common();
-        // The node's own SOM: its repeating children count their instances under it, and a
-        // growing text field finds its value at it. Measurements are cached per template node,
-        // so instance 0 stands for all of them.
-        let ctx = ctx.with_som(c, 0);
         let som = ctx.som.clone();
         // A container without a width is as wide as its content (a radio group beside its
         // question, say), and so is a text label or a button (as wide as its caption), within
@@ -57,7 +61,7 @@ impl Layouter<'_> {
             None => match node {
                 Node::Subform(_) | Node::ExclGroup(_) | Node::Area(_) => {
                     let inner = (avail_w - c.margin.horizontal()).max(1.0);
-                    (self.content_width(node, inner, &ctx, depth) + c.margin.horizontal()).min(avail_w)
+                    (self.content_width(node, inner, ctx, depth) + c.margin.horizontal()).min(avail_w)
                 }
                 Node::Draw(d) => self.natural_width(&d.value, &ctx.font, &ctx.para).map_or(avail_w, |t| (t + c.margin.horizontal()).min(avail_w)),
                 Node::Field(f) if f.ui == Ui::Button => f
@@ -74,32 +78,41 @@ impl Layouter<'_> {
             None => {
                 let inner_w = (w - c.margin.horizontal()).max(1.0);
                 let content = match node {
-                    Node::Draw(d) => self.value_height(&d.value, inner_w, &ctx),
-                    Node::Field(f) => self.field_height(f, inner_w, &ctx),
-                    Node::ExclGroup(g) => self.group_height(g, inner_w, &ctx, depth),
-                    Node::Area(a) => self.positioned_height(&a.children, inner_w, &ctx, depth),
+                    Node::Draw(d) => self.value_height(&d.value, inner_w, ctx),
+                    Node::Field(f) => self.field_height(f, inner_w, ctx),
+                    Node::ExclGroup(g) => self.group_height(g, inner_w, ctx, depth),
+                    Node::Area(a) => self.positioned_height(&a.children, inner_w, ctx, depth),
                     Node::Subform(s) => match s.layout {
-                        Layout::Positioned => self.positioned_height(&s.children, inner_w, &ctx, depth),
-                        // Each instance of a repeating child takes its height again.
-                        Layout::Tb => s
-                            .children
-                            .iter()
-                            .filter(|k| k.common().presence.occupies())
-                            .map(|k| self.size_of(k, inner_w, &ctx, depth + 1).1 * self.instances(k, &som) as f64)
-                            .sum(),
-                        Layout::LrTb | Layout::RlTb => self.pack_instances(&s.children, inner_w, &ctx, depth, &som).1,
-                        Layout::Table => {
-                            let cols = self.columns(s, inner_w);
+                        Layout::Positioned => self.positioned_height(&s.children, inner_w, ctx, depth),
+                        // Each instance of a repeating child takes its own height.
+                        Layout::Tb => {
+                            let sibs = SomIndices::of(&s.children);
                             s.children
                                 .iter()
-                                .filter(|k| k.common().presence.occupies())
-                                .map(|k| match k {
-                                    Node::Subform(r) if r.layout == Layout::Row => self.row_height(r, &cols, inner_w, &ctx, depth + 1),
-                                    _ => self.size_of(k, inner_w, &ctx, depth + 1).1,
+                                .enumerate()
+                                .filter(|(_, k)| k.common().presence.occupies())
+                                .map(|(i, k)| self.instances_height(k, inner_w, ctx, depth + 1, &som, sibs.at(i)))
+                                .sum()
+                        }
+                        Layout::LrTb | Layout::RlTb => self.pack_instances(&s.children, inner_w, ctx, depth, &som).1,
+                        Layout::Table => {
+                            let cols = self.columns(s, inner_w);
+                            let sibs = SomIndices::of(&s.children);
+                            s.children
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, k)| k.common().presence.occupies())
+                                .map(|(i, k)| match k {
+                                    // Each instance of a repeating row takes its own height, as drawn.
+                                    Node::Subform(r) if r.layout == Layout::Row => (0..self.instances(k, &som))
+                                        .map(|n| self.row_height(r, &cols, inner_w, ctx, depth + 1, sibs.at(i).saturating_add(n)))
+                                        .sum(),
+                                    _ => self.size_at(k, inner_w, ctx, depth + 1, sibs.at(i)).1,
                                 })
                                 .sum()
                         }
-                        Layout::Row => self.row_height(s, &self.columns(s, inner_w), inner_w, &ctx, depth + 1),
+                        // `ctx` is already this row instance's own.
+                        Layout::Row => self.cells(s, &self.columns(s, inner_w), inner_w, ctx, depth + 1).1,
                     },
                 };
                 content + c.margin.vertical()
@@ -112,6 +125,12 @@ impl Layouter<'_> {
             _ => c.min_h,
         };
         (w, clamp_opt(h, min_h, c.max_h))
+    }
+
+    /// The height `k` takes with all its instances under the container at `som`, one under
+    /// another, the first at SOM index `sib` among its siblings: each instance takes its own.
+    fn instances_height(&self, k: &Node, inner_w: f64, ctx: &Ctx, depth: usize, som: &str, sib: usize) -> f64 {
+        (0..self.instances(k, som)).map(|i| self.size_at(k, inner_w, ctx, depth, sib.saturating_add(i)).1).sum()
     }
 
     /// The natural width of a container's content within `avail_w`.
@@ -132,20 +151,24 @@ impl Layouter<'_> {
             Node::Area(a) => (&a.children, Layout::Positioned),
             _ => return avail_w,
         };
-        let visible = children.iter().filter(|k| k.common().presence.occupies());
+        // Each child under the SOM index it is drawn at.
+        let sibs = SomIndices::of(children);
+        let visible = children.iter().enumerate().filter(|(_, k)| k.common().presence.occupies());
         match layout {
             Layout::LrTb | Layout::RlTb | Layout::Row => {
-                let sum: f64 = visible.map(|k| self.size_of(k, avail_w, ctx, depth + 1).0).sum();
+                let sum: f64 = visible.map(|(i, k)| self.size_at(k, avail_w, ctx, depth + 1, sibs.at(i)).0).sum();
                 if sum <= avail_w + 0.05 { sum } else { avail_w }
             }
             Layout::Positioned => visible
-                .map(|k| {
-                    let (w, h) = self.size_of(k, avail_w, ctx, depth + 1);
+                .map(|(i, k)| {
+                    let (w, h) = self.size_at(k, avail_w, ctx, depth + 1, sibs.at(i));
                     k.common().top_left(w, h).0 + w
                 })
                 .fold(0.0, f64::max)
                 .min(avail_w),
-            Layout::Tb | Layout::Table => visible.map(|k| self.size_of(k, avail_w, ctx, depth + 1).0).fold(0.0, f64::max).min(avail_w),
+            Layout::Tb | Layout::Table => {
+                visible.map(|(i, k)| self.size_at(k, avail_w, ctx, depth + 1, sibs.at(i)).0).fold(0.0, f64::max).min(avail_w)
+            }
         }
     }
 
@@ -284,19 +307,29 @@ impl Layouter<'_> {
     fn group_height(&self, g: &ExclGroup, inner_w: f64, ctx: &Ctx, depth: usize) -> f64 {
         let nodes: Vec<Node> = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();
         match g.layout {
-            Layout::Tb => nodes.iter().filter(|k| k.common().presence.occupies()).map(|k| self.size_of(k, inner_w, ctx, depth + 1).1).sum(),
+            Layout::Tb => {
+                let sibs = SomIndices::of(&nodes);
+                nodes
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, k)| k.common().presence.occupies())
+                    .map(|(i, k)| self.size_at(k, inner_w, ctx, depth + 1, sibs.at(i)).1)
+                    .sum()
+            }
             Layout::Positioned => self.positioned_height(&nodes, inner_w, ctx, depth),
             _ => self.packed_height(&nodes, inner_w, ctx, depth),
         }
     }
 
     fn positioned_height(&self, children: &[Node], inner_w: f64, ctx: &Ctx, depth: usize) -> f64 {
+        let sibs = SomIndices::of(children);
         children
             .iter()
-            .filter(|k| k.common().presence.occupies())
-            .map(|k| {
+            .enumerate()
+            .filter(|(_, k)| k.common().presence.occupies())
+            .map(|(i, k)| {
                 let c = k.common();
-                let (w, h) = self.size_of(k, (inner_w - c.x.unwrap_or(0.0)).max(1.0), ctx, depth + 1);
+                let (w, h) = self.size_at(k, (inner_w - c.x.unwrap_or(0.0)).max(1.0), ctx, depth + 1, sibs.at(i));
                 c.top_left(w, h).1 + h
             })
             .fold(0.0, f64::max)
@@ -307,13 +340,14 @@ impl Layouter<'_> {
     /// container at `som`.
     pub(super) fn pack_instances(&self, children: &[Node], inner_w: f64, ctx: &Ctx, depth: usize, som: &str) -> (Vec<(usize, usize, Rect)>, f64) {
         let mut out = Vec::new();
+        let sibs = SomIndices::of(children);
         let (mut x, mut y, mut line_h) = (0.0, 0.0, 0.0);
         for (i, k) in children.iter().enumerate() {
             if !k.common().presence.occupies() {
                 continue;
             }
-            let (w, h) = self.size_of(k, inner_w, ctx, depth + 1);
             for instance in 0..self.instances(k, som) {
+                let (w, h) = self.size_at(k, inner_w, ctx, depth + 1, sibs.at(i).saturating_add(instance));
                 if x > 0.0 && x + w > inner_w + 0.05 {
                     y += line_h;
                     x = 0.0;
@@ -337,20 +371,24 @@ impl Layouter<'_> {
         self.pack(children, inner_w, ctx, depth).1
     }
 
-    /// Cell rectangles of a row (relative to the row's inner box) and the row height.
+    /// Cell rectangles of a row (relative to the row's inner box) and the row height. Each cell
+    /// is measured under its own SOM index among its same-named siblings (`qty[1]`, not
+    /// `qty[0]`), the index [`Self::draw_row`] draws it at, so a cell that grows with its value
+    /// takes its own value's height.
     pub(super) fn cells(&self, row: &Subform, cols: &[f64], inner_w: f64, ctx: &Ctx, depth: usize) -> (Vec<(usize, Rect)>, f64) {
         let ctx = ctx.child(&row.common);
         let mut out = Vec::new();
         let mut col = 0usize;
         let mut x = 0.0;
         let mut h: f64 = 0.0;
+        let sibs = SomIndices::of(&row.children);
         for (i, k) in row.children.iter().enumerate() {
             if !k.common().presence.occupies() {
                 continue;
             }
             let span = k.common().col_span.max(1);
             let w = if col < cols.len() { cols.iter().skip(col).take(span).sum::<f64>() } else { k.common().w.unwrap_or((inner_w - x).max(1.0)) };
-            let (_, ch) = self.size_of(k, w, &ctx, depth + 1);
+            let (_, ch) = self.size_at(k, w, &ctx, depth + 1, sibs.at(i));
             out.push((i, Rect::new(x, 0.0, w, ch)));
             h = h.max(ch);
             x += w;
@@ -363,7 +401,10 @@ impl Layouter<'_> {
         (out, clamp_opt(h, row.common.min_h, row.common.max_h))
     }
 
-    pub(super) fn row_height(&self, row: &Subform, cols: &[f64], inner_w: f64, ctx: &Ctx, depth: usize) -> f64 {
-        self.cells(row, cols, inner_w, ctx, depth).1
+    /// The height of instance `sib` of `row` in the table at `ctx`, measured as [`Self::draw_row`]
+    /// draws it: under the instance's own SOM path, so a cell that grows with its text takes
+    /// that instance's value (XFA 3.3, "Tables", p. 327; "Growable Containers", p. 275).
+    pub(super) fn row_height(&self, row: &Subform, cols: &[f64], inner_w: f64, ctx: &Ctx, depth: usize, sib: usize) -> f64 {
+        self.cells(row, cols, inner_w, &ctx.with_som(&row.common, sib), depth).1
     }
 }

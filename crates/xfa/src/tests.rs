@@ -3527,7 +3527,8 @@ fn imported_data_is_written_with_the_packets_own_prefix_and_never_leaves_it_unre
     assert!(import_data(&mut doc, &deepish, Some("form"), None).is_err());
     assert_eq!(crate::data_of(&doc).unwrap().text_at(&som_to_path("form[0].page1[0].country[0]")), Some("CA"), "untouched");
     // The data holds more rows than are laid out: said, not hidden.
-    let rows: String = (0..60).map(|i| format!("<row><item>r{i}</item><amount>1</amount></row>")).collect();
+    let n = crate::layout::MAX_INSTANCES + 10;
+    let rows: String = (0..n).map(|i| format!("<row><item>r{i}</item><amount>1</amount></row>")).collect();
     let many = scripted_template().replace(
         "</template>",
         &format!(
@@ -3535,7 +3536,7 @@ fn imported_data_is_written_with_the_packets_own_prefix_and_never_leaves_it_unre
         ),
     );
     let form = layout_xml(&many).unwrap();
-    assert!(form.warnings.iter().any(|w| w.contains("60 rows") && w.contains("first 50")), "{:?}", form.warnings);
+    assert!(form.warnings.iter().any(|w| w.contains(&format!("{n} rows")) && w.contains(&format!("first {}", n - 10))), "{:?}", form.warnings);
 }
 
 #[test]

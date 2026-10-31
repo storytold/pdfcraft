@@ -33,7 +33,7 @@ impl Layouter<'_> {
         if !c.presence.occupies() {
             return Ok(());
         }
-        let (w, h) = self.size_of(k, (inner.w - c.x.unwrap_or(0.0)).max(1.0), ctx, depth + 1);
+        let (w, h) = self.size_at(k, (inner.w - c.x.unwrap_or(0.0)).max(1.0), ctx, depth + 1, sib);
         let (x, y) = c.top_left(w, h);
         self.draw_node(k, Rect::new(inner.x + x, inner.y + y, w, h), ctx, depth + 1, sib)
     }
@@ -95,18 +95,25 @@ impl Layouter<'_> {
                             if !k.common().presence.occupies() {
                                 continue;
                             }
-                            let (w, h) = self.size_of(k, inner.w, &ctx, depth + 1);
                             // A repeating subform here (a table in an area of a positioned page,
-                            // say) gets its instances, as in a flowed one, one under another.
-                            for instance in 0..self.instances(k, &ctx.som) {
-                                self.draw_node(k, Rect::new(inner.x, y, w, h), &ctx, depth + 1, sibs.at(i) + instance)?;
+                            // say) gets its instances, as in a flowed one, one under another,
+                            // each as tall as its own content, and the rows past them are
+                            // reported as there.
+                            let instances = self.laid_out_instances(k, &ctx.som);
+                            for instance in 0..instances {
+                                let sib = sibs.at(i).saturating_add(instance);
+                                let (w, h) = self.size_at(k, inner.w, &ctx, depth + 1, sib);
+                                self.draw_node(k, Rect::new(inner.x, y, w, h), &ctx, depth + 1, sib)?;
                                 y += h;
                             }
                         }
                     }
                     Layout::LrTb | Layout::RlTb => {
                         // A repeating subform here (rows of fields under a heading) gets its
-                        // instances, as in the other layouts.
+                        // instances, as in the other layouts, and the rows past them are reported.
+                        for k in s.children.iter().filter(|k| k.common().presence.occupies()) {
+                            self.laid_out_instances(k, &ctx.som);
+                        }
                         let (placed, _) = self.pack_instances(&s.children, inner.w, &ctx, depth, &ctx.som);
                         for (i, instance, r) in placed {
                             if let Some(k) = s.children.get(i) {
@@ -126,11 +133,16 @@ impl Layouter<'_> {
                             if let Node::Subform(r) = k
                                 && r.layout == Layout::Row
                             {
-                                let h = self.row_height(r, &cols, inner.w, &ctx, depth + 1);
-                                self.draw_row(r, &cols, Rect::new(inner.x, y, inner.w, h), &ctx, depth + 1, csib)?;
-                                y += h;
+                                // A repeating row (a table in a positioned subform, say) gets its
+                                // instances one under another, as in a flowed table (XFA 3.3,
+                                // "Tables", p. 327), and the rows past them are reported.
+                                for instance in 0..self.laid_out_instances(k, &ctx.som) {
+                                    let h = self.row_height(r, &cols, inner.w, &ctx, depth + 1, csib.saturating_add(instance));
+                                    self.draw_row(r, &cols, Rect::new(inner.x, y, inner.w, h), &ctx, depth + 1, csib + instance)?;
+                                    y += h;
+                                }
                             } else {
-                                let (w, h) = self.size_of(k, inner.w, &ctx, depth + 1);
+                                let (w, h) = self.size_at(k, inner.w, &ctx, depth + 1, csib);
                                 self.draw_node(k, Rect::new(inner.x, y, w, h), &ctx, depth + 1, csib)?;
                                 y += h;
                             }
@@ -261,6 +273,8 @@ impl Layouter<'_> {
         let inner = rect.inset(&g.common.margin);
         let group = self.unique_name(g.common.name.as_deref().unwrap_or("group"));
         let nodes: Vec<Node> = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();
+        // Each field is measured under the SOM index it is drawn at.
+        let sibs = SomIndices::of(&nodes);
         let placed: Vec<(usize, Rect)> = match g.layout {
             Layout::Tb => {
                 let mut y = 0.0;
@@ -269,7 +283,7 @@ impl Layouter<'_> {
                     if !k.common().presence.occupies() {
                         continue;
                     }
-                    let (w, h) = self.size_of(k, inner.w, &ctx, depth + 1);
+                    let (w, h) = self.size_at(k, inner.w, &ctx, depth + 1, sibs.at(i));
                     out.push((i, Rect::new(0.0, y, w, h)));
                     y += h;
                 }
@@ -281,14 +295,13 @@ impl Layouter<'_> {
                 .filter(|(_, k)| k.common().presence.occupies())
                 .map(|(i, k)| {
                     let c = k.common();
-                    let (w, h) = self.size_of(k, (inner.w - c.x.unwrap_or(0.0)).max(1.0), &ctx, depth + 1);
+                    let (w, h) = self.size_at(k, (inner.w - c.x.unwrap_or(0.0)).max(1.0), &ctx, depth + 1, sibs.at(i));
                     let (x, y) = c.top_left(w, h);
                     (i, Rect::new(x, y, w, h))
                 })
                 .collect(),
             _ => self.pack(&nodes, inner.w, &ctx, depth).0,
         };
-        let sibs = SomIndices::of(&nodes);
         for (i, r) in placed {
             if let Some(f) = g.fields.get(i) {
                 let on = f.items.first().cloned().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| (i + 1).to_string());
