@@ -43,7 +43,7 @@ allow-git = [
 ]
 
 [advisories]
-yanked = "warn"
+yanked = "deny"
 ignore = [
     # Marvin (RSA private-key timing side channel, no fixed `rsa` release). pdfcraft-sign uses
     # `rsa` only for public-key signature verification, which the advisory does not affect; RSA
