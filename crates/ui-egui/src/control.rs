@@ -38,6 +38,8 @@
 //!   reports the choice and `ui.state.theme` reports the resolved light/dark colours.
 //!   `comment-tool-pinned=true|false` remembers the annotation quick bar's pin across restarts;
 //!   `ui.state.comment_tool_pinned` reports the same preference.
+//!   `folder-collapsed=<folder>=on|off` folds a pinned folder on Home down to its heading or
+//!   opens it again; `ui.state.pinned_folders` lists each pinned folder and whether it is.
 //! - `ui.open {path}`: open a file. A file whose tab is already open focuses it
 //!   (`"focused": true`) instead of adding a tab; native opens report `pending: true` until
 //!   they complete and are listed in `ui.state.pending_opens`; only a failed open replies `Err`.

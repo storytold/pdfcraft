@@ -2070,3 +2070,44 @@ fn routine_continuous_scrolling_does_not_add_navigation_history() {
     assert!(h.state().views[0].back.is_empty());
     assert!(h.state().views[0].forward.is_empty());
 }
+
+/// CodeRabbit on #5341: the control channel folds a pinned folder on Home down to its heading
+/// and opens it again, as its chevron does, and `ui.state` says which are folded. Folders that
+/// aren't pinned, and states other than on and off, are refused with the reason.
+#[test]
+fn control_collapses_and_expands_a_pinned_folder() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-ui-fold-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("inside.pdf"), fixture(1)).unwrap();
+    let folder = dir.to_string_lossy().into_owned();
+    let slot: Arc<Mutex<Option<ControlClient>>> = Arc::default();
+    let (s, pin) = (slot.clone(), folder.clone());
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_eframe(move |cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.run_inline = true;
+        app.pin_folder(&pin);
+        *s.lock().unwrap() = Some(app.attach_control(&cc.egui_ctx));
+        app
+    });
+    h.run_steps(4);
+    let c = slot.lock().unwrap().take().unwrap();
+    let folded = |h: &mut Harness<'static, PdfCraftApp>| ok(h, &c, "ui.state", json!({}))["pinned_folders"].clone();
+    assert_eq!(folded(&mut h), json!([{ "folder": folder, "collapsed": false }]));
+    h.get_by_label("inside.pdf");
+    ok(&mut h, &c, "ui.set", json!({ "key": "folder-collapsed", "value": format!("{folder}=on") }));
+    h.run_steps(2);
+    assert_eq!(folded(&mut h), json!([{ "folder": folder, "collapsed": true }]));
+    assert!(h.query_by_label("inside.pdf").is_none(), "a collapsed folder lists nothing");
+    let unpinned = call(&mut h, &c, "ui.set", json!({ "key": "folder-collapsed", "value": "/not/pinned=on" })).unwrap_err();
+    assert!(unpinned.contains("not a pinned folder"), "{unpinned}");
+    let bad = call(&mut h, &c, "ui.set", json!({ "key": "folder-collapsed", "value": format!("{folder}=yes") })).unwrap_err();
+    assert!(bad.contains("=on or"), "{bad}");
+    assert_eq!(folded(&mut h), json!([{ "folder": folder, "collapsed": true }]), "refusals change nothing");
+    ok(&mut h, &c, "ui.set", json!({ "key": "folder-collapsed", "value": format!("{folder}=off") }));
+    h.run_steps(2);
+    assert_eq!(folded(&mut h), json!([{ "folder": folder, "collapsed": false }]));
+    h.get_by_label("inside.pdf");
+    let _ = std::fs::remove_dir_all(&dir);
+}

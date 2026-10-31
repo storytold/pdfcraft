@@ -2174,6 +2174,8 @@
 	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	Tűzz ki egy mappát, hogy a legújabb PDF-jei itt jelenjenek meg, például oda, ahová a szkennered vagy egy szinkronizált felhőmeghajtó menti őket.
 	Unpin	Kitűzés megszüntetése
 	Unpin {folder}	{folder} kitűzésének megszüntetése
+	Collapse {folder}	{folder} összecsukása
+	Expand {folder}	{folder} kibontása
 	Looking for PDFs…	PDF-ek keresése…
 	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Ez a mappa jelenleg nem érhető el. Lehet, hogy áthelyezték, vagy a meghajtója, illetve a felhőszinkron offline.
 	No PDFs in this folder yet	Ebben a mappában még nincs PDF

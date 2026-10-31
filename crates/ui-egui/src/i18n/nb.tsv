@@ -1241,6 +1241,8 @@
 	Unlock…	Lås opp…
 	Unpin	Løsne
 	Unpin {folder}	Løsne {folder}
+	Collapse {folder}	Fold sammen {folder}
+	Expand {folder}	Utvid {folder}
 	Unplaced	Ikke plassert
 	Unsupported measurements	Målinger som ikke støttes
 	Up	Opp

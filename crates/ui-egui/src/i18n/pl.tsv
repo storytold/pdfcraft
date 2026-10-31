@@ -39,6 +39,8 @@
 	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	Przypnij folder, aby wyświetlać tutaj jego najnowsze pliki PDF, np. folder zapisu skanera lub synchronizowanego dysku w chmurze.
 	Unpin	Odepnij
 	Unpin {folder}	Odepnij {folder}
+	Collapse {folder}	Zwiń {folder}
+	Expand {folder}	Rozwiń {folder}
 	Looking for PDFs…	Szukanie plików PDF…
 	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Ten folder jest teraz niedostępny. Mógł zostać przeniesiony albo jego dysk lub synchronizacja z chmurą jest nieaktywna.
 	No PDFs in this folder yet	W tym folderze nie ma jeszcze plików PDF

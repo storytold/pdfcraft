@@ -1232,6 +1232,8 @@
 	Unlock…	Buka kunci…
 	Unpin	Lepas sematan
 	Unpin {folder}	Lepas sematan {folder}
+	Collapse {folder}	Ciutkan {folder}
+	Expand {folder}	Bentangkan {folder}
 	Unplaced	Belum ditempatkan
 	Unsupported measurements	Pengukuran tidak didukung
 	Up	Atas

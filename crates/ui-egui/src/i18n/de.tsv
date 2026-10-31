@@ -2189,6 +2189,8 @@
 	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	Hefte einen Ordner an, um hier seine neuesten PDFs aufzulisten – etwa den, in dem dein Scanner oder ein synchronisierter Cloud-Speicher sie ablegt.
 	Unpin	Lösen
 	Unpin {folder}	{folder} lösen
+	Collapse {folder}	{folder} einklappen
+	Expand {folder}	{folder} ausklappen
 	Looking for PDFs…	PDFs werden gesucht…
 	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Dieser Ordner ist gerade nicht verfügbar. Er wurde vielleicht verschoben, oder sein Laufwerk bzw. die Cloud-Synchronisierung ist offline.
 	No PDFs in this folder yet	Noch keine PDFs in diesem Ordner

@@ -39,6 +39,8 @@
 	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	Kiinnitä kansio, niin sen uusimmat PDF-tiedostot näkyvät tässä, esimerkiksi skannerin tai synkronoidun pilviaseman tallennuskansio.
 	Unpin	Irrota
 	Unpin {folder}	Irrota {folder}
+	Collapse {folder}	Tiivistä {folder}
+	Expand {folder}	Laajenna {folder}
 	Looking for PDFs…	Etsitään PDF-tiedostoja…
 	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Kansio ei ole juuri nyt käytettävissä. Se on ehkä siirretty, tai sen asema tai pilvisynkronointi on offline-tilassa.
 	No PDFs in this folder yet	Kansiossa ei ole vielä PDF-tiedostoja

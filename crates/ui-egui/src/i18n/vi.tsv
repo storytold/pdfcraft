@@ -1287,6 +1287,8 @@ theme	Appearance	Giao diện
 	Unlock…	Mở khóa…
 	Unpin	Bỏ ghim
 	Unpin {folder}	Bỏ ghim {folder}
+	Collapse {folder}	Thu gọn {folder}
+	Expand {folder}	Mở rộng {folder}
 	Unplaced	Chưa đặt
 	Unsupported measurements	Các phép đo không được hỗ trợ
 	Up	Lên

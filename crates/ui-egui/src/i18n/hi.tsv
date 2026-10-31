@@ -25,6 +25,8 @@
 	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	किसी फ़ोल्डर को पिन करें ताकि उसके नवीनतम पीडीएफ़ यहाँ सूची में दिखें, जैसे वह जगह जहाँ आपका स्कैनर या सिंक किया गया क्लाउड ड्राइव उन्हें सहेजता है।
 	Unpin	अनपिन करें
 	Unpin {folder}	{folder} अनपिन करें
+	Collapse {folder}	{folder} संक्षिप्त करें
+	Expand {folder}	{folder} विस्तृत करें
 	Looking for PDFs…	पीडीएफ़ खोजे जा रहे हैं…
 	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	यह फ़ोल्डर इस समय उपलब्ध नहीं है। हो सकता है कि इसे स्थानांतरित कर दिया गया हो, या इसका ड्राइव या क्लाउड सिंक ऑफ़लाइन हो।
 	No PDFs in this folder yet	इस फ़ोल्डर में अभी तक कोई पीडीएफ़ नहीं है

@@ -219,6 +219,8 @@ key	Space	Mezerník
 	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	Připněte složku a uvidíte zde její nejnovější soubory PDF, třeba tu, kam ukládá skener nebo synchronizovaný cloudový disk.
 	Unpin	Odepnout
 	Unpin {folder}	Odepnout {folder}
+	Collapse {folder}	Sbalit {folder}
+	Expand {folder}	Rozbalit {folder}
 	Looking for PDFs…	Hledání souborů PDF…
 	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Tato složka teď není dostupná. Mohla být přesunuta nebo je její disk či cloudová synchronizace offline.
 	No PDFs in this folder yet	V této složce zatím nejsou žádné soubory PDF

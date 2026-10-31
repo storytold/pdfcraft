@@ -2132,6 +2132,8 @@
 	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	Fixe uma pasta para listar aqui os PDFs mais recentes dela, como onde o seu scanner ou uma unidade de nuvem sincronizada os salva.
 	Unpin	Desafixar
 	Unpin {folder}	Desafixar {folder}
+	Collapse {folder}	Recolher {folder}
+	Expand {folder}	Expandir {folder}
 	Pin a folder to Home	Fixar uma pasta no Início
 	Looking for PDFs…	Procurando PDFs…
 	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Esta pasta não está disponível no momento. Ela pode ter sido movida, ou a unidade ou a sincronização de nuvem dela está desconectada.

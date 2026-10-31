@@ -19,6 +19,8 @@
 	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	Қалтаны бекітіңіз — оның ең жаңа PDF файлдары осында көрсетіледі, мысалы, сканер немесе синхрондалатын бұлт дискісі файлдарды сақтайтын қалта.
 	Unpin	Бекітуді алып тастау
 	Unpin {folder}	{folder} бекітпесін алып тастау
+	Collapse {folder}	{folder} жию
+	Expand {folder}	{folder} жаю
 	Looking for PDFs…	PDF файлдары ізделуде…
 	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Бұл қалта қазір қолжетімді емес. Ол басқа жерге көшірілген, не болмаса оның дискісі мен бұлт синхроны желіден тыс болуы мүмкін.
 	No PDFs in this folder yet	Бұл қалтада әзірге PDF файлдары жоқ

@@ -1241,6 +1241,8 @@
 	Unlock…	Deblocare…
 	Unpin	Anulare fixare
 	Unpin {folder}	Anulare fixare {folder}
+	Collapse {folder}	Restrânge {folder}
+	Expand {folder}	Extinde {folder}
 	Unplaced	Neplasat
 	Unsupported measurements	Măsurători neacceptate
 	Up	Sus

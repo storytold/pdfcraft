@@ -76,6 +76,8 @@
 	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	固定一个文件夹，即可在此列出其中最新的 PDF，例如扫描仪或同步云盘保存文件的位置。
 	Unpin	取消固定
 	Unpin {folder}	取消固定 {folder}
+	Collapse {folder}	折叠 {folder}
+	Expand {folder}	展开 {folder}
 	Looking for PDFs…	正在查找 PDF…
 	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	此文件夹当前不可用。它可能已被移动，或其所在驱动器或云同步处于离线状态。
 	No PDFs in this folder yet	此文件夹中还没有 PDF

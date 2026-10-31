@@ -35,6 +35,8 @@
 	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	釘選資料夾後，即可在此列出其中最新的 PDF，例如掃描器或同步雲端硬碟儲存檔案的位置。
 	Unpin	取消釘選
 	Unpin {folder}	取消釘選 {folder}
+	Collapse {folder}	摺疊 {folder}
+	Expand {folder}	展開 {folder}
 	Looking for PDFs…	正在尋找 PDF…
 	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	此資料夾目前無法使用。它可能已被移動，或其所在磁碟或雲端同步處於離線狀態。
 	No PDFs in this folder yet	此資料夾中還沒有 PDF

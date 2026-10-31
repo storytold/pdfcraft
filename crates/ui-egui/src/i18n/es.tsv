@@ -36,6 +36,8 @@
 	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	Ancla una carpeta para ver aquí sus PDF más recientes, por ejemplo donde los guarda tu escáner o una unidad en la nube sincronizada.
 	Unpin	Desanclar
 	Unpin {folder}	Desanclar {folder}
+	Collapse {folder}	Contraer {folder}
+	Expand {folder}	Expandir {folder}
 	Looking for PDFs…	Buscando PDF…
 	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Esta carpeta no está disponible ahora. Puede que se haya movido o que su unidad o la sincronización en la nube estén sin conexión.
 	No PDFs in this folder yet	Aún no hay PDF en esta carpeta

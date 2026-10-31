@@ -28,6 +28,8 @@
 	Pin a folder to Home	Καρφίτσωμα φακέλου στην αρχική
 	Unpin	Ξεκαρφίτσωμα
 	Unpin {folder}	Ξεκαρφίτσωμα του {folder}
+	Collapse {folder}	Σύμπτυξη του {folder}
+	Expand {folder}	Ανάπτυξη του {folder}
 	Looking for PDFs…	Αναζήτηση αρχείων PDF…
 	No PDFs in this folder yet	Δεν υπάρχουν ακόμη PDF σε αυτόν τον φάκελο
 	Show less	Εμφάνιση λιγότερων

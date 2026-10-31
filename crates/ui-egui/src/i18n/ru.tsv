@@ -35,6 +35,8 @@
 	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	Закрепите папку, чтобы видеть здесь её новые PDF, например папку, куда сохраняет файлы сканер или синхронизируемый облачный диск.
 	Unpin	Открепить
 	Unpin {folder}	Открепить {folder}
+	Collapse {folder}	Свернуть {folder}
+	Expand {folder}	Развернуть {folder}
 	Looking for PDFs…	Поиск PDF…
 	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Эта папка сейчас недоступна. Возможно, она перемещена или её диск либо облачная синхронизация не в сети.
 	No PDFs in this folder yet	В этой папке пока нет PDF

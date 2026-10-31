@@ -2142,6 +2142,8 @@
 	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	En yeni PDF'lerini burada listelemek için bir klasörü sabitleyin; örneğin tarayıcınızın veya eşitlenmiş bir bulut sürücüsünün bunları kaydettiği yer.
 	Unpin	Sabitlemeyi kaldır
 	Unpin {folder}	{folder} sabitlemesini kaldır
+	Collapse {folder}	{folder} daralt
+	Expand {folder}	{folder} genişlet
 	Looking for PDFs…	PDF'ler aranıyor…
 	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Bu klasör şu anda kullanılamıyor. Taşınmış olabilir veya sürücüsü ya da bulut eşitlemesi çevrimdışı olabilir.
 	No PDFs in this folder yet	Bu klasörde henüz PDF yok

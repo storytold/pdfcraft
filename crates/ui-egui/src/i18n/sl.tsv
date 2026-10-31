@@ -1983,6 +1983,8 @@
 	Unlock…	Odkleni…
 	Unpin	Odpni
 	Unpin {folder}	Odpni: {folder}
+	Collapse {folder}	Strni: {folder}
+	Expand {folder}	Razširi: {folder}
 	Unplaced	Nepostavljeno
 	Unsupported measurements	Nepodprte meritve
 	Up	Navzgor

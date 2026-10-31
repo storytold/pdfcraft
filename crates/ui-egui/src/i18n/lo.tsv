@@ -41,6 +41,8 @@
 	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	ປັກໝຸດໂຟນເດີເພື່ອສະແດງໄຟລ໌ PDF ໃໝ່ລ່າສຸດຢູ່ນີ້ ເຊັ່ນ: ບ່ອນທີ່ສະແກນເນີ ຫຼື ຄລາວໄດຣຟ໌ທີ່ຊິ້ງຄ໌ໄວ້ບັນທຶກລົງ.
 	Unpin	ຖອນການປັກໝຸດ
 	Unpin {folder}	ຖອນການປັກໝຸດ {folder}
+	Collapse {folder}	ຫຍໍ້ {folder}
+	Expand {folder}	ຂະຫຍາຍ {folder}
 	Looking for PDFs…	ກຳລັງຊອກຫາ PDF…
 	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	ໂຟນເດີນີ້ບໍ່ພ້ອມໃຊ້ງານໃນຕອນນີ້. ມັນອາດຈະຖືກຍ້າຍ, ຫຼື ໄດຣຟ໌ ຫຼື ການຊິ້ງຄ໌ຄລາວອອບລາຍຢູ່.
 	No PDFs in this folder yet	ຍັງບໍ່ມີໄຟລ໌ PDF ໃນໂຟນເດີນີ້

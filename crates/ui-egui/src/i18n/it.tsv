@@ -39,6 +39,8 @@
 	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	Fissa una cartella per elencarne qui i PDF più recenti, ad esempio quella in cui salvano i file lo scanner o un servizio cloud sincronizzato.
 	Unpin	Rimuovi
 	Unpin {folder}	Rimuovi {folder}
+	Collapse {folder}	Comprimi {folder}
+	Expand {folder}	Espandi {folder}
 	Looking for PDFs…	Ricerca di file PDF…
 	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	La cartella non è disponibile in questo momento. Potrebbe essere stata spostata, oppure il disco o il servizio cloud che la contiene non è in linea.
 	No PDFs in this folder yet	Ancora nessun PDF in questa cartella

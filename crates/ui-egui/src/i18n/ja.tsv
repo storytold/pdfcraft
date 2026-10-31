@@ -42,6 +42,8 @@
 	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	フォルダーをピン留めすると、スキャナーや同期中のクラウドドライブの保存先など、そのフォルダー内の新しい PDF がここに表示されます。
 	Unpin	ピン留めを外す
 	Unpin {folder}	{folder} のピン留めを外す
+	Collapse {folder}	{folder} を折りたたむ
+	Expand {folder}	{folder} を展開
 	Looking for PDFs…	PDF を探しています…
 	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	このフォルダーは現在利用できません。移動されたか、ドライブまたはクラウド同期がオフラインになっている可能性があります。
 	No PDFs in this folder yet	このフォルダーにはまだ PDF がありません

@@ -313,6 +313,7 @@ impl PdfCraftApp {
                 };
             }
             ("author", _) => self.comment_prefs.author = value.to_string(),
+            ("folder-collapsed", _) => self.set_folder_collapsed(value)?,
             ("comment-tool-pinned", _) => {
                 self.comment_prefs.pinned = match value {
                     "true" => true,

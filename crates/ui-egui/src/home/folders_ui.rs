@@ -55,6 +55,8 @@ pub struct PinnedFolders {
     pub listings: Vec<FolderListing>,
     /// Folders whose "Show more" is open.
     pub expanded: Vec<String>,
+    /// Folders folded down to their heading (#5295); kept in settings.
+    pub collapsed: Vec<String>,
     /// A listing in progress: the worker fills the slot.
     scan: Option<Arc<Mutex<Option<Vec<FolderListing>>>>>,
     /// When (egui time) the last listing started.
@@ -86,7 +88,33 @@ impl PinnedFolders {
         self.folders = folders;
         self.listings.clear();
         self.expanded.clear();
+        self.collapsed.clear();
         self.stale = true;
+    }
+
+    /// Restore which folders are collapsed, after [`Self::restore`]: only folders that are
+    /// pinned, each once, so untrusted settings can't grow the list.
+    pub(crate) fn restore_collapsed(&mut self, value: &serde_json::Value) {
+        let Some(items) = value.as_array() else { return };
+        self.collapsed.clear();
+        for folder in items.iter().filter_map(serde_json::Value::as_str) {
+            if self.folders.iter().any(|f| f == folder) && !self.collapsed.iter().any(|f| f == folder) {
+                self.collapsed.push(folder.to_string());
+            }
+        }
+    }
+
+    /// Fold pinned `folder` down to its heading (`collapsed`) or open it again. Returns false,
+    /// changing nothing, when `folder` isn't pinned.
+    pub(crate) fn set_collapsed(&mut self, folder: &str, collapsed: bool) -> bool {
+        if !self.folders.iter().any(|f| f == folder) {
+            return false;
+        }
+        self.collapsed.retain(|f| f != folder);
+        if collapsed {
+            self.collapsed.push(folder.to_string());
+        }
+        true
     }
 }
 
@@ -221,6 +249,25 @@ impl PdfCraftApp {
         self.pinned.folders.retain(|f| f != folder);
         self.pinned.listings.retain(|l| l.folder != folder);
         self.pinned.expanded.retain(|f| f != folder);
+        self.pinned.collapsed.retain(|f| f != folder);
+    }
+
+    /// `ui.set folder-collapsed <folder>=on|off` (CodeRabbit on #5341): the control channel's
+    /// way to fold a pinned folder down to its heading or open it again, as its chevron does.
+    /// `ui.state` lists the pinned folders and which are collapsed. The folder is named by its
+    /// path as pinned; the last `=` splits it from the state, so a path may hold `=` too.
+    pub(crate) fn set_folder_collapsed(&mut self, value: &str) -> Result<(), String> {
+        let (folder, state) = value.rsplit_once('=').ok_or("folder-collapsed must be <folder>=on or <folder>=off")?;
+        let collapsed = match state {
+            "on" => true,
+            "off" => false,
+            _ => return Err("folder-collapsed must be <folder>=on or <folder>=off".into()),
+        };
+        if self.pinned.set_collapsed(folder, collapsed) {
+            Ok(())
+        } else {
+            Err(format!("folder-collapsed: {folder} is not a pinned folder (ui.state lists them)"))
+        }
     }
 
     /// List the pinned folders again if the last listing is older than a few seconds or the
@@ -308,10 +355,27 @@ pub(crate) fn section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let mut open = None;
     let mut unpin = None;
     let mut toggle = None;
+    let mut fold = None;
     for folder in &app.pinned.folders {
         let name = folder_name(folder);
+        // Buttons name their folder; two pinned folders of the same name add where each is.
+        let shared = app.pinned.folders.iter().any(|f| f != folder && folder_name(f) == name);
+        let named = if shared { format!("{name} ({})", location(folder)) } else { name.clone() };
+        let collapsed = app.pinned.collapsed.contains(folder);
         ui.add_space(6.0);
         ui.horizontal(|ui| {
+            let (chevron, tip, label) = if collapsed {
+                ("chevron-right", tl!("Expand"), tl!("Expand {folder}"))
+            } else {
+                ("chevron-down", tl!("Collapse"), tl!("Collapse {folder}"))
+            };
+            let resp = icons::button(ui, chevron, 22.0, false, tip);
+            // Every folder has one: say which folder it folds.
+            let label = crate::i18n::fmt(label, &[("folder", &named)]);
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+            if resp.clicked() {
+                fold = Some(folder.clone());
+            }
             let (icon, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
             icons::paint(ui, icon, "folder", 20.0, t.icon);
             // Folder names and paths are file/path chrome: explicitly left to right, so an
@@ -327,13 +391,16 @@ pub(crate) fn section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let resp = widgets::ghost_button(ui, "x", tl!("Unpin"));
                 // Every folder has an Unpin button: say which one it is.
-                let label = crate::i18n::fmt(tl!("Unpin {folder}"), &[("folder", &name)]);
+                let label = crate::i18n::fmt(tl!("Unpin {folder}"), &[("folder", &named)]);
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
                 if resp.clicked() {
                     unpin = Some(folder.clone());
                 }
             });
         });
+        if collapsed {
+            continue;
+        }
         let note = |ui: &mut egui::Ui, text: &str| {
             ui.add_space(2.0);
             ui.label(egui::RichText::new(text).color(t.text_muted));
@@ -404,6 +471,10 @@ pub(crate) fn section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         } else {
             app.pinned.expanded.push(folder);
         }
+    }
+    if let Some(folder) = fold {
+        let collapsed = app.pinned.collapsed.contains(&folder);
+        app.pinned.set_collapsed(&folder, !collapsed);
     }
     if let Some(path) = open {
         app.open_recent(&path);
