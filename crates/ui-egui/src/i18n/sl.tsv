@@ -2509,6 +2509,7 @@ animation effects	Off	Izklopljeni
 	Print as image	Natisni kot sliko
 	Resolution:	Ločljivost:
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Uporabite, ko tiskalnik izpusti besedilo, senčenje ali prosojnost. Natis ni več iskalno besedilo; s tiskanjem v sivinah so slike sive.
+	Pages that use Type 3 fonts print as images, because Windows can close PdfCraft while printing them. The other pages print as usual.	Strani, ki uporabljajo pisave Type 3, se natisnejo kot slike, ker lahko Windows med njihovim tiskanjem zapre PdfCraft. Druge strani se natisnejo kot običajno.
 	Crop Image	Obreži sliko
 	Remove Crop	Odstrani obrezovanje
 	Trim the picture with its handles; Enter or Done applies	Obrežite sliko z ročicami; Enter ali Končano uporabi

@@ -9266,6 +9266,50 @@ fn doc_print_as_image() {
     }
 }
 
+/// `doc_print` with `type3_as_image` sends the pages that draw with Type 3 fonts as pictures and
+/// names them, while the other pages stay text (#2684: on by default for Windows printers only, so
+/// a saved print-ready PDF keeps every page as it is unless asked).
+#[test]
+fn doc_print_sends_type3_pages_as_images() {
+    let dir = workdir("print-type3");
+    let pdf = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 300] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /XObject << /Fm 7 0 R >> >> >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Resources << /Font << /F1 11 0 R >> >> >>")
+        .stream("", "q /Fm Do Q")
+        .stream("", "BT /F1 24 Tf 20 150 Td (Page 2) Tj ET")
+        .stream("/Type /XObject /Subtype /Form /BBox [0 0 200 300] /Resources << /Font << /F9 8 0 R >> >>", "BT /F9 40 Tf 30 200 Td <010F01> Tj ET")
+        .obj(
+            "<< /Type /Font /Subtype /Type3 /FontMatrix [0.001 0 0 0.001 0 0] /FontBBox [0 0 600 700] /FirstChar 0 /LastChar 15 \
+             /Widths [0 600 0 0 0 0 0 0 0 0 0 0 0 0 0 250] /Encoding << /Differences [1 /g3B 15 /g3] >> /CharProcs << /g3B 9 0 R /g3 10 0 R >> >>",
+        )
+        .stream("", "600 0 0 0 600 700 d1\n0 0 600 700 re f")
+        .stream("", "250 0 0 0 0 0 d1")
+        .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+        .build();
+    std::fs::write(dir.join("chrome.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "chrome.pdf" }))["doc"].as_u64().unwrap();
+    let pictures = |name: &str| {
+        let out = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join(name)).unwrap())).unwrap();
+        out.scan_objects().filter(|(_, o)| matches!(&**o, pdfcraft_cos::Object::Stream(st) if st.dict.name(b"Subtype") == Some(b"Image"))).count()
+    };
+    let r = ok(&mut a, "doc_print", json!({ "doc": doc, "type3_as_image": true, "dpi": 100, "path": "mixed.pdf" }));
+    assert_eq!(r["type3_as_image"], json!([1]), "{r}");
+    assert_eq!(pictures("mixed.pdf"), 1);
+    let mixed = ok(&mut a, "doc_open", json!({ "path": "mixed.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(page_text(&mut a, mixed), ["", "Page 2"]);
+    let r = ok(&mut a, "doc_print", json!({ "doc": doc, "path": "plain.pdf" }));
+    assert!(r.get("type3_as_image").is_none(), "{r}");
+    assert_eq!(pictures("plain.pdf"), 0);
+    match a.call("doc_print", &json!({ "doc": doc, "type3_as_image": true, "dpi": 20, "path": "x.pdf" })) {
+        Err(ToolError::InvalidArgs(m)) => assert!(m.contains("dpi"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// Without a root, `write_output` still writes through a staging file (#2166): the folder is
 /// made, nothing is left beside the file, and a folder at the path is refused.
 #[test]

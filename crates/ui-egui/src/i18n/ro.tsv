@@ -2705,6 +2705,7 @@ key	Space	Spațiu
 	Trim the picture with its handles; Enter or Done applies	Tăiați imaginea cu mânerele ei; Enter sau Gata aplică
 	Turn upside down (180°)	Întoarcere cu susul în jos (180°)
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Folosiți-o când o imprimantă omite text, umbriri sau transparență. Imprimarea nu mai conține text în care se poate căuta; cu Imprimare în tonuri de gri, imaginile sunt gri.
+	Pages that use Type 3 fonts print as images, because Windows can close PdfCraft while printing them. The other pages print as usual.	Paginile care folosesc fonturi Type 3 se imprimă ca imagini, deoarece Windows poate închide PdfCraft în timp ce le imprimă. Celelalte pagini se imprimă ca de obicei.
 	What takes up the space in this file, by kind of content.	Ce ocupă spațiul în acest fișier, pe tipuri de conținut.
 	Word count	Număr de cuvinte
 	Word counting stopped unexpectedly.	Numărarea cuvintelor s-a oprit neașteptat.

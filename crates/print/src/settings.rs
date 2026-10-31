@@ -142,6 +142,12 @@ pub struct Settings {
     /// resolution before it is placed on the paper. The engine does the rendering; `impose` is
     /// then given the image-only document.
     pub raster: Option<Raster>,
+    /// Print only the pages that draw with Type 3 fonts ([`type3_pages`]) as pictures at this
+    /// resolution; the other pages go as they are. Windows' print component can bring the whole
+    /// app down on some Type 3 text (#2684), so the Print dialog asks for this for Windows
+    /// printers ([`spool::TYPE3_AS_IMAGE`]). [`Settings::raster`], when set, already makes every
+    /// page a picture. The engine does the rendering; `impose_with_pictures` places the pictures.
+    pub type3_raster: Option<Raster>,
 }
 
 /// How pages are rendered when printing as image.
@@ -174,6 +180,7 @@ impl Default for Settings {
             layout: Layout::default(),
             content: Content::default(),
             raster: None,
+            type3_raster: None,
             crops: Vec::new(),
         }
     }

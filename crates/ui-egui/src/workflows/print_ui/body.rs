@@ -226,6 +226,16 @@ pub(crate) fn body(
             {
                 ui.label(egui::RichText::new(tl!("This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…")).small().color(t.text_muted));
             }
+            // Pages with Type 3 fonts go to a Windows printer as pictures (#2684).
+            if settings.as_ref().is_ok_and(|s| s.type3_raster.is_some() && s.pages.iter().any(|p| d.type3_pages.binary_search(p).is_ok())) {
+                ui.label(
+                    egui::RichText::new(tl!(
+                        "Pages that use Type 3 fonts print as images, because Windows can close PdfCraft while printing them. The other pages print as usual."
+                    ))
+                    .small()
+                    .color(t.text_muted),
+                );
+            }
             if d.printer.as_deref() == Some(crate::web_print::BROWSER_PRINTER) {
                 ui.label(egui::RichText::new(tl!("Copies, two-sided printing and colour are chosen in the browser's print dialog.")).small().color(t.text_muted));
             }

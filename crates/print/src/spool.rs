@@ -6,6 +6,12 @@ pub use craft_print::{
     parse_lpstat_e, parse_ppd, parse_windows_printers, ppd_text, printers, printers_parsed,
 };
 
+/// Whether this platform's spooler should get the pages that draw with Type 3 fonts as pictures
+/// ([`crate::Settings::type3_raster`]). Windows draws a job with `Windows.Data.Pdf` into
+/// Direct2D's print control, which can crash the whole app on some Type 3 text (#2684); CUPS
+/// takes the PDF as it is.
+pub const TYPE3_AS_IMAGE: bool = cfg!(windows);
+
 /// The driver's job options for a printer (CUPS: its PPD, with the queue's current defaults);
 /// empty when it has none or on other platforms. Reads files and runs `lpoptions`, so call it
 /// when the user asks, not every frame.

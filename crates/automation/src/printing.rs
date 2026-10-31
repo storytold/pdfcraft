@@ -200,11 +200,30 @@ impl Automation {
         } else {
             None
         };
-        let settings = print::Settings { pages, paper, orientation, layout, content, raster, crops: Vec::new() };
+        // The pages that draw with Type 3 fonts as pictures and the others as they are: by default
+        // when printing to a Windows printer, whose print component can crash on them (#2684).
+        let type3_raster = match a.opt_bool("type3_as_image")?.unwrap_or(spool::TYPE3_AS_IMAGE && a.opt_str("printer")?.is_some()) {
+            true if raster.is_none() => {
+                let dpi = a.opt_num("dpi")?.unwrap_or(300.0);
+                if !(72.0..=600.0).contains(&dpi) {
+                    return Err(bad("dpi must be between 72 and 600"));
+                }
+                Some(print::Raster { dpi, grayscale: a.opt_bool("grayscale")?.unwrap_or(false) })
+            }
+            _ => None,
+        };
+        let settings = print::Settings { pages, paper, orientation, layout, content, raster, type3_raster, crops: Vec::new() };
         let sizes: Vec<(f64, f64)> = self.doc(a)?.info.pages.iter().map(|p| (p.width as f64, p.height as f64)).collect();
         let sheets = print::layout(&sizes, &settings).map_err(|e| bad(e.to_string()))?.len();
+        let as_images = match settings.type3_raster {
+            Some(_) => self.session.print_type3_pages(id, &settings.pages, settings.content),
+            None => Vec::new(),
+        };
         let bytes = self.session.print_pdf(id, &settings).map_err(failed)?;
         let mut out = json!({ "sheets": sheets, "pages": settings.pages.len(), "bytes": bytes.len() });
+        if !as_images.is_empty() {
+            out["type3_as_image"] = json!(as_images.iter().map(|p| p.saturating_add(1)).collect::<Vec<_>>());
+        }
         match (a.opt_str("path")?, a.opt_str("printer")?) {
             (Some(p), None) => {
                 let path = self.resolve(p, true)?;

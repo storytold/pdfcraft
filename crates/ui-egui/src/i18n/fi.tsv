@@ -2702,6 +2702,7 @@ certificate	SHA-256 digest	SHA-256-tiiviste
 	Print as image	Tulosta kuvana
 	Resolution:	Tarkkuus:
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Käytä tätä, kun tulostin jättää pois tekstiä, varjostuksia tai läpinäkyvyyttä. Tulosteessa teksti ei ole enää haettavissa; Tulosta harmaasävyinä -asetuksella kuvat ovat harmaita.
+	Pages that use Type 3 fonts print as images, because Windows can close PdfCraft while printing them. The other pages print as usual.	Type 3 -fontteja käyttävät sivut tulostetaan kuvina, koska Windows voi sulkea PdfCraftin niitä tulostettaessa. Muut sivut tulostetaan tavalliseen tapaan.
 	Crop Image	Rajaa kuva
 	Remove Crop	Poista rajaus
 	Trim the picture with its handles; Enter or Done applies	Rajaa kuvaa sen kahvoilla; Enter tai Valmis ottaa rajauksen käyttöön

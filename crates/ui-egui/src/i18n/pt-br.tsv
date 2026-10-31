@@ -2518,6 +2518,7 @@ animation effects	Off	Desativados
 	Print as image	Imprimir como imagem
 	Resolution:	Resolução:
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Use quando uma impressora omite texto, sombreamento ou transparência. A impressão deixa de ser texto pesquisável; com Imprimir em tons de cinza, as imagens ficam cinza.
+	Pages that use Type 3 fonts print as images, because Windows can close PdfCraft while printing them. The other pages print as usual.	As páginas que usam fontes Type 3 são impressas como imagens, porque o Windows pode fechar o PdfCraft ao imprimi-las. As demais páginas são impressas normalmente.
 	Crop Image	Cortar imagem
 	Remove Crop	Remover corte
 	Trim the picture with its handles; Enter or Done applies	Corte a imagem com as alças; Enter ou Concluído aplica

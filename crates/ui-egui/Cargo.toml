@@ -87,6 +87,7 @@ js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "HtmlIFrameElement", "HtmlImageElement", "HtmlCollection", "Node", "EventTarget", "Navigator"] }
 
 [dev-dependencies]
+pdfcraft-testkit = { workspace = true }
 craft-update = { workspace = true }
 pdfcraft-xfa = { workspace = true }
 egui_kittest = { workspace = true, features = ["eframe", "wgpu"] }

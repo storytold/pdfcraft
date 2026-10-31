@@ -2504,6 +2504,7 @@ animation effects	Off	オフ
 	Print as image	画像として印刷
 	Resolution:	解像度:
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	プリンターが文字、グラデーション、透明部分を印刷しないときに使います。印刷物は検索できる文字ではなくなります。グレースケール印刷と併用すると画像はグレーになります。
+	Pages that use Type 3 fonts print as images, because Windows can close PdfCraft while printing them. The other pages print as usual.	Type 3 フォントを使うページは画像として印刷されます。そのまま印刷すると Windows が PdfCraft を終了させることがあるためです。ほかのページは通常どおり印刷されます。
 	Crop Image	画像を切り抜き
 	Remove Crop	切り抜きを解除
 	Trim the picture with its handles; Enter or Done applies	ハンドルで画像を切り抜きます。Enter または完了で適用

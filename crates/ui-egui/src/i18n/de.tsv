@@ -2505,6 +2505,7 @@ animation effects	Off	Aus
 	Print as image	Als Bild drucken
 	Resolution:	Auflösung:
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Verwenden, wenn ein Drucker Text, Schattierungen oder Transparenz auslässt. Der Ausdruck ist kein durchsuchbarer Text mehr; mit Graustufendruck sind die Bilder grau.
+	Pages that use Type 3 fonts print as images, because Windows can close PdfCraft while printing them. The other pages print as usual.	Seiten mit Type-3-Schriften werden als Bilder gedruckt, weil Windows PdfCraft beim Drucken dieser Seiten schließen kann. Die anderen Seiten werden wie gewohnt gedruckt.
 	Crop Image	Bild zuschneiden
 	Remove Crop	Zuschnitt entfernen
 	Trim the picture with its handles; Enter or Done applies	Bild mit den Griffen zuschneiden; Eingabe oder Fertig übernimmt

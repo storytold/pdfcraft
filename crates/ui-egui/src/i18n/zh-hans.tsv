@@ -2468,6 +2468,7 @@ animation effects	Off	关
 	Print as image	作为图像打印
 	Resolution:	分辨率：
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	当打印机漏印文字、渐变或透明效果时使用。打印结果不再是可搜索的文字；配合灰度打印时图像为灰色。
+	Pages that use Type 3 fonts print as images, because Windows can close PdfCraft while printing them. The other pages print as usual.	使用 Type 3 字体的页面将作为图像打印，因为打印这些页面时 Windows 可能会关闭 PdfCraft。其他页面照常打印。
 	Crop Image	裁剪图像
 	Remove Crop	移除裁剪
 	Trim the picture with its handles; Enter or Done applies	用控制柄裁剪图片;按 Enter 或“完成”应用
