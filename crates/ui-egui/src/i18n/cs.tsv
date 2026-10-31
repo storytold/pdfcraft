@@ -625,6 +625,12 @@ key	Space	Mezerník
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Čte {names}, která ho čtou zpět. Žádné pořadí smyčku neopraví: změňte jeden ze vzorců.
 	Not in order	Mimo pořadí
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Chybí v pořadí výpočtů uloženém v PDF: jiné prohlížeče PDF ho možná nepočítají.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Čte {name}, které formulář nemá, takže odtud nedostane žádnou hodnotu.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Jeho skript čte i pole, jejichž názvy sestavuje za běhu, takže tato čtení nelze zkontrolovat.
+	Missing field	Chybí pole
+	Unchecked reads	Neověřená čtení
+	{field} reads fields named as it runs	{field} čte pole pojmenovaná za běhu
+	Some names are built as it runs	Některé názvy se sestavují za běhu
 	Back to Prepare a form	Zpět na Připravit formulář
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Žádné pole tohoto formuláře zatím nepočítá svou hodnotu. Zadejte poli výpočet na kartě Výpočet v jeho vlastnostech a zobrazí se zde.
 	{names} and {last}	{names} a {last}
@@ -681,6 +687,9 @@ key	Space	Mezerník
 	Clean Up	Vyčištění
 	Color Images	Barevné obrázky
 	Grayscale Images	Obrázky ve stupních šedi
+	Monochrome Images	Monochromatické obrázky
+	CCITT Group 4	CCITT skupina 4
+	JBIG2 (lossless)	JBIG2 (bezeztrátová)
 	Bicubic downsampling to	Bikubické převzorkování na
 	for images above	u obrázků nad
 	Compression	Komprese
@@ -893,14 +902,9 @@ key	Space	Mezerník
 	Copy Image in Original Format	Kopírovat obrázek v původním formátu
 	The image has been copied as a {ext} file	Obrázek byl zkopírován jako soubor {ext}
 	The page has changed; select the image again	Stránka se změnila; vyberte obrázek znovu
-	Check for updates	Zkontrolovat aktualizace
 	No check has run yet.	Kontrola zatím neproběhla.
-	Checking for a newer version…	Hledání novější verze…
 	PdfCraft {v} is available.	Je k dispozici PdfCraft {v}.
 	You have version {c}. Download the new version from its release page.	Máte verzi {c}. Novou verzi si stáhněte z její stránky s vydáním.
-	PdfCraft {c} is up to date.	PdfCraft {c} je aktuální.
-	Couldn't check for updates: {e}	Aktualizace nelze zkontrolovat: {e}
-	You have version {c}. All releases are listed at {page}.	Máte verzi {c}. Všechna vydání najdete na {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Zjistí na GitHubu nejnovější vydání. Nic se automaticky nestahuje ani neinstaluje.
 	Download	Stáhnout
 	Later	Později
@@ -944,6 +948,14 @@ key	Space	Mezerník
 	Applies to 1 page	Týká se 1 stránky
 	Applies to {n} pages	Počet dotčených stránek: {n}
 	Replaces the existing one on those pages.	Nahradí stávající na těchto stránkách.
+	Checking pages…	Kontrola stránek…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Stránka {pages} má vlastní bílou výplň, která by zakryla pozadí. Nahradit ji
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Stránky {pages} mají vlastní bílou výplň, která by zakryla pozadí. Nahradit ji
+	Removing the background puts the page's own backdrop back.	Odebráním pozadí se vrátí vlastní bílá výplň stránky.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Stránku {pages} pokrývá obrázek (sken?), takže pozadí na ní nebude vidět.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Stránky {pages} pokrývají obrázky (skeny?), takže pozadí na nich nebude vidět.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Stránka {pages} se po přidání pozadí změnila, proto její vlastní bílá výplň zůstává vypnutá. Na bílém papíře vypadá stejně.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Stránky {pages} se po přidání pozadí změnily, proto jejich vlastní bílá výplň zůstává vypnutá. Na bílém papíře vypadají stejně.
 	PDF or image	PDF nebo obrázek
 	No file chosen	Není vybrán žádný soubor
 	Page number	Číslo stránky
@@ -2479,6 +2491,11 @@ animation effects	Off	Vypnuto
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} se počítá před {fields}, které čte.|{field} se počítá před {fields}, která čte.|{field} se počítá před {fields}, která čte.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	Ještě {n} pole se počítá příliš brzy.|Ještě {n} pole se počítají příliš brzy.|Ještě {n} polí se počítá příliš brzy.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} chybí v pořadí uloženém v PDF, takže ho jiné prohlížeče PDF nemusí vypočítat.|{fields} chybí v pořadí uloženém v PDF, takže je jiné prohlížeče PDF nemusí vypočítat.|{fields} chybí v pořadí uloženém v PDF, takže je jiné prohlížeče PDF nemusí vypočítat.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} vzorec čte pole, které formulář nemá|{n} vzorce čtou pole, která formulář nemá|{n} vzorců čte pole, která formulář nemá
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} čte {fields}, které formulář nemá.|{field} čte {fields}, která formulář nemá.|{field} čte {fields}, která formulář nemá.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	Ještě {n} vzorec čte chybějící pole.|Ještě {n} vzorce čtou chybějící pole.|Ještě {n} vzorců čte chybějící pole.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} sestavuje některé názvy polí za běhu, takže tato čtení nejsou ověřena.|{fields} sestavují některé názvy polí za běhu, takže tato čtení nejsou ověřena.|{fields} sestavují některé názvy polí za běhu, takže tato čtení nejsou ověřena.
+@plural	{fields} is missing|{fields} are missing	{fields} chybí|{fields} chybí|{fields} chybí
 	Scan	Skenovat
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Podepište se na bílý list papíru a vyfoťte ho při jasném, rovnoměrném světle (použijte blesk). Vyberte fotografii nebo ji sem přetáhněte: PdfCraft najde podpis a odstraní papír.
 	Choose photo…	Vybrat fotografii…
@@ -2864,3 +2881,7 @@ certificate	Version	Verze
 	Rotate the selected pages clockwise	Otočit vybrané stránky po směru hodinových ručiček
 	Extract the selected pages…	Extrahovat vybrané stránky…
 	Delete the selected pages	Odstranit vybrané stránky
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Možnosti této odpovědi
+	Export value	Exportní hodnota

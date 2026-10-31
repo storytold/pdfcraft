@@ -208,6 +208,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	读取 {names}，而它们又读取此字段。任何顺序都无法修正循环：请修改其中一个公式。
 	Not in order	不在顺序中
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	PDF 中保存的计算顺序缺少此字段：其他 PDF 查看器可能不会计算它。
+	Reads {name}, which the form doesn't have, so it gets no value there.	读取表单中不存在的 {name}，因此从中得不到值。
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	其脚本还会读取运行时才拼出名称的字段，因此无法检查这些读取。
+	Missing field	缺少字段
+	Unchecked reads	未检查的读取
+	{field} reads fields named as it runs	{field} 读取运行时才确定名称的字段
+	Some names are built as it runs	部分名称在运行时才拼出
 	Back to Prepare a form	返回准备表单
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	此表单中还没有计算自身值的字段。在字段属性的“计算”选项卡中为字段设置计算后，它会显示在这里。
 	{names} and {last}	{names}和{last}
@@ -265,6 +271,9 @@
 	Clean Up	清理
 	Color Images	彩色图像
 	Grayscale Images	灰度图像
+	Monochrome Images	单色图像
+	CCITT Group 4	CCITT 第 4 组
+	JBIG2 (lossless)	JBIG2（无损）
 	Bicubic downsampling to	双三次降采样至
 	for images above	（高于此分辨率的图像）
 	Compression	压缩
@@ -483,14 +492,9 @@
 	Copy Image in Original Format	以原始格式复制图像
 	The image has been copied as a {ext} file	图像已复制为 {ext} 文件
 	The page has changed; select the image again	页面已更改；请重新选择图像
-	Check for updates	检查更新
 	No check has run yet.	尚未运行检查。
-	Checking for a newer version…	正在检查新版本…
 	PdfCraft {v} is available.	PdfCraft {v} 可用。
 	You have version {c}. Download the new version from its release page.	当前版本为 {c}。请从其发布页面下载新版本。
-	PdfCraft {c} is up to date.	PdfCraft {c} 已是最新。
-	Couldn't check for updates: {e}	无法检查更新：{e}
-	You have version {c}. All releases are listed at {page}.	当前版本为 {c}。所有版本列在 {page}。
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	向 GitHub 查询最新版本。不会自动下载或安装任何内容。
 	Download	下载
 	Later	稍后
@@ -535,6 +539,14 @@
 	Applies to 1 page	应用于 1 页
 	Applies to {n} pages	应用于 {n} 页
 	Replaces the existing one on those pages.	替换这些页面上的现有内容。
+	Checking pages…	正在检查页面…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	第 {pages} 页有自己的白色填充，会遮住背景。替换它
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	第 {pages} 页各有自己的白色填充，会遮住背景。替换它们
+	Removing the background puts the page's own backdrop back.	移除背景后，页面自己的白色填充会恢复。
+	A picture covers page {pages} (a scan?), so the background won't show there.	第 {pages} 页被一张图片覆盖（扫描件？），因此那里不会显示背景。
+	Pictures cover pages {pages} (scans?), so the background won't show there.	第 {pages} 页被图片覆盖（扫描件？），因此那里不会显示背景。
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	第 {pages} 页在添加背景后有改动，因此其自身的白色填充保持关闭。在白纸上看起来一样。
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	第 {pages} 页在添加背景后有改动，因此它们自身的白色填充保持关闭。在白纸上看起来一样。
 	PDF or image	PDF 或图像
 	No file chosen	未选择文件
 	Page number	页码
@@ -2369,6 +2381,11 @@ animation effects	Off	关
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} 在它读取的 {fields} 之前计算。
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	另有 {n} 个字段计算过早。
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} 不在 PDF 中保存的顺序里，其他 PDF 查看器可能不会计算。
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} 个公式读取了表单中不存在的字段
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} 读取表单中不存在的 {fields}。
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	另有 {n} 个公式读取了缺失的字段。
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} 在运行时才拼出部分字段名称，因此这些读取不会被检查。
+@plural	{fields} is missing|{fields} are missing	缺少 {fields}
 	Scan	扫描
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	在白纸上签名，并在明亮、均匀的光线下拍照（使用闪光灯）。选择照片或将其拖放到此处：PdfCraft 会找到签名并去除纸张背景。
 	Choose photo…	选择照片…
@@ -2521,3 +2538,7 @@ animation effects	Off	关
 	Rotate the selected pages clockwise	顺时针旋转所选页面
 	Extract the selected pages…	提取所选页面…
 	Delete the selected pages	删除所选页面
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	此回复的选项
+	Export value	导出值

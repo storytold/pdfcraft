@@ -549,6 +549,193 @@ fn redaction_clears_pixels_intersected_without_covering_their_centres() {
     }
 }
 
+/// An image whose PNG predictor is given by reference has its covered pixel cleared, and only
+/// that one, whichever part is the reference: the dictionary, an array's entry, or the number
+/// itself. `Stream::decoded` reads only a direct `/DecodeParms` with direct numbers, so the row
+/// tags stayed in the data, the cleared byte drifted off the covered pixel and the covered sample
+/// survived.
+#[test]
+fn an_image_whose_predictor_is_given_by_reference_has_the_covered_pixel_cleared() {
+    // Two rows of four grey samples, each behind a PNG "None" row tag.
+    let predicted = pdfcraft_filters::encode_flate(&[0, 10, 20, 30, 40, 0, 50, 60, 70, 80]);
+    let parms = "/Predictor 15 /Colors 1 /BitsPerComponent 8 /Columns 4";
+    for (decode_parms, object8) in [
+        ("8 0 R".to_owned(), format!("<< {parms} >>")),
+        ("[8 0 R]".to_owned(), format!("<< {parms} >>")),
+        ("<< /Predictor 8 0 R /Colors 1 /BitsPerComponent 8 /Columns 4 >>".to_owned(), "15".to_owned()),
+    ] {
+        let image = format!(
+            "/Type /XObject /Subtype /Image /Width 4 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /DecodeParms {decode_parms}"
+        );
+        let mut doc = one_page(b"q 40 0 0 20 0 0 cm /Im Do Q", "/XObject << /Im 7 0 R >>", vec![stream(&image, &predicted), object8.into_bytes()]);
+        // The top row's second sample.
+        mark(&mut doc, 0, &[[12.0, 12.0, 18.0, 18.0]], "");
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!(report.images_cleared, 1, "{decode_parms}");
+        let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        assert_eq!(named_image(&saved, 0, b"PCRedacted1"), Some(vec![10, 0, 30, 40, 50, 60, 70, 80]), "{decode_parms}");
+    }
+}
+
+/// A CCITT fax image (a scan the optimizer or Create PDF stored as Group 4) has its covered
+/// pixels cleared in a copy, like any image PdfCraft can decode, instead of being removed whole:
+/// whether it sits behind another filter, with its parameters given by reference, or is a mask,
+/// its decode array inverting it given directly, by reference or with its first number so.
+#[test]
+fn a_fax_image_has_its_covered_pixels_cleared_instead_of_being_removed() {
+    // 16 × 2, all 1 bits (white), or all 0 bits (a mask painting everywhere); the left half of
+    // the top row is covered.
+    let g4 = pdfcraft_filters::encode_g4(&[0xFF; 4], 16, 2).unwrap();
+    let painted = pdfcraft_filters::encode_g4(&[0x00; 4], 16, 2).unwrap();
+    let hex: Vec<u8> = g4.iter().map(|b| format!("{b:02x}")).collect::<String>().bytes().chain(*b">").collect();
+    let image = "/Type /XObject /Subtype /Image /Width 16 /Height 2 /BitsPerComponent 1";
+    let parms = "<< /K -1 /Columns 16 /Rows 2 >>";
+    for (dict, data, extra, cleared) in [
+        (format!("{image} /ColorSpace /DeviceGray /Filter /CCITTFaxDecode /DecodeParms {parms}"), g4.clone(), vec![], [0x00, 0xFF, 0xFF, 0xFF]),
+        (
+            format!("{image} /ColorSpace /DeviceGray /Filter [/ASCIIHexDecode /CCITTFaxDecode] /DecodeParms [null 8 0 R]"),
+            hex,
+            vec![parms.as_bytes().to_vec()],
+            [0x00, 0xFF, 0xFF, 0xFF],
+        ),
+        // A mask's 0 bits paint: cleared bits are set to 1, which paints nothing.
+        (format!("{image} /ImageMask true /Filter /CCITTFaxDecode /DecodeParms {parms}"), painted, vec![], [0xFF, 0x00, 0x00, 0x00]),
+        // With /Decode [1 0] a mask's 1 bits paint, and cleared bits are 0.
+        (format!("{image} /ImageMask true /Decode [1 0] /Filter /CCITTFaxDecode /DecodeParms {parms}"), g4.clone(), vec![], [0x00, 0xFF, 0xFF, 0xFF]),
+        (
+            format!("{image} /ImageMask true /Decode 8 0 R /Filter /CCITTFaxDecode /DecodeParms {parms}"),
+            g4.clone(),
+            vec![b"[1 0]".to_vec()],
+            [0x00, 0xFF, 0xFF, 0xFF],
+        ),
+        (
+            format!("{image} /ImageMask true /Decode [8 0 R 0] /Filter /CCITTFaxDecode /DecodeParms {parms}"),
+            g4.clone(),
+            vec![b"1".to_vec()],
+            [0x00, 0xFF, 0xFF, 0xFF],
+        ),
+    ] {
+        let mut objs = vec![stream(&dict, data)];
+        objs.extend(extra);
+        let mut doc = one_page(b"q 160 0 0 20 0 0 cm /Im Do Q", "/XObject << /Im 7 0 R >>", objs);
+        mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!((report.images_cleared, report.images_removed), (1, 0), "{dict}");
+        let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        assert_eq!(named_image(&saved, 0, b"PCRedacted1").as_deref(), Some(&cleared[..]), "{dict}");
+    }
+}
+
+/// Images whose data is more than twice their raster before its last filter are cleared, not
+/// taken for decompression bombs: grey stored as ASCIIHex text broken into lines under Flate (two
+/// digits a byte and a line break every 64), and RGB behind an array of filters, which a fax
+/// image's bound (a byte a pixel) would refuse.
+#[test]
+fn images_behind_ascii_hex_in_lines_or_a_filter_array_are_cleared() {
+    let (w, h) = (1000usize, 200usize);
+    let grey: Vec<u8> = (0..w * h).map(|i| (i % 251) as u8).collect();
+    let digits: Vec<u8> = grey.iter().flat_map(|b| format!("{b:02X}").into_bytes()).collect();
+    let mut lines: Vec<u8> = digits.chunks(64).flat_map(|line| line.iter().copied().chain(*b"\n")).collect();
+    lines.push(b'>');
+    let rgb: Vec<u8> = (0..100 * 100 * 3).map(|i| (i % 253) as u8).collect();
+    let rgb_hex: Vec<u8> = pdfcraft_filters::encode_flate(&rgb).iter().flat_map(|b| format!("{b:02x}").into_bytes()).chain(*b">").collect();
+    for (dict, data) in [
+        (
+            format!(
+                "/Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter [/FlateDecode /ASCIIHexDecode]"
+            ),
+            pdfcraft_filters::encode_flate(&lines),
+        ),
+        (
+            "/Type /XObject /Subtype /Image /Width 100 /Height 100 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter [/ASCIIHexDecode /FlateDecode]"
+                .to_string(),
+            rgb_hex,
+        ),
+    ] {
+        let mut doc = one_page(b"q 100 0 0 20 0 0 cm /Im Do Q", "/XObject << /Im 7 0 R >>", vec![stream(&dict, data)]);
+        mark(&mut doc, 0, &[[0.0, 0.0, 10.0, 10.0]], "");
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!((report.images_cleared, report.images_removed), (1, 0), "{dict}");
+    }
+}
+
+/// A fax image that can't be decoded in full is removed whole, as any other image is: one whose
+/// code is cut short, and one behind a filter that inflates past what a code for its pixels can
+/// take (a decompression bomb, which `decoded_image` alone would undo up to a gigabyte).
+#[test]
+fn a_fax_image_that_cannot_be_decoded_in_full_is_removed_whole() {
+    let g4 = pdfcraft_filters::encode_g4(&[0xFF; 4], 16, 2).unwrap();
+    // A busy picture's code, cut off in its first row.
+    let busy = pdfcraft_filters::encode_g4(&[0xAA, 0xAA, 0x55, 0x55], 16, 2).unwrap();
+    let short = busy.get(..1).unwrap().to_vec();
+    // The real code, then four megabytes of padding the fax decoder would never read.
+    let mut padded = g4.clone();
+    padded.resize(4 << 20, 0);
+    let bomb = pdfcraft_filters::encode_flate(&padded);
+    let image = "/Type /XObject /Subtype /Image /Width 16 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 1";
+    let parms = "<< /K -1 /Columns 16 /Rows 2 >>";
+    for (filters, data) in [("/CCITTFaxDecode /DecodeParms", short), ("[/FlateDecode /CCITTFaxDecode] /DecodeParms [null", bomb)] {
+        let close = if filters.ends_with("[null") { "]" } else { "" };
+        let dict = format!("{image} /Filter {filters} {parms}{close}");
+        let mut doc = one_page(b"q 160 0 0 20 0 0 cm /Im Do Q", "/XObject << /Im 7 0 R >>", vec![stream(&dict, data)]);
+        mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!((report.images_cleared, report.images_removed), (0, 1), "{dict}");
+    }
+}
+
+/// Group 3 on bytes is removed whole: the renderer draws some of its layouts as other rows than
+/// the decoder reads, so the pixels a mark covers on screen needn't be the ones cleared. Group 3
+/// off bytes and Group 4 on bytes are cleared. Each picture is 16 × 2 white, each row a white run
+/// of 16 (`101010`): off bytes; on bytes with no end-of-line codes; on bytes after codes whose fill
+/// ends each on a byte, at `/K 0` and at `/K 1` (a 1 after each code), `/EncodedByteAlign` given by
+/// reference there; and Group 4 rows on bytes, each the one code 1 (vertical, no change).
+#[test]
+fn group_3_on_bytes_is_removed_whole_and_other_fax_images_cleared() {
+    let image = "/Type /XObject /Subtype /Image /Width 16 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /CCITTFaxDecode";
+    for (k, on_bytes, parms, data, extra, removed) in [
+        (0, false, "<< /K 0 /Columns 16 >>", vec![0xAA, 0xA0], vec![], false),
+        (0, true, "<< /K 0 /Columns 16 /EncodedByteAlign true >>", vec![0xA8, 0xA8], vec![], true),
+        (0, true, "<< /K 0 /Columns 16 /EncodedByteAlign true >>", vec![0x00, 0x01, 0xA8, 0x00, 0x01, 0xA8], vec![], true),
+        (1, true, "<< /K 1 /Columns 16 /EncodedByteAlign 8 0 R >>", vec![0x00, 0x01, 0xD4, 0x00, 0x01, 0xD4], vec![b"true".to_vec()], true),
+        (-1, true, "<< /K -1 /Columns 16 /EncodedByteAlign true >>", vec![0x80, 0x80], vec![], false),
+    ] {
+        let p = pdfcraft_filters::CcittParams { k, columns: 16, encoded_byte_align: on_bytes, ..Default::default() };
+        assert_eq!(pdfcraft_filters::decode_ccitt(&data, &p, 2).unwrap(), [0xFF; 4], "{parms}: the picture is white");
+        let dict = format!("{image} /DecodeParms {parms}");
+        let mut objs = vec![stream(&dict, data)];
+        objs.extend(extra);
+        let mut doc = one_page(b"q 160 0 0 20 0 0 cm /Im Do Q", "/XObject << /Im 7 0 R >>", objs);
+        mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
+        let report = apply(&mut doc, None).unwrap();
+        if removed {
+            assert_eq!((report.images_cleared, report.images_removed), (0, 1), "{parms}");
+        } else {
+            assert_eq!((report.images_cleared, report.images_removed), (1, 0), "{parms}");
+            let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+            assert_eq!(named_image(&saved, 0, b"PCRedacted1").as_deref(), Some(&[0x00, 0xFF, 0xFF, 0xFF][..]), "{parms}");
+        }
+    }
+}
+
+/// A busy fax image is cleared, though its code is bigger than three times its raster (the bound
+/// for other images): a code takes up to about a byte per pixel, and the fax image gets that much.
+#[test]
+fn a_busy_fax_image_behind_another_filter_is_cleared() {
+    // 256 × 256, rows of a one-pixel checkerboard between white ones: each checkered row is coded
+    // afresh against the white one above it, about four bits a pixel.
+    let rows: Vec<u8> = (0..256).flat_map(|y| [if y % 2 == 0 { 0xAA } else { 0xFF }; 32]).collect();
+    let g4 = pdfcraft_filters::encode_g4(&rows, 256, 256).unwrap();
+    let raster = 32 * 256;
+    assert!(g4.len() > (raster + 256) * 3 + 4096, "{} bytes: within the bound for other images", g4.len());
+    let dict = "/Type /XObject /Subtype /Image /Width 256 /Height 256 /ColorSpace /DeviceGray /BitsPerComponent 1 \
+                /Filter [/FlateDecode /CCITTFaxDecode] /DecodeParms [null << /K -1 /Columns 256 /Rows 256 >>]";
+    let mut doc = one_page(b"q 256 0 0 256 0 0 cm /Im Do Q", "/XObject << /Im 7 0 R >>", vec![stream(dict, pdfcraft_filters::encode_flate(&g4))]);
+    mark(&mut doc, 0, &[[0.0, 0.0, 10.0, 10.0]], "");
+    let report = apply(&mut doc, None).unwrap();
+    assert_eq!((report.images_cleared, report.images_removed), (1, 0));
+}
+
 /// Apply Redactions gives the page its own pruned /Resources, but the dictionary it drew through
 /// before (inherited from the /Pages node, or shared with another page) still named the removed
 /// image and form, so a full-rewrite save kept them.
