@@ -340,6 +340,9 @@ struct Walk {
     path: Vec<Op>,
     path_box: Option<[f64; 4]>,
     clip: bool,
+    /// `Some(false)` while a text object's clipping glyphs are all being removed: `None` until a
+    /// glyph is shown in a clipping mode, then whether any of them is still there.
+    clip_text: Option<bool>,
     out: Output,
 }
 
@@ -357,6 +360,7 @@ impl Walk {
             path: Vec::new(),
             path_box: None,
             clip: false,
+            clip_text: None,
             out: Output::default(),
         }
     }
@@ -383,7 +387,30 @@ impl Walk {
                 self.graphics_state(doc, scope, &op);
                 Some(op)
             }
-            b"BT" | b"Tc" | b"Tw" | b"Tz" | b"TL" | b"Ts" | b"Tr" | b"Td" | b"TD" | b"Tm" | b"T*" => {
+            b"BT" => {
+                self.clip_text = None;
+                self.text_state(&op);
+                Some(op)
+            }
+            // A text object whose glyphs were the clipping path, and which has none left: the clip
+            // it set is empty, and readers disagree about an empty text clip (#3451: CoreGraphics
+            // admits nothing, pdf.js admits everything). Saying it with a path leaves no room for
+            // that -- every reader then clips everything away, which is what the glyphs now say,
+            // rather than flooding what they used to mask (#3644).
+            b"ET" if self.clip_text == Some(false) && scope.mode == Mode::Apply => {
+                piece.changed = true;
+                piece.ops.push(op);
+                piece.ops.push(Op::new("re", vec![num(0.0), num(0.0), num(0.0), num(0.0)]));
+                piece.ops.push(Op::new("W", vec![]));
+                piece.ops.push(Op::new("n", vec![]));
+                self.clip_text = None;
+                None
+            }
+            b"ET" => {
+                self.clip_text = None;
+                Some(op)
+            }
+            b"Tc" | b"Tw" | b"Tz" | b"TL" | b"Ts" | b"Tr" | b"Td" | b"TD" | b"Tm" | b"T*" => {
                 self.text_state(&op);
                 Some(op)
             }
@@ -541,7 +568,15 @@ impl Walk {
         {
             self.out.vertical = true;
         }
+        // Whether this text object still has a glyph that clips. A clipping mode (Tr 4-7) paints
+        // nothing itself, so such text is hidden from the eye while staying extractable -- which
+        // is what this pass removes -- and taking its glyphs leaves the clip it set empty.
+        let clipping = (4..=7).contains(&self.gs.render_mode) && items.iter().any(|o| matches!(o, Object::String(t) if !t.bytes.is_empty()));
         let (new_items, removed) = show(scope, &self.gs, &mut self.tm, &items);
+        if clipping {
+            let kept = new_items.iter().any(|o| matches!(o, Object::String(t) if !t.bytes.is_empty()));
+            self.clip_text = Some(self.clip_text.unwrap_or(false) || kept);
+        }
         if removed == 0 {
             return Some(op);
         }
