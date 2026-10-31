@@ -554,6 +554,7 @@ impl Automation {
                     size: a.opt_num("size")?,
                     underline: a.opt_bool("underline")?,
                     line_spacing: a.opt_num("line_spacing")?,
+                    paragraph_spacing: a.opt_num("paragraph_spacing")?,
                     char_spacing: a.opt_num("char_spacing")?,
                     scale: a.opt_num("scale")?,
                     width,

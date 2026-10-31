@@ -6828,6 +6828,41 @@ fn removing_marks_strips_wrappers_that_closed_open_state() {
     assert_eq!(streams(&doc, 0), ["q 2 0 0 2 0 0 cm"]);
 }
 
+/// A line break in the edited text keeps a row of its own (the editor's rows); with a paragraph
+/// spacing set, that much more space goes before it. A row the page already had
+/// stays where it was, shifted by the spacing added above it.
+#[test]
+fn paragraph_breaks_get_their_own_spacing() {
+    let baselines = |doc: &Document| -> Vec<f64> { text::text_lines(&reopen(doc), 0).unwrap().iter().map(|l| l.rect[1]).collect() };
+    let gap_after_first = |b: &[f64]| b[0] - b[1];
+    // A one-line source has no row step of its own: 1.5 × the size stands in.
+    let mut doc = text_page("BT /F1 10 Tf 72 700 Td (The quick brown fox) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, Some("First one\nSecond one"), &text::BlockStyle::default()).unwrap();
+    let b = baselines(&doc);
+    assert_eq!(b.len(), 2, "{b:?}");
+    assert!((gap_after_first(&b) - 15.0).abs() < 0.5, "the row step alone: {b:?}");
+    let mut doc = text_page("BT /F1 10 Tf 72 700 Td (The quick brown fox) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, Some("First one\nSecond one"), &text::BlockStyle { paragraph_spacing: Some(20.0), ..Default::default() })
+        .unwrap();
+    assert!((gap_after_first(&baselines(&doc)) - 35.0).abs() < 0.5, "{:?}", baselines(&doc));
+    let mut doc = text_page("BT /F1 10 Tf 72 700 Td (The quick brown fox) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, Some("First one\nSecond one"), &text::BlockStyle { paragraph_spacing: Some(0.0), ..Default::default() })
+        .unwrap();
+    assert!((gap_after_first(&baselines(&doc)) - 15.0).abs() < 0.5);
+    // Without a break, nothing changes: one paragraph, the ordinary line step.
+    let mut doc = text_page("BT /F1 10 Tf 72 700 Td (The quick brown fox) Tj ET");
+    text::rewrite_block(
+        &mut doc,
+        0,
+        0,
+        Some("First one Second one and then some more words to wrap"),
+        &text::BlockStyle { width: Some(90.0), ..Default::default() },
+    )
+    .unwrap();
+    let b = baselines(&doc);
+    assert!(b.len() >= 2 && (gap_after_first(&b) - 12.0).abs() < 0.5, "{b:?}");
+}
+
 /// #3087: flattening comments leaves alone what isn't a comment: links, and the non-markup
 /// multimedia and print-production annotations (3D, Screen, Movie, RichMedia, PrinterMark,
 /// TrapNet, Watermark), which it used to bake into the page and delete with their data.

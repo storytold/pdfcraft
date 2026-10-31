@@ -417,6 +417,11 @@ pub struct BlockStyle {
     pub underline: Option<bool>,
     /// Line spacing as a multiple of the font size (1.2 is ordinary).
     pub line_spacing: Option<f64>,
+    /// Space between paragraphs, in points, beyond the line spacing; `None` adds none. Where
+    /// the text keeps the page's rows in place, a line break starts a paragraph only on a new
+    /// row or on a row the page had already set apart, and the spacing replaces the space it
+    /// had; where the text is laid out afresh, every line break starts one.
+    pub paragraph_spacing: Option<f64>,
     /// Character spacing (points) and horizontal scaling (percent).
     pub char_spacing: Option<f64>,
     pub scale: Option<f64>,

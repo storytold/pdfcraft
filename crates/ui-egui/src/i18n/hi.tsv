@@ -2791,6 +2791,7 @@ theme	Appearance	स्वरूप
 	field names can't contain a period: {name}	फ़ील्ड के नामों में पूर्ण विराम (.) नहीं हो सकता: {name}
 	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
 	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
+	Between paragraphs: press Enter in the box to start one	अनुच्छेदों के बीच: नया अनुच्छेद शुरू करने के लिए बॉक्स में Enter दबाएँ
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	आज
