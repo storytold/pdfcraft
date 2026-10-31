@@ -67,6 +67,9 @@ fn collect_resource_refs(doc: &Document, o: &Object, out: &mut HashSet<ObjRef>) 
             let res = doc.resolve(v);
             if let Some(res) = res.as_dict() {
                 for cat in RESOURCE_CATEGORIES {
+                    if let Some(Object::Ref(cat_ref)) = res.get(cat) {
+                        out.insert(*cat_ref);
+                    }
                     let entries = res.get(cat).map(|c| doc.resolve(c));
                     if let Some(entries) = entries.as_ref().and_then(|e| e.as_dict()) {
                         out.extend(entries.iter().filter_map(|(_, v)| if let Object::Ref(r) = v { Some(*r) } else { None }));
@@ -366,5 +369,34 @@ mod tests {
         assert!(doc.object_numbers().contains(&old.num));
         let cs = doc.get(h).as_dict().unwrap().get(b"CS").unwrap().clone();
         assert_eq!(cs, Object::Array(vec![Object::name("ICCBased"), Object::Ref(old)]));
+    }
+
+    #[test]
+    fn indirect_resource_category_and_resources_dictionaries_merge() {
+        let mut doc = Document::new_empty();
+        let mut gs = Dict::new();
+        gs.set(b"CA".to_vec(), Object::Real(0.5));
+        let g1 = doc.add(Object::Dict(gs.clone()));
+        let g2 = doc.add(Object::Dict(gs));
+
+        let page_with_indirect_res = |doc: &mut Document, g: ObjRef| {
+            let mut ext = Dict::new();
+            ext.set(b"G0".to_vec(), Object::Ref(g));
+            let ext_ref = doc.add(Object::Dict(ext));
+            let mut res = Dict::new();
+            res.set(b"ExtGState".to_vec(), Object::Ref(ext_ref));
+            let res_ref = doc.add(Object::Dict(res));
+            let mut p = Dict::new();
+            p.set(b"Type".to_vec(), Object::name("Page"));
+            p.set(b"Resources".to_vec(), Object::Ref(res_ref));
+            let p_ref = doc.add(Object::Dict(p));
+            (ext_ref, res_ref, p_ref)
+        };
+        let (ext1, res1, p1) = page_with_indirect_res(&mut doc, g1);
+        let (ext2, res2, p2) = page_with_indirect_res(&mut doc, g2);
+        assert_eq!(dedupe_resources(&mut doc, &[g1, g2, ext1, res1, p1, ext2, res2, p2], false), 3);
+        assert_eq!(doc.get(p1).as_dict().unwrap().get(b"Resources"), Some(&Object::Ref(res1)));
+        assert_eq!(doc.get(p2).as_dict().unwrap().get(b"Resources"), Some(&Object::Ref(res1)));
+        assert_eq!(doc.get(res1).as_dict().unwrap().get(b"ExtGState"), Some(&Object::Ref(ext1)));
     }
 }

@@ -54,9 +54,14 @@ pub fn import_comments(dst: &mut Document, src: &Document) -> Result<usize, Orga
     let to = walk(dst)?;
     let pages: Vec<(ObjRef, ObjRef)> = from.iter().zip(&to).map(|((s, _), (d, _))| (*s, *d)).collect();
     let mut incoming: Vec<Vec<Incoming>> = pages.iter().map(|(s, _)| page_comments(src, *s)).collect();
-    let kept = threads_kept(&incoming);
+    let kept = threads_kept(src, &incoming);
     for list in &mut incoming {
-        list.retain(|c| c.dict.get(b"IRT").is_none_or(|irt| irt.as_ref().is_some_and(|p| kept.contains(&p))));
+        list.retain(|c| {
+            c.dict
+                .get(b"IRT")
+                .filter(|irt| !matches!(*src.resolve(irt), Object::Null))
+                .is_none_or(|irt| irt.as_ref().is_some_and(|p| kept.contains(&p)))
+        });
     }
     let mut copier = Copier::new(src, HashMap::new(), pages.iter().copied().collect());
     // Every comment's object is chosen before any is copied, so a comment that another one reaches
@@ -158,10 +163,16 @@ fn reserve(dst: &mut Document, src: &Document, annots: &mut PageAnnots, mut dict
 /// The comments of `incoming` that go: a reply goes only with the comment it answers, and that one
 /// only with the comment it answers, up to the first comment of the thread. A thread whose replies
 /// answer each other in a loop goes, as all of its comments are there. Each comment is visited once.
-fn threads_kept(incoming: &[Vec<Incoming>]) -> HashSet<ObjRef> {
+fn threads_kept(src: &Document, incoming: &[Vec<Incoming>]) -> HashSet<ObjRef> {
     // For each comment: no parent, a parent comment, or a parent that is no comment of the source.
-    let parents: HashMap<ObjRef, Option<Option<ObjRef>>> =
-        incoming.iter().flatten().filter_map(|c| Some((c.entry.as_ref()?, c.dict.get(b"IRT").map(Object::as_ref)))).collect();
+    let parents: HashMap<ObjRef, Option<Option<ObjRef>>> = incoming
+        .iter()
+        .flatten()
+        .filter_map(|c| {
+            let irt = c.dict.get(b"IRT").filter(|v| !matches!(*src.resolve(v), Object::Null)).map(Object::as_ref);
+            Some((c.entry.as_ref()?, irt))
+        })
+        .collect();
     let mut known: HashMap<ObjRef, bool> = HashMap::new();
     for &start in parents.keys() {
         let (mut path, mut on_path) = (Vec::new(), HashSet::new());
@@ -217,7 +228,8 @@ fn page_popups(src: &Document, page: ObjRef) -> Vec<(ObjRef, ObjRef)> {
         .filter_map(|entry| {
             let r = entry.as_ref()?;
             let d = src.get(r).as_dict().cloned()?;
-            (d.name(b"Subtype") == Some(b"Popup".as_slice())).then(|| d.reference(b"Parent").map(|p| (r, p)))?
+            let is_popup = d.get(b"Subtype").map(|s| src.resolve(s)).as_deref().and_then(Object::as_name) == Some(b"Popup".as_slice());
+            is_popup.then(|| d.reference(b"Parent").map(|p| (r, p)))?
         })
         .collect()
 }
@@ -265,7 +277,7 @@ impl PageAnnots {
             if let Some(name) = d.get(b"NM").and_then(|n| dst.resolve(n).as_string().map(|s| s.to_text())) {
                 names.entry(name).or_default().push(r);
             }
-            if d.name(b"Subtype") == Some(b"Popup".as_slice())
+            if d.get(b"Subtype").map(|s| dst.resolve(s)).as_deref().and_then(Object::as_name) == Some(b"Popup".as_slice())
                 && let Some(parent) = d.reference(b"Parent")
             {
                 popups.entry(parent).or_default().push(r);
@@ -653,5 +665,26 @@ mod tests {
         ]);
         assert_eq!(import_comments(&mut doc, &src).unwrap(), 0);
         assert_eq!(page_annots(&doc, 0).len(), before);
+    }
+
+    #[test]
+    fn comment_with_null_irt_and_popup_with_indirect_subtype_are_imported() {
+        let src = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R] >>",
+            "<< /Type /Annot /Subtype /Text /NM (root-null-irt) /IRT null /Contents (root comment) /Rect [10 10 30 30] /P 3 0 R >>",
+            "<< /Type /Annot /Subtype /Text /IRT 4 0 R /Contents (reply to root) /Rect [10 10 30 30] /P 3 0 R >>",
+            "<< /Type /Annot /Subtype 7 0 R /Parent 4 0 R /Rect [40 40 200 120] /P 3 0 R >>",
+            "/Popup",
+        ]);
+        let mut dst = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+            "<< /Type /Page /Parent 2 0 R >>",
+        ]);
+        assert_eq!(import_comments(&mut dst, &src).unwrap(), 2);
+        let annots = page_annots(&dst, 0);
+        assert_eq!(annots.len(), 3, "root comment, its reply, and its parent-linked popup");
     }
 }
