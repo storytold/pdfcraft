@@ -2,7 +2,15 @@ use super::marks::{MarkKind, matrix_number, n};
 use super::{Dict, Document, EditError, ObjRef, Object, Stream, literal, win_ansi};
 
 pub(crate) fn page_list(doc: &Document) -> Vec<pdfcraft_model::Page> {
+    #[cfg(test)]
+    PAGE_LISTS.with(|n| n.set(n.get() + 1));
     pdfcraft_model::pages(doc)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Walks over the whole page tree on this thread ([`page_list`]).
+    pub(crate) static PAGE_LISTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 pub(crate) fn check(pages: &[usize], count: usize) -> Result<(), EditError> {
@@ -27,8 +35,54 @@ pub(crate) fn contents(doc: &mut Document, page: &pdfcraft_model::Page) -> Resul
     })
 }
 
+/// Resource dictionaries made for marked pages, by the indirect dictionary each one extends and
+/// what was added to it. Pages that share one resource dictionary (the 3,753 pages of a CAD plot
+/// share one that lists 10,816 shadings) then share one extended copy as well, instead of each
+/// getting a copy of its own.
+#[derive(Default)]
+pub(crate) struct DerivedResources(std::collections::HashMap<(ObjRef, Vec<u8>), ObjRef>);
+
+/// Give page `obj` the resources `extend` makes of `current`, its `/Resources` value. With
+/// `derived`, an indirect `current` is extended once for every `key`, as a new object that the
+/// pages share: the original stays untouched for the pages that keep it. Otherwise, and for a
+/// direct dictionary, the page gets a copy of its own.
+pub(crate) fn set_page_resources(
+    doc: &mut Document,
+    obj: ObjRef,
+    current: Option<&Object>,
+    key: Vec<u8>,
+    derived: Option<&mut DerivedResources>,
+    extend: impl FnOnce(&Document, Dict) -> Dict,
+) -> Result<(), EditError> {
+    let source = match current {
+        Some(Object::Ref(r)) => Some(*r),
+        _ => None,
+    };
+    let base = |doc: &Document| current.map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
+    let value = match (derived, source) {
+        (Some(derived), Some(source)) => match derived.0.get(&(source, key.clone())) {
+            Some(made) => Object::Ref(*made),
+            None => {
+                let res = extend(doc, base(doc));
+                let made = doc.add(Object::Dict(res));
+                derived.0.insert((source, key), made);
+                Object::Ref(made)
+            }
+        },
+        _ => Object::Dict(extend(doc, base(doc))),
+    };
+    doc.update_dict(obj, |d| d.set(b"Resources".to_vec(), value))?;
+    Ok(())
+}
+
 /// Add the font (and an opacity state) to the page's own resources.
-pub(crate) fn add_resources(doc: &mut Document, page: &pdfcraft_model::Page, opacity: Option<f64>, content: Option<&[u8]>) -> Result<(), EditError> {
+pub(crate) fn add_resources(
+    doc: &mut Document,
+    page: &pdfcraft_model::Page,
+    opacity: Option<f64>,
+    content: Option<&[u8]>,
+    derived: Option<&mut DerivedResources>,
+) -> Result<(), EditError> {
     let mut faces: Vec<(Vec<u8>, &str)> = Vec::new();
     for (name, base) in [(&b"PCHelv"[..], "Helvetica"), (b"PCTimes", "Times-Roman"), (b"PCCour", "Courier")] {
         // Helvetica always (marks use it); the others only when the content names them.
@@ -37,7 +91,7 @@ pub(crate) fn add_resources(doc: &mut Document, page: &pdfcraft_model::Page, opa
         }
         faces.push((name.to_vec(), base));
     }
-    add_page_resources(doc, page, opacity, &faces)
+    add_page_resources(doc, page, opacity, &faces, derived)
 }
 
 /// The fonts a page draws with: its own resources' or the ones it inherits.
@@ -75,31 +129,33 @@ pub(crate) fn add_page_resources(
     page: &pdfcraft_model::Page,
     opacity: Option<f64>,
     faces: &[(Vec<u8>, &str)],
+    derived: Option<&mut DerivedResources>,
 ) -> Result<(), EditError> {
-    let mut res = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
-    let mut fonts = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
-    for (name, base) in faces {
-        let mut font = Dict::new();
-        font.set(b"Type".to_vec(), Object::name("Font"));
-        font.set(b"Subtype".to_vec(), Object::name("Type1"));
-        font.set(b"BaseFont".to_vec(), Object::name(base));
-        font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
-        fonts.set(name.clone(), Object::Dict(font));
-    }
-    res.set(b"Font".to_vec(), Object::Dict(fonts));
-    if let Some(o) = opacity {
-        let mut gs = res.get(b"ExtGState").map(|g| doc.resolve(g)).and_then(|g| g.as_dict().cloned()).unwrap_or_default();
-        let mut s = Dict::new();
-        s.set(b"Type".to_vec(), Object::name("ExtGState"));
-        s.set(b"CA".to_vec(), Object::Real(o));
-        s.set(b"ca".to_vec(), Object::Real(o));
-        let name = format!("PCGS{}", (o * 100.0).round() as i64);
-        gs.set(name.into_bytes(), Object::Dict(s));
-        res.set(b"ExtGState".to_vec(), Object::Dict(gs));
-    }
+    let key = format!("fonts {faces:?} opacity {opacity:?}").into_bytes();
     // The page gets its own (possibly copied) resources; shared dictionaries stay untouched.
-    doc.update_dict(page.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(res)))?;
-    Ok(())
+    set_page_resources(doc, page.obj, page.dict.get(b"Resources"), key, derived, |doc, mut res| {
+        let mut fonts = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
+        for (name, base) in faces {
+            let mut font = Dict::new();
+            font.set(b"Type".to_vec(), Object::name("Font"));
+            font.set(b"Subtype".to_vec(), Object::name("Type1"));
+            font.set(b"BaseFont".to_vec(), Object::name(base));
+            font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+            fonts.set(name.clone(), Object::Dict(font));
+        }
+        res.set(b"Font".to_vec(), Object::Dict(fonts));
+        if let Some(o) = opacity {
+            let mut gs = res.get(b"ExtGState").map(|g| doc.resolve(g)).and_then(|g| g.as_dict().cloned()).unwrap_or_default();
+            let mut s = Dict::new();
+            s.set(b"Type".to_vec(), Object::name("ExtGState"));
+            s.set(b"CA".to_vec(), Object::Real(o));
+            s.set(b"ca".to_vec(), Object::Real(o));
+            let name = format!("PCGS{}", (o * 100.0).round() as i64);
+            gs.set(name.into_bytes(), Object::Dict(s));
+            res.set(b"ExtGState".to_vec(), Object::Dict(gs));
+        }
+        res
+    })
 }
 
 pub(crate) const WRAP_OPEN: &[u8] = b"q %PdfCraft\n";
@@ -386,7 +442,7 @@ pub fn stamp(doc: &mut Document, page: usize, tag: &str, content: Vec<u8>) -> Re
     let all = page_list(doc);
     check(&[page], all.len())?;
     check_on_top(doc, &all[page])?;
-    add_resources(doc, &all[page], None, Some(&content))?;
+    add_resources(doc, &all[page], None, Some(&content), None)?;
     let p = page_list(doc).swap_remove(page);
     place_tagged(doc, &p, tag, content, false)
 }

@@ -1,3 +1,4 @@
+use super::place::{DerivedResources, set_page_resources};
 use super::{Document, EditError, Object, Rgb, added};
 
 /// The kinds of page marks.
@@ -206,14 +207,21 @@ pub(crate) fn picture(src: &MarkSource, page: (f64, f64), scale: f64, rotation: 
 }
 
 /// Register a mark picture in the page's own resources (`/PCPic<num>`).
-pub(crate) fn add_picture_resource(doc: &mut Document, page: &pdfcraft_model::Page, src: &MarkSource) -> Result<(), EditError> {
+pub(crate) fn add_picture_resource(
+    doc: &mut Document,
+    page: &pdfcraft_model::Page,
+    src: &MarkSource,
+    derived: Option<&mut DerivedResources>,
+) -> Result<(), EditError> {
     let p = doc.get(page.obj).as_dict().cloned().unwrap_or_default();
-    let mut res = p.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
-    let mut xo = res.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
-    xo.set(format!("PCPic{}", src.xobject.num).into_bytes(), Object::Ref(src.xobject));
-    res.set(b"XObject".to_vec(), Object::Dict(xo));
-    doc.update_dict(page.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(res)))?;
-    Ok(())
+    let name = format!("PCPic{}", src.xobject.num).into_bytes();
+    let key = [&b"picture "[..], &name].concat();
+    set_page_resources(doc, page.obj, p.get(b"Resources"), key, derived, |doc, mut res| {
+        let mut xo = res.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
+        xo.set(name, Object::Ref(src.xobject));
+        res.set(b"XObject".to_vec(), Object::Dict(xo));
+        res
+    })
 }
 
 /// Values tokens need that come from outside the document.
