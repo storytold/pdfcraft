@@ -7981,11 +7981,11 @@ title = "Verify PDF/UA-1 and PDF/UA-2"
 area = "K"
 tier = "P1"
 milestone = "M11"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["a11y.check_pdfua"]
+tools = ["pdfua_verify"]
+evidence = ["crates/a11y/src/pdfua/tests.rs::a_conforming_file_fails_no_checked_condition_and_leaves_the_rest_to_a_person", "crates/a11y/src/pdfua/tests.rs::metadata_identification_and_title", "crates/a11y/src/pdfua/tests.rs::tagged_pdf_and_suspects", "crates/a11y/src/pdfua/tests.rs::artifacts_and_tagged_content_must_not_nest", "crates/a11y/src/pdfua/tests.rs::the_role_map_reaches_pdf_1_7_standard_types", "crates/a11y/src/pdfua/tests.rs::structure_elements_nest_as_iso_32000_says", "crates/a11y/src/pdfua/tests.rs::headings_start_at_h1_skip_nothing_and_are_of_one_kind", "crates/a11y/src/pdfua/tests.rs::header_cells_need_a_scope_unless_the_table_uses_headers", "crates/a11y/src/pdfua/tests.rs::every_text_needs_a_language", "crates/a11y/src/pdfua/tests.rs::annotations_are_tagged_described_and_tab_in_structure_order", "crates/a11y/src/pdfua/tests.rs::fonts_that_draw_text_are_embedded_and_map_to_unicode", "crates/a11y/src/pdfua/tests.rs::optional_content_embedded_files_and_xfa", "crates/a11y/src/pdfua/tests.rs::pdf_ua_2_checks_its_identification_and_version_and_what_it_keeps", "crates/a11y/src/pdfua/tests.rs::the_checks_and_the_table_agree", "crates/automation/tests/it/automation.rs::pdfua_verify_reports_conditions_with_their_clause_and_place", "crates/ui-egui/tests/it/accessibility.rs::verify_pdfua_lists_failed_and_manual_conditions"]
+notes = "PDF/UA-1 against the Matterhorn Protocol 1.1: 54 of its 87 machine-checkable failure conditions are checked (metadata and pdfuaid identification, DisplayDocTitle, Tagged PDF and Suspects, untagged content and artifact nesting, role mapping to PDF 1.7 types, table/list/TOC/Ruby/Warichu nesting, heading levels and H/Hn mixing, TH Scope, Figure and Formula alternate text, Note IDs, every language condition, annotation tagging, descriptions and Tabs, optional content names, embedded-file F/UF, XFA dynamicRender, the accessibility permission, reference XObjects and form XObjects with MCIDs drawn twice, embedded fonts and Unicode mapping per font). Each failure gives its Matterhorn id, ISO 14289-1 clause and the page, tag or object. The 47 human conditions are listed as needing a manual check and the 33 unchecked machine ones as not checked, never as passes. Missing: the font-program conditions 31-001 to 31-030 except embedding (CharSet/CIDSet, widths, cmaps, ToUnicode values, .notdef), 17-003, 28-006, 28-014/015 (media clips) and 28-018; Lang set on marked content is not read (a tag-level Lang is); no HTML report. PDF/UA-2 only in part: its identification (part and rev), PDF 2.0, and the PDF/UA-1 conditions it keeps unchanged; its own rules (namespaces, PDF 2.0 structure types, MathML) are not checked and no ISO 14289-2 clause is cited. Not cross-checked against veraPDF on a corpus yet. Save as PDF/UA (standards.pdfua) is separate and still planned."
 
 [[feature]]
 id = "optimize.standards-panel"

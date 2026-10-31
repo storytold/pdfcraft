@@ -4,7 +4,8 @@
 //! Alternate Text, Tables, Lists, Headings) and returns, per rule, Passed, Failed, Needs manual
 //! check or Skipped, with the elements or pages at fault. [`report_html`] writes the
 //! accessibility report. Rules read the document only; the fixes that need edits (language,
-//! title, tab order) are applied by the engine.
+//! title, tab order) are applied by the engine. [`pdfua::verify`] checks a document against
+//! PDF/UA (ISO 14289), condition by condition of the Matterhorn Protocol.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -17,6 +18,7 @@ mod autotag;
 mod autotag_fields;
 mod content;
 mod headings;
+pub mod pdfua;
 mod report;
 mod structure;
 mod tags;
@@ -577,6 +579,69 @@ pub const WORDINGS: &[&str] = &[
     "not in an LI (list item)",
     "the first heading is an H{n}; headings should not skip levels",
     "H{n} follows an H{d}; headings should not skip levels",
+    // PDF/UA: the document, its metadata and its language.
+    "The catalog has no metadata stream (XMP)",
+    "The metadata doesn't identify the file as PDF/UA (pdfuaid:part)",
+    "The metadata identifies the file as PDF/UA-{n}, not PDF/UA-{want}",
+    "The metadata has no PDF/UA revision year (pdfuaid:rev)",
+    "The file is PDF {v}, not PDF 2.0",
+    "The metadata has no title (dc:title)",
+    "The viewer preferences have no DisplayDocTitle entry",
+    "DisplayDocTitle isn't true: the window shows the file name",
+    "MarkInfo Suspects is true: the tags are marked as unreliable",
+    "The document sets no language (Lang), and neither do its tags",
+    "The bookmarks have no language: the document sets none (Lang)",
+    "The metadata has no language: the document sets none (Lang) and the metadata no xml:lang",
+    "The document's language (Lang) {} isn't a language tag",
+    // PDF/UA: the role map and the structure tree, then what goes in their `{what}`.
+    "Standard structure type {} is remapped to {to}",
+    "Role map entry {} leads round in a circle",
+    "Structure type {} doesn't map to a standard type",
+    "The document uses both H and numbered headings (H1–H6)",
+    "its alternate text, actual text or expansion has no language (Lang)",
+    "no language (Lang) on it, above it or on the document",
+    "its language (Lang) isn't a language tag",
+    "more than one H heading in it",
+    "not in a TOC",
+    "not allowed directly in a TOC",
+    "not in a Ruby",
+    "not in a Warichu",
+    "not in a Table",
+    "not allowed directly inside {in}",
+    "a second {} in its table",
+    "rows both directly in it and in THead, TBody or TFoot",
+    "not the first or last child of its table",
+    "not the first child of its list",
+    "a header cell with no Scope, in a table that doesn't use Headers",
+    "no ID",
+    "its ID is another Note's too",
+    // PDF/UA: annotations.
+    "Page {p} has annotations but no tab order (Tabs)",
+    "Page {p} has annotations and tabs in {} order, not structure order (S)",
+    "File attachment annotation on page {p}: its file specification lacks F or UF",
+    "Page {p} has a trap network annotation (TrapNet)",
+    "Printer's mark annotation on page {p} is in the structure tree",
+    "{} annotation on page {p} is in a {ty} tag, not {want}",
+    "Field \"{}\" on page {p} has no description (TU), and its tag no alternate text",
+    "Field \"{}\" on page {p}: its description has no language (Lang)",
+    "Link annotation on page {p} has no description (Contents)",
+    "{} annotation on page {p}: its description has no language (Lang)",
+    "{} annotation on page {p} has no description (Contents), and its tag no alternate text",
+    // PDF/UA: page content, fonts and the objects of the file.
+    "Page {p}: {n} artifact inside tagged content",
+    "Page {p}: {n} artifacts inside tagged content",
+    "Page {p}: {n} tagged content item inside an artifact",
+    "Page {p}: {n} tagged content items inside an artifact",
+    "A form XObject with marked content (MCIDs) is drawn {n} times",
+    "Font {} on page {p} isn't embedded",
+    "Font (unnamed) on page {p} isn't embedded",
+    "The default optional content configuration (D) has no Name",
+    "An optional content configuration has an AS entry",
+    "Optional content configuration {n} has no Name",
+    "The XFA form requires dynamic rendering (dynamicRender)",
+    "The file is encrypted but its encryption dictionary has no permissions (P)",
+    "The file has a reference XObject (Ref)",
+    "Embedded file \"{}\": its file specification lacks F or UF",
     // The summary at the end of a long list.
     AND_MORE,
 ];
@@ -635,9 +700,14 @@ pub fn check(doc: &Document, options: &Options) -> Report {
         Some(p) => p.iter().copied().filter(|p| *p < pages.len()).collect(),
         None => (0..pages.len()).collect(),
     };
-    let tagged = structure::has_struct_tree(doc);
     let scan = content::Scan::run(doc, &pages, &page_list);
-    let mut tree_rules = structure::run(doc, &pages, &options.rules);
+    check_scanned(doc, options, &pages, &page_list, &scan)
+}
+
+/// The full check, given the document's pages, the pages to check and their content already read.
+pub(crate) fn check_scanned(doc: &Document, options: &Options, pages: &[pdfcraft_model::Page], page_list: &[usize], scan: &content::Scan) -> Report {
+    let tagged = structure::has_struct_tree(doc);
+    let mut tree_rules = structure::run(doc, pages, &options.rules);
     let mut figure_bounds: Option<HashMap<pdfcraft_cos::ObjRef, (usize, [f64; 4])>> = None;
     let mut results = Vec::with_capacity(32);
     for rule in Rule::ALL {
@@ -652,12 +722,12 @@ pub fn check(doc: &Document, options: &Options) -> Report {
         // `total` counts every finding; `findings` holds the first MAX_FINDINGS of them.
         let (mut findings, total) = match rule.category() {
             Category::Document => {
-                let found = content::document_rule(doc, rule, &pages, &scan);
+                let found = content::document_rule(doc, rule, pages, scan);
                 let n = found.len();
                 (found, n)
             }
             Category::PageContent | Category::Forms => {
-                let found = content::page_rule(doc, rule, &pages, &page_list, &scan, tagged);
+                let found = content::page_rule(doc, rule, pages, page_list, scan, tagged);
                 let n = found.len();
                 (found, n)
             }
