@@ -518,8 +518,17 @@ impl Automation {
                     Some(_) => a.opt_str("text")?.unwrap_or_default().to_string(),
                     None => a.str("text")?.to_string(),
                 };
+                let font = match a.opt_str("font")? {
+                    None | Some("Helvetica") | Some("helvetica") => pdfcraft_engine::FontFamily::Helvetica,
+                    Some("Times") | Some("times") => pdfcraft_engine::FontFamily::Times,
+                    Some("Courier") | Some("courier") => pdfcraft_engine::FontFamily::Courier,
+                    Some(other) => {
+                        return Err(ToolError::InvalidArgs(format!("font must be \"Helvetica\", \"Times\" or \"Courier\", not {other:?}")));
+                    }
+                };
                 let wm = Watermark {
                     text,
+                    font,
                     source: None,
                     scale: a.opt_num("scale")?.unwrap_or(d.scale).clamp(0.01, 1.0),
                     font_size: a.opt_num("font_size")?.unwrap_or(0.0),

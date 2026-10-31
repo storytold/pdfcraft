@@ -564,8 +564,16 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                         );
                     });
                     ui.horizontal(|ui| {
+                        ui.add_enabled_ui(!d.use_file, |ui| {
+                            ui.label(tl!("Font"));
+                            egui::ComboBox::from_id_salt("wm-font").selected_text(d.wm.font.label()).width(100.0).show_ui(ui, |ui| {
+                                for f in [FontFamily::Helvetica, FontFamily::Times, FontFamily::Courier] {
+                                    ui.selectable_value(&mut d.wm.font, f, f.label());
+                                }
+                            });
+                        });
                         ui.add_enabled_ui(!d.use_file, |ui| ui.add(widgets::checkbox(&mut d.fit, tl!("Fit to page"))));
-                        ui.add_enabled_ui(!d.fit, |ui| {
+                        ui.add_enabled_ui(!d.fit && !d.use_file, |ui| {
                             ui.label(tl!("Size"));
                             if d.wm.font_size == 0.0 {
                                 d.wm.font_size = 72.0;
@@ -694,7 +702,8 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                 } else {
                     (wm.font_size as f32 * s).max(5.0)
                 };
-                let galley = p.layout_no_wrap(text.to_string(), egui::FontId::proportional(size), rgb32(wm.color).gamma_multiply(wm.opacity as f32));
+                let font_id = if wm.font == FontFamily::Courier { egui::FontId::monospace(size) } else { egui::FontId::proportional(size) };
+                let galley = p.layout_no_wrap(text.to_string(), font_id, rgb32(wm.color).gamma_multiply(wm.opacity as f32));
                 let angle = -(wm.rotation as f32).to_radians();
                 let half = galley.size() / 2.0;
                 let (sn, cs) = angle.sin_cos();
