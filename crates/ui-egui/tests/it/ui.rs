@@ -422,6 +422,46 @@ fn a_document_asking_for_full_screen_is_asked_about_first() {
     assert!(h.query_by_label("Open in Full Screen mode?").is_none() && !h.state().full_screen);
 }
 
+/// #5051: a reader who only goes full screen on purpose can turn the question off. A document's
+/// request is then ignored (never granted), the choice is kept in the settings and turned back
+/// on in Preferences or with `--full-screen-prompt`.
+#[test]
+fn the_full_screen_question_can_be_turned_off() {
+    use egui::accesskit::Role;
+    let deck = || String::from_utf8(FIXTURE.to_vec()).unwrap().replace("/Outlines 6 0 R", "/Outlines 6 0 R /PageMode /FullScreen").into_bytes();
+    let mut h = harness(|_| {});
+    assert!(h.state().ask_before_full_screen, "asked by default");
+    // Off from Preferences.
+    h.state_mut().set_option("dialog", "preferences").unwrap();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::CheckBox, "Ask before a document opens in Full Screen mode").scroll_to_me();
+    h.run_steps(4);
+    h.get_by_role_and_label(Role::CheckBox, "Ask before a document opens in Full Screen mode").click();
+    h.run_steps(2);
+    assert!(!h.state().ask_before_full_screen);
+    h.state_mut().dialog = None;
+    // The request is dropped: no question, and the window stays as it is.
+    h.state_mut().open_bytes("deck.pdf", None, deck()).expect("opens");
+    h.run_steps(3);
+    assert!(h.query_by_label("Open in Full Screen mode?").is_none());
+    assert!(h.state().pending_full_screen.is_none() && !h.state().full_screen);
+    // Kept in the settings.
+    let saved = h.state().persist();
+    let mut restored = harness(move |app| app.restore(&saved));
+    assert!(!restored.state().ask_before_full_screen, "remembered across a restart");
+    restored.state_mut().open_bytes("deck.pdf", None, deck()).expect("opens");
+    restored.run_steps(3);
+    assert!(restored.state().pending_full_screen.is_none());
+    // Back on: asked again. Scriptable, with a clear refusal for anything else.
+    let app = restored.state_mut();
+    app.set_option("full-screen-prompt", "true").unwrap();
+    assert!(app.ask_before_full_screen);
+    assert_eq!(app.set_option("full-screen-prompt", "maybe"), Err("full-screen-prompt must be true or false".into()));
+    restored.state_mut().open_bytes("deck2.pdf", None, deck()).expect("opens");
+    restored.run_steps(3);
+    restored.get_by_label("Open in Full Screen mode?");
+}
+
 /// Switching to Read mode closes the open pane, and switching back reopens it.
 #[test]
 fn read_mode_closes_the_panes_and_leaving_it_brings_them_back() {

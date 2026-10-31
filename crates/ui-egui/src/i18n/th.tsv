@@ -2248,6 +2248,8 @@ signature pad	Type	พิมพ์
 	Reload documents when their files change on disk	โหลดเอกสารใหม่เมื่อไฟล์บนดิสก์เปลี่ยนแปลง
 	Don't show again	ไม่ต้องแสดงอีก
 	Show a notice when a document is secured	แสดงการแจ้งเตือนเมื่อเอกสารมีการรักษาความปลอดภัย
+	Ask before a document opens in Full Screen mode	ถามก่อนเปิดเอกสารในโหมดเต็มหน้าจอ
+	Off, a document's request to open in Full Screen mode is ignored. You can still enter it from the View menu.	เมื่อปิด คำขอของเอกสารที่ให้เปิดในโหมดเต็มหน้าจอจะถูกละเว้น คุณยังเข้าสู่โหมดนี้ได้จากเมนูมุมมอง
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	ไฟล์นี้เปลี่ยนแปลงบนดิสก์ โหลดใหม่เพื่อดูรุ่นใหม่ การเปลี่ยนแปลงที่ยังไม่ได้บันทึกจะหายไป
 	Reload	โหลดใหม่
 	Couldn't reload {name}: {e}	โหลด {name} ใหม่ไม่ได้: {e}

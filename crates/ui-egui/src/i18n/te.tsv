@@ -2057,6 +2057,8 @@ action wizard	Start	ప్రారంభించు
 	Reload documents when their files change on disk	డిస్క్‌లో వాటి ఫైల్‌లు మారినప్పుడు పత్రాలను మళ్లీ లోడ్ చేయి
 	Don't show again	మళ్లీ చూపవద్దు
 	Show a notice when a document is secured	పత్రం రక్షించబడినప్పుడు నోటీసు చూపు
+	Ask before a document opens in Full Screen mode	పత్రం పూర్తి తెర మోడ్‌లో తెరవబడే ముందు అడగండి
+	Off, a document's request to open in Full Screen mode is ignored. You can still enter it from the View menu.	ఆఫ్‌లో ఉన్నప్పుడు, పత్రం పూర్తి తెర మోడ్‌లో తెరవాలనే అభ్యర్థన విస్మరించబడుతుంది. వీక్షణ మెను నుండి ఇప్పటికీ దీనిలోకి వెళ్లవచ్చు.
 	Always use my default zoom and page layout	ఎల్లప్పుడూ నా డిఫాల్ట్ జూమ్ మరియు పేజీ లేఅవుట్‌ను ఉపయోగించు
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	ఈ ఫైల్ డిస్క్‌లో మారింది. రీలోడ్ కొత్త వెర్షన్‌ను చూపించి సేవ్ చేయని మార్పులను వదిలేస్తుంది; సేవ్ దాని స్థానంలో ఈ వెర్షన్‌ను ఉంచుతుంది.
 	Reload	మళ్లీ లోడ్ చేయి

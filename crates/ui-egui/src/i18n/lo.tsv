@@ -2301,6 +2301,8 @@ key	Space	Space
 	Reload documents when their files change on disk	ໂຫຼດເອກະສານຄືນໃໝ່ເມື່ອໄຟລ໌ໃນດິສກ໌ມີການປ່ຽນແປງ
 	Don't show again	ບໍ່ຕ້ອງສະແດງອີກ
 	Show a notice when a document is secured	ສະແດງການແຈ້ງເຕືອນເມື່ອເອກະສານຖືກປ້ອງກັນໄວ້
+	Ask before a document opens in Full Screen mode	ຖາມກ່ອນເອກະສານຈະເປີດໃນໂໝດເຕັມຈໍ
+	Off, a document's request to open in Full Screen mode is ignored. You can still enter it from the View menu.	ເມື່ອປິດ, ຄຳຮ້ອງຂອງເອກະສານທີ່ຂໍເປີດໃນໂໝດເຕັມຈໍຈະຖືກບໍ່ສົນໃຈ. ຍັງສາມາດເຂົ້າໂໝດນີ້ໄດ້ຈາກເມນູມຸມມອງ.
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	ໄຟລ໌ນີ້ມີການປ່ຽນແປງໃນດິສກ໌. "ໂຫຼດຄືນໃໝ່" ຈະສະແດງເວີຊັນໃໝ່ ແລະ ປະຖິ້ມການປ່ຽນແປງທີ່ຍັງບໍ່ໄດ້ບັນທຶກ; "ບັນທຶກ" ຈະຂຽນທັບດ້ວຍເວີຊັນນີ້.
 	Reload	ໂຫຼດຄືນໃໝ່
 	Couldn't reload {name}: {e}	ບໍ່ສາມາດໂຫຼດ {name} ຄືນໃໝ່ໄດ້: {e}

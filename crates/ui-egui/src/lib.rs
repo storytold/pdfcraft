@@ -355,6 +355,9 @@ pub struct PdfCraftApp {
     /// Preferences: tell the user, above the pages, that a document is secured (its security
     /// settings restrict changes). Off only hides that notice (#4035); kept in the settings.
     pub show_secured_notice: bool,
+    /// Preferences: ask before a document that requests Full Screen mode opens in it. Off drops
+    /// the request without a question, never grants it (#5051); kept in the settings.
+    pub ask_before_full_screen: bool,
     /// Preferences: open every document at Default zoom and Default page display, whatever
     /// layout or zoom it asks for (#1618).
     pub always_default_view: bool,

@@ -2348,6 +2348,8 @@ key	Space	スペース
 	Reload documents when their files change on disk	ディスク上のファイルが変更されたら文書を再読み込みする
 	Don't show again	今後表示しない
 	Show a notice when a document is secured	文書が保護されているときに通知を表示する
+	Ask before a document opens in Full Screen mode	文書をフルスクリーンモードで開く前に確認する
+	Off, a document's request to open in Full Screen mode is ignored. You can still enter it from the View menu.	オフにすると、文書からのフルスクリーンモードで開く要求は無視されます。表示メニューからは引き続きフルスクリーンにできます。
 	Always use my default zoom and page layout	常に既定のズームとページレイアウトを使用する
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	このファイルはディスク上で変更されました。「再読み込み」は新しい版を表示して未保存の変更を破棄し、「保存」はこの版で置き換えます。
 	Reload	再読み込み

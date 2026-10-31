@@ -2328,6 +2328,8 @@ key	Space	Spacja
 	Reload documents when their files change on disk	Wczytuj ponownie dokumenty, gdy ich pliki zmienią się na dysku
 	Don't show again	Nie pokazuj ponownie
 	Show a notice when a document is secured	Pokazuj powiadomienie, gdy dokument jest zabezpieczony
+	Ask before a document opens in Full Screen mode	Pytaj, zanim dokument otworzy się w trybie pełnoekranowym
+	Off, a document's request to open in Full Screen mode is ignored. You can still enter it from the View menu.	Gdy wyłączone, prośba dokumentu o otwarcie w trybie pełnoekranowym jest ignorowana. Nadal można włączyć ten tryb z menu Widok.
 	Always use my default zoom and page layout	Zawsze używaj mojego domyślnego powiększenia i układu stron
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Ten plik zmienił się na dysku. Wczytaj ponownie pokazuje nową wersję i odrzuca niezapisane zmiany; Zapisz zastępuje ją tą wersją.
 	Reload	Wczytaj ponownie

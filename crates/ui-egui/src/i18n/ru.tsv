@@ -2138,6 +2138,8 @@
 	Reload documents when their files change on disk	Перезагружать документы при изменении их файлов на диске
 	Don't show again	Больше не показывать
 	Show a notice when a document is secured	Показывать уведомление, когда документ защищён
+	Ask before a document opens in Full Screen mode	Спрашивать, прежде чем документ откроется в полноэкранном режиме
+	Off, a document's request to open in Full Screen mode is ignored. You can still enter it from the View menu.	Если выключено, запрос документа открыться в полноэкранном режиме игнорируется. Включить этот режим по-прежнему можно в меню «Просмотр».
 	Always use my default zoom and page layout	Всегда использовать мой масштаб и макет страницы по умолчанию
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Этот файл был изменён на диске. «Перезагрузить» покажет новую версию и отбросит несохранённые изменения; «Сохранить» заменит её этой версией.
 	Reload	Перезагрузить
