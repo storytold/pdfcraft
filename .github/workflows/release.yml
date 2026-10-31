@@ -25,6 +25,7 @@ jobs:
       app-name: pdfcraft
       app-title: PdfCraft
       craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+      web-craft-fonts: true
       version: ${{ inputs.version }}
     secrets:
       APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
