@@ -261,7 +261,7 @@ impl Stream {
     /// [`Stream::filters`], or an error when `/Filter` is present but is not a name or an
     /// array of names (an indirect reference, say): the data is not unfiltered, so it must not
     /// read as decoded.
-    fn readable_filters(&self) -> Result<Vec<(Filter, Params)>, pdfcraft_filters::FilterError> {
+    pub(crate) fn readable_filters(&self) -> Result<Vec<(Filter, Params)>, pdfcraft_filters::FilterError> {
         let readable = match self.dict.get(b"Filter") {
             None | Some(Object::Null | Object::Name(_)) => true,
             Some(Object::Array(a)) => a.iter().all(|f| f.as_name().is_some()),

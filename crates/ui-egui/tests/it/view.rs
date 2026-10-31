@@ -43,6 +43,59 @@ fn rect(h: &Harness<'static, PdfCraftApp>, page: usize) -> Option<egui::Rect> {
     h.state().views[0].page_screen_rect(page)
 }
 
+fn sidebar_key(h: &mut Harness<'static, PdfCraftApp>, key: Key, modifiers: Modifiers) {
+    h.event(egui::Event::ModifiersChanged(modifiers));
+    for pressed in [true, false] {
+        h.event(egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers });
+    }
+    h.run_steps(2);
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(1);
+}
+
+#[test]
+fn pages_sidebar_select_all_keeps_current_page_and_keyboard_scope() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness(&[("panel", "pages")]);
+    let _ = h.get_by_role_and_label(egui::accesskit::Role::Group, "Pages");
+    h.get_by_label("Page 2").click();
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].current, 1);
+    // Moving the pointer is not a keyboard-focus change.
+    h.hover_at(rect(&h, 1).unwrap().center());
+    h.run_steps(1);
+    for _ in 0..2 {
+        sidebar_key(&mut h, Key::A, Modifiers::COMMAND);
+        assert_eq!(h.state().views[0].target_pages(), vec![0, 1, 2]);
+        assert_eq!(h.state().views[0].current, 1, "selecting does not navigate");
+    }
+    sidebar_key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().views[0].selected.is_empty());
+
+    // A click on the viewer returns Ctrl+A to text selection, even with Pages open.
+    let pos = rect(&h, 1).unwrap().center();
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+    }
+    h.run_steps(3);
+    sidebar_key(&mut h, Key::A, Modifiers::COMMAND);
+    assert!(h.state().views[0].selected.is_empty(), "viewer shortcut must not select thumbnails");
+
+    // A different document does not inherit the previous sidebar's keyboard ownership.
+    h.get_by_label("Page 2").click();
+    h.run_steps(2);
+    h.state_mut().open_bytes("other.pdf", None, PAGES.to_vec()).unwrap();
+    h.run_steps(5);
+    sidebar_key(&mut h, Key::A, Modifiers::COMMAND);
+    let active = h.state().active.unwrap();
+    assert!(h.state().views[active].selected.is_empty());
+    h.get_by_label("Page 1").click();
+    h.run_steps(2);
+    sidebar_key(&mut h, Key::A, Modifiers::COMMAND);
+    assert_eq!(h.state().views[active].target_pages(), vec![0, 1, 2]);
+    assert!(h.state().views[0].selected.is_empty(), "selection remains document-local");
+}
+
 /// Two pages of different sizes: 300×400 then 600×300.
 const MIXED: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -70,7 +123,7 @@ fn mixed_harness(options: &'static [(&'static str, &'static str)]) -> Harness<'s
 
 /// A vertical wheel event; negative `dy` scrolls down.
 fn wheel(unit: MouseWheelUnit, dy: f32, phase: TouchPhase) -> egui::Event {
-    egui::Event::MouseWheel { unit, delta: egui::vec2(0.0, dy), phase, modifiers: Modifiers::NONE }
+    egui::Event::MouseWheel { unit, delta: egui::vec2(0.0, dy), phase, modifiers: Modifiers::NONE, source: egui::MouseWheelSource::Unknown }
 }
 
 #[cfg(target_os = "linux")]
@@ -710,7 +763,13 @@ fn frames_after_a_notch(system_reduced: bool, animation_effects: &str, zooming: 
     h.run_steps(2);
     let before = rect(&h, 0).expect("page 1 on screen").min.y;
     let (delta, modifiers) = if zooming { (egui::vec2(0.0, 1.0), Modifiers::COMMAND) } else { (egui::vec2(0.0, -1.0), Modifiers::NONE) };
-    h.event(egui::Event::MouseWheel { unit: MouseWheelUnit::Line, delta, phase: TouchPhase::Move, modifiers });
+    h.event(egui::Event::MouseWheel {
+        unit: MouseWheelUnit::Line,
+        delta,
+        phase: TouchPhase::Move,
+        modifiers,
+        source: egui::MouseWheelSource::Unknown,
+    });
     (0..40)
         .map(|_| {
             h.step();
@@ -1027,9 +1086,8 @@ fn view_menu_page_display_uses_the_same_commands() {
     use egui_kittest::kittest::Queryable;
     let mut h = harness(&[]);
     h.run_steps(4);
-    h.get_by_label("Menu").click();
-    h.run_steps(2);
-    h.get_by_label("View ⏵").hover();
+    crate::support::open_menu(&mut h, "View");
+    crate::support::menu_row(&h, "Page display").hover();
     h.run_steps(3);
     h.get_by_label("Single page").click();
     h.run_steps(4);
@@ -1137,10 +1195,15 @@ trailer << /Root 1 0 R >>
 %%EOF";
 
 fn dests_harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+    bookmarks_harness("dests.pdf", DESTS)
+}
+
+/// `pdf` open with the Bookmarks panel showing, once the window's layout holds still.
+fn bookmarks_harness(name: &'static str, pdf: &'static [u8]) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
-        app.open_bytes("dests.pdf", None, DESTS.to_vec()).expect("opens");
+        app.open_bytes(name, None, pdf.to_vec()).expect("opens");
         app.set_option("left", "closed").unwrap();
         app.set_option("panel", "bookmarks").unwrap();
         app
@@ -1190,13 +1253,15 @@ fn bookmark_destinations_scroll_to_their_position() {
     let d = from_viewport_corner(&h, 1, 0.25, 0.5);
     assert!((d.x - 70.0).abs() < 2.0 && d.y.abs() < 2.0, "the destination point is at the window's top-left: {d:?}");
 
-    // Malformed operands fall back to the top of the page at the current zoom.
+    // Unusable operands are read as null, which keeps the reader's place in user space: y 300
+    // was at the window's top on page 2 (its crop box starts at y 100), so on page 3 (crop from
+    // 0) y 300 is there too, a quarter down, at the current zoom.
     h.get_by_label("Broken").click();
     h.run_steps(6);
     let v = &h.state().views[0];
     assert_eq!((v.current, v.zoom), (2, 3.0));
-    let d = from_viewport_corner(&h, 2, 0.0, 0.0);
-    assert!(d.y > 0.0 && d.y < 40.0, "page 3 is scrolled to its top: {d:?}");
+    let d = from_viewport_corner(&h, 2, 0.0, 0.25);
+    assert!(d.y.abs() < 2.0, "y 300 on page 3 is at the top of the window: {d:?}");
 }
 
 #[test]
@@ -1217,6 +1282,42 @@ fn link_destinations_scroll_to_their_position() {
     assert_eq!((v.current, v.fit), (1, Fit::Width), "/FitH goes to page 2 and fits its width");
     let d = from_viewport_corner(&h, 1, 0.0, 0.2);
     assert!(d.y.abs() < 2.0, "y 420 on page 2 is at the top of the window: {d:?}");
+}
+
+/// Two 300×400 pages. A bookmark shows page 1 at 400% with (40, 360) at the window's top-left;
+/// the link there goes to page 2 as CAD exports write their cross-references, `/XYZ null null 0`.
+const KEEP_PLACE: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /Outlines 10 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Annots [20 0 R] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R >> endobj
+10 0 obj << /Type /Outlines /First 11 0 R /Last 11 0 R /Count 1 >> endobj
+11 0 obj << /Title (Start) /Parent 10 0 R /Dest [3 0 R /XYZ 40 360 4] >> endobj
+20 0 obj << /Type /Annot /Subtype /Link /Rect [60 320 140 350] /Border [0 0 0] /Dest [4 0 R /XYZ null null 0] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+#[test]
+fn a_link_without_a_position_keeps_the_place_on_the_next_page() {
+    let mut h = bookmarks_harness("keep-place.pdf", KEEP_PLACE);
+    h.get_by_label("Start").click();
+    h.run_steps(6);
+    assert_eq!((h.state().views[0].current, h.state().views[0].zoom), (0, 4.0));
+    let (fx, fy) = (40.0 / 300.0, 40.0 / 400.0);
+    let d = from_viewport_corner(&h, 0, fx, fy);
+    assert!((d.x - 70.0).abs() < 2.0 && d.y.abs() < 2.0, "(40, 360) is at the window's top-left: {d:?}");
+
+    let r = rect(&h, 0).expect("page 1");
+    let at = egui::pos2(r.min.x + r.width() * (100.0 / 300.0), r.min.y + r.height() * (1.0 - 335.0 / 400.0));
+    h.hover_at(at);
+    h.run_steps(2);
+    h.drag_at(at); // press
+    h.drop_at(at); // release
+    h.run_steps(8);
+    let v = &h.state().views[0];
+    assert_eq!((v.current, v.zoom), (1, 4.0), "the link goes to page 2 at the same zoom");
+    let d = from_viewport_corner(&h, 1, fx, fy);
+    assert!((d.x - 70.0).abs() < 2.0 && d.y.abs() < 2.0, "page 2 shows the same place, not its top: {d:?}");
 }
 
 /// Two pages with a text field on each and a non-embedded Helvetica.
@@ -1266,13 +1367,7 @@ fn highlight_fields_tints_the_field_area() {
     h.state_mut().set_option("panel", "none").unwrap();
     // Highlighting is on by default; start from plain fields.
     h.state_mut().set_option("fields", "off").unwrap();
-    for _ in 0..100 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(&mut h);
     let r = rect(&h, 0).expect("page 1");
     // The field spans x 50..250, y 300..330 (PDF space, y up) on a 300×400 page; sample inside it.
     let at = egui::pos2(r.min.x + r.width() * (60.0 / 300.0), r.min.y + r.height() * (1.0 - 305.0 / 400.0));
@@ -1409,13 +1504,7 @@ fn required_radio_buttons_get_a_round_red_border() {
         app.set_option("fields", "on").unwrap();
         app
     });
-    for _ in 0..100 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(&mut h);
     let r = rect(&h, 0).expect("page 1");
     let ppp = h.ctx.pixels_per_point();
     let img = h.render().expect("renders");
@@ -1435,6 +1524,52 @@ fn required_radio_buttons_get_a_round_red_border() {
         at(50.2, 320.0)
     );
     assert!(!stroke(at(50.3, 339.7)), "the widget's corner, outside the circle, is not: {:?}", at(50.3, 339.7));
+}
+
+/// Two required check boxes: the first laid out for a round XFA check button (`/PCXfaRound`), the
+/// second an ordinary square one.
+const ROUND_CHECKS: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Widget /FT /Btn /Ff 2 /T (round) /V /Off /AS /Off /Rect [50 300 90 340] /PCXfaRound true /P 3 0 R >> endobj
+5 0 obj << /Type /Annot /Subtype /Widget /FT /Btn /Ff 2 /T (square) /V /Off /AS /Off /Rect [150 300 190 340] /P 3 0 R >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// With fields highlighted, a round XFA check box gets a round border, as a radio button does,
+/// while an ordinary check box keeps a square one.
+#[test]
+fn round_check_boxes_get_a_round_highlight() {
+    let _gpu = gpu();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("checks.pdf", None, ROUND_CHECKS.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("panel", "none").unwrap();
+        app.set_option("fields", "on").unwrap();
+        app
+    });
+    crate::support::settle(&mut h);
+    let r = rect(&h, 0).expect("page 1");
+    let ppp = h.ctx.pixels_per_point();
+    let img = h.render().expect("renders");
+    let at = |x: f32, y: f32| {
+        let p = egui::pos2(r.min.x + r.width() * (x / 300.0), r.min.y + r.height() * (1.0 - y / 400.0));
+        *img.get_pixel((p.x * ppp) as u32, (p.y * ppp) as u32)
+    };
+    // The red of the required border, or its antialiased edge over the field tint.
+    let stroke = |p: image::Rgba<u8>| p[0] > 180 && p[2] < 140 && i16::from(p[0]) - i16::from(p[2]) > 80;
+    assert!([0.05_f32, 0.2].into_iter().any(|dx| stroke(at(50.0 + dx, 320.0))), "the round box's left edge is red: {:?}", at(50.2, 320.0));
+    // Near the top of the left edge: outside the circle, on a square's border.
+    assert!(!stroke(at(50.25, 339.0)), "the round box's corner, outside the circle, is not: {:?}", at(50.25, 339.0));
+    assert!(
+        [0.1_f32, 0.25, 0.4].into_iter().any(|dx| stroke(at(150.0 + dx, 339.0))),
+        "the square box's is: {:?} {:?}",
+        at(150.1, 339.0),
+        at(150.25, 339.0)
+    );
 }
 
 /// Acrobat's Highlight existing fields is a preference, not a per-document choice: turned off
@@ -1560,13 +1695,7 @@ fn required_fields_get_a_red_border_when_highlighting() {
     h.state_mut().set_option("fields", "on").unwrap();
     let props = pdfcraft_engine::FieldProps { required: Some(true), ..Default::default() };
     h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldProps { name: "fullname".into(), props: Box::new(props) });
-    for _ in 0..100 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(&mut h);
     let r = rect(&h, 0).expect("page 1");
     // Just inside the left edge of the field (x 50, y 300..330 on a 300×400 page).
     let ppp = h.ctx.pixels_per_point();
@@ -1622,13 +1751,7 @@ trailer << /Root 1 0 R >>
 /// Mean and largest difference between page 1 on screen and the page rendered directly at the
 /// view's exact device scale, over the lined area of `page_raster_maps_one_to_one_onto_screen_pixels`.
 fn compare_page_with_raster(h: &mut Harness<'static, PdfCraftApp>, pdf: &[u8], zoom: f32) -> (f64, u8) {
-    for _ in 0..100 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(h);
     let ppp = h.ctx.pixels_per_point();
     let r = rect(h, 0).expect("page 1");
     let img = h.render().expect("renders");
@@ -1693,16 +1816,6 @@ fn grid_harness(pdf: Vec<u8>, zoom: &str) -> Harness<'static, PdfCraftApp> {
     })
 }
 
-fn settle(h: &mut Harness<'static, PdfCraftApp>) {
-    for _ in 0..400 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-}
-
 /// Detail in the middle of the window: the summed difference between neighbouring pixels.
 fn centre_detail(h: &mut Harness<'static, PdfCraftApp>) -> u64 {
     let img = h.render().expect("renders");
@@ -1720,7 +1833,7 @@ fn centre_detail(h: &mut Harness<'static, PdfCraftApp>) -> u64 {
 fn zooming_a_tiled_page_shows_its_earlier_tiles_until_new_ones_arrive() {
     let _gpu = gpu();
     let mut h = grid_harness(fine_grid_pdf(), "300");
-    settle(&mut h);
+    crate::support::settle(&mut h);
     let sharp = centre_detail(&mut h);
     // The first frame at a new zoom has no tiles for it yet (they are requested at its end).
     h.state_mut().set_option("zoom", "310").unwrap();
@@ -1736,13 +1849,13 @@ fn zooming_a_tiled_page_shows_its_earlier_tiles_until_new_ones_arrive() {
 fn returning_to_a_visited_zoom_reuses_its_cached_tiles() {
     let _gpu = gpu();
     let mut h = grid_harness(fine_grid_pdf(), "300");
-    settle(&mut h);
+    crate::support::settle(&mut h);
     let before = h.state().views[0].tiles_debug(0);
     assert!(!before.is_empty(), "the 300 % page should be tiled, but it cached no tiles");
     // Zoom right out, where the 1200 pt page fits in one raster and is not tiled at all, so
     // none of its tiles is demanded...
     h.state_mut().set_option("zoom", "50").unwrap();
-    settle(&mut h);
+    crate::support::settle(&mut h);
     // ...then back to the first zoom, which was already rendered sharp.
     h.state_mut().set_option("zoom", "300").unwrap();
     h.step();
@@ -1950,17 +2063,14 @@ fn long_view_menu_fits_a_short_window() {
         app
     });
     h.run_steps(8);
-    h.get_by_label("Menu").click();
+    crate::support::open_menu(&mut h, "View");
     h.run_steps(2);
-    h.get_by_label("View ⏵").hover();
-    h.run_steps(4);
-    let before = h.get_by_label("Side panels ⏵").rect().bottom();
-    h.get_by_label("Fit to height ").hover();
+    crate::support::menu_row(&h, "Rotate view").hover();
     h.event(wheel(MouseWheelUnit::Point, -1000.0, TouchPhase::Move));
     h.run_steps(6);
-    let after = h.get_by_label("Side panels ⏵").rect().bottom();
-    assert!(after < before && after <= 400.0, "menu did not scroll into view: {before} -> {after}");
-    h.get_by_label("Side panels ⏵").hover();
+    let after = crate::support::menu_row(&h, "Side panels").rect().bottom();
+    assert!(after <= 400.0, "the menu scrolls Side panels into view: {after}");
+    crate::support::menu_row(&h, "Side panels").hover();
     h.run_steps(4);
     h.get_all_by_label("Bookmarks").last().unwrap().click();
     h.run_steps(4);
@@ -2101,4 +2211,121 @@ fn full_screen_clicks_turn_pages_whatever_tool_was_on() {
     h.run_steps(4);
     assert!(!h.state().full_screen);
     assert_eq!(h.state().quick_tool, QuickTool::Hand, "the tool from before is back");
+}
+
+/// #4415: the Pages panel's Page tools menu. Each tool acts on the selected pages (the current
+/// page when none is): rotate, delete and insert a blank page here, as Pages ▸ … does.
+#[test]
+fn the_pages_panel_tools_act_on_the_selected_pages() {
+    let mut h = harness(&[("panel", "pages")]);
+    let id = h.state().views[0].id;
+    let rotations = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().info.pages.iter().map(|p| p.rotation).collect::<Vec<_>>();
+    // The panel's Page tools menu, on the right-hand side of the window.
+    let tool = |h: &mut Harness<'static, PdfCraftApp>, label: &str| {
+        h.get_all_by_label("Page tools").find(|n| n.rect().left() > 1000.0).expect("Page tools in the Pages panel").click();
+        h.run_steps(2);
+        h.get_by_label(label).click();
+        h.run_steps(3);
+    };
+    h.state_mut().views[0].select_pages(&[1, 2]);
+    h.run_steps(2);
+    tool(&mut h, "Rotate the selected pages clockwise");
+    assert_eq!(rotations(&h), [0, 90, 90], "pages 2 and 3, the selection");
+    tool(&mut h, "Rotate the selected pages counterclockwise");
+    assert_eq!(rotations(&h), [0, 0, 0]);
+    h.state_mut().views[0].select_pages(&[0]);
+    h.run_steps(2);
+    tool(&mut h, "Delete the selected pages");
+    assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), 2, "page 1 deleted");
+    tool(&mut h, "Insert a blank page after the selection");
+    assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), 3);
+    h.state_mut().execute("edit.undo");
+    h.run_steps(2);
+    assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), 2, "each is one undo step");
+}
+
+/// CodeRabbit on #4583: the Page tools menu's file items work from the menu too. Insert pages
+/// from a file puts the picked file's pages after the selection; Extract the selected pages
+/// opens Extract for the selection and writes it.
+#[test]
+fn the_pages_panel_tools_insert_from_a_file_and_extract() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-page-tools-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let more = dir.join("more.pdf");
+    std::fs::write(&more, PAGES).unwrap();
+    let mut h = harness(&[("panel", "pages")]);
+    let id = h.state().views[0].id;
+    let count = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().info.pages.len();
+    let tool = |h: &mut Harness<'static, PdfCraftApp>, label: &str| {
+        h.get_all_by_label("Page tools").find(|n| n.rect().left() > 1000.0).expect("Page tools in the Pages panel").click();
+        h.run_steps(2);
+        h.get_by_label(label).click();
+        h.run_steps(3);
+    };
+    assert_eq!(count(&h), 3);
+    h.state_mut().views[0].select_pages(&[0]);
+    h.state_mut().pick_override = Some(vec![more.to_string_lossy().into_owned()]);
+    tool(&mut h, "Insert pages from a file after the selection…");
+    h.run_steps(3);
+    assert_eq!(count(&h), 6, "the picked file's three pages are inserted");
+
+    let out = dir.join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    h.state_mut().export_dir_override = Some(out.to_string_lossy().into_owned());
+    h.state_mut().views[0].select_pages(&[1, 2]);
+    tool(&mut h, "Extract the selected pages…");
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::Extract), "Extract opens for the selection");
+    h.state_mut().extract_draft = pdfcraft_ui_egui::ExtractDraft { separate: true, ..Default::default() };
+    h.get_all_by_label("Extract").last().unwrap().click();
+    h.run_steps(3);
+    assert_eq!(std::fs::read_dir(&out).unwrap().count(), 2, "the two selected pages, each a file");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The Pages panel's Page tools are greyed out on a document whose security doesn't allow
+/// page changes: the menu doesn't open, and nothing changes.
+#[test]
+fn the_pages_panel_tools_are_off_without_page_editing_permission() {
+    use egui_kittest::kittest::NodeT;
+    let mut h = harness(&[("panel", "pages")]);
+    {
+        let app = h.state_mut();
+        app.apply_edit(pdfcraft_engine::Edit::Protect(pdfcraft_engine::Protection {
+            permissions_password: Some("owner".into()),
+            changes: pdfcraft_engine::Changes::None,
+            ..Default::default()
+        }));
+        let bytes = app.session.save_bytes(app.views[0].id).unwrap();
+        app.open_bytes("restricted.pdf", None, bytes.as_ref().clone()).unwrap();
+    }
+    h.run_steps(6);
+    let i = h.state().active.unwrap();
+    let id = h.state().views[i].id;
+    assert!(!h.state().session.get(id).unwrap().allows_assembly());
+    let tools = h.get_all_by_label("Page tools").find(|n| n.rect().left() > 1000.0).expect("Page tools");
+    assert!(tools.accesskit_node().is_disabled(), "Page tools is greyed out");
+    tools.click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Delete the selected pages").is_none(), "its menu doesn't open");
+    assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), 3);
+}
+
+#[test]
+fn a_document_press_releases_pages_keyboard_focus_without_escape() {
+    let mut h = harness(&[("panel", "pages")]);
+    h.get_by_label("Page 2").click();
+    h.run_steps(3);
+    let focused = h.ctx.memory(|m| m.focused());
+    assert!(focused.is_some(), "the thumbnail owns keyboard input");
+    let pos = rect(&h, 1).unwrap().center();
+    h.event(egui::Event::PointerMoved(pos));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+    assert_ne!(h.ctx.memory(|m| m.focused()), focused, "pressing the document relinquishes Pages focus without Escape");
+    sidebar_key(&mut h, Key::A, Modifiers::COMMAND);
+    assert!(h.state().views[0].selected.is_empty(), "Ctrl+A now belongs to the viewer, not page thumbnails");
 }
