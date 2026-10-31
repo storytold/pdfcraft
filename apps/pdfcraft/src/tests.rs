@@ -152,6 +152,7 @@ fn a_software_renderer_is_shown_to_the_user() {
     }
 }
 
+#[cfg(windows)]
 #[test]
 fn a_failed_update_says_why_at_the_next_start() {
     // Issue #5546: the Windows update helper failed, started the old copy again, and left its
