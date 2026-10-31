@@ -602,7 +602,7 @@ fn parse_page_set(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> PageS
         if content.is_empty() {
             content.push(Rect::new(0.0, 0.0, width, height));
         }
-        let items = pa.children().filter(|c| c.is_element()).filter_map(|c| parse_node(c, warnings, depth + 1)).collect();
+        let items = pa.children().filter(|c| c.is_element()).filter_map(|c| parse_node(c, warnings, depth + 1, Layout::Positioned)).collect();
         // A page area with no `<occur>` has no limit and no minimum (a subform's default of one
         // would exhaust it, and demand a page for every master).
         let occur = child(pa, "occur").map(|o| parse_occur(Some(o)));
@@ -618,15 +618,16 @@ fn parse_page_set(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> PageS
     PageSet { areas }
 }
 
-fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Subform {
+fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize, set_layout: Option<Layout>) -> Subform {
     let common = parse_common(n);
+    let layout = set_layout.unwrap_or_else(|| Layout::parse(n.attribute("layout")));
     let mut children_out = Vec::new();
     let mut page_set = None;
     for c in n.children().filter(|c| c.is_element()) {
         match c.tag_name().name() {
             "pageSet" => page_set = Some(parse_page_set(c, warnings, depth + 1)),
             _ => {
-                if let Some(node) = parse_node(c, warnings, depth + 1) {
+                if let Some(node) = parse_node(c, warnings, depth + 1, layout) {
                     children_out.push(node);
                 }
             }
@@ -637,7 +638,7 @@ fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Subfor
     let break_to_page = |name: &str| children(n, name).any(|b| b.attribute("targetType").is_none_or(|t| t == "pageArea" || t == "contentArea"));
     Subform {
         common,
-        layout: Layout::parse(n.attribute("layout")),
+        layout,
         children: children_out,
         scripts: parse_events(n),
         page_set,
@@ -645,26 +646,31 @@ fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Subfor
         break_before_page: break_to_page("breakBefore")
             || child(n, "break").is_some_and(|b| b.attribute("before").is_some_and(|v| v == "pageArea" || v == "contentArea")),
         break_after_page: break_to_page("breakAfter"),
+        set: false,
         column_widths,
         overflow_leader: child(n, "overflow").and_then(|o| o.attribute("leader")).map(str::to_string).filter(|s| !s.is_empty()),
     }
 }
 
-fn parse_node(c: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Option<Node> {
+/// `parent`: the layout of the container `c` is in, which a `subformSet` takes on.
+fn parse_node(c: XmlNode, warnings: &mut Vec<String>, depth: usize, parent: Layout) -> Option<Node> {
     if depth > MAX_DEPTH {
         return None;
     }
     Some(match c.tag_name().name() {
-        "subform" => Node::Subform(Box::new(parse_subform(c, warnings, depth))),
+        "subform" => Node::Subform(Box::new(parse_subform(c, warnings, depth, None))),
+        // A set of related subforms is transparent to layout (XFA 3.3 p. 357): its members are laid out
+        // as its container lays out its own children, at their own positions in a positioned one. In a
+        // table or a row they go one under another.
         "subformSet" => {
-            // A set of alternative subforms: lay out its members in order.
-            let mut sf = parse_subform(c, warnings, depth);
-            sf.layout = Layout::Tb;
-            Node::Subform(Box::new(sf))
+            let layout = if matches!(parent, Layout::Table | Layout::Row) { Layout::Tb } else { parent };
+            let mut set = parse_subform(c, warnings, depth, Some(layout));
+            set.set = true;
+            Node::Subform(Box::new(set))
         }
         "area" => Node::Area(Box::new(Area {
             common: parse_common(c),
-            children: c.children().filter(|k| k.is_element()).filter_map(|k| parse_node(k, warnings, depth + 1)).collect(),
+            children: c.children().filter(|k| k.is_element()).filter_map(|k| parse_node(k, warnings, depth + 1, Layout::Positioned)).collect(),
         })),
         "field" => Node::Field(Box::new(parse_field(c, warnings))),
         "draw" => Node::Draw(Box::new(Draw { common: parse_common(c), value: parse_value(child(c, "value"), warnings) })),
@@ -742,7 +748,7 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
     };
     let mut warnings = Vec::new();
     let sf = children(template, "subform").next().ok_or_else(|| XfaError::Malformed("the template has no root subform".into()))?;
-    let mut root_sf = parse_subform(sf, &mut warnings, 0);
+    let mut root_sf = parse_subform(sf, &mut warnings, 0, None);
     if root_sf.page_set.is_none() {
         // A page set may sit beside the root subform.
         root_sf.page_set = child(template, "pageSet").map(|ps| parse_page_set(ps, &mut warnings, 0));

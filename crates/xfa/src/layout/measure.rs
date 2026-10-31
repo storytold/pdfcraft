@@ -1,9 +1,13 @@
 use super::common::clamp_opt;
 use super::field::auto_check_reserve;
 use super::{
-    Access, Area, Ctx, ExclGroup, Face, Field, Font, Layout, Layouter, MAX_DEPTH, MAX_MEASURES, Measured, Node, Para, Placement, Rect, Subform, Ui,
-    Value, data_path, text,
+    Access, Area, Ctx, ExclGroup, Face, Field, Font, Layout, Layouter, MAX_DEPTH, MAX_MEASURES, Measured, Node, Para, Placement, Rect, SomIndices,
+    Subform, Ui, Value, data_path, text,
 };
+
+/// Where [`Layouter::pack_instances`] puts one object: the (child index, instance) steps to it, and
+/// its place in the packed container's box.
+pub(super) type Packed = (Vec<(usize, usize)>, Rect);
 
 impl Layouter<'_> {
     /// The width and height `node` takes in `avail_w`: its own size, else what its content needs
@@ -302,35 +306,69 @@ impl Layouter<'_> {
             .fold(0.0, f64::max)
     }
 
-    /// Left-to-right packing: rows of children, wrapped at the available width, as (child,
-    /// instance, place). A repeating subform is packed once per instance it has under the
-    /// container at `som`.
-    pub(super) fn pack_instances(&self, children: &[Node], inner_w: f64, ctx: &Ctx, depth: usize, som: &str) -> (Vec<(usize, usize, Rect)>, f64) {
+    /// Left-to-right packing: rows of children, wrapped at the available width, as (steps, place).
+    /// The steps are (child index, instance) from the packed container down to the object: one
+    /// step for a child, more for a member of a `subformSet`, which is transparent to layout (XFA
+    /// 3.3 p. 357), so its members go on among the container's other children. A repeating
+    /// subform is packed once per instance it has under the container at `som`.
+    pub(super) fn pack_instances(&self, children: &[Node], inner_w: f64, ctx: &Ctx, depth: usize, som: &str) -> (Vec<Packed>, f64) {
         let mut out = Vec::new();
-        let (mut x, mut y, mut line_h) = (0.0, 0.0, 0.0);
+        let mut line = (0.0, 0.0, 0.0);
+        self.pack_into(children, inner_w, ctx, depth, som, &[], &mut line, &mut out);
+        (out, line.1 + line.2)
+    }
+
+    /// [`Self::pack_instances`] from `line` (x, y, the line's height so far), the steps to
+    /// `children` being `path`.
+    #[allow(clippy::too_many_arguments)]
+    fn pack_into(
+        &self,
+        children: &[Node],
+        inner_w: f64,
+        ctx: &Ctx,
+        depth: usize,
+        som: &str,
+        path: &[(usize, usize)],
+        line: &mut (f64, f64, f64),
+        out: &mut Vec<Packed>,
+    ) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        let sibs = SomIndices::of(children);
         for (i, k) in children.iter().enumerate() {
             if !k.common().presence.occupies() {
                 continue;
             }
+            if let Node::Subform(s) = k
+                && s.set
+            {
+                for instance in 0..self.instances(k, som) {
+                    let set_ctx = ctx.with_som(&s.common, sibs.at(i) + instance);
+                    let at: Vec<(usize, usize)> = path.iter().copied().chain([(i, instance)]).collect();
+                    self.pack_into(&s.children, inner_w, &set_ctx, depth + 1, &set_ctx.som, &at, line, out);
+                }
+                continue;
+            }
             let (w, h) = self.size_of(k, inner_w, ctx, depth + 1);
             for instance in 0..self.instances(k, som) {
-                if x > 0.0 && x + w > inner_w + 0.05 {
-                    y += line_h;
-                    x = 0.0;
-                    line_h = 0.0;
+                let (x, y, line_h) = line;
+                if *x > 0.0 && *x + w > inner_w + 0.05 {
+                    *y += *line_h;
+                    *x = 0.0;
+                    *line_h = 0.0;
                 }
-                out.push((i, instance, Rect::new(x, y, w, h)));
-                x += w;
-                line_h = line_h.max(h);
+                out.push((path.iter().copied().chain([(i, instance)]).collect(), Rect::new(*x, *y, w, h)));
+                *x += w;
+                *line_h = line_h.max(h);
             }
         }
-        (out, y + line_h)
     }
 
     /// [`Self::pack_instances`] for children that don't repeat (the fields of a group).
     pub(super) fn pack(&self, children: &[Node], inner_w: f64, ctx: &Ctx, depth: usize) -> (Vec<(usize, Rect)>, f64) {
         let (placed, h) = self.pack_instances(children, inner_w, ctx, depth, "");
-        (placed.into_iter().map(|(i, _, r)| (i, r)).collect(), h)
+        (placed.into_iter().filter_map(|(at, r)| at.first().map(|&(i, _)| (i, r))).collect(), h)
     }
 
     fn packed_height(&self, children: &[Node], inner_w: f64, ctx: &Ctx, depth: usize) -> f64 {
