@@ -331,6 +331,76 @@ fn a_picture_on_the_clipboard_is_pasted_onto_the_page() {
     assert_eq!(images(&h), 2, "Prepare Form pastes fields");
 }
 
+/// egui-winit 0.37 swallows both the press and the release of ⌘V / Ctrl+V when the clipboard holds
+/// only a picture (a Win+Shift+S screenshot), and sends a PasteImage event instead: that pastes it.
+#[test]
+fn a_screenshot_pasted_with_no_key_events_lands_on_the_page() {
+    use pdfcraft_ui_egui::Clip;
+    let mut h = harness();
+    let images = |h: &Harness<'static, PdfCraftApp>| added(h).iter().filter(|a| matches!(a.content, pdfcraft_engine::AddedContent::Image(_))).count();
+    let shot = || egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::new([30, 20], vec![egui::Color32::GRAY; 30 * 20])));
+    h.state_mut().clipboard_override = Some(Clip::Image { width: 30, height: 20, rgba: [90u8, 90, 90, 255].repeat(30 * 20) });
+    h.event(shot());
+    h.run_steps(3);
+    assert_eq!(images(&h), 1, "one paste, one picture");
+    let pdfcraft_engine::AddedContent::Image(img) = &added(&h)[0].content else { panic!("an image was added") };
+    assert_eq!(img.rect, [135.0, 190.0, 165.0, 210.0], "in the middle of the page, at its own size");
+    // A text field with the keyboard keeps the paste for itself.
+    assert!(h.state_mut().execute("edit.find"));
+    h.run_steps(3);
+    h.event(shot());
+    h.run_steps(3);
+    assert_eq!(images(&h), 1, "the Find field has the keyboard");
+}
+
+/// Holding ⌘V / Ctrl+V makes egui-winit send a paste event per key repeat, with nothing to tell
+/// them from new presses: one hold of ⌘ / Ctrl pastes once, and the next hold pastes again.
+#[test]
+fn holding_the_paste_chord_pastes_one_picture() {
+    use pdfcraft_ui_egui::Clip;
+    let mut h = harness();
+    let images = |h: &Harness<'static, PdfCraftApp>| added(h).iter().filter(|a| matches!(a.content, pdfcraft_engine::AddedContent::Image(_))).count();
+    let shot = || egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::new([30, 20], vec![egui::Color32::GRAY; 30 * 20])));
+    h.state_mut().clipboard_override = Some(Clip::Image { width: 30, height: 20, rgba: [90u8, 90, 90, 255].repeat(30 * 20) });
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::COMMAND));
+    for _ in 0..5 {
+        h.event(shot());
+        h.run_steps(2);
+    }
+    assert_eq!(images(&h), 1, "five repeats of one hold");
+    // A second tap of V in the same hold looks the same as a repeat: it pastes nothing.
+    h.event(egui::Event::Paste("x".into()));
+    h.run_steps(2);
+    assert_eq!(images(&h), 1, "a second tap in the same hold");
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.run_steps(1);
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::COMMAND));
+    h.event(shot());
+    h.run_steps(2);
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.run_steps(2);
+    assert_eq!(images(&h), 2, "a second hold pastes again");
+}
+
+/// A clipboard holding a picture and text (a cell range from a spreadsheet, a selection in a
+/// word processor or browser) gets a Paste event with the text: on the page it pastes the picture.
+#[test]
+fn a_picture_with_text_on_the_clipboard_pastes_the_picture() {
+    use pdfcraft_ui_egui::Clip;
+    let mut h = harness();
+    let images = |h: &Harness<'static, PdfCraftApp>| added(h).iter().filter(|a| matches!(a.content, pdfcraft_engine::AddedContent::Image(_))).count();
+    h.state_mut().clipboard_override = Some(Clip::Image { width: 30, height: 20, rgba: [90u8, 90, 90, 255].repeat(30 * 20) });
+    h.event(egui::Event::Paste("A1	B1".into()));
+    h.run_steps(3);
+    assert_eq!(images(&h), 1);
+    // A text field with the keyboard keeps the paste for itself.
+    assert!(h.state_mut().execute("edit.find"));
+    h.run_steps(3);
+    h.event(egui::Event::Paste("A1	B1".into()));
+    h.run_steps(3);
+    assert_eq!(images(&h), 1, "the Find field has the keyboard");
+}
+
 /// #125: text the standard fonts can't draw stays in the editor with a warning instead of being
 /// written to the page as `?` (or lost).
 #[test]

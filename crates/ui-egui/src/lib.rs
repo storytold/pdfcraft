@@ -537,8 +537,10 @@ pub struct PdfCraftApp {
     pub system_clipboard: bool,
     /// What ⌘V reads instead of the system clipboard (tests).
     pub clipboard_override: Option<create_ui::Clip>,
-    /// V is down as a plain key press (see [`Self::paste_key_released`]).
+    /// V is down as a plain key press (see [`Self::paste_shortcut_given`]).
     v_pressed: bool,
+    /// A paste ran during the current hold of ⌘ / Ctrl (see [`Self::paste_shortcut_given`]).
+    paste_latched: bool,
     /// Attach file: the file to attach instead of asking (tests, automation).
     pub attach_override: Option<(String, Vec<u8>)>,
     /// Duplicate Field: which field and onto which pages.

@@ -1010,26 +1010,42 @@ impl crate::PdfCraftApp {
         }
     }
 
-    /// Whether ⌘V / Ctrl+V was let go this frame. egui-winit swallows that press (with a Paste
-    /// event only if the clipboard holds text), while a plain V press always comes through: a
-    /// release of V with no press of V since the last one is the shortcut, even when ⌘ or Ctrl
-    /// was let go first. Read every frame, dialogs or not, so a press is never missed.
-    pub(crate) fn paste_key_released(&mut self, ctx: &egui::Context) -> bool {
-        let mut released = false;
+    /// Whether ⌘V / Ctrl+V was given this frame: a Paste or PasteImage event (egui-winit sends
+    /// one instead of the key press), or a release of V with no press of V since the last one
+    /// (a backend that sends neither). One paste per hold of ⌘ / Ctrl, because egui-winit sends
+    /// an event for every key repeat and hides which are repeats; so a second tap of V in the
+    /// same hold pastes nothing. Read every frame, dialogs or not, so a press is never missed.
+    pub(crate) fn paste_shortcut_given(&mut self, ctx: &egui::Context) -> bool {
+        let mut given = false;
         ctx.input(|inp| {
             for e in &inp.events {
-                if let egui::Event::Key { key: egui::Key::V, pressed, .. } = e {
-                    released |= !*pressed && !self.v_pressed;
-                    self.v_pressed = *pressed;
+                let paste = match e {
+                    egui::Event::Key { key: egui::Key::V, pressed, .. } => {
+                        let released = !*pressed && !self.v_pressed;
+                        self.v_pressed = *pressed;
+                        released
+                    }
+                    egui::Event::Paste(_) | egui::Event::PasteImage(_) => true,
+                    egui::Event::ModifiersChanged(m) => {
+                        self.paste_latched &= m.command;
+                        false
+                    }
+                    _ => false,
+                };
+                if paste && !self.paste_latched {
+                    given = true;
+                    self.paste_latched = true;
                 }
             }
+            self.paste_latched &= inp.modifiers.command;
         });
-        released
+        given
     }
 
-    /// ⌘V / Ctrl+V with a picture on the system clipboard (a screenshot, a picture copied in a
-    /// browser) places it on the current page, as Add Image does.
-    /// Organize Pages keeps ⌘V for pages, Prepare Form for fields, and text fields for text.
+    /// ⌘V / Ctrl+V, or Edit ▸ Paste, with a picture on the system clipboard (a screenshot, a
+    /// picture copied in a browser, or one copied with text) places it on the current page, as
+    /// Add Image does. Organize Pages keeps ⌘V for pages, Prepare Form for fields, and text
+    /// fields for text.
     pub(crate) fn paste_image_key(&mut self, i: usize, ctx: &egui::Context, pasted: bool) {
         let free = self.dialog.is_none() && !self.palette_open && !ctx.egui_wants_keyboard_input();
         let Some(view) = self.views.get(i) else { return };
