@@ -491,6 +491,11 @@ pub(super) fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                                 endings: None,
                             });
                         }
+                    } else if app.quick_tool == QuickTool::AddText {
+                        // The same pin as the comment tools': each click on the page starts another text box.
+                        let (r, _) = ui.allocate_exact_size(vec2(32.0, 9.0), Sense::hover());
+                        ui.painter().hline(r.x_range().shrink(6.0), r.center().y, Stroke::new(1.0, t.divider));
+                        comments::pin_button(ui, &mut app.comment_prefs);
                     }
                 });
             });

@@ -788,6 +788,8 @@ Newest first: the date, what moved, and the new overall estimate.
 
 - **2026-10-21 (M4, #3865):** A new bookmark records where the reader is: the top-left of the selected text, or the top of the window, as `/XYZ left top null` (zoom kept), instead of the page top (`Edit::AddBookmark` takes `left` and `top`; `bookmark_add` takes `top` and `left`; `PageInfo::xyz_for_view`).
 
+- **2026-10-26 (M7, #4863):** The quick bar's "Keep tool selected" pin, shared with the comment tools and saved with the same setting, now also applies to Add text: with it on, Done leaves Add text selected so each click starts another text box; off, Done goes back to Select as before.
+
 - **2026-10-18 (renderer, hayro patches 19/35):** A mesh shading (types 4–7) is sampled over its own triangles instead of the whole path: a BricsCAD plan with 310 one-triangle `sh` fills took 2 s per 1024 px tile at every zoom (and hit the 20 s watchdog on a busy machine); now about 70 ms, so zooming into dense topology drawings stays fluid. Estimates unchanged.
 
 - **2026-10-22 (PR #3227 integration):** M11: integrate upstream `80b7d215`; retain partial target-version compatibility and upstream content-boundary and image-size regression coverage. Scope and estimates unchanged.
