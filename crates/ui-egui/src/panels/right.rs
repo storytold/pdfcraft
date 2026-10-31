@@ -271,7 +271,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         }
                         panel_edit = edit;
                     }
-                    RightPanel::Search => crate::search_ui::panel(ui, &t, view, info.pages.len()),
+                    RightPanel::Search => crate::search_ui::panel(ui, &t, view, info.pages.len(), &info.annotations),
                     RightPanel::Compare => compare_action = crate::compare_ui::panel(ui, &t, compare, id),
                     RightPanel::Attachments => {
                         let attachable = doc.allows_modification() && doc.read_only_reason.is_none();

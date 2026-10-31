@@ -457,7 +457,7 @@ impl DocView {
             keep.insert(s.page);
         }
         if let Some(f) = self.find.as_ref() {
-            keep.extend(f.matches.iter().map(|(p, _)| *p));
+            keep.extend(f.matches.iter().map(|hit| hit.page()));
         }
         let mut rest: Vec<usize> = self.texts.keys().filter(|p| !keep.contains(*p)).copied().collect();
         rest.sort_by_key(|p| p.abs_diff(self.current));
@@ -526,7 +526,7 @@ impl DocView {
                     if let Some(f) = self.find.as_mut() {
                         let previous = f.current.and_then(|c| f.matches.get(c).cloned());
                         let follow = f.follow_page(self.current);
-                        f.matches.retain(|(p, _)| *p != r.request.page);
+                        f.matches.retain(|hit| !hit.text_on(r.request.page));
                         match follow {
                             // An automatic choice keeps following its anchor; a failure never
                             // flashes, so the view stays exactly where it was.

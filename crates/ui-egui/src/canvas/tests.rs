@@ -250,7 +250,8 @@ fn history_search_view() -> DocView {
         }
         .into(),
     );
-    v.find = Some(Find { matches: vec![(3, 0..1), (3, 0..1), (1, 0..1)], current: Some(2), ..Default::default() });
+    v.find =
+        Some(Find { matches: vec![FindHit::text(3, 0..1), FindHit::text(3, 0..1), FindHit::text(1, 0..1)], current: Some(2), ..Default::default() });
     v
 }
 
@@ -360,7 +361,7 @@ fn automatic_search_match_follows_the_viewed_page_when_text_arrives_out_of_order
 
     v.receive_result(&ctx, result(0, "Panel sample draft notes"));
     let f = v.find.as_ref().unwrap();
-    assert_eq!(f.matches.iter().map(|(p, _)| *p).collect::<Vec<_>>(), vec![0, 1]);
+    assert_eq!(f.matches.iter().map(|hit| hit.page()).collect::<Vec<_>>(), vec![0, 1]);
     assert_eq!(f.current, Some(0), "page 1's match takes over once its text arrives");
     assert_eq!(v.current, 0, "the view follows the first match at or after the page being viewed");
 }
@@ -381,7 +382,7 @@ fn a_user_picked_search_match_stays_put_when_earlier_text_arrives() {
     v.texts.insert(0, Arc::new(find_test_text("Panel sample draft notes")));
     v.refresh_find_page(0);
     let f = v.find.as_ref().unwrap();
-    assert_eq!(f.matches.iter().map(|(p, _)| *p).collect::<Vec<_>>(), vec![0, 1]);
+    assert_eq!(f.matches.iter().map(|hit| hit.page()).collect::<Vec<_>>(), vec![0, 1]);
     assert_eq!(f.current, Some(1), "the picked match keeps its identity after page 1 is inserted");
     assert_eq!(v.current, 1, "the user's page does not change under them");
 }
@@ -440,7 +441,7 @@ fn refining_the_query_keeps_the_page_the_search_started_from() {
     v.rerun_find();
     let f = v.find.as_ref().unwrap();
     assert_eq!(f.auto_from, Some(0), "refinement keeps the page the reader searched from");
-    assert_eq!(f.matches.first().map(|(p, _)| *p), Some(0));
+    assert_eq!(f.matches.first().map(|hit| hit.page()), Some(0));
     assert_eq!(f.current, Some(0));
     assert_eq!(v.current, 0);
 }
@@ -471,7 +472,7 @@ fn keyboard_find_step_is_explicit_and_a_late_text_layer_cannot_undo_it() {
     v.refresh_find_page(0);
     let f = v.find.as_ref().unwrap();
     assert_eq!(v.current, 2, "the chosen match keeps the view");
-    assert_eq!(f.current.and_then(|i| f.matches.get(i)).map(|(p, _)| *p), Some(2));
+    assert_eq!(f.current.and_then(|i| f.matches.get(i)).map(|hit| hit.page()), Some(2));
 }
 
 /// A page whose text extraction failed keeps the automatic anchor: the failure selects the
@@ -504,7 +505,7 @@ fn a_failed_text_layer_keeps_the_automatic_anchor_without_jitter() {
         },
     );
     let f = v.find.as_ref().unwrap();
-    assert_eq!(f.matches.iter().map(|(p, _)| *p).collect::<Vec<_>>(), vec![2]);
+    assert_eq!(f.matches.iter().map(|hit| hit.page()).collect::<Vec<_>>(), vec![2]);
     assert_eq!(f.current, Some(0), "the remaining match is selected");
     assert_eq!((f.auto_from, f.auto_page), (Some(0), Some(1)), "a failure does not end automatic following");
     assert_eq!(v.current, 1, "a failure never moves the view");
@@ -515,7 +516,7 @@ fn a_failed_text_layer_keeps_the_automatic_anchor_without_jitter() {
     v.receive_result(&ctx, find_text_result(0, "intro sample"));
     assert_eq!(v.current, 0, "the anchor's earlier match takes over");
     let f = v.find.as_ref().unwrap();
-    assert_eq!(f.current.and_then(|i| f.matches.get(i)).map(|(p, _)| *p), Some(0));
+    assert_eq!(f.current.and_then(|i| f.matches.get(i)).map(|hit| hit.page()), Some(0));
 }
 
 /// A reader who navigated before a page's text failed is not pulled back by a later
@@ -561,7 +562,7 @@ fn a_failed_text_layer_after_navigation_does_not_reveal_a_late_match() {
     assert_eq!((f.auto_from, f.auto_page), (None, None));
     assert_eq!(v.current, 2, "the late matching layer does not pull the reader back");
     assert_eq!(v.goto, moved, "no flash was issued");
-    assert_eq!(f.current.and_then(|i| f.matches.get(i)).map(|(p, _)| *p), Some(0), "the result list still selects the late match");
+    assert_eq!(f.current.and_then(|i| f.matches.get(i)).map(|hit| hit.page()), Some(0), "the result list still selects the late match");
 }
 
 /// The reader can navigate before any text layer has supplied a match. That navigation
@@ -589,7 +590,7 @@ fn navigation_before_the_first_match_is_not_overridden_by_a_late_text_layer() {
     assert_eq!(v.current, 2, "the late first match does not pull the reader back");
     assert_eq!(v.goto, Some((2, 0.0)), "no flash was issued");
     assert_eq!((f.auto_from, f.auto_page), (None, None));
-    assert_eq!(f.current.and_then(|i| f.matches.get(i)).map(|(p, _)| *p), Some(1), "the result list still selects the match");
+    assert_eq!(f.current.and_then(|i| f.matches.get(i)).map(|hit| hit.page()), Some(1), "the result list still selects the match");
 }
 
 /// A page-box jump to the page already shown is still the reader's navigation: automatic
@@ -616,7 +617,7 @@ fn a_same_page_page_box_jump_ends_automatic_following() {
     assert_eq!((f.auto_from, f.auto_page), (None, None));
     assert_eq!(v.current, 1, "the late earlier match does not move the reader within the page");
     assert_eq!(v.goto, shown, "no flash was issued");
-    assert_eq!(f.current.and_then(|i| f.matches.get(i)).map(|(p, _)| *p), Some(1), "the page-2 match stays selected");
+    assert_eq!(f.current.and_then(|i| f.matches.get(i)).map(|hit| hit.page()), Some(1), "the page-2 match stays selected");
 }
 
 /// A document-wide invalidation (a layer toggle, an edit, undo/redo) clears results for
@@ -662,7 +663,7 @@ fn content_invalidation_keeps_the_following_state() {
     assert_eq!(v.current, 2, "no delayed reveal after the reader navigated");
     assert_eq!(v.goto, moved, "no flash was issued");
     let f = v.find.as_ref().unwrap();
-    assert_eq!(f.current.and_then(|i| f.matches.get(i)).map(|(p, _)| *p), Some(0), "the result list still selects the late match");
+    assert_eq!(f.current.and_then(|i| f.matches.get(i)).map(|hit| hit.page()), Some(0), "the result list still selects the late match");
 }
 
 /// A document edit can shrink the page count. `document_changed` clamps `current` but leaves
@@ -699,7 +700,7 @@ fn a_page_count_shrink_ends_following_before_a_late_reveal() {
     assert_eq!((f.auto_from, f.auto_page), (None, None));
     assert_eq!(v.current, 1, "the late layer cannot pull the view back");
     assert_eq!(v.goto, goto, "no flash was issued");
-    assert_eq!(f.current.and_then(|i| f.matches.get(i)).map(|(p, _)| *p), Some(0), "the result list still selects the match");
+    assert_eq!(f.current.and_then(|i| f.matches.get(i)).map(|hit| hit.page()), Some(0), "the result list still selects the match");
 }
 
 /// Typing refinements while text layers keep arriving must keep the page the search began
@@ -740,7 +741,7 @@ fn text_layers_evict_far_pages_but_keep_visible_and_matches() {
     }
     v.text_failed.insert(0);
     v.text_failed.insert(99);
-    v.find = Some(Find { matches: vec![(0, 0..1)], ..Default::default() });
+    v.find = Some(Find { matches: vec![FindHit::text(0, 0..1)], ..Default::default() });
     let _ = v.prepare_render_queue(&info, 1.0);
     assert!(v.texts.contains_key(&50) && v.texts.contains_key(&51), "visible pages stay");
     assert!(v.texts.contains_key(&0), "matched pages stay");
@@ -991,7 +992,7 @@ fn text_layers_stay_while_a_search_is_active() {
     for p in 0..100 {
         v.texts.insert(p, Arc::new(PageText::default()));
     }
-    v.find = Some(Find { query: "dup".into(), case_query: "dup".into(), matches: vec![(0, 0..1)], ..Default::default() });
+    v.find = Some(Find { query: "dup".into(), case_query: "dup".into(), matches: vec![FindHit::text(0, 0..1)], ..Default::default() });
     let _ = v.prepare_render_queue(&info, 1.0);
     assert_eq!(v.texts.len(), 100, "evicting mid-search would churn the workers");
 }
@@ -1863,8 +1864,13 @@ fn destinations_set_the_zoom_mode_and_the_point_to_show() {
 fn page_text_failure_preserves_valid_search_match_without_jitter() {
     let mut v = view(3, PageLayout::Single, true);
     v.current = 1;
-    v.find =
-        Some(Find { query: "test".into(), case_query: "test".into(), matches: vec![(0, 0..4), (1, 5..9)], current: Some(0), ..Default::default() });
+    v.find = Some(Find {
+        query: "test".into(),
+        case_query: "test".into(),
+        matches: vec![FindHit::text(0, 0..4), FindHit::text(1, 5..9)],
+        current: Some(0),
+        ..Default::default()
+    });
     let req = RenderRequest { page: 0, kind: RequestKind::Text, ..Default::default() };
     v.last_queue = vec![req];
     let ctx = egui::Context::default();
@@ -1883,8 +1889,149 @@ fn page_text_failure_preserves_valid_search_match_without_jitter() {
     );
     // Active match was on page 0 which failed: current should fall back to match on page 1 without jitter
     assert_eq!(v.find.as_ref().unwrap().current, Some(0));
-    assert_eq!(v.find.as_ref().unwrap().matches, vec![(1, 5..9)]);
+    assert_eq!(v.find.as_ref().unwrap().matches, vec![FindHit::text(1, 5..9)]);
     assert!(v.goto.is_none());
+}
+
+fn page_info() -> pdfcraft_render::PageInfo {
+    pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: "1".into(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 }
+}
+
+fn note(page: usize, index: usize, contents: &str, parent: Option<(usize, usize)>) -> pdfcraft_render::Annotation {
+    pdfcraft_render::Annotation {
+        page,
+        subtype: "Text".into(),
+        author: Some("Ada".into()),
+        contents: Some(contents.into()),
+        modified: None,
+        name: None,
+        in_reply_to: None,
+        parent,
+        grouped: false,
+        rect: [10.0, 100.0, 30.0, 120.0],
+        color: None,
+        index,
+        state: None,
+        quads: Vec::new(),
+        locked: false,
+        intent: None,
+        fill_sign: false,
+        no_rotate: true,
+        points: Vec::new(),
+    }
+}
+
+fn commented(pages: usize, annotations: Vec<pdfcraft_render::Annotation>) -> pdfcraft_render::DocInfo {
+    pdfcraft_render::DocInfo { pages: (0..pages).map(|_| page_info()).collect(), annotations, ..Default::default() }
+}
+
+#[test]
+fn find_bar_includes_a_comment_and_steps_to_it() {
+    let mut v = view(1, PageLayout::Single, true);
+    v.texts.insert(0, Arc::new(find_test_text("alpha zebra")));
+    let info = commented(1, vec![note(0, 0, "zebra note", None)]);
+    v.open_find();
+    v.find.as_mut().unwrap().query = "zebra".into();
+    v.sync_find_comments(&info);
+    v.rerun_find_in(&info.annotations);
+    assert_eq!(v.find.as_ref().unwrap().matches.len(), 1, "comments stay out until Include comments is on");
+    assert!(!v.find.as_ref().unwrap().matches[0].is_comment());
+
+    v.find.as_mut().unwrap().include_comments = true;
+    v.rerun_find_in(&info.annotations);
+    let hits = &v.find.as_ref().unwrap().matches;
+    assert_eq!(hits.len(), 2);
+    assert!(!hits[0].is_comment() && hits[1].is_comment(), "the page's text comes before its comment");
+    assert!(v.comments.selected.is_none(), "the first hit is the page text");
+    v.find_step(true);
+    assert_eq!(v.comments.selected, Some((0, 0)));
+    assert!(v.flash.is_some(), "the comment is outlined");
+}
+
+#[test]
+fn find_comments_honour_case_whole_words_and_type() {
+    let mut v = view(1, PageLayout::Single, true);
+    let mut callout = note(0, 0, "notebook", None);
+    callout.subtype = "FreeText".into();
+    callout.intent = Some("FreeTextCallout".into());
+    let info = commented(1, vec![callout]);
+    v.open_find();
+    {
+        let f = v.find.as_mut().unwrap();
+        f.include_comments = true;
+        f.whole_words = true;
+        f.query = "note".into();
+    }
+    v.sync_find_comments(&info);
+    v.rerun_find_in(&info.annotations);
+    assert!(v.find.as_ref().unwrap().matches.is_empty(), "note is not the whole word notebook");
+
+    v.find.as_mut().unwrap().query = "callout".into();
+    v.rerun_find_in(&info.annotations);
+    assert_eq!(v.find.as_ref().unwrap().matches.len(), 1, "the comment type matches, as in the panel");
+
+    v.find.as_mut().unwrap().case_sensitive = true;
+    v.find.as_mut().unwrap().query = "callout".into();
+    v.rerun_find_in(&info.annotations);
+    assert!(v.find.as_ref().unwrap().matches.is_empty(), "Callout does not match a case-sensitive callout");
+    v.find.as_mut().unwrap().query = "Callout".into();
+    v.rerun_find_in(&info.annotations);
+    assert_eq!(v.find.as_ref().unwrap().matches.len(), 1);
+
+    v.find.as_mut().unwrap().case_sensitive = false;
+    v.find.as_mut().unwrap().query = "Ada".into();
+    v.rerun_find_in(&info.annotations);
+    assert_eq!(v.find.as_ref().unwrap().matches.len(), 1, "the author matches");
+}
+
+#[test]
+fn find_comments_read_text_past_the_excerpt() {
+    let mut v = view(1, PageLayout::Single, true);
+    let body = format!("{}needle", "word ".repeat(80));
+    let info = commented(1, vec![note(0, 0, &body, None)]);
+    v.open_find();
+    v.find.as_mut().unwrap().include_comments = true;
+    v.find.as_mut().unwrap().query = "needle".into();
+    v.sync_find_comments(&info);
+    v.rerun_find_in(&info.annotations);
+    let hit = v.find.as_ref().unwrap().matches.first().expect("the word past the excerpt is still a hit");
+    assert!(matches!(hit, FindHit::Comment { excerpt, .. } if excerpt.len() <= 160 && !excerpt.contains("needle")));
+}
+
+#[test]
+fn a_reply_match_selects_its_thread_and_survives_a_failed_text_page() {
+    let mut v = view(2, PageLayout::Single, true);
+    v.texts.insert(1, Arc::new(find_test_text("zebra on the page")));
+    let info = commented(2, vec![note(0, 0, "hello", None), note(0, 1, "zebra reply", Some((0, 0)))]);
+    v.open_find();
+    v.find.as_mut().unwrap().include_comments = true;
+    v.find.as_mut().unwrap().query = "zebra".into();
+    v.sync_find_comments(&info);
+    v.rerun_find_in(&info.annotations);
+    let hits = &v.find.as_ref().unwrap().matches;
+    assert_eq!(hits.len(), 2, "one row for the thread, plus the page text");
+    assert!(hits[0].is_comment() && hits[0].page() == 0);
+    assert!(!hits[1].is_comment() && hits[1].page() == 1);
+    assert_eq!(v.comments.selected, Some((0, 0)), "the reply selects its thread");
+
+    let req = RenderRequest { page: 0, kind: RequestKind::Text, ..Default::default() };
+    v.last_queue = vec![req];
+    v.receive_result(
+        &egui::Context::default(),
+        pdfcraft_render::RenderedPage {
+            request: req,
+            width: 0,
+            height: 0,
+            rgba: Default::default(),
+            error: Some("extraction failed".into()),
+            text: None,
+            warnings: Vec::new(),
+            millis: 0,
+        },
+    );
+    let hits = &v.find.as_ref().unwrap().matches;
+    assert!(hits.iter().any(|hit| hit.is_comment() && hit.page() == 0), "the comment is not a text layer");
+    assert!(hits.iter().any(|hit| !hit.is_comment() && hit.page() == 1));
 }
 
 /// A page whose picture moved can get its whole-page raster back before its last stale tile.

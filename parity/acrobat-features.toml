@@ -1439,11 +1439,11 @@ title = "Find in comments and bookmarks"
 area = "B"
 tier = "P2"
 milestone = "M12"
-status = "planned"
-commands = []
+status = "partial"
+commands = ["edit.find"]
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/src/canvas/tests.rs::find_bar_includes_a_comment_and_steps_to_it", "crates/ui-egui/tests/it/ui.rs::find_bar_searches_a_comment_when_included"]
+notes = "Include comments is in the Find bar and Advanced Search. Bookmarks are not searched from Find."
 
 [[feature]]
 id = "view.find-results-panel"
@@ -4111,8 +4111,8 @@ milestone = "M5"
 status = "partial"
 commands = ["comment.list"]
 tools = ["comment_list"]
-evidence = ["crates/ui-egui/tests/it/comments.rs::the_panel_posts_comments_and_replies"]
-notes = "search by author, text and type in the panel; not yet in the Find bar"
+evidence = ["crates/ui-egui/tests/it/comments.rs::the_panel_posts_comments_and_replies", "crates/ui-egui/src/canvas/tests.rs::find_bar_includes_a_comment_and_steps_to_it", "crates/ui-egui/src/canvas/tests.rs::find_comments_honour_case_whole_words_and_type", "crates/ui-egui/src/canvas/tests.rs::find_comments_read_text_past_the_excerpt", "crates/ui-egui/src/canvas/tests.rs::a_reply_match_selects_its_thread_and_survives_a_failed_text_page", "crates/ui-egui/tests/it/ui.rs::find_bar_searches_a_comment_when_included"]
+notes = "The Comments panel searches author, text and type. Find and Advanced Search do the same when Include comments is on (off until chosen); a reply match selects its thread, listed after that page's text. The choice is not remembered."
 
 [[feature]]
 id = "comment.show-hide-comments"

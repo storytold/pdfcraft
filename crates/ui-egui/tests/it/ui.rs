@@ -788,7 +788,7 @@ fn find_counts_matches_across_pages() {
     h.get_by_label_contains("of 2");
     let v = &h.state().views[0];
     let f = v.find.as_ref().expect("find open");
-    assert_eq!(f.matches.iter().map(|(p, _)| *p).collect::<Vec<_>>(), vec![0, 1]);
+    assert_eq!(f.matches.iter().map(|hit| hit.page()).collect::<Vec<_>>(), vec![0, 1]);
 }
 
 #[test]
@@ -799,6 +799,24 @@ fn find_reports_no_matches() {
     });
     crate::support::settle(&mut h);
     h.get_by_label("No matches");
+}
+
+#[test]
+fn find_bar_searches_a_comment_when_included() {
+    let mut h = harness(|app| {
+        app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("opens");
+        app.set_option("find", "numbers").unwrap();
+    });
+    crate::support::settle(&mut h);
+    assert!(h.state().views[0].find.as_ref().is_some_and(|f| f.matches.is_empty()), "the page has no such text");
+    h.state_mut().set_option("find-comments", "on").unwrap();
+    crate::support::settle(&mut h);
+    let view = &h.state().views[0];
+    let find = view.find.as_ref().expect("find stays open");
+    assert!(find.include_comments);
+    assert_eq!(find.matches.len(), 1);
+    assert!(find.matches.first().is_some_and(|hit| hit.is_comment()));
+    assert_eq!(view.comments.selected, Some((0, 0)));
 }
 
 #[test]
