@@ -52,7 +52,7 @@ fn render(f: &MarkFile, max_side: u32) -> Result<MarkPicture, String> {
     for page in pdfcraft_model::pages(&doc) {
         doc.update_dict(page.obj, |d| d.set(b"MediaBox".to_vec(), media.clone())).map_err(|e| e.to_string())?;
     }
-    let black = pdfcraft_edit::Background { color: [0.0; 3], opacity: 1.0, source: None, scale: 1.0 };
+    let black = pdfcraft_edit::Background { color: [0.0; 3], opacity: 1.0, source: None, scale: 1.0, replace_backdrop: false };
     pdfcraft_edit::add_background(&mut doc, &[1], &black, false).map_err(|e| e.to_string())?;
     let whole = pdfcraft_edit::Watermark { source: Some(src), scale: 1.0, opacity: 1.0, rotation: 0.0, ..Default::default() };
     pdfcraft_edit::add_watermark(&mut doc, &[0, 1], &whole, false).map_err(|e| e.to_string())?;
