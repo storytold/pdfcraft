@@ -2838,3 +2838,9 @@ theme	Appearance	Aspect
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opțiuni pentru acest răspuns
+# Fill & Sign text: the border around it (M5).
+	Border:	Chenar:
+
+# A text border's own colour (M5).
+	Border colour	Culoare chenar
+	Same as text	Ca textul

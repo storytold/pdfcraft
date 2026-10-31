@@ -3703,8 +3703,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["sign.fill.text"]
 tools = ["fill_sign_add"]
-evidence = ["crates/annot/src/tests.rs::fill_and_sign_items_are_drawn", "crates/ui-egui/tests/it/fill_sign.rs::text_marks_and_date", "crates/ui-egui/tests/it/fill_sign.rs::fill_text_size_controls_new_text_and_survives_settings_restore", "crates/automation/tests/it/automation.rs::fill_sign_text_font_size_is_saved_and_validated"]
-notes = "Fill & Sign text and dates have a 4–300 pt size control in the active toolbar; new items use the chosen size, which persists across launches. fill_sign_add accepts font_size for text and dates."
+evidence = ["crates/annot/src/tests.rs::fill_and_sign_items_are_drawn", "crates/ui-egui/tests/it/fill_sign.rs::text_marks_and_date", "crates/ui-egui/tests/it/fill_sign.rs::fill_text_size_controls_new_text_and_survives_settings_restore", "crates/automation/tests/it/automation.rs::fill_sign_text_font_size_is_saved_and_validated", "crates/ui-egui/tests/it/fill_sign.rs::fill_text_border_frames_new_and_selected_text", "crates/annot/src/tests.rs::a_typewriter_border_goes_around_its_text_which_stays_put", "crates/automation/tests/it/automation.rs::fill_sign_text_border_is_saved_and_validated", "crates/ui-egui/tests/it/fill_sign.rs::the_toolbar_shows_and_changes_the_selected_texts_border", "crates/ui-egui/tests/it/fill_sign.rs::typed_text_made_default_is_what_new_text_gets", "crates/annot/src/tests.rs::a_text_border_can_have_its_own_colour"]
+notes = "Fill & Sign text and dates have a 4–300 pt size control in the active toolbar; new items use the chosen size, which persists across launches (with a placed text selected it resizes that text too). A Border control (none to 3 pt) frames new text or the selected text, in the text's colour or a Border colour of its own; the box grows outwards so the text keeps its place. With a placed text selected, the border controls show its own border and border colour (also after Comment Properties changed them) and change only that text; without one they set new text's until PdfCraft quits. Make Current Properties Default on typed text (its menus, or the box in Comment Properties) sets what new text gets, its size and border, kept across launches. Text boxes and callouts take a border colour too (quick bar, Comment Properties), the stroking colour in /DA. fill_sign_add accepts font_size, border and border_color for text and dates; comment_edit border_color."
 
 [[feature]]
 id = "comment.text-box"
@@ -3943,8 +3943,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.list"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/comments.rs::make_current_properties_default", "crates/ui-egui/tests/it/comments.rs::properties_dialog_makes_the_strikethrough_colour_default"]
-notes = "colour, opacity and line width become the tool's defaults (canvas and Comments panel menus, and Acrobat's Make Properties Default box in Comment Properties, applied on OK with the edited look) and survive a restart: the per-tool styles are persisted with the settings and restored through their clamping setters (#340)"
+evidence = ["crates/ui-egui/tests/it/comments.rs::make_current_properties_default", "crates/ui-egui/tests/it/comments.rs::properties_dialog_makes_the_strikethrough_colour_default", "crates/ui-egui/tests/it/fill_sign.rs::typed_text_made_default_is_what_new_text_gets"]
+notes = "colour, opacity and line width become the tool's defaults (canvas and Comments panel menus, and Acrobat's Make Properties Default box in Comment Properties, applied on OK with the edited look) and survive a restart: the per-tool styles are persisted with the settings and restored through their clamping setters (#340). Typed text, which no comment tool makes, gives Fill & Sign's new text its size and border"
 
 [[feature]]
 id = "comment.keep-tool-selected"

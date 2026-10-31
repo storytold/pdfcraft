@@ -2845,3 +2845,9 @@ key	Space	Space
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tùy chọn cho câu trả lời này
 	Export value	Giá trị xuất
+# Fill & Sign text: the border around it (M5).
+	Border:	Viền:
+
+# A text border's own colour (M5).
+	Border colour	Màu viền
+	Same as text	Giống chữ

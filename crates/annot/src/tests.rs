@@ -40,7 +40,7 @@ fn new(page: usize, shape: Shape) -> NewAnnotation {
     NewAnnotation {
         page,
         shape,
-        style: Style { color: [0.0, 0.4, 1.0], opacity: 1.0, width: 2.0, fill: None },
+        style: Style { color: [0.0, 0.4, 1.0], opacity: 1.0, width: 2.0, fill: None, border_color: None },
         contents: "hello".into(),
         author: "Ada".into(),
     }
@@ -591,6 +591,85 @@ fn fill_and_sign_items_are_drawn() {
     assert!(set_style(&mut doc, 1, 0, StyleChange::new(Some([0.0; 3]), None, None, None), &meta("")).is_err());
 }
 
+/// A border chosen for typewriter text goes around it in the text's colour. Changing it grows or
+/// shrinks the box on every side, so the text stays where it was typed; a text box keeps its box.
+#[test]
+fn a_typewriter_border_goes_around_its_text_which_stays_put() {
+    let mut doc = fixture();
+    let shape = Shape::Typewriter { rect: [100.0, 700.0, 200.0, 716.0], font_size: 11.0 };
+    let style = Style { width: 1.0, ..Style::default_for(&shape) };
+    let t = add_annotation(&mut doc, &NewAnnotation { page: 1, shape, style, contents: "Ada".into(), author: "Ada".into() }, &meta("x")).unwrap();
+    // The text starts 2 pt inside the border: 100 + 1 + 2 across, 716 - 1 - 2 - 0.9 em down.
+    let at = "1 0 0 1 103 703.1 Tm";
+    let d = &list(&doc, 1)[t];
+    let ap = ap_content(&doc, d);
+    assert!(ap.contains("1 w\n") && ap.contains(" re S"), "a 1 pt border: {ap}");
+    assert!(ap.contains(at), "{ap}");
+    for (width, expected) in [(2.0, [99.0, 699.0, 201.0, 717.0]), (0.0, [101.0, 701.0, 199.0, 715.0])] {
+        set_style(&mut doc, 1, t, StyleChange::new(None, None, Some(width), None), &meta("")).unwrap();
+        let d = &list(&doc, 1)[t];
+        assert_eq!(rect(d), expected, "{width} pt border");
+        let ap = ap_content(&doc, d);
+        assert!(ap.contains(at), "{width} pt: the text keeps its place: {ap}");
+        assert_eq!(ap.contains(" re S"), width > 0.0, "{width} pt: {ap}");
+    }
+    let shape = Shape::TextBox { rect: [100.0, 600.0, 200.0, 650.0], font_size: 11.0 };
+    let b = add_annotation(&mut doc, &new(1, shape), &meta("b")).unwrap();
+    set_style(&mut doc, 1, b, StyleChange::new(None, None, Some(3.0), None), &meta("")).unwrap();
+    assert_eq!(rect(&list(&doc, 1)[b]), [100.0, 600.0, 200.0, 650.0], "a text box keeps the box it was drawn with");
+    // Another app's typed text with its width in /Border (no /BS): 4 pt, so 2 pt shrinks the box
+    // by 2 on every side, as it is drawn.
+    let shape = Shape::Typewriter { rect: [100.0, 500.0, 200.0, 530.0], font_size: 11.0 };
+    let o = add_annotation(
+        &mut doc,
+        &NewAnnotation { page: 1, style: Style::default_for(&shape), shape: shape.clone(), contents: "Bo".into(), author: "Ada".into() },
+        &meta("o"),
+    )
+    .unwrap();
+    let (_, r) = annot_ref(&mut doc, 1, o).unwrap();
+    doc.update_dict(r, |d| {
+        d.remove(b"BS");
+        d.set(b"Border".to_vec(), num_array(&[0.0, 0.0, 4.0]));
+    })
+    .unwrap();
+    set_style(&mut doc, 1, o, StyleChange::new(None, None, Some(2.0), None), &meta("")).unwrap();
+    assert_eq!(rect(&list(&doc, 1)[o]), [102.0, 502.0, 198.0, 528.0], "the imported 4 pt border is read from /Border");
+    // A border colour that isn't a colour is refused before anything is written.
+    let mut bad = NewAnnotation { page: 1, style: Style::default_for(&shape), shape, contents: "x".into(), author: "Ada".into() };
+    bad.style.border_color = Some([f64::NAN, 0.0, 0.0]);
+    let before = list(&doc, 1).len();
+    assert!(matches!(add_annotation(&mut doc, &bad, &meta("n")), Err(AnnotError::Invalid(_))));
+    assert_eq!(list(&doc, 1).len(), before);
+}
+
+/// Text keeps its colour and the border gets its own: the stroking colour in `/DA`, which a new
+/// text colour or font size keeps, and which `None` gives back to the text's.
+#[test]
+fn a_text_border_can_have_its_own_colour() {
+    let mut doc = fixture();
+    let shape = Shape::Typewriter { rect: [100.0, 700.0, 200.0, 716.0], font_size: 11.0 };
+    let style = Style { color: [0.0, 0.5, 0.0], width: 1.0, border_color: Some([1.0, 0.0, 0.0]), ..Style::default_for(&shape) };
+    let t = add_annotation(&mut doc, &NewAnnotation { page: 1, shape, style, contents: "Ada".into(), author: "Ada".into() }, &meta("x")).unwrap();
+    let da = |doc: &Document| text(&list(doc, 1)[t], b"DA");
+    assert_eq!(da(&doc), "0 0.5 0 rg 1 0 0 RG /Helv 11 Tf");
+    let ap = ap_content(&doc, &list(&doc, 1)[t]);
+    assert!(ap.contains("1 0 0 RG\n1 w"), "the border in red: {ap}");
+    assert!(ap.contains("0 0.5 0 rg"), "the text in green: {ap}");
+    assert_eq!(props(&doc, 1, t).unwrap().border_color, Some([1.0, 0.0, 0.0]));
+    set_style(&mut doc, 1, t, StyleChange::new(Some([0.0, 0.0, 1.0]), None, None, None), &meta("")).unwrap();
+    assert_eq!(da(&doc), "0 0 1 rg 1 0 0 RG /Helv 11 Tf", "a new text colour keeps the border's");
+    set_font_size(&mut doc, 1, t, 14.0, &meta("")).unwrap();
+    assert_eq!(da(&doc), "0 0 1 rg 1 0 0 RG /Helv 14 Tf", "so does a new size");
+    set_border_color(&mut doc, 1, t, Some([0.5, 0.5, 0.5]), &meta("")).unwrap();
+    assert!(ap_content(&doc, &list(&doc, 1)[t]).contains("0.5 0.5 0.5 RG\n1 w"));
+    set_border_color(&mut doc, 1, t, None, &meta("")).unwrap();
+    assert_eq!(da(&doc), "0 0 1 rg /Helv 14 Tf");
+    assert!(ap_content(&doc, &list(&doc, 1)[t]).contains("0 0 1 RG\n1 w"), "the text's colour again");
+    assert_eq!(props(&doc, 1, t).unwrap().border_color, None);
+    let m = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [10.0, 10.0, 50.0, 50.0] }), &meta("m")).unwrap();
+    assert!(set_border_color(&mut doc, 0, m, Some([1.0, 0.0, 0.0]), &meta("")).is_err(), "a rectangle's colour is its border");
+}
+
 #[test]
 fn author_subject_and_note_icon_change() {
     let mut doc = fixture();
@@ -873,8 +952,8 @@ fn cloud_ys(path: &str) -> Vec<f64> {
 fn replace_text_groups_a_strikeout_and_a_caret() {
     let mut doc = fixture();
     let quads = [[100.0, 720.0, 200.0, 720.0, 100.0, 706.0, 200.0, 706.0]];
-    let red = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None };
-    let blue = Style { color: [0.0, 0.47, 0.84], opacity: 1.0, width: 1.0, fill: None };
+    let red = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None, border_color: None };
+    let blue = Style { color: [0.0, 0.47, 0.84], opacity: 1.0, width: 1.0, fill: None, border_color: None };
     let i = add_text_replacement(
         &mut doc,
         TextReplacement {

@@ -2564,3 +2564,9 @@ animation effects	Off	Joaktiv
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opsionet për këtë përgjigje
+# Fill & Sign text: the border around it (M5).
+	Border:	Korniza:
+
+# A text border's own colour (M5).
+	Border colour	Ngjyra e kornizës
+	Same as text	Si teksti

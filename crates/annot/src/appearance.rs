@@ -233,6 +233,31 @@ fn rg_stroke(c: Rgb) -> String {
 }
 
 /// `/DA` of a text box: (text colour, font size). Defaults to black 12 pt.
+/// A FreeText's border colour where it has its own: the stroking colour in `/DA` (`RG`, or `G`
+/// for grey). `None`: the border takes the text colour.
+pub fn da_border(d: &Dict) -> Option<Rgb> {
+    let da = d.get(b"DA").and_then(|o| o.as_string()).map(|s| String::from_utf8_lossy(&s.bytes).into_owned())?;
+    let toks: Vec<&str> = da.split_whitespace().collect();
+    let num = |i: usize| toks.get(i).and_then(|t| t.parse::<f64>().ok()).filter(|x| x.is_finite());
+    let mut col = None;
+    for (i, t) in toks.iter().enumerate() {
+        match *t {
+            "RG" if i >= 3 => {
+                if let (Some(r), Some(g), Some(b)) = (num(i - 3), num(i - 2), num(i - 1)) {
+                    col = Some([r, g, b].map(|x| x.clamp(0.0, 1.0)));
+                }
+            }
+            "G" if i >= 1 => {
+                if let Some(g) = num(i - 1) {
+                    col = Some([g.clamp(0.0, 1.0); 3]);
+                }
+            }
+            _ => {}
+        }
+    }
+    col
+}
+
 pub fn parse_da(d: &Dict) -> (Rgb, f64) {
     let da = d.get(b"DA").and_then(|o| o.as_string()).map(|s| String::from_utf8_lossy(&s.bytes).into_owned()).unwrap_or_default();
     let toks: Vec<&str> = da.split_whitespace().collect();
@@ -897,6 +922,8 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     let mut res = std::mem::take(&mut drawing.resources);
     let _tail = std::mem::take(&mut drawing.tail);
     let (text_color, size) = parse_da(d);
+    // The box's border and a callout's leader line: their own colour, else the text's.
+    let line_color = da_border(d).unwrap_or(text_color);
     let bg = stroke;
     let bw = if d.contains(b"BS") || d.contains(b"Border") { border_width(d) } else { 0.0 };
     // A callout: the leader line (arrowhead at its first point), and the text box inside
@@ -935,7 +962,7 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
         if pts.len() < 2 || pts.iter().any(|p| !p.0.is_finite() || !p.1.is_finite()) {
             return None;
         }
-        c.push_str(&format!("{}{}{} w 1 J 1 j\n", rg_stroke(text_color), rg(bg.unwrap_or([1.0; 3])), n(lw)));
+        c.push_str(&format!("{}{}{} w 1 J 1 j\n", rg_stroke(line_color), rg(bg.unwrap_or([1.0; 3])), n(lw)));
         for (i, p) in pts.iter().enumerate() {
             c.push_str(&format!("{} {} {}\n", n(p.0), n(p.1), if i == 0 { "m" } else { "l" }));
         }
@@ -951,7 +978,7 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
         let h = bw / 2.0;
         c.push_str(&format!(
             "{}{} w\n{}{} {} {} {} re S\n[] 0 d\n",
-            rg_stroke(text_color),
+            rg_stroke(line_color),
             n(bw),
             dash(d),
             n(rect[0] + h),

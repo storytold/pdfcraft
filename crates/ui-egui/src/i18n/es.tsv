@@ -2901,3 +2901,9 @@ theme	Appearance	Aspecto
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opciones de esta respuesta
 	Export value	Valor de exportación
+# Fill & Sign text: the border around it (M5).
+	Border:	Borde:
+
+# A text border's own colour (M5).
+	Border colour	Color del borde
+	Same as text	Igual que el texto

@@ -2600,3 +2600,9 @@ animation effects	Off	Вимкнено
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Параметри цієї відповіді
 	Export value	Значення експорту
+# Fill & Sign text: the border around it (M5).
+	Border:	Рамка:
+
+# A text border's own colour (M5).
+	Border colour	Колір рамки
+	Same as text	Як у тексту

@@ -528,8 +528,10 @@ fn apply_text_box(doc: &mut Document, r: ObjRef, rect: [f64; 4], meta: &Meta, ne
     }
 }
 
+/// The border width as the appearance draws it: `/BS /W`, else the third number of `/Border`
+/// (another app's), else 1.
 fn border_width_of(d: &Dict) -> f64 {
-    d.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(|w| w.as_f64()).unwrap_or(1.0).max(0.0)
+    appearance::border_width(d)
 }
 
 /// Change a comment's colour, opacity, line width and/or line endings, and redraw it.
@@ -555,13 +557,24 @@ pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleCha
     }
     refuse_foreign_text(doc, &d)?;
     let free_text = subtype == "FreeText";
+    // Typewriter text has no box of its own: a border goes around its text, so the box grows
+    // (or shrinks) by the change on every side and the text keeps its place and its lines.
+    let typewriter = free_text && d.name(b"IT") == Some(b"FreeTextTypeWriter") && !d.contains(b"CL");
+    let regrow = width.filter(|_| typewriter).and_then(|w| {
+        let by = w.max(0.0) - if d.contains(b"BS") || d.contains(b"Border") { border_width_of(&d) } else { 0.0 };
+        let rect: Vec<f64> = d.get(b"Rect")?.as_array()?.iter().filter_map(|o| o.as_f64()).collect();
+        let rect = grow(normalize(four(&rect)?), by);
+        (by != 0.0 && finite(&rect) && rect[2] - rect[0] >= 1.0 && rect[3] - rect[1] >= 1.0).then_some(rect)
+    });
     let before = d;
     doc.update_dict(r, |d| {
+        if let Some(rect) = regrow {
+            d.set(b"Rect".to_vec(), num_array(&rect));
+        }
         if let Some(c) = color {
             if free_text {
                 let (_, size) = appearance::parse_da(d);
-                let [r, g, b] = c.map(|x| x.clamp(0.0, 1.0));
-                d.set(b"DA".to_vec(), PdfString::literal(format!("{} {} {} rg /Helv {} Tf", n(r), n(g), n(b), n(size)).into_bytes()));
+                d.set(b"DA".to_vec(), free_text_da(c, appearance::da_border(d), size));
                 rich_text(d);
             } else {
                 d.set(b"C".to_vec(), rgb(c));
@@ -596,6 +609,37 @@ pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleCha
     redraw_or_restore(doc, r, before)
 }
 
+/// A FreeText's `/DA`: the text colour, the border's own colour when it has one (the stroking
+/// colour, `RG`), Helvetica at `size`.
+pub(crate) fn free_text_da(text: Rgb, border: Option<Rgb>, size: f64) -> PdfString {
+    let [r, g, b] = text.map(|x| x.clamp(0.0, 1.0));
+    let stroke = border.map(|c| c.map(|x| x.clamp(0.0, 1.0))).map(|[r, g, b]| format!("{} {} {} RG ", n(r), n(g), n(b))).unwrap_or_default();
+    PdfString::literal(format!("{} {} {} rg {stroke}/Helv {} Tf", n(r), n(g), n(b), n(size)).into_bytes())
+}
+
+/// Give a text box, typewriter text or callout a border colour of its own (`None`: the text's
+/// again), and redraw it.
+pub fn set_border_color(doc: &mut Document, page: usize, index: usize, color: Option<Rgb>, meta: &Meta) -> Result<(), AnnotError> {
+    let (_, r) = annot_ref(doc, page, index)?;
+    unlocked(doc, r)?;
+    let d = annot_dict(doc, r);
+    if d.name(b"Subtype") != Some(b"FreeText") {
+        return Err(AnnotError::Invalid("only text boxes, typewriter text and callouts have a border colour".into()));
+    }
+    if color.is_some_and(|c| !finite(&c)) {
+        return Err(AnnotError::Invalid("invalid colour".into()));
+    }
+    refuse_foreign_text(doc, &d)?;
+    let before = d;
+    doc.update_dict(r, |d| {
+        let (text, size) = appearance::parse_da(d);
+        d.set(b"DA".to_vec(), free_text_da(text, color, size));
+        rich_text(d);
+        touch(d, meta);
+    })?;
+    redraw_or_restore(doc, r, before)
+}
+
 /// Change the font size of a text box, typewriter text or callout (`/DA` keeps its colour; the
 /// rich-text strings follow) and redraw it. The box grows to hold the wrapped text at the new
 /// size and never shrinks, so a box the user drew large stays large. Sizes are 1 to 400 pt.
@@ -613,7 +657,7 @@ pub fn set_font_size(doc: &mut Document, page: usize, index: usize, size: f64, m
     let before = d;
     doc.update_dict(r, |d| {
         let (col, _) = appearance::parse_da(d);
-        d.set(b"DA".to_vec(), PdfString::literal(format!("{} {} {} rg /Helv {} Tf", n(col[0]), n(col[1]), n(col[2]), n(size)).into_bytes()));
+        d.set(b"DA".to_vec(), free_text_da(col, appearance::da_border(d), size));
         rich_text(d);
         touch(d, meta);
     })?;

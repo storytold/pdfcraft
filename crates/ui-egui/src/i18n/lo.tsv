@@ -2481,3 +2481,9 @@ animation effects	Off	ປິດ
 	Unchecked reads	Unchecked reads
 	{field} reads fields named as it runs	{field} reads fields named as it runs
 	Some names are built as it runs	Some names are built as it runs
+# Fill & Sign text: the border around it (M5).
+	Border:	ເສັ້ນຂອບ:
+
+# A text border's own colour (M5).
+	Border colour	ສີເສັ້ນຂອບ
+	Same as text	ຄືກັບຂໍ້ຄວາມ

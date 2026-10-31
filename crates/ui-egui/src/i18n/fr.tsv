@@ -2844,3 +2844,9 @@ certificate	Version	Version
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Options de cette réponse
 	Export value	Valeur d’exportation
+# Fill & Sign text: the border around it (M5).
+	Border:	Bordure :
+
+# A text border's own colour (M5).
+	Border colour	Couleur de bordure
+	Same as text	Comme le texte

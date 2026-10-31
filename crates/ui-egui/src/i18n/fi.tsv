@@ -2847,3 +2847,9 @@ theme	Appearance	Teema
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tämän vastauksen asetukset
+# Fill & Sign text: the border around it (M5).
+	Border:	Reuna:
+
+# A text border's own colour (M5).
+	Border colour	Reunan väri
+	Same as text	Sama kuin teksti

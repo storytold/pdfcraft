@@ -2487,3 +2487,9 @@ animation effects	Off	ఆఫ్
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	ఈ ప్రత్యుత్తరం ఎంపికలు
 	Export value	ఎగుమతి విలువ
+# Fill & Sign text: the border around it (M5).
+	Border:	అంచు:
+
+# A text border's own colour (M5).
+	Border colour	అంచు రంగు
+	Same as text	వచనం లాగే

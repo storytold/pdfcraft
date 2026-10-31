@@ -2770,3 +2770,9 @@ certificate	Version	وەشان
 @plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	{n} more formula reads a missing field.|{n} more formulas read missing fields.
 @plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.
 @plural	{fields} is missing|{fields} are missing	{fields} is missing|{fields} are missing
+# Fill & Sign text: the border around it (M5).
+	Border:	سنوور:
+
+# A text border's own colour (M5).
+	Border colour	ڕەنگی سنوور
+	Same as text	وەک دەق

@@ -2541,3 +2541,9 @@ animation effects	Off	Изключени
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Опции за този отговор
 	Export value	Стойност за експортиране
+# Fill & Sign text: the border around it (M5).
+	Border:	Рамка:
+
+# A text border's own colour (M5).
+	Border colour	Цвят на рамката
+	Same as text	Като текста

@@ -2816,3 +2816,10 @@ theme	Appearance	ظاهر
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	گزینه‌های این پاسخ
+
+# Fill & Sign text: the border around it (M5).
+	Border:	حاشیه:
+
+# A text border's own colour (M5).
+	Border colour	رنگ حاشیه
+	Same as text	همانند متن
