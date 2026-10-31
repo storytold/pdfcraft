@@ -133,11 +133,12 @@ fn write_stream(s: &Stream, out: &mut Vec<u8>) {
 
 /// The object as written: encrypted with its (output) number when the document is encrypted,
 /// except the `/Encrypt` dictionary itself (`source_num` is its number in the source document).
+/// `o` has the document's numbers in its references ([`crate::security::transform`]).
 fn prepared<'a>(doc: &Document, source_num: u32, num: u32, generation: u16, o: &'a Object) -> Cow<'a, Object> {
     match doc.output_security() {
-        (Some(h), encrypt_num) if Some(source_num) != encrypt_num => {
+        (Some(h), encrypt_num) if Some(source_num) != encrypt_num && !doc.stored_as_is(source_num) => {
             let pass = if doc.encryption_changed() { crate::security::Pass::EncryptReplacing } else { crate::security::Pass::Encrypt };
-            Cow::Owned(crate::security::transform(h, o, num, generation, pass))
+            Cow::Owned(crate::security::transform(doc, h, o, num, generation, pass))
         }
         _ => Cow::Borrowed(o),
     }
@@ -287,6 +288,10 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
             queue.push_back(r);
         }
     }
+    // A direct /Encrypt can refer to objects, /CF or /StmF, say.
+    if let Some(encrypt @ Object::Dict(_)) = trailer_in.get(b"Encrypt") {
+        visit_refs(encrypt, &mut queue);
+    }
     // Unknown trailer entries are document data. Objects they alone reference must be written
     // too, or a full rewrite would keep the key and drop its value.
     for (key, value) in trailer_in.iter() {
@@ -315,7 +320,10 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     // The /Encrypt dictionary and everything it references (e.g. indirect /CF crypt-filter
     // dictionaries) are needed before anything can be decrypted: never inside object streams.
     let mut encryption_objects: std::collections::HashSet<ObjRef> = std::collections::HashSet::new();
-    let mut pending: Vec<ObjRef> = trailer_in.reference(b"Encrypt").into_iter().collect();
+    let mut pending: Vec<ObjRef> = Vec::new();
+    if let Some(encrypt) = trailer_in.get(b"Encrypt") {
+        collect_refs(encrypt, &mut |r| pending.push(r));
+    }
     while let Some(r) = pending.pop() {
         if encryption_objects.insert(r) {
             collect_refs(&reader.get(r), &mut |x| pending.push(x));
@@ -336,9 +344,10 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
         if in_stream {
             packed.push((num, *r));
         } else {
-            let o = renumber(&*reread(&mut reader, *r, *is_stream)?, &map);
+            let o = reread(&mut reader, *r, *is_stream)?;
+            let o = renumber(&prepared(&reader.document, r.num, num, 0, &o), &map);
             rows.insert(num, Row::InFile(out.len() as u64, 0));
-            write_indirect(num, 0, &prepared(&reader.document, r.num, num, 0, &o), &mut out);
+            write_indirect(num, 0, &o, &mut out);
         }
     }
     // Object streams take the numbers after the last object. Their contents are not encrypted
@@ -368,11 +377,11 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
             trailer.set(key.to_vec(), Object::Ref(ObjRef::new(*r, 0)));
         }
     }
-    if let Some(Object::Dict(d)) = trailer_in.get(b"Encrypt") {
-        trailer.set(b"Encrypt".to_vec(), Object::Dict(d.clone()));
+    if let Some(encrypt @ Object::Dict(_)) = trailer_in.get(b"Encrypt") {
+        trailer.set(b"Encrypt".to_vec(), renumber(encrypt, &map));
     }
     if let Some(id) = trailer_in.get(b"ID") {
-        trailer.set(b"ID".to_vec(), id.clone());
+        trailer.set(b"ID".to_vec(), direct_id(&reader.document, id));
     }
     for (key, value) in trailer_in.iter() {
         if !trailer_key_rewritten(key) {
@@ -442,6 +451,22 @@ impl ObjectStreamBatch {
     }
 }
 
+/// `/ID` for the trailer, direct, as it has to be with `/Encrypt`: nothing else in the file holds
+/// what it refers to now. Given by reference it is two entries at most, however many references a
+/// file gave, so that one large string isn't copied for each. An entry that isn't a string stays in
+/// its place as an empty one, which is how the key read it.
+fn direct_id(doc: &Document, id: &Object) -> Object {
+    if matches!(id, Object::Array(a) if !a.iter().any(|s| matches!(s, Object::Ref(_)))) {
+        return id.clone();
+    }
+    let entry = |s: &Object| match &*doc.resolve(s) {
+        s @ Object::String(_) => s.clone(),
+        _ => Object::String(crate::PdfString { bytes: Vec::new(), hex: true }),
+    };
+    let held = doc.resolve(id);
+    Object::Array(held.as_array().into_iter().flatten().take(2).map(entry).collect())
+}
+
 /// Trailer keys a full rewrite generates itself. Everything else is copied, with references
 /// renumbered, so a save does not drop metadata the reader accepted.
 fn trailer_key_rewritten(key: &[u8]) -> bool {
@@ -486,7 +511,7 @@ pub(crate) fn unlinked_additions(doc: &Document) -> HashSet<u32> {
     pending.into_keys().collect()
 }
 
-fn collect_refs(o: &Object, f: &mut impl FnMut(ObjRef)) {
+pub(crate) fn collect_refs(o: &Object, f: &mut impl FnMut(ObjRef)) {
     match o {
         Object::Ref(r) => f(*r),
         Object::Array(a) => a.iter().for_each(|x| collect_refs(x, f)),
@@ -663,6 +688,15 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 
 #[cfg(test)]
 mod tests {
+    /// `/ID` by reference comes out direct, each entry where it was: the key is made from the first.
+    #[test]
+    fn a_file_identifier_keeps_its_entries_in_their_places() {
+        let doc = Document::new_empty();
+        let string = |bytes: &[u8]| Object::String(crate::PdfString { bytes: bytes.to_vec(), hex: true });
+        let nowhere = Object::Ref(ObjRef::new(9_999, 0));
+        assert_eq!(super::direct_id(&doc, &Object::Array(vec![nowhere, string(b"ab")])), Object::Array(vec![string(b""), string(b"ab")]));
+    }
+
     use proptest::prelude::*;
 
     use super::*;

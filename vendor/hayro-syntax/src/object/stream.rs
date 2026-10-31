@@ -5,7 +5,7 @@ use crate::filter::Filter;
 use crate::object;
 use crate::object::Dict;
 use crate::object::Name;
-use crate::object::dict::keys::{DECODE_PARMS, DP, F, FILTER, LENGTH, TYPE};
+use crate::object::dict::keys::{DECODE_PARMS, DP, F, FILTER, LENGTH, NAME, TYPE};
 use crate::object::{Array, ObjectIdentifier};
 use crate::object::{Object, ObjectLike, ObjectRefLike};
 use crate::reader::Reader;
@@ -13,6 +13,7 @@ use crate::reader::{Readable, ReaderContext, ReaderExt, Skippable};
 use crate::trivia::is_white_space_character;
 use crate::util::{OptionLog, find_needle};
 use alloc::borrow::Cow;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt::{Debug, Formatter};
 use smallvec::SmallVec;
@@ -73,38 +74,44 @@ impl<'a> Stream<'a> {
         let mut collected_filters = SmallVec::new();
         let mut collected_params = SmallVec::new();
 
+        // PdfCraft patch (30): `/DecodeParms` in either form, whichever form `/Filter` has: one filter
+        // in an array with a lone dictionary is an everyday spelling, and a lone dictionary is the
+        // first filter's. Read as the chain asks, so a long array costs no more than a short one.
+        let parms = self
+            .dict
+            .get::<Object<'_>>(DP)
+            .or_else(|| self.dict.get::<Object<'_>>(DECODE_PARMS));
+        let mut in_array = match &parms {
+            Some(Object::Array(a)) => Some(a.iter::<Object<'_>>()),
+            _ => None,
+        };
+        let mut lone = match parms {
+            Some(Object::Dict(d)) => Some(d),
+            _ => None,
+        };
+        let mut next_params = || {
+            lone.take()
+                .or_else(|| in_array.as_mut()?.next()?.into_dict())
+                .unwrap_or_default()
+        };
+
         if let Some(filter) = self
             .dict
             .get::<Name<'_>>(F)
             .or_else(|| self.dict.get::<Name<'_>>(FILTER))
             .and_then(Filter::from_name)
         {
-            let params = self
-                .dict
-                .get::<Dict<'_>>(DP)
-                .or_else(|| self.dict.get::<Dict<'_>>(DECODE_PARMS))
-                .unwrap_or_default();
-
             collected_filters.push(filter);
-            collected_params.push(params);
+            collected_params.push(next_params());
         } else if let Some(filters) = self
             .dict
             .get::<Array<'_>>(F)
             .or_else(|| self.dict.get::<Array<'_>>(FILTER))
         {
             let filters = filters.iter::<Name<'_>>().map(Filter::from_name);
-            let mut params = self
-                .dict
-                .get::<Array<'_>>(DP)
-                .or_else(|| self.dict.get::<Array<'_>>(DECODE_PARMS))
-                .map(|a| a.iter::<Object<'_>>());
 
             for filter in filters {
-                let params = params
-                    .as_mut()
-                    .and_then(|p| p.next())
-                    .and_then(|p| p.into_dict())
-                    .unwrap_or_default();
+                let params = next_params();
 
                 if let Some(filter) = filter {
                     collected_filters.push(filter);
@@ -117,6 +124,20 @@ impl<'a> Stream<'a> {
             filters: collected_filters,
             params: collected_params,
         }
+    }
+
+    /// PdfCraft patch (30): the crypt filter the stream names for itself: `/Crypt` in its chain, its
+    /// name in that filter's parameters, or `/Identity` without one (ISO 32000-2 §7.4.10).
+    fn crypt_filter(&self) -> Option<String> {
+        let FiltersAndParams { filters, params } = self.filters_and_params();
+        // A chain longer than cos decodes names none there, so it names none here either:
+        // `pdfcraft_filters::MAX_CHAIN`, and `/Crypt`.
+        if filters.len() > 9 {
+            return None;
+        }
+        let i = filters.iter().position(|f| matches!(f, Filter::Crypt))?;
+        let name = params.get(i).and_then(|p| p.get::<Name<'_>>(NAME));
+        Some(name.map_or_else(|| "Identity".to_string(), |n| n.as_str().to_string()))
     }
 
     /// Return the raw, decrypted data of the stream.
@@ -132,9 +153,13 @@ impl<'a> Stream<'a> {
                 .map(|t| t.as_ref() != b"XRef")
                 .unwrap_or(true)
         {
+            let own = self.crypt_filter();
+            let target = own
+                .as_deref()
+                .map_or(DecryptionTarget::Stream, DecryptionTarget::NamedStream);
             Cow::Owned(
                 ctx.xref()
-                    .decrypt(self.obj_id(), self.data, DecryptionTarget::Stream)
+                    .decrypt(self.obj_id(), self.data, target)
                     // TODO: MAybe an error would be better?
                     .unwrap_or_default(),
             )
@@ -241,6 +266,11 @@ impl<'a> Stream<'a> {
             .zip(filters_and_params.params.iter())
             .enumerate()
         {
+            // PdfCraft patch (30): `raw_data` decrypted the data, so there's nothing to undo, and a
+            // chain can name this thousands of times.
+            if matches!(filter, Filter::Crypt) {
+                continue;
+            }
             // PdfCraft patch: see `filter::decode_limit`.
             let limit = crate::filter::decode_limit(image_params, i + 1 == count).min(max);
             let new = filter.apply(

@@ -494,3 +494,769 @@ fn a_stream_labelled_xref_is_encrypted_when_saved() {
     let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
     assert!(!bytes.windows(SECRET.len()).any(|w| w == SECRET.as_bytes()), "the labelled stream was written in the clear");
 }
+
+/// The content stream's reference.
+fn contents_of(doc: &Document) -> ObjRef {
+    let catalog = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();
+    let pages = doc.get(catalog.reference(b"Pages").unwrap()).as_dict().cloned().unwrap();
+    let page = doc.resolve(&pages.get(b"Kids").unwrap().as_array().unwrap()[0]).as_dict().cloned().unwrap();
+    page.reference(b"Contents").unwrap()
+}
+
+/// The content stream's data as loaded, whatever its filters say.
+fn raw_content(doc: &Document) -> String {
+    match &*doc.get(contents_of(doc)) {
+        Object::Stream(s) => String::from_utf8_lossy(&s.raw).trim().to_string(),
+        _ => panic!("no content stream"),
+    }
+}
+
+/// Gives the content stream the `/Filter` and `/DecodeParms` of `selector`.
+fn select(doc: &mut Document, (filter, parms): (Object, Object)) {
+    let contents = contents_of(doc);
+    let Object::Stream(mut s) = doc.get(contents).as_ref().clone() else { panic!("no content stream") };
+    s.dict.set(b"Filter".to_vec(), filter);
+    s.dict.set(b"DecodeParms".to_vec(), parms);
+    doc.set(contents, Object::Stream(s));
+}
+
+/// `/Crypt` naming `name`, in the `form`th spelling: all direct, then each part by reference.
+/// `None` past the last.
+fn selector(doc: &mut Document, form: usize, name: &str) -> Option<(Object, Object)> {
+    let crypt = Object::name("Crypt");
+    let parms = |n: Object| {
+        let mut d = pdfcraft_cos::Dict::new();
+        d.set(b"Name".to_vec(), n);
+        Object::Dict(d)
+    };
+    let named = parms(Object::name(name));
+    Some(match form {
+        0 => (crypt, named),
+        1 => (crypt, Object::Ref(doc.add(named))),
+        2 => (Object::Array(vec![crypt]), Object::Array(vec![Object::Ref(doc.add(named))])),
+        3 => (Object::Array(vec![crypt]), Object::Ref(doc.add(Object::Array(vec![named])))),
+        4 => (crypt, parms(Object::Ref(doc.add(Object::name(name))))),
+        5 => (Object::Ref(doc.add(crypt)), named),
+        6 => (Object::Ref(doc.add(Object::Array(vec![crypt]))), Object::Array(vec![named])),
+        7 => (Object::Array(vec![Object::Ref(doc.add(crypt))]), Object::Array(vec![named])),
+        // Behind a filter given by reference: places in the two arrays pair up all the same.
+        8 => (Object::Array(vec![Object::Ref(doc.add(Object::name("ASCIIHexDecode"))), crypt]), Object::Array(vec![Object::Null, named])),
+        // The two entries in different forms, which is how a lone filter is usually spelled.
+        9 => (Object::Array(vec![crypt]), named),
+        10 => (crypt, Object::Array(vec![named])),
+        // The filter twice, which names the first's.
+        11 => (Object::Array(vec![crypt.clone(), crypt]), Object::Array(vec![named.clone(), named])),
+        // A reference to a reference.
+        12 => {
+            let name = doc.add(Object::name(name));
+            let hop = doc.add(Object::Ref(name));
+            (crypt, parms(Object::Ref(hop)))
+        }
+        _ => return None,
+    })
+}
+
+fn holds(bytes: &[u8], text: &str) -> bool {
+    String::from_utf8_lossy(bytes).contains(text)
+}
+
+/// A stream can select its crypt filter by reference at every step: the chain, an entry of it, the
+/// parameters, an entry of those, the name (ISO 32000-2 §7.3.10, §7.4.10). Read as absent, the
+/// filter was `/Identity`, so such a stream was saved in the clear and, in a file from elsewhere,
+/// its ciphertext read as data. A full save renumbers: what it follows has the document's numbers.
+#[test]
+fn a_crypt_filter_selected_by_reference_is_used() {
+    for alg in [Algorithm::Aes128, Algorithm::Aes256] {
+        for form in 0.. {
+            let mut doc = Document::open(Arc::new(protect(alg, "", "owner", -1))).unwrap();
+            let Some(selected) = selector(&mut doc, form, "StdCF") else { break };
+            select(&mut doc, selected);
+            let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
+            assert!(!holds(&saved, "Secret page"), "{alg:?} form {form}: saved encrypted");
+            let back = Document::open(Arc::new(saved)).unwrap();
+            assert_eq!(raw_content(&back), SECRET, "{alg:?} form {form}: read back");
+            let full = write_full(&back, &SaveOptions::default()).unwrap();
+            assert!(!holds(&full, "Secret page"), "{alg:?} form {form}: renumbered, encrypted");
+            assert_eq!(raw_content(&Document::open(Arc::new(full)).unwrap()), SECRET, "{alg:?} form {form}: renumbered");
+        }
+    }
+}
+
+/// A reference to a stream that takes `follows` references to read cold, this one included: its
+/// nine filters are all read, the last leading to the next stream.
+fn spends(doc: &mut Document, follows: usize) -> Object {
+    let left = follows - 1;
+    let mut filters: Vec<Object> = (0..left.min(8)).map(|i| Object::Ref(doc.add(Object::Int(i as i64)))).collect();
+    if left > 8 {
+        filters.push(spends(doc, left - 8));
+    }
+    let mut dict = pdfcraft_cos::Dict::new();
+    dict.set(b"Filter".to_vec(), Object::Array(filters));
+    Object::Ref(doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(dict, Vec::new()))))
+}
+
+/// Gives the content stream a `/Type` that takes `follows` references to read, ahead of its filter.
+fn spend_first(doc: &mut Document, follows: usize) {
+    let spent = spends(doc, follows);
+    let contents = contents_of(doc);
+    let Object::Stream(mut s) = doc.get(contents).as_ref().clone() else { panic!("no content stream") };
+    s.dict.set(b"Type".to_vec(), spent);
+    doc.set(contents, Object::Stream(s));
+}
+
+/// Past what one read may follow a reference reads as absent, and a crypt filter with no `/Name` is
+/// `/Identity`. Together those would read this stream's ciphertext as data, so what can't be told
+/// is the document's own filter, as a `/Filter` that can't be read is.
+#[test]
+fn a_crypt_filter_past_what_a_read_may_follow_is_the_documents_own() {
+    let mut doc = Document::open(Arc::new(protect(Algorithm::Aes128, "", "owner", -1))).unwrap();
+    let selected = selector(&mut doc, 1, "StdCF").unwrap();
+    select(&mut doc, selected);
+    spend_first(&mut doc, 40);
+    let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    assert!(!holds(&saved, "Secret page"), "saved encrypted");
+    let back = Document::open(Arc::new(saved)).unwrap();
+    assert_eq!(raw_content(&back), SECRET);
+    let full = write_full(&back, &SaveOptions::default()).unwrap();
+    assert!(!holds(&full, "Secret page"), "renumbered, encrypted");
+    assert_eq!(raw_content(&Document::open(Arc::new(full)).unwrap()), SECRET, "renumbered");
+}
+
+/// A read that takes all it may follow has refused nothing: a crypt filter with no `/Name` after it
+/// is still `/Identity`, and the stream is in the clear.
+#[test]
+fn a_crypt_filter_with_no_name_after_all_a_read_may_follow_is_identity() {
+    let mut doc = Document::open(Arc::new(protect(Algorithm::Aes128, "", "owner", -1))).unwrap();
+    select(&mut doc, (Object::name("Crypt"), Object::Dict(pdfcraft_cos::Dict::new())));
+    spend_first(&mut doc, 32);
+    let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    assert!(holds(&saved, "Secret page"), "written as the stream asks");
+    assert_eq!(raw_content(&Document::open(Arc::new(saved)).unwrap()), SECRET);
+}
+
+/// `/Identity` selected by reference keeps a stream in the clear in a document that encrypts the
+/// rest, in every spelling, on both saves.
+#[test]
+fn an_identity_crypt_filter_selected_by_reference_leaves_a_stream_alone() {
+    for form in 0.. {
+        let mut doc = Document::open(Arc::new(protect(Algorithm::Aes128, "", "owner", -1))).unwrap();
+        let Some(selected) = selector(&mut doc, form, "Identity") else { break };
+        select(&mut doc, selected);
+        let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
+        assert!(holds(&saved, "Secret page"), "form {form}: written as the stream asks");
+        let back = Document::open(Arc::new(saved)).unwrap();
+        assert_eq!(raw_content(&back), SECRET, "form {form}");
+        let full = write_full(&back, &SaveOptions::default()).unwrap();
+        assert!(holds(&full, "Secret page"), "form {form}: renumbered");
+        assert_eq!(raw_content(&Document::open(Arc::new(full)).unwrap()), SECRET, "form {form}: renumbered");
+    }
+}
+
+/// New protection drops a crypt filter it doesn't define, whichever way the stream selected it. The
+/// chain comes out direct. Parameters in the stream's own dictionary stay, encrypted with it; of an
+/// array in an object of its own, which every stream can share, only what decoders read is copied.
+#[test]
+fn protecting_drops_a_crypt_filter_selected_by_reference() {
+    let protected = |doc: &mut Document| {
+        doc.set_encryption(&NewEncryption {
+            algorithm: Algorithm::Aes256,
+            user_password: "",
+            owner_password: "owner",
+            permissions: -1,
+            encrypt_metadata: true,
+            seed: [7; 32],
+        })
+        .unwrap();
+        write_full(doc, &SaveOptions::default()).unwrap()
+    };
+    for form in 0.. {
+        let mut doc = Document::open(Arc::new(fixture())).unwrap();
+        let Some(selected) = selector(&mut doc, form, "MyCF") else { break };
+        select(&mut doc, selected);
+        let bytes = protected(&mut doc);
+        assert!(!holds(&bytes, "Secret page"), "form {form}: encrypted");
+        assert!(!holds(&bytes, "MyCF"), "form {form}: no selector left in the stream");
+        let back = Document::open(Arc::new(bytes.clone())).unwrap();
+        assert_eq!(raw_content(&back), SECRET, "form {form}");
+        let contents = back.get(contents_of(&back));
+        let filter = contents.as_dict().unwrap().get(b"Filter");
+        match form {
+            8 => assert!(
+                matches!(filter, Some(Object::Array(a)) if matches!(a.as_slice(), [Object::Ref(_)])),
+                "form 8: the other filter stays: {filter:?}"
+            ),
+            _ => assert_eq!(filter, None, "form {form}"),
+        }
+        assert!(hayro_syntax::Pdf::new(bytes).is_ok(), "form {form}");
+    }
+    for shared in [false, true] {
+        let mut doc = Document::open(Arc::new(fixture())).unwrap();
+        let mut named = pdfcraft_cos::Dict::new();
+        named.set(b"Name".to_vec(), Object::name("MyCF"));
+        let mut other = pdfcraft_cos::Dict::new();
+        other.set(b"Note".to_vec(), Object::String(PdfString::text("Private note")));
+        other.set(b"Predictor".to_vec(), Object::Int(1));
+        let parms = Object::Array(vec![Object::Dict(named), Object::Dict(other)]);
+        let parms = if shared { Object::Ref(doc.add(parms)) } else { parms };
+        select(&mut doc, (Object::Array(vec![Object::name("Crypt"), Object::name("ASCIIHexDecode")]), parms));
+        let bytes = protected(&mut doc);
+        assert!(!holds(&bytes, "Private note"), "shared: {shared}");
+        let back = Document::open(Arc::new(bytes)).unwrap();
+        let contents = back.get(contents_of(&back));
+        let kept = contents.as_dict().unwrap().get(b"DecodeParms").unwrap().as_array().unwrap();
+        assert_eq!(kept.len(), 1, "one filter left, one entry");
+        let kept = kept[0].as_dict().unwrap();
+        assert_eq!(kept.get(b"Predictor"), Some(&Object::Int(1)), "shared: {shared}");
+        assert_eq!(kept.get(b"Note").is_some(), !shared, "shared: {shared}");
+    }
+}
+
+/// Every stream of a file can share one large object as its `/DecodeParms` or `/Filter`, which
+/// costs nothing until new protection drops a crypt filter from each. Copied whole, a 1 MB file
+/// came out at 1 GB.
+#[test]
+fn protecting_copies_no_large_object_into_every_stream() {
+    let pad = Object::Array(vec![Object::Int(1); 100_000]);
+    let mut doc = Document::open(Arc::new(fixture())).unwrap();
+    let mut large = pdfcraft_cos::Dict::new();
+    large.set(b"Pad".to_vec(), pad.clone());
+    let parms = doc.add(Object::Array(vec![Object::Null, Object::Dict(large)]));
+    let filter = doc.add(Object::Array(vec![Object::name("Crypt"), Object::Name(vec![b'A'; 100_000]), pad]));
+    let mut streams = Vec::new();
+    for _ in 0..200 {
+        let mut by_parms = pdfcraft_cos::Dict::new();
+        by_parms.set(b"Filter".to_vec(), Object::Array(vec![Object::name("Crypt"), Object::name("ASCIIHexDecode")]));
+        by_parms.set(b"DecodeParms".to_vec(), Object::Ref(parms));
+        streams.push(Object::Ref(doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(by_parms, b"41>".to_vec())))));
+        let mut by_filter = pdfcraft_cos::Dict::new();
+        by_filter.set(b"Filter".to_vec(), Object::Ref(filter));
+        streams.push(Object::Ref(doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(by_filter, b"41>".to_vec())))));
+    }
+    doc.update_dict(doc.root().unwrap(), |c| c.set(b"Test".to_vec(), Object::Array(streams))).unwrap();
+    doc.set_encryption(&NewEncryption {
+        algorithm: Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        permissions: -1,
+        encrypt_metadata: true,
+        seed: [7; 32],
+    })
+    .unwrap();
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(bytes.len() < 1 << 20, "{} bytes", bytes.len());
+}
+
+/// A file can name one large string thousands of times in `/ID`, which holds two. An encrypted file
+/// keeps its `/ID`, so each copy would be in the file a save writes.
+#[test]
+fn a_file_identifier_of_many_references_is_two_strings() {
+    let mut doc = Document::open(Arc::new(fixture())).unwrap();
+    doc.set_encryption(&NewEncryption {
+        algorithm: Algorithm::Aes128,
+        user_password: "",
+        owner_password: "owner",
+        permissions: -1,
+        encrypt_metadata: true,
+        seed: [9; 32],
+    })
+    .unwrap();
+    let large = doc.add(Object::String(PdfString { bytes: vec![0xAB; 100_000], hex: true }));
+    doc.trailer_mut().set(b"ID".to_vec(), Object::Array(vec![Object::Ref(large); 500]));
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(bytes.len() < 1 << 20, "{} bytes", bytes.len());
+}
+
+/// What a file can do with those references: point a stream's selector at the stream itself, or at
+/// nothing. They read as absent, so a stream with `/Crypt` is `/Identity` (ISO 32000-2 §7.4.10),
+/// and one that names no filter follows the document's. Loading ends either way.
+#[test]
+fn a_crypt_filter_reference_to_itself_or_nothing_reads_as_absent() {
+    let named = |n: Object| {
+        let mut d = pdfcraft_cos::Dict::new();
+        d.set(b"Name".to_vec(), n);
+        Object::Dict(d)
+    };
+    for (what, encrypted) in [
+        ("/Filter to itself", true),
+        ("/Filter nowhere", true),
+        ("/DecodeParms to itself", false),
+        ("/DecodeParms nowhere", false),
+        ("/Name to itself", false),
+        ("/Name nowhere", false),
+    ] {
+        let mut doc = Document::open(Arc::new(protect(Algorithm::Aes128, "", "owner", -1))).unwrap();
+        let me = Object::Ref(contents_of(&doc));
+        let nowhere = Object::Ref(ObjRef::new(9_999, 0));
+        let crypt = Object::name("Crypt");
+        select(
+            &mut doc,
+            match what {
+                "/Filter to itself" => (me, Object::Null),
+                "/Filter nowhere" => (nowhere, Object::Null),
+                "/DecodeParms to itself" => (crypt, me),
+                "/DecodeParms nowhere" => (crypt, nowhere),
+                "/Name to itself" => (crypt, named(me)),
+                _ => (crypt, named(nowhere)),
+            },
+        );
+        let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
+        assert_eq!(!holds(&saved, "Secret page"), encrypted, "{what}");
+        assert_eq!(raw_content(&Document::open(Arc::new(saved)).unwrap()), SECRET, "{what}");
+    }
+}
+
+/// A lone parameter dictionary belongs to the first filter, so `/Crypt` behind another filter has
+/// none of its own and is `/Identity` (ISO 32000-2 §7.4.1), whatever that dictionary says.
+#[test]
+fn a_lone_parameter_dictionary_is_the_first_filters() {
+    let mut doc = Document::open(Arc::new(protect(Algorithm::Aes128, "", "owner", -1))).unwrap();
+    let mut parms = pdfcraft_cos::Dict::new();
+    parms.set(b"Name".to_vec(), Object::name("StdCF"));
+    let first = Object::Array(vec![Object::name("Crypt"), Object::name("ASCIIHexDecode")]);
+    let second = Object::Array(vec![Object::name("ASCIIHexDecode"), Object::name("Crypt")]);
+    select(&mut doc, (first, Object::Dict(parms.clone())));
+    assert!(!holds(&write_incremental(&doc, &SaveOptions::default()).unwrap(), "Secret page"), "first: it names StdCF");
+    select(&mut doc, (second, Object::Dict(parms)));
+    assert!(holds(&write_incremental(&doc, &SaveOptions::default()).unwrap(), "Secret page"), "second: it names nothing");
+}
+
+/// A lone parameter dictionary is the first filter's, so dropping a `/Crypt` behind that filter
+/// leaves it, and dropping one in front of it takes it away.
+#[test]
+fn protecting_keeps_the_parameters_of_the_filter_before_a_crypt_filter() {
+    let protected = |filters: Vec<Object>| {
+        let mut doc = Document::open(Arc::new(fixture())).unwrap();
+        let mut parms = pdfcraft_cos::Dict::new();
+        parms.set(b"Name".to_vec(), Object::name("MyCF"));
+        select(&mut doc, (Object::Array(filters), Object::Dict(parms)));
+        doc.set_encryption(&NewEncryption {
+            algorithm: Algorithm::Aes256,
+            user_password: "",
+            owner_password: "owner",
+            permissions: -1,
+            encrypt_metadata: true,
+            seed: [7; 32],
+        })
+        .unwrap();
+        let back = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        back.get(contents_of(&back)).as_dict().unwrap().contains(b"DecodeParms")
+    };
+    let (hex, crypt) = (Object::name("ASCIIHexDecode"), Object::name("Crypt"));
+    assert!(protected(vec![hex.clone(), crypt.clone()]), "the first filter's, which stays");
+    assert!(!protected(vec![crypt, hex]), "/Crypt's, which goes");
+}
+
+/// Dropping `/Crypt` takes its entry out of `/DecodeParms`, and an array too short to have one is
+/// left as it is, given directly or by reference.
+#[test]
+fn protecting_leaves_a_parameter_array_too_short_for_the_crypt_filter() {
+    for by_reference in [false, true] {
+        let mut doc = Document::open(Arc::new(fixture())).unwrap();
+        let short = Object::Array(vec![Object::Null]);
+        let parms = if by_reference { Object::Ref(doc.add(short)) } else { short };
+        select(&mut doc, (Object::Array(vec![Object::name("ASCIIHexDecode"), Object::name("Crypt")]), parms));
+        doc.set_encryption(&NewEncryption {
+            algorithm: Algorithm::Aes256,
+            user_password: "",
+            owner_password: "owner",
+            permissions: -1,
+            encrypt_metadata: true,
+            seed: [7; 32],
+        })
+        .unwrap();
+        let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+        assert!(!holds(&bytes, "Secret page"), "by reference: {by_reference}");
+        let back = Document::open(Arc::new(bytes)).unwrap();
+        assert_eq!(raw_content(&back), SECRET, "by reference: {by_reference}");
+        let contents = back.get(contents_of(&back));
+        let filter = contents.as_dict().unwrap().get(b"Filter").unwrap().as_array().unwrap();
+        assert_eq!(filter.len(), 1, "only /Crypt goes");
+        assert_eq!(filter[0].as_name(), Some(b"ASCIIHexDecode".as_slice()), "the other filter stays as it was");
+    }
+}
+
+/// A chain of up to [`pdfcraft_filters::MAX_CHAIN`] filters and `/Crypt` is read; a longer one
+/// names no crypt filter, so its entries aren't followed for every stream sharing it.
+#[test]
+fn a_chain_longer_than_any_decoder_takes_names_no_crypt_filter() {
+    let chain = |others: usize| {
+        let mut doc = Document::open(Arc::new(protect(Algorithm::Aes128, "", "owner", -1))).unwrap();
+        let mut filters = vec![Object::name("ASCIIHexDecode"); others];
+        filters.push(Object::name("Crypt"));
+        let array = doc.add(Object::Array(filters));
+        select(&mut doc, (Object::Ref(array), Object::Null));
+        holds(&write_incremental(&doc, &SaveOptions::default()).unwrap(), "Secret page")
+    };
+    assert!(chain(pdfcraft_filters::MAX_CHAIN), "the longest chain read: /Identity, in the clear");
+    assert!(!chain(pdfcraft_filters::MAX_CHAIN + 1), "one more: the document's filter");
+}
+
+/// A stream's `/Type` by reference picks its handling like one given directly: metadata left
+/// readable under `/EncryptMetadata false`, an embedded file under `/EFF`.
+#[test]
+fn a_stream_type_given_by_reference_picks_its_crypt_filter() {
+    let mut doc = Document::open(Arc::new(fixture())).unwrap();
+    let catalog = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();
+    let meta = catalog.reference(b"Metadata").unwrap();
+    let ty = doc.add(Object::name("Metadata"));
+    let Object::Stream(mut s) = doc.get(meta).as_ref().clone() else { panic!("no metadata stream") };
+    s.dict.set(b"Type".to_vec(), Object::Ref(ty));
+    doc.set(meta, Object::Stream(s));
+    doc.set_encryption(&NewEncryption {
+        algorithm: Algorithm::Aes256,
+        user_password: "",
+        owner_password: "o",
+        permissions: -1,
+        encrypt_metadata: false,
+        seed: [5; 32],
+    })
+    .unwrap();
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(holds(&bytes, "<x:xmpmeta>meta</x:xmpmeta>"), "search engines can read XMP");
+
+    let mut doc = Document::open(Arc::new(protect(Algorithm::Aes128, "", "owner", -1))).unwrap();
+    let encrypt = doc.trailer().reference(b"Encrypt").unwrap();
+    doc.update_dict(encrypt, |e| e.set(b"EFF".to_vec(), Object::name("Identity"))).unwrap();
+    let mut doc = Document::open(Arc::new(write_incremental(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    let contents = contents_of(&doc);
+    let ty = doc.add(Object::name("EmbeddedFile"));
+    let Object::Stream(mut s) = doc.get(contents).as_ref().clone() else { panic!("no content stream") };
+    s.dict.set(b"Type".to_vec(), Object::Ref(ty));
+    doc.set(contents, Object::Stream(s));
+    assert!(holds(&write_incremental(&doc, &SaveOptions::default()).unwrap(), "Secret page"), "/EFF /Identity leaves it alone");
+}
+
+/// What makes a dictionary a signature's can be given by reference, and what is null or refers to
+/// nothing is absent: `/Contents` stays as written in each of these.
+#[test]
+fn a_signature_dictionary_is_known_in_every_form() {
+    let mut doc = Document::open(Arc::new(fixture())).unwrap();
+    let ty = doc.add(Object::name("Sig"));
+    let range = Object::Array([0, 10, 20, 30].into_iter().map(Object::Int).collect());
+    let by_reference = doc.add(range.clone());
+    let nowhere = Object::Ref(ObjRef::new(9_999, 0));
+    let forms: [(Vec<(&str, Object)>, &str); 5] = [
+        (vec![("Type", Object::Ref(ty))], "DEAD"),
+        (vec![("ByteRange", Object::Ref(by_reference))], "BEEF"),
+        (vec![("Type", Object::Null), ("ByteRange", range.clone())], "CAFE"),
+        (vec![("Type", nowhere.clone()), ("ByteRange", range.clone())], "F00D"),
+        (vec![("Subtype", nowhere), ("ByteRange", range)], "D00D"),
+    ];
+    let mut signatures = Vec::new();
+    for (entries, contents) in forms {
+        let mut sig = pdfcraft_cos::Dict::new();
+        for (key, value) in entries {
+            sig.set(key.as_bytes().to_vec(), value);
+        }
+        let bytes = (0..contents.len()).step_by(2).map(|i| u8::from_str_radix(&contents[i..i + 2], 16).unwrap()).collect();
+        sig.set(b"Contents".to_vec(), Object::String(PdfString { bytes, hex: true }));
+        signatures.push(Object::Ref(doc.add(Object::Dict(sig))));
+    }
+    // Nested in another object, it follows nothing, but known directly it is one all the same.
+    let mut nested = pdfcraft_cos::Dict::new();
+    nested.set(b"Type".to_vec(), Object::name("Sig"));
+    nested.set(b"Contents".to_vec(), Object::String(PdfString { bytes: vec![0xAB, 0xBA], hex: true }));
+    let mut field = pdfcraft_cos::Dict::new();
+    field.set(b"V".to_vec(), Object::Dict(nested));
+    signatures.push(Object::Ref(doc.add(Object::Dict(field))));
+    // Neither of what makes one: a string /Contents alone is anybody's, so it's encrypted.
+    let mut other = pdfcraft_cos::Dict::new();
+    other.set(b"Contents".to_vec(), Object::String(PdfString { bytes: vec![0xAB, 0xCD], hex: true }));
+    signatures.push(Object::Ref(doc.add(Object::Dict(other))));
+    doc.update_dict(doc.root().unwrap(), |c| c.set(b"Test".to_vec(), Object::Array(signatures))).unwrap();
+    doc.set_encryption(&NewEncryption {
+        algorithm: Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        permissions: -1,
+        encrypt_metadata: true,
+        seed: [3; 32],
+    })
+    .unwrap();
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    for contents in ["DEAD", "BEEF", "CAFE", "F00D", "D00D", "ABBA"] {
+        assert!(holds(&bytes, &format!("<{contents}>")), "{contents}: written as is");
+    }
+    assert!(!holds(&bytes, "<ABCD>"), "without a /ByteRange it is no signature");
+}
+
+/// What a test needs to write an update of a classic file protected with AES-128.
+struct Classic {
+    bytes: Vec<u8>,
+    root: ObjRef,
+    pages: ObjRef,
+    info: ObjRef,
+    encrypt: ObjRef,
+    id: Vec<u8>,
+    dict: pdfcraft_cos::Dict,
+}
+
+fn classic_file() -> Classic {
+    let mut doc = Document::open(Arc::new(fixture())).unwrap();
+    doc.set_encryption(&NewEncryption {
+        algorithm: Algorithm::Aes128,
+        user_password: "",
+        owner_password: "owner",
+        permissions: -1,
+        encrypt_metadata: true,
+        seed: [9; 32],
+    })
+    .unwrap();
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    let doc = Document::open(Arc::new(bytes.clone())).unwrap();
+    let encrypt = doc.trailer().reference(b"Encrypt").unwrap();
+    let id = doc.trailer().get(b"ID").unwrap().as_array().unwrap()[0].as_string().unwrap().bytes.clone();
+    let dict = doc.get(encrypt).as_dict().cloned().unwrap();
+    let pages = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
+    Classic { root: doc.root().unwrap(), pages, info: doc.trailer().reference(b"Info").unwrap(), bytes, encrypt, id, dict }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02X}")).collect()
+}
+
+/// `bytes` with an update appended: `objects`, and a trailer of `trailer` entries, in which `@n`
+/// stands for the offset of object `n`. An object with nothing in it gets an entry of the
+/// cross-reference table that points at nothing.
+fn updated(bytes: &[u8], objects: &[(u32, Vec<u8>)], trailer: &str) -> Vec<u8> {
+    let at = bytes.windows(9).rposition(|w| w == b"startxref").unwrap();
+    let prev: usize = String::from_utf8_lossy(&bytes[at + 9..]).split_whitespace().next().unwrap().parse().unwrap();
+    let mut out = bytes.to_vec();
+    let mut table = String::from("xref\n");
+    let mut trailer = trailer.to_string();
+    for (num, body) in objects {
+        if body.is_empty() {
+            table.push_str(&format!("{num} 1\n0000000010 00000 n \n"));
+            continue;
+        }
+        trailer = trailer.replace(&format!("@{num}"), &out.len().to_string());
+        table.push_str(&format!("{num} 1\n{:010} 00000 n \n", out.len()));
+        out.extend_from_slice(format!("{num} 0 obj\n").as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(table.as_bytes());
+    out.extend_from_slice(format!("trailer\n<< {trailer} /Size 2000 /Prev {prev} >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    out
+}
+
+/// The `/Encrypt` dictionary of `file`, with `/O`, `/StmF` and `/StrF` as given.
+fn encrypt_with(file: &Classic, o: &str, filter: &str) -> Vec<u8> {
+    let string = |key: &[u8]| hex(&file.dict.get(key).unwrap().as_string().unwrap().bytes);
+    format!(
+        "<< /Filter /Standard /V 4 /R 4 /Length 128 /P {} /O {o} /U <{}> /CF << /StdCF << /CFM /AESV2 /Length 16 /AuthEvent /DocOpen >> >> /StmF /{filter} /StrF /{filter} >>",
+        file.dict.int(b"P").unwrap(),
+        string(b"U")
+    )
+    .into_bytes()
+}
+
+/// An object stream can have its parameters by reference, and a stream's crypt filter can be
+/// selected by a member of it: legal together, though each is rare. What reads the stream first
+/// goes through the object stream, and members must come out of it as they do read directly. They
+/// didn't, while a read made for a selector wasn't allowed to follow its own: the object stream was
+/// kept undecoded, its members lost for good, and a full save wrote nulls without saying so.
+#[test]
+fn an_object_stream_reached_from_a_selector_keeps_its_members() {
+    let file = classic_file();
+    let parms = "[<< /Name /Identity >> null]";
+    let header = format!("902 0 903 {} ", parms.len() + 1);
+    let members = format!("{header}{parms} << /Keep (yes) >>");
+    let (mut rows, mut before) = (vec![1u8], 0u8);
+    for b in members.bytes() {
+        rows.push(b.wrapping_sub(before));
+        before = b;
+    }
+    let coded = pdfcraft_cos::Stream::flate(pdfcraft_cos::Dict::new(), &rows).raw;
+    let mut object_stream =
+        format!("<< /Type /ObjStm /N 2 /First {} /Filter /FlateDecode /DecodeParms 911 0 R /Length {} >>\nstream\n", header.len(), coded.len())
+            .into_bytes();
+    object_stream.extend_from_slice(&coded);
+    object_stream.extend_from_slice(b"\nendstream");
+    let data = [2u8, 0x03, 0x8E, 0, 2, 0x03, 0x8E, 1];
+    let mut xref = format!("<< /Type /XRef /Size 2000 /W [1 2 1] /Index [902 2] /Length {} >>\nstream\n", data.len()).into_bytes();
+    xref.extend_from_slice(&data);
+    xref.extend_from_slice(b"\nendstream");
+    let string = |key: &[u8]| format!("<{}>", hex(&file.dict.get(key).unwrap().as_string().unwrap().bytes));
+    let objects = [
+        (file.root.num, format!("<< /Type /Catalog /Pages {} 0 R /A 900 0 R /B 903 0 R >>", file.pages.num).into_bytes()),
+        (file.encrypt.num, encrypt_with(&file, &string(b"O"), "Identity")),
+        (900, b"<< /Filter [/Crypt /ASCIIHexDecode] /DecodeParms 902 0 R /Length 1 >>\nstream\n>\nendstream".to_vec()),
+        (910, object_stream),
+        (911, format!("<< /Predictor 11 /Columns {} >>", members.len()).into_bytes()),
+        (912, xref),
+    ];
+    let trailer = format!("/Root {} 0 R /Encrypt {} 0 R /ID [<{id}> <{id}>] /XRefStm @912", file.root.num, file.encrypt.num, id = hex(&file.id));
+    let bytes = updated(&file.bytes, &objects, &trailer);
+    let keep =
+        |doc: &Document, r: &Object| doc.resolve(r).as_dict().and_then(|d| d.get(b"Keep")).and_then(Object::as_string).map(|s| s.bytes.clone());
+    let member = Object::Ref(ObjRef::new(903, 0));
+    let doc = Document::open(Arc::new(bytes.clone())).unwrap();
+    assert_eq!(keep(&doc, &member).as_deref(), Some(b"yes".as_slice()), "read first");
+    let doc = Document::open(Arc::new(bytes.clone())).unwrap();
+    let _ = doc.get(ObjRef::new(900, 0));
+    assert_eq!(keep(&doc, &member).as_deref(), Some(b"yes".as_slice()), "read after the stream selecting from it");
+    let saved = write_full(&Document::open(Arc::new(bytes)).unwrap(), &SaveOptions::default()).unwrap();
+    let back = Document::open(Arc::new(saved)).unwrap();
+    let catalog = back.get(back.root().unwrap());
+    assert_eq!(keep(&back, catalog.as_dict().unwrap().get(b"B").unwrap()).as_deref(), Some(b"yes".as_slice()), "after a full save");
+}
+
+/// `walk` goes as deep as an object nests, so following a reference from down there adds that depth
+/// again for each object it loads: this file, under 10 KB, overflowed a 2 MiB stack and took the
+/// process with it. Only the object itself follows references, and it does so in very little stack.
+#[test]
+fn nested_dictionaries_load_nothing_on_a_small_stack() {
+    let file = classic_file();
+    let first = 960u32;
+    let objects: Vec<(u32, Vec<u8>)> = (first..first + 40)
+        .map(|num| {
+            let open = "[".repeat(120);
+            let close = "]".repeat(120);
+            (num, format!("{open}<< /Contents () /Type {} 0 R >>{close}", num + 1).into_bytes())
+        })
+        .collect();
+    let trailer = format!("/Root {} 0 R /Encrypt {} 0 R /ID [<{id}> <{id}>]", file.root.num, file.encrypt.num, id = hex(&file.id));
+    let bytes = updated(&file.bytes, &objects, &trailer);
+    let reading = std::thread::Builder::new().stack_size(1 << 20).spawn(move || {
+        let doc = Document::open(Arc::new(bytes)).unwrap();
+        doc.get(ObjRef::new(first, 0)).as_array().is_some()
+    });
+    assert_eq!(reading.unwrap().join().ok(), Some(true));
+}
+
+/// The object itself can follow references, a ladder of them as long as loading may nest, and that
+/// fits a small stack too.
+#[test]
+fn a_ladder_of_signature_checks_fits_a_small_stack() {
+    let file = classic_file();
+    let first = 960u32;
+    let objects: Vec<(u32, Vec<u8>)> =
+        (first..first + 40).map(|num| (num, format!("<< /Contents () /Type {} 0 R >>", num + 1).into_bytes())).collect();
+    let trailer = format!("/Root {} 0 R /Encrypt {} 0 R /ID [<{id}> <{id}>]", file.root.num, file.encrypt.num, id = hex(&file.id));
+    let bytes = updated(&file.bytes, &objects, &trailer);
+    let reading = std::thread::Builder::new().stack_size(1 << 20).spawn(move || {
+        let doc = Document::open(Arc::new(bytes)).unwrap();
+        doc.get(ObjRef::new(first, 0)).as_dict().is_some()
+    });
+    assert_eq!(reading.unwrap().join().ok(), Some(true));
+}
+
+/// The strings of `/Encrypt` are never encrypted (ISO 32000-2 §7.6.2), and can be objects of their
+/// own. Read as ordinary strings they were decrypted, and a full save encrypted them again under
+/// another number, so the file it wrote no longer opened with its own password.
+#[test]
+fn encrypt_strings_given_by_reference_stay_as_stored() {
+    let file = classic_file();
+    let string = |key: &[u8]| hex(&file.dict.get(key).unwrap().as_string().unwrap().bytes);
+    let replaced = format!(
+        "<< /Filter /Standard /V 4 /R 4 /Length 128 /P {} /O 900 0 R /U 901 0 R /CF << /StdCF << /CFM /AESV2 /Length 16 /AuthEvent /DocOpen >> >> /StmF /StdCF /StrF /StdCF >>",
+        file.dict.int(b"P").unwrap()
+    );
+    let objects = [
+        (file.encrypt.num, replaced.into_bytes()),
+        (900, format!("<{}>", string(b"O")).into_bytes()),
+        (901, format!("<{}>", string(b"U")).into_bytes()),
+    ];
+    let trailer =
+        format!("/Root {} 0 R /Info {} 0 R /Encrypt {} 0 R /ID [<{id}> <{id}>]", file.root.num, file.info.num, file.encrypt.num, id = hex(&file.id));
+    let source = Document::open(Arc::new(updated(&file.bytes, &objects, &trailer))).unwrap();
+    assert_eq!(content(&source), SECRET, "the file reads");
+    assert_eq!(title(&source).as_deref(), Some("Quarterly numbers"));
+    for object_streams in [false, true] {
+        let saved = write_full(&source, &SaveOptions { object_streams, ..SaveOptions::default() }).unwrap();
+        let back = Document::open(Arc::new(saved)).unwrap();
+        assert_eq!(content(&back), SECRET, "object streams: {object_streams}");
+        assert_eq!(title(&back).as_deref(), Some("Quarterly numbers"), "object streams: {object_streams}");
+    }
+}
+
+/// `/ID` has to be direct in an encrypted file, but one that isn't has its key made from the same
+/// bytes, and a full save writes it direct.
+#[test]
+fn a_file_identifier_given_by_reference_is_read() {
+    let file = classic_file();
+    let id = hex(&file.id);
+    let reference = |entries: &str, objects: &[(u32, Vec<u8>)]| {
+        let trailer = format!("/Root {} 0 R /Encrypt {} 0 R /ID {entries}", file.root.num, file.encrypt.num);
+        updated(&file.bytes, objects, &trailer)
+    };
+    let whole = reference("900 0 R", &[(900, format!("[<{id}> <{id}>]").into_bytes())]);
+    let entries = reference("[900 0 R 901 0 R]", &[(900, format!("<{id}>").into_bytes()), (901, format!("<{id}>").into_bytes())]);
+    for file in [whole, entries] {
+        let source = Document::open(Arc::new(file)).unwrap();
+        assert_eq!(content(&source), SECRET);
+        let back = Document::open(Arc::new(write_full(&source, &SaveOptions::default()).unwrap())).unwrap();
+        assert_eq!(content(&back), SECRET);
+        assert!(matches!(back.trailer().get(b"ID"), Some(Object::Array(_))), "written direct");
+    }
+}
+
+/// A direct `/Encrypt` can refer to objects. A full save dropped those it found only there, and kept
+/// its references as they were under the old numbers, so nothing in the file read afterwards.
+#[test]
+fn a_direct_encrypt_dictionary_keeps_what_it_refers_to() {
+    for object_streams in [false, true] {
+        let mut doc = Document::open(Arc::new(fixture())).unwrap();
+        doc.set_encryption(&NewEncryption {
+            algorithm: Algorithm::Aes128,
+            user_password: "",
+            owner_password: "owner",
+            permissions: -1,
+            encrypt_metadata: true,
+            seed: [9; 32],
+        })
+        .unwrap();
+        let mut dict = doc.get(doc.trailer().reference(b"Encrypt").unwrap()).as_dict().cloned().unwrap();
+        let filter = doc.add(Object::name("StdCF"));
+        let filters = doc.add(dict.get(b"CF").unwrap().clone());
+        dict.set(b"StmF".to_vec(), Object::Ref(filter));
+        dict.set(b"CF".to_vec(), Object::Ref(filters));
+        doc.trailer_mut().set(b"Encrypt".to_vec(), Object::Dict(dict));
+        let options = SaveOptions { object_streams, ..SaveOptions::default() };
+        let saved = write_full(&doc, &options).unwrap();
+        let back = Document::open(Arc::new(saved)).unwrap();
+        assert_eq!(content(&back), SECRET, "object streams: {object_streams}");
+        let again = write_full(&back, &options).unwrap();
+        assert_eq!(content(&Document::open(Arc::new(again)).unwrap()), SECRET, "object streams: {object_streams}, saved again");
+    }
+}
+
+/// How a stream is treated can be given by reference, and what that loads can be a stream too. A
+/// file can make a ladder of those, where each rung reads the rung below, then two trees wider than
+/// the object cache, which push that rung out of it, then the rung below again. Each rung would
+/// take twice what the one below does, if one read could follow any number of references.
+#[test]
+fn selectors_that_lead_to_selectors_load_at_once() {
+    let mut doc = Document::open(Arc::new(protect(Algorithm::Aes128, "", "owner", -1))).unwrap();
+    let stream_of = |doc: &mut Document, filters: Vec<Object>| {
+        let mut dict = pdfcraft_cos::Dict::new();
+        dict.set(b"Filter".to_vec(), Object::Array(filters));
+        doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(dict, Vec::new())))
+    };
+    let tree = |doc: &mut Document| {
+        let mut level: Vec<ObjRef> = (0..6_561).map(|i| doc.add(Object::Int(i))).collect();
+        while level.len() > 1 {
+            let chunks: Vec<Vec<Object>> = level.chunks(9).map(|c| c.iter().map(|r| Object::Ref(*r)).collect()).collect();
+            level = chunks.into_iter().map(|c| stream_of(doc, c)).collect();
+        }
+        Object::Ref(level[0])
+    };
+    let (first, second) = (tree(&mut doc), tree(&mut doc));
+    let mut top = doc.add(Object::Int(0));
+    // Twelve rungs of two, and the trees' five levels, stay inside the 32 that loading may nest.
+    for _ in 0..12 {
+        let (a, b) = (stream_of(&mut doc, vec![Object::Ref(top)]), stream_of(&mut doc, vec![Object::Ref(top)]));
+        top = stream_of(&mut doc, vec![Object::Ref(a), first.clone(), second.clone(), Object::Ref(b)]);
+    }
+    let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let doc = Document::open(Arc::new(saved)).unwrap();
+        let _ = done.send(doc.get(top).as_dict().is_some());
+    });
+    // With the budget it takes milliseconds, and without it longer than anyone would wait, so a
+    // margin this wide can't fail on a busy machine.
+    assert_eq!(finished.recv_timeout(std::time::Duration::from_secs(120)), Ok(true), "loading must not fan out");
+}
