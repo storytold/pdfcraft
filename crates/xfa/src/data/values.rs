@@ -1,5 +1,6 @@
+use super::DataNode;
 use super::dates::{data_date_pattern, data_to_iso, iso_to_data, iso_to_pattern, pattern_to_iso};
-use super::path::{data_path, parse_datasets, som_to_path};
+use super::path::{bound_value, data_path, parse_datasets, som_to_path};
 use super::{DataPath, Dict, Document, ObjRef, Object, Template};
 
 /// What a field holds, for writing the datasets.
@@ -111,13 +112,32 @@ pub(super) fn path_of(tpl: Option<&Template>, som: &str) -> DataPath {
     }
 }
 
+/// The data path a field's value is written to. The data path of a field inside an unbound
+/// subform (transparent to data binding, XFA 3.3) names that subform, which the data may not hold;
+/// a value already in the data root is then written there, where reads find it (#5442). A path
+/// the data already holds, or one nothing holds yet, is kept as it is.
+fn write_path(current: Option<&DataNode>, tpl: Option<&Template>, som: &str) -> DataPath {
+    let full = path_of(tpl, som);
+    let Some(data) = current else { return full };
+    if data.get(&full).is_some() {
+        return full;
+    }
+    let transparent = data.transparent_path(&full);
+    if data.get(&transparent).is_some() { transparent } else { full }
+}
+
 /// The values the datasets should hold for `fields`, by data path: dates in each field's data
 /// picture (or ISO), check and radio states, choice values as saved.
 pub(super) fn wanted(doc: &Document, fields: &[FieldDatum], tpl: Option<&Template>) -> Vec<Want> {
     let mut out = Vec::new();
+    // The datasets as they are now, to tell where a value already lives (#5442).
+    let current = match tpl {
+        Some(_) => crate::read_packets(doc).ok().flatten().and_then(|p| parse_datasets(&p.xdp)),
+        None => None,
+    };
     for f in fields {
         let som = som_of(doc, f);
-        let path = path_of(tpl, &som);
+        let path = write_path(current.as_ref(), tpl, &som);
         if path.is_empty() {
             continue;
         }
@@ -163,7 +183,12 @@ fn values_at(doc: &Document, tpl: Option<&Template>, fields: &[FieldDatum]) -> V
     for f in fields {
         let som = som_of(doc, f);
         let path = path_of(tpl, &som);
-        let Some(text) = data.value_at(&path) else { continue };
+        let Some(text) = (match tpl {
+            Some(t) => bound_value(t, &data, &som),
+            None => data.value_at(&path),
+        }) else {
+            continue;
+        };
         let text = text.as_str();
         let value = match &f.data {
             FieldData::Text(_) => FieldData::Text(match date_pattern_of(doc, f) {

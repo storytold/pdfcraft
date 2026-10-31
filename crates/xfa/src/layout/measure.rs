@@ -2,7 +2,7 @@ use super::common::clamp_opt;
 use super::field::auto_check_reserve;
 use super::{
     Access, Area, Ctx, ExclGroup, Face, Field, Font, Layout, Layouter, MAX_DEPTH, MAX_MEASURES, Measured, Node, Para, Placement, Rect, Subform, Ui,
-    Value, data_path, text,
+    Value, bound_value, text,
 };
 
 impl Layouter<'_> {
@@ -264,7 +264,7 @@ impl Layouter<'_> {
         if !f.grows_with_text() || f.common.name.is_none() {
             return 0.0;
         }
-        let value = self.data.and_then(|d| d.value_at(&data_path(self.tpl, &ctx.som))).filter(|t| !t.trim().is_empty()).or_else(|| f.value.plain());
+        let value = self.data.and_then(|d| bound_value(self.tpl, d, &ctx.som)).filter(|t| !t.trim().is_empty()).or_else(|| f.value.plain());
         let Some(value) = value.filter(|t| !t.trim().is_empty()) else { return 0.0 };
         // Beside a caption the text has what the caption leaves; a widget's text has 2pt of
         // padding on each side, a non-interactive field's (drawn as text) none, so it wraps

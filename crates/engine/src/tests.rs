@@ -9409,3 +9409,20 @@ fn repeated_backdrop_artwork_survives_background_undo_redo_and_both_save_modes()
     s.apply(rewritten, Edit::RemoveMarks { kind: MarkKind::Background }).unwrap();
     black(&s, rewritten);
 }
+
+/// #5442: a value typed into a field of an unbound subform is written where its data already is (the
+/// data root), not under the subform's name, and the field reads it back.
+#[test]
+fn a_field_in_an_unbound_subform_writes_the_data_root() {
+    let xdp = r##"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="data" layout="tb"><pageSet><pageArea name="P"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet><subform name="DemoPage" layout="tb"><field name="GV" w="2in" h="0.3in"><ui><textEdit/></ui><bind match="dataRef" ref="$.GV"/></field></subform></subform></template><xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><data><GV>abc</GV></data></xfa:data></xfa:datasets></xdp:xdp>"##;
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("u.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).unwrap();
+    let name = s.get(id).unwrap().form.iter().find(|f| f.name.starts_with("GV") || f.name.contains("GV")).unwrap().name.clone();
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == name).unwrap().value, ["abc"]);
+    s.apply(id, Edit::SetFieldValue { name: name.clone(), value: FieldValue::Text("xyz".into()) }).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    assert!(!appears_in_pdf(&saved, "<DemoPage>"), "no subform node is written");
+    let mut t = Session::new();
+    let reopened = t.open("saved.pdf", None, saved, None).unwrap();
+    assert_eq!(t.get(reopened).unwrap().form.iter().find(|f| f.name == name).unwrap().value, ["xyz"]);
+}

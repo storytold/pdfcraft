@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use pdfcraft_cos::{Dict, Document, Object, PdfString};
 
-use crate::data::{DataNode, data_path, parse_datasets};
+use crate::data::{DataNode, bound_text, bound_value, data_path, parse_datasets};
 use crate::model::{Access, Field, Node, Presence, Script, SomIndices, Template};
 use crate::{Report, XfaError};
 
@@ -244,7 +244,7 @@ impl Walker<'_> {
     /// else empty; elsewhere it is its data value (as saved, as scripts read it) or its template default.
     fn field(&mut self, f: &Field, parent_som: &str, index: usize, radio: Option<&str>) -> FormNode {
         let som = child_som(parent_som, f.common.name.as_deref().or(Some("field")), index);
-        let data_value = self.data.and_then(|d| d.value_at(&data_path(self.tpl, &som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+        let data_value = self.data.and_then(|d| bound_value(self.tpl, d, &som)).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
         let value = match (radio, data_value) {
             // A radio button's value is its on value when the group picked it.
             (Some(selected), _) => {
@@ -282,7 +282,7 @@ impl Walker<'_> {
     /// What [`Self::field`] gives a field outside an exclusion group: its data value (as saved,
     /// as scripts read it) or its template default.
     fn plain_field_value(tpl: &Template, data: Option<&DataNode>, f: &Field, som: &str) -> String {
-        let data_value = data.and_then(|d| d.value_at(&data_path(tpl, som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+        let data_value = data.and_then(|d| bound_value(tpl, d, som)).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
         match data_value {
             Some(v) => f.saved_value(&Walker::as_scripts_read(f, &v)),
             None => f.value.plain().map(|v| f.saved_value(v.trim())).unwrap_or_default(),
@@ -370,8 +370,7 @@ impl Walker<'_> {
                 }
                 Node::ExclGroup(g) => {
                     let som = child_som(parent_som, g.common.name.as_deref().or(Some("group")), sib);
-                    let selected =
-                        self.data.and_then(|d| d.text_at(&data_path(self.tpl, &som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+                    let selected = self.data.and_then(|d| bound_text(self.tpl, d, &som)).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
                     self.push_events(&som, &g.scripts, None, None, None);
                     let fields: Vec<Node> = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();
                     let fsibs = SomIndices::of(&fields);
