@@ -12,6 +12,8 @@
 
 use std::path::{Path, PathBuf};
 
+mod layout;
+
 pub use pdfcraft_fonts::helvetica_width;
 
 /// The model files, as named in ATTRIBUTION.toml.
@@ -130,6 +132,7 @@ impl Ocr {
     }
 
     /// Recognise the text in an RGBA (or RGB, or grey) image, `width` × `height` pixels.
+    /// The lines come in reading order: split at column gutters, each column top to bottom.
     pub fn recognize(&self, pixels: &[u8], width: u32, height: u32) -> Result<Vec<Line>, OcrError> {
         if width == 0 || height == 0 || pixels.is_empty() {
             return Err(OcrError::EmptyImage);
@@ -147,21 +150,22 @@ impl Ocr {
         let lines = self.engine.find_text_lines(&input, &found);
         let read = self.engine.recognize_text(&input, &lines).map_err(|e| err(&e))?;
         use ocrs::TextItem;
-        Ok(read
-            .into_iter()
-            .flatten()
-            .map(|line| Line {
-                words: line
-                    .words()
-                    .map(|w| {
-                        let r = w.bounding_rect();
-                        Word { text: w.to_string(), rect: [r.left() as f32, r.top() as f32, r.right() as f32, r.bottom() as f32] }
-                    })
-                    .filter(|w| !w.text.trim().is_empty())
-                    .collect(),
-            })
-            .filter(|l| !l.words.is_empty())
-            .collect())
+        Ok(layout::reading_order(
+            read.into_iter()
+                .flatten()
+                .map(|line| Line {
+                    words: line
+                        .words()
+                        .map(|w| {
+                            let r = w.bounding_rect();
+                            Word { text: w.to_string(), rect: [r.left() as f32, r.top() as f32, r.right() as f32, r.bottom() as f32] }
+                        })
+                        .filter(|w| !w.text.trim().is_empty())
+                        .collect(),
+                })
+                .filter(|l| !l.words.is_empty())
+                .collect(),
+        ))
     }
 }
 

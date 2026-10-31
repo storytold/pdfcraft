@@ -5119,6 +5119,28 @@ fn recognize_text_makes_a_scanned_page_searchable() {
     assert!(again[0].skipped.is_some());
 }
 
+/// The recognised text keeps its lines: `OcrPage::text` (what `ocr_recognize` returns) breaks
+/// between them instead of running a whole page together.
+#[test]
+fn recognised_text_keeps_its_lines() {
+    if !ocr::available() {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let text = s.create_from_text("t", "The quick brown fox\n\nPack my box with jugs").unwrap();
+    let id = s.open("text.pdf", None, text, None).unwrap();
+    let png = export::Exporter::new(s.get(id).unwrap()).png(0, SYNTHETIC_SCAN_DPI).unwrap();
+    let scan = s.create_from_images_with_resolution(&[("scan.png".into(), png)], ImageResolution::Dpi(SYNTHETIC_SCAN_DPI)).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    let found = s.recognize_text(id, &[], ocr::OcrSettings::default()).unwrap();
+    let text = found[0].text().to_lowercase();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 2, "{text}");
+    assert!(lines[0].contains("brown") && lines[1].contains("jugs"), "{text}");
+    assert_eq!(found[0].line_lengths.iter().sum::<usize>(), found[0].words.len());
+}
+
 /// #1028: a page with its own text and a picture of text. By default it is skipped, as before;
 /// with `skip_text_pages: false` the picture is read and the page's own text is not added again.
 #[test]
