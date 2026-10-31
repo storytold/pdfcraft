@@ -22,7 +22,7 @@ use crate::common_data_structures;
 use crate::encryption::{self, EncryptionState};
 use crate::error::{ParseError, XrefError};
 use crate::load_options::{FilterFunc, LoadOptions};
-use crate::object_stream::ObjectStream;
+use crate::object_stream::{MAX_LOAD_NODES, NodeBudget, ObjectStream};
 use crate::parser;
 use crate::xref::{Xref, XrefEntry, XrefType};
 use crate::{Dictionary, Document, Error, IncrementalDocument, Object, ObjectId, Result};
@@ -849,6 +849,8 @@ impl Reader<'_> {
             .collect();
 
         let mut object_streams = Vec::new();
+        // PdfCraft patch: one object budget for every object stream this load parses.
+        let node_budget = NodeBudget::new(MAX_LOAD_NODES);
 
         for (obj_num, entry) in entries {
             match entry {
@@ -907,7 +909,7 @@ impl Reader<'_> {
                 if let Some(container_obj) = self.document.objects.get(&(container_id, 0))
                     && let Ok(stream) = container_obj.as_stream()
                 {
-                    match ObjectStream::new_with_limit(stream, self.max_decompressed_size) {
+                    match ObjectStream::new_within(stream, self.max_decompressed_size, &node_budget) {
                         Ok(object_stream) => {
                             for (obj_num, _index) in objects_in_stream {
                                 let obj_id = (obj_num, 0);
@@ -964,6 +966,9 @@ impl Reader<'_> {
         let is_encrypted = self.document.trailer.get(b"Encrypt").is_ok();
         let zero_length_streams = Mutex::new(vec![]);
         let object_streams = Mutex::new(vec![]);
+        // PdfCraft patch: one object budget for every object stream this load parses, so many
+        // streams, each inside the decompression limit, cannot together build billions of objects.
+        let node_budget = NodeBudget::new(MAX_LOAD_NODES);
 
         // Build a map of which container each compressed object belongs to
         // according to the xref. This prevents stale ObjStm copies (e.g., from
@@ -1014,15 +1019,16 @@ impl Reader<'_> {
 
                 if let Ok(stream) = object.as_stream() {
                     if stream.dict.has_type(b"ObjStm") && !is_encrypted {
-                        let obj_stream = match ObjectStream::new_with_limit(stream, self.max_decompressed_size) {
-                            Ok(obj_stream) => obj_stream,
-                            // Not an encryption-related loss, so it obeys the same
-                            // strict-mode policy as any other load error.
-                            Err(e) => {
-                                error!("Object stream load error for {object_id:?}: {e:?}");
-                                return if self.strict { Err(e) } else { Ok(None) };
-                            }
-                        };
+                        let obj_stream =
+                            match ObjectStream::new_within(stream, self.max_decompressed_size, &node_budget) {
+                                Ok(obj_stream) => obj_stream,
+                                // Not an encryption-related loss, so it obeys the same
+                                // strict-mode policy as any other load error.
+                                Err(e) => {
+                                    error!("Object stream load error for {object_id:?}: {e:?}");
+                                    return if self.strict { Err(e) } else { Ok(None) };
+                                }
+                            };
                         let container_id = object_id.0;
                         let mut object_streams = object_streams.lock().unwrap();
                         if let Some(filter_func) = filter_func {
@@ -1174,7 +1180,10 @@ impl Reader<'_> {
         let container_id = (container_id, 0);
         let container_obj = self.get_object(container_id, already_seen)?;
         let container_stream = container_obj.as_stream()?;
-        let object_stream = ObjectStream::new_with_limit(container_stream, self.max_decompressed_size)?;
+        // PdfCraft patch: a lookup needs one member and keeps none, so it gets one object's budget
+        // rather than a load's.
+        let budget = NodeBudget::new(parser::MAX_OBJECT_NODES);
+        let object_stream = ObjectStream::new_within(container_stream, self.max_decompressed_size, &budget)?;
         object_stream.objects.get(&id).cloned().ok_or(Error::MissingXrefEntry)
     }
 

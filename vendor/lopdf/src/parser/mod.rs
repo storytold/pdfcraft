@@ -3,6 +3,7 @@ use crate::Error;
 use crate::content::*;
 use crate::error;
 use crate::xref::*;
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::str::{self, FromStr};
 
@@ -26,6 +27,13 @@ pub(crate) type ParserInput<'a> = &'a [u8];
 pub(crate) type NomError<'a> = nom::error::Error<ParserInput<'a>>;
 
 pub(crate) type NomResult<'a, O, E = NomError<'a>> = IResult<ParserInput<'a>, O, E>;
+
+/// PdfCraft patch: objects one top-level parse may build, counting every array element and
+/// dictionary value at any depth (the same cap as `pdfcraft_cos`'s `MAX_NODES`). Each object
+/// costs a hundred bytes or more, so a decoded stream of `0 0 0 ...` otherwise built one per
+/// two input bytes: gigabytes from a stream inside the decompression limit. Real arrays (page
+/// trees, parent trees, widths) stay far below.
+pub(crate) const MAX_OBJECT_NODES: usize = 1 << 22;
 
 #[inline]
 fn strip_nom<O>(r: NomResult<O>) -> Option<O> {
@@ -274,11 +282,13 @@ fn null(input: ParserInput) -> NomResult<Object> {
     map(tag(&b"null"[..]), |_| Object::Null).parse(input)
 }
 
-fn array(depth: usize) -> impl Fn(ParserInput) -> NomResult<Vec<Object>> {
+// PdfCraft patch: every element is charged to `nodes` (see `_direct_object`), which bounds the
+// element count of one array and of all arrays nested in it.
+fn array(depth: usize, nodes: &Cell<usize>) -> impl Fn(ParserInput) -> NomResult<Vec<Object>> {
     move |input| {
         delimited(
             pair(tag(&b"["[..]), space),
-            many0(_direct_object(depth)),
+            many0(_direct_object(depth, nodes)),
             tag(&b"]"[..]),
         )
         .parse(input)
@@ -286,17 +296,25 @@ fn array(depth: usize) -> impl Fn(ParserInput) -> NomResult<Vec<Object>> {
 }
 
 pub(crate) fn dictionary(input: ParserInput) -> NomResult<Dictionary> {
-    _dictionary(crate::reader::MAX_NESTING_DEPTH)(input)
+    let nodes = Cell::new(MAX_OBJECT_NODES);
+    _dictionary(crate::reader::MAX_NESTING_DEPTH, &nodes)(input)
 }
 
-fn _dictionary(depth: usize) -> impl Fn(ParserInput) -> NomResult<Dictionary> {
-    move |input| delimited(pair(tag(&b"<<"[..]), space), inner_dictionary(depth), tag(&b">>"[..])).parse(input)
+fn _dictionary(depth: usize, nodes: &Cell<usize>) -> impl Fn(ParserInput) -> NomResult<Dictionary> {
+    move |input| {
+        delimited(
+            pair(tag(&b"<<"[..]), space),
+            inner_dictionary(depth, nodes),
+            tag(&b">>"[..]),
+        )
+        .parse(input)
+    }
 }
 
-fn inner_dictionary(depth: usize) -> impl Fn(ParserInput) -> NomResult<Dictionary> {
+fn inner_dictionary(depth: usize, nodes: &Cell<usize>) -> impl Fn(ParserInput) -> NomResult<Dictionary> {
     move |input| {
         fold_many0(
-            pair(terminated(name, space), _direct_object(depth)),
+            pair(terminated(name, space), _direct_object(depth, nodes)),
             Dictionary::new,
             |mut dict, (key, value)| {
                 dict.set(key, value);
@@ -308,6 +326,7 @@ fn inner_dictionary(depth: usize) -> impl Fn(ParserInput) -> NomResult<Dictionar
 }
 
 pub(crate) fn dict_dup(input: ParserInput) -> NomResult<Dictionary> {
+    let nodes = Cell::new(MAX_OBJECT_NODES);
     delimited(
         (
             digit1,
@@ -323,7 +342,7 @@ pub(crate) fn dict_dup(input: ParserInput) -> NomResult<Dictionary> {
             terminated(
                 pair(
                     terminated(name, space),
-                    _direct_object(crate::reader::MAX_NESTING_DEPTH),
+                    _direct_object(crate::reader::MAX_NESTING_DEPTH, &nodes),
                 ),
                 pair(tag(&b"def"[..]), multispace1),
             ),
@@ -434,7 +453,7 @@ fn reference(input: ParserInput) -> NomResult<Object> {
     map(terminated(object_id, tag(&b"R"[..])), Object::Reference).parse(input)
 }
 
-fn _direct_objects(depth: usize) -> impl Fn(ParserInput) -> NomResult<Object> {
+fn _direct_objects(depth: usize, nodes: &Cell<usize>) -> impl Fn(ParserInput) -> NomResult<Object> {
     move |input| {
         alt((
             null,
@@ -445,34 +464,51 @@ fn _direct_objects(depth: usize) -> impl Fn(ParserInput) -> NomResult<Object> {
             map(name, Object::Name),
             map(literal_string, Object::string_literal),
             hexadecimal_string,
-            map(array(depth), Object::Array),
-            map(_dictionary(depth), Object::Dictionary),
+            map(array(depth, nodes), Object::Array),
+            map(_dictionary(depth, nodes), Object::Dictionary),
         ))
         .parse(input)
     }
 }
 
-fn _direct_object(depth: usize) -> impl Fn(ParserInput) -> NomResult<Object> {
+fn _direct_object(depth: usize, nodes: &Cell<usize>) -> impl Fn(ParserInput) -> NomResult<Object> {
     move |input| {
         if depth == 0 {
             return Err(nom::Err::Failure(NomError::from_error_kind(input, ErrorKind::TooLarge)));
         }
-        terminated(_direct_objects(depth - 1), space).parse(input)
+        let (rest, object) = terminated(_direct_objects(depth - 1, nodes), space).parse(input)?;
+        // PdfCraft patch: charge each object once it is built, so a failed alternative costs
+        // nothing; its children were charged as they were built. A spent budget is a Failure,
+        // which ends the whole parse instead of backtracking into another alternative.
+        let Some(left) = nodes.get().checked_sub(1) else {
+            return Err(nom::Err::Failure(NomError::from_error_kind(input, ErrorKind::TooLarge)));
+        };
+        nodes.set(left);
+        Ok((rest, object))
     }
 }
 
+// PdfCraft patch: object streams now parse through `direct_object_within`; only tests use this.
+#[cfg(test)]
 pub fn direct_object(input: ParserInput) -> Option<Object> {
-    strip_nom(_direct_object(crate::reader::MAX_NESTING_DEPTH)(input))
+    direct_object_within(input, &Cell::new(MAX_OBJECT_NODES))
+}
+
+/// PdfCraft patch: parse one direct object, building at most `nodes` objects (the object itself
+/// and everything nested in it) and leaving the unspent count in `nodes`.
+pub(crate) fn direct_object_within(input: ParserInput, nodes: &Cell<usize>) -> Option<Object> {
+    strip_nom(_direct_object(crate::reader::MAX_NESTING_DEPTH, nodes)(input))
 }
 
 fn object<'a>(
     input: ParserInput<'a>, reader: &Reader, already_seen: &mut HashSet<ObjectId>, recover_stream_length: bool,
     recovery_bound: Option<usize>,
 ) -> NomResult<'a, Object> {
+    let nodes = Cell::new(MAX_OBJECT_NODES);
     terminated(
         alt((
             |input| stream(input, reader, already_seen, recover_stream_length, recovery_bound),
-            _direct_objects(crate::reader::MAX_NESTING_DEPTH),
+            _direct_objects(crate::reader::MAX_NESTING_DEPTH, &nodes),
         )),
         space,
     )
@@ -690,6 +726,7 @@ fn operator(input: ParserInput) -> NomResult<String> {
 }
 
 fn operand(input: ParserInput) -> NomResult<Object> {
+    let nodes = Cell::new(MAX_OBJECT_NODES);
     terminated(
         alt((
             null,
@@ -699,7 +736,7 @@ fn operand(input: ParserInput) -> NomResult<Object> {
             map(name, Object::Name),
             map(literal_string, Object::string_literal),
             hexadecimal_string,
-            map(array(crate::reader::MAX_NESTING_DEPTH), Object::Array),
+            map(array(crate::reader::MAX_NESTING_DEPTH, &nodes), Object::Array),
             map(dictionary, Object::Dictionary),
         )),
         content_space,
@@ -725,7 +762,8 @@ fn inline_image(input: ParserInput) -> NomResult<(Vec<Object>, String)> {
 }
 
 fn inline_image_impl(input: ParserInput) -> NomResult<(Vec<Object>, String)> {
-    let (input, stream_dict) = inner_dictionary(crate::reader::MAX_NESTING_DEPTH).parse(input)?;
+    let nodes = Cell::new(MAX_OBJECT_NODES);
+    let (input, stream_dict) = inner_dictionary(crate::reader::MAX_NESTING_DEPTH, &nodes).parse(input)?;
     let (input, _) = pair(tag(&b"ID"[..]), content_space).parse(input)?;
     match image_data_stream(input, stream_dict) {
         Ok((input, stream)) => {
@@ -1306,7 +1344,8 @@ EI";
             let mut input = Vec::with_capacity(depth * 2);
             input.extend(std::iter::repeat_n(b'[', depth));
             input.extend(std::iter::repeat_n(b']', depth));
-            let result = _direct_object(crate::reader::MAX_NESTING_DEPTH)(input.as_slice());
+            let result =
+                _direct_object(crate::reader::MAX_NESTING_DEPTH, &Cell::new(MAX_OBJECT_NODES))(input.as_slice());
             assert!(result.is_err());
         });
     }
@@ -1322,7 +1361,8 @@ EI";
             for _ in 0..depth {
                 input.extend_from_slice(b">>");
             }
-            let result = _direct_object(crate::reader::MAX_NESTING_DEPTH)(input.as_slice());
+            let result =
+                _direct_object(crate::reader::MAX_NESTING_DEPTH, &Cell::new(MAX_OBJECT_NODES))(input.as_slice());
             assert!(result.is_err());
         });
     }
@@ -1330,7 +1370,7 @@ EI";
     #[test]
     fn modestly_nested_array_still_parses() {
         let input = b"[[[[[1]]]]]";
-        let obj = _direct_object(crate::reader::MAX_NESTING_DEPTH)(test_span(input));
+        let obj = _direct_object(crate::reader::MAX_NESTING_DEPTH, &Cell::new(MAX_OBJECT_NODES))(test_span(input));
         assert!(obj.is_ok());
     }
 }
