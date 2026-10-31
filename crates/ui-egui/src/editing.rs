@@ -146,8 +146,12 @@ impl PdfCraftApp {
                 view.move_background.committed(&edit, doc.edit_generation());
                 view.text_background.committed(&edit);
                 if let Some(page) = comment_page(&edit).or_else(|| content_page(&edit)) {
-                    // Comment and content edits change one page: keep every other raster.
-                    view.page_changed(page);
+                    // Comment and content edits change one page: keep every other raster. Opening,
+                    // closing or moving a pop-up changes none: the window is drawn over the page, and
+                    // a /Popup annotation paints nothing in the raster (ISO 32000-2 §12.5.6.14).
+                    if !matches!(edit, Edit::SetAnnotationPopup { .. }) {
+                        view.page_changed(page);
+                    }
                 } else if let Some(form_before) = form_before
                     && doc.info.pages.len() == page_count_before
                     && doc.xfa.is_some() == had_xfa
