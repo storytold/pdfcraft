@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-mode="${1:?usage: scripts/gtk-qa.sh build|test-engine|smoke|viewer|document|palette|automation|form|reconcile|coverage|editing|screens|organizer|text-tools|redact|recents-open|fill-sign|sign|page-ops|panels-edit|export-ops|parity-ops|lifecycle|captures|parity}"
+mode="${1:?usage: scripts/gtk-qa.sh build|test-engine|smoke|viewer|document|palette|automation|form|reconcile|coverage|editing|screens|organizer|text-tools|redact|recents-open|fill-sign|sign|page-ops|panels-edit|export-ops|parity-ops|lifecycle|panels-more|tools-rail|captures|parity}"
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 export PATH="$HOME/.cargo/bin:$PATH"
 
 case "$mode" in
   captures)
-    for sub in smoke viewer document palette automation form reconcile editing screens organizer text-tools redact recents-open fill-sign sign page-ops panels-edit export-ops parity-ops lifecycle; do
+    for sub in smoke viewer document palette automation form reconcile editing screens organizer text-tools redact recents-open fill-sign sign page-ops panels-edit export-ops parity-ops lifecycle panels-more tools-rail; do
       "$0" "$sub" || exit 1
     done
     echo "GTK_GATE_OK captures"
@@ -33,7 +33,7 @@ case "$mode" in
     cargo test -p pdfcraft-engine --lib
     echo "GTK_GATE_OK test-engine"
     ;;
-  smoke|viewer|document|palette|automation|form|reconcile|coverage|editing|screens|organizer|text-tools|redact|recents-open|fill-sign|sign|page-ops|panels-edit|export-ops|parity-ops|lifecycle)
+  smoke|viewer|document|palette|automation|form|reconcile|coverage|editing|screens|organizer|text-tools|redact|recents-open|fill-sign|sign|page-ops|panels-edit|export-ops|parity-ops|lifecycle|panels-more|tools-rail)
     cargo build -p pdfcraft-gtk
     qa_dir="${PDFCRAFT_GTK_QA_DIR:-/tmp/opencode/pdfcraft-gtk-qa}"
     mkdir -p "$qa_dir"
@@ -62,9 +62,15 @@ case "$mode" in
       rm -f "$capture" "$log"
     fi
     qa_file="${PDFCRAFT_GTK_QA_FILE:-$root/crates/ui-egui/tests/data/form.pdf}"
-    if [[ "$mode" == parity-ops ]]; then
-      qa_file="$qa_dir/parity-fixture.pdf"
-      python3 - "$qa_file" <<'PYEOF'
+    if [[ "$mode" == panels-more ]]; then
+      qa_file="$qa_dir/panels-more-fixture.pdf"
+    fi
+    if [[ "$mode" == parity-ops ]] || [[ "$mode" == panels-more ]]; then
+      python_fixture="$qa_dir/parity-fixture.pdf"
+      if [[ "$mode" == panels-more ]]; then
+        python_fixture="$qa_file"
+      fi
+      python3 - "$python_fixture" <<'PYEOF'
 import sys
 path = sys.argv[1]
 stream = b"BT /F1 24 Tf 72 700 Td (Hola mundo) Tj ET"
@@ -87,6 +93,7 @@ with open(path, "wb") as fh:
         fh.write(f"{offset:010d} 00000 n \n".encode())
     fh.write(b"trailer\n<< /Size " + str(len(objects) + 1).encode() + b" /Root 1 0 R >>\nstartxref\n" + str(start).encode() + b"\n%%EOF\n")
 PYEOF
+      qa_file="$python_fixture"
     fi
     if [[ "$mode" == viewer || "$mode" == document || "$mode" == editing || "$mode" == lifecycle ]] && [[ -z "${PDFCRAFT_GTK_QA_FILE:-}" ]]; then
       qa_file="$qa_dir/two-pages.pdf"

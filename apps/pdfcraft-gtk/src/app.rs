@@ -162,6 +162,10 @@ impl App {
         app.install_registry_actions();
         app.connect_tabs();
         app.install_css();
+        app.panels.set_command_runner({
+            let app = app.clone();
+            Rc::new(move |command| app.run_registered(command))
+        });
         app
     }
 
@@ -590,6 +594,10 @@ impl App {
             self.schedule_parity_ops_qa();
         } else if mode == "lifecycle" {
             self.schedule_lifecycle_qa();
+        } else if mode == "panels-more" {
+            self.schedule_panels_more_qa();
+        } else if mode == "tools-rail" {
+            self.schedule_rail_qa();
         }
     }
 
@@ -1315,6 +1323,35 @@ impl App {
         });
     }
 
+    fn schedule_rail_qa(self: &Rc<Self>) {
+        let captured: Rc<RefCell<Option<Result<(), String>>>> = Rc::new(RefCell::new(None));
+        let app = self.clone();
+        glib::timeout_add_local_once(Duration::from_millis(1500), move || {
+            app.run_native("view.tools_pane");
+            eprintln!("[DEBUG-rail] groups={} tools={}", app.panels.rail_group_count(), app.panels.tool_button_count());
+        });
+        let app = self.clone();
+        let captured_slot = captured.clone();
+        glib::timeout_add_local_once(Duration::from_millis(2400), move || {
+            let ok = app.panels.rail_group_count() >= 15 && app.panels.tool_button_count() >= 30;
+            if !ok {
+                capture::mark(false, "tools-rail", &app.application);
+                return;
+            }
+            let path = capture::path("tools-rail");
+            capture::window_png_when_ready(app.window.clone(), &path, 6, move |result| {
+                *captured_slot.borrow_mut() = Some(result);
+            });
+        });
+        let app = self.clone();
+        let captured_final = captured.clone();
+        glib::timeout_add_local_once(Duration::from_millis(3400), move || {
+            let captured_ok = captured_final.borrow().as_ref().map_or(false, Result::is_ok);
+            eprintln!("[DEBUG-rail] captured={captured_ok}");
+            capture::mark(captured_ok, "tools-rail", &app.application);
+        });
+    }
+
     fn schedule_lifecycle_qa(self: &Rc<Self>) {
         let fixture_page: Rc<RefCell<Option<adw::TabPage>>> = Rc::new(RefCell::new(None));
         let copy_path = capture::artifact("lifecycle-copy.pdf");
@@ -1426,6 +1463,168 @@ impl App {
                 saved_final.get()
             );
             capture::mark(empty && reordered_final.get() && reverted_final.get() && saved_final.get() && captured_ok, "lifecycle", &app.application);
+        });
+    }
+
+    fn schedule_panels_more_qa(self: &Rc<Self>) {
+        let seeded = Rc::new(Cell::new(false));
+        let field_ok = Rc::new(Cell::new(false));
+        let ops = Rc::new(Cell::new(false));
+        let props = Rc::new(Cell::new(false));
+        let verified = Rc::new(Cell::new(false));
+        let captured: Rc<RefCell<Option<Result<(), String>>>> = Rc::new(RefCell::new(None));
+
+        let app = self.clone();
+        let seeded_cb = seeded.clone();
+        glib::timeout_add_local_once(Duration::from_millis(1100), move || {
+            let Some(view) = app.active_view() else {
+                capture::mark(false, "panels-more", &app.application);
+                return;
+            };
+            for (parent, index, title, page) in [(vec![], 0usize, "A", 0usize), (vec![], 1, "B", 0), (vec![], 2, "C", 0), (vec![0], 0, "D", 0)] {
+                app.apply_edit(Edit::AddBookmark { parent, index, title: title.to_string(), page, left: None, top: None });
+            }
+            let count = {
+                let automation = app.automation.borrow();
+                automation.session().get(view.id).map_or(0, |doc| doc.info.outline.len())
+            };
+            seeded_cb.set(count == 3);
+            eprintln!("[DEBUG-panelsmore] count={count}");
+        });
+
+        let app = self.clone();
+        let field_cb = field_ok.clone();
+        glib::timeout_add_local_once(Duration::from_millis(1500), move || {
+            let Some(view) = app.active_view() else {
+                capture::mark(false, "panels-more", &app.application);
+                return;
+            };
+            let result = app.automation.borrow_mut().call(
+                "form_add_field",
+                &serde_json::json!({ "doc": view.id.0, "page": 1, "type": "text", "rect": [60.0, 600.0, 200.0, 630.0], "name": "Prop" }),
+            );
+            field_cb.set(result.is_ok());
+            eprintln!("[DEBUG-panelsmore] form_add_field={}", result.is_ok());
+        });
+
+        let app = self.clone();
+        let ops_cb = ops.clone();
+        glib::timeout_add_local_once(Duration::from_millis(1900), move || {
+            let Some(view) = app.active_view() else {
+                capture::mark(false, "panels-more", &app.application);
+                return;
+            };
+            // Subir B y bajar B: ida y vuelta para verificar MoveBookmark en ambos sentidos.
+            let up = app.panels.move_bookmark(&view, vec![1], vec![], 0);
+            let down = app.panels.move_bookmark(&view, vec![0], vec![], 1);
+            ops_cb.set(up && down);
+            eprintln!("[DEBUG-panelsmore] subir={up} bajar={down}");
+        });
+
+        let app = self.clone();
+        glib::timeout_add_local_once(Duration::from_millis(2500), move || {
+            let Some(view) = app.active_view() else {
+                capture::mark(false, "panels-more", &app.application);
+                return;
+            };
+            // Indentar C bajo B y devolverlo a la raíz.
+            let indent = app.panels.move_bookmark(&view, vec![2], vec![1], usize::MAX);
+            let outdent = app.panels.move_bookmark(&view, vec![1, 0], vec![], 2);
+            eprintln!("[DEBUG-panelsmore] indentar={indent} desindentar={outdent}");
+            if !indent || !outdent {
+                capture::mark(false, "panels-more", &app.application);
+            }
+        });
+
+        let app = self.clone();
+        glib::timeout_add_local_once(Duration::from_millis(3200), move || {
+            let Some(view) = app.active_view() else {
+                capture::mark(false, "panels-more", &app.application);
+                return;
+            };
+            let page = view.current();
+            let retarget = app.panels.set_bookmark_page(&view, vec![1], page);
+            eprintln!("[DEBUG-panelsmore] fijar_pagina={retarget} destino={page}");
+            if !retarget {
+                capture::mark(false, "panels-more", &app.application);
+            }
+        });
+
+        let app = self.clone();
+        let props_cb = props.clone();
+        glib::timeout_add_local_once(Duration::from_millis(3600), move || {
+            let Some(view) = app.active_view() else {
+                capture::mark(false, "panels-more", &app.application);
+                return;
+            };
+            let ok = app.panels.set_field_props(&view, "Prop", String::from("QA tooltip"), true, true);
+            props_cb.set(ok);
+            eprintln!("[DEBUG-panelsmore] props={ok}");
+        });
+
+        let app = self.clone();
+        let verified_slot = verified.clone();
+        let seeded_slot = seeded.clone();
+        let field_slot = field_ok.clone();
+        let ops_slot = ops.clone();
+        let props_slot = props.clone();
+        glib::timeout_add_local_once(Duration::from_millis(4600), move || {
+            let Some(view) = app.active_view() else {
+                capture::mark(false, "panels-more", &app.application);
+                return;
+            };
+            let titles: Vec<String>;
+            let a_children: Vec<String>;
+            let b_page: Option<usize>;
+            let tooltip_ok: bool;
+            let read_only_ok: bool;
+            {
+                let automation = app.automation.borrow();
+                let Some(doc) = automation.session().get(view.id) else {
+                    capture::mark(false, "panels-more", &app.application);
+                    return;
+                };
+                titles = doc.info.outline.iter().map(|item| item.title.clone()).collect();
+                a_children = doc.info.outline.first().map(|item| item.children.iter().map(|child| child.title.clone()).collect()).unwrap_or_default();
+                b_page = doc.info.outline.get(1).and_then(|item| item.page);
+                tooltip_ok =
+                    doc.info.fields.iter().find(|field| field.name == "Prop").and_then(|field| field.tooltip.as_deref()) == Some("QA tooltip");
+                read_only_ok =
+                    doc.form.iter().find(|field| field.name == "Prop").and_then(|field| field.widgets.first()).map(|widget| widget.read_only)
+                        == Some(true);
+            }
+            let ok = seeded_slot.get()
+                && field_slot.get()
+                && ops_slot.get()
+                && props_slot.get()
+                && titles == ["A", "B", "C"]
+                && a_children == ["D"]
+                && b_page == Some(0)
+                && tooltip_ok
+                && read_only_ok;
+            eprintln!(
+                "[DEBUG-panelsmore] verify={ok} titles={titles:?} a_children={a_children:?} b_page={b_page:?} tooltip={tooltip_ok} read_only={read_only_ok}"
+            );
+            verified_slot.set(ok);
+        });
+
+        let app = self.clone();
+        let captured_slot = captured.clone();
+        glib::timeout_add_local_once(Duration::from_millis(4800), move || {
+            let path = capture::path("panels-more");
+            capture::window_png_when_ready(app.window.clone(), &path, 6, move |result| {
+                *captured_slot.borrow_mut() = Some(result);
+            });
+        });
+
+        let app = self.clone();
+        let verified_final = verified.clone();
+        let captured_final = captured.clone();
+        glib::timeout_add_local_once(Duration::from_millis(5600), move || {
+            let captured_ok = captured_final.borrow().as_ref().map_or(false, Result::is_ok);
+            let ok = verified_final.get() && captured_ok;
+            eprintln!("[DEBUG-panelsmore] final={ok} captured={captured_ok}");
+            capture::mark(ok, "panels-more", &app.application);
         });
     }
 

@@ -9,13 +9,71 @@ use std::{
 use adw::{glib, gtk, prelude::*};
 use libadwaita as adw;
 use pdfcraft_automation::Automation;
-use pdfcraft_engine::{AttachmentSource, DocId, DocInfo, Edit, FieldInfoKind, FieldValue, RenderConfig, RenderPool, RenderRequest, RequestKind};
+use pdfcraft_engine::{
+    AttachmentSource, DocId, DocInfo, Edit, FieldInfoKind, FieldProps, FieldValue, RenderConfig, RenderPool, RenderRequest, RequestKind,
+};
 
 use super::APP;
 use crate::document::DocumentView;
+use pdfcraft_engine::catalog::{self, Availability};
 
 const THUMB_HEIGHT: f32 = 128.0;
 const THUMB_TAG: u64 = 7;
+
+/// (etiqueta, comando, icono lucide, color de la herramienta)
+const ANNOT_TOOLS: &[(&str, &str, &str, &str)] = &[
+    ("Nota", "comment.note", "message-square-text", "#FFD100"),
+    ("Texto", "comment.freetext", "type", "#222226"),
+    ("Resaltar", "comment.highlight", "highlighter", "#FFF000"),
+    ("Subrayar", "comment.underline", "underline", "#0078D4"),
+    ("Tachar", "comment.strikeout", "strikethrough", "#E32121"),
+    ("Ondular", "comment.squiggly", "spline", "#2E9E5C"),
+    ("Tinta", "comment.ink", "pen-line", "#0066DE"),
+    ("Línea", "comment.line", "minus", "#E32121"),
+    ("Flecha", "comment.arrow", "arrow-up-right", "#E32121"),
+    ("Rectángulo", "comment.square", "square", "#E32121"),
+    ("Óvalo", "comment.circle", "circle", "#E32121"),
+    ("Polígono", "comment.polygon", "pencil", "#E32121"),
+    ("Nube", "comment.cloud", "cloud", "#E32121"),
+    ("Polilínea", "comment.polyline", "spline", "#E32121"),
+    ("Llamada", "comment.callout", "message-square", "#222226"),
+    ("Marca", "comment.caret", "superscript", "#0078D4"),
+    ("Reemplazo", "comment.replace", "file-input", "#0078D4"),
+    ("Redactar", "comment.redact", "rectangle-horizontal", "#E03E3E"),
+    ("Borrar", "comment.eraser", "eraser", "#5E5E66"),
+    ("Texto", "sign.fill.text", "text-cursor-input", "#8E4EE6"),
+    ("Visto", "sign.fill.check", "square", "#8E4EE6"),
+    ("Cruz", "sign.fill.cross", "circle", "#8E4EE6"),
+    ("Punto", "sign.fill.dot", "circle", "#8E4EE6"),
+    ("Guion", "sign.fill.line", "minus", "#8E4EE6"),
+    ("Fecha", "sign.fill.date", "type", "#8E4EE6"),
+    ("Firma", "sign.fill.signature", "pen-line", "#8E4EE6"),
+    ("Iniciales", "sign.fill.initials", "signature", "#8E4EE6"),
+    ("Firmar", "sign.digital", "signature", "#8E4EE6"),
+    ("Certificar", "sign.certify", "badge-check", "#149CA8"),
+];
+
+fn tinted_icon(icon: &str, color: &str) -> gtk::Image {
+    let image = gtk::Image::new();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/icons").join(format!("{icon}.svg"));
+    if let Ok(bytes) = std::fs::read(&path) {
+        let painted = String::from_utf8_lossy(&bytes).replace("currentColor", color);
+        if let Ok(texture) = gtk::gdk::Texture::from_bytes(&glib::Bytes::from(painted.as_bytes())) {
+            image.set_paintable(Some(&texture));
+            return image;
+        }
+    }
+    image.set_icon_name(Some("image-missing-symbolic"));
+    image
+}
+
+fn availability_chip(availability: Availability) -> Option<String> {
+    match availability {
+        Availability::Ready => None,
+        Availability::Planned(reason) => Some(reason.to_string()),
+        Availability::Provider => Some("requiere motor externo".to_string()),
+    }
+}
 
 type Shared = Rc<RefCell<Automation>>;
 
@@ -105,6 +163,8 @@ pub struct DocumentPanel {
     attachments: gtk::ListBox,
     signatures: gtk::ListBox,
     tool_buttons: RefCell<Vec<(String, gtk::ToggleButton)>>,
+    on_command: RefCell<Option<Rc<dyn Fn(&str)>>>,
+    rail_groups: Cell<usize>,
     active: RefCell<Option<Rc<DocumentView>>>,
     current: Cell<Option<DocId>>,
     fingerprint: Cell<u64>,
@@ -188,6 +248,8 @@ impl DocumentPanel {
             attachments,
             signatures,
             tool_buttons: RefCell::new(Vec::new()),
+            on_command: RefCell::new(None),
+            rail_groups: Cell::new(0),
             active: RefCell::new(None),
             current: Cell::new(None),
             fingerprint: Cell::new(0),
@@ -207,53 +269,124 @@ impl DocumentPanel {
         &self.tools_root
     }
 
+    pub fn set_command_runner(&self, runner: Rc<dyn Fn(&str)>) {
+        *self.on_command.borrow_mut() = Some(runner);
+    }
+
+    pub fn rail_group_count(&self) -> usize {
+        self.rail_groups.get()
+    }
+
+    pub fn tool_button_count(&self) -> usize {
+        self.tool_buttons.borrow().len()
+    }
+
     pub fn build_tools(self: &Rc<Self>) {
-        let tools = [
-            ("Nota", "comment.note"),
-            ("Texto", "comment.freetext"),
-            ("Resaltar", "comment.highlight"),
-            ("Subrayar", "comment.underline"),
-            ("Tachar", "comment.strikeout"),
-            ("Ondular", "comment.squiggly"),
-            ("Tinta", "comment.ink"),
-            ("Línea", "comment.line"),
-            ("Flecha", "comment.arrow"),
-            ("Rectángulo", "comment.square"),
-            ("Óvalo", "comment.circle"),
-            ("Polígono", "comment.polygon"),
-            ("Nube", "comment.cloud"),
-            ("Polilínea", "comment.polyline"),
-            ("Llamada", "comment.callout"),
-            ("Marca", "comment.caret"),
-            ("Reemplazo", "comment.replace"),
-            ("Redactar", "comment.redact"),
-            ("Borrar", "comment.eraser"),
-            ("Texto", "sign.fill.text"),
-            ("Visto", "sign.fill.check"),
-            ("Cruz", "sign.fill.cross"),
-            ("Punto", "sign.fill.dot"),
-            ("Guion", "sign.fill.line"),
-            ("Fecha", "sign.fill.date"),
-            ("Firma", "sign.fill.signature"),
-            ("Iniciales", "sign.fill.initials"),
-            ("Firmar", "sign.digital"),
-            ("Certificar", "sign.certify"),
-        ];
+        let heading = gtk::Label::new(Some("Herramientas"));
+        heading.set_css_classes(&["heading"]);
+        heading.set_halign(gtk::Align::Start);
+        heading.set_margin_top(6);
+        let top = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        top.append(&heading);
         let grid = gtk::FlowBox::new();
-        grid.set_max_children_per_line(2);
-        grid.set_min_children_per_line(2);
+        grid.set_max_children_per_line(3);
+        grid.set_min_children_per_line(3);
         grid.set_selection_mode(gtk::SelectionMode::None);
         grid.set_homogeneous(true);
-        for (label, id) in tools {
-            let button = gtk::ToggleButton::with_label(label);
-            self.tool_buttons.borrow_mut().push((id.to_string(), button.clone()));
+        for (label, id, icon, color) in ANNOT_TOOLS {
+            let button = gtk::ToggleButton::new();
+            let image = tinted_icon(icon, color);
+            image.set_pixel_size(18);
+            button.set_child(Some(&image));
+            button.set_tooltip_text(Some(label));
+            self.tool_buttons.borrow_mut().push(((*id).to_string(), button.clone()));
             grid.append(&button);
         }
-        let none = gtk::ToggleButton::with_label("Ninguna herramienta");
+        let none = gtk::ToggleButton::with_label("Ninguna");
         none.set_active(true);
+        none.set_tooltip_text(Some("Ninguna herramienta"));
         self.tool_buttons.borrow_mut().push((String::new(), none.clone()));
         grid.append(&none);
-        self.tools_root.append(&grid);
+        top.append(&grid);
+
+        let commands = gtk::Label::new(Some("Comandos"));
+        commands.set_css_classes(&["heading"]);
+        commands.set_halign(gtk::Align::Start);
+        commands.set_margin_top(10);
+        top.append(&commands);
+        let mut group_count = 0usize;
+        for category in catalog::TOOL_CATEGORIES {
+            let category_label = gtk::Label::new(Some(category.label));
+            category_label.set_css_classes(&["dim-label"]);
+            category_label.set_halign(gtk::Align::Start);
+            category_label.set_margin_top(6);
+            top.append(&category_label);
+            for group_id in category.groups {
+                let Some(group) = catalog::group(group_id) else { continue };
+                group_count += 1;
+                let hex = format!("#{0:02X}{1:02X}{2:02X}", group.hue[0], group.hue[1], group.hue[2]);
+                let items = gtk::FlowBox::new();
+                items.set_max_children_per_line(3);
+                items.set_min_children_per_line(2);
+                items.set_selection_mode(gtk::SelectionMode::None);
+                items.set_homogeneous(true);
+                items.set_margin_start(28);
+                for section in group.sections {
+                    for item in section.items {
+                        let button = gtk::Button::new();
+                        button.add_css_class("flat");
+                        let image = tinted_icon(item.icon, &hex);
+                        image.set_pixel_size(18);
+                        button.set_child(Some(&image));
+                        button.set_tooltip_text(Some(item.label));
+                        if !matches!(item.availability, Availability::Ready) {
+                            button.set_sensitive(false);
+                        }
+                        let runner = self.on_command.borrow().clone();
+                        let command = item.command.to_string();
+                        button.connect_clicked(move |_| {
+                            if let Some(runner) = runner.as_ref() {
+                                runner(&command);
+                            }
+                        });
+                        items.append(&button);
+                    }
+                }
+                let revealer = gtk::Revealer::new();
+                revealer.set_child(Some(&items));
+                revealer.set_reveal_child(false);
+                let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+                let group_icon = tinted_icon(group.icon, &hex);
+                group_icon.set_pixel_size(20);
+                row_box.append(&group_icon);
+                let group_label = gtk::Label::new(Some(group.label));
+                group_label.set_halign(gtk::Align::Start);
+                row_box.append(&group_label);
+                let chip = availability_chip(group.availability);
+                if let Some(chip) = chip.as_deref() {
+                    let chip_label = gtk::Label::new(Some(chip));
+                    chip_label.set_css_classes(&["dim-label"]);
+                    chip_label.set_halign(gtk::Align::Start);
+                    row_box.append(&chip_label);
+                }
+                let row = gtk::Button::new();
+                row.add_css_class("flat");
+                row.set_child(Some(&row_box));
+                row.set_halign(gtk::Align::Fill);
+                let revealer_toggle = revealer.clone();
+                row.connect_clicked(move |_| {
+                    revealer_toggle.set_reveal_child(!revealer_toggle.reveals_child());
+                });
+                top.append(&row);
+                top.append(&revealer);
+            }
+        }
+        self.rail_groups.set(group_count);
+        let scroll = gtk::ScrolledWindow::new();
+        scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+        scroll.set_vexpand(true);
+        scroll.set_child(Some(&top));
+        self.tools_root.append(&scroll);
 
         let panel = Rc::downgrade(self);
         for (_, button) in self.tool_buttons.borrow().iter() {
@@ -418,6 +551,25 @@ impl DocumentPanel {
         apply_edit(view, &self.automation, Edit::RenameBookmark { path, title: title.to_string() })
     }
 
+    pub(super) fn move_bookmark(&self, view: &Rc<DocumentView>, from: Vec<usize>, to_parent: Vec<usize>, index: usize) -> bool {
+        apply_edit(view, &self.automation, Edit::MoveBookmark { from, to_parent, index })
+    }
+
+    pub(super) fn set_bookmark_page(&self, view: &Rc<DocumentView>, path: Vec<usize>, page: usize) -> bool {
+        apply_edit(view, &self.automation, Edit::SetBookmarkPage { path, page })
+    }
+
+    pub(super) fn set_field_props(&self, view: &Rc<DocumentView>, name: &str, tooltip: String, read_only: bool, required: bool) -> bool {
+        apply_edit(
+            view,
+            &self.automation,
+            Edit::SetFieldProps {
+                name: name.to_string(),
+                props: Box::new(FieldProps { tooltip: Some(tooltip), read_only: Some(read_only), required: Some(required), ..FieldProps::default() }),
+            },
+        )
+    }
+
     pub(super) fn delete_bookmark(&self, view: &Rc<DocumentView>, path: Vec<usize>) -> bool {
         apply_edit(view, &self.automation, Edit::DeleteBookmark { path })
     }
@@ -564,6 +716,7 @@ fn fill_bookmarks(list: &gtk::ListBox, info: &DocInfo, view: &Rc<DocumentView>, 
                     delete_panel.delete_bookmark(&delete_view, delete_path.clone());
                 });
                 row.add_suffix(&delete_btn);
+                row.add_suffix(&bookmark_menu_button(panel, view, prefix.clone(), index, depth, path.clone()));
             }
             list.append(&row);
             if !item.children.is_empty() {
@@ -571,6 +724,174 @@ fn fill_bookmarks(list: &gtk::ListBox, info: &DocInfo, view: &Rc<DocumentView>, 
             }
         }
     }
+}
+
+/// Overflow menu for one bookmark row: reorder, indent, retarget, besides the inline rename/delete.
+fn bookmark_menu_button(
+    panel: &Rc<DocumentPanel>,
+    view: &Rc<DocumentView>,
+    prefix: Vec<usize>,
+    index: usize,
+    depth: usize,
+    path: Vec<usize>,
+) -> gtk::MenuButton {
+    let menu = gtk::MenuButton::new();
+    menu.set_icon_name("view-more-symbolic");
+    menu.set_tooltip_text(Some("Más acciones de marcador"));
+    menu.add_css_class("flat");
+    let list = gtk::ListBox::new();
+    list.set_css_classes(&["boxed-list"]);
+    list.set_selection_mode(gtk::SelectionMode::None);
+    let popover = gtk::Popover::new();
+    popover.set_child(Some(&list));
+    menu.set_popover(Some(&popover));
+    let entries: [(&str, bool, Box<dyn Fn()>); 5] = [
+        (
+            "Subir",
+            index > 0,
+            Box::new({
+                let panel = Rc::clone(panel);
+                let view = Rc::clone(view);
+                let from = path.clone();
+                let to_parent = prefix.clone();
+                move || {
+                    panel.move_bookmark(&view, from.clone(), to_parent.clone(), index - 1);
+                }
+            }),
+        ),
+        (
+            "Bajar",
+            true,
+            Box::new({
+                let panel = Rc::clone(panel);
+                let view = Rc::clone(view);
+                let from = path.clone();
+                let to_parent = prefix.clone();
+                move || {
+                    panel.move_bookmark(&view, from.clone(), to_parent.clone(), index + 1);
+                }
+            }),
+        ),
+        (
+            "Indentar",
+            index > 0,
+            Box::new({
+                let panel = Rc::clone(panel);
+                let view = Rc::clone(view);
+                let from = path.clone();
+                let mut to_parent = prefix.clone();
+                to_parent.push(index.saturating_sub(1));
+                move || {
+                    panel.move_bookmark(&view, from.clone(), to_parent.clone(), usize::MAX);
+                }
+            }),
+        ),
+        (
+            "Quitar indentación",
+            depth > 0,
+            Box::new({
+                let panel = Rc::clone(panel);
+                let view = Rc::clone(view);
+                let from = path.clone();
+                let parent_last = prefix.last().copied().unwrap_or(0);
+                let to_parent = prefix[..prefix.len().saturating_sub(1)].to_vec();
+                move || {
+                    panel.move_bookmark(&view, from.clone(), to_parent.clone(), parent_last + 1);
+                }
+            }),
+        ),
+        (
+            "Fijar a la página actual",
+            true,
+            Box::new({
+                let panel = Rc::clone(panel);
+                let view = Rc::clone(view);
+                let target = path.clone();
+                move || {
+                    panel.set_bookmark_page(&view, target.clone(), view.current());
+                }
+            }),
+        ),
+    ];
+    for (label, enabled, action) in entries {
+        let button = gtk::Button::with_label(label);
+        button.add_css_class("flat");
+        button.set_halign(gtk::Align::Fill);
+        button.set_sensitive(enabled);
+        let popover = popover.clone();
+        button.connect_clicked(move |_| {
+            popover.popdown();
+            action();
+        });
+        list.append(&button);
+    }
+    menu
+}
+
+/// Modal editor for the basic field properties (tooltip, read only, required).
+fn open_field_props(view: &Rc<DocumentView>, name: &str, tooltip: &str, panel: &Rc<DocumentPanel>) {
+    let window = app_window();
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    content.set_margin_top(18);
+    content.set_margin_bottom(18);
+    content.set_margin_start(18);
+    content.set_margin_end(18);
+    let tooltip_row = adw::EntryRow::new();
+    tooltip_row.set_title("Descripción emergente");
+    tooltip_row.set_text(tooltip);
+    let read_only = gtk::Switch::new();
+    read_only.set_valign(gtk::Align::Center);
+    let read_only_row = adw::ActionRow::new();
+    read_only_row.set_title("Solo lectura");
+    read_only_row.add_suffix(&read_only);
+    read_only_row.set_activatable_widget(Some(&read_only));
+    let required = gtk::Switch::new();
+    required.set_valign(gtk::Align::Center);
+    let required_row = adw::ActionRow::new();
+    required_row.set_title("Obligatorio");
+    required_row.add_suffix(&required);
+    required_row.set_activatable_widget(Some(&required));
+    let list = gtk::ListBox::new();
+    list.set_css_classes(&["boxed-list"]);
+    list.set_selection_mode(gtk::SelectionMode::None);
+    list.append(&tooltip_row);
+    list.append(&read_only_row);
+    list.append(&required_row);
+    content.append(&list);
+    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    buttons.set_halign(gtk::Align::End);
+    let cancel = gtk::Button::with_label("Cancelar");
+    let save = gtk::Button::with_label("Guardar");
+    save.add_css_class("suggested-action");
+    buttons.append(&cancel);
+    buttons.append(&save);
+    content.append(&buttons);
+    let dialog = adw::Window::builder().title(format!("Propiedades de {name}")).modal(true).build();
+    if let Some(window) = &window {
+        dialog.set_transient_for(Some(window));
+    }
+    dialog.set_content(Some(&content));
+    dialog.set_default_size(440, 220);
+    let dialog_cancel = dialog.clone();
+    cancel.connect_clicked(move |_| dialog_cancel.close());
+    let dialog_save = dialog.clone();
+    let tooltip_save = tooltip_row.clone();
+    let read_only_save = read_only.clone();
+    let required_save = required.clone();
+    let panel_save = Rc::clone(panel);
+    let view_save = Rc::clone(view);
+    let name_save = name.to_string();
+    save.connect_clicked(move |_| {
+        dialog_save.close();
+        panel_save.set_field_props(
+            &view_save,
+            &name_save,
+            tooltip_save.text().trim().to_string(),
+            read_only_save.is_active(),
+            required_save.is_active(),
+        );
+    });
+    dialog.present();
 }
 
 fn fill_fields(list: &gtk::ListBox, info: &DocInfo, view: &Rc<DocumentView>, automation: &Shared, panel: &Rc<DocumentPanel>, editable: bool) {
@@ -616,6 +937,15 @@ fn fill_fields(list: &gtk::ListBox, info: &DocInfo, view: &Rc<DocumentView>, aut
                 }
                 _ => {}
             }
+            let props_btn = icon_button("document-properties-symbolic", "Propiedades del campo");
+            let props_panel = Rc::clone(panel);
+            let props_view = Rc::clone(view);
+            let props_name = field.name.clone();
+            let props_tooltip = field.tooltip.clone().unwrap_or_default();
+            props_btn.connect_clicked(move |_| {
+                open_field_props(&props_view, &props_name, &props_tooltip, &props_panel);
+            });
+            row.add_suffix(&props_btn);
         }
         list.append(&row);
     }
