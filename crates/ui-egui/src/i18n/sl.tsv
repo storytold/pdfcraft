@@ -343,7 +343,6 @@
 	Check box is checked by default	Potrditveno polje je privzeto označeno
 	Check for accessibility	Preveri dostopnost
 	Check for accessibility…	Preveri dostopnost…
-	Check for updates	Preveri posodobitve
 	Check for updates…	Preveri posodobitve…
 	Check spelling	Preveri črkovanje
 	Check that the tags read in the order a sighted reader would. Use the Reading Order tool or the Tags panel to correct it.	Preverite, ali se oznake berejo v vrstnem redu, v katerem bi jih bral bralec. Za popravek uporabite orodje Vrstni red branja ali razdelek Oznake.
@@ -352,7 +351,6 @@
 	Checkbox	Potrditveno polje
 	Checked	Označeno
 	Checking Options ({on} of 32 in all categories)	Možnosti preverjanja ({on} od 32 v vseh kategorijah)
-	Checking for a newer version…	Preverjanje za novejšo različico…
 	Checkmark	Kljukica
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Izberite sliko PNG ali JPEG (do 4 MiB). Prosojnost je ohranjena.
 	Choose a folder for the exported files	Izberite mapo za izvožene datoteke
@@ -457,7 +455,6 @@
 	Correct recognized text	Popravi prepoznano besedilo
 	Could not save: {e}	Shranjevanje ni uspelo: {e}
 	Couldn't add {name}: {e}	Datoteke {name} ni bilo mogoče dodati: {e}
-	Couldn't check for updates: {e}	Posodobitev ni bilo mogoče preveriti: {e}
 	Couldn't combine files: {e}	Datotek ni bilo mogoče združiti: {e}
 	Couldn't create a PDF: {e}	PDF-ja ni bilo mogoče ustvariti: {e}
 	Couldn't download {name}: {e}	Datoteke {name} ni bilo mogoče prenesti: {e}
@@ -1368,7 +1365,6 @@
 	PdfCraft on GitHub	PdfCraft na GitHubu
 	PdfCraft web page	Spletna stran PdfCraft
 	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft deluje brez povezave. Brez telemetrije, brez računa in brez obdelave v oblaku, razen če dodate ponudnika.
-	PdfCraft {c} is up to date.	PdfCraft {c} je posodobljen.
 	PdfCraft {v} is available.	Na voljo je PdfCraft {v}.
 	People may need more time to respond. Check that nothing has a time limit.	Ljudje bodo morda potrebovali več časa za odziv. Preverite, da nič nima časovne omejitve.
 	Percentage	Odstotek
@@ -2063,7 +2059,6 @@
 	You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Uveljavili boste 1 oznako za počrnitev. Besedilo, slike in risbe pod oznakami ter komentarji in polja obrazca, ki se z njimi prekrivajo, bodo trajno odstranjeni.
 	You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Uveljavili boste oznake za počrnitev: {n}. Besedilo, slike in risbe pod oznakami ter komentarji in polja obrazca, ki se z njimi prekrivajo, bodo trajno odstranjeni.
 	You can pin up to {n} folders. Unpin one first.	Pripnete lahko do {n} map. Najprej eno odpnite.
-	You have version {c}. All releases are listed at {page}.	Imate različico {c}. Vse izdaje so navedene na {page}.
 	You have version {c}. Download the new version from its release page.	Imate različico {c}. Novo različico prenesite z njene strani izdaje.
 	Your changes will be lost if you don't save them.	Vaše spremembe bodo izgubljene, če jih ne shranite.
 	Your name	Vaše ime

@@ -794,14 +794,9 @@
 	Copy Image in Original Format	Kép másolása eredeti formátumban
 	The image has been copied as a {ext} file	A kép {ext}-fájlként a vágólapra került
 	The page has changed; select the image again	Az oldal megváltozott; jelölje ki újra a képet
-	Check for updates	Frissítések keresése
 	No check has run yet.	Még nem futott ellenőrzés.
-	Checking for a newer version…	Újabb verzió keresése…
 	PdfCraft {v} is available.	Elérhető a PdfCraft {v}.
 	You have version {c}. Download the new version from its release page.	A jelenlegi verzió: {c}. Töltsd le az újat a kiadási oldaláról.
-	PdfCraft {c} is up to date.	A PdfCraft {c} naprakész.
-	Couldn't check for updates: {e}	A frissítések keresése nem sikerült: {e}
-	You have version {c}. All releases are listed at {page}.	A jelenlegi verzió: {c}. Minden kiadás itt található: {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	A GitHubtól kéri le a legújabb kiadást. Semmi sem töltődik le vagy települ automatikusan.
 	Download	Letöltés
 	Later	Később

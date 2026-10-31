@@ -817,14 +817,9 @@
 	Copy Image in Original Format	Копировать изображение в исходном формате
 	The image has been copied as a {ext} file	Изображение скопировано как файл {ext}
 	The page has changed; select the image again	Страница изменилась; выберите изображение снова
-	Check for updates	Проверить обновления
 	No check has run yet.	Проверка ещё не выполнялась.
-	Checking for a newer version…	Проверка новой версии…
 	PdfCraft {v} is available.	Доступна PdfCraft {v}.
 	You have version {c}. Download the new version from its release page.	У вас версия {c}. Скачайте новую версию со страницы релизов.
-	PdfCraft {c} is up to date.	У вас последняя версия PdfCraft {c}.
-	Couldn't check for updates: {e}	Не удалось проверить обновления: {e}
-	You have version {c}. All releases are listed at {page}.	У вас версия {c}. Все релизы перечислены на {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Запрашивает у GitHub последний релиз. Ничего не скачивается и не устанавливается автоматически.
 	Download	Скачать
 	Later	Позже

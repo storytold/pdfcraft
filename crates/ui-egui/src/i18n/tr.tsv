@@ -779,14 +779,9 @@
 	Copy Image in Original Format	Resmi Özgün Biçimde Kopyala
 	The image has been copied as a {ext} file	Resim {ext} dosyası olarak kopyalandı
 	The page has changed; select the image again	Sayfa değişti; resmi yeniden seçin
-	Check for updates	Güncellemeleri denetle
 	No check has run yet.	Henüz denetim yapılmadı.
-	Checking for a newer version…	Daha yeni bir sürüm denetleniyor…
 	PdfCraft {v} is available.	PdfCraft {v} kullanılabilir.
 	You have version {c}. Download the new version from its release page.	{c} sürümüne sahipsiniz. Yeni sürümü sürüm sayfasından indirin.
-	PdfCraft {c} is up to date.	PdfCraft {c} güncel.
-	Couldn't check for updates: {e}	Güncellemeler denetlenemedi: {e}
-	You have version {c}. All releases are listed at {page}.	{c} sürümüne sahipsiniz. Tüm sürümler {page} adresinde listelenmiştir.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	En son sürüm için GitHub'ı sorgular. Hiçbir şey otomatik olarak indirilmez veya kurulmaz.
 	Download	İndir
 	Later	Daha sonra

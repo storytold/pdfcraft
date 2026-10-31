@@ -777,14 +777,9 @@
 	Copy Image in Original Format	Copia la imatge en el format original
 	The image has been copied as a {ext} file	S'ha copiat la imatge com a fitxer {ext}
 	The page has changed; select the image again	La pàgina ha canviat; torna a seleccionar la imatge
-	Check for updates	Cerca actualitzacions
 	No check has run yet.	Encara no s'ha fet cap comprovació.
-	Checking for a newer version…	S'està cercant una versió més recent…
 	PdfCraft {v} is available.	PdfCraft {v} està disponible.
 	You have version {c}. Download the new version from its release page.	Tens la versió {c}. Baixa la versió nova des de la seva pàgina de publicació.
-	PdfCraft {c} is up to date.	PdfCraft {c} està actualitzat.
-	Couldn't check for updates: {e}	No s'han pogut cercar actualitzacions: {e}
-	You have version {c}. All releases are listed at {page}.	Tens la versió {c}. Totes les versions es llisten a {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Consulta a GitHub la darrera versió. No es baixa ni s'instal·la res automàticament.
 	Download	Baixa
 	Later	Més tard

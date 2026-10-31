@@ -902,14 +902,9 @@ key	Space	Mezerník
 	Copy Image in Original Format	Kopírovat obrázek v původním formátu
 	The image has been copied as a {ext} file	Obrázek byl zkopírován jako soubor {ext}
 	The page has changed; select the image again	Stránka se změnila; vyberte obrázek znovu
-	Check for updates	Zkontrolovat aktualizace
 	No check has run yet.	Kontrola zatím neproběhla.
-	Checking for a newer version…	Hledání novější verze…
 	PdfCraft {v} is available.	Je k dispozici PdfCraft {v}.
 	You have version {c}. Download the new version from its release page.	Máte verzi {c}. Novou verzi si stáhněte z její stránky s vydáním.
-	PdfCraft {c} is up to date.	PdfCraft {c} je aktuální.
-	Couldn't check for updates: {e}	Aktualizace nelze zkontrolovat: {e}
-	You have version {c}. All releases are listed at {page}.	Máte verzi {c}. Všechna vydání najdete na {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Zjistí na GitHubu nejnovější vydání. Nic se automaticky nestahuje ani neinstaluje.
 	Download	Stáhnout
 	Later	Později

@@ -816,14 +816,9 @@
 	Copy Image in Original Format	Kopiuj obraz w oryginalnym formacie
 	The image has been copied as a {ext} file	Obraz został skopiowany jako plik {ext}
 	The page has changed; select the image again	Strona się zmieniła; zaznacz obraz ponownie
-	Check for updates	Sprawdź aktualizacje
 	No check has run yet.	Nie sprawdzono jeszcze aktualizacji.
-	Checking for a newer version…	Sprawdzanie dostępności nowszej wersji…
 	PdfCraft {v} is available.	PdfCraft {v} jest dostępny.
 	You have version {c}. Download the new version from its release page.	Masz wersję {c}. Pobierz nową wersję ze strony wydania.
-	PdfCraft {c} is up to date.	PdfCraft {c} jest aktualny.
-	Couldn't check for updates: {e}	Nie można sprawdzić aktualizacji: {e}
-	You have version {c}. All releases are listed at {page}.	Masz wersję {c}. Wszystkie wydania są dostępne na {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Sprawdza najnowsze wydanie na GitHubie. Nic nie jest pobierane ani instalowane automatycznie.
 	Download	Pobierz
 	Later	Później

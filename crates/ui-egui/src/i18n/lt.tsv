@@ -344,12 +344,10 @@
 	Check Again	Tikrinti dar kartą
 	Check again	Tikrinti dar kartą
 	Check box is checked by default	Žymimasis langelis pažymėtas pagal numatytuosius parametrus
-	Check for updates	Tikrinti, ar yra naujinimų
 	Check spelling	Tikrinti rašybą
 	Check the pages	Tikrinti puslapius
 	Check the pages of {name}: {why}	Tikrinti dokumento {name} puslapius: {why}
 	Checking Options ({on} of 32 in all categories)	Tikrinimo parinktys (visose kategorijose: {on} iš 32)
-	Checking for a newer version…	Tikrinama, ar yra naujesnė versija…
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Pasirinkite PNG arba JPEG paveikslėlį (iki 4 MiB). Skaidrumas išsaugomas.
 	Choose a folder for the exported files	Pasirinkite aplanką eksportuojamiems failams
 	Choose a folder for the extracted pages	Pasirinkite aplanką išskirtiems puslapiams
@@ -411,7 +409,6 @@
 	Copies:	Kopijų skaičius:
 	Copy selected text	Kopijuoti pažymėtą tekstą
 	Copy text	Kopijuoti tekstą
-	Couldn't check for updates: {e}	Nepavyko patikrinti, ar yra naujinimų: {e}
 	Couldn't open the printer's preferences: {e}	Nepavyko atverti spausdintuvo nuostatų: {e}
 	Counterclockwise 90 degrees	90 laipsnių prieš laikrodžio rodyklę
 	Country/Region	Šalis / regionas
@@ -916,7 +913,6 @@
 	Patterns (graphics objects)	Šablonai (grafiniai objektai)
 	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	„PdfCraft“ buvo uždaryta netinkamai. Šių dokumentų pakeitimai buvo automatiškai įrašyti:
 	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	„PdfCraft“ veikia neprisijungus. Nerenkami telemetrijos duomenys, nereikia paskyros ir nenaudojamos debesijos paslaugos, nebent pridėtumėte jų teikėją.
-	PdfCraft {c} is up to date.	Naudojate naujausią „PdfCraft“ versiją {c}.
 	PdfCraft {v} is available.	Išleista „PdfCraft“ versija {v}.
 	Percentage	Procentai
 	Permissions password	Teisių slaptažodis
@@ -1344,7 +1340,6 @@
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	XFA forma: jos laukai ir XFA duomenys sinchronizuojami, todėl kitose žiūryklėse rodoma tai, ką įvedate.
 	You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Ketinate pritaikyti 1 šalinimo žymą. Po žymomis esantis tekstas, paveikslėliai ir brėžiniai, taip pat su jomis persidengiantys komentarai ir formos laukai bus pašalinti visam laikui.
 	You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Ketinate pritaikyti šalinimo žymų: {n}. Po žymomis esantis tekstas, paveikslėliai ir brėžiniai, taip pat su jomis persidengiantys komentarai ir formos laukai bus pašalinti visam laikui.
-	You have version {c}. All releases are listed at {page}.	Turite versiją {c}. Visos laidos išvardytos čia: {page}.
 	You have version {c}. Download the new version from its release page.	Turite versiją {c}. Atsisiųskite naują versiją iš jos laidos puslapio.
 	Your changes will be lost if you don't save them.	Jei pakeitimų neįrašysite, jie bus prarasti.
 	ZIP	ZIP

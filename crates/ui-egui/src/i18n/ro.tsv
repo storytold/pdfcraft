@@ -342,12 +342,10 @@
 	Check Again	Verificare din nou
 	Check again	Verificare din nou
 	Check box is checked by default	Caseta de selectare este bifată implicit
-	Check for updates	Căutare actualizări
 	Check spelling	Verificare ortografică
 	Check the pages	Verificați paginile
 	Check the pages of {name}: {why}	Verificați paginile din {name}: {why}
 	Checking Options ({on} of 32 in all categories)	Opțiuni de verificare ({on} din 32 în toate categoriile)
-	Checking for a newer version…	Se caută o versiune mai nouă…
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Alegeți o imagine PNG sau JPEG (până la 4 MiB). Transparența se păstrează.
 	Choose a folder for the exported files	Alegeți un folder pentru fișierele exportate
 	Choose a folder for the extracted pages	Alegeți un folder pentru paginile extrase
@@ -407,7 +405,6 @@
 	Copies:	Copii:
 	Copy selected text	Copiere text selectat
 	Copy text	Copiere text
-	Couldn't check for updates: {e}	Nu s-au putut căuta actualizări: {e}
 	Couldn't open the printer's preferences: {e}	Nu s-au putut deschide preferințele imprimantei: {e}
 	Counterclockwise 90 degrees	90 de grade în sens invers acelor de ceasornic
 	Country/Region	Țară/regiune
@@ -868,7 +865,6 @@
 	Patterns (graphics objects)	Modele (obiecte grafice)
 	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft nu s-a închis normal. Aceste documente aveau modificări salvate automat:
 	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft funcționează offline. Fără telemetrie, fără cont și fără procesare în cloud, cu excepția cazului în care adăugați un furnizor.
-	PdfCraft {c} is up to date.	PdfCraft {c} este la zi.
 	PdfCraft {v} is available.	Este disponibil PdfCraft {v}.
 	Percentage	Procent
 	Permissions password	Parolă de permisiuni
@@ -1287,7 +1283,6 @@
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	Formular XFA: câmpurile și datele XFA sunt sincronizate, ca alte vizualizatoare să arate ce completați.
 	You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Urmează să aplicați 1 marcaj de anonimizare. Textul, imaginile și desenele de sub marcaje, precum și comentariile și câmpurile de formular care se suprapun cu ele, se elimină definitiv.
 	You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Urmează să aplicați {n} marcaje de anonimizare. Textul, imaginile și desenele de sub marcaje, precum și comentariile și câmpurile de formular care se suprapun cu ele, se elimină definitiv.
-	You have version {c}. All releases are listed at {page}.	Aveți versiunea {c}. Toate versiunile sunt listate la {page}.
 	You have version {c}. Download the new version from its release page.	Aveți versiunea {c}. Descărcați versiunea nouă de pe pagina ei de lansare.
 	Your changes will be lost if you don't save them.	Modificările se vor pierde dacă nu le salvați.
 	ZIP	ZIP

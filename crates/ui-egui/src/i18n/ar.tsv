@@ -823,14 +823,9 @@
 	Copy Image in Original Format	نسخ الصورة بتنسيقها الأصلي
 	The image has been copied as a {ext} file	نُسخت الصورة كملف {ext}
 	The page has changed; select the image again	تغيّرت الصفحة؛ حدّد الصورة مرة أخرى
-	Check for updates	التحقق من التحديثات
 	No check has run yet.	لم يُجرَ أي تحقق بعد.
-	Checking for a newer version…	جارٍ التحقق من وجود إصدار أحدث…
 	PdfCraft {v} is available.	PdfCraft {v} متاح.
 	You have version {c}. Download the new version from its release page.	لديك الإصدار {c}. نزّل الإصدار الجديد من صفحة إصداره.
-	PdfCraft {c} is up to date.	PdfCraft {c} محدَّث.
-	Couldn't check for updates: {e}	تعذّر التحقق من التحديثات: {e}
-	You have version {c}. All releases are listed at {page}.	لديك الإصدار {c}. كل الإصدارات مدرجة في {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	يسأل GitHub عن أحدث إصدار. لا يُنزَّل أو يُثبَّت شيء تلقائيًا.
 	Download	تنزيل
 	Later	لاحقًا

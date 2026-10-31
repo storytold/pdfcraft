@@ -11,7 +11,7 @@ workspace = true
 [dependencies]
 pdfcraft-engine = { workspace = true }
 pdfcraft-fonts = { workspace = true }
-pdfcraft-hot-folder-service = { path = "../../crates/hot-folder-service", version = "0.15.0" }
+pdfcraft-hot-folder-service = { path = "../../crates/hot-folder-service", version = "0.16.1" }
 eframe = { workspace = true, features = ["default_fonts", "glow", "accesskit", "wayland", "x11"] }
 egui = { workspace = true }
 # Dropdowns whose menu can grow back while open (the workspace bans craft_ui::ComboBox, egui#5225).

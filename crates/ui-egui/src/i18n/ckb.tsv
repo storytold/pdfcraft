@@ -787,14 +787,9 @@
 	Copy Image in Original Format	کۆپیکردنی وێنە بە فۆرماتی ڕەسەن
 	The image has been copied as a {ext} file	وێنەکە وەک فایلی {ext} کۆپی کرا
 	The page has changed; select the image again	پەڕەکە گۆڕاوە؛ دووبارە وێنەکە هەڵبژێرە
-	Check for updates	پشکنین بۆ نوێکردنەوەکان
 	No check has run yet.	هێشتا هیچ پشکنینێک نەکراوە.
-	Checking for a newer version…	پشکنین بۆ وەشانێکی نوێتر…
 	PdfCraft {v} is available.	PdfCraft {v} بەردەستە.
 	You have version {c}. Download the new version from its release page.	وەشانی {c} هەیە. وەشانە نوێیەکە لە پەڕەی وەشانەکەیەوە دابگرە.
-	PdfCraft {c} is up to date.	PdfCraft {c} نوێکراوەتەوە.
-	Couldn't check for updates: {e}	پشکنین بۆ نوێکردنەوە نەکرا: {e}
-	You have version {c}. All releases are listed at {page}.	وەشانی {c} هەیە. هەموو وەشانەکان لە {page} پێڕست کراون.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	لە GitHub دەپرسێت بۆ نوێترین وەشان. هیچ شتێک بە شێوەی خۆکار داگیر ناکرێت یان دادەمەزرێنرێت.
 	Download	داگرتن
 	Later	دواتر
