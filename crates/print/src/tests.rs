@@ -747,8 +747,24 @@ fn every_paper_reaches_the_spooler_by_a_name_of_its_size() {
             ("A0", "iso_a0_841x1189mm"),
             ("4 x 6 in label (101.6 x 152.4 mm)", "w288h432"),
             ("US #10 Envelope (4.125 x 9.5 in)", "Env10"),
+            ("Folio (8.5 x 13 in)", "na_folio_8.5x13in"),
+            ("Folio / F4 (8.27 x 13 in)", "om_folio_210x330mm"),
         ]
     );
+}
+
+/// #4777: Folio (8.5 × 13 in) and Folio / F4 (8.27 × 13 in) presets are offered, fed by their
+/// PWG 5101.1 media names (`na_folio_8.5x13in` and `om_folio_210x330mm`) and laid out at their
+/// proper dimensions.
+#[test]
+fn folio_paper_sizes_are_available() {
+    let folio = PAPERS.iter().position(|(name, _)| *name == "Folio (8.5 x 13 in)").expect("Folio present");
+    assert_eq!(cups_media(folio), Some("na_folio_8.5x13in"));
+    assert_eq!(PAPERS[folio].1, (612.0, 936.0));
+
+    let f4 = PAPERS.iter().position(|(name, _)| *name == "Folio / F4 (8.27 x 13 in)").expect("Folio / F4 present");
+    assert_eq!(cups_media(f4), Some("om_folio_210x330mm"));
+    assert_eq!(PAPERS[f4].1, (595.28, 935.43));
 }
 
 /// #2734: the US #10 envelope (4.125 × 9.5 in) is offered, fed by its PPD name and laid out at
