@@ -305,6 +305,10 @@ pub struct DocView {
     pub forward: Vec<usize>,
     /// Pending navigation: page and fraction down the page to align with the viewport top.
     pub goto: Option<(usize, f32)>,
+    /// With `goto`: → / ← turned the page at an edge, so a page or spread wider than the window
+    /// starts at the edge the reader comes from (`false`: its left, after →; `true`: its right,
+    /// after ←) instead of keeping the column.
+    pub(crate) goto_side: Option<bool>,
     /// Pending position within that page from a destination ([`Self::go_to_dest`]): the point
     /// (fractions of the displayed page; `None` leaves that axis to `goto`) to put `rel` points
     /// from the viewport's top-left corner.
@@ -312,6 +316,12 @@ pub struct DocView {
     /// Pending keyboard scrolling, in points down (negative: up): ↓ / ↑, and Page Down /
     /// Page Up where the pages scroll.
     pub key_scroll: f32,
+    /// Pending keyboard scrolling sideways, in points right (negative: left): → / ← on a page
+    /// wider than the window.
+    pub key_side: f32,
+    /// As last drawn: whether the view was at its left and at its right edge (both when the
+    /// pages fit across), so → / ← turn the page there and scroll sideways elsewhere.
+    side_edges: Option<(bool, bool)>,
     /// Single-page view, as last drawn: the page shown and whether the view was at its top and
     /// at its bottom, so ↑ / ↓ turn the page there instead of doing nothing (#273).
     single_edges: Option<(usize, bool, bool)>,
@@ -630,8 +640,11 @@ impl DocView {
             back: Vec::new(),
             forward: Vec::new(),
             goto: None,
+            goto_side: None,
             goto_point: None,
             key_scroll: 0.0,
+            key_side: 0.0,
+            side_edges: None,
             single_edges: None,
             flash: None,
             compare_marks: Vec::new(),
@@ -858,6 +871,7 @@ struct PageEnv<'a> {
     info: &'a DocInfo,
     initials: &'a Option<crate::fill_sign::SavedSig>,
     key_scroll: f32,
+    key_side: f32,
     middle_gesture: bool,
     modal: bool,
     navigation_enabled: bool,
@@ -904,6 +918,9 @@ struct PageOut {
     open_table: Option<(usize, [f64; 4])>,
     primary_down: bool,
     refused: Option<String>,
+    /// The current page or spread where it is drawn, every page of it: one off screen (the second
+    /// page of a zoomed spread) has no screen transform, but still decides where the row ends.
+    row_on_screen: Option<Rect>,
     stamp_placed: bool,
 }
 
@@ -1960,6 +1977,7 @@ fn draw_pages(
         hand,
         info,
         key_scroll,
+        key_side,
         middle_gesture,
         modal,
         navigation_enabled,
@@ -1988,7 +2006,7 @@ fn draw_pages(
     // ScrollArea ignores wheel input during a widget drag. Defer the wheel contribution
     // until after the text widgets when a selection owns that drag.
     let wheel_delta = if selection_wheel { Vec2::ZERO } else { precise_scroll + boost_extra };
-    let delta = auto_delta + edge_delta - vec2(0.0, key_scroll) + wheel_delta + glide;
+    let delta = auto_delta + edge_delta - vec2(key_side, key_scroll) + wheel_delta + glide;
     if delta != Vec2::ZERO && delta.is_finite() {
         ui.scroll_with_delta_animation(delta, egui::style::ScrollAnimation::none());
     }
@@ -2074,6 +2092,7 @@ fn draw_pages(
         open_table,
         primary_down: _,
         refused,
+        row_on_screen: _,
         stamp_placed,
     } = page_out;
     let painter = ui.painter();
@@ -2126,6 +2145,9 @@ fn draw_pages(
     if view.continuous {
         view.current = current;
     }
+    // The row as it is now: in continuous view the current page may have changed above.
+    let row_on_screen =
+        shown_row(view, env.rects).iter().filter_map(|&i| env.rects.get(i)).map(|r| r.translate(origin.to_vec2())).reduce(Rect::union);
     resp.context_menu(|ui| {
         // Preparing a form: the selected field's menu.
         if preparing && let Some((name, wi)) = view.prepare.selected.clone() {
@@ -2250,6 +2272,7 @@ fn draw_pages(
         open_table,
         primary_down: ptr.primary_down,
         refused,
+        row_on_screen,
         stamp_placed,
     };
     (wanted, visible_now)
@@ -2655,6 +2678,7 @@ fn page_scroll_area(ui: &egui::Ui, view: &mut DocView, geometry: &ScrollGeometry
         let point = pos2(r.left() + fx * r.width(), r.top() - y_shift + fy * r.height());
         scroll = scroll.scroll_offset(anchored_scroll(point, rel, vec2(content_w, content_h), avail.size()));
     } else if let Some((page, frac)) = view.goto.take() {
+        let side = view.goto_side.take();
         let page = page.min(rects.len() - 1);
         let r = rects[page];
         // Clamped here: egui clamps only after drawing, so a page that fits was drawn MARGIN - page_gap()
@@ -2670,7 +2694,27 @@ fn page_scroll_area(ui: &egui::Ui, view: &mut DocView, geometry: &ScrollGeometry
         // quick-action bar as the layout does.
         let (x, w) = (view.last_scroll.x, avail.width());
         let (left, right) = (r.left() - SIDE, r.right() + SIDE);
-        let target = if right - left <= w { if left >= x && right <= x + w { x } else { r.center().x - w / 2.0 } } else { x.clamp(left, right - w) };
+        // Turned by → / ← at an edge (`goto_side`): a page or spread wider than the window starts at
+        // the edge the reader comes from.
+        let row = shown_row(view, rects).iter().filter_map(|&i| rects.get(i)).copied().reduce(Rect::union).unwrap_or(r);
+        let (row_left, row_right) = (row.left() - SIDE, row.right() + SIDE);
+        let target = match side {
+            Some(from_right) if row_right - row_left > w => {
+                if from_right {
+                    row_right - w
+                } else {
+                    row_left
+                }
+            }
+            _ if right - left <= w => {
+                if left >= x && right <= x + w {
+                    x
+                } else {
+                    r.center().x - w / 2.0
+                }
+            }
+            _ => x.clamp(left, right - w),
+        };
         if (target - x).abs() > 0.5 {
             scroll = scroll.horizontal_scroll_offset(target.clamp(0.0, (content_w - w).max(0.0)));
         }
@@ -2902,6 +2946,7 @@ struct GlideCx {
     now: f64,
     may_glide: bool,
     key_scroll: f32,
+    key_side: f32,
     auto_delta: Vec2,
     zoom_delta: f32,
     edge_delta: Vec2,
@@ -2915,11 +2960,11 @@ struct GlideCx {
 /// automatic flash uses `goto`, not these deltas, so its programmatic scroll is never mistaken for
 /// a reader action. Returns this frame's glide.
 fn step_glide(ui: &egui::Ui, view: &mut DocView, avail: Rect, cx: &GlideCx) -> Vec2 {
-    let GlideCx { now, may_glide, key_scroll, auto_delta, zoom_delta, edge_delta, wheel_scrolled } = *cx;
+    let GlideCx { now, may_glide, key_scroll, key_side, auto_delta, zoom_delta, edge_delta, wheel_scrolled } = *cx;
     let over_page = ui.rect_contains_pointer(avail);
     ui.input(|i| view.fling.read(&i.events, now, may_glide && over_page));
     let interrupted = glide_interrupted(ui);
-    if !may_glide || interrupted || key_scroll != 0.0 || auto_delta != Vec2::ZERO || zoom_delta != 1.0 {
+    if !may_glide || interrupted || key_scroll != 0.0 || key_side != 0.0 || auto_delta != Vec2::ZERO || zoom_delta != 1.0 {
         view.fling.stop();
     }
     let glide = view.fling.step(now);
@@ -2993,7 +3038,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     // Keyboard scrolling applies to this frame's page view only, never later.
     let key_scroll = std::mem::take(&mut app.views[index].key_scroll);
-    if key_scroll != 0.0 {
+    let key_side = std::mem::take(&mut app.views[index].key_side);
+    if key_scroll != 0.0 || key_side != 0.0 {
         app.views[index].end_find_following();
     }
     // The Search panel closed: its search moves to the find bar.
@@ -3093,7 +3139,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let animates = app.animation_effects.animates(app.motion.reduced);
     let may_glide = !paging_owns_vertical && !middle_gesture && navigation_enabled && unobstructed && animates;
     let wheel_scrolled = precise_scroll != Vec2::ZERO || line_base != Vec2::ZERO || boost_extra != Vec2::ZERO || has_page;
-    let motion = GlideCx { now, may_glide, key_scroll, auto_delta, zoom_delta, edge_delta, wheel_scrolled };
+    let motion = GlideCx { now, may_glide, key_scroll, key_side, auto_delta, zoom_delta, edge_delta, wheel_scrolled };
     let glide = step_glide(ui, view, avail, &motion);
     // The wheel may have turned the page above: draw the row it turned to. Measured from the old
     // row, the jump to the new page scrolled both out of view, a blank frame on every turn forward.
@@ -3200,6 +3246,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         info,
         initials: &initials,
         key_scroll,
+        key_side,
         middle_gesture,
         modal,
         navigation_enabled,
@@ -3247,6 +3294,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         open_table,
         primary_down,
         mut refused,
+        row_on_screen,
         stamp_placed,
     } = page_out;
     view.single_edges = visible_pages.first().copied().filter(|_| !view.continuous).map(|page| {
@@ -3256,6 +3304,15 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         let max_y = (out.content_size.y - out.inner_rect.height()).max(0.0);
         (page, out.state.clamped_offset().y <= MARGIN - view.page_gap() + 1.0, out.state.clamped_offset().y >= max_y - 1.0)
     });
+    // Within a point, as above: at an edge of the scrolled content, or of the current page or
+    // spread shown whole that way (in continuous view the content is as wide as the widest page,
+    // and a narrower current page shows whole inside it).
+    let max_x = (out.content_size.x - out.inner_rect.width()).max(0.0);
+    let inner = out.inner_rect;
+    view.side_edges = Some((
+        out.state.clamped_offset().x <= 1.0 || row_on_screen.is_some_and(|r| r.left() >= inner.left() - 1.0),
+        out.state.clamped_offset().x >= max_x - 1.0 || row_on_screen.is_some_and(|r| r.right() <= inner.right() + 1.0),
+    ));
 
     view.viewport_screen = out.inner_rect;
     view.auto_scroll.paint(ui, avail);
