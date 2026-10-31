@@ -54,11 +54,19 @@ impl FontResolver<'_> {
         }) {
             return Ok(Some(name.clone()));
         }
+        if let Some(name) = self.complete_source_font(source, text)? {
+            return Ok(Some(name));
+        }
         if let Some(face) =
             pdfcraft_fonts::embedding::matching_faces(&source.base_font).into_iter().find(|face| pdfcraft_fonts::embedding::covers(face.bytes, text))
         {
             return self.embed_face(face.name(), face.bytes, face.family, "the full source font could not be loaded").map(Some);
         }
+        Ok(None)
+    }
+
+    /// Prefer the validated complete document program over optional matching faces.
+    fn complete_source_font(&mut self, source: &TextLine, text: &str) -> Result<Option<String>, EditError> {
         let Some(bytes) = self
             .programs
             .entry(source.font.clone())
@@ -128,10 +136,28 @@ impl CharacterPreparation<'_> {
         let mut substituted = None;
         let mut fallback = FallbackBuilder::new(max_glyphs);
         let mut resolver = FontResolver { doc, fonts, metrics, full_faces: HashMap::new(), programs: HashMap::new() };
+        let contextual = pdfcraft_fonts::source_shaping::required(draft);
         for (range, index) in spans {
             let source = lines.get(index).unwrap_or(first);
             let start = range.start;
-            for (offset, ch) in draft.get(range).unwrap_or_default().char_indices() {
+            let span = draft.get(range).unwrap_or_default();
+            let requested = overrides.get(&index).and_then(|range| range.resource.as_deref()).or(style.resource.as_deref());
+            // Choose one encoding for the contextual source span before resolving characters.
+            // After reopen, old partial resources can encode different pieces of the same
+            // cluster; selecting them character by character would split an otherwise uniform row.
+            let complete = if contextual
+                && requested.is_none()
+                && span
+                    .chars()
+                    .filter(|ch| !matches!(ch, '\n' | '\r'))
+                    .any(|ch| !resolver.metrics.get(&source.font).is_some_and(|metrics| source_encodes(metrics, &ch.to_string())))
+            {
+                resolver.complete_source_font(source, span)?
+            } else {
+                None
+            };
+            let requested = requested.or(complete.as_deref());
+            for (offset, ch) in span.char_indices() {
                 if ch == '\n' {
                     chars.push((ch, index, source.font.clone()));
                     continue;
@@ -142,7 +168,6 @@ impl CharacterPreparation<'_> {
                     continue;
                 }
                 let text = ch.to_string();
-                let requested = overrides.get(&index).and_then(|range| range.resource.as_deref()).or(style.resource.as_deref());
                 let name = if let Some(name) = resolver.encodable_font(source, &text, requested)? {
                     name
                 } else if needs_type3(&text) {
