@@ -597,5 +597,12 @@ pub(crate) fn source_show(metrics: &Metrics, text: &str, size: f64, space: f64, 
             out.push(Op::new("Tj", vec![Object::String(PdfString::literal(bytes))]));
         }
     }
+    if out.iter().any(|op| op.is("Tj")) {
+        let logical = crate::bidi::to_logical(&if metrics.visual_order { crate::indic::to_logical(text) } else { text.to_owned() });
+        let mut properties = Dict::new();
+        properties.set(b"ActualText".to_vec(), Object::String(PdfString::text(&logical)));
+        out.insert(0, Op::new("BDC", vec![Object::name("Span"), Object::Dict(properties)]));
+        out.push(Op::new("EMC", Vec::new()));
+    }
     Ok(out)
 }

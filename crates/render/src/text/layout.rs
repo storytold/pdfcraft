@@ -433,7 +433,13 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
                 let tight_cluster = (pt.chars().any(is_complex) || ct.chars().any(is_complex)) && gap < h * 0.6;
                 let run_start = sc.breaks.binary_search(&c).is_ok();
                 if let Some(space) = spaces.get_mut(w + 1) {
-                    *space = (gap > threshold || run_start) && !cjk && !tight_cluster && !pt.trim().is_empty() && !ct.trim().is_empty();
+                    *space = (gap > threshold || run_start)
+                        && !cjk
+                        && !tight_cluster
+                        && !pt.trim().is_empty()
+                        && !ct.trim().is_empty()
+                        && !pt.ends_with(char::is_whitespace)
+                        && !ct.starts_with(char::is_whitespace);
                 }
             }
             // Right-to-left spans are reversed (visual → logical) with their gaps, and only then is a second copy made.

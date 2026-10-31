@@ -517,32 +517,34 @@ impl MarkedContent {
         self.layers.pop();
         if let Some(Some((start, open, logical))) = self.actual_text.pop() {
             let tail = shown.split_off(start.min(shown.len()));
-            let mut items = tail.into_iter();
-            if let Some(mut first) = items.next() {
-                for item in items {
-                    first.glyph_count = first.glyph_count.saturating_add(item.glyph_count);
-                    first.extra_ops.push(item.op);
-                    first.extra_ops.extend(item.extra_ops);
-                    first.rect = [
-                        first.rect[0].min(item.rect[0]),
-                        first.rect[1].min(item.rect[1]),
-                        first.rect[2].max(item.rect[2]),
-                        first.rect[3].max(item.rect[3]),
-                    ];
-                    first.frame = union(first.frame, item.frame);
-                    first.ink.extend(item.ink);
+            if tail.iter().any(|s| s.glyph_count > 0) {
+                let mut items = tail.into_iter();
+                if let Some(mut first) = items.next() {
+                    for item in items {
+                        first.glyph_count = first.glyph_count.saturating_add(item.glyph_count);
+                        first.extra_ops.push(item.op);
+                        first.extra_ops.extend(item.extra_ops);
+                        first.rect = [
+                            first.rect[0].min(item.rect[0]),
+                            first.rect[1].min(item.rect[1]),
+                            first.rect[2].max(item.rect[2]),
+                            first.rect[3].max(item.rect[3]),
+                        ];
+                        first.frame = union(first.frame, item.frame);
+                        first.ink.extend(item.ink);
+                    }
+                    first.extra_ops.extend([open, index]);
+                    // Only right-to-left ActualText is already in typing order and must stay out of
+                    // bidi recovery. Word and Chrome also wrap Latin ligatures mid-word.
+                    first.logical_order = logical.chars().any(crate::bidi::is_rtl);
+                    first.actual_text = true;
+                    first.text = logical;
+                    first.start_x = first.rect[0];
+                    first.end_x = first.rect[2];
+                    first.end_y = first.baseline;
+                    first.advance = (first.end_x - first.start_x) / first.tm.then(&first.state.ctm).0[0].abs().max(1e-6);
+                    shown.push(first);
                 }
-                first.extra_ops.extend([open, index]);
-                // Only right-to-left ActualText is already in typing order and must stay out of
-                // bidi recovery. Word and Chrome also wrap Latin ligatures mid-word.
-                first.logical_order = logical.chars().any(crate::bidi::is_rtl);
-                first.actual_text = true;
-                first.text = logical;
-                first.start_x = first.rect[0];
-                first.end_x = first.rect[2];
-                first.end_y = first.baseline;
-                first.advance = (first.end_x - first.start_x) / first.tm.then(&first.state.ctm).0[0].abs().max(1e-6);
-                shown.push(first);
             }
         }
     }
@@ -711,8 +713,11 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         .collect();
     let size_user = (trm0.0[2].powi(2) + trm0.0[3].powi(2)).sqrt() * ts.size;
     // A numeric-only TJ adjusts the current text matrix but paints no glyphs.
-    // It must not create a phantom editable line or enlarge its neighbours' boxes.
-    if !pieces.iter().any(|p| matches!(p, Object::String(s) if !s.bytes.is_empty())) {
+    // Outside an `/ActualText` replacement it must not create a phantom editable
+    // line or enlarge its neighbours' boxes; inside one (such as a space gap in a
+    // subset font without a space glyph, #4229) it is part of the span's box and
+    // operators when the span also paints glyphs.
+    if !marked.actual_text.iter().any(Option::is_some) && !pieces.iter().any(|p| matches!(p, Object::String(s) if !s.bytes.is_empty())) {
         return Ok(());
     }
     out.push(Shown {
@@ -950,6 +955,7 @@ pub(super) fn interpret(
     carry.stack = stack;
     carry.marked = marked.regions;
     carry.layers = marked.layers;
+    out.retain(|s| s.glyph_count > 0 || s.actual_text);
     positioned_tracking(&mut out);
     Ok(out)
 }
