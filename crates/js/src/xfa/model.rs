@@ -61,6 +61,11 @@ pub struct XfaEvent {
     pub target: String,
     pub new_text: String,
     pub prev_text: String,
+    /// A change script run for a keystroke: what was typed or pasted (`xfa.event.change`, empty
+    /// for a deletion) in place of the characters `sel_start..sel_end` of `prev_text`.
+    pub change: String,
+    pub sel_start: usize,
+    pub sel_end: usize,
 }
 
 /// About the document.
@@ -129,6 +134,9 @@ pub struct XfaOutcome {
     /// The script ran past its time limit and was left running on its own thread (the engine
     /// can't interrupt it): the caller should run no more of this form's scripts.
     pub abandoned: bool,
+    /// A change script's `xfa.event.change` when it ended: the text a keystroke enters, which the
+    /// script may have rewritten (cut to the length a value keeps).
+    pub change: Option<String>,
 }
 
 /// Most nodes a snapshot may hold.
@@ -217,8 +225,9 @@ pub(super) fn payload(e: &XfaEffect) -> usize {
     }
 }
 
-/// A script's completion value (what a calculate script puts in its field) cut to
-/// [`MAX_VALUE`] characters, as values a script sets are, with a note when it was.
+/// A script's completion value (what a calculate script puts in its field), and the text a change
+/// script left in `xfa.event.change`, cut to [`MAX_VALUE`] characters as values a script sets
+/// are, with a note when one was.
 pub(crate) fn clip_result(out: &mut XfaOutcome) {
     if let Some(r) = out.result.take() {
         let (r, cut) = clip_value(r);
@@ -226,5 +235,12 @@ pub(crate) fn clip_result(out: &mut XfaOutcome) {
             out.notes.push(format!("the script's result was longer than {MAX_VALUE} characters; it was cut"));
         }
         out.result = Some(r);
+    }
+    if let Some(c) = out.change.take() {
+        let (c, cut) = clip_value(c);
+        if cut {
+            out.notes.push(format!("the text a change script entered was longer than {MAX_VALUE} characters; it was cut"));
+        }
+        out.change = Some(c);
     }
 }

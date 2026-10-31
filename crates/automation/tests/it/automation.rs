@@ -7763,6 +7763,39 @@ fn links_in_xfa_rich_text_are_listed_through_tools() {
     assert_eq!(urls(&mut a, doc), ["mailto:forms@example.com"], "one link after a save and a fresh open, not two");
 }
 
+/// A keystroke through the tools runs a dynamic XFA field's change scripts, which see it (what was
+/// typed, the text before and after, the selection it replaces) and may rewrite what it enters; a
+/// field without change scripts takes it as typed, and bad positions are refused.
+#[test]
+fn xfa_change_scripts_run_for_a_keystroke_through_tools() {
+    let dir = workdir("xfa-keystrokes");
+    std::fs::write(dir.join("keys.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::keystroke_template())).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "keys.pdf" }))["doc"].as_u64().unwrap();
+    let digits = ok(&mut a, "form_keystroke", json!({ "doc": doc, "field": "digits", "prev": "12", "change": "a3b" }));
+    assert_eq!((digits["entered"].clone(), digits["text"].clone()), (json!("3"), json!("123")), "{digits}");
+    let upper = ok(&mut a, "form_keystroke", json!({ "doc": doc, "field": "upper", "prev": "xyz", "change": "q", "sel_start": 1, "sel_end": 2 }));
+    assert_eq!((upper["entered"].clone(), upper["text"].clone()), (json!("Q"), json!("xQz")), "the selection it replaces: {upper}");
+    let seen = ok(&mut a, "form_keystroke", json!({ "doc": doc, "field": "seen", "prev": "ab", "change": "", "sel_start": 1, "sel_end": 2 }));
+    assert_eq!(
+        seen["alerts"],
+        json!([{ "message": "change=[] new=[a] prev=[ab] sel=1-2", "title": null, "icon": "error", "buttons": "ok" }]),
+        "{seen}"
+    );
+    let plain = ok(&mut a, "form_keystroke", json!({ "doc": doc, "field": "plain", "prev": "a", "change": "1" }));
+    assert_eq!((plain["entered"].clone(), plain["text"].clone()), (Value::Null, json!("a1")), "{plain}");
+    for bad in [json!({ "sel_start": 3 }), json!({ "sel_start": 1, "sel_end": 0 })] {
+        let mut args = json!({ "doc": doc, "field": "digits", "prev": "12", "change": "1" });
+        for (k, v) in bad.as_object().unwrap() {
+            args[k] = v.clone();
+        }
+        assert!(a.call("form_keystroke", &args).is_err(), "{bad} is refused");
+    }
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    assert_eq!(info["document"]["dirty"], json!(false), "keystrokes change nothing in the document");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn dynamic_xfa_forms_open_render_fill_and_save_through_tools() {
     let dir = workdir("xfa");
@@ -8040,6 +8073,8 @@ fn growable_xfa_text_paginates_after_fill_save_and_print() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// A print button repeated on every page of an XFA form runs its own XFA click script (a print
+/// request) through js_run, from each copy, before and after saving and reopening.
 #[test]
 fn repeated_xfa_print_buttons_work_through_tools_and_after_reopen() {
     let dir = workdir("xfa-print-buttons");
@@ -8065,6 +8100,53 @@ fn repeated_xfa_print_buttons_work_through_tools_and_after_reopen() {
     ok(&mut a, "doc_close", json!({ "doc": doc }));
     let doc = ok(&mut a, "doc_open", json!({ "path": "saved.pdf" }))["doc"].as_u64().unwrap();
     check(&mut a, doc);
+}
+
+/// form_focus runs a field's XFA enter and exit scripts on every focus change; scripts that
+/// change nothing leave no edit, a radio button's own scripts run for its widget, and unknown
+/// fields, widgets and events are refused.
+#[test]
+fn xfa_focus_scripts_run_through_form_focus() {
+    let dir = workdir("xfa-focus");
+    std::fs::write(dir.join("focus.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::focus_template())).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "focus.pdf" }))["doc"].as_u64().unwrap();
+    let value = |a: &mut Automation, n: &str| {
+        let f = ok(a, "form_fields", json!({ "doc": doc }));
+        f["fields"].as_array().unwrap().iter().find(|f| f["name"] == n).map(|f| f["value"].clone()).unwrap()
+    };
+    for _ in 0..3 {
+        assert_eq!(ok(&mut a, "form_focus", json!({ "doc": doc, "field": "probe", "event": "enter" }))["changed"], true);
+        assert_eq!(ok(&mut a, "form_focus", json!({ "doc": doc, "field": "probe", "event": "exit" }))["changed"], true);
+    }
+    assert_eq!((value(&mut a, "enters"), value(&mut a, "exits")), (json!("3"), json!("3")));
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert_eq!(value(&mut a, "exits"), "2", "each run is one undo step");
+    // A script that only shows a message changes nothing: no edit (the document stays saved and
+    // what was undone can still be redone), and the message comes back.
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "saved.pdf" }));
+    let quiet = ok(&mut a, "form_focus", json!({ "doc": doc, "field": "quiet", "event": "exit" }));
+    assert_eq!(
+        (quiet["changed"].clone(), quiet["alerts"].clone()),
+        (json!(false), json!([{ "message": "left quiet", "title": null, "icon": "error", "buttons": "ok" }])),
+        "{quiet}"
+    );
+    let state = &ok(&mut a, "doc_info", json!({ "doc": doc }))["document"];
+    assert_eq!((state["dirty"].clone(), state["redo"].clone()), (json!(false), json!("Run form script")), "{state}");
+    // The second radio button has an enter script of its own.
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let group = fields["fields"].as_array().unwrap().iter().find(|f| f["type"] == "radio").unwrap()["name"].clone();
+    assert_eq!(ok(&mut a, "form_focus", json!({ "doc": doc, "field": group, "event": "enter" }))["changed"], false);
+    assert_eq!(ok(&mut a, "form_focus", json!({ "doc": doc, "field": group, "event": "enter", "widget": 2 }))["changed"], true);
+    assert_eq!(value(&mut a, "picks"), "1");
+    for bad in [
+        json!({ "doc": doc, "field": "nowhere", "event": "enter" }),
+        json!({ "doc": doc, "field": group, "event": "enter", "widget": 3 }),
+        json!({ "doc": doc, "field": "probe", "event": "enter", "widget": 0 }),
+        json!({ "doc": doc, "field": "probe", "event": "click" }),
+    ] {
+        assert!(a.call("form_focus", &bad).is_err(), "{bad}");
+    }
 }
 
 /// A dynamic XFA form's scripts run on open, on fills and for buttons through the tools, with undo,

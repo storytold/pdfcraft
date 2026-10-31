@@ -451,6 +451,11 @@ impl Interp<'_> {
                 }
                 Ok(())
             }
+            // A change script rewrites what the keystroke enters (`$event.change = ""`).
+            Val::Event if prop.eq_ignore_ascii_case("change") => {
+                self.event.change = self.to_str(&v);
+                Ok(())
+            }
             _ => Ok(()),
         }
     }

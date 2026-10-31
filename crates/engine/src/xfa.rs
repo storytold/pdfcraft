@@ -654,6 +654,13 @@ impl<'a, 'b> Runner<'a, 'b> {
     /// Run one event script against the form as it is now. `None`: it was skipped (the
     /// event's budget is spent).
     fn run(&mut self, ev: &ScriptEvent, new_text: &str) -> Result<Option<pdfcraft_js::xfa::XfaOutcome>, String> {
+        let event = XfaEvent { activity: ev.activity.clone(), target: ev.som.clone(), new_text: new_text.to_string(), ..XfaEvent::default() };
+        self.run_event(ev, event)
+    }
+
+    /// [`Runner::run`] with the whole event the script sees: a keystroke's `change` and selection
+    /// too.
+    fn run_event(&mut self, ev: &ScriptEvent, event: XfaEvent) -> Result<Option<pdfcraft_js::xfa::XfaOutcome>, String> {
         if self.runs >= MAX_SCRIPTS_PER_EVENT || self.clock.spent() || self.run.ran_away {
             self.skipped += 1;
             return Ok(None);
@@ -661,7 +668,6 @@ impl<'a, 'b> Runner<'a, 'b> {
         self.runs += 1;
         #[cfg(test)]
         self.check_live();
-        let event = XfaEvent { activity: ev.activity.clone(), target: ev.som.clone(), new_text: new_text.to_string(), prev_text: String::new() };
         let root = to_js(&self.live().root);
         let script = Script {
             source: ev.script.clone(),
@@ -836,15 +842,33 @@ pub(crate) fn on_open(doc: &mut pdfcraft_cos::Document, tpl: &Template, run: &mu
 /// After fields `names` took new values: each one's change, exit and validate scripts, then
 /// the calculations once (or only those, after a reset). A validate script that answers false,
 /// or fails, shows its message; the value stays, as Acrobat marks the field invalid rather
-/// than reverting it.
-pub(crate) fn on_changes(doc: &mut pdfcraft_cos::Document, tpl: &Template, names: &[String], run: &mut XfaRun) -> Result<(), String> {
+/// than reverting it. The SOM paths whose exit scripts ran go into `exited`.
+pub(crate) fn on_changes(
+    doc: &mut pdfcraft_cos::Document,
+    tpl: &Template,
+    names: &[String],
+    run: &mut XfaRun,
+    exited: &mut Vec<String>,
+) -> Result<(), String> {
     let mut r = Runner::new(doc, tpl, run, OPEN_BUDGET_MS);
     for name in names {
         let som = r.by_som().iter().find(|(_, f)| *f == name).map(|(s, _)| s.clone());
         let Some(som) = som else { continue };
         let value = r.fields().get(name).map(|f| f.value.join("\n")).unwrap_or_default();
-        for ev in r.events_of(&som, "change").into_iter().chain(r.events_of(&som, "exit")) {
+        for ev in r.events_of(&som, "change") {
             r.run(&ev, &value)?;
+        }
+        // Noted only when an exit script ran, whether it succeeded or failed: it has run for this
+        // focus loss, and a failed script keeps what it changed before its error, so running it
+        // again would repeat that and the error. One the event's budget skipped, or one never
+        // reached because an earlier script stopped the run, is still to run when the field
+        // loses focus.
+        let mut ran_exit = false;
+        for ev in r.events_of(&som, "exit") {
+            ran_exit |= r.run(&ev, &value)?.is_some();
+        }
+        if ran_exit {
+            exited.push(som.clone());
         }
         for ev in r.events_of(&som, "validate") {
             let Some(o) = r.run(&ev, &value)? else { continue };
@@ -890,6 +914,69 @@ pub(crate) fn typed_date(
     pdfcraft_xfa::typed_date(tpl, &som, text).map(pdfcraft_forms::FieldValue::Text)
 }
 
+/// A keystroke in a text field: `change` typed or pasted (empty for a deletion) in place of the
+/// characters `sel_start..sel_end` of `prev`, the field's text before it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Keystroke {
+    pub prev: String,
+    pub change: String,
+    pub sel_start: usize,
+    pub sel_end: usize,
+}
+
+impl Keystroke {
+    /// The field's text once the keystroke enters `change`: `prev` with `change` in place of its
+    /// selection (character positions, clamped to `prev`).
+    pub fn applied(&self, change: &str) -> String {
+        let n = self.prev.chars().count();
+        let (start, end) = (self.sel_start.min(n), self.sel_end.clamp(self.sel_start.min(n), n));
+        self.prev.chars().take(start).chain(change.chars()).chain(self.prev.chars().skip(end)).collect()
+    }
+}
+
+/// The longest text, in characters, a field's change scripts are shown (the field's text and what
+/// was typed or pasted into it): as long as a value a script may set. Longer text is kept as
+/// typed, without them.
+const KEYSTROKE_TEXT_MAX: usize = 65_536;
+
+/// A keystroke in the laid-out field at `som`: its change scripts run, each seeing what the one
+/// before it left in `xfa.event.change`, as another viewer runs them for every keystroke. Returns
+/// what the keystroke enters once they ran, `None` when the field has none or the text is too
+/// long for them ([`KEYSTROKE_TEXT_MAX`]; the console says so). The scripts run on a copy of
+/// `doc`: only what they enter, and what they show or ask for (`run`'s output), is kept. Their
+/// other changes come when the value is committed, which runs the change scripts again.
+pub(crate) fn keystroke(doc: &pdfcraft_cos::Document, tpl: &Template, som: &str, ks: &Keystroke, run: &mut XfaRun) -> Result<Option<String>, String> {
+    if ks.prev.chars().count().saturating_add(ks.change.chars().count()) > KEYSTROKE_TEXT_MAX {
+        run.out
+            .console
+            .push(format!("{som}: the field's change scripts were not run: its text would be longer than {KEYSTROKE_TEXT_MAX} characters"));
+        return Ok(None);
+    }
+    let mut scratch = doc.clone();
+    let mut r = Runner::new(&mut scratch, tpl, run, EVENT_BUDGET_MS);
+    let events = r.events_of(som, "change");
+    if events.is_empty() {
+        return Ok(None);
+    }
+    let mut change = ks.change.clone();
+    for ev in &events {
+        let event = XfaEvent {
+            activity: "change".into(),
+            target: som.to_string(),
+            new_text: ks.applied(&change),
+            prev_text: ks.prev.clone(),
+            change: change.clone(),
+            sel_start: ks.sel_start,
+            sel_end: ks.sel_end,
+        };
+        if let Some(entered) = r.run_event(ev, event)?.and_then(|o| o.change) {
+            change = entered;
+        }
+    }
+    r.finish()?;
+    Ok(Some(change))
+}
+
 /// A button's click script (or any event, by SOM path and activity), then calculations.
 pub(crate) fn on_event(doc: &mut pdfcraft_cos::Document, tpl: &Template, som: &str, activity: &str, run: &mut XfaRun) -> Result<(), String> {
     let mut r = Runner::new(doc, tpl, run, EVENT_BUDGET_MS);
@@ -904,6 +991,47 @@ pub(crate) fn on_event(doc: &mut pdfcraft_cos::Document, tpl: &Template, som: &s
     r.clock = Clock::start(OPEN_BUDGET_MS.saturating_mul(u64::from(r.run.time_scale)));
     r.calculates()?;
     r.finish().map(|_| ())
+}
+
+/// A field gaining (`enter`) or losing (`exit`) focus: its scripts for that activity, then, when
+/// they changed something, the calculations. Returns what changed; nothing (and no error) when
+/// the field has no such script, so a focus change with nothing to run leaves the form alone.
+pub(crate) fn on_focus(doc: &mut pdfcraft_cos::Document, tpl: &Template, som: &str, activity: &str, run: &mut XfaRun) -> Result<Changes, String> {
+    let mut r = Runner::new(doc, tpl, run, EVENT_BUDGET_MS);
+    let events = r.events_of(som, activity);
+    if events.is_empty() {
+        return Ok(Changes::default());
+    }
+    // The field's value, as the script's event sees it (`xfa.event.prevText`, `newText`).
+    let value = r.by_som().get(som).cloned().and_then(|name| r.fields().get(&name).map(|f| f.value.join("\n"))).unwrap_or_default();
+    for ev in events {
+        r.run(&ev, &value)?;
+    }
+    if !r.changes.is_empty() {
+        // The calculations that follow get a budget of their own.
+        r.clock = Clock::start(OPEN_BUDGET_MS);
+        r.calculates()?;
+    }
+    r.finish()
+}
+
+/// The SOM path of widget `widget` of field `field`: each radio button of a group has its own,
+/// and a field's copies on several pages share one. `None` when the field has no widget
+/// `widget`: the field's own path is only for a widget that records none, so a widget index
+/// out of range never reaches the field (for a radio field, the group).
+pub(crate) fn widget_som(doc: &pdfcraft_cos::Document, field: &pdfcraft_forms::Field, widget: usize) -> Option<String> {
+    let som_of = |obj: pdfcraft_cos::ObjRef| {
+        let object = doc.get(obj);
+        object.as_dict()?.get(pdfcraft_xfa::SOM_KEY).map(|s| doc.resolve(s))?.as_string().map(|s| s.to_text())
+    };
+    let w = field.widgets.get(widget)?;
+    som_of(w.obj).or_else(|| som_of(field.obj))
+}
+
+/// Does the live form give SOM path `som` an `activity` script?
+pub(crate) fn has_event(doc: &pdfcraft_cos::Document, tpl: &Template, som: &str, activity: &str) -> bool {
+    let live = pdfcraft_xfa::form_tree(tpl, pdfcraft_xfa::data_of(doc).as_ref(), &pdfcraft_xfa::overrides(doc));
+    live.events.iter().any(|e| e.som == som && e.activity == activity)
 }
 
 /// The SOM path of a generated field whose template has a click script.
