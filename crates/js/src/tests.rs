@@ -503,9 +503,10 @@ fn ordinary_nesting_still_runs() {
     let o = go(&s, &Event::field("Calculate", "a", ""));
     assert_eq!(o.error, None);
     assert_eq!(o.value, "5");
-    // Brackets in strings and comments don't count.
+    // Opening brackets in strings and comments count, so many of them are refused (#5079).
     let s = format!("// {}\nevent.value = '{}'.length;", "(".repeat(1000), "[".repeat(1000));
-    assert_eq!(go(&s, &Event::field("Calculate", "a", "")).value, "1000");
+    let o = go(&s, &Event::field("Calculate", "a", ""));
+    assert!(o.error.as_deref().is_some_and(|e| e.contains("nested too deeply")), "{o:?}");
 }
 
 /// Code built from strings at run time would reach the parser without the size and nesting

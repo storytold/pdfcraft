@@ -29,9 +29,15 @@ const MAX_CONDITIONALS: usize = 4096;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) const SCRIPT_STACK: usize = 1 << 30;
 
-/// Why `source` is refused, if it is: too long, or nested deeper than any form needs. Strings
-/// and comments are skipped; brackets in regular expressions and templates count, which only
-/// errs on the safe side.
+/// Why `source` is refused, if it is: too long, or nested deeper than any form needs.
+///
+/// Opening brackets count everywhere, in strings and comments too: telling a regular expression
+/// from a division takes a parser, and a guess that reads `/'/` as the start of a string would
+/// otherwise hide every bracket after it (#5079). Closing brackets count only outside strings
+/// and comments, so one in a comment can't cancel real nesting either. A script with unbalanced
+/// opening brackets inside strings may be refused. This is still a scan, not a tokenizer: a
+/// quote in a regular expression or template can make a later string's closing brackets look
+/// like code, and hide prefix runs and conditionals.
 pub(crate) fn refuse(source: &str) -> Option<String> {
     if source.len() > MAX_SCRIPT_BYTES {
         return Some(format!("the script is too long ({} KiB; the limit is {} KiB)", source.len() / 1024, MAX_SCRIPT_BYTES / 1024));
@@ -41,6 +47,7 @@ pub(crate) fn refuse(source: &str) -> Option<String> {
     let (mut depth, mut prefix, mut conditionals) = (0usize, 0usize, 0usize);
     let mut i = 0;
     while let Some(&c) = b.get(i) {
+        let start = i;
         i += 1;
         match c {
             b'\'' | b'"' => {
@@ -93,6 +100,12 @@ pub(crate) fn refuse(source: &str) -> Option<String> {
             }
             c if c.is_ascii_whitespace() => {}
             _ => prefix = 0,
+        }
+        // A string or comment just skipped (empty otherwise) keeps its opening brackets.
+        let skipped = b.get(start + 1..i.min(b.len())).unwrap_or_default();
+        depth = depth.saturating_add(skipped.iter().filter(|d| matches!(d, b'(' | b'[' | b'{')).count());
+        if depth > MAX_BRACKET_DEPTH {
+            return too_deep();
         }
     }
     None
