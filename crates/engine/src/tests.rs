@@ -4320,8 +4320,12 @@ fn links_from_urls_and_link_edits() {
     assert_eq!(s.get(id).unwrap().links().len(), 1);
     // Link Properties and delete.
     let l = s.get(id).unwrap().links()[0].clone();
-    s.apply(id, Edit::SetLink { page: 0, index: l.index, rect: None, action: Some(LinkAction::Page(0)), style: None }).unwrap();
-    assert_eq!(s.get(id).unwrap().links()[0].action, LinkAction::Page(0));
+    s.apply(
+        id,
+        Edit::SetLink { page: 0, index: l.index, rect: None, action: Some(LinkAction::Page { page: 0, zoom: LinkZoom::FitPage }), style: None },
+    )
+    .unwrap();
+    assert_eq!(s.get(id).unwrap().links()[0].action, LinkAction::Page { page: 0, zoom: LinkZoom::FitPage });
     s.apply(id, Edit::DeleteLink { page: 0, index: l.index }).unwrap();
     assert!(s.get(id).unwrap().links().is_empty());
     assert!(s.apply(id, Edit::RemoveLinks { pages: None }).is_err(), "nothing left to remove");

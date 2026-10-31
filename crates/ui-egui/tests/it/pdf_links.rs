@@ -77,11 +77,70 @@ fn drawing_editing_and_deleting_links() {
     }
     h.get_by_label("OK").click();
     h.run_steps(3);
-    assert_eq!(links(&h)[0].action, LinkAction::Page(0));
+    assert_eq!(links(&h)[0].action, LinkAction::Page { page: 0, zoom: pdfcraft_engine::LinkZoom::FitPage });
     // Delete the selected link.
     h.key_press(egui::Key::Delete);
     h.run_steps(3);
     assert!(links(&h).is_empty());
+}
+
+#[test]
+fn link_properties_sets_the_page_view_zoom() {
+    use egui::accesskit::Role;
+    use pdfcraft_engine::LinkZoom;
+    let mut h = harness();
+    assert!(h.state_mut().execute("edit.link"));
+    let (a, b) = (at(&h, 40.0, 300.0), at(&h, 160.0, 320.0));
+    drag(&mut h, a, b);
+    h.get_by_label("Create Link");
+    h.get_by_label("Go to a page view").click();
+    h.run_steps(3);
+    // The toolbar has a zoom box of its own; the link's shows Fit Page until changed.
+    h.get_by(|n| n.role() == Role::ComboBox && n.value().as_deref() == Some("Fit Page")).click();
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::Button, "200%").scroll_to_me();
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::Button, "200%").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(links(&h)[0].action, LinkAction::Page { page: 0, zoom: LinkZoom::Percent(200.0) });
+}
+
+/// One page with a link whose destination has a position, which Link Properties doesn't show.
+const POSITIONED: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] /Annots [4 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Link /Rect [40 40 160 60] /Border [0 0 0] /Dest [3 0 R /XYZ 100 300 2] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+#[test]
+fn an_appearance_edit_keeps_the_destination_as_written() {
+    use pdfcraft_render::{DestView, LinkTarget};
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("positioned.pdf", None, POSITIONED.to_vec()).unwrap();
+        app
+    });
+    h.run_steps(6);
+    let positioned = LinkTarget::Page(0, DestView::Xyz { left: Some(100.0), top: Some(300.0), zoom: Some(2.0) });
+    let target = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().info.links[0].target.clone()
+    };
+    assert_eq!(target(&h), positioned);
+    h.state_mut().views[0].links.open_existing = Some((0, 0));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::LinkProps));
+    h.state_mut().link_draft.as_mut().unwrap().style.color = [1.0, 0.0, 0.0];
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(links(&h)[0].style.color, [1.0, 0.0, 0.0], "the edit applied");
+    assert_eq!(target(&h), positioned, "the destination is not rewritten without its position");
 }
 
 #[test]

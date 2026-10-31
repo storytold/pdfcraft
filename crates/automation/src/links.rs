@@ -2,7 +2,7 @@
 //! all links. Rectangles are points from the top-left of the displayed page.
 
 use pdfcraft_engine::{
-    Edit, LinkAction, LinkHighlight, LinkStyle, read_remote_document, remote_document_path_is_absolute, resolve_remote_document_path,
+    Edit, LinkAction, LinkHighlight, LinkStyle, LinkZoom, read_remote_document, remote_document_path_is_absolute, resolve_remote_document_path,
 };
 use pdfcraft_render::{DestView, LinkTarget, RemoteDestination};
 use serde_json::{Value, json};
@@ -25,18 +25,30 @@ impl Automation {
         Ok(Some([u0[0].min(u1[0]) as f64, u0[1].min(u1[1]) as f64, u0[0].max(u1[0]) as f64, u0[1].max(u1[1]) as f64]))
     }
 
-    fn link_action(&self, a: &Args) -> Result<Option<LinkAction>> {
+    /// The action `url`, `to_page` and `zoom` ask for, if any. `current` is the link's action now
+    /// (link_edit): a new page keeps the link's zoom, and a zoom alone keeps its page.
+    fn link_action(&self, a: &Args, current: Option<&LinkAction>) -> Result<Option<LinkAction>> {
+        let zoom = link_zoom(a)?;
+        let (current_page, current_zoom) = match current {
+            Some(LinkAction::Page { page, zoom }) => (Some(*page), Some(*zoom)),
+            _ => (None, None),
+        };
         match (a.opt_str("url")?, a.opt_int("to_page")?) {
             (Some(_), Some(_)) => Err(bad("pass url or to_page, not both")),
+            (Some(_), None) if zoom.is_some() => Err(bad("zoom goes with to_page, not url")),
             (Some(u), None) => Ok(Some(LinkAction::Uri(u.to_string()))),
             (None, Some(p)) => {
                 let n = self.doc(a)?.info.pages.len() as i64;
                 if p < 1 || p > n {
                     return Err(bad(format!("to_page must be 1–{n}")));
                 }
-                Ok(Some(LinkAction::Page(p as usize - 1)))
+                Ok(Some(LinkAction::Page { page: p as usize - 1, zoom: zoom.or(current_zoom).unwrap_or(LinkZoom::FitPage) }))
             }
-            (None, None) => Ok(None),
+            (None, None) => match (zoom, current_page) {
+                (None, _) => Ok(None),
+                (Some(zoom), Some(page)) => Ok(Some(LinkAction::Page { page, zoom })),
+                (Some(_), None) => Err(bad("zoom needs to_page: the link doesn't go to a page")),
+            },
         }
     }
 
@@ -86,11 +98,16 @@ impl Automation {
                         if let Some(d) = doc.info.pages.get(page).and_then(|p| crate::destination(view, p)) {
                             v["destination"] = d;
                         }
-                        if matches!(action, LinkAction::Other(_)) {
-                            v["named"] = json!(true);
+                        match action {
+                            LinkAction::Page { zoom, .. } => v["zoom"] = zoom_value(*zoom),
+                            LinkAction::Other(_) => v["named"] = json!(true),
+                            LinkAction::Uri(_) => {}
                         }
                     }
-                    (LinkAction::Page(p), None) => v["to_page"] = json!(p + 1),
+                    (LinkAction::Page { page, zoom }, None) => {
+                        v["to_page"] = json!(page + 1);
+                        v["zoom"] = zoom_value(*zoom);
+                    }
                     (LinkAction::Other(o), None) => v["other"] = json!(o),
                 }
                 v
@@ -168,12 +185,13 @@ impl Automation {
     pub(crate) fn link_add(&mut self, a: &Args) -> Result<Value> {
         let page = self.page(a)?;
         let rect = self.view_rect(a, page)?.ok_or_else(|| bad("link_add needs rect"))?;
-        let action = self.link_action(a)?.ok_or_else(|| bad("pass url or to_page"))?;
+        let action = self.link_action(a, None)?.ok_or_else(|| bad("pass url or to_page"))?;
         let style = self.link_style(a, LinkStyle::default())?;
         self.apply(a, Edit::AddLink { page, rect, action, style })
     }
 
-    fn link_index(&self, a: &Args) -> Result<(usize, usize, LinkStyle)> {
+    /// The link `page` and `index` name: its page, index in `/Annots`, appearance and action.
+    fn link_index(&self, a: &Args) -> Result<(usize, usize, LinkStyle, LinkAction)> {
         let page = self.page(a)?;
         let index = a.int("index")?;
         let doc = self.doc(a)?;
@@ -182,19 +200,19 @@ impl Automation {
             .iter()
             .find(|l| l.page == page && l.index as i64 + 1 == index)
             .ok_or_else(|| failed(format!("page {} has no link {index} (see link_list)", page + 1)))?;
-        Ok((page, l.index, l.style))
+        Ok((page, l.index, l.style, l.action.clone()))
     }
 
     pub(crate) fn link_edit(&mut self, a: &Args) -> Result<Value> {
-        let (page, index, style) = self.link_index(a)?;
+        let (page, index, style, current) = self.link_index(a)?;
         let rect = self.view_rect(a, page)?;
-        let action = self.link_action(a)?;
+        let action = self.link_action(a, Some(&current))?;
         let new_style = self.link_style(a, style)?;
         self.apply(a, Edit::SetLink { page, index, rect, action, style: (new_style != style).then_some(new_style) })
     }
 
     pub(crate) fn link_delete(&mut self, a: &Args) -> Result<Value> {
-        let (page, index, _) = self.link_index(a)?;
+        let (page, index, ..) = self.link_index(a)?;
         self.apply(a, Edit::DeleteLink { page, index })
     }
 
@@ -222,6 +240,40 @@ impl Automation {
         let mut out = self.apply(a, Edit::RemoveLinks { pages })?;
         out["removed"] = json!(before);
         Ok(out)
+    }
+}
+
+/// The zoom a `zoom` argument names: fit_page, fit_width, fit_height, fit_visible, actual
+/// (100%), inherit (keep the reader's zoom), or a percentage, kept within 1–6400.
+fn link_zoom(a: &Args) -> Result<Option<LinkZoom>> {
+    match a.get("zoom") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(p)) => match p.as_f64() {
+            Some(p) if p.is_finite() && p > 0.0 => Ok(Some(LinkZoom::Percent(p.clamp(1.0, 6400.0)))),
+            _ => Err(bad("zoom must be a positive percentage")),
+        },
+        Some(Value::String(z)) => Ok(Some(match z.as_str() {
+            "fit_page" => LinkZoom::FitPage,
+            "fit_width" => LinkZoom::FitWidth,
+            "fit_height" => LinkZoom::FitHeight,
+            "fit_visible" => LinkZoom::FitVisible,
+            "actual" => LinkZoom::Percent(100.0),
+            "inherit" => LinkZoom::Inherit,
+            o => return Err(bad(format!("unknown zoom {o:?}"))),
+        })),
+        Some(_) => Err(bad("zoom is a name or a percentage")),
+    }
+}
+
+/// How `link_list` reports a link's zoom: the names `link_zoom` reads, a percentage as a number.
+fn zoom_value(zoom: LinkZoom) -> Value {
+    match zoom {
+        LinkZoom::FitPage => json!("fit_page"),
+        LinkZoom::FitWidth => json!("fit_width"),
+        LinkZoom::FitHeight => json!("fit_height"),
+        LinkZoom::FitVisible => json!("fit_visible"),
+        LinkZoom::Inherit => json!("inherit"),
+        LinkZoom::Percent(p) => json!(p),
     }
 }
 
