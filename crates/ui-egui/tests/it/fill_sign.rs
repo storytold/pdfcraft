@@ -237,6 +237,98 @@ fn fill_text_size_resizes_the_selected_text() {
     assert!(after > before * 2.0, "36 pt text has a taller box than 10 pt text: {before} -> {after}");
 }
 
+/// The font sizes of the texts `text` drawn in the last frame.
+fn drawn_sizes(h: &Harness<'static, PdfCraftApp>, text: &str) -> Vec<f32> {
+    fn walk(shape: &egui::Shape, text: &str, out: &mut Vec<f32>) {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, text, out)),
+            egui::Shape::Text(t) if t.galley.text() == text => {
+                out.extend(t.galley.job.sections.first().map(|s| s.format.font_id.size));
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in &h.output().shapes {
+        walk(&clipped.shape, text, &mut out);
+    }
+    out
+}
+
+/// The type box draws its text at the page's zoom whichever way the view is turned. With the
+/// view turned a quarter, the page's width runs down the screen: reading the zoom off the screen
+/// rectangle's width instead made the typed text a height-over-width too large (here 4/3).
+#[test]
+fn the_type_box_text_matches_the_page_zoom_in_a_turned_view() {
+    for rotate in ["0", "90"] {
+        let mut h = harness();
+        h.state_mut().set_option("rotate", rotate).unwrap();
+        h.run_steps(3);
+        h.state_mut().execute("sign.fill.text");
+        click(&mut h, 50.0, 250.0);
+        h.event(egui::Event::Text("Ada".into()));
+        h.run_steps(2);
+        let s = h.state();
+        let page = &s.session.get(s.views[0].id).unwrap().info.pages[0];
+        let rect = s.views[0].page_screen_rect(0).expect("on screen");
+        // Screen pixels per page point: the page's width lies across, or down when turned.
+        let zoom = if rotate == "90" { rect.height() } else { rect.width() } / page.width;
+        let size = s.views[0].fill_text.as_ref().expect("an open type box").size as f32;
+        let drawn = drawn_sizes(&h, "Ada");
+        assert!(!drawn.is_empty(), "{rotate}°: the typed text is drawn");
+        for d in drawn {
+            assert!((d - size * zoom).abs() < 0.5, "{rotate}°: drawn at {d}, the page shows it at {}", size * zoom);
+        }
+    }
+}
+
+#[test]
+fn fill_text_colour_survives_preview_commit_settings_and_save() {
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.text");
+    h.run_steps(2);
+    h.get_by_label("Colour").click();
+    h.run_steps(2);
+    h.get_by_label("Blue").click();
+    h.run_steps(2);
+    let color = h.state().fill_text_color;
+    assert!(color[2] > color[0], "blue was selected: {color:?}");
+    click(&mut h, 50.0, 250.0);
+    assert_eq!(h.state().views[0].fill_text.as_ref().unwrap().color, color, "the editor uses the selected colour");
+    h.event(egui::Event::Text("Blue form text".into()));
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let id = h.state().views[0].id;
+    let expected = color.map(|v| v as f32);
+    let annotation = h.state().session.get(id).unwrap().info.annotations.iter().find(|a| a.contents.as_deref() == Some("Blue form text")).unwrap();
+    assert_eq!(annotation.color, Some(expected));
+    let bytes = h.state().session.save_bytes(id).unwrap();
+    let reopened = harness_bytes(&bytes);
+    let saved = reopened
+        .state()
+        .session
+        .get(reopened.state().views[0].id)
+        .unwrap()
+        .info
+        .annotations
+        .iter()
+        .find(|a| a.contents.as_deref() == Some("Blue form text"))
+        .unwrap();
+    assert_eq!(saved.color, Some(expected));
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&h.state().persist());
+    assert_eq!(restored.fill_text_color, color);
+    restored.restore(r#"{"fill_text_color":[2,0,0]}"#);
+    assert_eq!(restored.fill_text_color, color, "invalid saved colours are ignored");
+    h.state_mut().execute("edit.undo");
+    h.run_steps(2);
+    assert!(!items(&h).iter().any(|(_, text)| text.as_deref() == Some("Blue form text")));
+    h.state_mut().execute("edit.redo");
+    h.run_steps(2);
+    assert!(items(&h).iter().any(|(_, text)| text.as_deref() == Some("Blue form text")));
+}
+
 #[test]
 fn the_type_box_grows_as_text_is_typed() {
     let mut h = harness();
@@ -1064,7 +1156,7 @@ fn saving_flattens_fill_and_sign_only_when_the_preference_is_on() {
     app.open_bytes("form.pdf", None, FIXTURE.to_vec()).unwrap();
     let id = app.views[0].id;
     app.session.apply(id, mark).unwrap();
-    app.views[0].fill_text = Some(TypeBox { page: 0, at: [40.0, 200.0], text: "Typed".into(), size: 10.0, focus: false });
+    app.views[0].fill_text = Some(TypeBox { page: 0, at: [40.0, 200.0], text: "Typed".into(), size: 10.0, color: [0.0; 3], focus: false });
     let kept = dir.join("kept.pdf");
     app.save_override = Some(kept.to_string_lossy().into_owned());
     assert!(app.save_active(SaveTarget::InPlace));
@@ -1075,7 +1167,7 @@ fn saving_flattens_fill_and_sign_only_when_the_preference_is_on() {
     assert!(texts.iter().any(|t| t == "Typed"), "an open type box is saved: {texts:?}");
     assert_eq!(reopened.session.get(reopened.views[0].id).unwrap().info.annotations.len(), 2, "the check mark stays too");
 
-    app.views[0].fill_text = Some(TypeBox { page: 0, at: [40.0, 160.0], text: "More".into(), size: 10.0, focus: false });
+    app.views[0].fill_text = Some(TypeBox { page: 0, at: [40.0, 160.0], text: "More".into(), size: 10.0, color: [0.0; 3], focus: false });
     app.flatten_fill_sign_on_save = true;
     let flat = dir.join("flat.pdf");
     app.save_override = Some(flat.to_string_lossy().into_owned());

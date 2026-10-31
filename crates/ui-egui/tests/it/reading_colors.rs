@@ -100,17 +100,6 @@ fn png() -> Vec<u8> {
     out
 }
 
-/// The Reading colours combo of the preferences dialog: it shows the chosen mode as its value,
-/// and no other combo in the dialog shows `Off` while the setting is off.
-fn combo(h: &mut Harness<'static, PdfCraftApp>) {
-    // The preferences dialog grew taller than the window, which leaves this combo below the
-    // fold where a click lands outside the dialog and dismisses it; scroll it into view and
-    // let the scroll settle before clicking.
-    h.get_by(|n| n.role() == Role::ComboBox && n.value().is_some_and(|v| v == "Off")).scroll_to_me();
-    h.run_steps(4);
-    h.get_by(|n| n.role() == Role::ComboBox && n.value().is_some_and(|v| v == "Off")).click();
-}
-
 #[test]
 fn reading_colours_preference_round_trips() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
@@ -122,11 +111,9 @@ fn reading_colours_preference_round_trips() {
     });
     h.run_steps(4);
     assert_eq!(h.state().reading_colors, ReadingColors::default());
-    // Switch the preset to white-on-black in the dialog's Reading colours combo. The open
-    // document keeps repainting, so run a fixed number of steps and let the popup settle.
-    combo(&mut h);
-    h.run_steps(20);
-    h.get_by_label("White on black").click();
+    h.get_by(|n| n.role() == Role::Button && n.label().as_deref() == Some("White on black")).scroll_to_me();
+    h.run_steps(4);
+    h.get_by(|n| n.role() == Role::Button && n.label().as_deref() == Some("White on black")).click();
     h.run_steps(2);
     assert_eq!(h.state().reading_colors, ReadingColors::WHITE_ON_BLACK);
     // The preference is app-wide: the already open document follows it too.
@@ -149,6 +136,41 @@ fn reading_colours_preference_round_trips() {
     assert_eq!(fresh.reading_colors, ReadingColors::default());
     fresh.restore(r#"{"reading_colors": 7}"#);
     assert_eq!(fresh.reading_colors, ReadingColors::default());
+}
+
+#[test]
+fn reading_presets_follow_appearance_and_do_not_change_the_interface_theme() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1000.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.set_option("dialog", "preferences").unwrap();
+        app
+    });
+    h.run_steps(6);
+    assert!(h.query_by_label("Original").is_some());
+    let theme = h.state().theme_preference;
+    let appearance = h.get_by_label("Light theme").rect();
+    let preset = h.get_by(|n| n.role() == Role::Button && n.label().as_deref() == Some("White on black")).rect();
+    let documents = h.get_by_label("Documents and view").rect();
+    assert!(appearance.bottom() < preset.top() && preset.bottom() < documents.top());
+    for (label, expected) in [
+        ("White on black", ReadingColors::WHITE_ON_BLACK),
+        ("Yellow on black", ReadingColors::YELLOW_ON_BLACK),
+        ("Green on black", ReadingColors::GREEN_ON_BLACK),
+        ("Black on white", ReadingColors::BLACK_ON_WHITE),
+        ("Off", ReadingColors::default()),
+    ] {
+        h.get_by(|n| n.role() == Role::Button && n.label().as_deref() == Some(label)).scroll_to_me();
+        h.run_steps(4);
+        h.get_by(|n| n.role() == Role::Button && n.label().as_deref() == Some(label)).click();
+        h.run_steps(4);
+        assert_eq!(h.state().reading_colors, expected);
+        assert_eq!(h.state().theme_preference, theme);
+        assert_eq!(h.query_by_label("Original").is_some(), expected.params.is_none());
+    }
+    if let Ok(path) = std::env::var("PDFCRAFT_READING_SHOT") {
+        h.render().unwrap().save(path).unwrap();
+    }
 }
 
 #[test]

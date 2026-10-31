@@ -176,7 +176,7 @@ fn merge(doc: &Document, run: &[Fragment], n: usize) -> Option<(Vec<u8>, u32, u3
         }
         let obj = doc.get(f.image);
         let Object::Stream(s) = &*obj else { return None };
-        let px = pixels(s, n)?;
+        let px = pixels(doc, s, n)?;
         let px = if (f.width, f.height) == (width, r1 - r0) { px } else { resample(&px, n, f.width, f.height, width, r1 - r0)? };
         out.get_mut(r0 as usize * row..r1 as usize * row)?.copy_from_slice(px.get(..(r1 - r0) as usize * row)?);
     }
