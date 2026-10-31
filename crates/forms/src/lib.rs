@@ -214,6 +214,19 @@ impl Field {
         })
     }
 
+    /// The on-state name that selects `value` read as an export value: form data, or one of the
+    /// options [`Field::export_of`] lists. A field with one `/Opt` entry per widget matches those
+    /// entries first and its on-state names only after them: the names may be positions (`/0`,
+    /// `/1`; ISO 32000-2 Table 230), so the export value `1` is the first widget, not the second
+    /// one's state `/1`. Elsewhere this is [`Field::state_for`].
+    pub fn state_for_export(&self, value: &str) -> Option<&str> {
+        let by_export = self.button_exports().and_then(|exports| {
+            let i = exports.iter().position(|(e, _)| e == value)?;
+            self.widgets.get(i)?.on_state.as_deref()
+        });
+        by_export.or_else(|| self.state_for(value))
+    }
+
     /// The export value for an on-state name such as the field's value; the name itself when the
     /// field has no `/Opt`.
     pub fn export_for_state<'a>(&'a self, state: &'a str) -> &'a str {

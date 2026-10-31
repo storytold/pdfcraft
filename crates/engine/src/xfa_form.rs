@@ -133,7 +133,15 @@ pub(crate) fn strip_xfa(doc: &mut pdfcraft_cos::Document, cx: &mut EditCtx) -> R
             match value {
                 pdfcraft_xfa::FieldData::Text(t) => f.value.join("\n") != *t && !t.trim().is_empty(),
                 pdfcraft_xfa::FieldData::Check(on) => f.value.is_empty() == *on,
-                pdfcraft_xfa::FieldData::Radio(sel) => f.value.first() != sel.as_ref(),
+                // The field holds an on-state name; the data names a button by its item. They agree
+                // when the data holds what saving writes (`/PCOn`, the `/Opt` entry or the state
+                // name), or an export value or state that selects the same button.
+                pdfcraft_xfa::FieldData::Radio(sel) => {
+                    let state = f.value.first().map(String::as_str);
+                    let same_button = sel.as_deref().map(|s| f.state_for_export(s).unwrap_or(s)) == state;
+                    let written = data.iter().find(|d| d.name == *name).map(|d| pdfcraft_xfa::radio_dataset_value(doc, d, &f.value.first().cloned()));
+                    !same_button && written.as_deref() != Some(sel.as_deref().unwrap_or_default())
+                }
                 pdfcraft_xfa::FieldData::None => false,
             }
         })
@@ -283,7 +291,12 @@ pub(crate) fn xfa_values_from_datasets(doc: &mut pdfcraft_cos::Document) -> Resu
             }
             pdfcraft_xfa::FieldData::Text(t) => (f.value.join("\n") != t).then_some(FieldValue::Text(t)),
             pdfcraft_xfa::FieldData::Check(on) => (f.value.is_empty() == on).then_some(FieldValue::Check(on)),
-            pdfcraft_xfa::FieldData::Radio(sel) => (f.value.first() != sel.as_ref()).then_some(FieldValue::Radio(sel)),
+            // The data holds the item (the export value); the field takes the on state that
+            // exports it, which with `/Opt` may be a position (`1` is the state `/0`).
+            pdfcraft_xfa::FieldData::Radio(sel) => {
+                let state = sel.map(|v| f.state_for_export(&v).map_or(v.clone(), str::to_owned));
+                (f.value.first() != state.as_ref()).then_some(FieldValue::Radio(state))
+            }
             pdfcraft_xfa::FieldData::None => None,
         };
         if let Some(v) = new {

@@ -8,7 +8,8 @@ pub enum FieldData {
     Text(String),
     /// Checked or not.
     Check(bool),
-    /// The selected button's on value, if any.
+    /// The selected button, if any: written from its on-state name (the data gets its item, see
+    /// `radio_dataset_value`), read as the data's item, which is its export value.
     Radio(Option<String>),
     /// Nothing to write (buttons, signatures).
     None,
@@ -35,14 +36,32 @@ fn som_of(doc: &Document, f: &FieldDatum) -> String {
 
 /// The datasets text for a radio group. The AcroForm value is an appearance-state name
 /// (`New York` is stored as `New_York`); `/PCOn` on the selected widget is the original item.
-fn radio_dataset_value(doc: &Document, f: &FieldDatum, sel: &Option<String>) -> String {
+/// Without it, a group with one `/Opt` entry per widget exports that entry: its state names may
+/// be positions (`/0`, `/1`; ISO 32000-2 Table 230), and the data holds the item (`1`, `2`).
+/// `sel` is the selected on-state name; with none selected the text is empty.
+pub fn radio_dataset_value(doc: &Document, f: &FieldDatum, sel: &Option<String>) -> String {
     let Some(selected) = sel.as_deref().filter(|s| !s.is_empty() && *s != "Off") else {
         return String::new();
     };
     let Some(group) = doc.get(f.obj).as_dict().cloned() else { return selected.to_string() };
     let kids = group.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_else(|| vec![Object::Ref(f.obj)]);
-    for kid in kids {
-        let Some(widget) = doc.resolve(&kid).as_dict().cloned() else { continue };
+    // One export value per widget, as the field's `/Opt` lists them (an entry may be an
+    // `[export display]` pair, as a choice field's are).
+    let exports: Option<Vec<Option<String>>> = group
+        .get(b"Opt")
+        .map(|o| doc.resolve(o))
+        .and_then(|o| o.as_array().cloned())
+        .map(|opt| {
+            opt.iter()
+                .map(|o| match &*doc.resolve(o) {
+                    Object::Array(pair) => pair.first().and_then(|e| doc.resolve(e).as_string().map(|s| s.to_text())),
+                    other => other.as_string().map(|s| s.to_text()),
+                })
+                .collect()
+        })
+        .filter(|opt: &Vec<Option<String>>| opt.len() == kids.len());
+    for (i, kid) in kids.iter().enumerate() {
+        let Some(widget) = doc.resolve(kid).as_dict().cloned() else { continue };
         let original = text_of(doc, &widget, b"PCOn");
         let state = widget
             .get(b"AP")
@@ -51,7 +70,8 @@ fn radio_dataset_value(doc: &Document, f: &FieldDatum, sel: &Option<String>) -> 
             .and_then(|n| doc.resolve(&n).as_dict().cloned())
             .and_then(|n| n.iter().map(|(k, _)| String::from_utf8_lossy(k).into_owned()).find(|k| k != "Off"));
         if state.as_deref() == Some(selected) || original.as_deref() == Some(selected) {
-            return original.unwrap_or_else(|| selected.to_string());
+            let export = exports.as_ref().and_then(|e| e.get(i).cloned().flatten());
+            return original.or(export).unwrap_or_else(|| selected.to_string());
         }
     }
     selected.to_string()
