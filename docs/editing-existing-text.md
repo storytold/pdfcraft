@@ -89,7 +89,9 @@ On a scanned page, recognised text (Scan & OCR) is an invisible layer over the p
 text groups it into phrases: words joined by a word space, with a table cell, a tab stop and each
 scanned line kept apart. Applying an edit draws the new text visibly in the scan's ink colour (or
 the one chosen) and first covers the old words with the paper colour sampled around them. Each
-word keeps its position and width, and a longer phrase grows rightwards rather than wrapping. The
+word keeps its position and width, and a longer phrase grows rightwards rather than wrapping.
+OCR sizes each word from its own box, so a phrase's words can come out several points apart: the
+editor and the rewrite set the whole phrase in one size, the median of its words' sizes. The
 cover is one flat colour, and the text uses the layer's Helvetica, not the scanned typeface.
 This applies to any invisible text (rendering mode 3), not just a PdfCraft OCR layer: editing
 invisible text, such as another OCR tool's layer, makes the rewritten paragraph visible over a
