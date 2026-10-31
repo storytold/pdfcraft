@@ -2483,6 +2483,21 @@ animation effects	Off	Изключени
 	Make properties default	Задаване като свойства по подразбиране
 	Pages selected	Избрани страници
 	Page properties	Свойства на страницата
+	Send by email…	Изпращане по имейл…
+	Sending by email isn't available in the browser	Изпращането по имейл не е достъпно в браузъра
+	Still waiting for your email app…	Все още се чака имейл приложението…
+	The copy to attach couldn't be written: {e}	Копието за прикачване не можа да бъде записано: {e}
+	Attaching {name} to a new email message…	{name} се прикачва към ново имейл съобщение…
+	the request stopped without an answer	заявката спря без отговор
+	Couldn't attach the file	Файлът не можа да бъде прикачен
+	Open message and show file	Отвори съобщението и покажи файла
+	{program} can't take a file from PdfCraft.	{program} не може да приеме файл от PdfCraft.
+	Your default email app can't take a file from PdfCraft.	Имейл приложението по подразбиране не може да приеме файл от PdfCraft.
+	No email app is set up on this computer.	На този компютър не е настроено имейл приложение.
+	Your email app didn't open a message in time.	Имейл приложението не отвори съобщение навреме.
+	Your email app couldn't log on to your mailbox.	Имейл приложението не можа да влезе в пощенската ви кутия.
+	Your email app didn't open a message. It said: {why}.	Имейл приложението не отвори съобщение. То съобщи: {why}.
+	Open a new message without it, and PdfCraft will show {name} in its folder so you can attach it yourself.	Отворете ново съобщение без него и PdfCraft ще покаже {name} в папката му, за да го прикачите сами.
 	Create & Edit	Създаване и редактиране
 	Review & Compare	Преглед и сравнение
 	Forms & Signatures	Формуляри и подписи

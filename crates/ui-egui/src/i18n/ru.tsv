@@ -2433,6 +2433,21 @@ animation effects	Off	Выкл
 	Make properties default	Сделать свойства стандартными
 	Pages selected	Выделенные страницы
 	Page properties	Свойства страницы
+	Send by email…	Отправить по электронной почте…
+	Sending by email isn't available in the browser	Отправка по электронной почте недоступна в браузере
+	Still waiting for your email app…	Всё ещё ждём почтовое приложение…
+	The copy to attach couldn't be written: {e}	Не удалось записать копию для вложения: {e}
+	Attaching {name} to a new email message…	{name} прикрепляется к новому письму…
+	the request stopped without an answer	запрос завершился без ответа
+	Couldn't attach the file	Не удалось прикрепить файл
+	Open message and show file	Открыть письмо и показать файл
+	{program} can't take a file from PdfCraft.	{program} не может принять файл из PdfCraft.
+	Your default email app can't take a file from PdfCraft.	Почтовое приложение по умолчанию не может принять файл из PdfCraft.
+	No email app is set up on this computer.	На этом компьютере не настроено почтовое приложение.
+	Your email app didn't open a message in time.	Почтовое приложение не открыло письмо вовремя.
+	Your email app couldn't log on to your mailbox.	Почтовому приложению не удалось войти в ваш почтовый ящик.
+	Your email app didn't open a message. It said: {why}.	Почтовое приложение не открыло письмо. Сообщение: {why}.
+	Open a new message without it, and PdfCraft will show {name} in its folder so you can attach it yourself.	Откройте новое письмо без файла, и PdfCraft покажет {name} в его папке, чтобы вы прикрепили его сами.
 	Create & Edit	Создание и редактирование
 	Review & Compare	Рецензирование и сравнение
 	Forms & Signatures	Формы и подписи

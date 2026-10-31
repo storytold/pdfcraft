@@ -2594,6 +2594,21 @@ animation effects	Off	Vypnuto
 	Make properties default	Nastavit vlastnosti jako výchozí
 	Pages selected	Vybrané stránky
 	Page properties	Vlastnosti stránky
+	Send by email…	Odeslat e-mailem…
+	Sending by email isn't available in the browser	Odesílání e-mailem není v prohlížeči k dispozici
+	Still waiting for your email app…	Stále se čeká na e-mailovou aplikaci…
+	The copy to attach couldn't be written: {e}	Kopii k přiložení nelze zapsat: {e}
+	Attaching {name} to a new email message…	Přikládání {name} k nové e-mailové zprávě…
+	the request stopped without an answer	požadavek skončil bez odpovědi
+	Couldn't attach the file	Soubor nelze přiložit
+	Open message and show file	Otevřít zprávu a zobrazit soubor
+	{program} can't take a file from PdfCraft.	{program} nemůže převzít soubor z PdfCraft.
+	Your default email app can't take a file from PdfCraft.	Výchozí e-mailová aplikace nemůže převzít soubor z PdfCraft.
+	No email app is set up on this computer.	V tomto počítači není nastavena žádná e-mailová aplikace.
+	Your email app didn't open a message in time.	E-mailová aplikace neotevřela zprávu včas.
+	Your email app couldn't log on to your mailbox.	E-mailová aplikace se nemohla přihlásit k vaší poštovní schránce.
+	Your email app didn't open a message. It said: {why}.	E-mailová aplikace neotevřela zprávu. Uvedla: {why}.
+	Open a new message without it, and PdfCraft will show {name} in its folder so you can attach it yourself.	Otevřete novou zprávu bez něj a PdfCraft zobrazí {name} v jeho složce, abyste jej mohli přiložit sami.
 	Create & Edit	Vytváření a úpravy
 	Review & Compare	Revize a porovnání
 	Forms & Signatures	Formuláře a podpisy

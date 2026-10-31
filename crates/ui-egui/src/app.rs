@@ -185,6 +185,7 @@ impl PdfCraftApp {
             ocr_run: None,
             ocr_batch: None,
             run_inline: false,
+            send_email: Default::default(),
             custom_actions: Vec::new(),
             wizard: Default::default(),
             action_run: None,
@@ -554,6 +555,7 @@ impl eframe::App for PdfCraftApp {
         self.poll_ocr();
         self.poll_optimize();
         self.poll_action();
+        self.poll_send_email();
         self.process_file_requests();
         #[cfg(not(target_arch = "wasm32"))]
         self.process_picked();

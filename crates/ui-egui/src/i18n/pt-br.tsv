@@ -2534,6 +2534,21 @@ animation effects	Off	Desativados
 	Make properties default	Tornar propriedades padrão
 	Pages selected	Páginas selecionadas
 	Page properties	Propriedades da página
+	Send by email…	Enviar por e-mail…
+	Sending by email isn't available in the browser	O envio por e-mail não está disponível no navegador
+	Still waiting for your email app…	Ainda aguardando seu aplicativo de e-mail…
+	The copy to attach couldn't be written: {e}	Não foi possível gravar a cópia a anexar: {e}
+	Attaching {name} to a new email message…	Anexando {name} a uma nova mensagem de e-mail…
+	the request stopped without an answer	a solicitação parou sem resposta
+	Couldn't attach the file	Não foi possível anexar o arquivo
+	Open message and show file	Abrir mensagem e mostrar arquivo
+	{program} can't take a file from PdfCraft.	{program} não pode receber um arquivo do PdfCraft.
+	Your default email app can't take a file from PdfCraft.	Seu aplicativo de e-mail padrão não pode receber um arquivo do PdfCraft.
+	No email app is set up on this computer.	Nenhum aplicativo de e-mail está configurado neste computador.
+	Your email app didn't open a message in time.	Seu aplicativo de e-mail não abriu uma mensagem a tempo.
+	Your email app couldn't log on to your mailbox.	Seu aplicativo de e-mail não conseguiu entrar na sua caixa de correio.
+	Your email app didn't open a message. It said: {why}.	Seu aplicativo de e-mail não abriu uma mensagem. Ele disse: {why}.
+	Open a new message without it, and PdfCraft will show {name} in its folder so you can attach it yourself.	Abra uma nova mensagem sem ele, e o PdfCraft mostrará {name} na pasta dele para que você o anexe.
 	Create & Edit	Criar e editar
 	Review & Compare	Revisar e comparar
 	Forms & Signatures	Formulários e assinaturas

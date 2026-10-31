@@ -2429,6 +2429,21 @@ animation effects	Off	ఆఫ్
 	Make properties default	లక్షణాలను డిఫాల్ట్‌గా చేయి
 	Pages selected	ఎంచుకున్న పేజీలు
 	Page properties	పేజీ లక్షణాలు
+	Send by email…	ఇమెయిల్ ద్వారా పంపు…
+	Sending by email isn't available in the browser	బ్రౌజర్‌లో ఇమెయిల్ ద్వారా పంపడం అందుబాటులో లేదు
+	Still waiting for your email app…	ఇంకా మీ ఇమెయిల్ యాప్ కోసం వేచి ఉంది…
+	The copy to attach couldn't be written: {e}	జోడించాల్సిన కాపీని రాయలేకపోయింది: {e}
+	Attaching {name} to a new email message…	{name}ను కొత్త ఇమెయిల్ సందేశానికి జోడిస్తోంది…
+	the request stopped without an answer	అభ్యర్థన సమాధానం లేకుండా ఆగిపోయింది
+	Couldn't attach the file	ఫైల్‌ను జోడించలేకపోయింది
+	Open message and show file	సందేశాన్ని తెరిచి ఫైల్‌ను చూపు
+	{program} can't take a file from PdfCraft.	{program} PdfCraft నుండి ఫైల్‌ను తీసుకోలేదు.
+	Your default email app can't take a file from PdfCraft.	మీ డిఫాల్ట్ ఇమెయిల్ యాప్ PdfCraft నుండి ఫైల్‌ను తీసుకోలేదు.
+	No email app is set up on this computer.	ఈ కంప్యూటర్‌లో ఇమెయిల్ యాప్ ఏదీ సెటప్ చేయబడలేదు.
+	Your email app didn't open a message in time.	మీ ఇమెయిల్ యాప్ సమయానికి సందేశాన్ని తెరవలేదు.
+	Your email app couldn't log on to your mailbox.	మీ ఇమెయిల్ యాప్ మీ మెయిల్‌బాక్స్‌కు లాగిన్ కాలేకపోయింది.
+	Your email app didn't open a message. It said: {why}.	మీ ఇమెయిల్ యాప్ సందేశాన్ని తెరవలేదు. అది చెప్పింది: {why}.
+	Open a new message without it, and PdfCraft will show {name} in its folder so you can attach it yourself.	అది లేకుండా కొత్త సందేశాన్ని తెరవండి, PdfCraft {name}ను దాని ఫోల్డర్‌లో చూపుతుంది, మీరే దాన్ని జోడించవచ్చు.
 	Create & Edit	సృష్టించు & సవరించు
 	Review & Compare	సమీక్షించు & పోల్చు
 	Forms & Signatures	ఫారమ్‌లు & సంతకాలు

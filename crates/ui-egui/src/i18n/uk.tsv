@@ -2542,6 +2542,21 @@ animation effects	Off	Вимкнено
 	Make properties default	Зробити властивості типовими
 	Pages selected	Вибрані сторінки
 	Page properties	Властивості сторінки
+	Send by email…	Надіслати електронною поштою…
+	Sending by email isn't available in the browser	Надсилання електронною поштою недоступне в браузері
+	Still waiting for your email app…	Досі чекаємо на поштовий застосунок…
+	The copy to attach couldn't be written: {e}	Не вдалося записати копію для вкладення: {e}
+	Attaching {name} to a new email message…	{name} додається до нового листа…
+	the request stopped without an answer	запит завершився без відповіді
+	Couldn't attach the file	Не вдалося вкласти файл
+	Open message and show file	Відкрити лист і показати файл
+	{program} can't take a file from PdfCraft.	{program} не може прийняти файл із PdfCraft.
+	Your default email app can't take a file from PdfCraft.	Типовий поштовий застосунок не може прийняти файл із PdfCraft.
+	No email app is set up on this computer.	На цьому комп’ютері не налаштовано поштового застосунку.
+	Your email app didn't open a message in time.	Поштовий застосунок не відкрив лист вчасно.
+	Your email app couldn't log on to your mailbox.	Поштовому застосунку не вдалося увійти до вашої поштової скриньки.
+	Your email app didn't open a message. It said: {why}.	Поштовий застосунок не відкрив лист. Повідомлення: {why}.
+	Open a new message without it, and PdfCraft will show {name} in its folder so you can attach it yourself.	Відкрийте новий лист без файла, і PdfCraft покаже {name} у його теці, щоб ви вклали його самі.
 	Create & Edit	Створення й редагування
 	Review & Compare	Рецензування й порівняння
 	Forms & Signatures	Форми й підписи

@@ -2520,6 +2520,21 @@ animation effects	Off	オフ
 	Make properties default	プロパティをデフォルトに設定
 	Pages selected	選択したページ
 	Page properties	ページのプロパティ
+	Send by email…	メールで送信…
+	Sending by email isn't available in the browser	ブラウザーではメールでの送信を利用できません
+	Still waiting for your email app…	メールアプリの応答を待っています…
+	The copy to attach couldn't be written: {e}	添付用のコピーを書き込めませんでした：{e}
+	Attaching {name} to a new email message…	{name} を新しいメールに添付しています…
+	the request stopped without an answer	要求が応答なしで終了しました
+	Couldn't attach the file	ファイルを添付できませんでした
+	Open message and show file	メッセージを開いてファイルを表示
+	{program} can't take a file from PdfCraft.	{program} は PdfCraft からファイルを受け取れません。
+	Your default email app can't take a file from PdfCraft.	既定のメールアプリは PdfCraft からファイルを受け取れません。
+	No email app is set up on this computer.	このコンピューターにはメールアプリが設定されていません。
+	Your email app didn't open a message in time.	メールアプリが時間内にメッセージを開きませんでした。
+	Your email app couldn't log on to your mailbox.	メールアプリがメールボックスにログオンできませんでした。
+	Your email app didn't open a message. It said: {why}.	メールアプリがメッセージを開きませんでした。応答：{why}。
+	Open a new message without it, and PdfCraft will show {name} in its folder so you can attach it yourself.	ファイルなしで新しいメッセージを開いてください。PdfCraft が {name} をフォルダーに表示するので、ご自身で添付できます。
 	Create & Edit	作成と編集
 	Review & Compare	レビューと比較
 	Forms & Signatures	フォームと署名

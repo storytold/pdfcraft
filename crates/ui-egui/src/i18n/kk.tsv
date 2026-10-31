@@ -2518,6 +2518,21 @@ animation effects	Off	Өшірулі
 	Make properties default	Қасиеттерді әдепкі ету
 	Pages selected	Таңдалған беттер
 	Page properties	Бет қасиеттері
+	Send by email…	Email арқылы жіберу…
+	Sending by email isn't available in the browser	Email арқылы жіберу браузерде қолжетімсіз
+	Still waiting for your email app…	Email қосымшасы әлі күтілуде…
+	The copy to attach couldn't be written: {e}	Тіркелетін көшірмені жазу мүмкін болмады: {e}
+	Attaching {name} to a new email message…	{name} жаңа email хатына тіркелуде…
+	the request stopped without an answer	сұрау жауапсыз тоқтады
+	Couldn't attach the file	Файлды тіркеу мүмкін болмады
+	Open message and show file	Хатты ашу және файлды көрсету
+	{program} can't take a file from PdfCraft.	{program} PdfCraft-тан файл қабылдай алмайды.
+	Your default email app can't take a file from PdfCraft.	Әдепкі email қосымшаңыз PdfCraft-тан файл қабылдай алмайды.
+	No email app is set up on this computer.	Бұл компьютерде email қосымшасы бапталмаған.
+	Your email app didn't open a message in time.	Email қосымшаңыз хатты уақытында ашпады.
+	Your email app couldn't log on to your mailbox.	Email қосымшаңыз пошта жәшігіңізге кіре алмады.
+	Your email app didn't open a message. It said: {why}.	Email қосымшаңыз хатты ашпады. Ол былай деді: {why}.
+	Open a new message without it, and PdfCraft will show {name} in its folder so you can attach it yourself.	Файлсыз жаңа хат ашыңыз, PdfCraft {name} файлын қалтасында көрсетеді, оны өзіңіз тіркей аласыз.
 	Create & Edit	Жасау және өңдеу
 	Review & Compare	Шолу және салыстыру
 	Forms & Signatures	Пішіндер және қолтаңбалар

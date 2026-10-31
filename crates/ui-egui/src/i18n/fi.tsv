@@ -2829,6 +2829,21 @@ theme	Appearance	Teema
 	field names can't contain a period: {name}	kenttien nimissä ei voi olla pistettä: {name}
 	two cells would both be named {name}	kahdella solulla olisi sama nimi {name}
 	a field named {name} already exists	kenttä nimeltä {name} on jo olemassa
+	Attaching {name} to a new email message…	Liitetään {name} uuteen sähköpostiviestiin…
+	Couldn't attach the file	Tiedostoa ei voitu liittää
+	No email app is set up on this computer.	Tällä tietokoneella ei ole sähköpostisovellusta.
+	Open a new message without it, and PdfCraft will show {name} in its folder so you can attach it yourself.	Avaa uusi viesti ilman sitä, niin PdfCraft näyttää tiedoston {name} sen kansiossa, ja voit liittää sen itse.
+	Open message and show file	Avaa viesti ja näytä tiedosto
+	Send by email…	Lähetä sähköpostilla…
+	Sending by email isn't available in the browser	Sähköpostin lähettäminen ei ole käytettävissä selaimessa
+	Still waiting for your email app…	Odotetaan yhä sähköpostisovellustasi…
+	The copy to attach couldn't be written: {e}	Liitettävää kopiota ei voitu kirjoittaa: {e}
+	Your default email app can't take a file from PdfCraft.	Oletussähköpostisovelluksesi ei voi ottaa vastaan tiedostoa PdfCraftilta.
+	Your email app couldn't log on to your mailbox.	Sähköpostisovelluksesi ei voinut kirjautua postilaatikkoosi.
+	Your email app didn't open a message in time.	Sähköpostisovelluksesi ei avannut viestiä ajoissa.
+	Your email app didn't open a message. It said: {why}.	Sähköpostisovelluksesi ei avannut viestiä. Se ilmoitti: {why}.
+	the request stopped without an answer	pyyntö päättyi ilman vastausta
+	{program} can't take a file from PdfCraft.	{program} ei voi ottaa vastaan tiedostoa PdfCraftilta.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Tänään

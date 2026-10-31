@@ -2519,6 +2519,21 @@ animation effects	Off	Ki
 	Make properties default	Tulajdonságok beállítása alapértelmezettként
 	Pages selected	Kijelölt oldalak
 	Page properties	Oldaltulajdonságok
+	Send by email…	Küldés e-mailben…
+	Sending by email isn't available in the browser	Az e-mailben küldés nem érhető el a böngészőben
+	Still waiting for your email app…	Még várakozás az e-mail alkalmazásra…
+	The copy to attach couldn't be written: {e}	A csatolandó másolatot nem sikerült kiírni: {e}
+	Attaching {name} to a new email message…	{name} csatolása egy új e-mail üzenethez…
+	the request stopped without an answer	a kérés válasz nélkül leállt
+	Couldn't attach the file	A fájlt nem sikerült csatolni
+	Open message and show file	Üzenet megnyitása és a fájl megjelenítése
+	{program} can't take a file from PdfCraft.	A(z) {program} nem tud fájlt fogadni a PdfCraftból.
+	Your default email app can't take a file from PdfCraft.	Az alapértelmezett e-mail alkalmazásod nem tud fájlt fogadni a PdfCraftból.
+	No email app is set up on this computer.	Ezen a számítógépen nincs beállítva e-mail alkalmazás.
+	Your email app didn't open a message in time.	Az e-mail alkalmazásod nem nyitott meg időben üzenetet.
+	Your email app couldn't log on to your mailbox.	Az e-mail alkalmazásod nem tudott bejelentkezni a postafiókodba.
+	Your email app didn't open a message. It said: {why}.	Az e-mail alkalmazásod nem nyitott meg üzenetet. Ezt írta: {why}.
+	Open a new message without it, and PdfCraft will show {name} in its folder so you can attach it yourself.	Nyiss egy új üzenetet nélküle, és a PdfCraft megmutatja a(z) {name} fájlt a mappájában, hogy magad csatolhasd.
 	Create & Edit	Létrehozás és szerkesztés
 	Review & Compare	Áttekintés és összehasonlítás
 	Forms & Signatures	Űrlapok és aláírások

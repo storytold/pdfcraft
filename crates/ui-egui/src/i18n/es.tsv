@@ -2684,6 +2684,21 @@ animation effects	Off	Desactivados
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Estás viendo la versión firmada de «{from}» (revisión {rev}). Es una instantánea: los cambios aquí no afectarán al original.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Estás viendo la revisión {rev} de «{from}». Es una instantánea: los cambios aquí no afectarán al original.
+	Send by email…	Enviar por correo…
+	Sending by email isn't available in the browser	El envío por correo no está disponible en el navegador
+	Still waiting for your email app…	Aún esperando a tu aplicación de correo…
+	The copy to attach couldn't be written: {e}	No se pudo escribir la copia para adjuntar: {e}
+	Attaching {name} to a new email message…	Adjuntando {name} a un nuevo mensaje de correo…
+	the request stopped without an answer	la solicitud terminó sin respuesta
+	Couldn't attach the file	No se pudo adjuntar el archivo
+	Open message and show file	Abrir mensaje y mostrar archivo
+	{program} can't take a file from PdfCraft.	{program} no puede recibir un archivo de PdfCraft.
+	Your default email app can't take a file from PdfCraft.	Tu aplicación de correo predeterminada no puede recibir un archivo de PdfCraft.
+	No email app is set up on this computer.	No hay ninguna aplicación de correo configurada en este equipo.
+	Your email app didn't open a message in time.	Tu aplicación de correo no abrió un mensaje a tiempo.
+	Your email app couldn't log on to your mailbox.	Tu aplicación de correo no pudo iniciar sesión en tu buzón.
+	Your email app didn't open a message. It said: {why}.	Tu aplicación de correo no abrió un mensaje. Dijo: {why}.
+	Open a new message without it, and PdfCraft will show {name} in its folder so you can attach it yourself.	Abre un mensaje nuevo sin él y PdfCraft mostrará {name} en su carpeta para que lo adjuntes tú.
 	Attach a file…	Adjuntar un archivo…
 	Delete attachment	Eliminar adjunto
 	Attaching files is not available on the web yet	Adjuntar archivos aún no está disponible en la web

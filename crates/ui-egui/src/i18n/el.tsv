@@ -2526,6 +2526,21 @@ animation effects	Off	Ανενεργά
 	Make properties default	Ορισμός ιδιοτήτων ως προεπιλογή
 	Pages selected	Επιλεγμένες σελίδες
 	Page properties	Ιδιότητες σελίδας
+	Send by email…	Αποστολή με email…
+	Sending by email isn't available in the browser	Η αποστολή με email δεν είναι διαθέσιμη στο πρόγραμμα περιήγησης
+	Still waiting for your email app…	Αναμονή ακόμα για την εφαρμογή email…
+	The copy to attach couldn't be written: {e}	Δεν ήταν δυνατή η εγγραφή του αντιγράφου για επισύναψη: {e}
+	Attaching {name} to a new email message…	Επισύναψη του {name} σε νέο μήνυμα email…
+	the request stopped without an answer	το αίτημα σταμάτησε χωρίς απάντηση
+	Couldn't attach the file	Δεν ήταν δυνατή η επισύναψη του αρχείου
+	Open message and show file	Άνοιγμα μηνύματος και εμφάνιση αρχείου
+	{program} can't take a file from PdfCraft.	Το {program} δεν μπορεί να δεχτεί αρχείο από το PdfCraft.
+	Your default email app can't take a file from PdfCraft.	Η προεπιλεγμένη εφαρμογή email δεν μπορεί να δεχτεί αρχείο από το PdfCraft.
+	No email app is set up on this computer.	Δεν έχει ρυθμιστεί εφαρμογή email σε αυτόν τον υπολογιστή.
+	Your email app didn't open a message in time.	Η εφαρμογή email δεν άνοιξε μήνυμα εγκαίρως.
+	Your email app couldn't log on to your mailbox.	Η εφαρμογή email δεν μπόρεσε να συνδεθεί στο γραμματοκιβώτιό σας.
+	Your email app didn't open a message. It said: {why}.	Η εφαρμογή email δεν άνοιξε μήνυμα. Ανέφερε: {why}.
+	Open a new message without it, and PdfCraft will show {name} in its folder so you can attach it yourself.	Ανοίξτε ένα νέο μήνυμα χωρίς αυτό και το PdfCraft θα εμφανίσει το {name} στον φάκελό του, ώστε να το επισυνάψετε μόνοι σας.
 	Create & Edit	Δημιουργία και επεξεργασία
 	Review & Compare	Αναθεώρηση και σύγκριση
 	Forms & Signatures	Φόρμες και υπογραφές

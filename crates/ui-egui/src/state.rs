@@ -142,6 +142,8 @@ pub enum Dialog {
     Revert,
     /// Save over a file that changed on disk since the document came from it (#2166).
     OverwriteChanged,
+    /// File ▸ Send by email: the file couldn't be attached.
+    SendEmail,
     /// Link Properties.
     LinkProps,
     /// Organize ▸ Extract (options), Rotate Pages.

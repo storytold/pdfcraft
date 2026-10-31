@@ -2791,6 +2791,21 @@ theme	Appearance	स्वरूप
 	field names can't contain a period: {name}	फ़ील्ड के नामों में पूर्ण विराम (.) नहीं हो सकता: {name}
 	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
 	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
+	Attaching {name} to a new email message…	{name} को नए ईमेल संदेश में संलग्न किया जा रहा है…
+	Couldn't attach the file	फ़ाइल संलग्न नहीं की जा सकी
+	No email app is set up on this computer.	इस कंप्यूटर पर कोई ईमेल ऐप सेट नहीं है।
+	Open a new message without it, and PdfCraft will show {name} in its folder so you can attach it yourself.	इसके बिना नया संदेश खोलें, और PdfCraft {name} को उसके फ़ोल्डर में दिखाएगा ताकि आप उसे खुद संलग्न कर सकें।
+	Open message and show file	संदेश खोलें और फ़ाइल दिखाएँ
+	Send by email…	ईमेल से भेजें…
+	Sending by email isn't available in the browser	ब्राउज़र में ईमेल से भेजना उपलब्ध नहीं है
+	Still waiting for your email app…	आपके ईमेल ऐप की प्रतीक्षा जारी है…
+	The copy to attach couldn't be written: {e}	संलग्न करने वाली प्रति नहीं लिखी जा सकी: {e}
+	Your default email app can't take a file from PdfCraft.	आपका डिफ़ॉल्ट ईमेल ऐप PdfCraft से फ़ाइल नहीं ले सकता।
+	Your email app couldn't log on to your mailbox.	आपका ईमेल ऐप आपके मेलबॉक्स में लॉग इन नहीं कर सका।
+	Your email app didn't open a message in time.	आपके ईमेल ऐप ने समय पर संदेश नहीं खोला।
+	Your email app didn't open a message. It said: {why}.	आपके ईमेल ऐप ने संदेश नहीं खोला। उसने कहा: {why}।
+	the request stopped without an answer	अनुरोध बिना उत्तर के रुक गया
+	{program} can't take a file from PdfCraft.	{program} PdfCraft से फ़ाइल नहीं ले सकता।
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	आज
