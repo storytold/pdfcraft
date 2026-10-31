@@ -100,11 +100,11 @@ impl Session {
     }
 
     /// Web addresses in the text of every page (Create links from URLs): (page, one rectangle
-    /// per line in user space, URI). Text that already has a link over it is skipped.
+    /// per line in user space, URI). Text that already has a link over it is skipped, and so is
+    /// text on a layer the viewer hides: a link there would sit over nothing the reader can see.
     pub fn find_urls(&self, id: DocId) -> Vec<(usize, Vec<[f64; 4]>, String)> {
         let Some(doc) = self.get(id) else { return Vec::new() };
-        let config = RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() };
-        let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
+        let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), doc.config.clone());
         let mut out = Vec::new();
         for page in 0..doc.info.pages.len() {
             let res = r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
@@ -137,6 +137,26 @@ impl Session {
                     .collect();
                 if !rects.is_empty() {
                     out.push((page, rects, uri));
+                }
+            }
+        }
+        out
+    }
+
+    /// The addresses written as plain text on each page that the viewer makes clickable
+    /// ([`crate::text_links::find_text_links`]): (0-based page, address), leaving out any a link
+    /// annotation lies over.
+    pub fn text_links(&self, id: DocId) -> Vec<(usize, crate::text_links::TextLink)> {
+        let Some(doc) = self.get(id) else { return Vec::new() };
+        // The viewer's settings, so text on a layer it hides is not a link.
+        let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), doc.config.clone());
+        let mut out = Vec::new();
+        for (page, info) in doc.info.pages.iter().enumerate() {
+            let res = r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
+            let Some(text) = res.text else { continue };
+            for link in crate::text_links::find_text_links(&text) {
+                if !doc.info.links.iter().any(|l| l.page == page && link.covered_by(info, l.rect)) {
+                    out.push((page, link));
                 }
             }
         }

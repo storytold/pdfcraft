@@ -327,6 +327,13 @@ impl PdfCraftApp {
                     _ => return Err("hide-empty-highlight-hover must be true or false".into()),
                 };
             }
+            ("text-links", _) => {
+                self.text_links = match value {
+                    "true" => true,
+                    "false" => false,
+                    _ => return Err("text-links must be true or false".into()),
+                };
+            }
             ("ui-scale", _) => self.ui_scale = ui_scale::parse(value)?,
             // `--secured-notice false`: no notice above the pages that a document is secured.
             ("secured-notice", _) => {

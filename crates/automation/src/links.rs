@@ -96,7 +96,27 @@ impl Automation {
                 v
             })
             .collect();
-        Ok(json!({ "count": items.len(), "links": items }))
+        let mut out = json!({ "count": items.len(), "links": items });
+        // Addresses written as plain page text, which the viewer makes clickable (#4207). Reading
+        // every page's text costs more than the list above, so only on request.
+        if a.opt_bool("text_links")?.unwrap_or(false) {
+            let id = doc.id;
+            let found: Vec<Value> = self
+                .session
+                .text_links(id)
+                .into_iter()
+                .map(|(page, l)| {
+                    let mut v = json!({ "page": page + 1, "rects": l.rects, "url": l.uri });
+                    // What the viewer does on a click: the same check every document link gets.
+                    if let Err(e) = pdfcraft_engine::links::document_url(&l.uri) {
+                        v["blocked"] = json!(e.to_string());
+                    }
+                    v
+                })
+                .collect();
+            out["text_links"] = json!(found);
+        }
+        Ok(out)
     }
 
     pub(crate) fn link_open(&mut self, a: &Args) -> Result<Value> {

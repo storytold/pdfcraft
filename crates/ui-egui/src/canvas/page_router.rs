@@ -20,6 +20,8 @@ pub(crate) enum Owner {
     Comment { index: usize, part: CommentPart },
     /// A link, by its index in the document's links.
     Link { index: usize },
+    /// A web or email address written as plain page text (#4207), by its index among the page's.
+    TextLink { index: usize },
     /// A form field's widget, by the field's index in the form and the widget's in the field.
     Field { field: usize, widget: usize },
     /// Prepare Form: a field's widget, to select and move.

@@ -53,6 +53,7 @@ mod stamp_preview;
 #[cfg(test)]
 mod test_hooks;
 pub mod text_fonts;
+pub mod text_links;
 mod text_preview;
 pub mod text_style_bookmarks;
 pub mod word_count;

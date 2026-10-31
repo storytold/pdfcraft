@@ -9,6 +9,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Stroke, TextureHandle, TextureOptions, Vec2, pos2, vec2};
+use pdfcraft_engine::text_links::TextLink;
 use pdfcraft_engine::{DocId, Edit};
 use pdfcraft_render::{DestView, DocInfo, LayerOp, LinkTarget, PRINT_TAG, PageText, RenderPool, RenderRequest, RequestKind, Tile, device_pixels};
 
@@ -351,6 +352,8 @@ pub struct DocView {
     tiles: HashMap<(usize, u64, u32, u32), TextureHandle>,
     /// Text layers, extracted in the background on demand (selection, find, copy).
     pub(crate) texts: HashMap<usize, Arc<PageText>>,
+    /// Addresses written as plain text on a page (#4207), with the text layer they were found in.
+    text_links: HashMap<usize, (Arc<PageText>, Arc<[TextLink]>)>,
     pub(crate) text_failed: HashSet<usize>,
     pub find: Option<Find>,
     selection: Option<Selection>,
@@ -651,6 +654,7 @@ impl DocView {
             grayscale: false,
             tiles: HashMap::new(),
             texts: HashMap::new(),
+            text_links: HashMap::new(),
             text_failed: HashSet::new(),
             find: None,
             selection: None,
@@ -877,6 +881,8 @@ struct PageEnv<'a> {
     table_preview: &'a Option<crate::field_table_ui::Preview>,
     tag: u64,
     text_style: &'a pdfcraft_engine::AddedText,
+    /// Preferences: addresses written as plain page text open like links (#4207).
+    text_links: bool,
     tool: QuickTool,
     units: crate::units::Unit,
     unobstructed: bool,
@@ -1124,6 +1130,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
         signature,
         table_preview,
         text_style,
+        text_links,
         tool,
         units,
         fill_text_size,
@@ -1134,6 +1141,9 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
     let PageFrame { resp, ptr, pointer, .. } = *frame;
     let cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info };
     let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
+    if text_links {
+        view.refresh_text_links(i);
+    }
     let (lines, images) =
         if matches!(tool, QuickTool::AddText | QuickTool::EditText) && can_modify { edit_inventory(view, doc, i) } else { Default::default() };
     let field_tool = match tool {
@@ -1159,6 +1169,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
         lines: &lines,
         images: &images,
         clip: ui.clip_rect(),
+        text_links,
     };
     if let Some(o) = ptr.pressed().filter(|o| xf.rect.contains(*o)) {
         let at = hits.at(view, o);
@@ -1398,6 +1409,8 @@ struct PageHits<'a> {
     images: &'a [pdfcraft_engine::PageImage],
     /// The pages' visible area (the picture's rotate knob stays inside it).
     clip: Rect,
+    /// Addresses written as plain page text open like links (#4207).
+    text_links: bool,
 }
 
 impl PageHits<'_> {
@@ -1424,6 +1437,7 @@ impl PageHits<'_> {
             lines,
             images,
             clip,
+            text_links,
         } = *self;
         let fields = if preparing {
             crate::prepare::hit(xf, info, page, form, field_tool, prepare_allowed, &view.prepare, p)
@@ -1459,7 +1473,8 @@ impl PageHits<'_> {
         // together.
         let picks_up = matches!(tool, QuickTool::Select | QuickTool::AddText | QuickTool::EditText);
         let added = (editing_content && can_modify && picks_up).then(|| crate::content_ui::hit(xf, info, page, added, view, p)).flatten();
-        [link_hit(info, xf, page, p), comments::hit(pcx, view, p), pictures, paragraphs, added, objects, grips, fields]
+        let text_link = text_links.then(|| text_link_hit(view, info, xf, page, p)).flatten();
+        [link_hit(info, xf, page, p), text_link, comments::hit(pcx, view, p), pictures, paragraphs, added, objects, grips, fields]
             .into_iter()
             .flatten()
             .collect()
@@ -1468,7 +1483,7 @@ impl PageHits<'_> {
 
 /// Text layer: find matches, selection, I-beam and drag-to-select.
 fn text_layer(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, slot: &PageSlot, input: &PageInput) {
-    let PageEnv { info, selects_text, tool, .. } = frame.env;
+    let PageEnv { info, selects_text, text_links, tool, .. } = frame.env;
     let PageSlot { i, r, xf } = *slot;
     let PageFrame { resp, ptr, pointer, .. } = *frame;
     if let Some(text) = view.texts.get(&i).cloned() {
@@ -1477,7 +1492,7 @@ fn text_layer(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, 
             && !input.consumed
             && let Some(p) = pointer.filter(|p| r.contains(*p))
         {
-            text_pointer_input(ui, view, &text, TextPointer { page: i, xf, rect: r, info, tool, resp, ptr: ptr.clone(), pointer: p });
+            text_pointer_input(ui, view, &text, TextPointer { page: i, xf, rect: r, info, tool, resp, ptr: ptr.clone(), pointer: p, text_links });
         }
     }
 }
@@ -1527,6 +1542,8 @@ struct TextPointer<'a> {
     resp: &'a egui::Response,
     ptr: PagePointer,
     pointer: Pos2,
+    /// Addresses written as plain page text open like links (#4207).
+    text_links: bool,
 }
 
 struct TextGesture<'a> {
@@ -1545,10 +1562,11 @@ struct TextGesture<'a> {
 }
 
 fn text_pointer_input(ui: &mut egui::Ui, view: &mut DocView, text: &PageText, pointer: TextPointer<'_>) {
-    let TextPointer { page, xf, rect, info, tool, resp, ptr, pointer: screen_pointer } = pointer;
+    let TextPointer { page, xf, rect, info, tool, resp, ptr, pointer: screen_pointer, text_links } = pointer;
     let (vx, vy) = xf.screen_to_view(screen_pointer);
     let over_text = text.glyphs.iter().any(|glyph| vx >= glyph.rect[0] && vx <= glyph.rect[2] && vy >= glyph.rect[1] && vy <= glyph.rect[3]);
-    let over_link = info.links.iter().any(|link| link.page == page && xf.user_rect(info, page, link.rect).contains(screen_pointer));
+    let over_link = info.links.iter().any(|link| link.page == page && xf.user_rect(info, page, link.rect).contains(screen_pointer))
+        || (text_links && view.text_link_at(info, page, vx, vy).is_some());
     let column = tool == QuickTool::ColumnSelect || ui.input(|input| input.modifiers.alt);
     let gesture = TextGesture { page, xf, rect, tool, ptr, resp, pointer: screen_pointer, vx, vy, over_text, over_link, column };
     update_text_cursor(view, &gesture);
@@ -1759,6 +1777,19 @@ fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_
     {
         frame.out.clicked_link = Some(l.target.clone());
     }
+    // A web or email address written as plain text (#4207): the same click as a link annotation,
+    // and the same check and confirmation on opening.
+    if unobstructed
+        && resp.clicked()
+        && tool == QuickTool::Select
+        && !input.consumed
+        && frame.out.clicked_link.is_none()
+        && let Some(owner @ crate::page_router::Owner::TextLink { index }) = view.router.owner(i)
+        && pointer.and_then(|p| text_link_hit(view, info, &xf, i, p)).is_some_and(|h| h.owner == owner)
+        && let Some(uri) = view.text_link_uri(i, index)
+    {
+        frame.out.clicked_link = Some(LinkTarget::Uri(uri));
+    }
     // Comments say what they are with any tool, beside its cursor, as Acrobat's do.
     comments::describe(&pcx, view);
     for (mp, mr, mc) in &view.compare_marks {
@@ -1910,6 +1941,15 @@ fn link_hit(info: &DocInfo, xf: &PageXform, page: usize, p: Pos2) -> Option<crat
     };
     let owner = crate::page_router::Owner::Link { index };
     Some(crate::page_router::Hit { tip: Some(label), ..crate::page_router::Hit::new(owner, Layer::Link, egui::CursorIcon::PointingHand) })
+}
+
+/// The web or email address written as plain text under `p` on `page` (#4207), with no link
+/// annotation over it: the same hand and tip (its address) as a link annotation's.
+fn text_link_hit(view: &DocView, info: &DocInfo, xf: &PageXform, page: usize, p: Pos2) -> Option<crate::page_router::Hit> {
+    let (vx, vy) = xf.screen_to_view(p);
+    let (index, link) = view.text_link_at(info, page, vx, vy)?;
+    let owner = crate::page_router::Owner::TextLink { index };
+    Some(crate::page_router::Hit { tip: Some(link.uri.clone()), ..crate::page_router::Hit::new(owner, Layer::Link, egui::CursorIcon::PointingHand) })
 }
 
 /// Escape while the pages hold a press abandons the gesture it drives, whichever tool's: nothing is
@@ -3219,6 +3259,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         table_preview: &table_preview,
         tag,
         text_style: &text_style,
+        text_links: app.text_links,
         tool,
         units,
         unobstructed,

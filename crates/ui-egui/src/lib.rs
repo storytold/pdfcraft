@@ -355,6 +355,9 @@ pub struct PdfCraftApp {
     /// Preferences: tell the user, above the pages, that a document is secured (its security
     /// settings restrict changes). Off only hides that notice (#4035); kept in the settings.
     pub show_secured_notice: bool,
+    /// Preferences: web and email addresses written as plain page text open on a click, like
+    /// links (#4207).
+    pub text_links: bool,
     /// Preferences: open every document at Default zoom and Default page display, whatever
     /// layout or zoom it asks for (#1618).
     pub always_default_view: bool,

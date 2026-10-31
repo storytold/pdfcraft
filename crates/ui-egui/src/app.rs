@@ -124,6 +124,7 @@ impl PdfCraftApp {
             quit_session: None,
             reload_changed_files: true,
             show_secured_notice: true,
+            text_links: true,
             always_default_view: false,
             #[cfg(not(target_arch = "wasm32"))]
             watch: Default::default(),
