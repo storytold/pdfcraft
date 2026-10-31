@@ -286,7 +286,7 @@ const MAX_CMAP_ENTRIES: usize = 1 << 20;
 const MAX_CMAP_RANGES: usize = 1 << 16;
 /// Largest decoded Encoding or ToUnicode CMap stream read; real CMaps stay well under it, and a larger
 /// one is not decoded at all.
-const MAX_CMAP_BYTES: usize = 16 << 20;
+pub const MAX_CMAP_BYTES: usize = 16 << 20;
 
 /// Code → Unicode of a font. Explicit mappings and sequential ranges are kept as declared, so a range
 /// costs one record however many codes it covers; where two overlap, the one declared later wins.

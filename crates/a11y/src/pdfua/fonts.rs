@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 use pdfcraft_fonts::Std14;
-use pdfcraft_fonts::pdf::{BaseEncoding, Metrics, cmap_program, glyph_text, glyph_unicode, latin_glyph};
+use pdfcraft_fonts::pdf::{BaseEncoding, MAX_CMAP_BYTES, Metrics, cmap_program, glyph_text, glyph_unicode, latin_glyph};
 use pdfcraft_fonts::program::{Face, Program, Unreadable};
 
 /// A question about a font PdfCraft can't answer for this file.
@@ -1041,7 +1041,9 @@ impl<'a> Font<'a> {
     /// 31-027 to 31-029: a ToUnicode map, its values, and when a font may go without one.
     fn to_unicode(&self, face: Option<&Face>, c: &mut Collected) {
         if let Some(Object::Stream(map)) = self.resolve(self.dict, b"ToUnicode").as_deref() {
-            if map.decoded().is_err() {
+            // Read within the bound `Metrics` reads it within: a larger map has no codes there to
+            // look up, so what it maps can't be decided.
+            if map.decoded_within(MAX_CMAP_BYTES).is_err() {
                 c.undecided("31-028");
                 c.undecided("31-029");
                 return;
