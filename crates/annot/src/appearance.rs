@@ -6,9 +6,10 @@
 //! It returns `None` for anything it cannot draw faithfully (cloudy borders, unknown line
 //! endings, indirect geometry), so callers never replace an appearance with a worse one.
 //!
-//! The note icons are PdfCraft's own drawings (AGENTS.md §1). Text boxes use the standard
-//! Helvetica font with WinAnsi encoding; line breaking uses [`text_width`], an approximation of
-//! Helvetica's proportions by character class (no font program or metrics file is bundled).
+//! The note icons are PdfCraft's own drawings (AGENTS.md §1). Text boxes use a standard text
+//! font with WinAnsi encoding: Helvetica, or the face their `/DA` or `/DS` asks for
+//! ([`crate::text_style`]); lines break at that face's standard-14 widths (no font program is
+//! bundled).
 
 use pdfcraft_cos::{Dict, Object, PdfString, Stream};
 use pdfcraft_fonts::{first_undrawable, literal, win_ansi};
@@ -326,13 +327,19 @@ pub fn undrawable_text(d: &Dict) -> Option<(&'static str, char)> {
 
 /// `/Font` resources naming `/Helv`: standard Helvetica with WinAnsiEncoding.
 fn helvetica_resource() -> Object {
+    font_resource(pdfcraft_fonts::Std14::Helvetica)
+}
+
+/// `/Font` resources naming one standard face with WinAnsiEncoding, under the resource name
+/// [`crate::text_style::resource_name`] gives it (`/Helv` for Helvetica).
+fn font_resource(face: pdfcraft_fonts::Std14) -> Object {
     let mut font = Dict::new();
     font.set(b"Type".to_vec(), Object::name("Font"));
     font.set(b"Subtype".to_vec(), Object::name("Type1"));
-    font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
+    font.set(b"BaseFont".to_vec(), Object::name(face.base_font()));
     font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
     let mut fonts = Dict::new();
-    fonts.set(b"Helv".to_vec(), Object::Dict(font));
+    fonts.set(crate::text_style::resource_name(face).as_bytes().to_vec(), Object::Dict(font));
     Object::Dict(fonts)
 }
 
@@ -406,13 +413,19 @@ impl AppearanceDrawing {
 /// Text the standard fonts can't draw comes out as `?`: [`undrawable_text`] says which, and
 /// [`crate::set_appearance`] marks the annotation with it (`pdfcraft_fonts::UNDRAWN_MARK`).
 pub fn build(d: &Dict) -> Option<Stream> {
+    build_in(d, None)
+}
+
+/// [`build`], with the face a text box's `/DA` font names in the form's `/DR`
+/// ([`crate::text_style::dr_face`]).
+pub(crate) fn build_in(d: &Dict, dr_face: Option<pdfcraft_fonts::Std14>) -> Option<Stream> {
     let context = appearance_context(d)?;
     let drawing = AppearanceDrawing::new(&context);
     match context.subtype {
         b"Text" => return draw_icon(&context, "Note", [1.0, 0.82, 0.0], drawing),
         b"FileAttachment" => return draw_icon(&context, "PushPin", [0.0, 0.47, 0.84], drawing),
         b"Stamp" => return draw_stamp(&context, drawing),
-        b"FreeText" => return draw_free_text(&context, drawing),
+        b"FreeText" => return draw_free_text(&context, drawing, dr_face),
         _ => {}
     }
     let mut drawing = drawing;
@@ -532,8 +545,27 @@ fn draw_redaction(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawi
     let stroke = context.stroke;
     let c = &mut drawing.content;
     // While marked: the outline of each area (the fill comes when applied).
-    let q = nums(d, b"QuadPoints").filter(|q| !q.is_empty() && q.len() % 8 == 0)?;
-    let col = stroke.unwrap_or([0.89, 0.13, 0.13]);
+    // ISO 32000-2 gives a mark no outline colour (§12.5.6.23, Table 195). An array `/OC` of
+    // three numbers is the one some writers give it, and is drawn (the observation is in
+    // `parity/acrobat-features.toml`); `/OC` as ISO 32000-2 defines it (Table 166) is an
+    // optional-content dictionary, which this leaves alone.
+    let outline = nums(d, b"OC").and_then(|c| match c.as_slice() {
+        [r, g, b] if c.iter().all(|x| x.is_finite()) => Some([r.clamp(0.0, 1.0), g.clamp(0.0, 1.0), b.clamp(0.0, 1.0)]),
+        _ => None,
+    });
+    // Quadrilaterals are outlined in the `/OC` colour, else in `/C` as they always were.
+    let (q, col) = match d.get(b"QuadPoints") {
+        Some(_) => (nums(d, b"QuadPoints").filter(|q| !q.is_empty() && q.len() % 8 == 0)?, outline.or(stroke)),
+        // Without `/QuadPoints`, `/Rect` is the area (Table 195): outlined just inside its
+        // edges when the mark names an outline colour, else not drawn while marked.
+        None => {
+            let outline = outline?;
+            let rect = context.rect;
+            let [x0, y0, x1, y1] = [rect[0] + 0.5, rect[1] + 0.5, rect[2] - 0.5, rect[3] - 0.5];
+            (vec![x0, y1, x1, y1, x0, y0, x1, y0], Some(outline))
+        }
+    };
+    let col = col.unwrap_or([0.89, 0.13, 0.13]);
     c.push_str(&format!("{}1 w\n", rg_stroke(col)));
     for quad in q.as_chunks::<8>().0.iter() {
         c.push_str(&format!(
@@ -889,16 +921,17 @@ fn draw_stamp(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -
     Some(form(rect, c.as_bytes(), res))
 }
 
-fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -> Option<Stream> {
+fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing, dr_face: Option<pdfcraft_fonts::Std14>) -> Option<Stream> {
     let d = context.dict;
     let rect = context.rect;
     let stroke = context.stroke;
     let mut c = std::mem::take(&mut drawing.content);
     let mut res = std::mem::take(&mut drawing.resources);
     let _tail = std::mem::take(&mut drawing.tail);
-    let (text_color, size) = parse_da(d);
+    let crate::text_style::TextStyle { face, size, color: text_color } = crate::text_style::text_style(d, dr_face);
     let bg = stroke;
-    let bw = if d.contains(b"BS") || d.contains(b"Border") { border_width(d) } else { 0.0 };
+    // Without `/BS` or `/Border`, the `/Border` default [0 0 1]: a 1-pt border (Table 166).
+    let bw = border_width(d);
     // A callout: the leader line (arrowhead at its first point), and the text box inside
     // `/Rect` by `/RD`.
     // Text added to a turned page is drawn upright in its displayed box, which the form
@@ -965,21 +998,22 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     let width = (rect[2] - rect[0] - 2.0 * pad).max(1.0);
     let q = d.int(b"Q").unwrap_or(0);
     c.push_str(&format!(
-        "{} {} {} {} re W n\nBT\n/Helv {} Tf\n{}",
+        "{} {} {} {} re W n\nBT\n/{} {} Tf\n{}",
         n(rect[0]),
         n(rect[1]),
         n(rect[2] - rect[0]),
         n(rect[3] - rect[1]),
+        crate::text_style::resource_name(face),
         n(size),
         rg(text_color)
     ));
     let mut out = c.into_bytes();
     let mut y = rect[3] - pad - size * 0.9;
-    for line in wrap(&text, size, width) {
+    for line in pdfcraft_fonts::wrap_with(&text, size, width, |s, size| face.text_width(s, size)) {
         if y < rect[1] - size {
             break;
         }
-        let lw = text_width(&line, size);
+        let lw = face.text_width(&line, size);
         let x = match q {
             1 => rect[0] + pad + (width - lw) / 2.0,
             2 => rect[2] - pad - lw,
@@ -991,7 +1025,7 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
         y -= size * 1.2;
     }
     out.extend_from_slice(b"ET\n");
-    res.set(b"Font".to_vec(), helvetica_resource());
+    res.set(b"Font".to_vec(), font_resource(face));
     let mut stream = form(full, &out, res);
     if let Some(m) = matrix {
         stream.dict.set(b"Matrix".to_vec(), Object::Array(m.iter().copied().map(Object::Real).collect()));
