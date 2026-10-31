@@ -46,21 +46,41 @@ pub(crate) fn check_one(args: &[String]) -> Result<(), CliError> {
     let bytes = read(path)?;
     let (status, pages, failed, detail, warnings) = match inspect(bytes.clone(), None) {
         Err(e) => (format!("open-error:{}", short(&e.to_string())), 0, 0, e.to_string(), 0),
-        Ok(info) => {
-            let mut r = PageRenderer::new(bytes, RenderConfig::default());
-            let mut failed = Vec::new();
-            for i in 0..info.pages.len().min(500) {
-                let p = r.render(RenderRequest { page: i, kind: RequestKind::Pixels, tile: None, scale: dpi / 72.0, tag: 0, preview: false });
-                if let Some(e) = r.render(RenderRequest { page: i, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false }).error {
-                    failed.push(format!("p{} text: {e}", i + 1));
-                }
-                if let Some(e) = p.error {
-                    failed.push(format!("p{}: {e}", i + 1));
-                }
+        // A dynamic XFA form is laid out at open (#1645): like `info`, `text` and `render`, check
+        // the copy the app shows — the laid-out page tree, `session.display` — not the
+        // placeholder page the file still holds.
+        Ok(info) if info.xfa == Some(pdfcraft_render::Xfa::Dynamic) => {
+            let mut session = pdfcraft_engine::Session::new();
+            match session.open(path, None, bytes, None) {
+                Err(e) => (format!("open-error:{}", short(&e.to_string())), 0, 0, e.to_string(), 0),
+                Ok(id) => match session.get(id) {
+                    // Open succeeds even when the layout fails: the placeholder page stays and the
+                    // reason lands in the warnings. The placeholder renders, so reporting it as
+                    // `ok` would say a broken form checks fine — the layout failure is the finding.
+                    Some(doc) if doc.xfa.is_none() => {
+                        let detail = doc
+                            .info
+                            .warnings
+                            .iter()
+                            .find(|w| w.starts_with("This dynamic XFA form"))
+                            .cloned()
+                            .unwrap_or_else(|| "the dynamic XFA form could not be laid out".to_string());
+                        ("xfa-layout-failed".to_string(), doc.info.pages.len(), 1, detail, doc.info.warnings.len())
+                    }
+                    // A successful layout is what the app shows: its pages render, and its own
+                    // warnings live in the layout report, next to the file inspection's.
+                    Some(doc) => {
+                        let warnings = doc.info.warnings.len() + doc.xfa.as_ref().map_or(0, |xfa| xfa.warnings.len());
+                        check_pages(doc.display.clone(), doc.info.pages.len(), warnings, dpi)
+                    }
+                    None => {
+                        let e = "the document could not be opened".to_string();
+                        (format!("open-error:{}", short(&e)), 0, 0, e, 0)
+                    }
+                },
             }
-            let status = if failed.is_empty() { "ok".to_string() } else { "page-errors".to_string() };
-            (status, info.pages.len(), failed.len(), failed.join(" | "), info.warnings.len())
         }
+        Ok(info) => check_pages(bytes, info.pages.len(), info.warnings.len(), dpi),
     };
     // `--edit` (fuzzing): also run our own object layer end to end, with no panic safety net,
     // so a panic in cos shows up as a crash of this process.
@@ -71,6 +91,24 @@ pub(crate) fn check_one(args: &[String]) -> Result<(), CliError> {
         "ms": start.elapsed().as_millis() as u64, "detail": detail.chars().take(400).collect::<String>() });
     stdout_line(format_args!("{line}"))?;
     Ok(())
+}
+
+/// Render each page of `bytes` up to `count` (pixels at `--dpi` and text at 1.0) and give the
+/// status, page count, failure count, detail and warning count `check` reports.
+fn check_pages(bytes: Arc<Vec<u8>>, count: usize, warnings: usize, dpi: f32) -> (String, usize, usize, String, usize) {
+    let mut r = PageRenderer::new(bytes, RenderConfig::default());
+    let mut failed = Vec::new();
+    for i in 0..count.min(500) {
+        let p = r.render(RenderRequest { page: i, kind: RequestKind::Pixels, tile: None, scale: dpi / 72.0, tag: 0, preview: false });
+        if let Some(e) = r.render(RenderRequest { page: i, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false }).error {
+            failed.push(format!("p{} text: {e}", i + 1));
+        }
+        if let Some(e) = p.error {
+            failed.push(format!("p{}: {e}", i + 1));
+        }
+    }
+    let status = if failed.is_empty() { "ok".to_string() } else { "page-errors".to_string() };
+    (status, count, failed.len(), failed.join(" | "), warnings)
 }
 
 /// Open with cos, touch every object, edit the catalog, save incrementally and in full (both
