@@ -209,7 +209,10 @@ impl Layouter<'_> {
     /// that grows) plus a caption above or below it, or the taller of the two for one beside it.
     fn field_height(&self, f: &Field, inner_w: f64, ctx: &Ctx) -> f64 {
         let font = ctx.font.apply(&f.common.font);
-        let lines = if f.multiline { 3.0 } else { 1.0 };
+        // An empty multi-line field is three lines tall, unless it gives a minimum height (`minH`,
+        // XFA 3.3 p. 731): then that is where it starts, as a growable table cell does, and one
+        // line below it; its text, when there is more, still grows it.
+        let lines = if f.multiline && f.common.min_h.is_none() { 3.0 } else { 1.0 };
         let ui = match f.ui {
             Ui::CheckButton => f.check_size.unwrap_or(10.0).max(text::line_height(font.size)),
             // A button shows its caption: as tall as the caption's text in its own font.

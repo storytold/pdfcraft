@@ -4145,3 +4145,57 @@ fn clear_password_values_clears_static_xfa_password_fields() {
     let packets = read_packets(&doc).unwrap().unwrap();
     assert!(!packets.xdp.contains("hunter2"), "{}", packets.xdp);
 }
+
+/// An empty multi-line field with a minimum height and no height (a growable table cell, as a
+/// public form's activity list has) starts at its minimum, not three lines; text it can't hold
+/// grows it; one without a minimum stays three lines tall.
+#[test]
+fn an_empty_multiline_field_with_a_minimum_height_starts_there() {
+    let xml = |cell: &str| {
+        format!(
+            r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="a" w="2in" {cell}><ui><textEdit multiLine="1"/></ui><margin topInset="0.508mm" bottomInset="0.508mm"/></field>
+</subform></template>"#
+        )
+    };
+    let height = |cell: &str, value: Option<&str>| {
+        let t = crate::parse(&xml(cell)).unwrap().0;
+        let data = value.map(|v| {
+            parse_datasets(&format!(
+                "<xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data><form><a>{v}</a></form></xfa:data></xfa:datasets>"
+            ))
+            .unwrap()
+        });
+        let form = crate::layout::layout(&t, data.as_ref()).unwrap();
+        widgets(&form.pages[0]).first().map(|w| w.rect.h + 2.0 * 0.508 * 72.0 / 25.4).unwrap()
+    };
+    assert!((height(r#"minH="7.62mm""#, None) - 21.6).abs() < 0.01, "{}", height(r#"minH="7.62mm""#, None));
+    assert!(height(r#"minH="7.62mm""#, Some(&"word ".repeat(80))) > 40.0, "text grows it");
+    assert!(height("", None) > 38.0, "three lines without a minimum: {}", height("", None));
+}
+
+/// A growable `lr-tb` subform that doesn't fit what is left of the page is split there (XFA 3.3
+/// p. 1520), its first rows on this page and the rest on the next, as a public evaluation form's
+/// sections are; one with a height, a positioned one, still moves whole.
+#[test]
+fn a_growable_lr_tb_subform_is_split_at_the_page_break() {
+    let xml = |attrs: &str| {
+        let rows: String = (0..6).map(|i| format!(r#"<field name="f{i}" w="7in" h="1in"/>"#)).collect();
+        format!(
+            r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="tall" w="7in" h="6in"/><subform name="s" w="7.5in" {attrs}>{rows}</subform>
+</subform></template>"#
+        )
+    };
+    let pages_of = |attrs: &str| {
+        let t = crate::parse(&xml(attrs)).unwrap().0;
+        let form = crate::layout::layout(&t, None).unwrap();
+        (0..6)
+            .map(|i| form.pages.iter().position(|p| widgets(p).iter().any(|w| w.som == format!("form[0].s[0].f{i}[0]"))).unwrap_or(9))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(pages_of(r#"layout="lr-tb""#), [0, 0, 0, 0, 1, 1], "split at the break");
+    assert_eq!(pages_of(r#"layout="lr-tb" h="6in""#), [1, 1, 1, 1, 1, 1], "a fixed height moves whole");
+}

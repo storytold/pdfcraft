@@ -8,7 +8,12 @@ impl Layouter<'_> {
     /// content area (a positioned or fixed-height subform holding more than a page).
     fn flow_block(&mut self, node: &Node, x: f64, (w, h): (f64, f64), ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         let (rect, y, _) = self.cursor();
-        if y + h > rect.bottom() + 0.01 && h <= rect.h + 0.01 {
+        // A growable flowing subform (`lr-tb`/`rl-tb`, no `h`) is split where its objects allow
+        // ("splittable: in margins and where consensus exists among contained objects", XFA 3.3
+        // p. 1520), so it starts here and the rest goes on in the next content area, as one
+        // taller than a content area does. Anything else that fits one moves there whole.
+        let flows_on = matches!(node, Node::Subform(s) if matches!(s.layout, Layout::LrTb | Layout::RlTb) && s.common.h.is_none());
+        if !flows_on && y + h > rect.bottom() + 0.01 && h <= rect.h + 0.01 {
             self.make_room(h, 0.0)?;
         }
         let (rect, y, _) = self.cursor();
