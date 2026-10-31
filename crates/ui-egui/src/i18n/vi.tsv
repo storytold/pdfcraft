@@ -1466,6 +1466,9 @@ theme	Appearance	Giao diện
 	Applying a scale switches units to m / mm.	Áp dụng tỷ lệ sẽ chuyển đơn vị sang m / mm.
 	Drop-down list	Danh sách thả xuống
 	Duplicate pages	Nhân bản trang
+	Add a page from template {name}	Thêm trang từ mẫu {name}
+	Show template {name}	Hiện mẫu {name}
+	Hide template {name}	Ẩn mẫu {name}
 	Edit a PDF	Chỉnh sửa một PDF
 	Edit text & images	Chỉnh sửa văn bản & hình ảnh
 	Encrypt with certificate	Mã hóa bằng chứng chỉ

@@ -1477,6 +1477,9 @@
 	Applying a scale switches units to m / mm.	Pritaikius mastelį, vienetai pakeičiami į m / mm.
 	Drop-down list	Išskleidžiamasis sąrašas
 	Duplicate pages	Dubliuoti puslapius
+	Add a page from template {name}	Pridėti puslapį iš šablono {name}
+	Show template {name}	Rodyti šabloną {name}
+	Hide template {name}	Slėpti šabloną {name}
 	Edit a PDF	Redaguoti PDF
 	Edit text & images	Redaguoti tekstą ir paveikslėlius
 	Encrypt with certificate	Šifruoti sertifikatu

@@ -302,6 +302,9 @@
 	Insert blank page	แทรกหน้าเปล่า
 	Rotate pages…	หมุนหน้า…
 	Duplicate pages	ทำสำเนาหน้า
+	Add a page from template {name}	เพิ่มหน้าจากเทมเพลต {name}
+	Show template {name}	แสดงเทมเพลต {name}
+	Hide template {name}	ซ่อนเทมเพลต {name}
 	Crop pages	ครอบตัดหน้า
 	Set page boxes…	ตั้งกรอบหน้า…
 	Insert pages from file…	แทรกหน้าจากไฟล์…

@@ -1420,6 +1420,9 @@
 	Applying a scale switches units to m / mm.	Aplicarea unei scări schimbă unitățile în m / mm.
 	Drop-down list	Listă derulantă
 	Duplicate pages	Duplicare pagini
+	Add a page from template {name}	Adăugare pagină din șablonul {name}
+	Show template {name}	Afișare șablon {name}
+	Hide template {name}	Ascundere șablon {name}
 	Edit a PDF	Editare PDF
 	Edit text & images	Editare text și imagini
 	Encrypt with certificate	Criptare cu certificat

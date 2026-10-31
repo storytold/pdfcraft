@@ -9,6 +9,7 @@ mod button_caption;
 mod form_bulk;
 mod hostile_args;
 mod optimize_content_boundaries;
+mod page_templates;
 mod redact_after_stray_q_form;
 mod redact_text_after_q;
 mod render_warnings;

@@ -953,6 +953,13 @@ pub fn tools() -> Vec<ToolDef> {
         t("page_duplicate", "Duplicate pages", "Insert copies of pages so the first copy becomes page `at`, or after the last of them when `at` is left out (fonts and images are shared, not copied). Undoable.")
             .cmd("page.duplicate")
             .with(schema(json!({ "doc": doc(), "pages": pages("to duplicate"), "at": { "type": "integer", "minimum": 1 } }), &["doc", "pages"])),
+        t("page_templates", "List page templates", "The document's page templates (ISO 32000-2 §7.7.4: the name dictionary's /Templates, pages kept out of the document, then /Pages, named visible pages): each name, and whether it is hidden. A form's JavaScript adds pages from them (Template.spawn) or shows them (Template.hidden = false).")
+            .ro()
+            .with(schema(json!({ "doc": doc() }), &["doc"])),
+        t("page_template_spawn", "Add a page from a template", "Insert a copy of page template `name` so it becomes page `at` (default: after the last page), as JavaScript's Template.spawn does. With rename (the default, as in Acrobat) the copy's fields are its own, named P<at-1>.<name>.<field>; with rename false they are more widgets of the template's fields and share their values. Undoable.")
+            .with(schema(json!({ "doc": doc(), "name": { "type": "string" }, "at": { "type": "integer", "minimum": 1 }, "rename": { "type": "boolean" } }), &["doc", "name"])),
+        t("page_template_set_hidden", "Show or hide a page template", "Show page template `name` (hidden false: its own page goes at the end of the document, with its fields) or hide it again (hidden true: the page leaves the document and is kept as a template), as JavaScript's Template.hidden does. Undoable.")
+            .with(schema(json!({ "doc": doc(), "name": { "type": "string" }, "hidden": { "type": "boolean" } }), &["doc", "name", "hidden"])),
         t(
             "page_transition_set",
             "Set page transitions",

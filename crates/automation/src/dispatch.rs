@@ -279,6 +279,22 @@ impl Automation {
                 let at = self.opt_position(&a, "at")?;
                 self.apply(&a, Edit::DuplicatePages { pages, at })?
             }
+            "page_templates" => {
+                let templates: Vec<Value> = self.doc(&a)?.templates().into_iter().map(|t| json!({ "name": t.name, "hidden": t.hidden })).collect();
+                json!({ "templates": templates })
+            }
+            "page_template_spawn" => {
+                let at = self.opt_position(&a, "at")?.unwrap_or(self.doc(&a)?.info.pages.len());
+                let edit = Edit::SpawnTemplate { name: a.str("name")?.into(), at, rename: a.opt_bool("rename")?.unwrap_or(true) };
+                self.apply(&a, edit)?
+            }
+            "page_template_set_hidden" => self.apply(
+                &a,
+                Edit::SetTemplateHidden {
+                    name: a.str("name")?.into(),
+                    hidden: a.opt_bool("hidden")?.ok_or_else(|| ToolError::InvalidArgs("hidden is required".into()))?,
+                },
+            )?,
             "page_set_box" => self.page_set_box(&a)?,
             "page_transition_set" => self.page_transition_set(&a)?,
             "doc_create" => self.doc_create(&a)?,

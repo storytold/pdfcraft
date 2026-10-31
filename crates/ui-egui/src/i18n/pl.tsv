@@ -309,6 +309,9 @@
 	Insert blank page	Wstaw pustą stronę
 	Rotate pages…	Obróć strony…
 	Duplicate pages	Powiel strony
+	Add a page from template {name}	Dodaj stronę z szablonu {name}
+	Show template {name}	Pokaż szablon {name}
+	Hide template {name}	Ukryj szablon {name}
 	Crop pages	Przytnij strony
 	Set page boxes…	Ustaw obszary strony…
 	Insert pages from file…	Wstaw strony z pliku…

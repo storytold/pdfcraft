@@ -663,6 +663,9 @@
 	Duplicate field	Podvoji polje
 	Duplicate page	Podvoji stran
 	Duplicate pages	Podvoji strani
+	Add a page from template {name}	Dodaj stran iz predloge {name}
+	Show template {name}	Pokaži predlogo {name}
+	Hide template {name}	Skrij predlogo {name}
 	Duplicate…	Podvoji…
 	Dynamic	Dinamično
 	Dynamic XFA form laid out from its template: {pages}, {fields}.	Dinamični obrazec XFA, razporejen iz predloge: {pages}, {fields}.

@@ -272,6 +272,9 @@
 	Insert blank page	Boş sayfa ekle
 	Rotate pages…	Sayfaları döndür…
 	Duplicate pages	Sayfaları çoğalt
+	Add a page from template {name}	{name} şablonundan sayfa ekle
+	Show template {name}	{name} şablonunu göster
+	Hide template {name}	{name} şablonunu gizle
 	Crop pages	Sayfaları kırp
 	Set page boxes…	Sayfa kutularını ayarla…
 	Insert pages from file…	Dosyadan sayfa ekle…

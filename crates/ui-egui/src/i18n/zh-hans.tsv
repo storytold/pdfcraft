@@ -1892,6 +1892,9 @@
 	Insert blank page	插入空白页
 	Rotate pages…	旋转页面…
 	Duplicate pages	重复页面
+	Add a page from template {name}	从模板 {name} 添加页面
+	Show template {name}	显示模板 {name}
+	Hide template {name}	隐藏模板 {name}
 	Crop pages	裁剪页面
 	Set page boxes…	设置页面框…
 	Insert pages from file…	从文件插入页面…

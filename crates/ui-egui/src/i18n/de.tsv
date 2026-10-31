@@ -287,6 +287,9 @@
 	Insert blank page	Leere Seite einfügen
 	Rotate pages…	Seiten drehen…
 	Duplicate pages	Seiten duplizieren
+	Add a page from template {name}	Seite aus Vorlage {name} hinzufügen
+	Show template {name}	Vorlage {name} einblenden
+	Hide template {name}	Vorlage {name} ausblenden
 	Crop pages	Seiten zuschneiden
 	Set page boxes…	Seitenrahmen festlegen…
 	Insert pages from file…	Seiten aus Datei einfügen…

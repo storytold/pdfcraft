@@ -44,6 +44,20 @@ pub enum Edit {
         pages: Vec<usize>,
         at: Option<usize>,
     },
+    /// A copy of page template `name` inserted at `at` (clamped to the end), as JavaScript's
+    /// `Template.spawn` adds it (#1429). `rename` puts the copy's fields under `P<at>.<name>`;
+    /// without it they are more widgets of the template's fields.
+    SpawnTemplate {
+        name: String,
+        at: usize,
+        rename: bool,
+    },
+    /// Show page template `name` at the end of the document, or take its page out of the
+    /// document again (JavaScript's `Template.hidden`).
+    SetTemplateHidden {
+        name: String,
+        hidden: bool,
+    },
     /// Replace Pages: the content of `pages` is replaced by `src_pages` of another PDF; the
     /// pages' links, comments and bookmarks stay.
     ReplacePages {

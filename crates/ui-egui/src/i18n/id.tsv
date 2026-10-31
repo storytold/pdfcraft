@@ -1411,6 +1411,9 @@
 	Applying a scale switches units to m / mm.	Menerapkan skala mengubah satuan menjadi m / mm.
 	Drop-down list	Daftar drop-down
 	Duplicate pages	Duplikat halaman
+	Add a page from template {name}	Tambahkan halaman dari templat {name}
+	Show template {name}	Tampilkan templat {name}
+	Hide template {name}	Sembunyikan templat {name}
 	Edit a PDF	Edit PDF
 	Edit text & images	Edit teks & gambar
 	Encrypt with certificate	Enkripsi dengan sertifikat

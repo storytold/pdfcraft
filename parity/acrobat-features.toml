@@ -3264,11 +3264,11 @@ title = "Page templates"
 area = "D"
 tier = "P3"
 milestone = "M12"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["page_templates", "page_template_spawn", "page_template_set_hidden", "js_run"]
+evidence = ["crates/organize/src/templates/tests.rs::a_spawned_page_with_renaming_has_fields_of_its_own", "crates/organize/src/templates/tests.rs::every_unrenamed_copy_is_one_more_widget_of_the_one_field", "crates/organize/src/templates/tests.rs::showing_and_hiding_a_template_moves_its_own_page", "crates/js/src/tests.rs::spawn_asks_for_a_page_from_the_template", "crates/engine/tests/it/page_templates.rs::a_script_adds_pages_from_a_template_renamed_or_shared", "crates/engine/tests/it/page_templates.rs::a_spawning_loop_stops_at_its_page_budget", "crates/automation/tests/it/page_templates.rs::templates_are_listed_spawned_shown_and_hidden_through_tools"]
+notes = "Forms' JavaScript reads this.templates and getTemplate(name), adds a page from a template with Template.spawn or spawnPageFromTemplate (nPage, bRename, bOverlay, positional or named; renamed fields go under P<page>.<template>, unrenamed copies are more widgets of the template's fields and share their values) and shows or hides one with Template.hidden (the template's own page moves into or out of the document; /Templates and /Pages name trees, ISO 32000-2 §7.7.4). Only a button's or the console's script may change the pages, as one undo step with its field changes, at most 100 pages per run. Still missing: bOverlay true (laying a template over an existing page; the script is told on the console), creating or removing templates (Doc.createTemplate, removeTemplate) and an Organize Pages ▸ Page templates panel; numPages doesn't change within the script that spawned, and the new page's fields can't be read or set (getField returns null) until that script has finished."
 
 [[feature]]
 id = "organize.bookmark-add"

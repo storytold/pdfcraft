@@ -16,7 +16,7 @@ fn fields() -> Vec<FieldState> {
 }
 
 fn doc() -> DocInfo {
-    DocInfo { file_name: "order.pdf".into(), num_pages: 3, page: 0, info: vec![("title".into(), "Order".into())], xfa: false }
+    DocInfo { file_name: "order.pdf".into(), num_pages: 3, page: 0, info: vec![("title".into(), "Order".into())], xfa: false, templates: vec![] }
 }
 
 fn go(script: &str, event: &Event) -> Outcome {
@@ -2057,4 +2057,81 @@ fn a_plain_form_sees_the_xfa_version_but_not_installed() {
     assert_eq!(o.error, None);
     assert_eq!(o.value, "undefined number 3.5");
     assert_eq!(o.alerts, [Message::plain("old viewer")]);
+}
+
+/// A document with a hidden template `More` and a visible named page `Cover` (#1429).
+fn templated() -> DocInfo {
+    DocInfo { templates: vec![("More".into(), true), ("Cover".into(), false)], ..doc() }
+}
+
+fn run_templated(script: &str) -> Outcome {
+    run(script, &Event::field("Mouse Up", "agree", ""), &templated(), &fields(), &[], Limits::default())
+}
+
+#[test]
+fn templates_are_listed_and_found_by_name() {
+    let o = run_templated(
+        "var t = this.getTemplate('More'); \
+         console.println(this.templates.length + ' ' + this.templates[1].name + ' ' + t.name + ' ' + t.hidden + ' ' + this.getTemplate('Cover').hidden + ' ' + this.getTemplate('Nope'));",
+    );
+    assert_eq!(o.error, None);
+    assert_eq!(o.console, ["2 Cover More true false null"]);
+}
+
+#[test]
+fn spawn_asks_for_a_page_from_the_template() {
+    let o = run_templated("getTemplate('More').spawn(2, false, false);");
+    assert_eq!(o.requests, [Request::SpawnTemplate { name: "More".into(), page: 2, rename: false, overlay: false }]);
+    // As in Acrobat: page 0, renamed and laid over unless asked otherwise.
+    let o = run_templated("getTemplate('More').spawn();");
+    assert_eq!(o.requests, [Request::SpawnTemplate { name: "More".into(), page: 0, rename: true, overlay: true }]);
+    // The arguments by name.
+    let o = run_templated("getTemplate('More').spawn({ nPage: 1, bOverlay: false });");
+    assert_eq!(o.requests, [Request::SpawnTemplate { name: "More".into(), page: 1, rename: true, overlay: false }]);
+}
+
+#[test]
+fn spawn_page_from_template_takes_its_arguments_both_ways() {
+    let o = run_templated("this.spawnPageFromTemplate('More', 3, false, false);");
+    assert_eq!(o.requests, [Request::SpawnTemplate { name: "More".into(), page: 3, rename: false, overlay: false }]);
+    let o = run_templated("this.spawnPageFromTemplate({ cTemplate: 'More', nPage: 1, bRename: false, bOverlay: false });");
+    assert_eq!(o.requests, [Request::SpawnTemplate { name: "More".into(), page: 1, rename: false, overlay: false }]);
+    let o = run_templated("this.spawnPageFromTemplate('Nope', 1);");
+    assert!(o.error.as_deref().is_some_and(|e| e.contains("Nope")), "{o:?}");
+    assert!(o.requests.is_empty());
+}
+
+#[test]
+fn hiding_and_showing_a_template_is_asked_for_and_read_back() {
+    let o = run_templated("var t = getTemplate('More'); t.hidden = false; console.println(t.hidden);");
+    assert_eq!(o.requests, [Request::SetTemplateHidden { name: "More".into(), hidden: false }]);
+    assert_eq!(o.console, ["false"]);
+}
+
+/// Page numbers that aren't one land on the first page or past the last, where the document
+/// clamps them.
+#[test]
+fn spawn_pages_that_are_not_numbers_are_clamped() {
+    for (arg, page) in [("NaN", 0), ("-5", 0), ("Infinity", usize::MAX), ("-Infinity", 0), ("1e300", usize::MAX), ("'2'", 2)] {
+        let o = run_templated(&format!("getTemplate('More').spawn({arg}, true, false);"));
+        assert_eq!(o.requests, [Request::SpawnTemplate { name: "More".into(), page, rename: true, overlay: false }], "{arg}");
+    }
+}
+
+/// A template name longer than a console line is asked for whole, never clipped: a cut name
+/// could name another template.
+#[test]
+fn long_template_names_are_asked_for_whole() {
+    let long = "T".repeat(5000);
+    let doc = DocInfo { templates: vec![(long.clone(), true)], ..doc() };
+    let script = "var t = this.templates[0]; t.spawn(0, false, false); t.hidden = false;";
+    let o = run(script, &Event::field("Mouse Up", "agree", ""), &doc, &fields(), &[], Limits::default());
+    assert_eq!(o.error, None);
+    assert_eq!(
+        o.requests,
+        [
+            Request::SpawnTemplate { name: long.clone(), page: 0, rename: false, overlay: false },
+            Request::SetTemplateHidden { name: long, hidden: false },
+        ]
+    );
 }

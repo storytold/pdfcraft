@@ -292,6 +292,9 @@
 	Insert blank page	빈 페이지 삽입
 	Rotate pages…	페이지 회전…
 	Duplicate pages	페이지 복제
+	Add a page from template {name}	템플릿 {name}에서 페이지 추가
+	Show template {name}	템플릿 {name} 표시
+	Hide template {name}	템플릿 {name} 숨기기
 	Crop pages	페이지 자르기
 	Set page boxes…	페이지 상자 설정…
 	Insert pages from file…	파일에서 페이지 삽입…

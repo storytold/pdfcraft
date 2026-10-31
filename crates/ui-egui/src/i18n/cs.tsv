@@ -109,6 +109,9 @@
 	Insert blank page	Vložit prázdnou stránku
 	Rotate pages…	Otočit stránky…
 	Duplicate pages	Duplikovat stránky
+	Add a page from template {name}	Přidat stránku ze šablony {name}
+	Show template {name}	Zobrazit šablonu {name}
+	Hide template {name}	Skrýt šablonu {name}
 	Crop pages	Oříznout stránky
 	Set page boxes…	Nastavit rámečky stránek…
 	Insert pages from file…	Vložit stránky ze souboru…

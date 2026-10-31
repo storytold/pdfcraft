@@ -274,6 +274,9 @@
 	Insert blank page	Бос бет енгізу
 	Rotate pages…	Беттерді бұру…
 	Duplicate pages	Беттерді көшірмелеу
+	Add a page from template {name}	{name} үлгісінен бет қосу
+	Show template {name}	{name} үлгісін көрсету
+	Hide template {name}	{name} үлгісін жасыру
 	Crop pages	Беттерді қиып алу
 	Set page boxes…	Бет жәшіктерін орнату…
 	Insert pages from file…	Файлдан беттер енгізу…
