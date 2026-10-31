@@ -16,6 +16,10 @@
 //! (`/NeedAppearances`). Widths are the field font's own (its `/Widths`, or the standard-14
 //! metrics), Helvetica's when Helvetica stands in, and one em per full-width character in
 //! composite fonts.
+//! The mutable filling/authoring path first tries this existing selection, then embeds the
+//! bundled OFL Inter face if it covers all displayed text that would otherwise lose characters.
+//! That appearance uses its real advances and Unicode mapping; the source font and /DA stay
+//! unchanged. Immutable appearance helpers cannot materialize an embedded font.
 //!
 //! `/MK /R` (0, 90, 180, 270, counterclockwise) lays the content out in the upright box and sets
 //! the appearance `/Matrix` so that box lands on the widget rectangle. Any other value is 0, and
@@ -297,23 +301,27 @@ enum FontText {
     WinAnsi,
     /// A reused simple font's encoding, including indirect dictionaries and Differences.
     Simple(Box<Metrics>),
+    /// A complete embedded fallback with its own Unicode mapping and advances.
+    Embedded(Box<Metrics>),
     /// A composite font with a predefined Unicode CMap.
     Unicode(UnicodeCMap),
 }
 
 impl FontText {
+    /// Encode text with the already selected field font, normalizing tabs for reusable fonts.
     fn encode(&self, s: &str) -> Vec<u8> {
         match self {
             Self::WinAnsi => win_ansi(s),
             // Selection checks every displayed string first; wrapping only removes line breaks.
-            Self::Simple(metrics) => metrics.encode(&s.replace('\t', " ")).unwrap_or_default(),
+            Self::Simple(metrics) | Self::Embedded(metrics) => metrics.encode(&s.replace('\t', " ")).unwrap_or_default(),
             Self::Unicode(cmap) => cmap.encode(s),
         }
     }
 
+    /// Check reusable simple or embedded font coverage before choosing it for displayed text.
     fn can_encode(&self, s: &str) -> bool {
         match self {
-            Self::Simple(metrics) => metrics.encode(&s.replace('\t', " ")).is_some(),
+            Self::Simple(metrics) | Self::Embedded(metrics) => metrics.encode(&s.replace('\t', " ")).is_some(),
             _ => true,
         }
     }
@@ -324,13 +332,14 @@ impl FontText {
     fn first_unencodable(&self, s: &str) -> Option<char> {
         match self {
             Self::WinAnsi => pdfcraft_fonts::first_undrawable(s),
-            Self::Simple(metrics) => {
+            Self::Simple(metrics) | Self::Embedded(metrics) => {
                 s.chars().map(|c| if c == '\t' { ' ' } else { c }).find(|c| metrics.encode(c.encode_utf8(&mut [0; 4])).is_none())
             }
             Self::Unicode(cmap) => cmap.first_unencodable(s),
         }
     }
 
+    /// Measure text with its selected encoding and metrics at the requested point size.
     fn width(&self, s: &str, size: f64) -> f64 {
         match self {
             Self::WinAnsi => helvetica_width(s, size),
@@ -340,6 +349,10 @@ impl FontText {
                 None => helvetica_width(s, size),
             },
             Self::Unicode(_) => cjk_width(s, size),
+            Self::Embedded(metrics) => {
+                let bytes = self.encode(&s.replace(['\n', '\r'], " "));
+                metrics.codes(&bytes).into_iter().map(|(code, _)| metrics.width(code)).sum::<f64>() * size
+            }
         }
     }
 }
@@ -741,42 +754,126 @@ pub fn value_overflow(doc: &Document, f: &Field, w: &Widget) -> Option<Overflow>
 
 /// [`field_appearance_drawn`], and whether the text drawn is cut off by the box.
 fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String], format: bool) -> (Stream, Option<char>, Option<Overflow>) {
+    field_appearance_using(doc, f, w, values, format, None)
+}
+
+/// Apply the field's Format action only when values have not already been formatted.
+fn formatted_values<'a>(f: &Field, values: &'a [String], format: bool) -> std::borrow::Cow<'a, [String]> {
     // The Format event: what is shown, not what is stored.
-    let formatted: Vec<String>;
-    let values = if format
+    if format
         && matches!(f.kind, crate::FieldKind::Text | crate::FieldKind::Combo)
         && values.len() == 1
         && f.actions.format != crate::af::Format::None
     {
-        formatted = vec![crate::af::format_value(&f.actions.format, &values[0])];
-        &formatted[..]
+        std::borrow::Cow::Owned(vec![crate::af::format_value(&f.actions.format, &values[0])])
     } else {
-        values
-    };
-    let wobj = doc.get(w.obj);
-    let wd = wobj.as_dict().cloned().unwrap_or_default();
-    let (page_w, page_h) = ((w.rect[2] - w.rect[0]).max(1.0), (w.rect[3] - w.rect[1]).max(1.0));
-    let place = placement(mk_rotation(doc, &wd), page_w, page_h);
-    let (width, height) = (place.layout_w, place.layout_h);
-    let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(&f.da));
-    let text: String = if f.kind == FieldKind::Combo {
+        std::borrow::Cow::Borrowed(values)
+    }
+}
+
+/// Choose combo display labels or the first value, masking password characters before drawing.
+fn displayed_text(f: &Field, values: &[String]) -> String {
+    let text = if f.kind == FieldKind::Combo {
         values.iter().map(|v| f.options.iter().find(|(e, _)| e == v).map_or(v.clone(), |(_, d)| d.clone())).collect::<Vec<_>>().join(", ")
     } else {
         values.first().cloned().unwrap_or_default()
     };
-    let text = if f.has(flags::PASSWORD) { "*".repeat(text.chars().count()) } else { text };
+    if f.has(flags::PASSWORD) { "*".repeat(text.chars().count()) } else { text }
+}
+
+/// The logical appearance dimensions after the widget's rotation.
+fn widget_placement(doc: &Document, w: &Widget, wd: &Dict) -> Placement {
+    let (page_w, page_h) = ((w.rect[2] - w.rect[0]).max(1.0), (w.rect[3] - w.rect[1]).max(1.0));
+    placement(mk_rotation(doc, wd), page_w, page_h)
+}
+
+/// The exact rows drawn, including /TI and a widget too short for even one row.
+fn visible_list_options(f: &Field, rows: ListRows, height: f64) -> impl Iterator<Item = &(String, String)> {
+    let mut y = height - rows.inset;
+    f.options.iter().skip(rows.top).take_while(move |_| {
+        if y - rows.row < 0.0 {
+            return false;
+        }
+        y -= rows.row;
+        true
+    })
+}
+
+/// Materialize an approved fallback only when the normal appearance loses characters.
+/// Keep the source /DA and font unchanged; reuse one complete face in the form's /DR.
+pub(crate) fn field_appearance_embedded(
+    doc: &mut Document,
+    f: &Field,
+    w: &Widget,
+    values: &[String],
+    format: bool,
+) -> Result<(Stream, Option<char>), crate::FormError> {
+    let original = field_appearance_drawn(doc, f, w, values, format);
+    if original.1.is_none() {
+        return Ok(original);
+    }
+    let shown = formatted_values(f, values, format);
+    let covers = |s: &str| pdfcraft_fonts::embedding::covers(pdfcraft_fonts::INTER_REGULAR, &s.replace('\t', " "));
+    let covered = if f.kind == FieldKind::List {
+        let wobj = doc.get(w.obj);
+        let wd = wobj.as_dict().cloned().unwrap_or_default();
+        let fobj = doc.get(f.obj);
+        let rows = list_rows_of(doc, &f.da, fobj.as_dict(), &wd);
+        visible_list_options(f, rows, widget_placement(doc, w, &wd).layout_h).all(|(_, s)| covers(s))
+    } else {
+        covers(&displayed_text(f, &shown))
+    };
+    if !covered {
+        return Ok(original);
+    }
+    let form = crate::author::ensure_form(doc)?;
+    let af = doc.get(form);
+    let mut dr = af.as_dict().and_then(|d| d.get(b"DR")).map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
+    let mut fonts = dr.get(b"Font").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
+    let name = pdfcraft_fonts::embedding::embed(doc, &mut fonts, pdfcraft_fonts::INTER_REGULAR, "Inter").map_err(crate::FormError::Invalid)?;
+    let entry = fonts.get(name.as_bytes()).cloned().ok_or_else(|| crate::FormError::Invalid("the fallback font resource is missing".into()))?;
+    let font = doc.resolve(&entry);
+    let dict = font.as_dict().ok_or_else(|| crate::FormError::Invalid("the fallback font resource is not a dictionary".into()))?;
+    let enc = FontText::Embedded(Box::new(Metrics::from_dict(doc, dict)));
+    dr.set(b"Font".to_vec(), Object::Dict(fonts));
+    doc.update_dict(form, |d| d.set(b"DR".to_vec(), Object::Dict(dr)))?;
+    let (stream, unencodable, _) = field_appearance_using(doc, f, w, values, format, Some((name, entry, enc)));
+    Ok((stream, unencodable))
+}
+
+/// Draw a widget using an optional fallback font without rewriting its source font resource.
+fn field_appearance_using(
+    doc: &Document,
+    f: &Field,
+    w: &Widget,
+    values: &[String],
+    format: bool,
+    fallback: Option<(String, Object, FontText)>,
+) -> (Stream, Option<char>, Option<Overflow>) {
+    let values = formatted_values(f, values, format);
+    let wobj = doc.get(w.obj);
+    let wd = wobj.as_dict().cloned().unwrap_or_default();
+    let place = widget_placement(doc, w, &wd);
+    let (width, height) = (place.layout_w, place.layout_h);
+    let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(&f.da));
+    let text = displayed_text(f, &values);
     let can_show = |enc: &FontText| {
         if f.kind == FieldKind::List {
-            f.options.iter().all(|(_, display)| enc.can_encode(display))
+            let fobj = doc.get(f.obj);
+            let rows = list_rows_of(doc, &f.da, fobj.as_dict(), &wd);
+            visible_list_options(f, rows, height).all(|(_, display)| enc.can_encode(&display.replace(['\n', '\r'], " ")))
         } else if f.kind == FieldKind::Text && f.has(flags::MULTILINE) {
             text.split(['\n', '\r']).all(|line| enc.can_encode(line))
         } else {
-            enc.can_encode(&text)
+            enc.can_encode(&text.replace(['\n', '\r'], " "))
         }
     };
-    let (font_name, font_obj, enc) = match dr_font(doc, &da.font).filter(|(_, enc)| can_show(enc)) {
-        Some((o, enc)) => (da.font.clone(), o, enc),
-        None => ("Helv".to_string(), helvetica(), FontText::WinAnsi),
+    let (font_name, font_obj, enc) = match fallback.filter(|(_, _, enc)| can_show(enc)) {
+        Some(font) => font,
+        None => match dr_font(doc, &da.font).filter(|(_, enc)| can_show(enc)) {
+            Some((o, enc)) => (da.font.clone(), o, enc),
+            None => ("Helv".to_string(), helvetica(), FontText::WinAnsi),
+        },
     };
     let width_of = |text: &str, size: f64| enc.width(text, size);
     let (mut c, bw) = frame(doc, &wd, width, height);
@@ -814,10 +911,7 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
             size = rows.size;
             let line = rows.row;
             let mut y = height - rows.inset;
-            for (export, display) in f.options.iter().skip(rows.top) {
-                if y - line < 0.0 {
-                    break;
-                }
+            for (export, display) in visible_list_options(f, rows, height) {
                 if values.contains(export) {
                     c.push_str(&format!("0.6 0.75 0.86 rg\n{} {} {} {} re f\n", n(bw), n(y - line), n(width - 2.0 * bw), n(line)));
                 }
