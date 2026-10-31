@@ -248,6 +248,15 @@ returns to page tops, does not restore zoom, does not switch documents, and is n
 restarts. Standalone engine/MCP sessions have no viewport, so they do not have a separate
 navigation-history tool; use the opt-in UI control channel to navigate the displayed document.
 
+## Date locale preferences
+
+`fill_sign_date_format` accepts `format: "auto"` to restore the date language's default and
+returns `automatic` alongside the resolved `format`. Brazilian Portuguese (`language: "pt-br"`)
+uses `dd/mm/yyyy` automatically; other locales retain the existing default for now. An explicit
+pattern, including `m/d/yyyy`, is preserved when the language changes. The preference also
+localizes new dynamic `comment_add` stamp by-lines in Brazilian Portuguese, using a 24-hour
+clock; their date layout is independent of the Fill & Sign pattern.
+
 ## Fill & Sign text appearance
 
 `fill_sign_add` accepts `font_size` (4–300 pt, default 10) and `color`
