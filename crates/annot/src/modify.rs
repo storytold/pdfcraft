@@ -225,8 +225,9 @@ pub fn add_reply(doc: &mut Document, page: usize, index: usize, text: &str, auth
     reply(doc, page, index, text, author, meta, None)
 }
 
-/// Set a comment's review status (Acrobat: "Set status ▸ Accepted"…). Like Acrobat this adds a
-/// state reply (`/State`, `/StateModel /Review`) by `author`; the latest one wins.
+/// Set a comment's review status ("Set status ▸ Accepted"…). This adds a hidden state reply
+/// (`/State`, `/StateModel /Review`) by `author`, in reply to `author`'s previous one when there is
+/// one; each reviewer's latest is their status.
 pub fn set_review_state(doc: &mut Document, page: usize, index: usize, state: ReviewState, author: &str, meta: &Meta) -> Result<usize, AnnotError> {
     let text = format!("{} set by {}", state.name(), if author.is_empty() { "unknown" } else { author });
     reply(doc, page, index, &text, author, meta, Some(state))
@@ -259,6 +260,11 @@ fn reply(
         d.set(b"State".to_vec(), PdfString::text(s.name()));
         d.set(b"StateModel".to_vec(), PdfString::text("Review"));
         d.set(b"Subj".to_vec(), PdfString::text("Status"));
+        // Hidden (Table 167, bit 2): the state "is not specified in the annotation itself but in a
+        // separate text annotation" (ISO 32000-2 §12.5.6.3), so this reply is a state record, not
+        // a note, and is neither drawn nor listed as one.
+        d.set(b"F".to_vec(), Object::Int(FLAG_HIDDEN | FLAG_PRINT | FLAG_NO_ZOOM | FLAG_NO_ROTATE));
+        d.set(b"IRT".to_vec(), Object::Ref(last_state_reply(doc, p, parent, author, "Review").unwrap_or(parent)));
     }
     // An empty form: nothing is drawn for the reply itself.
     let mut fd = Dict::new();
@@ -295,8 +301,9 @@ pub fn set_locked(doc: &mut Document, page: usize, index: usize, locked: bool) -
     Ok(())
 }
 
-/// Mark or unmark a comment with a checkmark. Like Acrobat this adds a hidden state reply with
-/// `/StateModel /Marked` by `author`; the latest one wins. It's private bookkeeping, not a status.
+/// Mark or unmark a comment with a checkmark. This adds a hidden state reply with `/StateModel
+/// /Marked` by `author`, in reply to `author`'s previous one when there is one; their latest one
+/// wins. It's each reviewer's private bookkeeping, not a status.
 pub fn set_marked(doc: &mut Document, page: usize, index: usize, marked: bool, author: &str, meta: &Meta) -> Result<usize, AnnotError> {
     let (p, parent) = annot_ref(doc, page, index)?;
     let pd = annot_dict(doc, parent);
@@ -307,7 +314,7 @@ pub fn set_marked(doc: &mut Document, page: usize, index: usize, marked: bool, a
     let text = format!("{state} set by {}", if author.is_empty() { "unknown" } else { author });
     let mut d = base_dict("Text", [0.0; 4], p, &text, author, meta);
     d.set(b"Rect".to_vec(), pd.get(b"Rect").cloned().unwrap_or_else(|| num_array(&[0.0; 4])));
-    d.set(b"IRT".to_vec(), Object::Ref(parent));
+    d.set(b"IRT".to_vec(), Object::Ref(last_state_reply(doc, p, parent, author, "Marked").unwrap_or(parent)));
     d.set(b"F".to_vec(), Object::Int(FLAG_HIDDEN | FLAG_PRINT | FLAG_NO_ZOOM | FLAG_NO_ROTATE));
     d.set(b"State".to_vec(), PdfString::text(state));
     d.set(b"StateModel".to_vec(), PdfString::text("Marked"));
@@ -317,6 +324,56 @@ pub fn set_marked(doc: &mut Document, page: usize, index: usize, marked: bool, a
     let i = list.len() - 1;
     set_annots(doc, p, list)?;
     Ok(i)
+}
+
+/// `author`'s latest `model` state reply about `target` on page `p`, for the next change to reply
+/// to: ISO 32000-2 §12.5.6.3, "Additional state changes shall be made by adding text annotations
+/// in reply to the previous reply for a given user". A state reply is about the
+/// annotation its `/IRT` chain reaches past other state replies; a loop reaches nothing. Each
+/// reply's answer is kept, so a long history is walked once.
+fn last_state_reply(doc: &Document, p: ObjRef, target: ObjRef, author: &str, model: &str) -> Option<ObjRef> {
+    use std::collections::{HashMap, HashSet};
+    // As the readers see it: a readable `/State` (not null, empty or another type), or a known
+    // `/StateModel` whose default state applies.
+    let is_state = |r: ObjRef| {
+        doc.get(r).as_dict().is_some_and(|d| {
+            text_value(doc, d, b"State").is_some() || matches!(text_value(doc, d, b"StateModel").as_deref(), Some("Marked" | "Review"))
+        })
+    };
+    let irt = |r: ObjRef| doc.get(r).as_dict().and_then(|d| d.get(b"IRT").and_then(Object::as_ref));
+    let mut reaches: HashMap<ObjRef, Option<ObjRef>> = HashMap::new();
+    let mut mine = Vec::new();
+    for r in annots(doc, p).iter().filter_map(Object::as_ref).filter(|&r| r != target) {
+        let d = annot_dict(doc, r);
+        if text_value(doc, &d, b"StateModel").as_deref() != Some(model) || text_value(doc, &d, b"T").unwrap_or_default() != author.trim() {
+            continue;
+        }
+        let (mut path, mut seen, mut at) = (vec![r], HashSet::from([r]), irt(r));
+        let about = loop {
+            let Some(up) = at else { break None };
+            if let Some(&known) = reaches.get(&up) {
+                break known;
+            }
+            if !is_state(up) {
+                break Some(up);
+            }
+            if !seen.insert(up) {
+                break None;
+            }
+            path.push(up);
+            at = irt(up);
+        };
+        for x in path {
+            reaches.insert(x, about);
+        }
+        if about == Some(target) {
+            mine.push(r);
+        }
+    }
+    // The end of the chain, whatever order the page lists it in: a reply none of the others
+    // replies to; among several (changes that don't chain), the last listed.
+    let answered: HashSet<ObjRef> = mine.iter().filter_map(|&r| irt(r)).collect();
+    mine.iter().rev().copied().find(|r| !answered.contains(r))
 }
 
 /// Move a comment (and its pop-up) by `(dx, dy)` points. The appearance moves with `/Rect`.

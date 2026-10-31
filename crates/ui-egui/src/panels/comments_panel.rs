@@ -1,16 +1,16 @@
 //! The Comments panel (Acrobat's right-hand comment list; 11-visual-spec §3, audit `a15-*`).
 //!
-//! Header "Comments N" (comments, as Acrobat counts them) with "N replies" under it and search;
-//! an "Add a comment" box that posts a sticky note on the current page; cards grouped by page.
-//! Selecting a card selects the comment on the page and opens its reply box and "…" menu (Edit,
-//! Set status, Delete), and gives each reply a "…" of its own (Edit, Copy text, Delete). Status
-//! replies show as a badge.
+//! Header "Comments N" (comments) with "N replies" under it and search; an "Add a comment" box
+//! that posts a sticky note on the current page; cards grouped by page. Selecting a card selects
+//! the comment on the page and opens its reply box and "…" menu (Edit, Set status, Delete), and
+//! gives each reply a "…" of its own (Edit, Copy text, Delete). Status replies show as one badge
+//! per reviewer.
 
 use std::collections::HashMap;
 
 use egui::{Align, Color32, CornerRadius, Layout, Sense, Stroke, vec2};
 use pdfcraft_engine::{Edit, NoteIcon, ReviewState, Shape};
-use pdfcraft_render::{Annotation, DocInfo};
+use pdfcraft_render::{Annotation, DocInfo, ReviewStates};
 
 use crate::canvas::DocView;
 use crate::comments::{CommentPrefs, CommentTool, SortBy, color32, status_badge};
@@ -84,13 +84,7 @@ fn check_label(marked: bool) -> &'static str {
     if marked { "Checked" } else { "Unchecked" }
 }
 
-/// The latest checkmark reply in a thread says "Marked".
-pub fn is_marked(thread: &[&Annotation]) -> bool {
-    thread.iter().rev().find(|r| r.is_mark()).is_some_and(|r| r.state.as_deref() == Some("Marked"))
-}
-
-/// The number shown in the header: comments, not their replies or status changes (as Acrobat
-/// counts them).
+/// The number shown in the header: comments, not their replies or status changes.
 pub fn count(info: &DocInfo) -> usize {
     info.annotations.iter().filter(|a| a.is_comment()).count()
 }
@@ -178,15 +172,18 @@ pub(crate) fn show(
     let mut page_counts: HashMap<usize, usize> = HashMap::new();
     // Replies find their parent by reference (`/NM` need not be unique) and keep source order.
     // A reply at any depth joins the thread of the comment it starts from, as comment_list lists
-    // it. A status or checkmark stays with the annotation it was set on (its `/IRT` names it,
-    // ISO 32000-2 §12.5.6.2): one set on a reply, at any depth, is that reply's and not the
-    // comment's, so the card's badge and checkmark leave it out (comment_list reports it on the
-    // reply). Page badges count roots before filtering.
+    // it. Status and checkmark replies are read through `states`: each sets the state of the
+    // annotation its `/IRT` chain refers to past earlier state replies (ISO 32000-2 §12.5.6.3),
+    // so one set on a reply, at any depth, is that reply's and not the comment's, and the card's
+    // badges and checkmark leave it out (comment_list reports it on the reply). Page badges count
+    // roots before filtering.
     let tops = pdfcraft_render::thread_tops(&info.annotations);
+    let states = ReviewStates::new(&info.annotations);
     for a in &info.annotations {
         if let Some(parent) = a.parent {
-            let key = if a.state.is_none() { tops.get(&(a.page, a.index)).copied().unwrap_or(parent) } else { parent };
-            replies.entry(key).or_default().push(a);
+            if a.state.is_none() {
+                replies.entry(tops.get(&(a.page, a.index)).copied().unwrap_or(parent)).or_default().push(a);
+            }
         } else if a.is_comment() {
             let count = page_counts.entry(a.page).or_default();
             *count = count.saturating_add(1);
@@ -194,18 +191,29 @@ pub(crate) fn show(
     }
     let replies_of = |a: &Annotation| -> &[&Annotation] { replies.get(&(a.page, a.index)).map(Vec::as_slice).unwrap_or(&[]) };
     let cv = &view.comments;
-    let status_of =
-        |a: &Annotation| replies_of(a).iter().rev().filter(|r| !r.is_mark()).find_map(|r| r.state.clone()).unwrap_or_else(|| "None".into());
+    // Hidden by the status filter when every reviewer's status is hidden ("None" when nobody set one).
+    let status_hidden = |a: &Annotation| {
+        let all = states.statuses(a);
+        if all.is_empty() {
+            cv.hidden_statuses.iter().any(|s| s == "None")
+        } else {
+            all.iter().all(|(_, s)| cv.hidden_statuses.iter().any(|h| h == s))
+        }
+    };
     let mut roots: Vec<&Annotation> = info
         .annotations
         .iter()
         .filter(|a| a.is_comment())
-        .filter(|a| query.as_deref().is_none_or(|q| matches(a, q) || replies_of(a).iter().any(|r| matches(r, q))))
+        .filter(|a| {
+            query
+                .as_deref()
+                .is_none_or(|q| matches(a, q) || replies_of(a).iter().any(|r| matches(r, q)) || states.history(a).iter().any(|r| matches(r, q)))
+        })
         .filter(|a| !cv.hidden_types.iter().any(|t| t == kind_label(a)))
         .filter(|a| !cv.hidden_authors.contains(&a.author.clone().unwrap_or_default()))
-        .filter(|a| !cv.hidden_statuses.contains(&status_of(a)))
+        .filter(|a| !status_hidden(a))
         .filter(|a| !cv.hidden_colors.contains(&color_key(a)))
-        .filter(|a| !cv.hidden_checks.contains(&check_label(is_marked(replies_of(a))).to_string()))
+        .filter(|a| !cv.hidden_checks.contains(&check_label(states.marked_by(a, &prefs.author)).to_string()))
         .collect();
     let sort = cv.sort;
     match sort {
@@ -287,7 +295,7 @@ pub(crate) fn show(
         }
         let thread = replies_of(a);
         let rotation = info.pages.get(a.page).map_or(0, |p| p.rotation);
-        if let Some(e) = card(ui, view, CardContext { theme: t, annotation: a, rotation, thread, doc, prefs, allowed, nav }) {
+        if let Some(e) = card(ui, view, CardContext { theme: t, annotation: a, rotation, thread, states: &states, doc, prefs, allowed, nav }) {
             edit = Some(e);
         }
     }
@@ -302,6 +310,7 @@ struct CardContext<'a> {
     // The clockwise `/Rotate` of the comment's page.
     rotation: u16,
     thread: &'a [&'a Annotation],
+    states: &'a ReviewStates<'a>,
     doc: &'a pdfcraft_engine::Document,
     prefs: &'a CommentPrefs,
     allowed: bool,
@@ -309,15 +318,17 @@ struct CardContext<'a> {
 }
 
 fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Option<Edit> {
-    let CardContext { theme: t, annotation: a, rotation, thread, doc, prefs, allowed, nav } = context;
+    let CardContext { theme: t, annotation: a, rotation, thread, states, doc, prefs, allowed, nav } = context;
     let info = &doc.info;
     let mut edit = None;
     let key = (a.page, a.index);
     let selected = view.comments.selected == Some(key);
     let color = a.color.map(|c| color32(c.map(f64::from))).unwrap_or(t.accent);
-    let status = thread.iter().rev().filter(|r| !r.is_mark()).find_map(|r| r.state.as_deref());
-    let marked = is_marked(thread);
-    let replies: Vec<&&Annotation> = thread.iter().filter(|r| r.state.is_none()).collect();
+    // Each reviewer's status, and the checkmark of the reviewer using this copy (prefs.author):
+    // checkmarks are each reviewer's own (ISO 32000-2 Table 174, "marked by the user").
+    let statuses = states.statuses(a);
+    let marked = states.marked_by(a, &prefs.author);
+    let replies: Vec<&&Annotation> = thread.iter().collect();
     let editing = view.comments.editing.as_ref().is_some_and(|(p, i, _)| (*p, *i) == key);
     let fill = if selected { t.hover.gamma_multiply(0.7) } else { Color32::TRANSPARENT };
     let mut open_menu = false;
@@ -378,11 +389,15 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
                         widgets::wrapped_text(ui, body, theme::regular(13.0), t.text, !selected);
                     }
                 }
-                if let Some((icon, label, c)) = status.and_then(status_badge) {
+                // One badge per reviewer, with their name: a state is "for the specified user"
+                // (ISO 32000-2 §12.5.6.3).
+                for (who, state) in &statuses {
+                    let Some((icon, label, c)) = status_badge(state) else { continue };
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
                         ui.add(icons::image(icon, 13.0, c));
-                        ui.label(egui::RichText::new(tl!(label)).font(theme::medium(11.5)).color(c));
+                        let text = if who.is_empty() { tl!(label).to_string() } else { format!("{who}: {}", tl!(label)) };
+                        ui.label(egui::RichText::new(text).font(theme::medium(11.5)).color(c));
                     });
                 }
             });

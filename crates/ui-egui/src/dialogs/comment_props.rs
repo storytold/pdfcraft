@@ -168,10 +168,12 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         .zip(app.comment_props.as_ref())
         .map(|(doc, d)| {
             let me = doc.info.annotations.iter().find(|a| a.page == d.page && a.index == d.index && !a.is_reply());
-            doc.info
-                .annotations
+            // Every state change set on it, including a reviewer's later ones, which reply to
+            // their earlier (ISO 32000-2 §12.5.6.3).
+            let states = pdfcraft_render::ReviewStates::new(&doc.info.annotations);
+            me.map(|a| states.history(a))
+                .unwrap_or_default()
                 .iter()
-                .filter(|r| r.state.is_some() && me.is_some_and(|a| r.replies_to(a)))
                 .map(|r| (r.state.clone().unwrap_or_default(), r.author.clone().unwrap_or_default(), r.modified.clone().unwrap_or_default()))
                 .collect()
         })
