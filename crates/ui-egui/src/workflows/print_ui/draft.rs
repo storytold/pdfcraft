@@ -33,6 +33,8 @@ pub struct PrintDraft {
     pub copies: u32,
     pub collate: bool,
     pub grayscale: bool,
+    /// Eco print mode: quickly enables grayscale and duplex (two-sided) printing to save ink and paper.
+    pub eco_mode: bool,
     /// `None` = the printer's own default (its Properties), as Acrobat does.
     pub duplex: Option<spool::Duplex>,
     pub which: Which,
@@ -96,6 +98,7 @@ impl Default for PrintDraft {
             copies: 1,
             collate: true,
             grayscale: false,
+            eco_mode: false,
             duplex: None,
             which: Which::All,
             range: String::new(),
