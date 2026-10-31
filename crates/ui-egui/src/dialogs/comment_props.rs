@@ -99,7 +99,7 @@ impl PdfCraftApp {
         let Some((_, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
         let Some(a) = doc.info.annotations.iter().find(|a| a.page == page && a.index == index && !a.is_reply()) else { return };
-        let Some(tool) = crate::comments::tool_for_default(a, p.endings.as_deref()) else { return };
+        let Some(tool) = crate::comments::tool_for_default(&doc.info.annotations, a, p.endings.as_deref()) else { return };
         let mut style = self.comment_prefs.style(tool);
         if let Some(c) = p.color {
             style.color = c;
@@ -180,7 +180,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         let (_, id) = app.active_ids()?;
         let doc = app.session.get(id)?;
         let a = doc.info.annotations.iter().find(|a| a.page == d.page && a.index == d.index && !a.is_reply())?;
-        crate::comments::tool_for_default(a, d.edited.endings.as_deref())
+        crate::comments::tool_for_default(&doc.info.annotations, a, d.edited.endings.as_deref())
     });
     let Some(d) = app.comment_props.as_mut() else { return (false, true) };
     let kind = tl!(crate::comments_panel::subtype_label(&d.edited.subtype)).to_string();
