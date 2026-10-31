@@ -2,11 +2,16 @@
 
 use egui::{Align2, Color32, CornerRadius, Rect, Response, Sense, Stroke, vec2};
 
+use crate::PdfCraftApp;
 use crate::theme::{self, Tokens};
-use crate::{PdfCraftApp, icons};
+
+pub(super) mod icon_data;
+pub mod icons;
 
 /// Horizontal and vertical inset of a single-line field.
 const FIELD_MARGIN: egui::Margin = egui::Margin::symmetric(10, 6);
+/// Where text starts inside a [`line`] or [`block`] field, so plain values beside fields can line up with it.
+pub(crate) const FIELD_TEXT_INSET: f32 = FIELD_MARGIN.left as f32;
 /// Outer height of a single-line field, including its inset.
 const FIELD_MIN_HEIGHT: f32 = 30.0;
 /// Padding inside every modal.
@@ -25,12 +30,12 @@ fn dialog_frame(ctx: &egui::Context) -> egui::Frame {
 
 /// A modal with the card fill, a 10-point corner and room around its contents.
 pub fn modal(ctx: &egui::Context, id: impl std::hash::Hash + std::fmt::Debug) -> egui::Modal {
-    egui::Modal::new(egui::Id::new(id)).frame(dialog_frame(ctx))
+    egui::Modal::new(egui::Id::unique(id)).frame(dialog_frame(ctx))
 }
 
 /// Show [`modal`], outline its controls, and remember the card rect for layout checks.
 pub fn show_modal<R>(ctx: &egui::Context, id: &str, content: impl FnOnce(&mut egui::Ui) -> R) -> egui::ModalResponse<R> {
-    let stored = egui::Id::new(id);
+    let stored = egui::Id::unique(id);
     modal(ctx, id).show(ctx, |ui| {
         begin_dialog(ui);
         let inner = content(ui);
@@ -109,7 +114,7 @@ pub fn mode_tab(ui: &mut egui::Ui, label: &str, active: bool) -> Response {
     let font = if active { theme::semibold(13.5) } else { theme::medium(13.5) };
     let w = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font.clone(), t.text).size().x);
     let (rect, resp) = ui.allocate_exact_size(vec2(w + 22.0, 48.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), active, label));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), active, label));
     let press = theme::Press::track(ui, &resp);
     let well = rect.shrink2(vec2(2.0, 9.0));
     if active {
@@ -138,21 +143,26 @@ pub fn pill_button(ui: &mut egui::Ui, label: &str, primary: bool) -> Response {
 pub fn pill_button_marked(ui: &mut egui::Ui, label: &str, primary: bool, marked: bool) -> Response {
     let t = Tokens::get(ui.ctx());
     let font = theme::medium(12.5);
-    let w = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font.clone(), t.text).size().x);
+    let text_color = if primary { Color32::WHITE } else { t.text };
+    // Dialog buttons are translated UI text: an explicit RTL base keeps an Arabic label right
+    // to left even when its first strong character is Latin or a placeholder.
+    let label_galley = crate::bidi::layout_ui(ui, label.to_owned(), font, text_color);
+    let w = label_galley.size().x;
     let (rect, resp) = ui.allocate_exact_size(vec2(w + 26.0, 28.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
     let press = theme::Press::track(ui, &resp);
-    let (fill, stroke, text) = if primary {
-        (press.fill(t.accent, t.accent_text, t.accent.lerp_to_gamma(Color32::BLACK, 0.22)), Stroke::NONE, Color32::WHITE)
+    let (fill, stroke) = if primary {
+        (press.fill(t.accent, t.accent_text, t.accent.lerp_to_gamma(Color32::BLACK, 0.22)), Stroke::NONE)
     } else {
-        (press.fill(t.card, t.hover, t.pressed), Stroke::new(1.0, t.border), t.text)
+        (press.fill(t.card, t.hover, t.pressed), Stroke::new(1.0, t.border))
     };
     ui.painter().rect(rect, CornerRadius::same(14), fill, stroke, egui::StrokeKind::Inside);
     if marked {
         resp.request_focus();
         ui.painter().rect_stroke(rect.expand(2.0), CornerRadius::same(16), Stroke::new(2.0, t.accent), egui::StrokeKind::Outside);
     }
-    ui.painter().text(rect.translate(press.offset()).center(), Align2::CENTER_CENTER, label, font, text);
+    let body = rect.translate(press.offset());
+    ui.painter().galley(body.center() - label_galley.size() / 2.0, label_galley, text_color);
     theme::hand(resp)
 }
 
@@ -165,14 +175,15 @@ pub fn ghost_button(ui: &mut egui::Ui, icon: &str, label: &str) -> Response {
 pub fn ghost_button_sized(ui: &mut egui::Ui, icon: &str, label: &str, height: f32) -> Response {
     let t = Tokens::get(ui.ctx());
     let font = theme::medium(13.0);
-    let w = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font.clone(), t.text).size().x);
+    let label_galley = crate::bidi::layout_ui(ui, label.to_owned(), font, t.text);
+    let w = label_galley.size().x;
     let (rect, resp) = ui.allocate_exact_size(vec2(w + 38.0, height), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
     let press = theme::Press::track(ui, &resp);
     press.wash(ui, rect, 6, false);
     let body = rect.translate(press.offset());
     icons::paint(ui, Rect::from_min_size(body.min + vec2(6.0, (height - 18.0) / 2.0), vec2(18.0, 18.0)), icon, 17.0, t.icon);
-    ui.painter().text(body.left_center() + vec2(30.0, 0.0), Align2::LEFT_CENTER, label, font, t.text);
+    ui.painter().galley(body.left_center() + vec2(30.0, -label_galley.size().y / 2.0), label_galley, t.text);
     theme::hand(resp)
 }
 
@@ -180,7 +191,7 @@ pub fn ghost_button_sized(ui: &mut egui::Ui, icon: &str, label: &str, height: f3
 pub fn search_box(ui: &mut egui::Ui, placeholder: &str, width: f32) -> Response {
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 32.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), placeholder));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), placeholder));
     let press = theme::Press::track(ui, &resp);
     let fill = press.fill(t.field, t.hover, t.pressed);
     let edge = t.border.lerp_to_gamma(t.text_muted, press.hover * 0.35);
@@ -195,6 +206,7 @@ pub fn search_box(ui: &mut egui::Ui, placeholder: &str, width: f32) -> Response 
     let text_left = (rect.left() + 34.0).min(text_right);
     let text_rect = Rect::from_min_max(egui::pos2(text_left, rect.top()), egui::pos2(text_right, rect.bottom()));
     let mut job = egui::text::LayoutJob::simple_singleline(placeholder.to_owned(), theme::regular(13.0), t.text_faint);
+    job.direction = crate::bidi::ui_direction();
     job.wrap = egui::text::TextWrapping { max_width: text_rect.width(), max_rows: 1, break_anywhere: true, ..Default::default() };
     let text = ui.fonts_mut(|f| f.layout_job(job));
     let elided = text.elided;
@@ -202,10 +214,6 @@ pub fn search_box(ui: &mut egui::Ui, placeholder: &str, width: f32) -> Response 
     ui.painter().with_clip_rect(rect).galley(shortcut_pos, shortcut, t.text_faint);
     let resp = resp.on_hover_cursor(egui::CursorIcon::Text);
     if elided { resp.on_hover_text(placeholder) } else { resp }
-}
-
-pub fn menu_item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> Response {
-    ui.add(egui::Button::new(label).shortcut_text(shortcut))
 }
 
 /// Corner radius of a checkbox's box. With the widgets' radius (`Tokens::radius`, 6) egui's 14 px
@@ -278,11 +286,20 @@ fn toggle<'a>(widget: impl egui::Widget + 'a, radius: Option<u8>) -> impl egui::
     }
 }
 
+/// Draw a panel section heading with explicit paragraph direction and letter spacing.
 pub fn section_title(ui: &mut egui::Ui, text: &str) {
     let t = Tokens::get(ui.ctx());
     ui.add_space(10.0);
     // Section titles across every panel go through here, so one translation point covers them.
-    ui.label(egui::RichText::new(crate::i18n::upper_label(text)).font(theme::semibold(10.5)).color(t.text_faint).extra_letter_spacing(0.6));
+    // The paragraph direction is explicit: an Arabic title beginning with Latin or a placeholder
+    // must not inherit a left-to-right base from its first strong character.
+    let mut job = egui::text::LayoutJob::simple(crate::i18n::upper_label(text), theme::semibold(10.5), t.text_faint, ui.available_width().max(0.0));
+    job.direction = crate::bidi::ui_direction();
+    if let Some(section) = job.sections.first_mut() {
+        section.format.extra_letter_spacing = 0.6;
+    }
+    let galley = ui.painter().layout_job(job);
+    ui.add(egui::Label::new(egui::WidgetText::Galley(galley)).selectable(false));
     ui.add_space(2.0);
 }
 
@@ -290,10 +307,33 @@ pub fn section_title(ui: &mut egui::Ui, text: &str) {
 /// at most `max_width` wide: a long file name or path stays inside its row (#425).
 pub fn row_text(ui: &egui::Ui, pos: egui::Pos2, text: impl Into<String>, font: egui::FontId, color: Color32, max_width: f32) {
     let mut job = egui::text::LayoutJob::simple_singleline(text.into(), font, color);
+    // A file name or path: an Arabic name keeps its extension at the visual end, as in the tab.
+    job.direction = egui::epaint::text::TextDirection::LeftToRight;
     job.wrap = egui::text::TextWrapping::truncate_at_width(max_width.max(0.0));
     let galley = ui.painter().layout_job(job);
     let rect = Align2::LEFT_CENTER.anchor_size(pos, galley.size());
     ui.painter().galley(rect.min, galley, color);
+}
+
+/// A wrapping label for a file name or folder path, laid out explicitly left to right so an
+/// Arabic name keeps `.pdf` at the end. The accessibility name is the logical text.
+pub fn label_ltr(ui: &mut egui::Ui, text: impl Into<String>, font: egui::FontId, color: Color32) -> Response {
+    let mut job = egui::text::LayoutJob::simple(text.into(), font, color, ui.available_width().max(0.0));
+    job.direction = egui::epaint::text::TextDirection::LeftToRight;
+    let galley = ui.painter().layout_job(job);
+    ui.add(egui::Label::new(egui::WidgetText::Galley(galley)).selectable(false))
+}
+
+/// [`label_ltr`] for one table row: the name is cut with an ellipsis instead of wrapping onto a
+/// second row. The logical text remains the accessibility name.
+pub fn label_ltr_truncated(ui: &mut egui::Ui, text: impl Into<String>, font: egui::FontId, color: Color32) -> Response {
+    let text = text.into();
+    let width = ui.available_width().max(0.0);
+    let mut job = egui::text::LayoutJob::simple_singleline(text, font, color);
+    job.direction = egui::epaint::text::TextDirection::LeftToRight;
+    job.wrap = egui::text::TextWrapping::truncate_at_width(width);
+    let galley = ui.painter().layout_job(job);
+    ui.add(egui::Label::new(egui::WidgetText::Galley(galley)).selectable(false))
 }
 
 /// Text wrapped to the available width, for text people write (comments, replies). A paragraph
@@ -310,11 +350,11 @@ pub fn wrapped_text(ui: &mut egui::Ui, text: &str, font: egui::FontId, color: Co
     }
     let width = ui.available_width().max(1.0);
     let lines = wrapped_lines(ui, text, &font, width, truncate);
-    let galleys: Vec<_> = lines.iter().map(|line| (line.rtl, ui.painter().layout_no_wrap(line.text.clone(), font.clone(), color))).collect();
+    let galleys: Vec<_> = lines.iter().map(|line| (line.rtl, wrapped_line_galley(ui, line, &font, color))).collect();
     let height = galleys.iter().map(|(_, g)| g.size().y).sum();
     let (rect, resp) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
     // Painted text only: the accessibility name keeps the logical order.
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text));
     let mut y = rect.top();
     for (rtl, galley) in galleys {
         let x = if rtl { rect.right() - galley.size().x } else { rect.left() };
@@ -323,6 +363,15 @@ pub fn wrapped_text(ui: &mut egui::Ui, text: &str, font: egui::FontId, color: Co
         y += h;
     }
     resp
+}
+
+/// One wrapped line laid out with its own paragraph direction. A line beginning with a Latin
+/// word inside a right-to-left comment is still part of that paragraph, so its base direction
+/// must stay right to left; `Auto` would follow the Latin word instead.
+fn wrapped_line_galley(ui: &egui::Ui, line: &crate::bidi::Line, font: &egui::FontId, color: Color32) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple_singleline(line.text.clone(), font.clone(), color);
+    job.direction = if line.rtl { egui::epaint::text::TextDirection::RightToLeft } else { egui::epaint::text::TextDirection::LeftToRight };
+    ui.painter().layout_job(job)
 }
 
 const ELLIPSIS: &str = "\u{2026}";
@@ -349,7 +398,7 @@ fn wrapped_lines(ui: &egui::Ui, text: &str, font: &egui::FontId, width: f32, tru
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     (text, font, width.to_bits(), ui.ctx().pixels_per_point().to_bits(), truncate).hash(&mut hasher);
     let key = hasher.finish();
-    let cache_id = egui::Id::new("pdfcraft-rtl-wrap-cache");
+    let cache_id = egui::Id::unique("pdfcraft-rtl-wrap-cache");
     if let Some(hit) = ui.ctx().data_mut(|d| d.get_temp_mut_or_default::<WrapCache>(cache_id).lines.get(&key).cloned()) {
         return hit;
     }
@@ -366,12 +415,9 @@ fn wrapped_lines(ui: &egui::Ui, text: &str, font: &egui::FontId, width: f32, tru
     if truncate && (lines.len() > 1 || cut) {
         lines.truncate(1);
         if let Some(line) = lines.first_mut() {
-            // The ellipsis goes where the line's reading ends: the left of a right-to-left line.
-            if line.rtl {
-                line.text.insert_str(0, ELLIPSIS);
-            } else {
-                line.text.push_str(ELLIPSIS);
-            }
+            // The ellipsis goes where the line's reading ends, in logical text: epaint places it
+            // on the left for a right-to-left line and on the right for a left-to-right one.
+            line.text.push_str(ELLIPSIS);
         }
     }
     let lines: std::sync::Arc<[crate::bidi::Line]> = lines.into();
@@ -387,20 +433,34 @@ fn wrapped_lines(ui: &egui::Ui, text: &str, font: &egui::FontId, width: f32, tru
 
 /// Transient message at the bottom centre.
 pub fn toast(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    // A form script message waiting its turn takes the toast once it is free.
+    if app.toast.is_none() {
+        app.toast_script = None;
+        // A left-out count whose toast was cleared before its time is said again.
+        app.script_messages_dropped = app.script_messages_dropped.saturating_add(std::mem::take(&mut app.toast_dropped));
+        app.next_script_message();
+    }
     let Some((msg, start)) = app.toast.clone() else { return };
     let now = ctx.input(|i| i.time);
     let start = if start == 0.0 { now } else { start };
     app.toast = Some((msg.clone(), start));
     if now - start > 3.5 {
         app.toast = None;
+        app.toast_script = None;
+        // Shown its time: a left-out count it said is done.
+        app.toast_dropped = 0;
+        if app.next_script_message() {
+            ctx.request_repaint();
+        }
         return;
     }
+    let script = app.toast_script.as_ref().map(|m| (m.title.clone(), crate::js_ui::message_icon(m.icon)));
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
     // Above the progress notice while a job runs.
-    let card = if app.progress_notice.is_some() { ctx.data(|d| d.get_temp::<f32>(egui::Id::new(PROGRESS_HEIGHT))).unwrap_or(0.0) } else { 0.0 };
+    let card = if app.progress_notice.is_some() { ctx.data(|d| d.get_temp::<f32>(egui::Id::unique(PROGRESS_HEIGHT))).unwrap_or(0.0) } else { 0.0 };
     let lift = if card > 0.0 { 28.0 + card + 10.0 } else { 28.0 };
-    egui::Area::new(egui::Id::new("toast"))
+    egui::Area::new(egui::Id::unique("toast"))
         .order(egui::Order::Tooltip)
         .pivot(Align2::CENTER_BOTTOM)
         .fixed_pos(screen.center_bottom() - vec2(0.0, lift))
@@ -415,10 +475,26 @@ pub fn toast(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     // Allow natural short labels; wrap longer ones within the viewport,
                     // including the frame's 32 points and 16-point outside margins.
                     ui.set_max_width((screen.width() - 64.0).clamp(1.0, 560.0));
-                    ui.add(
-                        egui::Label::new(egui::RichText::new(msg).color(if t.dark() { Color32::from_rgb(0x22, 0x22, 0x26) } else { Color32::WHITE }))
-                            .wrap(),
-                    );
+                    let ink = if t.dark() { Color32::from_rgb(0x22, 0x22, 0x26) } else { Color32::WHITE };
+                    let text = |ui: &mut egui::Ui| {
+                        ui.add(egui::Label::new(egui::RichText::new(msg).color(ink)).wrap());
+                    };
+                    match script {
+                        // A form script's message: its icon, then its title (when it gave one)
+                        // over its text.
+                        Some((title, icon)) => {
+                            ui.horizontal_top(|ui| {
+                                ui.add(icons::image(icon, 16.0, ink));
+                                ui.vertical(|ui| {
+                                    if let Some(title) = title {
+                                        ui.add(egui::Label::new(egui::RichText::new(title).strong().color(ink)).wrap());
+                                    }
+                                    text(ui);
+                                });
+                            });
+                        }
+                        None => text(ui),
+                    }
                 });
         });
     ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -453,10 +529,10 @@ pub fn progress_notice(app: &PdfCraftApp, ctx: &egui::Context) -> bool {
     };
     let fraction = if p.fraction.is_finite() { p.fraction.clamp(0.0, 1.0) } else { 0.0 };
     let animated = crate::motion::animated(ctx);
-    let shown = ctx.animate_value_with_time(egui::Id::new("progress-notice-bar"), fraction, if animated { 0.3 } else { 0.0 });
+    let shown = ctx.animate_value_with_time(egui::Id::unique("progress-notice-bar"), fraction, if animated { 0.3 } else { 0.0 });
     let now = ctx.input(|i| i.time);
     let mut cancel = false;
-    let area = egui::Area::new(egui::Id::new("progress-notice"))
+    let area = egui::Area::new(egui::Id::unique("progress-notice"))
         .order(egui::Order::Tooltip)
         .pivot(Align2::CENTER_BOTTOM)
         .fixed_pos(screen.center_bottom() - vec2(0.0, 28.0))
@@ -474,7 +550,7 @@ pub fn progress_notice(app: &PdfCraftApp, ctx: &egui::Context) -> bool {
                 let (track, resp) = ui.allocate_exact_size(vec2(width, 6.0), Sense::hover());
                 // The label above names the job; the bar carries the percentage.
                 resp.widget_info(|| {
-                    let mut info = egui::WidgetInfo::new(egui::WidgetType::ProgressIndicator);
+                    let mut info = egui::WidgetInfo::new(egui::Role::ProgressIndicator);
                     info.value = Some(f64::from(fraction) * 100.0);
                     info
                 });
@@ -504,7 +580,7 @@ pub fn progress_notice(app: &PdfCraftApp, ctx: &egui::Context) -> bool {
                 }
             });
         });
-    ctx.data_mut(|d| d.insert_temp(egui::Id::new(PROGRESS_HEIGHT), area.response.rect.height()));
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique(PROGRESS_HEIGHT), area.response.rect.height()));
     ctx.request_repaint_after(std::time::Duration::from_millis(33));
     cancel
 }
@@ -553,10 +629,10 @@ pub fn split_pill(ui: &mut egui::Ui, icon: &str, label: &str, more: &str) -> (Re
     let w = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font.clone(), t.text).size().x);
     let (rect, _) = ui.allocate_exact_size(vec2(w + 46.0 + 28.0, 30.0), Sense::hover());
     let (main_rect, more_rect) = rect.split_left_right_at_x(rect.right() - 28.0);
-    let main = ui.interact(main_rect, ui.id().with(("split-pill", label)), Sense::click());
-    let arrow = ui.interact(more_rect, ui.id().with(("split-pill-more", label)), Sense::click());
-    main.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
-    arrow.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), more));
+    let main = ui.interact(main_rect, ui.scope_id().with(("split-pill", label)), Sense::click());
+    let arrow = ui.interact(more_rect, ui.scope_id().with(("split-pill-more", label)), Sense::click());
+    main.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
+    arrow.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), more));
     let radius = CornerRadius::same(15);
     ui.painter().rect(rect, radius, t.card, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
     let left = CornerRadius { nw: 15, sw: 15, ne: 0, se: 0 };
@@ -584,7 +660,7 @@ pub fn icon_pill(ui: &mut egui::Ui, icon: &str, label: &str, primary: bool) -> R
     let font = theme::medium(12.5);
     let w = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font.clone(), t.text).size().x);
     let (rect, resp) = ui.allocate_exact_size(vec2(w + 46.0, 30.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
     let press = theme::Press::track(ui, &resp);
     let (fill, stroke, text) = if primary {
         (press.fill(t.accent, t.accent_text, t.accent.lerp_to_gamma(Color32::BLACK, 0.22)), Stroke::NONE, Color32::WHITE)
@@ -708,7 +784,7 @@ mod tests {
             );
             output.drop_without_applying_deltas();
         }
-        ctx.memory(|memory| memory.area_rect(egui::Id::new("toast")).unwrap())
+        ctx.memory(|memory| memory.area_rect(egui::Id::unique("toast")).unwrap())
     }
 
     #[test]
@@ -759,7 +835,7 @@ mod tests {
         let ctx = egui::Context::default();
         ctx.set_fonts(theme::font_definitions());
         let cache_len =
-            |ctx: &egui::Context| ctx.data_mut(|d| d.get_temp_mut_or_default::<WrapCache>(egui::Id::new("pdfcraft-rtl-wrap-cache")).lines.len());
+            |ctx: &egui::Context| ctx.data_mut(|d| d.get_temp_mut_or_default::<WrapCache>(egui::Id::unique("pdfcraft-rtl-wrap-cache")).lines.len());
         let persian = "این یک نظر طولانی به زبان فارسی است که باید در چند خط شکسته شود";
         let long = persian.repeat(2_000);
         let mut first = None;
@@ -773,7 +849,7 @@ mod tests {
                 first = Some(lines);
                 let collapsed = wrapped_lines(ui, &long, &theme::regular(13.0), 120.0, true);
                 assert_eq!(collapsed.len(), 1);
-                assert!(collapsed[0].text.starts_with(ELLIPSIS), "{:?}", collapsed[0].text);
+                assert!(collapsed[0].text.ends_with(ELLIPSIS), "{:?}", collapsed[0].text);
             })
             .drop_without_applying_deltas();
         }
@@ -787,6 +863,61 @@ mod tests {
         assert!(cache_len(&ctx) <= WRAP_CACHE_MAX, "bounded: {}", cache_len(&ctx));
     }
 
+    /// Comment lines reach epaint in logical order. A mixed Persian/Latin comment preordered by
+    /// `bidi::wrap` would be reordered a second time by egui 0.37; the old display-order text is
+    /// distinctly different, so this fails if the preordering comes back.
+    #[test]
+    fn rtl_comment_lines_stay_logical_for_epaint() {
+        let mixed = "این نظر PDF درباره فایل است";
+        let ctx = egui::Context::default();
+        ctx.set_fonts(theme::font_definitions());
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            let lines = wrapped_lines(ui, mixed, &theme::regular(13.0), 1000.0, false);
+            assert_eq!(lines.len(), 1);
+            assert_eq!(lines[0].text, mixed, "epaint needs reading order, not display order");
+            assert!(lines[0].rtl);
+            // Truncation appends the ellipsis logically; the line still starts with its first word.
+            let cut = wrapped_lines(ui, mixed, &theme::regular(13.0), 60.0, true);
+            assert_eq!(cut.len(), 1);
+            assert!(cut[0].text.starts_with("این"), "{:?}", cut[0].text);
+            assert!(cut[0].text.ends_with(ELLIPSIS), "{:?}", cut[0].text);
+            // The galley keeps logical text, so inspect positioned glyphs to prove that the
+            // visible ellipsis is at the left-hand reading end after epaint's bidi layout.
+            let galley = ui.painter().layout_no_wrap(cut[0].text.clone(), theme::regular(13.0), Color32::WHITE);
+            let row = &galley.rows[0];
+            let ellipsis_x = row.glyphs.iter().find(|glyph| glyph.chr == '\u{2026}').expect("ellipsis glyph").pos.x;
+            assert!(
+                row.glyphs.iter().filter(|glyph| glyph.chr != '\u{2026}' && !glyph.chr.is_whitespace()).all(|glyph| glyph.pos.x > ellipsis_x),
+                "RTL truncation must place the ellipsis to the left: {:?}",
+                row.glyphs
+            );
+        })
+        .drop_without_applying_deltas();
+    }
+
+    /// A wrapped line keeps its paragraph's direction. The second line here starts with a
+    /// Latin word, but belongs to a right-to-left comment: `Auto` would shape it left to right
+    /// and put `PDF` at the visual left. Assert the actual painted positions instead.
+    #[test]
+    fn wrapped_rtl_line_starting_with_latin_keeps_its_rtl_base() {
+        if pdfcraft_fonts::ui_arabic_fonts().is_empty() {
+            return;
+        }
+        let ctx = egui::Context::default();
+        ctx.set_fonts(theme::font_definitions());
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            let line = crate::bidi::Line { text: "PDF درباره فایل است".to_owned(), rtl: true };
+            let galley = wrapped_line_galley(ui, &line, &theme::regular(13.0), Color32::WHITE);
+            assert_eq!(galley.job.direction, egui::epaint::text::TextDirection::RightToLeft);
+            let positions: Vec<_> = galley.rows.iter().flat_map(|row| row.glyphs.iter().map(|g| (g.chr, g.pos.x))).collect();
+            let p = positions.iter().find(|(c, _)| *c == 'P').map(|(_, x)| *x).expect("a Latin P");
+            let rightmost_arabic = positions.iter().filter(|(c, _)| crate::bidi::has_rtl(&c.to_string())).map(|(_, x)| *x).fold(f32::MIN, f32::max);
+            assert!(p > rightmost_arabic, "the line stays right to left: {positions:?}");
+        })
+        .drop_without_applying_deltas();
+    }
+
+    /// Check right-aligned wrapping and a single collapsed line whose logical text ends with an ellipsis.
     #[test]
     fn rtl_comment_wraps_against_the_right_edge() {
         let persian = "این یک نظر طولانی به زبان فارسی است که باید در چند خط شکسته شود";
@@ -803,7 +934,7 @@ mod tests {
         // Collapsed: one line, its ellipsis on the left where right-to-left reading ends.
         let collapsed = wrapped_shapes(persian, true);
         assert_eq!(collapsed.len(), 1);
-        assert!(collapsed[0].2.starts_with('\u{2026}'), "{collapsed:?}");
+        assert!(collapsed[0].2.ends_with('\u{2026}'), "the galley retains logical text: {collapsed:?}");
         // Text without right-to-left script is a plain label, as before.
         let latin = wrapped_shapes("A short note", false);
         assert_eq!(latin.len(), 1);

@@ -182,6 +182,15 @@
 	Available	Доступно
 	Ready	Готово
 	Search tools and commands…	Пошук інструментів і команд…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Доданий текст
+	Link URL	URL-адреса посилання
+	Search tools and commands	Пошук інструментів і команд
+	Text editing line	Рядок редагування тексту
+	Text to place	Текст для розміщення
+	Tooltip	Підказка
+	Words or phrases to redact	Слова або фрази для вилучення
 	No matching tools	Відповідних інструментів немає
 	Tool	Інструмент
 	Command	Команда
@@ -543,6 +552,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Читає {names}, які своєю чергою читають його. Жоден порядок не виправить цикл: змініть одну з формул.
 	Not in order	Поза порядком
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Відсутнє в порядку обчислень, збереженому в PDF: інші переглядачі PDF можуть його не обчислювати.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Читає {name}, якого немає у формі, тому не отримує звідти значення.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Його сценарій також читає поля, імена яких складає під час виконання, тому ці читання неможливо перевірити.
+	Missing field	Немає поля
+	Unchecked reads	Неперевірені читання
+	{field} reads fields named as it runs	{field} читає поля, імена яких задаються під час виконання
+	Some names are built as it runs	Деякі імена складаються під час виконання
 	Back to Prepare a form	Назад до «Підготувати форму»
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Жодне поле цієї форми поки не обчислює своє значення. Задайте полю обчислення на вкладці «Обчислення» його властивостей, і воно з’явиться тут.
 	{names} and {last}	{names} і {last}
@@ -599,6 +614,9 @@
 	Clean Up	Очищення
 	Color Images	Кольорові зображення
 	Grayscale Images	Зображення у відтінках сірого
+	Monochrome Images	Монохромні зображення
+	CCITT Group 4	CCITT група 4
+	JBIG2 (lossless)	JBIG2 (без втрат)
 	Bicubic downsampling to	Бікубічне зниження роздільної здатності до
 	for images above	для зображень із роздільною здатністю понад
 	Compression	Стиснення
@@ -622,6 +640,7 @@
 	Discard private data of other applications	Видалити приватні дані інших застосунків
 	Discard hidden text	Видалити прихований текст
 	Use Flate to encode streams that are not encoded	Кодувати незакодовані потоки за допомогою Flate
+	In streams that use LZW encoding, use Flate instead	Використовувати Flate замість LZW у потоках із кодуванням LZW
 	Remove invalid links and bookmarks	Видалити недійсні посилання й закладки
 	Remove unreferenced named destinations	Видалити іменовані призначення без посилань
 	Compress document structure (object streams)	Стиснути структуру документа (потоки об’єктів)
@@ -815,14 +834,9 @@
 	Copy Image in Original Format	Копіювати зображення в оригінальному форматі
 	The image has been copied as a {ext} file	Зображення скопійовано як файл {ext}
 	The page has changed; select the image again	Сторінка змінилася; виберіть зображення ще раз
-	Check for updates	Перевірити оновлення
 	No check has run yet.	Перевірку ще не виконано.
-	Checking for a newer version…	Перевірка наявності новішої версії…
 	PdfCraft {v} is available.	Доступна версія PdfCraft {v}.
 	You have version {c}. Download the new version from its release page.	У вас версія {c}. Завантажте нову версію зі сторінки випуску.
-	PdfCraft {c} is up to date.	Ваша версія PdfCraft {c} актуальна.
-	Couldn't check for updates: {e}	Не вдалося перевірити оновлення: {e}
-	You have version {c}. All releases are listed at {page}.	У вас версія {c}. Усі випуски наведено на {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Запитує в GitHub найновіший випуск. Нічого не завантажується й не встановлюється автоматично.
 	Download	Завантажити
 	Later	Пізніше
@@ -867,6 +881,14 @@
 	Applies to 1 page	Застосовується до 1 сторінки
 	Applies to {n} pages	Застосовується до {n} сторінок
 	Replaces the existing one on those pages.	Замінює наявний елемент на цих сторінках.
+	Checking pages…	Перевірка сторінок…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Сторінка з власною білою заливкою, яка приховає тло: {pages}. Замінити
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Сторінки з власною білою заливкою, яка приховає тло: {pages}. Замінити
+	Removing the background puts the page's own backdrop back.	Вилучення тла повертає власну білу заливку сторінки.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Сторінка, закрита зображенням (скан?): {pages}; тло там не буде видно.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Сторінки, закриті зображеннями (скани?): {pages}; тло там не буде видно.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Сторінка змінена після додавання тла, тому її власна біла заливка залишається вимкненою: {pages}. На білому папері вона виглядає так само.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Сторінки змінені після додавання тла, тому їхні власні білі заливки залишаються вимкненими: {pages}. На білому папері вони виглядають так само.
 	PDF or image	PDF або зображення
 	No file chosen	Файл не вибрано
 	Page number	Номер сторінки
@@ -2051,6 +2073,10 @@
 	Perimeter	Периметр
 	Area	Площа
 	Drawing scale	Масштаб креслення
+	Scale	Масштаб
+	Common scales	Поширені масштаби
+	Enter a scale such as 1:50.	Введіть масштаб, наприклад 1:50.
+	Applying a scale switches units to m / mm.	Застосування масштабу перемикає одиниці на м / мм.
 	Snapping	Прив’язування
 	Export measurements	Експортувати вимірювання
 	Open a PDF to measure it.	Відкрийте PDF для вимірювання.
@@ -2204,6 +2230,7 @@ calendar date	October	жовтня
 calendar date	November	листопада
 calendar date	December	грудня
 	Reopen the files that were open when PdfCraft last closed	Знову відкривати файли, які були відкриті під час останнього закриття PdfCraft
+	Restore the last view (page, zoom and page display) when a document is opened again	Відновлювати останній вигляд (сторінку, масштаб і показ сторінок) під час повторного відкриття документа
 	Clear Recent Files	Очистити список нещодавніх файлів
 	Remove from Recent	Вилучити з нещодавніх
 	Remove {name} from Recent	Вилучити {name} з нещодавніх
@@ -2354,6 +2381,8 @@ key	Space	Пробіл
 	Printer paper and scaling may differ. Check driver settings.	Папір і масштаб принтера можуть відрізнятися. Перевірте налаштування драйвера.
 	Drawing scale changes. Use Actual size for full-scale plans.	Масштаб креслення змінюється. Для друку в початковому масштабі виберіть Фактичний розмір.
 	Reload documents when their files change on disk	Перезавантажувати документи, коли їхні файли змінюються на диску
+	Don't show again	Більше не показувати
+	Show a notice when a document is secured	Показувати сповіщення, коли документ захищено
 	Always use my default zoom and page layout	Завжди використовувати мій типовий масштаб і макет сторінок
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Цей файл змінено на диску. «Перезавантажити» покаже нову версію й відкине незбережені зміни; «Зберегти» замінить її цією версією.
 	Reload	Перезавантажити
@@ -2423,6 +2452,11 @@ animation effects	Off	Вимкнено
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} обчислюється раніше за {fields}, яке воно читає.|{field} обчислюється раніше за {fields}, які воно читає.|{field} обчислюється раніше за {fields}, які воно читає.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	Ще {n} поле обчислюється зарано.|Ще {n} поля обчислюються зарано.|Ще {n} полів обчислюються зарано.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} немає в порядку, збереженому в PDF, тож інші переглядачі PDF можуть його не обчислити.|{fields} немає в порядку, збереженому в PDF, тож інші переглядачі PDF можуть їх не обчислити.|{fields} немає в порядку, збереженому в PDF, тож інші переглядачі PDF можуть їх не обчислити.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} формула читає поле, якого немає у формі|{n} формули читають поля, яких немає у формі|{n} формул читають поля, яких немає у формі
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} читає {fields}, якого немає у формі.|{field} читає {fields}, яких немає у формі.|{field} читає {fields}, яких немає у формі.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	Ще {n} формула читає відсутнє поле.|Ще {n} формули читають відсутні поля.|Ще {n} формул читають відсутні поля.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} складає деякі імена полів під час виконання, тому ці читання не перевіряються.|{fields} складають деякі імена полів під час виконання, тому ці читання не перевіряються.|{fields} складають деякі імена полів під час виконання, тому ці читання не перевіряються.
+@plural	{fields} is missing|{fields} are missing	Немає {fields}|Немає {fields}|Немає {fields}
 	Scan	Сканувати
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Розпишіться на аркуші білого паперу та сфотографуйте його за яскравого рівномірного освітлення (зі спалахом). Виберіть фото або перетягніть його сюди: PdfCraft знайде підпис і прибере папір.
 	Choose photo…	Вибрати фото…
@@ -2516,6 +2550,19 @@ animation effects	Off	Вимкнено
 	Make properties default	Зробити властивості типовими
 	Pages selected	Вибрані сторінки
 	Page properties	Властивості сторінки
+	Create & Edit	Створення й редагування
+	Review & Compare	Рецензування й порівняння
+	Forms & Signatures	Форми й підписи
+	Protect & Standardize	Захист і стандартизація
+	Customize & Automate	Налаштування й автоматизація
+	No tools match your search.	Немає інструментів, що відповідають пошуку.
+	Expand all tools	Розгорнути всі інструменти
+	Collapse all tools	Згорнути всі інструменти
+	Attach a file…	Прикріпити файл…
+	Delete attachment	Видалити вкладення
+	Attaching files is not available on the web yet	Прикріплення файлів у веб-версії поки недоступне
+	Attach {name}	Прикріпити {name}
+	Delete attachment {key}	Видалити вкладення {key}
 	Font	Шрифт
 	Bulleted list	Маркований список
 	Numbered list	Нумерований список
@@ -2550,3 +2597,19 @@ animation effects	Off	Вимкнено
 	field names can't contain a period: {name}	імена полів не можуть містити крапку: {name}
 	two cells would both be named {name}	дві клітинки мали б однакове ім'я {name}
 	a field named {name} already exists	поле з іменем {name} уже існує
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Сьогодні
+@plural	{n} reply|{n} replies	{n} відповідь|{n} відповіді|{n} відповідей
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Інструменти сторінок
+	Insert pages from a file after the selection…	Вставити сторінки з файлу після виділення…
+	Rotate the selected pages counterclockwise	Повернути вибрані сторінки проти годинникової стрілки
+	Rotate the selected pages clockwise	Повернути вибрані сторінки за годинниковою стрілкою
+	Extract the selected pages…	Витягнути вибрані сторінки…
+	Delete the selected pages	Видалити вибрані сторінки
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Параметри цієї відповіді
+	Export value	Значення експорту

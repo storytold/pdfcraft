@@ -659,6 +659,18 @@ fn pdfx1a_is_cmyk_gray_and_spot_only() {
             vec![],
         ));
         clean(&with("/XObject << /Im0 11 0 R >>".into(), "/Im0 Do", vec![image("/DeviceGray")]));
+        // A chain deeper than the walk follows (here a spot colour whose alternate is itself) is
+        // reported rather than passed: what it draws in isn't known.
+        let found = only(
+            &with(
+                "/ColorSpace << /CS0 11 0 R >>".into(),
+                "/CS0 cs 1 scn 0 0 1 1 re f",
+                vec![format!("[/Separation /Orange 11 0 R {tint}]").into_bytes()],
+            ),
+            "pdfx.colour",
+            "A colour space is nested too deeply for the spaces under it to be checked",
+        );
+        assert_eq!((found.page, found.object), (Some(0), Some(3)));
     }
 }
 

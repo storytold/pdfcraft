@@ -152,6 +152,7 @@ fn tools_that_read_a_path_are_held_to_the_read_root() {
         ("doc_create_multiple", json!({"paths": [secret], "mode": "combine", "out": out})),
         ("doc_create", json!({"from": "images", "paths": [pic]})),
         ("stamp_custom", json!({"doc": 1, "page": 1, "path": secret, "at": [10, 10]})),
+        ("stamp_custom", json!({"doc": 1, "page": 1, "path": secret, "rect": [10, 10, 493, 300]})),
         ("page_add_image", json!({"doc": 1, "page": 1, "path": pic})),
         ("image_edit", json!({"doc": 1, "page": 1, "image": 1, "action": "replace", "path": pic})),
         ("comment_add", json!({"doc": 1, "page": 1, "type": "attachment", "at": [10, 10], "path": secret})),
@@ -349,6 +350,19 @@ fn links_out_of_a_root_are_refused() {
     refused(&mut server, "doc_save", json!({"doc": 1, "path": s(&base.join("out/away/deeper/doc.pdf"))}), "outside the write root");
     refused(&mut server, "doc_save", json!({"doc": 1, "path": s(&base.join("out/dangling.pdf"))}), "a link that leads nowhere");
     assert_eq!(names(&base.join("outside")), ["pic.png", "secret.pdf"]);
+}
+
+/// #4003: without `--root`, another network share or a device is refused by name through the
+/// tools too, with the same words as any other path outside a root.
+#[cfg(windows)]
+#[test]
+fn other_shares_and_devices_are_refused_by_name() {
+    let (mut server, base) = confined("shares", true, true);
+    ok(&mut server, "doc_open", json!({"path": s(&base.join("in/a.pdf"))}));
+    for p in [r"\\.\pipe\pdfcraft-4003.pdf", r"\\pdfcraft-no-such-host.invalid\share\a.pdf", "//pdfcraft-no-such-host.invalid/share/a.pdf"] {
+        refused(&mut server, "doc_open", json!({"path": p}), "outside the read root");
+        refused(&mut server, "doc_save", json!({"doc": 1, "path": p}), "outside the write root");
+    }
 }
 
 #[test]
