@@ -15,7 +15,7 @@ pub fn printer_options(printer: &str) -> Vec<PrinterOption> {
 
 /// [`printer_options`] with the driver's own names in `lang` (a UI language code such as `bg`,
 /// `pt-br` or `zh-hans`) where its PPD has them (`*bg.Translation`, `*bg.InputSlot Tray2/…`);
-/// the driver's default names otherwise.
+/// the driver's default names otherwise. On non-CUPS platforms, `lang` is ignored.
 pub fn printer_options_in(printer: &str, lang: &str) -> Vec<PrinterOption> {
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     {
@@ -34,32 +34,53 @@ pub fn printer_options_in(printer: &str, lang: &str) -> Vec<PrinterOption> {
 const LPOPTIONS_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// The most of a command's output that is kept (`lpoptions -l` is a few kilobytes).
+// Gated with `test` as well as unix: `output_within` is compiled in test builds on every
+// platform, and it needs this constant. Without it, cross-platform test builds fail to compile.
 #[cfg(any(test, all(unix, not(target_arch = "wasm32"))))]
 const OUTPUT_CAP: u64 = 4 << 20;
+
+/// How long to wait for the output reader after the command itself has exited. A descendant may
+/// have inherited stdout and kept the pipe open; do not spend the command's remaining time waiting
+/// for that descendant to close it.
+// Gated with `test` as well as unix, for the same reason as `OUTPUT_CAP`: `output_within`
+// needs it, and that function is compiled in test builds on every platform.
+#[cfg(any(test, all(unix, not(target_arch = "wasm32"))))]
+const OUTPUT_GRACE: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Maximum PPD size read from the system spooler's PPD directory.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+const PPD_CAP: u64 = 16 << 20;
 
 /// Run `command` and collect its standard output, giving it `limit`: a command still running
 /// then is killed and reaped, and the error is `TimedOut`. Standard input and error are not
 /// connected. The exit status is not checked, as `Command::output` leaves it to the caller.
-/// Only CUPS runs a command today; the tests cover every desktop platform.
+// Gated with `test` as well as unix so it compiles under test on every platform. This is
+// necessary for cross-platform compiling: only CUPS runs a command today, but test builds on
+// Windows and other targets must still build. The `allow` covers non-unix test builds, where
+// nothing calls it because the tests that do are unix-only.
 #[cfg(any(test, all(unix, not(target_arch = "wasm32"))))]
+#[cfg_attr(not(all(unix, not(target_arch = "wasm32"))), allow(dead_code))]
 pub(crate) fn output_within(command: &mut std::process::Command, limit: std::time::Duration) -> std::io::Result<Vec<u8>> {
     use std::io::Read as _;
     use std::process::Stdio;
+
     let mut child = command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;
     let stop = |child: &mut std::process::Child| {
         let _ = child.kill();
         let _ = child.wait();
     };
+
     let Some(mut stdout) = child.stdout.take() else {
         stop(&mut child);
         return Err(std::io::Error::other("the command's output could not be read"));
     };
+
     // Read on a thread of its own, so a full pipe never holds the command while the deadline is
     // kept here. Past the cap the rest is drained and dropped, so the command still finishes.
     // The output comes back over a channel rather than through `join`: a process the command
-    // started can keep the pipe open after the command itself has exited or been killed, and
-    // the wait for the output must end at the deadline too. Such a reader is left to finish on
-    // its own when that process closes the pipe.
+    // started can keep the pipe open after the command itself has exited or been killed. The
+    // caller waits only for a bounded time; a reader blocked on an inherited pipe is left to
+    // finish on its own when that process eventually closes the pipe.
     let (tx, rx) = std::sync::mpsc::channel();
     let reader = std::thread::Builder::new().name("command output".into()).spawn(move || {
         let mut out = Vec::new();
@@ -67,20 +88,28 @@ pub(crate) fn output_within(command: &mut std::process::Command, limit: std::tim
         let _ = std::io::copy(&mut stdout, &mut std::io::sink());
         let _ = tx.send(read.map(|_| out));
     });
-    if let Err(e) = reader {
+    if let Err(error) = reader {
         stop(&mut child);
-        return Err(e);
+        return Err(error);
     }
-    let timed_out = || std::io::Error::new(std::io::ErrorKind::TimedOut, format!("the command did not answer within {limit:?}"));
+
+    let timed_out = || std::io::Error::new(std::io::ErrorKind::TimedOut, format!("{:?} did not answer within {limit:?}", command.get_program()));
+    let output_uncollected = || {
+        std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            format!("{:?} finished but its output was not closed within {OUTPUT_GRACE:?}", command.get_program()),
+        )
+    };
     let deadline = std::time::Instant::now() + limit;
+
     loop {
         match child.try_wait() {
             Ok(Some(_)) => {
-                // A moment's grace, so output written just before an exit at the deadline counts.
-                let left = deadline.saturating_duration_since(std::time::Instant::now()).max(std::time::Duration::from_millis(100));
-                return match rx.recv_timeout(left) {
+                // Once the child exits, allow only a short grace for its output to be collected.
+                // A descendant that inherited stdout must not extend this to the full deadline.
+                return match rx.recv_timeout(OUTPUT_GRACE) {
                     Ok(read) => read,
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(timed_out()),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(output_uncollected()),
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(std::io::Error::other("the command's output was lost")),
                 };
             }
@@ -89,9 +118,9 @@ pub(crate) fn output_within(command: &mut std::process::Command, limit: std::tim
                 return Err(timed_out());
             }
             Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
-            Err(e) => {
+            Err(error) => {
                 stop(&mut child);
-                return Err(e);
+                return Err(error);
             }
         }
     }
@@ -109,52 +138,65 @@ pub(crate) fn printer_options_via_within(
     limit: std::time::Duration,
     lang: &str,
 ) -> Vec<PrinterOption> {
-    let (queue, instance) = printer.split_once('/').map_or((printer, None), |(q, i)| (q, Some(i)));
-    // Retain the conservative name checks, applied to each component. Neither component is
-    // a path: reject dot components, backslashes and any additional separator before I/O.
-    let valid = |name: &str| {
-        !name.is_empty()
-            && name.len() <= 64
-            && !matches!(name, "." | "..")
-            && name.bytes().all(|b| b.is_ascii_graphic() && !matches!(b, b'/' | b'\\' | b':' | b'=' | b'"'))
-    };
-    if !valid(queue) || instance.is_some_and(|name| !valid(name)) {
+    let (queue, instance) = printer.split_once('/').map_or((printer, None), |(queue, instance)| (queue, Some(instance)));
+    if !valid_destination(queue) || instance.is_some_and(|name| !valid_destination(name)) {
         return Vec::new();
     }
-    const PPD_CAP: u64 = 16 << 20;
-    let ppd = std::fs::File::open(ppd_dir.join(format!("{queue}.ppd"))).ok().and_then(|f| {
-        use std::io::Read as _;
-        let mut bytes = Vec::new();
-        f.take(PPD_CAP).read_to_end(&mut bytes).ok().map(|_| bytes)
-    });
-    let mut options = ppd.as_deref().map(|b| parse_ppd(&ppd_text(b))).unwrap_or_default();
-    if let Some(b) = &ppd {
-        localize(&mut options, b, lang);
+
+    let ppd = read_ppd(&ppd_dir.join(format!("{queue}.ppd")));
+    let mut options = ppd.as_deref().map(|bytes| parse_ppd(&ppd_text(bytes))).unwrap_or_default();
+    if let Some(bytes) = &ppd {
+        localize(&mut options, bytes, lang);
     }
-    let current =
-        output_within(lpoptions.args(["-p", printer, "-l"]), limit).map(|out| parse_lpoptions(&String::from_utf8_lossy(&out))).unwrap_or_default();
+
+    let current = output_within(lpoptions.args(["-p", printer, "-l"]), limit)
+        .map(|output| parse_lpoptions(&String::from_utf8_lossy(&output)))
+        .unwrap_or_default();
+    // `lpoptions -l` returns a few dozen lines at most; linear lookup avoids building an index.
     for (key, value) in current {
-        if let Some(o) = options.iter_mut().find(|o| o.key == key)
-            && o.choices.iter().any(|(c, _)| *c == value)
+        if let Some(option) = options.iter_mut().find(|option| option.key == key)
+            && option.choices.iter().any(|(choice, _)| *choice == value)
         {
-            o.default = value;
+            option.default = value;
         }
     }
+
     options
 }
 
+/// A CUPS queue or instance name, not a path or an `lpoptions` assignment.
+/// Keep the accepted alphabet conservative before using the queue name in a PPD path.
+#[cfg(any(test, all(unix, not(target_arch = "wasm32"))))]
+fn valid_destination(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && !matches!(name, "." | "..")
+        && name.bytes().all(|byte| byte.is_ascii_graphic() && !matches!(byte, b'/' | b'\\' | b':' | b'=' | b'"'))
+}
+
+/// Read a PPD without allowing a broken or unexpectedly large file to consume unbounded memory.
+/// A file at or beyond `PPD_CAP` is truncated mid-line; `parse_ppd` drops any trailing partial directive.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn read_ppd(path: &std::path::Path) -> Option<Vec<u8>> {
+    use std::io::Read as _;
+
+    let mut bytes = Vec::new();
+    std::fs::File::open(path).ok()?.take(PPD_CAP).read_to_end(&mut bytes).ok()?;
+    Some(bytes)
+}
+
 pub fn submit(pdf: &[u8], job: &Job) -> Result<String, crate::PrintError> {
-    craft_print::submit(pdf, job).map_err(|e| crate::PrintError::Spool(e.to_string()))
+    craft_print::submit(pdf, job).map_err(|error| crate::PrintError::Spool(error.to_string()))
 }
 
 /// [`submit`], told `(sent, sheets)` as each sheet reaches the spooler (Windows; CUPS takes the
 /// whole PDF at once and reports nothing).
 pub fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize, usize)) -> Result<String, crate::PrintError> {
-    craft_print::submit_with_progress(pdf, job, progress).map_err(|e| crate::PrintError::Spool(e.to_string()))
+    craft_print::submit_with_progress(pdf, job, progress).map_err(|error| crate::PrintError::Spool(error.to_string()))
 }
 
 pub fn open_printer_preferences(printer: &str) -> Result<(), crate::PrintError> {
-    craft_print::open_printer_preferences(printer).map_err(|e| crate::PrintError::Spool(e.to_string()))
+    craft_print::open_printer_preferences(printer).map_err(|error| crate::PrintError::Spool(error.to_string()))
 }
 
 /// The PPD language codes (`*cupsLanguages`, the `ll` of `*ll.Translation`) to try for a UI
@@ -163,74 +205,271 @@ pub fn open_printer_preferences(printer: &str) -> Result<(), crate::PrintError> 
 #[cfg_attr(not(all(unix, not(target_arch = "wasm32"))), allow(dead_code))]
 fn ppd_languages(lang: &str) -> Vec<String> {
     let lang = lang.to_ascii_lowercase();
-    let mut parts = lang.split(['-', '_']).filter(|p| !p.is_empty());
-    let Some(primary) = parts.next() else { return Vec::new() };
+    let mut parts = lang.split(['-', '_']).filter(|part| !part.is_empty());
+    let Some(primary) = parts.next() else {
+        return Vec::new();
+    };
+
     let region = match (primary, parts.next()) {
         ("zh", Some("hans")) => Some("CN".to_string()),
         ("zh", Some("hant")) => Some("TW".to_string()),
-        (_, Some(r)) if r.len() == 2 => Some(r.to_ascii_uppercase()),
+        (_, Some(region)) if region.len() == 2 => Some(region.to_ascii_uppercase()),
         _ => None,
     };
-    region.map(|r| format!("{primary}_{r}")).into_iter().chain(std::iter::once(primary.to_string())).collect()
+
+    let mut languages = Vec::with_capacity(2);
+    if let Some(region) = region {
+        languages.push(format!("{primary}_{region}"));
+    }
+    languages.push(primary.to_string());
+    languages
+}
+
+/// Parse the `keyword/label: value` part of an `OpenGroup` line into `(label, keyword)`. The
+/// final colon separates the directive header from its value; `rsplit_once` also permits colons
+/// inside the label.
+#[cfg_attr(not(all(unix, not(target_arch = "wasm32"))), allow(dead_code))]
+fn parse_open_group(spec: &str) -> Option<(String, String)> {
+    let head = spec.rsplit_once(':').map_or(spec, |(head, _)| head).trim();
+    let (key, label) = head.split_once('/')?;
+    Some((label.trim().to_string(), key.trim().to_string()))
 }
 
 /// Give `options` the driver's own names in `lang` from the PPD's localization lines
 /// (`*ll.Translation Key/Label: ""` for options and groups, `*ll.Key choice/Label: ""` for
-/// choices). Each line is read as UTF-8 on its own: drivers write them so in files whose other
-/// text is Latin-1. Names with no translation, or an empty one, stay as they are.
+/// choices). Both default `*OpenGroup` and localized `*ll.OpenGroup` entries are supported.
+/// Each line is read as UTF-8 on its own: drivers write translations this way even when other
+/// PPD text is Latin-1. Names with no translation, or an empty one, stay as they are.
 // Read only by the CUPS path; the tests exercise it everywhere.
 #[cfg_attr(not(all(unix, not(target_arch = "wasm32"))), allow(dead_code))]
 pub(crate) fn localize(options: &mut [PrinterOption], ppd: &[u8], lang: &str) {
     use std::collections::HashMap;
-    let Some(code) = ppd_languages(lang).into_iter().find(|code| {
+
+    let languages = ppd_languages(lang);
+    let code = languages.into_iter().find(|code| {
         let prefix = format!("*{code}.");
-        ppd.split(|b| *b == b'\n').any(|l| l.starts_with(prefix.as_bytes()))
-    }) else {
+        ppd.split(|byte| *byte == b'\n').any(|line| line.starts_with(prefix.as_bytes()))
+    });
+    let Some(code) = code else {
         return;
     };
     if code == "en" {
         return;
     }
+
     let prefix = format!("*{code}.");
-    let mut names: HashMap<String, String> = HashMap::new();
-    let mut choices: HashMap<(String, String), String> = HashMap::new();
-    let mut groups: HashMap<String, String> = HashMap::new();
-    for line in ppd.split(|b| *b == b'\n') {
-        let Some(text) = std::str::from_utf8(line).ok() else { continue };
+    let mut names = HashMap::<String, String>::new();
+    let mut group_names = HashMap::<String, String>::new();
+    let mut choices = HashMap::<(String, String), String>::new();
+    let mut groups = HashMap::<String, String>::new();
+
+    for line in ppd.split(|byte| *byte == b'\n') {
+        let Ok(text) = std::str::from_utf8(line) else {
+            continue;
+        };
         let text = text.trim_end_matches('\r');
+
         if let Some(rest) = text.strip_prefix("*OpenGroup:") {
-            // Group label → keyword, since options carry their group's label.
-            let rest = rest.trim();
-            if let Some((key, label)) = rest.split_once('/') {
-                groups.insert(label.trim().to_string(), key.trim().to_string());
+            // Default group label → keyword; options carry the default group label.
+            if let Some((label, key)) = parse_open_group(rest) {
+                groups.insert(label, key);
             }
             continue;
         }
-        let Some(rest) = text.strip_prefix(prefix.as_str()) else { continue };
-        let Some((head, _)) = rest.split_once(':') else { continue };
-        let Some((main, spec)) = head.split_once(' ') else { continue };
-        let Some((key, label)) = spec.split_once('/') else { continue };
+
+        let Some(rest) = text.strip_prefix(prefix.as_str()) else {
+            continue;
+        };
+
+        if let Some(rest) = rest.strip_prefix("OpenGroup:") {
+            // A localized OpenGroup directly maps its keyword to the translated label.
+            // An empty label is no translation, so the existing name stays.
+            if let Some((label, key)) = parse_open_group(rest)
+                && !label.is_empty()
+            {
+                group_names.insert(key, label);
+            }
+            continue;
+        }
+
+        let Some((head, _value)) = rest.rsplit_once(':') else {
+            continue;
+        };
+        let Some((main, spec)) = head.split_once(' ') else {
+            continue;
+        };
+        let Some((key, label)) = spec.split_once('/') else {
+            continue;
+        };
         let label = label.trim();
         if label.is_empty() {
             continue;
         }
+
         if main == "Translation" {
             names.insert(key.trim().to_string(), label.to_string());
         } else {
             choices.insert((main.to_string(), key.trim().to_string()), label.to_string());
         }
     }
-    for o in options.iter_mut() {
-        if let Some(label) = names.get(&o.key) {
-            o.label = label.clone();
+
+    for option in options {
+        if let Some(label) = names.get(&option.key) {
+            option.label.clone_from(label);
         }
-        if let Some(label) = groups.get(&o.group).and_then(|key| names.get(key)) {
-            o.group = label.clone();
+
+        let group_key = groups.get(&option.group).unwrap_or(&option.group);
+        if let Some(label) = group_names.get(group_key).or_else(|| names.get(group_key)) {
+            option.group.clone_from(label);
         }
-        for (choice, label) in o.choices.iter_mut() {
-            if let Some(t) = choices.get(&(o.key.clone(), choice.clone())) {
-                *label = t.clone();
+
+        for (choice, label) in &mut option.choices {
+            if let Some(translated) = choices.get(&(option.key.clone(), choice.clone())) {
+                label.clone_from(translated);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{localize, ppd_languages, valid_destination};
+    use craft_print::PrinterOption;
+
+    #[test]
+    fn destination_names_are_conservative() {
+        for valid in ["Printer", "queue_1", "queue-1", "queue.name", "queue+name"] {
+            assert!(valid_destination(valid), "expected {valid:?} to be valid");
+        }
+
+        for invalid in ["", ".", "..", "a/b", "a\\b", "a:b", "a=b", "a\"b", "has space"] {
+            assert!(!valid_destination(invalid), "expected {invalid:?} to be invalid");
+        }
+        assert!(!valid_destination(&"a".repeat(65)));
+    }
+
+    #[test]
+    fn language_codes_include_script_and_region_fallbacks() {
+        assert_eq!(ppd_languages("pt-br"), vec!["pt_BR", "pt"]);
+        assert_eq!(ppd_languages("zh-hans"), vec!["zh_CN", "zh"]);
+        assert_eq!(ppd_languages("zh_Hant"), vec!["zh_TW", "zh"]);
+        assert_eq!(ppd_languages("bg"), vec!["bg"]);
+        assert!(ppd_languages("").is_empty());
+    }
+
+    #[test]
+    fn localize_translates_default_open_group_options_and_choices() {
+        let mut options = vec![PrinterOption {
+            key: "PageSize".into(),
+            label: "Paper size".into(),
+            group: "General".into(),
+            choices: vec![("A4".into(), "A4".into())],
+            default: "A4".into(),
+        }];
+        let ppd = r#"
+*OpenGroup: General/General: ""
+*bg.Translation General/Общи: ""
+*bg.Translation PageSize/Размер на хартията: ""
+*bg.PageSize A4/А4: ""
+"#
+        .as_bytes();
+
+        localize(&mut options, ppd, "bg");
+
+        assert_eq!(options[0].group, "Общи");
+        assert_eq!(options[0].label, "Размер на хартията");
+        assert_eq!(options[0].choices[0].1, "А4");
+    }
+
+    #[test]
+    fn localize_accepts_language_specific_open_group_entries() {
+        let mut options = vec![PrinterOption {
+            key: "PageSize".into(),
+            label: "Paper size".into(),
+            group: "General".into(),
+            choices: vec![("A4".into(), "A4".into())],
+            default: "A4".into(),
+        }];
+        let ppd = r#"
+*bg.OpenGroup: General/Общи: ""
+*bg.Translation PageSize/Размер на хартията: ""
+*bg.PageSize A4/А4: ""
+"#
+        .as_bytes();
+
+        localize(&mut options, ppd, "bg");
+
+        assert_eq!(options[0].group, "Общи");
+        assert_eq!(options[0].label, "Размер на хартията");
+        assert_eq!(options[0].choices[0].1, "А4");
+    }
+
+    #[test]
+    fn localize_keeps_group_name_for_empty_localized_open_group_label() {
+        let mut options = vec![PrinterOption {
+            key: "PageSize".into(),
+            label: "Paper size".into(),
+            group: "General".into(),
+            choices: vec![("A4".into(), "A4".into())],
+            default: "A4".into(),
+        }];
+        let ppd = r#"
+*bg.OpenGroup: General/: ""
+*bg.Translation PageSize/Размер на хартията: ""
+*bg.PageSize A4/А4: ""
+"#
+        .as_bytes();
+
+        localize(&mut options, ppd, "bg");
+
+        assert_eq!(options[0].group, "General");
+        assert_eq!(options[0].label, "Размер на хартията");
+        assert_eq!(options[0].choices[0].1, "А4");
+    }
+
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    #[test]
+    fn output_within_returns_stdout() {
+        use super::output_within;
+        use std::process::Command;
+        use std::time::Duration;
+
+        let mut cmd = Command::new("printf");
+        cmd.arg("hello");
+        assert_eq!(output_within(&mut cmd, Duration::from_secs(1)).unwrap(), b"hello");
+    }
+
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    #[test]
+    fn output_within_kills_on_deadline() {
+        use super::output_within;
+        use std::process::Command;
+        use std::time::{Duration, Instant};
+
+        let mut cmd = Command::new("sleep");
+        cmd.arg("10");
+        let start = Instant::now();
+        let err = output_within(&mut cmd, Duration::from_millis(50)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+        assert!(err.to_string().contains("did not answer within"));
+        assert!(start.elapsed() < Duration::from_secs(2));
+    }
+
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    #[test]
+    fn output_within_does_not_wait_for_grandchild_pipe() {
+        use super::output_within;
+        use std::process::Command;
+        use std::time::{Duration, Instant};
+
+        // `sh` exits immediately while backgrounded `sleep 1` inherits stdout and keeps the pipe
+        // open past `OUTPUT_GRACE` (100 ms) without leaving a long-lived orphan process.
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "echo hi; sleep 1 &"]);
+        let start = Instant::now();
+        let err = output_within(&mut cmd, Duration::from_secs(5)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+        assert!(err.to_string().contains("finished but its output was not closed"));
+        assert!(start.elapsed() < Duration::from_millis(500));
     }
 }
