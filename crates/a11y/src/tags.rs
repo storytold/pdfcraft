@@ -118,7 +118,13 @@ pub fn move_tag(doc: &mut Document, object: ObjRef, anchor: ObjRef, placement: T
         return Err(TagError::NotSiblings);
     }
     let reachable = alt::elements(doc);
-    if !reachable.iter().any(|e| e.object == object) || !reachable.iter().any(|e| e.object == anchor) {
+    let Some(obj_elem) = reachable.iter().find(|e| e.object == object) else {
+        return Err(TagError::NotSiblings);
+    };
+    let Some(anc_elem) = reachable.iter().find(|e| e.object == anchor) else {
+        return Err(TagError::NotSiblings);
+    };
+    if obj_elem.parent != anc_elem.parent {
         return Err(TagError::NotSiblings);
     }
     let parent_of = |r| doc.get(r).as_dict().and_then(|d| d.get(b"P").and_then(Object::as_ref));
@@ -126,8 +132,18 @@ pub fn move_tag(doc: &mut Document, object: ObjRef, anchor: ObjRef, placement: T
     if parent_of(anchor) != Some(parent) {
         return Err(TagError::NotSiblings);
     }
+    let valid_parent = match obj_elem.parent {
+        Some(expected) => parent == expected,
+        None => doc
+            .root()
+            .and_then(|r| doc.get(r).as_dict().and_then(|c| c.get(b"StructTreeRoot").and_then(Object::as_ref)))
+            .is_some_and(|root_ref| parent == root_ref),
+    };
+    if !valid_parent {
+        return Err(TagError::NotSiblings);
+    }
     let owner = doc.get(parent);
-    let Some(children) = owner.as_dict().and_then(|d| d.get(b"K").and_then(Object::as_array)) else {
+    let Some(children) = owner.as_dict().and_then(|d| d.get(b"K")).map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()) else {
         return Err(TagError::AmbiguousChildren);
     };
     let one_position = |child| {
@@ -135,7 +151,7 @@ pub fn move_tag(doc: &mut Document, object: ObjRef, anchor: ObjRef, placement: T
         matches.next().and_then(|(index, _)| matches.next().is_none().then_some(index))
     };
     let (Some(from), Some(to)) = (one_position(object), one_position(anchor)) else { return Err(TagError::AmbiguousChildren) };
-    let mut reordered = children.clone();
+    let mut reordered = children;
     let moved = reordered.remove(from);
     let target = if from < to { to - 1 } else { to };
     let destination = target + usize::from(placement == TagPlacement::After);
@@ -151,6 +167,10 @@ fn text(doc: &Document, d: &pdfcraft_cos::Dict, key: &[u8]) -> Option<String> {
     d.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(PdfString::to_text))
 }
 
+fn tag_type_name(doc: &Document, d: &Dict) -> Option<Vec<u8>> {
+    d.get(b"S").map(|s| doc.resolve(s)).and_then(|s| s.as_name().map(<[u8]>::to_vec))
+}
+
 /// List reachable, indirect tags in structure-tree order.
 pub fn tags(doc: &Document) -> Vec<TagInfo> {
     let pages = pdfcraft_model::pages(doc);
@@ -162,7 +182,7 @@ pub fn tags(doc: &Document) -> Vec<TagInfo> {
                 object: e.object,
                 parent: e.parent,
                 depth: e.depth,
-                kind: String::from_utf8_lossy(e.dict.name(b"S")?).into_owned(),
+                kind: String::from_utf8_lossy(&tag_type_name(doc, &e.dict)?).into_owned(),
                 title: text(doc, &e.dict, b"T"),
                 actual_text: text(doc, &e.dict, b"ActualText"),
                 alt: text(doc, &e.dict, b"Alt"),
@@ -181,8 +201,9 @@ pub fn tag_content(doc: &Document, object: ObjRef) -> Result<Vec<TagContentItem>
     let pages = pdfcraft_model::pages(doc);
     let page_index: std::collections::HashMap<ObjRef, usize> = pages.iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
     let mut marks = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     if let Some(kids) = element.dict.get(b"K") {
-        direct_marks(doc, kids, element.page, &mut marks);
+        direct_marks(doc, kids, element.page, &mut seen, &mut marks);
     }
     // Each page's content is parsed once, however many of its MCIDs the tag owns.
     let mut texts: std::collections::HashMap<usize, std::collections::HashMap<i64, String>> = std::collections::HashMap::new();
@@ -206,21 +227,36 @@ pub fn tag_content(doc: &Document, object: ObjRef) -> Result<Vec<TagContentItem>
         .collect())
 }
 
-fn direct_marks(doc: &Document, item: &Object, page: Option<ObjRef>, out: &mut Vec<(Option<ObjRef>, i64)>) {
+fn direct_marks(
+    doc: &Document,
+    item: &Object,
+    page: Option<ObjRef>,
+    seen: &mut std::collections::HashSet<ObjRef>,
+    out: &mut Vec<(Option<ObjRef>, i64)>,
+) {
     match item {
         Object::Int(mcid) => out.push((page, *mcid)),
-        Object::Array(items) => items.iter().for_each(|item| direct_marks(doc, item, page, out)),
-        Object::Dict(dict) if dict.name(b"Type") == Some(b"MCR") => {
-            if let Some(mcid) = dict.get(b"MCID").and_then(Object::as_int) {
+        Object::Array(items) => items.iter().for_each(|item| direct_marks(doc, item, page, seen, out)),
+        Object::Dict(dict) if dict.get(b"Type").map(|t| doc.resolve(t)).as_deref().and_then(Object::as_name) == Some(b"MCR") => {
+            if let Some(mcid) = dict.get(b"MCID").map(|m| doc.resolve(m)).and_then(|m| m.as_int()) {
                 out.push((dict.get(b"Pg").and_then(Object::as_ref).or(page), mcid));
             }
         }
         Object::Ref(reference) => {
-            if let Some(dict) = doc.get(*reference).as_dict()
-                && dict.name(b"Type") == Some(b"MCR")
-                && let Some(mcid) = dict.get(b"MCID").and_then(Object::as_int)
-            {
-                out.push((dict.get(b"Pg").and_then(Object::as_ref).or(page), mcid));
+            if !seen.insert(*reference) {
+                return;
+            }
+            let target = doc.get(*reference);
+            match &*target {
+                Object::Int(_) | Object::Array(_) | Object::Ref(_) => {
+                    direct_marks(doc, &target, page, seen, out);
+                }
+                Object::Dict(dict) if dict.get(b"Type").map(|t| doc.resolve(t)).as_deref().and_then(Object::as_name) == Some(b"MCR") => {
+                    if let Some(mcid) = dict.get(b"MCID").map(|m| doc.resolve(m)).and_then(|m| m.as_int()) {
+                        out.push((dict.get(b"Pg").and_then(Object::as_ref).or(page), mcid));
+                    }
+                }
+                _ => {}
             }
         }
         _ => {}
@@ -236,8 +272,8 @@ fn attribute_entries(doc: &Document, d: &Dict) -> (Vec<(Object, Option<Object>)>
     let Object::Array(items) = &*resolved else { return (vec![(a.clone(), None)], false) };
     let mut out: Vec<(Object, Option<Object>)> = Vec::new();
     for item in items {
-        match (item, out.last_mut()) {
-            (Object::Int(_), Some((_, revision @ None))) => *revision = Some(item.clone()),
+        match (doc.resolve(item).as_int(), out.last_mut()) {
+            (Some(_), Some((_, revision @ None))) => *revision = Some(item.clone()),
             _ => out.push((item.clone(), None)),
         }
     }
@@ -245,13 +281,18 @@ fn attribute_entries(doc: &Document, d: &Dict) -> (Vec<(Object, Option<Object>)>
 }
 
 /// Whether attribute object `o` (resolved) is a Table attribute object.
-fn is_table_attributes(o: &Object) -> bool {
-    o.as_dict().is_some_and(|d| d.name(b"O") == Some(b"Table"))
+fn is_table_attributes(doc: &Document, o: &Object) -> bool {
+    o.as_dict().and_then(|d| d.get(b"O")).map(|v| doc.resolve(v)).as_deref().and_then(Object::as_name) == Some(b"Table")
 }
 
 /// The value of `key` in the first Table attribute object of tag `d` that has it.
 fn table_attribute(doc: &Document, d: &Dict, key: &[u8]) -> Option<Object> {
-    attribute_entries(doc, d).0.iter().map(|(o, _)| doc.resolve(o)).filter(|o| is_table_attributes(o)).find_map(|o| o.as_dict()?.get(key).cloned())
+    attribute_entries(doc, d)
+        .0
+        .iter()
+        .map(|(o, _)| doc.resolve(o))
+        .filter(|o| is_table_attributes(doc, o))
+        .find_map(|o| o.as_dict()?.get(key).map(|v| (*doc.resolve(v)).clone()).filter(|v| !matches!(v, Object::Null)))
 }
 
 /// Set `key` in the Table attribute object of `object`'s `/A` entry that holds it (else the first
@@ -266,11 +307,12 @@ fn set_table_attribute(doc: &mut Document, object: ObjRef, key: &[u8], value: Op
     let mut entries: Vec<(Object, Option<Object>, Option<Dict>)> = entries
         .into_iter()
         .map(|(o, r)| {
-            let table = Some(doc.resolve(&o)).filter(|a| is_table_attributes(a)).and_then(|a| a.as_dict().cloned());
+            let table = Some(doc.resolve(&o)).filter(|a| is_table_attributes(doc, a)).and_then(|a| a.as_dict().cloned());
             (o, r, table)
         })
         .collect();
-    let holding = |e: &(Object, Option<Object>, Option<Dict>)| e.2.as_ref().is_some_and(|d| d.contains(key));
+    let holding =
+        |e: &(Object, Option<Object>, Option<Dict>)| e.2.as_ref().and_then(|d| d.get(key)).is_some_and(|v| !matches!(*doc.resolve(v), Object::Null));
     match value {
         Some(v) => match entries.iter().position(holding).or_else(|| entries.iter().position(|e| e.2.is_some())) {
             Some(i) => {
@@ -331,7 +373,7 @@ pub fn set_tag_property(doc: &mut Document, object: ObjRef, property: TagPropert
     if let Some(owner) = property.table_attribute_of() {
         let role_map =
             alt::tree_root(doc).and_then(|r| r.get(b"RoleMap").map(|o| doc.resolve(o))).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
-        let ty = element.dict.name(b"S").map(|s| alt::standard(doc, &role_map, s)).unwrap_or_default();
+        let ty = tag_type_name(doc, &element.dict).map(|s| alt::standard(doc, &role_map, &s)).unwrap_or_default();
         if ty != owner.as_bytes() {
             let name = if property == TagProperty::Summary { "summary" } else { "scope" };
             return Err(TagError::WrongTagType(name, owner));
@@ -356,4 +398,88 @@ pub fn set_tag_property(doc: &mut Document, object: ObjRef, property: TagPropert
         }
     })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+
+    fn pdf(bodies: &[String]) -> Document {
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, b) in bodies.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{b}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", bodies.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer << /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", bodies.len() + 1).as_bytes());
+        Document::open(Arc::new(out)).unwrap()
+    }
+
+    #[test]
+    fn tag_content_and_table_attributes_resolve_indirect_entries() {
+        let content = "/P << /MCID 0 >> BDC BT /F1 12 Tf (Hello) Tj ET EMC /P << /MCID 1 >> BDC BT /F1 12 Tf (World) Tj ET EMC";
+        let doc = pdf(&[
+            "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 5 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> >>".into(),
+            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+            "<< /Type /StructTreeRoot /K 6 0 R >>".into(),
+            "<< /S /Document /P 5 0 R /K [7 0 R 8 0 R] >>".into(),
+            "<< /S /Table /P 6 0 R /Pg 3 0 R /A << /O 11 0 R /Summary 12 0 R >> /K 9 0 R >>".into(),
+            "<< /S /TH /P 6 0 R /Pg 3 0 R /A [ << /O 11 0 R /Scope 13 0 R >> 14 0 R ] /K 10 0 R >>".into(),
+            "[15 0 R << /Type /MCR /MCID 16 0 R >>]".into(),
+            "15 0 R".into(),
+            "/Table".into(),
+            "(Indirect summary)".into(),
+            "/Column".into(),
+            "1".into(),
+            "0".into(),
+            "1".into(),
+        ]);
+        let listed = tags(&doc);
+        let table = listed.iter().find(|t| t.object == ObjRef::new(7, 0)).unwrap();
+        let th = listed.iter().find(|t| t.object == ObjRef::new(8, 0)).unwrap();
+        assert_eq!(table.summary.as_deref(), Some("Indirect summary"));
+        assert_eq!(th.scope.as_deref(), Some("Column"));
+
+        let table_marks = tag_content(&doc, ObjRef::new(7, 0)).unwrap();
+        assert_eq!(
+            table_marks,
+            [TagContentItem { page: Some(0), mcid: 0, text: "Hello".into() }, TagContentItem { page: Some(0), mcid: 1, text: "World".into() },]
+        );
+        let th_marks = tag_content(&doc, ObjRef::new(8, 0)).unwrap();
+        assert_eq!(th_marks, [TagContentItem { page: Some(0), mcid: 0, text: "Hello".into() }]);
+    }
+
+    #[test]
+    fn move_tag_rejects_non_sibling_tags_sharing_stale_parent_ref() {
+        // 8 0 R is a child of 6 0 R, while 9 0 R is a child of 7 0 R, even though both point /P at 6 0 R.
+        let mut doc = pdf(&[
+            "<< /Type /Catalog /StructTreeRoot 2 0 R >>".into(),
+            "<< /Type /StructTreeRoot /K 3 0 R >>".into(),
+            "<< /S /Document /P 2 0 R /K [6 0 R 7 0 R] >>".into(),
+            "<< /S /P >>".into(),
+            "<< /S /P >>".into(),
+            "<< /S /Sect /P 3 0 R /K [8 0 R 9 0 R] >>".into(),
+            "<< /S /Sect /P 3 0 R /K [9 0 R] >>".into(),
+            "<< /S /P /P 6 0 R >>".into(),
+            "<< /S /P /P 6 0 R >>".into(),
+        ]);
+        // Give 6 0 R only [8 0 R] in the reachable tree, and put [8 0 R 9 0 R] on an unreachable object 4 0 R.
+        doc.update_dict(ObjRef::new(6, 0), |d| d.set(b"K".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(8, 0))]))).unwrap();
+        doc.update_dict(ObjRef::new(4, 0), |d| {
+            d.set(b"K".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(8, 0)), Object::Ref(ObjRef::new(9, 0))]));
+        })
+        .unwrap();
+        doc.update_dict(ObjRef::new(8, 0), |d| d.set(b"P".to_vec(), Object::Ref(ObjRef::new(4, 0)))).unwrap();
+        doc.update_dict(ObjRef::new(9, 0), |d| d.set(b"P".to_vec(), Object::Ref(ObjRef::new(4, 0)))).unwrap();
+        assert_eq!(move_tag(&mut doc, ObjRef::new(9, 0), ObjRef::new(8, 0), TagPlacement::Before), Err(TagError::NotSiblings));
+    }
 }
