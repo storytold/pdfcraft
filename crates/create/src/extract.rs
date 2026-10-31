@@ -233,7 +233,11 @@ fn image(doc: &Document, s: &Stream) -> Result<(&'static str, Vec<u8>), String> 
     };
     let mask = s.dict.get(b"ImageMask").is_some_and(|m| matches!(&*doc.resolve(m), Object::Bool(true)));
     // A stencil mask (`ImageMask true`) has no /SMask or /Mask of its own (8.9.6.2).
-    let mut alpha = if mask { None } else { soft_mask(doc, s, w, h).or_else(|| stencil_mask(doc, s, w, h)) };
+    // A mask that is there but can't be decoded is an error, not an opaque export.
+    let mut alpha = if mask { None } else { soft_mask(doc, s, w, h)? };
+    if !mask && alpha.is_none() {
+        alpha = stencil_mask(doc, s, w, h)?;
+    }
     let key = if mask { None } else { colour_key(doc, s) };
     // Keep the existing JPEG and stencil-mask Decode handling separate from lossless colour images.
     let inverted = (jpeg || mask)
@@ -560,20 +564,24 @@ fn cmyk(c: u8, m: u8, y: u8, k: u8) -> [u8; 3] {
 }
 
 /// The soft mask (`/SMask`) as 8-bit alpha, scaled to the image's size when it has another.
-fn soft_mask(doc: &Document, s: &Stream, w: usize, h: usize) -> Option<Vec<u8>> {
-    let r = s.dict.get(b"SMask")?.as_ref()?;
+/// `Ok(None)` when the image has none; an error when it has one that can't be decoded, so the
+/// export doesn't silently drop the transparency.
+fn soft_mask(doc: &Document, s: &Stream, w: usize, h: usize) -> Result<Option<Vec<u8>>, String> {
+    let Some(r) = s.dict.get(b"SMask").and_then(Object::as_ref) else { return Ok(None) };
     let obj = doc.get(r);
-    let Object::Stream(m) = &*obj else { return None };
-    gray_plane(doc, m, w, h)
+    let Object::Stream(m) = &*obj else { return Ok(None) };
+    gray_plane(doc, m, w, h).map(Some).ok_or_else(|| "the image's soft mask can't be decoded".into())
 }
 
 /// A stencil `/Mask` (an image mask stream, 8.9.6.3) as 8-bit alpha: its 1 samples (0 with
 /// `/Decode [1 0]`) hide the image.
-fn stencil_mask(doc: &Document, s: &Stream, w: usize, h: usize) -> Option<Vec<u8>> {
-    let r = s.dict.get(b"Mask")?.as_ref()?;
+/// `Ok(None)` when the image has none; an error when it has one that can't be decoded.
+fn stencil_mask(doc: &Document, s: &Stream, w: usize, h: usize) -> Result<Option<Vec<u8>>, String> {
+    let Some(r) = s.dict.get(b"Mask").and_then(Object::as_ref) else { return Ok(None) };
     let obj = doc.get(r);
-    let Object::Stream(m) = &*obj else { return None };
-    Some(gray_plane(doc, m, w, h)?.into_iter().map(|v| 255 - v).collect())
+    let Object::Stream(m) = &*obj else { return Ok(None) };
+    let plane = gray_plane(doc, m, w, h).ok_or_else(|| "the image's stencil mask can't be decoded".to_string())?;
+    Ok(Some(plane.into_iter().map(|v| 255 - v).collect()))
 }
 
 /// A one-component mask image as 8-bit values (its `/Decode` interval applied), scaled to
