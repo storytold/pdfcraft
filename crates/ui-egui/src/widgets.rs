@@ -303,15 +303,16 @@ pub fn section_title(ui: &mut egui::Ui, text: &str) {
     ui.add_space(2.0);
 }
 
-/// Paint one line of `text` left-aligned and vertically centred on `pos`, cut with "…" so it is
-/// at most `max_width` wide: a long file name or path stays inside its row (#425).
+/// Paint one line of `text` anchored on the leading edge at `pos` and vertically centred, cut with
+/// "…" so it is at most `max_width` wide: a long file name or path stays inside its row (#425).
 pub fn row_text(ui: &egui::Ui, pos: egui::Pos2, text: impl Into<String>, font: egui::FontId, color: Color32, max_width: f32) {
     let mut job = egui::text::LayoutJob::simple_singleline(text.into(), font, color);
     // A file name or path: an Arabic name keeps its extension at the visual end, as in the tab.
     job.direction = egui::epaint::text::TextDirection::LeftToRight;
     job.wrap = egui::text::TextWrapping::truncate_at_width(max_width.max(0.0));
     let galley = ui.painter().layout_job(job);
-    let rect = Align2::LEFT_CENTER.anchor_size(pos, galley.size());
+    let align = if crate::i18n::current().rtl() { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER };
+    let rect = align.anchor_size(pos, galley.size());
     ui.painter().galley(rect.min, galley, color);
 }
 

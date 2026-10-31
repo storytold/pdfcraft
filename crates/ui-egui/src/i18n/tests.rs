@@ -984,17 +984,19 @@ fn ukrainian_integer_plurals_cover_teens_and_large_counts() {
     }
 }
 
+/// Returns the registered Arabic language entry.
 fn arabic() -> Lang {
     Lang::from_code("ar").expect("ar registered")
 }
 
+/// Verifies that Arabic is registered as an RTL language and persists across settings saves.
 #[test]
 fn arabic_is_registered_and_persists() {
     let ar = arabic();
     assert_eq!(ar.name(), "العربية");
     assert!(ar.rtl());
     let rtl: Vec<&str> = Lang::all().filter(|l| l.rtl()).map(|l| l.code()).collect();
-    assert_eq!(rtl, ["ar", "ckb", "fa"], "Arabic, Kurdish and Persian are the right-to-left languages");
+    assert_eq!(rtl, ["ar", "ckb", "fa", "he"], "Arabic, Kurdish, Persian and Hebrew are the right-to-left languages");
     assert_eq!(normalize_pref("AR"), Some("ar"));
     for tag in ["ar", "ar-MA", "ar_EG.UTF-8", "AR-sa", "ar_DZ@variant"] {
         assert_eq!(lang_from_tag(tag), Some(ar), "{tag}");
@@ -1075,6 +1077,33 @@ fn persian_is_registered_and_persists() {
     assert_eq!(restored.language, "fa");
     assert!(restored.set_option("language", "xx").is_err());
     assert_eq!(restored.language, "fa");
+}
+
+/// Verifies that Hebrew (`he`) and legacy `iw` tags resolve, use 3 plural forms, and persist.
+#[test]
+fn hebrew_is_registered_and_persists() {
+    let he = Lang::from_code("he").expect("he registered");
+    assert_eq!(he.name(), "עברית");
+    assert!(he.rtl());
+    assert_eq!(he.0.plural_forms(), 3);
+    assert_eq!([0, 1, 2, 3, 10].map(|n| (he.0.plural)(n)), [2, 0, 1, 2, 2]);
+    assert_eq!(normalize_pref("HE"), Some("he"));
+    for tag in ["he", "he-IL", "he_IL.UTF-8", "HE-il", "iw", "iw-IL", "iw_IL.UTF-8"] {
+        assert_eq!(lang_from_tag(tag), Some(he), "{tag}");
+    }
+    assert_eq!(first_supported("he-IL\r\nen-US"), Some(he));
+    assert_eq!(tr(he, "Save"), "שמירה");
+    assert_eq!(tr(he, "Cancel"), "ביטול");
+    assert_eq!(tr(he, "File"), "קובץ");
+    assert_eq!(tr(he, "דוח סופי {n}.pdf"), "דוח סופי {n}.pdf");
+    let mut app = crate::PdfCraftApp::default();
+    app.set_option("language", "HE").unwrap();
+    assert_eq!(app.language, "he");
+    let mut restored = crate::PdfCraftApp::default();
+    restored.restore(&app.persist());
+    assert_eq!(restored.language, "he");
+    assert!(restored.set_option("language", "xx").is_err());
+    assert_eq!(restored.language, "he");
 }
 
 /// With a craft-fonts Arabic face, every Arabic translation has glyphs: with all interface
