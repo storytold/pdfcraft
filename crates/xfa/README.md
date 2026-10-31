@@ -32,7 +32,11 @@ that warning and keeps the existing layout and accepted widget values.
   page masters chosen by occurrence; a table's header row repeats after a break; presence
   `hidden` takes no space, `invisible` takes space; repeating subforms get their initial
   instances, in flowed content and in a top-to-bottom container inside positioned content (a
-  table in an area) alike; fields that compute the page number or count on layout show the numbers.
+  table in an area) alike; fields that compute the page number or count on layout show the numbers. A
+  caption without a font of its own is drawn in its field's font, and one naming only
+  some font properties takes the rest from it (XFA 3.3, "Formatting Text That Appears as Fixed
+  or Variable Content", p. 43); a field caption's paragraph
+  is still the one around the field.
 - **PDF** (`pdf::write_form`): pages with content streams in the standard 14 fonts (Arial and
   friends → Helvetica, Courier New → Courier, serif faces → Times; nothing is embedded), JPEG
   XObjects, and widgets: text (multi-line, max length, alignment), date (Acrobat's `AFDate`

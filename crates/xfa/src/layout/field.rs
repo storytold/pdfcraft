@@ -25,7 +25,10 @@ impl Layouter<'_> {
         let fctx = ctx.child(&f.common);
         let inner = rect.inset(&f.common.margin);
         let (mut ui, mut cap_rect) = (inner, None);
-        if let Some((placement, reserve)) = self.caption_reserve(f, inner.w, ctx) {
+        // A caption without a font of its own is drawn in the field's (XFA 3.3, "Formatting Text
+        // That Appears as Fixed or Variable Content", p. 43), in the paragraph around the field,
+        // as it is measured.
+        if let Some((placement, reserve)) = self.caption_reserve(f, inner.w, &fctx, &ctx.para) {
             let reserve = auto_check_reserve(f, placement, inner.w, Some(inner.h)).unwrap_or(reserve);
             let r = reserve.max(0.0);
             match placement {
@@ -50,7 +53,7 @@ impl Layouter<'_> {
         if let (Some(cr), Some(cap)) = (cap_rect, &f.caption)
             && cap.presence == Presence::Visible
         {
-            let font = ctx.font.apply(&cap.font);
+            let font = fctx.font.apply(&cap.font);
             let para = ctx.para.apply(&cap.para);
             self.draw_value_text(&cap.value, cr, &font, &para)?;
         }
@@ -145,7 +148,7 @@ impl Layouter<'_> {
         }
         let face = match (&f.ui, &f.caption) {
             // Buttons show their caption in the caption's font.
-            (Ui::Button, Some(cap)) => Face::of(&ctx.font.apply(&cap.font)).unscaled(),
+            (Ui::Button, Some(cap)) => Face::of(&fctx.font.apply(&cap.font)).unscaled(),
             _ => Face::of(&fctx.font).unscaled(),
         };
         let h_align = match (&f.ui, &f.caption) {
