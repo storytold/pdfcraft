@@ -4351,6 +4351,28 @@ fn redacting_through_tools() {
 }
 
 #[test]
+fn applying_redactions_proposes_the_name_with_redacted() {
+    let dir = workdir("redact-save-as");
+    std::fs::write(dir.join("memo.txt"), "Call 555-123-4567 today").unwrap();
+    let mut a = auto(&dir);
+    let made = ok(&mut a, "doc_create", json!({ "from": "text", "path": "memo.txt" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_save", json!({ "doc": made, "path": "contract.pdf" }));
+    let original = std::fs::read(dir.join("contract.pdf")).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "contract.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "redact_mark", json!({ "doc": doc, "pattern": "phone" }));
+    let r = ok(&mut a, "redact_apply", json!({ "doc": doc }));
+    assert_eq!(r["save_as"], "contract_Redacted.pdf");
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": r["save_as"] }));
+    assert_eq!(std::fs::read(dir.join("contract.pdf")).unwrap(), original, "the opened file is left as it was");
+    let bytes = std::fs::read(dir.join("contract_Redacted.pdf")).unwrap();
+    assert!(!bytes.windows(4).any(|w| w == b"4567"), "the copy has no trace of the number");
+    // Redacting the redacted copy again proposes the same name, with one suffix.
+    let copy = ok(&mut a, "doc_open", json!({ "path": "contract_Redacted.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "redact_mark", json!({ "doc": copy, "find": "today" }));
+    assert_eq!(ok(&mut a, "redact_apply", json!({ "doc": copy }))["save_as"], "contract_Redacted.pdf");
+}
+
+#[test]
 /// Mark, apply and save remove the complete international number while retaining labels and controls.
 fn redacting_italian_international_slash_numbers_through_tools() {
     let dir = workdir("redact-italian-international-slash");

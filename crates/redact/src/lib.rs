@@ -761,3 +761,15 @@ pub fn clear_marks(doc: &mut Document, pages: Option<&[usize]>) -> Result<usize,
     }
     Ok(targets.len())
 }
+
+/// The name to save a document under after [`apply`]: `_Redacted` before the extension, as
+/// Acrobat appends it ("contract.pdf" gives "contract_Redacted.pdf"). The `.pdf` extension is
+/// matched in any letter case. A name that already ends in `_Redacted` keeps it once.
+pub fn redacted_file_name(name: &str) -> String {
+    let cut = name.len().saturating_sub(4);
+    let stem = match (name.get(..cut), name.get(cut..)) {
+        (Some(stem), Some(ext)) if ext.eq_ignore_ascii_case(".pdf") => stem,
+        _ => name,
+    };
+    if stem.ends_with("_Redacted") { format!("{stem}.pdf") } else { format!("{stem}_Redacted.pdf") }
+}

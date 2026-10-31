@@ -451,6 +451,24 @@ pub struct DocView {
     /// Redact tool: the box being drawn, and a mark to add (page, quads) for the app to style.
     pub redact_drag: crate::redact_ui::AreaDrag,
     pub pending_redaction: Option<(usize, Vec<[f64; 8]>)>,
+    /// How many Apply redactions steps are in effect in this view. While it is above 0, Save
+    /// proposes the name with `_Redacted` ([`pdfcraft_engine::redacted_file_name`]), and while it is
+    /// above `redactions_downloaded`, Save asks where.
+    /// Undo of an Apply redactions step takes one off and Redo adds it back. Reload and a desktop
+    /// save set it to 0, and Revert sets it to `redactions_downloaded`; after a desktop save the document has the name it was saved
+    /// under. A web download keeps it, so later downloads carry the `_Redacted` name.
+    pub redactions_applied: usize,
+    /// How many Apply redactions steps saved into the document's file are undone in this view.
+    /// While it is above 0, Save asks where, so the restored content is not written over the
+    /// redacted file. Redo takes one off. Revert, Reload and a desktop save set it to 0.
+    pub redactions_undone_after_save: usize,
+    /// Set when Apply redactions runs while saved Apply redactions steps are undone: Redo can no
+    /// longer bring those steps back, so Save asks where until a desktop save or Revert clears it.
+    pub saved_redactions_cut_off: bool,
+    /// `redactions_applied` at the last web download, which Revert restores. While
+    /// `redactions_applied` is below it, a delivered step is undone and Save asks where. A desktop
+    /// save leaves it at 0.
+    pub redactions_downloaded: usize,
     /// A crop rectangle being dragged (Crop tool).
     pub crop_drag: crate::crop::CropDrag,
     /// Enhance ▸ Camera image: the quadrilateral being placed.
@@ -723,6 +741,10 @@ impl DocView {
             links: Default::default(),
             redact_drag: None,
             pending_redaction: None,
+            redactions_applied: 0,
+            redactions_undone_after_save: 0,
+            saved_redactions_cut_off: false,
+            redactions_downloaded: 0,
             crop_drag: None,
             camera: None,
             camera_done: None,

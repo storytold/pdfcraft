@@ -48,6 +48,21 @@ impl PdfCraftApp {
         let Some(id) = self.views.get(index).map(|v| v.id) else { return false };
         let Some(doc) = self.session.get(id) else { return false };
         let (name, path) = (doc.name.clone(), doc.path.clone());
+        // After Apply redactions, Save asks where and proposes the name with `_Redacted`.
+        // In the web build a delivered step stays counted, so only the steps applied since the
+        // last delivery make Save ask where.
+        let redacted = self.views.get(index).is_some_and(|v| v.redactions_applied > 0);
+        let not_delivered = self.views.get(index).is_some_and(|v| v.redactions_applied > v.redactions_downloaded);
+        let name = if redacted { pdfcraft_engine::redacted_file_name(&name) } else { name };
+        // Undo past a saved Apply redactions brings back content that the file on disk has
+        // redacted: ask where instead of writing it over that file. In the web build a delivered
+        // step stays counted in `redactions_applied`, so fewer steps than were delivered means one
+        // was undone.
+        let unredacted = self.views.get(index).is_some_and(restores_saved_redactions);
+        // The restored content is not a redacted copy: propose the name without `_Redacted`, so
+        // the dialog's default is not the redacted file.
+        let name = if unredacted && !redacted { unredacted_file_name(&name) } else { name };
+        let target = if not_delivered || unredacted { SaveTarget::As } else { target };
         #[cfg(not(target_arch = "wasm32"))]
         {
             let doc_path = path.clone();
@@ -62,6 +77,14 @@ impl PdfCraftApp {
                     let dialog = in_document_folder(dialog, doc_path.as_deref());
                     // The bytes are taken once the user has chosen, so edits made meanwhile are saved too.
                     self.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, dest| {
+                        // An Apply redactions or an Undo of one while the dialog was open makes the
+                        // name it proposed wrong: ask again with the name for the current content.
+                        let asked = (redacted, unredacted);
+                        let changed = |v: &crate::DocView| v.id == id && (v.redactions_applied > 0, restores_saved_redactions(v)) != asked;
+                        if let Some(index) = app.views.iter().position(changed) {
+                            app.save_then(index, SaveTarget::As, after);
+                            return;
+                        }
                         app.save_doc_to_then(id, &dest.to_string_lossy(), target, Box::new(after));
                     });
                     return false;
@@ -96,6 +119,9 @@ impl PdfCraftApp {
                         && let Some(view) = self.views.get_mut(index)
                     {
                         view.document_changed(&doc.info);
+                        // `redactions_applied` stays set: the document keeps its name here, so
+                        // later downloads are named after the redacted copy too.
+                        view.redactions_downloaded = view.redactions_applied;
                     }
                     // The host reports where the file went (and any failure) itself.
                     if !to_host {
@@ -198,6 +224,9 @@ impl PdfCraftApp {
                     view.document_changed(&doc.info);
                     // Saving over a version that changed on disk keeps this one: nothing to ask.
                     view.disk_changed = false;
+                    view.redactions_applied = 0;
+                    view.redactions_undone_after_save = 0;
+                    view.saved_redactions_cut_off = false;
                 }
                 self.notify_fmt("Saved {name}", &[("name", &short_name(dest))]);
                 #[cfg(target_os = "macos")]
@@ -234,6 +263,27 @@ pub(crate) fn is_mail_temp_copy(path: &str) -> bool {
         || in_outlook_cache("/temporary internet files/content.outlook/")
         || p.contains("/packages/microsoft.outlookforwindows_")
         || p.contains("/library/containers/com.apple.mail/data/library/mail downloads/")
+}
+
+/// Whether `view` holds content that a saved or delivered Apply redactions removed: a saved step
+/// is undone, cannot be redone, or (in the web build) fewer steps are in effect than were
+/// delivered.
+fn restores_saved_redactions(view: &crate::DocView) -> bool {
+    view.redactions_undone_after_save > 0 || view.saved_redactions_cut_off || view.redactions_applied < view.redactions_downloaded
+}
+
+/// `name` without the `_Redacted` that [`pdfcraft_engine::redacted_file_name`] adds before the
+/// extension ("contract_Redacted.pdf" gives "contract.pdf"). Any other name is returned as it is.
+pub(crate) fn unredacted_file_name(name: &str) -> String {
+    let cut = name.len().saturating_sub(4);
+    let (stem, ext) = match (name.get(..cut), name.get(cut..)) {
+        (Some(stem), Some(ext)) if ext.eq_ignore_ascii_case(".pdf") => (stem, ext),
+        _ => (name, ""),
+    };
+    match stem.strip_suffix("_Redacted") {
+        Some(base) if !base.is_empty() => format!("{base}{ext}"),
+        _ => name.to_string(),
+    }
 }
 
 /// The folder a Save As style dialog should open in for a document stored at `path`: the

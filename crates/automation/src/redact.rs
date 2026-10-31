@@ -3,7 +3,7 @@
 
 use pdfcraft_engine::{
     Edit, Hidden, NewAnnotation, REDACT_MAX_WORDS, REDACTION_CODE_SETS, RedactPattern, RedactionCodeSet, Shape, Style, find_pattern, rect_quad,
-    redact_word_list,
+    redact_word_list, redacted_file_name,
 };
 use serde_json::{Value, json};
 
@@ -165,6 +165,8 @@ impl Automation {
         let after = self.doc(a)?.redaction_marks();
         out["applied"] = json!(before - after);
         out["marks_pending"] = json!(after);
+        // The name to save the redacted copy under, as Save does in the app.
+        out["save_as"] = json!(redacted_file_name(&self.doc(a)?.name));
         Ok(out)
     }
 

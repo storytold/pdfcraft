@@ -545,7 +545,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "redact_apply",
             "Apply redactions",
-            "Apply the redaction marks (all, or those on pages): text, images, vectors, comments and form fields under them are removed for good and boxes are drawn in their place. A verification pass fails the operation if anything readable remains. Undoable until saved; the saved file no longer contains the content.",
+            "Apply the redaction marks (all, or those on pages): text, images, vectors, comments and form fields under them are removed for good and boxes are drawn in their place. A verification pass fails the operation if anything readable remains. Undoable until saved; the saved file no longer contains the content. The result's save_as is the document's name with _Redacted before the extension (contract.pdf gives contract_Redacted.pdf; a name that already ends in _Redacted is unchanged); pass it to doc_save as path to save under that name.",
         )
         .destructive()
         .with(schema(json!({ "doc": doc(), "pages": pages("whose marks to apply (default: all)") }), &["doc"])),
