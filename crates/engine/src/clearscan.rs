@@ -3,7 +3,9 @@
 //! [`Session::clearscan_document`] renders each page, runs [`pdfcraft_ocr::clearscan`], and
 //! replaces what the page shows (one undoable step, through Replace Pages, so comments, links
 //! and bookmarks stay). A panic in the pipeline becomes a per-page error and the other pages
-//! still run.
+//! still run. The desktop dialog runs the same work as [`Session::clearscan_job`] on a worker
+//! and [`Session::apply_clearscan`] on the UI thread; [`Session::clearscan_document`] is those
+//! two steps in one call.
 
 use std::sync::Arc;
 
@@ -94,41 +96,30 @@ pub struct ClearScanReport {
     pub cancelled: bool,
 }
 
-impl Session {
-    /// ClearScan one page (0-based).
-    pub fn clearscan_page(
-        &mut self,
-        id: DocId,
-        page: usize,
-        settings: ClearScanSettings,
-        progress: impl FnMut(ClearScanProgress) -> bool,
-    ) -> Result<ClearScanReport, ClearScanError> {
-        self.clearscan_document(id, &[page], settings, progress)
-    }
+/// What [`Session::clearscan_job`] captured, detached from the session so a worker can run it.
+pub struct ClearScanJob {
+    bytes: Arc<Vec<u8>>,
+    password: Option<String>,
+    infos: Vec<PageInfo>,
+    native: Vec<Option<f32>>,
+    /// Pages to read, 0-based, already checked.
+    pub pages: Vec<usize>,
+    settings: ClearScanSettings,
+}
 
-    /// ClearScan `pages` (0-based; empty = every page). Successful pages are one undoable
-    /// "ClearScan" step. A page that already has text is skipped when `skip_text_pages` is set.
-    /// Returning `false` from `progress` stops before the next page; pages already built are
-    /// still applied.
-    pub fn clearscan_document(
-        &mut self,
-        id: DocId,
-        pages: &[usize],
-        settings: ClearScanSettings,
-        mut progress: impl FnMut(ClearScanProgress) -> bool,
-    ) -> Result<ClearScanReport, ClearScanError> {
-        settings.checked()?;
-        let doc = self.get(id).ok_or(EditError::NoDocument)?;
-        if let Some(why) = &doc.read_only_reason {
-            return Err(ClearScanError::Edit(EditError::ReadOnly(why.clone())));
-        }
-        let count = doc.info.pages.len();
-        let pages = resolve_pages(count, pages)?;
-        let bytes = doc.bytes.clone();
-        let password = doc.password.clone();
-        let infos = doc.info.pages.clone();
-        let native: Vec<Option<f32>> = (0..count).map(|page| native_scale(doc, page)).collect();
+/// Pages a [`ClearScanJob`] built, plus the report. [`Session::apply_clearscan`] turns `built`
+/// into one undo step. Empty `built` applies nothing.
+pub struct ClearScanBuilt {
+    pub report: ClearScanReport,
+    pub built: Vec<(usize, Vec<u8>)>,
+}
 
+impl ClearScanJob {
+    /// Run the pipeline. Returning `false` from `progress` stops before the next page. Pages
+    /// already built are in [`ClearScanBuilt::built`]; the caller still applies them. Missing
+    /// models are [`ClearScanError::NoModels`] and `built` is not returned.
+    pub fn run(self, mut progress: impl FnMut(ClearScanProgress) -> bool) -> Result<ClearScanBuilt, ClearScanError> {
+        let ClearScanJob { bytes, password, infos, native, pages, settings } = self;
         let config = RenderConfig { password: password.as_deref().map(Arc::from), hide_comments: true, ..Default::default() };
         let mut renderer = PageRenderer::new(bytes, config);
         let total = pages.len();
@@ -230,8 +221,57 @@ impl Session {
             }
         }
 
-        self.apply_built(id, built)?;
-        Ok(ClearScanReport { pages: report, cancelled })
+        Ok(ClearScanBuilt { report: ClearScanReport { pages: report, cancelled }, built })
+    }
+}
+
+impl Session {
+    /// ClearScan one page (0-based).
+    pub fn clearscan_page(
+        &mut self,
+        id: DocId,
+        page: usize,
+        settings: ClearScanSettings,
+        progress: impl FnMut(ClearScanProgress) -> bool,
+    ) -> Result<ClearScanReport, ClearScanError> {
+        self.clearscan_document(id, &[page], settings, progress)
+    }
+
+    /// Capture what ClearScan of `pages` (0-based; empty = every page) needs. The check is the
+    /// same one [`Self::clearscan_document`] makes before any page is read.
+    pub fn clearscan_job(&self, id: DocId, pages: &[usize], settings: ClearScanSettings) -> Result<ClearScanJob, ClearScanError> {
+        settings.checked()?;
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        if let Some(why) = &doc.read_only_reason {
+            return Err(ClearScanError::Edit(EditError::ReadOnly(why.clone())));
+        }
+        let count = doc.info.pages.len();
+        let pages = resolve_pages(count, pages)?;
+        let native = (0..count).map(|page| native_scale(doc, page)).collect();
+        Ok(ClearScanJob { bytes: doc.bytes.clone(), password: doc.password.clone(), infos: doc.info.pages.clone(), native, pages, settings })
+    }
+
+    /// ClearScan `pages` (0-based; empty = every page). Successful pages are one undoable
+    /// "ClearScan" step. A page that already has text is skipped when `skip_text_pages` is set.
+    /// Returning `false` from `progress` stops before the next page; pages already built are
+    /// still applied.
+    pub fn clearscan_document(
+        &mut self,
+        id: DocId,
+        pages: &[usize],
+        settings: ClearScanSettings,
+        progress: impl FnMut(ClearScanProgress) -> bool,
+    ) -> Result<ClearScanReport, ClearScanError> {
+        let job = self.clearscan_job(id, pages, settings)?;
+        let built = job.run(progress)?;
+        let report = built.report;
+        self.apply_clearscan(id, built.built)?;
+        Ok(report)
+    }
+
+    /// Apply pages a [`ClearScanJob`] already built, as one undoable "ClearScan" step.
+    pub fn apply_clearscan(&mut self, id: DocId, built: Vec<(usize, Vec<u8>)>) -> Result<(), ClearScanError> {
+        self.apply_built(id, built)
     }
 
     fn apply_built(&mut self, id: DocId, built: Vec<(usize, Vec<u8>)>) -> Result<(), ClearScanError> {

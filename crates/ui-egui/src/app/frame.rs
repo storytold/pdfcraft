@@ -4,7 +4,19 @@ impl PdfCraftApp {
     /// Draw the running job's progress card and pass a Cancel click on to the job.
     pub(super) fn show_progress(&mut self, ctx: &egui::Context) {
         if widgets::progress_notice(self, ctx) {
-            self.cancel_optimize();
+            if self.progress_job == widgets::ProgressJob::ClearScan {
+                self.cancel_clearscan();
+            } else {
+                self.cancel_optimize();
+            }
+        }
+    }
+
+    /// Drop the progress card when `job` still owns it, so one job cannot clear another's.
+    pub(crate) fn clear_progress(&mut self, job: widgets::ProgressJob) {
+        if self.progress_job == job {
+            self.progress_notice = None;
+            self.progress_job = widgets::ProgressJob::Other;
         }
     }
 

@@ -464,6 +464,8 @@ pub struct PdfCraftApp {
     pub ocr_draft: ocr_ui::OcrDraft,
     pub ocr_run: Option<ocr_ui::OcrRun>,
     pub ocr_batch: Option<std::sync::Arc<std::sync::Mutex<ocr_ui::BatchProgress>>>,
+    /// ClearScan from Recognize Text ▸ Editable text and images.
+    pub clearscan_run: Option<ocr_ui::ClearScanRun>,
     /// Background jobs (OCR, actions, listing pinned folders) run inline instead (tests).
     pub run_inline: bool,
     /// Action Wizard: the user's actions, the dialog state, the running action and (tests) the
@@ -521,6 +523,8 @@ pub struct PdfCraftApp {
     pub optimize_run: Option<optimize_ui::OptimizeRun>,
     /// A background job's progress card (see [`widgets::progress_notice`]).
     pub progress_notice: Option<widgets::ProgressNotice>,
+    /// Which job [`progress_notice`](Self::progress_notice)'s Cancel button stops.
+    pub progress_job: widgets::ProgressJob,
     /// Pages copied or cut in Organize Pages, ready to paste (into any document).
     pub page_clipboard: Option<PageClip>,
     /// Files dropped on the page grid, waiting for the pointer to say which gap they go to.

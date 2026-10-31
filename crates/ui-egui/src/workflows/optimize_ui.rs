@@ -434,7 +434,7 @@ impl PdfCraftApp {
         let Ok(mut s) = progress.lock() else {
             // The worker panicked while holding the lock: it will never report back.
             self.optimize_run = None;
-            self.progress_notice = None;
+            self.clear_progress(crate::widgets::ProgressJob::Optimize);
             self.notify_tr("Couldn't optimize the file");
             return;
         };
@@ -443,6 +443,7 @@ impl PdfCraftApp {
             let stage = s.stage;
             drop(s);
             let label = if cancelling { tl!("Cancelling…").to_string() } else { stage_label(stage) };
+            self.progress_job = crate::widgets::ProgressJob::Optimize;
             self.progress_notice = Some(crate::widgets::ProgressNotice { label, fraction: stage.fraction(), cancellable: !cancelling });
             if let Some(ctx) = &self.ctx {
                 ctx.request_repaint_after(std::time::Duration::from_millis(50));
@@ -451,7 +452,7 @@ impl PdfCraftApp {
         };
         drop(s);
         self.optimize_run = None;
-        self.progress_notice = None;
+        self.clear_progress(crate::widgets::ProgressJob::Optimize);
         match result {
             Err(EditError::Cancelled) => self.notify_tr("Optimization cancelled"),
             result => {
