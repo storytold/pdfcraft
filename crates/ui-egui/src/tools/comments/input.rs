@@ -286,7 +286,11 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
 pub(crate) fn page_after_text(resp: &egui::Response, cx: &PageCx<'_>, view: &mut DocView) {
     let QuickTool::Comment(tool) = cx.tool else { return };
     if tool == CommentTool::ReplaceText && cx.allowed && (resp.drag_stopped() || resp.double_clicked()) {
-        if let Some((page, quads)) = view.selection_quads(cx.info).filter(|(p, _)| *p == cx.page) {
+        // A replacement sits on one page: a selection across pages stays selected for the bar's
+        // markup or Copy.
+        if let Ok([(page, quads)]) = <[_; 1]>::try_from(view.selection_quads(cx.info))
+            && page == cx.page
+        {
             view.clear_selection();
             let last = quads.last().copied().unwrap_or_default();
             let at = [last[2].max(last[6]), last[1].max(last[3])];
@@ -295,15 +299,23 @@ pub(crate) fn page_after_text(resp: &egui::Response, cx: &PageCx<'_>, view: &mut
         }
         return;
     }
-    if tool.markup().is_none() || !cx.allowed || !(resp.drag_stopped() || resp.double_clicked()) {
-        return;
-    }
-    if let Some(kind) = tool.markup()
-        && let Some((page, quads)) = view.selection_quads(cx.info).filter(|(p, _)| *p == cx.page)
-    {
+    let Some(kind) = tool.markup().filter(|_| cx.allowed) else { return };
+    // Once, from whichever of the selection's pages is drawn: after an edge scroll its first page
+    // may be out of view. Every page it covers gets its own markup, in one undo step, once all
+    // of them are read.
+    let finished = resp.drag_stopped() || resp.double_clicked();
+    if let crate::canvas::ToolMarks::Marks(marks) = view.tool_marks(cx.tool, finished, Some(cx.page), false, cx.info) {
         view.clear_selection();
-        view.pending_edit = Some(new_comment(cx, tool, Shape::TextMarkup { kind, quads }, String::new()));
-        let _ = page;
+        let edits = marks.into_iter().map(|(page, quads)| {
+            Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+                page,
+                shape: Shape::TextMarkup { kind, quads },
+                style: cx.prefs.style(tool),
+                contents: String::new(),
+                author: cx.prefs.author.clone(),
+            })
+        });
+        view.pending_edit = view.selection_marks_edit(edits.collect());
     }
 }
 

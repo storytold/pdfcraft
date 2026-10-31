@@ -40,12 +40,19 @@ impl PdfCraftApp {
         self.document_copy = None;
         let Some(v) = self.views.get(i) else { return false };
         let id = v.id;
-        if v.all_text && !v.pages_without_text().is_empty() {
+        // So are a selection's pages not read yet (a selection across pages copied before every
+        // page it covers has its text), rather than copying nothing.
+        let waiting = v.selection_waits_for_text();
+        if (v.all_text && !v.pages_without_text().is_empty()) || waiting.is_some() {
             // Checked before any page is read: a document that refuses copying reads nothing.
             if !self.may_copy(id) {
                 return false;
             }
-            let Some(job) = self.views.get(i).and_then(|v| Some(DocumentCopyJob::of(v, self.session.get(id)?))) else { return false };
+            let job = |v: &crate::DocView, doc: &pdfcraft_engine::Document| match waiting {
+                Some(span) if !v.all_text => DocumentCopyJob::of_selection(v, doc, span),
+                _ => DocumentCopyJob::of(v, doc),
+            };
+            let Some(job) = self.views.get(i).and_then(|v| Some(job(v, self.session.get(id)?))) else { return false };
             self.document_copy = Some(DocumentCopy::start(id, job, ctx));
             return true;
         }

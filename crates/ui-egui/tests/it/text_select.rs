@@ -407,8 +407,8 @@ fn page_top(h: &Harness<'static, PdfCraftApp>, page: usize) -> f32 {
 }
 
 /// Issue #721: selecting near the bottom of a page with the button held, the wheel keeps
-/// scrolling while the pointer crosses the gap onto the next page. The selection stays on its
-/// own page (a selection can't span pages yet).
+/// scrolling while the pointer crosses the gap onto the next page, and the selection follows the
+/// pointer onto that page.
 #[test]
 fn a_selection_drag_keeps_scrolling_over_the_gap_and_the_next_page() {
     let (mut h, _) = harness_with(bottom_lines(3), |app| {
@@ -434,11 +434,105 @@ fn a_selection_drag_keeps_scrolling_over_the_gap_and_the_next_page() {
         }
     }
     assert!(over_gap && over_next, "the pointer crossed the gap ({over_gap}) onto the next page ({over_next})");
+    // The next page's text layer may still be on its way: the selection reaches it once read.
+    crate::support::wait_until(&mut h, "page 2's text layer", |app| app.views[0].glyph_screen_pos(1, 0).is_some());
+    h.hover_at(to);
+    h.run_steps(2);
     let held = h.state().views[0].selected_text().expect("still selected");
-    assert!(held.starts_with("ends") && "Page 1 ends with this line".contains(held.as_str()), "the selection stays on page 1: {held:?}");
+    assert!(held.starts_with("ends with this line\nPage 2"), "the selection runs on onto page 2: {held:?}");
     h.event(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(2);
     assert_eq!(h.state().views[0].selected_text(), Some(held), "releasing keeps the selection");
+}
+
+/// `bottom_lines(3)` at 75 %, every page on screen with its text layer read.
+fn three_pages() -> Harness<'static, PdfCraftApp> {
+    let (mut h, _) = harness_with(bottom_lines(3), |app| {
+        app.set_option("layout", "continuous").unwrap();
+        app.set_option("zoom", "75").unwrap();
+    });
+    crate::support::wait_until(&mut h, "every page's text layer", |app| {
+        (0..3).all(|p| app.views[0].glyph_screen_pos(p, 10).is_some()) && !app.render_pending()
+    });
+    let viewport = h.state().views[0].viewport_rect();
+    assert!((0..3).all(|p| h.state().views[0].page_screen_rect(p).is_some_and(|r| viewport.contains_rect(r))), "every page in view");
+    h
+}
+
+fn glyph_on(h: &Harness<'static, PdfCraftApp>, page: usize, g: usize) -> Pos2 {
+    h.state().views[0].glyph_screen_pos(page, g).expect("glyph on screen")
+}
+
+/// A drag from one page onto the next selects to the end of the first page and from the start
+/// of the next, as in Acrobat, and Copy has both parts in reading order. Dragging the other way
+/// selects the same text.
+#[test]
+fn a_drag_selects_text_across_pages() {
+    let mut h = three_pages();
+    // From "ends" on page 1 (glyph 7) to the "s" of "ends" on page 2 (glyph 10).
+    let (from, to) = (glyph_on(&h, 0, 7), glyph_on(&h, 1, 10));
+    drag(&mut h, from, to);
+    let want = "ends with this line\nPage 2 ends";
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some(want), "dragging down");
+    h.run_steps(60);
+    drag(&mut h, to, from);
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some(want), "dragging up");
+    // Over three pages: the middle one is selected whole.
+    h.run_steps(60);
+    let page3 = glyph_on(&h, 2, 3);
+    drag(&mut h, from, page3);
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("ends with this line\nPage 2 ends with this line\nPage"));
+    // ⌘C copies all of it.
+    h.event(Event::Copy);
+    let mut did_copy = false;
+    for _ in 0..4 {
+        h.step();
+        did_copy |= copied(&h, "ends with this line\nPage 2 ends with this line\nPage");
+    }
+    assert!(did_copy, "Copy has the text of every page");
+}
+
+/// ⇧-click on another page extends the selection there from its anchor, either way.
+#[test]
+fn shift_click_extends_the_selection_onto_another_page() {
+    let mut h = three_pages();
+    // "ends" on page 2.
+    let (from, to) = (glyph_on(&h, 1, 7), glyph_on(&h, 1, 10));
+    drag(&mut h, from, to);
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("ends"));
+    h.run_steps(60);
+    let page3 = glyph_on(&h, 2, 3);
+    shift_click(&mut h, page3);
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("ends with this line\nPage"));
+    h.run_steps(60);
+    // Before the anchor, on page 1: from the click to the anchor.
+    // Glyph 22 is the "l" of "line" (spaces are glyphs too).
+    let line = glyph_on(&h, 0, 22);
+    shift_click(&mut h, line);
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("line\nPage 2 e"));
+}
+
+/// Marking a selection that runs across pages puts one markup on each page, in one undo step.
+#[test]
+fn a_selection_across_pages_is_marked_on_every_page_in_one_step() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = three_pages();
+    let (from, to) = (glyph_on(&h, 0, 7), glyph_on(&h, 1, 10));
+    drag(&mut h, from, to);
+    h.run_steps(3);
+    h.get_by_label("Underline").click();
+    h.run_steps(3);
+    let marks = |h: &Harness<'static, PdfCraftApp>| {
+        let app = h.state();
+        let doc = app.session.get(app.views[0].id).unwrap();
+        doc.info.annotations.iter().map(|a| (a.page, a.subtype.clone())).collect::<Vec<_>>()
+    };
+    assert_eq!(marks(&h), [(0, "Underline".to_string()), (1, "Underline".to_string())]);
+    assert!(h.state().views[0].selected_text().is_none(), "the selection is consumed");
+    assert!(h.state().views[0].comments.selected.is_some_and(|(page, _)| page == 1), "its last part is selected, as one markup is");
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert_eq!(marks(&h), [], "one undo removes both");
 }
 
 /// One 300×600 page with a line of Helvetica text at its top and another at its bottom.
@@ -648,4 +742,121 @@ fn full_screen_double_click_selects_a_word_and_stays_on_the_page() {
     h.state_mut().apply_full_screen(false);
     h.run_steps(30);
     assert_eq!(h.state().views[0].current, 0, "no page turn after leaving");
+}
+
+/// A quick drag can be off its page by the frame egui calls it a drag, in the gap or on the next
+/// page: the selection still starts where the button went down and runs on to the pointer.
+#[test]
+fn a_flick_off_the_page_still_selects_from_the_press() {
+    let mut h = three_pages();
+    let (from, to) = (glyph_on(&h, 0, 7), glyph_on(&h, 1, 10));
+    h.event(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    let gap =
+        egui::pos2(from.x, (h.state().views[0].page_screen_rect(0).unwrap().bottom() + h.state().views[0].page_screen_rect(1).unwrap().top()) / 2.0);
+    h.hover_at(gap);
+    h.run_steps(1);
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("e"), "started at the press, on page 1; the gap moves nothing");
+    h.hover_at(to);
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("ends with this line\nPage 2 ends"));
+}
+
+/// The markup and Redact tools mark a drag across pages on every page it covers, in one step,
+/// and so does picking a markup tool with such a selection already made.
+#[test]
+fn markup_tools_mark_a_selection_across_pages_on_every_page() {
+    let marks = |h: &Harness<'static, PdfCraftApp>| {
+        let app = h.state();
+        let doc = app.session.get(app.views[0].id).unwrap();
+        doc.info.annotations.iter().map(|a| (a.page, a.subtype.clone())).collect::<Vec<_>>()
+    };
+    let both = |kind: &str| vec![(0, kind.to_string()), (1, kind.to_string())];
+    for (command, kind) in [("comment.strikeout", "StrikeOut"), ("redact.mark", "Redact")] {
+        // Dragging with the tool.
+        let mut h = three_pages();
+        assert!(h.state_mut().execute(command));
+        h.run_steps(2);
+        let (from, to) = (glyph_on(&h, 0, 7), glyph_on(&h, 1, 10));
+        drag(&mut h, from, to);
+        h.run_steps(3);
+        assert_eq!(marks(&h), both(kind), "{command}: dragged with the tool");
+        h.state_mut().undo();
+        h.run_steps(3);
+        assert_eq!(marks(&h), [], "{command}: one undo step");
+        // Selecting first, then picking the tool.
+        // (The tool opened the Comments panel above, which moved the pages.)
+        let mut h = three_pages();
+        let (from, to) = (glyph_on(&h, 0, 7), glyph_on(&h, 1, 10));
+        drag(&mut h, from, to);
+        assert!(h.state().views[0].selected_text().is_some());
+        assert!(h.state_mut().execute(command));
+        h.run_steps(3);
+        assert_eq!(marks(&h), both(kind), "{command}: picked after selecting");
+    }
+}
+
+/// Review of #5017: an area highlight whose drag ends in the same frame as Escape (which drops
+/// the Highlight tool for Select) is still a highlight, never a redaction: the queued box keeps
+/// the tool that drew it.
+#[test]
+fn an_area_highlight_ended_with_escape_stays_a_highlight() {
+    let mut h = three_pages();
+    assert!(h.state_mut().execute("comment.highlight"));
+    h.run_steps(2);
+    // A box in the empty top of page 1 (its text is at the bottom).
+    let page = h.state().views[0].page_screen_rect(0).expect("page on screen");
+    let (from, to) = (page.min + egui::vec2(20.0, 15.0), page.min + egui::vec2(120.0, 60.0));
+    h.event(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(from + (to - from) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    // Release and Escape in one frame.
+    h.input_mut().events.extend([
+        Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE },
+        Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE },
+    ]);
+    h.run_steps(3);
+    let app = h.state();
+    let doc = app.session.get(app.views[0].id).unwrap();
+    let marks: Vec<&str> = doc.info.annotations.iter().map(|a| a.subtype.as_str()).collect();
+    assert_eq!(marks, ["Highlight"], "the box is a highlight");
+    assert_eq!(doc.redaction_marks(), 0, "nothing marked for redaction");
+}
+
+/// Review of #5017: a highlight across pages is followed up as one on a single page is: the
+/// comment where the selection ends is selected and its note opens for typing.
+#[test]
+fn a_highlight_across_pages_selects_its_last_part_and_opens_its_note() {
+    let mut h = three_pages();
+    let (from, to) = (glyph_on(&h, 0, 7), glyph_on(&h, 1, 10));
+    drag(&mut h, from, to);
+    h.run_steps(3);
+    assert!(h.state_mut().execute("comment.highlight"));
+    h.run_steps(3);
+    let app = h.state();
+    let doc = app.session.get(app.views[0].id).unwrap();
+    let on_page_2 = doc.info.annotations.iter().find(|a| a.page == 1 && a.subtype == "Highlight").map(|a| a.index).expect("a highlight on page 2");
+    assert_eq!(app.views[0].comments.selected, Some((1, on_page_2)), "the part where the selection ends is selected");
+    assert!(app.views[0].comments.editing.as_ref().is_some_and(|(p, i, _)| (*p, *i) == (1, on_page_2)), "its note is open");
+}
+
+/// Review of #5017: only markup on a text selection across pages is followed up as one markup.
+/// Redact ▸ Mark Page Range, also one comment per page in one batch, selects nothing and leaves
+/// the comment editor alone, as before.
+#[test]
+fn a_page_range_redaction_is_not_followed_up_as_a_selection() {
+    let mut h = three_pages();
+    h.state_mut().redact_pages_draft = pdfcraft_ui_egui::RedactPagesDraft { current: false, from: 1, to: 3 };
+    h.state_mut().redact_pages();
+    h.run_steps(3);
+    let app = h.state();
+    let doc = app.session.get(app.views[0].id).unwrap();
+    assert_eq!(doc.redaction_marks(), 3, "a mark on every page");
+    assert_eq!(app.views[0].comments.selected, None, "no mark selected");
+    assert!(app.views[0].comments.editing.is_none(), "no editor opened");
 }

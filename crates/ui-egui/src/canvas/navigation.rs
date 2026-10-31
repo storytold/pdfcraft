@@ -9,15 +9,19 @@ impl DocView {
     /// zoom are kept). `None` before the first frame has laid pages out, when the bookmark just
     /// goes to the current page.
     pub(crate) fn bookmark_position(&self, info: &DocInfo) -> Option<(usize, [Option<f32>; 2])> {
+        // Across pages, the corner is on the selection's first page.
+        let first = self.selection.map(|s| *s.pages().start());
         if let Some(sel) = self.selection
-            && let Some(text) = self.texts.get(&sel.page)
-            && let Some(p) = info.pages.get(sel.page)
+            && let Some(first) = first
+            && let Some(text) = self.texts.get(&first)
+            && let Some(p) = info.pages.get(first)
         {
             // The selection's bounds in view space, which View ▸ Rotate View leaves unturned: the
             // corner at the screen's top-left is a different one for each quarter turn.
-            let [x0, y0, x1, y1] = sel.rects(text).iter().fold([f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY], |b, r| {
-                [b[0].min(r[0]), b[1].min(r[1]), b[2].max(r[2]), b[3].max(r[3])]
-            });
+            let [x0, y0, x1, y1] =
+                sel.rects_on(first, text).iter().fold([f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY], |b, r| {
+                    [b[0].min(r[0]), b[1].min(r[1]), b[2].max(r[2]), b[3].max(r[3])]
+                });
             let (x, y) = match self.rotation {
                 90 => (x0, y1),
                 180 => (x1, y1),
@@ -25,7 +29,7 @@ impl DocView {
                 _ => (x0, y0),
             };
             if x.is_finite() && y.is_finite() {
-                return Some((sel.page, p.xyz_for_view(Some(x), Some(y))));
+                return Some((first, p.xyz_for_view(Some(x), Some(y))));
             }
         }
         // The page showing at the window's top edge: one that crosses it (the first, in a spread

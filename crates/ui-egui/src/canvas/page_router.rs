@@ -119,6 +119,8 @@ pub(crate) struct Capture {
 #[derive(Debug, Default)]
 pub(crate) struct PageRouter {
     capture: Option<Capture>,
+    /// The page the press went down on, whoever holds it.
+    pressed: Option<usize>,
 }
 
 impl PageRouter {
@@ -126,6 +128,14 @@ impl PageRouter {
     /// hit claims is held by nobody (the page's text, or a tool that acts anywhere on the page).
     pub(crate) fn press(&mut self, page: usize, hits: impl IntoIterator<Item = Hit>, tool: QuickTool) {
         self.capture = top(hits, tool).map(|h| Capture { page, owner: h.owner, declines_drag: h.declines_drag });
+        self.pressed = Some(page);
+    }
+
+    /// Whether the press went down on `page`, whoever holds it: nobody, for a press on the
+    /// page's text or for a tool that acts anywhere on the page. Such a press is the page's own
+    /// even once a quick drag has taken the pointer onto another page, where it is not.
+    pub(crate) fn pressed_on(&self, page: usize) -> bool {
+        self.pressed == Some(page)
     }
 
     /// Who holds the press on `page`.
@@ -143,12 +153,14 @@ impl PageRouter {
     pub(crate) fn settle(&mut self, any_down: bool, edges: bool) {
         if !any_down && !edges {
             self.capture = None;
+            self.pressed = None;
         }
     }
 
     /// Drops the press (Escape, a dialog, automation's cancel).
     pub(crate) fn cancel(&mut self) {
         self.capture = None;
+        self.pressed = None;
     }
 }
 
@@ -184,6 +196,16 @@ mod tests {
         r.press(0, [], QuickTool::Select);
         assert_eq!(r.owner(0), None, "a press nobody claims is held by nobody");
         assert!(!r.keeps_drag());
+        // It still went down on its page, and only there, until it is over.
+        assert!(r.pressed_on(0) && !r.pressed_on(1));
+        r.settle(false, true);
+        assert!(r.pressed_on(0), "the release frame still belongs to the press");
+        r.settle(false, false);
+        assert!(!r.pressed_on(0));
+        r.press(1, [hit(Layer::Comment, 7)], QuickTool::Select);
+        assert!(r.pressed_on(1), "a claimed press too");
+        r.cancel();
+        assert!(!r.pressed_on(1), "Escape drops it");
     }
 
     #[test]

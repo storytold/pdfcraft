@@ -63,7 +63,8 @@ pub(crate) use organize::grid_page_rect;
 use organize::organize_grid;
 #[cfg(test)]
 use organize::sharp_enough;
-use selection::{Selection, Span, click_unit, selection_actions};
+use selection::{Selection, Span, click_unit, selection_actions, start_selection_drag};
+pub(crate) use selection::{TextSpan, ToolMarks};
 pub use xform::PageXform;
 use xform::snap_to_pixels;
 use zoom::anchored_scroll;
@@ -271,6 +272,9 @@ pub(crate) fn snapshot_tab_name(title: &str, file_name: &str, snapshot: &Snapsho
     }
 }
 
+/// Markup quadrilaterals in user space, one entry per page: (page, quads).
+pub type PageMarks = Vec<(usize, Vec<[f64; 8]>)>;
+
 pub struct DocView {
     pub id: DocId,
     pub zoom: f32,
@@ -448,9 +452,22 @@ pub struct DocView {
     pub content: crate::content_ui::ContentView,
     /// Edit a PDF ▸ Link tool state.
     pub links: crate::link_ui::LinkView,
-    /// Redact tool: the box being drawn, and a mark to add (page, quads) for the app to style.
+    /// Redact tool: the box being drawn, and the marks to add (page, quads) for the app to style,
+    /// one per page (a text selection can cover several), added in one undo step.
     pub redact_drag: crate::redact_ui::AreaDrag,
-    pub pending_redaction: Option<(usize, Vec<[f64; 8]>)>,
+    /// With the tool that made them, read when they are styled: a key handled later in the same
+    /// frame (Escape back to Select) must not turn an area highlight into a redaction.
+    pub pending_redaction: Option<(QuickTool, PageMarks)>,
+    /// A text selection Redact did not mark: it covers a page whose text could not be read
+    /// ([`ToolMarks::Unreadable`]). The app says so.
+    pub(crate) redaction_refused: bool,
+    /// The next edit applied is markup on a text selection across pages, one comment per page in
+    /// one batch ([`DocView::selection_marks_edit`]): `apply_edit` follows it up as one markup and
+    /// takes this back, whatever becomes of the edit.
+    pub(crate) marks_across_pages: bool,
+    /// A marking tool finished this text selection while a page it covers was still to be read
+    /// (or none was drawn): it is marked once they are ([`DocView::tool_marks`]).
+    marks_waiting: Option<(QuickTool, Selection)>,
     /// A crop rectangle being dragged (Crop tool).
     pub crop_drag: crate::crop::CropDrag,
     /// Enhance ▸ Camera image: the quadrilateral being placed.
@@ -723,6 +740,9 @@ impl DocView {
             links: Default::default(),
             redact_drag: None,
             pending_redaction: None,
+            redaction_refused: false,
+            marks_across_pages: false,
+            marks_waiting: None,
             crop_drag: None,
             camera: None,
             camera_done: None,
@@ -1278,7 +1298,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
             let (vx, vy) = xf.screen_to_view(p);
             text.as_ref().is_some_and(|t| t.glyphs.iter().any(|g| vx >= g.rect[0] && vx <= g.rect[2] && vy >= g.rect[1] && vy <= g.rect[3]))
         };
-        crate::redact_ui::page_input(cx, over_text, view)
+        crate::redact_ui::page_input(cx, tool, over_text, view)
     };
     let on_objects = tool == QuickTool::EditText && can_modify && crate::object_ui::page_input(cx, view);
     // Add text acts on the page's own paragraphs over them, and on the one its press was on until
@@ -1478,6 +1498,19 @@ fn text_layer(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, 
             && let Some(p) = pointer.filter(|p| r.contains(*p))
         {
             text_pointer_input(ui, view, &text, TextPointer { page: i, xf, rect: r, info, tool, resp, ptr: ptr.clone(), pointer: p });
+        } else if selects_text
+            && !input.consumed
+            && resp.drag_started()
+            && view.router.pressed_on(i)
+            && !view.router.keeps_drag()
+            && let (Some(origin), Some(p)) = (ptr.origin, pointer)
+        {
+            // A quick drag can leave the page it was pressed on before egui calls it a drag (a
+            // flick off the bottom of a page, onto the gap or the next page): the press is still
+            // this page's (the router's), so it starts the selection here, for the next page to
+            // extend. A press something on the page keeps (a link, a comment) selects nothing.
+            let column = tool == QuickTool::ColumnSelect || ui.input(|input| input.modifiers.alt);
+            start_selection_drag(view, i, &text, column, xf.screen_to_view(origin), xf.screen_to_view(p));
         }
     }
 }
@@ -1505,8 +1538,8 @@ fn paint_text_marks(ui: &egui::Ui, view: &DocView, text: &PageText, page: usize,
             painter.rect_filled(to_screen(line_rect), CornerRadius::same(1), Color32::from_rgba_unmultiplied(0x3A, 0x7B, 0xF0, 70));
         }
     }
-    if let Some(selection) = view.selection.filter(|selection| selection.page == page) {
-        for line_rect in selection.rects(text) {
+    if let Some(selection) = view.selection.filter(|selection| selection.pages().contains(&page)) {
+        for line_rect in selection.rects_on(page, text) {
             painter.rect_filled(to_screen(line_rect), CornerRadius::same(1), Color32::from_rgba_unmultiplied(0x3A, 0x7B, 0xF0, 70));
         }
         if let Span::Column { rect } = selection.span
@@ -1586,17 +1619,8 @@ fn update_selection_on_press(ui: &egui::Ui, view: &mut DocView, text: &PageText,
         }
     }
     if gesture.resp.drag_started() && press_here && !view.router.keeps_drag() {
-        view.actions_dismissed = None;
-        view.selection_drag = true;
-        let origin = gesture.ptr.origin.unwrap_or(gesture.pointer);
-        let (ox, oy) = gesture.xf.screen_to_view(origin);
-        if view.clicks < 2 {
-            view.selection = if gesture.column {
-                Some(Selection { page: gesture.page, span: Span::Column { rect: [ox, oy, gesture.vx, gesture.vy] } })
-            } else {
-                text.nearest(ox, oy).map(|anchor| Selection::run(gesture.page, anchor, anchor))
-            };
-        }
+        let origin = gesture.xf.screen_to_view(gesture.ptr.origin.unwrap_or(gesture.pointer));
+        start_selection_drag(view, gesture.page, text, gesture.column, origin, (gesture.vx, gesture.vy));
     }
 }
 
@@ -1606,36 +1630,60 @@ fn selection_click_count(clicks: u32, tool: QuickTool) -> u32 {
 
 fn update_dragged_selection(view: &mut DocView, text: &PageText, gesture: &TextGesture<'_>) {
     let clicks = selection_click_count(view.clicks, gesture.tool);
+    // The drag extends the selection on its own page and, for a reading-order selection the drag
+    // started, on any page the pointer moves on to.
     if gesture.resp.dragged()
-        && let Some(selection) = view.selection.as_mut().filter(|selection| selection.page == gesture.page)
+        && let Some(mut selection) =
+            view.selection.filter(|selection| selection.page == gesture.page || (view.selection_drag && matches!(selection.span, Span::Run { .. })))
     {
-        match &mut selection.span {
-            Span::Run { anchor, head } if clicks >= 2 => {
-                if let Some(hit) = text.nearest(gesture.vx, gesture.vy)
-                    && let Some((first, last)) = click_unit(text, clicks, *anchor)
-                {
-                    let (to_first, to_last) = click_unit(text, clicks, hit).unwrap_or((hit, hit));
-                    (*anchor, *head) = if to_first < first { (last, to_first) } else { (first, to_last.max(last)) };
+        let hit = text.nearest(gesture.vx, gesture.vy);
+        match selection.span {
+            Span::Run { .. } if clicks >= 2 => {
+                if let Some(hit) = hit {
+                    extend_by_unit(view, &mut selection, text, clicks, (gesture.page, hit));
                 }
             }
-            Span::Run { head, .. } => {
-                if let Some(hit) = text.nearest(gesture.vx, gesture.vy) {
-                    *head = hit;
+            Span::Run { .. } => {
+                if let Some(hit) = hit {
+                    selection.extend_to(gesture.page, hit);
                 }
             }
-            Span::Column { rect } => {
-                rect[2] = gesture.vx;
-                rect[3] = gesture.vy;
-            }
+            Span::Column { rect } => selection.span = Span::Column { rect: [rect[0], rect[1], gesture.vx, gesture.vy] },
         }
+        view.selection = Some(selection);
     }
     if gesture.resp.drag_stopped()
         && view.selection.is_some_and(|selection| {
-            selection.page == gesture.page && matches!(selection.span, Span::Column { .. }) && selection.text(text).is_empty()
+            selection.page == gesture.page && matches!(selection.span, Span::Column { .. }) && selection.text_on(gesture.page, text).is_empty()
         })
     {
         view.selection = None;
     }
+}
+
+/// After a multi-click the drag extends by its unit (#1685), as in Acrobat and browsers: whole
+/// words or lines, always keeping the one clicked, which holds the anchor whichever way the drag
+/// went. On another page than the one clicked, the clicked unit is read from its own page.
+fn extend_by_unit(view: &DocView, selection: &mut Selection, text: &PageText, clicks: u32, (page, hit): (usize, usize)) {
+    let Span::Run { anchor, .. } = selection.span else { return };
+    let start_page = selection.page;
+    let other = if start_page == page { None } else { view.texts.get(&start_page).cloned() };
+    let anchor_text = match other.as_deref() {
+        Some(t) => t,
+        None if start_page == page => text,
+        None => return,
+    };
+    let Some((first, last)) = click_unit(anchor_text, clicks, anchor) else { return };
+    let (to_first, to_last) = click_unit(text, clicks, hit).unwrap_or((hit, hit));
+    // (page, glyph) pairs compare in reading order.
+    let (anchor, head) = if (page, to_first) < (start_page, first) {
+        (last, to_first)
+    } else if page == start_page {
+        (first, to_last.max(last))
+    } else {
+        (first, to_last)
+    };
+    selection.span = Span::Run { anchor, head, head_page: page };
 }
 
 fn finish_text_pointer_gesture(ui: &egui::Ui, view: &mut DocView, text: &PageText, gesture: &TextGesture<'_>) {
@@ -1658,12 +1706,13 @@ fn finish_text_pointer_gesture(ui: &egui::Ui, view: &mut DocView, text: &PageTex
     {
         view.selection = Some(Selection::run(gesture.page, first, last));
     } else if gesture.resp.clicked() && view.clicks < 2 && !view.router.keeps_drag() {
+        // ⇧-click extends a reading-order selection to the click, on its page or another,
+        // keeping its anchor (#527). Otherwise (no shift, no selection, or a column selection,
+        // which has no anchor glyph) a click clears the selection.
         let shift = ui.input(|input| input.modifiers.shift);
-        match (
-            view.selection.as_mut().filter(|selection| shift && selection.page == gesture.page).map(|selection| &mut selection.span),
-            text.nearest(gesture.vx, gesture.vy),
-        ) {
-            (Some(Span::Run { head, .. }), Some(hit)) => *head = hit,
+        match (view.selection.as_mut().filter(|selection| shift && matches!(selection.span, Span::Run { .. })), text.nearest(gesture.vx, gesture.vy))
+        {
+            (Some(selection), Some(hit)) => selection.extend_to(gesture.page, hit),
             _ => view.selection = None,
         }
     }
@@ -2097,7 +2146,8 @@ fn draw_pages(
         }
     }
     // Held at the top or bottom edge, or dragged past it, a text selection scrolls the view
-    // so it can reach text off screen (#1670); the selection follows the pointer on its page.
+    // so it can reach text off screen (#1670); the selection follows the pointer, onto the
+    // pages it scrolls to.
     if view.selection_drag
         && navigation_enabled
         && unobstructed
@@ -2196,7 +2246,8 @@ fn draw_pages(
             return;
         }
         if view.comments.selected.is_none() {
-            let selected = view.selected_text().is_some_and(|t| !t.is_empty());
+            // A selection whose pages are still being read copies once they are.
+            let selected = view.selection_waits_for_text().is_some() || view.selected_text().is_some_and(|t| !t.is_empty());
             let key = crate::commands::shortcut_label(ui.ctx(), crate::commands::COPY);
             if ui.add_enabled(can_copy && selected, egui::Button::new(tl!("Copy")).shortcut_text(key)).clicked() {
                 copy_selected = true;
@@ -2527,6 +2578,11 @@ fn plan_renders(ui: &egui::Ui, view: &mut DocView, info: &DocInfo, renders: Page
     // the rest, as text far away is let go to bound memory.)
     let need_text = |p: &usize| !view.texts.contains_key(p) && !view.text_failed.contains(p);
     let mut text_pages: Vec<usize> = if hand { Vec::new() } else { visible_now.iter().copied().filter(need_text).collect() };
+    // A selection across pages copies and marks every page it covers, scrolled past or not.
+    if let Some(s) = view.selection {
+        let rest: Vec<usize> = s.pages().filter(|p| *p < info.pages.len()).filter(need_text).filter(|p| !text_pages.contains(p)).collect();
+        text_pages.extend(rest);
+    }
     if view.find.as_ref().is_some_and(|f| !f.case_query.trim().is_empty()) {
         let n = info.pages.len();
         let rest: Vec<usize> = (0..n).map(|k| (cur + k) % n).filter(need_text).filter(|p| !text_pages.contains(p)).collect();
@@ -3411,21 +3467,31 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
     if let Some((page, i)) = app.views[index].links.open_existing.take() {
         app.open_link_props(page, None, Some(i));
     }
-    if let Some((page, quads)) = app.views[index].pending_redaction.take() {
+    if std::mem::take(&mut app.views[index].redaction_refused) {
+        app.notify_tr("Part of the selected text is on a page whose text could not be read, so nothing was marked for redaction. Mark that page with a box instead.");
+    }
+    if let Some((made_by, marks)) = app.views[index].pending_redaction.take() {
         let author = app.comment_prefs.author.clone();
-        app.views[index].pending_edit = Some(if app.quick_tool == QuickTool::Comment(comments::CommentTool::Highlight) {
-            // An area highlight: a highlight over the box.
-            let style = app.comment_prefs.style(comments::CommentTool::Highlight);
-            pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
-                page,
-                shape: pdfcraft_engine::Shape::TextMarkup { kind: pdfcraft_engine::Markup::Highlight, quads },
-                style,
-                contents: String::new(),
-                author,
+        let edits: Vec<pdfcraft_engine::Edit> = marks
+            .into_iter()
+            .map(|(page, quads)| {
+                if made_by == QuickTool::Comment(comments::CommentTool::Highlight) {
+                    // An area highlight: a highlight over the box.
+                    let style = app.comment_prefs.style(comments::CommentTool::Highlight);
+                    pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+                        page,
+                        shape: pdfcraft_engine::Shape::TextMarkup { kind: pdfcraft_engine::Markup::Highlight, quads },
+                        style,
+                        contents: String::new(),
+                        author: author.clone(),
+                    })
+                } else {
+                    app.redact_prefs.mark(page, quads, &author)
+                }
             })
-        } else {
-            app.redact_prefs.mark(page, quads, &author)
-        });
+            .collect();
+        let edit = app.views[index].selection_marks_edit(edits);
+        app.views[index].pending_edit = edit;
     }
     match image_action {
         Some(crate::edit_text_ui::ImageAction::Replace(page, index)) => app.replace_page_image_dialog(page, index),

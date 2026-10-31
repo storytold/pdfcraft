@@ -28,13 +28,15 @@ fn new_text_typed(v: &crate::DocView) -> bool {
 }
 
 /// Keeps the pages (or comment) the user acted on selected, where they now are. `annots_before`
-/// is a deleted annotation's page's annotations before the delete (empty for other edits).
+/// is a deleted annotation's page's annotations before the delete (empty for other edits);
+/// `across_pages`, that the edit is markup on a text selection across pages.
 fn select_after_edit(
     view: &mut crate::DocView,
     edit: Edit,
     info: &pdfcraft_render::DocInfo,
     annots_before: &[pdfcraft_render::Annotation],
     quick_tool: crate::QuickTool,
+    across_pages: bool,
 ) {
     match edit {
         Edit::MovePages { pages, to } => {
@@ -72,6 +74,16 @@ fn select_after_edit(
             }
         }
         Edit::DeleteAnnotation { page, index } => view.comments.annotation_deleted(annots_before, &info.annotations, (page, index)),
+        // Markup on a text selection across pages (marked so when it was made,
+        // [`crate::DocView::selection_marks_edit`]; other batches of comments, such as Redact's
+        // page range or search, are not) is followed up as one markup is: on the page the
+        // selection ends, where the drag finished and is on screen, its comment selected and, for
+        // a highlight, its note open. One level: the last edit is an `AddAnnotation`.
+        Edit::Batch { mut edits, .. } if across_pages && edits.iter().all(|e| matches!(e, Edit::AddAnnotation(_))) => {
+            if let Some(last) = edits.pop() {
+                select_after_edit(view, last, info, &[], quick_tool, false);
+            }
+        }
         _ => {}
     }
 }
@@ -111,6 +123,8 @@ impl PdfCraftApp {
     /// Apply an edit to the active document. Returns `true` on success; failures are shown.
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
         let Some((i, id)) = self.active_ids() else { return false };
+        // Taken whatever happens to this edit, so it never carries over to another.
+        let across_pages = std::mem::take(&mut self.views[i].marks_across_pages) && annotated_pages(&edit).is_some();
         let label = edit.label();
         let (form_before, page_count_before, had_xfa) = if let Some(d) = self.session.get(id) {
             (Some(std::sync::Arc::clone(&d.form)), d.info.pages.len(), d.xfa.is_some())
@@ -148,6 +162,9 @@ impl PdfCraftApp {
                 if let Some(page) = comment_page(&edit).or_else(|| content_page(&edit)) {
                     // Comment and content edits change one page: keep every other raster.
                     view.page_changed(page);
+                } else if let Some(pages) = annotated_pages(&edit) {
+                    // Markup on a selection across pages: one comment on each of them.
+                    pages.into_iter().for_each(|page| view.page_changed(page));
                 } else if let Some(form_before) = form_before
                     && doc.info.pages.len() == page_count_before
                     && doc.xfa.is_some() == had_xfa
@@ -162,11 +179,11 @@ impl PdfCraftApp {
                 } else {
                     view.document_changed(info);
                 }
-                if matches!(edit, Edit::AddAnnotation(_)) {
+                if matches!(edit, Edit::AddAnnotation(_)) || across_pages {
                     view.comments.comment_added();
                 }
                 // Keep the pages the user acted on selected, where they now are.
-                select_after_edit(view, edit, info, &annots_before, self.quick_tool);
+                select_after_edit(view, edit, info, &annots_before, self.quick_tool, across_pages);
                 if std::mem::take(&mut view.comments.tool_done) && !self.comment_prefs.pinned {
                     self.quick_tool = crate::QuickTool::Select;
                 }
@@ -816,6 +833,20 @@ fn comment_page(edit: &Edit) -> Option<usize> {
         | Edit::SetAnnotationInfo { page, .. } => Some(*page),
         _ => None,
     }
+}
+
+/// The pages of a batch that only adds annotations (markup on a text selection across pages),
+/// each of which changes only its own page; `None` for anything else.
+fn annotated_pages(edit: &Edit) -> Option<Vec<usize>> {
+    let Edit::Batch { edits, .. } = edit else { return None };
+    let pages: Vec<usize> = edits
+        .iter()
+        .map(|e| match e {
+            Edit::AddAnnotation(a) => Some(a.page),
+            _ => None,
+        })
+        .collect::<Option<_>>()?;
+    (!pages.is_empty()).then_some(pages)
 }
 
 /// Whether `edit` is a form-related modification.
