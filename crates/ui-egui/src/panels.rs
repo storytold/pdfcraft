@@ -38,7 +38,8 @@ pub(crate) enum Nav {
 
 pub fn human_size(n: usize) -> String {
     match n {
-        n if n >= 1 << 20 => format!("{:.1} MB", n as f64 / (1u64 << 20) as f64),
+        // A size that rounds to "1024.0 KB" reads as the next unit.
+        n if n as f64 / 1024.0 >= 1023.95 => format!("{:.1} MB", n as f64 / (1u64 << 20) as f64),
         n if n >= 1 << 10 => format!("{:.1} KB", n as f64 / (1u64 << 10) as f64),
         n => byte_count(n),
     }
@@ -47,4 +48,17 @@ pub fn human_size(n: usize) -> String {
 /// An exact size in bytes, with the count's own plural form.
 pub fn byte_count(n: usize) -> String {
     crate::i18n::trn(crate::i18n::current(), n as u64, "{n} byte", "{n} bytes")
+}
+
+#[cfg(test)]
+mod human_size_tests {
+    use super::human_size;
+
+    #[test]
+    fn rounds_up_into_next_unit() {
+        assert_eq!(human_size(1_048_524), "1023.9 KB");
+        assert_eq!(human_size(1_048_525), "1.0 MB");
+        assert_eq!(human_size(1_048_575), "1.0 MB");
+        assert_eq!(human_size(1_048_576), "1.0 MB");
+    }
 }
