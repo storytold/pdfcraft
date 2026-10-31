@@ -673,18 +673,37 @@ fn run(program: &[Instr], stack: &mut Vec<Val>) -> Option<()> {
 }
 
 fn apply(op: Op, stack: &mut Vec<Val>) -> Option<()> {
-    use Val::{Bool, Int, Real};
-    let one = |stack: &mut Vec<Val>| stack.pop();
-    let two = |stack: &mut Vec<Val>| {
-        let b = stack.pop()?;
-        let a = stack.pop()?;
-        Some((a, b))
-    };
-    let int = |v: Val| match v {
-        Int(i) => Some(i),
-        _ => None,
-    };
     let result = match op {
+        Op::Dup | Op::Pop | Op::Exch | Op::Copy | Op::Index | Op::Roll => return stack_op(op, stack),
+        Op::Eq | Op::Ne | Op::Ge | Op::Gt | Op::Le | Op::Lt | Op::And | Op::Or | Op::Xor | Op::Not | Op::Bitshift => logic(op, stack)?,
+        Op::Sqrt | Op::Sin | Op::Cos | Op::Atan | Op::Exp | Op::Ln | Op::Log => math(op, stack)?,
+        _ => arithmetic(op, stack)?,
+    };
+    stack.push(result);
+    Some(())
+}
+
+fn one(stack: &mut Vec<Val>) -> Option<Val> {
+    stack.pop()
+}
+
+fn two(stack: &mut Vec<Val>) -> Option<(Val, Val)> {
+    let b = stack.pop()?;
+    let a = stack.pop()?;
+    Some((a, b))
+}
+
+fn int(v: Val) -> Option<i64> {
+    match v {
+        Val::Int(i) => Some(i),
+        _ => None,
+    }
+}
+
+/// `add` to `cvr`: integers stay integers while they fit.
+fn arithmetic(op: Op, stack: &mut Vec<Val>) -> Option<Val> {
+    use Val::{Bool, Int, Real};
+    Some(match op {
         Op::Add | Op::Sub | Op::Mul => {
             let (a, b) = two(stack)?;
             match (a, b) {
@@ -741,16 +760,22 @@ fn apply(op: Op, stack: &mut Vec<Val>) -> Option<()> {
             }
             Int(v as i64)
         }
-        Op::Cvr => Val::real(one(stack)?.num()?)?,
+        _ => Val::real(one(stack)?.num()?)?,
+    })
+}
+
+/// `sqrt` to `log`: real results, angles in degrees.
+fn math(op: Op, stack: &mut Vec<Val>) -> Option<Val> {
+    match op {
         Op::Sqrt => {
             let v = one(stack)?.num()?;
             if v < 0.0 {
                 return None;
             }
-            Val::real(v.sqrt())?
+            Val::real(v.sqrt())
         }
-        Op::Sin => Val::real(one(stack)?.num()?.to_radians().sin())?,
-        Op::Cos => Val::real(one(stack)?.num()?.to_radians().cos())?,
+        Op::Sin => Val::real(one(stack)?.num()?.to_radians().sin()),
+        Op::Cos => Val::real(one(stack)?.num()?.to_radians().cos()),
         Op::Atan => {
             let (num, den) = two(stack)?;
             let (n, d) = (num.num()?, den.num()?);
@@ -758,19 +783,26 @@ fn apply(op: Op, stack: &mut Vec<Val>) -> Option<()> {
                 return None;
             }
             let deg = n.atan2(d).to_degrees();
-            Val::real(if deg < 0.0 { deg + 360.0 } else { deg })?
+            Val::real(if deg < 0.0 { deg + 360.0 } else { deg })
         }
         Op::Exp => {
             let (base, exponent) = two(stack)?;
-            Val::real(base.num()?.powf(exponent.num()?))?
+            Val::real(base.num()?.powf(exponent.num()?))
         }
-        Op::Ln | Op::Log => {
+        _ => {
             let v = one(stack)?.num()?;
             if v <= 0.0 {
                 return None;
             }
-            Val::real(if op == Op::Ln { v.ln() } else { v.log10() })?
+            Val::real(if op == Op::Ln { v.ln() } else { v.log10() })
         }
+    }
+}
+
+/// The relational, boolean and bitwise operators.
+fn logic(op: Op, stack: &mut Vec<Val>) -> Option<Val> {
+    use Val::{Bool, Int, Real};
+    Some(match op {
         Op::Eq | Op::Ne => {
             let (a, b) = two(stack)?;
             let same = match (a, b) {
@@ -808,7 +840,7 @@ fn apply(op: Op, stack: &mut Vec<Val>) -> Option<()> {
             Int(i) => Int(!i),
             Real(_) => return None,
         },
-        Op::Bitshift => {
+        _ => {
             let (a, b) = two(stack)?;
             let (x, shift) = (int(a)?, int(b)?);
             // Bits shifted out are lost, and those shifted in are zero.
@@ -818,15 +850,23 @@ fn apply(op: Op, stack: &mut Vec<Val>) -> Option<()> {
                 u32::try_from(shift.unsigned_abs()).ok().and_then(|s| (x as u64).checked_shr(s)).map_or(0, |v| v as i64)
             })
         }
-        Op::Dup => *stack.last()?,
+    })
+}
+
+/// The operators that move what is on the stack.
+fn stack_op(op: Op, stack: &mut Vec<Val>) -> Option<()> {
+    match op {
+        Op::Dup => {
+            let top = *stack.last()?;
+            stack.push(top);
+        }
         Op::Pop => {
             stack.pop()?;
-            return Some(());
         }
         Op::Exch => {
             let (a, b) = two(stack)?;
             stack.push(b);
-            a
+            stack.push(a);
         }
         Op::Copy => {
             let n = usize::try_from(int(one(stack)?)?).ok()?;
@@ -836,14 +876,14 @@ fn apply(op: Op, stack: &mut Vec<Val>) -> Option<()> {
             }
             let copied: Vec<Val> = stack.get(start..)?.to_vec();
             stack.extend(copied);
-            return Some(());
         }
         Op::Index => {
             let n = usize::try_from(int(one(stack)?)?).ok()?;
             let at = stack.len().checked_sub(n.checked_add(1)?)?;
-            *stack.get(at)?
+            let v = *stack.get(at)?;
+            stack.push(v);
         }
-        Op::Roll => {
+        _ => {
             let (n, j) = two(stack)?;
             let (n, j) = (usize::try_from(int(n)?).ok()?, int(j)?);
             let start = stack.len().checked_sub(n)?;
@@ -851,10 +891,8 @@ fn apply(op: Op, stack: &mut Vec<Val>) -> Option<()> {
                 let by = usize::try_from(j.rem_euclid(i64::try_from(n).ok()?)).ok()?;
                 stack.get_mut(start..)?.rotate_right(by);
             }
-            return Some(());
         }
-    };
-    stack.push(result);
+    }
     Some(())
 }
 
