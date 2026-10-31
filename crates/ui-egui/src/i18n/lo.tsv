@@ -2472,6 +2472,12 @@ animation effects	Off	ປິດ
 	Extract the selected pages…	ແຍກໜ້າທີ່ເລືອກອອກ…
 	Delete the selected pages	ລຶບໜ້າທີ່ເລືອກ
 
+# Add Watermark: saved settings (#4616) (AI-assisted, not separately native-reviewed)
+	Saved Settings	ການຕັ້ງຄ່າທີ່ບັນທຶກໄວ້
+	Save Settings	ບັນທຶກການຕັ້ງຄ່າ
+	Delete Settings	ລຶບການຕັ້ງຄ່າ
+	[Custom]	[ກຳນົດເອງ]
+	Name a text watermark to save it	ຕັ້ງຊື່ລາຍນ້ຳຂໍ້ຄວາມເພື່ອບັນທຶກມັນ
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	ຕົວເລືອກຂອງການຕອບກັບນີ້
 # Untranslated: English text until a translator fills these in.

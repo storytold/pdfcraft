@@ -2836,5 +2836,11 @@ theme	Appearance	Aspecte
 	Extract the selected pages…	Extreu les pàgines seleccionades…
 	Delete the selected pages	Suprimeix les pàgines seleccionades
 
+# Add Watermark: saved settings (#4616) (AI-assisted, not separately native-reviewed)
+	Saved Settings	Configuració desada
+	Save Settings	Desa la configuració
+	Delete Settings	Suprimeix la configuració
+	[Custom]	[Personalitzat]
+	Name a text watermark to save it	Poseu nom a una marca d'aigua de text per desar-la
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opcions d'aquesta resposta

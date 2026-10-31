@@ -2841,6 +2841,12 @@ certificate	Version	Version
 	Extract the selected pages…	Extraire les pages sélectionnées…
 	Delete the selected pages	Supprimer les pages sélectionnées
 
+# Add Watermark: saved settings (#4616) (AI-assisted, not separately native-reviewed)
+	Saved Settings	Paramètres enregistrés
+	Save Settings	Enregistrer les paramètres
+	Delete Settings	Supprimer les paramètres
+	[Custom]	[Personnalisé]
+	Name a text watermark to save it	Nommez un filigrane de texte pour l'enregistrer
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Options de cette réponse
 	Export value	Valeur d’exportation

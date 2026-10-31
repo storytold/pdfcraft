@@ -2539,6 +2539,12 @@ animation effects	Off	关
 	Extract the selected pages…	提取所选页面…
 	Delete the selected pages	删除所选页面
 
+# Add Watermark: saved settings (#4616) (AI-assisted, not separately native-reviewed)
+	Saved Settings	已保存的设置
+	Save Settings	保存设置
+	Delete Settings	删除设置
+	[Custom]	[自定义]
+	Name a text watermark to save it	为文本水印命名以保存它
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	此回复的选项
 	Export value	导出值

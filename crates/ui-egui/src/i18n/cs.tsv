@@ -2882,6 +2882,12 @@ certificate	Version	Verze
 	Extract the selected pages…	Extrahovat vybrané stránky…
 	Delete the selected pages	Odstranit vybrané stránky
 
+# Add Watermark: saved settings (#4616) (AI-assisted, not separately native-reviewed)
+	Saved Settings	Uložená nastavení
+	Save Settings	Uložit nastavení
+	Delete Settings	Odstranit nastavení
+	[Custom]	[Vlastní]
+	Name a text watermark to save it	Pojmenujte textový vodoznak, abyste ho mohli uložit
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Možnosti této odpovědi
 	Export value	Exportní hodnota

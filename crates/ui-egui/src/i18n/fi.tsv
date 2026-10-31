@@ -2845,5 +2845,11 @@ theme	Appearance	Teema
 	Extract the selected pages…	Pura valitut sivut…
 	Delete the selected pages	Poista valitut sivut
 
+# Add Watermark: saved settings (#4616) (AI-assisted, not separately native-reviewed)
+	Saved Settings	Tallennetut asetukset
+	Save Settings	Tallenna asetukset
+	Delete Settings	Poista asetukset
+	[Custom]	[Mukautettu]
+	Name a text watermark to save it	Nimeä tekstivesileima tallentaaksesi sen
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tämän vastauksen asetukset

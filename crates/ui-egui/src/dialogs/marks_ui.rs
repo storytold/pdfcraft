@@ -216,6 +216,189 @@ pub struct MarksDraft {
     /// The page (0-based) the preview was stepped to; `None` previews the current page. Reset
     /// each time the dialog opens.
     pub preview: Option<usize>,
+    /// Watermark ▸ Saved Settings (#4616): kept in the settings, for every document.
+    pub saved: Vec<SavedWatermark>,
+    /// The name typed for Save Settings, and the saved setting last chosen or saved.
+    pub saved_name: String,
+    pub saved_pick: Option<usize>,
+}
+
+/// How many watermark settings are kept, and how long a name and a text may be.
+pub const MAX_SAVED: usize = 64;
+const MAX_NAME_CHARS: usize = 100;
+const MAX_TEXT_CHARS: usize = 4000;
+
+/// A watermark kept by name (Acrobat: Add Watermark ▸ Saved Settings): the text and how it is
+/// drawn. A picture source isn't kept, as the file may be gone when it is used again.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SavedWatermark {
+    pub name: String,
+    pub wm: Watermark,
+    pub fit: bool,
+}
+
+impl SavedWatermark {
+    /// The setting as it is kept in the app settings: its name, the watermark's text and look,
+    /// and whether it fits the page. No page range and no picture source (see [`Self::from_json`]).
+    fn to_json(&self) -> serde_json::Value {
+        let w = &self.wm;
+        serde_json::json!({
+            "name": self.name,
+            "text": w.text,
+            "fit": self.fit,
+            "font_size": w.font_size,
+            "color": w.color,
+            "opacity": w.opacity,
+            "rotation": w.rotation,
+            "behind": w.behind,
+            "offset": w.offset,
+        })
+    }
+
+    /// One saved setting from the settings file, leniently: anything missing or out of range
+    /// takes the dialog's default, and a setting without a name is dropped.
+    fn from_json(v: &serde_json::Value) -> Option<Self> {
+        let name = clean_name(v["name"].as_str()?)?;
+        let d = Watermark::default();
+        let num = |key: &str, lo: f64, hi: f64, or: f64| v[key].as_f64().filter(|n| n.is_finite()).map_or(or, |n| n.clamp(lo, hi));
+        let pair = |key: &str, i: usize, lo: f64, hi: f64, or: f64| {
+            v[key].get(i).and_then(serde_json::Value::as_f64).filter(|n| n.is_finite()).map_or(or, |n| n.clamp(lo, hi))
+        };
+        let text: String = v["text"].as_str().unwrap_or_default().chars().take(MAX_TEXT_CHARS).collect();
+        let wm = Watermark {
+            text,
+            source: None,
+            // A size not set yet loads as the 72 the dialog shows for it, so the setting still
+            // matches the shown watermark.
+            font_size: v["font_size"].as_f64().filter(|n| n.is_finite() && *n > 0.0).map_or(72.0, |n| n.clamp(6.0, 300.0)),
+            color: [0, 1, 2].map(|i| pair("color", i, 0.0, 1.0, d.color[i])),
+            opacity: num("opacity", 0.0, 1.0, d.opacity),
+            rotation: num("rotation", -180.0, 180.0, d.rotation),
+            behind: v["behind"].as_bool().unwrap_or(d.behind),
+            offset: [0, 1].map(|i| pair("offset", i, -MAX_OFFSET, MAX_OFFSET, 0.0)),
+            ..d
+        };
+        Some(Self { name, wm, fit: v["fit"].as_bool().unwrap_or(true) })
+    }
+}
+
+/// `name` trimmed and shortened, or `None` when nothing is left.
+fn clean_name(name: &str) -> Option<String> {
+    let name: String = name.trim().chars().filter(|c| !c.is_control()).take(MAX_NAME_CHARS).collect();
+    let name = name.trim().to_string();
+    (!name.is_empty()).then_some(name)
+}
+
+/// The saved watermark settings for the settings file.
+pub(crate) fn saved_to_json(saved: &[SavedWatermark]) -> serde_json::Value {
+    serde_json::Value::Array(saved.iter().map(SavedWatermark::to_json).collect())
+}
+
+/// The saved watermark settings from the settings file: unreadable entries are dropped, a name
+/// kept once (the first), and at most [`MAX_SAVED`].
+pub(crate) fn saved_from_json(v: &serde_json::Value) -> Vec<SavedWatermark> {
+    let mut out: Vec<SavedWatermark> = Vec::new();
+    for s in v.as_array().into_iter().flatten().filter_map(SavedWatermark::from_json) {
+        if out.len() >= MAX_SAVED {
+            break;
+        }
+        if !out.iter().any(|o| o.name == s.name) {
+            out.push(s);
+        }
+    }
+    out
+}
+
+impl MarksDraft {
+    /// Save the watermark as it stands under the name typed, replacing a setting of that name;
+    /// `None` without a name, for a picture watermark, or when [`MAX_SAVED`] are kept already.
+    pub fn save_watermark(&mut self) -> Option<usize> {
+        let name = clean_name(&self.saved_name).filter(|_| !self.use_file)?;
+        // An unset size is the 72 the dialog shows for it, as a saved setting loads it.
+        if self.wm.font_size <= 0.0 {
+            self.wm.font_size = 72.0;
+        }
+        // Keep the visible draft identical to the value persisted in the saved setting.
+        // Otherwise an overlong draft would immediately appear as [Custom] after saving.
+        self.wm.text = self.wm.text.chars().take(MAX_TEXT_CHARS).collect();
+        let s = SavedWatermark { name: name.clone(), wm: Watermark { source: None, ..self.wm.clone() }, fit: self.fit };
+        let at = match self.saved.iter().position(|o| o.name == name) {
+            Some(at) => {
+                *self.saved.get_mut(at)? = s;
+                at
+            }
+            None if self.saved.len() < MAX_SAVED => {
+                self.saved.push(s);
+                self.saved.len().saturating_sub(1)
+            }
+            None => return None,
+        };
+        self.saved_name = name;
+        self.saved_pick = Some(at);
+        Some(at)
+    }
+
+    /// Fill the dialog from saved setting `at`.
+    pub fn use_saved_watermark(&mut self, at: usize) {
+        let Some(s) = self.saved.get(at) else { return };
+        let scale = self.wm.scale;
+        self.wm = Watermark { scale, ..s.wm.clone() };
+        self.fit = s.fit;
+        self.use_file = false;
+        self.saved_name = s.name.clone();
+        self.saved_pick = Some(at);
+    }
+
+    /// The saved setting the dialog shows: the one last chosen or saved, while the watermark is
+    /// still as it was saved ("[Custom]" once it is changed).
+    pub fn shown_saved(&self) -> Option<usize> {
+        let at = self.saved_pick?;
+        let s = self.saved.get(at)?;
+        let same = !self.use_file && s.fit == self.fit && s.wm == Watermark { source: None, scale: s.wm.scale, ..self.wm.clone() };
+        same.then_some(at)
+    }
+
+    /// Delete the saved setting the dialog shows.
+    pub fn delete_saved_watermark(&mut self) {
+        if let Some(at) = self.shown_saved() {
+            self.saved_pick = None;
+            self.saved.remove(at);
+        }
+    }
+
+    /// Saved Settings: choose one, or save or delete one.
+    fn saved_settings_ui(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label(tl!("Saved Settings"));
+            let shown = self.shown_saved().and_then(|at| self.saved.get(at)).map_or_else(|| tl!("[Custom]").to_string(), |s| s.name.clone());
+            let mut pick = None;
+            craft_ui::ComboBox::from_id_salt("wm-saved").selected_text(shown).width(160.0).show_ui(ui, |ui| {
+                for (at, s) in self.saved.iter().enumerate() {
+                    if ui.selectable_label(self.shown_saved() == Some(at), &s.name).clicked() {
+                        pick = Some(at);
+                    }
+                }
+            });
+            if let Some(at) = pick {
+                self.use_saved_watermark(at);
+            }
+            let n = ui.label(tl!("Name"));
+            ui.add(crate::widgets::line(&mut self.saved_name).desired_width(140.0).id(egui::Id::unique("wm-saved-name"))).labelled_by(n.id);
+            let can_save = clean_name(&self.saved_name).is_some() && !self.use_file;
+            if ui
+                .add_enabled(can_save, egui::Button::new(tl!("Save Settings")))
+                .on_disabled_hover_text(tl!("Name a text watermark to save it"))
+                .clicked()
+            {
+                self.save_watermark();
+            }
+            let can_delete = self.shown_saved().is_some();
+            if ui.add_enabled(can_delete, egui::Button::new(tl!("Delete Settings"))).clicked() {
+                self.delete_saved_watermark();
+            }
+        });
+        ui.add_space(4.0);
+    }
 }
 
 impl Default for MarksDraft {
@@ -235,6 +418,9 @@ impl Default for MarksDraft {
             file_page: 1,
             backdrops: BackdropCheck::default(),
             preview: None,
+            saved: Vec::new(),
+            saved_name: String::new(),
+            saved_pick: None,
         }
     }
 }
@@ -547,6 +733,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
             ui.add(widgets::checkbox(&mut d.hf.shrink, tl!("Shrink the page content to make room for the header and footer")));
         }
         MarkKind::Watermark => {
+            d.saved_settings_ui(ui);
             ui.horizontal(|ui| {
                 ui.label(tl!("Source"));
                 widgets::radio_value(ui, &mut d.use_file, false, tl!("Text"));
@@ -1003,5 +1190,86 @@ mod tests {
             Edit::AddWatermark { settings, .. } => assert_eq!(settings.offset, [-72.0, 36.0]),
             other => panic!("expected AddWatermark, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn saved_watermarks_round_trip_and_damaged_entries_are_read_leniently() {
+        let mut d = MarksDraft::default();
+        d.wm.text = "DRAFT".into();
+        d.saved_name = "  Draft\u{7}  ".into();
+        assert_eq!(d.save_watermark(), Some(0));
+        assert_eq!(d.saved[0].name, "Draft", "trimmed, without control characters");
+        let back = saved_from_json(&saved_to_json(&d.saved));
+        assert_eq!(back, d.saved);
+        // The same name replaces the setting; a picture watermark or an empty name saves nothing.
+        d.wm.text = "FINAL".into();
+        d.saved_name = "Draft".into();
+        assert_eq!((d.save_watermark(), d.saved.len(), d.saved[0].wm.text.as_str()), (Some(0), 1, "FINAL"));
+        d.saved_name = "   ".into();
+        assert_eq!(d.save_watermark(), None);
+        d.saved_name = "Picture".into();
+        d.use_file = true;
+        assert_eq!(d.save_watermark(), None);
+        let v = serde_json::json!([
+            { "name": "a", "opacity": 9.0, "rotation": "x", "color": [2, -1], "offset": [1e9, -1e9], "font_size": 1000, "text": "t" },
+            { "name": "a", "text": "second of the same name" },
+            { "name": "" }, { "text": "no name" }, 7, null,
+            { "name": "x".repeat(500), "text": "y".repeat(10_000) },
+        ]);
+        let got = saved_from_json(&v);
+        assert_eq!(got.len(), 2, "{got:?}");
+        let a = &got[0].wm;
+        assert_eq!((a.opacity, a.rotation, a.color, a.offset, a.font_size), (1.0, 45.0, [1.0, 0.0, 0.6], [MAX_OFFSET, -MAX_OFFSET], 300.0));
+        assert_eq!((got[1].name.chars().count(), got[1].wm.text.chars().count()), (MAX_NAME_CHARS, MAX_TEXT_CHARS));
+        let many = serde_json::Value::Array((0..500).map(|i| serde_json::json!({ "name": format!("s{i}") })).collect());
+        assert_eq!(saved_from_json(&many).len(), MAX_SAVED);
+        assert!(saved_from_json(&serde_json::json!({ "name": "x" })).is_empty());
+        // A missing or unusable size loads as the 72 the dialog shows for an unset size, so the
+        // setting still matches the shown watermark and can be deleted.
+        // A text longer than a setting keeps is saved as it loads back.
+        let mut long = MarksDraft::default();
+        long.wm.text = "y".repeat(MAX_TEXT_CHARS + 10);
+        long.saved_name = "Long".into();
+        long.save_watermark();
+        assert_eq!(saved_from_json(&saved_to_json(&long.saved)), long.saved, "the same after a reload");
+        let unset = saved_from_json(&serde_json::json!([{ "name": "u", "font_size": 0 }, { "name": "v" }]));
+        assert_eq!(unset.iter().map(|s| s.wm.font_size).collect::<Vec<_>>(), [72.0, 72.0]);
+    }
+
+    #[test]
+    fn saving_truncates_overlong_text_and_keeps_the_saved_setting_selected() {
+        let mut d = MarksDraft { saved_name: "long text".into(), ..Default::default() };
+        d.wm.text = "x".repeat(MAX_TEXT_CHARS + 10);
+
+        assert_eq!(d.save_watermark(), Some(0));
+        assert_eq!(d.wm.text.chars().count(), MAX_TEXT_CHARS);
+        assert_eq!(d.saved[0].wm.text, d.wm.text);
+        assert_eq!(d.shown_saved(), Some(0));
+
+        d.delete_saved_watermark();
+        assert!(d.saved.is_empty());
+    }
+
+    #[test]
+    fn saving_stops_at_the_limit_and_delete_takes_only_the_shown_setting() {
+        let mut d = MarksDraft::default();
+        for i in 0..MAX_SAVED {
+            d.saved_name = format!("s{i}");
+            assert!(d.save_watermark().is_some());
+        }
+        d.saved_name = "one more".into();
+        assert_eq!(d.save_watermark(), None);
+        d.saved_name = "s3".into();
+        assert_eq!(d.save_watermark(), Some(3), "replacing one is still allowed");
+        d.wm.text = "changed".into();
+        d.delete_saved_watermark();
+        assert_eq!(d.saved.len(), MAX_SAVED, "a changed watermark is [Custom]: nothing is deleted");
+        d.use_saved_watermark(3);
+        assert_eq!(d.shown_saved(), Some(3));
+        d.delete_saved_watermark();
+        assert_eq!((d.saved.len(), d.shown_saved()), (MAX_SAVED - 1, None));
+        assert!(!d.saved.iter().any(|s| s.name == "s3"));
+        d.use_saved_watermark(usize::MAX);
+        assert_eq!(d.saved_pick, None, "a setting that isn't there changes nothing");
     }
 }

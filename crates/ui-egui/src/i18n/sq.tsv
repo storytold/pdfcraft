@@ -2562,5 +2562,11 @@ animation effects	Off	Joaktiv
 	Extract the selected pages…	Nxirr faqet e përzgjedhura…
 	Delete the selected pages	Fshi faqet e përzgjedhura
 
+# Add Watermark: saved settings (#4616) (AI-assisted, not separately native-reviewed)
+	Saved Settings	Cilësimet e ruajtura
+	Save Settings	Ruaj cilësimet
+	Delete Settings	Fshi cilësimet
+	[Custom]	[I personalizuar]
+	Name a text watermark to save it	Emërtoni një filigran teksti për ta ruajtur
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opsionet për këtë përgjigje

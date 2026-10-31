@@ -2740,6 +2740,12 @@ key	Space	Mellomrom
 	Extract the selected pages…	Trekk ut de valgte sidene…
 	Delete the selected pages	Slett de valgte sidene
 
+# Add Watermark: saved settings (#4616) (AI-assisted, not separately native-reviewed)
+	Saved Settings	Lagrede innstillinger
+	Save Settings	Lagre innstillinger
+	Delete Settings	Slett innstillinger
+	[Custom]	[Egendefinert]
+	Name a text watermark to save it	Gi et tekstvannmerke et navn for å lagre det
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Alternativer for dette svaret
 # Untranslated: English text until a translator fills these in.

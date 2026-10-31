@@ -2807,5 +2807,11 @@ theme	Appearance	स्वरूप
 	Extract the selected pages…	चयनित पृष्ठ निकालें…
 	Delete the selected pages	चयनित पृष्ठ हटाएँ
 
+# Add Watermark: saved settings (#4616) (AI-assisted, not separately native-reviewed)
+	Saved Settings	सहेजी गई सेटिंग्स
+	Save Settings	सेटिंग्स सहेजें
+	Delete Settings	सेटिंग्स हटाएँ
+	[Custom]	[कस्टम]
+	Name a text watermark to save it	सहेजने के लिए टेक्स्ट वॉटरमार्क को नाम दें
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	इस जवाब के विकल्प

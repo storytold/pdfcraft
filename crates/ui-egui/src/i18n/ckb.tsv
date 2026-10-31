@@ -2756,6 +2756,12 @@ certificate	Version	وەشان
 	Extract the selected pages…	پەڕە هەڵبژێردراوەکان دەربهێنە…
 	Delete the selected pages	پەڕە هەڵبژێردراوەکان بسڕەوە
 
+# Add Watermark: saved settings (#4616) (AI-assisted, not separately native-reviewed)
+	Saved Settings	ڕێکخستنە پاشەکەوتکراوەکان
+	Save Settings	پاشەکەوتکردنی ڕێکخستنەکان
+	Delete Settings	سڕینەوەی ڕێکخستنەکان
+	[Custom]	[تایبەت]
+	Name a text watermark to save it	ناوێک بۆ واتەرمارکی دەق دابنێ بۆ پاشەکەوتکردنی
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	هەڵبژاردەکانی ئەم وەڵامە
 # Untranslated: English text until a translator fills these in.

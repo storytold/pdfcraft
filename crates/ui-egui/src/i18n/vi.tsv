@@ -2842,6 +2842,12 @@ key	Space	Space
 	Extract the selected pages…	Trích xuất các trang đã chọn…
 	Delete the selected pages	Xóa các trang đã chọn
 
+# Add Watermark: saved settings (#4616) (AI-assisted, not separately native-reviewed)
+	Saved Settings	Cài đặt đã lưu
+	Save Settings	Lưu cài đặt
+	Delete Settings	Xóa cài đặt
+	[Custom]	[Tùy chỉnh]
+	Name a text watermark to save it	Đặt tên cho hình mờ văn bản để lưu
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tùy chọn cho câu trả lời này
 	Export value	Giá trị xuất
