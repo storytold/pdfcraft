@@ -406,32 +406,48 @@ impl Walker<'_> {
 /// from the template and `ov`) and every scripted event, in document order, within
 /// [`MAX_FORM_NODES`] objects.
 pub fn form_tree(tpl: &Template, data: Option<&DataNode>, ov: &Overrides) -> LiveForm {
+    form_tree_paged(tpl, data, ov, &HashMap::new())
+}
+
+/// [`form_tree`] for a laid-out form whose page areas made `uses` pages each, by name
+/// ([`page_area_uses`]): the master content of each of those pages is a node of its own
+/// (`master[0]`, `master[1]`, …), as the layout names its fields, so a button repeated on every
+/// page runs its click script as itself. A page area not in `uses` gets one node.
+pub fn form_tree_paged(tpl: &Template, data: Option<&DataNode>, ov: &Overrides, uses: &HashMap<String, usize>) -> LiveForm {
     let mut w = Walker { tpl, data, ov, events: Vec::new(), script_bytes: 0, nodes: 0, truncated: false };
     let root = Node::Subform(Box::new(tpl.root.clone()));
     let mut nodes = w.children(std::slice::from_ref(&root), "", 0);
     let mut root_node = nodes.pop().unwrap_or_default();
     // Page masters' fields (Print and Save buttons, page numbers) belong to the layout model
-    // in XFA; they hang off the root here, under their page area's name, as the layouter
-    // names them, so their click scripts can run.
+    // in XFA; they hang off the root here, under their page area's name, one node per page made
+    // from it, as the layouter names them, so their click scripts can run.
     if let Some(ps) = &tpl.root.page_set {
         for (i, area) in ps.areas.iter().enumerate() {
-            let som = area.name.clone().map(|n| format!("{n}[0]")).unwrap_or_else(|| format!("#pageArea[{i}]"));
-            let children = w.children(&area.items, &som, 1);
-            if children.is_empty() {
-                continue;
+            // A name two areas share stays one node: its pages can't be told apart by it.
+            let unique = area.name.as_ref().is_some_and(|n| ps.areas.iter().filter(|a| a.name.as_ref() == Some(n)).count() == 1);
+            let pages = match &area.name {
+                Some(n) if unique => uses.get(n).copied().unwrap_or(1).clamp(1, crate::layout::MAX_PAGES),
+                _ => 1,
+            };
+            for page in 0..pages {
+                let som = area.name.clone().map(|n| format!("{n}[{page}]")).unwrap_or_else(|| format!("#pageArea[{i}]"));
+                let children = w.children(&area.items, &som, 1);
+                if children.is_empty() {
+                    break;
+                }
+                root_node.children.push(FormNode {
+                    name: area.name.clone().unwrap_or_else(|| "#pageArea".into()),
+                    som,
+                    kind: Some(NodeKind::Area),
+                    presence: "visible".into(),
+                    access: "open".into(),
+                    occur_min: 1,
+                    occur_max: Some(1),
+                    index: page,
+                    children,
+                    ..Default::default()
+                });
             }
-            root_node.children.push(FormNode {
-                name: area.name.clone().unwrap_or_else(|| "#pageArea".into()),
-                som,
-                kind: Some(NodeKind::Area),
-                presence: "visible".into(),
-                access: "open".into(),
-                occur_min: 1,
-                occur_max: Some(1),
-                index: 0,
-                children,
-                ..Default::default()
-            });
         }
     }
     LiveForm { root: root_node, events: w.events, truncated: w.truncated }
@@ -459,81 +475,84 @@ pub fn has_scripts(tpl: &Template) -> bool {
     any(&tpl.root.scripts) || walk(&tpl.root.children, 1) || tpl.root.page_set.as_ref().is_some_and(|ps| ps.areas.iter().any(|a| walk(&a.items, 1)))
 }
 
-/// The template with `ov` applied to its objects (instance 0 of each; scripts that hide one
-/// instance of a repeating subform hide them all).
-pub fn apply_overrides(tpl: &Template, ov: &Overrides) -> Template {
-    /// Set the presence `ov` gives each of `nodes` (children of `parent_som`) and their descendants,
-    /// down to [`MAX_DEPTH`], and the access it gives a field outside an exclusion group. An unnamed
-    /// draw, area or subform shares its parent's SOM path, so it takes no override of its own.
-    fn walk(nodes: &mut [Node], parent_som: &str, ov: &Overrides, depth: usize) {
-        if depth > MAX_DEPTH {
-            return;
-        }
-        let sibs = SomIndices::of(nodes);
-        for (i, n) in nodes.iter_mut().enumerate() {
-            let sib = sibs.at(i);
-            let name_default = match n {
-                Node::Field(_) => Some("field"),
-                Node::ExclGroup(_) => Some("group"),
-                _ => None,
-            };
-            let name = n.common().name.as_deref().or(name_default);
-            let som = child_som(parent_som, name, sib);
-            // An unnamed draw, area or subform has no SOM name: `som` is its parent's, and so are
-            // the overrides under it.
-            let presence = name.and_then(|_| ov.presence.get(&som)).map(|p| Presence::parse(Some(p)));
-            let access = name.and_then(|_| ov.access.get(&som)).cloned();
-            match n {
-                Node::Subform(s) => {
-                    if let Some(p) = presence {
-                        s.common.presence = p;
-                    }
-                    walk(&mut s.children, &som, ov, depth + 1);
+/// Set the presence `ov` gives each of `nodes` (children of `parent_som`) and their descendants,
+/// down to [`MAX_DEPTH`], and the access it gives a field outside an exclusion group. An unnamed
+/// draw, area or subform shares its parent's SOM path, so it takes no override of its own.
+pub(crate) fn apply_overrides_to(nodes: &mut [Node], parent_som: &str, ov: &Overrides, depth: usize) {
+    if depth > MAX_DEPTH {
+        return;
+    }
+    let sibs = SomIndices::of(nodes);
+    for (i, n) in nodes.iter_mut().enumerate() {
+        let sib = sibs.at(i);
+        let name_default = match n {
+            Node::Field(_) => Some("field"),
+            Node::ExclGroup(_) => Some("group"),
+            _ => None,
+        };
+        let name = n.common().name.as_deref().or(name_default);
+        let som = child_som(parent_som, name, sib);
+        // An unnamed draw, area or subform has no SOM name: `som` is its parent's, and so are
+        // the overrides under it.
+        let presence = name.and_then(|_| ov.presence.get(&som)).map(|p| Presence::parse(Some(p)));
+        let access = name.and_then(|_| ov.access.get(&som)).cloned();
+        match n {
+            Node::Subform(s) => {
+                if let Some(p) = presence {
+                    s.common.presence = p;
                 }
-                Node::Area(a) => {
-                    if let Some(p) = presence {
-                        a.common.presence = p;
-                    }
-                    walk(&mut a.children, &som, ov, depth + 1);
+                apply_overrides_to(&mut s.children, &som, ov, depth + 1);
+            }
+            Node::Area(a) => {
+                if let Some(p) = presence {
+                    a.common.presence = p;
                 }
-                Node::Field(f) => {
-                    if let Some(p) = presence {
-                        f.common.presence = p;
-                    }
-                    if let Some(a) = access {
-                        f.access = match a.as_str() {
-                            "readOnly" => Access::ReadOnly,
-                            "protected" => Access::Protected,
-                            "nonInteractive" => Access::NonInteractive,
-                            _ => Access::Open,
-                        };
-                    }
+                apply_overrides_to(&mut a.children, &som, ov, depth + 1);
+            }
+            Node::Field(f) => {
+                if let Some(p) = presence {
+                    f.common.presence = p;
                 }
-                Node::Draw(d) => {
-                    if let Some(p) = presence {
-                        d.common.presence = p;
-                    }
+                if let Some(a) = access {
+                    f.access = match a.as_str() {
+                        "readOnly" => Access::ReadOnly,
+                        "protected" => Access::Protected,
+                        "nonInteractive" => Access::NonInteractive,
+                        _ => Access::Open,
+                    };
                 }
-                Node::ExclGroup(g) => {
-                    if let Some(p) = presence {
-                        g.common.presence = p;
-                    }
-                    let fields: Vec<Node> = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();
-                    let fsibs = SomIndices::of(&fields);
-                    for (fi, f) in g.fields.iter_mut().enumerate() {
-                        let fsom = child_som(&som, f.common.name.as_deref().or(Some("field")), fsibs.at(fi));
-                        if let Some(p) = ov.presence.get(&fsom) {
-                            f.common.presence = Presence::parse(Some(p));
-                        }
+            }
+            Node::Draw(d) => {
+                if let Some(p) = presence {
+                    d.common.presence = p;
+                }
+            }
+            Node::ExclGroup(g) => {
+                if let Some(p) = presence {
+                    g.common.presence = p;
+                }
+                let fields: Vec<Node> = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();
+                let fsibs = SomIndices::of(&fields);
+                for (fi, f) in g.fields.iter_mut().enumerate() {
+                    let fsom = child_som(&som, f.common.name.as_deref().or(Some("field")), fsibs.at(fi));
+                    if let Some(p) = ov.presence.get(&fsom) {
+                        f.common.presence = Presence::parse(Some(p));
                     }
                 }
             }
         }
     }
+}
+
+/// The template with `ov` applied to its objects (instance 0 of each; scripts that hide one
+/// instance of a repeating subform hide them all). Page-master content is left as it is: a page
+/// area makes many pages, each with its own SOM path, so `ov` is applied to it page by page as
+/// the pages are laid out ([`crate::layout::layout_with_overrides`]).
+pub fn apply_overrides(tpl: &Template, ov: &Overrides) -> Template {
     let mut t = tpl.clone();
     if !ov.is_empty() {
         let mut root = vec![Node::Subform(Box::new(t.root.clone()))];
-        walk(&mut root, "", ov, 0);
+        apply_overrides_to(&mut root, "", ov, 0);
         if let Some(Node::Subform(r)) = root.pop() {
             t.root = *r;
         }
@@ -575,6 +594,40 @@ pub fn fields_by_som(doc: &Document) -> HashMap<String, String> {
     out
 }
 
+/// How many pages the layout made from each named page area of `tpl`: the master content of the
+/// n-th page from area `master` is `master[n-1]`. Each page the layout wrote names its area
+/// ([`crate::AREA_KEY`]), so a page whose master fields are all hidden still counts; a file laid
+/// out before pages were named shows it by its generated fields. Areas neither shows are left out
+/// (one page's worth, to [`form_tree_paged`]).
+pub fn page_area_uses(doc: &Document, tpl: &Template) -> HashMap<String, usize> {
+    let mut out: HashMap<String, usize> = HashMap::new();
+    let Some(ps) = &tpl.root.page_set else { return out };
+    let is_area = |name: &str| tpl.root.common.name.as_deref() != Some(name) && ps.areas.iter().any(|a| a.name.as_deref() == Some(name));
+    // The flat page list laying the form out writes.
+    let pages = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|c| c.get(b"Pages")).map(|p| doc.resolve(p)));
+    let kids =
+        pages.and_then(|p| p.as_dict().and_then(|d| d.get(b"Kids")).map(|k| doc.resolve(k))).and_then(|k| k.as_array().cloned()).unwrap_or_default();
+    for page in kids.iter().filter_map(Object::as_ref).take(crate::layout::MAX_PAGES) {
+        let page = doc.get(page);
+        let Some(name) = page.as_dict().and_then(|d| d.get(crate::AREA_KEY)).and_then(Object::as_string).map(PdfString::to_text) else { continue };
+        if is_area(&name) {
+            let pages = out.entry(name).or_insert(0);
+            *pages = pages.saturating_add(1).min(crate::layout::MAX_PAGES);
+        }
+    }
+    for som in fields_by_som(doc).keys() {
+        let first = som.split('.').next().unwrap_or_default();
+        let Some((name, rest)) = first.split_once('[') else { continue };
+        let Some(index) = rest.strip_suffix(']').and_then(|i| i.parse::<usize>().ok()) else { continue };
+        if !is_area(name) {
+            continue;
+        }
+        let pages = out.entry(name.to_string()).or_insert(1);
+        *pages = (*pages).max(index.saturating_add(1)).min(crate::layout::MAX_PAGES);
+    }
+    out
+}
+
 /// Lay the form out again from its template, data and overrides, replacing the pages and the
 /// generated fields (a script added a row or hid a subform).
 pub fn rerender(doc: &mut Document, tpl: &Template) -> Result<Report, XfaError> {
@@ -582,7 +635,7 @@ pub fn rerender(doc: &mut Document, tpl: &Template) -> Result<Report, XfaError> 
     let data = parse_datasets(&packets.xdp);
     let ov = overrides(doc);
     let laid = apply_overrides(tpl, &ov);
-    let form = crate::layout(&laid, data.as_ref())?;
+    let form = crate::layout::layout_with_overrides(&laid, data.as_ref(), &ov)?;
     if form.pages.is_empty() {
         return Err(XfaError::Malformed("the template laid out to no pages".into()));
     }

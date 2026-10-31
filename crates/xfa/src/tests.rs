@@ -2102,6 +2102,47 @@ fn page_area_without_occur_serves_every_body_page() {
     assert_eq!(soms[4].iter().filter(|s| s.contains("PrintButton")).count(), 1, "the required page is laid out once: {soms:?}");
 }
 
+#[test]
+fn page_master_content_repeated_on_each_page_has_its_own_som_index() {
+    // One page area (no occur limit) serves three body pages and carries a field in its own
+    // master content. Each page's copy of that field gets the page area's instance index, so the
+    // three do not share one SOM path (and one data node).
+    let section = |n: u32| {
+        format!(
+            r#"<subform name="s{n}" layout="tb"><breakBefore targetType="pageArea" startNew="1"/><field name="f{n}" w="2in" h="0.3in"><ui><textEdit/></ui></field></subform>"#
+        )
+    };
+    let xdp = format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet>
+  <pageArea name="Body"><contentArea x="0.5in" y="0.5in" w="7.5in" h="2in"/><medium short="8.5in" long="11in"/>
+   <field name="pageNo" x="7in" y="10in" w="1in" h="0.3in"><ui><textEdit/></ui></field>
+   <field name="total" x="1in" y="10in" w="1in" h="0.3in"><ui><textEdit/></ui><bind match="global"/></field>
+  </pageArea>
+ </pageSet>
+ {}{}{}
+</subform>
+</template>
+</xdp:xdp>
+"##,
+        section(1),
+        section(2),
+        section(3)
+    );
+    let form = layout_xml(&xdp).unwrap();
+    let page_nos: Vec<String> = form.pages.iter().flat_map(|p| widgets(p)).filter(|w| w.som.contains("pageNo")).map(|w| w.som.clone()).collect();
+    assert_eq!(page_nos, ["Body[0].pageNo[0]", "Body[1].pageNo[0]", "Body[2].pageNo[0]"], "each page's master field has its own index");
+    // Its data path keeps that index, so each page binds apart; a field whose bind is global
+    // shares one data node, so every page binds it as instance 0 (XFA 3.3, "Page Background").
+    let (tpl, _) = crate::parse(&xdp).unwrap();
+    let dp = |som: &str| crate::data_path(&tpl, som);
+    assert_eq!(dp("Body[2].pageNo[0]"), crate::som_to_path("Body[2].pageNo[0]"));
+    assert_eq!(dp("Body[2].total[0]"), crate::som_to_path("Body[0].total[0]"), "a global field binds as instance 0 on each page");
+}
+
 /// A page area's `occur min` is a page it must have even when the body never reaches it, and a
 /// body that already used it does not get another. An area with no `<occur>` needs none.
 #[test]
@@ -4144,4 +4185,73 @@ fn clear_password_values_clears_static_xfa_password_fields() {
     assert!(!has_password_values(&doc));
     let packets = read_packets(&doc).unwrap().unwrap();
     assert!(!packets.xdp.contains("hunter2"), "{}", packets.xdp);
+}
+
+/// What a script sets on page-master content (a field hidden on the second page made from a
+/// page area) is applied to that page's copy only, when the form is laid out again: the other
+/// pages keep the field.
+#[test]
+fn a_script_hiding_master_content_on_one_page_hides_it_there_only() {
+    let section = |n: u32| {
+        format!(
+            r#"<subform name="s{n}" layout="tb"><breakBefore targetType="pageArea" startNew="1"/><field name="f{n}" w="2in" h="0.3in"><ui><textEdit/></ui></field></subform>"#
+        )
+    };
+    let xdp = format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet>
+  <pageArea name="Body"><contentArea x="0.5in" y="0.5in" w="7.5in" h="2in"/><medium short="8.5in" long="11in"/>
+   <field name="pageNo" x="7in" y="10in" w="1in" h="0.3in"><ui><textEdit/></ui></field>
+  </pageArea>
+ </pageSet>
+ {}{}{}
+</subform>
+</template>
+</xdp:xdp>
+"##,
+        section(1),
+        section(2),
+        section(3)
+    );
+    let (tpl, _) = crate::parse(&xdp).unwrap();
+    let mut ov = Overrides::default();
+    ov.presence.insert("Body[1].pageNo[0]".into(), "hidden".into());
+    let laid = apply_overrides(&tpl, &ov);
+    let form = crate::layout::layout_with_overrides(&laid, None, &ov).unwrap();
+    let has: Vec<bool> = form.pages.iter().map(|p| widgets(p).iter().any(|w| w.som.contains("pageNo"))).collect();
+    assert_eq!(has, [true, false, true], "hidden on the second page only");
+}
+
+/// Hidden master widgets still count their page area, and removed pages leave no
+/// stale count when a page set has several page areas (wireless89, #5368).
+#[test]
+fn page_area_uses_follow_hidden_masters_and_shrink_with_multiple_areas() {
+    let xml = fixtures::repeated_print_button_template()
+        .replace(
+            "<pageSet><pageArea name=\"master\"><occur max=\"-1\"/>",
+            r#"<pageSet><pageArea name="Cover"><occur max="1"/><contentArea w="540pt" h="648pt"/><medium short="612pt" long="792pt"/>
+<field name="hidden" presence="hidden"><ui><textEdit/></ui></field></pageArea><pageArea name="master"><occur max="-1"/>"#,
+        )
+        .replace("<occur max=\"-1\"/>", "<occur min=\"0\" max=\"-1\"/>")
+        .replace("name=\"PrintButton1\"", "name=\"PrintButton1\" presence=\"hidden\"");
+    let (tpl, _) = parse(&xml).unwrap();
+    let mut doc = Document::open(Arc::new(shell(&xml))).unwrap();
+    render_into(&mut doc).unwrap();
+    let uses = page_area_uses(&doc, &tpl);
+    assert_eq!(uses.get("Cover"), Some(&1));
+    assert_eq!(uses.get("master"), Some(&2));
+    let mut ov = Overrides::default();
+    ov.presence.insert("form[0].page3[0]".into(), "hidden".into());
+    set_overrides(&mut doc, &ov).unwrap();
+    rerender(&mut doc, &tpl).unwrap();
+    assert_eq!(page_area_uses(&doc, &tpl).get("master"), Some(&1));
+    ov.presence.insert("form[0].page2[0]".into(), "hidden".into());
+    set_overrides(&mut doc, &ov).unwrap();
+    rerender(&mut doc, &tpl).unwrap();
+    let uses = page_area_uses(&doc, &tpl);
+    assert_eq!(uses.get("Cover"), Some(&1));
+    assert!(!uses.contains_key("master"), "removed pages leave no stale occurrence metadata: {uses:?}");
 }

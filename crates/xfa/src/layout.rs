@@ -155,6 +155,11 @@ struct Layouter<'t> {
     /// The flowed subforms being laid out, outermost first: a break between their children
     /// closes their parts on one content area and opens new ones on the next.
     frames: Vec<Frame>,
+    /// What scripts set on page-master content, applied to each page's copy by its own SOM path.
+    overrides: Option<&'t crate::script::Overrides>,
+    /// The pages' copies of master content that overrides changed, kept for the whole layout so
+    /// their addresses stay unique (the measurement cache keys on them).
+    master_copies: Vec<Rc<Vec<Node>>>,
 }
 
 /// How many instances of a repeating subform to lay out: what the data holds once it holds
@@ -167,6 +172,17 @@ pub fn instance_count(occur: &Occur, from_data: usize) -> usize {
 
 /// Lay a template out, with the values and repeat counts of `data` (the `xfa:data` element).
 pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError> {
+    layout_inner(tpl, data, None)
+}
+
+/// [`layout`], with what scripts set (`ov`) applied to page-master content page by page: a
+/// field hidden on the second page made from a page area is hidden there only. The rest of the
+/// template takes `ov` before this ([`crate::script::apply_overrides`]).
+pub fn layout_with_overrides(tpl: &Template, data: Option<&DataNode>, ov: &crate::script::Overrides) -> Result<Form, XfaError> {
+    layout_inner(tpl, data, Some(ov))
+}
+
+fn layout_inner(tpl: &Template, data: Option<&DataNode>, overrides: Option<&crate::script::Overrides>) -> Result<Form, XfaError> {
     let areas = match &tpl.root.page_set {
         Some(ps) if !ps.areas.is_empty() => ps.areas.clone(),
         _ => vec![PageArea {
@@ -201,6 +217,8 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
         measures: Cell::new(0),
         leaves: Vec::new(),
         frames: Vec::new(),
+        overrides,
+        master_copies: Vec::new(),
     };
     let ctx = Ctx { font: Font::default(), para: Para::default(), som: String::new() };
     l.new_page()?;
