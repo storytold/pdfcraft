@@ -53,6 +53,7 @@ fn click_only(e: &XfaEffect) -> Option<&'static str> {
         XfaEffect::Print => Some("print"),
         XfaEffect::SaveAs => Some("save"),
         XfaEffect::LaunchUrl(_) => Some("open a link"),
+        XfaEffect::ShowPanel(_) => Some("show a side panel"),
         XfaEffect::SetFocus(_) => Some("move the focus"),
         _ => None,
     }
@@ -127,6 +128,10 @@ pub(crate) struct XfaRun<'a> {
     pub datasets: Option<pdfcraft_cos::ObjRef>,
     /// A script ran past its time limit and was abandoned: the form's scripts should stay off.
     pub ran_away: bool,
+    /// What every time limit of the scripts is multiplied by (the event's budget, the engine's
+    /// start and each script's own): 1, unless the session was given another
+    /// ([`crate::Session::with_xfa_time_scale`]).
+    pub time_scale: u32,
 }
 
 /// The live form node `n`, with its descendants, as the script engine's snapshot of it.
@@ -276,6 +281,7 @@ impl<'a, 'b> Runner<'a, 'b> {
     fn new(doc: &'a mut pdfcraft_cos::Document, tpl: &'a Template, run: &'a mut XfaRun<'b>, budget_ms: u64) -> Self {
         let data = pdfcraft_xfa::data_of(doc);
         let ov = pdfcraft_xfa::overrides(doc);
+        let budget_ms = budget_ms.saturating_mul(u64::from(run.time_scale));
         Runner {
             doc,
             tpl,
@@ -310,7 +316,8 @@ impl<'a, 'b> Runner<'a, 'b> {
     /// The script engine for this event.
     fn session(&mut self) -> &mut XfaSession {
         let doc_info = XfaDoc { file_name: String::new(), page: 0, page_count: self.run.page_count };
-        self.session.get_or_insert_with(|| XfaSession::new(doc_info))
+        let scale = self.run.time_scale;
+        self.session.get_or_insert_with(|| XfaSession::new(doc_info).with_time_scale(scale))
     }
 
     /// Give the object at `som` the value `text` in the data and in the live form (refreshed
@@ -381,6 +388,7 @@ impl<'a, 'b> Runner<'a, 'b> {
         }
     }
 
+    /// Keep console `lines`, up to [`MAX_CONSOLE_PER_EVENT`] for one event; the rest are counted.
     fn console(&mut self, lines: impl IntoIterator<Item = String>) {
         for l in lines {
             if self.run.out.console.len() < MAX_CONSOLE_PER_EVENT {
@@ -391,7 +399,8 @@ impl<'a, 'b> Runner<'a, 'b> {
         }
     }
 
-    fn alert(&mut self, m: String) {
+    /// Show message `m`, up to [`MAX_ALERTS_PER_EVENT`] for one event; the rest are counted.
+    fn alert(&mut self, m: crate::js::Message) {
         if self.run.out.alerts.len() < MAX_ALERTS_PER_EVENT {
             self.run.out.alerts.push(m);
         } else {
@@ -532,7 +541,7 @@ impl<'a, 'b> Runner<'a, 'b> {
         } else {
             Some(by_som.iter().filter(|(som, _)| names.iter().any(|n| som_matches(som, n))).map(|(_, f)| f.clone()).collect())
         };
-        if listed.as_ref().is_some_and(|l| l.is_empty()) {
+        if listed.as_ref().is_some_and(Vec::is_empty) {
             return Ok(());
         }
         pdfcraft_forms::reset(self.doc, listed.as_deref()).map_err(|e| e.to_string())?;
@@ -628,6 +637,7 @@ impl<'a, 'b> Runner<'a, 'b> {
                 XfaEffect::Print => self.run.out.requests.push(Request::Print),
                 XfaEffect::SaveAs => self.run.out.requests.push(Request::SaveAs),
                 XfaEffect::LaunchUrl(u) => self.run.out.requests.push(Request::LaunchUrl(u.clone())),
+                XfaEffect::ShowPanel(p) => self.run.out.requests.push(Request::ShowPanel(*p)),
                 XfaEffect::SetFocus(som) => {
                     if let Some(name) = self.by_som().get(som).cloned() {
                         self.run.out.requests.push(Request::Focus(name));
@@ -659,7 +669,7 @@ impl<'a, 'b> Runner<'a, 'b> {
             event,
             root,
             limits: limits_for(&ev.activity),
-            timeout: timeout_for(&ev.activity),
+            timeout: timeout_for(&ev.activity).saturating_mul(self.run.time_scale),
         };
         let o = self.session().run(script);
         if o.abandoned {
@@ -839,7 +849,7 @@ pub(crate) fn on_changes(doc: &mut pdfcraft_cos::Document, tpl: &Template, names
         for ev in r.events_of(&som, "validate") {
             let Some(o) = r.run(&ev, &value)? else { continue };
             if (o.result_bool == Some(false) || o.error.is_some()) && !value.trim().is_empty() {
-                r.alert(ev.message.clone().unwrap_or_else(|| format!("{name}: the value is not valid")));
+                r.alert(crate::js::Message::plain(ev.message.clone().unwrap_or_else(|| format!("{name}: the value is not valid"))));
             }
         }
     }
@@ -858,6 +868,28 @@ pub(crate) fn on_data_replaced(doc: &mut pdfcraft_cos::Document, tpl: &Template,
     r.finish().map(|_| ())
 }
 
+/// A text value typed into the laid-out XFA date field `name` by another of its edit picture's
+/// patterns, written in the first ([`pdfcraft_xfa::typed_date`]); `None` for anything else.
+/// `tpl` is the template the scripts use, when they run; otherwise it is read from `doc`.
+pub(crate) fn typed_date(
+    doc: &pdfcraft_cos::Document,
+    tpl: Option<&Template>,
+    name: &str,
+    value: &pdfcraft_forms::FieldValue,
+) -> Option<pdfcraft_forms::FieldValue> {
+    let pdfcraft_forms::FieldValue::Text(text) = value else { return None };
+    let som = pdfcraft_xfa::fields_by_som(doc).into_iter().find_map(|(som, n)| (n == name).then_some(som))?;
+    let read;
+    let tpl = match tpl {
+        Some(t) => t,
+        None => {
+            read = pdfcraft_xfa::template_of(doc).ok()?;
+            &read
+        }
+    };
+    pdfcraft_xfa::typed_date(tpl, &som, text).map(pdfcraft_forms::FieldValue::Text)
+}
+
 /// A button's click script (or any event, by SOM path and activity), then calculations.
 pub(crate) fn on_event(doc: &mut pdfcraft_cos::Document, tpl: &Template, som: &str, activity: &str, run: &mut XfaRun) -> Result<(), String> {
     let mut r = Runner::new(doc, tpl, run, EVENT_BUDGET_MS);
@@ -869,7 +901,7 @@ pub(crate) fn on_event(doc: &mut pdfcraft_cos::Document, tpl: &Template, som: &s
         r.run(&ev, "")?;
     }
     // The calculations that follow get a budget of their own.
-    r.clock = Clock::start(OPEN_BUDGET_MS);
+    r.clock = Clock::start(OPEN_BUDGET_MS.saturating_mul(u64::from(r.run.time_scale)));
     r.calculates()?;
     r.finish().map(|_| ())
 }

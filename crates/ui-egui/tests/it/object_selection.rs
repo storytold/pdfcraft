@@ -73,13 +73,7 @@ fn harness_document(clipping: bool, background: bool) -> Harness<'static, PdfCra
         assert!(app.execute("edit.edit_text"));
         app
     });
-    for _ in 0..60 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(&mut h);
     h
 }
 
