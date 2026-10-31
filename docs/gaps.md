@@ -212,7 +212,9 @@ update the numbers.
   `optimize.pdfua-validate` partial (2026-10-16): Verify PDF/UA reports every Matterhorn 1.1
   condition as failed (with clause and page, tag or object), passed, needing a manual check (47)
   or not checked (4, and any font condition a file's fonts don't let PdfCraft decide); the font
-  conditions read each font's CMap, ToUnicode map and embedded program. PDF/UA-2 checks its
+  conditions read each font's CMap, ToUnicode map and embedded program, for the fonts the page
+  content and its forms use (fonts used only in annotation appearances or inside Type 3 glyph
+  procedures aren't scanned). PDF/UA-2 checks its
   identification, PDF 2.0 and the conditions it keeps.
   Acrobat ships hundreds of built-in Preflight profiles.
 - **Impact:** blocks print shops, archives and accessibility compliance work.
