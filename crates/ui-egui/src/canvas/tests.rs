@@ -2002,3 +2002,14 @@ fn a_moved_picture_is_drawn_from_the_fresh_raster_while_a_tile_is_still_stale() 
     h.state_mut().views[0].stale_tiles.clear();
     h.state_mut().views[0].tiles.clear();
 }
+
+#[test]
+fn the_page_indicator_reads_page_over_pages_with_the_label_when_it_differs() {
+    assert_eq!(page_indicator_text(3, 42, ""), "4 / 42");
+    assert_eq!(page_indicator_text(3, 42, "4"), "4 / 42");
+    assert_eq!(page_indicator_text(3, 42, "iv"), "iv (4 / 42)");
+    // No pages, or a page past the end: never beyond the last.
+    assert_eq!(page_indicator_text(0, 0, ""), "0 / 0");
+    assert_eq!(page_indicator_text(9, 3, "x"), "3 / 3");
+    assert_eq!(page_indicator_text(usize::MAX, 3, ""), "3 / 3");
+}
