@@ -229,6 +229,16 @@ pub fn run(args: &[String]) -> Result<()> {
             );
         }
     }
+    // A warning, not an error: shipped means exists and tested, and the notes say what is still missing (CLAUDE.md).
+    let without_notes: Vec<&str> =
+        file.features.iter().filter(|f| f.status == "shipped" && f.notes.trim().is_empty()).map(|f| f.id.as_str()).collect();
+    if !without_notes.is_empty() && !args.iter().any(|a| a == "--json") {
+        eprintln!(
+            "parity warning: {} shipped feature(s) have empty notes (say what is still missing): {}",
+            without_notes.len(),
+            without_notes.join(", ")
+        );
+    }
     if !errors.is_empty() {
         for e in &errors {
             eprintln!("parity error: {e}");
