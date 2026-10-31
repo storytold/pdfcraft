@@ -2389,3 +2389,46 @@ fn the_accessible_window_has_the_window_title_as_its_name() {
     assert_eq!(name(&h).as_deref(), Some("Quarterly report • — PdfCraft"));
     assert_eq!(name(&h), Some(h.state().window_title.clone()));
 }
+
+/// #5141: ⌘F / Ctrl+F opens the find bar with the text selected in the document as the search,
+/// run at once; with nothing selected it opens with the last search, as before.
+#[test]
+fn find_shortcut_searches_the_selected_text() {
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+    h.state_mut().views[0].set_continuous(false);
+    for _ in 0..3000 {
+        h.run_steps(2);
+        if h.state_mut().views[0].select_all() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("Page 1 pages PAGE"));
+    assert!(h.state().views[0].find.is_none(), "no find bar yet");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::F);
+    h.run_steps(2);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while std::time::Instant::now() < deadline && h.state().views[0].find.as_ref().is_none_or(|f| f.matches.is_empty()) {
+        h.run_steps(2);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    {
+        let f = h.state().views[0].find.as_ref().expect("the find bar is open");
+        assert_eq!(f.query, "Page 1 pages PAGE", "the selection is the search");
+        assert_eq!(f.case_query, f.query, "and it has run");
+        assert_eq!(f.matches.len(), 1, "finding itself, once");
+        assert!(f.focus || h.ctx.egui_wants_keyboard_input(), "with the focus in the field");
+    }
+    // Nothing selected: the bar comes up with the search it had.
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+    h.state_mut().views[0].open_find();
+    h.state_mut().views[0].find.as_mut().unwrap().query = "pages".into();
+    h.state_mut().views[0].rerun_find();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::F);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].find.as_ref().unwrap().query, "pages", "no selection leaves the search alone");
+}
