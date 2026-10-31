@@ -2807,5 +2807,8 @@ theme	Appearance	모양
 	Extract the selected pages…	선택한 페이지 추출…
 	Delete the selected pages	선택한 페이지 삭제
 
+# Render warnings on the page in the viewer (#4340) (AI-assisted, not separately native-reviewed)
+	Part of this page isn't shown: its content goes past the most PdfCraft draws for one page.	이 페이지의 일부가 표시되지 않습니다. 내용이 PdfCraft가 한 페이지에 그리는 최대치를 넘습니다.
+	A colour on this page couldn't be computed and is shown in a fallback colour.	이 페이지의 색 하나를 계산할 수 없어 대체 색으로 표시합니다.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	이 답글의 옵션

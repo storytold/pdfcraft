@@ -2580,6 +2580,9 @@ animation effects	Off	Izklopljeni
 	Extract the selected pages…	Izvleci izbrane strani…
 	Delete the selected pages	Izbriši izbrane strani
 
+# Render warnings on the page in the viewer (#4340) (AI-assisted, not separately native-reviewed)
+	Part of this page isn't shown: its content goes past the most PdfCraft draws for one page.	Del te strani ni prikazan: njena vsebina presega največ, kar PdfCraft nariše za eno stran.
+	A colour on this page couldn't be computed and is shown in a fallback colour.	Barve na tej strani ni bilo mogoče izračunati, zato je prikazana z nadomestno barvo.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Možnosti tega odgovora
 	Export value	Izvozna vrednost

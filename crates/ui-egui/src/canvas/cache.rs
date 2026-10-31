@@ -126,6 +126,27 @@ impl DocView {
         v
     }
 
+    /// Pages drawn only in part or approximately, with the renderer's warnings (for automation;
+    /// 0-based pages).
+    pub fn page_warnings(&self) -> Vec<(usize, &[pdfcraft_render::RenderWarning])> {
+        let mut v: Vec<(usize, &[pdfcraft_render::RenderWarning])> = self.warnings.iter().map(|(p, w)| (*p, w.as_slice())).collect();
+        v.sort_unstable_by_key(|(p, _)| *p);
+        v
+    }
+
+    /// The warnings shown in `page`'s note: none once the reader has closed it.
+    pub fn render_warning_note(&self, page: usize) -> Option<&[pdfcraft_render::RenderWarning]> {
+        if self.warnings_dismissed.contains(&page) {
+            return None;
+        }
+        self.warnings.get(&page).map(Vec::as_slice).filter(|w| !w.is_empty())
+    }
+
+    /// Closes `page`'s warning note, as its close button does.
+    pub fn dismiss_render_warning_note(&mut self, page: usize) {
+        self.warnings_dismissed.insert(page);
+    }
+
     pub fn render_pending(&self) -> bool {
         !self.last_queue.is_empty() || self.text_background.pending() || self.move_background.pending()
     }
@@ -158,6 +179,8 @@ impl DocView {
         self.texts.clear();
         self.text_failed.clear();
         self.errors.clear();
+        self.warnings.clear();
+        self.warnings_dismissed.clear();
         self.slow_pages.clear();
         self.waiting_since.clear();
         self.last_queue.clear();
@@ -201,6 +224,8 @@ impl DocView {
         self.texts.remove(&page);
         self.text_failed.remove(&page);
         self.errors.remove(&page);
+        self.warnings.remove(&page);
+        self.warnings_dismissed.remove(&page);
         self.last_queue.clear();
         if self.selection.is_some_and(|s| s.page == page) {
             self.selection = None;
@@ -561,6 +586,17 @@ impl DocView {
         let bytes = rgba_bytes(r.width as usize, r.height as usize);
         if bytes != r.rgba.len() || !self.admit_texture(r.request, bytes) {
             return 0;
+        }
+        // The page's own rasters and tiles say whether what it shows is complete, once they are
+        // shown: a raster refused above shows nothing. Thumbnails, the organize grid and print
+        // previews are other pictures of the page and leave this alone.
+        if r.request.tag & (THUMB_TAG | GRID_TAG | PRINT_TAG) == 0 && !r.warnings.is_empty() {
+            let noted = self.warnings.entry(r.request.page).or_default();
+            for w in &r.warnings {
+                if !noted.contains(w) {
+                    noted.push(*w);
+                }
+            }
         }
         // The length was checked above, so the renderer's buffer becomes the texture data as is.
         let img = texture_image([r.width as usize, r.height as usize], r.rgba);

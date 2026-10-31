@@ -45,7 +45,7 @@ use area::{
 };
 #[cfg(test)]
 use bars::in_size_hint_zone;
-use bars::{Notice, notices, page_size_hint, quick_bar};
+use bars::{Notice, notices, page_size_hint, paint_render_warnings, quick_bar};
 pub use cache::RasterMemory;
 pub(crate) use cache::{BASE_SIDE, TILE_THRESHOLD, texture_image, thumbnail_rows};
 #[cfg(test)]
@@ -325,6 +325,12 @@ pub struct DocView {
     pages: HashMap<usize, PageTex>,
     /// Pages the renderer could not draw, with the reason (never re-requested).
     errors: HashMap<usize, String>,
+    /// Pages the renderer drew only in part or approximately, with what it reported for them
+    /// (#4340). Shown on the page until the page changes.
+    warnings: HashMap<usize, Vec<pdfcraft_render::RenderWarning>>,
+    /// Pages whose warning note the reader closed. The page is still reported as incomplete
+    /// (`page_warnings`); the note comes back once the page is drawn again after a change.
+    warnings_dismissed: HashSet<usize>,
     /// When each still-missing page was first shown, to flag unusually slow renders.
     waiting_since: HashMap<usize, f64>,
     thumbs: HashMap<usize, PageTex>,
@@ -638,6 +644,8 @@ impl DocView {
             presentation: None,
             pages: HashMap::new(),
             errors: HashMap::new(),
+            warnings: HashMap::new(),
+            warnings_dismissed: HashSet::new(),
             waiting_since: HashMap::new(),
             thumbs: HashMap::new(),
             thumb_demand: HashMap::new(),
@@ -892,6 +900,8 @@ struct PageEnv<'a> {
 struct PageOut {
     canvas_action: Option<comments::CanvasAction>,
     clicked_link: Option<LinkTarget>,
+    /// A click a page's render-warning note took (its close button or the note itself).
+    note_clicked: bool,
     copy_selected: bool,
     field_menu: Option<FieldMenu>,
     field_placed: bool,
@@ -1872,6 +1882,13 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
     if view.show_page_gaps {
         painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(0.5, t.border.gamma_multiply(0.8)), egui::StrokeKind::Outside);
     }
+    if let Some(warnings) = view.render_warning_note(i) {
+        let note = paint_render_warnings(ui, painter, r.intersect(visible), i, warnings, t);
+        frame.out.note_clicked |= note.clicked;
+        if note.closed {
+            view.dismiss_render_warning_note(i);
+        }
+    }
 
     let slot = PageSlot { i, r, xf };
     // A cancelled press takes nothing until the button is up.
@@ -2062,6 +2079,7 @@ fn draw_pages(
     let PageOut {
         mut canvas_action,
         clicked_link,
+        note_clicked,
         mut copy_selected,
         mut field_menu,
         field_placed,
@@ -2238,6 +2256,7 @@ fn draw_pages(
     *out = PageOut {
         canvas_action,
         clicked_link,
+        note_clicked,
         copy_selected,
         field_menu,
         field_placed,
@@ -2750,8 +2769,9 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
 /// Full screen: the click turns the page unless it did something else first. It waits out the
 /// double-click time: turning on the first click's release sent a double-click's second click,
 /// meant to select a word, to the next page (review on #2070). A selection cancels it, and so do a
-/// link followed meanwhile and leaving full screen; a double-click elsewhere still turns once.
-/// `click` is `Some(back)` on the frame of a click, `back` when it was a shift-click.
+/// link followed meanwhile, a click on a render-warning note and leaving full screen; a
+/// double-click elsewhere still turns once. `click` is `Some(back)` on the frame of a click,
+/// `back` when it was a shift-click; `link_followed` also covers a click a note took.
 fn schedule_presentation_turn(ui: &egui::Ui, view: &mut DocView, click: Option<bool>, link_followed: bool) {
     let now = ui.input(|i| i.time);
     if let Some(back) = click
@@ -3235,6 +3255,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let PageOut {
         canvas_action,
         clicked_link,
+        note_clicked,
         mut copy_selected,
         field_menu,
         field_placed,
@@ -3319,7 +3340,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         Some(comments::CanvasAction::CopyImageFile(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::CopyFile(p, i)),
         None => {}
     }
-    schedule_presentation_turn(ui, view, present, clicked_link.is_some());
+    schedule_presentation_turn(ui, view, present, clicked_link.is_some() || note_clicked);
     let remote_open = follow_link(app, index, clicked_link);
     if tool == QuickTool::Crop && cropped {
         tool = QuickTool::Select;

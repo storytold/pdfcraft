@@ -2574,6 +2574,9 @@ animation effects	Off	Ki
 	Extract the selected pages…	A kijelölt oldalak kibontása…
 	Delete the selected pages	A kijelölt oldalak törlése
 
+# Render warnings on the page in the viewer (#4340) (AI-assisted, not separately native-reviewed)
+	Part of this page isn't shown: its content goes past the most PdfCraft draws for one page.	Az oldal egy része nem látható: a tartalma túllépi azt a legtöbbet, amit a PdfCraft egy oldalra kirajzol.
+	A colour on this page couldn't be computed and is shown in a fallback colour.	Az oldal egyik színét nem sikerült kiszámítani, ezért helyettesítő színnel jelenik meg.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	A válasz beállításai
 	Export value	Exportérték

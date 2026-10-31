@@ -2740,6 +2740,9 @@ key	Space	Mellomrom
 	Extract the selected pages…	Trekk ut de valgte sidene…
 	Delete the selected pages	Slett de valgte sidene
 
+# Render warnings on the page in the viewer (#4340) (AI-assisted, not separately native-reviewed)
+	Part of this page isn't shown: its content goes past the most PdfCraft draws for one page.	En del av denne siden vises ikke: innholdet går ut over det meste PdfCraft tegner for én side.
+	A colour on this page couldn't be computed and is shown in a fallback colour.	En farge på denne siden kunne ikke beregnes og vises i en reservefarge.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Alternativer for dette svaret
 # Untranslated: English text until a translator fills these in.

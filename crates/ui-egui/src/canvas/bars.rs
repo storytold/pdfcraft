@@ -1,6 +1,6 @@
 use super::{
-    Color32, CornerRadius, DocInfo, DocView, Edit, PdfCraftApp, Pos2, QuickTool, Rect, Sense, SnapshotKind, Stroke, Tokens, comments, icons, theme,
-    vec2,
+    Color32, CornerRadius, DocInfo, DocView, Edit, PdfCraftApp, Pos2, QuickTool, Rect, Sense, SnapshotKind, Stroke, Tokens, Vec2, comments, icons,
+    pos2, theme, vec2,
 };
 
 /// Whether `p` lies in the bottom-left quadrant of `area`, where the page size shows (#1855).
@@ -274,6 +274,74 @@ fn notice_bar(ui: &mut egui::Ui, t: &Tokens, icon: &str, icon_color: Color32, te
             });
         });
     });
+}
+
+/// The note on a page the renderer drew only in part or approximately (#4340): an alert icon, one
+/// line per warning and a close button, in the top-right corner of the part of the page on screen
+/// (the quick bar floats at the left). Left out when that part is too small to hold it.
+pub(super) fn paint_render_warnings(
+    ui: &egui::Ui,
+    painter: &egui::Painter,
+    shown: Rect,
+    page: usize,
+    warnings: &[pdfcraft_render::RenderWarning],
+    t: &Tokens,
+) -> NoteClick {
+    const ICON: f32 = 14.0;
+    const PAD: f32 = 8.0;
+    const CLOSE: f32 = 20.0;
+    if !(shown.width() >= 200.0 && shown.height() >= 48.0) {
+        return NoteClick::default();
+    }
+    let text = warnings.iter().map(|w| render_warning_text(*w)).collect::<Vec<_>>().join("\n");
+    // At most 320 points wide, and never wider than the page leaves room for.
+    let wrap = (shown.width() - 5.0 * PAD - ICON - CLOSE).clamp(80.0, 320.0);
+    let galley = ui.fonts_mut(|f| f.layout(text, theme::regular(12.0), t.text, wrap));
+    let size = vec2(ICON + galley.size().x + CLOSE, galley.size().y.max(CLOSE)) + vec2(4.0 * PAD, 2.0 * PAD);
+    // Whole or not at all: a note cut off at the bottom of the page on screen would hide part of
+    // what it says.
+    let Some(note) = warning_note_rect(shown, size, PAD) else { return NoteClick::default() };
+    // The note is the reader's, not the page's: a press on it doesn't reach the page's tools.
+    let body = ui.interact(note, ui.scope_id().with(("render-warning-note", page)), Sense::click());
+    painter.rect_filled(note, CornerRadius::same(t.radius), t.card);
+    painter.rect_stroke(note, CornerRadius::same(t.radius), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    icons::paint(ui, Rect::from_min_size(note.min + vec2(PAD, PAD), vec2(ICON, ICON)), "triangle-alert", ICON, t.accent_text);
+    painter.galley(note.min + vec2(2.0 * PAD + ICON, PAD), galley, t.text);
+    // Close, as the notice bars above the document close.
+    let close = Rect::from_min_size(pos2(note.right() - PAD - CLOSE, note.top() + PAD), vec2(CLOSE, CLOSE));
+    let resp = ui.interact(close, ui.scope_id().with(("render-warning-close", page)), Sense::click()).on_hover_text(tl!("Dismiss"));
+    // A button to screen readers and the control channel too, not only a painted cross.
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Dismiss")));
+    if resp.hovered() {
+        painter.rect_filled(close, CornerRadius::same(t.radius), if resp.is_pointer_button_down_on() { t.pressed } else { t.hover });
+    }
+    icons::paint(ui, close, "x", 14.0, t.icon);
+    NoteClick { clicked: body.clicked() || resp.clicked(), closed: resp.clicked() }
+}
+
+/// What a click did to a page's render-warning note this frame.
+#[derive(Default)]
+pub(super) struct NoteClick {
+    /// The note took a click, so it isn't a click on the page (full screen doesn't turn).
+    pub(super) clicked: bool,
+    /// Its close button was clicked.
+    pub(super) closed: bool,
+}
+
+/// Where a note of `size` goes in the top-right corner of `shown`, `pad` in from its edges; `None`
+/// when it doesn't fit there whole.
+pub(super) fn warning_note_rect(shown: Rect, size: Vec2, pad: f32) -> Option<Rect> {
+    let note = Rect::from_min_size(pos2(shown.right() - pad - size.x, shown.top() + pad), size);
+    (note.left() >= shown.left() + pad && note.bottom() <= shown.bottom() - pad).then_some(note)
+}
+
+/// What a render warning means for the page on screen.
+fn render_warning_text(warning: pdfcraft_render::RenderWarning) -> &'static str {
+    use pdfcraft_render::RenderWarning;
+    match warning {
+        RenderWarning::ContentTruncated => tl!("Part of this page isn't shown: its content goes past the most PdfCraft draws for one page."),
+        RenderWarning::ColourFallback => tl!("A colour on this page couldn't be computed and is shown in a fallback colour."),
+    }
 }
 
 /// The floating quick-action bar at the left edge of the document area.
