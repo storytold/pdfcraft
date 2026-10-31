@@ -643,12 +643,20 @@ impl PdfCraftApp {
         }
     }
 
+    /// Closes the tab at `index`, remembering its view state and recent-closed entry.
     pub fn close_tab(&mut self, index: usize) {
         if index >= self.views.len() {
             return;
         }
         self.remember_view(index);
         let id = self.views.remove(index).id;
+        self.print_tasks.deferred.retain(|&d| d != id);
+        if self.print_tasks.target == Some(id) {
+            self.print_tasks.target = None;
+            if self.dialog == Some(crate::Dialog::Print) {
+                self.dialog = None;
+            }
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(path) = self.session.get(id).and_then(|d| d.path.clone()) {
             if self.closed_tabs.len() == 10 {
@@ -664,6 +672,9 @@ impl PdfCraftApp {
             Some(a) if a >= self.views.len() => Some(self.views.len() - 1),
             other => other,
         };
+        if self.dialog.is_none() {
+            self.open_next_deferred_print();
+        }
     }
 
     /// Moves the tab at `from` so it sits at `to` (#1537). The same document stays active

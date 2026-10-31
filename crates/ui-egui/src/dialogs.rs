@@ -93,6 +93,10 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     if app.dialog != Some(Dialog::FieldTable) {
         app.field_table_draft = None;
     }
+    if app.dialog != Some(Dialog::Print) {
+        app.print_tasks.target = None;
+        app.open_next_deferred_print();
+    }
     // A movable window, not this modal: the page under it shows the table as it changes.
     if app.dialog == Some(Dialog::FieldTable) {
         crate::field_table_ui::show(app, ctx);
@@ -1286,10 +1290,11 @@ fn dialog_overwrite_changed(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut 
 /// `Dialog::Print` content. Returns `false` when it has its own buttons and no footer is wanted.
 fn dialog_print(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> bool {
     let t = Tokens::get(ui.ctx());
-    let Some((i, id)) = app.active_ids() else {
+    let Some((i, id)) = app.print_target() else {
         req.close = true;
         return false;
     };
+    let doc_label = crate::canvas::tab_label(app, i).unwrap_or_else(|| app.session.get(id).map(|d| d.display_name()).unwrap_or_default());
     if app.print_draft.handling == crate::print_ui::Handling::Label {
         app.read_label_crops(id);
     }
@@ -1306,7 +1311,7 @@ fn dialog_print(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> 
     let view = &mut app.views[i];
     view.set_print_grayscale(app.print_draft.grayscale);
     view.queue_print_previews(&rasters);
-    let (go, cancel) = crate::print_ui::body(ui, &mut app.print_draft, &t, &sizes, &labels, &mut |p| {
+    let (go, cancel) = crate::print_ui::body(ui, &mut app.print_draft, &t, &doc_label, &sizes, &labels, &mut |p| {
         view.need_thumbnail(p, true);
         view.page_preview(p)
     });
@@ -1842,6 +1847,10 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
         app.custom_draft = None;
         app.bulk_field_props = None;
         app.unmarked_page = Default::default();
+        if dialog == Dialog::Print && !replaces {
+            app.print_tasks.target = None;
+            app.open_next_deferred_print();
+        }
     } else {
         app.dialog = Some(req.next.unwrap_or(dialog));
     }

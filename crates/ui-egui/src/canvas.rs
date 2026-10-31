@@ -842,6 +842,7 @@ struct PageEnv<'a> {
     can_crop: bool,
     can_fill: bool,
     can_modify: bool,
+    can_print: bool,
     comments_hidden: bool,
     content_h: f32,
     content_w: f32,
@@ -857,6 +858,7 @@ struct PageEnv<'a> {
     hand: bool,
     info: &'a DocInfo,
     initials: &'a Option<crate::fill_sign::SavedSig>,
+    is_active: bool,
     key_scroll: f32,
     middle_gesture: bool,
     modal: bool,
@@ -900,6 +902,7 @@ struct PageOut {
     image_action: Option<crate::edit_text_ui::ImageAction>,
     open_boxes: bool,
     open_initials: bool,
+    open_print: bool,
     open_signature: bool,
     open_table: Option<(usize, [f64; 4])>,
     primary_down: bool,
@@ -1934,6 +1937,7 @@ fn cancel_on_escape(ctx: &egui::Context, view: &mut DocView, ptr: &PagePointer) 
     }
 }
 
+/// Draws the visible pages inside the scroll viewport and collects their interaction outputs.
 fn draw_pages(
     ui: &mut egui::Ui,
     viewport: Rect,
@@ -1950,6 +1954,7 @@ fn draw_pages(
         calc_order,
         can_copy,
         can_modify,
+        can_print,
         content_h,
         content_w,
         doc,
@@ -1959,6 +1964,7 @@ fn draw_pages(
         glide,
         hand,
         info,
+        is_active,
         key_scroll,
         middle_gesture,
         modal,
@@ -2070,6 +2076,7 @@ fn draw_pages(
         image_action,
         open_boxes,
         open_initials,
+        mut open_print,
         open_signature,
         open_table,
         primary_down: _,
@@ -2197,9 +2204,18 @@ fn draw_pages(
         }
         if view.comments.selected.is_none() {
             let selected = view.selected_text().is_some_and(|t| !t.is_empty());
-            let key = crate::commands::shortcut_label(ui.ctx(), crate::commands::COPY);
-            if ui.add_enabled(can_copy && selected, egui::Button::new(tl!("Copy")).shortcut_text(key)).clicked() {
+            let copy_key = crate::commands::shortcut_label(ui.ctx(), crate::commands::COPY);
+            if ui.add_enabled(can_copy && selected, egui::Button::new(tl!("Copy")).shortcut_text(copy_key)).clicked() {
                 copy_selected = true;
+                ui.close();
+            }
+            let mut print_btn = egui::Button::new(tl!("Print…"));
+            if is_active {
+                let print_key = crate::commands::shortcut_label(ui.ctx(), crate::commands::PRINT);
+                print_btn = print_btn.shortcut_text(print_key);
+            }
+            if ui.add_enabled(can_print, print_btn).clicked() {
+                open_print = true;
                 ui.close();
             }
             ui.separator();
@@ -2246,6 +2262,7 @@ fn draw_pages(
         image_action,
         open_boxes,
         open_initials,
+        open_print,
         open_signature,
         open_table,
         primary_down: ptr.primary_down,
@@ -3133,6 +3150,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let units = app.units;
     let allowed = doc.allows_annotation();
     let can_copy = doc.allows_copying();
+    let can_print = doc.allows_printing();
     let comments_hidden = doc.comments_hidden();
     let form = doc.form.clone();
     let generation = doc.edit_generation();
@@ -3171,6 +3189,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
 
     scroll = refine_goto_point(scroll, view, &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand });
     let selection_wheel = view.selection_drag && navigation_enabled && unobstructed && !single_paging && ui.rect_contains_pointer(avail);
+    let is_active = app.active == Some(index);
     let env = PageEnv {
         added: &added,
         allowed,
@@ -3184,6 +3203,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         can_crop,
         can_fill,
         can_modify,
+        can_print,
         comments_hidden,
         content_h,
         content_w,
@@ -3199,6 +3219,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         hand,
         info,
         initials: &initials,
+        is_active,
         key_scroll,
         middle_gesture,
         modal,
@@ -3243,6 +3264,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         mut image_action,
         open_boxes,
         open_initials,
+        open_print,
         open_signature,
         open_table,
         primary_down,
@@ -3335,6 +3357,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         open_signature,
         open_initials,
         open_boxes,
+        open_print,
         open_table,
         form_notice,
         copy_selected,
@@ -3356,6 +3379,7 @@ struct FrameRequests {
     open_signature: bool,
     open_initials: bool,
     open_boxes: bool,
+    open_print: bool,
     open_table: Option<(usize, [f64; 4])>,
     form_notice: Option<crate::forms_ui::FormNotice>,
     copy_selected: bool,
@@ -3376,6 +3400,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
         open_signature,
         open_initials,
         open_boxes,
+        open_print,
         open_table,
         form_notice,
         copy_selected,
@@ -3384,6 +3409,9 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
         generation,
         avail,
     } = requests;
+    if open_print {
+        app.open_print_for(index);
+    }
     if let Some((page, at)) = app.views[index].comments.attach_at.take() {
         app.attach_file_comment(page, at);
     }

@@ -92,6 +92,7 @@ impl PdfCraftApp {
 }
 
 impl PdfCraftApp {
+    /// Retires hidden views' caches and finishes rendering the visible and print-target documents.
     pub(crate) fn finish_render_frame(&mut self, ctx: &egui::Context) {
         self.finish_document_copy(ctx);
         // The Combine grid's thumbnails, whichever tab shows (renders under way still finish).
@@ -100,15 +101,18 @@ impl PdfCraftApp {
         // three cache limits apply to the application, regardless of how many tabs are open.
         // Side by side: the comparison's old file renders alongside the active one.
         let partner = self.active.and_then(|i| compare_ui::side_by_side(self, i)).map(|(old, _)| old);
+        // The Print dialog's document keeps rendering while the dialog is open.
+        let print = self.print_target().map(|(i, _)| i).filter(|&i| Some(i) != self.active && Some(i) != partner);
         for (i, view) in self.views.iter_mut().enumerate() {
             if Some(i) != self.active
                 && Some(i) != partner
+                && Some(i) != print
                 && let Some(doc) = self.session.get(view.id)
             {
                 view.suspend_rendering(&doc.renderer);
             }
         }
-        for i in self.active.into_iter().chain(partner) {
+        for i in self.active.into_iter().chain(partner).chain(print) {
             if let Some(view) = self.views.get_mut(i)
                 && let Some(doc) = self.session.get(view.id)
             {

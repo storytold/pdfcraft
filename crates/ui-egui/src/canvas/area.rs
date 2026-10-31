@@ -59,7 +59,7 @@ pub(super) fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, action
             app.views[index].pending_edit = Some(pdfcraft_engine::Edit::ResetForm { names });
         }
         B::Named(n) => match n.as_str() {
-            "Print" => app.open_print(),
+            "Print" => app.open_print_for(index),
             // What PdfCraft's XFA buttons use, and what a script's `execMenuItem("Save")`
             // does too: the Save As dialog, so a click never overwrites the file unasked.
             "SaveAs" => app.run_command("file.save_as"),

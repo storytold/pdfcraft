@@ -79,18 +79,21 @@ fn combo<T: PartialEq + Copy>(ui: &mut egui::Ui, id: &str, name: &str, value: &m
         .accessible_name(name);
 }
 
-/// Draw the dialog. `thumb` gives a page's thumbnail texture when there is one. Returns
-/// (print, cancel).
+/// Draw the dialog. `doc_label` is shown in the header. `thumb` gives a page's thumbnail texture when
+/// there is one. Returns (print, cancel).
 pub(crate) fn body(
     ui: &mut egui::Ui,
     d: &mut PrintDraft,
     t: &Tokens,
+    doc_label: &str,
     sizes: &[(f64, f64)],
     labels: &[String],
     thumb: &mut dyn FnMut(usize) -> Option<egui::TextureId>,
 ) -> (bool, bool) {
     ui.set_width(820.0);
-    ui.label(egui::RichText::new(tl!("Print")).font(theme::semibold(18.0)));
+    let full = if doc_label.is_empty() { tl!("Print").to_string() } else { format!("{} — {doc_label}", tl!("Print")) };
+    let single_line = full.split_whitespace().collect::<Vec<_>>().join(" ");
+    ui.add(egui::Label::new(egui::RichText::new(single_line).font(theme::semibold(18.0))).truncate()).on_hover_text(full);
     ui.add_space(8.0);
     let settings = d.settings(sizes.len(), labels);
     let sheets = settings.as_ref().ok().and_then(|s| print::layout(sizes, s).ok()).unwrap_or_default();

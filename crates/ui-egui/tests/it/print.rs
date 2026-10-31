@@ -913,3 +913,258 @@ fn a_booklet_decides_two_sided_itself() {
     assert!(h.query_by_role_and_label(Role::ComboBox, "Two-sided:").is_some());
     assert_eq!(h.state().print_draft.job("x").duplex, Some(Duplex::LongEdge), "back to the choice");
 }
+
+/// #5177: right-clicking the canvas includes Print… in the context menu and opens the Print dialog.
+#[test]
+fn right_click_canvas_context_menu_includes_print() {
+    use egui::{Event, Modifiers, PointerButton};
+    let mut h = harness();
+    let at = egui::pos2(400.0, 400.0);
+    h.event(Event::PointerMoved(at));
+    for pressed in [true, false] {
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+    h.ctx.set_os(egui::os::OperatingSystem::Windows);
+    assert_ne!(h.state().dialog, Some(Dialog::Print));
+    let print_row = h.get_by_label_contains("Print…");
+    assert!(print_row.accesskit_node().label().unwrap_or_default().contains("Ctrl+P"));
+    print_row.click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(Dialog::Print));
+    h.get_by_label("Print — form.pdf");
+}
+
+/// #5177: on a print-restricted document, the canvas context menu item is disabled.
+#[test]
+fn right_click_canvas_context_menu_disables_print_when_restricted() {
+    use egui::{Event, Modifiers, PointerButton};
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(include_bytes!("../data/form.pdf").to_vec())).unwrap();
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        permissions: -1 ^ 0b100,
+        encrypt_metadata: true,
+        seed: [3; 32],
+    })
+    .unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("restricted.pdf", None, bytes).unwrap();
+        app
+    });
+    h.run_steps(4);
+    let at = egui::pos2(400.0, 400.0);
+    h.event(Event::PointerMoved(at));
+    for pressed in [true, false] {
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+    let print_row = h.get_by_label_contains("Print…");
+    assert!(print_row.accesskit_node().is_disabled());
+}
+
+/// #5177: in side-by-side comparison, right-clicking the old pane's context menu prints the old
+/// document rather than the active new document.
+#[test]
+fn right_click_compare_old_pane_context_menu_prints_that_document() {
+    use egui::{Event, Modifiers, PointerButton};
+    let mut h = harness();
+    let old_bytes = h.state().session.create_blank(200.0, 300.0, 3).unwrap();
+    let new_bytes = h.state().session.create_blank(200.0, 300.0, 1).unwrap();
+    h.state_mut().open_bytes("old.pdf", None, old_bytes.as_ref().clone()).unwrap();
+    h.state_mut().open_bytes("new.pdf", None, new_bytes.as_ref().clone()).unwrap();
+    h.run_steps(3);
+    let old_index = h.state().views.len() - 2;
+    let new_index = h.state().views.len() - 1;
+    h.state_mut().views[old_index].select_pages(&[0, 2]);
+    h.state_mut().compare_old = Some(h.state().views[old_index].id);
+    h.state_mut().run_compare();
+    h.run_steps(3);
+    assert_eq!(h.state().active, Some(new_index));
+    assert!(h.state().compare.as_ref().is_some_and(|c| c.side_by_side));
+    let at = h.state().views[old_index].viewport_rect().center();
+    h.event(Event::PointerMoved(at));
+    for pressed in [true, false] {
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+    h.ctx.set_os(egui::os::OperatingSystem::Windows);
+    let print_row = h.get_by_label_contains("Print…");
+    assert!(!print_row.accesskit_node().label().unwrap_or_default().contains("Ctrl+P"));
+    assert!(!print_row.accesskit_node().label().unwrap_or_default().contains("Command+P"));
+    print_row.click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::Print));
+    h.get_by_label("Print — old.pdf");
+    assert_eq!(h.state().active, Some(new_index), "side-by-side comparison stays active");
+    assert_eq!(h.state().print_draft.selected, vec![0, 2], "seeded from the old pane");
+    h.get_by_label("Selected pages (2)");
+    h.get_by_label("Sheet 1 of 2");
+    let out = std::env::temp_dir().join(format!("pdfcraft-print-compare-old-{}.pdf", std::process::id()));
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.state_mut().print_draft.printer = None;
+    h.run_steps(1);
+    h.get_by_label("Save as PDF").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None);
+    let saved = std::fs::read(&out).expect("saved");
+    let doc = pdfcraft_cos::Document::open(std::sync::Arc::new(saved)).unwrap();
+    assert_eq!(pdfcraft_model::pages(&doc).len(), 2);
+    let _ = std::fs::remove_file(out);
+}
+
+/// Closing the document that `Dialog::Print` was opened for clears the target and closes the
+/// dialog so it cannot fall back to printing a different open tab.
+#[test]
+fn closing_print_target_tab_closes_print_dialog() {
+    use pdfcraft_engine::js::{JsOutput, Request};
+    let mut h = harness();
+    let other = h.state().session.create_blank(200.0, 300.0, 3).unwrap();
+    h.state_mut().open_bytes("other.pdf", None, other.as_ref().clone()).unwrap();
+    h.run_steps(2);
+    let first_index = 0;
+    let second_index = 1;
+    let first_id = h.state().views[first_index].id;
+    h.state_mut().views[first_index].select_pages(&[0, 1]);
+    h.state_mut().handle_js(first_id, JsOutput { requests: vec![Request::Print], ..Default::default() });
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(Dialog::Print));
+    h.state_mut().close_tab(first_index);
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, None);
+    assert_eq!(h.state().views.len(), 1);
+    assert_eq!(h.state().active, Some(second_index - 1));
+}
+
+/// A background JavaScript `Request::Print` arriving while `Dialog::Print` is already open is
+/// deferred until the open dialog closes, preserving the open dialog's target and page state.
+#[test]
+fn background_js_print_request_defers_until_open_print_dialog_closes() {
+    use pdfcraft_engine::js::{JsOutput, Request};
+    let mut h = harness();
+    let bg_bytes = h.state().session.create_blank(200.0, 300.0, 3).unwrap();
+    let fg_bytes = h.state().session.create_blank(200.0, 300.0, 4).unwrap();
+    h.state_mut().open_bytes("bg.pdf", None, bg_bytes.as_ref().clone()).unwrap();
+    h.state_mut().open_bytes("fg.pdf", None, fg_bytes.as_ref().clone()).unwrap();
+    h.run_steps(2);
+    let bg_index = h.state().views.len() - 2;
+    let fg_index = h.state().views.len() - 1;
+    let bg_id = h.state().views[bg_index].id;
+    h.state_mut().views[bg_index].select_pages(&[2]);
+    h.state_mut().views[fg_index].select_pages(&[0, 3]);
+    h.state_mut().open_print();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(Dialog::Print));
+    h.get_by_label("Print — fg.pdf");
+    assert_eq!(h.state().print_draft.selected, vec![0, 3]);
+
+    // Background script asks to print while fg's Print dialog is open.
+    h.state_mut().handle_js(bg_id, JsOutput { requests: vec![Request::Print], ..Default::default() });
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(Dialog::Print));
+    h.get_by_label("Print — fg.pdf");
+    assert_eq!(h.state().print_draft.selected, vec![0, 3], "open dialog state is preserved");
+
+    // Closing fg's Print dialog promotes the deferred background request.
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::Print));
+    h.get_by_label("Print — bg.pdf");
+    assert_eq!(h.state().print_draft.selected, vec![2], "deferred background print opens next");
+    h.get_by_label("Selected pages (1)");
+}
+
+/// The Print dialog header collapses multiline document titles onto a single line and shows
+/// the full title on hover so tall titles cannot push dialog buttons off screen.
+#[test]
+fn print_dialog_header_collapses_whitespace_and_shows_full_title_on_hover() {
+    let mut h = harness();
+    let bytes = h.state().session.create_blank(200.0, 300.0, 1).unwrap();
+    h.state_mut().open_bytes("Line 1\nLine 2\nLine 3.pdf", None, bytes.as_ref().clone()).unwrap();
+    h.run_steps(2);
+    h.state_mut().open_print();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(Dialog::Print));
+    let header = h.get_by_label("Print — Line 1 Line 2 Line 3.pdf");
+    header.hover();
+    h.run_steps(30);
+    h.get_by_label("Print — Line 1\nLine 2\nLine 3.pdf");
+}
+
+/// Documents with print restrictions do not open the Print dialog, and deferred requests skip them.
+#[test]
+fn print_restricted_documents_do_not_open_print_and_are_skipped_in_deferred_queue() {
+    use pdfcraft_engine::js::{JsOutput, Request};
+
+    let plain = pdfcraft_engine::Session::new().create_blank(200.0, 300.0, 1).unwrap().as_ref().clone();
+    let mut restricted_doc = pdfcraft_cos::Document::open(std::sync::Arc::new(plain)).unwrap();
+    restricted_doc
+        .set_encryption(&pdfcraft_cos::NewEncryption {
+            algorithm: pdfcraft_cos::Algorithm::Aes256,
+            user_password: "",
+            owner_password: "owner",
+            permissions: -1 ^ 0b100,
+            encrypt_metadata: true,
+            seed: [4; 32],
+        })
+        .unwrap();
+    let restricted_bytes = pdfcraft_cos::write_full(&restricted_doc, &Default::default()).unwrap();
+
+    let mut h = harness();
+    let allowed_bytes = h.state().session.create_blank(200.0, 300.0, 1).unwrap();
+    h.state_mut().open_bytes("restricted.pdf", None, restricted_bytes).unwrap();
+    h.state_mut().open_bytes("allowed.pdf", None, allowed_bytes.as_ref().clone()).unwrap();
+    h.run_steps(2);
+
+    let restricted_idx = h.state().views.len() - 2;
+    let allowed_idx = h.state().views.len() - 1;
+    let restricted_id = h.state().views[restricted_idx].id;
+    let allowed_id = h.state().views[allowed_idx].id;
+
+    assert!(!h.state().session.get(restricted_id).unwrap().allows_printing());
+    assert!(h.state().session.get(allowed_id).unwrap().allows_printing());
+
+    // Direct open_print on an active print-restricted document must early-exit.
+    h.state_mut().active = Some(restricted_idx);
+    h.state_mut().open_print();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, None, "active restricted document does not open Print dialog");
+
+    // Non-active script print request on a print-restricted document must also early-exit.
+    h.state_mut().active = Some(allowed_idx);
+    h.state_mut().handle_js(restricted_id, JsOutput { requests: vec![Request::Print], ..Default::default() });
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, None, "non-active restricted document does not open Print dialog");
+
+    // Open Print dialog for form.pdf (tab 0).
+    h.state_mut().active = Some(0);
+    h.state_mut().open_print();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(Dialog::Print));
+    h.get_by_label("Print — form.pdf");
+
+    // Queue deferred print requests: first restricted, then allowed.
+    h.state_mut().handle_js(restricted_id, JsOutput { requests: vec![Request::Print], ..Default::default() });
+    h.state_mut().handle_js(allowed_id, JsOutput { requests: vec![Request::Print], ..Default::default() });
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(Dialog::Print));
+    h.get_by_label("Print — form.pdf");
+
+    // Closing the initial dialog skips restricted_id and opens allowed_id.
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::Print));
+    h.get_by_label("Print — allowed.pdf");
+
+    // Closing allowed_id leaves no remaining deferred print dialogs.
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None);
+}
