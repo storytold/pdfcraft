@@ -6214,6 +6214,9 @@ fn packet_array_dataset_declaration_preserves_edited_value_through_save_and_reop
         ("single_xdp_stream", format!("<xfa:datasets><xfa:data><form><entry>{INITIAL}</entry></form></xfa:data></xfa:datasets>"), true),
     ];
     let evidence_dir = std::env::var_os("PDFCRAFT_XFA_PERSISTENCE_EVIDENCE").map(std::path::PathBuf::from);
+    if let Some(dir) = &evidence_dir {
+        std::fs::create_dir_all(dir).expect("create synthetic XFA persistence evidence directory");
+    }
     let mut observations = Vec::new();
     for (case, datasets, single_stream) in cases {
         let bytes = fixture(&datasets, single_stream);
