@@ -128,6 +128,8 @@ pub struct Widget {
     pub items: Vec<String>,
     /// A text field that doesn't scroll: it takes no more text than it shows (`DoNotScroll`).
     pub no_scroll: bool,
+    /// The field must be filled in (`Required`); a radio button, when its group must be.
+    pub required: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

@@ -25,7 +25,7 @@ that warning and keeps the existing layout and accepted widget values.
   margins, borders (edge order rules), captions with reserves, check-button items, pictures,
   rich text (`exData` XHTML: paragraphs, `br`, bold/italic/underline/size spans, embedded fields),
   text-field limits (`text/maxChars` and `exData/maxLength`, carried into AcroForm `/MaxLen`),
-  inline JPEG, PNG and GIF images, lines, rectangles, occurrences, `breakBefore`/`breakAfter`, overflow
+  required fields and exclusion groups (`<validate nullTest="error">`), inline JPEG, PNG and GIF images, lines, rectangles, occurrences, `breakBefore`/`breakAfter`, overflow
   leaders, `columnWidths` and `colSpan`.
 - **Layout** (`layout`): positioned, `tb`, `lr-tb`/`rl-tb`, `table` and `row` layouts; a
   container without a width is as wide as its content; flow across content areas and pages with
@@ -41,7 +41,8 @@ that warning and keeps the existing layout and accepted widget values.
   scripts, and signature fields, each named by its SOM path (`form1[0].page1[0].sign[0]`, as
   fields under one for each step above it) because other viewers lay a dynamic form out again
   and find a signature by that name. A box whose path, or a part of it, the file already gives
-  another field keeps its own name, and a new layout keeps a signature a generated box holds. Appearance streams are left empty for the forms layer to
+  another field keeps its own name, and a new layout keeps a signature a generated box holds. A field or exclusion group that must be filled in gets the `Required` flag (a radio
+  group on its group field), which viewers outline when they highlight fields. Appearance streams are left empty for the forms layer to
   generate. Each field keeps its SOM path in `/PCSom`; the AcroForm gets `/PCXfaLayout` so a saved form is not laid out
   twice. The XFA packets stay, so Adobe's viewers keep rendering the form from them.
 

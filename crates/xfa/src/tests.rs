@@ -299,6 +299,10 @@ fn tables_break_across_pages_and_repeat_their_header_row() {
     assert_eq!(all.len(), all.iter().collect::<std::collections::HashSet<_>>().len(), "field names are unique");
 }
 
+/// Laying a dynamic form out into its PDF replaces the placeholder page with the template's pages
+/// and adds its fields (a radio group once), keeps the XFA packets and `/NeedsRendering` for Adobe's
+/// viewers, writes each `/DR` font as an object of its own, and marks the form so it isn't laid out
+/// twice.
 #[test]
 fn rendering_into_the_pdf_replaces_the_placeholder_page_and_adds_fields() {
     let mut doc = Document::open(Arc::new(shell(&template(2)))).unwrap();
@@ -335,6 +339,71 @@ fn rendering_into_the_pdf_replaces_the_placeholder_page_and_adds_fields() {
     assert!(first.as_dict().unwrap().contains(SOM_KEY));
     // Not dynamic twice: a second pass is refused rather than doubling the pages.
     assert!(!is_dynamic(&doc));
+}
+
+/// A field or exclusion group that must be filled in (`<validate nullTest="error">`) becomes a
+/// Required field, which viewers outline when they highlight a form's fields: a radio group on the
+/// group field, its buttons' flags being the group's (a button of its own that must be chosen
+/// makes the group required too). `nullTest="warning"` only recommends a value,
+/// so it, like no test, leaves the field optional. A push button keeps no value (ISO 32000-2
+/// §12.7.5.2.2), so it is never required.
+#[test]
+fn fields_that_must_be_filled_in_are_required() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+<pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+<field name="must" w="2in" h="0.3in"><ui><textEdit/></ui><validate nullTest="error"/></field>
+<field name="should" w="2in" h="0.3in"><ui><textEdit/></ui><validate nullTest="warning"/></field>
+<field name="may" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+<field name="agree" w="2in" h="0.3in"><ui><checkButton/></ui><items><integer>1</integer><integer>0</integer></items><validate nullTest="error"/></field>
+<field name="go" w="1in" h="0.3in"><ui><button/></ui><caption><value><text>Go</text></value></caption><validate nullTest="error"/></field>
+<exclGroup name="answer" layout="lr-tb"><validate nullTest="error"/>
+ <field name="yes" w="1in" h="0.3in"><ui><checkButton shape="round"/></ui><items><text>Y</text></items></field>
+ <field name="no" w="1in" h="0.3in"><ui><checkButton shape="round"/></ui><items><text>N</text></items></field>
+</exclGroup>
+<exclGroup name="optional" layout="lr-tb">
+ <field name="a" w="1in" h="0.3in"><ui><checkButton shape="round"/></ui><items><text>A</text></items></field>
+</exclGroup>
+<exclGroup name="second" layout="lr-tb">
+ <field name="b" w="1in" h="0.3in"><ui><checkButton shape="round"/></ui><items><text>B</text></items></field>
+ <field name="c" w="1in" h="0.3in"><ui><checkButton shape="round"/></ui><items><text>C</text></items><validate nullTest="error"/></field>
+</exclGroup>
+</subform></template></xdp:xdp>"##;
+    let mut doc = Document::open(Arc::new(shell(xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    let catalog = doc.get(doc.root().unwrap());
+    let acro = doc.resolve(catalog.as_dict().unwrap().get(b"AcroForm").unwrap());
+    let fields = doc.resolve(acro.as_dict().unwrap().get(b"Fields").unwrap()).as_array().unwrap().clone();
+    let required: std::collections::BTreeMap<String, bool> = fields
+        .iter()
+        .map(|f| {
+            let d = doc.resolve(f).as_dict().unwrap().clone();
+            let name = d.get(b"T").and_then(|t| doc.resolve(t).as_string().map(|s| s.to_text())).unwrap_or_default();
+            (name, d.int(b"Ff").unwrap_or(0) & 2 != 0)
+        })
+        .collect();
+    let leaf = |n: &str| required.iter().find(|(k, _)| k.contains(n)).map(|(_, r)| *r);
+    assert_eq!(leaf("must"), Some(true), "{required:?}");
+    assert_eq!(leaf("should"), Some(false), "a warning only recommends a value");
+    assert_eq!(leaf("may"), Some(false));
+    assert_eq!(leaf("agree"), Some(true), "a check box too");
+    assert_eq!(leaf("go"), Some(false), "a push button holds no value to fill in");
+    assert_eq!(leaf("answer"), Some(true), "the radio group field");
+    assert_eq!(leaf("optional"), Some(false));
+    assert_eq!(leaf("second"), Some(true), "a later button that must be chosen makes its group required");
+    // The buttons themselves carry no Required flag: theirs are the group's.
+    for group in ["answer", "second"] {
+        let field = fields
+            .iter()
+            .map(|f| doc.resolve(f).as_dict().unwrap().clone())
+            .find(|d| d.get(b"T").and_then(|t| doc.resolve(t).as_string().map(|s| s.to_text())).is_some_and(|t| t.contains(group)));
+        let kids = field.and_then(|d| d.get(b"Kids").map(|k| doc.resolve(k).as_array().cloned().unwrap_or_default())).unwrap_or_default();
+        assert!(!kids.is_empty(), "{group} has its buttons as kids");
+        for kid in &kids {
+            let ff = doc.resolve(kid).as_dict().and_then(|d| d.int(b"Ff")).unwrap_or(0);
+            assert_eq!(ff & 2, 0, "{group}: a button is not Required itself");
+        }
+    }
 }
 
 /// A dynamic form's own text that the standard fonts can't draw is laid out anyway and reported
