@@ -225,16 +225,13 @@ pub(super) fn selection_actions(
     view.clear_selection();
     match action {
         SelectionAction::Note | SelectionAction::Replace => {
-            if matches!(action, SelectionAction::Replace) {
+            let kind = if matches!(action, SelectionAction::Replace) {
                 view.comments.replace = Some(quads);
-            }
-            view.comments.composer = Some(comments::Composer {
-                page,
-                at,
-                kind: if matches!(action, SelectionAction::Replace) { comments::ComposerKind::Replace } else { comments::ComposerKind::Note },
-                text: String::new(),
-                focus: true,
-            });
+                comments::ComposerKind::Replace
+            } else {
+                comments::ComposerKind::TextNote { quads }
+            };
+            view.comments.composer = Some(comments::Composer { page, at, kind, text: String::new(), focus: true });
         }
         SelectionAction::Markup(tool) => {
             // Every markup button carries a markup tool; anything else adds nothing.
