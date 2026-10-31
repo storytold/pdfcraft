@@ -9985,11 +9985,11 @@ title = "Preferences: full screen"
 area = "N"
 tier = "P2"
 milestone = "M14"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/it/view.rs::full_screen_fills_the_screen_edge_to_edge", "crates/ui-egui/tests/it/view.rs::full_screen_keeps_continuous_scrolling_when_fill_is_off", "crates/ui-egui/tests/it/view.rs::full_screen_stays_on_esc_when_esc_does_not_leave_it", "crates/ui-egui/tests/it/view.rs::full_screen_esc_closes_the_find_bar_before_leaving"]
+notes = "Two of the full-screen preferences, in Preferences under Documents and view and saved with the others: Full screen fills the screen with one page at a time (on: the page or spread edge to edge, no margin or shadow, #576; off: full screen keeps the page display it was entered from, such as continuous scrolling, #4273) and Esc leaves full screen (off: only Ctrl+L / Cmd+L leaves it). Esc closes an open menu, the camera, a selection or the find bar before it leaves full screen (#5302). Missing: show a navigation bar, left/right click to page as an option, loop after the last page, advance every N seconds, the alert when a document asks for full screen, which monitor, background colour, mouse cursor, default transition and ignoring the document's transitions"
 
 [[feature]]
 id = "misc.prefs-search"

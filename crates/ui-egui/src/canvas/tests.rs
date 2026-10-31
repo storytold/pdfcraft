@@ -1707,22 +1707,41 @@ fn full_screen_two_page_view_fits_the_spread_it_shows() {
     assert!(small > windowed * 1.9, "the small spread fills the screen: {small} vs {windowed}");
     v.current = 3;
     v.fit_zoom(&info);
-    assert!((v.zoom - windowed).abs() < 1e-4, "the large spread fits as before");
+    // The large spread fits the screen edge to edge, without the window's margins (#576).
+    let edge_to_edge = (v.viewport_w - v.page_gap()) / (2.0 * 600.0 * PT);
+    assert!((v.zoom - edge_to_edge).abs() < 1e-4 && v.zoom > windowed, "the large spread fills the screen: {} vs {edge_to_edge}", v.zoom);
     v.current = 1;
     v.fit_zoom(&info);
     assert_eq!(v.zoom, small, "page 2 is in the first spread");
-    // With a cover page: [0] alone, then [1, 2] (the large page decides), then [3].
+    // With a cover page: [0] alone, then [1, 2], then [3].
     v.cover = true;
     v.current = 0;
     v.fit_zoom(&info);
     assert_eq!(v.zoom, small, "the cover page alone");
+    // The mixed spread [1, 2] fits its two pages' own widths side by side, 300 + 600 points,
+    // and not twice the wider one: here the height decides.
     v.current = 1;
     v.fit_zoom(&info);
-    assert!((v.zoom - windowed).abs() < 1e-4, "page 2 shares a spread with the large page 3");
+    let mixed_fit = ((v.viewport_w - v.page_gap()) / (900.0 * PT)).min(v.viewport_h / (800.0 * PT));
+    assert!((v.zoom - mixed_fit).abs() < 1e-4 && v.zoom > edge_to_edge, "page 2 shares a spread with the large page 3: {} vs {mixed_fit}", v.zoom);
+    // And the content is as wide as that spread, so the spread is centred on the screen: room for
+    // twice the larger page would centre it past the screen's right edge.
+    let content_w = v.content_width(&info, v.viewport_w);
+    let rects = v.layout(&info, content_w, 1.0);
+    let (left, right) = (rects[1].min.x, rects[2].max.x);
+    assert!(content_w <= v.viewport_w + 0.5, "the spread needs no scrolling: {content_w}");
+    assert!(left >= -0.5 && right <= v.viewport_w + 0.5, "the spread is on the screen: {left}..{right}");
+    assert!((left - (v.viewport_w - right)).abs() < 1.0, "and centred: {left}..{right}");
+    // The cover alone keeps its spread's blank slot, and is on the screen too.
+    v.current = 0;
+    v.fit_zoom(&info);
+    let content_w = v.content_width(&info, v.viewport_w);
+    let cover = v.layout(&info, content_w, 1.0)[0];
+    assert!(cover.min.x >= v.viewport_w / 2.0 && cover.max.x <= v.viewport_w + 0.5, "the cover sits on the right: {cover:?}");
     // Scrolling while in full screen fits the document, as scrolling does in the window.
     (v.continuous, v.current) = (true, 0);
     v.fit_zoom(&info);
-    assert!((v.zoom - windowed).abs() < 1e-4, "continuous full screen keeps one zoom");
+    assert!((v.zoom - edge_to_edge).abs() < 1e-4, "continuous full screen keeps one zoom");
     v.continuous = false;
     // The cover page is a spread of its own even when the next page is larger.
     let mixed = DocInfo { pages: vec![page(300.0, 400.0), page(600.0, 800.0), page(600.0, 800.0)], ..Default::default() };
@@ -2001,4 +2020,41 @@ fn a_moved_picture_is_drawn_from_the_fresh_raster_while_a_tile_is_still_stale() 
     assert_eq!(red(&pixels, old), 0, "nothing shows where it first was");
     h.state_mut().views[0].stale_tiles.clear();
     h.state_mut().views[0].tiles.clear();
+}
+
+/// Review on #5325: one Esc closes one thing. With a form field being filled (a check box that
+/// has the focus) and text selected, the page leaves the selection for the next Esc: the field's
+/// editor takes this one.
+#[test]
+fn esc_with_a_field_being_filled_leaves_the_selection() {
+    let mut v = view(3, PageLayout::Single, true);
+    v.all_text = true;
+    v.forms.focus = Some(crate::forms_ui::Focus {
+        name: "agree".into(),
+        widget: 0,
+        text: String::new(),
+        picked: Vec::new(),
+        request_focus: false,
+        select_all: false,
+        press: None,
+        calendar: None,
+        calendar_rect: None,
+        calendar_text: None,
+        had_focus: true,
+    });
+    let ctx = egui::Context::default();
+    ctx.input_mut(|i| {
+        i.events.push(egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+    });
+    shortcuts(&mut v, &ctx, Default::default());
+    assert!(v.all_text, "the selection stays while the field takes Esc");
+    v.forms.focus = None;
+    shortcuts(&mut v, &ctx, Default::default());
+    assert!(!v.all_text, "with no field being filled, Esc clears the selection");
 }
