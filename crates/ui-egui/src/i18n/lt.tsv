@@ -2844,3 +2844,7 @@ theme	Appearance	Išvaizda
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Šio atsakymo parinktys
 	Export value	Eksporto reikšmė
+
+# Toolbars and panels a document hides (#4378) (AI-assisted, not separately native-reviewed)
+	Show or hide toolbars and panels	Rodyti arba slėpti įrankių juostas ir skydelius
+	This document hides the toolbars and panels. Press {key} to show them.	Šis dokumentas slepia įrankių juostas ir skydelius. Norėdami juos parodyti, paspauskite {key}.

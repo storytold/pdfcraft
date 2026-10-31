@@ -2492,3 +2492,7 @@ animation effects	Off	ఆఫ్
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	ఈ ప్రత్యుత్తరం ఎంపికలు
 	Export value	ఎగుమతి విలువ
+
+# Toolbars and panels a document hides (#4378) (AI-assisted, not separately native-reviewed)
+	Show or hide toolbars and panels	టూల్‌బార్‌లు మరియు ప్యానెల్‌లను చూపించు లేదా దాచు
+	This document hides the toolbars and panels. Press {key} to show them.	ఈ పత్రం టూల్‌బార్‌లను మరియు ప్యానెల్‌లను దాచుతుంది. వాటిని చూపించడానికి {key} నొక్కండి.

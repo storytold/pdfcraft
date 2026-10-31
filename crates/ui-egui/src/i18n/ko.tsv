@@ -2814,3 +2814,7 @@ theme	Appearance	모양
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	이 답글의 옵션
+
+# Toolbars and panels a document hides (#4378) (AI-assisted, not separately native-reviewed)
+	Show or hide toolbars and panels	도구 모음 및 패널 표시/숨기기
+	This document hides the toolbars and panels. Press {key} to show them.	이 문서는 도구 모음과 패널을 숨깁니다. {key} 키를 눌러 표시할 수 있습니다.

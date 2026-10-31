@@ -2890,3 +2890,7 @@ certificate	Version	Verze
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Možnosti této odpovědi
 	Export value	Exportní hodnota
+
+# Toolbars and panels a document hides (#4378) (AI-assisted, not separately native-reviewed)
+	Show or hide toolbars and panels	Zobrazit nebo skrýt panely nástrojů a postranní panely
+	This document hides the toolbars and panels. Press {key} to show them.	Tento dokument skrývá panely nástrojů a postranní panely. Stisknutím {key} je zobrazíte.

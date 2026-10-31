@@ -2906,3 +2906,7 @@ theme	Appearance	Aspecto
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opciones de esta respuesta
 	Export value	Valor de exportación
+
+# Toolbars and panels a document hides (#4378) (AI-assisted, not separately native-reviewed)
+	Show or hide toolbars and panels	Mostrar u ocultar las barras de herramientas y los paneles
+	This document hides the toolbars and panels. Press {key} to show them.	Este documento oculta las barras de herramientas y los paneles. Pulse {key} para mostrarlos.

@@ -2605,3 +2605,7 @@ animation effects	Off	Вимкнено
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Параметри цієї відповіді
 	Export value	Значення експорту
+
+# Toolbars and panels a document hides (#4378) (AI-assisted, not separately native-reviewed)
+	Show or hide toolbars and panels	Показати або приховати панелі інструментів і бічні панелі
+	This document hides the toolbars and panels. Press {key} to show them.	Цей документ приховує панелі інструментів і бічні панелі. Натисніть {key}, щоб показати їх.

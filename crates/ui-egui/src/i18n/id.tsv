@@ -2815,3 +2815,7 @@ theme	Appearance	Tampilan
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opsi untuk balasan ini
+
+# Toolbars and panels a document hides (#4378) (AI-assisted, not separately native-reviewed)
+	Show or hide toolbars and panels	Tampilkan atau sembunyikan bilah alat dan panel
+	This document hides the toolbars and panels. Press {key} to show them.	Dokumen ini menyembunyikan bilah alat dan panel. Tekan {key} untuk menampilkannya.

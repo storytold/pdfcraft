@@ -2486,3 +2486,7 @@ animation effects	Off	ປິດ
 	Unchecked reads	Unchecked reads
 	{field} reads fields named as it runs	{field} reads fields named as it runs
 	Some names are built as it runs	Some names are built as it runs
+
+# Toolbars and panels a document hides (#4378) (AI-assisted, not separately native-reviewed)
+	Show or hide toolbars and panels	ສະແດງ ຫຼື ເຊື່ອງແຖບເຄື່ອງມື ແລະ ແຜງ
+	This document hides the toolbars and panels. Press {key} to show them.	ເອກະສານນີ້ເຊື່ອງແຖບເຄື່ອງມື ແລະ ແຜງ. ກົດ {key} ເພື່ອສະແດງພວກມັນ.

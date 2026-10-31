@@ -2581,3 +2581,7 @@ animation effects	Off	Өшірулі
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Осы жауаптың параметрлері
 	Export value	Экспорт мәні
+
+# Toolbars and panels a document hides (#4378) (AI-assisted, not separately native-reviewed)
+	Show or hide toolbars and panels	Құралдар тақталары мен панельдерді көрсету немесе жасыру
+	This document hides the toolbars and panels. Press {key} to show them.	Бұл құжат құралдар тақталары мен панельдерді жасырады. Оларды көрсету үшін {key} басыңыз.

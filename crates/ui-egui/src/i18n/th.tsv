@@ -2741,3 +2741,7 @@ theme	Appearance	ลักษณะที่ปรากฏ
 	Unchecked reads	Unchecked reads
 	{field} reads fields named as it runs	{field} reads fields named as it runs
 	Some names are built as it runs	Some names are built as it runs
+
+# Toolbars and panels a document hides (#4378) (AI-assisted, not separately native-reviewed)
+	Show or hide toolbars and panels	แสดงหรือซ่อนแถบเครื่องมือและแผง
+	This document hides the toolbars and panels. Press {key} to show them.	เอกสารนี้ซ่อนแถบเครื่องมือและแผง กด {key} เพื่อแสดง

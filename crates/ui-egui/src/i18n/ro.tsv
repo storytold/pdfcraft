@@ -2843,3 +2843,7 @@ theme	Appearance	Aspect
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opțiuni pentru acest răspuns
+
+# Toolbars and panels a document hides (#4378) (AI-assisted, not separately native-reviewed)
+	Show or hide toolbars and panels	Afișare sau ascundere bare de instrumente și panouri
+	This document hides the toolbars and panels. Press {key} to show them.	Acest document ascunde barele de instrumente și panourile. Apăsați {key} pentru a le afișa.

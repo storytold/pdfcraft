@@ -2002,3 +2002,32 @@ fn a_moved_picture_is_drawn_from_the_fresh_raster_while_a_tile_is_still_stale() 
     h.state_mut().views[0].stale_tiles.clear();
     h.state_mut().views[0].tiles.clear();
 }
+
+/// Review on #4378: `FitWindow` measures the spread the view shows, its pages side by side
+/// and as tall as the taller one, with one page in a spread that has only one.
+#[test]
+fn first_page_now_measures_the_pages_in_the_spread() {
+    let page =
+        |width: f32, height: f32| pdfcraft_render::PageInfo { width, height, label: String::new(), crop: [0.0, 0.0, width, height], rotation: 0 };
+    let info = DocInfo { pages: vec![page(300.0, 400.0), page(600.0, 800.0), page(200.0, 500.0)], ..Default::default() };
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+    let one = v.first_page_now(&info).expect("a page");
+    assert_eq!((one.size, one.margins.x), (vec2(300.0 * PT, 400.0 * PT), 2.0 * SIDE));
+    v.set_display(PageLayout::TwoUp, false);
+    let gap = v.page_gap();
+    // [0, 1]: 300 + 600 wide, 800 high, one gap between them.
+    let spread = v.first_page_now(&info).expect("a spread");
+    assert_eq!((spread.size, spread.margins.x), (vec2(900.0 * PT, 800.0 * PT), 2.0 * SIDE + gap));
+    // [2] on its own at the end: one page, no gap.
+    v.current = 2;
+    let last = v.first_page_now(&info).expect("the last page");
+    assert_eq!((last.size, last.margins.x), (vec2(200.0 * PT, 500.0 * PT), 2.0 * SIDE));
+    // With a cover page: [0] alone, then [1, 2].
+    v.set_cover(true);
+    assert_eq!(v.first_page_now(&info).expect("a spread").size, vec2(800.0 * PT, 800.0 * PT));
+    v.current = 0;
+    let cover = v.first_page_now(&info).expect("the cover");
+    assert_eq!((cover.size, cover.margins.x), (vec2(300.0 * PT, 400.0 * PT), 2.0 * SIDE));
+    v.current = 9;
+    assert!(v.first_page_now(&info).is_none());
+}

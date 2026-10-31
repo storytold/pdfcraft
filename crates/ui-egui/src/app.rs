@@ -253,6 +253,7 @@ impl PdfCraftApp {
             community_card_closed: false,
             pending_link: None,
             pending_full_screen: None,
+            pending_window: None,
             pending_remote_link: None,
             protect_draft: Default::default(),
             text_style_draft: Default::default(),
@@ -611,15 +612,22 @@ impl eframe::App for PdfCraftApp {
             window_controls::resize_edges(&ctx);
         }
         chrome::tab_strip(self, ui);
-        chrome::mode_bar(self, ui);
+        // A document can hide the toolbars, the menu and the panels around it in its tab (ISO
+        // 32000-2 Table 147); the tab strip stays, and F8 brings the rest back (`viewer_prefs`).
+        let hidden = self.hidden_interface();
+        if !hidden.mode_bar(self.native_menu.is_some()) {
+            chrome::mode_bar(self, ui);
+        }
         // Whichever way another tab came to the front, it shows instead of the expanded view.
         if self.all_tools_full && self.all_tools_tab != self.shown_tab() {
             self.all_tools_full = false;
         }
-        side_panels::show(self, ui);
+        if !hidden.window_ui {
+            side_panels::show(self, ui);
+        }
         let t = theme::Tokens::get(&ctx);
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.pasteboard)).show(ui, |ui| {
-            if self.mode == Mode::AllTools && self.all_tools_full {
+            if self.mode == Mode::AllTools && self.all_tools_full && !hidden.window_ui {
                 all_tools_ui::show(self, ui);
             } else {
                 match self.active {
@@ -632,6 +640,8 @@ impl eframe::App for PdfCraftApp {
                 }
             }
         });
+        // FitWindow and CenterWindow, once the document just opened is laid out.
+        self.window_preferences_frame(&ctx);
         self.process_pending_edits();
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);

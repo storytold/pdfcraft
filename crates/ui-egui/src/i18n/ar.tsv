@@ -2859,3 +2859,7 @@ certificate	Version	الإصدار
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	خيارات هذا الرد
 	Export value	قيمة التصدير
+
+# Toolbars and panels a document hides (#4378) (AI-assisted, not separately native-reviewed)
+	Show or hide toolbars and panels	إظهار أشرطة الأدوات واللوحات أو إخفاؤها
+	This document hides the toolbars and panels. Press {key} to show them.	يُخفي هذا المستند أشرطة الأدوات واللوحات. اضغط {key} لإظهارها.

@@ -140,6 +140,31 @@ impl DocView {
         self.layout == PageLayout::TwoUp
     }
 
+    /// The page (or spread) the view shows first, as `FitWindow` sizes the window to it
+    /// ([`crate::viewer_prefs::window_commands`]). `None` when there is no such page.
+    pub(crate) fn first_page_now(&self, info: &DocInfo) -> Option<crate::viewer_prefs::PageNow> {
+        info.pages.get(self.current)?;
+        // Two-page view shows the spread the page is in (a cover page on its own); the spread
+        // is as wide as its pages side by side and as tall as the taller one, as `layout`
+        // places it. The last spread of an odd page count has one page.
+        let (first, last) = if self.layout == PageLayout::TwoUp {
+            let first = self.spread_first(self.current);
+            (first, if self.cover && first == 0 { 0 } else { first.saturating_add(1) })
+        } else {
+            (self.current, self.current)
+        };
+        let sizes: Vec<(f32, f32)> =
+            info.pages.iter().skip(first).take(last.saturating_sub(first).saturating_add(1)).map(|p| self.display_size(p)).collect();
+        let w: f32 = sizes.iter().map(|s| s.0).sum();
+        let h = sizes.iter().map(|s| s.1).fold(0.0, f32::max);
+        let gap = self.page_gap() * sizes.len().saturating_sub(1) as f32;
+        Some(crate::viewer_prefs::PageNow {
+            size: vec2(w * PT, h * PT),
+            margins: vec2(2.0 * SIDE + gap, 2.0 * MARGIN),
+            zoom: (self.fit == Fit::None).then_some(self.zoom),
+        })
+    }
+
     /// Displayed page size in points for this view rotation.
     pub(super) fn display_size(&self, p: &pdfcraft_render::PageInfo) -> (f32, f32) {
         if self.rotation % 180 == 90 { (p.height, p.width) } else { (p.width, p.height) }

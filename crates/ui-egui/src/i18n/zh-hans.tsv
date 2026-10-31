@@ -2547,3 +2547,7 @@ animation effects	Off	关
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	此回复的选项
 	Export value	导出值
+
+# Toolbars and panels a document hides (#4378) (AI-assisted, not separately native-reviewed)
+	Show or hide toolbars and panels	显示或隐藏工具栏和面板
+	This document hides the toolbars and panels. Press {key} to show them.	此文档隐藏了工具栏和面板。按 {key} 可以显示。

@@ -2849,3 +2849,7 @@ certificate	Version	Version
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Options de cette réponse
 	Export value	Valeur d’exportation
+
+# Toolbars and panels a document hides (#4378) (AI-assisted, not separately native-reviewed)
+	Show or hide toolbars and panels	Afficher ou masquer les barres d'outils et les panneaux
+	This document hides the toolbars and panels. Press {key} to show them.	Ce document masque les barres d'outils et les panneaux. Appuyez sur {key} pour les afficher.

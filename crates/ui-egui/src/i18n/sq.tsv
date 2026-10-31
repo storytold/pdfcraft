@@ -2569,3 +2569,7 @@ animation effects	Off	Joaktiv
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opsionet për këtë përgjigje
+
+# Toolbars and panels a document hides (#4378) (AI-assisted, not separately native-reviewed)
+	Show or hide toolbars and panels	Shfaq ose fshih shiritat e mjeteve dhe panelet
+	This document hides the toolbars and panels. Press {key} to show them.	Ky dokument fsheh shiritat e mjeteve dhe panelet. Shtyp {key} për t'i shfaqur.

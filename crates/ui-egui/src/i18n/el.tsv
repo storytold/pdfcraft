@@ -2589,3 +2589,7 @@ animation effects	Off	Ανενεργά
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Επιλογές για αυτήν την απάντηση
 	Export value	Τιμή εξαγωγής
+
+# Toolbars and panels a document hides (#4378) (AI-assisted, not separately native-reviewed)
+	Show or hide toolbars and panels	Εμφάνιση ή απόκρυψη γραμμών εργαλείων και πλαισίων
+	This document hides the toolbars and panels. Press {key} to show them.	Αυτό το έγγραφο αποκρύπτει τις γραμμές εργαλείων και τα πλαίσια. Πατήστε {key} για να εμφανιστούν.

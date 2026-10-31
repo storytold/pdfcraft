@@ -2850,3 +2850,7 @@ key	Space	Space
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tùy chọn cho câu trả lời này
 	Export value	Giá trị xuất
+
+# Toolbars and panels a document hides (#4378) (AI-assisted, not separately native-reviewed)
+	Show or hide toolbars and panels	Hiện hoặc ẩn thanh công cụ và bảng
+	This document hides the toolbars and panels. Press {key} to show them.	Tài liệu này ẩn thanh công cụ và bảng. Nhấn {key} để hiện lại.

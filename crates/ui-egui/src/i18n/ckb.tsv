@@ -2775,3 +2775,7 @@ certificate	Version	وەشان
 @plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	{n} more formula reads a missing field.|{n} more formulas read missing fields.
 @plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.
 @plural	{fields} is missing|{fields} are missing	{fields} is missing|{fields} are missing
+
+# Toolbars and panels a document hides (#4378) (AI-assisted, not separately native-reviewed)
+	Show or hide toolbars and panels	پیشاندان یان شاردنەوەی شریتەکانی ئامراز و پانێڵەکان
+	This document hides the toolbars and panels. Press {key} to show them.	ئەم بەڵگەنامەیە شریتەکانی ئامراز و پانێڵەکان دەشارێتەوە. {key} دابگرە بۆ پیشاندانیان.

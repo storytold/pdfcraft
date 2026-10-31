@@ -2815,3 +2815,7 @@ certificate	SHA-256 digest	Impronta SHA-256
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opzioni per questa risposta
 	Export value	Valore di esportazione
+
+# Toolbars and panels a document hides (#4378) (AI-assisted, not separately native-reviewed)
+	Show or hide toolbars and panels	Mostra o nascondi barre degli strumenti e pannelli
+	This document hides the toolbars and panels. Press {key} to show them.	Questo documento nasconde le barre degli strumenti e i pannelli. Premi {key} per mostrarli.

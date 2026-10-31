@@ -2584,3 +2584,7 @@ animation effects	Off	Aus
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Optionen für diese Antwort
 	Export value	Exportwert
+
+# Toolbars and panels a document hides (#4378) (AI-assisted, not separately native-reviewed)
+	Show or hide toolbars and panels	Werkzeugleisten und Bereiche ein- oder ausblenden
+	This document hides the toolbars and panels. Press {key} to show them.	Dieses Dokument blendet die Werkzeugleisten und Bereiche aus. Mit {key} blenden Sie sie ein.

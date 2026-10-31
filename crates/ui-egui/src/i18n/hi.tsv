@@ -2814,3 +2814,7 @@ theme	Appearance	स्वरूप
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	इस जवाब के विकल्प
+
+# Toolbars and panels a document hides (#4378) (AI-assisted, not separately native-reviewed)
+	Show or hide toolbars and panels	टूलबार और पैनल दिखाएँ या छिपाएँ
+	This document hides the toolbars and panels. Press {key} to show them.	यह दस्तावेज़ टूलबार और पैनल छिपाता है। उन्हें दिखाने के लिए {key} दबाएँ।

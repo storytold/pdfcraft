@@ -2496,3 +2496,7 @@ animation effects	Off	Выкл
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Параметры этого ответа
 	Export value	Значение экспорта
+
+# Toolbars and panels a document hides (#4378) (AI-assisted, not separately native-reviewed)
+	Show or hide toolbars and panels	Показать или скрыть панели инструментов и боковые панели
+	This document hides the toolbars and panels. Press {key} to show them.	Этот документ скрывает панели инструментов и боковые панели. Нажмите {key}, чтобы показать их.

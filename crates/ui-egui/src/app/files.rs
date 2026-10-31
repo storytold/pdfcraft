@@ -284,9 +284,11 @@ impl PdfCraftApp {
             self.active = Some(self.views.len() - 1);
         }
         self.apply_initial_view(self.views.len() - 1, &initial);
-        // Where the reader left off wins over the file's own initial view (#1767).
+        self.apply_viewer_preferences(self.views.len() - 1, &initial, activate);
+        // Where the reader left off wins over the file's own initial view and the zoom its
+        // viewer preferences open at (#1767).
         self.apply_last_view(self.views.len() - 1);
-        // After both, so full screen shows one fitted page and leaving it comes back to them.
+        // After all of them, so full screen shows one fitted page and leaving it comes back to them.
         if self.full_screen
             && let Some(view) = self.views.last_mut()
         {
