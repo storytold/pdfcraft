@@ -40,9 +40,8 @@ mod zoom;
 pub(super) mod zoom_snap;
 
 pub(crate) use area::signature_badges;
-use area::{
-    SUPPRESS_SECS, SUPPRESS_TAIL_SECS, drawing_edge_pointer, glide_interrupted, page_scroll, presentation_click, run_button, set_layers, zoom_anchor,
-};
+use area::{SUPPRESS_SECS, SUPPRESS_TAIL_SECS, drawing_edge_pointer, glide_interrupted, page_scroll, presentation_click, set_layers, zoom_anchor};
+pub(crate) use area::{action_edit, run_button};
 #[cfg(test)]
 use bars::in_size_hint_zone;
 use bars::{Notice, notices, page_size_hint, quick_bar};
@@ -3470,9 +3469,9 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
             crate::forms_ui::FormNotice::NoAction(name) => app.notify_fmt("{name} has no action", &[("name", &name)]),
         }
     }
-    if let Some((name, action)) = app.views[index].forms.button.take() {
-        run_button(app, index, &name, action);
-    }
+    // Mouse Enter, Exit and Down now; Mouse Up, and a push button's action, once the press's
+    // commit and focus scripts have run (`PdfCraftApp::process_pending_edits`).
+    app.run_pointer_triggers(index);
     if copy_selected {
         app.execute("edit.copy");
     }
