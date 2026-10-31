@@ -1,12 +1,17 @@
 //! pdfcraft-preview — first-page preview of PDF files in the Windows File Explorer preview pane.
 //!
-//! Rendering reuses [`pdfcraft_thumbnails::render_page_fit`]. On Windows the crate is also a
-//! cdylib, `pdfcraft_preview.dll`: the `IPreviewHandler` registered for `PdfCraft.Document` files
-//! ([`windows`] module, see the README for its registration).
+//! [`render::render_page_fit`] draws the first page into a bounded rectangle. On Windows the crate
+//! is also a cdylib, `pdfcraft_preview.dll`: the `IPreviewHandler` registered for
+//! `PdfCraft.Document` files ([`windows`] module, see the README for its registration).
+//!
+//! The preview DLL does not link `pdfcraft_thumbnails` (that crate's COM entry points would
+//! duplicate this DLL's exports).
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-pub use pdfcraft_thumbnails::{MAX_PREVIEW_SIDE, Thumbnail, render_page_fit};
+pub mod render;
+
+pub use render::{MAX_PREVIEW_SIDE, PreviewBitmap, render_page_fit};
 
 #[cfg(windows)]
 #[allow(unsafe_code)]
