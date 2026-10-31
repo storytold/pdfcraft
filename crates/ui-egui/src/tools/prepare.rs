@@ -147,6 +147,8 @@ enum Grab {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PrepareView {
+    /// Show each fillable widget's position in the same order used by Tab and Shift+Tab.
+    pub show_tab_numbers: bool,
     /// The selected field and which of its widgets (the anchor of Align and Match Size).
     pub selected: Option<(String, usize)>,
     /// More fields selected with Shift- or ⌘-click.
@@ -605,6 +607,22 @@ pub(crate) fn paint_page(cx: PageToolContext<'_>, form: &[FormField], view: &Doc
                     painter.circle(c, 3.5, Color32::WHITE, Stroke::new(1.5, SELECT_BLUE));
                 }
             }
+        }
+    }
+    if prep.show_tab_numbers {
+        for (number, (fi, wi)) in crate::forms_ui::tab_order(form).into_iter().enumerate() {
+            let Some(widget) = form.get(fi).and_then(|field| field.widgets.get(wi)) else { continue };
+            if widget.page != Some(page) {
+                continue;
+            }
+            let r = screen_rect(xf, info, page, widget.rect);
+            let label = number.saturating_add(1).to_string();
+            let font = theme::semibold((10.0 * zoom).clamp(8.0, 14.0));
+            let galley = painter.layout_no_wrap(label, font, Color32::WHITE);
+            let badge = Rect::from_min_size(r.min + vec2(3.0, 3.0), galley.size() + vec2(8.0, 5.0));
+            let clipped = painter.with_clip_rect(painter.clip_rect().intersect(r));
+            clipped.rect_filled(badge, CornerRadius::same(3), SELECT_BLUE);
+            clipped.galley(badge.min + vec2(4.0, 2.0), galley, Color32::WHITE);
         }
     }
     if let (Some((_, Grab::Draw(from) | Grab::Select(from), _)), Some(p)) = (grab, pointer) {

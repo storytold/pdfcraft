@@ -5161,11 +5161,11 @@ title = "Show tab numbers"
 area = "F"
 tier = "P2"
 milestone = "M6"
-status = "planned"
+status = "shipped"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/it/prepare.rs::tab_numbers_follow_fill_order_without_dirtying_the_document", "crates/ui-egui/tests/it/control.rs::form_tab_numbers_can_be_shown_and_captured_through_the_control_channel", "crates/ui-egui/tests/it/forms.rs::tab_and_shift_tab_follow_widget_order_across_pages"]
+notes = "Prepare a form ▸ Show tab numbers overlays each visible, fillable widget with its 1-based position in the order used by Tab and Shift+Tab; repeated widgets receive separate numbers. This is a view-only toggle and does not dirty the PDF."
 
 [[feature]]
 id = "form.preview-form"
