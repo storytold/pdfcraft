@@ -289,6 +289,27 @@ fn standard_fonts_without_widths_measure_the_glyph_their_differences_name() {
     assert_eq!(Metrics::from_dict(&doc, &f).width(87), 0.5, "/Widths go by code");
 }
 
+/// The encoding PdfCraft's XFA output gives the standard fonts (`LATIN_EXTRA` in `/Differences`)
+/// reads back: a field appearance in such a `/DR` font encodes ă, ș, ț instead of falling back to
+/// Helvetica and `?`, and measures each as its base letter.
+#[test]
+fn latin_extra_differences_encode_decode_and_measure_as_the_base_letter() {
+    let mut doc = Document::new_empty();
+    let mut enc = Dict::new();
+    enc.set(b"BaseEncoding".to_vec(), Object::name("WinAnsiEncoding"));
+    let diffs = crate::LATIN_EXTRA.iter().flat_map(|e| [Object::Int(i64::from(e.1)), Object::name(e.2)]).collect();
+    enc.set(b"Differences".to_vec(), Object::Array(diffs));
+    let f = font(&mut doc, vec![("Subtype", Object::name("Type1")), ("BaseFont", Object::name("Helvetica")), ("Encoding", Object::Dict(enc))]);
+    let m = Metrics::from_dict(&doc, &f);
+    for e in crate::LATIN_EXTRA {
+        assert_eq!(glyph_unicode(e.2), Some(e.0), "{}", e.2);
+        assert_eq!(m.encode(&e.0.to_string()), Some(vec![e.1]), "{:?}", e.0);
+        assert_eq!(m.width(u32::from(e.1)), m.width(u32::from(e.3 as u8)), "{:?} as {:?}", e.0, e.3);
+    }
+    let text = "Declarație ŞI Łódź";
+    assert_eq!(m.decode(&m.encode(text).expect("all encodable")), text);
+}
+
 #[test]
 fn subset_fonts_only_encode_the_glyphs_they_have() {
     let mut doc = Document::new_empty();
