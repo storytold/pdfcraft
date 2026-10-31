@@ -1,4 +1,4 @@
-use super::{Arc, Face, HAlign, Rect, Span};
+use super::{Arc, Face, HAlign, Rect, Span, Views};
 
 /// How far below its baseline an underline is drawn, in the text's size: an underline is the
 /// level line pushed just before its span, this far below it (the PDF writer tells it apart from
@@ -27,6 +27,12 @@ pub enum Item {
         content_type: String,
     },
     Widget(Box<Widget>),
+    /// An item drawn only on screen or only in print (XFA `relevant`, `presence`): written in an
+    /// optional content group whose usage says so.
+    Only {
+        views: Views,
+        item: Box<Item>,
+    },
 }
 
 /// A box with rounded corners ([`Item::Rounded`]).
@@ -128,6 +134,8 @@ pub struct Widget {
     pub items: Vec<String>,
     /// A text field that doesn't scroll: it takes no more text than it shows (`DoNotScroll`).
     pub no_scroll: bool,
+    /// Where the field is shown: on screen, in print, or both (its annotation flags).
+    pub views: Views,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

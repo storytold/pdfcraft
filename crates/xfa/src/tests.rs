@@ -356,6 +356,264 @@ fn form_text_the_standard_fonts_cannot_draw_is_reported() {
     assert!(!render_into(&mut doc).unwrap().warnings.iter().any(|w| w.contains("standard fonts")));
 }
 
+/// A template whose page shows objects only on screen (`relevant="-print"`), only in print
+/// (`presence="invisible" relevant="+print"`) and everywhere, as fields and as draws, some of
+/// them inside a screen-only subform. `others` is put in the catalog (its own layers).
+fn relevant_template() -> String {
+    let field = |name: &str, attrs: &str| {
+        format!(r#"<field name="{name}" w="2in" h="0.3in" {attrs}><ui><textEdit/></ui><value><text>{name}</text></value></field>"#)
+    };
+    let draw = |name: &str, attrs: &str| format!(r#"<draw name="{name}" w="2in" h="0.3in" {attrs}><value><text>{name} text</text></value></draw>"#);
+    format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ {}{}{}{}{}{}{}{}
+ <subform name="screenBox" layout="tb" w="7.5in" relevant="-print">{}{}</subform>
+</subform></template></xdp:xdp>"##,
+        field("everywhere", ""),
+        field("screenOnly", r#"relevant="-print""#),
+        field("printOnly", r#"presence="invisible" relevant="+print""#),
+        field("nowhere", r#"presence="invisible""#),
+        draw("shown", ""),
+        draw("screenDraw", r#"relevant="-print""#),
+        draw("paperDraw", r#"presence="invisible" relevant="+print""#),
+        draw("otherView", r#"relevant="-screen""#),
+        field("inScreenBox", ""),
+        field("printInScreenBox", r#"relevant="+print""#),
+    )
+}
+
+/// `relevant` decides printing (`+print` prints even what its presence hides on screen, `-print`
+/// never prints) and presence decides the screen, inside containers too: a field's widget says
+/// where it shows, and a draw shown only on screen or only in print is wrapped as such. A token
+/// about another view is left aside with one warning.
+#[test]
+fn relevant_and_presence_say_where_fields_and_draws_show() {
+    let form = layout_xml(&relevant_template()).unwrap();
+    let page = &form.pages[0];
+    let views_of = |name: &str| widgets(page).iter().find(|w| w.name == name).map(|w| w.views);
+    let (screen, print) = (Views { screen: true, print: false }, Views { screen: false, print: true });
+    assert_eq!(views_of("everywhere"), Some(Views::ALL));
+    assert_eq!(views_of("screenOnly"), Some(screen));
+    assert_eq!(views_of("printOnly"), Some(print), "an invisible field that +print prints is drawn for print only");
+    assert_eq!(views_of("nowhere"), None, "an invisible field is still drawn nowhere");
+    assert_eq!(views_of("inScreenBox"), Some(screen), "inside a screen-only subform");
+    assert_eq!(views_of("printInScreenBox"), Some(screen), "+print can't print what its container keeps off paper");
+    // Draws: wrapped where they show only on screen or only in print.
+    let text = |want: &str| {
+        page.items.iter().find_map(|i| match i {
+            Item::Text(s) if s.text.contains(want) => Some(Views::ALL),
+            Item::Only { views, item } => matches!(item.as_ref(), Item::Text(s) if s.text.contains(want)).then_some(*views),
+            _ => None,
+        })
+    };
+    assert_eq!(text("shown text"), Some(Views::ALL));
+    assert_eq!(text("screenDraw text"), Some(screen));
+    assert_eq!(text("paperDraw text"), Some(print));
+    assert_eq!(text("otherView text"), Some(Views::ALL), "a view other than print is left aside");
+    let warned: Vec<&String> = form.warnings.iter().filter(|w| w.contains("relevant")).collect();
+    assert_eq!(warned.len(), 1, "{:?}", form.warnings);
+    assert!(warned[0].contains("-screen"), "{warned:?}");
+}
+
+/// The buttons of an exclusion group show where each one's own `relevant` and presence say,
+/// inside what the group says, as other fields do; a view other than print is warned about.
+#[test]
+fn exclusion_group_buttons_show_where_each_says() {
+    let button = |name: &str, on: &str, attrs: &str| {
+        format!(r#"<field name="{name}" w="2in" h="0.3in" {attrs}><ui><checkButton shape="round"/></ui><items><text>{on}</text></items></field>"#)
+    };
+    let body = format!(
+        r#"<subform name="body" layout="tb" w="7.5in">
+  <exclGroup name="choice" layout="tb" w="3in">{}{}{}{}{}</exclGroup>
+  <exclGroup name="screenGroup" layout="tb" w="3in" relevant="-print">{}</exclGroup>
+ </subform>"#,
+        button("plain", "1", ""),
+        button("screenOnly", "2", r#"relevant="-print""#),
+        button("printOnly", "3", r#"presence="invisible" relevant="+print""#),
+        button("nowhere", "4", r#"presence="invisible""#),
+        button("otherView", "5", r#"relevant="-preview""#),
+        button("printInScreenGroup", "1", r#"relevant="+print""#),
+    );
+    let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+    let views_of = |name: &str| widgets(&form.pages[0]).iter().find(|w| w.som.ends_with(&format!(".{name}[0]"))).map(|w| w.views);
+    let (screen, print) = (Views { screen: true, print: false }, Views { screen: false, print: true });
+    assert_eq!(views_of("plain"), Some(Views::ALL));
+    assert_eq!(views_of("screenOnly"), Some(screen));
+    assert_eq!(views_of("printOnly"), Some(print), "an invisible button that +print prints is drawn for print only");
+    assert_eq!(views_of("nowhere"), None, "an invisible button is drawn nowhere");
+    assert_eq!(views_of("otherView"), Some(Views::ALL), "a view other than print is left aside");
+    assert_eq!(views_of("printInScreenGroup"), Some(screen), "+print can't print what its group keeps off paper");
+    let warned: Vec<&String> = form.warnings.iter().filter(|w| w.contains("relevant")).collect();
+    assert!(warned.len() == 1 && warned[0].contains("-preview"), "{:?}", form.warnings);
+}
+
+/// A page count shown only on screen or only in print is filled in like any other, and a view
+/// other than print named on a flowed subform or a table row is warned about as on a draw.
+#[test]
+fn restricted_page_counts_are_filled_in_and_other_views_warned_about_everywhere() {
+    let xfa_ns = r#"xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/""#;
+    let body = format!(
+        r##"<subform name="body" layout="tb" w="7.5in">
+  <subform name="screenOnly" layout="position" w="7.5in" h="1in" relevant="-print">
+   <draw name="pn" x="0in" y="0in" w="2in" h="0.3in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml"><p>Pages: <span xfa:embed="#pageCount" {xfa_ns}/></p></body></exData></value><font typeface="Arial" size="10pt"/></draw>
+  </subform>
+  <field name="pageCount" id="pageCount" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = xfa.layout.pageCount();</script></event></field>
+  <subform name="flowed" layout="tb" w="7.5in" relevant="-screen"><draw name="f" w="2in" h="0.3in"><value><text>Flowed</text></value></draw></subform>
+  <subform name="grid" layout="table" columnWidths="2in" w="2in"><subform name="row" layout="row" relevant="-preview"><draw name="c" h="0.3in"><value><text>Cell</text></value></draw></subform></subform>
+ </subform>"##
+    );
+    let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+    let texts: Vec<String> = form.pages[0]
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            Item::Only { item, .. } => match item.as_ref() {
+                Item::Text(s) => Some(s.text.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert!(texts.iter().any(|t| t.contains("Pages:") && t.contains('1')), "{texts:?}");
+    assert!(
+        form.pages
+            .iter()
+            .flat_map(|p| &p.items)
+            .all(|i| !matches!(i, Item::Only { item, .. } if matches!(item.as_ref(), Item::Text(s) if s.text.contains('\u{E000}')))),
+        "no page-count mark left"
+    );
+    for token in ["-screen", "-preview"] {
+        assert!(form.warnings.iter().any(|w| w.contains(token)), "{token}: {:?}", form.warnings);
+    }
+}
+
+/// A master page's own objects show where they say, even when the page was started by a
+/// screen-only subform that ran onto it: its footer isn't made screen-only too.
+#[test]
+fn a_master_page_started_by_a_screen_only_subform_keeps_its_own_objects_everywhere() {
+    let rows: String = (0..30).map(|i| format!(r#"<draw name="row{i}" w="7in" h="0.5in"><value><text>Row {i}</text></value></draw>"#)).collect();
+    let xdp = format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="9.5in"/><medium short="8.5in" long="11in"/>
+  <draw name="footer" x="0.5in" y="10.3in" w="3in" h="0.3in"><value><text>Footer</text></value></draw></pageArea></pageSet>
+ <subform name="screenRows" layout="tb" w="7.5in" relevant="-print">{rows}</subform>
+</subform></template></xdp:xdp>"##
+    );
+    let form = layout_xml(&xdp).unwrap();
+    assert!(form.pages.len() >= 2, "{} pages", form.pages.len());
+    for (i, page) in form.pages.iter().enumerate() {
+        let footer = page.items.iter().any(|it| matches!(it, Item::Text(s) if s.text.contains("Footer")));
+        assert!(footer, "page {i}'s footer shows everywhere, not wrapped as screen-only");
+        assert!(page.items.iter().any(|it| matches!(it, Item::Only { .. })), "page {i} has the screen-only rows");
+    }
+}
+
+/// The widgets' annotation flags, the draws' optional content and the catalog's layers: shown
+/// everywhere prints (`/F 4`), screen only doesn't print (`/F 0`), print only is NoView too
+/// (`/F 36`); screen-only and print-only draws are marked content in groups whose `/Usage` and the
+/// default configuration's `/AS` say where they show, the print-only one off on screen; the
+/// document's own layer stays as it was; and laying the form out again adds nothing twice.
+#[test]
+fn screen_only_and_print_only_objects_are_written_with_flags_and_layers() {
+    let xdp = relevant_template();
+    let mut bytes = shell(&xdp);
+    // A layer of the document's own, off, listed in /Order.
+    let s = String::from_utf8_lossy(&bytes).into_owned();
+    let s = s.replacen(
+        "/AcroForm << /XFA 5 0 R /Fields [] >> >>",
+        "/AcroForm << /XFA 5 0 R /Fields [] >> /OCProperties << /OCGs [<< /Type /OCG /Name (Mine) >>] /D << /Order [] /OFF [] >> >> >>",
+        1,
+    );
+    assert_ne!(s.as_bytes(), bytes.as_slice(), "the shell's catalog was found");
+    bytes = s.into_bytes();
+    let mut doc = Document::open(Arc::new(bytes)).unwrap();
+    render_into(&mut doc).unwrap();
+    let check = |doc: &Document| {
+        // Widget flags by field name.
+        let catalog = doc.get(doc.root().unwrap());
+        let acro = doc.resolve(catalog.as_dict().unwrap().get(b"AcroForm").unwrap());
+        let fields = doc.resolve(acro.as_dict().unwrap().get(b"Fields").unwrap()).as_array().unwrap().clone();
+        let flags: std::collections::BTreeMap<String, i64> = fields
+            .iter()
+            .map(|f| doc.resolve(f))
+            .filter_map(|f| {
+                let d = f.as_dict()?;
+                Some((d.get(b"T").and_then(Object::as_string)?.to_text(), d.int(b"F").unwrap_or(-1)))
+            })
+            .collect();
+        assert_eq!(flags.get("everywhere"), Some(&4));
+        assert_eq!(flags.get("screenOnly"), Some(&0));
+        assert_eq!(flags.get("printOnly"), Some(&36));
+        // The groups, the configuration and the usage applications.
+        let props = doc.resolve(catalog.as_dict().unwrap().get(b"OCProperties").unwrap()).as_dict().unwrap().clone();
+        let ocgs = doc.resolve(props.get(b"OCGs").unwrap()).as_array().unwrap().clone();
+        assert_eq!(ocgs.len(), 3, "the document's own layer and the two groups, each once");
+        let mine = doc.resolve(ocgs.first().unwrap());
+        assert_eq!(mine.as_dict().unwrap().get(b"Name").and_then(Object::as_string).map(|s| s.to_text()).as_deref(), Some("Mine"));
+        let group = |key: &[u8]| {
+            ocgs.iter()
+                .filter_map(Object::as_ref)
+                .find(|r| doc.get(*r).as_dict().is_some_and(|d| d.name(crate::pdf::RELEVANT_KEY) == Some(key)))
+                .unwrap()
+        };
+        let (screen, print) = (group(b"Screen"), group(b"Print"));
+        let state = |r: pdfcraft_cos::ObjRef, event: &[u8], key: &[u8]| {
+            let g = doc.get(r);
+            let usage = g.as_dict().unwrap().get(b"Usage").unwrap().as_dict().unwrap().clone();
+            usage.get(event).unwrap().as_dict().unwrap().name(key).unwrap().to_vec()
+        };
+        assert_eq!((state(screen, b"View", b"ViewState"), state(screen, b"Print", b"PrintState")), (b"ON".to_vec(), b"OFF".to_vec()));
+        assert_eq!((state(print, b"View", b"ViewState"), state(print, b"Print", b"PrintState")), (b"OFF".to_vec(), b"ON".to_vec()));
+        let d = doc.resolve(props.get(b"D").unwrap()).as_dict().unwrap().clone();
+        let refs = |o: Option<&Object>| doc.resolve(o.unwrap()).as_array().unwrap().iter().filter_map(Object::as_ref).collect::<Vec<_>>();
+        assert_eq!(refs(d.get(b"OFF")), [print], "only the print-only group starts off");
+        assert!(refs(d.get(b"Order")).is_empty(), "the document's /Order is left as it was");
+        let apps = doc.resolve(d.get(b"AS").unwrap()).as_array().unwrap().clone();
+        assert_eq!(apps.len(), 2, "one usage application per event");
+        for (app, event) in apps.iter().zip([&b"View"[..], b"Print"]) {
+            let app = doc.resolve(app).as_dict().unwrap().clone();
+            assert_eq!(app.name(b"Event"), Some(event));
+            assert_eq!(refs(app.get(b"OCGs")), [screen, print]);
+        }
+        // The page's marked content and resources.
+        let kids = doc
+            .resolve(doc.resolve(catalog.as_dict().unwrap().get(b"Pages").unwrap()).as_dict().unwrap().get(b"Kids").unwrap())
+            .as_array()
+            .unwrap()
+            .clone();
+        let page = doc.resolve(kids.first().unwrap()).as_dict().unwrap().clone();
+        let res = doc.resolve(page.get(b"Resources").unwrap()).as_dict().unwrap().clone();
+        let properties = res.get(b"Properties").unwrap().as_dict().unwrap().clone();
+        assert_eq!((properties.reference(b"PCXfaScreen"), properties.reference(b"PCXfaPrint")), (Some(screen), Some(print)));
+        let Object::Stream(c) = &*doc.resolve(page.get(b"Contents").unwrap()) else { panic!("a content stream") };
+        let ops = String::from_utf8_lossy(&c.decoded().unwrap()).into_owned();
+        let inside = |group: &str, text: &str| {
+            let start = ops.find(&format!("/OC /{group} BDC")).unwrap_or(usize::MAX);
+            let at = ops.find(text).unwrap_or(0);
+            let end = ops.get(start.min(ops.len())..).and_then(|rest| rest.find("EMC")).map(|e| start + e).unwrap_or(0);
+            start < at && at < end
+        };
+        assert!(inside("PCXfaScreen", "(screenDraw text)") && inside("PCXfaPrint", "(paperDraw text)"), "{ops}");
+        // Shown everywhere: outside any marked content (here, before the first).
+        assert!(ops.find("(shown text)") < ops.find("/OC /"), "{ops}");
+    };
+    check(&doc);
+    // Laid out again: the same groups, nothing added twice.
+    let (tpl, _) = parse(&xdp).unwrap();
+    rerender(&mut doc, &tpl).unwrap();
+    check(&doc);
+    // Stripping the XFA keeps the layers the pages use, without PdfCraft's key.
+    strip(&mut doc).unwrap();
+    let catalog = doc.get(doc.root().unwrap());
+    let props = doc.resolve(catalog.as_dict().unwrap().get(b"OCProperties").unwrap()).as_dict().unwrap().clone();
+    let ocgs = doc.resolve(props.get(b"OCGs").unwrap()).as_array().unwrap().clone();
+    assert_eq!(ocgs.len(), 3);
+    assert!(ocgs.iter().all(|g| !doc.resolve(g).as_dict().unwrap().contains(crate::pdf::RELEVANT_KEY)));
+}
+
 /// A field whose ui doesn't scroll in the direction its text runs out (`hScrollPolicy="off"` for
 /// one line, `vScrollPolicy="off"` for several) is written with DoNotScroll (`/Ff` bit 24), so it
 /// takes no more text than it shows; the other direction's policy, or the default, doesn't.
@@ -610,6 +868,48 @@ fn links_to_anything_but_web_and_email_addresses_stay_plain_text() {
     let warned: Vec<&String> = report.warnings.iter().filter(|w| w.contains("link")).collect();
     assert_eq!(warned.len(), 1, "one warning for the form: {:?}", report.warnings);
     assert!(warned[0].contains("http, https") && warned[0].contains("mailto"), "{warned:?}");
+}
+
+/// A link in text shown only on screen or only in print works only where its text shows: in
+/// print-only text it is NoView (`/F 36`), so it can't be clicked on screen over nothing, and in
+/// screen-only text it doesn't print (`/F 0`). Its pieces still join into one link across a change
+/// of style and the underline drawn with them.
+#[test]
+fn links_in_screen_only_and_print_only_text_work_where_their_text_shows() {
+    let draw = |name: &str, attrs: &str| {
+        format!(
+            r#"<draw name="{name}" w="4in" {attrs}><font typeface="Arial" size="10pt"/><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml"><p style="text-decoration:underline"><a href="https://example.com/{name}">forms@<b>example</b>.com</a></p></body></exData></value></draw>"#
+        )
+    };
+    let xdp = format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ {}{}{}
+</subform></template></xdp:xdp>"##,
+        draw("everywhere", ""),
+        draw("screen", r#"relevant="-print""#),
+        draw("paper", r#"presence="invisible" relevant="+print""#),
+    );
+    let mut doc = Document::open(Arc::new(shell(&xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    // Each link annotation's address and flags.
+    let catalog = doc.get(doc.root().unwrap());
+    let pages = doc.resolve(catalog.as_dict().unwrap().get(b"Pages").unwrap());
+    let kids = doc.resolve(pages.as_dict().unwrap().get(b"Kids").unwrap()).as_array().unwrap().clone();
+    let page = doc.resolve(kids.first().unwrap());
+    let annots = doc.resolve(page.as_dict().unwrap().get(b"Annots").unwrap()).as_array().unwrap().clone();
+    let links: Vec<(String, i64)> = annots
+        .iter()
+        .map(|a| doc.resolve(a).as_dict().unwrap().clone())
+        .filter(|d| d.name(b"Subtype") == Some(&b"Link"[..]))
+        .map(|d| {
+            let action = doc.resolve(d.get(b"A").unwrap()).as_dict().unwrap().clone();
+            (String::from_utf8_lossy(&action.get(b"URI").and_then(Object::as_string).unwrap().bytes).into_owned(), d.int(b"F").unwrap())
+        })
+        .collect();
+    let expected = [("https://example.com/everywhere", 4), ("https://example.com/screen", 0), ("https://example.com/paper", 36)];
+    assert_eq!(links, expected.map(|(u, f)| (u.to_string(), f)), "one link each, with flags where its text shows");
 }
 
 #[test]

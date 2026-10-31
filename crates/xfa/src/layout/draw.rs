@@ -1,17 +1,32 @@
 use super::common::clean_name;
 use super::items::{Item, Rounded};
 use super::{
-    Arc, Border, Ctx, Draw, ExclGroup, Face, Font, Layout, Layouter, MAX_DEPTH, MAX_IMAGE_BYTES, Node, Para, Presence, Rect, SomIndices, Stroke,
-    Subform, Value, XfaError, data_path, text,
+    Arc, Border, Ctx, Draw, ExclGroup, Face, Font, Layout, Layouter, MAX_DEPTH, MAX_IMAGE_BYTES, Node, Para, Rect, SomIndices, Stroke, Subform,
+    Value, XfaError, data_path, text,
 };
 
 impl Layouter<'_> {
     // ───────────────────────────────────────────────────────────────────────── drawing
 
+    /// Draw table row `row` at `rect` in columns `cols`, shown where it and what it is inside say
+    /// ([`Common::views`]).
     pub(super) fn draw_row(&mut self, row: &Subform, cols: &[f64], rect: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         if depth > MAX_DEPTH {
             return Ok(());
         }
+        self.warn_other_views(&row.common);
+        let views = self.views.and(row.common.views());
+        if !views.any() {
+            return Ok(());
+        }
+        let outer = std::mem::replace(&mut self.views, views);
+        let drawn = self.draw_row_cells(row, cols, rect, ctx, depth, sib);
+        self.views = outer;
+        drawn
+    }
+
+    /// [`Self::draw_row`]'s border and cells, once where the row shows is set.
+    pub(super) fn draw_row_cells(&mut self, row: &Subform, cols: &[f64], rect: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         if let Some(b) = &row.common.border {
             self.draw_border(b, rect)?;
         }
@@ -38,14 +53,27 @@ impl Layouter<'_> {
         self.draw_node(k, Rect::new(inner.x + x, inner.y + y, w, h), ctx, depth + 1, sib)
     }
 
+    /// Draw `node` at `rect`, shown where it and what it is inside say ([`Common::views`]): an
+    /// invisible object that `relevant` prints is drawn for print only, and one shown nowhere
+    /// draws nothing.
     pub(super) fn draw_node(&mut self, node: &Node, rect: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         if depth > MAX_DEPTH {
             return Ok(());
         }
         let c = node.common();
-        if c.presence == Presence::Invisible {
+        self.warn_other_views(c);
+        let views = self.views.and(c.views());
+        if !views.any() {
             return Ok(());
         }
+        let outer = std::mem::replace(&mut self.views, views);
+        let drawn = self.draw_node_in(node, rect, ctx, depth, sib);
+        self.views = outer;
+        drawn
+    }
+
+    /// [`Self::draw_node`] once where the node shows is set.
+    pub(super) fn draw_node_in(&mut self, node: &Node, rect: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         match node {
             Node::Draw(d) => {
                 let start = self.item_count();
@@ -250,6 +278,8 @@ impl Layouter<'_> {
         }
     }
 
+    /// Draw exclusion group `g` at `rect`: its border, then each of its buttons where its layout
+    /// puts it, as one radio group, the one its data selects turned on.
     fn draw_group(&mut self, g: &ExclGroup, rect: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         if let Some(b) = &g.common.border {
             self.draw_border(b, rect)?;
@@ -291,10 +321,20 @@ impl Layouter<'_> {
         let sibs = SomIndices::of(&nodes);
         for (i, r) in placed {
             if let Some(f) = g.fields.get(i) {
+                // Each button shows where it and the group say ([`Common::views`]), as any field
+                // drawn through [`Self::draw_node`] does.
+                self.warn_other_views(&f.common);
+                let views = self.views.and(f.common.views());
+                if !views.any() {
+                    continue;
+                }
                 let on = f.items.first().cloned().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| (i + 1).to_string());
                 let tip = f.tooltip.clone().or_else(|| g.tooltip.clone());
                 let chosen = selected.as_deref() == Some(on.as_str());
-                self.draw_field(f, Rect::new(inner.x + r.x, inner.y + r.y, r.w, r.h), &ctx, Some((&group, &on, tip, chosen)), sibs.at(i))?;
+                let outer = std::mem::replace(&mut self.views, views);
+                let drawn = self.draw_field(f, Rect::new(inner.x + r.x, inner.y + r.y, r.w, r.h), &ctx, Some((&group, &on, tip, chosen)), sibs.at(i));
+                self.views = outer;
+                drawn?;
             }
         }
         Ok(())
