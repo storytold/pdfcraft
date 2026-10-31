@@ -296,6 +296,12 @@ pub(super) fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                     if icons::button(ui, "hand", 32.0, app.quick_tool == QuickTool::Hand, tl!("Hand (H)")).clicked() {
                         app.quick_tool = QuickTool::Hand;
                     }
+                    let may_crop = pdfcraft_engine::commands::command("page.crop").is_some_and(|spec| app.command_enabled(spec));
+                    ui.add_enabled_ui(may_crop, |ui| {
+                        if icons::button(ui, "crop", 32.0, app.quick_tool == QuickTool::Crop, tl!("Crop pages")).clicked() {
+                            app.execute("page.crop");
+                        }
+                    });
                     // Comment ▸, Highlight ▸, Draw ▸ (Acrobat's comment toolbar groups). Clicking a
                     // group selects its last-used tool; clicking it again opens the flyout.
                     for g in 0..comments::GROUPS.len() {

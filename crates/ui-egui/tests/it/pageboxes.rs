@@ -1,7 +1,7 @@
 //! Crop tool, Set Page Boxes and Duplicate pages in the real shell (egui_kittest).
 
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::{Dialog, PdfCraftApp, QuickTool};
 
 const FIXTURE: &[u8] = b"%PDF-1.7
@@ -37,6 +37,64 @@ fn the_crop_tool_crops_to_the_dragged_rectangle_then_returns_to_select() {
     assert!(h.state_mut().execute("page.crop"));
     assert_eq!(h.state().quick_tool, QuickTool::Crop);
     h.run_steps(2);
+    crop_middle_half(&mut h);
+}
+
+#[test]
+fn quick_toolbar_crop_crops_the_page_and_undo_restores_it() {
+    let mut h = harness();
+    h.get_by_label("Crop pages").click();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Crop);
+    assert!(!h.state().views[0].organize);
+    crop_middle_half(&mut h);
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(3);
+    assert_eq!(size(&h, 0), (300.0, 400.0));
+}
+
+#[test]
+fn quick_toolbar_crop_is_disabled_when_page_assembly_is_forbidden() {
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(FIXTURE.to_vec())).unwrap();
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        permissions: 0b0100,
+        encrypt_metadata: true,
+        seed: [5; 32],
+    })
+    .unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("restricted.pdf", None, bytes).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app
+    });
+    h.run_steps(6);
+    assert!(h.get_by_label("Crop pages").accesskit_node().is_disabled());
+    assert!(!h.state_mut().execute("page.crop"));
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+    assert_eq!(size(&h, 0), (300.0, 400.0));
+}
+
+#[test]
+fn quick_toolbar_crop_is_hidden_on_home_and_in_read_mode() {
+    let mut h = harness();
+    h.state_mut().execute("view.read_mode");
+    h.run_steps(3);
+    assert!(h.query_by_label("Crop pages").is_none());
+    h.state_mut().execute("view.read_mode");
+    h.run_steps(3);
+    h.get_by_label("Crop pages");
+    h.state_mut().active = None;
+    h.run_steps(3);
+    assert!(h.query_by_label("Crop pages").is_none());
+}
+
+fn crop_middle_half(h: &mut Harness<'static, PdfCraftApp>) {
     let r = h.state().views[0].page_screen_rect(0).unwrap();
     // The middle half of the page in both directions.
     let (a, b) = (r.min + r.size() * 0.25, r.min + r.size() * 0.75);
@@ -50,9 +108,9 @@ fn the_crop_tool_crops_to_the_dragged_rectangle_then_returns_to_select() {
     }
     h.drop_at(b);
     h.run_steps(4);
-    let (w, hh) = size(&h, 0);
+    let (w, hh) = size(h, 0);
     assert!((w - 150.0).abs() < 2.0 && (hh - 200.0).abs() < 2.0, "{w}×{hh}");
-    assert_eq!(size(&h, 1), (300.0, 400.0));
+    assert_eq!(size(h, 1), (300.0, 400.0));
     assert_eq!(h.state().quick_tool, QuickTool::Select);
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Crop page"));
 }

@@ -3195,8 +3195,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.crop"]
 tools = ["page_set_box"]
-evidence = ["crates/ui-egui/tests/it/pageboxes.rs::the_crop_tool_crops_to_the_dragged_rectangle_then_returns_to_select"]
-notes = "drag to crop; double-click opens Set Page Boxes"
+evidence = ["crates/ui-egui/tests/it/pageboxes.rs::the_crop_tool_crops_to_the_dragged_rectangle_then_returns_to_select", "crates/ui-egui/tests/it/pageboxes.rs::quick_toolbar_crop_crops_the_page_and_undo_restores_it", "crates/ui-egui/tests/it/pageboxes.rs::quick_toolbar_crop_is_disabled_when_page_assembly_is_forbidden", "crates/ui-egui/tests/it/pageboxes.rs::quick_toolbar_crop_is_hidden_on_home_and_in_read_mode"]
+notes = "drag to crop; double-click opens Set Page Boxes; Crop pages is also directly available in the document quick toolbar (#5330), using the existing command availability and assembly permission check. The quick toolbar is hidden on Home and in Read/full-screen modes; arbitrary toolbar customization remains outside this feature."
 
 [[feature]]
 id = "organize.remove-white-margins"
