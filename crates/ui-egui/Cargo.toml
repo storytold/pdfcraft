@@ -96,6 +96,7 @@ egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"
 image = { version = "0.25", default-features = false, features = ["png"] }
 # Glyph-coverage test of the interface fonts; the same skrifa pdfcraft-fonts already uses.
 skrifa = "0.44"
+proptest = { workspace = true }
 
 [build-dependencies]
 serde_json = { workspace = true }

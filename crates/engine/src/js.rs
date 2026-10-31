@@ -393,7 +393,7 @@ pub(crate) fn words_with(text: &pdfcraft_render::PageText, map: impl Fn(f32, f32
 impl Session {
     /// Prepare a form ▸ automatic field detection: the fields `pages` (0-based; empty = all)
     /// seem to ask for, named from their labels, as (page, candidate). Scanned pages (a picture
-    /// and no drawn shapes) are read from their pixels, see [`crate::scan_fields`].
+    /// and no drawn shapes) are read from their pixels, see `crate::scan_fields`.
     pub fn detect_fields(&self, id: DocId, pages: &[usize]) -> Vec<(usize, pdfcraft_forms::detect::Candidate)> {
         self.detect_fields_turned(id, pages).into_iter().map(|(page, c, _)| (page, c)).collect()
     }

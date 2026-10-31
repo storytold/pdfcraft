@@ -59,7 +59,7 @@ pub const MIN_PASSWORD_CHARS: usize = 8;
 
 /// The most key-derivation work one [`open`] does, in hash blocks summed over every derivation
 /// in the file. The file names its own iteration counts, so without a budget a crafted file
-/// hangs the caller on the password check (#1847). A file written by [`write`] needs about
+/// hangs the caller on the password check (#1847). A file written by [`write()`] needs about
 /// 2 million; real files from other tools need far less.
 const OPEN_BUDGET: u64 = 10_000_000;
 

@@ -651,7 +651,7 @@ fn tabbing_back_to_the_same_field_then_saving_keeps_the_committed_value() {
         ("single-backward", false, true, false),
         ("shared-forward", true, false, false),
         ("shared-backward", true, true, false),
-        ("same-frame", false, false, true),
+        ("tab-same-frame", false, false, true),
     ] {
         let dir = scratch(case);
         let out = dir.join("saved.pdf");

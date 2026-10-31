@@ -2815,6 +2815,33 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+	Bring forward	Aduce mai în față
+	Bring to front	Aduce în prim-plan
+	Crop image	Decupare imagine
+	Remove crop	Elimină decuparea
+	Send backward	Trimite mai în spate
+	Send to back	Trimite în fundal
+	Clear search	Golește căutarea
+	Edit this PDF	Editează acest PDF
+	Export this PDF	Exportă acest PDF
+	Find text or tools	Găsește text sau instrumente
+	Hand Tool	Instrumentul Mână
+	Marquee Zoom	Zoom cadru
+	Pin	Fixează
+	Pin a tool…	Fixează un instrument…
+	Pin to Home	Fixează la Pagina de pornire
+	Pin tools to Home	Fixează instrumente la Pagina de pornire
+	Pin your favorite tools here for quick access.	Fixează instrumentele preferate aici pentru acces rapid.
+	Pinned	Fixat
+	Pinned Tools	Instrumente fixate
+	Search tools…	Caută instrumente…
+	Select Tool	Instrumentul Selecție
+	Select tools to display on your Home page for quick access.	Selectează instrumentele de afișat pe Pagina de pornire pentru acces rapid.
+	Transform image	Transformare imagine
+	Unpin from Home	Anulează fixarea la Pagina de pornire
+	Unpin tool	Anulează fixarea instrumentului
+	Arrange image	Aranjează imaginea
+	Crop	Decupare
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Astăzi

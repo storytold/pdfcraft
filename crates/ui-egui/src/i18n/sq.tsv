@@ -2541,6 +2541,32 @@ animation effects	Off	Joaktiv
 	field names can't contain a period: {name}	emrat e fushave nuk mund të përmbajnë pikë: {name}
 	two cells would both be named {name}	dy qeliza do të kishin të dyja emrin {name}
 	a field named {name} already exists	ekziston tashmë një fushë me emrin {name}
+	Clear search	Pastro kërkimin
+	Edit this PDF	Redakto këtë PDF
+	Export this PDF	Eksporto këtë PDF
+	Find text or tools	Gjej tekst ose mjete
+	Hand Tool	Mjeti Dorë
+	Marquee Zoom	Zmadhim me kornizë
+	Paste	Ngjit
+	Pin	Fikso
+	Pin a tool…	Fikso një mjet…
+	Pin to Home	Fikso në Ballinë
+	Pin tools to Home	Fikso mjetet në Ballinë
+	Pin your favorite tools here for quick access.	Fiksoni mjetet tuaja të preferuara këtu për qasje të shpejtë.
+	Pinned	I fiksuar
+	Pinned Tools	Mjete të fiksuara
+	Search tools…	Kërko mjete…
+	Select Tool	Mjeti Përzgjedhje
+	Select tools to display on your Home page for quick access.	Zgjidhni mjetet për t'u shfaqur në faqen tuaj të Ballinës për qasje të shpejtë.
+	Unpin from Home	Hiq fiksimin nga Ballina
+	Unpin tool	Hiq fiksimin e mjetit
+	Arrange image	Rregullo figurën
+	Bring forward	Kalo përpara
+	Bring to front	Sille përpara
+	Crop	Crop
+	Remove crop	Remove Crop
+	Send backward	Kalo prapa
+	Send to back	Dërgo mbrapa
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Sot

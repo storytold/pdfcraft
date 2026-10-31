@@ -1,7 +1,7 @@
 //! Unicode embedding of an explicitly supplied, embeddable TrueType face. Font files are
 //! document inputs or the optional craft-fonts build input, never system-interface fallbacks.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as _;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
@@ -66,6 +66,7 @@ pub fn validate_document_input(bytes: &[u8]) -> Result<(), String> {
     {
         return Err("select an openly licensed font whose name table declares its licence (OFL, Apache, Ubuntu, Bitstream Vera or MIT)".into());
     }
+    validate(bytes)?;
     Ok(())
 }
 
@@ -337,6 +338,448 @@ fn same_resource(doc: &Document, fonts: &Dict, name: &str, programs: &mut Progra
         .map(|w| w.resource)
 }
 
+/// Generate a 6-character subset prefix tag for a font name, e.g. "ABCDEF+".
+pub fn subset_tag(seed: u64) -> String {
+    let mut tag = String::with_capacity(7);
+    let mut s = seed;
+    for _ in 0..6 {
+        let b = b'A'.saturating_add((s % 26) as u8);
+        tag.push(b as char);
+        s /= 26;
+    }
+    tag.push('+');
+    tag
+}
+
+fn calc_table_checksum(data: &[u8]) -> u32 {
+    let mut sum = 0u32;
+    for chunk in data.chunks(4) {
+        let mut b = [0u8; 4];
+        if let Some(target) = b.get_mut(..chunk.len()) {
+            target.copy_from_slice(chunk);
+        }
+        sum = sum.wrapping_add(u32::from_be_bytes(b));
+    }
+    sum
+}
+
+fn read_tables(bytes: &[u8]) -> Option<HashMap<[u8; 4], &[u8]>> {
+    let count_bytes: [u8; 2] = bytes.get(4..6)?.try_into().ok()?;
+    let num_tables = usize::from(u16::from_be_bytes(count_bytes));
+    if num_tables > 128 {
+        return None;
+    }
+    let mut map = HashMap::new();
+    for i in 0..num_tables {
+        let entry = 12usize.checked_add(i.checked_mul(16)?)?;
+        let tag: [u8; 4] = bytes.get(entry..entry.checked_add(4)?)?.try_into().ok()?;
+        let off_bytes: [u8; 4] = bytes.get(entry.checked_add(8)?..entry.checked_add(12)?)?.try_into().ok()?;
+        let offset = usize::try_from(u32::from_be_bytes(off_bytes)).ok()?;
+        let len_bytes: [u8; 4] = bytes.get(entry.checked_add(12)?..entry.checked_add(16)?)?.try_into().ok()?;
+        let length = usize::try_from(u32::from_be_bytes(len_bytes)).ok()?;
+        let table_data = bytes.get(offset..offset.checked_add(length)?)?;
+        map.insert(tag, table_data);
+    }
+    Some(map)
+}
+
+fn glyph_slice<'a>(loca: &'a [u8], glyf: &'a [u8], is_long: bool, gid: u16) -> Option<&'a [u8]> {
+    let (start, end) = if is_long {
+        let s_idx = usize::from(gid).checked_mul(4)?;
+        let e_idx = s_idx.checked_add(4)?;
+        let start_bytes: [u8; 4] = loca.get(s_idx..e_idx)?.try_into().ok()?;
+        let end_bytes: [u8; 4] = loca.get(e_idx..e_idx.checked_add(4)?)?.try_into().ok()?;
+        (usize::try_from(u32::from_be_bytes(start_bytes)).ok()?, usize::try_from(u32::from_be_bytes(end_bytes)).ok()?)
+    } else {
+        let s_idx = usize::from(gid).checked_mul(2)?;
+        let e_idx = s_idx.checked_add(2)?;
+        let start_bytes: [u8; 2] = loca.get(s_idx..e_idx)?.try_into().ok()?;
+        let end_bytes: [u8; 2] = loca.get(e_idx..e_idx.checked_add(2)?)?.try_into().ok()?;
+        (usize::from(u16::from_be_bytes(start_bytes)).checked_mul(2)?, usize::from(u16::from_be_bytes(end_bytes)).checked_mul(2)?)
+    };
+    if start <= end && end <= glyf.len() { glyf.get(start..end) } else { None }
+}
+
+fn composite_components(data: &[u8]) -> Vec<u16> {
+    let mut comps = Vec::new();
+    if data.len() < 10 {
+        return comps;
+    }
+    let Some(header) = data.get(0..2) else { return comps };
+    let num_contours = i16::from_be_bytes([header[0], header[1]]);
+    if num_contours != -1 {
+        return comps;
+    }
+    let mut offset = 10usize;
+    while let Some(flags_bytes) = data.get(offset..offset.saturating_add(2)) {
+        if flags_bytes.len() < 2 {
+            break;
+        }
+        let flags = u16::from_be_bytes([flags_bytes[0], flags_bytes[1]]);
+        let Some(gid_bytes) = data.get(offset.saturating_add(2)..offset.saturating_add(4)) else { break };
+        if gid_bytes.len() < 2 {
+            break;
+        }
+        let gid = u16::from_be_bytes([gid_bytes[0], gid_bytes[1]]);
+        comps.push(gid);
+        let Some(mut next_offset) = offset.checked_add(4) else { break };
+        if flags & 0x0001 != 0 {
+            next_offset = match next_offset.checked_add(4) {
+                Some(o) => o,
+                None => break,
+            };
+        } else {
+            next_offset = match next_offset.checked_add(2) {
+                Some(o) => o,
+                None => break,
+            };
+        }
+        if flags & 0x0008 != 0 {
+            next_offset = match next_offset.checked_add(2) {
+                Some(o) => o,
+                None => break,
+            };
+        } else if flags & 0x0040 != 0 {
+            next_offset = match next_offset.checked_add(4) {
+                Some(o) => o,
+                None => break,
+            };
+        } else if flags & 0x0080 != 0 {
+            next_offset = match next_offset.checked_add(8) {
+                Some(o) => o,
+                None => break,
+            };
+        }
+        offset = next_offset;
+        if flags & 0x0020 == 0 {
+            break;
+        }
+    }
+    comps
+}
+
+fn remap_composite_glyph(data: &[u8], old_to_new: &HashMap<u16, u16>) -> Vec<u8> {
+    let mut out = data.to_vec();
+    if out.len() < 10 {
+        return out;
+    }
+    let Some(header) = out.get(0..2) else { return out };
+    let num_contours = i16::from_be_bytes([header[0], header[1]]);
+    if num_contours != -1 {
+        return out;
+    }
+    let mut offset = 10usize;
+    while let Some(flags_bytes) = out.get(offset..offset.saturating_add(2)) {
+        if flags_bytes.len() < 2 {
+            break;
+        }
+        let flags = u16::from_be_bytes([flags_bytes[0], flags_bytes[1]]);
+        let Some(gid_bytes) = out.get(offset.saturating_add(2)..offset.saturating_add(4)) else { break };
+        if gid_bytes.len() < 2 {
+            break;
+        }
+        let old_gid = u16::from_be_bytes([gid_bytes[0], gid_bytes[1]]);
+        let new_gid = old_to_new.get(&old_gid).copied().unwrap_or(0);
+        if let Some(slot) = out.get_mut(offset.saturating_add(2)..offset.saturating_add(4)) {
+            slot.copy_from_slice(&new_gid.to_be_bytes());
+        }
+        let Some(mut next_offset) = offset.checked_add(4) else { break };
+        if flags & 0x0001 != 0 {
+            next_offset = match next_offset.checked_add(4) {
+                Some(o) => o,
+                None => break,
+            };
+        } else {
+            next_offset = match next_offset.checked_add(2) {
+                Some(o) => o,
+                None => break,
+            };
+        }
+        if flags & 0x0008 != 0 {
+            next_offset = match next_offset.checked_add(2) {
+                Some(o) => o,
+                None => break,
+            };
+        } else if flags & 0x0040 != 0 {
+            next_offset = match next_offset.checked_add(4) {
+                Some(o) => o,
+                None => break,
+            };
+        } else if flags & 0x0080 != 0 {
+            next_offset = match next_offset.checked_add(8) {
+                Some(o) => o,
+                None => break,
+            };
+        }
+        offset = next_offset;
+        if flags & 0x0020 == 0 {
+            break;
+        }
+    }
+    out
+}
+
+fn build_name_table(ps_name: &str) -> Vec<u8> {
+    let utf16_be: Vec<u8> = ps_name.encode_utf16().flat_map(u16::to_be_bytes).collect();
+    let str_len = u16::try_from(utf16_be.len()).unwrap_or(0);
+    let mut out = Vec::new();
+    out.extend_from_slice(&0u16.to_be_bytes());
+    out.extend_from_slice(&1u16.to_be_bytes());
+    out.extend_from_slice(&18u16.to_be_bytes());
+    out.extend_from_slice(&3u16.to_be_bytes());
+    out.extend_from_slice(&1u16.to_be_bytes());
+    out.extend_from_slice(&0x0409u16.to_be_bytes());
+    out.extend_from_slice(&6u16.to_be_bytes());
+    out.extend_from_slice(&str_len.to_be_bytes());
+    out.extend_from_slice(&0u16.to_be_bytes());
+    out.extend_from_slice(&utf16_be);
+    out
+}
+
+fn build_cmap_table(char_to_new_gid: &[(u32, u32)]) -> Vec<u8> {
+    let mut sorted = char_to_new_gid.to_vec();
+    if sorted.is_empty() {
+        sorted.push((0, 0));
+    }
+    sorted.sort_by_key(|&(c, _)| c);
+    sorted.dedup_by_key(|&mut (c, _)| c);
+    let n_groups = u32::try_from(sorted.len()).unwrap_or(1);
+    let subtable_len = 16u32.saturating_add(n_groups.saturating_mul(12));
+    let mut out = Vec::new();
+    out.extend_from_slice(&0u16.to_be_bytes());
+    out.extend_from_slice(&1u16.to_be_bytes());
+    out.extend_from_slice(&3u16.to_be_bytes());
+    out.extend_from_slice(&10u16.to_be_bytes());
+    out.extend_from_slice(&12u32.to_be_bytes());
+    out.extend_from_slice(&12u16.to_be_bytes());
+    out.extend_from_slice(&0u16.to_be_bytes());
+    out.extend_from_slice(&subtable_len.to_be_bytes());
+    out.extend_from_slice(&0u32.to_be_bytes());
+    out.extend_from_slice(&n_groups.to_be_bytes());
+    for &(c, gid) in &sorted {
+        out.extend_from_slice(&c.to_be_bytes());
+        out.extend_from_slice(&c.to_be_bytes());
+        out.extend_from_slice(&gid.to_be_bytes());
+    }
+    out
+}
+
+/// Subset a TrueType font to only the specified glyph IDs.
+/// Returns the new sfnt font binary and a mapping from old GID to new GID.
+#[allow(clippy::cognitive_complexity)]
+pub fn subset_truetype(bytes: &[u8], used_gids: &[u16], postscript_name: &str) -> Result<(Vec<u8>, HashMap<u16, u16>), String> {
+    validate(bytes)?;
+    let map = read_tables(bytes).ok_or("cannot parse font table directory")?;
+    let orig_glyf = map.get(b"glyf").copied().ok_or("the font has no TrueType glyf table")?;
+    let orig_loca = map.get(b"loca").copied().ok_or("missing loca table")?;
+    let orig_head = map.get(b"head").copied().ok_or("missing head table")?;
+    let orig_hhea = map.get(b"hhea").copied().ok_or("missing hhea table")?;
+    let orig_hmtx = map.get(b"hmtx").copied().ok_or("missing hmtx table")?;
+    let orig_maxp = map.get(b"maxp").copied().ok_or("missing maxp table")?;
+
+    let index_fmt_bytes: [u8; 2] = orig_head.get(50..52).ok_or("invalid head table")?.try_into().map_err(|_| "invalid head table")?;
+    let is_long = i16::from_be_bytes(index_fmt_bytes) != 0;
+
+    let mut needed_gids = BTreeSet::new();
+    needed_gids.insert(0u16);
+    for &g in used_gids {
+        needed_gids.insert(g);
+    }
+    let mut queue: Vec<u16> = needed_gids.iter().copied().collect();
+    while let Some(gid) = queue.pop() {
+        if let Some(g_data) = glyph_slice(orig_loca, orig_glyf, is_long, gid) {
+            for comp in composite_components(g_data) {
+                if needed_gids.insert(comp) {
+                    queue.push(comp);
+                }
+            }
+        }
+    }
+
+    let mut subset_glyphs = Vec::with_capacity(needed_gids.len());
+    let mut old_to_new_gid = HashMap::new();
+    for (new_gid, &old_gid) in needed_gids.iter().enumerate() {
+        let new_gid_u16 = u16::try_from(new_gid).map_err(|_| "too many glyphs in subset")?;
+        old_to_new_gid.insert(old_gid, new_gid_u16);
+        subset_glyphs.push(old_gid);
+    }
+
+    let mut subset_glyf = Vec::new();
+    let mut subset_loca = Vec::with_capacity((subset_glyphs.len().saturating_add(1)).saturating_mul(4));
+    for &old_gid in &subset_glyphs {
+        let offset_u32 = u32::try_from(subset_glyf.len()).map_err(|_| "glyf table overflow")?;
+        subset_loca.extend_from_slice(&offset_u32.to_be_bytes());
+        if let Some(g_data) = glyph_slice(orig_loca, orig_glyf, is_long, old_gid)
+            && !g_data.is_empty()
+        {
+            let remapped = remap_composite_glyph(g_data, &old_to_new_gid);
+            subset_glyf.extend_from_slice(&remapped);
+            if subset_glyf.len() % 2 != 0 {
+                subset_glyf.push(0);
+            }
+        }
+    }
+    let final_offset_u32 = u32::try_from(subset_glyf.len()).map_err(|_| "glyf table overflow")?;
+    subset_loca.extend_from_slice(&final_offset_u32.to_be_bytes());
+
+    let hmetrics_bytes: [u8; 2] = orig_hhea.get(34..36).ok_or("invalid hhea")?.try_into().map_err(|_| "invalid hhea")?;
+    let orig_num_hmetrics = usize::from(u16::from_be_bytes(hmetrics_bytes));
+    let mut subset_hmtx = Vec::with_capacity(subset_glyphs.len().saturating_mul(4));
+    for &old_gid in &subset_glyphs {
+        let old_idx = usize::from(old_gid);
+        let (adv, lsb) = if old_idx < orig_num_hmetrics {
+            let adv_bytes: [u8; 2] = orig_hmtx.get(old_idx * 4..old_idx * 4 + 2).unwrap_or(&[0, 0]).try_into().unwrap_or([0, 0]);
+            let lsb_bytes: [u8; 2] = orig_hmtx.get(old_idx * 4 + 2..old_idx * 4 + 4).unwrap_or(&[0, 0]).try_into().unwrap_or([0, 0]);
+            (u16::from_be_bytes(adv_bytes), i16::from_be_bytes(lsb_bytes))
+        } else {
+            let last_adv_offset = orig_num_hmetrics.saturating_sub(1) * 4;
+            let adv_bytes: [u8; 2] = orig_hmtx.get(last_adv_offset..last_adv_offset + 2).unwrap_or(&[0, 0]).try_into().unwrap_or([0, 0]);
+            let lsb_offset = orig_num_hmetrics * 4 + (old_idx.saturating_sub(orig_num_hmetrics)) * 2;
+            let lsb_bytes: [u8; 2] = orig_hmtx.get(lsb_offset..lsb_offset + 2).unwrap_or(&[0, 0]).try_into().unwrap_or([0, 0]);
+            (u16::from_be_bytes(adv_bytes), i16::from_be_bytes(lsb_bytes))
+        };
+        subset_hmtx.extend_from_slice(&adv.to_be_bytes());
+        subset_hmtx.extend_from_slice(&lsb.to_be_bytes());
+    }
+
+    let mut subset_hhea = orig_hhea.to_vec();
+    if subset_hhea.len() >= 36 {
+        let num_metrics = u16::try_from(subset_glyphs.len()).map_err(|_| "too many glyphs")?;
+        if let Some(target) = subset_hhea.get_mut(34..36) {
+            target.copy_from_slice(&num_metrics.to_be_bytes());
+        }
+    }
+
+    let mut subset_maxp = orig_maxp.to_vec();
+    if subset_maxp.len() >= 6 {
+        let num_g = u16::try_from(subset_glyphs.len()).map_err(|_| "too many glyphs")?;
+        if let Some(target) = subset_maxp.get_mut(4..6) {
+            target.copy_from_slice(&num_g.to_be_bytes());
+        }
+    }
+
+    let mut subset_head = orig_head.to_vec();
+    if subset_head.len() >= 54 {
+        if let Some(target) = subset_head.get_mut(8..12) {
+            target.copy_from_slice(&[0, 0, 0, 0]);
+        }
+        if let Some(target) = subset_head.get_mut(50..52) {
+            target.copy_from_slice(&1i16.to_be_bytes());
+        }
+    }
+
+    let mut subset_post = vec![0u8; 32];
+    if let Some(target) = subset_post.get_mut(0..4) {
+        target.copy_from_slice(&0x00030000u32.to_be_bytes());
+    }
+    if let Some(orig_post) = map.get(b"post")
+        && orig_post.len() >= 16
+        && let (Some(target), Some(src)) = (subset_post.get_mut(4..16), orig_post.get(4..16))
+    {
+        target.copy_from_slice(src);
+    }
+
+    let char_to_new: Vec<(u32, u32)> = FontRef::new(bytes)
+        .ok()
+        .map(|face| {
+            face.charmap().mappings().filter_map(|(cp, old)| old_to_new_gid.get(&(old.to_u32() as u16)).map(|&new| (cp, u32::from(new)))).collect()
+        })
+        .unwrap_or_default();
+
+    let subset_name = build_name_table(postscript_name);
+    let subset_cmap = build_cmap_table(&char_to_new);
+
+    let mut tables: Vec<([u8; 4], Vec<u8>)> = vec![
+        (*b"cmap", subset_cmap),
+        (*b"glyf", subset_glyf),
+        (*b"head", subset_head),
+        (*b"hhea", subset_hhea),
+        (*b"hmtx", subset_hmtx),
+        (*b"loca", subset_loca),
+        (*b"maxp", subset_maxp),
+        (*b"name", subset_name),
+    ];
+    if let Some(os2) = map.get(b"OS/2") {
+        tables.push((*b"OS/2", os2.to_vec()));
+    }
+    if let Some(cvt) = map.get(b"cvt ") {
+        tables.push((*b"cvt ", cvt.to_vec()));
+    }
+    if let Some(fpgm) = map.get(b"fpgm") {
+        tables.push((*b"fpgm", fpgm.to_vec()));
+    }
+    if let Some(prep) = map.get(b"prep") {
+        tables.push((*b"prep", prep.to_vec()));
+    }
+    tables.push((*b"post", subset_post));
+
+    tables.sort_by_key(|t| t.0);
+
+    let num_tables = u16::try_from(tables.len()).map_err(|_| "too many tables")?;
+    let mut max_pow2 = 1u16;
+    let mut entry_selector = 0u16;
+    while max_pow2.saturating_mul(2) <= num_tables {
+        max_pow2 = max_pow2.saturating_mul(2);
+        entry_selector = entry_selector.saturating_add(1);
+    }
+    let search_range = max_pow2.saturating_mul(16);
+    let range_shift = num_tables.saturating_mul(16).saturating_sub(search_range);
+
+    let mut sfnt = Vec::new();
+    sfnt.extend_from_slice(&0x00010000u32.to_be_bytes());
+    sfnt.extend_from_slice(&num_tables.to_be_bytes());
+    sfnt.extend_from_slice(&search_range.to_be_bytes());
+    sfnt.extend_from_slice(&entry_selector.to_be_bytes());
+    sfnt.extend_from_slice(&range_shift.to_be_bytes());
+
+    let dir_size = 12usize.saturating_add(usize::from(num_tables).saturating_mul(16));
+    let mut current_offset = dir_size;
+
+    struct Rec {
+        tag: [u8; 4],
+        checksum: u32,
+        offset: u32,
+        length: u32,
+    }
+    let mut records = Vec::with_capacity(tables.len());
+    for (tag, data) in &tables {
+        let checksum = calc_table_checksum(data);
+        let offset = u32::try_from(current_offset).map_err(|_| "font offset overflow")?;
+        let length = u32::try_from(data.len()).map_err(|_| "font table overflow")?;
+        records.push(Rec { tag: *tag, checksum, offset, length });
+        let padded_len = (data.len().saturating_add(3)) & !3;
+        current_offset = current_offset.saturating_add(padded_len);
+    }
+
+    for r in &records {
+        sfnt.extend_from_slice(&r.tag);
+        sfnt.extend_from_slice(&r.checksum.to_be_bytes());
+        sfnt.extend_from_slice(&r.offset.to_be_bytes());
+        sfnt.extend_from_slice(&r.length.to_be_bytes());
+    }
+
+    let mut head_offset = None;
+    for (r, (_, data)) in records.iter().zip(&tables) {
+        if &r.tag == b"head" {
+            head_offset = Some(sfnt.len());
+        }
+        sfnt.extend_from_slice(data);
+        while sfnt.len() % 4 != 0 {
+            sfnt.push(0);
+        }
+    }
+
+    if let Some(h_off) = head_offset {
+        let file_checksum = calc_table_checksum(&sfnt);
+        let adjustment = 0xB1B0AFBAu32.wrapping_sub(file_checksum);
+        if let Some(slot) = sfnt.get_mut(h_off.saturating_add(8)..h_off.saturating_add(12)) {
+            slot.copy_from_slice(&adjustment.to_be_bytes());
+        }
+    }
+
+    Ok((sfnt, old_to_new_gid))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -486,5 +929,20 @@ mod tests {
         let programs = doc.scan_objects().filter(|(_, o)| matches!(o.as_ref(), Object::Stream(s) if s.dict.get(b"PCFullFont").is_some())).count();
         assert_eq!(programs, 1, "one program for both pages");
         assert!(doc.scan_objects().count() > objects, "the second page gets its own resource");
+    }
+
+    #[test]
+    fn subset_truetype_creates_valid_compact_font() {
+        let bytes = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+        let face = FontRef::new(bytes).unwrap();
+        let gid_t = face.charmap().map('T').unwrap().to_u32() as u16;
+        let gid_e = face.charmap().map('e').unwrap().to_u32() as u16;
+        let (subset, mapping) = subset_truetype(bytes, &[gid_t, gid_e], "ABCDEF+Inter-Regular").unwrap();
+        assert!(subset.len() < 10_000, "subset should be tiny, was {}", subset.len());
+        assert!(mapping.contains_key(&gid_t));
+        assert!(mapping.contains_key(&gid_e));
+        let sub_face = FontRef::new(&subset).unwrap();
+        assert_eq!(sub_face.charmap().map('T').unwrap().to_u32(), u32::from(*mapping.get(&gid_t).unwrap()));
+        assert_eq!(sub_face.charmap().map('e').unwrap().to_u32(), u32::from(*mapping.get(&gid_e).unwrap()));
     }
 }

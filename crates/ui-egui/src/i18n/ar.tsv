@@ -2792,6 +2792,25 @@ certificate	Version	الإصدار
 	Make properties default	جعل الخصائص افتراضية
 	Pages selected	الصفحات المحددة
 	Page properties	خصائص الصفحة
+	Clear search	مسح البحث
+	Pin	تثبيت
+	Pin a tool…	تثبيت أداة…
+	Pin to Home	تثبيت في الصفحة الرئيسية
+	Pin tools to Home	تثبيت الأدوات في الصفحة الرئيسية
+	Pin your favorite tools here for quick access.	ثبّت أدواتك المفضلة هنا للوصول السريع.
+	Pinned	مثبت
+	Pinned Tools	الأدوات المثبتة
+	Search tools…	البحث عن الأدوات…
+	Select tools to display on your Home page for quick access.	حدد الأدوات المراد عرضها على صفحتك الرئيسية للوصول السريع.
+	Unpin from Home	إلغاء التثبيت من الصفحة الرئيسية
+	Unpin tool	إلغاء تثبيت الأداة
+	Transform image	تحويل الصورة
+	Select Tool	أداة التحديد
+	Hand Tool	أداة اليد
+	Marquee Zoom	تكبير بالتحديد
+	Edit this PDF	تحرير هذا الملف PDF
+	Export this PDF	تصدير هذا الملف PDF
+	Find text or tools	البحث عن نص أو أدوات
 	Create & Edit	الإنشاء والتحرير
 	Review & Compare	المراجعة والمقارنة
 	Forms & Signatures	النماذج والتوقيعات
@@ -2838,6 +2857,13 @@ certificate	Version	الإصدار
 	field names can't contain a period: {name}	لا يمكن أن تحتوي أسماء الحقول على نقطة: {name}
 	two cells would both be named {name}	ستحمل خليتان الاسم نفسه {name}
 	a field named {name} already exists	يوجد حقل باسم {name} بالفعل
+	Arrange image	ترتيب الصورة
+	Bring forward	إحضار للأمام
+	Bring to front	إحضار إلى المقدمة
+	Crop	قص
+	Remove crop	إزالة القص
+	Send backward	إرسال للخلف
+	Send to back	إرسال إلى المؤخرة
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	اليوم

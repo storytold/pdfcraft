@@ -2515,6 +2515,26 @@ animation effects	Off	Désactivés
 	Make properties default	Définir comme propriétés par défaut
 	Pages selected	Pages sélectionnées
 	Page properties	Propriétés de la page
+	Clear search	Effacer la recherche
+	Pin	Épingler
+	Pin a tool…	Épingler un outil…
+	Pin to Home	Épingler à l'Accueil
+	Pin tools to Home	Épingler des outils à l'Accueil
+	Pin your favorite tools here for quick access.	Épinglez vos outils préférés ici pour un accès rapide.
+	Pinned	Épinglé
+	Pinned Tools	Outils épinglés
+	Search tools…	Rechercher des outils…
+	Select tools to display on your Home page for quick access.	Sélectionnez les outils à afficher sur votre page d'Accueil pour un accès rapide.
+	Unpin from Home	Désépingler de l'Accueil
+	Unpin tool	Désépingler l'outil
+	Transform image	Transformer l'image
+	Select Tool	Outil Sélection
+	Hand Tool	Outil Main
+	Marquee Zoom	Zoom par sélection
+	Paste	Coller
+	Edit this PDF	Modifier ce PDF
+	Export this PDF	Exporter ce PDF
+	Find text or tools	Rechercher du texte ou des outils
 	Create & Edit	Créer et modifier
 	Review & Compare	Réviser et comparer
 	Forms & Signatures	Formulaires et signatures
@@ -2632,7 +2652,6 @@ animation effects	Off	Désactivés
 	Page {} has additional actions	La page {} contient des actions supplémentaires
 	Panel layout could not be restored: {error}	Impossible de restaurer la disposition des panneaux : {error}
 	Panel move was not applied: {error}	Le déplacement du panneau n'a pas été appliqué : {error}
-	Paste	Coller
 	PdfCraft can't check this signature yet: {}.	PdfCraft ne peut pas encore contrôler cette signature : {}.
 	Previous	Précédent
 	Previous (⇧⌘G)	Précédent (⇧⌘G)
@@ -2828,6 +2847,13 @@ certificate	Version	Version
 	field names can't contain a period: {name}	les noms de champ ne peuvent pas contenir de point : {name}
 	two cells would both be named {name}	deux cellules porteraient le nom {name}
 	a field named {name} already exists	un champ nommé {name} existe déjà
+	Arrange image	Organiser l'image
+	Bring forward	Avancer
+	Bring to front	Mettre au premier plan
+	Crop	Recadrer
+	Remove crop	Supprimer le recadrage
+	Send backward	Reculer
+	Send to back	Mettre à l'arrière-plan
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Aujourd'hui

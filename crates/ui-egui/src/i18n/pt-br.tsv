@@ -2529,6 +2529,25 @@ animation effects	Off	Desativados
 	Make properties default	Tornar propriedades padrão
 	Pages selected	Páginas selecionadas
 	Page properties	Propriedades da página
+	Clear search	Limpar pesquisa
+	Pin	Fixar
+	Pin a tool…	Fixar uma ferramenta…
+	Pin to Home	Fixar no Início
+	Pin tools to Home	Fixar ferramentas no Início
+	Pin your favorite tools here for quick access.	Fixe suas ferramentas favoritas aqui para acesso rápido.
+	Pinned	Fixado
+	Pinned Tools	Ferramentas fixadas
+	Search tools…	Pesquisar ferramentas…
+	Select tools to display on your Home page for quick access.	Selecione ferramentas para exibir na página Início para acesso rápido.
+	Unpin from Home	Desafixar do Início
+	Unpin tool	Desafixar ferramenta
+	Transform image	Transformar imagem
+	Select Tool	Ferramenta Seleção
+	Hand Tool	Ferramenta Mão
+	Marquee Zoom	Zoom por seleção
+	Edit this PDF	Editar este PDF
+	Export this PDF	Exportar este PDF
+	Find text or tools	Localizar texto ou ferramentas
 	Create & Edit	Criar e editar
 	Review & Compare	Revisar e comparar
 	Forms & Signatures	Formulários e assinaturas
@@ -2847,6 +2866,14 @@ theme	Appearance	Aparência
 	a table has 1 to {max} columns	uma tabela tem de 1 a {max} colunas
 	the first row number can be at most {max}	o número da primeira linha pode ser no máximo {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	a área, o espaçamento e as larguras das colunas devem ser números, o espaçamento 0 ou mais e cada largura maior que 0
+	Bring forward	Avançar
+	Bring to front	Trazer para a frente
+	Crop image	Cortar imagem
+	Remove crop	Remover corte
+	Send backward	Recuar
+	Send to back	Enviar para trás
+	Arrange image	Organizar imagem
+	Crop	Cortar
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hoje

@@ -2511,6 +2511,26 @@ animation effects	Off	Kapalı
 	Make properties default	Özellikleri varsayılan yap
 	Pages selected	Seçilen sayfalar
 	Page properties	Sayfa özellikleri
+	Clear search	Aramayı temizle
+	Pin	Sabitle
+	Pin a tool…	Bir aracı sabitle…
+	Pin to Home	Giriş'e sabitle
+	Pin tools to Home	Araçları Giriş'e sabitle
+	Pin your favorite tools here for quick access.	Hızlı erişim için favori araçlarınızı buraya sabitleyin.
+	Pinned	Sabitlendi
+	Pinned Tools	Sabitlenen Araçlar
+	Search tools…	Araçları ara…
+	Select tools to display on your Home page for quick access.	Hızlı erişim için Giriş sayfanızda görüntülenecek araçları seçin.
+	Unpin from Home	Giriş'ten sabitlemeyi kaldır
+	Unpin tool	Aracın sabitlemesini kaldır
+	Transform image	Görüntüyü dönüştür
+	Select Tool	Seçim Aracı
+	Hand Tool	El Aracı
+	Marquee Zoom	Seçim yakınlaştırma
+	Paste	Yapıştır
+	Edit this PDF	Bu PDF'i düzenle
+	Export this PDF	Bu PDF'i dışa aktar
+	Find text or tools	Metin veya araç bul
 	Create & Edit	Oluştur ve Düzenle
 	Review & Compare	İncele ve Karşılaştır
 	Forms & Signatures	Formlar ve İmzalar
@@ -2558,6 +2578,13 @@ animation effects	Off	Kapalı
 	field names can't contain a period: {name}	alan adları nokta içeremez: {name}
 	two cells would both be named {name}	iki hücrenin de adı {name} olurdu
 	a field named {name} already exists	{name} adlı bir alan zaten var
+	Arrange image	Resmi düzenle
+	Bring forward	Öne getir
+	Bring to front	En öne getir
+	Crop	Kırp
+	Remove crop	Kırpmayı kaldır
+	Send backward	Arkaya gönder
+	Send to back	En arkaya gönder
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Bugün

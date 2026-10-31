@@ -2702,6 +2702,12 @@ key	Space	Space
 	Redact Image	Xóa nội dung nhạy cảm của hình ảnh
 	Create Link…	Tạo liên kết…
 	Recognize Text…	Nhận dạng văn bản…
+	Bring forward	Chuyển lên trước
+	Bring to front	Đưa lên trước cùng
+	Crop image	Cắt hình ảnh
+	Remove crop	Xóa cắt
+	Send backward	Chuyển về sau
+	Send to back	Đưa về sau cùng
 	Create & Edit	Tạo và chỉnh sửa
 	Review & Compare	Xem xét và so sánh
 	Forms & Signatures	Biểu mẫu và chữ ký
@@ -2789,6 +2795,25 @@ key	Space	Space
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Bạn đang xem phiên bản đã ký của “{from}” (bản sửa đổi {rev}). Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Bạn đang xem bản sửa đổi {rev} của “{from}”. Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
+	Clear search	Xóa tìm kiếm
+	Pin	Ghim
+	Pin a tool…	Ghim công cụ…
+	Pin to Home	Ghim vào Trang chủ
+	Pin tools to Home	Ghim công cụ vào Trang chủ
+	Pin your favorite tools here for quick access.	Ghim các công cụ yêu thích của bạn vào đây để truy cập nhanh.
+	Pinned	Đã ghim
+	Pinned Tools	Công cụ đã ghim
+	Search tools…	Tìm kiếm công cụ…
+	Select tools to display on your Home page for quick access.	Chọn các công cụ hiển thị trên Trang chủ để truy cập nhanh.
+	Unpin from Home	Bỏ ghim khỏi Trang chủ
+	Unpin tool	Bỏ ghim công cụ
+	Transform image	Chuyển đổi hình ảnh
+	Select Tool	Công cụ chọn
+	Hand Tool	Công cụ bàn tay
+	Marquee Zoom	Thu phóng theo vùng chọn
+	Edit this PDF	Chỉnh sửa PDF này
+	Export this PDF	Xuất PDF này
+	Find text or tools	Tìm văn bản hoặc công cụ
 	Attach a file…	Đính kèm tệp…
 	Delete attachment	Xóa tệp đính kèm
 	Attaching files is not available on the web yet	Chưa thể đính kèm tệp trên web
@@ -2826,6 +2851,8 @@ key	Space	Space
 	a table has 1 to {max} columns	một bảng có từ 1 đến {max} cột
 	the first row number can be at most {max}	số hàng đầu tiên tối đa là {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	vùng, khoảng cách và độ rộng cột phải là số, khoảng cách từ 0 trở lên và mỗi độ rộng lớn hơn 0
+	Arrange image	Sắp xếp hình ảnh
+	Crop	Xén
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hôm nay

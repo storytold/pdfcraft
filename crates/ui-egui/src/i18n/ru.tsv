@@ -2428,6 +2428,26 @@ animation effects	Off	Выкл
 	Make properties default	Сделать свойства стандартными
 	Pages selected	Выделенные страницы
 	Page properties	Свойства страницы
+	Clear search	Очистить поиск
+	Pin	Закрепить
+	Pin a tool…	Закрепить инструмент…
+	Pin to Home	Закрепить на Главной
+	Pin tools to Home	Закрепить инструменты на Главной
+	Pin your favorite tools here for quick access.	Закрепите здесь избранные инструменты для быстрого доступа.
+	Pinned	Закреплено
+	Pinned Tools	Закрепленные инструменты
+	Search tools…	Поиск инструментов…
+	Select tools to display on your Home page for quick access.	Выберите инструменты для отображения на Главной странице для быстрого доступа.
+	Unpin from Home	Открепить от Главной
+	Unpin tool	Открепить инструмент
+	Transform image	Трансформировать изображение
+	Select Tool	Инструмент «Выделение»
+	Hand Tool	Инструмент «Рука»
+	Marquee Zoom	Масштаб выделением
+	Paste	Вставить
+	Edit this PDF	Редактировать этот PDF
+	Export this PDF	Экспортировать этот PDF
+	Find text or tools	Найти текст или инструменты
 	Create & Edit	Создание и редактирование
 	Review & Compare	Рецензирование и сравнение
 	Forms & Signatures	Формы и подписи
@@ -2475,6 +2495,13 @@ animation effects	Off	Выкл
 	field names can't contain a period: {name}	имена полей не могут содержать точку: {name}
 	two cells would both be named {name}	две ячейки получили бы одно имя {name}
 	a field named {name} already exists	поле с именем {name} уже существует
+	Arrange image	Упорядочить изображение
+	Bring forward	Переместить вперед
+	Bring to front	На передний план
+	Crop	Обрезать
+	Remove crop	Убрать обрезку
+	Send backward	Переместить назад
+	Send to back	На задний план
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Сегодня

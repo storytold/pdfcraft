@@ -2465,6 +2465,26 @@ animation effects	Off	關
 	Make properties default	將內容設為預設
 	Pages selected	選取的頁面
 	Page properties	頁面屬性
+	Clear search	清除搜尋
+	Pin	釘選
+	Pin a tool…	釘選工具…
+	Pin to Home	釘選到首頁
+	Pin tools to Home	將工具釘選到首頁
+	Pin your favorite tools here for quick access.	將常用的工具釘選在此處以便快速存取。
+	Pinned	已釘選
+	Pinned Tools	已釘選的工具
+	Search tools…	搜尋工具…
+	Select tools to display on your Home page for quick access.	選取要在首頁上顯示的工具以便快速存取。
+	Unpin from Home	從首頁取消釘選
+	Unpin tool	取消釘選工具
+	Transform image	變換影像
+	Select Tool	選取工具
+	Hand Tool	手形工具
+	Marquee Zoom	選取範圍縮放
+	Paste	貼上
+	Edit this PDF	編輯此 PDF
+	Export this PDF	匯出此 PDF
+	Find text or tools	尋找文字或工具
 	Create & Edit	建立與編輯
 	Review & Compare	審閱與比較
 	Forms & Signatures	表單與簽名
@@ -2512,6 +2532,13 @@ animation effects	Off	關
 	field names can't contain a period: {name}	欄位名稱不能包含句點：{name}
 	two cells would both be named {name}	兩個儲存格的名稱都會是 {name}
 	a field named {name} already exists	已有名為 {name} 的欄位
+	Arrange image	排列影像
+	Bring forward	上移一層
+	Bring to front	移到最上層
+	Crop	裁切
+	Remove crop	移除裁切
+	Send backward	下移一層
+	Send to back	移到最下層
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	今天

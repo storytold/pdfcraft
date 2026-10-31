@@ -2724,6 +2724,13 @@ key	Space	Mellomrom
 # Page gaps (AI-assisted, not separately native-reviewed)
 	Show gaps between pages	Vis mellomrom mellom sidene
 	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Skjul mellomrommene slik at sidekantene møtes. Margene inne i PDF-en endres ikke.
+	Arrange image	Ranger bilde
+	Bring forward	Flytt fremover
+	Bring to front	Plasser lengst frem
+	Crop	Beskjær
+	Remove crop	Fjern beskjæring
+	Send backward	Flytt bakover
+	Send to back	Plasser lengst bak
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	I dag

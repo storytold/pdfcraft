@@ -20,7 +20,14 @@ impl Document {
         let editor = self.editor.as_ref()?;
         let inside = |r: &[f64; 4]| (r[0]..=r[2]).contains(&at[0]) && (r[1]..=r[3]).contains(&at[1]);
         self.page_images(page).iter().rposition(|i| {
-            inside(&i.rect)
+            let bounds = if let Some(clip) = i.clip_rect {
+                let r = [i.rect[0].max(clip[0]), i.rect[1].max(clip[1]), i.rect[2].min(clip[2]), i.rect[3].min(clip[3])];
+                if r.iter().all(|v| v.is_finite()) && r[2] > r[0] && r[3] > r[1] { r } else { i.visible_rect.unwrap_or(i.rect) }
+            } else {
+                i.visible_rect.unwrap_or(i.rect)
+            };
+            inside(&bounds)
+                && i.contains(at)
                 && match (i.is_form, i.object) {
                     (false, Some(_)) => true,
                     (true, Some(form)) => picture_in_form(&editor.cos, form).is_some(),

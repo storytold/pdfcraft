@@ -2727,6 +2727,26 @@ certificate	Key usage	Utilizzo chiave
 certificate	Self-signed	Autofirmato
 certificate	SHA-1 digest	Impronta SHA-1
 certificate	SHA-256 digest	Impronta SHA-256
+	Clear search	Cancella ricerca
+	Pin	Fissa
+	Pin a tool…	Fissa uno strumento…
+	Pin to Home	Fissa sulla Home
+	Pin tools to Home	Fissa strumenti sulla Home
+	Pin your favorite tools here for quick access.	Fissa qui i tuoi strumenti preferiti per un accesso rapido.
+	Pinned	Fissato
+	Pinned Tools	Strumenti fissati
+	Search tools…	Cerca strumenti…
+	Select tools to display on your Home page for quick access.	Seleziona gli strumenti da visualizzare nella pagina Home per un acceso rapido.
+	Unpin from Home	Rimuovi da Home
+	Unpin tool	Rimuovi strumento
+	Transform image	Trasforma immagine
+	Select Tool	Strumento Selezione
+	Hand Tool	Strumento Mano
+	Marquee Zoom	Ingrandimento selettivo
+	Paste	Incolla
+	Edit this PDF	Modifica questo PDF
+	Export this PDF	Esporta questo PDF
+	Find text or tools	Trova testo o strumenti
 	Create & Edit	Crea e modifica
 	Review & Compare	Revisione e confronto
 	Forms & Signatures	Moduli e firme
@@ -2794,6 +2814,13 @@ certificate	SHA-256 digest	Impronta SHA-256
 	field names can't contain a period: {name}	i nomi dei campi non possono contenere un punto: {name}
 	two cells would both be named {name}	due celle si chiamerebbero entrambe {name}
 	a field named {name} already exists	esiste già un campo chiamato {name}
+	Arrange image	Disponi immagine
+	Bring forward	Porta avanti
+	Bring to front	Porta in primo piano
+	Crop	Ritaglia
+	Remove crop	Rimuovi ritaglio
+	Send backward	Porta indietro
+	Send to back	Porta in secondo piano
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Oggi

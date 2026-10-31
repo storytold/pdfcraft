@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use egui::{Color32, CornerRadius, FontFamily, FontId, Pos2, Rect, Stroke};
+use egui::{Color32, CornerRadius, FontFamily, FontId, Pos2, Rect, Stroke, pos2};
 use pdfcraft_engine::{Edit, ObjectKind, ObjectTarget};
 use pdfcraft_render::DocInfo;
 
@@ -21,14 +21,16 @@ mod image;
 mod layout;
 
 pub(crate) use background::TextBackground;
-pub use image::{CropMode, ImageSelection};
-pub(crate) use image::{ImageAction, ImageCx, body_hit as picture_hit, handle_hit as picture_handle_hit, image_input};
+pub use image::{CropMode, DragTarget, ImageAction, ImageDrag, ImageHandle, ImageSelection, image_menu_id};
+pub(crate) use image::{
+    ImageCx, Matrix, body_hit as picture_hit, handle_hit as picture_handle_hit, image_context_menu, image_input, quad_contains, user_to_screen,
+};
 #[cfg(test)]
-use image::{rotate_knob, turn_degrees};
+use image::{rotate_knob, turn_degrees, turn_degrees_delta};
 #[cfg(test)]
 use layout::{DARK_EDITOR_FILL, contrast};
 pub(crate) use layout::{caret_color_on, editor_fill, editor_font, install_source_fonts};
-use layout::{color32, editor_galley, editor_job, look_of, luminance, unseen};
+use layout::{color32, editor_galley, editor_job, look_of, luminance, source_look, unseen};
 
 const ACCENT: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 
@@ -42,7 +44,386 @@ enum TextTarget {
 /// ~1000 tiny images on one page; stroking all of them every frame (plus a hover query
 /// per box) stalls the UI. Past this, only the selected and hovered boxes are outlined:
 /// hit-testing still covers every image, so nothing becomes unselectable.
-const MAX_OUTLINES: usize = 250;
+pub(crate) const MAX_OUTLINES: usize = 250;
+
+pub fn is_bulleted(text: &str) -> bool {
+    let mut lines = text.lines();
+    let Some(first) = lines.next() else { return false };
+    first.trim_start().starts_with("• ") || first.trim_start().starts_with("- ")
+}
+
+pub fn is_numbered(text: &str) -> bool {
+    let mut lines = text.lines();
+    let Some(first) = lines.next() else { return false };
+    let t = first.trim_start();
+    let num_end = t.find('.').unwrap_or(0);
+    num_end > 0 && t[..num_end].chars().all(|c| c.is_ascii_digit()) && t[num_end..].starts_with(". ")
+}
+
+pub fn toggle_bullet_list(text: &mut String) -> bool {
+    let has_trailing_crlf = text.ends_with("\r\n");
+    let has_trailing_newline = text.ends_with('\n');
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.is_empty() {
+        return false;
+    }
+    let all_bulleted = lines.iter().all(|l| {
+        let t = l.trim_start();
+        t.is_empty() || t.starts_with("• ") || t.starts_with("- ")
+    });
+    let mut new_text = String::with_capacity(text.len() + 16);
+    for (i, line) in lines.iter().enumerate() {
+        if i > 0 {
+            new_text.push('\n');
+        }
+        let trimmed = line.trim_start();
+        let indent = &line[..line.len() - trimmed.len()];
+        if all_bulleted {
+            if let Some(rest) = trimmed.strip_prefix("• ").or_else(|| trimmed.strip_prefix("- ")) {
+                new_text.push_str(indent);
+                new_text.push_str(rest);
+            } else {
+                new_text.push_str(line);
+            }
+        } else if trimmed.is_empty() || trimmed.starts_with("• ") {
+            new_text.push_str(line);
+        } else {
+            new_text.push_str(indent);
+            new_text.push_str("• ");
+            new_text.push_str(trimmed);
+        }
+    }
+    if has_trailing_crlf {
+        new_text.push_str("\r\n");
+    } else if has_trailing_newline {
+        new_text.push('\n');
+    }
+    if new_text != *text {
+        *text = new_text;
+        true
+    } else {
+        false
+    }
+}
+
+pub fn toggle_numbered_list(text: &mut String) -> bool {
+    let has_trailing_crlf = text.ends_with("\r\n");
+    let has_trailing_newline = text.ends_with('\n');
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.is_empty() {
+        return false;
+    }
+    let is_num_line = |l: &str| {
+        let t = l.trim_start();
+        if t.is_empty() {
+            return true;
+        }
+        let dot_idx = t.find('.').unwrap_or(0);
+        dot_idx > 0 && t[..dot_idx].chars().all(|c| c.is_ascii_digit()) && t[dot_idx..].starts_with(". ")
+    };
+    let all_numbered = lines.iter().all(|l| is_num_line(l));
+    let mut new_text = String::with_capacity(text.len() + 16);
+    let mut num = 1;
+    for (i, line) in lines.iter().enumerate() {
+        if i > 0 {
+            new_text.push('\n');
+        }
+        let t = line.trim_start();
+        let indent = &line[..line.len() - t.len()];
+        if all_numbered {
+            if let Some(dot_idx) = t.find('.')
+                && dot_idx > 0
+                && t[..dot_idx].chars().all(|c| c.is_ascii_digit())
+                && t[dot_idx..].starts_with(". ")
+            {
+                new_text.push_str(indent);
+                new_text.push_str(t.get(dot_idx + 2..).unwrap_or(""));
+                continue;
+            }
+            new_text.push_str(line);
+        } else if t.is_empty() {
+            new_text.push_str(line);
+        } else {
+            use std::fmt::Write as _;
+            new_text.push_str(indent);
+            let _ = write!(new_text, "{num}. ");
+            new_text.push_str(t);
+            num += 1;
+        }
+    }
+    if has_trailing_crlf {
+        new_text.push_str("\r\n");
+    } else if has_trailing_newline {
+        new_text.push('\n');
+    }
+    if new_text != *text {
+        *text = new_text;
+        true
+    } else {
+        false
+    }
+}
+
+pub fn char_to_superscript(c: char) -> char {
+    match c {
+        '0' => '⁰',
+        '1' => '¹',
+        '2' => '²',
+        '3' => '³',
+        '4' => '⁴',
+        '5' => '⁵',
+        '6' => '⁶',
+        '7' => '⁷',
+        '8' => '⁸',
+        '9' => '⁹',
+        '+' => '⁺',
+        '-' | '−' => '⁻',
+        '=' => '⁼',
+        '(' => '⁽',
+        ')' => '⁾',
+        'a' => 'ᵃ',
+        'b' => 'ᵇ',
+        'c' => 'ᶜ',
+        'd' => 'ᵈ',
+        'e' => 'ᵉ',
+        'f' => 'ᶠ',
+        'g' => 'ᵍ',
+        'h' => 'ʰ',
+        'i' => 'ⁱ',
+        'j' => 'ʲ',
+        'k' => 'ᵏ',
+        'l' => 'ˡ',
+        'm' => 'ᵐ',
+        'n' => 'ⁿ',
+        'o' => 'ᵒ',
+        'p' => 'ᵖ',
+        'r' => 'ʳ',
+        's' => 'ˢ',
+        't' => 'ᵗ',
+        'u' => 'ᵘ',
+        'v' => 'ᵛ',
+        'w' => 'ʷ',
+        'x' => 'ˣ',
+        'y' => 'ʸ',
+        'z' => 'ᶻ',
+        'A' => 'ᴬ',
+        'B' => 'ᴮ',
+        'D' => 'ᴰ',
+        'E' => 'ᴱ',
+        'G' => 'ᴳ',
+        'H' => 'ᴴ',
+        'I' => 'ᴵ',
+        'J' => 'ᴶ',
+        'K' => 'ᴷ',
+        'L' => 'ᴸ',
+        'M' => 'ᴹ',
+        'N' => 'ᴺ',
+        'O' => 'ᴼ',
+        'P' => 'ᴾ',
+        'R' => 'ᴿ',
+        'T' => 'ᵀ',
+        'U' => 'ᵁ',
+        'V' => 'ⱽ',
+        'W' => 'ᵂ',
+        other => other,
+    }
+}
+
+pub fn char_from_superscript(c: char) -> char {
+    match c {
+        '⁰' => '0',
+        '¹' => '1',
+        '²' => '2',
+        '³' => '3',
+        '⁴' => '4',
+        '⁵' => '5',
+        '⁶' => '6',
+        '⁷' => '7',
+        '⁸' => '8',
+        '⁹' => '9',
+        '⁺' => '+',
+        '⁻' => '-',
+        '⁼' => '=',
+        '⁽' => '(',
+        '⁾' => ')',
+        'ᵃ' => 'a',
+        'ᵇ' => 'b',
+        'ᶜ' => 'c',
+        'ᵈ' => 'd',
+        'ᵉ' => 'e',
+        'ᶠ' => 'f',
+        'ᵍ' => 'g',
+        'ʰ' => 'h',
+        'ⁱ' => 'i',
+        'ʲ' => 'j',
+        'ᵏ' => 'k',
+        'ˡ' => 'l',
+        'ᵐ' => 'm',
+        'ⁿ' => 'n',
+        'ᵒ' => 'o',
+        'ᵖ' => 'p',
+        'ʳ' => 'r',
+        'ˢ' => 's',
+        'ᵗ' => 't',
+        'ᵘ' => 'u',
+        'ᵛ' => 'v',
+        'ʷ' => 'w',
+        'ˣ' => 'x',
+        'ʸ' => 'y',
+        'ᶻ' => 'z',
+        'ᴬ' => 'A',
+        'ᴮ' => 'B',
+        'ᴰ' => 'D',
+        'ᴱ' => 'E',
+        'ᴳ' => 'G',
+        'ᴴ' => 'H',
+        'ᴵ' => 'I',
+        'ᴶ' => 'J',
+        'ᴷ' => 'K',
+        'ᴸ' => 'L',
+        'ᴹ' => 'M',
+        'ᴺ' => 'N',
+        'ᴼ' => 'O',
+        'ᴾ' => 'P',
+        'ᴿ' => 'R',
+        'ᵀ' => 'T',
+        'ᵁ' => 'U',
+        'ⱽ' => 'V',
+        'ᵂ' => 'W',
+        other => other,
+    }
+}
+
+pub fn char_to_subscript(c: char) -> char {
+    match c {
+        '0' => '₀',
+        '1' => '₁',
+        '2' => '₂',
+        '3' => '₃',
+        '4' => '₄',
+        '5' => '₅',
+        '6' => '₆',
+        '7' => '₇',
+        '8' => '₈',
+        '9' => '₉',
+        '+' => '₊',
+        '-' | '−' => '₋',
+        '=' => '₌',
+        '(' => '₍',
+        ')' => '₎',
+        'a' => 'ₐ',
+        'e' => 'ₑ',
+        'h' => 'ₕ',
+        'i' => 'ᵢ',
+        'j' => 'ⱼ',
+        'k' => 'ₖ',
+        'l' => 'ₗ',
+        'm' => 'ₘ',
+        'n' => 'ₙ',
+        'o' => 'ₒ',
+        'p' => 'ₚ',
+        'r' => 'ᵣ',
+        's' => 'ₛ',
+        't' => 'ₜ',
+        'u' => 'ᵤ',
+        'v' => 'ᵥ',
+        'x' => 'ₓ',
+        other => other,
+    }
+}
+
+pub fn char_from_subscript(c: char) -> char {
+    match c {
+        '₀' => '0',
+        '₁' => '1',
+        '₂' => '2',
+        '₃' => '3',
+        '₄' => '4',
+        '₅' => '5',
+        '₆' => '6',
+        '₇' => '7',
+        '₈' => '8',
+        '₉' => '9',
+        '₊' => '+',
+        '₋' => '-',
+        '₌' => '=',
+        '₍' => '(',
+        '₎' => ')',
+        'ₐ' => 'a',
+        'ₑ' => 'e',
+        'ₕ' => 'h',
+        'ᵢ' => 'i',
+        'ⱼ' => 'j',
+        'ₖ' => 'k',
+        'ₗ' => 'l',
+        'ₘ' => 'm',
+        'ₙ' => 'n',
+        'ₒ' => 'o',
+        'ₚ' => 'p',
+        'ᵣ' => 'r',
+        'ₛ' => 's',
+        'ₜ' => 't',
+        'ᵤ' => 'u',
+        'ᵥ' => 'v',
+        'ₓ' => 'x',
+        other => other,
+    }
+}
+
+pub(crate) fn snap_char_boundaries(s: &str, start: usize, end: usize) -> (usize, usize) {
+    let mut s_idx = start.min(s.len());
+    while s_idx > 0 && !s.is_char_boundary(s_idx) {
+        s_idx -= 1;
+    }
+    let mut e_idx = end.min(s.len());
+    while e_idx < s.len() && !s.is_char_boundary(e_idx) {
+        e_idx += 1;
+    }
+    (s_idx, e_idx)
+}
+
+pub fn toggle_superscript(ed: &mut LineEditor) -> bool {
+    let (s_pos, e_pos) = if let Some(r) = &ed.selection { (r.start.min(ed.text.len()), r.end.min(ed.text.len())) } else { (0, ed.text.len()) };
+    let (start, end) = snap_char_boundaries(&ed.text, s_pos, e_pos);
+    if start >= end {
+        return false;
+    }
+    let target = &ed.text[start..end];
+    let all_sup = target.chars().all(|c| char_from_superscript(c) != c);
+    let converted: String =
+        if all_sup { target.chars().map(char_from_superscript).collect() } else { target.chars().map(char_to_superscript).collect() };
+    if converted != target {
+        let conv_len = converted.len();
+        ed.text.replace_range(start..end, &converted);
+        if ed.selection.is_some() {
+            ed.selection = Some(start..start + conv_len);
+        }
+        true
+    } else {
+        false
+    }
+}
+
+pub fn toggle_subscript(ed: &mut LineEditor) -> bool {
+    let (s_pos, e_pos) = if let Some(r) = &ed.selection { (r.start.min(ed.text.len()), r.end.min(ed.text.len())) } else { (0, ed.text.len()) };
+    let (start, end) = snap_char_boundaries(&ed.text, s_pos, e_pos);
+    if start >= end {
+        return false;
+    }
+    let target = &ed.text[start..end];
+    let all_sub = target.chars().all(|c| char_from_subscript(c) != c);
+    let converted: String = if all_sub { target.chars().map(char_from_subscript).collect() } else { target.chars().map(char_to_subscript).collect() };
+    if converted != target {
+        let conv_len = converted.len();
+        ed.text.replace_range(start..end, &converted);
+        if ed.selection.is_some() {
+            ed.selection = Some(start..start + conv_len);
+        }
+        true
+    } else {
+        false
+    }
+}
 
 /// A paragraph being edited.
 #[derive(Clone, Debug, PartialEq)]
@@ -67,7 +448,7 @@ pub struct LineEditor {
     /// Current screen-space size. Recomputed from the current page transform before painting.
     size: f32,
     /// Take the keyboard focus on the next frame.
-    pub(crate) focus: bool,
+    pub focus: bool,
     /// Whether the text box had the keyboard at the end of the editor's last frame
     /// ([`lost_focus_once`]).
     had_focus: bool,
@@ -322,6 +703,7 @@ impl LineEditor {
         self.look0 = self.look.clone();
         self.extras0 = self.extras;
         self.original = self.text.clone();
+        self.selection = None;
         // The page now has this text: the box's history restarts, even when the format left the
         // text as it was, so a Redo from before can't put undone typing back on top of it.
         self.typing_from = None;
@@ -348,6 +730,126 @@ impl LineEditor {
         self.original = self.text.clone();
     }
 
+    pub fn selection_formatting(&self, sources: &[(String, String)]) -> SelectionFormatting {
+        let Some((block, lines)) = &self.source else {
+            return SelectionFormatting {
+                font_shown: self.font_shown(sources),
+                size: Some(self.look.size),
+                family: Some(self.look.family),
+                bold: Some(self.look.bold),
+                italic: Some(self.look.italic),
+                color: Some(self.look.color),
+            };
+        };
+
+        let spans = block.edited_spans(&self.text);
+        let matching_lines: Vec<&pdfcraft_engine::TextLine> = match &self.selection {
+            Some(range) if range.start < range.end => {
+                spans.iter().filter(|(span, _)| span.start < range.end && span.end > range.start).filter_map(|(_, idx)| lines.get(*idx)).collect()
+            }
+            _ => spans.iter().filter_map(|(_, idx)| lines.get(*idx)).collect(),
+        };
+
+        if matching_lines.is_empty() {
+            return SelectionFormatting {
+                font_shown: self.font_shown(sources),
+                size: Some(self.look.size),
+                family: Some(self.look.family),
+                bold: Some(self.look.bold),
+                italic: Some(self.look.italic),
+                color: Some(self.look.color),
+            };
+        }
+
+        let line_font = |l: &pdfcraft_engine::TextLine| -> String {
+            if let Some((_, face)) = sources.iter().find(|(res, _)| res == &l.font) {
+                return face.clone();
+            }
+            let base = l.base_font.as_str();
+            let name = match base.split_once('+') {
+                Some((tag, rest)) if tag.len() == 6 && tag.bytes().all(|b| b.is_ascii_uppercase()) => rest,
+                _ => base,
+            };
+            if let Some((_, face)) = sources.iter().find(|(_, face)| face.as_str() == name) {
+                return face.clone();
+            }
+            let look = look_of_line(l);
+            let lower = name.to_ascii_lowercase();
+            if ["times", "serif", "roman", "courier", "helvetica", "arial"].iter().any(|s| lower.contains(s)) {
+                return look.family.label().to_string();
+            }
+            if name.is_empty() { tl!("Keep source fonts").to_string() } else { name.to_string() }
+        };
+
+        let first_font = line_font(matching_lines[0]);
+        let same_font = matching_lines.iter().skip(1).all(|l| line_font(l) == first_font);
+        let font_shown = if same_font {
+            if self.font_resource.is_some() || self.look.family != self.look0.family || self.family_chosen {
+                self.font_shown(sources)
+            } else {
+                first_font
+            }
+        } else {
+            tl!("Mixed").to_string()
+        };
+
+        let first_size = (matching_lines[0].size * 10.0).round() / 10.0;
+        let same_size = matching_lines.iter().skip(1).all(|l| ((l.size * 10.0).round() / 10.0 - first_size).abs() < 0.05);
+        let size = if same_size { Some(first_size) } else { None };
+
+        let first_look = look_of_line(matching_lines[0]);
+        let same_family = matching_lines.iter().skip(1).all(|l| look_of_line(l).family == first_look.family);
+        let family = if same_family { Some(first_look.family) } else { None };
+        let same_bold = matching_lines.iter().skip(1).all(|l| l.bold == matching_lines[0].bold);
+        let bold = if same_bold { Some(matching_lines[0].bold) } else { None };
+        let same_italic = matching_lines.iter().skip(1).all(|l| l.italic == matching_lines[0].italic);
+        let italic = if same_italic { Some(matching_lines[0].italic) } else { None };
+        let same_color = matching_lines.iter().skip(1).all(|l| l.color == matching_lines[0].color);
+        let color = if same_color { Some(matching_lines[0].color) } else { None };
+
+        SelectionFormatting { font_shown, size, family, bold, italic, color }
+    }
+
+    pub(crate) fn sync_selection_look(&mut self, fmt: &SelectionFormatting) {
+        if let Some(sz) = fmt.size {
+            self.look.size = sz;
+            self.look0.size = sz;
+        } else {
+            if self.look.size <= 0.0 {
+                self.look.size = 12.0;
+            }
+            self.look0.size = self.look.size;
+        }
+        if let Some(f) = fmt.family {
+            self.look.family = f;
+            self.look0.family = f;
+        }
+        match fmt.bold {
+            Some(b) => {
+                self.look.bold = b;
+                self.look0.bold = b;
+            }
+            None => {
+                self.look.bold = false;
+                self.look0.bold = false;
+            }
+        }
+        match fmt.italic {
+            Some(it) => {
+                self.look.italic = it;
+                self.look0.italic = it;
+            }
+            None => {
+                self.look.italic = false;
+                self.look0.italic = false;
+            }
+        }
+        if let Some(c) = fmt.color {
+            self.look.color = c;
+            self.look0.color = c;
+        }
+    }
+
     /// The text changed from `before` through the box's own typing (typing, Undo, Redo): rows
     /// aligned on their own keep their alignment, and a row Undo brings back gets its own back.
     pub(crate) fn follow_typed_rows(&mut self, ctx: &egui::Context, before: &str) {
@@ -360,6 +862,20 @@ impl LineEditor {
             look.aligns = pdfcraft_engine::paragraph_align::remap(before, &self.text, &look.aligns);
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SelectionFormatting {
+    pub font_shown: String,
+    pub size: Option<f64>,
+    pub family: Option<pdfcraft_engine::FontFamily>,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    pub color: Option<[f64; 3]>,
+}
+
+fn look_of_line(l: &pdfcraft_engine::TextLine) -> pdfcraft_engine::AddedText {
+    source_look(&l.base_font, l.size, l.color, l.bold, l.italic)
 }
 
 /// What a drag on a paragraph box takes hold of.
@@ -458,7 +974,7 @@ pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, lines: &[pdfcraft
     })
 }
 
-fn user_box(xf: &PageXform, info: &DocInfo, page: usize, r: Rect) -> [f64; 4] {
+pub(crate) fn user_box(xf: &PageXform, info: &DocInfo, page: usize, r: Rect) -> [f64; 4] {
     let p = &info.pages[page];
     let (a, b) = (xf.screen_to_view(r.min), xf.screen_to_view(r.max));
     let (u, v) = (p.view_to_user(a.0, a.1), p.view_to_user(b.0, b.1));
@@ -794,23 +1310,26 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                     }
                 }
                 look = Some((Arc::clone(&output.galley), output.galley_pos));
-                if let Some(cursor) = output.cursor_range {
-                    let selected = cursor.as_sorted_char_range();
-                    let byte = |index| ed.text.char_indices().nth(index).map_or(ed.text.len(), |(at, _)| at);
-                    ed.selection = (!selected.is_empty()).then(|| byte(selected.start.into())..byte(selected.end.into()));
-                }
                 let r = output.response;
-                if r.changed() {
-                    ed.follow_typed_rows(ctx, &before);
-                    // The next pass measures the updated draft with the Apply/Save rewrite.
-                    ctx.request_repaint();
-                }
                 if ed.focus {
                     r.request_focus();
                     if let Some(range) = &ed.selection {
                         reselect(ui.ctx(), input, &ed.text, range);
                     }
                     ed.focus = false;
+                } else if r.has_focus() {
+                    if let Some(cursor) = output.cursor_range {
+                        let selected = cursor.as_sorted_char_range();
+                        let byte = |index| ed.text.char_indices().nth(index).map_or(ed.text.len(), |(at, _)| at);
+                        ed.selection = (!selected.is_empty()).then(|| byte(selected.start.into())..byte(selected.end.into()));
+                    } else {
+                        ed.selection = None;
+                    }
+                }
+                if r.changed() {
+                    ed.follow_typed_rows(ctx, &before);
+                    // The next pass measures the updated draft with the Apply/Save rewrite.
+                    ctx.request_repaint();
                 }
                 let lost = lost_focus_once(&r, &mut ed.had_focus);
                 let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
@@ -1003,6 +1522,22 @@ C", &picked
         assert_eq!(at(f32::NAN, 5.0), 0.0);
     }
 
+    #[test]
+    fn the_rotate_knob_measures_clockwise_delta_from_drag_start() {
+        let c = Pos2::new(100.0, 100.0);
+        // Start dragging at 45° clockwise from top:
+        let r = 50.0_f32;
+        let start = c + egui::vec2(r * 45.0_f32.to_radians().sin(), -r * 45.0_f32.to_radians().cos());
+        // At start position, delta is 0:
+        assert!(turn_degrees_delta(c, start, start, false).abs() < 1e-3);
+        // Move by +15° (to 60°):
+        let p_60 = c + egui::vec2(r * 60.0_f32.to_radians().sin(), -r * 60.0_f32.to_radians().cos());
+        assert!((turn_degrees_delta(c, start, p_60, false) - 15.0).abs() < 1e-2);
+        // Move by -10° (to 35°):
+        let p_35 = c + egui::vec2(r * 35.0_f32.to_radians().sin(), -r * 35.0_f32.to_radians().cos());
+        assert!((turn_degrees_delta(c, start, p_35, false) + 10.0).abs() < 1e-2);
+    }
+
     /// An app with one text document open, and an editor on its first paragraph.
     fn preview_app() -> (crate::PdfCraftApp, LineEditor) {
         let mut app = crate::PdfCraftApp::new();
@@ -1193,5 +1728,118 @@ C", &picked
         assert_eq!(caret_color_on(Color32::from_rgb(0xFF, 0xFF, 0xF4)), Color32::BLACK);
         assert_eq!(caret_color_on(Color32::BLACK), Color32::WHITE);
         assert_eq!(caret_color_on(DARK_EDITOR_FILL), Color32::WHITE);
+    }
+
+    #[test]
+    fn bullet_list_toggles_and_preserves_content() {
+        let mut text = "First line\nSecond line\n\nThird line".to_string();
+        assert!(!is_bulleted(&text));
+        assert!(toggle_bullet_list(&mut text));
+        assert!(is_bulleted(&text));
+        assert_eq!(text, "• First line\n• Second line\n\n• Third line");
+
+        // Toggling again removes bullets
+        assert!(toggle_bullet_list(&mut text));
+        assert!(!is_bulleted(&text));
+        assert_eq!(text, "First line\nSecond line\n\nThird line");
+
+        let mut indented = "  First line\n  Second line".to_string();
+        assert!(toggle_bullet_list(&mut indented));
+        assert_eq!(indented, "  • First line\n  • Second line");
+        assert!(toggle_bullet_list(&mut indented));
+        assert_eq!(indented, "  First line\n  Second line");
+    }
+
+    #[test]
+    fn numbered_list_toggles_and_preserves_content() {
+        let mut text = "Item A\nItem B\n\nItem C".to_string();
+        assert!(!is_numbered(&text));
+        assert!(toggle_numbered_list(&mut text));
+        assert!(is_numbered(&text));
+        assert_eq!(text, "1. Item A\n2. Item B\n\n3. Item C");
+
+        // Toggling again removes numbering
+        assert!(toggle_numbered_list(&mut text));
+        assert!(!is_numbered(&text));
+        assert_eq!(text, "Item A\nItem B\n\nItem C");
+
+        let mut indented = "   Item A\n   Item B".to_string();
+        assert!(toggle_numbered_list(&mut indented));
+        assert_eq!(indented, "   1. Item A\n   2. Item B");
+        assert!(toggle_numbered_list(&mut indented));
+        assert_eq!(indented, "   Item A\n   Item B");
+    }
+
+    #[test]
+    fn superscript_and_subscript_conversion() {
+        let mut ed = LineEditor {
+            page: 0,
+            block: 0,
+            text: "E = mc2".to_string(),
+            original: "E = mc2".to_string(),
+            rect: egui::Rect::ZERO,
+            source_rect: [0.0; 4],
+            max_width: 100.0,
+            overflow: false,
+            selection: Some(6..7), // selecting '2'
+            font_resource: None,
+            fonts: std::collections::BTreeMap::new(),
+            source: None,
+            multiline: false,
+            size: 12.0,
+            family_chosen: false,
+            focus: true,
+            had_focus: false,
+            look: pdfcraft_engine::AddedText::default(),
+            look0: pdfcraft_engine::AddedText::default(),
+            extras: Extras::default(),
+            extras0: Extras::default(),
+            typing_from: None,
+        };
+
+        assert!(toggle_superscript(&mut ed));
+        assert_eq!(ed.text, "E = mc²");
+        // Toggling superscript again returns to normal '2'
+        assert!(toggle_superscript(&mut ed));
+        assert_eq!(ed.text, "E = mc2");
+
+        // Test subscript on H2O
+        ed.text = "H2O".to_string();
+        ed.selection = Some(1..2); // selecting '2'
+        assert!(toggle_subscript(&mut ed));
+        assert_eq!(ed.text, "H₂O");
+        assert!(toggle_subscript(&mut ed));
+        assert_eq!(ed.text, "H2O");
+    }
+
+    #[test]
+    fn value_based_line_spacing_in_style() {
+        let ed = LineEditor {
+            page: 0,
+            block: 0,
+            text: "Paragraph text".to_string(),
+            original: "Paragraph text".to_string(),
+            rect: egui::Rect::ZERO,
+            source_rect: [0.0; 4],
+            max_width: 100.0,
+            overflow: false,
+            selection: None,
+            font_resource: None,
+            fonts: std::collections::BTreeMap::new(),
+            source: None,
+            multiline: false,
+            size: 12.0,
+            family_chosen: false,
+            focus: true,
+            had_focus: false,
+            look: pdfcraft_engine::AddedText::default(),
+            look0: pdfcraft_engine::AddedText::default(),
+            extras: Extras { line_spacing: 1.33, underline: true, ..Default::default() },
+            extras0: Extras::default(),
+            typing_from: None,
+        };
+        let style = ed.style();
+        assert_eq!(style.line_spacing, Some(1.33));
+        assert_eq!(style.underline, Some(true));
     }
 }

@@ -2515,6 +2515,26 @@ animation effects	Off	オフ
 	Make properties default	プロパティをデフォルトに設定
 	Pages selected	選択したページ
 	Page properties	ページのプロパティ
+	Clear search	検索をクリア
+	Pin	ピン留め
+	Pin a tool…	ツールをピン留め…
+	Pin to Home	ホームにピン留め
+	Pin tools to Home	ツールをホームにピン留め
+	Pin your favorite tools here for quick access.	よく使うツールをここにピン留めして、すばやくアクセスできるようにします。
+	Pinned	ピン留め済み
+	Pinned Tools	ピン留めしたツール
+	Search tools…	ツールを検索…
+	Select tools to display on your Home page for quick access.	すばやくアクセスできるように、ホームに表示するツールを選択します。
+	Unpin from Home	ホームからピン留めを解除
+	Unpin tool	ツールのピン留めを解除
+	Transform image	画像を変換
+	Select Tool	選択ツール
+	Hand Tool	手のひらツール
+	Marquee Zoom	範囲指定ズーム
+	Paste	貼り付け
+	Edit this PDF	この PDF を編集
+	Export this PDF	この PDF を書き出す
+	Find text or tools	テキストまたはツールを検索
 	Create & Edit	作成と編集
 	Review & Compare	レビューと比較
 	Forms & Signatures	フォームと署名
@@ -2562,6 +2582,13 @@ animation effects	Off	オフ
 	field names can't contain a period: {name}	フィールド名にピリオドは使えません: {name}
 	two cells would both be named {name}	2 つのセルが同じ名前 {name} になります
 	a field named {name} already exists	{name} という名前のフィールドは既にあります
+	Arrange image	画像を配置
+	Bring forward	前面へ移動
+	Bring to front	最前面へ移動
+	Crop	切り抜き
+	Remove crop	切り抜きを解除
+	Send backward	背面へ移動
+	Send to back	最背面へ移動
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	今日

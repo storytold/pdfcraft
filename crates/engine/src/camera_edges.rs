@@ -3,7 +3,7 @@
 //! along most of its length. Pure Rust and deterministic; `None` when nothing convinces, so the
 //! caller falls back to corners the user places.
 //!
-//! Steps: shrink the picture to [`WORK`] pixels on its long side, blur it, take Sobel gradients
+//! Steps: shrink the picture to `WORK` pixels on its long side, blur it, take Sobel gradients
 //! and keep thin, strong edges; vote for lines (a Hough transform that only votes along each
 //! edge's own gradient direction, give or take a few degrees); pair two near-horizontal with two near-vertical lines; keep
 //! the quadrilaterals whose four sides lie on edges, and choose the largest.

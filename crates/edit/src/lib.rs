@@ -43,7 +43,10 @@ pub use objects::{EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget, ed
 mod flatten;
 pub use flatten::{flatten, flatten_fill_sign};
 pub mod images;
-pub use images::{ImageChange, PageImage, change_image, page_images, reading_images, rect_to_rect, turn_about_centre, turn_by_degrees};
+pub use images::{
+    ArrangeOrder, ImageChange, MaskIdentity, PageImage, arrange_image, change_image, crop_image, page_images, reading_images, rect_to_rect,
+    remove_image_crop, turn_about_centre, turn_by_degrees,
+};
 pub mod bidi;
 pub mod indic;
 mod linebreak;

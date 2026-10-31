@@ -2513,6 +2513,26 @@ animation effects	Off	Өшірулі
 	Make properties default	Қасиеттерді әдепкі ету
 	Pages selected	Таңдалған беттер
 	Page properties	Бет қасиеттері
+	Clear search	Іздеуді тазалау
+	Pin	Бекіту
+	Pin a tool…	Құралды бекіту…
+	Pin to Home	Басты бетке бекіту
+	Pin tools to Home	Құралдарды басты бетке бекіту
+	Pin your favorite tools here for quick access.	Жылдам қол жеткізу үшін таңдаулы құралдарды осында бекітіңіз.
+	Pinned	Бекітілген
+	Pinned Tools	Бекітілген құралдар
+	Search tools…	Құралдарды іздеу…
+	Select tools to display on your Home page for quick access.	Жылдам қол жеткізу үшін басты бетте көрсетілетін құралдарды таңдаңыз.
+	Unpin from Home	Басты беттен алып тастау
+	Unpin tool	Құралды алып тастау
+	Transform image	Кескінді түрлендіру
+	Select Tool	Таңдау құралы
+	Hand Tool	Қол құралы
+	Marquee Zoom	Аймақты масштабтау
+	Paste	Қою
+	Edit this PDF	Осы PDF файлын түзету
+	Export this PDF	Осы PDF файлын экспорттау
+	Find text or tools	Мәтінді немесе құралдарды табу
 	Create & Edit	Жасау және өңдеу
 	Review & Compare	Шолу және салыстыру
 	Forms & Signatures	Пішіндер және қолтаңбалар
@@ -2560,6 +2580,13 @@ animation effects	Off	Өшірулі
 	field names can't contain a period: {name}	өріс атауларында нүкте болмауы керек: {name}
 	two cells would both be named {name}	екі ұяшықтың да атауы {name} болар еді
 	a field named {name} already exists	{name} атты өріс бар
+	Arrange image	Суретті реттеу
+	Bring forward	Алға жылжыту
+	Bring to front	Алдыңғы планға шығару
+	Crop	Қию
+	Remove crop	Қиюды алып тастау
+	Send backward	Артқа жылжыту
+	Send to back	Артқы планға жіберу
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Бүгін

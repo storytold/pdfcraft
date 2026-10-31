@@ -266,11 +266,27 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             .into_iter()
             .map(|f| (f.resource, f.face))
             .collect();
-        let shown = ed.font_shown(&sources);
+        let fmt = ed.selection_formatting(&sources);
+        ed.sync_selection_look(&fmt);
+        let shown = fmt.font_shown;
+        let mixed_size = fmt.size.is_none();
         // A selection aligns the rows it touches; the caret alone, the whole paragraph.
         let paragraphs = crate::format_text_ui::Paragraphs { text: &ed.text, selection: ed.selection.clone(), tidy: false };
-        let out = crate::format_text_ui::panel(ui, t, &mut ed.look, Some(&mut ed.extras), Fonts { sources: Some(&sources), shown }, Some(paragraphs));
+        let out = crate::format_text_ui::panel(
+            ui,
+            t,
+            &mut ed.look,
+            Some(&mut ed.extras),
+            Fonts { sources: Some(&sources), shown, mixed_size },
+            Some(paragraphs),
+        );
         let mut changed = out.changed;
+        if out.toggle_superscript && crate::edit_text_ui::toggle_superscript(&mut ed) {
+            changed = true;
+        }
+        if out.toggle_subscript && crate::edit_text_ui::toggle_subscript(&mut ed) {
+            changed = true;
+        }
         match out.font {
             Some(FontChoice::KeepSource) => {
                 ed.keep_source_font();
@@ -305,7 +321,39 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         }
         let mut style = draft.style.clone();
         let paragraphs = crate::format_text_ui::Paragraphs { text: &draft.text, selection: draft.selection.clone(), tidy: true };
-        added_text_format(ui, t, &mut style, Some(paragraphs));
+        let out = added_text_format(ui, t, &mut style, Some(paragraphs));
+        if out.toggle_superscript || out.toggle_subscript {
+            let (s_pos, e_pos) =
+                if let Some(r) = &draft.selection { (r.start.min(draft.text.len()), r.end.min(draft.text.len())) } else { (0, draft.text.len()) };
+            let (start, end) = crate::edit_text_ui::snap_char_boundaries(&draft.text, s_pos, e_pos);
+            if start < end {
+                let target = &draft.text[start..end];
+                let converted: String = if out.toggle_superscript {
+                    let all_sup = target.chars().all(|c| crate::edit_text_ui::char_from_superscript(c) != c);
+                    if all_sup {
+                        target.chars().map(crate::edit_text_ui::char_from_superscript).collect()
+                    } else {
+                        target.chars().map(crate::edit_text_ui::char_to_superscript).collect()
+                    }
+                } else {
+                    let all_sub = target.chars().all(|c| crate::edit_text_ui::char_from_subscript(c) != c);
+                    if all_sub {
+                        target.chars().map(crate::edit_text_ui::char_from_subscript).collect()
+                    } else {
+                        target.chars().map(crate::edit_text_ui::char_to_subscript).collect()
+                    }
+                };
+                if converted != target {
+                    let mut new_draft = draft.clone();
+                    let conv_len = converted.len();
+                    new_draft.text.replace_range(start..end, &converted);
+                    if new_draft.selection.is_some() {
+                        new_draft.selection = Some(start..start + conv_len);
+                    }
+                    app.views[i].content.draft = Some(new_draft);
+                }
+            }
+        }
         if style != draft.style {
             app.restyle_draft(i, style);
         }
@@ -363,12 +411,18 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
 
 /// Format text for added text: the standard families, size, colour, style and alignment
 /// (of the lines `paragraphs` selects, while the text is being typed).
-fn added_text_format(ui: &mut egui::Ui, t: &Tokens, style: &mut pdfcraft_engine::AddedText, paragraphs: Option<crate::format_text_ui::Paragraphs>) {
+fn added_text_format(
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    style: &mut pdfcraft_engine::AddedText,
+    paragraphs: Option<crate::format_text_ui::Paragraphs>,
+) -> crate::format_text_ui::Outcome {
     let shown = style.family.label().to_string();
-    let out = crate::format_text_ui::panel(ui, t, style, None, crate::format_text_ui::Fonts { sources: None, shown }, paragraphs);
+    let out = crate::format_text_ui::panel(ui, t, style, None, crate::format_text_ui::Fonts { sources: None, shown, mixed_size: false }, paragraphs);
     if let Some(crate::format_text_ui::FontChoice::Family(family)) = out.font {
         style.family = family;
     }
+    out
 }
 
 impl PdfCraftApp {
@@ -408,6 +462,7 @@ impl PdfCraftApp {
     /// Apply the open paragraph's formatting as one change; the paragraph stays open.
     pub(crate) fn apply_line_format(&mut self, index: usize, mut ed: crate::edit_text_ui::LineEditor, ctx: Option<&egui::Context>) {
         let edit = pdfcraft_engine::Edit::EditTextBlock { page: ed.page, block: ed.block, text: ed.text.clone(), style: ed.style() };
+        let sel = ed.selection.clone();
         if self.apply_edit(edit) {
             ed.applied();
             if let Some(doc) = self.session.get(self.views[index].id)
@@ -417,6 +472,9 @@ impl PdfCraftApp {
                 if let Some(ctx) = ctx {
                     ed.fonts = crate::edit_text_ui::install_source_fonts(ctx, doc, ed.page);
                 }
+            }
+            if sel.is_some() {
+                ed.selection = sel;
             }
         }
         self.views[index].line_editor = Some(ed);

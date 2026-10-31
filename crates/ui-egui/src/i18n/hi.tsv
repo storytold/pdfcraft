@@ -2786,6 +2786,31 @@ theme	Appearance	स्वरूप
 	field names can't contain a period: {name}	फ़ील्ड के नामों में पूर्ण विराम (.) नहीं हो सकता: {name}
 	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
 	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
+	Clear search	खोज साफ़ करें
+	Edit this PDF	इस PDF को संपादित करें
+	Export this PDF	इस PDF को निर्यात करें
+	Find text or tools	पाठ या उपकरण ढूंढें
+	Hand Tool	हैंड टूल
+	Marquee Zoom	मार्की ज़ूम
+	Pin	पिन करें
+	Pin a tool…	उपकरण पिन करें…
+	Pin to Home	होम पर पिन करें
+	Pin tools to Home	होम पर उपकरण पिन करें
+	Pin your favorite tools here for quick access.	त्वरित पहुँच के लिए अपने पसंदीदा उपकरण यहाँ पिन करें।
+	Pinned	पिन किया गया
+	Pinned Tools	पिन किए गए उपकरण
+	Search tools…	उपकरण खोजें…
+	Select Tool	चयन उपकरण
+	Select tools to display on your Home page for quick access.	त्वरित पहुँच के लिए अपने होम पेज पर प्रदर्शित करने हेतु उपकरण चुनें।
+	Unpin from Home	होम से अनपिन करें
+	Unpin tool	उपकरण अनपिन करें
+	Arrange image	छवि व्यवस्थित करें
+	Bring forward	आगे लाएँ
+	Bring to front	सबसे आगे लाएँ
+	Crop	क्रॉप करें
+	Remove crop	क्रॉप हटाएँ
+	Send backward	पीछे भेजें
+	Send to back	सबसे पीछे भेजें
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	आज

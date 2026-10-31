@@ -2520,6 +2520,26 @@ animation effects	Off	Izklopljeni
 	Make properties default	Nastavi lastnosti kot privzete
 	Pages selected	Izbrane strani
 	Page properties	Lastnosti strani
+	Clear search	Počisti iskanje
+	Pin	Pripni
+	Pin a tool…	Pripni orodje…
+	Pin to Home	Pripni na domov
+	Pin tools to Home	Pripni orodja na domov
+	Pin your favorite tools here for quick access.	Tukaj pripnite svoja priljubljena orodja za hiter dostop.
+	Pinned	Pripeto
+	Pinned Tools	Pripeta orodja
+	Search tools…	Išči orodja…
+	Select tools to display on your Home page for quick access.	Izberite orodja za prikaz na domači strani za hiter dostop.
+	Unpin from Home	Odpni z domače strani
+	Unpin tool	Odpni orodje
+	Transform image	Preoblikuj sliko
+	Select Tool	Orodje za izbiro
+	Hand Tool	Orodje z roko
+	Marquee Zoom	Povečava z okvirjem
+	Paste	Prilepi
+	Edit this PDF	Uredi ta PDF
+	Export this PDF	Izvozi ta PDF
+	Find text or tools	Poišči besedilo ali orodja
 	Create & Edit	Ustvarjanje in urejanje
 	Review & Compare	Pregled in primerjava
 	Forms & Signatures	Obrazci in podpisi
@@ -2567,6 +2587,13 @@ animation effects	Off	Izklopljeni
 	field names can't contain a period: {name}	imena polj ne smejo vsebovati pike: {name}
 	two cells would both be named {name}	dve celici bi imeli enako ime {name}
 	a field named {name} already exists	polje z imenom {name} že obstaja
+	Arrange image	Uredi sliko
+	Bring forward	Premakni naprej
+	Bring to front	Postavi v ospredje
+	Crop	Obreži
+	Remove crop	Odstrani obrezovanje
+	Send backward	Premakni nazaj
+	Send to back	Postavi v ozadje
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Danes

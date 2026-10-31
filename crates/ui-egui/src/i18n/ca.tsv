@@ -2815,6 +2815,33 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+	Bring forward	Porta endavant
+	Bring to front	Porta al capdavant
+	Crop image	Retalla la imatge
+	Remove crop	Elimina el retall
+	Send backward	Envia enrere
+	Send to back	Envia al fons
+	Clear search	Neteja la cerca
+	Edit this PDF	Edita aquest PDF
+	Export this PDF	Exporta aquest PDF
+	Find text or tools	Cerca text o eines
+	Hand Tool	Eina Mà
+	Marquee Zoom	Zoom d'enquadrament
+	Pin	Fixa
+	Pin a tool…	Fixa una eina…
+	Pin to Home	Fixa a l'Inici
+	Pin tools to Home	Fixa eines a l'Inici
+	Pin your favorite tools here for quick access.	Fixeu aquí les vostres eines preferides per a un accés ràpid.
+	Pinned	Fixat
+	Pinned Tools	Eines fixades
+	Search tools…	Cerca eines…
+	Select Tool	Eina Selecció
+	Select tools to display on your Home page for quick access.	Seleccioneu les eines que es mostraran a la pàgina d'Inici per a un accés ràpid.
+	Transform image	Transforma la imatge
+	Unpin from Home	Desenganxa de l'Inici
+	Unpin tool	Desenganxa l'eina
+	Arrange image	Organitza la imatge
+	Crop	Escapça
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Avui

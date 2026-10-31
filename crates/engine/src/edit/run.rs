@@ -250,6 +250,210 @@ impl EditCtx {
     }
 }
 
+fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usize, change: &ImageEdit) -> Result<(), EditError> {
+    match change {
+        ImageEdit::Move(to) if !to.iter().all(|v| v.is_finite()) => {
+            return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("invalid position".into())));
+        }
+        ImageEdit::Transform(t) if !t.iter().all(|v| v.is_finite()) => {
+            return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("the image transform must be finite".into())));
+        }
+        ImageEdit::Crop(keep) if !keep.iter().all(|v| v.is_finite()) => {
+            return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("invalid crop".into())));
+        }
+        _ => {}
+    }
+    let img = pdfcraft_edit::page_images(doc, page)?
+        .into_iter()
+        .nth(index)
+        .ok_or_else(|| EditError::Edit(pdfcraft_edit::EditError::Invalid(format!("page {} has no image {}", page + 1, index + 1))))?;
+    let c = match change {
+        ImageEdit::Move(to) => pdfcraft_edit::ImageChange::Transform(pdfcraft_edit::rect_to_rect(img.rect, *to)),
+        ImageEdit::Transform(t) => pdfcraft_edit::ImageChange::Transform(*t),
+        ImageEdit::Rotate(q) => {
+            pdfcraft_edit::ImageChange::Transform(pdfcraft_edit::turn_about_centre(img.visible_rect.unwrap_or(img.rect), *q, false, false))
+        }
+        ImageEdit::RotateBy(degrees) => {
+            let t = pdfcraft_edit::turn_by_degrees(img.visible_rect.unwrap_or(img.rect), *degrees)
+                .ok_or_else(|| EditError::Edit(pdfcraft_edit::EditError::Invalid("the rotation angle must be a finite number".into())))?;
+            pdfcraft_edit::ImageChange::Transform(t)
+        }
+        ImageEdit::Flip { horizontal } => pdfcraft_edit::ImageChange::Transform(pdfcraft_edit::turn_about_centre(
+            img.visible_rect.unwrap_or(img.rect),
+            0,
+            *horizontal,
+            !*horizontal,
+        )),
+        ImageEdit::Replace { name, bytes } => {
+            if img.is_form {
+                return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("grouped Form artwork cannot be replaced with a bitmap".into())));
+            }
+            pdfcraft_edit::ImageChange::Replace(embed_image(doc, name, bytes)?.0)
+        }
+        ImageEdit::Crop(keep) => pdfcraft_edit::ImageChange::Crop(*keep),
+        ImageEdit::Delete => pdfcraft_edit::ImageChange::Delete,
+        ImageEdit::Arrange(order) => pdfcraft_edit::ImageChange::Arrange(*order),
+        ImageEdit::RemoveCrop => pdfcraft_edit::ImageChange::RemoveCrop,
+    };
+    let page_model = pdfcraft_model::pages(doc)
+        .into_iter()
+        .nth(page)
+        .ok_or_else(|| EditError::Edit(pdfcraft_edit::EditError::Invalid(format!("page {} not found", page + 1))))?;
+    let target_stream_obj = match page_model.dict.get(b"Contents") {
+        None => None,
+        Some(c) => match &*doc.resolve(c) {
+            pdfcraft_cos::Object::Array(a) => a.get(img.stream).and_then(|o| o.as_ref()),
+            _ if img.stream == 0 => c.as_ref(),
+            _ => None,
+        },
+    };
+
+    let added_items: Vec<(usize, pdfcraft_edit::Added)> = pdfcraft_edit::list_added(doc).into_iter().filter(|a| a.page == page).enumerate().collect();
+    let matched_added = if let (Some(st_ref), Some(target_ref)) = (target_stream_obj, img.object) {
+        added_items
+            .iter()
+            .find(|(_, a)| a.obj == st_ref && matches!(&a.content, AddedContent::Image(ai) if ai.image == target_ref))
+            .or_else(|| added_items.iter().find(|(_, a)| matches!(&a.content, AddedContent::Image(ai) if ai.image == target_ref)))
+    } else if let Some(st_ref) = target_stream_obj {
+        added_items.iter().find(|(_, a)| a.obj == st_ref)
+    } else if let Some(target_ref) = img.object {
+        added_items.iter().find(|(_, a)| matches!(&a.content, AddedContent::Image(ai) if ai.image == target_ref))
+    } else {
+        None
+    };
+
+    let mut ai_to_update = None;
+    if let Some((added_idx, added_item)) = matched_added
+        && let AddedContent::Image(ai) = added_item.content.clone()
+    {
+        let has_active_crop = ai.crop.iter().any(|v| v.abs() > 1e-6)
+            || img.visible_rect.is_some_and(|v| {
+                (v[0] - img.rect[0]).abs() > 1e-4
+                    || (v[1] - img.rect[1]).abs() > 1e-4
+                    || (v[2] - img.rect[2]).abs() > 1e-4
+                    || (v[3] - img.rect[3]).abs() > 1e-4
+            });
+        let should_promote = has_active_crop
+            || matches!(change, ImageEdit::Crop(_) | ImageEdit::RemoveCrop | ImageEdit::RotateBy(_) | ImageEdit::Arrange(_) | ImageEdit::Delete);
+
+        if should_promote {
+            doc.update_dict(added_item.obj, |d| {
+                d.remove(b"PCAdded");
+                d.remove(b"PCMark");
+            })
+            .map_err(|e| EditError::Edit(pdfcraft_edit::EditError::Invalid(e.to_string())))?;
+        } else {
+            ai_to_update = Some((*added_idx, ai));
+        }
+    }
+
+    if let Some((added_idx, mut ai)) = ai_to_update {
+        let view = page_model.view_matrix(doc);
+        let det = view[0] * view[3] - view[1] * view[2];
+        if det.abs() < 1e-12 || !det.is_finite() {
+            return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("invalid page transform".into())));
+        }
+        let (ia, ib, ic, id) = (view[3] / det, -view[1] / det, -view[2] / det, view[0] / det);
+        let to_display = [ia, ib, ic, id, -(view[4] * ia + view[5] * ic), -(view[4] * ib + view[5] * id)];
+        let apply = |m: [f64; 6], x: f64, y: f64| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]);
+        let bbox = |m: [f64; 6], r: [f64; 4]| {
+            let pts = [apply(m, r[0], r[1]), apply(m, r[2], r[1]), apply(m, r[0], r[3]), apply(m, r[2], r[3])];
+            let mut b = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+            for (x, y) in pts {
+                b = [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)];
+            }
+            b
+        };
+
+        match change {
+            ImageEdit::Move(to) => {
+                if !to.iter().all(|v| v.is_finite()) {
+                    return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("invalid position".into())));
+                }
+                ai.rect = bbox(to_display, *to);
+                pdfcraft_edit::update_content(doc, page, added_idx, &AddedContent::Image(ai))?;
+            }
+            ImageEdit::Transform(_) | ImageEdit::Flip { .. } => {
+                let pdfcraft_edit::ImageChange::Transform(t) = c else {
+                    return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("expected transform".into())));
+                };
+                let mul = |m1: [f64; 6], m2: [f64; 6]| {
+                    [
+                        m1[0] * m2[0] + m1[1] * m2[2],
+                        m1[0] * m2[1] + m1[1] * m2[3],
+                        m1[2] * m2[0] + m1[3] * m2[2],
+                        m1[2] * m2[1] + m1[3] * m2[3],
+                        m1[4] * m2[0] + m1[5] * m2[2] + m2[4],
+                        m1[4] * m2[1] + m1[5] * m2[3] + m2[5],
+                    ]
+                };
+                let t_display = mul(mul(view, t), to_display);
+                let is_parallel = t_display[1].abs() < 1e-5 && t_display[2].abs() < 1e-5;
+                let is_perpendicular = t_display[0].abs() < 1e-5 && t_display[3].abs() < 1e-5;
+
+                if is_parallel {
+                    let (toggle_h, toggle_v) =
+                        if ai.rotation % 2 == 1 { (t_display[3] < 0.0, t_display[0] < 0.0) } else { (t_display[0] < 0.0, t_display[3] < 0.0) };
+                    if toggle_h {
+                        ai.flip_h = !ai.flip_h;
+                    }
+                    if toggle_v {
+                        ai.flip_v = !ai.flip_v;
+                    }
+                    ai.rect = bbox(t_display, ai.rect);
+                } else if is_perpendicular {
+                    let b_pos = t_display[1] > 0.0;
+                    let c_pos = t_display[2] > 0.0;
+                    let (quarters_ccw, disp_flip_h, disp_flip_v) = match (b_pos, c_pos) {
+                        (true, false) => (1, false, false),
+                        (false, true) => (3, false, false),
+                        (true, true) => (1, false, true),
+                        (false, false) => (1, true, false),
+                    };
+                    let (toggle_h, toggle_v) = if ai.rotation % 2 == 1 { (disp_flip_v, disp_flip_h) } else { (disp_flip_h, disp_flip_v) };
+                    if toggle_h {
+                        ai.flip_h = !ai.flip_h;
+                    }
+                    if toggle_v {
+                        ai.flip_v = !ai.flip_v;
+                    }
+                    ai.rotation = (ai.rotation + quarters_ccw) % 4;
+                    ai.rect = bbox(t_display, ai.rect);
+                } else {
+                    return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid(
+                        "non-axis-aligned transforms are not supported for added images".into(),
+                    )));
+                }
+                pdfcraft_edit::update_content(doc, page, added_idx, &AddedContent::Image(ai))?;
+            }
+            ImageEdit::Rotate(q) => {
+                let k = ((4 - q.rem_euclid(4)) % 4) as u8;
+                ai.rotation = (ai.rotation + k) % 4;
+                let r = ai.rect;
+                let (cx, cy) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+                if k % 2 == 1 {
+                    let (w, h) = (r[2] - r[0], r[3] - r[1]);
+                    ai.rect = [cx - h / 2.0, cy - w / 2.0, cx + h / 2.0, cy + w / 2.0];
+                }
+                pdfcraft_edit::update_content(doc, page, added_idx, &AddedContent::Image(ai))?;
+            }
+            ImageEdit::Replace { .. } => {
+                let pdfcraft_edit::ImageChange::Replace(new_image) = c else {
+                    return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("expected replace".into())));
+                };
+                ai.image = new_image;
+                pdfcraft_edit::update_content(doc, page, added_idx, &AddedContent::Image(ai))?;
+            }
+            ImageEdit::Crop(_) | ImageEdit::RemoveCrop | ImageEdit::RotateBy(_) | ImageEdit::Arrange(_) | ImageEdit::Delete => {
+                pdfcraft_edit::change_image(doc, page, index, &c)?;
+            }
+        }
+    } else {
+        pdfcraft_edit::change_image(doc, page, index, &c)?;
+    }
+    Ok(())
+}
+
 /// Perform an edit on a working copy (the caller discards it on error).
 pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> Result<(), EditError> {
     match edit {
@@ -525,40 +729,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::AddOcrText { page, words } => {
             pdfcraft_edit::stamp(doc, *page, "OCR", pdfcraft_ocr::text_layer(words))?;
         }
-        Edit::EditPageImage { page, index, change } => {
-            let img = pdfcraft_edit::page_images(doc, *page)?
-                .into_iter()
-                .nth(*index)
-                .ok_or_else(|| EditError::Edit(pdfcraft_edit::EditError::Invalid(format!("page {} has no image {}", page + 1, index + 1))))?;
-            let c = match change {
-                ImageEdit::Move(to) => pdfcraft_edit::ImageChange::Transform(pdfcraft_edit::rect_to_rect(img.rect, *to)),
-                ImageEdit::Rotate(q) => {
-                    pdfcraft_edit::ImageChange::Transform(pdfcraft_edit::turn_about_centre(img.visible_rect.unwrap_or(img.rect), *q, false, false))
-                }
-                ImageEdit::RotateBy(degrees) => {
-                    let t = pdfcraft_edit::turn_by_degrees(img.visible_rect.unwrap_or(img.rect), *degrees)
-                        .ok_or_else(|| EditError::Edit(pdfcraft_edit::EditError::Invalid("the rotation angle must be a finite number".into())))?;
-                    pdfcraft_edit::ImageChange::Transform(t)
-                }
-                ImageEdit::Flip { horizontal } => pdfcraft_edit::ImageChange::Transform(pdfcraft_edit::turn_about_centre(
-                    img.visible_rect.unwrap_or(img.rect),
-                    0,
-                    *horizontal,
-                    !*horizontal,
-                )),
-                ImageEdit::Replace { name, bytes } => {
-                    if img.is_form {
-                        return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid(
-                            "grouped Form artwork cannot be replaced with a bitmap".into(),
-                        )));
-                    }
-                    pdfcraft_edit::ImageChange::Replace(embed_image(doc, name, bytes)?.0)
-                }
-                ImageEdit::Crop(keep) => pdfcraft_edit::ImageChange::Crop(*keep),
-                ImageEdit::Delete => pdfcraft_edit::ImageChange::Delete,
-            };
-            pdfcraft_edit::change_image(doc, *page, *index, &c)?;
-        }
+        Edit::EditPageImage { page, index, change } => run_edit_page_image(doc, *page, *index, change)?,
         Edit::MoveObjects { page, objects, offset } => pdfcraft_edit::move_objects(doc, *page, objects, *offset)?,
         Edit::EditTextBlock { page, block, text, style } => {
             pdfcraft_edit::rewrite_block(doc, *page, *block, Some(text), style)?;

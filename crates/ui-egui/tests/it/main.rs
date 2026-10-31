@@ -59,6 +59,7 @@ mod pageboxes;
 mod panel_snapshots;
 mod pdf_links;
 mod pickers;
+mod pinned_tools;
 mod pointer;
 mod preferences_layout;
 mod prepare;

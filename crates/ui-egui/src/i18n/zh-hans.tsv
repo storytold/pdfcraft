@@ -2479,6 +2479,26 @@ animation effects	Off	关
 	Make properties default	将属性设为默认
 	Pages selected	选定的页面
 	Page properties	页面属性
+	Clear search	清除搜索
+	Pin	固定
+	Pin a tool…	固定工具…
+	Pin to Home	固定到主页
+	Pin tools to Home	将工具固定到主页
+	Pin your favorite tools here for quick access.	将常用的工具固定在此处以便快速访问。
+	Pinned	已固定
+	Pinned Tools	已固定的工具
+	Search tools…	搜索工具…
+	Select tools to display on your Home page for quick access.	选择要在主页上显示的工具以便快速访问。
+	Unpin from Home	从主页取消固定
+	Unpin tool	取消固定工具
+	Transform image	变换图像
+	Select Tool	选择工具
+	Hand Tool	手形工具
+	Marquee Zoom	选框缩放
+	Paste	粘贴
+	Edit this PDF	编辑此 PDF
+	Export this PDF	导出此 PDF
+	Find text or tools	查找文本或工具
 	Create & Edit	创建和编辑
 	Review & Compare	审阅和比较
 	Forms & Signatures	表单和签名
@@ -2526,6 +2546,13 @@ animation effects	Off	关
 	field names can't contain a period: {name}	字段名称不能包含句点：{name}
 	two cells would both be named {name}	两个单元格的名称都会是 {name}
 	a field named {name} already exists	已存在名为 {name} 的字段
+	Arrange image	排列图像
+	Bring forward	上移一层
+	Bring to front	置于顶层
+	Crop	裁剪
+	Remove crop	移除裁剪
+	Send backward	下移一层
+	Send to back	置于底层
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	今天

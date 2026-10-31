@@ -2514,6 +2514,26 @@ animation effects	Off	Ki
 	Make properties default	Tulajdonságok beállítása alapértelmezettként
 	Pages selected	Kijelölt oldalak
 	Page properties	Oldaltulajdonságok
+	Clear search	Keresés törlése
+	Pin	Rögzítés
+	Pin a tool…	Eszköz rögzítése…
+	Pin to Home	Rögzítés a Kezdőlapra
+	Pin tools to Home	Eszközök rögzítése a Kezdőlapra
+	Pin your favorite tools here for quick access.	Rögzítse ide kedvenc eszközeit a gyors eléréshez.
+	Pinned	Rögzítve
+	Pinned Tools	Rögzített eszközök
+	Search tools…	Eszközök keresése…
+	Select tools to display on your Home page for quick access.	Válassza ki a Kezdőlapon megjelenítendő eszközöket a gyors eléréshez.
+	Unpin from Home	Rögzítés feloldása a Kezdőlapról
+	Unpin tool	Eszköz rögzítésének feloldása
+	Transform image	Kép transzformálása
+	Select Tool	Kijelölő eszköz
+	Hand Tool	Kéz eszköz
+	Marquee Zoom	Kijelölő nagyítás
+	Paste	Beillesztés
+	Edit this PDF	Ezen PDF szerkesztése
+	Export this PDF	Ezen PDF exportálása
+	Find text or tools	Szöveg vagy eszközök keresése
 	Create & Edit	Létrehozás és szerkesztés
 	Review & Compare	Áttekintés és összehasonlítás
 	Forms & Signatures	Űrlapok és aláírások
@@ -2561,6 +2581,13 @@ animation effects	Off	Ki
 	field names can't contain a period: {name}	a mezőnevek nem tartalmazhatnak pontot: {name}
 	two cells would both be named {name}	két cella neve is {name} lenne
 	a field named {name} already exists	már van {name} nevű mező
+	Arrange image	Kép elrendezése
+	Bring forward	Előrébb hozás
+	Bring to front	Előrehozás
+	Crop	Körülvágás
+	Remove crop	Körülvágás eltávolítása
+	Send backward	Hátrébb küldés
+	Send to back	Hátraküldés
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Ma

@@ -22,14 +22,66 @@ impl PdfCraftApp {
         false
     }
 
-    /// ⌘C copies the selected text, unless a text field has the keyboard (it copies its own).
-    pub(super) fn copy_key(&mut self, i: usize, ctx: &egui::Context) {
-        // ⌘C arrives as a Copy event on most platforms.
-        let copy = ctx.input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Copy)));
-        if !copy || ctx.egui_wants_keyboard_input() {
+    /// ⌘C / ⌘X / ⌘V copy, cut and paste text or images on canvas (unless a text field has focus).
+    pub(super) fn clipboard_keys(&mut self, i: usize, ctx: &egui::Context, pasted: bool) {
+        use egui::{Key, KeyboardShortcut, Modifiers};
+        let free = self.dialog.is_none() && !self.palette_open && !ctx.egui_wants_keyboard_input() && !self.is_preparing();
+        if !free || self.views.get(i).is_some_and(|v| v.forms.focus.is_some() || v.organize) {
             return;
         }
-        self.copy_selected_text(i, ctx);
+        let copy = ctx.input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Copy)))
+            || ctx.input_mut(|input| input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::C)));
+        let cut = ctx.input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Cut)))
+            || ctx.input_mut(|input| input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::X)));
+        let paste_event_text = ctx.input(|input| {
+            input.events.iter().find_map(|e| match e {
+                egui::Event::Paste(text) if !text.is_empty() => Some(text.clone()),
+                _ => None,
+            })
+        });
+        let paste = pasted
+            || ctx.input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Paste(_))))
+            || ctx.input_mut(|input| input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::V)));
+
+        if copy
+            && !self.copy_selected_text(i, ctx)
+            && let Some(sel) = self.views.get(i).and_then(|v| v.image_selection.clone())
+            && let Some(id) = self.views.get(i).map(|v| v.id)
+            && self.may_copy(id)
+        {
+            self.copy_page_image(sel.page, sel.index);
+        }
+        if cut
+            && let Some(sel) = self.views.get(i).and_then(|v| v.image_selection.clone())
+            && let Some(id) = self.views.get(i).map(|v| v.id)
+            && self.may_copy(id)
+        {
+            if let Some(v) = self.views.get_mut(i) {
+                v.image_selection = None;
+            }
+            self.cut_page_image(sel.page, sel.index);
+        }
+        if paste {
+            let has_override_image = matches!(self.clipboard_override, Some(crate::create_ui::Clip::Image { .. }));
+            #[cfg(not(target_arch = "wasm32"))]
+            let system_has_text = if !has_override_image && self.system_clipboard {
+                crate::os_clipboard::with(|cb| cb.get_text()).map(|t| !t.is_empty()).unwrap_or(false)
+            } else {
+                false
+            };
+            #[cfg(target_arch = "wasm32")]
+            let system_has_text = false;
+
+            if !has_override_image && (paste_event_text.is_some() || system_has_text) {
+                self.last_copied_image = None;
+                self.last_copied_file = None;
+                self.last_copied_image_rect = None;
+                return;
+            }
+
+            let page = self.views.get(i).map_or(0, |v| v.current);
+            self.paste_image(page, None);
+        }
     }
 
     /// Shared permission gate for copying selected page text from menus and keyboard events.

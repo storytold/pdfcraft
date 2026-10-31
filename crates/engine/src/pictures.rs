@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use image::ImageDecoder;
+
 use crate::EditError;
 
 /// A picture for a watermark or background (Acrobat: Source ▸ File): an image, or `page`
@@ -55,5 +57,77 @@ pub(crate) fn mark_source(doc: &mut pdfcraft_cos::Document, f: &MarkFile) -> Res
     } else {
         let (xobject, size) = embed_image(doc, &f.name, &f.bytes)?;
         Ok(pdfcraft_edit::MarkSource { xobject, size, image: true })
+    }
+}
+
+/// The dimensions of an image from its bytes (JPEG, PNG, TIFF), without decoding the full raster.
+pub fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() > 64_000_000 * 4 {
+        return None;
+    }
+    let format = image::guess_format(bytes).ok()?;
+    let mut reader = image::ImageReader::with_format(std::io::Cursor::new(bytes), format);
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(64_000_000 * 4);
+    reader.limits(limits);
+    let mut decoder = reader.into_decoder().ok()?;
+    let (mut w, mut h) = image::ImageDecoder::dimensions(&decoder);
+    if w == 0 || h == 0 {
+        return None;
+    }
+    if format == image::ImageFormat::Jpeg
+        && u64::from(w) * u64::from(h) <= (64 << 20)
+        && let Ok(orientation) = decoder.orientation()
+        && matches!(
+            orientation,
+            image::metadata::Orientation::Rotate90
+                | image::metadata::Orientation::Rotate270
+                | image::metadata::Orientation::Rotate90FlipH
+                | image::metadata::Orientation::Rotate270FlipH
+        )
+    {
+        std::mem::swap(&mut w, &mut h);
+    }
+    Some((w, h))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn phone_jpeg(w: u32, h: u32, orientation: u8) -> Vec<u8> {
+        use image::codecs::jpeg::JpegEncoder;
+        let mut jpeg = Vec::new();
+        let mut encoder = JpegEncoder::new(&mut jpeg);
+        encoder.encode_image(&image::RgbImage::from_pixel(w, h, image::Rgb([20, 20, 20]))).expect("valid jpeg");
+        let mut exif = b"Exif\0\0II\x2a\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0".to_vec();
+        exif.extend_from_slice(&[orientation, 0, 0, 0, 0, 0, 0, 0]);
+        let mut out = jpeg[..2].to_vec();
+        out.extend_from_slice(&[0xff, 0xe1]);
+        out.extend_from_slice(&((exif.len() + 2) as u16).to_be_bytes());
+        out.extend_from_slice(&exif);
+        out.extend_from_slice(&jpeg[2..]);
+        out
+    }
+
+    #[test]
+    fn jpeg_exif_orientation_swaps_dimensions_for_quarter_turns() {
+        let turned_6 = phone_jpeg(60, 20, 6);
+        assert_eq!(image_dimensions(&turned_6), Some((20, 60)));
+
+        let turned_8 = phone_jpeg(60, 20, 8);
+        assert_eq!(image_dimensions(&turned_8), Some((20, 60)));
+
+        let upright_1 = phone_jpeg(60, 20, 1);
+        assert_eq!(image_dimensions(&upright_1), Some((60, 20)));
+    }
+
+    #[test]
+    fn invalid_and_oversized_inputs_return_none() {
+        assert_eq!(image_dimensions(&[]), None);
+        assert_eq!(image_dimensions(b"not an image"), None);
+
+        let huge = vec![0u8; 64_000_000 * 4 + 1];
+        assert_eq!(image_dimensions(&huge), None);
     }
 }

@@ -2521,6 +2521,26 @@ animation effects	Off	Ανενεργά
 	Make properties default	Ορισμός ιδιοτήτων ως προεπιλογή
 	Pages selected	Επιλεγμένες σελίδες
 	Page properties	Ιδιότητες σελίδας
+	Clear search	Εκκαθάριση αναζήτησης
+	Pin	Καρφίτσωμα
+	Pin a tool…	Καρφίτσωμα εργαλείου…
+	Pin to Home	Καρφίτσωμα στην Αρχική
+	Pin tools to Home	Καρφίτσωμα εργαλείων στην Αρχική
+	Pin your favorite tools here for quick access.	Καρφιτσώστε τα αγαπημένα σας εργαλεία εδώ για γρήγορη πρόσβαση.
+	Pinned	Καρφιτσωμένο
+	Pinned Tools	Καρφιτσωμένα εργαλεία
+	Search tools…	Αναζήτηση εργαλείων…
+	Select tools to display on your Home page for quick access.	Επιλέξτε εργαλεία για εμφάνιση στην Αρχική σας για γρήγορη πρόσβαση.
+	Unpin from Home	Ξεκαρφίτσωμα από την Αρχική
+	Unpin tool	Ξεκαρφίτσωμα εργαλείου
+	Transform image	Μετασχηματισμός εικόνας
+	Select Tool	Εργαλείο επιλογής
+	Hand Tool	Εργαλείο χεριού
+	Marquee Zoom	Μεγέθυνση επιλεγμένης περιοχής
+	Paste	Επικόλληση
+	Edit this PDF	Επεξεργασία αυτού του PDF
+	Export this PDF	Εξαγωγή αυτού του PDF
+	Find text or tools	Εύρεση κειμένου ή εργαλείων
 	Create & Edit	Δημιουργία και επεξεργασία
 	Review & Compare	Αναθεώρηση και σύγκριση
 	Forms & Signatures	Φόρμες και υπογραφές
@@ -2568,6 +2588,13 @@ animation effects	Off	Ανενεργά
 	field names can't contain a period: {name}	τα ονόματα πεδίων δεν μπορούν να περιέχουν τελεία: {name}
 	two cells would both be named {name}	δύο κελιά θα είχαν το ίδιο όνομα {name}
 	a field named {name} already exists	υπάρχει ήδη πεδίο με όνομα {name}
+	Arrange image	Διάταξη εικόνας
+	Bring forward	Μεταφορά εμπρός
+	Bring to front	Μεταφορά σε πρώτο πλάνο
+	Crop	Περικοπή
+	Remove crop	Κατάργηση περικοπής
+	Send backward	Μεταφορά πίσω
+	Send to back	Μεταφορά σε δεύτερο πλάνο
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Σήμερα

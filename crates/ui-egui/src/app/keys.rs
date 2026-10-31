@@ -78,8 +78,7 @@ impl PdfCraftApp {
                 prepare::nudge_keys(ctx, &mut self.views[i], doc);
             }
             canvas::shortcuts(&mut self.views[i], ctx, self.scroll_speed);
-            self.copy_key(i, ctx);
-            self.paste_image_key(i, ctx, pasted);
+            self.clipboard_keys(i, ctx, pasted);
             self.image_pick_keys(i, ctx);
         }
     }

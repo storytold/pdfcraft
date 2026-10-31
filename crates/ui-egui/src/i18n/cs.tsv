@@ -2589,6 +2589,26 @@ animation effects	Off	Vypnuto
 	Make properties default	Nastavit vlastnosti jako výchozí
 	Pages selected	Vybrané stránky
 	Page properties	Vlastnosti stránky
+	Clear search	Vymazat hledání
+	Pin	Připnout
+	Pin a tool…	Připnout nástroj…
+	Pin to Home	Připnout na domovskou stránku
+	Pin tools to Home	Připnout nástroje na domovskou stránku
+	Pin your favorite tools here for quick access.	Připněte si sem oblíbené nástroje pro rychlý přístup.
+	Pinned	Připnuto
+	Pinned Tools	Připnuté nástroje
+	Search tools…	Hledat nástroje…
+	Select tools to display on your Home page for quick access.	Vyberte nástroje, které se mají zobrazovat na domovské stránce pro rychlý přístup.
+	Unpin from Home	Odepnout z domovské stránky
+	Unpin tool	Odepnout nástroj
+	Transform image	Transformovat obrázek
+	Select Tool	Nástroj pro výběr
+	Hand Tool	Nástroj ručička
+	Marquee Zoom	Zvětšit vybranou oblast
+	Paste	Vložit
+	Edit this PDF	Upravit toto PDF
+	Export this PDF	Exportovat toto PDF
+	Find text or tools	Hledat text nebo nástroje
 	Create & Edit	Vytváření a úpravy
 	Review & Compare	Revize a porovnání
 	Forms & Signatures	Formuláře a podpisy
@@ -2793,7 +2813,6 @@ animation effects	Off	Vypnuto
 	Organize	Uspořádat
 	Page {n}	Stránka {n}
 	Page {n} of {total}	Stránka {n} z {total}
-	Paste	Vložit
 	Previous	Předchozí
 	Previous (⇧⌘G)	Předchozí (⇧⌘G)
 	Print (⌘P)	Tisk (⌘P)
@@ -2869,6 +2888,14 @@ certificate	Version	Verze
 	field names can't contain a period: {name}	názvy polí nesmějí obsahovat tečku: {name}
 	two cells would both be named {name}	dvě buňky by se jmenovaly {name}
 	a field named {name} already exists	pole s názvem {name} už existuje
+	Bring forward	Přenést blíž
+	Bring to front	Přenést do popředí
+	Crop image	Oříznout obrázek
+	Remove crop	Odebrat oříznutí
+	Send backward	Přenést dál
+	Send to back	Přenést do pozadí
+	Arrange image	Uspořádat obrázek
+	Crop	Oříznout
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Dnes

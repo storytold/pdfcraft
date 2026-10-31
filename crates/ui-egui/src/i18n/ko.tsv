@@ -2786,6 +2786,31 @@ theme	Appearance	모양
 	field names can't contain a period: {name}	필드 이름에는 마침표를 쓸 수 없습니다: {name}
 	two cells would both be named {name}	두 셀의 이름이 모두 {name}이(가) 됩니다
 	a field named {name} already exists	{name}(이)라는 필드가 이미 있습니다
+	Clear search	검색 지우기
+	Edit this PDF	이 PDF 편집
+	Export this PDF	이 PDF 내보내기
+	Find text or tools	텍스트 또는 도구 찾기
+	Hand Tool	손 도구
+	Marquee Zoom	영역 확대/축소
+	Pin	고정
+	Pin a tool…	도구 고정…
+	Pin to Home	홈에 고정
+	Pin tools to Home	홈에 도구 고정
+	Pin your favorite tools here for quick access.	빠른 액세스를 위해 즐겨찾는 도구를 여기에 고정하세요.
+	Pinned	고정됨
+	Pinned Tools	고정된 도구
+	Search tools…	도구 검색…
+	Select Tool	선택 도구
+	Select tools to display on your Home page for quick access.	빠른 액세스를 위해 홈 페이지에 표시할 도구를 선택하세요.
+	Unpin from Home	홈에서 고정 해제
+	Unpin tool	도구 고정 해제
+	Arrange image	이미지 정렬
+	Bring forward	앞으로 가져오기
+	Bring to front	맨 앞으로 가져오기
+	Crop	자르기
+	Remove crop	자르기 제거
+	Send backward	뒤로 보내기
+	Send to back	맨 뒤로 보내기
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	오늘

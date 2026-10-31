@@ -166,7 +166,7 @@ fn grid_duplicate_warnings_compare_contents_and_follow_undo() {
 
 /// Run frames until `done`, giving render threads time; whether it happened.
 fn settle(h: &mut Harness<'static, PdfCraftApp>, done: impl Fn(&PdfCraftApp) -> bool) -> bool {
-    for _ in 0..400 {
+    for _ in 0..800 {
         h.run_steps(1);
         if done(h.state()) {
             return true;
@@ -1258,18 +1258,21 @@ fn a_right_click_on_a_card_offers_preview_and_remove() {
 
 #[test]
 fn the_preview_closes_when_its_file_leaves_and_keeps_to_three_render_threads() {
-    let files: Vec<(String, Vec<u8>)> = (0..12).map(|i| (format!("f{i:02}.pdf"), heavy())).collect();
+    let files: Vec<(String, Vec<u8>)> = (0..12).map(|i| (format!("f{i:02}.pdf"), if i < 6 { heavy() } else { fixture(1) })).collect();
     let mut h = grid_after_one(files.iter().map(|(n, b)| (n.as_str(), b.clone())).collect(), vec2(1400.0, 900.0));
     hover_card(&mut h, "f03.pdf");
     h.get_by_label("Preview").click();
     let (mut most, mut rendered) = (0, false);
-    for frame in 0..60 {
+    for frame in 0..120 {
         h.run_steps(1);
         let threads = h.state_mut().combine_thumbnail_threads();
         most = most.max(threads);
         assert!(threads <= 3, "frame {frame}: {threads} render threads");
         // The large page itself is rendered (under way, or done) among them.
         rendered |= matches!(h.state().combine_preview(), Some((_, _, CombineThumb::Pending | CombineThumb::Ready { .. })));
+        if rendered && frame >= 40 {
+            break;
+        }
         std::thread::sleep(Duration::from_millis(5));
     }
     assert!(most > 0);

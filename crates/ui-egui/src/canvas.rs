@@ -84,6 +84,322 @@ pub enum Fit {
     None,
 }
 
+use crate::edit_text_ui::ImageHandle;
+
+/// Extension trait on `egui::Painter` to draw polygons.
+pub trait PainterExt {
+    fn polygon(&self, points: Vec<Pos2>, fill: Color32, stroke: Stroke) -> egui::layers::ShapeIdx;
+}
+
+impl PainterExt for egui::Painter {
+    fn polygon(&self, points: Vec<Pos2>, fill: Color32, stroke: Stroke) -> egui::layers::ShapeIdx {
+        self.add(egui::Shape::convex_polygon(points, fill, stroke))
+    }
+}
+
+/// User-space selectable bounding box for an image object.
+/// If the image object has an active clipping path applied to it (the crop box),
+/// this is the mathematical intersection of the full CTM-derived rect and the clipping path's rect.
+pub fn image_selectable_bounds(im: &pdfcraft_engine::PageImage) -> [f64; 4] {
+    if let Some(clip) = im.clip_rect {
+        let r = [im.rect[0].max(clip[0]), im.rect[1].max(clip[1]), im.rect[2].min(clip[2]), im.rect[3].min(clip[3])];
+        if r.iter().all(|v| v.is_finite()) && r[2] > r[0] && r[3] > r[1] {
+            return r;
+        }
+    }
+    im.visible_rect.unwrap_or(im.rect)
+}
+
+/// Screen-space selectable bounding box for an image object.
+/// If the image object has an active clipping path applied to it (the crop box),
+/// the final selectable `egui::Rect` is the mathematical intersection of the image's
+/// full CTM-derived rect and the clipping path's rect.
+pub fn image_screen_rect(im: &pdfcraft_engine::PageImage, xf: &PageXform, info: &DocInfo, page: usize) -> Rect {
+    let full = xf.user_rect_f64(info, page, im.rect);
+    if let Some(clip) = im.clip_rect {
+        let clip_r = xf.user_rect_f64(info, page, clip);
+        let inter = full.intersect(clip_r);
+        if inter.is_positive() {
+            return inter;
+        }
+    }
+    if let Some(vr) = im.visible_rect {
+        let r = xf.user_rect_f64(info, page, vr);
+        if r.is_positive() {
+            return r;
+        }
+    }
+    full
+}
+
+/// An Oriented Bounding Box (OBB) representing a rotated rectangle in screen space,
+/// with 8 resize handles and rotated local axes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ImageObb {
+    pub s00: Pos2,
+    pub s10: Pos2,
+    pub s11: Pos2,
+    pub s01: Pos2,
+    pub s_bc: Pos2,
+    pub s_rc: Pos2,
+    pub s_tc: Pos2,
+    pub s_lc: Pos2,
+    pub s_rot: Pos2,
+    pub screen_center: Pos2,
+    pub width: f32,
+    pub height: f32,
+    pub theta: f32,
+    pub u_axis: (f64, f64),
+    pub v_axis: (f64, f64),
+    pub is_rotated: bool,
+}
+
+impl ImageObb {
+    /// Calculates the 4 rotated corners manually using center, width, height, and rotation angle (θ).
+    /// Local axes: `u_axis = (cos θ, sin θ)` and `v_axis = (-sin θ, cos θ)`.
+    /// Places the 8 resize handles exactly at these rotated vertices and midpoints.
+    pub fn from_center_size_angle(center: Pos2, width: f32, height: f32, theta: f32) -> Self {
+        let cos_t = theta.cos();
+        let sin_t = theta.sin();
+        let u_axis = (cos_t as f64, sin_t as f64);
+        let v_axis = (-sin_t as f64, cos_t as f64);
+        let u_vec = vec2(cos_t, sin_t);
+        let v_vec = vec2(-sin_t, cos_t);
+        let hw = width * 0.5;
+        let hh = height * 0.5;
+
+        let s00 = center - u_vec * hw - v_vec * hh;
+        let s10 = center + u_vec * hw - v_vec * hh;
+        let s11 = center + u_vec * hw + v_vec * hh;
+        let s01 = center - u_vec * hw + v_vec * hh;
+
+        let s_bc = center - v_vec * hh;
+        let s_rc = center + u_vec * hw;
+        let s_tc = center + v_vec * hh;
+        let s_lc = center - u_vec * hw;
+
+        let s_rot = s_tc + v_vec * 24.0;
+        let is_rotated = theta.abs() > 1e-4;
+
+        Self { s00, s10, s11, s01, s_bc, s_rc, s_tc, s_lc, s_rot, screen_center: center, width, height, theta, u_axis, v_axis, is_rotated }
+    }
+
+    pub fn new(matrix: [f64; 6], xf: &PageXform, info: &DocInfo, page: usize) -> Self {
+        Self::from_matrix(matrix, xf, info, page)
+    }
+
+    pub fn from_matrix(matrix: [f64; 6], xf: &PageXform, info: &DocInfo, page: usize) -> Self {
+        let m = crate::edit_text_ui::Matrix(matrix);
+        let p00 = m.apply(0.0, 0.0);
+        let p10 = m.apply(1.0, 0.0);
+        let p11 = m.apply(1.0, 1.0);
+        let p01 = m.apply(0.0, 1.0);
+
+        let s00 = crate::edit_text_ui::user_to_screen(xf, info, page, p00.0, p00.1);
+        let s10 = crate::edit_text_ui::user_to_screen(xf, info, page, p10.0, p10.1);
+        let s11 = crate::edit_text_ui::user_to_screen(xf, info, page, p11.0, p11.1);
+        let s01 = crate::edit_text_ui::user_to_screen(xf, info, page, p01.0, p01.1);
+
+        let s_bc = Pos2::new((s00.x + s10.x) * 0.5, (s00.y + s10.y) * 0.5);
+        let s_rc = Pos2::new((s10.x + s11.x) * 0.5, (s10.y + s11.y) * 0.5);
+        let s_tc = Pos2::new((s01.x + s11.x) * 0.5, (s01.y + s11.y) * 0.5);
+        let s_lc = Pos2::new((s00.x + s01.x) * 0.5, (s00.y + s01.y) * 0.5);
+
+        let screen_center = Pos2::new((s00.x + s10.x + s11.x + s01.x) * 0.25, (s00.y + s10.y + s11.y + s01.y) * 0.25);
+        let out_dir = s_tc - screen_center;
+        let out_len = out_dir.length().max(1e-4);
+        let out_norm = out_dir / out_len;
+        let s_rot = s_tc + out_norm * 24.0;
+
+        let [a, b, c, d, ..] = matrix;
+        let w_u = (a * a + b * b).sqrt().max(1e-6);
+        let h_v = (c * c + d * d).sqrt().max(1e-6);
+        let u_axis = (a / w_u, b / w_u);
+        let v_axis = (c / h_v, d / h_v);
+        let theta = (b).atan2(a) as f32;
+        let is_rotated = b.abs() > 1e-4 || c.abs() > 1e-4;
+
+        Self {
+            s00,
+            s10,
+            s11,
+            s01,
+            s_bc,
+            s_rc,
+            s_tc,
+            s_lc,
+            s_rot,
+            screen_center,
+            width: (s10 - s00).length(),
+            height: (s01 - s00).length(),
+            theta,
+            u_axis,
+            v_axis,
+            is_rotated,
+        }
+    }
+
+    pub fn from_image(im: &pdfcraft_engine::PageImage, xf: &PageXform, info: &DocInfo, page: usize) -> Self {
+        let [_, b, c, ..] = im.matrix;
+        let is_rot = b.abs() > 1e-4 || c.abs() > 1e-4;
+        let bounds = image_selectable_bounds(im);
+        let matrix = if !is_rot && bounds[2] > bounds[0] && bounds[3] > bounds[1] {
+            [bounds[2] - bounds[0], 0.0, 0.0, bounds[3] - bounds[1], bounds[0], bounds[1]]
+        } else {
+            im.matrix
+        };
+        Self::from_matrix(matrix, xf, info, page)
+    }
+
+    pub fn handles(&self) -> [(ImageHandle, Pos2); 8] {
+        [
+            (ImageHandle::TopLeft, self.s01),
+            (ImageHandle::TopCenter, self.s_tc),
+            (ImageHandle::TopRight, self.s11),
+            (ImageHandle::RightCenter, self.s_rc),
+            (ImageHandle::BottomRight, self.s10),
+            (ImageHandle::BottomCenter, self.s_bc),
+            (ImageHandle::BottomLeft, self.s00),
+            (ImageHandle::LeftCenter, self.s_lc),
+        ]
+    }
+
+    pub fn handle_pos(&self, handle: ImageHandle) -> Pos2 {
+        match handle {
+            ImageHandle::TopLeft => self.s01,
+            ImageHandle::TopCenter => self.s_tc,
+            ImageHandle::TopRight => self.s11,
+            ImageHandle::RightCenter => self.s_rc,
+            ImageHandle::BottomRight => self.s10,
+            ImageHandle::BottomCenter => self.s_bc,
+            ImageHandle::BottomLeft => self.s00,
+            ImageHandle::LeftCenter => self.s_lc,
+        }
+    }
+
+    pub fn handle_id(&self, base_id: egui::Id, handle: ImageHandle) -> egui::Id {
+        base_id.with(match handle {
+            ImageHandle::TopLeft => "handle_tl",
+            ImageHandle::TopCenter => "handle_tc",
+            ImageHandle::TopRight => "handle_tr",
+            ImageHandle::RightCenter => "handle_rc",
+            ImageHandle::BottomRight => "handle_br",
+            ImageHandle::BottomCenter => "handle_bc",
+            ImageHandle::BottomLeft => "handle_bl",
+            ImageHandle::LeftCenter => "handle_lc",
+        })
+    }
+
+    pub fn handles_with_ids(&self, base_id: egui::Id) -> [(ImageHandle, Pos2, egui::Id); 8] {
+        [
+            (ImageHandle::TopLeft, self.s01, self.handle_id(base_id, ImageHandle::TopLeft)),
+            (ImageHandle::TopCenter, self.s_tc, self.handle_id(base_id, ImageHandle::TopCenter)),
+            (ImageHandle::TopRight, self.s11, self.handle_id(base_id, ImageHandle::TopRight)),
+            (ImageHandle::RightCenter, self.s_rc, self.handle_id(base_id, ImageHandle::RightCenter)),
+            (ImageHandle::BottomRight, self.s10, self.handle_id(base_id, ImageHandle::BottomRight)),
+            (ImageHandle::BottomCenter, self.s_bc, self.handle_id(base_id, ImageHandle::BottomCenter)),
+            (ImageHandle::BottomLeft, self.s00, self.handle_id(base_id, ImageHandle::BottomLeft)),
+            (ImageHandle::LeftCenter, self.s_lc, self.handle_id(base_id, ImageHandle::LeftCenter)),
+        ]
+    }
+
+    pub fn corners(&self) -> [Pos2; 4] {
+        [self.s00, self.s10, self.s11, self.s01]
+    }
+
+    /// Resizes the OBB proportionally along its local axes using projected mouse delta,
+    /// locking the diagonally opposite corner as the fixed anchor point.
+    pub fn scale_proportional(&self, handle: ImageHandle, delta: Vec2, min_size: f32) -> Self {
+        let u_diff = self.s10 - self.s00;
+        let v_diff = self.s01 - self.s00;
+        let u_len = u_diff.length();
+        let v_len = v_diff.length();
+        let u_vec = if u_len > 1e-4 { u_diff / u_len } else { vec2(1.0, 0.0) };
+        let v_vec = if v_len > 1e-4 { v_diff / v_len } else { vec2(0.0, 1.0) };
+        let delta_u = delta.dot(u_vec);
+        let delta_v = delta.dot(v_vec);
+        let min_s = min_size.max(5.0);
+
+        match handle {
+            ImageHandle::TopRight => {
+                let anchor = self.s00;
+                let s_u = (self.width + delta_u) / self.width.max(1e-4);
+                let s_v = (self.height + delta_v) / self.height.max(1e-4);
+                let s = if (s_u - 1.0).abs() >= (s_v - 1.0).abs() { s_u } else { s_v };
+                let s = s.max(min_s / self.width.max(1e-4)).max(min_s / self.height.max(1e-4));
+                let nw = self.width * s;
+                let nh = self.height * s;
+                let new_center = anchor + u_vec * (nw * 0.5) + v_vec * (nh * 0.5);
+                Self::from_center_size_angle(new_center, nw, nh, self.theta)
+            }
+            ImageHandle::TopLeft => {
+                let anchor = self.s10;
+                let s_u = (self.width - delta_u) / self.width.max(1e-4);
+                let s_v = (self.height + delta_v) / self.height.max(1e-4);
+                let s = if (s_u - 1.0).abs() >= (s_v - 1.0).abs() { s_u } else { s_v };
+                let s = s.max(min_s / self.width.max(1e-4)).max(min_s / self.height.max(1e-4));
+                let nw = self.width * s;
+                let nh = self.height * s;
+                let new_center = anchor - u_vec * (nw * 0.5) + v_vec * (nh * 0.5);
+                Self::from_center_size_angle(new_center, nw, nh, self.theta)
+            }
+            ImageHandle::BottomLeft => {
+                let anchor = self.s11;
+                let s_u = (self.width - delta_u) / self.width.max(1e-4);
+                let s_v = (self.height - delta_v) / self.height.max(1e-4);
+                let s = if (s_u - 1.0).abs() >= (s_v - 1.0).abs() { s_u } else { s_v };
+                let s = s.max(min_s / self.width.max(1e-4)).max(min_s / self.height.max(1e-4));
+                let nw = self.width * s;
+                let nh = self.height * s;
+                let new_center = anchor - u_vec * (nw * 0.5) - v_vec * (nh * 0.5);
+                Self::from_center_size_angle(new_center, nw, nh, self.theta)
+            }
+            ImageHandle::BottomRight => {
+                let anchor = self.s01;
+                let s_u = (self.width + delta_u) / self.width.max(1e-4);
+                let s_v = (self.height - delta_v) / self.height.max(1e-4);
+                let s = if (s_u - 1.0).abs() >= (s_v - 1.0).abs() { s_u } else { s_v };
+                let s = s.max(min_s / self.width.max(1e-4)).max(min_s / self.height.max(1e-4));
+                let nw = self.width * s;
+                let nh = self.height * s;
+                let new_center = anchor + u_vec * (nw * 0.5) - v_vec * (nh * 0.5);
+                Self::from_center_size_angle(new_center, nw, nh, self.theta)
+            }
+            ImageHandle::RightCenter => {
+                let anchor = self.s_lc;
+                let nw = (self.width + delta_u).max(min_s);
+                let new_center = anchor + u_vec * (nw * 0.5);
+                Self::from_center_size_angle(new_center, nw, self.height, self.theta)
+            }
+            ImageHandle::LeftCenter => {
+                let anchor = self.s_rc;
+                let nw = (self.width - delta_u).max(min_s);
+                let new_center = anchor - u_vec * (nw * 0.5);
+                Self::from_center_size_angle(new_center, nw, self.height, self.theta)
+            }
+            ImageHandle::TopCenter => {
+                let anchor = self.s_bc;
+                let nh = (self.height + delta_v).max(min_s);
+                let new_center = anchor + v_vec * (nh * 0.5);
+                Self::from_center_size_angle(new_center, self.width, nh, self.theta)
+            }
+            ImageHandle::BottomCenter => {
+                let anchor = self.s_tc;
+                let nh = (self.height - delta_v).max(min_s);
+                let new_center = anchor - v_vec * (nh * 0.5);
+                Self::from_center_size_angle(new_center, self.width, nh, self.theta)
+            }
+        }
+    }
+}
+
+/// Projects mouse delta onto local unit axes `u_axis` and `v_axis` using the dot product.
+pub fn project_delta(delta: Vec2, u_axis: (f64, f64), v_axis: (f64, f64)) -> (f64, f64) {
+    let dx = delta.x as f64;
+    let dy = delta.y as f64;
+    (dx * u_axis.0 + dy * u_axis.1, dx * v_axis.0 + dy * v_axis.1)
+}
+
 /// The page display as it was before full screen, put back on leaving it
 /// ([`DocView::enter_presentation`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -569,6 +885,137 @@ pub enum ViewAction {
     CameraNext(&'static str),
 }
 
+/// Default page right-click menu actions.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum PageMenuAction {
+    RotateCCW(usize),
+    RotateCW(usize),
+    Print,
+    SelectTool,
+    HandTool,
+    MarqueeZoom,
+    Copy,
+    Paste(usize, [f64; 2]),
+    AddComment(usize, [f64; 2]),
+    AddBookmark(usize),
+    TakeSnapshot,
+    EditPdf,
+    AddText,
+    AddImage,
+    DeletePage(usize),
+    ExportPdf,
+    Find,
+    DocProperties,
+    FlattenComments,
+}
+
+pub(crate) struct PageMenuPerms {
+    pub can_modify: bool,
+    pub can_assemble: bool,
+    pub can_annotate: bool,
+    pub can_print: bool,
+    pub can_copy: bool,
+    pub can_paste: bool,
+    pub has_annotations: bool,
+}
+
+pub(crate) fn default_page_context_menu(ui: &mut egui::Ui, page: usize, at: [f64; 2], perms: PageMenuPerms, action: &mut Option<PageMenuAction>) {
+    // Top horizontal icon bar: Rotate CCW, Print, Select tool, Hand tool, Marquee Zoom
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        if crate::icons::button(ui, "rotate-ccw", 24.0, false, tl!("Rotate view counterclockwise")).clicked() {
+            *action = Some(PageMenuAction::RotateCCW(page));
+            ui.close();
+        }
+        ui.add_enabled_ui(perms.can_print, |ui| {
+            if crate::icons::button(ui, "printer", 24.0, false, tl!("Print")).clicked() {
+                *action = Some(PageMenuAction::Print);
+                ui.close();
+            }
+        });
+        if crate::icons::button(ui, "mouse-pointer-2", 24.0, false, tl!("Select Tool")).clicked() {
+            *action = Some(PageMenuAction::SelectTool);
+            ui.close();
+        }
+        if crate::icons::button(ui, "hand", 24.0, false, tl!("Hand Tool")).clicked() {
+            *action = Some(PageMenuAction::HandTool);
+            ui.close();
+        }
+        if crate::icons::button(ui, "zoom-in", 24.0, false, tl!("Marquee Zoom")).clicked() {
+            *action = Some(PageMenuAction::MarqueeZoom);
+            ui.close();
+        }
+    });
+
+    ui.separator();
+
+    if ui.add_enabled(perms.can_copy, egui::Button::new(tl!("Copy")).shortcut_text("Ctrl+C")).clicked() {
+        *action = Some(PageMenuAction::Copy);
+        ui.close();
+    }
+    if ui.add_enabled(perms.can_paste, egui::Button::new(tl!("Paste")).shortcut_text("Ctrl+V")).clicked() {
+        *action = Some(PageMenuAction::Paste(page, at));
+        ui.close();
+    }
+
+    ui.separator();
+
+    if ui.add_enabled(perms.can_annotate, egui::Button::new(tl!("Add comment"))).clicked() {
+        *action = Some(PageMenuAction::AddComment(page, at));
+        ui.close();
+    }
+    if perms.has_annotations && ui.add_enabled(perms.can_modify, egui::Button::new(tl!("Flatten comments"))).clicked() {
+        *action = Some(PageMenuAction::FlattenComments);
+        ui.close();
+    }
+    if ui.add_enabled(perms.can_assemble, egui::Button::new(tl!("Add bookmark"))).clicked() {
+        *action = Some(PageMenuAction::AddBookmark(page));
+        ui.close();
+    }
+    if ui.add_enabled(perms.can_copy, egui::Button::new(tl!("Take a snapshot"))).clicked() {
+        *action = Some(PageMenuAction::TakeSnapshot);
+        ui.close();
+    }
+
+    ui.separator();
+
+    if ui.add_enabled(perms.can_modify, egui::Button::new(egui::RichText::new(tl!("Edit this PDF")).strong())).clicked() {
+        *action = Some(PageMenuAction::EditPdf);
+        ui.close();
+    }
+    if ui.add_enabled(perms.can_modify, egui::Button::new(tl!("Add text"))).clicked() {
+        *action = Some(PageMenuAction::AddText);
+        ui.close();
+    }
+    if ui.add_enabled(perms.can_modify, egui::Button::new(tl!("Add image"))).clicked() {
+        *action = Some(PageMenuAction::AddImage);
+        ui.close();
+    }
+    if ui.add_enabled(perms.can_assemble, egui::Button::new(tl!("Delete page"))).clicked() {
+        *action = Some(PageMenuAction::DeletePage(page));
+        ui.close();
+    }
+    if ui.add_enabled(perms.can_copy, egui::Button::new(tl!("Export this PDF"))).clicked() {
+        *action = Some(PageMenuAction::ExportPdf);
+        ui.close();
+    }
+
+    ui.separator();
+
+    if ui.button(tl!("Find text or tools")).clicked() {
+        *action = Some(PageMenuAction::Find);
+        ui.close();
+    }
+    if ui.button(tl!("Rotate view clockwise")).clicked() {
+        *action = Some(PageMenuAction::RotateCW(page));
+        ui.close();
+    }
+    if ui.button(tl!("Document properties…")).clicked() {
+        *action = Some(PageMenuAction::DocProperties);
+        ui.close();
+    }
+}
+
 impl DocView {
     /// Whether a middle-button scrolling gesture is active (tests and automation).
     pub fn auto_scrolling(&self) -> bool {
@@ -885,6 +1332,7 @@ struct PageEnv<'a> {
     fill_text_size: f64,
     fill_text_color: [f64; 3],
     today: (i64, u32, u32),
+    can_paste_image: bool,
 }
 
 /// What the page-scroll closure produces for the rest of the frame.
@@ -902,6 +1350,7 @@ struct PageOut {
     open_initials: bool,
     open_signature: bool,
     open_table: Option<(usize, [f64; 4])>,
+    page_action: Option<PageMenuAction>,
     primary_down: bool,
     refused: Option<String>,
     stamp_placed: bool,
@@ -945,6 +1394,70 @@ struct PageSlot {
 
 /// Paints the page's paper, shadow and raster (or why it can't be shown), and asks for the renders
 /// it wants.
+#[allow(clippy::too_many_arguments)]
+fn paint_image_suppressed(
+    xf: &PageXform,
+    painter: &egui::Painter,
+    tex: egui::TextureId,
+    u0: f32,
+    v0: f32,
+    u1: f32,
+    v1: f32,
+    suppress: Option<[f32; 4]>,
+    is_full_page_tex: bool,
+) {
+    let Some([su0, sv0, su1, sv1]) = suppress else {
+        if is_full_page_tex {
+            xf.paint_page_texture_rect(painter, tex, u0, v0, u1, v1);
+        } else {
+            xf.paint_image(painter, tex, u0, v0, u1, v1);
+        }
+        return;
+    };
+    let iu0 = u0.max(su0);
+    let iu1 = u1.min(su1);
+    let iv0 = v0.max(sv0);
+    let iv1 = v1.min(sv1);
+    if iu0 >= iu1 || iv0 >= iv1 {
+        if is_full_page_tex {
+            xf.paint_page_texture_rect(painter, tex, u0, v0, u1, v1);
+        } else {
+            xf.paint_image(painter, tex, u0, v0, u1, v1);
+        }
+        return;
+    }
+    let map_uv = |pu: f32, pv: f32| -> (f32, f32) {
+        if is_full_page_tex {
+            (pu, pv)
+        } else {
+            let du = (u1 - u0).max(1e-6);
+            let dv = (v1 - v0).max(1e-6);
+            ((pu - u0) / du, (pv - v0) / dv)
+        }
+    };
+    let draw_strip = |pu0: f32, pv0: f32, pu1: f32, pv1: f32| {
+        if pu1 <= pu0 || pv1 <= pv0 {
+            return;
+        }
+        let (tu0, tv0) = map_uv(pu0, pv0);
+        let (tu1, tv1) = map_uv(pu1, pv1);
+        xf.paint_image_region(painter, tex, pu0, pv0, pu1, pv1, tu0, tv0, tu1, tv1);
+    };
+
+    if iv0 > v0 {
+        draw_strip(u0, v0, u1, iv0);
+    }
+    if v1 > iv1 {
+        draw_strip(u0, iv1, u1, v1);
+    }
+    if iu0 > u0 {
+        draw_strip(u0, iv0, iu0, iv1);
+    }
+    if u1 > iu1 {
+        draw_strip(iu1, iv0, u1, iv1);
+    }
+}
+
 fn paint_page_surface(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, slot: &PageSlot) {
     let PageEnv { paper, ppp, scale, t, tag, .. } = frame.env;
     let PageSlot { i, r, xf } = *slot;
@@ -987,13 +1500,33 @@ fn paint_page_surface(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFra
             Some(p) => frame.wanted.push((i, tag_scale(p.tag), p.tag, None)),
             None => frame.wanted.push((i, want_scale, want_tag, None)),
         }
+        let doc = frame.env.doc;
+        let active_drag_suppress = if let Some(sel) = view.image_selection.as_ref()
+            && sel.page == i
+            && sel.drag.is_some()
+        {
+            let images = doc.page_images(i);
+            if let Some(img) = images.get(sel.index) {
+                let obb = ImageObb::from_image(img, &xf, info, i);
+                let uvs = obb.corners().map(|c| xf.screen_to_norm(c));
+                let u0 = uvs.iter().map(|(u, _)| *u).fold(1.0f32, f32::min).clamp(0.0, 1.0);
+                let u1 = uvs.iter().map(|(u, _)| *u).fold(0.0f32, f32::max).clamp(0.0, 1.0);
+                let v0 = uvs.iter().map(|(_, v)| *v).fold(1.0f32, f32::min).clamp(0.0, 1.0);
+                let v1 = uvs.iter().map(|(_, v)| *v).fold(0.0f32, f32::max).clamp(0.0, 1.0);
+                if u1 > u0 && v1 > v0 { Some([u0, v0, u1, v1]) } else { None }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         match view.pages.get(&i) {
             Some(p) => {
                 if !tiled && p.tag == want_tag {
-                    xf.texel_aligned(p.tex.size(), ppp).paint_image(painter, p.tex.id(), 0.0, 0.0, 1.0, 1.0);
+                    paint_image_suppressed(&xf.texel_aligned(p.tex.size(), ppp), painter, p.tex.id(), 0.0, 0.0, 1.0, 1.0, active_drag_suppress, true);
                 } else {
                     // A backdrop, or a raster at an older scale until the new one arrives.
-                    xf.paint_image(painter, p.tex.id(), 0.0, 0.0, 1.0, 1.0);
+                    paint_image_suppressed(&xf, painter, p.tex.id(), 0.0, 0.0, 1.0, 1.0, active_drag_suppress, true);
                 }
             }
             None => {
@@ -1004,14 +1537,21 @@ fn paint_page_surface(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFra
             }
         }
         if tiled && r.intersects(visible) {
-            paint_page_tiles(ui, view, frame, slot, (pw_pt, ph_pt, max_side));
+            paint_page_tiles(ui, view, frame, slot, (pw_pt, ph_pt, max_side), active_drag_suppress);
         }
     }
 }
 
 /// Paints the tiles of a page too big to draw whole: the tiles of earlier zooms first, stretched,
 /// then the visible tiles of this one, nearest the viewport centre first, asking for those missing.
-fn paint_page_tiles(ui: &egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, slot: &PageSlot, (pw_pt, ph_pt, max_side): (f32, f32, f32)) {
+fn paint_page_tiles(
+    ui: &egui::Ui,
+    view: &mut DocView,
+    frame: &mut PageFrame<'_>,
+    slot: &PageSlot,
+    (pw_pt, ph_pt, max_side): (f32, f32, f32),
+    active_drag_suppress: Option<[f32; 4]>,
+) {
     let PageEnv { ppp, scale, tag, .. } = frame.env;
     let PageSlot { i, r, xf } = *slot;
     let visible = frame.visible;
@@ -1040,7 +1580,7 @@ fn paint_page_tiles(ui: &egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>
         let (ow, oh) = (device_pixels(pw_pt, s) as f32, device_pixels(ph_pt, s) as f32);
         let [w, h] = tex.size();
         let (x, y) = (ox as f32, oy as f32);
-        xf.paint_image(painter, tex.id(), x / ow, y / oh, (x + w as f32) / ow, (y + h as f32) / oh);
+        paint_image_suppressed(&xf, painter, tex.id(), x / ow, y / oh, (x + w as f32) / ow, (y + h as f32) / oh, active_drag_suppress, false);
     }
     // Visible tiles, nearest the viewport centre first: each tile costs a full
     // page interpret, so the workers sharpen what is looked at before the edges.
@@ -1065,13 +1605,16 @@ fn paint_page_tiles(ui: &egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>
         frame.wanted.push((i, scale, tag, Some(Tile { x, y, w, h })));
         if let Some(tex) = view.tiles.get(&(i, tag, x, y)) {
             let (fw, fh) = (dw as f32, dh as f32);
-            xf.texel_aligned([dw as usize, dh as usize], ppp).paint_image(
+            paint_image_suppressed(
+                &xf.texel_aligned([dw as usize, dh as usize], ppp),
                 painter,
                 tex.id(),
                 x as f32 / fw,
                 y as f32 / fh,
                 (x + w) as f32 / fw,
                 (y + h) as f32 / fh,
+                active_drag_suppress,
+                false,
             );
         }
     }
@@ -1934,6 +2477,7 @@ fn cancel_on_escape(ctx: &egui::Context, view: &mut DocView, ptr: &PagePointer) 
     }
 }
 
+#[allow(clippy::cognitive_complexity)]
 fn draw_pages(
     ui: &mut egui::Ui,
     viewport: Rect,
@@ -1967,6 +2511,8 @@ fn draw_pages(
         prefs,
         preparing,
         selection_wheel,
+        ppp,
+        rects,
         single_paging,
         tool,
         unobstructed,
@@ -2033,6 +2579,47 @@ fn draw_pages(
     if resp.secondary_clicked() {
         // Set again below when the right-click lands on a link.
         view.links.context = None;
+        let mut over_image = false;
+        if tool == QuickTool::EditText {
+            let pointer_pos = ptr.pos;
+            if let Some(p) = pointer_pos {
+                for &page_idx in visible_pages {
+                    let r = snap_to_pixels(rects[page_idx].translate(origin.to_vec2()), ppp);
+                    if !r.intersects(visible) {
+                        continue;
+                    }
+                    let xf =
+                        PageXform { rect: r, rot: view.rotation, pw: info.pages[page_idx].width.max(1.0), ph: info.pages[page_idx].height.max(1.0) };
+                    let images = doc.page_images(page_idx);
+                    for (idx, img) in images.iter().enumerate().rev() {
+                        let obb = ImageObb::from_image(img, &xf, info, page_idx);
+                        let b = image_screen_rect(img, &xf, info, page_idx);
+                        if (b.is_positive() && b.contains(p)) || crate::edit_text_ui::quad_contains(obb.corners(), p) {
+                            over_image = true;
+                            if view.image_selection.as_ref().is_none_or(|s| s.page != page_idx || s.index != idx) {
+                                view.image_selection = Some(crate::edit_text_ui::ImageSelection {
+                                    page: page_idx,
+                                    index: idx,
+                                    drag: None,
+                                    crop: None,
+                                    crop_mode: false,
+                                    crop_rect: None,
+                                    turning: false,
+                                    settled: None,
+                                });
+                            }
+                            break;
+                        }
+                    }
+                    if over_image {
+                        break;
+                    }
+                }
+            }
+        }
+        if !over_image && tool == QuickTool::EditText {
+            view.image_selection = None;
+        }
     }
     let mut frame = PageFrame {
         env: *env,
@@ -2062,20 +2649,22 @@ fn draw_pages(
     let PageOut {
         mut canvas_action,
         clicked_link,
-        mut copy_selected,
+        copy_selected,
         mut field_menu,
         field_placed,
         field_props,
         hover_text: _,
-        image_action,
+        mut image_action,
         open_boxes,
         open_initials,
         open_signature,
         open_table,
+        page_action: _,
         primary_down: _,
         refused,
         stamp_placed,
     } = page_out;
+    let mut page_action: Option<PageMenuAction> = None;
     let painter = ui.painter();
     if calc_order {
         view.calc_order.set_hover_page(calc_hover);
@@ -2195,20 +2784,32 @@ fn draw_pages(
             }
             return;
         }
-        if view.comments.selected.is_none() {
-            let selected = view.selected_text().is_some_and(|t| !t.is_empty());
-            let key = crate::commands::shortcut_label(ui.ctx(), crate::commands::COPY);
-            if ui.add_enabled(can_copy && selected, egui::Button::new(tl!("Copy")).shortcut_text(key)).clicked() {
-                copy_selected = true;
-                ui.close();
-            }
-            ui.separator();
+        let can_paste_image = env.can_paste_image;
+        let is_image_menu = tool == QuickTool::EditText
+            && (ui.ctx().data_mut(|d| d.get_persisted::<bool>(crate::edit_text_ui::image_menu_id())).unwrap_or(false)
+                || view.image_selection.as_ref().is_some_and(|sel| {
+                    let pointer_pos = ptr.pos;
+                    let Some(p) = pointer_pos else { return false };
+                    let Some((_, xf)) = view.screen_xforms.iter().find(|(page_idx, _)| *page_idx == sel.page) else { return false };
+                    let images = doc.page_images(sel.page);
+                    let Some(img) = images.get(sel.index) else { return false };
+                    let obb = ImageObb::from_image(img, xf, info, sel.page);
+                    let b = image_screen_rect(img, xf, info, sel.page);
+                    (b.is_positive() && b.contains(p)) || crate::edit_text_ui::quad_contains(obb.corners(), p)
+                }));
+        if is_image_menu && let Some(sel) = view.image_selection.clone() {
+            let images = doc.page_images(sel.page);
+            let at = view.comments.context_at.map(|(_, at)| at);
+            crate::edit_text_ui::image_context_menu(ui, view, &images, sel.page, sel.index, can_paste_image, &mut image_action, at);
+            return;
+        }
+        if view.comments.selected.is_some() {
+            canvas_action = comments::context_menu(ui, view, info, &|page, index| doc.annotation_deletable(page, index), prefs, allowed, can_modify);
+            return;
         }
         // Over a picture (and no comment): Copy Image, as in Acrobat's page menu.
         let mut copy_image = None;
-        if view.comments.selected.is_none()
-            && let Some((page, at)) = view.comments.context_at
-        {
+        if let Some((page, at)) = view.comments.context_at {
             // The page's content is parsed once per right-click, not on every frame the menu is open.
             let key = egui::Id::unique("copy-image-under-menu");
             let cached = ui.data(|d| d.get_temp::<(usize, [f64; 2], Option<usize>)>(key)).filter(|c| c.0 == page && c.1 == at);
@@ -2232,9 +2833,27 @@ fn draw_pages(
                 ui.separator();
             }
         }
-        canvas_action =
-            comments::context_menu(ui, view, info, &|page, index| doc.annotation_deletable(page, index), prefs, allowed, can_modify).or(copy_image);
+        let has_copy_image = copy_image.is_some();
+        if copy_image.is_some() {
+            canvas_action = copy_image;
+        }
+        let (page, at) = view.comments.context_at.unwrap_or((view.current, [0.0, 0.0]));
+        let can_copy_items = can_copy && (view.image_selection.is_some() || view.selected_text().is_some() || has_copy_image);
+        let can_paste = can_paste_image && can_modify;
+        let perms = PageMenuPerms {
+            can_modify,
+            can_assemble: doc.allows_assembly(),
+            can_annotate: allowed,
+            can_print: doc.allows_printing(),
+            can_copy: can_copy_items,
+            can_paste,
+            has_annotations: !info.annotations.is_empty(),
+        };
+        default_page_context_menu(ui, page, at, perms, &mut page_action);
     });
+    if !resp.context_menu_opened() {
+        ui.ctx().data_mut(|d| d.insert_persisted(crate::edit_text_ui::image_menu_id(), false));
+    }
     *out = PageOut {
         canvas_action,
         clicked_link,
@@ -2248,6 +2867,7 @@ fn draw_pages(
         open_initials,
         open_signature,
         open_table,
+        page_action,
         primary_down: ptr.primary_down,
         refused,
         stamp_placed,
@@ -2358,6 +2978,7 @@ fn read_wheel(ui: &mut egui::Ui, view: &mut DocView, avail: Rect, single_paging:
         // The turn leaves egui's eased copy of the notch to decay for a few frames; it must not
         // scroll the page just shown away from its top (or bottom).
         view.precise_scroll_until = now + 0.25;
+        view.fling.stop();
     }
     // Paging owns the vertical axis in single-page view; leave it to the pager.
     // The rest of a gesture that turned the page is swallowed too, or it would pan the new page
@@ -2991,6 +3612,14 @@ fn refine_goto_point(mut scroll: egui::ScrollArea, view: &mut DocView, geometry:
 /// scroll area with this frame's zoom, scrolling, tool input, overlays and render requests.
 pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
+    let can_paste_key = egui::Id::unique("can-paste-image");
+    let can_paste_image = if ui.input(|i| i.pointer.secondary_pressed()) {
+        let can = app.can_paste_image();
+        ui.data_mut(|d| d.insert_temp(can_paste_key, can));
+        can
+    } else {
+        ui.data(|d| d.get_temp(can_paste_key)).unwrap_or(false)
+    };
     // Keyboard scrolling applies to this frame's page view only, never later.
     let key_scroll = std::mem::take(&mut app.views[index].key_scroll);
     if key_scroll != 0.0 {
@@ -3227,6 +3856,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         fill_text_size: app.fill_text_size,
         fill_text_color: app.fill_text_color,
         today,
+        can_paste_image,
     };
     let mut page_out = PageOut::default();
     let out = page_scroll(ui, scroll, egui::Id::unique(("page-view-scope", view.id)), |ui, viewport| {
@@ -3245,6 +3875,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         open_initials,
         open_signature,
         open_table,
+        page_action,
         primary_down,
         mut refused,
         stamp_placed,
@@ -3292,6 +3923,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     } else {
         view.links.selected = None;
     }
+    if tool != QuickTool::EditText {
+        view.image_selection = None;
+    }
     if stamp_placed {
         tool = QuickTool::Select;
     }
@@ -3331,6 +3965,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         field_props,
         field_menu,
         image_action,
+        page_action,
         refused,
         open_signature,
         open_initials,
@@ -3352,6 +3987,7 @@ struct FrameRequests {
     field_props: Option<(String, usize)>,
     field_menu: Option<FieldMenu>,
     image_action: Option<crate::edit_text_ui::ImageAction>,
+    page_action: Option<PageMenuAction>,
     refused: Option<String>,
     open_signature: bool,
     open_initials: bool,
@@ -3366,12 +4002,14 @@ struct FrameRequests {
 }
 
 /// Opens the dialogs and runs the app commands the frame asked for.
+#[allow(clippy::cognitive_complexity)]
 fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, requests: FrameRequests) {
     let FrameRequests {
         open_props,
         field_props,
         field_menu,
         image_action,
+        page_action,
         refused,
         open_signature,
         open_initials,
@@ -3438,9 +4076,122 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
             app.views[index].image_selection = None;
             app.cut_page_image(page, image);
         }
+        Some(crate::edit_text_ui::ImageAction::Paste(page, at)) => {
+            if let Some(pt) = at {
+                app.paste_image_at(page, pt);
+            } else {
+                app.paste_image(page, None);
+            }
+        }
+        Some(crate::edit_text_ui::ImageAction::DrawFreehand) => {
+            app.quick_tool = crate::QuickTool::Comment(crate::comments::CommentTool::Ink);
+        }
         Some(crate::edit_text_ui::ImageAction::Redact(page, index)) => app.redact_page_image(page, index),
         Some(crate::edit_text_ui::ImageAction::Link(page, index)) => app.link_page_image(page, index),
         Some(crate::edit_text_ui::ImageAction::Recognize(page)) => app.recognize_text_on_page(page),
+        Some(crate::edit_text_ui::ImageAction::AddComment(page, i)) => {
+            if let Some(d) = app.session.get(app.views[index].id) {
+                let images = d.page_images(page);
+                if let Some(img) = images.get(i) {
+                    let r = img.visible_rect.unwrap_or(img.rect);
+                    let center = [(r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0];
+                    app.views[index].comments.context_at = Some((page, center));
+                    app.views[index].comments.composer = Some(crate::comments::Composer {
+                        page,
+                        at: center,
+                        kind: crate::comments::ComposerKind::Note,
+                        text: String::new(),
+                        focus: true,
+                    });
+                }
+            }
+        }
+        Some(crate::edit_text_ui::ImageAction::Crop) => {
+            let doc_id = app.views[index].id;
+            if let Some(s) = app.views[index].image_selection.as_mut()
+                && let Some(d) = app.session.get(doc_id)
+            {
+                let images = d.page_images(s.page);
+                if let Some(im) = images.get(s.index) {
+                    s.crop = Some(crate::edit_text_ui::CropMode::new(im.visible_rect.unwrap_or(im.rect)));
+                    s.crop_mode = true;
+                    s.crop_rect = None;
+                }
+            }
+        }
+        None => {}
+    }
+    match page_action {
+        Some(PageMenuAction::Copy) => {
+            if let Some(sel) = app.views[index].image_selection.clone() {
+                app.copy_page_image(sel.page, sel.index);
+            } else if app.views[index].selected_text().is_some() {
+                app.execute("edit.copy");
+            } else if let Some((page, at)) = app.views[index].comments.context_at
+                && let Some(doc) = app.session.get(app.views[index].id)
+                && let Some(image) = doc.page_image_at(page, at)
+            {
+                app.copy_page_image(page, image);
+            }
+        }
+        Some(PageMenuAction::Paste(page, at)) => {
+            app.paste_image_at(page, at);
+        }
+        Some(PageMenuAction::RotateCCW(page)) => {
+            let _ = page;
+            app.views[index].rotate_view(false);
+        }
+        Some(PageMenuAction::RotateCW(page)) => {
+            let _ = page;
+            app.views[index].rotate_view(true);
+        }
+        Some(PageMenuAction::Print) => {
+            app.open_print();
+        }
+        Some(PageMenuAction::SelectTool) => {
+            app.quick_tool = QuickTool::Select;
+        }
+        Some(PageMenuAction::HandTool) => {
+            app.quick_tool = QuickTool::Hand;
+        }
+        Some(PageMenuAction::MarqueeZoom) => {
+            app.quick_tool = QuickTool::MarqueeZoom;
+        }
+        Some(PageMenuAction::AddComment(page, at)) => {
+            app.views[index].comments.composer =
+                Some(crate::comments::Composer { page, at, kind: crate::comments::ComposerKind::Note, text: String::new(), focus: true });
+        }
+        Some(PageMenuAction::FlattenComments) => {
+            app.views[index].comments.selected = None;
+            app.views[index].pending_edit = Some(pdfcraft_engine::Edit::Flatten { comments: true, fields: false });
+        }
+        Some(PageMenuAction::AddBookmark(_page)) => {
+            app.bookmark_action(crate::panels::BmAction::New);
+        }
+        Some(PageMenuAction::TakeSnapshot) => {
+            app.quick_tool = QuickTool::Snapshot;
+        }
+        Some(PageMenuAction::EditPdf) => {
+            app.quick_tool = QuickTool::EditText;
+        }
+        Some(PageMenuAction::AddText) => {
+            app.quick_tool = QuickTool::AddText;
+        }
+        Some(PageMenuAction::AddImage) => {
+            app.add_image_dialog();
+        }
+        Some(PageMenuAction::DeletePage(page)) => {
+            app.views[index].pending_edit = Some(pdfcraft_engine::Edit::DeletePages { pages: vec![page] });
+        }
+        Some(PageMenuAction::ExportPdf) => {
+            app.select_tool("export");
+        }
+        Some(PageMenuAction::Find) => {
+            app.views[index].open_find();
+        }
+        Some(PageMenuAction::DocProperties) => {
+            app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Description));
+        }
         None => {}
     }
     if let Some(why) = refused {
@@ -3492,5 +4243,6 @@ enum FieldMenu {
     Duplicate(String),
 }
 
+pub use crate::image_engine::{HandleId, MIN_RECT_SIZE, apply_crop, apply_resize, apply_resize_proportional, reset_crop};
 #[cfg(test)]
 mod tests;

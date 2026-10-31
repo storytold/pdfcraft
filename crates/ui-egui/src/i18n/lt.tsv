@@ -2765,6 +2765,12 @@ key	Space	Tarpas
 	Make properties default	Nustatyti ypatybes kaip numatytąsias
 	Pages selected	Pasirinkti puslapiai
 	Page properties	Puslapio ypatybės
+	Bring forward	Perkelti į priekį
+	Bring to front	Iškelti į priekį
+	Crop image	Apkarpyti paveikslėlį
+	Remove crop	Pašalinti apkarpymą
+	Send backward	Perkelti atgal
+	Send to back	Nukelti į galą
 	Create & Edit	Kūrimas ir redagavimas
 	Review & Compare	Peržiūra ir palyginimas
 	Forms & Signatures	Formos ir parašai
@@ -2773,7 +2779,6 @@ key	Space	Tarpas
 	No tools match your search.	Paieškos neatitinka joks įrankis.
 	Expand all tools	Išskleisti visus įrankius
 	Collapse all tools	Suskleisti visus įrankius
-
 # AI-assisted additions for concurrently merged UI features (2026-10-15).
 # These additions have not had separate native-speaker review.
 	Mouse wheel scroll speed	Pelės ratuko slinkimo greitis
@@ -2781,6 +2786,25 @@ key	Space	Tarpas
 	The password must have at least 6 characters.	Slaptažodį turi sudaryti bent 6 simboliai.
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Šis failas diske pasikeitė. Įkelkite jį iš naujo, kad pamatytumėte naują versiją; neįrašyti pakeitimai bus prarasti.
 theme	Appearance	Išvaizda
+	Clear search	Išvalyti paiešką
+	Pin	Prisegti
+	Pin a tool…	Prisegti įrankį…
+	Pin to Home	Prisegti pradžioje
+	Pin tools to Home	Prisegti įrankius pradžioje
+	Pin your favorite tools here for quick access.	Prisekite mėgstamus įrankius čia, kad greitai pasiektumėte.
+	Pinned	Prisegta
+	Pinned Tools	Prisegti įrankiai
+	Search tools…	Ieškoti įrankių…
+	Select tools to display on your Home page for quick access.	Pasirinkite įrankius, kuriuos norite rodyti pradžios puslapyje.
+	Unpin from Home	Atsegti nuo pradžios
+	Unpin tool	Atsegti įrankį
+	Transform image	Transformuoti paveikslėlį
+	Select Tool	Pasirinkimo įrankis
+	Hand Tool	Rankos įrankis
+	Marquee Zoom	Didinti pažymėtą sritį
+	Edit this PDF	Redaguoti šį PDF
+	Export this PDF	Eksportuoti šį PDF
+	Find text or tools	Rasti tekstą arba įrankius
 	Attach a file…	Pridėti failą…
 	Delete attachment	Ištrinti priedą
 	Attaching files is not available on the web yet	Failų pridėjimas žiniatinklyje dar negalimas
@@ -2823,6 +2847,8 @@ theme	Appearance	Išvaizda
 	a table has 1 to {max} columns	lentelėje gali būti nuo 1 iki {max} stulpelių
 	the first row number can be at most {max}	pirmosios eilutės numeris gali būti ne didesnis nei {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	sritis, tarpai ir stulpelių pločiai turi būti skaičiai, tarpai – 0 arba daugiau, o kiekvienas plotis – daugiau nei 0
+	Arrange image	Tvarkyti vaizdą
+	Crop	Apkarpyti
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Šiandien

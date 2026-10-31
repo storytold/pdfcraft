@@ -2787,6 +2787,31 @@ theme	Appearance	Tampilan
 	field names can't contain a period: {name}	nama kolom tidak boleh berisi titik: {name}
 	two cells would both be named {name}	dua sel akan sama-sama bernama {name}
 	a field named {name} already exists	kolom bernama {name} sudah ada
+	Clear search	Bersihkan pencarian
+	Edit this PDF	Edit PDF ini
+	Export this PDF	Ekspor PDF ini
+	Find text or tools	Temukan teks atau alat
+	Hand Tool	Alat Tangan
+	Marquee Zoom	Zoom Bidang
+	Pin	Sematkan
+	Pin a tool…	Sematkan alat…
+	Pin to Home	Sematkan ke Beranda
+	Pin tools to Home	Sematkan alat ke Beranda
+	Pin your favorite tools here for quick access.	Sematkan alat favorit Anda di sini untuk akses cepat.
+	Pinned	Disematkan
+	Pinned Tools	Alat yang Disematkan
+	Search tools…	Cari alat…
+	Select Tool	Alat Pemilih
+	Select tools to display on your Home page for quick access.	Pilih alat untuk ditampilkan di halaman Beranda Anda untuk akses cepat.
+	Unpin from Home	Lepas sematan dari Beranda
+	Unpin tool	Lepas sematan alat
+	Arrange image	Atur gambar
+	Bring forward	Maju Selangkah
+	Bring to front	Bawa ke Depan
+	Crop	Pangkas
+	Remove crop	Hapus pangkasan
+	Send backward	Mundur Selangkah
+	Send to back	Kirim ke Belakang
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hari ini

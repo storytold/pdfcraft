@@ -2491,6 +2491,26 @@ animation effects	Off	Wyłączone
 	Make properties default	Ustaw właściwości jako domyślne
 	Pages selected	Zaznaczone strony
 	Page properties	Właściwości strony
+	Clear search	Wyczyść wyszukiwanie
+	Pin	Przypnij
+	Pin a tool…	Przypnij narzędzie…
+	Pin to Home	Przypnij do strony głównej
+	Pin tools to Home	Przypnij narzędzia do strony głównej
+	Pin your favorite tools here for quick access.	Przypnij tutaj ulubione narzędzia, aby mieć do nich szybki dostęp.
+	Pinned	Przypięte
+	Pinned Tools	Przypięte narzędzia
+	Search tools…	Szukaj narzędzi…
+	Select tools to display on your Home page for quick access.	Wybierz narzędzia do wyświetlenia na stronie głównej, aby mieć do nich szybki dostęp.
+	Unpin from Home	Odepnij od strony głównej
+	Unpin tool	Odepnij narzędzie
+	Transform image	Przekształć obraz
+	Select Tool	Narzędzie Zaznaczanie
+	Hand Tool	Narzędzie Rączka
+	Marquee Zoom	Powiększ zaznaczony obszar
+	Paste	Wklej
+	Edit this PDF	Edytuj ten plik PDF
+	Export this PDF	Eksportuj ten plik PDF
+	Find text or tools	Znajdź tekst lub narzędzia
 	Create & Edit	Tworzenie i edycja
 	Review & Compare	Recenzja i porównanie
 	Forms & Signatures	Formularze i podpisy
@@ -2658,6 +2678,13 @@ animation effects	Off	Wyłączone
 	field names can't contain a period: {name}	nazwy pól nie mogą zawierać kropki: {name}
 	two cells would both be named {name}	dwie komórki miałyby nazwę {name}
 	a field named {name} already exists	pole o nazwie {name} już istnieje
+	Arrange image	Rozmieść obraz
+	Bring forward	Przesuń do przodu
+	Bring to front	Przesuń na wierzch
+	Crop	Przytnij
+	Remove crop	Usuń przycięcie
+	Send backward	Przesuń do tyłu
+	Send to back	Przesuń pod spód
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Dzisiaj

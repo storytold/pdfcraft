@@ -2711,6 +2711,13 @@ key	Space	Space
 	Collapse all tools	ยุบเครื่องมือทั้งหมด
 	The password must have at least 8 characters.	รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร
 theme	Appearance	ลักษณะที่ปรากฏ
+	Arrange image	จัดเรียงรูปภาพ
+	Bring forward	นำไปข้างหน้า
+	Bring to front	นำไปไว้ข้างหน้าสุด
+	Crop	ครอบตัด
+	Remove crop	เอาการครอบตัดออก
+	Send backward	ส่งไปข้างหลัง
+	Send to back	ส่งไปไว้ข้างหลังสุด
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	วันนี้

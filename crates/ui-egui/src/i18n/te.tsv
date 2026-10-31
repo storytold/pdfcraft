@@ -2424,6 +2424,26 @@ animation effects	Off	ఆఫ్
 	Make properties default	లక్షణాలను డిఫాల్ట్‌గా చేయి
 	Pages selected	ఎంచుకున్న పేజీలు
 	Page properties	పేజీ లక్షణాలు
+	Clear search	శోధనను తీసివేయి
+	Pin	పిన్ చేయి
+	Pin a tool…	ఒక సాధనాన్ని పిన్ చేయి…
+	Pin to Home	హోమ్‌కు పిన్ చేయి
+	Pin tools to Home	సాధనాలను హోమ్‌కు పిన్ చేయి
+	Pin your favorite tools here for quick access.	త్వరిత ప్రాప్యత కోసం మీకు ఇష్టమైన సాధనాలను ఇక్కడ పిన్ చేయండి.
+	Pinned	పిన్ చేయబడింది
+	Pinned Tools	పిన్ చేసిన సాధనాలు
+	Search tools…	సాధనాలను శోధించండి…
+	Select tools to display on your Home page for quick access.	త్వరిత ప్రాప్యత కోసం మీ హోమ్ పేజీలో ప్రదర్శించడానికి సాధనాలను ఎంచుకోండి.
+	Unpin from Home	హోమ్ నుండి అన్‌పిన్ చేయి
+	Unpin tool	సాధనాన్ని అన్‌పిన్ చేయి
+	Transform image	చిత్రాన్ని రూపాంతరం చేయండి
+	Select Tool	ఎంపిక సాధనం
+	Hand Tool	హ్యాండ్ సాధనం
+	Marquee Zoom	ఎంచుకున్న ప్రాంతానికి జూమ్
+	Paste	అతికించు
+	Edit this PDF	ఈ PDFను సవరించు
+	Export this PDF	ఈ PDFను ఎగుమти చేయి
+	Find text or tools	వచనం లేదా సాధనాలను కనుగొనండి
 	Create & Edit	సృష్టించు & సవరించు
 	Review & Compare	సమీక్షించు & పోల్చు
 	Forms & Signatures	ఫారమ్‌లు & సంతకాలు
@@ -2471,6 +2491,13 @@ animation effects	Off	ఆఫ్
 	field names can't contain a period: {name}	ఫీల్డ్ పేర్లలో చుక్క ఉండకూడదు: {name}
 	two cells would both be named {name}	రెండు గడులకూ {name} అనే పేరు వస్తుంది
 	a field named {name} already exists	{name} అనే ఫీల్డ్ ఇప్పటికే ఉంది
+	Arrange image	చిత్రాన్ని అమర్చు
+	Bring forward	ముందుకు తీసుకురా
+	Bring to front	అందరికంటే ముందుకు తీసుకురా
+	Crop	కత్తిరించు
+	Remove crop	కత్తిరింపును తీసివేయి
+	Send backward	వెనుకకు పంపు
+	Send to back	అందరికంటే వెనుకకు పంపు
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	ఈరోజు

@@ -132,7 +132,7 @@ pub(crate) fn print_document_html(sheets: &[(f64, f64)], urls: &[String]) -> Str
 }
 
 /// A browser print being prepared: the print-ready PDF's sheets drawn one [`WebPrintJob::step`]
-/// at a time and handed to a sink (on the web, [`blob_url`]), which answers with the picture's URL.
+/// at a time and handed to a sink (on the web, `blob_url`), which answers with the picture's URL.
 pub(crate) struct WebPrintJob {
     exporter: Exporter,
     /// The print-ready PDF, kept for the download fallback when the browser won't print.
@@ -207,7 +207,7 @@ impl Drop for WebPrintJob {
     }
 }
 
-/// Let go of pictures handed out by [`blob_url`].
+/// Let go of pictures handed out by `blob_url`.
 fn revoke(urls: &[String]) {
     #[cfg(target_arch = "wasm32")]
     for url in urls {

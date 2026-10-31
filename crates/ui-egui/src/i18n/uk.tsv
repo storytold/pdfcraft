@@ -2537,6 +2537,26 @@ animation effects	Off	Вимкнено
 	Make properties default	Зробити властивості типовими
 	Pages selected	Вибрані сторінки
 	Page properties	Властивості сторінки
+	Clear search	Очистити пошук
+	Pin	Закріпити
+	Pin a tool…	Закріпити інструмент…
+	Pin to Home	Закріпити на Головній
+	Pin tools to Home	Закріпити інструменти на Головній
+	Pin your favorite tools here for quick access.	Закріпіть улюблені інструменти тут для швидкого доступу.
+	Pinned	Закріплено
+	Pinned Tools	Закріплені інструменти
+	Search tools…	Шукати інструменти…
+	Select tools to display on your Home page for quick access.	Виберіть інструменти для відображення на Головній для швидкого доступу.
+	Unpin from Home	Відкріпити від Головної
+	Unpin tool	Відкріпити інструмент
+	Transform image	Трансформувати зображення
+	Select Tool	Інструмент виділення
+	Hand Tool	Інструмент «Рука»
+	Marquee Zoom	Масштабувати виділену область
+	Paste	Вставити
+	Edit this PDF	Редактировать цей PDF
+	Export this PDF	Експортувати цей PDF
+	Find text or tools	Знайти текст або інструменти
 	Create & Edit	Створення й редагування
 	Review & Compare	Рецензування й порівняння
 	Forms & Signatures	Форми й підписи
@@ -2584,6 +2604,13 @@ animation effects	Off	Вимкнено
 	field names can't contain a period: {name}	імена полів не можуть містити крапку: {name}
 	two cells would both be named {name}	дві клітинки мали б однакове ім'я {name}
 	a field named {name} already exists	поле з іменем {name} уже існує
+	Arrange image	Упорядкувати зображення
+	Bring forward	Перемістити вперед
+	Bring to front	На передній план
+	Crop	Обрізати
+	Remove crop	Прибрати обрізання
+	Send backward	Перемістити назад
+	Send to back	На задній план
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Сьогодні

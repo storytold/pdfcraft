@@ -2824,6 +2824,33 @@ theme	Appearance	Teema
 	field names can't contain a period: {name}	kenttien nimissä ei voi olla pistettä: {name}
 	two cells would both be named {name}	kahdella solulla olisi sama nimi {name}
 	a field named {name} already exists	kenttä nimeltä {name} on jo olemassa
+	Bring forward	Tuo eteenpäin
+	Bring to front	Tuo etualalle
+	Crop image	Rajaa kuva
+	Remove crop	Poista rajaus
+	Send backward	Vie taaksepäin
+	Send to back	Vie taustalle
+	Clear search	Tyhjennä haku
+	Edit this PDF	Muokkaa tätä PDF-tiedostoa
+	Export this PDF	Vie tämä PDF-tiedosto
+	Find text or tools	Etsi tekstiä tai työkaluja
+	Hand Tool	Käsityökalu
+	Marquee Zoom	Alueen zoomaus
+	Pin	Kiinnitä
+	Pin a tool…	Kiinnitä työkalu…
+	Pin to Home	Kiinnitä Aloitus-näkymään
+	Pin tools to Home	Kiinnitä työkaluja Aloitus-näkymään
+	Pin your favorite tools here for quick access.	Kiinnitä suosikkityökalusi tähän nopeaa käyttöä varten.
+	Pinned	Kiinnitetty
+	Pinned Tools	Kiinnitetyt työkalut
+	Search tools…	Etsi työkaluja…
+	Select Tool	Valintatyökalu
+	Select tools to display on your Home page for quick access.	Valitse Aloitus-sivulla näytettävät työkalut nopeaa käyttöä varten.
+	Transform image	Muunna kuvaa
+	Unpin from Home	Irrota Aloitus-näkymästä
+	Unpin tool	Irrota työkalu
+	Arrange image	Järjestä kuva
+	Crop	Rajaa
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Tänään

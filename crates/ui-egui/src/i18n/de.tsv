@@ -2516,6 +2516,26 @@ animation effects	Off	Aus
 	Make properties default	Eigenschaften als Standard festlegen
 	Pages selected	Ausgewählte Seiten
 	Page properties	Seiteneigenschaften
+	Clear search	Suche löschen
+	Pin	Anheften
+	Pin a tool…	Werkzeug anheften…
+	Pin to Home	An Start anheften
+	Pin tools to Home	Werkzeuge an Start anheften
+	Pin your favorite tools here for quick access.	Heften Sie Ihre bevorzugten Werkzeuge hier an, um schnell darauf zuzugreifen.
+	Pinned	Angeheftet
+	Pinned Tools	Angeheftete Werkzeuge
+	Search tools…	Werkzeuge suchen…
+	Select tools to display on your Home page for quick access.	Wählen Sie Werkzeuge für den Schnellzugriff auf Ihrer Startseite aus.
+	Unpin from Home	Von Start lösen
+	Unpin tool	Werkzeug lösen
+	Transform image	Bild transformieren
+	Select Tool	Auswahl-Werkzeug
+	Hand Tool	Hand-Werkzeug
+	Marquee Zoom	Auswahlrahmen-Zoom
+	Paste	Einfügen
+	Edit this PDF	Dieses PDF bearbeiten
+	Export this PDF	Dieses PDF exportieren
+	Find text or tools	Text oder Werkzeuge suchen
 	Create & Edit	Erstellen & Bearbeiten
 	Review & Compare	Prüfen & Vergleichen
 	Forms & Signatures	Formulare & Signaturen
@@ -2563,6 +2583,13 @@ animation effects	Off	Aus
 	field names can't contain a period: {name}	Feldnamen dürfen keinen Punkt enthalten: {name}
 	two cells would both be named {name}	zwei Zellen hätten beide den Namen {name}
 	a field named {name} already exists	ein Feld namens {name} ist bereits vorhanden
+	Arrange image	Bild anordnen
+	Bring forward	Nach vorne bringen
+	Bring to front	In den Vordergrund
+	Crop	Zuschneiden
+	Remove crop	Zuschnitt entfernen
+	Send backward	Nach hinten senden
+	Send to back	In den Hintergrund
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Heute
