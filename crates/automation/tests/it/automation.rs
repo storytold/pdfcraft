@@ -6864,6 +6864,54 @@ endstream",
         );
         objs.push(o);
     }
+    pdf_with_objects(objs)
+}
+
+/// A PDF of `pages` pages, each drawing one `size`×`size` JPEG picture over the whole page.
+fn photo_deck(pages: usize, size: u32) -> Vec<u8> {
+    let mut px = Vec::with_capacity((size as usize) * (size as usize) * 3);
+    for y in 0..size {
+        for x in 0..size {
+            px.push(((x * 255 / size) as u8).wrapping_add(((x ^ y) & 15) as u8));
+            px.push((y * 255 / size) as u8);
+            px.push((((x + y) & 255) as u16 * 3 / 4) as u8);
+        }
+    }
+    let mut jpeg = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 95)
+        .encode(&px, size, size, image::ExtendedColorType::Rgb8)
+        .unwrap();
+    let mut objs: Vec<Vec<u8>> = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()];
+    let kids: String = (0..pages).map(|i| format!("{} 0 R ", 3 + 3 * i)).collect();
+    objs.push(format!("<< /Type /Pages /Kids [{kids}] /Count {pages} >>").into_bytes());
+    for i in 0..pages {
+        objs.push(
+            format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Im {} 0 R >> >> /Contents {} 0 R >>",
+                5 + 3 * i,
+                4 + 3 * i
+            )
+            .into_bytes(),
+        );
+        let content = "q 612 0 0 792 0 0 cm /Im Do Q\n";
+        objs.push(format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len() + 1).into_bytes());
+        let mut o = format!(
+            "<< /Type /XObject /Subtype /Image /Width {size} /Height {size} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length {} >>\nstream\n",
+            jpeg.len()
+        )
+        .into_bytes();
+        o.extend_from_slice(&jpeg);
+        o.extend_from_slice(
+            b"
+endstream",
+        );
+        objs.push(o);
+    }
+    pdf_with_objects(objs)
+}
+
+/// A PDF file from its objects in order (object 1 first), with a classic cross-reference table.
+fn pdf_with_objects(objs: Vec<Vec<u8>>) -> Vec<u8> {
     let mut out = b"%PDF-1.5
 "
     .to_vec();
@@ -6937,7 +6985,60 @@ fn a_page_printed_in_strips_gets_small_through_tools() {
     // The merged page opens and renders.
     let mobile = ok(&mut a, "doc_open", json!({ "path": "mobile.pdf" }))["doc"].as_u64().unwrap();
     assert!(a.call("page_render", &json!({ "doc": mobile, "page": 1, "dpi": 72 })).is_ok());
+    let pres = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "presentation.pdf", "preset": "presentation" }));
+    assert!(pres["bytes_after"].as_u64().unwrap() < pres["bytes_before"].as_u64().unwrap(), "{pres}");
+    // Flattening, the pixel cap and the extended formats are reported, so an agent can see them.
+    assert!(pres["tiled_pages"].is_u64() && pres["pages_flattened"].is_u64() && pres["images_capped"].is_u64(), "{pres}");
+    // A document already under the target is copied as it is: no rung is tried, no image touched.
+    let fits = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "fits.pdf", "target_mb": 50.0 }));
+    assert_eq!((fits["images_resampled"].as_u64(), fits["images_recompressed"].as_u64()), (Some(0), Some(0)), "{fits}");
+    assert!(fits["bytes_after"].as_u64().unwrap() <= 50 * 1024 * 1024, "{fits}");
+    // The flatten, cap and extended-format settings are reachable headlessly.
+    let tuned = ok(
+        &mut a,
+        "doc_optimize",
+        json!({
+            "doc": doc,
+            "path": "tuned.pdf",
+            "flatten_tiles": { "enabled": true, "min_images": 4, "max_dimension": 1440, "quality": 60 },
+            "max_image_dimension": 1440,
+            "extended_formats": true,
+        }),
+    );
+    assert!(tuned["bytes_after"].as_u64().unwrap() < tuned["bytes_before"].as_u64().unwrap(), "{tuned}");
+    for (key, value) in [
+        ("flatten_tiles", json!({ "quality": 0 })),
+        ("flatten_tiles", json!({ "max_dimension": 9000 })),
+        ("flatten_tiles", json!({ "min_images": 1 })),
+        ("max_image_dimension", json!(0)),
+    ] {
+        let mut args = json!({ "doc": doc, "path": "x.pdf" });
+        args[key] = value;
+        assert!(matches!(a.call("doc_optimize", &args), Err(ToolError::InvalidArgs(_))), "{key} {args}");
+    }
+    assert!(matches!(a.call("doc_optimize", &json!({ "doc": doc, "path": "x.pdf", "target_mb": 0.0 })), Err(ToolError::InvalidArgs(_))));
     assert!(matches!(a.call("doc_optimize", &json!({ "doc": doc, "path": "x.pdf", "preset": "tiny" })), Err(ToolError::InvalidArgs(_))));
+}
+
+#[test]
+fn optimizing_to_a_target_size_searches_the_ladder() {
+    let dir = workdir("optimize-target");
+    std::fs::write(dir.join("deck.pdf"), photo_deck(4, 800)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "deck.pdf" }))["doc"].as_u64().unwrap();
+    // The presentation preset's fixed quality, which the search must go below.
+    let pres = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "presentation.pdf", "preset": "presentation" }));
+    let pres_bytes = pres["bytes_after"].as_u64().unwrap();
+    let target_mb = pres_bytes as f64 * 0.9 / (1024.0 * 1024.0);
+    let target_bytes = (f64::from(target_mb as f32) * 1024.0 * 1024.0).round() as u64;
+    let t = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "target.pdf", "target_mb": target_mb }));
+    let after = t["bytes_after"].as_u64().unwrap();
+    assert!(t["bytes_before"].as_u64().unwrap() > target_bytes, "the fixture must start above the target: {t}");
+    assert!(after <= target_bytes, "{t}");
+    assert!(after < pres_bytes, "the search must try rungs below the preset's quality: {t}");
+    // The written file opens and renders.
+    let out = ok(&mut a, "doc_open", json!({ "path": "target.pdf" }))["doc"].as_u64().unwrap();
+    assert!(a.call("page_render", &json!({ "doc": out, "page": 1, "dpi": 72 })).is_ok());
 }
 
 #[test]

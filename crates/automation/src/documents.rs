@@ -2,6 +2,7 @@ use super::error::{Result, ToolError, failed};
 use super::json::{Args, nest_rows, security, summary};
 use super::paths::{child, read_input, write_atomic};
 use super::{Arc, Automation, BlockKey, DocId, Document, Edit, Path, PathBuf, TextBlock, Value, comments, file_access, json};
+use pdfcraft_engine::optimize::FlattenSettings;
 
 /// How far a watermark may be moved from the page centre, in points (a page is at most 14,400).
 const WATERMARK_MAX_OFFSET: f64 = 20_000.0;
@@ -10,6 +11,50 @@ const WATERMARK_MAX_OFFSET: f64 = 20_000.0;
 const BOOKMARK_PAGE: usize = 100;
 
 const MAX_BOOKMARK_PAGE: usize = 1000;
+
+/// Most pixels along an image's longer side `doc_optimize` accepts as a cap: past this the
+/// setting cannot save anything a viewer could show, and an absurd value only wastes memory.
+const MAX_IMAGE_DIMENSION: u32 = 65_536;
+
+/// The longest side `doc_optimize` keeps an image at, when `max_image_dimension` is given.
+fn image_dimension_arg(a: &Args) -> Result<Option<u32>> {
+    let Some(d) = a.opt_int("max_image_dimension")? else { return Ok(None) };
+    let cap = u32::try_from(d).ok().filter(|d| (16..=MAX_IMAGE_DIMENSION).contains(d));
+    cap.map(Some).ok_or_else(|| Args::wrong("max_image_dimension", &format!("between 16 and {MAX_IMAGE_DIMENSION} pixels")))
+}
+
+/// The tile-flattening settings `doc_optimize` was given, starting from `base`.
+fn flatten_tiles_arg(a: &Args, base: FlattenSettings) -> Result<FlattenSettings> {
+    let Some(v) = a.get("flatten_tiles") else { return Ok(base) };
+    let object = v.as_object().ok_or_else(|| Args::wrong("flatten_tiles", "an object"))?;
+    let field = |key: &str| object.get(key).filter(|x| !x.is_null());
+    let mut f = base;
+    if let Some(e) = field("enabled") {
+        f.enabled = e.as_bool().ok_or_else(|| Args::wrong("flatten_tiles.enabled", "true or false"))?;
+    }
+    if let Some(m) = field("min_images") {
+        f.min_images = m
+            .as_i64()
+            .and_then(|n| usize::try_from(n).ok())
+            .filter(|n| (2..=10_000).contains(n))
+            .ok_or_else(|| Args::wrong("flatten_tiles.min_images", "an integer between 2 and 10000"))?;
+    }
+    if let Some(m) = field("max_dimension") {
+        f.max_dimension = m
+            .as_i64()
+            .and_then(|d| u32::try_from(d).ok())
+            .filter(|d| (64..=8192).contains(d))
+            .ok_or_else(|| Args::wrong("flatten_tiles.max_dimension", "an integer between 64 and 8192 pixels"))?;
+    }
+    if let Some(q) = field("quality") {
+        f.quality = q
+            .as_i64()
+            .and_then(|q| u8::try_from(q).ok())
+            .filter(|q| (1..=100).contains(q))
+            .ok_or_else(|| Args::wrong("flatten_tiles.quality", "an integer between 1 and 100"))?;
+    }
+    Ok(f)
+}
 
 impl Automation {
     // ---- documents ---------------------------------------------------------------------------
@@ -286,8 +331,25 @@ impl Automation {
         let path = self.resolve(a.str("path")?, true)?;
         let mut settings = match a.opt_str("preset")? {
             None => Preset::Standard.settings(),
-            Some(p) => Preset::from_name(p).ok_or_else(|| ToolError::InvalidArgs(format!("unknown preset {p:?} (standard, mobile)")))?.settings(),
+            Some(p) => Preset::from_name(p)
+                .ok_or_else(|| ToolError::InvalidArgs(format!("unknown preset {p:?} (standard, mobile, presentation)")))?
+                .settings(),
         };
+        if let Some(v) = a.get("target_mb") {
+            let mb = v.as_f64().ok_or_else(|| ToolError::InvalidArgs("target_mb must be a number".into()))?;
+            let mb_f32 = mb as f32;
+            if !mb.is_finite() || mb <= 0.0 || !mb_f32.is_finite() || mb_f32 <= 0.0 {
+                return Err(ToolError::InvalidArgs(format!("target_mb must be a positive finite number, got {mb}")));
+            }
+            settings.target_mb = Some(mb_f32);
+        }
+        if let Some(cap) = image_dimension_arg(a)? {
+            settings.max_image_dimension = Some(cap);
+        }
+        if let Some(b) = a.opt_bool("extended_formats")? {
+            settings.extended_formats = b;
+        }
+        settings.flatten_tiles = flatten_tiles_arg(a, settings.flatten_tiles)?;
         if let Some(c) = a.opt_str("compatibility")? {
             settings.compatibility = Compatibility::from_name(c)
                 .ok_or_else(|| ToolError::InvalidArgs(format!("unknown compatibility {c:?} (retain, 1.4, 1.5, 1.6, 1.7, 2.0)")))?;
@@ -412,6 +474,13 @@ impl Automation {
             "images_recompressed": o.images_recompressed,
             "image_bytes_before": o.image_bytes_before,
             "image_bytes_after": o.image_bytes_after,
+            "tiled_pages": o.tiled_pages,
+            "pages_flattened": o.pages_flattened,
+            "pages_not_flattened": o.pages_not_flattened,
+            "tiles_flattened": o.tiles_flattened,
+            "images_capped": o.images_capped,
+            "jpx_images": o.jpx_images,
+            "palette_images": o.palette_images,
             "thumbnails": o.thumbnails,
             "alternate_images": o.alternate_images,
             "tags_removed": o.tags_removed,

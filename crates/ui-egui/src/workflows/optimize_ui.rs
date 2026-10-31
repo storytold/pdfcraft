@@ -18,6 +18,7 @@ use crate::{PdfCraftApp, widgets};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OptimizeTab {
     Images,
+    Presentation,
     DiscardObjects,
     DiscardUserData,
     CleanUp,
@@ -79,9 +80,17 @@ fn stage_label(stage: OptimizeStage) -> String {
     match stage {
         OptimizeStage::Discarding => tl!("Optimizing… removing user data").to_string(),
         OptimizeStage::Fragments => tl!("Optimizing… merging image fragments").to_string(),
+        OptimizeStage::Flattening { done, total } => crate::i18n::fmt(
+            tl!("Optimizing… flattening slide {d} of {t}"),
+            &[("d", &(done + 1).min(total.max(1)).to_string()), ("t", &total.max(1).to_string())],
+        ),
         OptimizeStage::Images { done, total } => crate::i18n::fmt(
             tl!("Optimizing… image {d} of {t}"),
             &[("d", &(done + 1).min(total.max(1)).to_string()), ("t", &total.max(1).to_string())],
+        ),
+        OptimizeStage::Trial { step, total } => crate::i18n::fmt(
+            tl!("Optimizing… trial {d} of at most {t} to fit the target size"),
+            &[("d", &step.min(total.max(1)).to_string()), ("t", &total.max(1).to_string())],
         ),
         OptimizeStage::CleaningUp => tl!("Optimizing… cleaning up").to_string(),
         OptimizeStage::Merging => tl!("Optimizing… merging identical objects").to_string(),
@@ -94,6 +103,9 @@ fn summary(r: &OptimizeReport) -> String {
     let o = &r.optimize;
     let lang = crate::i18n::current();
     let mut parts = Vec::new();
+    if o.pages_flattened > 0 {
+        parts.push(crate::i18n::trn(lang, o.pages_flattened as u64, "{n} slide flattened", "{n} slides flattened"));
+    }
     let images = o.images_resampled + o.images_recompressed;
     if images > 0 {
         parts.push(crate::i18n::trn(lang, images as u64, "{n} image optimized", "{n} images optimized"));
@@ -189,6 +201,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut OptimizeDraft, t: &Tokens) -> (boo
         let name = |p: Preset| match p {
             Preset::Standard => tl!("Standard"),
             Preset::Mobile => tl!("Mobile"),
+            Preset::Presentation => tl!("Presentation"),
         };
         let current = Preset::of(&d.settings);
         craft_ui::ComboBox::from_id_salt("optimize-preset").selected_text(current.map_or(tl!("Custom"), name)).show_ui(ui, |ui| {
@@ -214,6 +227,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut OptimizeDraft, t: &Tokens) -> (boo
     ui.horizontal_wrapped(|ui| {
         for (tab, label) in [
             (OptimizeTab::Images, tl!("Images")),
+            (OptimizeTab::Presentation, tl!("Presentations")),
             (OptimizeTab::DiscardObjects, tl!("Discard Objects")),
             (OptimizeTab::DiscardUserData, tl!("Discard User Data")),
             (OptimizeTab::CleanUp, tl!("Clean Up")),
@@ -237,6 +251,54 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut OptimizeDraft, t: &Tokens) -> (boo
                     .small()
                     .color(t.text_muted),
             );
+            ui.add_space(6.0);
+            let mut target_on = s.target_mb.is_some();
+            if ui.add(widgets::checkbox(&mut target_on, tl!("Optimize to target file size budget"))).changed() {
+                s.target_mb = if target_on { Some(20.0) } else { None };
+            }
+            if let Some(target) = &mut s.target_mb {
+                ui.horizontal(|ui| {
+                    ui.label(tl!("Target file size"));
+                    ui.add(egui::DragValue::new(target).range(0.5..=500.0).suffix(" MB").speed(0.5));
+                });
+                ui.label(
+                    egui::RichText::new(tl!("Searches image resolution and quality settings for the sharpest result that fits."))
+                        .small()
+                        .color(t.text_muted),
+                );
+            }
+        }
+        OptimizeTab::Presentation => {
+            ui.add(widgets::checkbox(&mut s.flatten_tiles.enabled, tl!("Flatten tiled presentation slides")));
+            ui.add_enabled_ui(s.flatten_tiles.enabled, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(tl!("Fewest images to count as tiled"));
+                    ui.add(egui::DragValue::new(&mut s.flatten_tiles.min_images).range(2..=200));
+                });
+                ui.horizontal(|ui| {
+                    ui.label(tl!("Max slide picture dimension"));
+                    ui.add(egui::DragValue::new(&mut s.flatten_tiles.max_dimension).range(640..=7680).suffix(" px"));
+                });
+                ui.horizontal(|ui| {
+                    ui.label(tl!("Flatten JPEG quality"));
+                    ui.add(egui::DragValue::new(&mut s.flatten_tiles.quality).range(10..=100));
+                });
+            });
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new(tl!("Resolution & Image Limits")).font(theme::semibold(13.0)));
+            let mut cap_on = s.max_image_dimension.is_some();
+            if ui.add(widgets::checkbox(&mut cap_on, tl!("Cap max image dimension"))).changed() {
+                s.max_image_dimension = if cap_on { Some(1920) } else { None };
+            }
+            if let Some(dim) = &mut s.max_image_dimension {
+                ui.horizontal(|ui| {
+                    ui.label(tl!("Max pixel dimension"));
+                    ui.add(egui::DragValue::new(dim).range(480..=7680).suffix(" px"));
+                });
+            }
+            ui.add(widgets::checkbox(&mut s.extended_formats, tl!("Recompress JPEG 2000 and palette images")));
         }
         OptimizeTab::DiscardObjects => {
             discard_box(ui, &mut d.discard, Hidden::LinksActionsScripts, "Discard all links, actions and JavaScript");

@@ -2743,6 +2743,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c75ab947623ef4ccaa7acf0579edf7cbb5a73838e3839a7be73335e522f433a1"
 dependencies = [
  "fearless_simd",
+ "image",
+ "moxcms",
 ]
 
 [[package]]
@@ -4511,6 +4513,7 @@ dependencies = [
 name = "pdfcraft-optimize"
 version = "0.16.1"
 dependencies = [
+ "hayro-jpeg2000",
  "image",
  "pdfcraft-annot",
  "pdfcraft-content",
