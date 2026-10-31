@@ -8976,8 +8976,8 @@ milestone = "M12"
 status = "partial"
 commands = ["a11y.autotag_fields"]
 tools = ["accessibility_autotag_form_fields"]
-evidence = ["crates/a11y/src/tests.rs::autotag_form_fields_writes_widget_structure_and_parent_tree", "crates/automation/tests/it/automation.rs::autotag_form_fields_writes_reviewable_widget_tags"]
-notes = "For an untagged AcroForm, writes Form structure elements, OBJR references, widget StructParent keys and ParentTree entries. An existing tree is extended when its root points directly to a Document element and its ParentTree uses a direct Nums array; other layouts are refused before any edit. A widget listed on several pages is tagged once. Text, figures, links and other content remain untagged."
+evidence = ["crates/a11y/src/tests.rs::autotag_form_fields_writes_widget_structure_and_parent_tree", "crates/automation/tests/it/automation.rs::autotag_form_fields_writes_reviewable_widget_tags", "crates/a11y/src/tagging/tests.rs::form_fields_are_tagged_in_any_tree_layout", "crates/a11y/src/tagging/tests.rs::form_fields_are_tagged_into_an_unusual_tree_in_place", "crates/a11y/src/tagging/tests.rs::form_fields_join_several_top_tags_indirect_arrays_and_the_next_key", "crates/a11y/src/tagging/tests.rs::widgets_with_a_tag_are_linked_and_stale_keys_replaced", "crates/automation/tests/tagging.rs::form_fields_are_tagged_into_an_existing_tag_tree_end_to_end"]
+notes = "Writes a Form tag with an OBJR, the widget's StructParent key and its ParentTree entry for every page widget no tag references, as one undo step. An untagged form gets a tag tree (a Document tag); an existing tree is extended in place in any layout the Tags panel reads: a root stored in the catalog, a /K that is one entry, an array or an indirect array, several top tags, and a ParentTree flat or with /Kids and /Limits, with direct or indirect arrays. Keys follow /ParentTreeNextKey and skip keys that pages and annotations already use. Each page's Form tags go after its last tagged content (else by page order), in /Annots order. A widget a tag already references but whose StructParent doesn't lead back to it gets the missing ParentTree entry instead of a second tag; a stale StructParent is replaced; a widget listed on several pages is tagged once. Refused with a reason: widgets referenced by two tags or by an inline tag, and parent trees with a node listed twice. Missing against Acrobat: Form tags go after the page's content, not next to their labels by position; no field descriptions (TU) are written; text, figures, links and other content remain untagged."
 
 [[feature]]
 id = "a11y.reading-order-tool"
@@ -8985,11 +8985,11 @@ title = "Reading order tool"
 area = "M"
 tier = "P1"
 milestone = "M12"
-status = "partial"
-commands = []
-tools = ["accessibility_move_tag"]
-evidence = ["crates/a11y/src/tests.rs::sibling_tags_move_in_reading_order_without_changing_content", "crates/automation/tests/it/automation.rs::accessibility_check_report_and_fixes_through_tools"]
-notes = "The headless tool can move a reachable indirect tag before or after a direct sibling in their parent's /K array as one undoable edit. It preserves page content and rejects ambiguous children. The visual Reading Order tool, inline tags, arbitrary retagging, and moving across parents remain planned."
+status = "shipped"
+commands = ["a11y.reading_order"]
+tools = ["accessibility_page_content", "accessibility_reading_order", "accessibility_create_tag", "accessibility_mark_content_artifact", "accessibility_move_tag_to", "accessibility_move_tag"]
+evidence = ["crates/a11y/src/tests.rs::sibling_tags_move_in_reading_order_without_changing_content", "crates/automation/tests/it/automation.rs::accessibility_check_report_and_fixes_through_tools", "crates/ui-egui/tests/tagging.rs::the_reading_order_tool_tags_what_a_rectangle_covers", "crates/ui-egui/tests/tagging.rs::the_order_list_moves_regions_and_selects_their_tags", "crates/automation/tests/tagging.rs::an_untagged_page_is_tagged_end_to_end_with_the_reading_order_tools", "crates/a11y/src/tagging/tests.rs::tagging_untagged_content_creates_the_tree_and_keeps_the_page", "crates/a11y/src/tagging/tests.rs::retagging_moves_content_and_drops_the_emptied_tag", "crates/a11y/src/tagging/tests.rs::tables_and_lists_are_built_from_the_layout", "crates/a11y/src/tagging/tests.rs::random_edits_keep_the_structure_consistent_and_the_pages_unchanged"]
+notes = "Fix reading order shows the page's tagged content as numbered regions in tag order, and untagged content and annotations in another colour. Click a region or content, or drag a rectangle, then tag the selection as P, H1-H6, Figure (with alternate text), Table (rows and cells from the layout) or L (items, with labels when a row starts with a bullet or number), or mark it as an artifact. Untagged content is wrapped in new marked content, artifacts become tagged content and tagged content moves between tags; the parent tree stays consistent in any number-tree layout and the page draws exactly as before (new operators are spliced in, nothing is re-serialized). The order list reorders regions, across parents, by dragging a row or with Move up/down; selecting a region selects its tag in the Tags panel. Refused with a reason: content inside form XObjects, tagged content nested in other tagged content, pages whose content can't be decoded exactly, and tags listed twice or stored inline. Missing against Acrobat: the Table Editor, the Formula, Form field, Figure/Caption and Cell buttons, Clear Page Structure, dragging regions on the page itself, and the structure-type and tables-and-figures display modes. Table and list structure comes from a layout heuristic and needs review."
 
 [[feature]]
 id = "a11y.tags-panel"
@@ -8997,11 +8997,11 @@ title = "Tags panel (new, delete, find, change to artifact)"
 area = "M"
 tier = "P1"
 milestone = "M12"
-status = "partial"
+status = "shipped"
 commands = ["a11y.tags"]
-tools = ["accessibility_tags"]
-evidence = ["crates/ui-egui/tests/it/accessibility.rs::tags_panel_edits_a_tag_property_and_undoes_it", "crates/ui-egui/tests/it/accessibility.rs::checker_finding_opens_its_structure_tag", "crates/automation/tests/it/automation.rs::structure_tags_are_listed_a_page_at_a_time"]
-notes = "The right-side Tags panel lists reachable indirect tags as a collapsible hierarchy, filters by type or title with ancestors, navigates to their page and edits properties. accessibility_tags lists them a page at a time (offset, limit, next) and can keep only some types, pages or depths. Checker findings linked to indirect tags open the matching tag without losing unsaved edits. Inline tags, adding/deleting tags, artifact marking and finding content remain planned in #982."
+tools = ["accessibility_tags", "accessibility_set_tag_property", "accessibility_new_tag", "accessibility_delete_tag", "accessibility_move_tag_to", "accessibility_tag_to_artifact", "accessibility_tag_annotation", "accessibility_tag_at", "accessibility_tag_boxes", "accessibility_page_content"]
+evidence = ["crates/ui-egui/tests/it/accessibility.rs::tags_panel_edits_a_tag_property_and_undoes_it", "crates/ui-egui/tests/it/accessibility.rs::checker_finding_opens_its_structure_tag", "crates/automation/tests/it/automation.rs::structure_tags_are_listed_a_page_at_a_time", "crates/ui-egui/tests/tagging.rs::the_tags_panel_adds_deletes_and_moves_tags", "crates/ui-egui/tests/tagging.rs::the_tags_panel_highlights_content_and_a_click_on_the_page_selects_its_tag", "crates/automation/tests/tagging.rs::tags_panel_tools_add_move_delete_and_artifact_tags", "crates/a11y/src/tagging/tests.rs::new_tags_and_moves_across_parents_keep_parents_and_pages", "crates/a11y/src/tagging/tests.rs::deleting_a_tag_untags_its_content_or_lifts_it_up", "crates/a11y/src/tagging/tests.rs::a_whole_subtree_becomes_an_artifact", "crates/a11y/src/tagging/tests.rs::annotations_get_tags_and_parent_tree_entries", "crates/a11y/src/tagging/tests.rs::unusual_layouts_are_read_and_extended_in_place", "crates/a11y/src/tagging/tests.rs::unsafe_requests_are_refused_and_change_nothing", "crates/a11y/src/tagging/tests.rs::random_edits_keep_the_structure_consistent_and_the_pages_unchanged"]
+notes = "The right-side Tags panel shows reachable indirect tags as a collapsible, searchable tree and edits type, title, actual text, alternate text and language. New Tag (a standard or role-mapped type, as a child of the selection); Delete Tag (its content stays on the page, untagged and findable) or remove a tag keeping its contents; move by dragging a row before, after or into another tag, or with Move earlier/later, into the previous tag and out of the parent; Change Tag to Artifact for a whole subtree on any page. Highlight content outlines the selected tag's content on the page, and a click on content selects its tag. Find untagged content opens the Reading Order tool's list of untagged content and annotations, where they are tagged (annotations get Link, Form or Annot tags with object references). Every edit is one undo step and keeps /P, the parent tree (any number-tree layout), MCIDs and the role map consistent; unsafe cases are refused with a reason and change nothing. Missing: cut and paste of tags, attribute-object and class-map editing, the Tag Inspector, finding OCR suspects, and inline tag dictionaries (only their indirect children are listed and edited)."
 
 [[feature]]
 id = "a11y.tag-properties"
@@ -9013,7 +9013,7 @@ status = "partial"
 commands = ["a11y.tags"]
 tools = ["accessibility_tags", "accessibility_set_tag_property"]
 evidence = ["crates/a11y/src/tests.rs::reachable_tag_properties_round_trip_and_reject_unrelated_objects", "crates/a11y/src/tests.rs::a_table_summary_is_a_table_attribute", "crates/a11y/src/tests.rs::a_header_cell_scope_keeps_its_other_attributes", "crates/a11y/src/tests.rs::a_shared_attribute_object_is_not_changed_for_other_tags", "crates/automation/tests/it/automation.rs::table_summary_and_header_scope_through_automation", "crates/a11y/src/tests.rs::tag_hierarchy_keeps_indirect_parent_through_inline_tags", "crates/automation/tests/it/automation.rs::accessibility_check_report_and_fixes_through_tools", "crates/ui-egui/tests/it/accessibility.rs::tags_panel_edits_a_tag_property_and_undoes_it"]
-notes = "The engine, headless tools and right-side editor list reachable indirect tags with parent and depth and edit type, title, actual text, alternate text and language with undo. accessibility_set_tag_property also sets a table's Summary and a header cell's Scope (Row, Column, Both) in the tag's Table attribute object, keeping its other attribute objects and revision numbers and leaving shared attribute objects unchanged for other tags; the Tags panel doesn't offer these two yet. Inline tag dictionaries and structural operations remain planned with the Tags Panel (#982)."
+notes = "The engine, headless tools and right-side editor list reachable indirect tags with parent and depth and edit type, title, actual text, alternate text and language with undo. accessibility_set_tag_property also sets a table's Summary and a header cell's Scope (Row, Column, Both) in the tag's Table attribute object, keeping its other attribute objects and revision numbers and leaving shared attribute objects unchanged for other tags; the Tags panel doesn't offer these two yet. Structural edits are in the Tags panel (a11y.tags-panel). Inline tag dictionaries are not edited."
 
 [[feature]]
 id = "a11y.role-map"
@@ -9047,9 +9047,9 @@ tier = "P1"
 milestone = "M12"
 status = "partial"
 commands = ["a11y.tags"]
-tools = ["accessibility_move_tag"]
-evidence = ["crates/ui-egui/tests/it/accessibility.rs::tags_panel_moves_a_tag_within_its_siblings", "crates/a11y/src/tests.rs::sibling_tags_move_in_reading_order_without_changing_content", "crates/automation/tests/it/automation.rs::accessibility_check_report_and_fixes_through_tools"]
-notes = "The Tags panel moves a selected reachable indirect tag earlier or later among direct siblings, preserving page appearance and making one undoable reading-order edit. It does not yet show page-content order visually, edit direct tag dictionaries, move across parents, or reorder arbitrary content."
+tools = ["accessibility_reading_order", "accessibility_move_tag_to", "accessibility_move_tag"]
+evidence = ["crates/ui-egui/tests/it/accessibility.rs::tags_panel_moves_a_tag_within_its_siblings", "crates/a11y/src/tests.rs::sibling_tags_move_in_reading_order_without_changing_content", "crates/automation/tests/it/automation.rs::accessibility_check_report_and_fixes_through_tools", "crates/ui-egui/tests/tagging.rs::the_order_list_moves_regions_and_selects_their_tags", "crates/a11y/src/tagging/tests.rs::new_tags_and_moves_across_parents_keep_parents_and_pages"]
+notes = "Fix reading order's order list shows one page's regions (tags owning content there) in reading order; dragging a row or Move up/down moves the tag, across parents, as one undoable edit that keeps page appearance. The Tags panel moves tags among siblings and across parents. A document-wide Order panel of page containers, and reordering content that is not tagged, remain planned."
 
 [[feature]]
 id = "a11y.content-panel"
@@ -9069,11 +9069,11 @@ title = "Create a tag from a selection"
 area = "M"
 tier = "P2"
 milestone = "M12"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["a11y.reading_order"]
+tools = ["accessibility_create_tag", "accessibility_page_content"]
+evidence = ["crates/a11y/src/tagging/tests.rs::tagging_untagged_content_creates_the_tree_and_keeps_the_page", "crates/a11y/src/tagging/tests.rs::artifacts_and_loose_text_join_the_structure_next_to_their_neighbours", "crates/a11y/src/tagging/tests.rs::text_objects_are_split_only_where_they_must_be", "crates/automation/tests/tagging.rs::an_untagged_page_is_tagged_end_to_end_with_the_reading_order_tools", "crates/ui-egui/tests/tagging.rs::the_reading_order_tool_tags_what_a_rectangle_covers"]
+notes = "Content selected with the Reading Order tool (a rectangle, or clicks) becomes a new tag of the chosen type: untagged content is wrapped in new marked content (a whole text object outside BT/ET, or single text operators inside it), artifacts become tagged, and tagged content moves from its old tag; the new tag goes next to the tags of neighbouring content, or where the automation tool's placement says. Selecting content with the Select tool and tagging it from the Tags panel's menu, as Acrobat also allows, is not offered: selection happens in the Reading Order tool."
 
 [[feature]]
 id = "a11y.artifact-marking"
@@ -9083,9 +9083,9 @@ tier = "P1"
 milestone = "M12"
 status = "partial"
 commands = ["a11y.tags"]
-tools = ["accessibility_mark_tag_artifact"]
-evidence = ["crates/a11y/src/tests.rs::marking_a_leaf_tag_as_an_artifact_preserves_appearance_and_structure_integrity", "crates/automation/tests/it/automation.rs::marking_a_leaf_tag_as_an_artifact_through_automation_is_undoable_and_saved", "crates/ui-egui/tests/it/accessibility.rs::tags_panel_marks_a_leaf_tag_as_an_artifact"]
-notes = "Tags panel and automation can retire a reachable indirect leaf tag that owns direct MCIDs: its visible page content remains but becomes /Artifact and the parent-tree references are cleared. Tags with structural children, non-MCID content, missing pages or ambiguous parents are refused. Arbitrary painted-content selection, direct structure dictionaries and removing whole tagged subtrees remain unsupported."
+tools = ["accessibility_mark_tag_artifact", "accessibility_tag_to_artifact", "accessibility_mark_content_artifact"]
+evidence = ["crates/a11y/src/tests.rs::marking_a_leaf_tag_as_an_artifact_preserves_appearance_and_structure_integrity", "crates/automation/tests/it/automation.rs::marking_a_leaf_tag_as_an_artifact_through_automation_is_undoable_and_saved", "crates/ui-egui/tests/it/accessibility.rs::tags_panel_marks_a_leaf_tag_as_an_artifact", "crates/a11y/src/tagging/tests.rs::a_whole_subtree_becomes_an_artifact", "crates/a11y/src/tagging/tests.rs::tagging_untagged_content_creates_the_tree_and_keeps_the_page"]
+notes = "The Tags panel turns a tag and everything below it into artifacts (marked content on any page, named property lists and several content streams included, rewriting only the streams that change), and the Reading Order tool marks any selected content, tagged or not, as an artifact; parent-tree entries are cleared and the page draws as before. Tags holding annotations, content in form XObjects and nested tagged content are refused. Artifact types (pagination, layout, page, background) and their subtypes are not asked for or written."
 
 [[feature]]
 id = "a11y.find-untagged"
@@ -9095,9 +9095,9 @@ tier = "P2"
 milestone = "M12"
 status = "partial"
 commands = ["a11y.find_untagged"]
-tools = ["accessibility_find_untagged"]
-evidence = ["crates/automation/tests/it/automation.rs::finding_untagged_content_limits_results_to_content_annotations_and_widgets", "crates/ui-egui/tests/it/accessibility.rs::finding_untagged_content_shows_the_focused_accessibility_results"]
-notes = "Lists findings for untagged painted page content, non-widget annotations and form widgets, optionally on selected pages. It reuses the checker and does not identify untagged table structure, links already represented by an annotation, or structure-tree elements that lack content."
+tools = ["accessibility_find_untagged", "accessibility_page_content"]
+evidence = ["crates/automation/tests/it/automation.rs::finding_untagged_content_limits_results_to_content_annotations_and_widgets", "crates/ui-egui/tests/it/accessibility.rs::finding_untagged_content_shows_the_focused_accessibility_results", "crates/automation/tests/tagging.rs::an_untagged_page_is_tagged_end_to_end_with_the_reading_order_tools"]
+notes = "Lists findings for untagged painted page content, non-widget annotations and form widgets, optionally on selected pages, through the checker. The Tags panel's Find untagged content opens the Reading Order tool, which lists the page's untagged content (including marked content no tag owns) and annotations and tags them there. OCR suspects, untagged table structure and structure elements that lack content are not found."
 
 [[feature]]
 id = "a11y.table-editor"

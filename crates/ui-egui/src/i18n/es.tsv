@@ -2618,7 +2618,6 @@ animation effects	Off	Desactivados
 	Found {n} untagged content problems.	Se encontraron {n} problemas de contenido sin etiquetar.
 	Tag form fields	Etiquetar campos de formulario
 	Mark as artifact	Marcar como artefacto
-	Remove this leaf tag from reading order and mark its direct content as an artifact	Quite esta etiqueta hoja del orden de lectura y marque su contenido directo como artefacto
 	Mark content as artifact	Marcar contenido como artefacto
 	Word count	Recuento de palabras
 	Current page only	Solo la página actual
@@ -2675,6 +2674,18 @@ animation effects	Off	Desactivados
 	Paragraph spacing	Espaciado entre párrafos
 	Less	Menos
 	Other options	Otras opciones
+	Highlight content	Resaltar contenido
+	Mark everything in this tag as an artifact and remove the tag from reading order	Marcar todo lo de esta etiqueta como artefacto y quitar la etiqueta del orden de lectura
+	Move into previous tag	Mover dentro de la etiqueta anterior
+	Move out of parent tag	Mover fuera de la etiqueta principal
+	New tag	Nueva etiqueta
+	Delete tag	Eliminar etiqueta
+	Remove tag, keep its contents	Quitar etiqueta y conservar su contenido
+	Draw a rectangle on the page or click content, then choose its tag.	Dibuja un rectángulo en la página o haz clic en el contenido y luego elige su etiqueta.
+	Tag annotation	Etiquetar anotación
+	Untagged content	Contenido sin etiquetar
+	Annotation	Anotación
+	Tag content as {type}	Etiquetar contenido como {type}
 
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Estás viendo la versión firmada de «{from}» (revisión {rev}). Es una instantánea: los cambios aquí no afectarán al original.

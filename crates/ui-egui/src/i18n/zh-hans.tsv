@@ -2439,7 +2439,6 @@ animation effects	Off	关
 	Found {n} untagged content problems.	发现 {n} 个未标记内容问题。
 	Tag form fields	标记表单字段
 	Mark as artifact	标记为工件
-	Remove this leaf tag from reading order and mark its direct content as an artifact	从阅读顺序中移除此叶标签，并将其直接内容标记为工件
 	Mark content as artifact	将内容标记为工件
 	Word count	字词统计
 	Current page only	仅当前页
@@ -2542,3 +2541,15 @@ animation effects	Off	关
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	此回复的选项
 	Export value	导出值
+	Highlight content	突出显示内容
+	Mark everything in this tag as an artifact and remove the tag from reading order	将此标签中的所有内容标记为工件，并从阅读顺序中移除该标签
+	Move into previous tag	移入上一个标签
+	Move out of parent tag	移出父标签
+	New tag	新建标签
+	Delete tag	删除标签
+	Remove tag, keep its contents	移除标签，保留其内容
+	Draw a rectangle on the page or click content, then choose its tag.	在页面上绘制矩形或单击内容，然后选择其标签。
+	Tag annotation	标记注释
+	Untagged content	未标记的内容
+	Annotation	注释
+	Tag content as {type}	将内容标记为 {type}

@@ -2549,7 +2549,6 @@ animation effects	Off	Vypnuto
 	Found {n} untagged content problems.	Nalezeno problémů s neoznačkovaným obsahem: {n}.
 	Tag form fields	Označkovat formulářová pole
 	Mark as artifact	Označit jako artefakt
-	Remove this leaf tag from reading order and mark its direct content as an artifact	Odebrat tento koncový tag z pořadí čtení a jeho přímý obsah označit jako artefakt
 	Mark content as artifact	Označit obsah jako artefakt
 	Word count	Počet slov
 	Current page only	Pouze aktuální stránka
@@ -2885,3 +2884,15 @@ certificate	Version	Verze
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Možnosti této odpovědi
 	Export value	Exportní hodnota
+	Highlight content	Zvýraznit obsah
+	Mark everything in this tag as an artifact and remove the tag from reading order	Označit vše v této značce jako artefakt a odebrat značku z pořadí čtení
+	Move into previous tag	Přesunout do předchozí značky
+	Move out of parent tag	Přesunout z nadřazené značky
+	New tag	Nová značka
+	Delete tag	Odstranit značku
+	Remove tag, keep its contents	Odebrat značku, ponechat její obsah
+	Draw a rectangle on the page or click content, then choose its tag.	Nakreslete na stránce obdélník nebo klikněte na obsah a pak zvolte jeho značku.
+	Tag annotation	Označit anotaci
+	Untagged content	Neoznačený obsah
+	Annotation	Anotace
+	Tag content as {type}	Označit obsah jako {type}

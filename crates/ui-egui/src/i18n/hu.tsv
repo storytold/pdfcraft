@@ -2474,7 +2474,6 @@ animation effects	Off	Ki
 	Found {n} untagged content problems.	{n} címkézetlen tartalmi probléma található.
 	Tag form fields	Űrlapmezők címkézése
 	Mark as artifact	Megjelölés műtárgyként
-	Remove this leaf tag from reading order and mark its direct content as an artifact	Távolítsa el ezt a levélcímkét az olvasási sorrendből, és jelölje meg a közvetlen tartalmát műtárgyként
 	Mark content as artifact	Tartalom megjelölése műtárgyként
 	Word count	Szavak száma
 	Current page only	Csak az aktuális oldal
@@ -2577,3 +2576,15 @@ animation effects	Off	Ki
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	A válasz beállításai
 	Export value	Exportérték
+	Highlight content	Tartalom kiemelése
+	Mark everything in this tag as an artifact and remove the tag from reading order	A címkében lévő minden tartalom megjelölése műtárgyként és a címke eltávolítása az olvasási sorrendből
+	Move into previous tag	Áthelyezés az előző címkébe
+	Move out of parent tag	Áthelyezés a szülőcímkéből
+	New tag	Új címke
+	Delete tag	Címke törlése
+	Remove tag, keep its contents	Címke eltávolítása, tartalma megtartásával
+	Draw a rectangle on the page or click content, then choose its tag.	Rajzoljon téglalapot az oldalra, vagy kattintson egy tartalomra, majd válassza ki a címkéjét.
+	Tag annotation	Széljegyzet címkézése
+	Untagged content	Címkézetlen tartalom
+	Annotation	Széljegyzet
+	Tag content as {type}	Tartalom címkézése mint {type}

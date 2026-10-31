@@ -2838,3 +2838,15 @@ theme	Appearance	Aspect
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opțiuni pentru acest răspuns
+	Highlight content	Evidențiere conținut
+	Mark everything in this tag as an artifact and remove the tag from reading order	Marcare ca artefact a tot ce conține această etichetă și eliminare a etichetei din ordinea de citire
+	Move into previous tag	Mutare în eticheta anterioară
+	Move out of parent tag	Mutare în afara etichetei părinte
+	New tag	Etichetă nouă
+	Delete tag	Ștergere etichetă
+	Remove tag, keep its contents	Eliminare etichetă, cu păstrarea conținutului
+	Draw a rectangle on the page or click content, then choose its tag.	Desenați un dreptunghi pe pagină sau faceți clic pe conținut, apoi alegeți-i eticheta.
+	Tag annotation	Etichetare adnotare
+	Untagged content	Conținut neetichetat
+	Annotation	Adnotare
+	Tag content as {type}	Etichetare conținut ca {type}

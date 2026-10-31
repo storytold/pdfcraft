@@ -49,6 +49,7 @@ impl PdfCraftApp {
                     "signatures" => Some(RightPanel::Signatures),
                     "accessibility" => Some(RightPanel::Accessibility),
                     "tags" => Some(RightPanel::Tags),
+                    "reading-order" => Some(RightPanel::ReadingOrder),
                     "search" => Some(RightPanel::Search),
                     "compare" => Some(RightPanel::Compare),
                     "none" => None,
@@ -142,6 +143,15 @@ impl PdfCraftApp {
                 self.palette_query = value.to_string();
             }
             ("page", Some(v)) => v.go_to_page(value.parse::<usize>().map_err(|e| e.to_string())?.saturating_sub(1)),
+            // The Tags panel's selection, by object number (screenshots and the control channel).
+            ("tag", Some(v)) => {
+                let id = v.id;
+                let number = value.parse::<u32>().map_err(|_| "tag must be a tag's object number".to_string())?;
+                let doc = self.session.get(id).ok_or("no document is open")?;
+                let tags = self.tags_state.tags(doc);
+                let object = tags.iter().find(|t| t.object.num == number).map(|t| t.object).ok_or_else(|| format!("no tag is object {number}"))?;
+                self.tags_state.select(id, &tags, object);
+            }
             ("zoom", Some(v)) => v.set_zoom(DocView::parse_zoom_percent(value).ok_or("zoom must be a percentage above 0")?),
             ("layout", Some(v)) => {
                 let (layout, continuous) = canvas::parse_display_token(value).ok_or("layout must be single, continuous, two-up or two-page")?;
@@ -285,6 +295,7 @@ impl PdfCraftApp {
                     "marquee-zoom" => QuickTool::MarqueeZoom,
                     "snapshot" => QuickTool::Snapshot,
                     "column-select" => QuickTool::ColumnSelect,
+                    "reading-order" => QuickTool::ReadingOrder,
                     "certify" => QuickTool::SignArea { certify: true },
                     custom if custom.starts_with("custom-stamp-") => {
                         let i: usize = custom[13..].parse().map_err(|_| format!("bad stamp {custom}"))?;

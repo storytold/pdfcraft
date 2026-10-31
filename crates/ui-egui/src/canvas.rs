@@ -876,6 +876,9 @@ struct PageEnv<'a> {
     t: &'a Tokens,
     table_preview: &'a Option<crate::field_table_ui::Preview>,
     tag: u64,
+    /// The Tags panel is open: it highlights its tag's content, and a click on content selects
+    /// its tag.
+    tags_open: bool,
     text_style: &'a pdfcraft_engine::AddedText,
     tool: QuickTool,
     units: crate::units::Unit,
@@ -919,6 +922,9 @@ struct PageFrame<'a> {
     pressed: bool,
     pointer: Option<Pos2>,
     signature_preview: &'a mut Option<(crate::fill_sign::SavedSig, egui::TextureHandle)>,
+    /// The Tags panel's state, and the Reading Order tool's regions.
+    tags_state: &'a mut crate::tags_ui::State,
+    reading_order: &'a mut crate::reading_order_ui::State,
     out: PageOut,
     wanted: Vec<(usize, f32, u64, Option<Tile>)>,
     visible_now: Vec<usize>,
@@ -928,6 +934,14 @@ struct PageFrame<'a> {
     current_height: f32,
     pressed_page: Option<usize>,
     calc_hover: Option<crate::calc_order_ui::Focus>,
+}
+
+/// What the pages change in the app besides their view: the signature preview, the Tags panel's
+/// state and the Reading Order tool's regions.
+struct PageApp<'a> {
+    signature_preview: &'a mut Option<(crate::fill_sign::SavedSig, egui::TextureHandle)>,
+    tags_state: &'a mut crate::tags_ui::State,
+    reading_order: &'a mut crate::reading_order_ui::State,
 }
 
 /// Visible heights (points) closer than this are equal: one page size can meet the viewport a
@@ -1124,6 +1138,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
         signature,
         table_preview,
         text_style,
+        tags_open,
         tool,
         units,
         fill_text_size,
@@ -1330,6 +1345,27 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
         !others_own_pointer && (text_used || image_used)
     };
     let on_link = tool == QuickTool::Link && can_modify && crate::link_ui::page_input(cx, doc_links, view);
+    let on_reading = tool == QuickTool::ReadingOrder && crate::reading_order_ui::page_input(ui, resp, &xf, i, info, doc, frame.reading_order);
+    if let Some(tag) = frame.reading_order.picked.take() {
+        let tags = frame.tags_state.tags(doc);
+        frame.tags_state.select(doc.id, &tags, tag);
+    }
+    let mut on_tag = false;
+    if tags_open
+        && tool == QuickTool::Select
+        && frame.tags_state.highlighting()
+        && resp.clicked()
+        && let Some(p) = pointer.filter(|p| xf.rect.contains(*p))
+        && let Some(page_info) = info.pages.get(i)
+    {
+        let (vx, vy) = xf.screen_to_view(p);
+        let [ux, uy] = page_info.view_to_user(vx, vy);
+        if let Some(tag) = doc.tag_at(i, f64::from(ux), f64::from(uy)) {
+            let tags = frame.tags_state.tags(doc);
+            frame.tags_state.select(doc.id, &tags, tag);
+            on_tag = true;
+        }
+    }
     if tool == QuickTool::Select
         && resp.secondary_clicked()
         && can_modify
@@ -1338,7 +1374,15 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
     {
         view.links.context = Some((i, l.index));
     }
-    let consumed = on_objects || on_edit_text || on_link || on_content || boxing || on_field || comments::page_input(ui, resp, &pcx, view);
+    let consumed = on_objects
+        || on_edit_text
+        || on_link
+        || on_reading
+        || on_tag
+        || on_content
+        || boxing
+        || on_field
+        || comments::page_input(ui, resp, &pcx, view);
     // The cursor and the tip from what lies under the pointer, after the tools claimed theirs (the
     // last claim on a layer stands).
     if frame.env.unobstructed
@@ -1687,7 +1731,9 @@ fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_
         prefs,
         preparing,
         redact_mark,
+        t,
         table_preview,
+        tags_open,
         tool,
         unobstructed,
         ..
@@ -1724,6 +1770,16 @@ fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_
     }
     if tool == QuickTool::Link {
         crate::link_ui::paint(painter, &xf, i, info, doc_links, view, pointer);
+    }
+    if tool == QuickTool::ReadingOrder {
+        crate::reading_order_ui::paint(ui, painter, &xf, i, info, doc, frame.reading_order);
+    }
+    if tags_open && let Some(tag) = frame.tags_state.highlighted(doc.id) {
+        for b in frame.tags_state.boxes(doc, tag, i).iter() {
+            let sr = xf.user_rect(info, i, [b[0] as f32, b[1] as f32, b[2] as f32, b[3] as f32]).expand(1.5);
+            painter.rect_filled(sr, CornerRadius::same(2), t.accent.gamma_multiply(0.16));
+            painter.rect_stroke(sr, CornerRadius::same(2), Stroke::new(1.5, t.accent), egui::StrokeKind::Outside);
+        }
     }
     if preparing {
         crate::prepare::paint_page(tool_cx, form, view);
@@ -1934,14 +1990,7 @@ fn cancel_on_escape(ctx: &egui::Context, view: &mut DocView, ptr: &PagePointer) 
     }
 }
 
-fn draw_pages(
-    ui: &mut egui::Ui,
-    viewport: Rect,
-    view: &mut DocView,
-    env: &PageEnv<'_>,
-    out: &mut PageOut,
-    signature_preview: &mut Option<(crate::fill_sign::SavedSig, egui::TextureHandle)>,
-) -> PageRenders {
+fn draw_pages(ui: &mut egui::Ui, viewport: Rect, view: &mut DocView, env: &PageEnv<'_>, out: &mut PageOut, app: PageApp<'_>) -> PageRenders {
     let PageEnv {
         allowed,
         auto_delta,
@@ -2042,7 +2091,9 @@ fn draw_pages(
         visible,
         pressed,
         pointer,
-        signature_preview,
+        signature_preview: app.signature_preview,
+        tags_state: app.tags_state,
+        reading_order: app.reading_order,
         out: std::mem::take(out),
         wanted: Vec::new(),
         visible_now: Vec::new(),
@@ -2951,7 +3002,8 @@ fn tool_selects_text(tool: QuickTool, preparing: bool) -> bool {
         | QuickTool::Link
         | QuickTool::SignArea { .. }
         | QuickTool::MarqueeZoom
-        | QuickTool::Snapshot => false,
+        | QuickTool::Snapshot
+        | QuickTool::ReadingOrder => false,
     }
 }
 
@@ -3218,6 +3270,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         t: &t,
         table_preview: &table_preview,
         tag,
+        tags_open: app.right == Some(RightPanel::Tags),
         text_style: &text_style,
         tool,
         units,
@@ -3230,7 +3283,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     };
     let mut page_out = PageOut::default();
     let out = page_scroll(ui, scroll, egui::Id::unique(("page-view-scope", view.id)), |ui, viewport| {
-        draw_pages(ui, viewport, view, &env, &mut page_out, &mut app.signature_preview)
+        draw_pages(
+            ui,
+            viewport,
+            view,
+            &env,
+            &mut page_out,
+            PageApp { signature_preview: &mut app.signature_preview, tags_state: &mut app.tags_state, reading_order: &mut app.reading_order },
+        )
     });
     let PageOut {
         canvas_action,

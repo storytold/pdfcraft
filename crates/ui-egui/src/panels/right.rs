@@ -34,6 +34,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         let sig_expanded = &mut app.sig_expanded;
         let a11y = &mut app.a11y;
         let tags_state = &mut app.tags_state;
+        let reading_order = &mut app.reading_order;
         let compare = &app.compare;
         let comment_allowed = doc.allows_annotation();
         // A dialog or the palette owns the keyboard: the panel leaves Escape to it.
@@ -53,6 +54,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     RightPanel::Signatures => ("Signatures", Some(doc.signatures.iter().filter(|s| s.signed).count())),
                     RightPanel::Accessibility => ("Accessibility Checker", None),
                     RightPanel::Tags => ("Tags", None),
+                    RightPanel::ReadingOrder => ("Fix reading order", None),
                     RightPanel::Search => ("Search", None),
                     RightPanel::Compare => ("Compare", compare.as_ref().filter(|c| c.new == id).map(|c| c.result.changes.len())),
                 };
@@ -265,11 +267,23 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     RightPanel::Tags => {
                         let tags = tags_state.tags(doc);
                         let content = tags_state.content(doc);
-                        let (page, edit) = crate::tags_ui::panel(ui, &t, id, &tags, &content, tags_state, doc.allows_modification());
+                        let (page, edit, command) = crate::tags_ui::panel(ui, &t, id, &tags, &content, tags_state, doc.allows_modification());
                         if let Some(page) = page {
                             nav = Some(Nav::Page(page));
                         }
                         panel_edit = edit;
+                        panel_command = command.or(panel_command);
+                    }
+                    RightPanel::ReadingOrder => {
+                        let current = view.current;
+                        match crate::reading_order_ui::panel(ui, &t, doc, current, reading_order, doc.allows_modification()) {
+                            Some(crate::reading_order_ui::Action::Edit(e)) => panel_edit = Some(*e),
+                            Some(crate::reading_order_ui::Action::SelectTag(tag)) => {
+                                let tags = tags_state.tags(doc);
+                                tags_state.select(id, &tags, tag);
+                            }
+                            None => {}
+                        }
                     }
                     RightPanel::Search => crate::search_ui::panel(ui, &t, view, info.pages.len()),
                     RightPanel::Compare => compare_action = crate::compare_ui::panel(ui, &t, compare, id),
@@ -374,6 +388,10 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             });
     }
     if close {
+        // Closing the Reading Order panel puts the tool down too.
+        if app.right == Some(RightPanel::ReadingOrder) && app.quick_tool == crate::QuickTool::ReadingOrder {
+            app.quick_tool = crate::QuickTool::Select;
+        }
         app.choose_right_panel(None);
     }
     if let Some(e) = panel_edit {

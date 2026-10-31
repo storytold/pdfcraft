@@ -2497,7 +2497,6 @@ animation effects	Off	Вимкнено
 	Found {n} untagged content problems.	Знайдено проблем із нетегованим вмістом: {n}.
 	Tag form fields	Позначити поля форми
 	Mark as artifact	Позначити як артефакт
-	Remove this leaf tag from reading order and mark its direct content as an artifact	Вилучіть цей кінцевий тег із порядку читання та позначте його безпосередній вміст як артефакт
 	Mark content as artifact	Позначити вміст як артефакт
 	Word count	Кількість слів
 	Current page only	Лише поточна сторінка
@@ -2600,3 +2599,15 @@ animation effects	Off	Вимкнено
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Параметри цієї відповіді
 	Export value	Значення експорту
+	Highlight content	Підсвічувати вміст
+	Mark everything in this tag as an artifact and remove the tag from reading order	Позначити весь вміст цього тегу як артефакт і вилучити тег із порядку читання
+	Move into previous tag	Перемістити всередину попереднього тегу
+	Move out of parent tag	Винести з батьківського тегу
+	New tag	Новий тег
+	Delete tag	Видалити тег
+	Remove tag, keep its contents	Вилучити тег, зберігши вміст
+	Draw a rectangle on the page or click content, then choose its tag.	Намалюйте прямокутник на сторінці або клацніть вміст, а потім виберіть його тег.
+	Tag annotation	Додати тег до коментаря
+	Untagged content	Нетегований вміст
+	Annotation	Коментар
+	Tag content as {type}	Позначити вміст тегом {type}

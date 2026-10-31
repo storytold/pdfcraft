@@ -2480,7 +2480,6 @@ animation effects	Off	Izklopljeni
 	Found {n} untagged content problems.	Najdenih je {n} težav z neoznačeno vsebino.
 	Tag form fields	Označi polja obrazca
 	Mark as artifact	Označi kot artefakt
-	Remove this leaf tag from reading order and mark its direct content as an artifact	Odstranite to listno oznako iz vrstnega reda branja in označite njeno neposredno vsebino kot artefakt
 	Mark content as artifact	Označi vsebino kot artefakt
 	Word count	Število besed
 	Current page only	Samo trenutna stran
@@ -2583,3 +2582,15 @@ animation effects	Off	Izklopljeni
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Možnosti tega odgovora
 	Export value	Izvozna vrednost
+	Highlight content	Poudari vsebino
+	Mark everything in this tag as an artifact and remove the tag from reading order	Vso vsebino te oznake označi kot artefakt in oznako odstrani iz vrstnega reda branja
+	Move into previous tag	Premakni v prejšnjo oznako
+	Move out of parent tag	Premakni iz nadrejene oznake
+	New tag	Nova oznaka
+	Delete tag	Izbriši oznako
+	Remove tag, keep its contents	Odstrani oznako, ohrani njeno vsebino
+	Draw a rectangle on the page or click content, then choose its tag.	Na strani narišite pravokotnik ali kliknite vsebino, nato izberite njeno oznako.
+	Tag annotation	Označi opombo
+	Untagged content	Neoznačena vsebina
+	Annotation	Opomba
+	Tag content as {type}	Označi vsebino kot {type}

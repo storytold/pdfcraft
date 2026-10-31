@@ -48,6 +48,8 @@ pub enum RightPanel {
     Accessibility,
     /// Reachable PDF structure tags and their properties.
     Tags,
+    /// Accessibility ▸ Fix reading order: the Reading Order tool's tags and order list.
+    ReadingOrder,
     /// Advanced Search results.
     Search,
     /// Compare files: the differences.
@@ -93,6 +95,8 @@ pub enum QuickTool {
     /// Edit ▸ Column Select: drag a rectangle to select only the text inside it (#740). The
     /// Select tool does the same while Alt/Option is held at the start of a drag.
     ColumnSelect,
+    /// Accessibility ▸ Fix reading order: numbered regions; click or drag to select content.
+    ReadingOrder,
 }
 
 /// A file dropped on a page grid: its name, and its bytes or, for a file on disk, the path they are

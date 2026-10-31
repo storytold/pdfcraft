@@ -75,6 +75,7 @@ const PANELS: &[(RightPanel, &str, &str)] = &[
     (RightPanel::Signatures, "signatures", "Signatures"),
     (RightPanel::Accessibility, "accessibility", "Accessibility Checker"),
     (RightPanel::Tags, "tags", "Tags"),
+    (RightPanel::ReadingOrder, "reading-order", "Fix reading order"),
     (RightPanel::Search, "search", "Search"),
     (RightPanel::Compare, "compare", "Compare"),
 ];
@@ -543,7 +544,11 @@ impl PdfCraftApp {
             PASTE => ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste),
             SELECT_ALL => self.menu_input.extend(key(egui::Key::A, egui::Modifiers::COMMAND)),
             DELETE => self.menu_input.extend(key(egui::Key::Delete, egui::Modifiers::NONE)),
-            PANEL => self.choose_right_panel(panel(command)),
+            PANEL => match panel(command) {
+                // The Reading Order panel works with its tool: its command turns both on.
+                Some(RightPanel::ReadingOrder) if self.right != Some(RightPanel::ReadingOrder) => self.run_command("a11y.reading_order"),
+                p => self.choose_right_panel(p),
+            },
             ACTUAL_SIZE | PAGE_LEVEL | FIT_WIDTH | FIT_HEIGHT | ZOOM_IN | ZOOM_OUT | ROTATE_CW | ROTATE_CCW => {
                 let Some(v) = self.active.and_then(|i| self.views.get_mut(i)) else { return };
                 match command.id.as_str() {

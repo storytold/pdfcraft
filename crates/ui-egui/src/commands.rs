@@ -725,6 +725,10 @@ impl PdfCraftApp {
             "a11y.alt_text" => self.start_alt_text(),
             "a11y.autotag_fields" => self.autotag_form_fields(),
             "a11y.tags" => self.choose_right_panel(Some(RightPanel::Tags)),
+            "a11y.reading_order" => {
+                self.quick_tool = crate::QuickTool::ReadingOrder;
+                self.choose_right_panel(Some(RightPanel::ReadingOrder));
+            }
             "a11y.reading_options" => self.dialog = Some(Dialog::Properties(crate::PropsTab::Advanced)),
             "redact.mark" => {
                 self.quick_tool = crate::QuickTool::Redact;

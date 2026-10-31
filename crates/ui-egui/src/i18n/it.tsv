@@ -2484,7 +2484,6 @@ animation effects	Off	Disattivati
 	Found {n} untagged content problems.	Trovati {n} problemi di contenuto senza tag.
 	Tag form fields	Assegna tag ai campi del modulo
 	Mark as artifact	Segna come artefatto
-	Remove this leaf tag from reading order and mark its direct content as an artifact	Rimuovi questo tag foglia dall'ordine di lettura e segna il suo contenuto diretto come artefatto
 	Mark content as artifact	Segna il contenuto come artefatto
 	Word count	Conteggio parole
 	Current page only	Solo la pagina corrente
@@ -2810,3 +2809,15 @@ certificate	SHA-256 digest	Impronta SHA-256
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opzioni per questa risposta
 	Export value	Valore di esportazione
+	Highlight content	Evidenzia contenuto
+	Mark everything in this tag as an artifact and remove the tag from reading order	Segna tutto il contenuto di questo tag come artefatto e rimuovi il tag dall'ordine di lettura
+	Move into previous tag	Sposta nel tag precedente
+	Move out of parent tag	Sposta fuori dal tag superiore
+	New tag	Nuovo tag
+	Delete tag	Elimina tag
+	Remove tag, keep its contents	Rimuovi tag mantenendone il contenuto
+	Draw a rectangle on the page or click content, then choose its tag.	Disegna un rettangolo sulla pagina o fai clic sul contenuto, quindi scegli il suo tag.
+	Tag annotation	Aggiungi tag all'annotazione
+	Untagged content	Contenuto senza tag
+	Annotation	Annotazione
+	Tag content as {type}	Assegna tag {type} al contenuto

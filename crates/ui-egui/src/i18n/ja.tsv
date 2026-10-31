@@ -2475,7 +2475,6 @@ animation effects	Off	オフ
 	Found {n} untagged content problems.	タグなしのコンテンツの問題が {n} 件見つかりました。
 	Tag form fields	フォームフィールドにタグを付ける
 	Mark as artifact	アーティファクトとしてマーク
-	Remove this leaf tag from reading order and mark its direct content as an artifact	このリーフタグを読み上げ順序から削除し、その直接のコンテンツをアーティファクトとしてマークします
 	Mark content as artifact	コンテンツをアーティファクトとしてマーク
 	Word count	文字数と単語数
 	Current page only	現在のページのみ
@@ -2578,3 +2577,15 @@ animation effects	Off	オフ
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	この返信のオプション
 	Export value	書き出し値
+	Highlight content	コンテンツを強調表示
+	Mark everything in this tag as an artifact and remove the tag from reading order	このタグ内のすべてをアーティファクトとしてマークし、タグを読み上げ順序から削除
+	Move into previous tag	前のタグの中へ移動
+	Move out of parent tag	親タグの外へ移動
+	New tag	新規タグ
+	Delete tag	タグを削除
+	Remove tag, keep its contents	タグを削除して内容を保持
+	Draw a rectangle on the page or click content, then choose its tag.	ページ上で四角形をドラッグするか、コンテンツをクリックしてから、タグを選択してください。
+	Tag annotation	注釈にタグを付ける
+	Untagged content	タグなしのコンテンツ
+	Annotation	注釈
+	Tag content as {type}	コンテンツに {type} タグを付ける

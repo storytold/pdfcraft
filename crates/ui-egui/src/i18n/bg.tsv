@@ -2438,7 +2438,6 @@ animation effects	Off	Изключени
 	Found {n} untagged content problems.	Открити са {n} проблема с немаркирано съдържание.
 	Tag form fields	Маркиране на полетата на формуляра
 	Mark as artifact	Маркиране като артефакт
-	Remove this leaf tag from reading order and mark its direct content as an artifact	Премахнете този листов етикет от реда на четене и маркирайте прякото му съдържание като артефакт
 	Mark content as artifact	Маркиране на съдържание като артефакт
 	Word count	Брой думи
 	Current page only	Само текущата страница
@@ -2541,3 +2540,15 @@ animation effects	Off	Изключени
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Опции за този отговор
 	Export value	Стойност за експортиране
+	Highlight content	Осветяване на съдържанието
+	Mark everything in this tag as an artifact and remove the tag from reading order	Маркиране на всичко в този етикет като артефакт и премахване на етикета от реда на четене
+	Move into previous tag	Преместване в предишния етикет
+	Move out of parent tag	Преместване извън родителския етикет
+	New tag	Нов етикет
+	Delete tag	Изтриване на етикета
+	Remove tag, keep its contents	Премахване на етикета със запазване на съдържанието му
+	Draw a rectangle on the page or click content, then choose its tag.	Начертайте правоъгълник върху страницата или щракнете върху съдържание, след което изберете етикета му.
+	Tag annotation	Етикетиране на анотация
+	Untagged content	Немаркирано съдържание
+	Annotation	Анотация
+	Tag content as {type}	Етикетиране на съдържанието като {type}

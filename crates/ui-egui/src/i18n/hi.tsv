@@ -2809,3 +2809,14 @@ theme	Appearance	स्वरूप
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	इस जवाब के विकल्प
+	Highlight content	सामग्री हाइलाइट करें
+	Mark everything in this tag as an artifact and remove the tag from reading order	इस टैग की हर चीज़ को आर्टिफ़ैक्ट के रूप में चिह्नित करें और टैग को पढ़ने के क्रम से हटाएँ
+	Move into previous tag	पिछले टैग में ले जाएँ
+	Move out of parent tag	पैरेंट टैग से बाहर ले जाएँ
+	New tag	नया टैग
+	Delete tag	टैग हटाएँ
+	Remove tag, keep its contents	टैग हटाएँ, उसकी सामग्री रखें
+	Draw a rectangle on the page or click content, then choose its tag.	पृष्ठ पर एक आयत बनाएँ या सामग्री पर क्लिक करें, फिर उसका टैग चुनें।
+	Tag annotation	एनोटेशन को टैग करें
+	Untagged content	बिना टैग की सामग्री
+	Annotation	एनोटेशन

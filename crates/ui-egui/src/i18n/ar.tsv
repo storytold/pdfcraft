@@ -2752,7 +2752,6 @@ certificate	Version	الإصدار
 	Found {n} untagged content problems.	تم العثور على {n} مشكلة في محتوى غير معلَّم.
 	Tag form fields	وضع علامات على حقول النموذج
 	Mark as artifact	وضع علامة كعنصر زخرفي
-	Remove this leaf tag from reading order and mark its direct content as an artifact	أزل هذه العلامة من ترتيب القراءة وضع علامة على محتواها المباشر كعنصر زخرفي
 	Mark content as artifact	وضع علامة على المحتوى كعنصر زخرفي
 	Word count	عدد الكلمات
 	Current page only	الصفحة الحالية فقط
@@ -2854,3 +2853,15 @@ certificate	Version	الإصدار
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	خيارات هذا الرد
 	Export value	قيمة التصدير
+	Highlight content	إبراز المحتوى
+	Mark everything in this tag as an artifact and remove the tag from reading order	وضع علامة كعنصر زخرفي على كل ما في هذه العلامة وإزالتها من ترتيب القراءة
+	Move into previous tag	النقل إلى داخل العلامة السابقة
+	Move out of parent tag	النقل إلى خارج العلامة الأم
+	New tag	علامة جديدة
+	Delete tag	حذف العلامة
+	Remove tag, keep its contents	إزالة العلامة مع الإبقاء على محتوياتها
+	Draw a rectangle on the page or click content, then choose its tag.	ارسم مستطيلاً على الصفحة أو انقر على المحتوى، ثم اختر علامته.
+	Tag annotation	وسم التعليق التوضيحي
+	Untagged content	محتوى غير مُعلَّم
+	Annotation	تعليق توضيحي
+	Tag content as {type}	وسم المحتوى كـ {type}

@@ -2785,6 +2785,18 @@ key	Space	Space
 	Subscript	Chỉ số dưới
 	Less	Ít hơn
 	Other options	Tùy chọn khác
+	Highlight content	Tô sáng nội dung
+	Mark everything in this tag as an artifact and remove the tag from reading order	Đánh dấu mọi nội dung trong thẻ này là thành phần trang trí và xóa thẻ khỏi thứ tự đọc
+	Move into previous tag	Chuyển vào thẻ trước
+	Move out of parent tag	Chuyển ra khỏi thẻ cha
+	New tag	Thẻ mới
+	Delete tag	Xóa thẻ
+	Remove tag, keep its contents	Gỡ thẻ, giữ nội dung
+	Draw a rectangle on the page or click content, then choose its tag.	Vẽ một hình chữ nhật trên trang hoặc nhấp vào nội dung, rồi chọn thẻ cho nó.
+	Tag annotation	Gắn thẻ chú thích
+	Untagged content	Nội dung chưa được gắn thẻ
+	Annotation	Chú thích
+	Tag content as {type}	Gắn thẻ nội dung là {type}
 
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Bạn đang xem phiên bản đã ký của “{from}” (bản sửa đổi {rev}). Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
