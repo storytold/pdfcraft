@@ -820,3 +820,64 @@ fn form_entries_past_the_page_allowance_fail_the_audit() {
     let page: Dict = [(b"Contents".to_vec(), Object::Ref(draws)), (b"Resources".to_vec(), Object::Dict(resources))].into_iter().collect();
     assert!(matches!(crate::cover::filled_rects(&doc, &page), Err(crate::AuditError::TooManyForms)));
 }
+
+#[test]
+fn sc_scn_fills_inherited_form_resources_and_translucent_squares_are_handled() {
+    for set_dark in ["/DeviceGray cs 0 sc", "/DeviceRGB cs 0 0 0 scn", "/DeviceCMYK cs 0 0 0 1 sc", "/Indexed /DeviceRGB 1 <FFFFFF000000> cs 1 sc"] {
+        let content = format!("BT /F1 24 Tf 100 700 Td (SECRET) Tj ET\n1 g\n{set_dark}\n98 688 94 32 re f\n");
+        let findings = audit_redactions(&open(one_page(content.as_bytes(), ""))).expect("audit must run");
+        assert_eq!(findings.len(), 1, "{set_dark}: {findings:?}");
+        assert_eq!(findings[0].covered_text, "SECRET");
+    }
+
+    // Named /ColorSpace resource entry for /Indexed and unsupported colour spaces leaving a dark fill intact.
+    let mut b = Builder::new();
+    b.add("<< /Type /Catalog /Pages 2 0 R >>");
+    b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /ColorSpace << /CS1 [/Indexed /DeviceRGB 1 <FFFFFF000000>] >> >> >>");
+    b.add_stream(b"BT /F1 24 Tf 100 700 Td (SECRET) Tj ET\n1 g\n/CS1 cs 1 sc\n98 688 94 32 re f\n");
+    b.add(FONT);
+    let findings = audit_redactions(&open(b.build())).expect("audit must run");
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].covered_text, "SECRET");
+
+    let unsupported = b"BT /F1 24 Tf 100 700 Td (SECRET) Tj ET\n0 g\n/UnknownCS cs 1 sc\n98 688 94 32 re f\n";
+    let findings = audit_redactions(&open(one_page(unsupported, ""))).expect("audit must run");
+    assert_eq!(findings.len(), 1, "unsupported cs leaves dark fill intact: {findings:?}");
+
+    // A form XObject without its own /Resources inherits the enclosing page/form resources
+    // (ISO 32000-2 §8.10.2), so a nested form drawn from it is still audited.
+    let mut b = Builder::new();
+    b.add("<< /Type /Catalog /Pages 2 0 R >>");
+    b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Outer 6 0 R /Inner 7 0 R >> >> >>");
+    b.add_stream(b"BT /F1 24 Tf 100 700 Td (SECRET) Tj ET\n/Outer Do\n");
+    b.add(FONT);
+    b.add_stream_with(b"/Inner Do\n", "/Type /XObject /Subtype /Form /BBox [0 0 612 792]");
+    b.add_stream_with(b"0 g\n98 688 94 32 re f\n", "/Type /XObject /Subtype /Form /BBox [0 0 612 792]");
+    let findings = audit_redactions(&open(b.build())).expect("audit must run");
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].covered_text, "SECRET");
+
+    // A /Square annotation without /AP and with non-stroking opacity /ca < 1.0 is translucent,
+    // whereas one with /AP ignores /ca per ISO 32000-2 §12.5.5.
+    let mut b = Builder::new();
+    b.add("<< /Type /Catalog /Pages 2 0 R >>");
+    b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>");
+    b.add_stream(b"BT /F1 24 Tf 100 700 Td (SECRET) Tj ET\n");
+    b.add(FONT);
+    b.add("<< /Type /Annot /Subtype /Square /Rect [95 685 200 725] /IC [0 0 0] /ca 0.5 >>");
+    let findings = audit_redactions(&open(b.build())).expect("audit must run");
+    assert!(findings.is_empty(), "{findings:?}");
+
+    let mut b = Builder::new();
+    b.add("<< /Type /Catalog /Pages 2 0 R >>");
+    b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>");
+    b.add_stream(b"BT /F1 24 Tf 100 700 Td (SECRET) Tj ET\n");
+    b.add(FONT);
+    b.add("<< /Type /Annot /Subtype /Square /Rect [95 685 200 725] /IC [0 0 0] /ca 0.5 /AP << >> >>");
+    let findings = audit_redactions(&open(b.build())).expect("audit must run");
+    assert_eq!(findings.len(), 1, "{findings:?}");
+}

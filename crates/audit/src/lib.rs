@@ -347,8 +347,11 @@ fn annots(doc: &Document, page: &Dict) -> Result<Vec<AnnotationCover>, AuditErro
                 if flags & 2 != 0 || flags & 32 != 0 {
                     continue;
                 }
-                let alpha = dict.get(b"CA").map(|o| doc.resolve(o)).and_then(|o| o.as_f64()).unwrap_or(1.0);
-                if alpha >= 1.0
+                let ca_stroke = dict.get(b"CA").map(|o| doc.resolve(o)).and_then(|o| o.as_f64()).unwrap_or(1.0);
+                let ca_fill = dict.get(b"ca").map(|o| doc.resolve(o)).and_then(|o| o.as_f64()).unwrap_or(1.0);
+                let has_appearance = dict.get(b"AP").is_some();
+                if ca_stroke >= 1.0
+                    && (has_appearance || ca_fill >= 1.0)
                     && let Some(rgb) = annotation_color(doc, &dict, b"IC")
                 {
                     out.push(AnnotationCover::Square { rect, rgb });
@@ -370,6 +373,7 @@ fn subtype(doc: &Document, dict: &Dict) -> Result<Option<Vec<u8>>, AuditError> {
     Ok(name)
 }
 
+/// Reads a 1-, 3-, or 4-component colour array (`key`) from an annotation dictionary as `[r, g, b]`.
 fn annotation_color(doc: &Document, dict: &Dict, key: &[u8]) -> Option<[f64; 3]> {
     let values: Vec<f64> = dict.get(key).map(|o| doc.resolve(o))?.as_array()?.iter().map(|o| doc.resolve(o).as_f64()).collect::<Option<_>>()?;
     if !values.iter().all(|v| v.is_finite()) {
