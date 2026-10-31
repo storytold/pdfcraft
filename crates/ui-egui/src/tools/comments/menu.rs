@@ -1,5 +1,4 @@
-use super::paint::edit_anchor;
-use super::state::{Composer, ComposerKind};
+use super::state::{Composer, ComposerKind, start_editing};
 use super::{
     Annotation, Color32, CommentPrefs, CommentTool, DocInfo, DocView, Edit, Rect, ReviewState, Rgb, SELECT_BLUE, SWATCHES, Sense, Stroke, color32,
     icons, theme, tool_for, vec2,
@@ -42,13 +41,10 @@ pub(crate) fn context_menu(
             let (page, index) = (a.page, a.index);
             attachment_items(ui, view, info, a);
             if ui.add_enabled(allowed, egui::Button::new(tl!("Edit text…"))).clicked() {
-                view.comments.composer = Some(Composer {
-                    page,
-                    at: edit_anchor(info, a),
-                    kind: ComposerKind::Edit(index),
-                    text: a.contents.clone().unwrap_or_default(),
-                    focus: true,
-                });
+                // The view's rotation, also for a page that isn't on screen (the Comments panel's
+                // menu), which has no transform to read it from.
+                let rotation = view.rotation;
+                start_editing(&mut view.comments, a, info, rotation);
                 ui.close();
             }
             if ui.add_enabled(allowed, egui::Button::new(tl!("Reply"))).clicked() {

@@ -755,6 +755,9 @@ impl DocView {
         if self.content.draft.as_ref().is_some_and(|d| d.page > last || self.page_count == 0) {
             self.content.draft = None;
         }
+        if self.comments.inline.as_ref().is_some_and(|t| t.page > last || self.page_count == 0) {
+            self.comments.inline = None;
+        }
         if self.select_anchor.is_some_and(|a| a > last) {
             self.select_anchor = None;
         }
@@ -2728,6 +2731,9 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
         crate::camera_ui::bar(ui.ctx(), view, avail, t, can_modify);
     }
     if let Some(e) = comments::composer(ui.ctx(), view, info, prefs) {
+        view.pending_edit = Some(e);
+    }
+    if let Some(e) = comments::inline_text(ui.ctx(), view, info, doc, prefs) {
         view.pending_edit = Some(e);
     }
     if let Some(e) = crate::edit_text_ui::overlay(ui.ctx(), view, info) {

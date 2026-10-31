@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use super::geometry::{corner_ratio, is_markup, resized};
+use super::paint::edit_anchor;
 use super::{Annotation, CommentPrefs, CommentTool, DocInfo, Edit, PagePointer, PageXform, Pos2, QuickTool, Rect};
 
 /// The user's login name, which Acrobat uses as the default comment author.
@@ -63,6 +64,83 @@ pub struct Composer {
     pub kind: ComposerKind,
     pub text: String,
     pub focus: bool,
+}
+
+/// A text box typed into on the page itself, as Acrobat edits one: a new box whose top-left
+/// corner is `at`, or the text box at `index` on `page`. Clicking away or ⌘/Ctrl+Enter keeps the
+/// text; Escape drops the change.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InlineText {
+    pub page: usize,
+    /// `None`: a new text box.
+    pub index: Option<usize>,
+    /// A new box's top-left corner, in user space.
+    pub at: [f64; 2],
+    /// A new box dragged out to this displayed width and height (see [`ComposerKind::TextBox`]);
+    /// `None`: the box fits its text.
+    pub size: Option<[f64; 2]>,
+    pub text: String,
+    /// The text it had (empty for a new box): nothing to do when it is unchanged.
+    pub original: String,
+    /// The comment's `/NM`, to find it again however the page's comments shift while it is typed
+    /// into (`None` for a new box, or a comment without one).
+    pub name: Option<String>,
+    pub focus: bool,
+}
+
+impl InlineText {
+    /// The comment this edits as the document lists it now: by its `/NM` wherever the page's
+    /// comments have moved it (the nearest one, as `/NM` need not be unique), else the one at
+    /// `index` while it still has the text it had. `None` for a new box, or when the comment is
+    /// gone or another has taken its place: then the text goes nowhere.
+    pub(crate) fn target<'a>(&self, info: &'a DocInfo) -> Option<&'a Annotation> {
+        let index = self.index?;
+        let mut on_page = info.annotations.iter().filter(|a| a.page == self.page && !a.is_reply());
+        match &self.name {
+            Some(name) => on_page.filter(|a| a.name.as_ref() == Some(name)).min_by_key(|a| a.index.abs_diff(index)),
+            None => on_page.find(|a| a.index == index && a.contents.as_deref().unwrap_or_default() == self.original),
+        }
+    }
+
+    /// Whether keeping the text would change anything, as [`inline_edit`] decides: trailing
+    /// spaces and line breaks don't count, and a new box needs some text.
+    pub(crate) fn has_changes(&self) -> bool {
+        let text = self.text.trim_end();
+        match self.index {
+            Some(_) => text != self.original.trim_end(),
+            None => !text.trim().is_empty(),
+        }
+    }
+}
+
+/// Whether `a` is typed into on the page (a text box or typewriter text whose lines read upright
+/// on screen) rather than in the composer card: a callout's box sits inside its rectangle, and
+/// turned text runs another way than the editor. The page's `/Rotate` and the view's turn add
+/// up; text PdfCraft wrote on a turned page is laid out for that turn ([`Annotation::text_turn`]).
+pub(crate) fn edits_in_place(a: &Annotation, info: &DocInfo, view_rotation: u16) -> bool {
+    a.subtype == "FreeText"
+        && a.intent.as_deref() != Some("FreeTextCallout")
+        && info.pages.get(a.page).is_some_and(|p| (u32::from(p.rotation) + u32::from(view_rotation)) % 360 == u32::from(a.text_turn) % 360)
+}
+
+/// Edit the text of comment `a`: on the page for a text box (see [`edits_in_place`]), else in
+/// the composer card.
+pub(crate) fn start_editing(cv: &mut CommentView, a: &Annotation, info: &DocInfo, view_rotation: u16) {
+    let text = a.contents.clone().unwrap_or_default();
+    if edits_in_place(a, info, view_rotation) {
+        cv.inline = Some(InlineText {
+            page: a.page,
+            index: Some(a.index),
+            at: [0.0; 2],
+            size: None,
+            original: text.clone(),
+            text,
+            name: a.name.clone(),
+            focus: true,
+        });
+    } else {
+        cv.composer = Some(Composer { page: a.page, at: edit_anchor(info, a), kind: ComposerKind::Edit(a.index), text, focus: true });
+    }
 }
 
 /// A released drawing gesture waiting for the page raster to show its annotation.
@@ -133,6 +211,8 @@ pub struct CommentView {
     /// Escape ends egui's drag too; ignore its synthetic release until the mouse is up.
     pub(super) cancelled_drag: bool,
     pub composer: Option<Composer>,
+    /// A text box being typed into on the page itself.
+    pub inline: Option<InlineText>,
     /// Reply being typed under the selected card.
     pub reply: String,
     /// Inline edit of a card's text in the Comments panel: (page, index, text).
@@ -170,6 +250,10 @@ pub struct CommentView {
     pub context_at: Option<(usize, [f64; 2])>,
     /// A one-shot tool just finished; the app returns to the Select tool unless pinned.
     pub tool_done: bool,
+    /// The text box being typed into was kept because it lost the keyboard: the press that took
+    /// it away only ends that, and its click must not start another box at once (the page sees
+    /// the click on the frame of the release, after the editor has gone).
+    pub inline_left: bool,
     /// What the inline editor (`editing`) does with the keyboard the next time it is drawn.
     pub(crate) editor_focus: Option<EditorFocus>,
 }

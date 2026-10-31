@@ -665,6 +665,33 @@ fn content_invalidation_keeps_the_following_state() {
     assert_eq!(f.current.and_then(|i| f.matches.get(i)).map(|(p, _)| *p), Some(0), "the result list still selects the late match");
 }
 
+/// Text typed into a comment on a page that an edit removes goes with the page, as text typed
+/// into the page does, rather than waiting for an index that now names another page or none.
+#[test]
+fn a_comment_draft_on_a_removed_page_goes_with_it() {
+    let mut v = view(3, PageLayout::Single, true);
+    v.comments.inline = Some(crate::comments::InlineText {
+        page: 2,
+        index: None,
+        at: [20.0, 30.0],
+        size: None,
+        text: "Typed".into(),
+        original: String::new(),
+        name: None,
+        focus: false,
+    });
+    let info = |n: usize| pdfcraft_render::DocInfo {
+        pages: (0..n)
+            .map(|_| pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 })
+            .collect(),
+        ..Default::default()
+    };
+    v.document_changed(&info(3));
+    assert!(v.comments.inline.is_some(), "kept while its page is there");
+    v.document_changed(&info(2));
+    assert!(v.comments.inline.is_none(), "gone with its page");
+}
+
 /// A document edit can shrink the page count. `document_changed` clamps `current` but leaves
 /// the automatic anchor's page index alone; a re-extracted layer must then end following
 /// rather than reveal a match by scrolling from a page that no longer exists.

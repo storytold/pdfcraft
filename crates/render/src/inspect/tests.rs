@@ -303,6 +303,7 @@ fn no_rotate_comments_are_shown_upright_from_their_corner_and_back() {
         intent: None,
         fill_sign: false,
         no_rotate: true,
+        text_turn: 0,
         points: Vec::new(),
     };
     let rect = note.rect.map(f64::from);

@@ -2,8 +2,8 @@ use super::geometry::{
     CARET_SIZE, HANDLES, clamp_to, corner_ratio, drawn_box, grabs_points, handle_pos, is_markup, point_handle, reshapable, reshaped, resizable,
     resized, snapped_caret,
 };
-use super::paint::{drawn_shape, edit_anchor, erase, new_comment};
-use super::state::{Composer, ComposerKind, Gesture, PageCx};
+use super::paint::{drawn_shape, erase, new_comment};
+use super::state::{Composer, ComposerKind, Gesture, InlineText, PageCx, start_editing};
 use super::{Annotation, CommentPrefs, CommentTool, DocInfo, DocView, Edit, Pos2, QuickTool, Rect, Shape, vec2};
 use crate::page_cursor::{Layer, Subject};
 use crate::page_router::{CommentPart, Hit, Owner};
@@ -269,13 +269,7 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
         && let Some((a, _)) = owner
     {
         cv.selected = Some((cx.page, a.index));
-        cv.composer = Some(Composer {
-            page: cx.page,
-            at: edit_anchor(cx.info, a),
-            kind: ComposerKind::Edit(a.index),
-            text: a.contents.clone().unwrap_or_default(),
-            focus: true,
-        });
+        start_editing(cv, a, cx.info, cx.xf.rot);
         consumed = true;
     }
     consumed
@@ -533,9 +527,12 @@ impl Gestures<'_> {
         }
         // A text box also takes a drag, as in Acrobat: the box is drawn at that size and its
         // text wraps inside it (#2669).
+        let upright = cx.xf.rot.is_multiple_of(360) && cx.info.pages.get(cx.page).is_some_and(|pg| pg.rotation.is_multiple_of(360));
         if tool == CommentTool::TextBox {
             if resp.drag_started()
                 && pressed_here
+                && cv.inline.is_none()
+                && !cv.inline_left
                 && let Some(o) = origin
             {
                 cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![cx.to_user(o)] });
@@ -559,16 +556,42 @@ impl Gestures<'_> {
                     let drawn =
                         (r.width() >= 6.0 && r.height() >= 6.0).then(|| cx.info.pages.get(page)).flatten().map(|p| drawn_box(p, *first, *last));
                     let (at, size) = drawn.map_or((*first, None), |(at, size)| (at, Some(size)));
-                    cv.composer = Some(Composer { page, at, kind: ComposerKind::TextBox { size }, text: String::new(), focus: true });
+                    if upright {
+                        cv.inline =
+                            Some(InlineText { page, index: None, at, size, text: String::new(), original: String::new(), name: None, focus: true });
+                    } else {
+                        cv.composer = Some(Composer { page, at, kind: ComposerKind::TextBox { size }, text: String::new(), focus: true });
+                    }
                 }
             }
         }
-        if resp.clicked()
+        // A click while a text box is being typed into only ends that (its editor loses the
+        // focus and keeps the text); the next click starts another. The editor goes on the
+        // press, so its release still has to be let go here; once nothing is pressed, no click
+        // is coming for it.
+        if cv.inline_left && (resp.clicked() || !cx.ptr.primary_down && cx.ptr.edges.is_empty()) {
+            cv.inline_left = false;
+        } else if resp.clicked()
             && over_page
+            && cv.inline.is_none()
             && let Some(p) = pointer
         {
-            let kind = if tool == CommentTool::Note { ComposerKind::Note } else { ComposerKind::TextBox { size: None } };
-            cv.composer = Some(Composer { page: cx.page, at: cx.to_user(p), kind, text: String::new(), focus: true });
+            if tool == CommentTool::TextBox && upright {
+                let at = cx.to_user(p);
+                cv.inline = Some(InlineText {
+                    page: cx.page,
+                    index: None,
+                    at,
+                    size: None,
+                    text: String::new(),
+                    original: String::new(),
+                    name: None,
+                    focus: true,
+                });
+            } else {
+                let kind = if tool == CommentTool::Note { ComposerKind::Note } else { ComposerKind::TextBox { size: None } };
+                cv.composer = Some(Composer { page: cx.page, at: cx.to_user(p), kind, text: String::new(), focus: true });
+            }
             cv.selected = None;
         }
         true

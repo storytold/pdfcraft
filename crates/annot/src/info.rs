@@ -35,9 +35,21 @@ pub struct Summary {
     pub fill_sign: bool,
     /// The NoRotate flag (`/F` bit 5), as `pdfcraft_render::Annotation::no_rotate`.
     pub no_rotate: bool,
+    /// `/PCTextRotate`, as `pdfcraft_render::Annotation::text_turn`.
+    pub text_turn: u16,
     /// A line's two ends (`/L`), or the corners of connected lines, a polygon or a cloud
     /// (`/Vertices`), in user space; empty for other comments.
     pub points: Vec<[f32; 2]>,
+}
+
+/// A text box's `/Contents` as its appearance lays it out: not trimmed, as spaces at either end
+/// take room on a line (the box was sized with them).
+pub(crate) fn contents_as_drawn(doc: &Document, d: &Dict) -> String {
+    let Some(o) = d.get(b"Contents").map(|o| doc.resolve(o)) else { return String::new() };
+    match &*o {
+        Object::String(s) => s.to_text(),
+        _ => String::new(),
+    }
 }
 
 pub(crate) fn text_value(doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
@@ -144,6 +156,7 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 intent: d.get(b"IT").and_then(|o| doc.resolve(o).as_name().map(|n| String::from_utf8_lossy(n).into_owned())),
                 fill_sign: is_fill_sign(doc, d),
                 no_rotate: drawn_upright(doc, d),
+                text_turn: appearance::text_turn(d) as u16,
                 points,
             });
         }
