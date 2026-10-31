@@ -697,6 +697,49 @@ impl Automation {
         let (page, index) = self.comment_target(a)?;
         self.apply(a, Edit::DeleteAnnotation { page, index })
     }
+
+    /// The XFDF of the listed comments and their replies (`comments`: 1-based [page, index] pairs).
+    pub(crate) fn comments_copy(&self, a: &Args) -> Result<Value> {
+        let id = self.doc(a)?.id;
+        let all = self.comments(a)?;
+        let shape = || ToolError::InvalidArgs("comments: [[page, index], …] (1-based, as comment_list reports)".into());
+        let list = a.get("comments").and_then(Value::as_array).ok_or_else(shape)?;
+        let mut which = Vec::with_capacity(list.len());
+        for item in list {
+            let pair = item.as_array().filter(|p| p.len() == 2).and_then(|p| Some((p.first()?.as_u64()?, p.get(1)?.as_u64()?)));
+            let Some((page, index)) = pair.filter(|(p, i)| *p >= 1 && *i >= 1) else { return Err(shape()) };
+            let (page, index) = (usize::try_from(page - 1).map_err(|_| shape())?, usize::try_from(index - 1).map_err(|_| shape())?);
+            if !all.iter().any(|c| c.page == page && c.index == index) {
+                return Err(failed(format!("there is no comment {} on page {} (see comment_list)", index + 1, page + 1)));
+            }
+            which.push((page, index));
+        }
+        let xfdf = self.session.export_comments(id, &which).map_err(failed)?;
+        Ok(json!({ "xfdf": xfdf, "comments": which.len() }))
+    }
+
+    /// Add the comments of `xfdf` (from `comments_copy`) to `page` as new comments.
+    pub(crate) fn comments_paste(&mut self, a: &Args) -> Result<Value> {
+        let page = self.page(a)?;
+        let xfdf = a.str("xfdf")?.to_owned();
+        if !pdfcraft_engine::is_xfdf_comments(&xfdf) {
+            return Err(ToolError::InvalidArgs("xfdf: the text comments_copy returned (XFDF with <annots>)".into()));
+        }
+        let offset = match a.nums::<2>("at")? {
+            Some([x, y]) => {
+                let info = self.doc(a)?.info.pages.get(page).cloned().ok_or_else(|| failed(format!("no page {}", page + 1)))?;
+                let [cx, cy] = to_user(&info, x, y);
+                let b =
+                    pdfcraft_engine::comments_bounds(&xfdf).ok_or_else(|| ToolError::InvalidArgs("xfdf: no comment with a rect to place".into()))?;
+                Some([cx - (b[0] + b[2]) / 2.0, cy - (b[1] + b[3]) / 2.0])
+            }
+            None => None,
+        };
+        let before = self.comments(a)?.len();
+        let mut out = self.apply(a, Edit::PasteComments { xfdf, page, offset })?;
+        out["comments"] = json!(self.comments(a)?.len().saturating_sub(before));
+        Ok(out)
+    }
 }
 
 impl Automation {

@@ -2809,3 +2809,18 @@ theme	Appearance	स्वरूप
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	इस जवाब के विकल्प
+# Comments copied, pasted and selected together (M5).
+	Copy comment	टिप्पणी कॉपी करें
+	Copy comments	टिप्पणियाँ कॉपी करें
+	Paste comments	टिप्पणियाँ चिपकाएँ
+	Delete comments	टिप्पणियाँ हटाएँ
+	Move comments	टिप्पणियाँ स्थानांतरित करें
+	Complete	पूर्ण करें
+	Undo last point	अंतिम बिंदु पूर्ववत करें
+	Cancel drawing	रेखांकन रद्द करें
+	Copy comments first	पहले टिप्पणियाँ कॉपी करें
+	Click where the copied comments go; Escape lets them go	जहाँ कॉपी की गई टिप्पणियाँ जानी हैं वहाँ क्लिक करें; Escape उन्हें छोड़ देता है
+	The copied comments are larger than this page; they were placed as they are	कॉपी की गई टिप्पणियाँ इस पृष्ठ से बड़ी हैं; उन्हें वैसे ही रखा गया
+	The clipboard holds no comments	क्लिपबोर्ड में कोई टिप्पणी नहीं है
+	Comments: {n}	टिप्पणियाँ: {n}
+	Changes here apply to all {n} selected comments	यहाँ के बदलाव सभी {n} चयनित टिप्पणियों पर लागू होते हैं

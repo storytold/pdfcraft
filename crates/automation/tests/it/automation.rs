@@ -10190,3 +10190,49 @@ fn simple_rule_scan_drawn(content: &[u8]) -> Vec<u8> {
     }
     write_full(&doc, &SaveOptions::default()).unwrap()
 }
+
+/// Copy and paste comments between documents through the tools: the copies carry their replies,
+/// land on the asked-for page under their own names (a second paste gives a second set), and a
+/// plain text is refused.
+#[test]
+fn comments_copy_and_paste_between_documents_through_tools() {
+    let dir = workdir("comments-clipboard");
+    let mut a = auto(&dir);
+    let src = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "comment_add", json!({ "doc": src, "page": 2, "type": "note", "at": [30, 30], "contents": "Please review", "author": "Ada" }));
+    ok(&mut a, "comment_add", json!({ "doc": src, "page": 2, "type": "rectangle", "rect": [20, 20, 80, 60], "contents": "Box" }));
+    ok(&mut a, "comment_reply", json!({ "doc": src, "page": 2, "index": 1, "text": "Done", "author": "Bob" }));
+    // Positions as comment_list reports them (a note's pop-up takes a position of its own).
+    let listed = ok(&mut a, "comment_list", json!({ "doc": src, "page": 2 }));
+    let pairs: Vec<Value> = listed["comments"].as_array().unwrap().iter().map(|c| json!([c["page"], c["index"]])).collect();
+    assert_eq!(pairs.len(), 2, "{listed}");
+    let copied = ok(&mut a, "comments_copy", json!({ "doc": src, "comments": pairs }));
+    assert_eq!(copied["comments"], 2);
+    let xfdf = copied["xfdf"].as_str().unwrap().to_owned();
+    assert!(xfdf.contains("inreplyto=") && xfdf.contains("<square"), "{xfdf}");
+    let dst = ok(&mut a, "doc_open", json!({ "path": "b.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "comments_paste", json!({ "doc": dst, "page": 1, "xfdf": xfdf }));
+    assert_eq!(r["comments"], 3, "two comments and the reply: {r}");
+    assert_eq!(r["undo"], "Paste comments");
+    let list = ok(&mut a, "comment_list", json!({ "doc": dst }));
+    let comments = list["comments"].as_array().unwrap();
+    assert_eq!(comments.len(), 2, "the reply is in its thread, not a comment of its own: {list}");
+    assert!(comments.iter().all(|c| c["page"] == 1), "{list}");
+    assert_eq!(comments.iter().filter(|c| c["contents"] == "Please review").count(), 1);
+    // The same again: a second set, not a replacement of the first.
+    ok(&mut a, "comments_paste", json!({ "doc": dst, "page": 1, "xfdf": copied["xfdf"] }));
+    assert_eq!(ok(&mut a, "comment_list", json!({ "doc": dst }))["comments"].as_array().unwrap().len(), 4);
+    // Placed: the copies' box is centred at `at` (top-left page coordinates, like comment_add).
+    let r = ok(&mut a, "comments_paste", json!({ "doc": dst, "page": 2, "xfdf": copied["xfdf"], "at": [100, 150] }));
+    assert_eq!(r["comments"], 3);
+    let placed = ok(&mut a, "comment_list", json!({ "doc": dst, "page": 2 }));
+    let rects: Vec<Vec<f64>> =
+        placed["comments"].as_array().unwrap().iter().map(|c| c["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect()).collect();
+    let (x0, y0, x1, y1) =
+        rects.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |(a, b, c, d), r| (a.min(r[0]), b.min(r[1]), c.max(r[2]), d.max(r[3])));
+    assert!(((x0 + x1) / 2.0 - 100.0).abs() < 1.0 && ((y0 + y1) / 2.0 - 150.0).abs() < 1.0, "centred at [100, 150]: {rects:?}");
+    assert!(matches!(a.call("comments_paste", &json!({ "doc": dst, "page": 1, "xfdf": "hello" })), Err(ToolError::InvalidArgs(_))));
+    assert!(a.call("comments_copy", &json!({ "doc": src, "comments": [[9, 9]] })).is_err(), "no such comment");
+    assert!(matches!(a.call("comments_copy", &json!({ "doc": src, "comments": [[2]] })), Err(ToolError::InvalidArgs(_))));
+    assert_eq!(ok(&mut a, "comment_list", json!({ "doc": src }))["comments"].as_array().unwrap().len(), 2, "the source is untouched");
+}

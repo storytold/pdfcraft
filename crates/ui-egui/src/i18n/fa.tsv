@@ -2816,3 +2816,20 @@ theme	Appearance	ظاهر
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	گزینه‌های این پاسخ
+
+# Comments copied between documents and selected several at once; finishing connected lines from the menu (M14).
+	Copy comment	رونوشت یادداشت
+	Copy comments	رونوشت یادداشت‌ها
+	Paste comments	جای‌گذاری یادداشت‌ها
+	Delete comments	حذف یادداشت‌ها
+	Move comments	جابه‌جایی یادداشت‌ها
+	Complete	تکمیل
+	Undo last point	واگرد آخرین نقطه
+	Cancel drawing	لغو ترسیم
+	Copy comments first	ابتدا یادداشت‌ها را رونوشت کنید
+	Click where the copied comments go; Escape lets them go	جایی را که یادداشت‌های رونوشت‌شده باید قرار بگیرند کلیک کنید؛ Escape آن‌ها را رها می‌کند
+	The copied comments are larger than this page; they were placed as they are	یادداشت‌های رونوشت‌شده از این صفحه بزرگ‌ترند؛ همان‌طور که هستند قرار گرفتند
+	The clipboard holds no comments	بریده دان هیچ یادداشتی ندارد
+	Comments: {n}	یادداشت‌ها: {n}
+# Comment Properties and the Colour menu act on every selected comment (M5).
+	Changes here apply to all {n} selected comments	تغییرات اینجا روی همه {n} یادداشت انتخاب‌شده اعمال می‌شود

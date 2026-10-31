@@ -2845,3 +2845,19 @@ key	Space	Space
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tùy chọn cho câu trả lời này
 	Export value	Giá trị xuất
+# Comments copied between documents and selected several at once; finishing connected lines from the menu (M14).
+	Copy comment	Sao chép nhận xét
+	Copy comments	Sao chép các nhận xét
+	Paste comments	Dán các nhận xét
+	Delete comments	Xóa các nhận xét
+	Move comments	Di chuyển các nhận xét
+	Complete	Hoàn tất
+	Undo last point	Hủy điểm cuối
+	Cancel drawing	Hủy vẽ
+	Copy comments first	Hãy sao chép nhận xét trước
+	Click where the copied comments go; Escape lets them go	Nhấp vào nơi đặt các nhận xét đã sao chép; Escape để bỏ
+	The copied comments are larger than this page; they were placed as they are	Các nhận xét đã sao chép lớn hơn trang này; đã đặt nguyên trạng
+	The clipboard holds no comments	Bảng tạm không có nhận xét nào
+	Comments: {n}	Nhận xét: {n}
+# Comment Properties and the Colour menu act on every selected comment (M5).
+	Changes here apply to all {n} selected comments	Các thay đổi ở đây áp dụng cho tất cả {n} nhận xét đã chọn

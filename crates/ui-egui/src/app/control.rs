@@ -355,7 +355,7 @@ impl PdfCraftApp {
                 let (p, i) = value.split_once(':').ok_or("comment: PAGE:INDEX")?;
                 let (p, i): (usize, usize) =
                     (p.trim().parse().map_err(|_| "comment: PAGE:INDEX")?, i.trim().parse().map_err(|_| "comment: PAGE:INDEX")?);
-                v.comments.selected = Some((p.saturating_sub(1), i.saturating_sub(1)));
+                v.comments.select_only((p.saturating_sub(1), i.saturating_sub(1)));
                 v.comments.reveal = true;
             }
             // `--combine-view list`: Combine files as thumbnails (grid) or as the table (list).

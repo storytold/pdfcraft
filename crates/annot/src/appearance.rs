@@ -832,46 +832,25 @@ fn draw_stamp(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -
     let [x0, y0, x1, y1] = draw;
     let (w, h) = (x1 - x0, y1 - y0);
     let lw = w.min(h) * 0.12;
+    // The strokes come from `FillMark::strokes`, which a copy's outline draws too.
+    let path = |mark: crate::FillMark| {
+        let ops: Vec<String> = mark
+            .strokes(draw)
+            .iter()
+            .flat_map(|s| s.iter().enumerate().map(|(i, p)| format!("{} {} {}", n(p[0]), n(p[1]), if i == 0 { "m" } else { "l" })))
+            .collect();
+        format!("{} S\n", ops.join(" "))
+    };
     match name {
-        b"PCCheck" => c.push_str(&format!(
-            "{}{} w 1 J 1 j\n{} {} m {} {} l {} {} l S\n",
-            rg_stroke(col),
-            n(lw),
-            n(x0 + w * 0.15),
-            n(y0 + h * 0.5),
-            n(x0 + w * 0.4),
-            n(y0 + h * 0.2),
-            n(x0 + w * 0.88),
-            n(y0 + h * 0.85)
-        )),
-        b"PCCross" => c.push_str(&format!(
-            "{}{} w 1 J\n{} {} m {} {} l {} {} m {} {} l S\n",
-            rg_stroke(col),
-            n(lw),
-            n(x0 + w * 0.18),
-            n(y0 + h * 0.18),
-            n(x1 - w * 0.18),
-            n(y1 - h * 0.18),
-            n(x0 + w * 0.18),
-            n(y1 - h * 0.18),
-            n(x1 - w * 0.18),
-            n(y0 + h * 0.18)
-        )),
+        b"PCCheck" => c.push_str(&format!("{}{} w 1 J 1 j\n{}", rg_stroke(col), n(lw), path(crate::FillMark::Check))),
+        b"PCCross" => c.push_str(&format!("{}{} w 1 J\n{}", rg_stroke(col), n(lw), path(crate::FillMark::Cross))),
         b"PCDot" => {
             let r = w.min(h) * 0.3;
             c.push_str(&rg(col));
             c.push_str(&ellipse(x0 + w / 2.0 - r, y0 + h / 2.0 - r, x0 + w / 2.0 + r, y0 + h / 2.0 + r));
             c.push_str("f\n");
         }
-        b"PCLine" => c.push_str(&format!(
-            "{}{} w 1 J\n{} {} m {} {} l S\n",
-            rg_stroke(col),
-            n(h.clamp(0.5, 2.0)),
-            n(x0),
-            n(y0 + h / 2.0),
-            n(x1),
-            n(y0 + h / 2.0)
-        )),
+        b"PCLine" => c.push_str(&format!("{}{} w 1 J\n{}", rg_stroke(col), n(h.clamp(0.5, 2.0)), path(crate::FillMark::Line))),
         other => {
             // Only stamps PdfCraft made: others keep their own artwork.
             if !matches!(d.get(b"PCStamp"), Some(Object::Bool(true))) {

@@ -2770,3 +2770,20 @@ certificate	Version	وەشان
 @plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	{n} more formula reads a missing field.|{n} more formulas read missing fields.
 @plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.
 @plural	{fields} is missing|{fields} are missing	{fields} is missing|{fields} are missing
+
+# Comments copied between documents and selected several at once; finishing connected lines from the menu (M14).
+	Copy comment	کۆپیکردنی لێدوان
+	Copy comments	کۆپیکردنی لێدوانەکان
+	Paste comments	لکاندنی لێدوانەکان
+	Delete comments	سڕینەوەی لێدوانەکان
+	Move comments	گواستنەوەی لێدوانەکان
+	Complete	تەواوکردن
+	Undo last point	پاشگەزبوونەوە لە دوایین خاڵ
+	Cancel drawing	هەڵوەشاندنەوەی وێنەکێشان
+	Copy comments first	سەرەتا لێدوانەکان کۆپی بکە
+	Click where the copied comments go; Escape lets them go	لەو شوێنە کرتە بکە کە لێدوانە کۆپیکراوەکان دەچنە ئەوێ؛ Escape وازیان لێ دەهێنێت
+	The copied comments are larger than this page; they were placed as they are	لێدوانە کۆپیکراوەکان لەم پەڕەیە گەورەترن؛ وەک خۆیان دانران
+	The clipboard holds no comments	کلیپبۆرد هیچ لێدوانێکی تێدا نییە
+	Comments: {n}	لێدوانەکان: {n}
+# Comment Properties and the Colour menu act on every selected comment (M5).
+	Changes here apply to all {n} selected comments	گۆڕانکارییەکانی ئێرە بۆ هەموو {n} لێدوانە دیاریکراوەکە جێبەجێ دەبن

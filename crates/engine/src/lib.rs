@@ -121,6 +121,7 @@ pub use pdfcraft_redact::sanitize::{HIDDEN, Hidden};
 pub use pdfcraft_sign as sign;
 pub use pdfcraft_sign::{SignOptions, SignatureInfo, Status as SignatureStatus, TrustStore};
 pub use pdfcraft_xfdf::Format as DataFormat;
+pub use pdfcraft_xfdf::{Outline as CommentOutline, comment_count, comment_outlines, comments_bounds, is_xfdf_comments};
 
 use bookmarks::outline_rows;
 pub use bookmarks::{BookmarkPage, BookmarkRow};

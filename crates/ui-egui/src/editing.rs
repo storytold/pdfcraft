@@ -28,7 +28,7 @@ fn new_text_typed(v: &crate::DocView) -> bool {
 }
 
 /// Keeps the pages (or comment) the user acted on selected, where they now are. `annots_before`
-/// is a deleted annotation's page's annotations before the delete (empty for other edits).
+/// is the page's annotations before a delete or a paste of comments (empty for other edits).
 fn select_after_edit(
     view: &mut crate::DocView,
     edit: Edit,
@@ -55,11 +55,12 @@ fn select_after_edit(
             if matches!(a.shape, pdfcraft_engine::Shape::Ink { .. })
                 && quick_tool == crate::QuickTool::Comment(crate::comments::CommentTool::Ink) =>
         {
-            view.comments.selected = None;
+            view.comments.clear_selection();
         }
         Edit::AddAnnotation(a) => {
-            // Select the new comment (appended last among the page's comments).
+            // Select the new comment alone (appended last among the page's comments).
             let newest = info.annotations.iter().filter(|x| x.page == a.page && !x.is_reply()).map(|x| x.index).max();
+            view.comments.clear_selection();
             view.comments.selected = newest.map(|n| (a.page, n));
             view.comments.reveal = true;
             // A new highlight opens its note for typing straight away, as in Acrobat,
@@ -72,6 +73,25 @@ fn select_after_edit(
             }
         }
         Edit::DeleteAnnotation { page, index } => view.comments.annotation_deleted(annots_before, &info.annotations, (page, index)),
+        // A group moved together stays selected (its positions don't change), so it
+        // can be moved or copied again; anything else in a batch clears the selection.
+        Edit::Batch { edits, .. } if edits.iter().all(|e| matches!(e, Edit::MoveAnnotation { .. })) => {}
+        Edit::Batch { .. } => view.comments.clear_selection(),
+        // The copies the paste added (and nothing that was there before): select them all.
+        Edit::PasteComments { page, .. } => {
+            let mut new: Vec<(usize, usize)> = info
+                .annotations
+                .iter()
+                .filter(|x| x.page == page && !x.is_reply() && !annots_before.iter().any(|b| b.name == x.name))
+                .map(|x| (page, x.index))
+                .collect();
+            view.comments.clear_selection();
+            if !new.is_empty() {
+                view.comments.selected = Some(new.remove(0));
+                view.comments.also = new;
+                view.comments.reveal = true;
+            }
+        }
         _ => {}
     }
 }
@@ -120,7 +140,10 @@ impl PdfCraftApp {
         // A deletion moves the comments after it on the page: these say where the selected one,
         // and the one open in the panel's editor, went.
         let annots_before = match (&edit, self.session.get(id)) {
-            (Edit::DeleteAnnotation { page, .. }, Some(d)) => d.info.annotations.iter().filter(|a| a.page == *page).cloned().collect(),
+            // A paste selects what it adds: the page's comments before it are the ones it didn't.
+            (Edit::DeleteAnnotation { page, .. } | Edit::PasteComments { page, .. }, Some(d)) => {
+                d.info.annotations.iter().filter(|a| a.page == *page).cloned().collect()
+            }
             _ => Vec::new(),
         };
         match self.session.apply(id, edit.clone()) {

@@ -2809,3 +2809,18 @@ theme	Appearance	모양
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	이 답글의 옵션
+# Comments copied, pasted and selected together (M5).
+	Copy comment	주석 복사
+	Copy comments	선택한 주석 복사
+	Paste comments	주석 붙여넣기
+	Delete comments	선택한 주석 삭제
+	Move comments	주석 이동
+	Complete	완료
+	Undo last point	마지막 점 실행 취소
+	Cancel drawing	그리기 취소
+	Copy comments first	먼저 주석을 복사하세요
+	Click where the copied comments go; Escape lets them go	복사한 주석을 놓을 곳을 클릭하세요. Esc를 누르면 놓아줍니다
+	The copied comments are larger than this page; they were placed as they are	복사한 주석이 이 페이지보다 큽니다. 그대로 배치했습니다
+	The clipboard holds no comments	클립보드에 주석이 없습니다
+	Comments: {n}	주석: {n}
+	Changes here apply to all {n} selected comments	여기서 변경한 내용은 선택한 주석 {n}개 모두에 적용됩니다

@@ -2754,3 +2754,20 @@ key	Space	Mellomrom
 @plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	{n} more formula reads a missing field.|{n} more formulas read missing fields.
 @plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.
 @plural	{fields} is missing|{fields} are missing	{fields} is missing|{fields} are missing
+
+# Comments copied between documents and selected several at once; finishing connected lines from the menu (M14).
+	Copy comment	Kopier kommentar
+	Copy comments	Kopier kommentarer
+	Paste comments	Lim inn kommentarer
+	Delete comments	Slett kommentarer
+	Move comments	Flytt kommentarer
+	Complete	Fullfør
+	Undo last point	Angre siste punkt
+	Cancel drawing	Avbryt tegning
+	Copy comments first	Kopier kommentarer først
+	Click where the copied comments go; Escape lets them go	Klikk der de kopierte kommentarene skal plasseres; Escape slipper dem
+	The copied comments are larger than this page; they were placed as they are	De kopierte kommentarene er større enn denne siden; de ble plassert uendret
+	The clipboard holds no comments	Utklippstavlen inneholder ingen kommentarer
+	Comments: {n}	Kommentarer: {n}
+# Comment Properties and the Colour menu act on every selected comment (M5).
+	Changes here apply to all {n} selected comments	Endringer her gjelder alle {n} valgte kommentarer

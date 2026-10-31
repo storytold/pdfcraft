@@ -29,9 +29,9 @@ pub use fdf::export_fdf;
 use fdf::{ImportBudget, fdf_body, import_fdf, walk_fdf};
 #[cfg(test)]
 use fdf::{MAX_FDF_BYTES, MAX_FDF_OBJECTS};
-pub use xfdf::export_xfdf;
 #[cfg(test)]
 use xfdf::{LOCKED, find_by_name};
+pub use xfdf::{Outline, comment_count, comment_outlines, comments_bounds, export_xfdf, export_xfdf_comments, import_comments, is_xfdf_comments};
 use xfdf::{apply_values, import_xfdf};
 
 #[cfg(test)]

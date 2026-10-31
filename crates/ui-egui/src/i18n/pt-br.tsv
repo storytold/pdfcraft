@@ -2863,3 +2863,19 @@ theme	Appearance	Aparência
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opções desta resposta
 	Export value	Valor de exportação
+# Comments copied between documents and selected several at once; finishing connected lines from the menu (M14).
+	Copy comment	Copiar comentário
+	Copy comments	Copiar comentários
+	Paste comments	Colar comentários
+	Delete comments	Excluir comentários
+	Move comments	Mover comentários
+	Complete	Concluir
+	Undo last point	Desfazer o último ponto
+	Cancel drawing	Cancelar o desenho
+	Copy comments first	Copie comentários primeiro
+	Click where the copied comments go; Escape lets them go	Clique onde os comentários copiados devem ficar; Esc os solta
+	The copied comments are larger than this page; they were placed as they are	Os comentários copiados são maiores que esta página; foram colocados como estão
+	The clipboard holds no comments	A área de transferência não contém comentários
+	Comments: {n}	Comentários: {n}
+# Comment Properties and the Colour menu act on every selected comment (M5).
+	Changes here apply to all {n} selected comments	As alterações aqui se aplicam a todos os {n} comentários selecionados

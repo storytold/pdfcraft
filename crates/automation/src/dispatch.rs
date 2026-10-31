@@ -811,6 +811,8 @@ impl Automation {
             "comments_summarize" => self.comments_summarize(&a)?,
             "comment_edit" => self.comment_edit(&a)?,
             "comment_delete" => self.comment_delete(&a)?,
+            "comments_copy" => self.comments_copy(&a)?,
+            "comments_paste" => self.comments_paste(&a)?,
             other => return Err(ToolError::UnknownTool(other.into())),
         };
         Ok(vec![Content::Json(out)])

@@ -47,6 +47,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         }
         Edit::AddMeasurement(_)
         | Edit::AddAnnotation(_)
+        | Edit::PasteComments { .. }
         | Edit::AddCustomStamp { .. }
         | Edit::DeleteAnnotation { .. }
         | Edit::SetAnnotationContents { .. }
@@ -324,6 +325,14 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::SetMeasurementScale { page, bbox, name, scale } => measure::set_scale(doc, *page, *bbox, name, scale)?,
         Edit::AddAnnotation(a) => {
             pdfcraft_annot::add_annotation(doc, a, &cx.meta())?;
+        }
+        Edit::PasteComments { xfdf, page, offset } => {
+            // Names from the edit's own id generator: unique to this paste within the document.
+            let prefix = cx.meta().id;
+            let report = pdfcraft_xfdf::import_comments(doc, xfdf, Some(*page), Some(&prefix), *offset)?;
+            if report.comments == 0 {
+                return Err(EditError::Invalid("the clipboard holds no comments".into()));
+            }
         }
         Edit::AddCustomStamp { page, rect, name, file, author } => {
             let src = mark_source(doc, file)?;

@@ -2810,3 +2810,19 @@ certificate	SHA-256 digest	Impronta SHA-256
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opzioni per questa risposta
 	Export value	Valore di esportazione
+# Comments copied between documents and selected several at once; finishing connected lines from the menu (M14).
+	Copy comment	Copia commento
+	Copy comments	Copia commenti
+	Paste comments	Incolla commenti
+	Delete comments	Elimina commenti
+	Move comments	Sposta commenti
+	Complete	Completa
+	Undo last point	Annulla l’ultimo punto
+	Cancel drawing	Annulla il disegno
+	Copy comments first	Copia prima dei commenti
+	Click where the copied comments go; Escape lets them go	Fai clic dove devono andare i commenti copiati; Esc li lascia
+	The copied comments are larger than this page; they were placed as they are	I commenti copiati sono più grandi di questa pagina; sono stati collocati così come sono
+	The clipboard holds no comments	Gli appunti non contengono commenti
+	Comments: {n}	Commenti: {n}
+# Comment Properties and the Colour menu act on every selected comment (M5).
+	Changes here apply to all {n} selected comments	Le modifiche qui valgono per tutti i {n} commenti selezionati

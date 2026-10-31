@@ -2736,3 +2736,20 @@ theme	Appearance	ลักษณะที่ปรากฏ
 	Unchecked reads	Unchecked reads
 	{field} reads fields named as it runs	{field} reads fields named as it runs
 	Some names are built as it runs	Some names are built as it runs
+
+# Comments copied between documents and selected several at once; finishing connected lines from the menu (M14).
+	Copy comment	คัดลอกความคิดเห็น
+	Copy comments	คัดลอกความคิดเห็นทั้งหมดที่เลือก
+	Paste comments	วางความคิดเห็น
+	Delete comments	ลบความคิดเห็น
+	Move comments	ย้ายความคิดเห็น
+	Complete	ทำให้เสร็จ
+	Undo last point	เลิกทำจุดสุดท้าย
+	Cancel drawing	ยกเลิกการวาด
+	Copy comments first	คัดลอกความคิดเห็นก่อน
+	Click where the copied comments go; Escape lets them go	คลิกตรงที่จะวางความคิดเห็นที่คัดลอกไว้; กด Escape เพื่อปล่อย
+	The copied comments are larger than this page; they were placed as they are	ความคิดเห็นที่คัดลอกไว้ใหญ่กว่าหน้านี้; จึงวางไว้ตามเดิม
+	The clipboard holds no comments	คลิปบอร์ดไม่มีความคิดเห็น
+	Comments: {n}	ความคิดเห็น: {n}
+# Comment Properties and the Colour menu act on every selected comment (M5).
+	Changes here apply to all {n} selected comments	การเปลี่ยนแปลงที่นี่จะใช้กับความคิดเห็นที่เลือกทั้งหมด {n} รายการ

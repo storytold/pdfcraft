@@ -2564,3 +2564,18 @@ animation effects	Off	Joaktiv
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opsionet për këtë përgjigje
+# Comments copied, pasted and selected together (M5).
+	Copy comment	Kopjo komentin
+	Copy comments	Kopjo komentet
+	Paste comments	Ngjit komentet
+	Delete comments	Fshi komentet
+	Move comments	Zhvendos komentet
+	Complete	Përfundo
+	Undo last point	Zhbëj pikën e fundit
+	Cancel drawing	Anulo vizatimin
+	Copy comments first	Fillimisht kopjo komente
+	Click where the copied comments go; Escape lets them go	Kliko ku do të shkojnë komentet e kopjuara; Esc i lëshon
+	The copied comments are larger than this page; they were placed as they are	Komentet e kopjuara janë më të mëdha se kjo faqe; u vendosën siç janë
+	The clipboard holds no comments	Clipboard nuk ka komente
+	Comments: {n}	Komente: {n}
+	Changes here apply to all {n} selected comments	Ndryshimet këtu zbatohen për të gjitha {n} komentet e zgjedhura

@@ -2481,3 +2481,20 @@ animation effects	Off	ປິດ
 	Unchecked reads	Unchecked reads
 	{field} reads fields named as it runs	{field} reads fields named as it runs
 	Some names are built as it runs	Some names are built as it runs
+
+# Comments copied between documents and selected several at once; finishing connected lines from the menu (M14).
+	Copy comment	ສຳເນົາຄຳເຫັນ
+	Copy comments	ສຳເນົາບັນດາຄຳເຫັນ
+	Paste comments	ວາງບັນດາຄຳເຫັນ
+	Delete comments	ລຶບບັນດາຄຳເຫັນ
+	Move comments	ຍ້າຍບັນດາຄຳເຫັນ
+	Complete	ເຮັດໃຫ້ສຳເລັດ
+	Undo last point	ຍົກເລີກຈຸດສຸດທ້າຍ
+	Cancel drawing	ຍົກເລີກການແຕ້ມ
+	Copy comments first	ສຳເນົາຄຳເຫັນກ່ອນ
+	Click where the copied comments go; Escape lets them go	ຄລິກບ່ອນທີ່ຈະວາງຄຳເຫັນທີ່ສຳເນົາໄວ້; Escape ເພື່ອປ່ອຍມັນ
+	The copied comments are larger than this page; they were placed as they are	ຄຳເຫັນທີ່ສຳເນົາໄວ້ໃຫຍ່ກວ່າໜ້ານີ້; ຈຶ່ງວາງໄວ້ຕາມເດີມ
+	The clipboard holds no comments	ຄລິບບອດບໍ່ມີຄຳເຫັນ
+	Comments: {n}	ຄຳເຫັນ: {n}
+# Comment Properties and the Colour menu act on every selected comment (M5).
+	Changes here apply to all {n} selected comments	ການປ່ຽນແປງຢູ່ນີ້ຈະໃຊ້ກັບຄຳເຫັນທີ່ເລືອກທັງໝົດ {n} ລາຍການ

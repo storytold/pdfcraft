@@ -69,6 +69,7 @@ pub const EDIT_LABELS: &[&str] = &[
     "Add file attachment",
     "Add stamp",
     "Delete comment",
+    "Paste comments",
     "Edit comment",
     "Reply",
     "Set status None",
@@ -199,6 +200,7 @@ impl Edit {
             Edit::AddAnnotation(a) => Label::of(add_annotation(&a.shape)),
             Edit::AddCustomStamp { .. } => Label::of("Add stamp"),
             Edit::DeleteAnnotation { .. } => Label::of("Delete comment"),
+            Edit::PasteComments { .. } => Label::of("Paste comments"),
             Edit::SetAnnotationContents { .. } => Label::of("Edit comment"),
             Edit::ReplyToAnnotation { .. } => Label::of("Reply"),
             // The state's name is part of the wording: a language may need to agree it with the rest.

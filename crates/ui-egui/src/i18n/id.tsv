@@ -2810,3 +2810,18 @@ theme	Appearance	Tampilan
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opsi untuk balasan ini
+# Comments copied, pasted and selected together (M5).
+	Copy comment	Salin komentar
+	Copy comments	Salin komentar terpilih
+	Paste comments	Tempel komentar
+	Delete comments	Hapus komentar terpilih
+	Move comments	Pindahkan komentar
+	Complete	Selesai
+	Undo last point	Urungkan titik terakhir
+	Cancel drawing	Batalkan menggambar
+	Copy comments first	Salin komentar terlebih dahulu
+	Click where the copied comments go; Escape lets them go	Klik di tempat komentar yang disalin diletakkan; Escape melepaskannya
+	The copied comments are larger than this page; they were placed as they are	Komentar yang disalin lebih besar dari halaman ini; komentar ditempatkan apa adanya
+	The clipboard holds no comments	Papan klip tidak berisi komentar
+	Comments: {n}	Komentar: {n}
+	Changes here apply to all {n} selected comments	Perubahan di sini berlaku untuk semua {n} komentar terpilih
