@@ -729,6 +729,31 @@ const CUSTOM_INFO: &[u8] = b"%PDF-1.7
 trailer << /Root 1 0 R /Info 4 0 R >>
 %%EOF";
 
+/// One page whose `/Info` is `info` (the dictionary's contents).
+fn with_info(info: &str) -> Vec<u8> {
+    format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+4 0 obj << {info} >> endobj
+trailer << /Root 1 0 R /Info 4 0 R >>
+%%EOF"
+    )
+    .into_bytes()
+}
+
+#[test]
+fn creation_and_modification_dates_are_read_for_document_properties() {
+    let info = inspect(Arc::new(with_info("/CreationDate (D:20240105093000+01'00') /ModDate (D:20261031174500Z)")), None).expect("opens");
+    assert_eq!((info.created.as_deref(), info.modified.as_deref()), (Some("2024-01-05 09:30"), Some("2026-10-31 17:45")));
+    // Not a PDF date: shown as written. Empty, a number and absent: no date.
+    let info = inspect(Arc::new(with_info("/CreationDate (last Tuesday) /ModDate ()")), None).expect("opens");
+    assert_eq!((info.created.as_deref(), info.modified.as_deref()), (Some("last Tuesday"), None));
+    let info = inspect(Arc::new(with_info("/CreationDate 20240105")), None).expect("opens");
+    assert_eq!((info.created, info.modified), (None, None));
+}
+
 #[test]
 fn custom_document_properties_are_listed_apart_from_the_standard_ones() {
     let info = inspect(Arc::new(CUSTOM_INFO.to_vec()), None).expect("opens");

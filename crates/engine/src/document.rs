@@ -675,8 +675,9 @@ pub(crate) fn same_pages(a: &[pdfcraft_render::PageInfo], b: &[pdfcraft_render::
 }
 
 /// Each document-information field of `info` with its value in `cos` (`/Info`, else XMP), read
-/// the way the full inspection reads them: NULs and spaces trimmed, empty is none.
-pub(crate) fn info_fields<'a>(info: &'a mut DocInfo, cos: &pdfcraft_cos::Document) -> [(&'a mut Option<String>, Option<String>); 6] {
+/// the way the full inspection reads them: NULs and spaces trimmed, empty is none, dates shown as
+/// [`pdfcraft_render::pretty_date`] shows them.
+pub(crate) fn info_fields<'a>(info: &'a mut DocInfo, cos: &pdfcraft_cos::Document) -> [(&'a mut Option<String>, Option<String>); 8] {
     let read = |key| pdfcraft_organize::info(cos, key).map(|v| v.trim_matches('\0').trim().to_string()).filter(|v| !v.is_empty());
     [
         (&mut info.title, read("Title")),
@@ -685,6 +686,8 @@ pub(crate) fn info_fields<'a>(info: &'a mut DocInfo, cos: &pdfcraft_cos::Documen
         (&mut info.keywords, read("Keywords")),
         (&mut info.creator, read("Creator")),
         (&mut info.producer, read("Producer")),
+        (&mut info.created, read("CreationDate").map(|d| pdfcraft_render::pretty_date(&d))),
+        (&mut info.modified, read("ModDate").map(|d| pdfcraft_render::pretty_date(&d))),
     ]
 }
 

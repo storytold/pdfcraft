@@ -171,6 +171,8 @@ impl<'a> Inspector<'a> {
             info.keywords = self.text(d, b"Keywords");
             info.creator = self.text(d, b"Creator");
             info.producer = self.text(d, b"Producer");
+            info.created = self.text(d, b"CreationDate").map(|s| pretty_date(&s));
+            info.modified = self.text(d, b"ModDate").map(|s| pretty_date(&s));
             const STANDARD: [&[u8]; 9] =
                 [b"Title", b"Author", b"Subject", b"Keywords", b"Creator", b"Producer", b"CreationDate", b"ModDate", b"Trapped"];
             // The same rule as the engine's list after an edit (`pdfcraft_organize::custom_info`,
