@@ -1909,3 +1909,101 @@ fn open_documents_already_in_the_list_are_not_added_again() {
     add_all(&mut h);
     assert_eq!(names(&h), ["a.pdf", "report.pdf", "report.pdf", "b.pdf"]);
 }
+
+#[derive(Debug)]
+struct DroppedUri {
+    path: std::path::PathBuf,
+}
+
+impl egui::DroppedFile for DroppedUri {
+    fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        Err("simulated desktop drop without preloaded bytes".into())
+    }
+}
+
+/// #4985: Dragging and dropping file:// URIs and URL-encoded file paths into Combine files works
+/// and adds the dropped files in batch.
+#[test]
+fn dropping_file_uris_and_url_encoded_paths_into_combine_grid_adds_them() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-combine-uri-drop-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let path1 = dir.join("first doc.pdf");
+    let path2 = dir.join("second_doc.pdf");
+    std::fs::write(&path1, fixture(1)).unwrap();
+    std::fs::write(&path2, fixture(2)).unwrap();
+
+    let norm1 = path1.to_string_lossy().replace('\\', "/");
+    let norm1 = norm1.trim_start_matches('/');
+    let uri1_str = format!("file:///{norm1}").replace(' ', "%20");
+
+    let norm2 = path2.to_string_lossy().replace('\\', "/");
+    let norm2 = norm2.trim_start_matches('/');
+    let uri2_str = format!("file://localhost/{norm2}");
+
+    let mut h = Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app
+    });
+    h.run_steps(3);
+    h.state_mut().execute("page.combine");
+    h.run_steps(2);
+
+    let drop1: egui::DroppedFileHandle = std::sync::Arc::new(DroppedUri { path: uri1_str.into() });
+    let drop2: egui::DroppedFileHandle = std::sync::Arc::new(DroppedUri { path: uri2_str.into() });
+
+    h.input_mut().dropped_files.extend([drop1, drop2]);
+    h.run_steps(4);
+
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(names(&h), ["first doc.pdf", "second_doc.pdf"], "dropped file URIs are added to combine draft in batch");
+}
+
+/// #4985: Dropping mixed files and folders preserves drop order, and unreadable paths do not prevent readable files from being staged.
+#[test]
+fn dropping_mixed_files_and_folders_into_combine_preserves_order() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-combine-mixed-drop-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let sub = dir.join("subfolder");
+    std::fs::create_dir_all(&sub).unwrap();
+
+    let file_before = dir.join("1_before.pdf");
+    let folder_file = sub.join("2_inside.pdf");
+    let file_after = dir.join("3_after.pdf");
+    let unreadable = dir.join("nonexistent.pdf");
+
+    std::fs::write(&file_before, fixture(1)).unwrap();
+    std::fs::write(&folder_file, fixture(1)).unwrap();
+    std::fs::write(&file_after, fixture(1)).unwrap();
+
+    let mut h = Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app
+    });
+    h.run_steps(3);
+    h.state_mut().execute("page.combine");
+    h.run_steps(2);
+
+    let drop_before: egui::DroppedFileHandle = std::sync::Arc::new(DroppedUri { path: file_before });
+    let drop_folder: egui::DroppedFileHandle = std::sync::Arc::new(DroppedUri { path: sub });
+    let drop_bad: egui::DroppedFileHandle = std::sync::Arc::new(DroppedUri { path: unreadable });
+    let drop_after: egui::DroppedFileHandle = std::sync::Arc::new(DroppedUri { path: file_after });
+
+    h.input_mut().dropped_files.extend([drop_before, drop_folder, drop_bad, drop_after]);
+    h.run_steps(4);
+
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(
+        names(&h),
+        ["1_before.pdf", "2_inside.pdf", "3_after.pdf"],
+        "mixed drop preserves order and unreadable path does not block readable files"
+    );
+}
