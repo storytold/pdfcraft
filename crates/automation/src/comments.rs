@@ -252,6 +252,12 @@ impl Automation {
         if endings.is_some() && !matches!(kind, "line" | "arrow" | "polyline" | "callout") {
             return Err(ToolError::InvalidArgs("endings apply to a line, arrow, polyline or callout".into()));
         }
+        // Shift while drawing: each end or corner held level or plumb with the one before.
+        let ortho = a.opt_bool("ortho")?.unwrap_or(false);
+        if ortho && !matches!(kind, "line" | "arrow" | "polygon" | "cloud" | "polyline") {
+            return Err(ToolError::InvalidArgs("ortho applies to a line, arrow, polygon, cloud or polyline".into()));
+        }
+        let held = |last: [f64; 2], p: [f64; 2]| if ortho { pdfcraft_engine::measure::snap::ortho(last, p) } else { p };
         let markup = match kind {
             "highlight" => Some(Markup::Highlight),
             "underline" => Some(Markup::Underline),
@@ -324,7 +330,8 @@ impl Automation {
                     Shape::TextBox { rect: rect_to_user(&info, a.need::<4>("rect", "a text box")?), font_size }
                 }
                 "line" | "arrow" => {
-                    let (f, t) = (a.need::<2>("from", "a line")?, a.need::<2>("to", "a line")?);
+                    let f = a.need::<2>("from", "a line")?;
+                    let t = held(f, a.need::<2>("to", "a line")?);
                     let [start, end] = ending_pair(kind, endings.as_deref())?;
                     Shape::Line { from: to_user(&info, f[0], f[1]), to: to_user(&info, t[0], t[1]), start, end }
                 }
@@ -351,10 +358,15 @@ impl Automation {
                 "polygon" | "cloud" | "polyline" => {
                     let wrong = || ToolError::InvalidArgs(format!("{kind} needs `points`: an array of [x, y] points"));
                     let pts = a.get("points").and_then(|p| p.as_array()).ok_or_else(wrong)?;
+                    let mut last = None;
                     let vertices = pts
                         .iter()
                         .map(|p| match p.as_array().map(|p| p.iter().map(|v| v.as_f64()).collect::<Vec<_>>()).as_deref() {
-                            Some([Some(x), Some(y)]) => Ok(to_user(&info, *x, *y)),
+                            Some([Some(x), Some(y)]) => {
+                                let p = last.map_or([*x, *y], |l| held(l, [*x, *y]));
+                                last = Some(p);
+                                Ok(to_user(&info, p[0], p[1]))
+                            }
                             _ => Err(wrong()),
                         })
                         .collect::<Result<Vec<_>>>()?;

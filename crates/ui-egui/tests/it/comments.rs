@@ -909,8 +909,8 @@ fn comments_are_selected_moved_and_deleted_with_the_select_tool() {
 }
 
 /// A line's ends have handles: dragging one with the Select tool changes the line's length and
-/// angle (Shift holds it to 45°), as one undo step. The line tool keeps drawing from an end: a
-/// new line starts there rather than dragging the one just drawn.
+/// angle (Shift holds it level or plumb with the other end), as one undo step. The line tool keeps
+/// drawing from an end: a new line starts there rather than dragging the one just drawn.
 #[test]
 fn line_ends_are_dragged_to_change_length_and_angle() {
     let mut h = harness(|app| app.set_option("quick", "line").unwrap());
@@ -934,7 +934,7 @@ fn line_ends_are_dragged_to_change_length_and_angle() {
     assert!((p[1][0] - 200.0).abs() < 1.0 && (p[1][1] - 160.0).abs() < 1.0, "the dragged end follows: {p:?}");
     let id = h.state().views[0].id;
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Reshape comment"));
-    // Shift: held to the nearest 45° from the other end (39° here).
+    // Shift: held level or plumb with the other end, here level (110 pt across, 90 up).
     let a = at(&h, 200.0, 160.0);
     let b = at(&h, 150.0, 190.0);
     h.hover_at(a);
@@ -951,8 +951,7 @@ fn line_ends_are_dragged_to_change_length_and_angle() {
     h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
     h.run_steps(1);
     let p = ends(&h);
-    let (dx, dy) = (p[1][0] - p[0][0], p[1][1] - p[0][1]);
-    assert!(dx > 50.0 && (dx - dy).abs() < 0.5, "45°: {p:?}");
+    assert!((p[1][1] - p[0][1]).abs() < 0.01 && (p[1][0] - 150.0).abs() < 1.0, "level: {p:?}");
     // Undo puts the line back as it was before the drag.
     h.state_mut().undo();
     h.run_steps(2);
@@ -1034,6 +1033,80 @@ fn alt_arrows_navigate_instead_of_nudging_the_selected_comment() {
     h.key_press(Key::ArrowRight);
     h.run_steps(3);
     assert!(comments(&h)[0].rect[0] > before[0], "→ nudged it");
+}
+
+/// Over the first corner, where a click closes the polygon, the rubber band runs to that corner
+/// with Shift held too: the closing side the click will make, not a level or plumb one.
+#[test]
+fn the_rubber_band_shows_the_closing_side_with_shift_held() {
+    let _gpu = crate::gpu();
+    let mut h = harness(|app| app.set_option("quick", "polygon").unwrap());
+    for p in [(40.0, 40.0), (140.0, 40.0), (140.0, 140.0)] {
+        click_pt(&mut h, p);
+    }
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
+    h.hover_at(at(&h, 40.0, 40.0) + egui::vec2(2.0, 2.0));
+    h.run_steps(3);
+    let pixels = h.render().unwrap();
+    // Halfway along the diagonal closing side, (90, 90).
+    let m = at(&h, 90.0, 90.0);
+    let drawn = (-2..=2).any(|d: i32| {
+        let v = pixels.get_pixel((m.x as i32 + d) as u32, (m.y as i32 + d) as u32).0;
+        v[0] > 150 && v[1] < 100 && v[2] < 100
+    });
+    assert!(drawn, "the closing side is drawn");
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.run_steps(1);
+}
+
+/// Shift holds a new line or arrow level or plumb with where it starts, and each new side of
+/// connected lines or a polygon with the corner before (a CAD drawing's ortho mode). Without
+/// Shift they go where the pointer is.
+#[test]
+fn shift_holds_new_lines_and_sides_level_or_plumb() {
+    let mut h = harness(|app| app.set_option("quick", "line").unwrap());
+    let shift = |h: &mut Harness<'static, PdfCraftApp>, on: bool| {
+        h.event(egui::Event::ModifiersChanged(if on { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE }));
+        h.run_steps(1);
+    };
+    let points = |h: &Harness<'static, PdfCraftApp>, subtype: &str| {
+        // In the order drawn: the list isn't sorted by index.
+        let mut drawn: Vec<_> = comments(h).into_iter().filter(|a| a.subtype == subtype).collect();
+        drawn.sort_by_key(|a| a.index);
+        drawn.into_iter().map(|a| a.points).collect::<Vec<_>>()
+    };
+    let close = |p: [f32; 2], q: [f32; 2]| (p[0] - q[0]).abs() < 1.0 && (p[1] - q[1]).abs() < 1.0;
+    shift(&mut h, true);
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 120.0));
+    drag_pt(&mut h, (200.0, 40.0), (215.0, 150.0));
+    shift(&mut h, false);
+    drag_pt(&mut h, (40.0, 160.0), (140.0, 190.0));
+    let lines = points(&h, "Line");
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    assert!(close(lines[0][0], [40.0, 100.0]) && close(lines[0][1], [140.0, 100.0]), "mostly across: level: {lines:?}");
+    assert!(close(lines[1][0], [200.0, 40.0]) && close(lines[1][1], [200.0, 150.0]), "mostly up: plumb: {lines:?}");
+    assert!(close(lines[2][1], [140.0, 190.0]), "no Shift, no hold: {lines:?}");
+
+    h.state_mut().set_option("quick", "arrow").unwrap();
+    shift(&mut h, true);
+    drag_pt(&mut h, (260.0, 180.0), (150.0, 170.0));
+    shift(&mut h, false);
+    let arrow = points(&h, "Line").pop().expect("an arrow");
+    assert!(close(arrow[1], [150.0, 180.0]), "an arrow too, leftwards: {arrow:?}");
+
+    // Connected lines: each click with Shift is held to the corner before.
+    h.state_mut().set_option("quick", "polyline").unwrap();
+    click_pt(&mut h, (20.0, 20.0));
+    shift(&mut h, true);
+    click_pt(&mut h, (90.0, 30.0));
+    click_pt(&mut h, (95.0, 80.0));
+    shift(&mut h, false);
+    click_pt(&mut h, (130.0, 60.0));
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let poly = points(&h, "PolyLine").pop().expect("connected lines");
+    assert_eq!(poly.len(), 4, "{poly:?}");
+    assert!(close(poly[1], [90.0, 20.0]) && close(poly[2], [90.0, 80.0]) && close(poly[3], [130.0, 60.0]), "{poly:?}");
 }
 
 #[test]

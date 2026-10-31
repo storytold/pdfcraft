@@ -1,8 +1,8 @@
 use super::geometry::{
-    CARET_SIZE, HANDLES, clamp_to, corner_ratio, drawn_box, grabs_points, handle_pos, is_markup, point_handle, reshapable, reshaped, resizable,
+    CARET_SIZE, HANDLES, clamp_to, corner_ratio, drawn_box, grabs_points, handle_pos, held, is_markup, point_handle, reshapable, reshaped, resizable,
     resized, snapped_caret,
 };
-use super::paint::{drawn_shape, edit_anchor, erase, new_comment};
+use super::paint::{closes_at, drawn_shape, edit_anchor, erase, new_comment};
 use super::state::{Composer, ComposerKind, Gesture, PageCx};
 use super::{Annotation, CommentPrefs, CommentTool, DocInfo, DocView, Edit, Pos2, QuickTool, Rect, Shape, vec2};
 use crate::page_cursor::{Layer, Subject};
@@ -322,6 +322,8 @@ struct Gestures<'a> {
 
 impl Gestures<'_> {
     fn draw_shape(&self, view: &mut DocView, tool: CommentTool) -> bool {
+        // Shift holds a line level or plumb (ortho).
+        let shift = self.resp.ctx.input(|i| i.modifiers.shift);
         let Self { ui, resp, cx, pointer, origin, page_rect, pressed_here, over_page } = *self;
         let cv = &mut view.comments;
         if !cx.allowed {
@@ -350,7 +352,8 @@ impl Gestures<'_> {
                 }
             } else {
                 points.truncate(1);
-                points.push(u);
+                let line = matches!(*tool, CommentTool::Line | CommentTool::Arrow);
+                points.push(held(points.first(), u, line && shift));
             }
         }
         if resp.drag_stopped()
@@ -384,6 +387,8 @@ impl Gestures<'_> {
     }
 
     fn click_points(&self, view: &mut DocView, tool: CommentTool) -> bool {
+        // Shift holds the next side of connected lines, a polygon or a cloud level or plumb.
+        let shift = self.resp.ctx.input(|i| i.modifiers.shift);
         let Self { ui, resp, cx, pointer, over_page, .. } = *self;
         let cv = &mut view.comments;
         if !cx.allowed {
@@ -410,8 +415,9 @@ impl Gestures<'_> {
             match cv.gesture.as_mut() {
                 Some(Gesture::Draw { page, tool: t, points }) if *page == cx.page && *t == tool => {
                     // Clicking the first point again closes a polygon.
-                    let closes = points.len() >= 3 && tool != CommentTool::PolyLine && cx.to_screen(points[0]).distance(p) <= 6.0;
-                    let repeat = points.last().is_some_and(|l| cx.to_screen(*l).distance(p) < 2.0);
+                    let closes = closes_at(cx, tool, points, p);
+                    let u = held(points.last(), u, shift);
+                    let repeat = points.last().is_some_and(|l| cx.to_screen(*l).distance(cx.to_screen(u)) < 2.0);
                     if closes {
                         let pts = std::mem::take(points);
                         cv.gesture = None;
