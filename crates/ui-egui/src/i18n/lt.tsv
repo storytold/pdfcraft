@@ -979,6 +979,8 @@
 	Reload documents when their files change on disk	Iš naujo įkelti dokumentus, kai pasikeičia jų failai diske
 	Don't show again	Daugiau nerodyti
 	Show a notice when a document is secured	Rodyti pranešimą, kai dokumentas apsaugotas
+	Ask before a document opens in Full Screen mode	Paklausti, prieš dokumentui atsidarant viso ekrano režimu
+	Off, a document's request to open in Full Screen mode is ignored. You can still enter it from the View menu.	Kai išjungta, dokumento prašymas atsidaryti viso ekrano režimu ignoruojamas. Į jį vis tiek galima pereiti iš meniu Rodinys.
 	Always use my default zoom and page layout	Visada naudoti mano numatytąjį mastelį ir puslapio išdėstymą
 	Remove checkmark	Pašalinti varnelę
 	Remove invalid links and bookmarks	Pašalinti netinkamus saitus ir žymeles

@@ -499,6 +499,8 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     ui.add(widgets::checkbox(&mut app.reload_changed_files, tl!("Reload documents when their files change on disk")));
     // The notice's "Don't show again" turns this off (#4035); the restrictions stay either way.
     ui.add(widgets::checkbox(&mut app.show_secured_notice, tl!("Show a notice when a document is secured")));
+    ui.add(widgets::checkbox(&mut app.ask_before_full_screen, tl!("Ask before a document opens in Full Screen mode")))
+        .on_hover_text(tl!("Off, a document's request to open in Full Screen mode is ignored. You can still enter it from the View menu."));
     ui.horizontal(|ui| {
         ui.label(tl!("Scroll speed (mouse wheel and arrow keys)"));
         for speed in crate::scroll_speed::ScrollSpeed::ALL {

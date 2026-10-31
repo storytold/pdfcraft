@@ -2347,6 +2347,8 @@ key	Space	Szóköz
 	Reload documents when their files change on disk	Dokumentumok újratöltése, ha a fájljuk megváltozik a lemezen
 	Don't show again	Ne jelenjen meg újra
 	Show a notice when a document is secured	Értesítés megjelenítése, ha egy dokumentum védett
+	Ask before a document opens in Full Screen mode	Rákérdezés, mielőtt egy dokumentum teljes képernyős módban nyílik meg
+	Off, a document's request to open in Full Screen mode is ignored. You can still enter it from the View menu.	Kikapcsolva a dokumentum teljes képernyős megnyitási kérése figyelmen kívül marad. A Nézet menüből továbbra is bekapcsolható.
 	Always use my default zoom and page layout	Mindig az alapértelmezett nagyításom és oldalelrendezésem használata
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Ez a fájl megváltozott a lemezen. Az Újratöltés az új változatot mutatja, és eldobja a nem mentett módosításokat; a Mentés erre a változatra cseréli le.
 	Reload	Újratöltés

@@ -2353,6 +2353,8 @@ key	Space	Leertaste
 	Reload documents when their files change on disk	Dokumente neu laden, wenn sich ihre Dateien auf dem Datenträger ändern
 	Don't show again	Nicht mehr anzeigen
 	Show a notice when a document is secured	Hinweis anzeigen, wenn ein Dokument geschützt ist
+	Ask before a document opens in Full Screen mode	Nachfragen, bevor ein Dokument im Vollbildmodus geöffnet wird
+	Off, a document's request to open in Full Screen mode is ignored. You can still enter it from the View menu.	Ist die Option aus, wird die Aufforderung eines Dokuments, im Vollbildmodus zu öffnen, ignoriert. Über das Menü „Ansicht“ lässt sich der Vollbildmodus weiterhin aufrufen.
 	Always use my default zoom and page layout	Immer meinen Standardzoom und mein Standard-Seitenlayout verwenden
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Diese Datei wurde auf dem Datenträger geändert. „Neu laden“ zeigt die neue Version und verwirft Ihre ungespeicherten Änderungen; „Speichern“ ersetzt sie durch diese Version.
 	Reload	Neu laden

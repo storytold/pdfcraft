@@ -2290,6 +2290,8 @@ key	Space	Välilyönti
 	Reload documents when their files change on disk	Lataa asiakirjat uudelleen, kun niiden tiedostot muuttuvat levyllä
 	Don't show again	Älä näytä uudelleen
 	Show a notice when a document is secured	Näytä ilmoitus, kun asiakirja on suojattu
+	Ask before a document opens in Full Screen mode	Kysy ennen kuin asiakirja avataan koko näytön tilassa
+	Off, a document's request to open in Full Screen mode is ignored. You can still enter it from the View menu.	Kun asetus on pois päältä, asiakirjan pyyntö avautua koko näytön tilassa ohitetaan. Tilan voi edelleen ottaa käyttöön Näytä-valikosta.
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Tämä tiedosto muuttui levyllä. Lataa se uudelleen nähdäksesi uuden version; tallentamattomat muutokset menetetään.
 	Reload	Lataa uudelleen
 	Couldn't reload {name}: {e}	Kohdetta {name} ei voitu ladata uudelleen: {e}

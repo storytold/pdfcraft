@@ -2272,6 +2272,8 @@ key	Space	Space
 	Reload documents when their files change on disk	जब उनकी फ़ाइलें डिस्क पर बदलें तो दस्तावेज़ दोबारा लोड करें
 	Don't show again	फिर से न दिखाएँ
 	Show a notice when a document is secured	दस्तावेज़ सुरक्षित होने पर सूचना दिखाएँ
+	Ask before a document opens in Full Screen mode	दस्तावेज़ को फ़ुल स्क्रीन मोड में खोलने से पहले पूछें
+	Off, a document's request to open in Full Screen mode is ignored. You can still enter it from the View menu.	बंद होने पर, दस्तावेज़ का फ़ुल स्क्रीन मोड में खुलने का अनुरोध अनदेखा कर दिया जाता है। आप अब भी दृश्य मेनू से इसमें जा सकते हैं।
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	यह फ़ाइल डिस्क पर बदल गई है। नया संस्करण देखने के लिए उसे दोबारा लोड करें; आपके असहेजे बदलाव खो जाएँगे।
 	Reload	दोबारा लोड करें
 	Couldn't reload {name}: {e}	{name} दोबारा लोड नहीं हो सका: {e}

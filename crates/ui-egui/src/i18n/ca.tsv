@@ -2159,6 +2159,8 @@ action wizard	Start	Inicia
 	Reload documents when their files change on disk	Torna a carregar els documents quan els seus fitxers canviïn al disc
 	Don't show again	No ho tornis a mostrar
 	Show a notice when a document is secured	Mostra un avís quan un document està protegit
+	Ask before a document opens in Full Screen mode	Pregunta abans que un document s'obri en mode de pantalla completa
+	Off, a document's request to open in Full Screen mode is ignored. You can still enter it from the View menu.	Si està desactivat, s'ignora la sol·licitud d'un document d'obrir-se en mode de pantalla completa. Encara hi podeu entrar des del menú Visualitza.
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Aquest fitxer ha canviat al disc. Torna'l a carregar per veure'n la versió nova; es perdran els canvis sense desar.
 	Reload	Torna a carregar
 	Couldn't reload {name}: {e}	No s'ha pogut tornar a carregar {name}: {e}

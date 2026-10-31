@@ -293,8 +293,9 @@ impl PdfCraftApp {
             view.enter_presentation();
         }
         // Full screen is asked for, never taken: a document can't put the app in full screen on
-        // its own (the prompt is `dialogs::full_screen_prompt`).
-        if activate && initial.full_screen {
+        // its own (the prompt is `dialogs::full_screen_prompt`). Turned off in Preferences, the
+        // request is dropped (#5051).
+        if activate && initial.full_screen && self.ask_before_full_screen {
             self.pending_full_screen = Some(id);
         }
         if activate

@@ -2071,6 +2071,8 @@
 	Reload documents when their files change on disk	Recharger les documents lorsque leurs fichiers sont modifiés sur le disque
 	Don't show again	Ne plus afficher
 	Show a notice when a document is secured	Afficher un avis lorsqu’un document est protégé
+	Ask before a document opens in Full Screen mode	Demander avant qu'un document s'ouvre en mode plein écran
+	Off, a document's request to open in Full Screen mode is ignored. You can still enter it from the View menu.	Désactivée, la demande d'un document de s'ouvrir en mode plein écran est ignorée. Vous pouvez toujours l'activer depuis le menu Affichage.
 	Always use my default zoom and page layout	Toujours utiliser mon zoom et ma présentation de page par défaut
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Ce fichier a été modifié sur le disque. Recharger affiche la nouvelle version et abandonne vos modifications non enregistrées ; Enregistrer la remplace par cette version.
 	Reload	Recharger

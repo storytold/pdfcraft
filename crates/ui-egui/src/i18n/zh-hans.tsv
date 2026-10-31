@@ -2172,6 +2172,8 @@
 	Reload documents when their files change on disk	文件在磁盘上更改时重新加载对应的文档
 	Don't show again	不再显示
 	Show a notice when a document is secured	文档已加密时显示通知
+	Ask before a document opens in Full Screen mode	文档以全屏模式打开前询问
+	Off, a document's request to open in Full Screen mode is ignored. You can still enter it from the View menu.	关闭后，文档要求以全屏模式打开的请求将被忽略。仍可从“视图”菜单进入全屏模式。
 	Always use my default zoom and page layout	始终使用我的默认缩放和页面布局
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	此文件已在磁盘上更改。“重新加载”显示新版本并放弃未保存的更改；“保存”则用此版本替换它。
 	Reload	重新加载

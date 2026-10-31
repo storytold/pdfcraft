@@ -2357,6 +2357,8 @@ key	Space	Spazio
 	Reload documents when their files change on disk	Ricarica i documenti quando i loro file cambiano sul disco
 	Don't show again	Non mostrare più
 	Show a notice when a document is secured	Mostra un avviso quando un documento è protetto
+	Ask before a document opens in Full Screen mode	Chiedi prima di aprire un documento in modalità schermo intero
+	Off, a document's request to open in Full Screen mode is ignored. You can still enter it from the View menu.	Se disattivata, la richiesta di un documento di aprirsi in modalità schermo intero viene ignorata. Si può comunque attivarla dal menu Visualizza.
 	Always use my default zoom and page layout	Usa sempre il mio ingrandimento e layout di pagina predefiniti
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Questo file è cambiato sul disco. Ricarica mostra la nuova versione e scarta le modifiche non salvate; Salva la sostituisce con questa versione.
 	Reload	Ricarica

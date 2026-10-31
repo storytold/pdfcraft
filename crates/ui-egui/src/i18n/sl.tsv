@@ -2354,6 +2354,8 @@ key	Space	Preslednica
 	Reload documents when their files change on disk	Znova naloži dokumente, ko se njihove datoteke na disku spremenijo
 	Don't show again	Ne prikaži več
 	Show a notice when a document is secured	Prikaži obvestilo, ko je dokument zaščiten
+	Ask before a document opens in Full Screen mode	Vprašaj, preden se dokument odpre v celozaslonskem načinu
+	Off, a document's request to open in Full Screen mode is ignored. You can still enter it from the View menu.	Če je izklopljeno, se zahteva dokumenta za odprtje v celozaslonskem načinu prezre. Način lahko še vedno vklopite v meniju Pogled.
 	Always use my default zoom and page layout	Vedno uporabi moje privzeto povečanje in postavitev strani
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Ta datoteka se je na disku spremenila. Ponovno naloži pokaže novo različico in zavrže neshranjene spremembe; Shrani jo zamenja s to različico.
 	Reload	Znova naloži
