@@ -1323,7 +1323,6 @@ mod dimension_tests {
         assert_eq!(pixels(&Document::new_empty(), &stream, 1), Some(vec![1, 2, 3, 4]));
     }
 
-    /// A JPEG larger than its dictionary says is refused from its header, before its pixels are decoded.
     /// JBIG2 alone, with Group 4 asked for, is decoded only to be resampled. A cost guard: dropped,
     /// no output changes, and an ordinary scan pays a quarter of a second a page for nothing. Behind
     /// another filter it can still be stored again, as Group 4 can.
@@ -1399,6 +1398,7 @@ mod dimension_tests {
         assert_eq!(changed, 2, "the third is as it was");
     }
 
+    /// A JPEG larger than its dictionary says is refused from its header, before its pixels are decoded.
     #[test]
     fn a_jpeg_of_another_size_than_its_dictionary_is_not_decoded() {
         let data = jpeg(&vec![128; 1000 * 1000], 1, 1000, 1000, 50).unwrap_or_default();
