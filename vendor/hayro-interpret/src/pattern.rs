@@ -75,6 +75,7 @@ impl<'a> Pattern<'a> {
             Self::Tiling(p) => {
                 p.non_stroking_paint = p.non_stroking_paint.clone().opaque();
                 p.stroke_paint = p.stroke_paint.clone().opaque();
+                p.opacity = 1.0;
             }
         }
         self
@@ -83,8 +84,11 @@ impl<'a> Pattern<'a> {
     /// PdfCraft patch: set the alpha of the graphics state in effect when the pattern is painted. The `gs` operator
     /// can come after `scn`/`SCN`, so the alpha must not be captured when the pattern is selected.
     pub(crate) fn set_alpha(&mut self, alpha: f32) {
-        if let Self::Shading(p) = self {
-            p.opacity = alpha;
+        match self {
+            Self::Shading(p) => p.opacity = alpha,
+            // PdfCraft patch (71): a tiling pattern too, coloured or not; the renderer applies it to the
+            // whole cell. It was ignored for a coloured pattern and captured at `scn` for an uncoloured one.
+            Self::Tiling(p) => p.opacity = alpha,
         }
     }
 
@@ -174,6 +178,10 @@ pub struct TilingPattern<'a> {
     pub(crate) settings: InterpreterSettings,
     pub(crate) xref: &'a XRef,
     nesting_depth: u32,
+    /// PdfCraft patch (71): the fill or stroke opacity (`ca`/`CA`) in effect when the pattern is
+    /// painted, applied to the whole cell (ISO 32000-2 §11.6.4.4). The pattern's own content
+    /// starts with an opacity of 1, and an uncoloured pattern's colour carries none of its own.
+    pub opacity: f32,
 }
 
 impl Debug for TilingPattern<'_> {
@@ -219,16 +227,10 @@ impl<'a> TilingPattern<'a> {
             .pattern_cs()
             .unwrap_or(ColorSpace::device_gray());
 
-        let non_stroking_paint = Color::new(
-            fill_cs,
-            state.graphics_state.non_stroke_color.clone(),
-            state.graphics_state.non_stroke_alpha,
-        );
-        let stroke_paint = Color::new(
-            stroke_cs,
-            state.graphics_state.stroke_color.clone(),
-            state.graphics_state.stroke_alpha,
-        );
+        // PdfCraft patch (71): the opacity is not captured here; `opacity` carries the one in
+        // effect when the pattern paints (a `gs` may follow `scn`).
+        let non_stroking_paint = Color::new(fill_cs, state.graphics_state.non_stroke_color.clone(), 1.0);
+        let stroke_paint = Color::new(stroke_cs, state.graphics_state.stroke_color.clone(), 1.0);
         let nesting_depth = ctx.nesting_depth() + 1;
 
         Some(Self {
@@ -247,6 +249,7 @@ impl<'a> TilingPattern<'a> {
             cache: ctx.interpreter_cache.clone(),
             xref: ctx.xref,
             nesting_depth,
+            opacity: 1.0,
         })
     }
 
