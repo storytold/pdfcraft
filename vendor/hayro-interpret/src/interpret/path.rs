@@ -1,4 +1,4 @@
-use crate::color::{Color, ColorSpace, InkUse, Plate};
+use crate::color::{Color, ColorSpace, InkUse, Plate, device_cmyk_to_gray};
 use crate::context::{Context, path_as_rect};
 use crate::device::Device;
 use crate::interpret::state::PaintData;
@@ -188,7 +188,13 @@ pub(crate) fn get_paint<'a>(context: &Context<'a>, is_stroke: bool) -> Paint<'a>
             Paint::Color(Color::new(ColorSpace::device_gray(), smallvec![0.0], 0.0))
         }
     } else {
-        let color = Color::new(data.color_space, data.color, data.alpha);
+        // PdfCraft patch (63): see `Context::luminosity_in_device_cmyk`.
+        let color = if context.luminosity_in_device_cmyk && data.color_space.is_device_cmyk() {
+            let gray = device_cmyk_to_gray(&data.color);
+            Color::new(ColorSpace::device_gray(), smallvec![gray], data.alpha)
+        } else {
+            Color::new(data.color_space, data.color, data.alpha)
+        };
 
         if let Some(tf) = &data.transfer_function {
             Paint::Color(Color::from_rgba(tf.apply(&color.to_rgba())))

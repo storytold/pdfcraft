@@ -334,12 +334,10 @@
 	Check Again	Periksa Lagi
 	Check again	Periksa lagi
 	Check box is checked by default	Kotak centang tercentang secara bawaan
-	Check for updates	Periksa pembaruan
 	Check spelling	Periksa ejaan
 	Check the pages	Periksa halaman
 	Check the pages of {name}: {why}	Periksa halaman {name}: {why}
 	Checking Options ({on} of 32 in all categories)	Memeriksa Opsi ({on} dari 32 di semua kategori)
-	Checking for a newer version…	Mencari versi yang lebih baru…
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Pilih gambar PNG atau JPEG (hingga 4 MiB). Transparansi dipertahankan.
 	Choose a folder for the exported files	Pilih folder untuk file yang diekspor
 	Choose a folder for the extracted pages	Pilih folder untuk halaman yang diekstrak
@@ -398,7 +396,6 @@
 	Copies:	Salinan:
 	Copy selected text	Salin teks yang dipilih
 	Copy text	Salin teks
-	Couldn't check for updates: {e}	Tidak dapat memeriksa pembaruan: {e}
 	Couldn't open the printer's preferences: {e}	Tidak dapat membuka preferensi printer: {e}
 	Counterclockwise 90 degrees	90 derajat berlawanan arah jarum jam
 	Country/Region	Negara/Wilayah
@@ -859,7 +856,6 @@
 	Patterns (graphics objects)	Pola (objek grafis)
 	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft tidak berhenti secara normal. Dokumen-dokumen ini memiliki perubahan yang disimpan otomatis:
 	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft bekerja secara luring. Tidak ada telemetri, tidak ada akun, dan tidak ada pemrosesan awan kecuali Anda menambahkan penyedia.
-	PdfCraft {c} is up to date.	PdfCraft {c} sudah terbaru.
 	PdfCraft {v} is available.	PdfCraft {v} tersedia.
 	Percentage	Persentase
 	Permissions password	Kata sandi izin
@@ -924,6 +920,8 @@
 	Redaction code:	Kode sensor:
 	Reload	Muat ulang
 	Reload documents when their files change on disk	Muat ulang dokumen saat file-nya berubah di disk
+	Don't show again	Jangan tampilkan lagi
+	Show a notice when a document is secured	Tampilkan pemberitahuan saat dokumen diamankan
 	Remove checkmark	Hapus centang
 	Remove invalid links and bookmarks	Hapus tautan dan bookmark yang tidak valid
 	Remove page	Hapus halaman
@@ -944,6 +942,14 @@
 	Replacement text	Teks pengganti
 	Replacement: pages of {name}	Pengganti: halaman dari {name}
 	Replaces the existing one on those pages.	Menggantikan yang ada di halaman-halaman itu.
+	Checking pages…	Memeriksa halaman…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Halaman {pages} memiliki isian putihnya sendiri, yang akan menutupi latar belakang. Ganti
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Halaman-halaman {pages} memiliki isian putihnya sendiri, yang akan menutupi latar belakang. Ganti
+	Removing the background puts the page's own backdrop back.	Menghapus latar belakang akan mengembalikan isian putih milik halaman.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Sebuah gambar menutupi halaman {pages} (hasil pindai?), jadi latar belakang tidak akan terlihat di sana.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Gambar menutupi halaman-halaman {pages} (hasil pindai?), jadi latar belakang tidak akan terlihat di sana.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Halaman {pages} berubah setelah latar belakang ditambahkan, jadi isian putihnya sendiri tetap mati. Di kertas putih tampilannya sama.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Halaman {pages} berubah setelah latar belakang ditambahkan, jadi isian putihnya sendiri tetap mati. Di kertas putih tampilannya sama.
 	Report	Laporan
 	Report…	Laporan…
 	Requires user to enter a password for:	Memerlukan pengguna untuk memasukkan kata sandi untuk:
@@ -1009,6 +1015,15 @@
 	Scroll tabs right	Gulir tab ke kanan
 	Search comments	Cari komentar
 	Search tools and commands…	Cari alat dan perintah…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Teks yang ditambahkan
+	Link URL	URL tautan
+	Search tools and commands	Cari alat dan perintah
+	Text editing line	Baris penyuntingan teks
+	Text to place	Teks yang akan ditempatkan
+	Tooltip	Tooltip
+	Words or phrases to redact	Kata atau frasa untuk disensor
 	Searchable Image (Exact)	Gambar yang Dapat Dicari (Tepat)
 	Searching… {s} of {p} pages	Mencari… {s} dari {p} halaman
 	Searching… {s}/{p}	Mencari… {s}/{p}
@@ -1219,6 +1234,7 @@
 	Update	Perbarui
 	Use 72 DPI (one point per pixel)	Gunakan 72 DPI (satu titik per piksel)
 	Use Flate to encode streams that are not encoded	Gunakan Flate untuk mengodekan stream yang belum dikodekan
+	In streams that use LZW encoding, use Flate instead	Pada stream yang memakai pengodean LZW, gunakan Flate sebagai gantinya
 	Use a Digital ID from a file	Gunakan ID Digital dari file
 	Use custom DPI	Gunakan DPI kustom
 	Use each image's embedded DPI; use 72 DPI when it is absent.	Gunakan DPI tertanam pada setiap gambar; gunakan 72 DPI jika tidak ada.
@@ -1258,7 +1274,6 @@
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	Formulir XFA: kolom dan data XFA-nya dijaga tetap sinkron, sehingga penampil lain menampilkan yang Anda isi.
 	You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Anda akan menerapkan 1 tanda sensor. Teks, gambar, dan gambar-gambar di bawah tanda tersebut, serta komentar dan kolom formulir yang bertumpang tindih dengannya, akan dihapus permanen.
 	You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Anda akan menerapkan {n} tanda sensor. Teks, gambar, dan gambar-gambar di bawah tanda tersebut, serta komentar dan kolom formulir yang bertumpang tindih dengannya, akan dihapus permanen.
-	You have version {c}. All releases are listed at {page}.	Anda memiliki versi {c}. Semua rilis tercantum di {page}.
 	You have version {c}. Download the new version from its release page.	Anda memiliki versi {c}. Unduh versi baru dari halaman rilisnya.
 	Your changes will be lost if you don't save them.	Perubahan Anda akan hilang jika tidak Anda simpan.
 	ZIP	ZIP
@@ -1390,6 +1405,10 @@
 	Draw freehand	Gambar bebas
 	Drawing	Gambar
 	Drawing scale	Skala gambar
+	Scale	Skala
+	Common scales	Skala umum
+	Enter a scale such as 1:50.	Masukkan skala seperti 1:50.
+	Applying a scale switches units to m / mm.	Menerapkan skala mengubah satuan menjadi m / mm.
 	Drop-down list	Daftar drop-down
 	Duplicate pages	Duplikat halaman
 	Edit a PDF	Edit PDF
@@ -2039,6 +2058,9 @@ comment menu	Edit	Edit
 	Formulas and similar non-text elements need alternate text. Add alternate text to them.	Rumus dan elemen non-teks serupa memerlukan teks alternatif. Tambahkan teks alternatif ke elemen tersebut.
 	Gray	Abu-abu
 	Grayscale Images	Gambar Skala Abu-abu
+	Monochrome Images	Gambar Monokrom
+	CCITT Group 4	CCITT Grup 4
+	JBIG2 (lossless)	JBIG2 (tanpa kehilangan)
 	Green	Hijau
 	Green on black	Hijau di atas hitam
 	H / Space (hold)	H / Space (tahan)
@@ -2676,6 +2698,14 @@ key	Space	Space
 	Make properties default	Jadikan properti default
 	Pages selected	Halaman yang dipilih
 	Page properties	Properti halaman
+	Create & Edit	Buat & Edit
+	Review & Compare	Tinjau & Bandingkan
+	Forms & Signatures	Formulir & Tanda Tangan
+	Protect & Standardize	Lindungi & Standarkan
+	Customize & Automate	Sesuaikan & Otomatiskan
+	No tools match your search.	Tidak ada alat yang cocok dengan pencarian Anda.
+	Expand all tools	Perluas semua alat
+	Collapse all tools	Ciutkan semua alat
 	The password must have at least 8 characters.	Kata sandi harus memiliki minimal 8 karakter.
 theme	Appearance	Tampilan
 	Zoom — type a percentage and press Enter	Zoom — ketik persentase dan tekan Enter
@@ -2698,6 +2728,12 @@ theme	Appearance	Tampilan
 	Links on page	Links on page
 	Loop	Loop
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Reads {name}, which the form doesn't have, so it gets no value there.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.
+	Missing field	Missing field
+	Unchecked reads	Unchecked reads
+	{field} reads fields named as it runs	{field} reads fields named as it runs
+	Some names are built as it runs	Some names are built as it runs
 	Move only what must move, so every field calculates after the fields it reads.	Move only what must move, so every field calculates after the fields it reads.
 	Moves only what must move	Moves only what must move
 	No field reads it	No field reads it
@@ -2751,6 +2787,29 @@ theme	Appearance	Tampilan
 	field names can't contain a period: {name}	nama kolom tidak boleh berisi titik: {name}
 	two cells would both be named {name}	dua sel akan sama-sama bernama {name}
 	a field named {name} already exists	kolom bernama {name} sudah ada
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Hari ini
+
+# AI-assisted additions for restoring the last view (#1767) (2026-10-22); not reviewed by a native speaker.
+	Restore the last view (page, zoom and page display) when a document is opened again	Pulihkan tampilan terakhir (halaman, zoom, dan tampilan halaman) saat dokumen dibuka lagi
+	Attach a file…	Lampirkan file…
+	Attach {name}	Lampirkan {name}
+	Attaching files is not available on the web yet	Melampirkan file belum tersedia di web
+	Delete attachment	Hapus lampiran
+	Delete attachment {key}	Hapus lampiran {key}
+@plural	{n} reply|{n} replies	{n} balasan
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Alat halaman
+	Insert pages from a file after the selection…	Sisipkan halaman dari file setelah pilihan…
+	Rotate the selected pages counterclockwise	Putar halaman yang dipilih berlawanan arah jarum jam
+	Rotate the selected pages clockwise	Putar halaman yang dipilih searah jarum jam
+	Extract the selected pages…	Ekstrak halaman yang dipilih…
+	Delete the selected pages	Hapus halaman yang dipilih
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Opsi untuk balasan ini
 	Simulate overprinting	Simulasikan overprint
 	Separating page {n}…	Memisahkan halaman {n}…
 	The page could not be separated: {error}	Halaman tidak dapat dipisahkan: {error}
