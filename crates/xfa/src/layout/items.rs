@@ -18,8 +18,8 @@ pub enum Item {
         color: [f64; 3],
         dashed: bool,
     },
-    /// A box with rounded (or inverted) corners: its fill, and its edge drawn inside it.
-    Rounded(Box<Rounded>),
+    /// A box whose corners reach along its edges: its fill, edges and corners ([`Cornered`]).
+    Cornered(Box<Cornered>),
     Text(Span),
     Image {
         rect: Rect,
@@ -29,21 +29,38 @@ pub enum Item {
     Widget(Box<Widget>),
 }
 
-/// A box with rounded corners ([`Item::Rounded`]).
+/// A line's width, colour and whether it is dashed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Pen {
+    pub width: f64,
+    pub color: [f64; 3],
+    pub dashed: bool,
+}
+
+/// One corner of a [`Cornered`] box.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CornerShape {
+    /// How far the corner reaches along the edges, at most half the box's shorter side.
+    pub radius: f64,
+    /// A quarter circle, rather than a right angle.
+    pub round: bool,
+    /// Turned into the box: a square notch, or a curve centred on the box's corner.
+    pub inverted: bool,
+    /// Its line, when the corner is shown.
+    pub line: Option<Pen>,
+}
+
+/// A box with corners of its own ([`Item::Cornered`]): its fill follows the corners' shapes,
+/// each shown edge runs between its two corners, and each shown corner is drawn with its own
+/// line, all inside the box.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Rounded {
+pub struct Cornered {
     pub rect: Rect,
-    /// Top-left, top-right, bottom-right and bottom-left radii, each at most half the box's
-    /// shorter side.
-    pub radii: [f64; 4],
-    /// Corners whose curve goes into the box rather than around it, in the same order.
-    pub inverted: [bool; 4],
+    /// Top-left, top-right, bottom-right and bottom-left.
+    pub corners: [CornerShape; 4],
     pub fill: Option<[f64; 3]>,
-    /// The edge: its width, colour and whether it is dashed.
-    pub edge: Option<(f64, [f64; 3], bool)>,
-    /// A page break cut the box here: that side has no edge, and its corners are square.
-    pub open_top: bool,
-    pub open_bottom: bool,
+    /// Top, right, bottom and left: each shown edge's line.
+    pub edges: [Option<Pen>; 4],
 }
 
 #[derive(Clone, Debug, PartialEq)]

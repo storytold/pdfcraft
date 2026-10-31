@@ -1,5 +1,5 @@
-use super::items::{Action, Item, Rounded};
-use super::{HashMap, Layout, MAX_DEPTH, Node, Rect, Script, date_letters, iso_to_pattern};
+use super::items::{Action, CornerShape, Cornered, Item, Pen};
+use super::{Edge, HashMap, Layout, MAX_DEPTH, Node, Rect, Script, Stroke, date_letters, iso_to_pattern};
 
 pub(super) fn collect_values(nodes: &[Node], out: &mut HashMap<String, String>, depth: usize) {
     if depth > MAX_DEPTH {
@@ -51,7 +51,7 @@ pub(super) fn solid_extent(item: &Item) -> Option<(f64, f64)> {
         Item::Text(s) => Some((s.baseline - s.face.size * 0.8, s.baseline + s.face.size * 0.2)),
         Item::Image { rect, .. } => Some((rect.y, rect.bottom())),
         Item::Widget(w) => Some((w.rect.y, w.rect.bottom())),
-        Item::Fill { .. } | Item::Line { .. } | Item::Rounded(_) => None,
+        Item::Fill { .. } | Item::Line { .. } | Item::Cornered(_) => None,
     }
 }
 
@@ -86,25 +86,42 @@ pub(super) fn divide(item: Item, cut: f64) -> (Option<Item>, Option<Item>) {
                 (Some(Item::Line { from: lo, to: mid, width, color, dashed }), Some(Item::Line { from: mid, to: hi, width, color, dashed }))
             }
         }
-        Item::Rounded(r) => {
+        Item::Cornered(r) => {
             if r.rect.bottom() <= cut + 0.01 {
-                (Some(Item::Rounded(r)), None)
+                (Some(Item::Cornered(r)), None)
             } else if r.rect.y >= cut - 0.01 {
-                (None, Some(Item::Rounded(r)))
+                (None, Some(Item::Cornered(r)))
             } else {
-                // Each part keeps the corners on its side, rounded no more than its own height
-                // allows, and is open where it was cut.
-                let [tl, tr, br, bl] = r.radii;
+                // Each part keeps the corners on its side, reaching no further than its own
+                // height allows, and is open where it was cut: no edge there, and square corners.
+                let part = |rect: Rect, keep: [bool; 4], open: usize| {
+                    let mut p = Cornered { rect, ..(*r).clone() };
+                    for (c, k) in p.corners.iter_mut().zip(keep) {
+                        if k {
+                            c.radius = c.radius.min(rect.h.max(0.0));
+                        } else {
+                            *c = CornerShape::default();
+                        }
+                    }
+                    if let Some(e) = p.edges.get_mut(open) {
+                        *e = None;
+                    }
+                    Item::Cornered(Box::new(p))
+                };
                 let above = Rect::new(r.rect.x, r.rect.y, r.rect.w, cut - r.rect.y);
                 let below = Rect::new(r.rect.x, cut, r.rect.w, r.rect.bottom() - cut);
-                let fit = |v: f64, h: f64| v.min(h.max(0.0));
-                let upper = Rounded { rect: above, radii: [fit(tl, above.h), fit(tr, above.h), 0.0, 0.0], open_bottom: true, ..(*r).clone() };
-                let lower = Rounded { rect: below, radii: [0.0, 0.0, fit(br, below.h), fit(bl, below.h)], open_top: true, ..*r };
-                (Some(Item::Rounded(Box::new(upper))), Some(Item::Rounded(Box::new(lower))))
+                (Some(part(above, [true, true, false, false], 2)), Some(part(below, [false, false, true, true], 0)))
             }
         }
         other => (Some(other), None),
     }
+}
+
+/// The line edge (or corner) `e` is drawn with: its width kept to 0.1-20pt, and relief strokes
+/// (raised, lowered, etched, embossed) as a solid grey.
+pub(super) fn pen(e: &Edge) -> Pen {
+    let color = if e.stroke == Stroke::Relief { [0.55, 0.55, 0.55] } else { e.color.0 };
+    Pen { width: e.thickness.clamp(0.1, 20.0), color, dashed: matches!(e.stroke, Stroke::Dashed | Stroke::Dotted) }
 }
 
 /// `item` moved by (`dx`, `dy`).
@@ -114,7 +131,7 @@ pub(super) fn moved(mut item: Item, dx: f64, dy: f64) -> Item {
             rect.x += dx;
             rect.y += dy;
         }
-        Item::Rounded(r) => {
+        Item::Cornered(r) => {
             r.rect.x += dx;
             r.rect.y += dy;
         }

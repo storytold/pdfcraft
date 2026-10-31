@@ -155,14 +155,16 @@ fn parse_border(n: Option<XmlNode>) -> Option<Border> {
 
 /// The `<corner>` children of a border or rectangle, top-left, top-right, bottom-right then
 /// bottom-left: one applies to all four, and a corner not given is the last one given. Without
-/// any, the corners are square.
+/// any, the corners are square. A corner is a right angle unless its `join` is `round`, and has
+/// its own line (presence, thickness, colour and stroke, read as an edge's).
 fn parse_corners(n: XmlNode) -> [Corner; 4] {
     let given: Vec<Corner> = children(n, "corner")
         .take(4)
         .map(|c| Corner {
-            presence: Presence::parse(c.attribute("presence")),
             radius: attr_measure(c, "radius").filter(|r| r.is_finite()).unwrap_or(0.0).max(0.0),
+            round: c.attribute("join") == Some("round"),
             inverted: c.attribute("inverted") == Some("1"),
+            line: parse_edge(c),
         })
         .collect();
     let Some(last) = given.last().copied() else { return [Corner::default(); 4] };

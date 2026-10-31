@@ -2381,102 +2381,135 @@ fn a_multi_line_field_without_a_height_grows_to_hold_its_text() {
     assert!((notes.rect.h - 108.0).abs() < 0.01, "{:?}", notes.rect);
 }
 
-/// The rounded boxes laid out on `page`, in order.
-fn rounded(page: &Page) -> Vec<&crate::layout::Rounded> {
-    page.items.iter().filter_map(|i| if let Item::Rounded(r) = i { Some(r.as_ref()) } else { None }).collect()
+/// The boxes with corners of their own laid out on `page`, in order.
+fn cornered(page: &Page) -> Vec<&crate::layout::Cornered> {
+    page.items.iter().filter_map(|i| if let Item::Cornered(r) = i { Some(r.as_ref()) } else { None }).collect()
 }
 
-/// A border or rectangle with rounded corners is one shape, filled and edged along its curves:
-/// one corner applies to all four, a corner not given repeats the last one given, a radius is at
-/// most half the box's shorter side, and inverted corners are kept. Hidden corners, and edges
-/// that differ from each other, keep the square box.
+/// A corner is a right angle unless its `join` is `round`, as the XFA specification's default
+/// and another viewer (on a synthetic form) have it. A box whose corners are right angles lined
+/// as its edges are is a plain rectangle: its edges whole, or nothing when they are hidden. Any
+/// other corner with a radius makes the box one shape: its edges stop the radius short of each
+/// corner, its fill follows the corners, and each shown corner has its own line (0.5pt black
+/// unless it says otherwise). One corner applies to all four, a corner not given repeats the
+/// last one given, and a radius is at most half the box's shorter side. A hidden corner still
+/// cuts its edges short, leaving a gap.
 #[test]
-fn rounded_corners_make_a_border_one_rounded_shape() {
+fn corners_are_right_angles_unless_their_join_is_round() {
+    use crate::layout::Pen;
     let draw = |name: &str, y: f64, border: &str| {
         format!(r#"<draw name="{name}" x="0in" y="{y}in" w="2in" h="1in"><value><text>{name}</text></value>{border}</draw>"#)
     };
     let body = [
-        draw("round", 0.0, r#"<border><edge thickness="1pt"><color value="255,0,0"/></edge><corner radius="0.25in"/><fill><color value="230,230,230"/></fill></border>"#),
-        draw("mixed", 1.2, r#"<border><edge/><corner radius="0.1in"/><corner radius="0.2in" inverted="1"/></border>"#),
-        draw("huge", 2.4, r#"<border><edge/><corner radius="3in"/></border>"#),
-        draw("hiddenCorner", 3.6, r#"<border><edge/><corner radius="0.25in" presence="hidden"/></border>"#),
-        draw("unlikeEdges", 4.8, r#"<border><edge/><edge presence="hidden"/><corner radius="0.25in"/></border>"#),
-        draw("fillOnly", 6.0, r#"<border><edge presence="hidden"/><corner radius="0.25in"/><fill><color value="200,200,200"/></fill></border>"#),
-        r#"<draw name="shape" x="0in" y="7.2in" w="2in" h="1in"><value><rectangle><edge thickness="0.5pt"/><corner radius="5.08mm"/></rectangle></value></draw>"#.to_string(),
+        r#"<draw name="frame" x="0in" y="0in" w="2in" h="1in"><value><rectangle><edge thickness="0.5pt"/><corner radius="5.08mm" thickness="0.5pt"/></rectangle></value></draw>"#.to_string(),
+        draw("round", 1.2, r#"<border><edge thickness="1pt"><color value="255,0,0"/></edge><corner radius="0.25in" join="round"/><fill><color value="230,230,230"/></fill></border>"#),
+        draw("square", 2.4, r#"<border><edge thickness="2pt"/><corner radius="0.25in"/></border>"#),
+        draw("mixed", 3.6, r#"<border><edge/><corner radius="0.1in" join="round"/><corner radius="0.2in" inverted="1"/></border>"#),
+        draw("huge", 4.8, r#"<border><edge/><corner radius="3in" join="round"/></border>"#),
+        draw("hiddenCorner", 6.0, r#"<border><edge/><corner radius="0.25in" join="round" presence="hidden"/></border>"#),
+        draw("hiddenEdges", 7.2, r#"<border><edge presence="hidden"/><corner radius="0.25in"/><fill><color value="200,200,200"/></fill></border>"#),
+        draw("redCorners", 8.4, r#"<border><edge presence="hidden"/><corner radius="0.25in" thickness="2pt"><color value="255,0,0"/></corner></border>"#),
     ]
     .concat();
-    let form = layout_xml(&one_area_form(r#"layout="tb""#, &format!(r#"<subform name="body" layout="position" w="7.5in" h="9in">{body}</subform>"#)))
-        .unwrap();
-    let shapes = rounded(&form.pages[0]);
+    let form =
+        layout_xml(&one_area_form(r#"layout="tb""#, &format!(r#"<subform name="body" layout="position" w="7.5in" h="9.5in">{body}</subform>"#)))
+            .unwrap();
+    let page = &form.pages[0];
+    let shapes = cornered(page);
     let at = |y: f64| shapes.iter().copied().find(|r| (r.rect.y - 36.0 - y * 72.0).abs() < 0.01);
-    let round = at(0.0).expect("the rounded border is one shape");
-    assert_eq!((round.rect.w, round.rect.h, round.radii), (144.0, 72.0, [18.0; 4]));
-    assert_eq!((round.fill, round.edge), (Some([230.0 / 255.0; 3]), Some((1.0, [1.0, 0.0, 0.0], false))));
-    let mixed = at(1.2).expect("the box with two corners given");
-    assert_eq!((mixed.radii, mixed.inverted), ([7.2, 14.4, 14.4, 14.4], [false, true, true, true]));
-    assert_eq!(at(2.4).expect("the huge radius").radii, [36.0; 4], "at most half the shorter side");
-    assert!(at(3.6).is_none() && at(4.8).is_none(), "hidden corners and unlike edges keep a square box");
-    let fill_only = at(6.0).expect("a fill with hidden edges is rounded too");
-    assert_eq!((fill_only.fill.is_some(), fill_only.edge), (true, None));
-    let shape = at(7.2).expect("a rectangle drawn as a value");
-    assert!((shape.radii[0] - 5.08 * 72.0 / 25.4).abs() < 1e-9 && shape.edge.is_some());
-    // The square boxes are drawn as before: edges as lines.
-    let lines_at = |y: f64| {
-        form.pages[0]
-            .items
-            .iter()
-            .filter(|i| matches!(i, Item::Line { from, .. } if from.1 >= 36.0 + y * 72.0 - 1.0 && from.1 <= 36.0 + (y + 1.0) * 72.0 + 1.0))
-            .count()
+    let in_row = |y: f64, i: &Item| match i {
+        Item::Line { from, .. } => (from.1 - 36.0 - y * 72.0).abs() < 1.5 || (from.1 - 36.0 - (y + 1.0) * 72.0).abs() < 1.5,
+        Item::Fill { rect, .. } => (rect.y - 36.0 - y * 72.0).abs() < 0.01,
+        _ => false,
     };
-    assert_eq!((lines_at(3.6), lines_at(4.8)), (4, 2));
+    // A rectangle whose corner has a radius but no join, lined as its edges are: square, its
+    // four edges whole.
+    assert!(at(0.0).is_none(), "the frame's corners are right angles: {:?}", at(0.0));
+    let whole = page.items.iter().filter(|i| matches!(i, Item::Line { from, to, .. } if in_row(0.0, i) && (to.0 - from.0).abs() > 143.0)).count();
+    assert_eq!(whole, 2, "its top and bottom edges run corner to corner");
+    let black = |width: f64| Some(Pen { width, color: [0.0; 3], dashed: false });
+    // join="round": one shape, the corners round with their own (default) line.
+    let round = at(1.2).expect("the round box is one shape");
+    assert_eq!((round.rect.w, round.rect.h, round.fill), (144.0, 72.0, Some([230.0 / 255.0; 3])));
+    assert!(round.corners.iter().all(|c| c.radius == 18.0 && c.round && !c.inverted && c.line == black(0.5)), "{:?}", round.corners);
+    assert_eq!(round.edges, [Some(Pen { width: 1.0, color: [1.0, 0.0, 0.0], dashed: false }); 4]);
+    // Square corners lined otherwise than the edges: right angles of their own.
+    let square = at(2.4).expect("square corners with their own line");
+    assert!(square.corners.iter().all(|c| c.radius == 18.0 && !c.round && c.line == black(0.5)), "{:?}", square.corners);
+    assert_eq!(square.edges, [black(2.0); 4]);
+    let mixed = at(3.6).expect("the box with two corners given");
+    assert_eq!(
+        mixed.corners.map(|c| (c.radius, c.round, c.inverted)),
+        [(7.2, true, false), (14.4, false, true), (14.4, false, true), (14.4, false, true)]
+    );
+    assert!(at(4.8).expect("the huge radius").corners.iter().all(|c| c.radius == 36.0), "at most half the shorter side");
+    // A hidden corner has no line, but still cuts the edges short.
+    let hidden = at(6.0).expect("hidden corners still shape the box");
+    assert!(hidden.corners.iter().all(|c| c.radius == 18.0 && c.line.is_none()) && hidden.edges == [black(0.5); 4]);
+    // Hidden edges with square corners lined as they are: the fill alone, square.
+    assert!(at(7.2).is_none() && page.items.iter().any(|i| matches!(i, Item::Fill { .. }) && in_row(7.2, i)));
+    assert!(!page.items.iter().any(|i| matches!(i, Item::Line { .. }) && in_row(7.2, i)), "no line on hidden edges");
+    // Hidden edges, corners lined in red: the corners alone.
+    let red = at(8.4).expect("corners lined otherwise are drawn");
+    assert_eq!((red.edges, red.corners.map(|c| c.line)), ([None; 4], [Some(Pen { width: 2.0, color: [1.0, 0.0, 0.0], dashed: false }); 4]));
 }
 
-/// A rounded box a page break cuts keeps its rounded corners on each page, square where it was
-/// cut, and its edge stops there instead of closing across the cut.
+/// A box with round corners a page break cuts keeps the corners on its side on each page, square
+/// where it was cut, with no edge across the cut.
 #[test]
-fn a_rounded_box_cut_by_a_page_break_keeps_its_corners_on_each_page() {
+fn a_cornered_box_cut_by_a_page_break_keeps_its_corners_on_each_page() {
     // A 12-inch box in a 10-inch content area: it is cut at the area's bottom.
-    let body = r#"<subform name="body" layout="tb" w="7.5in"><subform name="tall" layout="position" w="7.5in" h="12in"><border><edge/><corner radius="0.25in"/></border><draw name="note" x="0in" y="0in" w="2in" h="0.3in"><value><text>Note</text></value></draw></subform></subform>"#;
+    let body = r#"<subform name="body" layout="tb" w="7.5in"><subform name="tall" layout="position" w="7.5in" h="12in"><border><edge/><corner radius="0.25in" join="round"/></border><draw name="note" x="0in" y="0in" w="2in" h="0.3in"><value><text>Note</text></value></draw></subform></subform>"#;
     let form = layout_xml(&one_area_form(r#"layout="tb""#, body)).unwrap();
     assert_eq!(form.pages.len(), 2);
-    let (first, last) = (rounded(&form.pages[0]), rounded(&form.pages[1]));
+    let (first, last) = (cornered(&form.pages[0]), cornered(&form.pages[1]));
     assert_eq!((first.len(), last.len()), (1, 1), "{first:?} {last:?}");
-    assert_eq!((first[0].radii, first[0].open_top, first[0].open_bottom), ([18.0, 18.0, 0.0, 0.0], false, true));
-    assert_eq!((last[0].radii, last[0].open_top, last[0].open_bottom), ([0.0, 0.0, 18.0, 18.0], true, false));
+    let shown = |r: &crate::layout::Cornered| r.edges.map(|e| e.is_some());
+    assert_eq!((first[0].corners.map(|c| c.radius), shown(first[0])), ([18.0, 18.0, 0.0, 0.0], [true, true, false, true]));
+    assert_eq!((last[0].corners.map(|c| c.radius), shown(last[0])), ([0.0, 0.0, 18.0, 18.0], [false, true, true, true]));
+    assert!(last[0].corners[0].line.is_none() && last[0].corners[2].line.is_some(), "the corners at the cut are gone");
     assert!((first[0].rect.h + last[0].rect.h - 12.0 * 72.0).abs() < 0.01, "the two parts make the whole box");
 }
 
-/// A rounded box is written as one path: filled along its curves, then edged half its width
-/// inside, the curves as quarter circles. An inverted corner curves into the box, and the edge
-/// of a box a page break cut doesn't close across the cut.
+/// A cornered box is written as its fill along the corners, then each edge between its corners,
+/// then each shown corner with its own line, the lines half their width inside the box: a round
+/// corner a quarter circle, a square one a right angle. An inverted square corner is a notch and
+/// an inverted round one a quarter circle centred on the box's corner, their lines centred on
+/// that outline.
 #[test]
-fn rounded_boxes_are_written_as_curved_paths() {
-    use crate::layout::Rounded;
-    // A 2-by-1-inch box at the page's top left, on a page 792pt tall.
-    let shape = |inverted: [bool; 4], edge: bool, open: (bool, bool)| Rounded {
+fn cornered_boxes_are_written_with_their_corners_and_edges_apart() {
+    use crate::layout::{CornerShape, Cornered, Pen};
+    let red = Pen { width: 2.0, color: [1.0, 0.0, 0.0], dashed: false };
+    // A 2-by-1-inch box at the page's top left, on a page 792pt tall, its corners 18pt.
+    let shape = |round: bool, inverted: bool| Cornered {
         rect: Rect::new(36.0, 36.0, 144.0, 72.0),
-        radii: [18.0; 4],
-        inverted,
+        corners: [CornerShape { radius: 18.0, round, inverted, line: Some(red) }; 4],
         fill: Some([0.9, 0.9, 0.9]),
-        edge: edge.then_some((2.0, [1.0, 0.0, 0.0], false)),
-        open_top: open.0,
-        open_bottom: open.1,
+        edges: [Some(Pen { width: 2.0, color: [0.0; 3], dashed: false }); 4],
     };
-    let content = |r: Rounded| crate::pdf::rounded(&r, 792.0);
-    let ops = content(shape([false; 4], true, (false, false)));
-    // The fill: from the top-left corner's start, a quarter circle to (54, 36), closed.
-    assert!(ops.contains("0.9 0.9 0.9 rg 36 738 m 36 747.941 44.059 756 54 756 c "), "{ops}");
+    let content = |r: Cornered| crate::pdf::cornered(&r, 792.0);
+    let ops = content(shape(true, false));
+    // The fill: the top-left quarter circle to (54, 36), along the top to the top-right one, and
+    // round it, closed.
+    assert!(ops.contains("0.9 0.9 0.9 rg 36 738 m 36 747.941 44.059 756 54 756 c 162 756 l 171.941 756 180 747.941 180 738 c "), "{ops}");
     assert!(ops.contains(" h f\n"), "{ops}");
-    // The edge: 1pt inside, the corners 1pt tighter.
-    assert!(ops.contains("q 1 0 0 RG 2 w 37 738 m 37 747.389 44.611 755 54 755 c "), "{ops}");
-    assert!(ops.contains(" h S Q\n"), "{ops}");
-    // Inverted: the curve bends towards the box's inside.
-    let inv = content(shape([true; 4], false, (false, false)));
-    assert!(inv.contains("36 738 m 45.941 738 54 746.059 54 756 c "), "{inv}");
-    // Cut at the bottom: the edge runs from the bottom left round the top and back down, open.
-    let cut = content(Rounded { radii: [18.0, 18.0, 0.0, 0.0], ..shape([false; 4], true, (false, true)) });
-    let edge = cut.lines().find(|l| l.contains(" RG ")).unwrap_or_default();
-    assert!(edge.starts_with("q 1 0 0 RG 2 w 37 685 m 37 738 l ") && edge.ends_with(" 179 685 l S Q") && !edge.contains(" h "), "{edge}");
+    // The top edge, 1pt inside, from corner to corner.
+    assert!(ops.contains("q 0 0 0 RG 2 w 54 755 m 162 755 l S Q\n"), "{ops}");
+    // The top-left corner's own line, 1pt inside and 1pt tighter.
+    assert!(ops.contains("q 1 0 0 RG 2 w 37 738 m 37 747.389 44.611 755 54 755 c S Q\n"), "{ops}");
+    // A square corner: a right angle; inverted, a notch 18pt deep.
+    assert!(content(shape(false, false)).contains("q 1 0 0 RG 2 w 37 738 m 37 755 l 54 755 l S Q\n"));
+    assert!(content(shape(false, true)).contains("q 1 0 0 RG 2 w 36 738 m 54 738 l 54 756 l S Q\n"));
+    // Inverted, a corner's line is centred on its outline.
+    assert!(content(shape(true, true)).contains("q 1 0 0 RG 2 w 36 738 m 45.941 738 54 746.059 54 756 c S Q\n"));
+    // Inverted round: the fill curves into the box, centred on its corner.
+    assert!(content(shape(true, true)).contains("36 738 m 45.941 738 54 746.059 54 756 c "));
+    // Hidden corners draw no line, and edges the corners take up entirely aren't drawn.
+    let mut bare = shape(false, false);
+    bare.corners = [CornerShape { radius: 36.0, round: false, inverted: false, line: None }; 4];
+    let bare = content(bare);
+    assert!(!bare.contains("1 0 0 RG") && bare.contains("72 755 m 144 755 l"), "{bare}");
+    assert_eq!(bare.matches(" S Q").count(), 2, "only the top and bottom edges have length left: {bare}");
 }
 
 /// A flowed subform without a fixed height gets its border and fill round all it takes, margins

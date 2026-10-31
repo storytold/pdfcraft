@@ -125,13 +125,25 @@ impl Edge {
     }
 }
 
-/// One corner of a border: how far it rounds the box (`radius`), and whether the curve goes
-/// into the box (`inverted`) rather than around it.
+/// One corner of a border. `radius` is how far it reaches along the edges: the edges stop that
+/// far from the corner, whatever its shape or presence, and the corner fills the gap. Its shape
+/// is a right angle (`join="square"`, the default) or a quarter circle (`join="round"`), and
+/// `inverted` turns it into the box: a square notch or a concave curve. The corner is drawn with
+/// its own line, whose presence is the corner's.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Corner {
-    pub presence: Presence,
     pub radius: f64,
+    pub round: bool,
     pub inverted: bool,
+    pub line: Edge,
+}
+
+impl Corner {
+    /// Whether the corner is a plain right angle drawn as `edge` is: the edges then draw it,
+    /// meeting there as in a box without corners (and leaving it out when they are hidden).
+    fn part_of(&self, edge: &Edge) -> bool {
+        !self.round && !self.inverted && self.line.thickness == edge.thickness && self.line.color == edge.color && self.line.stroke == edge.stroke
+    }
 }
 
 /// A box border: four edges (top, right, bottom, left), four corners (top-left, top-right,
@@ -156,13 +168,21 @@ impl Border {
         if self.presence == Presence::Visible { self.fill } else { None }
     }
 
-    /// How far each corner (top-left, top-right, bottom-right, bottom-left) rounds a box `w` by
-    /// `h`: its radius when the corner is shown, no more than half the box's shorter side, and 0
-    /// for a hidden corner or a hidden border.
+    /// How far each corner (top-left, top-right, bottom-right, bottom-left) reaches along the
+    /// edges of a box `w` by `h`: its radius, shown or not, no more than half the box's shorter
+    /// side, and 0 for a hidden border.
     pub fn radii(&self, w: f64, h: f64) -> [f64; 4] {
         let most = (w.min(h) / 2.0).max(0.0);
         let shown = self.presence == Presence::Visible;
-        self.corners.map(|c| if shown && c.presence == Presence::Visible && c.radius.is_finite() { c.radius.clamp(0.0, most) } else { 0.0 })
+        self.corners.map(|c| if shown && c.radius.is_finite() { c.radius.clamp(0.0, most) } else { 0.0 })
+    }
+
+    /// Whether the box is a plain rectangle: every corner that reaches along the edges is a right
+    /// angle drawn as every edge is, so the edges meet at the corners whole. Another viewer draws
+    /// such a box so, its corners hidden with its edges, while a corner lined otherwise is drawn
+    /// with its own line between edges cut short.
+    pub fn plain(&self) -> bool {
+        self.corners.iter().all(|c| c.radius <= 0.0 || self.edges.iter().all(|e| c.part_of(e)))
     }
 }
 

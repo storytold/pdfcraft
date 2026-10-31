@@ -1,5 +1,5 @@
-use super::common::clean_name;
-use super::items::{Item, Rounded};
+use super::common::{clean_name, pen};
+use super::items::{CornerShape, Cornered, Item};
 use super::{
     Arc, Border, Ctx, Draw, ExclGroup, Face, Font, Layout, Layouter, MAX_DEPTH, MAX_IMAGE_BYTES, Node, Para, Presence, Rect, SomIndices, Stroke,
     Subform, Value, XfaError, data_path, text,
@@ -146,31 +146,20 @@ impl Layouter<'_> {
         }
     }
 
-    /// Draw border `b` around `rect`: its fill, then each shown edge as a line inside the box, or
-    /// the whole box as one rounded shape when its corners are rounded.
+    /// Draw border `b` around `rect`: its fill, then each shown edge as a line inside the box. A
+    /// box whose corners reach along its edges is one [`Cornered`] item instead (its fill
+    /// following the corners, its edges stopping short of them, each shown corner drawn with its
+    /// own line), unless every such corner is a right angle drawn as the edges are.
     pub(super) fn draw_border(&mut self, b: &Border, rect: Rect) -> Result<(), XfaError> {
         let vis = b.visible_edges();
-        // Rounded corners: the box is one shape, filled and edged along its curves, when its
-        // edges are all alike (all shown and the same, or all hidden). Edges that differ keep
-        // square corners.
         let radii = b.radii(rect.w, rect.h);
-        let alike = b.edges.iter().all(|e| *e == b.edges[0]);
-        if radii.iter().any(|r| *r > 0.0) && (vis == [true; 4] && alike || vis == [false; 4]) {
-            let e = b.edges[0];
-            let edge = vis[0].then(|| {
-                let color = if e.stroke == Stroke::Relief { [0.55, 0.55, 0.55] } else { e.color.0 };
-                (e.thickness.clamp(0.1, 20.0), color, matches!(e.stroke, Stroke::Dashed | Stroke::Dotted))
+        if radii.iter().any(|r| *r > 0.0) && !b.plain() {
+            let corners = std::array::from_fn(|i| {
+                let (c, radius) = (b.corners[i], radii[i]);
+                CornerShape { radius, round: c.round, inverted: c.inverted, line: (radius > 0.0 && c.line.visible()).then(|| pen(&c.line)) }
             });
-            let shape = Rounded {
-                rect,
-                radii,
-                inverted: b.corners.map(|c| c.inverted),
-                fill: b.fill().map(|f| f.0),
-                edge,
-                open_top: false,
-                open_bottom: false,
-            };
-            return self.push(Item::Rounded(Box::new(shape)));
+            let edges = std::array::from_fn(|i| vis[i].then(|| pen(&b.edges[i])));
+            return self.push(Item::Cornered(Box::new(Cornered { rect, corners, fill: b.fill().map(|f| f.0), edges })));
         }
         if let Some(fill) = b.fill() {
             self.push(Item::Fill { rect, color: fill.0 })?;
@@ -182,21 +171,20 @@ impl Layouter<'_> {
             if !vis[i] {
                 continue;
             }
-            let e = b.edges[i];
-            let t = e.thickness.clamp(0.1, 20.0);
+            let p = pen(&b.edges[i]);
+            let t = p.width;
             let (dx, dy) = match i {
                 0 => (0.0, t / 2.0),
                 1 => (-t / 2.0, 0.0),
                 2 => (0.0, -t / 2.0),
                 _ => (t / 2.0, 0.0),
             };
-            let color = if e.stroke == Stroke::Relief { [0.55, 0.55, 0.55] } else { e.color.0 };
             self.push(Item::Line {
                 from: (seg.0.0 + dx, seg.0.1 + dy),
                 to: (seg.1.0 + dx, seg.1.1 + dy),
                 width: t,
-                color,
-                dashed: matches!(e.stroke, Stroke::Dashed | Stroke::Dotted),
+                color: p.color,
+                dashed: p.dashed,
             })?;
         }
         Ok(())
