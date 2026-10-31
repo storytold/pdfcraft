@@ -2885,3 +2885,8 @@ certificate	Version	Verze
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Možnosti této odpovědi
 	Export value	Exportní hodnota
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Otočit komentář
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Přetažením otočíte · Shift: kroky po 15° · Tab při tažení: čtvrtotáčky

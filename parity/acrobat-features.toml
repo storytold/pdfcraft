@@ -4042,6 +4042,18 @@ tools = ["comment_edit"]
 evidence = ["crates/annot/src/tests.rs::lines_and_polygons_are_reshaped_by_their_points", "crates/ui-egui/tests/it/comments.rs::line_ends_are_dragged_to_change_length_and_angle", "crates/automation/tests/it/automation.rs::comments_are_reshaped_through_the_tool"]
 notes = "A selected line, arrow, connected lines, polygon or cloud has a handle on each end or corner (instead of the frame); dragging one changes the length and angle (Shift holds it to 45° from the point before), with the new shape drawn while dragging, as one undo step (Edit::ReshapeAnnotation). The drawing tools keep drawing from an end (a new line starts there); the Select tool reshapes. /Rect follows the points with room for the width and arrowheads, and the appearance is drawn anew. Headless: comment_edit `points`; comment_list reports them. Measurements keep the points they measured; locked comments keep their shape. Not yet: adding or removing a corner."
 
+
+[[feature]]
+id = "comment.rotate"
+title = "Turn comments by a rotate handle"
+area = "E"
+tier = "P2"
+milestone = "M5"
+status = "shipped"
+commands = []
+tools = ["comment_edit"]
+evidence = ["crates/annot/src/tests.rs::a_turned_rectangle_keeps_its_box_and_turns_its_appearance", "crates/annot/src/tests.rs::turning_lines_polygons_and_drawings_turns_their_points", "crates/annot/src/tests.rs::a_turned_text_box_grows_from_its_top_edge_as_it_reads", "crates/annot/src/tests.rs::callouts_notes_and_stamps_do_not_turn", "crates/engine/src/tests.rs::a_turned_rectangle_is_drawn_turned", "crates/ui-egui/tests/it/comments.rs::the_rotate_handle_turns_a_rectangle_and_tab_turns_it_by_quarters", "crates/ui-egui/tests/it/comments.rs::comments_turn_from_the_page_menu_and_turned_boxes_are_hit_inside_their_outline", "crates/automation/tests/it/automation.rs::comments_are_turned_through_the_tool"]
+notes = "A selected rectangle, oval, text box, typewriter text, line, connected lines, polygon, cloud or drawing has a rotate handle above its frame: dragging it turns the comment about its middle (Shift: 15° steps), with the turned outline and the angle shown while dragging; Tab while dragging sets quarter turns (Shift+Tab back). The right-click menu turns by a quarter either way. One undo step (Edit::RotateAnnotation). Lines, polygons and drawings turn their points (standard PDF). PDF has no angle for rectangles, ovals and text: they keep their own box in /PCBox and the angle in /PCAngle, their appearance is drawn upright in that box and turned by its /Matrix, and /Rect is the turned box's upright hull, so other viewers show them turned; a program that redraws them from /Rect shows them upright. A turned box is hit inside its turned outline, moves with its box, and is typed into through the comment card (it grows from its top edge as it reads); it has no resize handles yet. Callouts, measurements, notes and stamps don't turn. Headless: comment_edit `rotate`; comment_list reports `angle`."
 [[feature]]
 id = "comment.move-preview"
 title = "A moved comment is drawn where it goes while it is dragged"

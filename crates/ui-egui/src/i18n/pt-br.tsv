@@ -2863,3 +2863,8 @@ theme	Appearance	Aparência
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opções desta resposta
 	Export value	Valor de exportação
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Girar comentário
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Arraste para girar · Shift: passos de 15° · Tab ao arrastar: quartos de volta

@@ -2810,3 +2810,8 @@ certificate	SHA-256 digest	Impronta SHA-256
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opzioni per questa risposta
 	Export value	Valore di esportazione
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Ruota commento
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Trascina per ruotare · Shift: passi di 15° · Tab durante il trascinamento: quarti di giro

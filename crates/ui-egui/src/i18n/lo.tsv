@@ -2481,3 +2481,8 @@ animation effects	Off	ປິດ
 	Unchecked reads	Unchecked reads
 	{field} reads fields named as it runs	{field} reads fields named as it runs
 	Some names are built as it runs	Some names are built as it runs
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	ໝູນຄວາມເຫັນ
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	ລາກເພື່ອໝູນ · Shift: ເທື່ອລະ 15° · Tab ຂະນະລາກ: ເທື່ອລະ 90°

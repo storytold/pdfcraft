@@ -2809,3 +2809,8 @@ theme	Appearance	स्वरूप
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	इस जवाब के विकल्प
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	टिप्पणी घुमाएँ
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	घुमाने के लिए खींचें · Shift: 15° के चरण · खींचते समय Tab: चौथाई घुमाव

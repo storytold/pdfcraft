@@ -2583,3 +2583,8 @@ animation effects	Off	Izklopljeni
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Možnosti tega odgovora
 	Export value	Izvozna vrednost
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Zavrti komentar
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Povlecite za vrtenje · Shift: koraki po 15° · Tab med vlečenjem: četrtine obrata

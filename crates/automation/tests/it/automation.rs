@@ -9658,6 +9658,41 @@ fn a_bookmark_added_at_a_position_reports_the_same_position_back_on_any_page_rot
     near(&d["top"], Some(120.25), "reopened top");
 }
 
+/// `comment_edit rotate` turns a line's points about its middle and keeps a rectangle's box with
+/// an angle, which `comment_list` reports.
+#[test]
+fn comments_are_turned_through_the_tool() {
+    let dir = workdir("rotate");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [20, 40], "to": [120, 40] }));
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": 1, "index": 1, "rotate": 90 }));
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 1 }));
+    assert_eq!(list["comments"][0]["points"], json!([[70.0, 90.0], [70.0, -10.0]]), "a quarter counterclockwise about its middle (y down)");
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Rotate comment");
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "rectangle", "rect": [20, 100, 120, 140] }));
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 1 }));
+    let index = list["comments"].as_array().unwrap().iter().find(|c| c["type"] == "Square").unwrap()["index"].clone();
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": 1, "index": index, "rotate": 30 }));
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 1 }));
+    let r = list["comments"].as_array().unwrap().iter().find(|c| c["type"] == "Square").unwrap().clone();
+    assert_eq!(r["angle"], json!(30.0), "{r}");
+    for bad in [json!(1000), json!("x")] {
+        assert!(a.call("comment_edit", &json!({ "doc": doc, "page": 1, "index": index, "rotate": bad })).is_err());
+    }
+    // Its `rect` is now the upright rectangle around it, which doesn't give its own sides: `rect`
+    // is refused while it is turned (it grew it and, at a quarter turn, swapped its sides), `move`
+    // still moves it.
+    let resized = a.call("comment_edit", &json!({ "doc": doc, "page": 1, "index": index, "rect": r["rect"] }));
+    assert!(matches!(&resized, Err(ToolError::InvalidArgs(m)) if m.contains("upright")), "{resized:?}");
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": 1, "index": index, "move": [10, 0] }));
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 1 }));
+    let moved = list["comments"].as_array().unwrap().iter().find(|c| c["type"] == "Square").unwrap().clone();
+    let x = |c: &Value| c["rect"][0].as_f64().unwrap();
+    assert!((x(&moved) - x(&r) - 10.0).abs() < 0.01, "{moved} from {r}");
+    assert_eq!(moved["angle"], json!(30.0));
+}
+
 /// `comment_edit points` reshapes a line, connected lines or a polygon, in one undo step, and
 /// `comment_list` reports the points it takes.
 #[test]

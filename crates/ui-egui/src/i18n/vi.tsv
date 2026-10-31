@@ -2845,3 +2845,8 @@ key	Space	Space
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tùy chọn cho câu trả lời này
 	Export value	Giá trị xuất
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Xoay bình luận
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Kéo để xoay · Shift: bước 15° · Tab khi kéo: từng 90°

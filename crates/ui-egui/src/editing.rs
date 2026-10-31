@@ -810,6 +810,7 @@ fn comment_page(edit: &Edit) -> Option<usize> {
         | Edit::MoveAnnotation { page, .. }
         | Edit::ReshapeAnnotation { page, .. }
         | Edit::ResizeAnnotation { page, .. }
+        | Edit::RotateAnnotation { page, .. }
         | Edit::StyleAnnotation { page, .. }
         | Edit::FillAnnotation { page, .. }
         | Edit::FontSizeAnnotation { page, .. }

@@ -2847,3 +2847,8 @@ theme	Appearance	Teema
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tämän vastauksen asetukset
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Kierrä kommenttia
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Kierrä vetämällä · Shift: 15°:n askelin · Tab vedettäessä: neljännekset

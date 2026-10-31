@@ -65,6 +65,7 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         | Edit::MoveAnnotation { .. }
         | Edit::ReshapeAnnotation { .. }
         | Edit::ResizeAnnotation { .. }
+        | Edit::RotateAnnotation { .. }
         | Edit::StyleAnnotation { .. }
         | Edit::FillAnnotation { .. }
         | Edit::FontSizeAnnotation { .. }

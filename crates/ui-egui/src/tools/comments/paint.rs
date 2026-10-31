@@ -1,8 +1,10 @@
-use super::geometry::{HANDLES, grabs_points, handle_pos, is_markup, reshapable, reshaped, resizable};
+use super::geometry::{
+    HANDLES, TURN_HANDLE_REACH, grabs_points, handle_pos, is_markup, reshapable, reshaped, resizable, turn_degrees, turn_handle, turnable,
+};
 use super::state::{Gesture, PageCx, SETTLE_SECS};
 use super::{
-    Annotation, Color32, CommentTool, CornerRadius, DocInfo, DocView, Edit, LineEnding, NewAnnotation, Pos2, QuickTool, Rect, SELECT_BLUE, Shape,
-    Stroke, color32, vec2,
+    Annotation, Color32, CommentTool, CornerRadius, DocInfo, DocView, Edit, LineEnding, NewAnnotation, Pos2, QuickTool, Rect, SELECT_BLUE, Sense,
+    Shape, Stroke, color32, icons, vec2,
 };
 
 /// Paint comment selection, hover and gesture previews on a page.
@@ -45,8 +47,36 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
             return paint_gesture(painter, cx, view);
         }
         let shift = ui.input(|i| i.modifiers.shift);
+        // Turning: the outline as it will be, and the angle by the pointer.
+        if let Some(Gesture::Rotate { page: p, index: i, centre, from, quarter }) = &cv.gesture
+            && (*p, *i) == (page, index)
+        {
+            let degrees = pointer.map_or(0.0, |at| turn_degrees(*centre, *from, at, shift, *quarter));
+            let (outline, closed) = cx.outline(a, degrees);
+            let stroke = Stroke::new(1.5, SELECT_BLUE);
+            painter.add(if closed { egui::Shape::closed_line(outline, stroke) } else { egui::Shape::line(outline, stroke) });
+            painter.circle(*centre, 3.0, SELECT_BLUE, Stroke::NONE);
+            if let Some(at) = pointer {
+                let label = format!("{}°", degrees.round());
+                painter.text(at + vec2(14.0, -14.0), egui::Align2::LEFT_BOTTOM, label, egui::FontId::proportional(12.0), SELECT_BLUE);
+            }
+            return paint_gesture(painter, cx, view);
+        }
+        if cx.allowed && turnable(a) && cv.gesture.is_none() {
+            paint_turn_handle(ui, painter, cx.screen_rect(a).expand(2.0), (page, index), pointer);
+        }
         if cx.allowed && grabs_points(cx.tool) && reshapable(a) {
             return paint_points(painter, cx, view, a, pointer, shift);
+        }
+        // A turned box: its turned outline, moved along while it is dragged; no resize handles.
+        if a.turn.is_some() {
+            let shift_by = match (&cv.gesture, pointer) {
+                (Some(Gesture::Move { page: p, index: i, from }), Some(at)) if (*p, *i) == (page, index) => at - *from,
+                _ => vec2(0.0, 0.0),
+            };
+            let (outline, _) = cx.outline(a, 0.0);
+            painter.add(egui::Shape::closed_line(outline.into_iter().map(|q| q + shift_by).collect(), Stroke::new(1.0, SELECT_BLUE)));
+            return paint_gesture(painter, cx, view);
         }
         let r = cx.adjusted_rect(a, cv.gesture.as_ref(), pointer, shift, view.pending_edit.as_ref()).expand(2.0);
         painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
@@ -58,6 +88,27 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
         }
     }
     paint_gesture(painter, cx, view);
+}
+
+/// The rotate handle above frame `r`: a stem, and a round button with a turning arrow that
+/// lights up under the pointer. It names itself to screen readers and says how it works.
+fn paint_turn_handle(ui: &egui::Ui, painter: &egui::Painter, r: Rect, (page, index): (usize, usize), pointer: Option<Pos2>) {
+    let knob = turn_handle(r);
+    let radius = 10.0;
+    painter.line_segment([r.center_top(), knob + vec2(0.0, radius)], Stroke::new(1.0, SELECT_BLUE));
+    let over = pointer.is_some_and(|p| p.distance(knob) <= TURN_HANDLE_REACH);
+    let fill = if over { SELECT_BLUE } else { Color32::WHITE };
+    painter.circle(knob, radius, fill, Stroke::new(1.5, SELECT_BLUE));
+    let tint = if over { Color32::WHITE } else { SELECT_BLUE };
+    icons::paint(ui, Rect::from_center_size(knob, vec2(13.0, 13.0)), "rotate-cw", 13.0, tint);
+    // Hover only: the page below still takes the press and the drag.
+    let tip = tl!("Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns");
+    let resp =
+        ui.interact(Rect::from_center_size(knob, vec2(2.0 * radius, 2.0 * radius)), egui::Id::unique(("turn-handle", page, index)), Sense::hover());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Rotate")));
+    if over {
+        resp.on_hover_text(tip);
+    }
 }
 
 /// A selected line, connected lines, polygon or cloud: a handle on each end or corner and, while

@@ -2816,3 +2816,9 @@ theme	Appearance	ظاهر
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	گزینه‌های این پاسخ
+
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	چرخش یادداشت
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	برای چرخاندن بکشید · Shift: گام‌های 15° · Tab هنگام کشیدن: یک‌چهارم دور

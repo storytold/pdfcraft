@@ -2576,3 +2576,8 @@ animation effects	Off	Өшірулі
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Осы жауаптың параметрлері
 	Export value	Экспорт мәні
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Түсініктемені бұру
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Бұру үшін сүйреңіз · Shift: 15° қадам · Сүйреу кезінде Tab: ширек айналым

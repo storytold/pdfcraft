@@ -2854,3 +2854,8 @@ certificate	Version	الإصدار
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	خيارات هذا الرد
 	Export value	قيمة التصدير
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	تدوير التعليق
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	اسحب للتدوير · Shift: خطوات 15° · Tab أثناء السحب: أرباع دورة

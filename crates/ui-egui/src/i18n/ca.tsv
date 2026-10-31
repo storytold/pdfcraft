@@ -2838,3 +2838,8 @@ theme	Appearance	Aspecte
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opcions d'aquesta resposta
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Gira el comentari
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Arrossegueu per girar · Shift: passos de 15° · Tab mentre arrossegueu: quarts de volta

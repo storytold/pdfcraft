@@ -2838,3 +2838,8 @@ theme	Appearance	Aspect
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opțiuni pentru acest răspuns
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Rotire comentariu
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Trageți pentru a roti · Shift: pași de 15° · Tab în timpul tragerii: sferturi de rotație

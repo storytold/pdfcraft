@@ -38,6 +38,9 @@ pub struct Summary {
     /// A line's two ends (`/L`), or the corners of connected lines, a polygon or a cloud
     /// (`/Vertices`), in user space; empty for other comments.
     pub points: Vec<[f32; 2]>,
+    /// A turned rectangle, oval, text box or typewriter text: degrees counterclockwise, and its
+    /// own box before turning (see [`rotate_annotation`]). `None` when it is upright.
+    pub turn: Option<(f32, [f32; 4])>,
 }
 
 pub(crate) fn text_value(doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
@@ -145,6 +148,7 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 fill_sign: is_fill_sign(doc, d),
                 no_rotate: drawn_upright(doc, d),
                 points,
+                turn: appearance::turned_box(d).map(|(a, b)| (a as f32, b.map(|x| x as f32))),
             });
         }
     }

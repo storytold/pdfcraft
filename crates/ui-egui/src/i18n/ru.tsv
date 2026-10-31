@@ -2491,3 +2491,8 @@ animation effects	Off	Выкл
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Параметры этого ответа
 	Export value	Значение экспорта
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Повернуть комментарий
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Перетащите, чтобы повернуть · Shift: шаг 15° · Tab при перетаскивании: на четверть оборота

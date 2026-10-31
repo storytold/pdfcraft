@@ -77,6 +77,8 @@ pub(crate) enum CommentPart {
     Handle(i8, i8),
     /// A point of the selected line, polygon or cloud.
     Point(usize),
+    /// The rotate handle above the selected comment's frame: a drag turns it.
+    Turn,
 }
 
 /// What lies under a point, for one page module.

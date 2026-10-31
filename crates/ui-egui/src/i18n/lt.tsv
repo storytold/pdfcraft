@@ -2839,3 +2839,8 @@ theme	Appearance	Išvaizda
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Šio atsakymo parinktys
 	Export value	Eksporto reikšmė
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Pasukti komentarą
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Vilkite, kad pasuktumėte · Shift: 15° žingsniai · Tab vilkdami: ketvirčio posūkiai
