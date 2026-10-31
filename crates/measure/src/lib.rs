@@ -133,9 +133,10 @@ impl Scale {
             return Err(invalid("precision must be between 0 and 6 decimal places"));
         }
         // Units are text strings, so non-ASCII labels such as "m²" are allowed.
-        for s in [&self.unit, &self.area_unit] {
+        // The area unit is the unit plus "^2", so it gets two more characters.
+        for (s, max) in [(&self.unit, 24), (&self.area_unit, 26)] {
             let n = s.chars().count();
-            if s.trim().is_empty() || n > 24 || s.chars().any(char::is_control) {
+            if s.trim().is_empty() || n > max || s.chars().any(char::is_control) {
                 return Err(invalid("unit labels must be 1 to 24 printable characters"));
             }
         }

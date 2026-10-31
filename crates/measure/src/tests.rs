@@ -461,3 +461,10 @@ fn a_stream_over_the_byte_budget_uses_it_up_once() {
     assert!(g.truncated);
     assert_eq!(g.segments.len(), 1, "the parts before it still snap");
 }
+
+#[test]
+fn scale_accepts_24_char_unit() {
+    let unit = "a".repeat(24);
+    assert!(Scale::new(1.0, &unit, 2).is_ok(), "24-char unit rejected");
+    assert!(Scale::new(1.0, &"a".repeat(25), 2).is_err());
+}
