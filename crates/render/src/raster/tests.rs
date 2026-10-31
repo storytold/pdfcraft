@@ -3673,6 +3673,31 @@ fn zero_width_jbig2_dictionary(symbols: u32, exported: bool) -> Vec<u8> {
     dictionary
 }
 
+/// A Huffman-coded symbol dictionary of `symbols` symbols of width 1 and no rows, none exported.
+/// Only table B.5 has a negative height class delta, so it gets to no rows from one.
+fn no_row_jbig2_dictionary(symbols: u32) -> Vec<u8> {
+    let mut bits = Bits::default();
+    bits.put(0, 1); // height class delta 1 (B.5), a class of no symbols
+    bits.put(0b111111, 6); // end of the class (B.2)
+    bits.put(0, 5); // BMSIZE 0, uncompressed (B.1)
+    bits.align();
+    bits.put(0b1111110, 7); // height class delta -1 (B.5): -255 and 254
+    bits.put(254, 8);
+    bits.put(0b10, 2); // width delta 1 (B.2)
+    for _ in 1..symbols {
+        bits.put(0, 1); // width delta 0 (B.2)
+    }
+    bits.put(0b111111, 6); // end of the class (B.2)
+    bits.put(0, 5); // BMSIZE 0, uncompressed (B.1)
+    bits.align();
+    bits.table_b1(symbols); // the first export run, not exported, is all of them
+    let mut dictionary = vec![0x00, 0x05]; // Huffman, tables B.5, B.2, B.1, B.1
+    dictionary.extend_from_slice(&0u32.to_be_bytes()); // exported
+    dictionary.extend_from_slice(&symbols.to_be_bytes()); // new
+    dictionary.extend_from_slice(&bits.bytes);
+    dictionary
+}
+
 /// A Huffman-coded symbol dictionary of `symbols` white symbols of width 1 and `height` rows, none
 /// exported, for `height` from 76 up.
 fn narrow_jbig2_dictionary(symbols: u32, height: u32) -> Vec<u8> {
@@ -4083,45 +4108,47 @@ fn jbig2_decoding_work_is_counted_item_by_item() {
             data: jbig2_pattern_dictionary(32, 2),
             cost: two_patterns(1, 32),
         },
-        // Rows cost in a symbol of no pixels too.
-        Item { what: "symbols without pixels", before: vec![], spent: 0, kind: 0, refs: &[], data: zero_width_jbig2_dictionary(3, false), cost: 12 },
-        Item { what: "a tall symbol of no width", before: vec![], spent: 0, kind: 0, refs: &[], data: zero(1000), cost: 4000 },
-        Item { what: "new symbols", before: vec![], spent: 0, kind: 0, refs: &[], data: square_jbig2_dictionary(80, false), cost: 6720 },
-        Item { what: "referred symbols", before: symbol(), spent: 4, kind: 0, refs: &[1], data: exporting_none, cost: 1 },
+        // What an item reads counts, at 38 an integer: two classes, five widths and an export run.
+        Item { what: "symbols of no rows", before: vec![], spent: 0, kind: 0, refs: &[], data: no_row_jbig2_dictionary(5), cost: 304 },
+        // Rows cost in a symbol of no pixels too, on top of a class, three widths and an export run.
+        Item { what: "symbols without pixels", before: vec![], spent: 0, kind: 0, refs: &[], data: zero_width_jbig2_dictionary(3, false), cost: 202 },
+        Item { what: "a tall symbol of no width", before: vec![], spent: 0, kind: 0, refs: &[], data: zero(1000), cost: 4114 },
+        Item { what: "new symbols", before: vec![], spent: 0, kind: 0, refs: &[], data: square_jbig2_dictionary(80, false), cost: 6834 },
+        Item { what: "referred symbols", before: symbol(), spent: 156, kind: 0, refs: &[1], data: exporting_none, cost: 39 },
         // Its symbol, and its one row and word; Huffman-coded, a table line for the symbol.
-        Item { what: "immediate text", before: symbol(), spent: 4, kind: 6, refs: &[1], data: jbig2_text_region(1, 1, 0), cost: 13 },
-        Item { what: "intermediate text", before: symbol(), spent: 4, kind: 4, refs: &[1], data: jbig2_text_region(1, 1, 0), cost: 13 },
-        Item { what: "a text region's pixels", before: symbol(), spent: 4, kind: 6, refs: &[1], data: jbig2_text_region(32, 32, 0), cost: 75 },
+        Item { what: "immediate text", before: symbol(), spent: 156, kind: 6, refs: &[1], data: jbig2_text_region(1, 1, 0), cost: 13 },
+        Item { what: "intermediate text", before: symbol(), spent: 156, kind: 4, refs: &[1], data: jbig2_text_region(1, 1, 0), cost: 13 },
+        Item { what: "a text region's pixels", before: symbol(), spent: 156, kind: 6, refs: &[1], data: jbig2_text_region(32, 32, 0), cost: 75 },
         Item {
             what: "an intermediate text region's pixels",
             before: symbol(),
-            spent: 4,
+            spent: 156,
             kind: 4,
             refs: &[1],
             data: jbig2_text_region(32, 32, 0),
             cost: 75,
         },
-        // The region's 13, a copy of the symbol's row and the round of the loop.
-        Item { what: "an instance", before: symbol(), spent: 4, kind: 6, refs: &[1], data: jbig2_text_region(1, 1, 1), cost: 15 },
-        // The region's 13, 80 rows of 4 words copied, the round of the loop.
+        // The region's 13, a copy of the symbol's row, and the instance's 4 integers.
+        Item { what: "an instance", before: symbol(), spent: 156, kind: 6, refs: &[1], data: jbig2_text_region(1, 1, 1), cost: 166 },
+        // The region's 13, 80 rows of 4 words copied, and the instance's 4 integers.
         Item {
             what: "an instance of a large symbol",
             before: vec![(0, square_jbig2_dictionary(80, true))],
-            spent: 6720,
+            spent: 6872,
             kind: 6,
             refs: &[1],
             data: jbig2_text_region(1, 1, 1),
-            cost: 334,
+            cost: 485,
         },
-        // And decoded as well as copied.
+        // And decoded as well as copied, with the 4 integers that gave its size.
         Item {
             what: "a refined instance",
             before: vec![(0, square_jbig2_dictionary(80, true))],
-            spent: 6720,
+            spent: 6872,
             kind: 6,
             refs: &[1],
             data: jbig2_refined_text_region(),
-            cost: 7054,
+            cost: 7357,
         },
         // A bit plane, a cell's copy and the region's.
         Item {

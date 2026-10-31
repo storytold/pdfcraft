@@ -4,7 +4,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::arithmetic_decoder::{ArithmeticDecoder, ArithmeticDecoderContext};
-use crate::bitmap::{BITMAP_WORDS, Bitmap, HUFFMAN_LINE_WORK, WORD_BITS, Word, decode_work};
+use crate::bitmap::{BITMAP_WORDS, Bitmap, HUFFMAN_LINE_WORK, INTEGER_WORK, WORD_BITS, Word, decode_work};
 use crate::decode::generic::{decode_bitmap_mmr, parse_adaptive_template_pixels};
 use crate::decode::text::{
     DecodeContext, ReferenceCorner, TextRegionContexts, TextRegionFlags, TextRegionHeader,
@@ -101,6 +101,8 @@ pub(crate) fn decode(
             bail!(SymbolError::Invalid);
         }
         height_classes_left -= 1;
+        // PdfCraft patch: see `bitmap::INTEGER_WORK`. A class of no symbols still reads its delta.
+        *ctx.work_left = ctx.work_left.checked_sub(INTEGER_WORK).ok_or(OverflowError::DecodingWork)?;
         let height_class_delta =
             read_height_class_delta(&mut ctx)?.ok_or(SymbolError::UnexpectedOob)?;
 
@@ -135,8 +137,11 @@ pub(crate) fn decode(
             if ctx.pixels > MAX_DICTIONARY_PIXELS {
                 bail!(OverflowError::BitmapDimension);
             }
-            // PdfCraft patch: see `bitmap::MAX_WORK`.
-            let work = decode_work(symbol_width, ctx.height_class_height);
+            // PdfCraft patch: see `bitmap::INTEGER_WORK`. Its width, and a stream can hold thousands
+            // of dictionaries of symbols of no pixels. An aggregated one reads its count, a symbol
+            // and two offsets as well.
+            let integers = if ctx.header.flags.use_refagg { 5 } else { 1 };
+            let work = decode_work(symbol_width, ctx.height_class_height).saturating_add(integers * INTEGER_WORK);
             *ctx.work_left = ctx.work_left.checked_sub(work).ok_or(OverflowError::DecodingWork)?;
             // PdfCraft patch: see `room`. Rows take a word at least, so symbols of one column
             // held 270 MiB within the pixel bound, however few the dictionary exported.
@@ -759,6 +764,8 @@ fn export_symbols(ctx: &mut SymbolDecodeContext<'_>) -> Result<Vec<Bitmap>> {
             bail!(SymbolError::Invalid);
         }
         runs_left -= 1;
+        // PdfCraft patch: see `bitmap::INTEGER_WORK`. A run of no symbols still reads its length.
+        *ctx.work_left = ctx.work_left.checked_sub(INTEGER_WORK).ok_or(OverflowError::DecodingWork)?;
         let run_length = read_run_length()?;
 
         let end_index = index.checked_add(run_length).ok_or(OverflowError::Index)?;

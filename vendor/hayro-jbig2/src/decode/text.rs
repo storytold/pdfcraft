@@ -11,7 +11,7 @@ use super::{
 use super::{RegionBitmap, generic_refinement};
 use crate::ScratchBuffers;
 use crate::arithmetic_decoder::{ArithmeticDecoder, ArithmeticDecoderContext};
-use crate::bitmap::{Bitmap, copy_work, decode_work};
+use crate::bitmap::{Bitmap, INTEGER_WORK, copy_work, decode_work};
 use crate::error::{HuffmanError, OverflowError, ParseError, Result, SymbolError, bail};
 use crate::huffman_table::{HuffmanTable, StandardHuffmanTables, TableLine};
 use crate::integer_decoder::IntegerDecoder;
@@ -151,7 +151,7 @@ pub(crate) fn decode_with(
             let symbol_id = ctx.read_symbol_id()?;
 
             let symbol_bitmap =
-                decode_symbol_instance_bitmap(&mut ctx, symbols, header, symbol_id)?;
+                decode_symbol_instance_bitmap(&mut ctx, symbols, header, symbol_id, work_left)?;
 
             let symbol_bitmap_ref: &Bitmap = match &symbol_bitmap {
                 SymbolBitmap::Reference(idx) => symbols.get(*idx).ok_or(SymbolError::OutOfRange)?,
@@ -161,14 +161,8 @@ pub(crate) fn decode_with(
             let symbol_height = symbol_bitmap_ref.height as i32;
 
             // PdfCraft patch: see `bitmap::MAX_WORK`. An instance of a large symbol costs its copy,
-            // and 10,000 of one took 64 s. A refined one was decoded as well. Even one with no
-            // pixels goes round this loop.
-            let (width, height) = (symbol_bitmap_ref.width, symbol_bitmap_ref.height);
-            let copied = copy_work(width, height).saturating_add(1);
-            let work = match &symbol_bitmap {
-                SymbolBitmap::Reference(_) => copied,
-                SymbolBitmap::Owned(_) => copied.saturating_add(decode_work(width, height)),
-            };
+            // and 10,000 of one took 64 s. Even one with no pixels reads its four integers.
+            let work = copy_work(symbol_bitmap_ref.width, symbol_bitmap_ref.height).saturating_add(4 * INTEGER_WORK);
             *work_left = work_left.checked_sub(work).ok_or(OverflowError::DecodingWork)?;
 
             if !header.flags.transposed
@@ -546,6 +540,7 @@ fn decode_symbol_instance_bitmap(
     symbols: &[&Bitmap],
     header: &TextRegionHeader<'_>,
     symbol_id: usize,
+    work_left: &mut u64,
 ) -> Result<SymbolBitmap> {
     if !header.flags.use_refinement || ctx.read_refinement_flag()? == 0 {
         return Ok(SymbolBitmap::Reference(symbol_id));
@@ -576,6 +571,11 @@ fn decode_symbol_instance_bitmap(
         .div_euclid(2)
         .checked_add(rdy)
         .ok_or(OverflowError::ReferenceOffset)?;
+
+    // PdfCraft patch: see `bitmap::MAX_WORK`. Before it is decoded: charged after, one instance
+    // could still be 2^28 pixels past what was left. With the four integers that gave its size.
+    let work = decode_work(refined_width, refined_height).saturating_add(4 * INTEGER_WORK);
+    *work_left = work_left.checked_sub(work).ok_or(OverflowError::DecodingWork)?;
 
     let mut refined_bitmap = Bitmap::new(refined_width, refined_height)?;
 

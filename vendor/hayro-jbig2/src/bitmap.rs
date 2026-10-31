@@ -31,6 +31,12 @@ pub(crate) const MAX_GRID_CELLS: u64 = 1 << 25;
 /// halftone 265 s, and a 923-byte PDF's regions would have taken days.
 pub(crate) const MAX_WORK: u64 = 4 * MAX_PIXELS;
 
+/// PdfCraft patch: the work of reading one integer of an item, what an arithmetic-coded one takes
+/// at worst in decisions (see [`MAX_WORK`]), so that a decision costs no more than a pixel. An item
+/// with no pixels still reads its integers: charged a step each, a 22,515-byte PDF of refined text
+/// instances of no size stayed inside `MAX_WORK` and took 730 s.
+pub(crate) const INTEGER_WORK: u64 = 38;
+
 /// PdfCraft patch: the work of a line of a Huffman table built for symbols, about 50 ns (see
 /// [`MAX_WORK`]).
 pub(crate) const HUFFMAN_LINE_WORK: u64 = 10;
