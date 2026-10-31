@@ -119,8 +119,12 @@ pub(crate) fn warm_up() {
     static WARM: std::sync::Once = std::sync::Once::new();
     // `call_once_force`: a poisoned `Once` (a panic while warming up) only means warming up again.
     WARM.call_once_force(|_| {
-        let mut ctx = Context::default();
-        let _ = ctx.eval(Source::from_bytes(b"(function () { return eval('0'); }).call({})"));
+        if let Ok(mut ctx) = Context::builder().host_hooks(std::rc::Rc::new(crate::CheckedCodeFromStrings)).build() {
+            // Warm-up only runs once the same limits a user script gets are in place.
+            if crate::install_intrinsic_limits(&mut ctx).is_ok() {
+                let _ = ctx.eval(Source::from_bytes(b"(function () { return eval('0'); }).call({})"));
+            }
+        }
     });
 }
 
@@ -133,6 +137,9 @@ pub(crate) fn run_here(script: &str, event: &XfaEvent, doc: &XfaDoc, root: XfaNo
     };
     ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
     ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
+    if let Err(e) = crate::install_intrinsic_limits(&mut ctx) {
+        return XfaOutcome { error: Some(format!("the script engine could not start: {e}")), ..Default::default() };
+    }
     let host_state = XHost::new(root, &event.target, doc);
     let current = host_state.current;
     ctx.insert_data(RefCell::new(host_state));

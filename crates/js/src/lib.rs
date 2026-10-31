@@ -54,8 +54,8 @@ pub use model::{
 #[cfg(not(target_arch = "wasm32"))]
 use run::SCRIPT_STACK;
 use run::refuse;
-pub(crate) use run::{CheckedCodeFromStrings, MAX_SCRIPT_BYTES};
-pub use run::{run, run_shared};
+pub(crate) use run::{CheckedCodeFromStrings, MAX_SCRIPT_BYTES, MAX_STRING_UNITS, install_intrinsic_limits};
+pub use run::{MAX_ALERTS, MAX_CONSOLE, MAX_HOST_BYTES, MAX_REQUESTS, run, run_shared};
 
 pub mod formcalc;
 pub mod xfa;
