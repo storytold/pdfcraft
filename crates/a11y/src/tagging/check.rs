@@ -13,6 +13,29 @@ use super::content::PageContent;
 use super::parent_tree::Value;
 use super::tree::{Container, Owner, Tree, root_of};
 
+/// Each tag listed once, its `/P` naming what lists it, and its type standard or role-mapped.
+fn tag_problems(doc: &Document, tree: &Tree, root: ObjRef, role_map: &pdfcraft_cos::Dict, out: &mut Vec<String>) {
+    for node in &tree.nodes {
+        if node.shared {
+            out.push(format!("tag {} is listed more than once", node.object));
+        }
+        let expected = match node.container {
+            Container::Root => Some(root),
+            Container::Element(p) => Some(p),
+            Container::Inline => None,
+        };
+        let actual = node.dict.get(b"P").and_then(Object::as_ref);
+        if expected.is_some() && actual != expected {
+            out.push(format!("tag {}: /P is {actual:?}, but {expected:?} lists it", node.object));
+        }
+        match node.dict.name(b"S") {
+            Some(s) if crate::structure::is_standard(&crate::alt::standard(doc, role_map, s)) => {}
+            Some(s) => out.push(format!("tag {}: type {} is neither standard nor role-mapped", node.object, String::from_utf8_lossy(s))),
+            None => out.push(format!("tag {} has no type", node.object)),
+        }
+    }
+}
+
 /// The structure's consistency problems; empty when it is consistent (or untagged).
 pub fn structure_problems(doc: &Document) -> Vec<String> {
     let mut out = Vec::new();
@@ -35,25 +58,7 @@ pub fn structure_problems(doc: &Document) -> Vec<String> {
     let number: HashMap<ObjRef, usize> = pages.iter().enumerate().map(|(i, p)| (p.obj, i.saturating_add(1))).collect();
     let page_no = |p: ObjRef| number.get(&p).map_or_else(|| format!("{p}"), |n| n.to_string());
     let role_map = root_dict.get(b"RoleMap").map(|m| doc.resolve(m)).and_then(|m| m.as_dict().cloned()).unwrap_or_default();
-    for node in &tree.nodes {
-        if node.shared {
-            out.push(format!("tag {} is listed more than once", node.object));
-        }
-        let expected = match node.container {
-            Container::Root => Some(root),
-            Container::Element(p) => Some(p),
-            Container::Inline => None,
-        };
-        let actual = node.dict.get(b"P").and_then(Object::as_ref);
-        if expected.is_some() && actual != expected {
-            out.push(format!("tag {}: /P is {actual:?}, but {expected:?} lists it", node.object));
-        }
-        match node.dict.name(b"S") {
-            Some(s) if crate::structure::is_standard(&crate::alt::standard(doc, &role_map, s)) => {}
-            Some(s) => out.push(format!("tag {}: type {} is neither standard nor role-mapped", node.object, String::from_utf8_lossy(s))),
-            None => out.push(format!("tag {} has no type", node.object)),
-        }
-    }
+    tag_problems(doc, &tree, root, &role_map, &mut out);
     let Ok(pt) = super::parent_tree(&copy, root) else {
         out.push("the parent tree is missing".into());
         return out;

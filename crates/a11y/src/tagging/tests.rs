@@ -1172,6 +1172,23 @@ fn build(spec: &Spec) -> Document {
         objects[*sect as usize - 1] = format!("<< /Type /StructElem /S /Sect /P {document} 0 R {pg} /K [{}] >>", list(kids));
     }
     objects[document as usize - 1] = format!("<< /Type /StructElem /S /Document /P {root} 0 R /K [{}] >>", list(&doc_kids));
+    let parent_tree = build_parent_tree(spec, &mut objects, &arrays, &singles);
+    let k = if spec.single_root { format!("{document} 0 R") } else { format!("[{document} 0 R]") };
+    let next = if spec.next_key { format!("/ParentTreeNextKey {next_key}") } else { String::new() };
+    objects[root as usize - 1] = format!("<< /Type /StructTreeRoot /K {k} /ParentTree {parent_tree} {next} >>");
+    objects[0] = format!("<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot {root} 0 R {form} >>");
+    pdf(&objects)
+}
+
+/// `spec`'s parent tree: page `p`'s key to the tags that own its content, and each tagged
+/// widget's key to its form tag; one number tree or a level of kids, its arrays written in or
+/// objects of their own, and the tree itself indirect unless the layout writes it in.
+fn build_parent_tree(spec: &Spec, objects: &mut Vec<String>, arrays: &[(usize, Vec<u32>)], singles: &[(usize, u32)]) -> String {
+    let add = |objects: &mut Vec<String>, body: String| {
+        objects.push(body);
+        objects.len() as u32
+    };
+    let list = |v: &[u32]| v.iter().map(|x| format!("{x} 0 R")).collect::<Vec<_>>().join(" ");
     let value = |objects: &mut Vec<String>, owners: &[u32]| -> String {
         if spec.layout == 1 {
             let a = add(objects, format!("[{}]", list(owners)));
@@ -1183,34 +1200,29 @@ fn build(spec: &Spec) -> Document {
     let parent_tree = match spec.layout {
         2 => {
             let mut leaves = Vec::new();
-            for (p, owners) in &arrays {
-                let v = value(&mut objects, owners);
-                leaves.push(add(&mut objects, format!("<< /Limits [{p} {p}] /Nums [{p} {v}] >>")));
+            for (p, owners) in arrays {
+                let v = value(objects, owners);
+                leaves.push(add(objects, format!("<< /Limits [{p} {p}] /Nums [{p} {v}] >>")));
             }
-            for (key, form) in &singles {
-                leaves.push(add(&mut objects, format!("<< /Limits [{key} {key}] /Nums [{key} {form} 0 R] >>")));
+            for (key, form) in singles {
+                leaves.push(add(objects, format!("<< /Limits [{key} {key}] /Nums [{key} {form} 0 R] >>")));
             }
             if leaves.is_empty() {
-                leaves.push(add(&mut objects, "<< /Limits [0 0] /Nums [] >>".into()));
+                leaves.push(add(objects, "<< /Limits [0 0] /Nums [] >>".into()));
             }
             format!("<< /Kids [{}] >>", list(&leaves))
         }
         _ => {
             let mut nums = Vec::new();
-            for (p, owners) in &arrays {
-                let v = value(&mut objects, owners);
+            for (p, owners) in arrays {
+                let v = value(objects, owners);
                 nums.push(format!("{p} {v}"));
             }
             nums.extend(singles.iter().map(|(key, form)| format!("{key} {form} 0 R")));
             format!("<< /Nums [{}] >>", nums.join(" "))
         }
     };
-    let parent_tree = if spec.layout == 3 { parent_tree } else { format!("{} 0 R", add(&mut objects, parent_tree)) };
-    let k = if spec.single_root { format!("{document} 0 R") } else { format!("[{document} 0 R]") };
-    let next = if spec.next_key { format!("/ParentTreeNextKey {next_key}") } else { String::new() };
-    objects[root as usize - 1] = format!("<< /Type /StructTreeRoot /K {k} /ParentTree {parent_tree} {next} >>");
-    objects[0] = format!("<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot {root} 0 R {form} >>");
-    pdf(&objects)
+    if spec.layout == 3 { parent_tree } else { format!("{} 0 R", add(objects, parent_tree)) }
 }
 
 #[derive(Clone, Debug)]
