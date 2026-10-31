@@ -387,6 +387,10 @@ impl PdfCraftApp {
             self.notify_tr("Optimization is already running");
             return;
         }
+        if self.clearscan_run.is_some() {
+            self.notify_tr("Text recognition is already running");
+            return;
+        }
         let job = match self.session.optimize_job(id, settings, discard) {
             Ok(job) => job,
             Err(e) => return self.save_optimized(id, kind, Err(e)),
@@ -434,7 +438,7 @@ impl PdfCraftApp {
         let Ok(mut s) = progress.lock() else {
             // The worker panicked while holding the lock: it will never report back.
             self.optimize_run = None;
-            self.progress_notice = None;
+            self.clear_progress(crate::widgets::ProgressJob::Optimize);
             self.notify_tr("Couldn't optimize the file");
             return;
         };
@@ -443,6 +447,7 @@ impl PdfCraftApp {
             let stage = s.stage;
             drop(s);
             let label = if cancelling { tl!("Cancelling…").to_string() } else { stage_label(stage) };
+            self.progress_job = crate::widgets::ProgressJob::Optimize;
             self.progress_notice = Some(crate::widgets::ProgressNotice { label, fraction: stage.fraction(), cancellable: !cancelling });
             if let Some(ctx) = &self.ctx {
                 ctx.request_repaint_after(std::time::Duration::from_millis(50));
@@ -451,7 +456,7 @@ impl PdfCraftApp {
         };
         drop(s);
         self.optimize_run = None;
-        self.progress_notice = None;
+        self.clear_progress(crate::widgets::ProgressJob::Optimize);
         match result {
             Err(EditError::Cancelled) => self.notify_tr("Optimization cancelled"),
             result => {
@@ -517,5 +522,17 @@ mod tests {
         app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Reduce, progress: Arc::default() });
         app.optimize_with_draft();
         assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Optimization is already running"));
+    }
+
+    #[test]
+    fn optimization_waits_while_clearscan_is_running() {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("notes.txt", None, b"hello".to_vec()).unwrap();
+        let (_, doc) = app.active_ids().unwrap();
+        app.clearscan_run = Some(crate::workflows::ocr_ui::ClearScanRun { doc, progress: Arc::default(), generation: 0, pending: None, shown: true });
+        app.optimize_with_draft();
+        assert!(app.optimize_run.is_none());
+        assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Text recognition is already running"));
     }
 }

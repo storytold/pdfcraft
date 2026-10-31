@@ -4500,9 +4500,15 @@ dependencies = [
 name = "pdfcraft-ocr"
 version = "0.16.1"
 dependencies = [
+ "image",
+ "kurbo 0.13.1",
  "ocrs",
+ "pdfcraft-cos",
  "pdfcraft-fonts",
+ "pdfcraft-oracle",
+ "pdfcraft-render",
  "rten",
+ "rten-imageproc",
  "tempfile",
  "thiserror 2.0.21",
 ]

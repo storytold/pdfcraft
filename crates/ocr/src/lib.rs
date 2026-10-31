@@ -7,10 +7,53 @@
 //! searchable image (Acrobat's "Searchable Image (Exact)": the image is left untouched).
 //!
 //! The models read the Latin alphabet (English and other languages written without accents).
+//!
+//! For glyph work (the ClearScan pipeline), [`preprocess`](mod@preprocess) prepares a scan first — greyscale,
+//! Sauvola/Otsu binarization, deskew — and [`Ocr::recognize_annotated`] reads the same pages
+//! keeping per-character boxes and line metrics (baseline, x-height, cap height, descent).
+//! [`components`](mod@components) then labels the binarized page into blobs and separates text from rules,
+//! photos and speckles; [`align`](mod@align) matches those glyphs to the OCR boxes and either keeps
+//! touching letters as one ligature or cuts them apart on the character boundaries; and
+//! [`cluster`](mod@cluster) groups the resolved glyphs into clusters of the same shape and averages their
+//! centroid-aligned greyscale into pristine master prototypes, [`vectorize`](mod@vectorize) traces
+//! each master bitmap into a hole-aware Bézier outline, and [`type3`](mod@type3) writes that outline
+//! into a Type 3 font with a `/ToUnicode` map so the glyphs stay searchable.
+//! [`background`](mod@background) then paints those glyphs out of the scan — the paper colour
+//! around each one, so the fuzzy ink cannot halo the vectors — and writes the cleaned raster
+//! under a content stream that shows the Type 3 text.
+//! [`clearscan`](mod@clearscan) runs those stages on one raster and returns the one-page PDF.
+//! See [`preprocess`](mod@preprocess), [`annotations`](mod@annotations), [`components`](mod@components),
+//! [`align`](mod@align), [`cluster`](mod@cluster), [`vectorize`](mod@vectorize), [`type3`](mod@type3),
+//! [`background`](mod@background) and [`clearscan`](mod@clearscan).
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod align;
+pub mod annotations;
+pub mod background;
+pub mod binarize;
+pub mod clearscan;
+pub mod cluster;
+pub mod components;
+pub mod deskew;
+pub mod grey;
+pub mod preprocess;
+pub mod type3;
+pub mod vectorize;
+
 use std::path::{Path, PathBuf};
+
+pub use align::{AlignParams, CharRef, MatchRole, PageAlignment, ResolvedGlyph, TouchingStrategy, align, iou};
+pub use annotations::{AnnotatedLine, AnnotatedWord, CharBox};
+pub use background::{
+    BackgroundEncoding, BackgroundImage, CleanedPage, ClearScanLayer, DerenderParams, GlyphShow, InkRegion, PageRaster, content_stream, derender,
+    embed_background, encoding_for, protected_regions, text_regions,
+};
+pub use cluster::{ClusterParams, Clusters, GlyphCluster, Prototype, SkipReason, cluster, cluster_pages};
+pub use components::{AnalyzeOptions, Component, ComponentKind, ComponentSet, Connectivity, FilterParams, analyze, analyze_page};
+pub use preprocess::{PreprocessedOptions, PreprocessedPage};
+pub use type3::{Type3Font, Type3Glyph, Type3Metrics, baseline_in_prototype, synthesize_type3};
+pub use vectorize::{ContourKind, GlyphOutline, VectorContour, VectorizeParams, vectorize};
 
 pub use pdfcraft_fonts::helvetica_width;
 
@@ -28,7 +71,7 @@ pub const LANGUAGES: &[(&str, &str)] = &[("en", "English")];
 
 #[derive(Debug, thiserror::Error)]
 pub enum OcrError {
-    /// Shown to end users (release packages ship the models; a source build fetches them with
+    /// The text recognition models are not installed (release packages ship them; a source build fetches them with
     /// `cargo xtask models`). The UI catalogs key this exact text.
     #[error("the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)")]
     NoModels,
@@ -36,8 +79,21 @@ pub enum OcrError {
     Load(String, String),
     #[error("text recognition failed: {0}")]
     Recognize(String),
+    #[error("preprocessing the page: {0}")]
+    Preprocess(String),
+    #[error("connected components: {0}")]
+    Components(String),
     #[error("the image is empty")]
     EmptyImage,
+    /// A Type 3 font could not be built. The message names the glyph and the limit.
+    #[error("Type 3 font: {0}")]
+    Type3(String),
+    /// The cleaned background could not be built or written. The message names the limit.
+    #[error("background: {0}")]
+    Background(String),
+    /// The ClearScan page could not be built. The message names the limit or the bad input.
+    #[error("ClearScan: {0}")]
+    ClearScan(String),
 }
 
 /// Where the two model files are.
@@ -131,37 +187,24 @@ impl Ocr {
 
     /// Recognise the text in an RGBA (or RGB, or grey) image, `width` × `height` pixels.
     pub fn recognize(&self, pixels: &[u8], width: u32, height: u32) -> Result<Vec<Line>, OcrError> {
-        if width == 0 || height == 0 || pixels.is_empty() {
-            return Err(OcrError::EmptyImage);
-        }
-        // ocrs wants 1 or 3 channels.
-        let rgb: std::borrow::Cow<[u8]> = if pixels.len() == (width * height * 4) as usize {
-            pixels.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect::<Vec<u8>>().into()
-        } else {
-            pixels.into()
-        };
-        let err = |e: &dyn std::fmt::Display| OcrError::Recognize(e.to_string());
-        let source = ocrs::ImageSource::from_bytes(&rgb, (width, height)).map_err(|e| err(&e))?;
-        let input = self.engine.prepare_input(source).map_err(|e| err(&e))?;
-        let found = self.engine.detect_words(&input).map_err(|e| err(&e))?;
-        let lines = self.engine.find_text_lines(&input, &found);
-        let read = self.engine.recognize_text(&input, &lines).map_err(|e| err(&e))?;
-        use ocrs::TextItem;
-        Ok(read
+        Ok(self
+            .recognize_annotated(pixels, width, height)?
             .into_iter()
-            .flatten()
-            .map(|line| Line {
-                words: line
-                    .words()
-                    .map(|w| {
-                        let r = w.bounding_rect();
-                        Word { text: w.to_string(), rect: [r.left() as f32, r.top() as f32, r.right() as f32, r.bottom() as f32] }
-                    })
-                    .filter(|w| !w.text.trim().is_empty())
-                    .collect(),
-            })
-            .filter(|l| !l.words.is_empty())
+            .map(|line| Line { words: line.words.into_iter().map(|w| Word { text: w.text, rect: w.rect }).collect() })
             .collect())
+    }
+
+    /// The same recognition, keeping what glyph work needs: per-character boxes grouped into
+    /// words, and each line's baseline, x-height, cap height and descent
+    /// ([`annotations::AnnotatedLine`]). Boxes are in the pixel space of the image read.
+    pub fn recognize_annotated(&self, pixels: &[u8], width: u32, height: u32) -> Result<Vec<AnnotatedLine>, OcrError> {
+        annotations::recognize(&self.engine, pixels, width, height)
+    }
+
+    /// Recognize a preprocessed page's deskewed greyscale: the annotations come back in the
+    /// deskewed frame, and the page's `to_original` maps them onto the scan.
+    pub fn recognize_page(&self, page: &PreprocessedPage) -> Result<Vec<AnnotatedLine>, OcrError> {
+        annotations::recognize(&self.engine, page.grey.data(), page.grey.width(), page.grey.height())
     }
 }
 
@@ -214,6 +257,24 @@ fn num(v: f64) -> String {
     if s == "-0" { "0".into() } else { s.into() }
 }
 
+/// A PDF real for ClearScan's own content: no exponent, trailing zeros dropped, and a magnitude
+/// below the print precision written as zero. Type 3 charprocs, the background content stream,
+/// and the multi-font page stream all go through this so a coordinate is spelled one way.
+/// [`num`] is the invisible text layer's formatter and uses a tighter zero.
+pub(crate) fn pdf_num(value: f64) -> String {
+    let value = if value.abs() < 5.0e-5 { 0.0 } else { value };
+    let mut text = format!("{value:.4}");
+    if text.contains('.') {
+        while text.ends_with('0') {
+            text.pop();
+        }
+        if text.ends_with('.') {
+            text.pop();
+        }
+    }
+    if text == "-0" || text.is_empty() { "0".into() } else { text }
+}
+
 /// Page content that writes `words` as invisible text in `/PCHelv` (standard Helvetica,
 /// WinAnsiEncoding), each word stretched to its box so selection and search highlight the
 /// right place. Marked content `/OCR` so it can be told apart from the page's own text.
@@ -248,6 +309,16 @@ pub fn text_layer(words: &[PlacedWord]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pdf_reals_drop_noise_and_trailing_zeros() {
+        assert_eq!(pdf_num(0.0), "0");
+        assert_eq!(pdf_num(-1.0e-5), "0");
+        assert_eq!(pdf_num(1.0), "1");
+        assert_eq!(pdf_num(1.5), "1.5");
+        assert_eq!(pdf_num(-2.25), "-2.25");
+        assert_eq!(pdf_num(0.0001), "0.0001");
+    }
 
     #[test]
     fn places_words_through_the_mapping() {
@@ -441,6 +512,53 @@ mod tests {
         assert!(text.iter().any(|t| t.contains("HELL") && t.contains("WOR")), "{text:?}");
         let word = lines.iter().flat_map(|l| &l.words).find(|w| w.text.contains("HELL")).unwrap();
         assert!(word.rect[0] >= 10.0 && word.rect[0] < 60.0, "{word:?}");
+    }
+
+    /// End to end through the ClearScan preprocessing: the rendered text, degraded by a
+    /// lighting gradient and a tilt, is deskewed, binarized and read with characters and line
+    /// metrics, and its boxes map back onto the scan. Needs the models (`cargo xtask models`).
+    #[test]
+    fn reads_degraded_text_through_preprocessing() {
+        let Some(models) = Models::find() else {
+            eprintln!("skipped: OCR models not installed");
+            return;
+        };
+        let ocr = Ocr::load(&models).unwrap();
+        let (w, h, px) = test_image::hello();
+        let level = grey::to_grey(&px, w, h, 4).unwrap();
+        // Degrade: a gradient that darkens the left half's paper towards the ink, then a
+        // 2° tilt (rectifying by −2° turns the page by +2°: its text descends to the right).
+        let mut degraded = crate::grey::GreyImage::new(w, h, level.data().to_vec()).unwrap();
+        for (index, value) in degraded.data_mut().iter_mut().enumerate() {
+            let x = (index % w as usize) as f64;
+            let dim = (x / f64::from(w) * 70.0).round();
+            *value = value.saturating_sub(dim as u8);
+        }
+        let tilt = 2.0_f64.to_radians();
+        let tilted = deskew::rectify(&degraded, -tilt).unwrap();
+        let page = preprocess::preprocess(tilted.grey.data(), tilted.grey.width(), tilted.grey.height(), 1, &PreprocessedOptions::default()).unwrap();
+        assert!((page.angle_radians - tilt).abs() <= 0.3_f64.to_radians(), "tilt read as {}°", page.angle_radians.to_degrees());
+        assert!(page.binary.ink_count() > 0, "the text is ink");
+        let lines = ocr.recognize_page(&page).unwrap();
+        let text: Vec<String> = lines.iter().map(AnnotatedLine::text).collect();
+        assert!(text.iter().any(|t| t.contains("HELL") && t.contains("WOR")), "{text:?}");
+        for line in &lines {
+            assert!(line.baseline.is_finite() && line.x_height > 0.0 && line.cap_height >= line.x_height, "{line:?}");
+            for word in &line.words {
+                assert!(!word.chars.is_empty(), "every word keeps its characters: {word:?}");
+                // The word's box is the union of its characters' boxes.
+                for c in &word.chars {
+                    let inside = c.rect[0] >= word.rect[0] - 1.0
+                        && c.rect[1] >= word.rect[1] - 1.0
+                        && c.rect[2] <= word.rect[2] + 1.0
+                        && c.rect[3] <= word.rect[3] + 1.0;
+                    assert!(inside, "{c:?} outside its word {word:?}");
+                }
+                // Back on the scan, the word lands inside the original raster.
+                let (ox, oy) = page.to_original.apply(f64::from(word.rect[0]), f64::from(word.rect[3]));
+                assert!(ox >= 0.0 && oy >= 0.0 && ox <= f64::from(w) + 2.0 && oy <= f64::from(h) + 2.0, "({ox}, {oy})");
+            }
+        }
     }
 
     mod test_image {

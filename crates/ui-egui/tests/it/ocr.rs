@@ -66,6 +66,63 @@ fn recognize_text_in_multiple_files_writes_searchable_copies() {
     }
 }
 
+/// Recognize Text ▸ Output ▸ Editable text and images is ClearScan: sensitivity and downsample
+/// appear only for that choice, the run replaces the scan, and Undo takes the step back.
+#[test]
+fn editable_text_and_images_replaces_a_scan_and_undoes() {
+    use egui::accesskit::Role;
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("scan.pdf", None, scan()).unwrap();
+        app.run_inline = true;
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("ocr.recognize"));
+    h.run_steps(2);
+    assert!(h.query_by_label("Sensitivity").is_none(), "sensitivity is a ClearScan setting");
+    assert!(h.query_by_label("Downsample").is_none(), "downsample is a ClearScan setting");
+    h.get_by(|node| node.role() == Role::ComboBox && node.value().as_deref() == Some("Searchable Image (Exact)")).click();
+    h.run_steps(2);
+    h.get_by_label("Editable text and images").click();
+    h.run_steps(2);
+    h.get_by_label("Sensitivity");
+    h.get_by_label("Downsample");
+    assert_eq!((h.state().ocr_draft.sensitivity, h.state().ocr_draft.downsample), (50, 1));
+    h.get_by(|node| node.role() == Role::ComboBox && node.value().as_deref() == Some("Editable text and images")).hover();
+    h.run_steps(4);
+    let hover = h
+        .query_all_by(|node| {
+            node.label().is_some_and(|label| label.contains("Replaces the lettering with outlines"))
+                || node.value().is_some_and(|value| value.contains("Replaces the lettering with outlines"))
+        })
+        .count();
+    assert!(hover >= 1, "the output explains that lettering becomes outlines");
+    if !pdfcraft_engine::ocr::available() {
+        h.get_by_label_contains("model files are missing");
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    // 72 dpi is one of the dialog's choices. It keeps this synthetic page small.
+    h.state_mut().ocr_draft.dpi = 72;
+    h.get_by_label("Recognize text").click();
+    h.run_steps(4);
+    assert!(h.state().clearscan_run.is_none() && h.state().ocr_run.is_none(), "finished");
+    let id = h.state().active_ids().unwrap().1;
+    let toast = h.state().toast.clone().unwrap().0;
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("ClearScan"), "{toast}");
+    let bytes = h.state().session.get(id).unwrap().bytes.clone();
+    let mut renderer = pdfcraft_render::PageRenderer::new(bytes, Default::default());
+    let text =
+        renderer.render(pdfcraft_render::RenderRequest { page: 0, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
+    let plain = text.text.as_ref().map(|page| page.plain_text().to_lowercase()).unwrap_or_default();
+    assert!(plain.contains("recognize") || plain.contains("scanned") || plain.contains("words"), "{plain} ({toast})");
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), None);
+}
+
 /// #1028: "Also recognize pages that already have text" reads a picture on a page that has its own
 /// text, without adding that text a second time.
 #[test]

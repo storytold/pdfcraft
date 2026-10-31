@@ -500,6 +500,15 @@ pub fn toast(app: &mut PdfCraftApp, ctx: &egui::Context) {
     ctx.request_repaint_after(std::time::Duration::from_millis(100));
 }
 
+/// Which background job the progress card's Cancel button stops.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ProgressJob {
+    #[default]
+    Other,
+    Optimize,
+    ClearScan,
+}
+
 /// A background job's progress, shown at the bottom centre until the job is done.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProgressNotice {

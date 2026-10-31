@@ -728,6 +728,7 @@ impl Automation {
             "accessibility_autotag_apply" => self.accessibility_autotag_apply(&a)?,
             "accessibility_autotag_form_fields" => self.accessibility_autotag_form_fields(&a)?,
             "ocr_recognize" => self.ocr_recognize(&a)?,
+            "ocr_clearscan" => self.ocr_clearscan(&a)?,
             "js_run" => self.js_run(&a)?,
             "js_document_scripts" => self.js_document_scripts(&a)?,
             "js_set_document_script" => self.js_set_document_script(&a)?,

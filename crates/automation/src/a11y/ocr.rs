@@ -86,6 +86,80 @@ impl Automation {
         Ok(json!({ "words": found.iter().map(|p| p.words.len()).sum::<usize>(), "pages": list }))
     }
 
+    /// ClearScan the open document's `pages` (every page when absent). The result lists each
+    /// page and a progress log of the stages the pipeline ran. Text is left out when the
+    /// document's security doesn't allow copying.
+    pub(crate) fn ocr_clearscan(&mut self, a: &Args) -> Result<Value> {
+        let mut settings = pdfcraft_engine::clearscan::ClearScanSettings::default();
+        if let Some(dpi) = a.opt_num("dpi")? {
+            if !dpi.is_finite() || !(72.0..=600.0).contains(&dpi) {
+                return Err(ToolError::InvalidArgs(format!("dpi must be a finite number from 72 to 600, got {dpi}")));
+            }
+            settings.dpi = dpi as f32;
+        }
+        if let Some(sensitivity) = a.opt_int("sensitivity")? {
+            let Ok(sensitivity) = u8::try_from(sensitivity) else {
+                return Err(ToolError::InvalidArgs(format!("sensitivity must be 0..=100, got {sensitivity}")));
+            };
+            if sensitivity > 100 {
+                return Err(ToolError::InvalidArgs(format!("sensitivity must be 0..=100, got {sensitivity}")));
+            }
+            settings.sensitivity = sensitivity;
+        }
+        if let Some(downsample) = a.opt_int("downsample")? {
+            if !(1..=8).contains(&downsample) {
+                return Err(ToolError::InvalidArgs(format!("downsample must be 1..=8, got {downsample}")));
+            }
+            let Ok(downsample) = u8::try_from(downsample) else {
+                return Err(ToolError::InvalidArgs(format!("downsample must be 1..=8, got {downsample}")));
+            };
+            settings.downsample = downsample;
+        }
+        if let Some(language) = a.opt_str("language")? {
+            if !pdfcraft_engine::ocr::LANGUAGES.iter().any(|(code, _)| *code == language) {
+                return Err(ToolError::InvalidArgs(format!("unsupported language {language:?}")));
+            }
+            settings.language = language.into();
+        }
+        if let Some(skip) = a.opt_bool("skip_text_pages")? {
+            settings.skip_text_pages = skip;
+        }
+        let pages = if a.opt_ints("pages")?.is_some() { self.pages(a, "pages")? } else { Vec::new() };
+        let doc = self.doc(a)?;
+        let (id, copy) = (doc.id, doc.allows_copying());
+        let mut progress_log = Vec::new();
+        let report = self
+            .session
+            .clearscan_document(id, &pages, settings, |event| {
+                progress_log.push(json!({
+                    "page": event.page.saturating_add(1),
+                    "done": event.done,
+                    "total": event.total,
+                    "stage": event.stage,
+                }));
+                true
+            })
+            .map_err(|error| failed(error.to_string()))?;
+        let pages_out: Vec<Value> = report
+            .pages
+            .iter()
+            .map(|page| {
+                let number = page.page.saturating_add(1);
+                if let Some(why) = &page.skipped {
+                    json!({ "page": number, "skipped": why })
+                } else if let Some(why) = &page.error {
+                    json!({ "page": number, "error": why })
+                } else if copy {
+                    json!({ "page": number, "glyphs": page.glyphs, "clusters": page.clusters, "erased": page.erased, "bytes": page.bytes, "text": page.text })
+                } else {
+                    json!({ "page": number, "glyphs": page.glyphs, "clusters": page.clusters, "erased": page.erased, "bytes": page.bytes })
+                }
+            })
+            .collect();
+        let glyphs: usize = report.pages.iter().map(|page| page.glyphs).sum();
+        Ok(json!({ "glyphs": glyphs, "cancelled": report.cancelled, "pages": pages_out, "progress": progress_log }))
+    }
+
     /// Whether text recognition's models are installed, the directories searched for them (in
     /// order), and the languages it reads, each as a code and a name.
     pub(crate) fn ocr_status(&self) -> Result<Value> {

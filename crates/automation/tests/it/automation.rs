@@ -10190,3 +10190,22 @@ fn simple_rule_scan_drawn(content: &[u8]) -> Vec<u8> {
     }
     write_full(&doc, &SaveOptions::default()).unwrap()
 }
+
+#[test]
+fn ocr_clearscan_skips_text_pages_and_refuses_bad_settings() {
+    let dir = workdir("clearscan");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let skipped = ok(&mut a, "ocr_clearscan", json!({ "doc": doc }));
+    let pages = skipped["pages"].as_array().expect("pages");
+    assert_eq!(pages.len(), 3, "{skipped}");
+    assert!(pages.iter().all(|page| page["skipped"] == "the page already contains text"), "{skipped}");
+    assert!(skipped["progress"].as_array().is_some_and(|log| log.iter().any(|event| event["stage"] == "skipped")), "{skipped}");
+    assert_eq!(skipped["glyphs"], 0);
+    assert!(err(&mut a, "ocr_clearscan", json!({ "doc": doc, "sensitivity": 101 })).to_string().contains("sensitivity"));
+    assert!(err(&mut a, "ocr_clearscan", json!({ "doc": doc, "downsample": 0 })).to_string().contains("downsample"));
+    assert!(err(&mut a, "ocr_clearscan", json!({ "doc": doc, "language": "xx" })).to_string().contains("language"));
+    assert!(err(&mut a, "ocr_clearscan", json!({ "doc": doc, "dpi": 10 })).to_string().contains("dpi"));
+    assert!(err(&mut a, "ocr_clearscan", json!({ "doc": doc, "pages": [9] })).to_string().contains("out of range"));
+    std::fs::remove_dir_all(dir).unwrap();
+}

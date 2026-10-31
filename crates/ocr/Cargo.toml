@@ -11,10 +11,17 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+pdfcraft-cos = { workspace = true }
 pdfcraft-fonts = { workspace = true }
+kurbo = { workspace = true }
+# JPEG (DCTDecode) for a cleaned colour photograph. Monochrome stays Flate; no JBIG2 encoder.
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 ocrs = { version = "0.13.1", default-features = false, features = ["rten"] }
 rten = { version = "0.26.0", default-features = false, features = ["onnx_format", "rten_format"] }
 thiserror.workspace = true
 
 [dev-dependencies]
+pdfcraft-render = { workspace = true }
+pdfcraft-oracle = { workspace = true }
 tempfile = "3.27"
+rten-imageproc = { version = "0.26.0", default-features = false }
