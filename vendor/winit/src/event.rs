@@ -281,7 +281,8 @@ pub enum WindowEvent {
     ///
     /// ## Platform-specific
     ///
-    /// - Only available on **macOS** and **iOS**.
+    /// - Available on **macOS**, **iOS**, and **Wayland** compositors supporting
+    ///   `zwp_pointer_gestures_v1` (PdfCraft backport of winit#4338).
     /// - On iOS, not recognized by default. It must be enabled when needed.
     PinchGesture {
         device_id: DeviceId,

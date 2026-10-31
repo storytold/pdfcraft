@@ -18,7 +18,12 @@ fn assert_window_stack_graph(root: &std::path::Path, name: &str, version: &str) 
     let package = locked_package(root, name);
     assert!(package.contains(&format!("\nversion = \"{version}\"\n")), "{name} must resolve to {version}: {package}");
     if let Some(source) = package.lines().find_map(|line| line.strip_prefix("source = ")) {
-        assert!(source.contains("github.com/storytold/"), "{name} must come from the reviewed storytold fork once published, not {source}");
+        // Temporary pinch candidate, pending storytold/winit#20. Only this exact
+        // revision is allowed outside the reviewed storytold forks.
+        let pinch_candidate = name == "winit"
+            && source
+                == "\"git+https://github.com/tomasmark79/winit.git?rev=0bc1a9b7b239d62ee3cb4ce498aa6bf3af208b5a#0bc1a9b7b239d62ee3cb4ce498aa6bf3af208b5a\"";
+        assert!(source.contains("github.com/storytold/") || pinch_candidate, "{name} must come from a reviewed window-stack fork, not {source}");
         assert!(
             source.split(|c: char| !c.is_ascii_hexdigit()).any(|part| part.len() == 40),
             "{name} must pin the fork's 40-character revision, not {source}"

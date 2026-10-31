@@ -2,12 +2,20 @@
 
 ## Window-stack provenance after the egui 0.37 migration
 
-The checked-in, resolved Cargo graph pins `winit` to storytold/winit
-`a517b3846ee8457d84ee4975110bfda6797c44dc` and the egui crates to storytold/egui
+The checked-in, resolved Cargo graph pins `winit` to tomasmark79/winit
+`0bc1a9b7b239d62ee3cb4ce498aa6bf3af208b5a` and the egui crates to storytold/egui
 `6d518fc799681571963842f95b55a6b68431b15a`. Neither `vendor/winit` nor
 `vendor/egui-wgpu` is a root `[patch.crates-io]` path entry. The retained copies
 record the app's earlier patches; their source-reading tests establish provenance,
 while the resolved forks and their behavioral tests establish runtime behavior.
+
+The temporary winit pin adds native Wayland pinch delivery on top of the reviewed
+Craft branch; [storytold/winit#20](https://github.com/storytold/winit/pull/20)
+tracks its integration there. Return to the storytold fork once that PR is merged.
+The runtime port preserves the newer file-drag and IME seat teardown. Its four
+`wayland_pinch` tests cover the production scale/lifecycle policy; PdfCraft's
+`winit_wayland_pinch` target additionally checks cumulative zoom through egui.
+The retained vendor pinch copy is provenance, not the runtime dependency.
 
 The retained winit copy has upstream base `e9809ef54b18499bb4f2cac945719ecc2a61061b`,
 as recorded in `vendor/winit/.cargo_vcs_info.json`. Its thirteen patch rows below

@@ -135,8 +135,8 @@ hayro-jbig2 = { path = "vendor/hayro-jbig2" }
 lopdf = { path = "vendor/lopdf" }
 vello_common = { path = "vendor/vello_common" }
 vello_cpu = { path = "vendor/vello_cpu" }
-# The egui and winit crates below are pinned to immutable storytold git revisions (egui
-# 6d518fc799681571963842f95b55a6b68431b15a, winit a517b3846ee8457d84ee4975110bfda6797c44dc).
+# The egui and winit crates below are pinned to immutable Git revisions (egui
+# 6d518fc799681571963842f95b55a6b68431b15a, winit 0bc1a9b7b239d62ee3cb4ce498aa6bf3af208b5a).
 # Only the retained `vendor/winit` and `vendor/egui-wgpu` copies are provenance for the app's
 # earlier patches and their source guards, not path patches; the other `vendor/` entries above
 # remain real path patches. See vendor/README.md and the migration plan.
@@ -154,4 +154,6 @@ egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev
 eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
 egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
 egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
+# Native Wayland pinch: storytold/winit#20. Return to storytold/winit once merged,
+# retaining the tested pinch behavior and the newer drag/IME teardown.
+winit = { git = "https://github.com/tomasmark79/winit.git", rev = "0bc1a9b7b239d62ee3cb4ce498aa6bf3af208b5a" }
