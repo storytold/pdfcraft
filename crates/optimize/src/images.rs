@@ -802,6 +802,9 @@ fn one_bit(doc: &Document, s: &Stream, pack: bool, defaults: bool) -> Option<(Ve
         let len = stride.checked_mul(hu)?;
         let max = match s.filters().last() {
             Some((pdfcraft_filters::Filter::CcittFax, _)) => wu.checked_mul(hu)?.checked_add(hu.checked_mul(4)?)?.checked_add(4096)?,
+            // `decoded_image_within` reads JBIG2 too, but not for this yet: a resampled JBIG2 image
+            // would come out Flate under Retain, and nothing weighs JBIG2 again against it.
+            Some((pdfcraft_filters::Filter::Jbig2, _)) => return None,
             _ => allowance(len, h)?,
         };
         let mut data = doc.decoded_image_within(s, max).ok()?;
@@ -1000,9 +1003,12 @@ fn downsample_bits_checked(data: &[u8], w: u32, h: u32, nw: u32, nh: u32, dark_i
 /// `/DefaultGray` or `/DefaultRGB` is or may be in force. Also says whether it was resampled.
 ///
 /// - **Resampled** ([`downsample_bits_checked`]) when its resolution is above `above_ppi`, to `target_ppi`,
+///   if its dark sample is known ([`dark_is_one`]: grey or an image mask, not under `defaults`),
 ///   unless it has a soft mask, whose own size would then have to follow, or is a halftone or a
 ///   dither: most of its new pixels would cover both black and white, and taking the sample that
-///   covers more would turn its tones solid (a 50% screen black, a 25% one white).
+///   covers more would turn its tones solid (a 50% screen black, a 25% one white). So would a
+///   square of four new pixels that each cover both, as a small screened picture on a white page
+///   has (and ragged scanned text, which is then left at its resolution too).
 /// - **Stored** as CCITT Group 4 with `CcittG4`, or as 1-bit Flate when that is smaller, which only
 ///   a resampled image or one packed from more bits may be: a 1-bit image that is only stored again
 ///   becomes Group 4 or stays. Group 4 alone is only decoded to be resampled; Group 3 is stored

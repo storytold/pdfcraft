@@ -60,13 +60,18 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
   - **Downsampling:** one whose effective resolution is above `above_ppi` is averaged down to
     `target_ppi`: each new pixel takes the sample covering more of its area, and the dark one on a
     tie, so a dark line half a new pixel wide stays: black in grey and the painted part of an image
-    mask (a 0, or a 1 with an inverting decode array), full ink in a separation (a 1, or a 0), and
-    entry 0 of an indexed image, whatever colour its palette gives it (the palette isn't read yet).
-    Not one with a soft mask, whose own size would have to follow; not a halftone or a dither,
-    most of whose new pixels would cover both black and white, so that taking the sample covering
-    more would turn its tones solid (a 50% screen black, a 25% one white); and not one wider than
-    a fax row (`pdfcraft_filters::MAX_CCITT_COLUMNS`), as the averaging keeps a counter for each
-    column. On a 600 ppi text page, Group 4 at 300 ppi is half the size.
+    mask (a 0, or a 1 with an inverting decode array). Only images whose dark sample is known so
+    are averaged: `DeviceGray` (grey and RGB packed to one bit among them) and image masks, with no
+    decode array or one of two different numbers, and not drawn or listed where `/DefaultGray` or
+    `/DefaultRGB` is or may be in force. Not a separation, a DeviceN, calibrated or ICC grey, or an
+    indexed image, whose palette isn't read. Not one with a soft mask, whose own size would have to
+    follow; not a halftone or a dither, most of whose new pixels would cover both black and white,
+    so that taking the sample covering more would turn its tones solid (a 50% screen black, a 25%
+    one white), nor one with a square of four new pixels that each would, as a small screened
+    picture on a white page has: ragged scanned text has such squares along its strokes too, and
+    is then left at its resolution. And not one wider than a fax row
+    (`pdfcraft_filters::MAX_CCITT_COLUMNS`), as the averaging keeps a counter for each column. On a
+    600 ppi page of text that is averaged, Group 4 at 300 ppi is about half the size.
   - **Compression:** CCITT Group 4 (`pdfcraft_filters::encode_g4`), or 1-bit Flate when that is
     smaller, which only a resampled image or one packed from more bits may be: a 1-bit image that
     is only stored again becomes Group 4 or stays. Group 4 alone is only decoded to be resampled;
@@ -80,7 +85,8 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
   - Apart from the downsampling it is lossless: the samples keep their meaning, so the colour
     space, decode array and `/Mask` stay, but for packed RGB, which becomes grey with one decode
     pair. Group 4 wins on scans, whose ragged edges defeat Flate; on clean computer-drawn 1-bit
-    art Flate can be smaller. Not yet: inline images, an image's own `/SMask` or `/Mask`
+    art Flate can be smaller. Not yet: JBIG2 images themselves (left as they are, neither
+    downsampled nor stored again, though `Document::decoded_image` reads them), inline images, an image's own `/SMask` or `/Mask`
     image (only images drawn on a page are visited), and Group 4 for rows wider than 32,767
     samples.
 

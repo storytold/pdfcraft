@@ -13,7 +13,8 @@
 //!   and `/ColorTransform` disagree). Black-and-white images (1-bit, image masks and CCITT fax,
 //!   Group 3 among them; and eight-bit grey and RGB of only black and white, and indexed images
 //!   that use only palette entries 0 and 1, packed to one bit) above a threshold are averaged down to a
-//!   target resolution, halftones and dithers aside, and are stored as CCITT Group 4 or lossless JBIG2, or 1-bit
+//!   target resolution when grey or image masks, halftones and dithers aside (see the README), and
+//!   are stored as CCITT Group 4 or lossless JBIG2, or 1-bit
 //!   Flate once resampled or packed, when that is smaller.
 //! - **Discard objects:** page thumbnails, alternate images, document tags (structure tree),
 //!   print settings.
