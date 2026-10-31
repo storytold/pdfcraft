@@ -3,6 +3,7 @@
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
+use pdfcraft_engine::Edit;
 use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
 
 /// A form with a text field and a push button whose Mouse Up script fills it in.
@@ -79,6 +80,83 @@ fn button_scripts_run_and_alert() {
     h.run_steps(2);
     assert_eq!(value(&h, "greeting"), ["Hello from JavaScript"]);
     assert_eq!(h.state().toast.clone().unwrap().0, "Filled in");
+}
+
+/// Install an initializer that defines `hi` before throwing, then clear setup diagnostics.
+fn failing_document_script(h: &mut Harness<'static, PdfCraftApp>) {
+    assert!(h.state_mut().apply_edit(Edit::SetDocumentScript {
+        name: "init".into(),
+        script: Some("function hi() { return 'hi'; } throw new Error('document failed');".into()),
+    }));
+    h.state_mut().js_console.log.clear();
+}
+
+/// Document errors stay visible alongside command results, field changes and command errors.
+#[test]
+fn console_reports_document_script_errors_and_keeps_the_result() {
+    let _gpu = std::env::var_os("PDFCRAFT_JS_ERROR_SHOT").map(|_| crate::gpu());
+    let mut h = harness();
+    failing_document_script(&mut h);
+    assert!(h.state_mut().execute("tools.js_console"));
+    h.run_steps(2);
+    h.state_mut().js_console.input = "getField('greeting').value = hi(); console.println('console ran'); 6 * 7".into();
+    h.get_by_label("Run").click();
+    h.run_steps(2);
+    assert_eq!(value(&h, "greeting"), ["hi"]);
+    let log = &h.state().js_console.log;
+    assert!(log.iter().any(|line| line == "console ran"), "{log:?}");
+    assert_eq!(log.last().map(String::as_str), Some("42"));
+    let errors: Vec<_> = log.iter().filter(|line| line.starts_with("Error: ")).collect();
+    assert_eq!(errors.len(), 1, "{log:?}");
+    assert!(errors[0].starts_with("Error: document script 1: ") && errors[0].contains("document failed"), "{log:?}");
+    h.get_by_label(errors[0].as_str());
+    if let Ok(path) = std::env::var("PDFCRAFT_JS_ERROR_SHOT") {
+        h.render().unwrap().save(path).unwrap();
+    }
+
+    h.state_mut().js_console.log.clear();
+    h.state_mut().js_console.input = "throw new Error('console failed')".into();
+    h.run_steps(4);
+    h.get_by_label("Run").click();
+    h.run_steps(2);
+    let log = &h.state().js_console.log;
+    assert_eq!(log.iter().filter(|line| line.starts_with("Error: ")).count(), 2, "{log:?}");
+    assert!(log.last().unwrap().contains("console failed"), "{log:?}");
+    assert!(log.iter().any(|line| line.starts_with("Error: document script 1: ") && line.contains("document failed")), "{log:?}");
+}
+
+/// Document errors survive button effects and failures, including a button with no other output.
+#[test]
+fn button_reports_document_script_errors_and_keeps_its_actions() {
+    let mut h = harness();
+    failing_document_script(&mut h);
+    let id = h.state().active_ids().unwrap().1;
+    h.state_mut().run_button_script(id, "hello", "getField('greeting').value = hi(); console.println('button ran'); app.alert('Filled in');");
+    h.run_steps(2);
+    assert_eq!(value(&h, "greeting"), ["hi"]);
+    assert_eq!(h.state().toast.as_ref().unwrap().0, "Filled in");
+    let log = &h.state().js_console.log;
+    assert!(log.iter().any(|line| line == "button ran"), "{log:?}");
+    let errors: Vec<_> = log.iter().filter(|line| line.starts_with("Error: ")).collect();
+    assert_eq!(errors.len(), 1, "{log:?}");
+    let doc_error = errors[0].strip_prefix("Error: ").unwrap().to_string();
+    assert!(doc_error.starts_with("document script 1: ") && doc_error.contains("document failed"), "{log:?}");
+    assert!(h.state_mut().execute("tools.js_console"));
+    h.run_steps(2);
+    h.get_by_label(&format!("Error: {doc_error}"));
+
+    // A failure in the button itself is reported alongside the document error.
+    h.state_mut().js_console.log.clear();
+    h.state_mut().run_button_script(id, "hello", "throw new Error('button failed')");
+    let log = &h.state().js_console.log;
+    assert_eq!(log.len(), 2, "{log:?}");
+    assert!(log[0].starts_with("Error: ") && log[0].contains("button failed"), "{log:?}");
+    assert_eq!(log[1], format!("Error: {doc_error}"));
+
+    // A document error is still output when the button itself produces nothing.
+    h.state_mut().js_console.log.clear();
+    h.state_mut().run_button_script(id, "hello", "void 0");
+    assert_eq!(h.state().js_console.log, [format!("Error: {doc_error}")]);
 }
 
 /// One run's messages are all shown, in order (#4294): the first takes the toast with its title
