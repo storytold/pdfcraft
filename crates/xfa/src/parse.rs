@@ -401,7 +401,8 @@ fn parse_value(n: Option<XmlNode>, warnings: &mut Vec<String>) -> Value {
                     warnings.push("an image is larger than 32 MB; it is left out".into());
                     return Value::Empty;
                 }
-                return Value::Image { content_type: c.attribute("contentType").unwrap_or("").to_string(), data };
+                let href = c.attribute("href").map(str::trim).filter(|h| !h.is_empty()).map(str::to_string);
+                return Value::Image { content_type: c.attribute("contentType").unwrap_or("").to_string(), data, href };
             }
             "line" => {
                 return Value::Line { slope_up: c.attribute("slope") == Some("/"), edge: child(c, "edge").map(parse_edge).unwrap_or_default() };

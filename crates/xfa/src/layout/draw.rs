@@ -233,7 +233,7 @@ impl Layouter<'_> {
         let inner = rect.inset(&d.common.margin);
         match &d.value {
             Value::Text(_) | Value::Rich(_) => self.draw_value_text(&d.value, inner, &ctx.font, &ctx.para),
-            Value::Image { content_type, data } => self.draw_image(data, content_type, inner),
+            Value::Image { content_type, data, .. } => self.draw_image(data, content_type, inner),
             Value::Line { slope_up, edge } => {
                 if !edge.visible() {
                     return Ok(());
