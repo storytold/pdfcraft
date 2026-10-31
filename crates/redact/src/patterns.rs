@@ -216,11 +216,15 @@ fn email(s: &[char], i: usize) -> Option<usize> {
     let local = |c: &char| address_char(*c) || "._%+-".contains(*c);
     // A match starts at the first character of a run of local characters, which may be
     // punctuation ("_admin@host.com"), but the run needs a letter or digit.
-    if !local(&s[i]) || i.checked_sub(1).and_then(|p| s.get(p)).is_some_and(local) {
+    // An apostrophe ("o'brien@example.com") belongs to the local part but never starts it, so a
+    // quote around an address ("'john@example.com'") stays outside the match.
+    let inner = |c: &char| local(c) || *c == '\'';
+    let before = |n: usize| i.checked_sub(n).and_then(|p| s.get(p));
+    if !local(&s[i]) || before(1).is_some_and(local) || (before(1) == Some(&'\'') && before(2).is_some_and(inner)) {
         return None;
     }
     let mut j = i;
-    while j < s.len() && local(&s[j]) {
+    while j < s.len() && inner(&s[j]) {
         j += 1;
     }
     if s.get(j) != Some(&'@') || !s[i..j].iter().any(|c| address_char(*c)) {
@@ -454,6 +458,14 @@ mod tests {
     fn found(p: Pattern, s: &str) -> Vec<String> {
         let c: Vec<char> = s.chars().collect();
         find(p, &c).into_iter().map(|r| c[r].iter().collect()).collect()
+    }
+
+    #[test]
+    fn email_local_part_may_contain_an_apostrophe() {
+        assert_eq!(found(Pattern::Email, "Mail o'brien@example.com today"), ["o'brien@example.com"]);
+        assert_eq!(found(Pattern::Email, "Mail 'john@example.com' today"), ["john@example.com"]);
+        // Only the leading quote stays outside; the whole local part is matched.
+        assert_eq!(found(Pattern::Email, "Mail 'john'@example.com today"), ["john'@example.com"]);
     }
 
     #[test]
