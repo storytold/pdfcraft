@@ -13,7 +13,7 @@
 //! applied by the app, so each change is one undo step.
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, pos2, vec2};
-use pdfcraft_engine::{Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, Style};
+use pdfcraft_engine::{Document, Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, Style, measure};
 use pdfcraft_render::{Annotation, DocInfo, PageInfo, PageText};
 
 use crate::canvas::{DocView, PageXform};
@@ -41,7 +41,7 @@ pub(crate) use input::{describe, fill_grabs, hit, keys, nudge_keys, page_after_t
 pub use menu::{CanvasAction, fill_picker, recent_custom_colours, remember_custom_colour, status_badge, swatch_grid};
 #[cfg(test)]
 use menu::{RECENT_CUSTOM, same_colour};
-pub(crate) use menu::{attachment_items, context_menu, quick_bar_controls};
+pub(crate) use menu::{attachment_items, context_menu, quick_bar_controls, snap_button, snap_target_boxes, take_snap_tabs};
 pub(crate) use paint::paint_page;
 #[cfg(test)]
 use paint::{changing_points, drawn_shape, edited_in_view};
@@ -217,6 +217,12 @@ impl CommentTool {
         matches!(self, Self::Polygon | Self::PolyLine | Self::Cloud)
     }
 
+    /// Tools whose points snap to the page's drawing when snapping is on (M5): the ones that
+    /// set points or corners, not freehand drawing.
+    pub fn snaps(self) -> bool {
+        self.clicks_points() || matches!(self, Self::Line | Self::Arrow | Self::Rectangle | Self::Oval | Self::Note | Self::TextBox | Self::Callout)
+    }
+
     /// Whether the line-thickness control applies.
     pub fn has_width(self) -> bool {
         self.draws() || self.clicks_points() || matches!(self, Self::TextBox | Self::Callout)
@@ -288,6 +294,12 @@ pub struct CommentPrefs {
     pub group_tool: [CommentTool; 3],
     /// Hide hover previews on highlight annotations when they contain no comment text beyond the author.
     pub hide_empty_highlight_hover: bool,
+    /// Snap to drawing (F3): points of the drawing tools land on the page's own vector paths
+    /// (endpoints, midpoints, intersections, paths), as the measuring tools do and as CAD's
+    /// object snap does.
+    pub snap: bool,
+    /// Which targets snapping offers (CAD's object snap modes), for commenting and measuring.
+    pub snap_targets: measure::snap::SnapOptions,
 }
 
 impl Default for CommentPrefs {
@@ -298,7 +310,88 @@ impl Default for CommentPrefs {
             pinned: false,
             group_tool: [CommentTool::Note, CommentTool::Highlight, CommentTool::Ink],
             hide_empty_highlight_hover: false,
+            snap: false,
+            snap_targets: measure::snap::SnapOptions::default(),
         }
+    }
+}
+
+/// Where something snapped to: the point in user space and what it is.
+pub(crate) type SnapHit = ([f64; 2], measure::snap::SnapKind);
+
+/// How close (screen points) the pointer must be to a path for a drawing tool's point to snap.
+pub const SNAP_SENSITIVITY: f64 = 6.0;
+
+/// How many pages' paths the snap cache keeps: enough for the pages on screen, few enough for
+/// a CAD plan's geometry (tens of MB a page).
+const SNAP_CACHE_PAGES: usize = 4;
+
+/// The pages' vector paths for snapping, kept per page for the current edit generation
+/// (extraction is bounded but not free: up to a second on an A0 plan), shared by every
+/// drawing tool. Several pages at a time, so two pages on screen don't throw each other out.
+#[derive(Clone, Debug, Default)]
+pub struct SnapCache {
+    /// Page, generation and its paths (`None` when the page can't be read), oldest first.
+    paths: Vec<(usize, u64, Option<std::sync::Arc<measure::snap::Geometry>>)>,
+    /// Pages (and generations) whose limit notice has been shown.
+    warned: Vec<(usize, u64)>,
+    /// The comments drawn on a page, by generation and the `/Annots` places left out.
+    comments: Vec<CommentPaths>,
+}
+
+/// A page, generation, the `/Annots` places left out, and the comments' snap geometry.
+type CommentPaths = (usize, u64, Vec<usize>, Option<std::sync::Arc<measure::snap::Geometry>>);
+
+impl SnapCache {
+    /// The pages whose paths are kept, oldest first.
+    pub fn cached_pages(&self) -> Vec<usize> {
+        self.paths.iter().map(|(page, ..)| *page).collect()
+    }
+
+    /// The paths of `page` as the document is now (`None` when the page can't be read). A page
+    /// whose extraction hit a limit says so once, through `notice`.
+    pub fn geometry(&mut self, doc: &Document, page: usize, notice: &mut Option<&'static str>) -> Option<std::sync::Arc<measure::snap::Geometry>> {
+        let generation = doc.edit_generation();
+        // An edit starts the document over.
+        self.paths.retain(|(_, g, _)| *g == generation);
+        self.warned.retain(|(_, g)| *g == generation);
+        if let Some((_, _, cached)) = self.paths.iter().find(|(p, _, _)| *p == page) {
+            return cached.clone();
+        }
+        let geometry = doc.measurement_paths(page).ok().map(std::sync::Arc::new);
+        if let Some(g) = &geometry
+            && (g.truncated || g.unreadable > 0)
+            && !self.warned.contains(&(page, generation))
+        {
+            *notice = Some(if g.truncated {
+                "This drawing exceeds the snapping limit; only the first paths are used."
+            } else {
+                "Some page content couldn't be read; snapping uses the rest."
+            });
+            self.warned.push((page, generation));
+        }
+        if self.paths.len() >= SNAP_CACHE_PAGES {
+            self.paths.remove(0);
+        }
+        self.paths.push((page, generation, geometry.clone()));
+        geometry
+    }
+
+    /// The comments drawn with lines on `page`, as the document is now, but those at the
+    /// `/Annots` places in `except` (`None` when the page can't be read). Built again after an
+    /// edit, or when what is left out changes.
+    pub fn comments(&mut self, doc: &Document, page: usize, except: &[usize]) -> Option<std::sync::Arc<measure::snap::Geometry>> {
+        let generation = doc.edit_generation();
+        self.comments.retain(|(_, g, _, _)| *g == generation);
+        if let Some((_, _, _, cached)) = self.comments.iter().find(|(p, _, e, _)| *p == page && e == except) {
+            return cached.clone();
+        }
+        let geometry = doc.comment_paths(page, except).ok().map(std::sync::Arc::new);
+        if self.comments.len() >= SNAP_CACHE_PAGES {
+            self.comments.remove(0);
+        }
+        self.comments.push((page, generation, except.to_vec(), geometry.clone()));
+        geometry
     }
 }
 

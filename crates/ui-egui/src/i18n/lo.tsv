@@ -2481,3 +2481,21 @@ animation effects	Off	ປິດ
 	Unchecked reads	Unchecked reads
 	{field} reads fields named as it runs	{field} reads fields named as it runs
 	Some names are built as it runs	Some names are built as it runs
+
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	ດູດຈັບກັບຮູບແຕ້ມ: ເປີດ
+	Snap to drawing: off	ດູດຈັບກັບຮູບແຕ້ມ: ປິດ
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	ເປົ້າໝາຍການດູດຈັບ
+	Centre points	ຈຸດສູນກາງ
+	Centre point	ຈຸດສູນກາງ
+	Tab: the next target under the pointer	Tab: ເປົ້າໝາຍຕໍ່ໄປພາຍໃຕ້ຕົວຊີ້
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	ລຸ່ມຊ້າຍ
+	Top left	ເທິງຊ້າຍ
+	Top right	ເທິງຂວາ
+	Bottom right	ລຸ່ມຂວາ
+	Middle	ເຄິ່ງກາງ
+	Vertex	ຈຸດຍອດ
+	Reference point: {point} (Tab: next)	ຈຸດອ້າງອີງ: {point} (Tab: ຕໍ່ໄປ)

@@ -324,6 +324,10 @@ impl PdfCraftApp {
                     return Some(v.view_history(id == "view.next_view"));
                 }
             }
+            "comment.snap" => {
+                self.comment_prefs.snap = !self.comment_prefs.snap;
+                self.notify_tr(if self.comment_prefs.snap { "Snap to drawing: on" } else { "Snap to drawing: off" });
+            }
             "view.next_tab" => self.step_tab(true),
             "view.previous_tab" => self.step_tab(false),
             "view.theme" => {

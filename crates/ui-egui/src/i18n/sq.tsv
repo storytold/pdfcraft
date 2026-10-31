@@ -2564,3 +2564,17 @@ animation effects	Off	Joaktiv
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opsionet për këtë përgjigje
+# Snap to drawing for commenting (M5).
+	Snap to drawing: on	Ngjit te vizatimi: aktiv
+	Snap to drawing: off	Ngjit te vizatimi: joaktiv
+	Snap targets	Objektivat e ngjitjes
+	Centre points	Pikat qendrore
+	Centre point	Pika qendrore
+	Tab: the next target under the pointer	Tab: objektivi tjetër nën tregues
+	Bottom left	Poshtë majtas
+	Top left	Lart majtas
+	Top right	Lart djathtas
+	Bottom right	Poshtë djathtas
+	Middle	Mesi
+	Vertex	Kulm
+	Reference point: {point} (Tab: next)	Pika e referencës: {point} (Tab: tjetra)

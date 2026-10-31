@@ -2838,3 +2838,17 @@ theme	Appearance	Aspecte
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opcions d'aquesta resposta
+# Snap to drawing for commenting (M5).
+	Snap to drawing: on	Ajusta al dibuix: activat
+	Snap to drawing: off	Ajusta al dibuix: desactivat
+	Snap targets	Objectius d'ajust
+	Centre points	Punts centrals
+	Centre point	Punt central
+	Tab: the next target under the pointer	Tab: el següent objectiu sota el punter
+	Bottom left	A baix a l'esquerra
+	Top left	A dalt a l'esquerra
+	Top right	A dalt a la dreta
+	Bottom right	A baix a la dreta
+	Middle	Mig
+	Vertex	Vèrtex
+	Reference point: {point} (Tab: next)	Punt de referència: {point} (Tab: següent)

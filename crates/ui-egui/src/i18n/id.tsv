@@ -2810,3 +2810,17 @@ theme	Appearance	Tampilan
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opsi untuk balasan ini
+# Snap to drawing for commenting (M5).
+	Snap to drawing: on	Tempel ke gambar: aktif
+	Snap to drawing: off	Tempel ke gambar: nonaktif
+	Snap targets	Target tempel
+	Centre points	Titik pusat
+	Centre point	Titik pusat
+	Tab: the next target under the pointer	Tab: target berikutnya di bawah penunjuk
+	Bottom left	Kiri bawah
+	Top left	Kiri atas
+	Top right	Kanan atas
+	Bottom right	Kanan bawah
+	Middle	Tengah
+	Vertex	Verteks
+	Reference point: {point} (Tab: next)	Titik acuan: {point} (Tab: berikutnya)

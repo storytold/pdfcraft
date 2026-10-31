@@ -1,9 +1,10 @@
 use super::geometry::{HANDLES, grabs_points, handle_pos, is_markup, reshapable, reshaped, resizable};
-use super::state::{Gesture, PageCx, SETTLE_SECS};
+use super::state::{Gesture, PageCx, SETTLE_SECS, anchor_label};
 use super::{
     Annotation, Color32, CommentTool, CornerRadius, DocInfo, DocView, Edit, LineEnding, NewAnnotation, Pos2, QuickTool, Rect, SELECT_BLUE, Shape,
     Stroke, color32, vec2,
 };
+use pdfcraft_engine::measure;
 
 /// Paint comment selection, hover and gesture previews on a page.
 pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
@@ -48,7 +49,7 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
         if cx.allowed && grabs_points(cx.tool) && reshapable(a) {
             return paint_points(painter, cx, view, a, pointer, shift);
         }
-        let r = cx.adjusted_rect(a, cv.gesture.as_ref(), pointer, shift, view.pending_edit.as_ref()).expand(2.0);
+        let r = cx.adjusted_rect(a, cv.gesture.as_ref(), cv.move_anchor, pointer, shift, view.pending_edit.as_ref()).expand(2.0);
         painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
         if cx.allowed && resizable(a) {
             for h in HANDLES {
@@ -57,6 +58,7 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
             }
         }
     }
+    paint_snap_marker(painter, cx, view);
     paint_gesture(painter, cx, view);
 }
 
@@ -92,6 +94,12 @@ pub(super) fn changing_points(
 fn paint_points(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, a: &Annotation, pointer: Option<Pos2>, shift: bool) {
     let cv = &view.comments;
     let points: Vec<[f64; 2]> = a.points.iter().map(|q| [f64::from(q[0]), f64::from(q[1])]).collect();
+    // As the release will have it: a dragged end onto a snap target, unless Shift holds the angle.
+    let pointer = match &cv.gesture {
+        Some(Gesture::Reshape { .. }) if !shift => pointer.map(|p| cx.to_screen(cx.snapped(p).0)),
+        Some(Gesture::Move { from, .. }) => pointer.map(|p| cx.snap_move(a, *from, p, cv.move_anchor).0),
+        _ => pointer,
+    };
     let changing = changing_points(cv.gesture.as_ref(), view.pending_edit.as_ref(), (cx.page, a.index), &points, |p| cx.to_user(p), pointer, shift);
     let changed = changing.is_some();
     let points = changing.unwrap_or(points);
@@ -107,7 +115,47 @@ fn paint_points(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, a: &An
     for c in screen {
         painter.circle(c, 4.5, Color32::WHITE, Stroke::new(1.0, SELECT_BLUE));
     }
+    paint_snap_marker(painter, cx, view);
     paint_gesture(painter, cx, view);
+}
+
+/// Where a drawing tool's next point would snap to: a ring and the kind of target, as the
+/// measuring tools show it.
+fn paint_snap_marker(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
+    // The anchor of a comment being moved: a square, named below it (Tab moves on).
+    if let Some((page, point, name)) = view.comments.anchor_shown
+        && page == cx.page
+    {
+        let at = cx.to_screen(point);
+        painter.rect_filled(Rect::from_center_size(at, vec2(7.0, 7.0)), CornerRadius::ZERO, SELECT_BLUE);
+        painter.text(
+            at + vec2(10.0, 10.0),
+            egui::Align2::LEFT_TOP,
+            crate::i18n::fmt(tl!("Reference point: {point} (Tab: next)"), &[("point", anchor_label(name))]),
+            crate::theme::regular(11.0),
+            SELECT_BLUE,
+        );
+    }
+    if let Some((page, point, kind)) = view.comments.snap_hover
+        && page == cx.page
+    {
+        let at = cx.to_screen(point);
+        let green = Color32::from_rgb(46, 158, 92);
+        painter.circle_stroke(at, 6.0, Stroke::new(1.5, green));
+        painter.text(
+            at + vec2(10.0, -10.0),
+            egui::Align2::LEFT_BOTTOM,
+            tl!(match kind {
+                measure::snap::SnapKind::Endpoint => "Endpoint",
+                measure::snap::SnapKind::Midpoint => "Midpoint",
+                measure::snap::SnapKind::Intersection => "Intersection",
+                measure::snap::SnapKind::Path => "Path",
+                measure::snap::SnapKind::Centre => "Centre point",
+            }),
+            crate::theme::regular(11.0),
+            green,
+        );
+    }
 }
 
 fn paint_gesture(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {

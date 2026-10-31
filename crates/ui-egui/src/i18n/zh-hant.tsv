@@ -2528,3 +2528,20 @@ animation effects	Off	關
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	此回覆的選項
 	Export value	匯出值
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	吸附至圖形：開
+	Snap to drawing: off	吸附至圖形：關
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	鎖點目標
+	Centre points	中心點
+	Centre point	中心
+	Tab: the next target under the pointer	Tab：指標下的下一個目標
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	左下
+	Top left	左上
+	Top right	右上
+	Bottom right	右下
+	Middle	中心
+	Vertex	頂點
+	Reference point: {point} (Tab: next)	參考點：{point}（Tab：下一個）

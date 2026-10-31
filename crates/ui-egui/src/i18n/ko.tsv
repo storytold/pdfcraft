@@ -2809,3 +2809,17 @@ theme	Appearance	모양
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	이 답글의 옵션
+# Snap to drawing for commenting (M5).
+	Snap to drawing: on	도면에 스냅: 켬
+	Snap to drawing: off	도면에 스냅: 끔
+	Snap targets	스냅 대상
+	Centre points	중심점
+	Centre point	중심점
+	Tab: the next target under the pointer	Tab: 포인터 아래의 다음 대상
+	Bottom left	왼쪽 아래
+	Top left	왼쪽 위
+	Top right	오른쪽 위
+	Bottom right	오른쪽 아래
+	Middle	가운데
+	Vertex	꼭짓점
+	Reference point: {point} (Tab: next)	기준점: {point} (Tab: 다음)

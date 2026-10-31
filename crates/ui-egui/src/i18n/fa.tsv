@@ -2816,3 +2816,21 @@ theme	Appearance	ظاهر
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	گزینه‌های این پاسخ
+
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	چسبیدن به ترسیم: روشن
+	Snap to drawing: off	چسبیدن به ترسیم: خاموش
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	هدف‌های چسبیدن
+	Centre points	نقاط مرکز
+	Centre point	نقطه مرکز
+	Tab: the next target under the pointer	Tab: هدف بعدی زیر نشانگر
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	پایین چپ
+	Top left	بالا چپ
+	Top right	بالا راست
+	Bottom right	پایین راست
+	Middle	وسط
+	Vertex	رأس
+	Reference point: {point} (Tab: next)	نقطه مرجع: {point} (Tab: بعدی)

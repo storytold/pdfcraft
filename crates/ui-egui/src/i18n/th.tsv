@@ -2736,3 +2736,21 @@ theme	Appearance	ลักษณะที่ปรากฏ
 	Unchecked reads	Unchecked reads
 	{field} reads fields named as it runs	{field} reads fields named as it runs
 	Some names are built as it runs	Some names are built as it runs
+
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	ยึดกับภาพวาด: เปิด
+	Snap to drawing: off	ยึดกับภาพวาด: ปิด
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	เป้าหมายการยึด
+	Centre points	จุดศูนย์กลาง
+	Centre point	จุดศูนย์กลาง
+	Tab: the next target under the pointer	Tab: เป้าหมายถัดไปใต้ตัวชี้
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	ล่างซ้าย
+	Top left	บนซ้าย
+	Top right	บนขวา
+	Bottom right	ล่างขวา
+	Middle	ตรงกลาง
+	Vertex	จุดยอด
+	Reference point: {point} (Tab: next)	จุดอ้างอิง: {point} (Tab: ถัดไป)

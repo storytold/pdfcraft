@@ -2863,3 +2863,20 @@ theme	Appearance	Aparência
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opções desta resposta
 	Export value	Valor de exportação
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	Ajustar ao desenho: ligado
+	Snap to drawing: off	Ajustar ao desenho: desligado
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	Pontos de encaixe
+	Centre points	Centros
+	Centre point	Centro
+	Tab: the next target under the pointer	Tab: o próximo ponto sob o ponteiro
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	Inferior esquerdo
+	Top left	Superior esquerdo
+	Top right	Superior direito
+	Bottom right	Inferior direito
+	Middle	Centro
+	Vertex	Vértice
+	Reference point: {point} (Tab: next)	Ponto de referência: {point} (Tab: próximo)
