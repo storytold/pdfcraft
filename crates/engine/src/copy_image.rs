@@ -69,10 +69,53 @@ impl Document {
         let editor = self.editor.as_ref().ok_or("the document can't be read")?;
         let item = self.added().iter().filter(|a| a.page == page).nth(index);
         let Some(pdfcraft_edit::Content::Image(img)) = item.map(|a| &a.content) else {
-            return Err(format!("item {} on page {} is not an added image", index + 1, page + 1));
+            return Err(format!("item {} on page {} is not an added image", index.saturating_add(1), page.saturating_add(1)));
         };
         picture_file(&editor.cos, img.image)
     }
+
+    /// The edit that moves added item `index` of `page` onto page `to`, its box at `rect` (display
+    /// space of `to`) pushed back inside that page if it reaches past an edge: the item is pasted
+    /// there and deleted from `page`, as one undo step. A picture is drawn from the same image
+    /// object (and is refused, as Copy is, when the document doesn't allow copying).
+    pub fn move_content_to_page(&self, page: usize, index: usize, to: usize, rect: [f64; 4]) -> Result<crate::Edit, String> {
+        if page == to {
+            return Err(format!("the item is already on page {}", page.saturating_add(1)));
+        }
+        let target = self.info.pages.get(to).ok_or_else(|| format!("page {} doesn't exist", to.saturating_add(1)))?;
+        let item = self.added().iter().filter(|a| a.page == page).nth(index);
+        let Some(item) = item else {
+            return Err(format!("page {} has no added item {}", page.saturating_add(1), index.saturating_add(1)));
+        };
+        let content = item.content.with_rect(fit_in_page(rect, f64::from(target.width), f64::from(target.height)));
+        let file = match &content {
+            pdfcraft_edit::Content::Text(_) => None,
+            pdfcraft_edit::Content::Image(_) => {
+                let (ext, bytes) = self.added_image_file(page, index)?;
+                Some((format!("Moved image.{ext}"), std::sync::Arc::new(bytes)))
+            }
+        };
+        Ok(crate::Edit::Batch {
+            label: "Edit content".into(),
+            edits: vec![crate::Edit::PasteContent { page: to, content, file }, crate::Edit::DeleteContent { page, index }],
+        })
+    }
+}
+
+/// `rect` moved, not resized, to lie inside a `w` × `h` page; a box larger than the page lines up
+/// with its left and bottom edges.
+fn fit_in_page(rect: [f64; 4], w: f64, h: f64) -> [f64; 4] {
+    let shift = |lo: f64, hi: f64, max: f64| {
+        if hi - lo >= max || lo < 0.0 {
+            -lo
+        } else if hi > max {
+            max - hi
+        } else {
+            0.0
+        }
+    };
+    let (dx, dy) = (shift(rect[0], rect[2], w), shift(rect[1], rect[3], h));
+    [rect[0] + dx, rect[1] + dy, rect[2] + dx, rect[3] + dy]
 }
 
 /// An added image's picture as a file: [`pdfcraft_create::image_file`], except that a JPEG 2000
@@ -155,5 +198,20 @@ fn collect(cos: &Cos, res: &Dict, depth: usize, seen: &mut HashSet<ObjRef>, best
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod move_tests {
+    use super::fit_in_page;
+
+    #[test]
+    fn a_box_is_pushed_back_inside_the_page() {
+        let page = (300.0, 400.0);
+        let fit = |r| fit_in_page(r, page.0, page.1);
+        assert_eq!(fit([10.0, 20.0, 110.0, 40.0]), [10.0, 20.0, 110.0, 40.0], "inside: untouched");
+        assert_eq!(fit([-30.0, 20.0, 70.0, 40.0]), [0.0, 20.0, 100.0, 40.0], "past the left edge");
+        assert_eq!(fit([250.0, 390.0, 350.0, 410.0]), [200.0, 380.0, 300.0, 400.0], "past the right and top edges");
+        assert_eq!(fit([20.0, -500.0, 60.0, 900.0]), [20.0, 0.0, 60.0, 1400.0], "taller than the page: lines up with the bottom");
     }
 }
