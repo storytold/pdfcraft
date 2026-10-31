@@ -341,7 +341,7 @@ Estimates unchanged.
 | 2026-10-13 | minor | M6: XML/XFDF attribute whitespace survives form and comment export/import; estimates unchanged |
 | 2026-10-14 | minor | M1: raw-deflate fallback preserves decoding-limit errors in strict and tolerant decoding; synthetic filter and COS stream regressions. Estimates unchanged. |
 | 2026-10-16 | minor | M5 #2669, item 5: the Comments panel groups replies and counts all page roots once per frame. Estimates unchanged. |
-| 2026-10-16 | minor | M10 #2269: Export all images, Save Image As and Word export convert CMYK and ICCBased images to sRGB as the page draws them (vendored hayro patch 67). Estimates unchanged. |
+| 2026-10-16 | minor | M10 #2269: Export all images, Save Image As and Word export convert CMYK and ICCBased images to sRGB as the page draws them (vendored hayro patch 71). Estimates unchanged. |
 | 2026-10-15 | minor | M9 #1895: generic appearance rewriting deferred; separate validation overlays preserve original artwork, exports and printing. Baked captions remain unchanged (#79 open). Estimates unchanged. |
 | 2026-10-16 | minor | M10 #1201 partial: lossless image export applies component Decode pairs and Indexed mapping. Estimates unchanged. |
 | 2026-10-15 | minor | M6: CSV export and spreadsheet merging quote tabs, and import distinguishes quoted tabs from TSV delimiters without changing field identities. Estimates unchanged. |

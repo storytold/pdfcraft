@@ -1447,7 +1447,7 @@ static CMYK_TRANSFORM: LazyLock<ICCProfile> = LazyLock::new(|| {
     ICCProfile::new(include_bytes!("../assets/CGATS001Compat-v2-micro.icc"), 4).unwrap()
 });
 
-/// PdfCraft patch (67): convert 8-bit `DeviceCMYK` samples (four a pixel) in `input` to sRGB
+/// PdfCraft patch (71): convert 8-bit `DeviceCMYK` samples (four a pixel) in `input` to sRGB
 /// (three a pixel) in `output`, as pages draw `DeviceCMYK`, so that a caller writing image
 /// samples out (image export) shows the colours the page does. `None` when the lengths don't
 /// hold the same number of pixels.
@@ -1458,7 +1458,7 @@ pub fn device_cmyk_to_srgb(input: &[u8], output: &mut [u8]) -> Option<()> {
     CMYK_TRANSFORM.convert_u8(input, output)
 }
 
-/// PdfCraft patch (67): the conversion of an `ICCBased` colour space's 8-bit samples to sRGB,
+/// PdfCraft patch (71): the conversion of an `ICCBased` colour space's 8-bit samples to sRGB,
 /// as pages draw that colour space.
 #[derive(Clone, Debug)]
 pub struct IccToSrgb(ICCProfile);
