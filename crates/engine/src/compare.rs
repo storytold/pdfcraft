@@ -278,6 +278,18 @@ impl crate::Document {
     /// [`Self::export_office`], and the pages whose text it had to leave out
     /// ([`OfficeExport::truncated_pages`]).
     pub fn export_office_checked(&self, format: OfficeFormat) -> OfficeExport {
+        if !self.editable() {
+            return OfficeExport::default();
+        }
+        let (pages, truncated_pages) = self.export_pages_checked(true, MAX_EXPORT_IMAGE_BYTES);
+        let title = self.info.title.clone().unwrap_or_else(|| {
+            std::path::Path::new(&self.name)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .unwrap_or_else(|| "Document".to_string())
+        });
         // RTF and Markdown leave pictures out.
         let (pages, truncated_pages) =
             self.export_pages_checked(!matches!(format, OfficeFormat::Rtf | OfficeFormat::Markdown), MAX_EXPORT_IMAGE_BYTES);

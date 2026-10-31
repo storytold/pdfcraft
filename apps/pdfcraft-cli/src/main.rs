@@ -60,7 +60,7 @@ mod run;
 mod ui;
 
 use check::{audit, check, check_one};
-use commands::{combine, edit, extract, info, render, split, text};
+use commands::{combine, edit, export, extract, info, render, split, text};
 use options::{OptionSpec, flag, validate_options};
 #[cfg(feature = "mcp")]
 use run::mcp;
@@ -73,6 +73,8 @@ const USAGE: &str = concat!(
 pdfcraft-cli info   <file.pdf> [--password PW]            document summary as JSON
                                                           (includes any declared PDF/A or PDF/UA level)
 pdfcraft-cli render <file.pdf> --page N [--dpi 96] --out x.png   (.png, .jpg, .tif or .pam)
+pdfcraft-cli export <file.pdf> --out report.docx [--password PW]
+                      (.docx, .pptx, .html or .rtf; format from the output name)
 pdfcraft-cli text   <file.pdf> [--page N]                  extracted text (pages separated by form feeds)
 pdfcraft-cli edit   <in.pdf> --out out.pdf [--rotate 1,3:90] [--delete 2,4] [--move 5:1]
                       [--insert-blank 1] [--title T] [--author A] [--full]
@@ -126,6 +128,7 @@ fn main() -> ExitCode {
         None => Err(format!("usage:\n{USAGE}").into()),
         Some("info") => info(&args[1..]),
         Some("render") => render(&args[1..]),
+        Some("export") => export(&args[1..]),
         Some("text") => text(&args[1..]),
         Some("edit") => edit(&args[1..]),
         Some("combine") => combine(&args[1..]),

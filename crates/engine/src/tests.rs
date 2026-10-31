@@ -5759,6 +5759,62 @@ fn exporting_office_files_keeps_images() {
     assert!(String::from_utf8(d.export_office(compare::OfficeFormat::Html)).unwrap().contains("data:image/png;base64,"));
 }
 
+#[test]
+fn exporting_office_files_embeds_images_in_rtf() {
+    let mut s = Session::new();
+    let text = s.create_from_text("t", "Picture page").unwrap();
+    let id = s.open("t.pdf", None, text, None).unwrap();
+    let png = export::Exporter::new(s.get(id).unwrap()).png(0, 20.0).unwrap();
+    let pic = s.create_from_images(&[("p.png".into(), png)]).unwrap();
+    let pid = s.open("p.pdf", None, pic, None).unwrap();
+    let d = s.get(pid).unwrap();
+    let html = d.export_office(compare::OfficeFormat::Html);
+    assert!(String::from_utf8(html.clone()).unwrap().contains("data:image/png;base64,"));
+
+    let rtf = d.export_office_checked(compare::OfficeFormat::Rtf);
+    assert!(rtf.truncated_pages.is_empty());
+    let out = String::from_utf8(rtf.bytes).unwrap();
+    assert!(out.contains("\\pict\\pngblip"), "{out}");
+    assert!(out.contains("89504E470D0A1A0A"), "{out}");
+}
+
+#[test]
+fn exporting_office_files_rejects_documents_whose_structure_could_not_be_read() {
+    let doc = Document {
+        id: DocId(0),
+        name: "broken.pdf".into(),
+        path: None,
+        bytes: Arc::new(Vec::new()),
+        display: Arc::new(Vec::new()),
+        info: Default::default(),
+        renderer: pdfcraft_render::RenderPool::new(Arc::new(Vec::new()), 1, pdfcraft_render::RenderConfig::default()),
+        password: None,
+        dirty: false,
+        generation: 0,
+        snapshot_generation: 0,
+        read_only_reason: Some("the document structure could not be read for editing".into()),
+        form: Arc::new(Vec::new()),
+        marker_scan: std::sync::OnceLock::new(),
+        links: std::sync::OnceLock::new(),
+        signatures: Arc::new(Vec::new()),
+        trust: Arc::new(TrustStore::default()),
+        sig_cache: Arc::new(pdfcraft_sign::DigestCache::default()),
+        editor: None,
+        config: pdfcraft_render::RenderConfig::default(),
+        js_output: js::JsOutput::default(),
+        xfa: None,
+        xfa_template: None,
+        xfa_scripts_off: false,
+        fonts_stale: false,
+        xfa_warnings: Vec::new(),
+        edit_notices: Vec::new(),
+    };
+    assert!(!doc.editable());
+    let out = doc.export_office_checked(compare::OfficeFormat::Docx);
+    assert!(out.bytes.is_empty());
+    assert!(out.truncated_pages.is_empty());
+}
+
 /// #314: a page whose content is drawn through a form XObject exports its text (the file from
 /// the report: no xref table, wrong stream lengths).
 #[test]
