@@ -96,16 +96,19 @@ pub(crate) fn panel(
     let chosen = builtin.iter().chain(&single).find(|p| p.id == state.profile).cloned().or_else(|| builtin.first().cloned());
     let shown = chosen.as_ref().map(|p| say(&p.name)).unwrap_or_default();
     let before = state.profile.clone();
-    craft_ui::ComboBox::from_id_salt("preflight-profile").selected_text(shown).width((ui.available_width() - 8.0).max(80.0)).show_ui(ui, |ui| {
-        for p in &builtin {
-            ui.selectable_value(&mut state.profile, p.id.clone(), say(&p.name));
-        }
-        ui.separator();
-        ui.label(egui::RichText::new(say("Single checks")).small().color(t.text_muted));
-        for p in &single {
-            ui.selectable_value(&mut state.profile, p.id.clone(), say(&p.name));
-        }
-    });
+    let profile_box =
+        craft_ui::ComboBox::from_id_salt("preflight-profile").selected_text(shown).width((ui.available_width() - 8.0).max(80.0)).show_ui(ui, |ui| {
+            for p in &builtin {
+                ui.selectable_value(&mut state.profile, p.id.clone(), say(&p.name));
+            }
+            ui.separator();
+            ui.label(egui::RichText::new(say("Single checks")).small().color(t.text_muted));
+            for p in &single {
+                ui.selectable_value(&mut state.profile, p.id.clone(), say(&p.name));
+            }
+        });
+    // The box shows no label of its own: a screen reader names it by what it chooses.
+    profile_box.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, tl!("Preflight profile")));
     if state.profile != before {
         state.selected = None;
         state.expanded.clear();
