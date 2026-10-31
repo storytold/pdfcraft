@@ -6362,6 +6362,55 @@ fn xfa_data_import_on_a_static_form_replaces_every_value_and_pictures_reach_its_
     assert!(xml.contains("<name>Bob</name>") && !xml.contains("<agree>1</agree>"), "{xml}");
 }
 
+/// A click on an XFA check box or radio button runs its change scripts, then its click scripts,
+/// which read the new value, show messages and may ask for the focus; a radio group's run before
+/// those of the button now on. All as one undo step. A text field's click script doesn't run when
+/// its value changes.
+#[test]
+fn xfa_check_box_and_radio_button_clicks_run_their_click_scripts() {
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::toggle_template()));
+    let mut s = Session::new();
+    let id = s.open("toggle.pdf", None, bytes, None).expect("opens");
+    // What the scripts have written to the form's log field so far.
+    let log = |s: &Session| s.get(id).unwrap().form.iter().find(|f| f.name == "log").and_then(|f| f.value.first().cloned()).unwrap_or_default();
+    s.apply(id, Edit::SetFieldValue { name: "agree".into(), value: FieldValue::Check(true) }).unwrap();
+    assert_eq!(log(&s), "change 1;click 1;", "change, then click, each seeing the new value");
+    let out = s.take_js_output(id);
+    assert_eq!(out.alerts, [crate::js::Message::plain("Agreed")]);
+    assert!(out.requests.iter().any(|r| matches!(r, pdfcraft_js::Request::Focus(n) if n == "note")), "a click may move the focus: {out:?}");
+    s.apply(id, Edit::SetFieldValue { name: "agree".into(), value: FieldValue::Check(false) }).unwrap();
+    assert_eq!(log(&s), "change 1;click 1;change 0;click 0;", "turning it off is a click too");
+    // One undo step takes back the click and what its scripts did.
+    s.undo(id).unwrap();
+    assert_eq!(log(&s), "change 1;click 1;");
+    // A radio group runs each activity's scripts, then the button now on runs its own; the
+    // button turned off runs none. Exit scripts follow, the button's first.
+    let state = |s: &Session, i: usize| s.get(id).unwrap().form.iter().find(|f| f.name == "answer").and_then(|f| f.widgets.get(i)?.on_state.clone());
+    let (yes, no) = (state(&s, 0).expect("yes"), state(&s, 1).expect("no"));
+    s.apply(id, Edit::SetFieldValue { name: "answer".into(), value: FieldValue::Radio(Some(no)) }).unwrap();
+    assert!(log(&s).ends_with("group change N;no change;group click;no click;no exit;group exit;"), "{}", log(&s));
+    s.apply(id, Edit::SetFieldValue { name: "answer".into(), value: FieldValue::Radio(Some(yes)) }).unwrap();
+    assert!(log(&s).ends_with("no exit;group exit;group change Y;yes change;group click;yes click;yes exit;group exit;"), "{}", log(&s));
+    // A text field's value isn't set by a click.
+    s.apply(id, Edit::SetFieldValue { name: "note".into(), value: FieldValue::Text("typed".into()) }).unwrap();
+    assert!(!log(&s).contains("note click"), "{}", log(&s));
+    // A value set again, unchanged, isn't a click: no click script, no message or request.
+    let _ = s.take_js_output(id);
+    let seen = log(&s);
+    s.apply(id, Edit::SetFieldValue { name: "agree".into(), value: FieldValue::Check(true) }).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "answer".into(), value: FieldValue::Radio(Some(state(&s, 0).unwrap())) }).unwrap();
+    let after = log(&s);
+    assert!(!after.get(seen.len()..).unwrap_or_default().contains("click"), "{after}");
+    let out = s.take_js_output(id);
+    assert!(out.alerts.is_empty() && out.requests.is_empty(), "{out:?}");
+    // A batch that turns the check box off twice clicks it once: the second set changes nothing.
+    let off = || Edit::SetFieldValue { name: "agree".into(), value: FieldValue::Check(false) };
+    let seen = log(&s);
+    s.apply(id, Edit::Batch { label: "twice".into(), edits: vec![off(), off()] }).unwrap();
+    let after = log(&s);
+    assert_eq!(after.get(seen.len()..).unwrap_or_default().matches("click 0;").count(), 1, "{after}");
+}
+
 /// Importing data into a dynamic form adds and removes the rows of its repeating subform to
 /// match, and the calculations over them run again.
 #[test]
