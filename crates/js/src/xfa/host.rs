@@ -34,6 +34,8 @@ pub(crate) struct XHost {
     pub(super) added: usize,
     /// Index of `this`.
     pub(crate) current: usize,
+    /// The event's activity (`initialize`, `click`, …).
+    pub(crate) activity: String,
     /// Where the effect setting a property of an object is in `effects`, by (property, SOM):
     /// setting it again replaces that effect (the last value wins) unless something that
     /// depends on order (rows added or removed, a reset) came after it.
@@ -48,7 +50,14 @@ pub(crate) struct XHost {
     /// Bytes of text kept in effects, console lines and values written, against [`MAX_PAYLOAD`].
     kept: usize,
     dropped_bytes: usize,
+    /// Field properties a script set through `event.target.getField(…)` that the XFA form has
+    /// no counterpart for here (`field.readonly`, say), as "SOM: property", at most
+    /// [`MAX_UNAPPLIED`] of them.
+    unapplied: Vec<String>,
 }
+
+/// Most unapplied field properties a run names (see [`XHost::unapplied`]).
+const MAX_UNAPPLIED: usize = 20;
 
 impl XHost {
     /// The host for a script on `root` (the template's root subform), with `this` at the node
@@ -74,6 +83,8 @@ impl XHost {
             dropped_console: 0,
             kept: 0,
             dropped_bytes: 0,
+            unapplied: Vec::new(),
+            activity: String::new(),
         }
     }
 
@@ -209,7 +220,21 @@ impl XHost {
         if self.clipped_values > 0 {
             out.push(format!("the script set {} value(s) longer than {MAX_VALUE} characters; they were cut", self.clipped_values));
         }
+        if !self.unapplied.is_empty() {
+            out.push(format!(
+                "the script set field properties through getField that XFA fields don't take this way; they were left as they were: {}",
+                self.unapplied.join(", ")
+            ));
+        }
         out
+    }
+
+    /// Note that `what` ("SOM: property") was set through `getField` and not applied.
+    pub(crate) fn unapplied(&mut self, what: String) {
+        let what = clip(what);
+        if self.unapplied.len() < MAX_UNAPPLIED && !self.unapplied.contains(&what) {
+            self.unapplied.push(what);
+        }
     }
 
     /// Give node `i` the value `text` when it is a field or exclusion group (nothing else

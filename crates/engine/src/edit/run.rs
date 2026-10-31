@@ -172,6 +172,8 @@ pub(crate) struct EditCtx {
     pub(crate) xfa_removed: Vec<String>,
     /// Pages in the document, for `xfa.layout.pageCount()`.
     pub(crate) pages: usize,
+    /// The document's signature fields and how each signature checks, for the XFA scripts.
+    pub(crate) signatures: Arc<std::collections::HashMap<String, pdfcraft_js::SignatureState>>,
     pub(crate) date: Option<String>,
     /// Today in local time, for date tokens.
     pub(crate) today: (i64, u32, u32),
@@ -207,6 +209,7 @@ impl EditCtx {
             xfa_time_scale: 1,
             xfa_removed: Vec::new(),
             pages: 0,
+            signatures: Default::default(),
             date: now.map(pdfcraft_cos::pdf_date),
             today: (1970, 1, 1),
             seed,
@@ -422,8 +425,14 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         },
         Edit::XfaEvent { som, activity } => {
             let tpl = cx.xfa.clone().ok_or_else(|| EditError::Invalid("this is not a laid-out XFA form, or JavaScript is off".into()))?;
-            let mut run =
-                xfa::XfaRun { page_count: cx.pages, out: &mut cx.xfa_out, datasets: cx.xfa_datasets, ran_away: false, time_scale: cx.xfa_time_scale };
+            let mut run = xfa::XfaRun {
+                page_count: cx.pages,
+                out: &mut cx.xfa_out,
+                datasets: cx.xfa_datasets,
+                ran_away: false,
+                time_scale: cx.xfa_time_scale,
+                signatures: Arc::clone(&cx.signatures),
+            };
             let ran = xfa::on_event(doc, &tpl, som, activity, &mut run);
             cx.xfa_datasets = run.datasets;
             cx.xfa_ran_away |= run.ran_away;

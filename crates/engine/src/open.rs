@@ -189,6 +189,7 @@ impl Session {
                             datasets: None,
                             ran_away: false,
                             time_scale: context.xfa_time_scale,
+                            signatures: Arc::new(crate::js::signature_states(&pdfcraft_sign::pdf::list(&work, &bytes, &context.trust))),
                         };
                         let changes = xfa::on_open(&mut work, &tpl, &mut run);
                         if run.ran_away {

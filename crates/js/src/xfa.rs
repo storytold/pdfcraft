@@ -15,6 +15,7 @@ use boa_engine::object::builtins::{JsArray, JsProxy};
 use boa_engine::property::Attribute;
 use boa_engine::{Context, JsObject, JsResult, JsString, JsValue, NativeFunction, Source, js_string};
 
+use crate::globals::data_object;
 use crate::{Limits, Message, arg, as_number, error, function, platform, printd, printf, printx, refuse, s, scand, text};
 
 mod globals;
@@ -24,6 +25,8 @@ mod model;
 mod nodes;
 mod run;
 
+pub(crate) use globals::field_written;
+pub use globals::som_names;
 pub(crate) use host::{HNode, XHost};
 pub use model::{MAX_ALERTS, MAX_CONSOLE, MAX_EFFECTS, XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaOutcome};
 pub(crate) use model::{MAX_LINE, MAX_PAYLOAD, clip, clip_result, reset_names};

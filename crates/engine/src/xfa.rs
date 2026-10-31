@@ -53,6 +53,7 @@ fn click_only(e: &XfaEffect) -> Option<&'static str> {
         XfaEffect::Print => Some("print"),
         XfaEffect::SaveAs => Some("save"),
         XfaEffect::LaunchUrl(_) => Some("open a link"),
+        XfaEffect::OpenAttachment { .. } => Some("open an attached file"),
         XfaEffect::ShowPanel(_) => Some("show a side panel"),
         XfaEffect::SetFocus(_) => Some("move the focus"),
         _ => None,
@@ -132,6 +133,11 @@ pub(crate) struct XfaRun<'a> {
     /// start and each script's own): 1, unless the session was given another
     /// ([`crate::Session::with_xfa_time_scale`]).
     pub time_scale: u32,
+    /// How each signature field's signature checks, by field name
+    /// ([`crate::js::signature_states`]), for
+    /// `signatureInfo()` and `signatureValidate()` on the fields `event.target.getField(…)`
+    /// gives.
+    pub signatures: Arc<HashMap<String, pdfcraft_js::SignatureState>>,
 }
 
 /// The live form node `n`, with its descendants, as the script engine's snapshot of it.
@@ -183,30 +189,9 @@ fn split_instance(tpl: &Template, som: &str) -> Option<(pdfcraft_xfa::DataPath, 
     Some((path, parent_som, name, index))
 }
 
-/// A SOM path without its indexes (`form.page1.qty`), for matching names scripts pass.
-fn plain_som(som: &str) -> String {
-    let mut out = String::with_capacity(som.len());
-    let mut skip = false;
-    for c in som.chars() {
-        match c {
-            '[' => skip = true,
-            ']' => skip = false,
-            _ if !skip => out.push(c),
-            _ => {}
-        }
-    }
-    out
-}
-
-/// Does `name` from a script (`qty`, `page1.qty`, `xfa.form.form.page1.qty`, or a container
-/// such as `table`) name this SOM or one of its ancestors?
+/// Does `name` from a script name the object at `som` or one of its ancestors?
 fn som_matches(som: &str, name: &str) -> bool {
-    let plain = plain_som(som);
-    let n = plain_som(name.trim());
-    let n = n.strip_prefix("xfa.form.").or_else(|| n.strip_prefix("$form.")).unwrap_or(&n);
-    let want: Vec<&str> = n.split('.').filter(|s| !s.is_empty()).collect();
-    let have: Vec<&str> = plain.split('.').filter(|s| !s.is_empty()).collect();
-    !want.is_empty() && have.windows(want.len()).any(|w| w == want.as_slice())
+    pdfcraft_js::xfa::som_names(som, name)
 }
 
 /// A generated field as the runner tracks it: kind, value and on state.
@@ -244,6 +229,9 @@ fn data_text(info: &FieldInfo) -> String {
     }
 }
 
+/// The document's fields as scripts get them, with each one's place by field name.
+type DocFields = (Arc<Vec<pdfcraft_js::FieldState>>, HashMap<String, usize>);
+
 /// Runs the scripts of one event (opening, a change, a click) against one document: what
 /// they change is kept in memory (data, field values, overrides) and written once, when the
 /// event ends or the form has to be laid out again.
@@ -268,6 +256,10 @@ struct Runner<'a, 'b> {
     /// Widget names by the data node they bind to (built with `by_som`).
     by_path: Option<HashMap<pdfcraft_xfa::DataPath, Vec<String>>>,
     fields: Option<HashMap<String, FieldInfo>>,
+    /// The document's fields as `event.target.getField(…)` gives them (named by SOM, values as
+    /// the scripts left them), with each one's place by field name; built for the first script
+    /// and kept up to date as values change, rebuilt when the fields themselves change.
+    doc_fields: Option<DocFields>,
     /// The live form as last built; dropped when a script changed the form.
     cached: Option<LiveForm>,
     /// The script engine for this event: one thread for all its scripts, each run in a fresh
@@ -301,6 +293,7 @@ impl<'a, 'b> Runner<'a, 'b> {
             by_som: None,
             by_path: None,
             fields: None,
+            doc_fields: None,
             cached: None,
             session: None,
             changes: Changes::default(),
@@ -315,7 +308,7 @@ impl<'a, 'b> Runner<'a, 'b> {
 
     /// The script engine for this event.
     fn session(&mut self) -> &mut XfaSession {
-        let doc_info = XfaDoc { file_name: String::new(), page: 0, page_count: self.run.page_count };
+        let doc_info = XfaDoc { file_name: String::new(), page: 0, page_count: self.run.page_count, ..Default::default() };
         let scale = self.run.time_scale;
         self.session.get_or_insert_with(|| XfaSession::new(doc_info).with_time_scale(scale))
     }
@@ -371,6 +364,35 @@ impl<'a, 'b> Runner<'a, 'b> {
     fn widgets_at(&mut self, path: &pdfcraft_xfa::DataPath) -> Vec<String> {
         self.by_som();
         self.by_path.as_ref().and_then(|m| m.get(path)).cloned().unwrap_or_default()
+    }
+
+    /// The document's fields for [`Script::fields`], see [`Runner::doc_fields`].
+    fn doc_fields(&mut self) -> Arc<Vec<pdfcraft_js::FieldState>> {
+        if let Some((fields, _)) = &self.doc_fields {
+            return Arc::clone(fields);
+        }
+        let som_of: HashMap<String, String> = self.by_som().iter().map(|(som, name)| (name.clone(), som.clone())).collect();
+        let values: HashMap<String, Vec<String>> = self.fields().iter().map(|(name, info)| (name.clone(), info.value.clone())).collect();
+        let mut at = HashMap::new();
+        let mut out = Vec::new();
+        for f in pdfcraft_forms::fields(self.doc) {
+            let mut state = crate::js::field_state(self.doc, &f);
+            if let Some(v) = values.get(&f.name) {
+                state.value = v.clone();
+            }
+            // Not among the signatures checked (signed since?): as its value shows it.
+            if let Some(s) = self.run.signatures.get(&f.name) {
+                state.signature = *s;
+            }
+            if let Some(som) = som_of.get(&f.name) {
+                state.name = som.clone();
+            }
+            at.insert(f.name, out.len());
+            out.push(state);
+        }
+        let out = Arc::new(out);
+        self.doc_fields = Some((Arc::clone(&out), at));
+        out
     }
 
     fn fields(&mut self) -> &mut HashMap<String, FieldInfo> {
@@ -462,6 +484,11 @@ impl<'a, 'b> Runner<'a, 'b> {
                 continue;
             }
             self.fields().insert(name.clone(), updated);
+            if let Some((fields, at)) = self.doc_fields.as_mut()
+                && let Some(f) = at.get(name).and_then(|i| Arc::make_mut(fields).get_mut(*i))
+            {
+                f.value = new_value.clone();
+            }
             self.field_changes.insert(name.clone(), new_value);
             changed = true;
         }
@@ -495,6 +522,7 @@ impl<'a, 'b> Runner<'a, 'b> {
                 .collect();
             pdfcraft_forms::apply_script_changes(self.doc, &changes, &mut pdfcraft_forms::NoScripts).map_err(|e| e.to_string())?;
             self.fields = None;
+            self.doc_fields = None;
         }
         if self.ov_dirty {
             pdfcraft_xfa::set_overrides(self.doc, &self.ov).map_err(|e| e.to_string())?;
@@ -528,6 +556,7 @@ impl<'a, 'b> Runner<'a, 'b> {
         self.by_som = None;
         self.by_path = None;
         self.fields = None;
+        self.doc_fields = None;
         self.invalidate();
         Ok(())
     }
@@ -546,6 +575,7 @@ impl<'a, 'b> Runner<'a, 'b> {
         }
         pdfcraft_forms::reset(self.doc, listed.as_deref()).map_err(|e| e.to_string())?;
         self.fields = None;
+        self.doc_fields = None;
         let infos = self.fields().clone();
         for (som, name) in &by_som {
             if listed.as_ref().is_some_and(|l| !l.contains(name)) {
@@ -637,6 +667,7 @@ impl<'a, 'b> Runner<'a, 'b> {
                 XfaEffect::Print => self.run.out.requests.push(Request::Print),
                 XfaEffect::SaveAs => self.run.out.requests.push(Request::SaveAs),
                 XfaEffect::LaunchUrl(u) => self.run.out.requests.push(Request::LaunchUrl(u.clone())),
+                XfaEffect::OpenAttachment { name, open } => self.run.out.requests.push(Request::OpenAttachment { name: name.clone(), open: *open }),
                 XfaEffect::ShowPanel(p) => self.run.out.requests.push(Request::ShowPanel(*p)),
                 XfaEffect::SetFocus(som) => {
                     if let Some(name) = self.by_som().get(som).cloned() {
@@ -663,6 +694,7 @@ impl<'a, 'b> Runner<'a, 'b> {
         self.check_live();
         let event = XfaEvent { activity: ev.activity.clone(), target: ev.som.clone(), new_text: new_text.to_string(), prev_text: String::new() };
         let root = to_js(&self.live().root);
+        let fields = Some(self.doc_fields());
         let script = Script {
             source: ev.script.clone(),
             formcalc: ev.formcalc,
@@ -670,6 +702,7 @@ impl<'a, 'b> Runner<'a, 'b> {
             root,
             limits: limits_for(&ev.activity),
             timeout: timeout_for(&ev.activity).saturating_mul(self.run.time_scale),
+            fields,
         };
         let o = self.session().run(script);
         if o.abandoned {

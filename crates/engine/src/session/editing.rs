@@ -26,6 +26,7 @@ impl Session {
         }
         cx.xfa_time_scale = xfa_time_scale;
         cx.pages = doc.info.pages.len();
+        cx.signatures = Arc::new(crate::js::signature_states(&doc.signatures));
         cx.today = today;
         let reason = doc.read_only_reason.clone().unwrap_or_default();
         let signed = doc.is_signed();
@@ -128,6 +129,7 @@ impl Session {
                     datasets: cx.xfa_datasets,
                     ran_away: false,
                     time_scale: cx.xfa_time_scale,
+                    signatures: Arc::clone(&cx.signatures),
                 };
                 // Every changed field's scripts, then the calculations once (after a reset,
                 // only those).

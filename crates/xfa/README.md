@@ -108,7 +108,11 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   not locale-aware pictures beyond simple number and date ones, or `Get`/`Post`/`Put` (refused).
   The object model covers what forms commonly use (`xfa.form`
   navigation and SOM resolution, `rawValue`, `presence`, `access`, instance managers,
-  `xfa.host` messages, reset, print, focus and URLs, `xfa.layout` page numbers, `xfa.event`);
+  `xfa.host` messages, reset, print, focus and URLs, `xfa.layout` page numbers, `xfa.event`,
+  and the bare `event`'s target, the document, with `getField` (by full SOM expression, giving
+  the form object model's field object, whose value writes through to the XFA field and whose
+  `signatureInfo().status` and `signatureValidate()` give a signature field's state as read on
+  opening), `resetForm` and `exportDataObject`);
   not `xfa.template`, data descriptions, `xfa.connectionSet`, `border`/`font`/`ui` properties
   (reads give a sink that accepts writes), `execEvent`, or the change event per keystroke.
   Validate failures show their message and keep the value, as Acrobat does for scripts.
