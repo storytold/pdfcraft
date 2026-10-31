@@ -1447,6 +1447,51 @@ static CMYK_TRANSFORM: LazyLock<ICCProfile> = LazyLock::new(|| {
     ICCProfile::new(include_bytes!("../assets/CGATS001Compat-v2-micro.icc"), 4).unwrap()
 });
 
+/// PdfCraft patch (71): convert 8-bit `DeviceCMYK` samples (four a pixel) in `input` to sRGB
+/// (three a pixel) in `output`, as pages draw `DeviceCMYK`, so that a caller writing image
+/// samples out (image export) shows the colours the page does. `None` when the lengths don't
+/// hold the same number of pixels.
+pub fn device_cmyk_to_srgb(input: &[u8], output: &mut [u8]) -> Option<()> {
+    if input.len() % 4 != 0 || input.len() / 4 * 3 != output.len() {
+        return None;
+    }
+    CMYK_TRANSFORM.convert_u8(input, output)
+}
+
+/// PdfCraft patch (71): the conversion of an `ICCBased` colour space's 8-bit samples to sRGB,
+/// as pages draw that colour space.
+#[derive(Clone, Debug)]
+pub struct IccToSrgb(ICCProfile);
+
+impl IccToSrgb {
+    /// The conversion through `profile` for samples of `components` (1, 3 or 4) components.
+    /// `None` when the profile can't be read for that many components; pages then draw the
+    /// colour space's `/Alternate` instead.
+    pub fn new(profile: &[u8], components: usize) -> Option<Self> {
+        ICCProfile::new(profile, components).map(Self)
+    }
+
+    /// Whether pages draw this profile's samples as they are, as sRGB (a three-component
+    /// profile marked as sRGB).
+    pub fn is_srgb(&self) -> bool {
+        self.0.is_srgb() && self.0.0.number_components == 3
+    }
+
+    /// Convert the samples in `input` to sRGB (three a pixel) in `output`. `None` when the
+    /// lengths don't hold the same number of pixels.
+    pub fn convert(&self, input: &[u8], output: &mut [u8]) -> Option<()> {
+        let n = self.0.0.number_components;
+        if n == 0 || input.len() % n != 0 || input.len() / n * 3 != output.len() {
+            return None;
+        }
+        if self.is_srgb() {
+            output.copy_from_slice(input);
+            return Some(());
+        }
+        self.0.transform_u8().transform(input, output).ok()
+    }
+}
+
 pub(crate) trait ToRgb {
     fn convert_sample(&self, input: &[f32], output: &mut [u8], manual_scale: bool) -> Option<()> {
         // We prefer using the u8 variant for single samples, which is especially
