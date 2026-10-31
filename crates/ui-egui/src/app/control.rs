@@ -14,6 +14,16 @@ impl PdfCraftApp {
     ///
     /// This is the seed of the UI control channel (M3.9): the same verbs become `ui.set` calls.
     pub fn set_option(&mut self, key: &str, value: &str) -> Result<(), String> {
+        if key == "print-file" {
+            // The file's Print dialog, now if it is open, else once it opens.
+            let open = self
+                .views
+                .iter()
+                .map(|v| v.id)
+                .find(|id| self.session.get(*id).and_then(|d| d.path.as_deref()).is_some_and(|p| super::files::same_file(p, value)));
+            self.print_requests.push((value.to_string(), open));
+            return Ok(());
+        }
         let view = self.active.and_then(|i| self.views.get_mut(i));
         match (key, view) {
             ("language", _) => {
@@ -114,6 +124,12 @@ impl PdfCraftApp {
                         let page = self.active.map_or(0, |i| self.views[i].current);
                         self.start_signing(page, None, None, (value == "certify").then_some(2));
                         Some(Dialog::Sign)
+                    }
+                    "print" => {
+                        // Same path as the menu, so the printers and pages are seeded; nothing
+                        // with no document open.
+                        self.open_print();
+                        self.dialog
                     }
                     "number-pages" => {
                         // Same path as the menu, so the page range is seeded.

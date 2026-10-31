@@ -147,6 +147,7 @@ impl PdfCraftApp {
             app_frame_shown: None,
             password_prompt: None,
             document_copy: None,
+            print_requests: Vec::new(),
             unlock_prompt: None,
             full_screen: false,
             inbox: Default::default(),
@@ -580,6 +581,7 @@ impl eframe::App for PdfCraftApp {
         for view in &mut self.views {
             view.begin_render_frame();
         }
+        self.open_queued_print();
         self.sync_titles(&ctx);
         // The accessible window takes the same name, so a screen reader (AT-SPI on Linux, UIA on
         // Windows) can tell it apart (#4614). egui builds the root node afresh every pass.

@@ -256,6 +256,13 @@ impl PdfCraftApp {
         activate: bool,
     ) -> Result<DocId, String> {
         let id = self.session.commit_open(prepared);
+        // Every Print request waiting for this file: asked for twice while it was opening, it is
+        // opened once, and each request still gets its dialog (review on #1723).
+        if let Some(p) = &path {
+            for request in self.print_requests.iter_mut().filter(|(f, open)| open.is_none() && same_file(f, p)) {
+                request.1 = Some(id);
+            }
+        }
         self.password_prompt = None;
         // The reading-colours preference is app-wide: a newly opened document starts with it.
         // Idempotent: the engine returns `false` when the document has the setting already.
