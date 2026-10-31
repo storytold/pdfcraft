@@ -394,6 +394,8 @@ fn native_wayland(_: &eframe::CreationContext<'_>) -> bool {
     false
 }
 
+/// Build the desktop app and handle startup files and single-instance handoffs.
+/// A Windows launch with accepted PDF paths requests taskbar attention when necessary.
 fn app_creator<'a>(
     launch: Launch,
     started: Rc<Cell<bool>>,
@@ -467,6 +469,10 @@ fn app_creator<'a>(
                 &[("folder", &w.folder.display().to_string()), ("error", &w.error)],
             );
         }
+        // A new Windows process launched by a document opener can start behind the foreground
+        // application. Request the same taskbar attention as a handed-off open (#5344).
+        // The shell ignores the request if the PdfCraft window is already focused.
+        let mut command_line_open = false;
         if create_images {
             if let Err(e) = app.begin_image_import_paths(&files) {
                 app.notify(e);
@@ -476,13 +482,19 @@ fn app_creator<'a>(
             // the command line open after them, in front (#442).
             app.reopen_last_files(&files);
             for f in files {
-                app.open_path(&f);
+                let outcome = app.open_path(&f);
+                if cfg!(target_os = "windows") && outcome != pdfcraft_ui_egui::OpenOutcome::Failed {
+                    command_line_open = true;
+                }
             }
         }
         for (k, v) in options {
             if let Err(e) = app.set_option(&k, &v) {
                 log::warn!("--{k} {v}: {e}");
             }
+        }
+        if command_line_open {
+            cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(egui::UserAttentionType::Informational));
         }
         Ok(Box::new(app))
     })

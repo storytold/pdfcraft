@@ -85,9 +85,9 @@ impl Server {
 
     /// The queue the UI drains every frame (`PdfCraftApp::os_events`). Files that arrived before
     /// the window existed are in the first batch. A batch also brings the window forward, as the
-    /// new window it replaces would have been. A Wayland window can't bring itself forward (winit
-    /// ignores `Focus` there), so on `native_wayland` it asks for the user's attention instead,
-    /// which desktops show by highlighting it in the taskbar.
+    /// new window it replaces would have been. Wayland can't honor `Focus`; on Windows the OS can
+    /// deny foreground activation to a background app. Both therefore request taskbar attention
+    /// as a fallback, without changing how already-focused windows behave (#5344).
     pub fn connect(&self, ctx: &egui::Context, native_wayland: bool) -> OsEventsFn {
         let wake = ctx.clone();
         self.inbox.lock().unwrap_or_else(PoisonError::into_inner).wake = Some(Box::new(move || wake.request_repaint()));
@@ -98,14 +98,24 @@ impl Server {
             if paths.is_empty() {
                 return Vec::new();
             }
-            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-            if native_wayland {
-                ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(egui::UserAttentionType::Informational));
+            let focused = ctx.input(|i| i.viewport().focused == Some(true));
+            for cmd in handoff_viewport_commands(native_wayland, focused, cfg!(target_os = "windows")) {
+                ctx.send_viewport_cmd(cmd);
             }
             vec![OsEvent::Open(paths)]
         })
     }
+}
+
+/// Commands for a handoff. On Windows, SetForegroundWindow may refuse focus from a process
+/// which isn't foreground; requesting attention lets the shell highlight the taskbar button.
+/// Preserve Wayland's existing attention request; on Windows skip it if focused.
+fn handoff_viewport_commands(native_wayland: bool, focused: bool, windows: bool) -> Vec<egui::ViewportCommand> {
+    let mut commands = vec![egui::ViewportCommand::Minimized(false), egui::ViewportCommand::Focus];
+    if native_wayland || (windows && !focused) {
+        commands.push(egui::ViewportCommand::RequestUserAttention(egui::UserAttentionType::Informational));
+    }
+    commands
 }
 
 /// The request a launch sends: `{"open":[…]}` and a newline.
@@ -391,6 +401,68 @@ mod tests {
         assert_eq!(socket_name(None, Some(r"..\x/y:z")), "instance-xyz.sock", "never a path");
         assert_eq!(socket_name(None, None), "instance.sock");
         assert_eq!(socket_name(None, Some("")), "instance.sock");
+    }
+
+    #[test]
+    fn handoff_requests_taskbar_attention_on_windows_and_wayland() {
+        let wayland = handoff_viewport_commands(true, false, false);
+        assert!(matches!(
+            wayland.as_slice(),
+            [
+                egui::ViewportCommand::Minimized(false),
+                egui::ViewportCommand::Focus,
+                egui::ViewportCommand::RequestUserAttention(egui::UserAttentionType::Informational)
+            ]
+        ));
+
+        let other = handoff_viewport_commands(false, false, false);
+        let focused = handoff_viewport_commands(false, true, true);
+        let wayland_focused = handoff_viewport_commands(true, true, false);
+        let windows = handoff_viewport_commands(false, false, true);
+        assert!(!focused.iter().any(|cmd| matches!(cmd, egui::ViewportCommand::RequestUserAttention(_))));
+        assert!(
+            wayland_focused.iter().any(|cmd| matches!(cmd, egui::ViewportCommand::RequestUserAttention(egui::UserAttentionType::Informational))),
+            "Wayland keeps its previous attention behaviour"
+        );
+        assert!(windows.iter().any(|cmd| matches!(cmd, egui::ViewportCommand::RequestUserAttention(egui::UserAttentionType::Informational))));
+        assert!(matches!(other.first(), Some(egui::ViewportCommand::Minimized(false))));
+        assert!(matches!(other.get(1), Some(egui::ViewportCommand::Focus)));
+        assert_eq!(
+            other.iter().any(|cmd| matches!(
+                cmd,
+                egui::ViewportCommand::RequestUserAttention(egui::UserAttentionType::Informational)
+            )),
+            false,
+            "X11 does not request attention after a handoff"
+        );
+    }
+
+    #[test]
+    fn delivered_files_emit_attention_command_only_when_appropriate() {
+        for native_wayland in [false, true] {
+            let server = Server::new();
+            let ctx = egui::Context::default();
+            let mut poll = server.connect(&ctx, native_wayland);
+            server.deliver(vec!["sample.pdf".into()]);
+
+            let out = ctx.run(egui::RawInput::default(), |_ctx| {
+                assert!(matches!(poll().as_slice(), [OsEvent::Open(paths)] if paths == &["sample.pdf"]));
+            });
+            let attention = out
+                .viewport_output
+                .values()
+                .flat_map(|v| &v.commands)
+                .any(|cmd| matches!(cmd, egui::ViewportCommand::RequestUserAttention(egui::UserAttentionType::Informational)));
+            assert_eq!(attention, native_wayland || cfg!(target_os = "windows"));
+
+            let idle = ctx.run(egui::RawInput::default(), |_ctx| {
+                assert!(poll().is_empty(), "the same handoff must not be delivered twice");
+            });
+            assert!(
+                !idle.viewport_output.values().flat_map(|v| &v.commands).any(|cmd| matches!(cmd, egui::ViewportCommand::RequestUserAttention(_))),
+                "no new files means no attention request"
+            );
+        }
     }
 
     #[test]
