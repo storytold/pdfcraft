@@ -3420,11 +3420,11 @@ title = "Edit attachment descriptions"
 area = "D"
 tier = "P2"
 milestone = "M12"
-status = "planned"
+status = "shipped"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["attachment_edit"]
+evidence = ["crates/organize/src/tests.rs::attachment_description_changes_only_the_file_spec_and_can_be_cleared", "crates/automation/tests/it/automation.rs::attachment_descriptions_can_be_edited_cleared_undone_and_saved", "crates/ui-egui/tests/it/attachment_row.rs::the_description_can_be_edited_from_the_row_menu"]
+notes = "The document-level attachment row menu edits only the Filespec /Desc; an empty description clears it. The embedded stream and other file-spec keys stay intact. Undo/redo and the headless attachment_edit tool use the same edit. Page paper-clip comments are not affected."
 
 [[feature]]
 id = "organize.associated-files"

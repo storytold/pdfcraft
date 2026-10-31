@@ -362,6 +362,13 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                     ui.close();
                                 }
                                 if let Some(key) = deletable
+                                    && ui.button(tl!("Edit description")).clicked()
+                                {
+                                    app.attachment_description_draft = Some((id, key.clone(), a.description.clone().unwrap_or_default()));
+                                    app.dialog = Some(crate::Dialog::AttachmentDescription);
+                                    ui.close();
+                                }
+                                if let Some(key) = deletable
                                     && ui.button(tl!("Delete attachment")).clicked()
                                 {
                                     panel_edit = Some(pdfcraft_engine::Edit::DeleteAttachment { key: key.clone() });

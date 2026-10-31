@@ -165,6 +165,7 @@ impl PdfCraftApp {
             pending_overwrite: None,
             save_override: None,
             props_draft: None,
+            attachment_description_draft: None,
             view_draft: None,
             custom_draft: None,
             requests: Default::default(),

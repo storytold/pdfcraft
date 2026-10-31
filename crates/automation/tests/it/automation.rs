@@ -9325,6 +9325,35 @@ fn attaching_and_deleting_files_through_the_tools() {
 }
 
 #[test]
+fn attachment_descriptions_can_be_edited_cleared_undone_and_saved() {
+    let dir = workdir("attachment-description");
+    let bytes = b"original attachment bytes";
+    std::fs::write(dir.join("notes.txt"), bytes).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path": "a.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "attachment_add", json!({"doc": doc, "path": "notes.txt", "description": "Original"}));
+
+    ok(&mut a, "attachment_edit", json!({"doc": doc, "name": "notes.txt", "description": "Updated"}));
+    assert_eq!(ok(&mut a, "doc_info", json!({"doc": doc}))["attachments"][0]["description"], "Updated");
+    ok(&mut a, "edit_undo", json!({"doc": doc}));
+    assert_eq!(ok(&mut a, "doc_info", json!({"doc": doc}))["attachments"][0]["description"], "Original");
+    ok(&mut a, "edit_redo", json!({"doc": doc}));
+    assert_eq!(ok(&mut a, "doc_info", json!({"doc": doc}))["attachments"][0]["description"], "Updated");
+
+    ok(&mut a, "attachment_edit", json!({"doc": doc, "name": "notes.txt", "description": ""}));
+    assert!(ok(&mut a, "doc_info", json!({"doc": doc}))["attachments"][0]["description"].is_null());
+    ok(&mut a, "edit_undo", json!({"doc": doc}));
+    ok(&mut a, "doc_save", json!({"doc": doc, "path": "edited.pdf", "full": true}));
+    let saved = std::fs::read(dir.join("edited.pdf")).unwrap();
+    let info = pdfcraft_render::inspect(std::sync::Arc::new(saved.clone()), None).unwrap();
+    let attachment = info.attachments.iter().find(|item| item.name == "notes.txt").unwrap();
+    assert_eq!(attachment.description.as_deref(), Some("Updated"));
+    assert_eq!(pdfcraft_render::attachment_data(&saved, None, attachment).unwrap(), bytes);
+    let reopened = ok(&mut a, "doc_open", json!({"path": "edited.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "doc_info", json!({"doc": reopened}))["attachments"][0]["description"], "Updated");
+}
+
+#[test]
 fn fdf_nested_comment_values_survive_export_import_and_save_through_tools() {
     use pdfcraft_cos::{Dict, Document, Object, PdfString, SaveOptions, write_full};
     use std::sync::Arc;

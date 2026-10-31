@@ -127,6 +127,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::SetInitialView(_)
         | Edit::AddAttachment { .. }
         | Edit::DeleteAttachment { .. }
+        | Edit::EditAttachmentDescription { .. }
         | Edit::AutoTagText
         | Edit::SetAltText { .. }
         | Edit::AutoTagFormFields
@@ -360,6 +361,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_organize::add_attachment(doc, name, bytes, description.as_deref(), mime.as_deref(), cx.date.as_deref())?;
         }
         Edit::DeleteAttachment { key } => pdfcraft_organize::delete_attachment(doc, key)?,
+        Edit::EditAttachmentDescription { key, description } => {
+            pdfcraft_organize::set_attachment_description(doc, key, description.as_deref())?;
+        }
         Edit::ReplaceText { page, quads, text, author, strike, caret } => {
             // One `/NM` each: the caret replies to the strikeout, and XFDF names that reply by
             // the strikeout's `/NM` (#2666).
