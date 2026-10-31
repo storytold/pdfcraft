@@ -163,13 +163,23 @@ pub fn displays_doc_title(doc: &Document) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether `a` and `b` open at the same magnification. 100% writes the zoom Actual Size writes,
+/// which [`initial_view`] reads back as Actual Size.
+fn same_magnification(a: Magnification, b: Magnification) -> bool {
+    let actual = |m: Magnification| match m {
+        Magnification::Percent(p) if (p / 100.0 - 1.0).abs() < 1e-6 => Magnification::ActualSize,
+        m => m,
+    };
+    actual(a) == actual(b)
+}
+
 /// Write the initial view. An opening action that isn't a plain destination (a script, say) is
 /// kept unless the page or magnification asks for a destination, and an opening action whose page
 /// and magnification `v` leaves as [`initial_view`] reads them is kept as it is.
 pub fn set_initial_view(doc: &mut Document, v: &InitialView) -> Result<(), OrganizeError> {
     let same_destination = {
         let now = initial_view(doc);
-        now.page == v.page && now.magnification == v.magnification
+        now.page == v.page && same_magnification(now.magnification, v.magnification)
     };
     let (root, c) = catalog(doc)?;
     let pages = crate::walk(doc)?;
