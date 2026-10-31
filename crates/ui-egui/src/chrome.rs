@@ -36,8 +36,11 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let mac = cfg!(target_os = "macos") && app.integrated_titlebar;
     let left = if mac { MAC_CONTENT_LEFT as i8 } else { 8 };
     let (tab_h, button) = if mac { (MAC_TITLE_BAR - 2.0, 24.0) } else { (TAB_HEIGHT, STRIP_BUTTON) };
+    ui.ctx().data_mut(|d| d.insert_temp::<Option<egui::Rangef>>(egui::Id::unique(ACTIVE_TAB_SPAN), None));
+    // No separator line: the mode bar's top edge divides the two, and opens under the active tab.
     egui::Panel::top("tab_strip")
         .exact_size(if mac { MAC_TITLE_BAR } else { TAB_STRIP })
+        .show_separator_line(false)
         .frame(egui::Frame::NONE.fill(t.titlebar).inner_margin(egui::Margin { left, right: 10, top: 0, bottom: 0 }))
         .show(ui, |ui| {
             let full = ui.max_rect();
@@ -65,7 +68,12 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     });
                     ui.add_space(window_controls::SIDE_GAP - 4.0);
                 }
-                if icons::button(ui, "house", button, app.active.is_none() && !app.combine_showing(), tl!("Home")).clicked() {
+                let home = app.active.is_none() && !app.combine_showing();
+                let response = home_tab(ui, &t, tab_h, home);
+                if home {
+                    mark_active_tab(ui, response.rect);
+                }
+                if response.clicked() {
                     app.active = None;
                     app.combine_tab.focused = false;
                 }
@@ -150,6 +158,9 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                     &mut close,
                                 );
                                 slots.push((i, response.rect));
+                                if app.active == Some(i) {
+                                    mark_active_tab(ui, response.rect);
+                                }
                                 if response.dragged() || response.drag_stopped() {
                                     dragged = Some((i, response.drag_stopped()));
                                 }
@@ -233,6 +244,9 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                     },
                                     &mut close,
                                 );
+                                if app.combine_showing() {
+                                    mark_active_tab(ui, response.rect);
+                                }
                                 if changed && app.combine_showing() {
                                     response.scroll_to_me(Some(Align::Center));
                                 }
@@ -324,6 +338,53 @@ fn appearance_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         app.dialog = Some(Dialog::Preferences);
         ui.close();
     }
+}
+
+/// Where the active tab meets the mode bar (an `Option<egui::Rangef>` of x, in temp data), written by the
+/// tab strip each frame and read by the mode bar, which opens its top edge there.
+const ACTIVE_TAB_SPAN: &str = "active_tab_span";
+
+/// Records the visible part of the active tab, so the mode bar runs on into it without a line.
+fn mark_active_tab(ui: &egui::Ui, rect: Rect) {
+    let shown = rect.intersect(ui.clip_rect());
+    if shown.width() > 0.0 {
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(ACTIVE_TAB_SPAN), Some(shown.x_range())));
+    }
+}
+
+/// A tab's top corners; the bottom stays square so an active tab runs into the mode bar.
+const TAB_CORNERS: CornerRadius = CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 };
+/// Home's tab: its icon alone, with room for the rounded corners either side.
+const HOME_TAB_WIDTH: f32 = 36.0;
+
+/// The fill every tab shares: the mode bar's colour when active, a hover and press wash otherwise.
+fn tab_background(ui: &egui::Ui, t: &Tokens, rect: Rect, resp: &egui::Response, active: bool) {
+    let press = theme::Press::track(ui, resp);
+    let bg = if active {
+        press.fill(t.chrome, t.chrome.lerp_to_gamma(t.hover, 0.65), t.hover)
+    } else {
+        press.fill(Color32::TRANSPARENT, t.hover, t.pressed)
+    };
+    if bg.a() > 0 {
+        ui.painter().rect_filled(rect, TAB_CORNERS, bg);
+    }
+}
+
+/// Home, pinned as the first tab: drawn as the document tabs are, so while it shows it is the
+/// active tab sitting on the mode bar, never closed, dragged or scrolled away.
+fn home_tab(ui: &mut egui::Ui, t: &Tokens, height: f32, active: bool) -> egui::Response {
+    // Full strip height, as the document tabs.
+    let height = ui.available_height().max(height);
+    let (rect, _) = ui.allocate_exact_size(vec2(HOME_TAB_WIDTH, height), Sense::hover());
+    let resp = craft_ui::tabs::Tab::new(egui::Id::unique("home-tab"), tl!("Home"), active).focus_stroke(Stroke::new(1.0, t.accent)).show_at(
+        ui,
+        rect,
+        |ui, resp| {
+            tab_background(ui, t, rect, resp, active);
+            icons::paint(ui, Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), "house", 15.0, if active { t.accent } else { t.text_muted });
+        },
+    );
+    theme::hand(resp).on_hover_text(tl!("Home"))
 }
 
 /// A tab's chrome around its name: the icon on the left, the close button on the right.
@@ -439,15 +500,7 @@ fn tab(ui: &mut egui::Ui, spec: TabSpec<'_>, close: &mut Option<usize>) -> egui:
     let a11y = if dirty { format!("{name} (edited)") } else { name.to_string() };
     let sense = if draggable { Sense::click_and_drag() } else { Sense::click() };
     let resp = craft_ui::tabs::Tab::new(id, &a11y, active).sense(sense).focus_stroke(Stroke::new(1.0, t.accent)).show_at(ui, rect, |ui, resp| {
-        let press = theme::Press::track(ui, resp);
-        let bg = if active {
-            press.fill(t.chrome, t.chrome.lerp_to_gamma(t.hover, 0.65), t.hover)
-        } else {
-            press.fill(Color32::TRANSPARENT, t.hover, t.pressed)
-        };
-        if bg.a() > 0 {
-            ui.painter().rect_filled(rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, bg);
-        }
+        tab_background(ui, t, rect, resp, active);
         icons::paint(
             ui,
             Rect::from_min_size(rect.min + vec2(6.0, (height - 16.0) / 2.0), vec2(16.0, 16.0)),
@@ -479,7 +532,7 @@ fn tab(ui: &mut egui::Ui, spec: TabSpec<'_>, close: &mut Option<usize>) -> egui:
 
 pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    egui::Panel::top("mode_bar")
+    let bar = egui::Panel::top("mode_bar")
         .exact_size(48.0)
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(10, 0)).stroke(Stroke::new(1.0, t.divider)))
         .show(ui, |ui| {
@@ -528,7 +581,13 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     }
                 });
             });
-        });
+        })
+        .response
+        .rect;
+    // The active tab runs on into the bar: its top edge opens under the tab.
+    if let Some(span) = ui.ctx().data(|d| d.get_temp::<Option<egui::Rangef>>(egui::Id::unique(ACTIVE_TAB_SPAN))).flatten() {
+        ui.painter().rect_filled(Rect::from_x_y_ranges(span, bar.top()..=bar.top() + 1.0), 0, t.chrome);
+    }
 }
 
 /// Draw the right tool rail with page navigation, history, zoom, rotation and page-display controls for the
