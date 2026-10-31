@@ -1,7 +1,9 @@
 use super::dispatch::Content;
 use super::error::{Result, ToolError, failed};
 use super::json::{Args, one_based};
-use super::{Arc, Automation, DocId, HashMap, PageRenderer, PageText, RenderConfig, RenderRequest, RequestKind, Value, commands, json, tools};
+use super::{
+    Arc, Automation, DocId, HashMap, PageRenderer, PageText, PdfSource, RenderConfig, RenderRequest, RequestKind, Value, commands, json, tools,
+};
 
 /// Default and maximum resolution for `page_render`.
 pub(crate) const DEFAULT_DPI: f64 = 96.0;
@@ -57,7 +59,7 @@ impl Automation {
         // (tools that change one drop this cache so the next render reads it again).
         let config =
             self.session.render_config(id).unwrap_or_else(|| RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() });
-        let fresh = || (doc.display.clone(), PageRenderer::new(doc.display.clone(), config.clone()));
+        let fresh = || (doc.display.clone(), PageRenderer::new(doc.shown(), config.clone()));
         let entry = self.renderers.entry(id).or_insert_with(fresh);
         if !Arc::ptr_eq(&entry.0, &doc.display) {
             *entry = fresh();
@@ -146,10 +148,10 @@ impl Automation {
         &mut self,
         id: DocId,
         pages: &[usize],
-        extract: &mut impl FnMut(&Arc<Vec<u8>>, Option<Arc<str>>, &[usize]) -> PageTexts,
+        extract: &mut impl FnMut(&PdfSource, Option<Arc<str>>, &[usize]) -> PageTexts,
     ) -> Result<PageTexts> {
         let doc = self.session.get(id).ok_or_else(|| failed("no such document"))?;
-        let (bytes, n) = (doc.bytes.clone(), doc.info.pages.len());
+        let (bytes, source, n) = (doc.bytes.clone(), doc.source(), doc.info.pages.len());
         let password: Option<Arc<str>> = doc.password.as_deref().map(Arc::from);
         self.texts.prepare(id, &bytes);
         let mut results = HashMap::new();
@@ -166,7 +168,7 @@ impl Automation {
         missing.sort_unstable();
         missing.dedup();
         if !missing.is_empty() {
-            for (p, text) in extract(&bytes, password, &missing) {
+            for (p, text) in extract(&source, password, &missing) {
                 if let Ok(text) = &text {
                     self.texts.insert(id, p, &bytes, text.clone());
                 }
@@ -229,7 +231,7 @@ impl Automation {
     pub(crate) fn text_find_with(
         &mut self,
         a: &Args,
-        extract: &mut impl FnMut(&Arc<Vec<u8>>, Option<Arc<str>>, &[usize]) -> PageTexts,
+        extract: &mut impl FnMut(&PdfSource, Option<Arc<str>>, &[usize]) -> PageTexts,
     ) -> Result<Value> {
         let doc = self.doc(a)?;
         let (id, n) = (doc.id, doc.info.pages.len());
@@ -349,7 +351,7 @@ fn render_warning_text(warning: pdfcraft_render::RenderWarning) -> &'static str 
 }
 
 /// Extract the text of `pages` (0-based) with one renderer per worker thread.
-pub(crate) fn extract_parallel(bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[usize]) -> PageTexts {
+pub(crate) fn extract_parallel(bytes: &PdfSource, password: Option<Arc<str>>, pages: &[usize]) -> PageTexts {
     let extract = |r: &mut PageRenderer, p: usize| {
         let out = r.render(RenderRequest { page: p, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false });
         match out.error {

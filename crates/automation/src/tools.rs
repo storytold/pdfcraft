@@ -138,9 +138,9 @@ pub fn tools() -> Vec<ToolDef> {
         t("attachment_delete", "Delete an attachment", "Remove the document-level attachment with this name (as doc_info lists it). Undoable.")
             .destructive()
             .with(schema(json!({"doc": doc(), "name": {"type": "string"}}), &["doc", "name"])),
-        t("doc_open", "Open a PDF", "Open a PDF file and return its document id, page count and whether it can be edited.")
+        t("doc_open", "Open a PDF", "Open a PDF file and return its document id, page count and whether it can be edited. A file over 512 MiB, or any file with on_disk, reads from disk a part at a time when it can: pages, text and structure work, editing does not, and doc_save copies it.")
             .cmd("file.open")
-            .with(schema(json!({ "path": { "type": "string" }, "password": { "type": "string", "description": "User or owner password for encrypted files." } }), &["path"])),
+            .with(schema(json!({ "path": { "type": "string" }, "password": { "type": "string", "description": "User or owner password for encrypted files." }, "on_disk": { "type": "boolean", "description": "Keep the file's stream bodies on disk, whatever its size. Ignored for an encrypted or damaged file, which is read whole; the result's on_disk says which it was." } }), &["path"])),
         t("doc_list", "List open documents", "List the open documents with their ids, page counts and unsaved state.").ro().with(schema(json!({}), &[])),
         t("doc_info", "Inspect a document", "Metadata, page sizes and labels, bookmarks, annotations, form fields, links, layers, page transitions and display times, the destination it opens at, attachments, fonts, security and repair notes.")
             .ro()

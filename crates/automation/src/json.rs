@@ -273,6 +273,7 @@ pub(crate) fn summary(d: &Document) -> Value {
         "dirty": d.dirty,
         "editable": d.read_only_reason.is_none(),
         "read_only_reason": d.read_only_reason,
+        "on_disk": d.on_disk.is_some(),
         "encrypted": d.info.encrypted,
         "undo": d.can_undo(),
         "redo": d.can_redo(),

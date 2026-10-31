@@ -4278,6 +4278,7 @@ dependencies = [
  "pdfcraft-organize",
  "pdfcraft-platform",
  "pdfcraft-render",
+ "pdfcraft-testkit",
  "pdfcraft-xfa",
  "png 0.18.1",
  "rustix 1.1.5",

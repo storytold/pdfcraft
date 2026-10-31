@@ -39,7 +39,7 @@ use std::sync::Arc;
 
 use pdfcraft_engine::{BlockKey, CombineSource, DocId, Document, Edit, Session, TextBlock, block_overlapping, commands};
 use pdfcraft_platform::staging::{StagingName, staging_suffixes};
-use pdfcraft_render::{PageRenderer, PageText, RenderConfig, RenderRequest, RequestKind};
+use pdfcraft_render::{PageRenderer, PageText, PdfSource, RenderConfig, RenderRequest, RequestKind};
 use serde_json::{Value, json};
 
 pub use pdfcraft_render::Pixels;

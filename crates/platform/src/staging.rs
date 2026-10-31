@@ -151,6 +151,21 @@ pub fn write_atomically_with(
     sync_all: impl FnOnce(&std::fs::File) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
     use std::io::Write as _;
+    write_atomically_by(path, form, suffixes, sync_all, |file| file.write_all(bytes))
+}
+
+/// [`write_atomically`] for a file too large to hold: `write` fills the staging file.
+pub fn write_atomically_from(path: &Path, form: StagingName, write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>) -> std::io::Result<()> {
+    write_atomically_by(path, form, staging_suffixes(), std::fs::File::sync_all, write)
+}
+
+fn write_atomically_by(
+    path: &Path,
+    form: StagingName,
+    suffixes: impl IntoIterator<Item = u64>,
+    sync_all: impl FnOnce(&std::fs::File) -> std::io::Result<()>,
+    write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+) -> std::io::Result<()> {
     // A read-only file is not replaced. Windows refuses the rename anyway, but on Unix a rename
     // ignores the target's permissions: the file would be overwritten without a word, and come
     // out writable (#2658).
@@ -176,7 +191,7 @@ pub fn write_atomically_with(
         // Closed at the end of the block, before the rename (required on Windows).
         {
             let mut file = file;
-            file.write_all(bytes)?;
+            write(&mut file)?;
             #[cfg(target_os = "macos")]
             preserve_target_xattrs(path, &file).map_err(|e| {
                 std::io::Error::new(e.kind(), format!("could not preserve the file's extended attributes; save a copy with Save As: {e}"))

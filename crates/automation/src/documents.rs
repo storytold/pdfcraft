@@ -1,6 +1,6 @@
 use super::error::{Result, ToolError, failed};
 use super::json::{Args, nest_rows, security, summary};
-use super::paths::{child, read_input, write_atomic};
+use super::paths::{MAX_INPUT, child, read_input, write_atomic, write_atomic_from};
 use super::{Arc, Automation, BlockKey, DocId, Document, Edit, Path, PathBuf, TextBlock, Value, comments, file_access, json};
 
 /// How far a watermark may be moved from the page centre, in points (a page is at most 14,400).
@@ -101,8 +101,17 @@ impl Automation {
 
     pub(crate) fn doc_open(&mut self, a: &Args) -> Result<Value> {
         let path = self.resolve(a.str("path")?, false)?;
-        let bytes = read_input(&path)?;
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        // A file too large to read whole can still be read from disk.
+        let too_large = std::fs::metadata(&path).is_ok_and(|m| m.len() > MAX_INPUT);
+        if (a.opt_bool("on_disk")?.unwrap_or(false) || too_large)
+            && let Some(prepared) = self.session.open_context().with_on_disk_from(0).prepare_on_disk(name.clone(), &path)
+        {
+            let id = self.session.commit_open(prepared);
+            let doc = self.session.get(id).ok_or_else(|| failed("the document vanished"))?;
+            return Ok(summary(doc));
+        }
+        let bytes = read_input(&path)?;
         let id = self.session.open(name, Some(path.to_string_lossy().into_owned()), Arc::new(bytes), a.opt_str("password")?).map_err(failed)?;
         let doc = self.session.get(id).ok_or_else(|| failed("the document vanished"))?;
         Ok(summary(doc))
@@ -142,6 +151,13 @@ impl Automation {
             }
         };
         let same_file = doc.path.as_deref().is_some_and(|p| Path::new(p) == target);
+        // A file on disk is copied as it is: there is nothing else to write, and nothing in memory.
+        if let Some(file) = doc.on_disk.clone() {
+            if !same_file {
+                write_atomic_from(&target, |out| file.copy_to(out))?;
+            }
+            return Ok(json!({ "path": target.to_string_lossy(), "bytes": file.size(), "incremental": false, "document": summary(doc) }));
+        }
         // Saving to a new file is a full rewrite unless asked otherwise, like Save As.
         let full = a.opt_bool("full")?.unwrap_or(!same_file);
         let flatten_fill_sign = a.opt_bool("flatten_fill_sign")?.unwrap_or(false);

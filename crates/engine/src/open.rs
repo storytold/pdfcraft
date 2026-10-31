@@ -49,6 +49,12 @@ struct DocumentOpenData<'a> {
 }
 
 impl OpenContext {
+    /// Open files of `size` and up from disk.
+    pub fn with_on_disk_from(mut self, size: u64) -> Self {
+        self.on_disk_from = size;
+        self
+    }
+
     /// Prepare a document without mutating the session that supplied this context.
     pub fn prepare_open(
         &self,
