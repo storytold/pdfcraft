@@ -703,8 +703,18 @@ fn process(doc: &Document, s: &Stream, ppi: f64, settings: &ImageSettings, n: us
     if w == 0 || h == 0 || (w as u64) * (h as u64) > MAX_PIXELS {
         return None;
     }
-    let resize = settings.downsample && ppi.is_finite() && ppi > settings.above_ppi && settings.target_ppi > 0.0;
+    let resize = settings.downsample && ppi.is_finite() && ppi > settings.above_ppi && settings.target_ppi > 0.0 && settings.target_ppi.is_finite();
     let recompress = matches!(settings.compression, Compression::Jpeg(_)) || (matches!(settings.compression, Compression::Flate) && was_dct);
+    let (nw, nh) = if resize {
+        // Downsampling never enlarges: a target above the image's own resolution (or a hostile
+        // settings value) must not size a buffer from the setting.
+        let k = (settings.target_ppi / ppi).min(1.0);
+        (((w as f64 * k).round() as u32).max(1), ((h as f64 * k).round() as u32).max(1))
+    } else {
+        (w, h)
+    };
+    // A target at or above the image's own resolution resizes nothing.
+    let resize = resize && (nw, nh) != (w, h);
     if !resize && !recompress {
         return None;
     }
@@ -712,12 +722,6 @@ fn process(doc: &Document, s: &Stream, ppi: f64, settings: &ImageSettings, n: us
     if !resize && (w as u64) * (h as u64) < 64 * 64 {
         return None;
     }
-    let (nw, nh) = if resize {
-        let k = settings.target_ppi / ppi;
-        (((w as f64 * k).round() as u32).max(1), ((h as f64 * k).round() as u32).max(1))
-    } else {
-        (w, h)
-    };
     let px = pixels(doc, s, n)?;
     let px = if (nw, nh) != (w, h) { resample(&px, n, w, h, nw, nh)? } else { px };
     let new = image_stream(d, &px, n, nw, nh, settings.compression, was_dct)?;
