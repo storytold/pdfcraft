@@ -10428,4 +10428,3 @@ fn winansi_marks_still_use_the_standard_face() {
     let page0 = streams(&reopen(&doc), 0).join("\n");
     assert!(page0.contains("/PCHelv") && !page0.contains("/PCMk"), "{page0}");
 }
-}
