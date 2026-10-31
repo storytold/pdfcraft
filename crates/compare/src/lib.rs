@@ -407,6 +407,11 @@ pub fn visual_regions(a: (&[u8], u32, u32), b: (&[u8], u32, u32), tolerance: u8)
     if wa == 0 || ha == 0 || wb == 0 || hb == 0 {
         return Vec::new();
     }
+    // Declared sizes the buffers cannot hold (a damaged render) would overflow the u32 index maths.
+    let holds = |px: &[u8], w: u32, h: u32| u128::from(w) * u128::from(h) * 4 <= px.len() as u128;
+    if !holds(pa, wa, ha) || !holds(pb, wb, hb) {
+        return Vec::new();
+    }
     const CELL: u32 = 8;
     let (gw, gh) = (wa.div_ceil(CELL), ha.div_ceil(CELL));
     let mut grid = vec![false; (gw * gh) as usize];
@@ -484,5 +489,17 @@ mod visual_tests {
         // Two nearby marks join; distant ones don't.
         let c = image(200, 200, &[[10, 10, 50, 20], [100, 100, 104, 104], [110, 100, 114, 104], [10, 180, 14, 184]]);
         assert_eq!(visual_regions((&a, 200, 200), (&c, 200, 200), 16).len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod visual_hostile_tests {
+    use super::*;
+
+    #[test]
+    fn absurd_dimensions_with_short_buffers_return_quickly() {
+        let px = [0u8; 16];
+        let r = visual_regions((&px, u32::MAX, u32::MAX), (&px, 2, 2), 0);
+        assert!(r.is_empty());
     }
 }
