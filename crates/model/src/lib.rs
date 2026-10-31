@@ -18,10 +18,17 @@ pub struct Page {
     pub dict: Dict,
 }
 
+/// Normalized `[x0, y0, x1, y1]` of a page box when its first four entries form a finite, positive rectangle.
 fn rect(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
     let o = doc.resolve(o?);
-    let v: Vec<f64> = o.as_array()?.iter().filter_map(|x| doc.resolve(x).as_f64()).collect();
-    (v.len() == 4 && v.iter().all(|x| x.is_finite())).then(|| [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])])
+    let [a, b, c, d, ..] = o.as_array()?.as_slice() else { return None };
+    let coords = [doc.resolve(a).as_f64()?, doc.resolve(b).as_f64()?, doc.resolve(c).as_f64()?, doc.resolve(d).as_f64()?];
+    if !coords.iter().all(|x| x.is_finite()) {
+        return None;
+    }
+    let r = [coords[0].min(coords[2]), coords[1].min(coords[3]), coords[0].max(coords[2]), coords[1].max(coords[3])];
+    let (w, h) = (r[2] - r[0], r[3] - r[1]);
+    (w > 0.0 && h > 0.0 && (w * MAX_USER_UNIT).is_finite() && (h * MAX_USER_UNIT).is_finite()).then_some(r)
 }
 
 impl Page {
@@ -47,7 +54,7 @@ impl Page {
     /// The size of the page's user-space unit in points (`/UserUnit`; it isn't inherited), read
     /// as Acrobat reads it: a number from 1 up, at most [`MAX_USER_UNIT`]; anything else is 1.
     pub fn user_unit(&self, doc: &Document) -> f64 {
-        self.dict.get(b"UserUnit").and_then(|o| doc.resolve(o).as_f64()).filter(|u| *u >= 1.0).map_or(1.0, |u| u.min(MAX_USER_UNIT))
+        self.dict.get(b"UserUnit").and_then(|o| doc.resolve(o).as_f64()).filter(|u| u.is_finite() && *u >= 1.0).map_or(1.0, |u| u.min(MAX_USER_UNIT))
     }
 
     /// The displayed size (width, height) in points, after `/UserUnit` and `/Rotate`.
@@ -401,6 +408,46 @@ mod tests {
         ] {
             let d = doc_with(0, pages_attrs, page_attrs);
             assert_eq!(pages(&d)[0].user_unit(&d), unit, "{pages_attrs} {page_attrs}");
+        }
+    }
+
+    #[test]
+    fn degenerate_or_malformed_boxes_and_non_finite_user_unit_fall_back() {
+        for bad_media in ["[0 0 0 792]", "[10 10 100 10]", "[10 10 10 10]", "[0 0 /Bad 400 500]"] {
+            let d = doc_with(0, &format!("/MediaBox {bad_media}"), "/CropBox null");
+            let p = &pages(&d)[0];
+            assert_eq!(p.crop(&d), [0.0, 0.0, 612.0, 792.0], "{bad_media}");
+            assert_eq!(p.display_size(&d), (612.0, 792.0), "{bad_media}");
+        }
+        // Four valid leading coordinates with trailing entries match the renderer's crop bounds.
+        let trailing = doc_with(0, "", "/CropBox [0 0 300 792 /Extra]");
+        assert_eq!(pages(&trailing)[0].crop(&trailing), [0.0, 0.0, 300.0, 792.0]);
+
+        let mut d = doc_with(0, "", "/CropBox null");
+        let leaf = ObjRef { num: 3, generation: 0 };
+        for extreme in [
+            vec![Object::Real(-1e308), Object::Real(0.0), Object::Real(1e308), Object::Real(792.0)],
+            vec![Object::Real(0.0), Object::Real(0.0), Object::Real(1e306), Object::Real(792.0)],
+            vec![Object::Real(0.0), Object::Real(0.0), Object::Real(f64::NAN), Object::Real(792.0)],
+        ] {
+            d.update_dict(leaf, |dict| {
+                dict.set(b"MediaBox".to_vec(), Object::Array(extreme.clone()));
+                dict.set(b"UserUnit".to_vec(), Object::Real(1000.0));
+            })
+            .unwrap();
+            let p = &pages(&d)[0];
+            assert_eq!(p.crop(&d), [0.0, 0.0, 612.0, 792.0], "{extreme:?}");
+            let (w, h) = p.display_size(&d);
+            assert!(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0, "{extreme:?}: ({w}, {h})");
+        }
+
+        for non_finite in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            d.update_dict(leaf, |dict| {
+                dict.remove(b"MediaBox");
+                dict.set(b"UserUnit".to_vec(), Object::Real(non_finite));
+            })
+            .unwrap();
+            assert_eq!(pages(&d)[0].user_unit(&d), 1.0, "{non_finite}");
         }
     }
 }
