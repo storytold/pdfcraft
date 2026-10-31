@@ -1201,6 +1201,13 @@ pub fn tools() -> Vec<ToolDef> {
             .ro()
             .cmd("standards.pdfa")
             .with(schema(json!({ "doc": doc(), "level": { "type": "string", "enum": ["2b", "3b"], "description": "Default 2b." } }), &["doc"])),
+        t("pdfx_verify", "Verify PDF/X", "Standards ▸ Verify PDF/X compliance: the PDF/X-1a:2001, PDF/X-1a:2003, PDF/X-3:2002, PDF/X-3:2003 or PDF/X-4 (ISO 15930) rules the document breaks: rule id, where the rule is described, message, page and object, plus what the document declares. Without level, the level the document declares, else PDF/X-4. Verification only; nothing is changed or fixed.")
+            .ro()
+            .cmd("standards.pdfx")
+            .with(schema(
+                json!({ "doc": doc(), "level": { "type": "string", "enum": ["x1a:2001", "x1a:2003", "x3:2002", "x3:2003", "x4"], "description": "Default: the declared level, else x4." } }),
+                &["doc"],
+            )),
         t("print_readiness", "Print readiness", "Verification only. Reports effective image resolution where each image is drawn (not against the page size), page boxes and bleed past the trim, output intents, fonts that are not embedded, and the PDF/A-2b structural result. Does not modify the document, embed fonts, invent a press profile, or check PDF/X.")
             .ro()
             .with(schema(json!({ "doc": doc() }), &["doc"])),

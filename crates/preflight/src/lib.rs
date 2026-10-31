@@ -18,10 +18,13 @@
 //! [`convert`] fixes what can be fixed without changing how pages look (XMP, the sRGB output
 //! intent, forbidden actions, annotation flags, Interpolate, NeedAppearances, encryption) and
 //! returns what remains. Fonts that aren't embedded can't be fixed here.
+//!
+//! [`pdfx::verify`] checks a document against PDF/X-1a, PDF/X-3 and PDF/X-4 (ISO 15930).
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod icc;
+pub mod pdfx;
 mod xmp;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
@@ -148,6 +151,9 @@ pub struct Declared {
     /// `pdfaid:part` and `pdfaid:conformance`, e.g. (2, "B").
     pub pdfa: Option<(u8, String)>,
     pub pdfua: Option<u8>,
+    /// The PDF/X version, e.g. "PDF/X-4": `GTS_PDFXVersion` from the document information or the
+    /// XMP metadata, and for PDF/X-1:2001 its conformance level ("PDF/X-1a:2001").
+    pub pdfx: Option<String>,
     /// Output intents' condition identifiers.
     pub output_intents: Vec<String>,
 }
@@ -179,6 +185,7 @@ pub fn declared(doc: &Document) -> Declared {
         d.pdfa = part.map(|p| (p, conf.to_uppercase()));
         d.pdfua = xmp::identifier(&x, xmp::PDFUA_ID, "part").and_then(|p| p.parse().ok());
     }
+    d.pdfx = pdfx::declared_version(doc);
     let cat = catalog(doc);
     if let Some(list) = cat.get(b"OutputIntents").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()) {
         for oi in list {
