@@ -150,6 +150,15 @@ pub fn layout_xml(xml: &str) -> Result<Form, XfaError> {
 /// left for the forms layer to generate.
 pub fn render_into(doc: &mut Document) -> Result<Report, XfaError> {
     if !is_dynamic(doc) {
+        // Classification remains authoritative for readable packets (including saved forms
+        // and signature safeguards). Recover only a malformed-packet diagnostic that the
+        // boolean classifier cannot carry, when the PDF independently asks for layout.
+        if existing_layout(doc).is_none()
+            && packets::marked_for_layout(doc) == Some(true)
+            && let Err(error @ XfaError::Malformed(_)) = read_packets(doc)
+        {
+            return Err(error);
+        }
         return Err(XfaError::NotXfa);
     }
     let packets = read_packets(doc)?.ok_or(XfaError::NotXfa)?;
