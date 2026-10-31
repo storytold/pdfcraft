@@ -1425,8 +1425,10 @@ mod dimension_tests {
         let plain = image(&|_| {});
         assert!(spent(&plain, false) > 0, "one that can be averaged is decoded");
         assert_eq!(spent(&plain, true), 0, "drawn where a device colour space is remapped");
-        let wide = image(&|d| d.set(b"Width".to_vec(), Object::Int(i64::from(pdfcraft_filters::MAX_CCITT_COLUMNS) + 1)));
-        assert_eq!(spent(&wide, false), 0, "too wide to average");
+        let width = |w: i64| image(&move |d| d.set(b"Width".to_vec(), Object::Int(w)));
+        let widest = i64::from(pdfcraft_filters::MAX_CCITT_COLUMNS);
+        assert!(spent(&width(widest), false) > 0, "the widest that can be averaged is decoded");
+        assert_eq!(spent(&width(widest + 1), false), 0, "too wide to average");
         let tinted = image(&|d| d.set(b"ColorSpace".to_vec(), Object::Array(vec![Object::name("CalGray"), Object::Dict(Dict::new())])));
         assert_eq!(spent(&tinted, false), 0, "no way to tell which sample is dark");
     }
