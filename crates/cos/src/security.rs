@@ -132,6 +132,8 @@ fn is_crypt(doc: &Document, f: &Object) -> bool {
 /// The crypt filter a stream names in its `/Filter` chain (`/Crypt` + `/DecodeParms /Name`), each
 /// given directly or by reference, in an array or not. A chain longer than any decoder takes names
 /// none: nothing can read that stream anyway, and every stream of a file can share one long array.
+/// A `/Name` that reads as absent means `/Identity`, unless reading it ran past [`MAX_FOLLOWED`]:
+/// that says nothing about the stream, so it names none, and the document's own filter is used.
 fn named_crypt_filter(doc: &Document, dict: &Dict) -> Option<Vec<u8>> {
     let filter = followed(doc, dict.get(b"Filter")?);
     let i = match &*filter {
@@ -146,7 +148,12 @@ fn named_crypt_filter(doc: &Document, dict: &Dict) -> Option<Vec<u8>> {
         _ => None,
     };
     let name = entry.as_deref().and_then(Object::as_dict).and_then(|p| p.get(b"Name")).map(|n| followed(doc, n));
-    Some(name.as_deref().and_then(Object::as_name).map_or_else(|| b"Identity".to_vec(), <[u8]>::to_vec))
+    match name.as_deref().and_then(Object::as_name) {
+        Some(name) => Some(name.to_vec()),
+        // /Identity here would read ciphertext as data, and write the stream in the clear.
+        None if FOLLOWED.get() >= MAX_FOLLOWED => None,
+        None => Some(b"Identity".to_vec()),
+    }
 }
 
 /// A signature dictionary (field signature, document timestamp or usage-rights signature),
