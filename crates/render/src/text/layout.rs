@@ -1,5 +1,7 @@
 use super::device::{DIRECTION_TOLERANCE, Drawn, WORD_GAP};
-use super::order::{NONE, REDRAW_CANDIDATES, Run, Scratch, Seg, fingerprint, is_script_on, place_glyphs, redraws, restarts_run, reverse_rtl};
+use super::order::{
+    NONE, REDRAW_CANDIDATES, Run, SAME_LINE_GAP, Scratch, Seg, fingerprint, is_script_on, place_glyphs, redraws, restarts_run, reverse_rtl, same_line,
+};
 use super::{HashMap, PageText, TextGlyph};
 
 /// Glyphs in reading order, as indices into the page's glyphs, with their lines and word gaps.
@@ -132,7 +134,11 @@ pub(super) fn union(a: &mut [f32; 4], b: &[f32; 4]) {
 ///    (text on a baseline grid), it counts as a row and the top-most rule applies, so the column
 ///    order of #3658 is lost there. Telling prose from a row in that case needs more evidence.
 /// 4. Within a segment glyphs run left to right; runs of right-to-left script are reversed so the
-///    text comes out in logical order.
+///    text comes out in logical order. A block whose first line sits on the baseline of the line read
+///    just before it, to its right and less than [`SAME_LINE_GAP`] heights away, continues that line
+///    after a space (a label and its value, words drawn out of order or in another size). A block of
+///    several lines does so only after a line narrower than [`SAME_LINE_GAP`] heights (a label):
+///    beside a wider one it is the next column.
 pub fn layout(glyphs: Vec<TextGlyph>) -> PageText {
     let (order, line_of, space_before) = arrange(&glyphs);
     let mut slots: Vec<Option<TextGlyph>> = glyphs.into_iter().map(Some).collect();
@@ -396,8 +402,10 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
     // `spaces[w]`: a word gap left of the w-th glyph of the segment, by position on the line, not by drawing order
     // (#1062). Reused by every segment.
     let mut spaces: Vec<bool> = Vec::new();
+    // The segment emitted last, and whether it had right-to-left text.
+    let mut last: Option<(usize, bool)> = None;
     for b in block_order {
-        for &si in &blocks[b].0 {
+        for (k, &si) in blocks[b].0.iter().enumerate() {
             place_glyphs(&glyphs, &height, &segs[si], &mut sc);
             let h = segs[si].h;
             // Word gaps relative to this line's typical letter gap (handles tracking).
@@ -444,13 +452,50 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
                 reverse_rtl(&glyphs, &mut sc.logical, &mut spaces);
             }
             let idx: &[usize] = if has_rtl { &sc.logical } else { &sc.placed };
+            let joined = joins_line(&segs, last, si, k == 0, blocks[b].0.len() > 1, has_rtl);
+            let start = order.len();
             order.extend_from_slice(idx);
-            line_of.resize(order.len(), line);
-            // `spaces[0]` stays false: the first glyph of a segment never takes a space.
+            // `spaces[0]` stays false: the first glyph of a segment never takes a space, unless it joins a line.
             space_before.extend(spaces.iter().take(idx.len()));
             space_before.resize(order.len(), false);
-            line += 1;
+            line = put_on_line(&mut line_of, &mut space_before, start..order.len(), line, &segs[si], joined);
+            last = Some((si, has_rtl));
         }
     }
     (order.into_iter().map(|i| kept[i]).collect(), line_of, space_before)
+}
+
+/// Puts the reading-order glyphs `glyphs` of segment `seg` on their line: `line`, or the line
+/// before it when `seg` continues the line of `joined` (see [`joins_line`]), with a space before
+/// its first glyph when the two are a word gap apart. Returns the line the next segment starts on.
+fn put_on_line(line_of: &mut Vec<u32>, space_before: &mut [bool], glyphs: std::ops::Range<usize>, line: u32, seg: &Seg, joined: Option<&Seg>) -> u32 {
+    let Some(p) = joined else {
+        line_of.resize(glyphs.end, line);
+        return line.saturating_add(1);
+    };
+    line_of.resize(glyphs.end, line.saturating_sub(1));
+    if let Some(space) = space_before.get_mut(glyphs.start) {
+        *space = seg.bbox[0] - p.bbox[2] > WORD_GAP * p.h.min(seg.h);
+    }
+    line
+}
+
+/// The segment read just before (`last`, with whether it had right-to-left text) whose line segment
+/// `si` goes on, when `si` is the first line of its block (`first`) and sits on that line's baseline
+/// to its right (a label and its value, a word drawn out of order or set in another size).
+/// Same-baseline segments are always in different blocks. A column of several lines is read after
+/// the column to its left ends, so their lines don't meet. A paragraph of several lines that starts
+/// beside a line as wide as [`SAME_LINE_GAP`] heights or more is the next column, not that line's
+/// value, so it starts a line of its own; only a narrower line (a label) takes it. One-line
+/// paragraphs of two columns that share a baseline cannot be told from a table row, and are further
+/// apart than [`same_line`] allows unless the left one fills its column. Right-to-left lines are
+/// left alone: their blocks still read left first.
+fn joins_line(segs: &[Seg], last: Option<(usize, bool)>, si: usize, first: bool, paragraph: bool, has_rtl: bool) -> Option<&Seg> {
+    let (p, p_rtl) = last?;
+    if !first || p_rtl || has_rtl {
+        return None;
+    }
+    let (p, s) = (segs.get(p)?, segs.get(si)?);
+    let label = p.bbox[2] - p.bbox[0] < SAME_LINE_GAP * p.h;
+    (same_line(p, s) && (!paragraph || label)).then_some(p)
 }

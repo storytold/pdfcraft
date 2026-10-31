@@ -881,6 +881,188 @@ fn two_columns_read_left_then_right_even_if_drawn_interleaved() {
     assert_eq!(t.plain_text(), "Left1\nLeft2\nRight1\nRight2");
 }
 
+/// Runs on one baseline read as one line, left to right, with a space at the gap between them, however they were
+/// drawn and whatever their sizes. Columns of several lines still read one after the other.
+#[test]
+fn runs_on_one_baseline_read_as_one_line_in_any_drawing_order() {
+    // Glyphs of `h` pt on the baseline `base`, 0.6 em apart.
+    let sized = |v: &mut Vec<TextGlyph>, s: &str, x: f32, base: f32, h: f32| {
+        for (i, c) in s.chars().enumerate() {
+            let x0 = x + i as f32 * h * 0.6;
+            v.push(em_box(&c.to_string(), x0, base - 0.8 * h, x0 + h * 0.6, base + 0.2 * h));
+        }
+    };
+    // The second word drawn first, three and a half heights to the right of the first.
+    let mut v = Vec::new();
+    sized(&mut v, "second", 160.0, 100.0, 14.0);
+    sized(&mut v, "first", 90.0, 100.0, 14.0);
+    let t = layout(v);
+    assert_eq!(t.plain_text(), "first second");
+    assert_eq!(t.line_rects(0..t.glyphs.len()).len(), 1, "one line, one highlight");
+    // A 9 pt label, a 14 pt word and a 9 pt note on one baseline.
+    let mut v = Vec::new();
+    sized(&mut v, "11", 40.0, 100.0, 9.0);
+    sized(&mut v, "hidden", 90.0, 100.0, 14.0);
+    sized(&mut v, "note", 170.0, 100.0, 9.0);
+    assert_eq!(layout(v).plain_text(), "11 hidden note");
+    // A label beside two columns of two lines: the label joins the first line of the left column, and the
+    // columns keep their own lines.
+    let mut v = Vec::new();
+    sized(&mut v, "07", 40.0, 100.0, 9.0);
+    sized(&mut v, "leftone", 90.0, 100.0, 12.0);
+    sized(&mut v, "lefttwo", 90.0, 114.0, 12.0);
+    sized(&mut v, "rightone", 300.0, 100.0, 12.0);
+    sized(&mut v, "righttwo", 300.0, 114.0, 12.0);
+    assert_eq!(layout(v).plain_text(), "07 leftone\nlefttwo\nrightone\nrighttwo");
+    // Two columns of prose 20 pt apart, where a one-line paragraph that fills the left column shares its baseline
+    // with the first line of a paragraph in the right one: the paragraph is the next column, not the line's value.
+    let mut v = Vec::new();
+    for (k, y) in [100.0, 112.0, 124.0].iter().enumerate() {
+        sized(&mut v, &format!("leftparagraphlinenumber{k}xxxxxxxxxxxxxxx"), 72.0, *y, 10.0);
+    }
+    sized(&mut v, "leftlastonelinexxxxxxxxxxxxxxxxxxxxxxxx", 72.0, 160.0, 10.0);
+    for (k, y) in [100.0, 112.0, 124.0].iter().enumerate() {
+        sized(&mut v, &format!("rightparagraphline{k}"), 326.0, *y, 10.0);
+    }
+    sized(&mut v, "rightsecondpara", 326.0, 160.0, 10.0);
+    sized(&mut v, "rightsecondparaline2", 326.0, 172.0, 10.0);
+    let t = layout(v).plain_text();
+    assert!(t.lines().any(|l| l == "leftlastonelinexxxxxxxxxxxxxxxxxxxxxxxx"), "{t}");
+    assert!(t.lines().any(|l| l == "rightsecondpara"), "{t}");
+    // Half a height lower is another line.
+    let mut v = Vec::new();
+    sized(&mut v, "first", 90.0, 100.0, 14.0);
+    sized(&mut v, "lower", 160.0, 107.0, 14.0);
+    assert_eq!(layout(v).plain_text(), "first\nlower");
+    // Right-to-left runs on one baseline keep their lines: their blocks read left first.
+    let mut v = Vec::new();
+    sized(&mut v, "שלום", 90.0, 100.0, 14.0);
+    sized(&mut v, "עולם", 200.0, 100.0, 14.0);
+    assert_eq!(layout(v).plain_text().lines().count(), 2);
+}
+
+/// A page of fourteen labelled rows, each a case of text copy: a `/fi` glyph by name, a ToUnicode map, an
+/// `/ActualText` span, word gaps by `TJ` and `Td`, a hyphen at a line end, two columns, words drawn out of order,
+/// fake bold, invisible text, letter spacing and a line turned upwards.
+fn copy_test_page() -> Pdf {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let rows: [(&str, &str); 14] = [
+        ("01", "BT /F2 14 Tf 90 {Y} Td (of\\200ce) Tj ET"),
+        ("02", "BT /F3 14 Tf 90 {Y} Td (XEY) Tj ET"),
+        ("03", "/Span << /ActualText (replaced) >> BDC BT /F1 14 Tf 90 {Y} Td (shown) Tj ET EMC"),
+        ("04", "BT /F1 14 Tf 90 {Y} Td [(Hello) -400 (world)] TJ ET"),
+        ("05", "BT /F1 14 Tf 90 {Y} Td [(W) 80 (ave)] TJ ET"),
+        ("06", "BT /F1 14 Tf 90 {Y} Td (exam-) Tj 0 -16 Td (ple) Tj ET"),
+        ("07", "BT /F1 12 Tf 90 {Y} Td (left one) Tj 0 -14 Td (left two) Tj ET BT /F1 12 Tf 300 {Y} Td (right one) Tj 0 -14 Td (right two) Tj ET"),
+        ("08", "BT /F1 14 Tf 160 {Y} Td (second) Tj ET BT /F1 14 Tf 90 {Y} Td (first) Tj ET"),
+        ("09", "BT /F1 14 Tf 90 {Y} Td (caf\\351 na\\357ve) Tj ET"),
+        ("10", "BT /F1 14 Tf 90 {Y} Td (Bold) Tj ET BT /F1 14 Tf 90.4 {Y} Td (Bold) Tj ET"),
+        ("11", "BT /F1 14 Tf 3 Tr 90 {Y} Td (hidden) Tj ET BT /F1 9 Tf 0.5 g 160 {Y} Td (<- invisible word here) Tj ET"),
+        ("12", "BT /F1 14 Tf 8 Tc 90 {Y} Td (SPACED) Tj ET"),
+        ("13", "BT /F1 14 Tf 0 1 -1 0 110 {Y} Tm (up) Tj ET"),
+        ("14", "BT /F1 14 Tf 90 {Y} Td (split) Tj 40 0 Td (words) Tj ET"),
+    ];
+    let mut content = String::from("BT /F1 9 Tf 40 770 Td (Text copy and search test) Tj ET\n");
+    let mut y = 740;
+    for (tag, body) in rows {
+        content += &format!("BT /F1 9 Tf 0.4 g 40 {y} Td ({tag}) Tj ET 0 g\nq {} Q\n", body.replace("{Y}", &y.to_string()));
+        y -= 38
+            + match tag {
+                "06" | "13" => 10,
+                "07" => 6,
+                _ => 0,
+            };
+    }
+    let mut doc = Document::with_version("1.7");
+    let helvetica = || dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica", "Encoding" => "WinAnsiEncoding" };
+    let f1 = doc.add_object(helvetica());
+    let differences = dictionary! { "Type" => "Encoding", "BaseEncoding" => "WinAnsiEncoding", "Differences" => vec![Object::Integer(128), Object::Name(b"fi".to_vec())] };
+    let f2 = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica", "Encoding" => differences });
+    let cmap = "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def /CMapName /Test-UCS def /CMapType 2 def 1 begincodespacerange <00> <FF> endcodespacerange 3 beginbfchar <58> <004B> <45> <0045> <59> <0059> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end";
+    let to_unicode = doc.add_object(Stream::new(dictionary! {}, cmap.as_bytes().to_vec()));
+    let mut f3 = helvetica();
+    f3.set("ToUnicode", to_unicode);
+    let f3 = doc.add_object(f3);
+    let contents = doc.add_object(Stream::new(dictionary! {}, content.into_bytes()));
+    let pages = doc.new_object_id();
+    let page = doc.add_object(dictionary! {
+        "Type" => "Page", "Parent" => pages, "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+        "Resources" => dictionary! { "Font" => dictionary! { "F1" => f1, "F2" => f2, "F3" => f3 } }, "Contents" => contents
+    });
+    doc.objects.insert(pages, dictionary! { "Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1 }.into());
+    let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages });
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    Pdf::new(std::sync::Arc::new(bytes)).unwrap()
+}
+
+/// Copy of the whole page: one line per baseline in left-to-right order whatever the drawing order, the `/fi`
+/// glyph as its letters, and the line turned upwards in its row, not after the page. `/ActualText` replaces what
+/// is drawn (ISO 32000-2 §14.9.4), a hard hyphen at a line end stays (§14.8.2.3: an incidental one is U+00AD),
+/// fake bold reads once, and letter spacing that is the same between every letter is tracking, not word gaps.
+#[test]
+fn a_copied_page_reads_one_line_per_baseline_in_reading_order() {
+    let text = extract_page(&copy_test_page(), 0, &InterpreterSettings::default()).unwrap();
+    assert_eq!(
+        text.plain_text(),
+        "Text copy and search test\n01 office\n02 KEY\n03 replaced\n04 Hello world\n05 Wave\n06 exam-\nple\n07 left one\nleft two\n\
+         right one\nright two\n08 first second\n09 café naïve\n10 Bold\n11 hidden <- invisible word here\n12 SPACED\n13\nup\n14 split words"
+    );
+    assert_eq!(text.find("first second").len(), 1);
+    assert_eq!(text.find("office").len(), 1);
+}
+
+/// A turned line inside the page's text reads where it stands; one in the margin, beside every line (a stamp
+/// set up the edge of the page), still reads after the text instead of splitting a paragraph.
+#[test]
+fn a_turned_line_reads_in_place_inside_the_text_and_after_it_in_the_margin() {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let page = |before: &str, after: &str| {
+        let mut doc = Document::with_version("1.7");
+        let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+        let mut content = before.to_owned();
+        for (k, word) in ["Alpha", "Beta", "Gamma", "Delta"].iter().enumerate() {
+            content += &format!("BT /F1 12 Tf 72 {} Td ({word}) Tj ET\n", 700 - 30 * k);
+        }
+        content += after;
+        let contents = doc.add_object(Stream::new(dictionary! {}, content.into_bytes()));
+        let pages = doc.new_object_id();
+        let page = doc.add_object(dictionary! {
+            "Type" => "Page", "Parent" => pages, "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+            "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } }, "Contents" => contents
+        });
+        doc.objects.insert(pages, dictionary! { "Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1 }.into());
+        let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages });
+        doc.trailer.set("Root", catalog);
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).unwrap();
+        let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+        extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap().plain_text()
+    };
+    // "up", set upwards from the baseline of "Beta" beside it, and "dn", set downwards in the space under it.
+    let up = "BT /F1 12 Tf 0 1 -1 0 110 670 Tm (up) Tj ET\n";
+    let down = "BT /F1 8 Tf 0 -1 1 0 100 662 Tm (dn) Tj ET\n";
+    assert_eq!(page("", up), "Alpha\nBeta\nup\nGamma\nDelta");
+    assert_eq!(page(up, ""), "Alpha\nBeta\nup\nGamma\nDelta", "drawn before the text");
+    assert_eq!(page("", down), "Alpha\nBeta\ndn\nGamma\nDelta");
+    // Upside-down text inside the text's area, under "Beta", is not turned a quarter and keeps its own flow.
+    let upside_down = "BT /F1 12 Tf -1 0 0 -1 110 660 Tm (ud) Tj ET\n";
+    assert_eq!(page("", upside_down), "Alpha\nBeta\nGamma\nDelta\nud");
+    // A stamp up the left margin, beside "Beta" and "Gamma": laid out with the text, it would read after "Alpha".
+    let stamp = "BT /F1 10 Tf 0 1 -1 0 30 640 Tm (arXiv stamp) Tj ET\n";
+    assert_eq!(page("", stamp), "Alpha\nBeta\nGamma\nDelta\narXiv stamp");
+}
+
+#[test]
+fn ligature_characters_read_as_their_letters() {
+    assert_eq!(ligature_letters("o\u{FB01}ce".into()), "ofice");
+    assert_eq!(ligature_letters("\u{FB00}\u{FB02}\u{FB03}\u{FB04}\u{FB05}\u{FB06}".into()), "ffflffifflstst");
+    // Only those seven: other compatibility characters stay as they are.
+    assert_eq!(ligature_letters("\u{FB13}\u{FF21}\u{2460}é".into()), "\u{FB13}\u{FF21}\u{2460}é");
+    assert_eq!(ligature_letters(String::new()), "");
+}
+
 /// Lays out one-word lines, each `(text, x, y)`, 10 pt high: 14 pt apart is a line in a paragraph, 24 pt a
 /// paragraph gap.
 fn lines(at: &[(&str, f32, f32)]) -> String {
@@ -978,7 +1160,32 @@ fn a_full_width_line_ends_the_columns_above_it() {
 fn table_rows_apart_still_read_across() {
     // Rows a paragraph gap apart whose cells start level read row by row, as before #3658.
     let rows = [("Name", 10.0, 10.0), ("Qty", 100.0, 10.0), ("Apple", 10.0, 34.0), ("12", 100.0, 34.0), ("Pear", 10.0, 58.0), ("7", 100.0, 58.0)];
-    assert_eq!(lines(&rows), "Name\nQty\nApple\n12\nPear\n7");
+    // The cells of a row share its baseline, so they share a line too.
+    assert_eq!(lines(&rows), "Name Qty\nApple 12\nPear 7");
+    // Column select still separates them with a tab.
+    let mut v = Vec::new();
+    for &(s, x, y) in &rows {
+        word(&mut v, s, x, y, 6.0);
+    }
+    let t = layout(v);
+    assert_eq!(t.column_text(&t.glyphs_in([0.0, 0.0, 300.0, 300.0])), "Name\tQty\nApple\t12\nPear\t7");
+}
+
+/// Two cells two heights apart (closer than [`CELL_GAP`]) copy the same whichever is drawn first:
+/// drawn left to right they were always one run, and the right cell drawn first now joins it too.
+#[test]
+fn close_cells_copy_the_same_in_either_drawing_order() {
+    let copy = |cells: &[(&str, f32)]| {
+        let mut v = Vec::new();
+        for &(s, x) in cells {
+            word(&mut v, s, x, 10.0, 6.0);
+        }
+        let t = layout(v);
+        (t.plain_text(), t.column_text(&t.glyphs_in([0.0, 0.0, 300.0, 300.0])))
+    };
+    let in_order = copy(&[("Name", 10.0), ("Qty", 54.0)]);
+    assert_eq!(copy(&[("Qty", 54.0), ("Name", 10.0)]), in_order);
+    assert_eq!(in_order.0, "Name Qty");
 }
 
 #[test]
@@ -997,7 +1204,7 @@ fn form_rows_in_mixed_sizes_still_read_across() {
         sized(&mut v, label, 10.0, base, 8.0);
         sized(&mut v, value, 100.0, base, 12.0);
     }
-    assert_eq!(layout(v).plain_text(), "Name\nAlice\nStreet\nMain\nCity\nOslo");
+    assert_eq!(layout(v).plain_text(), "Name Alice\nStreet Main\nCity Oslo");
     // Values drawn 6 pt below their labels, rows a paragraph gap apart.
     let offset =
         [("Name", 10.0, 10.0), ("Val1", 100.0, 16.0), ("Addr", 10.0, 40.0), ("Val2", 100.0, 46.0), ("City", 10.0, 70.0), ("Val3", 100.0, 76.0)];
@@ -1006,7 +1213,8 @@ fn form_rows_in_mixed_sizes_still_read_across() {
 
 #[test]
 fn a_column_does_not_jump_to_a_distant_footer_footnote_or_caption() {
-    // A page number far below the left column reads after the right column.
+    // A page number far below the left column reads after the right column. L3 and R3, one-line paragraphs
+    // on one baseline a column apart, keep their own lines.
     let footer = [
         ("L1", 10.0, 10.0),
         ("L2", 10.0, 24.0),

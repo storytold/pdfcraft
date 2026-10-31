@@ -7839,7 +7839,8 @@ fn cut_stack_printing_through_tools() {
     );
     assert_eq!(r["pages"], 5);
     let printed = ok(&mut a, "doc_open", json!({"path": "range.pdf"}))["doc"].as_u64().unwrap();
-    assert_eq!(page_text(&mut a, printed), ["Page 10\nPage 4", "Page 8\nPage 2", "Page 6"]);
+    // Two pages side by side: their labels share a baseline, so a line.
+    assert_eq!(page_text(&mut a, printed), ["Page 10 Page 4", "Page 8 Page 2", "Page 6"]);
     assert_eq!(page_text(&mut a, doc), before);
     assert_eq!(ok(&mut a, "doc_info", json!({"doc": doc}))["document"]["dirty"], false);
     for duplex in ["long-edge", "short-edge"] {

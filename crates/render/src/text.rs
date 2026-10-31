@@ -305,13 +305,21 @@ impl PageText {
     /// turned by `/Rotate`) rows mean nothing, and the lines come out one per row in reading order
     /// instead.
     pub fn column_text(&self, glyphs: &[usize]) -> String {
-        // The selected glyphs of each line, with their box: (glyphs, bbox).
+        // The selected glyphs of each line, with their box: (glyphs, bbox). A line is cut where a gap wider than one run
+        // of text can hold separates two glyphs (`arrange` joins runs on one baseline into a line, as table cells are), so
+        // cells keep their tab.
         let mut lines: Vec<(Vec<usize>, [f32; 4])> = Vec::new();
         let mut line_ids: Vec<u32> = Vec::new();
+        let mut previous: Option<&TextGlyph> = None;
         for &i in glyphs {
             let (Some(g), Some(&line)) = (self.glyphs.get(i), self.line_of.get(i)) else { continue };
+            let apart = previous.is_some_and(|p| {
+                let h = (p.rect[3] - p.rect[1]).max(g.rect[3] - g.rect[1]);
+                g.rect[0] - p.rect[2] >= CELL_GAP * h
+            });
+            previous = Some(g);
             match (lines.last_mut(), line_ids.last()) {
-                (Some((members, bb)), Some(&l)) if l == line => {
+                (Some((members, bb)), Some(&l)) if l == line && !apart => {
                     members.push(i);
                     union(bb, &g.rect);
                 }
@@ -376,9 +384,9 @@ mod device;
 mod layout;
 mod order;
 
-use device::WORD_GAP;
+use device::{CELL_GAP, WORD_GAP};
 #[cfg(test)]
-use device::{MAX_REDRAW_TEXT, REDRAW_TEXT_BYTES, Replaced, TextDevice};
+use device::{MAX_REDRAW_TEXT, REDRAW_TEXT_BYTES, Replaced, TextDevice, ligature_letters};
 pub(crate) use device::{extract_page, extract_page_filtered};
 pub use layout::layout;
 #[cfg(test)]
