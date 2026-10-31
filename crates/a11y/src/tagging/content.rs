@@ -362,15 +362,7 @@ impl PageContent {
                 }
                 b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"re" => {
                     path_start.get_or_insert(i);
-                    let points: Vec<(f64, f64)> = match name {
-                        b"re" => op.nums::<4>().map(|[x, y, w, h]| vec![(x, y), (x + w, y + h)]).unwrap_or_default(),
-                        b"h" => Vec::new(),
-                        _ => {
-                            let nums: Vec<f64> = op.operands.iter().filter_map(Object::as_f64).collect();
-                            nums.as_chunks::<2>().0.iter().map(|[x, y]| (*x, *y)).collect()
-                        }
-                    };
-                    for (x, y) in points {
+                    for (x, y) in path_points(name, op) {
                         let (x, y) = state.ctm.apply(x, y);
                         path_box = union(path_box, [x, y, x, y]);
                     }
@@ -385,48 +377,14 @@ impl PageContent {
                     path_box = None;
                 }
                 b"Do" => {
-                    let target = op.name(0).and_then(|n| xobjects.get(n)).and_then(Object::as_ref);
-                    let (kind, bbox, structured) = match target.map(|r| doc.get(r)) {
-                        Some(x) => match &*x {
-                            Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form") => {
-                                let bb: Vec<f64> = s
-                                    .dict
-                                    .get(b"BBox")
-                                    .and_then(|b| doc.resolve(b).as_array().map(|a| a.iter().filter_map(Object::as_f64).collect()))
-                                    .unwrap_or_default();
-                                let fm = s
-                                    .dict
-                                    .get(b"Matrix")
-                                    .and_then(|m| doc.resolve(m).as_array().and_then(|a| Matrix::from_operands(a)))
-                                    .unwrap_or(Matrix::IDENTITY);
-                                let bbox = match bb[..] {
-                                    [a, b, c, d] => Some(fm.then(&state.ctm).bbox([a.min(c), b.min(d), a.max(c), b.max(d)])),
-                                    _ => None,
-                                };
-                                (UnitKind::Graphic, bbox, s.dict.contains(b"StructParents") || s.dict.contains(b"StructParent"))
-                            }
-                            _ => (UnitKind::Image, Some(state.ctm.bbox([0.0, 0.0, 1.0, 1.0])), false),
-                        },
-                        None => (UnitKind::Graphic, None, false),
-                    };
+                    let (kind, bbox, structured) = xobject_unit(doc, &xobjects, op, &state.ctm);
                     self.atom(i, i, kind, bbox, String::new(), &open, text_object, structured);
                 }
                 b"BI" => self.atom(i, i, UnitKind::Image, Some(state.ctm.bbox([0.0, 0.0, 1.0, 1.0])), String::new(), &open, text_object, false),
                 b"sh" => self.atom(i, i, UnitKind::Graphic, Some(crop), String::new(), &open, text_object, false),
                 b"BMC" | b"BDC" => {
                     let tag = op.name(0);
-                    let mcid = if name == b"BDC" {
-                        match op.operands.get(1) {
-                            Some(Object::Dict(d)) => d.get(b"MCID").and_then(Object::as_int),
-                            Some(Object::Name(n)) => properties
-                                .get(n)
-                                .map(|x| doc.resolve(x))
-                                .and_then(|x| x.as_dict().and_then(|d| d.get(b"MCID").and_then(Object::as_int))),
-                            _ => None,
-                        }
-                    } else {
-                        None
-                    };
+                    let mcid = if name == b"BDC" { marked_mcid(doc, op, &properties) } else { None };
                     let mark = match (tag, mcid) {
                         (Some(b"Artifact"), _) => Mark::Artifact,
                         (_, Some(m)) => Mark::Tagged(m),
@@ -738,6 +696,52 @@ impl PageContent {
 }
 
 /// Where a text-showing operator draws, and what it says.
+/// The points a path construction operator names (`re` its two corners, `h` none).
+fn path_points(name: &[u8], op: &Op) -> Vec<(f64, f64)> {
+    match name {
+        b"re" => op.nums::<4>().map(|[x, y, w, h]| vec![(x, y), (x + w, y + h)]).unwrap_or_default(),
+        b"h" => Vec::new(),
+        _ => {
+            let nums: Vec<f64> = op.operands.iter().filter_map(Object::as_f64).collect();
+            nums.as_chunks::<2>().0.iter().map(|[x, y]| (*x, *y)).collect()
+        }
+    }
+}
+
+/// What a `Do` paints, under `ctm`: its kind, its box, and whether it is structured content of
+/// its own (a form with `StructParents` or `StructParent`).
+fn xobject_unit(doc: &Document, xobjects: &Dict, op: &Op, ctm: &Matrix) -> (UnitKind, Option<[f64; 4]>, bool) {
+    let target = op.name(0).and_then(|n| xobjects.get(n)).and_then(Object::as_ref);
+    let Some(x) = target.map(|r| doc.get(r)) else { return (UnitKind::Graphic, None, false) };
+    match &*x {
+        Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form") => {
+            let bb: Vec<f64> = s
+                .dict
+                .get(b"BBox")
+                .and_then(|b| doc.resolve(b).as_array().map(|a| a.iter().filter_map(Object::as_f64).collect()))
+                .unwrap_or_default();
+            let fm = s.dict.get(b"Matrix").and_then(|m| doc.resolve(m).as_array().and_then(|a| Matrix::from_operands(a))).unwrap_or(Matrix::IDENTITY);
+            let bbox = match bb[..] {
+                [a, b, c, d] => Some(fm.then(ctm).bbox([a.min(c), b.min(d), a.max(c), b.max(d)])),
+                _ => None,
+            };
+            (UnitKind::Graphic, bbox, s.dict.contains(b"StructParents") || s.dict.contains(b"StructParent"))
+        }
+        _ => (UnitKind::Image, Some(ctm.bbox([0.0, 0.0, 1.0, 1.0])), false),
+    }
+}
+
+/// The MCID of a `BDC`'s property list, written in or named from the page's `/Properties`.
+fn marked_mcid(doc: &Document, op: &Op, properties: &Dict) -> Option<i64> {
+    match op.operands.get(1) {
+        Some(Object::Dict(d)) => d.get(b"MCID").and_then(Object::as_int),
+        Some(Object::Name(n)) => {
+            properties.get(n).map(|x| doc.resolve(x)).and_then(|x| x.as_dict().and_then(|d| d.get(b"MCID").and_then(Object::as_int)))
+        }
+        _ => None,
+    }
+}
+
 fn show(op: &Op, m: &Metrics, state: &State, tm: &mut Matrix) -> (Option<[f64; 4]>, String) {
     let pieces: Vec<&Object> = match op.op.as_slice() {
         b"TJ" => op.operands.first().and_then(Object::as_array).map(|a| a.iter().collect()).unwrap_or_default(),
