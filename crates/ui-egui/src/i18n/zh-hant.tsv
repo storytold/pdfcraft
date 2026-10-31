@@ -164,6 +164,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	讀取 {names}，而它們又讀取此欄位。任何順序都無法修正迴圈：請修改其中一個公式。
 	Not in order	不在順序中
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	PDF 中儲存的計算順序缺少此欄位：其他 PDF 檢視器可能不會計算它。
+	Reads {name}, which the form doesn't have, so it gets no value there.	讀取表單中不存在的 {name}，因此從中得不到值。
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	其指令碼還會讀取執行時才組出名稱的欄位，因此無法檢查這些讀取。
+	Missing field	缺少欄位
+	Unchecked reads	未檢查的讀取
+	{field} reads fields named as it runs	{field} 讀取執行時才確定名稱的欄位
+	Some names are built as it runs	部分名稱在執行時才組出
 	Back to Prepare a form	返回準備表單
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	此表單中還沒有計算自身值的欄位。在欄位內容的「計算」索引標籤中為欄位設定計算後，它會顯示在這裡。
 	{names} and {last}	{names}和{last}
@@ -221,6 +227,9 @@
 	Clean Up	清理
 	Color Images	彩色圖片
 	Grayscale Images	灰階圖片
+	Monochrome Images	單色圖片
+	CCITT Group 4	CCITT 第 4 組
+	JBIG2 (lossless)	JBIG2（無損）
 	Bicubic downsampling to	雙三次降取樣至
 	for images above	（高於此解析度的圖片）
 	Compression	壓縮
@@ -244,6 +253,7 @@
 	Discard private data of other applications	捨棄其他應用程式的私有資料
 	Discard hidden text	捨棄隱藏文字
 	Use Flate to encode streams that are not encoded	使用 Flate 編碼未編碼的流
+	In streams that use LZW encoding, use Flate instead	在使用 LZW 編碼的流中改用 Flate
 	Remove invalid links and bookmarks	刪除無效連結和書籤
 	Remove unreferenced named destinations	刪除未引用的命名目標
 	Compress document structure (object streams)	壓縮文件結構（物件流）
@@ -435,14 +445,9 @@
 	Copy Image in Original Format	以原始格式複製圖片
 	The image has been copied as a {ext} file	圖片已複製為 {ext} 檔案
 	The page has changed; select the image again	頁面已變更；請重新選取圖片
-	Check for updates	檢驗更新
 	No check has run yet.	尚未執行檢驗。
-	Checking for a newer version…	正在檢驗新版本…
 	PdfCraft {v} is available.	PdfCraft {v} 可用。
 	You have version {c}. Download the new version from its release page.	目前版本為 {c}。請從其釋出頁面下載新版本。
-	PdfCraft {c} is up to date.	PdfCraft {c} 已是最新。
-	Couldn't check for updates: {e}	無法檢驗更新：{e}
-	You have version {c}. All releases are listed at {page}.	目前版本為 {c}。所有版本列在 {page}。
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	向 GitHub 搜尋最新版本。不會自動下載或安裝任何內容。
 	Download	下載
 	Later	稍後
@@ -486,6 +491,14 @@
 	Applies to 1 page	套用於 1 頁
 	Applies to {n} pages	套用於 {n} 頁
 	Replaces the existing one on those pages.	替換這些頁面上的現有內容。
+	Checking pages…	正在檢查頁面…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	第 {pages} 頁有自己的白色填色，會遮住背景。取代它
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	第 {pages} 頁各有自己的白色填色，會遮住背景。取代它們
+	Removing the background puts the page's own backdrop back.	移除背景後，頁面自己的白色填色會恢復。
+	A picture covers page {pages} (a scan?), so the background won't show there.	第 {pages} 頁被一張圖片覆蓋（掃描檔？），因此那裡不會顯示背景。
+	Pictures cover pages {pages} (scans?), so the background won't show there.	第 {pages} 頁被圖片覆蓋（掃描檔？），因此那裡不會顯示背景。
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	第 {pages} 頁在加入背景後有變更，因此其本身的白色填色維持關閉。在白紙上看起來一樣。
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	第 {pages} 頁在加入背景後有變更，因此它們本身的白色填色維持關閉。在白紙上看起來一樣。
 	PDF or image	PDF 或圖片
 	No file chosen	未選擇檔案
 	Page number	頁碼
@@ -1782,6 +1795,15 @@
 	Tool	工具
 	Command	指令
 	Search tools and commands…	搜尋工具與指令…
+
+# Accessible names for inputs that have no visible label.
+	Added text	已新增的文字
+	Link URL	連結 URL
+	Search tools and commands	搜尋工具與指令
+	Text editing line	文字編輯行
+	Text to place	要放置的文字
+	Tooltip	提示
+	Words or phrases to redact	要遮蔽的字詞或片語
 	No matching tools	找不到相符的工具
 	All tools	所有工具
 	Read	閱讀
@@ -2054,6 +2076,10 @@
 	Perimeter	周長
 	Area	面積
 	Drawing scale	圖面比例
+	Scale	比例
+	Common scales	常用比例
+	Enter a scale such as 1:50.	請輸入比例，例如 1:50。
+	Applying a scale switches units to m / mm.	套用比例會將單位切換為 m / mm。
 	Snapping	吸附
 	Export measurements	匯出測量結果
 	Open a PDF to measure it.	開啟 PDF 以進行測量。
@@ -2106,6 +2132,7 @@
 	Go to page…	轉到頁面…
 	For page sizes and margins.	用於頁面尺寸和邊距。
 	Reopen the files that were open when PdfCraft last closed	重新開啟上次關閉 PdfCraft 時開啟的檔案
+	Restore the last view (page, zoom and page display) when a document is opened again	再次開啟文件時還原上次的檢視（頁面、縮放與頁面顯示）
 	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	PDF 文字字型無法顯示「{c}」（{code}）。請選擇支援的文字。
 	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	標準字型無法顯示「{c}」（{code}）。目前只能新增西歐字元作為文字。
 	This field's font can't draw “{c}” ({code}), so PdfCraft shows ? in its place. The value is saved, and other PDF viewers redraw the field from it.	此欄位的字型無法顯示「{c}」（{code}），PdfCraft 會在該處顯示 ?。值已儲存，其他 PDF 閱讀器會依據該值重新繪製此欄位。
@@ -2206,6 +2233,8 @@ key	Space	空格
 	Tools	工具
 	Inspector	檢查器
 	Reload documents when their files change on disk	檔案在磁碟上變更時重新載入對應的文件
+	Don't show again	不再顯示
+	Show a notice when a document is secured	文件已加密時顯示通知
 	Always use my default zoom and page layout	一律使用我的預設縮放與頁面佈局
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	此檔案已在磁碟上變更。「重新載入」會顯示新版本並捨棄未儲存的變更；「儲存」則會以此版本取代它。
 	Reload	重新載入
@@ -2264,6 +2293,11 @@ animation effects	Off	關
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} 在它讀取的 {fields} 之前計算。
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	另有 {n} 個欄位計算過早。
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} 不在 PDF 中儲存的順序裡，其他 PDF 檢視器可能不會計算。
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} 個公式讀取了表單中不存在的欄位
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} 讀取表單中不存在的 {fields}。
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	另有 {n} 個公式讀取了缺少的欄位。
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} 在執行時才組出部分欄位名稱，因此這些讀取不會被檢查。
+@plural	{fields} is missing|{fields} are missing	缺少 {fields}
 	Scan	掃描
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	在白紙上簽名，並在明亮、均勻的光線下拍照（使用閃光燈）。選擇相片或將其拖放到此處：PdfCraft 會找到簽名並去除紙張背景。
 	Choose photo…	選擇相片…
@@ -2444,6 +2478,19 @@ animation effects	Off	關
 	Make properties default	將內容設為預設
 	Pages selected	選取的頁面
 	Page properties	頁面屬性
+	Create & Edit	建立與編輯
+	Review & Compare	審閱與比較
+	Forms & Signatures	表單與簽名
+	Protect & Standardize	保護與標準化
+	Customize & Automate	自訂與自動化
+	No tools match your search.	沒有符合搜尋的工具。
+	Expand all tools	展開所有工具
+	Collapse all tools	摺疊所有工具
+	Attach a file…	附加檔案…
+	Delete attachment	刪除附件
+	Attaching files is not available on the web yet	網頁版尚不支援附加檔案
+	Attach {name}	附加 {name}
+	Delete attachment {key}	刪除附件 {key}
 	Font	字型
 	Bulleted list	項目符號清單
 	Numbered list	編號清單
@@ -2478,3 +2525,19 @@ animation effects	Off	關
 	field names can't contain a period: {name}	欄位名稱不能包含句點：{name}
 	two cells would both be named {name}	兩個儲存格的名稱都會是 {name}
 	a field named {name} already exists	已有名為 {name} 的欄位
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	今天
+@plural	{n} reply|{n} replies	{n} 則回覆
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	頁面工具
+	Insert pages from a file after the selection…	在所選內容後插入檔案中的頁面…
+	Rotate the selected pages counterclockwise	逆時針旋轉所選頁面
+	Rotate the selected pages clockwise	順時針旋轉所選頁面
+	Extract the selected pages…	擷取所選頁面…
+	Delete the selected pages	刪除所選頁面
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	此回覆的選項
+	Export value	匯出值

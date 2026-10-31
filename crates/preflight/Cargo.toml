@@ -16,7 +16,7 @@ pdfcraft-cos = { workspace = true }
 pdfcraft-filters = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 pdfcraft-model = { workspace = true }
-roxmltree = "0.20"
+roxmltree = "0.21"
 # ICC colour transforms (RGB to CMYK through the output profile); already in the tree via
 # hayro-interpret, at the same version and features.
 moxcms = "0.8.1"

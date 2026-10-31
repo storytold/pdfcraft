@@ -169,6 +169,39 @@ pub struct Context<'a> {
     pub(crate) xref: &'a XRef,
     pub(crate) ocg_state: OcgState,
     nesting_depth: u32,
+    /// PdfCraft patch: estimated bytes held by saved states, and for each `q` not saved because
+    /// a limit was reached, the clip count to return to at its `Q`.
+    saved_bytes: usize,
+    skipped_saves: Vec<usize>,
+    /// PdfCraft patch (68): the `num_states` at which the nested content stream (a form, an
+    /// appearance, a glyph or pattern cell) being interpreted started, or 0 in page content. A
+    /// `Q` there has no `q` of its own stream to match (see `stream_floor_reached`).
+    stream_floor: usize,
+    // PdfCraft patch (63).
+    /// This is the content of a luminosity soft mask whose group colour space is `/DeviceCMYK`,
+    /// so a `/DeviceCMYK` fill or stroke colour paints as its gray (ISO 32000-2 §11.5.3,
+    /// §10.4.2.3) rather than through the CMYK profile used for display.
+    pub(crate) luminosity_in_device_cmyk: bool,
+}
+
+/// PdfCraft patch: most graphics states saved at once. Every `q` copies the current state, dash
+/// array and clip list included, so without a limit short operators multiply one large state.
+const MAX_SAVED_STATES: usize = 4096;
+/// PdfCraft patch: most bytes all saved states may hold together.
+const MAX_SAVED_STATE_BYTES: usize = 64 << 20;
+
+/// Roughly what a saved copy of `state` holds.
+fn state_bytes(state: &State<'_>) -> usize {
+    size_of::<State<'_>>()
+        .saturating_add(
+            state
+                .graphics_state
+                .stroke_props
+                .dash_array
+                .len()
+                .saturating_mul(size_of::<f32>()),
+        )
+        .saturating_add(state.clips.len().saturating_mul(size_of::<ClipType>()))
 }
 
 impl<'a> Context<'a> {
@@ -185,6 +218,8 @@ impl<'a> Context<'a> {
         NESTED_PAINTS.with(|n| n.set(0));
         CONTENT_LEFT.with(|c| c.set(MAX_PAGE_CONTENT));
         CONTENT_TRUNCATED.with(|truncated| truncated.set(false));
+        // PdfCraft patch (55): a fallback left over from another page is not this page's.
+        crate::color::take_color_fallback();
         crate::encode::reset_mesh_budget();
 
         Self::new_with(initial_transform, bbox, cache, xref, settings, state, 0)
@@ -223,15 +258,35 @@ impl<'a> Context<'a> {
             interpreter_cache: cache.clone(),
             ocg_state,
             nesting_depth,
+            saved_bytes: 0,
+            skipped_saves: Vec::new(),
+            stream_floor: 0,
+            luminosity_in_device_cmyk: false,
         }
     }
 
     pub(crate) fn save_state(&mut self) {
-        let Some(cur) = self.states.last().cloned() else {
+        let Some(cur) = self.states.last() else {
             warn!("attempted to save state without existing state");
             return;
         };
 
+        // PdfCraft patch: past either limit the `q` is recorded but nothing is copied. Its `Q`
+        // still removes the clips added since; other changes made in between are kept.
+        let bytes = state_bytes(cur);
+        if !self.skipped_saves.is_empty()
+            || self.states.len() >= MAX_SAVED_STATES
+            || self.saved_bytes.saturating_add(bytes) > MAX_SAVED_STATE_BYTES
+        {
+            if self.skipped_saves.is_empty() {
+                warn!("too many saved graphics states; further saves are not kept");
+            }
+            self.skipped_saves.push(cur.clips.len());
+            return;
+        }
+
+        let cur = cur.clone();
+        self.saved_bytes = self.saved_bytes.saturating_add(bytes);
         self.states.push(cur);
     }
 
@@ -308,6 +363,14 @@ impl<'a> Context<'a> {
     }
 
     pub(crate) fn restore_state(&mut self, device: &mut impl Device<'a>) {
+        // PdfCraft patch: a save that was not kept is the most recent one.
+        if let Some(target_clips) = self.skipped_saves.pop() {
+            while self.get().clips.len() > target_clips {
+                self.pop_clip_path(device);
+            }
+            return;
+        }
+
         let Some(target_clips) = self
             .states
             .get(self.states.len().saturating_sub(2))
@@ -324,6 +387,10 @@ impl<'a> Context<'a> {
         // The first state should never be popped.
         if self.states.len() > 1 {
             self.states.pop();
+            // PdfCraft patch: the state now on top is the copy that was charged when saved.
+            if let Some(top) = self.states.last() {
+                self.saved_bytes = self.saved_bytes.saturating_sub(state_bytes(top));
+            }
         }
 
         device.set_soft_mask(
@@ -394,8 +461,28 @@ impl<'a> Context<'a> {
         self.get().graphics_state.stroke_props.clone()
     }
 
+    /// PdfCraft patch (68): starts a nested content stream at the current depth and returns the
+    /// floor of the stream it runs inside, for `leave_stream`.
+    pub(crate) fn enter_stream(&mut self) -> usize {
+        let depth = self.num_states();
+        std::mem::replace(&mut self.stream_floor, depth)
+    }
+
+    /// PdfCraft patch (68): ends a content stream begun with `enter_stream`.
+    pub(crate) fn leave_stream(&mut self, outer_floor: usize) {
+        self.stream_floor = outer_floor;
+    }
+
+    /// PdfCraft patch (68): every `q` of the current content stream has been matched, so a `Q`
+    /// now would restore a state its caller saved (a stream balances its own `q` and `Q`,
+    /// ISO 32000-2 §8.4.2, §8.10.1).
+    pub(crate) fn stream_floor_reached(&self) -> bool {
+        self.num_states() <= self.stream_floor
+    }
+
     pub(crate) fn num_states(&self) -> usize {
-        self.states.len()
+        // PdfCraft patch: saves not kept still count, so callers restore back past them.
+        self.states.len().saturating_add(self.skipped_saves.len())
     }
 
     pub(crate) fn nesting_depth(&self) -> u32 {
@@ -516,4 +603,98 @@ pub(crate) fn path_as_rect(path: &BezPath) -> Option<Rect> {
     }
 
     Some(path.fast_bounding_box())
+}
+
+/// PdfCraft patch tests (ported from craft-libs): the graphics-state stack is bounded by count
+/// and by bytes, and every `q` still pairs with its `Q`.
+#[cfg(test)]
+mod saved_state_tests {
+    use super::*;
+    use crate::device::DummyDevice;
+    use hayro_syntax::Pdf;
+
+    fn pdf() -> Pdf {
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Count 0 /Kids [] >>",
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, body) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(b"xref\n0 3\n0000000000 65535 f \n");
+        for offset in offsets {
+            out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(
+            format!("trailer\n<< /Size 3 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes(),
+        );
+        Pdf::new(out).expect("synthetic pdf")
+    }
+
+    fn triangle() -> BezPath {
+        let mut path = BezPath::new();
+        path.move_to((10.0, 10.0));
+        path.line_to((90.0, 10.0));
+        path.line_to((50.0, 90.0));
+        path.close_path();
+        path
+    }
+
+    /// Saves `saves` more times, checks a clip added after the last save goes at its `Q`, and unwinds.
+    fn save_and_unwind(ctx: &mut Context<'_>, saves: usize) {
+        let before = ctx.num_states();
+        for _ in 0..saves {
+            ctx.save_state();
+        }
+        assert!(ctx.states.len() <= MAX_SAVED_STATES);
+        assert!(ctx.saved_bytes <= MAX_SAVED_STATE_BYTES);
+        assert_eq!(ctx.num_states(), before + saves, "every q still counts");
+
+        let mut device = DummyDevice;
+        let clips = ctx.get().clips.len();
+        ctx.push_clip_path(triangle(), FillRule::NonZero, &mut device);
+        assert_eq!(ctx.get().clips.len(), clips + 1);
+        ctx.restore_state(&mut device);
+        assert_eq!(ctx.get().clips.len(), clips);
+
+        while ctx.num_states() > 1 {
+            ctx.restore_state(&mut device);
+        }
+        assert_eq!(ctx.states.len(), 1);
+        assert!(ctx.skipped_saves.is_empty());
+        assert_eq!(ctx.saved_bytes, 0);
+    }
+
+    #[test]
+    fn repeated_saves_stay_bounded_and_balanced() {
+        let pdf = pdf();
+        let cache = InterpreterCache::new();
+        let bbox = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let settings = InterpreterSettings::default();
+        let mut ctx = Context::new(Affine::IDENTITY, bbox, &cache, pdf.xref(), settings);
+
+        // A small state reaches the count limit.
+        save_and_unwind(&mut ctx, 20_000);
+
+        // A large one (a 64 Ki-entry dash array, 256 KiB a copy) reaches the byte limit first.
+        ctx.get_mut().graphics_state.stroke_props.dash_array = (0..1 << 16).map(|_| 2.0).collect();
+        ctx.save_state();
+        assert_eq!(ctx.states.len(), 2);
+        while ctx.skipped_saves.is_empty() {
+            ctx.save_state();
+        }
+        assert!(ctx.states.len() < MAX_SAVED_STATES);
+        save_and_unwind(&mut ctx, 1000);
+
+        // Once unwound, a kept save restores what changed after it.
+        let mut device = DummyDevice;
+        ctx.save_state();
+        ctx.pre_concat_affine(Affine::scale(2.0));
+        ctx.restore_state(&mut device);
+        assert_eq!(ctx.get().ctm, Affine::IDENTITY);
+    }
 }
