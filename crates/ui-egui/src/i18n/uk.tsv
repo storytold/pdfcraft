@@ -2641,3 +2641,4 @@ animation effects	Off	Вимкнено
 # A text border's own colour (M5).
 	Border colour	Колір рамки
 	Same as text	Як у тексту
+	Border shape	Форма рамки

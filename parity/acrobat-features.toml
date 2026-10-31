@@ -3727,6 +3727,18 @@ evidence = ["crates/annot/src/tests.rs::fill_and_sign_items_are_drawn", "crates/
 notes = "Fill & Sign text and dates have a 4–300 pt size control in the active toolbar; new items use the chosen size, which persists across launches (with a placed text selected it resizes that text too). A Border control (none to 3 pt) frames new text or the selected text, in the text's colour or a Border colour of its own; the box grows outwards so the text keeps its place. With a placed text selected, the border controls show its own border and border colour (also after Comment Properties changed them) and change only that text; without one they set new text's until PdfCraft quits. Make Current Properties Default on typed text (its menus, or the box in Comment Properties) sets what new text gets, its size and border, kept across launches. Text boxes and callouts take a border colour too (quick bar, Comment Properties), the stroking colour in /DA. fill_sign_add accepts font_size, border and border_color for text and dates; comment_edit border_color."
 
 [[feature]]
+id = "comment.text-border-shape"
+title = "An oval or a circle around a text box's or typed text's text"
+area = "E"
+tier = "P2"
+milestone = "M5"
+status = "shipped"
+commands = []
+tools = ["comment_add", "comment_edit", "fill_sign_add", "comment_list"]
+evidence = ["crates/annot/src/tests.rs::text_boxes_take_an_oval_or_a_circle_around_their_text", "crates/annot/src/tests.rs::a_circle_goes_snug_around_its_text_and_follows_it", "crates/annot/src/tests.rs::a_circle_touching_its_text_box_keeps_following_its_text", "crates/ui-egui/tests/it/fill_sign.rs::typed_text_takes_an_oval_or_a_circle_from_the_toolbar", "crates/ui-egui/tests/it/comments.rs::text_box_properties_choose_the_border_shape", "crates/automation/tests/it/automation.rs::text_borders_take_an_oval_or_a_circle_through_the_tools"]
+notes = "Comment Properties ▸ Border shape (text boxes, typewriter text) and Fill & Sign's toolbar beside Border (typed text and dates, for new text and the selected one, and showing the selected one's) choose Rectangle, Oval or Circle: a position number in a circle, a label in an oval on a plan. The text box keeps its place and the shape goes around it, centred: an oval through its corners (√2 its size), a point clear of the border; the text is centred in it. A circle goes snug around its text: the text box is no wider than its text needs (typed text with a circle skips the 40 pt a box to type into keeps; choosing Circle shrinks an existing box to its lines), the circle a point clear of the text's lines and touching the box's longer sides, so a 10 pt \"3\" gets a 20 pt circle; a snug circle follows its text and font size, one made larger by hand keeps its size. /Rect grows to hold the shape and /RD keeps the text box inside it (§12.5.6.6, as a callout's; 0 where a circle touches the box, a hair below 0 read as 0), with PdfCraft's /PCBorderShape; background and border take the shape, the appearance draws it so every viewer shows it, and an app that redraws the comment from its keys draws a rectangle. Resizing the frame takes the text box along (a circle's keeping its proportions); a thicker border leaves the text where it is. Make Properties Default carries it into the Text box tool, and on typed text into Fill & Sign's new text. Headless: comment_add / comment_edit / fill_sign_add `border_shape` (rectangle, oval, circle); comment_list reports an oval or a circle. Callouts keep a rectangle. Acrobat's text boxes have a rectangular border only."
+
+[[feature]]
 id = "comment.text-box"
 title = "Text box comment with rich text"
 area = "E"

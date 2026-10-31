@@ -2796,3 +2796,4 @@ key	Space	Mellomrom
 # A text border's own colour (M5).
 	Border colour	Kantlinjefarge
 	Same as text	Samme som teksten
+	Border shape	Kantlinjeform

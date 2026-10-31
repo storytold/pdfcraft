@@ -34,7 +34,7 @@ use geometry::handle_pos;
 #[cfg(test)]
 pub(crate) use geometry::{caret_snap, snapped_caret};
 pub(crate) use geometry::{corner_ratio, page_rotation, resized};
-pub use geometry::{drawn_text_box_rect, text_box_rect};
+pub use geometry::{drawn_text_box_rect, snug_text_box_rect, text_box_rect};
 #[cfg(test)]
 use input::hover_tip;
 pub(crate) use input::{describe, fill_grabs, hit, keys, nudge_keys, page_after_text, page_input};
@@ -334,6 +334,13 @@ impl CommentPrefs {
     pub fn set_opacity(&mut self, tool: CommentTool, o: f64) {
         if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
             s.opacity = if o.is_finite() { o.clamp(0.1, 1.0) } else { 1.0 };
+        }
+    }
+
+    /// The text box tool's border shape (the other tools keep a rectangle).
+    pub fn set_border_shape(&mut self, tool: CommentTool, shape: pdfcraft_engine::BorderShape) {
+        if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
+            s.border_shape = if tool == CommentTool::TextBox { shape } else { pdfcraft_engine::BorderShape::Rectangle };
         }
     }
 

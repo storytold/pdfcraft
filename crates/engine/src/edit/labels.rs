@@ -229,6 +229,7 @@ impl Edit {
             | Edit::FillAnnotation { .. }
             | Edit::FontSizeAnnotation { .. }
             | Edit::BorderColorAnnotation { .. }
+            | Edit::BorderShapeAnnotation { .. }
             | Edit::SetAnnotationInfo { .. } => Label::of("Change comment properties"),
             Edit::SetFieldValue { name, .. } => Label::with("Fill in {name}", name.as_str()),
             Edit::SetFieldImage { name, .. } => Label::with("Set the image of {name}", name.as_str()),

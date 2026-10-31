@@ -2847,3 +2847,4 @@ theme	Appearance	모양
 # A text border's own colour (M5).
 	Border colour	테두리 색
 	Same as text	텍스트와 같음
+	Border shape	테두리 모양

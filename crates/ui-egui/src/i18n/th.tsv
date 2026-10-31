@@ -2778,3 +2778,4 @@ theme	Appearance	ลักษณะที่ปรากฏ
 # A text border's own colour (M5).
 	Border colour	สีเส้นขอบ
 	Same as text	เหมือนข้อความ
+	Border shape	รูปทรงเส้นขอบ

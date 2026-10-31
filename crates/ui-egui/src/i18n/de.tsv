@@ -2620,3 +2620,4 @@ animation effects	Off	Aus
 # A text border's own colour (M5).
 	Border colour	Rahmenfarbe
 	Same as text	Wie Text
+	Border shape	Rahmenform

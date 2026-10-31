@@ -2926,3 +2926,4 @@ certificate	Version	Verze
 # A text border's own colour (M5).
 	Border colour	Barva ohraničení
 	Same as text	Stejně jako text
+	Border shape	Tvar ohraničení

@@ -2,7 +2,7 @@ use super::create::finite;
 use super::draw::set_appearance;
 use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, drawn_upright, is_fill_sign, page_ref, page_refs};
 use super::modify::{fillable, touch, unlocked};
-use super::types::{FLAG_LOCKED, LineEnding, Meta, NoteIcon, Rgb};
+use super::types::{BorderShape, FLAG_LOCKED, LineEnding, Meta, NoteIcon, Rgb};
 use super::{AnnotError, Dict, Document, ObjRef, Object, PdfString, appearance};
 
 // ── reading ─────────────────────────────────────────────────────────────────────────────────
@@ -215,6 +215,8 @@ pub struct Props {
     pub font_size: Option<f64>,
     /// Text boxes, typewriter text and callouts: the border's own colour (`None`: the text's).
     pub border_color: Option<Rgb>,
+    /// Text boxes and typewriter text: the border's shape (callouts have none to choose).
+    pub border_shape: Option<BorderShape>,
 }
 
 /// The current properties of the comment at `(page, index)`.
@@ -247,6 +249,7 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
         fill: fill_of(d),
         font_size: (subtype == "FreeText").then(|| appearance::parse_da(d).1),
         border_color: (subtype == "FreeText").then(|| appearance::da_border(d)).flatten(),
+        border_shape: (subtype == "FreeText" && !d.contains(b"CL")).then(|| BorderShape::of(d)),
         subtype,
         endings: line_endings_of(d),
     })

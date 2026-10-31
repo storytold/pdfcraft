@@ -1,5 +1,5 @@
 use super::create::normalize;
-use super::{ObjRef, appearance};
+use super::{Dict, ObjRef, appearance};
 
 pub type Rgb = [f64; 3];
 
@@ -564,6 +564,8 @@ pub struct Style {
     /// A text box's, typewriter text's or callout's border colour where it differs from the
     /// text's (`None`: the text colour), the stroking colour in its `/DA`.
     pub border_color: Option<Rgb>,
+    /// A text box's or typewriter text's border shape (a callout's is always a rectangle).
+    pub border_shape: BorderShape,
 }
 
 /// The style properties changed by one annotation edit. `None` leaves a property unchanged.
@@ -595,7 +597,93 @@ pub struct TextReplacement<'a> {
 
 impl Default for Style {
     fn default() -> Self {
-        Self { color: [1.0, 0.82, 0.0], opacity: 1.0, width: 1.0, fill: None, border_color: None }
+        Self { color: [1.0, 0.82, 0.0], opacity: 1.0, width: 1.0, fill: None, border_color: None, border_shape: BorderShape::Rectangle }
+    }
+}
+
+/// The shape of a text box's or typewriter text's border (PdfCraft's `/PCBorderShape`, absent for
+/// a rectangle). An oval or a circle goes around the text box, which keeps its place: `/Rect`
+/// grows to hold it, centred on the text box, and `/RD` says where the text box is inside
+/// (§12.5.6.6), as for a callout. Other apps that redraw the comment draw a rectangle.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BorderShape {
+    #[default]
+    Rectangle,
+    Oval,
+    Circle,
+}
+
+impl BorderShape {
+    pub const ALL: [BorderShape; 3] = [BorderShape::Rectangle, BorderShape::Oval, BorderShape::Circle];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            BorderShape::Rectangle => "Rectangle",
+            BorderShape::Oval => "Oval",
+            BorderShape::Circle => "Circle",
+        }
+    }
+
+    /// `rectangle`, `oval` or `circle`, in any case.
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|b| b.name().eq_ignore_ascii_case(s))
+    }
+
+    /// The border shape of FreeText `d`: always a rectangle for a callout.
+    pub fn of(d: &Dict) -> Self {
+        if d.contains(b"CL") {
+            return BorderShape::Rectangle;
+        }
+        match d.name(b"PCBorderShape") {
+            Some(b"Oval") => BorderShape::Oval,
+            Some(b"Circle") => BorderShape::Circle,
+            _ => BorderShape::Rectangle,
+        }
+    }
+
+    /// The rectangle this shape, with a border `width` wide, takes around text box `tb`, centred on
+    /// it: an oval through the text box's corners (`√2` its size), a point clear of the border; a
+    /// circle around the text's lines (`text`: the widest line's width and the lines' height, when
+    /// known), a point clear of the border and touching the text box's longer sides at least
+    /// (its corners, padding only, may lie outside), else through the box's corners; the text box
+    /// itself for a rectangle.
+    pub fn around(self, tb: [f64; 4], width: f64, text: Option<[f64; 2]>) -> [f64; 4] {
+        let tb = normalize(tb);
+        let (cx, cy, hx, hy) = ((tb[0] + tb[2]) / 2.0, (tb[1] + tb[3]) / 2.0, (tb[2] - tb[0]) / 2.0, (tb[3] - tb[1]) / 2.0);
+        let gap = width.max(0.0) + 1.0;
+        let (ax, ay) = match self {
+            BorderShape::Rectangle => return tb,
+            BorderShape::Oval => (hx * std::f64::consts::SQRT_2 + gap, hy * std::f64::consts::SQRT_2 + gap),
+            BorderShape::Circle => {
+                let r = match text {
+                    Some([w, h]) => ((w / 2.0).hypot(h / 2.0) + gap).max(hx).max(hy),
+                    None => hx.hypot(hy) + gap,
+                };
+                (r, r)
+            }
+        };
+        [cx - ax, cy - ay, cx + ax, cy + ay]
+    }
+
+    /// The text box inside `outer` for this shape when none is recorded: the inverse of
+    /// [`Self::around`] for an oval, a box through a circle's corners for a circle, keeping the
+    /// proportions of `was` (the one it had).
+    pub(crate) fn inside(self, outer: [f64; 4], width: f64, was: [f64; 4]) -> [f64; 4] {
+        let o = normalize(outer);
+        let (cx, cy, hx, hy) = ((o[0] + o[2]) / 2.0, (o[1] + o[3]) / 2.0, (o[2] - o[0]) / 2.0, (o[3] - o[1]) / 2.0);
+        let gap = width.max(0.0) + 1.0;
+        let (ix, iy) = match self {
+            BorderShape::Rectangle => return o,
+            BorderShape::Oval => ((hx - gap) / std::f64::consts::SQRT_2, (hy - gap) / std::f64::consts::SQRT_2),
+            BorderShape::Circle => {
+                let w = normalize(was);
+                let (wx, wy) = ((w[2] - w[0]) / 2.0, (w[3] - w[1]) / 2.0);
+                let k = (hx.min(hy) - gap) / wx.hypot(wy).max(1e-6);
+                (wx * k, wy * k)
+            }
+        };
+        let (ix, iy) = (ix.max(0.5), iy.max(0.5));
+        [cx - ix, cy - iy, cx + ix, cy + iy]
     }
 }
 
@@ -622,10 +710,10 @@ impl Style {
             Shape::TypedSignature { .. } => ([0.0, 0.0, 0.0], 0.0),
             // Red outline while marked; a black box once applied.
             Shape::Redact { .. } => {
-                return Self { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: Some([0.0, 0.0, 0.0]), border_color: None };
+                return Self { color: [0.89, 0.13, 0.13], fill: Some([0.0, 0.0, 0.0]), ..Self::default() };
             }
         };
-        Self { color, opacity: 1.0, width, fill: None, border_color: None }
+        Self { color, width, ..Self::default() }
     }
 }
 

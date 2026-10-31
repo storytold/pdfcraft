@@ -2894,3 +2894,4 @@ certificate	Version	الإصدار
 # A text border's own colour (M5).
 	Border colour	لون الحد
 	Same as text	مثل النص
+	Border shape	شكل الحد

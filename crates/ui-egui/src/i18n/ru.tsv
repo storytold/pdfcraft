@@ -2532,3 +2532,4 @@ animation effects	Off	Выкл
 # A text border's own colour (M5).
 	Border colour	Цвет границы
 	Same as text	Как у текста
+	Border shape	Форма границы

@@ -330,6 +330,8 @@ pub struct PdfCraftApp {
     pub fill_text_border: f64,
     /// That border's own colour (`None`: the text's).
     pub fill_text_border_color: Option<pdfcraft_engine::Rgb>,
+    /// That border's shape (an oval or a circle goes around the text).
+    pub fill_text_border_shape: pdfcraft_engine::BorderShape,
     /// The border new Fill & Sign text starts each launch with, kept across launches: what Make
     /// Current Properties Default last took from typed text (none at first).
     pub fill_text_default: fill_sign::TextBorder,

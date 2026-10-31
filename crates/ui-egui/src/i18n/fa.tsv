@@ -2830,3 +2830,5 @@ theme	Appearance	ظاهر
 # A text border's own colour (M5).
 	Border colour	رنگ حاشیه
 	Same as text	همانند متن
+
+	Border shape	شکل حاشیه

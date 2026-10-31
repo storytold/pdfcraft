@@ -2942,3 +2942,4 @@ theme	Appearance	Aspecto
 # A text border's own colour (M5).
 	Border colour	Color del borde
 	Same as text	Igual que el texto
+	Border shape	Forma del borde

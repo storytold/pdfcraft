@@ -69,6 +69,7 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         | Edit::FillAnnotation { .. }
         | Edit::FontSizeAnnotation { .. }
         | Edit::BorderColorAnnotation { .. }
+        | Edit::BorderShapeAnnotation { .. }
         | Edit::SetAnnotationInfo { .. } => Scope::Comments,
         Edit::AddLink { .. } | Edit::SetLink { .. } | Edit::DeleteLink { .. } | Edit::RemoveLinks { .. } | Edit::AddLinks { .. } => Scope::Links,
         Edit::SetFieldValue { .. } | Edit::ResetForm { .. } | Edit::SetFieldImage { .. } | Edit::ApplyScriptChanges { .. } => Scope::Form,

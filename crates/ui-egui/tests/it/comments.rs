@@ -1237,6 +1237,80 @@ fn shapes_take_a_fill_colour_from_the_quick_bar_and_properties() {
     assert_eq!(h.state().comment_prefs.style(CommentTool::Rectangle).fill, Some([0.0, 0.0, 1.0]));
 }
 
+/// Comment Properties ▸ Border shape puts an oval or a circle around a text box's text; a
+/// callout has none to choose. Make Properties Default carries it into the Text box tool.
+#[test]
+fn text_box_properties_choose_the_border_shape() {
+    use pdfcraft_engine::BorderShape;
+    use pdfcraft_ui_egui::comments::CommentTool;
+    let mut h = harness(|_| {});
+    let shape = pdfcraft_engine::Shape::TextBox { rect: [40.0, 120.0, 200.0, 160.0], font_size: 12.0 };
+    let mut style = pdfcraft_engine::Style::default_for(&shape);
+    style.width = 1.0;
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+        page: 0,
+        shape,
+        style,
+        contents: "Pos. 3".into(),
+        author: "Tester".into(),
+    })));
+    h.run_steps(2);
+    h.state_mut().open_comment_props(0, 0);
+    h.run_steps(2);
+    h.get_by_label("Border shape");
+    {
+        let d = h.state_mut().comment_props.as_mut().expect("open");
+        assert_eq!(d.original.border_shape, Some(BorderShape::Rectangle));
+        d.edited.border_shape = Some(BorderShape::Oval);
+        d.make_default = true;
+    }
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert_eq!(doc.comment_props(0, 0).unwrap().border_shape, Some(BorderShape::Oval));
+    assert_eq!(doc.can_undo(), Some("Change comment properties"));
+    assert_eq!(s.comment_prefs.style(CommentTool::TextBox).border_shape, BorderShape::Oval, "the default for new text boxes");
+}
+
+/// Thickness 0 in Comment Properties takes a circle away with the line, as Border ▸ None does on
+/// the toolbar, and a default made from it draws no circle either.
+#[test]
+fn no_thickness_in_text_box_properties_takes_the_circle_away() {
+    use pdfcraft_engine::BorderShape;
+    use pdfcraft_ui_egui::comments::CommentTool;
+    let mut h = harness(|_| {});
+    let shape = pdfcraft_engine::Shape::TextBox { rect: [40.0, 120.0, 200.0, 160.0], font_size: 12.0 };
+    let mut style = pdfcraft_engine::Style::default_for(&shape);
+    style.width = 1.0;
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+        page: 0,
+        shape,
+        style,
+        contents: "Pos. 3".into(),
+        author: "Tester".into(),
+    })));
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::BorderShapeAnnotation { page: 0, index: 0, shape: BorderShape::Circle }));
+    h.state_mut().comment_prefs.set_border_shape(CommentTool::TextBox, BorderShape::Circle);
+    h.run_steps(2);
+    h.state_mut().open_comment_props(0, 0);
+    h.run_steps(2);
+    {
+        let d = h.state_mut().comment_props.as_mut().expect("open");
+        assert_eq!(d.original.border_shape, Some(BorderShape::Circle));
+        d.edited.width = Some(0.0);
+        d.make_default = true;
+    }
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    let p = doc.comment_props(0, 0).unwrap();
+    assert_eq!((p.width, p.border_shape), (Some(0.0), Some(BorderShape::Rectangle)));
+    assert_eq!(doc.can_undo(), Some("Change comment properties"));
+    assert_eq!(s.comment_prefs.style(CommentTool::TextBox).border_shape, BorderShape::Rectangle, "the default for new text boxes");
+}
+
 #[test]
 fn the_panel_filters_and_sorts() {
     let mut h = harness(|app| {
@@ -2154,6 +2228,47 @@ fn a_text_box_made_default_gives_the_tool_its_border_colour() {
     assert_eq!(h.state().comment_prefs.style(CommentTool::TextBox).border_color, red);
 }
 
+/// The Text box tool's Border colour button shows the selected text box's own border colour
+/// (Comment Properties may have given it one), and the tool's again with none selected.
+#[test]
+fn the_border_colour_button_shows_the_selected_text_boxs_colour() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+    let mut h = harness(|app| app.set_option("quick", "freetext").unwrap());
+    let shape = Shape::TextBox { rect: [100.0, 600.0, 220.0, 630.0], font_size: 12.0 };
+    let style = Style { width: 1.0, ..Style::default_for(&shape) };
+    assert!(h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation {
+        page: 0,
+        shape,
+        style,
+        contents: "Framed".into(),
+        author: "Tester".into()
+    })));
+    h.run_steps(2);
+    let index = comments(&h).iter().find(|a| a.contents.as_deref() == Some("Framed")).map(|a| a.index).expect("the text box");
+    // A border colour of its own, which the tool doesn't have.
+    assert!(h.state_mut().apply_edit(Edit::BorderColorAnnotation { page: 0, index, color: Some([0.0, 0.47, 0.84]) }));
+    h.run_steps(2);
+    // The colour the button's square is drawn in.
+    let shown = |h: &Harness<'static, PdfCraftApp>| {
+        let button = h.get_by_label("Border colour").rect();
+        h.output().shapes.iter().find_map(|s| match &s.shape {
+            egui::Shape::Rect(r) if r.stroke.width == 3.0 && button.contains_rect(r.rect) => Some(r.stroke.color),
+            _ => None,
+        })
+    };
+    // A new text box comes selected.
+    h.state_mut().views[0].comments.selected = None;
+    h.run_steps(3);
+    let tool = shown(&h).expect("the button's square");
+    h.state_mut().views[0].comments.selected = Some((0, index));
+    h.run_steps(3);
+    let own = shown(&h).expect("the button's square");
+    assert!(own != tool && own.b() > 200 && own.r() < 30, "the selected text box's blue: {own:?}, the tool's {tool:?}");
+    h.state_mut().views[0].comments.selected = None;
+    h.run_steps(3);
+    assert_eq!(shown(&h), Some(tool), "the tool's colour again");
+}
+
 /// #1302: making an arrow's properties the default updates the Arrow tool, not later plain lines.
 #[test]
 fn an_arrows_default_does_not_restyle_lines() {
@@ -2895,7 +3010,14 @@ fn a_moved_comment_is_drawn_where_it_goes_before_release() {
     for shape in
         [pdfcraft_engine::Shape::Rectangle { rect: [30.0, 30.0, 70.0, 70.0] }, pdfcraft_engine::Shape::Oval { rect: [230.0, 30.0, 270.0, 70.0] }]
     {
-        let style = pdfcraft_engine::Style { color: [1.0, 0.0, 0.0], opacity: 1.0, width: 2.0, fill: Some([1.0, 0.0, 0.0]), border_color: None };
+        let style = pdfcraft_engine::Style {
+            color: [1.0, 0.0, 0.0],
+            opacity: 1.0,
+            width: 2.0,
+            fill: Some([1.0, 0.0, 0.0]),
+            border_color: None,
+            border_shape: pdfcraft_engine::BorderShape::Rectangle,
+        };
         assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
             page: 0,
             shape,

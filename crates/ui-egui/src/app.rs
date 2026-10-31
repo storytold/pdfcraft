@@ -108,6 +108,7 @@ impl PdfCraftApp {
             fill_text_color: [0.0; 3],
             fill_text_border: 0.0,
             fill_text_border_color: None,
+            fill_text_border_shape: pdfcraft_engine::BorderShape::Rectangle,
             fill_text_default: fill_sign::TextBorder::NONE,
             dialog: None,
             updates: updates::Updates::default(),

@@ -2625,3 +2625,4 @@ animation effects	Off	Ανενεργά
 # A text border's own colour (M5).
 	Border colour	Χρώμα περιγράμματος
 	Same as text	Ίδιο με το κείμενο
+	Border shape	Σχήμα περιγράμματος

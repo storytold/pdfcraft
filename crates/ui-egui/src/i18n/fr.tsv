@@ -2884,3 +2884,4 @@ certificate	Version	Version
 # A text border's own colour (M5).
 	Border colour	Couleur de bordure
 	Same as text	Comme le texte
+	Border shape	Forme de la bordure

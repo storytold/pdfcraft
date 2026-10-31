@@ -2851,3 +2851,4 @@ certificate	SHA-256 digest	Impronta SHA-256
 # A text border's own colour (M5).
 	Border colour	Colore bordo
 	Same as text	Come il testo
+	Border shape	Forma bordo

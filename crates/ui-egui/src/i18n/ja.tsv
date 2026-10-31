@@ -2619,3 +2619,4 @@ animation effects	Off	オフ
 # A text border's own colour (M5).
 	Border colour	境界線の色
 	Same as text	テキストと同じ
+	Border shape	境界線の形

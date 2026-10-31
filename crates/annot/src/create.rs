@@ -1,6 +1,6 @@
 use super::draw::draw_appearance;
 use super::lookup::{annot_dict, annot_ref, annots, fill_sign_shape, page_ref, set_annots};
-use super::modify::{free_text_da, n, rich_text};
+use super::modify::{free_text_da, n, rich_text, shape_text_box};
 use super::types::{
     FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, OverlayLook, Rgb, Shape, StampGroup, Style,
 };
@@ -379,12 +379,15 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             }
             border(&mut d);
             rich_text(&mut d);
-            // The text is laid out for the page as displayed, like a stamp's label.
             if !matches!(new.shape, Shape::Callout { .. }) {
+                // The text is laid out for the page as displayed, like a stamp's label.
                 let turn = pdfcraft_model::pages(doc).get(new.page).map_or(0, |p| p.rotation(doc));
                 if matches!(turn, 90 | 180 | 270) {
                     d.set(b"PCTextRotate".to_vec(), Object::Int(turn));
                 }
+                // An oval or a circle goes around the text box, its text wrapped as displayed:
+                // after `/PCTextRotate`, which swaps the box's sides on a quarter-turned page.
+                shape_text_box(&mut d, rect, style.border_shape, style.width);
             }
         }
         _ => {}

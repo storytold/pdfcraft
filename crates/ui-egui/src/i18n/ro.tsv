@@ -2878,3 +2878,4 @@ theme	Appearance	Aspect
 # A text border's own colour (M5).
 	Border colour	Culoare chenar
 	Same as text	Ca textul
+	Border shape	Formă chenar

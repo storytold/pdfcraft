@@ -104,6 +104,7 @@ impl PdfCraftApp {
             "fill_text_size": self.fill_text_size,
             "fill_text_border": self.fill_text_default.width,
             "fill_text_border_color": self.fill_text_default.color,
+            "fill_text_border_shape": self.fill_text_default.shape.name(),
             "date_format": self.session.date_format(),
             // Null follows the interface language.
             "date_language": self.session.date_language(),
@@ -120,6 +121,7 @@ impl PdfCraftApp {
                     "width": s.width,
                     "fill": s.fill,
                     "border_color": s.border_color,
+                    "border_shape": s.border_shape.name(),
                 }))
                 .collect::<Vec<_>>(),
             // Drawn signatures keep their original form (older settings read the same).
@@ -290,6 +292,9 @@ impl PdfCraftApp {
         if let Some(width) = v["fill_text_border"].as_f64().and_then(fill_sign::valid_text_border) {
             self.fill_text_default.width = width;
         }
+        if let Some(shape) = v["fill_text_border_shape"].as_str().and_then(pdfcraft_engine::BorderShape::parse) {
+            self.fill_text_default.shape = shape;
+        }
         // `null` is a saved "the text's colour"; a missing or malformed one keeps the setting.
         match v.get("fill_text_border_color") {
             Some(serde_json::Value::Null) => self.fill_text_default.color = None,
@@ -303,6 +308,7 @@ impl PdfCraftApp {
         // Fill & Sign text starts from the saved border.
         self.fill_text_border = self.fill_text_default.width;
         self.fill_text_border_color = self.fill_text_default.color;
+        self.fill_text_border_shape = self.fill_text_default.shape;
         if let Some(prefs) = RedactPrefs::from_json(&v["redact_prefs"]) {
             self.redact_prefs = prefs.clone();
             self.redact_defaults = prefs;
@@ -376,6 +382,9 @@ impl PdfCraftApp {
                         }
                     }
                     None => {}
+                }
+                if let Some(shape) = e["border_shape"].as_str().and_then(pdfcraft_engine::BorderShape::parse) {
+                    self.comment_prefs.set_border_shape(tool, shape);
                 }
             }
         }

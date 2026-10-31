@@ -370,6 +370,116 @@ fn the_toolbar_shows_and_changes_the_selected_texts_border() {
     assert!(shows(&h, "None"));
 }
 
+/// With a border, typed text can have an oval or a circle around it instead of a box (a
+/// position number in a circle on a plan): the toolbar's shape control sets it for new text and
+/// for the selected text, and shows the selected text's own. The text stays where it was typed.
+#[test]
+fn typed_text_takes_an_oval_or_a_circle_from_the_toolbar() {
+    use pdfcraft_engine::BorderShape;
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.text");
+    h.run_steps(2);
+    assert_eq!(h.query_all_by_label("Border shape").count(), 0, "no shape without a border");
+    h.state_mut().fill_text_border = 1.0;
+    h.run_steps(2);
+    // The shape control shows "Rectangle"; pick Circle for new text.
+    h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some("Rectangle")).expect("the shape control").click();
+    h.run_steps(2);
+    h.get_by_label("Circle").click();
+    h.run_steps(2);
+    assert_eq!(h.state().fill_text_border_shape, BorderShape::Circle);
+    click(&mut h, 50.0, 250.0);
+    h.event(egui::Event::Text("12".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let (page, index) = {
+        let s = h.state();
+        let a = s.session.get(s.views[0].id).unwrap().info.annotations.iter().find(|a| a.contents.as_deref() == Some("12")).cloned().unwrap();
+        (a.page, a.index)
+    };
+    let props = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().comment_props(page, index).unwrap();
+    assert_eq!(props(&h).border_shape, Some(BorderShape::Circle), "new text gets the circle");
+    let r = h.state().session.get(h.state().views[0].id).unwrap().info.annotations.iter().find(|a| a.index == index).unwrap().rect;
+    assert!(((r[2] - r[0]) - (r[3] - r[1])).abs() < 0.01, "a circle's square box: {r:?}");
+    // Snug around "12" at 10 pt: its box no wider than the text needs (not the 40 pt a box to type
+    // into keeps), so the circle is as wide as that box, where it was 50 pt around the wider one.
+    let w = pdfcraft_engine::annot_text::text_width("12", 10.0) + 10.0;
+    let across = f64::from(r[2] - r[0]);
+    assert!((across - w.max(20.0)).abs() < 0.01, "the circle is {across} pt across, not {w}: {r:?}");
+    // Selected, an oval from the toolbar: one undo step.
+    h.state_mut().views[0].comments.selected = Some((page, index));
+    h.run_steps(3);
+    h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some("Circle")).expect("shows the text's own").click();
+    h.run_steps(2);
+    h.get_by_label("Oval").click();
+    h.run_steps(4);
+    assert_eq!(props(&h).border_shape, Some(BorderShape::Oval));
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Change comment properties"));
+    assert_eq!(h.state().fill_text_border_shape, BorderShape::Circle, "new text keeps the circle");
+    // As Comment Properties does: the toolbar shows it.
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::BorderShapeAnnotation { page, index, shape: BorderShape::Rectangle });
+    h.run_steps(3);
+    assert!(h.query_all_by_role(egui::accesskit::Role::ComboBox).any(|n| n.value().as_deref() == Some("Rectangle")), "the selected text's own");
+
+    // The circle for new text lasts until PdfCraft quits; a saved default is read back.
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&h.state().persist());
+    assert_eq!(restored.fill_text_border_shape, BorderShape::Rectangle);
+    restored.restore(r#"{"fill_text_border_shape":"oval"}"#);
+    assert_eq!(restored.fill_text_border_shape, BorderShape::Oval);
+    restored.restore(r#"{"fill_text_border_shape":"star"}"#);
+    assert_eq!(restored.fill_text_border_shape, BorderShape::Oval, "an unknown shape keeps the setting");
+}
+
+/// Border ▸ None takes an oval or a circle away with its line, from the selected text and for new
+/// text: without one, the text's box stayed grown around a shape that isn't drawn.
+#[test]
+fn no_border_takes_the_oval_or_circle_away_too() {
+    use pdfcraft_engine::BorderShape;
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.text");
+    h.state_mut().fill_text_border = 1.0;
+    h.state_mut().fill_text_border_shape = BorderShape::Circle;
+    h.run_steps(2);
+    click(&mut h, 50.0, 250.0);
+    h.event(egui::Event::Text("12".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let (page, index) = {
+        let s = h.state();
+        let a = s.session.get(s.views[0].id).unwrap().info.annotations.iter().find(|a| a.contents.as_deref() == Some("12")).cloned().unwrap();
+        (a.page, a.index)
+    };
+    let props = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().comment_props(page, index).unwrap();
+    assert_eq!(props(&h).border_shape, Some(BorderShape::Circle));
+    let no_border = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some("1 pt")).expect("the Border control").click();
+        h.run_steps(2);
+        h.get_by_label("None").click();
+        h.run_steps(4);
+    };
+    // The selected text: no line, and a rectangle again, its box the text's.
+    h.state_mut().views[0].comments.selected = Some((page, index));
+    h.run_steps(3);
+    no_border(&mut h);
+    assert_eq!(props(&h).width, Some(0.0));
+    assert_eq!(props(&h).border_shape.unwrap_or_default(), BorderShape::Rectangle);
+    // One undo step brings back the line and the circle together.
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert_eq!((props(&h).width, props(&h).border_shape), (Some(1.0), Some(BorderShape::Circle)), "one undo step");
+    h.state_mut().redo();
+    h.run_steps(2);
+    assert_eq!(h.state().fill_text_border_shape, BorderShape::Circle, "new text keeps its circle");
+    // New text: none, and a rectangle when a border is chosen again.
+    h.state_mut().views[0].comments.selected = None;
+    h.run_steps(3);
+    no_border(&mut h);
+    assert_eq!((h.state().fill_text_border, h.state().fill_text_border_shape), (0.0, BorderShape::Rectangle));
+}
+
 /// The Border control puts a frame around new Fill & Sign text, and around the text that is
 /// selected; the box grows outwards, so the text stays where it was typed. The choice persists.
 #[test]
@@ -432,7 +542,7 @@ fn fill_text_border_frames_new_and_selected_text() {
 /// border, and keeps it across launches.
 #[test]
 fn typed_text_made_default_is_what_new_text_gets() {
-    use pdfcraft_engine::Edit;
+    use pdfcraft_engine::{BorderShape, Edit};
     let mut h = harness();
     h.state_mut().execute("sign.fill.text");
     let type_at = |h: &mut Harness<'static, PdfCraftApp>, y: f32, text: &str| {
@@ -450,6 +560,7 @@ fn typed_text_made_default_is_what_new_text_gets() {
     for edit in [
         Edit::StyleAnnotation { page, index, color: None, opacity: None, width: Some(1.5), endings: None },
         Edit::BorderColorAnnotation { page, index, color: red },
+        Edit::BorderShapeAnnotation { page, index, shape: BorderShape::Circle },
         Edit::FontSizeAnnotation { page, index, size: 14.0 },
     ] {
         assert!(h.state_mut().apply_edit(edit));
@@ -461,14 +572,18 @@ fn typed_text_made_default_is_what_new_text_gets() {
     h.get_by_label("OK").click();
     h.run_steps(3);
     let s = h.state();
-    assert_eq!((s.fill_text_size, s.fill_text_border, s.fill_text_border_color), (14.0, 1.5, red));
+    assert_eq!((s.fill_text_size, s.fill_text_border, s.fill_text_border_color, s.fill_text_border_shape), (14.0, 1.5, red, BorderShape::Circle));
     let mut restored = PdfCraftApp::new();
     restored.restore(&h.state().persist());
-    assert_eq!((restored.fill_text_size, restored.fill_text_border, restored.fill_text_border_color), (14.0, 1.5, red), "kept across launches");
+    assert_eq!(
+        (restored.fill_text_size, restored.fill_text_border, restored.fill_text_border_color, restored.fill_text_border_shape),
+        (14.0, 1.5, red, BorderShape::Circle),
+        "kept across launches"
+    );
     h.state_mut().views[0].comments.selected = None;
     let (page, index) = type_at(&mut h, 350.0, "Next");
     let p = h.state().session.get(h.state().views[0].id).unwrap().comment_props(page, index).unwrap();
-    assert_eq!((p.font_size, p.width, p.border_color), (Some(14.0), Some(1.5), red));
+    assert_eq!((p.font_size, p.width, p.border_color, p.border_shape), (Some(14.0), Some(1.5), red, Some(BorderShape::Circle)));
 }
 
 #[test]

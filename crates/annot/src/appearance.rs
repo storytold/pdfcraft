@@ -326,8 +326,16 @@ fn stamp_turn(d: &Dict) -> i64 {
 
 /// The page `/Rotate` a text box's or Fill & Sign text's lines are turned back by
 /// (`/PCTextRotate`, written when it is added to a turned page).
-fn text_turn(d: &Dict) -> i64 {
+pub(crate) fn text_turn(d: &Dict) -> i64 {
     d.get(b"PCTextRotate").and_then(Object::as_int).unwrap_or(0).rem_euclid(360) / 90 * 90
+}
+
+/// A FreeText's `/RD`: how far its text box lies inside `/Rect` from the left, bottom, right and
+/// top. A distance a hair below 0 (rounding) reads as 0; `None` when one is negative or they can't
+/// be read.
+pub(crate) fn inset(d: &Dict) -> Option<[f64; 4]> {
+    let rd: [f64; 4] = nums(d, b"RD")?.try_into().ok()?;
+    rd.iter().all(|x| x.is_finite() && *x > -0.001).then(|| rd.map(|x| x.max(0.0)))
 }
 
 /// The first text [`build`] would draw in the standard fonts (Helvetica, WinAnsiEncoding) that
@@ -971,26 +979,61 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
             return None;
         }
     }
-    if let Some(bg) = bg {
-        c.push_str(&format!("{}{} {} {} {} re f\n", rg(bg), n(rect[0]), n(rect[1]), n(rect[2] - rect[0]), n(rect[3] - rect[1])));
-    }
-    if bw > 0.0 {
+    // An oval or a circle (`/PCBorderShape`) around the text box, which is `/Rect` inset by
+    // `/RD` and keeps its place: background and border take the shape, the text is laid out
+    // in the text box as in a rectangle.
+    let shape = crate::BorderShape::of(d);
+    if shape != crate::BorderShape::Rectangle {
+        // Laid out as displayed: a quarter turn swaps the sides' differences.
+        rect = match inset(d) {
+            Some(rd) => {
+                let (dx, dy) = if matches!(turn, 90 | 270) { (rd[1], rd[0]) } else { (rd[0], rd[1]) };
+                [full[0] + dx, full[1] + dy, full[2] - dx, full[3] - dy]
+            }
+            None => shape.inside(full, bw, full),
+        };
+        if rect[2] - rect[0] < 1.0 || rect[3] - rect[1] < 1.0 {
+            return None;
+        }
         let h = bw / 2.0;
-        c.push_str(&format!(
-            "{}{} w\n{}{} {} {} {} re S\n[] 0 d\n",
-            rg_stroke(line_color),
-            n(bw),
-            dash(d),
-            n(rect[0] + h),
-            n(rect[1] + h),
-            n(rect[2] - rect[0] - bw),
-            n(rect[3] - rect[1] - bw)
-        ));
+        let [x0, y0, x1, y1] = [full[0] + h, full[1] + h, full[2] - h, full[3] - h];
+        let path = match shape {
+            crate::BorderShape::Circle => {
+                let (cx, cy, r) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0, (x1 - x0).min(y1 - y0) / 2.0);
+                ellipse(cx - r, cy - r, cx + r, cy + r)
+            }
+            _ => ellipse(x0, y0, x1, y1),
+        };
+        if let Some(bg) = bg {
+            c.push_str(&format!("{}{path}f\n", rg(bg)));
+        }
+        if bw > 0.0 {
+            c.push_str(&format!("{}{} w\n{}{path}S\n[] 0 d\n", rg_stroke(line_color), n(bw), dash(d)));
+        }
+    } else {
+        if let Some(bg) = bg {
+            c.push_str(&format!("{}{} {} {} {} re f\n", rg(bg), n(rect[0]), n(rect[1]), n(rect[2] - rect[0]), n(rect[3] - rect[1])));
+        }
+        if bw > 0.0 {
+            let h = bw / 2.0;
+            c.push_str(&format!(
+                "{}{} w\n{}{} {} {} {} re S\n[] 0 d\n",
+                rg_stroke(line_color),
+                n(bw),
+                dash(d),
+                n(rect[0] + h),
+                n(rect[1] + h),
+                n(rect[2] - rect[0] - bw),
+                n(rect[3] - rect[1] - bw)
+            ));
+        }
     }
     let text = d.get(b"Contents").and_then(|o| o.as_string()).map(PdfString::to_text).unwrap_or_default();
     let pad = 2.0 + bw;
     let width = (rect[2] - rect[0] - 2.0 * pad).max(1.0);
-    let q = d.int(b"Q").unwrap_or(0);
+    // In an oval or a circle the lines are centred in the text box, up and down too.
+    let round = shape != crate::BorderShape::Rectangle;
+    let q = if round { 1 } else { d.int(b"Q").unwrap_or(0) };
     c.push_str(&format!(
         "{} {} {} {} re W n\nBT\n/Helv {} Tf\n{}",
         n(rect[0]),
@@ -1001,8 +1044,12 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
         rg(text_color)
     ));
     let mut out = c.into_bytes();
+    let lines = wrap(&text, size, width);
     let mut y = rect[3] - pad - size * 0.9;
-    for line in wrap(&text, size, width) {
+    if round {
+        y -= ((rect[3] - rect[1] - 2.0 * pad - lines.len() as f64 * size * 1.2) / 2.0).max(0.0);
+    }
+    for line in lines {
         if y < rect[1] - size {
             break;
         }

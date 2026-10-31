@@ -2618,3 +2618,4 @@ animation effects	Off	Ki
 # A text border's own colour (M5).
 	Border colour	Szegély színe
 	Same as text	Mint a szöveg
+	Border shape	Szegély alakja
