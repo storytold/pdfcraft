@@ -300,6 +300,9 @@ pub struct PdfCraftApp {
     pub scroll_speed: scroll_speed::ScrollSpeed,
     /// Preferences ▸ Animation effects: on, off, or as the system's animation setting says.
     pub animation_effects: motion::AnimationEffects,
+    /// Preferences ▸ Esc leaves full screen (on by default). Off, only ⌘L / Ctrl+L leaves it, as
+    /// for a kiosk display; Esc still closes the find bar and the like.
+    pub full_screen_escape_exits: bool,
     /// Whether the system asked for no animations, and how the desktop app asks it.
     pub motion: motion::Motion,
     /// Interface language preference: `auto` (follow the system) or a code from [`i18n::LANGUAGES`].

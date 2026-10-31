@@ -160,6 +160,20 @@ impl PdfCraftApp {
                 };
                 self.set_active_page_gaps(show);
             }
+            ("full-screen-escape", _) => {
+                self.full_screen_escape_exits = match value {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err("full-screen-escape must be on or off".into()),
+                };
+            }
+            ("full-screen-fill", _) => {
+                self.view_defaults.full_screen_fill = match value {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err("full-screen-fill must be on or off".into()),
+                };
+            }
             ("default-page-gaps", _) => {
                 self.view_defaults.show_page_gaps = match value {
                     "on" => true,

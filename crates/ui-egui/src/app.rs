@@ -97,6 +97,7 @@ impl PdfCraftApp {
             desktop_theme_enabled: false,
             scroll_speed: scroll_speed::ScrollSpeed::default(),
             animation_effects: motion::AnimationEffects::default(),
+            full_screen_escape_exits: true,
             motion: motion::Motion::default(),
             language: i18n::AUTO.to_string(),
             ui_scale: None,

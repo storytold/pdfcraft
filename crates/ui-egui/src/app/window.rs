@@ -44,6 +44,7 @@ impl PdfCraftApp {
         self.full_screen = on;
         for view in &mut self.views {
             if on {
+                view.full_screen_fill = self.view_defaults.full_screen_fill;
                 view.enter_presentation();
             } else {
                 view.leave_presentation();

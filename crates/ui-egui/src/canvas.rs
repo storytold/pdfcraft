@@ -192,12 +192,23 @@ pub struct ViewDefaults {
     /// Highlight existing fields: a preference in Acrobat, so it carries over to the next
     /// document and the next session. On for new settings; a stored choice wins.
     pub highlight_fields: bool,
+    /// Full screen fills the screen with one page (or spread) at a time, edge to edge; off, it
+    /// keeps the page display it is entered from (continuous scrolling, say: #4273).
+    pub full_screen_fill: bool,
 }
 
 impl Default for ViewDefaults {
     fn default() -> Self {
         // Single page, scrolling continuously at fit width: the earlier "continuous" default.
-        Self { layout: PageLayout::Single, continuous: true, show_page_gaps: true, fit: Fit::Width, zoom: 1.0, highlight_fields: true }
+        Self {
+            layout: PageLayout::Single,
+            continuous: true,
+            show_page_gaps: true,
+            fit: Fit::Width,
+            zoom: 1.0,
+            highlight_fields: true,
+            full_screen_fill: true,
+        }
     }
 }
 
@@ -322,6 +333,10 @@ pub struct DocView {
     /// Full screen (Acrobat's Full Screen Mode): the display saved on entering it, while the view
     /// shows one page or spread at a time, fitted to the screen. `None` outside full screen.
     presentation: Option<SavedDisplay>,
+    /// Full screen fills the screen with one page (or spread) at a time, edge to edge (the
+    /// default); off, it keeps the page display it was entered from. Set from the app's
+    /// preference before full screen is entered.
+    pub full_screen_fill: bool,
     pages: HashMap<usize, PageTex>,
     /// Pages the renderer could not draw, with the reason (never re-requested).
     errors: HashMap<usize, String>,
@@ -636,6 +651,7 @@ impl DocView {
             flash: None,
             compare_marks: Vec::new(),
             presentation: None,
+            full_screen_fill: defaults.full_screen_fill,
             pages: HashMap::new(),
             errors: HashMap::new(),
             waiting_since: HashMap::new(),
@@ -795,6 +811,7 @@ impl DocView {
         fresh.cover = self.cover;
         // Still presenting, with the display to go back to on leaving.
         fresh.presentation = self.presentation.take();
+        fresh.full_screen_fill = self.full_screen_fill;
         fresh.back = std::mem::take(&mut self.back);
         fresh.forward = std::mem::take(&mut self.forward);
         fresh.find = self.find.take();
@@ -951,8 +968,9 @@ fn paint_page_surface(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFra
     let visible = frame.visible;
     let info = frame.env.info;
     let painter = ui.painter();
-    // Shadows would darken the preceding page when pages touch.
-    if view.show_page_gaps {
+    // Shadows would darken the preceding page when pages touch; full screen filling the screen
+    // shows the page alone on black (#576).
+    if view.show_page_gaps && !view.fills_screen() {
         painter.add(egui::epaint::Shadow { offset: [0, 3], blur: 14, spread: 0, color: t.page_shadow }.as_shape(r, CornerRadius::ZERO));
     }
     painter.rect_filled(r, CornerRadius::ZERO, paper);
@@ -2273,7 +2291,7 @@ fn anchor_zoom_change(view: &mut DocView, avail_width: f32, old_zoom: f32) {
         if let Some((page, fy, rel_y)) = anchor {
             view.zoom_anchor = Some((page, 0.5, fy, vec2(avail_width / 2.0, rel_y)));
         } else {
-            view.zoom_anchor = Some((view.current, 0.5, 0.0, vec2(avail_width / 2.0, MARGIN)));
+            view.zoom_anchor = Some((view.current, 0.5, 0.0, vec2(avail_width / 2.0, view.margin())));
         }
     }
 }
@@ -2297,7 +2315,7 @@ fn single_page_paging(ui: &egui::Ui, view: &mut DocView, cx: &PagingCx<'_>) -> (
         // The row's bounding box on screen (one page, or a two-page spread).
         let row_rect = row.iter().filter_map(|&i| rects.get(i)).copied().reduce(Rect::union);
         // Within a point, so layout rounding can't stop a fitting page from turning.
-        let fits = row_rect.is_some_and(|r| r.height() + 2.0 * MARGIN <= avail.height() + 1.0);
+        let fits = row_rect.is_some_and(|r| r.height() + 2.0 * view.margin() <= avail.height() + 1.0);
         let can_turn = !middle_gesture && unobstructed && ui.rect_contains_pointer(avail);
         single_paging = can_turn && fits;
         // Every wheel event goes to the pager, so it follows each trackpad touch to its end
@@ -2669,7 +2687,7 @@ fn page_scroll_area(ui: &egui::Ui, view: &mut DocView, geometry: &ScrollGeometry
         // The page counts with its side gutters, which keep its edge clear of the floating
         // quick-action bar as the layout does.
         let (x, w) = (view.last_scroll.x, avail.width());
-        let (left, right) = (r.left() - SIDE, r.right() + SIDE);
+        let (left, right) = (r.left() - view.side(), r.right() + view.side());
         let target = if right - left <= w { if left >= x && right <= x + w { x } else { r.center().x - w / 2.0 } } else { x.clamp(left, right - w) };
         if (target - x).abs() > 0.5 {
             scroll = scroll.horizontal_scroll_offset(target.clamp(0.0, (content_w - w).max(0.0)));
@@ -3037,7 +3055,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // Security, stay as they are.
     let secured = show_secured_notice && doc.security_summary().is_some_and(|s| !(s.owner || (s.permissions.modify() && s.permissions.assemble())));
     let repaired = !doc.repair_log().is_empty();
-    let notice = notices(view, doc, secured, repaired, crate::sign_ui::banner(&doc.signatures), ui, &t);
+    // Full screen shows the page and nothing else (#1459), so the notice bar above the pages waits
+    // until it is left; filling the screen, a bar would push the page past its bottom (#576).
+    let notice =
+        if view.presentation.is_some() { None } else { notices(view, doc, secured, repaired, crate::sign_ui::banner(&doc.signatures), ui, &t) };
     apply_notice(app, index, notice);
     let Some(doc) = app.session.get(app.views[index].id) else { return };
     let info = &doc.info;
@@ -3100,11 +3121,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let row = shown_row(view, &rects);
     let visible_pages: Vec<usize> = if view.continuous { (0..rects.len()).collect() } else { row.clone() };
     let (y_shift, content_h) = if view.continuous {
-        (0.0, rects.iter().map(|r| r.bottom()).reduce(f32::max).map(|bottom| bottom + MARGIN).unwrap_or(0.0))
+        (0.0, rects.iter().map(|r| r.bottom()).reduce(f32::max).map(|bottom| bottom + view.margin()).unwrap_or(0.0))
     } else {
         // Only the current row scrolls into view; the content is its bounding box plus margins.
         match row.iter().filter_map(|&i| rects.get(i)).copied().reduce(Rect::union) {
-            Some(r) => (r.top() - MARGIN, r.height() + 2.0 * MARGIN),
+            Some(r) => (r.top() - view.margin(), r.height() + 2.0 * view.margin()),
             None => (0.0, 0.0),
         }
     };
@@ -3254,7 +3275,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         // below the window's top). Within a point, as for wheel paging, so layout rounding
         // can't hide an edge.
         let max_y = (out.content_size.y - out.inner_rect.height()).max(0.0);
-        (page, out.state.clamped_offset().y <= MARGIN - view.page_gap() + 1.0, out.state.clamped_offset().y >= max_y - 1.0)
+        // Going to a page clamps at 0, which is where a page sits with no margin (full screen).
+        (page, out.state.clamped_offset().y <= (view.margin() - view.page_gap()).max(0.0) + 1.0, out.state.clamped_offset().y >= max_y - 1.0)
     });
 
     view.viewport_screen = out.inner_rect;

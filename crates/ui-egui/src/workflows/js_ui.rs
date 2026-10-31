@@ -463,6 +463,16 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     });
     ui.add(widgets::checkbox(&mut defaults.show_page_gaps, tl!("Show gaps between pages")));
     ui.label(egui::RichText::new(tl!("Hide gaps to join page edges. Margins inside the PDF remain unchanged.")).small().color(t.text_muted));
+    ui.add(widgets::checkbox(&mut defaults.full_screen_fill, tl!("Full screen fills the screen with one page at a time")));
+    ui.label(
+        egui::RichText::new(tl!("Turn off to keep the page display, such as continuous scrolling, in full screen.")).small().color(t.text_muted),
+    );
+    ui.add(widgets::checkbox(&mut app.full_screen_escape_exits, tl!("Esc leaves full screen")));
+    ui.label(
+        egui::RichText::new(tl!("Turn off so that only Ctrl+L (⌘L on macOS) leaves full screen, as for a kiosk display."))
+            .small()
+            .color(t.text_muted),
+    );
     ui.horizontal(|ui| {
         use crate::canvas::Fit;
         ui.label(tl!("Default zoom"));
