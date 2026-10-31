@@ -6960,6 +6960,45 @@ fn a_clipping_copy_on_the_same_baseline_is_refused() {
     assert_eq!(text::text_lines(&doc, 0).unwrap().len(), 2, "refused means untouched");
 }
 
+/// `'` moves to the next line before it shows its text, and `"` also sets the word and character
+/// spacing (ISO 32000-2 §9.4.3, Table 107). Rewriting a paragraph drawn with them drops the
+/// operator but must keep what it did: text after it, positioned from that line or using that
+/// spacing, stays exactly where and how it was. Both the single-style paragraph path and the
+/// region path (a draft with a line break) are checked.
+#[test]
+fn rewriting_a_paragraph_drawn_with_quote_operators_keeps_their_line_move_and_spacing() {
+    let cases = [
+        // The next line is placed relative to the line `'` moved to.
+        "BT /F1 12 Tf 14 TL 72 714 Td (Target line here) ' 0 -100 Td (Footer stays put) Tj ET",
+        // The same with `"`, whose spacing the footer also inherits.
+        "BT /F1 12 Tf 14 TL 72 714 Td 3 2 (Target line here) \" 0 -100 Td (Footer stays put) Tj ET",
+        // Spacing set by `"` carries over into the next text object.
+        "BT /F1 12 Tf 14 TL 72 714 Td 3 2 (Target line here) \" ET BT 72 600 Td (Footer stays put) Tj ET",
+        // A split text object: text before the paragraph stays first, then the `'` lines go.
+        "BT /F1 12 Tf 14 TL 72 760 Td (Heading words) Tj 0 -46 Td (Target line here) Tj (more target) ' 0 -100 Td (Footer stays put) Tj ET",
+        // Split at a `'`: the rewrite's `Tm` there is already past its line move.
+        "BT /F1 12 Tf 14 TL 72 760 Td (Heading words) Tj 0 -32 Td (Target line here) ' (more target) ' 0 -100 Td (Footer stays put) Tj ET",
+    ];
+    for content in cases {
+        let footer = |doc: &Document| {
+            let lines = text::text_lines(doc, 0).unwrap();
+            let f = lines.iter().find(|l| l.text == "Footer stays put").unwrap_or_else(|| panic!("no footer in {content}"));
+            (f.rect, f.ink.clone())
+        };
+        let original = text_page(content);
+        let before = footer(&original);
+        let target = text::text_blocks(&original, 0).unwrap().iter().position(|b| b.text.starts_with("Target")).unwrap();
+        for draft in ["NEW TEXT", "NEW\nTEXT"] {
+            let mut doc = original.clone();
+            text::replace_block(&mut doc, 0, target, draft).unwrap();
+            let doc = reopen(&doc);
+            assert_eq!(footer(&doc), before, "{content} with {draft:?}");
+            let texts: Vec<String> = text::text_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+            assert!(texts.iter().any(|t| t.contains("NEW")) && !texts.iter().any(|t| t.contains("Target")), "{content} with {draft:?}: {texts:?}");
+        }
+    }
+}
+
 /// #2512: a session's drafts are laid out from the document as it was opened, never from each
 /// other, and its commit writes what a one-shot rewrite writes, whatever was laid out before.
 #[test]
@@ -8575,4 +8614,28 @@ fn styled_existing_justification_is_refused_instead_of_silently_left_aligning() 
     assert!(error.to_string().contains("justification"));
     assert_eq!(page_content_bytes(&doc, 0), before);
     assert_eq!(page_content_bytes(&reopen(&doc), 0), before);
+}
+
+/// Each `Tj`/`TJ` moves the text matrix by the width of its text. A run shown later in the same
+/// text object without a `Td` or `Tm` of its own (a raised run in another colour, a column after
+/// a `TJ` gap) is placed by those advances. Rewriting the paragraph before it must keep them, as
+/// deleting a paragraph does: the run must not jump onto the new text.
+#[test]
+fn rewriting_a_paragraph_keeps_later_runs_on_its_baseline_in_place() {
+    let cases = [
+        ("BT /F1 12 Tf 72 700 Td (Target words) Tj 1 0 0 rg 3 Ts (Red) Tj ET", "Red"),
+        ("BT /F1 12 Tf 72 700 Td (Target words) Tj [-20000] TJ (Far) Tj ET", "Far"),
+    ];
+    for (content, run) in cases {
+        let original = text_page(content);
+        let place = |doc: &Document| text::text_lines(doc, 0).unwrap().into_iter().find(|l| l.text == run).map(|l| l.rect);
+        let before = place(&original).unwrap_or_else(|| panic!("{run} is a line of its own in {content}"));
+        let target = text::text_blocks(&original, 0).unwrap().iter().position(|b| b.text == "Target words").unwrap();
+        for draft in ["NEW TEXT", "NEW\nTEXT"] {
+            let mut doc = original.clone();
+            text::replace_block(&mut doc, 0, target, draft).unwrap();
+            let after = place(&reopen(&doc)).unwrap_or_else(|| panic!("{run} is gone: {content} with {draft:?}"));
+            assert!(after.iter().zip(before).all(|(a, b)| (a - b).abs() < 1e-6), "{content} with {draft:?}: {before:?} -> {after:?}");
+        }
+    }
 }
