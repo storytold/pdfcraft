@@ -3155,3 +3155,36 @@ fn a_double_click_opens_a_notes_pop_up_which_drags_and_closes() {
     assert!(h.state().views[0].comments.popup_rects.is_empty());
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Close comment pop-up"));
 }
+
+// Contributor-original PDF: two notes sharing one /NM (as PyMuPDF names them), both with an open
+// pop-up; the second has a reply by reference and a reply to that reply, which has no /NM.
+const POPUPS_SHARING_A_NAME: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R 9 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [20 160 40 180] /NM (fitz-A0) /T (Alpha) /Contents (First note) /Popup 5 0 R /Open true >> endobj
+5 0 obj << /Type /Annot /Subtype /Popup /Rect [60 110 160 190] /Parent 4 0 R /Open true >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [20 40 40 60] /NM (fitz-A0) /T (Beta) /Contents (Second note) /Popup 7 0 R /Open true >> endobj
+7 0 obj << /Type /Annot /Subtype /Popup /Rect [180 10 290 90] /Parent 6 0 R /Open true >> endobj
+8 0 obj << /Type /Annot /Subtype /Text /Rect [20 40 40 60] /NM (fitz-A1) /IRT 6 0 R /T (Gamma) /Contents (Reply by reference) >> endobj
+9 0 obj << /Type /Annot /Subtype /Text /Rect [20 40 40 60] /IRT 8 0 R /T (Delta) /Contents (Reply to the reply) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// A pop-up reads its comment's thread by `/IRT` reference, as the Comments panel does: the
+/// replies show once, in the second note's window only, at any depth, though both notes share
+/// one `/NM`.
+#[test]
+fn a_pop_up_lists_its_replies_by_reference_when_names_repeat() {
+    let h = harness_with_bytes(POPUPS_SHARING_A_NAME.to_vec(), |_| {});
+    let windows = h.state().views[0].comments.popup_rects.clone();
+    assert_eq!(windows.len(), 2, "both notes' pop-ups are open: {windows:?}");
+    let (_, second) = windows.iter().find(|(key, _)| *key == (0, 2)).copied().expect("the second note's pop-up");
+    for text in ["Reply by reference", "Reply to the reply"] {
+        // The Comments panel lists the thread too; count only what the windows show.
+        let shown: Vec<Pos2> =
+            h.query_all_by_label(text).map(|n| n.rect().center()).filter(|c| windows.iter().any(|(_, w)| w.contains(*c))).collect();
+        assert_eq!(shown.len(), 1, "{text:?} shows in one window: {shown:?}");
+        assert!(shown.iter().all(|c| second.contains(*c)), "{text:?} is in the second note's window");
+    }
+}

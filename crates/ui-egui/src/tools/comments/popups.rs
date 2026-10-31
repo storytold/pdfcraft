@@ -4,9 +4,10 @@ use super::{
     theme,
 };
 
-/// A comment with a pop-up window of its own (not a text box, a Fill & Sign mark or a reply).
+/// A comment with a pop-up window of its own: not a text box, a Fill & Sign mark, a reply or a
+/// status (replies are found by `/IRT` reference, [`Annotation::is_comment`]).
 pub(super) fn has_popup(a: &Annotation) -> bool {
-    a.subtype != "FreeText" && !a.fill_sign && a.in_reply_to.is_none()
+    a.subtype != "FreeText" && !a.fill_sign && a.is_comment()
 }
 
 /// The line from a comment to its open pop-up, in the comment's colour, while the pointer is on
@@ -62,6 +63,8 @@ pub(crate) fn popups(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, hi
     let mut edits: Vec<Edit> = Vec::new();
     let mut rects = Vec::new();
     let mut hovered = None;
+    // The comment each reply files under, as the Comments panel threads them (by reference).
+    let tops = pdfcraft_render::thread_tops(&info.annotations);
     let xforms: Vec<(usize, PageXform)> = view.page_xforms();
     for (page, xf) in xforms {
         let shown: Vec<Annotation> =
@@ -167,13 +170,16 @@ pub(crate) fn popups(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, hi
                         } else {
                             ui.label(a.contents.as_deref().unwrap_or_default());
                         }
-                        // Replies, as the thread reads: text replies only, as in the Comments
-                        // panel. A review status or a checkmark (`/State`) is a reply too, but
-                        // not one to read here.
+                        // Replies, as the thread reads: text replies only, at any depth, filed
+                        // under this comment by `/IRT` reference as in the Comments panel. A
+                        // review status or a checkmark (`/State`) is a reply too, but not one to
+                        // read here.
                         let replies: Vec<&Annotation> = info
                             .annotations
                             .iter()
-                            .filter(|r| r.page == page && r.in_reply_to.is_some() && r.in_reply_to == a.name && r.state.is_none())
+                            .filter(|r| {
+                                r.state.is_none() && r.parent.is_some_and(|parent| tops.get(&(r.page, r.index)).copied().unwrap_or(parent) == key)
+                            })
                             .collect();
                         for r in replies {
                             ui.add_space(4.0);
