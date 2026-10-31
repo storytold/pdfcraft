@@ -936,6 +936,14 @@ struct PageFrame<'a> {
     calc_hover: Option<crate::calc_order_ui::Focus>,
 }
 
+/// What the pages change in the app besides their view: the signature preview, the Tags panel's
+/// state and the Reading Order tool's regions.
+struct PageApp<'a> {
+    signature_preview: &'a mut Option<(crate::fill_sign::SavedSig, egui::TextureHandle)>,
+    tags_state: &'a mut crate::tags_ui::State,
+    reading_order: &'a mut crate::reading_order_ui::State,
+}
+
 /// Visible heights (points) closer than this are equal: one page size can meet the viewport a
 /// fraction of a point differently once the scroll offset is applied.
 const PAGE_TIE: f32 = 0.5;
@@ -1982,16 +1990,7 @@ fn cancel_on_escape(ctx: &egui::Context, view: &mut DocView, ptr: &PagePointer) 
     }
 }
 
-fn draw_pages(
-    ui: &mut egui::Ui,
-    viewport: Rect,
-    view: &mut DocView,
-    env: &PageEnv<'_>,
-    out: &mut PageOut,
-    signature_preview: &mut Option<(crate::fill_sign::SavedSig, egui::TextureHandle)>,
-    tags_state: &mut crate::tags_ui::State,
-    reading_order: &mut crate::reading_order_ui::State,
-) -> PageRenders {
+fn draw_pages(ui: &mut egui::Ui, viewport: Rect, view: &mut DocView, env: &PageEnv<'_>, out: &mut PageOut, app: PageApp<'_>) -> PageRenders {
     let PageEnv {
         allowed,
         auto_delta,
@@ -2092,9 +2091,9 @@ fn draw_pages(
         visible,
         pressed,
         pointer,
-        signature_preview,
-        tags_state,
-        reading_order,
+        signature_preview: app.signature_preview,
+        tags_state: app.tags_state,
+        reading_order: app.reading_order,
         out: std::mem::take(out),
         wanted: Vec::new(),
         visible_now: Vec::new(),
@@ -3284,7 +3283,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     };
     let mut page_out = PageOut::default();
     let out = page_scroll(ui, scroll, egui::Id::unique(("page-view-scope", view.id)), |ui, viewport| {
-        draw_pages(ui, viewport, view, &env, &mut page_out, &mut app.signature_preview, &mut app.tags_state, &mut app.reading_order)
+        draw_pages(
+            ui,
+            viewport,
+            view,
+            &env,
+            &mut page_out,
+            PageApp { signature_preview: &mut app.signature_preview, tags_state: &mut app.tags_state, reading_order: &mut app.reading_order },
+        )
     });
     let PageOut {
         canvas_action,
