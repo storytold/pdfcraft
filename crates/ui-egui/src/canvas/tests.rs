@@ -2002,3 +2002,70 @@ fn a_moved_picture_is_drawn_from_the_fresh_raster_while_a_tile_is_still_stale() 
     h.state_mut().views[0].stale_tiles.clear();
     h.state_mut().views[0].tiles.clear();
 }
+
+#[test]
+fn a_followed_link_flashes_where_its_destination_lands() {
+    let page = |w: f32, h: f32| pdfcraft_render::PageInfo { width: w, height: h, label: String::new(), crop: [0.0, 0.0, w, h], rotation: 0 };
+    let info = pdfcraft_render::DocInfo { pages: vec![page(300.0, 400.0), page(300.0, 400.0)], ..Default::default() };
+    let mut v = view(2, PageLayout::Single, true);
+    // A point's box goes through displayed space and back, so it is right to a rounding error.
+    let near = |got: &Option<(usize, [f32; 4], f64)>, page: usize, want: [f32; 4]| {
+        let (p, r, _) = got.expect("a flash");
+        assert!(p == page && r.iter().zip(want).all(|(g, w)| (g - w).abs() < 0.01), "{r:?} on page {p}, wanted {want:?} on {page}");
+    };
+    // /FitR names the rectangle itself, kept inside the page.
+    v.flash_dest(1, DestView::FitR { rect: [10.0, 20.0, 110.0, 70.0] }, &info);
+    assert_eq!(v.flash, Some((1, [10.0, 20.0, 110.0, 70.0], 0.0)));
+    v.flash_dest(1, DestView::FitR { rect: [-50.0, 20.0, 110.0, 500.0] }, &info);
+    assert_eq!(v.flash, Some((1, [0.0, 20.0, 110.0, 400.0], 0.0)));
+    // A point gets a box hanging from it; a missing coordinate falls back to the page edge.
+    v.flash_dest(0, DestView::Xyz { left: Some(50.0), top: Some(300.0), zoom: None }, &info);
+    near(&v.flash, 0, [50.0, 276.0, 210.0, 300.0]);
+    v.flash_dest(0, DestView::FitH { top: Some(300.0) }, &info);
+    near(&v.flash, 0, [0.0, 276.0, 160.0, 300.0]);
+    // A point on the bottom or right edge shifts the box inward instead of losing it.
+    v.flash_dest(0, DestView::Xyz { left: Some(300.0), top: Some(0.0), zoom: None }, &info);
+    near(&v.flash, 0, [140.0, 0.0, 300.0, 24.0]);
+    // A turned page sizes the box as displayed (160 wide, 24 high on screen), not in user space.
+    let turned = pdfcraft_render::PageInfo { width: 400.0, height: 300.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 90 };
+    let info90 = pdfcraft_render::DocInfo { pages: vec![turned], ..Default::default() };
+    v.flash_dest(0, DestView::Xyz { left: Some(50.0), top: Some(300.0), zoom: None }, &info90);
+    let (_, r, _) = v.flash.expect("a flash on the turned page");
+    for (got, want) in r.iter().zip([50.0, 240.0, 74.0, 400.0]) {
+        assert!((got - want).abs() < 0.01, "{r:?}");
+    }
+    // An unknown page clears an earlier flash instead of leaving it on the wrong place.
+    v.flash_dest(0, DestView::FitH { top: Some(300.0) }, &info);
+    assert!(v.flash.is_some());
+    v.flash_dest(9, DestView::FitH { top: Some(300.0) }, &info);
+    assert_eq!(v.flash, None);
+    // Nothing to mark: no position, a whole-page fit, an unknown page, or junk numbers.
+    for (page, dest) in [
+        (0, DestView::Top),
+        (0, DestView::Fit),
+        (0, DestView::Xyz { left: None, top: None, zoom: Some(2.0) }),
+        (0, DestView::FitH { top: None }),
+        (9, DestView::FitH { top: Some(300.0) }),
+        (0, DestView::FitR { rect: [f32::NAN, 0.0, 10.0, 10.0] }),
+        (0, DestView::FitR { rect: [500.0, 500.0, 600.0, 600.0] }),
+        (0, DestView::Xyz { left: Some(f32::NAN), top: Some(10.0), zoom: None }),
+    ] {
+        v.flash_dest(page, dest, &info);
+        assert_eq!(v.flash, None, "{dest:?} on page {page}");
+    }
+}
+
+#[test]
+fn a_null_coordinate_flashes_at_the_place_the_reader_keeps() {
+    let page = pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 };
+    let info = pdfcraft_render::DocInfo { pages: vec![page.clone(), page], ..Default::default() };
+    let v = view(2, PageLayout::Single, true);
+    // With both coordinates null the link names no place, so nothing is filled in.
+    let none = DestView::Xyz { left: None, top: None, zoom: Some(2.0) };
+    assert_eq!(v.resolve_dest(none, &info), none);
+    // Before the first frame there is no place to keep: the coordinate stays null.
+    let dest = DestView::Xyz { left: Some(20.0), top: None, zoom: None };
+    assert_eq!(v.resolve_dest(dest, &info), dest);
+    let whole = DestView::Xyz { left: Some(1.0), top: Some(2.0), zoom: None };
+    assert_eq!(v.resolve_dest(whole, &info), whole);
+}

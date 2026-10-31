@@ -180,6 +180,31 @@ impl DocView {
         }
     }
 
+    /// `dest` with the one null `/XYZ` coordinate of a partial position filled by the place [`DocView::go_to_dest`] keeps, so
+    /// the place it lands on can be read. Call it before `go_to_dest`: it reads where the reader is.
+    pub fn resolve_dest(&self, dest: DestView, info: &DocInfo) -> DestView {
+        match dest {
+            // Only a partial position is completed: with both null the link names no place.
+            DestView::Xyz { left, top, zoom } if left.is_some() != top.is_some() => {
+                let [kept_left, kept_top] = self.place_at_corner(info).unwrap_or([None, None]);
+                DestView::Xyz { left: left.or(kept_left), top: top.or(kept_top), zoom }
+            }
+            d => d,
+        }
+    }
+
+    /// Flash the place an internal link lands on, so it can be found on a dense page. The
+    /// rectangle comes from the destination: `/FitR` names one, and a point (`/XYZ`, `/FitH`,
+    /// `/FitV` with a coordinate) gets a box a line high at that point. `/Fit` and a destination
+    /// with no position name no place to mark. (Acrobat's own extent is not documented, so the
+    /// box is an approximation.)
+    pub fn flash_dest(&mut self, page: usize, dest: DestView, info: &DocInfo) {
+        // Cleared first: a flash left from an earlier link would mark the wrong place.
+        self.flash = None;
+        let Some(p) = info.pages.get(page) else { return };
+        self.flash = dest_flash_rect(dest, p).map(|r| (page, r, 0.0));
+    }
+
     /// Next page (`true`) or previous page. In two-page view this moves a whole spread: the other
     /// page of the spread is already on screen, so stepping to it wouldn't move the view (#70).
     pub fn step_page(&mut self, forward: bool) {
@@ -454,3 +479,48 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
 /// How far ↓ / ↑ scroll at Normal speed (Scroll speed halves or doubles it). Page Down / Page Up
 /// keep this much of the previous screen in view.
 const KEY_SCROLL_LINE: f32 = 40.0;
+
+/// The user-space rectangle to flash for a destination on `page` (see [`DocView::flash_dest`]),
+/// within its crop box. A point flashes a box sized in displayed points, whatever the page's
+/// rotation or `/UserUnit`; a point with only one coordinate flashes along the other axis from the
+/// window's edge. Non-finite input marks nothing.
+fn dest_flash_rect(dest: DestView, page: &pdfcraft_render::PageInfo) -> Option<[f32; 4]> {
+    let [cx0, cy0, cx1, cy1] = page.crop;
+    let rect = match dest {
+        DestView::FitR { rect } => rect,
+        DestView::Xyz { left, top, .. } if left.is_some() || top.is_some() => point_box(left, top, page),
+        DestView::FitH { top: Some(top) } => point_box(None, Some(top), page),
+        DestView::FitV { left: Some(left) } => point_box(Some(left), None, page),
+        _ => return None,
+    };
+    let [x0, y0, x1, y1] = rect;
+    let (x0, x1, y0, y1) = (x0.min(x1).max(cx0), x0.max(x1).min(cx1), y0.min(y1).max(cy0), y0.max(y1).min(cy1));
+    (rect.iter().all(|v| v.is_finite()) && x1 > x0 && y1 > y0).then_some([x0, y0, x1, y1])
+}
+
+/// A line-high box hanging down and right, as displayed, from (`left`, `top`) in user space; a
+/// missing coordinate takes the displayed page's left or top edge. A point at the right or bottom
+/// edge shifts the box inward, so it stays visible. Returned in user space.
+fn point_box(left: Option<f32>, top: Option<f32>, page: &pdfcraft_render::PageInfo) -> [f32; 4] {
+    const LINE: f32 = 24.0;
+    const WIDTH: f32 = 160.0;
+    let [cx0, _, _, cy1] = page.crop;
+    let [x, y] = page.user_to_view(left.unwrap_or(cx0), top.unwrap_or(cy1));
+    // On a page turned a quarter the user `top` decides the displayed x and `left` the displayed y.
+    let quarter = matches!(page.rotation, 90 | 270);
+    let (x_given, y_given) = if quarter { (top.is_some(), left.is_some()) } else { (left.is_some(), top.is_some()) };
+    // Comparisons, not `clamp`: that panics on an inverted range (a page narrower than the box)
+    // and `min`/`max` would turn a NaN into a number.
+    let shift = |v: f32, hi: f32| {
+        if v > hi {
+            hi.max(0.0)
+        } else if v < 0.0 {
+            0.0
+        } else {
+            v
+        }
+    };
+    let x = shift(if x_given { x } else { 0.0 }, page.width - WIDTH);
+    let y = shift(if y_given { y } else { 0.0 }, page.height - LINE);
+    page.view_rect_to_user([x, y, x + WIDTH, y + LINE])
+}
