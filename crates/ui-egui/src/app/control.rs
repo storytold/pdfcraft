@@ -208,6 +208,13 @@ impl PdfCraftApp {
                     _ => return Err("tools-side must be left or right".into()),
                 }
             }
+            ("panels-side", _) => {
+                self.side_panels.panels_side = match value {
+                    "left" => side_panels::PanelsSide::Left,
+                    "right" => side_panels::PanelsSide::Right,
+                    _ => return Err("panels-side must be left or right".into()),
+                }
+            }
             ("organize", Some(v)) => {
                 if value == "off" {
                     v.organize = false;

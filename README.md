@@ -335,9 +335,9 @@ pdfcraft-cli ui --control ~/.pdfcraft-control.json quit
 `ui.panel` opens, closes or sizes a side panel: `{"panel":"tools"|"side","open":true|false,"width":320}`.
 `tools` is the Tools panel and `side` the panel the rail opens (reopening it shows the one open last).
 `width` is clamped to the panel's limits (Tools 240–520, side panel 260–520 points). `ui.dock.reset`
-resets the side panels: Tools open on the left, default widths. The control channel accepts these
+resets the side panels: Tools open on the left, the side panels on the right, default widths. The control channel accepts these
 methods directly; `ui.command` also accepts `{"id":"ui.panel","params":{...}}`. Saved preferences keep
-the Tools side, the open panels and their widths. Invalid requests return an error without changing
+the Tools side, the side panels' side, the open panels and their widths. Invalid requests return an error without changing
 the document or the panels.
 
 
@@ -595,4 +595,4 @@ Forks and modified versions must remove them.
   <sub>Made by the <a href="https://getartcraft.com/">ArtCraft</a> team and community.</sub>
 </p>
 
-The Tools panel sits on the left, or on the right with Preferences ▸ Tools panel side. The rail stays at the right edge and opens one side panel beside it. Drag a panel's inner edge to resize it; widths are remembered. F4 shows or hides the side panel and Shift+F4 the Tools panel (also in the View menu); View ▸ Reset side panels restores the default arrangement.
+The Tools panel sits on the left, or on the right with Preferences ▸ Tools panel side. The rail stays at the right edge, or the left with Preferences ▸ Side panels, and opens one side panel beside it. Drag a panel's inner edge to resize it; widths are remembered. F4 shows or hides the side panel and Shift+F4 the Tools panel (also in the View menu); View ▸ Reset side panels restores the default arrangement.

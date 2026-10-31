@@ -33,7 +33,7 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | Split window, spreadsheet split | yes | no | planned |
 | Read mode, full screen | yes | yes; full screen is one fitted page at a time on black, click/keys turn pages (#1459) | shipped; auto-advance, loop and transitions planned |
 | Light, dark, system theme | yes | yes | shipped |
-| Side panels: thumbnails, bookmarks, attachments, layers, comments, fields, signatures | yes | yes; panels keep their width (#704); the Pages inspector has a 50–150% thumbnail size slider and buttons (#3808) | shipped |
+| Side panels: thumbnails, bookmarks, attachments, layers, comments, fields, signatures | yes | yes; panels keep their width (#704); the Pages inspector has a 50–150% thumbnail size slider and buttons (#3808); left or right of the page with their rail (Preferences ▸ Side panels) | shipped |
 | Destinations, articles, model tree, Tags, Order, Content panels | yes | no | planned |
 | Message bars (restricted, signed, PDF/A, forms) | yes | restricted and signed; no PDF/A view mode | partial |
 

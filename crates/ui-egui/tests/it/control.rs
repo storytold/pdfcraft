@@ -1626,7 +1626,7 @@ fn ui_panel_opens_closes_and_sizes_panes_and_survives_restore() {
     let state = ok(&mut reloaded, &client, "ui.state", json!({}))["side_panels"].clone();
     assert_eq!(
         state,
-        json!({"tools_side":"left", "tools_open":false, "tools_width":300.0, "side_open":true, "side_panel":"Bookmarks", "side_width":401.6f32 as f64})
+        json!({"tools_side":"left", "panels_side":"right", "tools_open":false, "tools_width":300.0, "side_open":true, "side_panel":"Bookmarks", "side_width":401.6f32 as f64})
     );
     // The ui.command form and the reset command.
     ok(&mut reloaded, &client, "ui.command", json!({"id":"ui.panel", "params":{"panel":"tools", "open":true}}));
