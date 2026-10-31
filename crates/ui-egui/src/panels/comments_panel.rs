@@ -241,6 +241,10 @@ pub(crate) fn show(
     }
     let mut page = usize::MAX;
     let mut group: Option<String> = None;
+    // A card (or page header) out of view that was measured at this width only takes up its
+    // height: laying out hundreds of them every frame put the panel over the frame budget
+    // (#5488). Shorter lists are laid out whole, so every card stays in the accessibility tree.
+    let virtual_list = roots.len() > LAY_OUT_WHOLE;
     for a in roots {
         if sort != SortBy::Page {
             let g = group_of(a);
@@ -252,46 +256,94 @@ pub(crate) fn show(
             }
         } else if a.page != page {
             page = a.page;
-            let n = page_counts.get(&page).copied().unwrap_or_default();
-            let open = !view.comments.collapsed_pages.contains(&page);
-            ui.add_space(6.0);
-            let clicked = ui
-                .horizontal(|ui| {
-                    let chevron = if open { "chevron-down" } else { "chevron-right" };
-                    let toggle = icons::button(ui, chevron, 18.0, false, if open { tl!("Collapse") } else { tl!("Expand") }).clicked();
-                    let label = ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(crate::i18n::fmt(tl!("Page {label}"), &[("label", &info.pages[page].label)]))
-                                .font(theme::semibold(12.5))
-                                .color(t.text_muted),
-                        )
-                        .sense(Sense::click()),
-                    );
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.label(egui::RichText::new(n.to_string()).color(t.text_faint).small())
-                    });
-                    toggle || label.clicked()
-                })
-                .inner;
-            if clicked {
-                if open {
-                    view.comments.collapsed_pages.push(page);
-                } else {
-                    view.comments.collapsed_pages.retain(|&c| c != page);
+            let header = ui.scope_id().with(("comment-page-header", page));
+            if !(virtual_list && skip_if_hidden(ui, header)) {
+                let top = ui.cursor().min.y;
+                page_header(ui, t, info, page, page_counts.get(&page).copied().unwrap_or_default(), &mut view.comments.collapsed_pages);
+                if virtual_list {
+                    remember_height(ui, header, top);
                 }
             }
-            ui.add_space(2.0);
         }
         if sort == SortBy::Page && view.comments.collapsed_pages.contains(&a.page) {
             continue;
         }
+        let key = (a.page, a.index);
+        // The selected card is always drawn, so it can scroll itself into view and keep its menu
+        // and editor.
+        let id = ui.scope_id().with(("comment-card", key));
+        if virtual_list && view.comments.selected != Some(key) && skip_if_hidden(ui, id) {
+            continue;
+        }
         let thread = replies_of(a);
         let rotation = info.pages.get(a.page).map_or(0, |p| p.rotation);
+        let top = ui.cursor().min.y;
         if let Some(e) = card(ui, view, CardContext { theme: t, annotation: a, rotation, thread, doc, prefs, allowed, nav }) {
             edit = Some(e);
         }
+        if virtual_list {
+            remember_height(ui, id, top);
+        }
     }
     edit
+}
+
+/// The "Page N" group header with its fold chevron and comment count `n`; a click folds or
+/// unfolds the page.
+fn page_header(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, page: usize, n: usize, collapsed: &mut Vec<usize>) {
+    let open = !collapsed.contains(&page);
+    ui.add_space(6.0);
+    let clicked = ui
+        .horizontal(|ui| {
+            let chevron = if open { "chevron-down" } else { "chevron-right" };
+            let toggle = icons::button(ui, chevron, 18.0, false, if open { tl!("Collapse") } else { tl!("Expand") }).clicked();
+            let label = ui.add(
+                egui::Label::new(
+                    egui::RichText::new(crate::i18n::fmt(tl!("Page {label}"), &[("label", info.pages.get(page).map_or("?", |p| p.label.as_str()))]))
+                        .font(theme::semibold(12.5))
+                        .color(t.text_muted),
+                )
+                .sense(Sense::click()),
+            );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.label(egui::RichText::new(n.to_string()).color(t.text_faint).small()));
+            toggle || label.clicked()
+        })
+        .inner;
+    ui.add_space(2.0);
+    if clicked {
+        if open {
+            collapsed.push(page);
+        } else {
+            collapsed.retain(|&c| c != page);
+        }
+    }
+}
+
+/// Comment lists up to this long are laid out whole; longer ones lay out only what is in view.
+const LAY_OUT_WHOLE: usize = 100;
+
+/// For a part of the list (a card or a page header) that was measured at this width and would
+/// fall out of view: takes up its height without laying it out, and returns `true`.
+fn skip_if_hidden(ui: &mut egui::Ui, id: egui::Id) -> bool {
+    let width = ui.available_width();
+    let Some(height) = ui.data(|d| d.get_temp::<(f32, f32)>(id)).filter(|(w, _)| (w - width).abs() < 0.5).map(|(_, h)| h) else {
+        return false;
+    };
+    if ui.is_rect_visible(egui::Rect::from_min_size(ui.cursor().min, vec2(width, height))) {
+        return false;
+    }
+    ui.allocate_space(vec2(width, height));
+    true
+}
+
+/// Records the height part `id` took since the cursor was at `top`, for [`skip_if_hidden`]: less
+/// the spacing `allocate_space` adds back after it.
+fn remember_height(ui: &egui::Ui, id: egui::Id, top: f32) {
+    let height = ui.cursor().min.y - top - ui.spacing().item_spacing.y;
+    if height.is_finite() && height > 0.0 {
+        let width = ui.available_width();
+        ui.data_mut(|d| d.insert_temp(id, (width, height)));
+    }
 }
 
 /// Draw one comment thread card, including author, body or inline editor, replies, status and per-comment
