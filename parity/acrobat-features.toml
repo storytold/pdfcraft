@@ -4063,8 +4063,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.list"]
 tools = ["comment_edit"]
-evidence = ["crates/annot/src/tests.rs::text_box_text_and_colour_changes_are_drawn", "crates/annot/src/tests.rs::editing_a_text_box_refits_its_rectangle", "crates/automation/tests/it/automation.rs::comments_through_tools", "crates/ui-egui/tests/it/comments.rs::ctrl_enter_posts_a_highlight_comment_and_shift_enter_adds_a_line", "crates/ui-egui/tests/it/comments.rs::one_reply_is_deleted_from_its_menu_and_the_thread_stays", "crates/ui-egui/tests/it/comments.rs::undo_and_redo_close_a_reply_editor_left_open"]
-notes = "double-click a comment or card, or Edit in the menus (a reply from its own \"…\" menu); Ctrl+Enter (also Command+Enter) saves text in the focused comment editor, Shift+Enter adds a newline; a text box's rectangle follows the new text (wrap width and top edge stay, the height fits the wrapped lines). Undo or Redo closes the panel's editor without saving it, since either can move the comment it was open on"
+evidence = ["crates/annot/src/tests.rs::text_box_text_and_colour_changes_are_drawn", "crates/annot/src/tests.rs::editing_a_text_box_refits_its_rectangle", "crates/automation/tests/it/automation.rs::comments_through_tools", "crates/ui-egui/tests/it/comments.rs::ctrl_enter_posts_a_highlight_comment_and_shift_enter_adds_a_line", "crates/ui-egui/tests/it/comments.rs::one_reply_is_deleted_from_its_menu_and_the_thread_stays", "crates/ui-egui/tests/it/comments.rs::undo_and_redo_close_a_reply_editor_left_open", "crates/ui-egui/tests/it/comments.rs::double_clicking_a_cards_text_edits_it"]
+notes = "double-click a comment or card (its header or its text), or Edit in the menus; double-click a comment or card, or Edit in the menus (a reply from its own \"…\" menu); Ctrl+Enter (also Command+Enter) saves text in the focused comment editor, Shift+Enter adds a newline; a text box's rectangle follows the new text (wrap width and top edge stay, the height fits the wrapped lines). Undo or Redo closes the panel's editor without saving it, since either can move the comment it was open on"
 
 [[feature]]
 id = "comment.copy-comment-text"

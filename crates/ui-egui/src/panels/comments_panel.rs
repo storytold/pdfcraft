@@ -359,7 +359,7 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
                     buttons_left = ui.min_rect().left();
                 });
             });
-            egui::Frame::NONE.inner_margin(egui::Margin { left: 34, right: 0, top: 4, bottom: 0 }).show(ui, |ui| {
+            let body = egui::Frame::NONE.inner_margin(egui::Margin { left: 34, right: 0, top: 4, bottom: 0 }).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 if editing {
                     if let Some(e) = inline_editor(ui, t, view, key, 2) {
@@ -457,7 +457,7 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
             // The header selects the card, except where its buttons are.
             let mut r = head.response.rect;
             r.max.x = r.max.x.min(buttons_left - 2.0);
-            r
+            (r, body.response.rect)
         });
     let rect = frame.response.rect;
     if selected {
@@ -471,7 +471,8 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
     ui.add_space(5.0);
     // The header row selects the card (and shows the comment on the page); unselected cards are
     // clickable everywhere.
-    let hit = if selected { frame.inner } else { rect };
+    let (head, body) = frame.inner;
+    let hit = if selected { head } else { rect };
     let click = ui
         .interact(hit, ui.scope_id().with(("card", key)), Sense::click())
         .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -481,7 +482,10 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
         view.comments.reply.clear();
         *nav = Some(Nav::Flash(a.page, a.shown_rect(rotation)));
     }
-    if click.double_clicked() && allowed {
+    // On the selected card a double-click on the text edits it too (dragging over it selects
+    // words of it, for copying).
+    let body = (selected && !editing).then(|| ui.interact(body, ui.scope_id().with(("card-body", key)), Sense::click()));
+    if (click.double_clicked() || body.is_some_and(|b| b.double_clicked())) && allowed {
         view.comments.open_editor(a.page, a.index, a.contents.clone().unwrap_or_default());
     }
     let menu_id = ui.scope_id().with(("card-menu", key));
