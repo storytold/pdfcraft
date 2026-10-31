@@ -2820,6 +2820,21 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+	No matches to replace	Nimic de înlocuit
+	Not replaced: {why}	Neînlocuit: {why}
+	Nothing replaced	Nimic înlocuit
+	Replace ({key})	Înlocuire ({key})
+	Replace all	Înlocuire peste tot
+	Replace with	Înlocuire cu
+	Replaced {n} on {pages}	S-au înlocuit {n} pe {pages}
+	Replace…	Înlocuire…
+	not editable text	text needitabil
+	scanned text	text scanat
+	spans two paragraphs	se întinde pe două paragrafe
+	the font can't draw it	fontul nu îl poate desena
+	the paragraph can't be rewritten	paragraful nu poate fi rescris
+	{k} skipped: {why}	{k} omis: {why}
+	{why} ({n})	{why} ({n})
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Astăzi

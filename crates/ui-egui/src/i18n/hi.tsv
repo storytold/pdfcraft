@@ -2791,6 +2791,21 @@ theme	Appearance	स्वरूप
 	field names can't contain a period: {name}	फ़ील्ड के नामों में पूर्ण विराम (.) नहीं हो सकता: {name}
 	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
 	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
+	No matches to replace	बदलने के लिए कोई मिलान नहीं
+	Not replaced: {why}	बदला नहीं गया: {why}
+	Nothing replaced	कुछ नहीं बदला गया
+	Replace ({key})	बदलें ({key})
+	Replace all	सभी बदलें
+	Replace with	इससे बदलें
+	Replaced {n} on {pages}	{pages} पर {n} बदले गए
+	Replace…	बदलें…
+	not editable text	संपादन योग्य पाठ नहीं
+	scanned text	स्कैन किया गया पाठ
+	spans two paragraphs	दो अनुच्छेदों में फैला है
+	the font can't draw it	फ़ॉन्ट इसे नहीं बना सकता
+	the paragraph can't be rewritten	अनुच्छेद को दोबारा नहीं लिखा जा सकता
+	{k} skipped: {why}	{k} छोड़ा गया: {why}
+	{why} ({n})	{why} ({n})
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	आज

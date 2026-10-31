@@ -2520,6 +2520,21 @@ animation effects	Off	オフ
 	Make properties default	プロパティをデフォルトに設定
 	Pages selected	選択したページ
 	Page properties	ページのプロパティ
+	Replace…	置換…
+	Replace ({key})	置換（{key}）
+	Replace with	置換後の文字列
+	Replace all	すべて置換
+	No matches to replace	置換する一致がありません
+	{why} ({n})	{why}（{n}）
+	Not replaced: {why}	置換されませんでした: {why}
+	Nothing replaced	何も置換されませんでした
+	Replaced {n} on {pages}	{pages}で {n} 件を置換しました
+	{k} skipped: {why}	{k} 件をスキップ: {why}
+	spans two paragraphs	2 つの段落にまたがる
+	scanned text	スキャンしたテキスト
+	the font can't draw it	フォントで描画できない
+	the paragraph can't be rewritten	段落を書き換えられない
+	not editable text	編集できないテキスト
 	Create & Edit	作成と編集
 	Review & Compare	レビューと比較
 	Forms & Signatures	フォームと署名

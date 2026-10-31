@@ -2483,6 +2483,21 @@ animation effects	Off	Изключени
 	Make properties default	Задаване като свойства по подразбиране
 	Pages selected	Избрани страници
 	Page properties	Свойства на страницата
+	Replace…	Замени…
+	Replace ({key})	Замени ({key})
+	Replace with	Замени с
+	Replace all	Замени всички
+	No matches to replace	Няма съвпадения за замяна
+	{why} ({n})	{why} ({n})
+	Not replaced: {why}	Не е заменено: {why}
+	Nothing replaced	Нищо не е заменено
+	Replaced {n} on {pages}	Заменени: {n} ({pages})
+	{k} skipped: {why}	Пропуснати {k}: {why}
+	spans two paragraphs	обхваща два абзаца
+	scanned text	сканиран текст
+	the font can't draw it	шрифтът не може да го изобрази
+	the paragraph can't be rewritten	абзацът не може да бъде пренаписан
+	not editable text	текст, който не може да се редактира
 	Create & Edit	Създаване и редактиране
 	Review & Compare	Преглед и сравнение
 	Forms & Signatures	Формуляри и подписи

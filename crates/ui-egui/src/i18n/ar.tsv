@@ -2797,6 +2797,21 @@ certificate	Version	الإصدار
 	Make properties default	جعل الخصائص افتراضية
 	Pages selected	الصفحات المحددة
 	Page properties	خصائص الصفحة
+	Replace…	استبدال…
+	Replace ({key})	استبدال ({key})
+	Replace with	استبدال بـ
+	Replace all	استبدال الكل
+	No matches to replace	لا توجد تطابقات لاستبدالها
+	{why} ({n})	{why} ({n})
+	Not replaced: {why}	لم يُستبدل: {why}
+	Nothing replaced	لم يُستبدل شيء
+	Replaced {n} on {pages}	تم استبدال {n} في {pages}
+	{k} skipped: {why}	تم تخطي {k}: {why}
+	spans two paragraphs	يمتد عبر فقرتين
+	scanned text	نص ممسوح ضوئيًا
+	the font can't draw it	لا يستطيع الخط رسمه
+	the paragraph can't be rewritten	تتعذر إعادة كتابة الفقرة
+	not editable text	نص غير قابل للتحرير
 	Create & Edit	الإنشاء والتحرير
 	Review & Compare	المراجعة والمقارنة
 	Forms & Signatures	النماذج والتوقيعات

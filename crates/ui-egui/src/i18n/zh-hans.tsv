@@ -2484,6 +2484,21 @@ animation effects	Off	关
 	Make properties default	将属性设为默认
 	Pages selected	选定的页面
 	Page properties	页面属性
+	Replace…	替换…
+	Replace ({key})	替换 ({key})
+	Replace with	替换为
+	Replace all	全部替换
+	No matches to replace	没有可替换的匹配项
+	{why} ({n})	{why}（{n}）
+	Not replaced: {why}	未替换：{why}
+	Nothing replaced	未替换任何内容
+	Replaced {n} on {pages}	已替换 {n} 处（{pages}）
+	{k} skipped: {why}	已跳过 {k} 处：{why}
+	spans two paragraphs	跨越两个段落
+	scanned text	扫描的文本
+	the font can't draw it	字体无法显示
+	the paragraph can't be rewritten	无法重写该段落
+	not editable text	不可编辑的文本
 	Create & Edit	创建和编辑
 	Review & Compare	审阅和比较
 	Forms & Signatures	表单和签名

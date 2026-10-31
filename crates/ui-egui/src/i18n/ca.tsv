@@ -2820,6 +2820,21 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+	No matches to replace	No hi ha coincidències per substituir
+	Not replaced: {why}	No substituït: {why}
+	Nothing replaced	No s'ha substituït res
+	Replace ({key})	Substitueix ({key})
+	Replace all	Substitueix-ho tot
+	Replace with	Substitueix per
+	Replaced {n} on {pages}	S'ha substituït {n} a {pages}
+	Replace…	Substitueix…
+	not editable text	text no editable
+	scanned text	text escanejat
+	spans two paragraphs	abasta dos paràgrafs
+	the font can't draw it	la tipografia no el pot dibuixar
+	the paragraph can't be rewritten	el paràgraf no es pot reescriure
+	{k} skipped: {why}	{k} omès: {why}
+	{why} ({n})	{why} ({n})
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Avui

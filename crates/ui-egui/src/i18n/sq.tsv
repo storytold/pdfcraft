@@ -2546,6 +2546,21 @@ animation effects	Off	Joaktiv
 	field names can't contain a period: {name}	emrat e fushave nuk mund të përmbajnë pikë: {name}
 	two cells would both be named {name}	dy qeliza do të kishin të dyja emrin {name}
 	a field named {name} already exists	ekziston tashmë një fushë me emrin {name}
+	No matches to replace	Nuk ka përputhje për t'u zëvendësuar
+	Not replaced: {why}	Nuk u zëvendësua: {why}
+	Nothing replaced	Nuk u zëvendësua asgjë
+	Replace ({key})	Zëvendëso ({key})
+	Replace all	Zëvendëso të gjitha
+	Replace with	Zëvendëso me
+	Replaced {n} on {pages}	U zëvendësuan {n} në {pages}
+	Replace…	Zëvendëso…
+	not editable text	tekst jo i redaktueshëm
+	scanned text	tekst i skanuar
+	spans two paragraphs	përfshin dy paragrafë
+	the font can't draw it	shkronja nuk mund ta vizatojë
+	the paragraph can't be rewritten	paragrafi nuk mund të rishkruhet
+	{k} skipped: {why}	{k} u kapërcye: {why}
+	{why} ({n})	{why} ({n})
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Sot

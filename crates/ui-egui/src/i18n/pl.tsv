@@ -2496,6 +2496,21 @@ animation effects	Off	Wyłączone
 	Make properties default	Ustaw właściwości jako domyślne
 	Pages selected	Zaznaczone strony
 	Page properties	Właściwości strony
+	Replace…	Zastąp…
+	Replace ({key})	Zastąp ({key})
+	Replace with	Zastąp przez
+	Replace all	Zastąp wszystko
+	No matches to replace	Brak dopasowań do zastąpienia
+	{why} ({n})	{why} ({n})
+	Not replaced: {why}	Nie zastąpiono: {why}
+	Nothing replaced	Nic nie zastąpiono
+	Replaced {n} on {pages}	Zastąpiono: {n} ({pages})
+	{k} skipped: {why}	Pominięto {k}: {why}
+	spans two paragraphs	obejmuje dwa akapity
+	scanned text	zeskanowany tekst
+	the font can't draw it	czcionka nie potrafi go wyświetlić
+	the paragraph can't be rewritten	nie można przepisać akapitu
+	not editable text	tekst nieedytowalny
 	Create & Edit	Tworzenie i edycja
 	Review & Compare	Recenzja i porównanie
 	Forms & Signatures	Formularze i podpisy

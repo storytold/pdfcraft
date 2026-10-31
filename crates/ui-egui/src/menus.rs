@@ -144,6 +144,7 @@ const EDIT: &[&str] = &[
     SELECT_ALL,
     SEP,
     "edit.find",
+    "edit.replace",
     "edit.advanced_search",
     SEP,
     "edit.column_select",

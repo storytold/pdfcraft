@@ -2433,6 +2433,21 @@ animation effects	Off	Выкл
 	Make properties default	Сделать свойства стандартными
 	Pages selected	Выделенные страницы
 	Page properties	Свойства страницы
+	Replace…	Заменить…
+	Replace ({key})	Заменить ({key})
+	Replace with	Заменить на
+	Replace all	Заменить все
+	No matches to replace	Нет совпадений для замены
+	{why} ({n})	{why} ({n})
+	Not replaced: {why}	Не заменено: {why}
+	Nothing replaced	Ничего не заменено
+	Replaced {n} on {pages}	Заменено: {n} ({pages})
+	{k} skipped: {why}	Пропущено {k}: {why}
+	spans two paragraphs	охватывает два абзаца
+	scanned text	отсканированный текст
+	the font can't draw it	шрифт не может его отобразить
+	the paragraph can't be rewritten	абзац нельзя переписать
+	not editable text	нередактируемый текст
 	Create & Edit	Создание и редактирование
 	Review & Compare	Рецензирование и сравнение
 	Forms & Signatures	Формы и подписи

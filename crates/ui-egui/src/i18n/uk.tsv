@@ -2542,6 +2542,21 @@ animation effects	Off	Вимкнено
 	Make properties default	Зробити властивості типовими
 	Pages selected	Вибрані сторінки
 	Page properties	Властивості сторінки
+	Replace…	Замінити…
+	Replace ({key})	Замінити ({key})
+	Replace with	Замінити на
+	Replace all	Замінити все
+	No matches to replace	Немає збігів для заміни
+	{why} ({n})	{why} ({n})
+	Not replaced: {why}	Не замінено: {why}
+	Nothing replaced	Нічого не замінено
+	Replaced {n} on {pages}	Замінено: {n} ({pages})
+	{k} skipped: {why}	Пропущено {k}: {why}
+	spans two paragraphs	охоплює два абзаци
+	scanned text	відсканований текст
+	the font can't draw it	шрифт не може його відобразити
+	the paragraph can't be rewritten	абзац не можна переписати
+	not editable text	текст, який не можна редагувати
 	Create & Edit	Створення й редагування
 	Review & Compare	Рецензування й порівняння
 	Forms & Signatures	Форми й підписи

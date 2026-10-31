@@ -2732,6 +2732,21 @@ certificate	Key usage	Utilizzo chiave
 certificate	Self-signed	Autofirmato
 certificate	SHA-1 digest	Impronta SHA-1
 certificate	SHA-256 digest	Impronta SHA-256
+	Replace…	Sostituisci…
+	Replace ({key})	Sostituisci ({key})
+	Replace with	Sostituisci con
+	Replace all	Sostituisci tutto
+	No matches to replace	Nessuna corrispondenza da sostituire
+	{why} ({n})	{why} ({n})
+	Not replaced: {why}	Non sostituito: {why}
+	Nothing replaced	Nessuna sostituzione
+	Replaced {n} on {pages}	{n} sostituzioni su {pages}
+	{k} skipped: {why}	{k} ignorate: {why}
+	spans two paragraphs	si estende su due paragrafi
+	scanned text	testo scansionato
+	the font can't draw it	il carattere non può disegnarlo
+	the paragraph can't be rewritten	il paragrafo non può essere riscritto
+	not editable text	testo non modificabile
 	Create & Edit	Crea e modifica
 	Review & Compare	Revisione e confronto
 	Forms & Signatures	Moduli e firme

@@ -2519,6 +2519,21 @@ animation effects	Off	Ki
 	Make properties default	Tulajdonságok beállítása alapértelmezettként
 	Pages selected	Kijelölt oldalak
 	Page properties	Oldaltulajdonságok
+	Replace…	Csere…
+	Replace ({key})	Csere ({key})
+	Replace with	Csere erre
+	Replace all	Összes cseréje
+	No matches to replace	Nincs cserélhető találat
+	{why} ({n})	{why} ({n})
+	Not replaced: {why}	Nincs lecserélve: {why}
+	Nothing replaced	Semmi sem lett lecserélve
+	Replaced {n} on {pages}	Lecserélve: {n} ({pages})
+	{k} skipped: {why}	{k} kihagyva: {why}
+	spans two paragraphs	két bekezdésre terjed ki
+	scanned text	beolvasott szöveg
+	the font can't draw it	a betűtípus nem tudja megjeleníteni
+	the paragraph can't be rewritten	a bekezdés nem írható újra
+	not editable text	nem szerkeszthető szöveg
 	Create & Edit	Létrehozás és szerkesztés
 	Review & Compare	Áttekintés és összehasonlítás
 	Forms & Signatures	Űrlapok és aláírások

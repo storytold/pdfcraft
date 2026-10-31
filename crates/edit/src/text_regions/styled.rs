@@ -489,9 +489,8 @@ fn wrap_styled_rows(
 
 fn apply_range_styles<'a>(
     first: &TextLine,
-    block: &TextBlock,
     lines: &[TextLine],
-    draft: &str,
+    sources: Vec<(std::ops::Range<usize>, usize)>,
     ranges: &[&'a RangeStyle],
     style: &BlockStyle,
 ) -> StyledLines<'a> {
@@ -499,7 +498,7 @@ fn apply_range_styles<'a>(
     let mut styled_spans = Vec::new();
     let mut underlines = HashMap::new();
     let mut overrides = HashMap::new();
-    for (span, source) in block.edited_spans(draft) {
+    for (span, source) in sources {
         let mut edges = vec![span.start, span.end];
         for range in ranges {
             for edge in [range.range.start, range.range.end] {
@@ -838,6 +837,25 @@ fn splice_with_marker(
     data
 }
 
+/// The source run each part of the draft is styled from: the ones given, which must cover the draft
+/// in order, on character boundaries, from the block's runs, or else the edit's own.
+fn draft_sources(block: &TextBlock, draft: &str, style: &BlockStyle) -> Result<Vec<(std::ops::Range<usize>, usize)>, EditError> {
+    if style.sources.is_empty() {
+        return Ok(block.edited_spans(draft));
+    }
+    let mut at = 0;
+    for (range, source) in &style.sources {
+        if range.start != at || range.start >= range.end || draft.get(range.clone()).is_none() || !block.lines.contains(source) {
+            return Err(EditError::Invalid("the text's style sources must cover it in order with the paragraph's own runs".into()));
+        }
+        at = range.end;
+    }
+    if at != draft.len() {
+        return Err(EditError::Invalid("the text's style sources must cover it in order with the paragraph's own runs".into()));
+    }
+    Ok(style.sources.clone())
+}
+
 /// Rewrite visual rows while keeping the source style on each surviving character. Resource
 /// names may differ between Unicode subsets of the same face; encoding searches those subsets.
 pub(crate) fn rewrite_styled_block(
@@ -856,7 +874,8 @@ pub(crate) fn rewrite_styled_block(
     }
     let ranges = validated_ranges(draft, style)?;
     let source_count = lines.len();
-    let styled = apply_range_styles(first, block, lines, draft, &ranges, style);
+    let sources = draft_sources(block, draft, style)?;
+    let styled = apply_range_styles(first, lines, sources, &ranges, style);
     let lines = styled.lines.as_slice();
     let styled_spans = styled.spans;
     let underlines = styled.underlines;
@@ -956,7 +975,7 @@ pub(crate) fn rewrite_styled_block(
     // A row the edit doesn't reach keeps its source operators, so its kerning, TJ word gaps and
     // glyph widths stay exactly as they were instead of being rebuilt from the text state. A row
     // aligned on its own is reached; the rows around it are not.
-    let plain = BlockStyle { ranges: Vec::new(), aligns: Vec::new(), ..style.clone() } == BlockStyle::default();
+    let plain = BlockStyle { ranges: Vec::new(), sources: Vec::new(), aligns: Vec::new(), ..style.clone() } == BlockStyle::default();
     let mut kept = if plain {
         untouched_rows(block, draft, &row_ranges)
             .into_iter()
