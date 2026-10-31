@@ -2797,6 +2797,12 @@ theme	Appearance	모양
 	Attaching files is not available on the web yet	웹에서는 아직 파일을 첨부할 수 없습니다
 	Delete attachment	첨부 파일 삭제
 	Delete attachment {key}	첨부 파일 {key} 삭제
+	Inserted page	삽입한 페이지
+	Deleted page	삭제한 페이지
+	Moved page	이동한 페이지
+	Page {old} → Page {new}	{old} 페이지 → {new} 페이지
+	+ Page {p}	+ {p} 페이지
+	− Page {p}	− {p} 페이지
 @plural	{n} reply|{n} replies	답글 {n}개
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

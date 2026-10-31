@@ -2872,6 +2872,12 @@ certificate	Version	Verze
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Dnes
+	Inserted page	Vložená stránka
+	Deleted page	Odstraněná stránka
+	Moved page	Přesunutá stránka
+	Page {old} → Page {new}	Stránka {old} → stránka {new}
+	+ Page {p}	+ Stránka {p}
+	− Page {p}	− Stránka {p}
 @plural	{n} reply|{n} replies	{n} odpověď|{n} odpovědi|{n} odpovědí
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

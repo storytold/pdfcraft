@@ -2474,6 +2474,12 @@ animation effects	Off	ఆఫ్
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	ఈరోజు
+	Inserted page	చొప్పించిన పేజీ
+	Deleted page	తొలగించిన పేజీ
+	Moved page	తరలించిన పేజీ
+	Page {old} → Page {new}	పేజీ {old} → పేజీ {new}
+	+ Page {p}	+ పేజీ {p}
+	− Page {p}	− పేజీ {p}
 @plural	{n} reply|{n} replies	{n} ప్రత్యుత్తరం|{n} ప్రత్యుత్తరాలు
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

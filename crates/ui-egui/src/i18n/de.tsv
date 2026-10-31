@@ -2566,6 +2566,12 @@ animation effects	Off	Aus
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Heute
+	Inserted page	Eingefügte Seite
+	Deleted page	Gelöschte Seite
+	Moved page	Verschobene Seite
+	Page {old} → Page {new}	Seite {old} → Seite {new}
+	+ Page {p}	+ Seite {p}
+	− Page {p}	− Seite {p}
 @plural	{n} reply|{n} replies	{n} Antwort|{n} Antworten
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

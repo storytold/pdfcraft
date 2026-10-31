@@ -2841,6 +2841,12 @@ certificate	Version	الإصدار
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	اليوم
+	Inserted page	صفحة مُدرجة
+	Deleted page	صفحة محذوفة
+	Moved page	صفحة منقولة
+	Page {old} → Page {new}	صفحة {old} → صفحة {new}
+	+ Page {p}	+ صفحة {p}
+	− Page {p}	− صفحة {p}
 @plural	{n} reply|{n} replies	{n} رد|{n} رد|{n} ردّان|{n} ردود|{n} ردًا|{n} رد
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

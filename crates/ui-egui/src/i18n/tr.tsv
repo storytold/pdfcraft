@@ -2561,6 +2561,12 @@ animation effects	Off	Kapalı
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Bugün
+	Inserted page	Eklenen sayfa
+	Deleted page	Silinen sayfa
+	Moved page	Taşınan sayfa
+	Page {old} → Page {new}	Sayfa {old} → sayfa {new}
+	+ Page {p}	+ Sayfa {p}
+	− Page {p}	− Sayfa {p}
 @plural	{n} reply|{n} replies	{n} yanıt
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

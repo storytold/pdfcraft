@@ -2563,6 +2563,12 @@ animation effects	Off	Өшірулі
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Бүгін
+	Inserted page	Енгізілген бет
+	Deleted page	Жойылған бет
+	Moved page	Жылжытылған бет
+	Page {old} → Page {new}	{old}-бет → {new}-бет
+	+ Page {p}	+ {p}-бет
+	− Page {p}	− {p}-бет
 @plural	{n} reply|{n} replies	{n} жауап|{n} жауап
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
