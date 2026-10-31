@@ -1467,6 +1467,7 @@ impl Renderer {
                             renderer.ctx.flush();
                             let mut resources = vello_cpu::Resources::default();
                             renderer.ctx.render_to_pixmap(&mut resources, &mut pix);
+                            apply_tiling_opacity(&mut pix, t.opacity);
                             paint_transform = path_transform.inverse() * t.matrix * initial_transform.inverse();
                             let image = Image {
                                 image: ImageSource::Pixmap(Arc::new(pix)),
@@ -1530,6 +1531,7 @@ impl Renderer {
                         renderer.ctx.flush();
                         let mut resources = vello_cpu::Resources::default();
                         renderer.ctx.render_to_pixmap(&mut resources, &mut pix);
+                        apply_tiling_opacity(&mut pix, t.opacity);
 
                         // TODO: Fix these
                         if t.x_step < 0.0 {
@@ -2443,6 +2445,22 @@ struct KnockoutPass {
     other_modes: Vec<BlendMode>,
 }
 
+/// PdfCraft patch (28): applies a tiling pattern's fill or stroke opacity (`ca`/`CA` when it is
+/// painted, ISO 32000-2 §11.6.4.4) to its rendered cell. vello_cpu 0.0.8 can't take it as the
+/// image sampler's alpha (`encode_into` refuses anything but 1), so the premultiplied pixels are
+/// scaled. A cell was drawn at full opacity whatever `ca` said. An opacity that is not a number
+/// leaves the cell as it is; one outside 0–1 is clamped, as for a solid colour.
+fn apply_tiling_opacity(pix: &mut Pixmap, opacity: f32) {
+    if opacity.is_nan() {
+        return;
+    }
+    // In 0..=255 after the clamp, so the cast is exact.
+    let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+    if alpha != u8::MAX {
+        pix.multiply_alpha(alpha);
+    }
+}
+
 /// PdfCraft patch (26): `paint` at full opacity, for the shape it covers.
 fn shape_of<'a>(paint: &Paint<'a>) -> Paint<'a> {
     match paint {
@@ -2452,7 +2470,12 @@ fn shape_of<'a>(paint: &Paint<'a>) -> Paint<'a> {
                 s.opacity = 1.0;
                 Paint::Pattern(Box::new(Pattern::Shading(s)))
             }
-            Pattern::Tiling(_) => paint.clone(),
+            // PdfCraft patch (28): a tiling pattern's paint-time opacity too.
+            Pattern::Tiling(t) => {
+                let mut t = t.clone();
+                t.opacity = 1.0;
+                Paint::Pattern(Box::new(Pattern::Tiling(t)))
+            }
         },
         Paint::Color(_) => paint.clone(),
     }
