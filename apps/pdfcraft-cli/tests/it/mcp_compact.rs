@@ -39,14 +39,18 @@ fn listed_tools(flags: &[&str]) -> Vec<String> {
 
 #[test]
 fn mcp_rejects_unknown_options_before_starting_the_server() {
-    for option in ["--totally-bogus-flag", "--rot", "--root=."] {
+    for option in ["--totally-bogus-flag", "--rot", "--root."] {
         let out = Command::new(env!("CARGO_BIN_EXE_pdfcraft-cli")).args(["mcp", option]).output().expect("run CLI");
 
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(!out.status.success(), "mcp {option} unexpectedly succeeded");
-        assert!(stderr.contains("unknown option") && stderr.contains(option), "mcp {option}: {stderr}");
+        assert_eq!(out.status.code(), Some(2), "mcp {option}: {stderr}");
+        assert!(stderr.contains("unexpected argument") && stderr.contains(option.split('=').next().unwrap()), "mcp {option}: {stderr}");
         assert!(!stderr.contains("MCP server on stdio"), "server started despite invalid option: {stderr}");
     }
+    let out = Command::new(env!("CARGO_BIN_EXE_pdfcraft-cli")).args(["mcp", "--compact=yes"]).output().expect("run CLI");
+    assert_eq!(out.status.code(), Some(2));
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("MCP server on stdio"));
 }
 
 #[test]

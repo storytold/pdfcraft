@@ -1,50 +1,47 @@
-use super::options::{UI_OPTIONS, flag, positional, validate_options};
-use super::{CliError, Duration, stdout_line};
+use std::time::Duration;
+
+use crate::cli::UiArgs;
+use crate::error::CliError;
+use crate::{Io, stdout_line};
 
 // ---- UI control channel client -----------------------------------------------------------------
 
 /// One request to a running app's control channel (`pdfcraft --control FILE`).
-pub(crate) fn ui(args: &[String]) -> Result<(), CliError> {
-    validate_options("ui", args, UI_OPTIONS)?;
+pub(crate) fn ui(args: &UiArgs, io: &mut Io) -> Result<(), CliError> {
     use std::io::{BufRead, BufReader, Write as _};
-    let file = flag(args, "--control").ok_or("ui: missing --control FILE (start the app with `pdfcraft --control FILE`)")?;
+    let file = args.control.as_path();
     let info = read_control_file(file)?;
-    let port = info["port"].as_u64().ok_or(format!("{file}: no port"))?;
+    let port = info["port"].as_u64().ok_or_else(|| CliError::Ui(format!("{}: no port", file.display())))?;
     // Refused rather than truncated, which would quietly reach some other port.
-    let port = u16::try_from(port).map_err(|_| format!("{file}: {port} is not a port number"))?;
-    let token = info["token"].as_str().ok_or(format!("{file}: no token"))?;
-    let pos = positional(args, UI_OPTIONS);
-    let method = *pos.first().ok_or("ui: missing method (state, inspect, click, drag, type, key, command, commands, set, open, screenshot)")?;
+    let port = u16::try_from(port).map_err(|_| CliError::Ui(format!("{}: {port} is not a port number", file.display())))?;
+    let token = info["token"].as_str().ok_or_else(|| CliError::Ui(format!("{}: no token", file.display())))?;
+    let method = args.method.as_str();
     let method = if method.starts_with("ui.") { method.to_string() } else { format!("ui.{method}") };
-    let mut params = serde_json::Map::new();
-    for kv in pos.iter().skip(1) {
-        let (k, v) = kv.split_once('=').ok_or(format!("ui: expected key=value, got {kv:?}"))?;
-        params.insert(k.to_string(), serde_json::from_str(v).unwrap_or_else(|_| serde_json::Value::String(v.to_string())));
-    }
-    let stream =
-        std::net::TcpStream::connect(("127.0.0.1", port)).map_err(|e| format!("can't reach the app on port {port}: {e} (is it still running?)"))?;
-    stream.set_read_timeout(Some(Duration::from_secs(40))).map_err(|e| e.to_string())?;
-    let mut write = stream.try_clone().map_err(|e| e.to_string())?;
+    let params: serde_json::Map<String, serde_json::Value> = args.args.iter().map(|kv| (kv.key.clone(), kv.value.clone())).collect();
+    let stream = std::net::TcpStream::connect(("127.0.0.1", port))
+        .map_err(|e| CliError::Ui(format!("can't reach the app on port {port}: {e} (is it still running?)")))?;
+    let io_error = |e: std::io::Error| CliError::Ui(e.to_string());
+    stream.set_read_timeout(Some(Duration::from_secs(40))).map_err(io_error)?;
+    let mut write = stream.try_clone().map_err(io_error)?;
     let mut lines = BufReader::new(stream).lines();
-    let mut rpc = |id: u64, method: &str, params: serde_json::Value| -> Result<serde_json::Value, String> {
-        writeln!(write, "{}", serde_json::json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params })).map_err(|e| e.to_string())?;
-        let line = lines.next().ok_or("the app closed the connection")?.map_err(|e| e.to_string())?;
-        let reply: serde_json::Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;
+    let mut rpc = |id: u64, method: &str, params: serde_json::Value| -> Result<serde_json::Value, CliError> {
+        writeln!(write, "{}", serde_json::json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params })).map_err(io_error)?;
+        let line = lines.next().ok_or_else(|| CliError::Ui("the app closed the connection".into()))?.map_err(io_error)?;
+        let reply: serde_json::Value = serde_json::from_str(&line).map_err(|e| CliError::Ui(e.to_string()))?;
         match reply.get("error") {
-            Some(e) => Err(e["message"].as_str().unwrap_or("error").to_string()),
+            Some(e) => Err(CliError::Ui(e["message"].as_str().unwrap_or("error").to_string())),
             None => Ok(reply["result"].clone()),
         }
     };
     rpc(1, "auth", serde_json::json!({ "token": token }))?;
     let mut result = rpc(2, &method, serde_json::Value::Object(params))?;
-    if let (Some(out), Some(data)) = (flag(args, "--out"), result.get("png_base64").and_then(|d| d.as_str())) {
+    if let (Some(out), Some(data)) = (&args.out, result.get("png_base64").and_then(|d| d.as_str())) {
         use base64::Engine as _;
-        let png = base64::engine::general_purpose::STANDARD.decode(data).map_err(|e| e.to_string())?;
-        std::fs::write(out, png).map_err(|e| format!("{out}: {e}"))?;
-        result["png_base64"] = serde_json::json!(format!("written to {out}"));
+        let png = base64::engine::general_purpose::STANDARD.decode(data).map_err(|e| CliError::Ui(e.to_string()))?;
+        std::fs::write(out, png).map_err(|e| CliError::file(out, e))?;
+        result["png_base64"] = serde_json::json!(format!("written to {}", out.display()));
     }
-    stdout_line(format_args!("{}", serde_json::to_string_pretty(&result).unwrap_or_default()))?;
-    Ok(())
+    stdout_line(io, format_args!("{}", serde_json::to_string_pretty(&result).unwrap_or_default()))
 }
 
 /// Most a control file may hold. The app writes under 100 bytes.
@@ -60,34 +57,36 @@ const CONTROL_FILE_ADVICE: &str =
 /// first; the app then can't write it, and the CLI would talk to the other user's listener.
 /// Refused: a symbolic link, anything but a regular file, and on Unix a file owned by someone
 /// else or open to other users (the app writes it with mode 600).
-fn read_control_file(file: &str) -> Result<serde_json::Value, String> {
+fn read_control_file(file: &std::path::Path) -> Result<serde_json::Value, CliError> {
     use std::io::Read as _;
-    let at_path = std::fs::symlink_metadata(file).map_err(|e| format!("{file}: {e}"))?;
+    let name = file.display();
+    let fail = |message: String| CliError::Ui(format!("{name}: {message}"));
+    let at_path = std::fs::symlink_metadata(file).map_err(|e| fail(e.to_string()))?;
     if at_path.file_type().is_symlink() {
-        return Err(format!("{file}: is a symbolic link, which could point at another user's file. {CONTROL_FILE_ADVICE}"));
+        return Err(fail(format!("is a symbolic link, which could point at another user's file. {CONTROL_FILE_ADVICE}")));
     }
     if !at_path.is_file() {
-        return Err(format!("{file}: not a regular file. {CONTROL_FILE_ADVICE}"));
+        return Err(fail(format!("not a regular file. {CONTROL_FILE_ADVICE}")));
     }
-    let f = std::fs::File::open(file).map_err(|e| format!("{file}: {e}"))?;
+    let f = std::fs::File::open(file).map_err(|e| fail(e.to_string()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
         // Checked on the open file, so nothing swapped in after `symlink_metadata` gets through.
-        let opened = f.metadata().map_err(|e| format!("{file}: {e}"))?;
+        let opened = f.metadata().map_err(|e| fail(e.to_string()))?;
         if (opened.dev(), opened.ino()) != (at_path.dev(), at_path.ino()) {
-            return Err(format!("{file}: was replaced while being opened. {CONTROL_FILE_ADVICE}"));
+            return Err(fail(format!("was replaced while being opened. {CONTROL_FILE_ADVICE}")));
         }
         if let Some(problem) = control_file_problem(opened.uid(), opened.mode(), current_uid()) {
-            return Err(format!("{file}: {problem}. {CONTROL_FILE_ADVICE}"));
+            return Err(fail(format!("{problem}. {CONTROL_FILE_ADVICE}")));
         }
     }
     let mut text = String::new();
-    f.take(CONTROL_FILE_MAX.saturating_add(1)).read_to_string(&mut text).map_err(|e| format!("{file}: {e}"))?;
+    f.take(CONTROL_FILE_MAX.saturating_add(1)).read_to_string(&mut text).map_err(|e| fail(e.to_string()))?;
     if u64::try_from(text.len()).unwrap_or(u64::MAX) > CONTROL_FILE_MAX {
-        return Err(format!("{file}: too large for a control file (over {} KiB)", CONTROL_FILE_MAX / 1024));
+        return Err(fail(format!("too large for a control file (over {} KiB)", CONTROL_FILE_MAX / 1024)));
     }
-    serde_json::from_str(&text).map_err(|e| format!("{file}: {e}"))
+    serde_json::from_str(&text).map_err(|e| fail(e.to_string()))
 }
 
 /// Why user `me` can't trust a control file with this owner and mode, if they can't.
