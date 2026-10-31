@@ -223,11 +223,11 @@ mod tests {
         assert_eq!(work, 7, "only what it took");
         let mut work = cost - 1;
         let refused = decode_ccitt_within(&data, &p, h, &mut work).unwrap_err();
-        assert_eq!(refused.to_string(), crate::work_spent().to_string(), "a step short");
+        assert!(matches!(refused, FilterError::Spent), "a step short: {refused}");
         assert_eq!(work, 0, "spends all that was left");
         // Nothing left: not read at all, so bad columns aren't reported as bad columns.
         let bad = CcittParams { columns: 0, ..p };
-        assert!(decode_ccitt_within(&data, &bad, h, &mut 0).is_err_and(|e| e.to_string() == crate::work_spent().to_string()));
+        assert!(decode_ccitt_within(&data, &bad, h, &mut 0).is_err_and(|e| matches!(e, FilterError::Spent)));
         // No code at all, for the same rows.
         let mut work = u64::MAX;
         decode_ccitt_within(&[], &p, h, &mut work).unwrap();

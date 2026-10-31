@@ -30,7 +30,7 @@ pub const MAX_PAGE_FORMS: usize = 50_000;
 type Decoder = fn(&Stream, usize) -> Result<(Vec<u8>, usize), (FilterError, usize)>;
 
 /// What one operation over a document's images may still spend decoding them: exporting them,
-/// optimizing them, clearing them for redaction.
+/// optimizing them, and storing LZW streams with Flate as it does, clearing them for redaction.
 ///
 /// An image has its own limit, which doesn't bound a file of thousands of images made to reach it:
 /// a few hundred bytes of JBIG2 can ask for seconds of decoding, 4 KB of Flate inside Flate for a
@@ -73,6 +73,24 @@ impl ImageBudget {
         let decoded = doc.with_direct_parms(s).decoded_spending(max, &mut self.work);
         self.count_refused(s, &decoded);
         decoded
+    }
+
+    /// `data` through `chain`, any corruption being an error ([`pdfcraft_filters::decode_within`]),
+    /// for a stream a run rewrites rather than an image it reads, charged to the allowance.
+    pub fn decode_chain(
+        &mut self,
+        chain: &[(pdfcraft_filters::Filter, pdfcraft_filters::Params)],
+        data: &[u8],
+        max: usize,
+    ) -> Result<Vec<u8>, FilterError> {
+        pdfcraft_filters::decode_within(chain, data, max, &mut self.work)
+    }
+
+    /// Pays `steps` of other work on decoded data, or spends all there is and says so.
+    pub fn spend(&mut self, steps: u64) -> bool {
+        let left = self.work.checked_sub(steps);
+        self.work = left.unwrap_or(0);
+        left.is_some()
     }
 
     /// An image that failed with nothing left was refused, unless it has a filter that costs
@@ -406,6 +424,31 @@ mod image_tests {
         assert_eq!(budget.work_left(), 0, "exactly that");
         assert!(budget.decode(&doc, &image, 1 << 20).is_err());
         assert_eq!(budget.refused(), 1);
+    }
+
+    /// A stream a run rewrites is read strictly and charged, and what the caller does with it after
+    /// comes out of the same allowance: what can't be paid for spends all of it.
+    #[test]
+    fn a_rewritten_stream_shares_the_allowance() {
+        use pdfcraft_filters::{Filter, FilterError, Params};
+        let samples = vec![7u8; 1000];
+        let raw = pdfcraft_filters::encode_flate(&samples);
+        let chain = [(Filter::Flate, Params::default())];
+        let cost = (raw.len() + samples.len()) as u64;
+        let mut budget = ImageBudget::with_work(cost + 10);
+        assert_eq!(budget.decode_chain(&chain, &raw, 1 << 20).unwrap(), samples);
+        assert_eq!(budget.work_left(), 10);
+        assert!(budget.spend(4));
+        assert_eq!(budget.work_left(), 6);
+        assert!(budget.spend(6), "exactly what is left");
+        assert_eq!(budget.work_left(), 0);
+        assert!(budget.spend(0));
+        let mut budget = ImageBudget::with_work(5);
+        assert!(!budget.spend(6));
+        assert_eq!(budget.work_left(), 0, "spends all of it");
+        assert!(matches!(budget.decode_chain(&chain, &raw, 1 << 20), Err(FilterError::Spent)));
+        let cut = raw.get(..raw.len() / 2).unwrap();
+        assert!(matches!(ImageBudget::with_work(u64::MAX).decode_chain(&chain, cut, 1 << 20), Err(FilterError::Corrupt { .. })), "strictly");
     }
 
     /// An image read through its filters alone reads parameters given by reference, is charged, and

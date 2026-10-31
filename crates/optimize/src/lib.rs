@@ -36,7 +36,7 @@ mod unused;
 
 pub use audit::{SpaceCategory, SpaceUse, audit_space};
 
-use pdfcraft_cos::{Dict, Document, MAX_PAGE_DECODED, ObjRef, Object, Stream, serialize};
+use pdfcraft_cos::{Dict, Document, ImageBudget, MAX_PAGE_DECODED, ObjRef, Object, Stream, serialize};
 use pdfcraft_filters::{Filter, Params};
 
 pub use images::effective_resolutions;
@@ -331,8 +331,8 @@ pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress:
     }
     let mut report = Report::default();
     let pages = pdfcraft_annot::page_refs(doc).map_err(|_| OptimizeError::NoPages)?;
-    // Merging fragments and the pass after it read the same images, so they share the allowance.
-    let mut budget = pdfcraft_cos::ImageBudget::new(doc);
+    // Merging fragments, the image pass and the LZW pass read the same images, so they share it.
+    let mut budget = ImageBudget::new(doc);
     if settings.merge_fragments {
         fragments::run(doc, &pages, &mut report, progress, &mut budget)?;
     }
@@ -432,7 +432,11 @@ pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress:
             let r = ObjRef { num, generation: doc.generation(num) };
             let obj = doc.get(r);
             let Object::Stream(s) = &*obj else { continue };
-            if let Some(replacement) = lzw_to_flate(s, MAX_LZW_DECODED) {
+            // Each can take a second or more, of a pass that has no other way to stop.
+            if s.filters().iter().any(|(f, _)| *f == Filter::Lzw) && !progress(Stage::CleanUp) {
+                return Err(OptimizeError::Cancelled);
+            }
+            if let Some(replacement) = lzw_to_flate(s, MAX_LZW_DECODED, &mut budget) {
                 doc.set(r, Object::Stream(replacement));
                 report.lzw_streams += 1;
             }
@@ -467,14 +471,17 @@ pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress:
 /// Largest decoded LZW stream converted, as for a page's content: the data and its check are
 /// held together, so a few hundred kilobytes of hostile LZW can't ask for gigabytes.
 const MAX_LZW_DECODED: usize = MAX_PAGE_DECODED;
+/// The steps of a run's allowance a decoded byte costs to store with Flate and read back: up to
+/// 78 ns a byte to encode and 4 to check, at the 6 to 16 ns of a step.
+const LZW_REWRITE_WORK: u64 = 8;
 
 /// `s` with its LZW compression replaced by Flate (Acrobat's "In streams that use LZW encoding,
 /// use Flate instead"). The filters up to the last LZW one are decoded, strictly and with its
 /// predictor; the result is Flate-encoded under the same predictor, without `EarlyChange`, and
 /// the filters after it keep their encoded bytes. A stream that doesn't decode cleanly, or
-/// whose filters or parameters can't be read for certain, or that decodes past `max` bytes, is
-/// left as it is.
-fn lzw_to_flate(s: &Stream, max: usize) -> Option<Stream> {
+/// whose filters or parameters can't be read for certain, or that decodes past `max` bytes or
+/// what `budget` has left, is left as it is.
+fn lzw_to_flate(s: &Stream, max: usize, budget: &mut ImageBudget) -> Option<Stream> {
     // An external file's data isn't in `raw`; cross-reference and object streams are rewritten
     // on save, so converting them would change nothing in the file.
     if s.dict.contains(b"F") || matches!(s.dict.name(b"Type"), Some(b"XRef" | b"ObjStm")) {
@@ -517,7 +524,10 @@ fn lzw_to_flate(s: &Stream, max: usize) -> Option<Stream> {
     if !parms.get(..=lzw)?.iter().all(direct) {
         return None;
     }
-    let data = pdfcraft_filters::decode(stages, &s.raw, max).ok()?;
+    let data = budget.decode_chain(stages, &s.raw, max).ok()?;
+    if !budget.spend((data.len() as u64).saturating_mul(LZW_REWRITE_WORK)) {
+        return None;
+    }
     let flate = Params { early_change: 1, ..params.clone() };
     let raw = pdfcraft_filters::encode(&Filter::Flate, &flate, &data).ok()?;
     // The predictor's encoder must give back exactly what its decoder read (a short last row,
@@ -601,8 +611,31 @@ mod tests {
         let mut dict = Dict::new();
         dict.set(b"Filter".to_vec(), Object::name("LZWDecode"));
         let s = Stream::from_raw(dict, raw);
-        assert!(lzw_to_flate(&s, data.len() - 1).is_none());
-        let converted = lzw_to_flate(&s, data.len()).unwrap();
+        let mut budget = ImageBudget::with_work(u64::MAX);
+        assert!(lzw_to_flate(&s, data.len() - 1, &mut budget).is_none());
+        let converted = lzw_to_flate(&s, data.len(), &mut budget).unwrap();
         assert_eq!(converted.decoded_strict().unwrap(), data);
+    }
+
+    /// Rewriting a stream spends the run's allowance: reading it, decoding it, and storing and
+    /// checking what it decoded. One the allowance can't pay for stays LZW, and ends the rewriting.
+    #[test]
+    fn lzw_streams_spend_the_runs_allowance() {
+        let data = b"0 0 m 612 792 l S\n".repeat(64);
+        let raw = pdfcraft_filters::encode(&Filter::Lzw, &Params::default(), &data).unwrap();
+        let mut dict = Dict::new();
+        dict.set(b"Filter".to_vec(), Object::name("LZWDecode"));
+        let s = Stream::from_raw(dict, raw);
+        let cost = (s.raw.len() + data.len()) as u64 + data.len() as u64 * LZW_REWRITE_WORK;
+        let mut budget = ImageBudget::with_work(cost + 7);
+        assert!(lzw_to_flate(&s, data.len(), &mut budget).is_some());
+        assert_eq!(budget.work_left(), 7);
+        let mut budget = ImageBudget::with_work(cost);
+        assert!(lzw_to_flate(&s, data.len(), &mut budget).is_some(), "exactly enough");
+        assert_eq!(budget.work_left(), 0);
+        let mut budget = ImageBudget::with_work(cost - 1);
+        assert!(lzw_to_flate(&s, data.len(), &mut budget).is_none(), "a step short");
+        assert_eq!(budget.work_left(), 0, "and the next stream isn't read");
+        assert!(lzw_to_flate(&s, data.len(), &mut budget).is_none());
     }
 }

@@ -3398,6 +3398,42 @@ fn lzw_streams_become_flate_and_decode_to_the_same_bytes() {
     assert!(!stream(&doc, c_late).dict.contains(b"DecodeParms"), "nothing left to say for the content stream");
 }
 
+/// A stream can take a second or more to store again, so a cancel lands between any two of them,
+/// and nothing runs after it.
+#[test]
+fn a_cancel_lands_during_the_lzw_pass() {
+    use pdfcraft_optimize::{OptimizeError, Stage, optimize_with_progress};
+    let build = |streams: usize| {
+        let mut doc = Document::new_empty();
+        let mut d = Dict::new();
+        d.set(b"Filter".to_vec(), Object::name("LZWDecode"));
+        for _ in 0..streams {
+            doc.add(Object::Stream(Stream::from_raw(d.clone(), lzw(&lzw_ops(), &Params::default()))));
+        }
+        page(&mut doc, &[], "0 0 1 1 re f");
+        doc
+    };
+    let asked = |streams: usize| {
+        let mut asked = 0;
+        optimize_with_progress(&mut build(streams), &Settings::default(), &mut |s| {
+            asked += usize::from(s == Stage::CleanUp);
+            true
+        })
+        .unwrap();
+        asked
+    };
+    let none = asked(0);
+    assert_eq!(asked(3), none + 3, "once a stream");
+    let mut left = none + 1;
+    let mut doc = build(3);
+    let r = optimize_with_progress(&mut doc, &Settings::default(), &mut |s| {
+        left -= usize::from(s == Stage::CleanUp);
+        left > 0
+    });
+    assert!(matches!(r, Err(OptimizeError::Cancelled)), "{r:?}");
+    assert_eq!(left, 0, "nothing runs after it");
+}
+
 #[test]
 fn a_page_drawn_from_lzw_streams_renders_the_same_after_conversion() {
     let png = Params { predictor: 12, colors: 3, columns: 64, early_change: 0, ..Params::default() };

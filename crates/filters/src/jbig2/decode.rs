@@ -39,9 +39,9 @@ pub fn decode_jbig2_within(data: &[u8], globals: Option<&[u8]>, columns: u32, ro
         return Ok(Vec::new());
     }
     if *work == 0 {
-        return Err(crate::work_spent());
+        return Err(FilterError::Spent);
     }
-    hayro_jbig2::charge_reading(work, data.len().saturating_add(globals.map_or(0, <[u8]>::len))).map_err(|_| crate::work_spent())?;
+    hayro_jbig2::charge_reading(work, data.len().saturating_add(globals.map_or(0, <[u8]>::len))).map_err(|_| FilterError::Spent)?;
     let corrupt = |detail: String| FilterError::Corrupt { filter: "JBIG2Decode", detail };
     let image = hayro_jbig2::Image::new_embedded(data, globals).map_err(|e| corrupt(e.to_string()))?;
     let (width, height) = (image.width(), image.height());
@@ -58,7 +58,7 @@ pub fn decode_jbig2_within(data: &[u8], globals: Option<&[u8]>, columns: u32, ro
     }
     let mut out = Rows::new(width, height, false);
     // Stopped by what was left, it isn't a damaged image, whatever the decoder calls it.
-    image.decode_within(&mut out, work).map_err(|e| if *work == 0 { crate::work_spent() } else { corrupt(e.to_string()) })?;
+    image.decode_within(&mut out, work).map_err(|e| if *work == 0 { FilterError::Spent } else { corrupt(e.to_string()) })?;
     Ok(out.out)
 }
 
@@ -159,10 +159,10 @@ mod tests {
         decode_jbig2_within(&data, None, w, h, usize::MAX, &mut work).unwrap();
         assert_eq!(work, 7, "only what it took");
         let mut work = cost - 1;
-        assert!(matches!(decode_jbig2_within(&data, None, w, h, usize::MAX, &mut work), Err(FilterError::Unsupported(_))), "a step short");
+        assert!(matches!(decode_jbig2_within(&data, None, w, h, usize::MAX, &mut work), Err(FilterError::Spent)), "a step short");
         assert_eq!(work, 0, "spends all that was left");
         // Nothing left: not read at all, so this garbage isn't reported as garbage.
-        assert!(matches!(decode_jbig2_within(b"garbage", None, w, h, usize::MAX, &mut work), Err(FilterError::Unsupported(_))));
+        assert!(matches!(decode_jbig2_within(b"garbage", None, w, h, usize::MAX, &mut work), Err(FilterError::Spent)));
         // Too little even for its page.
         let mut work = 3;
         assert!(decode_jbig2_within(&data, None, w, h, usize::MAX, &mut work).is_err());

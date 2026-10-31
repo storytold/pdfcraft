@@ -1241,8 +1241,6 @@ pub(crate) fn run(
         }
         let n = s.dict.get(b"ColorSpace").and_then(|cs| components(doc, cs));
         let processed = n.and_then(|n| process(doc, s, ppi, if n == 1 { &settings.gray } else { &settings.color }, n, budget));
-        // Read to be packed and again to be resampled, it is still one image.
-        report.images_refused += usize::from(budget.refused() > refused);
         // A dithered scan, say, downsampled and JPEG-compressed: the smaller wins, counting a soft
         // mask resampled with it.
         let smask_len = |smask: Option<&(ObjRef, Stream)>| match smask {
@@ -1268,7 +1266,11 @@ pub(crate) fn run(
             doc.set(r, Object::Stream(new));
             continue;
         }
-        let Some((new, smask)) = processed else { continue };
+        let Some((new, smask)) = processed else {
+            // Read to be packed and again to be resampled, it is still one image, and it stayed.
+            report.images_refused += usize::from(budget.refused() > refused);
+            continue;
+        };
         let resized = new.dict.int(b"Width") != s.dict.int(b"Width") || new.dict.int(b"Height") != s.dict.int(b"Height");
         report.image_bytes_before += s.raw.len();
         report.image_bytes_after += new.raw.len();
@@ -1471,6 +1473,76 @@ mod dimension_tests {
             let changed = refs.iter().filter(|r| matches!(&*doc.get(**r), Object::Stream(s) if *s != image)).count();
             assert_eq!(changed, 2, "{name}: the third is as it was");
         }
+    }
+
+    /// An image the allowance ran out on between being packed and being resampled is rewritten,
+    /// as the packed one, so it isn't one that stayed as it was.
+    #[test]
+    fn a_packed_image_isnt_counted_as_refused() {
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let samples: Vec<u8> = (0..256 * 256)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                if seed & 1 == 0 { 0 } else { 255 }
+            })
+            .collect();
+        let mut doc = Document::new_empty();
+        let mut dict = Dict::new();
+        dict.set(b"Subtype".to_vec(), Object::name("Image"));
+        dict.set(b"Width".to_vec(), Object::Int(256));
+        dict.set(b"Height".to_vec(), Object::Int(256));
+        dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        let image = Stream::flate(dict, &samples);
+        let read = (image.raw.len() + samples.len()) as u64;
+        let original = doc.add(Object::Stream(image.clone()));
+        let mut xobjects = Dict::new();
+        xobjects.set(b"I0".to_vec(), Object::Ref(original));
+        let mut resources = Dict::new();
+        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        let content = doc.add(Object::Stream(Stream::flate(Dict::new(), b"q 10 0 0 10 0 0 cm /I0 Do Q")));
+        let mut page = Dict::new();
+        page.set(b"Type".to_vec(), Object::name("Page"));
+        page.set(b"Resources".to_vec(), Object::Dict(resources));
+        page.set(b"Contents".to_vec(), Object::Ref(content));
+        let page = doc.add(Object::Dict(page));
+        let settings = Settings { mono: MonoSettings { compression: MonoCompression::CcittG4, ..MonoSettings::REDUCE }, ..Settings::default() };
+        let mut report = Report::default();
+        let mut budget = ImageBudget::with_work(read);
+        run(&mut doc, &[page], &settings, &mut report, &mut |_| true, &mut budget).unwrap();
+        assert_eq!(budget.refused(), 1, "its second read was refused");
+        assert_eq!(report.images_refused, 0, "{report:?}");
+        assert_eq!(report.images_recompressed + report.images_resampled, 1, "{report:?}");
+        assert!(matches!(&*doc.get(original), Object::Stream(s) if *s != image));
+    }
+
+    /// An image the run has no use for stayed as it was too, but nothing refused it: this one is
+    /// too small to compress and drawn at no more than its size.
+    #[test]
+    fn an_image_left_alone_isnt_counted_as_refused() {
+        let mut doc = Document::new_empty();
+        let mut dict = Dict::new();
+        dict.set(b"Subtype".to_vec(), Object::name("Image"));
+        dict.set(b"Width".to_vec(), Object::Int(8));
+        dict.set(b"Height".to_vec(), Object::Int(8));
+        dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        let image = doc.add(Object::Stream(Stream::flate(dict, &[0x80; 64])));
+        let mut xobjects = Dict::new();
+        xobjects.set(b"I0".to_vec(), Object::Ref(image));
+        let mut resources = Dict::new();
+        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        let content = doc.add(Object::Stream(Stream::flate(Dict::new(), b"q 72 0 0 72 0 0 cm /I0 Do Q")));
+        let mut page = Dict::new();
+        page.set(b"Type".to_vec(), Object::name("Page"));
+        page.set(b"Resources".to_vec(), Object::Dict(resources));
+        page.set(b"Contents".to_vec(), Object::Ref(content));
+        let page = doc.add(Object::Dict(page));
+        let mut report = Report::default();
+        run(&mut doc, &[page], &Settings::default(), &mut report, &mut |_| true, &mut ImageBudget::with_work(u64::MAX)).unwrap();
+        assert_eq!((report.images, report.images_refused), (1, 0), "{report:?}");
     }
 
     /// A soft mask resampled with its image is read from the same allowance as the image.

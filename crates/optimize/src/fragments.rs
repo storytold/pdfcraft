@@ -359,7 +359,7 @@ mod tests {
     }
 
     /// Merging reads the images the pass after it reads, from the same allowance: with nothing
-    /// left the strips stay as they are, and the image that couldn't be read is counted.
+    /// left the strips stay as they are, and the budget shows the read it refused.
     #[test]
     fn merging_spends_the_runs_allowance() {
         let mut doc = Document::new_empty();

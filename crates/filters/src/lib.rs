@@ -124,6 +124,9 @@ pub enum FilterError {
     LimitExceeded(usize),
     #[error("unsupported filter: {0}")]
     Unsupported(String),
+    /// A run of images has nothing left to spend ([`decode_tolerant_within`]).
+    #[error("more image decoding than one operation may do")]
+    Spent,
 }
 
 /// A decoder failure carrying whatever was decoded before the error.
@@ -144,11 +147,6 @@ impl Failure {
 
 pub(crate) type Step = Result<Vec<u8>, Failure>;
 
-/// What decoding says when a run of images has nothing left to spend on it.
-pub(crate) fn work_spent() -> FilterError {
-    FilterError::Unsupported("more image decoding than one operation may do".into())
-}
-
 /// Takes `steps` from `work`, what a run of images may still cost. What it can't pay for spends
 /// all of it.
 pub(crate) fn pay(work: &mut u64, steps: u64) -> Result<(), FilterError> {
@@ -159,7 +157,7 @@ pub(crate) fn pay(work: &mut u64, steps: u64) -> Result<(), FilterError> {
         }
         None => {
             *work = 0;
-            Err(work_spent())
+            Err(FilterError::Spent)
         }
     }
 }
@@ -202,13 +200,23 @@ pub fn decode_tolerant_counted(chain: &[(Filter, Params)], data: &[u8], max_outp
 ///
 /// Unlike [`decode_tolerant`], no filters at all gives `data` itself, within `max_output`.
 pub fn decode_tolerant_within(chain: &[(Filter, Params)], data: &[u8], max_output: usize, work: &mut u64) -> Result<Vec<u8>, FilterError> {
+    spending(chain, data, max_output, work, false)
+}
+
+/// [`decode`], spending from `work` as [`decode_tolerant_within`] does: corrupt data is an error,
+/// having paid for what was decoded before it.
+pub fn decode_within(chain: &[(Filter, Params)], data: &[u8], max_output: usize, work: &mut u64) -> Result<Vec<u8>, FilterError> {
+    spending(chain, data, max_output, work, true)
+}
+
+fn spending(chain: &[(Filter, Params)], data: &[u8], max_output: usize, work: &mut u64, strict: bool) -> Result<Vec<u8>, FilterError> {
     decodable(chain)?;
     pay(work, data.len() as u64)?;
     if chain.is_empty() {
         return if data.len() > max_output { Err(FilterError::LimitExceeded(max_output)) } else { Ok(data.to_vec()) };
     }
     let left = usize::try_from(*work).unwrap_or(usize::MAX);
-    match run(chain, data, max_output, Some(left), false) {
+    match run(chain, data, max_output, Some(left), strict) {
         Ok((out, _, decoded)) => pay(work, decoded as u64).map(|()| out),
         // The stage stopped at the lower of the two, which took as much to find out.
         Err((FilterError::LimitExceeded(_), decoded)) if left.saturating_sub(decoded) > max_output => {
@@ -217,7 +225,7 @@ pub fn decode_tolerant_within(chain: &[(Filter, Params)], data: &[u8], max_outpu
         }
         Err((FilterError::LimitExceeded(_), _)) => {
             *work = 0;
-            Err(work_spent())
+            Err(FilterError::Spent)
         }
         Err((e, decoded)) => pay(work, decoded as u64).and(Err(e)),
     }
@@ -513,7 +521,7 @@ mod tests {
     }
 
     fn refused(e: &FilterError) -> bool {
-        e.to_string() == work_spent().to_string()
+        matches!(e, FilterError::Spent)
     }
 
     /// A chain pays for what it reads and what each stage decodes, down to the byte: Flate inflates
@@ -597,6 +605,14 @@ mod tests {
         let mut work = u64::MAX;
         assert_eq!(decode_tolerant_within(&chain, &cut, 1 << 20, &mut work).unwrap(), partial);
         assert_eq!(u64::MAX - work, (cut.len() + partial.len()) as u64);
+        // Read strictly it is an error, for the same work.
+        let mut work = u64::MAX;
+        assert!(matches!(decode_within(&chain, &cut, 1 << 20, &mut work), Err(FilterError::Corrupt { .. })));
+        assert_eq!(u64::MAX - work, (cut.len() + partial.len()) as u64);
+        let whole = encode_flate(&data);
+        let mut work = u64::MAX;
+        assert_eq!(decode_within(&chain, &whole, 1 << 20, &mut work).unwrap(), data);
+        assert_eq!(u64::MAX - work, (whole.len() + data.len()) as u64);
         // A predictor that comes to nothing, after all of this was inflated for it.
         let p = Params { predictor: 99, ..Params::default() };
         let data = encode_flate(&vec![0; 1 << 16]);

@@ -71,12 +71,12 @@ impl Session {
     /// Reduce File Size: Acrobat's defaults (colour and grey images above 225 ppi to 150 ppi,
     /// JPEG medium quality; black-and-white averaged down to 300 ppi above 450 ppi, and stored as
     /// CCITT Group 4 whenever smaller; thumbnails dropped), identical resources merged, unused
-    /// objects dropped, objects packed into compressed object streams. Returns the bytes and how
-    /// many objects were merged. The open document is not changed (Acrobat saves the reduced copy
-    /// as a new file).
-    pub fn reduced_bytes(&self, id: DocId) -> Result<(Arc<Vec<u8>>, usize), EditError> {
+    /// objects dropped, objects packed into compressed object streams. Returns the bytes, how
+    /// many objects were merged and how many images stayed as they were, past what one run may
+    /// decode. The open document is not changed (Acrobat saves the reduced copy as a new file).
+    pub fn reduced_bytes(&self, id: DocId) -> Result<(Arc<Vec<u8>>, usize, usize), EditError> {
         let (bytes, report) = self.optimized_bytes(id, &optimize::Settings::default(), &[])?;
-        Ok((bytes, report.merged))
+        Ok((bytes, report.merged, report.optimize.images_refused))
     }
 
     /// Optimize PDF ▸ Advanced optimization: `settings` for images and objects, plus Remove

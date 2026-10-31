@@ -146,6 +146,11 @@ pub struct FileResult {
     pub log: Vec<String>,
 }
 
+/// What an action's log says of the images a Reduce File Size step left, if there are any.
+fn images_refused_note(images: usize) -> Option<String> {
+    (images > 0).then(|| format!("Reduce file size: {images} image(s) stayed as they were, past what one run may decode"))
+}
+
 fn apply_step(s: &mut Session, id: DocId, step: &Step, log: &mut Vec<String>) -> Result<Option<DocId>, EditError> {
     let pages = s.get(id).map_or(0, |d| d.info.pages.len());
     let all: Vec<usize> = (0..pages).collect();
@@ -156,9 +161,10 @@ fn apply_step(s: &mut Session, id: DocId, step: &Step, log: &mut Vec<String>) ->
             return Ok(None);
         }
         Step::ReduceFileSize => {
-            let (bytes, _) = s.optimized_bytes(id, &crate::optimize::Settings::default(), &[])?;
+            let (bytes, report) = s.optimized_bytes(id, &crate::optimize::Settings::default(), &[])?;
             let before = s.get(id).map_or(0, |d| d.bytes.len());
             log.push(format!("Reduce file size: {} → {} bytes", before, bytes.len()));
+            log.extend(images_refused_note(report.optimize.images_refused));
             let name = s.get(id).map(|d| d.name.clone()).unwrap_or_default();
             s.close(id);
             let new = s.open(name, None, bytes, None).map_err(|e| EditError::Reopen(e.to_string()))?;
@@ -221,4 +227,17 @@ pub fn run_on(action: &Action, name: &str, bytes: Arc<Vec<u8>>, mut progress: im
     // A signed file keeps its signatures: incremental. Otherwise a clean full rewrite.
     let bytes = if d.is_signed() { s.save_bytes(id) } else { s.save_full_bytes(id) }.map_err(|e| e.to_string())?;
     Ok(FileResult { name: name.to_string(), bytes, log })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::images_refused_note;
+
+    /// A log line only for images that stayed, saying how many.
+    #[test]
+    fn the_log_says_when_images_stayed_as_they_were() {
+        assert_eq!(images_refused_note(0), None);
+        assert!(images_refused_note(1).is_some_and(|note| note.contains("1 image(s)")));
+        assert!(images_refused_note(3).is_some_and(|note| note.contains("3 image(s)")));
+    }
 }
