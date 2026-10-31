@@ -527,6 +527,11 @@ fn tool_file_reads_refuse_inputs_exceeding_512_mib() {
     file.set_len(MAX_INPUT + 1).unwrap();
     drop(file);
     let huge_str = huge.to_string_lossy().into_owned();
+    let huge_docx = dir.join("huge.docx");
+    let file = std::fs::File::create(&huge_docx).unwrap();
+    file.set_len(MAX_INPUT + 1).unwrap();
+    drop(file);
+    let huge_docx = huge_docx.to_string_lossy().into_owned();
 
     let mut a = Automation::new();
     let id = a.session.open("a.pdf", None, Arc::new(numbered_pages(2)), None).unwrap().0;
@@ -538,6 +543,7 @@ fn tool_file_reads_refuse_inputs_exceeding_512_mib() {
         ("doc_import_data", json!({ "doc": id, "path": huge_str })),
         ("doc_create", json!({ "from": "text", "path": huge_str })),
         ("doc_create", json!({ "from": "images", "paths": [huge_str] })),
+        ("doc_create", json!({ "from": "office", "path": huge_docx })),
         ("doc_combine", json!({ "paths": [huge_str, huge_str] })),
         ("form_merge_data", json!({ "paths": [huge_str], "path": dir.join("out.csv").to_string_lossy() })),
         ("comment_add", json!({ "doc": id, "page": 1, "type": "attachment", "at": [72.0, 72.0], "path": huge_str })),

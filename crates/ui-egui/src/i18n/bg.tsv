@@ -2056,6 +2056,9 @@
 	Go to page {p}	Отиди на страница {p}
 	Images and text	Изображения и текст
 	Images and text (converted to PDF)	Изображения и текст (конвертирани в PDF)
+	Word, PowerPoint and Excel (converted to PDF)	Word, PowerPoint и Excel (конвертирани в PDF)
+	PDF, images, text and Office documents	PDF, изображения, текст и документи на Office
+	Converted {name}. Approximated: {notes}	{name} е конвертиран. Приблизително: {notes}
 	Import {name}	Импортирай {name}
 	Insert pages from {name}	Вмъкни страници от {name}
 	Insert pages from {name} — 1 field renamed	Вмъкни страници от {name} — 1 поле е преименувано

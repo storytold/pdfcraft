@@ -2815,6 +2815,9 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+	Word, PowerPoint and Excel (converted to PDF)	Word, PowerPoint și Excel (convertite în PDF)
+	PDF, images, text and Office documents	PDF, imagini, text și documente Office
+	Converted {name}. Approximated: {notes}	{name} a fost convertit. Aproximări: {notes}
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Astăzi

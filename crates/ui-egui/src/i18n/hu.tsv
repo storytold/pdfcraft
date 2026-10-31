@@ -1872,6 +1872,9 @@
 	Draw your {what} below.	Rajzold le alább a következőt: {what}.
 	Your name	A neved
 	Images and text (converted to PDF)	Képek és szöveg (PDF-fé alakítva)
+	Word, PowerPoint and Excel (converted to PDF)	Word, PowerPoint és Excel (PDF-fé alakítva)
+	PDF, images, text and Office documents	PDF, képek, szöveg és Office-dokumentumok
+	Converted {name}. Approximated: {notes}	{name} átalakítva. Közelítve: {notes}
 	Images and text	Képek és szöveg
 	Check Box Style:	Jelölőnégyzet stílusa:
 	Button Style:	Gomb stílusa:

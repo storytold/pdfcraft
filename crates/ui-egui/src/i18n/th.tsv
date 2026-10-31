@@ -2711,6 +2711,9 @@ key	Space	Space
 	Collapse all tools	ยุบเครื่องมือทั้งหมด
 	The password must have at least 8 characters.	รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร
 theme	Appearance	ลักษณะที่ปรากฏ
+	Word, PowerPoint and Excel (converted to PDF)	Word, PowerPoint และ Excel (แปลงเป็น PDF)
+	PDF, images, text and Office documents	PDF, รูปภาพ, ข้อความ และเอกสาร Office
+	Converted {name}. Approximated: {notes}	แปลง {name} แล้ว ส่วนที่ประมาณ: {notes}
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	วันนี้

@@ -1321,6 +1321,9 @@
 	Draw your {what} below.	Σχεδιάστε {what} παρακάτω.
 	Your name	Το όνομά σας
 	Images and text (converted to PDF)	Εικόνες και κείμενο (μετατροπή σε PDF)
+	Word, PowerPoint and Excel (converted to PDF)	Word, PowerPoint και Excel (μετατροπή σε PDF)
+	PDF, images, text and Office documents	PDF, εικόνες, κείμενο και έγγραφα Office
+	Converted {name}. Approximated: {notes}	Το {name} μετατράπηκε. Κατά προσέγγιση: {notes}
 	Images and text	Εικόνες και κείμενο
 	Check Box Style:	Στυλ πλαισίου ελέγχου:
 	Button Style:	Στυλ κουμπιού:

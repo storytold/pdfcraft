@@ -1846,7 +1846,8 @@ fn files_that_cannot_be_read_are_listed_and_left_out_once_the_user_agrees() {
         assert!(why.starts_with("Can't be read: ") && !why.contains(&f.name), "{why}");
         assert!(f.lock.is_none() && f.pages == 0);
     }
-    h.get_by_label_contains("this file type can't be converted");
+    // Word is supported now; this truncated package is refused for its damaged directory.
+    h.get_by_label_contains("the package's directory is missing");
     // One readable file is not enough to combine.
     assert!(h.get_by_label("Combine").accesskit_node().is_disabled());
     h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::Combine, vec![("two.pdf".into(), fixture(1))]);

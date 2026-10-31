@@ -7,6 +7,8 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream, serialize}
 mod extract;
 mod upright_image;
 pub use extract::{ExtractedImage, ImageExport, extract_images, image_file};
+mod office;
+pub use office::{OFFICE_EXTENSIONS, OfficeKind, OfficeReport, from_office};
 use pdfcraft_fonts::{literal, win_ansi, wrap};
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -573,16 +575,21 @@ fn tiff_pages_within(name: &str, bytes: &[u8], wanted: usize, budget: usize) -> 
     Ok(out)
 }
 
-/// What a file picked for Create is, by its bytes (and, for text, its name).
+/// What a file picked for Create is, by its bytes (and, for text and Office files, its name).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SourceKind {
     Pdf,
     Image,
     Text,
+    /// A Word, PowerPoint or Excel (Office Open XML) document, converted by [`from_office`].
+    Office,
 }
 
-/// File extensions Create converts to PDF (images and plain text).
-pub const CONVERTIBLE: [&str; 12] = ["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx", "txt", "text"];
+/// File extensions Create converts to PDF (images, plain text and Office documents).
+pub const CONVERTIBLE: [&str; 22] = [
+    "png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx", "txt", "text", "docx", "docm", "dotx", "pptx", "pptm", "ppsx", "potx",
+    "xlsx", "xlsm", "xltx",
+];
 
 /// A classic TIFF or a BigTIFF (version 43), in either byte order.
 fn is_tiff(bytes: &[u8]) -> bool {
@@ -607,8 +614,9 @@ fn is_image(bytes: &[u8]) -> bool {
             && bytes.get(14..18).and_then(|h| <[u8; 4]>::try_from(h).ok()).is_some_and(|h| matches!(u32::from_le_bytes(h), 12 | 40 | 52 | 56 | 108 | 124)))
 }
 
-/// Whether `bytes` named `name` is a PDF, an image Create can embed, or plain text (a `.txt` or
-/// `.text` file). `None` for anything else.
+/// Whether `bytes` named `name` is a PDF, an image Create can embed, plain text (a `.txt` or
+/// `.text` file) or an Office document (a zip package, or an encrypted one, named `.docx`,
+/// `.pptx`, `.xlsx`…). `None` for anything else.
 pub fn source_kind(name: &str, bytes: &[u8]) -> Option<SourceKind> {
     let head = bytes.get(..bytes.len().min(1024)).unwrap_or_default();
     if head.windows(5).any(|w| w == b"%PDF-") {
@@ -618,6 +626,11 @@ pub fn source_kind(name: &str, bytes: &[u8]) -> Option<SourceKind> {
         return Some(SourceKind::Image);
     }
     let lower = name.to_ascii_lowercase();
+    let office = lower.rsplit_once('.').is_some_and(|(_, ext)| OFFICE_EXTENSIONS.contains(&ext));
+    // Encrypted Office files are OLE compound files; conversion explains that it can't open them.
+    if office && (bytes.starts_with(b"PK\x03\x04") || bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1])) {
+        return Some(SourceKind::Office);
+    }
     (lower.ends_with(".txt") || lower.ends_with(".text")).then_some(SourceKind::Text)
 }
 

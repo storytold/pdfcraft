@@ -267,7 +267,21 @@ impl PdfCraftApp {
                 notes: Vec::new(),
             };
             let source = bytes.clone();
-            let (bytes, assessed) = match self.session.as_pdf(&name, &bytes) {
+            let mut note = note;
+            let converted = if pdfcraft_engine::source_kind(&name, &bytes) == Some(pdfcraft_engine::SourceKind::Office) {
+                self.session.create_from_office(&name, &bytes).map(|(pdf, report)| {
+                    if let Some(converted) = crate::office_note(&name, &report) {
+                        note = Some(match note.take() {
+                            Some(prior) => format!("{prior}; {converted}"),
+                            None => converted,
+                        });
+                    }
+                    pdf
+                })
+            } else {
+                self.session.as_pdf(&name, &bytes)
+            };
+            let (bytes, assessed) = match converted {
                 Ok(pdf) => {
                     let assessed = assess(&pdf, None);
                     (pdf, assessed)

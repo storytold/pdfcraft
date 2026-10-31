@@ -646,6 +646,9 @@
 	Icon	Piktograma
 	Images and text	Paveikslėliai ir tekstas
 	Images and text (converted to PDF)	Paveikslėliai ir tekstas (konvertuoti į PDF)
+	Word, PowerPoint and Excel (converted to PDF)	Word, PowerPoint ir Excel (konvertuoti į PDF)
+	PDF, images, text and Office documents	PDF, paveikslėliai, tekstas ir Office dokumentai
+	Converted {name}. Approximated: {notes}	{name} konvertuotas. Apytiksliai: {notes}
 	Import list…	Importuoti sąrašą…
 	Includes unsaved changes	Yra neįrašytų pakeitimų
 	Indent	Įtrauka

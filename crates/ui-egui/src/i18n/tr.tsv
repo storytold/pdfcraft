@@ -1845,6 +1845,9 @@
 	Draw your {what} below.	{what} bilginizi aşağıya çizin.
 	Your name	Adınız
 	Images and text (converted to PDF)	Resimler ve metin (PDF'e dönüştürüldü)
+	Word, PowerPoint and Excel (converted to PDF)	Word, PowerPoint ve Excel (PDF'e dönüştürüldü)
+	PDF, images, text and Office documents	PDF, resimler, metin ve Office belgeleri
+	Converted {name}. Approximated: {notes}	{name} dönüştürüldü. Yaklaşık: {notes}
 	Images and text	Resimler ve metin
 	Check Box Style:	Onay Kutusu Stili:
 	Button Style:	Düğme Stili:

@@ -2813,6 +2813,9 @@ theme	Appearance	ظاهر
 	two cells would both be named {name}	دو خانه هر دو با نام {name} نام‌گذاری می‌شوند
 	a field named {name} already exists	فیلدی با نام {name} از قبل وجود دارد
 	Today	امروز
+	Word, PowerPoint and Excel (converted to PDF)	Word، PowerPoint و Excel (تبدیل‌شده به PDF)
+	PDF, images, text and Office documents	PDF، تصاویر، متن و اسناد Office
+	Converted {name}. Approximated: {notes}	{name} تبدیل شد. موارد تقریبی: {notes}
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	گزینه‌های این پاسخ

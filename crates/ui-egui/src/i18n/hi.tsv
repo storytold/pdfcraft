@@ -2786,6 +2786,9 @@ theme	Appearance	स्वरूप
 	field names can't contain a period: {name}	फ़ील्ड के नामों में पूर्ण विराम (.) नहीं हो सकता: {name}
 	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
 	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
+	Word, PowerPoint and Excel (converted to PDF)	Word, PowerPoint और Excel (PDF में बदले गए)
+	PDF, images, text and Office documents	PDF, छवियाँ, टेक्स्ट और Office दस्तावेज़
+	Converted {name}. Approximated: {notes}	{name} बदला गया। अनुमानित: {notes}
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	आज

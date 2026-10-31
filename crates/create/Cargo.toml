@@ -25,6 +25,12 @@ zune-jpeg = "0.5"
 thiserror = { workspace = true }
 # Already in the graph through lopdf; used only to read plain-text files (decode_text).
 encoding_rs = "0.8"
+# Office Open XML import (docx/pptx/xlsx): parts are deflated XML. Both are already in the tree
+# (flate2 through cos, roxmltree through xfa and xfdf).
+flate2 = { workspace = true }
+roxmltree = "0.21"
+# Excel date serials become calendar dates through chrono (no hand-rolled calendar code).
+chrono = { workspace = true }
 
 [dev-dependencies]
 # An independent CCITT decoder, to check Create PDF's Group 4 images.

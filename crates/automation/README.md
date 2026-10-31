@@ -220,6 +220,23 @@ unapplied with a warning.
 folders. The CLI also exposes it as `pdfcraft-cli batch`. See the
 [batch guide](../../docs/cli-batch.md) for examples, output protection, errors and limits.
 
+## Office documents
+
+`doc_create` with `from: "office"` and a `path` converts a Word, PowerPoint or Excel file natively
+(no external program) into a new, unsaved document, and adds an `office` object to the result:
+`kind`, `pages`, `escaped` (characters written as `[U+XXXX]`), `notes` (what was approximated)
+and `notice` (an English sentence with the font/layout caveat and the notes).
+
+`doc_open` also converts Office inputs into unsaved PDFs (#2871). `page_insert_file` converts before inserting selected source
+pages and stays undoable; both return the same `office` report. `doc_combine` returns per-source
+`conversions`. Source DOCX files are read only, Save requires a PDF destination, and `--root`
+and existing PDF password behavior are preserved.
+
+`doc_create_multiple` and `doc_batch` also convert Office files like images and text;
+`doc_create_multiple` lists each Office file's report under `conversions` (mode "combine") or
+`conversion` (each file, mode "separate"). See
+[Word, PowerPoint and Excel to PDF](../../docs/office-import.md).
+
 ## Editing button export values
 
 Use `form_set_props` with `field`, `export_value` and optional `widget`

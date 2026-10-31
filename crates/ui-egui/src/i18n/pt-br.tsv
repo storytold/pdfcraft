@@ -1929,6 +1929,9 @@
 	Go to page {p}	Ir para a página {p}
 	Images and text	Imagens e texto
 	Images and text (converted to PDF)	Imagens e texto (convertidos para PDF)
+	Word, PowerPoint and Excel (converted to PDF)	Word, PowerPoint e Excel (convertidos para PDF)
+	PDF, images, text and Office documents	PDF, imagens, texto e documentos do Office
+	Converted {name}. Approximated: {notes}	{name} convertido. Aproximações: {notes}
 	Import {name}	Importar {name}
 	Insert pages from {name}	Inserir páginas de {name}
 	Insert pages from {name} — 1 field renamed	Inserir páginas de {name} — 1 campo renomeado

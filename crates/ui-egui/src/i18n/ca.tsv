@@ -2815,6 +2815,9 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+	Word, PowerPoint and Excel (converted to PDF)	Word, PowerPoint i Excel (convertits a PDF)
+	PDF, images, text and Office documents	PDF, imatges, text i documents d'Office
+	Converted {name}. Approximated: {notes}	S'ha convertit {name}. Aproximacions: {notes}
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Avui

@@ -2787,6 +2787,9 @@ theme	Appearance	Tampilan
 	field names can't contain a period: {name}	nama kolom tidak boleh berisi titik: {name}
 	two cells would both be named {name}	dua sel akan sama-sama bernama {name}
 	a field named {name} already exists	kolom bernama {name} sudah ada
+	Word, PowerPoint and Excel (converted to PDF)	Word, PowerPoint, dan Excel (dikonversi ke PDF)
+	PDF, images, text and Office documents	PDF, gambar, teks, dan dokumen Office
+	Converted {name}. Approximated: {notes}	{name} dikonversi. Diperkirakan: {notes}
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hari ini

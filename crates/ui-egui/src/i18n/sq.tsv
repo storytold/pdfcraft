@@ -2541,6 +2541,9 @@ animation effects	Off	Joaktiv
 	field names can't contain a period: {name}	emrat e fushave nuk mund të përmbajnë pikë: {name}
 	two cells would both be named {name}	dy qeliza do të kishin të dyja emrin {name}
 	a field named {name} already exists	ekziston tashmë një fushë me emrin {name}
+	Word, PowerPoint and Excel (converted to PDF)	Word, PowerPoint dhe Excel (të konvertuara në PDF)
+	PDF, images, text and Office documents	PDF, imazhe, tekst dhe dokumente Office
+	Converted {name}. Approximated: {notes}	{name} u konvertua. Të përafruara: {notes}
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Sot

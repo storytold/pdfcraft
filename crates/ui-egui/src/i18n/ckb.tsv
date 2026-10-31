@@ -2735,6 +2735,9 @@ certificate	Version	وەشان
 	Make properties default	کردنی تایبەتمەندییەکان بە بنەڕەتی
 	Pages selected	پەڕە هەڵبژێردراوەکان
 	Page properties	تایبەتمەندییەکانی پەڕە
+	Word, PowerPoint and Excel (converted to PDF)	Word، PowerPoint و Excel (گۆڕدراو بۆ PDF)
+	PDF, images, text and Office documents	PDF، وێنە، دەق و بەڵگەنامەکانی Office
+	Converted {name}. Approximated: {notes}	{name} گۆڕدرا. نزیککراوەکان: {notes}
 	Create & Edit	دروستکردن و دەستکاریکردن
 	Review & Compare	پێداچوونەوە و بەراوردکردن
 	Forms & Signatures	فۆڕمەکان و واژووەکان

@@ -645,3 +645,20 @@ pub struct PdfCraftApp {
     /// An absolute GoToR target waiting for approval, before any target-file I/O (#1364).
     pub pending_remote_link: Option<PendingRemoteLink>,
 }
+
+/// What converting the Office file `name` approximated, in the UI language, for a notice or a
+/// Combine row; `None` when the conversion carried everything over. The report's English `notice`
+/// is for automation; the UI words it here so it is translated.
+pub(crate) fn office_note(name: &str, report: &pdfcraft_engine::OfficeReport) -> Option<String> {
+    (!report.notes.is_empty())
+        .then(|| i18n::fmt(tl!("Converted {name}. Approximated: {notes}"), &[("name", name), ("notes", &report.notes.join("; "))]))
+}
+
+#[cfg(test)]
+#[test]
+fn office_conversions_are_noted_only_when_something_was_approximated() {
+    let mut report = pdfcraft_engine::OfficeReport { kind: pdfcraft_engine::OfficeKind::Word, pages: 1, escaped: 0, notes: Vec::new() };
+    assert_eq!(office_note("a.docx", &report), None, "an exact conversion opens without a notice");
+    report.notes = vec!["charts drawn as boxes: 2".into(), "embedded objects: 1".into()];
+    assert_eq!(office_note("a.docx", &report).as_deref(), Some("Converted a.docx. Approximated: charts drawn as boxes: 2; embedded objects: 1"));
+}

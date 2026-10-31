@@ -1873,6 +1873,9 @@
 	Draw your {what} below.	Төменде {what} салыңыз.
 	Your name	Атыңыз
 	Images and text (converted to PDF)	Кескіндер мен мәтін (PDF-ке түрлендірілген)
+	Word, PowerPoint and Excel (converted to PDF)	Word, PowerPoint және Excel (PDF-ке түрлендірілген)
+	PDF, images, text and Office documents	PDF, суреттер, мәтін және Office құжаттары
+	Converted {name}. Approximated: {notes}	{name} түрлендірілді. Шамамен: {notes}
 	Images and text	Кескіндер мен мәтін
 	Check Box Style:	Құсбелгі стилі:
 	Button Style:	Түйме стилі:

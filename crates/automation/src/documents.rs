@@ -1,6 +1,6 @@
 use super::error::{Result, ToolError, failed};
-use super::json::{Args, nest_rows, security, summary};
-use super::paths::{child, read_input, write_atomic};
+use super::json::{Args, nest_rows, office_report, security, summary};
+use super::paths::{child, read_input, refuse_office_target, write_atomic};
 use super::{Arc, Automation, BlockKey, DocId, Document, Edit, Path, PathBuf, TextBlock, Value, comments, file_access, json};
 
 /// How far a watermark may be moved from the page centre, in points (a page is at most 14,400).
@@ -103,6 +103,14 @@ impl Automation {
         let path = self.resolve(a.str("path")?, false)?;
         let bytes = read_input(&path)?;
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        if pdfcraft_engine::source_kind(&name, &bytes) == Some(pdfcraft_engine::SourceKind::Office) {
+            let (pdf, report) = self.session.create_from_office(&name, &bytes).map_err(failed)?;
+            let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            let id = self.session.open_new(format!("{stem}.pdf"), pdf).map_err(failed)?;
+            let mut result = summary(self.session.get(id).ok_or_else(|| failed("the document vanished"))?);
+            result["office"] = office_report(&report);
+            return Ok(result);
+        }
         let id = self.session.open(name, Some(path.to_string_lossy().into_owned()), Arc::new(bytes), a.opt_str("password")?).map_err(failed)?;
         let doc = self.session.get(id).ok_or_else(|| failed("the document vanished"))?;
         Ok(summary(doc))
@@ -141,6 +149,7 @@ impl Automation {
                 own_path
             }
         };
+        refuse_office_target(&target)?;
         let same_file = doc.path.as_deref().is_some_and(|p| Path::new(p) == target);
         // Saving to a new file is a full rewrite unless asked otherwise, like Save As.
         let full = a.opt_bool("full")?.unwrap_or(!same_file);

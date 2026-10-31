@@ -2702,6 +2702,9 @@ key	Space	Space
 	Redact Image	Xóa nội dung nhạy cảm của hình ảnh
 	Create Link…	Tạo liên kết…
 	Recognize Text…	Nhận dạng văn bản…
+	Word, PowerPoint and Excel (converted to PDF)	Word, PowerPoint và Excel (chuyển đổi sang PDF)
+	PDF, images, text and Office documents	PDF, hình ảnh, văn bản và tài liệu Office
+	Converted {name}. Approximated: {notes}	Đã chuyển đổi {name}. Nội dung được tái tạo gần đúng: {notes}
 	Create & Edit	Tạo và chỉnh sửa
 	Review & Compare	Xem xét và so sánh
 	Forms & Signatures	Biểu mẫu và chữ ký

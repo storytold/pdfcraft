@@ -77,7 +77,9 @@ pub use pdfcraft_organize::check_custom_key;
 pub use pdfcraft_organize::view::{InitialView, Layout as InitialLayout, Magnification, Navigation};
 
 pub use pdfcraft_cos::Algorithm;
-pub use pdfcraft_create::{CONVERTIBLE, CreateError, ImageResolution, SourceKind, decode_text, source_kind};
+pub use pdfcraft_create::{
+    CONVERTIBLE, CreateError, ImageResolution, OFFICE_EXTENSIONS, OfficeKind, OfficeReport, SourceKind, decode_text, source_kind,
+};
 pub use pdfcraft_edit::added::{
     CHAR_SPACING_LIMIT as ADDED_CHAR_SPACING_LIMIT, paste_place as added_paste_place, paste_rect as added_paste_rect, text_rect as added_text_rect,
     text_width as added_text_width,
@@ -135,7 +137,7 @@ pub use error::{EditError, SourceProblem};
 pub use fill_sign::{displayed_offset, text_box_at, typed_signature_graphic, typed_signature_shape};
 pub use history::Label;
 use layers::{apply_layer_state, set_default_layer_state, use_layer_choices};
-pub use open::{OpenContext, PreparedDocument};
+pub use open::{Converted, OpenContext, PreparedDocument};
 pub use page_filter::{PageOrientation, PageParity, filter_pages};
 pub use pictures::MarkFile;
 use pictures::{embed_image, fit_picture, mark_source};

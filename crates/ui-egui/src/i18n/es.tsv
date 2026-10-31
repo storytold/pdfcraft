@@ -1966,6 +1966,9 @@ action wizard	Start	Iniciar
 	Draw your {what} below.	Dibuja tu {what} abajo.
 	Your name	Tu nombre
 	Images and text (converted to PDF)	Imágenes y texto (convertidos a PDF)
+	Word, PowerPoint and Excel (converted to PDF)	Word, PowerPoint y Excel (convertidos a PDF)
+	PDF, images, text and Office documents	PDF, imágenes, texto y documentos de Office
+	Converted {name}. Approximated: {notes}	{name} convertido. Aproximado: {notes}
 	Images and text	Imágenes y texto
 	Check Box Style:	Estilo de la casilla:
 	Button Style:	Estilo del botón:

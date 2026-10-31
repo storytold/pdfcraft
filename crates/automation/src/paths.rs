@@ -1,4 +1,4 @@
-use super::error::{Result, failed};
+use super::error::{Result, ToolError, failed};
 use super::{Automation, Path, PathBuf, StagingName, file_access, foreign_share, staging_suffixes};
 
 impl Automation {
@@ -125,6 +125,18 @@ pub(crate) fn unused(dir: &Path, stem: &str) -> PathBuf {
 
 /// Largest input file a tool reads into memory (512 MiB, matching `doc_batch`).
 pub(crate) const MAX_INPUT: u64 = 512 * 1024 * 1024;
+
+/// Refuse a Word, PowerPoint or Excel file name as the destination of a PDF: a document converted
+/// from an Office file has no path of its own, and writing PDF bytes under that name would
+/// replace the source.
+pub(crate) fn refuse_office_target(path: &Path) -> Result<()> {
+    let office =
+        path.extension().and_then(|e| e.to_str()).is_some_and(|e| pdfcraft_engine::OFFICE_EXTENSIONS.iter().any(|o| o.eq_ignore_ascii_case(e)));
+    if office {
+        return Err(ToolError::InvalidArgs(format!("{}: a PDF can't be written under an Office file name; use .pdf", path.display())));
+    }
+    Ok(())
+}
 
 /// Read a resolved input file of at most [`MAX_INPUT`] bytes without buffering past the cap.
 pub(crate) fn read_input_bytes(path: &Path) -> std::io::Result<Vec<u8>> {
