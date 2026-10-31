@@ -1,10 +1,10 @@
 //! Clearing the pixels of an image under redaction regions. The image is decoded, every pixel
 //! whose footprint intersects a region is set to zero (no ink for image masks), and the result is
 //! written as a new Flate image; the original object is untouched (other pages may use it).
-//! CCITT fax images decode through `Document::decoded_image_within`, but for Group 3 on bytes,
-//! which PdfCraft's renderer may draw as other rows. Images whose codec PdfCraft can't decode
-//! (DCT, JPX, JBIG2), and Group 3 on bytes, return `None`, and the caller removes the whole image
-//! instead; that is fail-closed.
+//! CCITT fax and JBIG2 images decode through `Document::decoded_image_within`, but for Group 3 on
+//! bytes, which PdfCraft's renderer may draw as other rows, and a JBIG2 page of other rows than the
+//! image's. Images whose codec PdfCraft can't decode (DCT, JPX), and those, return `None`, and the
+//! caller removes the whole image instead; that is fail-closed.
 
 use pdfcraft_content::{Matrix, overlaps};
 use pdfcraft_cos::{Document, Object, Stream};
@@ -53,18 +53,20 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
             b"FlateDecode" | b"Fl" | b"LZWDecode" | b"LZW" | b"ASCII85Decode" | b"A85" | b"ASCIIHexDecode" | b"AHx" | b"RunLengthDecode" | b"RL"
         )
     };
-    // A CCITT fax image (its last filter) decodes through `Document::decoded_image_within`, after the
-    // filters before it, so a scan stored as Group 4 is cleared like any other image.
+    // A CCITT fax or JBIG2 image (its last filter) decodes through `Document::decoded_image_within`,
+    // after the filters before it, so a scan stored as Group 4 or JBIG2 is cleared like any other
+    // image.
     let fax = |f: &Object| f.as_name().is_some_and(|n| matches!(n, b"CCITTFaxDecode" | b"CCF"));
+    let jbig2 = |f: &Object| f.as_name() == Some(b"JBIG2Decode".as_slice());
     let readable = |f: &Object| f.as_name().is_some_and(supported);
-    let (ok, is_fax) = match s.dict.get(b"Filter") {
-        None => (true, false),
-        Some(f @ Object::Name(_)) => (readable(f) || fax(f), fax(f)),
+    let (ok, is_fax, is_jbig2) = match s.dict.get(b"Filter") {
+        None => (true, false, false),
+        Some(f @ Object::Name(_)) => (readable(f) || fax(f) || jbig2(f), fax(f), jbig2(f)),
         Some(Object::Array(a)) => match a.split_last() {
-            Some((last, before)) if fax(last) => (before.iter().all(readable), true),
-            _ => (a.iter().all(readable), false),
+            Some((last, before)) if fax(last) || jbig2(last) => (before.iter().all(readable), fax(last), jbig2(last)),
+            _ => (a.iter().all(readable), false, false),
         },
-        _ => (false, false),
+        _ => (false, false, false),
     };
     if !ok {
         return None;
@@ -83,7 +85,8 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     let (w, h) = (w as usize, h as usize);
     let mask = matches!(s.dict.get(b"ImageMask"), Some(Object::Bool(true)));
     let (ncomp, bpc) = if mask { (1, 1) } else { (components(doc, s)?, s.dict.int(b"BitsPerComponent")? as usize) };
-    if !matches!(bpc, 1 | 2 | 4 | 8 | 16) {
+    // JBIG2 codes one-bit images of one component (ISO 32000-2 §7.4.7).
+    if !matches!(bpc, 1 | 2 | 4 | 8 | 16) || (is_jbig2 && (ncomp, bpc) != (1, 1)) {
         return None;
     }
     // Every size comes from the file: multiply checked, so an overflowing product refuses the image
@@ -105,7 +108,9 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
         bytes.checked_add(h)?.checked_mul(3)?.checked_add(4096)?
     };
     // Through the document, which reads `/DecodeParms` given by reference (`Stream::decoded*`
-    // alone would skip such a predictor, and the cleared bytes would then miss the covered pixels).
+    // alone would skip such a predictor, and the cleared bytes would then miss the covered pixels),
+    // and refuses a JBIG2 page of another size than the image: the renderer draws the whole page
+    // into the image, so the rows cleared wouldn't be the ones a mark covers on screen.
     let mut data = doc.decoded_image_within(s, allowance).ok()?;
     if data.len() < bytes {
         return None;

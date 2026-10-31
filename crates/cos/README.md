@@ -90,6 +90,8 @@ recognisable in a diff and byte-stable when re-serialized.
 - Linearized output, Fast Web View (`core.linearization`, M11).
 - Structural validation against the Arlington model (`core.arlington-validation`), which will live
   in the reserved `arlington` crate.
-- Image codecs. `pdfcraft-filters` carries the non-image filters and CCITT fax decoding
-  (`Document::decoded_image`); DCT, JPX and JBIG2 are still decoded through the bootstrap renderer
-  (`core.image-filters`, M2.6).
+- Image codecs. `pdfcraft-filters` carries the non-image filters and CCITT fax and JBIG2 decoding
+  (`Document::decoded_image`, a JBIG2 image's `/JBIG2Globals` within `MAX_JBIG2_GLOBALS`, 32 MiB,
+  their filters undone once a document for the images that share them, up to 64 MiB kept, while
+  their segments are decoded for every image);
+  DCT and JPX are still decoded through the bootstrap renderer (`core.image-filters`, M2.6).

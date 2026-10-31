@@ -1,6 +1,7 @@
 //! Image resampling and recompression.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use pdfcraft_content::{Matrix, Pieces};
 use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, Stream};
@@ -298,6 +299,19 @@ fn device_rgb(doc: &Document, r: ObjRef) -> bool {
     s.dict.int(b"BitsPerComponent") == Some(8)
         && !codec
         && cs.as_deref().and_then(Object::as_name).is_some_and(|n| matches!(n, b"DeviceRGB" | b"RGB"))
+}
+
+/// Whether image `r` is indexed: its palette says which of its samples is dark ([`dark_is_one`]),
+/// which default colour spaces in force where it is drawn may change.
+fn indexed(doc: &Document, r: ObjRef) -> bool {
+    let Object::Stream(s) = &*doc.get(r) else { return false };
+    let cs = s.dict.get(b"ColorSpace").map(|cs| doc.resolve(cs));
+    matches!(cs.as_deref(), Some(Object::Array(a)) if matches!(family(doc, a).as_deref().and_then(Object::as_name), Some(b"Indexed")))
+}
+
+/// The first entry of colour space array `a`, its family, read through a reference.
+fn family(doc: &Document, a: &[Object]) -> Option<Arc<Object>> {
+    a.first().map(|f| doc.resolve(f))
 }
 
 /// Call `f` with every reference in `o`, a dictionary's or array's included, a stream's dictionary
@@ -754,7 +768,7 @@ fn one_component(doc: &Document, cs: &Object) -> bool {
     let cs = doc.resolve(cs);
     match &*cs {
         Object::Name(n) => matches!(n.as_slice(), b"DeviceGray" | b"G"),
-        Object::Array(a) => match a.first().and_then(Object::as_name) {
+        Object::Array(a) => match family(doc, a).as_deref().and_then(Object::as_name) {
             Some(b"CalGray" | b"Separation" | b"Indexed" | b"I") => true,
             Some(b"ICCBased") => a.get(1).is_some_and(|icc| matches!(&*doc.resolve(icc), Object::Stream(s) if s.dict.int(b"N") == Some(1))),
             Some(b"DeviceN") => a.get(1).is_some_and(|names| doc.resolve(names).as_array().is_some_and(|n| n.len() == 1)),
@@ -802,6 +816,9 @@ fn one_bit(doc: &Document, s: &Stream, pack: bool, defaults: bool) -> Option<(Ve
         let len = stride.checked_mul(hu)?;
         let max = match s.filters().last() {
             Some((pdfcraft_filters::Filter::CcittFax, _)) => wu.checked_mul(hu)?.checked_add(hu.checked_mul(4)?)?.checked_add(4096)?,
+            // `decoded_image_within` reads JBIG2 too, but not for this yet: a resampled JBIG2 image
+            // would come out Flate under Retain, and nothing weighs JBIG2 again against it.
+            Some((pdfcraft_filters::Filter::Jbig2, _)) => return None,
             _ => allowance(len, h)?,
         };
         let mut data = doc.decoded_image_within(s, max).ok()?;
@@ -827,7 +844,7 @@ fn one_bit(doc: &Document, s: &Stream, pack: bool, defaults: bool) -> Option<(Ve
     packed.set(b"BitsPerComponent".to_vec(), Object::Int(1));
     // Components a pixel, bits a component, and a pixel's samples as 1 or 0.
     let (n, bpc, white): (usize, usize, Pixel) = match &*doc.resolve(cs) {
-        Object::Array(a) if matches!(a.first().and_then(Object::as_name), Some(b"Indexed" | b"I")) => {
+        Object::Array(a) if matches!(family(doc, a).as_deref().and_then(Object::as_name), Some(b"Indexed" | b"I")) => {
             let bpc = bits.filter(|b| matches!(b, 2 | 4 | 8))?;
             match decode.as_deref() {
                 None => {}
@@ -908,8 +925,12 @@ fn packed_rows(samples: &[u8], row_len: usize, w: usize, h: usize, (n, bpc, whit
     Some(out)
 }
 
-/// Resolve polarity only for explicitly understood samples. Indexed palettes and custom
-/// colour spaces stay at their original resolution rather than guessing which entry is dark.
+/// Whether sample 1 is the dark one of the 1-bit image `d` describes, after its decode array
+/// (`[0 1]` when it has none; another must be two different numbers): black in grey is a 0, and so
+/// is the painted part of an image mask. An indexed image's samples pick palette entries (its
+/// decode array maps them to entries, rounded and clipped to the table, ISO 32000-2 §8.9.5.2), and
+/// the palette says which is darker ([`lightness`]). `None` for anything else: separations and
+/// DeviceN, whose tint transforms aren't read, other colour spaces, and two entries alike.
 fn dark_is_one(doc: &Document, d: &Dict) -> Option<bool> {
     let number = |v: Option<&Object>| v.and_then(|v| doc.resolve(v).as_f64()).filter(|v| v.is_finite());
     let (d0, d1) = match d.get(b"Decode").map(|v| doc.resolve(v)).as_deref() {
@@ -923,10 +944,60 @@ fn dark_is_one(doc: &Document, d: &Dict) -> Option<bool> {
     if matches!(d.get(b"ImageMask"), Some(Object::Bool(true))) {
         return Some(d1 < d0);
     }
+    // A colour key can hide the dark sample, and a tie going to it would lose a thin rule of the
+    // sample that shows.
+    if matches!(d.get(b"Mask").map(|m| doc.resolve(m)).as_deref(), Some(Object::Array(_))) {
+        return None;
+    }
     match d.get(b"ColorSpace").map(|cs| doc.resolve(cs)).as_deref() {
         Some(Object::Name(n)) if matches!(n.as_slice(), b"DeviceGray" | b"G") => Some(d1 < d0),
+        Some(Object::Array(a)) if matches!(family(doc, a).as_deref().and_then(Object::as_name), Some(b"Indexed")) => {
+            let hival = a.get(2).and_then(|v| match &*doc.resolve(v) {
+                Object::Int(h) if (0..=255).contains(h) => Some(*h),
+                _ => None,
+            })?;
+            // `hival` is 0 to 255, and the rounded value is clipped to it: the cast can't wrap.
+            let entry = |v: f64| v.round().clamp(0.0, hival as f64) as usize;
+            let (l0, l1) = (lightness(doc, a, entry(d0))?, lightness(doc, a, entry(d1))?);
+            (l0 != l1).then_some(l1 < l0)
+        }
         _ => None,
     }
+}
+
+/// The most bytes a palette is read to (see [`lightness`]).
+const MAX_PALETTE: usize = 4096;
+
+/// How light entry `i` of the palette of indexed colour space `a` (`[/Indexed base hival lookup]`)
+/// is, from 0 (black) to 255,000 (white): its grey, or its luma (Rec. 601) over `DeviceRGB`. Only
+/// those two bases count, where the palette's values are the colour: under `/DefaultGray` or
+/// `/DefaultRGB` they aren't, and the caller asks for no polarity there; `None` for another base
+/// (calibrated, CMYK, an ICC profile, a resource name), and for an entry the table doesn't hold.
+fn lightness(doc: &Document, a: &[Object], i: usize) -> Option<u32> {
+    // A device space is its name, or that name alone in an array.
+    let base = doc.resolve(a.get(1)?);
+    let base = match &*base {
+        Object::Array(b) if b.len() == 1 => doc.resolve(b.first()?),
+        _ => base,
+    };
+    let n = match base.as_name()? {
+        b"DeviceGray" => 1,
+        b"DeviceRGB" => 3,
+        _ => return None,
+    };
+    // At most 256 entries of three components: more is no palette. Images share a table, and this
+    // is read for each of them, so a large one is refused before it's copied or decoded.
+    let table = match &*doc.resolve(a.get(3)?) {
+        Object::String(s) if s.bytes.len() <= MAX_PALETTE => s.bytes.clone(),
+        Object::Stream(s) if s.raw.len() <= 4 * MAX_PALETTE => doc.with_direct_parms(s).decoded_within(MAX_PALETTE).ok()?,
+        _ => return None,
+    };
+    let c: Vec<u32> = table.get(i.checked_mul(n)?..i.checked_mul(n)?.checked_add(n)?)?.iter().map(|v| u32::from(*v)).collect();
+    Some(match c.as_slice() {
+        [v] => v * 1000,
+        [r, g, b] => 299 * r + 587 * g + 114 * b,
+        _ => return None,
+    })
 }
 
 /// `w` × `h` 1-bit rows (each starting on a new byte) averaged down to `nw` × `nh`, no larger:
@@ -1000,9 +1071,13 @@ fn downsample_bits_checked(data: &[u8], w: u32, h: u32, nw: u32, nh: u32, dark_i
 /// `/DefaultGray` or `/DefaultRGB` is or may be in force. Also says whether it was resampled.
 ///
 /// - **Resampled** ([`downsample_bits_checked`]) when its resolution is above `above_ppi`, to `target_ppi`,
-///   unless it has a soft mask, whose own size would then have to follow, or is a halftone or a
-///   dither: most of its new pixels would cover both black and white, and taking the sample that
-///   covers more would turn its tones solid (a 50% screen black, a 25% one white).
+///   if its dark sample is known ([`dark_is_one`]: grey, an image mask, or an indexed image whose
+///   palette says which entry is darker, not under `defaults`), unless it has a soft mask, whose
+///   own size would then have to follow, or is a halftone or a dither: most of its new pixels would
+///   cover both black and white, and taking the sample that covers more would turn its tones solid
+///   (a 50% screen black, a 25% one white). So would a square of four new pixels that each cover
+///   both, as a small screened picture on a white page has (and ragged scanned text, which is then
+///   left at its resolution too).
 /// - **Stored** as CCITT Group 4 with `CcittG4`, or as 1-bit Flate when that is smaller, which only
 ///   a resampled image or one packed from more bits may be: a 1-bit image that is only stored again
 ///   becomes Group 4 or stays. Group 4 alone is only decoded to be resampled; Group 3 is stored
@@ -1038,8 +1113,8 @@ fn mono(doc: &Document, s: &Stream, ppi: f64, defaults: bool, settings: &MonoSet
     } else {
         (w, h)
     };
-    let polarity = if defaults { None } else { dark_is_one(doc, packed.as_ref().unwrap_or(d)) };
-    let averaged = if (nw, nh) != (w, h) && polarity.is_some() {
+    let polarity = if defaults || (nw, nh) == (w, h) { None } else { dark_is_one(doc, packed.as_ref().unwrap_or(d)) };
+    let averaged = if polarity.is_some() {
         // The dark sample of the image as it ends up: packed RGB is grey, with grey's decode pair.
         let (out, mixed, local_tone) = downsample_bits_checked(&data, w, h, nw, nh, polarity?)?;
         // A halftone or dither: most new pixels cover both samples. Text covers both only along
@@ -1101,11 +1176,13 @@ pub(crate) fn run(
     progress: &mut dyn FnMut(Stage) -> bool,
 ) -> Result<(), OptimizeError> {
     let (ppi, mut defaults, read) = walk_pages(doc, pages);
-    // Black-and-white RGB becomes grey, which default colour spaces would draw otherwise: one used
-    // where the walk didn't look may be drawn so.
+    // Black-and-white RGB becomes grey, which default colour spaces would draw otherwise, and an
+    // indexed image's palette says which of its samples a resampled one keeps, which they may
+    // change: one used where the walk didn't look may be drawn so.
     let packs = settings.mono.compression != MonoCompression::Retain;
-    let rgb: HashSet<u32> = ppi.keys().filter(|r| packs && device_rgb(doc, **r)).map(|r| r.num).collect();
-    defaults.extend(used_elsewhere(doc, &rgb, &read));
+    let checked: HashSet<u32> =
+        ppi.keys().filter(|r| (packs && device_rgb(doc, **r)) || (settings.mono.downsample && indexed(doc, **r))).map(|r| r.num).collect();
+    defaults.extend(used_elsewhere(doc, &checked, &read));
     // Soft masks are processed with their image, not on their own.
     let masks: HashSet<ObjRef> = ppi
         .keys()
@@ -1307,8 +1384,9 @@ mod downsample_tests {
         assert_eq!(downsample_bits(&[0b1100_0000], 3, 1, 2, 1, false).map(|(out, _)| out), Some(vec![0b1000_0000]));
     }
 
-    /// The dark sample: 0 in grey and of an image mask, 1 in a separation, each the other way round
-    /// with an inverting decode array; 0 for an indexed image, whatever its decode array.
+    /// The dark sample: 0 in grey and of an image mask, the other way round with an inverting decode
+    /// array; none known for a separation, nor for an indexed image without a palette (see the next
+    /// test), nor with a decode array that isn't two numbers.
     #[test]
     fn the_dark_sample_follows_the_colour_space_and_decode_array() {
         let doc = Document::new_empty();
@@ -1332,11 +1410,60 @@ mod downsample_tests {
             (vec![mask, inverted.clone()], Some(true)),
             (vec![separation.clone()], None),
             (vec![separation, inverted.clone()], None),
+            // A palette that isn't there says nothing.
             (vec![indexed.clone()], None),
             (vec![indexed, inverted], None),
             (vec![("ColorSpace", Object::name("DeviceGray")), ("Decode", Object::Array(vec![Object::name("x"), 0.into()]))], None),
         ] {
             assert_eq!(dark_is_one(&doc, &image(&entries)), dark_one, "{entries:?}");
+        }
+    }
+
+    /// An indexed image's dark sample is the one picking the darker palette entry, after its decode
+    /// array: over DeviceGray and DeviceRGB (by luma, each weight checked), with the table a string
+    /// or a stream, directly or by reference. Another base (CMYK, calibrated, an ICC profile, a
+    /// resource name), two entries alike, an entry the table doesn't hold, and a `hival` past 255
+    /// say nothing.
+    #[test]
+    fn an_indexed_images_palette_says_which_sample_is_dark() {
+        let mut doc = Document::new_empty();
+        let string = |bytes: &[u8]| Object::String(pdfcraft_cos::PdfString::literal(bytes.to_vec()));
+        let referenced = doc.add(string(&[255, 0]));
+        let stream = doc.add(Object::Stream(pdfcraft_cos::Stream::flate(Dict::new(), &[0, 0, 0, 255, 255, 255])));
+        let cal = |name: &str| Object::Array(vec![Object::name(name), Object::Dict(Dict::new())]);
+        let indexed = |base: Object, hival: i64, table: Object| {
+            let mut d = Dict::new();
+            d.set(b"ColorSpace".to_vec(), Object::Array(vec![Object::name("Indexed"), base, hival.into(), table]));
+            d
+        };
+        let inverted = |mut d: Dict| {
+            d.set(b"Decode".to_vec(), Object::Array(vec![1.into(), 0.into()]));
+            d
+        };
+        for (d, dark_one, what) in [
+            (indexed(Object::name("DeviceGray"), 1, string(&[0, 255])), Some(false), "grey, black first"),
+            (indexed(Object::name("DeviceGray"), 1, string(&[255, 0])), Some(true), "grey, white first"),
+            (indexed(Object::name("DeviceGray"), 1, string(&[90, 89])), Some(true), "two greys a step apart"),
+            (inverted(indexed(Object::name("DeviceGray"), 1, string(&[255, 0]))), Some(false), "white first, inverted"),
+            (indexed(Object::name("DeviceGray"), 1, Object::Ref(referenced)), Some(true), "the table by reference"),
+            (indexed(Object::name("DeviceRGB"), 1, Object::Ref(stream)), Some(false), "RGB in a stream"),
+            (indexed(Object::name("DeviceRGB"), 1, string(&[255, 255, 0, 0, 0, 255])), Some(true), "yellow, then blue"),
+            // Pure red (76,245) is lighter than pure blue (29,070), and darker than green (149,685).
+            (indexed(Object::name("DeviceRGB"), 1, string(&[255, 0, 0, 0, 0, 255])), Some(true), "red, then blue"),
+            (indexed(Object::name("DeviceRGB"), 1, string(&[255, 0, 0, 0, 255, 0])), Some(false), "red, then green"),
+            (indexed(Object::name("DeviceRGB"), 1, string(&[0, 0, 255, 0, 255, 0])), Some(false), "blue, then green"),
+            // Blue (29,070) is lighter than grey 20 (20,000): the blue weight decides it.
+            (indexed(Object::name("DeviceRGB"), 1, string(&[0, 0, 255, 20, 20, 20])), Some(true), "blue, then dark grey"),
+            (indexed(Object::name("DeviceCMYK"), 1, string(&[0, 0, 0, 0, 0, 0, 0, 255])), None, "CMYK"),
+            (indexed(cal("CalGray"), 1, string(&[200, 20])), None, "calibrated grey"),
+            (indexed(cal("ICCBased"), 1, string(&[0, 255])), None, "an ICC profile"),
+            (indexed(Object::name("CS0"), 1, string(&[0, 255])), None, "a resource name"),
+            (indexed(Object::name("DeviceGray"), 1, string(&[7, 7])), None, "two entries alike"),
+            (indexed(Object::name("DeviceGray"), 1, string(&[0])), None, "a table of one entry"),
+            (indexed(Object::name("DeviceGray"), 0, string(&[0, 255])), None, "hival 0: both samples pick entry 0"),
+            (indexed(Object::name("DeviceGray"), 256, string(&[0, 255])), None, "hival past 255"),
+        ] {
+            assert_eq!(dark_is_one(&doc, &d), dark_one, "{what}");
         }
     }
 
