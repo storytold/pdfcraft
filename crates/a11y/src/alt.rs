@@ -211,6 +211,25 @@ fn close(marks: &mut Vec<Mark>, matching: &mut usize, out: &mut HashMap<i64, [f6
     draw(marks, b);
 }
 
+/// The page-space box a `Do` operator paints: a form's transformed `/BBox`, or the unit square for an image.
+/// `None` when the operand is not a resolvable XObject or the form's box is malformed.
+fn xobject_bbox(doc: &Document, xobjects: &Dict, op: &pdfcraft_content::Op, top: &Matrix) -> Option<[f64; 4]> {
+    let r = op.name(0).and_then(|n| xobjects.get(n)).and_then(Object::as_ref)?;
+    Some(match &*doc.get(r) {
+        Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form") => {
+            let bb: Vec<f64> =
+                s.dict.get(b"BBox").and_then(|b| b.as_array().map(|a| a.iter().filter_map(Object::as_f64).collect())).unwrap_or_default();
+            let m = Matrix::from_operands(s.dict.get(b"Matrix").and_then(|m| m.as_array()).map(Vec::as_slice).unwrap_or(&[]))
+                .unwrap_or(Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
+            match bb[..] {
+                [a, b, c, d] => m.then(top).bbox([a, b, c, d]),
+                _ => return None,
+            }
+        }
+        _ => top.bbox([0.0, 0.0, 1.0, 1.0]),
+    })
+}
+
 /// Where each of the marked content `ids` is drawn on a page (images, forms and paths), in one pass
 /// over the page. What a sequence draws counts for every sequence of `ids` around it too.
 pub(crate) fn content_bboxes(doc: &Document, page: &Dict, ids: &HashSet<i64>) -> HashMap<i64, [f64; 4]> {
@@ -274,20 +293,7 @@ pub(crate) fn content_bboxes(doc: &Document, page: &Dict, ids: &HashSet<i64>) ->
                 path.clear();
             }
             b"Do" if inside => {
-                let Some(r) = op.name(0).and_then(|n| xobjects.get(n)).and_then(Object::as_ref) else { continue };
-                let unit = match &*doc.get(r) {
-                    Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form") => {
-                        let bb: Vec<f64> =
-                            s.dict.get(b"BBox").and_then(|b| b.as_array().map(|a| a.iter().filter_map(Object::as_f64).collect())).unwrap_or_default();
-                        let m = Matrix::from_operands(s.dict.get(b"Matrix").and_then(|m| m.as_array()).map(Vec::as_slice).unwrap_or(&[]))
-                            .unwrap_or(Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
-                        match bb[..] {
-                            [a, b, c, d] => m.then(&top).bbox([a, b, c, d]),
-                            _ => continue,
-                        }
-                    }
-                    _ => top.bbox([0.0, 0.0, 1.0, 1.0]),
-                };
+                let Some(unit) = xobject_bbox(doc, &xobjects, &op, &top) else { continue };
                 draw(&mut marks, unit);
             }
             b"BI" if inside => draw(&mut marks, top.bbox([0.0, 0.0, 1.0, 1.0])),

@@ -2,15 +2,25 @@
 //! streams (standard-14 fonts, WinAnsi), image XObjects and AcroForm widgets. Widget appearance
 //! streams are left empty here; the forms layer regenerates them from the field dictionaries.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 use pdfcraft_fonts::{literal, win_ansi};
 
 use crate::XfaError;
-use crate::layout::{Action, BorderShape, Form, Item, Page, Widget, WidgetKind};
+use crate::layout::{Action, BorderShape, Form, Item, Page, Rounded, Widget, WidgetKind};
 use crate::model::Rect;
-use crate::text::{Face, Family};
+use crate::text::{Face, Family, Span};
+
+mod common;
+mod strip;
+
+pub use common::jpeg_size;
+pub(crate) use common::rounded;
+use common::{all_faces, content_hash, empty_form, hex32, jpeg_info, js_action, n, parse_hex32, rgb, rgb_array, standard_font, state_name};
+pub(crate) use strip::USAGE_RIGHTS_REMOVED;
+use strip::drop_usage_rights;
+pub use strip::{Stripped, XfaShape, existing_layout, strip, xfa_shape};
 
 /// Private key on generated fields: the template's SOM path, so data can be put back.
 pub const SOM_KEY: &[u8] = b"PCSom";
@@ -21,144 +31,27 @@ pub const LAYOUT_KEY: &[u8] = b"PCXfaLayout";
 /// PDF action (the script is XFA's, not Acrobat JavaScript); PdfCraft runs the script by the
 /// field's SOM path.
 pub const CLICK_KEY: &[u8] = b"PCXfaClick";
-
-/// Width and height of a JPEG from its first frame header (SOF0–SOF15, not the DNL/JPG/DAC/DHT
-/// markers). `None` for anything else.
-pub fn jpeg_size(data: &[u8]) -> Option<(u32, u32)> {
-    jpeg_frame(data).map(|(w, h, _)| (w, h))
-}
-
-fn jpeg_frame(data: &[u8]) -> Option<(u32, u32, u8)> {
-    jpeg_info(data).map(|(w, h, c, _)| (w, h, c))
-}
-
-/// The SHA-256 of a picture's bytes, to find its XObject again.
-fn content_hash(data: &[u8]) -> [u8; 32] {
-    use sha2::Digest;
-    sha2::Sha256::digest(data).into()
-}
-
-fn hex32(h: &[u8; 32]) -> Vec<u8> {
-    h.iter().flat_map(|b| format!("{b:02x}").into_bytes()).collect()
-}
-
-fn parse_hex32(s: &[u8]) -> Option<[u8; 32]> {
-    let mut out = [0u8; 32];
-    if s.len() != 64 {
-        return None;
-    }
-    for (o, pair) in out.iter_mut().zip(s.as_chunks::<2>().0) {
-        *o = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
-    }
-    Some(out)
-}
-
-/// Width, height, components and whether an Adobe APP14 segment is present (such CMYK JPEGs
-/// store inverted values).
-fn jpeg_info(data: &[u8]) -> Option<(u32, u32, u8, bool)> {
-    if data.get(0..2)? != [0xFF, 0xD8] {
-        return None;
-    }
-    let mut i = 2usize;
-    let mut guard = 0;
-    let mut adobe = false;
-    while i + 4 <= data.len() && guard < 10_000 {
-        guard += 1;
-        if *data.get(i)? != 0xFF {
-            i += 1;
-            continue;
-        }
-        let marker = *data.get(i + 1)?;
-        if marker == 0xFF {
-            i += 1;
-            continue;
-        }
-        if (0xD0..=0xD9).contains(&marker) || marker == 0x01 {
-            i += 2;
-            continue;
-        }
-        let len = u16::from_be_bytes([*data.get(i + 2)?, *data.get(i + 3)?]) as usize;
-        if marker == 0xEE && data.get(i + 4..i + 9) == Some(b"Adobe") {
-            adobe = true;
-        }
-        let sof = matches!(marker, 0xC0..=0xCF) && !matches!(marker, 0xC4 | 0xC8 | 0xCC);
-        if sof {
-            let h = u16::from_be_bytes([*data.get(i + 5)?, *data.get(i + 6)?]) as u32;
-            let w = u16::from_be_bytes([*data.get(i + 7)?, *data.get(i + 8)?]) as u32;
-            let comps = *data.get(i + 9)?;
-            return (w > 0 && h > 0).then_some((w, h, comps, adobe));
-        }
-        i = i.checked_add(2)?.checked_add(len.max(2))?;
-    }
-    None
-}
-
-/// Format a number for content streams.
-fn n(v: f64) -> String {
-    let v = if v.is_finite() { v } else { 0.0 };
-    let s = format!("{:.3}", if v.abs() < 5e-4 { 0.0 } else { v });
-    let s = s.trim_end_matches('0').trim_end_matches('.');
-    if s == "-0" { "0".into() } else { s.into() }
-}
-
-fn rgb(c: [f64; 3]) -> String {
-    format!("{} {} {}", n(c[0]), n(c[1]), n(c[2]))
-}
-
-fn rgb_array(c: [f64; 3]) -> Object {
-    Object::Array(c.iter().map(|v| Object::Real(v.clamp(0.0, 1.0))).collect())
-}
-
-fn standard_font(base: &str) -> Object {
-    let mut f = Dict::new();
-    f.set(b"Type".to_vec(), Object::name("Font"));
-    f.set(b"Subtype".to_vec(), Object::name("Type1"));
-    f.set(b"BaseFont".to_vec(), Object::name(base));
-    f.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
-    Object::Dict(f)
-}
-
-/// Every face the content streams or `/DA` strings may name.
-fn all_faces() -> Vec<(&'static str, &'static str)> {
-    let mut out = Vec::new();
-    for fam in [Family::Helvetica, Family::Courier, Family::Times] {
-        for (b, i) in [(false, false), (true, false), (false, true), (true, true)] {
-            out.push((fam.resource_name(b, i), fam.base_font(b, i)));
-        }
-    }
-    out
-}
-
-/// A PDF appearance-state name for a check button's on value.
-fn state_name(on: &str) -> String {
-    let s: String = on.trim().chars().map(|c| if c.is_whitespace() || "()<>[]{}/%#".contains(c) || c.is_control() { '_' } else { c }).collect();
-    if s.is_empty() || s == "Off" { "Yes".into() } else { s }
-}
-
-fn empty_form(doc: &mut Document, w: f64, h: f64) -> Object {
-    let mut d = Dict::new();
-    d.set(b"Type".to_vec(), Object::name("XObject"));
-    d.set(b"Subtype".to_vec(), Object::name("Form"));
-    d.set(b"BBox".to_vec(), Object::Array([0.0, 0.0, w, h].iter().map(|v| Object::Real(*v)).collect()));
-    Object::Ref(doc.add(Object::Stream(Stream::from_raw(d, Vec::new()))))
-}
-
-fn js_action(js: &str) -> Object {
-    let mut a = Dict::new();
-    a.set(b"S".to_vec(), Object::name("JavaScript"));
-    a.set(b"JS".to_vec(), Object::String(PdfString::literal(js.as_bytes().to_vec())));
-    Object::Dict(a)
-}
+/// Private key on the fields generated to name a signature field by its SOM path, one for each
+/// step of the path above it (`form1[0]`, then `page1[0]`): a new layout replaces them with the
+/// fields they hold.
+pub const NODE_KEY: &[u8] = b"PCXfaNode";
 
 pub struct Written {
     pub pages: usize,
     pub fields: usize,
     pub warnings: Vec<String>,
+    /// Usage rights were taken off the catalog (laying the form out voided them).
+    pub usage_rights: bool,
 }
 
 /// On a push button generated for an XFA image field: clicking it picks a picture (the forms
 /// layer reads this key).
 pub const IMAGE_FIELD_KEY: &[u8] = b"PCXfaImage";
+
+/// On a check box or radio button generated for a round XFA check button (`shape="round"`): its
+/// background and border are drawn as a circle, not the widget's rectangle (the forms layer
+/// reads this key).
+pub const ROUND_KEY: &[u8] = b"PCXfaRound";
 
 /// On an image XObject written for a picture: the SHA-256 (hex) of the picture's bytes. A
 /// re-layout (after every script event) finds the XObjects on the pages it replaces by this,
@@ -182,6 +75,11 @@ struct Emitter<'a> {
     warnings: Vec<String>,
     /// The signatures the file holds, by the SOM path of the field signed.
     signed: HashMap<String, Signed>,
+    /// The full names of the fields the file came with, which a generated name must not repeat.
+    taken: HashSet<String>,
+    /// The fields above the signature fields named by their SOM paths, by the path they name:
+    /// each one's object and the fields it holds.
+    nodes: HashMap<String, (ObjRef, Vec<ObjRef>)>,
 }
 
 /// A signature field of the file that has been signed.
@@ -197,13 +95,16 @@ const MAX_FIELDS_SEARCHED: usize = 20_000;
 /// Deepest field nesting followed.
 const MAX_FIELD_DEPTH: usize = 32;
 
-/// The signed signature fields the document came with, by full name. Signing applications name
-/// a dynamic form's fields by their SOM path (`form1[0].page1[0].sign[0]`), which is how a
-/// laid-out signature box finds its signature. Fields of an earlier layout pass are not read.
-fn signed_fields(doc: &Document, catalog: &Dict) -> HashMap<String, Signed> {
+/// The fields the document came with: the full name of each, and the signed signature fields by
+/// SOM path. Signing applications name a dynamic form's fields by their SOM path
+/// (`form1[0].page1[0].sign[0]`), which is how a laid-out signature box finds its signature. A
+/// field an earlier layout pass generated gives no name, but a signature on it is kept, by its
+/// `/PCSom`, so a new layout keeps the box signed.
+fn existing_fields(doc: &Document, catalog: &Dict) -> (HashMap<String, Signed>, HashSet<String>) {
     let mut out = HashMap::new();
-    let Some(acro) = catalog.get(b"AcroForm").map(|a| doc.resolve(a)) else { return out };
-    let Some(fields) = acro.as_dict().and_then(|a| a.get(b"Fields")).map(|f| doc.resolve(f)) else { return out };
+    let mut names = HashSet::new();
+    let Some(acro) = catalog.get(b"AcroForm").map(|a| doc.resolve(a)) else { return (out, names) };
+    let Some(fields) = acro.as_dict().and_then(|a| a.get(b"Fields")).map(|f| doc.resolve(f)) else { return (out, names) };
     let mut stack: Vec<(Object, String, bool, usize)> =
         fields.as_array().into_iter().flatten().map(|f| (f.clone(), String::new(), false, 0)).collect();
     let mut seen = 0usize;
@@ -214,7 +115,22 @@ fn signed_fields(doc: &Document, catalog: &Dict) -> HashMap<String, Signed> {
         }
         let field = doc.resolve(&field);
         let Some(d) = field.as_dict() else { continue };
+        if d.contains(NODE_KEY) {
+            // Generated to name a signature field: only what it holds is looked at.
+            if depth < MAX_FIELD_DEPTH {
+                let kids = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
+                stack.extend(kids.into_iter().map(|k| (k, String::new(), false, depth + 1)));
+            }
+            continue;
+        }
         if d.contains(SOM_KEY) {
+            let som = d.get(SOM_KEY).map(|s| doc.resolve(s)).and_then(|s| s.as_string().map(|s| s.to_text()));
+            if d.name(b"FT") == Some(b"Sig")
+                && let Some(som) = som
+                && let Some(value) = d.get(b"V").filter(|v| doc.resolve(v).as_dict().is_some())
+            {
+                out.entry(som).or_insert(Signed { value: value.clone(), appearance: d.get(b"AP").cloned() });
+            }
             continue;
         }
         let name = match d.get(b"T").map(|t| doc.resolve(t)).and_then(|t| t.as_string().map(|t| t.to_text())) {
@@ -222,6 +138,9 @@ fn signed_fields(doc: &Document, catalog: &Dict) -> HashMap<String, Signed> {
             Some(t) => format!("{prefix}.{t}"),
             None => prefix,
         };
+        if !name.is_empty() {
+            names.insert(name.clone());
+        }
         let is_sig = match d.name(b"FT") {
             Some(ft) => ft == b"Sig",
             None => parent_is_sig,
@@ -236,7 +155,7 @@ fn signed_fields(doc: &Document, catalog: &Dict) -> HashMap<String, Signed> {
             stack.extend(kids.into_iter().map(|k| (k, name.clone(), is_sig, depth + 1)));
         }
     }
-    out
+    (out, names)
 }
 
 impl Emitter<'_> {
@@ -244,38 +163,16 @@ impl Emitter<'_> {
         format!("/{} {} Tf {} rg", face.resource_name(), n(face.size), rgb(face.color)).into_bytes()
     }
 
-    fn widget(&mut self, w: &Widget, page: &Page, page_ref: ObjRef) -> Result<Option<ObjRef>, XfaError> {
+    fn populate_widget_kind(&mut self, w: &Widget, d: &mut Dict, mk: &mut Dict) -> (i64, bool, Option<String>) {
         let r = w.rect;
-        let (x0, y0, x1, y1) = (r.x, page.height - r.bottom(), r.right(), page.height - r.y);
-        let mut d = Dict::new();
-        d.set(b"Type".to_vec(), Object::name("Annot"));
-        d.set(b"Subtype".to_vec(), Object::name("Widget"));
-        d.set(b"F".to_vec(), Object::Int(4));
-        d.set(b"P".to_vec(), Object::Ref(page_ref));
-        d.set(b"Rect".to_vec(), Object::Array([x0, y0, x1, y1].iter().map(|v| Object::Real(*v)).collect()));
-        d.set(b"DA".to_vec(), Object::String(PdfString::literal(Self::da(&w.face))));
-        if let Some(t) = &w.tooltip {
-            d.set(b"TU".to_vec(), Object::String(PdfString::text(t)));
-        }
-        d.set(SOM_KEY.to_vec(), Object::String(PdfString::text(&w.som)));
-        let mut mk = Dict::new();
-        if let Some(c) = w.border.color
-            && w.border.shape != BorderShape::None
-        {
-            mk.set(b"BC".to_vec(), rgb_array(c));
-        }
-        if let Some(c) = w.border.fill {
-            mk.set(b"BG".to_vec(), rgb_array(c));
-        }
-        let mut bs = Dict::new();
-        bs.set(b"W".to_vec(), Object::Real(if w.border.shape == BorderShape::None { 0.0 } else { w.border.width.clamp(0.1, 12.0) }));
-        bs.set(b"S".to_vec(), Object::name(if w.border.shape == BorderShape::Underline { "U" } else { "S" }));
-        d.set(b"BS".to_vec(), Object::Dict(bs));
         let mut ff: i64 = 0;
         if w.read_only {
             ff |= 1;
         }
         let mut top_level = true;
+        // The SOM path of the generated field above this one, for a signature field named by its
+        // SOM path.
+        let mut under: Option<String> = None;
         match &w.kind {
             WidgetKind::Text | WidgetKind::Date(_) | WidgetKind::Password => {
                 d.set(b"FT".to_vec(), Object::name("Tx"));
@@ -284,6 +181,10 @@ impl Emitter<'_> {
                 }
                 if w.kind == WidgetKind::Password {
                     ff |= 1 << 13;
+                }
+                // DoNotScroll (ISO 32000-2 Table 228): the field takes no more than it shows.
+                if w.no_scroll {
+                    ff |= 1 << 23;
                 }
                 if let Some(m) = w.max_chars {
                     d.set(b"MaxLen".to_vec(), Object::Int(m.min(100_000) as i64));
@@ -373,6 +274,16 @@ impl Emitter<'_> {
                     }
                     ff |= 1;
                 }
+                if let Some((above, last)) = self.som_steps(&w.som)
+                    && let Some(parent) = self.node(&above)
+                {
+                    // Named by its SOM path, as fields under one for each step above it: other
+                    // viewers lay a dynamic form out again and find a signature by that name.
+                    d.set(b"T".to_vec(), Object::String(PdfString::text(&last)));
+                    d.set(b"Parent".to_vec(), Object::Ref(parent));
+                    top_level = false;
+                    under = Some(above.join("."));
+                }
             }
             WidgetKind::Image => {
                 // A push button with nothing drawn: the forms layer treats one so marked as an
@@ -442,34 +353,45 @@ impl Emitter<'_> {
                 d.set(b"FT".to_vec(), Object::name("Btn"));
                 ff |= 1 << 16;
                 mk.set(b"CA".to_vec(), Object::String(PdfString::text(caption)));
-                if let Some(Action::Script(_)) = &w.action {
-                    // An XFA click script is no Acrobat JavaScript: no PDF action, which other
-                    // viewers would run; PdfCraft finds the script by the field's SOM path.
-                    d.set(CLICK_KEY.to_vec(), Object::Bool(true));
-                } else if let Some(a) = &w.action {
-                    let mut ad = Dict::new();
-                    match a {
-                        Action::Reset => {
-                            ad.set(b"S".to_vec(), Object::name("ResetForm"));
-                        }
-                        Action::Print => {
-                            ad.set(b"S".to_vec(), Object::name("Named"));
-                            ad.set(b"N".to_vec(), Object::name("Print"));
-                        }
-                        Action::SaveAs => {
-                            ad.set(b"S".to_vec(), Object::name("Named"));
-                            ad.set(b"N".to_vec(), Object::name("SaveAs"));
-                        }
-                        Action::Url(u) => {
-                            ad.set(b"S".to_vec(), Object::name("URI"));
-                            ad.set(b"URI".to_vec(), Object::String(PdfString::literal(u.as_bytes().to_vec())));
-                        }
-                        Action::Script(_) => {}
-                    }
-                    d.set(b"A".to_vec(), Object::Dict(ad));
-                }
+                write_button_action(w.action.as_ref(), d);
             }
         }
+        (ff, top_level, under)
+    }
+
+    /// Write laid-out widget `w` on `page` as an AcroForm widget annotation (and its field), with
+    /// its border, background and kind, and return the annotation's object.
+    fn widget(&mut self, w: &Widget, page: &Page, page_ref: ObjRef) -> Result<Option<ObjRef>, XfaError> {
+        let r = w.rect;
+        let (x0, y0, x1, y1) = (r.x, page.height - r.bottom(), r.right(), page.height - r.y);
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name("Widget"));
+        d.set(b"F".to_vec(), Object::Int(4));
+        d.set(b"P".to_vec(), Object::Ref(page_ref));
+        d.set(b"Rect".to_vec(), Object::Array([x0, y0, x1, y1].iter().map(|v| Object::Real(*v)).collect()));
+        d.set(b"DA".to_vec(), Object::String(PdfString::literal(Self::da(&w.face))));
+        if let Some(t) = &w.tooltip {
+            d.set(b"TU".to_vec(), Object::String(PdfString::text(t)));
+        }
+        d.set(SOM_KEY.to_vec(), Object::String(PdfString::text(&w.som)));
+        let mut mk = Dict::new();
+        if let Some(c) = w.border.color
+            && w.border.shape != BorderShape::None
+        {
+            mk.set(b"BC".to_vec(), rgb_array(c));
+        }
+        if let Some(c) = w.border.fill {
+            mk.set(b"BG".to_vec(), rgb_array(c));
+        }
+        let mut bs = Dict::new();
+        bs.set(b"W".to_vec(), Object::Real(if w.border.shape == BorderShape::None { 0.0 } else { w.border.width.clamp(0.1, 12.0) }));
+        bs.set(b"S".to_vec(), Object::name(if w.border.shape == BorderShape::Underline { "U" } else { "S" }));
+        d.set(b"BS".to_vec(), Object::Dict(bs));
+        if matches!(w.kind, WidgetKind::CheckBox { round: true, .. } | WidgetKind::Radio { round: true, .. }) {
+            d.set(ROUND_KEY.to_vec(), Object::Bool(true));
+        }
+        let (ff, top_level, under) = self.populate_widget_kind(w, &mut d, &mut mk);
         if !mk.is_empty() {
             d.set(b"MK".to_vec(), Object::Dict(mk));
         }
@@ -483,12 +405,72 @@ impl Emitter<'_> {
         if top_level {
             self.fields.push(r);
             self.field_count += 1;
+        } else if let Some(path) = under {
+            if let Some((_, kids)) = self.nodes.get_mut(&path) {
+                kids.push(r);
+            }
+            self.taken.insert(w.som.clone());
+            self.field_count += 1;
         } else if let WidgetKind::Radio { group, .. } = &w.kind
             && let Some((_, kids)) = self.radio_groups.get_mut(group)
         {
             kids.push(r);
         }
         Ok(Some(r))
+    }
+
+    /// The steps of SOM path `som` above the last, and the last, when a field can be named by the
+    /// path: two to [`MAX_FIELD_DEPTH`] steps, none empty, and no field of the file or of this
+    /// pass already named by the path or by a part of it. `None` keeps the field's own name.
+    fn som_steps(&self, som: &str) -> Option<(Vec<String>, String)> {
+        let steps: Vec<&str> = som.split('.').collect();
+        if steps.len() < 2 || steps.len() > MAX_FIELD_DEPTH || steps.iter().any(|s| s.is_empty()) {
+            return None;
+        }
+        for i in 1..=steps.len() {
+            let path = steps.get(..i)?.join(".");
+            // A part already generated by this pass is shared; one the file has is not touched.
+            let generated = i < steps.len() && self.nodes.contains_key(&path);
+            if !generated && self.taken.contains(&path) {
+                return None;
+            }
+        }
+        let (last, above) = steps.split_last()?;
+        Some((above.iter().map(|s| s.to_string()).collect(), last.to_string()))
+    }
+
+    /// The generated field named by the SOM path of `steps`, made (with those above it) when this
+    /// pass has none yet; the topmost goes into the AcroForm's fields. `None` for no steps.
+    fn node(&mut self, steps: &[String]) -> Option<ObjRef> {
+        let mut parent: Option<(ObjRef, String)> = None;
+        for step in steps {
+            let path = match &parent {
+                Some((_, above)) => format!("{above}.{step}"),
+                None => step.clone(),
+            };
+            let r = match self.nodes.get(&path) {
+                Some((r, _)) => *r,
+                None => {
+                    let mut d = Dict::new();
+                    d.set(b"T".to_vec(), Object::String(PdfString::text(step)));
+                    d.set(b"Kids".to_vec(), Object::Array(Vec::new()));
+                    d.set(NODE_KEY.to_vec(), Object::Bool(true));
+                    if let Some((p, _)) = &parent {
+                        d.set(b"Parent".to_vec(), Object::Ref(*p));
+                    }
+                    let r = self.doc.add(Object::Dict(d));
+                    match parent.as_ref().and_then(|(_, above)| self.nodes.get_mut(above)) {
+                        Some((_, kids)) => kids.push(r),
+                        None => self.fields.push(r),
+                    }
+                    self.nodes.insert(path.clone(), (r, Vec::new()));
+                    self.taken.insert(path.clone());
+                    r
+                }
+            };
+            parent = Some((r, path));
+        }
+        parent.map(|(r, _)| r)
     }
 
     /// An image XObject for a picture: JPEGs as they are (`DCTDecode`), PNGs, GIFs, BMPs and TIFFs
@@ -574,8 +556,8 @@ impl Emitter<'_> {
     }
 
     /// Write one laid-out page under `pages_ref`: its fills, lines, text and pictures in a
-    /// content stream, the fonts and images it uses as resources, and its widgets as
-    /// annotations. Returns the page object.
+    /// content stream, the fonts and images it uses as resources, and its widgets and the links
+    /// in its text as annotations. Returns the page object.
     fn page(&mut self, page: &Page, pages_ref: ObjRef) -> Result<ObjRef, XfaError> {
         let page_ref = self.doc.add(Object::Dict(Dict::new()));
         let mut content: Vec<u8> = Vec::new();
@@ -583,11 +565,27 @@ impl Emitter<'_> {
         let mut xobjects = Dict::new();
         let mut annots = Vec::new();
         let h = page.height;
+        // The link the text before ended in, which a next piece of it on the line widens.
+        let mut last_link: Option<LinkPiece> = None;
         for (i, item) in page.items.iter().enumerate() {
+            // A link's pieces join only across text and the underline drawn just before it: a fill,
+            // picture, field or any other line (a rule) between them ends the link there.
+            let keeps_link = match item {
+                Item::Text(_) => true,
+                Item::Line { from, to, .. } => matches!(page.items.get(i + 1), Some(Item::Text(s))
+                    if (from.1 - to.1).abs() < 0.01
+                        && (from.0 - s.x).abs() < 0.01
+                        && (from.1 - (s.baseline + s.face.size * crate::layout::UNDERLINE_DROP)).abs() < 0.01),
+                _ => false,
+            };
+            if !keeps_link {
+                last_link = None;
+            }
             match item {
                 Item::Fill { rect, color } => {
                     content.extend(format!("{} rg {} {} {} {} re f\n", rgb(*color), n(rect.x), n(h - rect.bottom()), n(rect.w), n(rect.h)).bytes());
                 }
+                Item::Rounded(r) => content.extend(rounded(r, h).bytes()),
                 Item::Line { from, to, width, color, dashed } => {
                     content.extend(
                         format!(
@@ -629,6 +627,9 @@ impl Emitter<'_> {
                     );
                     content.extend(literal(&win_ansi(&s.text)));
                     content.extend_from_slice(format!(" Tj{close}\n").as_bytes());
+                    if let Some(r) = self.text_link(s, h, page_ref, &mut last_link)? {
+                        annots.push(Object::Ref(r));
+                    }
                 }
                 Item::Image { rect, data, content_type } => {
                     let Some(r) = self.image_xobject(data, content_type) else { continue };
@@ -668,6 +669,141 @@ impl Emitter<'_> {
         self.doc.set(page_ref, Object::Dict(pd));
         Ok(page_ref)
     }
+
+    /// A link annotation over span `s` (on a page `page_height` tall), when its text links
+    /// somewhere: over the text it draws, without the spaces around it, and opening its address.
+    /// A span that goes on the link `last` ended in, on the same line, widens that annotation
+    /// instead (a link whose text changes style partway is one link). An address PdfCraft
+    /// wouldn't open from a document leaves the text as plain text, with one warning for the form.
+    fn text_link(&mut self, s: &Span, page_height: f64, page_ref: ObjRef, last: &mut Option<LinkPiece>) -> Result<Option<ObjRef>, XfaError> {
+        let piece = self.link_piece(s, page_height);
+        let Some((target, rect)) = piece else {
+            *last = None;
+            return Ok(None);
+        };
+        if let Some(prev) = last.as_mut()
+            && prev.uri == target
+            && (prev.baseline - s.baseline).abs() < 0.01
+            && (-0.01..=s.face.size).contains(&(rect[0] - prev.rect[2]))
+        {
+            prev.rect = [prev.rect[0].min(rect[0]), prev.rect[1].min(rect[1]), prev.rect[2].max(rect[2]), prev.rect[3].max(rect[3])];
+            let r = prev.rect;
+            self.doc.update_dict(prev.annot, |d| d.set(b"Rect".to_vec(), Object::Array(r.iter().map(|v| Object::Real(*v)).collect())))?;
+            return Ok(None);
+        }
+        let mut action = Dict::new();
+        action.set(b"S".to_vec(), Object::name("URI"));
+        action.set(b"URI".to_vec(), Object::String(PdfString::literal(target.as_bytes().to_vec())));
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name("Link"));
+        d.set(b"Rect".to_vec(), Object::Array(rect.iter().map(|v| Object::Real(*v)).collect()));
+        d.set(b"P".to_vec(), Object::Ref(page_ref));
+        d.set(b"F".to_vec(), Object::Int(4));
+        d.set(b"Border".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(0)]));
+        d.set(b"A".to_vec(), Object::Dict(action));
+        let annot = self.doc.add(Object::Dict(d));
+        *last = Some(LinkPiece { annot, uri: target, baseline: s.baseline, rect });
+        Ok(Some(annot))
+    }
+
+    /// Where span `s` links to and the rectangle (PDF user space, on a page `page_height` tall)
+    /// over the text it draws, without the spaces around it. `None` for text that links nowhere,
+    /// draws nothing, or links to an address PdfCraft wouldn't open from a document, which is
+    /// warned about once for the form.
+    fn link_piece(&mut self, s: &Span, page_height: f64) -> Option<(String, [f64; 4])> {
+        let href = s.link.as_deref()?;
+        let shown = s.text.trim();
+        if shown.is_empty() {
+            return None;
+        }
+        let Some(target) = link_target(href) else {
+            if !self.warnings.iter().any(|w| w.starts_with(LINK_LEFT_OUT)) {
+                self.warnings.push(format!("{LINK_LEFT_OUT}: PdfCraft makes links only of web (http, https) and email (mailto) addresses"));
+            }
+            return None;
+        };
+        let lead = s.text.len() - s.text.trim_start().len();
+        let x = s.x + s.face.width(s.text.get(..lead).unwrap_or_default());
+        let w = s.face.width(shown);
+        // The text's ascent and descent, as the layout measures a span's extent.
+        let rect = pdf_rect(Rect::new(x, s.baseline - s.face.size * 0.8, w, s.face.size), page_height);
+        (rect.iter().all(|v| v.is_finite()) && w > 0.0).then(|| (target.to_string(), rect))
+    }
+}
+
+fn write_button_action(action: Option<&Action>, d: &mut Dict) {
+    match action {
+        Some(Action::Script(_)) => {
+            // An XFA click script is no Acrobat JavaScript: no PDF action, which other
+            // viewers would run; PdfCraft finds the script by the field's SOM path.
+            d.set(CLICK_KEY.to_vec(), Object::Bool(true));
+        }
+        Some(action) => {
+            let mut ad = Dict::new();
+            match action {
+                Action::Reset => {
+                    ad.set(b"S".to_vec(), Object::name("ResetForm"));
+                }
+                Action::Print => {
+                    ad.set(b"S".to_vec(), Object::name("Named"));
+                    ad.set(b"N".to_vec(), Object::name("Print"));
+                }
+                Action::SaveAs => {
+                    ad.set(b"S".to_vec(), Object::name("Named"));
+                    ad.set(b"N".to_vec(), Object::name("SaveAs"));
+                }
+                Action::Url(url) => {
+                    ad.set(b"S".to_vec(), Object::name("URI"));
+                    ad.set(b"URI".to_vec(), Object::String(PdfString::literal(url.as_bytes().to_vec())));
+                }
+                Action::Script(_) => {}
+            }
+            d.set(b"A".to_vec(), Object::Dict(ad));
+        }
+        None => {}
+    }
+}
+
+/// The link annotation a page's text last ended in: the next piece of the same link on the same
+/// line widens it.
+struct LinkPiece {
+    annot: ObjRef,
+    uri: String,
+    baseline: f64,
+    rect: [f64; 4],
+}
+
+/// How the layout warning about a link left out starts.
+const LINK_LEFT_OUT: &str = "a link in the form's text was left as plain text";
+
+/// The longest link address kept, in characters: as long as PdfCraft opens from a document.
+const MAX_LINK: usize = 2048;
+
+/// `href` as the address of a link PdfCraft makes from a form's text: a web (http, https) or
+/// email (mailto) address, trimmed, of at most [`MAX_LINK`] characters and without control
+/// characters. `None` for anything else (scripts, files, data, relative paths). Opening it still
+/// goes through the app's own checks and prompt.
+fn link_target(href: &str) -> Option<&str> {
+    let href = href.trim();
+    if href.is_empty() || href.chars().count() > MAX_LINK || href.chars().any(char::is_control) {
+        return None;
+    }
+    let (scheme, rest) = href.split_once(':')?;
+    let web = scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https");
+    let ok = if web { rest.strip_prefix("//").is_some_and(has_host) } else { scheme.eq_ignore_ascii_case("mailto") && !rest.is_empty() };
+    ok.then_some(href)
+}
+
+/// Whether `after` (a web address past its `//`) names a host: what comes before the path (which a
+/// backslash starts too, as web addresses read it), query or fragment, past any user name and
+/// before any port, isn't empty.
+fn has_host(after: &str) -> bool {
+    let authority = after.split(['/', '\\', '?', '#']).next().unwrap_or_default();
+    let host = authority.rsplit('@').next().unwrap_or_default();
+    // An IPv6 host is bracketed and holds colons of its own.
+    let host = if host.starts_with('[') { host } else { host.split(':').next().unwrap_or_default() };
+    !host.is_empty()
 }
 
 /// Replace the document's pages with the laid-out form and add its fields to the AcroForm. The
@@ -696,6 +832,9 @@ fn earlier_images(doc: &Document, pages: ObjRef) -> HashMap<[u8; 32], ObjRef> {
     out
 }
 
+/// Write laid-out `form` into `doc`: its pages replace the document's, its widgets join the
+/// AcroForm's fields (a box the file holds a signature for keeps it), and the AcroForm is marked
+/// laid out. What was written, with any warnings, comes back.
 pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> {
     let catalog_ref = doc.root().ok_or_else(|| XfaError::Malformed("the document has no catalog".into()))?;
     let mut catalog = doc.get(catalog_ref).as_dict().cloned().ok_or_else(|| XfaError::Malformed("the catalog is not a dictionary".into()))?;
@@ -713,7 +852,7 @@ pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> 
     };
     // Pictures embedded by earlier passes, from the pages this pass replaces.
     let images = earlier_images(doc, pages_ref);
-    let signed = signed_fields(doc, &catalog);
+    let (signed, taken) = existing_fields(doc, &catalog);
     let mut em = Emitter {
         doc,
         images,
@@ -723,7 +862,17 @@ pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> 
         field_count: 0,
         warnings: Vec::new(),
         signed,
+        taken,
+        nodes: HashMap::new(),
     };
+    // Every name a field of this pass takes at the top, wherever and in whatever order it is
+    // written: a signature field named by its SOM path must not repeat one.
+    for w in form.pages.iter().flat_map(|p| &p.items).filter_map(|i| if let Item::Widget(w) = i { Some(w) } else { None }) {
+        em.taken.insert(match &w.kind {
+            WidgetKind::Radio { group, .. } => group.clone(),
+            _ => w.name.clone(),
+        });
+    }
     let mut kids = Vec::new();
     for page in &form.pages {
         kids.push(Object::Ref(em.page(page, pages_ref)?));
@@ -737,6 +886,10 @@ pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> 
                 d.set(b"V".to_vec(), Object::name(s));
             }
         })?;
+    }
+    let nodes: Vec<(ObjRef, Vec<ObjRef>)> = em.nodes.values().cloned().collect();
+    for (node, kids) in nodes {
+        em.doc.update_dict(node, |d| d.set(b"Kids".to_vec(), Object::Array(kids.iter().map(|r| Object::Ref(*r)).collect())))?;
     }
     let Emitter { doc, fields, field_count, warnings, .. } = em;
     let count = kids.len();
@@ -769,6 +922,13 @@ pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> 
         z.set(b"BaseFont".to_vec(), Object::name("ZapfDingbats"));
         dr_fonts.set(b"ZaDb".to_vec(), Object::Dict(z));
     }
+    // Each font its own object: Acrobat shows nothing in a text field it redraws after typing
+    // when the field's /DR font is a dictionary written inline (#3441).
+    let inline: Vec<(Vec<u8>, Dict)> = dr_fonts.iter().filter_map(|(k, v)| Some((k.clone(), v.as_dict()?.clone()))).collect();
+    for (name, font) in inline {
+        let r = doc.add(Object::Dict(font));
+        dr_fonts.set(name, Object::Ref(r));
+    }
     dr.set(b"Font".to_vec(), Object::Dict(dr_fonts));
     acro.set(b"DR".to_vec(), Object::Dict(dr));
     if !acro.contains(b"DA") {
@@ -786,281 +946,32 @@ pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> 
             catalog_changed = true;
         }
     }
-    if catalog_changed {
+    // The pages and fields are new: usage rights signed over the form as it was are void now.
+    let usage_rights = drop_usage_rights(doc, &mut catalog);
+    if catalog_changed || usage_rights {
         doc.set(catalog_ref, Object::Dict(catalog));
     }
-    Ok(Written { pages: count, fields: field_count, warnings })
-}
-
-/// What [`strip`] took out, for the user to be told (the packets held more than the fields).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Stripped {
-    /// The packets removed, by name (`template`, `datasets`, `config`, `signature`, …).
-    pub packets: Vec<String>,
-    /// Data values in the datasets no field held (what the form's data had that its fields
-    /// didn't show); `None` when the template could not be read to tell.
-    pub unbound_data: Option<usize>,
-    /// Buttons whose click ran an XFA script, and image fields: they do nothing from now on.
-    pub script_buttons: usize,
-    pub image_fields: usize,
-    /// What the layout left out (pictures, rows past the cap), now for good.
-    pub layout_warnings: Vec<String>,
-    /// Reader usage rights (`/Perms /UR3`) were removed: changing the form voids them anyway.
-    pub usage_rights: bool,
-    /// Private keys removed from field dictionaries (`/PCSom`, `/PCXfaClick`, …).
-    pub field_keys: usize,
-}
-
-impl Stripped {
-    /// What was dropped, as lines for the user (empty when nothing worth saying).
-    pub fn notes(&self) -> Vec<String> {
-        let mut out = Vec::new();
-        if !self.packets.is_empty() {
-            out.push(format!("The XFA was taken out of the form: its {} packet(s) are gone from the saved file", self.packets.join(", ")));
-        }
-        match self.unbound_data {
-            Some(n) if n > 0 => out.push(format!("{n} value(s) the form's XFA data held that no field showed are gone with it")),
-            None => out.push("The template could not be read, so data the fields didn't show may be gone with the XFA".into()),
-            _ => {}
-        }
-        if self.script_buttons + self.image_fields > 0 {
-            out.push(format!("{} button(s) that ran XFA scripts and {} image field(s) do nothing now", self.script_buttons, self.image_fields));
-        }
-        for w in &self.layout_warnings {
-            out.push(format!("Kept as laid out: {w}"));
-        }
-        if self.usage_rights {
-            out.push("Adobe Reader extended features were removed (changing the form voids them)".into());
-        }
-        out
-    }
-}
-
-/// What a document's XFA entry says, from its dictionaries alone (no packet decoded).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct XfaShape {
-    /// `/NeedsRendering true`: the form expects to be laid out from the template.
-    pub needs_rendering: bool,
-    /// The AcroForm has fields of its own.
-    pub has_fields: bool,
-    /// PdfCraft laid the form out (the layout mark is there).
-    pub laid_out: bool,
-}
-
-impl XfaShape {
-    /// Whether taking the XFA out leaves a form every viewer shows: the pages PdfCraft laid out
-    /// (with their fields), or a static form's own pages and fields. A dynamic form that was
-    /// never laid out has only placeholder pages: stripping it would leave nothing.
-    pub fn strippable(self) -> bool {
-        self.laid_out || (!self.needs_rendering && self.has_fields)
-    }
-}
-
-/// The document's XFA entry, if any, without decoding a packet.
-pub fn xfa_shape(doc: &Document) -> Option<XfaShape> {
-    let root = doc.root()?;
-    let catalog = doc.get(root);
-    let catalog = catalog.as_dict()?;
-    let acro = doc.resolve(catalog.get(b"AcroForm")?);
-    let acro = acro.as_dict()?;
-    acro.get(b"XFA")?;
-    let bool_of = |v: Option<&Object>| matches!(v.map(|v| doc.resolve(v)).as_deref(), Some(Object::Bool(true)));
-    let needs_rendering = bool_of(catalog.get(b"NeedsRendering")) || bool_of(acro.get(b"NeedsRendering"));
-    let has_fields = acro.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().map(|a| !a.is_empty())).unwrap_or(false);
-    Some(XfaShape { needs_rendering, has_fields, laid_out: acro.contains(LAYOUT_KEY) })
-}
-
-/// Most field dictionaries walked for their private keys.
-const MAX_STRIP_FIELDS: usize = 1_000_000;
-
-/// Take the XFA out of a document, leaving what every viewer shows: the pages as laid out
-/// and, when the fields were kept, an ordinary AcroForm. The packets (template, data and
-/// all), `/NeedsRendering`, the layout mark, the overrides and Reader usage rights go, and
-/// the fields lose the private keys PdfCraft gave them. A flattened form (no fields left)
-/// becomes a plain PDF; one with its fields becomes a static form that Adobe's viewers no
-/// longer lay out again. What the packets held beyond the fields is counted in the report,
-/// so the user can be told; the caller decides whether the form is one to strip
-/// ([`XfaShape::strippable`]). A document without XFA is left as it is.
-pub fn strip(doc: &mut Document) -> Result<Stripped, XfaError> {
-    let mut out = Stripped::default();
-    let Some(root) = doc.root() else { return Ok(out) };
-    let Some(mut catalog) = doc.get(root).as_dict().cloned() else { return Ok(out) };
-    let acro_obj = catalog.get(b"AcroForm").cloned();
-    let Some(acro_obj) = acro_obj else { return Ok(out) };
-    let Some(mut acro) = doc.resolve(&acro_obj).as_dict().cloned() else { return Ok(out) };
-    let Some(xfa) = acro.get(b"XFA").cloned() else { return Ok(out) };
-    // What is about to go, while it can still be read.
-    out.unbound_data = unbound_data(doc);
-    out.layout_warnings = existing_layout(doc).map(|r| r.warnings).unwrap_or_default();
-    let mut streams: Vec<ObjRef> = Vec::new();
-    match &*doc.resolve(&xfa) {
-        Object::Array(items) => {
-            let mut i = 0;
-            while i < items.len() {
-                let name = items.get(i).and_then(|n| n.as_string()).map(|s| s.to_text());
-                let stream = if name.is_some() { items.get(i + 1) } else { items.get(i) };
-                if let Some(n) = &name {
-                    out.packets.push(n.clone());
-                }
-                if let Some(r) = stream.and_then(Object::as_ref) {
-                    streams.push(r);
-                }
-                i += if name.is_some() { 2 } else { 1 };
-            }
-        }
-        Object::Stream(s) => {
-            if let Some(r) = xfa.as_ref() {
-                streams.push(r);
-            }
-            // One XDP: the packets it holds are the envelope's children.
-            let text = s.decoded_within(64 << 20).ok().and_then(|b| crate::packets::decode(&b)).map(|(t, _)| t).unwrap_or_default();
-            let opts = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: 1_000_000 };
-            if crate::xml_nesting_depth(&text) <= crate::MAX_XML_DEPTH
-                && let Ok(parsed) = roxmltree::Document::parse_with_options(&text, opts)
-            {
-                let root = parsed.root_element();
-                if root.tag_name().name() == "xdp" {
-                    out.packets.extend(root.children().filter(|c| c.is_element()).map(|c| c.tag_name().name().to_string()).take(32));
-                } else {
-                    out.packets.push(root.tag_name().name().to_string());
-                }
-            }
-            if out.packets.is_empty() {
-                out.packets.push("xdp".into());
-            }
-        }
-        _ => {}
-    }
-    acro.remove(b"XFA");
-    for key in [b"NeedsRendering".as_slice(), LAYOUT_KEY, crate::script::OVERRIDES_KEY] {
-        acro.remove(key);
-    }
-    // The private keys on every field and widget, down the tree (each dictionary once).
-    let fields = acro.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()).unwrap_or_default();
-    let mut seen = std::collections::HashSet::new();
-    let mut todo: Vec<ObjRef> = Vec::new();
-    for r in fields.iter().filter_map(Object::as_ref) {
-        if seen.insert(r) && seen.len() <= MAX_STRIP_FIELDS {
-            todo.push(r);
-        }
-    }
-    while let Some(r) = todo.pop() {
-        let Some(d) = doc.get(r).as_dict().cloned() else { continue };
-        if d.contains(CLICK_KEY) {
-            out.script_buttons += 1;
-        }
-        if d.contains(IMAGE_FIELD_KEY) {
-            out.image_fields += 1;
-        }
-        let private: Vec<Vec<u8>> =
-            [SOM_KEY, CLICK_KEY, IMAGE_FIELD_KEY, b"PCItems".as_slice()].iter().filter(|k| d.contains(k)).map(|k| k.to_vec()).collect();
-        if !private.is_empty() {
-            out.field_keys += private.len();
-            doc.update_dict(r, |d| {
-                for k in &private {
-                    d.remove(k);
-                }
-            })?;
-        }
-        if let Some(kids) = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()) {
-            for k in kids.iter().filter_map(Object::as_ref) {
-                if seen.insert(k) && seen.len() <= MAX_STRIP_FIELDS {
-                    todo.push(k);
-                }
-            }
-        }
-    }
-    match acro_obj.as_ref() {
-        Some(r) => doc.set(r, Object::Dict(acro)),
-        None => catalog.set(b"AcroForm".to_vec(), Object::Dict(acro)),
-    }
-    catalog.remove(b"NeedsRendering");
-    // Reader usage rights are void once the form changed: Reader says so on opening the file
-    // and drops them, so they go now, with a note.
-    if let Some(perms) = catalog.get(b"Perms").map(|p| doc.resolve(p))
-        && let Some(mut perms) = perms.as_dict().cloned()
-        && (perms.contains(b"UR3") || perms.contains(b"UR"))
-    {
-        perms.remove(b"UR3");
-        perms.remove(b"UR");
-        out.usage_rights = true;
-        if perms.is_empty() {
-            catalog.remove(b"Perms");
-        } else {
-            catalog.set(b"Perms".to_vec(), Object::Dict(perms));
-        }
-    }
-    doc.set(root, Object::Dict(catalog));
-    // The packet streams are referenced from nowhere else: freed, so an incremental save
-    // doesn't carry an unreachable copy of the data.
-    for r in streams {
-        doc.free(r);
-    }
-    Ok(out)
-}
-
-/// Values in the datasets that no field of the laid-out form holds (leaf text nodes whose
-/// data path no field binds to). `None` when the template can't be read.
-fn unbound_data(doc: &Document) -> Option<usize> {
-    let data = crate::script::data_of(doc)?;
-    let tpl = crate::script::template_of(doc).ok()?;
-    let bound: std::collections::HashSet<crate::data::DataPath> =
-        crate::script::fields_by_som(doc).keys().map(|som| crate::data::data_path(&tpl, som)).collect();
-    fn walk(
-        n: &crate::data::DataNode,
-        path: &mut crate::data::DataPath,
-        bound: &std::collections::HashSet<crate::data::DataPath>,
-        count: &mut usize,
-        depth: usize,
-    ) {
-        if depth > 64 {
-            return;
-        }
-        let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-        for c in &n.children {
-            let idx = seen.entry(c.name.as_str()).or_insert(0);
-            path.push((c.name.clone(), *idx));
-            *idx += 1;
-            if c.children.is_empty() {
-                if !c.text.trim().is_empty() && !bound.contains(path) {
-                    *count += 1;
-                }
-            } else {
-                walk(c, path, bound, count, depth + 1);
-            }
-            path.pop();
-        }
-    }
-    let mut count = 0;
-    walk(&data, &mut Vec::new(), &bound, &mut count, 0);
-    Some(count)
-}
-
-/// The layout a document already carries from an earlier pass, if any.
-pub fn existing_layout(doc: &Document) -> Option<crate::Report> {
-    let root = doc.root()?;
-    let catalog = doc.get(root);
-    let acro = doc.resolve(catalog.as_dict()?.get(b"AcroForm")?);
-    let mark = doc.resolve(acro.as_dict()?.get(LAYOUT_KEY)?);
-    let mark = mark.as_dict()?;
-    let warnings = mark
-        .get(b"Warnings")
-        .map(|w| doc.resolve(w))
-        .and_then(|w| w.as_array().cloned())
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|w| w.as_string().map(|s| s.to_text()))
-        .take(100)
-        .collect();
-    Some(crate::Report {
-        pages: mark.int(b"Pages").unwrap_or(0).clamp(0, 100_000) as usize,
-        fields: mark.int(b"Fields").unwrap_or(0).clamp(0, 1_000_000) as usize,
-        template_bytes: 0,
-        warnings,
-    })
+    Ok(Written { pages: count, fields: field_count, warnings, usage_rights })
 }
 
 /// The rectangle of a widget in PDF user space (for tests).
 pub fn pdf_rect(r: Rect, page_height: f64) -> [f64; 4] {
     [r.x, page_height - r.bottom(), r.right(), page_height - r.y]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_hex32;
+
+    #[test]
+    fn parse_hex32_rejects_non_hex_digits() {
+        for prefix in ["+f", "-f", " f"] {
+            let mut s = prefix.as_bytes().to_vec();
+            s.resize(64, b'0');
+            assert!(parse_hex32(&s).is_none(), "{prefix:?}");
+        }
+        let mut ok = b"Ff".to_vec();
+        ok.resize(64, b'0');
+        assert_eq!(parse_hex32(&ok).map(|h| h[0]), Some(0xff));
+    }
 }

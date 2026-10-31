@@ -152,6 +152,7 @@ pub enum OfficeFormat {
     Pptx,
     Html,
     Rtf,
+    Markdown,
 }
 
 impl OfficeFormat {
@@ -161,6 +162,7 @@ impl OfficeFormat {
             OfficeFormat::Pptx => "pptx",
             OfficeFormat::Html => "html",
             OfficeFormat::Rtf => "rtf",
+            OfficeFormat::Markdown => "md",
         }
     }
 
@@ -170,12 +172,13 @@ impl OfficeFormat {
             "pptx" => Some(OfficeFormat::Pptx),
             "html" | "htm" => Some(OfficeFormat::Html),
             "rtf" => Some(OfficeFormat::Rtf),
+            "md" | "markdown" => Some(OfficeFormat::Markdown),
             _ => None,
         }
     }
 }
 
-/// A Word, PowerPoint, HTML or RTF export ([`crate::Document::export_office_checked`]).
+/// A Word, PowerPoint, HTML, RTF or Markdown export ([`crate::Document::export_office_checked`]).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct OfficeExport {
     /// The exported file.
@@ -231,7 +234,10 @@ impl crate::Document {
                     .filter(|b| !b.text.trim().is_empty())
                     .map(|b| {
                         let f = b.base_font.to_ascii_lowercase();
+                        // `text` is trimmed; the editor text keeps the source's own spaces.
+                        let space_around = [b.editor_text.starts_with(char::is_whitespace), b.editor_text.ends_with(char::is_whitespace)];
                         pdfcraft_export::Block {
+                            space_around,
                             text: b.text,
                             rect: visible_rect(b.rect),
                             size: b.size * unit,
@@ -283,14 +289,16 @@ impl crate::Document {
     /// [`Self::export_office`], and the pages whose text it had to leave out
     /// ([`OfficeExport::truncated_pages`]).
     pub fn export_office_checked(&self, format: OfficeFormat) -> OfficeExport {
-        // RTF leaves pictures out.
-        let (pages, truncated_pages) = self.export_pages_checked(format != OfficeFormat::Rtf, MAX_EXPORT_IMAGE_BYTES);
+        // RTF and Markdown leave pictures out.
+        let (pages, truncated_pages) =
+            self.export_pages_checked(!matches!(format, OfficeFormat::Rtf | OfficeFormat::Markdown), MAX_EXPORT_IMAGE_BYTES);
         let title = self.info.title.clone().unwrap_or_else(|| self.name.trim_end_matches(".pdf").to_string());
         let bytes = match format {
             OfficeFormat::Docx => pdfcraft_export::docx(&pages, &title),
             OfficeFormat::Pptx => pdfcraft_export::pptx(&pages, &title),
             OfficeFormat::Html => pdfcraft_export::html(&pages, &title).into_bytes(),
             OfficeFormat::Rtf => pdfcraft_export::rtf(&pages).into_bytes(),
+            OfficeFormat::Markdown => pdfcraft_export::markdown(&pages).into_bytes(),
         };
         OfficeExport { bytes, truncated_pages }
     }
