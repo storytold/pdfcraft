@@ -279,7 +279,7 @@ pub struct Report {
     pub images: usize,
     pub images_resampled: usize,
     pub images_recompressed: usize,
-    /// JBIG2 images left as they are: decoding them all would take more than one run may spend.
+    /// Images left as they are: decoding them all would take more than one run may spend.
     pub images_refused: usize,
     /// Encoded image bytes before and after (images that changed).
     pub image_bytes_before: usize,
@@ -331,10 +331,12 @@ pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress:
     }
     let mut report = Report::default();
     let pages = pdfcraft_annot::page_refs(doc).map_err(|_| OptimizeError::NoPages)?;
+    // Merging fragments and the pass after it read the same images, so they share the allowance.
+    let mut budget = pdfcraft_cos::ImageBudget::new(doc);
     if settings.merge_fragments {
-        fragments::run(doc, &pages, &mut report, progress)?;
+        fragments::run(doc, &pages, &mut report, progress, &mut budget)?;
     }
-    images::run(doc, &pages, settings, &mut report, progress)?;
+    images::run(doc, &pages, settings, &mut report, progress, &mut budget)?;
     if !progress(Stage::CleanUp) {
         return Err(OptimizeError::Cancelled);
     }

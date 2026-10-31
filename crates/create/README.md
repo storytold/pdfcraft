@@ -32,8 +32,8 @@ other filters too, with the `/JBIG2Globals` of their own `/DecodeParms` entry, a
 whose JBIG2 page isn't its size (PdfCraft's renderer draws the whole page into the image; the page is refused before it is decoded),
 or whose globals can't be read or decode to more than 32 MiB (they are decoded before the page's size is known, so they have a
 limit of their own), is skipped, and such a mask is left out and the image exported opaque, as JPX and CCITT masks are.
-Past what one export may decode of JBIG2, which its images share, an image is skipped, and so is one whose mask is past it, which
-would otherwise come out showing what the mask hides. An export also stops at 2 GiB of files held, or twice the document if that
+Past what one export may decode, which its images share, filters and fax and JBIG2 decoders alike (`ImageBudget`; JPEG data isn't
+counted), an image is skipped, and so is one whose mask is past it, which would otherwise come out showing what the mask hides. An export also stops at 2 GiB of files held, or twice the document if that
 is more, since they stay in memory until it ends.
 Indexed Decode values select palette entries after rounding and clipping. Color-key masks compare the original samples.
 Missing, null or malformed Decode arrays keep the default mapping.

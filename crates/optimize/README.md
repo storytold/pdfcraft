@@ -100,9 +100,11 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
 
   - Lossless JBIG2 uses bounded generic-region encoding or exact-copy symbol dictionaries when
     smaller. No lossy symbol substitution is used. Export, redaction and this step read JBIG2
-    images, with bounded shared globals. All of a run's JBIG2 images share one allowance of
-    decoding (`pdfcraft_cos::ImageBudget`): about 1,000 scanned pages' worth, plus more for each
-    byte of the file. Images past it stay as they are, and `Report::images_refused` counts them.
+    images, with bounded shared globals. All of a run's images share one allowance of decoding
+    (`pdfcraft_cos::ImageBudget`), filters and fax and JBIG2 decoders alike, JPEG data aside: about
+    1,000 scanned pages' worth, plus more for each byte of the file, enough to decode a stream
+    about 8 times at Flate's best. Images past it stay as they are, and `Report::images_refused`
+    counts them.
 - **Discard objects:** thumbnails, alternate images, document tags, print settings.
 - **Clean up:** Flate for streams with no filter; for streams with an outer ASCII85 or ASCIIHex
   layer, that layer is removed when the result is smaller (the inner filters keep their encoded

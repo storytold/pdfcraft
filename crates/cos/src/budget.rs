@@ -6,15 +6,17 @@ use pdfcraft_filters::FilterError;
 
 use crate::{CosError, Document, ObjRef, Object, Stream};
 
-/// The steps of JBIG2 decoding ([`hayro_jbig2::Image::decode_within`]) an operation over a
-/// document's images may take whatever the file's size. A step is about a pixel, and takes 6 to 16
-/// ns to decode, so this is 2 to 5 minutes, and about as long again for what an operation does with
-/// the pixels. A page scanned at 300 dpi takes about 17 million, 8.4 for its pixels and that again
-/// to decode them, so this alone reads about 1,000 of them.
+/// The steps of decoding an operation over a document's images may take whatever the file's size.
+/// A step of JBIG2 decoding ([`hayro_jbig2::Image::decode_within`]) is about a pixel, and takes 6 to
+/// 16 ns, so this is 2 to 5 minutes, and about as long again for what an operation does with the
+/// pixels. A page scanned at 300 dpi takes about 17 million, 8.4 for its pixels and that again to
+/// decode them, so this alone reads about 1,000 of them. A byte into or out of a filter is a step
+/// too, and takes less: 3 ns at most, or up to 19 ns through a predictor on samples of a bit.
 const IMAGE_WORK: u64 = 1 << 34;
 /// The steps each byte of the file adds to [`IMAGE_WORK`], so that a long scan is read whole: such a
 /// page pays for itself with about 2 KB of the file, about the smallest a page of text is stored
-/// in. So what a hostile file can ask for grows with its length, by about 14 minutes for 10 MB.
+/// in, and a stream of any filter this reads can be decoded about 8 times at Flate's best, 1,032 to
+/// one. So what a hostile file can ask for grows with its length, by about 14 minutes for 10 MB.
 const IMAGE_WORK_PER_BYTE: u64 = 1 << 13;
 
 /// Decoded bytes one page's content walk may produce in all: its `/Contents` streams and every
@@ -30,14 +32,18 @@ type Decoder = fn(&Stream, usize) -> Result<(Vec<u8>, usize), (FilterError, usiz
 /// What one operation over a document's images may still spend decoding them: exporting them,
 /// optimizing them, clearing them for redaction.
 ///
-/// An image has its own limit, which doesn't bound a file of thousands of images made to reach it.
-/// JBIG2 is what such a file would use: a few hundred bytes can ask for seconds of decoding, and an
-/// image that shares `/JBIG2Globals` decodes them again. So those images share this allowance, and
-/// past it they aren't decoded. A caller then treats them as it does an image it can't read, and
+/// An image has its own limit, which doesn't bound a file of thousands of images made to reach it:
+/// a few hundred bytes of JBIG2 can ask for seconds of decoding, 4 KB of Flate inside Flate for a
+/// gigabyte, and an image that shares `/JBIG2Globals` decodes them again. So images share this
+/// allowance, whatever they do with what they decode and whether or not it works, and past it they
+/// aren't decoded. A caller then treats them as it does an image it can't read, and
 /// [`ImageBudget::refused`] says how many there were.
+///
+/// JPEG and JPEG 2000 data aren't charged: their decoders don't run here, and what one asks for
+/// grows with its length, as the allowance does.
 #[derive(Debug)]
 pub struct ImageBudget {
-    jbig2_work: u64,
+    work: u64,
     refused: usize,
 }
 
@@ -48,28 +54,46 @@ impl ImageBudget {
         Self::with_work(IMAGE_WORK.saturating_add(bytes.saturating_mul(IMAGE_WORK_PER_BYTE)))
     }
 
-    /// An allowance of `jbig2_work` steps of JBIG2 decoding.
-    pub fn with_work(jbig2_work: u64) -> Self {
-        Self { jbig2_work, refused: 0 }
+    /// An allowance of `work` steps of decoding.
+    pub fn with_work(work: u64) -> Self {
+        Self { work, refused: 0 }
     }
 
     /// Image `s` decoded like [`Document::decoded_image_within`], charged to the allowance.
     pub fn decode(&mut self, doc: &Document, s: &Stream, max: usize) -> Result<Vec<u8>, CosError> {
-        let decoded = doc.decoded_image_spending(s, max, &mut self.jbig2_work);
-        if decoded.is_err() && self.jbig2_work == 0 && matches!(s.filters().last(), Some((pdfcraft_filters::Filter::Jbig2, _))) {
-            self.refused += 1;
-        }
+        let decoded = doc.decoded_image_spending(s, max, &mut self.work);
+        self.count_refused(s, &decoded);
         decoded
     }
 
-    /// The JBIG2 images refused for lack of allowance.
+    /// Image `s` through its filters alone, charged to the allowance: [`Stream::decoded_within`]
+    /// with its `/DecodeParms` given by reference read too ([`Document::with_direct_parms`]), for an
+    /// image that has no fax or JBIG2 decoder to go through.
+    pub fn decode_filters(&mut self, doc: &Document, s: &Stream, max: usize) -> Result<Vec<u8>, CosError> {
+        let decoded = doc.with_direct_parms(s).decoded_spending(max, &mut self.work);
+        self.count_refused(s, &decoded);
+        decoded
+    }
+
+    /// An image that failed with nothing left was refused, unless it has a filter that costs
+    /// nothing here, which fails whatever is left.
+    fn count_refused(&mut self, s: &Stream, decoded: &Result<Vec<u8>, CosError>) {
+        use pdfcraft_filters::Filter;
+        let charged =
+            s.readable_filters().is_ok_and(|chain| chain.iter().all(|(f, _)| f.is_decodable() || matches!(f, Filter::Jbig2 | Filter::CcittFax)));
+        if decoded.is_err() && self.work == 0 && charged {
+            self.refused += 1;
+        }
+    }
+
+    /// The decodes refused for lack of allowance: an image read twice over is counted twice.
     pub fn refused(&self) -> usize {
         self.refused
     }
 
-    /// The steps of JBIG2 decoding still allowed.
+    /// The steps of decoding still allowed.
     pub fn work_left(&self) -> u64 {
-        self.jbig2_work
+        self.work
     }
 }
 
@@ -216,8 +240,9 @@ mod image_tests {
         Stream::from_raw(dict, pdfcraft_filters::encode_jbig2_generic(&[0xFF; 4], 16, 2).unwrap())
     }
 
-    /// Each JBIG2 image spends what it took from one allowance, and those past it are refused and
-    /// counted. Other images aren't charged, and a failure of theirs isn't counted as one of these.
+    /// Each image spends what it took from one allowance, and those past it are refused and
+    /// counted, whatever their filters. What can't be decoded here costs nothing, and fails
+    /// without being one of these.
     #[test]
     fn the_images_of_an_operation_share_its_allowance() {
         let doc = Document::new_empty();
@@ -236,12 +261,180 @@ mod image_tests {
             assert!(budget.decode(&doc, &image, 1 << 20).is_err());
             assert_eq!(budget.refused(), refused);
         }
-        let flate = Stream::flate(Dict::new(), b"samples");
-        assert_eq!(budget.decode(&doc, &flate, 1 << 20).unwrap(), b"samples", "not JBIG2: no charge");
+        assert!(budget.decode(&doc, &Stream::flate(Dict::new(), b"samples"), 1 << 20).is_err());
+        assert!(budget.decode(&doc, &Stream::from_raw(Dict::new(), b"samples".to_vec()), 1 << 20).is_err());
+        assert_eq!(budget.refused(), 4, "other images share it");
+        for name in ["NoSuchFilter", "DCTDecode", "JPXDecode"] {
+            let mut dict = Dict::new();
+            dict.set(b"Filter".to_vec(), Object::name(name));
+            assert!(budget.decode(&doc, &Stream::from_raw(dict, b"data".to_vec()), 1 << 20).is_err());
+            assert_eq!(budget.refused(), 4, "{name} isn't one of these");
+        }
         let mut dict = Dict::new();
-        dict.set(b"Filter".to_vec(), Object::name("NoSuchFilter"));
+        dict.set(b"Filter".to_vec(), Object::Int(5));
         assert!(budget.decode(&doc, &Stream::from_raw(dict, b"data".to_vec()), 1 << 20).is_err());
-        assert_eq!(budget.refused(), 2, "not JBIG2: not one of these");
+        assert_eq!(budget.refused(), 4, "a /Filter that can't be read isn't either");
+    }
+
+    /// What a file of images each inflating a megabyte asks for: 4 KB of Flate inside Flate can ask
+    /// for a gigabyte, and these aren't JBIG2, so without the allowance nothing would stop them.
+    #[test]
+    fn filter_bombs_stop_at_the_allowance() {
+        let doc = Document::new_empty();
+        let samples = vec![0; 1 << 20];
+        let inner = pdfcraft_filters::encode_flate(&samples);
+        let mut dict = Dict::new();
+        dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("FlateDecode"), Object::name("FlateDecode")]));
+        let bomb = Stream::from_raw(dict, pdfcraft_filters::encode_flate(&inner));
+        let cost = (bomb.raw.len() + inner.len() + samples.len()) as u64;
+        let mut budget = ImageBudget::with_work(2 * cost + 1);
+        for left in [cost + 1, 1] {
+            assert_eq!(budget.decode(&doc, &bomb, 1 << 20).unwrap(), samples);
+            assert_eq!(budget.work_left(), left);
+        }
+        assert!(budget.decode(&doc, &bomb, 1 << 20).is_err());
+        assert_eq!((budget.work_left(), budget.refused()), (0, 1), "the first it can't pay for ends it");
+    }
+
+    /// Filters in front of a JBIG2 decoder pay as they run, on top of what the decoder takes, and
+    /// one that fails has still paid: nothing about the JBIG2 data is known by then, and each image
+    /// of a file can do this.
+    #[test]
+    fn filters_in_front_of_jbig2_pay_whether_or_not_they_work() {
+        let doc = Document::new_empty();
+        let alone = jbig2(None);
+        let mut budget = ImageBudget::with_work(u64::MAX);
+        let samples = budget.decode(&doc, &alone, 1 << 20).unwrap();
+        let decoding = u64::MAX - budget.work_left();
+        let behind = |raw: Vec<u8>| {
+            let mut dict = alone.dict.clone();
+            dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("FlateDecode"), Object::name("JBIG2Decode")]));
+            Stream::from_raw(dict, raw)
+        };
+
+        let image = behind(pdfcraft_filters::encode_flate(&alone.raw));
+        let mut budget = ImageBudget::with_work(u64::MAX);
+        assert_eq!(budget.decode(&doc, &image, 1 << 20).unwrap(), samples);
+        assert_eq!(u64::MAX - budget.work_left(), decoding + (image.raw.len() + alone.raw.len()) as u64);
+
+        // Past this image's limit: an error, with what finding out took paid and the rest left.
+        let bomb = behind(pdfcraft_filters::encode_flate(&vec![0; 1 << 16]));
+        let mut budget = ImageBudget::with_work(u64::MAX);
+        assert!(budget.decode(&doc, &bomb, 1000).is_err());
+        assert_eq!(u64::MAX - budget.work_left(), bomb.raw.len() as u64 + 1000);
+        assert_eq!(budget.refused(), 0, "that image's limit isn't the run's");
+
+        // A small allowance is a limit too: it stops there, and the image is refused.
+        let mut budget = ImageBudget::with_work(bomb.raw.len() as u64 + 10);
+        assert!(budget.decode(&doc, &bomb, 1 << 20).is_err());
+        assert_eq!((budget.work_left(), budget.refused()), (0, 1));
+    }
+
+    /// Globals that are read again for every image pay every time, and fail having paid. Kept
+    /// ones have no filters left to undo, so they pay for being read and nothing more.
+    #[test]
+    fn globals_pay_for_their_filters_each_time_they_are_decoded() {
+        let skipped = [0, 0, 0, 0, 0x3E, 0, 0, 0, 0, 0, 4, 0, 0, 0, 1];
+        let raw = pdfcraft_filters::encode_flate(&skipped);
+        let stream = |doc: &Document, r: ObjRef| match &*doc.get(r) {
+            Object::Stream(s) => s.clone(),
+            _ => panic!("not a stream"),
+        };
+        let spent = |doc: &Document, s: &Stream| {
+            let mut budget = ImageBudget::with_work(u64::MAX);
+            budget.decode(doc, s, 1 << 20).unwrap();
+            u64::MAX - budget.work_left()
+        };
+        let mut doc = Document::new_empty();
+        let mut dict = Dict::new();
+        dict.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+        let globals = doc.add(Object::Stream(Stream::from_raw(dict, raw.clone())));
+        let mut parms = Dict::new();
+        parms.set(b"JBIG2Globals".to_vec(), Object::Ref(globals));
+        let image = doc.add(Object::Stream(jbig2(Some(Object::Dict(parms)))));
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| c.set(b"Image".to_vec(), Object::Ref(image))).unwrap();
+
+        // Added in memory, so not kept: the filters are undone for each read.
+        let s = stream(&doc, image);
+        let first = spent(&doc, &s);
+        assert_eq!(spent(&doc, &s), first, "not kept, so paid for again");
+
+        // Read from a file, so kept: the second read has no filters to undo.
+        let file = crate::write_full(&doc, &crate::SaveOptions::default()).unwrap();
+        let doc = Document::open(std::sync::Arc::new(file)).unwrap();
+        let image = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Image").unwrap();
+        let s = stream(&doc, image);
+        let filters = (raw.len() + skipped.len()) as u64;
+        assert_eq!(spent(&doc, &s), first, "the first read undoes them");
+        assert_eq!(spent(&doc, &s), first - filters, "kept");
+
+        // Globals that fail pay too, with the image not refused: these go past their own limit.
+        let over = pdfcraft_filters::encode_flate(&vec![0; crate::MAX_JBIG2_GLOBALS + 1]);
+        let mut doc = Document::new_empty();
+        let mut dict = Dict::new();
+        dict.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+        let globals = doc.add(Object::Stream(Stream::from_raw(dict, over.clone())));
+        let mut parms = Dict::new();
+        parms.set(b"JBIG2Globals".to_vec(), Object::Ref(globals));
+        let image = jbig2(Some(Object::Dict(parms)));
+        let mut budget = ImageBudget::with_work(u64::MAX);
+        assert!(budget.decode(&doc, &image, 1 << 20).unwrap_err().to_string().contains("globals"));
+        assert_eq!(u64::MAX - budget.work_left(), (over.len() + crate::MAX_JBIG2_GLOBALS) as u64);
+        assert_eq!(budget.refused(), 0);
+    }
+
+    /// A fax image pays for what comes before its decoder and for the rows it asks for, and past
+    /// the allowance it is refused like any other.
+    #[test]
+    fn fax_images_share_the_allowance() {
+        let doc = Document::new_empty();
+        let (w, h) = (4096u32, 64u32);
+        let coded = pdfcraft_filters::encode_g4(&vec![0xFF; 512 * h as usize], w, h).unwrap();
+        let mut parms = Dict::new();
+        parms.set(b"K".to_vec(), Object::Int(-1));
+        parms.set(b"Columns".to_vec(), Object::Int(i64::from(w)));
+        let mut dict = Dict::new();
+        dict.set(b"Width".to_vec(), Object::Int(i64::from(w)));
+        dict.set(b"Height".to_vec(), Object::Int(i64::from(h)));
+        dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("FlateDecode"), Object::name("CCITTFaxDecode")]));
+        dict.set(b"DecodeParms".to_vec(), Object::Array(vec![Object::Null, Object::Dict(parms)]));
+        let image = Stream::from_raw(dict, pdfcraft_filters::encode_flate(&coded));
+        let cost = (image.raw.len() + coded.len() + 4 * coded.len() + 512 * h as usize) as u64;
+        let mut budget = ImageBudget::with_work(cost);
+        assert_eq!(budget.decode(&doc, &image, 1 << 20).unwrap().len(), 512 * h as usize);
+        assert_eq!(budget.work_left(), 0, "exactly that");
+        assert!(budget.decode(&doc, &image, 1 << 20).is_err());
+        assert_eq!(budget.refused(), 1);
+    }
+
+    /// An image read through its filters alone reads parameters given by reference, is charged, and
+    /// is refused like the others. It isn't given to a decoder.
+    #[test]
+    fn filters_alone_are_charged_too() {
+        let mut doc = Document::new_empty();
+        let p = pdfcraft_filters::Params { predictor: 12, columns: 4, ..pdfcraft_filters::Params::default() };
+        let rows = vec![7u8; 400];
+        let mut parms = Dict::new();
+        parms.set(b"Predictor".to_vec(), Object::Int(12));
+        parms.set(b"Columns".to_vec(), Object::Int(4));
+        let parms = doc.add(Object::Dict(parms));
+        let mut dict = Dict::new();
+        dict.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+        dict.set(b"DecodeParms".to_vec(), Object::Ref(parms));
+        let raw = pdfcraft_filters::encode(&pdfcraft_filters::Filter::Flate, &p, &rows).unwrap();
+        let image = Stream::from_raw(dict, raw);
+        let mut budget = ImageBudget::with_work(u64::MAX);
+        assert_eq!(budget.decode_filters(&doc, &image, 1 << 20).unwrap(), rows);
+        let cost = u64::MAX - budget.work_left();
+        // The tag byte of each of its 100 rows counts, which the predictor takes off.
+        assert_eq!(cost, (image.raw.len() + rows.len() + 100) as u64);
+        let mut budget = ImageBudget::with_work(cost - 1);
+        assert!(budget.decode_filters(&doc, &image, 1 << 20).is_err());
+        assert_eq!((budget.work_left(), budget.refused()), (0, 1));
+        let mut budget = ImageBudget::with_work(u64::MAX);
+        assert!(budget.decode_filters(&doc, &jbig2(None), 1 << 20).is_err());
+        assert_eq!(budget.work_left(), u64::MAX, "no decoder here, so nothing was read");
     }
 
     /// The images of a file share its globals, so an image refused doesn't read them: this one's
@@ -258,7 +451,7 @@ mod image_tests {
         let read = ImageBudget::with_work(u64::MAX).decode(&doc, &image, 1 << 20).unwrap_err().to_string();
         assert!(read.contains("globals"), "{read}");
         let refused = ImageBudget::with_work(0).decode(&doc, &image, 1 << 20).unwrap_err().to_string();
-        assert!(refused.contains("more JBIG2 decoding than"), "{refused}");
+        assert!(refused.contains("more image decoding than"), "{refused}");
     }
 
     /// A longer file gets more, by its length, and an empty one the fixed part.
@@ -276,6 +469,8 @@ mod image_tests {
     const PAGE: u64 = 17_000_000;
     const _: () = assert!(IMAGE_WORK >= 1_000 * PAGE);
     const _: () = assert!(IMAGE_WORK_PER_BYTE * 2_100 >= PAGE);
+    // And that a stream can be decoded about 8 times at Flate's best, 1,032 to one, and the byte in.
+    const _: () = assert!(IMAGE_WORK_PER_BYTE >= 7 * 1_033);
 }
 
 #[cfg(test)]

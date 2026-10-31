@@ -2264,7 +2264,7 @@ fn jbig2_images_past_the_exports_allowance_are_left_out_with_the_reason() {
     let export = crate::extract::extract_images_within(&doc, &[0], 1, &mut ImageBudget::with_work(cost), usize::MAX);
     assert_eq!(export.images.len(), 1);
     assert_eq!(export.skipped.len(), 1);
-    assert!(export.skipped[0].2.contains("more JBIG2 decoding than"), "{:?}", export.skipped);
+    assert!(export.skipped[0].2.contains("more image decoding than"), "{:?}", export.skipped);
     // What an export holds is bounded too: the files are all in memory until it ends.
     let export = crate::extract::extract_images_within(&doc, &[0], 1, &mut ImageBudget::with_work(u64::MAX), 1);
     assert_eq!(export.images.len(), 1, "the first goes past it");
@@ -2274,6 +2274,42 @@ fn jbig2_images_past_the_exports_allowance_are_left_out_with_the_reason() {
     let mut budget = ImageBudget::with_work(cost);
     assert!(crate::extract::image_file_within(&doc, a, &mut budget).is_ok());
     assert!(crate::extract::image_file_within(&doc, b, &mut budget).is_err());
+}
+
+/// An image that isn't JBIG2 shares the allowance too: a file of filter bombs would hold an export
+/// as long as one of JBIG2. What isn't decoded here, a JPEG, is still exported.
+#[test]
+fn flate_images_past_the_exports_allowance_are_left_out_with_the_reason() {
+    use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
+    let image = |filter: &str, raw: Vec<u8>| {
+        let mut dict = Dict::new();
+        dict.set(b"Subtype".to_vec(), Object::name("Image"));
+        dict.set(b"Width".to_vec(), Object::Int(2));
+        dict.set(b"Height".to_vec(), Object::Int(2));
+        dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        dict.set(b"Filter".to_vec(), Object::name(filter));
+        Stream::from_raw(dict, raw)
+    };
+    let flate = image("FlateDecode", pdfcraft_filters::encode_flate(&[0x80; 4]));
+    let mut cost = ImageBudget::with_work(u64::MAX);
+    cost.decode(&Document::new_empty(), &flate, 1 << 20).unwrap();
+    let cost = u64::MAX - cost.work_left();
+
+    let mut doc = Document::new_empty();
+    let (a, b) = (doc.add(Object::Stream(flate.clone())), doc.add(Object::Stream(flate)));
+    let mut budget = ImageBudget::with_work(cost);
+    assert!(crate::extract::image_file_within(&doc, a, &mut budget).is_ok());
+    let refused = crate::extract::image_file_within(&doc, b, &mut budget).unwrap_err();
+    assert!(refused.contains("more image decoding than"), "{refused}");
+    assert_eq!(budget.refused(), 1);
+
+    let jpeg = image::RgbImage::from_pixel(2, 2, image::Rgb([9, 9, 9]));
+    let mut bytes = Vec::new();
+    jpeg.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Jpeg).unwrap();
+    let jpeg = doc.add(Object::Stream(image("DCTDecode", bytes)));
+    assert!(crate::extract::image_file_within(&doc, jpeg, &mut budget).is_ok(), "nothing charged");
+    assert_eq!(budget.refused(), 1);
 }
 
 /// A mask past the allowance can't be left out as an unreadable one is, or the image comes out
@@ -2290,17 +2326,21 @@ fn an_image_whose_jbig2_mask_is_past_the_allowance_is_left_out() {
     mask.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
     let mut doc = Document::new_empty();
     let mask = doc.add(Object::Stream(Stream::from_raw(mask, pdfcraft_filters::encode_jbig2_generic(&[0xFF; 4], 16, 2).unwrap())));
+    // A JPEG, which nothing charges, so only its mask can be what stops it.
+    let mut jpeg = Vec::new();
+    image::RgbImage::from_pixel(1, 1, image::Rgb([9, 9, 9])).write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
     let mut image = Dict::new();
     image.set(b"Subtype".to_vec(), Object::name("Image"));
     image.set(b"Width".to_vec(), Object::Int(1));
     image.set(b"Height".to_vec(), Object::Int(1));
     image.set(b"BitsPerComponent".to_vec(), Object::Int(8));
-    image.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    image.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+    image.set(b"Filter".to_vec(), Object::name("DCTDecode"));
     image.set(b"SMask".to_vec(), Object::Ref(mask));
-    let image = doc.add(Object::Stream(Stream::from_raw(image, vec![0x80])));
+    let image = doc.add(Object::Stream(Stream::from_raw(image, jpeg)));
     assert!(crate::extract::image_file_within(&doc, image, &mut ImageBudget::with_work(u64::MAX)).is_ok());
     let refused = crate::extract::image_file_within(&doc, image, &mut ImageBudget::with_work(0)).unwrap_err();
-    assert!(refused.contains("more JBIG2 decoding than"), "{refused}");
+    assert!(refused.contains("more image decoding than"), "{refused}");
 }
 
 /// A large honest file keeps its images: what an export may hold grows with the file past the fixed

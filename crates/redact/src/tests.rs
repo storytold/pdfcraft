@@ -780,6 +780,28 @@ fn a_jbig2_image_past_the_runs_allowance_stops_the_run() {
     assert!(crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(u64::MAX)).is_ok());
 }
 
+/// A Flate image past the run's allowance stops the run as a JBIG2 image does: removed whole, it
+/// would take what no mark covers with it, unreported. A JPEG, which clearing doesn't read, is
+/// removed whole as it always was, and spends nothing.
+#[test]
+fn a_flate_image_past_the_runs_allowance_stops_the_run() {
+    let dict = "/Type /XObject /Subtype /Image /Width 2 /Height 2 /BitsPerComponent 8 /ColorSpace /DeviceGray /Filter /FlateDecode";
+    let page = || one_page(b"q 160 0 0 20 0 0 cm /Im Do Q", "/XObject << /Im 7 0 R >>", vec![stream(dict, pdfcraft_filters::encode_flate(&[9; 4]))]);
+    let mut doc = page();
+    mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
+    let refused = crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(0));
+    assert!(matches!(refused, Err(crate::RedactError::ImagesPastAllowance)), "{refused:?}");
+    let mut doc = page();
+    mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
+    assert!(crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(u64::MAX)).is_ok());
+
+    let dict = "/Type /XObject /Subtype /Image /Width 2 /Height 2 /BitsPerComponent 8 /ColorSpace /DeviceGray /Filter /DCTDecode";
+    let mut doc = one_page(b"q 160 0 0 20 0 0 cm /Im Do Q", "/XObject << /Im 7 0 R >>", vec![stream(dict, b"not read")]);
+    mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
+    let report = crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(0)).unwrap();
+    assert_eq!(report.images_removed, 1);
+}
+
 /// A JBIG2 image (a scan the optimizer stored as JBIG2) has its covered pixels cleared in a copy,
 /// like a fax image, instead of being removed whole: with `/JBIG2Globals`, its `/DecodeParms` by
 /// reference, behind another filter with its globals at its own place, or as a mask, its decode

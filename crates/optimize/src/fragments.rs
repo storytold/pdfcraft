@@ -18,7 +18,7 @@
 //! drops them.
 
 use pdfcraft_content::{Matrix, Op, parse, serialize_ops};
-use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, Stream};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, ImageBudget, ObjRef, Object, Stream};
 
 use crate::images::{components, content_bytes, decodable, page_resources, pixels, resample};
 use crate::{OptimizeError, Report, Stage};
@@ -152,7 +152,7 @@ fn run_end(ops: &[Op], i: usize, count: usize) -> usize {
 }
 
 /// The run's pixels as one image, top row first: `(pixels, width, height)`.
-fn merge(doc: &Document, run: &[Fragment], n: usize) -> Option<(Vec<u8>, u32, u32)> {
+fn merge(doc: &Document, run: &[Fragment], n: usize, budget: &mut ImageBudget) -> Option<(Vec<u8>, u32, u32)> {
     let (top, bottom) = (run.first()?.rect[3], run.last()?.rect[1]);
     let width = run.iter().map(|f| f.width).max()?;
     // Pixel rows per unit of height: the finest fragment's.
@@ -176,7 +176,7 @@ fn merge(doc: &Document, run: &[Fragment], n: usize) -> Option<(Vec<u8>, u32, u3
         }
         let obj = doc.get(f.image);
         let Object::Stream(s) = &*obj else { return None };
-        let px = pixels(doc, s, n)?;
+        let px = pixels(doc, s, n, budget)?;
         let px = if (f.width, f.height) == (width, r1 - r0) { px } else { resample(&px, n, f.width, f.height, width, r1 - r0)? };
         out.get_mut(r0 as usize * row..r1 as usize * row)?.copy_from_slice(px.get(..(r1 - r0) as usize * row)?);
     }
@@ -230,7 +230,13 @@ fn add_xobject(doc: &mut Document, page: ObjRef, name: &[u8], image: ObjRef) -> 
 }
 
 /// Merge the fragment runs of one page; returns how many fragments were merged.
-fn merge_page(doc: &mut Document, page: ObjRef, report: &mut Report, progress: &mut dyn FnMut(Stage) -> bool) -> Result<usize, OptimizeError> {
+fn merge_page(
+    doc: &mut Document,
+    page: ObjRef,
+    report: &mut Report,
+    progress: &mut dyn FnMut(Stage) -> bool,
+    images: &mut ImageBudget,
+) -> Result<usize, OptimizeError> {
     let Some(contents) = doc.get(page).as_dict().and_then(|d| d.get(b"Contents").cloned()) else { return Ok(0) };
     // A page whose content isn't all known is left alone: rewriting it would drop the rest.
     let Some(data) = content_bytes(doc, &contents, &mut DecodeBudget::page()) else { return Ok(0) };
@@ -286,7 +292,7 @@ fn merge_page(doc: &mut Document, page: ObjRef, report: &mut Report, progress: &
         if !progress(Stage::Fragments) {
             return Err(OptimizeError::Cancelled);
         }
-        let Some((px, w, h)) = merge(doc, &run, n) else {
+        let Some((px, w, h)) = merge(doc, &run, n, images) else {
             out.extend(ops.get(i..j).unwrap_or_default().iter().cloned());
             i = j;
             continue;
@@ -320,9 +326,15 @@ fn merge_page(doc: &mut Document, page: ObjRef, report: &mut Report, progress: &
     Ok(merged)
 }
 
-pub(crate) fn run(doc: &mut Document, pages: &[ObjRef], report: &mut Report, progress: &mut dyn FnMut(Stage) -> bool) -> Result<(), OptimizeError> {
+pub(crate) fn run(
+    doc: &mut Document,
+    pages: &[ObjRef],
+    report: &mut Report,
+    progress: &mut dyn FnMut(Stage) -> bool,
+    budget: &mut ImageBudget,
+) -> Result<(), OptimizeError> {
     for p in pages {
-        report.fragments_merged += merge_page(doc, *p, report, progress)?;
+        report.fragments_merged += merge_page(doc, *p, report, progress, budget)?;
     }
     Ok(())
 }
@@ -343,7 +355,42 @@ mod tests {
             Fragment { image, rect: [0.0, edge, 1.0, 1.0], width: 1 << 16, height: 1 },
             Fragment { image, rect: [0.0, 0.0, 1.0, edge], width: 1 << 16, height: 1 },
         ];
-        assert!(merge(&Document::new_empty(), &run, 3).is_none());
+        assert!(merge(&Document::new_empty(), &run, 3, &mut ImageBudget::with_work(u64::MAX)).is_none());
+    }
+
+    /// Merging reads the images the pass after it reads, from the same allowance: with nothing
+    /// left the strips stay as they are, and the image that couldn't be read is counted.
+    #[test]
+    fn merging_spends_the_runs_allowance() {
+        let mut doc = Document::new_empty();
+        let mut image = Dict::new();
+        for (k, v) in
+            [("Subtype", Object::name("Image")), ("Width", Object::Int(8)), ("Height", Object::Int(1)), ("BitsPerComponent", Object::Int(8))]
+        {
+            image.set(k.as_bytes().to_vec(), v);
+        }
+        image.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        let mut xobjects = Dict::new();
+        let mut drawn = String::new();
+        for row in 0..8 {
+            let r = doc.add(Object::Stream(Stream::flate(image.clone(), &[row * 30; 8])));
+            xobjects.set(format!("I{row}").into_bytes(), Object::Ref(r));
+            drawn.push_str(&format!("q 80 0 0 10 0 {} cm /I{row} Do Q\n", 70 - 10 * i32::from(row)));
+        }
+        let content = doc.add(Object::Stream(Stream::flate(Dict::new(), drawn.as_bytes())));
+        let mut resources = Dict::new();
+        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        let mut page = Dict::new();
+        page.set(b"Type".to_vec(), Object::name("Page"));
+        page.set(b"Resources".to_vec(), Object::Dict(resources));
+        page.set(b"Contents".to_vec(), Object::Ref(content));
+        let page = doc.add(Object::Dict(page));
+        let mut budget = ImageBudget::with_work(0);
+        assert_eq!(merge_page(&mut doc.clone(), page, &mut Report::default(), &mut |_| true, &mut budget).unwrap(), 0);
+        assert_eq!(budget.refused(), 1);
+        let mut budget = ImageBudget::with_work(u64::MAX);
+        assert_eq!(merge_page(&mut doc, page, &mut Report::default(), &mut |_| true, &mut budget).unwrap(), 8);
+        assert!(budget.work_left() < u64::MAX);
     }
 
     /// Many images drawn on top of each other are not one picture; looking for runs among them reads
@@ -370,7 +417,7 @@ mod tests {
         page.set(b"Resources".to_vec(), Object::Dict(resources));
         let page = doc.add(Object::Dict(page));
         GROUP_READS.with(|c| c.set(0));
-        let merged = merge_page(&mut doc, page, &mut Report::default(), &mut |_| true);
+        let merged = merge_page(&mut doc, page, &mut Report::default(), &mut |_| true, &mut ImageBudget::with_work(u64::MAX));
         assert_eq!(merged.ok(), Some(0));
         let reads = GROUP_READS.with(|c| c.get());
         assert!(reads <= 40 * 4 * groups, "{reads} group reads");

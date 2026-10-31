@@ -298,18 +298,19 @@ impl Document {
         self.decoded_image_spending(s, max, &mut unbounded)
     }
 
-    /// [`Document::decoded_image_within`], a JBIG2 image spending from `work`, what an operation
-    /// may still do across its images ([`ImageBudget`](crate::ImageBudget)). With nothing left a
-    /// JBIG2 image is refused before its globals are read.
+    /// [`Document::decoded_image_within`], spending from `work`, what an operation may still do
+    /// across its images ([`ImageBudget`](crate::ImageBudget)): each filter as it runs, a JBIG2
+    /// image's globals when they have to be read, and the fax or JBIG2 decoder. With nothing left an
+    /// image is refused before anything is read, its globals included.
     pub(crate) fn decoded_image_spending(&self, s: &Stream, max: usize, work: &mut u64) -> Result<Vec<u8>, CosError> {
         let max = max.min(MAX_DECODED);
         let s = &*self.with_direct_parms(s);
         let filter = |e: pdfcraft_filters::FilterError| CosError::Filter(e.to_string());
         let chain = s.readable_filters().map_err(filter)?;
         // The filters before the image codec, such as ASCII85Decode, are undone first.
-        let undo = |before: &[(pdfcraft_filters::Filter, pdfcraft_filters::Params)]| match before {
+        let undo = |before: &[(pdfcraft_filters::Filter, pdfcraft_filters::Params)], work: &mut u64| match before {
             [] => Ok(Cow::Borrowed(&s.raw[..])),
-            _ => pdfcraft_filters::decode_tolerant(before, &s.raw, max).map(|(data, _)| Cow::Owned(data)).map_err(filter),
+            _ => pdfcraft_filters::decode_tolerant_within(before, &s.raw, max, work).map(Cow::Owned).map_err(filter),
         };
         // `/Width` and `/Height` are read as given directly, as every caller reads them first: one
         // given by reference has the image refused there, before it gets here.
@@ -319,11 +320,11 @@ impl Document {
                 return Err(CosError::Filter("a JBIG2 image's /Width or /Height isn't a size".into()));
             };
             // Nothing to read for what can't be decoded: the images of a file share its globals.
-            let globals = if *work == 0 { None } else { self.jbig2_globals(s)? };
-            let data = if *work == 0 { Cow::Borrowed(&[][..]) } else { undo(before)? };
+            let globals = if *work == 0 { None } else { self.jbig2_globals(s, work)? };
+            let data = if *work == 0 { Cow::Borrowed(&[][..]) } else { undo(before, work)? };
             return pdfcraft_filters::decode_jbig2_within(&data, globals.as_deref().map(Vec::as_slice), columns, height, max, work).map_err(filter);
         }
-        let Some(p) = self.fax_params(s) else { return s.decoded_within(max) };
+        let Some(p) = self.fax_params(s) else { return s.decoded_spending(max, work) };
         // As many rows as the image has: a /Rows below /Height would cut the picture short, and
         // rows past /Height aren't drawn.
         let p = pdfcraft_filters::CcittParams { rows: 0, ..p };
@@ -332,8 +333,8 @@ impl Document {
         }
         let stride = usize::try_from(p.columns).unwrap_or(usize::MAX).div_ceil(8).max(1);
         let rows = u32::try_from(max / stride).unwrap_or(u32::MAX).min(height.unwrap_or(0));
-        let data = undo(chain.split_last().map_or(&[][..], |(_, before)| before))?;
-        pdfcraft_filters::decode_ccitt(&data, &p, rows).map_err(filter)
+        let data = undo(chain.split_last().map_or(&[][..], |(_, before)| before), work)?;
+        pdfcraft_filters::decode_ccitt_within(&data, &p, rows, work).map_err(filter)
     }
 
     /// What the `/JBIG2Globals` stream of JBIG2 image `s` (in its last filter's `/DecodeParms`)
@@ -347,8 +348,9 @@ impl Document {
     /// it was read (the same in every clone) and with its `/DecodeParms` direct (by reference they
     /// are another object, which can change while this one doesn't), has its filters undone once a
     /// document and is kept, up to [`JBIG2_GLOBALS_HELD`] in all; others are read each time. That
-    /// saves the filters only: the segments it holds are decoded again for every image.
-    fn jbig2_globals(&self, s: &Stream) -> Result<Option<Arc<Vec<u8>>>, CosError> {
+    /// saves the filters only: the segments it holds are decoded again for every image. Undoing
+    /// the filters spends from `work`, so globals read for every image pay every time.
+    fn jbig2_globals(&self, s: &Stream, work: &mut u64) -> Result<Option<Arc<Vec<u8>>>, CosError> {
         let Some(entry) = self.last_filter_parms(s).get(b"JBIG2Globals").cloned() else { return Ok(None) };
         let held = match entry {
             Object::Ref(r) if !self.overlay.contains_key(&r.num) => Some(r.num),
@@ -360,7 +362,7 @@ impl Document {
         let Object::Stream(g) = &*self.resolve(&entry) else { return Ok(None) };
         let readable = self.with_direct_parms(g);
         let held = held.filter(|_| matches!(readable, Cow::Borrowed(_)));
-        let mut data = readable.decoded_within(MAX_JBIG2_GLOBALS).map_err(|e| {
+        let mut data = readable.decoded_spending(MAX_JBIG2_GLOBALS, work).map_err(|e| {
             let detail = match e {
                 CosError::Filter(detail) => detail,
                 e => e.to_string(),

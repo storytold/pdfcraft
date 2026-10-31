@@ -28,7 +28,7 @@ mod runlength;
 
 use std::borrow::Cow;
 
-pub use ccitt::{CcittParams, MAX_CCITT_COLUMNS, MAX_G4_COLUMNS, decode_ccitt, encode_g4};
+pub use ccitt::{CcittParams, MAX_CCITT_COLUMNS, MAX_G4_COLUMNS, decode_ccitt, decode_ccitt_within, encode_g4};
 pub use jbig2::{MAX_JBIG2_COLUMNS, MAX_JBIG2_PIXELS, decode_jbig2, decode_jbig2_within, encode_jbig2, encode_jbig2_generic};
 
 /// A PDF stream filter, identified by its `/Filter` name.
@@ -91,7 +91,8 @@ impl Filter {
         matches!(self, Filter::Dct | Filter::Jpx | Filter::Jbig2 | Filter::CcittFax)
     }
 
-    fn is_decodable(&self) -> bool {
+    /// True for the general-purpose filters, which a chain can hold ([`decode`]).
+    pub fn is_decodable(&self) -> bool {
         matches!(self, Filter::Flate | Filter::Lzw | Filter::AsciiHex | Filter::Ascii85 | Filter::RunLength)
     }
 }
@@ -143,13 +144,33 @@ impl Failure {
 
 pub(crate) type Step = Result<Vec<u8>, Failure>;
 
+/// What decoding says when a run of images has nothing left to spend on it.
+pub(crate) fn work_spent() -> FilterError {
+    FilterError::Unsupported("more image decoding than one operation may do".into())
+}
+
+/// Takes `steps` from `work`, what a run of images may still cost. What it can't pay for spends
+/// all of it.
+pub(crate) fn pay(work: &mut u64, steps: u64) -> Result<(), FilterError> {
+    match work.checked_sub(steps) {
+        Some(left) => {
+            *work = left;
+            Ok(())
+        }
+        None => {
+            *work = 0;
+            Err(work_spent())
+        }
+    }
+}
+
 /// Decodes `data` through `chain` (first element applied first).
 ///
 /// Image codecs, `Crypt` and unknown filters anywhere in the chain give
 /// [`FilterError::Unsupported`] (callers keep such data encoded), as does a chain longer than
 /// [`MAX_CHAIN`]. `max_output` bounds every intermediate buffer.
 pub fn decode(chain: &[(Filter, Params)], data: &[u8], max_output: usize) -> Result<Vec<u8>, FilterError> {
-    run(chain, data, max_output, true, false).map(|(v, _, _)| v).map_err(|(e, _)| e)
+    run(chain, data, max_output, None, true).map(|(v, _, _)| v).map_err(|(e, _)| e)
 }
 
 /// Like [`decode`] for a caller charging an allowance: `max_output` bounds the bytes all stages
@@ -157,42 +178,83 @@ pub fn decode(chain: &[(Filter, Params)], data: &[u8], max_output: usize) -> Res
 /// bytes, on success and on failure. A stage's output counts even when a later stage or its
 /// predictor shrinks it.
 pub fn decode_counted(chain: &[(Filter, Params)], data: &[u8], max_output: usize) -> Result<(Vec<u8>, usize), (FilterError, usize)> {
-    run(chain, data, max_output, true, true).map(|(v, _, spent)| (v, spent))
+    run(chain, data, max_output, Some(max_output), true).map(|(v, _, spent)| (v, spent))
 }
 
 /// Like [`decode`], but on corrupt data returns what was decoded before the error and
 /// reports `partial = true` (the behaviour viewers expect). The remaining filters of the
 /// chain still run on the partial data. Limit and unsupported errors are still errors.
 pub fn decode_tolerant(chain: &[(Filter, Params)], data: &[u8], max_output: usize) -> Result<(Vec<u8>, bool), FilterError> {
-    run(chain, data, max_output, false, false).map(|(v, partial, _)| (v, partial)).map_err(|(e, _)| e)
+    run(chain, data, max_output, None, false).map(|(v, partial, _)| (v, partial)).map_err(|(e, _)| e)
 }
 
 /// [`decode_tolerant`] bounded and counted as [`decode_counted`] is.
 pub fn decode_tolerant_counted(chain: &[(Filter, Params)], data: &[u8], max_output: usize) -> Result<(Vec<u8>, bool, usize), (FilterError, usize)> {
-    run(chain, data, max_output, false, true)
+    run(chain, data, max_output, Some(max_output), false)
+}
+
+/// [`decode_tolerant`], spending from `work`, what decoding may still cost across a run of images:
+/// a step for each byte of `data`, paid before anything is decoded, and one for each byte a stage
+/// decodes, so a chain that fails, or a stage that goes past `max_output`, has paid for what it did.
+/// No stage decodes past what is left: a chain that `work` can't pay for spends all of it and stops
+/// there, so with nothing left nothing is read. A chain that can't be decoded at all costs nothing,
+/// whatever is left, so what an image's filters are is known from the error.
+///
+/// Unlike [`decode_tolerant`], no filters at all gives `data` itself, within `max_output`.
+pub fn decode_tolerant_within(chain: &[(Filter, Params)], data: &[u8], max_output: usize, work: &mut u64) -> Result<Vec<u8>, FilterError> {
+    decodable(chain)?;
+    pay(work, data.len() as u64)?;
+    if chain.is_empty() {
+        return if data.len() > max_output { Err(FilterError::LimitExceeded(max_output)) } else { Ok(data.to_vec()) };
+    }
+    let left = usize::try_from(*work).unwrap_or(usize::MAX);
+    match run(chain, data, max_output, Some(left), false) {
+        Ok((out, _, decoded)) => pay(work, decoded as u64).map(|()| out),
+        // The stage stopped at the lower of the two, which took as much to find out.
+        Err((FilterError::LimitExceeded(_), decoded)) if left.saturating_sub(decoded) > max_output => {
+            pay(work, (decoded as u64).saturating_add(max_output as u64))?;
+            Err(FilterError::LimitExceeded(max_output))
+        }
+        Err((FilterError::LimitExceeded(_), _)) => {
+            *work = 0;
+            Err(work_spent())
+        }
+        Err((e, decoded)) => pay(work, decoded as u64).and(Err(e)),
+    }
 }
 
 /// Longest filter chain decoded. Real streams use one to three filters; every stage may produce
 /// up to the output limit, so the chain length multiplies the work.
 pub const MAX_CHAIN: usize = 8;
 
-/// The decoded data, whether it is partial and the bytes all stages decoded, or the error and
-/// the bytes decoded before it. `max` bounds each stage, or with `cumulative` all of them
-/// together.
-fn run(chain: &[(Filter, Params)], data: &[u8], max: usize, strict: bool, cumulative: bool) -> Result<(Vec<u8>, bool, usize), (FilterError, usize)> {
+/// Whether a chain is one [`run`] takes, and if not, the error.
+fn decodable(chain: &[(Filter, Params)]) -> Result<(), FilterError> {
     if chain.len() > MAX_CHAIN {
-        return Err((FilterError::Unsupported(format!("a chain of {} filters", chain.len())), 0));
+        return Err(FilterError::Unsupported(format!("a chain of {} filters", chain.len())));
     }
-    if let Some((f, _)) = chain.iter().find(|(f, _)| !f.is_decodable()) {
-        return Err((FilterError::Unsupported(f.name().to_owned()), 0));
+    match chain.iter().find(|(f, _)| !f.is_decodable()) {
+        Some((f, _)) => Err(FilterError::Unsupported(f.name().to_owned())),
+        None => Ok(()),
     }
+}
+
+/// The decoded data, whether it is partial and the bytes all stages decoded, or the error and
+/// the bytes decoded before it. `max` bounds each stage, and `total` all of them together.
+fn run(
+    chain: &[(Filter, Params)],
+    data: &[u8],
+    max: usize,
+    total: Option<usize>,
+    strict: bool,
+) -> Result<(Vec<u8>, bool, usize), (FilterError, usize)> {
+    decodable(chain).map_err(|e| (e, 0))?;
     let mut cur: Cow<[u8]> = Cow::Borrowed(data);
     let mut partial = false;
     let mut spent = 0usize;
     for (filter, params) in chain {
         #[cfg(test)]
         STAGE_BYTES.with(|c| c.set(c.get() + cur.len()));
-        let limit = if cumulative { max.saturating_sub(spent) } else { max };
+        let limit = total.map_or(max, |total| max.min(total.saturating_sub(spent)));
         let (step, work) = decode_one(filter, params, &cur, limit);
         spent = spent.saturating_add(work);
         cur = Cow::Owned(match step {
@@ -428,6 +490,9 @@ mod tests {
         assert_eq!(decode(&chain, &data, max).map(|d| d.len()).ok(), Some(1 << 19));
         assert!(matches!(decode_counted(&chain, &data, max), Err((FilterError::LimitExceeded(m), _)) if m == max));
         assert_eq!(decode_counted(&chain, &data, 2 << 20).map(|(_, spent)| spent).ok(), Some((1 << 20) + (1 << 19)));
+        let tolerant = decode_tolerant_counted(&chain, &data, 2 << 20).map(|(out, partial, spent)| (out.len(), partial, spent));
+        assert_eq!(tolerant.ok(), Some((1 << 19, false, (1 << 20) + (1 << 19))));
+        assert!(matches!(decode_tolerant_counted(&chain, &data, max), Err((FilterError::LimitExceeded(m), _)) if m == max));
     }
 
     /// A PNG predictor drops a tag byte per row, but Flate produced it: the count includes it,
@@ -445,5 +510,124 @@ mod tests {
         let (e, spent) = decode_counted(&chain, &encode_flate(&bad), usize::MAX).unwrap_err();
         assert!(matches!(e, FilterError::Corrupt { .. }), "{e}");
         assert_eq!(spent, bad.len());
+    }
+
+    fn refused(e: &FilterError) -> bool {
+        e.to_string() == work_spent().to_string()
+    }
+
+    /// A chain pays for what it reads and what each stage decodes, down to the byte: Flate inflates
+    /// hex that ASCIIHex halves, so a stage counts when a later one shrinks it.
+    #[test]
+    fn a_chain_spends_down_to_the_byte() {
+        let hex = b"ab".repeat(1 << 10);
+        let data = encode_flate(&hex);
+        let chain = [(Filter::Flate, Params::default()), (Filter::AsciiHex, Params::default())];
+        let whole = decode(&chain, &data, 1 << 20).unwrap();
+        let cost = (data.len() + hex.len() + whole.len()) as u64;
+        let mut work = u64::MAX;
+        assert_eq!(decode_tolerant_within(&chain, &data, 1 << 20, &mut work).unwrap(), whole);
+        assert_eq!(u64::MAX - work, cost);
+        let mut work = cost;
+        assert_eq!(decode_tolerant_within(&chain, &data, 1 << 20, &mut work).unwrap(), whole, "exactly enough");
+        assert_eq!(work, 0);
+        let mut work = cost + 7;
+        decode_tolerant_within(&chain, &data, 1 << 20, &mut work).unwrap();
+        assert_eq!(work, 7, "only what it took");
+        let mut work = cost - 1;
+        assert!(refused(&decode_tolerant_within(&chain, &data, 1 << 20, &mut work).unwrap_err()), "a step short");
+        assert_eq!(work, 0, "spends all that was left");
+        // Each stage has `max_output` to itself, as in a plain decode: together they are past it.
+        let mut work = u64::MAX;
+        assert_eq!(decode_tolerant_within(&chain, &data, hex.len(), &mut work).unwrap(), whole);
+    }
+
+    /// No stage runs past what is left: the first stage of this bomb stops there, so the second
+    /// isn't given anything to read, and with too little to read it nothing runs at all.
+    #[test]
+    fn a_chain_stops_at_what_is_left() {
+        let inner = encode_flate(&vec![0; 1 << 20]);
+        let bomb = encode_flate(&inner);
+        let chain = [(Filter::Flate, Params::default()), (Filter::Flate, Params::default())];
+        let read = |work: u64| {
+            super::STAGE_BYTES.with(|c| c.set(0));
+            let mut work = work;
+            assert!(refused(&decode_tolerant_within(&chain, &bomb, usize::MAX, &mut work).unwrap_err()));
+            assert_eq!(work, 0);
+            super::STAGE_BYTES.with(|c| c.get())
+        };
+        assert_eq!(read((bomb.len() + inner.len()) as u64 + 10), bomb.len() + inner.len(), "the second stage stops");
+        assert_eq!(read(bomb.len() as u64 + 10), bomb.len(), "the first stops, and the second never runs");
+        assert_eq!(read(bomb.len() as u64 - 1), 0, "it can't pay to be read");
+    }
+
+    /// Past `max_output` the chain has failed, and hasn't run out of anything: it pays what it took
+    /// to find out, and what is left stays. Whichever limit a stage stops at is the one reported.
+    #[test]
+    fn a_stage_past_its_limit_pays_for_finding_out() {
+        let data = encode_flate(&vec![0; 1 << 16]);
+        let chain = [(Filter::Flate, Params::default())];
+        let mut work = u64::MAX;
+        assert!(matches!(decode_tolerant_within(&chain, &data, 1000, &mut work), Err(FilterError::LimitExceeded(1000))));
+        assert_eq!(u64::MAX - work, data.len() as u64 + 1000);
+        // The later stage of two, which pays for the first as well.
+        let bomb = encode_flate(&data);
+        let two = [(Filter::Flate, Params::default()), (Filter::Flate, Params::default())];
+        let mut work = u64::MAX;
+        assert!(matches!(decode_tolerant_within(&two, &bomb, data.len(), &mut work), Err(FilterError::LimitExceeded(_))));
+        assert_eq!(u64::MAX - work, (bomb.len() + 2 * data.len()) as u64);
+        // Both limits at once: a run that can't go on is what a caller needs to hear.
+        let mut work = data.len() as u64 + 1000;
+        assert!(refused(&decode_tolerant_within(&chain, &data, 1000, &mut work).unwrap_err()));
+        assert_eq!(work, 0);
+        let mut work = data.len() as u64 + 1001;
+        assert!(matches!(decode_tolerant_within(&chain, &data, 1000, &mut work), Err(FilterError::LimitExceeded(1000))));
+        assert_eq!(work, 1, "the image's limit, with a step to spare");
+    }
+
+    /// What a damaged stream decoded is paid for, however the decode ends.
+    #[test]
+    fn a_chain_that_fails_has_paid_for_what_it_did() {
+        let data: Vec<u8> = (0..20_000u32).map(|i| (i % 97) as u8 ^ (i / 300) as u8).collect();
+        let mut cut = encode_flate(&data);
+        cut.truncate(cut.len() / 2);
+        let chain = [(Filter::Flate, Params::default())];
+        let (partial, _) = decode_tolerant(&chain, &cut, 1 << 20).unwrap();
+        assert!(!partial.is_empty());
+        let mut work = u64::MAX;
+        assert_eq!(decode_tolerant_within(&chain, &cut, 1 << 20, &mut work).unwrap(), partial);
+        assert_eq!(u64::MAX - work, (cut.len() + partial.len()) as u64);
+        // A predictor that comes to nothing, after all of this was inflated for it.
+        let p = Params { predictor: 99, ..Params::default() };
+        let data = encode_flate(&vec![0; 1 << 16]);
+        let mut work = u64::MAX;
+        assert!(decode_tolerant_within(&[(Filter::Flate, p)], &data, 1 << 20, &mut work).unwrap().is_empty());
+        assert_eq!(u64::MAX - work, data.len() as u64 + (1 << 16));
+    }
+
+    /// With nothing left nothing is read. What can't be decoded at all never costs anything, and
+    /// says so whatever is left. Without filters, what is read is the data.
+    #[test]
+    fn what_a_chain_is_shows_whatever_is_left() {
+        let flate = [(Filter::Flate, Params::default())];
+        let mut work = 0;
+        assert!(refused(&decode_tolerant_within(&flate, b"garbage", 1 << 20, &mut work).unwrap_err()));
+        let long = vec![(Filter::Flate, Params::default()); MAX_CHAIN + 1];
+        for chain in [vec![(Filter::Dct, Params::default())], vec![(Filter::Jbig2, Params::default())], long] {
+            for left in [0, 100] {
+                let mut work = left;
+                let e = decode_tolerant_within(&chain, b"data", 1 << 20, &mut work).unwrap_err();
+                assert!(matches!(e, FilterError::Unsupported(_)) && !refused(&e), "{e}");
+                assert_eq!(work, left);
+            }
+        }
+        let mut work = 100;
+        assert_eq!(decode_tolerant_within(&[], b"data", 4, &mut work).unwrap(), b"data");
+        assert_eq!(work, 96);
+        assert!(matches!(decode_tolerant_within(&[], b"data", 3, &mut work), Err(FilterError::LimitExceeded(3))));
+        assert_eq!(work, 92);
+        let mut work = 3;
+        assert!(refused(&decode_tolerant_within(&[], b"data", 4, &mut work).unwrap_err()));
+        assert_eq!(work, 0);
     }
 }

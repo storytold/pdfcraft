@@ -38,11 +38,10 @@ pub fn decode_jbig2_within(data: &[u8], globals: Option<&[u8]>, columns: u32, ro
     if rows == 0 {
         return Ok(Vec::new());
     }
-    let spent = || FilterError::Unsupported("more JBIG2 decoding than one operation may do".into());
     if *work == 0 {
-        return Err(spent());
+        return Err(crate::work_spent());
     }
-    hayro_jbig2::charge_reading(work, data.len().saturating_add(globals.map_or(0, <[u8]>::len))).map_err(|_| spent())?;
+    hayro_jbig2::charge_reading(work, data.len().saturating_add(globals.map_or(0, <[u8]>::len))).map_err(|_| crate::work_spent())?;
     let corrupt = |detail: String| FilterError::Corrupt { filter: "JBIG2Decode", detail };
     let image = hayro_jbig2::Image::new_embedded(data, globals).map_err(|e| corrupt(e.to_string()))?;
     let (width, height) = (image.width(), image.height());
@@ -59,7 +58,7 @@ pub fn decode_jbig2_within(data: &[u8], globals: Option<&[u8]>, columns: u32, ro
     }
     let mut out = Rows::new(width, height, false);
     // Stopped by what was left, it isn't a damaged image, whatever the decoder calls it.
-    image.decode_within(&mut out, work).map_err(|e| if *work == 0 { spent() } else { corrupt(e.to_string()) })?;
+    image.decode_within(&mut out, work).map_err(|e| if *work == 0 { crate::work_spent() } else { corrupt(e.to_string()) })?;
     Ok(out.out)
 }
 

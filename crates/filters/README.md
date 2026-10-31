@@ -21,6 +21,7 @@ decode(chain, data, max_output) -> Result<Vec<u8>, FilterError>
 decode_counted(chain, data, max_output) -> Result<(Vec<u8>, usize /*decoded*/), (FilterError, usize /*decoded*/)>
 decode_tolerant(chain, data, max_output) -> Result<(Vec<u8>, bool /*partial*/), FilterError>
 decode_tolerant_counted(chain, data, max_output) -> Result<(Vec<u8>, bool /*partial*/, usize /*decoded*/), (FilterError, usize /*decoded*/)>
+decode_tolerant_within(chain, data, max_output, work: &mut u64) -> Result<Vec<u8>, FilterError>
 encode(filter, params, data) -> Result<Vec<u8>, FilterError>
 encode_flate(data) -> Vec<u8>   // zlib, level 6
 encode_g4(data, columns, rows) -> Result<Vec<u8>, FilterError>   // 1-bit rows as CCITT Group 4; columns <= MAX_G4_COLUMNS
@@ -35,6 +36,7 @@ encode_jbig2(data, columns, rows) -> Result<Vec<u8>, FilterError>   // 1-bit row
 - Image codecs (DCT, JPX, JBIG2, CCITT), `Crypt` and unknown filters anywhere in a chain give `Unsupported`: callers keep such data encoded. So does a chain longer than `MAX_CHAIN` (8) filters, before any stage runs. Decryption belongs to `crypt`.
 - `max_output` bounds every intermediate buffer (including the pre-predictor buffer) and gives `LimitExceeded(max_output)`. This also holds when Flate retries raw deflate after a misleading zlib header, in both strict and tolerant decoding.
 - `decode_counted` and `decode_tolerant_counted` are for a caller charging a budget (`pdfcraft_cos::DecodeBudget`). `max_output` bounds all stages together (each stage gets what the earlier ones left), and they give the bytes every stage that ran decoded, on success and on failure. A stage's output counts as its decoder produced it, before a predictor or a later stage shrinks it, and a failed decode pays for what it decoded first.
+- `decode_tolerant_within` is for a run of images (`pdfcraft_cos::ImageBudget`), as `decode_jbig2_within` and `decode_ccitt_within` are, all three spending from one `work`, in the JBIG2 decoder's steps. `max_output` bounds each stage, as in `decode_tolerant`, and no stage decodes past what `work` has left. It pays a step a byte of `data` first and a step a byte each stage decodes, so a chain that fails has paid for what it did: 0.2 to 3 ns a byte in or out, up to 19 ns through a predictor on samples of a bit, against the 6 to 16 ns of a JBIG2 step. What `work` can't pay for spends all of it, and gives `Unsupported`; with nothing left nothing is read. A chain that can't be decoded at all costs nothing and gives its usual error.
 - `decode_tolerant` turns `Corrupt` into "what was decoded so far" plus `partial = true`, then runs the rest of the chain on it (predictors are applied to partial output too). `LimitExceeded` and `Unsupported` are still errors.
 
 ## Behaviour
