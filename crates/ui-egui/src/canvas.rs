@@ -1740,10 +1740,12 @@ fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_
             }
         }
     } else {
-        // Read-only widgets look disabled, over their own appearance and under the page's
-        // form overlays; viewer chrome only, never written to the document, printed or exported.
-        paint_read_only_wash(painter, &xf, info, form.as_slice(), i, read_only_wash);
         crate::forms_ui::paint_page(painter, &xf, i, info, form, view, pointer);
+        // Read-only widgets look disabled, over their own appearance and over the preview of a
+        // field that hasn't been rendered again yet (a radio group's preview covers its locked
+        // buttons too); the focus ring and hover outline are drawn outside the widget, so they
+        // stay visible. Viewer chrome only, never written to the document, printed or exported.
+        paint_read_only_wash(painter, &xf, info, form.as_slice(), i, read_only_wash);
     }
 
     // Form-field highlight (Acrobat's "Highlight existing fields"); required fields get a
@@ -1839,8 +1841,10 @@ fn read_only_wash(colours: Option<([u8; 3], [u8; 3])>) -> Color32 {
 /// fields a form locks look disabled whether field highlighting is on or off. A widget is
 /// read-only when its field is (`/Ff` bit 1) or, for a radio group's button, on its own
 /// (`FormWidget::read_only`), as a click reads it (`forms_ui::page_input`). Round widgets get a
-/// round wash, as their highlight is round.
+/// round wash, as their highlight is round. The wash stays on the page: a widget reaching past
+/// the crop box is washed only where the page shows it.
 fn paint_read_only_wash(painter: &egui::Painter, xf: &PageXform, info: &DocInfo, form: &[pdfcraft_engine::FormField], page: usize, wash: Color32) {
+    let painter = painter.with_clip_rect(xf.rect);
     let locked = form.iter().flat_map(|f| f.widgets.iter().map(move |w| (f.read_only(), w)));
     for widget in locked.filter(|(field, w)| w.page == Some(page) && !w.hidden && (*field || w.read_only)).map(|(_, w)| w) {
         let rect = widget.rect;
