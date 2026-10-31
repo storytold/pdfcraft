@@ -23,7 +23,8 @@ impl Automation {
 
     fn pdfa_level(&self, a: &Args) -> Result<pdfcraft_engine::pdfa::Level> {
         let l = a.opt_str("level")?.unwrap_or("2b");
-        pdfcraft_engine::pdfa::Level::from_id(l).ok_or_else(|| ToolError::InvalidArgs(format!("unknown PDF/A level {l:?} (2b or 3b)")))
+        pdfcraft_engine::pdfa::Level::from_id(l)
+            .ok_or_else(|| ToolError::InvalidArgs(format!("unknown PDF/A level {l:?} (2b, 2u, 2a, 3b, 3u or 3a)")))
     }
 
     pub(crate) fn pdfa_verify(&self, a: &Args) -> Result<Value> {
@@ -96,8 +97,12 @@ impl Automation {
     pub(crate) fn pdfa_convert(&mut self, a: &Args) -> Result<Value> {
         let level = self.pdfa_level(a)?;
         let id = self.doc(a)?.id;
-        self.session.apply(id, pdfcraft_engine::Edit::ConvertPdfA { level }).map_err(failed)?;
-        self.pdfa_verify(a)
+        let condition = self.output_condition(a)?;
+        let mut out = self.conversion(id, pdfcraft_engine::Edit::ConvertPdfA { level, condition })?;
+        if let (Some(out), Value::Object(v)) = (out.as_object_mut(), self.pdfa_verify(a)?) {
+            out.extend(v);
+        }
+        Ok(out)
     }
 
     pub(crate) fn action_list(&self) -> Result<Value> {

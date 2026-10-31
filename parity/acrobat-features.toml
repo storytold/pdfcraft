@@ -7888,8 +7888,8 @@ milestone = "M11"
 status = "partial"
 commands = ["standards.pdfa"]
 tools = ["pdfa_verify"]
-evidence = ["crates/preflight/src/tests.rs::verify_reports_what_breaks_pdfa", "crates/preflight/src/tests.rs::standards_identification_uses_namespace_not_prefix", "crates/preflight/src/tests.rs::convert_fixes_all_but_fonts", "crates/preflight/src/tests.rs::verify_reports_an_output_intent_that_does_not_match_device_colour", "crates/automation/tests/it/automation.rs::pdfa_through_tools", "crates/ui-egui/tests/it/compare.rs::pdfa_dialog_verifies_and_converts"]
-notes = "PDF/A-2b/3b structural rules: identification, encryption, output intent (present, and RGB/CMYK to match DeviceRGB/DeviceCMYK use), fonts embedded, annotations, actions, images, embedded files. Not yet: content-stream operator checks, transparency details, PDF/A-1 and -4, a veraPDF comparison."
+evidence = ["crates/preflight/src/tests.rs::verify_reports_what_breaks_pdfa", "crates/preflight/src/tests.rs::standards_identification_uses_namespace_not_prefix", "crates/preflight/src/tests.rs::convert_fixes_all_but_fonts", "crates/preflight/src/tests.rs::verify_reports_an_output_intent_that_does_not_match_device_colour", "crates/automation/tests/it/automation.rs::pdfa_through_tools", "crates/ui-egui/tests/it/compare.rs::pdfa_dialog_verifies_and_converts", "crates/preflight/src/tests.rs::output_intents_share_one_profile"]
+notes = "PDF/A-2 and -3 structural rules: identification (the conformance letter of level b, u or a), encryption, output intent (present, RGB/CMYK to match DeviceRGB/DeviceCMYK use, and intents with profiles sharing one, 6.2.3), fonts embedded, annotations, actions, images, embedded files; levels u and a add the rules in optimize.pdfa-accessible-levels. Not yet: content-stream operator checks, transparency details, PDF/A-1 and -4, a veraPDF comparison."
 
 [[feature]]
 id = "optimize.pdfa-convert"
@@ -7900,8 +7900,8 @@ milestone = "M11"
 status = "partial"
 commands = ["standards.pdfa"]
 tools = ["pdfa_convert"]
-evidence = ["crates/preflight/src/tests.rs::convert_fixes_all_but_fonts", "crates/preflight/src/tests.rs::convert_does_not_give_cmyk_documents_an_srgb_output_intent", "crates/automation/tests/it/automation.rs::pdfa_through_tools", "crates/ui-egui/tests/it/compare.rs::pdfa_dialog_verifies_and_converts", "crates/engine/src/tests.rs::convert_to_pdfa_needs_the_owners_rights_on_an_encrypted_document"]
-notes = "Fixes XMP, output intent (generated sRGB ICC profile, only for documents without DeviceCMYK; CMYK documents need a user-chosen CMYK output intent, not yet offered), forbidden actions, annotation flags, interpolation, encryption, AFRelationship. Not yet: embedding fonts, converting device CMYK, flattening transparency for PDF/A-1. On an encrypted document it needs the owner password, as Protect and Remove security do, since it removes the encryption (#3921)."
+evidence = ["crates/preflight/src/tests.rs::convert_fixes_all_but_fonts", "crates/preflight/src/tests.rs::convert_does_not_give_cmyk_documents_an_srgb_output_intent", "crates/automation/tests/it/automation.rs::pdfa_through_tools", "crates/ui-egui/tests/it/compare.rs::pdfa_dialog_verifies_and_converts", "crates/engine/src/tests.rs::convert_to_pdfa_needs_the_owners_rights_on_an_encrypted_document", "crates/preflight/src/conform/tests.rs::pdfa_gives_a_cmyk_document_the_chosen_profile_as_its_output_intent", "crates/preflight/src/conform/tests.rs::pdfa_keeps_a_pdfua_identification_and_describes_its_schema", "crates/preflight/src/conform/tests.rs::an_encrypted_document_needs_its_owner_password", "crates/preflight/src/conform/tests.rs::qpdf_finds_the_converted_files_sound", "crates/automation/src/standards.rs::pdfa_convert_takes_a_level_and_a_cmyk_profile"]
+notes = "Standards ▸ PDF/A… ▸ Save as PDF/A, pdfa_convert (level 2b/2u/2a/3b/3u/3a, icc, condition). The conversion works on a copy and keeps it only when the PDF/A verifier then finds nothing; otherwise the document is unchanged and the refusal lists what stands in the way (the dialog shows it in the interface language), so a file never claims PDF/A and fails the verifier. Fixes XMP (pdfaid part and conformance, keeping a pdfuaid identification with its extension schema), the output intent (generated sRGB profile, or an ICC profile the user chooses: how documents with DeviceCMYK get a CMYK output intent, with sRGB as DefaultRGB for their RGB; intents with profiles share one), forbidden actions, annotation flags, interpolation, encryption (only when opened with the owner password, as Protect and Remove security need it, #3921), AFRelationship, a header no newer than PDF 1.7, and matching modification dates in the document information and XMP (saves of a document that declares PDF/A no longer stamp one alone). The dialog saves the converted file through Save As and verifies the file written. Not yet: embedding fonts that aren't embedded (refused with the font's name), converting device CMYK, flattening transparency for PDF/A-1, PDF/A-1 and -4; no profile ships with PdfCraft (vendors' press profiles are their assets), so a CMYK document needs the user's own ICC file; no comparison against veraPDF."
 
 [[feature]]
 id = "optimize.pdfa-accessible-levels"
@@ -7909,11 +7909,11 @@ title = "PDF/A conformance levels a and u"
 area = "K"
 tier = "P1"
 milestone = "M11"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["standards.pdfa"]
+tools = ["pdfa_verify", "pdfa_convert"]
+evidence = ["crates/preflight/src/conform/tests.rs::pdfa_u_needs_unicode_for_every_character_shown", "crates/preflight/src/conform/tests.rs::pdfa_a_needs_tags", "crates/preflight/src/conform/tests.rs::levels_read_their_ids", "crates/preflight/src/levels.rs::language_tag_syntax", "crates/ui-egui/src/dialogs/standards_ui.rs::a_refused_save_as_lists_why_in_the_interface_language_and_changes_nothing", "crates/automation/src/standards.rs::pdfa_convert_takes_a_level_and_a_cmyk_profile"]
+notes = "PDF/A-2u, -2a, -3u and -3a in verify and Save as PDF/A (Standards ▸ PDF/A…, pdfa_verify, pdfa_convert). u and a: every character content shows maps to Unicode and not to U+0000, U+FEFF or U+FFFE (6.2.11.7.2), read with PdfCraft's text-extraction map (ToUnicode, else the encoding and glyph names). a: Private Use Area text inside marked content with ActualText (6.2.11.7.3), MarkInfo /Marked true (6.7.2.2, set on conversion when the document has a structure tree), a StructTreeRoot (6.7.3.3), structure types standard or role-mapped to standard ones without cycles and without standard types mapped away (6.7.3.4), well-formed Lang tags (6.7.4). Clause numbers from veraPDF's public rule list (the ISO text wasn't available). Conversion can't add Unicode maps or tags: a document without them is refused with the reasons (tagging is the Reading Order tools' job). Not yet: generating ToUnicode from an embedded font's cmap, ActualText on structure elements, alternate text and the rest of the Tagged PDF rules beyond these, no veraPDF comparison."
 
 [[feature]]
 id = "optimize.pdfx-validate"
@@ -7921,11 +7921,11 @@ title = "Verify PDF/X compliance"
 area = "K"
 tier = "P1"
 milestone = "M11"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["standards.pdfx"]
+tools = ["pdfx_verify"]
+evidence = ["crates/preflight/src/pdfx/tests.rs::each_level_accepts_a_conforming_page", "crates/preflight/src/pdfx/tests.rs::identification_names_the_level", "crates/preflight/src/pdfx/tests.rs::pdfx4_metadata_has_its_title_dates_and_identity", "crates/preflight/src/pdfx/tests.rs::trapped_is_true_or_false", "crates/preflight/src/pdfx/tests.rs::the_output_intent_embeds_its_profile_or_names_a_registered_one", "crates/preflight/src/pdfx/tests.rs::the_output_profile_is_a_printer_profile_the_level_allows", "crates/preflight/src/pdfx/tests.rs::page_boxes_nest", "crates/preflight/src/pdfx/tests.rs::annotations_stay_outside_the_bleed", "crates/preflight/src/pdfx/tests.rs::transparency_only_in_pdfx4", "crates/preflight/src/pdfx/tests.rs::pdfx1a_is_cmyk_gray_and_spot_only", "crates/preflight/src/pdfx/tests.rs::pdfx3_and_4_device_colour_matches_the_output_intent", "crates/automation/src/standards.rs::pdfx_verify_checks_the_declared_level_or_the_one_asked_for", "crates/ui-egui/src/dialogs/standards_ui.rs::pdfx_dialog_verifies_the_level_the_document_declares", "crates/ui-egui/src/dialogs/standards_ui.rs::pdfx_dialog_lists_what_breaks_the_level_in_the_interface_language"]
+notes = "Verification only (Standards ▸ PDF/X…, pdfx_verify, pdfcraft-cli run): PDF/X-1a:2001, PDF/X-1a:2003, PDF/X-3:2002, PDF/X-3:2003 and PDF/X-4, defaulting to the level the document declares. Structural rules read from the object graph: identification (GTS_PDFXVersion and GTS_PDFXConformance; for PDF/X-4 the XMP pdfxid with dc:title, CreateDate, ModifyDate, DocumentID, VersionID and RenditionClass), the trailer ID, Trapped, encryption, one GTS_PDFX output intent with a valid output (prtr) ICC profile of a colour space the level allows (AToB1 or grayTRC, /N matching) or a characterization in the ICC registry where the level allows one, TrimBox or ArtBox (not both) nested in the BleedBox, CropBox and MediaBox, annotations outside the BleedBox and printer marks outside the TrimBox, embedded fonts, LZW (and JBIG2 before X-4), external streams, reference XObjects, OPI, PostScript XObjects, JavaScript and additional actions, transparency before X-4 (soft masks, opacity, blend modes), and colour (CMYK, gray and spot only in X-1a; in X-3 and X-4 device colour that matches the output intent or a Default space, and device-independent colour only under an embedded profile; alternates and bases included). Each finding gives a rule id, the section of the CGATS PDF/X application notes it rests on (the ISO 15930 text was not available, so no ISO clause numbers; the PDF/X-4 metadata rules come from public summaries of ISO 15930-7), the page and the object. Not yet: PDF/X-4p, -5 and -6; content checks beyond device colour (the PS operator, inline-image filters, overprint mode, transfer functions, halftones); the output condition name checked against the ICC registry's list; a colour space a resource dictionary lists counts as used whether or not content selects it; fonts written directly into resource dictionaries; no comparison against an external PDF/X validator or Acrobat's own results; the new finding wordings are translated into Spanish, Lithuanian and Vietnamese only (other languages show them in English; the 14 shared with PDF/A are translated everywhere). Save as PDF/X is optimize.pdfx-convert."
 
 [[feature]]
 id = "optimize.pdfx-convert"
@@ -7933,11 +7933,11 @@ title = "Save as PDF/X (1a, 3, 4)"
 area = "K"
 tier = "P1"
 milestone = "M11"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["standards.pdfx"]
+tools = ["pdfx_convert", "output_conditions"]
+evidence = ["crates/preflight/src/conform/tests.rs::pdfx1a_converts_rgb_through_the_output_profile", "crates/preflight/src/conform/tests.rs::pdfx1a_converts_jpeg_pictures_and_writes_them_lossless", "crates/preflight/src/conform/tests.rs::pdfx1a_refuses_what_it_cannot_convert_and_changes_nothing", "crates/preflight/src/conform/tests.rs::pdfx1a_names_fogra39_without_a_profile_and_needs_one_for_rgb", "crates/preflight/src/conform/tests.rs::pdfx4_embeds_a_chosen_profile_and_maps_rgb_to_srgb", "crates/preflight/src/conform/tests.rs::pdfx3_needs_an_embedded_profile_for_rgb", "crates/preflight/src/conform/tests.rs::without_a_choice_the_documents_own_printing_condition_is_kept", "crates/preflight/src/conform/tests.rs::a_profile_that_isnt_a_cmyk_printer_profile_is_refused", "crates/preflight/src/conform/tests.rs::page_boxes_are_set_and_fitted", "crates/preflight/src/conform/tests.rs::scripts_and_automatic_actions_are_removed", "crates/preflight/src/conform/tests.rs::identification_trapped_and_the_document_id", "crates/preflight/src/conform/tests.rs::fonts_that_arent_embedded_and_transparency_refuse", "crates/preflight/src/conform/tests.rs::annotations_that_print_nothing_leave_the_bleed_when_asked", "crates/preflight/src/conform/tests.rs::later_features_than_the_level_allows_refuse", "crates/preflight/src/conform/tests.rs::an_encrypted_document_needs_its_owner_password", "crates/preflight/src/conform/tests.rs::qpdf_finds_the_converted_files_sound", "crates/automation/src/standards.rs::pdfx_convert_writes_a_file_that_verifies_or_says_why_not", "crates/automation/src/standards.rs::printing_conditions_are_named_and_profiles_stay_inside_the_root", "crates/ui-egui/src/dialogs/standards_ui.rs::save_as_pdfx_converts_saves_and_verifies_the_file_written", "crates/ui-egui/src/dialogs/standards_ui.rs::a_refused_save_as_lists_why_in_the_interface_language_and_changes_nothing"]
+notes = "Standards ▸ PDF/X… ▸ Save as PDF/X (level, printing condition, ICC profile, flatten), pdfx_convert, output_conditions: PDF/X-1a:2001, PDF/X-1a:2003, PDF/X-3:2002, PDF/X-3:2003 and PDF/X-4. The conversion works on a copy and keeps it only when the PDF/X verifier then finds nothing; otherwise the document is unchanged and the refusal lists what stands in the way. Sets the one GTS_PDFX output intent (the document's own when none is chosen; else an ICC registry characterization named without a profile for PDF/X-1a and -3, FOGRA39 by default, or the user's ICC profile, embedded; PDF/X-4 needs one), GTS_PDFXVersion (and GTS_PDFXConformance for 2001), Trapped (/False unless the document says it is trapped), the trailer ID, XMP metadata (title, dates, document ID, version, rendition class, pdf:Trapped, pdfxid for PDF/X-4; a PDF/A or PDF/UA identification is kept when still true), TrimBox and BleedBox (from the CropBox when missing; an ArtBox beside a TrimBox goes; boxes fitted inside each other), removes JavaScript and additional actions, re-encodes LZW, drops OPI comments and reference-XObject links, writes the header as the level's PDF version (1.3, 1.4, 1.6) with a classic cross-reference table before PDF 1.5, and names PDF/X-4 layer configurations without AS. PDF/X-1a converts colour to CMYK through the profile with moxcms (relative colorimetric, perceptual when the profile has no colorimetric table): rg/RG and cs/sc in DeviceRGB, DefaultRGB or ICC-based gray/RGB/CMYK spaces, 8-bit pictures (JPEG ones too, written back with Flate), inline pictures, indexed colour tables, transparency-group blending spaces; DeviceRGB is taken as sRGB. PDF/X-3 and -4 keep device-independent colour and describe RGB under a CMYK condition with sRGB as DefaultRGB. Flatten flattens comments and form fields first and removes links and annotations that print nothing from the bleed. Refused with the reason, not converted: fonts that aren't embedded (including ones written into resource dictionaries), transparency before PDF/X-4 (no flattener yet), shadings, Lab, CalRGB, CalGray and spot colours with RGB alternates in PDF/X-1a, pictures of other bit depths, decode arrays or colour-key masks, CMYK JPEGs, JBIG2 before PDF/X-4, JPEG 2000, layers and OpenType programs before the PDF version allows them, PostScript XObjects, external streams. No press profile ships with PdfCraft (vendors' profiles are their assets): converting colour and PDF/X-4 need the user's ICC file. Verified with PdfCraft's own PDF/X verifier and qpdf --check (structure); no comparison against an external PDF/X validator or Acrobat's Preflight; a content stream's ri operator and pictures' Intent aren't followed; PDF/X-4p, -5 and -6 aren't offered."
 
 [[feature]]
 id = "optimize.output-intents"
@@ -7946,10 +7946,10 @@ area = "K"
 tier = "P1"
 milestone = "M11"
 status = "partial"
-commands = ["standards.pdfa"]
-tools = ["pdfa_convert", "pdfa_verify"]
-evidence = ["crates/preflight/src/tests.rs::convert_fixes_all_but_fonts", "crates/automation/tests/it/automation.rs::pdfa_through_tools", "crates/ui-egui/tests/it/compare.rs::pdfa_dialog_verifies_and_converts"]
-notes = "sRGB output intent added and listed; no choice of other conditions yet."
+commands = ["standards.pdfa", "standards.pdfx"]
+tools = ["pdfa_convert", "pdfa_verify", "pdfx_convert", "output_conditions"]
+evidence = ["crates/preflight/src/tests.rs::convert_fixes_all_but_fonts", "crates/automation/tests/it/automation.rs::pdfa_through_tools", "crates/ui-egui/tests/it/compare.rs::pdfa_dialog_verifies_and_converts", "crates/preflight/src/output.rs::reads_a_printer_profile_and_the_characterization_it_names", "crates/preflight/src/output.rs::registry_names_are_found_whatever_their_case_and_spacing", "crates/preflight/src/conform/tests.rs::pdfx1a_names_fogra39_without_a_profile_and_needs_one_for_rgb", "crates/preflight/src/conform/tests.rs::pdfa_gives_a_cmyk_document_the_chosen_profile_as_its_output_intent", "crates/automation/src/standards.rs::printing_conditions_are_named_and_profiles_stay_inside_the_root", "crates/ui-egui/src/dialogs/standards_ui.rs::save_as_pdfx_converts_saves_and_verifies_the_file_written"]
+notes = "Save as PDF/X and Save as PDF/A set the output intent: an ICC profile file the user chooses (Choose ICC profile…, icc), embedded and named by the user, the ICC registry characterization its description names, or its description; or for PDF/X-1a and -3 a characterization in the ICC registry named without a profile (FOGRA39, FOGRA51, FOGRA52, FOGRA47, CGATS TR 006, CGATS TR 001, JC200103, IFRA26; output_conditions lists them). PDF/A otherwise gets the generated sRGB profile. No printer profile ships with PdfCraft. Not yet: editing the output intents of a document outside a conversion, the full ICC registry list, PDF/X-5's external profile references."
 
 [[feature]]
 id = "optimize.pdfe"
@@ -8008,7 +8008,7 @@ milestone = "M11"
 status = "shipped"
 commands = ["standards.pdfa"]
 tools = ["standards_remove_id"]
-evidence = ["crates/organize/src/tests.rs::removing_the_pdfx_identification_keeps_the_output_intent_and_other_claims", "crates/organize/src/tests.rs::removing_the_pdfa_identification_removes_its_xmp_properties_in_either_form", "crates/automation/tests/it/automation.rs::pdfa_through_tools", "crates/ui-egui/tests/it/compare.rs::pdfa_dialog_verifies_and_converts"]
+evidence = ["crates/organize/src/tests.rs::removing_the_pdfx_identification_keeps_the_output_intent_and_other_claims", "crates/organize/src/tests.rs::removing_the_pdfa_identification_removes_its_xmp_properties_in_either_form", "crates/automation/tests/it/automation.rs::pdfa_through_tools", "crates/ui-egui/tests/it/compare.rs::pdfa_dialog_removes_a_declared_identification"]
 notes = "Standards ▸ PDF/A ▸ Remove PDF/A identification, and the standards_remove_id tool (pdfa or pdfx): removes the pdfaid: XMP properties, or GTS_PDFXVersion and GTS_PDFXConformance from the document information and the pdfxid: XMP properties. Output intents and other claims (PDF/UA) stay; a packet that can't be edited safely is left as it is. Not yet: PDF/X removal in the interface (there is no PDF/X dialog yet)"
 
 [[feature]]

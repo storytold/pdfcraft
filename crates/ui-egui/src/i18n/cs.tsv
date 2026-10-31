@@ -345,6 +345,7 @@ key	Space	Mezerník
 	Import form data…	Importovat data formuláře…
 	Export form data…	Exportovat data formuláře…
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	Action Wizard…	Průvodce akcemi…
 	Prepare for distribution…	Připravit k distribuci…
 	Optimize scanned documents…	Optimalizovat skenované dokumenty…
@@ -562,6 +563,18 @@ key	Space	Mezerník
 	Standards	Standardy
 	Save as PDF/A	Uložit jako PDF/A
 	Save as PDF/X	Uložit jako PDF/X
+	Verify PDF/X	Ověřit PDF/X
+	Choose ICC profile…	Vybrat profil ICC…
+	ICC profile: {name}	Profil ICC: {name}
+	Can't save as {level}; nothing was changed:	Nelze uložit jako {level}; nic nebylo změněno:
+	Saved {name} and verified it: it conforms to {level}.	Soubor {name} byl uložen a ověřen: vyhovuje standardu {level}.
+	Saved {name}, but verifying it found {n} problems.	Soubor {name} byl uložen, ale ověření našlo problémy: {n}.
+	Converted to {level} ({n} changes)	Převedeno na {level} (změny: {n})
+	Output intent profile:	Profil výstupního záměru:
+	None: sRGB for RGB and gray documents	Žádný: sRGB pro dokumenty RGB a ve stupních šedi
+	Printing condition:	Tiskové podmínky:
+	Flatten comments and form fields	Sloučit komentáře a pole formulářů se stránkou
+	Couldn't read the ICC profile {name}: {e}	Profil ICC {name} nelze přečíst: {e}
 	Save as PDF/UA	Uložit jako PDF/UA
 	Add search index	Přidat vyhledávací index
 	Index	Index
@@ -1994,6 +2007,86 @@ key	Space	Mezerník
 	PostScript XObjects aren't allowed	Objekty PostScript XObject nejsou povoleny
 	Embedded files must be PDF/A files themselves (use PDF/A-3 for others)	Vložené soubory musí být samy soubory PDF/A (pro ostatní použijte PDF/A-3)
 	An embedded file has no AFRelationship	Vložený soubor nemá AFRelationship
+	The document information doesn't identify the file as {}	Informace o dokumentu neoznačují soubor jako {}
+	The metadata has no {}	Metadata nemají {}
+	The document information and the metadata name different PDF/X versions	Informace o dokumentu a metadata uvádějí různé verze PDF/X
+	The file trailer has no document ID	Trailer souboru nemá ID dokumentu
+	The document doesn't say whether it is trapped (Trapped)	Dokument neuvádí, zda má přesahy (Trapped)
+	Trapped is {}, but it must be /True or /False	Trapped je {}, ale musí být /True nebo /False
+	The Trapped key and the metadata's pdf:Trapped disagree	Klíč Trapped a pdf:Trapped v metadatech se neshodují
+	There is no PDF/X output intent (GTS_PDFX)	Chybí výstupní záměr PDF/X (GTS_PDFX)
+	There is more than one PDF/X output intent	Existuje více než jeden výstupní záměr PDF/X
+	The PDF/X output intent has no OutputConditionIdentifier	Výstupní záměr PDF/X nemá OutputConditionIdentifier
+	The PDF/X output intent has no embedded profile (DestOutputProfile)	Výstupní záměr PDF/X nemá vložený profil (DestOutputProfile)
+	The PDF/X output intent has neither an embedded profile nor a characterization in the ICC registry	Výstupní záměr PDF/X nemá vložený profil ani charakterizaci z registru ICC
+	The output intent's profile isn't a valid ICC profile	Profil výstupního záměru není platný profil ICC
+	The output intent's profile isn't an output (printer) profile	Profil výstupního záměru není výstupní (tiskárenský) profil
+	The output intent's profile describes {} colour, but PDF/X-1a needs a CMYK printing condition	Profil výstupního záměru popisuje barvu {}, ale PDF/X-1a potřebuje tiskovou podmínku CMYK
+	The output intent's profile describes {} colour; it must be gray, RGB or CMYK	Profil výstupního záměru popisuje barvu {}; musí být šedá, RGB nebo CMYK
+	The output intent's profile has /N {}, which doesn't match its colour space	Profil výstupního záměru má /N {}, což neodpovídá jeho barevnému prostoru
+	The output intent's profile has no device-to-PCS transform (AToB1 or grayTRC)	Profil výstupního záměru nemá převod ze zařízení do PCS (AToB1 nebo grayTRC)
+	The page has no valid MediaBox	Stránka nemá platný MediaBox
+	The page has neither a TrimBox nor an ArtBox	Stránka nemá TrimBox ani ArtBox
+	The page has both a TrimBox and an ArtBox	Stránka má TrimBox i ArtBox
+	The {} extends beyond the BleedBox	{} přesahuje BleedBox
+	The {} extends beyond the CropBox	{} přesahuje CropBox
+	The {} extends beyond the MediaBox	{} přesahuje MediaBox
+	A {} annotation lies within the BleedBox	Anotace {} leží uvnitř BleedBox
+	A PrinterMark annotation overlaps the TrimBox or ArtBox	Anotace PrinterMark zasahuje do TrimBox nebo ArtBox
+	A stream uses JBIG2 compression	Proud používá kompresi JBIG2
+	A form XObject refers to a page of another file (reference XObject)	Formulářový XObject odkazuje na stránku jiného souboru (referenční XObject)
+	An image or form has OPI information	Obrázek nebo formulář obsahuje informace OPI
+	A graphics state uses a soft mask	Grafický stav používá měkkou masku
+	A graphics state sets an opacity below 1	Grafický stav nastavuje krytí menší než 1
+	A graphics state uses the {} blend mode	Grafický stav používá režim prolnutí {}
+	An image has a soft mask	Obrázek má měkkou masku
+	The {} colour space isn't allowed: PDF/X-1a allows only CMYK, gray and spot colour	Barevný prostor {} není povolen: PDF/X-1a povoluje jen CMYK, šedou a přímé barvy
+	A colour space is nested too deeply for the spaces under it to be checked	Barevný prostor je vnořen příliš hluboko, takže prostory pod ním nelze zkontrolovat
+	Content uses DeviceRGB colour: PDF/X-1a allows only CMYK, gray and spot colour	Obsah používá barvu DeviceRGB: PDF/X-1a povoluje jen CMYK, šedou a přímé barvy
+	{} colour doesn't match the output intent's colour space	Barva {} neodpovídá barevnému prostoru výstupního záměru
+	Content uses {} colour, which doesn't match the output intent's colour space	Obsah používá barvu {}, která neodpovídá barevnému prostoru výstupního záměru
+	Device-independent colour is used, so the output intent needs an embedded profile	Používá se barva nezávislá na zařízení, takže výstupní záměr potřebuje vložený profil
+	Output intents with profiles don't all share one profile	Výstupní záměry s profily nesdílejí všechny tentýž profil
+	The font {} has characters with no Unicode value	Písmo {} má znaky bez hodnoty Unicode
+	The font {} maps characters to U+0000, U+FEFF or U+FFFE	Písmo {} převádí znaky na U+0000, U+FEFF nebo U+FFFE
+	Text in the font {} uses the Private Use Area without ActualText	Text v písmu {} používá oblast pro soukromé použití bez ActualText
+	The document isn't marked as tagged (MarkInfo /Marked true)	Dokument není označen jako otagovaný (MarkInfo /Marked true)
+	The language {} isn't a valid language tag	Jazyk {} není platná jazyková značka
+	The document has no structure tree: it isn't tagged	Dokument nemá strom struktury: není otagovaný
+	The standard structure type {} is mapped to a type that isn't standard	Standardní typ struktury {} je mapován na typ, který není standardní
+	The role map maps {} in a circle	Mapa rolí mapuje {} v kruhu
+	The structure type {} isn't standard and isn't mapped to a standard type	Typ struktury {} není standardní a není mapován na standardní typ
+	The document is encrypted: open it with its permissions password to remove the security	Dokument je zašifrovaný: otevřete ho heslem oprávnění a odeberte zabezpečení
+	The document can't be converted: {}	Dokument nelze převést: {}
+	PDF/X-4 embeds the printing condition's ICC profile: choose a profile file	PDF/X-4 vkládá profil ICC tiskové podmínky: vyberte soubor profilu
+	PDF/A embeds the output intent's ICC profile: choose a profile file	PDF/A vkládá profil ICC výstupního záměru: vyberte soubor profilu
+	The ICC profile {} isn't an output (printer) profile	Profil ICC {} není výstupní (tiskárenský) profil
+	The ICC profile {} isn't an output or display profile	Profil ICC {} není výstupní ani zobrazovací profil
+	The ICC profile {} isn't a CMYK profile, which PDF/X-1a needs	Profil ICC {} není profil CMYK, který PDF/X-1a potřebuje
+	The ICC profile {} isn't a gray, RGB or CMYK profile	Profil ICC {} není šedý, RGB ani CMYK profil
+	Converting colour to CMYK needs the printing condition's ICC profile: choose a profile file	Převod barvy do CMYK potřebuje profil ICC tiskové podmínky: vyberte soubor profilu
+	{} needs the printing condition's ICC profile embedded for RGB or device-independent colour: choose a profile file	{} potřebuje pro barvu RGB nebo nezávislou na zařízení vložený profil ICC tiskové podmínky: vyberte soubor profilu
+	CMYK colour needs a CMYK printing condition	Barva CMYK potřebuje tiskovou podmínku CMYK
+	The document uses CMYK colour: choose the ICC profile of a CMYK printing condition for its output intent	Dokument používá barvu CMYK: pro jeho výstupní záměr vyberte profil ICC tiskové podmínky CMYK
+	JPEG 2000 pictures need PDF 1.5, newer than {} allows	Obrázky JPEG 2000 potřebují PDF 1.5, novější, než {} povoluje
+	Layers (optional content) need PDF 1.5, newer than {} allows	Vrstvy (volitelný obsah) potřebují PDF 1.5, novější, než {} povoluje
+	OpenType font programs need PDF 1.6, newer than {} allows	Programy písem OpenType potřebují PDF 1.6, novější, než {} povoluje
+	Page {}'s TrimBox, BleedBox and CropBox don't overlap	TrimBox, BleedBox a CropBox stránky {} se nepřekrývají
+	The output profile can't convert colour to CMYK ({})	Výstupní profil nedokáže převést barvu do CMYK ({})
+	A colour space's ICC profile can't be used to convert its colour	Profil ICC barevného prostoru nelze použít k převodu jeho barvy
+	A colour space is nested too deeply to convert	Barevný prostor je vnořený příliš hluboko na převod
+	The spot colour {} has an alternate that can't be converted to CMYK yet	Přímá barva {} má alternativu, kterou zatím nelze převést do CMYK
+	A pattern over RGB or device-independent colour can't be converted to CMYK yet	Vzorek přes barvu RGB nebo nezávislou na zařízení zatím nelze převést do CMYK
+	{} colour can't be converted to CMYK yet	Barvu {} zatím nelze převést do CMYK
+	A content stream can't be read, so its colour can't be converted	Proud obsahu nelze přečíst, takže jeho barvu nelze převést
+	A colour operator's operands don't match its colour space	Operandy barevného operátoru neodpovídají jeho barevnému prostoru
+	A content stream is drawn with different resources in different places, so its colour can't be converted	Proud obsahu se na různých místech kreslí s různými prostředky, takže jeho barvu nelze převést
+	A shading in RGB or device-independent colour can't be converted to CMYK yet	Stínování v barvě RGB nebo nezávislé na zařízení zatím nelze převést do CMYK
+	A picture with other than 8 bits per component can't be converted to CMYK yet	Obrázek s jiným počtem bitů na složku než 8 zatím nelze převést do CMYK
+	A picture with a decode array or a colour-key mask can't be converted to CMYK yet	Obrázek s polem dekódování nebo maskou barevného klíče zatím nelze převést do CMYK
+	A picture's data can't be read, so it can't be converted to CMYK	Data obrázku nelze přečíst, takže ho nelze převést do CMYK
+	A JPEG picture in CMYK can't be converted yet	Obrázek JPEG v CMYK zatím nelze převést
+	An indexed colour space's table is too short to convert	Tabulka indexovaného barevného prostoru je na převod příliš krátká
 	Select Icon	Vybrat ikonu
 	Choose images	Vyberte obrázky
 	{dpi} pixels/inch	{dpi} pixelů/palec

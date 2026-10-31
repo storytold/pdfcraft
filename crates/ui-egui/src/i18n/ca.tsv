@@ -218,6 +218,7 @@
 	Import form data…	Importa dades de formulari…
 	Export form data…	Exporta dades de formulari…
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	Action Wizard…	Assistent d'accions…
 	Prepare for distribution…	Prepara per a la distribució…
 	Optimize scanned documents…	Optimitza documents escanejats…
@@ -470,6 +471,18 @@
 	Standards	Estàndards
 	Save as PDF/A	Anomena i desa com a PDF/A
 	Save as PDF/X	Anomena i desa com a PDF/X
+	Verify PDF/X	Verifica PDF/X
+	Choose ICC profile…	Tria un perfil ICC…
+	ICC profile: {name}	Perfil ICC: {name}
+	Can't save as {level}; nothing was changed:	No es pot desar com a {level}; no s'ha canviat res:
+	Saved {name} and verified it: it conforms to {level}.	S'ha desat {name} i s'ha verificat: és conforme amb {level}.
+	Saved {name}, but verifying it found {n} problems.	S'ha desat {name}, però la verificació ha trobat {n} problemes.
+	Converted to {level} ({n} changes)	Convertit a {level} ({n} canvis)
+	Output intent profile:	Perfil del propòsit de sortida:
+	None: sRGB for RGB and gray documents	Cap: sRGB per a documents RGB i en gris
+	Printing condition:	Condició d'impressió:
+	Flatten comments and form fields	Aplana els comentaris i els camps de formulari
+	Couldn't read the ICC profile {name}: {e}	No s'ha pogut llegir el perfil ICC {name}: {e}
 	Save as PDF/UA	Anomena i desa com a PDF/UA
 	Add search index	Afegeix un índex de cerca
 	Index	Índex
@@ -1898,6 +1911,85 @@ action wizard	Start	Inicia
 	PostScript XObjects aren't allowed	No es permeten els XObjects PostScript
 	Embedded files must be PDF/A files themselves (use PDF/A-3 for others)	Els fitxers incrustats han de ser fitxers PDF/A (utilitza PDF/A-3 per a la resta)
 	An embedded file has no AFRelationship	Un fitxer incrustat no té AFRelationship
+	The document information doesn't identify the file as {}	La informació del document no identifica el fitxer com a {}
+	The metadata has no {}	Les metadades no tenen {}
+	The document information and the metadata name different PDF/X versions	La informació del document i les metadades indiquen versions de PDF/X diferents
+	The file trailer has no document ID	El tràiler del fitxer no té ID de document
+	The document doesn't say whether it is trapped (Trapped)	El document no indica si té reventats (Trapped)
+	Trapped is {}, but it must be /True or /False	Trapped és {}, però ha de ser /True o /False
+	The Trapped key and the metadata's pdf:Trapped disagree	La clau Trapped i el pdf:Trapped de les metadades no coincideixen
+	There is no PDF/X output intent (GTS_PDFX)	No hi ha cap propòsit de sortida PDF/X (GTS_PDFX)
+	There is more than one PDF/X output intent	Hi ha més d'un propòsit de sortida PDF/X
+	The PDF/X output intent has no OutputConditionIdentifier	El propòsit de sortida PDF/X no té OutputConditionIdentifier
+	The PDF/X output intent has no embedded profile (DestOutputProfile)	El propòsit de sortida PDF/X no té perfil incrustat (DestOutputProfile)
+	The PDF/X output intent has neither an embedded profile nor a characterization in the ICC registry	El propòsit de sortida PDF/X no té ni un perfil incrustat ni una caracterització del registre ICC
+	The output intent's profile isn't a valid ICC profile	El perfil del propòsit de sortida no és un perfil ICC vàlid
+	The output intent's profile isn't an output (printer) profile	El perfil del propòsit de sortida no és un perfil de sortida (d'impressora)
+	The output intent's profile describes {} colour, but PDF/X-1a needs a CMYK printing condition	El perfil del propòsit de sortida descriu color {}, però PDF/X-1a necessita una condició d'impressió CMYK
+	The output intent's profile describes {} colour; it must be gray, RGB or CMYK	El perfil del propòsit de sortida descriu color {}; ha de ser gris, RGB o CMYK
+	The output intent's profile has /N {}, which doesn't match its colour space	El perfil del propòsit de sortida té /N {}, que no coincideix amb el seu espai de color
+	The output intent's profile has no device-to-PCS transform (AToB1 or grayTRC)	El perfil del propòsit de sortida no té transformació de dispositiu a PCS (AToB1 o grayTRC)
+	The page has no valid MediaBox	La pàgina no té cap MediaBox vàlida
+	The page has neither a TrimBox nor an ArtBox	La pàgina no té ni TrimBox ni ArtBox
+	The page has both a TrimBox and an ArtBox	La pàgina té alhora una TrimBox i una ArtBox
+	The {} extends beyond the BleedBox	La {} sobresurt de la BleedBox
+	The {} extends beyond the CropBox	La {} sobresurt de la CropBox
+	The {} extends beyond the MediaBox	La {} sobresurt de la MediaBox
+	A {} annotation lies within the BleedBox	Una anotació {} és dins de la BleedBox
+	A PrinterMark annotation overlaps the TrimBox or ArtBox	Una anotació PrinterMark se superposa a la TrimBox o l'ArtBox
+	A stream uses JBIG2 compression	Un flux fa servir compressió JBIG2
+	A form XObject refers to a page of another file (reference XObject)	Un XObject de formulari fa referència a una pàgina d'un altre fitxer (XObject de referència)
+	An image or form has OPI information	Una imatge o un formulari té informació OPI
+	A graphics state uses a soft mask	Un estat gràfic fa servir una màscara suau
+	A graphics state sets an opacity below 1	Un estat gràfic estableix una opacitat inferior a 1
+	A graphics state uses the {} blend mode	Un estat gràfic fa servir el mode de fusió {}
+	An image has a soft mask	Una imatge té una màscara suau
+	The {} colour space isn't allowed: PDF/X-1a allows only CMYK, gray and spot colour	L'espai de color {} no està permès: PDF/X-1a només permet CMYK, gris i colors plans
+	Content uses DeviceRGB colour: PDF/X-1a allows only CMYK, gray and spot colour	El contingut fa servir color DeviceRGB: PDF/X-1a només permet CMYK, gris i colors plans
+	{} colour doesn't match the output intent's colour space	El color {} no coincideix amb l'espai de color del propòsit de sortida
+	Content uses {} colour, which doesn't match the output intent's colour space	El contingut fa servir color {}, que no coincideix amb l'espai de color del propòsit de sortida
+	Device-independent colour is used, so the output intent needs an embedded profile	Es fa servir color independent del dispositiu, de manera que el propòsit de sortida necessita un perfil incrustat
+	Output intents with profiles don't all share one profile	Els propòsits de sortida amb perfil no comparteixen tots el mateix perfil
+	The font {} has characters with no Unicode value	El tipus de lletra {} té caràcters sense valor Unicode
+	The font {} maps characters to U+0000, U+FEFF or U+FFFE	El tipus de lletra {} assigna caràcters a U+0000, U+FEFF o U+FFFE
+	Text in the font {} uses the Private Use Area without ActualText	El text del tipus de lletra {} fa servir l'àrea d'ús privat sense ActualText
+	The document isn't marked as tagged (MarkInfo /Marked true)	El document no està marcat com a etiquetat (MarkInfo /Marked true)
+	The language {} isn't a valid language tag	L'idioma {} no és una etiqueta d'idioma vàlida
+	The document has no structure tree: it isn't tagged	El document no té arbre d'estructura: no està etiquetat
+	The standard structure type {} is mapped to a type that isn't standard	El tipus d'estructura estàndard {} s'assigna a un tipus que no és estàndard
+	The role map maps {} in a circle	El mapa de rols assigna {} en cercle
+	The structure type {} isn't standard and isn't mapped to a standard type	El tipus d'estructura {} no és estàndard i no s'assigna a cap tipus estàndard
+	The document is encrypted: open it with its permissions password to remove the security	El document està xifrat: obre'l amb la contrasenya de permisos per treure'n la seguretat
+	The document can't be converted: {}	No es pot convertir el document: {}
+	PDF/X-4 embeds the printing condition's ICC profile: choose a profile file	PDF/X-4 incrusta el perfil ICC de la condició d'impressió: tria un fitxer de perfil
+	PDF/A embeds the output intent's ICC profile: choose a profile file	PDF/A incrusta el perfil ICC del propòsit de sortida: tria un fitxer de perfil
+	The ICC profile {} isn't an output (printer) profile	El perfil ICC {} no és un perfil de sortida (d'impressora)
+	The ICC profile {} isn't an output or display profile	El perfil ICC {} no és un perfil de sortida ni de pantalla
+	The ICC profile {} isn't a CMYK profile, which PDF/X-1a needs	El perfil ICC {} no és un perfil CMYK, que és el que necessita PDF/X-1a
+	The ICC profile {} isn't a gray, RGB or CMYK profile	El perfil ICC {} no és un perfil de gris, RGB ni CMYK
+	Converting colour to CMYK needs the printing condition's ICC profile: choose a profile file	Per convertir el color a CMYK cal el perfil ICC de la condició d'impressió: tria un fitxer de perfil
+	{} needs the printing condition's ICC profile embedded for RGB or device-independent colour: choose a profile file	{} necessita el perfil ICC de la condició d'impressió incrustat per al color RGB o independent del dispositiu: tria un fitxer de perfil
+	CMYK colour needs a CMYK printing condition	El color CMYK necessita una condició d'impressió CMYK
+	The document uses CMYK colour: choose the ICC profile of a CMYK printing condition for its output intent	El document fa servir color CMYK: tria el perfil ICC d'una condició d'impressió CMYK per al seu propòsit de sortida
+	JPEG 2000 pictures need PDF 1.5, newer than {} allows	Les imatges JPEG 2000 necessiten PDF 1.5, més recent del que permet {}
+	Layers (optional content) need PDF 1.5, newer than {} allows	Les capes (contingut opcional) necessiten PDF 1.5, més recent del que permet {}
+	OpenType font programs need PDF 1.6, newer than {} allows	Els programes de tipus de lletra OpenType necessiten PDF 1.6, més recent del que permet {}
+	Page {}'s TrimBox, BleedBox and CropBox don't overlap	La TrimBox, la BleedBox i la CropBox de la pàgina {} no se superposen
+	The output profile can't convert colour to CMYK ({})	El perfil de sortida no pot convertir el color a CMYK ({})
+	A colour space's ICC profile can't be used to convert its colour	El perfil ICC d'un espai de color no es pot fer servir per convertir-ne el color
+	A colour space is nested too deeply to convert	Un espai de color està massa imbricat per convertir-lo
+	The spot colour {} has an alternate that can't be converted to CMYK yet	El color pla {} té un alternatiu que encara no es pot convertir a CMYK
+	A pattern over RGB or device-independent colour can't be converted to CMYK yet	Encara no es pot convertir a CMYK un patró sobre color RGB o independent del dispositiu
+	{} colour can't be converted to CMYK yet	Encara no es pot convertir a CMYK el color {}
+	A content stream can't be read, so its colour can't be converted	No es pot llegir un flux de contingut, de manera que no se'n pot convertir el color
+	A colour operator's operands don't match its colour space	Els operands d'un operador de color no coincideixen amb el seu espai de color
+	A content stream is drawn with different resources in different places, so its colour can't be converted	Un flux de contingut es dibuixa amb recursos diferents en llocs diferents, de manera que no se'n pot convertir el color
+	A shading in RGB or device-independent colour can't be converted to CMYK yet	Encara no es pot convertir a CMYK un ombrejat en color RGB o independent del dispositiu
+	A picture with other than 8 bits per component can't be converted to CMYK yet	Encara no es pot convertir a CMYK una imatge amb un nombre de bits per component diferent de 8
+	A picture with a decode array or a colour-key mask can't be converted to CMYK yet	Encara no es pot convertir a CMYK una imatge amb una matriu de descodificació o una màscara de color clau
+	A picture's data can't be read, so it can't be converted to CMYK	No es poden llegir les dades d'una imatge, de manera que no es pot convertir a CMYK
+	A JPEG picture in CMYK can't be converted yet	Encara no es pot convertir una imatge JPEG en CMYK
+	An indexed colour space's table is too short to convert	La taula d'un espai de color indexat és massa curta per convertir-la
 	Select Icon	Selecciona la icona
 	Choose images	Tria imatges
 	{dpi} pixels/inch	{dpi} píxels/polzada

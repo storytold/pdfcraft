@@ -183,6 +183,11 @@ impl PdfCraftApp {
                 self.handle_js(id, out);
                 true
             }
+            // Save as PDF/A or PDF/X lists why in its dialog.
+            Err(pdfcraft_engine::EditError::Refused(r)) => {
+                self.conversion_refused(r);
+                false
+            }
             Err(e) => {
                 if let Some(view) = self.views.get_mut(i) {
                     // A drawing whose annotation wasn't added must not stay painted.

@@ -185,6 +185,7 @@
 	Import form data…	Форма деректерін импорттау…
 	Export form data…	Форма деректерін экспорттау…
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	Action Wizard…	Әрекеттер шебері…
 	Prepare for distribution…	Таратуға дайындау…
 	Optimize scanned documents…	Сканерленген құжаттарды оңтайландыру…
@@ -437,6 +438,18 @@
 	Standards	Стандарттар
 	Save as PDF/A	PDF/A ретінде сақтау
 	Save as PDF/X	PDF/X ретінде сақтау
+	Verify PDF/X	PDF/X тексеру
+	Choose ICC profile…	ICC профилін таңдау…
+	ICC profile: {name}	ICC профилі: {name}
+	Can't save as {level}; nothing was changed:	{level} ретінде сақтау мүмкін емес; ештеңе өзгертілмеді:
+	Saved {name} and verified it: it conforms to {level}.	{name} сақталды және тексерілді: ол {level} деңгейіне сәйкес.
+	Saved {name}, but verifying it found {n} problems.	{name} сақталды, бірақ тексеру {n} мәселе тапты.
+	Converted to {level} ({n} changes)	{level} деңгейіне түрлендірілді ({n} өзгеріс)
+	Output intent profile:	Шығыс профилі (ICC):
+	None: sRGB for RGB and gray documents	Жоқ: RGB және сұр құжаттар үшін sRGB
+	Printing condition:	Басып шығару шарты:
+	Flatten comments and form fields	Түсініктемелер мен пішін өрістерін жазықтау
+	Couldn't read the ICC profile {name}: {e}	{name} ICC профилін оқу мүмкін болмады: {e}
 	Save as PDF/UA	PDF/UA ретінде сақтау
 	Add search index	Іздеу индексін қосу
 	Index	Индекс

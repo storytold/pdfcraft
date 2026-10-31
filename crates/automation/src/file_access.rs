@@ -393,9 +393,20 @@ mod tests {
     fn tools_do_not_touch_the_file_system_without_resolving_the_path() {
         // Helpers that are only called with a resolved path. `doc_batch` (batch.rs) resolves its
         // inputs and out_dir, walks only inside them (skipping links) and resolves every
-        // discovered file again before `process` reads it or `publish` writes it.
-        const RESOLVED_BY_CALLER: &[&str] =
-            &["write_atomic", "write_atomic_with", "read_input", "read_input_bytes", "read_review_sidecar", "process", "linked", "walk", "publish"];
+        // discovered file again before `process` reads it or `publish` writes it. `read_profile`
+        // (standards.rs) reads the ICC profile `output_condition` has just resolved.
+        const RESOLVED_BY_CALLER: &[&str] = &[
+            "write_atomic",
+            "write_atomic_with",
+            "read_input",
+            "read_input_bytes",
+            "read_review_sidecar",
+            "process",
+            "linked",
+            "walk",
+            "publish",
+            "read_profile",
+        ];
         let mut dirs = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
         let mut files = vec![];
         while let Some(dir) = dirs.pop() {

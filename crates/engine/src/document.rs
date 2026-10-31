@@ -63,6 +63,9 @@ pub struct Document {
     /// [`EditNotice`]): text its fonts can't draw, pages whose own backdrop stays off. The
     /// interface shows it; tools return it.
     pub edit_notices: Vec<EditNotice>,
+    /// What the last successful Save as PDF/A or PDF/X ([`Edit::ConvertPdfA`],
+    /// [`Edit::ConvertPdfX`]) changed, in English; empty after any other edit.
+    pub converted: Vec<String>,
 }
 
 /// Something the last successful edit did that the user should hear about, never left silent

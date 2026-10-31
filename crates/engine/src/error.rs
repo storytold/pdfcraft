@@ -71,6 +71,9 @@ pub enum EditError {
     Signed,
     #[error("{0}")]
     Invalid(String),
+    /// Save as PDF/A or PDF/X found what stands in the way; the document is unchanged.
+    #[error("{0}")]
+    Refused(pdfcraft_preflight::conform::Refusal),
 }
 
 impl From<pdfcraft_sign::SignError> for EditError {

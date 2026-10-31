@@ -201,6 +201,7 @@ comment menu	Edit	సవరించు
 	Import form data…	ఫారం డేటాను దిగుమతి చేయి…
 	Export form data…	ఫారం డేటాను ఎగుమతి చేయి…
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	Action Wizard…	చర్యల విజార్డ్…
 	Prepare for distribution…	పంపిణీకి సిద్ధం చేయి…
 	Optimize scanned documents…	స్కాన్ చేసిన పత్రాలను ఆప్టిమైజ్ చేయి…
@@ -454,6 +455,18 @@ comment menu	Edit	సవరించు
 	Standards	ప్రమాణాలు
 	Save as PDF/A	PDF/Aగా సేవ్ చేయి
 	Save as PDF/X	PDF/Xగా సేవ్ చేయి
+	Verify PDF/X	PDF/X ధృవీకరించు
+	Choose ICC profile…	ICC ప్రొఫైల్‌ను ఎంచుకోండి…
+	ICC profile: {name}	ICC ప్రొఫైల్: {name}
+	Can't save as {level}; nothing was changed:	{level}గా సేవ్ చేయడం సాధ్యం కాదు; ఏదీ మార్చబడలేదు:
+	Saved {name} and verified it: it conforms to {level}.	{name} సేవ్ చేయబడింది మరియు ధృవీకరించబడింది: ఇది {level}కు అనుగుణంగా ఉంది.
+	Saved {name}, but verifying it found {n} problems.	{name} సేవ్ చేయబడింది, కానీ ధృవీకరణలో {n} సమస్యలు కనుగొనబడ్డాయి.
+	Converted to {level} ({n} changes)	{level}కు మార్చబడింది ({n} మార్పులు)
+	Output intent profile:	అవుట్‌పుట్ ఇంటెంట్ ప్రొఫైల్:
+	None: sRGB for RGB and gray documents	ఏదీ లేదు: RGB మరియు బూడిద రంగు పత్రాలకు sRGB
+	Printing condition:	ముద్రణ పరిస్థితి:
+	Flatten comments and form fields	వ్యాఖ్యలు మరియు ఫారమ్ ఫీల్డ్‌లను ఫ్లాటెన్ చేయి
+	Couldn't read the ICC profile {name}: {e}	ICC ప్రొఫైల్ {name}ను చదవడం సాధ్యం కాలేదు: {e}
 	Save as PDF/UA	PDF/UAగా సేవ్ చేయి
 	Add search index	శోధన ఇండెక్స్‌ను జోడించు
 	Index	ఇండెక్స్

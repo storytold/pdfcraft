@@ -220,6 +220,7 @@
 	Import form data…	Importar datos de formulario…
 	Export form data…	Exportar datos de formulario…
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	Action Wizard…	Asistente de acciones…
 	Prepare for distribution…	Preparar para distribución…
 	Optimize scanned documents…	Optimizar documentos escaneados…
@@ -473,6 +474,18 @@
 	Standards	Estándares
 	Save as PDF/A	Guardar como PDF/A
 	Save as PDF/X	Guardar como PDF/X
+	Verify PDF/X	Verificar PDF/X
+	Choose ICC profile…	Elegir perfil ICC…
+	ICC profile: {name}	Perfil ICC: {name}
+	Can't save as {level}; nothing was changed:	No se puede guardar como {level}; no se ha cambiado nada:
+	Saved {name} and verified it: it conforms to {level}.	Se ha guardado {name} y se ha verificado: cumple {level}.
+	Saved {name}, but verifying it found {n} problems.	Se ha guardado {name}, pero la verificación ha encontrado {n} problemas.
+	Converted to {level} ({n} changes)	Convertido a {level} ({n} cambios)
+	Output intent profile:	Perfil del propósito de salida:
+	None: sRGB for RGB and gray documents	Ninguno: sRGB para documentos en RGB y en gris
+	Printing condition:	Condición de impresión:
+	Flatten comments and form fields	Acoplar comentarios y campos de formulario
+	Couldn't read the ICC profile {name}: {e}	No se ha podido leer el perfil ICC {name}: {e}
 	Save as PDF/UA	Guardar como PDF/UA
 	Add search index	Añadir índice de búsqueda
 	Index	Índice
@@ -1959,6 +1972,86 @@ action wizard	Start	Iniciar
 	PostScript XObjects aren't allowed	No se permiten XObjects PostScript
 	Embedded files must be PDF/A files themselves (use PDF/A-3 for others)	Los archivos incrustados deben ser a su vez archivos PDF/A (usa PDF/A-3 para otros)
 	An embedded file has no AFRelationship	Un archivo incrustado no tiene AFRelationship
+	The document information doesn't identify the file as {}	La información del documento no identifica el archivo como {}
+	The metadata has no {}	Los metadatos no tienen {}
+	The document information and the metadata name different PDF/X versions	La información del documento y los metadatos indican versiones de PDF/X distintas
+	The file trailer has no document ID	El trailer del archivo no tiene ID de documento
+	The document doesn't say whether it is trapped (Trapped)	El documento no indica si se le ha aplicado reventado (Trapped)
+	Trapped is {}, but it must be /True or /False	Trapped es {}, pero debe ser /True o /False
+	The Trapped key and the metadata's pdf:Trapped disagree	La clave Trapped y el pdf:Trapped de los metadatos no coinciden
+	There is no PDF/X output intent (GTS_PDFX)	No hay propósito de salida PDF/X (GTS_PDFX)
+	There is more than one PDF/X output intent	Hay más de un propósito de salida PDF/X
+	The PDF/X output intent has no OutputConditionIdentifier	El propósito de salida PDF/X no tiene OutputConditionIdentifier
+	The PDF/X output intent has no embedded profile (DestOutputProfile)	El propósito de salida PDF/X no tiene un perfil incrustado (DestOutputProfile)
+	The PDF/X output intent has neither an embedded profile nor a characterization in the ICC registry	El propósito de salida PDF/X no tiene ni un perfil incrustado ni una caracterización del registro ICC
+	The output intent's profile isn't a valid ICC profile	El perfil del propósito de salida no es un perfil ICC válido
+	The output intent's profile isn't an output (printer) profile	El perfil del propósito de salida no es un perfil de salida (de impresora)
+	The output intent's profile describes {} colour, but PDF/X-1a needs a CMYK printing condition	El perfil del propósito de salida describe color {}, pero PDF/X-1a necesita una condición de impresión CMYK
+	The output intent's profile describes {} colour; it must be gray, RGB or CMYK	El perfil del propósito de salida describe color {}; debe ser gris, RGB o CMYK
+	The output intent's profile has /N {}, which doesn't match its colour space	El perfil del propósito de salida tiene /N {}, que no coincide con su espacio de color
+	The output intent's profile has no device-to-PCS transform (AToB1 or grayTRC)	El perfil del propósito de salida no tiene transformación de dispositivo a PCS (AToB1 o grayTRC)
+	The page has no valid MediaBox	La página no tiene un MediaBox válido
+	The page has neither a TrimBox nor an ArtBox	La página no tiene ni TrimBox ni ArtBox
+	The page has both a TrimBox and an ArtBox	La página tiene a la vez TrimBox y ArtBox
+	The {} extends beyond the BleedBox	El {} sobresale del BleedBox
+	The {} extends beyond the CropBox	El {} sobresale del CropBox
+	The {} extends beyond the MediaBox	El {} sobresale del MediaBox
+	A {} annotation lies within the BleedBox	Una anotación {} está dentro del BleedBox
+	A PrinterMark annotation overlaps the TrimBox or ArtBox	Una anotación PrinterMark se superpone al TrimBox o al ArtBox
+	A stream uses JBIG2 compression	Una secuencia usa compresión JBIG2
+	A form XObject refers to a page of another file (reference XObject)	Un XObject de formulario hace referencia a una página de otro archivo (XObject de referencia)
+	An image or form has OPI information	Una imagen o un formulario tiene información OPI
+	A graphics state uses a soft mask	Un estado gráfico usa una máscara suave
+	A graphics state sets an opacity below 1	Un estado gráfico fija una opacidad inferior a 1
+	A graphics state uses the {} blend mode	Un estado gráfico usa el modo de fusión {}
+	An image has a soft mask	Una imagen tiene una máscara suave
+	The {} colour space isn't allowed: PDF/X-1a allows only CMYK, gray and spot colour	El espacio de color {} no está permitido: PDF/X-1a solo admite CMYK, gris y tintas planas
+	A colour space is nested too deeply for the spaces under it to be checked	Un espacio de color está anidado a demasiada profundidad para comprobar los espacios que tiene debajo
+	Content uses DeviceRGB colour: PDF/X-1a allows only CMYK, gray and spot colour	El contenido usa color DeviceRGB: PDF/X-1a solo admite CMYK, gris y tintas planas
+	{} colour doesn't match the output intent's colour space	El color {} no coincide con el espacio de color del propósito de salida
+	Content uses {} colour, which doesn't match the output intent's colour space	El contenido usa color {}, que no coincide con el espacio de color del propósito de salida
+	Device-independent colour is used, so the output intent needs an embedded profile	Se usa color independiente del dispositivo, así que el propósito de salida necesita un perfil incrustado
+	Output intents with profiles don't all share one profile	Los propósitos de salida con perfil no comparten todos el mismo perfil
+	The font {} has characters with no Unicode value	La fuente {} tiene caracteres sin valor Unicode
+	The font {} maps characters to U+0000, U+FEFF or U+FFFE	La fuente {} asigna caracteres a U+0000, U+FEFF o U+FFFE
+	Text in the font {} uses the Private Use Area without ActualText	El texto con la fuente {} usa el área de uso privado sin ActualText
+	The document isn't marked as tagged (MarkInfo /Marked true)	El documento no está marcado como etiquetado (MarkInfo /Marked true)
+	The language {} isn't a valid language tag	El idioma {} no es una etiqueta de idioma válida
+	The document has no structure tree: it isn't tagged	El documento no tiene árbol de estructura: no está etiquetado
+	The standard structure type {} is mapped to a type that isn't standard	El tipo de estructura estándar {} está asignado a un tipo que no es estándar
+	The role map maps {} in a circle	El mapa de funciones asigna {} en círculo
+	The structure type {} isn't standard and isn't mapped to a standard type	El tipo de estructura {} no es estándar ni está asignado a un tipo estándar
+	The document is encrypted: open it with its permissions password to remove the security	El documento está cifrado: ábrelo con su contraseña de permisos para quitar la seguridad
+	The document can't be converted: {}	El documento no se puede convertir: {}
+	PDF/X-4 embeds the printing condition's ICC profile: choose a profile file	PDF/X-4 incrusta el perfil ICC de la condición de impresión: elige un archivo de perfil
+	PDF/A embeds the output intent's ICC profile: choose a profile file	PDF/A incrusta el perfil ICC del propósito de salida: elige un archivo de perfil
+	The ICC profile {} isn't an output (printer) profile	El perfil ICC {} no es un perfil de salida (de impresora)
+	The ICC profile {} isn't an output or display profile	El perfil ICC {} no es un perfil de salida ni de pantalla
+	The ICC profile {} isn't a CMYK profile, which PDF/X-1a needs	El perfil ICC {} no es un perfil CMYK, que es lo que PDF/X-1a necesita
+	The ICC profile {} isn't a gray, RGB or CMYK profile	El perfil ICC {} no es un perfil de gris, RGB ni CMYK
+	Converting colour to CMYK needs the printing condition's ICC profile: choose a profile file	Para convertir el color a CMYK hace falta el perfil ICC de la condición de impresión: elige un archivo de perfil
+	{} needs the printing condition's ICC profile embedded for RGB or device-independent colour: choose a profile file	{} necesita incrustado el perfil ICC de la condición de impresión para el color RGB o independiente del dispositivo: elige un archivo de perfil
+	CMYK colour needs a CMYK printing condition	El color CMYK necesita una condición de impresión CMYK
+	The document uses CMYK colour: choose the ICC profile of a CMYK printing condition for its output intent	El documento usa color CMYK: elige el perfil ICC de una condición de impresión CMYK para su propósito de salida
+	JPEG 2000 pictures need PDF 1.5, newer than {} allows	Las imágenes JPEG 2000 necesitan PDF 1.5, más reciente de lo que permite {}
+	Layers (optional content) need PDF 1.5, newer than {} allows	Las capas (contenido opcional) necesitan PDF 1.5, más reciente de lo que permite {}
+	OpenType font programs need PDF 1.6, newer than {} allows	Los programas de fuentes OpenType necesitan PDF 1.6, más reciente de lo que permite {}
+	Page {}'s TrimBox, BleedBox and CropBox don't overlap	El TrimBox, el BleedBox y el CropBox de la página {} no se solapan
+	The output profile can't convert colour to CMYK ({})	El perfil de salida no puede convertir el color a CMYK ({})
+	A colour space's ICC profile can't be used to convert its colour	El perfil ICC de un espacio de color no se puede usar para convertir su color
+	A colour space is nested too deeply to convert	Un espacio de color está anidado demasiado profundamente para convertirlo
+	The spot colour {} has an alternate that can't be converted to CMYK yet	La tinta plana {} tiene un espacio alternativo que aún no se puede convertir a CMYK
+	A pattern over RGB or device-independent colour can't be converted to CMYK yet	Un motivo sobre color RGB o independiente del dispositivo aún no se puede convertir a CMYK
+	{} colour can't be converted to CMYK yet	El color {} aún no se puede convertir a CMYK
+	A content stream can't be read, so its colour can't be converted	No se puede leer un flujo de contenido, así que su color no se puede convertir
+	A colour operator's operands don't match its colour space	Los operandos de un operador de color no coinciden con su espacio de color
+	A content stream is drawn with different resources in different places, so its colour can't be converted	Un flujo de contenido se dibuja con recursos distintos en distintos lugares, así que su color no se puede convertir
+	A shading in RGB or device-independent colour can't be converted to CMYK yet	Un sombreado en color RGB o independiente del dispositivo aún no se puede convertir a CMYK
+	A picture with other than 8 bits per component can't be converted to CMYK yet	Una imagen con un número de bits por componente distinto de 8 aún no se puede convertir a CMYK
+	A picture with a decode array or a colour-key mask can't be converted to CMYK yet	Una imagen con matriz de decodificación o máscara de color clave aún no se puede convertir a CMYK
+	A picture's data can't be read, so it can't be converted to CMYK	No se pueden leer los datos de una imagen, así que no se puede convertir a CMYK
+	A JPEG picture in CMYK can't be converted yet	Una imagen JPEG en CMYK aún no se puede convertir
+	An indexed colour space's table is too short to convert	La tabla de un espacio de color indexado es demasiado corta para convertirla
 	Select Icon	Seleccionar icono
 	Choose images	Elegir imágenes
 	{dpi} pixels/inch	{dpi} píxeles/pulgada

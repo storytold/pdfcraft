@@ -182,6 +182,7 @@
 	Import form data…	Form verilerini içe aktar…
 	Export form data…	Form verilerini dışa aktar…
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	Action Wizard…	Eylem Sihirbazı…
 	Prepare for distribution…	Dağıtım için hazırla…
 	Optimize scanned documents…	Taranmış belgeleri en iyileştir…
@@ -435,6 +436,18 @@
 	Standards	Standartlar
 	Save as PDF/A	PDF/A olarak kaydet
 	Save as PDF/X	PDF/X olarak kaydet
+	Verify PDF/X	PDF/X doğrula
+	Choose ICC profile…	ICC profili seç…
+	ICC profile: {name}	ICC profili: {name}
+	Can't save as {level}; nothing was changed:	{level} olarak kaydedilemiyor; hiçbir şey değiştirilmedi:
+	Saved {name} and verified it: it conforms to {level}.	{name} kaydedildi ve doğrulandı: {level} standardına uygundur.
+	Saved {name}, but verifying it found {n} problems.	{name} kaydedildi, ancak doğrulama {n} sorun buldu.
+	Converted to {level} ({n} changes)	{level} biçimine dönüştürüldü ({n} değişiklik)
+	Output intent profile:	Çıktı amacı profili:
+	None: sRGB for RGB and gray documents	Yok: RGB ve gri belgeler için sRGB
+	Printing condition:	Baskı koşulu:
+	Flatten comments and form fields	Yorumları ve form alanlarını düzleştir
+	Couldn't read the ICC profile {name}: {e}	{name} ICC profili okunamadı: {e}
 	Save as PDF/UA	PDF/UA olarak kaydet
 	Add search index	Arama dizini ekle
 	Index	Dizin

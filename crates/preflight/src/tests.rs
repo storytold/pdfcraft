@@ -71,22 +71,24 @@ fn verify_reports_what_breaks_pdfa() {
 }
 
 /// Every problem the rules can report is listed in `WORDINGS`, so an interface showing them in
-/// another language has something to translate. The wording is `verify`'s second argument, which is
-/// what this reads off the file; the sentences `convert` reports as fixed are not wordings.
+/// another language has something to translate. The wording is `verify`'s second argument (and the
+/// second of what the level u and a rules find), which is what this reads off the files; the
+/// sentences `convert` reports as fixed are not wordings.
 #[test]
 fn wordings_are_complete() {
-    let source = include_str!("lib.rs");
     let mut said = Vec::new();
-    let mut rest = source;
-    while let Some(at) = rest.find("issue(\"") {
-        rest = &rest[at + 7..];
-        // Step over the clause, then take the wording that follows it.
-        let Some(end) = rest.find('"') else { break };
-        rest = &rest[end + 1..];
-        let Some(text) = rest.strip_prefix(", \"") else { continue };
-        let Some(end) = text.find('"') else { break };
-        said.push(&text[..end]);
-        rest = text;
+    for (source, opener) in [(include_str!("lib.rs"), "issue(\""), (include_str!("levels.rs"), "out.push((\"")] {
+        let mut rest = source;
+        while let Some(at) = rest.find(opener) {
+            rest = &rest[at + opener.len()..];
+            // Step over the clause, then take the wording that follows it.
+            let Some(end) = rest.find('"') else { break };
+            rest = &rest[end + 1..];
+            let Some(text) = rest.strip_prefix(", \"") else { continue };
+            let Some(end) = text.find('"') else { break };
+            said.push(&text[..end]);
+            rest = text;
+        }
     }
     assert!(said.len() >= 24, "the wordings are not being read off the file: {said:#?}");
     let missing: Vec<&&str> = said.iter().filter(|word| !WORDINGS.contains(word)).collect();
@@ -167,6 +169,31 @@ fn convert_does_not_give_cmyk_documents_an_srgb_output_intent() {
     assert!(left.contains(&"Device colour is used, but there is no PDF/A output intent"), "{left:#?}");
     assert!(left.contains(&"DeviceCMYK is used: it needs a CMYK output intent (not added automatically)"), "{left:#?}");
     assert!(r.remaining.iter().all(|i| !i.fixable));
+}
+
+/// ISO 19005-2 6.2.3: output intents that embed a profile all embed the same object, so a PDF/A
+/// document that is also PDF/X describes one printing condition, not two.
+#[test]
+fn output_intents_share_one_profile() {
+    let doc = |second: &str| {
+        let catalog = format!(
+            "<< /Type /Catalog /Pages 2 0 R /OutputIntents [<< /Type /OutputIntent /S /GTS_PDFA1 /OutputConditionIdentifier (A) /DestOutputProfile 4 0 R >> \
+             << /Type /OutputIntent /S /GTS_PDFX /OutputConditionIdentifier (X) /DestOutputProfile {second} >>] >>"
+        );
+        build(
+            &[
+                &catalog,
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>",
+                "<< /N 3 /Length 0 >>\nstream\n\nendstream",
+                "<< /N 3 /Length 0 >>\nstream\n\nendstream",
+            ],
+            "",
+        )
+    };
+    let shared = "Output intents with profiles don't all share one profile";
+    assert!(messages(&verify(&doc("5 0 R"), Level::A2b)).contains(&shared));
+    assert!(!messages(&verify(&doc("4 0 R"), Level::A2b)).contains(&shared));
 }
 
 /// Issue #667: verify checks the output intent's colour space against the device colour the

@@ -1877,6 +1877,85 @@
 	Add text box	Adicionar caixa de texto
 	Add underline	Adicionar sublinhado
 	An embedded file has no AFRelationship	Um arquivo incorporado não possui AFRelationship
+	The document information doesn't identify the file as {}	As informações do documento não identificam o arquivo como {}
+	The metadata has no {}	Os metadados não têm {}
+	The document information and the metadata name different PDF/X versions	As informações do documento e os metadados indicam versões de PDF/X diferentes
+	The file trailer has no document ID	O trailer do arquivo não tem ID de documento
+	The document doesn't say whether it is trapped (Trapped)	O documento não informa se tem trapping (Trapped)
+	Trapped is {}, but it must be /True or /False	Trapped é {}, mas deve ser /True ou /False
+	The Trapped key and the metadata's pdf:Trapped disagree	A chave Trapped e o pdf:Trapped dos metadados não coincidem
+	There is no PDF/X output intent (GTS_PDFX)	Não há intenção de saída PDF/X (GTS_PDFX)
+	There is more than one PDF/X output intent	Há mais de uma intenção de saída PDF/X
+	The PDF/X output intent has no OutputConditionIdentifier	A intenção de saída PDF/X não tem OutputConditionIdentifier
+	The PDF/X output intent has no embedded profile (DestOutputProfile)	A intenção de saída PDF/X não tem perfil incorporado (DestOutputProfile)
+	The PDF/X output intent has neither an embedded profile nor a characterization in the ICC registry	A intenção de saída PDF/X não tem perfil incorporado nem uma caracterização do registro ICC
+	The output intent's profile isn't a valid ICC profile	O perfil da intenção de saída não é um perfil ICC válido
+	The output intent's profile isn't an output (printer) profile	O perfil da intenção de saída não é um perfil de saída (de impressora)
+	The output intent's profile describes {} colour, but PDF/X-1a needs a CMYK printing condition	O perfil da intenção de saída descreve cor {}, mas o PDF/X-1a precisa de uma condição de impressão CMYK
+	The output intent's profile describes {} colour; it must be gray, RGB or CMYK	O perfil da intenção de saída descreve cor {}; ele deve ser cinza, RGB ou CMYK
+	The output intent's profile has /N {}, which doesn't match its colour space	O perfil da intenção de saída tem /N {}, que não corresponde ao seu espaço de cor
+	The output intent's profile has no device-to-PCS transform (AToB1 or grayTRC)	O perfil da intenção de saída não tem transformação de dispositivo para PCS (AToB1 ou grayTRC)
+	The page has no valid MediaBox	A página não tem uma MediaBox válida
+	The page has neither a TrimBox nor an ArtBox	A página não tem TrimBox nem ArtBox
+	The page has both a TrimBox and an ArtBox	A página tem uma TrimBox e uma ArtBox
+	The {} extends beyond the BleedBox	A {} ultrapassa a BleedBox
+	The {} extends beyond the CropBox	A {} ultrapassa a CropBox
+	The {} extends beyond the MediaBox	A {} ultrapassa a MediaBox
+	A {} annotation lies within the BleedBox	Uma anotação {} está dentro da BleedBox
+	A PrinterMark annotation overlaps the TrimBox or ArtBox	Uma anotação PrinterMark se sobrepõe à TrimBox ou à ArtBox
+	A stream uses JBIG2 compression	Um fluxo usa compressão JBIG2
+	A form XObject refers to a page of another file (reference XObject)	Um XObject de formulário faz referência a uma página de outro arquivo (XObject de referência)
+	An image or form has OPI information	Uma imagem ou formulário tem informações OPI
+	A graphics state uses a soft mask	Um estado gráfico usa uma máscara suave
+	A graphics state sets an opacity below 1	Um estado gráfico define uma opacidade abaixo de 1
+	A graphics state uses the {} blend mode	Um estado gráfico usa o modo de mesclagem {}
+	An image has a soft mask	Uma imagem tem uma máscara suave
+	The {} colour space isn't allowed: PDF/X-1a allows only CMYK, gray and spot colour	O espaço de cor {} não é permitido: o PDF/X-1a permite apenas CMYK, cinza e cores especiais
+	Content uses DeviceRGB colour: PDF/X-1a allows only CMYK, gray and spot colour	O conteúdo usa cor DeviceRGB: o PDF/X-1a permite apenas CMYK, cinza e cores especiais
+	{} colour doesn't match the output intent's colour space	A cor {} não corresponde ao espaço de cor da intenção de saída
+	Content uses {} colour, which doesn't match the output intent's colour space	O conteúdo usa cor {}, que não corresponde ao espaço de cor da intenção de saída
+	Device-independent colour is used, so the output intent needs an embedded profile	É usada cor independente de dispositivo, então a intenção de saída precisa de um perfil incorporado
+	Output intents with profiles don't all share one profile	As intenções de saída com perfis não compartilham todas o mesmo perfil
+	The font {} has characters with no Unicode value	A fonte {} tem caracteres sem valor Unicode
+	The font {} maps characters to U+0000, U+FEFF or U+FFFE	A fonte {} mapeia caracteres para U+0000, U+FEFF ou U+FFFE
+	Text in the font {} uses the Private Use Area without ActualText	O texto na fonte {} usa a Área de Uso Privado sem ActualText
+	The document isn't marked as tagged (MarkInfo /Marked true)	O documento não está marcado como tendo tags (MarkInfo /Marked true)
+	The language {} isn't a valid language tag	O idioma {} não é uma tag de idioma válida
+	The document has no structure tree: it isn't tagged	O documento não tem árvore de estrutura: não tem tags
+	The standard structure type {} is mapped to a type that isn't standard	O tipo de estrutura padrão {} é mapeado para um tipo que não é padrão
+	The role map maps {} in a circle	O mapa de funções mapeia {} em círculo
+	The structure type {} isn't standard and isn't mapped to a standard type	O tipo de estrutura {} não é padrão e não é mapeado para um tipo padrão
+	The document is encrypted: open it with its permissions password to remove the security	O documento está criptografado: abra-o com a senha de permissões para remover a segurança
+	The document can't be converted: {}	O documento não pode ser convertido: {}
+	PDF/X-4 embeds the printing condition's ICC profile: choose a profile file	O PDF/X-4 incorpora o perfil ICC da condição de impressão: escolha um arquivo de perfil
+	PDF/A embeds the output intent's ICC profile: choose a profile file	O PDF/A incorpora o perfil ICC da intenção de saída: escolha um arquivo de perfil
+	The ICC profile {} isn't an output (printer) profile	O perfil ICC {} não é um perfil de saída (de impressora)
+	The ICC profile {} isn't an output or display profile	O perfil ICC {} não é um perfil de saída nem de tela
+	The ICC profile {} isn't a CMYK profile, which PDF/X-1a needs	O perfil ICC {} não é um perfil CMYK, que o PDF/X-1a exige
+	The ICC profile {} isn't a gray, RGB or CMYK profile	O perfil ICC {} não é um perfil de cinza, RGB ou CMYK
+	Converting colour to CMYK needs the printing condition's ICC profile: choose a profile file	Converter a cor para CMYK requer o perfil ICC da condição de impressão: escolha um arquivo de perfil
+	{} needs the printing condition's ICC profile embedded for RGB or device-independent colour: choose a profile file	{} precisa do perfil ICC da condição de impressão incorporado para cor RGB ou independente de dispositivo: escolha um arquivo de perfil
+	CMYK colour needs a CMYK printing condition	A cor CMYK precisa de uma condição de impressão CMYK
+	The document uses CMYK colour: choose the ICC profile of a CMYK printing condition for its output intent	O documento usa cor CMYK: escolha o perfil ICC de uma condição de impressão CMYK para sua intenção de saída
+	JPEG 2000 pictures need PDF 1.5, newer than {} allows	Imagens JPEG 2000 precisam do PDF 1.5, mais recente do que {} permite
+	Layers (optional content) need PDF 1.5, newer than {} allows	Camadas (conteúdo opcional) precisam do PDF 1.5, mais recente do que {} permite
+	OpenType font programs need PDF 1.6, newer than {} allows	Programas de fonte OpenType precisam do PDF 1.6, mais recente do que {} permite
+	Page {}'s TrimBox, BleedBox and CropBox don't overlap	A TrimBox, a BleedBox e a CropBox da página {} não se sobrepõem
+	The output profile can't convert colour to CMYK ({})	O perfil de saída não consegue converter a cor para CMYK ({})
+	A colour space's ICC profile can't be used to convert its colour	O perfil ICC de um espaço de cor não pode ser usado para converter sua cor
+	A colour space is nested too deeply to convert	Um espaço de cor está aninhado profundamente demais para ser convertido
+	The spot colour {} has an alternate that can't be converted to CMYK yet	A cor especial {} tem uma alternativa que ainda não pode ser convertida para CMYK
+	A pattern over RGB or device-independent colour can't be converted to CMYK yet	Um padrão sobre cor RGB ou independente de dispositivo ainda não pode ser convertido para CMYK
+	{} colour can't be converted to CMYK yet	A cor {} ainda não pode ser convertida para CMYK
+	A content stream can't be read, so its colour can't be converted	Um fluxo de conteúdo não pode ser lido, então sua cor não pode ser convertida
+	A colour operator's operands don't match its colour space	Os operandos de um operador de cor não correspondem ao seu espaço de cor
+	A content stream is drawn with different resources in different places, so its colour can't be converted	Um fluxo de conteúdo é desenhado com recursos diferentes em lugares diferentes, então sua cor não pode ser convertida
+	A shading in RGB or device-independent colour can't be converted to CMYK yet	Um sombreamento em cor RGB ou independente de dispositivo ainda não pode ser convertido para CMYK
+	A picture with other than 8 bits per component can't be converted to CMYK yet	Uma imagem com outro número que não 8 bits por componente ainda não pode ser convertida para CMYK
+	A picture with a decode array or a colour-key mask can't be converted to CMYK yet	Uma imagem com matriz de decodificação ou máscara de cor-chave ainda não pode ser convertida para CMYK
+	A picture's data can't be read, so it can't be converted to CMYK	Os dados de uma imagem não podem ser lidos, então ela não pode ser convertida para CMYK
+	A JPEG picture in CMYK can't be converted yet	Uma imagem JPEG em CMYK ainda não pode ser convertida
+	An indexed colour space's table is too short to convert	A tabela de um espaço de cor indexado é curta demais para ser convertida
 	An image asks to be interpolated	Uma imagem solicita interpolação
 	An image has alternates or OPI information	Uma imagem contém alternativas ou informações de OPI
 	Button Style:	Estilo do botão:
@@ -1950,6 +2029,7 @@
 	open to see what it will include	abra para ver o que será incluído
 	Page {p} of {n}	Página {p} de {n}
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	Planned	Planejado
 	Planned for milestone	Planejado para o marco
 	PostScript / EPS	PostScript / EPS
@@ -1970,6 +2050,18 @@
 	Save as PDF/A-3b	Salvar como PDF/A-3b
 	Save as PDF/UA	Salvar como PDF/UA
 	Save as PDF/X	Salvar como PDF/X
+	Verify PDF/X	Verificar PDF/X
+	Choose ICC profile…	Escolher perfil ICC…
+	ICC profile: {name}	Perfil ICC: {name}
+	Can't save as {level}; nothing was changed:	Não é possível salvar como {level}; nada foi alterado:
+	Saved {name} and verified it: it conforms to {level}.	{name} foi salvo e verificado: está em conformidade com {level}.
+	Saved {name}, but verifying it found {n} problems.	{name} foi salvo, mas a verificação encontrou {n} problemas.
+	Converted to {level} ({n} changes)	Convertido para {level} ({n} alterações)
+	Output intent profile:	Perfil da intenção de saída:
+	None: sRGB for RGB and gray documents	Nenhum: sRGB para documentos RGB e em tons de cinza
+	Printing condition:	Condição de impressão:
+	Flatten comments and form fields	Nivelar comentários e campos de formulário
+	Couldn't read the ICC profile {name}: {e}	Não foi possível ler o perfil ICC {name}: {e}
 	Select a file for the stamp	Selecionar um arquivo para o carimbo
 	Select Icon	Selecionar ícone
 	Set bookmark destination	Definir destino do marcador
