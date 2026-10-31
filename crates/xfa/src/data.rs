@@ -79,14 +79,49 @@ impl DataNode {
         self.get(path).map(|n| n.text.as_str())
     }
 
-    /// The value at `path`: its text, or, for a container whose children are all `value`
-    /// elements (one way a multi-select list's picks are stored), those on separate lines.
-    pub fn value_at(&self, path: &[(String, usize)]) -> Option<String> {
-        let n = self.get(path)?;
-        if n.children.is_empty() || !n.children.iter().all(|c| c.name == "value") {
-            return Some(n.text.clone());
+    /// Text of a value node, including the `value` children used by multi-select controls.
+    fn value(&self) -> String {
+        if self.children.is_empty() || !self.children.iter().all(|c| c.name == "value") {
+            return self.text.clone();
         }
-        Some(n.children.iter().map(|c| c.text.trim()).filter(|t| !t.is_empty()).take(1000).collect::<Vec<_>>().join("\n"))
+        self.children.iter().map(|c| c.text.trim()).filter(|t| !t.is_empty()).take(1000).collect::<Vec<_>>().join("\n")
+    }
+
+    /// The value at the exact data path, without any form-field binding heuristics.
+    pub fn value_at(&self, path: &[(String, usize)]) -> Option<String> {
+        self.get(path).map(Self::value)
+    }
+
+    /// Read a field from its data binding. Direct paths always win. Only when the final leaf
+    /// is absent may the field bind to one unambiguous value descendant inside schema-specific
+    /// containers (#5337); explicit data operations must continue to use `value_at`.
+    pub(super) fn field_value_at(&self, path: &[(String, usize)]) -> Option<String> {
+        if path.is_empty() {
+            return None;
+        }
+        let mut node = self;
+        for (position, (name, index)) in path.iter().enumerate() {
+            if let Some(direct) = node.children.iter().filter(|child| &child.name == name).nth(*index) {
+                node = direct;
+                continue;
+            }
+            if position + 1 != path.len() || *index != 0 {
+                return None;
+            }
+            let mut found: Option<&DataNode> = None;
+            let mut pending: Vec<&DataNode> = node.children.iter().collect();
+            while let Some(candidate) = pending.pop() {
+                if &candidate.name == name && candidate.children.is_empty() {
+                    if found.is_some() {
+                        return None;
+                    }
+                    found = Some(candidate);
+                }
+                pending.extend(candidate.children.iter());
+            }
+            return found.map(Self::value);
+        }
+        Some(node.value())
     }
 }
 
