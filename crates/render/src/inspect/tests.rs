@@ -747,10 +747,10 @@ trailer << /Root 1 0 R /Info 4 0 R >>
 fn creation_and_modification_dates_are_read_for_document_properties() {
     let info = inspect(Arc::new(with_info("/CreationDate (D:20240105093000+01'00') /ModDate (D:20261031174500Z)")), None).expect("opens");
     assert_eq!((info.created.as_deref(), info.modified.as_deref()), (Some("2024-01-05 09:30"), Some("2026-10-31 17:45")));
-    // Not a PDF date: shown as written. Empty, a number and absent: no date.
+    // Not a PDF date: shown as written. Empty, a number, a name and absent: no date.
     let info = inspect(Arc::new(with_info("/CreationDate (last Tuesday) /ModDate ()")), None).expect("opens");
     assert_eq!((info.created.as_deref(), info.modified.as_deref()), (Some("last Tuesday"), None));
-    let info = inspect(Arc::new(with_info("/CreationDate 20240105")), None).expect("opens");
+    let info = inspect(Arc::new(with_info("/CreationDate 20240105 /ModDate /D:20240105093000Z")), None).expect("opens");
     assert_eq!((info.created, info.modified), (None, None));
 }
 
