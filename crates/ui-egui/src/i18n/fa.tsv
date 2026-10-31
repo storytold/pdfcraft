@@ -2814,5 +2814,11 @@ theme	Appearance	ظاهر
 	a field named {name} already exists	فیلدی با نام {name} از قبل وجود دارد
 	Today	امروز
 
+# Duplicate pages with new field names (#2228) (AI-assisted, not separately native-reviewed)
+	Duplicate pages with new field names	تکثیر صفحه‌ها با نام‌های تازه برای فیلدها
+	Duplicate pages — 1 field renamed	تکثیر صفحه‌ها — ۱ فیلد تغییر نام یافت
+	Duplicate pages — fields renamed	تکثیر صفحه‌ها — فیلد‌ها تغییر نام یافتند
+	{batch} — 1 field renamed	{batch} — ۱ فیلد تغییر نام یافت
+	{batch} — fields renamed	{batch} — فیلد‌ها تغییر نام یافتند
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	گزینه‌های این پاسخ

@@ -2898,6 +2898,12 @@ theme	Appearance	Aspecto
 	Extract the selected pages…	Extraer las páginas seleccionadas…
 	Delete the selected pages	Eliminar las páginas seleccionadas
 
+# Duplicate pages with new field names (#2228) (AI-assisted, not separately native-reviewed)
+	Duplicate pages with new field names	Duplicar páginas con nombres de campo nuevos
+	Duplicate pages — 1 field renamed	Duplicar páginas — 1 campo renombrado
+	Duplicate pages — fields renamed	Duplicar páginas — campos renombrados
+	{batch} — 1 field renamed	{batch} — 1 campo renombrado
+	{batch} — fields renamed	{batch} — campos renombrados
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opciones de esta respuesta
 	Export value	Valor de exportación

@@ -386,6 +386,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("page.insert_blank", "Insert blank page", PAGES, None, Assembly, "file-plus"),
     c("page.rotate_dialog", "Rotate pages…", PAGES, None, Assembly, "rotate-cw"),
     c("page.duplicate", "Duplicate pages", PAGES, None, Assembly, "copy-plus"),
+    // The copies' form fields get names of their own (Text1 becomes Text1-1), so filling in a
+    // copy doesn't fill in the original (#2228).
+    c("page.duplicate_renaming_fields", "Duplicate pages with new field names", PAGES, None, Assembly, "copy-plus"),
     c("page.reverse", "Reverse pages", PAGES, None, Assembly, "arrow-up-down"),
     c("page.crop", "Crop pages", PAGES, None, Assembly, "crop"),
     c("page.boxes", "Set page boxes…", PAGES, None, Assembly, "square-dashed-mouse-pointer"),

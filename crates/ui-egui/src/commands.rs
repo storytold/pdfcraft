@@ -408,7 +408,10 @@ impl PdfCraftApp {
             "page.cut" => self.copy_pages(true),
             "page.paste" => self.paste_pages(),
             "page.duplicate" => {
-                self.apply_edit(Edit::DuplicatePages { pages: targets, at: None });
+                self.apply_edit(Edit::DuplicatePages { pages: targets, at: None, field_conflicts: pdfcraft_engine::FieldConflicts::Merge });
+            }
+            "page.duplicate_renaming_fields" => {
+                self.apply_edit(Edit::DuplicatePages { pages: targets, at: None, field_conflicts: pdfcraft_engine::FieldConflicts::Rename });
             }
             // Two or more selected pages reverse among themselves; otherwise the whole document.
             "page.reverse" => {

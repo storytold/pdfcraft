@@ -2808,5 +2808,11 @@ theme	Appearance	Tampilan
 	Extract the selected pages…	Ekstrak halaman yang dipilih…
 	Delete the selected pages	Hapus halaman yang dipilih
 
+# Duplicate pages with new field names (#2228) (AI-assisted, not separately native-reviewed)
+	Duplicate pages with new field names	Duplikat halaman dengan nama kolom baru
+	Duplicate pages — 1 field renamed	Duplikat halaman — 1 kolom diganti namanya
+	Duplicate pages — fields renamed	Duplikat halaman — kolom diganti namanya
+	{batch} — 1 field renamed	{batch} — 1 kolom diganti namanya
+	{batch} — fields renamed	{batch} — kolom diganti namanya
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opsi untuk balasan ini

@@ -551,16 +551,31 @@ pub fn reverse_pages(doc: &mut Document, indices: &[usize]) -> Result<(), Organi
 
 /// Duplicate pages: copies of `indices` (in order) are inserted at `at` in the page order
 /// (clamped to the document's end), or after the last of them when `at` is `None`, sharing
-/// fonts and images with the originals.
+/// fonts and images with the originals. The copies' form fields keep their names, so each is
+/// one field with its original ([`FieldConflicts::Merge`]; see [`duplicate_pages_with`]).
 pub fn duplicate_pages(doc: &mut Document, indices: &[usize], at: Option<usize>) -> Result<(), OrganizeError> {
+    duplicate_pages_with(doc, indices, at, FieldConflicts::Merge).map(|_| ())
+}
+
+/// [`duplicate_pages`], resolving the copies' form field names per `conflicts`: with
+/// [`FieldConflicts::Rename`] every copied field gets the first free `Name-1`, `Name-2`… name,
+/// so filling in a copy no longer fills in the original (#2228). Returns what was renamed (old
+/// fully-qualified name → new one), in order; nothing with [`FieldConflicts::Merge`].
+pub fn duplicate_pages_with(
+    doc: &mut Document,
+    indices: &[usize],
+    at: Option<usize>,
+    conflicts: FieldConflicts,
+) -> Result<Vec<(String, String)>, OrganizeError> {
     let n = page_count(doc)?;
     check(indices, n)?;
-    let Some(&last) = indices.iter().max() else { return Ok(()) };
+    let Some(&last) = indices.iter().max() else { return Ok(Vec::new()) };
     let mut order = indices.to_vec();
     order.sort_unstable();
     order.dedup();
     let src = doc.clone();
-    import_pages(doc, &src, &order, at.unwrap_or(last + 1)).map(|_| ())
+    // `check` keeps `last` below the page count, so `last + 1` can't overflow.
+    import_pages_with(doc, &src, &order, at.unwrap_or(last.saturating_add(1)), conflicts).map(|o| o.renamed_fields)
 }
 
 /// Replace Pages: the content of `targets` (in order) is replaced by that of `src_pages` of

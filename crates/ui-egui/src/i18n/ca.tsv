@@ -2836,5 +2836,11 @@ theme	Appearance	Aspecte
 	Extract the selected pages…	Extreu les pàgines seleccionades…
 	Delete the selected pages	Suprimeix les pàgines seleccionades
 
+# Duplicate pages with new field names (#2228) (AI-assisted, not separately native-reviewed)
+	Duplicate pages with new field names	Duplica pàgines amb noms de camp nous
+	Duplicate pages — 1 field renamed	Duplica pàgines — 1 camp s'ha reanomenat
+	Duplicate pages — fields renamed	Duplica pàgines — camps reanomenats
+	{batch} — 1 field renamed	{batch} — 1 camp s'ha reanomenat
+	{batch} — fields renamed	{batch} — camps reanomenats
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opcions d'aquesta resposta

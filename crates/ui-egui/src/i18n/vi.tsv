@@ -2842,6 +2842,12 @@ key	Space	Space
 	Extract the selected pages…	Trích xuất các trang đã chọn…
 	Delete the selected pages	Xóa các trang đã chọn
 
+# Duplicate pages with new field names (#2228) (AI-assisted, not separately native-reviewed)
+	Duplicate pages with new field names	Nhân bản trang với tên trường mới
+	Duplicate pages — 1 field renamed	Nhân bản trang — 1 trường được đổi tên
+	Duplicate pages — fields renamed	Nhân bản trang — các trường được đổi tên
+	{batch} — 1 field renamed	{batch} — 1 trường được đổi tên
+	{batch} — fields renamed	{batch} — các trường được đổi tên
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tùy chọn cho câu trả lời này
 	Export value	Giá trị xuất

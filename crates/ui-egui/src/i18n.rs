@@ -723,6 +723,11 @@ pub fn edit_label(label: &pdfcraft_engine::Label) -> String {
     if let Some(name) = label.value.as_deref().filter(|_| label.wording == "{batch}") {
         return t(name).to_owned();
     }
+    // A batch that renamed fields says so after its name ("{batch} — fields renamed"), whose
+    // name is looked up as above.
+    if let Some(name) = label.value.as_deref().filter(|_| label.wording.starts_with("{batch}")) {
+        return pdfcraft_engine::Label::with(label.wording, t(name)).said(t(label.wording));
+    }
     label.said(t(label.wording))
 }
 

@@ -2562,5 +2562,11 @@ animation effects	Off	Joaktiv
 	Extract the selected pages…	Nxirr faqet e përzgjedhura…
 	Delete the selected pages	Fshi faqet e përzgjedhura
 
+# Duplicate pages with new field names (#2228) (AI-assisted, not separately native-reviewed)
+	Duplicate pages with new field names	Dyfisho faqet me emra të rinj fushash
+	Duplicate pages — 1 field renamed	Dyfisho faqet — 1 fushë u riemërua
+	Duplicate pages — fields renamed	Dyfisho faqet — fushat u riemëruan
+	{batch} — 1 field renamed	{batch} — 1 fushë u riemërua
+	{batch} — fields renamed	{batch} — fushat u riemëruan
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opsionet për këtë përgjigje

@@ -1193,7 +1193,7 @@ fn form_with_field(name: &str) -> Vec<u8> {
 fn duplicating_a_page_with_a_field_keeps_the_field_name() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let id = s.open("a.pdf", None, Arc::new(form_with_field("Text1")), None).unwrap();
-    s.apply(id, Edit::DuplicatePages { pages: vec![0], at: None }).unwrap();
+    s.apply(id, Edit::DuplicatePages { pages: vec![0], at: None, field_conflicts: FieldConflicts::Merge }).unwrap();
     let doc = s.get(id).unwrap();
     assert_eq!(doc.info.pages.len(), 2);
     assert!(doc.form.iter().all(|f| f.name == "Text1"), "{:?}", doc.form.iter().map(|f| &f.name).collect::<Vec<_>>());
@@ -1230,6 +1230,76 @@ fn insert_from_file_renames_colliding_fields_and_notes_it() {
     let doc = s.get(id).unwrap();
     let names: Vec<&str> = doc.form.iter().map(|f| f.name.as_str()).collect();
     assert_eq!(names, ["Text1"], "undo restores the single original field");
+}
+
+/// #2228: Duplicate pages with new field names gives the copy a field of its own. Filling it in
+/// leaves the original alone; the repair log names the rename (and the scripts caveat), the
+/// undo step's label says fields were renamed, and undo takes the copy away again.
+#[test]
+fn duplicating_with_new_field_names_makes_the_copy_its_own_field() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("a.pdf", None, Arc::new(form_with_field("Text1")), None).unwrap();
+    s.apply(id, Edit::DuplicatePages { pages: vec![0], at: None, field_conflicts: FieldConflicts::Rename }).unwrap();
+    let names = |s: &Session| s.get(id).unwrap().form.iter().map(|f| f.name.clone()).collect::<Vec<_>>();
+    assert_eq!(names(&s), ["Text1", "Text1-1"]);
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.pages.len(), 2);
+    let copy = doc.form.iter().find(|f| f.name == "Text1-1").unwrap();
+    assert_eq!(copy.widgets.iter().map(|w| w.page).collect::<Vec<_>>(), [Some(1)], "the copy's widget is on the new page");
+    assert!(
+        doc.repair_log()
+            .iter()
+            .any(|l| l.starts_with("duplicated pages renamed 1 form field") && l.contains("Text1 → Text1-1") && l.contains("were not rewritten")),
+        "{:?}",
+        doc.repair_log()
+    );
+    s.apply(id, Edit::SetFieldValue { name: "Text1-1".into(), value: FieldValue::Text("copy".into()) }).unwrap();
+    let value = |s: &Session, name: &str| s.get(id).unwrap().form.iter().find(|f| f.name == name).map(|f| f.value.clone());
+    assert_eq!(value(&s, "Text1-1"), Some(vec!["copy".to_string()]));
+    assert_ne!(value(&s, "Text1"), Some(vec!["copy".to_string()]), "the original keeps its own value");
+    s.undo(id).unwrap();
+    let label = s.undo(id).unwrap();
+    assert_eq!(label.as_str(), "Duplicate pages — 1 field renamed");
+    assert_eq!(names(&s), ["Text1"]);
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 1);
+}
+
+/// CodeRabbit on #4557: two renaming duplications in one batch each report their renames; the
+/// second no longer replaces the first's in the repair log.
+#[test]
+fn a_batch_of_renaming_duplications_reports_every_rename() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("a.pdf", None, Arc::new(form_with_field("Text1")), None).unwrap();
+    let dup = || Edit::DuplicatePages { pages: vec![0], at: None, field_conflicts: FieldConflicts::Rename };
+    s.apply(id, Edit::Batch { label: "Duplicate twice".into(), edits: vec![dup(), dup()] }).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.form.len(), 3, "{:?}", doc.form.iter().map(|f| &f.name).collect::<Vec<_>>());
+    assert!(
+        doc.repair_log().iter().any(|l| l.starts_with("duplicated pages renamed 2 form fields")),
+        "both renames are noted: {:?}",
+        doc.repair_log()
+    );
+    // The undo step keeps the batch's name and says fields were renamed (CodeRabbit on #4557).
+    assert_eq!(doc.can_undo(), Some("Duplicate twice — fields renamed"));
+}
+
+/// CodeRabbit on #4557: the note names the step that renamed, not every kind of step in the
+/// batch: an insertion that renamed nothing doesn't make it "duplicated and inserted pages".
+#[test]
+fn a_mixed_batch_names_only_the_step_that_renamed() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("a.pdf", None, Arc::new(form_with_field("Text1")), None).unwrap();
+    let dup = Edit::DuplicatePages { pages: vec![0], at: None, field_conflicts: FieldConflicts::Rename };
+    let insert = Edit::InsertPagesFrom {
+        name: "b.pdf".into(),
+        bytes: Arc::new(form_with_field("Other")),
+        pages: None,
+        at: 1,
+        field_conflicts: FieldConflicts::Rename,
+    };
+    s.apply(id, Edit::Batch { label: "Mixed".into(), edits: vec![dup, insert] }).unwrap();
+    let log = s.get(id).unwrap().repair_log().to_vec();
+    assert!(log.iter().any(|l| l.starts_with("duplicated pages renamed 1 form field")), "{log:?}");
 }
 
 /// A combine reports the fields it renamed — the tool result tells callers what their scripts
@@ -3258,7 +3328,7 @@ fn crop_and_duplicate_pages_show_in_the_viewer() {
     assert_eq!(d.info.pages[0].crop, [10.0, 20.0, 170.0, 260.0]);
     assert_eq!((d.info.pages[0].width, d.info.pages[0].height), (160.0, 240.0), "the viewer shows the cropped size");
     assert_eq!(d.page_boxes()[1][1], [0.0, 0.0, 200.0, 300.0]);
-    s.apply(id, Edit::DuplicatePages { pages: vec![1], at: None }).unwrap();
+    s.apply(id, Edit::DuplicatePages { pages: vec![1], at: None, field_conflicts: FieldConflicts::Merge }).unwrap();
     assert_eq!(page_texts(&s, id), ["Page 1", "Page 2", "Page 2"]);
     assert_eq!(s.get(id).unwrap().can_undo(), Some("Duplicate page"));
 }

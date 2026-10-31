@@ -43,6 +43,9 @@ pub enum Edit {
     DuplicatePages {
         pages: Vec<usize>,
         at: Option<usize>,
+        /// The copies' form fields: `Merge` keeps their names, so each copy is one field with
+        /// its original (Duplicate pages); `Rename` gives each its own (#2228).
+        field_conflicts: pdfcraft_organize::FieldConflicts,
     },
     /// Replace Pages: the content of `pages` is replaced by `src_pages` of another PDF; the
     /// pages' links, comments and bookmarks stay.

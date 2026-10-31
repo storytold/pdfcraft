@@ -277,7 +277,15 @@ impl Automation {
             "page_duplicate" => {
                 let pages = self.pages(&a, "pages")?;
                 let at = self.opt_position(&a, "at")?;
-                self.apply(&a, Edit::DuplicatePages { pages, at })?
+                // Duplicate keeps the copies' field names unless asked (#2228).
+                let field_conflicts = match a.opt_str("field_conflicts")? {
+                    None | Some("merge") => pdfcraft_organize::FieldConflicts::Merge,
+                    Some("rename") => pdfcraft_organize::FieldConflicts::Rename,
+                    Some(other) => {
+                        return Err(ToolError::InvalidArgs(format!("field_conflicts must be \"merge\" or \"rename\", not {other:?}")));
+                    }
+                };
+                self.apply(&a, Edit::DuplicatePages { pages, at, field_conflicts })?
             }
             "page_set_box" => self.page_set_box(&a)?,
             "page_transition_set" => self.page_transition_set(&a)?,

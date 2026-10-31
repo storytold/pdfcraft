@@ -2740,6 +2740,12 @@ key	Space	Mellomrom
 	Extract the selected pages…	Trekk ut de valgte sidene…
 	Delete the selected pages	Slett de valgte sidene
 
+# Duplicate pages with new field names (#2228) (AI-assisted, not separately native-reviewed)
+	Duplicate pages with new field names	Dupliser sider med nye feltnavn
+	Duplicate pages — 1 field renamed	Dupliser sider — 1 felt fikk nytt navn
+	Duplicate pages — fields renamed	Dupliser sider — felt fikk nytt navn
+	{batch} — 1 field renamed	{batch} — 1 felt fikk nytt navn
+	{batch} — fields renamed	{batch} — felt fikk nytt navn
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Alternativer for dette svaret
 # Untranslated: English text until a translator fills these in.

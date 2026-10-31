@@ -359,6 +359,20 @@ fn history_labels_keep_captured_names() {
     assert_eq!(command_label("Undo Fill in Save {e}"), "Undo Fill in Save {e}");
 }
 
+/// CodeRabbit on #4557: a batch that renamed fields keeps its own name, translated as a batch
+/// name is, before the translated note that fields were renamed.
+#[test]
+fn a_renaming_batch_label_translates_its_name_and_the_note() {
+    let de = Lang::from_code("de").expect("de registered");
+    set_current(de);
+    let one = pdfcraft_engine::Label::with("{batch} — 1 field renamed", "Recognize text");
+    assert_eq!(edit_label(&one), "Text erkennen — 1 Feld umbenannt");
+    let many = pdfcraft_engine::Label::with("{batch} — fields renamed", "My own steps");
+    assert_eq!(edit_label(&many), "My own steps — Felder umbenannt");
+    set_current(Lang::EN);
+    assert_eq!(edit_label(&many), "My own steps — fields renamed");
+}
+
 #[test]
 fn current_language_is_per_thread() {
     set_current(JA());

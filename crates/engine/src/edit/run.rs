@@ -182,6 +182,9 @@ pub(crate) struct EditCtx {
     /// Fields the edit renamed to keep imported names separate (old → new), for the repair
     /// log and the undo label.
     pub(crate) renamed_fields: Vec<(String, String)>,
+    /// Whether a page duplication and whether a file insertion renamed any of them, for the
+    /// repair note's wording.
+    pub(crate) renamed_by: (bool, bool),
     /// The overlay streams the edit's applied redactions added, which alone the renderer's check
     /// leaves out.
     pub(crate) redaction_overlays: Vec<pdfcraft_cos::ObjRef>,
@@ -213,6 +216,7 @@ impl EditCtx {
             count: 0,
             rng: getrandom::fill,
             renamed_fields: Vec::new(),
+            renamed_by: (false, false),
             redaction_overlays: Vec::new(),
         }
     }
@@ -261,7 +265,12 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_organize::insert_blank_page(doc, *at, *width, *height)?;
         }
         Edit::SetInfo { key, value } => pdfcraft_organize::set_info(doc, key, value)?,
-        Edit::DuplicatePages { pages, at } => pdfcraft_organize::duplicate_pages(doc, pages, *at)?,
+        Edit::DuplicatePages { pages, at, field_conflicts } => {
+            // Added to, not replaced: a batch can duplicate (or insert) more than once.
+            let renamed = pdfcraft_organize::duplicate_pages_with(doc, pages, *at, *field_conflicts)?;
+            cx.renamed_by.0 |= !renamed.is_empty();
+            cx.renamed_fields.extend(renamed);
+        }
         Edit::ReplacePages { pages, name, bytes, src_pages } => {
             let src = open_source(name, bytes)?;
             pdfcraft_organize::replace_pages(doc, pages, &src, src_pages)?;
@@ -277,7 +286,8 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             // The file's bookmarks come along under one named after it, as in Combine Files.
             let title = std::path::Path::new(name).file_stem().map_or_else(|| name.clone(), |s| s.to_string_lossy().into_owned());
             let outcome = pdfcraft_organize::insert_file_pages(doc, &src, &title, &pages, *at, *field_conflicts)?;
-            cx.renamed_fields = outcome.renamed_fields;
+            cx.renamed_by.1 |= !outcome.renamed_fields.is_empty();
+            cx.renamed_fields.extend(outcome.renamed_fields);
         }
         Edit::AddBookmark { parent, index, title, page, left, top } => {
             pdfcraft_organize::add_bookmark_at(doc, parent, *index, title, *page, *left, *top)?;

@@ -2574,6 +2574,12 @@ animation effects	Off	Ki
 	Extract the selected pages…	A kijelölt oldalak kibontása…
 	Delete the selected pages	A kijelölt oldalak törlése
 
+# Duplicate pages with new field names (#2228) (AI-assisted, not separately native-reviewed)
+	Duplicate pages with new field names	Oldalak megkettőzése új mezőnevekkel
+	Duplicate pages — 1 field renamed	Oldalak megkettőzése — 1 mező átnevezve
+	Duplicate pages — fields renamed	Oldalak megkettőzése — mezők átnevezve
+	{batch} — 1 field renamed	{batch} — 1 mező átnevezve
+	{batch} — fields renamed	{batch} — mezők átnevezve
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	A válasz beállításai
 	Export value	Exportérték

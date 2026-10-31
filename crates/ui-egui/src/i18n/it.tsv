@@ -2807,6 +2807,12 @@ certificate	SHA-256 digest	Impronta SHA-256
 	Extract the selected pages…	Estrai le pagine selezionate…
 	Delete the selected pages	Elimina le pagine selezionate
 
+# Duplicate pages with new field names (#2228) (AI-assisted, not separately native-reviewed)
+	Duplicate pages with new field names	Duplica pagine con nuovi nomi di campo
+	Duplicate pages — 1 field renamed	Duplica pagine — 1 campo rinominato
+	Duplicate pages — fields renamed	Duplica pagine — campi rinominati
+	{batch} — 1 field renamed	{batch} — 1 campo rinominato
+	{batch} — fields renamed	{batch} — campi rinominati
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opzioni per questa risposta
 	Export value	Valore di esportazione

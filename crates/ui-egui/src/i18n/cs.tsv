@@ -2882,6 +2882,12 @@ certificate	Version	Verze
 	Extract the selected pages…	Extrahovat vybrané stránky…
 	Delete the selected pages	Odstranit vybrané stránky
 
+# Duplicate pages with new field names (#2228) (AI-assisted, not separately native-reviewed)
+	Duplicate pages with new field names	Duplikovat stránky s novými názvy polí
+	Duplicate pages — 1 field renamed	Duplikovat stránky — 1 pole přejmenováno
+	Duplicate pages — fields renamed	Duplikovat stránky — pole přejmenována
+	{batch} — 1 field renamed	{batch} — 1 pole přejmenováno
+	{batch} — fields renamed	{batch} — pole přejmenována
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Možnosti této odpovědi
 	Export value	Exportní hodnota

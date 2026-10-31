@@ -2807,5 +2807,11 @@ theme	Appearance	स्वरूप
 	Extract the selected pages…	चयनित पृष्ठ निकालें…
 	Delete the selected pages	चयनित पृष्ठ हटाएँ
 
+# Duplicate pages with new field names (#2228) (AI-assisted, not separately native-reviewed)
+	Duplicate pages with new field names	नए फ़ील्ड नामों के साथ पृष्ठ डुप्लिकेट करें
+	Duplicate pages — 1 field renamed	पृष्ठ डुप्लिकेट करें — 1 फ़ील्ड का नाम बदला गया
+	Duplicate pages — fields renamed	पृष्ठ डुप्लिकेट करें — फ़ील्ड के नाम बदले गए
+	{batch} — 1 field renamed	{batch} — 1 फ़ील्ड का नाम बदला गया
+	{batch} — fields renamed	{batch} — फ़ील्ड के नाम बदले गए
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	इस जवाब के विकल्प
