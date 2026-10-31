@@ -94,6 +94,18 @@ impl PdfCraftApp {
 impl PdfCraftApp {
     pub(crate) fn finish_render_frame(&mut self, ctx: &egui::Context) {
         self.finish_document_copy(ctx);
+        // Dialogs run after native intake in both normal and full-screen views. Resume only
+        // when paths can be admitted next frame; a held modal or worker must not spin repaint.
+        #[cfg(not(target_arch = "wasm32"))]
+        if !self.pending_os_opens.is_empty()
+            && !self.modal_open()
+            && self.pending_full_screen.is_none()
+            && !self.pickers.pending()
+            && self.pending_opens.is_empty()
+        {
+            let remaining = self.native_open_retry_at.map_or(0.0, |deadline| (deadline - ctx.input(|i| i.time)).max(0.0));
+            ctx.request_repaint_after(std::time::Duration::try_from_secs_f64(remaining).unwrap_or_default());
+        }
         // The Combine grid's thumbnails, whichever tab shows (renders under way still finish).
         self.combine_thumbs_frame(ctx);
         // Retire hidden documents before admitting the visible document's textures, so the

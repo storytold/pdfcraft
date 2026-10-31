@@ -367,7 +367,14 @@ pub struct PdfCraftApp {
     #[cfg(not(target_arch = "wasm32"))]
     pending_opens: Vec<PendingOpen>,
     #[cfg(not(target_arch = "wasm32"))]
+    pending_os_opens: std::collections::VecDeque<String>,
+    #[cfg(not(target_arch = "wasm32"))]
     next_open_token: u64,
+    /// Retry the retained native queue head after worker admission fails.
+    #[cfg(not(target_arch = "wasm32"))]
+    native_open_retry_at: Option<f64>,
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    open_worker_start_failures: u32,
     #[cfg(all(test, not(target_arch = "wasm32")))]
     open_prepare_gate: Option<std::sync::Arc<open_worker::PrepareGate>>,
     /// Folders pinned to Home, and what they held when last listed.
@@ -644,4 +651,339 @@ pub struct PdfCraftApp {
     pub pending_full_screen: Option<DocId>,
     /// An absolute GoToR target waiting for approval, before any target-file I/O (#1364).
     pub pending_remote_link: Option<PendingRemoteLink>,
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[allow(clippy::unwrap_used)]
+mod native_os_open_tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use eframe::App;
+
+    use super::*;
+
+    fn full_screen_bytes() -> Vec<u8> {
+        let bytes = pdfcraft_engine::Session::new().create_from_text("deck", "Consent owner").unwrap();
+        let mut document = pdfcraft_cos::Document::open(bytes).unwrap();
+        let root = document.root().unwrap();
+        let mut catalog = document.get(root).as_dict().unwrap().clone();
+        catalog.set(b"PageMode".to_vec(), pdfcraft_cos::Object::name("FullScreen"));
+        document.set(root, catalog);
+        pdfcraft_cos::write_full(&document, &Default::default()).unwrap()
+    }
+
+    fn settle(ctx: &egui::Context) {
+        for _ in 0..2 {
+            let _ = ctx.run_logic(&Default::default(), |_| {});
+        }
+        assert!(!ctx.has_requested_repaint());
+    }
+
+    #[test]
+    fn native_full_screen_consent_holds_ready_replies_and_wakes_on_both_answers() {
+        for allow in [false, true] {
+            let mut app = PdfCraftApp::new();
+            let ctx = egui::Context::default();
+            app.ctx = Some(ctx.clone());
+            let (gate, started, release, finished) = open_worker::prepare_gate();
+            app.open_prepare_gate = Some(gate);
+            let a = full_screen_bytes();
+            let b = full_screen_bytes();
+            for (name, bytes) in [("a.pdf", a.clone()), ("b.pdf", b.clone())] {
+                app.schedule_open(OpenRequest {
+                    name: name.into(),
+                    path: None,
+                    stamp: None,
+                    input: open_worker::Input::Bytes(Arc::new(bytes)),
+                    password: None,
+                    activate: true,
+                    after_open: None,
+                    recovered: None,
+                    then: None,
+                })
+                .unwrap();
+                started.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+                release.send(()).unwrap();
+                finished.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+            }
+            app.poll_pending_opens();
+            assert_eq!(app.views.len(), 1, "ready B must not replace A's consent");
+            let a_id = app.views[0].id;
+            assert_eq!(app.pending_full_screen, Some(a_id));
+            assert_eq!(app.pending_opens.len(), 1);
+            app.poll_pending_opens();
+            assert_eq!(app.active_ids().unwrap().1, a_id);
+            settle(&ctx);
+            let wakes = Arc::new(AtomicUsize::new(0));
+            let requested = wakes.clone();
+            ctx.set_request_repaint_callback(move |_| {
+                requested.fetch_add(1, Ordering::SeqCst);
+            });
+            app.resolve_full_screen_prompt(&ctx, allow);
+            assert_eq!(wakes.load(Ordering::SeqCst), 1, "ready replies need a wake before delivery");
+            assert_eq!(app.views.len(), 1);
+            app.poll_pending_opens();
+            assert_eq!(app.views.len(), 2);
+            let b_id = app.views[1].id;
+            assert_eq!(app.pending_full_screen, Some(b_id));
+            assert_eq!(app.active_ids().unwrap().1, b_id);
+            assert!(app.pending_opens.is_empty());
+            for (id, original) in [(a_id, &a), (b_id, &b)] {
+                let doc = app.session.get(id).unwrap();
+                assert_eq!(doc.bytes.as_ref(), original);
+                assert!(!doc.dirty && doc.can_undo().is_none());
+            }
+            // No retained native work means no extra release wake.
+            settle(&ctx);
+            wakes.store(0, Ordering::SeqCst);
+            app.resolve_full_screen_prompt(&ctx, false);
+            assert_eq!(wakes.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[test]
+    fn native_full_screen_consent_blocks_frame_wakes_then_releases_paths() {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("a.pdf", Some("/consent-a.pdf".into()), full_screen_bytes()).unwrap();
+        let a = app.active_ids().unwrap().1;
+        let ctx = egui::Context::default();
+        app.ctx = Some(ctx.clone());
+        app.pending_os_opens.push_back("/consent-a.pdf".into());
+        settle(&ctx);
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let requested = wakes.clone();
+        ctx.set_request_repaint_callback(move |_| {
+            requested.fetch_add(1, Ordering::SeqCst);
+        });
+        for _ in 0..3 {
+            app.finish_render_frame(&ctx);
+        }
+        assert_eq!(wakes.load(Ordering::SeqCst), 0, "consent must not spin the frame tail");
+        app.resolve_full_screen_prompt(&ctx, false);
+        assert_eq!(wakes.load(Ordering::SeqCst), 1, "path release wakes before delivery");
+        assert_eq!(app.pending_os_opens, ["/consent-a.pdf"]);
+        app.poll_os_opens();
+        assert_eq!(app.active_ids().unwrap().1, a);
+        assert!(app.pending_os_opens.is_empty());
+    }
+
+    fn at_time(ctx: &egui::Context, time: f64, mut logic: impl FnMut(&egui::Context)) {
+        ctx.run_ui(egui::RawInput { time: Some(time), predicted_dt: 0.0, ..Default::default() }, |ui| logic(ui.ctx())).drop_without_applying_deltas();
+        // Consume egui's setup demand without advancing this controlled clock.
+        settle(ctx);
+    }
+
+    struct NativeFile(std::path::PathBuf);
+
+    impl Drop for NativeFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    fn native_file(name: &str, content: &str) -> (NativeFile, Arc<Vec<u8>>) {
+        let path = std::env::temp_dir().join(format!("pdfcraft-native-retry-{}-{name}.pdf", std::process::id()));
+        let bytes = pdfcraft_engine::Session::new().create_from_text(name, content).unwrap();
+        std::fs::write(&path, bytes.as_slice()).unwrap();
+        (NativeFile(path), bytes)
+    }
+
+    #[test]
+    fn native_admission_failure_retains_fifo_and_retries_once_per_second() {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        let original_a = app.session.create_from_text("A", "Recipient A").unwrap();
+        app.open_bytes("a.pdf", None, original_a.as_ref().clone()).unwrap();
+        let a = app.active_ids().unwrap().1;
+        let (b, original_b) = native_file("b", "Recipient B");
+        let (c, original_c) = native_file("c", "Recipient C");
+        let paths = vec![b.0.to_string_lossy().into_owned(), c.0.to_string_lossy().into_owned()];
+        let mut events = vec![OsEvent::Open(paths.clone())];
+        app.os_events = Some(Box::new(move || std::mem::take(&mut events)));
+        app.open_worker_start_failures = 2;
+        let ctx = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        at_time(&ctx, 10.0, |ctx| app.logic(ctx, &mut frame));
+        assert_eq!(app.pending_os_opens.iter().cloned().collect::<Vec<_>>(), paths, "rejection retains the complete FIFO");
+        assert_eq!(app.native_open_retry_at, Some(11.0));
+        assert_eq!(app.open_worker_start_failures, 1);
+        assert_eq!(app.active_ids().unwrap().1, a);
+        assert!(app.pending_opens.is_empty());
+        assert!(app.toast.as_ref().unwrap().0.contains("couldn't start the document-open worker"));
+        // A consumed toast must not return when this same admission episode retries.
+        app.toast = None;
+        at_time(&ctx, 10.5, |_| app.poll_os_opens());
+        assert_eq!(app.open_worker_start_failures, 1, "no attempt before the deadline");
+        at_time(&ctx, 11.0, |_| app.poll_os_opens());
+        assert_eq!(app.open_worker_start_failures, 0);
+        assert_eq!(app.native_open_retry_at, Some(12.0));
+        assert!(app.toast.is_none(), "persistent rejection notifies once per retained head");
+        assert_eq!(app.pending_os_opens.iter().cloned().collect::<Vec<_>>(), paths);
+        assert_eq!(app.session.get(a).unwrap().bytes.as_slice(), original_a.as_slice());
+        assert_eq!(std::fs::read(&b.0).unwrap(), *original_b);
+        assert_eq!(std::fs::read(&c.0).unwrap(), *original_c);
+
+        let (gate, started, release, finished) = open_worker::prepare_gate();
+        app.open_prepare_gate = Some(gate);
+        at_time(&ctx, 11.5, |_| app.poll_os_opens());
+        assert!(app.pending_opens.is_empty());
+        at_time(&ctx, 12.0, |_| app.poll_os_opens());
+        assert_eq!(app.native_open_retry_at, None, "acceptance ends the rejection episode");
+        assert_eq!(app.pending_os_opens, [paths[1].clone()]);
+        assert_eq!(app.views.len(), 1, "accepted work must still use real preparation");
+        for (index, original, expected) in [(1, &original_b, "Recipient B"), (2, &original_c, "Recipient C")] {
+            started.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+            release.send(()).unwrap();
+            finished.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+            app.poll_pending_opens();
+            assert_eq!(app.views.len(), index + 1);
+            let id = app.views[index].id;
+            assert_eq!(app.active_ids().unwrap().1, id);
+            let doc = app.session.get(id).unwrap();
+            assert_eq!(doc.path.as_deref(), Some(paths[index - 1].as_str()));
+            assert_eq!(doc.bytes.as_slice(), original.as_slice());
+            assert!(!doc.dirty && doc.can_undo().is_none());
+            let saved = app.session.save_bytes(id).unwrap();
+            let mut reopened = pdfcraft_engine::Session::new();
+            reopened.open("reopened", None, saved.clone(), None).unwrap();
+            let mut renderer = pdfcraft_render::PageRenderer::new(saved, Default::default());
+            let output = renderer.render(pdfcraft_render::RenderRequest {
+                page: 0,
+                kind: pdfcraft_render::RequestKind::Text,
+                scale: 1.0,
+                ..Default::default()
+            });
+            assert_eq!(output.text.unwrap().plain_text().trim(), expected);
+            app.poll_os_opens();
+        }
+        assert!(app.pending_os_opens.is_empty() && app.pending_opens.is_empty());
+        assert_eq!(std::fs::read(&b.0).unwrap(), *original_b);
+        assert_eq!(std::fs::read(&c.0).unwrap(), *original_c);
+    }
+
+    #[test]
+    fn native_admission_retry_requests_only_the_remaining_delay() {
+        let mut app = PdfCraftApp::new();
+        app.pending_os_opens.push_back("held.pdf".into());
+        app.native_open_retry_at = Some(21.0);
+        let ctx = egui::Context::default();
+        for _ in 0..2 {
+            at_time(&ctx, 20.0, |_| {});
+        }
+        let delays = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let requested = delays.clone();
+        ctx.set_request_repaint_callback(move |info| {
+            requested.lock().unwrap().push(info.delay);
+        });
+        app.finish_render_frame(&ctx);
+        assert_eq!(*delays.lock().unwrap(), [std::time::Duration::from_secs(1)]);
+        at_time(&ctx, 20.5, |_| {});
+        delays.lock().unwrap().clear();
+        app.finish_render_frame(&ctx);
+        assert_eq!(*delays.lock().unwrap(), [std::time::Duration::from_millis(500)]);
+        app.dialog = Some(Dialog::About);
+        at_time(&ctx, 21.0, |_| {});
+        delays.lock().unwrap().clear();
+        app.finish_render_frame(&ctx);
+        assert!(delays.lock().unwrap().is_empty(), "a held blocker does not schedule retry wakes");
+        app.dialog = None;
+        app.finish_render_frame(&ctx);
+        assert_eq!(*delays.lock().unwrap(), [std::time::Duration::ZERO]);
+    }
+
+    #[test]
+    fn pending_native_paths_coalesce_repeats_and_preserve_every_unique_path() {
+        let mut app = PdfCraftApp::new();
+        app.dialog = Some(Dialog::About);
+        let events = Rc::new(RefCell::new(vec![OsEvent::Open(vec!["a.pdf".into(), "b.pdf".into(), "a.pdf".into()])]));
+        let polled = events.clone();
+        app.os_events = Some(Box::new(move || std::mem::take(&mut *polled.borrow_mut())));
+        let ctx = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let _ = ctx.run_logic(&Default::default(), |ctx| app.logic(ctx, &mut frame));
+        assert_eq!(app.pending_os_opens, ["a.pdf", "b.pdf"], "A,B,A retains the first pending occurrence");
+        let unique: Vec<_> = (0..513).map(|index| format!("unique-{index}.pdf")).collect();
+        events.borrow_mut().extend([OsEvent::Open(vec!["b.pdf".into(), "c.pdf".into(), "a.pdf".into()]), OsEvent::Open(unique.clone())]);
+        let _ = ctx.run_logic(&Default::default(), |ctx| app.logic(ctx, &mut frame));
+        let expected: Vec<_> = ["a.pdf".to_owned(), "b.pdf".to_owned(), "c.pdf".to_owned()].into_iter().chain(unique).collect();
+        assert_eq!(app.pending_os_opens.into_iter().collect::<Vec<_>>(), expected);
+        assert!(app.views.is_empty(), "queued paths must not be read under the modal");
+        assert!(app.pending_opens.is_empty());
+        assert!(app.toast.is_none());
+    }
+
+    #[test]
+    fn native_frame_end_wakes_only_an_admissible_queue_before_delivery() {
+        let mut app = PdfCraftApp::new();
+        let ctx = egui::Context::default();
+        app.ctx = Some(ctx.clone());
+        app.pending_os_opens.push_back("/native-frame-end-b.pdf".into());
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let requested = wakes.clone();
+        ctx.set_request_repaint_callback(move |_| {
+            requested.fetch_add(1, Ordering::SeqCst);
+        });
+        let settle = || {
+            for _ in 0..2 {
+                let _ = ctx.run_logic(&Default::default(), |_| {});
+            }
+            wakes.store(0, Ordering::SeqCst);
+            assert!(!ctx.has_requested_repaint());
+        };
+        settle();
+        app.dialog = Some(Dialog::RotatePages);
+        for _ in 0..3 {
+            app.finish_render_frame(&ctx);
+        }
+        assert_eq!(wakes.load(Ordering::SeqCst), 0, "a held modal must not cause continuous repaint");
+        app.dialog = None;
+        app.pick_override = Some(vec![]);
+        assert!(app.ask(pickers::Ask::File(rfd::AsyncFileDialog::new()), None, |_, _| {}));
+        assert!(app.pickers.pending());
+        settle();
+        app.finish_render_frame(&ctx);
+        assert_eq!(wakes.load(Ordering::SeqCst), 0, "the picker must retain its queue without polling");
+        app.process_picked();
+        let (_sender, receiver) = std::sync::mpsc::channel();
+        app.pending_opens.push(PendingOpen {
+            token: 1,
+            receiver,
+            name: "held worker".into(),
+            path: None,
+            stamp: None,
+            activate: true,
+            after_open: None,
+            recovered: None,
+            then: None,
+        });
+        settle();
+        app.finish_render_frame(&ctx);
+        assert_eq!(wakes.load(Ordering::SeqCst), 0, "a pending worker supplies its own completion wake");
+        app.pending_opens.clear();
+        settle();
+        app.finish_render_frame(&ctx);
+        assert!(ctx.has_requested_repaint(), "frame end must request delivery after the last blocker closes");
+        assert_eq!(wakes.load(Ordering::SeqCst), 1, "the integration must receive a wake before any delivery frame");
+        assert_eq!(app.pending_os_opens, ["/native-frame-end-b.pdf"]);
+        let bytes = app.session.create_from_text("recipient", "Unchanged recipient").unwrap();
+        app.open_bytes("a.pdf", Some("/native-frame-end-a.pdf".into()), bytes.as_ref().clone()).unwrap();
+        app.open_bytes("b.pdf", Some("/native-frame-end-b.pdf".into()), bytes.as_ref().clone()).unwrap();
+        app.active = Some(0);
+        let b = app.views[1].id;
+        app.poll_os_opens();
+        assert_eq!(app.active_ids().map(|(_, id)| id), Some(b));
+        assert!(app.pending_os_opens.is_empty());
+        for view in &app.views {
+            let doc = app.session.get(view.id).unwrap();
+            assert_eq!(doc.bytes.as_slice(), bytes.as_slice());
+            assert!(!doc.dirty && doc.can_undo().is_none() && doc.can_redo().is_none());
+        }
+        app.active = None;
+        settle();
+        app.finish_render_frame(&ctx);
+        assert_eq!(wakes.load(Ordering::SeqCst), 0, "an empty queue must not keep repainting");
+    }
 }
