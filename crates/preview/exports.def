@@ -1,0 +1,4 @@
+LIBRARY pdfcraft_preview
+EXPORTS
+    DllGetClassObject PRIVATE
+    DllCanUnloadNow PRIVATE
