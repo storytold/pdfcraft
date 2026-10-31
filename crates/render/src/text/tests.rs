@@ -97,6 +97,13 @@ fn identity_to_unicode_names_give_text() {
 /// One page per text matrix, each showing `codes` in Helvetica whose `/ToUnicode` maps the
 /// codes in `unicode` (a `bfchar` body) to several characters.
 fn ligature_pages(unicode: &str, codes: &str, matrices: &[&str]) -> Pdf {
+    let contents: Vec<String> = matrices.iter().map(|m| format!("BT /F1 20 Tf {m} Tm ({codes}) Tj ET")).collect();
+    unicode_mapped_pages(unicode, &contents)
+}
+
+/// Contributor-original semantic fixtures: Helvetica outlines with synthetic `/ToUnicode`
+/// mappings. These exercise extraction, not the visual appearance of an Arabic font.
+fn unicode_mapped_pages(unicode: &str, contents: &[String]) -> Pdf {
     use lopdf::{Document, Object, Stream, dictionary};
     let mut doc = Document::with_version("1.7");
     let cmap = format!(
@@ -106,8 +113,8 @@ fn ligature_pages(unicode: &str, codes: &str, matrices: &[&str]) -> Pdf {
     let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica", "ToUnicode" => to_unicode });
     let pages = doc.new_object_id();
     let mut kids = Vec::new();
-    for m in matrices {
-        let content = doc.add_object(Stream::new(dictionary! {}, format!("BT /F1 20 Tf {m} Tm ({codes}) Tj ET").into_bytes()));
+    for content in contents {
+        let content = doc.add_object(Stream::new(dictionary! {}, content.as_bytes().to_vec()));
         let page = doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages, "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(300), Object::Integer(300)], "Resources" => dictionary! {"Font" => dictionary! {"F1" => font}}, "Contents" => content });
         kids.push(Object::Reference(page));
     }
@@ -1468,6 +1475,58 @@ fn a_combining_mark_drawn_last_stays_with_its_letter() {
     v.push(g("\u{301}", 16.0, 10.0, 16.0));
     let t = layout(v);
     assert_eq!(t.glyphs.iter().map(|g| g.text.as_str()).collect::<Vec<_>>(), ["a", "b", "\u{301}", "Z"]);
+}
+
+#[test]
+fn arabic_separate_marks_stay_after_their_base_in_copied_text() {
+    let mut glyphs = vec![g("ب", 10.0, 10.0, 16.0), g("ب", 16.0, 10.0, 22.0)];
+    glyphs.push(g("\u{64e}", 16.0, 10.0, 16.0));
+    let text = layout(glyphs);
+    assert_eq!(text.plain_text(), "بَب");
+}
+
+#[test]
+fn separate_marks_keep_source_order_and_glyph_geometry_in_rtl_lines() {
+    for (left, right, marks, expected) in [("ب", "ب", "\u{64e}\u{651}", "بَّب"), ("ם", "ש", "\u{5b8}\u{5c1}", "שָׁם")] {
+        let mut glyphs = vec![g(left, 10.0, 10.0, 16.0), g(right, 16.0, 10.0, 22.0)];
+        glyphs.extend(marks.chars().map(|c| g(&c.to_string(), 16.0, 10.0, 16.0)));
+        let original = glyphs.clone();
+        let text = layout(glyphs);
+        assert_eq!(text.plain_text(), expected);
+        assert_eq!(text.glyphs.len(), original.len());
+        for glyph in &original {
+            assert!(text.glyphs.contains(glyph), "each glyph retains its text, box, quad and direction");
+        }
+        let (start, last) = text.word_at(0).unwrap();
+        assert_eq!(text.text_of(start..last + 1), expected);
+        assert_eq!(text.column_text(&text.glyphs_in([0.0, 0.0, 100.0, 100.0])), expected);
+    }
+    // A Latin mark in an Arabic-dominant line belongs to its Latin base, not the RTL run.
+    let text = layout(vec![g("e", 10.0, 10.0, 16.0), g("ا", 30.0, 10.0, 36.0), g("ب", 36.0, 10.0, 42.0), g("\u{301}", 10.0, 10.0, 10.0)]);
+    assert_eq!(text.plain_text(), "با e\u{301}");
+    assert_eq!(text.find("e\u{301}"), vec![2..4]);
+    // No base can be inferred for a lone mark; never discard it or invent a letter.
+    assert_eq!(layout(vec![g("\u{64e}", 10.0, 10.0, 10.0)]).plain_text(), "\u{64e}");
+}
+
+#[test]
+fn arabic_mapped_diacritics_keep_copy_and_search_order() {
+    let pdf = unicode_mapped_pages(
+        "4 beginbfchar <61> <0628> <62> <0627> <63> <0628> <64> <064E> endbfchar",
+        &["BT /F1 20 Tf 1 0 0 1 100 150 Tm (a) Tj 1 0 0 1 112 150 Tm (b) Tj 1 0 0 1 124 150 Tm (c) Tj 1 0 0 1 124 150 Tm (d) Tj ET".into()],
+    );
+    let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap();
+    assert_eq!(text.plain_text(), "بَاب");
+    assert_eq!(text.text_of(0..2), "بَ");
+    assert_eq!(text.find("بَاب"), vec![0..4]);
+    assert_eq!(text.column_text(&text.glyphs_in([90.0, 100.0, 160.0, 200.0])), "بَاب");
+    // Exercise PdfCraft's serializer, not just the fixture writer. No text edit or
+    // Arabic outline rendering is implied by this semantic save/reopen check.
+    let document = pdfcraft_cos::Document::open(std::sync::Arc::new(pdf.data().as_ref().to_vec())).unwrap();
+    let saved = pdfcraft_cos::write_full(&document, &pdfcraft_cos::SaveOptions::default()).unwrap();
+    let reopened = Pdf::new(std::sync::Arc::new(saved)).unwrap();
+    let after = extract_page(&reopened, 0, &InterpreterSettings::default()).unwrap();
+    assert_eq!(after, text, "logical text, glyph geometry and search owners survive serialization");
 }
 
 #[test]
