@@ -24,7 +24,7 @@ Button "Move tag later" [disabled]
 Button "Mark as artifact"
 Button "Move into previous tag" [disabled]
 Button "Move out of parent tag" [disabled]
-ComboBox = "P"
+ComboBox "Type of the new tag" = "P"
 Button "New tag"
 Button "Delete tag"
 Button "Remove tag, keep its contents"
