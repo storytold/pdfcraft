@@ -211,6 +211,16 @@ impl DocView {
         }
     }
 
+    /// Only `page`'s content changed (its text, pictures or added items): as
+    /// [`Self::page_changed`], and the text recognised on it in the background goes, since the
+    /// picture it was read from may be another now. A recognition running stops, so what it
+    /// read from the old content can't come back.
+    pub(crate) fn content_page_changed(&mut self, page: usize) {
+        self.page_changed(page);
+        self.ocr_texts.remove(&page);
+        self.auto_ocr.content_changed();
+    }
+
     /// A page's thumbnail texture, when rendered.
     pub(crate) fn thumb_id(&self, page: usize) -> Option<egui::TextureId> {
         self.thumbs.get(&page).map(|t| t.tex.id())

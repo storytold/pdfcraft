@@ -23,6 +23,9 @@ pub(crate) struct AutoOcr {
     pub(crate) wanted: bool,
     /// Recognition ran (or was stopped, or cannot run) for the pages as they are now.
     pub(crate) done: bool,
+    /// It was stopped (Cancel), or cannot run here: a page's content changing doesn't start it
+    /// again.
+    stopped: bool,
     run: Option<Run>,
 }
 
@@ -92,6 +95,15 @@ impl AutoOcr {
     pub(crate) fn stop(&mut self) {
         self.run = None;
         self.done = true;
+        self.stopped = true;
+    }
+
+    /// One page's content changed (its text, pictures or added items): a run may be reading
+    /// the old content, so it stops, and what its worker read goes with it. Recognition starts
+    /// again for the pages not recognised yet, the changed one among them, unless it was stopped.
+    pub(crate) fn content_changed(&mut self) {
+        self.run = None;
+        self.done = self.stopped;
     }
 }
 
@@ -181,7 +193,8 @@ impl PdfCraftApp {
                 break;
             }
             let Some(page) = run.queue.pop_front() else { break };
-            if doc.page_images(page).is_empty() {
+            // A page recognised already, before another page's content changed, is not read again.
+            if view.ocr_texts.contains_key(&page) || doc.page_images(page).is_empty() {
                 run.handled = run.handled.saturating_add(1);
             } else {
                 run.pending.push(page);
@@ -249,5 +262,83 @@ pub(crate) fn progress_bar(ui: &egui::Ui, viewport: egui::Rect, view: &mut DocVi
         });
     if cancel {
         view.auto_ocr.stop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pdfcraft_engine::ocr::PlacedWord;
+    use pdfcraft_engine::{Edit, Session};
+
+    fn png() -> Vec<u8> {
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([200, 200, 200, 255])).write_to(&mut png, image::ImageFormat::Png).unwrap();
+        png.into_inner()
+    }
+
+    /// An app with a document of `pages` pages that are each only a picture, as a scan's are.
+    fn scan(pages: usize) -> PdfCraftApp {
+        let images: Vec<(String, Vec<u8>)> = (0..pages).map(|p| (format!("{p}.png"), png())).collect();
+        let pdf = Session::new().create_from_images(&images).unwrap();
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("scan.pdf", None, pdf.to_vec()).unwrap();
+        app
+    }
+
+    /// What recognition read on `page`: one word.
+    fn read(page: usize, word: &str) -> OcrPage {
+        let word = PlacedWord { text: word.into(), origin: [2.0, 2.0], across: [4.0, 0.0], up: [0.0, 2.0] };
+        OcrPage { page, words: vec![word], already_on_page: 0, skipped: None }
+    }
+
+    /// A recognition running when a page's content changes may be reading its old picture: what
+    /// it read comes back neither as the page's recognised text nor as its text layer (CodeRabbit
+    /// on #3860).
+    #[test]
+    fn words_read_before_a_content_edit_do_not_come_back() {
+        let mut app = scan(1);
+        // Only the run planted here: none starts after the edit.
+        app.auto_ocr = false;
+        let shared = Shared { found: vec![read(0, "Old")], finished: true, ..Default::default() };
+        let chunk = Chunk { shared: Arc::new(Mutex::new(shared)), pages: 1 };
+        let run = Run { queue: VecDeque::new(), pending: Vec::new(), total: 1, handled: 0, chunk: Some(chunk) };
+        app.views[0].auto_ocr = AutoOcr { wanted: true, run: Some(run), ..Default::default() };
+        let picture = Edit::AddImage { page: 0, rect: Some([1.0, 1.0, 4.0, 4.0]), name: "stamp.png".into(), bytes: Arc::new(png()) };
+        assert!(app.apply_edit(picture));
+        app.poll_auto_ocr();
+        let view = &app.views[0];
+        assert!(view.ocr_texts.is_empty(), "kept as the page's recognised text");
+        assert_eq!(view.page_plain_text(0), None, "made the page's text layer");
+        assert!(!view.auto_ocr.done, "recognition starts again, for the page as it is now");
+    }
+
+    /// Cancel holds through a content edit: recognition doesn't start again on its own.
+    #[test]
+    fn a_stopped_recognition_stays_stopped_when_a_page_changes() {
+        let mut ocr = AutoOcr { wanted: true, done: true, ..Default::default() };
+        ocr.content_changed();
+        assert!(!ocr.done, "a finished recognition starts again for the changed page");
+        ocr.stop();
+        ocr.content_changed();
+        assert!(ocr.done, "one that was stopped does not");
+    }
+
+    /// Starting again after a page's content changed, recognition reads that page and passes
+    /// over the pages it recognised before, instead of reading the whole document again.
+    #[test]
+    fn pages_recognised_already_are_not_read_again() {
+        let mut app = scan(3);
+        app.run_inline = true;
+        // Pages 0 and 2 were recognised; page 1's content changed since.
+        let pages = app.session.get(app.views[0].id).unwrap().info.pages.clone();
+        for page in [0, 2] {
+            app.views[0].ocr_texts.insert(page, Arc::new(read(page, "Kept").view_text(&pages[page])));
+        }
+        app.views[0].auto_ocr.run = Some(Run { queue: (0..3).collect(), pending: Vec::new(), total: 3, handled: 0, chunk: None });
+        app.step_auto_ocr(0);
+        let run = app.views[0].auto_ocr.run.as_ref().expect("reading");
+        assert_eq!(run.chunk.as_ref().map(|c| c.pages), Some(1), "only the changed page is handed to the worker");
+        assert_eq!(run.handled, 2, "the recognised pages are passed over");
     }
 }

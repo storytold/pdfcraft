@@ -1930,6 +1930,58 @@ fn recognised_text_is_kept_for_its_page_until_pages_may_move() {
     assert_eq!(v.text_glyph_count(1), Some(0));
 }
 
+/// An edit of a page's content (a picture added) may change the picture text was recognised
+/// from, so read again the page has no text rather than the old words. A comment keeps them: the
+/// picture under it is the same (CodeRabbit on #3860).
+#[test]
+fn recognised_text_goes_when_its_page_content_is_edited() {
+    let mut app = PdfCraftApp::new();
+    let blank = pdfcraft_engine::Session::new().create_blank(300.0, 400.0, 1).unwrap();
+    app.open_bytes("scan.pdf", None, blank.to_vec()).unwrap();
+    let ctx = egui::Context::default();
+    // The page's own text layer read again: empty, as a scan's is.
+    let read_empty = |app: &mut PdfCraftApp| {
+        let req = RenderRequest { page: 0, kind: RequestKind::Text, ..Default::default() };
+        app.views[0].last_queue = vec![req];
+        let r = pdfcraft_render::RenderedPage {
+            request: req,
+            width: 0,
+            height: 0,
+            rgba: Default::default(),
+            error: None,
+            text: Some(Arc::new(PageText::default())),
+            warnings: Vec::new(),
+            millis: 0,
+        };
+        app.views[0].receive_result(&ctx, r);
+    };
+    let recognised = PageText {
+        glyphs: vec![pdfcraft_render::TextGlyph { text: "x".into(), rect: [0.0, 0.0, 10.0, 10.0], quad: [[0.0, 0.0]; 4], direction: [1.0, 0.0] }],
+        line_of: vec![0],
+        space_before: vec![false],
+    };
+    app.views[0].ocr_texts.insert(0, Arc::new(recognised));
+    let highlight = pdfcraft_engine::NewAnnotation {
+        page: 0,
+        shape: pdfcraft_engine::Shape::TextMarkup {
+            kind: pdfcraft_engine::Markup::Highlight,
+            quads: vec![[10.0, 30.0, 60.0, 30.0, 10.0, 10.0, 60.0, 10.0]],
+        },
+        style: app.comment_prefs.style(comments::CommentTool::Highlight),
+        contents: String::new(),
+        author: String::new(),
+    };
+    assert!(app.apply_edit(Edit::AddAnnotation(highlight)));
+    read_empty(&mut app);
+    assert_eq!(app.views[0].page_plain_text(0).as_deref(), Some("x"), "a comment keeps the recognised text");
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(4, 4, image::Rgba([20, 30, 40, 255])).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let picture = Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "stamp.png".into(), bytes: Arc::new(png.into_inner()) };
+    assert!(app.apply_edit(picture));
+    read_empty(&mut app);
+    assert_eq!(app.views[0].text_glyph_count(0), Some(0), "the old words came back: {:?}", app.views[0].page_plain_text(0));
+}
+
 /// A page whose picture moved can get its whole-page raster back before its last stale tile.
 /// From then on the raster has the picture where it went: it is drawn from there, not from
 /// where it was (which the raster now shows empty), and another drag starts from there too.
