@@ -37,7 +37,7 @@ pub(crate) fn data_to_iso(value: &str, data_pattern: Option<&str>) -> String {
 }
 
 /// An ISO date as the data should hold it: in `data_pattern` when the field has one and the
-/// date reads back from it unchanged (a two-digit year holds only 1950 to 2049), else as ISO.
+/// date reads back from it unchanged (a two-digit year holds only 1930 to 2029), else as ISO.
 pub(crate) fn iso_to_data(iso: String, data_pattern: Option<&str>) -> String {
     match data_pattern {
         Some(p) => {
@@ -52,6 +52,10 @@ pub(crate) fn iso_to_data(iso: String, data_pattern: Option<&str>) -> String {
 pub(super) fn data_date_pattern(tpl: Option<&Template>, som: &str) -> Option<String> {
     tpl.and_then(|t| template_field(t, som)).and_then(data_date_letters)
 }
+
+/// The century split of a two-digit year (`yy`), XFA picture clauses' default: `00` to `29` are
+/// 2000 to 2029 and `30` to `99` are 1930 to 1999.
+const CENTURY_SPLIT: u32 = 30;
 
 const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
@@ -160,7 +164,7 @@ pub fn pattern_to_iso(text: &str, pattern: &str) -> Option<String> {
                 rest = &rest[digits.len()..];
                 match t.as_str() {
                     "yyyy" => y = Some(v),
-                    "yy" => y = Some(if v < 50 { 2000 + v } else { 1900 + v }),
+                    "yy" => y = Some(if v < CENTURY_SPLIT { 2000 + v } else { 1900 + v }),
                     "mm" | "m" => m = Some(v),
                     _ => d = Some(v),
                 }

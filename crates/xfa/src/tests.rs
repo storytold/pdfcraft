@@ -895,16 +895,31 @@ fn node_at<'a>(live: &'a crate::script::FormNode, som: &str) -> Option<&'a crate
     live.children.iter().find_map(|c| node_at(c, som))
 }
 
-/// A date its data picture can't hold (2050 in a two-digit year) is written as ISO and reads
+/// A date its data picture can't hold (2030 in a two-digit year) is written as ISO and reads
 /// back as written.
 #[test]
 fn a_date_its_data_picture_cant_hold_is_written_as_iso() {
     use crate::data::{data_to_iso, iso_to_data};
     assert_eq!(iso_to_data("2026-01-02".into(), Some("yymmdd")), "260102");
-    // A two-digit year reads back as 1950 to 2049: 2050 and 1949 keep ISO, and read back as written.
-    for iso in ["2050-01-02", "1949-12-31"] {
+    // A two-digit year reads back as 1930 to 2029, so those years are written in it.
+    for (iso, data) in [("2029-12-31", "291231"), ("1930-01-01", "300101"), ("1949-12-31", "491231"), ("1950-01-01", "500101")] {
+        assert_eq!(iso_to_data(iso.into(), Some("yymmdd")), data, "{iso}");
+    }
+    // 2030 and 1929 keep ISO, and read back as written.
+    for iso in ["2030-01-01", "1929-12-31", "2050-01-02"] {
         assert_eq!(iso_to_data(iso.into(), Some("yymmdd")), iso);
         assert_eq!(data_to_iso(iso, Some("yymmdd")), iso);
+    }
+}
+
+/// A two-digit year splits its century at 30, the XFA picture clause default: `00` to `29` are
+/// 2000 to 2029 and `30` to `99` are 1930 to 1999, typed and in the data alike.
+#[test]
+fn a_two_digit_year_splits_its_century_at_30() {
+    use crate::data::data_to_iso;
+    for (text, iso) in [("291231", "2029-12-31"), ("300101", "1930-01-01"), ("491231", "1949-12-31"), ("500101", "1950-01-01")] {
+        assert_eq!(pattern_to_iso(text, "yymmdd").as_deref(), Some(iso), "{text}");
+        assert_eq!(data_to_iso(text, Some("yymmdd")), iso, "{text}");
     }
 }
 
@@ -3864,6 +3879,8 @@ fn a_typed_date_is_rewritten_only_by_date_clauses_into_a_first_pattern_that_keep
     let short = "form[0].short[0]";
     assert_eq!(typed(short, "20261018").as_deref(), Some("261018"), "a year the first pattern keeps");
     assert_eq!(typed(short, "19011018"), None, "1901 as 01 would read back as 2001");
+    assert_eq!(typed(short, "19451018").as_deref(), Some("451018"), "45 reads back as 1945");
+    assert_eq!(typed(short, "20301018"), None, "2030 as 30 would read back as 1930");
     // DDMMYYYY reads 20011203 as 1203-01-20, which YYMMDD can't keep; YYYYMMDD reads 2001-12-03.
     assert_eq!(typed("form[0].pick[0]", "20011203").as_deref(), Some("011203"), "the next pattern that the first keeps");
 }

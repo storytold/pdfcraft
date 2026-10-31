@@ -1271,6 +1271,16 @@ mod formcalc {
         assert_eq!(calc(r#"Date2Num("2024-12-31") <> 0"#), "1");
     }
 
+    /// A `YY` year in a date picture splits its century at 30, the XFA picture clause default:
+    /// `00` to `29` are 2000 to 2029 and `30` to `99` are 1930 to 1999.
+    #[test]
+    fn a_two_digit_year_splits_its_century_at_30() {
+        for (text, iso) in [("12/31/29", "2029-12-31"), ("01/01/30", "1930-01-01"), ("12/31/49", "1949-12-31"), ("01/01/50", "1950-01-01")] {
+            assert_eq!(calc(&format!(r#"Num2Date(Date2Num("{text}", "MM/DD/YY"), "YYYY-MM-DD")"#)), iso, "{text}");
+            assert_eq!(calc(&format!(r#"Parse("MM/DD/YY", "{text}")"#)), iso, "{text}");
+        }
+    }
+
     #[test]
     fn control_flow_variables_and_functions_work() {
         assert_eq!(calc("var x = 3\nif (x > 2) then 10 elseif (x > 1) then 20 else 30 endif"), "10");
