@@ -8,7 +8,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 use pdfcraft_fonts::{literal, win_ansi};
 
 use crate::XfaError;
-use crate::layout::{Action, BorderShape, Form, Item, Page, Rounded, Widget, WidgetKind};
+use crate::layout::{Action, BorderShape, EllipseArc, Form, Item, Page, Rounded, Widget, WidgetKind};
 use crate::model::Rect;
 use crate::text::{Face, Family, Span};
 
@@ -16,8 +16,8 @@ mod common;
 mod strip;
 
 pub use common::jpeg_size;
-pub(crate) use common::rounded;
 use common::{all_faces, content_hash, empty_form, hex32, jpeg_info, js_action, n, parse_hex32, rgb, rgb_array, standard_font, state_name};
+pub(crate) use common::{arc, rounded};
 pub(crate) use strip::USAGE_RIGHTS_REMOVED;
 use strip::drop_usage_rights;
 pub use strip::{Stripped, XfaShape, existing_layout, strip, xfa_shape};
@@ -586,6 +586,7 @@ impl Emitter<'_> {
                     content.extend(format!("{} rg {} {} {} {} re f\n", rgb(*color), n(rect.x), n(h - rect.bottom()), n(rect.w), n(rect.h)).bytes());
                 }
                 Item::Rounded(r) => content.extend(rounded(r, h).bytes()),
+                Item::Arc(a) => content.extend(arc(a, h).bytes()),
                 Item::Line { from, to, width, color, dashed } => {
                     content.extend(
                         format!(

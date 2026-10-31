@@ -1,5 +1,5 @@
 use super::common::clean_name;
-use super::items::{Item, Rounded};
+use super::items::{EllipseArc, Item, Rounded};
 use super::{
     Arc, Border, Ctx, Draw, ExclGroup, Face, Font, Layout, Layouter, MAX_DEPTH, MAX_IMAGE_BYTES, Node, Para, Presence, Rect, SomIndices, Stroke,
     Subform, Value, XfaError, data_path, text,
@@ -246,6 +246,17 @@ impl Layouter<'_> {
                 self.push(Item::Line { from, to, width: edge.thickness.clamp(0.1, 20.0), color: edge.color.0, dashed: edge.stroke == Stroke::Dashed })
             }
             Value::Rectangle(b) => self.draw_border(b, inner),
+            Value::Arc(a) => {
+                let edge = a.edge.visible().then(|| {
+                    let color = if a.edge.stroke == Stroke::Relief { [0.55, 0.55, 0.55] } else { a.edge.color.0 };
+                    (a.edge.thickness.clamp(0.1, 20.0), color, matches!(a.edge.stroke, Stroke::Dashed | Stroke::Dotted))
+                });
+                let fill = a.fill.map(|f| f.0);
+                if (edge.is_none() && fill.is_none()) || a.sweep.abs() < 1e-9 {
+                    return Ok(());
+                }
+                self.push(Item::Arc(Box::new(EllipseArc { rect: inner, start: a.start, sweep: a.sweep, fill, edge })))
+            }
             Value::Empty => Ok(()),
         }
     }
