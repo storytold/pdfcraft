@@ -3291,8 +3291,8 @@ milestone = "M4"
 status = "shipped"
 commands = []
 tools = ["bookmark_rename"]
-evidence = ["crates/ui-egui/tests/it/bookmarks.rs::new_rename_reorder_indent_delete_and_undo", "crates/ui-egui/tests/it/bookmarks.rs::escape_cancels_a_rename", "crates/organize/src/tests.rs::bookmarks_add_rename_move_delete", "crates/organize/src/tests.rs::bookmark_edits_keep_unknown_keys_and_touch_few_objects"]
-notes = ""
+evidence = ["crates/ui-egui/tests/it/bookmarks.rs::new_rename_reorder_indent_delete_and_undo", "crates/ui-egui/tests/it/bookmarks.rs::escape_cancels_a_rename", "crates/ui-egui/tests/it/bookmarks.rs::typing_replaces_the_title_when_the_editor_opens", "crates/ui-egui/tests/it/bookmarks.rs::a_rename_editor_keeps_the_users_caret_across_frames", "crates/organize/src/tests.rs::bookmarks_add_rename_move_delete", "crates/organize/src/tests.rs::bookmark_edits_keep_unknown_keys_and_touch_few_objects"]
+notes = "The inline editor opens with the whole title selected, so typing replaces it at once (#5529); a caret the user moves afterwards is kept by later frames."
 
 [[feature]]
 id = "organize.bookmark-delete"
