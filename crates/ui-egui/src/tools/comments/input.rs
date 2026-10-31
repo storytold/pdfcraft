@@ -585,9 +585,11 @@ pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, tool: &mut QuickTool
     }
     let cv = &mut view.comments;
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-        // One step back per press: cancel the gesture, then deselect, then drop the tool.
+        // One step back per press: cancel the gesture, then deselect, then drop the tool (a
+        // comment tool, or a Fill & Sign one: its Text tool would otherwise open a box at every
+        // click with no way out by the keyboard).
         let cancelled = cv.gesture.take().is_some() || cv.selected.take().is_some();
-        if !cancelled && matches!(tool, QuickTool::Comment(_)) {
+        if !cancelled && matches!(tool, QuickTool::Comment(_) | QuickTool::Fill(_)) {
             *tool = QuickTool::Select;
         }
     }
