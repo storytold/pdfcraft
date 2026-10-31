@@ -24,6 +24,15 @@ pub(crate) use files::same_file;
 use frame::migrate_panel_state;
 pub(crate) use prefs::{MAX_AUTHOR_CHARS, date_text_for_pdf};
 
+/// The dedicated Hebrew build can choose its first-launch UI language at compile time.
+/// A saved user preference still overrides this default; ordinary builds remain on Auto.
+fn default_language() -> String {
+    option_env!("PDFCRAFT_DEFAULT_LANGUAGE")
+        .and_then(i18n::normalize_pref)
+        .unwrap_or(i18n::AUTO)
+        .to_owned()
+}
+
 impl Default for PdfCraftApp {
     fn default() -> Self {
         Self::new()
@@ -98,7 +107,7 @@ impl PdfCraftApp {
             scroll_speed: scroll_speed::ScrollSpeed::default(),
             animation_effects: motion::AnimationEffects::default(),
             motion: motion::Motion::default(),
-            language: i18n::AUTO.to_string(),
+            language: default_language(),
             ui_scale: None,
             system_text_scale: 1.0,
             ui_scale_applied: None,

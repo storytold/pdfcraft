@@ -93,8 +93,7 @@ pub fn has_rtl(text: &str) -> bool {
     text.chars().any(is_rtl_script)
 }
 
-/// The paragraph direction for translated interface text: explicitly right to left for Arabic,
-/// Kurdish and Persian, and `TextDirection::Auto` otherwise. A label whose first strong character is
+/// The paragraph direction for translated interface text: explicitly right to left for Arabic, Kurdish, Persian and Hebrew, and `TextDirection::Auto` otherwise. A label whose first strong character is
 /// Latin or a `{placeholder}` must not fall back to a left-to-right paragraph in an RTL locale.
 pub fn ui_direction() -> egui::epaint::text::TextDirection {
     if crate::i18n::current().rtl() { egui::epaint::text::TextDirection::RightToLeft } else { egui::epaint::text::TextDirection::Auto }
