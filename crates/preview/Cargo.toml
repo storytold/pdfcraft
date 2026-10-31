@@ -1,0 +1,37 @@
+[package]
+name = "pdfcraft-preview"
+description = "First-page preview of PDF files in the Windows File Explorer preview pane"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+# The cdylib is pdfcraft_preview.dll, the preview handler File Explorer loads (packaging/windows).
+crate-type = ["cdylib", "rlib"]
+
+# Not `workspace = true`: the workspace forbids `unsafe`, and Explorer's preview interface (an
+# in-process COM server: exported functions taking raw pointers, and a bitmap written through one)
+# can't be implemented without it. The same lints otherwise; `unsafe` stays denied everywhere except
+# the Windows COM glue in src/windows.rs, which allows it explicitly.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[dependencies]
+pdfcraft-thumbnails = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_Shell",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_UI_WindowsAndMessaging",
+] }
+windows-core = "0.62"
