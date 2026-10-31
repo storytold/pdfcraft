@@ -61,7 +61,7 @@ impl App {
         });
     }
 
-    fn save_to(self: &Rc<Self>, view: Rc<crate::document::DocumentView>, path: PathBuf) {
+    pub(super) fn save_to(self: &Rc<Self>, view: Rc<crate::document::DocumentView>, path: PathBuf) {
         let prepared = {
             let automation = self.automation.borrow();
             automation.session().save_bytes(view.id).and_then(|bytes| {

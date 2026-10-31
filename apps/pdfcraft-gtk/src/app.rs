@@ -588,6 +588,8 @@ impl App {
             self.schedule_export_ops_qa();
         } else if mode == "parity-ops" {
             self.schedule_parity_ops_qa();
+        } else if mode == "lifecycle" {
+            self.schedule_lifecycle_qa();
         }
     }
 
@@ -1310,6 +1312,120 @@ impl App {
             capture::window_png_when_ready(app.window.clone(), &capture::path("page-ops"), 6, move |captured| {
                 capture::mark(ok && captured.is_ok(), "page-ops", &app.application);
             });
+        });
+    }
+
+    fn schedule_lifecycle_qa(self: &Rc<Self>) {
+        let fixture_page: Rc<RefCell<Option<adw::TabPage>>> = Rc::new(RefCell::new(None));
+        let copy_path = capture::artifact("lifecycle-copy.pdf");
+        let _ = std::fs::remove_file(&copy_path);
+        let reordered = Rc::new(Cell::new(false));
+        let reverted = Rc::new(Cell::new(false));
+        let saved = Rc::new(Cell::new(false));
+        let captured: Rc<RefCell<Option<Result<(), String>>>> = Rc::new(RefCell::new(None));
+
+        let app = self.clone();
+        let page_slot = fixture_page.clone();
+        glib::timeout_add_local_once(Duration::from_millis(800), move || {
+            *page_slot.borrow_mut() = app.tabs.selected_page();
+            eprintln!("[DEBUG-lifecycle] fixture page anotada views={}", app.views.borrow().len());
+        });
+
+        let app = self.clone();
+        glib::timeout_add_local_once(Duration::from_millis(1100), move || {
+            let result = app.automation.borrow_mut().session_mut().create_from_text("Ciclo", "B");
+            if let Ok(bytes) = result {
+                app.open_created("lifecycle-doc.pdf".to_string(), bytes);
+            }
+            eprintln!("[DEBUG-lifecycle] segundo doc views={}", app.views.borrow().len());
+        });
+
+        let app = self.clone();
+        let page_for_reorder = fixture_page.clone();
+        let reordered_slot = reordered.clone();
+        glib::timeout_add_local_once(Duration::from_millis(1600), move || {
+            let page_guard = page_for_reorder.borrow();
+            let Some(page) = page_guard.as_ref() else {
+                capture::mark(false, "lifecycle", &app.application);
+                return;
+            };
+            let moved = app.tabs.reorder_page(page, 1);
+            let position = app.tabs.page_position(page);
+            let views = app.views.borrow().len();
+            eprintln!("[DEBUG-lifecycle] reordered={moved} pos={position} views={views}");
+            reordered_slot.set(moved && position == 1 && views == 2);
+        });
+
+        let app = self.clone();
+        let page_for_edit = fixture_page.clone();
+        glib::timeout_add_local_once(Duration::from_millis(2200), move || {
+            let page_guard = page_for_edit.borrow();
+            let Some(page) = page_guard.as_ref() else {
+                capture::mark(false, "lifecycle", &app.application);
+                return;
+            };
+            app.tabs.set_selected_page(page);
+            app.apply_edit(Edit::RotatePages { pages: vec![0], degrees: 90 });
+        });
+
+        let app = self.clone();
+        let reverted_slot = reverted.clone();
+        glib::timeout_add_local_once(Duration::from_millis(2800), move || {
+            app.run_registered("file.revert");
+            let ok = app.active_view().map_or(false, |view| {
+                let automation = app.automation.borrow();
+                automation.session().get(view.id).map_or(false, |doc| !doc.dirty && doc.info.pages.first().map_or(false, |page| page.rotation == 0))
+            });
+            eprintln!("[DEBUG-lifecycle] reverted={ok}");
+            reverted_slot.set(ok);
+        });
+
+        let app = self.clone();
+        let copy_for_save = copy_path.clone();
+        glib::timeout_add_local_once(Duration::from_millis(3400), move || {
+            let Some(view) = app.active_view() else {
+                capture::mark(false, "lifecycle", &app.application);
+                return;
+            };
+            app.save_to(view, copy_for_save);
+        });
+
+        let app = self.clone();
+        let saved_slot = saved.clone();
+        let copy_for_check = copy_path.clone();
+        glib::timeout_add_local_once(Duration::from_millis(4400), move || {
+            let exists = copy_for_check.exists();
+            let path_ok = app.active_view().map_or(false, |view| view.path().as_deref() == Some(copy_for_check.as_path()));
+            let dirty = app.active_view().is_none_or(|view| app.automation.borrow().session().get(view.id).map_or(true, |doc| doc.dirty));
+            eprintln!("[DEBUG-lifecycle] saved={exists} path_ok={path_ok} dirty={dirty}");
+            saved_slot.set(exists && path_ok && !dirty);
+        });
+
+        let app = self.clone();
+        let captured_slot = captured.clone();
+        glib::timeout_add_local_once(Duration::from_millis(4600), move || {
+            let path = capture::path("lifecycle");
+            capture::window_png_when_ready(app.window.clone(), &path, 6, move |result| {
+                *captured_slot.borrow_mut() = Some(result);
+            });
+        });
+
+        let app = self.clone();
+        let reordered_final = reordered.clone();
+        let reverted_final = reverted.clone();
+        let saved_final = saved.clone();
+        let captured_final = captured.clone();
+        glib::timeout_add_local_once(Duration::from_millis(5600), move || {
+            app.run_registered("file.close_all");
+            let empty = app.views.borrow().is_empty() && app.tabs.n_pages() == 0;
+            let captured_ok = captured_final.borrow().as_ref().map_or(false, Result::is_ok);
+            eprintln!(
+                "[DEBUG-lifecycle] closed={empty} reordered={} reverted={} saved={} captured={captured_ok}",
+                reordered_final.get(),
+                reverted_final.get(),
+                saved_final.get()
+            );
+            capture::mark(empty && reordered_final.get() && reverted_final.get() && saved_final.get() && captured_ok, "lifecycle", &app.application);
         });
     }
 

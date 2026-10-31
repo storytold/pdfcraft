@@ -23,7 +23,7 @@ No se cuenta como equivalente una entrada de menú que solo muestra un mensaje o
 | Navegación | Anterior, siguiente y atajos PageUp/PageDown | Equivalente | `viewer` |
 | Zoom | Acercar, alejar, 100 % y ajustar | Equivalente | `viewer.png` |
 | Archivo: guardar | Escritura atómica y `mark_saved` | Equivalente | `document`, PDF de 3 páginas |
-| Archivo: guardar como, revertir y cerrar todo | Acciones nativas sobre la Automation compartida | En curso | Ejercitadas en los incrementos, sin humo individual dedicado |
+| Archivo: guardar como, revertir y cerrar todo | Acciones nativas sobre la Automation compartida | Equivalente | Humo `lifecycle`: revertir restaura rotación y estado limpio; guardar como escribe y actualiza la ruta de la vista; cerrar todo deja 0 vistas |
 | Archivo: crear, combinar, reducir y optimizar | Blank nativo y comandos Automation con formularios | En curso | Blank y dispatcher implementados, falta QA por operación |
 | Archivo: exportaciones e imágenes | `export.text` mediante formulario JSON Schema | Equivalente parcial | `export-ops` verifica página-imagen PNG, texto, office DOCX, all_images (0 en PDF sin imágenes) y all_images con imagen REAL (ciclo render→`doc_create` from images→reextracción `_Page_1_Image_0001.png` con magia PNG verificada); tool_form con selector de fichero/carpeta para `path`/`out`/`folder`; faltan opciones completas del diálogo del original (JPEG/TIFF/calidad/min_size/rango) y humos de comment/form export y measure.export |
 | Archivo: contraseñas, seguridad, propiedades, word count e imprimir | Propiedades mediante `command_run`; unlock y recientes nativos; resto por Automation | En curso | `automation`, 1767 bytes JSON |
@@ -42,7 +42,7 @@ No se cuenta como equivalente una entrada de menú que solo muestra un mensaje o
 | Redacción | Marcar (arrastre, buscar/palabras), aplicar con confirmación y limpiar | Equivalente (sin cuadros de códigos ni diálogo de alcance por páginas del original) | `redact.apply` nativo con `Edit::ApplyRedactions`; QA `redact` verifica eliminación real del texto |
 | Saneado, OCR, acciones y JavaScript | Rutas Automation con formularios | En curso | `redact.sanitize` y acciones builtin mapeadas; falta humo por acción |
 | Accesibilidad, etiquetas y comparación | `accessibility_autotag_apply` (con fallback a campos), `doc_compare` con resultados nativos | Equivalente básico | `parity-ops` verifica autotag real (etiquetas creadas) y comparación de dos documentos con cambios detectados; faltan reporte/marcado de comparación y panel a11y dedicado |
-| Ventana: orden de pestañas, reabrir y revelar | Submenú Window con reabrir pestaña cerrada (historial de 10) y revelar en gestor de archivos | Equivalente básico | `parity-ops` cierra la pestaña activa, la reabre desde disco y verifica ruta y vista; revelar usa `FileLauncher::open_containing_folder`; falta reordenar por arrastre con verificación dedicada |
+| Ventana: orden de pestañas, reabrir y revelar | Submenú Window con reabrir pestaña cerrada (historial de 10), revelar en gestor de archivos y reordenado (arrastre nativo de `TabBar`, verificado con `reorder_page`) | Equivalente | `parity-ops` cierra la pestaña activa, la reabre desde disco y verifica ruta y vista; `lifecycle` reordena la pestaña del fixture a la posición 1 y captura el resultado; revelar usa `FileLauncher::open_containing_folder` |
 | Ayuda y preferencias completas | About y enlaces nativos; resto pendiente | En curso | Falta QA |
 
 ## Cobertura de comandos

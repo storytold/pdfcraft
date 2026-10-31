@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-mode="${1:?usage: scripts/gtk-qa.sh build|test-engine|smoke|viewer|document|palette|automation|form|reconcile|coverage|editing|screens|organizer|text-tools|redact|recents-open|fill-sign|sign|page-ops|panels-edit|export-ops|parity-ops|captures|parity}"
+mode="${1:?usage: scripts/gtk-qa.sh build|test-engine|smoke|viewer|document|palette|automation|form|reconcile|coverage|editing|screens|organizer|text-tools|redact|recents-open|fill-sign|sign|page-ops|panels-edit|export-ops|parity-ops|lifecycle|captures|parity}"
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 export PATH="$HOME/.cargo/bin:$PATH"
 
 case "$mode" in
   captures)
-    for sub in smoke viewer document palette automation form reconcile editing screens organizer text-tools redact recents-open fill-sign sign page-ops panels-edit export-ops parity-ops; do
+    for sub in smoke viewer document palette automation form reconcile editing screens organizer text-tools redact recents-open fill-sign sign page-ops panels-edit export-ops parity-ops lifecycle; do
       "$0" "$sub" || exit 1
     done
     echo "GTK_GATE_OK captures"
@@ -33,7 +33,7 @@ case "$mode" in
     cargo test -p pdfcraft-engine --lib
     echo "GTK_GATE_OK test-engine"
     ;;
-  smoke|viewer|document|palette|automation|form|reconcile|coverage|editing|screens|organizer|text-tools|redact|recents-open|fill-sign|sign|page-ops|panels-edit|export-ops|parity-ops)
+  smoke|viewer|document|palette|automation|form|reconcile|coverage|editing|screens|organizer|text-tools|redact|recents-open|fill-sign|sign|page-ops|panels-edit|export-ops|parity-ops|lifecycle)
     cargo build -p pdfcraft-gtk
     qa_dir="${PDFCRAFT_GTK_QA_DIR:-/tmp/opencode/pdfcraft-gtk-qa}"
     mkdir -p "$qa_dir"
@@ -56,6 +56,8 @@ case "$mode" in
     elif [[ "$mode" == export-ops ]]; then
       rm -f "$qa_dir/export-ops.txt" "$qa_dir/export-ops.docx" "$log"
       rm -rf "$qa_dir/export-imgs" "$qa_dir/export-imgs-all" "$qa_dir/export-imgs-made"
+    elif [[ "$mode" == lifecycle ]]; then
+      rm -f "$qa_dir/lifecycle-copy.pdf" "$log"
     else
       rm -f "$capture" "$log"
     fi
@@ -86,7 +88,7 @@ with open(path, "wb") as fh:
     fh.write(b"trailer\n<< /Size " + str(len(objects) + 1).encode() + b" /Root 1 0 R >>\nstartxref\n" + str(start).encode() + b"\n%%EOF\n")
 PYEOF
     fi
-    if [[ "$mode" == viewer || "$mode" == document || "$mode" == editing ]] && [[ -z "${PDFCRAFT_GTK_QA_FILE:-}" ]]; then
+    if [[ "$mode" == viewer || "$mode" == document || "$mode" == editing || "$mode" == lifecycle ]] && [[ -z "${PDFCRAFT_GTK_QA_FILE:-}" ]]; then
       qa_file="$qa_dir/two-pages.pdf"
       pdfunite "$root/crates/ui-egui/tests/data/form.pdf" "$root/crates/ui-egui/tests/data/form.pdf" "$qa_file"
     fi
@@ -163,6 +165,10 @@ PYEOF
     fi
     if [[ "$mode" == reconcile ]]; then
       pdfinfo "$qa_dir/reconcile-output.pdf" | grep -E '^Pages:[[:space:]]+1$'
+    fi
+    if [[ "$mode" == lifecycle ]]; then
+      test -s "$qa_dir/lifecycle-copy.pdf"
+      pdfinfo "$qa_dir/lifecycle-copy.pdf" | grep -E '^Pages:[[:space:]]+2$'
     fi
     echo "GTK_GATE_OK $mode capture=$capture"
     ;;
