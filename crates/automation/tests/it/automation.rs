@@ -664,6 +664,44 @@ fn tool_table_is_well_formed() {
     }
 }
 
+fn assert_homogeneous_enums(schema: &Value, path: &str) {
+    fn json_kind(value: &Value) -> &'static str {
+        match value {
+            Value::Null => "null",
+            Value::Bool(_) => "boolean",
+            Value::Number(_) => "number",
+            Value::String(_) => "string",
+            Value::Array(_) => "array",
+            Value::Object(_) => "object",
+        }
+    }
+
+    if let Some(values) = schema.get("enum").and_then(Value::as_array) {
+        let first = values.first().map(json_kind);
+        assert!(values.iter().map(json_kind).all(|kind| Some(kind) == first), "mixed enum types at {path}: {values:?}");
+    }
+    match schema {
+        Value::Object(object) => {
+            for (key, child) in object {
+                assert_homogeneous_enums(child, &format!("{path}.{key}"));
+            }
+        }
+        Value::Array(array) => {
+            for (index, child) in array.iter().enumerate() {
+                assert_homogeneous_enums(child, &format!("{path}[{index}]"));
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn tool_schema_enums_have_one_json_type() {
+    for tool in tools() {
+        assert_homogeneous_enums(&tool.input_schema, tool.name);
+    }
+}
+
 #[test]
 fn explicit_font_and_disjoint_ranges_save_reopen_through_tools() {
     let dir = workdir("font-ranges");
@@ -9764,7 +9802,11 @@ fn added_text_lines_take_their_own_alignments() {
     let dir = workdir("paragraph-aligns");
     let mut a = auto(&dir);
     let id = ok(&mut a, "doc_create", json!({"from":"blank","width":600,"height":400}))["doc"].as_u64().unwrap();
-    ok(&mut a, "page_add_text", json!({"doc":id,"page":1,"text":"Left line\nRight line","at":[40,50],"width":500,"size":12,"aligns":[null,"right"]}));
+    ok(
+        &mut a,
+        "page_add_text",
+        json!({"doc":id,"page":1,"text":"Left line\nRight line\nInherited line","at":[40,50],"width":500,"size":12,"aligns":[null,"right","inherit"]}),
+    );
     let rect = |a: &mut Automation, text: &str| -> Vec<f64> {
         let lines = ok(a, "text_lines", json!({"doc":id,"page":1}));
         let line = lines["lines"].as_array().unwrap().iter().find(|l| l["text"] == text).cloned().unwrap();
@@ -9772,10 +9814,13 @@ fn added_text_lines_take_their_own_alignments() {
     };
     assert!((rect(&mut a, "Left line")[0] - 40.0).abs() < 1.0);
     assert!((rect(&mut a, "Right line")[2] - 540.0).abs() < 1.0, "{:?}", rect(&mut a, "Right line"));
+    assert!((rect(&mut a, "Inherited line")[0] - 40.0).abs() < 1.0);
     // The whole box centred: the right-aligned line goes with it.
     ok(&mut a, "content_update", json!({"doc":id,"page":1,"index":1,"align":"center"}));
     let right = rect(&mut a, "Right line");
     assert!(((right[0] + right[2]) / 2.0 - 290.0).abs() < 1.0, "{right:?}");
+    let inherited = rect(&mut a, "Inherited line");
+    assert!(((inherited[0] + inherited[2]) / 2.0 - 290.0).abs() < 1.0, "{inherited:?}");
     assert!(a.call("content_update", &json!({"doc":id,"page":1,"index":1,"aligns":["sideways"]})).is_err());
     assert!(a.call("content_update", &json!({"doc":id,"page":1,"index":1,"aligns":"right"})).is_err());
 }

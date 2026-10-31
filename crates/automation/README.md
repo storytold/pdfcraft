@@ -21,6 +21,9 @@ them with the image's current orientation. Full turns retain its appearance, rec
 and flips. Angles that are not multiples of 90 are refused without changing the document or
 its undo/redo history.
 
+`page_add_text`, `content_update` and `text_edit` take per-line `aligns`. An `"inherit"` entry
+follows the box-level `align`; legacy `null` entries remain accepted with the same meaning.
+
 `Content` is `Json(Value)` or `Png { data, width, height }`. Errors are `UnknownTool`, `InvalidArgs` (the call didn't match the schema) or `Failed` (a readable message for the agent).
 
 ## Conventions
