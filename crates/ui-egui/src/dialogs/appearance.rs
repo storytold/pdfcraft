@@ -80,6 +80,9 @@ fn preview(ui: &mut egui::Ui, kind: ThemeKind, width: f32) -> egui::Response {
         let w = if i % 4 == 3 { 0.45 } else { 0.8 };
         painter.rect_filled(Rect::from_min_size(page.min + vec2(6.0, 15.0 + i as f32 * 6.0), vec2(page.width() * w - 6.0, 1.5)), 0.5, ink);
     }
+    if response.has_focus() {
+        painter.rect_stroke(rect, 3.0, ui.visuals().selection.stroke, egui::StrokeKind::Inside);
+    }
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 

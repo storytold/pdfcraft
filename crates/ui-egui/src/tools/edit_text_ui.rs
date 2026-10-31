@@ -501,6 +501,15 @@ fn user_box(xf: &PageXform, info: &DocInfo, page: usize, r: Rect) -> [f64; 4] {
     [u[0].min(v[0]) as f64, u[1].min(v[1]) as f64, u[0].max(v[0]) as f64, u[1].max(v[1]) as f64]
 }
 
+/// A unique logical byte range, counting overlapping occurrences as ambiguous too.
+pub(crate) fn unique_selection_range(text: &str, selected: &str) -> Option<std::ops::Range<usize>> {
+    if selected.is_empty() {
+        return None;
+    }
+    let at = text.find(selected)?;
+    (text.rfind(selected) == Some(at)).then_some(at..at.saturating_add(selected.len()))
+}
+
 /// Open the paragraph editor from the edit tool or selection toolbar. Typing replaces the
 /// selected word in the logical buffer; applying rewrites the actual page content.
 pub(crate) fn open_block(
@@ -519,7 +528,7 @@ pub(crate) fn open_block(
     let Some(l) = blocks.get(block) else { return false };
     let rect = xf.user_rect(&doc.info, page, l.rect.map(|v| v as f32)).expand(2.0);
     let text = l.editor_text.clone();
-    let selection = selected.and_then(|s| text.find(s).map(|at| at..at.saturating_add(s.len())));
+    let selection = selected.and_then(|s| unique_selection_range(&text, s));
     if selected.is_some() && selection.is_none() {
         return false;
     }

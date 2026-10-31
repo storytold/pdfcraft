@@ -198,8 +198,8 @@ pub(super) fn selection_actions(
             let (_, blocks) = view.edit_lines.get(&selection.page)?;
             let mut candidates = blocks.iter().enumerate().filter_map(|(i, block)| {
                 (xf.user_rect(info, selection.page, block.rect.map(|v| v as f32)).expand(2.0).intersects(rect)
-                    && block.editor_text.matches(&selected).count() == 1)
-                    .then_some(i)
+                    && crate::edit_text_ui::unique_selection_range(&block.editor_text, &selected).is_some())
+                .then_some(i)
             });
             let first = candidates.next()?;
             candidates.next().is_none().then_some(first)

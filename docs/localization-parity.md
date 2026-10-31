@@ -6,7 +6,7 @@
 Per-language status of PdfCraft's interface against Acrobat Pro's. How translations work and how to
 add a language: [localization.md](localization.md). Summary in [ROADMAP.md](../ROADMAP.md).
 
-The 2026-10-31 source snapshot has **2,809 distinct Arabic translated keys** against
+The 2026-10-31 source snapshot has **2,809 distinct keys translated into Arabic** against
 **2,824 keys in the bundled catalog union**. The coverage scores below retain their
 measurement dates; this update does not re-estimate readiness.
 

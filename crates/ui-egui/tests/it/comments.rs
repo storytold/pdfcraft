@@ -3045,3 +3045,19 @@ fn an_upright_comment_on_a_turned_page_is_drawn_where_it_goes_before_release() {
     h.drop_at(from + delta);
     h.run_steps(3);
 }
+
+#[test]
+fn selected_text_edit_action_refuses_overlapping_occurrences() {
+    // Equal-length substitution keeps this synthetic fixture's stream lengths unchanged.
+    let bytes = String::from_utf8(TEXT_FIXTURE.to_vec()).unwrap().replace("The quick brown fox", "banana pear fruitxx").into_bytes();
+    let mut h = harness_with_bytes(bytes, |_| {});
+    h.state_mut().views[0].select_text(0, 3, 5);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("ana"));
+    let button = h.get_by_label("Edit text");
+    assert!(button.accesskit_node().is_disabled(), "both overlapping occurrences must count, so editing cannot target the first by mistake");
+    let at = button.rect().center();
+    click(&mut h, at);
+    assert!(h.state().views[0].line_editor.is_none());
+    assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
+}

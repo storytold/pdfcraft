@@ -266,7 +266,7 @@ Estimates unchanged.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-31 | minor | PR #1851: integrate native egui bidi editing, direct selection editing and PDF-metric RTL growth; preserve Latin subsets and source hard/soft row breaks. Estimates unchanged. |
+| 2026-10-31 | minor | PR #1851: integrate native egui bidi editing, direct selection editing and PDF-metric RTL growth; preserve Latin subsets and source hard/soft row breaks; reject overlapping repeated selections. Estimates unchanged. |
 | 2026-10-24 | minor | M11: the PDF Optimizer and Reduce File Size store Group 3 fax images as Group 4 when smaller (`Document::fax_params`), and pack eight-bit `DeviceRGB` of only black and white (as grey) and indexed images of 2, 4 or 8 bits that use only palette entries 0 and 1 (keeping the palette) to one bit, so Monochrome Images compresses and downsamples them. Estimates unchanged. |
 | 2026-10-24 | minor | M11: monochrome downsampling: the PDF Optimizer and Reduce File Size average black-and-white images (1-bit, CCITT fax, eight-bit black-and-white grey) above 450 ppi down to 300 ppi, by area with ties black, as Monochrome Images ▸ Downsample to and `doc_optimize` `mono: { downsample, ppi, above_ppi }`; CCITT decoding moves into `pdfcraft-filters` (`decode_ccitt`) behind `Document::decoded_image`. Estimates unchanged. |
 | 2026-10-24 | minor | M11: Create PDF stores pictures of only black and white at one bit (Group 4 or Flate, whichever is smaller) instead of eight-bit grey; the optimizer packs eight-bit black-and-white grey images to one bit before Monochrome Images compresses them, unless the grey settings make them smaller, as they can a dithered scan, soft mask counted; Export ▸ Images decodes CCITT fax images. Estimates unchanged. |
