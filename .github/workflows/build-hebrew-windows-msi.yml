@@ -4,17 +4,6 @@ on:
   push:
     branches:
       - feat/hebrew-ui-and-booklet-side-persistence
-    paths:
-      - ".github/workflows/build-hebrew-windows-msi.yml"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "apps/pdfcraft/**"
-      - "apps/pdfcraft-cli/**"
-      - "crates/engine/**"
-      - "crates/ui-egui/**"
-      - "crates/fonts/**"
-      - "packaging/windows/**"
-      - "xtask/**"
   workflow_dispatch:
 
 permissions:
@@ -82,9 +71,12 @@ jobs:
           if (-not (Test-Path 'crates/ui-egui/src/i18n/he.tsv')) {
             throw 'The Hebrew translation catalog is missing.'
           }
-          if (-not (Select-String -Path '.github/workflows/build-hebrew-windows-msi.yml' -Pattern 'PDFCRAFT_DEFAULT_LANGUAGE: he' -Quiet)) {
-            throw 'The Windows MSI build does not set Hebrew as its default language.'
-          }
+
+      - name: Test UI library with Hebrew as the default language
+        shell: pwsh
+        env:
+          PDFCRAFT_DEFAULT_LANGUAGE: he
+        run: cargo test --locked -p pdfcraft-ui-egui --lib
 
       - name: Build, validate and package MSI
         shell: pwsh
@@ -98,7 +90,12 @@ jobs:
           AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
           AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
           AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
-        run: ./packaging/windows/package.ps1 -Arch x64
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:PDFCRAFT_DEFAULT_LANGUAGE -ne 'he') {
+            throw "Expected PDFCRAFT_DEFAULT_LANGUAGE=he, got '$env:PDFCRAFT_DEFAULT_LANGUAGE'."
+          }
+          ./packaging/windows/package.ps1 -Arch x64
 
       - name: Verify MSI signature and calculate SHA-256
         shell: pwsh
