@@ -87,6 +87,7 @@ impl PdfCraftApp {
             "reload_changed_files": self.reload_changed_files,
             "system_title_bar": self.system_title_bar,
             "pinned_folders": self.pinned.folders,
+            "header_footer_settings": marks_ui::saved_hf_to_json(&self.marks_draft.saved_hf),
             "theme": self.theme_preference,
             "scroll_speed": self.scroll_speed,
             "animation_effects": self.animation_effects,
@@ -206,6 +207,7 @@ impl PdfCraftApp {
             self.show_secured_notice = on;
         }
         self.pinned.restore(&v["pinned_folders"]);
+        self.marks_draft.saved_hf = marks_ui::saved_hf_from_json(&v["header_footer_settings"]);
         if let Ok(preference) = serde_json::from_value::<ThemePreference>(v["theme"].clone()) {
             self.set_theme_preference(preference);
         }

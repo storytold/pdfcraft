@@ -10,8 +10,8 @@ const FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
 2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 300 400] >> endobj
 3 0 obj << /Type /Page /Parent 2 0 R >> endobj
-4 0 obj << /Type /Page /Parent 2 0 R >> endobj
-5 0 obj << /Type /Page /Parent 2 0 R >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 500 600] >> endobj
+5 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] >> endobj
 trailer << /Root 1 0 R >>
 %%EOF";
 
@@ -61,6 +61,53 @@ fn header_and_footer_dialog_inserts_tokens_and_applies_to_a_subset() {
     h.run_steps(2);
     assert!(h.state_mut().execute("edit.header_footer.remove"));
     assert!(marks(&h).is_empty());
+}
+
+#[test]
+fn header_footer_settings_are_saved_recalled_across_sessions_and_exclude_page_ranges() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("edit.header_footer"));
+    h.run_steps(3);
+    {
+        let d = &mut h.state_mut().marks_draft;
+        d.hf.text[0] = "Résumé <<1>>".into();
+        d.hf.font = pdfcraft_engine::FontFamily::Courier;
+        d.hf.color = [0.2, 0.4, 0.6];
+        d.hf.margins = [20.0, 24.0, 36.0, 48.0];
+        d.hf.shrink = true;
+        d.saved_hf_name = "Résumé".into();
+        d.range.all = false;
+        d.range.from = 2;
+        d.range.to = 2;
+    }
+    h.run_steps(1);
+    h.get_by_label("Save Settings").click();
+    h.run_steps(2);
+    assert_eq!(h.state().marks_draft.saved_hf.len(), 1);
+    let template = h.state().marks_draft.saved_hf[0].clone();
+    let persisted = h.state().persist();
+
+    let mut restored = harness();
+    restored.state_mut().restore(&persisted);
+    assert_eq!(restored.state().marks_draft.saved_hf.as_slice(), std::slice::from_ref(&template));
+    assert!(restored.state_mut().execute("edit.header_footer"));
+    restored.run_steps(3);
+    {
+        let d = &mut restored.state_mut().marks_draft;
+        d.hf.text[0] = "Temporary".into();
+        d.range.all = true;
+    }
+    restored.run_steps(1);
+    restored.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some("[Custom]")).unwrap().click();
+    restored.run_steps(2);
+    restored.get_by_label("Résumé").click();
+    restored.run_steps(2);
+    assert_eq!(restored.state().marks_draft.hf, template.settings);
+    assert!(restored.state().marks_draft.range.all, "page range belongs to the current document");
+    restored.get_by_label("OK").click();
+    restored.run_steps(4);
+    assert_eq!(restored.state().marks_draft.saved_hf[0], template, "applying to pages of different sizes leaves the reusable settings unchanged");
+    assert_eq!(marks(&restored), [MarkKind::HeaderFooter]);
 }
 
 #[test]
