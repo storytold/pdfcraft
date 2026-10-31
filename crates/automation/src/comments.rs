@@ -192,7 +192,10 @@ impl Automation {
                 .get(&(c.page, c.index))
                 .into_iter()
                 .flatten()
-                .map(|m| json!({ "id": m.name, "page": m.page + 1, "index": m.index + 1, "type": m.subtype }))
+                .map(|m| {
+                    let rect = crate::view_rect(&doc.info, m.page, m.shown_rect(doc.info.pages.get(m.page).map_or(0, |p| p.rotation)));
+                    json!({ "id": m.name, "page": m.page + 1, "index": m.index + 1, "type": m.subtype, "rect": rect })
+                })
                 .collect();
             let mut v = json!({
                 "id": c.name,

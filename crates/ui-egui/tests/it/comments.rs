@@ -3107,3 +3107,121 @@ fn delete_deletes_the_group_member_clicked() {
     h.run_steps(3);
     assert_eq!(shapes(&h), [("Circle".to_string(), true)], "the Square goes, the Circle stays as a comment of its own");
 }
+
+/// The Square's and the Circle's `/Rect` in [`GROUP_FIXTURE`] (or one built like it).
+fn group_rects(h: &Harness<'static, PdfCraftApp>) -> (Vec<f32>, Vec<f32>) {
+    let all = comments(h);
+    let rect = |subtype: &str| all.iter().find(|a| a.subtype == subtype).map(|a| a.rect.to_vec()).unwrap_or_default();
+    (rect("Square"), rect("Circle"))
+}
+
+fn moved_by(before: &[f32], after: &[f32]) -> (f32, f32) {
+    match (before, after) {
+        ([x0, y0, ..], [x1, y1, ..]) => (x1 - x0, y1 - y0),
+        _ => (0.0, 0.0),
+    }
+}
+
+/// As in Acrobat desktop, clicking any member of a group selects the group, and dragging or
+/// nudging a member moves that member alone; ISO 32000-2 §12.5.6.2 lists movement among the
+/// operations that act on the entire group. Dragging the Circle, a subordinate, moves only it, as
+/// one undo step, with the group still selected; the arrow keys move the member last clicked.
+#[test]
+fn dragging_or_nudging_a_group_member_moves_it_alone() {
+    let mut h = harness_with_bytes(GROUP_FIXTURE.to_vec(), |_| {});
+    let (square, circle) = group_rects(&h);
+    drag_pt(&mut h, (220.0, 150.0), (240.0, 140.0));
+    let (sq, ci) = group_rects(&h);
+    let (moved_square, moved_circle) = (moved_by(&square, &sq), moved_by(&circle, &ci));
+    assert!((moved_circle.0 - 20.0).abs() < 1.0 && (moved_circle.1 + 10.0).abs() < 1.0, "the Circle moves: {moved_circle:?}");
+    assert_eq!(moved_square, (0.0, 0.0), "the Square stays");
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the group is selected");
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert_eq!(group_rects(&h), (square.clone(), circle.clone()), "one undo step puts the Circle back");
+
+    for (clicked, (x, y)) in [("Square", (60.0, 50.0)), ("Circle", (220.0, 150.0))] {
+        let before = group_rects(&h);
+        click_pt(&mut h, (x, y));
+        h.key_press(egui::Key::ArrowRight);
+        h.run_steps(3);
+        let after = group_rects(&h);
+        let (sq, ci) = (moved_by(&before.0, &after.0), moved_by(&before.1, &after.1));
+        let (moved, kept) = if clicked == "Square" { (sq, ci) } else { (ci, sq) };
+        assert!(moved.0 > 0.0 && moved.1 == 0.0, "the arrow key moves the {clicked}: {moved:?}");
+        assert_eq!(kept, (0.0, 0.0), "and nothing else");
+    }
+}
+
+/// Clicking a group selects every member with its own handles, as Acrobat does, and a member's
+/// handle resizes that member alone, even with the group selected from its primary.
+#[test]
+fn a_group_members_handles_resize_it_alone() {
+    let mut h = harness_with_bytes(GROUP_FIXTURE.to_vec(), |_| {});
+    let (square, _) = group_rects(&h);
+    click_pt(&mut h, (60.0, 50.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the group is selected from the Square");
+    drag_pt(&mut h, (260.0, 180.0), (280.0, 190.0));
+    let (sq, ci) = group_rects(&h);
+    assert_eq!(sq, square, "the Square keeps its size");
+    let grown = [ci.first().copied(), ci.get(2).copied(), ci.get(3).copied()];
+    assert!(
+        grown[0].is_some_and(|x| (x - 180.0).abs() < 1.0)
+            && grown[1].is_some_and(|x| (x - 280.0).abs() < 1.0)
+            && grown[2].is_some_and(|y| (y - 190.0).abs() < 1.0),
+        "the Circle's corner follows its handle: {ci:?}"
+    );
+}
+
+/// Hovering a subordinate shows its group's tip: the primary's author and text, not the
+/// subordinate's own, which a reader ignores (ISO 32000-2 §12.5.6.2).
+#[test]
+fn a_group_members_tip_is_its_groups() {
+    let mut h = harness_with_bytes(GROUP_FIXTURE.to_vec(), |_| {});
+    let p = at(&h, 220.0, 150.0);
+    h.hover_at(p);
+    for _ in 0..40 {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(15));
+    }
+    assert!(h.query_all_by_label("Alice\nPrimary").next().is_some(), "the Circle's tip is the group's");
+    assert!(h.query_all_by_label_contains("Subordinate").next().is_none(), "not the Circle's own text");
+}
+
+// Contributor-original PDF: a Square on page 1 and, on page 2, a Circle grouped with it.
+const SPREAD_GROUP_FIXTURE: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [6 0 R] >> endobj
+5 0 obj << /Type /Annot /Subtype /Square /Rect [20 20 100 80] /NM (sq-primary) /T (Alice) /Contents (Primary) /C [1 0 0] >> endobj
+6 0 obj << /Type /Annot /Subtype /Circle /Rect [180 120 260 180] /NM (circ-sub) /T (Bob) /Contents (Subordinate) /C [0 0 1] /IRT 5 0 R /RT /Group >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// A group is one page's, as Acrobat (desktop and iPad) and PDF-XChange read it: a subordinate
+/// whose primary is on another page is a comment of its own. Clicking it selects it, with its own
+/// author in the panel, and dragging it moves it alone.
+#[test]
+fn a_member_on_another_page_than_its_primary_is_a_comment_of_its_own() {
+    let mut h = harness_with_bytes(SPREAD_GROUP_FIXTURE.to_vec(), |app| {
+        app.set_option("panel", "comments").unwrap();
+        // Both pages on screen.
+        app.set_option("zoom", "50").unwrap();
+    });
+    let on_page_2 = |h: &Harness<'static, PdfCraftApp>, x: f32, y: f32| {
+        let r = h.state().views[0].page_screen_rect(1).expect("page 2 on screen");
+        pos2(r.left() + x / 300.0 * r.width(), r.top() + (200.0 - y) / 200.0 * r.height())
+    };
+    let (square, circle) = group_rects(&h);
+    let p = on_page_2(&h, 220.0, 150.0);
+    click(&mut h, p);
+    assert_eq!(h.state().views[0].comments.selected, Some((1, 0)), "the Circle itself is selected");
+    assert!(h.query_all_by_label("Bob").next().is_some(), "listed with its own author");
+    let (from, to) = (on_page_2(&h, 220.0, 150.0), on_page_2(&h, 240.0, 140.0));
+    drag(&mut h, from, to);
+    let (sq, ci) = group_rects(&h);
+    let (moved_square, moved_circle) = (moved_by(&square, &sq), moved_by(&circle, &ci));
+    assert!((moved_circle.0 - 20.0).abs() < 1.0 && (moved_circle.1 + 10.0).abs() < 1.0, "the Circle moves: {moved_circle:?}");
+    assert_eq!(moved_square, (0.0, 0.0), "the Square on page 1 stays");
+}

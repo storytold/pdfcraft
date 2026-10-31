@@ -70,7 +70,7 @@ pub fn is_comment_subtype(subtype: &str) -> bool {
 
 /// Where a reference to a reference (`5 0 obj 6 0 R endobj`) ends, as `pdfcraft_render::inspect`
 /// follows it, within a few steps (a cycle stops there).
-fn final_ref(doc: &Document, mut r: ObjRef) -> ObjRef {
+pub(crate) fn final_ref(doc: &Document, mut r: ObjRef) -> ObjRef {
     for _ in 0..8 {
         match &*doc.get(r) {
             Object::Ref(next) => r = *next,
@@ -88,6 +88,9 @@ fn final_ref(doc: &Document, mut r: ObjRef) -> ObjRef {
 pub fn is_group_subordinate(d: &Dict) -> bool {
     d.name(b"RT") == Some(b"Group") && d.reference(b"IRT").is_some()
 }
+
+/// How far a group subordinate's `/IRT` chain is followed to its primary.
+pub(crate) const MAX_GROUP_DEPTH: usize = 64;
 
 /// Every comment (see [`is_comment_subtype`]), ordered by page and then top edge.
 pub fn summaries(doc: &Document) -> Vec<Summary> {

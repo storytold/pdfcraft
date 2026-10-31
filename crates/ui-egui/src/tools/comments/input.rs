@@ -32,8 +32,10 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
     {
         cv.context_at = Some((cx.page, cx.to_user(p)));
         // On a group subordinate, its group (the primary), so the menu offers the comment's actions.
-        cv.selected = cx.click_hit(p).map(|a| (cx.page, a.index));
-        cv.member = cx.picked(p, cv.selected);
+        match cx.click_hit(p) {
+            Some(a) => cv.pick(cx, a),
+            None => cv.selected = None,
+        }
     }
     let gestures = Gestures { ui, resp, cx, pointer, origin, page_rect, pressed_here, over_page };
     match cx.tool {
@@ -74,7 +76,11 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2) -> Option<Hit> {
         _ => return None,
     };
     let bodies = matches!(cx.tool, QuickTool::Select | QuickTool::Fill(_));
-    if let Some(a) = view.comments.selected.filter(|(page, _)| *page == cx.page).and_then(|(_, i)| cx.get(i)).filter(|a| pick(a) && cx.allowed) {
+    // A selected group shows every member's handles on the page, and each changes only its own
+    // member, as Acrobat's do; the topmost member's come first where they overlap.
+    let mut selected = cx.selected_here(view.comments.selected);
+    selected.sort_by_key(|a| std::cmp::Reverse(a.index));
+    for a in selected.into_iter().filter(|a| pick(a) && cx.allowed) {
         if grabs_points(cx.tool)
             && reshapable(a)
             && let Some(point) = point_handle(cx, a, p)
@@ -93,13 +99,9 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2) -> Option<Hit> {
             return Some(Hit::new(Owner::Comment { index: a.index, part: CommentPart::Handle(x, y) }, Layer::Handle, icon));
         }
     }
-    // A group subordinate (`/RT /Group`) stands for its primary (ISO 32000-2 §12.5.6.2): a click
-    // there selects the group. Only a click: a drag still moves what is under the pointer.
-    let (a, member) = match cx.hit(p) {
-        Some(a) => (a, false),
-        None => (cx.click_hit(p)?, true),
-    };
-    let a = Some(a).filter(|a| bodies && pick(a))?;
+    // A click on a group subordinate (`/RT /Group`) selects its group (ISO 32000-2 §12.5.6.2); a
+    // drag moves just it, as Acrobat's does.
+    let a = Some(cx.click_hit(p)?).filter(|a| bodies && pick(a))?;
     // A click on a highlight over a link follows the link, so the link's hand and tip show there.
     if cx.tool == QuickTool::Select && a.subtype == "Highlight" && on_link(cx, p) {
         return None;
@@ -110,7 +112,7 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2) -> Option<Hit> {
     // page, over a form field; text markup lies on the text, under one.
     let layer = if a.fill_sign || !markup { Layer::Placed } else { Layer::Comment };
     // Text markup does not move: a click selects it, a drag across it selects the text.
-    Some(Hit { declines_drag: markup || member, ..Hit::new(Owner::Comment { index: a.index, part: CommentPart::Body }, layer, icon) })
+    Some(Hit { declines_drag: markup, ..Hit::new(Owner::Comment { index: a.index, part: CommentPart::Body }, layer, icon) })
 }
 
 /// Whether the comments take the press on this page (or, with no button down, would take one
@@ -155,10 +157,15 @@ pub(crate) fn describe(cx: &PageCx<'_>, view: &mut DocView) {
     let Some(p) = cx.ptr.pos else { return };
     // Inspection sorts comments by position, but the renderer paints them in `/Annots` order: the
     // tip is that of the one drawn on top, among those with something to say (#3620).
+    // A group subordinate says what its group does: its primary's author and text (ISO 32000-2
+    // §12.5.6.2), wherever the primary is.
+    let members = cx.group_members();
     let top = cx
         .comments()
-        .filter(|a| cx.screen_rects(a).any(|r| r.contains(p)))
-        .filter_map(|a| hover_tip(a, cx.prefs).map(|text| (a.index, text)))
+        .map(|a| (a, a))
+        .chain(members.iter().copied())
+        .filter(|(a, _)| cx.screen_rects(a).any(|r| r.contains(p)))
+        .filter_map(|(a, says)| hover_tip(says, cx.prefs).map(|text| (a.index, text)))
         .max_by_key(|(index, _)| *index);
     if let Some((_, text)) = top {
         view.cursor.describe(Subject::Comment, text);
@@ -209,7 +216,7 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
                 consumed = true;
             }
             CommentPart::Body if !is_markup(&a.subtype) => {
-                cv.selected = Some((cx.page, a.index));
+                cv.pick(cx, a);
                 cv.reveal = true;
                 if cx.allowed {
                     cv.gesture = Some(Gesture::Move { page: cx.page, index: a.index, from: o });
@@ -264,8 +271,7 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
         // leaves comments unselected.
         match owner {
             Some((a, _)) => {
-                cv.selected = Some((cx.page, a.index));
-                cv.member = pointer.and_then(|p| cx.picked(p, cv.selected));
+                cv.pick(cx, a);
                 cv.reveal = true;
                 consumed = true;
             }
@@ -277,7 +283,10 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
         && cx.allowed
         && let Some((a, _)) = owner
     {
-        cv.selected = Some((cx.page, a.index));
+        let (page, index) = cx.selects(a);
+        cv.pick(cx, a);
+        // A group's text is its primary's, wherever in the group the double-click was.
+        let a = cx.get(index).filter(|_| page == cx.page).unwrap_or(a);
         cv.composer = Some(Composer {
             page: cx.page,
             at: edit_anchor(cx.info, a),
@@ -621,8 +630,11 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, info: &DocInfo
     if cv.gesture.is_some() || cv.composer.is_some() {
         return;
     }
-    let Some((page, index)) = cv.selected else { return };
-    let movable = info.annotations.iter().any(|a| a.page == page && a.index == index && !a.is_reply() && !is_markup(&a.subtype) && !a.locked);
+    let Some((page, index)) = cv.target() else { return };
+    let movable = info
+        .annotations
+        .iter()
+        .any(|a| a.page == page && a.index == index && (!a.is_reply() || a.is_group_member()) && !is_markup(&a.subtype) && !a.locked);
     let (Some(xf), Some(p)) = (view.page_xform(page), info.pages.get(page)) else { return };
     if !movable {
         return;

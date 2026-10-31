@@ -125,6 +125,41 @@ fn a_kept_comment_is_found_where_a_delete_moved_it() {
     assert_eq!((view.editing, view.editor_focus), (None, None), "the editor closes with the reply it was open on");
 }
 
+/// A click picks the annotation drawn on top across comments and group subordinates alike, in
+/// `/Annots` order: a subordinate painted over a comment selects its group's primary, and a
+/// comment painted over a subordinate selects itself.
+#[test]
+fn a_click_selects_the_topmost_of_comments_and_group_subordinates() {
+    let at = |a: Annotation, rect: [f32; 4]| Annotation { rect, ..a };
+    let under = [90.0, 90.0, 110.0, 110.0];
+    let primary = at(listed(0, 0, "primary", None), [150.0, 150.0, 170.0, 170.0]);
+    let subordinate = |index| Annotation { grouped: true, ..at(listed(0, index, "subordinate", Some((0, 0))), under) };
+    let page = PageInfo { width: 200.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 200.0, 200.0], rotation: 0 };
+    let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), rot: 0, pw: 200.0, ph: 200.0 };
+    let prefs = CommentPrefs::default();
+    let cases = [
+        (vec![primary.clone(), at(listed(0, 1, "comment", None), under), subordinate(2)], (2, "subordinate"), 0, "subordinate on top"),
+        (vec![primary.clone(), subordinate(1), at(listed(0, 2, "comment", None), under)], (2, "comment"), 2, "comment on top"),
+    ];
+    for (annotations, (index, contents), selects, case) in cases {
+        let info = DocInfo { pages: vec![page.clone()], annotations, ..Default::default() };
+        let cx = PageCx {
+            page: 0,
+            xf: &xf,
+            ptr: &PagePointer::default(),
+            info: &info,
+            tool: QuickTool::Select,
+            prefs: &prefs,
+            allowed: true,
+            hidden: false,
+            redact_mark: ([0.0; 3], 1.0),
+        };
+        let hit = cx.click_hit(pos2(100.0, 100.0));
+        assert_eq!(hit.map(|a| (a.index, a.contents.as_deref())), Some((index, Some(contents))), "{case}: the press lands on it");
+        assert_eq!(hit.map(|a| cx.selects(a)), Some((0, selects)), "{case}: a click selects it, or its group's primary");
+    }
+}
+
 use pdfcraft_render::TextGlyph;
 
 /// One glyph per character, `w` points wide, on a line of `em`-point text whose baseline is at `y`, drawn

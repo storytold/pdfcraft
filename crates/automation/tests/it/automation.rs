@@ -10422,3 +10422,33 @@ fn a_group_member_on_another_page_is_a_comment_of_its_own() {
     let left = ok(&mut a, "comment_list", json!({ "doc": doc }));
     assert!(left.to_string().contains("circ-other-page"), "deleting the primary leaves the Circle on page 2: {left}");
 }
+
+/// Moving a member of a group moves just it, as Acrobat moves the member dragged; restyling any
+/// member restyles the whole group (ISO 32000-2 §12.5.6.2). `comment_edit` on the subordinate
+/// moves only it, as one undo step, and recolours the primary with it; `comment_list` reports
+/// where each member went.
+#[test]
+fn editing_a_group_member_moves_it_and_restyles_the_group() {
+    let dir = workdir("rt-group-edit");
+    std::fs::write(dir.join("group.pdf"), GROUP_FIXTURE).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "group.pdf" }))["doc"].as_u64().unwrap();
+    let rects = |a: &mut _| {
+        let list = ok(a, "comment_list", json!({ "doc": doc }));
+        let c = list["comments"].as_array().unwrap().iter().find(|c| c["id"] == "sq-primary").cloned().unwrap();
+        let nums = |v: &Value| v.as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect::<Vec<f64>>();
+        (nums(&c["rect"]), nums(&c["group"][0]["rect"]), c["color"].clone())
+    };
+    let (square, circle, _) = rects(&mut a);
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "id": "circ-sub", "move": [20, -10] }));
+    let (sq, ci, _) = rects(&mut a);
+    let by = |from: &[f64], to: &[f64]| from.iter().zip(to).map(|(f, t)| ((t - f) * 100.0).round() / 100.0).collect::<Vec<f64>>();
+    let (moved_square, moved_circle) = (by(&square, &sq), by(&circle, &ci));
+    assert_eq!(moved_circle.first(), Some(&20.0), "the member moves: {moved_circle:?}");
+    assert!(moved_square.iter().all(|d| *d == 0.0), "the primary stays: {moved_square:?}");
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert_eq!((rects(&mut a).0, rects(&mut a).1), (square, circle), "one undo step puts it back");
+
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "id": "circ-sub", "color": "#00FF00" }));
+    assert_eq!(rects(&mut a).2, "#00FF00", "the group's colour, which is the primary's, changes with the member's");
+}
