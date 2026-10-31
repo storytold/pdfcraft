@@ -3,7 +3,8 @@
 //! is applied as one undoable edit when it is done. Editable text and images is ClearScan: the
 //! same worker pattern runs [`pdfcraft_engine::Session::clearscan_job`], then
 //! [`pdfcraft_engine::Session::apply_clearscan`] (what [`pdfcraft_engine::Session::clearscan_document`]
-//! does in one call).
+//! does in one call). The web has no worker thread: one page runs each frame, after the stage
+//! notice has been shown, so Cancel is read before the next page.
 
 use std::sync::{Arc, Mutex};
 
@@ -140,6 +141,11 @@ pub struct ClearScanRun {
     pub progress: Arc<Mutex<ClearScanRunProgress>>,
     /// The document's edit generation when the run started. A result is for those bytes only.
     pub generation: u64,
+    /// Set on the web, which cannot put the job on a worker. One [`poll`](PdfCraftApp::poll_ocr)
+    /// runs one page. The desktop worker leaves this empty.
+    pub(crate) pending: Option<pdfcraft_engine::clearscan::ClearScanCursor>,
+    /// The stage notice is shown once before the first page, so the browser can paint it.
+    pub(crate) shown: bool,
 }
 
 pub struct OcrRun {
@@ -409,36 +415,45 @@ impl PdfCraftApp {
             }
         };
         let progress = Arc::new(Mutex::new(ClearScanRunProgress { total: job.pages.len(), ..Default::default() }));
-        let p = progress.clone();
-        let lang = crate::i18n::current();
-        let work = move || {
-            crate::i18n::set_current(lang);
-            let result = clearscan_guarded(|| {
-                job.run(|event| {
-                    let Ok(mut state) = p.lock() else { return false };
-                    state.done = event.done;
-                    state.total = event.total;
-                    state.stage = event.stage;
-                    !state.cancel
-                })
-            });
-            if let Ok(mut state) = p.lock() {
-                state.result = Some(result);
-            }
-        };
-        #[cfg(not(target_arch = "wasm32"))]
-        if self.run_inline {
-            work();
-        } else if let Err(error) = std::thread::Builder::new().name("pdfcraft-clearscan".into()).spawn(work)
-            && let Ok(mut state) = progress.lock()
-        {
-            state.result = Some(Err(ClearScanFail::Message(error.to_string())));
-        }
-        #[cfg(target_arch = "wasm32")]
-        work();
         let generation = self.session.get(id).map_or(0, |document| document.edit_generation());
-        self.clearscan_run = Some(ClearScanRun { doc: id, progress, generation });
-        self.poll_ocr();
+        // The web cannot run a worker thread. Stepping the whole job here would finish before
+        // the stage notice is drawn and before Cancel can be clicked. One page per frame instead.
+        #[cfg(target_arch = "wasm32")]
+        {
+            let cursor = job.cursor();
+            self.clearscan_run = Some(ClearScanRun { doc: id, progress, generation, pending: Some(cursor), shown: false });
+            self.poll_ocr();
+            return;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let p = progress.clone();
+            let lang = crate::i18n::current();
+            let work = move || {
+                crate::i18n::set_current(lang);
+                let result = guard_clearscan(|| {
+                    job.run(|event| {
+                        let Ok(mut state) = p.lock() else { return false };
+                        state.done = event.done;
+                        state.total = event.total;
+                        state.stage = event.stage;
+                        !state.cancel
+                    })
+                });
+                if let Ok(mut state) = p.lock() {
+                    state.result = Some(result);
+                }
+            };
+            if self.run_inline {
+                work();
+            } else if let Err(error) = std::thread::Builder::new().name("pdfcraft-clearscan".into()).spawn(work)
+                && let Ok(mut state) = progress.lock()
+            {
+                state.result = Some(Err(ClearScanFail::Message(error.to_string())));
+            }
+            self.clearscan_run = Some(ClearScanRun { doc: id, progress, generation, pending: None, shown: true });
+            self.poll_ocr();
+        }
     }
 
     /// Recognize text in each file, writing the searchable copies into a folder the user picks
@@ -687,6 +702,9 @@ impl PdfCraftApp {
     fn poll_clearscan(&mut self) {
         let Some(run) = self.clearscan_run.as_ref() else { return };
         let (doc, progress, generation) = (run.doc, run.progress.clone(), run.generation);
+        if self.pump_clearscan_page(&progress) {
+            return;
+        }
         let mut state = match progress.lock() {
             Ok(state) => state,
             Err(error) => {
@@ -741,6 +759,78 @@ impl PdfCraftApp {
         }
     }
 
+    /// One page of a web ClearScan run. The first call only shows the notice. Later calls read
+    /// one page, then return so the browser can paint and take Cancel before the next page.
+    /// `false` means a result is waiting and the caller should apply it.
+    fn pump_clearscan_page(&mut self, progress: &Mutex<ClearScanRunProgress>) -> bool {
+        let Some(run) = self.clearscan_run.as_ref() else { return false };
+        if run.pending.is_none() {
+            return false;
+        }
+        let waiting = match progress.lock() {
+            Ok(state) => state.result.is_none(),
+            Err(_) => return false,
+        };
+        if !waiting {
+            return false;
+        }
+        if !run.shown {
+            if let Some(run) = self.clearscan_run.as_mut() {
+                run.shown = true;
+            }
+            self.show_clearscan_wait(progress);
+            return true;
+        }
+        let Some(mut cursor) = self.clearscan_run.as_mut().and_then(|run| run.pending.take()) else {
+            return false;
+        };
+        let stepped = guard_clearscan(|| {
+            cursor.step(|event| {
+                let Ok(mut state) = progress.lock() else { return false };
+                state.done = event.done;
+                state.total = event.total;
+                state.stage = event.stage;
+                !state.cancel
+            })
+        });
+        match stepped {
+            Ok(None) => {
+                if let Some(run) = self.clearscan_run.as_mut() {
+                    run.pending = Some(cursor);
+                }
+                self.show_clearscan_wait(progress);
+                true
+            }
+            Ok(Some(built)) => {
+                if let Ok(mut state) = progress.lock() {
+                    state.result = Some(Ok(built));
+                }
+                false
+            }
+            Err(error) => {
+                if let Ok(mut state) = progress.lock() {
+                    state.result = Some(Err(error));
+                }
+                false
+            }
+        }
+    }
+
+    /// The stage notice for a ClearScan run that is still going, and a request for the next frame.
+    fn show_clearscan_wait(&mut self, progress: &Mutex<ClearScanRunProgress>) {
+        let Ok(state) = progress.lock() else { return };
+        let cancelling = state.cancel;
+        let (done, total, stage) = (state.done, state.total, state.stage);
+        drop(state);
+        let label = if cancelling { tl!("Cancelling…").to_string() } else { clearscan_progress_label(stage, done, total) };
+        self.progress_job = crate::widgets::ProgressJob::ClearScan;
+        self.progress_notice =
+            Some(crate::widgets::ProgressNotice { label, fraction: clearscan_fraction(done, total, stage), cancellable: !cancelling });
+        if let Some(ctx) = &self.ctx {
+            ctx.request_repaint();
+        }
+    }
+
     fn notify_clearscan_error(&mut self, error: ClearScanError) {
         match error {
             ClearScanError::NoModels => self.notify(models_missing()),
@@ -760,9 +850,9 @@ fn recognize_guarded<T>(recognize: impl FnOnce() -> Result<T, String>) -> Result
     pdfcraft_engine::guard(recognize).unwrap_or_else(|panic| Err(failed(&panic)))
 }
 
-fn clearscan_guarded(run: impl FnOnce() -> Result<ClearScanBuilt, ClearScanError>) -> Result<ClearScanBuilt, ClearScanFail> {
+fn guard_clearscan<T>(run: impl FnOnce() -> Result<T, ClearScanError>) -> Result<T, ClearScanFail> {
     match pdfcraft_engine::guard(run) {
-        Ok(Ok(built)) => Ok(built),
+        Ok(Ok(value)) => Ok(value),
         Ok(Err(ClearScanError::NoModels)) => Err(ClearScanFail::NoModels),
         Ok(Err(error)) => Err(ClearScanFail::Message(error.to_string())),
         Err(panic) => Err(ClearScanFail::Message(failed_clearscan(&panic))),
@@ -1098,7 +1188,7 @@ mod tests {
         let id = app.active_ids().unwrap().1;
         let progress = Arc::new(Mutex::new(ClearScanRunProgress { done: 0, total: 2, stage: "vectorize", ..Default::default() }));
         let generation = app.session.get(id).unwrap().edit_generation();
-        app.clearscan_run = Some(ClearScanRun { doc: id, progress: progress.clone(), generation });
+        app.clearscan_run = Some(ClearScanRun { doc: id, progress: progress.clone(), generation, pending: None, shown: true });
         app.poll_ocr();
         let notice = app.progress_notice.clone().unwrap();
         assert_eq!(notice.label, "ClearScan… Drawing outlines, page 1 of 2");
@@ -1141,7 +1231,7 @@ mod tests {
         let id = app.active_ids().unwrap().1;
         let progress = Arc::new(Mutex::new(ClearScanRunProgress { result: Some(Err(ClearScanFail::NoModels)), ..Default::default() }));
         let generation = app.session.get(id).unwrap().edit_generation();
-        app.clearscan_run = Some(ClearScanRun { doc: id, progress, generation });
+        app.clearscan_run = Some(ClearScanRun { doc: id, progress, generation, pending: None, shown: true });
         app.progress_job = crate::widgets::ProgressJob::ClearScan;
         app.progress_notice = Some(crate::widgets::ProgressNotice { label: "ClearScan…".into(), fraction: 0.2, cancellable: true });
         app.poll_ocr();
@@ -1178,7 +1268,7 @@ mod tests {
             })),
             ..Default::default()
         }));
-        app.clearscan_run = Some(ClearScanRun { doc: id, progress, generation });
+        app.clearscan_run = Some(ClearScanRun { doc: id, progress, generation, pending: None, shown: true });
         let mut png = std::io::Cursor::new(Vec::new());
         image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(8, 8, image::Rgba([250, 250, 250, 255])))
             .write_to(&mut png, image::ImageFormat::Png)
@@ -1191,5 +1281,53 @@ mod tests {
         assert_eq!(app.session.get(id).unwrap().can_undo(), Some("Add image"));
         let toast = app.toast.take().map(|toast| toast.0).unwrap_or_default();
         assert!(toast.contains("document changed"), "{toast}");
+    }
+
+    /// Two pages of real text, so each ClearScan step skips without the recognition models.
+    fn two_text_pages() -> Vec<u8> {
+        let mut session = Session::new();
+        let first = session.create_from_text("a", "Alpha page").unwrap();
+        let id = session.open("a.pdf", None, first, None).unwrap();
+        let second = session.create_from_text("b", "Beta page").unwrap();
+        session
+            .apply(
+                id,
+                Edit::InsertPagesFrom {
+                    name: "b.pdf".into(),
+                    bytes: second,
+                    pages: None,
+                    at: 1,
+                    field_conflicts: pdfcraft_engine::FieldConflicts::Rename,
+                },
+            )
+            .unwrap();
+        session.get(id).unwrap().bytes.to_vec()
+    }
+
+    #[test]
+    fn a_clearscan_page_waits_until_the_notice_can_paint_and_cancel_stops_the_next() {
+        let mut app = app_with(two_text_pages());
+        app.set_option("language", "en").unwrap();
+        let id = app.active_ids().unwrap().1;
+        let job = app.session.clearscan_job(id, &[], ClearScanSettings::default()).unwrap();
+        assert_eq!(job.pages.len(), 2);
+        let progress = Arc::new(Mutex::new(ClearScanRunProgress { total: job.pages.len(), ..Default::default() }));
+        let generation = app.session.get(id).unwrap().edit_generation();
+        app.clearscan_run = Some(ClearScanRun { doc: id, progress: progress.clone(), generation, pending: Some(job.cursor()), shown: false });
+        app.poll_ocr();
+        let run = app.clearscan_run.as_ref().unwrap();
+        assert!(run.shown && run.pending.is_some(), "the first poll only shows the notice");
+        assert_eq!(progress.lock().unwrap().done, 0);
+        assert!(app.progress_notice.is_some());
+        assert!(app.session.get(id).unwrap().can_undo().is_none());
+        app.poll_ocr();
+        assert_eq!(progress.lock().unwrap().done, 1);
+        assert!(app.clearscan_run.as_ref().unwrap().pending.is_some(), "the second page is still waiting");
+        app.cancel_clearscan();
+        app.poll_ocr();
+        assert!(app.clearscan_run.is_none() && app.progress_notice.is_none());
+        assert!(app.session.get(id).unwrap().can_undo().is_none(), "a skipped page is not an edit");
+        let toast = app.toast.take().map(|toast| toast.0).unwrap_or_default();
+        assert!(toast.contains("cancelled"), "{toast}");
     }
 }

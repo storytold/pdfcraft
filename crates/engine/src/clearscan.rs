@@ -107,6 +107,22 @@ pub struct ClearScanJob {
     settings: ClearScanSettings,
 }
 
+/// One page of a [`ClearScanJob`] at a time. The desktop drains this on a worker.
+/// The web runs one [`ClearScanCursor::step`] per frame, so the browser can paint and Cancel.
+pub struct ClearScanCursor {
+    renderer: PageRenderer,
+    infos: Vec<PageInfo>,
+    native: Vec<Option<f32>>,
+    pages: Vec<usize>,
+    settings: ClearScanSettings,
+    scan_options: pdfcraft_ocr::clearscan::ClearScanOptions,
+    /// The next index into `pages`.
+    index: usize,
+    recognizer: Option<Arc<Ocr>>,
+    report: Vec<ClearScanPage>,
+    built: Vec<(usize, Vec<u8>)>,
+}
+
 /// Pages a [`ClearScanJob`] built, plus the report. [`Session::apply_clearscan`] turns `built`
 /// into one undo step. Empty `built` applies nothing.
 pub struct ClearScanBuilt {
@@ -115,113 +131,144 @@ pub struct ClearScanBuilt {
 }
 
 impl ClearScanJob {
+    /// A run that advances one page per [`ClearScanCursor::step`].
+    pub fn cursor(self) -> ClearScanCursor {
+        let ClearScanJob { bytes, password, infos, native, pages, settings } = self;
+        let config = RenderConfig { password: password.as_deref().map(Arc::from), hide_comments: true, ..Default::default() };
+        let scan_options = scan_options(&settings);
+        ClearScanCursor {
+            renderer: PageRenderer::new(bytes, config),
+            infos,
+            native,
+            pages,
+            settings,
+            scan_options,
+            index: 0,
+            recognizer: None,
+            report: Vec::new(),
+            built: Vec::new(),
+        }
+    }
+
     /// Run the pipeline. Returning `false` from `progress` stops before the next page. Pages
     /// already built are in [`ClearScanBuilt::built`]; the caller still applies them. Missing
     /// models are [`ClearScanError::NoModels`] and `built` is not returned.
     pub fn run(self, mut progress: impl FnMut(ClearScanProgress) -> bool) -> Result<ClearScanBuilt, ClearScanError> {
-        let ClearScanJob { bytes, password, infos, native, pages, settings } = self;
-        let config = RenderConfig { password: password.as_deref().map(Arc::from), hide_comments: true, ..Default::default() };
-        let mut renderer = PageRenderer::new(bytes, config);
-        let total = pages.len();
-        let mut report = Vec::new();
-        let mut built: Vec<(usize, Vec<u8>)> = Vec::new();
-        let mut recognizer: Option<Arc<Ocr>> = None;
-        let mut cancelled = false;
-        let scan_options = scan_options(&settings);
-
-        for (done, &page) in pages.iter().enumerate() {
-            if !progress(ClearScanProgress { page, done, total, stage: "render" }) {
-                cancelled = true;
-                break;
-            }
-            let Some(info) = infos.get(page) else {
-                report.push(failed_page(page, "the page is not in the document"));
-                continue;
-            };
-            if settings.skip_text_pages && page_has_text(&mut renderer, page) {
-                let _ = progress(ClearScanProgress { page, done, total, stage: "skipped" });
-                report.push(ClearScanPage {
-                    page,
-                    text: String::new(),
-                    glyphs: 0,
-                    clusters: 0,
-                    erased: 0,
-                    bytes: 0,
-                    skipped: Some("the page already contains text".into()),
-                    error: None,
-                });
-                let _ = progress(ClearScanProgress { page, done: done.saturating_add(1), total, stage: "done" });
-                continue;
-            }
-            let scale = render_scale(settings.dpi, info, native.get(page).copied().flatten());
-            let shot = renderer.render(RenderRequest { page, scale, ..Default::default() });
-            if let Some(error) = shot.error {
-                report.push(failed_page(page, &format!("page {} could not be rendered: {error}", page.saturating_add(1))));
-                continue;
-            }
-            if shot.width == 0 || shot.height == 0 {
-                report.push(failed_page(page, "the rendered page is empty"));
-                continue;
-            }
-            let ppp = f64::from(info.width) / f64::from(shot.width.max(1));
-            if !ppp.is_finite() || ppp <= 0.0 {
-                report.push(failed_page(page, "the page scale is not a finite number"));
-                continue;
-            }
-            if recognizer.is_none() {
-                if !ocr::available() {
-                    return Err(ClearScanError::NoModels);
-                }
-                recognizer = Some(ocr::engine().map_err(ClearScanError::Failed)?);
-            }
-            let Some(ocr) = recognizer.as_ref() else {
-                return Err(ClearScanError::Failed("text recognition did not start".into()));
-            };
-            let mut stop = false;
-            let outcome = crate::guard(|| {
-                pdfcraft_ocr::clearscan::clearscan_recognized(
-                    ocr,
-                    pdfcraft_ocr::clearscan::ScanRaster {
-                        pixels: &shot.rgba,
-                        width: shot.width,
-                        height: shot.height,
-                        channels: 4,
-                        points_per_pixel: ppp,
-                    },
-                    &scan_options,
-                    |stage| {
-                        if !progress(ClearScanProgress { page, done, total, stage: stage.as_str() }) {
-                            stop = true;
-                        }
-                    },
-                )
-            });
-            match outcome {
-                Ok(Ok(out)) => {
-                    let bytes = out.pdf.len();
-                    report.push(ClearScanPage {
-                        page,
-                        text: out.text,
-                        glyphs: out.glyphs,
-                        clusters: out.clusters,
-                        erased: out.erased,
-                        bytes,
-                        skipped: None,
-                        error: None,
-                    });
-                    built.push((page, out.pdf));
-                }
-                Ok(Err(error)) => report.push(failed_page(page, &error.to_string())),
-                Err(panic) => report.push(failed_page(page, &format!("internal error: {panic}"))),
-            }
-            let _ = progress(ClearScanProgress { page, done: done.saturating_add(1), total, stage: "done" });
-            if stop {
-                cancelled = true;
-                break;
+        let mut cursor = self.cursor();
+        loop {
+            if let Some(built) = cursor.step(&mut progress)? {
+                return Ok(built);
             }
         }
+    }
+}
 
-        Ok(ClearScanBuilt { report: ClearScanReport { pages: report, cancelled }, built })
+impl ClearScanCursor {
+    /// Read the next page. `None` means pages remain. `Some` is the finished run, including a
+    /// cancel: the callback returned `false` before this page, or during it, and earlier pages
+    /// are in [`ClearScanBuilt::built`]. A `Some` result ends the cursor.
+    pub fn step(&mut self, mut progress: impl FnMut(ClearScanProgress) -> bool) -> Result<Option<ClearScanBuilt>, ClearScanError> {
+        let Some(page) = self.pages.get(self.index).copied() else {
+            return Ok(Some(self.finish(false)));
+        };
+        let done = self.index;
+        let total = self.pages.len();
+        if !progress(ClearScanProgress { page, done, total, stage: "render" }) {
+            return Ok(Some(self.finish(true)));
+        }
+        let Some(info) = self.infos.get(page).cloned() else {
+            self.report.push(failed_page(page, "the page is not in the document"));
+            return Ok(self.advance(false));
+        };
+        if self.settings.skip_text_pages && page_has_text(&mut self.renderer, page) {
+            let _ = progress(ClearScanProgress { page, done, total, stage: "skipped" });
+            self.report.push(ClearScanPage {
+                page,
+                text: String::new(),
+                glyphs: 0,
+                clusters: 0,
+                erased: 0,
+                bytes: 0,
+                skipped: Some("the page already contains text".into()),
+                error: None,
+            });
+            let _ = progress(ClearScanProgress { page, done: done.saturating_add(1), total, stage: "done" });
+            return Ok(self.advance(false));
+        }
+        let native = self.native.get(page).copied().flatten();
+        let scale = render_scale(self.settings.dpi, &info, native);
+        let shot = self.renderer.render(RenderRequest { page, scale, ..Default::default() });
+        if let Some(error) = shot.error {
+            self.report.push(failed_page(page, &format!("page {} could not be rendered: {error}", page.saturating_add(1))));
+            return Ok(self.advance(false));
+        }
+        if shot.width == 0 || shot.height == 0 {
+            self.report.push(failed_page(page, "the rendered page is empty"));
+            return Ok(self.advance(false));
+        }
+        let ppp = f64::from(info.width) / f64::from(shot.width.max(1));
+        if !ppp.is_finite() || ppp <= 0.0 {
+            self.report.push(failed_page(page, "the page scale is not a finite number"));
+            return Ok(self.advance(false));
+        }
+        if self.recognizer.is_none() {
+            if !ocr::available() {
+                return Err(ClearScanError::NoModels);
+            }
+            self.recognizer = Some(ocr::engine().map_err(ClearScanError::Failed)?);
+        }
+        let Some(ocr) = self.recognizer.clone() else {
+            return Err(ClearScanError::Failed("text recognition did not start".into()));
+        };
+        let mut stop = false;
+        let outcome = crate::guard(|| {
+            pdfcraft_ocr::clearscan::clearscan_recognized(
+                &ocr,
+                pdfcraft_ocr::clearscan::ScanRaster {
+                    pixels: &shot.rgba,
+                    width: shot.width,
+                    height: shot.height,
+                    channels: 4,
+                    points_per_pixel: ppp,
+                },
+                &self.scan_options,
+                |stage| {
+                    if !progress(ClearScanProgress { page, done, total, stage: stage.as_str() }) {
+                        stop = true;
+                    }
+                },
+            )
+        });
+        match outcome {
+            Ok(Ok(out)) => {
+                let bytes = out.pdf.len();
+                self.report.push(ClearScanPage {
+                    page,
+                    text: out.text,
+                    glyphs: out.glyphs,
+                    clusters: out.clusters,
+                    erased: out.erased,
+                    bytes,
+                    skipped: None,
+                    error: None,
+                });
+                self.built.push((page, out.pdf));
+            }
+            Ok(Err(error)) => self.report.push(failed_page(page, &error.to_string())),
+            Err(panic) => self.report.push(failed_page(page, &format!("internal error: {panic}"))),
+        }
+        let _ = progress(ClearScanProgress { page, done: done.saturating_add(1), total, stage: "done" });
+        Ok(self.advance(stop))
+    }
+
+    /// Count this page as visited. `None` when another page is still waiting.
+    fn advance(&mut self, cancelled: bool) -> Option<ClearScanBuilt> {
+        self.index = self.index.saturating_add(1);
+        if cancelled || self.index >= self.pages.len() { Some(self.finish(cancelled)) } else { None }
+    }
+
+    fn finish(&mut self, cancelled: bool) -> ClearScanBuilt {
+        ClearScanBuilt { report: ClearScanReport { pages: std::mem::take(&mut self.report), cancelled }, built: std::mem::take(&mut self.built) }
     }
 }
 
@@ -395,6 +442,45 @@ mod tests {
         assert!(report.cancelled);
         assert!(report.pages.is_empty(), "{report:?}");
         assert!(session.undo(id).is_err());
+    }
+
+    #[test]
+    fn a_clearscan_cursor_reads_one_page_and_cancel_keeps_it() {
+        let mut session = Session::new();
+        let first = session.create_from_text("a", "Alpha page").expect("first");
+        let id = session.open("a.pdf", None, first, None).expect("open");
+        let second = session.create_from_text("b", "Beta page").expect("second");
+        session
+            .apply(
+                id,
+                Edit::InsertPagesFrom {
+                    name: "b.pdf".into(),
+                    bytes: second,
+                    pages: None,
+                    at: 1,
+                    field_conflicts: pdfcraft_organize::FieldConflicts::Rename,
+                },
+            )
+            .expect("insert");
+        let job = session.clearscan_job(id, &[], ClearScanSettings::default()).expect("job");
+        assert_eq!(job.pages.len(), 2);
+        let mut cursor = job.cursor();
+        let mut finished_pages = 0_usize;
+        let pending = cursor
+            .step(|event| {
+                if event.stage == "done" {
+                    finished_pages = finished_pages.saturating_add(1);
+                }
+                true
+            })
+            .expect("first page");
+        assert!(pending.is_none(), "the second page is still waiting");
+        assert_eq!(finished_pages, 1);
+        let built = cursor.step(|_| false).expect("cancel").expect("the cancel finishes the run");
+        assert!(built.report.cancelled);
+        assert_eq!(built.report.pages.len(), 1, "{:?}", built.report);
+        assert!(built.report.pages[0].skipped.is_some());
+        assert!(built.built.is_empty());
     }
 
     #[test]

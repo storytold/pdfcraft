@@ -1,20 +1,22 @@
 # ClearScan
 
+> **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** minor (on the web, ClearScan runs one page at a time so the stage notice and Cancel stay live)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** minor (a split letter is searchable once; only redrawn ink is painted out)
-
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** minor (Recognize Text ▸ Editable text and images runs ClearScan)
 
 ClearScan replaces the lettering on a scanned page with resolution-independent outlines.
 The page image loses the lettering that was redrawn, and the outlines are drawn over it
-as a Type 3 font with a `/ToUnicode` map, so the text stays selectable and searchable. A
-character the labeling split, such as the stem and dot of an i, is searchable once.
-Photographs, rules, and marks no character box claimed stay in the image. Comments, links
-and bookmarks on the page stay.
+as a Type 3 font with a `/ToUnicode` map, so the text stays selectable and searchable.
+When labeling splits a character, such as the stem and dot of an i, the character is
+searchable once.
+Photographs, rules, and marks that no character box claimed stay in the image. Comments,
+links and bookmarks on the page stay.
 
 On the desktop, Scan & OCR ▸ Recognize text ▸ In this file ▸ Output ▸ Editable text and
 images runs the same step. Sensitivity (0–100) and downsample (1–8) appear only for that
-output. The run is a worker thread with stage progress and Cancel; pages already built are
-kept, as one undo step named ClearScan. In multiple files stays Searchable Image (Exact).
+output. The desktop run is a worker thread. On the web each page runs on its own turn, so
+the stage notice can repaint and Cancel is read before the next page. Pages already built
+are kept, as one undo step named ClearScan. For multiple files, the output remains Searchable Image (Exact).
 
 Headless, run it with `pdfcraft-cli run` or the MCP server (`pdfcraft-cli mcp`), which share
 the automation tool table.
@@ -45,9 +47,10 @@ pdfcraft-cli run --root . --script clearscan.json
 
 The result is JSON. `pages` is one object per page (1-based): recognised `text` when the
 document allows copying, `glyphs`, `clusters` and `erased`, or `skipped` / `error`.
-`progress` is the stage log (`render`, `preprocess`, `recognize`, `components`, `align`,
-`cluster`, `vectorize`, `compose`, `done`). The call is synchronous, so the log arrives
-with the result. Successful pages are one undoable step named ClearScan.
+`progress` is the stage log. It can include `skipped` for text pages. Normal stages are
+`render`, `preprocess`, `recognize`, `components`, `align`, `cluster`, `vectorize`, `compose`
+and `done`. The call is synchronous, so the log arrives with the result. Successful pages
+are one undoable step named ClearScan.
 
 | Argument | Meaning |
 |---|---|
@@ -101,6 +104,7 @@ is not claimed to match Acrobat.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | minor | On the web, ClearScan runs one page at a time so the stage notice can repaint and Cancel is read before the next page. |
 | 2026-10-31 | minor | A split letter is searchable once. Only ink that was redrawn is painted out. A ClearScan result is dropped when the document changed, and it does not run beside optimization. |
 | 2026-10-31 | minor | Recognize Text ▸ Editable text and images runs ClearScan on a worker, with progress, cancel and one undo step. |
 | 2026-10-31 | minor | Headless ClearScan: `ocr_clearscan` on the CLI and MCP, one undoable step. |

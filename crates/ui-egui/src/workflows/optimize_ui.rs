@@ -530,7 +530,7 @@ mod tests {
         app.set_option("language", "en").unwrap();
         app.open_bytes("notes.txt", None, b"hello".to_vec()).unwrap();
         let (_, doc) = app.active_ids().unwrap();
-        app.clearscan_run = Some(crate::workflows::ocr_ui::ClearScanRun { doc, progress: Arc::default(), generation: 0 });
+        app.clearscan_run = Some(crate::workflows::ocr_ui::ClearScanRun { doc, progress: Arc::default(), generation: 0, pending: None, shown: true });
         app.optimize_with_draft();
         assert!(app.optimize_run.is_none());
         assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Text recognition is already running"));
