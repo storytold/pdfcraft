@@ -2147,6 +2147,16 @@
 	The document's security settings don't allow this change	Οι ρυθμίσεις ασφαλείας του εγγράφου δεν επιτρέπουν αυτή την αλλαγή
 	Open a document first	Ανοίξτε πρώτα ένα έγγραφο
 	Security will be removed when you save	Η προστασία θα αφαιρεθεί κατά την αποθήκευση
+	The extracted pages aren't protected: the original's security settings don't carry over.	Οι εξαγόμενες σελίδες δεν είναι προστατευμένες: οι ρυθμίσεις ασφαλείας του πρωτοτύπου δεν μεταφέρονται.
+	The split files aren't protected: the original's security settings don't carry over.	Τα διαχωρισμένα αρχεία δεν είναι προστατευμένα: οι ρυθμίσεις ασφαλείας του πρωτοτύπου δεν μεταφέρονται.
+	Change a signed document?	Αλλαγή υπογεγραμμένου εγγράφου;
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	Αυτό το έγγραφο είναι υπογεγραμμένο. Μια αλλαγή προσθέτει νέα έκδοση: οι υπογραφές παραμένουν έγκυρες για την έκδοση που υπέγραψαν, και τα προγράμματα προβολής θα δείχνουν ότι το έγγραφο άλλαξε μετά την υπογραφή.
+	It is certified with no changes allowed: any change invalidates the certification.	Είναι πιστοποιημένο χωρίς να επιτρέπονται αλλαγές: κάθε αλλαγή ακυρώνει την πιστοποίηση.
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	Είναι πιστοποιημένο: επιτρέπονται η συμπλήρωση φορμών και η υπογραφή· άλλες αλλαγές ακυρώνουν την πιστοποίηση.
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	Είναι πιστοποιημένο: επιτρέπονται η συμπλήρωση φορμών, η υπογραφή και τα σχόλια· άλλες αλλαγές ακυρώνουν την πιστοποίηση.
+	Change anyway	Αλλαγή ούτως ή άλλως
+	Remove security?	Αφαίρεση ασφάλειας;
+	The passwords and the restrictions are removed when you save.	Οι κωδικοί πρόσβασης και οι περιορισμοί αφαιρούνται κατά την αποθήκευση.
 	Click text or an image to edit it	Κάντε κλικ σε κείμενο ή εικόνα για επεξεργασία
 	Drag a rectangle to create a link; double-click a link to edit it	Σύρετε για να ορίσετε ορθογώνια περιοχή συνδέσμου· κάντε διπλό κλικ σε σύνδεσμο για επεξεργασία
 	There are no redaction marks to apply	Δεν υπάρχουν σημάνσεις απόκρυψης για εφαρμογή

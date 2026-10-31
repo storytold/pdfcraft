@@ -1881,6 +1881,16 @@ key	Space	Mezerník
 	The document's security settings don't allow printing	Nastavení zabezpečení dokumentu nedovoluje tisk
 	Open a document first	Nejdřív otevřete dokument
 	Security will be removed when you save	Zabezpečení se odebere při uložení
+	The extracted pages aren't protected: the original's security settings don't carry over.	Extrahované stránky nejsou chráněny: nastavení zabezpečení původního souboru se nepřenáší.
+	The split files aren't protected: the original's security settings don't carry over.	Rozdělené soubory nejsou chráněny: nastavení zabezpečení původního souboru se nepřenáší.
+	Change a signed document?	Změnit podepsaný dokument?
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	Tento dokument je podepsán. Změna přidá novou verzi: podpisy zůstávají platné pro verzi, kterou podepsaly, a prohlížeče ukážou, že dokument byl po podepsání změněn.
+	It is certified with no changes allowed: any change invalidates the certification.	Je certifikován bez povolených změn: jakákoli změna certifikaci zneplatní.
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	Je certifikován: vyplňování formulářů a podepisování jsou povoleny; jiné změny certifikaci zneplatní.
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	Je certifikován: vyplňování formulářů, podepisování a komentování jsou povoleny; jiné změny certifikaci zneplatní.
+	Change anyway	Přesto změnit
+	Remove security?	Odebrat zabezpečení?
+	The passwords and the restrictions are removed when you save.	Hesla a omezení budou odebrána při uložení.
 	Click text or an image to edit it	Kliknutím na text nebo obrázek ho upravíte
 	Drag a rectangle to create a link; double-click a link to edit it	Tažením obdélníku vytvoříte odkaz; dvojitým kliknutím na odkaz ho upravíte
 	There are no redaction marks to apply	Nejsou žádné značky začernění k použití

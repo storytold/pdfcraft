@@ -1425,3 +1425,54 @@ fn typing_in_one_tab_never_reaches_another_tabs_added_text() {
     h.run_steps(3);
     assert_eq!(h.state().views[1].content.draft.as_ref().map(|d| d.text.as_str()), Some("Reviewed"), "the other tab's typing stays out");
 }
+
+/// #2187 review: new text typed on a signed document is its first change (#2168). Save asks;
+/// Change anyway adds the text once and the save goes on, rather than adding it again from a
+/// draft put back while the question was open. The same holds for Fill & Sign's type box.
+#[test]
+fn text_typed_on_a_signed_document_is_added_once_after_the_question() {
+    let signed = {
+        let mut session = pdfcraft_engine::Session::new();
+        let id = session.open("form.pdf", None, std::sync::Arc::new(include_bytes!("../data/form.pdf").to_vec()), None).unwrap();
+        let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+        let digital_id = pdfcraft_engine::sign::pkcs12::open(&p12, "test").unwrap();
+        let opts = pdfcraft_engine::SignOptions { page: 0, rect: Some([20.0, 20.0, 160.0, 50.0]), ..Default::default() };
+        session.sign(id, &digital_id, opts).unwrap().as_ref().clone()
+    };
+    let out = std::env::temp_dir().join(format!("pdfcraft-signed-text-{}.pdf", std::process::id()));
+    let _ = std::fs::remove_file(&out);
+    let mut h = harness_bytes(signed.clone());
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(2);
+    let p = at(&h, 40.0, 100.0);
+    click(&mut h, p);
+    h.event(egui::Event::Text("Signed note".into()));
+    h.run_steps(2);
+    assert!(!h.state_mut().save_active(pdfcraft_ui_egui::SaveTarget::InPlace), "waits for the answer");
+    // Not put back in the editor as if refused: a later commit (the resumed save) would add it again.
+    assert!(h.state().views[0].content.draft.is_none(), "the question holds the text, not the editor");
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::SignedEdit));
+    h.get_by_label("Change anyway").click();
+    h.run_steps(4);
+    assert_eq!(texts(&h), ["Signed note"], "added once");
+    assert!(out.exists() && !h.state().session.get(h.state().views[0].id).unwrap().dirty, "saved after the answer");
+    let _ = std::fs::remove_file(&out);
+
+    // Fill & Sign's type box.
+    let mut h = harness_bytes(signed);
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.state_mut().views[0].fill_text =
+        Some(pdfcraft_ui_egui::fill_sign::TypeBox { page: 0, at: [40.0, 100.0], text: "Ada".into(), size: 10.0, color: [0.0; 3], focus: false });
+    assert!(!h.state_mut().save_active(pdfcraft_ui_egui::SaveTarget::InPlace), "waits for the answer");
+    assert!(h.state().views[0].fill_text.is_none(), "the question holds the text, not the box");
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::SignedEdit));
+    h.get_by_label("Change anyway").click();
+    h.run_steps(4);
+    let typed = h.state().session.get(h.state().views[0].id).unwrap().info.annotations.iter().filter(|a| a.fill_sign).count();
+    assert_eq!(typed, 1, "added once");
+    assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty, "saved after the answer");
+    let _ = std::fs::remove_file(&out);
+}

@@ -209,11 +209,8 @@ impl PdfCraftApp {
                 self.protect_draft = Default::default();
                 self.dialog = Some(Dialog::Protect);
             }
-            "protect.remove" => {
-                if self.apply_edit(Edit::RemoveProtection) {
-                    self.notify_tr("Security will be removed when you save");
-                }
-            }
+            // Asks first (#2168); the dialog applies it.
+            "protect.remove" => self.dialog = Some(Dialog::RemoveSecurity),
             link if pdfcraft_engine::links::for_command(link).is_some() => {
                 if let Some(l) = pdfcraft_engine::links::for_command(link) {
                     self.open_url(l.url);

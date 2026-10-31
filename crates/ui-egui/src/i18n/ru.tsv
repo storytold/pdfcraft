@@ -1832,6 +1832,16 @@
 	The document's security settings don't allow printing	Настройки безопасности документа не разрешают печать
 	Open a document first	Сначала откройте документ
 	Security will be removed when you save	Безопасность будет удалена при сохранении
+	The extracted pages aren't protected: the original's security settings don't carry over.	Извлечённые страницы не защищены: настройки безопасности оригинала не переносятся.
+	The split files aren't protected: the original's security settings don't carry over.	Разделённые файлы не защищены: настройки безопасности оригинала не переносятся.
+	Change a signed document?	Изменить подписанный документ?
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	Этот документ подписан. Изменение добавляет новую версию: подписи остаются действительными для подписанной версии, а программы просмотра покажут, что документ был изменён после подписания.
+	It is certified with no changes allowed: any change invalidates the certification.	Он сертифицирован без разрешённых изменений: любое изменение аннулирует сертификацию.
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	Он сертифицирован: разрешены заполнение форм и подписание; другие изменения аннулируют сертификацию.
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	Он сертифицирован: разрешены заполнение форм, подписание и комментирование; другие изменения аннулируют сертификацию.
+	Change anyway	Всё равно изменить
+	Remove security?	Удалить защиту?
+	The passwords and the restrictions are removed when you save.	Пароли и ограничения удаляются при сохранении.
 	Click text or an image to edit it	Щёлкните текст или изображение, чтобы редактировать
 	Drag a rectangle to create a link; double-click a link to edit it	Перетащите прямоугольник, чтобы создать ссылку; двойной щелчок по ссылке — для редактирования
 	There are no redaction marks to apply	Нет меток сокрытия для применения

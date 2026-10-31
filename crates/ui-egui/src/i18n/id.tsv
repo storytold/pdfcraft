@@ -2792,6 +2792,15 @@ theme	Appearance	Tampilan
 	field names can't contain a period: {name}	nama kolom tidak boleh berisi titik: {name}
 	two cells would both be named {name}	dua sel akan sama-sama bernama {name}
 	a field named {name} already exists	kolom bernama {name} sudah ada
+	Change a signed document?	Ubah dokumen yang ditandatangani?
+	Change anyway	Tetap ubah
+	It is certified with no changes allowed: any change invalidates the certification.	Dokumen ini disertifikasi tanpa izin perubahan: perubahan apa pun membatalkan sertifikasi.
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	Dokumen ini disertifikasi: pengisian formulir dan penandatanganan diizinkan; perubahan lain membatalkan sertifikasi.
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	Dokumen ini disertifikasi: pengisian formulir, penandatanganan, dan pemberian komentar diizinkan; perubahan lain membatalkan sertifikasi.
+	Remove security?	Hapus keamanan?
+	The extracted pages aren't protected: the original's security settings don't carry over.	Halaman yang diekstrak tidak dilindungi: pengaturan keamanan dokumen asli tidak ikut terbawa.
+	The passwords and the restrictions are removed when you save.	Kata sandi dan pembatasan dihapus saat Anda menyimpan.
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	Dokumen ini ditandatangani. Perubahan menambahkan versi baru: tanda tangan tetap sah untuk versi yang ditandatanganinya, dan penampil akan menunjukkan bahwa dokumen diubah setelah ditandatangani.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hari ini

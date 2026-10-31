@@ -1838,6 +1838,16 @@
 	The document's security settings don't allow printing	Le impostazioni di sicurezza del documento non consentono la stampa
 	Open a document first	Apri prima un documento
 	Security will be removed when you save	La protezione verrà rimossa al salvataggio
+	The extracted pages aren't protected: the original's security settings don't carry over.	Le pagine estratte non sono protette: le impostazioni di sicurezza dell’originale non vengono mantenute.
+	The split files aren't protected: the original's security settings don't carry over.	I file divisi non sono protetti: le impostazioni di sicurezza dell’originale non vengono mantenute.
+	Change a signed document?	Modificare un documento firmato?
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	Questo documento è firmato. Una modifica aggiunge una nuova versione: le firme restano valide per la versione che hanno firmato, e i lettori mostreranno che il documento è stato modificato dopo la firma.
+	It is certified with no changes allowed: any change invalidates the certification.	È certificato senza modifiche consentite: qualsiasi modifica invalida la certificazione.
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	È certificato: la compilazione dei moduli e la firma sono consentite; altre modifiche invalidano la certificazione.
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	È certificato: la compilazione dei moduli, la firma e i commenti sono consentiti; altre modifiche invalidano la certificazione.
+	Change anyway	Modifica comunque
+	Remove security?	Rimuovere la protezione?
+	The passwords and the restrictions are removed when you save.	Le password e le restrizioni vengono rimosse al salvataggio.
 	Click text or an image to edit it	Fai clic su un testo o un'immagine per modificarlo
 	Drag a rectangle to create a link; double-click a link to edit it	Trascina un rettangolo per creare un collegamento; fai doppio clic su un collegamento per modificarlo
 	There are no redaction marks to apply	Non ci sono segni di oscuramento da applicare

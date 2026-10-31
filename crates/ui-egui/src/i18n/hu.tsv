@@ -1752,6 +1752,16 @@
 	The document's security settings don't allow printing	A dokumentum biztonsági beállításai nem engedik a nyomtatást
 	Open a document first	Előbb nyiss meg egy dokumentumot
 	Security will be removed when you save	A védelem mentéskor megszűnik
+	The extracted pages aren't protected: the original's security settings don't carry over.	A kinyert oldalak nem védettek: az eredeti biztonsági beállításai nem öröklődnek.
+	The split files aren't protected: the original's security settings don't carry over.	A felosztott fájlok nem védettek: az eredeti biztonsági beállításai nem öröklődnek.
+	Change a signed document?	Módosítja az aláírt dokumentumot?
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	Ez a dokumentum alá van írva. A módosítás új verziót ad hozzá: az aláírások az általuk aláírt verzióra maradnak érvényesek, és a megjelenítők jelzik, hogy a dokumentum az aláírás után módosult.
+	It is certified with no changes allowed: any change invalidates the certification.	Tanúsított, módosítás nem engedélyezett: bármely módosítás érvényteleníti a tanúsítást.
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	Tanúsított: az űrlapok kitöltése és az aláírás engedélyezett; más módosítás érvényteleníti a tanúsítást.
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	Tanúsított: az űrlapok kitöltése, az aláírás és a megjegyzések engedélyezettek; más módosítás érvényteleníti a tanúsítást.
+	Change anyway	Módosítás mindenképp
+	Remove security?	Eltávolítja a biztonságot?
+	The passwords and the restrictions are removed when you save.	A jelszavak és a korlátozások mentéskor törlődnek.
 	Click text or an image to edit it	Kattints a szövegre vagy egy képre a szerkesztéshez
 	Drag a rectangle to create a link; double-click a link to edit it	Húzz egy téglalapot hivatkozás létrehozásához; dupla kattintással szerkesztheted
 	There are no redaction marks to apply	Nincs alkalmazható kitakarásjelölés

@@ -2748,6 +2748,15 @@ certificate	Version	وەشان
 	No tools match your search.	هیچ ئامرازێک لەگەڵ گەڕانەکەت ناگونجێت.
 	Expand all tools	فراوانکردنی هەموو ئامرازەکان
 	Collapse all tools	کۆکردنەوەی هەموو ئامرازەکان
+	Change a signed document?	بەڵگەنامەیەکی واژووکراو بگۆڕدرێت؟
+	Change anyway	هەر بیگۆڕە
+	It is certified with no changes allowed: any change invalidates the certification.	پشتڕاستکراوەتەوە و هیچ گۆڕانکارییەک ڕێگەپێدراو نییە: هەر گۆڕانکارییەک پشتڕاستکردنەوەکە پووچەڵ دەکاتەوە.
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	پشتڕاستکراوەتەوە: پڕکردنەوەی فۆرم و واژووکردن ڕێگەپێدراون؛ گۆڕانکارییەکانی تر پشتڕاستکردنەوەکە پووچەڵ دەکەنەوە.
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	پشتڕاستکراوەتەوە: پڕکردنەوەی فۆرم، واژووکردن و لێدوان ڕێگەپێدراون؛ گۆڕانکارییەکانی تر پشتڕاستکردنەوەکە پووچەڵ دەکەنەوە.
+	Remove security?	ئاسایش لاببرێت؟
+	The extracted pages aren't protected: the original's security settings don't carry over.	لاپەڕە دەرهێنراوەکان پارێزراو نین: ڕێکخستنەکانی ئاسایشی ڕەسەنەکە ناگوازرێنەوە.
+	The passwords and the restrictions are removed when you save.	وشە نهێنییەکان و سنووردارکردنەکان لە کاتی پاشەکەوتکردندا لادەبرێن.
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	ئەم بەڵگەنامەیە واژووکراوە. گۆڕانکارییەک وەشانێکی نوێ زیاد دەکات: واژووەکان بۆ ئەو وەشانەی واژوویان کردووە دروست دەمێننەوە، و پیشاندەرەکان پیشان دەدەن کە بەڵگەنامەکە دوای واژووکردن گۆڕدراوە.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	ئەمڕۆ

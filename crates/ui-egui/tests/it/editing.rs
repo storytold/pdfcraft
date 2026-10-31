@@ -2762,6 +2762,10 @@ fn remove_security_asks_for_the_permissions_password_first() {
     assert!(h.state_mut().execute("protect.remove"));
     h.run_steps(2);
     type_password(&mut h, "owner");
+    // Unlocked: Remove security now asks (#2168).
+    assert_eq!(h.state().dialog, Some(Dialog::RemoveSecurity));
+    h.get_by_label("Remove security").click();
+    h.run_steps(3);
     let doc = h.state().session.get(id).unwrap();
     assert!(doc.dirty && doc.security_summary().is_none(), "security is removed (written by the next save)");
 }
@@ -2783,6 +2787,148 @@ fn a_secured_form_shows_its_form_notice_and_its_security() {
     h.get_by_label("Hide field highlights");
     h.get_by_label("Security settings");
     h.get_by_label("Unlock…");
+}
+
+/// Remove security asks first (#2168): Cancel keeps the protection, confirming removes it.
+#[test]
+fn removing_security_asks_first() {
+    let mut h = harness(1, |app| {
+        let p = pdfcraft_engine::Protection { open_password: Some("pw".into()), ..Default::default() };
+        app.apply_edit(pdfcraft_engine::Edit::Protect(p));
+    });
+    let id = h.state().active_ids().unwrap().1;
+    assert!(h.state().session.get(id).unwrap().security_summary().is_some());
+    assert!(h.state_mut().execute("protect.remove"));
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(Dialog::RemoveSecurity));
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, None);
+    assert!(h.state().session.get(id).unwrap().security_summary().is_some(), "cancelled: still protected");
+    assert!(h.state_mut().execute("protect.remove"));
+    h.run_steps(2);
+    h.get_by_label("Remove security").click();
+    h.run_steps(3);
+    assert!(h.state().session.get(id).unwrap().security_summary().is_none(), "confirmed: removed");
+    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("Security will be removed when you save"));
+}
+
+/// The first change to a signed document asks first (#2168): Cancel makes no change, Change
+/// anyway makes it, and the document's later changes are not asked about again. A certified
+/// document names what its certification allows.
+#[test]
+fn the_first_change_to_a_signed_document_asks_first() {
+    let mut h = harness(2, |app| {
+        let id = app.active_ids().unwrap().1;
+        let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+        let digital_id = pdfcraft_engine::sign::pkcs12::open(&p12, "test").unwrap();
+        let opts = pdfcraft_engine::SignOptions { page: 0, rect: Some([20.0, 20.0, 160.0, 50.0]), certify: Some(2), ..Default::default() };
+        let signed = app.session.sign(id, &digital_id, opts).expect("signs");
+        app.session.mark_signed(id, signed, None).unwrap();
+    });
+    let id = h.state().active_ids().unwrap().1;
+    assert!(h.state().session.get(id).unwrap().signatures.iter().any(|s| s.signed && s.certify == Some(2)));
+    let rotation = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().info.pages[1].rotation;
+    assert_eq!(rotation(&h), 0);
+    let rotate = pdfcraft_engine::Edit::RotatePages { pages: vec![1], degrees: 90 };
+
+    assert!(!h.state_mut().apply_edit(rotate.clone()), "the change waits for the answer");
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(Dialog::SignedEdit));
+    h.get_by_label_contains("filling in forms and signing are allowed");
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, None);
+    assert!(h.state().pending_signed_edit.is_none());
+    assert_eq!(rotation(&h), 0, "cancelled: no change");
+
+    assert!(!h.state_mut().apply_edit(rotate.clone()));
+    h.run_steps(2);
+    h.get_by_label("Change anyway").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None);
+    assert_eq!(rotation(&h), 90, "confirmed: the change is made");
+    assert!(h.state_mut().apply_edit(rotate), "later changes are not asked about again");
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, None);
+    assert_eq!(rotation(&h), 180);
+}
+
+/// #2187 review: the signed-document question also comes from a dialog's action (it replaces the
+/// dialog instead of closing with it); its answer changes the document that asked, whichever tab
+/// is active by then; and a save whose typing was the first change saves once it is answered.
+#[test]
+fn the_signed_document_question_survives_dialogs_tabs_and_saves() {
+    let sign = |app: &mut PdfCraftApp| {
+        let id = app.active_ids().unwrap().1;
+        let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+        let digital_id = pdfcraft_engine::sign::pkcs12::open(&p12, "test").unwrap();
+        let opts = pdfcraft_engine::SignOptions { page: 0, rect: Some([20.0, 20.0, 160.0, 50.0]), ..Default::default() };
+        let signed = app.session.sign(id, &digital_id, opts).expect("signs");
+        app.session.mark_signed(id, signed, None).unwrap();
+    };
+    // From the Properties dialog.
+    let mut h = harness(2, move |app| {
+        sign(app);
+        app.set_option("dialog", "properties").unwrap();
+    });
+    let id = h.state().active_ids().unwrap().1;
+    let title = h.get_by_role_and_label(Role::TextInput, "Title");
+    title.focus();
+    title.type_text("Signed report");
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::SignedEdit), "the question replaces the dialog");
+    h.get_by_label("Change anyway").click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.get(id).unwrap().info.title.as_deref(), Some("Signed report"));
+
+    // Answered after switching to another tab: the signed document changes, not the other one.
+    let mut h = harness(2, move |app| sign(app));
+    let signed_id = h.state().active_ids().unwrap().1;
+    assert!(!h.state_mut().apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![1], degrees: 90 }));
+    h.state_mut().open_bytes("other.pdf", None, fixture(2)).unwrap();
+    h.run_steps(3);
+    let other_id = h.state().active_ids().unwrap().1;
+    assert_ne!(other_id, signed_id);
+    h.state_mut().dialog = Some(Dialog::SignedEdit);
+    h.run_steps(2);
+    h.get_by_label("Change anyway").click();
+    h.run_steps(3);
+    let rotation = |h: &Harness<'static, PdfCraftApp>, id| h.state().session.get(id).unwrap().info.pages[1].rotation;
+    assert_eq!((rotation(&h, signed_id), rotation(&h, other_id)), (90, 0));
+
+    // A save whose pending change is the first one: it saves once confirmed.
+    let out = std::env::temp_dir().join(format!("pdfcraft-signed-save-{}.pdf", std::process::id()));
+    let _ = std::fs::remove_file(&out);
+    let mut h = harness(2, move |app| sign(app));
+    let id = h.state().active_ids().unwrap().1;
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.state_mut().views[0].pending_edit = Some(pdfcraft_engine::Edit::RotatePages { pages: vec![1], degrees: 90 });
+    assert!(!h.state_mut().save_active(pdfcraft_ui_egui::SaveTarget::InPlace), "waits for the answer");
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(Dialog::SignedEdit));
+    assert!(!out.exists());
+    h.get_by_label("Change anyway").click();
+    h.run_steps(4);
+    assert_eq!(rotation(&h, id), 90);
+    assert!(out.exists() && !h.state().session.get(id).unwrap().dirty, "saved after the answer");
+    let _ = std::fs::remove_file(&out);
+}
+
+/// Extracting pages of a protected document says that the new file isn't protected (#2168),
+/// as Combine does.
+#[test]
+fn extracting_from_a_protected_document_says_the_pages_are_not_protected() {
+    let mut h = harness(1, |app| {
+        app.open_bytes("locked.pdf", None, protected("", "owner", -1)).unwrap();
+    });
+    h.run_steps(2);
+    h.state_mut().extract_selection();
+    h.run_steps(3);
+    let toast = h.state().toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(toast.contains("The extracted pages aren't protected"), "{toast}");
 }
 
 #[test]

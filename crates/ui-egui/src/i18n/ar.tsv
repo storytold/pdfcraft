@@ -1831,6 +1831,16 @@
 	The document's security settings don't allow printing	إعدادات أمان المستند لا تسمح بالطباعة
 	Open a document first	افتح مستندًا أولًا
 	Security will be removed when you save	سيُزال الأمان عند الحفظ
+	The extracted pages aren't protected: the original's security settings don't carry over.	الصفحات المستخرجة غير محمية: إعدادات الأمان الخاصة بالملف الأصلي لا تنتقل إليها.
+	The split files aren't protected: the original's security settings don't carry over.	الملفات المقسمة غير محمية: إعدادات الأمان الخاصة بالملف الأصلي لا تنتقل إليها.
+	Change a signed document?	تغيير مستند موقّع؟
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	هذا المستند موقّع. أي تغيير يضيف نسخة جديدة: تبقى التواقيع صالحة للنسخة التي وقّعتها، وستُظهر برامج العرض أن المستند تغيّر بعد التوقيع.
+	It is certified with no changes allowed: any change invalidates the certification.	إنه مصدّق دون السماح بأي تغيير: أي تغيير يبطل التصديق.
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	إنه مصدّق: يُسمح بتعبئة النماذج والتوقيع؛ أي تغيير آخر يبطل التصديق.
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	إنه مصدّق: يُسمح بتعبئة النماذج والتوقيع والتعليق؛ أي تغيير آخر يبطل التصديق.
+	Change anyway	التغيير على أي حال
+	Remove security?	إزالة الأمان؟
+	The passwords and the restrictions are removed when you save.	تُزال كلمات المرور والقيود عند الحفظ.
 	Click text or an image to edit it	انقر على نص أو صورة لتحريرها
 	Drag a rectangle to create a link; double-click a link to edit it	اسحب مستطيلًا لإنشاء رابط؛ انقر نقرًا مزدوجًا على رابط لتحريره
 	There are no redaction marks to apply	لا توجد علامات حجب لتطبيقها

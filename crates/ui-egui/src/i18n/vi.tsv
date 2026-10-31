@@ -2850,3 +2850,15 @@ key	Space	Space
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tùy chọn cho câu trả lời này
 	Export value	Giá trị xuất
+
+# AI-assisted additions for the signed-change, Remove security and unprotected-output notes (#2168) (2026-10-16); not reviewed by a native speaker.
+	Change a signed document?	Thay đổi tài liệu đã ký?
+	Change anyway	Vẫn thay đổi
+	It is certified with no changes allowed: any change invalidates the certification.	Tài liệu được chứng nhận và không cho phép thay đổi: mọi thay đổi đều làm mất hiệu lực chứng nhận.
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	Tài liệu được chứng nhận: được phép điền biểu mẫu và ký; các thay đổi khác làm mất hiệu lực chứng nhận.
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	Tài liệu được chứng nhận: được phép điền biểu mẫu, ký và bình luận; các thay đổi khác làm mất hiệu lực chứng nhận.
+	Remove security?	Gỡ bảo mật?
+	The extracted pages aren't protected: the original's security settings don't carry over.	Các trang được trích xuất không được bảo vệ: cài đặt bảo mật của bản gốc không được chuyển sang.
+	The passwords and the restrictions are removed when you save.	Mật khẩu và các hạn chế sẽ bị gỡ khi bạn lưu.
+	The split files aren't protected: the original's security settings don't carry over.	Các tệp sau khi tách không được bảo vệ: cài đặt bảo mật của bản gốc không được chuyển sang.
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	Tài liệu này đã được ký. Mỗi thay đổi sẽ thêm một phiên bản mới: chữ ký vẫn hợp lệ cho phiên bản mà chúng đã ký, và trình xem sẽ cho thấy tài liệu đã bị thay đổi sau khi ký.

@@ -1825,6 +1825,16 @@
 	The document's security settings don't allow printing	Ustawienia zabezpieczeń dokumentu nie zezwalają na drukowanie
 	Open a document first	Najpierw otwórz dokument
 	Security will be removed when you save	Zabezpieczenia zostaną usunięte przy zapisie
+	The extracted pages aren't protected: the original's security settings don't carry over.	Wyodrębnione strony nie są chronione: ustawienia zabezpieczeń oryginału nie są przenoszone.
+	The split files aren't protected: the original's security settings don't carry over.	Podzielone pliki nie są chronione: ustawienia zabezpieczeń oryginału nie są przenoszone.
+	Change a signed document?	Zmienić podpisany dokument?
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	Ten dokument jest podpisany. Zmiana dodaje nową wersję: podpisy pozostają ważne dla wersji, którą podpisały, a przeglądarki pokażą, że dokument zmieniono po podpisaniu.
+	It is certified with no changes allowed: any change invalidates the certification.	Jest certyfikowany bez dozwolonych zmian: każda zmiana unieważnia certyfikację.
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	Jest certyfikowany: wypełnianie formularzy i podpisywanie są dozwolone; inne zmiany unieważniają certyfikację.
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	Jest certyfikowany: wypełnianie formularzy, podpisywanie i komentowanie są dozwolone; inne zmiany unieważniają certyfikację.
+	Change anyway	Zmień mimo to
+	Remove security?	Usunąć zabezpieczenia?
+	The passwords and the restrictions are removed when you save.	Hasła i ograniczenia są usuwane przy zapisie.
 	Click text or an image to edit it	Kliknij tekst lub obraz, aby go edytować
 	Drag a rectangle to create a link; double-click a link to edit it	Narysuj prostokąt, aby utworzyć łącze; kliknij łącze dwukrotnie, aby je edytować
 	There are no redaction marks to apply	Brak oznaczeń do utajnienia do zastosowania

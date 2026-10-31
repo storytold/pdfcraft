@@ -1754,6 +1754,16 @@
 	The document's security settings don't allow this change	Құжаттың қауіпсіздік параметрлері бұл өзгерісті рұқсат етпейді
 	Open a document first	Алдымен құжатты ашыңыз
 	Security will be removed when you save	Сақтаған кезде қауіпсіздік алынып тасталады
+	The extracted pages aren't protected: the original's security settings don't carry over.	Шығарылған беттер қорғалмаған: түпнұсқаның қауіпсіздік параметрлері көшірілмейді.
+	The split files aren't protected: the original's security settings don't carry over.	Бөлінген файлдар қорғалмаған: түпнұсқаның қауіпсіздік параметрлері көшірілмейді.
+	Change a signed document?	Қол қойылған құжатты өзгерту керек пе?
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	Бұл құжатқа қол қойылған. Өзгерту жаңа нұсқа қосады: қолтаңбалар өздері қол қойған нұсқа үшін жарамды болып қалады, ал көру бағдарламалары құжаттың қол қойылғаннан кейін өзгертілгенін көрсетеді.
+	It is certified with no changes allowed: any change invalidates the certification.	Ол өзгерістерге рұқсат етпей куәландырылған: кез келген өзгеріс куәландыруды жарамсыз етеді.
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	Ол куәландырылған: пішіндерді толтыруға және қол қоюға рұқсат етілген; басқа өзгерістер куәландыруды жарамсыз етеді.
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	Ол куәландырылған: пішіндерді толтыруға, қол қоюға және түсініктеме қалдыруға рұқсат етілген; басқа өзгерістер куәландыруды жарамсыз етеді.
+	Change anyway	Бәрібір өзгерту
+	Remove security?	Қауіпсіздікті алып тастау керек пе?
+	The passwords and the restrictions are removed when you save.	Сақтау кезінде құпиясөздер мен шектеулер алып тасталады.
 	Click text or an image to edit it	Түзету үшін мәтінге немесе кескінге шертіңіз
 	Drag a rectangle to create a link; double-click a link to edit it	Сілтеме жасау үшін тіктөртбұрыш сүйреңіз; сілтемені түзету үшін оған екі рет шертіңіз
 	There are no redaction marks to apply	Қолданатын жасыру белгілері жоқ

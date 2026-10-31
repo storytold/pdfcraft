@@ -2829,6 +2829,16 @@ theme	Appearance	Teema
 	field names can't contain a period: {name}	kenttien nimissä ei voi olla pistettä: {name}
 	two cells would both be named {name}	kahdella solulla olisi sama nimi {name}
 	a field named {name} already exists	kenttä nimeltä {name} on jo olemassa
+	Change a signed document?	Muutetaanko allekirjoitettua asiakirjaa?
+	Change anyway	Muuta silti
+	It is certified with no changes allowed: any change invalidates the certification.	Se on varmennettu eikä muutoksia sallita: mikä tahansa muutos mitätöi varmennuksen.
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	Se on varmennettu: lomakkeiden täyttäminen ja allekirjoittaminen ovat sallittuja; muut muutokset mitätöivät varmennuksen.
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	Se on varmennettu: lomakkeiden täyttäminen, allekirjoittaminen ja kommentointi ovat sallittuja; muut muutokset mitätöivät varmennuksen.
+	Remove security?	Poistetaanko suojaus?
+	The extracted pages aren't protected: the original's security settings don't carry over.	Poimitut sivut eivät ole suojattuja: alkuperäisen suojausasetukset eivät siirry niihin.
+	The passwords and the restrictions are removed when you save.	Salasanat ja rajoitukset poistetaan, kun tallennat.
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	Tämä asiakirja on allekirjoitettu. Muutos lisää uuden version: allekirjoitukset pysyvät voimassa allekirjoittamassaan versiossa, ja katseluohjelmat näyttävät, että asiakirjaa on muutettu allekirjoittamisen jälkeen.
+	The split files aren't protected: the original's security settings don't carry over.	Jaetut tiedostot eivät ole suojattuja: alkuperäisen suojausasetukset eivät siirry niihin.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Tänään

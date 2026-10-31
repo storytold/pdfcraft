@@ -241,6 +241,9 @@ struct PendingOpen {
     then: Option<&'static str>,
 }
 
+/// Work that waits on an answer, run with the app once it comes.
+pub(crate) type Resume = Box<dyn FnOnce(&mut PdfCraftApp) + Send>;
+
 pub struct PdfCraftApp {
     /// Tools side and pane widths; which panes are open is `left_open` and `right`.
     pub side_panels: side_panels::SidePanels,
@@ -398,6 +401,13 @@ pub struct PdfCraftApp {
     /// Copy of a whole document's text (#2639) whose pages are being read off the UI thread.
     document_copy: Option<DocumentCopy>,
     pub unlock_prompt: Option<UnlockPrompt>,
+    /// The edit a signed document is asked about before its first change (`Dialog::SignedEdit`),
+    /// with that document: the answer applies it there, whichever tab is active by then.
+    pub pending_signed_edit: Option<(DocId, pdfcraft_engine::Edit)>,
+    /// What waited on that answer (a save whose typing was the edit), run once it is confirmed.
+    pub(crate) resume_after_signed_edit: Option<Resume>,
+    /// Signed documents whose first change was confirmed: later changes are not asked about again.
+    pub signed_edits_confirmed: std::collections::HashSet<DocId>,
     pub full_screen: bool,
     /// Files delivered asynchronously (web drag-and-drop, web file picker).
     pub inbox: Inbox,

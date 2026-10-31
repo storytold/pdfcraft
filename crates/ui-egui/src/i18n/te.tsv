@@ -1751,6 +1751,16 @@ action wizard	Start	ప్రారంభించు
 	The document's security settings don't allow printing	పత్రం భద్రతా సెట్టింగ్‌లు ముద్రించడాన్ని అనుమతించవు
 	Open a document first	ముందుగా ఒక పత్రాన్ని తెరవండి
 	Security will be removed when you save	మీరు సేవ్ చేసినప్పుడు భద్రత తీసివేయబడుతుంది
+	The extracted pages aren't protected: the original's security settings don't carry over.	సంగ్రహించిన పేజీలు రక్షించబడలేదు: అసలు పత్రం యొక్క భద్రతా సెట్టింగ్‌లు కొనసాగవు.
+	The split files aren't protected: the original's security settings don't carry over.	విభజించిన ఫైళ్లు రక్షించబడలేదు: అసలు పత్రం యొక్క భద్రతా సెట్టింగ్‌లు కొనసాగవు.
+	Change a signed document?	సంతకం చేసిన పత్రాన్ని మార్చాలా?
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	ఈ పత్రం సంతకం చేయబడింది. మార్పు కొత్త వెర్షన్‌ను జోడిస్తుంది: సంతకాలు అవి సంతకం చేసిన వెర్షన్‌కు చెల్లుబాటులో ఉంటాయి, సంతకం తర్వాత పత్రం మార్చబడిందని వీక్షకులు చూపిస్తారు.
+	It is certified with no changes allowed: any change invalidates the certification.	ఇది మార్పులు అనుమతించకుండా ధృవీకరించబడింది: ఏ మార్పు అయినా ధృవీకరణను చెల్లకుండా చేస్తుంది.
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	ఇది ధృవీకరించబడింది: ఫారమ్‌లు నింపడం మరియు సంతకం చేయడం అనుమతించబడతాయి; ఇతర మార్పులు ధృవీకరణను చెల్లకుండా చేస్తాయి.
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	ఇది ధృవీకరించబడింది: ఫారమ్‌లు నింపడం, సంతకం చేయడం మరియు వ్యాఖ్యానించడం అనుమతించబడతాయి; ఇతర మార్పులు ధృవీకరణను చెల్లకుండా చేస్తాయి.
+	Change anyway	ఏమైనా మార్చండి
+	Remove security?	భద్రతను తొలగించాలా?
+	The passwords and the restrictions are removed when you save.	సేవ్ చేసినప్పుడు పాస్‌వర్డ్‌లు మరియు పరిమితులు తొలగించబడతాయి.
 	Click text or an image to edit it	సవరించడానికి టెక్స్ట్ లేదా చిత్రంపై క్లిక్ చేయండి
 	Drag a rectangle to create a link; double-click a link to edit it	లింక్‌ను సృష్టించడానికి దీర్ఘచతురస్రాన్ని లాగండి; లింక్‌ను సవరించడానికి దానిపై డబుల్-క్లిక్ చేయండి
 	There are no redaction marks to apply	వర్తింపజేయడానికి రెడాక్షన్ గుర్తులు ఏవీ లేవు

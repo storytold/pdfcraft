@@ -2464,6 +2464,15 @@ animation effects	Off	ປິດ
 	No tools match your search.	ບໍ່ມີເຄື່ອງມືທີ່ກົງກັບການຄົ້ນຫາຂອງທ່ານ.
 	Expand all tools	ຂະຫຍາຍເຄື່ອງມືທັງໝົດ
 	Collapse all tools	ຫຍໍ້ເຄື່ອງມືທັງໝົດເຂົ້າ
+	Change a signed document?	ປ່ຽນເອກະສານທີ່ເຊັນແລ້ວບໍ່?
+	Change anyway	ປ່ຽນເລີຍ
+	It is certified with no changes allowed: any change invalidates the certification.	ເອກະສານນີ້ຖືກຢັ້ງຢືນ ແລະ ບໍ່ອະນຸຍາດໃຫ້ປ່ຽນແປງ: ການປ່ຽນແປງໃດໆຈະເຮັດໃຫ້ການຢັ້ງຢືນບໍ່ມີຜົນ.
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	ເອກະສານນີ້ຖືກຢັ້ງຢືນ: ອະນຸຍາດໃຫ້ຕື່ມແບບຟອມ ແລະ ເຊັນ; ການປ່ຽນແປງອື່ນຈະເຮັດໃຫ້ການຢັ້ງຢືນບໍ່ມີຜົນ.
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	ເອກະສານນີ້ຖືກຢັ້ງຢືນ: ອະນຸຍາດໃຫ້ຕື່ມແບບຟອມ, ເຊັນ ແລະ ໃຫ້ຄຳເຫັນ; ການປ່ຽນແປງອື່ນຈະເຮັດໃຫ້ການຢັ້ງຢືນບໍ່ມີຜົນ.
+	Remove security?	ລຶບຄວາມປອດໄພອອກບໍ່?
+	The extracted pages aren't protected: the original's security settings don't carry over.	ໜ້າທີ່ແຍກອອກມາບໍ່ໄດ້ຮັບການປ້ອງກັນ: ການຕັ້ງຄ່າຄວາມປອດໄພຂອງຕົ້ນສະບັບບໍ່ຕິດໄປນຳ.
+	The passwords and the restrictions are removed when you save.	ລະຫັດຜ່ານ ແລະ ຂໍ້ຈຳກັດຈະຖືກລຶບອອກເມື່ອທ່ານບັນທຶກ.
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	ເອກະສານນີ້ເຊັນແລ້ວ. ການປ່ຽນແປງຈະເພີ່ມສະບັບໃໝ່: ລາຍເຊັນຍັງໃຊ້ໄດ້ສຳລັບສະບັບທີ່ເຊັນໄວ້, ແລະ ໂປຣແກຣມເບິ່ງຈະສະແດງວ່າເອກະສານຖືກປ່ຽນແປງຫຼັງຈາກເຊັນ.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	ມື້ນີ້

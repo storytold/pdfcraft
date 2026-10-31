@@ -1829,6 +1829,16 @@
 	The document's security settings don't allow printing	Налаштування захисту документа не дозволяють друк
 	Open a document first	Спочатку відкрийте документ
 	Security will be removed when you save	Захист буде знято під час збереження
+	The extracted pages aren't protected: the original's security settings don't carry over.	Витягнуті сторінки не захищені: налаштування безпеки оригіналу не переносяться.
+	The split files aren't protected: the original's security settings don't carry over.	Розділені файли не захищені: налаштування безпеки оригіналу не переносяться.
+	Change a signed document?	Змінити підписаний документ?
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	Цей документ підписано. Зміна додає нову версію: підписи залишаються дійсними для версії, яку вони підписали, а програми перегляду покажуть, що документ змінено після підписання.
+	It is certified with no changes allowed: any change invalidates the certification.	Він сертифікований без дозволених змін: будь-яка зміна скасовує сертифікацію.
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	Він сертифікований: дозволено заповнення форм і підписання; інші зміни скасовують сертифікацію.
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	Він сертифікований: дозволено заповнення форм, підписання та коментування; інші зміни скасовують сертифікацію.
+	Change anyway	Усе одно змінити
+	Remove security?	Видалити захист?
+	The passwords and the restrictions are removed when you save.	Паролі та обмеження видаляються під час збереження.
 	Click text or an image to edit it	Клацніть текст або зображення для редагування
 	Drag a rectangle to create a link; double-click a link to edit it	Намалюйте прямокутник, щоб створити посилання; двічі клацніть посилання, щоб редагувати його
 	There are no redaction marks to apply	Немає позначок вилучення для застосування
