@@ -142,6 +142,100 @@ impl Automation {
         Ok(out)
     }
 
+    /// Crops multiple pages in a document using uniform, alternating odd/even, or auto-detected content margins.
+    pub(crate) fn page_bulk_crop(&mut self, a: &Args) -> Result<Value> {
+        use pdfcraft_engine::{BoxSpec, Edit, PageBox};
+        let doc = self.doc(a)?;
+        let doc_id = doc.id;
+        let n = doc.info.pages.len();
+        let pages = match a.opt_ints("pages")? {
+            Some(_) => self.pages(a, "pages")?,
+            None => (0..n).collect(),
+        };
+        let padding = a.opt_num("padding")?.unwrap_or(18.0);
+        let auto_crop = a.opt_bool("auto_crop")?.unwrap_or(false);
+
+        let nums = |key: &str| -> Result<Option<[f64; 4]>> {
+            a.get(key)
+                .map(|v| {
+                    let v: Vec<f64> = v.as_array().map(|x| x.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
+                    <[f64; 4]>::try_from(v).map_err(|_| ToolError::InvalidArgs(format!("{key} must be 4 numbers")))
+                })
+                .transpose()
+        };
+
+        let odd_margins = nums("odd_margins")?;
+        let even_margins = nums("even_margins")?;
+        let margins = nums("margins")?;
+
+        if margins.is_some() && (odd_margins.is_some() || even_margins.is_some()) {
+            return Err(ToolError::InvalidArgs("cannot combine uniform margins with odd_margins or even_margins".into()));
+        }
+
+        if odd_margins.is_some() || even_margins.is_some() {
+            if !auto_crop && (odd_margins.is_none() || even_margins.is_none()) {
+                return Err(ToolError::InvalidArgs("both odd_margins and even_margins must be provided, or use auto_crop: true".into()));
+            }
+
+            let odd_p: Vec<usize> = pages.iter().copied().filter(|p| p % 2 == 0).collect();
+            let even_p: Vec<usize> = pages.iter().copied().filter(|p| p % 2 != 0).collect();
+
+            let odd_margins = match odd_margins {
+                Some(m) => m,
+                None => {
+                    if odd_p.is_empty() {
+                        [0.0; 4]
+                    } else {
+                        self.session
+                            .detect_bulk_auto_crop(doc_id, &odd_p, padding)
+                            .ok_or_else(|| ToolError::Failed("no content could be detected to crop on odd pages".into()))?
+                    }
+                }
+            };
+
+            let even_margins = match even_margins {
+                Some(m) => m,
+                None => {
+                    if even_p.is_empty() {
+                        [0.0; 4]
+                    } else {
+                        self.session
+                            .detect_bulk_auto_crop(doc_id, &even_p, padding)
+                            .ok_or_else(|| ToolError::Failed("no content could be detected to crop on even pages".into()))?
+                    }
+                }
+            };
+
+            let mut edits = Vec::new();
+            if !odd_p.is_empty() {
+                edits.push(Edit::SetPageBox { pages: odd_p, which: PageBox::Crop, spec: BoxSpec::Margins(odd_margins) });
+            }
+            if !even_p.is_empty() {
+                edits.push(Edit::SetPageBox { pages: even_p, which: PageBox::Crop, spec: BoxSpec::Margins(even_margins) });
+            }
+
+            let mut out = self.apply(a, Edit::Batch { label: "Bulk crop pages".into(), edits })?;
+            out["page_sizes"] = json!(self.doc(a)?.info.pages.iter().map(|p| [p.width, p.height]).collect::<Vec<_>>());
+            return Ok(out);
+        }
+
+        let chosen_margins = match (margins, auto_crop) {
+            (Some(m), _) => m,
+            (None, true) => self
+                .session
+                .detect_bulk_auto_crop(doc_id, &pages, padding)
+                .ok_or_else(|| ToolError::Failed("no content could be detected to crop".into()))?,
+            (None, false) => {
+                return Err(ToolError::InvalidArgs("must provide margins, odd_margins and even_margins, or auto_crop: true".into()));
+            }
+        };
+
+        let spec = BoxSpec::Margins(chosen_margins);
+        let mut out = self.apply(a, Edit::SetPageBox { pages, which: PageBox::Crop, spec })?;
+        out["page_sizes"] = json!(self.doc(a)?.info.pages.iter().map(|p| [p.width, p.height]).collect::<Vec<_>>());
+        Ok(out)
+    }
+
     pub(crate) fn insert_blank(&mut self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let at = self.position(a, "at")?;

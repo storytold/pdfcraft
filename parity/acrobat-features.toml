@@ -3199,16 +3199,35 @@ evidence = ["crates/ui-egui/tests/it/pageboxes.rs::the_crop_tool_crops_to_the_dr
 notes = "drag to crop; double-click opens Set Page Boxes"
 
 [[feature]]
+id = "organize.bulk-crop"
+title = "Bulk crop pages"
+area = "D"
+tier = "P1"
+milestone = "M4"
+status = "shipped"
+commands = ["page.bulk_crop"]
+tools = ["page_bulk_crop"]
+evidence = [
+    "crates/automation/tests/it/automation.rs::bulk_crop_through_tools",
+    "crates/ui-egui/tests/it/pageboxes.rs::bulk_crop_dialog_applies_margins_across_pages",
+    "crates/engine/src/bulk_crop.rs::content_bounds_detects_centered_box",
+]
+notes = "Multi-page bulk cropping: Blended mode, Odd & Even mode, Page-by-Page mode, and Auto-crop"
+
+[[feature]]
 id = "organize.remove-white-margins"
 title = "Remove white margins"
 area = "D"
 tier = "P2"
 milestone = "M4"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["page.bulk_crop"]
+tools = ["page_bulk_crop"]
+evidence = [
+    "crates/engine/src/bulk_crop.rs::content_bounds_detects_centered_box",
+    "crates/automation/tests/it/automation.rs::bulk_crop_through_tools",
+]
+notes = "auto_crop: true detects non-white content bounds with padding across pages"
 
 [[feature]]
 id = "organize.change-page-size"

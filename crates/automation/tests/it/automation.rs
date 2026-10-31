@@ -2742,6 +2742,46 @@ fn duplicating_and_cropping_through_tools() {
 }
 
 #[test]
+fn bulk_crop_through_tools() {
+    let dir = workdir("bulk-crop");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    // Bulk crop all pages with uniform margins [10, 20, 10, 20]
+    let r = ok(&mut a, "page_bulk_crop", json!({ "doc": doc, "margins": [10, 20, 10, 20] }));
+    assert_eq!(r["page_sizes"][0], json!([180.0, 260.0]));
+    assert_eq!(r["page_sizes"][1], json!([180.0, 260.0]));
+    // Bulk crop odd and even pages with alternating margins whose totals differ
+    let r = ok(
+        &mut a,
+        "page_bulk_crop",
+        json!({
+            "doc": doc,
+            "odd_margins": [10, 20, 10, 20],
+            "even_margins": [20, 30, 20, 30]
+        }),
+    );
+    assert_eq!(r["page_sizes"][0], json!([180.0, 260.0]));
+    assert_eq!(r["page_sizes"][1], json!([160.0, 240.0]));
+
+    // Auto crop detection on text document shrinks around content
+    let r = ok(&mut a, "page_bulk_crop", json!({ "doc": doc, "auto_crop": true, "padding": 10.0 }));
+    let w0 = r["page_sizes"][0][0].as_f64().unwrap();
+    let h0 = r["page_sizes"][0][1].as_f64().unwrap();
+    assert!(w0 < 200.0 && w0 > 10.0, "w0: {w0}");
+    assert!(h0 < 300.0 && h0 > 10.0, "h0: {h0}");
+
+    // Input validation: combining uniform margins with odd/even margins is rejected
+    assert!(matches!(
+        a.call("page_bulk_crop", &json!({ "doc": doc, "margins": [10, 10, 10, 10], "odd_margins": [5, 5, 5, 5] })),
+        Err(ToolError::InvalidArgs(_))
+    ));
+    // Omitting even_margins without auto_crop is rejected
+    assert!(matches!(a.call("page_bulk_crop", &json!({ "doc": doc, "odd_margins": [5, 5, 5, 5] })), Err(ToolError::InvalidArgs(_))));
+    // Missing all margin inputs without auto_crop is rejected
+    assert!(matches!(a.call("page_bulk_crop", &json!({ "doc": doc })), Err(ToolError::InvalidArgs(_))));
+}
+
+#[test]
 fn headers_watermarks_and_backgrounds_through_tools() {
     let dir = workdir("marks");
     let mut a = auto(&dir);

@@ -50,6 +50,7 @@ pub use link_ui::LinkDraft;
 pub use optimize_ui::{OptimizeDraft, OptimizeTab};
 pub use sign_ui::{DigitalIdEntry, SignDraft, SignGraphic, SignStep};
 mod bidi;
+pub mod bulk_crop;
 mod dialogs;
 pub use edit_text_ui::CropMode;
 mod editing;
@@ -228,6 +229,71 @@ impl Drop for DocumentCopy {
     }
 }
 
+/// A background scan reading page content margins off the UI thread for bulk crop auto-detection.
+pub(crate) struct BulkCropScan {
+    pub(crate) doc: DocId,
+    pub(crate) is_explicit: bool,
+    pub(crate) rx: std::sync::mpsc::Receiver<Vec<(usize, [f64; 4])>>,
+    pub(crate) cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl BulkCropScan {
+    pub(crate) fn start(
+        doc: DocId,
+        bytes: std::sync::Arc<Vec<u8>>,
+        password: Option<String>,
+        pages: Vec<(usize, pdfcraft_render::PageInfo, [f64; 4])>,
+        padding: f64,
+        is_explicit: bool,
+        ctx: &egui::Context,
+    ) -> BulkCropScan {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let (stop, ctx) = (cancel.clone(), ctx.clone());
+            let spawned = std::thread::Builder::new().name("bulk-crop-scan".into()).spawn(move || {
+                let config = pdfcraft_render::RenderConfig { password: password.map(std::sync::Arc::from), ..Default::default() };
+                let mut renderer = pdfcraft_render::PageRenderer::new(bytes, config);
+                let mut results = Vec::new();
+                for (p, info, media) in pages {
+                    if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        return;
+                    }
+                    if let Some(m) = pdfcraft_engine::bulk_crop::detect_page_margins(&mut renderer, &info, p, media, padding) {
+                        results.push((p, m));
+                    }
+                }
+                let _ = tx.send(results);
+                ctx.request_repaint();
+            });
+            if let Err(e) = spawned {
+                log::warn!("scanning pages for bulk crop: {e}");
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = ctx;
+            let config = pdfcraft_render::RenderConfig { password: password.map(std::sync::Arc::from), ..Default::default() };
+            let mut renderer = pdfcraft_render::PageRenderer::new(bytes, config);
+            let mut results = Vec::new();
+            for (p, info, media) in pages {
+                if let Some(m) = pdfcraft_engine::bulk_crop::detect_page_margins(&mut renderer, &info, p, media, padding) {
+                    results.push((p, m));
+                }
+            }
+            let _ = tx.send(results);
+        }
+        BulkCropScan { doc, is_explicit, rx, cancel }
+    }
+}
+
+impl Drop for BulkCropScan {
+    fn drop(&mut self) {
+        self.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 struct PendingOpen {
     token: u64,
@@ -397,6 +463,8 @@ pub struct PdfCraftApp {
     pub password_prompt: Option<PasswordPrompt>,
     /// Copy of a whole document's text (#2639) whose pages are being read off the UI thread.
     document_copy: Option<DocumentCopy>,
+    /// Background scan of page content margins for bulk cropping.
+    pub(crate) bulk_crop_scan: Option<BulkCropScan>,
     pub unlock_prompt: Option<UnlockPrompt>,
     pub full_screen: bool,
     /// Files delivered asynchronously (web drag-and-drop, web file picker).
@@ -593,6 +661,8 @@ pub struct PdfCraftApp {
     pub text_style_draft: bookmark_styles_ui::TextStyleDraft,
     /// Set Page Boxes dialog state.
     pub boxes_draft: pageboxes::BoxesDraft,
+    /// Bulk Crop dialog state.
+    pub bulk_crop_draft: bulk_crop::BulkCropDraft,
     /// Header & footer / watermark / background dialog state.
     pub marks_draft: marks_ui::MarksDraft,
     /// The Update dialogs' preview page without the marks they replace.
