@@ -1358,6 +1358,10 @@ fn drawing_a_comment_by_drag_and_its_context_menu() {
 #[test]
 fn screenshots_of_window_and_region() {
     let (mut h, c) = harness();
+    // The harness makes its GPU renderer on the first render. The app has one before the control
+    // channel answers anything, so make it here, outside the screenshot's 5 s deadline: with 16
+    // tests at once on Windows, making it took up to 6 s and every copy of this test failed.
+    h.render().expect("the test renderer draws");
     let shot = ok(&mut h, &c, "ui.screenshot", json!({}));
     let ppp = shot["pixels_per_point"].as_f64().unwrap();
     assert_eq!(shot["width"].as_f64().unwrap(), (1400.0 * ppp).round());
