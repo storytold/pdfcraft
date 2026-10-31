@@ -668,7 +668,7 @@ impl CalGray {
         ))
     }
 
-    /// PdfCraft patch (68): from the dictionary's entries, a missing one taking its default
+    /// PdfCraft patch (72): from the dictionary's entries, a missing one taking its default
     /// (shared with [`CieToSrgb::cal_gray`]).
     fn from_entries(
         white_point: Option<[f32; 3]>,
@@ -730,7 +730,7 @@ impl CalRgb {
         ))
     }
 
-    /// PdfCraft patch (68): from the dictionary's entries, a missing one taking its default
+    /// PdfCraft patch (72): from the dictionary's entries, a missing one taking its default
     /// (shared with [`CieToSrgb::cal_rgb`]).
     fn from_entries(
         white_point: Option<[f32; 3]>,
@@ -899,7 +899,7 @@ impl Lab {
         Some(Self::from_entries(dict.get(WHITE_POINT), dict.get(RANGE)))
     }
 
-    /// PdfCraft patch (68): from the dictionary's entries, a missing one taking its default
+    /// PdfCraft patch (72): from the dictionary's entries, a missing one taking its default
     /// (shared with [`CieToSrgb::lab`]).
     fn from_entries(white_point: Option<[f32; 3]>, range: Option<[f32; 4]>) -> Self {
         Self {
@@ -1470,7 +1470,7 @@ static CMYK_TRANSFORM: LazyLock<ICCProfile> = LazyLock::new(|| {
     ICCProfile::new(include_bytes!("../assets/CGATS001Compat-v2-micro.icc"), 4).unwrap()
 });
 
-/// PdfCraft patch (67): convert 8-bit `DeviceCMYK` samples (four a pixel) in `input` to sRGB
+/// PdfCraft patch (71): convert 8-bit `DeviceCMYK` samples (four a pixel) in `input` to sRGB
 /// (three a pixel) in `output`, as pages draw `DeviceCMYK`, so that a caller writing image
 /// samples out (image export) shows the colours the page does. `None` when the lengths don't
 /// hold the same number of pixels.
@@ -1481,7 +1481,7 @@ pub fn device_cmyk_to_srgb(input: &[u8], output: &mut [u8]) -> Option<()> {
     CMYK_TRANSFORM.convert_u8(input, output)
 }
 
-/// PdfCraft patch (67): the conversion of an `ICCBased` colour space's 8-bit samples to sRGB,
+/// PdfCraft patch (71): the conversion of an `ICCBased` colour space's 8-bit samples to sRGB,
 /// as pages draw that colour space.
 #[derive(Clone, Debug)]
 pub struct IccToSrgb(ICCProfile);
@@ -1515,7 +1515,7 @@ impl IccToSrgb {
     }
 }
 
-/// PdfCraft patch (68): the conversion of a `CalGray`, `CalRGB` or `Lab` colour space's samples
+/// PdfCraft patch (72): the conversion of a `CalGray`, `CalRGB` or `Lab` colour space's samples
 /// to sRGB, as pages draw that colour space. The constructors take the colour space
 /// dictionary's entries, `None` for one that is missing or isn't as many numbers as it should
 /// be: pages then use its default.

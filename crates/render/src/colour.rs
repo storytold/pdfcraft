@@ -3,8 +3,8 @@
 //! The renderer converts an image's colours to sRGB as it draws the page. Image export
 //! (`pdfcraft-create`) converts the samples it writes out through the same conversion, here,
 //! so an exported image shows the page's colours instead of those of a second, simpler
-//! formula (#2269). Bootstrap: hayro's colour conversion (vendored hayro-interpret patches 67
-//! and 68), replaced together with the renderer (ADR-0004).
+//! formula (#2269). Bootstrap: hayro's colour conversion (vendored hayro-interpret patches 71
+//! and 72), replaced together with the renderer (ADR-0004).
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
