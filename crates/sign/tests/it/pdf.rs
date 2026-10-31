@@ -396,8 +396,8 @@ fn visible_signatures_show_a_drawn_typed_or_image_graphic() {
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
     let name = format!("({})", id.certificate.display_name());
     let plain = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
-    // Without a graphic the name is large on the left and in the details.
-    assert_eq!(appearance_of(&plain, "Signature1").0.matches(&name).count(), 2);
+    // Without a graphic the name is large on the left, wrapped as its column needs, and whole in the details.
+    assert_eq!(appearance_of(&plain, "Signature1").0.matches(&name).count(), 1);
     let strokes = Graphic::Strokes(vec![vec![[0.0, 0.0], [0.3, 0.2], [0.6, 0.0], [1.0, 0.2]], vec![[0.5, 0.1]]]);
     let typed = Graphic::Outlines(vec![vec![[0.0, 0.0], [1.0, 0.0], [1.0, 0.5], [0.0, 0.5]], vec![[0.2, 0.1], [0.8, 0.1], [0.5, 0.4]]]);
     for (graphic, drawn) in [
