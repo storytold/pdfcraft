@@ -621,6 +621,7 @@
 	Discard embedded page thumbnails	埋め込みページサムネイルを破棄
 	Discard document tags	文書タグを破棄
 	Discard embedded print settings	埋め込み印刷設定を破棄
+	Discard all form submission, import and reset actions	フォームの送信、インポート、リセットのすべてのアクションを破棄
 	Discard bookmarks	しおりを破棄
 	Discard hidden layer content	非表示レイヤーの内容を破棄
 	Discard all comments, forms and multimedia	すべての注釈、フォーム、マルチメディアを破棄

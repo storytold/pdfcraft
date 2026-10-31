@@ -621,6 +621,7 @@
 	Discard embedded page thumbnails	تجاهل مصغرات الصفحات المضمَّنة
 	Discard document tags	تجاهل وسوم المستند
 	Discard embedded print settings	تجاهل إعدادات الطباعة المضمَّنة
+	Discard all form submission, import and reset actions	تجاهل جميع إجراءات إرسال النماذج واستيرادها وإعادة ضبطها
 	Discard bookmarks	تجاهل الإشارات المرجعية
 	Discard hidden layer content	تجاهل محتوى الطبقات المخفية
 	Discard all comments, forms and multimedia	تجاهل كل التعليقات والنماذج والوسائط المتعددة

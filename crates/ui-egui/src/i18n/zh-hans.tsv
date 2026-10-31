@@ -289,6 +289,7 @@
 	Discard embedded page thumbnails	丢弃嵌入的页面缩略图
 	Discard document tags	丢弃文档标记
 	Discard embedded print settings	丢弃嵌入的打印设置
+	Discard all form submission, import and reset actions	丢弃所有表单提交、导入和重置操作
 	Discard bookmarks	丢弃书签
 	Discard hidden layer content	丢弃隐藏图层内容
 	Discard all comments, forms and multimedia	丢弃所有注释、表单和多媒体

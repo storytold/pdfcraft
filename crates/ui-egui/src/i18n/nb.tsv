@@ -467,6 +467,7 @@
 	Discard document tags	Forkast dokumenttagger
 	Discard embedded page thumbnails	Forkast innebygde sideminiatyrer
 	Discard embedded print settings	Forkast innebygde utskriftsinnstillinger
+	Discard all form submission, import and reset actions	Forkast alle handlinger for innsending, import og tilbakestilling av skjemaer
 	Discard this text (Esc)	Forkast denne teksten (Esc)
 	Dismiss	Lukk
 	Distinguished name	Entydig navn

@@ -578,6 +578,7 @@
 	Discard embedded page thumbnails	Hylkää upotetut sivujen pikkukuvat
 	Discard document tags	Hylkää asiakirjan tagit
 	Discard embedded print settings	Hylkää upotetut tulostusasetukset
+	Discard all form submission, import and reset actions	Hylkää kaikki lomakkeiden lähetys-, tuonti- ja nollaustoiminnot
 	Discard bookmarks	Hylkää kirjanmerkit
 	Discard hidden layer content	Hylkää piilotettujen tasojen sisältö
 	Discard all comments, forms and multimedia	Hylkää kaikki kommentit, lomakkeet ja multimedia

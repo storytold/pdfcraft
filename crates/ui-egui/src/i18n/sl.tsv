@@ -596,6 +596,7 @@
 	Discard document tags	Zavrzi oznake dokumenta
 	Discard embedded page thumbnails	Zavrzi vdelane sličice strani
 	Discard embedded print settings	Zavrzi vdelane nastavitve tiskanja
+	Discard all form submission, import and reset actions	Zavrzi vsa dejanja za pošiljanje, uvoz in ponastavitev obrazcev
 	Discard hidden layer content	Zavrzi vsebino skritih plasti
 	Discard hidden text	Zavrzi skrito besedilo
 	Discard private data of other applications	Zavrzi zasebne podatke drugih programov

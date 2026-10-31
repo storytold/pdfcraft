@@ -594,6 +594,7 @@
 	Discard embedded page thumbnails	Ignorer les vignettes de page incorporées
 	Discard document tags	Ignorer les balises du document
 	Discard embedded print settings	Ignorer les réglages d'impression incorporés
+	Discard all form submission, import and reset actions	Ignorer toutes les actions d'envoi, d'importation et de réinitialisation des formulaires
 	Discard bookmarks	Ignorer les signets
 	Discard hidden layer content	Ignorer le contenu des calques masqués
 	Discard all comments, forms and multimedia	Ignorer tous les commentaires, formulaires et contenus multimédias
