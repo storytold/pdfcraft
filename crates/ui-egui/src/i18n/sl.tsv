@@ -1347,6 +1347,8 @@
 	Pages per file	Strani na datoteko
 	Pages per sheet:	Strani na list:
 	Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.	Strani, ki so samo slike besedila, ni mogoče prebrati na glas ali iskati. Prepoznajte besedilo (OCR), da dodate besedilno plast.
+	There is no selectable text on this page. If it is a scan or a picture of text, recognize its text to select it.	Na tej strani ni besedila, ki bi ga bilo mogoče izbrati. Če je to optično prebrana stran ali slika besedila, prepoznajte besedilo, da ga boste lahko izbrali.
+	Recognize the text of scanned pages in the background (the file is not changed)	Prepoznaj besedilo optično prebranih strani v ozadju (datoteka se ne spremeni)
 	Pages to Print	Strani za tiskanje
 	Pages with links, comments or fields should tab in structure order. The fix sets each page's tab order to Use Document Structure.	Strani s povezavami, komentarji ali polji naj se pomikajo s tabulatorjem po vrstnem redu strukture. Popravek nastavi vrstni red tabulatorja vsake strani na Uporabi strukturo dokumenta.
 	Pages:	Strani:

@@ -1065,6 +1065,8 @@
 	Image-only PDF	Yalnızca resim içeren PDF
 	Document is not image-only PDF	Belge yalnızca resim içeren PDF değil
 	Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.	Yalnızca metin resimlerinden oluşan sayfalar sesli okunamıyor veya aranamıyor. Metin katmanı eklemek için metni tanıyın (OCR).
+	There is no selectable text on this page. If it is a scan or a picture of text, recognize its text to select it.	Bu sayfada seçilebilir metin yok. Sayfa bir tarama veya metin resmiyse, seçilebilir hale getirmek için metni tanıyın.
+	Recognize the text of scanned pages in the background (the file is not changed)	Taranmış sayfaların metnini arka planda tanı (dosya değiştirilmez)
 	Document is tagged PDF	Belge etiketli PDF
 	Tags give the document a logical structure that assistive technology follows. Tag the document (Automatically tag PDF).	Etiketler belgeye yardımcı teknolojilerin takip ettiği mantıksal bir yapı kazandırır. Belgeyi etiketleyin (PDF'i otomatik etiketle).
 	Logical Reading Order	Mantıksal Okuma Sırası

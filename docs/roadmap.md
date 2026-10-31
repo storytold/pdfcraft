@@ -1,5 +1,6 @@
 # PdfCraft roadmap: milestones and what's next
 
+> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-21 · **Change:** minor (M10: scanned pages are recognized in the background, view-only; selecting where a page has no text offers Recognize text; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: integrate main fa5f9f8c; retain CJK viewer and upstream raster regressions, restore explicit display_config imports; estimates unchanged)
 > **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** patch (M2, PR #4172: integrate main 5af10276; retain both roadmap histories and viewer-only CJK font policy; estimates unchanged)
@@ -290,6 +291,7 @@ Estimates unchanged.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-21 | minor | M10: background, view-only recognition of scanned pages on desktop when the OCR models are installed (progress, Cancel, Preferences toggle); a text selection tried on a page with no text offers Recognize text. Estimates unchanged. |
 | 2026-10-31 | patch | M2, PR #4172: eight GBK font/alias cases compare exact pixels with independent installed-face and explicit-Unicode references; wrong-glyph and wrong-family negative controls fail. Estimates unchanged. |
 | 2026-10-31 | patch | M2, PR #4172: integrate main fa5f9f8c, preserve both raster test groups and restore explicit display_config imports; display-only CJK policy and estimates unchanged. |
 | 2026-10-28 | patch | M2, PR #4172: integrate main 5af10276 and retain both roadmap histories; viewer-only CJK and print/output font policies and estimates unchanged. |

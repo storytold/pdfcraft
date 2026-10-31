@@ -162,6 +162,7 @@ impl DocView {
         self.waiting_since.clear();
         self.last_queue.clear();
         self.selection = None;
+        self.no_text = None;
         self.all_text = false;
         // A content change is not reader navigation: keep the automatic anchor so the
         // re-extracted layers still follow it, and keep `follow_ended` so a reader who already
@@ -205,6 +206,19 @@ impl DocView {
         if self.selection.is_some_and(|s| s.page == page) {
             self.selection = None;
         }
+        if self.no_text.is_some_and(|n| n.page == page) {
+            self.no_text = None;
+        }
+    }
+
+    /// Only `page`'s content changed (its text, pictures or added items): as
+    /// [`Self::page_changed`], and the text recognised on it in the background goes, since the
+    /// picture it was read from may be another now. A recognition running stops, so what it
+    /// read from the old content can't come back.
+    pub(crate) fn content_page_changed(&mut self, page: usize) {
+        self.page_changed(page);
+        self.ocr_texts.remove(&page);
+        self.auto_ocr.content_changed();
     }
 
     /// A page's thumbnail texture, when rendered.
@@ -517,6 +531,13 @@ impl DocView {
         if r.request.kind == RequestKind::Text {
             match r.text {
                 Some(t) => {
+                    // A page without text may be a scan: recognise it, or use what was.
+                    let t = if t.is_empty() {
+                        self.auto_ocr.wanted = true;
+                        self.ocr_texts.get(&r.request.page).cloned().unwrap_or(t)
+                    } else {
+                        t
+                    };
                     self.texts.insert(r.request.page, t);
                     self.refresh_find_page(r.request.page);
                 }

@@ -1077,6 +1077,8 @@
 	Image-only PDF	Csak képből álló PDF
 	Document is not image-only PDF	A dokumentum nem csak képből álló PDF
 	Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.	A csak szöveg képéből álló oldalak nem olvashatók fel, és nem kereshetők. Futtass szövegfelismerést (OCR), hogy szöveges réteg kerüljön rájuk.
+	There is no selectable text on this page. If it is a scan or a picture of text, recognize its text to select it.	Ezen az oldalon nincs kijelölhető szöveg. Ha szkennelt oldal vagy szöveg képe, futtass szövegfelismerést, hogy a szöveg kijelölhető legyen.
+	Recognize the text of scanned pages in the background (the file is not changed)	A szkennelt oldalak szövegének felismerése a háttérben (a fájl nem változik)
 	Document is tagged PDF	A dokumentum címkézett PDF
 	Tags give the document a logical structure that assistive technology follows. Tag the document (Automatically tag PDF).	A címkék logikai szerkezetet adnak a dokumentumnak, amelyet a kisegítő technológia követ. Címkézd a dokumentumot (PDF automatikus címkézése).
 	Logical Reading Order	Logikai olvasási sorrend

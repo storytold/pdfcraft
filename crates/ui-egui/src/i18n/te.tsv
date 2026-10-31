@@ -1077,6 +1077,8 @@ comment menu	Edit	సవరించు
 	Image-only PDF	చిత్రాలు మాత్రమే ఉన్న PDF
 	Document is not image-only PDF	పత్రం చిత్రాలు మాత్రమే ఉన్న PDF కాదు
 	Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.	టెక్స్ట్ చిత్రాలు మాత్రమే ఉన్న పేజీలను బిగ్గరగా చదవడం లేదా వెతకడం సాధ్యం కాదు. టెక్స్ట్ లేయర్‌ను జోడించడానికి టెక్స్ట్‌ను గుర్తించండి (OCR).
+	There is no selectable text on this page. If it is a scan or a picture of text, recognize its text to select it.	ఈ పేజీలో ఎంచుకోగల టెక్స్ట్ లేదు. ఇది స్కాన్ లేదా టెక్స్ట్ చిత్రం అయితే, దాన్ని ఎంచుకోగలిగేలా చేయడానికి టెక్స్ట్‌ను గుర్తించండి.
+	Recognize the text of scanned pages in the background (the file is not changed)	స్కాన్ చేసిన పేజీల టెక్స్ట్‌ను నేపథ్యంలో గుర్తించు (ఫైల్ మారదు)
 	Document is tagged PDF	పత్రం ట్యాగ్ చేసిన PDF
 	Tags give the document a logical structure that assistive technology follows. Tag the document (Automatically tag PDF).	ట్యాగ్‌లు పత్రానికి సహాయక సాంకేతికత అనుసరించే తార్కిక నిర్మాణాన్ని ఇస్తాయి. పత్రాన్ని ట్యాగ్ చేయండి (PDFను స్వయంచాలకంగా ట్యాగ్ చేయి).
 	Logical Reading Order	తార్కిక చదివే క్రమం

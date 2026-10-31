@@ -1058,6 +1058,8 @@
 	Image-only PDF	Тек суреттерден тұратын PDF
 	Document is not image-only PDF	Құжат тек суреттерден тұратын PDF емес
 	Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.	Мәтіннің суреті ғана болып табылатын беттерді дауыстап оқуға немесе іздеуге болмайды. Мәтін қабатын қосу үшін мәтінді тануыңыз (OCR).
+	There is no selectable text on this page. If it is a scan or a picture of text, recognize its text to select it.	Бұл бетте таңдауға болатын мәтін жоқ. Егер бұл сканерленген бет немесе мәтіннің суреті болса, оны таңдау үшін мәтінді таныңыз.
+	Recognize the text of scanned pages in the background (the file is not changed)	Сканерленген беттердің мәтінін фондық режимде тану (файл өзгертілмейді)
 	Document is tagged PDF	Құжат — тегтелген PDF
 	Tags give the document a logical structure that assistive technology follows. Tag the document (Automatically tag PDF).	Тегтер құжатқа көмекші технологиялар ұстанатын логикалық құрылым береді. Құжатты тегтеңіз («PDF-ті автоматты түрде тегтеу»).
 	Logical Reading Order	Логикалық оқу реті

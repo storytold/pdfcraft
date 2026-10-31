@@ -145,9 +145,13 @@ impl PdfCraftApp {
                 view.signature_drag.committed(&edit, doc.edit_generation());
                 view.move_background.committed(&edit, doc.edit_generation());
                 view.text_background.committed(&edit);
-                if let Some(page) = comment_page(&edit).or_else(|| content_page(&edit)) {
-                    // Comment and content edits change one page: keep every other raster.
+                if let Some(page) = comment_page(&edit) {
+                    // A comment edit changes one page: keep every other raster.
                     view.page_changed(page);
+                } else if let Some(page) = content_page(&edit) {
+                    // So does a content edit, which may also change the picture text was
+                    // recognised from.
+                    view.content_page_changed(page);
                 } else if let Some(form_before) = form_before
                     && doc.info.pages.len() == page_count_before
                     && doc.xfa.is_some() == had_xfa

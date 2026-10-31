@@ -1184,6 +1184,8 @@ key	Space	Mezerník
 	Image-only PDF	PDF jen s obrázky
 	Document is not image-only PDF	Dokument není PDF jen s obrázky
 	Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.	Stránky, které jsou jen obrázky textu, nelze předčítat ani v nich vyhledávat. Rozpoznáním textu (OCR) přidáte textovou vrstvu.
+	There is no selectable text on this page. If it is a scan or a picture of text, recognize its text to select it.	Na této stránce není žádný text, který lze vybrat. Pokud jde o sken nebo obrázek textu, rozpoznejte text, aby šel vybrat.
+	Recognize the text of scanned pages in the background (the file is not changed)	Rozpoznávat text naskenovaných stránek na pozadí (soubor se nemění)
 	Document is tagged PDF	Dokument je označkované PDF
 	Tags give the document a logical structure that assistive technology follows. Tag the document (Automatically tag PDF).	Tagy dávají dokumentu logickou strukturu, kterou asistivní technologie sledují. Označkujte dokument (Automaticky označkovat PDF).
 	Logical Reading Order	Logické pořadí čtení

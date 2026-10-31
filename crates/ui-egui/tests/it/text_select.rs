@@ -3,6 +3,7 @@
 
 use egui::{Event, Modifiers, MouseWheelUnit, PointerButton, Pos2, TouchPhase};
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
 
 /// One 300×200 page with two lines of Helvetica text.
@@ -648,4 +649,88 @@ fn full_screen_double_click_selects_a_word_and_stays_on_the_page() {
     h.state_mut().apply_full_screen(false);
     h.run_steps(30);
     assert_eq!(h.state().views[0].current, 0, "no page turn after leaving");
+}
+
+/// One 300×200 page that is only a picture (a gray 4×4 image over the whole page), as a scan is.
+fn picture_pdf() -> Vec<u8> {
+    let image = "80".repeat(16);
+    let content = "q 300 0 0 200 0 0 cm /Im0 Do Q";
+    format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /XObject /Subtype /Image /Width 4 /Height 4 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length {} >> stream
+{image}>
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        content.len(),
+        image.len() + 1
+    )
+    .into_bytes()
+}
+
+/// The picture page on screen with its (empty) text layer loaded, and the page's screen rectangle.
+/// `auto_ocr` lets the page be recognised in the background (when the models are installed).
+fn picture_harness(auto_ocr: bool) -> (Harness<'static, PdfCraftApp>, egui::Rect) {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.auto_ocr = auto_ocr;
+        app.open_bytes("scan.pdf", None, picture_pdf()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app
+    });
+    crate::support::wait_until(&mut h, "the page's empty text layer", |app| {
+        app.views[0].text_glyph_count(0) == Some(0) && app.views[0].page_screen_rect(0).is_some() && !app.render_pending()
+    });
+    let page = h.state().views[0].page_screen_rect(0).expect("page on screen");
+    (h, page)
+}
+
+/// A scan has no text to select until its text is recognized. Chrome recognizes it silently in
+/// its viewer; PdfCraft adds a text layer as an undoable edit, so selecting where there is no text
+/// offers Recognize text, set to that page, instead of doing nothing.
+#[test]
+fn selecting_on_a_page_without_text_offers_to_recognize_it() {
+    let (mut h, page) = picture_harness(false);
+    drag(&mut h, page.center() - egui::vec2(60.0, 20.0), page.center() + egui::vec2(60.0, 20.0));
+    assert_eq!(h.state().views[0].selected_text(), None);
+    assert_eq!(h.state().views[0].no_text_page(), Some(0), "the bar offers Recognize text");
+
+    h.get_by_label("Recognize text…").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::RecognizeText));
+    assert_eq!((h.state().ocr_draft.from, h.state().ocr_draft.to), (1, 1), "set to the page");
+    assert_eq!(h.state().views[0].no_text_page(), None, "the bar closes");
+}
+
+#[test]
+fn the_recognize_text_bar_closes_on_a_click_elsewhere_and_never_shows_over_text() {
+    let (mut h, page) = picture_harness(false);
+    drag(&mut h, page.center(), page.center() + egui::vec2(80.0, 10.0));
+    assert_eq!(h.state().views[0].no_text_page(), Some(0));
+    click(&mut h, page.left_top() + egui::vec2(10.0, 10.0));
+    assert_eq!(h.state().views[0].no_text_page(), None, "a press outside the bar closes it");
+
+    // A page with text selects it, and offers nothing.
+    let (mut h, at) = harness(|_| {});
+    drag(&mut h, at, at + egui::vec2(60.0, 0.0));
+    assert!(h.state().views[0].selected_text().is_some());
+    assert_eq!(h.state().views[0].no_text_page(), None);
+}
+
+/// While the page is being recognised in the background the bar waits: the text may be on its
+/// way. Recognition that finds nothing (here a plain gray picture) leaves the bar to explain.
+#[test]
+fn the_recognize_text_bar_waits_for_background_recognition() {
+    let (mut h, page) = picture_harness(true);
+    crate::support::wait_until(&mut h, "background recognition to finish", |app| app.views[0].auto_ocr_progress().is_none());
+    assert_eq!(h.state().views[0].text_glyph_count(0), Some(0), "a gray picture has no words");
+    drag(&mut h, page.center(), page.center() + egui::vec2(80.0, 10.0));
+    assert_eq!(h.state().views[0].no_text_page(), Some(0));
 }

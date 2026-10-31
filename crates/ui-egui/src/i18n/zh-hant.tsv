@@ -726,6 +726,8 @@
 	Image-only PDF	純圖片 PDF
 	Document is not image-only PDF	文件不是純圖片 PDF
 	Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.	僅為文字圖片的頁面無法朗讀或搜尋。請辨識文字（OCR）以新增文字層。
+	There is no selectable text on this page. If it is a scan or a picture of text, recognize its text to select it.	此頁面上沒有可選取的文字。如果這是掃描件或文字圖片，請辨識其中的文字以便選取。
+	Recognize the text of scanned pages in the background (the file is not changed)	在背景辨識掃描頁面的文字（不會變更檔案）
 	Document is tagged PDF	文件是標記的 PDF
 	Tags give the document a logical structure that assistive technology follows. Tag the document (Automatically tag PDF).	標記為文件提供輔助技術遵循的邏輯結構。請標記文件（自動標記 PDF）。
 	Logical Reading Order	邏輯閱讀順序

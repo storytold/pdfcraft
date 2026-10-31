@@ -775,6 +775,8 @@
 	Image-only PDF	PDF само с изображения
 	Document is not image-only PDF	Документът не е PDF само с изображения
 	Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.	Страниците, които са само снимки на текст, не могат да се четат на глас или да се търсят. Разпознайте текста (OCR), за да добавите текстов слой.
+	There is no selectable text on this page. If it is a scan or a picture of text, recognize its text to select it.	На тази страница няма текст, който може да се маркира. Ако е сканирана или е снимка на текст, разпознайте текста, за да може да се маркира.
+	Recognize the text of scanned pages in the background (the file is not changed)	Разпознаване на текста на сканираните страници във фонов режим (файлът не се променя)
 	Document is tagged PDF	Документът е етикетиран PDF
 	Tags give the document a logical structure that assistive technology follows. Tag the document (Automatically tag PDF).	Етикетите придават на документа логическа структура, която помощните технологии следват. Етикетирайте документа („Автоматично етикетиране на PDF“).
 	Logical Reading Order	Логически ред на четене

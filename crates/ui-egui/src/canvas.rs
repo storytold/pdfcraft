@@ -63,7 +63,7 @@ pub(crate) use organize::grid_page_rect;
 use organize::organize_grid;
 #[cfg(test)]
 use organize::sharp_enough;
-use selection::{Selection, Span, click_unit, selection_actions};
+use selection::{NoText, Selection, Span, click_unit, no_text_bar, selection_actions};
 pub use xform::PageXform;
 use xform::snap_to_pixels;
 use zoom::anchored_scroll;
@@ -352,6 +352,12 @@ pub struct DocView {
     /// Text layers, extracted in the background on demand (selection, find, copy).
     pub(crate) texts: HashMap<usize, Arc<PageText>>,
     pub(crate) text_failed: HashSet<usize>,
+    /// Text recognised in the background on pages whose own text layer is empty (scans): the
+    /// view's, never the document's, and the page's text layer whenever that is read again.
+    /// Dropped when pages may have moved ([`Self::document_changed`]).
+    pub(crate) ocr_texts: HashMap<usize, Arc<PageText>>,
+    /// The background recognition of this document's scanned pages.
+    pub(crate) auto_ocr: crate::auto_ocr::AutoOcr,
     pub find: Option<Find>,
     selection: Option<Selection>,
     /// Select All while scrolling continuously (#2639): the text of every page of the document,
@@ -363,6 +369,9 @@ pub struct DocView {
     /// The drag in progress started a text selection: the wheel scrolls the page during it
     /// (#721), which egui's scroll area refuses while anything is dragged.
     selection_drag: bool,
+    /// A text selection tried on a page whose text layer is empty: the bar offering Recognize
+    /// text. A scan has nothing to select until its text is recognized.
+    no_text: Option<NoText>,
     /// Clicks in the current run on the text layer: two select a word, three the line, four the page.
     clicks: u32,
     last_press_time: f64,
@@ -652,11 +661,14 @@ impl DocView {
             tiles: HashMap::new(),
             texts: HashMap::new(),
             text_failed: HashSet::new(),
+            ocr_texts: HashMap::new(),
+            auto_ocr: crate::auto_ocr::AutoOcr::default(),
             find: None,
             selection: None,
             all_text: false,
             actions_dismissed: None,
             selection_drag: false,
+            no_text: None,
             clicks: 0,
             last_press_time: 0.0,
             last_press_pos: None,
@@ -745,6 +757,9 @@ impl DocView {
     /// adopt the new page geometry, keeping the reader's place where possible.
     pub fn document_changed(&mut self, info: &DocInfo) {
         self.invalidate_content();
+        // Pages may have moved, so text recognised on one may belong to another now.
+        self.ocr_texts.clear();
+        self.auto_ocr.reset();
         self.frame_geometry_changed = true;
         self.page_count = info.pages.len();
         self.page_heights = info.pages.iter().map(|p| p.height).collect();
@@ -1542,6 +1557,7 @@ struct TextGesture<'a> {
     over_text: bool,
     over_link: bool,
     column: bool,
+    offers_ocr: bool,
 }
 
 fn text_pointer_input(ui: &mut egui::Ui, view: &mut DocView, text: &PageText, pointer: TextPointer<'_>) {
@@ -1550,7 +1566,10 @@ fn text_pointer_input(ui: &mut egui::Ui, view: &mut DocView, text: &PageText, po
     let over_text = text.glyphs.iter().any(|glyph| vx >= glyph.rect[0] && vx <= glyph.rect[2] && vy >= glyph.rect[1] && vy <= glyph.rect[3]);
     let over_link = info.links.iter().any(|link| link.page == page && xf.user_rect(info, page, link.rect).contains(screen_pointer));
     let column = tool == QuickTool::ColumnSelect || ui.input(|input| input.modifiers.alt);
-    let gesture = TextGesture { page, xf, rect, tool, ptr, resp, pointer: screen_pointer, vx, vy, over_text, over_link, column };
+    // Selecting on a page with no text at all (a scan) offers to recognize it, unless that is
+    // already happening in the background.
+    let offers_ocr = text.is_empty() && !view.auto_ocr.running() && matches!(tool, QuickTool::Select | QuickTool::ColumnSelect);
+    let gesture = TextGesture { page, xf, rect, tool, ptr, resp, pointer: screen_pointer, vx, vy, over_text, over_link, column, offers_ocr };
     update_text_cursor(view, &gesture);
     update_selection_on_press(ui, view, text, &gesture);
     update_dragged_selection(view, text, &gesture);
@@ -1584,6 +1603,9 @@ fn update_selection_on_press(ui: &egui::Ui, view: &mut DocView, text: &PageText,
         {
             view.selection = Some(Selection::run(gesture.page, first, last));
         }
+        if clicks >= 2 && gesture.offers_ocr {
+            view.no_text = Some(NoText { page: gesture.page, at: [gesture.vx, gesture.vy], since: now });
+        }
     }
     if gesture.resp.drag_started() && press_here && !view.router.keeps_drag() {
         view.actions_dismissed = None;
@@ -1597,6 +1619,7 @@ fn update_selection_on_press(ui: &egui::Ui, view: &mut DocView, text: &PageText,
                 text.nearest(ox, oy).map(|anchor| Selection::run(gesture.page, anchor, anchor))
             };
         }
+        view.no_text = gesture.offers_ocr.then(|| NoText { page: gesture.page, at: [ox, oy], since: ui.input(|input| input.time) });
     }
 }
 
@@ -3261,6 +3284,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     view.auto_scroll.paint(ui, avail);
     if unobstructed && matches!(tool, QuickTool::Select | QuickTool::ColumnSelect) {
         copy_selected |= selection_actions(ui, avail, view, info, prefs, allowed && !comments_hidden, can_copy);
+        if let Some(page) = no_text_bar(ui, avail, view, can_modify) {
+            image_action = Some(crate::edit_text_ui::ImageAction::Recognize(page));
+        }
+    } else {
+        view.no_text = None;
+    }
+    if unobstructed {
+        crate::auto_ocr::progress_bar(ui, avail, view);
     }
 
     // Collect all main-page demand, including cached surfaces, for byte admission later.

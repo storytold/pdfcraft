@@ -2254,6 +2254,8 @@ comment menu	Edit	Redaguoti
 	Page thumbnails	Puslapių miniatiūros
 	Page will not cause screen flicker	Puslapis nesukels ekrano mirgėjimo
 	Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.	Puslapių, kuriuose tekstas yra tik paveikslėlis, negalima perskaityti balsu ar juose ieškoti. Atpažinkite tekstą (OCR), kad pridėtumėte teksto sluoksnį.
+	There is no selectable text on this page. If it is a scan or a picture of text, recognize its text to select it.	Šiame puslapyje nėra pažymimo teksto. Jei tai nuskaitytas puslapis ar teksto paveikslėlis, atpažinkite tekstą, kad jį būtų galima pažymėti.
+	Recognize the text of scanned pages in the background (the file is not changed)	Atpažinti nuskaitytų puslapių tekstą fone (failas nekeičiamas)
 	Pages with links, comments or fields should tab in structure order. The fix sets each page's tab order to Use Document Structure.	Puslapiuose su saitais, komentarais ar laukais pereiti tabuliavimo klavišu reikia struktūros tvarka. Pataisa nustato kiekvieno puslapio tabuliavimo tvarką pagal dokumento struktūrą.
 	Passed	Atitinka
 	Password protection will be applied when you save	Apsauga slaptažodžiu bus pritaikyta įrašant

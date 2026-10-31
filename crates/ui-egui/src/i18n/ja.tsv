@@ -1107,6 +1107,8 @@
 	Image-only PDF	画像のみの PDF
 	Document is not image-only PDF	文書は画像のみの PDF ではありません
 	Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.	テキストの画像だけで構成されたページは読み上げや検索ができません。OCR でテキストを認識し、テキストレイヤーを追加してください。
+	There is no selectable text on this page. If it is a scan or a picture of text, recognize its text to select it.	このページには選択できるテキストがありません。スキャンやテキストの画像の場合は、テキストを認識すると選択できるようになります。
+	Recognize the text of scanned pages in the background (the file is not changed)	スキャンしたページのテキストをバックグラウンドで認識する（ファイルは変更されません）
 	Document is tagged PDF	文書はタグ付き PDF です
 	Tags give the document a logical structure that assistive technology follows. Tag the document (Automatically tag PDF).	タグは支援技術が利用する論理構造を定義します。「PDF に自動でタグを付ける」で文書にタグを追加してください。
 	Logical Reading Order	論理的な読み取り順序

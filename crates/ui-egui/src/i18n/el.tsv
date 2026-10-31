@@ -640,6 +640,8 @@
 	Image-only PDF	PDF μόνο με εικόνες
 	Document is not image-only PDF	Το PDF δεν αποτελείται αποκλειστικά από εικόνες
 	Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.	Οι σελίδες που περιέχουν μόνο εικόνες κειμένου δεν μπορούν να αναγνωστούν φωναχτά ή να αναζητηθούν. Χρησιμοποιήστε αναγνώριση κειμένου (OCR) για να προσθέσετε επίπεδο κειμένου.
+	There is no selectable text on this page. If it is a scan or a picture of text, recognize its text to select it.	Δεν υπάρχει κείμενο που μπορεί να επιλεγεί σε αυτή τη σελίδα. Αν είναι σάρωση ή εικόνα κειμένου, αναγνωρίστε το κείμενό της για να μπορεί να επιλεγεί.
+	Recognize the text of scanned pages in the background (the file is not changed)	Αναγνώριση του κειμένου των σαρωμένων σελίδων στο παρασκήνιο (το αρχείο δεν αλλάζει)
 	Document is tagged PDF	Το έγγραφο είναι PDF με ετικέτες δομής
 	Tags give the document a logical structure that assistive technology follows. Tag the document (Automatically tag PDF).	Οι ετικέτες δίνουν στο έγγραφο λογική δομή που ακολουθούν οι βοηθητικές τεχνολογίες. Προσθέστε ετικέτες στο έγγραφο («Αυτόματη προσθήκη ετικετών PDF»).
 	Logical Reading Order	Λογική σειρά ανάγνωσης

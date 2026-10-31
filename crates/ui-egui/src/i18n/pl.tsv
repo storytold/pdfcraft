@@ -1097,6 +1097,8 @@
 	Image-only PDF	PDF zawierający wyłącznie obrazy
 	Document is not image-only PDF	Dokument nie jest plikiem PDF zawierającym wyłącznie obrazy
 	Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.	Stron będących jedynie obrazami tekstu nie można odczytać na głos ani przeszukiwać. Rozpoznaj tekst (OCR), aby dodać warstwę tekstową.
+	There is no selectable text on this page. If it is a scan or a picture of text, recognize its text to select it.	Na tej stronie nie ma tekstu, który można zaznaczyć. Jeśli to skan lub obraz tekstu, rozpoznaj tekst, aby można go było zaznaczyć.
+	Recognize the text of scanned pages in the background (the file is not changed)	Rozpoznawaj tekst zeskanowanych stron w tle (plik nie jest zmieniany)
 	Document is tagged PDF	Dokument jest plikiem PDF z tagami
 	Tags give the document a logical structure that assistive technology follows. Tag the document (Automatically tag PDF).	Tagi nadają dokumentowi strukturę logiczną używaną przez technologie asystujące. Oznacz dokument tagami (Automatycznie oznacz PDF tagami).
 	Logical Reading Order	Logiczna kolejność czytania

@@ -1106,6 +1106,8 @@
 	Image-only PDF	PDF من صور فقط
 	Document is not image-only PDF	المستند ليس PDF من صور فقط
 	Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.	الصفحات التي ليست سوى صور لنص لا يمكن قراءتها بصوت أو البحث فيها. استخدم التعرف على النص (OCR) لإضافة طبقة نص.
+	There is no selectable text on this page. If it is a scan or a picture of text, recognize its text to select it.	لا يوجد نص قابل للتحديد في هذه الصفحة. إذا كانت صفحة ممسوحة ضوئيًا أو صورة لنص، فاستخدم التعرف على النص لجعله قابلاً للتحديد.
+	Recognize the text of scanned pages in the background (the file is not changed)	التعرف على نص الصفحات الممسوحة ضوئيًا في الخلفية (لا يتغير الملف)
 	Document is tagged PDF	المستند PDF موسوم
 	Tags give the document a logical structure that assistive technology follows. Tag the document (Automatically tag PDF).	الوسوم تمنح المستند بنية منطقية تتبعها التقنيات المساعدة. وسّم المستند (وسم PDF تلقائيًا).
 	Logical Reading Order	ترتيب القراءة المنطقي

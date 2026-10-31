@@ -2242,6 +2242,8 @@ comment menu	Edit	Sửa
 	Page thumbnails	Hình thu nhỏ trang
 	Page will not cause screen flicker	Trang sẽ không gây nhấp nháy màn hình
 	Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.	Các trang chỉ là hình chụp của văn bản không thể được đọc to hoặc tìm kiếm. Hãy nhận dạng văn bản (OCR) để thêm lớp văn bản.
+	There is no selectable text on this page. If it is a scan or a picture of text, recognize its text to select it.	Trang này không có văn bản có thể chọn. Nếu đây là bản quét hoặc hình chụp của văn bản, hãy nhận dạng văn bản để có thể chọn.
+	Recognize the text of scanned pages in the background (the file is not changed)	Nhận dạng văn bản của các trang được quét trong nền (tệp không bị thay đổi)
 	Pages with links, comments or fields should tab in structure order. The fix sets each page's tab order to Use Document Structure.	Các trang có liên kết, bình luận hoặc trường nên chuyển tab theo thứ tự cấu trúc. Cách sửa đặt thứ tự tab của mỗi trang thành Dùng cấu trúc tài liệu.
 	Passed	Đạt
 	Password protection will be applied when you save	Bảo vệ bằng mật khẩu sẽ được áp dụng khi bạn lưu

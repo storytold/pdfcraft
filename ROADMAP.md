@@ -13,6 +13,7 @@
 
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
+> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-21 · **Change:** minor (M10: scanned pages are recognized in the background, view-only; selecting where a page has no text offers Recognize text; estimates unchanged)
 > **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M7 #2517: a narrowed then widened paragraph keeps the typed spaces the wrap consumed, after save and reopen; estimates unchanged)
 > **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: OCR model downloads use verified ONNX pairs with legacy discovery fallback; estimates unchanged)
 > **Last reviewed:** 2026-10-25 | **Last updated:** 2026-10-25 | **Change:** minor (M14 localization current state: Arabic logical catalog, explicit RTL label direction and mirrored stock chrome; native/browser RTL workflows unqualified. Native release Hans face via LXGW WenKai Lite; estimates unchanged)
@@ -212,6 +213,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-10-21 (M10):** On desktop, with the OCR models installed, scanned pages can be selected, found and copied without a manual step. Once a page's text layer comes back empty, the document's pages with pictures are recognized in the background from the current page on, with progress and Cancel at the bottom of the document; each page's words become its text layer as soon as it is read. The text is the view's and is never saved (Recognize text still adds it to the file as an undoable edit); Preferences can turn it off. Selecting on a page that still has no text shows a bar offering Recognize text for that page. Estimates unchanged.
 
 - **2026-10-31 (M2, PR #4172 review):** Added same-machine pixel oracles for GBK Song, Hei, Kai and FangSong, including all four subset-prefixed Founder aliases. Reference PDFs use explicit Unicode mappings and independently selected installed faces; font data and rasters remain in memory. All eight cases ran; wrong-glyph and wrong-family production mutations each failed the new assertion and were restored. Validation: 422 renderer unit tests, renderer all-target Clippy with -D warnings, formatting, layers/assets/parity and renderer WASM checks passed; existing optional-patch/WASM warnings and parity notes remain. Estimates unchanged.
 

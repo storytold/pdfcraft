@@ -782,6 +782,8 @@
 	Image-only PDF	纯图像 PDF
 	Document is not image-only PDF	文档不是纯图像 PDF
 	Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.	仅为文本图片的页面无法朗读或搜索。请识别文本（OCR）以添加文本层。
+	There is no selectable text on this page. If it is a scan or a picture of text, recognize its text to select it.	此页面上没有可选择的文本。如果这是扫描件或文本图片，请识别其中的文本以便选择。
+	Recognize the text of scanned pages in the background (the file is not changed)	在后台识别扫描页面的文本（不会更改文件）
 	Document is tagged PDF	文档是标记的 PDF
 	Tags give the document a logical structure that assistive technology follows. Tag the document (Automatically tag PDF).	标记为文档提供辅助技术遵循的逻辑结构。请标记文档（自动标记 PDF）。
 	Logical Reading Order	逻辑阅读顺序
