@@ -164,6 +164,14 @@ fn path_from_arg(arg: String) -> String {
     String::from_utf8(out).unwrap_or(arg)
 }
 
+/// An argument as text. `std::env::args` panics on one that isn't UTF-8, which a Latin-1 or
+/// Shift-JIS file name on Linux is. The app opens paths as `str`, so such a name can't be opened:
+/// it is logged and becomes `None`, keeping its place so a flag's value never shifts onto the
+/// next argument (`--control <name> report.pdf` must not make the PDF the control file).
+fn text_arg(arg: std::ffi::OsString) -> Option<String> {
+    arg.into_string().map_err(|bad| log::warn!("skipping the argument `{}`: it is not UTF-8, so PdfCraft can't use it", bad.to_string_lossy())).ok()
+}
+
 /// Some programs start the PDF reader with the path unquoted (`pdfcraft.exe P:\Docs\01 Contract.PDF`),
 /// so a path with spaces arrives split into several arguments (Acrobat accepts this). When an
 /// argument names no file but it and the ones after it, joined with one space, do, rejoin them
@@ -223,17 +231,18 @@ fn main() -> eframe::Result {
     let mut control_file: Option<String> = None;
     let mut create_images = false;
     let mut new_window = false;
-    let mut args = std::env::args().skip(1);
+    let mut args = std::env::args_os().skip(1).map(text_arg);
     while let Some(a) = args.next() {
+        let Some(a) = a else { continue };
         match a.as_str() {
             "--version" => return print_and_exit(&format!("pdfcraft {}", pdfcraft_engine::build_info::version())),
             // Before any window or log file, so a scripted call returns (#4076).
             "-h" | "--help" => return print_and_exit(USAGE),
-            "--control" => control_file = args.next(),
+            "--control" => control_file = args.next().flatten(),
             "--create-images" => create_images = true,
             "--new-window" => new_window = true,
             flag if flag.starts_with("--") => {
-                let value = args.next().unwrap_or_default();
+                let value = args.next().flatten().unwrap_or_default();
                 options.push((flag.trim_start_matches("--").to_string(), value));
             }
             _ => files.push(path_from_arg(a)),

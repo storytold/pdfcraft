@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft");
 
 /// Run the app with `args`, failing if it is still running after 60 s (it opened its window).
-fn run(args: &[&str], stdout: Stdio) -> Output {
+fn run<A: AsRef<std::ffi::OsStr> + std::fmt::Debug>(args: &[A], stdout: Stdio) -> Output {
     let mut child = Command::new(BIN).args(args).stdin(Stdio::null()).stdout(stdout).stderr(Stdio::piped()).spawn().unwrap();
     let deadline = Instant::now() + Duration::from_secs(60);
     while child.try_wait().unwrap().is_none() {
@@ -40,6 +40,24 @@ fn version_prints_the_version_and_exits() {
     let out = run(&["--version"], Stdio::piped());
     assert!(out.status.success(), "{:?} {}", out.status, String::from_utf8_lossy(&out.stderr));
     assert!(String::from_utf8_lossy(&out.stdout).starts_with("pdfcraft "), "{}", String::from_utf8_lossy(&out.stdout));
+}
+
+/// An argument that isn't UTF-8 (a Latin-1 file name, as a Linux file manager passes it) is skipped
+/// with a warning instead of panicking in `std::env::args` (exit 101), and the ones after it keep
+/// their place: `--control` gets no value rather than taking `--version` as its file.
+#[cfg(unix)]
+#[test]
+fn an_argument_that_is_not_utf8_is_skipped_not_a_crash() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let latin1 = OsStr::from_bytes(b"caf\xe9.pdf");
+    for args in [vec![latin1, OsStr::new("--version")], vec![OsStr::new("--control"), latin1, OsStr::new("--version")]] {
+        let out = run(&args, Stdio::piped());
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{args:?}: {:?} {stderr}", out.status);
+        assert!(String::from_utf8_lossy(&out.stdout).starts_with("pdfcraft "), "{args:?}");
+        assert!(stderr.contains("caf\u{FFFD}.pdf") && stderr.contains("not UTF-8"), "{args:?}: says what it skipped: {stderr}");
+    }
 }
 
 /// A standard output that can't be written (here a full device) ends the run normally: `println!`
