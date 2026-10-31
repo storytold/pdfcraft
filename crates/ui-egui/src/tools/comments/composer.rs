@@ -113,7 +113,9 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
     let c = view.comments.composer.take()?;
     let text = c.text.trim_end().to_string();
     match c.kind {
-        ComposerKind::Edit(index) => Some(Edit::SetAnnotationContents { page, index, text }),
+        ComposerKind::Edit(index) => {
+            info.annotations.iter().any(|a| a.page == page && a.index == index).then_some(Edit::SetAnnotationContents { page, index, text })
+        }
         ComposerKind::Note => {
             view.comments.tool_done = true;
             Some(new_comment(&cx, CommentTool::Note, Shape::Note { at: c.at, icon: NoteIcon::Comment }, text))

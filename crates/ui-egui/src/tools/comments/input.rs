@@ -576,7 +576,7 @@ impl Gestures<'_> {
 }
 
 /// Delete / Escape handling for comments (only while no text field has focus).
-pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, tool: &mut QuickTool, allowed: bool) {
+pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, tool: &mut QuickTool, allowed: bool) {
     if !ctx.input(|i| i.pointer.any_down()) {
         view.comments.cancelled_drag = false;
     }
@@ -596,7 +596,9 @@ pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, tool: &mut QuickTool
         && ctx.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
     {
         cv.selected = None;
-        view.pending_edit = Some(Edit::DeleteAnnotation { page, index });
+        if info.annotations.iter().any(|a| a.page == page && a.index == index && !a.locked) {
+            view.pending_edit = Some(Edit::DeleteAnnotation { page, index });
+        }
     }
 }
 

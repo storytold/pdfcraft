@@ -60,7 +60,7 @@ pub fn is_comment_subtype(subtype: &str) -> bool {
 
 /// Where a reference to a reference (`5 0 obj 6 0 R endobj`) ends, as `pdfcraft_render::inspect`
 /// follows it, within a few steps (a cycle stops there).
-fn final_ref(doc: &Document, mut r: ObjRef) -> ObjRef {
+pub(crate) fn final_ref(doc: &Document, mut r: ObjRef) -> ObjRef {
     for _ in 0..8 {
         match &*doc.get(r) {
             Object::Ref(next) => r = *next,
@@ -222,6 +222,9 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
     let obj = doc.resolve(&entry);
     let d = obj.as_dict()?;
     let subtype = String::from_utf8_lossy(d.name(b"Subtype")?).into_owned();
+    if !is_comment_subtype(&subtype) {
+        return None;
+    }
     let c: Vec<f64> = d.get(b"C").and_then(|o| o.as_array().map(|a| a.iter().filter_map(|x| x.as_f64()).collect())).unwrap_or_default();
     let color = if subtype == "FreeText" { Some(appearance::parse_da(d).0) } else { (c.len() == 3).then(|| [c[0], c[1], c[2]]) };
     let width = matches!(subtype.as_str(), "Square" | "Circle" | "Line" | "Ink" | "Polygon" | "PolyLine" | "FreeText").then(|| {

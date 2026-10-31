@@ -1353,6 +1353,28 @@ fn non_markup_annotations_are_not_comments() {
     for s in ["Text", "FreeText", "Highlight", "Ink", "Stamp", "FileAttachment", "Redact", "Sound"] {
         assert!(is_comment_subtype(s), "{s}");
     }
+    // #3916: comment edits must refuse non-comment annotations (form widgets, links, pop-ups)
+    // when a stale `/Annots` index points at one.
+    for subtype in ["Widget", "Link", "Popup", "Watermark"] {
+        let mut doc = fixture();
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name(subtype));
+        d.set(b"Rect".to_vec(), num_array(&[10.0, 10.0, 50.0, 30.0]));
+        d.set(b"Contents".to_vec(), PdfString::text("keep me"));
+        let w = doc.add(Object::Dict(d));
+        let p = page_refs(&doc).unwrap()[0];
+        let mut a = annots(&doc, p);
+        a.push(Object::Ref(w));
+        let idx = a.len() - 1;
+        set_annots(&mut doc, p, a).unwrap();
+
+        assert_eq!(delete_annotation(&mut doc, 0, idx), Err(AnnotError::NoSuchAnnotation { page: 0, index: idx }), "{subtype}");
+        assert_eq!(set_contents(&mut doc, 0, idx, "overwritten", &meta("m")), Err(AnnotError::NoSuchAnnotation { page: 0, index: idx }), "{subtype}");
+        assert_eq!(move_annotation(&mut doc, 0, idx, 5.0, 5.0, &meta("m")), Err(AnnotError::NoSuchAnnotation { page: 0, index: idx }), "{subtype}");
+        assert_eq!(props(&doc, 0, idx), None, "{subtype}");
+        assert_eq!(text(&list(&doc, 0)[idx], b"Contents"), "keep me", "{subtype} contents must be untouched");
+    }
 }
 
 /// A drawing (a drawn Fill & Sign signature is one) resizes by scaling its strokes into the new
