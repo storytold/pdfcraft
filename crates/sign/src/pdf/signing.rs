@@ -533,9 +533,26 @@ fn appearance(doc: &mut Document, rect: [f64; 4], turn: i64, name: &str, cert: &
         |l: &str| -> Vec<u8> { if let Some(m) = &metrics { literal(&m.encode(l).unwrap_or_else(|| win_ansi(l))) } else { literal(&win_ansi(l)) } };
     if w > 1.0 && h > 1.0 {
         let pad = (h * 0.06).clamp(1.0, 6.0);
+        // The name's column: as wide as a short name needs, wrapped and sized to the box's height.
+        // A long name wraps within two fifths of the box, so the details keep the rest.
+        let name_column = (opts.graphic.is_none() && a.name).then(|| {
+            let max_w = (w * 0.4 - 2.0 * pad).max(1.0);
+            let mut size = (h * 0.4).min(36.0);
+            loop {
+                let words = wrap_text(name, size, max_w);
+                if words.len() as f64 * size * 1.1 <= h - 2.0 * pad || size <= 4.0 {
+                    let width = words.iter().map(|l| measure(l, size)).fold(0.0, f64::max);
+                    break (size, words, width);
+                }
+                size *= 0.95;
+            }
+        });
+        // The details start a gap after the name's column, so no empty space sits between them.
+        let name_w = name_column.as_ref().map_or(0.0, |(_, _, width)| *width);
         let (left_w, right_x) = match (&opts.graphic, a.name) {
             (Some(_), _) if lines.is_empty() => (w, pad),
-            (Some(_), _) | (None, true) => (w * 0.5, w * 0.5 + pad),
+            (Some(_), _) => (w * 0.5, w * 0.5 + pad),
+            (None, true) => (pad + name_w + 2.0 * pad, pad + name_w + 2.0 * pad),
             (None, false) => (0.0, pad),
         };
         let right_w = (w - right_x - pad).max(1.0);
@@ -545,13 +562,7 @@ fn appearance(doc: &mut Document, rect: [f64; 4], turn: i64, name: &str, cert: &
             image = im;
         }
         out.extend_from_slice(b"BT\n0 g\n");
-        if a.name && opts.graphic.is_none() {
-            // The name fills the left half.
-            let mut size = (h * 0.4).min(36.0);
-            let fit = (left_w - 2.0 * pad).max(1.0);
-            let longest = measure(name, 1.0).max(0.01);
-            size = size.min(fit / longest).max(4.0);
-            let words = wrap_text(name, size, fit);
+        if let Some((size, words, _)) = name_column {
             let total = words.len() as f64 * size * 1.1;
             let mut y = (h + total) / 2.0 - size * 0.85;
             for l in &words {
