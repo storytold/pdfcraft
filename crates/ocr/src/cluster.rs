@@ -228,6 +228,10 @@ pub fn cluster_pages(pages: &[(&GreyImage, &[ResolvedGlyph])], params: &ClusterP
     for members in groups.values() {
         grouped.extend(group_clusters(&instances, members, params));
     }
+    // `groups` is a HashMap, so its iteration order changes between processes. The prototype
+    // budget breaks equal canvas areas by position in `grouped`. Order the groups first, or
+    // two runs of the same page can embed different masters.
+    grouped.sort_by(|a, b| a.first().cmp(&b.first()));
     let plan = prototype_plan(&instances, &grouped, params);
     let mut clusters: Vec<GlyphCluster> = Vec::new();
     for (cluster_index, members) in grouped.into_iter().enumerate() {
@@ -249,12 +253,15 @@ pub fn cluster_pages(pages: &[(&GreyImage, &[ResolvedGlyph])], params: &ClusterP
 }
 
 /// The text a glyph was recognised as, when it is the key a cluster groups by.
+///
+/// An empty fragment is still a key. A split letter keeps its text on one piece; the other
+/// pieces are drawn, and they must not join the cluster that carries the letter.
 fn role_text(role: &MatchRole) -> Option<&str> {
     match role {
-        MatchRole::Character { text, .. } | MatchRole::Fragment { text, .. } | MatchRole::Ligature { text, .. } => Some(text.as_str()),
-        MatchRole::Unmatched => None,
+        MatchRole::Character { text, .. } | MatchRole::Ligature { text, .. } if !text.is_empty() => Some(text.as_str()),
+        MatchRole::Fragment { text, .. } => Some(text.as_str()),
+        MatchRole::Character { .. } | MatchRole::Ligature { .. } | MatchRole::Unmatched => None,
     }
-    .filter(|text| !text.is_empty())
 }
 
 /// Connected components of the matches within one text group.
@@ -870,6 +877,50 @@ mod tests {
         let clustered = cluster(&grey, &glyphs, &ClusterParams::default());
         assert_eq!(clustered.clusters().len(), 1);
         assert_eq!(clustered.clusters()[0].members().len(), 3);
+    }
+
+    #[test]
+    fn the_prototype_budget_prefers_the_earlier_glyph_when_canvases_match() {
+        let (ink, grey, width, height) = page(&[E, E]);
+        let grey = GreyImage::new(width, height, grey).unwrap();
+        let mut glyphs = glyphs_of(&analyzed(ink, width, height));
+        glyphs[0].role = MatchRole::Character { text: "e".into(), source: CharRef { line: 0, word: 0, index: Some(0) } };
+        glyphs[1].role = MatchRole::Character { text: "c".into(), source: CharRef { line: 0, word: 0, index: Some(1) } };
+        let open = cluster(&grey, &glyphs, &ClusterParams::default());
+        let areas: Vec<u64> = open
+            .clusters()
+            .iter()
+            .filter_map(|cluster| cluster.prototype())
+            .map(|prototype| u64::from(prototype.binary().width()).saturating_mul(u64::from(prototype.binary().height())))
+            .collect();
+        let one = areas.first().copied().unwrap_or(0);
+        assert!(one > 0 && areas.iter().all(|area| *area == one), "the two shapes share one canvas size");
+        let params = ClusterParams { max_total_prototype_pixels: one, ..ClusterParams::default() };
+        let clustered = cluster(&grey, &glyphs, &params);
+        let earlier = clustered.clusters().iter().find(|cluster| cluster.members() == [0]);
+        let later = clustered.clusters().iter().find(|cluster| cluster.members() == [1]);
+        assert!(earlier.is_some_and(|cluster| cluster.prototype().is_some()), "the earlier glyph takes the one canvas");
+        assert!(later.is_some_and(|cluster| cluster.prototype().is_none()), "the later glyph waits");
+    }
+
+    #[test]
+    fn an_empty_fragment_clusters_apart_from_the_letter() {
+        let stem = Shape { pattern: |x, y| x < 3 && y < 20, width: 3, height: 20 };
+        let dot = Shape { pattern: |x, y| x < 3 && y < 3, width: 3, height: 3 };
+        let (ink, grey, width, height) = page(&[stem, dot]);
+        let grey = GreyImage::new(width, height, grey).unwrap();
+        let mut glyphs = glyphs_of(&analyzed(ink, width, height));
+        assert_eq!(glyphs.len(), 2, "the stem and the dot are both glyphs");
+        let source = CharRef { line: 0, word: 0, index: Some(0) };
+        glyphs[0].role = MatchRole::Fragment { text: "i".into(), source };
+        glyphs[1].role = MatchRole::Fragment { text: String::new(), source };
+        let clustered = cluster(&grey, &glyphs, &ClusterParams::default());
+        assert_eq!(clustered.clusters().len(), 2, "the silent piece is drawn, and it is not another i");
+        assert_eq!(clustered.clusters()[0].text(), "i");
+        assert_eq!(clustered.clusters()[0].members(), &[0]);
+        assert_eq!(clustered.clusters()[1].text(), "");
+        assert_eq!(clustered.clusters()[1].members(), &[1]);
+        assert!(clustered.skipped().is_empty());
     }
 
     #[test]

@@ -2,13 +2,15 @@
 //!
 //! [`clearscan_image`] turns one page raster into a one-page PDF: deskew and binarize, connected
 //! components, alignment with the recognised lines, centroid-aligned prototypes, Bézier outlines,
-//! a Type 3 font with `/ToUnicode`, and a background the lettering has been painted out of.
+//! a Type 3 font with `/ToUnicode`, and a background the redrawn lettering has been painted out of.
 //! Nothing here calls potrace, autotrace or any other copyleft tracer. The outlines are the
 //! paths [`crate::vectorize`] already fitted, written as PDF operators by [`crate::synthesize_type3`].
 //!
 //! Lines passed to the recognizer callback are in the deskewed frame, the same frame as
 //! [`PreprocessedPage`]. A simple Type 3 font holds 255 drawing glyphs; further shapes go into
 //! more fonts on the same page, up to [`MAX_FONTS`].
+
+use std::collections::BTreeMap;
 
 use pdfcraft_cos::{Dict, Document, Object, SaveOptions, Stream, write_full};
 
@@ -17,7 +19,7 @@ use crate::OcrError;
 use crate::align::{AlignParams, MatchRole, ResolvedGlyph, align};
 use crate::annotations::AnnotatedLine;
 use crate::background::{
-    ClearScanLayer, DerenderParams, PageRaster, content_stream, derender, embed_background, encoding_for, protected_regions, text_regions,
+    ClearScanLayer, DerenderParams, InkRegion, PageRaster, content_stream, derender, embed_background, encoding_for, protected_regions,
 };
 use crate::cluster::{ClusterParams, cluster};
 use crate::components::{AnalyzeOptions, analyze_page};
@@ -168,7 +170,9 @@ where
     progress(ClearScanStage::Components);
     let components = analyze_page(&page, &options.analyze)?;
     progress(ClearScanStage::Align);
-    let aligned = align(&components, &lines, &options.align);
+    let mut aligned = align(&components, &lines, &options.align);
+    // A split letter (the stem and the dot) would otherwise embed the character once per piece.
+    assign_fragment_text(&mut aligned.matched);
     progress(ClearScanStage::Cluster);
     let clustered = cluster(&page.grey, &aligned.matched, &options.cluster);
     progress(ClearScanStage::Vectorize);
@@ -289,6 +293,40 @@ struct Occurrence {
     y_down: f64,
     origin_x: f64,
     text: String,
+    /// The piece the background loses when this occurrence is drawn.
+    bounds: [u32; 4],
+    mask: Option<crate::binarize::Bitmap>,
+}
+
+/// One character that labeling split into several blobs keeps its text on the largest piece.
+/// The others are drawn with empty text, so search reads the letter once. Ties keep the
+/// earlier glyph, which is the stable choice.
+fn assign_fragment_text(glyphs: &mut [ResolvedGlyph]) {
+    let mut groups: BTreeMap<(usize, usize, Option<usize>), Vec<usize>> = BTreeMap::new();
+    for (index, glyph) in glyphs.iter().enumerate() {
+        if let MatchRole::Fragment { source, .. } = &glyph.role {
+            groups.entry((source.line, source.word, source.index)).or_default().push(index);
+        }
+    }
+    for members in groups.values() {
+        if members.len() < 2 {
+            continue;
+        }
+        let Some(primary) = members.iter().copied().max_by_key(|index| {
+            let area = glyphs.get(*index).map(|glyph| glyph.component.area).unwrap_or(0);
+            (area, std::cmp::Reverse(*index))
+        }) else {
+            continue;
+        };
+        for index in members {
+            if *index == primary {
+                continue;
+            }
+            if let Some(MatchRole::Fragment { text, .. }) = glyphs.get_mut(*index).map(|glyph| &mut glyph.role) {
+                text.clear();
+            }
+        }
+    }
 }
 
 fn masters_of(
@@ -344,7 +382,13 @@ fn masters_of(
             if !origin_x.is_finite() {
                 continue;
             }
-            shows.push(Occurrence { y_down: baseline_of(glyph, lines), origin_x, text: text.to_string() });
+            shows.push(Occurrence {
+                y_down: baseline_of(glyph, lines),
+                origin_x,
+                text: text.to_string(),
+                bounds: glyph.component.bounds,
+                mask: glyph.component.mask.clone(),
+            });
         }
         if shows.is_empty() {
             skipped = skipped.saturating_add(1);
@@ -433,12 +477,14 @@ fn compose(
     options: &ClearScanOptions,
     skipped_clusters: usize,
 ) -> Result<ClearScanOutput, OcrError> {
-    let text = text_regions(components);
+    let height_px = f64::from(raster.height());
+    // Paint out only ink a placed outline replaces. An unmatched mark, a cluster with no
+    // prototype, and a glyph whose origin cannot be shown stay in the scan.
+    let text = erase_regions(masters, height_px, points_per_pixel);
     let protect = protected_regions(components);
     let cleaned = derender(raster, &text, &protect, &options.derender)?;
     let erased = cleaned.erased();
     let encoding = encoding_for(cleaned.raster());
-    let height_px = f64::from(cleaned.raster().height());
     let metrics = page_metrics(lines);
     // The same em the Type 3 font is built with. `size / em` is one prototype pixel.
     let em = em_pixels(&metrics)?;
@@ -456,12 +502,8 @@ fn compose(
             for (glyph_index, master) in chunk.iter().enumerate() {
                 let Some(&code) = written.codes.get(glyph_index) else { continue };
                 for show in &master.shows {
-                    let origin_x = show.origin_x * points_per_pixel;
-                    let origin_y = (height_px - show.y_down) * points_per_pixel;
-                    if !origin_x.is_finite() || !origin_y.is_finite() || origin_x.abs() > MAX_USER || origin_y.abs() > MAX_USER {
-                        continue;
-                    }
-                    placed.push(Placed { font: font_index, code, origin: [origin_x, origin_y], size, y_down: show.y_down, text: show.text.clone() });
+                    let Some(origin) = show_origin(show, height_px, points_per_pixel) else { continue };
+                    placed.push(Placed { font: font_index, code, origin, size, y_down: show.y_down, text: show.text.clone() });
                 }
             }
             font_ids.push(written.id);
@@ -490,6 +532,36 @@ fn compose(
         .collect();
     let glyphs = placements.len();
     Ok(ClearScanOutput { pdf, text: text_out, glyphs, clusters: masters.len(), skipped_clusters, erased, width, height, placements })
+}
+
+/// The baseline origin in user space, when the page can show it. [`compose`] places a glyph
+/// and paints out its ink only when this is `Some`, so a skipped placement stays visible.
+fn show_origin(show: &Occurrence, height_px: f64, points_per_pixel: f64) -> Option<[f64; 2]> {
+    let origin_x = show.origin_x * points_per_pixel;
+    let origin_y = (height_px - show.y_down) * points_per_pixel;
+    if origin_x.is_finite() && origin_y.is_finite() && origin_x.abs() <= MAX_USER && origin_y.abs() <= MAX_USER {
+        Some([origin_x, origin_y])
+    } else {
+        None
+    }
+}
+
+/// Ink regions of the occurrences that will be drawn. A master with no outline is not a
+/// replacement, so its scan ink stays.
+fn erase_regions<'a>(masters: &'a [Master], height_px: f64, points_per_pixel: f64) -> Vec<InkRegion<'a>> {
+    let mut regions = Vec::new();
+    for master in masters {
+        if master.glyph.outline.contours().is_empty() {
+            continue;
+        }
+        for show in &master.shows {
+            if show_origin(show, height_px, points_per_pixel).is_none() {
+                continue;
+            }
+            regions.push(InkRegion { bounds: show.bounds, mask: show.mask.as_ref() });
+        }
+    }
+    regions
 }
 
 fn deskewed_raster(pixels: &[u8], width: u32, height: u32, channels: u32, page: &PreprocessedPage) -> Result<PageRaster, OcrError> {
@@ -811,6 +883,116 @@ mod tests {
         let checked = qpdf.command().arg("--check").arg(&path).output().expect("qpdf");
         let _ = std::fs::remove_file(&path);
         assert!(checked.status.success(), "qpdf --check\n{}", String::from_utf8_lossy(&checked.stderr));
+    }
+
+    #[test]
+    fn a_stem_and_a_dot_are_searchable_once() {
+        let (width, height) = (160_u32, 80_u32);
+        // The dot sits clear of the stem, so labeling keeps two blobs inside one character box.
+        let pixels = marked_page(width, height, &[[40, 12, 43, 15], [40, 24, 43, 44]]);
+        let out =
+            clearscan_image(ScanRaster { pixels: &pixels, width, height, channels: 1, points_per_pixel: 1.0 }, &tuned(1, 1.0), lines_i, no_progress)
+                .expect("dotted i");
+        assert_eq!(out.text, "i", "placements {:?}", out.placements);
+        assert_eq!(out.glyphs, 2, "the dot is drawn, without its own letter: {:?}", out.placements);
+        assert_eq!(out.placements.iter().filter(|show| show.text == "i").count(), 1);
+
+        let mut renderer = PageRenderer::new(Arc::new(out.pdf.clone()), RenderConfig::default());
+        let text = renderer.render(RenderRequest { page: 0, kind: RequestKind::Text, scale: 1.0, ..RenderRequest::default() });
+        assert!(text.error.is_none(), "{:?}", text.error);
+        let found: String = text.text.iter().flat_map(|page| page.glyphs.iter().map(|glyph| glyph.text.as_str())).collect();
+        assert_eq!(found, "i", "extracted {found:?}");
+    }
+
+    #[test]
+    fn an_unclaimed_mark_stays_in_the_scan() {
+        let (width, height) = (180_u32, 140_u32);
+        // The recognizer claims the left stem only. The stem on the right is the same kind of
+        // glyph, and no character box owns it.
+        let pixels = marked_page(width, height, &[[30, 40, 34, 68], [140, 40, 144, 68]]);
+        let out = clearscan_image(
+            ScanRaster { pixels: &pixels, width, height, channels: 1, points_per_pixel: 1.0 },
+            &tuned(1, 1.0),
+            lines_for_left_ink,
+            no_progress,
+        )
+        .expect("unclaimed mark");
+        assert!(out.text.contains('H'), "{:?}", out.text);
+        let mut renderer = PageRenderer::new(Arc::new(out.pdf), RenderConfig::default());
+        let rendered = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..RenderRequest::default() });
+        assert!(rendered.error.is_none(), "{:?}", rendered.error);
+        let page_width = rendered.width.max(1);
+        let dark_right = rendered
+            .rgba
+            .chunks(4)
+            .enumerate()
+            .filter(|(index, pixel)| {
+                let x = (*index as u32) % page_width;
+                x >= page_width.saturating_mul(2) / 3 && pixel.first().copied().unwrap_or(255) < 80
+            })
+            .count();
+        assert!(dark_right > 40, "the unclaimed block should stay, dark pixels on the right {dark_right}");
+    }
+
+    /// Black rectangles on a lightly grained page. Each mark is `[left, top, right, bottom)`.
+    fn marked_page(width: u32, height: u32, marks: &[[u32; 4]]) -> Vec<u8> {
+        let len = (width as usize).saturating_mul(height as usize);
+        let mut data = vec![250_u8; len];
+        let put = |data: &mut [u8], x: u32, y: u32, value: u8| {
+            let index = y as usize * width as usize + x as usize;
+            if let Some(slot) = data.get_mut(index) {
+                *slot = value;
+            }
+        };
+        for mark in marks {
+            let [left, top, right, bottom] = *mark;
+            for y in top..bottom {
+                for x in left..right {
+                    put(&mut data, x, y, 0);
+                }
+            }
+        }
+        let mut noise = 0x1234_5678_u32;
+        for y in 0..height {
+            for x in 0..width {
+                let index = y as usize * width as usize + x as usize;
+                if data.get(index).copied() == Some(250) {
+                    noise = noise.wrapping_mul(1664525).wrapping_add(1013904223);
+                    put(&mut data, x, y, 247 + ((noise >> 24) % 7) as u8);
+                }
+            }
+        }
+        data
+    }
+
+    fn lines_i(page: &PreprocessedPage) -> Result<Vec<AnnotatedLine>, OcrError> {
+        let binary = &page.binary;
+        let mid = binary.width() / 2;
+        let (mut left, mut top, mut right, mut bottom) = (u32::MAX, u32::MAX, 0_u32, 0_u32);
+        let mut any = false;
+        for y in 0..binary.height() {
+            for x in 0..mid {
+                if binary.is_ink(i64::from(x), i64::from(y)) {
+                    any = true;
+                    left = left.min(x);
+                    top = top.min(y);
+                    right = right.max(x.saturating_add(1));
+                    bottom = bottom.max(y.saturating_add(1));
+                }
+            }
+        }
+        if !any {
+            return Ok(Vec::new());
+        }
+        let rect = [left as f32, top as f32, right as f32, bottom as f32];
+        let height = rect[3] - rect[1];
+        Ok(vec![AnnotatedLine {
+            words: vec![AnnotatedWord { text: "i".into(), rect, chars: vec![CharBox { char: 'i', rect }] }],
+            baseline: rect[3],
+            x_height: height * 0.5,
+            cap_height: height,
+            descent: 0.0,
+        }])
     }
 
     #[test]

@@ -1,11 +1,15 @@
 # ClearScan
 
+> **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** minor (a split letter is searchable once; only redrawn ink is painted out)
+
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** minor (Recognize Text ▸ Editable text and images runs ClearScan)
 
 ClearScan replaces the lettering on a scanned page with resolution-independent outlines.
-The page image loses that lettering, and the outlines are drawn over it as a Type 3 font
-with a `/ToUnicode` map, so the text stays selectable and searchable. Photographs, rules
-and other non-text marks stay in the image. Comments, links and bookmarks on the page stay.
+The page image loses the lettering that was redrawn, and the outlines are drawn over it
+as a Type 3 font with a `/ToUnicode` map, so the text stays selectable and searchable. A
+character the labeling split, such as the stem and dot of an i, is searchable once.
+Photographs, rules, and marks no character box claimed stay in the image. Comments, links
+and bookmarks on the page stay.
 
 On the desktop, Scan & OCR ▸ Recognize text ▸ In this file ▸ Output ▸ Editable text and
 images runs the same step. Sensitivity (0–100) and downsample (1–8) appear only for that
@@ -69,8 +73,9 @@ uncolored Type 3 glyph (`d1`, `m`/`l`/`c`/`h`/`f`). A simple font holds 255 draw
 further shapes use `F2`, `F3`, … up to 16 fonts. Past that, extra clusters are counted and
 left out.
 
-The background is the deskewed scan with each glyph, plus a one-pixel halo, painted in the
-paper colour sampled around it. A photograph or rule that overlaps the halo stays. Grey,
+The background is the deskewed scan with each redrawn glyph, plus a one-pixel halo, painted
+in the paper colour sampled around it. A glyph that was not redrawn stays. A photograph or
+rule that overlaps the halo stays. Grey,
 and colour whose channels match, is Flate DeviceGray. A flat tint is Flate DeviceRGB. A
 page whose colour varies like a photograph is JPEG. There is no JBIG2 encoder in this
 tree (the usual one is AGPL), so a monochrome scan stays Flate.
@@ -96,5 +101,6 @@ is not claimed to match Acrobat.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | minor | A split letter is searchable once. Only ink that was redrawn is painted out. A ClearScan result is dropped when the document changed, and it does not run beside optimization. |
 | 2026-10-31 | minor | Recognize Text ▸ Editable text and images runs ClearScan on a worker, with progress, cancel and one undo step. |
 | 2026-10-31 | minor | Headless ClearScan: `ocr_clearscan` on the CLI and MCP, one undoable step. |

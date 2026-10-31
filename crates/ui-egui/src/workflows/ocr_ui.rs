@@ -138,6 +138,8 @@ pub(crate) enum ClearScanFail {
 pub struct ClearScanRun {
     pub doc: DocId,
     pub progress: Arc<Mutex<ClearScanRunProgress>>,
+    /// The document's edit generation when the run started. A result is for those bytes only.
+    pub generation: u64,
 }
 
 pub struct OcrRun {
@@ -252,6 +254,10 @@ impl PdfCraftApp {
         let Some((vi, id)) = self.active_ids() else { return };
         if self.ocr_run.is_some() || self.clearscan_run.is_some() {
             self.notify_tr("Text recognition is already running");
+            return;
+        }
+        if self.optimize_run.is_some() {
+            self.notify_tr("Optimization is already running");
             return;
         }
         if let Some(why) = self.session.get(id).and_then(|d| d.read_only_reason.clone()) {
@@ -430,7 +436,8 @@ impl PdfCraftApp {
         }
         #[cfg(target_arch = "wasm32")]
         work();
-        self.clearscan_run = Some(ClearScanRun { doc: id, progress });
+        let generation = self.session.get(id).map_or(0, |document| document.edit_generation());
+        self.clearscan_run = Some(ClearScanRun { doc: id, progress, generation });
         self.poll_ocr();
     }
 
@@ -679,7 +686,7 @@ impl PdfCraftApp {
     /// when the run was cancelled.
     fn poll_clearscan(&mut self) {
         let Some(run) = self.clearscan_run.as_ref() else { return };
-        let (doc, progress) = (run.doc, run.progress.clone());
+        let (doc, progress, generation) = (run.doc, run.progress.clone(), run.generation);
         let mut state = match progress.lock() {
             Ok(state) => state,
             Err(error) => {
@@ -716,6 +723,10 @@ impl PdfCraftApp {
                 return;
             }
         };
+        if self.session.get(doc).map(|document| document.edit_generation()) != Some(generation) {
+            self.notify_tr("The document changed while ClearScan ran, so its result was not applied");
+            return;
+        }
         let report = built.report;
         match self.session.apply_clearscan(doc, built.built) {
             Ok(()) => {
@@ -1086,7 +1097,8 @@ mod tests {
         app.set_option("language", "en").unwrap();
         let id = app.active_ids().unwrap().1;
         let progress = Arc::new(Mutex::new(ClearScanRunProgress { done: 0, total: 2, stage: "vectorize", ..Default::default() }));
-        app.clearscan_run = Some(ClearScanRun { doc: id, progress: progress.clone() });
+        let generation = app.session.get(id).unwrap().edit_generation();
+        app.clearscan_run = Some(ClearScanRun { doc: id, progress: progress.clone(), generation });
         app.poll_ocr();
         let notice = app.progress_notice.clone().unwrap();
         assert_eq!(notice.label, "ClearScan… Drawing outlines, page 1 of 2");
@@ -1128,7 +1140,8 @@ mod tests {
         app.set_option("language", "en").unwrap();
         let id = app.active_ids().unwrap().1;
         let progress = Arc::new(Mutex::new(ClearScanRunProgress { result: Some(Err(ClearScanFail::NoModels)), ..Default::default() }));
-        app.clearscan_run = Some(ClearScanRun { doc: id, progress });
+        let generation = app.session.get(id).unwrap().edit_generation();
+        app.clearscan_run = Some(ClearScanRun { doc: id, progress, generation });
         app.progress_job = crate::widgets::ProgressJob::ClearScan;
         app.progress_notice = Some(crate::widgets::ProgressNotice { label: "ClearScan…".into(), fraction: 0.2, cancellable: true });
         app.poll_ocr();
@@ -1136,5 +1149,47 @@ mod tests {
         assert_eq!(app.session.get(id).unwrap().can_undo(), None);
         let toast = app.toast.take().map(|t| t.0).unwrap_or_default();
         assert!(toast.contains("model files are missing"), "{toast}");
+    }
+
+    #[test]
+    fn recognize_text_waits_while_optimization_is_running() {
+        let mut app = app_with(scan());
+        app.set_option("language", "en").unwrap();
+        app.ocr_draft.output = OcrOutput::EditableText;
+        let id = app.active_ids().unwrap().1;
+        app.optimize_run =
+            Some(super::super::optimize_ui::OptimizeRun { doc: id, kind: super::super::optimize_ui::OptimizeKind::Reduce, progress: Arc::default() });
+        app.start_ocr();
+        assert!(app.clearscan_run.is_none() && app.ocr_run.is_none());
+        assert_eq!(app.toast.as_ref().map(|toast| toast.0.as_str()), Some("Optimization is already running"));
+    }
+
+    #[test]
+    fn a_clearscan_result_is_dropped_when_the_document_changed() {
+        let mut app = app_with(scan());
+        app.set_option("language", "en").unwrap();
+        let id = app.active_ids().unwrap().1;
+        let generation = app.session.get(id).unwrap().edit_generation();
+        let replacement = Session::new().create_blank(200.0, 200.0, 1).unwrap().to_vec();
+        let progress = Arc::new(Mutex::new(ClearScanRunProgress {
+            result: Some(Ok(ClearScanBuilt {
+                report: pdfcraft_engine::clearscan::ClearScanReport { cancelled: false, pages: Vec::new() },
+                built: vec![(0, replacement)],
+            })),
+            ..Default::default()
+        }));
+        app.clearscan_run = Some(ClearScanRun { doc: id, progress, generation });
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(8, 8, image::Rgba([250, 250, 250, 255])))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        app.session
+            .apply(id, Edit::AddImage { page: 0, rect: Some([10.0, 10.0, 50.0, 50.0]), name: "p.png".into(), bytes: Arc::new(png.into_inner()) })
+            .unwrap();
+        app.poll_ocr();
+        assert!(app.clearscan_run.is_none() && app.progress_notice.is_none());
+        assert_eq!(app.session.get(id).unwrap().can_undo(), Some("Add image"));
+        let toast = app.toast.take().map(|toast| toast.0).unwrap_or_default();
+        assert!(toast.contains("document changed"), "{toast}");
     }
 }
