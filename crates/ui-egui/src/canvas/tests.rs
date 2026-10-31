@@ -1568,8 +1568,9 @@ fn virtualized_organizer_keeps_insert_gaps_at_document_positions() {
         app
     });
     h.run_steps(4);
+    let insert_at_end = crate::i18n::t("Insert a file at the end");
     assert!(h.state().views[0].thumb_demand.len() < 50);
-    assert_eq!(h.query_all_by_label("Insert a file at the end").count(), 0, "the last virtualized cell is not the final page");
+    assert_eq!(h.query_all_by_label(insert_at_end).count(), 0, "the last virtualized cell is not the final page");
     let center = h.state().views[0].viewport_rect().center();
     h.hover_at(center);
     h.event(egui::Event::MouseWheel {
@@ -1581,8 +1582,12 @@ fn virtualized_organizer_keeps_insert_gaps_at_document_positions() {
     });
     // Well past egui's longest scroll animation (about 0.3 s).
     h.run_steps(40);
-    h.get_by_label("Insert a file at the end");
-    let before_last = h.get_by_label("Insert a file before page 100").rect().center();
+    h.get_by_label(insert_at_end);
+    let insert_before_page_100 = crate::i18n::fmt(
+        crate::i18n::t("Insert a file before page {label}"),
+        &[("label", "100")],
+    );
+    let before_last = h.get_by_label(&insert_before_page_100).rect().center();
     h.hover_at(before_last);
     h.run_steps(2);
     assert_eq!(h.state().views[0].grid_gap, Some(99), "external drops use the document index after virtualized scrolling");
