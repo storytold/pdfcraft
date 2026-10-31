@@ -15,3 +15,4 @@ mod stroke_degenerate_cubic;
 mod substitute_widths;
 mod tiling_cell_placement;
 mod type3_text_clip;
+mod zero_area_fill_clip;
