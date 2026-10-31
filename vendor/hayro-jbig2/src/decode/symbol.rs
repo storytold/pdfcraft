@@ -657,6 +657,17 @@ fn decode_height_class_collective_bitmap(ctx: &mut SymbolDecodeContext<'_>) -> R
 
     ctx.h_ctx.reader.align();
 
+    // PdfCraft patch: a class of no symbols has nothing to cut out, and `bitmap::decode_work` charges
+    // rows by the symbol, so decoding this would be rows for nothing: 65,535 a class, and a dictionary
+    // can hold a thousand such classes. Its bytes still have to be stepped over.
+    if ctx.symbols_decoded_count == ctx.height_class_first_symbol {
+        ctx.h_ctx
+            .reader
+            .read_bytes(bitmap_size as usize)
+            .ok_or(ParseError::UnexpectedEof)?;
+        return Ok(());
+    }
+
     let collective_bitmap = if bitmap_size == 0 {
         // Bitmap is stored uncompressed, so we basically just copy-paste
         // each byte. Rows are padded to the byte boundary.

@@ -3858,6 +3858,44 @@ fn no_row_jbig2_dictionary(symbols: u32) -> Vec<u8> {
     dictionary
 }
 
+/// A Huffman-coded symbol dictionary that climbs to `height`, stays about there for `classes`
+/// classes of no symbols, each with a byte of MMR bitmap, and drops to one row for its one symbol,
+/// not exported.
+fn empty_class_jbig2_dictionary(classes: u32, height: u32) -> Vec<u8> {
+    let mut bits = Bits::default();
+    bits.put(0b111110, 6); // height class delta, the upper line of table B.5
+    bits.put(height - 76, 32);
+    let mut at = height;
+    for class in 0..classes {
+        // Table B.5 has no delta of 0, so it goes down one and up one.
+        if class % 2 == 1 {
+            bits.put(0b1111110, 7); // height class delta -1 (B.5): -255 and 254
+            bits.put(254, 8);
+            at -= 1;
+        } else if class > 0 {
+            bits.put(0, 1); // height class delta 1 (B.5)
+            at += 1;
+        }
+        bits.put(0b111111, 6); // end of the class (B.2)
+        bits.put(1, 5); // BMSIZE 1 (B.1)
+        bits.align();
+        bits.put(0xFF, 8);
+    }
+    bits.put(0b1111111, 7); // height class delta, the lower line of table B.5
+    bits.put(at - 1 - 256, 32);
+    bits.put(0b10, 2); // width delta 1 (B.2)
+    bits.put(0b111111, 6); // end of the class (B.2)
+    bits.put(0, 5); // BMSIZE 0, uncompressed (B.1)
+    bits.align();
+    bits.put(0, 8); // its row
+    bits.table_b1(1); // the first export run, not exported, is all of them
+    let mut dictionary = vec![0x00, 0x05]; // Huffman, tables B.5, B.2, B.1, B.1
+    dictionary.extend_from_slice(&0u32.to_be_bytes()); // exported
+    dictionary.extend_from_slice(&1u32.to_be_bytes()); // new
+    dictionary.extend_from_slice(&bits.bytes);
+    dictionary
+}
+
 /// A Huffman-coded symbol dictionary of `symbols` white symbols of width 1 and `height` rows, none
 /// exported, for `height` from 76 up.
 fn narrow_jbig2_dictionary(symbols: u32, height: u32) -> Vec<u8> {
@@ -4158,6 +4196,25 @@ fn jbig2_refinement_region() -> Vec<u8> {
     region.push(1); // template 1, no typical prediction
     region.extend_from_slice(&[0; 4]);
     region
+}
+
+/// A class of no symbols has nothing to cut from its bitmap, and rows are charged by the symbol, so
+/// decoding one would be rows for nothing: a thousand classes of 65,000 rows take a second, from a
+/// dictionary of 4 KB. It isn't decoded, however many there are, and the symbol after them shows that
+/// its bytes are stepped over.
+#[test]
+fn jbig2_classes_of_no_symbols_decode_no_bitmap() {
+    let mut stream = black_jbig2_page();
+    for number in 0..1_000 {
+        jbig2_segment(&mut stream, number + 1, 0, &[], &empty_class_jbig2_dictionary(1024, 65_000));
+    }
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = done.send(jbig2_image_draws(&stream));
+    });
+    // This takes milliseconds now and took a quarter of an hour, so a margin this wide can't fail on
+    // a busy machine.
+    assert_eq!(finished.recv_timeout(std::time::Duration::from_secs(120)), Ok(true));
 }
 
 /// Each item a JBIG2 stream decodes costs its work, and the stream may ask for 2^30: four of the
