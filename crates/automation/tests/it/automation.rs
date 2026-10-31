@@ -3106,6 +3106,59 @@ trailer << /Root 1 0 R >>
     assert_eq!(saved.iter().find(|t| t.kind == "TH").and_then(|t| t.scope.as_deref()), Some("Column"));
 }
 
+/// A layout table becomes plain blocks through `accessibility_layout_table_to_blocks` (#4105): the
+/// table findings go, the content keeps its order, and the change is undone and saved.
+#[test]
+fn a_layout_table_becomes_blocks_through_automation() {
+    let dir = workdir("a11y-layout-table");
+    let content = "/TD << /MCID 0 >> BDC 10 150 40 20 re f EMC /TD << /MCID 1 >> BDC 60 150 40 20 re f EMC";
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /StructParents 0 >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /StructTreeRoot /K 6 0 R /ParentTree 11 0 R >> endobj
+6 0 obj << /S /Document /P 5 0 R /K [7 0 R] >> endobj
+7 0 obj << /S /Table /P 6 0 R /K [8 0 R] >> endobj
+8 0 obj << /S /TR /P 7 0 R /K [9 0 R 10 0 R] >> endobj
+9 0 obj << /S /TD /P 8 0 R /Pg 3 0 R /K 0 >> endobj
+10 0 obj << /S /TD /P 8 0 R /Pg 3 0 R /K 1 >> endobj
+11 0 obj << /Nums [0 [9 0 R 10 0 R]] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        content.len()
+    );
+    std::fs::write(dir.join("layout.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let fd = ok(&mut a, "doc_open", json!({ "path": "layout.pdf" }))["doc"].as_u64().unwrap();
+    let table_rules = |a: &mut Automation| -> Vec<String> {
+        let r = ok(a, "accessibility_check", json!({ "doc": fd, "rules": ["table-summary", "table-headers"] }));
+        ["table-summary", "table-headers"]
+            .map(|id| r["results"].as_array().unwrap().iter().find(|x| x["rule"] == id).unwrap()["status"].as_str().unwrap().to_owned())
+            .to_vec()
+    };
+    assert_eq!(table_rules(&mut a), ["failed", "failed"]);
+    let types = |tags: &Value| tags["tags"].as_array().unwrap().iter().map(|t| t["type"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
+    let tags = ok(&mut a, "accessibility_layout_table_to_blocks", json!({ "doc": fd, "object": 7, "generation": 0 }));
+    assert_eq!(types(&tags), ["Document", "Div", "Div", "P", "P"]);
+    assert_eq!(table_rules(&mut a), ["passed", "passed"]);
+    let content = |a: &mut Automation, object: u32| {
+        ok(a, "accessibility_tag_content", json!({ "doc": fd, "object": object, "generation": 0 }))["content"][0]["mcid"].clone()
+    };
+    assert_eq!((content(&mut a, 9), content(&mut a, 10)), (json!(0), json!(1)), "each cell keeps its content");
+    // Only a table: a cell is refused.
+    assert!(matches!(err(&mut a, "accessibility_layout_table_to_blocks", json!({ "doc": fd, "object": 9, "generation": 0 })), ToolError::Failed(_)));
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": fd }))["undone"], "Change tag properties");
+    assert_eq!(types(&ok(&mut a, "accessibility_tags", json!({ "doc": fd }))), ["Document", "Table", "TR", "TD", "TD"]);
+    ok(&mut a, "edit_redo", json!({ "doc": fd }));
+    ok(&mut a, "doc_save", json!({ "doc": fd, "path": "blocks.pdf" }));
+    let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("blocks.pdf")).unwrap())).unwrap();
+    assert_eq!(pdfcraft_engine::a11y::tags(&saved).into_iter().map(|t| t.kind).collect::<Vec<_>>(), ["Document", "Div", "Div", "P", "P"]);
+}
+
 #[test]
 fn marking_a_leaf_tag_as_an_artifact_through_automation_is_undoable_and_saved() {
     let dir = workdir("a11y-artifact");

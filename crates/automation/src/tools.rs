@@ -1164,6 +1164,11 @@ pub fn tools() -> Vec<ToolDef> {
                 "doc": doc(), "object": { "type": "integer", "minimum": 1 },
                 "generation": { "type": "integer", "minimum": 0, "maximum": 65535 },
             }), &["doc", "object", "generation"])),
+        t("accessibility_layout_table_to_blocks", "Change layout table to blocks", "Turn a table used only for layout (label and value pairs, a letterhead grid) into plain blocks in one step: the Table tag, its THead/TBody/TFoot and TR tags become Div, its TH, TD and Caption tags P (Div when they hold tags of their own). Content, reading order and the tags inside cells stay; a table nested in a cell stays a table; Table attributes (Summary, Scope, spans) are removed, other attributes kept. The tag's type must be Table after the role map; use object and generation from accessibility_tags. Undoable. Returns the tags as accessibility_tags does.")
+            .with(schema(json!({
+                "doc": doc(), "object": { "type": "integer", "minimum": 1 },
+                "generation": { "type": "integer", "minimum": 0, "maximum": 65535 },
+            }), &["doc", "object", "generation"])),
         t("accessibility_move_tag", "Move structure tag", "Move a reachable indirect structure tag before or after a direct sibling in their parent's /K array, changing tagged reading order without changing page appearance. Use object and generation values from accessibility_tags. Rejects distinct parents, duplicate references and positions that are already current. Undoable.")
             .with(schema(json!({
                 "doc": doc(), "object": { "type": "integer", "minimum": 1 },
