@@ -2256,7 +2256,7 @@ fn permissions_password_restricts_others_but_not_this_session() {
 /// it needs the same rights as removing security, not just the right to make changes (#3921).
 #[test]
 fn convert_to_pdfa_needs_the_owners_rights_on_an_encrypted_document() {
-    let pdfa = || Edit::ConvertPdfA { level: pdfcraft_preflight::Level::A2b };
+    let pdfa = || Edit::ConvertPdfA { level: pdfcraft_preflight::Level::A2b, condition: None };
     let refused = Err(EditError::NotPermitted("removing the encryption, which PDF/A forbids"));
     // Changes allowed; printing (bit 3) and copying (bit 5) withheld.
     let bytes = protected("pw", "owner", !((1 << 2) | (1 << 4)));
@@ -2278,6 +2278,16 @@ fn convert_to_pdfa_needs_the_owners_rights_on_an_encrypted_document() {
     // An unencrypted document needs nothing more.
     let (mut s, id) = session_with(1);
     s.apply(id, pdfa()).unwrap();
+}
+
+/// Save as PDF/X takes the encryption off too (PDF/X forbids it), so it needs the same rights.
+#[test]
+fn convert_to_pdfx_needs_the_owners_rights_on_an_encrypted_document() {
+    let pdfx = Edit::ConvertPdfX { level: pdfcraft_preflight::pdfx::Level::X4, condition: None, flatten: false };
+    let bytes = protected("pw", "owner", !((1 << 2) | (1 << 4)));
+    let mut s = Session::new();
+    let id = s.open("x.pdf", None, bytes, Some("pw")).unwrap();
+    assert_eq!(s.apply(id, pdfx), Err(EditError::NotPermitted("removing the encryption, which PDF/X forbids")));
 }
 
 #[test]

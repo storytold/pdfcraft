@@ -84,13 +84,20 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
                 Err(EditError::NotPermitted("changing security"))
             }
         }
-        // Converting to PDF/A takes the encryption off (PDF/A forbids it), so on an encrypted
-        // document it is a change of security (#3921).
+        // Converting to PDF/A or PDF/X takes the encryption off (both forbid it), so on an
+        // encrypted document it is a change of security (#3921).
         Edit::ConvertPdfA { .. } => {
             if unrestricted(p) {
                 Ok(())
             } else {
                 Err(EditError::NotPermitted("removing the encryption, which PDF/A forbids"))
+            }
+        }
+        Edit::ConvertPdfX { .. } => {
+            if unrestricted(p) {
+                Ok(())
+            } else {
+                Err(EditError::NotPermitted("removing the encryption, which PDF/X forbids"))
             }
         }
         Edit::SetInfo { .. }
@@ -137,7 +144,6 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::AddOcrText { .. }
         | Edit::SetDocumentScript { .. }
         | Edit::SetFieldScript { .. }
-        | Edit::ConvertPdfX { .. }
         | Edit::RemoveStandardId { .. }
         | Edit::EditTextLine { .. }
         | Edit::EditTextBlock { .. }
