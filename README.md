@@ -458,6 +458,8 @@ Installers and executables are code-signed.
 The portable zip runs from any folder, a USB stick included. Its `portable.txt` keeps the settings,
 logs and crash recovery in a `PdfCraftData` folder next to `pdfcraft.exe`, so nothing is written to
 `%APPDATA%`; delete that file to use the normal per-user folders.
+Windows doesn't offer the portable copy as a default PDF app on its own, since it registers nothing;
+`portable.txt` has the PowerShell lines that register it for your user only, and how to undo them.
 
 The MSI installs for your account only by default, without administrator privileges. Choose
 "Everyone on this computer" on its first page, or pass `ALLUSERS=1` from an elevated terminal, to install
