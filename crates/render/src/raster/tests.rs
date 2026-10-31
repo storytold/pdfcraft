@@ -7008,6 +7008,47 @@ mod devicen_inks;
 // patch 27).
 mod isolated_cmyk_groups;
 
+/// A file whose cross-reference table has to be rebuilt keeps an object whose header names a
+/// generation the reference does not.
+///
+/// `poppler-85140-0.pdf` is 340 bytes with no table at all, and its one page's header reads
+/// `3 18446744073709551616 obj` while the page tree points at `3 0 R`. Before #427 the digits
+/// wrapped, and 2^64 wrapped to exactly 0, so the header read as `3 0 obj` and the file opened by
+/// accident; once an overflowing integer became a real the object was unreachable and the file
+/// stopped opening at all, which `cargo xtask check` reports as a regression (#5580).
+///
+/// A rebuilt table has no revision history to tell two generations of an object apart -- the scan
+/// already files objects found in object streams under generation 0 -- so the object number is
+/// what identifies one. A readable generation that simply is not the one referenced
+/// (`3 99999 obj`) was lost the same way, and is covered here too.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn a_rebuilt_table_finds_an_object_whose_header_names_another_generation() {
+    for generation in [
+        // The generation the reference names, which always worked.
+        "0",
+        // One that reads as an integer but is not the one referenced.
+        "99999",
+        // And one no generation may be: 2^64, which is what the reported file carries. A
+        // generation number is at most 65,535 (ISO 32000-2 §7.5.4).
+        "18446744073709551616",
+    ] {
+        // No table and no `startxref`, so the objects are recovered by scanning the file.
+        let pdf = format!(
+            "%PDF-1.4\n\
+             1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 {generation} obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] >> endobj\n\
+             trailer << /Root 1 0 R >>\n\
+             %%EOF\n"
+        );
+        let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+        assert!(page.error.is_none(), "generation {generation}: the page is found: {:?}", page.error);
+        assert_eq!((page.width, page.height), (200, 100), "generation {generation}: and it is the page's own size");
+    }
+}
+
 /// #3109 / #3116: clipping-only text (`7 Tr`) installs a clip for subsequent painting
 /// but draws no pixels itself.
 #[test]
