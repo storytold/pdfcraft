@@ -1186,9 +1186,13 @@ fn overlay_clears_after_fresh_tiles_zoom_then_edit_and_rejected_edit() {
     h.key_press(egui::Key::Escape);
     h.run_steps(2);
 
-    // 3. Zoom then edit: zoom to another scale, let tiles settle, then edit.
+    // 3. Zoom then edit: start from the 100% wheel stop, zoom to 150%, let the new layout and
+    // tiles settle, then reacquire the field from its current screen transform before clicking.
+    h.state_mut().set_option("zoom", "100").unwrap();
+    crate::support::settle(&mut h);
     h.state_mut().views[0].zoom_step(true);
     crate::support::settle(&mut h);
+    assert_eq!(h.state().views[0].zoom, 1.5);
     click_field(&mut h, "name", 0);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     h.event(egui::Event::Text("ZoomedVal".into()));
@@ -1537,6 +1541,43 @@ fn an_editable_combo_box_takes_a_typed_value() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// An editable combo keeps keyboard focus across a ruler click, while an ordinary outside click
+/// still commits it and moves focus to the clicked field.
+#[test]
+fn an_editable_combo_keeps_keyboard_focus_after_a_ruler_click() {
+    let mut h = combo_harness();
+    h.state_mut().set_option("rulers", "on").unwrap();
+    h.run_steps(3);
+
+    click_field(&mut h, "fruit", 0);
+    assert_eq!(focused(&h), Some(("fruit".into(), 0)));
+    h.event(egui::Event::Text("Cher".into()));
+    h.run_steps(2);
+
+    let viewport = h.state().views[0].viewport_rect();
+    let ruler = egui::pos2(viewport.center().x, viewport.top() + pdfcraft_ui_egui::ruler::HORIZONTAL_RULER_HEIGHT / 2.0);
+    click_at(&mut h, ruler);
+
+    assert_eq!(focused(&h), Some(("fruit".into(), 0)), "a ruler click keeps the editable combo open");
+    h.event(egui::Event::Text("ry".into()));
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+
+    assert_eq!(value(&h, "fruit"), ["Cherry"], "typing continues after the ruler click");
+    assert!(h.state().views[0].forms.focus.is_none(), "Enter commits and closes the combo");
+
+    // A normal click outside the editable combo still commits it and moves focus normally.
+    click_field(&mut h, "fruit", 0);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("Plum".into()));
+    h.run_steps(2);
+    let page = h.state().views[0].page_screen_rect(0).expect("page on screen");
+    click_at(&mut h, egui::pos2(page.center().x, page.bottom() - 20.0));
+
+    assert_eq!(value(&h, "fruit"), ["Plum"], "an ordinary outside click commits the editable combo");
+    assert!(h.state().views[0].forms.focus.is_none(), "the ordinary outside click closes the editable combo");
+}
 /// A combo box without the Edit flag is a drop-down list only: typing changes nothing.
 #[test]
 fn a_combo_box_without_edit_takes_no_typing() {

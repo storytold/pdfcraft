@@ -314,6 +314,11 @@ impl LineEditor {
         style
     }
 
+    /// Current screen-space rectangle used to paint and hit-test the inline editor.
+    pub fn screen_rect(&self) -> Rect {
+        self.rect
+    }
+
     /// After applying formatting: the paragraph now has it. The selection stays, as the box still
     /// shows it, so a second alignment or format picked for it applies to the same rows.
     pub fn applied(&mut self) {
@@ -651,13 +656,14 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
 }
 
 /// The inline editor; returns the edit once the text is applied.
-pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -> Option<Edit> {
+pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, interaction_rect: Rect, ruler_interaction: bool) -> Option<Edit> {
     let view_id = view.id;
     // Clicks outside the document (the Format text panel) keep the paragraph open, as does the
-    // keyboard moving there. Where the click landed is `interact_pos`: `latest_pos` is gone on the
-    // frame a tap lifts.
-    let away = |p: egui::Pos2| !view.viewport_rect().contains(p);
-    let outside = ctx.input(|i| i.pointer.interact_pos()).is_some_and(away) || focus_pos(ctx).is_some_and(away);
+    // keyboard moving there. Ruler interaction is inside the viewport but outside page input.
+    let viewport = view.viewport_rect();
+    let pointer = ctx.input(|i| i.pointer.interact_pos());
+    let (pointer_outside, _) = click_regions(pointer, viewport, interaction_rect);
+    let outside = pointer_outside || focus_pos(ctx).is_some_and(|p| !viewport.contains(p));
     let page = view.line_editor.as_ref()?.page;
     let xf = view.page_xform(page)?;
     let hold = view.objects.hold_editor;
@@ -678,7 +684,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
     // page's edge (a converter relying on the page clip) must not cover the next page or the
     // tool bars (#3061).
     let viewport = view.viewport_rect();
-    let page_clip = xf.rect.intersect(viewport);
+    let page_clip = xf.rect.intersect(viewport).intersect(interaction_rect);
     let ed = view.line_editor.as_mut()?;
     if hold {
         ed.focus = true;
@@ -738,15 +744,11 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
             // can differ from the PDF's. Keep every visible row inside the growing frame.
             let live = draft_rect.map_or(visible, |bounds| bounds.union(visible));
             ui.painter().rect_stroke(live.expand(2.0), CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
-            // On the frame, a press takes hold of the box (a click selects it, a drag moves it):
-            // the pointer says so there, and reads as text inside.
-            if let Some(p) = ui.input(|i| i.pointer.hover_pos())
-                && ui.clip_rect().contains(p)
-                && live.expand(2.0 + FRAME_REACH).contains(p)
-                && !live.expand(2.0).contains(p)
-            {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
-            }
+            // On the frame, a press takes hold of the box (a click selects it, a drag moves it).
+            // Apply the cursor after TextEdit is built so the text widget cannot overwrite it.
+            let frame_hovered = ui
+                .input(|i| i.pointer.hover_pos())
+                .is_some_and(|p| ui.clip_rect().contains(p) && live.expand(2.0 + FRAME_REACH).contains(p) && !live.expand(2.0).contains(p));
             // White, unless the text is too pale to read on white (white text from a coloured
             // banner, #913): then a dark box, with a caret that shows on it.
             let fill = if background_ready { Color32::TRANSPARENT } else { editor_fill(text_color) };
@@ -815,12 +817,19 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                 let lost = lost_focus_once(&r, &mut ed.had_focus);
                 let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
                 let apply = ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command);
+                if lost && ruler_interaction {
+                    r.request_focus();
+                    ed.had_focus = true;
+                }
                 if esc {
                     done = Some(false);
-                } else if apply || (lost && !outside && !hold) {
+                } else if apply || (lost && !outside && !ruler_interaction && !hold) {
                     done = Some(true);
                 }
             });
+            if frame_hovered {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
+            }
         });
     if reveal {
         view.text_background.reveal();
@@ -853,6 +862,13 @@ pub(crate) fn finished_edit(ed: LineEditor) -> Option<Edit> {
         text: ed.text,
         style,
     })
+}
+
+/// Classify a pointer position relative to the document viewport and page interaction area.
+fn click_regions(pointer: Option<Pos2>, viewport: Rect, interaction_rect: Rect) -> (bool, bool) {
+    let outside = pointer.is_some_and(|point| !viewport.contains(point));
+    let ruler = pointer.is_some_and(|point| viewport.contains(point) && !interaction_rect.contains(point));
+    (outside, ruler)
 }
 
 /// Where the keyboard is: the centre of the widget that has it. A text box that loses it to a
@@ -977,6 +993,20 @@ C", &picked
             ),
             "the pick stays"
         );
+    }
+
+    #[test]
+    fn pointer_regions_distinguish_rulers_from_outside_clicks() {
+        let viewport = Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(800.0, 600.0));
+        let interaction = Rect::from_min_max(egui::pos2(24.0, 24.0), viewport.max);
+        assert_eq!(click_regions(Some(egui::pos2(100.0, 100.0)), viewport, interaction), (false, false));
+        assert_eq!(click_regions(Some(egui::pos2(100.0, 10.0)), viewport, interaction), (false, true));
+        assert_eq!(click_regions(Some(egui::pos2(10.0, 100.0)), viewport, interaction), (false, true));
+        assert_eq!(click_regions(Some(egui::pos2(-10.0, 100.0)), viewport, interaction), (true, false));
+        assert_eq!(click_regions(Some(viewport.min), viewport, interaction), (false, true));
+        assert_eq!(click_regions(Some(interaction.min), viewport, interaction), (false, false));
+        assert_eq!(click_regions(Some(viewport.max), viewport, interaction), (false, false));
+        assert_eq!(click_regions(None, viewport, interaction), (false, false));
     }
 
     #[test]

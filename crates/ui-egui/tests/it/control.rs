@@ -1928,7 +1928,7 @@ fn wheel_zoom_is_scoped_to_the_viewport_and_respects_existing_limits() {
     let zoom = h.state().views[0].zoom;
     navigation_wheel(&mut h, outside, 40.0, true);
     assert_eq!(h.state().views[0].zoom, zoom);
-    for (percent, delta, expected) in [(6400, 80.0, 64.0), (8, -80.0, 0.08)] {
+    for (percent, delta, expected) in [(6400, 80.0, 64.0), (1, -80.0, 0.01)] {
         ok(&mut h, &c, "ui.set", json!({"key":"zoom", "value":percent.to_string()}));
         h.run_steps(4);
         let p = h.state().views[0].viewport_rect().center();

@@ -3,7 +3,7 @@
 //! signature. Everything is an annotation (typewriter text, PdfCraft-drawn stamps, ink), so it
 //! can be moved, deleted and undone like any comment.
 
-use egui::{Color32, CornerRadius, Pos2, Sense, Stroke, pos2, vec2};
+use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, pos2, vec2};
 use pdfcraft_engine::signature_scan::{DEFAULT_SENSITIVITY, PREVIEW_MAX_SIDE, SCAN_MAX_SIDE, ScanError};
 use pdfcraft_engine::{Edit, FillMark, NewAnnotation, PhotoRect, Shape, SignatureImage, SignaturePhoto, Style, Turn};
 use pdfcraft_render::{DocInfo, PageInfo};
@@ -533,7 +533,14 @@ pub enum FillAction {
 }
 
 /// The in-place editor for typed text. Returns the edit once committed.
-pub(crate) fn type_box(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, author: &str) -> Option<Edit> {
+pub(crate) fn type_box(
+    ctx: &egui::Context,
+    view: &mut DocView,
+    info: &DocInfo,
+    author: &str,
+    interaction_rect: Rect,
+    ruler_interaction: bool,
+) -> Option<Edit> {
     let tb = view.fill_text.clone()?;
     let xf = view.page_xform(tb.page)?;
     let v = info.pages.get(tb.page)?.user_to_view(tb.at[0] as f32, tb.at[1] as f32);
@@ -549,7 +556,7 @@ pub(crate) fn type_box(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
         .fade_in(false)
         .order(egui::Order::Foreground)
         .fixed_pos(pos)
-        .constrain_to(view.viewport_rect())
+        .constrain_to(interaction_rect)
         .constrain(false)
         .show(ctx, |ui| {
             let Some(t) = view.fill_text.as_mut() else { return };
@@ -576,6 +583,8 @@ pub(crate) fn type_box(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
             }
             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 cancel = true;
+            } else if r.lost_focus() && ruler_interaction {
+                r.request_focus();
             } else if r.lost_focus() {
                 commit = true;
             }

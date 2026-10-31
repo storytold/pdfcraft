@@ -328,6 +328,7 @@ fn page_gaps_work_for_mixed_sizes_and_two_page_rows() {
     let (a, b, c) = (rect(&h, 0).unwrap(), rect(&h, 1).unwrap(), rect(&h, 2).unwrap());
     assert!((b.left() - a.right()).abs() < 0.01);
     assert!((c.top() - a.bottom()).abs() < 0.01);
+    assert!((c.left() - a.left()).abs() < 0.01, "the final page keeps the left column without gaps: {a:?} {c:?}");
     let info = h.state().session.get(h.state().views[0].id).unwrap().info.clone();
     h.state_mut().views[0].document_replaced(&info);
     assert!(!h.state().views[0].show_page_gaps, "a file reload preserves the view setting");
@@ -362,6 +363,7 @@ fn two_up_layout_places_pages_side_by_side() {
     assert!(b.min.x > a.max.x, "page 2 right of page 1");
     let c = rect(&h, 2).expect("page 3 on the next row");
     assert!(c.min.y > a.max.y);
+    assert!((c.left() - a.left()).abs() < 1.0, "page 3 uses page 1's left column: {a:?} {c:?}");
 }
 
 #[test]
@@ -931,10 +933,14 @@ fn default_zoom_is_used_for_new_documents() {
     let asks = String::from_utf8_lossy(PAGES).replace("/Pages 2 0 R >>", "/Pages 2 0 R /OpenAction [3 0 R /Fit] >>");
     h.state_mut().open_bytes("asks.pdf", None, asks.into_bytes()).expect("opens");
     assert_eq!(h.state().views[3].fit, Fit::Page);
-    // Typos and zooms the view can't show are refused.
-    for bad in ["huge", "fit-height", "5", "9000%"] {
+    // The supported range includes its 1% lower bound; smaller, excessive and malformed values
+    // are refused.
+    h.state_mut().set_option("default-zoom", "1").unwrap();
+    assert_eq!(h.state().view_defaults.zoom, 0.01);
+    for bad in ["huge", "fit-height", "0", "0.5", "9000%"] {
         assert!(h.state_mut().set_option("default-zoom", bad).is_err(), "{bad}");
     }
+    h.state_mut().set_option("default-zoom", "150%").unwrap();
     // Saved settings keep it, and garbage leaves it alone.
     let saved = h.state().persist();
     let mut fresh = PdfCraftApp::new();
@@ -1625,6 +1631,42 @@ fn fonts_tab_lists_fonts_and_embedding() {
     h.get_by_label_contains("Not embedded");
 }
 
+/// A Hand drag cannot start on ruler chrome, but a page drag stays active when crossing it.
+#[test]
+fn the_hand_tool_ignores_ruler_origin_but_keeps_a_document_origin_across_it() {
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "600"), ("quick", "hand"), ("rulers", "on")]);
+    let viewport = h.state().views[0].viewport_rect();
+    let horizontal_ruler = egui::pos2(viewport.center().x, viewport.top() + pdfcraft_ui_egui::ruler::HORIZONTAL_RULER_HEIGHT / 2.0);
+    let document = viewport.center();
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    let page = |h: &Harness<'static, PdfCraftApp>| rect(h, 0).expect("page 1 on screen").min;
+
+    // A Hand drag beginning on the horizontal ruler never pans, even after it enters the document.
+    h.hover_at(horizontal_ruler);
+    h.run_steps(2);
+    let before_blocked = page(&h);
+    h.event(button(horizontal_ruler, true));
+    h.step();
+    let inside_document = horizontal_ruler + egui::vec2(0.0, 120.0);
+    h.event(egui::Event::PointerMoved(inside_document));
+    h.step();
+    h.event(button(inside_document, false));
+    h.run_steps(2);
+    assert_eq!(page(&h), before_blocked, "a Hand drag that starts on a ruler must not pan");
+
+    // A Hand drag beginning in the document keeps panning when the pointer crosses the ruler.
+    h.hover_at(document);
+    h.run_steps(2);
+    let before_allowed = page(&h);
+    h.event(button(document, true));
+    h.step();
+    h.event(egui::Event::PointerMoved(horizontal_ruler));
+    h.step();
+    assert_eq!(page(&h) - before_allowed, horizontal_ruler - document, "a document-originated Hand drag must remain active across the ruler",);
+    h.event(button(horizontal_ruler, false));
+    h.run_steps(2);
+}
+
 #[test]
 fn the_hand_tool_pans_by_dragging() {
     let mut h = harness(&[("layout", "continuous"), ("zoom", "150"), ("quick", "hand")]);
@@ -2077,6 +2119,52 @@ fn long_view_menu_fits_a_short_window() {
     assert_eq!(h.state().right, Some(pdfcraft_ui_egui::RightPanel::Bookmarks));
 }
 
+#[test]
+fn rulers_command_requires_an_open_document_and_toggles_global_visibility() {
+    let mut empty = PdfCraftApp::new();
+    assert!(!empty.show_rulers, "rulers start hidden");
+    assert!(!empty.execute("view.rulers"));
+    assert!(!empty.show_rulers, "refusing the command leaves rulers hidden");
+
+    let mut h = harness(&[]);
+    assert!(!h.state().show_rulers, "rulers start hidden");
+    assert!(h.state_mut().execute("view.rulers"));
+    assert!(h.state().show_rulers, "the first command shows rulers");
+    assert!(h.state_mut().execute("view.rulers"));
+    assert!(!h.state().show_rulers, "the second command hides rulers");
+}
+
+#[test]
+fn rulers_option_sets_an_idempotent_headless_state() {
+    let mut app = PdfCraftApp::new();
+    assert!(!app.show_rulers);
+    app.set_option("rulers", "on").unwrap();
+    app.set_option("rulers", "on").unwrap();
+    assert!(app.show_rulers, "repeating on must not toggle rulers off");
+    app.set_option("rulers", "off").unwrap();
+    app.set_option("rulers", "off").unwrap();
+    assert!(!app.show_rulers, "repeating off must not toggle rulers on");
+    assert_eq!(app.set_option("rulers", "sometimes"), Err("rulers must be on or off".into()));
+    assert!(!app.show_rulers, "an invalid value must preserve the current state");
+}
+
+#[test]
+fn ruler_visibility_persists_and_legacy_settings_keep_rulers_hidden() {
+    let mut app = PdfCraftApp::new();
+    app.set_option("rulers", "on").unwrap();
+    let saved = app.persist();
+
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&saved);
+    assert!(restored.show_rulers, "an explicit ruler choice persists");
+
+    let mut legacy = PdfCraftApp::new();
+    legacy.restore("{}");
+    assert!(!legacy.show_rulers, "legacy settings keep the hidden default");
+    legacy.restore(r#"{"show_rulers":"sometimes"}"#);
+    assert!(!legacy.show_rulers, "an invalid stored value keeps the current choice");
+}
+
 fn click_with(h: &mut Harness<'static, PdfCraftApp>, pos: egui::Pos2, modifiers: Modifiers) {
     h.hover_at(pos);
     h.run_steps(1);
@@ -2309,6 +2397,49 @@ fn the_pages_panel_tools_are_off_without_page_editing_permission() {
     h.run_steps(3);
     assert!(h.query_by_label("Delete the selected pages").is_none(), "its menu doesn't open");
     assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), 3);
+}
+#[test]
+fn rulers_preserve_two_up_page_geometry() {
+    let mut h = harness(&[("layout", "two-up"), ("zoom", "50")]);
+
+    h.run_steps(4);
+
+    let before = [rect(&h, 0).expect("page 1 before rulers"), rect(&h, 1).expect("page 2 before rulers"), rect(&h, 2).expect("page 3 before rulers")];
+
+    eprintln!("before rulers: {before:#?}");
+
+    assert!((before[2].left() - before[0].left()).abs() < 1.0, "page 3 must occupy page 1's left column before rulers: {before:?}");
+
+    assert!(h.state_mut().execute("view.rulers"));
+    h.run_steps(4);
+
+    let after = [rect(&h, 0).expect("page 1 with rulers"), rect(&h, 1).expect("page 2 with rulers"), rect(&h, 2).expect("page 3 with rulers")];
+
+    eprintln!("with rulers: {after:#?}");
+
+    for page in 0..3 {
+        assert_eq!(after[page], before[page], "rulers must not change page {} geometry", page + 1);
+    }
+
+    assert!((after[2].left() - after[0].left()).abs() < 1.0, "page 3 must occupy page 1's left column with rulers: {after:?}");
+
+    let horizontal_gap_before = before[1].left() - before[0].right();
+    let horizontal_gap_after = after[1].left() - after[0].right();
+
+    assert!((horizontal_gap_before - 2.0).abs() < 0.01, "two-page column gap is {horizontal_gap_before}, expected 2");
+    assert!(
+        (horizontal_gap_after - horizontal_gap_before).abs() < 0.01,
+        "rulers changed horizontal page spacing: before={horizontal_gap_before}, after={horizontal_gap_after}"
+    );
+
+    let vertical_gap_before = before[2].top() - before[0].bottom();
+    let vertical_gap_after = after[2].top() - after[0].bottom();
+
+    assert!((vertical_gap_before - 8.0).abs() <= 0.5, "page-row gap is {vertical_gap_before}, expected 8 within device-pixel snapping");
+    assert!(
+        (vertical_gap_after - vertical_gap_before).abs() < 0.01,
+        "rulers changed vertical page spacing: before={vertical_gap_before}, after={vertical_gap_after}"
+    );
 }
 
 #[test]

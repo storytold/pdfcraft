@@ -6534,9 +6534,10 @@ fn private_new_chinese_keyboard_input_preserves_font_layout_and_saved_pixels() {
 /// Moving text shows the four-way arrow wherever a drag would move it (#1520 follow-up): over a
 /// closed paragraph, on the frame of an open one, and while dragging. Inside the open one the
 /// pointer reads as text; on a closed one's edge, as the rewrap handle.
-#[test]
-fn moving_text_offers_the_four_way_arrow() {
-    let mut h = harness(2, |_| {});
+fn moving_text_offers_the_four_way_arrow_case(show_rulers: bool) {
+    let mut h = harness(2, move |app| {
+        app.show_rulers = show_rulers;
+    });
     assert!(h.state_mut().execute("edit.edit_text"));
     h.run_steps(2);
     let id = h.state().views[0].id;
@@ -6570,9 +6571,25 @@ fn moving_text_offers_the_four_way_arrow() {
     let centre = screen((moved.rect[0] + moved.rect[2]) / 2.0, (moved.rect[1] + moved.rect[3]) / 2.0);
     click_at(&mut h, centre);
     assert!(h.state().views[0].line_editor.is_some());
-    assert_eq!(cursor_at(&mut h, centre), egui::CursorIcon::Text);
-    let frame = screen((moved.rect[0] + moved.rect[2]) / 2.0, moved.rect[3]) - egui::vec2(0.0, 4.0);
+
+    let editor_rect = h.state().views[0].line_editor.as_ref().expect("editor remains open").screen_rect();
+    assert_eq!(cursor_at(&mut h, editor_rect.center()), egui::CursorIcon::Text);
+
+    // The frame hit zone extends outwards from the live editor rectangle. Use that same
+    // authoritative screen-space geometry so viewport overlays cannot make this probe fall back
+    // inside the text editor.
+    let frame = egui::pos2(editor_rect.center().x, editor_rect.top() - 4.0);
     assert_eq!(cursor_at(&mut h, frame), egui::CursorIcon::Move);
+}
+
+#[test]
+fn moving_text_offers_the_four_way_arrow_with_rulers() {
+    moving_text_offers_the_four_way_arrow_case(true);
+}
+
+#[test]
+fn moving_text_offers_the_four_way_arrow_without_rulers() {
+    moving_text_offers_the_four_way_arrow_case(false);
 }
 
 /// Cropping a picture on the page (Acrobat's crop handles): in crop mode the
@@ -6797,6 +6814,36 @@ fn leaving_organize_goes_back_to_the_workspace_panel() {
     h.state_mut().views[0].organize = false;
     h.run_steps(3);
     assert_eq!(h.state().left, LeftPanel::AllTools);
+}
+
+/// A parked ruler pointer is not a ruler interaction and cannot make the text editor reclaim
+/// focus from the command palette.
+#[test]
+fn command_palette_closes_text_editor_with_pointer_parked_over_a_ruler() {
+    let mut h = harness(1, |app| app.show_rulers = true);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+
+    let page = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let text = egui::pos2(page.left() + 40.0 / 200.0 * page.width(), page.top() + (300.0 - 158.0) / 300.0 * page.height());
+    h.hover_at(text);
+    h.run_steps(1);
+    h.drag_at(text);
+    h.run_steps(1);
+    h.drop_at(text);
+    h.run_steps(3);
+    assert!(h.state().views[0].line_editor.is_some(), "the line opens for editing");
+
+    let viewport = h.state().views[0].viewport_rect();
+    let ruler = egui::pos2(viewport.center().x, viewport.top() + pdfcraft_ui_egui::ruler::HORIZONTAL_RULER_HEIGHT / 2.0);
+    h.hover_at(ruler);
+    h.run_steps(2);
+    assert!(h.state().views[0].line_editor.is_some(), "hovering the ruler alone keeps the editor open");
+
+    h.state_mut().palette_open = true;
+    h.run_steps(3);
+    assert!(h.state().palette_open, "the command palette remains open");
+    assert!(h.state().views[0].line_editor.is_none(), "the editor does not reclaim focus from the palette");
 }
 
 /// The Read mode command (not the mode bar) applies a paragraph still open in the editor, as

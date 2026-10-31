@@ -72,6 +72,7 @@ impl PdfCraftApp {
             mode: Mode::AllTools,
             default_mode: Mode::AllTools,
             view_defaults: Default::default(),
+            show_rulers: false,
             units: Default::default(),
             date_format_draft: None,
             mode_override: None,

@@ -167,6 +167,13 @@ impl PdfCraftApp {
                     _ => return Err("default-page-gaps must be on or off".into()),
                 };
             }
+            ("rulers", _) => {
+                self.show_rulers = match value {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err("rulers must be on or off".into()),
+                };
+            }
             ("cover", Some(v)) => {
                 let on = match value {
                     "on" => true,
@@ -192,7 +199,7 @@ impl PdfCraftApp {
             }
             ("default-zoom", _) => {
                 self.view_defaults =
-                    self.view_defaults.with_zoom(value).ok_or("default-zoom must be fit-width, fit-page or a percentage from 8 to 6400")?;
+                    self.view_defaults.with_zoom(value).ok_or("default-zoom must be fit-width, fit-page or a percentage from 1 to 6400")?;
             }
             ("always-default-view", _) => {
                 self.always_default_view = match value {

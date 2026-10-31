@@ -22,11 +22,16 @@ fn frame(ctx: &Context, events: Vec<Event>, area: bool) -> PagePointer {
 
 /// [`frame`], with a dialog open (`modal`) whose layer egui has not met.
 fn frame_with(ctx: &Context, events: Vec<Event>, area: bool, modal: bool) -> PagePointer {
+    frame_excluding(ctx, events, area, modal, &[])
+}
+
+/// [`frame_with`], with viewport chrome excluded from page interaction.
+fn frame_excluding(ctx: &Context, events: Vec<Event>, area: bool, modal: bool, blocked: &[Rect]) -> PagePointer {
     let mut seen = PagePointer::default();
     let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))), events, ..Default::default() };
     let mut output = ctx.run_ui(input, |ui| {
         let (_, resp) = ui.allocate_exact_size(PAGES.size(), Sense::click_and_drag());
-        seen = PagePointer::read(ui, &resp, modal);
+        seen = PagePointer::read_excluding(ui, &resp, modal, blocked);
         if area {
             egui::Area::new(egui::Id::unique("over")).fixed_pos(OVER.min).show(ui.ctx(), |ui| {
                 ui.allocate_exact_size(OVER.size(), Sense::hover());
@@ -102,6 +107,89 @@ fn a_press_on_the_pages_keeps_the_pointer_until_its_release() {
     assert_eq!((up.pos, up.edges.as_slice()), (Some(end), [Edge::Release(end)].as_slice()), "the release is the pages' too");
     assert!(!up.primary_down && !up.any_down, "and the button is up");
     assert_eq!(frame(&ctx, vec![], true).pos, None, "then off the pages, the pointer is not theirs");
+}
+
+#[test]
+fn a_page_drag_keeps_its_pointer_when_it_enters_blocked_chrome() {
+    let ctx = Context::default();
+    let blocked = Rect::from_min_max(Pos2::ZERO, pos2(200.0, 20.0));
+    let start = pos2(80.0, 40.0);
+    frame_excluding(&ctx, vec![], false, false, &[blocked]);
+    frame_excluding(&ctx, vec![Event::PointerMoved(start), button(start, PointerButton::Primary, true)], false, false, &[blocked]);
+
+    let over_ruler = pos2(80.0, 10.0);
+    let held = frame_excluding(&ctx, vec![Event::PointerMoved(over_ruler)], false, false, &[blocked]);
+
+    assert_eq!(held.pos, Some(over_ruler));
+    assert_eq!(held.origin, Some(start));
+    assert!(held.primary_down);
+    assert!(!held.blocked_press);
+}
+
+#[test]
+fn a_blocked_secondary_press_does_not_revoke_a_held_primary_page_drag() {
+    let ctx = Context::default();
+    let blocked = Rect::from_min_max(Pos2::ZERO, pos2(200.0, 20.0));
+    let start = pos2(80.0, 40.0);
+    frame_excluding(&ctx, vec![], false, false, &[blocked]);
+    frame_excluding(&ctx, vec![Event::PointerMoved(start), button(start, PointerButton::Primary, true)], false, false, &[blocked]);
+
+    // Move far enough to establish the page's primary drag before entering the ruler.
+    let dragging = pos2(120.0, 60.0);
+    frame_excluding(&ctx, vec![Event::PointerMoved(dragging)], false, false, &[blocked]);
+
+    let over_ruler = pos2(120.0, 10.0);
+    let secondary_down =
+        frame_excluding(&ctx, vec![Event::PointerMoved(over_ruler), button(over_ruler, PointerButton::Secondary, true)], false, false, &[blocked]);
+    assert!(secondary_down.blocked_press, "the ruler press must remain blocked for page context-menu handling");
+    assert_eq!(secondary_down.pos, Some(over_ruler), "the held primary drag keeps its pointer");
+    assert!(secondary_down.primary_down);
+
+    let primary_up = frame_excluding(&ctx, vec![button(over_ruler, PointerButton::Primary, false)], false, false, &[blocked]);
+    assert!(primary_up.blocked_press);
+    assert_eq!(primary_up.pos, Some(over_ruler));
+    assert_eq!(primary_up.edges.as_slice(), [Edge::Release(over_ruler)].as_slice());
+    assert!(!primary_up.primary_down);
+
+    let secondary_up = frame_excluding(&ctx, vec![button(over_ruler, PointerButton::Secondary, false)], false, false, &[blocked]);
+    assert!(secondary_up.blocked_press);
+    assert!(secondary_up.pos.is_none());
+}
+
+#[test]
+fn a_primary_drag_that_starts_in_blocked_chrome_stays_out_of_the_page_path() {
+    let ctx = Context::default();
+    let blocked = Rect::from_min_max(Pos2::ZERO, pos2(200.0, 20.0));
+    let ruler = pos2(80.0, 10.0);
+
+    frame_excluding(&ctx, vec![], false, false, &[blocked]);
+
+    let down = frame_excluding(&ctx, vec![Event::PointerMoved(ruler), button(ruler, PointerButton::Primary, true)], false, false, &[blocked]);
+
+    assert!(down.blocked_press);
+    assert_eq!(down.blocked_interaction, Some(ruler));
+    assert!(down.pos.is_none());
+    assert!(down.origin.is_none());
+    assert!(down.edges.is_empty());
+    assert!(!down.primary_down);
+
+    let dragging = pos2(80.0, 60.0);
+    let moved = frame_excluding(&ctx, vec![Event::PointerMoved(dragging)], false, false, &[blocked]);
+
+    assert!(moved.blocked_press);
+    assert_eq!(moved.blocked_interaction, None, "hovering after the press is not a new ruler interaction");
+    assert!(moved.pos.is_none());
+    assert!(moved.origin.is_none());
+    assert!(moved.edges.is_empty());
+    assert!(!moved.primary_down);
+
+    let up = frame_excluding(&ctx, vec![button(dragging, PointerButton::Primary, false)], false, false, &[blocked]);
+
+    assert!(up.blocked_press);
+    assert!(up.pos.is_none());
+    assert!(up.origin.is_none());
+    assert!(up.edges.is_empty());
+    assert!(!up.primary_down);
 }
 
 #[test]
@@ -360,6 +448,58 @@ fn page_modules_claim_the_cursor_and_never_set_it() {
         "sets no cursor any more: remove it from NOT_PAGE_CURSOR.",
     );
     assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
+#[test]
+fn a_blocked_press_stays_blocked_through_every_release_pass() {
+    let ctx = Context::default();
+    let blocked = Rect::from_min_max(Pos2::ZERO, pos2(200.0, 20.0));
+    let point = pos2(80.0, 10.0);
+    let mut press = PagePointer::default();
+    let input = egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))),
+        events: vec![Event::PointerMoved(point), button(point, PointerButton::Secondary, true)],
+        ..Default::default()
+    };
+    let mut output = ctx.run_ui(input, |ui| {
+        let (_, resp) = ui.allocate_exact_size(PAGES.size(), Sense::click_and_drag());
+        press = PagePointer::read_excluding(ui, &resp, false, &[blocked]);
+    });
+    output.textures_delta.clear();
+    assert!(press.blocked_press);
+    assert!(press.pos.is_none());
+
+    let mut passes = Vec::new();
+    let input = egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))),
+        events: vec![button(point, PointerButton::Secondary, false)],
+        ..Default::default()
+    };
+    let mut output = ctx.run_ui(input, |ui| {
+        let (_, resp) = ui.allocate_exact_size(PAGES.size(), Sense::click_and_drag());
+        passes.push(PagePointer::read_excluding(ui, &resp, false, &[blocked]));
+        if ui.ctx().current_pass_index() == 0 {
+            ui.ctx().request_discard("test blocked ruler release");
+        }
+    });
+    output.textures_delta.clear();
+    assert_eq!(passes.len(), 2);
+    assert!(passes.iter().all(|pointer| pointer.blocked_press && pointer.pos.is_none()));
+
+    let page = pos2(80.0, 40.0);
+    let input = egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))),
+        events: vec![Event::PointerMoved(page)],
+        ..Default::default()
+    };
+    let mut after = PagePointer::default();
+    let mut output = ctx.run_ui(input, |ui| {
+        let (_, resp) = ui.allocate_exact_size(PAGES.size(), Sense::click_and_drag());
+        after = PagePointer::read_excluding(ui, &resp, false, &[blocked]);
+    });
+    output.textures_delta.clear();
+    assert!(!after.blocked_press);
+    assert_eq!(after.pos, Some(page));
 }
 
 /// Hit producers are called only by the central routing table, not again by an input handler.

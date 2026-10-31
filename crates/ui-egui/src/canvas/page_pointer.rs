@@ -43,31 +43,101 @@ pub(crate) struct PagePointer {
     pub primary_down: bool,
     /// Some button is down, wherever it was pressed.
     pub any_down: bool,
+    /// The current interaction began in excluded viewport chrome.
+    pub blocked_press: bool,
+    /// A pointer-button edge in excluded viewport chrome in this frame. Unlike `blocked_press`,
+    /// this is not retained into later frames, so hover or a past ruler click cannot suppress an
+    /// editor's ordinary focus-loss handling.
+    pub blocked_interaction: Option<Pos2>,
 }
 
 impl PagePointer {
-    /// The pointer for `resp`, the content widget that holds every page, allocated in `ui`, while
-    /// a dialog is open over the window or not (`modal`).
-    pub(crate) fn read(ui: &egui::Ui, resp: &egui::Response, modal: bool) -> Self {
-        let (at, origin, edges, primary_down, any_down) =
-            ui.input(|i| (i.pointer.interact_pos(), i.pointer.press_origin(), edges(&i.events), i.pointer.primary_down(), i.pointer.any_down()));
+    /// The current press origin when it did not begin in excluded viewport chrome.
+    ///
+    /// The Hand tool reads this before the page widget is laid out for the current frame, while
+    /// egui still identifies the previous frame's page widget as the drag owner. Keeping the raw
+    /// pointer read here preserves the single page-pointer boundary.
+    pub(crate) fn unblocked_press_origin(ui: &egui::Ui, blocked: &[Rect]) -> Option<Pos2> {
+        ui.input(|i| i.pointer.press_origin()).filter(|origin| !blocked.iter().any(|rect| rect.contains(*origin)))
+    }
+
+    /// The page pointer with gestures that begin in `blocked` retained as blocked through every
+    /// egui pass of their release frame. A new frame clears the retained block.
+    pub(crate) fn read_excluding(ui: &egui::Ui, resp: &egui::Response, modal: bool, blocked: &[Rect]) -> Self {
+        let (at, origin, edges, mut primary_down, mut any_down, raw_press_blocked, raw_primary_press_blocked, blocked_interaction) = ui.input(|i| {
+            (
+                i.pointer.interact_pos(),
+                i.pointer.press_origin(),
+                edges(&i.events),
+                i.pointer.primary_down(),
+                i.pointer.any_down(),
+                i.events.iter().any(|event| match event {
+                    Event::PointerButton { pos, pressed: true, .. } => blocked.iter().any(|rect| rect.contains(*pos)),
+                    _ => false,
+                }),
+                i.events.iter().any(|event| match event {
+                    Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, .. } => blocked.iter().any(|rect| rect.contains(*pos)),
+                    _ => false,
+                }),
+                i.events.iter().find_map(|event| match event {
+                    Event::PointerButton { pos, .. } if pos.is_finite() && blocked.iter().any(|rect| rect.contains(*pos)) => Some(*pos),
+                    _ => None,
+                }),
+            )
+        });
+        let blocked_press_key = resp.id.with("blocked-press");
+        let primary_press_blocked_key = resp.id.with("primary-press-blocked");
+        let clear_blocked_press_key = resp.id.with("clear-blocked-press");
+        if ui.ctx().current_pass_index() == 0 && ui.data(|data| data.get_temp::<bool>(clear_blocked_press_key)).unwrap_or(false) {
+            ui.data_mut(|data| {
+                data.remove_temp::<bool>(blocked_press_key);
+                data.remove_temp::<bool>(primary_press_blocked_key);
+                data.remove_temp::<bool>(clear_blocked_press_key);
+            });
+        }
+        let blocked_at = |point: Pos2| blocked.iter().any(|rect| rect.contains(point));
+        if raw_primary_press_blocked {
+            ui.data_mut(|data| data.insert_temp(primary_press_blocked_key, true));
+        }
+        let primary_press_blocked = raw_primary_press_blocked || ui.data(|data| data.get_temp::<bool>(primary_press_blocked_key)).unwrap_or(false);
+        let started_blocked = raw_press_blocked || origin.or_else(|| first_press(&edges)).is_some_and(blocked_at);
+        if started_blocked {
+            ui.data_mut(|data| data.insert_temp(blocked_press_key, true));
+        }
+        let blocked_press = started_blocked || ui.data(|data| data.get_temp::<bool>(blocked_press_key)).unwrap_or(false);
+        let released = edges.iter().any(|edge| matches!(edge, Edge::Release(_)));
+        // A later button press over viewport chrome must not revoke a primary drag that the pages
+        // already own. Keep the chrome press blocked for context-menu handling while delivering
+        // the held primary pointer and its release to the active page operation.
+        let preserve_primary = blocked_press
+            && !primary_press_blocked
+            && ((primary_down && resp.dragged_by(PointerButton::Primary)) || (released && resp.drag_stopped()));
+        let raw_any_down = any_down;
+        if blocked_press && !preserve_primary {
+            primary_down = false;
+            any_down = false;
+        }
         // egui's own answer to "do the pages hold a press?": from the press on until the frame
         // of its click, release or drag stop. A drag can outlive egui's press while the
         // pointer is outside the window. With a dialog open only a drag counts, up to the frame
         // it stops: on the frame one opens egui still gives the pages a press that lands under
         // it, and its click.
-        let held = resp.dragged() || resp.drag_stopped() || (!modal && resp.interact_pointer_pos().is_some());
+        let held =
+            preserve_primary || (!blocked_press && (resp.dragged() || resp.drag_stopped() || (!modal && resp.interact_pointer_pos().is_some())));
         // `contains_pointer` alone also holds a few points under the edge of an Area over the
         // pages (egui's interact radius), so the top layer there must be the pages' own. A
         // dialog covers them from the frame it opens, before egui knows its layer.
         let layer = ui.layer_id();
         let on_top =
             |p: &Pos2| !modal && !dragged_elsewhere(ui, resp) && resp.contains_pointer() && ui.ctx().layer_id_at(*p).is_none_or(|l| l == layer);
-        let pos = at.filter(|p| held || on_top(p));
-        if !held {
-            return Self { pos, origin: None, edges: Vec::new(), primary_down, any_down };
+        let pos = at.filter(|p| preserve_primary || (!blocked_press && (held || (on_top(p) && !blocked_at(*p)))));
+        if blocked_press && !raw_any_down {
+            ui.data_mut(|data| data.insert_temp(clear_blocked_press_key, true));
         }
-        Self { pos, origin: origin.or_else(|| first_press(&edges)), edges, primary_down, any_down }
+        if !held {
+            return Self { pos, origin: None, edges: Vec::new(), primary_down, any_down, blocked_press, blocked_interaction };
+        }
+        Self { pos, origin: origin.or_else(|| first_press(&edges)), edges, primary_down, any_down, blocked_press, blocked_interaction }
     }
 
     /// Where the pointer is, when it is inside `r`.
