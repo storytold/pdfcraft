@@ -391,6 +391,9 @@ cargo xtask demo-pdf                              # build the showcase PDF used 
 cargo xtask screenshots                           # regenerate every screenshot in this README
 ```
 
+A release build looks for the OCR models only where the packages install them, so for a
+`--release` run from this checkout, set `PDFCRAFT_MODELS=assets/models` (debug builds find them on their own).
+
 The interface language is chosen in **Menu → Edit → Preferences…** (Command-comma on macOS,
 Ctrl-comma elsewhere, also with no document open; Auto follows the system language;
 see [docs/localization.md](docs/localization.md)) and saved. Japanese covers commands,
