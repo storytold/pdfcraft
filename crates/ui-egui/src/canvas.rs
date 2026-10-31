@@ -862,6 +862,8 @@ struct PageEnv<'a> {
     modal: bool,
     navigation_enabled: bool,
     paper: Color32,
+    /// What a read-only widget is washed with, from the reading colours ([`read_only_wash`]).
+    read_only_wash: Color32,
     ppp: f32,
     precise_scroll: Vec2,
     prefs: &'a comments::CommentPrefs,
@@ -1686,6 +1688,7 @@ fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_
         info,
         prefs,
         preparing,
+        read_only_wash,
         redact_mark,
         table_preview,
         tool,
@@ -1737,6 +1740,9 @@ fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_
             }
         }
     } else {
+        // Read-only widgets look disabled, over their own appearance and under the page's
+        // form overlays; viewer chrome only, never written to the document, printed or exported.
+        paint_read_only_wash(painter, &xf, info, form.as_slice(), i, read_only_wash);
         crate::forms_ui::paint_page(painter, &xf, i, info, form, view, pointer);
     }
 
@@ -1809,6 +1815,40 @@ fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_
         // any tool; a link's or a comment's tip wins over any badge.
         if pointer.is_some_and(|p| mark.expand(2.0).contains(p)) {
             view.cursor.describe(Subject::SignatureBadge, badge.summary.to_string());
+        }
+    }
+}
+
+/// How much of a read-only widget's own drawing the wash covers: enough that its text and
+/// border fade, not so much that its value can't be read.
+const READ_ONLY_WASH_ALPHA: u8 = 0x90;
+
+/// What a read-only widget is washed with, so it reads as disabled on the paper it is shown
+/// on: the paper's colour, a little way toward the text's, partly opaque. Its drawing fades
+/// toward the paper (less contrast, as a disabled control has) and the box takes a faint tint
+/// of the text colour. `colours` is the reading colours' `(paper, text)`, `None` when they are
+/// off (black on white): a fixed grey would lighten a black page instead of dimming it.
+fn read_only_wash(colours: Option<([u8; 3], [u8; 3])>) -> Color32 {
+    let ([pr, pg, pb], [tr, tg, tb]) = colours.unwrap_or(([0xff; 3], [0x00; 3]));
+    // 1/8 of the way from the paper to the text; at most 255 * 8 / 8, so it fits a u8.
+    let mix = |paper: u8, text: u8| u8::try_from((u16::from(paper) * 7 + u16::from(text)) / 8).unwrap_or(u8::MAX);
+    Color32::from_rgba_unmultiplied(mix(pr, tr), mix(pg, tg), mix(pb, tb), READ_ONLY_WASH_ALPHA)
+}
+
+/// Washes every shown read-only widget on `page` with `wash` ([`read_only_wash`]), so the
+/// fields a form locks look disabled whether field highlighting is on or off. A widget is
+/// read-only when its field is (`/Ff` bit 1) or, for a radio group's button, on its own
+/// (`FormWidget::read_only`), as a click reads it (`forms_ui::page_input`). Round widgets get a
+/// round wash, as their highlight is round.
+fn paint_read_only_wash(painter: &egui::Painter, xf: &PageXform, info: &DocInfo, form: &[pdfcraft_engine::FormField], page: usize, wash: Color32) {
+    let locked = form.iter().flat_map(|f| f.widgets.iter().map(move |w| (f.read_only(), w)));
+    for widget in locked.filter(|(field, w)| w.page == Some(page) && !w.hidden && (*field || w.read_only)).map(|(_, w)| w) {
+        let rect = widget.rect;
+        let screen_rect = xf.user_rect(info, page, [rect[0] as f32, rect[1] as f32, rect[2] as f32, rect[3] as f32]);
+        if widget.round {
+            painter.circle_filled(screen_rect.center(), screen_rect.width().min(screen_rect.height()) / 2.0, wash);
+        } else {
+            painter.rect_filled(screen_rect, CornerRadius::same(1), wash);
         }
     }
 }
@@ -3009,10 +3049,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     let Some(doc) = app.session.get(app.views[index].id) else { return };
     let info = &doc.info;
-    let paper = app.session.reading_colors(app.views[index].id).and_then(|c| c.params).map_or(Color32::WHITE, |p| {
+    let reading = app.session.reading_colors(app.views[index].id).and_then(|c| c.params);
+    let paper = reading.map_or(Color32::WHITE, |p| {
         let [r, g, b] = p.background;
         Color32::from_rgb(r, g, b)
     });
+    let read_only_wash = read_only_wash(reading.map(|p| (p.background, p.text)));
     if info.pages.is_empty() {
         app.views[index].auto_scroll.cancel();
         ui.centered_and_justified(|ui| ui.label(tl!("This document has no pages.")));
@@ -3204,6 +3246,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         modal,
         navigation_enabled,
         paper,
+        read_only_wash,
         ppp,
         precise_scroll,
         prefs,
