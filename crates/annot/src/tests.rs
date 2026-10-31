@@ -2255,6 +2255,15 @@ fn pop_ups_open_close_and_move_and_are_reported() {
     assert!(matches!(set_popup(&mut doc, 0, note, Some([0.0, 0.0, 0.5, 0.5]), None, &meta("n1")), Err(AnnotError::Invalid(_))));
     assert!(matches!(set_popup(&mut doc, 0, note, Some([f64::NAN, 0.0, 10.0, 10.0]), None, &meta("n1")), Err(AnnotError::Invalid(_))));
     assert!(matches!(set_popup(&mut doc, 0, 99, None, Some(true), &meta("n1")), Err(AnnotError::NoSuchAnnotation { .. })));
+
+    // #2137 review: /Annots may list the note through an object that is only a reference to it.
+    // Its pop-up's /Parent names the note itself, so the pop-up is still the note's.
+    let p = page_ref(&doc, 0).unwrap();
+    let via = doc.add(Object::Ref(r));
+    let list: Vec<Object> = annots(&doc, p).into_iter().map(|o| if o.as_ref() == Some(r) { Object::Ref(via) } else { o }).collect();
+    set_annots(&mut doc, p, list).unwrap();
+    let listed = summaries(&doc).into_iter().find(|s| s.index == note).unwrap();
+    assert_eq!(listed.popup, Some(PopupInfo { rect: [150.0, 100.0, 290.0, 200.0], open: false }), "listed through {via:?}");
 }
 
 /// #2137 review: a pop-up that is not the mark's own is neither reported as its pop-up nor

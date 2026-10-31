@@ -60,7 +60,10 @@ pub struct PopupInfo {
 pub(crate) fn own_popup(doc: &Document, own: Option<ObjRef>, annot: &Dict) -> Option<ObjRef> {
     let pr = annot.reference(b"Popup")?;
     let is_own = doc.get(pr).as_dict().is_some_and(|pd| {
-        pd.name(b"Subtype") == Some(b"Popup") && pd.get(b"Parent").is_none_or(|parent| parent.as_ref().is_some_and(|parent| Some(parent) == own))
+        pd.name(b"Subtype") == Some(b"Popup")
+            && pd
+                .get(b"Parent")
+                .is_none_or(|parent| parent.as_ref().is_some_and(|parent| own.is_some_and(|own| final_ref(doc, parent) == final_ref(doc, own))))
     });
     is_own.then_some(pr)
 }
@@ -183,7 +186,7 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 fill_sign: is_fill_sign(doc, d),
                 no_rotate: drawn_upright(doc, d),
                 points,
-                popup: popup_info(doc, entry.as_ref(), d),
+                popup: popup_info(doc, entry.as_ref().map(|r| final_ref(doc, r)), d),
             });
         }
     }

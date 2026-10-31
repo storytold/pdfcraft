@@ -1875,6 +1875,13 @@ fn a_comments_pop_up_is_read_with_its_place_and_state() {
         let note = info.annotations.iter().find(|a| a.subtype == "Text").expect("the note");
         assert_eq!(note.popup.is_some(), own, "/Popup {target} {extra}");
     }
+
+    // #2137 review: /Annots may list the note through an object that is only a reference to
+    // it; its pop-up's /Parent names the note itself, and is still its own.
+    let text = String::from_utf8_lossy(bytes).replace("/Annots [4 0 R", "/Annots [8 0 R").replace("trailer", "8 0 obj 4 0 R endobj\ntrailer");
+    let info = inspect(Arc::new(text.into_bytes()), None).expect("opens");
+    let note = info.annotations.iter().find(|a| a.subtype == "Text").expect("the note");
+    assert_eq!(note.popup, Some(Popup { rect: [50.0, 160.0, 190.0, 280.0], open: true }), "listed through 8 0 R");
 }
 
 #[test]
