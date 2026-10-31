@@ -120,6 +120,264 @@ fn an_atomic_write_replaces_the_target_only_when_complete() {
 }
 
 #[cfg(target_os = "macos")]
+fn macos_acl(path: &Path) -> Vec<String> {
+    let result = std::process::Command::new("/bin/ls").arg("-le").arg(path).env("LC_ALL", "C").output().unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    String::from_utf8(result.stdout)
+        .unwrap()
+        .lines()
+        .filter(|line| line.trim_start().split_once(':').is_some_and(|(index, _)| !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit())))
+        .map(str::trim)
+        .map(str::to_owned)
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn add_macos_acl(path: &Path, rule: &str) {
+    let result = std::process::Command::new("/bin/chmod").args(["+a", rule]).arg(path).output().unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+}
+
+/// #2658: Save must keep the destination's access rules or refuse without publishing.
+#[cfg(target_os = "macos")]
+#[test]
+fn atomic_saves_preserve_macos_acl_or_leave_original_intact() {
+    for (index, form) in [StagingName::SuffixThenTag, StagingName::TagThenSuffix].into_iter().enumerate() {
+        let dir = test_dir(&format!("acl-target-{index}"));
+        let target = dir.join("out.pdf");
+        std::fs::write(&target, b"OLD").unwrap();
+        add_macos_acl(&target, "user:nobody deny read");
+        let before = macos_acl(&target);
+        assert!(!before.is_empty(), "the original file has an explicit ACL");
+        let result = write_atomically(&target, b"NEW", form);
+        assert_eq!(macos_acl(&target), before, "an atomic save may not discard destination access rules");
+        assert!(result.is_ok(), "an explicit destination ACL is preserved: {result:?}");
+        assert_eq!(std::fs::read(&target).unwrap(), if result.is_ok() { b"NEW" } else { b"OLD" });
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "no staging file remains");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// A staging file can inherit broader access than an existing private destination.
+#[cfg(target_os = "macos")]
+#[test]
+fn atomic_saves_do_not_add_inherited_macos_acl_to_a_private_target() {
+    use std::os::unix::fs::PermissionsExt as _;
+    for (index, form) in [StagingName::SuffixThenTag, StagingName::TagThenSuffix].into_iter().enumerate() {
+        let dir = test_dir(&format!("acl-inherited-{index}"));
+        let target = dir.join("out.pdf");
+        std::fs::write(&target, b"OLD").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(macos_acl(&target).is_empty(), "the original private file has no ACL");
+        add_macos_acl(&dir, "user:nobody allow read,file_inherit");
+        let flushed = std::cell::Cell::new(false);
+        let result = write_atomically_with(&target, b"NEW", form, [7], |_| {
+            flushed.set(true);
+            Ok(())
+        });
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(!flushed.get(), "a refused ACL must not reach the flush or publication");
+        assert!(macos_acl(&target).is_empty(), "an atomic save may not inherit broader access than the original file");
+        assert_eq!(std::fs::read(&target).unwrap(), b"OLD");
+        assert_eq!(std::fs::metadata(&target).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "no staging file remains");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_acl_order_and_inherited_flags_survive_before_flush() {
+    use std::os::unix::fs::PermissionsExt as _;
+    for (index, form) in [StagingName::SuffixThenTag, StagingName::TagThenSuffix].into_iter().enumerate() {
+        let dir = test_dir(&format!("acl-order-{index}"));
+        let target = dir.join("out.pdf");
+        std::fs::write(&target, b"OLD").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640)).unwrap();
+        add_macos_acl(&target, "user:nobody deny read");
+        let inherited = std::process::Command::new("/bin/chmod").args(["+ai", "group:everyone allow readattr"]).arg(&target).output().unwrap();
+        assert!(inherited.status.success(), "{}", String::from_utf8_lossy(&inherited.stderr));
+        let before = macos_acl(&target);
+        assert_eq!(before.len(), 2);
+        assert!(before[0].contains("deny read"));
+        assert!(before[1].contains("inherited allow readattr"));
+        write_atomically_with(&target, b"NEW", form, [9], |file| {
+            use std::os::fd::AsFd as _;
+            let entries = exacl::getfacl(file.as_fd(), Some(exacl::AclOption::NATIVE_ID)).unwrap();
+            assert_eq!(entries.len(), 2);
+            assert!(entries[1].flags.contains(exacl::Flag::INHERITED));
+            assert_eq!(file.metadata()?.permissions().mode() & 0o777, 0o640);
+            file.sync_all()
+        })
+        .unwrap();
+        assert_eq!(macos_acl(&target), before, "ordering and inherited entry flags are retained");
+        assert_eq!(std::fs::read(&target).unwrap(), b"NEW");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_replacement_starts_owner_only_and_refuses_inherited_acl_before_payload() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = test_dir("acl-before-payload");
+    let target = dir.join("out.pdf");
+    std::fs::write(&target, b"OLD").unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let source = std::fs::File::open(&target).unwrap();
+    let keep = source.metadata().unwrap();
+    let (tmp, staged) = create_staging_as(&dir, "out.pdf", StagingName::SuffixThenTag, [1], Some(&keep)).unwrap();
+    assert_eq!(staged.metadata().unwrap().permissions().mode() & 0o777, 0o600, "no broadening before access checks");
+    drop(staged);
+    std::fs::remove_file(tmp).unwrap();
+    add_macos_acl(&dir, "user:nobody allow read,file_inherit");
+    let (tmp, staged) = create_staging_as(&dir, "out.pdf", StagingName::SuffixThenTag, [2], Some(&keep)).unwrap();
+    assert!(!macos_acl(&tmp).is_empty());
+    assert_eq!(prepare_macos_access(&staged, Some(&source), Some(&keep)).unwrap_err().kind(), std::io::ErrorKind::PermissionDenied);
+    assert_eq!(staged.metadata().unwrap().len(), 0, "the rejected inherited ACL received no payload");
+    assert_eq!(std::fs::read(&target).unwrap(), b"OLD");
+    drop(staged);
+    std::fs::remove_file(tmp).unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_new_macos_destination_retains_the_chosen_folders_acl_inheritance() {
+    let dir = test_dir("acl-new-path");
+    add_macos_acl(&dir, "user:nobody allow read,file_inherit");
+    let target = dir.join("copy.pdf");
+    write_atomically(&target, b"NEW", StagingName::SuffixThenTag).unwrap();
+    assert_eq!(std::fs::read(&target).unwrap(), b"NEW");
+    assert!(macos_acl(&target).iter().any(|entry| entry.contains("inherited allow read")));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn an_observed_macos_destination_change_is_not_overwritten() {
+    for (index, form) in [StagingName::SuffixThenTag, StagingName::TagThenSuffix].into_iter().enumerate() {
+        let dir = test_dir(&format!("acl-changed-{index}"));
+        let target = dir.join("out.pdf");
+        std::fs::write(&target, b"OLD").unwrap();
+        add_macos_acl(&target, "user:nobody deny read");
+        let before = macos_acl(&target);
+        let result = write_atomically_with(&target, b"NEW", form, [1], |_| std::fs::write(&target, b"EXTERNAL CHANGE"));
+        assert!(result.unwrap_err().to_string().contains("destination changed"));
+        assert_eq!(std::fs::read(&target).unwrap(), b"EXTERNAL CHANGE");
+        assert_eq!(macos_acl(&target), before);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_macos_regular_target_requires_its_captured_descriptor() {
+    let dir = test_dir("acl-capture-change");
+    let target = dir.join("out.pdf");
+    assert!(macos_target_metadata(&target, None).unwrap().is_none());
+    std::fs::write(&target, b"APPEARED").unwrap();
+    add_macos_acl(&target, "user:nobody deny read");
+    assert!(macos_target_metadata(&target, None).unwrap_err().to_string().contains("destination changed"));
+    assert_eq!(std::fs::read(&target).unwrap(), b"APPEARED");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_macos_destination_that_appears_before_publication_is_kept() {
+    let dir = test_dir("acl-appeared");
+    let target = dir.join("out.pdf");
+    let result = write_atomically_with(&target, b"NEW", StagingName::TagThenSuffix, [1], |_| {
+        std::fs::write(&target, b"APPEARED")?;
+        add_macos_acl(&target, "user:nobody deny read");
+        Ok(())
+    });
+    assert!(result.unwrap_err().to_string().contains("destination appeared"));
+    assert_eq!(std::fs::read(&target).unwrap(), b"APPEARED");
+    assert!(!macos_acl(&target).is_empty());
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_failed_macos_flush_keeps_the_original_acl_and_cleans_staging() {
+    let dir = test_dir("acl-flush-failure");
+    let target = dir.join("out.pdf");
+    std::fs::write(&target, b"OLD").unwrap();
+    add_macos_acl(&target, "user:nobody deny read");
+    let before = macos_acl(&target);
+    let result = write_atomically_with(&target, b"NEW", StagingName::TagThenSuffix, [1], |_| Err(std::io::Error::other("refused flush")));
+    assert!(result.unwrap_err().to_string().contains("refused flush"));
+    assert_eq!(std::fs::read(&target).unwrap(), b"OLD");
+    assert_eq!(macos_acl(&target), before);
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_macos_delete_denial_refuses_before_payload_without_leaving_staging() {
+    let user = std::process::Command::new("/usr/bin/id").arg("-un").output().unwrap();
+    assert!(user.status.success());
+    let user = String::from_utf8(user.stdout).unwrap();
+    for (index, form) in [StagingName::SuffixThenTag, StagingName::TagThenSuffix].into_iter().enumerate() {
+        let dir = test_dir(&format!("acl-deny-delete-{index}"));
+        let target = dir.join("out.pdf");
+        std::fs::write(&target, b"OLD").unwrap();
+        add_macos_acl(&target, &format!("user:{} deny delete", user.trim()));
+        let before = macos_acl(&target);
+        let flushed = std::cell::Cell::new(false);
+        let result = write_atomically_with(&target, b"PRIVATE NEW PDF", form, [1], |_| {
+            flushed.set(true);
+            Ok(())
+        });
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"OLD");
+        assert_eq!(macos_acl(&target), before);
+        let leftovers: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|entry| entry.unwrap().path()).filter(|path| *path != target).collect();
+        // Clean deliberately undeletable private test fixtures even on a regression failure.
+        for path in leftovers.iter().chain(std::iter::once(&target)) {
+            assert!(std::process::Command::new("/bin/chmod").arg("-N").arg(path).status().unwrap().success());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(leftovers.is_empty(), "a delete-denying ACL may not leave staged PDF bytes");
+        assert!(!flushed.get(), "delete denial is refused before payload and flush");
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn an_inherited_macos_delete_denial_never_receives_pdf_payload() {
+    let dir = test_dir("acl-inherited-delete");
+    let target = dir.join("out.pdf");
+    std::fs::write(&target, b"OLD").unwrap();
+    let user = std::process::Command::new("/usr/bin/id").arg("-un").output().unwrap();
+    assert!(user.status.success());
+    add_macos_acl(&dir, &format!("user:{} deny delete,file_inherit,only_inherit", String::from_utf8(user.stdout).unwrap().trim()));
+    let flushed = std::cell::Cell::new(false);
+    let result = write_atomically_with(&target, b"PRIVATE NEW PDF", StagingName::SuffixThenTag, [1], |_| {
+        flushed.set(true);
+        Ok(())
+    });
+    let original = std::fs::read(&target).unwrap();
+    let paths: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|entry| entry.unwrap().path()).collect();
+    let staged_sizes: Vec<_> = paths.iter().filter(|path| **path != target).map(|path| path.metadata().unwrap().len()).collect();
+    // Inherited delete denials can prevent unlink even of an empty staging file.
+    // Remove only the deliberately applied private-fixture policy after observing it.
+    for path in paths.iter().chain(std::iter::once(&dir)) {
+        assert!(std::process::Command::new("/bin/chmod").arg("-N").arg(path).status().unwrap().success());
+    }
+    let _ = std::fs::remove_dir_all(dir);
+    assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::PermissionDenied);
+    assert_eq!(original, b"OLD");
+    assert!(!flushed.get());
+    assert!(staged_sizes.iter().all(|size| *size == 0), "no PDF payload enters an inherited delete-denying file");
+}
+
+#[cfg(target_os = "macos")]
 #[test]
 fn atomic_saves_keep_finder_tags_and_binary_extended_attributes() {
     use rustix::fs::{XattrFlags, fgetxattr, setxattr};

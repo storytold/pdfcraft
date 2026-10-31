@@ -2056,6 +2056,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "exacl"
+version = "0.13.0"
+dependencies = [
+ "bitflags 2.13.2",
+ "log",
+ "scopeguard",
+ "uuid",
+]
+
+[[package]]
 name = "fast-float2"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4543,6 +4553,7 @@ name = "pdfcraft-platform"
 version = "0.16.1"
 dependencies = [
  "async-channel",
+ "exacl",
  "futures-lite",
  "rustix 1.1.5",
  "zbus",
