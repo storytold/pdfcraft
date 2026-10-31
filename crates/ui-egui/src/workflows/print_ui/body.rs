@@ -102,6 +102,7 @@ pub(crate) fn body(
     egui::ScrollArea::vertical()
         .id_salt("print-body-scroll")
         .auto_shrink([false, true])
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
         .max_height(max_h)
         .min_scrolled_height(max_h)
         .show(ui, |ui| {
