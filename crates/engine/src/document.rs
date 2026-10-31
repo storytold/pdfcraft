@@ -3,7 +3,7 @@
 use std::sync::{Arc, OnceLock};
 
 use pdfcraft_cos::{SaveOptions, write_incremental};
-use pdfcraft_render::{DocInfo, RenderConfig, RenderPool};
+use pdfcraft_render::{DocInfo, ReadingColors, RenderConfig, RenderPool};
 
 use crate::history::Editor;
 use crate::{
