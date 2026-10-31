@@ -462,7 +462,8 @@ logs and crash recovery in a `PdfCraftData` folder next to `pdfcraft.exe`, so no
 The MSI installs for your account only by default, without administrator privileges. Choose
 "Everyone on this computer" on its first page, or pass `ALLUSERS=1` from an elevated terminal, to install
 for all users. It adds "Edit with PdfCraft"
-to the right-click menu of PDF files and "Create PDF with PdfCraft…" to the right-click menu of
+and "Combine files in PdfCraft" (select several PDFs: they land in the Combine files tab of the
+running PdfCraft) to the right-click menu of PDF files and "Create PDF with PdfCraft…" to the right-click menu of
 images (.png .jpg .jpeg .tif .tiff .gif .bmp .jp2 .j2k .jpx) in File Explorer (on Windows 11, under
 "Show more options"), without changing which app opens them by default. For unattended deployment
 without a desktop shortcut (add `ALLUSERS=1`, from an elevated terminal, for an all-users install):
@@ -474,7 +475,7 @@ msiexec /i "pdfcraft-<ver>-windows-x64.msi" /qn /norestart INSTALLDESKTOPSHORTCU
 | Property | `=0` leaves out |
 |---|---|
 | `INSTALLDESKTOPSHORTCUT` | the desktop shortcut |
-| `INSTALLPDFCONTEXTMENU` | "Edit with PdfCraft" on PDF files |
+| `INSTALLPDFCONTEXTMENU` | "Edit with PdfCraft" and "Combine files in PdfCraft" on PDF files |
 | `INSTALLIMAGECONTEXTMENU` | "Create PDF with PdfCraft…" on images |
 
 All three are on for a first install. An upgrade keeps what the installed version has: a shortcut
