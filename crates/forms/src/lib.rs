@@ -229,6 +229,30 @@ impl Field {
         }
     }
 
+    /// Whether widget `i` of a check box or radio group is on: its `/AS` is its on state. Widgets
+    /// sharing an on state tell themselves apart only by `/AS`, which ISO 32000-2 §12.7.5.2.3 and
+    /// §12.7.5.2.4 make the deciding entry where it and `/V` differ. A widget without `/AS`
+    /// follows the field's value.
+    pub fn widget_on(&self, i: usize) -> bool {
+        let Some(w) = self.widgets.get(i) else { return false };
+        let Some(on) = w.on_state.as_deref() else { return false };
+        match w.state.as_deref() {
+            Some(s) => s == on,
+            None => self.value.first().map(String::as_str) == Some(on),
+        }
+    }
+
+    /// The value that gives this check box the stored value `value` (`/V`, `/DV`, imported or
+    /// script data): the on state it names (or whose `/Opt` export it is), so that of kids with
+    /// different on states the right one turns on (ISO 32000-2 §12.7.5.2.3, Table 230); checked
+    /// for any other value but Off, unchecked for none.
+    pub fn check_box_value(&self, value: Option<&str>) -> FieldValue {
+        match value.filter(|v| !v.is_empty() && *v != "Off") {
+            Some(v) => self.state_for(v).map_or(FieldValue::Check(true), |s| FieldValue::Text(s.to_owned())),
+            None => FieldValue::Check(false),
+        }
+    }
+
     /// The value as one string: text, the state name, or the selected display texts.
     pub fn display_value(&self) -> String {
         match self.kind {

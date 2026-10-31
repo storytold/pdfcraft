@@ -114,7 +114,7 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
         {
             let value = match f.kind {
                 FieldKind::Text => FieldValue::Text(v.first().cloned().unwrap_or_default()),
-                FieldKind::CheckBox => FieldValue::Check(!v.is_empty()),
+                FieldKind::CheckBox => f.check_box_value(v.first().map(String::as_str)),
                 FieldKind::Radio => FieldValue::Radio(v.first().cloned()),
                 FieldKind::Combo | FieldKind::List => FieldValue::Choice(v.clone()),
                 _ => continue,

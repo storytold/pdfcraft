@@ -222,24 +222,31 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
             redraw(doc, f, std::slice::from_ref(t), scripts)
         }
         (FieldKind::CheckBox, v) => {
-            let state = f.widgets.iter().find_map(|w| w.on_state.clone()).unwrap_or_else(|| "Yes".into());
-            let on = match v {
-                FieldValue::Check(on) => *on,
-                // The on-state name or a yes/no word also work (agents, FDF-style data).
+            // The kids of one check box field can have different on states, and the field's
+            // value is the on state of the kid that is on (ISO 32000-2 §12.7.5.2.3, Table 230).
+            // "Checked" keeps the state that is on, else takes the first kid's.
+            let first = f.widgets.iter().find_map(|w| w.on_state.clone()).unwrap_or_else(|| "Yes".into());
+            let checked = || (0..f.widgets.len()).find(|&i| f.widget_on(i)).and_then(|i| f.widgets.get(i)?.on_state.clone()).unwrap_or(first.clone());
+            let state = match v {
+                FieldValue::Check(on) => on.then(checked),
+                // An on-state name (or `/Opt` export value) turns on the kids that have it; a
+                // yes/no word also works (agents, FDF-style data).
                 FieldValue::Text(t) | FieldValue::Radio(Some(t)) => {
                     let t = t.trim();
-                    if t == state || f.state_for(t).is_some() || ["yes", "true", "on", "1", "x", "checked"].contains(&t.to_lowercase().as_str()) {
-                        true
+                    if let Some(s) = f.state_for(t) {
+                        Some(s.to_owned())
+                    } else if t == first || ["yes", "true", "on", "1", "x", "checked"].contains(&t.to_lowercase().as_str()) {
+                        Some(checked())
                     } else if t.is_empty() || ["no", "false", "off", "0", "unchecked"].contains(&t.to_lowercase().as_str()) {
-                        false
+                        None
                     } else {
                         return invalid(format!("{:?} is a check box: use true or false", f.name));
                     }
                 }
-                FieldValue::Radio(None) => false,
+                FieldValue::Radio(None) => None,
                 FieldValue::Choice(_) => return invalid(format!("{:?} is a check box: use true or false", f.name)),
             };
-            set_states(doc, f, on.then_some(state.as_str()))
+            set_states(doc, f, state.as_deref())
         }
         (FieldKind::Radio, v) => {
             let choice = match v {
@@ -643,7 +650,7 @@ pub fn reset(doc: &mut Document, names: Option<&[String]>) -> Result<usize, Form
         }
         let v = match f.kind {
             FieldKind::Text => FieldValue::Text(f.default.first().cloned().unwrap_or_default()),
-            FieldKind::CheckBox => FieldValue::Check(!f.default.is_empty()),
+            FieldKind::CheckBox => f.check_box_value(f.default.first().map(String::as_str)),
             FieldKind::Radio => FieldValue::Radio(f.default.first().cloned()),
             FieldKind::Combo | FieldKind::List => FieldValue::Choice(f.default.clone()),
             FieldKind::PushButton | FieldKind::Signature => continue,

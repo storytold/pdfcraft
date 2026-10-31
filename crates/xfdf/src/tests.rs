@@ -2099,3 +2099,45 @@ fn an_fdf_comment_popup_without_a_rect_is_dropped() {
     let popups = page.iter().filter(|a| dst.resolve(a).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Popup".as_slice()))).count();
     assert_eq!(popups, 0);
 }
+
+/// A check box field whose two kids have the on states `A` and `B`.
+fn check_box_kids() -> Document {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>",
+        "<< /Fields [5 0 R] >>",
+        "<< /FT /Btn /T (pair) /V /Off /Kids [6 0 R 7 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [50 700 64 714] /P 3 0 R /AP << /N << /A 8 0 R /Off 8 0 R >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [80 700 94 714] /P 3 0 R /AP << /N << /B 8 0 R /Off 8 0 R >> >> >>",
+        "<< /Length 0 >>\nstream\n\nendstream",
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
+/// Imported data that names a check box kid's on state ticks that kid (ISO 32000-2 §12.7.5.2.3:
+/// the field's value is the on state of the kid that is on), not the first kid.
+#[test]
+fn imported_values_tick_the_check_box_kid_they_name() {
+    let mut src = check_box_kids();
+    set_value(&mut src, "pair", &pdfcraft_forms::FieldValue::Text("B".into())).unwrap();
+    let xfdf = export_xfdf(&src, false, true, "form.pdf");
+    let mut dst = check_box_kids();
+    import(&mut dst, xfdf.as_bytes()).unwrap();
+    let all = fields(&dst);
+    let pair = all.iter().find(|f| f.name == "pair").unwrap();
+    assert_eq!(pair.value, ["B"], "{xfdf}");
+    assert_eq!((pair.widget_on(0), pair.widget_on(1)), (false, true));
+}

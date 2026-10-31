@@ -2630,6 +2630,80 @@ fn form_fill_warns_when_a_value_does_not_fit() {
     assert!(r.get("warnings").is_none(), "{r}");
 }
 
+/// `form_fill` ticks one kid of a check box whose kids have different on states by naming it
+/// (ISO 32000-2 §12.7.5.2.3, Table 230), and `form_fields` lists the names and the ticked one.
+#[test]
+fn form_fill_ticks_one_kid_of_a_check_box_by_its_on_state() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>",
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>",
+        "<< /FT /Btn /T (pair) /V /Off /Kids [6 0 R 7 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [10 250 26 266] /P 3 0 R /AP << /N << /A 8 0 R /Off 8 0 R >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [40 250 56 266] /P 3 0 R /AP << /N << /B 8 0 R /Off 8 0 R >> >> >>",
+        "<< /Length 0 >>\nstream\n\nendstream",
+    ];
+    let dir = workdir("check-box-kids");
+    std::fs::write(dir.join("form.pdf"), pdf_of(&objs)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    assert_eq!((&before["fields"][0]["options"], &before["fields"][0]["checked"]), (&json!(["A", "B"]), &Value::Null), "{before}");
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "pair": "A" } }));
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "pair": "B" } }));
+    let after = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    assert_eq!((&after["fields"][0]["value"], &after["fields"][0]["checked"]), (&json!(true), &json!("B")), "{after}");
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "pair": false } }));
+    assert_eq!(ok(&mut a, "form_fields", json!({ "doc": doc }))["fields"][0]["checked"], Value::Null);
+}
+
+/// `form_fields` on a check box's kids: one option per distinct on state, named by its `/Opt`
+/// export unless two states share one, and `checked` follows the kid whose `/AS` is on, which
+/// ISO 32000-2 §12.7.5.2.3 makes decide where `/AS` and `/V` differ.
+#[test]
+fn form_fields_lists_a_check_box_by_on_state_and_reports_the_kid_that_is_on() {
+    // Each kid is (on state, /AS).
+    let listed = |name: &str, field: &str, (sa, asa): (&str, &str), (sb, asb): (&str, &str)| {
+        let kid = |on: &str, state: &str, x: u32| {
+            format!(
+                "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /{state} /Rect [{x} 250 {} 266] /P 3 0 R /AP << /N << /{on} 8 0 R /Off 8 0 R >> >> >>",
+                x + 16
+            )
+        };
+        let (wa, wb) = (kid(sa, asa, 10), kid(sb, asb, 40));
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 300] >>",
+            "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>",
+            "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>",
+            field,
+            &wa,
+            &wb,
+            "<< /Length 0 >>\nstream\n\nendstream",
+        ];
+        let dir = workdir(name);
+        std::fs::write(dir.join("form.pdf"), pdf_of(&objs)).unwrap();
+        let mut a = auto(&dir);
+        let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+        let r = ok(&mut a, "form_fields", json!({ "doc": doc }));
+        (r["fields"][0]["options"].clone(), r["fields"][0]["checked"].clone())
+    };
+    // Kids sharing the on state Yes tick together, whatever their exports: not two options.
+    let shared =
+        listed("check-box-shared-state", "<< /FT /Btn /T (pair) /V /Off /Opt [(x) (y)] /Kids [6 0 R 7 0 R] >>", ("Yes", "Off"), ("Yes", "Off"));
+    assert_eq!(shared, (Value::Null, Value::Null));
+    // /V names B, but A's /AS is on: A is the one ticked.
+    let differ = listed("check-box-as-wins", "<< /FT /Btn /T (pair) /V /B /Kids [6 0 R 7 0 R] >>", ("A", "A"), ("B", "Off"));
+    assert_eq!(differ, (json!(["A", "B"]), json!("A")));
+    // Two on states with one export: the states name the options.
+    let same = listed("check-box-same-export", "<< /FT /Btn /T (pair) /V /B /Opt [(x) (x)] /Kids [6 0 R 7 0 R] >>", ("A", "Off"), ("B", "B"));
+    assert_eq!(same, (json!(["A", "B"]), json!("B")));
+    // B's export is A's on state, so naming it would tick A: the states name the options.
+    let crossed = listed("check-box-crossed-export", "<< /FT /Btn /T (pair) /V /B /Opt [(x) (A)] /Kids [6 0 R 7 0 R] >>", ("A", "Off"), ("B", "B"));
+    assert_eq!(crossed, (json!(["A", "B"]), json!("B")));
+}
+
 /// A form whose fields are only page widgets (the `/Fields` list is empty) still lists, fills and
 /// resets through the tools, and the leniency shows up as a repair note.
 #[test]
