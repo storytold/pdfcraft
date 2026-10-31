@@ -223,6 +223,16 @@ kind = "translation"
 usage = "Persian UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
+path = "crates/ui-egui/src/i18n/he.tsv"
+title = "Hebrew interface translation catalog"
+author = "PdfCraft contributors"
+source = "Contributor-original: clean-room translations of PdfCraft's English UI labels, no proprietary localisation resources; initial Hebrew catalog is AI-assisted from English and has not been separately native-reviewed"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Hebrew UI strings, compiled in by crates/ui-egui/src/i18n.rs"
+
+[[asset]]
 path = "crates/ui-egui/src/i18n/tr.tsv"
 title = "Turkish interface translation catalog"
 author = "PdfCraft contributors"
