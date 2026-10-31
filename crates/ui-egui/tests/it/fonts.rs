@@ -9,6 +9,7 @@ const CHINESE: &str = "简体中文欢迎";
 const ARABIC: &str = "واحد اثنين";
 const TELUGU: &str = "తెలుగు ఫైల్";
 const HEBREW: &str = "ייפוי כח.pdf";
+const THAI: &str = "สวัสดีภาษาไทย น้ำ ผู้ใช้ กิ่ ๑๒๓";
 const DEVANAGARI: &str = "हिंदी पाठ सम्पादन";
 
 fn families() -> Vec<FontId> {
@@ -277,6 +278,34 @@ fn system_fallback_covers_hebrew() {
         assert!(fonts.has_glyphs(&id, HEBREW), "{id:?} lacks {HEBREW}");
     }
     assert!(layout_widths(&mut fonts, HEBREW).iter().all(|w| w.is_finite() && *w > 0.0));
+}
+
+/// On a machine with an installed Thai font, the installed definitions include it and
+/// Thai text, such as a file name or input, has glyphs instead of boxes.
+#[test]
+fn system_fallback_covers_thai() {
+    assert!(!theme::font_definitions().font_data.contains_key(theme::SYSTEM_THAI_FALLBACK));
+    let defs = theme::installed_font_definitions(theme::CjkPreference::Default);
+    let off = std::env::var_os("PDFCRAFT_SYSTEM_FONTS").is_some_and(|v| v == "0");
+    if !defs.font_data.contains_key(theme::SYSTEM_THAI_FALLBACK) && off {
+        eprintln!("skipping system_fallback_covers_thai: PDFCRAFT_SYSTEM_FONTS=0");
+        assert!(defs.families.values().all(|stack| !stack.iter().any(|n| n == theme::SYSTEM_THAI_FALLBACK)));
+        return;
+    }
+    // Windows (Leelawadee UI) and macOS (Thonburi) always have a Thai face, so only elsewhere
+    // may one be missing.
+    if !defs.font_data.contains_key(theme::SYSTEM_THAI_FALLBACK) && !cfg!(any(windows, target_os = "macos")) {
+        eprintln!("skipping system_fallback_covers_thai: no installed Thai fallback font");
+        return;
+    }
+    for (family, stack) in &defs.families {
+        assert_eq!(stack.iter().filter(|n| *n == theme::SYSTEM_THAI_FALLBACK).count(), 1, "{family:?}: {stack:?}");
+    }
+    let mut fonts = Fonts::new(TextOptions::default(), defs);
+    for id in families() {
+        assert!(fonts.has_glyphs(&id, THAI), "{id:?} lacks {THAI}");
+    }
+    assert!(layout_widths(&mut fonts, THAI).iter().all(|w| w.is_finite() && *w > 0.0));
 }
 
 /// The Han characters of a catalog's translations.
