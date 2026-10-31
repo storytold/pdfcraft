@@ -52,6 +52,12 @@ impl Op {
     pub fn name(&self, i: usize) -> Option<&[u8]> {
         self.operands.get(i).and_then(Object::as_name)
     }
+
+    /// The last operand as a name: the one `Do` and the other one-operand operators act on, since
+    /// the renderer takes operands from the end and ignores any surplus before them.
+    pub fn last_name(&self) -> Option<&[u8]> {
+        self.operands.last().and_then(Object::as_name)
+    }
 }
 
 /// A parsed stream.

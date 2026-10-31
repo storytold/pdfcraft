@@ -8,6 +8,8 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+#[cfg(test)]
+mod cjk_scripts;
 mod craft;
 pub mod embedding;
 mod encodings;

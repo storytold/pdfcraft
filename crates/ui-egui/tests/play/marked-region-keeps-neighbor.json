@@ -1,0 +1,15 @@
+{
+  "name": "marked region keeps neighbor",
+  "content": "/H1 << /MCID 0 >> BDC BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET EMC /P << /MCID 1 >> BDC BT /F1 12 Tf 14.4 TL 1 0 0 1 72 656.8 Tm (Neighbor stays.) Tj ET EMC",
+  "steps": [
+    {"command": {"id": "edit.edit_text"}},
+    {"click_page": {"x": 120, "y": 704}},
+    {"type": {"text": "One.\nAlpha next row."}},
+    {"key": {"key": "Enter", "modifiers": ["command"]}},
+    {"expect_together": {"parts": ["One.", "Alpha next row."]}},
+    {"expect_apart": {"text": "Neighbor stays.", "not": "One."}},
+    {"click_page": {"x": 140, "y": 660}},
+    {"expect_editor": {"contains": "Neighbor stays.", "text": "Neighbor stays."}},
+    {"shot": {"name": "marked-region-keeps-neighbor"}}
+  ]
+}
