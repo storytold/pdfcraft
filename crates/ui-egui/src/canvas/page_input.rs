@@ -2,11 +2,12 @@
 //! router, the text layer, and what is drawn over the page after its text.
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke, vec2};
-use pdfcraft_render::{DocInfo, LinkTarget, PageText};
+use pdfcraft_render::{DocInfo, PageText};
 
 use super::{DocView, PageEnv, PageFrame, PageSlot, PageXform, Selection, Span, cached_edit_images, click_unit, signature_badges};
 use crate::page_cursor::{Layer, Subject};
 use crate::page_pointer::PagePointer;
+use crate::page_router::{Owner, top};
 use crate::{QuickTool, comments, icons};
 
 /// What the page's tools did with the pointer this frame.
@@ -88,6 +89,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         field_tool,
         prepare_allowed,
         added,
+        doc_links,
         lines: &lines,
         images: &images,
         clip: ui.clip_rect(),
@@ -96,6 +98,8 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         let at = hits.at(view, o);
         view.router.press(i, at, tool);
     }
+    // A right-click goes to what a press there would go to: the top hit under the pointer.
+    let context = pointer.filter(|p| resp.secondary_clicked() && xf.rect.contains(*p)).and_then(|p| top(hits.at(view, p), tool)).map(|h| h.owner);
     if let QuickTool::Measure(measure_tool) = tool {
         crate::measure_ui::page_input(ui, resp, doc, view, &pcx, measure_tool, units);
     }
@@ -270,14 +274,13 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
             crate::content_ui::sync_image_selection(view, i, &images, added);
         }
     }
-    let on_link = tool == QuickTool::Link && can_modify && crate::link_ui::page_input(cx, doc_links, view);
+    let (link_owner, link_context) = (link_of(view.router.owner(i)), link_of(context));
+    let on_link = tool == QuickTool::Link && can_modify && crate::link_ui::page_input(cx, link_owner, link_context, view);
     if tool == QuickTool::Select
-        && resp.secondary_clicked()
         && can_modify
-        && let Some(p) = pointer.filter(|p| xf.rect.contains(*p))
-        && let Some(l) = doc.links().iter().find(|l| l.page == i && crate::link_ui::screen_rect(&xf, info, i, l.rect).expand(2.0).contains(p))
+        && let Some(index) = link_context
     {
-        view.links.context = Some((i, l.index));
+        view.links.context = Some((i, index));
     }
     let consumed = on_objects || on_edit_text || on_link || on_content || boxing || on_field || comments::page_input(ui, resp, &pcx, view);
     // The cursor and the tip from what lies under the pointer, after the tools claimed theirs (the
@@ -290,6 +293,14 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         }
     }
     PageInput { consumed, area_tool }
+}
+
+/// The link `owner` is, by its `/Annots` index.
+fn link_of(owner: Option<Owner>) -> Option<usize> {
+    match owner {
+        Some(Owner::Link { index }) => Some(index),
+        _ => None,
+    }
 }
 
 /// Edit text's paragraphs and pictures on page `i`, kept while the document is unchanged.
@@ -328,6 +339,8 @@ struct PageHits<'a> {
     /// Prepare may draw and move fields (not while a table is being set up).
     prepare_allowed: bool,
     added: &'a [pdfcraft_engine::Added],
+    /// The document's links, as the engine lists them (the Link tool edits every one).
+    doc_links: &'a [pdfcraft_engine::LinkItem],
     lines: &'a [pdfcraft_engine::TextBlock],
     images: &'a [pdfcraft_engine::PageImage],
     /// The pages' visible area (the picture's rotate knob stays inside it).
@@ -355,6 +368,7 @@ impl PageHits<'_> {
             field_tool,
             prepare_allowed,
             added,
+            doc_links,
             lines,
             images,
             clip,
@@ -400,10 +414,9 @@ impl PageHits<'_> {
         // together.
         let picks_up = matches!(tool, QuickTool::Select | QuickTool::AddText | QuickTool::EditText);
         let added = (editing_content && can_modify && picks_up).then(|| crate::content_ui::hit(xf, info, page, added, view, p)).flatten();
-        [link_hit(info, xf, page, p), comments::hit(pcx, view, p), pictures, paragraphs, added, objects, grips, fields]
-            .into_iter()
-            .flatten()
-            .collect()
+        let link = crate::link_ui::hit(xf, info, page, doc_links, tool, p);
+        let comment = comments::hit(pcx, view, p, link.is_some());
+        [link, comment, pictures, paragraphs, added, objects, grips, fields].into_iter().flatten().collect()
     }
 }
 
@@ -694,9 +707,9 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         && resp.clicked()
         && tool == QuickTool::Select
         && !input.consumed
-        && let Some(owner @ crate::page_router::Owner::Link { index }) = view.router.owner(i)
-        && pointer.and_then(|p| link_hit(info, &xf, i, p)).is_some_and(|h| h.owner == owner)
-        && let Some(l) = info.links.get(index)
+        && let Some(owner @ Owner::Link { index }) = view.router.owner(i)
+        && pointer.and_then(|p| crate::link_ui::hit(&xf, info, i, doc_links, tool, p)).is_some_and(|h| h.owner == owner)
+        && let Some(l) = info.links.iter().find(|l| l.page == i && l.index == index)
     {
         frame.out.clicked_link = Some(l.target.clone());
     }
@@ -775,21 +788,6 @@ fn paint_field_highlights(painter: &egui::Painter, xf: &PageXform, info: &DocInf
             }
         }
     }
-}
-
-/// The link under `p` on `page`: the hand, and where a click goes. Only the Select tool follows
-/// links and the Link tool edits them (`Layer::reached_by`).
-fn link_hit(info: &DocInfo, xf: &PageXform, page: usize, p: Pos2) -> Option<crate::page_router::Hit> {
-    let (index, l) = info.links.iter().enumerate().rfind(|(_, l)| l.page == page && xf.user_rect(info, page, l.rect).contains(p))?;
-    let label = match &l.target {
-        LinkTarget::Page(n, _) => crate::i18n::fmt(tl!("Go to page {p}"), &[("p", info.pages.get(*n).map(|p| p.label.as_str()).unwrap_or("?"))]),
-        LinkTarget::Uri(u) => u.clone(),
-        LinkTarget::SetLayers { .. } => tl!("Set layer visibility").to_string(),
-        LinkTarget::RemoteGoTo { file, .. } => file.clone(),
-        LinkTarget::Other(s) => crate::i18n::fmt(tl!("{s} action"), &[("s", s)]),
-    };
-    let owner = crate::page_router::Owner::Link { index };
-    Some(crate::page_router::Hit { tip: Some(label), ..crate::page_router::Hit::new(owner, Layer::Link, egui::CursorIcon::PointingHand) })
 }
 
 /// Escape while the pages hold a press abandons the gesture it drives, whichever tool's: nothing is

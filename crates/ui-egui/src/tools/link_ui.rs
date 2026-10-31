@@ -4,14 +4,17 @@
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
 use pdfcraft_engine::{Edit, LinkAction, LinkHighlight, LinkItem, LinkStyle};
-use pdfcraft_render::DocInfo;
+use pdfcraft_render::{DocInfo, LinkTarget};
 
 use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::page_cursor::Layer;
+use crate::page_router::{Hit, Owner};
 use crate::theme::{self, Tokens};
-use crate::{PdfCraftApp, widgets};
+use crate::{PdfCraftApp, QuickTool, widgets};
 
 const LINK_BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
+/// How far around a link (screen points) the Link tool finds it, so a thin one can be picked.
+const LINK_TOOL_MARGIN: f32 = 2.0;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LinkView {
@@ -56,8 +59,38 @@ fn to_user(xf: &PageXform, info: &DocInfo, page: usize, p: Pos2) -> [f64; 2] {
     [u[0] as f64, u[1] as f64]
 }
 
-/// Link tool input on one page. Returns `true` when the gesture belongs to the tool.
-pub(crate) fn page_input(cx: PageToolContext<'_>, links: &[LinkItem], view: &mut DocView) -> bool {
+/// The link under `p` on `page`: the one hit test of links, for the hand, the tip and the press.
+/// Of stacked links, the topmost (the last in `/Annots`, drawn on top). Only the Select tool
+/// follows links and the Link tool edits them (`Layer::reached_by`). The Link tool finds every link
+/// the document has (`links`, the engine's), with a margin around each so a thin one can be
+/// picked, and a drag from one draws a new link. The other tools find the links the renderer can
+/// follow, which have a target (`info.links`). The tip is the link's target.
+pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, links: &[LinkItem], tool: QuickTool, p: Pos2) -> Option<Hit> {
+    let index = if tool == QuickTool::Link {
+        links.iter().rfind(|l| l.page == page && screen_rect(xf, info, page, l.rect).expand(LINK_TOOL_MARGIN).contains(p))?.index
+    } else {
+        info.links.iter().rfind(|l| l.page == page && xf.user_rect(info, page, l.rect).contains(p))?.index
+    };
+    let tip = info.links.iter().find(|l| l.page == page && l.index == index).map(|l| target_label(info, &l.target));
+    let declines_drag = tool == QuickTool::Link;
+    Some(Hit { tip, declines_drag, ..Hit::new(Owner::Link { index }, Layer::Link, egui::CursorIcon::PointingHand) })
+}
+
+/// What a link's tip says it goes to.
+fn target_label(info: &DocInfo, target: &LinkTarget) -> String {
+    match target {
+        LinkTarget::Page(n, _) => crate::i18n::fmt(tl!("Go to page {p}"), &[("p", info.pages.get(*n).map(|p| p.label.as_str()).unwrap_or("?"))]),
+        LinkTarget::Uri(u) => u.clone(),
+        LinkTarget::SetLayers { .. } => tl!("Set layer visibility").to_string(),
+        LinkTarget::RemoteGoTo { file, .. } => file.clone(),
+        LinkTarget::Other(s) => crate::i18n::fmt(tl!("{s} action"), &[("s", s)]),
+    }
+}
+
+/// Link tool input on one page: `owner` is the link that holds the press (by its `/Annots`
+/// index), and `context` the one a right-click is on. Returns `true` when the gesture belongs to
+/// the tool.
+pub(crate) fn page_input(cx: PageToolContext<'_>, owner: Option<usize>, context: Option<usize>, view: &mut DocView) -> bool {
     let PageToolContext { ui, resp, xf, ptr, page, info, .. } = cx;
     let pointer = ptr.pos;
     let lv = &mut view.links;
@@ -76,26 +109,21 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, links: &[LinkItem], view: &mut
         return true;
     }
     let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return false };
-    let hit = links.iter().filter(|l| l.page == page).find(|l| screen_rect(xf, info, page, l.rect).expand(2.0).contains(p));
-    match hit {
-        Some(_) => view.cursor.claim(Layer::Link, egui::CursorIcon::PointingHand),
-        None => view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair),
-    }
-    if resp.secondary_clicked()
-        && let Some(l) = hit
-    {
-        lv.selected = Some((page, l.index));
-        lv.context = Some((page, l.index));
+    // Over a link, its hit claims the hand.
+    view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
+    if let Some(index) = context {
+        lv.selected = Some((page, index));
+        lv.context = Some((page, index));
         return true;
     }
     if resp.clicked() || resp.double_clicked() {
         let now = ui.input(|i| i.time);
         // A second click on the same link soon after the first is a double-click.
-        let double = resp.double_clicked() || hit.is_some_and(|l| lv.last_click.is_some_and(|(t, p, k)| p == page && k == l.index && now - t < 0.5));
-        lv.last_click = hit.map(|l| (now, page, l.index));
-        lv.selected = hit.map(|l| (page, l.index));
-        if double && let Some(l) = hit {
-            lv.open_existing = Some((page, l.index));
+        let double = resp.double_clicked() || owner.is_some_and(|k| lv.last_click.is_some_and(|(t, p, l)| p == page && l == k && now - t < 0.5));
+        lv.last_click = owner.map(|k| (now, page, k));
+        lv.selected = owner.map(|k| (page, k));
+        if double && let Some(k) = owner {
+            lv.open_existing = Some((page, k));
             lv.last_click = None;
         }
         return true;

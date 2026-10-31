@@ -432,7 +432,8 @@ const PRESS_IGNORERS: [(&str, &str, &str); 1] =
 
 /// The module hit tests, called by path: a press handler calls none of them (HIT_TESTERS says who
 /// may).
-const PAGE_HIT_CALLS: [&str; 9] = [
+const PAGE_HIT_CALLS: [&str; 10] = [
+    "link_ui::hit(",
     "prepare::hit(",
     "forms_ui::hit(",
     "comments::hit(",

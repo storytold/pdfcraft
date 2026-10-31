@@ -11,7 +11,7 @@ use egui_kittest::kittest::Queryable;
 use pdfcraft_engine::StampKind;
 use pdfcraft_ui_egui::comments::CommentTool;
 use pdfcraft_ui_egui::fill_sign::FillTool;
-use pdfcraft_ui_egui::{PdfCraftApp, QuickTool, UnlockPrompt};
+use pdfcraft_ui_egui::{Dialog, PdfCraftApp, QuickTool, UnlockPrompt};
 
 use crate::support::input::{coalesced_click, double_click, one_frame, touch_drag, touch_tap};
 
@@ -956,4 +956,136 @@ fn escape_cancels_a_crop_rectangle() {
     h.run_steps(4);
     let s = h.state();
     assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), None, "no page box was set");
+}
+
+// ---------------------------------------------------------------------------------------------
+// One link test: what the Select tool follows, the Link tool edits and a right-click opens is
+// the same link.
+
+/// A 300×400 page with two web links overlapping at x 150..200, y 300..350: `first` first in
+/// `/Annots`, then `second` drawn over it.
+fn stacked_links_pdf() -> Vec<u8> {
+    pdf(&[
+        CATALOG,
+        PAGES,
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        "<< /Type /Annot /Subtype /Link /Rect [50 300 200 350] /Border [0 0 0] /A << /S /URI /URI (https://example.org/first) >> >>",
+        "<< /Type /Annot /Subtype /Link /Rect [150 300 250 350] /Border [0 0 0] /A << /S /URI /URI (https://example.org/second) >> >>",
+    ])
+}
+
+/// A 300×400 page with a link that does nothing (no action) at x 10..40, y 300..350, then a web
+/// link at x 50..250 beside it: second in `/Annots`, and the first the renderer can follow.
+fn dead_link_pdf() -> Vec<u8> {
+    pdf(&[
+        CATALOG,
+        PAGES,
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        "<< /Type /Annot /Subtype /Link /Rect [10 300 40 350] /Border [0 0 0] >>",
+        "<< /Type /Annot /Subtype /Link /Rect [50 300 250 350] /Border [0 0 0] /A << /S /URI /URI (https://example.org/) >> >>",
+    ])
+}
+
+/// [`link_pdf`], with a rectangle comment drawn over the middle of its link.
+fn note_over_link_pdf() -> Vec<u8> {
+    pdf(&[
+        CATALOG,
+        PAGES,
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        "<< /Type /Annot /Subtype /Link /Rect [50 300 250 350] /Border [0 0 0] /A << /S /URI /URI (https://example.org/) >> >>",
+        "<< /Type /Annot /Subtype /Square /Rect [100 310 200 340] /C [1 0 0] /F 4 /T (Ana) /Contents (A note) >>",
+    ])
+}
+
+fn link_tool(h: &mut Harness<'_, PdfCraftApp>) {
+    h.state_mut().quick_tool = QuickTool::Link;
+    h.run_steps(4);
+}
+
+/// A right-click at `p`: press and release in frames of their own.
+fn right_click(h: &mut Harness<'_, PdfCraftApp>, p: egui::Pos2) {
+    h.hover_at(p);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE });
+    }
+    h.run_steps(3);
+}
+
+fn pending_url(h: &Harness<'_, PdfCraftApp>) -> Option<String> {
+    h.state().pending_link.as_ref().map(|l| l.url.clone())
+}
+
+/// Of two stacked links the Link tool selects the one drawn on top, the one the Select tool
+/// follows. It used to select the one underneath.
+#[test]
+fn the_link_tool_selects_the_topmost_of_stacked_links() {
+    let mut h = open(stacked_links_pdf(), "150", false);
+    let both = at(&h, 175.0, 325.0);
+    mouse_click(&mut h, both);
+    assert_eq!(pending_url(&h).as_deref(), Some("https://example.org/second"), "the Select tool follows the link on top");
+    h.state_mut().pending_link = None;
+    link_tool(&mut h);
+    mouse_click(&mut h, both);
+    assert_eq!(h.state().views[0].links.selected, Some((0, 1)), "the Link tool selects it too");
+}
+
+/// The Link tool edits every link, one that does nothing included. The Select tool, which
+/// follows links, shows no hand over it, and follows the link beside it by its own `/Annots`
+/// place, not by its place among the links the renderer can follow.
+#[test]
+fn the_link_tool_selects_a_link_with_no_action() {
+    let mut h = open(dead_link_pdf(), "150", false);
+    let dead = at(&h, 25.0, 325.0);
+    assert_ne!(cursor_at(&mut h, dead), egui::CursorIcon::PointingHand, "the Select tool has nothing to follow there");
+    let web = at(&h, 150.0, 325.0);
+    mouse_click(&mut h, web);
+    assert_eq!(pending_url(&h).as_deref(), Some("https://example.org/"), "the web link is followed");
+    h.state_mut().pending_link = None;
+    link_tool(&mut h);
+    assert_eq!(cursor_at(&mut h, dead), egui::CursorIcon::PointingHand);
+    mouse_click(&mut h, dead);
+    assert_eq!(h.state().views[0].links.selected, Some((0, 0)), "the Link tool selects the link that does nothing");
+}
+
+/// With the Link tool a drag that starts on a link draws a new link: the press is the link's, its
+/// drag is not.
+#[test]
+fn a_drag_with_the_link_tool_from_a_link_draws_a_new_link() {
+    let mut h = open(link_pdf(), "150", false);
+    link_tool(&mut h);
+    let on_link = at(&h, 150.0, 325.0);
+    mouse_drag(&mut h, on_link, egui::vec2(80.0, 120.0));
+    let s = h.state();
+    assert_eq!(s.dialog, Some(Dialog::LinkProps));
+    assert_eq!(s.link_draft.as_ref().map(|d| d.index), Some(None), "Link Properties opens for a new link");
+}
+
+/// With the Select tool a right-click finds a link only where a click follows it: just beside the
+/// link it opens the page's menu. The Link tool's margin around links used to reach there.
+#[test]
+fn a_right_click_beside_a_link_with_the_select_tool_opens_no_link_menu() {
+    let mut h = open(link_pdf(), "150", false);
+    // The link ends at x 250.
+    let beside = at(&h, 250.0, 325.0) + egui::vec2(1.5, 0.0);
+    right_click(&mut h, beside);
+    assert_eq!(h.state().views[0].links.context, None, "no link under the right-click");
+    assert!(h.query_by_label("Remove all links").is_none(), "the page's menu has no link items");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    let on_link = at(&h, 245.0, 325.0);
+    right_click(&mut h, on_link);
+    assert_eq!(h.state().views[0].links.context, Some((0, 0)), "on the link, its menu");
+}
+
+/// A right-click goes to what a press there would go to: on a note over a link, the note. It used
+/// to open the link's menu.
+#[test]
+fn a_right_click_on_a_note_over_a_link_opens_the_notes_menu() {
+    let mut h = open(note_over_link_pdf(), "150", false);
+    let on_note = at(&h, 150.0, 325.0);
+    right_click(&mut h, on_note);
+    let v = &h.state().views[0];
+    assert_eq!((v.links.context, v.comments.selected), (None, Some((0, 1))), "the note is selected, not the link");
+    assert!(h.query_by_label("Remove all links").is_none(), "the menu is the note's");
 }

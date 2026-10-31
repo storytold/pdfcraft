@@ -54,8 +54,9 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
 /// only, as Acrobat picks them up: a press anywhere else places the tool's mark. With a shape
 /// tool (rectangle, oval, line, polygon…), only the selected comment's handles, so the shape just
 /// drawn can be resized straight away (#2338); a press anywhere else, the shape itself included,
-/// draws. `None` with other tools, off the page, or with comments hidden.
-pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2) -> Option<Hit> {
+/// draws. `None` with other tools, off the page, or with comments hidden. `on_link`: a link lies
+/// under `p` ([`crate::link_ui::hit`]).
+pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2, on_link: bool) -> Option<Hit> {
     if cx.hidden || !cx.xf.rect.contains(p) {
         return None;
     }
@@ -93,7 +94,7 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2) -> Option<Hit> {
     }
     let a = cx.hit(p).filter(|a| bodies && pick(a))?;
     // A click on a highlight over a link follows the link, so the link's hand and tip show there.
-    if cx.tool == QuickTool::Select && a.subtype == "Highlight" && on_link(cx, p) {
+    if cx.tool == QuickTool::Select && a.subtype == "Highlight" && on_link {
         return None;
     }
     let markup = is_markup(&a.subtype);
@@ -116,7 +117,8 @@ fn grabs(cx: &PageCx<'_>, view: &DocView) -> bool {
     if cx.ptr.any_down {
         return matches!(view.router.owner(cx.page), Some(Owner::Comment { .. })) && view.router.keeps_drag();
     }
-    cx.ptr.pos.and_then(|p| hit(cx, view, p)).is_some_and(|h| !h.declines_drag)
+    // Only the Select tool lets a link through a highlight, and it doesn't come here.
+    cx.ptr.pos.and_then(|p| hit(cx, view, p, false)).is_some_and(|h| !h.declines_drag)
 }
 
 /// With a Fill & Sign tool, a Fill & Sign mark already on the page is picked up as with the Select
@@ -128,11 +130,6 @@ pub(crate) fn fill_grabs(cx: &PageCx<'_>, view: &DocView) -> bool {
 /// With a shape tool, the selected comment's handles are picked up ([`hit`]).
 fn draw_grabs(cx: &PageCx<'_>, view: &DocView) -> bool {
     matches!(cx.tool, QuickTool::Comment(_)) && grabs(cx, view)
-}
-
-/// Whether `p` is on one of this page's links.
-fn on_link(cx: &PageCx<'_>, p: Pos2) -> bool {
-    cx.info.links.iter().any(|link| link.page == cx.page && cx.xf.user_rect(cx.info, cx.page, link.rect).contains(p))
 }
 
 /// The tip for the comment under the pointer, with any tool, beside that tool's own cursor: Acrobat

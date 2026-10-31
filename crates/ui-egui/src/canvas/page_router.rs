@@ -18,7 +18,7 @@ use crate::page_cursor::Layer;
 pub(crate) enum Owner {
     /// A comment (or a Fill & Sign mark), by its `/Annots` index, and the part of it.
     Comment { index: usize, part: CommentPart },
-    /// A link, by its index in the document's links.
+    /// A link, by its index in its page's `/Annots`.
     Link { index: usize },
     /// A form field's widget, by the field's index in the form and the widget's in the field.
     Field { field: usize, widget: usize },
