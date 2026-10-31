@@ -2270,14 +2270,41 @@ fn convert_to_pdfa_needs_the_owners_rights_on_an_encrypted_document() {
     // Nothing was applied: no undo step, and saving gives back the encrypted original.
     assert!(s.get(id).unwrap().can_undo().is_none());
     assert_eq!(s.save_bytes(id).unwrap().as_slice(), bytes.as_slice());
-    // The owner's password allows it, and the result is no longer encrypted.
+    // The owner's password allows it. What can still stand in the way is the font this fixture
+    // doesn't embed (Save as PDF/A refuses rather than claim a conformance the file lacks), never
+    // the encryption.
+    let permitted = |r: Result<_, EditError>| match r {
+        Ok(_) => true,
+        Err(EditError::Refused(refusal)) => refusal.blockers.iter().all(|b| b.pattern == "The font {} isn't embedded"),
+        Err(e) => panic!("{e:?}"),
+    };
     let id2 = s.open("x.pdf", None, bytes, Some("owner")).unwrap();
-    s.apply(id2, pdfa()).unwrap();
-    let saved = s.save_bytes(id2).unwrap();
-    assert!(pdfcraft_cos::Document::open(saved).unwrap().trailer().get(b"Encrypt").is_none());
+    assert!(permitted(s.apply(id2, pdfa())));
     // An unencrypted document needs nothing more.
     let (mut s, id) = session_with(1);
+    assert!(permitted(s.apply(id, pdfa())));
+    // A page with no text has nothing in the way: the conversion goes through, and the result is
+    // no longer encrypted.
+    let blank = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>")
+        .build();
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(blank)).unwrap();
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "pw",
+        owner_password: "owner",
+        permissions: !((1 << 2) | (1 << 4)),
+        encrypt_metadata: true,
+        seed: [7; 32],
+    })
+    .unwrap();
+    let bytes = Arc::new(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap());
+    let id = s.open("blank.pdf", None, bytes, Some("owner")).unwrap();
     s.apply(id, pdfa()).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    assert!(pdfcraft_cos::Document::open(saved).unwrap().trailer().get(b"Encrypt").is_none());
 }
 
 /// Save as PDF/X takes the encryption off too (PDF/X forbids it), so it needs the same rights.
