@@ -2797,6 +2797,7 @@ theme	Appearance	स्वरूप
 	Attaching files is not available on the web yet	वेब पर अभी फ़ाइलें संलग्न करना उपलब्ध नहीं है
 	Delete attachment	अनुलग्नक हटाएँ
 	Delete attachment {key}	अनुलग्नक {key} हटाएँ
+	Automatic AcroForm scripts are disabled until safe execution isolation is available; saved field values were preserved. Explicit button and console scripts are still available.	सुरक्षित निष्पादन अलगाव उपलब्ध होने तक स्वचालित AcroForm स्क्रिप्ट बंद हैं; सहेजे गए फ़ील्ड मान यथावत रखे गए हैं. बटन और कंसोल स्क्रिप्ट अभी भी उपलब्ध हैं.
 @plural	{n} reply|{n} replies	{n} जवाब
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

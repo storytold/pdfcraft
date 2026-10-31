@@ -2831,6 +2831,7 @@ certificate	Version	Version
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Aujourd'hui
+	Automatic AcroForm scripts are disabled until safe execution isolation is available; saved field values were preserved. Explicit button and console scripts are still available.	Les scripts AcroForm automatiques sont désactivés jusqu'à ce qu'un isolement d'exécution sûr soit disponible ; les valeurs de champs enregistrées sont conservées. Les scripts de bouton et de console restent disponibles.
 @plural	{n} reply|{n} replies	{n} réponse|{n} réponses
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

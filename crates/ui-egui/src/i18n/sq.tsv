@@ -2552,6 +2552,7 @@ animation effects	Off	Joaktiv
 	Attaching files is not available on the web yet	Bashkëngjitja e skedarëve nuk është ende e disponueshme në ueb
 	Delete attachment	Fshi bashkëngjitjen
 	Delete attachment {key}	Fshi bashkëngjitjen {key}
+	Automatic AcroForm scripts are disabled until safe execution isolation is available; saved field values were preserved. Explicit button and console scripts are still available.	Skriptet automatike të AcroForm janë të çaktivizuara derisa të ketë izolim të sigurt të ekzekutimit; vlerat e ruajtura të fushave janë mbajtur. Skriptet e butonave dhe të konsolës mbeten të disponueshme.
 @plural	{n} reply|{n} replies	{n} përgjigje|{n} përgjigje
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

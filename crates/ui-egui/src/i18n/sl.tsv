@@ -2570,6 +2570,7 @@ animation effects	Off	Izklopljeni
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Danes
+	Automatic AcroForm scripts are disabled until safe execution isolation is available; saved field values were preserved. Explicit button and console scripts are still available.	Samodejni skripti AcroForm so onemogočeni, dokler ni na voljo varne izolacije izvajanja; shranjene vrednosti polj so ohranjene. Skripti gumbov in konzole so še vedno na voljo.
 @plural	{n} reply|{n} replies	{n} odgovor|{n} odgovora|{n} odgovori|{n} odgovorov
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

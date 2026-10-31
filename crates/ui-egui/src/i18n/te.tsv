@@ -2474,6 +2474,7 @@ animation effects	Off	ఆఫ్
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	ఈరోజు
+	Automatic AcroForm scripts are disabled until safe execution isolation is available; saved field values were preserved. Explicit button and console scripts are still available.	సురక్షితమైన అమలు వేరుచేయడం అందుబాటులోకి వచ్చే వరకు AcroForm స్వయంచాలక స్క్రిప్ట్‌లు నిలిపివేయబడ్డాయి; సేవ్ చేసిన ఫీల్డ్ విలువలు అలాగే ఉంచబడ్డాయి. బటన్ మరియు కన్సోల్ స్క్రిప్ట్‌లు ఇప్పటికీ అందుబాటులో ఉన్నాయి.
 @plural	{n} reply|{n} replies	{n} ప్రత్యుత్తరం|{n} ప్రత్యుత్తరాలు
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

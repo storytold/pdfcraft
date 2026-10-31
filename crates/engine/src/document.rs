@@ -59,6 +59,10 @@ pub struct Document {
     /// XFA forms: what was approximated, rewritten or could not be written to the XFA data
     /// (also in `info.warnings`, kept there when the document is re-read).
     pub xfa_warnings: Vec<String>,
+    /// Keep the automatic-script policy notice through refreshes, edits and saves.
+    /// Crate-visible so opening (`open`) and refresh (`session`) can set and read it after the
+    /// engine split moved those out of this module.
+    pub(crate) acroform_open_notice: bool,
     /// What the last successful [`Session::apply`](crate::Session::apply) wants said (see
     /// [`EditNotice`]): text its fonts can't draw, pages whose own backdrop stays off. The
     /// interface shows it; tools return it.

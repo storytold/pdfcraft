@@ -2797,6 +2797,7 @@ certificate	SHA-256 digest	Impronta SHA-256
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Oggi
+	Automatic AcroForm scripts are disabled until safe execution isolation is available; saved field values were preserved. Explicit button and console scripts are still available.	Gli script automatici di AcroForm sono disattivati finché non è disponibile un isolamento sicuro dell'esecuzione; i valori salvati dei campi sono stati conservati. Gli script dei pulsanti e della console restano disponibili.
 @plural	{n} reply|{n} replies	{n} risposta|{n} risposte
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

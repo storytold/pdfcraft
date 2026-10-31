@@ -2587,6 +2587,7 @@ animation effects	Off	Вимкнено
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Сьогодні
+	Automatic AcroForm scripts are disabled until safe execution isolation is available; saved field values were preserved. Explicit button and console scripts are still available.	Автоматичні сценарії AcroForm вимкнено, доки немає безпечної ізоляції виконання; збережені значення полів залишено без змін. Сценарії кнопок і консолі й далі доступні.
 @plural	{n} reply|{n} replies	{n} відповідь|{n} відповіді|{n} відповідей
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

@@ -2835,6 +2835,7 @@ theme	Appearance	Teema
 	Attaching files is not available on the web yet	Tiedostojen liittäminen ei ole vielä käytettävissä verkossa
 	Delete attachment	Poista liite
 	Delete attachment {key}	Poista liite {key}
+	Automatic AcroForm scripts are disabled until safe execution isolation is available; saved field values were preserved. Explicit button and console scripts are still available.	Automaattiset AcroForm-skriptit ovat poissa käytöstä, kunnes turvallinen suorituseristys on käytettävissä; tallennetut kenttäarvot säilytettiin. Painikkeiden ja konsolin skriptit ovat yhä käytettävissä.
 @plural	{n} reply|{n} replies	{n} vastaus|{n} vastausta
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

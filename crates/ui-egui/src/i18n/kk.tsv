@@ -2563,6 +2563,7 @@ animation effects	Off	Өшірулі
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Бүгін
+	Automatic AcroForm scripts are disabled until safe execution isolation is available; saved field values were preserved. Explicit button and console scripts are still available.	Қауіпсіз орындау оқшаулауы болғанша AcroForm автоматты скрипттері өшірулі; сақталған өріс мәндері сол күйінде қалды. Түйме мен консоль скрипттері бұрынғыдай қолжетімді.
 @plural	{n} reply|{n} replies	{n} жауап|{n} жауап
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

@@ -226,6 +226,16 @@ impl Scripts for JsRunner {
     }
 }
 
+/// The opening policy notice. Frontends translate this exact English string; it is also the
+/// stable entry stored in `DocInfo::warnings`.
+pub const OPEN_SCRIPTS_SKIPPED: &str = "Automatic AcroForm scripts are disabled until safe execution isolation is available; saved field values were preserved. Explicit button and console scripts are still available.";
+
+/// Whether opening would have run document JavaScript, a catalog `/OpenAction` script, or the
+/// opening page's `/AA /O` script. Field scripts alone do not count.
+pub(crate) fn has_deferred_open_scripts(cos: &pdfcraft_cos::Document) -> bool {
+    pdfcraft_forms::document_scripts(cos).iter().any(|s| !s.trim().is_empty()) || !pdfcraft_forms::open_scripts(cos).is_empty()
+}
+
 /// A document-level JavaScript: its name and source.
 pub fn document_scripts(cos: &pdfcraft_cos::Document) -> Vec<(String, String)> {
     pdfcraft_forms::document_scripts_named(cos)

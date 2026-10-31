@@ -2462,6 +2462,7 @@ animation effects	Off	ປິດ
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	ມື້ນີ້
+	Automatic AcroForm scripts are disabled until safe execution isolation is available; saved field values were preserved. Explicit button and console scripts are still available.	ສະຄຣິບອັດຕະໂນມັດຂອງ AcroForm ຖືກປິດໄວ້ຈົນກວ່າຈະມີການແຍກການທຳງານທີ່ປອດໄພ; ຄ່າຟິວທີ່ບັນທຶກໄວ້ຖືກຮັກສາໄວ້. ສະຄຣິບຂອງປຸ່ມ ແລະ ຄອນໂຊນຍັງໃຊ້ໄດ້.
 @plural	{n} reply|{n} replies	ການຕອບກັບ {n} ລາຍການ
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

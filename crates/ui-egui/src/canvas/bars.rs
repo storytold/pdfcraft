@@ -42,6 +42,14 @@ pub(super) fn page_size_hint(
         });
 }
 
+/// The open-script policy, in the current language. The English text is the key stored in
+/// `info.warnings` (`pdfcraft_engine::js::OPEN_SCRIPTS_SKIPPED`); the two must stay identical.
+fn open_scripts_notice() -> &'static str {
+    tl!(
+        "Automatic AcroForm scripts are disabled until safe execution isolation is available; saved field values were preserved. Explicit button and console scripts are still available."
+    )
+}
+
 /// What the notice bar's buttons ask for.
 pub(super) enum Notice {
     /// Reload the file that changed on disk, dropping unsaved changes.
@@ -75,6 +83,15 @@ pub(super) fn notices(
 ) -> Option<Notice> {
     let info = &doc.info;
     let xfa = doc.xfa.as_ref();
+    // The policy must remain visible beside either a signature or an ordinary form notice.
+    let with_open_script_policy = |mut text: String| {
+        let policy = open_scripts_notice();
+        if info.warnings.iter().any(|warning| warning == pdfcraft_engine::js::OPEN_SCRIPTS_SKIPPED) && !text.contains(policy) {
+            text.push(' ');
+            text.push_str(policy);
+        }
+        text
+    };
     // The file changed on disk while this document has unsaved changes (#431): ask before
     // replacing it, ahead of every other notice.
     if view.disk_changed {
@@ -124,7 +141,8 @@ pub(super) fn notices(
     }
     if let Some((icon, color, template, arg)) = signed {
         let mut open = false;
-        notice_bar(ui, t, icon, color, crate::i18n::fmt(tl!(template), &[("by", &arg)]), |ui| {
+        let text = with_open_script_policy(crate::i18n::fmt(tl!(template), &[("by", &arg)]));
+        notice_bar(ui, t, icon, color, text, |ui| {
             if crate::widgets::pill_button(ui, tl!("Signature panel"), false).clicked() {
                 open = true;
             }
@@ -196,13 +214,14 @@ pub(super) fn notices(
         form
     } else if repaired {
         Some(("bandage", tl!("This file was damaged and has been repaired. Saving keeps the repaired version.").to_string(), false))
-    } else if !info.warnings.is_empty() {
-        Some(("triangle-alert", info.warnings[0].clone(), false))
+    } else if let Some(first) = info.warnings.first() {
+        let first = if first == pdfcraft_engine::js::OPEN_SCRIPTS_SKIPPED { open_scripts_notice().to_string() } else { first.clone() };
+        Some(("triangle-alert", first, false))
     } else {
         None
     };
     let (icon, text, fields) = msg?;
-    notice_bar(ui, t, icon, t.accent_text, text, |ui| {
+    notice_bar(ui, t, icon, t.accent_text, with_open_script_policy(text), |ui| {
         if icons::button(ui, "x", 22.0, false, tl!("Dismiss")).clicked() {
             view.notice_dismissed = true;
         }
