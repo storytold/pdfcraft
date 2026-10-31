@@ -360,14 +360,17 @@ pub(crate) fn pages_body(ui: &mut egui::Ui, d: &mut PagesDraft, pages: usize, _t
     ui.label(egui::RichText::new(tl!("Mark Page Range")).font(crate::theme::semibold(18.0)));
     ui.add_space(8.0);
     widgets::radio_value(ui, &mut d.current, true, tl!("Current page"));
-    ui.horizontal(|ui| {
-        widgets::radio_value(ui, &mut d.current, false, tl!("Pages from"));
-        ui.add_enabled(!d.current, egui::DragValue::new(&mut d.from).range(1..=pages));
-        ui.label(tl!("to"));
-        ui.add_enabled(!d.current, egui::DragValue::new(&mut d.to).range(1..=pages));
-        ui.label(crate::i18n::fmt(tl!("of {name}"), &[("name", &pages.to_string())]));
-    });
-    d.to = d.to.max(d.from);
+    let to_field = ui
+        .horizontal(|ui| {
+            let from_label = widgets::radio_value(ui, &mut d.current, false, tl!("Pages from"));
+            ui.add_enabled(!d.current, egui::DragValue::new(&mut d.from).range(1..=pages)).labelled_by(from_label.id);
+            let to_label = ui.label(tl!("to"));
+            let to_field = ui.add_enabled(!d.current, egui::DragValue::new(&mut d.to).range(1..=pages)).labelled_by(to_label.id);
+            ui.label(crate::i18n::fmt(tl!("of {name}"), &[("name", &pages.to_string())]));
+            to_field
+        })
+        .inner;
+    widgets::keep_range_ordered(d.from, &mut d.to, to_field.has_focus());
     ui.add_space(12.0);
     buttons(ui, "OK", true)
 }
@@ -674,4 +677,48 @@ pub(crate) fn sanitize_body(ui: &mut egui::Ui, t: &Tokens) -> (bool, bool) {
     );
     ui.add_space(12.0);
     buttons(ui, "Sanitize", true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+
+    fn key(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }
+    }
+
+    /// #5574: typing "12" into the end of 5 to 5 came out as 5. The end was raised to the start
+    /// after every keystroke, so the half-typed "1" was replaced before the "2" arrived.
+    #[test]
+    fn typing_the_last_page_keeps_what_is_typed() {
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::new_ui_state(
+            move |ui, d: &mut PagesDraft| {
+                // The app's fonts (the semibold heading) take effect from the next frame.
+                if !fonts {
+                    ui.ctx().set_fonts(crate::theme::font_definitions());
+                    fonts = true;
+                    return;
+                }
+                let t = Tokens::get(ui.ctx());
+                pages_body(ui, d, 20, &t);
+            },
+            PagesDraft { current: false, from: 5, to: 5 },
+        );
+        h.run();
+        for (typed, expected) in [("12", 12), ("3", 5)] {
+            h.get_by_role_and_label(Role::SpinButton, "to").click();
+            h.run();
+            h.event(key(egui::Key::A, egui::Modifiers::COMMAND));
+            for c in typed.chars() {
+                h.event(egui::Event::Text(c.to_string()));
+                h.run_steps(2);
+            }
+            h.event(key(egui::Key::Enter, egui::Modifiers::NONE));
+            h.run_steps(2);
+            assert_eq!(*h.state(), PagesDraft { current: false, from: 5, to: expected }, "typed {typed:?}");
+        }
+    }
 }

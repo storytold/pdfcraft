@@ -254,6 +254,15 @@ pub fn radio_value<'a, V: PartialEq>(ui: &mut egui::Ui, current: &mut V, alterna
     response
 }
 
+/// Keeps the end of a "from … to …" page range at or after its start, but not while `typing` into the
+/// end's `DragValue` (`Response::has_focus`): the half-typed "1" of "12" is below
+/// `from`, and raising it then replaced what the user was typing with `from` (#5574).
+pub fn keep_range_ordered(from: usize, to: &mut usize, typing: bool) {
+    if !typing {
+        *to = (*to).max(from);
+    }
+}
+
 /// The box of a checkbox or the circle of a radio button. egui draws it with the widgets' visuals
 /// and has no style of its own for it, so it is set in a scope around the widget, keeping what
 /// the caller set (dialogs and the search panel already outline theirs):
