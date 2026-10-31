@@ -169,8 +169,10 @@ impl PdfCraftApp {
             sheet: 0,
             selected,
             which,
+            custom_new: None,
             ..keep
         };
+        self.print_draft.apply_remembered();
         self.dialog = Some(crate::Dialog::Print);
     }
 
@@ -312,7 +314,13 @@ impl PdfCraftApp {
                     // A picked printer that is no longer listed falls back to the default too.
                     if !d.printer_picked || !offered(d.printer.as_deref(), &printers) {
                         d.printer_picked = false;
-                        d.printer = default_printer(&printers);
+                        // Only a different printer starts over with its remembered paper; the
+                        // same one keeps the paper and the Remember box as they were left.
+                        let default = default_printer(&printers);
+                        if default != d.printer {
+                            d.printer = default;
+                            d.apply_remembered();
+                        }
                     }
                     d.printers = printers;
                     d.printers_loading = false;

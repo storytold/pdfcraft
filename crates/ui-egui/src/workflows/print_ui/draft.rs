@@ -58,7 +58,16 @@ pub struct PrintDraft {
     /// Print as image (Acrobat's Advanced Print Setup) at `dpi`.
     pub as_image: bool,
     pub dpi: f64,
+    /// Index into the paper list: the standard sizes, then `custom_papers`.
     pub paper: usize,
+    /// Paper sizes added with Custom…, kept with the settings.
+    pub custom_papers: Vec<crate::print_paper::CustomPaper>,
+    /// The paper each printer is remembered with, kept with the settings.
+    pub remembered_paper: crate::print_paper::RememberedPaper,
+    /// "Remember this paper for …", applied at Print time.
+    pub remember_paper: bool,
+    /// The custom paper being added: name, width and height as typed (the preferences' unit).
+    pub custom_new: Option<(String, String, String)>,
     /// The paper chosen before Label put label stock in, so leaving Label gives it back (#3564).
     pub paper_before_label: Option<usize>,
     /// The sheet shown in the preview (0-based).
@@ -119,6 +128,10 @@ impl Default for PrintDraft {
             as_image: false,
             dpi: 300.0,
             paper: 0,
+            custom_papers: Vec::new(),
+            remembered_paper: Default::default(),
+            remember_paper: false,
+            custom_new: None,
             paper_before_label: None,
             sheet: 0,
             current_page: 0,
@@ -192,7 +205,7 @@ impl PrintDraft {
         };
         Ok(print::Settings {
             pages,
-            paper: PAPERS[self.paper.min(PAPERS.len() - 1)].1,
+            paper: self.paper_size(),
             orientation: self.orientation,
             layout,
             content: self.content,

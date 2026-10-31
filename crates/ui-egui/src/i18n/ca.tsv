@@ -2820,6 +2820,10 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+	Add a paper size of your own to the list	Afegeix una mida de paper pròpia a la llista
+	Custom…	Personalitzada…
+	Remember this paper for {printer}	Recorda aquest paper per a {printer}
+	Take this paper size off the list	Treu aquesta mida de paper de la llista
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Avui

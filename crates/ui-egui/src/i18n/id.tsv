@@ -2792,6 +2792,10 @@ theme	Appearance	Tampilan
 	field names can't contain a period: {name}	nama kolom tidak boleh berisi titik: {name}
 	two cells would both be named {name}	dua sel akan sama-sama bernama {name}
 	a field named {name} already exists	kolom bernama {name} sudah ada
+	Add a paper size of your own to the list	Tambahkan ukuran kertas Anda sendiri ke daftar
+	Custom…	Kustom…
+	Remember this paper for {printer}	Ingat kertas ini untuk {printer}
+	Take this paper size off the list	Hapus ukuran kertas ini dari daftar
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hari ini

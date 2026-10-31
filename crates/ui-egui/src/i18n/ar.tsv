@@ -2797,6 +2797,10 @@ certificate	Version	الإصدار
 	Make properties default	جعل الخصائص افتراضية
 	Pages selected	الصفحات المحددة
 	Page properties	خصائص الصفحة
+	Custom…	مخصص…
+	Add a paper size of your own to the list	أضف مقاس ورق خاصًا بك إلى القائمة
+	Take this paper size off the list	أزل مقاس الورق هذا من القائمة
+	Remember this paper for {printer}	تذكّر هذا الورق لـ {printer}
 	Create & Edit	الإنشاء والتحرير
 	Review & Compare	المراجعة والمقارنة
 	Forms & Signatures	النماذج والتوقيعات

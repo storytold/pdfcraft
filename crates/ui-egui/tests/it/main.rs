@@ -63,6 +63,8 @@ mod pointer;
 mod preferences_layout;
 mod prepare;
 mod print;
+mod print_custom_paper_names;
+mod print_late_printer_list;
 mod protect;
 mod reading_colors;
 mod recovery;

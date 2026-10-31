@@ -38,8 +38,14 @@ fn bad(m: impl Into<String>) -> ToolError {
 }
 
 /// `doc_print`'s `paper`, by its name or a short form ("Letter", "ARCH D"), as its `PAPERS`
-/// index and size; US Letter when none is given.
+/// index and size (or a size such as "8.5x14in", whose index is past the list); US Letter when
+/// none is given.
 fn paper_named(name: Option<&str>) -> Result<(usize, (f64, f64))> {
+    // A size of its own: "8.5x14in", "210x297mm", "10x15cm", "612x792pt". It has no place in
+    // `PAPERS` (index `PAPERS.len()`), so no `media` option is sent for it.
+    if let Some(size) = name.and_then(paper_size) {
+        return Ok((PAPERS.len(), size));
+    }
     let mut papers = PAPERS.iter().enumerate();
     let found = match name {
         None => papers.next(),
@@ -51,7 +57,7 @@ fn paper_named(name: Option<&str>) -> Result<(usize, (f64, f64))> {
     };
     found.map(|(index, (_, size))| (index, *size)).ok_or_else(|| {
         bad(format!(
-            "unknown paper {:?}; choose one of {}",
+            "unknown paper {:?}; choose one of {}, or a size such as 8.5x14in or 210x297mm (1 to 200 inches a side)",
             name.unwrap_or_default(),
             PAPERS.iter().map(|(name, _)| *name).collect::<Vec<_>>().join(", ")
         ))
@@ -221,6 +227,19 @@ impl Automation {
     }
 }
 
+/// "WxH" with a unit (in, mm, cm or pt) as a portrait paper size in points; each side 1 to 200
+/// inches (PDF's own page limit).
+fn paper_size(spec: &str) -> Option<(f64, f64)> {
+    let s = spec.trim().to_ascii_lowercase();
+    let (body, per_point) = [("in", 1.0 / 72.0), ("mm", 25.4 / 72.0), ("cm", 2.54 / 72.0), ("pt", 1.0)]
+        .into_iter()
+        .find_map(|(unit, per_point)| s.strip_suffix(unit).map(|b| (b, per_point)))?;
+    let (w, h) = body.split_once('x')?;
+    let side = |t: &str| t.trim().parse::<f64>().ok().map(|v| v / per_point).filter(|v| (72.0..=14_400.0).contains(v));
+    let (w, h) = (side(w)?, side(h)?);
+    Some((w.min(h), w.max(h)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -273,6 +292,9 @@ mod tests {
         assert_eq!(job(json!({}), Some("letter")).options, [media("Letter")]);
         assert_eq!(job(json!({}), Some("ARCH D")).options, [media("na_arch-d_24x36in")]);
         assert!(matches!(paper_named(Some("Quarto")), Err(ToolError::InvalidArgs(m)) if m.contains("US Letter")));
+        // A size of its own is laid out as asked and names no media.
+        assert_eq!(paper_named(Some("8.5x14in")).ok(), Some((PAPERS.len(), (612.0, 1008.0))));
+        assert!(job(json!({}), Some("8.5x14in")).options.is_empty());
         assert_eq!(spool_job(&Args(&json!({})), "default", String::new(), None, 0).ok().map(|j| j.printer), Some(None));
         assert!(spool_job(&Args(&json!({ "options": { "InputSlot": 3 } })), "Office", String::new(), None, 0).is_err());
     }

@@ -606,7 +606,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "cut_marks": { "type": "boolean" },
                 "orientation": { "type": "string", "enum": ["auto", "portrait", "landscape"] },
                 "comments_forms": { "type": "string", "enum": ["document", "document-and-markups", "document-and-stamps", "form-fields-only"] },
-                "paper": { "type": "string" },
+                "paper": { "type": "string", "description": "A paper name (US Letter, A4…) or a size of its own such as 8.5x14in, 210x297mm, 10x15cm or 612x792pt (1 to 200 inches a side)." },
                 "path": { "type": "string" },
                 "printer": { "type": "string" },
                 "copies": { "type": "integer", "minimum": 1, "maximum": 999 },
