@@ -23,6 +23,8 @@ impl Session {
         let mut cx = EditCtx::new(now, doc.generation ^ (id.0 << 48));
         if !js_off {
             cx.xfa = doc.xfa_template.clone();
+            // Shared until the edit runs a script, which copies it; kept only if the edit succeeds.
+            cx.xfa_deps = doc.xfa_calc_deps.clone();
         }
         cx.xfa_time_scale = xfa_time_scale;
         cx.pages = doc.info.pages.len();
@@ -100,8 +102,8 @@ impl Session {
             _ => edit.label(),
         };
         // An XFA form's scripts answer the change: exit and validate scripts of the field, then
-        // every calculation (and a reset recalculates). They read the data, so it is brought up
-        // to date first.
+        // the calculations that read what changed (a reset recalculates them all). They read
+        // the data, so it is brought up to date first.
         if let Some(tpl) = cx.xfa.clone() {
             if is_xfa && matches!(scope_of(&edit), Scope::Form | Scope::Full | Scope::Content) {
                 let datasets = &mut cx.xfa_datasets;
@@ -122,16 +124,18 @@ impl Session {
             let mut reset = false;
             collect(&edit, &mut changed, &mut reset);
             if !changed.is_empty() || reset {
+                let deps = Arc::make_mut(&mut cx.xfa_deps);
                 let mut run = xfa::XfaRun {
                     page_count: cx.pages,
                     out: &mut cx.xfa_out,
                     datasets: cx.xfa_datasets,
                     ran_away: false,
+                    deps,
                     time_scale: cx.xfa_time_scale,
                 };
-                // Every changed field's scripts, then the calculations once (after a reset,
-                // only those).
-                let ran = guard(|| xfa::on_changes(&mut next, &tpl, &changed, &mut run))
+                // Every changed field's scripts, then the calculations that read what changed
+                // (every one after a reset).
+                let ran = guard(|| xfa::on_changes(&mut next, &tpl, &changed, reset, &mut run))
                     .unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
                 cx.xfa_datasets = run.datasets;
                 cx.xfa_ran_away |= run.ran_away;
@@ -196,6 +200,7 @@ impl Session {
         doc.dirty = true;
         doc.generation += 1;
         doc.edit_notices = notices;
+        doc.xfa_calc_deps = cx.xfa_deps.clone();
         if !cx.xfa_removed.is_empty() {
             let removed: Vec<String> = cx.xfa_removed.iter().map(|n| format!("{XFA_REMOVED_PREFIX}{n}")).collect();
             doc.xfa_warnings.retain(|w| w.starts_with(XFA_REMOVED_PREFIX));
@@ -217,6 +222,8 @@ impl Session {
         Ok(())
     }
 
+    /// Undo the last edit of document `id`: its earlier state comes back, and the label of the
+    /// edit undone is returned.
     pub fn undo(&mut self, id: DocId) -> Result<Label, EditError> {
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToUndo)?;
@@ -225,6 +232,8 @@ impl Session {
         let current_keys = std::mem::replace(&mut editor.keys, keys);
         editor.redo.push((label.clone(), current, current_keys, scope));
         Self::adopt_keys(doc);
+        // The form is back in an earlier state: what its calculations read is learned again.
+        doc.xfa_calc_deps = Arc::default();
         let refreshed = guard(|| Self::refresh_scoped(doc, scope)).unwrap_or_else(|m| Err(EditError::Reopen(m)));
         if let Err(e) = refreshed {
             if let Some(ed) = doc.editor.as_mut()
@@ -246,6 +255,7 @@ impl Session {
         Ok(label)
     }
 
+    /// Redo the last undone edit of document `id`, returning its label.
     pub fn redo(&mut self, id: DocId) -> Result<Label, EditError> {
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToRedo)?;
@@ -254,6 +264,7 @@ impl Session {
         let current_keys = std::mem::replace(&mut editor.keys, keys);
         editor.undo.push((label.clone(), current, current_keys, scope));
         Self::adopt_keys(doc);
+        doc.xfa_calc_deps = Arc::default();
         let refreshed = guard(|| Self::refresh_scoped(doc, scope)).unwrap_or_else(|m| Err(EditError::Reopen(m)));
         if let Err(e) = refreshed {
             if let Some(ed) = doc.editor.as_mut()

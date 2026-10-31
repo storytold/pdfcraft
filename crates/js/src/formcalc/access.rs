@@ -59,6 +59,7 @@ impl Interp<'_> {
 
     /// A node's value as a FormCalc value.
     fn node_value(&self, i: usize) -> Val {
+        self.h.read(i);
         let Some(n) = self.node(i) else { return Val::Null };
         if n.value.is_empty() {
             return Val::Null;
@@ -106,6 +107,7 @@ impl Interp<'_> {
         }
     }
 
+    /// `v` as a FormCalc number: null and text that isn't a number are 0, a list is its first.
     pub(super) fn to_num(&self, v: &Val) -> f64 {
         match v {
             Val::Null => 0.0,
@@ -117,6 +119,7 @@ impl Interp<'_> {
         }
     }
 
+    /// `v` as FormCalc text: null is empty, numbers in FormCalc's shortest form.
     pub(super) fn to_str(&self, v: &Val) -> String {
         match v {
             Val::Null => String::new(),
@@ -133,6 +136,7 @@ impl Interp<'_> {
         }
     }
 
+    /// Whether `v` counts as true in a FormCalc condition.
     pub(super) fn truthy(&self, v: &Val) -> bool {
         match v {
             Val::Null => false,
@@ -147,10 +151,14 @@ impl Interp<'_> {
         }
     }
 
+    /// Whether `v` is null: an empty field is, and asking reads its value.
     pub(super) fn is_null(&self, v: &Val) -> bool {
         match v {
             Val::Null => true,
-            Val::Node(i) => self.node(*i).is_none_or(|n| n.value.is_empty()),
+            Val::Node(i) => {
+                self.h.read(*i);
+                self.node(*i).is_none_or(|n| n.value.is_empty())
+            }
             Val::List(items) => items.is_empty(),
             _ => false,
         }
@@ -323,7 +331,10 @@ impl Interp<'_> {
             "index" | "instanceIndex" => Val::Num(n.index as f64),
             "presence" => Val::Str(n.presence.clone()),
             "access" => Val::Str(n.access.clone()),
-            "isNull" => Val::Num(if n.value.is_empty() { 1.0 } else { 0.0 }),
+            "isNull" => {
+                self.h.read(i);
+                Val::Num(if n.value.is_empty() { 1.0 } else { 0.0 })
+            }
             "mandatory" => Val::Str("disabled".into()),
             "parent" => n.parent.map_or(Val::Null, Val::Node),
             "nodes" => Val::List(n.children.iter().copied().filter(|c| self.node(*c).is_some()).map(Val::Node).collect()),

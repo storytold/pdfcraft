@@ -6398,8 +6398,8 @@ fn xfa_data_import_adds_and_removes_rows_of_a_dynamic_form() {
 }
 
 /// Hundreds of calculations, in JavaScript and FormCalc, run on opening in one engine, and a
-/// change recalculates them in one more. The time limits are raised so that a busy machine
-/// does not stop them; the next test checks that the limits stop them.
+/// change recalculates what it concerns in one more. The time limits are raised so that a busy
+/// machine does not stop them; the next test checks that the limits stop them.
 #[test]
 fn hundreds_of_xfa_calculations_run_in_one_engine() {
     let (sections, rows) = (10, 20);
@@ -6484,6 +6484,144 @@ fn xfa_scripts_of_one_event_see_the_form_as_the_engine_holds_it() {
     assert_eq!(value(&s, "country"), vec!["CA".to_string()], "shown text mapped to the saved value");
     assert_eq!(value(&s, "e"), vec!["CA".to_string()], "the next script reads the saved value");
     assert_eq!(value(&s, "summary"), vec!["Country: CA".to_string()]);
+}
+
+/// Which of a fixture's calculations an event ran, in order, from the `ran …` lines they print.
+fn calculations_ran(console: &[String]) -> Vec<String> {
+    console.iter().filter_map(|l| l.trim().strip_prefix("ran ").map(str::to_string)).collect()
+}
+
+/// A change reruns only the calculations that read what changed, as another viewer does
+/// (black-box, on a form shaped like this fixture). On opening, each runs once in document
+/// order. A typed value reruns its readers, and a click that writes nothing reruns nothing.
+/// A click that writes a field, even its own value again, reruns that field's readers.
+/// Writing a field that a calculation only writes reruns nothing.
+#[test]
+fn xfa_calculations_rerun_only_where_what_they_read_changed() {
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::recalculation_template()));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("recalc.pdf", None, bytes, None).expect("opens");
+    let value = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).map(|f| f.value.clone()).unwrap_or_default();
+    let none = Vec::<String>::new();
+    assert_eq!(calculations_ran(&s.take_js_output(id).console), ["A", "C", "B"], "each once, in document order");
+    assert_eq!(value(&s, "shared"), ["B"]);
+    s.apply(id, Edit::SetFieldValue { name: "entry".into(), value: FieldValue::Text("5".into()) }).unwrap();
+    assert_eq!(calculations_ran(&s.take_js_output(id).console), ["A"], "only the calculation that reads entry");
+    assert_eq!(value(&s, "shared"), ["A"]);
+    let o = s.run_javascript(id, "", Some("noop")).unwrap();
+    assert_eq!(calculations_ran(&o.console), none, "a click that writes nothing reruns nothing");
+    let o = s.run_javascript(id, "", Some("same")).unwrap();
+    assert_eq!(calculations_ran(&o.console), ["A"], "entry written again, with the same value");
+    let o = s.run_javascript(id, "", Some("setw")).unwrap();
+    assert_eq!(calculations_ran(&o.console), none, "C writes boxW but doesn't read it");
+    assert_eq!(value(&s, "boxW"), ["Button 3 wrote this"]);
+    assert_eq!(value(&s, "shared"), ["A"]);
+}
+
+/// When another script writes a field that has a calculation of its own, that calculation
+/// runs again, as another viewer does (black-box, on a form shaped like this fixture). The
+/// hidden copy writes the visible copy's total after the visible copy emptied it, and the
+/// visible copy's calculation empties it again. Showing the section changes no value, so
+/// nothing reruns.
+#[test]
+fn a_calculated_field_another_script_writes_calculates_again() {
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::hidden_copy_template()));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("copies.pdf", None, bytes, None).expect("opens");
+    let out = s.take_js_output(id);
+    assert_eq!(calculations_ran(&out.console), ["P", "E", "P"], "{:?}", out.errors);
+    s.apply(id, Edit::SetFieldValue { name: "show".into(), value: FieldValue::Check(true) }).unwrap();
+    let out = s.take_js_output(id);
+    assert_eq!(calculations_ran(&out.console), Vec::<String>::new(), "{:?}", out.errors);
+    let total = s.get(id).unwrap().form.iter().find(|f| f.name == "total").map(|f| f.value.clone()).expect("the shown section's total");
+    assert!(total.iter().all(|v| v.is_empty()), "the visible copy's calculation emptied it: {total:?}");
+}
+
+/// The document's record of what its calculations read is copied only by an edit that runs the
+/// form's scripts: an edit that runs none (the document's title) leaves it shared, and a field
+/// edit runs its scripts on a copy, which the document then keeps.
+#[test]
+fn only_an_edit_that_runs_the_forms_scripts_copies_what_its_calculations_read() {
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::recalculation_template()));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("recalc.pdf", None, bytes, None).expect("opens");
+    assert_eq!(calculations_ran(&s.take_js_output(id).console), ["A", "C", "B"]);
+    let record = |s: &Session| s.get(id).unwrap().xfa_calc_deps.clone();
+    let opened = record(&s);
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "Report".into() }).unwrap();
+    assert!(Arc::ptr_eq(&opened, &record(&s)), "no script ran, so nothing was copied");
+    s.apply(id, Edit::SetFieldValue { name: "entry".into(), value: FieldValue::Text("5".into()) }).unwrap();
+    assert_eq!(calculations_ran(&s.take_js_output(id).console), ["A"], "the record still steers the calculations");
+    assert!(!Arc::ptr_eq(&opened, &record(&s)), "the field's scripts ran on a copy, which the document kept");
+}
+
+/// A script's write to a field reaches every field bound to the same data node, and so does
+/// the rerun: a calculation that reads the other field runs again.
+#[test]
+fn a_write_wakes_the_readers_of_every_field_on_the_same_data_node() {
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::shared_node_template()));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("shared.pdf", None, bytes, None).expect("opens");
+    s.take_js_output(id);
+    let o = s.run_javascript(id, "", Some("set")).unwrap();
+    assert_eq!(calculations_ran(&o.console), ["c"], "{o:?}");
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "c").map(|f| f.value.clone()), Some(vec!["7".to_string()]));
+}
+
+/// When a document's record of what its calculations read reaches its cap during an event, it
+/// starts over: the calculations it no longer knows run once more, and the event still ends well
+/// within the runs one calculation may take, with no "kept changing each other" error.
+#[test]
+fn a_record_that_starts_over_during_an_event_still_ends_it() {
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::recalculation_template()));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("recalc.pdf", None, bytes, None).expect("opens");
+    s.take_js_output(id);
+    // A record one short of the cap, as many earlier events adding rows would leave it.
+    s.doc_mut(id).unwrap().xfa_calc_deps = Arc::new(xfa::CalcDeps::filled(xfa::MAX_RECORDED_CALCULATIONS - 1));
+    s.apply(id, Edit::SetFieldValue { name: "entry".into(), value: FieldValue::Text("5".into()) }).unwrap();
+    let out = s.take_js_output(id);
+    // None of A, C and B is known, so each runs; recording C fills the record, which starts
+    // over, so A, known no more, runs once more.
+    assert_eq!(calculations_ran(&out.console), ["A", "C", "B", "A"], "{:?}", out.errors);
+    assert!(out.errors.iter().all(|e| !e.contains("kept changing")), "{:?}", out.errors);
+    assert_eq!(s.get(id).unwrap().xfa_calc_deps.recorded(), 3, "the record started over with A, C and B");
+}
+
+/// A calculation that calls `xfa.form.recalculate()` doesn't make every calculation due again:
+/// on opening each runs once, with no "kept changing each other" error. A click that asks for a
+/// recalculation still runs them all.
+#[test]
+fn a_calculation_asking_for_a_recalculation_runs_once() {
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::recalculating_calculation_template()));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("recalc.pdf", None, bytes, None).expect("opens");
+    let out = s.take_js_output(id);
+    assert_eq!(calculations_ran(&out.console), ["t", "o"], "{:?}", out.errors);
+    assert!(out.errors.iter().all(|e| !e.contains("kept changing")), "{:?}", out.errors);
+    let o = s.run_javascript(id, "", Some("again")).unwrap();
+    assert_eq!(calculations_ran(&o.console), ["t", "o"], "a click's request runs every calculation: {o:?}");
+}
+
+/// Undoing gives the form back its earlier state and forgets what its calculations read since,
+/// so the next change runs them all once and learns again: a row brought back by undo counts
+/// in the total when it is filled in.
+#[test]
+fn after_an_undo_a_restored_row_counts_in_its_total_again() {
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template()));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("rows.pdf", None, bytes, None).expect("opens");
+    let value = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).map(|f| f.value.clone()).unwrap_or_default();
+    s.run_javascript(id, "", Some("addRow")).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "amount".into(), value: FieldValue::Text("10".into()) }).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "amount_2".into(), value: FieldValue::Text("32".into()) }).unwrap();
+    assert_eq!(value(&s, "grand"), ["42"]);
+    s.run_javascript(id, "", Some("removeRow")).unwrap();
+    assert_eq!(value(&s, "grand"), ["10"]);
+    s.undo(id).unwrap();
+    assert_eq!(value(&s, "grand"), ["42"], "the row and its total are back");
+    s.apply(id, Edit::SetFieldValue { name: "amount_2".into(), value: FieldValue::Text("50".into()) }).unwrap();
+    assert_eq!(value(&s, "grand"), ["60"], "{:?}", s.take_js_output(id));
 }
 
 /// A row of dates worked out the way leave forms do it: the calculation checks that the raw value
@@ -6610,9 +6748,8 @@ fn an_xfa_script_that_fails_partway_keeps_what_it_changed_before_the_error() {
     s.apply(id, Edit::SetFieldValue { name: "leave".into(), value: FieldValue::Check(true) }).expect("can be checked now");
 }
 
-/// A scripted form end to end: initialize and calculate on open, recalculation after a change,
-/// a failing validation's message, buttons that add and remove rows and show messages, a check
-/// box that shows a subform (undoable), FormCalc, and a save and reopen that keep it all.
+/// A print button repeated on every page (`PrintButton1`, `_2` and `_3`) runs the form's click
+/// script from each copy, which asks to print, and never an AcroForm fallback.
 #[test]
 fn repeated_xfa_print_buttons_run_their_click_script() {
     let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::repeated_print_button_template()));

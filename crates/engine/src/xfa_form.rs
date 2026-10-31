@@ -1,5 +1,7 @@
 //! A document's XFA form: laying it out, keeping its datasets and fields in step, and taking it out.
 
+use std::sync::Arc;
+
 use crate::edit::EditCtx;
 use crate::{Document, EditError, FieldValue, XfaLayout, guard, xfa};
 
@@ -217,8 +219,15 @@ pub(crate) fn image_content_type(bytes: &[u8]) -> Option<&'static str> {
 /// fields take the data's values.
 pub(crate) fn xfa_after_data_change(doc: &mut pdfcraft_cos::Document, cx: &mut EditCtx, calculate: bool) -> Result<(), EditError> {
     if let Some(tpl) = cx.xfa.clone() {
-        let mut run =
-            xfa::XfaRun { page_count: cx.pages, out: &mut cx.xfa_out, datasets: cx.xfa_datasets, ran_away: false, time_scale: cx.xfa_time_scale };
+        let deps = Arc::make_mut(&mut cx.xfa_deps);
+        let mut run = xfa::XfaRun {
+            page_count: cx.pages,
+            out: &mut cx.xfa_out,
+            datasets: cx.xfa_datasets,
+            ran_away: false,
+            deps,
+            time_scale: cx.xfa_time_scale,
+        };
         let r = guard(|| xfa::on_data_replaced(doc, &tpl, calculate, &mut run))
             .unwrap_or_else(|m| Err(format!("laying the form out again failed unexpectedly ({m})")));
         cx.xfa_datasets = run.datasets;

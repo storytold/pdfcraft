@@ -129,6 +129,13 @@ pub struct XfaOutcome {
     /// The script ran past its time limit and was left running on its own thread (the engine
     /// can't interrupt it): the caller should run no more of this form's scripts.
     pub abandoned: bool,
+    /// The fields and exclusion groups whose value the script read, by SOM, in the order first
+    /// read: a calculation's dependencies (XFA dependency tracking), so that it runs again
+    /// when one of them changes.
+    pub reads: Vec<String>,
+    /// The script read more values than [`MAX_READS`]: `reads` is incomplete, so any change may
+    /// concern it.
+    pub reads_cut: bool,
 }
 
 /// Most nodes a snapshot may hold.
@@ -148,6 +155,9 @@ pub const MAX_ALERTS: usize = 100;
 
 /// Most console lines one run may print.
 pub const MAX_CONSOLE: usize = 1_000;
+
+/// Most values one run's [`XfaOutcome::reads`] lists.
+pub const MAX_READS: usize = 4_096;
 
 /// Longest message or console line kept, in characters.
 pub(crate) const MAX_LINE: usize = 4_096;

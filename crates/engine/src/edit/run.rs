@@ -166,6 +166,10 @@ pub(crate) struct EditCtx {
     pub(crate) xfa_datasets: Option<pdfcraft_cos::ObjRef>,
     /// A form script ran too long and was abandoned: the document's scripts go off.
     pub(crate) xfa_ran_away: bool,
+    /// What the form's calculations read: the document's record, copied when an edit first runs
+    /// the form's scripts, so an edit that runs none copies nothing and a failed edit leaves
+    /// the document's record as it was.
+    pub(crate) xfa_deps: Arc<xfa::CalcDeps>,
     /// What the XFA scripts' time limits are multiplied by ([`Session::with_xfa_time_scale`]).
     pub(crate) xfa_time_scale: u32,
     /// The edit took the XFA out of the form: what went with it, for the document's warnings.
@@ -188,6 +192,8 @@ pub(crate) struct EditCtx {
 }
 
 impl EditCtx {
+    /// The context of one edit: `now` (the clock's time, `None` without one) and `salt` seed the
+    /// unique ids it hands out.
     pub(crate) fn new(now: Option<i64>, salt: u64) -> Self {
         let mut seed = 0x9E37_79B9_7F4A_7C15u64 ^ salt;
         if let Some(t) = now {
@@ -204,6 +210,7 @@ impl EditCtx {
             xfa_out: Default::default(),
             xfa_datasets: None,
             xfa_ran_away: false,
+            xfa_deps: Arc::default(),
             xfa_time_scale: 1,
             xfa_removed: Vec::new(),
             pages: 0,
@@ -422,8 +429,15 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         },
         Edit::XfaEvent { som, activity } => {
             let tpl = cx.xfa.clone().ok_or_else(|| EditError::Invalid("this is not a laid-out XFA form, or JavaScript is off".into()))?;
-            let mut run =
-                xfa::XfaRun { page_count: cx.pages, out: &mut cx.xfa_out, datasets: cx.xfa_datasets, ran_away: false, time_scale: cx.xfa_time_scale };
+            let deps = Arc::make_mut(&mut cx.xfa_deps);
+            let mut run = xfa::XfaRun {
+                page_count: cx.pages,
+                out: &mut cx.xfa_out,
+                datasets: cx.xfa_datasets,
+                ran_away: false,
+                deps,
+                time_scale: cx.xfa_time_scale,
+            };
             let ran = xfa::on_event(doc, &tpl, som, activity, &mut run);
             cx.xfa_datasets = run.datasets;
             cx.xfa_ran_away |= run.ran_away;
