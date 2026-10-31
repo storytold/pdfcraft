@@ -141,6 +141,22 @@ fn thumbnail_size_is_settable_and_inspectable_through_the_control_channel() {
 }
 
 #[test]
+fn form_tab_numbers_can_be_shown_and_captured_through_the_control_channel() {
+    let (mut h, c) = harness();
+    h.state_mut().open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+    h.run_steps(3);
+    ok(&mut h, &c, "ui.command", json!({"id": "form.prepare"}));
+    let control = ok(&mut h, &c, "ui.inspect", json!({"query": "Show tab numbers"}));
+    assert!(control["widgets"].as_array().unwrap().iter().any(|widget| widget["label"] == "Show tab numbers"));
+    ok(&mut h, &c, "ui.click", json!({"label": "Show tab numbers"}));
+    h.run_steps(2);
+    assert!(h.state().views[h.state().active.unwrap()].prepare.show_tab_numbers);
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"][1]["dirty"], false);
+    let shot = ok(&mut h, &c, "ui.screenshot", json!({}));
+    assert!(shot["png_base64"].as_str().is_some_and(|png| !png.is_empty()), "the control channel captures the enabled overlay");
+}
+
+#[test]
 fn control_resize_reports_observed_dimensions_and_rejects_invalid_sizes() {
     let (mut h, c) = harness();
     for params in [

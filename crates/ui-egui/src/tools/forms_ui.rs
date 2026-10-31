@@ -95,6 +95,25 @@ fn fillable(f: &FormField) -> bool {
     !f.read_only() && !matches!(f.kind, FormFieldKind::PushButton | FormFieldKind::Signature)
 }
 
+/// The fillable widgets in the order Tab and Shift+Tab visit them.
+pub(crate) fn tab_order(form: &[FormField]) -> Vec<(usize, usize)> {
+    let mut order: Vec<(usize, usize, usize)> = form
+        .iter()
+        .enumerate()
+        .filter(|(_, field)| fillable(field))
+        .flat_map(|(fi, field)| {
+            field
+                .widgets
+                .iter()
+                .enumerate()
+                .filter(|(_, widget)| widget.page.is_some() && !widget.hidden)
+                .map(move |(wi, widget)| (widget.tab, fi, wi))
+        })
+        .collect();
+    order.sort_by_key(|(tab, _, _)| *tab);
+    order.into_iter().map(|(_, fi, wi)| (fi, wi)).collect()
+}
+
 /// Whether a combo box takes typed text as well as a choice from its list: the Edit flag
 /// (ISO 32000-2 Table 233), which only means something with Combo set.
 fn editable_combo(f: &FormField) -> bool {
@@ -708,19 +727,17 @@ fn tab_to_next_field(view: &mut DocView, form: &[FormField], f: &FormField, widg
     let pending = view.pending_edit.take();
     // The next field that can be filled in, check boxes and radio buttons included (#2223), in
     // the document's tab order (each page's /Tabs: rows, columns or structure), wrapping.
-    let mut order: Vec<(usize, &FormField, usize)> = form
+    let order = tab_order(form);
+    if let Some(pos) = order
         .iter()
-        .filter(|x| fillable(x))
-        .flat_map(|x| x.widgets.iter().enumerate().filter(|(_, w)| w.page.is_some() && !w.hidden).map(move |(wi, w)| (w.tab, x, wi)))
-        .collect();
-    order.sort_by_key(|o| o.0);
-    if let Some(pos) =
-        order.iter().position(|(_, x, wi)| x.name == f.name && *wi == widget).or_else(|| order.iter().position(|(_, x, _)| x.name == f.name))
+        .position(|(fi, wi)| form.get(*fi).is_some_and(|x| x.name == f.name && *wi == widget))
+        .or_else(|| order.iter().position(|(fi, _)| form.get(*fi).is_some_and(|x| x.name == f.name)))
     {
         let k = if forward { (pos + 1) % order.len() } else { (pos + order.len() - 1) % order.len() };
-        let (_, target, wi) = order[k];
+        let Some((fi, wi)) = order.get(k).copied() else { return edit.or(pending) };
+        let Some(target) = form.get(fi) else { return edit.or(pending) };
         view.forms.focus = Some(Focus { select_all: true, ..open_focus(target, wi) });
-        if let Some(p) = target.widgets[wi].page
+        if let Some(p) = target.widgets.get(wi).and_then(|widget| widget.page)
             && view.page_screen_rect(p).is_none()
         {
             view.go_to_page(p);

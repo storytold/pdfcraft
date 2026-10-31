@@ -278,6 +278,51 @@ fn tab_and_space_fill_in_a_check_box_between_text_fields() {
 }
 
 #[test]
+fn tab_and_shift_tab_follow_widget_order_across_pages() {
+    let mut h = check_box_harness();
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::AddField {
+        page: 1,
+        rect: [20.0, 350.0, 180.0, 372.0],
+        kind: pdfcraft_engine::NewField::Text { multiline: false },
+        name: Some("second_page".into()),
+    });
+    h.run_steps(4);
+    let order = {
+        let s = h.state();
+        let form = &s.session.get(s.views[0].id).unwrap().form;
+        let mut widgets: Vec<(usize, String, usize)> = form
+            .iter()
+            .filter(|field| {
+                !field.read_only() && !matches!(field.kind, pdfcraft_engine::FormFieldKind::PushButton | pdfcraft_engine::FormFieldKind::Signature)
+            })
+            .flat_map(|field| {
+                field
+                    .widgets
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, widget)| widget.page.is_some() && !widget.hidden)
+                    .map(move |(wi, widget)| (widget.tab, field.name.clone(), wi))
+            })
+            .collect();
+        widgets.sort_by_key(|(tab, _, _)| *tab);
+        widgets.into_iter().map(|(_, name, wi)| (name, wi)).collect::<Vec<_>>()
+    };
+    assert_eq!(order.first().map(|entry| entry.0.as_str()), Some("first"));
+    assert_eq!(order.last().map(|entry| entry.0.as_str()), Some("second_page"));
+    click_field(&mut h, "first", 0);
+    for expected in order.iter().skip(1) {
+        h.key_press(egui::Key::Tab);
+        h.run_steps(4);
+        assert_eq!(focused(&h), Some(expected.clone()), "forward traversal: {order:?}");
+    }
+    for expected in order.iter().rev().skip(1) {
+        h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
+        h.run_steps(4);
+        assert_eq!(focused(&h), Some(expected.clone()), "reverse traversal: {order:?}");
+    }
+}
+
+#[test]
 fn clicking_a_check_box_while_typing_keeps_the_text_and_focuses_the_box() {
     // Issue #2223: the click ticked the box but left no field focused, so Tab started over.
     let mut h = check_box_harness();

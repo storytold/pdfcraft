@@ -545,6 +545,73 @@ fn the_fields_panel_orders_tabs_manually() {
 }
 
 #[test]
+fn tab_numbers_follow_fill_order_without_dirtying_the_document() {
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h.get_by_label("Show tab numbers").click();
+    h.run_steps(3);
+
+    let (order, rects, undo) = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let mut order: Vec<(usize, usize, usize)> = doc
+            .form
+            .iter()
+            .enumerate()
+            .filter(|(_, field)| {
+                !field.read_only() && !matches!(field.kind, pdfcraft_engine::FormFieldKind::PushButton | pdfcraft_engine::FormFieldKind::Signature)
+            })
+            .flat_map(|(fi, field)| {
+                field
+                    .widgets
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, widget)| widget.page.is_some() && !widget.hidden)
+                    .map(move |(wi, widget)| (widget.tab, fi, wi))
+            })
+            .collect();
+        order.sort_by_key(|(tab, _, _)| *tab);
+        let order: Vec<(usize, usize)> = order.into_iter().map(|(_, fi, wi)| (fi, wi)).collect();
+        let rects = order
+            .iter()
+            .map(|(fi, wi)| {
+                let field = doc.form.get(*fi).expect("the traversal field exists");
+                pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, field, *wi).unwrap()
+            })
+            .collect::<Vec<_>>();
+        (order, rects, doc.can_undo())
+    };
+    assert!(h.state().views[0].prepare.show_tab_numbers);
+    assert_eq!(undo, None, "displaying the numbers does not edit the PDF");
+    let size_widgets = order
+        .iter()
+        .filter(|(fi, _)| h.state().session.get(h.state().views[0].id).unwrap().form.get(*fi).is_some_and(|field| field.name == "size"))
+        .count();
+    assert_eq!(size_widgets, 2, "each radio widget has its own tab stop");
+
+    let drawn: Vec<(String, egui::Pos2)> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) => Some((text.galley.text().to_owned(), text.visual_bounding_rect().center())),
+            _ => None,
+        })
+        .collect();
+    for (i, rect) in rects.iter().enumerate() {
+        let expected = i.saturating_add(1).to_string();
+        let badge_center = rect.min + egui::vec2(3.0 + 4.0 + 3.0, 3.0 + 2.0 + 5.0);
+        assert!(
+            drawn.iter().any(|(label, center)| label == &expected && center.distance(badge_center) < 8.0),
+            "widget {:?} should show tab number {expected} near {:?}; drawn: {drawn:?}",
+            order.get(i),
+            rect.min
+        );
+    }
+}
+
+#[test]
 fn duplicating_a_field_onto_every_page() {
     let mut h = harness();
     h.state_mut().apply_edit(pdfcraft_engine::Edit::InsertBlankPage { at: 1, width: 300.0, height: 400.0 });
