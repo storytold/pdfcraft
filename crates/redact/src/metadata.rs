@@ -12,8 +12,9 @@
 //! removed run, is removed whole: editing the XML in place could leave it malformed or keep the
 //! term in another spelling. A PDF/A identification in that packet goes with it.
 //!
-//! Fail-closed: XMP that isn't UTF-8 or UTF-16 goes, text too large to search against every term
-//! counts as matching, and when the removed text itself was cut short (too many runs or terms,
+//! Fail-closed: XMP that isn't UTF-8 or UTF-16, or whose filter data is damaged or behind more than
+//! one filter (it is decoded strictly, so nothing after damage goes unsearched), goes; text too
+//! large to search against every term counts as matching, and when the removed text itself was cut short (too many runs or terms,
 //! or a run too long to keep) every `/Info` string and every XMP stream goes, since what was
 //! never collected can't be searched for. Terms are matched without regard to case or spacing.
 
@@ -273,8 +274,14 @@ pub(crate) fn decode_xmp(bytes: &[u8]) -> Option<String> {
 /// The text values of an XMP stream, or `None` when it can't be read.
 fn xmp_values(doc: &Document, o: &Object) -> Option<Vec<String>> {
     let Object::Stream(s) = &*doc.resolve(o) else { return None };
-    // Decoding stops at the cap, so a small stream that inflates hugely costs no more memory.
-    let bytes = s.decoded_within(MAX_XMP_BYTES).ok()?;
+    // Decoded strictly: a tolerant decode returns whatever came before the damage, and the part
+    // after it would go unsearched. A chain of more than one filter has no strict decoder here,
+    // so it isn't read either (fail-closed; XMP is rarely filtered at all). Decoding stops at the
+    // cap, so a small stream that inflates hugely costs no more memory.
+    if s.filters().len() > 1 {
+        return None;
+    }
+    let bytes = s.decoded_first_filter_strict(MAX_XMP_BYTES).ok()?;
     decode_xmp(&bytes).map(|t| xml_values(&t))
 }
 

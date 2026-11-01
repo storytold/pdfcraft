@@ -47,8 +47,9 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
     is nested past the depth limit (`MAX_DEPTH`, 50) or its content can't be read; or more
     than 20,000 terms, or a run longer than 4,096 characters, to search for. Once the
     search's work limit (2^28 steps) runs out, every entry and packet not yet checked goes
-    too. An XMP packet that isn't valid UTF-8 or UTF-16, can't be decoded, or decodes to
-    more than 16 MiB goes without being read.
+    too. An XMP packet that isn't valid UTF-8 or UTF-16, can't be decoded strictly (damaged or
+    cut-short filter data, or more than one filter), or decodes to more than
+    16 MiB goes without being read.
   - **Not scrubbed** (Sanitize's categories cover them): XMP streams on anything but the
     catalog and the pages (images, fonts, form XObjects, annotations and other objects),
     bookmark titles, and attachments (embedded files, their names and descriptions).
