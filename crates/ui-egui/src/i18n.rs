@@ -58,6 +58,15 @@ fn plural_none(_: u64) -> usize {
     0
 }
 
+/// Hebrew uses CLDR one (1), two (2), and other (all remaining counts) plural categories.
+fn plural_hebrew(n: u64) -> usize {
+    match n {
+        1 => 0,
+        2 => 1,
+        _ => 2,
+    }
+}
+
 /// Romanian (CLDR `ro`): 1 is `one`; 0 and numbers whose last two digits are 1–19 (2, 19, 101,
 /// 119) are `few`; everything else (20, 100, 120) is `other`, the form with "de" ("20 de pagini").
 fn plural_ro(n: u64) -> usize {
@@ -159,7 +168,7 @@ fn plural_sl(n: u64) -> usize {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 35] = [
+pub static LANGUAGES: [LangInfo; 36] = [
     LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, rtl: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: include_str!("i18n/ja.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new() },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` locales resolve here (see `candidates`).
@@ -238,6 +247,9 @@ pub static LANGUAGES: [LangInfo; 35] = [
     // to left like Arabic: see `LangInfo::rtl`. CLDR `fa` counts have two forms (one: i = 0 or n = 1,
     // other), which for whole counts is the French rule, so `@plural` entries list two forms.
     LangInfo { code: "fa", name: "فارسی", source: include_str!("i18n/fa.tsv"), plural: plural_fr, rtl: true, catalog: OnceLock::new() },
+    // Hebrew UI labels use the existing bidi text shaping while retaining PdfCraft's current
+    // control placement and toolbar layout in this fork.
+    LangInfo { code: "he", name: "עברית", source: include_str!("i18n/he.tsv"), plural: plural_hebrew, rtl: true, catalog: OnceLock::new() },
     // Polish; every `pl-*` locale (`pl-pl`, `pl_pl.UTF-8`) resolves here.
     LangInfo { code: "pl", name: "Polski", source: include_str!("i18n/pl.tsv"), plural: plural_polish, rtl: false, catalog: OnceLock::new() },
     // Slovene; every `sl-*` locale (`sl-SI`) resolves here. Four plural forms (one, two, few, other).
@@ -399,6 +411,7 @@ impl Lang {
             "ar" => "Arabic",
             "ckb" => "Central Kurdish",
             "fa" => "Persian",
+            "he" => "Hebrew",
             "pl" => "Polish",
             "sl" => "Slovenian",
             "el" => "Greek",
@@ -433,6 +446,13 @@ impl Lang {
     /// shapes and reorders each run for display (see [`LangInfo::rtl`]).
     pub fn rtl(self) -> bool {
         self.0.rtl
+    }
+
+    /// Whether the stock egui chrome (menus, combo boxes, scroll bars and headers) should mirror.
+    /// Hebrew uses right-to-left text direction but, in this fork, retains the existing control
+    /// and button placement rather than mirroring the entire interface.
+    pub fn mirrors_chrome(self) -> bool {
+        self.rtl() && self.code() != "he"
     }
 
     fn catalog(self) -> &'static Catalog {
