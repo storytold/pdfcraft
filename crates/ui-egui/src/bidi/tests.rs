@@ -26,6 +26,12 @@ fn latin_and_numbers_keep_their_own_order() {
 #[test]
 fn hebrew_and_brackets() {
     assert_eq!(visual("שלום עולם.pdf"), "עולם שלום.pdf");
+    assert_eq!(visual("מסמך (טיוטה) 2026.pdf"), "2026 (טיוטה) מסמך.pdf");
+    assert_eq!(display_rtl("ייצוא ל-Microsoft Word כעת"), "כעת Microsoft Word-ל ייצוא");
+    assert_eq!(display_rtl("עמוד {p} מתוך {n}"), "{n} מתוך {p} עמוד");
+    assert_eq!(wrap_at("מסמך PDF גרסה 2 מוכן", 80), [rtl("מסמך PDF גרסה 2 מוכן")]);
+    assert_eq!(visual_auto("צוות שלום עולם"), "עולם שלום צוות");
+    assert_eq!(visual_auto("Team שלום עולם"), "Team עולם שלום");
     // Brackets between right-to-left words flip with the direction.
     assert_eq!(visual("واحد (اثنين) ثلاثة.pdf"), "ثلاثة (اثنين) واحد.pdf");
 }
