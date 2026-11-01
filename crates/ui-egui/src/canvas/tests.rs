@@ -2006,9 +2006,15 @@ fn a_moved_picture_is_drawn_from_the_fresh_raster_while_a_tile_is_still_stale() 
 /// Full screen's presenter for one frame of `ctx`, at time `now`: whether the frame asked to be
 /// drawn again at once.
 fn presenter_frame(ctx: &egui::Context, v: &mut DocView, info: &DocInfo, now: f64) -> bool {
+    presenter_frame_animating(ctx, v, info, now, true)
+}
+
+/// [`presenter_frame`] with the Animation effects preference as given (`false` also when the
+/// system asks for no animations).
+fn presenter_frame_animating(ctx: &egui::Context, v: &mut DocView, info: &DocInfo, now: f64, animates: bool) -> bool {
     let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
         let painter = ui.ctx().layer_painter(egui::LayerId::background());
-        presenter::frame(v, info, &painter, ui.ctx(), now, true, None);
+        presenter::frame(v, info, &painter, ui.ctx(), now, animates, None);
     });
     // No renderer here to upload textures: drop the frame's texture changes.
     out.textures_delta.clear();
@@ -2183,4 +2189,173 @@ fn a_display_time_in_two_page_view_waits_for_the_whole_spread() {
     assert_eq!(v.current, 0, "half of its second on screen");
     presenter_frame(&ctx, &mut v, &info, 6.6);
     assert_eq!(v.current, 2, "its second on screen is up: the next spread");
+}
+
+/// Page 1 of `pages` 300×400 pt pages, with `transitions`, in full screen (single page), its
+/// raster in. The other pages get theirs with [`give_raster`].
+fn presenting_view(pages: usize, transitions: Vec<pdfcraft_render::PageTransition>, ctx: &egui::Context) -> (DocView, DocInfo) {
+    let page = pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 };
+    let info = DocInfo { pages: vec![page; pages], transitions, ..Default::default() };
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults { layout: PageLayout::Single, continuous: false, ..Default::default() });
+    v.enter_presentation();
+    give_raster(ctx, &mut v, 0);
+    (v, info)
+}
+
+/// Page `page`'s raster has arrived (a blank one).
+fn give_raster(ctx: &egui::Context, v: &mut DocView, page: usize) {
+    let tex = ctx.load_texture("page", egui::ColorImage::new([4, 4], vec![Color32::WHITE; 16]), Default::default());
+    v.pages.insert(page, super::cache::PageTex { tag: 0, tex });
+}
+
+/// Turn to `page` as a key would, with its raster in and its place on screen.
+fn turn_to(ctx: &egui::Context, v: &mut DocView, page: usize) {
+    give_raster(ctx, v, page);
+    v.current = page;
+    v.screen_rects = vec![(page, Rect::from_min_size(Pos2::ZERO, egui::vec2(300.0, 400.0)))];
+}
+
+/// A page's `/Trans` (style and `/D`) and `/Dur`, the rest as the spec's defaults.
+fn trans(page: usize, style: Option<pdfcraft_render::TransitionStyle>, duration: f32, display: Option<f32>) -> pdfcraft_render::PageTransition {
+    pdfcraft_render::PageTransition { page, style, duration, horizontal: true, inward: true, direction: Some(0), scale: 1.0, opaque: false, display }
+}
+
+/// A page with a transition but no display time (ISO 32000-2 Table 31, `Dur`: "By default, the
+/// viewer shall not advance automatically") stays until the user turns it, however long it shows.
+#[test]
+fn a_page_without_a_display_time_never_advances_by_itself() {
+    use pdfcraft_render::TransitionStyle;
+    let ctx = egui::Context::default();
+    let (mut v, info) = presenting_view(3, vec![trans(0, Some(TransitionStyle::Wipe), 1.0, None)], &ctx);
+    for now in [0.0, 1.0, 60.0, 86_400.0, 1.0e7] {
+        presenter_frame(&ctx, &mut v, &info, now);
+    }
+    assert_eq!(v.current, 0, "no /Dur: the page waits for the presenter");
+}
+
+/// A display time of 0 seconds advances as soon as the page is on screen: zero is a number the
+/// spec allows, the time a page "shall be displayed" at most.
+#[test]
+fn a_display_time_of_zero_advances_once_the_page_is_on_screen() {
+    let ctx = egui::Context::default();
+    let (mut v, info) = presenting_view(3, vec![trans(0, None, 1.0, Some(0.0))], &ctx);
+    presenter_frame(&ctx, &mut v, &info, 0.0);
+    assert_eq!(v.current, 1, "page 1's zero seconds are up at once");
+    presenter_frame(&ctx, &mut v, &info, 0.1);
+    assert_eq!(v.current, 1, "page 2 has no display time");
+}
+
+/// A display time from the file that is negative, not a number or endless is no display time, or
+/// at most a day: it neither turns the page at once nor reaches a timer that can't hold it.
+#[test]
+fn a_negative_or_endless_display_time_is_no_display_time() {
+    for display in [-1.0, -0.001, f32::NAN, f32::NEG_INFINITY, f32::INFINITY] {
+        let ctx = egui::Context::default();
+        let (mut v, info) = presenting_view(3, vec![trans(0, None, 1.0, Some(display))], &ctx);
+        for now in [0.0, 0.1, 5.0, 3600.0] {
+            presenter_frame(&ctx, &mut v, &info, now);
+        }
+        assert_eq!(v.current, 0, "/Dur {display}");
+    }
+}
+
+/// A display time longer than a day is cut to a day; the largest number the file can hold would
+/// otherwise be past what a timer can wait for.
+#[test]
+fn a_display_time_longer_than_a_day_is_cut_to_a_day() {
+    for display in [1.0e9, f32::MAX] {
+        let ctx = egui::Context::default();
+        let (mut v, info) = presenting_view(3, vec![trans(0, None, 1.0, Some(display))], &ctx);
+        presenter_frame(&ctx, &mut v, &info, 0.0);
+        presenter_frame(&ctx, &mut v, &info, 86_399.0);
+        assert_eq!(v.current, 0, "/Dur {display}: not yet a day");
+        presenter_frame(&ctx, &mut v, &info, 86_400.5);
+        assert_eq!(v.current, 1, "/Dur {display}: a day is up");
+    }
+}
+
+/// A transition the file says lasts a day (or longer) ends within ten seconds: it can't hold the
+/// screen.
+#[test]
+fn a_transition_of_a_day_ends_within_ten_seconds() {
+    use pdfcraft_render::TransitionStyle;
+    for duration in [86_400.0, f32::MAX] {
+        let ctx = egui::Context::default();
+        let (mut v, info) = presenting_view(3, vec![trans(1, Some(TransitionStyle::Wipe), duration, None)], &ctx);
+        presenter_frame(&ctx, &mut v, &info, 0.0);
+        turn_to(&ctx, &mut v, 1);
+        presenter_frame(&ctx, &mut v, &info, 0.1);
+        presenter_frame(&ctx, &mut v, &info, 5.0);
+        assert!(v.presenting_a_transition(), "/D {duration}: playing");
+        presenter_frame(&ctx, &mut v, &info, 10.2);
+        assert!(!v.presenting_a_transition(), "/D {duration}: over after ten seconds");
+    }
+}
+
+/// A transition of no length, a negative one or one that is not a number changes the page at once
+/// (a negative one would otherwise never end).
+#[test]
+fn a_transition_of_zero_or_negative_length_cuts() {
+    use pdfcraft_render::TransitionStyle;
+    for duration in [0.0, -1.0, f32::NAN, f32::NEG_INFINITY] {
+        let ctx = egui::Context::default();
+        let (mut v, info) = presenting_view(3, vec![trans(1, Some(TransitionStyle::Wipe), duration, None)], &ctx);
+        presenter_frame(&ctx, &mut v, &info, 0.0);
+        turn_to(&ctx, &mut v, 1);
+        presenter_frame(&ctx, &mut v, &info, 0.1);
+        assert!(!v.presenting_a_transition(), "/D {duration}: cut");
+        assert_eq!(v.current, 1);
+    }
+}
+
+/// A style the spec doesn't name is read as its default R, Replace (ISO 32000-2 Table 164: "The
+/// new page simply replaces the old one with no special transition effect"): the page changes at
+/// once, and its display time still counts.
+#[test]
+fn an_unknown_transition_style_cuts_and_keeps_the_display_time() {
+    use pdfcraft_render::TransitionStyle;
+    let ctx = egui::Context::default();
+    let unknown = TransitionStyle::from_name("Spiral");
+    let (mut v, info) = presenting_view(3, vec![trans(1, Some(unknown), 5.0, Some(1.0))], &ctx);
+    presenter_frame(&ctx, &mut v, &info, 0.0);
+    turn_to(&ctx, &mut v, 1);
+    presenter_frame(&ctx, &mut v, &info, 0.1);
+    assert!(!v.presenting_a_transition(), "no effect for an unknown style");
+    presenter_frame(&ctx, &mut v, &info, 0.9);
+    assert_eq!(v.current, 1, "its display time is not up");
+    presenter_frame(&ctx, &mut v, &info, 1.2);
+    assert_eq!(v.current, 2, "its display time is up");
+}
+
+/// With animations off (the preference, or the system asking for none), a transition is a cut and
+/// the page's display time still counts from when it is on screen.
+#[test]
+fn without_animations_a_transition_cuts_and_the_display_time_counts() {
+    use pdfcraft_render::TransitionStyle;
+    let ctx = egui::Context::default();
+    let (mut v, info) = presenting_view(3, vec![trans(1, Some(TransitionStyle::Wipe), 5.0, Some(1.0))], &ctx);
+    presenter_frame_animating(&ctx, &mut v, &info, 0.0, false);
+    turn_to(&ctx, &mut v, 1);
+    presenter_frame_animating(&ctx, &mut v, &info, 0.1, false);
+    assert!(!v.presenting_a_transition(), "cut");
+    presenter_frame_animating(&ctx, &mut v, &info, 1.2, false);
+    assert_eq!(v.current, 2, "page 2's second is up");
+}
+
+/// A page turned by hand while a display time counts starts its own time afresh (ISO 32000-2
+/// §12.4.4.1, NOTE 1: "The user can advance the page manually before the specified time has
+/// expired"); the time left on the page before is not carried over.
+#[test]
+fn a_page_turned_by_hand_starts_its_own_display_time() {
+    let ctx = egui::Context::default();
+    let timed = (0..4).map(|p| trans(p, None, 1.0, Some(2.0))).collect();
+    let (mut v, info) = presenting_view(4, timed, &ctx);
+    presenter_frame(&ctx, &mut v, &info, 0.0);
+    presenter_frame(&ctx, &mut v, &info, 1.5);
+    turn_to(&ctx, &mut v, 1);
+    presenter_frame(&ctx, &mut v, &info, 1.5);
+    presenter_frame(&ctx, &mut v, &info, 3.0);
+    assert_eq!(v.current, 1, "page 2 has shown 1.5 of its 2 seconds");
+    presenter_frame(&ctx, &mut v, &info, 3.6);
+    assert_eq!(v.current, 2, "page 2's own 2 seconds are up");
 }

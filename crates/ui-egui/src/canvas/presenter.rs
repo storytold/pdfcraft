@@ -3,9 +3,13 @@
 //! and the pointer hides while it stays still.
 //!
 //! Transitions play in single-page view without view rotation, from the outgoing page's raster
-//! to the incoming one's once it has rendered; spreads, a rotated view and the Animation effects
-//! preference set to off change pages at once. Display times count from the end of the
-//! transition and stop at the last page.
+//! to the incoming one's once it has rendered; spreads, a rotated view and animations turned off
+//! (the Animation effects preference, which by default follows the system's request for no
+//! animations) change pages at once. A style the spec doesn't name is its default, Replace, a
+//! cut. Display times count from the end of the transition and stop at the last page; the keys
+//! and clicks still turn pages meanwhile (§12.4.4.1, NOTE 1), and leaving full screen stops them.
+//! The file's numbers are bounded: a transition plays for at most `MAX_TRANSITION` seconds, and a
+//! display time waits at most `MAX_DISPLAY`.
 
 use egui::{Color32, CornerRadius, Painter, Pos2, Rect, TextureHandle, pos2};
 use pdfcraft_render::transition::{self, Effect, Piece};
@@ -16,7 +20,8 @@ use super::{DocView, PageLayout};
 /// Seconds the pointer stays still before full screen hides it.
 pub(crate) const HIDE_POINTER_AFTER: f64 = 3.0;
 /// Bounds on a document's numbers, which are untrusted: the longest transition played and the
-/// longest display time waited for.
+/// longest display time waited for (a day: a timer can't hold the largest number a file can
+/// write).
 const MAX_TRANSITION: f64 = 10.0;
 const MAX_DISPLAY: f64 = 24.0 * 3600.0;
 

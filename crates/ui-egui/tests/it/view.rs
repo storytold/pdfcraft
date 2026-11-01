@@ -2343,10 +2343,15 @@ trailer << /Root 1 0 R >>
 
 /// The presentation document in full screen, frames a tenth of a second apart, every raster in.
 fn presenting(options: &'static [(&'static str, &'static str)]) -> Harness<'static, PdfCraftApp> {
+    presenting_pdf(PRESENTATION, options)
+}
+
+/// [`presenting`] with another document.
+fn presenting_pdf(pdf: &'static [u8], options: &'static [(&'static str, &'static str)]) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(0.1).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
-        app.open_bytes("slides.pdf", None, PRESENTATION.to_vec()).expect("opens");
+        app.open_bytes("slides.pdf", None, pdf.to_vec()).expect("opens");
         app.set_option("left", "closed").unwrap();
         app.set_option("panel", "none").unwrap();
         app.set_option("animation_effects", "on").unwrap();
@@ -2421,8 +2426,10 @@ fn full_screen_plays_a_page_transition_and_honours_the_display_time() {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     assert!(wipe_strip(&h), "the Wipe paints part of page 2 ({steps} frames)");
-    let frames = steps + frames_until(&mut h, |a| !a.views[0].presenting_a_transition());
-    assert!(frames >= 9, "the Wipe takes its second ({frames} frames of 0.1 s)");
+    // Counted from the first painted strip, when page 2's raster is in and the Wipe is under way:
+    // the frames spent waiting for the raster don't count toward its second.
+    let frames = frames_until(&mut h, |a| !a.views[0].presenting_a_transition());
+    assert!(frames >= 8, "the Wipe takes its second ({frames} frames of 0.1 s after the first strip)");
     assert_eq!(h.state().views[0].current, 1, "still page 2 when the transition ends");
     h.run_steps(5);
     assert_eq!(h.state().views[0].current, 1, "half of its display time");
@@ -2623,4 +2630,164 @@ trailer << /Root 1 0 R >>
     h.run_steps(30);
     assert_eq!(h.state().views[n].current, 0, "no page turned");
     assert!(h.ctx.egui_wants_keyboard_input(), "the note is open to edit");
+}
+
+/// With Animation effects following the system and the system asking for no animations (Windows'
+/// Animation effects off, or another system's Reduce motion), full screen changes pages at once
+/// and still keeps the page's display time; with the system not asking, the same transition plays.
+#[test]
+fn full_screen_cuts_transitions_when_the_system_asks_for_no_animations() {
+    for reduced in [true, false] {
+        let mut h = presenting(&[("animation_effects", "system")]);
+        h.state_mut().motion.reduced = reduced;
+        h.run_steps(1);
+        h.key_press(Key::ArrowRight);
+        h.run_steps(1);
+        assert_eq!(h.state().views[0].current, 1);
+        assert_eq!(h.state().views[0].presenting_a_transition(), !reduced, "system asks for no animations: {reduced}");
+        if reduced {
+            settle(&mut h);
+            let frames = frames_until(&mut h, |a| a.views[0].current == 2);
+            assert!(frames <= 20, "page 2's one-second display time still turns it ({frames} frames of 0.1 s)");
+        }
+    }
+}
+
+/// Escape leaves full screen while a transition plays and while a display time counts, and the
+/// display time stops with it: the page reached stays.
+#[test]
+fn escape_leaves_full_screen_mid_transition_and_stops_the_display_time() {
+    for mid_transition in [true, false] {
+        let mut h = presenting(&[]);
+        h.key_press(Key::ArrowRight);
+        h.run_steps(1);
+        assert!(h.state().views[0].presenting_a_transition(), "page 2 comes in with its Wipe");
+        if !mid_transition {
+            frames_until(&mut h, |a| !a.views[0].presenting_a_transition());
+            h.run_steps(3);
+            assert_eq!(h.state().views[0].current, 1, "page 2's display time is counting");
+        }
+        h.key_press(Key::Escape);
+        h.run_steps(1);
+        assert!(!h.state().full_screen, "Escape leaves full screen (mid-transition: {mid_transition})");
+        assert!(!h.state().views[0].presenting_a_transition());
+        h.run_steps(30);
+        assert_eq!(h.state().views[0].current, 1, "no page turns by itself after leaving (mid-transition: {mid_transition})");
+    }
+}
+
+/// While a page's display time counts, the keys still turn pages at once (ISO 32000-2 §12.4.4.1,
+/// NOTE 1: "The user can advance the page manually before the specified time has expired"):
+/// → goes on before the time is up, and ← back to a page with no display time, which then stays.
+#[test]
+fn full_screen_keys_take_over_from_a_display_time() {
+    let mut h = presenting(&[("animation_effects", "off")]);
+    h.key_press(Key::ArrowRight);
+    h.run_steps(1);
+    assert_eq!(h.state().views[0].current, 1, "page 2, with its one-second display time");
+    h.key_press(Key::ArrowLeft);
+    h.run_steps(1);
+    assert_eq!(h.state().views[0].current, 0, "← goes back before the time is up");
+    h.run_steps(30);
+    assert_eq!(h.state().views[0].current, 0, "page 1 has no display time: it stays");
+    h.key_press(Key::ArrowRight);
+    h.run_steps(2);
+    h.key_press(Key::ArrowRight);
+    h.run_steps(1);
+    assert_eq!(h.state().views[0].current, 2, "→ goes on before page 2's time is up");
+}
+
+/// Every way full screen moves: forward (→, Space, Enter, Page Down, a click), back (←, Backspace,
+/// Shift+Enter, Page Up, a right-click, a Shift-click), first (Home, Shift+Ctrl+Page Up), last (End,
+/// Shift+Ctrl+Page Down) and out (Escape, Ctrl+L).
+#[test]
+fn full_screen_every_key_and_click_goes_where_it_says() {
+    #[derive(Clone, Copy, Debug)]
+    enum Input {
+        Key(Key, Modifiers),
+        Click(egui::PointerButton, Modifiers),
+    }
+    use Input::{Click, Key as K};
+    use egui::PointerButton::{Primary, Secondary};
+    let both = Modifiers::COMMAND | Modifiers::SHIFT;
+    // (input, page before, page after); a page past the end stays where it is.
+    let moves = [
+        (K(Key::ArrowRight, Modifiers::NONE), 0, 1),
+        (K(Key::Space, Modifiers::NONE), 0, 1),
+        (K(Key::Enter, Modifiers::NONE), 0, 1),
+        (K(Key::PageDown, Modifiers::NONE), 0, 1),
+        (Click(Primary, Modifiers::NONE), 0, 1),
+        (K(Key::ArrowLeft, Modifiers::NONE), 1, 0),
+        (K(Key::Backspace, Modifiers::NONE), 1, 0),
+        (K(Key::Enter, Modifiers::SHIFT), 1, 0),
+        (K(Key::PageUp, Modifiers::NONE), 1, 0),
+        (Click(Secondary, Modifiers::NONE), 1, 0),
+        (Click(Primary, Modifiers::SHIFT), 1, 0),
+        (K(Key::Home, Modifiers::NONE), 2, 0),
+        (K(Key::PageUp, both), 2, 0),
+        (K(Key::End, Modifiers::NONE), 0, 2),
+        (K(Key::PageDown, both), 0, 2),
+    ];
+    // A document with no display times, so no page turns by itself meanwhile.
+    let mut h = harness(&[]);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::L);
+    h.run_steps(6);
+    assert!(h.state().full_screen);
+    for (input, from, to) in moves {
+        h.state_mut().views[0].go_to_page(from);
+        h.run_steps(4);
+        assert_eq!(h.state().views[0].current, from, "{input:?}: on page {}", from + 1);
+        match input {
+            K(key, modifiers) => {
+                h.key_press_modifiers(modifiers, key);
+                h.run_steps(4);
+            }
+            Click(button, modifiers) => {
+                // Clear of page 1's link, which a click would follow instead.
+                let r = rect(&h, from).expect("the page is on screen");
+                let at = egui::pos2(r.center().x, r.bottom() - 20.0);
+                h.hover_at(at);
+                h.run_steps(1);
+                for pressed in [true, false] {
+                    h.event(egui::Event::PointerButton { pos: at, button, pressed, modifiers });
+                }
+                h.run_steps(6);
+            }
+        }
+        assert_eq!(h.state().views[0].current, to, "{input:?} from page {}", from + 1);
+        assert!(h.state().full_screen, "{input:?} stays in full screen");
+    }
+    for (key, modifiers) in [(Key::Escape, Modifiers::NONE), (Key::L, Modifiers::COMMAND)] {
+        if !h.state().full_screen {
+            h.key_press_modifiers(Modifiers::COMMAND, Key::L);
+            h.run_steps(6);
+        }
+        assert!(h.state().full_screen);
+        h.key_press_modifiers(modifiers, key);
+        h.run_steps(4);
+        assert!(!h.state().full_screen, "{key:?} leaves full screen");
+    }
+}
+
+/// A transition style the spec doesn't name (here `/Spiral`, with a five-second `/D`) is the
+/// default, Replace (ISO 32000-2 Table 164, `S`: "Default value: R"): the page changes at once, and
+/// its display time still turns it.
+#[test]
+fn full_screen_cuts_an_unknown_transition_style_and_keeps_its_display_time() {
+    const SPIRAL: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /Trans << /S /Spiral /D 5 >> /Dur 1 >> endobj
+5 0 obj << /Type /Page /Parent 2 0 R >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let mut h = presenting_pdf(SPIRAL, &[]);
+    h.key_press(Key::ArrowRight);
+    h.run_steps(1);
+    assert_eq!(h.state().views[0].current, 1);
+    assert!(!h.state().views[0].presenting_a_transition(), "no effect for an unknown style");
+    settle(&mut h);
+    let frames = frames_until(&mut h, |a| a.views[0].current == 2);
+    assert!(frames <= 20, "its one-second display time turns it ({frames} frames of 0.1 s)");
 }
