@@ -390,6 +390,8 @@ pub struct PdfCraftApp {
     open_prepare_gate: Option<std::sync::Arc<open_worker::PrepareGate>>,
     /// Folders pinned to Home, and what they held when last listed.
     pub pinned: folders_ui::PinnedFolders,
+    /// The recent files restored from settings, checked off the UI thread (#5682).
+    recent_check: persist::recent_check::RecentCheck,
     /// Tools pinned to Home, in user-defined order.
     pub pinned_tools: Vec<String>,
     /// Search query for the Pin a tool selection dialog.

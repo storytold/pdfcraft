@@ -177,9 +177,9 @@ impl PdfCraftApp {
             self.organize_zoom = zoom.clamp(*canvas::GRID_ZOOM_RANGE.start(), *canvas::GRID_ZOOM_RANGE.end());
         }
         if let Ok(r) = serde_json::from_value::<Vec<RecentFile>>(v["recent"].clone()) {
-            // Only keep entries whose files still exist.
-            #[cfg(not(target_arch = "wasm32"))]
-            let r: Vec<RecentFile> = r.into_iter().filter(|f| std::path::Path::new(&f.path).exists()).collect();
+            // Entries whose files are gone leave once the window is up: asking here could block
+            // startup on a mount that has stopped answering (#5682).
+            self.recent_check.restored(r.iter().map(|f| f.path.clone()).collect());
             self.recent = r;
         }
         // Nonsense keeps the limit it had; settings from before the limit have none.
