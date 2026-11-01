@@ -220,6 +220,7 @@ fn the_default_panel_preference_picks_the_panel_a_document_opens_with() {
     // A document that asks for no panel in so many words gets none; naming none is not asking.
     assert_eq!(open("pages", "/PageMode /UseNone"), None);
     assert_eq!(open("comments", "/Outlines 9 0 R /PageMode /UseNone"), None);
+    assert_eq!(open("auto", "/Outlines 9 0 R /PageMode /UseNone"), None, "Automatic too");
     // F4 closes the panel the document opened with and opens that one again, not the one shown
     // before (CodeRabbit on #5599).
     let mut app = PdfCraftApp::new();

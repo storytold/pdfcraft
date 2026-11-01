@@ -236,6 +236,9 @@ pub fn set_initial_view(doc: &mut Document, v: &InitialView) -> Result<(), Organ
         };
         match mode {
             Some(m) => c.set(b"PageMode".to_vec(), Object::name(m)),
+            // An explicit `/UseNone` is kept: it asks for no panel, which a viewer's default panel
+            // doesn't override, where no entry leaves the panel to the viewer (CodeRabbit on #5599).
+            None if c.get(b"PageMode").and_then(|o| o.as_name()) == Some(b"UseNone".as_slice()) => {}
             None => {
                 c.remove(b"PageMode");
             }

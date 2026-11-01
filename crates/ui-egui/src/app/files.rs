@@ -283,15 +283,17 @@ impl PdfCraftApp {
         let choose = self.right.is_none() || self.default_panel != DefaultPanel::Auto;
         if activate && choose && !self.right_panel_closed && opening_mode != Mode::Read {
             self.right = match self.default_panel {
+                // A document that asks for no panel (`/PageMode /UseNone`) gets none, whatever
+                // the preference, Automatic included (CodeRabbit on #5599).
+                _ if doc.asks_for_no_panel() => None,
                 DefaultPanel::Auto if !doc.info.annotations.is_empty() => Some(RightPanel::Comments),
                 // A full-screen document names its panel for outside full screen, and with
                 // `/NonFullScreenPageMode /UseNone` (the default) no outline is visible (Table 147).
                 DefaultPanel::Auto if !doc.info.outline.is_empty() && !initial.full_screen => Some(RightPanel::Bookmarks),
                 DefaultPanel::Auto | DefaultPanel::None => None,
                 // Nor a chosen one (CodeRabbit on #5599): the document's panel for outside full
-                // screen, if it names one, is set from its Initial View below. A document that
-                // asks for no panel (`/PageMode /UseNone`) gets none too.
-                _ if initial.full_screen || doc.asks_for_no_panel() => None,
+                // screen, if it names one, is set from its Initial View below.
+                _ if initial.full_screen => None,
                 DefaultPanel::Pages => Some(RightPanel::Pages),
                 DefaultPanel::Bookmarks => Some(RightPanel::Bookmarks),
                 DefaultPanel::Comments => Some(RightPanel::Comments),
