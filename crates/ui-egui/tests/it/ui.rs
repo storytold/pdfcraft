@@ -561,7 +561,7 @@ fn a_link_prompt_above_a_save_prompt_owns_its_keys() {
         let mut h = harness(|app| {
             app.open_bytes("first.pdf", None, FIXTURE.to_vec()).unwrap();
             app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
-            app.close_request = Some(pdfcraft_ui_egui::CloseRequest::Tab(app.views[0].id));
+            app.close_request = Some(pdfcraft_ui_egui::CloseRequest::Tab(app.views[0].tab));
         });
         h.run_steps(3);
         h.state_mut().pending_link =
@@ -1414,7 +1414,7 @@ fn cancelling_then_discarding_an_earlier_dirty_tab_preserves_the_selected_docume
     h.get_by_label("middle.pdf").click();
     h.run_steps(3);
     close_named_tab(&mut h, "first.pdf (edited)");
-    assert_eq!(h.state().close_request, Some(pdfcraft_ui_egui::CloseRequest::Tab(ids[0])));
+    assert_eq!(h.state().close_request, Some(pdfcraft_ui_egui::CloseRequest::Tab(h.state().views[0].tab)));
     h.get_by_label("Cancel").click();
     h.run_steps(3);
     assert_eq!(h.state().views.len(), 3);

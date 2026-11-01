@@ -2438,6 +2438,7 @@ animation effects	Off	Aus
 
 # PDF tab context menu (#1233)
 	Close Tab	Tab schließen
+	Duplicate Tab	Tab duplizieren
 	Reopen Closed Tab	Geschlossenen Tab wieder öffnen
 	Reveal in Finder	Im Finder anzeigen
 	Reveal in File Explorer	Im Datei-Explorer anzeigen

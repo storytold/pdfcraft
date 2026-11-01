@@ -192,12 +192,12 @@ impl PdfCraftApp {
         match self.session.mark_saved(id, bytes, Some(dest.to_string())) {
             Ok(()) => {
                 self.forget_recovery(id);
-                if let Some(doc) = self.session.get(id)
-                    && let Some(view) = self.views.iter_mut().find(|v| v.id == id)
-                {
-                    view.document_changed(&doc.info);
-                    // Saving over a version that changed on disk keeps this one: nothing to ask.
-                    view.disk_changed = false;
+                if let Some(doc) = self.session.get(id) {
+                    for view in self.views.iter_mut().filter(|v| v.id == id) {
+                        view.document_changed(&doc.info);
+                        // Saving over a version that changed on disk keeps this one: nothing to ask.
+                        view.disk_changed = false;
+                    }
                 }
                 self.notify_fmt("Saved {name}", &[("name", &short_name(dest))]);
                 #[cfg(target_os = "macos")]

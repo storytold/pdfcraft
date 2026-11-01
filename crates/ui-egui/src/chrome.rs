@@ -135,7 +135,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 let response = tab(
                                     ui,
                                     TabSpec {
-                                        id: ui.scope_id().with(("document-tab", app.views[i].id)),
+                                        id: ui.scope_id().with(("document-tab", app.views[i].tab)),
                                         theme: &t,
                                         icon: "file-text",
                                         name: &name,
@@ -157,10 +157,16 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                     response.scroll_to_me(Some(Align::Center));
                                 }
                                 let id = app.views[i].id;
+                                let key = app.views[i].tab;
+                                let duplicable = app.views[i].snapshot.is_none();
                                 let reveal = cfg!(not(target_arch = "wasm32")) && doc.path.is_some();
                                 response.context_menu(|ui| {
                                     if ui.button(tl!("Close Tab")).clicked() {
-                                        action = Some(crate::tab_context::Action::Close(id));
+                                        action = Some(crate::tab_context::Action::Close(key));
+                                        ui.close();
+                                    }
+                                    if ui.add_enabled(duplicable, egui::Button::new(tl!("Duplicate Tab"))).clicked() {
+                                        action = Some(crate::tab_context::Action::Duplicate(key));
                                         ui.close();
                                     }
                                     if ui.add_enabled(!app.closed_tabs.is_empty(), egui::Button::new(tl!("Reopen Closed Tab"))).clicked() {
@@ -208,7 +214,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             if let Some(i) = close
                                 && let Some(view) = app.views.get(i)
                             {
-                                action.get_or_insert(crate::tab_context::Action::Close(view.id));
+                                action.get_or_insert(crate::tab_context::Action::Close(view.tab));
                             }
                             if let Some(action) = action {
                                 app.tab_action(action);

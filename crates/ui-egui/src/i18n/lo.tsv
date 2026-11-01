@@ -2377,6 +2377,7 @@ animation effects	Off	ປິດ
 
 # PDF tab context menu (#1233)
 	Close Tab	ປິດແທັບ
+	Duplicate Tab	ຊ້ຳແທັບ
 	Reopen Closed Tab	ເປີດແທັບທີ່ປິດຕືນໃໝ່
 	Reveal in Finder	ສະແດງໃນ Finder
 	Reveal in File Explorer	ສະແດງໃນ File Explorer

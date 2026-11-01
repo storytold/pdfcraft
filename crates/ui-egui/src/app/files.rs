@@ -288,7 +288,8 @@ impl PdfCraftApp {
                 None
             };
         }
-        let view = DocView::new(id, &doc.info, self.view_defaults);
+        let mut view = DocView::new(id, &doc.info, self.view_defaults);
+        view.tab = self.take_tab_key();
         self.views.push(view);
         if activate {
             self.active = Some(self.views.len() - 1);
@@ -746,15 +747,19 @@ impl PdfCraftApp {
         }
         self.remember_view(index);
         let id = self.views.remove(index).id;
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(path) = self.session.get(id).and_then(|d| d.path.clone()) {
-            if self.closed_tabs.len() == 10 {
-                self.closed_tabs.remove(0);
+        // A tab of the same document is still open: the document stays open with it, and its
+        // history and recovery copy stay too.
+        if !self.views.iter().any(|v| v.id == id) {
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(path) = self.session.get(id).and_then(|d| d.path.clone()) {
+                if self.closed_tabs.len() == 10 {
+                    self.closed_tabs.remove(0);
+                }
+                self.closed_tabs.push(path);
             }
-            self.closed_tabs.push(path);
+            self.forget_recovery(id);
+            self.session.close(id);
         }
-        self.forget_recovery(id);
-        self.session.close(id);
         self.active = match self.active {
             _ if self.views.is_empty() => None,
             Some(a) if a > index => Some(a - 1),
@@ -769,11 +774,74 @@ impl PdfCraftApp {
         if from >= self.views.len() || to >= self.views.len() || from == to {
             return;
         }
-        let active = self.active_ids().map(|(_, id)| id);
+        // Followed by index, not by document: tabs of one document are told apart by their key.
         let view = self.views.remove(from);
         self.views.insert(to, view);
-        if let Some(id) = active {
-            self.active = self.views.iter().position(|v| v.id == id);
+        self.active = self.active.map(|a| {
+            if a == from {
+                to
+            } else if from < a && a <= to {
+                a - 1
+            } else if to <= a && a < from {
+                a + 1
+            } else {
+                a
+            }
+        });
+    }
+
+    /// Opens a second tab on the document of tab `index`, beside it, at the same page, zoom and
+    /// layout. Both tabs show one document, so an edit in either shows in both. Snapshots
+    /// (a historical version of a file) can't be duplicated. Returns whether a tab was made.
+    pub fn duplicate_tab(&mut self, index: usize) -> bool {
+        let Some(source) = self.views.get(index) else { return false };
+        if source.snapshot.is_some() {
+            return false;
+        }
+        let id = source.id;
+        let defaults = crate::canvas::ViewDefaults {
+            layout: source.layout,
+            continuous: source.continuous,
+            show_page_gaps: source.show_page_gaps,
+            fit: source.fit,
+            zoom: source.zoom,
+            highlight_fields: source.highlight_fields,
+        };
+        let (current, rotation, cover) = (source.current, source.rotation, source.cover);
+        let Some(doc) = self.session.get(id) else { return false };
+        let mut view = DocView::new(id, &doc.info, defaults);
+        view.go_to_page(current);
+        view.rotation = rotation;
+        view.cover = cover;
+        view.tab = self.take_tab_key();
+        self.views.insert(index + 1, view);
+        self.active = Some(index + 1);
+        true
+    }
+
+    /// A tab key no open tab has. Keys only grow, so a key from a closed tab is never reused.
+    pub(crate) fn take_tab_key(&mut self) -> u64 {
+        self.last_tab_key = self.last_tab_key.saturating_add(1);
+        self.last_tab_key
+    }
+
+    /// Brings the other tabs up to date with their document. Tabs showing one document share it,
+    /// so an edit, undo or reload made through one tab reaches the others here, on the next frame.
+    /// The active tab is left alone: whatever changed it updated it already, and a second pass
+    /// would drop the caches its own pending state is drawn from. A tab that is not active adopts
+    /// the change when it is next looked at.
+    pub(crate) fn sync_document_views(&mut self) {
+        let active = self.active;
+        for (index, view) in self.views.iter_mut().enumerate() {
+            if active == Some(index) {
+                continue;
+            }
+            let Some(doc) = self.session.get(view.id) else { continue };
+            let generation = doc.edit_generation();
+            if view.seen_generation != Some(generation) {
+                view.seen_generation = Some(generation);
+                view.adopt_pages(&doc.info);
+            }
         }
     }
 }

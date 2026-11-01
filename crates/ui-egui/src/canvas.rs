@@ -442,6 +442,12 @@ pub(crate) fn snapshot_tab_name(title: &str, file_name: &str, snapshot: &Snapsho
 
 pub struct DocView {
     pub id: DocId,
+    /// Identity of this tab. Tabs showing one document share `id`, so keys that must tell them
+    /// apart (tab widgets, scroll memory, close requests) use this.
+    pub tab: u64,
+    /// The document edit generation this tab's pages were last adopted from (see
+    /// [`crate::PdfCraftApp::sync_document_views`]).
+    pub(crate) seen_generation: Option<u64>,
     pub zoom: f32,
     pub fit: Fit,
     pub layout: PageLayout,
@@ -877,6 +883,8 @@ impl DocView {
     pub fn new(id: DocId, info: &DocInfo, defaults: ViewDefaults) -> Self {
         Self {
             id,
+            tab: 0,
+            seen_generation: None,
             zoom: defaults.zoom,
             fit: defaults.fit,
             layout: defaults.layout,
@@ -1011,6 +1019,21 @@ impl DocView {
     /// The document's content or page list changed (an edit, undo or redo): drop caches and
     /// adopt the new page geometry, keeping the reader's place where possible.
     pub fn document_changed(&mut self, info: &DocInfo) {
+        self.adopt_pages(info);
+        self.goto = None;
+        self.goto_point = None;
+        self.zoom_anchor = None;
+        self.flash = None;
+        // Thumbnail drags hold page indexes from before the change.
+        self.panel_drag = None;
+        self.org_drag = None;
+        self.reset_coarse_state();
+    }
+
+    /// Adopts the pages of a document that changed under this tab, whichever tab made the change:
+    /// drops the caches and keeps every index in range. Unlike [`Self::document_changed`] it
+    /// leaves the reader's place and any pending navigation alone, so it can run every frame.
+    pub(crate) fn adopt_pages(&mut self, info: &DocInfo) {
         self.invalidate_content();
         self.frame_geometry_changed = true;
         self.page_count = info.pages.len();
@@ -1025,14 +1048,6 @@ impl DocView {
         if self.select_anchor.is_some_and(|a| a > last) {
             self.select_anchor = None;
         }
-        self.goto = None;
-        self.goto_point = None;
-        self.zoom_anchor = None;
-        self.flash = None;
-        // Thumbnail drags hold page indexes from before the change.
-        self.panel_drag = None;
-        self.org_drag = None;
-        self.reset_coarse_state();
     }
 
     /// The document was replaced by a newer version of its file (#431). The reader's place
@@ -1043,6 +1058,7 @@ impl DocView {
     /// afresh, so no stale index reaches the new one.
     pub fn document_replaced(&mut self, info: &DocInfo) {
         let mut fresh = Self::new(self.id, info, ViewDefaults::default());
+        fresh.tab = self.tab;
         fresh.zoom = self.zoom;
         fresh.fit = self.fit;
         fresh.layout = self.layout;
@@ -3038,11 +3054,11 @@ fn apply_notice(app: &mut PdfCraftApp, index: usize, notice: Option<Notice>) {
 /// tab is looked up by id: indices may have shifted since the click, and the flag rides its own
 /// view, so a stale flag can never close the wrong tab. Whether a tab was closed (or asked about).
 fn close_requested_tab(app: &mut PdfCraftApp, index: usize) -> bool {
-    let pending = app.views.get(index).filter(|v| v.close_requested).map(|v| v.id).and_then(|id| app.views.iter().position(|v| v.id == id));
+    let pending = app.views.get(index).filter(|v| v.close_requested).map(|v| v.tab).and_then(|key| app.views.iter().position(|v| v.tab == key));
     let Some(i) = pending else { return false };
     app.views[i].close_requested = false;
-    if app.has_unsaved_work(i) {
-        app.close_request = Some(crate::CloseRequest::Tab(app.views[i].id));
+    if app.needs_close_prompt(i) {
+        app.close_request = Some(crate::CloseRequest::Tab(app.views[i].tab));
     } else {
         app.close_tab(i);
     }
@@ -3075,7 +3091,7 @@ fn page_scroll_area(ui: &egui::Ui, view: &mut DocView, geometry: &ScrollGeometry
         ..Default::default()
     });
     // Each document keeps its own scroll position when switching tabs (#189).
-    scroll = scroll.id_salt(("page-view", view.id));
+    scroll = scroll.id_salt(("page-view", view.tab));
     // Every scroll here asks for no animation. An animated area would still queue a zero-length
     // offset target for the next frame, which overwrites the jump a page turn just set.
     scroll = scroll.animated(false);

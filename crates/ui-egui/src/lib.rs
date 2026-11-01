@@ -252,6 +252,8 @@ pub struct PdfCraftApp {
     pub side_panels: side_panels::SidePanels,
     pub session: Session,
     pub views: Vec<DocView>,
+    /// The last [`DocView::tab`] handed out: each new tab gets the next one.
+    pub(crate) last_tab_key: u64,
     pub(crate) closed_tabs: Vec<String>,
     /// `None` shows the Home tab.
     pub active: Option<usize>,

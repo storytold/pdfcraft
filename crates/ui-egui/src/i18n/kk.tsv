@@ -2425,6 +2425,7 @@ animation effects	Off	Өшірулі
 
 # PDF tab context menu (#1233)
 	Close Tab	Қойындыны жабу
+	Duplicate Tab	Қойындыны көшірмелеу
 	Reopen Closed Tab	Жабылған қойындыны қайта ашу
 	Reveal in Finder	Finder ішінде көрсету
 	Reveal in File Explorer	Файл шолғышында көрсету

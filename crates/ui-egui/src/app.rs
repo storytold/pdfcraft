@@ -67,6 +67,7 @@ impl PdfCraftApp {
         Self {
             session: Session::new(),
             views: Vec::new(),
+            last_tab_key: 0,
             closed_tabs: Vec::new(),
             active: None,
             mode: Mode::AllTools,
@@ -579,6 +580,7 @@ impl eframe::App for PdfCraftApp {
         self.shortcuts(ctx);
         // Scrolling and group-drag previews are transient: never resume after changing tabs,
         // opening a modal/palette, or returning to a window that lost focus.
+        self.sync_document_views();
         let blocked = self.modal_open() || self.palette_open || !ctx.input(|i| i.focused);
         for (index, view) in self.views.iter_mut().enumerate() {
             view.objects.set_input_blocked(blocked || self.active != Some(index));

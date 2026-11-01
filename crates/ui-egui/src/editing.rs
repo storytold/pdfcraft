@@ -714,7 +714,17 @@ impl PdfCraftApp {
     /// panel answering later, Close All). If its tab has typing or a queued edit, the tab is
     /// brought forward first, so the commit and any field scripts act on that document.
     pub(crate) fn commit_typing_in(&mut self, id: pdfcraft_engine::DocId) -> bool {
-        let Some(i) = self.views.iter().position(|v| v.id == id) else { return true };
+        // Every tab of the document, the active one first: typing may be pending in any of them.
+        let mut tabs: Vec<usize> = (0..self.views.len()).filter(|&i| self.views[i].id == id).collect();
+        tabs.sort_by_key(|&i| self.active != Some(i));
+        tabs.into_iter().all(|i| self.commit_tab_typing(i))
+    }
+
+    /// [`Self::commit_typing_in`] for the one tab at `i`.
+    fn commit_tab_typing(&mut self, i: usize) -> bool {
+        if i >= self.views.len() {
+            return true;
+        }
         // Added text the standard fonts can't draw can't be saved: show it rather than drop it.
         // Its page is brought into view, so the text, the warning and Discard are on screen.
         let blocked = self.views.get_mut(i).and_then(|v| {
@@ -743,15 +753,16 @@ impl PdfCraftApp {
             }
             self.active = Some(i);
         }
-        self.commit_form_typing() && self.commit_open_fill_text(id) && self.commit_open_text_edits(id)
+        self.commit_form_typing() && self.commit_open_fill_text(i) && self.commit_open_text_edits(i)
     }
 
     /// The Edit a PDF ▸ Text boxes (new text, and a paragraph open for editing) commit on
     /// click-away. Save does that first, so the typed text is in the file instead of being left
     /// open on the screen (#3496).
-    fn commit_open_text_edits(&mut self, id: pdfcraft_engine::DocId) -> bool {
+    fn commit_open_text_edits(&mut self, i: usize) -> bool {
+        let Some(id) = self.views.get(i).map(|v| v.id) else { return true };
         let Some(doc) = self.session.get(id) else { return true };
-        let Some(view) = self.views.iter_mut().find(|v| v.id == id) else { return true };
+        let Some(view) = self.views.get_mut(i) else { return true };
         // Both are taken out of the view before either edit runs, so keep what is needed to put
         // back whichever one the document refuses: typed text must not be lost.
         let (draft, select_added, editor) = (view.content.draft.clone(), view.content.select_added, view.line_editor.clone());
@@ -759,7 +770,7 @@ impl PdfCraftApp {
         let paragraph = view.line_editor.take_if(|ed| ed.has_changes()).and_then(crate::edit_text_ui::finished_edit);
         let added_ok = added.is_none_or(|edit| self.apply_edit(edit));
         let paragraph_ok = paragraph.is_none_or(|edit| self.apply_edit(edit));
-        if let Some(view) = self.views.iter_mut().find(|v| v.id == id) {
+        if let Some(view) = self.views.get_mut(i) {
             if !added_ok {
                 (view.content.draft, view.content.select_added) = (draft, select_added);
             }
@@ -772,9 +783,8 @@ impl PdfCraftApp {
 
     /// The Fill & Sign type box commits on click-away. Save does that first, so the text is in
     /// the file (and can be flattened) instead of being left on the screen.
-    fn commit_open_fill_text(&mut self, id: pdfcraft_engine::DocId) -> bool {
-        let Some(i) = self.views.iter().position(|v| v.id == id) else { return true };
-        let Some(tb) = self.views[i].fill_text.clone() else { return true };
+    fn commit_open_fill_text(&mut self, i: usize) -> bool {
+        let Some((id, tb)) = self.views.get(i).and_then(|v| Some((v.id, v.fill_text.clone()?))) else { return true };
         let text = tb.text.trim().to_string();
         if text.is_empty() {
             if let Some(view) = self.views.get_mut(i) {
@@ -819,9 +829,31 @@ impl PdfCraftApp {
     /// Whether tab `index` has work that isn't saved: edits, or form typing not committed yet.
     pub(crate) fn has_unsaved_work(&self, index: usize) -> bool {
         let Some(v) = self.views.get(index) else { return false };
+        self.session.get(v.id).is_some_and(|doc| doc.dirty) || self.has_unsaved_tab_work(index)
+    }
+
+    /// Whether closing tab `index` needs the save prompt. Typing in the tab itself always counts.
+    /// The document's own edits count only on its last tab: a document shown in another tab stays
+    /// open, so closing this tab loses nothing, and the last tab asks once for all of them.
+    pub(crate) fn needs_close_prompt(&self, index: usize) -> bool {
+        let Some(v) = self.views.get(index) else { return false };
+        let shared = self.views.iter().enumerate().any(|(j, other)| j != index && other.id == v.id);
+        self.has_unsaved_tab_work(index) || (!shared && self.session.get(v.id).is_some_and(|doc| doc.dirty))
+    }
+
+    /// Whether tab `index` is the last tab of a document with unsaved edits. That tab asks about the
+    /// edits for every tab of the document (see [`Self::first_dirty`]).
+    pub(crate) fn is_last_tab_of_dirty_document(&self, index: usize) -> bool {
+        let Some(v) = self.views.get(index) else { return false };
+        let later_tab = self.views.iter().skip(index + 1).any(|other| other.id == v.id);
+        !later_tab && self.session.get(v.id).is_some_and(|doc| doc.dirty)
+    }
+
+    /// Unsaved work that belongs to tab `index` alone: typing, a queued edit, an open editor.
+    fn has_unsaved_tab_work(&self, index: usize) -> bool {
+        let Some(v) = self.views.get(index) else { return false };
         let Some(doc) = self.session.get(v.id) else { return false };
-        doc.dirty
-            || v.pending_edit.is_some()
+        v.pending_edit.is_some()
             || v.content.blocked().is_some()
             || v.forms.focus.as_ref().is_some_and(|f| crate::forms_ui::draft_edit(f, &doc.form).is_some())
             || v.fill_text.as_ref().is_some_and(|t| !t.text.trim().is_empty())
@@ -1297,7 +1329,7 @@ mod attention_tests {
         }
         // a.pdf was answered with Save while quitting. While that save is pending, the user closes
         // c.pdf's tab, and its question opens in front.
-        let c = app.views[2].id;
+        let c = app.views[2].tab;
         app.close_request = Some(CloseRequest::Tab(c));
         assert!(attend(&mut app, &ctx, true).is_empty());
         // a.pdf's save finishes once the user has gone to another app.

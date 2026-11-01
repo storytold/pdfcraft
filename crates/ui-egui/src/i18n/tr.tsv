@@ -2423,6 +2423,7 @@ animation effects	Off	Kapalı
 
 # PDF tab context menu (#1233)
 	Close Tab	Sekmeyi kapat
+	Duplicate Tab	Sekmeyi çoğalt
 	Reopen Closed Tab	Kapatılan sekmeyi yeniden aç
 	Reveal in Finder	Finder’da göster
 	Reveal in File Explorer	Dosya Gezgini’nde göster
