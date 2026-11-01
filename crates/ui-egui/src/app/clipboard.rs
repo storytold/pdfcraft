@@ -114,9 +114,8 @@ impl PdfCraftApp {
         self.document_copy = None;
         let Some(v) = self.views.get(i) else { return false };
         let id = v.id;
-        // A failed page of a file on disk is read again (`DocumentCopyJob::of`).
-        let failed_on_disk = !v.text_failed.is_empty() && self.session.get(id).is_some_and(|d| d.on_disk.is_some());
-        if v.all_text && (failed_on_disk || !v.pages_without_text().is_empty()) {
+        // A page the file couldn't give is read again (`DocumentCopyJob::of`).
+        if v.all_text && (!v.text_unread.is_empty() || !v.pages_without_text().is_empty()) {
             // Checked before any page is read: a document that refuses copying reads nothing.
             if !self.may_copy(id) {
                 return false;

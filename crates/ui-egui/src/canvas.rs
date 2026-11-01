@@ -521,6 +521,8 @@ pub struct DocView {
     /// Text layers, extracted in the background on demand (selection, find, copy).
     pub(crate) texts: HashMap<usize, Arc<PageText>>,
     pub(crate) text_failed: HashSet<usize>,
+    /// The failed pages that failed because the file couldn't give them, which a new read can tell.
+    pub(crate) text_unread: HashSet<usize>,
     pub find: Option<Find>,
     selection: Option<Selection>,
     /// Select All while scrolling continuously (#2639): the text of every page of the document,
@@ -919,6 +921,7 @@ impl DocView {
             tiles: HashMap::new(),
             texts: HashMap::new(),
             text_failed: HashSet::new(),
+            text_unread: HashSet::new(),
             find: None,
             selection: None,
             all_text: false,

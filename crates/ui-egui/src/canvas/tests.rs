@@ -955,13 +955,38 @@ fn a_document_copy_tries_a_failed_page_of_a_file_on_disk_again() {
     let mut r = pdfcraft_render::PageRenderer::new(doc.source(), Default::default());
     let first = r.render(RenderRequest { page: 0, kind: RequestKind::Text, ..Default::default() }).text.unwrap();
     app.views[0].texts.insert(0, first);
-    app.views[0].text_failed.insert(1);
     app.views[0].all_text = true;
     std::fs::File::options().write(true).open(&path).unwrap().set_len(1_000).unwrap();
+    let request = RenderRequest { page: 1, kind: RequestKind::Text, ..Default::default() };
+    let unread = r.render(request);
+    app.views[0].last_queue = vec![request];
+    app.views[0].receive_result(&egui::Context::default(), unread);
+    assert!(app.views[0].text_failed.contains(&1) && app.views[0].text_unread.contains(&1));
     let job = crate::DocumentCopyJob::of(&app.views[0], app.session.get(app.views[0].id).unwrap());
     assert_eq!(job.text(&std::sync::atomic::AtomicBool::new(false)), Some(Err(pdfcraft_render::PART_UNREAD)));
     assert!(app.copy_selected_text(0, &egui::Context::default()));
     assert!(app.document_copy.is_some(), "read again, not copied from the pages at hand");
+    // A page that failed by itself, as the watchdog fails it, is not read here without its limit.
+    app.document_copy = None;
+    app.views[0].text_failed.clear();
+    app.views[0].text_unread.clear();
+    app.views[0].last_queue = vec![request];
+    let timed_out = pdfcraft_render::RenderedPage {
+        request,
+        width: 0,
+        height: 0,
+        rgba: Default::default(),
+        error: Some("the page took too long".into()),
+        text: None,
+        warnings: Vec::new(),
+        millis: 0,
+    };
+    app.views[0].receive_result(&egui::Context::default(), timed_out);
+    assert!(app.views[0].text_failed.contains(&1) && app.views[0].text_unread.is_empty());
+    let job = crate::DocumentCopyJob::of(&app.views[0], app.session.get(app.views[0].id).unwrap());
+    assert_eq!(job.text(&std::sync::atomic::AtomicBool::new(false)), Some(Ok("Page 1".into())));
+    assert!(app.copy_selected_text(0, &egui::Context::default()));
+    assert!(app.document_copy.is_none(), "copied from the pages at hand");
     drop(app);
     let _ = std::fs::remove_dir_all(&dir);
 }
