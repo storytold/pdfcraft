@@ -17,6 +17,7 @@ pub struct PickedImage {
     pub index: usize,
     pub rect: [f64; 4],
     pub generation: u64,
+    pub is_form: bool,
 }
 
 const BLUE: Color32 = Color32::from_rgb(0x3A, 0x7B, 0xF0);
@@ -50,7 +51,7 @@ pub(crate) fn page_input(
         doc.page_images(page).get(index).and_then(|i| {
             let screen_rect = crate::canvas::image_screen_rect(i, xf, info, page);
             if screen_rect.is_positive() && screen_rect.contains(p) {
-                Some(PickedImage { page, index, rect: crate::canvas::image_selectable_bounds(i), generation })
+                Some(PickedImage { page, index, rect: crate::canvas::image_selectable_bounds(i), generation, is_form: i.is_form })
             } else {
                 None
             }

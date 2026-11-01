@@ -503,7 +503,7 @@ pub(super) fn picked_image_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let Some(picked) = app.views.get(view_idx).and_then(|v| v.picked_image) else { return };
     let Some(doc) = app.session.get(doc_id) else { return };
     let Some(xf) = app.views.get(view_idx).and_then(|v| v.page_xform(picked.page)) else { return };
-    if doc.info.pages.get(picked.page).is_none() || !picked.rect.iter().all(|v| v.is_finite()) {
+    if doc.info.pages.get(picked.page).is_none() || !picked.rect.iter().all(|v| v.is_finite()) || picked.is_form {
         return;
     }
     let r = xf.user_rect(&doc.info, picked.page, picked.rect.map(|v| v as f32));

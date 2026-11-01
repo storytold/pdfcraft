@@ -2650,17 +2650,19 @@ fn draw_pages(
         if let Some((page, at)) = view.comments.context_at {
             // The page's content is parsed once per right-click, not on every frame the menu is open.
             let key = egui::Id::unique("copy-image-under-menu");
-            let cached = ui.data(|d| d.get_temp::<(usize, [f64; 2], Option<usize>)>(key)).filter(|c| c.0 == page && c.1 == at);
+            let cached = ui.data(|d| d.get_temp::<(usize, [f64; 2], Option<(usize, bool)>)>(key)).filter(|c| c.0 == page && c.1 == at);
             let hit = match cached {
                 Some(c) => c.2,
                 None => {
-                    let hit = doc.page_image_at(page, at);
+                    let hit = doc.page_image_at(page, at).map(|image| {
+                        let is_raster = doc.page_images(page).get(image).is_some_and(|img| !img.is_form);
+                        (image, is_raster)
+                    });
                     ui.data_mut(|d| d.insert_temp(key, (page, at, hit)));
                     hit
                 }
             };
-            if let Some(image) = hit {
-                let is_raster = doc.page_images(page).get(image).is_some_and(|img| !img.is_form);
+            if let Some((image, is_raster)) = hit {
                 if is_raster && ui.button(tl!("Replace Image…")).clicked() {
                     copy_image = Some(comments::CanvasAction::ReplaceImage(page, image));
                     ui.close();

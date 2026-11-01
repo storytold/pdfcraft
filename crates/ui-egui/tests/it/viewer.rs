@@ -1972,18 +1972,20 @@ fn right_click_and_floating_bar_offer_replace_image() {
     assert!(h.state().views[i].picked_image.is_some(), "picked with the Select tool");
     h.get_by_label("Replace image…");
 
-    // 3. Applying replacement updates image data
+    // 3. Applying replacement updates image data via UI action
     let png = {
         let mut buf = std::io::Cursor::new(Vec::new());
         image::RgbaImage::from_pixel(10, 10, image::Rgba([0, 255, 0, 255])).write_to(&mut buf, image::ImageFormat::Png).unwrap();
         buf.into_inner()
     };
-    let replace = pdfcraft_engine::Edit::EditPageImage {
-        page: 0,
-        index: 0,
-        change: pdfcraft_engine::ImageEdit::Replace { name: "green.png".into(), bytes: std::sync::Arc::new(png) },
-    };
-    assert!(h.state_mut().apply_edit(replace));
+    let dir = std::env::temp_dir().join(format!("pdfcraft-test-replace-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let file = dir.join("green.png");
+    std::fs::write(&file, &png).unwrap();
+    h.state_mut().pick_override = Some(vec![file.to_string_lossy().into_owned()]);
+    h.get_by_label("Replace image…").click();
+    h.run_steps(3);
+    let _ = std::fs::remove_dir_all(&dir);
 
     // 4. Verify replacement persists across save and reopen.
     let id = h.state().views[i].id;
