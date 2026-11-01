@@ -8157,7 +8157,7 @@ status = "shipped"
 commands = ["print.dialog"]
 tools = ["doc_print"]
 evidence = ["crates/print/src/tests.rs::booklets_pair_pages_for_folding", "crates/ui-egui/tests/it/print.rs::a_booklet_decides_two_sided_itself", "crates/automation/src/printing.rs::a_booklet_decides_two_sided_itself", "crates/print/src/tests.rs::a_booklet_prints_both_sides_on_the_short_edge"]
-notes = "both/front/back, left/right binding; a booklet decides two-sided itself, as Acrobat does (its Print dialog hides Two-sided while Booklet is chosen; Using Acrobat X Pro: Acrobat automatically enables duplex printing for booklet printing): both sides flip on the short edge, front or back only prints one-sided, and the Two-sided choice is kept for the other layouts (#2707)"
+notes = "both/front/back, left/right binding; the selected binding side is remembered between application launches (#5046); a booklet decides two-sided itself, as Acrobat does (its Print dialog hides Two-sided while Booklet is chosen; Using Acrobat X Pro: Acrobat automatically enables duplex printing for booklet printing): both sides flip on the short edge, front or back only prints one-sided, and the Two-sided choice is kept for the other layouts (#2707)"
 
 [[feature]]
 id = "print.poster"
