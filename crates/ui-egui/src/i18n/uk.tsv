@@ -226,6 +226,16 @@
 	Prepare for distribution…	Підготувати до розповсюдження…
 	Optimize scanned documents…	Оптимізувати відскановані документи…
 	Compare files…	Порівняти файли…
+	Validate structure…	Перевірити структуру…
+	Validate structure	Перевірити структуру
+	Checked {objects} objects against the Arlington PDF Model for PDF {version}.	Перевірено об’єктів: {objects} за моделлю Arlington PDF Model для PDF {version}.
+	No errors: the structure follows the Arlington PDF Model.	Помилок немає: структура відповідає моделі Arlington PDF Model.
+	No errors in the rules that were evaluated.	В оцінених правилах помилок немає.
+	Errors	Помилки
+	Information	Відомості
+	Not evaluated: {list}	Не оцінено: {list}
+	Only the first {n} of each kind are listed.	Показано лише перші {n} кожного виду.
+	The document has more objects than one check covers; the rest was not checked.	У документі більше об’єктів, ніж охоплює одна перевірка; решту не перевірено.
 	Detect form fields	Виявити поля форми
 	Merge data files into spreadsheet…	Об’єднати файли даних в електронну таблицю…
 	Flatten form fields	Звести поля форми

@@ -189,6 +189,16 @@
 	Prepare for distribution…	Таратуға дайындау…
 	Optimize scanned documents…	Сканерленген құжаттарды оңтайландыру…
 	Compare files…	Файлдарды салыстыру…
+	Validate structure…	Құрылымды тексеру…
+	Validate structure	Құрылымды тексеру
+	Checked {objects} objects against the Arlington PDF Model for PDF {version}.	PDF {version} үшін Arlington PDF Model бойынша {objects} нысан тексерілді.
+	No errors: the structure follows the Arlington PDF Model.	Қате жоқ: құрылым Arlington PDF Model-ге сай.
+	No errors in the rules that were evaluated.	Бағаланған ережелерде қате жоқ.
+	Errors	Қателер
+	Information	Ақпарат
+	Not evaluated: {list}	Бағаланбаған: {list}
+	Only the first {n} of each kind are listed.	Әр түрден тек алғашқы {n} көрсетіледі.
+	The document has more objects than one check covers; the rest was not checked.	Құжаттағы нысандар бір тексеру қамтитын саннан көп; қалғаны тексерілмеді.
 	Detect form fields	Форма өрістерін анықтау
 	Merge data files into spreadsheet…	Деректер файлдарын электронды кестеге біріктіру…
 	Flatten form fields	Форма өрістерін жазықтау

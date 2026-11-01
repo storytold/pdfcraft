@@ -186,6 +186,16 @@
 	Prepare for distribution…	Dağıtım için hazırla…
 	Optimize scanned documents…	Taranmış belgeleri en iyileştir…
 	Compare files…	Dosyaları karşılaştır…
+	Validate structure…	Yapıyı doğrula…
+	Validate structure	Yapıyı doğrula
+	Checked {objects} objects against the Arlington PDF Model for PDF {version}.	{objects} nesne, PDF {version} için Arlington PDF Model'e göre denetlendi.
+	No errors: the structure follows the Arlington PDF Model.	Hata yok: yapı Arlington PDF Model'e uyuyor.
+	No errors in the rules that were evaluated.	Değerlendirilen kurallarda hata yok.
+	Errors	Hatalar
+	Information	Bilgi
+	Not evaluated: {list}	Değerlendirilmedi: {list}
+	Only the first {n} of each kind are listed.	Her türden yalnızca ilk {n} tanesi listelenir.
+	The document has more objects than one check covers; the rest was not checked.	Belgede bir denetimin kapsadığından fazla nesne var; geri kalanı denetlenmedi.
 	Detect form fields	Form alanlarını algıla
 	Merge data files into spreadsheet…	Veri dosyalarını elektronik tabloda birleştir…
 	Flatten form fields	Form alanlarını düzleştir

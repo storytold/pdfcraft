@@ -2221,6 +2221,16 @@
 	Prepare for distribution…	Προετοιμασία για διανομή…
 	Optimize scanned documents…	Βελτιστοποίηση σαρωμένων εγγράφων…
 	Compare files…	Σύγκριση αρχείων…
+	Validate structure…	Επικύρωση δομής…
+	Validate structure	Επικύρωση δομής
+	Checked {objects} objects against the Arlington PDF Model for PDF {version}.	Ελέγχθηκαν {objects} αντικείμενα με βάση το Arlington PDF Model για PDF {version}.
+	No errors: the structure follows the Arlington PDF Model.	Κανένα σφάλμα: η δομή ακολουθεί το Arlington PDF Model.
+	No errors in the rules that were evaluated.	Κανένα σφάλμα στους κανόνες που αξιολογήθηκαν.
+	Errors	Σφάλματα
+	Information	Πληροφορίες
+	Not evaluated: {list}	Δεν αξιολογήθηκαν: {list}
+	Only the first {n} of each kind are listed.	Εμφανίζονται μόνο τα πρώτα {n} κάθε είδους.
+	The document has more objects than one check covers; the rest was not checked.	Το έγγραφο έχει περισσότερα αντικείμενα από όσα καλύπτει ένας έλεγχος· τα υπόλοιπα δεν ελέγχθηκαν.
 	Detect form fields	Εντοπισμός πεδίων φόρμας
 	Merge data files into spreadsheet…	Συγχώνευση αρχείων δεδομένων σε υπολογιστικό φύλλο…
 	Flatten form fields	Ενσωμάτωση πεδίων φόρμας στο περιεχόμενο
