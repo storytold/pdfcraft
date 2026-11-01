@@ -1,7 +1,7 @@
 use super::find::Follow;
 use super::{
-    Arc, Color32, DocInfo, DocView, HashSet, PRINT_TAG, PT, PageText, Range, RenderPool, RenderRequest, RequestKind, TextureHandle, TextureOptions,
-    device_pixels,
+    Arc, Color32, DocInfo, DocView, HashSet, PRINT_TAG, PT, PageText, Range, RenderPool, RenderRequest, RequestKind, TextLink, TextureHandle,
+    TextureOptions, device_pixels,
 };
 
 pub(super) const THUMB_TAG: u64 = 1 << 63;
@@ -237,6 +237,37 @@ impl DocView {
 
     pub(crate) fn page_text(&self, page: usize) -> Option<Arc<PageText>> {
         self.texts.get(&page).cloned()
+    }
+
+    /// Finds the addresses written as plain text on `page` (#4207): once per text layer, and only
+    /// once the page's text is known. The addresses of text layers that were dropped or replaced
+    /// are forgotten.
+    pub(crate) fn refresh_text_links(&mut self, page: usize) {
+        let texts = &self.texts;
+        self.text_links.retain(|p, (t, _)| texts.get(p).is_some_and(|current| Arc::ptr_eq(current, t)));
+        if self.text_links.contains_key(&page) {
+            return;
+        }
+        if let Some(text) = self.texts.get(&page).cloned() {
+            let found: Arc<[TextLink]> = pdfcraft_engine::text_links::find_text_links(&text).into();
+            self.text_links.insert(page, (text, found));
+        }
+    }
+
+    /// The address written as plain text on `page` under the view-space point `(x, y)` (#4207),
+    /// with its index among the page's, unless a link annotation lies over it: the annotation is
+    /// what the document asks for there. Only addresses [`Self::refresh_text_links`] found count.
+    pub(crate) fn text_link_at(&self, info: &DocInfo, page: usize, x: f32, y: f32) -> Option<(usize, &TextLink)> {
+        let (_, links) = self.text_links.get(&page)?;
+        let page_info = info.pages.get(page)?;
+        let (index, hit) = links.iter().enumerate().find(|(_, l)| l.contains(x, y))?;
+        let covered = info.links.iter().any(|l| l.page == page && hit.covered_by(page_info, l.rect));
+        (!covered).then_some((index, hit))
+    }
+
+    /// The address of the `index`-th text link found on `page` (#4207).
+    pub(crate) fn text_link_uri(&self, page: usize, index: usize) -> Option<String> {
+        self.text_links.get(&page).and_then(|(_, links)| links.get(index)).map(|l| l.uri.clone())
     }
 
     pub fn thumb(&self, page: usize) -> Option<&TextureHandle> {

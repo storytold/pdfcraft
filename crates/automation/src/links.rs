@@ -96,7 +96,41 @@ impl Automation {
                 v
             })
             .collect();
-        Ok(json!({ "count": items.len(), "links": items }))
+        let mut out = json!({ "count": items.len(), "links": items });
+        // Addresses written as plain page text, which the viewer makes clickable (#4207). Reading
+        // the pages' text costs more than the list above, so only on request.
+        if a.opt_bool("text_links")?.unwrap_or(false) {
+            let id = doc.id;
+            // One share of the pages at a time (`MAX_TEXT_LINK_PAGES_PER_SCAN`), from the 1-based
+            // `text_links_from`; `text_links_next_page` says where the next share starts.
+            let pages = doc.info.pages.len().max(1);
+            let from = match a.opt_int("text_links_from")? {
+                None => 0,
+                Some(p) => usize::try_from(p)
+                    .ok()
+                    .filter(|p| (1..=pages).contains(p))
+                    .map(|p| p - 1)
+                    .ok_or_else(|| bad(format!("text_links_from must be a page from 1 to {pages}")))?,
+            };
+            let scan = self.session.text_links(id, from);
+            if let Some(next) = scan.next_page {
+                out["text_links_next_page"] = json!(next.saturating_add(1));
+            }
+            let found: Vec<Value> = scan
+                .links
+                .into_iter()
+                .map(|(page, l)| {
+                    let mut v = json!({ "page": page + 1, "rects": l.rects, "url": l.uri });
+                    // What the viewer does on a click: the same check every document link gets.
+                    if let Err(e) = pdfcraft_engine::links::document_url(&l.uri) {
+                        v["blocked"] = json!(e.to_string());
+                    }
+                    v
+                })
+                .collect();
+            out["text_links"] = json!(found);
+        }
+        Ok(out)
     }
 
     pub(crate) fn link_open(&mut self, a: &Args) -> Result<Value> {

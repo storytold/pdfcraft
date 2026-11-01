@@ -2049,6 +2049,162 @@ fn destinations_are_listed_with_their_position() {
     assert_eq!((links["links"][2]["url"].clone(), links["links"][2].get("destination")), (json!("https://example.com"), None));
 }
 
+/// Web, `www.` and email addresses written as plain page text, which the viewer opens on a click
+/// (#4207), are listed by link_list with text_links: true; one under a link annotation is not.
+#[test]
+fn addresses_written_as_page_text_are_listed_with_text_links() {
+    let dir = workdir("text-links");
+    let content = [
+        (700, "Visit https://example.com/plain-text-url."),
+        (650, "or www.example.com/no-scheme"),
+        (600, "Write to someone@example.com, please"),
+        (550, "https://example.org/covered"),
+        (500, "Version 1.2.3 and file:///etc/passwd"),
+    ]
+    .iter()
+    .map(|(y, s)| format!("BT /F1 14 Tf 72 {y} Td ({s}) Tj ET\n"))
+    .collect::<String>();
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R /Annots [6 0 R] >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}endstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        "<< /Type /Annot /Subtype /Link /Rect [60 545 400 565] /Border [0 0 0] /A << /S /URI /URI (https://example.org/annotation) >> >>".into(),
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    std::fs::write(dir.join("text.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "text.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "link_list", json!({ "doc": doc })).get("text_links"), None, "only on request");
+    let listed = ok(&mut a, "link_list", json!({ "doc": doc, "text_links": true }));
+    let found = listed["text_links"].as_array().unwrap();
+    let urls: Vec<&str> = found.iter().map(|l| l["url"].as_str().unwrap()).collect();
+    assert_eq!(urls, ["https://example.com/plain-text-url", "https://www.example.com/no-scheme", "mailto:someone@example.com"], "{listed}");
+    assert!(found.iter().all(|l| l["page"] == 1 && l.get("blocked").is_none()), "{listed}");
+    // Rectangles from the top-left of the page: the first line's baseline is 792 − 700 = 92 down.
+    let r = found[0]["rects"][0].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect::<Vec<_>>();
+    assert!(r[0] > 100.0 && r[0] < 140.0 && r[1] < 92.0 && r[3] > 80.0, "{r:?}");
+}
+
+/// One PDF of `pages` pages that all draw `content` in Helvetica.
+fn same_text_pages(pages: usize, content: &str) -> Vec<u8> {
+    let kids: String = (0..pages).map(|k| format!("{} 0 R ", k + 5)).collect();
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        format!("<< /Type /Pages /Kids [{kids}] /Count {pages} /MediaBox [0 0 612 792] >>"),
+        format!("<< /Length {} >>\nstream\n{content}endstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+    ];
+    objs.extend((0..pages).map(|_| "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 4 0 R >> >> /Contents 3 0 R >>".to_string()));
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    pdf
+}
+
+/// Review on #4472: link_list with text_links reads a share of a large document's pages per
+/// call and says where to go on, so a 10,000-page document is never read all at once; a call
+/// also stops after the page that brings it to 2,000 addresses.
+#[test]
+fn text_links_of_a_large_document_are_read_a_share_at_a_time() {
+    let dir = workdir("text-links-large");
+    std::fs::write(dir.join("long.pdf"), same_text_pages(10_000, "BT /F1 14 Tf 72 700 Td (See https://example.com/page now) Tj ET\n")).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "long.pdf" }))["doc"].as_u64().unwrap();
+    let first = ok(&mut a, "link_list", json!({ "doc": doc, "text_links": true }));
+    let found = first["text_links"].as_array().unwrap();
+    assert_eq!(found.len(), 100, "the first 100 pages");
+    assert_eq!((found[0]["page"].clone(), found[99]["page"].clone()), (json!(1), json!(100)));
+    assert_eq!(first["text_links_next_page"], json!(101));
+    let last = ok(&mut a, "link_list", json!({ "doc": doc, "text_links": true, "text_links_from": 9_951 }));
+    let found = last["text_links"].as_array().unwrap();
+    assert_eq!((found.len(), found[0]["page"].clone()), (50, json!(9_951)));
+    assert_eq!(last.get("text_links_next_page"), None, "nothing after the last page");
+    for from in [0, -1, 10_001, i64::MAX] {
+        err(&mut a, "link_list", json!({ "doc": doc, "text_links": true, "text_links_from": from }));
+    }
+
+    // 52 lines of 10 addresses: 520 on a page, kept to 512; the fourth page brings a call to
+    // 2,048, so it stops there.
+    let line = "x@example.org ".repeat(10);
+    let content: String = (0..52).map(|k| format!("BT /F1 6 Tf 20 {} Td ({line}) Tj ET\n", 760 - k * 7)).collect();
+    std::fs::write(dir.join("dense.pdf"), same_text_pages(6, &content)).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "dense.pdf" }))["doc"].as_u64().unwrap();
+    let dense = ok(&mut a, "link_list", json!({ "doc": doc, "text_links": true }));
+    assert_eq!(dense["text_links"].as_array().unwrap().len(), 4 * 512);
+    assert_eq!(dense["text_links_next_page"], json!(5));
+    let rest = ok(&mut a, "link_list", json!({ "doc": doc, "text_links": true, "text_links_from": 5 }));
+    assert_eq!((rest["text_links"].as_array().unwrap().len(), rest.get("text_links_next_page")), (2 * 512, None));
+}
+
+/// An address on a layer the viewer hides is not a text link, and Create links from URLs makes
+/// no link there: link_list and links_from_urls read the page text with the layers as layer_set
+/// left them (ISO 32000-2 §8.11.3.1: hidden optional content "shall not be drawn").
+#[test]
+fn text_links_leave_out_addresses_on_hidden_layers() {
+    let dir = workdir("text-links-layers");
+    let content =
+        "BT /F1 14 Tf 72 700 Td (https://example.com/shown) Tj ET\n/OC /L1 BDC BT /F1 14 Tf 72 650 Td (https://example.com/layered) Tj ET EMC\n";
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [6 0 R] /D << /Order [6 0 R] >> >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 5 0 R >> /Properties << /L1 6 0 R >> >> /Contents 4 0 R >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}endstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        "<< /Type /OCG /Name (Addresses) >>".into(),
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    std::fs::write(dir.join("layers.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "layers.pdf" }))["doc"].as_u64().unwrap();
+    let urls = |a: &mut Automation| -> Vec<String> {
+        let listed = ok(a, "link_list", json!({ "doc": doc, "text_links": true }));
+        listed["text_links"].as_array().unwrap().iter().map(|l| l["url"].as_str().unwrap().to_owned()).collect()
+    };
+    assert_eq!(urls(&mut a), ["https://example.com/shown", "https://example.com/layered"]);
+    ok(&mut a, "layer_set", json!({ "doc": doc, "layer": "Addresses", "visible": false }));
+    assert_eq!(urls(&mut a), ["https://example.com/shown"]);
+    let created = ok(&mut a, "links_from_urls", json!({ "doc": doc }));
+    assert_eq!(created["created"], json!(["https://example.com/shown"]), "no link over the hidden address: {created}");
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    ok(&mut a, "layer_set", json!({ "doc": doc, "layer": "Addresses", "visible": true }));
+    assert_eq!(urls(&mut a), ["https://example.com/shown", "https://example.com/layered"]);
+    let created = ok(&mut a, "links_from_urls", json!({ "doc": doc }));
+    assert_eq!(created["created"], json!(["https://example.com/shown", "https://example.com/layered"]), "{created}");
+}
+
 #[test]
 fn bookmarks_from_structure_through_tools() {
     let dir = workdir("bookmarks-structure");

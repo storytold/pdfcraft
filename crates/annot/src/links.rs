@@ -400,8 +400,16 @@ fn email_at(chars: &[char], start: usize) -> Option<(usize, String)> {
 
 /// Find web addresses in text: `http(s)://…`, `www.…` and bare e-mail addresses become
 /// `mailto:`. Returns character ranges and the URI for each.
+///
+/// No other scheme is ever found, and a `www.` or e-mail address that is part of one written with
+/// another scheme (`ftp://www.example.com`, `smb://admin@example.org`) is not taken out of it:
+/// it would open with a scheme the text doesn't say. Brackets inside a web address belong to it
+/// when they pair up (`…/wiki/Mercury_(planet)`); an unpaired one ends it.
 pub fn find_urls(chars: &[char]) -> Vec<(std::ops::Range<usize>, String)> {
     let url_char = |c: char| !c.is_whitespace() && !"<>\"'()[]{}".contains(c);
+    // Characters found inside an address but not between words: a `www.` after one is part of
+    // a longer address, and so is an e-mail address after a slash.
+    let inside_address = |i: usize, set: &str| i > 0 && chars.get(i - 1).is_some_and(|c| set.contains(*c));
     // Case-insensitive prefix test that never steps past the end. Comparing against the original
     // characters keeps every offset in `chars`'s own index space: case-folding a copy can change
     // its length (U+0130 becomes "i" plus a combining dot), so a folded copy must never supply
@@ -412,10 +420,28 @@ pub fn find_urls(chars: &[char]) -> Vec<(std::ops::Range<usize>, String)> {
     let mut i = 0;
     while i < chars.len() {
         let boundary = i == 0 || chars.get(i - 1).is_some_and(|c| !c.is_alphanumeric());
-        if boundary && (starts_with(i, "http://") || starts_with(i, "https://") || starts_with(i, "www.")) {
+        let www = starts_with(i, "www.") && !inside_address(i, "/\\:@.-_~%+=&#");
+        if boundary && (starts_with(i, "http://") || starts_with(i, "https://") || www) {
             let mut j = i;
-            while chars.get(j).is_some_and(|c| url_char(*c)) {
+            // Brackets pair up inside the address: `depth` are open, the outermost at `opened`.
+            let (mut depth, mut opened) = (0usize, i);
+            loop {
+                match chars.get(j) {
+                    Some('(') => {
+                        if depth == 0 {
+                            opened = j;
+                        }
+                        depth = depth.saturating_add(1);
+                    }
+                    Some(')') if depth > 0 => depth -= 1,
+                    Some(c) if url_char(*c) => {}
+                    _ => break,
+                }
                 j += 1;
+            }
+            // A bracket left open isn't the address's: it ends before it.
+            if depth > 0 {
+                j = opened;
             }
             // Trailing punctuation belongs to the sentence.
             while j > i && chars.get(j - 1).is_some_and(|c| ".,;:!?".contains(*c)) {
@@ -429,7 +455,10 @@ pub fn find_urls(chars: &[char]) -> Vec<(std::ops::Range<usize>, String)> {
                 continue;
             }
         }
-        if boundary && let Some((end, uri)) = email_at(chars, i) {
+        if boundary
+            && !inside_address(i, "/\\")
+            && let Some((end, uri)) = email_at(chars, i)
+        {
             out.push((i..end, uri));
             i = end;
             continue;
