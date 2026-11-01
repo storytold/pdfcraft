@@ -277,15 +277,26 @@ impl PdfCraftApp {
         // the user closed stays closed (#1590).
         let opening_mode = self.mode_override.unwrap_or(self.default_mode);
         let initial = doc.initial_view();
-        if activate && self.right.is_none() && !self.right_panel_closed && opening_mode != Mode::Read {
-            self.right = if !doc.info.annotations.is_empty() {
-                Some(RightPanel::Comments)
-            // A full-screen document names its panel for outside full screen, and with
-            // `/NonFullScreenPageMode /UseNone` (the default) no outline is visible (Table 147).
-            } else if !doc.info.outline.is_empty() && !initial.full_screen {
-                Some(RightPanel::Bookmarks)
-            } else {
-                None
+        // Preferences ▸ Default panel (#1495): Automatic only fills an empty right panel, as
+        // before; a chosen panel replaces the one open (the right panel is shared by the tabs and
+        // comes back from the last session). A panel the document names still wins below.
+        let choose = self.right.is_none() || self.default_panel != DefaultPanel::Auto;
+        if activate && choose && !self.right_panel_closed && opening_mode != Mode::Read {
+            self.right = match self.default_panel {
+                // A document that asks for no panel (`/PageMode /UseNone`) gets none, whatever
+                // the preference, Automatic included (CodeRabbit on #5599).
+                _ if doc.asks_for_no_panel() => None,
+                DefaultPanel::Auto if !doc.info.annotations.is_empty() => Some(RightPanel::Comments),
+                // A full-screen document names its panel for outside full screen, and with
+                // `/NonFullScreenPageMode /UseNone` (the default) no outline is visible (Table 147).
+                DefaultPanel::Auto if !doc.info.outline.is_empty() && !initial.full_screen => Some(RightPanel::Bookmarks),
+                DefaultPanel::Auto | DefaultPanel::None => None,
+                // Nor a chosen one (CodeRabbit on #5599): the document's panel for outside full
+                // screen, if it names one, is set from its Initial View below.
+                _ if initial.full_screen => None,
+                DefaultPanel::Pages => Some(RightPanel::Pages),
+                DefaultPanel::Bookmarks => Some(RightPanel::Bookmarks),
+                DefaultPanel::Comments => Some(RightPanel::Comments),
             };
         }
         let view = DocView::new(id, &doc.info, self.view_defaults);
@@ -294,6 +305,11 @@ impl PdfCraftApp {
             self.active = Some(self.views.len() - 1);
         }
         self.apply_initial_view(self.views.len() - 1, &initial);
+        // F4 reopens the panel shown last: the one the document opened with, chosen by the
+        // preference or named by the document (CodeRabbit on #5599).
+        if activate && let Some(panel) = self.right {
+            self.last_right = panel;
+        }
         // Where the reader left off wins over the file's own initial view (#1767).
         self.apply_last_view(self.views.len() - 1);
         // After both, so full screen shows one fitted page and leaving it comes back to them.

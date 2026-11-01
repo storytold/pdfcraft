@@ -2395,6 +2395,27 @@ fn a_page_becomes_a_form_xobject_upright() {
     assert!(crate::page_as_form(&mut dst, &src, 7).is_err());
 }
 
+/// CodeRabbit on #5599: an explicit `/PageMode /UseNone` (open with no panel) survives a change
+/// to another part of the initial view; choosing a panel replaces it, and choosing Page only
+/// again leaves no entry, as before.
+#[test]
+fn an_explicit_use_none_survives_other_initial_view_changes() {
+    use crate::view::{Layout, Navigation};
+    let mut doc = open(fixture());
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| c.set(b"PageMode".to_vec(), Object::name("UseNone"))).unwrap();
+    assert!(crate::asks_for_no_panel(&doc));
+    let v = crate::InitialView { layout: Layout::SinglePage, ..crate::initial_view(&doc) };
+    crate::set_initial_view(&mut doc, &v).unwrap();
+    assert!(crate::asks_for_no_panel(&doc), "a layout change keeps /UseNone");
+    let v = crate::InitialView { navigation: Navigation::Bookmarks, ..crate::initial_view(&doc) };
+    crate::set_initial_view(&mut doc, &v).unwrap();
+    assert!(!crate::asks_for_no_panel(&doc));
+    let v = crate::InitialView { navigation: Navigation::PageOnly, ..crate::initial_view(&doc) };
+    crate::set_initial_view(&mut doc, &v).unwrap();
+    assert!(!crate::asks_for_no_panel(&doc) && doc.get(root).as_dict().unwrap().get(b"PageMode").is_none());
+}
+
 #[test]
 fn initial_view_round_trips_and_keeps_scripts() {
     use crate::view::{Layout, Magnification, Navigation};

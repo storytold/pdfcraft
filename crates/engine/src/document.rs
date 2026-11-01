@@ -367,6 +367,12 @@ impl Document {
         self.editor.as_ref().map(|e| pdfcraft_organize::initial_view(&e.cos)).unwrap_or_default()
     }
 
+    /// Whether the document asks to open with no navigation panel (`/PageMode /UseNone`), which
+    /// a default panel the user chose doesn't override.
+    pub fn asks_for_no_panel(&self) -> bool {
+        self.editor.as_ref().is_some_and(|e| pdfcraft_organize::asks_for_no_panel(&e.cos))
+    }
+
     /// Signed: at least one signature field holds a signature.
     pub fn is_signed(&self) -> bool {
         self.signatures.iter().any(|s| s.signed)
