@@ -11,6 +11,10 @@ pub use pdfcraft_js::{Limits, Message, MessageButtons, MessageIcon, Outcome, Pan
 
 use crate::{DocId, Edit, EditError, Session};
 
+/// At most this many pages a script adds or shows from templates in one run: each one copies
+/// the document, so a script looping over `spawn` must not hold the app on a large file (#1429).
+const MAX_TEMPLATE_PAGES: usize = 100;
+
 /// What scripts produced for the viewer since it last looked.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct JsOutput {
@@ -45,6 +49,9 @@ impl JsOutput {
                 Request::ShowPanel(_) => self.console.push("A field script asked to show a side panel; only a button may show a side panel".into()),
                 Request::SaveAs => {
                     self.console.push("A field script asked to save the document as a new file; only a button may open Save As".into())
+                }
+                Request::SpawnTemplate { .. } | Request::SetTemplateHidden { .. } => {
+                    self.console.push("A field script asked to add or show a page from a template; only a button may change the pages".into())
                 }
                 r => self.requests.push(r.clone()),
             }
@@ -172,8 +179,16 @@ impl JsRunner {
     /// an XFA form) and its document-level scripts, read once.
     pub fn new(cos: &pdfcraft_cos::Document, file_name: &str) -> JsRunner {
         let xfa = pdfcraft_xfa::xfa_shape(cos).is_some();
-        let doc =
-            pdfcraft_js::DocInfo { file_name: file_name.to_string(), num_pages: pdfcraft_model::pages(cos).len(), page: 0, info: info(cos), xfa };
+        // The page templates a script can show or add a page from (#1429).
+        let templates = pdfcraft_organize::templates(cos).into_iter().map(|t| (t.name, t.hidden)).collect();
+        let doc = pdfcraft_js::DocInfo {
+            file_name: file_name.to_string(),
+            num_pages: pdfcraft_model::pages(cos).len(),
+            page: 0,
+            info: info(cos),
+            xfa,
+            templates,
+        };
         // Once XFA owns the form, the PDF container's scripts belong to its fallback view.
         // Keep them in the file and in Document JavaScripts, but do not initialize an
         // AcroForm context with them: a viewer-compatibility alert would be misleading.
@@ -307,6 +322,32 @@ impl Session {
             })
             .collect();
         o.requests.retain(|r| !matches!(r, Request::Reset(_)));
+        // Pages from templates go in the same undo step, after the field changes (#1429). Only a
+        // push button may change the pages, as for field scripts (`JsOutput`); a target that
+        // names another field, or no field, is refused that (CodeRabbit on #5332).
+        let button = target.is_none_or(|t| fields.iter().any(|f| f.name == t && f.kind == pdfcraft_forms::FieldKind::PushButton));
+        let mut pages = Vec::new();
+        let (mut over, mut overlaid, mut not_button) = (false, None, false);
+        for r in std::mem::take(&mut o.requests) {
+            match r {
+                Request::SpawnTemplate { .. } | Request::SetTemplateHidden { .. } if !button => not_button = true,
+                Request::SpawnTemplate { .. } | Request::SetTemplateHidden { .. } if pages.len() >= MAX_TEMPLATE_PAGES => over = true,
+                Request::SpawnTemplate { overlay: true, name, .. } => overlaid = overlaid.or(Some(name)),
+                Request::SpawnTemplate { name, page, rename, overlay: false } => pages.push(Edit::SpawnTemplate { name, at: page, rename }),
+                Request::SetTemplateHidden { name, hidden } => pages.push(Edit::SetTemplateHidden { name, hidden }),
+                r => o.requests.push(r),
+            }
+        }
+        // Said once, however many overlays the script asked for.
+        if let Some(name) = overlaid {
+            o.console.push(format!("Laying template {name} over an existing page isn't supported yet; ask for a new page (bOverlay false)"));
+        }
+        if not_button {
+            o.console.push("A field script asked to add or show a page from a template; only a button may change the pages".into());
+        }
+        if over {
+            o.console.push(format!("A script may add or show at most {MAX_TEMPLATE_PAGES} pages from templates at a time; the rest were left out"));
+        }
         let mut edits = Vec::new();
         if !changes.is_empty() {
             edits.push(Edit::ApplyScriptChanges { changes });
@@ -317,6 +358,7 @@ impl Session {
                 .then(|| all.iter().filter(|n| names.iter().any(|x| *n == x || n.starts_with(&format!("{x}.")))).cloned().collect());
             edits.push(Edit::ResetForm { names });
         }
+        edits.extend(pages);
         if !edits.is_empty() {
             self.apply(id, Edit::Batch { label: "Run JavaScript".into(), edits })?;
         }

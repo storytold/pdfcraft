@@ -308,6 +308,9 @@
 	Insert blank page	Lisää tyhjä sivu
 	Rotate pages…	Kierrä sivuja…
 	Duplicate pages	Monista sivut
+	Add a page from template {name}	Lisää sivu mallista {name}
+	Show template {name}	Näytä malli {name}
+	Hide template {name}	Piilota malli {name}
 	Crop pages	Rajaa sivut
 	Set page boxes…	Määritä sivualueet…
 	Insert pages from file…	Lisää sivuja tiedostosta…

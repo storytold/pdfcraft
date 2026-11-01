@@ -1422,6 +1422,9 @@
 	Applying a scale switches units to m / mm.	Når du bruker en målestokk, byttes enhetene til m / mm.
 	Drop-down list	Nedtrekksliste
 	Duplicate pages	Dupliser sider
+	Add a page from template {name}	Legg til en side fra malen {name}
+	Show template {name}	Vis malen {name}
+	Hide template {name}	Skjul malen {name}
 	Edit a PDF	Rediger en PDF
 	Edit text & images	Rediger tekst og bilder
 	Encrypt with certificate	Krypter med sertifikat

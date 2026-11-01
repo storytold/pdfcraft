@@ -1,4 +1,7 @@
-use super::document::{field_object, get_field, get_nth_field_name, noop, num_fields, page_num_get, page_num_set, print, reset_form, submit_form};
+use super::document::{
+    field_object, get_field, get_nth_field_name, get_template, noop, num_fields, page_num_get, page_num_set, print, reset_form,
+    spawn_page_from_template, submit_form, template_object,
+};
 use super::format::{printd, printf, printx, scand};
 use super::host::{arg, function, host, s, text, text_line};
 use super::model::{DISPLAY_HIDDEN, DISPLAY_NO_PRINT, DISPLAY_NO_VIEW, DISPLAY_VISIBLE, Event, Panel, Request};
@@ -181,7 +184,7 @@ const XFA_VERSION: f64 = 3.5;
 /// `documentFileName`, `info`, the XFA version), and the `app`, `util`, `console`, `display` and
 /// `color` objects.
 pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
-    let globals: [(&str, usize, NativeFunction); 9] = [
+    let globals: [(&str, usize, NativeFunction); 11] = [
         ("getField", 1, NativeFunction::from_fn_ptr(get_field)),
         ("getNthFieldName", 1, NativeFunction::from_fn_ptr(get_nth_field_name)),
         ("resetForm", 1, NativeFunction::from_fn_ptr(reset_form)),
@@ -191,6 +194,8 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         ("calculateNow", 0, NativeFunction::from_fn_ptr(noop)),
         ("syncAnnotScan", 0, NativeFunction::from_fn_ptr(noop)),
         ("dirty", 0, NativeFunction::from_fn_ptr(noop)),
+        ("getTemplate", 1, NativeFunction::from_fn_ptr(get_template)),
+        ("spawnPageFromTemplate", 5, NativeFunction::from_fn_ptr(spawn_page_from_template)),
     ];
     for (name, len, f) in globals {
         ctx.register_global_callable(JsString::from(name), len, f)?;
@@ -215,6 +220,11 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
     ctx.register_global_property(js_string!("numPages"), JsValue::from(pages as f64), rw)?;
     ctx.register_global_property(js_string!("documentFileName"), s(&file), rw)?;
     ctx.register_global_property(js_string!("info"), info, rw)?;
+    // `this.templates`: every page template, as Template objects (#1429).
+    let names: Vec<String> = host(ctx)?.borrow().doc.templates.iter().map(|(n, _)| n.clone()).collect();
+    let templates: Vec<JsValue> = names.iter().map(|n| template_object(ctx, n).into()).collect();
+    let templates = JsArray::from_iter(templates, ctx);
+    ctx.register_global_property(js_string!("templates"), templates, rw)?;
     // XFA forms check both before they run: every document sees the XFA version, and only an
     // XFA form sees `xfa_installed`.
     ctx.register_global_property(js_string!("xfa_version"), JsValue::from(XFA_VERSION), rw)?;

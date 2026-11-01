@@ -314,6 +314,9 @@
 	Insert blank page	空白のページを挿入
 	Rotate pages…	ページを回転…
 	Duplicate pages	ページを複製
+	Add a page from template {name}	テンプレート {name} からページを追加
+	Show template {name}	テンプレート {name} を表示
+	Hide template {name}	テンプレート {name} を非表示
 	Crop pages	ページをトリミング
 	Set page boxes…	ページボックスを設定…
 	Insert pages from file…	ファイルからページを挿入…

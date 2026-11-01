@@ -285,6 +285,9 @@
 	Insert blank page	Üres oldal beszúrása
 	Rotate pages…	Oldalak forgatása…
 	Duplicate pages	Oldalak megkettőzése
+	Add a page from template {name}	Oldal hozzáadása a(z) {name} sablonból
+	Show template {name}	A(z) {name} sablon megjelenítése
+	Hide template {name}	A(z) {name} sablon elrejtése
 	Crop pages	Oldalak levágása
 	Set page boxes…	Oldalkeretek beállítása…
 	Insert pages from file…	Oldalak beszúrása fájlból…

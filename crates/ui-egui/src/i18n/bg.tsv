@@ -1885,6 +1885,9 @@
 	Insert blank page	Вмъкни празна страница
 	Rotate pages…	Завърти страници…
 	Duplicate pages	Дублирай страници
+	Add a page from template {name}	Добави страница от шаблон {name}
+	Show template {name}	Покажи шаблон {name}
+	Hide template {name}	Скрий шаблон {name}
 	Crop pages	Изрежи страници
 	Set page boxes…	Задай полета на страницата…
 	Insert pages from file…	Вмъкни страници от файл…

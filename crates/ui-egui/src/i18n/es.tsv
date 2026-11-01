@@ -310,6 +310,9 @@
 	Insert blank page	Insertar página en blanco
 	Rotate pages…	Girar páginas…
 	Duplicate pages	Duplicar páginas
+	Add a page from template {name}	Añadir una página desde la plantilla {name}
+	Show template {name}	Mostrar la plantilla {name}
+	Hide template {name}	Ocultar la plantilla {name}
 	Crop pages	Recortar páginas
 	Set page boxes…	Definir cuadros de página…
 	Insert pages from file…	Insertar páginas desde un archivo…

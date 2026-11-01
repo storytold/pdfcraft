@@ -1836,6 +1836,9 @@
 	Insert blank page	插入空白頁面
 	Rotate pages…	旋轉頁面…
 	Duplicate pages	複製頁面
+	Add a page from template {name}	從範本 {name} 新增頁面
+	Show template {name}	顯示範本 {name}
+	Hide template {name}	隱藏範本 {name}
 	Crop pages	裁切頁面
 	Set page boxes…	設定頁面方框…
 	Insert pages from file…	從檔案插入頁面…

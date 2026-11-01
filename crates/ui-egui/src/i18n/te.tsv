@@ -291,6 +291,9 @@ comment menu	Edit	సవరించు
 	Insert blank page	ఖాళీ పేజీని చొప్పించు
 	Rotate pages…	పేజీలను తిప్పు…
 	Duplicate pages	పేజీలను నకలు చేయి
+	Add a page from template {name}	టెంప్లేట్ {name} నుండి పేజీని జోడించు
+	Show template {name}	టెంప్లేట్ {name}ను చూపించు
+	Hide template {name}	టెంప్లేట్ {name}ను దాచు
 	Crop pages	పేజీలను క్రాప్ చేయి
 	Set page boxes…	పేజీ బాక్స్‌లను సెట్ చేయి…
 	Insert pages from file…	ఫైల్ నుండి పేజీలను చొప్పించు…

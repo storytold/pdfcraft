@@ -314,6 +314,9 @@
 	Insert blank page	إدراج صفحة فارغة
 	Rotate pages…	تدوير الصفحات…
 	Duplicate pages	تكرار الصفحات
+	Add a page from template {name}	إضافة صفحة من القالب {name}
+	Show template {name}	إظهار القالب {name}
+	Hide template {name}	إخفاء القالب {name}
 	Crop pages	اقتصاص الصفحات
 	Set page boxes…	ضبط مربعات الصفحة…
 	Insert pages from file…	إدراج صفحات من ملف…

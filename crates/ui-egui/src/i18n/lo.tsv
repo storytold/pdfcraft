@@ -312,6 +312,9 @@
 	Insert blank page	ແຊກໜ້າຫວ່າງເປົ່າ
 	Rotate pages…	ໝູນໜ້າ…
 	Duplicate pages	ສຳເນົາໜ້າຊ້ຳ
+	Add a page from template {name}	ເພີ່ມໜ້າຈາກແມ່ແບບ {name}
+	Show template {name}	ສະແດງແມ່ແບບ {name}
+	Hide template {name}	ເຊື່ອງແມ່ແບບ {name}
 	Crop pages	ຕັດຂອບໜ້າ
 	Set page boxes…	ຕັ້ງຄ່າກ່ອງໜ້າ…
 	Insert pages from file…	ແຊກໜ້າຈາກໄຟລ໌…

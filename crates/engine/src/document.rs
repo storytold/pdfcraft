@@ -603,6 +603,11 @@ impl Document {
         self.editor.as_ref().map(|e| pdfcraft_organize::custom_info(&e.cos)).unwrap_or_default()
     }
 
+    /// The page templates as they are now: the hidden ones, then the named visible pages (#1429).
+    pub fn templates(&self) -> Vec<pdfcraft_organize::Template> {
+        self.editor.as_ref().map(|e| pdfcraft_organize::templates(&e.cos)).unwrap_or_default()
+    }
+
     /// The name shown on the tab and window: the document title when the document asks for it
     /// (Initial View ▸ Show: Document Title) and has a real one, else the file name.
     pub fn display_name(&self) -> String {

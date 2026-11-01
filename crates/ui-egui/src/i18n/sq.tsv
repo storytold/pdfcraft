@@ -654,6 +654,9 @@
 	Duplicate field	Dyfisho fushën
 	Duplicate page	Dyfisho faqen
 	Duplicate pages	Dyfisho faqet
+	Add a page from template {name}	Shto një faqe nga shablloni {name}
+	Show template {name}	Shfaq shabllonin {name}
+	Hide template {name}	Fshih shabllonin {name}
 	Duplicate…	Dyfisho…
 	Dynamic	Dinamike
 	Dynamic XFA form laid out from its template: {pages}, {fields}.	Formular dinamik XFA i ndërtuar nga shablloni i tij: {pages}, {fields}.

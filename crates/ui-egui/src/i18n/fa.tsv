@@ -311,6 +311,9 @@
 	Insert blank page	درج صفحه خالی
 	Rotate pages…	چرخش صفحه‌ها…
 	Duplicate pages	تکثیر صفحه‌ها
+	Add a page from template {name}	افزودن صفحه از الگوی {name}
+	Show template {name}	نمایش الگوی {name}
+	Hide template {name}	پنهان کردن الگوی {name}
 	Crop pages	برش صفحه‌ها
 	Set page boxes…	تنظیم کادر‌های صفحه…
 	Insert pages from file…	درج صفحه‌ها از فایل…

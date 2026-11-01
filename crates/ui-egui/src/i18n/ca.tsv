@@ -308,6 +308,9 @@
 	Insert blank page	Insereix una pàgina en blanc
 	Rotate pages…	Gira pàgines…
 	Duplicate pages	Duplica pàgines
+	Add a page from template {name}	Afegeix una pàgina a partir de la plantilla {name}
+	Show template {name}	Mostra la plantilla {name}
+	Hide template {name}	Amaga la plantilla {name}
 	Crop pages	Escapça pàgines
 	Set page boxes…	Defineix els quadres de pàgina…
 	Insert pages from file…	Insereix pàgines des d'un fitxer…

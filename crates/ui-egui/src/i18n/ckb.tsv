@@ -314,6 +314,9 @@
 	Insert blank page	خستنەناوی پەڕەیەکی بەتاڵ
 	Rotate pages…	سووڕاندنەوەی پەڕەکان…
 	Duplicate pages	دووبارەکردنەوەی پەڕەکان
+	Add a page from template {name}	زیادکردنی پەڕە لە قاڵبی {name}
+	Show template {name}	پیشاندانی قاڵبی {name}
+	Hide template {name}	شاردنەوەی قاڵبی {name}
 	Crop pages	بڕینەوەی پەڕەکان
 	Set page boxes…	دانانی سندووقەکانی پەڕە…
 	Insert pages from file…	خستنەناوی پەڕە لە فایل…

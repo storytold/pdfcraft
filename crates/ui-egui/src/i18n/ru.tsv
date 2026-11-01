@@ -307,6 +307,9 @@
 	Insert blank page	Вставить пустую страницу
 	Rotate pages…	Повернуть страницы…
 	Duplicate pages	Дублировать страницы
+	Add a page from template {name}	Добавить страницу из шаблона {name}
+	Show template {name}	Показать шаблон {name}
+	Hide template {name}	Скрыть шаблон {name}
 	Crop pages	Обрезать страницы
 	Set page boxes…	Задать поля страницы…
 	Insert pages from file…	Вставить страницы из файла…

@@ -93,7 +93,8 @@ impl PdfCraftApp {
                     // Show/Hide: a panel already showing closes.
                     self.right = (self.right != Some(panel)).then_some(panel);
                 }
-                Request::Focus(_) | Request::Beep | Request::Reset(_) => {}
+                // The engine applies these with the script's other changes (resets, templates).
+                Request::Focus(_) | Request::Beep | Request::Reset(_) | Request::SpawnTemplate { .. } | Request::SetTemplateHidden { .. } => {}
             }
         }
         self.show_script_messages(out.alerts);
