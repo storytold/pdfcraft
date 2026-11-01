@@ -309,6 +309,10 @@ impl Time {
         if t.year == 0 {
             return None;
         }
+        // Reject impossible calendar dates and times of day (month 13, day 31 in April, hour 24...).
+        let valid_date = i32::try_from(t.year).ok().and_then(|y| chrono::NaiveDate::from_ymd_opt(y, t.month, t.day));
+        valid_date?;
+        chrono::NaiveTime::from_hms_opt(t.hour, t.minute, t.second)?;
         let tz = s.get(14..).unwrap_or("");
         let sign = match tz.chars().next() {
             Some('+') => -1i64,
@@ -593,6 +597,22 @@ mod tests {
         // Nesting is bounded, so a file made of nothing but wrappers fails instead of crashing.
         let deep = [[0x30u8, 0x80].repeat(400), [0u8, 0].repeat(400)].concat();
         assert!(Tlv::parse_all_ber(&deep).is_err());
+    }
+
+    #[test]
+    fn from_pdf_rejects_out_of_range_fields() {
+        for s in [
+            "D:20241399000000+01'00'",
+            "D:20241399250000Z",
+            "D:20241301000000Z",
+            "D:20240431000000Z",
+            "D:20241001240000Z",
+            "D:20241001006000Z",
+            "D:20241001000060Z",
+        ] {
+            assert_eq!(Time::from_pdf(s), None, "{s}");
+        }
+        assert_eq!(Time::from_pdf("D:20240430235959Z"), Some(Time { year: 2024, month: 4, day: 30, hour: 23, minute: 59, second: 59 }));
     }
 
     #[test]
