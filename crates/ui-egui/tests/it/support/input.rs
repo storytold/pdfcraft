@@ -60,6 +60,18 @@ fn contact_drag<S>(h: &mut Harness<'_, S>, a: Pos2, b: Pos2, force: Option<f32>)
     h.run_steps(4);
 }
 
+/// A finger's double tap at `p`: two taps, each a whole touch in one frame, in consecutive frames
+/// (0.25 s apart, within egui's 0.3 s double-click delay).
+pub fn touch_double_tap<S>(h: &mut Harness<'_, S>, p: Pos2) {
+    for _ in 0..2 {
+        one_frame(
+            h,
+            [touch(TouchPhase::Start, p), Event::PointerMoved(p), button(p, true), touch(TouchPhase::End, p), button(p, false), Event::PointerGone],
+        );
+    }
+    h.run_steps(2);
+}
+
 /// A mouse click at `p` whose press and release land in one slow frame (#2100).
 pub fn coalesced_click<S>(h: &mut Harness<'_, S>, p: Pos2) {
     h.hover_at(p);

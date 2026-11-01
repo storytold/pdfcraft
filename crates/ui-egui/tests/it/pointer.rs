@@ -14,7 +14,7 @@ use pdfcraft_ui_egui::comments::CommentTool;
 use pdfcraft_ui_egui::fill_sign::FillTool;
 use pdfcraft_ui_egui::{Dialog, PdfCraftApp, QuickTool, UnlockPrompt};
 
-use crate::support::input::{coalesced_click, double_click, one_frame, pen_drag, touch_drag, touch_tap};
+use crate::support::input::{coalesced_click, double_click, one_frame, pen_drag, touch_double_tap, touch_drag, touch_tap};
 
 /// A PDF of `objects`, numbered from 1 with the catalog first.
 fn pdf(objects: &[&str]) -> Vec<u8> {
@@ -853,6 +853,47 @@ fn a_pen_drag_selects_text_and_leaves_the_page_still() {
     assert_eq!(page(&h).top(), before, "the pen leaves the page where it is");
     let selected = h.state().views[0].selected_text().unwrap_or_default();
     assert!(selected.starts_with("Signed"), "the pen selected the words it crossed: {selected:?}");
+}
+
+/// A finger's tap still clicks in the Select tool: on text it clears a selection, as a click does.
+#[test]
+fn a_finger_tap_clears_a_selection() {
+    let mut h = open(text_pdf(), "400", false);
+    let (a, b) = (at(&h, 42.0, 303.0), at(&h, 120.0, 303.0));
+    assert_eq!(wait_for_cursor(&mut h, a, |c| c == egui::CursorIcon::Text), egui::CursorIcon::Text, "the page's text has arrived");
+    pen_drag(&mut h, a, b);
+    assert!(h.state().views[0].selected_text().is_some_and(|t| !t.is_empty()), "the pen selected some text");
+    let tap = at(&h, 230.0, 303.0);
+    touch_tap(&mut h, tap);
+    assert_eq!(h.state().views[0].selected_text(), None, "the tap cleared it");
+}
+
+/// A finger's double tap on a word selects it, as a double click does.
+#[test]
+fn a_finger_double_tap_selects_a_word() {
+    let mut h = open(text_pdf(), "400", false);
+    let word = at(&h, 50.0, 303.0);
+    assert_eq!(wait_for_cursor(&mut h, word, |c| c == egui::CursorIcon::Text), egui::CursorIcon::Text, "the page's text has arrived");
+    touch_double_tap(&mut h, word);
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("Signed"));
+}
+
+/// A finger's drag pans the page and leaves a selection where it was: the finger doesn't move its
+/// end, as a mouse drag would.
+#[test]
+fn a_finger_drag_leaves_a_selection_as_it_is() {
+    let mut h = open(text_pdf(), "400", false);
+    let (a, b) = (at(&h, 42.0, 303.0), at(&h, 120.0, 303.0));
+    assert_eq!(wait_for_cursor(&mut h, a, |c| c == egui::CursorIcon::Text), egui::CursorIcon::Text, "the page's text has arrived");
+    pen_drag(&mut h, a, b);
+    let selected = h.state().views[0].selected_text();
+    assert!(selected.as_ref().is_some_and(|t| !t.is_empty()), "the pen selected some text");
+    let before = page(&h).top();
+    let p = at(&h, 200.0, 303.0);
+    touch_drag(&mut h, p, p - egui::vec2(0.0, 120.0));
+    let moved = before - page(&h).top();
+    assert!((moved - 120.0).abs() < 1.0, "the page follows the finger 120 points up, not {moved}");
+    assert_eq!(h.state().views[0].selected_text(), selected, "the selection kept its ends");
 }
 
 // ---------------------------------------------------------------------------------------------
