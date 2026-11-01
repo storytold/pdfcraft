@@ -2036,6 +2036,45 @@ fn tab_context_menu_can_detach_tab_to_new_window() {
 }
 
 #[test]
+fn dragging_sole_tab_to_open_space_does_not_detach_it() {
+    use egui::accesskit::Role;
+    let mut h = harness(|app| {
+        app.open_bytes("sole.pdf", None, FIXTURE.to_vec()).unwrap();
+    });
+    let id = h.state().views[0].id;
+    let tab_rect = h.get_by_role_and_label(Role::Tab, "sole.pdf").rect();
+
+    // Drag "sole.pdf" downwards into open space (60px below the tab strip)
+    let from = tab_rect.center();
+    let to = from + egui::vec2(0.0, 60.0);
+    drag_named_tab(&mut h, "sole.pdf", to, true);
+    h.run_steps(3);
+
+    // sole.pdf must NOT be detached and must remain the active tab
+    assert!(!h.state().views[0].detached, "sole tab must not be detached");
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(id));
+    assert!(h.query_by_role_and_label(Role::Tab, "sole.pdf").is_some());
+}
+
+#[test]
+fn sole_tab_context_menu_disables_move_to_new_window() {
+    use egui::accesskit::Role;
+    let mut h = harness(|app| {
+        app.open_bytes("sole.pdf", None, FIXTURE.to_vec()).unwrap();
+    });
+
+    // Right-click sole.pdf tab
+    h.get_by_role_and_label(Role::Tab, "sole.pdf").click_secondary();
+    h.run_steps(2);
+
+    let move_node = h.get_by_label("Move to New Window");
+    assert!(move_node.accesskit_node().is_disabled(), "Move to New Window should be disabled when only one tab is open");
+    move_node.hover();
+    h.run_steps(30);
+    h.get_by_label_contains("Cannot detach the only open document");
+}
+
+#[test]
 fn detached_window_views_retain_render_demand_and_are_not_suspended() {
     let mut h = three_tab_harness();
     let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
