@@ -1161,9 +1161,11 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
         images: &images,
         clip: ui.clip_rect(),
     };
-    if let Some(o) = ptr.pressed().filter(|o| xf.rect.contains(*o)) {
+    if let Some(o) = ptr.pressed() {
         let at = hits.at(view, o);
-        view.router.press(i, at, tool);
+        if xf.rect.contains(o) || !at.is_empty() {
+            view.router.press(i, at, tool);
+        }
     }
     if let QuickTool::Measure(measure_tool) = tool {
         crate::measure_ui::page_input(ui, resp, doc, view, &pcx, measure_tool, units);
@@ -1993,7 +1995,12 @@ fn draw_pages(
     if delta != Vec2::ZERO && delta.is_finite() {
         ui.scroll_with_delta_animation(delta, egui::style::ScrollAnimation::none());
     }
-    let (resp_rect, resp) = ui.allocate_exact_size(vec2(content_w, content_h), Sense::click_and_drag());
+    // A resized handle can sit in the window beside a page that does not fill it. The
+    // response has to cover that visible area or the next press never starts: the pointer
+    // is reported only inside this rectangle once the previous drag has been released.
+    // Page positions stay on `content_w`/`content_h`; the extra area is not a new page.
+    let response_size = vec2(content_w.max(viewport.width()), content_h.max(viewport.height()));
+    let (resp_rect, resp) = ui.allocate_exact_size(response_size, Sense::click_and_drag());
     view.page_widget = Some(resp.id);
     // A drag lasts only while egui reports it, so the mark can't outlive one.
     if !resp.dragged_by(egui::PointerButton::Primary) {
