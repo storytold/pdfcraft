@@ -200,6 +200,20 @@ fn a_search_marks_nothing_it_can_not_apply() {
 }
 
 #[test]
+fn a_search_of_a_file_cut_short_is_refused_and_not_no_matches() {
+    let file = Temp::new("redact-cut", &large());
+    let mut h = harness(true);
+    h.state_mut().open_path(&file.path);
+    h.run_steps(4);
+    assert!(on_disk(h.state()));
+    std::fs::File::options().write(true).open(&file.path).unwrap().set_len(1_000).unwrap();
+    h.state_mut().toast = None;
+    h.state_mut().redact_search.text = "Page".into();
+    assert_eq!(h.state_mut().redact_search(), None);
+    assert!(h.state().toast.is_some(), "the refusal is said");
+}
+
+#[test]
 fn a_search_says_how_many_it_marked() {
     let file = Temp::new("marked", &large());
     let mut h = harness(true);

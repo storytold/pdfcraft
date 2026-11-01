@@ -304,6 +304,11 @@ impl PdfCraftApp {
         if d.mode != SearchMode::Patterns && needles.is_empty() {
             return Some(0);
         }
+        // Marks would be refused, and a page the file can't give would read as no matches.
+        if doc.on_disk.is_some() {
+            self.apply_edit(Edit::Batch { label: "Mark for redaction".into(), edits: Vec::new() });
+            return None;
+        }
         let config = pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..Default::default() };
         let mut r = pdfcraft_render::PageRenderer::new(doc.source(), config);
         let mut edits = Vec::new();
