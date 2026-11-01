@@ -4530,7 +4530,8 @@ fn stream(dict: &str, data: &str) -> String {
 /// Word processors draw italic in a face that has none by leaning the letters through the text
 /// matrix (`1 0 0.2679 1 x y Tm`, 15 degrees) or the CTM, and the font's name says nothing of it.
 /// Reading for export takes such text as italic, whichever way its baseline turns. Text leaning
-/// left or barely, or sheared past 45 degrees, stays upright, and editing reads the face as it is.
+/// left or barely, sheared past 45 degrees, or mirrored, stays upright, and editing reads the face
+/// as it is.
 #[test]
 fn reading_takes_letters_the_matrix_leans_as_italic() {
     let content = [
@@ -4542,6 +4543,8 @@ fn reading_takes_letters_the_matrix_leans_as_italic() {
         "BT /F1 10 Tf 1 0 -0.2679 1 72 520 Tm (Back) Tj ET",
         "BT /F1 10 Tf 1 0 0.05 1 72 460 Tm (Barely) Tj ET",
         "BT /F1 10 Tf 1 0 1.5 1 72 400 Tm (Flat) Tj ET",
+        "BT /F1 10 Tf -1 0 0.2679 1 300 240 Tm (Mirrored) Tj ET",
+        "BT /F1 10 Tf 1 0 0.2679 -1 72 340 Tm (Flipped) Tj ET",
     ]
     .join("\n");
     let doc = build(&[
@@ -4561,6 +4564,8 @@ fn reading_takes_letters_the_matrix_leans_as_italic() {
         ("Back", false),
         ("Barely", false),
         ("Flat", false),
+        ("Mirrored", false),
+        ("Flipped", false),
     ] {
         assert!(read.contains(&(word.to_string(), italic)), "{word} should read italic: {italic}; {read:?}");
     }
