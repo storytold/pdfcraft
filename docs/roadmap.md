@@ -1,7 +1,5 @@
 # PdfCraft roadmap: milestones and what's next
 
-> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M10, PR #4759: privacy-safe printer-option diagnostics; response shapes and estimates unchanged)
-
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: integrate main fa5f9f8c; retain CJK viewer and upstream raster regressions, restore explicit display_config imports; estimates unchanged)
 > **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** patch (M2, PR #4172: integrate main 5af10276; retain both roadmap histories and viewer-only CJK font policy; estimates unchanged)
@@ -275,6 +273,8 @@ M2 (renderer), M7 (content editing), M10 (OCR and Office), M11 (Preflight and st
 - Unmeasured fidelity: without an Acrobat comparison harness, quality gaps surface as user reports.
 
 ## Revision history
+
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M10, PR #4759: privacy-safe printer-option diagnostics; response shapes and estimates unchanged)
 
 **2026-11-01 · patch:** M10, PR #4759: printer-option diagnostics omit local paths, queue identifiers and raw OS errors while retaining bounded failure categories. Synthetic retrieval, tool and UI privacy coverage; response shapes and estimates unchanged.
 
