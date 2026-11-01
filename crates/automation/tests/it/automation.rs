@@ -9828,6 +9828,32 @@ fn comments_are_reshaped_through_the_tool() {
     assert!(matches!(a.call("comment_edit", &json!({ "doc": doc, "page": 1, "index": 1, "points": "no" })), Err(ToolError::InvalidArgs(_))));
 }
 
+#[test]
+fn brazilian_fill_sign_defaults_and_explicit_choices_through_tools() {
+    let dir = workdir("brazilian-date");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let pref = ok(&mut a, "fill_sign_date_format", json!({ "language": "pt-br" }));
+    assert_eq!(pref["format"], "dd/mm/yyyy");
+    assert_eq!(pref["automatic"], true);
+    assert_eq!(pref["today"], "14/11/2023");
+    ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": 1, "type": "date", "at": [20, 40] }));
+    assert!(page_text(&mut a, doc)[0].contains("14/11/2023"));
+    let pref = ok(&mut a, "fill_sign_date_format", json!({ "format": "m/d/yyyy" }));
+    assert_eq!(pref["automatic"], false);
+    assert_eq!(pref["today"], "11/14/2023");
+    ok(&mut a, "fill_sign_date_format", json!({ "language": "en" }));
+    assert_eq!(ok(&mut a, "fill_sign_date_format", json!({ "language": "pt-br" }))["today"], "11/14/2023");
+    // Validation remains atomic, including when the other argument requests auto.
+    let before = ok(&mut a, "fill_sign_date_format", json!({}));
+    for args in [json!({ "format": "auto", "language": "unknown" }), json!({ "format": "HH:MM", "language": "auto" })] {
+        assert!(matches!(a.call("fill_sign_date_format", &args), Err(ToolError::InvalidArgs(_))));
+        assert_eq!(ok(&mut a, "fill_sign_date_format", json!({})), before);
+    }
+    assert_eq!(ok(&mut a, "fill_sign_date_format", json!({ "format": "auto" }))["today"], "14/11/2023");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// #3193: bookmark_list reports a bookmark's colour and style (ISO 32000-2 §12.3.3, Tables 151
 /// and 152), only where they differ from black and regular. The list is read from the opened file
 /// and, once the document has been edited, from the edited one; both read them alike.

@@ -93,3 +93,27 @@ family (`sign`, `sign_with_timestamp`, `timestamp_document`, `embed_ltv`).
 `doc.text_edit_preview(page, block)` prepares a read-only page background with the selected
 paragraph’s glyphs removed, preserving text positioning, images and colours. It shares the
 working document’s render configuration and never enters the undo history.
+
+## Date preferences and dynamic stamps
+
+Fill & Sign uses the date language's default until a pattern is explicitly chosen. Brazilian
+Portuguese (`pt-br`) defaults to `dd/mm/yyyy`; locales without an implemented default retain
+`m/d/yyyy`. GUI callers supply their effective interface language; headless callers can set the
+session date language. `set_date_format("auto")` restores automatic selection. Persist
+`date_format_override()` rather than the resolved pattern so automatic and explicit choices,
+including an explicit US pattern, remain distinct after restart. The UI saves this under
+`date_format_override`; the legacy `date_format` key migrates
+`m/d/yyyy` to automatic (the old setter normalized it to the default), preserving other
+custom patterns. Old profiles did not record whether `m/d/yyyy` was chosen intentionally or
+was the untouched default: both migrate to automatic, so a Brazilian Portuguese user who
+intentionally chose US dates must select `m/d/yyyy` again after upgrading. That new explicit
+choice is saved in `date_format_override` and survives language changes and restarts.
+The UI regression `legacy_date_settings_migrate_without_losing_custom_or_new_explicit_patterns`
+covers old default/custom profiles and new-key precedence;
+`intentional_legacy_us_dates_are_indistinguishable_and_can_be_selected_again` covers the
+ambiguous old US choice and its explicit recovery.
+
+Dynamic stamp by-lines follow the same effective date language, independently of the Fill &
+Sign pattern. Brazilian Portuguese uses `Por Ana às 15:45, 15/10/2026`; other languages retain
+the English fallback for now. This changes newly placed dynamic stamps only, not existing PDF
+appearances or custom stamp templates. Dates and times still use the session's local clock.

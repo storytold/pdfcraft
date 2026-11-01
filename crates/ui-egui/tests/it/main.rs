@@ -74,6 +74,7 @@ mod reload;
 mod script_noop;
 mod side_panels;
 mod signing;
+mod stamp_locale;
 mod stamps;
 mod text_select;
 mod theme;

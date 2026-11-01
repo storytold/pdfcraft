@@ -102,7 +102,9 @@ impl PdfCraftApp {
             "ui_scale": self.ui_scale,
             "flatten_fill_sign": self.flatten_fill_sign_on_save,
             "fill_text_size": self.fill_text_size,
-            "date_format": self.session.date_format(),
+            // A separate key distinguishes new explicit US choices from the legacy default.
+            // Null keeps the locale default automatic across restarts.
+            "date_format_override": self.session.date_format_override(),
             // Null follows the interface language.
             "date_language": self.session.date_language(),
             "author": self.comment_prefs.author,
@@ -305,12 +307,22 @@ impl PdfCraftApp {
         }
         // Settings are untrusted: a size out of range follows the system instead.
         self.ui_scale = v["ui_scale"].as_f64().and_then(ui_scale::valid);
-        // Settings are untrusted: an unusable pattern keeps the default.
-        if let Some(f) = v["date_format"].as_str() {
-            let _ = self.session.set_date_format(f);
+        // New settings distinguish an explicit US pattern from the legacy default.
+        // Prefer the new key even when malformed, rather than reviving a stale legacy value.
+        let date_format = v.get("date_format_override").or_else(|| v.get("date_format"));
+        if let Some(f) = date_format.and_then(serde_json::Value::as_str) {
+            // The old setter normalized m/d/yyyy to no override, and persist always
+            // wrote that resolved default. Preserve those semantics when upgrading.
+            let legacy_default = v.get("date_format_override").is_none() && f.trim() == pdfcraft_engine::dates::DEFAULT_DATE_FORMAT;
+            // Settings are untrusted: an unusable pattern keeps the current choice.
+            let _ = self.session.set_date_format(if legacy_default { "auto" } else { f });
+        } else if date_format.is_some_and(serde_json::Value::is_null) {
+            let _ = self.session.set_date_format("auto");
         }
         if let Some(l) = v["date_language"].as_str() {
             let _ = self.session.set_date_language(Some(l));
+        } else if v.get("date_language").is_some_and(serde_json::Value::is_null) {
+            let _ = self.session.set_date_language(None);
         }
         // An empty or missing name keeps the login-name default; settings are untrusted, so the
         // name is cut to a sane length.
