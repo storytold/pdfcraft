@@ -4118,6 +4118,24 @@ fn a_made_up_field_name_never_takes_one_the_template_uses() {
     }
 }
 
+/// #5225 review: a form whose fields don't repeat keeps every template name as it is, a name
+/// that looks like a made-up one (`Total_2`) included, in every subform. Reserving the template's
+/// names must not push a field off its own.
+#[test]
+fn a_form_without_repeats_keeps_every_template_name() {
+    let names = ["Name", "Total", "Total_2", "Date"];
+    let body: String = names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            format!(r#"<subform name="part{i}" layout="tb"><field name="{name}" w="2in" h="0.3in"><ui><textEdit/></ui></field></subform>"#)
+        })
+        .collect();
+    let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+    let got: Vec<String> = widgets(&form.pages[0]).iter().map(|w| w.name.clone()).collect();
+    assert_eq!(got, names, "the template's names, unchanged");
+}
+
 /// An unnamed field's made-up name (`field`) doesn't take the name a later field has in the
 /// template: the field the template names `field` keeps it, and the unnamed one before it takes
 /// the next free name.
