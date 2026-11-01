@@ -7,9 +7,9 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** closed
 
-- [ ] All multi-viewport methods and view calls in `crates/ui-egui/src/app.rs` and `crates/ui-egui/src/chrome.rs` are gated behind `#[cfg(not(target_arch = "wasm32"))]`.
-- [ ] Context menu "Move to New Window" is omitted on WASM and disabled with a tooltip if `app.views.len() <= 1`.
-- [ ] Vertical drag gestures do not enter tear-off mode if `app.views.len() <= 1`.
-- [ ] UI harness tests in `crates/ui-egui/tests/it/ui.rs` verify sole-tab detachment prevention and menu state.
+- [x] All multi-viewport methods and view calls in `crates/ui-egui/src/app.rs` and `crates/ui-egui/src/chrome.rs` are gated behind `#[cfg(not(target_arch = "wasm32"))]`.
+- [x] Context menu "Move to New Window" is omitted on WASM and disabled with a tooltip if `app.views.len() <= 1`.
+- [x] Vertical drag gestures do not enter tear-off mode if `app.views.len() <= 1`.
+- [x] UI harness tests in `crates/ui-egui/tests/it/ui.rs` verify sole-tab detachment prevention and menu state.
