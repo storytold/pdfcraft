@@ -5756,7 +5756,7 @@ milestone = "M8"
 status = "shipped"
 commands = ["redact.properties"]
 tools = ["redact_mark"]
-evidence = ["crates/ui-egui/tests/it/redact.rs::marking_applying_and_clearing", "crates/ui-egui/tests/it/redact.rs::redaction_properties_survive_a_restart", "crates/ui-egui/tests/it/redact.rs::redaction_properties_for_this_run_only_and_cancel", "crates/redact/src/tests.rs::overlay_text_takes_its_font_size_colour_alignment_and_repeats"]
+evidence = ["crates/ui-egui/tests/it/redact.rs::marking_applying_and_clearing", "crates/ui-egui/tests/it/redact.rs::redaction_properties_survive_a_restart", "crates/ui-egui/tests/it/redact.rs::redaction_properties_for_this_run_only_and_cancel", "crates/redact/src/tests.rs::overlay_text_takes_its_font_size_colour_alignment_and_repeats", "crates/redact/src/tests.rs::a_mark_with_no_fill_colour_draws_no_box"]
 notes = "Acrobat's three groups: redacted area fill colour or none; overlay text with font, size or auto-size, colour, alignment and repeat, or redaction codes (protect.redaction-codes); Redaction mark appearance: outline colour (/C), fill colour shown while the pointer is over a mark (a preference, not written), opacity (/CA). Make properties default: ticked, OK keeps the values for the next run (settings \"redact_prefs\"); unticked, this run only and the saved defaults stay; Cancel puts back what the dialog opened with."
 
 [[feature]]
