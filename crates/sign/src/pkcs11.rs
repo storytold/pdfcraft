@@ -24,6 +24,7 @@ use cryptoki::object::{Attribute, AttributeType, KeyType, ObjectClass, ObjectHan
 use cryptoki::session::{Session, UserType};
 use cryptoki::slot::Slot;
 use cryptoki::types::AuthPin;
+use zeroize::Zeroizing;
 
 use crate::keys::{DigestAlg, ExternalKey, PrivateKey};
 use crate::{Certificate, DigitalId, SignError};
@@ -57,9 +58,12 @@ fn module_paths() -> Vec<String> {
         .collect()
 }
 
+/// A loaded module and how it was named; initialized once and kept for the process.
+type Loaded = Mutex<Vec<(String, Option<Pkcs11>)>>;
+
 /// Loaded modules, initialized once and kept for the process.
 fn modules() -> Vec<Pkcs11> {
-    static LOADED: OnceLock<Mutex<Vec<(String, Option<Pkcs11>)>>> = OnceLock::new();
+    static LOADED: OnceLock<Loaded> = OnceLock::new();
     let loaded = LOADED.get_or_init(|| Mutex::new(Vec::new()));
     let mut guard = match loaded.lock() {
         Ok(g) => g,
@@ -234,7 +238,12 @@ pub fn find_with_pin(reference_or_name: &str, pin: Option<&str>) -> Result<Digit
                 return Ok(DigitalId {
                     key: PrivateKey::external(
                         certificate.public_key.clone(),
-                        std::sync::Arc::new(Pkcs11Key { module: client.clone(), slot, ckaid: id.clone(), pin: Mutex::new(pin.map(String::from)) }),
+                        std::sync::Arc::new(Pkcs11Key {
+                            module: client.clone(),
+                            slot,
+                            ckaid: id.clone(),
+                            pin: Mutex::new(pin.map(|p| Zeroizing::new(p.to_string()))),
+                        }),
                     ),
                     certificate,
                     chain,
@@ -268,8 +277,9 @@ struct Pkcs11Key {
     slot: Slot,
     ckaid: Vec<u8>,
     /// The PIN, when `find_with_pin` was given one; sessions opened at sign time log in
-    /// with it when the token requires authentication.
-    pin: Mutex<Option<String>>,
+    /// with it when the token requires authentication. A `Zeroizing` copy zeroes on drop, so
+    /// the PIN survives only as long as the identity that holds it.
+    pin: Mutex<Option<Zeroizing<String>>>,
 }
 
 impl ExternalKey for Pkcs11Key {
@@ -321,7 +331,7 @@ impl Pkcs11Key {
 
 /// `r || s` of equal halves → DER `SEQUENCE { r INTEGER, s INTEGER }`.
 fn ecdsa_raw_to_der(raw: &[u8]) -> Option<Vec<u8>> {
-    if raw.is_empty() || raw.len() % 2 != 0 {
+    if raw.is_empty() || !raw.len().is_multiple_of(2) {
         return None;
     }
     let half = raw.len() / 2;
