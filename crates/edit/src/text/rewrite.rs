@@ -234,7 +234,8 @@ fn choose_rewrite_path(
     }
     // Turned text is rewritten in its own text space by the single-style path. Styled layout uses
     // page x-coordinates and cannot safely apply those operations to rotated runs.
-    let upright = members.iter().all(|line| line.upright());
+    // So is text running against text space: the styled path lays rows out from their left edge.
+    let upright = members.iter().all(|line| line.upright() && !line.runs_backwards());
     if !upright && (!style.ranges.is_empty() || style.resource.is_some()) {
         return Err(EditError::Invalid("formatting part of turned text, or choosing a document font for it, isn't supported yet".into()));
     }
@@ -327,6 +328,7 @@ fn margin_reach(origin: f64, direction: f64, low: f64, high: f64) -> f64 {
 fn turned_line_width(first: &TextLine, crop: [f64; 4], offset: [f64; 2], width: f64, text: &str, advance: &Advance<'_>) -> f64 {
     let (x0, y0) = (first.origin.x + offset[0], first.origin.baseline + offset[1]);
     let (ux, uy) = first.direction();
+    let (ux, uy) = if first.runs_backwards() { (-ux, -uy) } else { (ux, uy) };
     let tx = margin_reach(x0, ux, crop[0], crop[2]);
     let ty = margin_reach(y0, uy, crop[1], crop[3]);
     let cap = width.max(tx.min(ty)).min(14_400.0);
@@ -368,7 +370,8 @@ impl Advance<'_> {
             }
             (None, None) => self.family.std14(self.bold, self.italic).text_width(s, self.size) + extra,
         };
-        t * self.scale * self.k
+        // A length: a negative `Tf` or `Tz` runs the glyphs against text space x, not less far.
+        (t * self.scale * self.k).abs()
     }
 }
 
@@ -567,7 +570,9 @@ impl LineWriter<'_> {
     fn stretch(&self, body: &str, last: bool, justify: bool) -> f64 {
         let interior = body.matches(' ').count();
         if justify && !last && interior > 0 && self.scale.abs() > 1e-6 {
-            Some((self.width - self.advance.of(body)).max(0.0) / self.k / self.scale / interior as f64).filter(|tw| tw.is_finite()).unwrap_or(0.0)
+            // `Tw` adds to `Tf`'s advance before `Tz` scales it, so it widens with `Tf`'s sign.
+            let tw = (self.width - self.advance.of(body)).max(0.0) / self.k / self.scale.abs() / interior as f64;
+            Some(if self.size < 0.0 { -tw } else { tw }).filter(|tw| tw.is_finite()).unwrap_or(0.0)
         } else {
             0.0
         }
@@ -578,7 +583,7 @@ impl LineWriter<'_> {
     /// one on its whole width, since the spaces typed after its last word are drawn on its left
     /// and the ones before its first on its right.
     fn shown<'t>(&self, line: &'t str, body: &'t str, tw: f64) -> (&'t str, f64) {
-        if tw > 0.0 {
+        if tw != 0.0 {
             (body, self.advance.of(body))
         } else if crate::bidi::rtl_base(line) {
             (line, self.advance.of(line))
@@ -606,7 +611,9 @@ impl LineWriter<'_> {
         let interior = body.matches(' ').count();
         let tw = self.stretch(body, last, line_align == Some(crate::added::Align::Justify));
         let (shown, visible) = self.shown(line, body, tw);
-        let dx = if tw > 0.0 { 0.0 } else { self.alignment.offset(visible, line_align) };
+        // Along the glyphs: against text space x when they run that way.
+        let along = if self.size * self.scale < 0.0 { -1.0 } else { 1.0 };
+        let dx = if tw != 0.0 { 0.0 } else { along * self.alignment.offset(visible, line_align) };
         if index > 0 {
             // Inside this text object, so the marker starts and ends here. `/PCHard` is a newline
             // that was already in the text. `/PCSoft` rejoins when the box widens, with `/N` the
@@ -638,17 +645,17 @@ impl LineWriter<'_> {
         // Each wrapped line in typing order; drawn left to right (right-to-left runs reversed).
         let visual = crate::bidi::to_visual(shown);
         // Stretched without word spacing: shown up to and including each space, then moved on.
-        let pieces: Vec<&str> = if stretch > 0.0 { visual.split_inclusive(' ').collect() } else { vec![visual.as_str()] };
+        let pieces: Vec<&str> = if stretch != 0.0 { visual.split_inclusive(' ').collect() } else { vec![visual.as_str()] };
         for piece in pieces {
             self.show_piece(piece, line, tw, cursor, ops)?;
-            if stretch > 0.0 && piece.ends_with(' ') {
+            if stretch != 0.0 && piece.ends_with(' ') {
                 ops.push(Op::new("TJ", vec![Object::Array(vec![n(-1000.0 * stretch / self.size)])]));
             }
         }
         let tw = tw + stretch;
         // Underlined to the line's last word, over its stretched gaps.
-        let w = (visible + tw * interior as f64 * self.scale * self.k) / self.k;
-        Ok((dx, dx + w, -(index as f64) * self.lead - self.size * 0.12))
+        let w = (visible + (tw * self.scale).abs() * interior as f64 * self.k) / self.k;
+        Ok((dx, dx + along * w, -(index as f64) * self.lead - self.size * 0.12))
     }
 
     fn show_piece(&self, piece: &str, line: &str, tw: f64, cursor: &mut LineCursor, ops: &mut Vec<Op>) -> Result<(), EditError> {
