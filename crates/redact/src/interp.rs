@@ -326,7 +326,10 @@ struct Piece {
 /// The interpreter state carried across the operators of a scope.
 struct Walk {
     gs: Gs,
-    stack: Vec<Gs>,
+    /// With each saved state, the text and text line matrices: inside a text object `q`/`Q`
+    /// save and restore them too (ISO 32000-2 §9.4.1 as corrected by the PDF Association's
+    /// errata, issue 368), as the renderer does.
+    stack: Vec<(Gs, Matrix, Matrix)>,
     tm: Matrix,
     tlm: Matrix,
     fonts_res: Dict,
@@ -437,10 +440,10 @@ impl Walk {
 
     fn graphics_state(&mut self, doc: &Document, scope: &mut Scope<'_>, op: &Op) {
         match op.op.as_slice() {
-            b"q" => self.stack.push(self.gs.clone()),
+            b"q" => self.stack.push((self.gs.clone(), self.tm, self.tlm)),
             b"Q" => {
-                if let Some(g) = self.stack.pop() {
-                    self.gs = g;
+                if let Some((g, m, lm)) = self.stack.pop() {
+                    (self.gs, self.tm, self.tlm) = (g, m, lm);
                 }
             }
             b"cm" => {

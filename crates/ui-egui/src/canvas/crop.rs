@@ -38,15 +38,18 @@ pub(crate) fn page_input(ui: &egui::Ui, input: CropPageInput<'_>) -> bool {
     if !allowed {
         return false;
     }
-    if resp.drag_started()
+    // The tool's own press, of the primary button: nothing drawn over the page here holds it.
+    if resp.drag_started_by(egui::PointerButton::Primary)
+        && view.router.owner(page).is_none()
         && let Some(o) = origin.filter(|o| xf.rect.contains(*o))
     {
         view.crop_drag = Some((page, o));
     }
     if let Some((p, start)) = view.crop_drag
         && p == page
-        && let Some(end) = pointer
     {
+        // Where the pointer is, or where it went down when it is off the window.
+        let end = pointer.unwrap_or(start);
         let end = Pos2::new(end.x.clamp(xf.rect.left(), xf.rect.right()), end.y.clamp(xf.rect.top(), xf.rect.bottom()));
         let r = Rect::from_two_pos(start, end);
         // Dim what will be cut away.
@@ -60,7 +63,7 @@ pub(crate) fn page_input(ui: &egui::Ui, input: CropPageInput<'_>) -> bool {
             painter.rect_filled(band, CornerRadius::ZERO, Color32::from_black_alpha(70));
         }
         painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, Color32::from_rgb(0x14, 0x73, 0xE6)), egui::StrokeKind::Middle);
-        if resp.drag_stopped() {
+        if resp.drag_stopped() || !ptr.primary_down {
             view.crop_drag = None;
             if r.width() >= 4.0 && r.height() >= 4.0 {
                 let (a, b) = (to_user(xf, info, page, r.left_top()), to_user(xf, info, page, r.right_bottom()));
