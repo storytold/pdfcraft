@@ -1,4 +1,4 @@
-use super::geometry::{HANDLES, grabs_points, handle_pos, is_markup, reshapable, reshaped, resizable};
+use super::geometry::{HANDLES, grabs_points, handle_pos, held, is_markup, reshapable, reshaped, resizable};
 use super::state::{Gesture, PageCx, SETTLE_SECS};
 use super::{
     Annotation, Color32, CommentTool, CornerRadius, DocInfo, DocView, Edit, LineEnding, NewAnnotation, Pos2, QuickTool, Rect, SELECT_BLUE, Shape,
@@ -157,10 +157,12 @@ fn paint_draw(painter: &egui::Painter, cx: &PageCx<'_>, tool: &CommentTool, poin
                 painter.add(egui::Shape::ellipse_stroke(r.center(), r.size() / 2.0, stroke));
             }
             CommentTool::Polygon | CommentTool::PolyLine | CommentTool::Cloud => {
-                // The vertices so far, and a rubber band to the pointer.
+                // The vertices so far, and a rubber band to where a click would put the next one: the
+                // first, where the click closes the shape, Shift or not.
                 let mut line = pts.clone();
                 if let Some(p) = cx.ptr.pos {
-                    line.push(p);
+                    let shift = painter.ctx().input(|i| i.modifiers.shift);
+                    line.push(if closes_at(cx, *tool, points, p) { pts[0] } else { cx.to_screen(held(points.last(), cx.to_user(p), shift)) });
                 }
                 painter.add(egui::Shape::line(line, stroke));
                 if let Some(first) = pts.first().filter(|_| *tool != CommentTool::PolyLine && pts.len() >= 3) {
@@ -177,6 +179,12 @@ fn paint_draw(painter: &egui::Painter, cx: &PageCx<'_>, tool: &CommentTool, poin
             _ => {}
         }
     }
+}
+
+/// Whether a click at `p` (on screen) closes the polygon or cloud drawn so far (`points`, user
+/// space): on its first point again, once it has three.
+pub(super) fn closes_at(cx: &PageCx<'_>, tool: CommentTool, points: &[[f64; 2]], p: Pos2) -> bool {
+    points.len() >= 3 && tool != CommentTool::PolyLine && cx.to_screen(points[0]).distance(p) <= 6.0
 }
 
 /// The shape a finished drawing gesture makes (`None` if it is too small to mean anything).
