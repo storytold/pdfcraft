@@ -104,6 +104,8 @@ pub struct AddedText {
     pub align: Align,
     /// Extra space after every character, in points: the PDF's character spacing (`Tc`).
     pub char_spacing: f64,
+    /// Explicit page font resource for custom or embedded Unicode fonts (e.g. from `RegisterTextFont`).
+    pub font_resource: Option<String>,
     /// Paragraphs (lines typed with Enter) aligned other than [`AddedText::align`], by index;
     /// `None` and paragraphs past the end follow `align` ([`crate::paragraph_align`]).
     pub aligns: Vec<Option<Align>>,
@@ -129,6 +131,7 @@ impl Default for AddedText {
             align: Align::Left,
             aligns: Vec::new(),
             char_spacing: 0.0,
+            font_resource: None,
         }
     }
 }

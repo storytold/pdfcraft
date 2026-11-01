@@ -117,6 +117,7 @@ fn number(v: f64) -> String {
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
+/// Renders the format text panel controls for styling selected or added text.
 pub(crate) fn panel(
     ui: &mut egui::Ui,
     t: &Tokens,
@@ -141,14 +142,14 @@ pub(crate) fn panel(
                     out.font = Some(FontChoice::KeepSource);
                 }
                 for (resource, face) in sources.iter().filter(|(r, _)| !r.starts_with("PCApproved")) {
-                    if ui.selectable_label(false, face).clicked() {
+                    if ui.selectable_label(look.font_resource.as_deref() == Some(resource), face).clicked() {
                         out.font = Some(FontChoice::Resource(resource.clone()));
                     }
                 }
                 ui.separator();
             }
             for f in [FontFamily::Helvetica, FontFamily::Times, FontFamily::Courier] {
-                if ui.selectable_label(fonts.sources.is_none() && look.family == f, f.label()).clicked() {
+                if ui.selectable_label(look.font_resource.is_none() && look.family == f, f.label()).clicked() {
                     out.font = Some(FontChoice::Family(f));
                 }
             }
@@ -289,11 +290,20 @@ pub(crate) fn panel(
     // Bold, italic, underline, superscript, subscript.
     let mut extras = extras;
     row(ui, |ui| {
-        if icons::button(ui, "bold", 30.0, look.bold, tl!("Bold")).clicked() {
+        let styleable = look.font_resource.is_none();
+        let bold_btn = ui.add_enabled_ui(styleable, |ui| icons::button(ui, "bold", 30.0, look.bold && styleable, tl!("Bold"))).inner;
+        if styleable && bold_btn.clicked() {
             look.bold = !look.bold;
         }
-        if icons::button(ui, "italic", 30.0, look.italic, tl!("Italic")).clicked() {
+        if !styleable {
+            bold_btn.on_disabled_hover_text(tl!("Bold is determined by the selected document font"));
+        }
+        let italic_btn = ui.add_enabled_ui(styleable, |ui| icons::button(ui, "italic", 30.0, look.italic && styleable, tl!("Italic"))).inner;
+        if styleable && italic_btn.clicked() {
             look.italic = !look.italic;
+        }
+        if !styleable {
+            italic_btn.on_disabled_hover_text(tl!("Italic is determined by the selected document font"));
         }
         match extras.as_deref_mut() {
             Some(e) => {
