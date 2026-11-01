@@ -269,6 +269,8 @@ pub(super) struct Shown {
     pub(super) extra_ops: Vec<usize>,
     /// Encoded glyphs, not bytes or Unicode characters (a ligature can represent several).
     pub(super) glyph_count: usize,
+    /// At least one glyph has nonzero font advance, independent of TJ positioning.
+    has_advance: bool,
     /// Advance in text space, including spacing and TJ adjustments.
     pub(super) advance: f64,
     pub(super) tracking: f64,
@@ -519,7 +521,29 @@ impl MarkedContent {
             let tail = shown.split_off(start.min(shown.len()));
             let mut items = tail.into_iter();
             if let Some(mut first) = items.next() {
+                let matrix = first.tm.then(&first.state.ctm);
+                // A self-contained horizontal replacement may paint a raised, zero-advance
+                // mark first. Its temporary Ts must not become the whole line's source rise.
+                // Inline, multi-object, rotated/skewed or mixed-body-rise spans stay untouched.
+                let mut body_origin =
+                    !first.has_advance && first.bt_op > open && first.state.vertical.is_none() && matrix.0[1] == 0.0 && matrix.0[2] == 0.0;
+                let mut body_rise = None;
                 for item in items {
+                    body_origin &= item.bt == first.bt
+                        && item.font == first.font
+                        && item.tlm.0 == first.tlm.0
+                        && item.state.ctm.0 == first.state.ctm.0
+                        && item.state.size == first.state.size
+                        && item.state.scale == first.state.scale
+                        && item.state.vertical.is_none();
+                    if item.has_advance {
+                        if let Some(rise) = body_rise {
+                            body_origin &= rise == item.state.rise;
+                        } else {
+                            body_rise = Some(item.state.rise);
+                        }
+                    }
+                    first.has_advance |= item.has_advance;
                     first.glyph_count = first.glyph_count.saturating_add(item.glyph_count);
                     first.extra_ops.push(item.op);
                     first.extra_ops.extend(item.extra_ops);
@@ -531,6 +555,13 @@ impl MarkedContent {
                     ];
                     first.frame = union(first.frame, item.frame);
                     first.ink.extend(item.ink);
+                }
+                if body_origin && let Some(rise) = body_rise {
+                    let (_, baseline) = matrix.apply(0.0, rise);
+                    if baseline.is_finite() {
+                        first.state.rise = rise;
+                        first.baseline = baseline;
+                    }
                 }
                 first.extra_ops.extend([open, index]);
                 // Only right-to-left ActualText is already in typing order and must stay out of
@@ -605,11 +636,14 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
     let mut words: Vec<(f64, f64)> = Vec::new();
     let mut in_word = false;
     let mut glyph_count = 0_usize;
+    let mut has_advance = false;
     for p in &pieces {
         match p {
             Object::String(s) => {
                 for (code, len) in m.codes(&s.bytes) {
                     glyph_count = glyph_count.saturating_add(1);
+                    let width = m.width(code);
+                    has_advance |= width.is_finite() && width != 0.0;
                     let shown = m.text_of(code);
                     let blank = m.is_space(code, len) || shown.as_deref().is_some_and(|t| !t.is_empty() && t.chars().all(char::is_whitespace));
                     match shown {
@@ -719,6 +753,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         op: i,
         extra_ops: Vec::new(),
         glyph_count,
+        has_advance,
         // Vertical text: the TJ adjustment that undoes the run is n = -1000 y / size; the
         // preview divides by size × `Tz`, so `Tz` is put back here.
         advance: if vertical.is_some() { y_text * ts.scale } else { x_text },

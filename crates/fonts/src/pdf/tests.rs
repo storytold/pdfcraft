@@ -521,6 +521,18 @@ fn to_unicode(cmap: &[u8]) -> HashMap<u32, String> {
 }
 
 #[test]
+fn empty_unicode_destinations_are_explicit_and_empty_source_codes_are_not() {
+    let mapping = to_unicode(b"4 beginbfchar <41> <0061> <42> <> <43> <0062> <> <0078> endbfchar");
+    assert_eq!(mapping.get(&0x41).map(String::as_str), Some("a"));
+    assert_eq!(mapping.get(&0x42).map(String::as_str), Some(""), "an auxiliary must not fall back to its encoded character");
+    assert_eq!(mapping.get(&0x43).map(String::as_str), Some("b"));
+    assert!(!mapping.contains_key(&0), "an empty source is not character code zero");
+    let array = to_unicode(b"1 beginbfrange <41> <43> [<0061> <> <0062>] endbfrange");
+    assert_eq!(array.get(&0x42).map(String::as_str), Some(""), "array destinations have the same semantics");
+    assert_eq!(array.get(&0x43).map(String::as_str), Some("b"));
+}
+
+#[test]
 fn cmap_tokens_need_no_space_between_them() {
     // Hex strings, brackets and operators may touch; comments and literal strings are skipped.
     let cmap = b"/CIDSystemInfo << /Registry (Adobe (x) \\) beginbfchar) >> def % beginbfchar <0001> <0058>\n\

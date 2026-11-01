@@ -1,7 +1,10 @@
 //! Shaping an explicitly selected source/document face, with OpenType features and UAX #9.
 use harfrust::{BufferClusterLevel, Direction, ShapeOptions, ShaperData, UnicodeBuffer};
 use skrifa::raw::TableProvider;
-use skrifa::{FontRef, GlyphId};
+use skrifa::{
+    FontRef, GlyphId, MetadataProvider,
+    instance::{LocationRef, Size},
+};
 use unicode_bidi::{Level, ParagraphBidiInfo};
 
 #[derive(Clone, Debug)]
@@ -14,6 +17,36 @@ pub struct ShapedGlyph {
 pub struct ShapedRun {
     pub glyphs: Vec<ShapedGlyph>,
     pub advance: f64,
+}
+
+impl ShapedRun {
+    /// PDF Unicode ownership is separate from shaping/spacing ownership. A zero-advance
+    /// dot may precede its letter body in a cluster. Put ToUnicode on the first advancing
+    /// body, retaining all-zero-advance clusters and every original glyph position.
+    pub fn pdf_mappings(&self, bytes: &[u8]) -> Result<Vec<(String, GlyphId)>, String> {
+        if self.glyphs.len() > 65_534 || self.glyphs.iter().fold(0usize, |n, g| n.saturating_add(g.text.len())) > 262_144 {
+            return Err("shaped font mapping exceeds its budget".into());
+        }
+        let face = FontRef::new(bytes).map_err(|e| e.to_string())?;
+        let metrics = face.glyph_metrics(Size::unscaled(), LocationRef::default());
+        let mut mappings: Vec<_> = self.glyphs.iter().map(|g| (g.text.clone(), g.id)).collect();
+        let mut owner = None;
+        for (i, glyph) in self.glyphs.iter().enumerate() {
+            if !glyph.text.is_empty() {
+                owner = Some(i);
+            }
+            if metrics.advance_width(glyph.id).is_some_and(|w| w > 0.0)
+                && let Some(start) = owner.take()
+                && start != i
+            {
+                let text = mappings.get_mut(start).map(|m| std::mem::take(&mut m.0)).unwrap_or_default();
+                if let Some(mapping) = mappings.get_mut(i) {
+                    mapping.0 = text;
+                }
+            }
+        }
+        Ok(mappings)
+    }
 }
 
 /// Complex scripts/marks require shaping instead of independently encoding characters.
@@ -73,4 +106,30 @@ pub fn shape(bytes: &[u8], text: &str) -> Result<ShapedRun, String> {
         return Err("shaped row exceeds its geometry budget".into());
     }
     Ok(ShapedRun { glyphs, advance: x })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arabic_cluster_unicode_is_carried_by_its_advancing_body() {
+        let Some(font) = crate::document_arabic_font() else {
+            eprintln!("set CRAFT_FONTS_DIR to exercise Arabic cluster Unicode ownership");
+            return;
+        };
+        let face = FontRef::new(font.bytes).unwrap();
+        let metrics = face.glyph_metrics(Size::unscaled(), LocationRef::default());
+        for text in ["ج", "ف", "ي", "ب", "ة", "ش", "اً"] {
+            let shaped = shape(font.bytes, text).unwrap();
+            let mappings = shaped.pdf_mappings(font.bytes).unwrap();
+            let mapped: Vec<_> = mappings.iter().filter(|(text, _)| !text.is_empty()).collect();
+            assert_eq!(mapped.iter().map(|(text, _)| text.as_str()).collect::<String>(), text);
+            assert_eq!(shaped.glyphs[0].text, text, "PDF mappings must not move the original shaping/spacing ownership");
+            assert!(
+                mapped.iter().all(|(_, id)| metrics.advance_width(*id).unwrap_or(0.0) > 0.0),
+                "{text:?}: Unicode belongs on the body, not a zero-advance dot or mark"
+            );
+        }
+    }
 }
