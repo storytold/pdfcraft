@@ -381,11 +381,9 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             border(&mut d);
             rich_text(&mut d);
             // The text is laid out for the page as displayed, like a stamp's label.
-            if !matches!(new.shape, Shape::Callout { .. }) {
-                let turn = pdfcraft_model::pages(doc).get(new.page).map_or(0, |p| p.rotation(doc));
-                if matches!(turn, 90 | 180 | 270) {
-                    d.set(b"PCTextRotate".to_vec(), Object::Int(turn));
-                }
+            let turn = pdfcraft_model::pages(doc).get(new.page).map_or(0, |p| p.rotation(doc));
+            if matches!(turn, 90 | 180 | 270) {
+                d.set(b"PCTextRotate".to_vec(), Object::Int(turn));
             }
         }
         _ => {}

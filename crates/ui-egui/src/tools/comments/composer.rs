@@ -130,16 +130,23 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
         }
         ComposerKind::Callout { point } => {
             view.comments.tool_done = true;
-            // A callout's leader and box stay in user-space axes (its appearance isn't turned).
-            let rect = text_box_rect(c.at, &text, 10.0, 0);
-            let side = if point[0] < rect[0] {
-                rect[0]
-            } else if point[0] > rect[2] {
-                rect[2]
+            // The box and leader are laid out as the page is displayed, like a text box's.
+            let rect = text_box_rect(c.at, &text, 10.0, page_rotation(info, page));
+            let page_info = info.pages.get(page);
+            let to_view = |p: [f64; 2]| page_info.map_or(p, |pg| pg.user_to_view(p[0] as f32, p[1] as f32).map(f64::from));
+            let to_user = |p: [f64; 2]| page_info.map_or(p, |pg| pg.view_to_user(p[0] as f32, p[1] as f32).map(f64::from));
+            let (a, b) = (to_view([rect[0], rect[1]]), to_view([rect[2], rect[3]]));
+            let (left, right) = (a[0].min(b[0]), a[0].max(b[0]));
+            let mid_y = (a[1] + b[1]) / 2.0;
+            let pv = to_view(point);
+            let side = if pv[0] < left {
+                left
+            } else if pv[0] > right {
+                right
             } else {
-                (rect[0] + rect[2]) / 2.0
+                (left + right) / 2.0
             };
-            let knee = [(point[0] + side) / 2.0, (rect[1] + rect[3]) / 2.0];
+            let knee = to_user([(pv[0] + side) / 2.0, mid_y]);
             Some(new_comment(&cx, CommentTool::Callout, Shape::Callout { rect, knee, point, font_size: 10.0, ending: LineEnding::OpenArrow }, text))
         }
         ComposerKind::Replace => {
