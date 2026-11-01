@@ -41,7 +41,7 @@ pub use model::{
 };
 #[cfg(test)]
 use navigation::{OUTLINE_DEPTH, OUTLINE_WINDOW};
-pub use resources::attachment_data;
+pub use resources::{attachment_data, looks_like_pdf};
 #[cfg(test)]
 use resources::{xfa_config_dynamic_render, xfa_packet_text};
 

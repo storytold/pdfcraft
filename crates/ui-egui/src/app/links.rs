@@ -65,6 +65,45 @@ impl PdfCraftApp {
         self.pending_remote_link = None;
     }
 
+    /// Follow a link's embedded Go-To action (ISO 32000-2 §12.6.4.4): open the PDF attached to
+    /// document `doc` at `source` in a new tab, as the Attachments panel's Open does (from the
+    /// document's own bytes: no file is read or written), then go to `destination` in it. A
+    /// file that isn't attached there, or isn't a PDF, opens nothing.
+    pub(crate) fn open_embedded_link(
+        &mut self,
+        doc: DocId,
+        source: pdfcraft_render::AttachmentSource,
+        destination: pdfcraft_render::RemoteDestination,
+    ) {
+        let Some(d) = self.session.get(doc) else { return };
+        let Some(att) = d.info.attachments.iter().find(|a| a.source == source).cloned() else {
+            self.notify_fmt("This PDF uses the unsupported {s} action.", &[("s", "GoToE")]);
+            return;
+        };
+        let bytes = match pdfcraft_render::attachment_data(&d.bytes, d.password.as_deref(), &att) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                self.notify_fmt("Couldn't read {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]);
+                return;
+            }
+        };
+        // "Embedded go-to actions work only for files of Type PDF" (§12.6.4.4). Checked here, as
+        // the Attachments panel's Open would turn a picture or text file into a new PDF.
+        if !pdfcraft_render::looks_like_pdf(&bytes) {
+            self.notify_fmt("{name} isn't a PDF, so the link can't open it.", &[("name", &att.name)]);
+            return;
+        }
+        if let Err(e) = self.open_bytes(&crate::files::attachment_file_name(&att.name), None, bytes) {
+            self.notify_fmt("Couldn't open {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]);
+            return;
+        }
+        // An encrypted attachment waits for its password; the destination waits with it.
+        match self.password_prompt.as_mut() {
+            Some(prompt) => prompt.after_open = Some(destination),
+            None => self.apply_remote_destination(destination),
+        }
+    }
+
     pub(super) fn apply_remote_destination(&mut self, destination: pdfcraft_render::RemoteDestination) {
         let Some(index) = self.views.len().checked_sub(1) else { return };
         let Some(doc) = self.session.get(self.views[index].id) else { return };

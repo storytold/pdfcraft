@@ -353,6 +353,19 @@ pub(crate) fn info(d: &Document) -> Value {
                     },
                     "new_window": new_window,
                 }),
+                pdfcraft_render::LinkTarget::EmbeddedGoTo { source, destination, new_window } => json!({
+                    "action": "GoToE",
+                    "embedded_file": match source {
+                        pdfcraft_render::AttachmentSource::Document { key } => json!({ "name": key }),
+                        pdfcraft_render::AttachmentSource::Annotation { page, index } => json!({ "page": page1(*page), "annotation": index.saturating_add(1) }),
+                    },
+                    "destination": match destination {
+                        pdfcraft_render::RemoteDestination::Default => json!({ "kind": "default" }),
+                        pdfcraft_render::RemoteDestination::Page { page, view } => json!({ "kind": "page", "page": page1(*page), "view": format!("{view:?}") }),
+                        pdfcraft_render::RemoteDestination::Named(name) => json!({ "kind": "named", "name": name }),
+                    },
+                    "new_window": new_window,
+                }),
                 pdfcraft_render::LinkTarget::Other(o) => json!({ "other": o }),
             },
         })).collect::<Vec<_>>(),
