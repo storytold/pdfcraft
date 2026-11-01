@@ -3139,6 +3139,26 @@ fn a_large_step_still_tiles_where_the_next_cell_shows() {
 /// no decomposition, reversible wavelet, and one empty packet per component. Empty
 /// coefficients decode to the midpoint (128) after the unsigned DC level shift.
 fn jpx_midpoint_pdf(bpc: u8, components: u16) -> Vec<u8> {
+    let codestream = jpx_midpoint_codestream(components);
+    let content = "q 20 0 0 20 5 5 cm /Im1 Do Q 1 0 0 rg 0 0 4 4 re f";
+    let mut pdf = format!(
+        "%PDF-1.7\n\
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n\
+4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+5 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent {bpc} /Filter /JPXDecode /Length {} >> stream\n",
+        content.len(),
+        codestream.len()
+    )
+    .into_bytes();
+    pdf.extend_from_slice(&codestream);
+    pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF");
+    pdf
+}
+
+/// [`jpx_midpoint_pdf`]'s one-pixel codestream on its own.
+fn jpx_midpoint_codestream(components: u16) -> Vec<u8> {
     let mut codestream = vec![0xff, 0x4f, 0xff, 0x51]; // SOC, SIZ.
     codestream.extend_from_slice(&(38 + 3 * components).to_be_bytes());
     codestream.extend_from_slice(&0_u16.to_be_bytes()); // Rsiz.
@@ -3158,22 +3178,7 @@ fn jpx_midpoint_pdf(bpc: u8, components: u16) -> Vec<u8> {
     codestream.extend_from_slice(&[0, 1, 0xff, 0x93]); // One tile part, SOD.
     codestream.extend(std::iter::repeat_n(0, usize::from(components)));
     codestream.extend_from_slice(&[0xff, 0xd9]); // EOC.
-
-    let content = "q 20 0 0 20 5 5 cm /Im1 Do Q 1 0 0 rg 0 0 4 4 re f";
-    let mut pdf = format!(
-        "%PDF-1.7\n\
-1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
-2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
-3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n\
-4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
-5 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent {bpc} /Filter /JPXDecode /Length {} >> stream\n",
-        content.len(),
-        codestream.len()
-    )
-    .into_bytes();
-    pdf.extend_from_slice(&codestream);
-    pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF");
-    pdf
+    codestream
 }
 
 /// [`jpx_midpoint_pdf`]'s codestream (every sample 128) wrapped in a JP2 file whose header
@@ -3337,6 +3342,40 @@ fn jpx_32_bit_image_does_not_prevent_other_page_content_from_rendering() {
         assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "other page content draws");
         if bpc == 8 {
             assert_eq!(&page.rgba[((25 * 40 + 15) * 4)..][..4], &[128, 128, 128, 255], "the valid image paints gray");
+        }
+    }
+}
+
+/// #3884: a JPX image filling a `/Rotate 90` page (Acrobat Paper Capture scans) crashed the page
+/// with "attempt to divide by zero". The decode-size hint mapped the image's corners as points,
+/// so it took in the translation, and on a rotated page one corner lands on the device origin:
+/// a hint side of 0, which `hayro-jpeg2000` divides the image size by. The hint now comes from
+/// the transform's linear part and is never below one pixel. Negative, past-360 and
+/// non-multiple-of-90 `/Rotate` values (invalid, ISO 32000-2 §7.7.3.3) must not panic either.
+#[test]
+fn jpx_image_on_a_rotated_page_draws_instead_of_crashing() {
+    let codestream = jpx_midpoint_codestream(1);
+    for rotate in [0, 90, 180, 270, -90, 450, 45] {
+        let content = "q 40 0 0 40 0 0 cm /Im1 Do Q";
+        let mut bytes = format!(
+            "%PDF-1.7\n\
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Rotate {rotate} /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n\
+4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+5 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /JPXDecode /Length {} >> stream\n",
+            content.len(),
+            codestream.len()
+        )
+        .into_bytes();
+        bytes.extend_from_slice(&codestream);
+        bytes.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF");
+        let mut renderer = PageRenderer::new(Arc::new(bytes), RenderConfig::default());
+        for scale in [0.5, 1.0, 1.5] {
+            let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale, tag: 0, ..Default::default() });
+            assert!(page.error.is_none(), "/Rotate {rotate} at {scale}x: {:?}", page.error);
+            let centre = (page.height / 2 * page.width + page.width / 2) as usize * 4;
+            assert_eq!(page.rgba.get(centre..centre + 4), Some(&[128, 128, 128, 255][..]), "/Rotate {rotate} at {scale}x paints the image");
         }
     }
 }
@@ -7678,6 +7717,86 @@ fn decoded_images_under_a_transfer_function_are_not_shared() {
     let w = out.width as usize;
     assert_eq!(rgb_at(&out.rgba, w, 35, 35), [0, 255, 255], "the transfer function was not applied to a cached image");
     assert_eq!(rgb_at(&out.rgba, w, 100, 35), [255, 0, 0]);
+}
+
+/// A 4x4 one-component 8-bit JPX codestream with one decomposition level and an empty packet
+/// per resolution (every sample 128), so a size hint of 2x2 decodes it at its reduced level.
+fn jpx_one_level_codestream() -> Vec<u8> {
+    let mut out = vec![0xff, 0x4f, 0xff, 0x51, 0, 41, 0, 0]; // SOC, SIZ, Lsiz, Rsiz.
+    for value in [4_u32, 4, 0, 0, 4, 4, 0, 0] {
+        out.extend_from_slice(&value.to_be_bytes());
+    }
+    out.extend_from_slice(&[0, 1, 7, 1, 1]); // One component: eight bits, no subsampling.
+    // COD: one decomposition level, reversible wavelet. QCD: no quantization, four subbands.
+    out.extend_from_slice(&[0xff, 0x52, 0, 12, 0, 0, 0, 1, 0, 1, 4, 4, 0, 1]);
+    out.extend_from_slice(&[0xff, 0x5c, 0, 7, 0x40, 0x40, 0x48, 0x48, 0x50]);
+    // SOT for tile zero, one 16-byte tile part, SOD, two empty packets, EOC.
+    out.extend_from_slice(&[0xff, 0x90, 0, 10, 0, 0, 0, 0, 0, 16, 0, 1, 0xff, 0x93, 0, 0, 0xff, 0xd9]);
+    out
+}
+
+/// Review on #3884: a colour-key `/Mask` (ISO 32000-2 §8.9.6.4) is matched against the decoded
+/// samples, and a JPX image decoded at a reduced resolution has averaged ones, so keyed pixels
+/// next to unkeyed ones turned opaque (or unkeyed averages fell in the key range). Such an
+/// image is decoded at full size, like every other filter, and resampled with its mask; a
+/// `/SMask`, which takes precedence over `/Mask`, keeps the reduced decode.
+#[test]
+fn jpx_with_a_colour_key_mask_is_decoded_at_full_size() {
+    use hayro::hayro_interpret::font::Glyph;
+    use hayro::hayro_interpret::hayro_syntax::Pdf;
+    use hayro::hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, ImageData, InterpreterCache, Paint, PathDrawMode, SoftMask, TransformExt,
+        interpret_page,
+    };
+    use kurbo::{Affine, BezPath, Rect};
+
+    /// Asks for every raster image at 2x2 and records the size it was decoded at.
+    #[derive(Default)]
+    struct Decoded(Vec<(u32, u32)>);
+    impl<'a> Device<'a> for Decoded {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'a>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &BezPath, _: Affine, _: &Paint<'a>, _: &PathDrawMode) {}
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'a>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, _: &Glyph<'a>, _: Affine, _: Affine, _: &Paint<'a>, _: &GlyphDrawMode) {}
+        fn draw_image(&mut self, image: Image<'a, '_>, _: Affine) {
+            if let Image::Raster(r) = image {
+                r.with_rgba(
+                    |image, _| {
+                        self.0.push(match image {
+                            ImageData::Rgb(d) => (d.width, d.height),
+                            ImageData::Luma(d) => (d.width, d.height),
+                        })
+                    },
+                    Some((2, 2)),
+                );
+            }
+        }
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+
+    let codestream = jpx_one_level_codestream();
+    let image = |extra: &str| {
+        format!(
+            "<< /Type /XObject /Subtype /Image /Width 4 /Height 4 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /JPXDecode {extra}/Length {} >>",
+            codestream.len()
+        )
+    };
+    let soft_mask = "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>";
+    for (extra, expected) in [("", (2, 2)), ("/Mask [0 0] ", (4, 4)), ("/Mask [0 0] /SMask 6 0 R ", (2, 2))] {
+        let bytes =
+            image_cache_pdf("q 20 0 0 20 0 0 cm /A Do Q", "<< /XObject << /A 5 0 R >> >>", &[(&image(extra), &codestream), (soft_mask, b"\xff")]);
+        let parsed = Pdf::new(Arc::new(bytes)).expect("parses");
+        let page = &parsed.pages()[0];
+        let cache = InterpreterCache::new();
+        let initial = page.initial_transform(true).to_kurbo();
+        let mut ctx = Context::new(initial, Rect::new(0.0, 0.0, 40.0, 40.0), &cache, page.xref(), InterpreterSettings::default());
+        let mut device = Decoded::default();
+        interpret_page(page, &mut ctx, &mut device);
+        assert_eq!(device.0, [expected], "{extra:?}");
+    }
 }
 
 /// The decoded-image cache keyed every decode by the size the image is drawn at, but only

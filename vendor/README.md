@@ -132,6 +132,25 @@ order the font lists them, platform ID first, so a wrong (1, 0) table (SAS 9.4's
 drew "8" as "p" and "+" as "V". Covered by `raster::tests::symbolic_truetype_cmap`, whose font
 is built in memory.
 
+JPX decode-size hint on rotated pages (#3884): in `hayro` `Renderer::image_draw_size`, the
+size an image is decoded at is the length of each image axis on the device, taken from the
+transform's linear part, and each side is at least 1. It mapped the corners `(w, 0)` and
+`(0, h)` as points, which took in the translation, so on a `/Rotate 90` page (Acrobat Paper
+Capture scans) a corner on the device origin gave a side of 0 and `hayro-jpeg2000` 0.3.5
+divided the image size by it: "attempt to divide by zero" on every rotated page. Covered by
+`raster::tests::jpx_image_on_a_rotated_page_draws_instead_of_crashing`. With an accurate hint
+more images decode at a reduced resolution, and 0.3.5 places a reduced resolution's samples
+using the image area's reference-grid offset (`XOsiz`, `YOsiz`) unscaled: rows are left out,
+or a row is sliced past its end (a panic). So `hayro-syntax` `filter::jpx::decode` drops the
+hint unless both offsets are 0 (`image_area_offset` reads them from the SIZ segment of a raw
+codestream or a JP2 `jp2c` box). Covered by
+`filter::jpx::tests::jpx_size_hint_is_dropped_only_for_an_offset_image_area`. A colour-key
+`/Mask` array is matched against the decoded samples, and a reduced JPX decode has averaged
+ones, so `hayro-interpret` `ImageXObject::decoded_raster` drops the hint when that key is the
+image's mask (no `/SMask` stream, no `/SMaskInData 1`): it is decoded at full size and
+resampled with its mask like any other image. Covered by
+`raster::tests::jpx_with_a_colour_key_mask_is_decoded_at_full_size`.
+
 ## KenM76 integration patches
 
 | PR | Vendored change | Regression coverage |

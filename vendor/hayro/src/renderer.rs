@@ -873,8 +873,10 @@ impl Renderer {
     /// `transform`, or `None` if `draw_image` skips it: off the canvas (PdfCraft patch: see
     /// `may_paint_rect`; checked before decoding, so a tile no longer decodes every image on its
     /// page), or, in a preview, covering only a few device pixels (PdfCraft patch; final renders
-    /// always draw them). The tiny-image test measures axis lengths: the size returned maps a
-    /// point, so it includes the translation and only suits the decode hint.
+    /// always draw them). Both sides are the lengths of the image's axes on the device, from the
+    /// transform's linear part (PdfCraft patch, #3884: mapping the corners as points took in the
+    /// translation, so on a `/Rotate 90` page a corner on the device origin gave a side of 0,
+    /// which `hayro-jpeg2000` divides the image size by); as the decode hint each is at least 1.
     fn image_draw_size(&self, width: u32, height: u32, transform: Affine) -> Option<(u32, u32)> {
         if !may_paint_rect(
             Rect::new(0.0, 0.0, f64::from(width), f64::from(height)),
@@ -884,23 +886,14 @@ impl Renderer {
         ) {
             return None;
         }
-        let target_width = (transform * Point::new(width as f64, 0.0))
-            .to_vec2()
-            .length()
-            .ceil() as u32;
-        let target_height = (transform * Point::new(0.0, height as f64))
-            .to_vec2()
-            .length()
-            .ceil() as u32;
-        if self.preview {
-            let c = transform.as_coeffs();
-            let tiny_w = (f64::from(width) * (c[0] * c[0] + c[1] * c[1]).sqrt()).ceil() as u32;
-            let tiny_h = (f64::from(height) * (c[2] * c[2] + c[3] * c[3]).sqrt()).ceil() as u32;
-            if tiny_w.saturating_mul(tiny_h) < PREVIEW_MIN_IMAGE_AREA {
-                return None;
-            }
+        let (x_axis, y_axis) = x_y_advances(&transform);
+        // `as` saturates, and turns NaN into 0.
+        let drawn_width = (f64::from(width) * x_axis.length()).ceil() as u32;
+        let drawn_height = (f64::from(height) * y_axis.length()).ceil() as u32;
+        if self.preview && drawn_width.saturating_mul(drawn_height) < PREVIEW_MIN_IMAGE_AREA {
+            return None;
         }
-        Some((target_width, target_height))
+        Some((drawn_width.max(1), drawn_height.max(1)))
     }
 
     fn draw_image(&mut self, image_data: ImageData, alpha_data: Option<LumaData>) {
