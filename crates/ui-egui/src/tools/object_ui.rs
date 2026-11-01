@@ -308,6 +308,7 @@ pub(crate) fn hit(view: &DocView, xf: &PageXform, info: &DocInfo, page: usize, o
         return Some(Hit::new(Owner::Objects { part: ObjectsPart::Selection }, Layer::Placed, egui::CursorIcon::Move));
     }
     open.filter(|r| on_frame(r.shrink(2.0), p)).map(|_| Hit::new(Owner::Objects { part: ObjectsPart::Frame }, Layer::Handle, egui::CursorIcon::Move))
+}
 
 /// A graphic covering nearly the whole page is background artwork: a click should reach the
 /// smaller icon or text on top of it, never select and delete the page's background.
@@ -557,7 +558,7 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
         return true;
     }
     if owner == Some(Owner::Objects { part: ObjectsPart::Selection }) && !resp.double_clicked() {
-        s.gesture = Some(Gesture { start: p, now: p, marquee: false, additive: false });
+        s.gesture = Some(Gesture { start: p, now: p, start_view: None, marquee: false, additive: false });
         return true;
     }
     if s.page == Some(page) && !s.selected.is_empty() {

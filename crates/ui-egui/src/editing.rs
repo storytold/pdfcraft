@@ -204,7 +204,6 @@ impl PdfCraftApp {
                 }
                 // Keep the pages the user acted on selected, where they now are.
                 select_after_edit(view, edit, info, &annots_before, self.quick_tool);
-                select_after_edit(view, edit, info, self.quick_tool);
                 if let Some(old) = restacked {
                     // Restacking keeps an object's text, type and box, so those identify it at
                     // its new index.
