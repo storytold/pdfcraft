@@ -2209,3 +2209,78 @@ fn jbig2_globals_are_decoded_within_a_limit_of_their_own() {
         assert!(why.starts_with("the JBIG2 globals can't be read") && why.contains(&format!("limit of {LIMIT} bytes")), "{why}");
     }
 }
+
+/// A mask of other proportions than its image is scaled to it, however far apart they are: the
+/// first two shapes asked for 160 GB on the way, in a file of a kilobyte, and that aborted the
+/// process. The third would ask for 10 GB if it went across first, which is why the way round
+/// depends on the shapes. The value comes through, and masks of ordinary proportions, of the
+/// image's size and larger than it, are scaled as they always were.
+#[test]
+fn a_mask_of_other_proportions_than_its_image_is_scaled_without_the_memory_of_both() {
+    use pdfcraft_cos::{Dict, Document, Object, Stream};
+    let gray = |w: i64, h: i64, data: &[u8]| {
+        let mut d = Dict::new();
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(w));
+        d.set(b"Height".to_vec(), Object::Int(h));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        d.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+        Stream::from_raw(d, pdfcraft_filters::encode_flate(data))
+    };
+    let shapes = [
+        (100_000usize, 1usize, 1usize, 100_000usize),
+        (100_000, 64, 64, 100_000),
+        (1, 100_000, 100_000, 1),
+        (64, 1, 1, 64),
+        (3, 2, 6, 4),
+        (3, 2, 3, 2),
+        (6, 4, 3, 2),
+    ];
+    for (mask_w, mask_h, w, h) in shapes {
+        let mut doc = Document::new_empty();
+        let mask = doc.add(Object::Stream(gray(mask_w as i64, mask_h as i64, &vec![0x80; mask_w * mask_h])));
+        let mut image = gray(w as i64, h as i64, &vec![0x40; w * h]);
+        image.dict.set(b"SMask".to_vec(), Object::Ref(mask));
+        let image = doc.add(Object::Stream(image));
+        let (name, png) = crate::image_file(&doc, image).unwrap_or_else(|e| panic!("{mask_w} × {mask_h} on {w} × {h}: {e}"));
+        assert_eq!(name, "png");
+        let mut reader = ::png::Decoder::new(std::io::Cursor::new(&png)).read_info().unwrap();
+        let mut rgba = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut rgba).unwrap();
+        assert_eq!((info.width as usize, info.height as usize, info.color_type), (w, h, ::png::ColorType::Rgba));
+        assert!(rgba.as_chunks::<4>().0.iter().all(|p| p[3].abs_diff(0x80) <= 1), "{mask_w} × {mask_h} on {w} × {h}");
+    }
+}
+
+/// The long way round is for proportions far apart: up to a quarter over the larger image the
+/// buffer is no danger, and such a mask scales as it always did, to the byte. Noise, as a flat mask comes
+/// out the same either way.
+#[test]
+fn proportions_up_to_the_limit_scale_as_they_did() {
+    let noise = |w: u32, h: u32| {
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let px = (0..w * h)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                seed as u8
+            })
+            .collect();
+        image::GrayImage::from_raw(w, h, px).unwrap()
+    };
+    // Each exactly a quarter over the larger: the source's size, then the target's.
+    for (mw, mh, w, h) in [(25, 16, 10, 20), (20, 5, 16, 25)] {
+        let mask = noise(mw, mh);
+        let direct = image::imageops::resize(&mask, w, h, image::imageops::FilterType::Triangle);
+        assert_eq!(crate::extract::scaled(&mask, w, h), direct, "{mw} × {mh} to {w} × {h}");
+    }
+    // A step past it goes the long way, which is how to tell.
+    let mask = noise(25, 15);
+    let direct = image::imageops::resize(&mask, 10, 20, image::imageops::FilterType::Triangle);
+    assert_ne!(crate::extract::scaled(&mask, 10, 20), direct);
+    // A mask of its image's size comes through as it is.
+    let mask = noise(20, 10);
+    assert_eq!(crate::extract::scaled(&mask, 20, 10), mask);
+}
