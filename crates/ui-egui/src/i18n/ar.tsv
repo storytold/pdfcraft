@@ -823,14 +823,9 @@
 	Copy Image in Original Format	نسخ الصورة بتنسيقها الأصلي
 	The image has been copied as a {ext} file	نُسخت الصورة كملف {ext}
 	The page has changed; select the image again	تغيّرت الصفحة؛ حدّد الصورة مرة أخرى
-	Check for updates	التحقق من التحديثات
 	No check has run yet.	لم يُجرَ أي تحقق بعد.
-	Checking for a newer version…	جارٍ التحقق من وجود إصدار أحدث…
 	PdfCraft {v} is available.	PdfCraft {v} متاح.
 	You have version {c}. Download the new version from its release page.	لديك الإصدار {c}. نزّل الإصدار الجديد من صفحة إصداره.
-	PdfCraft {c} is up to date.	PdfCraft {c} محدَّث.
-	Couldn't check for updates: {e}	تعذّر التحقق من التحديثات: {e}
-	You have version {c}. All releases are listed at {page}.	لديك الإصدار {c}. كل الإصدارات مدرجة في {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	يسأل GitHub عن أحدث إصدار. لا يُنزَّل أو يُثبَّت شيء تلقائيًا.
 	Download	تنزيل
 	Later	لاحقًا
@@ -2797,6 +2792,25 @@ certificate	Version	الإصدار
 	Make properties default	جعل الخصائص افتراضية
 	Pages selected	الصفحات المحددة
 	Page properties	خصائص الصفحة
+	Clear search	مسح البحث
+	Pin	تثبيت
+	Pin a tool…	تثبيت أداة…
+	Pin to Home	تثبيت في الصفحة الرئيسية
+	Pin tools to Home	تثبيت الأدوات في الصفحة الرئيسية
+	Pin your favorite tools here for quick access.	ثبّت أدواتك المفضلة هنا للوصول السريع.
+	Pinned	مثبت
+	Pinned Tools	الأدوات المثبتة
+	Search tools…	البحث عن الأدوات…
+	Select tools to display on your Home page for quick access.	حدد الأدوات المراد عرضها على صفحتك الرئيسية للوصول السريع.
+	Unpin from Home	إلغاء التثبيت من الصفحة الرئيسية
+	Unpin tool	إلغاء تثبيت الأداة
+	Transform image	تحويل الصورة
+	Select Tool	أداة التحديد
+	Hand Tool	أداة اليد
+	Marquee Zoom	تكبير بالتحديد
+	Edit this PDF	تحرير هذا الملف PDF
+	Export this PDF	تصدير هذا الملف PDF
+	Find text or tools	البحث عن نص أو أدوات
 	Create & Edit	الإنشاء والتحرير
 	Review & Compare	المراجعة والمقارنة
 	Forms & Signatures	النماذج والتوقيعات
@@ -2843,6 +2857,13 @@ certificate	Version	الإصدار
 	field names can't contain a period: {name}	لا يمكن أن تحتوي أسماء الحقول على نقطة: {name}
 	two cells would both be named {name}	ستحمل خليتان الاسم نفسه {name}
 	a field named {name} already exists	يوجد حقل باسم {name} بالفعل
+	Arrange image	ترتيب الصورة
+	Bring forward	إحضار للأمام
+	Bring to front	إحضار إلى المقدمة
+	Crop	قص
+	Remove crop	إزالة القص
+	Send backward	إرسال للخلف
+	Send to back	إرسال إلى المؤخرة
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	اليوم
@@ -2865,3 +2886,11 @@ certificate	Version	الإصدار
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	خيارات هذا الرد
 	Export value	قيمة التصدير
+	Show Page Edge Shadows	إظهار ظلال حواف الصفحات
+
+# Image paste and Home notifications (AI-assisted; not separately native-reviewed)
+	Search…	بحث…
+	Image pasted	تم لصق الصورة
+	No image on clipboard to paste	لا توجد صورة في الحافظة للصقها
+	Pinned {tool} to Home	تم تثبيت {tool} في الرئيسية
+	Unpinned {tool} from Home	تم إلغاء تثبيت {tool} من الرئيسية

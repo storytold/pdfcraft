@@ -801,14 +801,9 @@
 	Copy Image in Original Format	Bild im Originalformat kopieren
 	The image has been copied as a {ext} file	Das Bild wurde als {ext}-Datei kopiert
 	The page has changed; select the image again	Die Seite hat sich geändert; wählen Sie das Bild erneut aus
-	Check for updates	Nach Updates suchen
 	No check has run yet.	Es wurde noch nicht gesucht.
-	Checking for a newer version…	Suche nach einer neueren Version…
 	PdfCraft {v} is available.	PdfCraft {v} ist verfügbar.
 	You have version {c}. Download the new version from its release page.	Du hast Version {c}. Lade die neue Version von ihrer Release-Seite herunter.
-	PdfCraft {c} is up to date.	PdfCraft {c} ist auf dem neuesten Stand.
-	Couldn't check for updates: {e}	Updates konnten nicht gesucht werden: {e}
-	You have version {c}. All releases are listed at {page}.	Du hast Version {c}. Alle Releases findest du unter {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Fragt GitHub nach dem neuesten Release. Es wird nichts automatisch heruntergeladen oder installiert.
 	Download	Herunterladen
 	Later	Später
@@ -2521,6 +2516,26 @@ animation effects	Off	Aus
 	Make properties default	Eigenschaften als Standard festlegen
 	Pages selected	Ausgewählte Seiten
 	Page properties	Seiteneigenschaften
+	Clear search	Suche löschen
+	Pin	Anheften
+	Pin a tool…	Werkzeug anheften…
+	Pin to Home	An Start anheften
+	Pin tools to Home	Werkzeuge an Start anheften
+	Pin your favorite tools here for quick access.	Heften Sie Ihre bevorzugten Werkzeuge hier an, um schnell darauf zuzugreifen.
+	Pinned	Angeheftet
+	Pinned Tools	Angeheftete Werkzeuge
+	Search tools…	Werkzeuge suchen…
+	Select tools to display on your Home page for quick access.	Wählen Sie Werkzeuge für den Schnellzugriff auf Ihrer Startseite aus.
+	Unpin from Home	Von Start lösen
+	Unpin tool	Werkzeug lösen
+	Transform image	Bild transformieren
+	Select Tool	Auswahl-Werkzeug
+	Hand Tool	Hand-Werkzeug
+	Marquee Zoom	Auswahlrahmen-Zoom
+	Paste	Einfügen
+	Edit this PDF	Dieses PDF bearbeiten
+	Export this PDF	Dieses PDF exportieren
+	Find text or tools	Text oder Werkzeuge suchen
 	Create & Edit	Erstellen & Bearbeiten
 	Review & Compare	Prüfen & Vergleichen
 	Forms & Signatures	Formulare & Signaturen
@@ -2568,6 +2583,13 @@ animation effects	Off	Aus
 	field names can't contain a period: {name}	Feldnamen dürfen keinen Punkt enthalten: {name}
 	two cells would both be named {name}	zwei Zellen hätten beide den Namen {name}
 	a field named {name} already exists	ein Feld namens {name} ist bereits vorhanden
+	Arrange image	Bild anordnen
+	Bring forward	Nach vorne bringen
+	Bring to front	In den Vordergrund
+	Crop	Zuschneiden
+	Remove crop	Zuschnitt entfernen
+	Send backward	Nach hinten senden
+	Send to back	In den Hintergrund
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Heute
@@ -2590,3 +2612,11 @@ animation effects	Off	Aus
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Optionen für diese Antwort
 	Export value	Exportwert
+	Show Page Edge Shadows	Schatten an Seitenrändern anzeigen
+
+# Image paste and Home notifications (AI-assisted; not separately native-reviewed)
+	Search…	Suchen…
+	Image pasted	Bild eingefügt
+	No image on clipboard to paste	Kein Bild in der Zwischenablage zum Einfügen
+	Pinned {tool} to Home	{tool} an Start angeheftet
+	Unpinned {tool} from Home	{tool} von Start gelöst
