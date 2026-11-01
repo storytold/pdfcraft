@@ -23,6 +23,13 @@ fn page_size_hint_zone_is_the_bottom_left_quadrant() {
 
 use super::*;
 
+// As in tests/it/main.rs, keep rendered-pixel tests to one wgpu device at a time.
+static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn gpu() -> std::sync::MutexGuard<'static, ()> {
+    GPU.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[test]
 fn typed_zoom_percentages_parse() {
     for (typed, zoom) in [("150", 1.5), ("150%", 1.5), (" 62.5 % ", 0.625), ("6400%", 64.0)] {
@@ -1099,6 +1106,7 @@ fn tile_error_harness() -> egui_kittest::Harness<'static, PdfCraftApp> {
 /// #623 item 4: an error must not replace pixels from another successful request.
 #[test]
 fn tile_error_keeps_successful_pixels_in_both_result_orders() {
+    let _gpu = gpu();
     for failure_first in [false, true] {
         let mut h = tile_error_harness();
         // Both requests must cover the viewport; the former adjacent 4096px tile was offscreen.
@@ -1155,9 +1163,142 @@ fn tile_error_keeps_successful_pixels_in_both_result_orders() {
     }
 }
 
+/// Partial failures must keep useful pixels without leaving the dragged image in any cache layer.
+#[test]
+fn tile_error_image_drag_suppresses_current_retained_and_whole_page_pixels() {
+    let _gpu = gpu();
+    use pdfcraft_cos::{Dict, Document, Object, Stream, write_incremental};
+    let session = pdfcraft_engine::Session::new();
+    let blank = session.create_blank(300.0, 400.0, 1).unwrap();
+    let mut doc = Document::open(blank).unwrap();
+    let mut image = Dict::new();
+    for (key, value) in [("Type", "XObject"), ("Subtype", "Image"), ("ColorSpace", "DeviceRGB")] {
+        image.set(key.as_bytes().to_vec(), Object::name(value));
+    }
+    for (key, value) in [("Width", 1), ("Height", 1), ("BitsPerComponent", 8)] {
+        image.set(key.as_bytes().to_vec(), Object::Int(value));
+    }
+    let image = doc.add(Object::Stream(Stream::flate(image, &[210, 30, 30])));
+    let page = pdfcraft_model::pages(&doc).remove(0);
+    // A clipped, reflected image uses the affine preview path, which does not paint a white
+    // rectangle over its old location: unsuppressed cache pixels cannot hide behind that blank.
+    let content = b"0 0.7 0 rg 210 320 25 25 re f q 230 250 40 40 re W n -60 0 0 60 280 240 cm /Im0 Do Q";
+    let contents = doc.add(Object::Stream(Stream::flate(Dict::new(), content)));
+    let mut xobjects = Dict::new();
+    xobjects.set(b"Im0".to_vec(), Object::Ref(image));
+    let mut resources = Dict::new();
+    resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+    doc.update_dict(page.obj, |d| {
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+        d.set(b"Contents".to_vec(), Object::Ref(contents));
+    })
+    .unwrap();
+    let bytes = write_incremental(&doc, &Default::default()).unwrap();
+    for mode in ["backdrop", "current", "retained", "recovery", "whole"] {
+        let input = bytes.clone();
+        let mut renderer = pdfcraft_render::PageRenderer::new(Arc::new(bytes.clone()), Default::default());
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(2600.0, 1600.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.open_bytes("drag-tile-failure.pdf", None, input).unwrap();
+            app.set_option("language", "en").unwrap();
+            app.set_option("zoom", "400").unwrap();
+            app.quick_tool = QuickTool::EditText;
+            app.views[0].hold_rasters = true;
+            app
+        });
+        h.input_mut().max_texture_side = Some(1024);
+        h.run_steps(4);
+        let ctx = h.ctx.clone();
+        let queue = h.state().views[0].last_queue.clone();
+        let backdrop = *queue.iter().find(|r| r.kind == RequestKind::Pixels && r.tile.is_none()).unwrap();
+        let good = *queue
+            .iter()
+            .find(|r| r.tile.is_some_and(|t| t.x > 0 && t.x as f32 <= 250.0 * r.scale && (t.x + t.w) as f32 > 250.0 * r.scale && t.y == 0))
+            .unwrap();
+        let bad = *queue.iter().find(|r| r.tile.is_some() && **r != good).unwrap();
+        let healthy = *queue.iter().find(|r| r.tile.is_some() && **r != good && **r != bad).unwrap();
+        for request in [backdrop, good] {
+            let result = renderer.render(request);
+            assert!(result.error.is_none(), "{mode}: {:?}", result.error);
+            assert!(h.state_mut().views[0].receive_result(&ctx, result) > 0);
+        }
+        h.state_mut().views[0].receive_result(&ctx, tile_error(bad));
+        h.run_steps(3);
+        assert!(h.state().views[0].last_queue.contains(&healthy), "{mode}: healthy tile still scheduled");
+        assert!(!h.state().views[0].last_queue.contains(&bad), "{mode}: identical failure suppressed");
+        let tile = good.tile.unwrap();
+        let tile_texture = h.state().views[0].tiles[&(0, good.tag, tile.x, tile.y)].id();
+        match mode {
+            "backdrop" => h.state_mut().views[0].tiles.clear(),
+            "retained" => h.state_mut().set_option("zoom", "450").unwrap(),
+            "recovery" => h.state_mut().set_option("zoom", "100").unwrap(),
+            "whole" => {
+                h.state_mut().views[0].tiles.clear();
+                h.state_mut().set_option("zoom", "100").unwrap();
+                h.run_steps(3);
+                let whole = *h.state().views[0].last_queue.iter().find(|r| r.kind == RequestKind::Pixels && r.tile.is_none()).unwrap();
+                assert!(h.state_mut().views[0].receive_result(&ctx, renderer.render(whole)) > 0);
+                h.state_mut().views[0].receive_result(&ctx, tile_error(whole));
+            }
+            _ => {}
+        }
+        h.run_steps(3);
+        let page = h.state().views[0].page_screen_rect(0).unwrap();
+        let at = |x: f32, y: f32| pos2(page.left() + x / 300.0 * page.width(), page.top() + (400.0 - y) / 400.0 * page.height());
+        let old = Rect::from_two_pos(at(236.0, 256.0), at(264.0, 284.0));
+        let delta = at(150.0, 270.0) - at(250.0, 270.0);
+        let grab = old.center();
+        h.hover_at(grab);
+        h.run_steps(1);
+        h.drag_at(grab);
+        h.run_steps(1);
+        h.drop_at(grab);
+        h.run_steps(3);
+        assert!(h.state().views[0].image_selection.is_some(), "{mode}: image selected");
+        h.drag_at(grab);
+        h.run_steps(1);
+        for k in 1..=4 {
+            h.hover_at(grab + delta * (k as f32 / 4.0));
+            h.run_steps(1);
+        }
+        assert!(h.state().views[0].image_selection.as_ref().unwrap().drag.is_some(), "{mode}: active drag");
+        assert!(
+            h.output().shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text == "Error\nsynthetic tile failure")),
+            "{mode}: meaningful partial-error notice"
+        );
+        if matches!(mode, "backdrop" | "current" | "retained") {
+            assert!(h.state().views[0].last_queue.iter().any(|r| r.tile.is_some()), "{mode}: healthy tiles remain scheduled during drag");
+        }
+        let painted = h.ctx.tessellate(h.output().shapes.clone(), h.ctx.pixels_per_point());
+        if matches!(mode, "current" | "retained" | "recovery") {
+            assert!(
+                painted.iter().any(|p| matches!(&p.primitive, egui::epaint::Primitive::Mesh(m) if m.texture_id == tile_texture)),
+                "{mode}: nontransparent retained/current tile still painted"
+            );
+        }
+        let pixels = h.render().unwrap();
+        if let Ok(dir) = std::env::var("PDFCRAFT_TILE_ERROR_SHOTS") {
+            pixels.save(std::path::Path::new(&dir).join(format!("drag-error-{mode}.png"))).unwrap();
+        }
+        let red = |r: Rect| {
+            (r.top().max(0.0) as u32..(r.bottom() as u32).min(pixels.height()))
+                .flat_map(|y| (r.left().max(0.0) as u32..(r.right() as u32).min(pixels.width())).map(move |x| (x, y)))
+                .filter(|(x, y)| matches!(pixels.get_pixel(*x, *y).0, [r, g, b, _] if r > 150 && g < 90 && b < 90))
+                .count()
+        };
+        assert!(red(old.translate(delta)) > 50, "{mode}: live preview at its intended position");
+        assert_eq!(red(old), 0, "{mode}: original ghost absent inside suppression region");
+        assert!(
+            pixels.pixels().filter(|p| matches!(p.0, [r, g, b, _] if r < 50 && g > 100 && b < 50)).count() > 100,
+            "{mode}: useful page pixels retained"
+        );
+    }
+}
+
 /// Keep preview failures inspectable without showing a false error over successful main pixels.
 #[test]
 fn tile_followup_preview_failures_do_not_mark_the_main_canvas() {
+    let _gpu = gpu();
     for main_fails in [false, true] {
         let mut h = tile_error_harness();
         h.state_mut().set_option("zoom", "100").unwrap();
@@ -1411,6 +1552,7 @@ fn tile_review_failure_history_is_bounded_without_retrying_active_requests() {
 /// Require cached pixels to intersect the rotated viewport before showing a partial-error notice.
 #[test]
 fn tile_review_offscreen_tile_does_not_hide_the_no_content_error() {
+    let _gpu = gpu();
     for rotation in [0, 90, 180, 270] {
         let mut h = tile_error_harness();
         h.state_mut().set_option("rotate", &rotation.to_string()).unwrap();
@@ -1445,6 +1587,7 @@ fn tile_review_offscreen_tile_does_not_hide_the_no_content_error() {
 /// Keep the full-page diagnostic when every requested surface fails and suppress identical retries.
 #[test]
 fn tile_error_all_failures_keep_the_full_page_error_without_retrying() {
+    let _gpu = gpu();
     let mut h = tile_error_harness();
     let ctx = h.ctx.clone();
     let requests = h.state().views[0].last_queue.clone();
@@ -1535,6 +1678,7 @@ fn tile_error_a_new_complete_raster_recovers_and_old_zoom_results_stay_rejected(
 /// Retain a useful backdrop beneath a failed sharp tile and keep its diagnostic visible.
 #[test]
 fn tile_error_keeps_a_successful_backdrop_and_reports_the_failure() {
+    let _gpu = gpu();
     let mut h = tile_error_harness();
     let ctx = h.ctx.clone();
     let requests = h.state().views[0].last_queue.clone();
@@ -2405,6 +2549,7 @@ fn page_text_failure_preserves_valid_search_match_without_jitter() {
 /// where it was (which the raster now shows empty), and another drag starts from there too.
 #[test]
 fn a_moved_picture_is_drawn_from_the_fresh_raster_while_a_tile_is_still_stale() {
+    let _gpu = gpu();
     let content = b"q 60 0 0 60 40 260 cm /Im0 Do Q";
     let objs: Vec<Vec<u8>> = vec![
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
@@ -2514,4 +2659,39 @@ fn a_moved_picture_is_drawn_from_the_fresh_raster_while_a_tile_is_still_stale() 
     assert_eq!(red(&pixels, old), 0, "nothing shows where it first was");
     h.state_mut().views[0].stale_tiles.clear();
     h.state_mut().views[0].tiles.clear();
+}
+
+#[test]
+fn image_handles_account_for_document_and_view_rotation() {
+    for page_rotation in [0, 90, 180, 270] {
+        for view_rotation in [0, 90, 180, 270] {
+            let (width, height) = if page_rotation % 180 == 0 { (300.0, 400.0) } else { (400.0, 300.0) };
+            let info = DocInfo {
+                pages: vec![pdfcraft_render::PageInfo {
+                    width,
+                    height,
+                    label: String::new(),
+                    crop: [0.0, 0.0, 300.0, 400.0],
+                    rotation: page_rotation,
+                }],
+                ..Default::default()
+            };
+            let size = if view_rotation % 180 == 0 { vec2(width, height) } else { vec2(height, width) };
+            let xf = PageXform { rect: Rect::from_min_size(pos2(10.0, 20.0), size), rot: view_rotation, pw: width, ph: height };
+            let obb = ImageObb::from_matrix([100.0, 0.0, 0.0, 50.0, 50.0, 70.0], &xf, &info, 0);
+            let total = (page_rotation + view_rotation) % 360;
+            assert_eq!(obb.is_rotated, total != 0, "page={page_rotation} view={view_rotation}: user-labelled grips need matrix resize when turned");
+            for (handle, point) in obb.handles() {
+                let direction = point - obb.screen_center;
+                let cursor = match handle {
+                    ImageHandle::TopLeft | ImageHandle::TopRight | ImageHandle::BottomLeft | ImageHandle::BottomRight => {
+                        if direction.x * direction.y > 0.0 { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw }
+                    }
+                    _ if direction.x.abs() > direction.y.abs() => egui::CursorIcon::ResizeHorizontal,
+                    _ => egui::CursorIcon::ResizeVertical,
+                };
+                assert_eq!(obb.handle_cursor(handle), cursor, "page={page_rotation} view={view_rotation} handle={handle:?}");
+            }
+        }
+    }
 }
