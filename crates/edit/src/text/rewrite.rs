@@ -4,7 +4,7 @@ use super::fallback::{
     source_program_completes, source_show, source_space, source_width, type3_encode, type3_font,
 };
 use super::interp::{Carry, Origin, TextState, interpret};
-use super::lines::{content_streams, page_dict, rewritten_contents, splice, text_lines};
+use super::lines::{content_streams, dropped_side_effects, page_dict, rewritten_contents, show_side_effects, splice, text_lines};
 use super::{
     Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, PdfString, Pieces, TextLine, TextSession, alignment_frame, group_blocks,
     is_centred, parse, rewrite_styled_block,
@@ -68,16 +68,8 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
     let reused = font.as_ref().filter(|m| source_encodes(m, &shown));
     let mut substituted = None;
     let mut replacement: Vec<Op> = Vec::new();
-    // ' and " also move to the next line; keep that.
-    match ops[first].op.as_slice() {
-        b"'" => replacement.push(Op::new("T*", vec![])),
-        b"\"" => {
-            replacement.push(Op::new("Tw", vec![ops[first].operands.first().cloned().unwrap_or(Object::Int(0))]));
-            replacement.push(Op::new("Tc", vec![ops[first].operands.get(1).cloned().unwrap_or(Object::Int(0))]));
-            replacement.push(Op::new("T*", vec![]));
-        }
-        _ => {}
-    }
+    // ' and " also move to the next line (and " sets the spacing); keep that.
+    replacement.extend(ops.get(first).map(show_side_effects).unwrap_or_default());
     match reused {
         Some(metrics) => replacement.extend(source_show(
             metrics,
@@ -942,8 +934,10 @@ pub(crate) fn rewrite_block_from(
     }
     let at = if split { start } else { emit.bt_op };
     let new_data = splice(&pieces, &ops, |i| {
-        let insert = if i == at { std::mem::take(&mut block_ops) } else { Vec::new() };
-        (insert, !dropped.contains(&i))
+        let mut insert = if i == at { std::mem::take(&mut block_ops) } else { Vec::new() };
+        let keep = !dropped.contains(&i);
+        insert.extend(dropped_side_effects(&ops, i, keep, split.then_some(start)));
+        (insert, keep)
     });
     let contents = rewritten_contents(doc, &streams, new_data);
     let new_font = !reuse;

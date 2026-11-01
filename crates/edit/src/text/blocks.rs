@@ -1,5 +1,5 @@
 use super::interp::{Carry, interpret};
-use super::lines::{content_streams, page_dict, reading_lines, rewritten_contents, splice, text_lines};
+use super::lines::{content_streams, page_dict, reading_lines, rewritten_contents, show_side_effects, splice, text_lines};
 use super::rewrite::{LineEdit, coincident_ops, rewrite_block};
 use super::{Document, EditError, HashMap, Object, Op, Pieces, TextLine, group_blocks, regions};
 
@@ -284,13 +284,7 @@ pub fn clear_block(doc: &mut Document, page: usize, block: usize) -> Result<(), 
         }
         let mut replacement = Vec::new();
         if let Some(op) = ops.get(s.op) {
-            if op.is("\"") {
-                replacement.push(Op::new("Tw", vec![op.operands.first().cloned().unwrap_or(Object::Int(0))]));
-                replacement.push(Op::new("Tc", vec![op.operands.get(1).cloned().unwrap_or(Object::Int(0))]));
-            }
-            if op.is("'") || op.is("\"") {
-                replacement.push(Op::new("T*", vec![]));
-            }
+            replacement.extend(show_side_effects(op));
         }
         replacement.push(Op::new("TJ", vec![Object::Array(vec![pdfcraft_content::num(adjustment)])]));
         patches.insert(s.op, replacement);
