@@ -1490,3 +1490,30 @@ fn a_stream_whose_length_is_itself_and_never_ends_loads_quickly() {
     });
     rx.recv_timeout(std::time::Duration::from_secs(20)).expect("loading must not retry exponentially");
 }
+
+#[test]
+fn pages_repeating_one_large_resource_list_share_it() {
+    // A plot rewritten by a header-and-footer tool: each page lists every shading of the plot
+    // in its own direct /Resources, next to the XObject that holds its new footer.
+    let big = format!("<< {}>>", (0..1000).map(|i| format!("/Sh{i} {i} 0 R /T{i} (shading {i}) ")).collect::<String>());
+    let page = |fm: usize| format!("<< /Type /Page /Parent 2 0 R /Resources << /Shading {big} /XObject << /Fm1 {fm} 0 R >> >> >>");
+    let bodies =
+        ["<< /Type /Catalog /Pages 2 0 R >>".into(), "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>".into(), page(6), page(7), page(8)];
+    let plain = build(&bodies.iter().map(String::as_str).collect::<Vec<_>>(), "/Root 1 0 R");
+    let packed =
+        crate::write_full(&Document::open(Arc::new(plain.clone())).unwrap(), &crate::SaveOptions { object_streams: true, ..Default::default() })
+            .unwrap();
+    for bytes in [plain, packed] {
+        let doc = Document::open(Arc::new(bytes)).unwrap();
+        let tree = doc.get(doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap());
+        let pages: Vec<Arc<Object>> =
+            tree.as_dict().unwrap().get(b"Kids").unwrap().as_array().unwrap().iter().map(|k| doc.get(k.as_ref().unwrap())).collect();
+        let shading =
+            |p: &Object| p.as_dict().unwrap().get(b"Resources").unwrap().as_dict().unwrap().get(b"Shading").unwrap().as_dict().unwrap().clone();
+        assert_eq!(pages.len(), 3);
+        assert!(pages.windows(2).all(|w| shading(&w[0]).shares(&shading(&w[1]))), "one parse for all copies");
+        assert_eq!(shading(&pages[2]).len(), 2000);
+        // The shared list is not counted as each page's own: the cache check stays cheap.
+        assert!(owned_bytes(&pages[0], doc.bytes(), 0) < 1000, "{}", owned_bytes(&pages[0], doc.bytes(), 0));
+    }
+}

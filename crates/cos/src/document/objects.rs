@@ -1,7 +1,9 @@
 use super::reader::find;
 use super::state::{LENGTHS, LoadGuard, ObjStm, ObjectReader, ReadState, Slot, SourceIdentity, objstm_member, owned_bytes};
 use super::xref::{Revision, XrefEntry};
-use super::{Arc, CosError, Cow, Dict, Document, Lexer, MAX_DECODED, ObjRef, Object, Stream, is_whitespace, parse_indirect_shared};
+use super::{
+    Arc, CosError, Cow, Dict, Document, Lexer, MAX_DECODED, ObjRef, Object, Stream, is_whitespace, parse_indirect_shared, parse_indirect_sharing,
+};
 
 impl Document {
     pub fn bytes(&self) -> &Arc<Vec<u8>> {
@@ -463,7 +465,7 @@ impl Document {
                     length
                 };
                 let off = offset as usize;
-                let at = |off: usize| match parse_indirect_shared(&self.data, off, &resolve, &self.endstreams) {
+                let at = |off: usize| match parse_indirect_sharing(&self.data, off, &resolve, &self.endstreams, &self.shared_dicts) {
                     Ok((id, o)) if id.num == num => Some(self.decrypted(id, o)),
                     _ => None,
                 };
@@ -479,7 +481,7 @@ impl Document {
                 // The member at the entry's position, else wherever the stream lists `num`.
                 let at = usize::try_from(index).ok().and_then(|i| stm.index.get(i)).copied().flatten().filter(|(n, _)| *n == num);
                 let (_, off) = at.or_else(|| stm.index.iter().flatten().find(|(n, _)| *n == num).copied()).ok_or(CosError::MissingObject(num))?;
-                Lexer::new(&stm.data, off).object()
+                Lexer::new(&stm.data, off).sharing(&self.shared_dicts).object()
             }
         }
     }

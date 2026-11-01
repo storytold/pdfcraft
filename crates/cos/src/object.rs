@@ -88,24 +88,28 @@ thread_local! {
 const INDEX_FROM: usize = 32;
 
 /// An ordered dictionary.
+///
+/// Clones share their entries until one of them is changed (copy on write), so a large
+/// dictionary that recurs in many objects is held once (see `parser::SharedDicts`).
 #[derive(Clone, Default)]
-pub struct Dict {
+pub struct Dict(std::sync::Arc<DictEntries>);
+
+#[derive(Clone, Default)]
+struct DictEntries {
     entries: Vec<(Name, Object)>,
     /// Key to position in `entries`, kept once the dictionary reaches [`INDEX_FROM`] entries.
-    /// Boxed so that every `Dict`, and so every `Object`, grows by one pointer, not by a map.
-    #[allow(clippy::box_collection)]
-    index: Option<Box<std::collections::HashMap<Name, usize>>>,
+    index: Option<std::collections::HashMap<Name, usize>>,
 }
 
 impl PartialEq for Dict {
     fn eq(&self, other: &Self) -> bool {
-        self.entries == other.entries
+        self.0.entries == other.0.entries
     }
 }
 
 impl std::fmt::Debug for Dict {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Dict").field("entries", &self.entries).finish()
+        f.debug_struct("Dict").field("entries", &self.0.entries).finish()
     }
 }
 
@@ -115,12 +119,12 @@ impl Dict {
     }
 
     fn position(&self, key: &[u8]) -> Option<usize> {
-        if let Some(index) = &self.index {
+        if let Some(index) = &self.0.index {
             #[cfg(test)]
             KEY_COMPARES.with(|c| c.set(c.get() + 1));
             return index.get(key).copied();
         }
-        self.entries.iter().position(|(k, _)| {
+        self.0.entries.iter().position(|(k, _)| {
             #[cfg(test)]
             KEY_COMPARES.with(|c| c.set(c.get() + 1));
             k == key
@@ -128,40 +132,43 @@ impl Dict {
     }
 
     pub fn get(&self, key: &[u8]) -> Option<&Object> {
-        self.position(key).and_then(|i| self.entries.get(i)).map(|(_, v)| v)
+        self.position(key).and_then(|i| self.0.entries.get(i)).map(|(_, v)| v)
     }
 
     pub fn get_mut(&mut self, key: &[u8]) -> Option<&mut Object> {
         let i = self.position(key)?;
-        self.entries.get_mut(i).map(|(_, v)| v)
+        std::sync::Arc::make_mut(&mut self.0).entries.get_mut(i).map(|(_, v)| v)
     }
 
     /// Insert or replace, keeping the position of an existing key.
     pub fn set(&mut self, key: impl Into<Name>, value: impl Into<Object>) {
         let key = key.into();
         let value = value.into();
-        match self.position(&key).and_then(|i| self.entries.get_mut(i)) {
+        let at = self.position(&key);
+        let d = std::sync::Arc::make_mut(&mut self.0);
+        match at.and_then(|i| d.entries.get_mut(i)) {
             Some((_, v)) => *v = value,
             None => {
-                let at = self.entries.len();
-                if let Some(index) = &mut self.index {
+                let at = d.entries.len();
+                if let Some(index) = &mut d.index {
                     index.insert(key.clone(), at);
                 } else if at + 1 >= INDEX_FROM {
-                    let index = self.entries.iter().enumerate().map(|(i, (k, _))| (k.clone(), i)).chain([(key.clone(), at)]).collect();
-                    self.index = Some(Box::new(index));
+                    let index = d.entries.iter().enumerate().map(|(i, (k, _))| (k.clone(), i)).chain([(key.clone(), at)]).collect();
+                    d.index = Some(index);
                 }
-                self.entries.push((key, value));
+                d.entries.push((key, value));
             }
         }
     }
 
     pub fn remove(&mut self, key: &[u8]) -> Option<Object> {
         let i = self.position(key)?;
-        if let Some(index) = &mut self.index {
+        let d = std::sync::Arc::make_mut(&mut self.0);
+        if let Some(index) = &mut d.index {
             index.remove(key);
             index.values_mut().filter(|at| **at > i).for_each(|at| *at -= 1);
         }
-        Some(self.entries.remove(i).1)
+        Some(d.entries.remove(i).1)
     }
 
     pub fn contains(&self, key: &[u8]) -> bool {
@@ -169,15 +176,25 @@ impl Dict {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&Name, &Object)> {
-        self.entries.iter().map(|(k, v)| (k, v))
+        self.0.entries.iter().map(|(k, v)| (k, v))
     }
 
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.0.entries.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.0.entries.is_empty()
+    }
+
+    /// `self` and `other` are clones of one dictionary: they share its entries.
+    pub fn shares(&self, other: &Dict) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+
+    /// Another clone shares these entries.
+    pub(crate) fn is_shared(&self) -> bool {
+        std::sync::Arc::strong_count(&self.0) > 1
     }
 
     pub fn name(&self, key: &[u8]) -> Option<&[u8]> {
@@ -534,6 +551,29 @@ mod tests {
         d.set(b"K3".to_vec(), Object::Null);
         assert_eq!(d.iter().last().map(|(k, _)| k.as_slice()), Some(&b"K3"[..]));
         assert!(d.get(b"K20000").is_none());
+    }
+
+    #[test]
+    fn a_clone_shares_its_entries_until_one_of_them_changes() {
+        let mut original = Dict::new();
+        for i in 0..40 {
+            original.set(format!("K{i}").into_bytes(), Object::Int(i));
+        }
+        let changes: [fn(&mut Dict); 3] =
+            [|d| d.set(b"K1".to_vec(), Object::Null), |d| *d.get_mut(b"K2").unwrap() = Object::Null, |d| drop(d.remove(b"K3"))];
+        for change in changes {
+            let mut copy = original.clone();
+            assert!(copy.shares(&original));
+            change(&mut copy);
+            assert!(!copy.shares(&original));
+            assert_ne!(copy, original);
+            // The original keeps every entry and its key index.
+            assert_eq!(original.len(), 40);
+            assert_eq!(
+                (1..4).map(|i| original.get(format!("K{i}").as_bytes()).cloned()).collect::<Vec<_>>(),
+                [1, 2, 3].map(|i| Some(Object::Int(i)))
+            );
+        }
     }
 
     #[test]
