@@ -6,6 +6,46 @@
 <dict>
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
+  <!-- UI translations are embedded in Rust; declare them for AppKit's system dialogs (open and
+       save panels, overwrite confirmation). Keep in sync with LANGUAGES in crates/ui-egui/src/i18n.rs. -->
+  <key>CFBundleLocalizations</key>
+  <array>
+    <string>en</string>
+    <string>ja</string>
+    <string>zh-Hans</string>
+    <string>zh-Hant</string>
+    <string>cs</string>
+    <string>pt-BR</string>
+    <string>de</string>
+    <string>es</string>
+    <string>fr</string>
+    <string>ru</string>
+    <string>kk</string>
+    <string>bg</string>
+    <string>te</string>
+    <string>hu</string>
+    <string>uk</string>
+    <string>it</string>
+    <string>ar</string>
+    <string>ckb</string>
+    <string>fa</string>
+    <string>pl</string>
+    <string>sl</string>
+    <string>el</string>
+    <string>tr</string>
+    <string>lt</string>
+    <string>id</string>
+    <string>vi</string>
+    <string>fi</string>
+    <string>sq</string>
+    <string>th</string>
+    <string>ca</string>
+    <string>ro</string>
+    <string>lo</string>
+    <string>hi</string>
+    <string>ko</string>
+    <string>nb</string>
+  </array>
   <key>CFBundleDisplayName</key>
   <string>PdfCraft</string>
   <key>CFBundleName</key>
