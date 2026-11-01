@@ -531,6 +531,9 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         });
 }
 
+/// The size of the rail's page and zoom fields: wide enough for "6400%", the largest zoom, in the
+/// 12 pt font, and inside the 45 pt the rail leaves.
+const RAIL_FIELD_SIZE: [f32; 2] = [42.0, 22.0];
 /// Padding inside the rail's page and zoom fields.
 const RAIL_FIELD_MARGIN: egui::Vec2 = egui::vec2(1.0, 4.0);
 
@@ -543,7 +546,7 @@ fn rail_field(ui: &mut egui::Ui, t: &Tokens, edit: egui::TextEdit<'_>) -> egui::
         .corner_radius(CornerRadius::same(5))
         .show(ui, |ui| {
             ui.spacing_mut().interact_size.x = 0.0;
-            ui.add_sized([34.0, 22.0], edit)
+            ui.add_sized(RAIL_FIELD_SIZE, edit)
         })
         .inner
 }

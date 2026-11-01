@@ -32,7 +32,7 @@ impl DocView {
         // of pages of different heights, whose shorter page can start below it), else the
         // nearest one below.
         let top = self.viewport_screen.top();
-        // A page showing less than a pixel is rounding, not what the reader is looking at: a jump
+        // A page showing less than SLIVER is rounding, not what the reader is looking at: a jump
         // to the next page leaves the previous one's bottom edge within a pixel of the top. Such a
         // sliver still counts when nothing else shows (the last page at the very end).
         let pick = |slack: f32| {
@@ -42,7 +42,7 @@ impl DocView {
                 .min_by_key(|(p, _)| *p)
                 .or_else(|| showing().min_by(|a, b| a.1.rect.top().total_cmp(&b.1.rect.top()).then(a.0.cmp(&b.0))))
         };
-        let (page, xf) = pick(1.0).or_else(|| pick(0.0))?;
+        let (page, xf) = pick(SLIVER).or_else(|| pick(0.0))?;
         let p = info.pages.get(*page)?;
         // Above the page (in the gap before it) is the page's own top. The window's vertical is
         // the view's y, or its x when the view is turned a quarter.
@@ -460,3 +460,6 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
 /// How far ↓ / ↑ scroll at Normal speed (Scroll speed halves or doubles it). Page Down / Page Up
 /// keep this much of the previous screen in view.
 const KEY_SCROLL_LINE: f32 = 40.0;
+/// How much of a page must show at the window's top edge to count as the page there, in points: less
+/// is rounding, since page rectangles snap to whole pixels.
+const SLIVER: f32 = 1.0;
