@@ -2467,6 +2467,23 @@ fn an_unchanged_opening_destination_keeps_its_position_and_name() {
     }
 }
 
+/// A percentage is written as the `/XYZ` zoom factor (ISO 32000-2 Table 149), not the percentage:
+/// 25% as 0.25 and 100% as 1, and each survives a save.
+#[test]
+fn initial_view_percentages_are_written_as_zoom_factors() {
+    use crate::view::Magnification;
+    for (percent, factor) in [(25.0, 0.25), (100.0, 1.0), (150.0, 1.5)] {
+        let mut doc = open(fixture());
+        let v = crate::initial_view(&doc);
+        crate::set_initial_view(&mut doc, &crate::InitialView { magnification: Magnification::Percent(percent), ..v }).unwrap();
+        let doc = save_and_reopen(&doc);
+        let root = doc.root().unwrap();
+        let open_action = doc.get(root).as_dict().and_then(|c| c.get(b"OpenAction").cloned()).map(|o| doc.resolve(&o).as_ref().clone());
+        let zoom = open_action.as_ref().and_then(Object::as_array).and_then(|a| a.get(4)).and_then(Object::as_f64);
+        assert_eq!(zoom, Some(factor), "{percent}%: {open_action:?}");
+    }
+}
+
 #[test]
 fn choosing_100_percent_keeps_an_actual_size_opening_destination() {
     use crate::view::Magnification;
