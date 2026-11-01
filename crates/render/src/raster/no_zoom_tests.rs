@@ -223,3 +223,114 @@ fn a_no_zoom_highlight_whose_rect_overflows_is_drawn_unscaled() {
     let got = ink_box(&page, LEFT[2], m, top_row(m));
     assert!(close(got, expected(LEFT[2], m, SIDE * m)), "drawn at {got:?}");
 }
+
+/// The width and height of a device-pixel box.
+fn size(b: [u32; 4]) -> (u32, u32) {
+    (b[2].saturating_sub(b[0]), b[3].saturating_sub(b[1]))
+}
+
+/// The same page on screen at 100% and at 200%, each annotation's icon measured in device
+/// pixels: A (NoZoom note), B (note without the flag, §12.5.6.4) and C (NoZoom square) are
+/// 20 × 20 pixels at both, while D, the control without NoZoom, doubles. Every one keeps its
+/// upper-left corner where the page puts the upper-left corner of its `/Rect`.
+#[test]
+fn the_same_page_at_two_magnifications_keeps_no_zoom_icons_the_same_pixel_size() {
+    let boxes = |m: f32| {
+        let page = render(m, Some(m));
+        LEFT.map(|left| ink_box(&page, left, m, top_row(m)))
+    };
+    let (at_1, at_2) = (boxes(1.0), boxes(2.0));
+    for (i, (one, two)) in at_1.into_iter().zip(at_2).enumerate() {
+        let (Some(one), Some(two)) = (one, two) else { panic!("annotation {i} not drawn: {one:?} {two:?}") };
+        let side = SIDE as u32;
+        if i == 3 {
+            assert_eq!((size(one), size(two)), ((side, side), (2 * side, 2 * side)), "the control scales with the page");
+        } else {
+            assert_eq!((size(one), size(two)), ((side, side), (side, side)), "annotation {i} keeps its size");
+        }
+        for (m, b) in [(1.0f32, one), (2.0, two)] {
+            let corner = [(LEFT[i] * m).round() as u32, ((PAGE_HEIGHT - TOP) * m).round() as u32];
+            assert_eq!([b[0], b[1]], corner, "annotation {i} at {m}: anchored at the upper-left of /Rect");
+        }
+    }
+}
+
+/// A page with `/Rotate 90` (400 × 300 points, so 300 wide and 400 tall on screen) holding two
+/// annotations whose appearance is a 20 × 10 black bar, `/Rect` [x, 180, x + 20, 190]: a note
+/// with NoZoom and NoRotate (`/F 28`) at x = 40, and a square with neither (`/F 4`) at x = 200.
+fn rotated_page() -> Vec<u8> {
+    let annot = |n: usize, subtype: &str, flags: u32, x: f32| {
+        format!("{n} 0 obj << /Type /Annot /Subtype /{subtype} /F {flags} /Rect [{x} 180 {} 190] /AP << /N 4 0 R >> >> endobj\n", x + 20.0)
+    };
+    let appearance = "0 g 0 0 20 10 re f";
+    let mut pdf = String::from(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Rotate 90 /Annots [5 0 R 6 0 R] >> endobj
+",
+    );
+    pdf.push_str(&format!(
+        "4 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 20 10] /Length {} >> stream\n{appearance}\nendstream endobj\n",
+        appearance.len()
+    ));
+    pdf.push_str(&annot(5, "Text", 28, 40.0));
+    pdf.push_str(&annot(6, "Square", 4, 200.0));
+    pdf.push_str("trailer << /Root 1 0 R >>\n%%EOF\n");
+    pdf.into_bytes()
+}
+
+/// The device-pixel box of the dark pixels in the device rectangle `[x0, y0, x1, y1)`.
+fn ink_in(page: &RenderedPage, area: [u32; 4]) -> Option<[u32; 4]> {
+    let mut b: Option<[u32; 4]> = None;
+    for y in area[1]..area[3].min(page.height) {
+        for x in area[0]..area[2].min(page.width) {
+            let at = ((y * page.width + x) * 4) as usize;
+            if page.rgba[at] < 128 {
+                let r = b.get_or_insert([x, y, x + 1, y + 1]);
+                *r = [r[0].min(x), r[1].min(y), r[2].max(x + 1), r[3].max(y + 1)];
+            }
+        }
+    }
+    b
+}
+
+/// On a page shown turned 90° clockwise, at 100% and at 200%: the NoZoom and NoRotate note stays
+/// an upright 20 × 10 bar of device pixels with its upper-left corner on the screen position of
+/// the upper-left corner of its `/Rect` (user (40, 190), which the turn puts at (190, 40) × m);
+/// the square, with neither flag, turns with the page (10 wide, 20 tall) and scales (× m).
+#[test]
+fn a_no_zoom_no_rotate_note_stays_upright_and_the_same_size_on_a_turned_page() {
+    for m in [1.0f32, 2.0] {
+        let mut renderer = PageRenderer::new(Arc::new(rotated_page()), RenderConfig::default());
+        let page = renderer.render(RenderRequest { scale: m, magnification: Some(m), ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!((page.width, page.height), ((300.0 * m) as u32, (400.0 * m) as u32), "the page is shown turned");
+        let s = |v: f32| (v * m).round() as u32;
+        // The note's band of rows runs from y = 40 down to the square's (y = 200, 120 points on).
+        let note = ink_in(&page, [0, 0, page.width, s(120.0)]);
+        assert_eq!(note, Some([s(190.0), s(40.0), s(190.0) + 20, s(40.0) + 10]), "{m}: the note");
+        // The square: user x 200..220, y 180..190 → device x 180..190, y 200..220, times m.
+        let square = ink_in(&page, [0, s(120.0), page.width, page.height]);
+        assert_eq!(square, Some([s(180.0), s(200.0), s(190.0), s(220.0)]), "{m}: the square");
+    }
+}
+
+/// A `/Rect` written with its corners the other way round (upper right first, ISO 32000-2 §7.9.5
+/// lets a reader take any two opposite corners) pins a NoZoom square at the same upper-left corner,
+/// at 100% and at 200%.
+#[test]
+fn a_rect_written_corners_first_keeps_the_same_anchor() {
+    let (x0, x1, y0, y1) = (LEFT[2], LEFT[2] + SIDE, TOP - SIDE, TOP);
+    let pdf = String::from_utf8(one_annotation("/Subtype /Square /F 12 /AP << /N 4 0 R >>")).expect("the fixture is ASCII");
+    let rect = format!("/Rect [{x0} {y0} {x1} {y1}]");
+    assert!(pdf.contains(&rect), "{pdf}");
+    let pdf = pdf.replace(&rect, &format!("/Rect [{x1} {y1} {x0} {y0}]")).into_bytes();
+    for m in [1.0f32, 2.0] {
+        let mut renderer = PageRenderer::new(Arc::new(pdf.clone()), RenderConfig::default());
+        let page = renderer.render(RenderRequest { scale: m, magnification: Some(m), ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        let got = ink_box(&page, LEFT[2], m, top_row(m));
+        assert_eq!(got, Some(expected(LEFT[2], m, SIDE)), "{m}: drawn at {got:?}");
+    }
+}
