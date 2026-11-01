@@ -193,7 +193,8 @@ fn thread_root(i: usize, link: impl Fn(usize) -> Option<usize>) -> usize {
 /// (`pdfcraft_render::inspect`), so the count matches what the Comments panel shows:
 /// - Only comment subtypes ([`is_comment_subtype`]) go: links, form widgets and the other
 ///   non-markup annotations stay, and so do redaction marks and Fill & Sign items, even when
-///   their `/IRT` makes them replies in a thread that goes.
+///   their `/IRT` makes them replies in a thread that goes; they lose that `/IRT`, so a saved copy
+///   doesn't keep the deleted comment.
 /// - A comment starts a thread unless its `/IRT` chain reaches another listed comment within 64
 ///   steps. An `/IRT` to an object that isn't listed, to itself or round a loop leaves it a
 ///   comment of its own. Replies, statuses and checkmarks go with their thread, wherever it
@@ -260,14 +261,27 @@ pub fn delete_all_annotations(doc: &mut Document, pages: Option<&[usize]>) -> Re
                 || (l.popup_subtype && (l.key.is_some_and(|k| going_popups.contains(&k)) || l.parent.is_some_and(|p| going.contains(&p))))
         })
         .collect();
+    // A redaction mark or Fill & Sign item that stays drops its `/IRT` to a comment that goes, which
+    // would otherwise keep that comment, and its text, in a saved copy.
+    let unlink: Vec<bool> = listed.iter().zip(&gone).map(|(l, &g)| !g && l.own_tool && l.irt.is_some_and(|r| going.contains(&r))).collect();
+    for (l, _) in listed.iter().zip(&unlink).filter(|(_, u)| **u) {
+        if let Some(k) = l.key {
+            doc.update_dict(k, |d| {
+                d.remove(b"IRT");
+            })?;
+        }
+    }
 
     // Each page's entries are together and in order: what is left of each, and whether it changed.
     let mut left: Vec<(usize, Vec<Object>, bool)> = Vec::new();
-    for ((page, e), gone) in entries.into_iter().zip(gone) {
+    for (((page, mut e), gone), unlink) in entries.into_iter().zip(gone).zip(unlink) {
+        // An inline entry is changed where it is listed.
+        let inline_unlinked = unlink && e.as_dict_mut().is_some_and(|d| d.remove(b"IRT").is_some());
         if left.last().is_none_or(|(p, ..)| *p != page) {
             left.push((page, Vec::new(), false));
         }
         if let Some((_, kept, changed)) = left.last_mut() {
+            *changed |= inline_unlinked;
             if gone {
                 *changed = true;
             } else {
