@@ -2209,3 +2209,88 @@ fn jbig2_globals_are_decoded_within_a_limit_of_their_own() {
         assert!(why.starts_with("the JBIG2 globals can't be read") && why.contains(&format!("limit of {LIMIT} bytes")), "{why}");
     }
 }
+
+#[test]
+fn image_export_resolves_indirect_subtype_dimensions_bpc_and_filters() {
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    with_image(&mut doc, |doc| {
+        let subtype_leaf = doc.add(Object::name("Image"));
+        let subtype = doc.add(Object::Ref(subtype_leaf));
+        let width = doc.add(Object::Int(4));
+        let height = doc.add(Object::Int(2));
+        let bpc = doc.add(Object::Int(8));
+        let dct_leaf = doc.add(Object::name("DCTDecode"));
+        let dct = doc.add(Object::Ref(dct_leaf));
+        let filter = doc.add(Object::Array(vec![Object::Ref(dct)]));
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("XObject"));
+        d.set(b"Subtype".to_vec(), Object::Ref(subtype));
+        d.set(b"Width".to_vec(), Object::Ref(width));
+        d.set(b"Height".to_vec(), Object::Ref(height));
+        d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        d.set(b"BitsPerComponent".to_vec(), Object::Ref(bpc));
+        d.set(b"Filter".to_vec(), Object::Ref(filter));
+        Stream::from_raw(d, real_jpeg())
+    });
+    let doc = reopen(&doc);
+    let out = extract_images(&doc, &[0], 0);
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    assert_eq!(out.images.len(), 1);
+    assert_eq!((out.images[0].extension, out.images[0].width, out.images[0].height), ("jpg", 4, 2));
+    assert_eq!(out.images[0].data, real_jpeg());
+    let (ext, bytes) = image_file(&doc, out.images[0].object).unwrap();
+    assert_eq!((ext, bytes), ("jpg", real_jpeg()));
+
+    // A Flate lossless image and its /SMask with indirect /Filter references decode cleanly.
+    let mut flate_doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    with_image(&mut flate_doc, |doc| {
+        let flate = doc.add(Object::name("FlateDecode"));
+        let mut md = Dict::new();
+        md.set(b"Type".to_vec(), Object::name("XObject"));
+        md.set(b"Subtype".to_vec(), Object::name("Image"));
+        md.set(b"Width".to_vec(), Object::Int(2));
+        md.set(b"Height".to_vec(), Object::Int(1));
+        md.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        md.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        let mut ms = Stream::flate(md, &[64, 192]);
+        ms.dict.set(b"Filter".to_vec(), Object::Ref(flate));
+        let mask_ref = doc.add(Object::Stream(ms));
+
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("XObject"));
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(2));
+        d.set(b"Height".to_vec(), Object::Int(1));
+        d.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        d.set(b"SMask".to_vec(), Object::Ref(mask_ref));
+        let mut s = Stream::flate(d, &[255, 0, 0, 0, 255, 0]);
+        s.dict.set(b"Filter".to_vec(), Object::Array(vec![Object::Ref(flate)]));
+        s
+    });
+    let flate_doc = reopen(&flate_doc);
+    let flate_out = extract_images(&flate_doc, &[0], 0);
+    assert!(flate_out.skipped.is_empty(), "{:?}", flate_out.skipped);
+    let mut rd = png::Decoder::new(std::io::Cursor::new(&flate_out.images[0].data)).read_info().unwrap();
+    let mut buf = vec![0; rd.output_buffer_size().unwrap()];
+    rd.next_frame(&mut buf).unwrap();
+    assert_eq!(&buf[..8], &[255, 0, 0, 64, 0, 255, 0, 192]);
+
+    // An unresolved reference inside a /Filter array is rejected rather than ignored.
+    let mut bad_filter_doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    with_image(&mut bad_filter_doc, |doc| {
+        let dct = doc.add(Object::name("DCTDecode"));
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("XObject"));
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(4));
+        d.set(b"Height".to_vec(), Object::Int(2));
+        d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        d.set(b"Filter".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(999, 0)), Object::Ref(dct)]));
+        Stream::from_raw(d, real_jpeg())
+    });
+    let bad_filter_out = extract_images(&bad_filter_doc, &[0], 0);
+    assert!(bad_filter_out.images.is_empty());
+    assert_eq!(bad_filter_out.skipped.len(), 1);
+}
