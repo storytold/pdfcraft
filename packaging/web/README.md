@@ -78,6 +78,62 @@ Local test: `python3 -m http.server 8765` inside the folder, then open http://lo
   downloads) are blocked.
 - Don't send `X-Frame-Options: DENY` or a `frame-ancestors` CSP that excludes the embedding page.
 
+## Same-document host mode (no iframe)
+
+A host application can also run PdfCraft from its own document: it loads the wasm-bindgen module
+itself and gives PdfCraft one of its own canvases, so there is no iframe and no `?host=parent`.
+It opts in with `data-host="page"` on that canvas — the exact value `page` — and the canvas
+keeps the id the app looks up (`id="pdfcraft"`).
+
+The page and the app then talk with DOM `CustomEvent`s on the canvas instead of `postMessage`.
+The app dispatches the same messages it would post to a parent — `pdfcraft:ready`,
+`pdfcraft:save`, `pdfcraft:dirty`, `pdfcraft:failed` — with the message fields (without the
+`type`) as the event's `detail`, and it opens a file when the page dispatches a `pdfcraft:open`
+event with `detail: { name, bytes }`. Events do not bubble, so listen on the canvas itself.
+
+Add the listeners before `init`: the app announces itself with `pdfcraft:ready` while `init` is
+still running, and a file sent in reply would otherwise be missed.
+
+```js
+import init from "./pdfcraft-web-<hash>.js"; // the wasm-bindgen glue shipped with the app
+
+const canvas = document.getElementById("pdfcraft");
+canvas.dataset.host = "page";             // or <canvas id="pdfcraft" data-host="page">
+
+canvas.addEventListener("pdfcraft:ready", () => {
+  // The app is listening; hand it a document now, if you have one.
+  canvas.dispatchEvent(new CustomEvent("pdfcraft:open", {
+    detail: { name: "handout.pdf", bytes: pdfBytes },   // ArrayBuffer or Uint8Array
+  }));
+});
+canvas.addEventListener("pdfcraft:save", (event) => {
+  const { name, saveAs, bytes } = event.detail;         // bytes is an ArrayBuffer
+  // Store the file under `name`; `saveAs` is true for Save As. Report your own errors.
+});
+canvas.addEventListener("pdfcraft:dirty", (event) => {
+  unsaved = event.detail.dirty;                         // warn before leaving, as you like
+});
+canvas.addEventListener("pdfcraft:failed", (event) => {
+  showError(event.detail.error);                        // the app couldn't start
+});
+
+await init({ module_or_path: "./pdfcraft-web-<hash>_bg.wasm" });
+```
+
+- Saves are not downloads in this mode: the `bytes` in `pdfcraft:save` hold the saved PDF, and
+  the host decides where the file goes.
+- `?author=<name>` still signs the user's comments, as with `?host=parent`.
+- An unframed page that uses `?host=parent` keeps the normal app with downloads.
+  `data-host="page"` turns this mode on only when `?host=parent` is absent: if `?host=parent` is
+  present it takes precedence, so a same-origin framed page uses the parent bridge, while an
+  unframed or cross-origin page gets no bridge and keeps normal downloads.
+
+### Trust and limits
+
+- **Who is trusted.** In page host mode the page and PdfCraft share one document, so any script on the page can drive the app: open files in it and receive what it saves. Use this mode only for a page you control. The iframe mode (`?host=parent`) answers only the parent window, on the page's own origin.
+- **Files from the host are untrusted input.** An opened file goes through the same reading as one picked with File ▸ Open or dropped on the window, with the same format limits; before it is copied into the app's memory, its size is checked against the host open limit (512 MiB) and a larger file is refused, and a name is cut to 255 characters.
+- **The event and message names are the interface.** `pdfcraft:ready`, `pdfcraft:open`, `pdfcraft:save`, `pdfcraft:dirty` and `pdfcraft:failed`, and the fields they carry (the same as the `?host=parent` messages), stay stable; changing one is a breaking change.
+
 ## Renderer selection and fallback flags
 
 PdfCraft renders with wgpu. It uses **WebGPU** when the browser has it and falls back to
