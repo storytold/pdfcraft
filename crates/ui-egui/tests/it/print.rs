@@ -764,6 +764,7 @@ fn print_without_a_document_does_not_blame_security() {
 }
 
 #[test]
+/// Paper choice and booklet binding survive dialog cancellation and saved-state restoration.
 fn paper_choice_survives_cancel_and_settings_restore() {
     use pdfcraft_engine::print::{Orientation, PAPERS};
     let a4 = PAPERS.iter().position(|(name, _)| *name == "A4").unwrap();
@@ -894,6 +895,7 @@ fn restored_paper_keeps_preview_and_saved_sheet_dimensions() {
 }
 
 #[test]
+/// Restore only canonical Left and Right values; malformed saved values leave the current side unchanged.
 fn booklet_binding_restore_accepts_only_known_sides() {
     use pdfcraft_engine::print::Binding;
 
