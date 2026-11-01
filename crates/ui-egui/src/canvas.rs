@@ -2551,7 +2551,8 @@ fn draw_pages(
     if let Some(p) = pressed_page {
         current = p;
     }
-    if view.continuous {
+    // Either page of a noncontinuous spread can be current without changing the shown row.
+    if view.continuous || (view.layout == PageLayout::TwoUp && pressed_page.is_some()) {
         view.current = current;
     }
     resp.context_menu(|ui| {

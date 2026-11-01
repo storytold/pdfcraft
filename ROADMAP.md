@@ -88,6 +88,7 @@
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M12 #2570: Dynamic XFA rich-text fields carry exData/maxLength into AcroForm MaxLen for reported and enforced Unicode character limits, retained after save/reopen. Estimates unchanged)
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M4 #3309: bounded iterative named-destination pruning on page deletion; estimates unchanged)
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M1 #2658: macOS atomic saves retain destination extended attributes, including Finder tags, and reject partial resource-fork reads after size changes. Metadata failures retain the original PDF and unsaved edit. Estimates unchanged)
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (Pressing either page in a noncontinuous two-page spread updates the current page and size label without moving the spread. A control regression covers both cover modes and spread navigation, fails without the fix, and passes with it; 2050 UI tests pass, 5 existing ignored, with strict Clippy and repository/wasm gates)
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M3 #4908: rebase PR #4910 onto main b36bdaea; 2049 scoped tests pass (5 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged)
 
 PdfCraft's one-page summary: how close it is to Adobe Acrobat Pro's offline feature set, and what
@@ -238,7 +239,10 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 - **2026-10-27 (M3, #4908):** Preferences gains "Always show the page size": the current page's size stays up at the bottom-left of the page view instead of only while the pointer is in that corner (same label and unit; off by default; saved with the settings; `set_option`/`--always-show-page-size`).
 
+- **2026-11-01 (M3, #4908 review):** Pressing either page in a noncontinuous two-page spread updates the current page and size label without moving the spread. A control regression covers both cover modes and spread navigation, fails without the fix, and passes with it; 2050 UI tests pass, 5 existing ignored, with strict Clippy and repository/wasm gates.
+
 - **2026-11-01 (M3, #4908 rebase):** PR #4910 rebased onto main `b36bdaea`; resolved and auto-merged hunks reviewed. 2049 scoped tests passed, 5 existing ignored; formatting, strict Clippy, layers/assets/parity and wasm checks passed. Behavior and estimates unchanged.
+
 
 
 - **2026-10-27 (M2, PR #4172 module-split conflicts):** Integrated main 1dd2737b, retaining viewer-only CJK fallback in split session modules and Combine thumbnail workers, and moving renderer regressions to the new test module. Validation: 798 scoped tests passed (371 engine, 412 renderer, 15 Combine; two existing engine tests ignored); scoped all-target Clippy with -D warnings, formatting, layers, assets, parity and renderer/engine WASM checks passed. Estimates unchanged.
@@ -748,6 +752,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | patch | Pressing either page in a noncontinuous two-page spread updates the current page and size label without moving the spread. A control regression covers both cover modes and spread navigation, fails without the fix, and passes with it; 2050 UI tests pass, 5 existing ignored, with strict Clippy and repository/wasm gates. |
 | 2026-11-01 | patch | M3 #4908: rebase PR #4910 onto main b36bdaea; 2049 scoped tests pass (5 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged. |
 | 2026-10-28 | patch | M2, PR #4172: integrate main 5af10276 and retain both roadmap histories; viewer-only CJK and print/output font policies and estimates unchanged. |
 | 2026-10-27 | minor | M10: OCR stages SHA-256-verified ONNX models after the upstream RTEN URL brownout; discovery prefers a complete ONNX pair per directory, falls back to a complete RTEN pair, and never mixes formats or directories; language/web limits and estimates unchanged. |

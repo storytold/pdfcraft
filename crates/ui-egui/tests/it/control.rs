@@ -2071,6 +2071,43 @@ fn page_size_follows_the_current_page() {
     assert_eq!((label(&h, "200.0 × 300.0 pt"), size_labels(&h)), (1, 1), "page 3: back to 200 × 300");
 }
 
+/// Pressing either page of a noncontinuous spread updates its size without moving that spread.
+#[test]
+fn page_size_tracks_the_pressed_page_without_moving_its_two_page_spread() {
+    for cover in [false, true] {
+        let bytes = fixture_boxes(&[None, Some((400, 250)), None, Some((400, 250)), None]);
+        let (mut h, c) = harness_bytes_at(bytes, 1400.0, 1.0);
+        h.state_mut().units = pdfcraft_ui_egui::units::Unit::Points;
+        for (key, value) in [("layout", "two-page"), ("zoom", "100"), ("always-show-page-size", "on")] {
+            h.state_mut().set_option(key, value).unwrap();
+        }
+        h.state_mut().views[0].cover = cover;
+        let first = usize::from(cover);
+        h.state_mut().views[0].go_to_page(first);
+        h.run_steps(4);
+        assert!(!h.state().views[0].continuous);
+        let rects = [first, first + 1].map(|p| h.state().views[0].page_screen_rect(p).expect("both pages are shown"));
+        for side in [1, 0, 1] {
+            let page = first + side;
+            let point = rects[side].max - egui::vec2(15.0, 15.0);
+            ok(&mut h, &c, "ui.click", json!({ "x": point.x, "y": point.y }));
+            h.run_steps(3);
+            assert_eq!(h.state().views[0].current, page, "cover={cover}: the pressed page is current");
+            assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["page"], page + 1);
+            let size = if page % 2 == 0 { "200.0 × 300.0 pt" } else { "400.0 × 250.0 pt" };
+            assert_eq!((h.query_all_by_label_contains(size).count(), size_labels(&h)), (1, 1), "cover={cover}: the pressed page's size");
+            assert_eq!([first, first + 1].map(|p| h.state().views[0].page_screen_rect(p).unwrap()), rects, "pressing keeps the spread in place");
+        }
+        // Navigation still advances and returns by a complete spread after selecting its second page.
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::ArrowRight);
+        h.run_steps(4);
+        assert_eq!(h.state().views[0].current, first + 2, "next spread");
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::ArrowLeft);
+        h.run_steps(4);
+        assert_eq!(h.state().views[0].current, first, "previous spread");
+    }
+}
+
 /// The label stays under a dialog: ticking the preference in an open dialog does not bring it up.
 #[test]
 fn page_size_stays_hidden_under_a_dialog_even_when_always_show_is_on() {
