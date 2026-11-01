@@ -12,6 +12,34 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
 use crate::RedactError;
 
+fn resolve(doc: &Document, obj: &Object) -> Object {
+    let mut cur = obj.clone();
+    for _ in 0..16 {
+        let Object::Ref(r) = cur else { break };
+        cur = (*doc.get(r)).clone();
+    }
+    cur
+}
+
+fn target_ref(doc: &Document, obj: &Object) -> Option<ObjRef> {
+    let mut cur = obj.as_ref()?;
+    for _ in 0..16 {
+        match &*doc.get(cur) {
+            Object::Ref(next) => cur = *next,
+            _ => return Some(cur),
+        }
+    }
+    None
+}
+
+fn dict_name(doc: &Document, d: &Dict, key: &[u8]) -> Option<Vec<u8>> {
+    d.get(key).and_then(|v| resolve(doc, v).as_name().map(<[u8]>::to_vec))
+}
+
+fn dict_int(doc: &Document, d: &Dict, key: &[u8]) -> Option<i64> {
+    d.get(key).and_then(|v| resolve(doc, v).as_int())
+}
+
 /// The marked content of one content stream. Every operator inside some MCID is serialized once
 /// into `ops`, and each MCID holds the ranges of `ops` its sequences span (marked-content
 /// operators are not written, so a sequence is one range however deeply it nests), with whether
@@ -54,11 +82,11 @@ fn by_mcid(doc: &Document, resources: &Dict, data: &[u8]) -> Marked {
             b"BDC" => {
                 let id = match op.operands.get(1) {
                     Some(Object::Name(n)) => resources.get(b"Properties").and_then(|p| {
-                        let props = doc.resolve(p);
-                        let prop = doc.resolve(props.as_dict()?.get(n)?);
-                        prop.as_dict()?.int(b"MCID")
+                        let props = resolve(doc, p);
+                        let prop = resolve(doc, props.as_dict()?.get(n)?);
+                        dict_int(doc, prop.as_dict()?, b"MCID")
                     }),
-                    Some(p) => doc.resolve(p).as_dict().and_then(|d| d.int(b"MCID")),
+                    Some(p) => resolve(doc, p).as_dict().and_then(|d| dict_int(doc, d, b"MCID")),
                     _ => None,
                 };
                 if let Some(id) = id {
@@ -134,12 +162,15 @@ pub(crate) fn touched(doc: &Document, resources: &Dict, before: &[u8], after: &[
 }
 
 fn mcid_of(doc: &Document, o: &Object, page: Option<ObjRef>, target: ObjRef, stream: Option<(ObjRef, ObjRef)>) -> Option<i64> {
-    match &*doc.resolve(o) {
-        Object::Int(n) if page == Some(target) && stream.is_none() => Some(*n),
-        Object::Dict(m) if m.name(b"Type") == Some(b"MCR") => {
-            let pg = m.get(b"Pg").and_then(Object::as_ref).or(page);
-            let stm = m.get(b"Stm").and_then(Object::as_ref);
-            (pg == Some(target) && stm == stream.map(|s| s.0)).then(|| m.int(b"MCID")).flatten()
+    match resolve(doc, o) {
+        Object::Int(n) if page == Some(target) && stream.is_none() => Some(n),
+        Object::Dict(m)
+            if dict_name(doc, &m, b"Type").as_deref() == Some(b"MCR")
+                || (dict_name(doc, &m, b"Type").is_none() && !m.contains(b"S") && m.contains(b"MCID")) =>
+        {
+            let pg = m.get(b"Pg").and_then(|p| target_ref(doc, p)).or(page);
+            let stm = m.get(b"Stm").and_then(|s| target_ref(doc, s));
+            (pg == Some(target) && stm == stream.map(|s| s.0)).then(|| dict_int(doc, &m, b"MCID")).flatten()
         }
         _ => None,
     }
@@ -174,8 +205,8 @@ pub(crate) fn clean_within(
     }
     let Some(root) = doc
         .root()
-        .and_then(|r| doc.get(r).as_dict().cloned())
-        .and_then(|c| c.get(b"StructTreeRoot").map(|s| doc.resolve(s)).and_then(|s| s.as_dict().cloned()))
+        .and_then(|r| resolve(doc, &Object::Ref(r)).as_dict().cloned())
+        .and_then(|c| c.get(b"StructTreeRoot").and_then(|s| resolve(doc, s).as_dict().cloned()))
     else {
         return Ok(0);
     };
@@ -201,7 +232,7 @@ pub(crate) fn clean_within(
             // An element written in place: its kids are followed, but if it owns marked content
             // this cleanup changes, only rewriting what holds it could change it.
             Object::Dict(d) => {
-                let pg = match d.get(b"Pg").and_then(Object::as_ref).or(pg) {
+                let pg = match d.get(b"Pg").and_then(|p| target_ref(doc, p)).or(pg) {
                     Some(p) => Some(p),
                     None => inherited_page(doc, &d, &mut pages)?,
                 };
@@ -221,6 +252,10 @@ pub(crate) fn clean_within(
                     return Err(RedactError::Tags);
                 }
                 let object = doc.get(r);
+                if let Object::Ref(next) = &*object {
+                    todo.push((Object::Ref(*next), pg, above));
+                    continue;
+                }
                 if let Object::Array(a) = &*object {
                     todo.extend(a.iter().cloned().map(|x| (x, pg, above)));
                     continue;
@@ -231,7 +266,7 @@ pub(crate) fn clean_within(
                     todo.extend(tree_node_entries(&d).into_iter().map(|x| (x, pg, above)));
                     continue;
                 }
-                let pg = match d.get(b"Pg").and_then(Object::as_ref).or(pg) {
+                let pg = match d.get(b"Pg").and_then(|p| target_ref(doc, p)).or(pg) {
                     Some(p) => Some(p),
                     None => inherited_page(doc, &d, &mut pages)?,
                 };
@@ -249,10 +284,10 @@ pub(crate) fn clean_within(
     let sensitive: Vec<ObjRef> = hits.iter().filter(|h| h.3).map(|h| h.0).collect();
     let mut n = 0;
     for (r, d, pg, sensitive) in hits {
-        let kids = d.get(b"K").map(|k| doc.resolve(k));
-        let array = kids.as_ref().is_some_and(|k| matches!(&**k, Object::Array(_)));
-        let list = match kids.as_deref() {
-            Some(Object::Array(a)) => a.clone(),
+        let kids = d.get(b"K").map(|k| resolve(doc, k));
+        let array = matches!(kids.as_ref(), Some(Object::Array(_)));
+        let list = match kids {
+            Some(Object::Array(a)) => a,
             Some(_) => d.get(b"K").cloned().into_iter().collect(),
             None => Vec::new(),
         };
@@ -263,16 +298,17 @@ pub(crate) fn clean_within(
                 continue;
             }
             if let Some((original, replacement)) = stream.filter(|_| mcid.is_some()) {
-                if let Some(reference) = kid.as_ref() {
+                if let Some(reference) = target_ref(doc, &kid) {
+                    let update_own = doc.get(reference).as_dict().and_then(|m| m.get(b"StmOwn")).and_then(|o| target_ref(doc, o)) == Some(original);
                     doc.update_dict(reference, |m| {
                         m.set(b"Stm".to_vec(), Object::Ref(replacement));
-                        if m.get(b"StmOwn").and_then(Object::as_ref) == Some(original) {
+                        if update_own {
                             m.set(b"StmOwn".to_vec(), Object::Ref(replacement));
                         }
                     })?;
                 } else if let Object::Dict(m) = &mut kid {
                     m.set(b"Stm".to_vec(), Object::Ref(replacement));
-                    if m.get(b"StmOwn").and_then(Object::as_ref) == Some(original) {
+                    if m.get(b"StmOwn").and_then(|o| target_ref(doc, o)) == Some(original) {
                         m.set(b"StmOwn".to_vec(), Object::Ref(replacement));
                     }
                 }
@@ -347,7 +383,12 @@ fn clear_ancestors(doc: &mut Document, elements: &[ObjRef], parents: &Parents, l
     let mut seen: HashSet<ObjRef> = elements.iter().copied().collect();
     let mut cleared = 0;
     while let Some(r) = todo.pop() {
-        let mut up: Vec<ObjRef> = doc.get(r).as_dict().and_then(|d| d.get(b"P")).and_then(Object::as_ref).into_iter().collect();
+        let mut up: Vec<ObjRef> = Vec::new();
+        if let Some(p) = doc.get(r).as_dict().and_then(|d| d.get(b"P")).cloned()
+            && p.as_ref().is_some()
+        {
+            up.push(target_ref(doc, &p).ok_or(RedactError::Tags)?);
+        }
         for above in parents.0.get(&r).into_iter().flatten() {
             if above.described_in_place {
                 return Err(RedactError::Tags);
@@ -394,8 +435,12 @@ fn inherited_page(doc: &Document, d: &Dict, pages: &mut HashMap<ObjRef, Option<O
         }
         chain.push(r);
         let object = doc.get(r);
+        if let Object::Ref(next) = &*object {
+            parent = Some(*next);
+            continue;
+        }
         let Some(p) = object.as_dict() else { break None };
-        if let Some(pg) = p.get(b"Pg").and_then(Object::as_ref) {
+        if let Some(pg) = p.get(b"Pg").and_then(|pg| target_ref(doc, pg)) {
             break Some(pg);
         }
         parent = p.get(b"P").and_then(Object::as_ref);
@@ -408,11 +453,9 @@ fn inherited_page(doc: &Document, d: &Dict, pages: &mut HashMap<ObjRef, Option<O
 
 /// An element's kids: its `/K` array, or the one kid it has.
 fn kids_of(doc: &Document, d: &Dict) -> Vec<Object> {
-    match d.get(b"K").map(|k| doc.resolve(k)) {
-        Some(o) => match &*o {
-            Object::Array(a) => a.clone(),
-            _ => d.get(b"K").cloned().into_iter().collect(),
-        },
+    match d.get(b"K").map(|k| resolve(doc, k)) {
+        Some(Object::Array(a)) => a,
+        Some(_) => d.get(b"K").cloned().into_iter().collect(),
         None => Vec::new(),
     }
 }
@@ -422,9 +465,14 @@ const MAX_PARENTS: usize = 256;
 
 /// Whether `o` is an object reference (`/Type /OBJR`, direct or indirect) to one of `gone`.
 fn refers_to(doc: &Document, o: &Object, gone: &HashSet<ObjRef>) -> bool {
-    doc.resolve(o)
-        .as_dict()
-        .is_some_and(|d| d.name(b"Type") == Some(b"OBJR") && d.get(b"Obj").and_then(Object::as_ref).is_some_and(|r| gone.contains(&r)))
+    resolve(doc, o).as_dict().is_some_and(|d| {
+        let is_objr = match dict_name(doc, d, b"Type").as_deref() {
+            Some(b"OBJR") => true,
+            Some(_) => false,
+            None => !d.contains(b"S") && d.contains(b"Obj"),
+        };
+        is_objr && d.get(b"Obj").and_then(|obj| target_ref(doc, obj)).is_some_and(|r| gone.contains(&r))
+    })
 }
 
 /// What a number or name tree node leads on to: its `/Nums` or `/Names` array (keys and values
@@ -460,8 +508,8 @@ pub(crate) fn drop_object_refs_within(doc: &mut Document, gone: &HashSet<ObjRef>
     }
     let Some(root) = doc
         .root()
-        .and_then(|r| doc.get(r).as_dict().cloned())
-        .and_then(|c| c.get(b"StructTreeRoot").map(|s| doc.resolve(s)).and_then(|s| s.as_dict().cloned()))
+        .and_then(|r| resolve(doc, &Object::Ref(r)).as_dict().cloned())
+        .and_then(|c| c.get(b"StructTreeRoot").and_then(|s| resolve(doc, s).as_dict().cloned()))
     else {
         return Ok(0);
     };
@@ -496,6 +544,10 @@ pub(crate) fn drop_object_refs_within(doc: &mut Document, gone: &HashSet<ObjRef>
                     return Err(RedactError::Tags);
                 }
                 let object = doc.get(r);
+                if let Object::Ref(next) = &*object {
+                    todo.push((Object::Ref(*next), above));
+                    continue;
+                }
                 if let Object::Array(a) = &*object {
                     todo.extend(a.iter().cloned().map(|x| (x, above)));
                     continue;
@@ -518,10 +570,10 @@ pub(crate) fn drop_object_refs_within(doc: &mut Document, gone: &HashSet<ObjRef>
     let mut n = 0;
     for &r in &hits {
         let Some(d) = doc.get(r).as_dict().cloned() else { continue };
-        let kids = d.get(b"K").map(|k| doc.resolve(k));
-        let array = kids.as_ref().is_some_and(|k| matches!(&**k, Object::Array(_)));
-        let list: Vec<Object> = match kids.as_deref() {
-            Some(Object::Array(a)) => a.clone(),
+        let kids = d.get(b"K").map(|k| resolve(doc, k));
+        let array = matches!(kids.as_ref(), Some(Object::Array(_)));
+        let list: Vec<Object> = match kids {
+            Some(Object::Array(a)) => a,
             Some(_) => d.get(b"K").cloned().into_iter().collect(),
             None => Vec::new(),
         };
@@ -553,4 +605,119 @@ pub(crate) fn drop_object_refs_within(doc: &mut Document, gone: &HashSet<ObjRef>
 pub(crate) fn retained_for_comparison(doc: &Document, resources: &Dict, data: &[u8]) -> usize {
     let marked = by_mcid(doc, resources, data);
     marked.ops.len() + marked.ids.values().map(|(ranges, _)| ranges.len() * std::mem::size_of::<Range<usize>>()).sum::<usize>()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_doc() -> Document {
+        Document::new_empty()
+    }
+
+    #[test]
+    fn by_mcid_and_touched_resolve_indirect_mcid_and_chained_properties() {
+        let mut doc = test_doc();
+        let mcid_ref = doc.add(Object::Int(7));
+        let mut prop = Dict::new();
+        prop.set(b"MCID".to_vec(), Object::Ref(mcid_ref));
+        let prop_ref = doc.add(Object::Dict(prop));
+        let prop_hop = doc.add(Object::Ref(prop_ref));
+
+        let mut props = Dict::new();
+        props.set(b"MC0".to_vec(), Object::Ref(prop_hop));
+        let props_ref = doc.add(Object::Dict(props));
+        let props_hop = doc.add(Object::Ref(props_ref));
+
+        let mut res = Dict::new();
+        res.set(b"Properties".to_vec(), Object::Ref(props_hop));
+
+        let (changed, empty) = touched(&doc, &res, b"/Span /MC0 BDC (secret) Tj EMC", b"/Span /MC0 BDC EMC");
+        assert!(changed.contains(&7));
+        assert!(empty.contains(&7));
+    }
+
+    #[test]
+    fn clean_and_drop_object_refs_resolve_indirect_mcr_and_objr_fields() {
+        let mut doc = test_doc();
+        let page_ref = doc.add(Object::Dict(Dict::new()));
+        let page_hop = doc.add(Object::Ref(page_ref));
+
+        let mcr_type_ref = doc.add(Object::Name(b"MCR".to_vec()));
+        let mcid_ref = doc.add(Object::Int(3));
+        let mut mcr = Dict::new();
+        mcr.set(b"Type".to_vec(), Object::Ref(mcr_type_ref));
+        mcr.set(b"Pg".to_vec(), Object::Ref(page_hop));
+        mcr.set(b"MCID".to_vec(), Object::Ref(mcid_ref));
+        let mcr_ref = doc.add(Object::Dict(mcr));
+        let mcr_hop = doc.add(Object::Ref(mcr_ref));
+
+        let annot_ref = doc.add(Object::Dict(Dict::new()));
+        let annot_hop = doc.add(Object::Ref(annot_ref));
+        let objr_type_ref = doc.add(Object::Name(b"OBJR".to_vec()));
+        let mut objr = Dict::new();
+        objr.set(b"Type".to_vec(), Object::Ref(objr_type_ref));
+        objr.set(b"Obj".to_vec(), Object::Ref(annot_hop));
+        let objr_ref = doc.add(Object::Dict(objr));
+        let objr_hop = doc.add(Object::Ref(objr_ref));
+
+        let mut elem = Dict::new();
+        elem.set(b"S".to_vec(), Object::Name(b"P".to_vec()));
+        elem.set(b"ActualText".to_vec(), Object::String(pdfcraft_cos::PdfString::text("secret")));
+        elem.set(b"K".to_vec(), Object::Array(vec![Object::Ref(mcr_hop), Object::Ref(objr_hop)]));
+        let elem_ref = doc.add(Object::Dict(elem));
+
+        let mut st_root = Dict::new();
+        st_root.set(b"Type".to_vec(), Object::Name(b"StructTreeRoot".to_vec()));
+        st_root.set(b"K".to_vec(), Object::Ref(elem_ref));
+        let st_root_ref = doc.add(Object::Dict(st_root));
+        let root_ref = doc.root().expect("catalog root");
+        doc.update_dict(root_ref, |d| {
+            d.set(b"StructTreeRoot".to_vec(), Object::Ref(st_root_ref));
+        })
+        .expect("set StructTreeRoot");
+
+        let changed = HashSet::from([3]);
+        let empty = HashSet::from([3]);
+        let cleaned = clean(&mut doc, page_ref, None, &changed, &empty).expect("clean MCR");
+        assert_eq!(cleaned, 1);
+        let after_clean = doc.get(elem_ref);
+        let after_clean_dict = after_clean.as_dict().expect("elem dict");
+        assert!(!after_clean_dict.contains(b"ActualText"));
+        assert_eq!(after_clean_dict.get(b"K").and_then(Object::as_array).map(Vec::len), Some(1));
+
+        let dropped = drop_object_refs(&mut doc, &HashSet::from([annot_ref])).expect("drop OBJR");
+        assert_eq!(dropped, 1);
+        let after_drop = doc.get(elem_ref);
+        let after_drop_dict = after_drop.as_dict().expect("elem dict");
+        assert_eq!(after_drop_dict.get(b"K").and_then(Object::as_array).map(Vec::len), Some(0));
+    }
+
+    #[test]
+    fn clean_fails_closed_on_cyclic_parent_ref_chain() {
+        let mut doc = test_doc();
+        let page_ref = doc.add(Object::Dict(Dict::new()));
+        let cycle_a = doc.add(Object::Null);
+        let cycle_b = doc.add(Object::Ref(cycle_a));
+        doc.set(cycle_a, Object::Ref(cycle_b));
+
+        let mut elem = Dict::new();
+        elem.set(b"S".to_vec(), Object::Name(b"Span".to_vec()));
+        elem.set(b"P".to_vec(), Object::Ref(cycle_a));
+        elem.set(b"K".to_vec(), Object::Int(0));
+        let elem_ref = doc.add(Object::Dict(elem));
+
+        let mut st_root = Dict::new();
+        st_root.set(b"K".to_vec(), Object::Ref(elem_ref));
+        let st_root_ref = doc.add(Object::Dict(st_root));
+        let root_ref = doc.root().expect("catalog root");
+        doc.update_dict(root_ref, |d| {
+            d.set(b"StructTreeRoot".to_vec(), Object::Ref(st_root_ref));
+        })
+        .expect("set StructTreeRoot");
+
+        let changed = HashSet::from([0]);
+        let empty = HashSet::new();
+        assert!(matches!(clean(&mut doc, page_ref, None, &changed, &empty), Err(RedactError::Tags)));
+    }
 }
