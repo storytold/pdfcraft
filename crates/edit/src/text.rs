@@ -40,7 +40,7 @@ use blocks::paragraph_separator;
 use blocks::wrap;
 pub use blocks::{
     BlockKey, BlockStyle, RangeStyle, ReadingBlocks, TextBlock, block_overlapping, clear_block, reading_blocks, reading_blocks_checked,
-    replace_block, text_blocks,
+    reading_blocks_with_heading_levels, replace_block, text_blocks,
 };
 use editor::layout_draft;
 pub use editor::{TextEditLayout, TextEditorFont, register_text_font, text_edit_layout, text_editor_fonts};
@@ -61,6 +61,28 @@ use rewrite::{coincident_ops, rewrite_block_from};
 #[cfg(test)]
 pub(crate) use rewrite::{replace_line_with_limit, rewrite_block_with_limit};
 pub(crate) use rewrite::{reveal_ops, selectable_blocks, translate_blocks};
+
+// Distinguish operator-index boundaries from structure paragraph identities.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ContentScope {
+    Content { stream: usize, op: usize },
+    Structure(usize),
+}
+
+#[derive(Clone, Copy, Default)]
+struct MarkedScope {
+    scope: Option<ContentScope>,
+    heading_level: Option<u8>,
+}
+
+// Resolve a marked-content ID within a page or form without depending on a11y.
+type HeadingResolver<'a> = dyn Fn(Option<pdfcraft_cos::ObjRef>, i64) -> Option<(usize, u8)> + 'a;
+
+#[derive(Clone, Copy)]
+struct TextProperties<'a> {
+    lists: &'a Dict,
+    heading_levels: Option<&'a dyn Fn(i64) -> Option<(usize, u8)>>,
+}
 
 /// One line of existing text.
 #[derive(Clone, Debug, PartialEq)]
@@ -99,7 +121,8 @@ pub struct TextLine {
     /// Where the line starts: text matrix (text space), the state there, and its `BT`.
     origin: Origin,
     /// Explicit marked-content scope (when present); distinct scopes must not be guessed into one paragraph.
-    scope: Option<usize>,
+    scope: Option<ContentScope>,
+    heading_level: Option<u8>,
     /// The layers and graphics state parameters it is drawn in; see [`Paint`].
     paint: Paint,
     /// Right-to-left `/ActualText` already supplies typing order; glyph text still needs bidi
@@ -150,6 +173,7 @@ impl TextLine {
 mod tests {
     use super::*;
 
+    /// Build a synthetic text block for reading-order and layout regressions.
     fn block(text: &str, rect: [f64; 4]) -> TextBlock {
         TextBlock {
             text: text.into(),
@@ -160,6 +184,7 @@ mod tests {
             italic: false,
             color: [0.0; 3],
             rotation: 0.0,
+            heading_level: None,
             lines: Vec::new(),
             rows: Vec::new(),
             editor_text: text.into(),

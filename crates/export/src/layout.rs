@@ -14,6 +14,8 @@ pub struct Block {
     pub color: [f64; 3],
     /// Counterclockwise baseline angle in user space (degrees).
     pub rotation: f64,
+    /// Explicit structure level: Some(0) is body, Some(1..=6) is a heading; None infers from size.
+    pub heading_level: Option<u8>,
     /// Whether the source had a word space just before (`[0]`) and just after (`[1]`) `text`,
     /// which `text` leaves out. A block that continues this one on its line is a run of the same
     /// paragraph, and these say whether a space separates them (#4158).
@@ -109,8 +111,11 @@ pub(crate) fn body_size(pages: &[Page]) -> f64 {
     by.into_iter().max_by_key(|e| e.1).map_or(11.0, |e| e.0 as f64 / 2.0)
 }
 
-/// Heading level for a block: 1 for ≥ 1.6× the body size, 2 for ≥ 1.25×, 0 for body text.
+/// Explicit structure level, or size-based inference (1/2/0) for untagged content.
 fn level(b: &Block, body: f64) -> u8 {
+    if let Some(level) = b.heading_level.filter(|level| *level <= 6) {
+        return level;
+    }
     let short = b.text.len() < 200;
     if short && b.size >= body * 1.6 {
         1

@@ -1,3 +1,4 @@
+use super::HeadingResolver;
 use super::interp::{Carry, interpret};
 use super::lines::{content_streams, page_dict, reading_lines, rewritten_contents, splice, text_lines};
 use super::rewrite::{LineEdit, coincident_ops, rewrite_block};
@@ -19,6 +20,8 @@ pub struct TextBlock {
     pub color: [f64; 3],
     /// Counterclockwise baseline angle in page user space, in degrees.
     pub rotation: f64,
+    /// Explicit structure level for export: 0 for P, 1–6 for H1–H6, None for size inference.
+    pub heading_level: Option<u8>,
     /// Indexes into [`text_lines`].
     pub lines: Vec<usize>,
     /// Visual rows; each contains indexes into [`text_lines`], including mixed-style runs.
@@ -326,7 +329,21 @@ pub struct ReadingBlocks {
 /// whose `/Contents` alone runs past its decode budget is an [`EditError::Invalid`], not a
 /// truncated result.
 pub fn reading_blocks_checked(doc: &Document, page: usize) -> Result<ReadingBlocks, EditError> {
-    let (lines, truncated) = reading_lines(doc, page)?;
+    reading_blocks_with_levels(doc, page, None)
+}
+
+/// Read export paragraphs with explicit structure levels supplied by their (form stream, MCID).
+/// Return (stable paragraph identity, level): zero means P, 1–6 means H1–H6.
+/// Marks of the same paragraph must share an identity; distinct paragraphs must not.
+/// None retains size-based inference. Levels above six are ignored.
+/// The callback keeps this L4 reader independent of the L4 accessibility tree reader.
+pub fn reading_blocks_with_heading_levels(doc: &Document, page: usize, levels: &HeadingResolver<'_>) -> Result<ReadingBlocks, EditError> {
+    reading_blocks_with_levels(doc, page, Some(levels))
+}
+
+/// Extract and group reading lines with optional structure-derived paragraph scopes and levels.
+fn reading_blocks_with_levels(doc: &Document, page: usize, levels: Option<&HeadingResolver<'_>>) -> Result<ReadingBlocks, EditError> {
+    let (lines, truncated) = reading_lines(doc, page, levels)?;
     Ok(ReadingBlocks { blocks: regions::group_reading_blocks(&lines), truncated })
 }
 

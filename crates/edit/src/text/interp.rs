@@ -1,6 +1,6 @@
 use super::fallback::is_type3_fallback;
 use super::rewrite::vertical_advance;
-use super::{Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, Rc};
+use super::{ContentScope, Dict, Document, EditError, HashMap, MarkedScope, Matrix, Metrics, Object, Op, Rc, TextProperties};
 
 /// Text and graphics state captured for rewriting.
 #[derive(Clone, Debug, PartialEq)]
@@ -297,7 +297,8 @@ pub(super) struct Shown {
     pub(super) italic: bool,
     pub(super) visual_order: bool,
     pub(super) decodable: bool,
-    pub(super) scope: Option<usize>,
+    pub(super) scope: Option<ContentScope>,
+    pub(super) heading_level: Option<u8>,
     pub(super) paint: Paint,
     pub(super) logical_order: bool,
     pub(super) actual_text: bool,
@@ -437,7 +438,10 @@ pub(super) struct Carry {
     /// save and restore them too (ISO 32000-2 §9.4.1, as corrected by the PDF Association's
     /// errata, issue 368), as the renderer does.
     pub(super) stack: Vec<(Ts, Matrix, Matrix)>,
-    pub(super) marked: Vec<Option<usize>>,
+    pub(super) marked: Vec<MarkedScope>,
+    // Local EMC operators cannot close the caller form's marked span.
+    pub(super) parent: MarkedScope,
+    pub(super) scope_stream: usize,
     /// For each open marked-content sequence, its optional content group when it is `/OC`.
     pub(super) layers: Vec<Option<Vec<u8>>>,
     /// Bytes of glyph text the rest of the page may still produce (see [`MAX_PAGE_TEXT`]).
@@ -472,7 +476,15 @@ impl Carry {
             dash: (Vec::new(), 0.0),
             line_cap: 0,
         };
-        Carry { ts, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: MAX_PAGE_TEXT }
+        Carry {
+            ts,
+            stack: Vec::new(),
+            marked: Vec::new(),
+            parent: MarkedScope::default(),
+            scope_stream: 0,
+            layers: Vec::new(),
+            text_left: MAX_PAGE_TEXT,
+        }
     }
 }
 
@@ -481,29 +493,49 @@ impl Carry {
 type CachedFont = (Rc<Metrics>, Option<String>, Result<Option<f64>, String>);
 
 /// A `Do` met while interpreting: its operator index, XObject name and the state there.
-type Invocation = (usize, Vec<u8>, Ts);
+type Invocation = (usize, Vec<u8>, Ts, MarkedScope);
 
 #[derive(Default)]
 struct MarkedContent {
-    regions: Vec<Option<usize>>,
+    regions: Vec<MarkedScope>,
+    parent: MarkedScope,
+    scope_stream: usize,
     layers: Vec<Option<Vec<u8>>>,
     actual_text: Vec<Option<(usize, usize, String)>>,
 }
 
 impl MarkedContent {
-    fn begin(&mut self, doc: &Document, op: &Op, index: usize, logical_text: Option<&Dict>, shown_count: usize) {
+    fn current(&self) -> MarkedScope {
+        self.regions.last().copied().unwrap_or(self.parent)
+    }
+
+    fn begin(&mut self, doc: &Document, op: &Op, index: usize, logical_text: Option<TextProperties<'_>>, shown_count: usize) {
         // Marked text paragraphs/headings are authoritative boundaries. Ignore artifacts and
         // inner spans, which inherit their enclosing region.
         let region = matches!(op.name(0), Some(b"P" | b"H" | b"H1" | b"H2" | b"H3" | b"H4" | b"H5" | b"H6" | b"LI" | b"TD" | b"TH"));
-        self.regions.push(if region { Some(index) } else { self.regions.last().copied().flatten() });
         // A layer named in the resources is told apart by its name, an inline one by where it opens.
         let layer = op.is("BDC") && op.name(0) == Some(b"OC".as_slice());
         self.layers
             .push(layer.then(|| op.operands.get(1).and_then(Object::as_name).map_or_else(|| format!("@{index}").into_bytes(), <[u8]>::to_vec)));
         // The property list is inline or named in the resources' /Properties (§14.6.2).
         let list = logical_text.and_then(|properties| match op.operands.get(1) {
-            Some(Object::Name(name)) => properties.get(name).and_then(|object| doc.dict(object)),
+            Some(Object::Name(name)) => properties.lists.get(name).and_then(|object| doc.dict(object)),
             other => other.and_then(Object::as_dict).cloned(),
+        });
+        let heading_level = list
+            .as_ref()
+            .and_then(|d| d.get(b"MCID"))
+            .and_then(Object::as_int)
+            .and_then(|mcid| logical_text.and_then(|p| p.heading_levels).and_then(|f| f(mcid)))
+            .filter(|(_, level)| *level <= 6);
+        let parent = self.current();
+        self.regions.push(MarkedScope {
+            scope: heading_level.map(|(owner, _)| ContentScope::Structure(owner)).or(if region {
+                Some(ContentScope::Content { stream: self.scope_stream, op: index })
+            } else {
+                parent.scope
+            }),
+            heading_level: heading_level.map(|(_, level)| level).or(parent.heading_level),
         });
         let logical = list.as_ref().and_then(|dict| dict.get(b"ActualText")).and_then(|value| match value {
             Object::String(value) if value.bytes.len() <= 4_000_000 => Some(value.to_text()),
@@ -752,7 +784,8 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         italic: m.italic,
         visual_order: m.visual_order,
         decodable,
-        scope: marked.regions.last().copied().flatten(),
+        scope: marked.current().scope,
+        heading_level: marked.current().heading_level,
         paint: Paint { layers: marked.layers.iter().flatten().cloned().collect(), gs: ts.gs.clone() },
         logical_order: false,
         actual_text: false,
@@ -771,7 +804,7 @@ pub(super) fn interpret(
     carry: &mut Carry,
     mut invoked: Option<&mut Vec<Invocation>>,
     // `Some(properties)`: read `/ActualText`, looking named property lists up in `properties`.
-    logical_text: Option<&Dict>,
+    logical_text: Option<TextProperties<'_>>,
 ) -> Result<Vec<Shown>, EditError> {
     let fonts_res = resources.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
     let states = resources.get(b"ExtGState").map(|g| doc.resolve(g)).and_then(|g| g.as_dict().cloned()).unwrap_or_default();
@@ -781,8 +814,13 @@ pub(super) fn interpret(
     let mut stack: Vec<(Ts, Matrix, Matrix)> = std::mem::take(&mut carry.stack);
     let (mut tm, mut tlm) = (Matrix::IDENTITY, Matrix::IDENTITY);
     let mut bt = 0usize;
-    let mut marked =
-        MarkedContent { regions: std::mem::take(&mut carry.marked), layers: std::mem::take(&mut carry.layers), ..MarkedContent::default() };
+    let mut marked = MarkedContent {
+        regions: std::mem::take(&mut carry.marked),
+        layers: std::mem::take(&mut carry.layers),
+        parent: carry.parent,
+        scope_stream: carry.scope_stream,
+        ..MarkedContent::default()
+    };
     // A rewrite names a wrap (`/PCSoft`) or a break it kept (`/PCHard`) in an empty marker
     // before the next line. Neither name is a paragraph region, so it does not change scope.
     let mut soft_break = false;
@@ -897,7 +935,7 @@ pub(super) fn interpret(
             }
             b"Do" => {
                 if let (Some(list), Some(name)) = (invoked.as_deref_mut(), op.name(0)) {
-                    list.push((i, name.to_vec(), ts.clone()));
+                    list.push((i, name.to_vec(), ts.clone(), marked.current()));
                 }
             }
             b"Td" | b"TD" => {
