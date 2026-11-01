@@ -44,6 +44,11 @@ fn utf16(bytes: &[u8], from: fn([u8; 2]) -> u16) -> Option<String> {
 /// anything else (invalid UTF-8, a legacy encoding, a broken surrogate), which can be read
 /// only approximately and so must not be written back.
 pub fn decode(bytes: &[u8]) -> Option<(String, Encoding)> {
+    // a bare `&` is escaped on the way in, so the packet is XML for every reader and what is written back is too
+    decode_exactly(bytes).map(|(text, encoding)| (repair_ampersands(text), encoding))
+}
+
+fn decode_exactly(bytes: &[u8]) -> Option<(String, Encoding)> {
     match bytes {
         [0xFF, 0xFE, rest @ ..] => utf16(rest, u16::from_le_bytes).map(|t| (t, Encoding::Utf16Le { bom: true })),
         [0xFE, 0xFF, rest @ ..] => utf16(rest, u16::from_be_bytes).map(|t| (t, Encoding::Utf16Be { bom: true })),
@@ -97,6 +102,56 @@ fn to_text(bytes: &[u8]) -> String {
     }
 }
 
+/// A packet whose text has a bare `&` ("Humanitarian & Compassionate" in a filled form's data) is not well-formed XML,
+/// though Adobe's own reader takes it: such a `&` becomes `&amp;`, leaving CDATA and comments as they are.
+pub(crate) fn repair_ampersands(text: String) -> String {
+    // only the five predefined entities and numeric references are references; anything else is text
+    let valid_reference = |rest: &str| -> bool {
+        // the `;` must come within the longest name (32), so a text full of `&` is not searched to its end each time
+        let Some(end) = rest.char_indices().take(34).find(|(_, c)| *c == ';').map(|(i, _)| i).filter(|e| *e > 1 && *e <= 32) else { return false };
+        let name = &rest[1..end];
+        match name.strip_prefix('#') {
+            Some(num) => match num.strip_prefix(['x', 'X']) {
+                Some(hex) => !hex.is_empty() && hex.chars().all(|c| c.is_ascii_hexdigit()),
+                None => !num.is_empty() && num.chars().all(|c| c.is_ascii_digit()),
+            },
+            None => matches!(name, "lt" | "gt" | "amp" | "quot" | "apos"),
+        }
+    };
+    if !text.contains('&') {
+        return text;
+    }
+    let mut out = String::with_capacity(text.len() + 16);
+    let mut rest = text.as_str();
+    let mut changed = false;
+    while let Some(at) = rest.find(['&', '<']) {
+        out.push_str(&rest[..at]);
+        rest = &rest[at..];
+        if let Some(inner) = rest.strip_prefix("<![CDATA[") {
+            let len = inner.find("]]>").map_or(rest.len(), |e| e + "<![CDATA[".len() + 3);
+            out.push_str(&rest[..len]);
+            rest = &rest[len..];
+        } else if rest.starts_with("<!--") {
+            let len = rest.find("-->").map_or(rest.len(), |e| e + 3);
+            out.push_str(&rest[..len]);
+            rest = &rest[len..];
+        } else if rest.starts_with('&') {
+            if valid_reference(rest) {
+                out.push('&');
+            } else {
+                out.push_str("&amp;");
+                changed = true;
+            }
+            rest = &rest[1..];
+        } else {
+            out.push('<');
+            rest = &rest[1..];
+        }
+    }
+    out.push_str(rest);
+    if changed { out } else { text }
+}
+
 /// Read the XFA packets, if the document has any.
 pub fn read_packets(doc: &Document) -> Result<Option<Packets>, XfaError> {
     let Some(root) = doc.root() else { return Ok(None) };
@@ -127,7 +182,7 @@ pub fn read_packets(doc: &Document) -> Result<Option<Packets>, XfaError> {
         if total > MAX_XDP {
             return Err(XfaError::TooLarge("the XFA packets are larger than 64 MB".into()));
         }
-        Ok(Some(to_text(&bytes)))
+        Ok(Some(repair_ampersands(to_text(&bytes))))
     };
     let mut xdp = String::new();
     match &*xfa {
@@ -162,4 +217,25 @@ pub fn read_packets(doc: &Document) -> Result<Option<Packets>, XfaError> {
         xdp.clear();
     }
     Ok(Some(Packets { xdp, needs_rendering: needs_rendering.unwrap_or(false), has_fields }))
+}
+
+#[cfg(test)]
+mod repair_tests {
+    use super::repair_ampersands;
+
+    #[test]
+    fn a_bare_ampersand_is_escaped_and_the_rest_is_left_alone() {
+        assert_eq!(repair_ampersands("<a>Humanitarian & Compassionate</a>".into()), "<a>Humanitarian &amp; Compassionate</a>");
+        assert_eq!(repair_ampersands("<a>x &amp; y &#xD; &#10; &lt;</a>".into()), "<a>x &amp; y &#xD; &#10; &lt;</a>");
+        assert_eq!(
+            repair_ampersands("<a><![CDATA[ a & b ]]> c & d <!-- e & f --></a>".into()),
+            "<a><![CDATA[ a & b ]]> c &amp; d <!-- e & f --></a>"
+        );
+        assert_eq!(repair_ampersands("<a>AT&T; R&D, &, & &nbsp; &quot;</a>".into()), "<a>AT&amp;T; R&amp;D, &amp;, &amp; &amp;nbsp; &quot;</a>");
+        assert_eq!(repair_ampersands("<a>&#38; &#x26; &amp;</a>".into()), "<a>&#38; &#x26; &amp;</a>");
+        assert_eq!(repair_ampersands("no entities".into()), "no entities");
+        // an unterminated CDATA section or comment runs to the end and stays as it is
+        assert_eq!(repair_ampersands("<a><![CDATA[ a & b".into()), "<a><![CDATA[ a & b");
+        assert_eq!(repair_ampersands("<a><!-- a & b".into()), "<a><!-- a & b");
+    }
 }
