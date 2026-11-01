@@ -42,6 +42,8 @@
 	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	Закріпіть теку, щоб бачити тут її найновіші PDF, наприклад теку, куди сканер або синхронізований хмарний диск зберігає файли.
 	Unpin	Відкріпити
 	Unpin {folder}	Відкріпити {folder}
+	Collapse {folder}	Згорнути {folder}
+	Expand {folder}	Розгорнути {folder}
 	Looking for PDFs…	Пошук PDF…
 	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Ця тека зараз недоступна. Можливо, її переміщено або її диск чи хмарна синхронізація не в мережі.
 	No PDFs in this folder yet	У цій теці ще немає PDF

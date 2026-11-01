@@ -70,6 +70,8 @@
 	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	Закачете папка, за да виждате тук най-новите PDF файлове в нея – например папката, в която записва скенерът ви или синхронизирано облачно хранилище.
 	Unpin	Откачи
 	Unpin {folder}	Откачи {folder}
+	Collapse {folder}	Свий {folder}
+	Expand {folder}	Разгъни {folder}
 	Looking for PDFs…	Търсене на PDF файлове…
 	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Тази папка в момента не е достъпна. Може да е преместена или дискът, на който е, или облачната синхронизация да не са на линия.
 	No PDFs in this folder yet	В тази папка все още няма PDF файлове

@@ -33,6 +33,8 @@
 	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	ปักหมุดโฟลเดอร์เพื่อแสดง PDF ล่าสุดในโฟลเดอร์นั้นที่นี่ เช่น โฟลเดอร์ที่สแกนเนอร์หรือไดรฟ์คลาวด์ที่ซิงก์ไว้บันทึกไฟล์
 	Unpin	เลิกปักหมุด
 	Unpin {folder}	เลิกปักหมุด {folder}
+	Collapse {folder}	ยุบ {folder}
+	Expand {folder}	ขยาย {folder}
 	Looking for PDFs…	กำลังค้นหา PDF…
 	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	โฟลเดอร์นี้ใช้งานไม่ได้ในขณะนี้ อาจถูกย้าย หรือไดรฟ์หรือการซิงก์คลาวด์ออฟไลน์อยู่
 	No PDFs in this folder yet	ยังไม่มี PDF ในโฟลเดอร์นี้

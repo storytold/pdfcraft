@@ -44,6 +44,8 @@
 	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	فۆڵدەرێک جێگیر بکە بۆ ئەوەی نوێترین PDFەکانی لێرە پیشان بدات، وەک ئەو شوێنەی کە سکانەرەکەت یان درایڤێکی هەوری هاوکاتکراو فایلەکانی تێدا پاشەکەوت دەکات.
 	Unpin	لابردنی جێگیرکردن
 	Unpin {folder}	لابردنی جێگیرکردنی {folder}
+	Collapse {folder}	داخستنی {folder}
+	Expand {folder}	کردنەوەی {folder}
 	Looking for PDFs…	بەدوای PDFەکاندا دەگەڕێین…
 	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	ئەم فۆڵدەرە ئێستا بەردەست نییە. لەوانەیە گوێزرابێتەوە، یان درایڤەکەی یان هاوکاتکردنی هەورەکەی دابڕابێت.
 	No PDFs in this folder yet	هێشتا هیچ PDFێک لەم فۆڵدەرەدا نییە

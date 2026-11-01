@@ -44,6 +44,8 @@
 	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	ثبّت مجلدًا لعرض أحدث ملفات PDF فيه هنا، مثل المجلد الذي يحفظ فيه الماسح الضوئي أو قرص سحابي مُزامَن.
 	Unpin	إلغاء التثبيت
 	Unpin {folder}	إلغاء تثبيت {folder}
+	Collapse {folder}	طي {folder}
+	Expand {folder}	توسيع {folder}
 	Looking for PDFs…	جارٍ البحث عن ملفات PDF…
 	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	هذا المجلد غير متاح الآن. ربما نُقل، أو أن قرصه أو مزامنته السحابية غير متصلة.
 	No PDFs in this folder yet	لا توجد ملفات PDF في هذا المجلد بعد

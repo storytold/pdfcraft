@@ -46,6 +46,8 @@
 	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	یک پوشه را سنجاق کنید تا جدید‌ترین PDFهای آن اینجا فهرست شوند، مثلاً جایی که اسکنر یا درایو ابری هم‌گام‌شده آن‌ها را ذخیره می‌کند.
 	Unpin	برداشتن سنجاق
 	Unpin {folder}	برداشتن سنجاق {folder}
+	Collapse {folder}	جمع کردن {folder}
+	Expand {folder}	باز کردن {folder}
 	Looking for PDFs…	جستوجوی PDFها…
 	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	این پوشه هم اکنون در دسترس نیست. ممکن است جابه جا شده باشد یا درایو یا هم‌گام‌سازی ابری آن آفلاین باشد.
 	No PDFs in this folder yet	هنوز PDFی در این پوشه نیست

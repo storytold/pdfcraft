@@ -35,6 +35,8 @@
 	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	Fixa una carpeta per llistar-hi els PDF més recents, com ara on els desa l'escàner o una unitat al núvol sincronitzada.
 	Unpin	Deixa de fixar
 	Unpin {folder}	Deixa de fixar {folder}
+	Collapse {folder}	Replega {folder}
+	Expand {folder}	Desplega {folder}
 	Looking for PDFs…	Cercant PDF…
 	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Aquesta carpeta no està disponible ara mateix. Pot haver-se mogut, o la seva unitat o la sincronització al núvol no té connexió.
 	No PDFs in this folder yet	Encara no hi ha cap PDF en aquesta carpeta
