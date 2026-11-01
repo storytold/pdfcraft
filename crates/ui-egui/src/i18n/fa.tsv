@@ -2823,3 +2823,8 @@ theme	Appearance	ظاهر
 	No image on clipboard to paste	تصویری در حافظهٔ موقت برای چسباندن نیست
 	Pinned {tool} to Home	{tool} به خانه سنجاق شد
 	Unpinned {tool} from Home	{tool} از خانه جدا شد
+	Ink	جوهر
+	Dark ink	جوهر تیره
+	Light ink	جوهر روشن
+	No signature was found. Adjust the ink sensitivity or keep the original image.	هیچ امضایی پیدا نشد. حساسیت جوهر را تنظیم کنید یا تصویر اصلی را نگه دارید.
+	Signature cleanup stopped unexpectedly.	پاک‌سازی امضا به‌طور غیرمنتظره متوقف شد.

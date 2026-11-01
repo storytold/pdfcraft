@@ -787,7 +787,7 @@ pub(crate) fn signature_pad(
             ui.add_enabled_ui(import.options.remove_background, |ui| {
                 ui.horizontal(|ui| {
                     let ink_label = ui.label(tl!("Ink"));
-                    egui::ComboBox::from_id_salt("signature-ink")
+                    craft_ui::ComboBox::from_id_salt("signature-ink")
                         .selected_text(match import.options.ink {
                             SignatureInk::Auto => tl!("Auto"),
                             SignatureInk::Dark => tl!("Dark ink"),
