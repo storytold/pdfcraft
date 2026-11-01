@@ -2305,12 +2305,8 @@ fn headless_control_channel_tab_detach_and_reattach() {
 
     // Inspect tabs: only docked tabs (doc.pdf, third.pdf) appear in main tab strip.
     let tabs = ok(&mut h, &c, "ui.inspect", json!({"role": "tab"}));
-    let tab_labels: Vec<String> = tabs["widgets"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|w| w.get("label").and_then(|l| l.as_str()).map(str::to_string))
-        .collect();
+    let tab_labels: Vec<String> =
+        tabs["widgets"].as_array().unwrap().iter().filter_map(|w| w.get("label").and_then(|l| l.as_str()).map(str::to_string)).collect();
     assert!(tab_labels.contains(&"doc.pdf".to_string()), "{tab_labels:?}");
     assert!(tab_labels.contains(&"third.pdf".to_string()), "{tab_labels:?}");
     assert!(!tab_labels.contains(&"second.pdf".to_string()), "{tab_labels:?}");
@@ -2376,5 +2372,3 @@ fn headless_control_channel_tab_detach_errors_and_trait() {
     let err = call(&mut h, &c, "ui.detach", json!({})).unwrap_err();
     assert!(err.contains("pass doc id"), "{err}");
 }
-
-

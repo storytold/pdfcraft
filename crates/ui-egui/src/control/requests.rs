@@ -409,4 +409,3 @@ fn parse_doc_or_tab(p: &Value, host: &impl Host, method: &str) -> Result<pdfcraf
     }
     Err(format!("{method}: pass doc id (doc) or tab index (tab)"))
 }
-
