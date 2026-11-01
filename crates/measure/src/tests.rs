@@ -461,3 +461,86 @@ fn a_stream_over_the_byte_budget_uses_it_up_once() {
     assert!(g.truncated);
     assert_eq!(g.segments.len(), 1, "the parts before it still snap");
 }
+
+#[test]
+fn indirect_scale_fields_and_closed_area_edges_are_handled() {
+    let mut d = fixture("", "", &[]);
+    let mut m = new(Kind::Area, vec![[0.0, 0.0], [3.0, 0.0], [3.0, 4.0], [0.0, 4.0]]);
+    m.scale = Scale { y: 3.0, ..Scale::new(2.0, "m", 2).unwrap() };
+    add(&mut d, &m, &Meta { date: None, id: "area-1".into() }).unwrap();
+
+    // Open and closed vertex lists for the same rectangle produce identical readings (including perimeter length).
+    let open = reading(Kind::Area, &[[0.0, 0.0], [3.0, 0.0], [3.0, 4.0], [0.0, 4.0]], &m.scale).unwrap();
+    let closed = reading(Kind::Area, &[[0.0, 0.0], [3.0, 0.0], [3.0, 4.0], [0.0, 4.0], [0.0, 0.0]], &m.scale).unwrap();
+    close(open.length, 36.0);
+    close(closed.length, 36.0);
+
+    // A doubled closing vertex leaves a zero-length closing edge after stripping one closing duplicate,
+    // and an area with fewer than 3 distinct vertices or a NaN coordinate is also rejected.
+    assert!(add(&mut d, &new(Kind::Area, vec![[0.0, 0.0], [3.0, 0.0], [3.0, 4.0], [0.0, 0.0], [0.0, 0.0]]), &Meta::default()).is_err());
+    assert!(add(&mut d, &new(Kind::Area, vec![[0.0, 0.0], [3.0, 0.0], [0.0, 0.0]]), &Meta::default()).is_err());
+    assert!(add(&mut d, &new(Kind::Area, vec![[0.0, 0.0], [3.0, 0.0], [f64::NAN, 4.0]]), &Meta::default()).is_err());
+    assert!(reading(Kind::Area, &[[0.0, 0.0], [3.0, 0.0], [f64::NAN, 4.0]], &m.scale).is_err());
+
+    // Indirect PDF objects inside /Measure, /NumberFormat, and the annotation dictionary still resolve cleanly.
+    let (r, mut annot_dict) = annot(&d, 0, 0).unwrap();
+    let it_ref = d.add(Object::name("PolygonDimension"));
+    let nm_ref = d.add(PdfString::text("area-indirect"));
+    let author_ref = d.add(PdfString::text("Architect"));
+    let label_ref = d.add(PdfString::text("Floor Plan"));
+    let rl_ref = d.add(Object::name("RL"));
+    let ratio_ref = d.add(PdfString::text("1 pt = 2 m"));
+    let cyx_ref = d.add(Object::Real(1.5));
+    let unit_ref = d.add(PdfString::text("m"));
+    let area_unit_ref = d.add(PdfString::text("m^2"));
+    let factor_x_ref = d.add(Object::Real(2.0));
+    let factor_y_ref = d.add(Object::Real(2.0));
+    let factor_d_ref = d.add(Object::Real(1.0));
+    let factor_a_ref = d.add(Object::Real(1.0));
+    let fmt_d_ref = d.add(Object::name("D"));
+    let denom_ref = d.add(Object::Int(1000));
+
+    let nf = |u: ObjRef, c: ObjRef| {
+        let mut f = Dict::new();
+        f.set(b"Type".to_vec(), Object::name("NumberFormat"));
+        f.set(b"U".to_vec(), Object::Ref(u));
+        f.set(b"C".to_vec(), Object::Ref(c));
+        f.set(b"F".to_vec(), Object::Ref(fmt_d_ref));
+        f.set(b"D".to_vec(), Object::Ref(denom_ref));
+        Object::Array(vec![Object::Dict(f)])
+    };
+    let mut measure = Dict::new();
+    measure.set(b"Type".to_vec(), Object::name("Measure"));
+    measure.set(b"Subtype".to_vec(), Object::Ref(rl_ref));
+    measure.set(b"R".to_vec(), Object::Ref(ratio_ref));
+    measure.set(b"CYX".to_vec(), Object::Ref(cyx_ref));
+    measure.set(b"X".to_vec(), nf(unit_ref, factor_x_ref));
+    measure.set(b"Y".to_vec(), nf(unit_ref, factor_y_ref));
+    measure.set(b"D".to_vec(), nf(unit_ref, factor_d_ref));
+    measure.set(b"A".to_vec(), nf(area_unit_ref, factor_a_ref));
+
+    annot_dict.set(b"IT".to_vec(), Object::Ref(it_ref));
+    annot_dict.set(b"NM".to_vec(), Object::Ref(nm_ref));
+    annot_dict.set(b"T".to_vec(), Object::Ref(author_ref));
+    annot_dict.set(b"PCMeasureLabel".to_vec(), Object::Ref(label_ref));
+    annot_dict.set(b"Measure".to_vec(), Object::Dict(measure.clone()));
+    d.update_dict(r, |target| *target = annot_dict).unwrap();
+
+    // Non-RL indirect subtypes and numeric subtypes are rejected by Scale::read.
+    let geo_ref = d.add(Object::name("GEO"));
+    let mut bad_geo = measure.clone();
+    bad_geo.set(b"Subtype".to_vec(), Object::Ref(geo_ref));
+    assert!(Scale::read(&d, &Object::Dict(bad_geo)).is_err());
+    let mut bad_num = measure;
+    bad_num.set(b"Subtype".to_vec(), Object::Int(42));
+    assert!(Scale::read(&d, &Object::Dict(bad_num)).is_err());
+
+    let listing = list(&d);
+    assert!(listing.unsupported.is_empty(), "{:?}", listing.unsupported);
+    assert_eq!(listing.measurements.len(), 1);
+    let item = &listing.measurements[0];
+    assert_eq!(item.id, "area-indirect");
+    assert_eq!(item.author, "Architect");
+    assert_eq!(item.label, "Floor Plan");
+    assert_eq!(item.scale, Scale { y: 3.0, ..Scale::new(2.0, "m", 3).unwrap() });
+}
