@@ -232,6 +232,7 @@ mod repair_tests {
             "<a><![CDATA[ a & b ]]> c &amp; d <!-- e & f --></a>"
         );
         assert_eq!(repair_ampersands("<a>AT&T; R&D, &, & &nbsp; &quot;</a>".into()), "<a>AT&amp;T; R&amp;D, &amp;, &amp; &amp;nbsp; &quot;</a>");
+        assert_eq!(repair_ampersands("<a>&#38; &#x26; &amp;</a>".into()), "<a>&#38; &#x26; &amp;</a>");
         assert_eq!(repair_ampersands("no entities".into()), "no entities");
         // an unterminated CDATA section or comment runs to the end and stays as it is
         assert_eq!(repair_ampersands("<a><![CDATA[ a & b".into()), "<a><![CDATA[ a & b");
