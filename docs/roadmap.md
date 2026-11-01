@@ -1,6 +1,5 @@
 # PdfCraft roadmap: milestones and what's next
 
-> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7 #4957: rebase PR #4984 onto main 61140ed8; 3246 scoped tests pass (9 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged)
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 further review: inherited drawing/text state, affine image gestures, paste/selection ownership, no-op scripts and menu permissions; estimates unchanged)
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 latest comments: explicit image-paste events, mixed-size field refresh, and documented mixed-script normalization with Undo; estimates unchanged)
@@ -17,6 +16,7 @@
 > **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** patch (M2, PR #4172: reconcile current main and retain Japanese serif/weight selection alongside display-only CJK fallback; estimates unchanged)
 > **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M7 #2517: a narrowed then widened paragraph keeps the typed spaces the wrap consumed, after save and reopen; estimates unchanged)
 > **Last reviewed:** 2026-10-30 | **Last updated:** 2026-10-30 | **Change:** minor (M7, #4957: foreign-watermark scans enforce the operator budget while streaming; estimates unchanged)
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7 #4957: rebase PR #4984 onto main 61140ed8; 3246 scoped tests pass (9 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged)
 > **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: OCR model downloads use verified ONNX pairs with legacy discovery fallback; estimates unchanged)
 > **Last reviewed:** 2026-10-25 | **Last updated:** 2026-10-25 | **Change:** minor (M5: one reply in the Comments panel is edited, copied or deleted from its own "…" menu; estimates unchanged)
 > **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** minor (M11: lossless JBIG2 stores each distinct mark once, as a symbol; estimates unchanged)

@@ -1,6 +1,5 @@
 # PdfCraft roadmap
 
-> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7 #4957: rebase PR #4984 onto main 61140ed8; 3246 scoped tests pass (9 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged)
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 further review: inherited drawing/text state, affine image gestures, paste/selection ownership, no-op scripts and menu permissions; estimates unchanged)
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 latest comments: explicit image-paste events, mixed-size field refresh, and documented mixed-script normalization with Undo; estimates unchanged)
@@ -89,6 +88,7 @@
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M12 #2570: Dynamic XFA rich-text fields carry exData/maxLength into AcroForm MaxLen for reported and enforced Unicode character limits, retained after save/reopen. Estimates unchanged)
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M4 #3309: bounded iterative named-destination pruning on page deletion; estimates unchanged)
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M1 #2658: macOS atomic saves retain destination extended attributes, including Finder tags, and reject partial resource-fork reads after size changes. Metadata failures retain the original PDF and unsaved edit. Estimates unchanged)
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7 #4957: rebase PR #4984 onto main 61140ed8; 3246 scoped tests pass (9 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged)
 
 PdfCraft's one-page summary: how close it is to Adobe Acrobat Pro's offline feature set, and what
 comes next. Adobe's cloud services (Document Cloud, Acrobat Sign requests, shared review, the AI
@@ -219,8 +219,6 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
-
-- **2026-11-01 (M7, #4957 rebase):** PR #4984 rebased onto main `61140ed8`; resolved and auto-merged hunks reviewed. 3246 scoped tests passed, 9 existing ignored; formatting, strict Clippy, layers/assets/parity and wasm checks passed. Behavior and estimates unchanged.
 
 - 2026-11-01: PR #2155 further review preserves inherited Form text state and soft-mask chronology during Arrange, composes crop-group moves in the proper scope, and uses affine/press-relative image resize plus a shared rotation pivot. No-op script buttons preserve hidden source text; paste coordinates, visible selection ownership, and Snapshot/Export permissions have dedicated regressions. Candidate only; estimates unchanged.
 
@@ -827,3 +825,5 @@ PR #1952 retains per-widget checkbox/radio export-value editing in the split for
 
 - **2026-10-31 (#1577):** Reconciled the page-shadow preference with split viewer, organizer, settings and control modules, preserving upstream page-gap shadow suppression. CI validation pending.
 - **2026-10-27 (M7, #4957):** Remove watermark also removes watermarks another editor wrote as artifacts (`/Artifact <</Subtype /Watermark>> BDC … EMC`, inline or through `/Properties`): the marked content is cut out byte for byte, anything unbalanced or unreadable is left. `doc_remove_marks` and the Edit menu command both go through it. A watermark whose drawing changes state that later content inherits, or a page that can't be read, stops the removal with the page and the reason, and the command is offered for a document that has only such a watermark. Update and reading a foreign watermark's settings into the dialog are not done.
+
+- **2026-11-01 (M7, #4957 rebase):** PR #4984 rebased onto main `61140ed8`; resolved and auto-merged hunks reviewed. 3246 scoped tests passed, 9 existing ignored; formatting, strict Clippy, layers/assets/parity and wasm checks passed. Behavior and estimates unchanged.
