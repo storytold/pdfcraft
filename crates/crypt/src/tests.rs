@@ -5,6 +5,16 @@ fn hex(s: &str) -> Vec<u8> {
 }
 
 #[test]
+fn file_id_is_a_one_way_16_byte_identifier() {
+    let seed = [7u8; 32];
+    let id = file_id(&seed);
+    assert_eq!(id.len(), 16);
+    assert_eq!(id, file_id(&seed));
+    assert_ne!(id, seed[..16]);
+    assert_ne!(id, file_id(&[8u8; 32]));
+}
+
+#[test]
 fn rc4_reference_vectors() {
     assert_eq!(rc4(b"Key", b"Plaintext"), hex("bbf316e8d940af0ad3"));
     assert_eq!(rc4(b"Wiki", b"pedia"), hex("1021bf0420"));

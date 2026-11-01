@@ -343,3 +343,13 @@ fn on_the_web_a_render_that_never_answers_fails_and_lets_the_rest_through() {
     assert!(thumbs.jobs.is_empty());
     assert!(frame(&ctx, &mut thumbs, &current) > std::time::Duration::ZERO, "no more frames asked for at once");
 }
+
+/// Combine thumbnails are on-screen rasters: like the viewer, they may draw a non-embedded
+/// CJK font with an installed face, and they keep the file's password.
+#[test]
+fn thumbnails_use_the_on_screen_configuration() {
+    let config = thumbnail_config(Some(Arc::from("secret")));
+    assert!(config.system_fonts, "Combine thumbnails draw non-embedded CJK text like the viewer");
+    assert_eq!(config.password.as_deref(), Some("secret"));
+    assert!(!RenderConfig::default().system_fonts, "anything else stays off by default");
+}
