@@ -177,7 +177,26 @@ impl Automation {
         let doc = self.doc(a)?;
         let only = a.opt_int("page")?.map(|p| (p.max(1) - 1) as usize);
         let all = self.comments(a)?;
+        // A group (`/RT /Group`, ISO 32000-2 §12.5.6.2) lists as its primary, with the primary's
+        // attributes: the subordinates are neither comments nor replies, only its `group`.
+        let mut members: HashMap<(usize, usize), Vec<&Annotation>> = HashMap::new();
+        let mut primary_of: HashMap<(usize, usize), (usize, usize)> = HashMap::new();
+        for (m, p) in all.iter().zip(pdfcraft_render::group_primaries(&all)) {
+            if let Some(p) = p.and_then(|p| all.get(p)) {
+                members.entry((p.page, p.index)).or_default().push(m);
+                primary_of.insert((m.page, m.index), (p.page, p.index));
+            }
+        }
         let view = |c: &Annotation| -> Value {
+            let group: Vec<Value> = members
+                .get(&(c.page, c.index))
+                .into_iter()
+                .flatten()
+                .map(|m| {
+                    let rect = crate::view_rect(&doc.info, m.page, m.shown_rect(doc.info.pages.get(m.page).map_or(0, |p| p.rotation)));
+                    json!({ "id": m.name, "page": m.page + 1, "index": m.index + 1, "type": m.subtype, "rect": rect })
+                })
+                .collect();
             let mut v = json!({
                 "id": c.name,
                 "page": c.page + 1,
@@ -188,6 +207,7 @@ impl Automation {
                 "modified": c.modified,
                 "rect": crate::view_rect(&doc.info, c.page, c.shown_rect(doc.info.pages.get(c.page).map_or(0, |p| p.rotation))),
                 "color": c.color.map(hex),
+                "group": group,
             });
             // A line's ends, or the corners of connected lines, a polygon or a cloud, as
             // comment_edit's `points` takes them.
@@ -204,13 +224,14 @@ impl Automation {
         // a reply to a reply keeps its `/IRT` on the direct parent, so following one level would
         // drop it. Parents are found by reference, as `/NM` need not be unique. A status or
         // checkmark belongs to the annotation its `/IRT` names (ISO 32000-2 §12.5.6.2), as in the
-        // Comments panel: one set on a reply is not the comment's.
+        // Comments panel: one set on a reply is not the comment's. A group subordinate is in no
+        // thread, and a reply to one (status included) is the group's, its primary's.
         let tops = pdfcraft_render::thread_tops(&all);
         let mut threads: HashMap<(usize, usize), Vec<&Annotation>> = HashMap::new();
-        for r in &all {
+        for r in all.iter().filter(|r| !r.is_group_member()) {
             let Some(&top) = tops.get(&(r.page, r.index)) else { continue };
             let key = match r.parent {
-                Some(parent) if r.state.is_some() => parent,
+                Some(parent) if r.state.is_some() => primary_of.get(&parent).copied().unwrap_or(parent),
                 _ => top,
             };
             threads.entry(key).or_default().push(r);

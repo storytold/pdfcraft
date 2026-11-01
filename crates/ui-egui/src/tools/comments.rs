@@ -357,12 +357,21 @@ pub(crate) fn made_by(a: &Annotation, tool: CommentTool) -> bool {
 /// The tool whose defaults "Make Current Properties Default" should update.
 ///
 /// Arrows are stored as Line annotations. An arrow ending belongs to the Arrow tool, so its
-/// defaults stay separate from a plain line.
-pub(crate) fn tool_for_default(a: &Annotation, endings: Option<&[LineEnding]>) -> Option<CommentTool> {
+/// defaults stay separate from a plain line. A Replace Text group is selected by its caret (the
+/// group's primary, ISO 32000-2 §12.5.6.2), so a caret whose group holds a Replace Text strikeout
+/// (`/IT /StrikeOutTextEdit`) belongs to the Replace Text tool; `all` is the document's listing.
+pub(crate) fn tool_for_default(all: &[Annotation], a: &Annotation, endings: Option<&[LineEnding]>) -> Option<CommentTool> {
     match tool_for(a) {
         Some(CommentTool::Line) if endings.is_some_and(|ends| ends.iter().copied().any(arrow_ending)) => Some(CommentTool::Arrow),
+        Some(CommentTool::Caret) if replaces_text(all, a) => Some(CommentTool::ReplaceText),
         other => other,
     }
+}
+
+/// Whether the caret `a` is the primary of a Replace Text group: a grouped strikeout with
+/// `/IT /StrikeOutTextEdit` is one of its subordinates.
+fn replaces_text(all: &[Annotation], a: &Annotation) -> bool {
+    all.iter().any(|s| s.is_group_member() && s.subtype == "StrikeOut" && s.intent.as_deref() == Some("StrikeOutTextEdit") && s.replies_to(a))
 }
 
 fn arrow_ending(ending: LineEnding) -> bool {

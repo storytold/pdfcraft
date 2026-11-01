@@ -2,7 +2,8 @@ use super::create::{
     add_annotation, base_dict, bounds, callout_attach, ending_draws, ending_pair, finite, grow, normalize, num_array, rect_for, rgb,
 };
 use super::draw::{draw_appearance, redraw_or_restore, set_appearance};
-use super::info::{line_endings_of, text_value};
+use super::group::group_members;
+use super::info::{is_group_subordinate, line_endings_of, text_value};
 use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, page_ref, set_annots};
 use super::types::{
     FLAG_HIDDEN, FLAG_LOCKED, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NewAnnotation, ReviewState, Rgb, Shape, Style,
@@ -70,9 +71,13 @@ pub(crate) fn touch(d: &mut Dict, meta: &Meta) {
 }
 
 /// Delete a comment together with its pop-up and its replies (and theirs), as Acrobat does.
-/// Refused while it, or a reply that would go with it, is locked.
+/// Refused while it, or a reply that would go with it, is locked. A member of a group (`/RT
+/// /Group`), its primary included, goes alone, as Acrobat deletes the member clicked and keeps the
+/// rest of its group, although ISO 32000-2 §12.5.6.2 lists deletion among the operations that act
+/// on the entire group; a subordinate left without its primary is a comment of its own. Replace
+/// Text's strikeout and caret are one comment and go together from either ([`own_deletion`]).
 pub fn delete_annotation(doc: &mut Document, page: usize, index: usize) -> Result<(), AnnotError> {
-    deletable(doc, page, index)?;
+    let index = deleted_index(doc, page, index)?;
     lift_annotation(doc, page, index)
 }
 
@@ -80,23 +85,44 @@ pub fn delete_annotation(doc: &mut Document, page: usize, index: usize) -> Resul
 /// changing anything: what a Delete command asks before it is offered. It is refused while the
 /// annotation is locked, or a reply that would go with it is.
 pub fn deletable(doc: &Document, page: usize, index: usize) -> Result<(), AnnotError> {
+    deleted_index(doc, page, index).map(|_| ())
+}
+
+/// [`deletable`], returning the index [`delete_annotation`] deletes from: the caret for Replace
+/// Text's strikeout, else `index`.
+fn deleted_index(doc: &Document, page: usize, index: usize) -> Result<usize, AnnotError> {
     let list = annots(doc, page_ref(doc, page)?);
-    let target = list.get(index).ok_or(AnnotError::NoSuchAnnotation { page, index })?;
+    let mut target = list.get(index).ok_or(AnnotError::NoSuchAnnotation { page, index })?;
+    let mut index = index;
     if let Some(r) = target.as_ref() {
         unlocked(doc, r)?;
     }
+    // Replace Text is one comment: its strikeout goes with its caret, the group's primary, and
+    // the caret with it, as Acrobat deletes the pair from either.
+    let caret = doc
+        .resolve(target)
+        .as_dict()
+        .filter(|d| is_group_subordinate(d) && !own_deletion(doc, d))
+        .and_then(|d| d.reference(b"IRT"))
+        .and_then(|irt| list.iter().enumerate().find(|(_, e)| e.as_ref() == Some(irt)));
+    if let Some((i, e)) = caret {
+        (target, index) = (e, i);
+    }
     let doomed = with_replies_and_popups(doc, &list, seed(target));
     // A locked reply can't be deleted on its own, so it doesn't go with the comment or reply it
-    // answers either. Pop-ups follow their comment.
-    for (_, e) in list.iter().enumerate().filter(|(i, e)| *i != index && goes_with(e, &doomed)) {
+    // answers either (ISO 32000-2 §12.5.3, Table 167: Locked); nor does the other half of Replace
+    // Text. Pop-ups follow their comment.
+    for (i, e) in list.iter().enumerate().filter(|(i, e)| (*i != index || caret.is_some()) && goes_with(doc, e, &doomed)) {
         let obj = doc.resolve(e);
         if let Some(d) = obj.as_dict().filter(|d| d.name(b"Subtype") != Some(b"Popup".as_slice()))
             && annotation_flags(doc, d) & FLAG_LOCKED != 0
         {
-            return Err(AnnotError::Invalid("a reply to it is locked".into()));
+            let grouped = is_group_subordinate(d) || caret.is_some_and(|(c, _)| c == i);
+            let what = if grouped { "a comment in its group is locked" } else { "a reply to it is locked" };
+            return Err(AnnotError::Invalid(what.into()));
         }
     }
-    Ok(())
+    Ok(index)
 }
 
 /// Take the annotation at `(page, index)` out of its page with its pop-up and replies, as
@@ -107,7 +133,7 @@ pub fn lift_annotation(doc: &mut Document, page: usize, index: usize) -> Result<
     let list = annots(doc, p);
     let target = list.get(index).ok_or(AnnotError::NoSuchAnnotation { page, index })?;
     let doomed = with_replies_and_popups(doc, &list, seed(target));
-    let kept: Vec<Object> = list.iter().enumerate().filter(|(i, e)| *i != index && !goes_with(e, &doomed)).map(|(_, e)| e.clone()).collect();
+    let kept: Vec<Object> = list.iter().enumerate().filter(|(i, e)| *i != index && !goes_with(doc, e, &doomed)).map(|(_, e)| e.clone()).collect();
     Ok(set_annots(doc, p, kept)?)
 }
 
@@ -121,16 +147,35 @@ fn seed(target: &Object) -> Option<ObjRef> {
 /// one of them, or it is written inline (a file can, though the standard asks for references) and
 /// replies to (`/IRT`) or pops up for (`/Parent`) one of them. An inline entry has no reference
 /// for the walk to collect, so it is matched here.
-pub fn goes_with(entry: &Object, going: &HashSet<ObjRef>) -> bool {
+pub fn goes_with(doc: &Document, entry: &Object, going: &HashSet<ObjRef>) -> bool {
     match entry.as_ref() {
         Some(r) => going.contains(&r),
-        None => entry.as_dict().is_some_and(|d| [d.reference(b"IRT"), d.reference(b"Parent")].into_iter().flatten().any(|r| going.contains(&r))),
+        None => entry.as_dict().is_some_and(|d| hangs_off(doc, d).into_iter().flatten().any(|r| going.contains(&r))),
     }
+}
+
+/// What the annotation `d` goes with when it is deleted: what it replies to (`/IRT`) and what it
+/// pops up for (`/Parent`). A group subordinate (`/RT /Group`) is deleted on its own
+/// ([`own_deletion`]), so its `/IRT` doesn't count.
+fn hangs_off(doc: &Document, d: &Dict) -> [Option<ObjRef>; 2] {
+    [d.reference(b"IRT").filter(|_| !own_deletion(doc, d)), d.reference(b"Parent")]
+}
+
+/// Whether the annotation `d` stays when its group's primary is deleted: a group subordinate
+/// (`/RT /Group`) does, as Acrobat deletes only the member clicked, unless it is half of Replace
+/// Text, which Acrobat deletes as one comment: the strikeout (`/IT /StrikeOutTextEdit`) under its
+/// caret, or a caret under such a strikeout, as earlier PdfCraft builds wrote the pair.
+fn own_deletion(doc: &Document, d: &Dict) -> bool {
+    let edit = |d: &Dict| d.name(b"IT") == Some(b"StrikeOutTextEdit".as_slice());
+    let under_edit =
+        || d.name(b"Subtype") == Some(b"Caret".as_slice()) && d.reference(b"IRT").is_some_and(|r| doc.get(r).as_dict().is_some_and(edit));
+    is_group_subordinate(d) && !edit(d) && !under_edit()
 }
 
 /// `doomed` and what goes with it, as Acrobat deletes a comment: the entries of `list` (one or
 /// more pages' `/Annots`) that reply to (`/IRT`) or pop up for (`/Parent`) anything going, their
-/// own replies, and the pop-ups going annotations name (`/Popup`). An inline reply has no
+/// own replies, and the pop-ups going annotations name (`/Popup`). A group subordinate stays
+/// ([`own_deletion`]). An inline reply has no
 /// reference to collect, but the pop-up it names is. Each annotation is visited once, so a long or
 /// cyclic chain costs no more than its length. Filter a list with [`goes_with`], which also
 /// matches inline entries.
@@ -142,7 +187,7 @@ pub fn with_replies_and_popups(doc: &Document, list: &[Object], doomed: impl Int
         // What goes with the annotation this entry hangs off: the entry, or for an inline one the
         // pop-up it names.
         let Some(goes) = e.as_ref().or_else(|| d.reference(b"Popup")) else { continue };
-        for on in [d.reference(b"IRT"), d.reference(b"Parent")].into_iter().flatten() {
+        for on in hangs_off(doc, d).into_iter().flatten() {
             hanging.entry(on).or_default().push(goes);
         }
     }
@@ -319,7 +364,28 @@ pub fn set_marked(doc: &mut Document, page: usize, index: usize, marked: bool, a
     Ok(i)
 }
 
-/// Move a comment (and its pop-up) by `(dx, dy)` points. The appearance moves with `/Rect`.
+/// Refuse a change to a group while one of its `members` (from [`group_members`]) is locked:
+/// `this`, the one asked for, as any comment is refused, and another as part of its group.
+fn group_unlocked(doc: &Document, members: &[(usize, usize)], this: (usize, usize)) -> Result<(), AnnotError> {
+    let mut lists: HashMap<usize, Vec<Object>> = HashMap::new();
+    for &(p, i) in members {
+        let list = match lists.entry(p) {
+            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+            std::collections::hash_map::Entry::Vacant(e) => e.insert(annots(doc, page_ref(doc, p)?)),
+        };
+        let Some(entry) = list.get(i) else { continue };
+        let obj = doc.resolve(entry);
+        if obj.as_dict().is_some_and(|d| annotation_flags(doc, d) & FLAG_LOCKED != 0) {
+            let what = if (p, i) == this { "the comment is locked" } else { "a comment in its group is locked" };
+            return Err(AnnotError::Invalid(what.into()));
+        }
+    }
+    Ok(())
+}
+
+/// Move a comment (and its pop-up) by `(dx, dy)` points. The appearance moves with `/Rect`. A
+/// comment in a group (`/RT /Group`) moves alone: Acrobat moves the member dragged and leaves the
+/// rest of its group in place, although ISO 32000-2 §12.5.6.2 has a group move as one.
 pub fn move_annotation(doc: &mut Document, page: usize, index: usize, dx: f64, dy: f64, meta: &Meta) -> Result<(), AnnotError> {
     if !finite(&[dx, dy]) {
         return Err(AnnotError::Invalid("invalid offset".into()));
@@ -532,11 +598,43 @@ fn border_width_of(d: &Dict) -> f64 {
     d.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(|w| w.as_f64()).unwrap_or(1.0).max(0.0)
 }
 
-/// Change a comment's colour, opacity, line width and/or line endings, and redraw it.
+/// Change a comment's colour, opacity, line width and/or line endings, and redraw it. A comment
+/// in a group restyles the whole group (ISO 32000-2 §12.5.6.2), refused while any member is
+/// locked: the other members take what applies to them (see [`member_change`]), and one that
+/// can't be redrawn keeps its look.
 pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleChange, meta: &Meta) -> Result<(), AnnotError> {
+    let members = group_members(doc, page, index)?;
+    group_unlocked(doc, &members, (page, index))?;
+    style_one(doc, page, index, change.clone(), meta)?;
+    for (p, i) in members.into_iter().filter(|m| *m != (page, index)) {
+        let Some(c) = member_change(doc, p, i, &change)? else { continue };
+        match style_one(doc, p, i, c, meta) {
+            Err(AnnotError::Unsupported(_) | AnnotError::Invalid(_) | AnnotError::Undrawable(_)) | Ok(()) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
+/// What of a group's `change` applies to its member at `(page, index)`: line endings only to a
+/// member that has as many (a callout one, a line or polyline two), a line width only to one drawn
+/// with a border, colour and opacity to all. `None` when nothing does.
+fn member_change(doc: &Document, page: usize, index: usize, change: &StyleChange) -> Result<Option<StyleChange>, AnnotError> {
+    let list = annots(doc, page_ref(doc, page)?);
+    let Some(d) = list.get(index).map(|e| doc.resolve(e)).and_then(|o| o.as_dict().cloned()) else { return Ok(None) };
+    let subtype = d.name(b"Subtype").unwrap_or_default();
+    let callout = subtype == b"FreeText" && d.contains(b"CL");
+    let pair = matches!(subtype, b"Line" | b"PolyLine");
+    let endings = change.endings.clone().filter(|e| (callout && e.len() == 1) || (pair && e.len() == 2));
+    let bordered = matches!(subtype, b"Square" | b"Circle" | b"Line" | b"PolyLine" | b"Polygon" | b"Ink" | b"FreeText");
+    let c = StyleChange { color: change.color, opacity: change.opacity, width: change.width.filter(|_| bordered), endings };
+    Ok((c != StyleChange::default()).then_some(c))
+}
+
+/// [`set_style`] for one annotation, its group already checked.
+fn style_one(doc: &mut Document, page: usize, index: usize, change: StyleChange, meta: &Meta) -> Result<(), AnnotError> {
     let StyleChange { color, opacity, width, endings } = change;
     let (_, r) = annot_ref(doc, page, index)?;
-    unlocked(doc, r)?;
     let d = annot_dict(doc, r);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
     // Check before changing anything: a stale appearance would contradict the new style.
@@ -643,10 +741,25 @@ pub fn fillable(subtype: &str) -> bool {
 }
 
 /// Fill a shape or FreeText comment with `fill`, or remove its fill (`None`), and
-/// redraw its appearance (Acrobat: Properties ▸ Fill Color).
+/// redraw its appearance (Acrobat: Properties ▸ Fill Color). A comment in a group fills every
+/// member that can be filled (ISO 32000-2 §12.5.6.2), refused while any member is locked; one
+/// that can't be redrawn keeps its look.
 pub fn set_fill(doc: &mut Document, page: usize, index: usize, fill: Option<Rgb>, meta: &Meta) -> Result<(), AnnotError> {
+    let members = group_members(doc, page, index)?;
+    group_unlocked(doc, &members, (page, index))?;
+    fill_one(doc, page, index, fill, meta)?;
+    for (p, i) in members.into_iter().filter(|m| *m != (page, index)) {
+        match fill_one(doc, p, i, fill, meta) {
+            Err(AnnotError::Unsupported(_) | AnnotError::Invalid(_) | AnnotError::Undrawable(_)) | Ok(()) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
+/// [`set_fill`] for one annotation, its group already checked.
+fn fill_one(doc: &mut Document, page: usize, index: usize, fill: Option<Rgb>, meta: &Meta) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
-    unlocked(doc, r)?;
     let d = annot_dict(doc, r);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
     if !fillable(&subtype) {
@@ -709,11 +822,17 @@ fn pair_points(d: &Dict, key: &[u8]) -> Option<Vec<[f64; 2]>> {
 }
 
 /// Replace Text (Acrobat's proposal): strike out `quads` and add a caret at the end of the
-/// struck text holding `replacement`, grouped with the strikeout (`/IRT` + `/RT /Group`) so they
-/// move, list and delete as one. Returns the strikeout's index.
+/// struck text holding `replacement`, grouped (ISO 32000-2 §12.5.6.2) so they list, select and
+/// delete as one. Returns the caret's index, the group's comment.
+///
+/// The caret is the group's primary: it holds `replacement` in `/Contents` and has `/IT
+/// /Replace`. The strikeout is its subordinate (`/IRT` to the caret, `/RT /Group`, `/IT
+/// /StrikeOutTextEdit`) with no `/Contents`, since a reader ignores a subordinate's text.
+/// Groups written before this the other way round (the strikeout primary, the text only on
+/// the caret) still list their text: see `pdfcraft_render::fill_group_text`.
 ///
 /// The two annotations need their own `/NM`: XFDF names a reply by the `/NM` of what it replies
-/// to, so one id for both writes `inreplyto` equal to the caret's own `name`, and a reader that
+/// to, so one id for both writes `inreplyto` equal to the strikeout's own `name`, and a reader that
 /// resolves names (Acrobat, and our own importer) loses the pair. `caret_meta` is a second id
 /// from the caller, so the edit stays deterministic.
 pub fn add_text_replacement(doc: &mut Document, replacement: TextReplacement<'_>) -> Result<usize, AnnotError> {
@@ -731,7 +850,6 @@ pub fn add_text_replacement(doc: &mut Document, replacement: TextReplacement<'_>
         meta,
     )?;
     let (_, sr) = annot_ref(doc, page, s)?;
-    doc.update_dict(sr, |d| d.set(b"IT".to_vec(), Object::name("StrikeOutTextEdit")))?;
     // The caret sits on the baseline at the end of the last line, its point at the text.
     let xs = [last[0], last[2], last[4], last[6]];
     let ys = [last[1], last[3], last[5], last[7]];
@@ -746,11 +864,16 @@ pub fn add_text_replacement(doc: &mut Document, replacement: TextReplacement<'_>
     )?;
     let (_, cr) = annot_ref(doc, page, c)?;
     doc.update_dict(cr, |d| {
-        d.set(b"IRT".to_vec(), Object::Ref(sr));
-        d.set(b"RT".to_vec(), Object::name("Group"));
+        d.set(b"IT".to_vec(), Object::name("Replace"));
         d.set(b"Subj".to_vec(), PdfString::text("Replace Text"));
     })?;
-    Ok(s)
+    doc.update_dict(sr, |d| {
+        d.set(b"IT".to_vec(), Object::name("StrikeOutTextEdit"));
+        d.set(b"IRT".to_vec(), Object::Ref(cr));
+        d.set(b"RT".to_vec(), Object::name("Group"));
+        d.remove(b"Contents");
+    })?;
+    Ok(c)
 }
 
 /// The Eraser (Draw tools): remove the parts of drawing `(page, index)` within `radius` points

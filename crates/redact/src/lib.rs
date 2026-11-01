@@ -752,7 +752,7 @@ pub fn clear_marks(doc: &mut Document, pages: Option<&[usize]>) -> Result<usize,
     let doomed = pdfcraft_annot::with_replies_and_popups(doc, &listed, targets.iter().copied());
     for p in pdfcraft_model::pages(doc) {
         let annots = annots_of(doc, &p.dict);
-        let kept: Vec<Object> = annots.iter().filter(|a| !pdfcraft_annot::goes_with(a, &doomed)).cloned().collect();
+        let kept: Vec<Object> = annots.iter().filter(|a| !pdfcraft_annot::goes_with(doc, a, &doomed)).cloned().collect();
         // As deleting a comment does: a page whose marks were all it had loses `/Annots` again,
         // and an indirect array stays the one object the page points to.
         if kept.len() != annots.len() {

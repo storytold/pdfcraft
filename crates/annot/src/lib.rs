@@ -20,6 +20,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
 mod create;
 mod draw;
+mod group;
 mod info;
 mod lookup;
 mod modify;
@@ -29,7 +30,8 @@ mod types;
 use create::num_array;
 pub use create::{add_annotation, callout_attach, orient_image_stamp};
 pub use draw::{AppearanceCache, set_appearance, with_missing_appearances, with_missing_appearances_cached};
-pub use info::{Props, Summary, is_comment_subtype, props, set_info, summaries};
+pub use group::group_members;
+pub use info::{Props, Summary, is_comment_subtype, is_group_subordinate, props, set_info, summaries};
 #[cfg(test)]
 use lookup::{ANNOTS_ENTRIES_COPIED, PageWalk, annot_dict, annot_ref};
 use lookup::{annots, page_ref};

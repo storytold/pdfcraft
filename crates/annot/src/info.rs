@@ -23,7 +23,8 @@ pub struct Summary {
     pub in_reply_to: Option<String>,
     /// The page and `/Annots` position `/IRT` points at, by reference (`/NM` need not be unique).
     pub parent: Option<(usize, usize)>,
-    /// `/RT /Group`: grouped with the `/IRT` annotation (Replace Text's caret), not a reply to it.
+    /// `/RT /Group`: with an `/IRT` reference, a subordinate of the group whose primary that is
+    /// ([`is_group_subordinate`]), not a reply to it.
     pub grouped: bool,
     pub rect: [f32; 4],
     pub color: Option<[f32; 3]>,
@@ -38,6 +39,15 @@ pub struct Summary {
     /// A line's two ends (`/L`), or the corners of connected lines, a polygon or a cloud
     /// (`/Vertices`), in user space; empty for other comments.
     pub points: Vec<[f32; 2]>,
+}
+
+impl Summary {
+    /// A subordinate of a group (`/RT /Group` with an `/IRT` to a listed comment, ISO 32000-2
+    /// §12.5.6.2): part of its primary's comment, not a reply. As
+    /// `pdfcraft_render::Annotation::is_group_member`, which also drops a looping `/IRT`.
+    pub fn is_group_member(&self) -> bool {
+        self.grouped && self.parent.is_some()
+    }
 }
 
 pub(crate) fn text_value(doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
@@ -60,7 +70,7 @@ pub fn is_comment_subtype(subtype: &str) -> bool {
 
 /// Where a reference to a reference (`5 0 obj 6 0 R endobj`) ends, as `pdfcraft_render::inspect`
 /// follows it, within a few steps (a cycle stops there).
-fn final_ref(doc: &Document, mut r: ObjRef) -> ObjRef {
+pub(crate) fn final_ref(doc: &Document, mut r: ObjRef) -> ObjRef {
     for _ in 0..8 {
         match &*doc.get(r) {
             Object::Ref(next) => r = *next,
@@ -69,6 +79,18 @@ fn final_ref(doc: &Document, mut r: ObjRef) -> ObjRef {
     }
     r
 }
+
+/// Whether an annotation is a subordinate of a group rather than a reply: `/RT /Group` with an
+/// `/IRT` reference (ISO 32000-2 §12.5.6.2, Table 172). The group's primary is the `/IRT`
+/// annotation, and the subordinate's own text, author, colour, dates and pop-up are ignored.
+/// `/RT` is `R` by default, and a value other than `Group` reads as `R` too. Keep in step with
+/// `pdfcraft_render::inspect`.
+pub fn is_group_subordinate(d: &Dict) -> bool {
+    d.name(b"RT") == Some(b"Group") && d.reference(b"IRT").is_some()
+}
+
+/// How far a group subordinate's `/IRT` chain is followed to its primary.
+pub(crate) const MAX_GROUP_DEPTH: usize = 64;
 
 /// Every comment (see [`is_comment_subtype`]), ordered by page and then top edge.
 pub fn summaries(doc: &Document) -> Vec<Summary> {
@@ -123,6 +145,12 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
             let irt = d.get(b"IRT").map(|o| o.as_ref().map_or_else(|| doc.resolve(o), |r| doc.get(final_ref(doc, r))));
             let in_reply_to = irt.and_then(|o| o.as_dict().cloned()).and_then(|p| text_value(doc, &p, b"NM"));
             let parent = d.get(b"IRT").and_then(Object::as_ref).and_then(|r| slots.get(&final_ref(doc, r)).copied());
+            // A group is one page's, as Acrobat reads it: a subordinate whose primary is on
+            // another page is a comment of its own (keep in step with
+            // `pdfcraft_render::link_replies`).
+            let grouped = d.name(b"RT") == Some(b"Group");
+            let cross_page = grouped && parent.is_some_and(|(p, _)| p != page);
+            let (parent, in_reply_to) = if cross_page { (None, None) } else { (parent, in_reply_to) };
             out.push(Summary {
                 page,
                 index,
@@ -135,7 +163,7 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 name: text_value(doc, d, b"NM"),
                 in_reply_to,
                 parent,
-                grouped: d.name(b"RT") == Some(b"Group"),
+                grouped,
                 rect,
                 color,
                 state: text_value(doc, d, b"State"),
