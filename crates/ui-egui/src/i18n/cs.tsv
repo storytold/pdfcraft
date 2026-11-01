@@ -705,6 +705,7 @@ key	Space	Mezerník
 	Discard embedded page thumbnails	Zahodit vložené miniatury stránek
 	Discard document tags	Zahodit tagy dokumentu
 	Discard embedded print settings	Zahodit vložené nastavení tisku
+	Discard all form submission, import and reset actions	Zahodit všechny akce odeslání, importu a resetování formulářů
 	Discard bookmarks	Zahodit záložky
 	Discard hidden layer content	Zahodit obsah skrytých vrstev
 	Discard all comments, forms and multimedia	Zahodit všechny komentáře, formuláře a multimédia

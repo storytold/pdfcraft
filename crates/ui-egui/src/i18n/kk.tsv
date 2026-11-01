@@ -581,6 +581,7 @@
 	Discard embedded page thumbnails	Ендірілген бет миниатюраларын алып тастау
 	Discard document tags	Құжат тегтерін алып тастау
 	Discard embedded print settings	Ендірілген басып шығару параметрлерін алып тастау
+	Discard all form submission, import and reset actions	Форманы жіберу, импорттау және бастапқы күйге келтіру әрекеттерінің барлығын алып тастау
 	Discard bookmarks	Бетбелгілерді алып тастау
 	Discard hidden layer content	Жасырын қабат мазмұнын алып тастау
 	Discard all comments, forms and multimedia	Барлық түсініктемелерді, формаларды және мультимедияны алып тастау

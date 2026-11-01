@@ -87,7 +87,10 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
   - Lossless JBIG2 uses bounded generic-region encoding or exact-copy symbol dictionaries when
     smaller. No lossy symbol substitution is used. Export reads embedded images and bounded
     shared globals.
-- **Discard objects:** thumbnails, alternate images, document tags, print settings.
+- **Discard objects:** thumbnails, alternate images, document tags, print settings, and form
+  submission, import and reset actions (`/SubmitForm`, `/ImportData`, `/ResetForm`, off by
+  default). The fields, links, bookmarks and pages that ran a removed action keep their other
+  actions, and the actions chained after it through `/Next` still run in order.
 - **Clean up:** Flate for streams with no filter; for streams with an outer ASCII85 or ASCIIHex
   layer, that layer is removed when the result is smaller (the inner filters keep their encoded
   bytes; streams with `/DecodeParms`, images and object streams keep their ASCII layer. LZW-compressed

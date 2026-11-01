@@ -618,6 +618,7 @@
 	Discard embedded page thumbnails	Elimina miniature di pagina incorporate
 	Discard document tags	Elimina tag del documento
 	Discard embedded print settings	Elimina impostazioni di stampa incorporate
+	Discard all form submission, import and reset actions	Elimina tutte le azioni di invio, importazione e reimpostazione dei moduli
 	Discard bookmarks	Elimina segnalibri
 	Discard hidden layer content	Elimina contenuto dei livelli nascosti
 	Discard all comments, forms and multimedia	Elimina tutti i commenti, i moduli e i contenuti multimediali

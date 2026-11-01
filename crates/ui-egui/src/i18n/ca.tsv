@@ -578,6 +578,7 @@
 	Discard embedded page thumbnails	Descarta les miniatures de pàgina incrustades
 	Discard document tags	Descarta les etiquetes del document
 	Discard embedded print settings	Descarta la configuració d'impressió incrustada
+	Discard all form submission, import and reset actions	Descarta totes les accions d'enviament, importació i restabliment de formularis
 	Discard bookmarks	Descarta els marcadors
 	Discard hidden layer content	Descarta el contingut de capes ocultes
 	Discard all comments, forms and multimedia	Descarta tots els comentaris, formularis i multimèdia

@@ -572,6 +572,7 @@
 	Discard embedded page thumbnails	ละทิ้งภาพขนาดย่อของหน้าที่ฝังไว้
 	Discard document tags	ละทิ้งแท็กของเอกสาร
 	Discard embedded print settings	ละทิ้งการตั้งค่าการพิมพ์ที่ฝังไว้
+	Discard all form submission, import and reset actions	ละทิ้งการดำเนินการส่ง นำเข้า และรีเซ็ตแบบฟอร์มทั้งหมด
 	Discard bookmarks	ละทิ้งบุ๊กมาร์ก
 	Discard hidden layer content	ละทิ้งเนื้อหาในเลเยอร์ที่ซ่อนอยู่
 	Discard all comments, forms and multimedia	ละทิ้งความคิดเห็น แบบฟอร์ม และมัลติมีเดียทั้งหมด

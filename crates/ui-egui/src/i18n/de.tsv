@@ -594,6 +594,7 @@
 	Discard embedded page thumbnails	Eingebettete Seitenminiaturen verwerfen
 	Discard document tags	Dokument-Tags verwerfen
 	Discard embedded print settings	Eingebettete Druckeinstellungen verwerfen
+	Discard all form submission, import and reset actions	Alle Aktionen zum Senden, Importieren und Zurücksetzen von Formularen verwerfen
 	Discard bookmarks	Lesezeichen verwerfen
 	Discard hidden layer content	Inhalt ausgeblendeter Ebenen verwerfen
 	Discard all comments, forms and multimedia	Alle Kommentare, Formulare und Multimedia-Inhalte verwerfen

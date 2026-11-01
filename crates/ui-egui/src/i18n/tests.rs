@@ -1122,6 +1122,14 @@ fn bundled_catalogs_are_consistent() {
     }
 }
 
+#[test]
+fn optimizer_form_actions_label_is_translated_in_every_catalog() {
+    const LABEL: &str = "Discard all form submission, import and reset actions";
+    for language in Lang::all().filter(|language| *language != Lang::EN) {
+        assert!(language.catalog().plain(LABEL).is_some(), "{}: missing {LABEL:?}", language.code());
+    }
+}
+
 /// The translation gaps report (`cargo xtask i18n-report`, a step of `cargo xtask ci`): for
 /// each language, how many English strings it has no translation for, and the first few.
 /// It never fails: a missing string shows in English.

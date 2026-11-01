@@ -245,6 +245,7 @@
 	Discard embedded page thumbnails	捨棄嵌入的頁面縮圖
 	Discard document tags	捨棄文件標記
 	Discard embedded print settings	捨棄嵌入的列印設定
+	Discard all form submission, import and reset actions	捨棄所有表單提交、匯入和重設動作
 	Discard bookmarks	捨棄書籤
 	Discard hidden layer content	捨棄隱藏圖層內容
 	Discard all comments, forms and multimedia	捨棄所有註解、表單和多媒體

@@ -592,6 +592,7 @@
 	Discard embedded page thumbnails	Beágyazott oldalbélyegképek elvetése
 	Discard document tags	Dokumentumcímkék elvetése
 	Discard embedded print settings	Beágyazott nyomtatási beállítások elvetése
+	Discard all form submission, import and reset actions	Az összes űrlapbeküldési, -importálási és -visszaállítási művelet elvetése
 	Discard bookmarks	Könyvjelzők elvetése
 	Discard hidden layer content	Rejtett rétegek tartalmának elvetése
 	Discard all comments, forms and multimedia	Összes megjegyzés, űrlap és multimédia elvetése

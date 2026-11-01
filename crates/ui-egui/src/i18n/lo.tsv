@@ -583,6 +583,7 @@
 	Discard embedded page thumbnails	ຕັດຮູບຫຍໍ້ຂອງໜ້າທີ່ຝັງໄວ້ອອກ
 	Discard document tags	ຕັດແທັກເອກະສານອອກ
 	Discard embedded print settings	ຕັດການຕັ້ງຄ່າການພິມທີ່ຝັງໄວ້ອອກ
+	Discard all form submission, import and reset actions	ຕັດການດຳເນີນການສົ່ງ ນຳເຂົ້າ ແລະຕັ້ງຄ່າຟອມໃໝ່ທັງໝົດອອກ
 	Discard bookmarks	ຕັດບຸກມາກອອກ
 	Discard hidden layer content	ຕັດເນື້ອຫາເລເຍີທີ່ເຊື່ອງໄວ້ອອກ
 	Discard all comments, forms and multimedia	ຕັດຄຳເຫັນ, ຟອມ ແລະ ມັລຕິມີເດຍທັງໝົດອອກ

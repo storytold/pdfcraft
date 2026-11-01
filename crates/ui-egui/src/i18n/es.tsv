@@ -617,6 +617,7 @@
 	Discard embedded page thumbnails	Descartar miniaturas de página incrustadas
 	Discard document tags	Descartar etiquetas del documento
 	Discard embedded print settings	Descartar ajustes de impresión incrustados
+	Discard all form submission, import and reset actions	Descartar todas las acciones de envío, importación y restablecimiento de formularios
 	Discard bookmarks	Descartar marcadores
 	Discard hidden layer content	Descartar contenido de capas ocultas
 	Discard all comments, forms and multimedia	Descartar todos los comentarios, formularios y multimedia
