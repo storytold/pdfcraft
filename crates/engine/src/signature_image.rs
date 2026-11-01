@@ -122,6 +122,110 @@ pub struct SignatureImage {
     size: [usize; 2],
 }
 
+/// An immutable decoded import, before enforcing the stored PNG byte limit. Source files still
+/// have the 4 MiB/32-megapixel limits; decoded pixels fit at most 4 megapixels. It cannot be placed
+/// or persisted until cleanup (or normalization without cleanup) returns a `SignatureImage`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SignatureImageSource {
+    rgba: Arc<Vec<u8>>,
+    size: [usize; 2],
+}
+
+impl From<SignatureImage> for SignatureImageSource {
+    /// Reuse validated pixels when editing an existing signature without another decode.
+    fn from(image: SignatureImage) -> Self {
+        Self { rgba: image.rgba, size: image.size }
+    }
+}
+
+impl SignatureImageSource {
+    /// Read the bounded original file; an intermediate PNG need not fit the stored-image limit.
+    pub fn read(reader: impl Read) -> Result<Self, SignatureImageError> {
+        let mut bytes = Vec::new();
+        reader.take(MAX_SIGNATURE_IMAGE_BYTES as u64 + 1).read_to_end(&mut bytes)?;
+        Self::from_bytes(&bytes)
+    }
+
+    /// Decode and orient within the normal source/pixel bounds, without encoding a stored image.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, SignatureImageError> {
+        let rgba = decode_source(bytes)?.into_rgba8();
+        Ok(Self { size: [rgba.width() as usize, rgba.height() as usize], rgba: Arc::new(rgba.into_raw()) })
+    }
+
+    pub(crate) fn size(&self) -> [usize; 2] {
+        self.size
+    }
+
+    pub(crate) fn rgba(&self) -> &[u8] {
+        &self.rgba
+    }
+
+    /// Only final output crosses into the validated, persistable signature type.
+    fn normalized(&self) -> Result<SignatureImage, SignatureImageError> {
+        let [w, h] = self.size;
+        let rgba = image::RgbaImage::from_raw(w as u32, h as u32, self.rgba.as_ref().clone()).ok_or(SignatureImageError::Size)?;
+        SignatureImage::from_rgba(rgba)
+    }
+
+    /// Extract existing ink locally, without generation or network access. Estimate paper with
+    /// the scan pipeline, remove isolated noise, trim empty margins and normalize the ink to
+    /// black. Always call on the original import, so slider changes cannot accumulate damage.
+    pub fn clean_background(&self, options: SignatureCleanup) -> Result<SignatureImage, SignatureImageError> {
+        if options.sensitivity > 100 {
+            return Err(SignatureImageError::CleanupOptions);
+        }
+        let [w, h] = self.size;
+        // An already isolated cutout retains its colour and canvas. Low but nonzero alpha on
+        // the border is not transparency: it is exactly the scanner haze we need to remove.
+        let transparent_border = self.rgba.as_chunks::<4>().0.iter().enumerate().all(|(i, p)| {
+            let (x, y) = (i % w, i / w);
+            !(x == 0 || y == 0 || x + 1 == w || y + 1 == h) || p[3] == 0
+        });
+        let transparent_pixels = self.rgba.as_chunks::<4>().0.iter().filter(|p| p[3] == 0).count();
+        if options.remove_background && transparent_border && transparent_pixels > w * h / 2 && transparent_pixels < w * h {
+            return self.normalized();
+        }
+        let image = if options.remove_background {
+            let [w, h] = self.size;
+            let light = match options.ink {
+                SignatureInk::Dark => false,
+                SignatureInk::Light => true,
+                SignatureInk::Auto => {
+                    let mut border = Vec::with_capacity((w + h) * 2);
+                    for (i, &[r, g, b, a]) in self.rgba.as_chunks::<4>().0.iter().enumerate() {
+                        let (x, y) = (i % w, i / w);
+                        if x == 0 || y == 0 || x + 1 == w || y + 1 == h {
+                            let visible = |c: u8| (u32::from(c) * u32::from(a) + 255 * (255 - u32::from(a))) / 255;
+                            border.push((299 * visible(r) + 587 * visible(g) + 114 * visible(b)) / 1000);
+                        }
+                    }
+                    border.sort_unstable();
+                    border.get(border.len() / 2).copied().unwrap_or(255) < 96
+                }
+            };
+            let photo = crate::SignaturePhoto::from_signature(self, light);
+            let frame = crate::PhotoRect { x: 0, y: 0, width: w as u32, height: h as u32 };
+            let scanned = photo.scan(frame, options.sensitivity, crate::signature_scan::SCAN_MAX_SIDE).map_err(|e| match e {
+                crate::signature_scan::ScanError::NoInk => SignatureImageError::NoInk,
+                crate::signature_scan::ScanError::Signature(e) => e,
+                crate::signature_scan::ScanError::Decode(e) => SignatureImageError::Decode(e),
+                crate::signature_scan::ScanError::Read(e) => SignatureImageError::Read(e),
+                crate::signature_scan::ScanError::Size => SignatureImageError::Size,
+                crate::signature_scan::ScanError::Format => SignatureImageError::Format,
+            })?;
+            let [sw, sh] = scanned.size();
+            let mut rgba = image::RgbaImage::from_raw(sw as u32, sh as u32, scanned.rgba().to_vec()).ok_or(SignatureImageError::Size)?;
+            for pixel in rgba.pixels_mut() {
+                pixel.0 = [0, 0, 0, pixel.0[3]];
+            }
+            SignatureImage::from_rgba(rgba)?
+        } else {
+            self.normalized()?
+        };
+        Ok(image)
+    }
+}
+
 /// Which side of the background is ink. Auto uses the visible border, not hidden RGB in alpha.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SignatureInk {
@@ -216,62 +320,15 @@ impl SignatureImage {
         self.size
     }
 
-    /// Extract existing ink locally, without generation or network access. Estimate paper with
-    /// the scan pipeline, remove isolated noise, trim empty margins and normalize the ink to
-    /// black. Always call on the original import, so slider changes cannot accumulate damage.
+    /// Clean an already validated signature without changing its original pixels.
     pub fn clean_background(&self, options: SignatureCleanup) -> Result<Self, SignatureImageError> {
         if options.sensitivity > 100 {
             return Err(SignatureImageError::CleanupOptions);
         }
-        let [w, h] = self.size;
-        // An already isolated cutout retains its colour and canvas. Low but nonzero alpha on
-        // the border is not transparency: it is exactly the scanner haze we need to remove.
-        let transparent_border = self.rgba.as_chunks::<4>().0.iter().enumerate().all(|(i, p)| {
-            let (x, y) = (i % w, i / w);
-            !(x == 0 || y == 0 || x + 1 == w || y + 1 == h) || p[3] == 0
-        });
-        let transparent_pixels = self.rgba.as_chunks::<4>().0.iter().filter(|p| p[3] == 0).count();
-        if options.remove_background && transparent_border && transparent_pixels > w * h / 2 && transparent_pixels < w * h {
+        if !options.remove_background {
             return Ok(self.clone());
         }
-        let image = if options.remove_background {
-            let [w, h] = self.size;
-            let light = match options.ink {
-                SignatureInk::Dark => false,
-                SignatureInk::Light => true,
-                SignatureInk::Auto => {
-                    let mut border = Vec::with_capacity((w + h) * 2);
-                    for (i, &[r, g, b, a]) in self.rgba.as_chunks::<4>().0.iter().enumerate() {
-                        let (x, y) = (i % w, i / w);
-                        if x == 0 || y == 0 || x + 1 == w || y + 1 == h {
-                            let visible = |c: u8| (u32::from(c) * u32::from(a) + 255 * (255 - u32::from(a))) / 255;
-                            border.push((299 * visible(r) + 587 * visible(g) + 114 * visible(b)) / 1000);
-                        }
-                    }
-                    border.sort_unstable();
-                    border.get(border.len() / 2).copied().unwrap_or(255) < 96
-                }
-            };
-            let photo = crate::SignaturePhoto::from_signature(self, light);
-            let frame = crate::PhotoRect { x: 0, y: 0, width: w as u32, height: h as u32 };
-            let scanned = photo.scan(frame, options.sensitivity, crate::signature_scan::SCAN_MAX_SIDE).map_err(|e| match e {
-                crate::signature_scan::ScanError::NoInk => SignatureImageError::NoInk,
-                crate::signature_scan::ScanError::Signature(e) => e,
-                crate::signature_scan::ScanError::Decode(e) => SignatureImageError::Decode(e),
-                crate::signature_scan::ScanError::Read(e) => SignatureImageError::Read(e),
-                crate::signature_scan::ScanError::Size => SignatureImageError::Size,
-                crate::signature_scan::ScanError::Format => SignatureImageError::Format,
-            })?;
-            let [sw, sh] = scanned.size();
-            let mut rgba = image::RgbaImage::from_raw(sw as u32, sh as u32, scanned.rgba().to_vec()).ok_or(SignatureImageError::Size)?;
-            for pixel in rgba.pixels_mut() {
-                pixel.0 = [0, 0, 0, pixel.0[3]];
-            }
-            Self::from_rgba(rgba)?
-        } else {
-            self.clone()
-        };
-        Ok(image)
+        SignatureImageSource::from(self.clone()).clean_background(options)
     }
 
     /// Normalize generated pixels through the same bounded PNG decoder as imported signatures.
@@ -434,6 +491,11 @@ mod tests {
         assert!(matches!(SignatureImage::from_bytes(&png(8193, 1)), Err(SignatureImageError::Size)));
         assert!(matches!(SignatureImage::from_bytes(&png(8192, 4097)), Err(SignatureImageError::Size)));
         assert!(SignatureImage::read(std::io::repeat(0)).is_err());
+        assert!(SignatureImageSource::from_bytes(b"not an image").is_err());
+        assert!(SignatureImageSource::from_bytes(&vec![0; MAX_SIGNATURE_IMAGE_BYTES + 1]).is_err());
+        assert!(matches!(SignatureImageSource::from_bytes(&png(8193, 1)), Err(SignatureImageError::Size)));
+        assert!(matches!(SignatureImageSource::from_bytes(&png(8192, 4097)), Err(SignatureImageError::Size)));
+        assert!(SignatureImageSource::read(std::io::repeat(0)).is_err());
         assert!(matches!(SignatureImage::from_bytes(b"GIF89a\x02\0\x02\0"), Err(SignatureImageError::Format)));
     }
 

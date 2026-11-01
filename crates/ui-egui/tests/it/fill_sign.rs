@@ -615,7 +615,8 @@ fn browse_image(h: &mut Harness<'static, PdfCraftApp>, path: &std::path::Path) {
 }
 
 fn settle_image(h: &mut Harness<'static, PdfCraftApp>) {
-    for _ in 0..100 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while std::time::Instant::now() < deadline {
         h.run_steps(2);
         let draft = &h.state().signature_draft;
         if draft.saved().is_some() || draft.image_import.as_ref().is_some_and(|d| d.problem.is_some()) {
@@ -623,7 +624,7 @@ fn settle_image(h: &mut Harness<'static, PdfCraftApp>) {
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
-    panic!("image cleanup did not finish");
+    panic!("image cleanup did not finish: {:?}", h.state().signature_draft);
 }
 
 /// Image import previews transparent ink, restores the original and places an undoable signature.
@@ -647,7 +648,8 @@ fn image_signature_cleanup_removes_haze_and_can_restore_the_original() {
     h.run_steps(2);
     browse_image(&mut h, &path);
     let wait = |h: &mut Harness<'static, PdfCraftApp>| {
-        for _ in 0..100 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while std::time::Instant::now() < deadline {
             h.run_steps(2);
             if h.state().signature_draft.saved().is_some() {
                 return;

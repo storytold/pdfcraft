@@ -1,5 +1,5 @@
 # PdfCraft roadmap: milestones and what's next
-
+>
 > **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-01 · **Change:** patch (M5, PR #2164: refreshed signature cleanup for 0.16.1/main, preserving the split Scan module, typed worker errors and text/date color; estimates unchanged)
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 further review: inherited drawing/text state, affine image gestures, paste/selection ownership, no-op scripts and menu permissions; estimates unchanged)

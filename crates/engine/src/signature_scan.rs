@@ -135,7 +135,7 @@ pub struct SignaturePhoto {
 impl SignaturePhoto {
     /// Composite alpha on white for dark ink, or black before inversion for light ink.
     /// Transparent RGB must not become ink when removing low-alpha scanner haze.
-    pub(crate) fn from_signature(image: &SignatureImage, light_ink: bool) -> Self {
+    pub(crate) fn from_signature(image: &crate::signature_image::SignatureImageSource, light_ink: bool) -> Self {
         let [w, h] = image.size();
         let mut rgb = RgbImage::new(w as u32, h as u32);
         for (pixel, &[r, g, b, a]) in rgb.pixels_mut().zip(image.rgba().as_chunks::<4>().0) {

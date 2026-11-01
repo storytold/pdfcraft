@@ -4,7 +4,7 @@
 //! can be moved, deleted and undone like any comment.
 
 use egui::{Color32, CornerRadius, Pos2, Sense, Stroke, pos2, vec2};
-use pdfcraft_engine::signature_image::{SignatureCleanup, SignatureImageError, SignatureInk};
+use pdfcraft_engine::signature_image::{SignatureCleanup, SignatureImageError, SignatureImageSource, SignatureInk};
 use pdfcraft_engine::signature_scan::{DEFAULT_SENSITIVITY, PREVIEW_MAX_SIDE, SCAN_MAX_SIDE, ScanError};
 use pdfcraft_engine::{Edit, FillMark, NewAnnotation, PhotoRect, Shape, SignatureImage, SignaturePhoto, Style, Turn};
 use pdfcraft_render::{DocInfo, PageInfo};
@@ -167,7 +167,7 @@ impl SigDraft {
 /// Rebuild from the immutable original; never clean an already cleaned preview again.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImageImportDraft {
-    pub original: SignatureImage,
+    pub original: SignatureImageSource,
     pub options: SignatureCleanup,
     pub problem: Option<String>,
     worker: ImageCleanupWorker,
@@ -204,8 +204,8 @@ impl std::fmt::Debug for ImageCleanupWorker {
 
 impl ImageImportDraft {
     /// Start a reversible import with cleanup enabled and no worker running.
-    fn new(original: SignatureImage) -> Self {
-        Self { original, options: SignatureCleanup::default(), problem: None, worker: Default::default() }
+    fn new(original: impl Into<SignatureImageSource>) -> Self {
+        Self { original: original.into(), options: SignatureCleanup::default(), problem: None, worker: Default::default() }
     }
 
     /// Reopen a saved signature without cleaning its pixels again.
@@ -214,7 +214,7 @@ impl ImageImportDraft {
     }
 
     /// Run bounded cleanup behind the engine panic guard without translating on the worker.
-    fn run(original: &SignatureImage, options: SignatureCleanup) -> CleanupAnswer {
+    fn run(original: &SignatureImageSource, options: SignatureCleanup) -> CleanupAnswer {
         pdfcraft_engine::guard(|| original.clean_background(options))
     }
 
@@ -980,7 +980,7 @@ impl crate::PdfCraftApp {
                 return;
             }
             let result =
-                std::fs::File::open(path).map_err(pdfcraft_engine::signature_image::SignatureImageError::from).and_then(SignatureImage::read);
+                std::fs::File::open(path).map_err(pdfcraft_engine::signature_image::SignatureImageError::from).and_then(SignatureImageSource::read);
             app.use_signature_image(result.map_err(|e| e.to_string()));
         });
         #[cfg(target_arch = "wasm32")]
@@ -1044,13 +1044,14 @@ impl crate::PdfCraftApp {
             self.use_signature_photo(result);
             return;
         }
-        let result = bytes
-            .and_then(|bytes| pdfcraft_engine::guard(|| SignatureImage::from_bytes(&bytes)).map_err(|e| e.to_string())?.map_err(|e| e.to_string()));
+        let result = bytes.and_then(|bytes| {
+            pdfcraft_engine::guard(|| SignatureImageSource::from_bytes(&bytes)).map_err(|e| e.to_string())?.map_err(|e| e.to_string())
+        });
         self.use_signature_image(result);
     }
 
     /// Initialize the active import tab from a decoded image or display its read error.
-    fn use_signature_image(&mut self, result: Result<SignatureImage, String>) {
+    fn use_signature_image(&mut self, result: Result<SignatureImageSource, String>) {
         match result {
             Ok(image) => {
                 let mut import = ImageImportDraft::new(image);
@@ -1086,8 +1087,8 @@ impl crate::PdfCraftApp {
                 bytes.and_then(|b| pdfcraft_engine::guard(|| SignaturePhoto::from_bytes(&b)).map_err(|e| e.to_string())?.map_err(|e| e.to_string()));
             self.use_signature_photo(photo);
         } else {
-            let image =
-                bytes.and_then(|b| pdfcraft_engine::guard(|| SignatureImage::from_bytes(&b)).map_err(|e| e.to_string())?.map_err(|e| e.to_string()));
+            let image = bytes
+                .and_then(|b| pdfcraft_engine::guard(|| SignatureImageSource::from_bytes(&b)).map_err(|e| e.to_string())?.map_err(|e| e.to_string()));
             self.use_signature_image(image);
         }
         Vec::new()
@@ -1114,7 +1115,7 @@ mod tests {
         use super::*;
         let mut bytes = std::io::Cursor::new(Vec::new());
         image::RgbaImage::from_pixel(20, 10, image::Rgba([255, 255, 255, 255])).write_to(&mut bytes, image::ImageFormat::Png).unwrap();
-        let source = SignatureImage::from_bytes(bytes.get_ref()).unwrap();
+        let source = SignatureImageSource::from_bytes(bytes.get_ref()).unwrap();
         let result = std::thread::spawn(move || ImageImportDraft::run(&source, SignatureCleanup::default())).join().unwrap();
         let source = SignatureImage::from_bytes(&bytes.into_inner()).unwrap();
         let mut draft = ImageImportDraft::new(source);

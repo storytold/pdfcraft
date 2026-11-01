@@ -277,9 +277,12 @@ extracted ink and places it as black ink on real transparency. Already isolated
 cutouts retain their color and dimensions. This is local pixel extraction, not
 generated handwriting; textured backgrounds overlapping ink may need manual
 preparation. The existing `scan` mode and this option are mutually exclusive.
+Source JPEGs are decoded within the existing limits before cleanup; the final PNG
+still must fit 4 MiB, including when cleanup is disabled.
 
 The Image tab enables cleanup by default and previews actual transparency on a
-checkerboard. Clearing Remove background restores the original import; adjustments
+checkerboard. Clearing Remove background restores the original import if it fits the stored PNG
+limit; otherwise it reports the size error. Adjustments
 always start from that source. Desktop processing runs on a worker, with Apply
 disabled until the latest result is ready. Existing automation callers keep their
 original behavior because `remove_background` defaults to false. No stroke-width

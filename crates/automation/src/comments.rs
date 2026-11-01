@@ -545,15 +545,13 @@ impl Automation {
                 let mut photo = pdfcraft_engine::SignaturePhoto::read(file).map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
                 let frame = photo.auto_frame();
                 photo.scan(frame, sensitivity, pdfcraft_engine::signature_scan::SCAN_MAX_SIDE).map_err(|e| ToolError::InvalidArgs(e.to_string()))?
+            } else if cleanup {
+                pdfcraft_engine::signature_image::SignatureImageSource::read(file)
+                    .map_err(|e| ToolError::InvalidArgs(e.to_string()))?
+                    .clean_background(pdfcraft_engine::signature_image::SignatureCleanup { remove_background: true, ink, sensitivity })
+                    .map_err(|e| ToolError::InvalidArgs(e.to_string()))?
             } else {
-                let image = pdfcraft_engine::SignatureImage::read(file).map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
-                if cleanup {
-                    image
-                        .clean_background(pdfcraft_engine::signature_image::SignatureCleanup { remove_background: true, ink, sensitivity })
-                        .map_err(|e| ToolError::InvalidArgs(e.to_string()))?
-                } else {
-                    image
-                }
+                pdfcraft_engine::SignatureImage::read(file).map_err(|e| ToolError::InvalidArgs(e.to_string()))?
             };
             let edit = image.edit(page, &info, at, kind == "initials", &author).ok_or_else(|| ToolError::InvalidArgs("at must be finite".into()))?;
             return self.apply(a, edit);
