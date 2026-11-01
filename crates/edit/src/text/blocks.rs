@@ -259,13 +259,48 @@ pub fn text_blocks(doc: &Document, page: usize) -> Result<Vec<TextBlock>, EditEr
 /// preserve the text matrix, so unselected text positioned relative to it stays in place.
 /// Call this on a clone: it is a preview operation, not a document edit.
 pub fn clear_block(doc: &mut Document, page: usize, block: usize) -> Result<(), EditError> {
+    let drops = block_ops(doc, page, block)?;
+    rewrite_page_ops(doc, page, |shown| drops.contains(&shown), |_| None)
+}
+
+/// Leave only a paragraph on `page`: every other glyph, path and picture stops painting (clips
+/// stay) and the annotations go, so a render of the page on a transparent backdrop is the
+/// paragraph's pixels alone. For previews on a clone, like [`clear_block`].
+pub fn isolate_block(doc: &mut Document, page: usize, block: usize) -> Result<(), EditError> {
+    let kept = block_ops(doc, page, block)?;
+    rewrite_page_ops(
+        doc,
+        page,
+        |shown| !kept.contains(&shown),
+        |op| match op.op.as_slice() {
+            b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"S" | b"s" => Some(vec![Op::new("n", vec![])]),
+            b"sh" | b"Do" | b"BI" => Some(Vec::new()),
+            _ => None,
+        },
+    )?;
+    let p = page_dict(doc, page)?;
+    doc.update_dict(p.obj, |d| {
+        d.remove(b"Annots");
+    })?;
+    Ok(())
+}
+
+/// The content operators that draw paragraph `block`, its stacked copies included, once it is
+/// checked to be previewable.
+fn block_ops(doc: &Document, page: usize, block: usize) -> Result<std::collections::HashSet<usize>, EditError> {
     let lines = text_lines(doc, page)?;
     let blocks = group_blocks(&lines);
     let target = blocks.get(block).ok_or_else(|| EditError::Invalid("the paragraph no longer exists".into()))?;
     let targets: Vec<&TextLine> = target.lines.iter().filter_map(|i| lines.get(*i)).collect();
     targets.iter().try_for_each(|line| line.ensure_editable())?;
-    let mut drops = coincident_ops(&lines, &targets);
-    drops.extend(target.lines.iter().filter_map(|i| lines.get(*i)).flat_map(|l| l.ops.iter().copied()));
+    let mut ops = coincident_ops(&lines, &targets);
+    ops.extend(target.lines.iter().filter_map(|i| lines.get(*i)).flat_map(|l| l.ops.iter().copied()));
+    Ok(ops)
+}
+
+/// Rewrite `page`'s content: a text-showing operator `blank` picks only keeps its advance, and
+/// `other` may replace any operator that shows no text.
+fn rewrite_page_ops(doc: &mut Document, page: usize, blank: impl Fn(usize) -> bool, other: impl Fn(&Op) -> Option<Vec<Op>>) -> Result<(), EditError> {
     let p = page_dict(doc, page)?;
     let res = p.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     let streams = content_streams(doc, &p.dict)?;
@@ -273,7 +308,7 @@ pub fn clear_block(doc: &mut Document, page: usize, block: usize) -> Result<(), 
     let ops = pieces.parse().ops;
     let shown = interpret(doc, &ops, &res, &mut HashMap::new(), &mut Carry::new(), None, None)?;
     let mut patches = HashMap::new();
-    for s in shown.into_iter().filter(|s| drops.contains(&s.op)) {
+    for s in shown.into_iter().filter(|s| blank(s.op)) {
         if s.state.render_mode >= 4 {
             return Err(EditError::Invalid("text used as a clipping path cannot be previewed for editing".into()));
         }
@@ -294,6 +329,13 @@ pub fn clear_block(doc: &mut Document, page: usize, block: usize) -> Result<(), 
         }
         replacement.push(Op::new("TJ", vec![Object::Array(vec![pdfcraft_content::num(adjustment)])]));
         patches.insert(s.op, replacement);
+    }
+    for (i, op) in ops.iter().enumerate() {
+        if !patches.contains_key(&i)
+            && let Some(replacement) = other(op)
+        {
+            patches.insert(i, replacement);
+        }
     }
     let data = splice(&pieces, &ops, |i| patches.remove(&i).map_or((Vec::new(), true), |v| (v, false)));
     let contents = rewritten_contents(doc, &streams, data);
