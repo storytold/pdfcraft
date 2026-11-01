@@ -1866,11 +1866,24 @@
 	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft 可離線使用，不收集遙測資料，也不需要帳號。只有在您新增服務供應商後，才會使用雲端處理。
 	Double-click	滑鼠按兩下
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	Microsoft Word (.docx)	Microsoft Word（.docx）
 	Spreadsheet (.xlsx)	試算表（.xlsx）
 	Presentation (.pptx)	簡報（.pptx）
 	PostScript / EPS	PostScript / EPS
 	Save as PDF/X	另存新檔為 PDF/X
+	Verify PDF/X	驗證 PDF/X
+	Choose ICC profile…	選擇 ICC 描述檔…
+	ICC profile: {name}	ICC 描述檔：{name}
+	Can't save as {level}; nothing was changed:	無法另存新檔為 {level}；未做任何變更：
+	Saved {name} and verified it: it conforms to {level}.	已儲存 {name} 並完成驗證：符合 {level}。
+	Saved {name}, but verifying it found {n} problems.	已儲存 {name}，但驗證發現 {n} 個問題。
+	Converted to {level} ({n} changes)	已轉換為 {level}（{n} 項變更）
+	Output intent profile:	輸出意圖描述檔：
+	None: sRGB for RGB and gray documents	無：RGB 與灰階文件使用 sRGB
+	Printing condition:	印刷條件：
+	Flatten comments and form fields	平面化註解與表單欄位
+	Couldn't read the ICC profile {name}: {e}	無法讀取 ICC 描述檔 {name}：{e}
 	Save as PDF/UA	另存新檔為 PDF/UA
 	JavaScript	JavaScript
 	pages	頁

@@ -2077,6 +2077,7 @@
 	open to see what it will include	отворете, за да видите какво ще включва
 	Page {p} of {n}	Страница {p} от {n}
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	Planned	Планирано
 	Planned for milestone	Планирано за етап
 	PostScript / EPS	PostScript / EPS
@@ -2097,6 +2098,18 @@
 	Save as PDF/A-3b	Запиши като PDF/A-3b
 	Save as PDF/UA	Запиши като PDF/UA
 	Save as PDF/X	Запиши като PDF/X
+	Verify PDF/X	Провери PDF/X
+	Choose ICC profile…	Избери ICC профил…
+	ICC profile: {name}	ICC профил: {name}
+	Can't save as {level}; nothing was changed:	Не може да се запише като {level}; нищо не е променено:
+	Saved {name} and verified it: it conforms to {level}.	{name} е записан и проверен: съответства на {level}.
+	Saved {name}, but verifying it found {n} problems.	{name} е записан, но проверката откри {n} проблема.
+	Converted to {level} ({n} changes)	Преобразуван в {level} ({n} промени)
+	Output intent profile:	Профил на изходното предназначение:
+	None: sRGB for RGB and gray documents	Няма: sRGB за RGB и сиви документи
+	Printing condition:	Условия за печат:
+	Flatten comments and form fields	Сплескай коментарите и полетата на формуляри
+	Couldn't read the ICC profile {name}: {e}	Профилът ICC {name} не може да бъде прочетен: {e}
 	Select a file for the stamp	Изберете файл за печата
 	Select Icon	Избери икона
 	Set bookmark destination	Задай местоназначение на отметката

@@ -224,6 +224,7 @@
 	Import form data…	استيراد بيانات النموذج…
 	Export form data…	تصدير بيانات النموذج…
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	Action Wizard…	معالج الإجراءات…
 	Prepare for distribution…	التجهيز للتوزيع…
 	Optimize scanned documents…	تحسين المستندات الممسوحة ضوئيًا…
@@ -477,6 +478,18 @@
 	Standards	المعايير
 	Save as PDF/A	حفظ بصيغة PDF/A
 	Save as PDF/X	حفظ بصيغة PDF/X
+	Verify PDF/X	تحقق من PDF/X
+	Choose ICC profile…	اختيار ملف تعريف ICC…
+	ICC profile: {name}	ملف تعريف ICC: {name}
+	Can't save as {level}; nothing was changed:	تعذّر الحفظ بصيغة {level}؛ لم يتغير شيء:
+	Saved {name} and verified it: it conforms to {level}.	حُفظ {name} وتم التحقق منه: إنه مطابق لـ {level}.
+	Saved {name}, but verifying it found {n} problems.	حُفظ {name}، لكن التحقق منه وجد {n} من المشكلات.
+	Converted to {level} ({n} changes)	تم التحويل إلى {level} ({n} من التغييرات)
+	Output intent profile:	ملف تعريف هدف الإخراج:
+	None: sRGB for RGB and gray documents	لا شيء: sRGB لمستندات RGB والرمادي
+	Printing condition:	ظروف الطباعة:
+	Flatten comments and form fields	تسطيح التعليقات وحقول النماذج
+	Couldn't read the ICC profile {name}: {e}	تعذّرت قراءة ملف تعريف ICC {name}: {e}
 	Save as PDF/UA	حفظ بصيغة PDF/UA
 	Add search index	إضافة فهرس بحث
 	Index	فهرس

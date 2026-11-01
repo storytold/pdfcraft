@@ -15,29 +15,59 @@
 //! - images: no `Interpolate`, no `Alternates`, no OPI; no PostScript XObjects;
 //! - embedded files: PDF/A-2 only allows embedded PDF/A files; PDF/A-3 needs `AFRelationship`.
 //!
+//! Levels u and a add Unicode for every character shown and, for a, tagging (see `levels.rs`).
+//!
 //! [`convert`] fixes what can be fixed without changing how pages look (XMP, the sRGB output
 //! intent, forbidden actions, annotation flags, Interpolate, NeedAppearances, encryption) and
 //! returns what remains. Fonts that aren't embedded can't be fixed here.
+//!
+//! [`pdfx::verify`] checks a document against PDF/X-1a, PDF/X-3 and PDF/X-4 (ISO 15930).
+//!
+//! [`conform`] is Save as PDF/X and Save as PDF/A: it converts a copy, and keeps it only when the
+//! verifier then finds nothing; otherwise it says what stands in the way and changes nothing.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod conform;
+mod function;
 pub mod icc;
+mod levels;
+pub mod output;
+pub mod pdfx;
+mod recolour;
+mod walk;
 mod xmp;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
-/// The PDF/A part and conformance level.
+/// The PDF/A part and conformance level: b (basic: how pages look), u (and every character maps
+/// to Unicode) or a (and the document is tagged, accessible).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {
     A2b,
     A3b,
+    A2u,
+    A3u,
+    A2a,
+    A3a,
 }
 
 impl Level {
+    pub const ALL: [Level; 6] = [Level::A2b, Level::A2u, Level::A2a, Level::A3b, Level::A3u, Level::A3a];
+
     pub fn part(self) -> u8 {
         match self {
-            Level::A2b => 2,
-            Level::A3b => 3,
+            Level::A2b | Level::A2u | Level::A2a => 2,
+            Level::A3b | Level::A3u | Level::A3a => 3,
+        }
+    }
+
+    /// `pdfaid:conformance`: B, U or A.
+    pub fn conformance(self) -> &'static str {
+        match self {
+            Level::A2b | Level::A3b => "B",
+            Level::A2u | Level::A3u => "U",
+            Level::A2a | Level::A3a => "A",
         }
     }
 
@@ -45,15 +75,29 @@ impl Level {
         match self {
             Level::A2b => "PDF/A-2b",
             Level::A3b => "PDF/A-3b",
+            Level::A2u => "PDF/A-2u",
+            Level::A3u => "PDF/A-3u",
+            Level::A2a => "PDF/A-2a",
+            Level::A3a => "PDF/A-3a",
         }
     }
 
+    /// A level from its short id (`2b`, `a3u`, `pdfa-2a`) or its label.
     pub fn from_id(id: &str) -> Option<Level> {
-        match id.to_ascii_lowercase().replace(['/', '-', ' '], "").as_str() {
-            "pdfa2b" | "a2b" | "2b" => Some(Level::A2b),
-            "pdfa3b" | "a3b" | "3b" => Some(Level::A3b),
-            _ => None,
-        }
+        let id = id.to_ascii_lowercase().replace(['/', '-', ' '], "");
+        let id = id.strip_prefix("pdf").unwrap_or(&id);
+        let id = id.strip_prefix('a').unwrap_or(id);
+        Level::ALL.into_iter().find(|l| format!("{}{}", l.part(), l.conformance().to_ascii_lowercase()) == id)
+    }
+
+    /// Levels u and a: every character the document shows maps to Unicode.
+    pub fn needs_unicode(self) -> bool {
+        self.conformance() != "B"
+    }
+
+    /// Level a: the document is tagged.
+    pub fn needs_structure(self) -> bool {
+        self.conformance() == "A"
     }
 }
 
@@ -140,6 +184,18 @@ pub const WORDINGS: &[&str] = &[
     "PostScript XObjects aren't allowed",
     "Embedded files must be PDF/A files themselves (use PDF/A-3 for others)",
     "An embedded file has no AFRelationship",
+    "Output intents with profiles don't all share one profile",
+    // Levels u and a: Unicode.
+    "The font {} has characters with no Unicode value",
+    "The font {} maps characters to U+0000, U+FEFF or U+FFFE",
+    "Text in the font {} uses the Private Use Area without ActualText",
+    // Level a: tagging.
+    "The document isn't marked as tagged (MarkInfo /Marked true)",
+    "The language {} isn't a valid language tag",
+    "The document has no structure tree: it isn't tagged",
+    "The standard structure type {} is mapped to a type that isn't standard",
+    "The role map maps {} in a circle",
+    "The structure type {} isn't standard and isn't mapped to a standard type",
 ];
 
 /// What a document declares (the Standards panel).
@@ -148,6 +204,9 @@ pub struct Declared {
     /// `pdfaid:part` and `pdfaid:conformance`, e.g. (2, "B").
     pub pdfa: Option<(u8, String)>,
     pub pdfua: Option<u8>,
+    /// The PDF/X version, e.g. "PDF/X-4": `GTS_PDFXVersion` from the document information or the
+    /// XMP metadata, and for PDF/X-1:2001 its conformance level ("PDF/X-1a:2001").
+    pub pdfx: Option<String>,
     /// Output intents' condition identifiers.
     pub output_intents: Vec<String>,
 }
@@ -156,12 +215,12 @@ const FORBIDDEN_ACTIONS: &[&[u8]] =
     &[b"JavaScript", b"Launch", b"Sound", b"Movie", b"ResetForm", b"ImportData", b"Hide", b"SetOCGState", b"Rendition", b"Trans", b"GoTo3DView"];
 const FORBIDDEN_ANNOTS: &[&[u8]] = &[b"Sound", b"Movie", b"Screen", b"3D", b"RichMedia"];
 
-fn catalog(doc: &Document) -> Dict {
+pub(crate) fn catalog(doc: &Document) -> Dict {
     doc.root().and_then(|r| doc.get(r).as_dict().cloned()).unwrap_or_default()
 }
 
 /// The XMP metadata stream of the catalog, as text.
-fn metadata(doc: &Document) -> Option<String> {
+pub(crate) fn metadata(doc: &Document) -> Option<String> {
     let cat = catalog(doc);
     let m = doc.resolve(cat.get(b"Metadata")?);
     match &*m {
@@ -179,6 +238,7 @@ pub fn declared(doc: &Document) -> Declared {
         d.pdfa = part.map(|p| (p, conf.to_uppercase()));
         d.pdfua = xmp::identifier(&x, xmp::PDFUA_ID, "part").and_then(|p| p.parse().ok());
     }
+    d.pdfx = pdfx::declared_version(doc);
     let cat = catalog(doc);
     if let Some(list) = cat.get(b"OutputIntents").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()) {
         for oi in list {
@@ -207,6 +267,17 @@ fn dict_of(o: &Object) -> Option<&Dict> {
         Object::Dict(d) => Some(d),
         Object::Stream(s) => Some(&s.dict),
         _ => None,
+    }
+}
+
+/// Whether every output intent that embeds a profile embeds the same object (ISO 19005-2 6.2.3).
+fn intents_share_profile(doc: &Document) -> bool {
+    let cat = catalog(doc);
+    let list = cat.get(b"OutputIntents").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
+    let mut profiles = list.iter().filter_map(|oi| doc.resolve(oi).as_dict().and_then(|d| d.get(b"DestOutputProfile").cloned()));
+    match profiles.next() {
+        Some(first) => profiles.all(|p| p.as_ref().is_some() && p.as_ref() == first.as_ref()),
+        None => true,
     }
 }
 
@@ -332,7 +403,7 @@ fn referenced_content(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)])
 /// Whether a stream's own dictionary says it holds content: a form XObject, or a stream with a
 /// `/BBox` and no `/Subtype` (a tiling pattern, or an appearance stream that leaves out
 /// `/Subtype /Form`). Mesh shadings may carry a `/BBox` too, but their data isn't content.
-fn is_content(d: &Dict) -> bool {
+pub(crate) fn is_content(d: &Dict) -> bool {
     match d.name(b"Subtype") {
         Some(t) => t == b"Form",
         None => d.get(b"BBox").is_some() && d.get(b"ShadingType").is_none(),
@@ -444,7 +515,7 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
         Some(x) => {
             let part = xmp::identifier(&x, xmp::PDFA_ID, "part");
             let conf = xmp::identifier(&x, xmp::PDFA_ID, "conformance");
-            if part.as_deref() != Some(&level.part().to_string()) || conf.as_deref().map(str::to_uppercase).as_deref() != Some("B") {
+            if part.as_deref() != Some(&level.part().to_string()) || conf.as_deref().map(str::to_uppercase).as_deref() != Some(level.conformance()) {
                 issue("6.6.4", "The metadata doesn't identify the file as {}", Some(level.label().to_owned()), None, true);
             }
             if let Some(title) = info(doc, "Title")
@@ -478,6 +549,10 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
             }
         }
         None => {}
+    }
+    // 6.2.3: output intents that embed a profile all embed the same one.
+    if !intents_share_profile(doc) {
+        issue("6.2.3", "Output intents with profiles don't all share one profile", None, None, false);
     }
     // 6.1.3 / 6.6.1: catalog actions.
     if cat.get(b"AA").is_some() {
@@ -515,6 +590,18 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
         }
     }
     check_objects(doc, level, &objs, &page_of, &mut issue);
+    // Levels u and a.
+    let mut found = Vec::new();
+    if level.needs_unicode() {
+        levels::unicode(doc, level.needs_structure(), &mut found);
+    }
+    if level.needs_structure() {
+        levels::structure(doc, &mut found);
+    }
+    for (clause, pattern, value, fixable) in found {
+        issue(clause, pattern, value, None, fixable);
+    }
+
     // One message per kind of problem is enough for repeated ones (as preflight summaries do).
     let mut seen = std::collections::HashSet::new();
     out.retain(|i| seen.insert((i.clause, i.message.clone(), i.page)));
@@ -662,12 +749,10 @@ fn check_stream(
 }
 
 fn check_embedded_file(level: Level, dict: &Dict, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
-    match level {
-        Level::A2b => issue("6.8", "Embedded files must be PDF/A files themselves (use PDF/A-3 for others)", None, None, false),
-        Level::A3b if dict.get(b"AFRelationship").is_none() => {
-            issue("6.8", "An embedded file has no AFRelationship", None, None, true);
-        }
-        Level::A3b => {}
+    if level.part() == 2 {
+        issue("6.8", "Embedded files must be PDF/A files themselves (use PDF/A-3 for others)", None, None, false);
+    } else if dict.get(b"AFRelationship").is_none() {
+        issue("6.8", "An embedded file has no AFRelationship", None, None, true);
     }
 }
 
@@ -915,7 +1000,7 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
             }
             continue;
         }
-        if level == Level::A3b && ty.as_deref() == Some(b"Filespec") && d.get(b"EF").is_some() && d.get(b"AFRelationship").is_none() {
+        if level.part() == 3 && ty.as_deref() == Some(b"Filespec") && d.get(b"EF").is_some() && d.get(b"AFRelationship").is_none() {
             let mut nd = d.clone();
             nd.set(b"AFRelationship".to_vec(), Object::name("Unspecified"));
             doc.set(r, Object::Dict(nd));

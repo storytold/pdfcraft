@@ -1803,6 +1803,18 @@
 	Standards	Πρότυπα
 	Save as PDF/A	Αποθήκευση ως PDF/A
 	Save as PDF/X	Αποθήκευση ως PDF/X
+	Verify PDF/X	Επαλήθευση PDF/X
+	Choose ICC profile…	Επιλογή προφίλ ICC…
+	ICC profile: {name}	Προφίλ ICC: {name}
+	Can't save as {level}; nothing was changed:	Δεν είναι δυνατή η αποθήκευση ως {level}· δεν άλλαξε τίποτα:
+	Saved {name} and verified it: it conforms to {level}.	Το {name} αποθηκεύτηκε και επαληθεύτηκε: συμμορφώνεται με το {level}.
+	Saved {name}, but verifying it found {n} problems.	Το {name} αποθηκεύτηκε, αλλά η επαλήθευση βρήκε {n} προβλήματα.
+	Converted to {level} ({n} changes)	Μετατράπηκε σε {level} ({n} αλλαγές)
+	Output intent profile:	Προφίλ χρωματικής εξόδου:
+	None: sRGB for RGB and gray documents	Κανένα: sRGB για έγγραφα RGB και αποχρώσεων του γκρι
+	Printing condition:	Συνθήκες εκτύπωσης:
+	Flatten comments and form fields	Ενσωμάτωση σχολίων και πεδίων φόρμας στο περιεχόμενο
+	Couldn't read the ICC profile {name}: {e}	Δεν ήταν δυνατή η ανάγνωση του προφίλ ICC {name}: {e}
 	Save as PDF/UA	Αποθήκευση ως PDF/UA
 	Add search index	Προσθήκη ευρετηρίου αναζήτησης
 	Index	Ευρετήριο
@@ -2217,6 +2229,7 @@
 	Import form data…	Εισαγωγή δεδομένων φόρμας…
 	Export form data…	Εξαγωγή δεδομένων φόρμας…
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	Action Wizard…	Οδηγός ενεργειών…
 	Prepare for distribution…	Προετοιμασία για διανομή…
 	Optimize scanned documents…	Βελτιστοποίηση σαρωμένων εγγράφων…

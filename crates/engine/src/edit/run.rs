@@ -84,13 +84,20 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
                 Err(EditError::NotPermitted("changing security"))
             }
         }
-        // Converting to PDF/A takes the encryption off (PDF/A forbids it), so on an encrypted
-        // document it is a change of security (#3921).
+        // Converting to PDF/A or PDF/X takes the encryption off (both forbid it), so on an
+        // encrypted document it is a change of security (#3921).
         Edit::ConvertPdfA { .. } => {
             if unrestricted(p) {
                 Ok(())
             } else {
                 Err(EditError::NotPermitted("removing the encryption, which PDF/A forbids"))
+            }
+        }
+        Edit::ConvertPdfX { .. } => {
+            if unrestricted(p) {
+                Ok(())
+            } else {
+                Err(EditError::NotPermitted("removing the encryption, which PDF/X forbids"))
             }
         }
         Edit::SetInfo { .. }
@@ -185,6 +192,10 @@ pub(crate) struct EditCtx {
     /// The overlay streams the edit's applied redactions added, which alone the renderer's check
     /// leaves out.
     pub(crate) redaction_overlays: Vec<pdfcraft_cos::ObjRef>,
+    /// The document's name (Save as PDF/X titles an untitled document with it).
+    pub(crate) name: String,
+    /// What a Save as PDF/A or PDF/X changed.
+    pub(crate) converted: Vec<String>,
 }
 
 impl EditCtx {
@@ -213,6 +224,8 @@ impl EditCtx {
             count: 0,
             rng: getrandom::fill,
             renamed_fields: Vec::new(),
+            name: String::new(),
+            converted: Vec::new(),
             redaction_overlays: Vec::new(),
         }
     }
@@ -517,8 +530,27 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 None => pdfcraft_forms::recalculate(doc)?,
             };
         }
-        Edit::ConvertPdfA { level } => {
-            pdfcraft_preflight::convert(doc, *level).map_err(|e| EditError::Invalid(e.to_string()))?;
+        Edit::ConvertPdfA { level, condition } => {
+            let opts = pdfcraft_preflight::conform::Options { condition: condition.clone(), now: cx.date.clone(), ..Default::default() };
+            cx.converted = pdfcraft_preflight::conform::pdfa(doc, *level, &opts).map_err(EditError::Refused)?;
+        }
+        Edit::ConvertPdfX { level, condition, flatten } => {
+            let flattened = if *flatten {
+                let pages: Vec<usize> = (0..pdfcraft_model::pages(doc).len()).collect();
+                pdfcraft_edit::flatten(doc, &pages, true, true)?
+            } else {
+                0
+            };
+            let opts = pdfcraft_preflight::conform::Options {
+                condition: condition.clone(),
+                drop_unprinted: *flatten,
+                title: (!cx.name.is_empty()).then(|| cx.name.clone()),
+                now: cx.date.clone(),
+            };
+            let mut converted =
+                if flattened > 0 { vec![format!("{flattened}: flattened comments and form fields into the page")] } else { Vec::new() };
+            converted.extend(pdfcraft_preflight::conform::pdfx(doc, *level, &opts).map_err(EditError::Refused)?);
+            cx.converted = converted;
         }
         Edit::RemoveStandardId { standard } => pdfcraft_organize::remove_standard_id(doc, *standard)?,
         Edit::SetDocumentScript { name, script } => pdfcraft_forms::set_document_script(doc, name, script.as_deref())?,

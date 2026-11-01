@@ -482,6 +482,8 @@ pub struct PdfCraftApp {
     pub action_files_override: Option<Vec<String>>,
     /// Standards ▸ PDF/A: level and last result.
     pub pdfa: standards_ui::PdfaState,
+    /// Standards ▸ PDF/X: level and last result.
+    pub pdfx: standards_ui::PdfxState,
     /// Compare files: the chosen older document and the last result.
     pub compare_old: Option<DocId>,
     pub compare: Option<compare_ui::CompareState>,

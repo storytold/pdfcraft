@@ -360,10 +360,25 @@ pub enum Edit {
         event: String,
         script: Option<String>,
     },
-    /// Standards ▸ Save as PDF/A: fix what can be fixed for `level` (metadata, output intent,
-    /// forbidden actions, annotation flags, …).
+    /// Standards ▸ Save as PDF/A: convert to `level` (metadata, output intent, forbidden actions,
+    /// annotation flags, …), or refuse with what stands in the way ([`EditError::Refused`]) and
+    /// change nothing. `condition`: an ICC profile for the output intent (how a document with
+    /// CMYK device colour gets one).
     ConvertPdfA {
         level: pdfcraft_preflight::Level,
+        condition: Option<pdfcraft_preflight::output::OutputCondition>,
+    },
+    /// Standards ▸ Save as PDF/X: convert to `level` (output intent, identification, page boxes,
+    /// colour, …), or refuse with what stands in the way ([`EditError::Refused`]) and change
+    /// nothing. `condition`: the printing condition (by default the document's own PDF/X output
+    /// intent, else for PDF/X-1a and -3 FOGRA39, named without a profile; PDF/X-4 and converting
+    /// colour need a profile). `flatten`: flatten
+    /// comments and form fields first, and take links and annotations that print nothing out of
+    /// the bleed (PDF/X allows no annotations there).
+    ConvertPdfX {
+        level: pdfcraft_preflight::pdfx::Level,
+        condition: Option<pdfcraft_preflight::output::OutputCondition>,
+        flatten: bool,
     },
     /// Remove what identifies the document as meeting `standard` (PDF/A or PDF/X).
     RemoveStandardId {

@@ -195,6 +195,7 @@
 	Import form data…	Űrlapadatok importálása…
 	Export form data…	Űrlapadatok exportálása…
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	Action Wizard…	Műveletvarázsló…
 	Prepare for distribution…	Előkészítés terjesztésre…
 	Optimize scanned documents…	Beolvasott dokumentumok optimalizálása…
@@ -448,6 +449,18 @@
 	Standards	Szabványok
 	Save as PDF/A	Mentés PDF/A-ként
 	Save as PDF/X	Mentés PDF/X-ként
+	Verify PDF/X	PDF/X ellenőrzése
+	Choose ICC profile…	ICC-profil kiválasztása…
+	ICC profile: {name}	ICC-profil: {name}
+	Can't save as {level}; nothing was changed:	Nem menthető {level} formátumban; semmi sem változott:
+	Saved {name} and verified it: it conforms to {level}.	{name} mentve és ellenőrizve: megfelel ennek: {level}.
+	Saved {name}, but verifying it found {n} problems.	{name} mentve, de az ellenőrzés {n} problémát talált.
+	Converted to {level} ({n} changes)	Átalakítva erre: {level} ({n} módosítás)
+	Output intent profile:	Kimeneti cél profilja:
+	None: sRGB for RGB and gray documents	Nincs: sRGB az RGB és szürkeárnyalatos dokumentumokhoz
+	Printing condition:	Nyomtatási feltétel:
+	Flatten comments and form fields	Megjegyzések és űrlapmezők beégetése
+	Couldn't read the ICC profile {name}: {e}	Nem sikerült beolvasni a(z) {name} ICC-profilt: {e}
 	Save as PDF/UA	Mentés PDF/UA-ként
 	Add search index	Keresőindex hozzáadása
 	Index	Index

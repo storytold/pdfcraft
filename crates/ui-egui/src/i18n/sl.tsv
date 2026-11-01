@@ -1315,6 +1315,7 @@
 	PDF version	Različica PDF
 	PDF, images and text	PDF, slike in besedilo
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	PRs	PR-ji
 	Page	Stran
 	Page Content	Vsebina strani
@@ -1619,6 +1620,18 @@
 	Save as PDF/A-3b	Shrani kot PDF/A-3b
 	Save as PDF/UA	Shrani kot PDF/UA
 	Save as PDF/X	Shrani kot PDF/X
+	Verify PDF/X	Preveri PDF/X
+	Choose ICC profile…	Izberi profil ICC…
+	ICC profile: {name}	Profil ICC: {name}
+	Can't save as {level}; nothing was changed:	Shranjevanje kot {level} ni mogoče; nič ni bilo spremenjeno:
+	Saved {name} and verified it: it conforms to {level}.	{name} je shranjen in preverjen: je skladen z {level}.
+	Saved {name}, but verifying it found {n} problems.	{name} je shranjen, vendar je preverjanje našlo težave: {n}.
+	Converted to {level} ({n} changes)	Pretvorjeno v {level} (sprememb: {n})
+	Output intent profile:	Profil izhodnega namena:
+	None: sRGB for RGB and gray documents	Brez: sRGB za dokumente RGB in v sivinah
+	Printing condition:	Pogoj tiskanja:
+	Flatten comments and form fields	Splošči komentarje in polja obrazcev
+	Couldn't read the ICC profile {name}: {e}	Profila ICC {name} ni bilo mogoče prebrati: {e}
 	Save as…	Shrani kot…
 	Save attachment…	Shrani priponko…
 	Save changes to “{name}” before closing?	Ali želite shraniti spremembe v „{name}“?

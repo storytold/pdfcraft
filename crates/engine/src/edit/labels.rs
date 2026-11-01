@@ -244,7 +244,8 @@ impl Edit {
             Edit::ApplyScriptChanges { .. } => Label::of("Run JavaScript"),
             Edit::XfaEvent { .. } => Label::of("Run form script"),
             // The level is the standard's own name ("PDF/A-2b"), so it goes in as it stands.
-            Edit::ConvertPdfA { level } => Label::with("Save as {level}", level.label()),
+            Edit::ConvertPdfA { level, .. } => Label::with("Save as {level}", level.label()),
+            Edit::ConvertPdfX { level, .. } => Label::with("Save as {level}", level.label()),
             Edit::RemoveStandardId { standard } => Label::with("Remove {standard} identification", standard.label()),
             Edit::SetFieldScript { name, .. } => Label::with("Edit script of {name}", name.as_str()),
             Edit::SetDocumentScript { script: None, .. } => Label::of("Delete document JavaScript"),

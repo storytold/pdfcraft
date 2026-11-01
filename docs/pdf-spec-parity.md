@@ -2,7 +2,7 @@
 
 > Integration update 2026-10-30: lossless JBIG2 generic and exact-copy symbol coding are included; no lossy substitution. Combined tests passed at bdf5620; the subsequent review fixes require fresh CI.
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** minor (§7.4: redaction decodes CCITT fax images, Group 3 on bytes aside; earlier, §7.4: CCITT decoding in `pdfcraft-filters`) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** minor (PDF/X-1a, -3, -4 verify and convert partial; PDF/A-2/3 levels u and a; chosen output intents) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How much of ISO 32000-2 (PDF 2.0) and the PDF subset standards PdfCraft implements, set against
 what Acrobat Pro implements. This is PdfCraft's equivalent of a "geometry" or "codec" checklist:
@@ -32,7 +32,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 | §7.11 | File specifications, embedded files | full | read and save attachments; no add/delete/describe | `organize.attachments-*` planned |
 | §7.12 | Extensions dictionary | yes | preserved | |
 | §8 | Graphics: paths, colour spaces, patterns, shadings, images, XObjects | full | **borrowed** renderer; own content parser and serializer (`crates/content`) for editing and redaction | rendering P0s partial |
-| §8.6 | ICC-based colour, output intents, colour management | full | ICC preserved; sRGB output intent for PDF/A; no colour management settings or soft proofing | `print.color-management` planned |
+| §8.6 | ICC-based colour, output intents, colour management | full | ICC preserved; sRGB output intent for PDF/A, or an ICC profile the user chooses (PDF/A and PDF/X); RGB and ICC-based colour converted to CMYK through the output profile for PDF/X-1a (moxcms); no colour management settings or soft proofing | `print.color-management` planned |
 | §9 | Text and fonts: Type 1, TrueType, OpenType/CFF, Type 3, CID-keyed, CMaps, ToUnicode | full | **borrowed** rendering; own text extraction (word-F1 0.98); standard-14 metrics for generated appearances; embedded fonts reused for editing, else Helvetica | `view.render-type3`, `view.render-cid-fonts` partial; no own font engine; no font embedding/subsetting for arbitrary new text beyond craft-fonts Japanese |
 | §10 | Rendering: transfer functions, halftones, overprint, smoothness | full | borrowed; no overprint preview | `print.overprint-preview` planned |
 | §11 | Transparency: blend modes, soft masks, groups, knockout | full | borrowed (knockout shipped) | `view.render-transparency` partial |
@@ -119,9 +119,9 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 | Standard | Acrobat | PdfCraft | Hours |
 |---|---|---|---|
 | PDF/A-1a/b (ISO 19005-1) | verify, convert | none | |
-| PDF/A-2a/b/u, PDF/A-3a/b/u | verify, convert | **partial**: 2b and 3b structural rules and conversion (sRGB intent; not CMYK) | |
+| PDF/A-2a/b/u, PDF/A-3a/b/u | verify, convert | **partial**: structural rules for b, Unicode for u, tagging rules for a; conversion that refuses rather than write a file that fails (sRGB intent, or a chosen ICC profile for CMYK documents); no font embedding or tagging on conversion | |
 | PDF/A-4, 4e, 4f | verify, convert | none | |
-| PDF/X-1a, X-3, X-4 (ISO 15930) | verify, convert | none | |
+| PDF/X-1a, X-3, X-4 (ISO 15930) | verify, convert | **partial**: structural rules from the CGATS application notes; Save as PDF/X (output intent, identification, boxes, PDF version, RGB to CMYK for X-1a); no transparency flattening or font embedding | |
 | PDF/UA-1, PDF/UA-2 (ISO 14289) | verify (Preflight), checker | Accessibility Checker (32 rules, Acrobat's own), no PDF/UA verification | |
 | PDF/E, PDF/VT | verify, convert | none | |
 | Preflight (profiles, fixups, reports) | hundreds of profiles | none | |
@@ -135,6 +135,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 | 2026-10-26 | minor | §7.4: redaction clears pixels in CCITT fax images through the CCITT decoder, instead of removing them whole (Group 4 and Group 3 off bytes; Group 3 on bytes is still removed whole, as the bootstrap renderer may draw it as other rows than the decoder reads) |
 | 2026-10-26 | minor | §7.4: CCITT decoding (`hayro-ccitt`) in `pdfcraft-filters`, for export and the Optimizer |
 | 2026-10-26 | minor | §7.4: CCITT Group 4 encoding (`fax`) in the Optimizer |
+| 2026-10-16 | minor | PDF/X-1a, -3 and -4: Save as PDF/X partial (with RGB to CMYK through the output profile for PDF/X-1a); PDF/A-2/3 levels u and a partial; output intents from an ICC profile the user chooses |
 | 2026-10-14 | minor | §12.4.4: `/Trans` and `/Dur` read into `DocInfo::transitions` and reported by `doc_info` |
 | 2026-10-11 | minor | §7.6.4: encrypted files we write open in Acrobat (#774, fixed by #836) |
 | 2026-10-10 | major | Created from the code, `vendor/README.md` and `parity/acrobat-features.toml`, against ISO 32000-2 and Acrobat Pro 26.002.21931's documented capabilities |

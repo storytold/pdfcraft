@@ -174,8 +174,51 @@ fn info(doc: &Document, key: &str) -> Option<String> {
     i.as_dict()?.get(key.as_bytes()).and_then(|v| doc.resolve(v).as_string().map(|s| s.to_text())).filter(|s| !s.is_empty())
 }
 
-/// The XMP packet for `doc` declaring `level`, from its document information.
+/// The XMP packet for `doc` declaring `level`, from its document information. A PDF/UA
+/// identification the document's metadata had is kept.
 pub fn packet(doc: &Document, level: crate::Level) -> String {
+    let pdfua = crate::metadata(doc).and_then(|x| value(&x, "pdfuaid:part")).and_then(|p| p.trim().parse().ok());
+    packet_with(doc, &Ids { pdfa: Some((level.part(), level.conformance())), pdfua, ..Ids::default() })
+}
+
+/// What a packet identifies besides the document information.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Ids {
+    /// PDF/A part and conformance letter.
+    pub pdfa: Option<(u8, &'static str)>,
+    /// PDF/UA part.
+    pub pdfua: Option<u8>,
+    /// `pdfxid:GTS_PDFXVersion` (PDF/X-4).
+    pub pdfx: Option<&'static str>,
+    /// `pdf:Trapped`.
+    pub trapped: Option<bool>,
+    /// `xmpMM:DocumentID`; with it, `xmpMM:InstanceID`, `xmpMM:VersionID` and
+    /// `xmpMM:RenditionClass` are written too.
+    pub document_id: Option<String>,
+    /// `xmp:MetadataDate`, as a PDF date.
+    pub now: Option<String>,
+}
+
+/// An extension schema (ISO 19005-2 6.6.2.3): PDF/A accepts properties outside the predefined
+/// schemas only when the packet describes them.
+fn extension(name: &str, uri: &str, prefix: &str, property: &str, value_type: &str, description: &str) -> String {
+    format!(
+        "     <rdf:li rdf:parseType=\"Resource\">\n\
+      <pdfaSchema:schema>{name}</pdfaSchema:schema>\n\
+      <pdfaSchema:namespaceURI>{uri}</pdfaSchema:namespaceURI>\n\
+      <pdfaSchema:prefix>{prefix}</pdfaSchema:prefix>\n\
+      <pdfaSchema:property><rdf:Seq><rdf:li rdf:parseType=\"Resource\">\n\
+       <pdfaProperty:name>{property}</pdfaProperty:name>\n\
+       <pdfaProperty:valueType>{value_type}</pdfaProperty:valueType>\n\
+       <pdfaProperty:category>internal</pdfaProperty:category>\n\
+       <pdfaProperty:description>{description}</pdfaProperty:description>\n\
+      </rdf:li></rdf:Seq></pdfaSchema:property>\n\
+     </rdf:li>\n"
+    )
+}
+
+/// The XMP packet for `doc`: its document information and `ids`.
+pub(crate) fn packet_with(doc: &Document, ids: &Ids) -> String {
     let mut props = String::new();
     if let Some(t) = info(doc, "Title") {
         props.push_str(&format!("   <dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">{}</rdf:li></rdf:Alt></dc:title>\n", esc(&t)));
@@ -201,22 +244,82 @@ pub fn packet(doc: &Document, level: crate::Level) -> String {
     if let Some(d) = info(doc, "ModDate").and_then(|d| iso_date(&d)) {
         props.push_str(&format!("   <xmp:ModifyDate>{d}</xmp:ModifyDate>\n"));
     }
+    if let Some(d) = ids.now.as_deref().and_then(iso_date) {
+        props.push_str(&format!("   <xmp:MetadataDate>{d}</xmp:MetadataDate>\n"));
+    }
+    if let Some(t) = ids.trapped {
+        props.push_str(&format!("   <pdf:Trapped>{}</pdf:Trapped>\n", if t { "True" } else { "False" }));
+    }
+    let mut namespaces = String::from(
+        "    xmlns:dc=\"http://purl.org/dc/elements/1.1/\"\n    xmlns:pdf=\"http://ns.adobe.com/pdf/1.3/\"\n    xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\"",
+    );
+    if let Some(id) = &ids.document_id {
+        namespaces.push_str("\n    xmlns:xmpMM=\"http://ns.adobe.com/xap/1.0/mm/\"");
+        props.push_str(&format!("   <xmpMM:DocumentID>{}</xmpMM:DocumentID>\n", esc(id)));
+        props.push_str(&format!("   <xmpMM:InstanceID>{}</xmpMM:InstanceID>\n", esc(id)));
+        props.push_str("   <xmpMM:VersionID>1</xmpMM:VersionID>\n   <xmpMM:RenditionClass>default</xmpMM:RenditionClass>\n");
+    }
+    if let Some((part, conformance)) = ids.pdfa {
+        namespaces.push_str("\n    xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\"");
+        props.push_str(&format!("   <pdfaid:part>{part}</pdfaid:part>\n   <pdfaid:conformance>{conformance}</pdfaid:conformance>\n"));
+    }
+    if let Some(part) = ids.pdfua {
+        namespaces.push_str("\n    xmlns:pdfuaid=\"http://www.aiim.org/pdfua/ns/id/\"");
+        props.push_str(&format!("   <pdfuaid:part>{part}</pdfuaid:part>\n"));
+    }
+    if let Some(version) = ids.pdfx {
+        namespaces.push_str("\n    xmlns:pdfxid=\"http://www.npes.org/pdfx/ns/id/\"");
+        props.push_str(&format!("   <pdfxid:GTS_PDFXVersion>{}</pdfxid:GTS_PDFXVersion>\n", esc(version)));
+    }
+    // A PDF/A packet describes the schemas PDF/A doesn't predefine.
+    let mut schemas = String::new();
+    if ids.pdfa.is_some() {
+        if ids.pdfua.is_some() {
+            schemas.push_str(&extension(
+                "PDF/UA Universal Accessibility Schema",
+                "http://www.aiim.org/pdfua/ns/id/",
+                "pdfuaid",
+                "part",
+                "Integer",
+                "The part of ISO 14289 the document conforms to",
+            ));
+        }
+        if ids.pdfx.is_some() {
+            schemas.push_str(&extension(
+                "PDF/X Identification Schema",
+                "http://www.npes.org/pdfx/ns/id/",
+                "pdfxid",
+                "GTS_PDFXVersion",
+                "Text",
+                "The PDF/X version the document conforms to",
+            ));
+        }
+    }
+    let extensions = if schemas.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "  <rdf:Description rdf:about=\"\"\n\
+    xmlns:pdfaExtension=\"http://www.aiim.org/pdfa/ns/extension/\"\n\
+    xmlns:pdfaSchema=\"http://www.aiim.org/pdfa/ns/schema#\"\n\
+    xmlns:pdfaProperty=\"http://www.aiim.org/pdfa/ns/property#\">\n\
+   <pdfaExtension:schemas>\n\
+    <rdf:Bag>\n\
+{schemas}    </rdf:Bag>\n\
+   </pdfaExtension:schemas>\n\
+  </rdf:Description>\n"
+        )
+    };
     format!(
         "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n\
 <x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n\
  <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n\
   <rdf:Description rdf:about=\"\"\n\
-    xmlns:dc=\"http://purl.org/dc/elements/1.1/\"\n\
-    xmlns:pdf=\"http://ns.adobe.com/pdf/1.3/\"\n\
-    xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\"\n\
-    xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\">\n\
-   <pdfaid:part>{}</pdfaid:part>\n\
-   <pdfaid:conformance>B</pdfaid:conformance>\n\
+{namespaces}>\n\
 {props}  </rdf:Description>\n\
- </rdf:RDF>\n\
+{extensions} </rdf:RDF>\n\
 </x:xmpmeta>\n\
-<?xpacket end=\"w\"?>",
-        level.part()
+<?xpacket end=\"w\"?>"
     )
 }
 

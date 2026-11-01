@@ -739,9 +739,12 @@ impl Automation {
             "doc_compare" => self.doc_compare(&a)?,
             "action_list" => self.action_list()?,
             "pdfa_verify" => self.pdfa_verify(&a)?,
+            "pdfx_verify" => self.pdfx_verify(&a)?,
             "print_readiness" => self.print_readiness(&a)?,
             "doc_export_office" => self.doc_export_office(&a)?,
             "pdfa_convert" => self.pdfa_convert(&a)?,
+            "pdfx_convert" => self.pdfx_convert(&a)?,
+            "output_conditions" => self.output_conditions()?,
             "standards_remove_id" => {
                 let standard = match a.str("standard")? {
                     "pdfa" => pdfcraft_engine::Standard::PdfA,

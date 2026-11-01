@@ -1264,6 +1264,7 @@
 	PDF version	Versioni i PDF
 	PDF, images and text	PDF, imazhe dhe tekst
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	PRs	PR-të
 	Page	Faqja
 	Page Content	Përmbajtja e faqes
@@ -1562,6 +1563,17 @@
 	Save as PDF/A-3b	Ruaj si PDF/A-3b
 	Save as PDF/UA	Ruaj si PDF/UA
 	Save as PDF/X	Ruaj si PDF/X
+	Verify PDF/X	Verifiko PDF/X
+	Choose ICC profile…	Zgjidh profilin ICC…
+	ICC profile: {name}	Profili ICC: {name}
+	Can't save as {level}; nothing was changed:	Nuk mund të ruhet si {level}; nuk u ndryshua asgjë:
+	Saved {name} and verified it: it conforms to {level}.	{name} u ruajt dhe u verifikua: është në përputhje me {level}.
+	Saved {name}, but verifying it found {n} problems.	{name} u ruajt, por verifikimi gjeti {n} probleme.
+	Converted to {level} ({n} changes)	U konvertua në {level} ({n} ndryshime)
+	Output intent profile:	Profili i synimit të daljes:
+	None: sRGB for RGB and gray documents	Asnjë: sRGB për dokumentet RGB dhe gri
+	Printing condition:	Kushti i shtypjes:
+	Flatten comments and form fields	Rrafsho komentet dhe fushat e formularit
 	Save as…	Ruaj si…
 	Save attachment…	Ruaj bashkëngjitjen…
 	Save changes to “{name}” before closing?	Të ruhen ndryshimet në “{name}” para mbylljes?

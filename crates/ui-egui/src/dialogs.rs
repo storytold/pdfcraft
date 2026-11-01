@@ -355,6 +355,10 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             req.close = crate::standards_ui::body(ui, app, &t);
             return false;
         }
+        Dialog::PdfX => {
+            req.close = crate::standards_ui::pdfx_body(ui, app, &t);
+            return false;
+        }
         Dialog::ActionWizard => {
             ui.set_width(620.0);
             req.close = crate::actions_ui::body(ui, app, &t);

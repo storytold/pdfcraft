@@ -4278,6 +4278,7 @@ dependencies = [
  "pdfcraft-organize",
  "pdfcraft-platform",
  "pdfcraft-render",
+ "pdfcraft-testkit",
  "pdfcraft-xfa",
  "png 0.18.1",
  "rustix 1.1.5",
@@ -4553,9 +4554,16 @@ name = "pdfcraft-preflight"
 version = "0.16.1"
 dependencies = [
  "flate2",
+ "image",
+ "moxcms",
  "pdfcraft-content",
  "pdfcraft-cos",
+ "pdfcraft-crypt",
+ "pdfcraft-filters",
+ "pdfcraft-fonts",
  "pdfcraft-model",
+ "pdfcraft-oracle",
+ "pdfcraft-testkit",
  "roxmltree 0.21.2",
 ]
 
@@ -4679,6 +4687,7 @@ dependencies = [
  "pdfcraft-model",
  "pdfcraft-platform",
  "pdfcraft-render",
+ "pdfcraft-testkit",
  "pdfcraft-xfa",
  "plist",
  "png 0.18.1",

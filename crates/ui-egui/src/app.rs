@@ -195,6 +195,7 @@ impl PdfCraftApp {
             action_run: None,
             action_files_override: None,
             pdfa: Default::default(),
+            pdfx: Default::default(),
             compare_old: None,
             compare: None,
             js_console: Default::default(),
