@@ -45,7 +45,7 @@ use area::{
 };
 #[cfg(test)]
 use bars::in_size_hint_zone;
-use bars::{Notice, notices, page_size_hint, quick_bar};
+use bars::{Notice, notices, page_size_hint, picked_image_bar, quick_bar};
 pub use cache::RasterMemory;
 pub(crate) use cache::{BASE_SIDE, TILE_THRESHOLD, texture_image, thumbnail_rows};
 #[cfg(test)]
@@ -2650,16 +2650,23 @@ fn draw_pages(
         if let Some((page, at)) = view.comments.context_at {
             // The page's content is parsed once per right-click, not on every frame the menu is open.
             let key = egui::Id::unique("copy-image-under-menu");
-            let cached = ui.data(|d| d.get_temp::<(usize, [f64; 2], Option<usize>)>(key)).filter(|c| c.0 == page && c.1 == at);
+            let cached = ui.data(|d| d.get_temp::<(usize, [f64; 2], Option<(usize, bool)>)>(key)).filter(|c| c.0 == page && c.1 == at);
             let hit = match cached {
                 Some(c) => c.2,
                 None => {
-                    let hit = doc.page_image_at(page, at);
+                    let hit = doc.page_image_at(page, at).map(|image| {
+                        let is_raster = doc.page_images(page).get(image).is_some_and(|img| !img.is_form);
+                        (image, is_raster)
+                    });
                     ui.data_mut(|d| d.insert_temp(key, (page, at, hit)));
                     hit
                 }
             };
-            if let Some(image) = hit {
+            if let Some((image, is_raster)) = hit {
+                if is_raster && ui.button(tl!("Replace Image…")).clicked() {
+                    copy_image = Some(comments::CanvasAction::ReplaceImage(page, image));
+                    ui.close();
+                }
                 if ui.button(tl!("Copy Image")).clicked() {
                     copy_image = Some(comments::CanvasAction::CopyImage(page, image));
                     ui.close();
@@ -3792,6 +3799,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         Some(comments::CanvasAction::Properties(p, i)) => open_props = Some((p, i)),
         Some(comments::CanvasAction::CopyImage(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::Copy(p, i)),
         Some(comments::CanvasAction::CopyImageFile(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::CopyFile(p, i)),
+        Some(comments::CanvasAction::ReplaceImage(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::Replace(p, i)),
         None => {}
     }
     schedule_presentation_turn(ui, view, present, clicked_link.is_some());
@@ -4055,6 +4063,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
     // Read mode hides the tools (#2646), and full screen is the page and nothing else (#1459);
     // the quick tools come back with the window.
     if app.mode != crate::Mode::Read && !app.full_screen {
+        picked_image_bar(app, ui);
         quick_bar(app, avail, ui);
     }
     if let Some((source, file, destination)) = remote_open {
