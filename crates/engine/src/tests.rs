@@ -7339,6 +7339,44 @@ fn a_line_without_an_appearance_is_drawn_at_its_leader_length() {
     assert_eq!(px(100, 200), vec![255, 255, 255, 255], "nothing along /L");
 }
 
+/// A text box without `/AP`, `/BS` or `/Border` is drawn with the `/Border` default, a 1-pt
+/// border in its text colour (ISO 32000-2 Table 166), and a redaction mark without `/AP` or
+/// `/QuadPoints` is outlined around `/Rect` (Table 195), here in its array `/OC` colour.
+#[test]
+fn text_boxes_and_redaction_marks_without_appearances_show_their_outlines() {
+    let objs: Vec<&[u8]> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        b"<< /Type /Annot /Subtype /FreeText /Rect [20 200 180 260] /Contents (Box) /DA (1 0 0 rg /Helv 10 Tf) >>",
+        b"<< /Type /Annot /Subtype /Redact /Rect [20 20 180 120] /IC [0 0 0] /OC [0 0 1] >>",
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        bytes.extend_from_slice(o);
+        bytes.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("outlines.pdf", None, Arc::new(bytes), None).expect("opens");
+    let p = shown(&s, id, 0);
+    let px = |x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..3].to_vec();
+    // y down: the text box spans rows 40..100, the redaction mark rows 180..280; both left edges
+    // are column 20.
+    assert_eq!(px(20, 70), [255, 0, 0], "the text box's left border, in its /DA colour");
+    assert_eq!(px(100, 99), [255, 0, 0], "the text box's bottom border");
+    assert_eq!(px(20, 230), [0, 0, 255], "the redaction mark's outline, in its /OC colour");
+    assert_eq!(px(100, 230), [255, 255, 255], "no fill before the redaction is applied");
+}
+
 /// A stamp's `/Rect` and the colour family expected inside it.
 type StampRect = ([f64; 4], char);
 

@@ -1603,7 +1603,8 @@ fn free_text_properties_show_legacy_or_absent_border_width() {
         d.remove(b"Border");
     })
     .unwrap();
-    assert_eq!(props(&doc, 0, index).unwrap().width, Some(0.0));
+    // Neither /BS nor /Border: the /Border default [0 0 1] (ISO 32000-2 Table 166), as drawn.
+    assert_eq!(props(&doc, 0, index).unwrap().width, Some(1.0));
     doc.update_dict(reference, |d| {
         d.set(b"Border".to_vec(), Object::Array([0.0, 0.0, 4.0].into_iter().map(Object::Real).collect()));
     })
@@ -2193,4 +2194,347 @@ fn degenerate_and_absurd_leader_and_caption_values_do_not_panic() {
     ));
     assert!(long.contains(&format!("({}) Tj", "w".repeat(256))), "cut to 256");
     assert!(!long.contains(&"w".repeat(257)));
+}
+
+/// PdfCraft's own text boxes, typewriter text and redaction marks write `/BS` (width 0 for text
+/// boxes and typewriter text), `/DA /Helv` and a `/DS` that agrees with it, and quadrilaterals:
+/// the default border, `/DA` fonts, `/DS` and the `/Rect` outline leave them exactly as they were.
+#[test]
+fn pdfcraft_text_boxes_and_redaction_marks_look_as_before() {
+    let mut doc = fixture();
+    let mut tb = new(0, Shape::TextBox { rect: [100.0, 100.0, 220.0, 160.0], font_size: 12.5 });
+    tb.style = Style { color: [0.1, 0.2, 0.3], fill: Some([1.0, 1.0, 0.8]), ..Style::default_for(&tb.shape) };
+    tb.contents = "PdfCraft text box that wraps onto a second line".into();
+    let t = add_annotation(&mut doc, &tb, &meta("t")).unwrap();
+    let mut tw = new(0, Shape::Typewriter { rect: [100.0, 300.0, 300.0, 320.0], font_size: 10.0 });
+    tw.style = Style::default_for(&tw.shape);
+    let w = add_annotation(&mut doc, &tw, &meta("w")).unwrap();
+    let quads = vec![[100.0, 520.0, 200.0, 520.0, 100.0, 500.0, 200.0, 500.0]];
+    let mut rd = new(0, Shape::Redact { quads, overlay: String::new(), look: OverlayLook::default() });
+    rd.style = Style::default_for(&rd.shape);
+    let r = add_annotation(&mut doc, &rd, &meta("r")).unwrap();
+    let all = list(&doc, 0);
+    assert_eq!(
+        ap_content(&doc, &all[t]),
+        "1 1 0.8 rg\n100 100 120 60 re f\n100 100 120 60 re W n\nBT\n/Helv 12.5 Tf\n0.1 0.2 0.3 rg\n1 0 0 1 102 146.75 Tm (PdfCraft text box) Tj\n1 0 0 1 102 131.75 Tm (that wraps onto a) Tj\n1 0 0 1 102 116.75 Tm (second line) Tj\nET\n"
+    );
+    assert_eq!(text(&all[t], b"DS"), "font: Helvetica 12.5pt; text-align:left; color:#1A334D");
+    assert_eq!(ap_content(&doc, &all[w]), "100 300 200 20 re W n\nBT\n/Helv 10 Tf\n0 0 0 rg\n1 0 0 1 102 309 Tm (hello) Tj\nET\n");
+    assert_eq!(ap_content(&doc, &all[r]), "0.89 0.13 0.13 RG\n1 w\n100 520 m 200 520 l 200 500 l 100 500 l h S\n");
+    // New text keeps the box's look: Helvetica, /DA's exact colour (not /DS's 8-bit one).
+    set_contents(&mut doc, 0, t, "Edited", &meta("")).unwrap();
+    let d = &list(&doc, 0)[t];
+    assert_eq!(text(d, b"DS"), "font: Helvetica 12.5pt; text-align:left; color:#1A334D");
+    let ap = ap_content(&doc, d);
+    assert!(ap.contains("/Helv 12.5 Tf\n0.1 0.2 0.3 rg\n") && !ap.contains(" re S"), "{ap}");
+}
+
+/// The display appearance of the annotation dictionary `annot` on a page of a document whose
+/// form `/DR` maps `Helv`, `Cour`, `TiRo`, `F1` (Courier) and `F2` (a font that isn't standard),
+/// and the font resources it draws with.
+fn display_of(annot: &str) -> (String, Dict) {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /DR << /Font << /Helv 5 0 R /Cour 6 0 R /TiRo 7 0 R /F1 6 0 R /F2 9 0 R >> >> >> >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [8 0 R] >>",
+        b"<< /Length 0 >>\nstream\n\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman /Encoding /WinAnsiEncoding >>",
+        annot.as_bytes(),
+        b"<< /Type /Font /Subtype /TrueType /BaseFont /ABCDEF+HouseGothic >>",
+    ]);
+    let shown = with_missing_appearances(&doc).expect("drawn for display");
+    let d = list(&shown, 0).remove(0);
+    let n = d.get(b"AP").and_then(|a| a.as_dict()).and_then(|a| a.reference(b"N")).expect("/AP /N");
+    let Object::Stream(s) = &*shown.get(n) else { panic!("not a stream") };
+    let fonts = s.dict.get(b"Resources").and_then(|r| r.as_dict()).and_then(|r| r.get(b"Font")).and_then(|f| f.as_dict()).cloned();
+    (String::from_utf8_lossy(&s.decoded().unwrap()).into_owned(), fonts.unwrap_or_default())
+}
+
+fn base_fonts(fonts: &Dict) -> Vec<String> {
+    fonts.iter().filter_map(|(_, f)| f.as_dict()?.name(b"BaseFont").map(|b| String::from_utf8_lossy(b).into_owned())).collect()
+}
+
+/// A text box without `/BS` or `/Border` has the `/Border` default [0 0 1] (ISO 32000-2
+/// Table 166): a 1-pt border in the text colour. `/BS /W 0` or `/Border [0 0 0]` turn it off.
+#[test]
+fn free_text_without_a_border_entry_has_the_default_one() {
+    let (ap, _) = display_of("<< /Type /Annot /Subtype /FreeText /Rect [45 630 165 700] /DA (0 0 1 rg /Helv 12 Tf) /Contents (Hi) >>");
+    assert!(ap.contains("0 0 1 RG\n1 w\n45.5 630.5 119 69 re S\n"), "{ap}");
+    assert!(ap.contains("1 0 0 1 48 "), "text inset by the border: {ap}");
+    for off in ["/BS << /W 0 >>", "/Border [0 0 0]"] {
+        let (ap, _) = display_of(&format!("<< /Type /Annot /Subtype /FreeText /Rect [45 630 165 700] /DA (0 g /Helv 12 Tf) {off} /Contents (Hi) >>"));
+        assert!(!ap.contains(" re S"), "{off}: {ap}");
+    }
+}
+
+/// `/DA` names its font in the form's `/DR` (§12.7.4.3): a standard face is drawn in that face,
+/// with its widths for wrapping; any other font stays Helvetica.
+#[test]
+fn free_text_da_fonts_draw_in_their_standard_face() {
+    use pdfcraft_fonts::Std14;
+    let width = 120.0 - 2.0 * 2.0;
+    let words = "iiiiiiiiii iiiiiiiiii";
+    let lines = |face: Std14| pdfcraft_fonts::wrap_with(words, 12.0, width, |s, z| face.text_width(s, z)).len();
+    assert_eq!((lines(Std14::Helvetica), lines(Std14::Courier)), (1, 2), "the case tells the faces apart");
+    for (da, base, key, n) in [
+        ("0 g /Cour 12 Tf", "Courier", "/Cour 12 Tf", 2),
+        ("1 0 0 rg /TiRo 12 Tf", "Times-Roman", "/TiRo 12 Tf", 1),
+        ("0 g /F1 12 Tf", "Courier", "/Cour 12 Tf", 2),
+        ("0 g /F2 12 Tf", "Helvetica", "/Helv 12 Tf", 1),
+        ("0 g /Nowhere 12 Tf", "Helvetica", "/Helv 12 Tf", 1),
+        ("0 g /CoBo 12 Tf", "Courier-Bold", "/CoBo 12 Tf", 2),
+    ] {
+        let annot = format!("<< /Type /Annot /Subtype /FreeText /Rect [45 630 165 700] /DA ({da}) /BS << /W 0 >> /Contents ({words}) >>");
+        let (ap, fonts) = display_of(&annot);
+        assert_eq!(base_fonts(&fonts), [base], "{da}");
+        assert!(ap.contains(key), "{da}: {ap}");
+        assert_eq!(ap.matches(" Tj").count(), n, "{da}: wrapped at {base}'s widths: {ap}");
+    }
+}
+
+/// `/DS` (Table 177) sets the face, size and colour over `/DA`'s; a malformed one is ignored.
+#[test]
+fn free_text_ds_style_is_drawn() {
+    let annot =
+        "<< /Type /Annot /Subtype /FreeText /Rect [45 630 165 700] /DA (0 g /Helv 12 Tf) /DS (font: Times 14pt; color: #008000) /Contents (Hi) >>";
+    let (ap, fonts) = display_of(annot);
+    assert_eq!(base_fonts(&fonts), ["Times-Roman"]);
+    assert!(ap.contains("/TiRo 14 Tf\n0 0.502 0 rg\n"), "{ap}");
+    let junk = format!("font: NaNpt; font-size: inf; color: rgb(1e999, x); {}", "\u{FFFD}".repeat(20_000));
+    let annot = format!("<< /Type /Annot /Subtype /FreeText /Rect [45 630 165 700] /DA (0 0 1 rg /Cour 9 Tf) /DS ({junk}) /Contents (Hi) >>");
+    let (ap, fonts) = display_of(&annot);
+    assert_eq!(base_fonts(&fonts), ["Courier"]);
+    assert!(ap.contains("/Cour 9 Tf\n0 0 1 rg\n"), "{ap}");
+}
+
+/// New text in a box drawn in Courier stays Courier: its rich text says so.
+#[test]
+fn new_text_keeps_a_foreign_box_face() {
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /FreeText /Rect [45 630 165 700] /DA (0 g /Cour 12 Tf) /Contents (Hi) >>",
+    ]);
+    set_contents(&mut doc, 0, 0, "Hello", &meta("")).unwrap();
+    let d = &list(&doc, 0)[0];
+    assert_eq!(text(d, b"DS"), "font: Courier 12pt; text-align:left; color:#000000");
+    assert!(ap_content(&doc, d).contains("/Cour 12 Tf"));
+}
+
+/// A text box whose `/DS` overrides `/DA` reports the colour and size it is drawn in, and a colour
+/// or size change keeps the other drawn value.
+#[test]
+fn text_box_properties_report_the_drawn_style() {
+    let doc = || {
+        document_of(&[
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+            b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+            b"<< /Type /Annot /Subtype /FreeText /Rect [45 500 300 700] /Contents (Hi) /DA (1 0 0 rg /Helv 12 Tf) /DS (font: Helvetica 24pt; color:#0000FF) >>",
+        ])
+    };
+    let mut d = doc();
+    let p = props(&d, 0, 0).unwrap();
+    assert_eq!((p.color, p.font_size), (Some([0.0, 0.0, 1.0]), Some(24.0)));
+    set_style(&mut d, 0, 0, StyleChange::new(Some([0.0, 1.0, 0.0]), None, None, None), &meta("")).unwrap();
+    let p = props(&d, 0, 0).unwrap();
+    assert_eq!((p.color, p.font_size), (Some([0.0, 1.0, 0.0]), Some(24.0)), "a colour change keeps the drawn size");
+    let mut d = doc();
+    set_font_size(&mut d, 0, 0, 18.0, &meta("")).unwrap();
+    let p = props(&d, 0, 0).unwrap();
+    assert_eq!((p.color, p.font_size), (Some([0.0, 0.0, 1.0]), Some(18.0)), "a size change keeps the drawn colour");
+}
+
+/// A redaction mark without `/QuadPoints` marks `/Rect` (Table 195). While marked it is outlined
+/// only when it names an outline colour (an array `/OC` of three numbers); without one it draws
+/// nothing. Marks with quadrilaterals and no `/OC` colour are outlined in `/C` as before.
+#[test]
+fn redaction_marks_without_quadpoints_outline_their_rect_in_their_oc_colour() {
+    let (ap, _) = display_of("<< /Type /Annot /Subtype /Redact /Rect [45 470 165 540] /IC [0 0 0] /OC [1 0 0] /C [0 0 1] >>");
+    assert_eq!(ap, "1 0 0 RG\n1 w\n45.5 539.5 m 164.5 539.5 l 164.5 470.5 l 45.5 470.5 l h S\n");
+    // No /OC colour: nothing to draw while marked (no /C outline, no /IC fill, no overlay text).
+    let blank = |annot: &str| {
+        let annot = format!("<< /Type /Annot /Subtype /Redact /Rect [45 470 165 540] {annot} >>");
+        let doc = document_of(&[
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+            b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+            annot.as_bytes(),
+        ]);
+        with_missing_appearances(&doc).is_none()
+    };
+    // An /OC that isn't three finite numbers is no colour; an optional-content dictionary keeps its meaning.
+    for annot in [
+        "/C [0.9 0.1 0.1]",
+        "/IC [0 0 0] /OverlayText (REDACTED) /DA (1 1 1 rg /Helv 10 Tf) /C [0.9 0.1 0.1]",
+        "/OC [1 0]",
+        "/OC [(a) 0 0]",
+        "/OC << /Type /OCG /Name (L) >>",
+    ] {
+        assert!(blank(annot), "{annot}");
+    }
+    // With /OC, the interior colour and overlay text still wait for the redaction to be applied.
+    let (ap, _) =
+        display_of("<< /Type /Annot /Subtype /Redact /Rect [45 470 165 540] /OC [1 0 0] /IC [0 0 0] /OverlayText (X) /DA (1 1 1 rg /Helv 10 Tf) >>");
+    assert!(!ap.contains(" f\n") && !ap.contains("Tj"), "{ap}");
+    // With quadrilaterals and no /OC: the /C outline, as before.
+    let (ap, _) = display_of("<< /Type /Annot /Subtype /Redact /Rect [45 470 165 540] /QuadPoints [45 540 165 540 45 470 165 470] /C [0 0 1] >>");
+    assert_eq!(ap, "0 0 1 RG\n1 w\n45 540 m 165 540 l 165 470 l 45 470 l h S\n");
+}
+
+/// A redaction mark with quadrilaterals is outlined in its array `/OC` colour when it has one,
+/// over `/C`; without `/OC` in `/C`, and without either in the default red.
+#[test]
+fn redaction_marks_with_quadpoints_take_their_outline_from_oc_then_c() {
+    let quad = |extra: &str| {
+        display_of(&format!("<< /Type /Annot /Subtype /Redact /Rect [45 470 165 540] /QuadPoints [45 540 165 540 45 470 165 470] {extra} >>")).0
+    };
+    let outline = "1 w\n45 540 m 165 540 l 165 470 l 45 470 l h S\n";
+    assert_eq!(quad("/OC [0 0 1]"), format!("0 0 1 RG\n{outline}"), "/OC blue");
+    assert_eq!(quad("/OC [0 0 1] /C [0 1 0]"), format!("0 0 1 RG\n{outline}"), "/OC over /C");
+    assert_eq!(quad("/C [0 1 0]"), format!("0 1 0 RG\n{outline}"), "/C only");
+    assert_eq!(quad(""), format!("0.89 0.13 0.13 RG\n{outline}"), "neither: red");
+    // An optional-content /OC is not a colour.
+    assert_eq!(quad("/OC << /Type /OCG /Name (L) >> /C [0 1 0]"), format!("0 1 0 RG\n{outline}"), "OCG /OC");
+}
+
+/// The six unapplied marks of the synthetic fixture the parity note's observation used: an array
+/// `/OC` outlines the mark in its colour with or without `/QuadPoints`, beside `/C` or `/IC`; a
+/// mark without `/QuadPoints` or `/OC` draws nothing while marked.
+#[test]
+fn unapplied_redaction_marks_follow_their_oc_outline_colour() {
+    let quad = "/QuadPoints [60 520 260 520 60 420 260 420]";
+    let cases = [
+        ("/OC [0 0 1]", Some("0 0 1 RG")),
+        ("/C [0 1 0]", None),
+        ("/OC [0 0 1] /C [0 1 0]", Some("0 0 1 RG")),
+        ("/OC [0 0 1] /IC [0 0 0]", Some("0 0 1 RG")),
+        ("", None),
+        (&format!("/OC [0 0 1] {quad}"), Some("0 0 1 RG")),
+    ];
+    for (extra, colour) in cases {
+        let annot = format!("<< /Type /Annot /Subtype /Redact /Rect [60 420 260 520] {extra} >>");
+        match colour {
+            Some(colour) => {
+                let (ap, _) = display_of(&annot);
+                assert!(ap.starts_with(&format!("{colour}\n1 w\n")) && ap.ends_with(" h S\n") && !ap.contains(" f\n"), "{extra}: {ap}");
+            }
+            None => {
+                let doc = document_of(&[
+                    b"<< /Type /Catalog /Pages 2 0 R >>",
+                    b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+                    b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+                    annot.as_bytes(),
+                ]);
+                assert!(with_missing_appearances(&doc).is_none(), "{extra}: drawn");
+            }
+        }
+    }
+}
+
+/// New text re-fits the box in the face and size it is drawn in (`/DA`, or `/DS` where it sets
+/// one), so the rectangle holds every drawn line.
+#[test]
+fn new_text_refits_the_box_in_its_drawn_face_and_size() {
+    let bottom = |annot: &str, new_text: &str| {
+        let mut doc = document_of(&[
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+            b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+            annot.as_bytes(),
+        ]);
+        set_contents(&mut doc, 0, 0, new_text, &meta("")).unwrap();
+        let d = &list(&doc, 0)[0];
+        let rect: Vec<f64> = d.get(b"Rect").and_then(|r| r.as_array()).unwrap().iter().filter_map(|x| x.as_f64()).collect();
+        assert_eq!(rect[3], 700.0, "the top edge stays");
+        (rect[1], ap_content(&doc, d).matches(" Tj").count())
+    };
+    // The default 1-pt border: a 3-pt pad, so 114 pt for the text; the box is lines × 1.2 × size + 8 tall.
+    let words = "iiiiiiiiii iiiiiiiiii";
+    let fits = |b: f64, want: f64| (b - want).abs() < 1e-9;
+    let (b, n) = bottom("<< /Type /Annot /Subtype /FreeText /Rect [45 630 165 700] /DA (0 g /Helv 12 Tf) /Contents (Hi) >>", words);
+    assert!(n == 1 && fits(b, 700.0 - 14.4 - 8.0), "Helvetica: one line, bottom {b}");
+    let (b, n) = bottom("<< /Type /Annot /Subtype /FreeText /Rect [45 630 165 700] /DA (0 g /Cour 12 Tf) /Contents (Hi) >>", words);
+    assert!(n == 2 && fits(b, 700.0 - 2.0 * 14.4 - 8.0), "Courier: two lines, bottom {b}");
+    let (b, n) =
+        bottom("<< /Type /Annot /Subtype /FreeText /Rect [45 630 165 700] /DA (0 g /Helv 12 Tf) /DS (font: Helvetica 24pt) /Contents (Hi) >>", "Hi");
+    assert!(n == 1 && fits(b, 700.0 - 28.8 - 8.0), "/DS 24 pt: bottom {b}");
+}
+
+/// A colour or size change keeps the face a text box is drawn in: `/DA` keeps naming its font
+/// resource (here Courier, and a `/DR` font that is Times Bold), and `/DS` says the same face
+/// (ISO 32000-2 Table 177).
+#[test]
+fn a_colour_or_size_change_keeps_the_drawn_face() {
+    use pdfcraft_fonts::Std14;
+    let doc = |da: &str| {
+        let annot = format!("<< /Type /Annot /Subtype /FreeText /Rect [45 500 300 700] /Contents (Hi) /DA ({da}) >>");
+        document_of(&[
+            b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /DR << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Times-Bold >> >> >> >> >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+            b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+            annot.as_bytes(),
+        ])
+    };
+    let face = |doc: &Document| {
+        let d = &list(doc, 0)[0];
+        text_style::text_style(d, text_style::dr_face(doc, d)).face
+    };
+    for (da, font, want) in [("0 g /Cour 12 Tf", "/Cour", Std14::Courier), ("0 g /F1 12 Tf", "/F1", Std14::TimesBold)] {
+        let mut d = doc(da);
+        assert_eq!(face(&d), want, "{da}");
+        set_style(&mut d, 0, 0, StyleChange::new(Some([1.0, 0.0, 0.0]), None, None, None), &meta("")).unwrap();
+        assert_eq!(face(&d), want, "colour change, {da}");
+        assert!(text(&list(&d, 0)[0], b"DA").contains(&format!("{font} 12 Tf")), "{da}");
+        set_font_size(&mut d, 0, 0, 18.0, &meta("")).unwrap();
+        assert_eq!(face(&d), want, "size change, {da}");
+        let p = props(&d, 0, 0).unwrap();
+        assert_eq!((p.color, p.font_size), (Some([1.0, 0.0, 0.0]), Some(18.0)), "{da}");
+    }
+    // The Courier box's appearance draws Courier.
+    let mut d = doc("0 g /Cour 12 Tf");
+    set_style(&mut d, 0, 0, StyleChange::new(Some([1.0, 0.0, 0.0]), None, None, None), &meta("")).unwrap();
+    assert!(ap_content(&d, &list(&d, 0)[0]).contains("/Cour 12 Tf"));
+}
+
+/// A text box without an appearance is drawn from its `/DA` however the file wrote it: a `Tf`
+/// without a size, a zero size, a font name the form's `/DR` doesn't list, and hostile operands.
+/// The stream names the face the box is drawn in at a usable size, and no number in it is `NaN`
+/// or infinite.
+#[test]
+fn text_boxes_draw_from_any_da_string() {
+    let doc = |da: &str| {
+        let annot = format!("<< /Type /Annot /Subtype /FreeText /Rect [45 500 300 700] /Contents (Hi) /DA ({da}) >>");
+        document_of(&[
+            b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /DR << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Times-Bold >> >> >> >> >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+            b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+            annot.as_bytes(),
+        ])
+    };
+    for (da, tf, colour) in [
+        ("0 g /Cour Tf", "/Cour 12 Tf", "0 0 0 rg"),
+        ("0 g /Cour 0 Tf", "/Cour 12 Tf", "0 0 0 rg"),
+        ("0 g /Cour -5 Tf", "/Cour 12 Tf", "0 0 0 rg"),
+        ("NaN NaN NaN rg /Cour NaN Tf", "/Cour 12 Tf", "0 0 0 rg"),
+        ("inf g /Cour inf Tf", "/Cour 12 Tf", "0 0 0 rg"),
+        ("1 0 0 rg /Cour 1e300 Tf", "/Cour 400 Tf", "1 0 0 rg"),
+        // In `/DR`: Times Bold. Not in `/DR` and no standard name: Helvetica.
+        ("0 g /F1 Tf", "/TiBo 12 Tf", "0 0 0 rg"),
+        ("0 g /F9 11 Tf", "/Helv 11 Tf", "0 0 0 rg"),
+        // No Tf at all, or garbage.
+        ("0 0 1 rg", "/Helv 12 Tf", "0 0 1 rg"),
+        ("] [ << >> Tf", "/Helv 12 Tf", "0 0 0 rg"),
+    ] {
+        let mut d = doc(da);
+        set_appearance(&mut d, ObjRef::new(4, 0)).unwrap();
+        let content = ap_content(&d, &list(&d, 0)[0]);
+        assert!(content.contains(tf), "{da:?}: {content}");
+        assert!(content.contains(colour), "{da:?}: {content}");
+        let lower = content.to_ascii_lowercase();
+        assert!(!lower.contains("nan") && !lower.contains("inf"), "{da:?}: {content}");
+    }
 }
