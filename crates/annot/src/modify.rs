@@ -73,8 +73,9 @@ pub(crate) fn touch(d: &mut Dict, meta: &Meta) {
 /// Refused while it, or a reply that would go with it, is locked. A member of a group (`/RT
 /// /Group`), its primary included, goes alone, as Acrobat deletes the member clicked and keeps the
 /// rest of its group, although ISO 32000-2 §12.5.6.2 lists deletion among the operations that act
-/// on the entire group; a subordinate left without its primary is a comment of its own. Replace
-/// Text's strikeout and caret are one comment and go together from either ([`own_deletion`]).
+/// on the entire group; a subordinate left without its primary is a comment of its own and
+/// loses its `/IRT` ([`release_members`]). Replace Text's strikeout and caret are one comment and
+/// go together from either ([`own_deletion`]).
 pub fn delete_annotation(doc: &mut Document, page: usize, index: usize) -> Result<(), AnnotError> {
     let index = deleted_index(doc, page, index)?;
     lift_annotation(doc, page, index)
@@ -133,7 +134,39 @@ pub fn lift_annotation(doc: &mut Document, page: usize, index: usize) -> Result<
     let target = list.get(index).ok_or(AnnotError::NoSuchAnnotation { page, index })?;
     let doomed = with_replies_and_popups(doc, &list, seed(target));
     let kept: Vec<Object> = list.iter().enumerate().filter(|(i, e)| *i != index && !goes_with(doc, e, &doomed)).map(|(_, e)| e.clone()).collect();
+    let kept = release_members(doc, kept, &doomed)?;
     Ok(set_annots(doc, p, kept)?)
+}
+
+/// The `/Annots` entries `kept` after deleting `going`, with every group subordinate that stays
+/// ([`own_deletion`]) but whose `/IRT` names an annotation going made a comment of its own: its
+/// `/IRT` is removed and its `/RT /Group` kept, as Acrobat does when a group's primary is deleted.
+/// A deleted primary then stays reachable from nothing, so a full save leaves its text out. An
+/// inline entry is rewritten in the list; a referenced one is updated in place. Each entry is
+/// read once, following no chain.
+pub fn release_members(doc: &mut Document, kept: Vec<Object>, going: &HashSet<ObjRef>) -> Result<Vec<Object>, pdfcraft_cos::CosError> {
+    let orphaned = |d: &Dict| is_group_subordinate(d) && d.reference(b"IRT").is_some_and(|r| going.contains(&r));
+    let mut out = Vec::with_capacity(kept.len());
+    for e in kept {
+        match e.as_ref() {
+            Some(r) => {
+                if doc.get(r).as_dict().is_some_and(orphaned) {
+                    doc.update_dict(r, |d| {
+                        d.remove(b"IRT");
+                    })?;
+                }
+                out.push(e);
+            }
+            None => match e {
+                Object::Dict(mut d) if orphaned(&d) => {
+                    d.remove(b"IRT");
+                    out.push(Object::Dict(d));
+                }
+                other => out.push(other),
+            },
+        }
+    }
+    Ok(out)
 }
 
 /// What deleting the `/Annots` entry `target` starts from: its reference, or for an inline

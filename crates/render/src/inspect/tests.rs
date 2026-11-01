@@ -1935,6 +1935,15 @@ mod group_tests {
         }
     }
 
+    /// `group_primaries` is public and may be handed links `link_replies` has not settled: a loop
+    /// of subordinates (each other's `/IRT`, or its own) still ends, within `MAX_GROUP_DEPTH`
+    /// steps, with no primary.
+    #[test]
+    fn group_primaries_end_on_an_unsettled_loop() {
+        let all = vec![annot(0, Some(1), true), annot(1, Some(0), true), annot(2, Some(2), true), annot(3, None, false)];
+        assert_eq!(group_primaries(&all), [None, None, None, None]);
+    }
+
     fn with(mut a: Annotation, subtype: &str, t: Option<&str>) -> Annotation {
         a.subtype = subtype.into();
         a.contents = t.map(Into::into);

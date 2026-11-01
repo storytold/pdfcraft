@@ -987,6 +987,118 @@ fn a_group_reads_as_one_and_deletes_by_member() {
     assert!(member.parent.is_none() && !member.is_group_member(), "left without its primary, it is a comment of its own: {member:?}");
 }
 
+/// A primary with one subordinate and one reply, all on page 0 of a reopened file. Returns the
+/// primary's and the subordinate's `/Annots` positions and references.
+fn group_of_two(text: &str) -> (Document, (usize, ObjRef), (usize, ObjRef)) {
+    let mut doc = fixture();
+    let primary = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [100.0, 100.0, 200.0, 200.0] }), &meta("primary")).unwrap();
+    let (_, pr) = annot_ref(&mut doc, 0, primary).unwrap();
+    doc.update_dict(pr, |d| d.set(b"Contents".to_vec(), pdfcraft_cos::PdfString::text(text))).unwrap();
+    let member = add_annotation(&mut doc, &new(0, Shape::Oval { rect: [300.0, 300.0, 350.0, 350.0] }), &meta("member")).unwrap();
+    let (_, mr) = annot_ref(&mut doc, 0, member).unwrap();
+    doc.update_dict(mr, |d| {
+        d.set(b"IRT".to_vec(), Object::Ref(pr));
+        d.set(b"RT".to_vec(), Object::name("Group"));
+    })
+    .unwrap();
+    add_reply(&mut doc, 0, primary, "a reply", "Ada", &meta("reply")).unwrap();
+    (reopen(&doc), (primary, pr), (member, mr))
+}
+
+/// Deleting a group's primary leaves its subordinate a comment of its own, as Acrobat does: the
+/// subordinate loses its `/IRT` and keeps `/RT /Group`, so nothing refers to the deleted primary
+/// and a full save leaves its text out.
+#[test]
+fn deleting_a_primary_releases_its_subordinate() {
+    let (mut doc, (primary, _), (_, mr)) = group_of_two("primary secret text");
+    delete_annotation(&mut doc, 0, primary).unwrap();
+    let member = doc.get(mr).as_dict().cloned().unwrap();
+    assert!(member.get(b"IRT").is_none(), "the subordinate no longer names the deleted primary: {member:?}");
+    assert_eq!(member.name(b"RT"), Some(&b"Group"[..]), "its /RT stays, as Acrobat leaves it");
+    let s = summaries(&doc);
+    let listed = s.iter().find(|s| s.name.as_deref() == Some("member")).unwrap();
+    assert!(listed.parent.is_none() && listed.in_reply_to.is_none() && !listed.is_group_member(), "a comment of its own: {listed:?}");
+    assert!(!s.iter().any(|s| s.name.as_deref() == Some("reply")), "the primary's reply went with it");
+    let full = pdfcraft_cos::write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(!full.windows(19).any(|w| w == b"primary secret text"), "the deleted primary's text is not in a full save");
+}
+
+/// Deleting a subordinate leaves its primary as it was.
+#[test]
+fn deleting_a_subordinate_leaves_its_primary_untouched() {
+    let (mut doc, (_, pr), (member, _)) = group_of_two("primary text");
+    let before = doc.get(pr).as_dict().cloned();
+    delete_annotation(&mut doc, 0, member).unwrap();
+    assert_eq!(doc.get(pr).as_dict().cloned(), before);
+    assert!(summaries(&doc).iter().any(|s| s.name.as_deref() == Some("reply")), "the primary keeps its reply");
+}
+
+/// An inline subordinate (`/Annots` may hold a dictionary, though the standard asks for a
+/// reference) whose primary is deleted loses its `/IRT` in the page's list.
+#[test]
+fn an_inline_subordinate_is_released_too() {
+    let mut doc = fixture();
+    let primary = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [100.0, 100.0, 200.0, 200.0] }), &meta("primary")).unwrap();
+    let (_, pr) = annot_ref(&mut doc, 0, primary).unwrap();
+    let p = page_refs(&doc).unwrap()[0];
+    let mut entries = annots(&doc, p);
+    let mut inline = Dict::new();
+    inline.set(b"Type".to_vec(), Object::name("Annot"));
+    inline.set(b"Subtype".to_vec(), Object::name("Square"));
+    inline.set(b"Rect".to_vec(), Object::Array([300, 300, 350, 350].map(Object::Int).to_vec()));
+    inline.set(b"IRT".to_vec(), Object::Ref(pr));
+    inline.set(b"RT".to_vec(), Object::name("Group"));
+    entries.push(Object::Dict(inline));
+    set_annots(&mut doc, p, entries).unwrap();
+    delete_annotation(&mut doc, 0, primary).unwrap();
+    let left = list(&doc, 0);
+    let inline = left.iter().find(|d| d.name(b"RT") == Some(b"Group")).expect("the inline subordinate stays");
+    assert!(inline.get(b"IRT").is_none());
+}
+
+/// Deleting follows `/IRT` replies by visiting each annotation once, with no step limit to cut a
+/// thread short: a thread of 200 replies (past the 64 steps the listings follow) goes whole, and
+/// replies or group members in a loop (`/IRT` back to each other) end the walk. A loop of group
+/// members deletes only the one picked; the other is released.
+#[test]
+fn deleting_follows_a_long_or_looping_irt_chain_once_each() {
+    let mut doc = fixture();
+    let top = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [100.0, 100.0, 200.0, 200.0] }), &meta("top")).unwrap();
+    let mut on = top;
+    for k in 0..200 {
+        on = add_reply(&mut doc, 0, on, "reply", "Ada", &meta(&format!("r{k}"))).unwrap();
+    }
+    let before = list(&doc, 0).len();
+    delete_annotation(&mut doc, 0, top).unwrap();
+    assert_eq!(list(&doc, 0).len(), before - 201, "the comment and its 200-deep thread go together");
+    for rt in [None, Some("Group")] {
+        let mut doc = fixture();
+        let a = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [100.0, 100.0, 200.0, 200.0] }), &meta("a")).unwrap();
+        let b = add_annotation(&mut doc, &new(0, Shape::Oval { rect: [300.0, 300.0, 350.0, 350.0] }), &meta("b")).unwrap();
+        let (_, ar) = annot_ref(&mut doc, 0, a).unwrap();
+        let (_, br) = annot_ref(&mut doc, 0, b).unwrap();
+        for (r, to) in [(ar, br), (br, ar)] {
+            doc.update_dict(r, |d| {
+                d.set(b"IRT".to_vec(), Object::Ref(to));
+                if let Some(rt) = rt {
+                    d.set(b"RT".to_vec(), Object::name(rt));
+                }
+            })
+            .unwrap();
+        }
+        let before = list(&doc, 0).len();
+        delete_annotation(&mut doc, 0, a).unwrap();
+        let left = list(&doc, 0);
+        match rt {
+            None => assert_eq!(left.len(), before - 2, "a reply loop goes whole"),
+            Some(_) => {
+                assert_eq!(left.len(), before - 1, "a group member goes alone");
+                assert!(doc.get(br).as_dict().is_some_and(|d| d.get(b"IRT").is_none()), "the other member is released");
+            }
+        }
+    }
+}
+
 /// A subordinate deep in a chain of subordinates, within the 64 annotations the listing follows
 /// up a chain or past them, is deleted alone: the chain above it stays.
 #[test]
