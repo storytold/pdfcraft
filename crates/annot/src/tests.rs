@@ -2253,10 +2253,10 @@ fn cloudy_borders_are_drawn_on_squares_circles_polygons_and_text_boxes() {
 /// inner square.
 #[test]
 fn a_cloudy_square_follows_rd_left_top_right_bottom() {
-    let ops = built("<< /Type /Annot /Subtype /Square /Rect [100 100 300 300] /C [1 0 0] /BS << /W 1 >> /BE << /S /C /I 1 >> /RD [10 40 20 30] >>")
+    let ops = built("<< /Type /Annot /Subtype /Square /Rect [100 100 300 300] /C [1 0 0] /BS << /W 1 >> /BE << /S /C /I 1 >> /RD [20 40 30 25] >>")
         .unwrap();
-    // The corners of the inner square are path points: left 110, bottom 130, right 280, top 260.
-    for corner in ["110 130", "280 130", "280 260", "110 260"] {
+    // The corners of the inner square are path points: left 120, bottom 125, right 270, top 260.
+    for corner in ["120 125", "270 125", "270 260", "120 260"] {
         assert!(ops.contains(corner), "corner {corner} in {ops}");
     }
 }
@@ -2267,7 +2267,7 @@ fn a_cloudy_square_follows_rd_left_top_right_bottom() {
 /// the cloud stays inside `/Rect` too.
 #[test]
 fn a_small_cloudy_square_without_rd_stays_inside_its_rect() {
-    for side in [20.0, 24.4, 30.0, 41.0] {
+    for side in [40.0, 48.8, 60.0, 82.0] {
         let ops = built(&format!(
             "<< /Type /Annot /Subtype /Square /Rect [100 100 {x} {x}] /C [1 0 0] /BS << /W 2 >> /BE << /S /C /I 1 >> >>",
             x = 100.0 + side
