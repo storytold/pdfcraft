@@ -354,6 +354,56 @@ fn marking_pages_reads_the_page_tree_a_fixed_number_of_times() {
     assert_eq!(walks(&[0]), walks(&[0, 1, 2]));
 }
 
+/// `o` with every reference followed: a shared copy and a copy per page are other objects, what
+/// they read as must not differ.
+fn read_through(doc: &Document, o: &Object, depth: usize) -> String {
+    let o = doc.resolve(o);
+    match &*o {
+        Object::Dict(d) if depth < 16 => {
+            format!(
+                "<<{}>>",
+                d.iter().map(|(k, v)| format!("/{} {}", String::from_utf8_lossy(k), read_through(doc, v, depth + 1))).collect::<Vec<_>>().join(" ")
+            )
+        }
+        Object::Array(a) if depth < 16 => format!("[{}]", a.iter().map(|v| read_through(doc, v, depth + 1)).collect::<Vec<_>>().join(" ")),
+        other => format!("{other:?}"),
+    }
+}
+
+/// The extended resources that marked pages share read exactly as the copy each page got of its
+/// own before (`DerivedResources` off): for a page that inherits one indirect dictionary from its
+/// parent, a page that names that dictionary itself, and a page with a direct one of its own. The
+/// dictionary they came from stays as it was either way.
+#[test]
+fn shared_extended_resources_read_as_a_copy_per_page() {
+    let marked = |share: bool| {
+        let mut doc = fixture();
+        let mut fonts = Dict::new();
+        fonts.set(b"F2".to_vec(), Object::Ref(ObjRef::new(8, 0)));
+        let mut own = Dict::new();
+        own.set(b"Font".to_vec(), Object::Dict(fonts));
+        doc.update_dict(ObjRef::new(4, 0), |d| d.set(b"Resources".to_vec(), Object::Dict(own))).unwrap();
+        doc.update_dict(ObjRef::new(5, 0), |d| d.set(b"Resources".to_vec(), Object::Ref(ObjRef::new(6, 0)))).unwrap();
+        let mut derived = place::DerivedResources::default();
+        for page in &pdfcraft_model::pages(&doc) {
+            place::add_resources(&mut doc, page, Some(0.5), Some(&b"/PCTimes 9 Tf"[..]), share.then_some(&mut derived)).unwrap();
+        }
+        reopen(&doc)
+    };
+    let (shared, own) = (marked(true), marked(false));
+    let read = |doc: &Document| -> Vec<String> {
+        pdfcraft_model::pages(doc).iter().map(|p| p.dict.get(b"Resources").map_or_else(String::new, |r| read_through(doc, r, 0))).collect()
+    };
+    assert_eq!(read(&shared), read(&own));
+    assert!(read(&shared).iter().all(|r| r.contains("/PCHelv") && r.contains("/PCTimes") && r.contains("/PCGS50")), "{:?}", read(&shared));
+    let refs: Vec<Option<ObjRef>> = pdfcraft_model::pages(&shared).iter().map(|p| p.dict.get(b"Resources").and_then(Object::as_ref)).collect();
+    assert!(refs[0].is_some() && refs[2] == refs[0], "the inheriting page and the naming one share one copy: {refs:?}");
+    assert_eq!(refs[1], None, "a direct dictionary stays the page's own: {refs:?}");
+    for doc in [&shared, &own] {
+        assert_eq!(read_through(doc, &Object::Ref(ObjRef::new(6, 0)), 0), read_through(&fixture(), &Object::Ref(ObjRef::new(6, 0)), 0));
+    }
+}
+
 #[test]
 fn replace_and_remove_restore_the_original_content() {
     let mut doc = fixture();
