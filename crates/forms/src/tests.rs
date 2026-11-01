@@ -5546,4 +5546,27 @@ fn list_box_duplicate_exports_and_single_select_array_value() {
     f_order.indices = vec![0, 1];
     f_order.options = vec![("Ex".into(), "Export-X".into()), ("Why".into(), "Export-Y".into())];
     assert_eq!(f_order.display_value(), "Export-Y, Export-X");
+
+    // Option-order precedence: when an export value matches an earlier option, it is selected
+    // rather than matching a later option's display text (e.g. options [(B, C), (A, B)] with value B).
+    let mut order_doc = doc.clone();
+    order_doc
+        .update_dict(dup.obj, |d| {
+            d.set(
+                b"Opt".to_vec(),
+                Object::Array(vec![
+                    Object::Array(vec![Object::String(PdfString::text("B")), Object::String(PdfString::text("C"))]),
+                    Object::Array(vec![Object::String(PdfString::text("A")), Object::String(PdfString::text("B"))]),
+                ]),
+            );
+            d.remove(b"I");
+            d.remove(b"V");
+        })
+        .unwrap();
+    set_value(&mut order_doc, "D_dup", &FieldValue::Choice(vec!["B".into()])).unwrap();
+    let all_order = fields(&order_doc);
+    let order_field = field(&all_order, "D_dup");
+    assert_eq!(order_field.value, ["B"]);
+    assert_eq!(order_field.indices, [0]);
+    assert_eq!(order_field.display_value(), "C");
 }

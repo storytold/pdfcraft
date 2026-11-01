@@ -276,20 +276,24 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
             let mut exports = Vec::new();
             let mut picked_indices = Vec::new();
             for v in &vals {
-                let matched = f
+                let first_match = f
                     .options
                     .iter()
                     .enumerate()
-                    .find(|(i, (_, d))| !picked_indices.contains(i) && d == v)
-                    .or_else(|| {
-                        f.indices
+                    .find(|(i, (e, d))| !picked_indices.contains(i) && (e == v || d == v));
+                let matched = match first_match {
+                    Some((i, (e, _))) if e == v => {
+                        let idx = f
+                            .indices
                             .iter()
                             .copied()
-                            .filter(|i| !picked_indices.contains(i))
-                            .find_map(|i| f.options.get(i).filter(|(e, _)| e == v).map(|o| (i, o)))
-                    })
-                    .or_else(|| f.options.iter().enumerate().find(|(i, (e, _))| !picked_indices.contains(i) && e == v))
-                    .or_else(|| f.options.iter().enumerate().find(|(_, (e, d))| e == v || d == v));
+                            .find(|&ci| !picked_indices.contains(&ci) && f.options.get(ci).is_some_and(|(ce, _)| ce == v))
+                            .unwrap_or(i);
+                        Some((idx, &f.options[idx]))
+                    }
+                    Some((i, _)) => Some((i, &f.options[i])),
+                    None => None,
+                };
                 match matched {
                     Some((i, (e, _))) => {
                         exports.push(e.clone());
