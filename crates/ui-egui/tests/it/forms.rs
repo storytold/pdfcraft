@@ -404,7 +404,7 @@ fn dragging_over_another_fields_text_focuses_it_and_selects_from_the_press() {
         let doc = s.session.get(s.views[0].id).unwrap();
         let f = doc.form.iter().find(|f| f.name == "name").unwrap();
         let rect = pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen");
-        (rect, egui::Id::unique(("form-field", s.views[0].id.0, "name", 0usize)))
+        (rect, egui::Id::unique(("form-field", s.views[0].view_key(), "name", 0usize)))
     };
     // From inside the first word ("Ad|a" at the field's auto size, 13.9 pt) to past the end of the text.
     let (from, to) = (egui::pos2(rect.left() + 38.0, rect.center().y), egui::pos2(rect.right() - 8.0, rect.center().y));

@@ -55,7 +55,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
         anchor = anchor.clamp(viewport.min, viewport.max);
     }
     let pos = pos2(anchor.x + 12.0, anchor.y);
-    let area = egui::Area::new(egui::Id::unique(("comment-composer", view.id.0))).order(egui::Order::Foreground).constrain_to(viewport);
+    let area = egui::Area::new(egui::Id::unique(("comment-composer", view.pane.key))).order(egui::Order::Foreground).constrain_to(viewport);
     area.fixed_pos(pos).show(ctx, |ui| {
         egui::Frame::popup(ui.style()).inner_margin(egui::Margin::same(12)).corner_radius(CornerRadius::same(8)).show(ui, |ui| {
             ui.set_width(260.0);

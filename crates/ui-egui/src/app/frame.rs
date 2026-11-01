@@ -96,23 +96,39 @@ impl PdfCraftApp {
         self.finish_document_copy(ctx);
         // The Combine grid's thumbnails, whichever tab shows (renders under way still finish).
         self.combine_thumbs_frame(ctx);
-        // Retire hidden documents before admitting the visible document's textures, so the
+        // Retire hidden documents before admitting the visible documents' textures, so the
         // three cache limits apply to the application, regardless of how many tabs are open.
-        // Side by side: the comparison's old file renders alongside the active one.
-        let partner = self.active.and_then(|i| compare_ui::side_by_side(self, i)).map(|(old, _)| old);
+        // On screen: the active tab, the comparison's old file side by side with it, and what
+        // split view's other pane shows.
+        let shown = self.views_on_screen();
+        let shown_docs: std::collections::HashSet<DocId> = shown.iter().filter_map(|&i| self.views.get(i)).map(|v| v.id).collect();
         for (i, view) in self.views.iter_mut().enumerate() {
-            if Some(i) != self.active
-                && Some(i) != partner
-                && let Some(doc) = self.session.get(view.id)
-            {
+            if shown.contains(&i) {
+                continue;
+            }
+            if shown_docs.contains(&view.id) {
+                // Another tab of this document is on screen, and renders through its pool.
+                view.release_rasters();
+            } else if let Some(doc) = self.session.get(view.id) {
                 view.suspend_rendering(&doc.renderer);
             }
         }
-        for i in self.active.into_iter().chain(partner) {
-            if let Some(view) = self.views.get_mut(i)
-                && let Some(doc) = self.session.get(view.id)
-            {
-                view.finish_render_frame(ctx, &doc.info, &doc.renderer);
+        // Each document on screen once: two views of it (split view) share its render pool.
+        let mut done = std::collections::HashSet::new();
+        for &i in &shown {
+            let Some(id) = self.views.get(i).map(|v| v.id) else { continue };
+            if !done.insert(id) {
+                continue;
+            }
+            let Some(doc) = self.session.get(id) else { continue };
+            let group: Vec<usize> = shown.iter().copied().filter(|&k| self.views.get(k).is_some_and(|v| v.id == id)).collect();
+            match group.as_slice() {
+                [only] => {
+                    if let Some(view) = self.views.get_mut(*only) {
+                        view.finish_render_frame(ctx, &doc.info, &doc.renderer);
+                    }
+                }
+                _ => DocView::finish_shared_render_frame(ctx, &doc.info, &doc.renderer, &mut self.views, &group),
             }
         }
     }

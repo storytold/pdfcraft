@@ -192,11 +192,14 @@ impl PdfCraftApp {
         match self.session.mark_saved(id, bytes, Some(dest.to_string())) {
             Ok(()) => {
                 self.forget_recovery(id);
+                // The tab in use: `sync_views` brings any other tab of the document up to date.
                 if let Some(doc) = self.session.get(id)
-                    && let Some(view) = self.views.iter_mut().find(|v| v.id == id)
+                    && let Some(view) = self.asking_tab(id).and_then(|i| self.views.get_mut(i))
                 {
                     view.document_changed(&doc.info);
-                    // Saving over a version that changed on disk keeps this one: nothing to ask.
+                }
+                // Saving over a version that changed on disk keeps this one: nothing to ask.
+                for view in self.views.iter_mut().filter(|v| v.id == id) {
                     view.disk_changed = false;
                 }
                 self.notify_fmt("Saved {name}", &[("name", &short_name(dest))]);

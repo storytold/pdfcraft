@@ -2856,6 +2856,8 @@ theme	Appearance	Teema
 	Unpin tool	Irrota työkalu
 	Arrange image	Järjestä kuva
 	Crop	Rajaa
+	Split down	Jaa alaspäin
+	Split right	Jaa oikealle
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Tänään

@@ -2816,6 +2816,8 @@ theme	Appearance	모양
 	Remove crop	자르기 제거
 	Send backward	뒤로 보내기
 	Send to back	맨 뒤로 보내기
+	Split down	아래로 분할
+	Split right	오른쪽으로 분할
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	오늘

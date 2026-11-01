@@ -1247,11 +1247,11 @@ title = "Split window (two panes on one document)"
 area = "B"
 tier = "P2"
 milestone = "M14"
-status = "planned"
-commands = []
+status = "shipped"
+commands = ["view.split"]
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/it/split_view.rs::split_right_from_the_tab_menu_shows_two_panes_each_with_its_own_zoom", "crates/ui-egui/tests/it/split_view.rs::the_same_document_in_both_panes_is_one_document_with_one_undo", "crates/ui-egui/tests/it/split_view.rs::split_again_or_closing_a_panes_last_tab_ends_split_view", "crates/ui-egui/tests/it/split_view.rs::the_pane_last_clicked_is_the_one_menus_and_keys_act_on", "crates/ui-egui/tests/it/split_view.rs::a_tab_dropped_on_the_right_half_of_the_page_splits_right_with_it", "crates/ui-egui/src/panes.rs::the_panes_share_the_area_and_the_divider_stays_inside"]
+notes = "View ▸ Split (⌘\\ / Ctrl+\\) splits the current document into two panes (page 2 beside page 40) and ends split view again; a tab's right-click Split right / Split down puts that tab beside (or below) the one shown (two documents side by side), or the shown tab's document in both panes; a tab dropped on the right half of the page area splits right with it. Each pane scrolls and zooms on its own, the second has its own small tab strip, and the divider is dragged. The same document in both panes is one document: an edit in one shows in the other, and Undo is the document's. The pane last clicked is the active one (menus, keys and the side panels act on it). Closing a pane's last tab, or Split again, ends split view. Headless: the UI control channel runs view.split like any command. Beyond Acrobat's Window ▸ Split, which splits one document only. Not yet: Acrobat's spreadsheet split (four panes) is view.spreadsheet-split; split view isn't kept across restarts."
 
 [[feature]]
 id = "view.spreadsheet-split"

@@ -545,7 +545,7 @@ pub(crate) fn type_box(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
     // Over the page, so only where the document shows: a box scrolled under the mode bar or a
     // side panel must leave them their pointer (#2755). It stays where it was placed, cut off as
     // the page is, rather than pushed back into the window.
-    egui::Area::new(egui::Id::unique(("fill-text", view.id.0)))
+    egui::Area::new(egui::Id::unique(("fill-text", view.view_key())))
         .fade_in(false)
         .order(egui::Order::Foreground)
         .fixed_pos(pos)
