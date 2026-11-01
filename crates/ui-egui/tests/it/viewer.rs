@@ -2432,3 +2432,81 @@ fn find_shortcut_searches_the_selected_text() {
     h.run_steps(2);
     assert_eq!(h.state().views[0].find.as_ref().unwrap().query, "pages", "no selection leaves the search alone");
 }
+
+/// A one-page PDF with three lines of text.
+fn three_lines() -> Vec<u8> {
+    let body = "BT /F1 18 Tf 20 200 Td (alpha beta) Tj 0 -30 Td (gamma delta) Tj 0 -30 Td (epsilon zeta) Tj ET";
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_string(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_string(),
+        format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// #5141: a selection over three lines becomes one search phrase that the page's own search finds
+/// again (it reads a line break as a space), so the bar shows what was selected and finds it.
+#[test]
+fn find_shortcut_searches_a_selection_over_three_lines() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("lines.pdf", None, three_lines()).unwrap();
+        app
+    });
+    crate::support::settle(&mut h);
+    h.state_mut().views[0].set_continuous(false);
+    for _ in 0..3000 {
+        h.run_steps(2);
+        if h.state_mut().views[0].select_all() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("alpha beta\ngamma delta\nepsilon zeta"));
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::F);
+    h.run_steps(2);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while std::time::Instant::now() < deadline && h.state().views[0].find.as_ref().is_none_or(|f| f.matches.is_empty()) {
+        h.run_steps(2);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let f = h.state().views[0].find.as_ref().expect("the find bar is open");
+    assert_eq!(f.query, "alpha beta gamma delta epsilon zeta", "the lines are one line of words");
+    assert_eq!(f.matches.len(), 1, "and the page's search finds them where they were selected");
+}
+
+/// #5141: Select All over the whole document is no search: the bar opens with what it had.
+#[test]
+fn find_shortcut_ignores_a_select_all_of_the_document() {
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+    h.state_mut().views[0].set_continuous(true);
+    for _ in 0..3000 {
+        h.run_steps(2);
+        if h.state_mut().views[0].select_all() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(h.state().views[0].selected_text().is_some(), "the whole document is selected");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::F);
+    h.run_steps(2);
+    let f = h.state().views[0].find.as_ref().expect("the find bar is open");
+    assert_eq!(f.query, "", "nothing of it is taken as the search");
+}

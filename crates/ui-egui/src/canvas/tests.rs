@@ -467,6 +467,24 @@ fn find_for_a_selection_searches_from_the_page_the_reader_is_on() {
     assert_eq!((v.find.as_ref().unwrap().current, v.current), stepped, "the query is already the search");
 }
 
+/// #5141: with the selection on the second page and the first the view's current one (two pages
+/// on screen), the search starts from the selection's page and finds the word there, not the
+/// same word on the first page.
+#[test]
+fn find_for_a_selection_searches_from_the_selections_page() {
+    let mut v = view(2, PageLayout::TwoUp, true);
+    v.current = 0;
+    v.texts.insert(0, Arc::new(find_test_text("a word first")));
+    v.texts.insert(1, Arc::new(find_test_text("second word here")));
+    v.select_text(1, 7, 10);
+    assert_eq!(v.selected_text().as_deref(), Some("word"));
+    v.open_find_for_selection();
+    let f = v.find.as_ref().unwrap();
+    assert_eq!(f.matches.iter().map(|(p, _)| *p).collect::<Vec<_>>(), [0, 1]);
+    assert_eq!((f.auto_from, f.current), (Some(1), Some(1)), "from the selection's page, to its match there");
+    assert_eq!(v.current, 1, "the view goes to that match");
+}
+
 /// Typing on while the results arrive must not re-anchor the search on a page the automatic
 /// flash picked. The anchor stays the page the reader was on when they started searching.
 #[test]

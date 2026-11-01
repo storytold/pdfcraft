@@ -97,14 +97,19 @@ impl DocView {
     /// it was: with the last search.
     pub fn open_find_for_selection(&mut self) {
         let phrase = if self.all_text { None } else { self.selected_text().as_deref().and_then(find_phrase) };
+        // The page of the selection, which in a two-page view or a scroll that shows two is not
+        // always the one the view counts as current.
+        let (current, anchor) = (self.current, self.selection.map_or(self.current, |s| s.page));
         self.open_find();
         if let (Some(phrase), Some(f)) = (phrase, self.find.as_mut()) {
             // The same search again keeps its matches and the match the reader is on.
             if f.query != phrase || f.case_query != phrase {
                 f.query = phrase;
-                // A new search starts from the page the reader is on: an earlier one that followed
-                // its matches here must not pull this one back to the page it began on.
-                f.stop_following();
+                // A new search starts from the page of the selection: an earlier one that
+                // followed its matches here must not pull this one back to the page it began on.
+                f.auto_from = Some(anchor);
+                f.auto_page = Some(current);
+                f.follow_ended = false;
                 self.rerun_find();
             }
         }
