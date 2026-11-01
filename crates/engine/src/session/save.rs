@@ -1,6 +1,6 @@
 use super::{
-    Arc, DocId, EditError, Keys, OpenError, RecoverySnapshot, RenderPool, SaveOptions, Session, SignOptions, TrustStore, display_bytes, guard,
-    render_threads, signatures_of, writable, write_full, write_incremental, xfa_sync_datasets,
+    Arc, DocId, EditError, Keys, OpenError, RecoverySnapshot, RenderPool, SaveOptions, Session, SignOptions, TrustStore, display_bytes,
+    display_config, guard, render_threads, signatures_of, writable, write_full, write_incremental, xfa_sync_datasets,
 };
 
 impl Session {
@@ -170,7 +170,7 @@ impl Session {
         {
             doc.config.reading_colors = old.config.reading_colors;
             doc.config.hide_comments = old.config.hide_comments;
-            doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+            doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         }
         // Caches keyed by the edit generation (edit lines, images, measurements) must see a new
         // one; there is nothing new to autosave.
@@ -249,7 +249,7 @@ impl Session {
             let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &doc.bytes, &doc.trust, &doc.sig_cache) };
             doc.display = display_bytes(Some(editor), &doc.bytes);
             doc.signatures = Arc::new(signatures);
-            doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+            doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         }
     }
 

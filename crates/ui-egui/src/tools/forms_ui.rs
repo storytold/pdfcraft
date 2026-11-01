@@ -14,6 +14,8 @@ use pdfcraft_engine::{Edit, FieldValue, FormField, FormFieldKind, FormWidget, fi
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageToolContext, PageXform};
+use crate::page_cursor::Layer;
+use crate::page_router::{Hit, Owner};
 use crate::theme::Tokens;
 
 const FOCUS_BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
@@ -150,64 +152,71 @@ fn toggle_edit(f: &FormField, w: &FormWidget) -> Option<Edit> {
     Some(Edit::SetFieldValue { name: f.name.clone(), value })
 }
 
-/// Where the pointer is relative to one page's form widgets.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FieldPointer {
-    /// Not over a field.
-    Away,
-    /// Over a field, which has set the cursor. Nothing is pressed, so the layers below still see
-    /// the hover, but they must not replace the cursor: a check box drawn with a glyph, or set
-    /// on printed text, is a button, not text to select.
-    Over,
-    /// The field owns the press or click.
-    Owned,
+/// Whether `w`, a widget of `f`, takes a press: fillable, a push button with an action, or an
+/// empty signature field (signed by clicking it, Use a certificate). A radio button of a group can
+/// be read-only on its own.
+fn usable(f: &FormField, w: &FormWidget, allowed: bool) -> bool {
+    let pressable = f.kind == FormFieldKind::PushButton && !f.read_only() && f.button.is_some();
+    allowed && !w.read_only && (fillable(f) || pressable || f.kind == FormFieldKind::Signature)
 }
 
-/// Clicks on form widgets of one page.
-pub(crate) fn page_input(cx: PageToolContext<'_>, form: &[FormField], allowed: bool, view: &mut DocView) -> FieldPointer {
-    let PageToolContext { ui, resp, xf, ptr, page, info, .. } = cx;
-    let Some(p) = ptr.within(xf.rect) else { return FieldPointer::Away };
-    let hit = form.iter().find_map(|f| {
+/// The form widget under `p` on `page`: the one hit test of the fields, for the cursor and the
+/// press. Over the page's text too: a check box drawn with a glyph, or set on printed text, is a
+/// button, not text to select.
+pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, form: &[FormField], allowed: bool, p: Pos2) -> Option<Hit> {
+    if !xf.rect.contains(p) {
+        return None;
+    }
+    let (field, f, widget, w) = form.iter().enumerate().find_map(|(fi, f)| {
         f.widgets
             .iter()
             .enumerate()
             .find(|(_, w)| w.page == Some(page) && !w.hidden && widget_rect(xf, info, page, w.rect).contains(p))
-            .map(|(i, w)| (f, i, w))
-    });
-    let Some((f, wi, w)) = hit else { return FieldPointer::Away };
-    // The field's tooltip (`/TU`), as Acrobat shows it on hover (#3854). ISO 32000-2 Table 226
-    // makes it the name the user interface identifies the field by.
-    if let Some(tip) = f.tooltip.as_deref().filter(|t| !t.trim().is_empty()) {
+            .map(|(wi, w)| (fi, f, wi, w))
+    })?;
+    let icon = match (usable(f, w, allowed), f.kind) {
+        (false, _) => egui::CursorIcon::NotAllowed,
+        (true, FormFieldKind::Text) => egui::CursorIcon::Text,
+        _ => egui::CursorIcon::PointingHand,
+    };
+    Some(Hit::new(Owner::Field { field, widget }, Layer::Field, icon))
+}
+
+/// Presses and clicks on form widgets of one page, on the field the press was on ([`hit`]).
+/// `true` while a field holds the press.
+pub(crate) fn page_input(cx: PageToolContext<'_>, form: &[FormField], allowed: bool, view: &mut DocView) -> bool {
+    let PageToolContext { ui, resp, xf, ptr, page, info, .. } = cx;
+    // The field's tooltip (`/TU`) under the pointer, as Acrobat shows it on hover (#3854). ISO
+    // 32000-2 Table 226 makes it the name the user interface identifies the field by.
+    if let Some(p) = ptr.within(xf.rect)
+        && let Some(Owner::Field { field, .. }) = hit(xf, info, page, form, allowed, p).map(|h| h.owner)
+        && let Some(tip) = form.get(field).and_then(|f| f.tooltip.as_deref()).filter(|t| !t.trim().is_empty())
+    {
         resp.clone().on_hover_text_at_pointer(tip);
     }
-    // Empty signature fields are signed by clicking them (Use a certificate); push buttons run
-    // their action.
-    let pressable = f.kind == FormFieldKind::PushButton && !f.read_only() && f.button.is_some();
-    // A radio button of a group can be read-only on its own.
-    let usable = allowed && !w.read_only && (fillable(f) || pressable || f.kind == FormFieldKind::Signature);
-    // Only where the page shows: the mode bar and side panels over a field scrolled under them
-    // keep their own cursor (#2755).
-    if resp.contains_pointer() {
-        ui.ctx().set_cursor_icon(match (usable, f.kind) {
-            (false, _) => egui::CursorIcon::NotAllowed,
-            (true, FormFieldKind::Text) => egui::CursorIcon::Text,
-            _ => egui::CursorIcon::PointingHand,
-        });
-    }
+    let Some(Owner::Field { field, widget: wi }) = view.router.owner(page) else { return false };
+    let Some((f, w)) = form.get(field).and_then(|f| f.widgets.get(wi).map(|w| (f, w))) else { return false };
+    let usable = usable(f, w, allowed);
     // A text field opens on the press rather than the click, so a drag that starts on it
     // selects its text (#2213).
-    let pressed = f.kind == FormFieldKind::Text && usable && resp.is_pointer_button_down_on() && ptr.pressed().is_some();
-    if pressed && view.forms.focus.as_ref().is_none_or(|x| x.name != f.name || x.widget != wi) {
+    if f.kind == FormFieldKind::Text
+        && usable
+        && let Some(at) = ptr.pressed()
+        && view.forms.focus.as_ref().is_none_or(|x| x.name != f.name || x.widget != wi)
+    {
         commit(view, form);
-        view.forms.focus = Some(Focus { press: Some(p), ..open_focus(f, wi) });
+        view.forms.focus = Some(Focus { press: Some(at), ..open_focus(f, wi) });
         view.forms.pressed = true;
     }
-    if !resp.clicked() {
-        return if resp.is_pointer_button_down_on() { FieldPointer::Owned } else { FieldPointer::Over };
+    // A click counts released over the widget its press was on, as a button's does: one that slips
+    // off it first does nothing (a check box's overlay closes on it too).
+    if !resp.clicked() || !ptr.pos.and_then(|p| hit(xf, info, page, form, allowed, p)).is_some_and(|h| h.owner == Owner::Field { field, widget: wi })
+    {
+        return true;
     }
     if !allowed {
         view.forms.notice = Some(FormNotice::Security);
-        return FieldPointer::Owned;
+        return true;
     }
     match f.kind {
         _ if f.read_only() || w.read_only => view.forms.notice = Some(FormNotice::ReadOnly(f.name.clone())),
@@ -242,6 +251,7 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, form: &[FormField], allowed: b
             }
         }
         FormFieldKind::List => {
+            let Some(p) = ptr.within(xf.rect) else { return true };
             commit(view, form);
             view.forms.focus = Some(open_focus(f, wi));
             let r = widget_rect(xf, info, page, w.rect);
@@ -278,7 +288,7 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, form: &[FormField], allowed: b
             }
         }
     }
-    FieldPointer::Owned
+    true
 }
 
 /// The edit the focused field's draft makes, if it differs from the field's value.
@@ -329,7 +339,7 @@ fn combo_editor(ctx: &egui::Context, view: &mut DocView, editor: ComboEditor<'_>
         .show(ctx, |ui| {
             ui.set_min_size(rect.size());
             let Some(fx) = view.forms.focus.as_mut() else { return };
-            let font = (field_text_size(ui.painter(), f, w, &fx.text) * zoom).clamp(3.0, 64.0);
+            let font = field_screen_font(ui.painter(), f, w, &fx.text, zoom);
             // The box is pale yellow in every theme, as a text field's is (#655).
             ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(FIELD_FILL);
             let te = egui::TextEdit::singleline(&mut fx.text)
@@ -521,17 +531,39 @@ pub fn field_text_size(painter: &egui::Painter, f: &FormField, w: &FormWidget, t
         // The appearance's padding: 2 pt inside a 1 pt border.
         let pad = 3.0;
         let (width, height) = ((w.rect[2] - w.rect[0]).abs() - 2.0 * pad, (w.rect[3] - w.rect[1]).abs() - 2.0 * pad);
-        // Comb cells hold one character each, so only the height limits them.
-        let comb = f.has(field_flags::COMB) && f.max_len.is_some_and(|m| m > 0);
-        let fit = if comb { "" } else { text };
+        // Comb cells hold one character each, so only the height limits them, as on the page.
+        if f.is_comb() {
+            return pdfcraft_engine::field_comb_auto_text_size(height);
+        }
         let font = |size: f64| egui::FontId::proportional(size as f32);
-        let line_width = |size: f64| f64::from(painter.layout_no_wrap(fit.to_string(), font(size), Color32::BLACK).size().x);
+        let line_width = |size: f64| {
+            bounded_line_width(size, |at| painter.layout_no_wrap(text.to_string(), egui::FontId::proportional(at), Color32::BLACK).size().x)
+        };
         // Wrapped as the editor and the page preview wrap it.
         let wrap = width.max(1.0) as f32;
-        let wrapped_height = |size: f64| f64::from(painter.layout(fit.to_string(), font(size), Color32::BLACK, wrap).size().y);
+        let wrapped_height = |size: f64| f64::from(painter.layout(text.to_string(), font(size), Color32::BLACK, wrap).size().y);
         pdfcraft_engine::field_auto_text_size_by(width, height, f.has(field_flags::MULTILINE), line_width, wrapped_height)
     });
-    size.min(300.0) as f32
+    size as f32
+}
+
+/// The width of a line at `size` points from `measure`, the width at a given size, called at no
+/// more than [`MAX_SCREEN_FONT`] and scaled: egui rasterizes every glyph it lays out, and a tall
+/// field's automatic size can be thousands of points.
+fn bounded_line_width(size: f64, measure: impl Fn(f32) -> f32) -> f64 {
+    let at = size.min(f64::from(MAX_SCREEN_FONT));
+    if at > 0.0 { f64::from(measure(at as f32)) * size / at } else { f64::from(measure(at as f32)) }
+}
+
+/// The largest font, in screen points, the on-page field editor draws with: a bound that keeps
+/// one rasterized glyph (font size times pixels per point) well inside egui's font atlas.
+pub const MAX_SCREEN_FONT: f32 = 256.0;
+
+/// The font, in screen points, a field's editor shows `text` at, `zoom` screen points per page
+/// point: [`field_text_size`] scaled, within 3 and [`MAX_SCREEN_FONT`].
+pub fn field_screen_font(painter: &egui::Painter, f: &FormField, w: &FormWidget, text: &str, zoom: f32) -> f32 {
+    let font = field_text_size(painter, f, w, text) * zoom;
+    if font.is_nan() { 3.0 } else { font.clamp(3.0, MAX_SCREEN_FONT) }
 }
 
 fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, w: &FormWidget, r: Rect) {
@@ -543,7 +575,7 @@ fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, 
             if !text.is_empty() {
                 let unrotated_w = if xf.rot % 180 == 90 { xf.ph } else { xf.pw };
                 let zoom = xf.rect.width() / unrotated_w.max(1.0);
-                let font_size = (field_text_size(painter, f, w, text) * zoom).clamp(3.0, 64.0);
+                let font_size = field_screen_font(painter, f, w, text, zoom);
                 let display_text = if f.has(field_flags::PASSWORD) { "•".repeat(text.chars().count()) } else { text.to_string() };
                 let p = painter.with_clip_rect(r);
                 let (align, pos) = match f.quadding {
@@ -777,7 +809,7 @@ pub(crate) fn overlay(
                     ui.set_min_size(rect.size());
                     let Some(fx) = view.forms.focus.as_mut() else { return };
                     // Sized from the text being typed, so an auto-sized field shrinks to keep it in view.
-                    let font = (field_text_size(ui.painter(), f, w, &fx.text) * zoom).clamp(3.0, 64.0);
+                    let font = field_screen_font(ui.painter(), f, w, &fx.text, zoom);
                     // The field is pale yellow in every theme, so the caret must not follow the theme (pale in dark mode) (#655).
                     ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(FIELD_FILL);
                     // A field that doesn't scroll takes no more than fits (ISO 32000-2 Table 228).
@@ -969,4 +1001,23 @@ pub fn field_screen_rect(view: &DocView, info: &DocInfo, f: &FormField, widget: 
     let page = w.page?;
     let xf = view.page_xform(page)?;
     Some(widget_rect(&xf, info, page, w.rect))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_SCREEN_FONT, bounded_line_width};
+    use std::cell::Cell;
+
+    #[test]
+    fn a_line_is_never_laid_out_above_the_screen_font_bound() {
+        let largest = Cell::new(0.0f32);
+        let measure = |at: f32| {
+            largest.set(largest.get().max(at));
+            at * 3.0
+        };
+        assert_eq!(bounded_line_width(12_522.0, measure), 12_522.0 * 3.0, "the width scales");
+        assert_eq!(largest.get(), MAX_SCREEN_FONT, "laid out at the bound");
+        assert_eq!(bounded_line_width(10.0, measure), 30.0, "below it, at the size itself");
+        assert_eq!(largest.get(), MAX_SCREEN_FONT);
+    }
 }

@@ -15,7 +15,7 @@ use boa_engine::object::builtins::{JsArray, JsProxy};
 use boa_engine::property::Attribute;
 use boa_engine::{Context, JsObject, JsResult, JsString, JsValue, NativeFunction, Source, js_string};
 
-use crate::{Limits, arg, as_number, error, function, platform, printd, printf, printx, refuse, s, scand, text};
+use crate::{Limits, Message, arg, as_number, error, function, platform, printd, printf, printx, refuse, s, scand, text};
 
 mod globals;
 mod host;

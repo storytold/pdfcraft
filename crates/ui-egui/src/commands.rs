@@ -83,7 +83,11 @@ impl PdfCraftApp {
         if self.combine_showing() && matches!(spec.needs, commands::Needs::Undo | commands::Needs::Redo) {
             return self.combine_can_undo(spec.needs == commands::Needs::Undo);
         }
-        commands::is_enabled(spec, &self.session, self.active_ids().map(|(_, id)| id))
+        // Undo also takes back typing in a box open on the page, and Redo what Undo took there,
+        // with no document step.
+        (commands::is_enabled(spec, &self.session, self.active_ids().map(|(_, id)| id))
+            || spec.needs == commands::Needs::Undo && self.page_typing_unapplied()
+            || spec.needs == commands::Needs::Redo && self.open_box_can_redo())
             && (spec.id != "edit.copy"
                 || self
                     .active
@@ -355,8 +359,23 @@ impl PdfCraftApp {
                 }
                 self.dialog = Some(Dialog::NumberPages);
             }
+            "page.properties" => {
+                if let Some(i) = active
+                    && let Some(doc) = self.session.get(self.views[i].id)
+                {
+                    let pages = self.views[i].target_pages();
+                    let orders = doc.tab_orders();
+                    let mut theirs = pages.iter().map(|p| orders.get(*p).copied());
+                    let first = theirs.next().flatten();
+                    let before = if theirs.all(|o| o == first) { first } else { None };
+                    let generation = doc.edit_generation();
+                    self.page_props_draft = Some(crate::PagePropsDraft { doc: self.views[i].id, generation, pages, before, tab_order: before });
+                    self.dialog = Some(Dialog::PageProps);
+                }
+            }
             "bookmark.add" => self.bookmark_action(crate::panels::BmAction::New),
             "bookmark.from_structure" => self.bookmark_action(crate::panels::BmAction::FromStructure),
+            "bookmark.from_text_styles" => self.bookmark_action(crate::panels::BmAction::FromTextStyles),
             "page.organize" => {
                 if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
                     if v.organize {
@@ -474,6 +493,7 @@ impl PdfCraftApp {
                     K::Background
                 };
                 self.marks_draft.replace = id.ends_with(".update");
+                self.marks_draft.opened(kind);
                 self.marks_draft.preview = None;
                 self.dialog = Some(Dialog::Marks(kind));
             }
@@ -528,7 +548,8 @@ impl PdfCraftApp {
             }
             "edit.links_from_urls" => self.links_from_urls(),
             "edit.remove_links" => self.remove_all_links(),
-            "comment.import" | "form.import_data" => self.import_data_dialog(),
+            "comment.import" => self.import_comments_dialog(),
+            "form.import_data" => self.import_data_dialog(),
             "comment.stamp" => {
                 self.left = crate::LeftPanel::Tool("stamp");
                 self.reveal_tools();
@@ -781,7 +802,16 @@ impl PdfCraftApp {
             if matches!(spec.id, "view.previous_view" | "view.next_view") && !self.command_enabled(spec) {
                 continue;
             }
-            if typing && !spec.in_text {
+            // A box typed into on the page (a paragraph being edited, added text) keeps Undo and
+            // Redo only while it holds typing the page doesn't have, or Redo has typing to put
+            // back; then they reach the document. ⌘⇧Z is also ⌘Z to the Undo shortcut, so a
+            // Redo the box keeps is never taken as Undo.
+            let page_box = matches!(spec.id, "edit.undo" | "edit.redo")
+                && self.page_box_focused(ctx)
+                && !self.page_typing_unapplied()
+                && !(spec.id == "edit.redo" && self.page_box_can_redo(ctx))
+                && !(spec.id == "edit.undo" && ctx.input(|i| i.modifiers.shift));
+            if typing && !spec.in_text && !page_box {
                 continue;
             }
             let Some(key) = Key::from_name(s.key) else { continue };
