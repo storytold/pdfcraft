@@ -2443,6 +2443,62 @@ fn clean_detached_and_docked_tabs_request_quit_returns_true_and_allows_quit() {
     assert!(h.state().close_request.is_none());
 }
 
+#[test]
+fn reopening_detached_file_reattaches_tab_and_commit_typing_preserves_active_invariants() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-ui-test-reattach-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let p1 = dir.join("first.pdf").to_string_lossy().into_owned();
+    let p2 = dir.join("middle.pdf").to_string_lossy().into_owned();
+    let p3 = dir.join("last.pdf").to_string_lossy().into_owned();
+
+    let p1_c = p1.clone();
+    let p2_c = p2.clone();
+    let p3_c = p3.clone();
+    let mut h = harness(move |app| {
+        app.open_bytes("first.pdf", Some(p1_c), FIXTURE.to_vec()).unwrap();
+        app.open_bytes("middle.pdf", Some(p2_c), FIXTURE.to_vec()).unwrap();
+        app.open_bytes("last.pdf", Some(p3_c), FIXTURE.to_vec()).unwrap();
+    });
+
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    // Detach middle.pdf (index 1)
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(3);
+    assert!(h.state().views[1].detached, "middle.pdf should be detached");
+    let active_before = h.state().active;
+    assert_ne!(active_before, Some(1), "active tab must not be detached tab");
+
+    // Detached window header renders compact page & zoom readout
+    h.get_by_label_contains("Page 1 of 1 • 100%");
+
+    // 1. commit_typing_in preserves active tab invariants when tab is detached
+    h.state_mut().views[1].pending_edit = Some(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+    let committed = h.state_mut().commit_typing_in(ids[1]);
+    assert!(committed, "commit_typing_in should succeed");
+    assert_eq!(h.state().active, active_before, "commit_typing_in must not make detached tab active");
+    assert!(h.state().views[1].detached, "middle.pdf must remain detached");
+
+    // 2. Reopening via open_recent re-attaches middle.pdf and makes it active
+    h.state_mut().open_recent(&p2);
+    h.run_steps(3);
+    assert!(!h.state().views[1].detached, "open_recent must re-attach detached tab");
+    assert_eq!(h.state().active, Some(1), "open_recent must make re-attached tab active");
+
+    // Detach middle.pdf again
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(3);
+    assert!(h.state().views[1].detached);
+    assert_ne!(h.state().active, Some(1));
+
+    // 3. Reopening via open_path re-attaches middle.pdf and makes it active
+    let outcome = h.state_mut().open_path(&p2);
+    h.run_steps(3);
+    assert_eq!(outcome, pdfcraft_ui_egui::OpenOutcome::Focused);
+    assert!(!h.state().views[1].detached, "open_path must re-attach detached tab");
+    assert_eq!(h.state().active, Some(1), "open_path must make re-attached tab active");
+}
+
 /// The Edit tab turns on Edit text & images at once, as Acrobat does, so every paragraph and image
 /// is boxed and editable with one click; another tab puts the tool down again.
 #[test]

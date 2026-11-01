@@ -153,7 +153,7 @@ impl PdfCraftApp {
                 // Bring the document forward if it's docked in the main window: what's typed
                 // in its form is committed and saved with it, and a field that rejects the value
                 // is shown where the user can fix it. Detached windows keep their own viewport.
-                if !self.views[index].detached {
+                if self.views.get(index).is_some_and(|v| !v.detached) {
                     self.active = Some(index);
                 }
                 // Close only once the save has actually been written, which may be on a later
@@ -223,13 +223,17 @@ impl PdfCraftApp {
 
     fn quit(&mut self, ctx: &egui::Context) {
         self.allow_quit = true;
+        self.close_detached_viewports(ctx);
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
+    fn close_detached_viewports(&self, ctx: &egui::Context) {
         for view in &self.views {
             if view.detached {
                 let id = egui::ViewportId::from_hash_of(("detached-doc", view.id));
                 ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Close);
             }
         }
-        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
     /// Publish whether leaving would lose work, for the browser's reload warning (#812): a
@@ -279,12 +283,7 @@ impl PdfCraftApp {
             // A clean quit: nothing is left to recover.
             self.shutdown_recovery();
             self.allow_quit = true;
-            for view in &self.views {
-                if view.detached {
-                    let id = egui::ViewportId::from_hash_of(("detached-doc", view.id));
-                    ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Close);
-                }
-            }
+            self.close_detached_viewports(ctx);
         }
     }
 
