@@ -177,7 +177,7 @@ impl Scale {
     pub fn read(doc: &Document, object: &Object) -> Result<Self> {
         let o = doc.resolve(object);
         let d = o.as_dict().ok_or_else(|| invalid("invalid measure dictionary"))?;
-        if d.get(b"Subtype").is_some_and(|o| doc.resolve(o).as_name().is_some_and(|n| n != b"RL")) {
+        if d.get(b"Subtype").map(|o| doc.resolve(o)).is_some_and(|o| !matches!(*o, Object::Null) && o.as_name() != Some(b"RL")) {
             return Err(invalid("only rectilinear measurement scales are supported"));
         }
         let format = |key: &[u8]| -> Result<(String, f64, u8)> {

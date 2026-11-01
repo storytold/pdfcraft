@@ -475,8 +475,12 @@ fn indirect_scale_fields_and_closed_area_edges_are_handled() {
     close(open.length, 36.0);
     close(closed.length, 36.0);
 
-    // A doubled closing vertex leaves a zero-length closing edge after stripping one closing duplicate.
+    // A doubled closing vertex leaves a zero-length closing edge after stripping one closing duplicate,
+    // and an area with fewer than 3 distinct vertices or a NaN coordinate is also rejected.
     assert!(add(&mut d, &new(Kind::Area, vec![[0.0, 0.0], [3.0, 0.0], [3.0, 4.0], [0.0, 0.0], [0.0, 0.0]]), &Meta::default()).is_err());
+    assert!(add(&mut d, &new(Kind::Area, vec![[0.0, 0.0], [3.0, 0.0], [0.0, 0.0]]), &Meta::default()).is_err());
+    assert!(add(&mut d, &new(Kind::Area, vec![[0.0, 0.0], [3.0, 0.0], [f64::NAN, 4.0]]), &Meta::default()).is_err());
+    assert!(reading(Kind::Area, &[[0.0, 0.0], [3.0, 0.0], [f64::NAN, 4.0]], &m.scale).is_err());
 
     // Indirect PDF objects inside /Measure, /NumberFormat, and the annotation dictionary still resolve cleanly.
     let (r, mut annot_dict) = annot(&d, 0, 0).unwrap();
@@ -519,8 +523,17 @@ fn indirect_scale_fields_and_closed_area_edges_are_handled() {
     annot_dict.set(b"NM".to_vec(), Object::Ref(nm_ref));
     annot_dict.set(b"T".to_vec(), Object::Ref(author_ref));
     annot_dict.set(b"PCMeasureLabel".to_vec(), Object::Ref(label_ref));
-    annot_dict.set(b"Measure".to_vec(), Object::Dict(measure));
+    annot_dict.set(b"Measure".to_vec(), Object::Dict(measure.clone()));
     d.update_dict(r, |target| *target = annot_dict).unwrap();
+
+    // Non-RL indirect subtypes and numeric subtypes are rejected by Scale::read.
+    let geo_ref = d.add(Object::name("GEO"));
+    let mut bad_geo = measure.clone();
+    bad_geo.set(b"Subtype".to_vec(), Object::Ref(geo_ref));
+    assert!(Scale::read(&d, &Object::Dict(bad_geo)).is_err());
+    let mut bad_num = measure;
+    bad_num.set(b"Subtype".to_vec(), Object::Int(42));
+    assert!(Scale::read(&d, &Object::Dict(bad_num)).is_err());
 
     let listing = list(&d);
     assert!(listing.unsupported.is_empty(), "{:?}", listing.unsupported);
