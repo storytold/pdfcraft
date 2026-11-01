@@ -6,9 +6,7 @@
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 review follow-up: preserve image crop/tag/stream ownership, resize in page orientation, harden clipboard and text formatting, and reload installed fonts; estimates unchanged)
 
-> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7 #4789: Format-panel fill coverage exercises both defaults and active typed drafts; independent set/clear mutations fail the new assertions; 1910 UI tests pass (5 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm pass; production unchanged)
 
-> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7 #4789: rebase PR #4912 onto main 47f42ba0; 3030 scoped tests pass (9 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged)
 
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: integrate main fa5f9f8c; retain CJK viewer and upstream raster regressions, restore explicit display_config imports; estimates unchanged)
@@ -26,6 +24,9 @@
 > **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M7 #2517: a narrowed then widened paragraph keeps the typed spaces the wrap consumed, after save and reopen; estimates unchanged)
 > **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: OCR model downloads use verified ONNX pairs with legacy discovery fallback; estimates unchanged)
 > **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** patch (M7 #4789: keep narrow added-text preview fills inside the PDF text rectangle for every alignment, before and after the clean background arrives; estimates unchanged)
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7 #4789: rebase PR #4912 onto main 0cba87ae; 3284 scoped tests pass (9 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged)
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7 #4789: Format-panel fill coverage exercises both defaults and active typed drafts; independent set/clear mutations fail the new assertions; 1910 UI tests pass (5 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm pass; production unchanged)
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7 #4789: rebase PR #4912 onto main 47f42ba0; 3030 scoped tests pass (9 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged)
 > **Last reviewed:** 2026-10-25 | **Last updated:** 2026-10-25 | **Change:** minor (M14 localization current state: Arabic logical catalog, explicit RTL label direction and mirrored stock chrome; native/browser RTL workflows unqualified. Native release Hans face via LXGW WenKai Lite; estimates unchanged)
 > **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M7, #2636 partial: pasting added text boxes and images in the engine and through `content_copy`; estimates unchanged)
 > **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M11: image optimization accounts for page-local UserUnit; estimates unchanged)
@@ -233,10 +234,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 - 2026-11-01: PR #2155 review follow-up preserves editor crops through group moves and keeps arranged artwork outside added-item streams; unsafe nested-tag extraction is refused. Image handles and flips follow page orientation, added images accept general transforms, and clipboard/text/Home/font-discovery edge cases have focused regressions. Candidate only; estimates unchanged.
 - 2026-11-01: PR #2155 maintainer edits remove redundant image/text helpers and add regressions for crop ownership, arrange scope/state fidelity, clipboard precedence, crop-drag bounds, and font scanning. Transform and Unicode-script tools complete the headless paths.
-- **2026-11-01 (M7, #4789 coverage):** M7 #4789: Format-panel fill coverage exercises both defaults and active typed drafts; independent set/clear mutations fail the new assertions; 1910 UI tests pass (5 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm pass; production unchanged.
 
 
-- **2026-11-01 (M7, #4789 rebase):** PR #4912 rebased onto main `47f42ba0`; resolved and auto-merged hunks reviewed. 3030 scoped tests passed, 9 existing ignored; formatting, strict Clippy, layers/assets/parity and wasm checks passed. Behavior and estimates unchanged.
 
 
 - **2026-10-18 (M3, #1354, local candidate):** Integrated --two-paged with current main, retaining upstream modal/picker ownership and single-tab reuse. Native launch/opening/password regressions, negative checks against the old wrapper, visual inspection, formatting, strict scoped Clippy, layers, assets, parity and scoped WASM compilation pass. Three existing socket tests are unavailable in this workspace; one existing network test remains ignored. No push or GitHub merge; estimates unchanged.
@@ -755,6 +754,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | patch | M7 #4789: rebase PR #4912 onto main 0cba87ae; 3284 scoped tests pass (9 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged. |
 | 2026-11-01 | patch | M7 #4789: Format-panel fill coverage exercises both defaults and active typed drafts; independent set/clear mutations fail the new assertions; 1910 UI tests pass (5 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm pass; production unchanged. |
 | 2026-11-01 | patch | M7 #4789: rebase PR #4912 onto main 47f42ba0; 3030 scoped tests pass (9 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged. |
 | 2026-10-28 | patch | M2, PR #4172: integrate main 5af10276 and retain both roadmap histories; viewer-only CJK and print/output font policies and estimates unchanged. |
@@ -840,3 +840,8 @@ PR #1952 retains per-widget checkbox/radio export-value editing in the split for
 - **2026-10-31 (#1577):** Reconciled the page-shadow preference with split viewer, organizer, settings and control modules, preserving upstream page-gap shadow suppression. CI validation pending.
 - **2026-10-27 (M7, #4789):** Add text can have a background fill of its own, apart from the text colour: Format text ▸ Fill colour (and No fill), `background` on `page_add_text`/`content_update` (`none` removes it), listed by `content_list`; drawn as a filled rectangle under the text and kept through save and reopen.
 
+- **2026-11-01 (M7, #4789 coverage):** M7 #4789: Format-panel fill coverage exercises both defaults and active typed drafts; independent set/clear mutations fail the new assertions; 1910 UI tests pass (5 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm pass; production unchanged.
+
+- **2026-11-01 (M7, #4789 rebase):** PR #4912 rebased onto main `47f42ba0`; resolved and auto-merged hunks reviewed. 3030 scoped tests passed, 9 existing ignored; formatting, strict Clippy, layers/assets/parity and wasm checks passed. Behavior and estimates unchanged.
+
+- **2026-11-01 (M7, #4789 rebase):** PR #4912 rebased onto main `0cba87ae`; resolved and auto-merged hunks reviewed. 3284 scoped tests passed, 9 existing ignored; formatting, strict Clippy, layers/assets/parity and wasm checks passed. Behavior and estimates unchanged.
