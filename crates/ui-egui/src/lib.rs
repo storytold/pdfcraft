@@ -41,6 +41,7 @@ pub use combine_grid::ThumbState as CombineThumb;
 pub use combine_ui::{Columns as CombineColumns, CombineView, Lock as CombineLock, SortKey};
 mod commands;
 pub mod control;
+pub use control::PdfCraftControl;
 mod menus;
 mod properties_session;
 /// Header & footer / watermark / background dialog types (tests and automation).
