@@ -19,6 +19,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let mut panel_edit: Option<pdfcraft_engine::Edit> = None;
     let mut field_properties = None;
     let mut panel_command: Option<&'static str> = None;
+    let mut comment_types_changed = false;
     let mut sig_action: Option<crate::sign_ui::PanelAction> = None;
     let mut a11y_action: Option<crate::a11y_ui::PanelAction> = None;
     let mut compare_action: Option<crate::compare_ui::PanelAction> = None;
@@ -88,7 +89,9 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         }
                         // Right to left: close, "…", filter, search (Acrobat's order left to right).
                         if panel == RightPanel::Comments {
+                            let before = view.comments.hidden_types.clone();
                             panel_command = crate::comments_panel::header_controls(ui, info, view, doc.comments_hidden());
+                            comment_types_changed = view.comments.hidden_types != before;
                         }
                         if panel == RightPanel::Comments
                             && icons::button(ui, "search", 26.0, view.comments.search.is_some(), tl!("Search comments")).clicked()
@@ -432,6 +435,27 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
     if reset_layers && app.session.reset_layers(id) {
         app.views[index].invalidate_content();
+    }
+    if comment_types_changed {
+        let types = app.views.get(index).map(|v| v.comments.hidden_types.clone()).unwrap_or_default();
+        let selected = app.views.get(index).and_then(|v| v.comments.selected);
+        let selected_hidden = selected.is_some_and(|(page, idx)| {
+            app.session.get(id).is_some_and(|doc| {
+                doc.info
+                    .annotations
+                    .iter()
+                    .any(|annot| annot.page == page && annot.index == idx && types.iter().any(|ty| ty == crate::comments_panel::kind_label(annot)))
+            })
+        });
+        let changed = app.session.set_hidden_comment_types(id, &types);
+        if let Some(view) = app.views.get_mut(index) {
+            if selected_hidden {
+                view.comments.selected = None;
+            }
+            if changed {
+                view.invalidate_content();
+            }
+        }
     }
     match nav {
         Some(Nav::Page(p)) => app.views[index].go_to_page(p),

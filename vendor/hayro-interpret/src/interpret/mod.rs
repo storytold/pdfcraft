@@ -18,7 +18,7 @@ use crate::x_object::{
 use hayro_syntax::content::TypedIter;
 use hayro_syntax::content::ops::TypedInstruction;
 use hayro_syntax::object::dict::keys::{
-    ACTUAL_TEXT, ANNOTS, AP, AS, C, CA, F, MCID, N, OC, QUADPOINTS, RECT, SUBTYPE,
+    ACTUAL_TEXT, ANNOTS, AP, AS, C, CA, F, IT, MCID, N, OC, QUADPOINTS, RECT, RT, SUBTYPE,
 };
 use hayro_syntax::object::{Array, Dict, Object, Rect, Stream, dict_or_stream};
 use hayro_syntax::page::{ContentReader, Page, Resources, Rotation};
@@ -44,6 +44,23 @@ pub type CMapResolverFn =
     Arc<dyn Fn(hayro_cmap::CMapName<'_>) -> Option<&'static [u8]> + Send + Sync>;
 /// A callback function for resolving warnings during interpretation.
 pub type WarningSinkFn = Arc<dyn Fn(InterpreterWarning) + Send + Sync>;
+
+/// PdfCraft patch: one comment type the viewer asked not to draw.
+///
+/// `subtype` is the PDF `/Subtype`. `intent` set means `/IT` must equal it; unset means any
+/// `/IT` except `except_intents`. `grouped` set means `/RT /Group` must equal it (Replace
+/// Text's caret is grouped; a caret of its own is not).
+#[derive(Clone, Debug)]
+pub struct HiddenCommentType {
+    /// PDF `/Subtype` (`Circle`, `FreeText`, …).
+    pub subtype: String,
+    /// When set, `/IT` must equal this. When unset, any `/IT` except [`Self::except_intents`].
+    pub intent: Option<String>,
+    /// `/IT` values that stay visible when [`Self::intent`] is unset (a callout is not a text box).
+    pub except_intents: Vec<String>,
+    /// When set, `/RT /Group` must equal this. `None` ignores `/RT`.
+    pub grouped: Option<bool>,
+}
 
 #[derive(Clone)]
 /// Settings that should be applied during the interpretation process.
@@ -108,6 +125,9 @@ pub struct InterpreterSettings {
     /// PdfCraft patch: hide comments (markup annotations) but keep form fields (`/Widget`)
     /// and links, for the viewer's "Hide all comments".
     pub hide_comments: bool,
+    /// PdfCraft patch: comment types to skip (the viewer's filter by type). Empty draws every
+    /// type. Fields and links are never skipped because of this list.
+    pub hidden_comment_types: Arc<Vec<HiddenCommentType>>,
     /// PdfCraft patch: viewer overrides for optional content groups (object number, generation,
     /// visible), applied on top of the document's default configuration (Layers panel toggles).
     pub ocg_overrides: Arc<Vec<(i32, i32, bool)>>,
@@ -139,6 +159,7 @@ impl Default for InterpreterSettings {
             warning_sink: Arc::new(|_| {}),
             render_annotations: true,
             hide_comments: false,
+            hidden_comment_types: Arc::new(Vec::new()),
             ocg_overrides: Arc::new(Vec::new()),
             cancelled: None,
             preview: false,
@@ -203,6 +224,10 @@ pub fn interpret_page<'a>(
             if context.settings.hide_comments
                 && !matches!(annot.get::<hayro_syntax::object::Name<'_>>(SUBTYPE).as_deref(), Some(b"Widget" | b"Link"))
             {
+                continue;
+            }
+            // PdfCraft patch: the viewer's filter by type. Same exception for fields and links.
+            if comment_type_hidden(&annot, &context.settings.hidden_comment_types) {
                 continue;
             }
 
@@ -300,6 +325,28 @@ pub fn interpret_page<'a>(
         }
         device.end_annotations();
     }
+}
+
+/// PdfCraft patch: whether this annotation is one of the comment types the viewer hid.
+/// A field or a link is never hidden this way.
+fn comment_type_hidden(annot: &Dict<'_>, rules: &[HiddenCommentType]) -> bool {
+    if rules.is_empty() {
+        return false;
+    }
+    let subtype = annot.get::<hayro_syntax::object::Name<'_>>(SUBTYPE);
+    if matches!(subtype.as_deref(), Some(b"Widget" | b"Link")) {
+        return false;
+    }
+    let intent = annot.get::<hayro_syntax::object::Name<'_>>(IT);
+    let grouped = annot.get::<hayro_syntax::object::Name<'_>>(RT).as_deref() == Some(b"Group");
+    rules.iter().any(|rule| {
+        subtype.as_deref() == Some(rule.subtype.as_bytes())
+            && match &rule.intent {
+                Some(it) => intent.as_deref() == Some(it.as_bytes()),
+                None => !rule.except_intents.iter().any(|except| intent.as_deref() == Some(except.as_bytes())),
+            }
+            && rule.grouped.is_none_or(|want| want == grouped)
+    })
 }
 
 /// PdfCraft patch (56): whether `subtype` is one of the standard annotation types of
