@@ -347,6 +347,19 @@ pub struct Common {
     pub para: ParaSpec,
     /// Table cells: how many columns this cell spans.
     pub col_span: usize,
+    /// `<traversal>`: where Tab goes from here.
+    pub traversal: Traversal,
+}
+
+/// A container's or object's `<traversal>` links, as SOM references relative to it. Only the
+/// two Tab follows are kept; the arrow-key ones (`up`, `down`, `left`, `right`, `back`) aren't.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Traversal {
+    /// `operation="first"`: where Tab goes on entering a container.
+    pub first: Option<String>,
+    /// `operation="next"` (the default): where Tab goes after this object, or after the last
+    /// stop inside a container.
+    pub next: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
