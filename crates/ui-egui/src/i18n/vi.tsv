@@ -342,12 +342,10 @@ theme	Appearance	Giao diện
 	Check Again	Kiểm tra lại
 	Check again	Kiểm tra lại
 	Check box is checked by default	Hộp kiểm được chọn theo mặc định
-	Check for updates	Kiểm tra bản cập nhật
 	Check spelling	Kiểm tra chính tả
 	Check the pages	Kiểm tra các trang
 	Check the pages of {name}: {why}	Kiểm tra các trang của {name}: {why}
 	Checking Options ({on} of 32 in all categories)	Tùy chọn kiểm tra ({on} trên 32 ở tất cả danh mục)
-	Checking for a newer version…	Đang kiểm tra phiên bản mới hơn…
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Chọn ảnh PNG hoặc JPEG (tối đa 4 MiB). Độ trong suốt được giữ nguyên.
 	Choose a folder for the exported files	Chọn thư mục cho các tệp đã xuất
 	Choose a folder for the extracted pages	Chọn thư mục cho các trang đã trích xuất
@@ -408,7 +406,6 @@ theme	Appearance	Giao diện
 	Copies:	Số bản sao:
 	Copy selected text	Sao chép văn bản đã chọn
 	Copy text	Sao chép văn bản
-	Couldn't check for updates: {e}	Không thể kiểm tra bản cập nhật: {e}
 	Couldn't open the printer's preferences: {e}	Không thể mở tùy chọn của máy in: {e}
 	Counterclockwise 90 degrees	Ngược chiều kim đồng hồ 90 độ
 	Country/Region	Quốc gia/Khu vực
@@ -697,6 +694,12 @@ theme	Appearance	Giao diện
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Đọc {names}, các trường này lại đọc ngược nó. Không thứ tự nào sửa được vòng lặp: hãy đổi một trong các công thức.
 	Not in order	Không có trong thứ tự
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Không có trong thứ tự tính toán lưu trong PDF: các trình xem PDF khác có thể không tính trường này.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Đọc {name}, nhưng biểu mẫu không có trường này, nên không nhận được giá trị nào từ đó.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Tập lệnh của nó còn đọc các trường có tên được tạo ra khi chạy, nên không thể kiểm tra các lần đọc đó.
+	Missing field	Thiếu trường
+	Unchecked reads	Lần đọc chưa kiểm tra
+	{field} reads fields named as it runs	{field} đọc các trường được đặt tên khi chạy
+	Some names are built as it runs	Một số tên được tạo ra khi chạy
 	Back to Prepare a form	Quay lại Chuẩn bị biểu mẫu
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Chưa có trường nào trong biểu mẫu này tự tính giá trị. Hãy đặt phép tính cho một trường ở thẻ Tính toán trong thuộc tính của nó, trường đó sẽ hiện ở đây.
 	{names} and {last}	{names} và {last}
@@ -904,7 +907,6 @@ theme	Appearance	Giao diện
 	Patterns (graphics objects)	Họa tiết (đối tượng đồ họa)
 	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft không đóng bình thường. Các tài liệu này có thay đổi đã được tự động lưu:
 	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft hoạt động ngoại tuyến. Không thu thập dữ liệu sử dụng, không cần tài khoản, và không xử lý đám mây trừ khi bạn thêm nhà cung cấp.
-	PdfCraft {c} is up to date.	PdfCraft {c} đã là bản mới nhất.
 	PdfCraft {v} is available.	PdfCraft {v} đã có sẵn.
 	Percentage	Phần trăm
 	Permissions password	Mật khẩu quyền hạn
@@ -992,6 +994,14 @@ theme	Appearance	Giao diện
 	Replacement text	Văn bản được thay vào
 	Replacement: pages of {name}	Thay thế: các trang của {name}
 	Replaces the existing one on those pages.	Thay thế cái hiện có trên các trang đó.
+	Checking pages…	Đang kiểm tra các trang…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Trang {pages} có lớp tô trắng riêng, sẽ che mất nền. Thay thế
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Các trang {pages} có lớp tô trắng riêng, sẽ che mất nền. Thay thế
+	Removing the background puts the page's own backdrop back.	Gỡ nền sẽ khôi phục lớp tô trắng riêng của trang.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Một hình ảnh phủ kín trang {pages} (bản quét?), nên nền sẽ không hiện ở đó.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Hình ảnh phủ kín các trang {pages} (bản quét?), nên nền sẽ không hiện ở đó.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Trang {pages} đã thay đổi sau khi thêm nền, nên lớp tô trắng riêng của nó vẫn tắt. Trên giấy trắng trông vẫn như cũ.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Các trang {pages} đã thay đổi sau khi thêm nền, nên lớp tô trắng riêng của chúng vẫn tắt. Trên giấy trắng trông vẫn như cũ.
 	Report	Báo cáo
 	Report…	Báo cáo…
 	Requires user to enter a password for:	Yêu cầu người dùng nhập mật khẩu cho:
@@ -1319,7 +1329,6 @@ theme	Appearance	Giao diện
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	Biểu mẫu XFA: các trường và dữ liệu XFA của nó được giữ đồng bộ, nên các trình xem khác hiển thị những gì bạn điền.
 	You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Bạn sắp áp dụng 1 dấu xóa. Văn bản, hình ảnh và bản vẽ nằm dưới các dấu, cũng như bình luận và trường biểu mẫu chồng lên chúng, sẽ bị xóa vĩnh viễn.
 	You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Bạn sắp áp dụng {n} dấu xóa. Văn bản, hình ảnh và bản vẽ nằm dưới các dấu, cũng như bình luận và trường biểu mẫu chồng lên chúng, sẽ bị xóa vĩnh viễn.
-	You have version {c}. All releases are listed at {page}.	Bạn đang dùng phiên bản {c}. Tất cả các bản phát hành được liệt kê tại {page}.
 	You have version {c}. Download the new version from its release page.	Bạn đang dùng phiên bản {c}. Hãy tải phiên bản mới từ trang phát hành của nó.
 	Your changes will be lost if you don't save them.	Các thay đổi của bạn sẽ bị mất nếu bạn không lưu.
 	ZIP	ZIP
@@ -2111,6 +2120,9 @@ comment menu	Edit	Sửa
 	Formulas and similar non-text elements need alternate text. Add alternate text to them.	Công thức và các phần tử không phải văn bản tương tự cần có văn bản thay thế. Hãy thêm văn bản thay thế cho chúng.
 	Gray	Xám
 	Grayscale Images	Ảnh thang xám
+	Monochrome Images	Ảnh đơn sắc
+	CCITT Group 4	CCITT nhóm 4
+	JBIG2 (lossless)	JBIG2 (không mất dữ liệu)
 	Green	Xanh lá
 	Green on black	Xanh lá trên nền đen
 	H / Space (hold)	H / Space (giữ)
@@ -2656,6 +2668,11 @@ certificate	SHA-256 digest	Giá trị băm SHA-256
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} được tính trước {fields} mà nó đọc.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	Còn {n} trường khác được tính quá sớm.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} không có trong thứ tự lưu trong PDF, nên các trình xem PDF khác có thể không tính.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} công thức đọc trường không có trong biểu mẫu
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} đọc {fields}, nhưng biểu mẫu không có.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	Còn {n} công thức khác đọc trường bị thiếu.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} tạo một số tên trường khi chạy, nên các lần đọc đó không được kiểm tra.
+@plural	{fields} is missing|{fields} are missing	Thiếu {fields}
 key	Ctrl	Ctrl
 key	Shift	Shift
 key	Delete	Delete
@@ -2824,3 +2841,8 @@ key	Space	Space
 	Rotate the selected pages clockwise	Xoay các trang đã chọn theo chiều kim đồng hồ
 	Extract the selected pages…	Trích xuất các trang đã chọn…
 	Delete the selected pages	Xóa các trang đã chọn
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Tùy chọn cho câu trả lời này
+	Export value	Giá trị xuất
+	Show Page Edge Shadows	Hiển thị bóng viền trang
