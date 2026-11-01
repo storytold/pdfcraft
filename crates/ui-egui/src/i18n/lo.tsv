@@ -2481,3 +2481,4 @@ animation effects	Off	ປິດ
 	Unchecked reads	Unchecked reads
 	{field} reads fields named as it runs	{field} reads fields named as it runs
 	Some names are built as it runs	Some names are built as it runs
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	ຟອນລາຍເຊັນບໍ່ສາມາດສະແດງ “{c}” ({code}) ໄດ້. ພິມດ້ວຍຕົວອັກສອນລາຕິນ, ຊີຣິລລິກ ຫຼື ກຣີກ, ຫຼື ໃຊ້ “ແຕ້ມ” ຫຼື “ຮູບພາບ”.

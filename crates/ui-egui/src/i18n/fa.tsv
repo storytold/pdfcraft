@@ -2816,3 +2816,4 @@ theme	Appearance	ظاهر
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	گزینه‌های این پاسخ
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	قلم امضا نمی‌تواند «{c}» ({code}) را رسم کند. آن را با حروف لاتین، سیریلیک یا یونانی بنویسید، یا از «رسم» یا «تصویر» استفاده کنید.

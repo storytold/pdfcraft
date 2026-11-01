@@ -2902,3 +2902,4 @@ theme	Appearance	Aspecto
 	Options for this reply	Opciones de esta respuesta
 	Export value	Valor de exportación
 	Show Page Edge Shadows	Mostrar sombras en los bordes de las páginas
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	La fuente de la firma no puede mostrar «{c}» ({code}). Escríbelo con letras latinas, cirílicas o griegas, o usa «Dibujar» o «Imagen».

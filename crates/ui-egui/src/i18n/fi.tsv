@@ -2847,3 +2847,4 @@ theme	Appearance	Teema
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tämän vastauksen asetukset
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	Allekirjoitusfontti ei pysty piirtämään merkkiä ”{c}” ({code}). Kirjoita se latinalaisin, kyrillisin tai kreikkalaisin kirjaimin tai käytä vaihtoehtoa Piirrä tai Kuva.

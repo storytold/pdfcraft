@@ -2492,3 +2492,4 @@ animation effects	Off	Выкл
 	Options for this reply	Параметры этого ответа
 	Export value	Значение экспорта
 	Show Page Edge Shadows	Показывать тени по краям страниц
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	Шрифт подписи не может отобразить «{c}» ({code}). Введите подпись латинскими, кириллическими или греческими буквами или используйте «Рисовать» или «Изображение».

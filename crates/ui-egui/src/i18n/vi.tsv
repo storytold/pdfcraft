@@ -2846,3 +2846,4 @@ key	Space	Space
 	Options for this reply	Tùy chọn cho câu trả lời này
 	Export value	Giá trị xuất
 	Show Page Edge Shadows	Hiển thị bóng viền trang
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	Phông chữ chữ ký không thể vẽ “{c}” ({code}). Hãy nhập bằng chữ Latinh, Kirin hoặc Hy Lạp, hoặc dùng “Vẽ” hoặc “Hình ảnh”.

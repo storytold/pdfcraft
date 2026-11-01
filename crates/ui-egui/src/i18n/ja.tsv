@@ -2579,3 +2579,4 @@ animation effects	Off	オフ
 	Options for this reply	この返信のオプション
 	Export value	書き出し値
 	Show Page Edge Shadows	ページ端の影を表示
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	署名用フォントでは「{c}」（{code}）を表示できません。ラテン文字、キリル文字、ギリシャ文字で入力するか、「描画」または「画像」を使用してください。

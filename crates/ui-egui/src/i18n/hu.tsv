@@ -2578,3 +2578,4 @@ animation effects	Off	Ki
 	Options for this reply	A válasz beállításai
 	Export value	Exportérték
 	Show Page Edge Shadows	Oldalszéli árnyékok megjelenítése
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	Az aláírás betűtípusa nem tudja megjeleníteni ezt: „{c}” ({code}). Írja be latin, cirill vagy görög betűkkel, vagy használja a „Rajzolás” vagy a „Kép” lehetőséget.

@@ -2809,3 +2809,4 @@ theme	Appearance	모양
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	이 답글의 옵션
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	서명 글꼴은 “{c}”({code})를 그릴 수 없습니다. 라틴, 키릴 또는 그리스 문자로 입력하거나 “그리기” 또는 “이미지”를 사용하세요.

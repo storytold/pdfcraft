@@ -2543,3 +2543,4 @@ animation effects	Off	关
 	Options for this reply	此回复的选项
 	Export value	导出值
 	Show Page Edge Shadows	显示页面边缘阴影
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	签名字体无法显示“{c}”（{code}）。请使用拉丁、西里尔或希腊字母输入，或改用“绘制”或“图像”。

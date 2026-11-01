@@ -2675,3 +2675,4 @@ animation effects	Off	Wyłączone
 	Options for this reply	Opcje tej odpowiedzi
 	Export value	Wartość eksportowa
 	Show Page Edge Shadows	Pokaż cienie krawędzi stron
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	Czcionka podpisu nie obsługuje znaku „{c}” ({code}). Wpisz go literami łacińskimi, cyrylicą lub greckimi albo użyj opcji „Rysuj” lub „Obraz”.

@@ -2838,3 +2838,4 @@ theme	Appearance	Aspecte
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opcions d'aquesta resposta
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	El tipus de lletra de la signatura no pot dibuixar “{c}” ({code}). Escriviu-lo amb lletres llatines, ciríl·liques o gregues, o feu servir Dibuixa o Imatge.
