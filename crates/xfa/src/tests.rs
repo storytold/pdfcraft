@@ -2783,8 +2783,14 @@ fn the_form_packet_restores_the_presence_and_access_the_form_was_saved_with() {
     assert_eq!(locked, [true, true, false, false]);
 }
 
+/// A subform without a height, flowed or positioned, is as tall as what it holds, whatever its
+/// `minH`. XFA 3.3 p. 847 makes `minH` the minimum of a growable subform; this follows Adobe
+/// Acrobat instead. IRCC's IMM 5257 (04-2022, visitor visa) ends its first page with section 10
+/// (`MaritalStatus`), a positioned subform at `minH="58.274mm"` holding about 80pt, then an
+/// office-use box: Acrobat draws the section as tall as its fields, the box after it on page 1
+/// (5 pages); stretched to 165pt, the section pushed the box onto a page of its own.
 #[test]
-fn a_flowed_subform_is_as_tall_as_its_content_whatever_its_minimum_height() {
+fn a_subform_is_as_tall_as_its_content_whatever_its_minimum_height() {
     // A bar with a stale 3in `minH` holds one 0.2in line; the row after it follows directly.
     let body = |bar: &str| {
         format!(
@@ -2798,8 +2804,53 @@ fn a_flowed_subform_is_as_tall_as_its_content_whatever_its_minimum_height() {
     };
     let flowed = top(r#"layout="lr-tb""#);
     assert!((top(r#"layout="tb""#) - flowed).abs() < 0.01);
-    // A positioned subform keeps its minimum: nothing else says how tall it is.
-    assert!((top("") - flowed - (216.0 - 14.4)).abs() < 0.01, "{} against {flowed}", top(""));
+    assert!((top("") - flowed).abs() < 0.01, "positioned: {} against {flowed}", top(""));
+}
+
+/// The cases around a positioned subform's `minH`: a `minH` below the content, content taller
+/// than `minH`, a `minH` above the content, a fixed `h` (alone and with a `minH` below it), and
+/// hidden children (which take no room). A table row, which no form we test gives a `minH`
+/// without an `h`, keeps its `minH` as XFA 3.3 p. 847 (subform, `minH`) says.
+#[test]
+fn a_positioned_subform_takes_its_content_height_and_a_row_keeps_its_minimum() {
+    // The field after a positioned 7.5in-wide bar starts where the bar ends.
+    let after = |bar_attrs: &str, content: &str| {
+        let body = format!(
+            r#"<subform name="body" layout="lr-tb" w="7.5in"><subform name="bar" w="7.5in" {bar_attrs}>{content}</subform><field name="who" w="3in" h="0.4in"><ui><textEdit/></ui></field></subform>"#
+        );
+        let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+        widgets(&form.pages[0])[0].rect.y
+    };
+    let line = |h: &str| format!(r#"<draw w="7.5in" h="{h}"><value><text>Line</text></value></draw>"#);
+    let bare = after("", &line("0.2in"));
+    let inch = 72.0;
+    // A `minH` below the content, and content taller than the `minH`: the content's height.
+    assert!((after(r#"minH="0.1in""#, &line("0.2in")) - bare).abs() < 0.01);
+    assert!((after(r#"minH="0.1in""#, &line("1in")) - after("", &line("1in"))).abs() < 0.01);
+    assert!(after("", &line("1in")) - bare > 0.7 * inch, "taller content pushes the field down");
+    // A `minH` above the content: still the content's height, not the 3in.
+    let above = after(r#"minH="3in""#, &line("0.2in"));
+    assert!((above - bare).abs() < 0.01, "{above} against {bare}");
+    assert!((after(r#"minH="3in""#, &line("1in")) - after("", &line("1in"))).abs() < 0.01);
+    // A fixed `h` is the height, whatever the content.
+    assert!((after(r#"h="2in""#, &line("0.2in")) - after(r#"h="2in""#, &line("1in"))).abs() < 0.01);
+    assert!(after(r#"h="2in""#, &line("0.2in")) - bare > 1.7 * inch, "h=2in, not the 0.2in content");
+    let fixed = after(r#"h="2in" minH="1in""#, &line("0.2in"));
+    assert!((fixed - after(r#"h="2in""#, &line("0.2in"))).abs() < 0.01, "a minH below h changes nothing: {fixed}");
+    // A hidden child takes no room.
+    let hidden = format!(r#"{}<draw w="7.5in" h="2in" presence="hidden"><value><text>Hidden</text></value></draw>"#, line("0.2in"));
+    assert!((after(r#"minH="3in""#, &hidden) - bare).abs() < 0.01, "{} against {bare}", after(r#"minH="3in""#, &hidden));
+
+    // A table row keeps its `minH`: one holding a 0.2in cell with `minH="3in"` is 3in tall.
+    let after_table = |row_min_h: &str| {
+        let body = format!(
+            r#"<subform name="body" layout="tb" w="7.5in"><subform name="grid" layout="table" columnWidths="2in"><subform name="row" layout="row" {row_min_h}><draw h="0.2in"><value><text>One</text></value></draw></subform></subform><field name="who" w="3in" h="0.4in"><ui><textEdit/></ui></field></subform>"#
+        );
+        let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+        widgets(&form.pages[0])[0].rect.y
+    };
+    let grown = after_table(r#"minH="3in""#) - after_table("");
+    assert!((grown - 2.8 * inch).abs() < 0.01, "the row grew by {grown}pt");
 }
 
 #[test]
@@ -4144,4 +4195,23 @@ fn clear_password_values_clears_static_xfa_password_fields() {
     assert!(!has_password_values(&doc));
     let packets = read_packets(&doc).unwrap().unwrap();
     assert!(!packets.xdp.contains("hunter2"), "{}", packets.xdp);
+}
+
+/// #5153 review: a row outside a table keeps its `minH`, as a table row does (XFA 3.3 p. 847):
+/// one holding a 0.2in cell with `minH="3in"` is 3in tall, in a top-to-bottom and in a
+/// left-to-right parent, and the field after it starts 2.8in lower than after a row without one.
+#[test]
+fn a_row_outside_a_table_keeps_its_minimum_height() {
+    let inch = 72.0;
+    for parent in ["tb", "lr-tb"] {
+        let after = |row_min_h: &str| {
+            let body = format!(
+                r#"<subform name="body" layout="{parent}" w="7.5in"><subform name="row" layout="row" w="7.5in" {row_min_h}><draw w="2in" h="0.2in"><value><text>One</text></value></draw></subform><field name="who" w="3in" h="0.4in"><ui><textEdit/></ui></field></subform>"#
+            );
+            let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+            widgets(&form.pages[0])[0].rect.y
+        };
+        let grown = after(r#"minH="3in""#) - after("");
+        assert!((grown - 2.8 * inch).abs() < 0.01, "{parent}: the row grew by {grown}pt");
+    }
 }

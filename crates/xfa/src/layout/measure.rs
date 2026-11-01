@@ -105,10 +105,12 @@ impl Layouter<'_> {
                 content + c.margin.vertical()
             }
         };
-        // A flowed subform is as tall as what it holds: other viewers do not stretch one to
-        // the `minH` a designer left on it.
+        // A subform without a height is as tall as what it holds, flowed or positioned. XFA 3.3
+        // p. 847 makes `minH` its minimum; Adobe Acrobat doesn't stretch one to it (IRCC's
+        // IMM 5257: section 10 at `minH="58.274mm"`), and this follows Acrobat. A row, in a table
+        // or not, keeps its `minH`: [`Self::cells`] has already raised its height to it.
         let min_h = match node {
-            Node::Subform(s) if c.h.is_none() && s.layout != Layout::Positioned => None,
+            Node::Subform(_) if c.h.is_none() => None,
             _ => c.min_h,
         };
         (w, clamp_opt(h, min_h, c.max_h))
