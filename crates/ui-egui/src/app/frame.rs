@@ -98,20 +98,11 @@ impl PdfCraftApp {
         // The Combine grid's thumbnails, whichever tab shows (renders under way still finish).
         self.combine_thumbs_frame(ctx);
         // Retire hidden documents before admitting the visible documents' textures, so the
-<<<<<<< HEAD
         // three cache limits apply to the application, regardless of how many tabs are open.
         // On screen: the active tab, the comparison's old file side by side with it, what
         // split view's other pane shows, and a tab torn out into its own window.
         let shown = self.views_on_screen();
         let shown_docs: std::collections::HashSet<DocId> = shown.iter().filter_map(|&i| self.views.get(i)).map(|v| v.id).collect();
-=======
-        // cache limits apply to the application, regardless of how many tabs are open.
-        // Side by side: the comparison's old file renders alongside the active one.
-        // Multiple windows: detached tabs are drawn in their own viewports and treated as visible.
-        let partner = self.active.and_then(|i| compare_ui::side_by_side(self, i)).map(|(old, _)| old);
-        let detached: Vec<usize> = self.views.iter().enumerate().filter_map(|(i, v)| if v.detached { Some(i) } else { None }).collect();
-
->>>>>>> 0e339829b (fix(ui): retain render demand for all open detached window viewports)
         for (i, view) in self.views.iter_mut().enumerate() {
             if shown.contains(&i) {
                 continue;

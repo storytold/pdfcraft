@@ -395,6 +395,9 @@ impl PdfCraftApp {
 
     /// Detaches a document tab into its own window (view.multiple-windows).
     pub fn detach_tab(&mut self, id: DocId) {
+        if self.views.len() <= 1 {
+            return;
+        }
         if let Some(i) = self.views.iter().position(|v| v.id == id) {
             self.views[i].detached = true;
             if self.active == Some(i) {
@@ -959,6 +962,7 @@ impl PdfCraftApp {
 
 impl PdfCraftApp {
     /// Shows any detached document windows in their own viewports (view.multiple-windows).
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn show_detached_windows(&mut self, ctx: &egui::Context) {
         let detached_ids: Vec<pdfcraft_engine::DocId> = self.views.iter().filter(|v| v.detached).map(|v| v.id).collect();
         if detached_ids.is_empty() {
@@ -1013,4 +1017,7 @@ impl PdfCraftApp {
             }
         }
     }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn show_detached_windows(&mut self, _ctx: &egui::Context) {}
 }

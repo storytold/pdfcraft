@@ -13,6 +13,7 @@ pub(crate) enum Action {
         tab: u64,
         down: bool,
     },
+    #[cfg(not(target_arch = "wasm32"))]
     Detach(DocId),
 }
 
@@ -89,6 +90,7 @@ impl crate::PdfCraftApp {
                 let _ = id;
             }
             Action::Rename(id) => self.start_rename(id),
+            #[cfg(not(target_arch = "wasm32"))]
             Action::Detach(id) => {
                 self.detach_tab(id);
             }

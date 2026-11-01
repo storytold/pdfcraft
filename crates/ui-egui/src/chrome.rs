@@ -408,6 +408,7 @@ fn tab_menu(app: &PdfCraftApp, ui: &mut egui::Ui, index: usize, action: &mut Opt
         *action = Some(Action::Split { tab, down: true });
         ui.close();
     }
+    #[cfg(not(target_arch = "wasm32"))]
     {
         ui.separator();
         let detach = egui::Button::new(tl!("Move to New Window"));
@@ -449,6 +450,7 @@ fn tab_drag(
     let pos = ui.ctx().pointer_latest_pos()?;
     // Past the strip, the tab leaves for its own window. A drag along the strip still reorders
     // it, and a drag onto the right half of the page still splits.
+    #[cfg(not(target_arch = "wasm32"))]
     if app.views.len() > 1 {
         let strip = slots.iter().skip(1).fold(slots.first().map(|(_, rect)| *rect).unwrap_or(Rect::ZERO), |acc, (_, rect)| acc.union(*rect));
         let outside = pos.y < strip.top() - TAB_TEAR_OFF_DISTANCE
