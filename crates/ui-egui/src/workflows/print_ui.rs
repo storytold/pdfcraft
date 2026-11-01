@@ -314,9 +314,16 @@ impl PdfCraftApp {
                 };
                 if let Some(printers) = printers {
                     self.print_tasks.printers = None;
+                    let had_timed_out = !self.print_draft.printers_loading;
                     let d = &mut self.print_draft;
                     // A picked printer that is no longer listed falls back to the default too.
-                    if !d.printer_picked || !offered(d.printer.as_deref(), &printers) {
+                    // If printer search timed out, preserve "Save as PDF" so the user's action
+                    // does not unexpectedly flip from saving to printing (#5020).
+                    if !d.printer_picked {
+                        if !had_timed_out {
+                            d.printer = default_printer(&printers);
+                        }
+                    } else if !offered(d.printer.as_deref(), &printers) {
                         d.printer_picked = false;
                         d.printer = default_printer(&printers);
                     }

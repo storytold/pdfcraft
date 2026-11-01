@@ -982,4 +982,7 @@ fn a_slow_printer_list_still_arrives() {
     h.run_steps(2);
     let names: Vec<String> = h.state().print_draft.printers.iter().map(|p| p.name.clone()).collect();
     assert_eq!(names, ["Office"]);
+    // Preserves Save as PDF so the button does not unexpectedly flip to Print after timeout (#5020).
+    assert_eq!(h.state().print_draft.printer, None);
+    assert!(h.query_by_role_and_label(Role::Button, "Save as PDF").is_some());
 }
