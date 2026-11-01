@@ -117,10 +117,15 @@ fn a_kept_comment_is_found_where_a_delete_moved_it() {
     let changed = vec![listed(0, 0, "something else", None), listed(0, 1, "B", Some((0, 0)))];
     assert_eq!(after_delete(&before, &changed, gone, (0, 2)), None);
 
-    let mut view = CommentView { selected: Some((0, 2)), editing: Some((0, 3, "typed".into())), ..Default::default() };
+    let info = DocInfo { annotations: before.clone(), ..Default::default() };
+    let mut view = CommentView::from_info(&info);
+    view.selected = Some((0, 2));
+    view.editing = Some((0, 3, "typed".into()));
     view.annotation_deleted(&before, &after, gone);
     assert_eq!((view.selected, view.editing), (Some((0, 0)), Some((0, 1, "typed".into()))), "both follow");
-    let mut view = CommentView { editing: Some((0, 4, "typed".into())), editor_focus: Some(EditorFocus::Take), ..Default::default() };
+    let mut view = CommentView::from_info(&info);
+    view.editing = Some((0, 4, "typed".into()));
+    view.editor_focus = Some(EditorFocus::Take);
     view.annotation_deleted(&before, &after, gone);
     assert_eq!((view.editing, view.editor_focus), (None, None), "the editor closes with the reply it was open on");
 }
