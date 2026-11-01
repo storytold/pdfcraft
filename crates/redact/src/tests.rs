@@ -1303,6 +1303,15 @@ fn globals_a_redacted_jbig2_image_shares_with_another_page_leave_the_file() {
     let mut doc = build(&image.replace(&format!("/Height {h}"), &format!("/Height {}", h + 1)));
     mark(&mut doc, 0, &[[0.25, 113.75, 49.75, 120.0]], "");
     assert!(matches!(apply(&mut doc, None), Err(RedactError::SharedJbig2Globals(1))));
+    // Storing the second page's image again decodes it, within what is left of the run's
+    // allowance: with nothing left the redaction is refused as one past the allowance, not
+    // reported as an image that can't be read.
+    let mut doc = build(&image);
+    let first_image = [ObjRef::new(7, 0)];
+    let refused = crate::restore_shared_jbig2(&mut doc, &first_image, &mut pdfcraft_cos::ImageBudget::with_work(0));
+    assert!(matches!(refused, Err(RedactError::ImagesPastAllowance)), "{refused:?}");
+    let restored = crate::restore_shared_jbig2(&mut doc, &first_image, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX));
+    assert_eq!(restored.ok(), Some(1));
 }
 
 /// Apply Redactions gives the page its own pruned /Resources, but the dictionary it drew through

@@ -211,12 +211,12 @@ fn stored_len(s: &Stream) -> usize {
 
 /// JBIG2 image `s` stored again without its `/JBIG2Globals`: decoded through them, as it is drawn,
 /// and written as the same samples, Flate, Group 4 or JBIG2 coded alone, whichever is smallest
-/// (`smallest`), its other entries kept. `None` when it can't
-/// be decoded for certain (too large, data that doesn't decode, a JBIG2 page of another size than
-/// the image, or not a one-bit image of one component). Redaction does this to every image that
+/// (`smallest`), its other entries kept. `None` when it can't be decoded for certain (too large,
+/// past what is left of `budget`, data that doesn't decode, a JBIG2 page of another size than the
+/// image, or not a one-bit image of one component). Redaction does this to every image that
 /// shares a redacted image's globals, since their symbol dictionary holds the shapes of marks drawn
 /// under the area too.
-pub(crate) fn without_globals(doc: &Document, s: &Stream) -> Option<Stream> {
+pub(crate) fn without_globals(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Option<Stream> {
     let (w, h) = (s.dict.int(b"Width")?, s.dict.int(b"Height")?);
     if w <= 0 || h <= 0 || (w as u64) * (h as u64) > MAX_PIXELS {
         return None;
@@ -231,7 +231,7 @@ pub(crate) fn without_globals(doc: &Document, s: &Stream) -> Option<Stream> {
     // As for `clear`: the filters before the JBIG2 decoder may give up to three bytes for each one
     // of the raster and a byte a row.
     let allowance = bytes.checked_add(h)?.checked_mul(3)?.checked_add(4096)?;
-    let mut data = doc.decoded_image_within(s, allowance).ok()?;
+    let mut data = budget.decode(doc, s, allowance).ok()?;
     if data.len() < bytes {
         return None;
     }
