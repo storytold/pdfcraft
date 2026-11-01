@@ -2795,6 +2795,14 @@ struct Wheel {
     paging_owns_vertical: bool,
 }
 
+impl Wheel {
+    /// True when this frame received discrete notch or page wheel input, as separated by
+    /// `wheel_boost::accumulate` (#4840).
+    fn has_discrete(&self) -> bool {
+        self.line_base != Vec2::ZERO || self.boost_extra != Vec2::ZERO || self.has_page
+    }
+}
+
 /// Point input bypasses egui smoothing for 1:1 motion. Line input keeps egui's configured, smoothed
 /// base and adds only the accelerated surplus. While point suppression is active, line and page
 /// input are reconstructed so current coarse events survive without exposing an older eased tail.
@@ -3561,13 +3569,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // reconstruct line and page input here so current coarse events survive without exposing an
     // older eased tail.
     let now = ui.input(|i| i.time);
-    let Wheel { precise_scroll, line_base, boost_extra, has_page, paging_owns_vertical } = read_wheel(ui, view, avail, single_paging, edge_turned);
+    let wheel = read_wheel(ui, view, avail, single_paging, edge_turned);
     let animates = app.animation_effects.animates(app.motion.reduced);
-    let has_discrete_wheel = line_base != Vec2::ZERO || boost_extra != Vec2::ZERO || has_page;
-    let may_glide = !paging_owns_vertical && !middle_gesture && navigation_enabled && unobstructed && animates && !has_discrete_wheel;
-    let wheel_scrolled = precise_scroll != Vec2::ZERO || line_base != Vec2::ZERO || boost_extra != Vec2::ZERO || has_page;
+    let has_discrete_wheel = wheel.has_discrete();
+    let may_glide = !wheel.paging_owns_vertical && !middle_gesture && navigation_enabled && unobstructed && animates && !has_discrete_wheel;
+    let wheel_scrolled = wheel.precise_scroll != Vec2::ZERO || has_discrete_wheel;
     let motion = GlideCx { now, may_glide, key_scroll, auto_delta, zoom_delta, edge_delta, wheel_scrolled, has_discrete_wheel };
     let glide = step_glide(ui, view, avail, &motion);
+    let Wheel { precise_scroll, boost_extra, .. } = wheel;
     // The wheel may have turned the page above: draw the row it turned to. Measured from the old
     // row, the jump to the new page scrolled both out of view, a blank frame on every turn forward.
     let row = shown_row(view, &rects);
