@@ -1150,6 +1150,180 @@ fn a_group_restyles_and_fills_as_one() {
     }
 }
 
+/// An Oval on page 1 at `x`, with `/IRT` to `to` and `/RT rt` when given. Returns its index and
+/// reference.
+fn oval_to(doc: &mut Document, x: f64, to: Option<ObjRef>, rt: Option<&str>, id: &str) -> (usize, ObjRef) {
+    let i = add_annotation(doc, &new(0, Shape::Oval { rect: [x, 300.0, x + 40.0, 340.0] }), &meta(id)).unwrap();
+    let (_, r) = annot_ref(doc, 0, i).unwrap();
+    doc.update_dict(r, |d| {
+        if let Some(to) = to {
+            d.set(b"IRT".to_vec(), Object::Ref(to));
+        }
+        if let Some(rt) = rt {
+            d.set(b"RT".to_vec(), Object::name(rt));
+        }
+    })
+    .unwrap();
+    (i, r)
+}
+
+fn colour_of(doc: &Document, i: usize) -> Option<Object> {
+    list(doc, 0)[i].get(b"C").cloned()
+}
+
+fn blue(doc: &mut Document, i: usize) -> Result<(), AnnotError> {
+    set_style(doc, 0, i, StyleChange::new(Some([0.0, 0.0, 1.0]), None, None, None), &meta("s"))
+}
+
+/// A group of three, a subordinate of a subordinate (ISO 32000-2 §12.5.6.2: the primary is found
+/// up the `/IRT` chain): every member finds the same group, primary first; restyling the last
+/// recolours all three; moving the middle one moves only it, as Acrobat moves the member dragged.
+#[test]
+fn a_group_of_three_restyles_as_one_and_moves_by_member() {
+    let mut doc = fixture();
+    let square = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [100.0, 100.0, 200.0, 200.0] }), &meta("sq")).unwrap();
+    let (_, sr) = annot_ref(&mut doc, 0, square).unwrap();
+    let (b, br) = oval_to(&mut doc, 300.0, Some(sr), Some("Group"), "b");
+    let (c, _) = oval_to(&mut doc, 400.0, Some(br), Some("Group"), "c");
+    let (other, _) = oval_to(&mut doc, 500.0, None, None, "other");
+    let mut doc = reopen(&doc);
+    for i in [square, b, c] {
+        assert_eq!(group_members(&doc, 0, i).unwrap(), [(0, square), (0, b), (0, c)], "from {i}");
+    }
+    assert_eq!(group_members(&doc, 0, other).unwrap(), [(0, other)], "a comment in no group is a group of one");
+    let unrelated = colour_of(&doc, other);
+    blue(&mut doc, c).unwrap();
+    for i in [square, b, c] {
+        assert_eq!(colour_of(&doc, i), Some(crate::create::rgb([0.0, 0.0, 1.0])), "{i}: recoloured from the last member");
+    }
+    assert_eq!(colour_of(&doc, other), unrelated, "the unrelated Oval keeps its colour");
+    let before = [rect_of(&doc, 0, square), rect_of(&doc, 0, b), rect_of(&doc, 0, c)];
+    move_annotation(&mut doc, 0, b, 10.0, 0.0, &meta("m")).unwrap();
+    assert_eq!([rect_of(&doc, 0, square), rect_of(&doc, 0, c)], [before[0].clone(), before[2].clone()], "the others stay");
+    assert_ne!(rect_of(&doc, 0, b), before[1], "the middle member moves");
+}
+
+/// A loop in `/IRT` ends, and leaves each annotation on it, and one hanging off it, a comment of
+/// its own, as the comment list shows them (`pdfcraft_render::link_replies` drops a looping
+/// parent): restyling one doesn't reach another. So does an `/IRT` to the annotation itself, and
+/// a loop through a plain reply (`/RT /R`).
+#[test]
+fn a_looping_group_chain_leaves_each_member_on_its_own() {
+    let mut doc = fixture();
+    let (a, ar) = oval_to(&mut doc, 100.0, None, None, "a");
+    let (b, br) = oval_to(&mut doc, 150.0, Some(ar), Some("Group"), "b");
+    doc.update_dict(ar, |d| {
+        d.set(b"IRT".to_vec(), Object::Ref(br));
+        d.set(b"RT".to_vec(), Object::name("Group"));
+    })
+    .unwrap();
+    let (hanging, _) = oval_to(&mut doc, 200.0, Some(br), Some("Group"), "hanging");
+    let (selfish, sr) = oval_to(&mut doc, 250.0, None, None, "self");
+    doc.update_dict(sr, |d| {
+        d.set(b"IRT".to_vec(), Object::Ref(sr));
+        d.set(b"RT".to_vec(), Object::name("Group"));
+    })
+    .unwrap();
+    // A subordinate of the self-referencing one: that one has no link, so it is a primary.
+    let (under_self, _) = oval_to(&mut doc, 300.0, Some(sr), Some("Group"), "under-self");
+    // A plain reply loop (g and h reply to each other), with a subordinate of g.
+    let (g, gr) = oval_to(&mut doc, 350.0, None, None, "g");
+    let (_, hr) = oval_to(&mut doc, 400.0, Some(gr), Some("R"), "h");
+    doc.update_dict(gr, |d| d.set(b"IRT".to_vec(), Object::Ref(hr))).unwrap();
+    let (on_g, _) = oval_to(&mut doc, 450.0, Some(gr), Some("Group"), "on-g");
+    let mut doc = reopen(&doc);
+    for i in [a, b, hanging, on_g] {
+        assert_eq!(group_members(&doc, 0, i).unwrap(), [(0, i)], "{i}: a loop leaves it on its own");
+    }
+    assert_eq!(group_members(&doc, 0, selfish).unwrap(), [(0, selfish), (0, under_self)], "an /IRT to itself is no link");
+    assert_eq!(group_members(&doc, 0, under_self).unwrap(), [(0, selfish), (0, under_self)]);
+    let colours: Vec<_> = [b, hanging, g].iter().map(|&i| colour_of(&doc, i)).collect();
+    blue(&mut doc, a).unwrap();
+    blue(&mut doc, on_g).unwrap();
+    assert_eq!([b, hanging, g].iter().map(|&i| colour_of(&doc, i)).collect::<Vec<_>>(), colours, "nothing else on the loops is recoloured");
+}
+
+/// A subordinate whose primary is missing, an object that is no annotation, or an annotation the
+/// comment list doesn't show (a link) is a comment of its own, and the head of its own
+/// subordinates: a lock on the link holds back no restyle, and a link with `/RT /Group` to a
+/// comment is not restyled with it.
+#[test]
+fn a_member_whose_primary_is_missing_is_a_comment_of_its_own() {
+    use crate::links::{self, LinkAction, LinkStyle};
+    let mut doc = fixture();
+    let page = page_refs(&doc).unwrap()[0];
+    let (orphan, or) = oval_to(&mut doc, 100.0, Some(ObjRef { num: 9999, generation: 0 }), Some("Group"), "orphan");
+    let (orphans, _) = oval_to(&mut doc, 150.0, Some(or), Some("Group"), "orphans");
+    let (on_page, _) = oval_to(&mut doc, 200.0, Some(page), Some("Group"), "on-page");
+    let link = links::add(&mut doc, 0, [10.0, 600.0, 110.0, 620.0], &LinkAction::Uri("https://example.org".into()), &LinkStyle::default()).unwrap();
+    let (_, lr) = annot_ref(&mut doc, 0, link).unwrap();
+    let (on_link, onr) = oval_to(&mut doc, 250.0, Some(lr), Some("Group"), "on-link");
+    doc.update_dict(lr, |d| {
+        d.set(b"F".to_vec(), Object::Int(4 | 128));
+        d.set(b"IRT".to_vec(), Object::Ref(onr));
+        d.set(b"RT".to_vec(), Object::name("Group"));
+    })
+    .unwrap();
+    let mut doc = reopen(&doc);
+    assert_eq!(group_members(&doc, 0, orphan).unwrap(), [(0, orphan), (0, orphans)], "the orphan heads its own subordinate");
+    assert_eq!(group_members(&doc, 0, orphans).unwrap(), [(0, orphan), (0, orphans)]);
+    assert_eq!(group_members(&doc, 0, on_page).unwrap(), [(0, on_page)], "an /IRT to the page leads nowhere");
+    assert_eq!(group_members(&doc, 0, on_link).unwrap(), [(0, on_link)], "the link is neither its primary nor its subordinate");
+    blue(&mut doc, on_link).expect("the locked link holds nothing back");
+    let link_colour = list(&doc, 0)[link].get(b"C").cloned();
+    blue(&mut doc, orphan).unwrap();
+    assert_eq!(colour_of(&doc, orphans), Some(crate::create::rgb([0.0, 0.0, 1.0])), "the orphan's subordinate follows it");
+    assert_eq!(list(&doc, 0)[link].get(b"C").cloned(), link_colour, "the link keeps its colour");
+}
+
+/// Only `/RT /Group` groups: a plain reply (`/RT /R`), an `/RT` of another value and a bare `/IRT`
+/// read as replies, and a restyle of the comment they answer leaves them alone.
+#[test]
+fn only_rt_group_joins_a_group() {
+    let mut doc = fixture();
+    let (top, tr) = oval_to(&mut doc, 100.0, None, None, "top");
+    let replies: Vec<usize> = [Some("R"), Some("Bogus"), None]
+        .iter()
+        .enumerate()
+        .map(|(k, rt)| oval_to(&mut doc, 150.0 + 50.0 * k as f64, Some(tr), *rt, &format!("r{k}")).0)
+        .collect();
+    let mut doc = reopen(&doc);
+    assert_eq!(group_members(&doc, 0, top).unwrap(), [(0, top)]);
+    let colours: Vec<_> = replies.iter().map(|&i| colour_of(&doc, i)).collect();
+    blue(&mut doc, top).unwrap();
+    assert_eq!(replies.iter().map(|&i| colour_of(&doc, i)).collect::<Vec<_>>(), colours, "replies keep their colour");
+    for &i in &replies {
+        assert_eq!(group_members(&doc, 0, i).unwrap(), [(0, i)]);
+    }
+}
+
+/// A chain of subordinates is followed up to [`MAX_GROUP_DEPTH`] `- 1` links to its primary, as
+/// the comment list follows it (`pdfcraft_render::group_primaries`); a member further down is a
+/// group of its own, and a restyle from the primary stops there. The walk is bounded either way.
+#[test]
+fn a_group_chain_is_followed_to_a_bounded_depth() {
+    use crate::info::MAX_GROUP_DEPTH;
+    let mut doc = fixture();
+    let (top, mut up) = oval_to(&mut doc, 100.0, None, None, "top");
+    let mut chain = vec![top];
+    for k in 0..MAX_GROUP_DEPTH + 2 {
+        let (i, r) = oval_to(&mut doc, 100.0, Some(up), Some("Group"), &format!("s{k}"));
+        chain.push(i);
+        up = r;
+    }
+    let deepest = MAX_GROUP_DEPTH - 1;
+    let group: Vec<(usize, usize)> = chain.iter().take(deepest + 1).map(|&i| (0, i)).collect();
+    assert_eq!(group_members(&doc, 0, top).unwrap(), group, "the primary's group stops at {deepest} links down");
+    assert_eq!(group_members(&doc, 0, chain[deepest]).unwrap(), group, "the last member still finds its primary");
+    for k in [deepest + 1, deepest + 2, deepest + 3] {
+        assert_eq!(group_members(&doc, 0, chain[k]).unwrap(), [(0, chain[k])], "{k} links down: a group of its own");
+    }
+    let past = colour_of(&doc, chain[deepest + 1]);
+    blue(&mut doc, top).unwrap();
+    assert_eq!(colour_of(&doc, chain[deepest]), Some(crate::create::rgb([0.0, 0.0, 1.0])));
+    assert_eq!(colour_of(&doc, chain[deepest + 1]), past, "past the depth limit, not in the group");
+}
+
 #[test]
 fn files_attach_as_comments() {
     let mut doc = fixture();
