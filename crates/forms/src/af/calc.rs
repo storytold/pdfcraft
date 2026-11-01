@@ -19,7 +19,7 @@ pub(super) enum Js {
 type Token = (Range<usize>, Js);
 
 /// Words after which `/` starts a regular expression instead of dividing.
-const BEFORE_REGEX: [&str; 13] = ["return", "typeof", "case", "do", "else", "in", "of", "new", "delete", "void", "throw", "instanceof", "yield"];
+const BEFORE_REGEX: [&str; 12] = ["return", "typeof", "case", "do", "else", "in", "new", "delete", "void", "throw", "instanceof", "yield"];
 
 /// Words whose condition, in parentheses, comes before a statement, so a `/` after it starts a
 /// regular expression. The `while` that ends a `do` loop counts too: the loop ends at its `)`, so
@@ -103,7 +103,7 @@ pub(super) fn js_tokens(js: &str) -> (Vec<Token>, Vec<Range<usize>>) {
                 i = j + 1;
                 Js::Other
             }
-            b'/' if i >= divides_until && regex_may_follow(js, &out, after_condition) => {
+            b'/' if i >= divides_until && regex_may_follow(js, &out, after_condition, conditions.last().copied().unwrap_or(false)) => {
                 // A regular expression ends at a `/` outside a class; a line break first means it
                 // was a division after all.
                 let (mut j, mut class) = (i + 1, false);
@@ -147,7 +147,7 @@ pub(super) fn js_tokens(js: &str) -> (Vec<Token>, Vec<Range<usize>>) {
             }
             b'+' | b'-'
                 if s.get(i + 1) == Some(&c)
-                    && !regex_may_follow(js, &out, after_condition)
+                    && !regex_may_follow(js, &out, after_condition, conditions.last().copied().unwrap_or(false))
                     && out.last().is_some_and(|(range, _)| !(range.end..i).any(|j| line_ends_at(s, j))) =>
             {
                 // Postfix update ends an expression: a following slash divides. A line
@@ -188,10 +188,13 @@ pub(super) fn js_tokens(js: &str) -> (Vec<Token>, Vec<Range<usize>>) {
 /// Whether a `/` after `tokens` starts a regular expression: after an operator, an opening
 /// bracket, a keyword such as `return` or the condition of `if`, `while`, `for` or `with`, not
 /// after a value. `after_condition` says the last token is the `)` that ends such a condition.
-fn regex_may_follow(js: &str, tokens: &[Token], after_condition: bool) -> bool {
+fn regex_may_follow(js: &str, tokens: &[Token], after_condition: bool, in_condition: bool) -> bool {
     match tokens.last() {
         None => true,
-        Some((range, Js::Ident)) => js.get(range.clone()).is_some_and(|w| BEFORE_REGEX.contains(&w)),
+        Some((range, Js::Ident)) => {
+            !matches!(tokens.get(tokens.len().wrapping_sub(2)), Some((_, Js::Punct('.'))))
+                && js.get(range.clone()).is_some_and(|w| BEFORE_REGEX.contains(&w) || (w == "of" && in_condition))
+        }
         Some((_, Js::Punct(')'))) => after_condition,
         Some((_, Js::Punct(c))) => !matches!(c, ']' | '}'),
         Some((_, Js::Str(_) | Js::Other)) => false,
@@ -594,6 +597,11 @@ mod tests {
 
         let js_utf8 = "var r = /\\é/; event.value = this.getField(\"tax\").value;";
         assert_eq!(calculation_reads(js_utf8), vec!["tax".to_owned()]);
+
+        let trailing_backslash = "event.value = this.getField(\"subtotal\").value + /unterminated\\";
+        assert_eq!(calculation_reads(trailing_backslash), vec!["subtotal".to_owned()]);
+        let template_trailing = "event.value = this.getField(\"shipping\").value + `unterminated\\";
+        assert_eq!(calculation_reads(template_trailing), vec!["shipping".to_owned()]);
     }
 
     #[test]

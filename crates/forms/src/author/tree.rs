@@ -165,8 +165,8 @@ fn add_to_fields(doc: &mut Document, af: ObjRef, field: ObjRef) -> Result<(), Fo
 /// The most parts a dotted field name may have ("a.b.c" has three).
 const MAX_NAME_PARTS: usize = 32;
 
-/// The field attributes a field inherits from its parents (ISO 32000-2 §12.7.4.1).
-const INHERITED_KEYS: [&[u8]; 7] = [b"FT", b"Ff", b"V", b"DV", b"DA", b"Q", b"MaxLen"];
+/// The field attributes a field inherits from its parents (ISO 32000-2 §12.7.4.1, §12.7.5.2).
+const INHERITED_KEYS: [&[u8]; 8] = [b"FT", b"Ff", b"V", b"DV", b"DA", b"Q", b"MaxLen", b"Opt"];
 
 /// The parts of a full field name: `a.b` is the field `b` under the parent field `a`, since a
 /// field's own (partial) name can't contain a period (ISO 32000-2 §12.7.4.2) (#2696).
@@ -438,5 +438,18 @@ mod tests {
         assert!(!inh.contains(b"V"));
         assert!(!ancestor_sets(&doc, child_ref, b"V"));
         assert!(ancestor_sets(&doc, child_ref, b"MaxLen"));
+
+        // Inherited /Opt is preserved, null kids in /Kids are ignored, and /Parent cycles terminate.
+        let opt_val = Object::Array(vec![Object::String(PdfString::text("Choice1"))]);
+        doc.update_dict(grand_ref, |d| {
+            d.set(b"Opt".to_vec(), opt_val.clone());
+            d.set(b"Parent".to_vec(), Object::Ref(parent_ref));
+            d.set(b"Kids".to_vec(), Object::Array(vec![Object::Null, Object::Ref(parent_ref)]));
+        })
+        .unwrap();
+        let inh_cycle = inherited(&doc, child_ref);
+        assert_eq!(inh_cycle.get(b"Opt"), Some(&opt_val));
+        assert!(!holds_value(&doc, child_ref));
+        assert_eq!(child_named(&doc, grand_ref, Some(grand_ref), "group"), Some(parent_ref));
     }
 }

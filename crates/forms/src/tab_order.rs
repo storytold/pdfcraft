@@ -258,5 +258,17 @@ mod tests {
         move_in_tab_order(&mut doc, "note", true).unwrap();
         let annots = doc.get(page_ref).as_dict().and_then(|d| d.get(b"Annots")).and_then(Object::as_array).cloned().unwrap();
         assert_eq!(annots, vec![Object::Ref(text_ref), Object::Ref(w2_ref), Object::Ref(w1_ref)]);
+
+        // Missing page and unplaced field return errors cleanly.
+        assert!(set_tab_order(&mut doc, &[99], TabOrder::Row).is_err());
+        let mut unplaced = Dict::new();
+        unplaced.set(b"FT".to_vec(), Object::name("Tx"));
+        unplaced.set(b"T".to_vec(), PdfString::text("orphan"));
+        let unplaced_ref = doc.add(Object::Dict(unplaced));
+        doc.update_dict(af_ref, |d| {
+            d.set(b"Fields".to_vec(), Object::Array(vec![Object::Ref(radio_ref), Object::Ref(text_ref), Object::Ref(unplaced_ref)]));
+        })
+        .unwrap();
+        assert!(move_in_tab_order(&mut doc, "orphan", true).is_err());
     }
 }

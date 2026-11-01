@@ -430,6 +430,11 @@ mod tests {
             let commented = format!("var y = x/* comment */{op} / 2; AFPercent_Format(2, 1); var z = 1 / 2;");
             assert_eq!(parse_format(&commented), Some(Format::Percent { decimals: 2, sep: 1 }));
         }
+        assert_eq!(parse_format("var of = 8; of / 2; AFPercent_Format(2, 1); var z = 1 / 2;"), Some(Format::Percent { decimals: 2, sep: 1 }));
+        assert_eq!(
+            parse_format("for (var x of /AFPercent_Format(0, 0)/g) {} AFPercent_Format(2, 1);"),
+            Some(Format::Percent { decimals: 2, sep: 1 })
+        );
         // A newline makes ++ a prefix operator; the following regex must remain opaque.
         for js in ["x\n++/AFPercent_Format(2, 1)/.lastIndex;", "x/*\n*/++/AFPercent_Format(2, 1)/.lastIndex;"] {
             assert_eq!(parse_format(js), None);
