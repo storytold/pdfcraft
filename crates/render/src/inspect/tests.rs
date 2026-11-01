@@ -1916,3 +1916,19 @@ fn a_pop_up_without_a_four_number_rect_is_none() {
         assert_eq!(note.popup.is_some(), read, "{rect:?}");
     }
 }
+
+/// #2137 review: a pop-up `/Rect` with its corners reversed reads with them in order (ISO
+/// 32000-2 §7.9.5), and one with a number too large for `f32` reads as no pop-up, as
+/// `pdfcraft_annot::summaries` reads both.
+#[test]
+fn a_pop_up_rect_with_reversed_corners_is_put_in_order_and_a_huge_one_is_none() {
+    let bytes = "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Annots [4 0 R 5 0 R] >> endobj\n4 0 obj << /Type /Annot /Subtype /Text /Rect [20 260 40 280] /Contents (Hi) /Popup 5 0 R >> endobj\n5 0 obj << /Type /Annot /Subtype /Popup /Rect RECT /Parent 4 0 R /Open true >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n";
+    let popup = |rect: &str| {
+        let info = inspect(Arc::new(bytes.replace("RECT", rect).into_bytes()), None).expect("opens");
+        info.annotations.iter().find(|a| a.subtype == "Text").expect("the note").popup.map(|p| p.rect)
+    };
+    assert_eq!(popup("[150 200 50 100]"), Some([50.0, 100.0, 150.0, 200.0]), "reversed");
+    let huge = format!("1{}", "0".repeat(40));
+    assert_eq!(popup(&format!("[0 0 {huge} 100]")), None, "a number past f32");
+    assert_eq!(popup(&format!("[0 0 {huge}.0 100]")), None, "a real past f32");
+}

@@ -166,12 +166,16 @@ impl<'a> Inspector<'a> {
                     && p.get(b"Parent")
                         .map_or(true, |parent| parent.as_reference().is_ok() && self.resolved_id(parent).is_some_and(|id| Some(id) == own))
             };
-            // A pop-up without a `/Rect` of four numbers is none, as `pdfcraft_annot::summaries`
-            // reads it: both lists of the comments agree.
+            // A pop-up without a `/Rect` of four numbers finite as `f32` is none, as
+            // `pdfcraft_annot::summaries` reads it: both lists of the comments agree. Its corners
+            // may come in any order.
             let popup = d.get(b"Popup").ok().and_then(|o| self.dict(o)).filter(is_own).and_then(|p| {
                 let rect = self.resolve(p.get(b"Rect").ok()?).as_array().ok()?;
                 let nums: Vec<f32> = rect.iter().filter_map(|v| self.resolve(v).as_float().ok()).collect();
                 let [x0, y0, x1, y1] = nums[..] else { return None };
+                if !nums.iter().all(|v| v.is_finite()) {
+                    return None;
+                }
                 Some(Popup {
                     rect: [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)],
                     open: p.get(b"Open").ok().and_then(|o| self.resolve(o).as_bool().ok()).unwrap_or(false),

@@ -76,7 +76,11 @@ pub(crate) fn popup_info(doc: &Document, own: Option<ObjRef>, annot: &Dict) -> O
     let p = doc.get(r);
     let p = p.as_dict()?;
     let rect: Vec<f32> = doc.resolve(p.get(b"Rect")?).as_array()?.iter().filter_map(|v| doc.resolve(v).as_f64().map(|x| x as f32)).collect();
+    // Four numbers that are finite as `f32` (a huge one becomes infinite), corners in any order.
     let [x0, y0, x1, y1] = rect[..] else { return None };
+    if !rect.iter().all(|v| v.is_finite()) {
+        return None;
+    }
     let open = p.get(b"Open").map(|o| doc.resolve(o)).is_some_and(|o| matches!(&*o, Object::Bool(true)));
     Some(PopupInfo { rect: [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)], open })
 }

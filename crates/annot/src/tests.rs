@@ -2320,3 +2320,34 @@ fn opening_a_pop_up_without_a_rect_gives_it_one() {
     assert!(popup.rect[2] - popup.rect[0] >= 100.0 && popup.rect[3] - popup.rect[1] >= 100.0, "a window's size: {:?}", popup.rect);
     assert_eq!(annot_dict(&doc, r).reference(b"Popup"), Some(pr), "the same pop-up, not a new one");
 }
+
+/// #2137 review: a pop-up rectangle with its corners reversed is read, and saved, with them in
+/// order (ISO 32000-2 §7.9.5: a reader normalises a rectangle). One whose numbers aren't finite
+/// as `f32` (a file's huge number) reads as no pop-up, and opening it gives it a new place.
+#[test]
+fn a_pop_up_rect_with_reversed_corners_is_put_in_order_and_a_huge_one_is_none() {
+    let mut doc = fixture();
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [20.0, 280.0], icon: NoteIcon::Comment }), &meta("n1")).unwrap();
+    let (_, r) = annot_ref(&mut doc, 0, note).unwrap();
+    let pr = annot_dict(&doc, r).reference(b"Popup").expect("new notes have a pop-up");
+    let popup = |doc: &Document| summaries(doc).into_iter().find(|s| s.index == note).unwrap().popup;
+    let set_rect = |doc: &mut Document, rect: [f64; 4]| doc.update_dict(pr, |p| p.set(b"Rect".to_vec(), num_array(&rect))).unwrap();
+
+    // Reversed in the file: read in order.
+    set_rect(&mut doc, [290.0, 200.0, 150.0, 100.0]);
+    assert_eq!(popup(&doc), Some(PopupInfo { rect: [150.0, 100.0, 290.0, 200.0], open: false }));
+    // Reversed through `set_popup`: saved in order.
+    set_popup(&mut doc, 0, note, Some([300.0, 220.0, 160.0, 120.0]), None, &meta("n1")).unwrap();
+    let saved: Vec<f64> =
+        doc.get(pr).as_dict().and_then(|p| p.get(b"Rect")).and_then(Object::as_array).unwrap().iter().filter_map(Object::as_f64).collect();
+    assert_eq!(saved, [160.0, 120.0, 300.0, 220.0]);
+
+    // A number too large for `f32` (or infinite): no pop-up, and opening it gives it a place.
+    for huge in [1e300, f64::INFINITY] {
+        set_rect(&mut doc, [0.0, 0.0, huge, 100.0]);
+        assert_eq!(popup(&doc), None, "{huge}");
+    }
+    set_popup(&mut doc, 0, note, None, Some(true), &meta("n1")).unwrap();
+    let given = popup(&doc).expect("the pop-up reads again");
+    assert!(given.open && given.rect.iter().all(|v| v.is_finite()), "{given:?}");
+}
