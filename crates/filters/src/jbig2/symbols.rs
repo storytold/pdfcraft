@@ -40,10 +40,6 @@ const MAX_REGION_INSTANCES: usize = 10_000;
 // generic region.
 const _: () = assert!(MAX_RUNS.div_ceil(MAX_REGION_INSTANCES) + 3 <= 256);
 
-/// The most rows symbol coded. With rows at most 2^20 samples wide, every coordinate and
-/// difference coded then fits the 32-bit integers Annex A codes.
-const MAX_ROWS: u32 = 1 << 24;
-
 /// The integer coders' ranges (Table A.1): how many 1 bits pick the range, how many bits give the
 /// offset into it, and its first value. The last range has no 0 after its prefix.
 const RANGES: [(u32, u32, u32); 6] = [(0, 2, 0), (1, 4, 4), (2, 6, 20), (3, 8, 84), (4, 12, 340), (5, 32, 4436)];
@@ -104,15 +100,12 @@ struct Instance {
 /// `None` when neither plan has from two to [`MAX_CODED_SYMBOLS`] symbols, or the image is too
 /// large or too busy to look at.
 pub(super) fn encode(samples: &[u8], columns: u32, rows: u32) -> Option<Vec<u8>> {
-    let page = page(samples, columns, rows)?;
+    let page = page(samples, columns)?;
     [1, 2].into_iter().filter_map(|copies| plan(&page, columns, rows, copies, None)).min_by_key(Vec::len)
 }
 
 /// The image's marks and symbols; `None` past the limits above.
-fn page(samples: &[u8], columns: u32, rows: u32) -> Option<Page> {
-    if rows > MAX_ROWS {
-        return None;
-    }
+fn page(samples: &[u8], columns: u32) -> Option<Page> {
     let width = usize::try_from(columns).ok()?;
     let stride = width.div_ceil(8);
     if stride == 0 {
@@ -665,7 +658,7 @@ mod tests {
     fn every_plan_round_trips(picture: &Bitmap) -> usize {
         let (columns, rows) = (picture[0].len() as u32, picture.len() as u32);
         let data = samples(picture);
-        let page = page(&data, columns, rows).unwrap();
+        let page = page(&data, columns).unwrap();
         let mut plans = 0;
         for copies in [1, 2] {
             for log_strips in 0..4 {
@@ -735,7 +728,7 @@ mod tests {
                 row[stride - 1] &= 0xFF << (8 * stride - columns);
             }
             let (c, r) = (columns as u32, 120);
-            let page = page(&data, c, r).unwrap();
+            let page = page(&data, c).unwrap();
             assert!(page.marks.iter().all(|m| m.x1 as usize <= columns), "{columns} columns");
             for copies in [1, 2] {
                 if let Some(coded) = plan(&page, c, r, copies, None) {
@@ -771,7 +764,7 @@ mod tests {
             row[290] = 1;
         }
         let data = samples(&picture);
-        let page = page(&data, 300, 300).unwrap();
+        let page = page(&data, 300).unwrap();
         let boxes: Vec<(u32, u32, u32, u32)> = page.marks.iter().map(|m| (m.x0, m.y0, m.x1 - m.x0, m.y1 - m.y0)).collect();
         assert_eq!(
             boxes,
@@ -792,18 +785,14 @@ mod tests {
         assert_eq!(every_plan_round_trips(&picture), 8);
     }
 
-    /// Past 2^20 black runs or 2^24 rows the image is left to generic coding; at either cap it is
-    /// still looked at.
+    /// Past 2^20 black runs the image is left to generic coding; at the cap it is still looked at.
     #[test]
-    fn busy_or_tall_images_are_left_to_generic_coding() {
+    fn busy_images_are_left_to_generic_coding() {
         // 0x55: four black pixels a byte, each its own run, under the same ones on the next row.
         let columns = 1 << 20;
         let row = vec![0x55u8; columns / 8];
-        assert!(page(&row.repeat(2), columns as u32, 2).is_some(), "2^20 runs");
-        assert!(page(&row.repeat(3), columns as u32, 3).is_none(), "1.5 × 2^20 runs");
-        let tall = vec![0xFFu8; MAX_ROWS as usize + 1];
-        assert!(page(&tall, 1, MAX_ROWS + 1).is_none());
-        assert!(page(&tall, 1, MAX_ROWS).is_some());
+        assert!(page(&row.repeat(2), columns as u32).is_some(), "2^20 runs");
+        assert!(page(&row.repeat(3), columns as u32).is_none(), "1.5 × 2^20 runs");
     }
 
     /// A plan codes at most 32,767 symbols, which an independent decoder reads back; with more,
@@ -828,16 +817,16 @@ mod tests {
             (samples(&picture), columns as u32, rows as u32)
         };
         let (data, columns, rows) = codes(MAX_CODED_SYMBOLS, 0);
-        let at_cap = page(&data, columns, rows).unwrap();
+        let at_cap = page(&data, columns).unwrap();
         assert_eq!(decode(&plan(&at_cap, columns, rows, 1, None).unwrap()), unpack(&data, columns, rows));
         // One more distinct mark, each once: neither plan is made.
         let (data, columns, rows) = codes(MAX_CODED_SYMBOLS + 1, 0);
-        let past = page(&data, columns, rows).unwrap();
+        let past = page(&data, columns).unwrap();
         assert!(plan(&past, columns, rows, 1, None).is_none() && plan(&past, columns, rows, 2, None).is_none());
         assert_eq!(encode_jbig2(&data, columns, rows).unwrap(), encode_jbig2_generic(&data, columns, rows).unwrap());
         // With two of them repeated, the second plan codes those two.
         let (data, columns, rows) = codes(MAX_CODED_SYMBOLS + 1, 200);
-        let past = page(&data, columns, rows).unwrap();
+        let past = page(&data, columns).unwrap();
         assert!(plan(&past, columns, rows, 1, None).is_none());
         assert_eq!(decode(&plan(&past, columns, rows, 2, None).unwrap()), unpack(&data, columns, rows));
         // Above a page of text whose letters repeat, that second plan is the one `encode_jbig2`
@@ -857,10 +846,10 @@ mod tests {
         let coded = encode_jbig2(&data, columns, rows).unwrap();
         assert_eq!(segment_types(&coded)[1], 0, "symbol coded");
         assert_eq!(decode(&coded), unpack(&data, columns, rows));
-        let (data, columns, rows) = codes(MAX_SYMBOLS, 0);
-        assert_eq!(page(&data, columns, rows).map(|p| p.symbols.len()), Some(MAX_SYMBOLS));
-        let (data, columns, rows) = codes(MAX_SYMBOLS + 1, 0);
-        assert!(page(&data, columns, rows).is_none());
+        let (data, columns, _) = codes(MAX_SYMBOLS, 0);
+        assert_eq!(page(&data, columns).map(|p| p.symbols.len()), Some(MAX_SYMBOLS));
+        let (data, columns, _) = codes(MAX_SYMBOLS + 1, 0);
+        assert!(page(&data, columns).is_none());
         // `n` black squares of 256 × 256, each with a white pixel in a different place: 2^16
         // pixels a symbol, so 256 of them are exactly the cap.
         let squares = |n: usize| {
@@ -876,11 +865,11 @@ mod tests {
             (samples(&picture), columns as u32, rows as u32)
         };
         let (data, columns, rows) = squares(256);
-        let at_cap = page(&data, columns, rows).unwrap();
+        let at_cap = page(&data, columns).unwrap();
         assert_eq!(at_cap.symbols.len(), 256);
         assert_eq!(decode(&plan(&at_cap, columns, rows, 1, None).unwrap()), unpack(&data, columns, rows));
-        let (data, columns, rows) = squares(257);
-        assert!(page(&data, columns, rows).is_none());
+        let (data, columns, _) = squares(257);
+        assert!(page(&data, columns).is_none());
     }
 
     /// More than 10,000 marks are placed by several text regions, each of at most 10,000 (more

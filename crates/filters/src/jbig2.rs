@@ -9,9 +9,14 @@ mod symbols;
 use crate::FilterError;
 use crate::mq::{Context, MqEncoder};
 
-/// The widest row [`encode_jbig2_generic`] encodes. JBIG2 allows 32-bit widths; this keeps a
-/// row's buffers small and its positions in range.
-pub const MAX_JBIG2_COLUMNS: u32 = 1 << 20;
+/// The widest row, and the most rows, [`encode_jbig2_generic`] encodes: what `hayro-jbig2`, the
+/// decoder behind `JBIG2Decode` here, takes on a side. JBIG2 allows 32-bit sizes, but past this
+/// nothing here could read the stream, and the optimizer, which doesn't read back what it stores,
+/// replaced such an image with one that draws nothing.
+pub const MAX_JBIG2_COLUMNS: u32 = 65_535;
+
+/// The most samples [`encode_jbig2_generic`] encodes: that decoder's bound on a bitmap.
+const MAX_JBIG2_SAMPLES: u64 = 1 << 28;
 
 /// Template 0's pixels (Figure 3), as (x, y) offsets from the pixel being coded, each a bit of the
 /// context in this order: the four on the current row, the five fixed ones on the row above, the
@@ -69,10 +74,12 @@ pub fn encode_jbig2(data: &[u8], columns: u32, rows: u32) -> Result<Vec<u8>, Fil
 /// samples have it. Bytes after the last row are ignored, as are the bits that pad a row to a whole
 /// byte.
 ///
-/// Errors: no rows or columns, or rows wider than [`MAX_JBIG2_COLUMNS`]
-/// ([`FilterError::Unsupported`]); fewer bytes than the rows need ([`FilterError::Corrupt`]).
+/// Errors: no rows or columns, more of either than [`MAX_JBIG2_COLUMNS`], or more samples than the
+/// decoder takes ([`FilterError::Unsupported`]); fewer bytes than the rows need
+/// ([`FilterError::Corrupt`]).
 pub fn encode_jbig2_generic(data: &[u8], columns: u32, rows: u32) -> Result<Vec<u8>, FilterError> {
-    if columns == 0 || rows == 0 || columns > MAX_JBIG2_COLUMNS {
+    let too_large = columns > MAX_JBIG2_COLUMNS || rows > MAX_JBIG2_COLUMNS || u64::from(columns) * u64::from(rows) > MAX_JBIG2_SAMPLES;
+    if columns == 0 || rows == 0 || too_large {
         return Err(FilterError::Unsupported(format!("JBIG2 encoding of {columns} × {rows} samples")));
     }
     let width = columns as usize;
@@ -152,7 +159,7 @@ fn segment(out: &mut Vec<u8>, number: u32, kind: u8, refers_to: &[(u8, bool)], r
     out.push((refers_to.len() as u8) << 5 | kept | u8::from(retained));
     out.extend(refers_to.iter().map(|(n, _)| *n));
     out.push(1);
-    // A segment's data never comes near 4 GiB here: a row is at most 1 MiB wide.
+    // A segment's data never comes near 4 GiB here: an image is at most 2^28 samples.
     out.extend_from_slice(&u32::try_from(data.len()).unwrap_or(u32::MAX).to_be_bytes());
     out.extend_from_slice(data);
 }
@@ -340,9 +347,44 @@ mod tests {
     fn what_it_cannot_encode_is_an_error() {
         assert!(matches!(encode_jbig2_generic(&[0; 8], 0, 1), Err(FilterError::Unsupported(_))));
         assert!(matches!(encode_jbig2_generic(&[0; 8], 8, 0), Err(FilterError::Unsupported(_))));
-        assert!(matches!(encode_jbig2_generic(&[0; 8], MAX_JBIG2_COLUMNS + 1, 1), Err(FilterError::Unsupported(_))));
         assert!(matches!(encode_jbig2_generic(&[0; 3], 16, 2), Err(FilterError::Corrupt { .. })), "two rows of 16 need 4 bytes");
-        assert!(matches!(encode_jbig2_generic(&[], 1, u32::MAX), Err(FilterError::Corrupt { .. })));
+        assert!(matches!(encode_jbig2_generic(&[], 1, 2), Err(FilterError::Corrupt { .. })));
+    }
+
+    /// The encoder stops where the decoder does, on each side and in total: past that it would
+    /// write a stream nothing here can read. 16,384 squared is exactly the bound on samples.
+    #[test]
+    fn it_encodes_only_what_the_decoder_takes() {
+        let unsupported = |columns, rows| matches!(encode_jbig2_generic(&[], columns, rows), Err(FilterError::Unsupported(_)));
+        assert!(unsupported(MAX_JBIG2_COLUMNS + 1, 1), "too wide");
+        assert!(unsupported(1, MAX_JBIG2_COLUMNS + 1), "too tall");
+        assert!(unsupported(16_385, 16_384), "too many samples, each side within the bound");
+        assert!(unsupported(u32::MAX, u32::MAX), "the product doesn't overflow");
+        // At the bounds what it writes reads back, through the decoder that has to read it.
+        let wide = vec![0x0F; (MAX_JBIG2_COLUMNS as usize).div_ceil(8) * 4];
+        assert_eq!(decode(&encode_jbig2_generic(&wide, MAX_JBIG2_COLUMNS, 4).unwrap()), unpack(&wide, MAX_JBIG2_COLUMNS, 4));
+        let tall = vec![0x7F; MAX_JBIG2_COLUMNS as usize];
+        assert_eq!(decode(&encode_jbig2_generic(&tall, 1, MAX_JBIG2_COLUMNS).unwrap()), unpack(&tall, 1, MAX_JBIG2_COLUMNS));
+        struct Rows(u32, u64);
+        impl hayro_jbig2::Decoder for Rows {
+            fn push_pixel(&mut self, black: bool) {
+                self.1 += u64::from(black);
+            }
+            fn push_pixel_chunk(&mut self, black: bool, chunks: u32) {
+                self.1 += u64::from(black) * u64::from(chunks) * 8;
+            }
+            fn next_line(&mut self) {
+                self.0 += 1;
+            }
+        }
+        // One black pixel, so a page that came back blank wouldn't pass.
+        let mut largest = vec![0xFF; 2_048 * 16_384];
+        largest[0] = 0x7F;
+        let largest = encode_jbig2_generic(&largest, 16_384, 16_384).unwrap();
+        let mut rows = Rows(0, 0);
+        hayro_jbig2::Image::new_embedded(&largest, None).unwrap().decode(&mut rows).unwrap();
+        assert_eq!(rows.0, 16_384);
+        assert_eq!(rows.1, 1);
     }
 
     proptest::proptest! {
