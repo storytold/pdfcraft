@@ -112,6 +112,18 @@ pub(crate) fn take_nested_paint(depth: u32) -> bool {
     })
 }
 
+/// PdfCraft patch (71): how many nested paints this page has done so far, and setting that
+/// count back. A page drawn in CMYK passes interprets its contents up to three times (two passes
+/// and, when they fall back, once more as before); each starts from the count the page had, so a
+/// pass can't spend the budget the drawing that is kept needs, and the work stays bounded.
+pub(crate) fn nested_paints_used() -> u32 {
+    NESTED_PAINTS.with(core::cell::Cell::get)
+}
+
+pub(crate) fn set_nested_paints_used(used: u32) {
+    NESTED_PAINTS.with(|n| n.set(used));
+}
+
 /// A cache used by the interpreter.
 ///
 /// Ideally, such a cache should be constructed once per PDF and then reused across

@@ -55,6 +55,8 @@ pub mod util;
 
 pub use cache::CacheKey;
 pub use cmyk_group::CmykGroup;
+#[doc(hidden)]
+pub use cmyk_group::page_blends_in_device_cmyk;
 pub use context::*;
 pub use device::*;
 pub use function::Function;

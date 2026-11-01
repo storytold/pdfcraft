@@ -132,6 +132,26 @@ order the font lists them, platform ID first, so a wrong (1, 0) table (SAS 9.4's
 drew "8" as "p" and "+" as "V". Covered by `raster::tests::symbolic_truetype_cmap`, whose font
 is built in memory.
 
+## DeviceCMYK page groups (#4887)
+
+hayro-interpret patch (71), with hayro patch (27): a page whose `/Group /CS` is `DeviceCMYK`
+blends in CMYK on the page itself, in the non-isolated and knockout groups that inherit that
+space and in its isolated `DeviceCMYK` groups (ISO 32000-2 §11.3.4, §11.4.7, Table 145).
+`interpret_page` offers the page's contents (not its annotations) to
+`Device::draw_isolated_cmyk_group` as a `CmykGroup::for_page`, which hayro draws in the same two
+ink passes as an isolated group (patch (70), #5228). Only a page that can reach a blend mode other
+than `Normal` is offered (`cmyk_group::page_blends_in_device_cmyk`, which reads the graphics states
+of the page's resources and of the forms, tiling and shading patterns and Type 3 fonts in them,
+within bounds that answer yes), since every press-ready page has a CMYK page group. A pass that
+meets something with no ink tints stops interpreting at once (`Device::abandoned`), and each pass
+and the fallback start from the page's nested-paint count (`context::set_nested_paints_used`), so
+the work stays within three times the page's budget. Coverage:
+`raster::tests::cmyk_page_groups::{a_device_cmyk_page_group_blends_its_page_and_inherited_groups_in_cmyk,
+a_device_cmyk_page_group_falls_back_to_rgb_when_it_must_or_needs_not_blend,
+a_cmyk_page_group_is_drawn_in_passes_only_when_a_blend_mode_is_in_reach}` (pdfcraft-render; the
+gate is exported `#[doc(hidden)]` for them: hayro-interpret's own tests don't build outside the
+workspace, where `--manifest-path` resolves the crates.io hayro-syntax).
+
 ## KenM76 integration patches
 
 | PR | Vendored change | Regression coverage |

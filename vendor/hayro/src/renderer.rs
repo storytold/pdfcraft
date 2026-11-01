@@ -1898,6 +1898,12 @@ impl<'a> Device<'a> for Renderer {
         }
     }
 
+    /// PdfCraft patch (27), with hayro-interpret patch (71): an ink pass that met something it has
+    /// no tints for will be thrown away, so the rest of the contents needn't be drawn into it.
+    fn abandoned(&self) -> bool {
+        self.ink.pass.is_some() && self.ink.unsupported
+    }
+
     /// PdfCraft patch (27), with hayro-interpret patch (70): an isolated group that blends in
     /// `DeviceCMYK` (ISO 32000-2 §11.3.4). Its contents are drawn twice on canvases of their own,
     /// as cyan-magenta-yellow and as black (see [`InkState`]), and the tints those passes leave
