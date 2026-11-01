@@ -113,6 +113,127 @@ impl PdfCraftApp {
         }
     }
 
+    /// The pointer's triggers on tab `index` this frame, in another viewer's order: the widget it
+    /// left runs its Mouse Exit action and the one it reached its Mouse Enter, then a press runs
+    /// the pressed widget's Mouse Down, before the field the focus leaves commits.
+    pub(crate) fn run_pointer_triggers(&mut self, index: usize) {
+        use pdfcraft_engine::FieldTrigger as T;
+        // A field's editor, drawn over the field (or closing over it this frame), hides the
+        // pointer from the pages: while no dialog is open and the pointer is still inside the
+        // widget it was over, it hasn't left.
+        let still = self.views.get(index).and_then(|view| {
+            let (name, widget) = view.forms.hovered.clone()?;
+            let p = self.ctx.as_ref()?.input(|i| i.pointer.hover_pos())?;
+            let doc = self.session.get(view.id)?;
+            let f = doc.form.iter().find(|f| f.name == name)?;
+            let inside = crate::forms_ui::field_screen_rect(view, &doc.info, f, widget)?.contains(p);
+            (inside && !self.modal_open()).then_some((name, widget))
+        });
+        let Some(view) = self.views.get_mut(index) else { return };
+        let seen = view.forms.hover_seen.take().or(still);
+        let mut queue = Vec::new();
+        if view.forms.hovered != seen {
+            let left = std::mem::replace(&mut view.forms.hovered, seen.clone());
+            queue.extend(left.map(|(n, w)| (n, w, T::MouseExit)));
+            queue.extend(seen.map(|(n, w)| (n, w, T::MouseEnter)));
+        }
+        queue.extend(std::mem::take(&mut view.forms.pressed_on).into_iter().map(|(n, w)| (n, w, T::MouseDown)));
+        for (name, widget, trigger) in queue {
+            self.run_field_trigger(index, &name, widget, trigger);
+        }
+    }
+
+    /// What a click released on tab `i` runs once its commit and focus scripts have: the Mouse Up
+    /// action of the field it released on, or a push button's action.
+    pub(crate) fn run_release_triggers(&mut self, i: usize) {
+        let Some(view) = self.views.get_mut(i) else { return };
+        let released = std::mem::take(&mut view.forms.released_on);
+        let button = view.forms.button.take();
+        for (name, widget) in released {
+            self.run_field_trigger(i, &name, widget, pdfcraft_engine::FieldTrigger::MouseUp);
+        }
+        if let Some((name, action)) = button {
+            crate::canvas::run_button(self, i, &name, action);
+        }
+    }
+
+    /// Run what widget `widget` of field `name` on tab `i` does on `trigger` (ISO 32000-2 Table
+    /// 197): a JavaScript sees that event, and any other action runs as a push button's does,
+    /// except that only a click may run a menu item, open a link, submit or pick a picture.
+    /// With JavaScript turned off its scripts don't run, and nothing says so: only a push
+    /// button's click asks for one to run. A script that changes the field being edited shows in
+    /// its editor, as an XFA enter script's does.
+    pub(crate) fn run_field_trigger(&mut self, i: usize, name: &str, widget: usize, trigger: pdfcraft_engine::FieldTrigger) {
+        use pdfcraft_engine::form_scripts::ButtonAction as B;
+        let Some(id) = self.views.get(i).map(|v| v.id) else { return };
+        let Some(action) = self.session.field_action(id, name, widget, trigger) else { return };
+        let B::Script(js) = action else {
+            // Off a click, an action may not run a menu item (print, save), open a link, submit
+            // or pick a picture: it changes the form, the view or the layers, or shows a message.
+            if !trigger.is_click() && matches!(action, B::Named(_) | B::Uri(_) | B::Submit(_) | B::ImportIcon) {
+                self.js_console.log.push(format!("{name}: its {} action only runs on a click", trigger.label()));
+                return;
+            }
+            // A reset or show/hide applies now, and leaves the edit already queued (the text the
+            // press committed) to apply after it, in another viewer's order, and the field being
+            // edited open: a push button's click closes it first, a trigger doesn't.
+            if matches!(action, B::Reset { .. } | B::ShowHide { .. }) {
+                if let Some(edit) = crate::canvas::action_edit(self, i, &action) {
+                    let before = self.focus_before(i, id);
+                    self.apply_edit(edit);
+                    // A reset of the field being edited shows in its editor, so leaving it
+                    // doesn't write the old text back.
+                    self.refresh_focus(i, id, before);
+                }
+                return;
+            }
+            crate::canvas::run_button(self, i, name, action);
+            return;
+        };
+        if !self.session.javascript() {
+            return;
+        }
+        let before = self.focus_before(i, id);
+        let generation = self.session.get(id).map(|d| d.edit_generation());
+        match self.session.run_field_script(id, &js, Some(name), trigger) {
+            Ok(o) => {
+                if self.session.get(id).map(|d| d.edit_generation()) != generation {
+                    if let Some(info) = self.session.get(id).map(|d| d.info.clone())
+                        && let Some(view) = self.views.get_mut(i)
+                    {
+                        view.document_changed(&info);
+                    }
+                    self.refresh_focus(i, id, before);
+                }
+                let out = JsOutput {
+                    alerts: o.alerts,
+                    console: o.console,
+                    requests: o.requests,
+                    errors: o.error.into_iter().collect(),
+                    doc_errors: Vec::new(),
+                };
+                self.handle_js(id, out);
+            }
+            Err(e) => self.notify_fmt("{field}: {e}", &[("field", name), ("e", &e.to_string())]),
+        }
+    }
+
+    /// The field being edited in view `i` of document `id`, as its editor text and its value, for
+    /// [`Self::refresh_focus`] after a change.
+    fn focus_before(&self, i: usize, id: DocId) -> Option<(String, Vec<String>)> {
+        let name = self.views.get(i)?.forms.focus.as_ref()?.name.clone();
+        self.session.get(id)?.form.iter().find(|f| f.name == name).map(|f| (crate::forms_ui::draft_text(f), f.value.clone()))
+    }
+
+    /// After a change to the form, the editor open in view `i` shows its field's new value, unless
+    /// the person has typed there since `before` ([`crate::forms_ui::refresh_draft`]).
+    fn refresh_focus(&mut self, i: usize, id: DocId, before: Option<(String, Vec<String>)>) {
+        let Some(before) = before else { return };
+        let Some(draft) = self.views.get_mut(i).and_then(|v| v.forms.focus.as_mut()) else { return };
+        let Some(f) = self.session.get(id).and_then(|d| d.form.iter().find(|f| f.name == draft.name)) else { return };
+        crate::forms_ui::refresh_draft(draft, (&before.0, &before.1), (crate::forms_ui::draft_text(f), &f.value));
+    }
+
     /// Put the next waiting script message in the toast, or, once none waits, a notice of how many
     /// the queue had no room for. False when there is neither.
     pub fn next_script_message(&mut self) -> bool {

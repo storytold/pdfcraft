@@ -400,6 +400,20 @@ pub fn tools() -> Vec<ToolDef> {
             "Set several fields at once (one undo step). values maps field names (from form_fields) to: a string for text fields, combo boxes and radio groups (an option), true/false for check boxes, an array of strings for multi-select lists. Appearances are regenerated so every viewer shows the values. A value whose characters the field's font can't draw (Chinese in a Helvetica field) is still saved; `warnings` in the result names the field and character: PdfCraft draws `?` there and asks other viewers to redraw the field from its value.",
         )
         .with(schema(json!({ "doc": doc(), "values": { "type": "object", "description": "Field name → value." } }), &["doc", "values"])),
+        t(
+            "form_focus",
+            "Move the focus into or out of a field",
+            "A field gains (event enter) or loses (event exit) focus, as when someone clicks or tabs into or out of it, and the dynamic XFA form's enter or exit scripts for it run (other forms have none, and nothing happens). widget picks the radio button or copy of the field (1-based, default 1; see form_fields). What the scripts change is one undoable edit, and none when they change nothing. Changing a field's value (form_fill) runs its exit scripts already, so the next exit of that field doesn't run them again. Returns changed, and the scripts' alerts, console output, requests and errors.",
+        )
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "field": { "type": "string", "description": "Field name (from form_fields)." },
+                "event": { "type": "string", "enum": ["enter", "exit"] },
+                "widget": { "type": "integer", "minimum": 1, "description": "Widget of the field (1-based, default 1): a radio button of the group, or a copy of the field." },
+            }),
+            &["doc", "field", "event"],
+        )),
         t("form_reset", "Clear form", "Reset fields to their default values: all of them, or only those listed. Undoable.")
             .destructive()
             .with(schema(json!({ "doc": doc(), "fields": { "type": "array", "items": { "type": "string" } } }), &["doc"])),
@@ -1180,6 +1194,16 @@ pub fn tools() -> Vec<ToolDef> {
             .with(schema(
                 json!({ "doc": doc(), "script": { "type": "string" }, "field": { "type": "string", "description": "Run as this button's Mouse Up event." } }),
                 &["doc", "script"],
+            )),
+        t("form_trigger", "Run a field's mouse or focus action", "Run what a field's widget does on a trigger, as the pointer or the focus sets it off in the app: mouse_enter and mouse_exit (the pointer arrives over it or leaves), mouse_down and mouse_up (a press and release on it), on_focus and on_blur (it gains or loses the focus) — the widget's /A and /AA actions (ISO 32000-2 Table 197). A JavaScript action runs with that event (event.name Mouse Enter, Mouse Exit, Mouse Down, Mouse Up, Focus, Blur), its field changes one undoable step; an alert is returned; any other action (reset, show/hide, link, page, menu item, submit) is reported as `action` with `performed` false. `action` is null when the widget has none for that trigger. widget picks the radio button or copy of the field (1-based, default 1; see form_fields).")
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "field": { "type": "string", "description": "Field name (from form_fields)." },
+                    "trigger": { "type": "string", "enum": ["mouse_up", "mouse_down", "mouse_enter", "mouse_exit", "on_focus", "on_blur"] },
+                    "widget": { "type": "integer", "minimum": 1, "description": "Widget of the field (1-based, default 1): a radio button of the group, or a copy of the field." },
+                }),
+                &["doc", "field", "trigger"],
             )),
         t("js_document_scripts", "Document JavaScripts", "List the document-level JavaScripts (name and source), which define functions field scripts use.")
             .ro()

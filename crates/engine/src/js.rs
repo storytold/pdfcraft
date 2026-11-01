@@ -9,7 +9,16 @@
 use pdfcraft_forms::{Field, FieldChange, FieldEvent, FieldKind, FieldProps, ScriptResult, Scripts};
 pub use pdfcraft_js::{Limits, Message, MessageButtons, MessageIcon, Outcome, Panel, Request};
 
-use crate::{DocId, Edit, EditError, Session};
+use crate::{DocId, Edit, EditError, FieldTrigger, Session};
+
+/// A field gaining or losing focus ([`Session::field_focus`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FieldFocus {
+    /// The field gained focus: its `enter` scripts run.
+    Enter,
+    /// The field lost focus: its `exit` scripts run.
+    Exit,
+}
 
 /// What scripts produced for the viewer since it last looked.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -263,10 +272,58 @@ impl Session {
         self.docs.iter_mut().find(|d| d.id == id).map(|d| std::mem::take(&mut d.js_output)).unwrap_or_default()
     }
 
+    /// Widget `widget` of field `name` in document `id` gained or lost focus: on a laid-out XFA form,
+    /// run the field's `enter` or `exit` scripts, as one undoable edit when they change something
+    /// (and none when they don't). An exit that the field's new value already ran (the value's
+    /// change runs it) isn't run a second time. Returns whether the document changed; what the
+    /// scripts showed or asked for is in [`Session::take_js_output`].
+    pub fn field_focus(&mut self, id: DocId, name: &str, widget: usize, focus: FieldFocus) -> Result<bool, EditError> {
+        if self.js_off {
+            return Ok(false);
+        }
+        let doc = self.doc_mut(id)?;
+        let Some(tpl) = doc.xfa_template.clone().filter(|t| pdfcraft_xfa::has_focus_scripts(t)) else { return Ok(false) };
+        let Some(cos) = doc.editor.as_ref().map(|e| &e.cos) else { return Ok(false) };
+        let Some(som) = doc.form.iter().find(|f| f.name == name).and_then(|f| crate::xfa::widget_som(cos, f, widget)) else { return Ok(false) };
+        let activity = match focus {
+            FieldFocus::Enter => "enter",
+            FieldFocus::Exit => "exit",
+        };
+        if !crate::xfa::has_event(cos, &tpl, &som, activity) {
+            doc.xfa_exited.remove(&som);
+            return Ok(false);
+        }
+        // Gaining focus starts afresh; losing it runs the exit unless the change just did.
+        if doc.xfa_exited.remove(&som) && focus == FieldFocus::Exit {
+            return Ok(false);
+        }
+        let before = doc.generation;
+        self.apply(id, Edit::XfaEvent { som, activity: activity.into() })?;
+        Ok(self.get(id).is_some_and(|d| d.generation != before))
+    }
+
     /// Run `script` in document `id`, for a button (`target`: the field, event "Mouse Up") or
     /// the console (no target). Field changes and `resetForm` are applied as one undoable step;
     /// everything else the script asked for is returned.
     pub fn run_javascript(&mut self, id: DocId, script: &str, target: Option<&str>) -> Result<Outcome, EditError> {
+        self.run_field_script(id, script, target, FieldTrigger::MouseUp)
+    }
+
+    /// The action widget `widget` of field `name` in document `id` runs on `trigger` (ISO
+    /// 32000-2 Table 197), if it has one PdfCraft can read.
+    pub fn field_action(&self, id: DocId, name: &str, widget: usize, trigger: FieldTrigger) -> Option<crate::form_scripts::ButtonAction> {
+        let doc = self.get(id)?;
+        let cos = &doc.editor.as_ref()?.cos;
+        let field = doc.form.iter().find(|f| f.name == name)?;
+        pdfcraft_forms::widget_action(cos, field, widget, trigger)
+    }
+
+    /// [`Session::run_javascript`] for a field's action on `trigger`: the script sees the field
+    /// event that trigger names (`event.name` "Mouse Down", "Focus", …), and only Mouse Up runs a
+    /// laid-out XFA button's click script instead. Off a click (Mouse Enter or Exit, Focus,
+    /// Blur), its requests to print, open a link or Save As, or show a side panel are dropped and
+    /// noted on the console.
+    pub fn run_field_script(&mut self, id: DocId, script: &str, target: Option<&str>, trigger: FieldTrigger) -> Result<Outcome, EditError> {
         if self.js_off {
             return Err(EditError::Invalid("JavaScript is turned off (Preferences ▸ JavaScript)".into()));
         }
@@ -274,6 +331,7 @@ impl Session {
         let cos = doc.editor.as_ref().map(|e| e.cos.clone()).ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
         // A button PdfCraft generated from an XFA template runs its XFA click script.
         if let Some(t) = target
+            && trigger == FieldTrigger::MouseUp
             && let Some(tpl) = doc.xfa_template.clone()
             && let Some(field) = doc.form.iter().find(|f| f.name == t)
             && let Some(som) = crate::xfa::clickable_som(&cos, &tpl, field)
@@ -293,10 +351,26 @@ impl Session {
         let fields = pdfcraft_forms::fields(&cos);
         let states: Vec<_> = fields.iter().map(|f| field_state(&cos, f)).collect();
         let event = match target {
-            Some(t) => pdfcraft_js::Event { will_commit: false, ..pdfcraft_js::Event::field("Mouse Up", t, "") },
+            Some(t) => pdfcraft_js::Event { will_commit: false, ..pdfcraft_js::Event::field(trigger.event_name(), t, "") },
             None => pdfcraft_js::Event::doc("Console"),
         };
         let mut o = pdfcraft_js::run(script, &event, &runner.doc, &states, &runner.doc_scripts, Limits::default());
+        // Only a click (its press or its release) may print, open a link or Save As, or show a
+        // side panel: the pointer passing over a field, or the focus moving, is no one asking to.
+        if !trigger.is_click() {
+            let label = trigger.label();
+            o.requests.retain(|r| {
+                let what = match r {
+                    pdfcraft_js::Request::Print => "print",
+                    pdfcraft_js::Request::LaunchUrl(_) => "open a link",
+                    pdfcraft_js::Request::SaveAs => "open Save As",
+                    pdfcraft_js::Request::ShowPanel(_) => "show a side panel",
+                    _ => return true,
+                };
+                o.console.push(format!("A field's {label} script asked to {what}; only a click may"));
+                false
+            });
+        }
         let changes = changes(&states, &o.changed);
         let resets: Vec<Vec<String>> = o
             .requests
