@@ -78,7 +78,7 @@ Upstream announced the legacy RTEN download URLs' brownout in [ocrs #282](https:
 Runtime discovery prefers a complete ONNX detection/recognition pair within each directory, then a complete legacy `text-detection.rten` / `text-recognition.rten` pair.
 An incomplete ONNX update can therefore use an intact RTEN pair in the same directory.
 Discovery never combines model formats or files from different directories.
-Directory precedence stays the same: `$PDFCRAFT_MODELS`, the release-package locations beside the executable, then the source tree's `assets/models/`.
+Directory precedence stays the same: `$PDFCRAFT_MODELS`, the release-package locations beside the executable, then, in debug builds only, the source tree's `assets/models/`.
 The first directory with a complete supported pair wins, even if an earlier legacy pair precedes a later ONNX pair.
 
 The release-package locations are `models\` beside `pdfcraft.exe` (MSI, portable zip), `PdfCraft.app/Contents/Resources/models` (macOS), and `share/pdfcraft/models` beside `bin/` (deb, rpm, tar.gz, AppImage, Flatpak, FreeBSD).
