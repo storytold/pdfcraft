@@ -120,7 +120,7 @@ fn save_as_copies_the_file_and_saving_in_place_changes_nothing() {
 }
 
 #[test]
-fn saving_in_place_puts_back_a_file_that_was_deleted() {
+fn saving_in_place_refuses_a_file_that_has_gone_and_save_as_still_copies_it() {
     let pdf = large();
     let file = Temp::new("deleted", &pdf);
     let mut h = harness(true);
@@ -128,9 +128,12 @@ fn saving_in_place_puts_back_a_file_that_was_deleted() {
     h.run_steps(4);
     assert!(on_disk(h.state()));
     std::fs::remove_file(&file.path).unwrap();
-    assert!(h.state_mut().save_active(SaveTarget::InPlace));
-    assert_eq!(std::fs::read(&file.path).unwrap(), pdf);
-    assert!(h.state_mut().save_active(SaveTarget::InPlace), "it is the same file again");
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace));
+    assert!(!std::path::Path::new(&file.path).exists());
+    let copy = file.dir.join("copy.pdf").to_string_lossy().into_owned();
+    h.state_mut().save_override = Some(copy.clone());
+    assert!(h.state_mut().save_active(SaveTarget::As));
+    assert_eq!(std::fs::read(&copy).unwrap(), pdf, "the tab still reads the file it opened");
 }
 
 #[test]

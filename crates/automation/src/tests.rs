@@ -188,14 +188,35 @@ fn a_file_opened_on_disk_reads_saves_as_a_copy_and_refuses_edits() {
     let rewritten = a.call("doc_save", &json!({ "doc": doc, "path": "full.pdf", "full": true }));
     assert!(rewritten.is_err(), "and it is not a full rewrite");
     assert!(!dir.join("full.pdf").exists());
-    std::fs::remove_file(dir.join("large.pdf")).unwrap();
-    json(&mut a, "doc_save", json!({ "doc": doc }));
-    assert_eq!(std::fs::read(dir.join("large.pdf")).unwrap(), pdf, "a deleted file comes back");
-    json(&mut a, "doc_save", json!({ "doc": doc }));
     std::fs::write(dir.join("large.pdf"), b"another program's newer file").unwrap();
     assert!(a.call("doc_save", &json!({ "doc": doc })).is_err());
-    assert_eq!(std::fs::read(dir.join("large.pdf")).unwrap(), b"another program's newer file", "and a newer file stays");
+    assert_eq!(std::fs::read(dir.join("large.pdf")).unwrap(), b"another program's newer file", "a newer file stays");
+    std::fs::remove_file(dir.join("large.pdf")).unwrap();
+    assert!(a.call("doc_save", &json!({ "doc": doc })).is_err(), "and a save does not say it kept a file that has gone");
+    assert!(!dir.join("large.pdf").exists());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_file_opened_on_disk_is_its_own_path_however_that_is_spelled() {
+    // Under the working directory, so that the same file has a relative and an absolute path.
+    let folder = format!("pdfcraft-automation-spelling-{}", std::process::id());
+    let dir = std::env::current_dir().unwrap().join(&folder);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    large_file(&dir);
+    let mut a = Automation::new();
+    let doc = json(&mut a, "doc_open", json!({ "path": format!("{folder}/large.pdf"), "on_disk": true }))["doc"].clone();
+    // Renamed over it: the file still reads as it was, so a copy would go through.
+    std::fs::write(dir.join("newer.pdf"), b"another program's newer file").unwrap();
+    std::fs::rename(dir.join("newer.pdf"), dir.join("large.pdf")).unwrap();
+    let saved = a.call("doc_save", &json!({ "doc": doc, "path": dir.join("large.pdf") }));
+    let kept = std::fs::read(dir.join("large.pdf")).unwrap();
+    // It holds the file open, which some drives won't delete until it lets go.
+    drop(a);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(saved.is_err());
+    assert_eq!(kept, b"another program's newer file");
 }
 
 #[test]

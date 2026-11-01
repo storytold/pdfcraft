@@ -26,21 +26,11 @@ pub struct FileSource {
     modified: Option<SystemTime>,
 }
 
-/// Whether saving `file` to its own `path` has to write it: only when it has gone. A file of
-/// another size or time there is not this one, and a save must not replace it.
-pub fn must_write_back(path: &Path, file: &OnDiskFile) -> Result<bool, EditError> {
-    match std::fs::metadata(path) {
-        Ok(found) if found.len() == file.size() && found.modified().ok() == file.modified() => Ok(false),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(true),
-        _ => Err(EditError::ReplacedOnDisk),
-    }
-}
-
-/// Write `file` to `out` to put it back at its own path, with the time it had, so that
-/// [`must_write_back`] knows it again.
-pub fn write_back(file: &OnDiskFile, out: &mut File) -> std::io::Result<()> {
-    file.copy_to(out)?;
-    file.modified().map_or(Ok(()), |modified| out.set_modified(modified))
+/// Check that `file` is still what its own `path` holds, going by size and time. Saving it there
+/// writes nothing, so it must not report success for a file that has gone or been replaced.
+pub fn check_own_path(path: &Path, file: &OnDiskFile) -> Result<(), EditError> {
+    let found = std::fs::metadata(path).map_err(|_| EditError::ChangedOnDisk)?;
+    if found.len() == file.size() && found.modified().ok() == file.modified() { Ok(()) } else { Err(EditError::ChangedOnDisk) }
 }
 
 impl FileSource {
@@ -253,7 +243,7 @@ mod tests {
         let file = Temp::new(&pdf);
         let (session, id) = open(&file.path).expect("stays on disk");
         let held = session.get(id).unwrap().on_disk.clone().unwrap();
-        assert_eq!(must_write_back(&file.path, &held), Ok(false));
+        assert_eq!(check_own_path(&file.path, &held), Ok(()));
 
         // The same size and a later time, as a rebuild leaves a file.
         let other = file.dir.join("other.pdf");
@@ -263,13 +253,10 @@ mod tests {
         let later = held.modified().unwrap() + std::time::Duration::from_secs(5);
         File::options().write(true).open(&other).unwrap().set_modified(later).unwrap();
         std::fs::rename(&other, &file.path).unwrap();
-        assert_eq!(must_write_back(&file.path, &held), Err(EditError::ReplacedOnDisk));
+        assert_eq!(check_own_path(&file.path, &held), Err(EditError::ChangedOnDisk));
 
         std::fs::remove_file(&file.path).unwrap();
-        assert_eq!(must_write_back(&file.path, &held), Ok(true));
-        write_back(&held, &mut File::create(&file.path).unwrap()).unwrap();
-        assert_eq!(std::fs::read(&file.path).unwrap(), pdf);
-        assert_eq!(must_write_back(&file.path, &held), Ok(false), "it is the same file again");
+        assert_eq!(check_own_path(&file.path, &held), Err(EditError::ChangedOnDisk));
     }
 
     #[test]

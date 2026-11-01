@@ -217,24 +217,22 @@ impl PdfCraftApp {
 
 impl PdfCraftApp {
     /// Save a document that stayed on disk: it can't have changed, so that is copying the file a
-    /// piece at a time. It keeps reading from where it was, and to itself there is nothing to do
-    /// unless the file has gone.
+    /// piece at a time. It keeps reading from where it was, and to itself there is nothing to write.
     #[cfg(not(target_arch = "wasm32"))]
     fn save_on_disk(&mut self, id: pdfcraft_engine::DocId, dest: &str, file: &pdfcraft_cos::OnDiskFile) -> bool {
         let own = self.session.get(id).and_then(|d| d.path.as_deref()).is_some_and(|p| crate::same_file(p, dest));
         let path = std::path::Path::new(dest);
         if own {
-            match pdfcraft_engine::on_disk::must_write_back(path, file) {
-                Ok(true) => {}
-                Ok(false) => return true,
+            return match pdfcraft_engine::on_disk::check_own_path(path, file) {
+                Ok(()) => true,
                 Err(e) => {
                     self.notify_fmt("Couldn't save {name}: {e}", &[("name", dest), ("e", &e.to_string())]);
-                    return false;
+                    false
                 }
-            }
+            };
         }
-        let copy = |out: &mut std::fs::File| if own { pdfcraft_engine::on_disk::write_back(file, out) } else { file.copy_to(out) };
-        match pdfcraft_platform::staging::write_atomically_from(path, pdfcraft_platform::staging::StagingName::TagThenSuffix, copy) {
+        match pdfcraft_platform::staging::write_atomically_from(path, pdfcraft_platform::staging::StagingName::TagThenSuffix, |out| file.copy_to(out))
+        {
             Ok(()) => {
                 self.notify_fmt("Saved {name}", &[("name", &short_name(dest))]);
                 true
