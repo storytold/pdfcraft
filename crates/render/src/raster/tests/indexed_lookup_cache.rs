@@ -61,3 +61,15 @@ fn inline_images_naming_one_indexed_resource_read_its_lookup_once() {
     let short = page(20, 7, b"\xFF\x00\x00\x00\xFF\x00");
     assert_eq!(lookup_reads(short), [1, 1], "a short table: read once, then cached");
 }
+
+/// Two Indexed resources whose arrays differ (`/P` names object 5, `/Q` object 6) are two
+/// spaces: each is built, and its table read, once, and neither stands in for the other.
+#[test]
+fn two_indexed_resources_are_cached_apart() {
+    let image = |name: &str| format!("q 20 0 0 20 0 0 cm BI /W 2 /H 1 /BPC 8 /CS /{name} /F /AHx ID 0001> EI Q");
+    let content = [image("P"), image("Q"), image("P"), image("Q")].join("\n");
+    let resources = "<< /ColorSpace << /P [/Indexed /DeviceRGB 1 5 0 R] /Q [/Indexed /DeviceRGB 1 6 0 R] >> >>";
+    let (red_green, blue_white): (&[u8], &[u8]) = (b"\xFF\x00\x00\x00\xFF\x00", b"\x00\x00\xFF\xFF\xFF\xFF");
+    let pdf = image_cache_pdf(&content, resources, &[("<< /Length 6 >>", red_green), ("<< /Length 6 >>", blue_white)]);
+    assert_eq!(lookup_reads(pdf), [2, 2], "each table read once");
+}

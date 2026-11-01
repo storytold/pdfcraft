@@ -299,10 +299,10 @@ fn an_unreadable_base_keeps_its_fallback() {
     }
 }
 
-/// A fill colour set in such a space (`cs`, `sc`) draws through the same recovered table, and
+/// A fill or stroke colour set in such a space (`cs`, `sc`, `CS`, `SC`) draws through the same recovered table, and
 /// the recovery is reported as `ColourFallback`, as the upstream DeviceGray fallback was.
 #[test]
-fn a_fill_colour_in_a_short_table_is_padded_and_reported() {
+fn a_fill_or_stroke_colour_in_a_short_table_is_padded_and_reported() {
     let fill = |index: u8| format!("/P cs {index} sc 0 0 200 200 re f");
     let short = format!("[/Indexed /DeviceRGB 7 <{}>]", entries(2));
     let page = render(pdf(&short, &fill(1), &[]));
@@ -310,6 +310,10 @@ fn a_fill_colour_in_a_short_table_is_padded_and_reported() {
     assert_eq!(page.warnings, vec![RenderWarning::ColourFallback]);
     let page = render(pdf(&short, &fill(5), &[]));
     assert_eq!(columns(&page)[0], BLACK, "entry 5 is padding");
+    // A stroke colour (`CS`, `SC`) the same way.
+    let page = render(pdf(&short, "/P CS 1 SC 20 w 0 100 m 200 100 l S", &[]));
+    assert_eq!(columns(&page)[0], COLOURS[1], "the stroke is green");
+    assert_eq!(page.warnings, vec![RenderWarning::ColourFallback]);
     let page = render(pdf(&format!("[/Indexed /DeviceRGB 7 <{TABLE}>]"), &fill(1), &[]));
     assert_eq!(columns(&page)[0], COLOURS[1]);
     assert!(page.warnings.is_empty(), "{:?}", page.warnings);
