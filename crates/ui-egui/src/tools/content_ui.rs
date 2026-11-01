@@ -831,6 +831,7 @@ fn aligned_galley(
     let job = |text: &str, align: TextAlign| {
         let mut job = spaced_job(text, font, color, letter_spacing, wrap, egui::Align::Min);
         job.justify = align == TextAlign::Justify;
+        job.direction = crate::bidi::text_direction(style.direction);
         job
     };
     let uniform = text.split('\n').enumerate().all(|(i, _)| style.paragraph_align(i) == style.align);
@@ -863,7 +864,9 @@ fn aligned_galley(
         }
         start = end + 1;
     }
-    let whole = std::sync::Arc::new(spaced_job(text, font, color, letter_spacing, wrap, egui::Align::Min));
+    let mut whole = spaced_job(text, font, color, letter_spacing, wrap, egui::Align::Min);
+    whole.direction = crate::bidi::text_direction(style.direction);
+    let whole = std::sync::Arc::new(whole);
     std::sync::Arc::new(egui::Galley::concat(whole, &galleys, ui.ctx().pixels_per_point()))
 }
 

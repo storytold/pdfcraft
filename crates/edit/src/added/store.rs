@@ -32,6 +32,7 @@ fn parse(doc: &Document, d: &Dict) -> Option<Content> {
                 align,
                 aligns: crate::paragraph_align::tidy(aligns, align),
                 // Items written before character spacing have none.
+                direction: pdfcraft_fonts::TextDirection::from_name(d.name(b"Direction").unwrap_or_default()),
                 char_spacing: d.get(b"CharSpacing").and_then(Object::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0),
             }))
         }

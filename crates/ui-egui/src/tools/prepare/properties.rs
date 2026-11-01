@@ -192,6 +192,11 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                 FormFieldKind::Text => {
                     use pdfcraft_engine::field_flags as ff;
                     egui::Grid::new("text-options").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+                        ui.label(tl!("Text direction"));
+                        ui.horizontal(|ui| {
+                            widgets::direction_buttons_with_overrides(ui, &mut d.text_direction, d.flags & ff::COMB == 0);
+                        });
+                        ui.end_row();
                         alignment(ui, &mut d.quadding);
                         ui.end_row();
                         let l = ui.label(tl!("Default Value:"));
@@ -207,6 +212,9 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                         ui.add_enabled(d.limit, egui::DragValue::new(&mut d.max_len).range(0..=10_000));
                         ui.label(tl!("characters"));
                     });
+                    if d.flags & ff::COMB != 0 {
+                        ui.label(tl!("Comb fields support automatic text direction only. Select Auto or turn off Comb before applying."));
+                    }
                     flag_box(ui, &mut d.flags, ff::PASSWORD, false, tl!("Password"));
                     flag_box(ui, &mut d.flags, ff::FILE_SELECT, false, tl!("Field is used for file selection"));
                     flag_box(ui, &mut d.flags, ff::DO_NOT_SPELL_CHECK, true, tl!("Check spelling"));
@@ -257,6 +265,12 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                 }
                 _ => {
                     ui.horizontal(|ui| alignment(ui, &mut d.quadding));
+                    if matches!(d.kind, FormFieldKind::Combo | FormFieldKind::List) {
+                        ui.horizontal(|ui| {
+                            ui.label(tl!("Text direction"));
+                            widgets::direction_buttons(ui, &mut d.text_direction);
+                        });
+                    }
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
                         let l = ui.label(tl!("Item:"));

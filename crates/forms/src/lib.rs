@@ -163,6 +163,8 @@ pub struct Field {
     pub da: String,
     /// Quadding: 0 left, 1 centred, 2 right.
     pub quadding: i64,
+    /// Paragraph direction retained in /PCTextDirection; independent of /Q and /V.
+    pub text_direction: pdfcraft_fonts::TextDirection,
     pub tooltip: Option<String>,
     pub widgets: Vec<Widget>,
     /// Format, validate and calculate scripts (Acrobat's AF functions), see [`af`].

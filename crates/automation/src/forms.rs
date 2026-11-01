@@ -251,6 +251,7 @@ impl Automation {
                     "page": w.and_then(|w| w.page).map(|p| p + 1),
                     "rect": rect,
                     "rotation": w.map(|w| w.rotation).unwrap_or(0),
+                    "direction": f.text_direction.name().to_ascii_lowercase(),
                     "read_only": f.read_only(),
                     "required": f.has(field_flags::REQUIRED),
                 });
@@ -584,6 +585,7 @@ impl Automation {
             format: a.get("format").map(format_arg).transpose()?,
             validate: a.get("validate").map(validate_arg).transpose()?,
             calculate: a.get("calculate").map(calculate_arg).transpose()?,
+            text_direction: a.opt_str("direction")?.map(crate::content::parse_direction).transpose()?,
             quadding: match a.opt_str("align")? {
                 None => None,
                 Some("left") => Some(0),

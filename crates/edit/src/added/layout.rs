@@ -29,14 +29,14 @@ thread_local! {
     pub(crate) static WRAP_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// [`lines`], each with whether its paragraph runs right to left (its first strong character
-/// does) and which paragraph it is in.
+/// [`lines`], each with its paragraph base direction and which paragraph it is in.
 pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
     #[cfg(test)]
     WRAP_CALLS.with(|c| c.set(c.get().saturating_add(1)));
     let width = (t.rect[2] - t.rect[0]).max(t.size);
     let mut out = Vec::new();
     for (index, para) in t.text.split('\n').enumerate() {
+        let rtl = t.direction.rtl(para);
         // Arabic or Hebrew: laid out with the bidirectional algorithm and shaped.
         let rtl_script = para.chars().any(|c| is_arabic(c) || is_hebrew(c));
         let thai = para.chars().any(is_thai);
@@ -44,10 +44,9 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
             && !rtl_script
             && let Ok(lines) = thai_lines(t, para, width)
         {
-            out.extend(lines.into_iter().map(|line| (line, false, index)));
+            out.extend(lines.into_iter().map(|line| (line, rtl, index)));
             continue;
         }
-        let rtl = rtl_script && unicode_bidi::get_base_direction(para) == unicode_bidi::Direction::Rtl;
         // Arabic words are shaped one by one (joining stops at spaces), so a line's width is the
         // sum of its words' and shaping stays linear in the paragraph's length. The space is the
         // paragraph's; a space between Latin words is drawn in the item's font, a few hundredths
@@ -194,6 +193,9 @@ pub(super) enum Piece {
 /// A line of a shaped-text item in drawing order (the Unicode bidirectional algorithm, UAX #9), and
 /// its width at the item's size. `rtl` is its paragraph's direction.
 pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec<Piece>, f64), EditError> {
+    if line.len() > pdfcraft_fonts::text_direction::MAX_DIRECTION_BYTES {
+        return Err(EditError::Invalid("a directional text line exceeds 262144 UTF-8 bytes; shorten it before laying it out".into()));
+    }
     // unicode-bidi indexes the first level of a line, so an empty one would panic.
     if line.is_empty() {
         return Ok((Vec::new(), 0.0));
@@ -355,5 +357,5 @@ fn copy_key(c: &Content) -> Content {
 
 /// The widest explicit line before wrapping, measured with the PDF writing fonts.
 pub fn text_width(t: &AddedText) -> f64 {
-    t.text.split('\n').map(|line| shaped_width(t, line, unicode_bidi::get_base_direction(line) == unicode_bidi::Direction::Rtl)).fold(0.0, f64::max)
+    t.text.split('\n').map(|line| shaped_width(t, line, t.direction.rtl(line))).fold(0.0, f64::max)
 }

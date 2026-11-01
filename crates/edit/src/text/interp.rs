@@ -298,6 +298,7 @@ pub(super) struct Shown {
     pub(super) visual_order: bool,
     pub(super) decodable: bool,
     pub(super) scope: Option<usize>,
+    pub(super) text_direction: pdfcraft_fonts::TextDirection,
     pub(super) paint: Paint,
     pub(super) logical_order: bool,
     pub(super) actual_text: bool,
@@ -438,6 +439,7 @@ pub(super) struct Carry {
     /// errata, issue 368), as the renderer does.
     pub(super) stack: Vec<(Ts, Matrix, Matrix)>,
     pub(super) marked: Vec<Option<usize>>,
+    pub(super) directions: Vec<pdfcraft_fonts::TextDirection>,
     /// For each open marked-content sequence, its optional content group when it is `/OC`.
     pub(super) layers: Vec<Option<Vec<u8>>>,
     /// Bytes of glyph text the rest of the page may still produce (see [`MAX_PAGE_TEXT`]).
@@ -472,7 +474,7 @@ impl Carry {
             dash: (Vec::new(), 0.0),
             line_cap: 0,
         };
-        Carry { ts, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: MAX_PAGE_TEXT }
+        Carry { ts, stack: Vec::new(), marked: Vec::new(), directions: Vec::new(), layers: Vec::new(), text_left: MAX_PAGE_TEXT }
     }
 }
 
@@ -485,13 +487,14 @@ type Invocation = (usize, Vec<u8>, Ts);
 
 #[derive(Default)]
 struct MarkedContent {
+    directions: Vec<pdfcraft_fonts::TextDirection>,
     regions: Vec<Option<usize>>,
     layers: Vec<Option<Vec<u8>>>,
     actual_text: Vec<Option<(usize, usize, String)>>,
 }
 
 impl MarkedContent {
-    fn begin(&mut self, doc: &Document, op: &Op, index: usize, logical_text: Option<&Dict>, shown_count: usize) {
+    fn begin(&mut self, doc: &Document, op: &Op, index: usize, logical_text: Option<&Dict>, shown_count: usize, resources: &Dict) {
         // Marked text paragraphs/headings are authoritative boundaries. Ignore artifacts and
         // inner spans, which inherit their enclosing region.
         let region = matches!(op.name(0), Some(b"P" | b"H" | b"H1" | b"H2" | b"H3" | b"H4" | b"H5" | b"H6" | b"LI" | b"TD" | b"TH"));
@@ -509,11 +512,26 @@ impl MarkedContent {
             Object::String(value) if value.bytes.len() <= 4_000_000 => Some(value.to_text()),
             _ => None,
         });
+        // Direction metadata is needed even by callers that deliberately disable ActualText.
+        let direction_list = match op.operands.get(1) {
+            Some(Object::Name(name)) => resources
+                .get(b"Properties")
+                .and_then(|object| doc.dict(object))
+                .and_then(|properties| properties.get(name).and_then(|object| doc.dict(object))),
+            other => other.and_then(Object::as_dict).cloned(),
+        };
+        let direction = direction_list
+            .as_ref()
+            .and_then(|d| d.name(b"PCTextDirection"))
+            .map(pdfcraft_fonts::TextDirection::from_name)
+            .unwrap_or_else(|| self.directions.last().copied().unwrap_or_default());
+        self.directions.push(direction);
         self.actual_text.push(logical.map(|text| (shown_count, index, text)));
     }
 
     fn end(&mut self, index: usize, shown: &mut Vec<Shown>) {
         self.regions.pop();
+        self.directions.pop();
         self.layers.pop();
         if let Some(Some((start, open, logical))) = self.actual_text.pop() {
             let tail = shown.split_off(start.min(shown.len()));
@@ -535,7 +553,7 @@ impl MarkedContent {
                 first.extra_ops.extend([open, index]);
                 // Only right-to-left ActualText is already in typing order and must stay out of
                 // bidi recovery. Word and Chrome also wrap Latin ligatures mid-word.
-                first.logical_order = logical.chars().any(crate::bidi::is_rtl);
+                first.logical_order = first.text_direction != pdfcraft_fonts::TextDirection::Auto || logical.chars().any(crate::bidi::is_rtl);
                 first.actual_text = true;
                 first.text = logical;
                 first.start_x = first.rect[0];
@@ -753,6 +771,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         visual_order: m.visual_order,
         decodable,
         scope: marked.regions.last().copied().flatten(),
+        text_direction: marked.directions.last().copied().unwrap_or_default(),
         paint: Paint { layers: marked.layers.iter().flatten().cloned().collect(), gs: ts.gs.clone() },
         logical_order: false,
         actual_text: false,
@@ -781,8 +800,12 @@ pub(super) fn interpret(
     let mut stack: Vec<(Ts, Matrix, Matrix)> = std::mem::take(&mut carry.stack);
     let (mut tm, mut tlm) = (Matrix::IDENTITY, Matrix::IDENTITY);
     let mut bt = 0usize;
-    let mut marked =
-        MarkedContent { regions: std::mem::take(&mut carry.marked), layers: std::mem::take(&mut carry.layers), ..MarkedContent::default() };
+    let mut marked = MarkedContent {
+        regions: std::mem::take(&mut carry.marked),
+        directions: std::mem::take(&mut carry.directions),
+        layers: std::mem::take(&mut carry.layers),
+        ..MarkedContent::default()
+    };
     // A rewrite names a wrap (`/PCSoft`) or a break it kept (`/PCHard`) in an empty marker
     // before the next line. Neither name is a paragraph region, so it does not change scope.
     let mut soft_break = false;
@@ -816,7 +839,7 @@ pub(super) fn interpret(
                     hard_break = true;
                     soft_break = false;
                 }
-                marked.begin(doc, op, i, logical_text, out.len());
+                marked.begin(doc, op, i, logical_text, out.len(), resources);
             }
             b"EMC" => {
                 marked.end(i, &mut out);
@@ -949,6 +972,7 @@ pub(super) fn interpret(
     carry.ts = ts;
     carry.stack = stack;
     carry.marked = marked.regions;
+    carry.directions = marked.directions;
     carry.layers = marked.layers;
     positioned_tracking(&mut out);
     Ok(out)

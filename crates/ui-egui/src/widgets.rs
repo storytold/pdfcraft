@@ -691,6 +691,28 @@ pub fn icon_pill(ui: &mut egui::Ui, icon: &str, label: &str, primary: bool) -> R
     theme::hand(resp)
 }
 
+/// Shared paragraph base controls; selecting direction never changes alignment or Unicode.
+pub(crate) fn direction_buttons(ui: &mut egui::Ui, value: &mut pdfcraft_engine::TextDirection) -> bool {
+    direction_buttons_with_overrides(ui, value, true)
+}
+
+/// Comb cells cannot preserve reordered spans; Auto must remain available to clear an override.
+pub(crate) fn direction_buttons_with_overrides(ui: &mut egui::Ui, value: &mut pdfcraft_engine::TextDirection, overrides: bool) -> bool {
+    use pdfcraft_engine::TextDirection as D;
+    let before = *value;
+    for (direction, icon, tip) in [
+        (D::Auto, "arrow-left-right", tl!("Automatic text direction")),
+        (D::LeftToRight, "chevrons-right", tl!("Left to right (LTR)")),
+        (D::RightToLeft, "chevrons-left", tl!("Right to left (RTL)")),
+    ] {
+        let response = ui.add_enabled_ui(overrides || direction == D::Auto, |ui| crate::icons::button(ui, icon, 30.0, *value == direction, tip));
+        if response.inner.clicked() {
+            *value = direction;
+        }
+    }
+    *value != before
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -277,6 +277,7 @@ struct Inherited {
     dv: Option<Object>,
     da: Option<String>,
     q: Option<i64>,
+    text_direction: Option<pdfcraft_fonts::TextDirection>,
     max_len: Option<usize>,
 }
 
@@ -462,6 +463,9 @@ fn walk(
     if let Some(q) = d.get(b"Q").and_then(|o| doc.resolve(o).as_int()) {
         inh.q = Some(q);
     }
+    if let Some(direction) = d.name(b"PCTextDirection") {
+        inh.text_direction = Some(pdfcraft_fonts::TextDirection::from_name(direction));
+    }
     if let Some(m) = d.get(b"MaxLen").and_then(|o| doc.resolve(o).as_int()) {
         // Compatibility: some writers emit zero for an unlimited text field. Keep /MaxLen
         // untouched in the object graph, but expose only positive limits to both UI and API.
@@ -556,6 +560,7 @@ fn walk(
         options,
         da: inh.da.clone().unwrap_or_else(|| "/Helv 0 Tf 0 g".into()),
         quadding: inh.q.unwrap_or(0),
+        text_direction: inh.text_direction.unwrap_or_default(),
         tooltip: d.get(b"TU").and_then(|o| text_of(&doc.resolve(o))),
         widgets,
         actions,

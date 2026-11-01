@@ -38,6 +38,25 @@ follows the box-level `align`; legacy `null` entries remain accepted with the sa
 - With a root set, every read and write path must resolve inside it (symlinks and `..` included). Relative paths resolve inside the root, and `..` is resolved by name before the check. Every path outside the root gets the same refusal (`<path> is outside the allowed directory <root>`), whether or not it exists, so a confined agent can't probe the rest of the disk; on Windows another network share or device path (`\\host\share`, `\\?\UNC\…`, `\\.\…`) is refused without being contacted. "Not found" and other filesystem errors are reported only for paths inside the root. Tools that write several files into a folder name them after the document or input file, with separators, colons and control characters replaced by `_`, so a name can't lead them out of the folder. The root itself must be a folder.
 - `Automation::with_automation_roots` holds a read folder and a write folder (`pdfcraft-cli mcp --automation-read-root DIR --automation-write-root DIR`, see [docs/mcp.md](../../docs/mcp.md)). Reads must lie inside the read root and writes inside the write root, links followed. A root left out grants none of its access. Refusals read `automation path rejected: outside the read root <root>: <path>`. As with a root set, on Windows a path on another network share or device path is refused with that refusal without being contacted (#4003). It applies on top of `with_root`.
 
+## Explicit paragraph direction
+
+`page_add_text`, `content_update` for added text, paragraph `text_edit`,
+`text_edit_layout` and `form_set_props` accept `direction: "auto" | "ltr" | "rtl"`.
+Direction selects the paragraph's Unicode bidi base; `align` selects its physical
+alignment independently. Auto derives direction from the text, not the interface
+language. `content_list`, `text_paragraphs` and `form_fields` return `direction`.
+A direction-only paragraph edit preserves the editor's row boundaries. Line edits
+and image updates refuse direction; use the paragraph or added text item instead.
+
+Logical Unicode remains the stored text. PdfCraft records explicit overrides in
+its own PDF metadata, so another viewer need not expose the same controls. Complex
+existing text still needs a supported complete embedded source face; direction
+does not supply a missing font or qualify every mixed-style shaping case. Text and
+choice field overrides retain the existing appearance font/encoding limits and
+unsupported-character warnings; they do not add Arabic form shaping. Comb fields
+refuse explicit overrides. Directional rows have a 262,144 UTF-8 byte budget;
+oversized loaded field appearances report a warning and retain their value.
+
 ## Text search and cache limits
 
 `text_word_count` counts the current snapshot without filling the text cache. It returns totals

@@ -239,16 +239,34 @@ struct ShapedRows {
     advances: HashMap<(usize, usize), f64>,
 }
 
+/// The simple-font path mirrors punctuation while reordering. Measure the exact characters
+/// it will show: custom source fonts need not give a mirrored pair identical advances.
+fn plain_segment_width(
+    segment: &[StyledChar],
+    advance: &impl Fn(&StyledChar) -> f64,
+    direction: pdfcraft_fonts::TextDirection,
+) -> Result<f64, EditError> {
+    if direction == pdfcraft_fonts::TextDirection::Auto {
+        return Ok(segment.iter().map(advance).sum());
+    }
+    let Some(first) = segment.first() else { return Ok(0.0) };
+    let logical: String = segment.iter().map(|item| item.0).collect();
+    let visual = direction.visual_plain(&logical).map_err(|message| EditError::Invalid(message.into()))?;
+    Ok(visual.chars().map(|ch| advance(&(ch, first.1, first.2.clone()))).sum())
+}
+
 fn prepare_shaped_rows(
     doc: &Document,
     fonts: &Dict,
     rows: &[Vec<StyledChar>],
     kept: &[bool],
     advance: impl Fn(&StyledChar) -> f64,
+    direction: impl Fn(usize) -> pdfcraft_fonts::TextDirection,
 ) -> Result<ShapedRows, EditError> {
     let mut runs = HashMap::new();
     let mut advances = HashMap::new();
     for (row_index, row) in rows.iter().enumerate().filter(|(index, _)| !kept.get(*index).copied().unwrap_or(false)) {
+        let direction = direction(row_index);
         let mut at = 0;
         while let Some(item) = row.get(at) {
             let mut end = at + 1;
@@ -256,10 +274,11 @@ fn prepare_shaped_rows(
                 end += 1;
             }
             let segment = row.get(at..end).unwrap_or_default();
-            advances.insert((row_index, at), segment.iter().map(&advance).sum::<f64>());
             let text: String = segment.iter().map(|character| character.0).collect();
-            if let Some((bytes, shaped, family)) = shape_source(doc, fonts, &item.2, &text)? {
+            if let Some((bytes, shaped, family)) = shape_source(doc, fonts, &item.2, &text, direction)? {
                 runs.insert((row_index, at), (bytes, shaped, family));
+            } else {
+                advances.insert((row_index, at), plain_segment_width(segment, &advance, direction)?);
             }
             at = end;
         }
@@ -277,10 +296,10 @@ fn embed_shaped_resources(doc: &mut Document, fonts: &mut Dict, runs: &ShapedRun
     Ok(resources)
 }
 
-fn validate_contextual_rows(rows: &[Vec<StyledChar>], kept: &[bool]) -> Result<(), EditError> {
-    for (row, _) in rows.iter().zip(kept).filter(|(_, retained)| !**retained) {
+fn validate_contextual_rows(rows: &[Vec<StyledChar>], kept: &[bool], directional: impl Fn(usize) -> bool) -> Result<(), EditError> {
+    for ((index, row), _) in rows.iter().enumerate().zip(kept).filter(|(_, retained)| !**retained) {
         let text: String = row.iter().map(|character| character.0).collect();
-        if pdfcraft_fonts::source_shaping::required(&text)
+        if (pdfcraft_fonts::source_shaping::required(&text) || directional(index))
             && row.first().is_some_and(|first| row.iter().any(|character| character.1 != first.1 || character.2 != first.2))
         {
             return Err(EditError::Invalid(
@@ -406,7 +425,7 @@ type WrappedStyledRows = (StyledRows, RowRanges, Vec<usize>, Vec<bool>, Vec<usiz
 fn wrap_styled_rows(
     chars: &[StyledChar],
     width: f64,
-    measure: impl Fn(&[StyledChar]) -> Result<f64, EditError>,
+    measure: impl Fn(&[StyledChar], usize) -> Result<f64, EditError>,
 ) -> Result<WrappedStyledRows, EditError> {
     let mut rows: Vec<Vec<StyledChar>> = Vec::new();
     let mut row_ranges = Vec::new();
@@ -456,7 +475,7 @@ fn wrap_styled_rows(
             }
         }
         let word = chars.get(at..end).unwrap_or_default();
-        let word_width = measure(word)?;
+        let word_width = measure(word, draft_line)?;
         if !row.is_empty() && !item.0.is_whitespace() && row_width + word_width > width + 0.5 {
             let mut trimmed = 0usize;
             while row.last().is_some_and(|c: &StyledChar| c.0.is_whitespace()) {
@@ -573,6 +592,7 @@ fn shape_source(
     fonts: &Dict,
     name: &str,
     text: &str,
+    direction: pdfcraft_fonts::TextDirection,
 ) -> Result<Option<(Vec<u8>, pdfcraft_fonts::source_shaping::ShapedRun, String)>, EditError> {
     if !pdfcraft_fonts::source_shaping::required(text) {
         return Ok(None);
@@ -590,7 +610,7 @@ fn shape_source(
     for font in candidates {
         if let Some(bytes) = pdfcraft_fonts::pdf::embedded_sfnt(doc, &font)
             && pdfcraft_fonts::embedding::covers(&bytes, text)
-            && let Ok(shaped) = pdfcraft_fonts::source_shaping::shape(&bytes, text)
+            && let Ok(shaped) = pdfcraft_fonts::source_shaping::shape_with_direction(&bytes, text, direction)
         {
             return Ok(Some((bytes, shaped, family)));
         }
@@ -838,6 +858,49 @@ fn splice_with_marker(
     data
 }
 
+fn paragraph_bases(draft: &str, direction: pdfcraft_fonts::TextDirection) -> Vec<pdfcraft_fonts::TextDirection> {
+    draft
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .split('\n')
+        .map(
+            |paragraph| {
+                if direction.rtl(paragraph) { pdfcraft_fonts::TextDirection::RightToLeft } else { pdfcraft_fonts::TextDirection::LeftToRight }
+            },
+        )
+        .collect()
+}
+
+fn direction_needs_uniform_row(direction: pdfcraft_fonts::TextDirection, base: pdfcraft_fonts::TextDirection) -> bool {
+    direction != pdfcraft_fonts::TextDirection::Auto || base == pdfcraft_fonts::TextDirection::RightToLeft
+}
+
+fn begin_logical_span(ops: &mut Vec<Op>, logical: &str, visual: &str) -> bool {
+    let changed = logical != visual;
+    if changed {
+        let mut props = Dict::new();
+        props.set(b"ActualText".to_vec(), Object::String(PdfString::text(logical)));
+        ops.push(Op::new("BDC", vec![Object::name("Span"), Object::Dict(props)]));
+    }
+    changed
+}
+
+fn end_logical_span(ops: &mut Vec<Op>, changed: bool) {
+    if changed {
+        ops.push(Op::new("EMC", vec![]));
+    }
+}
+
+fn begin_direction_marker(ops: &mut Vec<Op>, marked: bool, direction: pdfcraft_fonts::TextDirection, explicit: bool) {
+    if marked && (explicit || direction != pdfcraft_fonts::TextDirection::Auto) {
+        let mut props = Dict::new();
+        props.set(b"PCTextDirection".to_vec(), Object::name(direction.name()));
+        ops.push(Op::new("BDC", vec![Object::name("P"), Object::Dict(props)]));
+    } else {
+        push_whole_paragraph_marker(ops, marked, "BMC");
+    }
+}
+
 /// Rewrite visual rows while keeping the source style on each surviving character. Resource
 /// names may differ between Unicode subsets of the same face; encoding searches those subsets.
 pub(crate) fn rewrite_styled_block(
@@ -918,7 +981,8 @@ pub(crate) fn rewrite_styled_block(
             * across(source)
             * calibration.get(&item.1).copied().unwrap_or(1.0)
     };
-    let measure = |items: &[(char, usize, String)]| -> Result<f64, EditError> {
+    let direction = style.direction.unwrap_or(block.text_direction);
+    let measure = |items: &[(char, usize, String)], direction: pdfcraft_fonts::TextDirection| -> Result<f64, EditError> {
         let mut width = 0.0;
         let mut at = 0;
         while let Some(item) = items.get(at) {
@@ -928,7 +992,7 @@ pub(crate) fn rewrite_styled_block(
             }
             let segment = items.get(at..end).unwrap_or_default();
             let string: String = segment.iter().map(|v| v.0).collect();
-            if let Some((_, shaped, _)) = shape_source(doc, &fonts, &item.2, &string)? {
+            if let Some((_, shaped, _)) = shape_source(doc, &fonts, &item.2, &string, direction)? {
                 let source = lines.get(item.1).unwrap_or(first);
                 let scale =
                     overrides.get(&item.1).and_then(|r| r.scale).or(style.scale).map_or(source.origin.state.scale, |s| (s / 100.0).clamp(0.1, 10.0));
@@ -941,22 +1005,29 @@ pub(crate) fn rewrite_styled_block(
                     + spacing * string.chars().count() as f64
                     + source.origin.state.word_spacing * string.matches(' ').count() as f64)
                     * scale
-                    * source.origin.k;
+                    * across(source);
             } else {
-                width += segment.iter().map(&advance).sum::<f64>();
+                width += plain_segment_width(segment, &advance, direction)?;
             }
             at = end;
         }
         Ok(width)
     };
-    let (rows, row_ranges, row_lines, row_soft, row_gap) = wrap_styled_rows(&chars, width, measure)?;
+    // Auto is a paragraph choice: a wrapped continuation beginning with a number or a
+    // different script must keep the first strong character of its logical paragraph.
+    // Keep Auto in the PDF metadata so a subsequent edit can choose a new first strong base.
+    let bases = paragraph_bases(draft, direction);
+    let (rows, row_ranges, row_lines, row_soft, row_gap) =
+        wrap_styled_rows(&chars, width, |items, paragraph| measure(items, bases.get(paragraph).copied().unwrap_or(direction)))?;
+    let row_direction = |row: usize| row_lines.get(row).and_then(|paragraph| bases.get(*paragraph)).copied().unwrap_or(direction);
     let streams = content_streams(doc, &p.dict)?;
     let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
     // A row the edit doesn't reach keeps its source operators, so its kerning, TJ word gaps and
     // glyph widths stay exactly as they were instead of being rebuilt from the text state. A row
     // aligned on its own is reached; the rows around it are not.
-    let plain = BlockStyle { ranges: Vec::new(), aligns: Vec::new(), ..style.clone() } == BlockStyle::default();
+    let plain = block.text_direction == pdfcraft_fonts::TextDirection::Auto
+        && BlockStyle { ranges: Vec::new(), aligns: Vec::new(), ..style.clone() } == BlockStyle::default();
     let mut kept = if plain {
         untouched_rows(block, draft, &row_ranges)
             .into_iter()
@@ -976,9 +1047,9 @@ pub(crate) fn rewrite_styled_block(
     let o = &lead.origin;
     // What is in force where the rewrite is drawn, and what the text after it expects.
     let after = if split { &o.state } else { &o.bt_state };
-    validate_contextual_rows(&rows, &kept)?;
-    let measured: Vec<_> = rows.iter().map(|row| measure(row)).collect::<Result<_, _>>()?;
-    let shaped = prepare_shaped_rows(doc, &fonts, &rows, &kept, advance)?;
+    validate_contextual_rows(&rows, &kept, |index| direction_needs_uniform_row(direction, row_direction(index)))?;
+    let measured: Vec<_> = rows.iter().enumerate().map(|(index, row)| measure(row, row_direction(index))).collect::<Result<_, _>>()?;
+    let shaped = prepare_shaped_rows(doc, &fonts, &rows, &kept, advance, row_direction)?;
     let ShapedRows { runs: shaped_runs, advances: segment_advances } = shaped;
     let glyph_resources = embed_shaped_resources(doc, &mut fonts, &shaped_runs)?;
     let n = pdfcraft_content::num;
@@ -994,7 +1065,7 @@ pub(crate) fn rewrite_styled_block(
     // scope so the neighbour stays out (#2517). A row left in the source stream cannot share
     // that marker, so it is omitted and geometry groups those rows as before.
     let marked = kept.iter().all(|row| !*row);
-    push_whole_paragraph_marker(&mut block_ops, marked, "BMC");
+    begin_direction_marker(&mut block_ops, marked, direction, style.direction.is_some());
     let crop = p.crop(doc);
     let centered = is_centred(block, lines, (crop[0] + crop[2]) / 2.0, first.size);
     let source_leading = block
@@ -1009,6 +1080,7 @@ pub(crate) fn rewrite_styled_block(
         .unwrap_or(first.size * 1.5);
     let mut baseline = first.origin.baseline;
     for (row_index, row) in rows.iter().enumerate() {
+        let visual_direction = row_direction(row_index);
         let anchor = block.rows.get(row_index).and_then(|r| r.first()).and_then(|i| lines.get(*i));
         if style.line_spacing.is_none()
             && style.size.is_none()
@@ -1134,20 +1206,23 @@ pub(crate) fn rewrite_styled_block(
                 block_ops.push(Op::new("ET", vec![]));
                 (state.char_spacing, state.word_spacing) = (char_spacing, word_spacing);
                 block_ops.push(Op::new("EMC", vec![]));
-                segment_width = (shaped.advance * size + extra) * state.scale * source.origin.k;
+                segment_width = (shaped.advance * size + extra) * state.scale * across(source);
             } else {
+                let visual = visual_direction.visual_plain(&string).map_err(|message| EditError::Invalid(message.into()))?;
+                let replacement = begin_logical_span(&mut block_ops, &string, &visual);
                 block_ops.push(Op::new("BT", vec![]));
                 block_ops.extend(state.ops());
                 block_ops.push(Op::new("Tm", tm.iter().map(|v| n(*v)).collect()));
                 block_ops.extend(source_show(
                     m,
-                    &string,
+                    &visual,
                     size_of(source, item.1),
                     spaces.borrow().get(&item.2).copied().unwrap_or_else(|| source_space(doc, &fonts, m)),
                     state.char_spacing,
                     state.word_spacing,
                 )?);
                 block_ops.push(Op::new("ET", vec![]));
+                end_logical_span(&mut block_ops, replacement);
             }
             if underlines.get(&item.1).copied().or(style.underline) == Some(true) {
                 let [r, g, b] = overrides.get(&item.1).and_then(|r| r.color).or(style.color).unwrap_or(source.color);

@@ -819,10 +819,13 @@ pub(crate) fn rewrite_block_from(
     let mut res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut fonts_res = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
     let dispatch = choose_rewrite_path(doc, &fonts_res, &b, &members, first, text, style)?;
-    if dispatch.use_styled_path && style.align == Some(crate::added::Align::Justify) {
-        return Err(EditError::Invalid("justification of mixed-style existing paragraphs is not supported".into()));
+    let styled = dispatch.use_styled_path || style.direction.is_some() || b.text_direction != pdfcraft_fonts::TextDirection::Auto;
+    if styled
+        && (style.align == Some(crate::added::Align::Justify) || style.aligns.iter().flatten().any(|align| *align == crate::added::Align::Justify))
+    {
+        return Err(EditError::Invalid("justification of styled or explicit-direction existing paragraphs is not supported".into()));
     }
-    if dispatch.use_styled_path {
+    if styled {
         return rewrite_styled_block(doc, page, &b, &lines, text, style, max_glyphs);
     }
     let upright = dispatch.upright;

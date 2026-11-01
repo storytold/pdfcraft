@@ -102,7 +102,7 @@ pub use pdfcraft_xfa::Report as XfaLayout;
 
 pub use pdfcraft_edit::{EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget};
 
-pub use pdfcraft_fonts::{MAX_SIGNATURE_CHARS, ScriptOutline, script_missing, script_outline, undrawable_message};
+pub use pdfcraft_fonts::{MAX_SIGNATURE_CHARS, ScriptOutline, TextDirection, script_missing, script_outline, undrawable_message};
 
 /// Comment geometry helpers (text-box line breaking) for frontends.
 pub use pdfcraft_annot::appearance as annot_text;

@@ -470,6 +470,7 @@ pub fn tools() -> Vec<ToolDef> {
         )
         .with(schema(
             json!({
+                "direction": {"type":"string", "enum":["auto","ltr","rtl"], "description":"Paragraph base direction, independent of alignment and logical Unicode."},
                 "doc": doc(),
                 "field": { "type": "string", "description": "The field's current name." },
                 "fields": { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 1000, "uniqueItems": true, "description": "Apply the same changes to these fields in one atomic edit. Use either field or fields." },
@@ -630,6 +631,7 @@ pub fn tools() -> Vec<ToolDef> {
         .cmd("edit.text")
         .with(schema(
             json!({
+                "direction": {"type":"string", "enum":["auto","ltr","rtl"], "description":"Paragraph base direction, independent of alignment and logical Unicode."},
                 "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "text": { "type": "string", "minLength": 1 },
                 "at": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
                 "width": { "type": "number", "exclusiveMinimum": 0 },
@@ -655,6 +657,7 @@ pub fn tools() -> Vec<ToolDef> {
         t("content_update", "Edit added content", "Move/resize (rect), retype (text) or restyle (font, size, bold, italic, color, align, char_spacing in points) an added item (page, index from content_list). Images: rotate (degrees, multiple of 90, counter-clockwise), flip_h / flip_v (toggle), crop [left, bottom, right, top] as fractions trimmed, image (a file that replaces the picture). Undoable.")
             .with(schema(
                 json!({
+                "direction": {"type":"string", "enum":["auto","ltr","rtl"], "description":"Paragraph base direction, independent of alignment and logical Unicode."},
                     "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "index": { "type": "integer", "minimum": 1 },
                     "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 }, "text": { "type": "string" },
                     "font": { "type": "string", "enum": ["helvetica", "times", "courier"] }, "size": { "type": "number", "minimum": 1, "maximum": 500 },
@@ -1414,11 +1417,13 @@ pub fn tools() -> Vec<ToolDef> {
         t("text_edit_layout", "Measure text draft", "Measure a paragraph draft using the same PDF rewrite as Apply, without changing the document. Returns source_rect, draft_rect (top-left-origin points), overflow, and the embedded sfnt source faces available to the inline editor. Text defaults to the unchanged paragraph. Optional size, width, font_resource and disjoint UTF-8 ranges preview formatting changes.")
             .ro()
             .cmd("edit.edit_text")
-            .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "paragraph": { "type": "integer", "minimum": 1 }, "text": { "type": "string" }, "size": { "type": "number" }, "width": { "type": "number" }, "font_resource":{"type":"string"}, "ranges":{"type":"array","maxItems":1024,"items":{"type":"object"}} }), &["doc", "page", "paragraph"])),
+            .with(schema(json!({
+                "direction": {"type":"string", "enum":["auto","ltr","rtl"], "description":"Paragraph base direction, independent of alignment and logical Unicode."}, "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "paragraph": { "type": "integer", "minimum": 1 }, "text": { "type": "string" }, "size": { "type": "number" }, "width": { "type": "number" }, "font_resource":{"type":"string"}, "ranges":{"type":"array","maxItems":1024,"items":{"type":"object"}} }), &["doc", "page", "paragraph"])),
         t("text_edit", "Edit text", "Replace the text of one paragraph (paragraph, from text_paragraphs: rewrapped to the paragraph's width with its line spacing) or one line (line, from text_lines) in place, keeping position, size and colour. For a mixed-style region, editor_text supplies visual row breaks; surviving text keeps its source-run styles and inserted text inherits the surrounding run. For a paragraph, also change its formatting: font (helvetica, times, courier) with bold/italic, size (points), color (#rrggbb), align (left, center, right, justify), underline, line_spacing (× size), char_spacing (points) and scale (horizontal, percent), or move it (dx, dy in points; up is +dy) and rewrap it to a new width (points); text may then be omitted. Its own font is reused when it can show every character and no font/weight change is requested; otherwise it uses a standard font matching the source style or, for text no standard font can show, real fallback outlines from PdfCraft's own faces, from the one that has every character: the craft-fonts Japanese faces (Mincho/Gothic matching the requested/source family and available weight) or, behind them, the bundled Inter face, which carries the Latin, Greek and Cyrillic letters they lack (Uzbek қ, Kazakh ә). The result shows the font used, and for a paragraph its text unless the document's security doesn't allow copying. Missing Japanese weights use Regular, not synthetic bold; the small web build has only Gothic Regular. Paragraph bold may be set without font to keep the source family. Text that no available font can show is refused. A paragraph number is refused when an earlier edit merged that paragraph into a neighbour (list the page again); the result's stale_paragraphs names the numbers gone. Undoable.")
             .cmd("edit.edit_text")
             .with(schema(
-                json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "line": { "type": "integer", "minimum": 1 },
+                json!({
+                "direction": {"type":"string", "enum":["auto","ltr","rtl"], "description":"Paragraph base direction, independent of alignment and logical Unicode."}, "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "line": { "type": "integer", "minimum": 1 },
                     "paragraph": { "type": "integer", "minimum": 1 },
                     "font_resource": { "type": "string", "description": "Explicit source/full page font resource from text_fonts or text_font_import." },
                     "ranges": { "type": "array", "maxItems": 1024, "items": { "type": "object", "properties": {"range":{"type":"array","items":{"type":"integer","minimum":0},"minItems":2,"maxItems":2},"font":{"type":"string","enum":["helvetica","times","courier"]},"bold":{"type":"boolean"},"italic":{"type":"boolean"},"font_resource":{"type":"string"},"size":{"type":"number","exclusiveMinimum":0},"color":{"type":"string"},"underline":{"type":"boolean"},"char_spacing":{"type":"number"},"scale":{"type":"number"}},"required":["range"]}, "description":"Disjoint UTF-8 byte ranges in replacement text; unspecified source formatting survives." },

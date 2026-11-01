@@ -2618,3 +2618,8 @@ animation effects	Off	Aus
 	No image on clipboard to paste	Kein Bild in der Zwischenablage zum Einfügen
 	Pinned {tool} to Home	{tool} an Start angeheftet
 	Unpinned {tool} from Home	{tool} von Start gelöst
+
+	Text direction	Textrichtung
+	Automatic text direction	Automatische Textrichtung
+	Left to right (LTR)	Von links nach rechts (LTR)
+	Right to left (RTL)	Von rechts nach links (RTL)

@@ -709,6 +709,10 @@ pub fn field_appearance_drawn(doc: &Document, f: &Field, w: &Widget, values: &[S
 /// A text value that its box cuts off at the field's font size (#4018).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Overflow {
+    /// The explicit direction could not be applied within the bounded row budget.
+    DirectionBudget,
+    /// The simple appearance path cannot safely reorder the value.
+    DirectionUnsupported,
     /// One line `width` points wide, with `room` for it, at `size` points.
     Wide { width: f64, room: f64, size: f64 },
     /// `lines` wrapped lines, of which the box shows `room`, at `size` points.
@@ -720,6 +724,12 @@ pub enum Overflow {
 impl std::fmt::Display for Overflow {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::DirectionBudget => {
+                f.write_str("explicit text direction was skipped: a line exceeds 262144 UTF-8 bytes; shorten the value or use automatic direction")
+            }
+            Self::DirectionUnsupported => {
+                f.write_str("explicit text direction was skipped: this value needs a shaping or mirroring path the form appearance does not support")
+            }
             Self::Wide { width, room, size } => {
                 write!(f, "the value does not fit: {} pt wide at {} pt, room for {} pt", fmt(*width), fmt(*size), fmt(*room))
             }
@@ -733,7 +743,8 @@ impl std::fmt::Display for Overflow {
 
 /// Whether the text field's value, drawn in widget `w`, is cut off by its box.
 pub fn value_overflow(doc: &Document, f: &Field, w: &Widget) -> Option<Overflow> {
-    if f.kind != FieldKind::Text {
+    if f.kind != FieldKind::Text && (f.text_direction == pdfcraft_fonts::TextDirection::Auto || !matches!(f.kind, FieldKind::Combo | FieldKind::List))
+    {
         return None;
     }
     field_appearance_fit(doc, f, w, &f.value, true).2
@@ -778,7 +789,14 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
         Some((o, enc)) => (da.font.clone(), o, enc),
         None => ("Helv".to_string(), helvetica(), FontText::WinAnsi),
     };
-    let width_of = |text: &str, size: f64| enc.width(text, size);
+    let width_of = |text: &str, size: f64| {
+        if f.text_direction == pdfcraft_fonts::TextDirection::Auto {
+            enc.width(text, size)
+        } else {
+            // Mirroring can change a glyph's width; fit and align what is drawn.
+            f.text_direction.visual_plain(text).map_or_else(|_| enc.width(text, size), |visual| enc.width(&visual, size))
+        }
+    };
     let (mut c, bw) = frame(doc, &wd, width, height);
     let pad = 2.0 + bw;
     let inner_w = (width - 2.0 * pad).max(1.0);
@@ -786,15 +804,43 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
     let mut body: Vec<u8> = Vec::new();
     // The first character drawn that the font can't hold (drawn as `?`), for the caller to report.
     let mut unencodable: Option<char> = None;
+    let mut direction_warning = None;
     let mut show = |body: &mut Vec<u8>, x: f64, y: f64, text: &str| {
         // A line break in a single-line value is a space, as in viewers (multiline text is split).
         let text: String = text.chars().map(|c| if matches!(c, '\n' | '\r') { ' ' } else { c }).collect();
         if unencodable.is_none() {
             unencodable = enc.first_unencodable(&text);
         }
+        let visual = if f.text_direction == pdfcraft_fonts::TextDirection::Auto {
+            text.clone()
+        } else {
+            match f.text_direction.visual_plain(&text) {
+                Ok(visual) => visual,
+                Err(_) => {
+                    direction_warning = Some(if text.len() > pdfcraft_fonts::text_direction::MAX_DIRECTION_BYTES {
+                        Overflow::DirectionBudget
+                    } else {
+                        Overflow::DirectionUnsupported
+                    });
+                    text.clone()
+                }
+            }
+        };
+        if unencodable.is_none() {
+            unencodable = enc.first_unencodable(&visual);
+        }
+        let replacement = visual != text;
+        if replacement {
+            body.extend_from_slice(b"/Span <</ActualText ");
+            body.extend(literal(&pdfcraft_cos::PdfString::text(&text).bytes));
+            body.extend_from_slice(b">> BDC\n");
+        }
         body.extend(format!("1 0 0 1 {} {} Tm ", n(x), n(y)).bytes());
-        body.extend(literal(&enc.encode(&text)));
+        body.extend(literal(&enc.encode(&visual)));
         body.extend_from_slice(b" Tj\n");
+        if replacement {
+            body.extend_from_slice(b"EMC\n");
+        }
     };
     let x_for = |text: &str, size: f64| -> f64 {
         let tw = width_of(text, size);
@@ -910,7 +956,7 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
     set_form_box(&mut d, place);
     d.set(b"Resources".to_vec(), Object::Dict(res));
     // Nothing drawn is nothing cut, however small the box.
-    let overflow = overflow.filter(|_| !text.is_empty());
+    let overflow = direction_warning.or_else(|| overflow.filter(|_| !text.is_empty()));
     (Stream::flate(d, &content), unencodable, overflow)
 }
 

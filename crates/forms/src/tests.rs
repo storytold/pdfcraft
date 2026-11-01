@@ -261,6 +261,111 @@ fn appearance_text(doc: &Document, w: &Widget, font_name: &[u8]) -> (Object, Vec
 }
 
 #[test]
+fn explicit_text_direction_budget_refuses_edits_and_reports_loaded_values() {
+    use pdfcraft_fonts::{TextDirection as D, text_direction::MAX_DIRECTION_BYTES};
+    let mut doc = fixture();
+    let value = "a".repeat(MAX_DIRECTION_BYTES.saturating_add(1));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(10, 0), |d| {
+        d.set(b"V".to_vec(), Object::String(pdfcraft_cos::PdfString::text(&value)));
+    })
+    .unwrap();
+    let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+    let error = set_props(&mut doc, "name", &FieldProps { text_direction: Some(D::RightToLeft), ..Default::default() }).unwrap_err();
+    assert!(error.to_string().contains("262144"));
+    assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
+    // A file may already carry an over-budget override; reading/drawing remains bounded
+    // and reports the skipped direction without altering the field's logical value.
+    doc.update_dict(pdfcraft_cos::ObjRef::new(10, 0), |d| d.set(b"PCTextDirection".to_vec(), Object::name("RTL"))).unwrap();
+    let all = fields(&doc);
+    let f = field(&all, "name");
+    assert_eq!(f.value, [value]);
+    assert_eq!(appearance::value_overflow(&doc, f, &f.widgets[0]), Some(appearance::Overflow::DirectionBudget));
+}
+
+#[test]
+fn explicit_text_direction_preserves_value_quadding_and_reopen() {
+    use pdfcraft_fonts::TextDirection as D;
+    let mut doc = fixture();
+    set_value(&mut doc, "name", &FieldValue::Text("123 ABC".into())).unwrap();
+    let original_q = field(&fields(&doc), "name").quadding;
+    set_props(&mut doc, "name", &FieldProps { text_direction: Some(D::RightToLeft), ..Default::default() }).unwrap();
+    let all = fields(&doc);
+    let f = field(&all, "name");
+    assert_eq!(f.text_direction, D::RightToLeft);
+    assert_eq!(f.quadding, original_q);
+    assert_eq!(f.value, ["123 ABC"]);
+    let appearance = ap(&doc, &f.widgets[0]);
+    assert!(appearance.contains("(ABC 123) Tj"), "{appearance}");
+    assert!(appearance.contains("/ActualText"), "copy retains the logical field value");
+    let bytes = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+    let mut reopened = Document::open(Arc::new(bytes)).unwrap();
+    assert_eq!(field(&fields(&reopened), "name").text_direction, D::RightToLeft);
+    set_props(&mut reopened, "name", &FieldProps { text_direction: Some(D::Auto), ..Default::default() }).unwrap();
+    let all = fields(&reopened);
+    let f = field(&all, "name");
+    assert_eq!(f.text_direction, D::Auto);
+    assert_eq!(f.value, ["123 ABC"]);
+    assert_eq!(f.quadding, original_q);
+    assert!(ap(&reopened, &f.widgets[0]).contains("(123 ABC) Tj"));
+}
+
+#[test]
+fn explicit_text_direction_inherits_and_does_not_expose_passwords() {
+    use pdfcraft_fonts::TextDirection as D;
+    let mut doc = fixture();
+    doc.update_dict(pdfcraft_cos::ObjRef::new(15, 0), |d| d.set(b"PCTextDirection".to_vec(), Object::name("RTL"))).unwrap();
+    assert_eq!(field(&fields(&doc), "address.city").text_direction, D::RightToLeft);
+    doc.update_dict(pdfcraft_cos::ObjRef::new(16, 0), |d| d.set(b"PCTextDirection".to_vec(), Object::name("Auto"))).unwrap();
+    assert_eq!(field(&fields(&doc), "address.city").text_direction, D::Auto);
+    set_value(&mut doc, "pin", &FieldValue::Text("s3cr3t".into())).unwrap();
+    set_props(&mut doc, "pin", &FieldProps { text_direction: Some(D::RightToLeft), ..Default::default() }).unwrap();
+    let appearance = ap(&doc, &field(&fields(&doc), "pin").widgets[0]);
+    assert!(!appearance.contains("s3cr3t"), "password appearance must stay masked");
+    assert!(!appearance.contains("/ActualText"), "a logical-value override must never expose password text as copyable metadata");
+    let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(set_props(&mut doc, "agree", &FieldProps { text_direction: Some(D::RightToLeft), ..Default::default() }).is_err());
+    assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
+}
+
+#[test]
+fn explicit_text_direction_refusal_does_not_rename_or_unlock_fields() {
+    use pdfcraft_fonts::TextDirection as D;
+    let mut doc = fixture();
+    set_props(&mut doc, "agree", &FieldProps { locked: Some(true), ..Default::default() }).unwrap();
+    let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+    let invalid = FieldProps {
+        name: Some("renamed".into()),
+        locked: Some(false),
+        tooltip: Some("must stay absent".into()),
+        text_direction: Some(D::RightToLeft),
+        ..Default::default()
+    };
+    assert!(set_props(&mut doc, "agree", &invalid).is_err());
+    assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
+    assert!(field(&fields(&doc), "agree").locked());
+
+    // Comb places one character in each fixed cell: reordering it as a bidi span
+    // is deliberately refused, with no partial rename/lock/appearance change.
+    set_value(&mut doc, "zip", &FieldValue::Text("123 A".into())).unwrap();
+    let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+    for direction in [D::RightToLeft, D::LeftToRight] {
+        assert!(
+            set_props(
+                &mut doc,
+                "zip",
+                &FieldProps { name: Some("new-zip".into()), locked: Some(true), text_direction: Some(direction), ..Default::default() }
+            )
+            .is_err()
+        );
+        assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
+    }
+    set_props(&mut doc, "zip", &FieldProps { text_direction: Some(D::Auto), ..Default::default() }).unwrap();
+    let all = fields(&doc);
+    assert_eq!(field(&all, "zip").value, ["123 A"]);
+    assert_eq!(field(&all, "zip").text_direction, D::Auto);
+}
+
+#[test]
 fn the_field_tree_is_read_with_inheritance() {
     let doc = fixture();
     assert_combined_matches_legacy(&doc, 0);
