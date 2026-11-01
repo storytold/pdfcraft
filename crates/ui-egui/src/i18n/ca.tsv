@@ -2705,6 +2705,7 @@ certificate	SHA-256 digest	Resum SHA-256
 	Trim the picture with its handles; Enter or Done applies	Escapça la imatge amb els seus tiradors; Retorn o Fet ho aplica
 	Turn upside down (180°)	Gira cap per avall (180°)
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Fes-ho servir quan una impressora ometi text, ombrejats o transparències. La impressió deixa de ser text cercable; amb Imprimeix en escala de grisos, les imatges són grises.
+	Pages that use Type 3 fonts print as images, because Windows can close PdfCraft while printing them. The other pages print as usual.	Les pàgines que fan servir tipus de lletra Type 3 s'imprimeixen com a imatges, perquè Windows pot tancar PdfCraft mentre les imprimeix. Les altres pàgines s'imprimeixen com sempre.
 	What takes up the space in this file, by kind of content.	El que ocupa l'espai d'aquest fitxer, per tipus de contingut.
 	Word count	Recompte de paraules
 	Word counting stopped unexpectedly.	El recompte de paraules s'ha aturat de manera inesperada.

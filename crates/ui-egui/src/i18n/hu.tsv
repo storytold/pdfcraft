@@ -2503,6 +2503,7 @@ animation effects	Off	Ki
 	Print as image	Nyomtatás képként
 	Resolution:	Felbontás:
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Akkor használja, ha a nyomtató kihagy szöveget, árnyékolást vagy átlátszóságot. A nyomat már nem kereshető szöveg; szürkeárnyalatos nyomtatással a képek szürkék.
+	Pages that use Type 3 fonts print as images, because Windows can close PdfCraft while printing them. The other pages print as usual.	A Type 3 betűtípust használó oldalak képként nyomtatódnak, mert a Windows bezárhatja a PdfCraftot a nyomtatásuk közben. A többi oldal a szokásos módon nyomtatódik.
 	Crop Image	Kép körülvágása
 	Remove Crop	Körülvágás eltávolítása
 	Trim the picture with its handles; Enter or Done applies	Vágja körül a képet a fogantyúival; Enter vagy Kész alkalmazza

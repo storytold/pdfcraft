@@ -2578,6 +2578,7 @@ animation effects	Off	Vypnuto
 	Print as image	Tisknout jako obrázek
 	Resolution:	Rozlišení:
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Použijte, když tiskárna vynechává text, stínování nebo průhlednost. Výtisk už není prohledávatelný text; s tiskem v odstínech šedi jsou obrázky šedé.
+	Pages that use Type 3 fonts print as images, because Windows can close PdfCraft while printing them. The other pages print as usual.	Stránky, které používají písma Type 3, se tisknou jako obrázky, protože Windows může při jejich tisku PdfCraft zavřít. Ostatní stránky se tisknou jako obvykle.
 	Crop Image	Oříznout obrázek
 	Remove Crop	Odebrat oříznutí
 	Trim the picture with its handles; Enter or Done applies	Ořízněte obrázek úchyty; Enter nebo Hotovo použije

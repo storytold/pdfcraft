@@ -78,6 +78,10 @@ pub struct PrintDraft {
     pub crops: Vec<Option<print::Crop>>,
     /// The pages `crops` were read for, so a changed page selection reads them again.
     pub crop_pages: Option<Vec<usize>>,
+    /// The document's pages (0-based, ascending) that draw with Type 3 fonts, read when the
+    /// dialog opens where they print as images ([`spool::TYPE3_AS_IMAGE`]), so the dialog can
+    /// say so; empty elsewhere.
+    pub type3_pages: Vec<usize>,
     /// The printer whose options are being read in the background (CUPS runs `lpoptions`,
     /// which a stuck CUPS can hold up; #1818). The panel says so meanwhile.
     pub driver_options_loading: Option<String>,
@@ -129,6 +133,7 @@ impl Default for PrintDraft {
             label_flip: false,
             crops: Vec::new(),
             crop_pages: None,
+            type3_pages: Vec::new(),
             driver_options_loading: None,
             read_options_for: None,
         }
@@ -197,8 +202,16 @@ impl PrintDraft {
             layout,
             content: self.content,
             raster: self.as_image.then_some(print::Raster { dpi: self.dpi, grayscale: self.grayscale }),
+            type3_raster: self.type3_as_image().then_some(print::Raster { dpi: self.dpi, grayscale: self.grayscale }),
             crops: self.crops.clone(),
         })
+    }
+
+    /// Whether the pages that draw with Type 3 fonts go to the printer as pictures, at the
+    /// Resolution chosen for Print as image: on Windows printers (#2684), unless every page
+    /// already does.
+    pub fn type3_as_image(&self) -> bool {
+        spool::TYPE3_AS_IMAGE && self.printer.is_some() && !self.as_image
     }
 
     fn cut_and_stack(&self) -> bool {

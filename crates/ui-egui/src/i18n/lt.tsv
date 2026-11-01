@@ -2754,6 +2754,7 @@ key	Space	Tarpas
 	Print as image	Spausdinti kaip vaizdą
 	Resolution:	Raiška:
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Naudokite, kai spausdintuvas praleidžia tekstą, šešėliavimą ar skaidrumą. Atspaudas nebėra ieškomas tekstas; spausdinant pilkais atspalviais vaizdai yra pilki.
+	Pages that use Type 3 fonts print as images, because Windows can close PdfCraft while printing them. The other pages print as usual.	Puslapiai, kuriuose naudojami Type 3 šriftai, spausdinami kaip vaizdai, nes juos spausdinant Windows gali uždaryti PdfCraft. Kiti puslapiai spausdinami įprastai.
 	Crop Image	Apkarpyti vaizdą
 	Remove Crop	Pašalinti apkarpymą
 	Trim the picture with its handles; Enter or Done applies	Apkarpykite paveikslėlį rankenėlėmis; Enter arba Atlikta pritaiko

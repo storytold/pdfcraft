@@ -2526,6 +2526,7 @@ animation effects	Off	Вимкнено
 	Print as image	Друкувати як зображення
 	Resolution:	Роздільність:
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Використовуйте, коли принтер пропускає текст, заливки або прозорість. Відбиток більше не текст із пошуком; під час друку у відтінках сірого зображення сірі.
+	Pages that use Type 3 fonts print as images, because Windows can close PdfCraft while printing them. The other pages print as usual.	Сторінки зі шрифтами Type 3 друкуються як зображення, бо Windows може закрити PdfCraft під час їх друку. Інші сторінки друкуються як зазвичай.
 	Crop Image	Обрізати зображення
 	Remove Crop	Прибрати обрізання
 	Trim the picture with its handles; Enter or Done applies	Обріжте зображення за маркери; Enter або «Готово» застосовує

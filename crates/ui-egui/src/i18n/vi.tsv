@@ -2776,6 +2776,7 @@ key	Space	Space
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Tệp này đã thay đổi trên đĩa. Tải lại sẽ hiển thị phiên bản mới và bỏ các thay đổi chưa lưu của bạn; Lưu sẽ thay thế tệp bằng phiên bản này.
 	Trim the picture with its handles; Enter or Done applies	Xén hình bằng các tay nắm; nhấn Enter hoặc Xong để áp dụng
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Dùng khi máy in bỏ sót văn bản, chuyển sắc hoặc độ trong suốt. Bản in không còn chứa văn bản có thể tìm kiếm; với In thang độ xám, hình ảnh sẽ có màu xám.
+	Pages that use Type 3 fonts print as images, because Windows can close PdfCraft while printing them. The other pages print as usual.	Các trang dùng phông chữ Type 3 được in dưới dạng hình ảnh, vì Windows có thể đóng PdfCraft khi in các trang này. Các trang khác được in như bình thường.
 	What takes up the space in this file, by kind of content.	Dung lượng mà từng loại nội dung chiếm trong tệp này.
 	Word count	Số từ
 	Word counting stopped unexpectedly.	Việc đếm từ đã dừng đột ngột.

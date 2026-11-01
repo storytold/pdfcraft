@@ -8356,6 +8356,154 @@ fn printing_as_image_sends_pictures_instead_of_pages() {
     assert!(img.pixels().all(|p| p[0] == p[1] && p[1] == p[2]), "every pixel grey");
 }
 
+/// Type 3 text as Chrome (Skia) writes it (#2684): a y-flipped font matrix, glyph boxes in `d1`,
+/// the space as an all-zero box (code 0x0F, the issue's trigger after a glyph), and a flipped page.
+/// Page 1 draws a glyph, a space and a glyph with it; page 2 is Helvetica text; page 3, turned a
+/// quarter, draws the glyph from a form inside a form.
+fn chrome_type3_pdf() -> Vec<u8> {
+    pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 200 300] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Resources << /Font << /F9 9 0 R >> >> >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 7 0 R /Resources << /Font << /F1 12 0 R >> >> >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Rotate 90 /Contents 8 0 R /Resources << /XObject << /Outer 13 0 R >> >> >>")
+        .stream("", "1 0 0 -1 0 300 cm q BT /F9 40 Tf 1 0 0 -1 30 80 Tm <010F01> Tj ET Q")
+        .stream("", "BT /F1 24 Tf 20 150 Td (Page 2) Tj ET")
+        .stream("", "q /Outer Do Q")
+        .obj(
+            "<< /Type /Font /Subtype /Type3 /FontMatrix [0.001 0 0 -0.001 0 0] /FontBBox [0 -700 600 0] /FirstChar 0 /LastChar 15 \
+             /Widths [0 600 0 0 0 0 0 0 0 0 0 0 0 0 0 250] /Encoding << /Type /Encoding /Differences [1 /g3B 15 /g3] >> \
+             /CharProcs << /g3B 10 0 R /g3 11 0 R >> /Resources << /ProcSet [/PDF] >> >>",
+        )
+        .stream("", "600 0 0 -700 600 0 d1\n0 -700 600 700 re f")
+        .stream("", "250 0 0 0 0 0 d1")
+        .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+        .stream("/Type /XObject /Subtype /Form /BBox [0 0 200 300] /Resources << /XObject << /Inner 14 0 R >> >>", "/Inner Do")
+        .stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 200 300] /Resources << /Font << /F9 9 0 R >> >>",
+            "BT /F9 40 Tf 1 0 0 -1 30 250 Tm <01> Tj ET",
+        )
+        .build()
+}
+
+/// The box (pixels at 72 dpi: left, top, right, bottom) around what is drawn dark on `page`.
+fn ink_box(pdf: &[u8], page: usize) -> [u32; 4] {
+    let mut r = pdfcraft_render::PageRenderer::new(Arc::new(pdf.to_vec()), pdfcraft_render::RenderConfig::default());
+    let p = r.render(pdfcraft_render::RenderRequest { page, scale: 1.0, ..Default::default() });
+    assert!(p.error.is_none(), "{:?}", p.error);
+    let mut b = [u32::MAX, u32::MAX, 0, 0];
+    for (i, px) in p.rgba.as_chunks::<4>().0.iter().enumerate() {
+        let (x, y) = (i as u32 % p.width, i as u32 / p.width);
+        if px[3] > 128 && px[0] < 100 {
+            b = [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)];
+        }
+    }
+    b
+}
+
+/// Pages drawn with Type 3 fonts go to the printer as pictures when `type3_raster` asks for it
+/// (the Windows print component can crash the app on such text, #2684), drawn where the vector
+/// page prints, while pages with ordinary fonts stay vector text. Without it nothing changes.
+#[test]
+fn pages_with_type3_fonts_print_as_pictures_and_the_others_stay_vector() {
+    let mut s = Session::new();
+    let id = s.open("chrome.pdf", None, Arc::new(chrome_type3_pdf()), None).unwrap();
+    assert_eq!(s.print_type3_pages(id, &[0, 1, 2], print::Content::DocumentAndMarkups), [0, 2]);
+    let vector_settings = print::Settings { pages: vec![0, 1, 2], layout: print::Layout::Size(print::SizeMode::Actual), ..Default::default() };
+    let vector = s.print_pdf(id, &vector_settings).unwrap();
+    let raster = print::Raster { dpi: 144.0, grayscale: false };
+    let mixed = s.print_pdf(id, &print::Settings { type3_raster: Some(raster), ..vector_settings.clone() }).unwrap();
+    let count = |pdf: &[u8], subtype: &[u8]| {
+        let doc = pdfcraft_cos::Document::open(Arc::new(pdf.to_vec())).unwrap();
+        doc.scan_objects().filter(|(_, o)| o.as_dict().is_some_and(|d| d.name(b"Subtype") == Some(subtype))).count()
+    };
+    assert_eq!((count(&vector, b"Type3"), count(&vector, b"Image")), (1, 0), "as it is, the Type 3 font goes to the printer");
+    assert_eq!((count(&mixed, b"Type3"), count(&mixed, b"Image")), (0, 2), "two pictures, and no Type 3 font left to send");
+    // Page 2 is still text; pages 1 and 3 are pictures, with no text to find.
+    let mut s2 = Session::new();
+    let id2 = s2.open("mixed.pdf", None, Arc::new(mixed.clone()), None).unwrap();
+    let texts = page_texts(&s2, id2);
+    assert!(texts[0].is_empty() && texts[1].contains("Page 2") && texts[2].is_empty(), "{texts:?}");
+    // The pictures sit where the pages print, the turned page too.
+    for sheet in [0, 2] {
+        let (want, got) = (ink_box(&vector, sheet), ink_box(&mixed, sheet));
+        assert!(want[0] < want[2] && want[1] < want[3], "sheet {sheet} draws something: {want:?}");
+        assert!(want.iter().zip(got).all(|(w, g)| w.abs_diff(g) <= 2), "sheet {sheet}: vector {want:?}, picture {got:?}");
+    }
+    // Print as image already makes every page a picture; then the Type 3 setting changes nothing.
+    let all = print::Settings { raster: Some(raster), ..vector_settings.clone() };
+    assert_eq!(count(&s.print_pdf(id, &all).unwrap(), b"Image"), 3);
+    assert_eq!(count(&s.print_pdf(id, &print::Settings { type3_raster: Some(raster), ..all }).unwrap(), b"Image"), 3);
+}
+
+/// Printing with `type3_raster` reads every printed page's resources: broken, cyclic and missing
+/// ones are not Type 3 fonts, and never stop the print.
+#[test]
+fn printing_type3_pages_as_pictures_survives_broken_resources() {
+    let pdf = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 200 300] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Resources 42 >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Resources << /Font 7 0 R /XObject << /A 8 0 R >> /ExtGState << /G << /SMask << /G 2 0 R >> >> >> >> >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Resources << /Font << /F 99 0 R >> >> /Annots [1 null << /Subtype /Square /F 4 /AP 5 >>] >>")
+        .stream("", "0 0 1 rg 10 10 50 50 re f")
+        .obj("[/Not /A /Dict]")
+        .stream("/Subtype /Form /BBox [0 0 1 1] /Resources << /XObject << /A 8 0 R >> >>", "/A Do")
+        .build();
+    let mut s = Session::new();
+    let id = s.open("broken.pdf", None, Arc::new(pdf), None).unwrap();
+    assert!(s.print_type3_pages(id, &[0, 1, 2], print::Content::DocumentAndMarkups).is_empty());
+    let settings = print::Settings { pages: vec![0, 1, 2], type3_raster: Some(print::Raster::default()), ..Default::default() };
+    let printed = pdfcraft_cos::Document::open(Arc::new(s.print_pdf(id, &settings).unwrap())).unwrap();
+    assert_eq!(pdfcraft_model::pages(&printed).len(), 3);
+    assert!(!printed.scan_objects().any(|(_, o)| o.as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Image"))), "nothing to picture");
+}
+
+/// A page printed as a picture shows what the chosen Comments & Forms prints, as the vector page
+/// would: a comment only with the comments, the page content not with form fields only.
+#[test]
+fn type3_pictures_print_what_the_content_choice_prints() {
+    // Type 3 text in the lower left, a black comment in the upper right, and a form field drawn
+    // with the Type 3 font in the lower right.
+    let pdf = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F9 5 0 R >> >> /Annots [8 0 R 10 0 R] >>")
+        .stream("", "BT /F9 40 Tf 1 0 0 -1 30 80 Tm <01> Tj ET")
+        .obj(
+            "<< /Type /Font /Subtype /Type3 /FontMatrix [0.001 0 0 -0.001 0 0] /FontBBox [0 -700 600 0] /FirstChar 1 /LastChar 1              /Widths [600] /Encoding << /Type /Encoding /Differences [1 /g3B] >> /CharProcs << /g3B 6 0 R >> /Resources << >> >>",
+        )
+        .stream("", "600 0 0 -700 600 0 d1
+0 -700 600 700 re f")
+        .stream("/Subtype /Form /BBox [0 0 40 40]", "0 g 0 0 40 40 re f")
+        .obj("<< /Type /Annot /Subtype /Square /F 4 /Rect [150 250 190 290] /AP << /N 7 0 R >> >>")
+        .stream("/Subtype /Form /BBox [0 0 30 30] /Resources << /Font << /F9 5 0 R >> >>", "BT /F9 30 Tf 1 0 0 -1 0 25 Tm <01> Tj ET")
+        .obj("<< /Type /Annot /Subtype /Widget /FT /Tx /T (f) /F 4 /Rect [150 20 180 50] /AP << /N 9 0 R >> >>")
+        .build();
+    let mut s = Session::new();
+    let id = s.open("choices.pdf", None, Arc::new(pdf), None).unwrap();
+    let print = |content: print::Content| {
+        let settings = print::Settings {
+            pages: vec![0],
+            layout: print::Layout::Size(print::SizeMode::Actual),
+            content,
+            type3_raster: Some(print::Raster { dpi: 144.0, grayscale: false }),
+            ..Default::default()
+        };
+        ink_box(&s.print_pdf(id, &settings).unwrap(), 0)
+    };
+    // With the comments, the ink reaches the comment at the top; with the document alone, or
+    // with stamps (the comment is no stamp), it stops at the text 210 points lower.
+    let markups = print(print::Content::DocumentAndMarkups);
+    let document = print(print::Content::Document);
+    let stamps = print(print::Content::DocumentAndStamps);
+    assert!(document[1] > markups[1] + 150, "comments {markups:?}, document {document:?}");
+    assert_eq!(stamps, document);
+    // Form fields only: the field on the right, not the page's text 120 points to its left.
+    let fields = print(print::Content::FormFieldsOnly);
+    assert!(fields[0] > document[0] + 100, "fields {fields:?}, document {document:?}");
+}
+
 /// A one-page PDF: a JPEG logo (DCTDecode) at the top and a big text title below it.
 fn jpeg_cover_pdf(logo_y: i32) -> Vec<u8> {
     let mut jpeg = Vec::new();

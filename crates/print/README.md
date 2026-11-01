@@ -62,8 +62,13 @@ In a browser there is no spooler: the app (`pdfcraft-ui-egui`'s `web_print`) dra
 PDF's sheets with PdfCraft's renderer and prints them through the browser's print dialog, which
 sets copies, two-sided printing and colour. This crate stays free of web APIs.
 
-Not yet: print as image, poster labels, PostScript output, colour conversion for
-grayscale.
+Print as image is rendered by the engine and imposed like any page. On Windows the pages that
+draw with Type 3 fonts (`type3_pages`: their resources, forms, tiling patterns, soft masks and
+printing annotations, bounded) go to the printer as pictures through `impose_with_pictures`
+while the other pages stay vector (`Settings::type3_raster`, `spool::TYPE3_AS_IMAGE`): the
+Windows print component can crash the whole app on such text (#2684).
+
+Not yet: poster labels, PostScript output, colour conversion for grayscale.
 
 ## Architectural sheets and scale
 

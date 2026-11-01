@@ -2480,6 +2480,7 @@ animation effects	Off	Wyłączone
 	Print as image	Drukuj jako obraz
 	Resolution:	Rozdzielczość:
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Użyj, gdy drukarka pomija tekst, cieniowanie lub przezroczystość. Wydruk nie jest już tekstem do przeszukiwania; przy druku w skali szarości obrazy są szare.
+	Pages that use Type 3 fonts print as images, because Windows can close PdfCraft while printing them. The other pages print as usual.	Strony z czcionkami Type 3 są drukowane jako obrazy, ponieważ Windows może zamknąć PdfCraft podczas ich drukowania. Pozostałe strony drukują się jak zwykle.
 	Crop Image	Przytnij obraz
 	Remove Crop	Usuń przycięcie
 	Trim the picture with its handles; Enter or Done applies	Przytnij obraz uchwytami; Enter lub Gotowe stosuje
