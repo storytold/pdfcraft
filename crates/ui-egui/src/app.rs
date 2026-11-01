@@ -1011,11 +1011,13 @@ impl PdfCraftApp {
             ctx.show_viewport_immediate(viewport_id, builder, |child_ui, _class| {
                 let close_requested =
                     child_ui.input(|i| i.viewport().close_requested() || i.raw.viewports.get(&viewport_id).is_some_and(|v| v.close_requested()));
-                if close_requested {
+                if close_requested && !self.allow_quit {
                     if self.has_unsaved_work(idx) {
                         child_ui.ctx().send_viewport_cmd_to(viewport_id, egui::ViewportCommand::CancelClose);
                         child_ui.ctx().send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                        self.close_request = Some(crate::CloseRequest::Tab(doc_id));
+                        if self.close_request.is_none() {
+                            self.close_request = Some(crate::CloseRequest::Tab(doc_id));
+                        }
                     } else {
                         close_clean = true;
                         return;
