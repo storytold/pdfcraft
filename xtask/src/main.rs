@@ -12,6 +12,7 @@ mod license_check;
 mod macos_integration;
 mod parity;
 mod screenshots;
+mod trust_lists;
 mod version;
 
 type Command = fn(&[String]) -> anyhow::Result<()>;
@@ -48,6 +49,11 @@ const COMMANDS: &[(&str, &str, Command)] = &[
     ),
     ("screenshots", "Regenerate the README screenshots in docs/images/ and their ATTRIBUTION entries", screenshots::run),
     ("models", "Fetch the OCR models (ATTRIBUTION.toml kind = \"model\") into assets/models/, verified by SHA-256", assets::models),
+    (
+        "trust-lists",
+        "Write dist/trust/eutl-qualified-ca.der (or --out FILE) from the EU Trusted Lists: a trust list for the `sign_trust` tool's `eu_trusted_list` argument, which #622 adds (needs network and curl)",
+        trust_lists::run,
+    ),
     ("demo-pdf", "Build dist/demo/pdfcraft-showcase.pdf (needs Google Chrome or Chromium)", demo_pdf::run),
 ];
 
