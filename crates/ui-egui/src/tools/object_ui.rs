@@ -375,6 +375,34 @@ fn select_within(s: &mut ObjectSelection, objects: Vec<EditableObject>, area: Re
     }
 }
 
+/// Continue the handle-resize drag of the one selected graphic: preview the box under the
+/// pointer every frame and commit one resize on release. Returns true while it owns the pointer.
+fn resize_input(s: &mut ObjectSelection, pointer: Option<Pos2>, down: bool, xf: &PageXform, info: &DocInfo, page: usize, view: &mut DocView) -> bool {
+    let Some(mut drag) = s.resize.filter(|_| s.page == Some(page)) else { return false };
+    if let Some(p) = pointer {
+        drag.now = p;
+    }
+    drag.preview = resized_box(screen_rect(xf, info, page, drag.rect), drag.grip, drag.start, drag.now);
+    if down {
+        s.resize = Some(drag);
+    } else {
+        s.resize = None;
+        let target = user_box(xf, info, page, drag.preview);
+        if drag.preview.is_positive()
+            && let [object] = s.selected.as_slice()
+            && target != object.rect
+        {
+            let index = object.target.index;
+            let mut expected = s.selected.clone();
+            expected[0].rect = target;
+            s.pending = Some(expected);
+            view.pending_edit = Some(Edit::ResizePageGraphic { page, index, rect: target });
+        }
+    }
+    view.cursor.claim(Layer::Drag, resize_cursor(drag.grip));
+    true
+}
+
 fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -> bool {
     let PageToolContext { ui, resp, xf, ptr, page, doc, .. } = cx;
     let pointer = ptr.pos;
@@ -433,30 +461,7 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
         view.cursor.claim(Layer::Drag, if gesture.marquee { egui::CursorIcon::Crosshair } else { egui::CursorIcon::Move });
         return true;
     }
-    if s.page == Some(page)
-        && let Some(mut drag) = s.resize
-    {
-        if let Some(p) = pointer {
-            drag.now = p;
-        }
-        drag.preview = resized_box(screen_rect(xf, info, page, drag.rect), drag.grip, drag.start, drag.now);
-        if down {
-            s.resize = Some(drag);
-        } else {
-            s.resize = None;
-            let target = user_box(xf, info, page, drag.preview);
-            if drag.preview.is_positive()
-                && let [object] = s.selected.as_slice()
-                && target != object.rect
-            {
-                let index = object.target.index;
-                let mut expected = s.selected.clone();
-                expected[0].rect = target;
-                s.pending = Some(expected);
-                view.pending_edit = Some(Edit::ResizePageGraphic { page, index, rect: target });
-            }
-        }
-        view.cursor.claim(Layer::Drag, resize_cursor(drag.grip));
+    if resize_input(s, pointer, down, xf, info, page, view) {
         return true;
     }
     let Some(p) = pointer.filter(|p| xf.rect.contains(*p) && ui.clip_rect().contains(*p) && resp.rect.contains(*p)) else {
