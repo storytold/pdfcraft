@@ -220,6 +220,8 @@ pub fn install_fonts_for(ctx: &egui::Context, cjk: CjkPreference) {
 pub const SYSTEM_FALLBACK: &str = "system-fallback";
 /// The name of the installed Devanagari (Hindi) face [`installed_font_definitions`] may add.
 pub const SYSTEM_DEVANAGARI_FALLBACK: &str = "system-devanagari-fallback";
+/// The name of the installed Bengali (Bangla) face [`installed_font_definitions`] may add.
+pub const SYSTEM_BENGALI_FALLBACK: &str = "system-bengali-fallback";
 /// The name of the installed Telugu face [`installed_font_definitions`] may add.
 pub const SYSTEM_TELUGU_FALLBACK: &str = "system-telugu-fallback";
 /// The name of the installed Sinhala face [`installed_font_definitions`] may add.
@@ -262,10 +264,10 @@ fn installed_fallback_need(cjk: CjkPreference, has_embedded_hans: bool) -> crate
 /// - Otherwise it is the last fallback of every family (an Arabic file name in a build without
 ///   craft-fonts).
 ///
-/// Installed Devanagari, Telugu, Sinhala, Tamil, Hebrew and Hangul faces, when there are, end
-/// every family just before that one, so Hindi, Telugu (#1531), Sinhala and Tamil (#1688) and
-/// Korean text, such as a file name or a tab title, and Hebrew file names (#586) draw in a build
-/// without such faces.
+/// Installed Devanagari, Bengali, Telugu, Sinhala, Tamil, Hebrew and Hangul faces, when there
+/// are, end every family just before that one, so Hindi, Telugu (#1531), Sinhala and Tamil
+/// (#1688) and Korean text, such as a file name or a tab title, and Hebrew (#586) and Bengali
+/// (#3082) file names draw in a build without such faces.
 ///
 /// `PDFCRAFT_SYSTEM_FONTS=0` leaves them out.
 pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
@@ -277,6 +279,7 @@ pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
         // Before the general installed face, which stays the last fallback outside Chinese.
         for (name, data) in [
             (SYSTEM_DEVANAGARI_FALLBACK, crate::system_fonts::devanagari_fallback()),
+            (SYSTEM_BENGALI_FALLBACK, crate::system_fonts::bengali_fallback()),
             (SYSTEM_TELUGU_FALLBACK, crate::system_fonts::telugu_fallback()),
             (SYSTEM_SINHALA_FALLBACK, crate::system_fonts::sinhala_fallback()),
             (SYSTEM_TAMIL_FALLBACK, crate::system_fonts::tamil_fallback()),

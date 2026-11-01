@@ -279,6 +279,30 @@ fn system_fallback_covers_hebrew() {
     assert!(layout_widths(&mut fonts, HEBREW).iter().all(|w| w.is_finite() && *w > 0.0));
 }
 
+/// On a machine with an installed Bengali font, the installed definitions include it and a
+/// Bengali (Bangla) file name has glyphs in the document tab instead of boxes (#3082). Windows
+/// ships Nirmala UI and macOS Bangla Sangam MN, so the test normally runs there; it skips on any
+/// machine whose installed fonts lack a Bengali face (or with `PDFCRAFT_SYSTEM_FONTS=0`).
+#[test]
+fn system_fallback_covers_bengali() {
+    const BENGALI: &str = "বাংলা ফাইল";
+    assert!(!theme::font_definitions().font_data.contains_key(theme::SYSTEM_BENGALI_FALLBACK));
+    let defs = theme::installed_font_definitions(theme::CjkPreference::Default);
+    if !defs.font_data.contains_key(theme::SYSTEM_BENGALI_FALLBACK) {
+        eprintln!("skipping system_fallback_covers_bengali: no installed Bengali fallback font (or PDFCRAFT_SYSTEM_FONTS=0)");
+        assert!(defs.families.values().all(|stack| !stack.iter().any(|n| n == theme::SYSTEM_BENGALI_FALLBACK)));
+        return;
+    }
+    for (family, stack) in &defs.families {
+        assert_eq!(stack.iter().filter(|n| *n == theme::SYSTEM_BENGALI_FALLBACK).count(), 1, "{family:?}: {stack:?}");
+    }
+    let mut fonts = Fonts::new(TextOptions::default(), defs);
+    for id in families() {
+        assert!(fonts.has_glyphs(&id, BENGALI), "{id:?} lacks {BENGALI}");
+    }
+    assert!(layout_widths(&mut fonts, BENGALI).iter().all(|w| w.is_finite() && *w > 0.0));
+}
+
 /// The Han characters of a catalog's translations.
 fn catalog_han(catalog: &str) -> String {
     let mut han: Vec<char> = catalog

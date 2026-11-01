@@ -3,10 +3,11 @@
 //! The embedded faces (Inter, egui's defaults, craft-fonts) come first in every family; this one
 //! only draws characters none of them has, such as an Arabic file name in a build without
 //! craft-fonts, or the Simplified Chinese interface in a build without a `Hans` face (#826). A
-//! few more installed faces, [`devanagari_fallback`], [`telugu_fallback`], [`sinhala_fallback`],
-//! [`tamil_fallback`], [`hebrew_fallback`] and [`hangul_fallback`], draw Hindi, Telugu, Sinhala,
-//! Tamil, Hebrew and Korean when one is installed. It is read at runtime and never embedded or
-//! shipped (AGENTS.md §1.4), and `PDFCRAFT_SYSTEM_FONTS=0` turns it off (published screenshots do).
+//! few more installed faces, [`devanagari_fallback`], [`bengali_fallback`], [`telugu_fallback`],
+//! [`sinhala_fallback`], [`tamil_fallback`], [`hebrew_fallback`] and [`hangul_fallback`], draw
+//! Hindi, Bengali, Telugu, Sinhala, Tamil, Hebrew and Korean when one is installed. It is read at
+//! runtime and never embedded or shipped (AGENTS.md §1.4), and `PDFCRAFT_SYSTEM_FONTS=0` turns it
+//! off (published screenshots do).
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
@@ -26,6 +27,8 @@ const MAX_FACES: u32 = 16;
 const PROBE: char = '\u{0627}';
 /// Devanagari letter ka: the face must have it to cover Hindi.
 const DEVANAGARI_PROBE: char = '\u{0915}';
+/// Bengali letter ka (ক): the face must have it to cover Bengali (Bangla) and Assamese.
+const BENGALI_PROBE: char = '\u{0995}';
 /// Telugu letter ka: the face must have it to cover Telugu.
 const TELUGU_PROBE: char = '\u{0C15}';
 /// Sinhala letter ka (ක): the face must have it to cover Sinhala.
@@ -85,6 +88,13 @@ fn load(need: Need) -> Option<Arc<FontData>> {
 pub fn devanagari_fallback() -> Option<Arc<FontData>> {
     static CACHE: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
     CACHE.get_or_init(|| script_fallback(&devanagari_candidates(), DEVANAGARI_PROBE)).clone()
+}
+
+/// The installed fallback face for Bengali (Bangla), read once. `None` when it is turned off or
+/// no candidate is installed; the interface then draws what the embedded faces can.
+pub fn bengali_fallback() -> Option<Arc<FontData>> {
+    static CACHE: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
+    CACHE.get_or_init(|| script_fallback(&bengali_candidates(), BENGALI_PROBE)).clone()
 }
 
 /// The installed fallback face for Telugu, read once. `None` when it is turned off or no
@@ -192,6 +202,39 @@ fn devanagari_candidates() -> Vec<PathBuf> {
             "google-droid-sans-fonts/DroidSansDevanagari-Regular.ttf",
             "samyak-fonts/Samyak-Devanagari.ttf",
             "gargi/Gargi.ttf",
+        ])
+    }
+}
+
+/// Well-known locations of Bengali (Bangla) faces, best first. Nirmala UI has Bengali from
+/// Windows 8.1; Vrinda and Shonar Bangla are the older Windows Bengali faces.
+fn bengali_candidates() -> Vec<PathBuf> {
+    if cfg!(windows) {
+        ["Nirmala.ttc", "Nirmala.ttf", "vrinda.ttf", "shonar.ttf"].iter().map(|f| windows_fonts().join(f)).collect()
+    } else if cfg!(target_os = "macos") {
+        [
+            "/System/Library/Fonts/KohinoorBangla.ttc",
+            "/System/Library/Fonts/Supplemental/Bangla Sangam MN.ttc",
+            "/System/Library/Fonts/Supplemental/Bangla MN.ttc",
+            "/Library/Fonts/Arial Unicode.ttf",
+        ]
+        .iter()
+        .map(PathBuf::from)
+        .collect()
+    } else {
+        unix_fonts(&[
+            "google-noto/NotoSansBengaliUI-Regular.ttf",
+            "google-noto/NotoSansBengali-Regular.ttf",
+            "google-noto-vf/NotoSansBengali[wght].ttf",
+            "google-noto-vf/NotoSansBengaliUI[wght].ttf",
+            "truetype/noto/NotoSansBengali-Regular.ttf",
+            "truetype/noto/NotoSansBengaliUI-Regular.ttf",
+            "noto/NotoSansBengali-Regular.ttf",
+            "noto/NotoSansBengaliUI-Regular.ttf",
+            "lohit-bengali-fonts/Lohit-Bengali.ttf",
+            "truetype/lohit-bengali/Lohit-Bengali.ttf",
+            "lohit-assamese-fonts/Lohit-Assamese.ttf",
+            "truetype/lohit-assamese/Lohit-Assamese.ttf",
         ])
     }
 }
@@ -537,6 +580,7 @@ mod tests {
         assert!(script_fallback(&candidates, 'A').is_some());
         assert!(script_fallback(&candidates, TELUGU_PROBE).is_none());
         assert!(script_fallback(&candidates, DEVANAGARI_PROBE).is_none());
+        assert!(script_fallback(&candidates, BENGALI_PROBE).is_none());
         assert!(script_fallback(&candidates, HANGUL_PROBE).is_none());
         assert!(script_fallback(&candidates, SINHALA_PROBE).is_none());
         assert!(script_fallback(&candidates, TAMIL_PROBE).is_none());
@@ -545,8 +589,15 @@ mod tests {
 
     #[test]
     fn script_candidates_are_absolute_font_files() {
-        for list in [devanagari_candidates(), telugu_candidates(), sinhala_candidates(), tamil_candidates(), hebrew_candidates(), hangul_candidates()]
-        {
+        for list in [
+            devanagari_candidates(),
+            bengali_candidates(),
+            telugu_candidates(),
+            sinhala_candidates(),
+            tamil_candidates(),
+            hebrew_candidates(),
+            hangul_candidates(),
+        ] {
             assert!(!list.is_empty());
             assert!(list.iter().all(|p| p.is_absolute() || cfg!(windows)), "{list:?}");
             assert!(list.iter().all(|p| p.extension().is_some_and(|e| e == "ttf" || e == "ttc")), "{list:?}");
