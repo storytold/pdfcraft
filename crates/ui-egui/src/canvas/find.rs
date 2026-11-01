@@ -117,7 +117,7 @@ impl DocView {
         }
     }
 
-    pub(super) fn refresh_find_page(&mut self, page: usize) {
+    pub(crate) fn refresh_find_page(&mut self, page: usize) {
         let (Some(f), Some(text)) = (self.find.as_mut(), self.texts.get(&page)) else { return };
         if f.case_query.trim().is_empty() {
             return;
