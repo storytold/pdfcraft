@@ -335,13 +335,19 @@ pub struct PasswordPrompt {
     pub(crate) display_override: Option<(canvas::PageLayout, bool)>,
 }
 
+impl Drop for PasswordPrompt {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.input);
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct OpenRequest {
     pub(crate) name: String,
     pub(crate) path: Option<String>,
     pub(crate) stamp: Option<file_watch::Stamp>,
     pub(crate) input: open_worker::Input,
-    pub(crate) password: Option<String>,
+    pub(crate) password: Option<zeroize::Zeroizing<String>>,
     pub(crate) activate: bool,
     pub(crate) after_open: Option<pdfcraft_render::RemoteDestination>,
     pub(crate) recovered: Option<RecoveryMeta>,
@@ -357,6 +363,12 @@ pub struct UnlockPrompt {
     pub error: Option<String>,
     /// The command to run once unlocked (Protect using password, Remove security), if any.
     pub then: Option<&'static str>,
+}
+
+impl Drop for UnlockPrompt {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.input);
+    }
 }
 
 impl UnlockPrompt {

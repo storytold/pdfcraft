@@ -134,6 +134,7 @@ impl PdfCraftApp {
                 if let Some(Dialog::Marks(kind)) = self.dialog {
                     self.marks_draft.opened(kind);
                 }
+                dialogs::discard_inactive_password_drafts(self);
             }
             ("tools", _) if value == "full" => self.expand_all_tools(),
             ("tools", _) => {
