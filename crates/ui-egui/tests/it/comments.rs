@@ -2192,6 +2192,30 @@ fn highlighting_an_area_off_the_text() {
     assert_eq!(comments(&h).len(), 2);
 }
 
+/// A Replace Text proposal is picked by its strikeout too, not only by its small caret: the
+/// strikeout is grouped under the caret (`/RT /Group`), and a click on it selects the caret, the
+/// proposal, so it can be deleted or restyled from either part.
+#[test]
+fn clicking_a_replace_text_strikeout_selects_the_proposal() {
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R 4 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Caret /Rect [135 95 145 105] /C [0 0 1] /T (Bob) /IT /Replace /Contents (slow red) >> endobj
+5 0 obj << /Type /Annot /Subtype /StrikeOut /Rect [40 100 130 120] /QuadPoints [40 120 130 120 40 100 130 100] /C [1 0 0] /T (Bob) /IT /StrikeOutTextEdit /IRT 4 0 R /RT /Group >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let mut h = harness(move |app| {
+        app.open_bytes("replace.pdf", None, pdf.to_vec()).expect("opens");
+        app.close_tab(0);
+    });
+    h.run_steps(6);
+    let caret = comments(&h).into_iter().find(|a| a.subtype == "Caret").expect("the caret");
+    let p = at(&h, 70.0, 110.0);
+    click(&mut h, p);
+    assert_eq!(h.state().views[0].comments.selected, Some((caret.page, caret.index)), "the strikeout picks the proposal");
+}
+
 #[test]
 fn replacing_text_strikes_it_and_adds_a_caret() {
     let mut h = harness(|app| app.set_option("quick", "replace").unwrap());

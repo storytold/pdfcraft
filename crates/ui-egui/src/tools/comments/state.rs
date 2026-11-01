@@ -382,9 +382,23 @@ impl PageCx<'_> {
     }
 
     /// The topmost comment under `p`: the one drawn last, in `/Annots` order (inspection lists
-    /// comments by position, not in paint order).
+    /// comments by position, not in paint order). A Replace Text strikeout is grouped under its
+    /// caret (`/RT /Group`), which holds the proposal, so the strikeout is hit as that caret: the
+    /// proposal is picked by either part, not only by its small caret.
     pub(super) fn hit(&self, p: Pos2) -> Option<&Annotation> {
-        self.comments().filter(|a| self.screen_rects(a).any(|r| r.expand(3.0).contains(p))).max_by_key(|a| a.index)
+        let under = |a: &&Annotation| self.screen_rects(a).any(|r| r.expand(3.0).contains(p));
+        let strikes = self
+            .info
+            .annotations
+            .iter()
+            .filter(|a| !self.hidden && a.page == self.page && a.grouped && a.intent.as_deref() == Some("StrikeOutTextEdit"))
+            .filter(under)
+            .filter_map(|s| {
+                let (page, index) = s.parent?;
+                let caret = self.get(index).filter(|c| page == self.page && c.subtype == "Caret")?;
+                Some((s.index, caret))
+            });
+        self.comments().filter(under).map(|a| (a.index, a)).chain(strikes).max_by_key(|(i, _)| *i).map(|(_, a)| a)
     }
 
     pub(crate) fn get(&self, index: usize) -> Option<&Annotation> {
