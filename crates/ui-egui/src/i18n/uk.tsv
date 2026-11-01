@@ -1800,6 +1800,8 @@
 	{n} pages	Сторінок: {n}
 	Copy or cut pages first	Спочатку скопіюйте або виріжте сторінки
 	Couldn't save {name}: {e}	Не вдалося зберегти {name}: {e}
+	the website did not confirm that it stored the file	сайт не підтвердив, що зберіг файл
+	earlier saves are still waiting for the website	попередні збереження ще чекають на відповідь сайту
 	Saved {name}	Збережено {name}
 	Saved, but reopening failed: {e}	Збережено, але не вдалося відкрити повторно: {e}
 	Downloaded {name}	Завантажено {name}

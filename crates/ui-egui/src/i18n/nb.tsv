@@ -1963,6 +1963,8 @@
 	Couldn't reload {name}: {e}	Kunne ikke laste {name} på nytt: {e}
 	Couldn't save the image: {e}	Kunne ikke lagre bildet: {e}
 	Couldn't save {name}: {e}	Kunne ikke lagre {name}: {e}
+	the website did not confirm that it stored the file	nettstedet bekreftet ikke at det lagret filen
+	earlier saves are still waiting for the website	tidligere lagringer venter fortsatt på nettstedet
 	Couldn't save: {e}	Kunne ikke lagre: {e}
 	Couldn't show the file picker. Please try again.	Kunne ikke vise filvelgeren. Prøv igjen.
 	Couldn't split: {e}	Kunne ikke dele opp: {e}

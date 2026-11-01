@@ -1732,6 +1732,8 @@
 	{n} pages	{n} бет
 	Copy or cut pages first	Алдымен беттерді көшіріңіз немесе кесіңіз
 	Couldn't save {name}: {e}	«{name}» сақталмады: {e}
+	the website did not confirm that it stored the file	веб-сайт файлды сақтағанын растамады
+	earlier saves are still waiting for the website	алдыңғы сақтаулар әлі веб-сайтты күтуде
 	Saved {name}	«{name}» сақталды
 	Saved, but reopening failed: {e}	Сақталды, бірақ қайта ашу мүмкін болмады: {e}
 	Downloaded {name}	«{name}» жүктеп алынды

@@ -1756,6 +1756,8 @@
 	{n} pages	{n} страници
 	Copy or cut pages first	Първо копирайте или изрежете страници
 	Couldn't save {name}: {e}	{name} не можа да бъде записан: {e}
+	the website did not confirm that it stored the file	уебсайтът не потвърди, че е съхранил файла
+	earlier saves are still waiting for the website	предишни записвания още чакат отговор от уебсайта
 	Saved {name}	Записан: {name}
 	Saved, but reopening failed: {e}	Записано, но повторното отваряне не бе успешно: {e}
 	Downloaded {name}	Изтеглен: {name}

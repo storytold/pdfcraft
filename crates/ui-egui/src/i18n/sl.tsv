@@ -475,6 +475,8 @@
 	Couldn't recover {name}: {e}	Datoteke {name} ni bilo mogoče obnoviti: {e}
 	Couldn't save the image: {e}	Slike ni bilo mogoče shraniti: {e}
 	Couldn't save {name}: {e}	Datoteke {name} ni bilo mogoče shraniti: {e}
+	the website did not confirm that it stored the file	spletna stran ni potrdila, da je shranila datoteko
+	earlier saves are still waiting for the website	prejšnja shranjevanja še čakajo na spletno stran
 	Couldn't save: {e}	Shranjevanje ni uspelo: {e}
 	Couldn't show the file picker. Please try again.	Izbirnika datotek ni bilo mogoče prikazati. Poskusite znova.
 	Couldn't split: {e}	Razdelitev ni uspela: {e}

@@ -1814,6 +1814,8 @@
 	{n} pages	{n} ページ
 	Copy or cut pages first	先にページをコピーまたは切り取ってください
 	Couldn't save {name}: {e}	{name} を保存できませんでした: {e}
+	the website did not confirm that it stored the file	Web サイトがファイルの保存を確認しませんでした
+	earlier saves are still waiting for the website	以前の保存が Web サイトの応答をまだ待っています
 	Saved {name}	{name} を保存しました
 	Saved, but reopening failed: {e}	保存しましたが、再度開けませんでした: {e}
 	Downloaded {name}	{name} をダウンロードしました

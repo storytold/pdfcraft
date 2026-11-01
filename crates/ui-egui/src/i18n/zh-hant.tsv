@@ -1706,6 +1706,8 @@
 	{n} pages	{n} 頁
 	Copy or cut pages first	請先複製或剪下頁面
 	Couldn't save {name}: {e}	無法儲存{name}：{e}
+	the website did not confirm that it stored the file	網站未確認已儲存檔案
+	earlier saves are still waiting for the website	先前的儲存仍在等待網站回應
 	Saved {name}	已儲存{name}
 	Saved, but reopening failed: {e}	已儲存，但重新開啟失敗：{e}
 	Downloaded {name}	已下載{name}

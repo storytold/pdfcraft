@@ -1802,6 +1802,8 @@
 	{n} pages	{n} صفحات
 	Copy or cut pages first	انسخ صفحات أو قصها أولًا
 	Couldn't save {name}: {e}	تعذّر حفظ {name}: {e}
+	the website did not confirm that it stored the file	لم يؤكد الموقع أنه خزّن الملف
+	earlier saves are still waiting for the website	ما زالت عمليات الحفظ السابقة بانتظار الموقع
 	Saved {name}	تم حفظ {name}
 	Saved, but reopening failed: {e}	تم الحفظ، لكن فشلت إعادة الفتح: {e}
 	Downloaded {name}	تم تنزيل {name}

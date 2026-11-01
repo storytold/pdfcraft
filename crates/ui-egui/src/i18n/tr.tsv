@@ -1703,6 +1703,8 @@
 	{n} pages	{n} sayfa
 	Copy or cut pages first	Önce sayfaları kopyalayın veya kesin
 	Couldn't save {name}: {e}	{name} kaydedilemedi: {e}
+	the website did not confirm that it stored the file	web sitesi dosyayı kaydettiğini onaylamadı
+	earlier saves are still waiting for the website	önceki kayıtlar hâlâ web sitesini bekliyor
 	Saved {name}	{name} kaydedildi
 	Saved, but reopening failed: {e}	Kaydedildi, ancak yeniden açma başarısız oldu: {e}
 	Downloaded {name}	{name} indirildi

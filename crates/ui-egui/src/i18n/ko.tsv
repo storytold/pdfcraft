@@ -1720,6 +1720,8 @@
 	{n} pages	페이지 {n}개
 	Copy or cut pages first	먼저 페이지를 복사하거나 잘라내세요
 	Couldn't save {name}: {e}	{name}을(를) 저장할 수 없습니다: {e}
+	the website did not confirm that it stored the file	웹사이트가 파일을 저장했다고 확인하지 않았습니다
+	earlier saves are still waiting for the website	이전 저장이 아직 웹사이트를 기다리고 있습니다
 	Saved {name}	{name}을(를) 저장했습니다
 	Saved, but reopening failed: {e}	저장했지만 다시 여는 데 실패했습니다: {e}
 	Downloaded {name}	{name}을(를) 다운로드했습니다

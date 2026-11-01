@@ -1970,6 +1970,8 @@ comment menu	Edit	Editare
 	Couldn't reload {name}: {e}	Nu s-a putut reîncărca {name}: {e}
 	Couldn't save the image: {e}	Nu s-a putut salva imaginea: {e}
 	Couldn't save {name}: {e}	Nu s-a putut salva {name}: {e}
+	the website did not confirm that it stored the file	site-ul nu a confirmat că a stocat fișierul
+	earlier saves are still waiting for the website	salvările anterioare încă așteaptă site-ul
 	Couldn't save: {e}	Nu s-a putut salva: {e}
 	Couldn't show the file picker. Please try again.	Nu s-a putut afișa selectorul de fișiere. Încercați din nou.
 	Couldn't split: {e}	Nu s-a putut împărți: {e}

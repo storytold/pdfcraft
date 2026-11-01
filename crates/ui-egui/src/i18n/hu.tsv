@@ -1724,6 +1724,8 @@
 	{n} pages	{n} oldal
 	Copy or cut pages first	Előbb másolj vagy vágj ki oldalakat
 	Couldn't save {name}: {e}	{name} mentése nem sikerült: {e}
+	the website did not confirm that it stored the file	a webhely nem erősítette meg, hogy tárolta a fájlt
+	earlier saves are still waiting for the website	korábbi mentések még a webhelyre várnak
 	Saved {name}	{name} mentve
 	Saved, but reopening failed: {e}	Mentve, de az újranyitás nem sikerült: {e}
 	Downloaded {name}	{name} letöltve

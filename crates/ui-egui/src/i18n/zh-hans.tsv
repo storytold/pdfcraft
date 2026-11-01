@@ -1763,6 +1763,8 @@
 	{n} pages	{n} 页
 	Copy or cut pages first	请先复制或剪切页面
 	Couldn't save {name}: {e}	无法保存{name}：{e}
+	the website did not confirm that it stored the file	网站未确认已存储该文件
+	earlier saves are still waiting for the website	之前的保存仍在等待网站响应
 	Saved {name}	已保存{name}
 	Saved, but reopening failed: {e}	已保存，但重新打开失败：{e}
 	Downloaded {name}	已下载{name}

@@ -1755,6 +1755,8 @@ action wizard	Start	Inicia
 	{n} pages	{n} pàgines
 	Copy or cut pages first	Copia o retalla primer unes pàgines
 	Couldn't save {name}: {e}	No s'ha pogut desar {name}: {e}
+	the website did not confirm that it stored the file	el lloc web no ha confirmat que hagi desat el fitxer
+	earlier saves are still waiting for the website	els desaments anteriors encara esperen el lloc web
 	Saved {name}	S'ha desat {name}
 	Saved, but reopening failed: {e}	S'ha desat, però no s'ha pogut tornar a obrir: {e}
 	Downloaded {name}	S'ha baixat {name}
