@@ -4314,6 +4314,14 @@ fn a_thin_stroke_is_one_pixel_wide_under_a_squeezed_matrix() {
     // As before: an unscaled hairline is one pixel thick.
     let plain = column("0.1 w 4 20.5 m 36 20.5 l S", 20);
     assert!(one_pixel.contains(&plain), "a plain hairline is {plain} px thick");
+    // A line width of zero, the thinnest line the device can draw (ISO 32000-2 §8.4.3.2), is the
+    // same: one pixel with the matrix or without it, whichever way the line runs.
+    let zero = column("0 w 4 20.5 m 36 20.5 l S", 20);
+    assert!(one_pixel.contains(&zero), "a zero-width line is {zero} px thick");
+    let across = column("q 1 0 0 0.25 0 0 cm 0 w 4 82 m 36 82 l S Q", 20);
+    assert!(one_pixel.contains(&across), "a zero-width horizontal line is {across} px thick");
+    let along: f32 = row("q 1 0 0 0.25 0 0 cm 0 w 20.5 40 m 20.5 120 l S Q", 20).iter().sum();
+    assert!(one_pixel.contains(&along), "a zero-width vertical line is {along} px wide");
 
     // Dashes of 4 pt, gaps of 4 pt from x = 4: columns 4–7 and 12–15 are inked, 8–11 are not.
     let dashes = row("q 1 0 0 0.25 0 0 cm 0.3 w [4 4] 0 d 4 82 m 36 82 l S Q", 19);
