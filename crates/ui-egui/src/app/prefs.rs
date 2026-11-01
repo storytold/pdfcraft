@@ -146,6 +146,7 @@ impl PdfCraftApp {
         v["show_page_edge_shadows"] = self.show_page_edge_shadows.into();
         v["comment_tool_pinned"] = serde_json::Value::Bool(self.comment_prefs.pinned);
         v["show_secured_notice"] = serde_json::Value::Bool(self.show_secured_notice);
+        v["show_page_indicator"] = serde_json::Value::Bool(self.show_page_indicator);
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language.
         v["print_paper"] = serde_json::json!(pdfcraft_engine::print::PAPERS.get(self.print_draft.paper).map(|(name, _)| *name));
@@ -234,6 +235,9 @@ impl PdfCraftApp {
         }
         if let Some(on) = v["always_default_view"].as_bool() {
             self.always_default_view = on;
+        }
+        if let Some(on) = v["show_page_indicator"].as_bool() {
+            self.show_page_indicator = on;
         }
         if let Some(paper) = v
             .get("print_paper")

@@ -2988,6 +2988,27 @@ fn refine_goto_point(mut scroll: egui::ScrollArea, view: &mut DocView, geometry:
     scroll
 }
 
+/// The page indicator's text: `4 / 42`, or `iv (4 / 42)` when the page has a label that is not
+/// its number (as Acrobat's page box does). Out of range (no pages) reads `0 / 0`.
+fn page_indicator_text(current: usize, count: usize, label: &str) -> String {
+    let number = if current < count { current + 1 } else { count };
+    if label.is_empty() || label == number.to_string() || current >= count {
+        format!("{number} / {count}")
+    } else {
+        format!("{label} ({number} / {count})")
+    }
+}
+
+/// A small pill at the bottom centre of the document area; display only, it takes no input.
+fn paint_page_indicator(ui: &egui::Ui, avail: Rect, text: &str) {
+    let t = Tokens::get(ui.ctx());
+    let painter = ui.painter().with_clip_rect(avail);
+    let galley = painter.layout_no_wrap(text.to_owned(), theme::medium(12.0), t.text);
+    let pill = Rect::from_center_size(pos2(avail.center().x, avail.bottom() - 22.0), galley.size() + vec2(20.0, 10.0));
+    painter.rect(pill, CornerRadius::same(255), t.chrome.gamma_multiply(0.92), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    painter.galley(pill.center() - galley.size() / 2.0, galley, t.text);
+}
+
 /// Draws the document tab at `index`: its notice bars, then its pages (or the Organize grid) in a
 /// scroll area with this frame's zoom, scrolling, tool input, overlays and render requests.
 pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
@@ -3017,6 +3038,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     if info.pages.is_empty() {
         app.views[index].auto_scroll.cancel();
         ui.centered_and_justified(|ui| ui.label(tl!("This document has no pages.")));
+        if app.show_page_indicator {
+            paint_page_indicator(ui, ui.max_rect(), &page_indicator_text(0, 0, ""));
+        }
         return;
     }
     // The print dialog queues its own rasters later in the frame. Closing it drops them.
@@ -3266,6 +3290,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
 
     view.viewport_screen = out.inner_rect;
     view.auto_scroll.paint(ui, avail);
+    if app.show_page_indicator {
+        let label = info.pages.get(view.current).map_or("", |p| p.label.as_str());
+        paint_page_indicator(ui, avail, &page_indicator_text(view.current, info.pages.len(), label));
+    }
     if unobstructed && matches!(tool, QuickTool::Select | QuickTool::ColumnSelect) {
         copy_selected |= selection_actions(ui, avail, view, info, prefs, allowed && !comments_hidden, can_copy);
     }

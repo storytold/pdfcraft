@@ -204,6 +204,13 @@ impl PdfCraftApp {
                     _ => return Err("always-default-view must be on or off".into()),
                 };
             }
+            ("page-indicator", _) => {
+                self.show_page_indicator = match value {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err("page-indicator must be on or off".into()),
+                };
+            }
             ("tools-side", _) => {
                 self.side_panels.tools_side = match value {
                     "left" => side_panels::ToolsSide::Left,
