@@ -382,7 +382,7 @@ mod rename_field_tests {
     #[test]
     fn rename_field_selects_all_text_on_first_focus() {
         let ctx = egui::Context::default();
-        let id = egui::Id::new("bm_rename_test");
+        let id = egui::Id::unique("bm_rename_test");
         let mut text = String::from("Untitled");
         for _ in 0..2 {
             let output = ctx.run_ui(egui::RawInput::default(), |ui| {
