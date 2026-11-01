@@ -1586,8 +1586,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["edit.snapshot"]
 tools = ["page_render"]
-evidence = ["crates/ui-egui/tests/it/viewer.rs::marquee_zoom_and_snapshot"]
-notes = "copies the area at the current zoom to the clipboard as an image"
+evidence = ["crates/ui-egui/tests/it/viewer.rs::marquee_zoom_and_snapshot", "crates/ui-egui/tests/it/editing.rs::a_snapshot_click_copies_the_whole_page"]
+notes = "copies the area at the current zoom to the clipboard as an image; a click copies the whole page, as in Acrobat (#2078)."
 
 [[feature]]
 id = "view.copy-image"
