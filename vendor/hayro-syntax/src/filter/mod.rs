@@ -10,6 +10,8 @@ mod dct;
 mod jbig2;
 #[cfg(feature = "images")]
 mod jpx;
+#[cfg(all(feature = "images", feature = "std"))]
+mod jxl;
 mod lzw_flate;
 mod run_length;
 
@@ -43,6 +45,9 @@ pub enum Filter {
     DctDecode,
     /// JPEG 2000 compression.
     JpxDecode,
+    /// PdfCraft patch (29): JPEG XL compression. ISO 32000-2 defines no such filter yet, so the
+    /// name `JXLDecode` is a placeholder until the standard names one (#4782).
+    JxlDecode,
     /// Encryption filter.
     Crypt,
 }
@@ -59,6 +64,7 @@ impl Filter {
             Self::Jbig2Decode => "jbig2",
             Self::DctDecode => "dct",
             Self::JpxDecode => "jpx",
+            Self::JxlDecode => "jxl",
             Self::Crypt => "crypt",
         }
     }
@@ -74,6 +80,7 @@ impl Filter {
             JBIG2_DECODE => Some(Self::Jbig2Decode),
             DCT_DECODE | DCT_DECODE_ABBREVIATION => Some(Self::DctDecode),
             JPX_DECODE => Some(Self::JpxDecode),
+            JXL_DECODE => Some(Self::JxlDecode),
             CRYPT => Some(Self::Crypt),
             _ => {
                 warn!("unknown filter: {}", name.as_str());
@@ -121,6 +128,13 @@ impl Filter {
             }
             #[cfg(feature = "images")]
             Self::JpxDecode => jpx::decode(data, image_params).ok_or(DecodeFailure::ImageDecode),
+            #[cfg(all(feature = "images", feature = "std"))]
+            Self::JxlDecode => jxl::decode(data, image_params).ok_or(DecodeFailure::ImageDecode),
+            #[cfg(not(all(feature = "images", feature = "std")))]
+            Self::JxlDecode => {
+                warn!("JPEG XL decoding needs the `images` and `std` features");
+                Err(DecodeFailure::ImageDecode)
+            }
             #[cfg(not(feature = "images"))]
             Self::DctDecode | Self::CcittFaxDecode | Self::Jbig2Decode | Self::JpxDecode => {
                 warn!("image decoding is not supported (enable the `images` feature)");
