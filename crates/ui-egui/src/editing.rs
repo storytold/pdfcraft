@@ -850,9 +850,17 @@ impl PdfCraftApp {
                 let (page, [left, top]) =
                     self.session.get(id).and_then(|d| self.views.get(i)?.bookmark_position(&d.info)).unwrap_or((current, [None, None]));
                 let (left, top) = (left.map(f64::from), top.map(f64::from));
-                // Named after the words selected, as in Acrobat (#5577); else "Untitled".
-                let title = self.views.get(i).and_then(|v| v.bookmark_title()).unwrap_or_else(|| "Untitled".into());
+                // Named after the words selected, as in Acrobat (#5577); else "Untitled". Only
+                // where the document lets its text be copied: the title is a copy of the words
+                // that leaves the page (CodeRabbit on #5615).
+                let may_copy = self.session.get(id).is_some_and(|d| d.allows_copying());
+                let title = self.views.get(i).filter(|_| may_copy).and_then(|v| v.bookmark_title()).unwrap_or_else(|| "Untitled".into());
+                // A bookmark leaves the pages' text as it was: the words stay selected.
+                let kept = self.views.get(i).map(crate::DocView::text_selection);
                 self.apply_edit(Edit::AddBookmark { parent: vec![], index: n, title: title.clone(), page, left, top });
+                if let (Some(view), Some(kept)) = (self.views.get_mut(i), kept) {
+                    view.restore_text_selection(kept);
+                }
                 // Like Acrobat: the new bookmark starts in rename mode.
                 self.bookmark_rename = Some((vec![n], title));
                 self.right = Some(crate::RightPanel::Bookmarks);

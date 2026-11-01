@@ -104,6 +104,23 @@ impl DocView {
         title_of(&s.text(self.texts.get(&s.page)?))
     }
 
+    /// The text selection as it stands, to put back with [`Self::restore_text_selection`] after an
+    /// edit that leaves the pages' text as it was (adding a bookmark).
+    pub(crate) fn text_selection(&self) -> KeptSelection {
+        // The selected page's words too: an edit empties the read text, and the selection
+        // indexes into them.
+        let text = self.selection.and_then(|s| Some((s.page, Arc::clone(self.texts.get(&s.page)?))));
+        KeptSelection { selection: self.selection, all_text: self.all_text, dismissed: self.actions_dismissed, text }
+    }
+
+    /// Put back a selection kept with [`Self::text_selection`], with the words it selects.
+    pub(crate) fn restore_text_selection(&mut self, kept: KeptSelection) {
+        (self.selection, self.all_text, self.actions_dismissed) = (kept.selection, kept.all_text, kept.dismissed);
+        if let Some((page, text)) = kept.text {
+            self.texts.entry(page).or_insert(text);
+        }
+    }
+
     /// Select every page without navigating; shared by Organize and the Pages sidebar.
     pub fn select_all_pages(&mut self) -> bool {
         self.selected = (0..self.page_count).collect();
@@ -166,6 +183,17 @@ enum SelectionAction {
     Replace,
     Copy,
     Bookmark,
+}
+
+/// A text selection kept across an edit that leaves the pages' text as it was
+/// ([`DocView::text_selection`]).
+#[derive(Clone)]
+pub(crate) struct KeptSelection {
+    selection: Option<Selection>,
+    all_text: bool,
+    dismissed: Option<Selection>,
+    /// The selected page and its words.
+    text: Option<(usize, Arc<PageText>)>,
 }
 
 /// The longest title [`DocView::bookmark_title`] makes, in characters.
