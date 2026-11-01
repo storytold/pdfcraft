@@ -9356,6 +9356,54 @@ fn need_appearances_buttons_are_displayed_from_their_captions() {
 }
 
 #[test]
+fn live_layer_choices_control_image_discovery_and_edit_targeting() {
+    for marked in [false, true] {
+        for form in [false, true] {
+            let wrapped = if marked { "/OC /L BDC q 20 0 0 20 10 10 cm /Hidden Do Q EMC" } else { "q 20 0 0 20 10 10 cm /Hidden Do Q" };
+            let oc = if marked { "" } else { "/OC 5 0 R" };
+            let hidden = if form {
+                format!("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << >> {oc}")
+            } else {
+                format!("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 {oc}")
+            };
+            let bytes = pdfcraft_testkit::Pdf::new()
+                .obj("<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R] /D << /OFF [5 0 R] /Order [5 0 R] >> >> >>")
+                .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+                .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << /Properties << /L 5 0 R >> /XObject << /Hidden 6 0 R /Visible 7 0 R >> >> >>")
+                .stream("", format!("{wrapped} q 20 0 0 20 60 60 cm /Visible Do Q"))
+                .obj("<< /Type /OCG /Name (Switchable) >>")
+                .stream(&hidden, if form { "0 0 1 1 re f" } else { "x" })
+                .stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", "x")
+                .build();
+            let mut s = Session::new();
+            let id = s.open("layers.pdf", None, Arc::new(bytes), None).unwrap();
+            let names = |s: &Session| s.get(id).unwrap().page_images(0).into_iter().map(|i| i.name).collect::<Vec<_>>();
+            assert_eq!(names(&s), ["Visible"]);
+            let generation = s.get(id).unwrap().edit_generation();
+            assert!(s.set_layer_visible(id, 0, true));
+            assert_ne!(generation, s.get(id).unwrap().edit_generation());
+            assert_eq!(names(&s), ["Hidden", "Visible"]);
+            assert_eq!(s.get(id).unwrap().editable_objects(0).unwrap().len(), 2);
+            // The live inventory index selects the newly revealed operator, not its neighbour.
+            s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Delete }).unwrap();
+            assert_eq!(names(&s), ["Visible"]);
+            s.undo(id).unwrap();
+            assert_eq!(names(&s), ["Hidden", "Visible"]);
+            assert!(s.reset_layers(id));
+            assert_eq!(names(&s), ["Visible"]);
+            assert_eq!(s.get(id).unwrap().editable_objects(0).unwrap().len(), 1);
+            // A preceding hidden operator must not steal the visible inventory's index zero.
+            s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Delete }).unwrap();
+            assert!(names(&s).is_empty());
+            assert!(s.set_layer_visible(id, 0, true));
+            assert_eq!(names(&s), ["Hidden"]);
+            assert!(s.set_layer_visible(id, 0, false));
+            assert!(names(&s).is_empty());
+        }
+    }
+}
+
+#[test]
 fn repeated_backdrop_artwork_survives_background_undo_redo_and_both_save_modes() {
     let white = "1 g";
     let rectangle = "0 0 100 100 re f";
@@ -9408,52 +9456,4 @@ fn repeated_backdrop_artwork_survives_background_undo_redo_and_both_save_modes()
     black(&s, rewritten);
     s.apply(rewritten, Edit::RemoveMarks { kind: MarkKind::Background }).unwrap();
     black(&s, rewritten);
-}
-
-#[test]
-fn live_layer_choices_control_image_discovery_and_edit_targeting() {
-    for marked in [false, true] {
-        for form in [false, true] {
-            let wrapped = if marked { "/OC /L BDC q 20 0 0 20 10 10 cm /Hidden Do Q EMC" } else { "q 20 0 0 20 10 10 cm /Hidden Do Q" };
-            let oc = if marked { "" } else { "/OC 5 0 R" };
-            let hidden = if form {
-                format!("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << >> {oc}")
-            } else {
-                format!("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 {oc}")
-            };
-            let bytes = pdfcraft_testkit::Pdf::new()
-                .obj("<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R] /D << /OFF [5 0 R] /Order [5 0 R] >> >> >>")
-                .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
-                .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << /Properties << /L 5 0 R >> /XObject << /Hidden 6 0 R /Visible 7 0 R >> >> >>")
-                .stream("", format!("{wrapped} q 20 0 0 20 60 60 cm /Visible Do Q"))
-                .obj("<< /Type /OCG /Name (Switchable) >>")
-                .stream(&hidden, if form { "0 0 1 1 re f" } else { "x" })
-                .stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", "x")
-                .build();
-            let mut s = Session::new();
-            let id = s.open("layers.pdf", None, Arc::new(bytes), None).unwrap();
-            let names = |s: &Session| s.get(id).unwrap().page_images(0).into_iter().map(|i| i.name).collect::<Vec<_>>();
-            assert_eq!(names(&s), ["Visible"]);
-            let generation = s.get(id).unwrap().edit_generation();
-            assert!(s.set_layer_visible(id, 0, true));
-            assert_ne!(generation, s.get(id).unwrap().edit_generation());
-            assert_eq!(names(&s), ["Hidden", "Visible"]);
-            assert_eq!(s.get(id).unwrap().editable_objects(0).unwrap().len(), 2);
-            // The live inventory index selects the newly revealed operator, not its neighbour.
-            s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Delete }).unwrap();
-            assert_eq!(names(&s), ["Visible"]);
-            s.undo(id).unwrap();
-            assert_eq!(names(&s), ["Hidden", "Visible"]);
-            assert!(s.reset_layers(id));
-            assert_eq!(names(&s), ["Visible"]);
-            assert_eq!(s.get(id).unwrap().editable_objects(0).unwrap().len(), 1);
-            // A preceding hidden operator must not steal the visible inventory's index zero.
-            s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Delete }).unwrap();
-            assert!(names(&s).is_empty());
-            assert!(s.set_layer_visible(id, 0, true));
-            assert_eq!(names(&s), ["Hidden"]);
-            assert!(s.set_layer_visible(id, 0, false));
-            assert!(names(&s).is_empty());
-        }
-    }
 }
