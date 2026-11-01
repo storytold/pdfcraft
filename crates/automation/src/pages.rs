@@ -1,6 +1,6 @@
 use super::dispatch::Content;
 use super::error::{Result, ToolError, failed};
-use super::json::{Args, one_based};
+use super::json::{Args, one_based, summary};
 use super::{Arc, Automation, DocId, HashMap, PageRenderer, PageText, RenderConfig, RenderRequest, RequestKind, Value, commands, json, tools};
 
 /// Default and maximum resolution for `page_render`.
@@ -283,6 +283,53 @@ impl Automation {
             "warnings_truncated": warning_count > warnings.len(), "warning_count": warning_count, "warnings": warnings });
         if let (Some(next), Some(o)) = (next, out.as_object_mut()) {
             o.insert("next".into(), next);
+        }
+        Ok(out)
+    }
+
+    /// Find and replace (Edit text ▸ Replace): every match (or the first) rewritten inside its
+    /// own paragraph through the same engine plan as the window's Replace all, one undo step.
+    /// The page text is searched too (as `text_find` does), so matches no paragraph holds are
+    /// counted as not editable and the counts add up to what `text_find` reports.
+    pub(crate) fn text_replace(&mut self, a: &Args) -> Result<Value> {
+        let doc = self.doc(a)?;
+        let (id, n) = (doc.id, doc.info.pages.len());
+        let pages = match a.opt_ints("pages")? {
+            Some(_) => self.pages(a, "pages")?,
+            None => (0..n).collect(),
+        };
+        let query = pdfcraft_engine::find_replace::Replace {
+            find: a.str("find")?.to_owned(),
+            with: a.str("replace")?.to_owned(),
+            case_sensitive: a.opt_bool("case_sensitive")?.unwrap_or(false),
+            whole_words: a.opt_bool("whole_words")?.unwrap_or(false),
+        };
+        let all = a.opt_bool("all")?.unwrap_or(true);
+        let which = if all { pdfcraft_engine::find_replace::Which::All } else { pdfcraft_engine::find_replace::Which::First };
+        let found = if all {
+            let mut found = std::collections::BTreeMap::new();
+            for (p, text) in self.page_text_results(id, &pages, &mut extract_parallel)? {
+                if let Ok(text) = text {
+                    found.insert(p, text.find_opts(&query.find, query.case_sensitive, query.whole_words).len());
+                }
+            }
+            Some(found)
+        } else {
+            None
+        };
+        let plan = self.doc(a)?.plan_replace(&pages, &query, which, found.as_ref()).map_err(failed)?;
+        let mut out = match plan.edit.clone() {
+            Some(edit) => self.apply(a, edit)?,
+            None => summary(self.doc(a)?),
+        };
+        let skipped: serde_json::Map<String, Value> = plan.skipped.iter().map(|(why, k)| (why.key().to_owned(), json!(k))).collect();
+        out["replaced"] = json!(plan.replaced);
+        out["changed"] = json!(plan.edit.is_some());
+        out["pages"] = json!(plan.pages.iter().map(|p| p + 1).collect::<Vec<_>>());
+        out["skipped"] = json!(plan.skipped_total());
+        out["skipped_by"] = Value::Object(skipped);
+        if !plan.refusals.is_empty() {
+            out["refusals"] = json!(plan.refusals);
         }
         Ok(out)
     }

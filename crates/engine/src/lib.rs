@@ -31,6 +31,7 @@ mod error;
 pub mod export;
 pub mod field_table;
 mod fill_sign;
+pub mod find_replace;
 mod history;
 pub mod js;
 mod layers;
