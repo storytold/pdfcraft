@@ -3,6 +3,7 @@
 
 use super::{Color32, CompareState, Comparison, DocId, Kind, VISUAL, colour, shading};
 use pdfcraft_engine::compare::{Change, Side};
+use std::collections::HashMap;
 
 fn original_colour(kind: Kind) -> Color32 {
     match kind {
@@ -66,6 +67,192 @@ fn check(s: &mut CompareState) {
             }
         }
     }
+}
+
+#[derive(Default, Debug)]
+struct WorkCounts {
+    same_page_rect_tests: usize,
+    page_key_checks: usize,
+    page_lookups: usize,
+    indexed_entries: usize,
+    nonempty_buckets: usize,
+}
+
+/// Count source-matched overlap work and index overhead; this model does not instrument production.
+fn count_work(s: &CompareState, old: bool) -> (WorkCounts, WorkCounts) {
+    let mut text = Vec::new();
+    for ch in s.result.changes.iter().filter(|ch| !(old && ch.kind == Kind::Inserted)) {
+        let side = if old { &ch.old } else { &ch.new };
+        text.extend(side.rects.iter().map(|r| (side.page, r.map(|v| v as f32))));
+    }
+    let visual: Vec<_> = s.visual.iter().map(|(p, r)| (*p, r.map(|v| v as f32))).collect();
+    let overlaps = |a: &[f32; 4], b: &[f32; 4]| a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3];
+    let mut scan = WorkCounts::default();
+    let mut accepted = Vec::new();
+    for (page, rect) in &visual {
+        let mut hit = false;
+        for (mark_page, mark) in &text {
+            scan.page_key_checks += 1;
+            if page == mark_page {
+                scan.same_page_rect_tests += 1;
+                if overlaps(mark, rect) {
+                    hit = true;
+                    break;
+                }
+            }
+        }
+        if !hit && old {
+            for (mark_page, mark) in &accepted {
+                scan.page_key_checks += 1;
+                if page == mark_page {
+                    scan.same_page_rect_tests += 1;
+                    if overlaps(mark, rect) {
+                        hit = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if !hit {
+            accepted.push((*page, *rect));
+        }
+    }
+
+    let mut indexed = WorkCounts::default();
+    let mut text_pages: HashMap<usize, Vec<[f32; 4]>> = HashMap::new();
+    for (page, rect) in &text {
+        text_pages.entry(*page).or_default().push(*rect);
+    }
+    indexed.indexed_entries += text.len();
+    indexed.nonempty_buckets += text_pages.len();
+    let mut accepted_pages: HashMap<usize, Vec<[f32; 4]>> = HashMap::new();
+    for (page, rect) in &visual {
+        indexed.page_lookups += 1;
+        let text_hit = text_pages.get(page).is_some_and(|marks| {
+            marks.iter().any(|mark| {
+                indexed.same_page_rect_tests += 1;
+                overlaps(mark, rect)
+            })
+        });
+        if !text_hit {
+            let visual_hit = if old {
+                indexed.page_lookups += 1;
+                accepted_pages.get(page).is_some_and(|marks| {
+                    marks.iter().any(|mark| {
+                        indexed.same_page_rect_tests += 1;
+                        overlaps(mark, rect)
+                    })
+                })
+            } else {
+                false
+            };
+            if visual_hit {
+                continue;
+            }
+            if old {
+                accepted_pages.entry(*page).or_default().push(*rect);
+                indexed.indexed_entries += 1;
+            }
+        }
+    }
+    indexed.nonempty_buckets += accepted_pages.len();
+    // Compare actual output before treating the modeled work counts as relevant evidence.
+    let actual = bits(shading(s, old));
+    let oracle = bits(original(s, old));
+    assert_eq!(actual, oracle, "counter model input must satisfy shading oracle");
+    (scan, indexed)
+}
+
+#[test]
+/// Compare bit-identical shading and deterministic work counts on bounded page distributions.
+fn shading_operation_counts_are_page_local() {
+    let mut exact = state();
+    let r = [0.0, 0.0, 2.0, 2.0];
+    exact.result.changes.push(Change {
+        kind: Kind::Replaced,
+        old: Side { page: 7, rects: vec![r], ..Default::default() },
+        new: Side { page: 7, rects: vec![r], ..Default::default() },
+    });
+    exact.visual.push((7, r));
+    let (scan, indexed) = count_work(&exact, false);
+    assert_eq!((scan.same_page_rect_tests, scan.page_key_checks), (1, 1));
+    assert_eq!((indexed.same_page_rect_tests, indexed.page_lookups, indexed.indexed_entries, indexed.nonempty_buckets), (1, 1, 1, 1));
+
+    let mut rows = Vec::new();
+    for (name, pages, marks_per_page, overlap) in [
+        ("sparse_200_pages", 200, 1, false),
+        ("dense_one_page", 1, 80, false),
+        ("repeated_overlapping_pages", 25, 8, true),
+        ("empty", 5000, 0, false),
+    ] {
+        let mut s = state();
+        for p in 0..pages {
+            for i in 0..marks_per_page {
+                let x = if overlap { 0.0 } else { (i * 4) as f64 };
+                let r = [x, 0.0, x + 2.0, 2.0];
+                s.result.changes.push(Change {
+                    kind: Kind::Replaced,
+                    old: Side { page: p, rects: vec![r], ..Default::default() },
+                    new: Side { page: p, rects: vec![r], ..Default::default() },
+                });
+                s.visual.push((p, r));
+                s.visual.push((p, r));
+            }
+        }
+        check(&mut s);
+        for text in [true] {
+            for visual in [false, true] {
+                s.show_text = text;
+                s.show_visual = visual;
+                for old in [false, true] {
+                    let (scan, indexed) = count_work(&s, old);
+                    rows.push(format!(
+                        "{name},{pages},{marks_per_page},{overlap},{text},{visual},{old},{},{},{},{},{},{}",
+                        scan.same_page_rect_tests,
+                        scan.page_key_checks,
+                        indexed.same_page_rect_tests,
+                        indexed.page_lookups,
+                        indexed.indexed_entries,
+                        indexed.nonempty_buckets
+                    ));
+                }
+            }
+        }
+    }
+    println!(
+        "workload,pages,marks_per_page,overlap,show_text,show_visual,old,scan_rect_tests,scan_page_checks,indexed_rect_tests,page_lookups,index_entries,buckets"
+    );
+    for row in rows {
+        println!("{row}");
+    }
+}
+
+#[test]
+#[ignore = "manual 5,000-page-identifier counter model; this is not a PDF test"]
+/// Measure bounded in-memory candidate counts across 5,000 sparse page identifiers.
+fn shading_operation_counts_for_5000_page_identifiers() {
+    let mut s = state();
+    for page in 0..5000 {
+        let x = page as f64 * 4.0;
+        let rect = [x, 0.0, x + 2.0, 2.0];
+        s.result.changes.push(Change {
+            kind: Kind::Replaced,
+            old: Side { page, rects: vec![rect], ..Default::default() },
+            new: Side { page, rects: vec![rect], ..Default::default() },
+        });
+        s.visual.push((page, rect));
+    }
+    let (scan, indexed) = count_work(&s, false);
+    assert_eq!(bits(shading(&s, false)), bits(original(&s, false)));
+    println!(
+        "pages=5000,scan_same_page={},scan_page_checks={},indexed_same_page={},lookups={},entries={},buckets={}",
+        scan.same_page_rect_tests,
+        scan.page_key_checks,
+        indexed.same_page_rect_tests,
+        indexed.page_lookups,
+        indexed.indexed_entries,
+        indexed.nonempty_buckets
+    );
 }
 
 #[test]
@@ -135,6 +322,37 @@ fn shading_matches_original_on_many_pages_and_dense_pages() {
             s.visual.extend([(p, r), (p, [x + 8.0, y, x + 13.0, y + 9.0])]);
         }
         check(&mut s);
+    }
+}
+
+#[test]
+/// Exercise bounded, reproducible mixtures of sparse pages, repeated marks and change kinds.
+fn shading_matches_original_across_fixed_seeds() {
+    for initial in [0_u64, 1, 17, 3920, u64::MAX] {
+        let mut seed = initial;
+        let mut s = state();
+        for i in 0..120 {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let page = [0, 3, 97, 4999, usize::MAX][(seed as usize) % 5];
+            let x = ((seed >> 32) % 20) as f64 * 4.0;
+            let y = ((seed >> 48) % 20) as f64 * 4.0;
+            let r = [x, y, x + 6.0, y + 6.0];
+            s.result.changes.push(Change {
+                kind: [Kind::Inserted, Kind::Deleted, Kind::Replaced][i % 3],
+                old: Side { page, rects: if i % 4 == 0 { vec![] } else { vec![r] }, ..Default::default() },
+                new: Side { page: if i % 2 == 0 { page } else { 42 }, rects: if i % 5 == 0 { vec![] } else { vec![r, r] }, ..Default::default() },
+            });
+            s.visual.extend([(page, r), (page, r), (page, [x + 20.0, y, x + 22.0, y + 2.0])]);
+        }
+        for text in [false, true] {
+            for visual in [false, true] {
+                s.show_text = text;
+                s.show_visual = visual;
+                for old in [false, true] {
+                    assert_eq!(bits(shading(&s, old)), bits(original(&s, old)), "seed={initial}, old={old}, text={text}, visual={visual}");
+                }
+            }
+        }
     }
 }
 
