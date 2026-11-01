@@ -1425,6 +1425,8 @@
 	Change signature	Keisti parašą
 	Check for accessibility	Tikrinti prieinamumą
 	Check for accessibility…	Tikrinti prieinamumą…
+	Verify PDF/UA	Patikrinti PDF/UA
+	Not checked	Netikrinta
 	Checkbox	Žymimasis langelis
 	Checkmark	Varnelė
 	Clear form	Išvalyti formą
@@ -1717,6 +1719,65 @@
 	Font {} on page {p} doesn't map its characters to Unicode	Šriftas {} puslapyje {p} nesusieja simbolių su „Unicode“
 	Form field on page {p} isn't tagged	Formos laukas puslapyje {p} neturi struktūros žymos
 	H{n} follows an H{d}; headings should not skip levels	Po H{d} eina H{n}; antraščių lygiai neturi būti praleidžiami
+	The catalog has no metadata stream (XMP)	Kataloge nėra metaduomenų srauto (XMP)
+	The metadata doesn't identify the file as PDF/UA (pdfuaid:part)	Metaduomenys nenurodo, kad failas yra PDF/UA (pdfuaid:part)
+	The metadata identifies the file as PDF/UA-{n}, not PDF/UA-{want}	Metaduomenys nurodo, kad failas yra PDF/UA-{n}, o ne PDF/UA-{want}
+	The metadata has no PDF/UA revision year (pdfuaid:rev)	Metaduomenyse nėra PDF/UA leidimo metų (pdfuaid:rev)
+	The file is PDF {v}, not PDF 2.0	Failas yra PDF {v}, o ne PDF 2.0
+	The metadata has no title (dc:title)	Metaduomenyse nėra pavadinimo (dc:title)
+	The viewer preferences have no DisplayDocTitle entry	Peržiūros nuostatose nėra įrašo DisplayDocTitle
+	DisplayDocTitle isn't true: the window shows the file name	DisplayDocTitle nėra true: lange rodomas failo vardas
+	MarkInfo Suspects is true: the tags are marked as unreliable	MarkInfo Suspects yra true: žymos pažymėtos kaip nepatikimos
+	The document sets no language (Lang), and neither do its tags	Dokumente nenurodyta kalba (Lang), jo žymose taip pat
+	The bookmarks have no language: the document sets none (Lang)	Žymelės neturi kalbos: dokumente ji nenurodyta (Lang)
+	The metadata has no language: the document sets none (Lang) and the metadata no xml:lang	Metaduomenys neturi kalbos: dokumente ji nenurodyta (Lang), o metaduomenyse nėra xml:lang
+	The document's language (Lang) {} isn't a language tag	Dokumento kalba (Lang) {} nėra kalbos žymė
+	Standard structure type {} is remapped to {to}	Standartinis struktūros tipas {} perskirtas į {to}
+	Role map entry {} leads round in a circle	Vaidmenų žemėlapio įrašas {} veda ratu
+	Structure type {} doesn't map to a standard type	Struktūros tipas {} nesusietas su standartiniu tipu
+	The document uses both H and numbered headings (H1–H6)	Dokumente naudojamos ir H, ir numeruotos antraštės (H1–H6)
+	its alternate text, actual text or expansion has no language (Lang)	jo alternatyvusis tekstas, tikrasis tekstas ar išplėtimas neturi kalbos (Lang)
+	no language (Lang) on it, above it or on the document	nėra kalbos (Lang) nei jame, nei aukščiau jo, nei dokumente
+	its language (Lang) isn't a language tag	jo kalba (Lang) nėra kalbos žymė
+	more than one H heading in it	jame yra daugiau nei viena H antraštė
+	not in a TOC	nepriklauso TOC
+	not allowed directly in a TOC	negali būti tiesiogiai TOC viduje
+	not in a Ruby	nepriklauso Ruby
+	not in a Warichu	nepriklauso Warichu
+	not in a Table	nepriklauso Table
+	not allowed directly inside {in}	negali būti tiesiogiai {in} viduje
+	a second {} in its table	antras {} jo lentelėje
+	rows both directly in it and in THead, TBody or TFoot	jame eilutės yra ir tiesiogiai, ir THead, TBody ar TFoot viduje
+	not the first or last child of its table	nėra nei pirmas, nei paskutinis savo lentelės vaikas
+	not the first child of its list	nėra pirmas savo sąrašo vaikas
+	a header cell with no Scope, in a table that doesn't use Headers	antraštės langelis be Scope lentelėje, kurioje nenaudojama Headers
+	no ID	nėra ID
+	its ID is another Note's too	tokį patį ID turi ir kitas Note
+	Page {p} has annotations but no tab order (Tabs)	Puslapyje {p} yra anotacijų, bet nenurodyta tabuliavimo tvarka (Tabs)
+	Page {p} has annotations and tabs in {} order, not structure order (S)	Puslapyje {p} yra anotacijų, o tabuliuojama tvarka {}, ne struktūros tvarka (S)
+	File attachment annotation on page {p}: its file specification lacks F or UF	Failo priedo anotacija puslapyje {p}: jos failo specifikacijoje trūksta F arba UF
+	Page {p} has a trap network annotation (TrapNet)	Puslapyje {p} yra užlaidų tinklo anotacija (TrapNet)
+	Printer's mark annotation on page {p} is in the structure tree	Spaudos žymės anotacija puslapyje {p} yra struktūros medyje
+	{} annotation on page {p} is in a {ty} tag, not {want}	Anotacija {} puslapyje {p} yra žymoje {ty}, o ne {want}
+	Field "{}" on page {p} has no description (TU), and its tag no alternate text	Laukas „{}“ puslapyje {p} neturi aprašo (TU), o jo žyma – alternatyviojo teksto
+	Field "{}" on page {p}: its description has no language (Lang)	Laukas „{}“ puslapyje {p}: jo aprašas neturi kalbos (Lang)
+	Link annotation on page {p} has no description (Contents)	Saito anotacija puslapyje {p} neturi aprašo (Contents)
+	{} annotation on page {p}: its description has no language (Lang)	Anotacija {} puslapyje {p}: jos aprašas neturi kalbos (Lang)
+	{} annotation on page {p} has no description (Contents), and its tag no alternate text	Anotacija {} puslapyje {p} neturi aprašo (Contents), o jos žyma – alternatyviojo teksto
+	Page {p}: {n} artifact inside tagged content	Puslapis {p}: artefaktų žymėto turinio viduje: {n}
+	Page {p}: {n} artifacts inside tagged content	Puslapis {p}: artefaktų žymėto turinio viduje: {n}
+	Page {p}: {n} tagged content item inside an artifact	Puslapis {p}: žymėto turinio elementų artefakto viduje: {n}
+	Page {p}: {n} tagged content items inside an artifact	Puslapis {p}: žymėto turinio elementų artefakto viduje: {n}
+	A form XObject with marked content (MCIDs) is drawn {n} times	Formos XObject su pažymėtu turiniu (MCID) piešiamas kartų: {n}
+	Font {} on page {p} isn't embedded	Šriftas {} puslapyje {p} neįterptas
+	Font (unnamed) on page {p} isn't embedded	Šriftas be pavadinimo puslapyje {p} neįterptas
+	The default optional content configuration (D) has no Name	Numatytoji pasirenkamojo turinio konfigūracija (D) neturi Name
+	An optional content configuration has an AS entry	Pasirenkamojo turinio konfigūracija turi įrašą AS
+	Optional content configuration {n} has no Name	Pasirenkamojo turinio konfigūracija {n} neturi Name
+	The XFA form requires dynamic rendering (dynamicRender)	XFA formai reikia dinaminio atvaizdavimo (dynamicRender)
+	The file is encrypted but its encryption dictionary has no permissions (P)	Failas užšifruotas, bet jo šifravimo žodyne nėra leidimų (P)
+	The file has a reference XObject (Ref)	Faile yra nuorodos XObject (Ref)
+	Embedded file "{}": its file specification lacks F or UF	Įterptasis failas „{}“: jo failo specifikacijoje trūksta F arba UF
 	Inserted text	Įterptas tekstas
 	Key Agreement	Raktų suderinimas
 	Key Encipherment	Raktų šifravimas

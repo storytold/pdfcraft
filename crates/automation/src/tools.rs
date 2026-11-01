@@ -1079,6 +1079,13 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc"],
             )),
+        t("pdfua_verify", "Verify PDF/UA", "Verify the document against PDF/UA-1 (ISO 14289-1), or in part PDF/UA-2, condition by condition of the Matterhorn Protocol 1.1. Each condition is failed (with findings: page, object, bbox_user_space, message), passed, manual (only a person can judge it; never counted as passed) or not_checked (machine-checkable, but PdfCraft doesn't check it yet). Every condition gives its Matterhorn id, checkpoint and ISO 14289-1 clause. part defaults to the one the document declares (pdfuaid:part), else 1; PDF/UA-2 checks its identification, PDF 2.0 and the PDF/UA-1 conditions it keeps. Does not change the document or certify conformance.")
+            .ro()
+            .cmd("a11y.check_pdfua")
+            .with(schema(
+                json!({ "doc": doc(), "part": { "type": "integer", "enum": [1, 2], "description": "1 (PDF/UA-1) or 2 (PDF/UA-2). Default: the part the document declares, else 1." } }),
+                &["doc"],
+            )),
         t("accessibility_find_untagged", "Find untagged content", "Find untagged painted page content, annotations, and form widgets. This focused check does not modify the PDF or claim that its other accessibility rules pass.")
             .ro()
             .cmd("a11y.find_untagged")

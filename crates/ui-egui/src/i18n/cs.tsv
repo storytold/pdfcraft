@@ -401,6 +401,8 @@ key	Space	Mezerník
 	Recognize text…	Rozpoznat text…
 	Recognize text in multiple files…	Rozpoznat text ve více souborech…
 	Check for accessibility…	Zkontrolovat přístupnost…
+	Verify PDF/UA	Ověřit PDF/UA
+	Not checked	Nekontrolováno
 	Open accessibility report	Otevřít zprávu o přístupnosti
 	Change reading options…	Změnit možnosti čtení…
 	Add alternate text…	Přidat alternativní text…
@@ -2642,6 +2644,65 @@ animation effects	Off	Vypnuto
 	Font {} on page {p} doesn't map its characters to Unicode	Písmo {} na stránce {p} nemapuje své znaky na Unicode
 	Form field on page {p} isn't tagged	Formulářové pole na stránce {p} není označkované
 	H{n} follows an H{d}; headings should not skip levels	H{n} následuje po H{d}; nadpisy by neměly přeskakovat úrovně
+	The catalog has no metadata stream (XMP)	Katalog nemá proud metadat (XMP)
+	The metadata doesn't identify the file as PDF/UA (pdfuaid:part)	Metadata neoznačují soubor jako PDF/UA (pdfuaid:part)
+	The metadata identifies the file as PDF/UA-{n}, not PDF/UA-{want}	Metadata označují soubor jako PDF/UA-{n}, ne PDF/UA-{want}
+	The metadata has no PDF/UA revision year (pdfuaid:rev)	Metadata nemají rok revize PDF/UA (pdfuaid:rev)
+	The file is PDF {v}, not PDF 2.0	Soubor je PDF {v}, ne PDF 2.0
+	The metadata has no title (dc:title)	Metadata nemají název (dc:title)
+	The viewer preferences have no DisplayDocTitle entry	Předvolby prohlížeče nemají položku DisplayDocTitle
+	DisplayDocTitle isn't true: the window shows the file name	DisplayDocTitle není true: okno zobrazuje název souboru
+	MarkInfo Suspects is true: the tags are marked as unreliable	MarkInfo Suspects je true: tagy jsou označené jako nespolehlivé
+	The document sets no language (Lang), and neither do its tags	Dokument nenastavuje jazyk (Lang) a jeho tagy také ne
+	The bookmarks have no language: the document sets none (Lang)	Záložky nemají jazyk: dokument žádný nenastavuje (Lang)
+	The metadata has no language: the document sets none (Lang) and the metadata no xml:lang	Metadata nemají jazyk: dokument žádný nenastavuje (Lang) a metadata nemají xml:lang
+	The document's language (Lang) {} isn't a language tag	Jazyk dokumentu (Lang) {} není jazyková značka
+	Standard structure type {} is remapped to {to}	Standardní typ struktury {} je přemapován na {to}
+	Role map entry {} leads round in a circle	Položka {} mapy rolí vede v kruhu
+	Structure type {} doesn't map to a standard type	Typ struktury {} se nemapuje na standardní typ
+	The document uses both H and numbered headings (H1–H6)	Dokument používá H i číslované nadpisy (H1–H6)
+	its alternate text, actual text or expansion has no language (Lang)	jeho alternativní text, skutečný text nebo rozvinutí nemá jazyk (Lang)
+	no language (Lang) on it, above it or on the document	bez jazyka (Lang) na něm, nad ním ani v dokumentu
+	its language (Lang) isn't a language tag	jeho jazyk (Lang) není jazyková značka
+	more than one H heading in it	obsahuje více než jeden nadpis H
+	not in a TOC	není v TOC
+	not allowed directly in a TOC	není povoleno přímo v TOC
+	not in a Ruby	není v Ruby
+	not in a Warichu	není ve Warichu
+	not in a Table	není v Table
+	not allowed directly inside {in}	není povoleno přímo uvnitř {in}
+	a second {} in its table	druhý {} v jeho tabulce
+	rows both directly in it and in THead, TBody or TFoot	řádky přímo v něm i v THead, TBody nebo TFoot
+	not the first or last child of its table	není prvním ani posledním potomkem své tabulky
+	not the first child of its list	není prvním potomkem svého seznamu
+	a header cell with no Scope, in a table that doesn't use Headers	buňka záhlaví bez Scope v tabulce, která nepoužívá Headers
+	no ID	bez ID
+	its ID is another Note's too	jeho ID má i jiná Note
+	Page {p} has annotations but no tab order (Tabs)	Stránka {p} má anotace, ale nemá pořadí tabulátoru (Tabs)
+	Page {p} has annotations and tabs in {} order, not structure order (S)	Stránka {p} má anotace a pořadí tabulátoru {}, ne pořadí struktury (S)
+	File attachment annotation on page {p}: its file specification lacks F or UF	Anotace přiloženého souboru na stránce {p}: její specifikaci souboru chybí F nebo UF
+	Page {p} has a trap network annotation (TrapNet)	Stránka {p} má anotaci sítě přesahů (TrapNet)
+	Printer's mark annotation on page {p} is in the structure tree	Anotace tiskové značky na stránce {p} je ve stromu struktury
+	{} annotation on page {p} is in a {ty} tag, not {want}	Anotace {} na stránce {p} je v tagu {ty}, ne {want}
+	Field "{}" on page {p} has no description (TU), and its tag no alternate text	Pole „{}“ na stránce {p} nemá popis (TU) a jeho tag nemá alternativní text
+	Field "{}" on page {p}: its description has no language (Lang)	Pole „{}“ na stránce {p}: jeho popis nemá jazyk (Lang)
+	Link annotation on page {p} has no description (Contents)	Anotace odkazu na stránce {p} nemá popis (Contents)
+	{} annotation on page {p}: its description has no language (Lang)	Anotace {} na stránce {p}: její popis nemá jazyk (Lang)
+	{} annotation on page {p} has no description (Contents), and its tag no alternate text	Anotace {} na stránce {p} nemá popis (Contents) a její tag nemá alternativní text
+	Page {p}: {n} artifact inside tagged content	Stránka {p}: {n} artefakt uvnitř otagovaného obsahu
+	Page {p}: {n} artifacts inside tagged content	Stránka {p}: {n} artefaktů uvnitř otagovaného obsahu
+	Page {p}: {n} tagged content item inside an artifact	Stránka {p}: {n} otagovaná položka obsahu uvnitř artefaktu
+	Page {p}: {n} tagged content items inside an artifact	Stránka {p}: {n} otagovaných položek obsahu uvnitř artefaktu
+	A form XObject with marked content (MCIDs) is drawn {n} times	Formulářový XObject s označeným obsahem (MCID) se kreslí {n}krát
+	Font {} on page {p} isn't embedded	Písmo {} na stránce {p} není vložené
+	Font (unnamed) on page {p} isn't embedded	Písmo (bez názvu) na stránce {p} není vložené
+	The default optional content configuration (D) has no Name	Výchozí konfigurace volitelného obsahu (D) nemá Name
+	An optional content configuration has an AS entry	Konfigurace volitelného obsahu má položku AS
+	Optional content configuration {n} has no Name	Konfigurace volitelného obsahu {n} nemá Name
+	The XFA form requires dynamic rendering (dynamicRender)	Formulář XFA vyžaduje dynamické vykreslování (dynamicRender)
+	The file is encrypted but its encryption dictionary has no permissions (P)	Soubor je zašifrovaný, ale jeho slovník šifrování nemá oprávnění (P)
+	The file has a reference XObject (Ref)	Soubor má referenční XObject (Ref)
+	Embedded file "{}": its file specification lacks F or UF	Vložený soubor „{}“: jeho specifikaci souboru chybí F nebo UF
 	No document language is set	Není nastaven jazyk dokumentu
 	No page has text: the document appears to be images of pages	Žádná stránka nemá text: dokument se zdá být tvořen obrázky stránek
 	Page {p} doesn't tab in structure order	Stránka {p} nepřechází tabulátorem v pořadí struktury

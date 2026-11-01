@@ -624,6 +624,67 @@ fn accessibility_check_locates_field_description_on_page() {
     assert_eq!(rule["findings"][0]["bbox_user_space"], json!([60.0, 60.0, 200.0, 80.0]));
 }
 
+/// A tagged one-page PDF/UA-1 candidate whose only figure has no alternate text.
+fn pdfua_pdf() -> Vec<u8> {
+    let content = "/Figure << /MCID 0 >> BDC 10 150 40 20 re f EMC";
+    let xmp = "<x:xmpmeta><rdf:RDF><rdf:Description rdf:about=\"\" pdfuaid:part=\"1\"><dc:title><rdf:Alt>\
+               <rdf:li xml:lang=\"x-default\">Report</rdf:li></rdf:Alt></dc:title></rdf:Description></rdf:RDF></x:xmpmeta>";
+    format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /Lang (en) /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R /ViewerPreferences << /DisplayDocTitle true >> /Metadata 7 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /StructTreeRoot /K 6 0 R >> endobj
+6 0 obj << /S /Figure /Pg 3 0 R /K 0 >> endobj
+7 0 obj << /Type /Metadata /Subtype /XML /Length {} >> stream
+{xmp}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        content.len(),
+        xmp.len()
+    )
+    .into_bytes()
+}
+
+#[test]
+fn pdfua_verify_reports_conditions_with_their_clause_and_place() {
+    let dir = workdir("pdfua");
+    std::fs::write(dir.join("ua.pdf"), pdfua_pdf()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "ua.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "pdfua_verify", json!({ "doc": doc }));
+    assert_eq!((r["part"].as_str(), r["declared"].as_u64(), r["machine_checks_pass"].as_bool()), (Some("PDF/UA-1"), Some(1), Some(false)));
+    let failed = r["failed"].as_array().unwrap();
+    assert_eq!(failed.iter().map(|f| f["condition"].as_str().unwrap()).collect::<Vec<_>>(), ["13-004"]);
+    assert_eq!((failed[0]["clause"].as_str(), failed[0]["section"].as_str()), (Some("ISO 14289-1 7.3"), Some("UA1:7.3-3")));
+    assert_eq!(failed[0]["findings"][0]["page"], 1);
+    assert_eq!(failed[0]["findings"][0]["object"], 6);
+    // A person's judgement is listed as manual, never as passed; unchecked machine conditions too.
+    assert_eq!(r["counts"]["manual"], 47);
+    assert!(r["manual"].as_array().unwrap().iter().any(|m| m["condition"] == "09-001"));
+    assert!(r["not_checked"].as_array().unwrap().iter().any(|m| m["condition"] == "31-011"));
+    let passed = r["passed"].as_array().unwrap();
+    assert!(!passed.iter().any(|p| p["condition"] == "09-001" || p["condition"] == "31-011"));
+    // Passed conditions say what they are as the others do (the tool's description promises it).
+    assert!(!passed.is_empty());
+    for p in passed {
+        assert!(["condition", "checkpoint", "clause"].iter().all(|k| p[*k].is_string()) && p["matterhorn"].is_boolean(), "{p}");
+    }
+    let total: u64 = ["failed", "passed", "manual", "not_checked"].iter().map(|k| r["counts"][*k].as_u64().unwrap()).sum();
+    assert_eq!(total, 135);
+    // PDF/UA-2 on request: the file declares part 1 and is PDF 1.7.
+    let r = ok(&mut a, "pdfua_verify", json!({ "doc": doc, "part": 2 }));
+    let ua2: Vec<&str> = r["failed"].as_array().unwrap().iter().map(|f| f["condition"].as_str().unwrap()).collect();
+    assert_eq!(ua2, ["13-004", "ua2-identification", "ua2-pdf-version"]);
+    assert!(matches!(err(&mut a, "pdfua_verify", json!({ "doc": doc, "part": 3 })), ToolError::InvalidArgs(_)));
+    // The check reads only: the document is unchanged.
+    assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc }))["document"]["dirty"], false);
+}
+
 fn ok(a: &mut Automation, tool: &str, args: Value) -> Value {
     match a.call(tool, &args) {
         Ok(mut c) => match c.remove(0) {

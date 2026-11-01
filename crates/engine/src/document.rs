@@ -187,6 +187,12 @@ impl Document {
         self.editor.as_ref().map(|e| a11y::check(&e.cos, options))
     }
 
+    /// Accessibility ▸ Verify PDF/UA: the document against a part of PDF/UA, condition by condition
+    /// of the Matterhorn Protocol (`None` if the document can't be read for editing).
+    pub fn pdfua_verify(&self, part: a11y::pdfua::Part) -> Option<a11y::pdfua::UaReport> {
+        self.editor.as_ref().map(|e| a11y::pdfua::verify(&e.cos, part))
+    }
+
     /// A script of this XFA form ran past its time limit and was abandoned, so the form's
     /// scripts no longer run in this document (reopening it runs them again). The script's
     /// error is in the JavaScript output; this is the state, for a viewer to show.
