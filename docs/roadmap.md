@@ -1,7 +1,5 @@
 # PdfCraft roadmap: milestones and what's next
 
-> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (Grouped document tabs expose their visual selection to assistive technology, preserving the active Combine tab; regression fails before the fix; 1912 UI tests and stable scoped gates pass (5 existing ignored))
-> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M3 #4590: rebase PR #5159 onto main 47f42ba0; 1912 scoped tests pass (5 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: integrate main fa5f9f8c; retain CJK viewer and upstream raster regressions, restore explicit display_config imports; estimates unchanged)
 > **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** patch (M2, PR #4172: integrate main 5af10276; retain both roadmap histories and viewer-only CJK font policy; estimates unchanged)
@@ -115,6 +113,8 @@
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M12 #2570: Dynamic XFA rich-text fields carry exData/maxLength into AcroForm MaxLen for reported and enforced Unicode character limits, retained after save/reopen. Estimates unchanged)
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M4 #3309: bounded iterative named-destination pruning on page deletion; estimates unchanged)
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M1 #2658: macOS atomic saves retain destination extended attributes, including Finder tags, and reject partial resource-fork reads after size changes. Metadata failures retain the original PDF and unsaved edit. Estimates unchanged)
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (Grouped document tabs expose their visual selection to assistive technology, preserving the active Combine tab; regression fails before the fix; 1912 UI tests and stable scoped gates pass (5 existing ignored))
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M3 #4590: rebase PR #5159 onto main 47f42ba0; 1912 scoped tests pass (5 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged)
 
 Forward-looking: the milestones, the current focus and what comes next. The parity numbers behind
 it are in [target-app-parity.md](target-app-parity.md), the ranked work list in [gaps.md](gaps.md),
