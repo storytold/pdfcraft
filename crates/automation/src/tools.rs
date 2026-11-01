@@ -544,7 +544,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "redact_apply",
             "Apply redactions",
-            "Apply the redaction marks (all, or those on pages): text, images, vectors, comments and form fields under them are removed for good and boxes are drawn in their place. A verification pass fails the operation if anything readable remains. Undoable until saved; the saved file no longer contains the content.",
+            "Apply the redaction marks (all, or those on pages): text, images, vectors, comments and form fields under them are removed for good and boxes are drawn in their place. A verification pass fails the operation if anything readable remains. Document metadata (Info entries, the document's and pages' XMP) that repeats the removed text is removed too. still_holding counts the places applying leaves as they are that still hold the removed text: bookmarks (titles), attachments (names, file names, descriptions), comments (text, rich text, subject or author of those that remain) and xmp (XMP on images, fonts, forms, annotations and other objects), with their total; doc_remove_hidden removes them. unsearched: true means the removed text couldn't be searched for, so every such place holding any text is counted. Undoable until saved; the saved file no longer contains the content.",
         )
         .destructive()
         .with(schema(json!({ "doc": doc(), "pages": pages("whose marks to apply (default: all)") }), &["doc"])),

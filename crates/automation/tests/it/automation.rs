@@ -4289,6 +4289,31 @@ fn redacting_through_tools() {
     assert!(matches!(a.call("redact_mark", &json!({ "doc": doc })), Err(ToolError::InvalidArgs(_))));
 }
 
+/// #2539 review: `redact_apply` says where the removed text is still held that applying leaves as
+/// it is (a bookmark title and a note's text here), and changes neither.
+#[test]
+fn redact_apply_reports_places_that_still_hold_the_removed_text() {
+    let dir = workdir("redact-still-holding");
+    std::fs::write(dir.join("memo.txt"), "Codename Bluefin report\nPublic line").unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "text", "path": "memo.txt" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "bookmark_add", json!({ "doc": doc, "title": "Bluefin plans", "page": 1 }));
+    ok(&mut a, "bookmark_add", json!({ "doc": doc, "title": "Annual figures", "page": 1 }));
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "note", "at": [300, 400], "contents": "Ask about bluefin" }));
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "note", "at": [300, 500], "contents": "Looks good" }));
+    ok(&mut a, "redact_mark", json!({ "doc": doc, "find": "Bluefin" }));
+    let r = ok(&mut a, "redact_apply", json!({ "doc": doc }));
+    assert_eq!(r["still_holding"], json!({ "bookmarks": 1, "attachments": 0, "comments": 1, "xmp": 0, "total": 2, "unsearched": false }), "{r}");
+    assert!(!page_text(&mut a, doc)[0].contains("Bluefin"));
+    let titles: Vec<String> = ok(&mut a, "bookmark_list", json!({ "doc": doc }))["bookmarks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["title"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(titles, ["Bluefin plans", "Annual figures"], "reported, not changed");
+}
+
 #[test]
 /// Mark, apply and save remove the complete international number while retaining labels and controls.
 fn redacting_italian_international_slash_numbers_through_tools() {

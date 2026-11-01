@@ -62,6 +62,11 @@ pub struct Document {
     /// What the last successful [`Session::apply`](crate::Session::apply) wrote that its fonts can't draw: kept as typed,
     /// drawn with `?` in its place (see [`TextNotice`]). The interface shows it; tools return it.
     pub edit_notices: Vec<TextNotice>,
+    /// What the last successful [`Session::apply`](crate::Session::apply), when it applied redactions,
+    /// found still holding the removed text in places applying leaves as they are (bookmark titles,
+    /// attachments, remaining comments, other XMP; see [`RedactionElsewhere`](crate::RedactionElsewhere)).
+    /// `None` after any other edit, an undo or a redo. The interface says so; tools return it.
+    pub redaction_elsewhere: Option<pdfcraft_redact::Elsewhere>,
 }
 
 /// Text an edit stored as typed but drew with `?` in place of `ch`, because the font it is drawn

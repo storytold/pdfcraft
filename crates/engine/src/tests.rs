@@ -2829,6 +2829,25 @@ fn text_after_an_inline_image_is_redacted_where_the_page_shows_it() {
     );
 }
 
+/// #2539 review: Apply redactions tells the caller where the removed text is still held that
+/// it leaves as it is (here a bookmark title), and the next edit, or an undo, forgets it.
+#[test]
+fn applied_redactions_report_a_bookmark_that_still_holds_the_removed_text() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let page = one_line_page("/Font << /F1 4 0 R >>", "BT /F1 10 Tf 20 150 Td (Codename BLUEFIN report) Tj ET");
+    let id = s.open("bookmark.pdf", None, Arc::new(page), None).unwrap();
+    s.apply(id, Edit::AddBookmark { parent: vec![], index: 0, title: "Bluefin plans".into(), page: 0, left: None, top: None }).unwrap();
+    s.apply(id, Edit::AddBookmark { parent: vec![], index: 1, title: "Annual figures".into(), page: 0, left: None, top: None }).unwrap();
+    mark_shown_text(&mut s, id, "BLUEFIN");
+    assert_eq!(s.get(id).unwrap().redaction_elsewhere, None, "only applying redactions reports it");
+    s.apply(id, Edit::ApplyRedactions { pages: None }).unwrap();
+    let found = s.get(id).unwrap().redaction_elsewhere.expect("applying reports what it left");
+    assert_eq!(found, crate::RedactionElsewhere { bookmarks: 1, ..Default::default() });
+    assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["Bluefin plans→1", "Annual figures→1"], "the bookmark is reported, not changed");
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().redaction_elsewhere, None, "an undo forgets it");
+}
+
 /// A word whose font and size an ExtGState /Font entry (`gs`) sets is placed where the renderer
 /// draws it, so a mark drawn over it as displayed takes it out of the file.
 #[test]
