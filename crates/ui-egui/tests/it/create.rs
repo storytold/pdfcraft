@@ -258,6 +258,22 @@ fn the_pdf_optimizer_dialog_picks_a_preset() {
     h.get_by_label("Compress document structure (object streams)").click();
     h.run_steps(2);
     assert!(!h.state().optimize_draft.settings.object_streams);
+
+    // The Presentations tab reaches the slide-flattening and image-cap settings.
+    h.get_by_label("Presentations").click();
+    h.run_steps(2);
+    h.get_by_label("Flatten tiled presentation slides").click();
+    h.run_steps(2);
+    assert!(h.state().optimize_draft.settings.flatten_tiles.enabled, "flattening on");
+    h.get_by_label("Cap max image dimension").click();
+    h.run_steps(2);
+    assert_eq!(h.state().optimize_draft.settings.max_image_dimension, Some(1920));
+    // The target file size budget lives on Images, where the image settings it searches are.
+    h.get_by_label("Images").click();
+    h.run_steps(2);
+    h.get_by_label("Optimize to target file size budget").click();
+    h.run_steps(2);
+    assert_eq!(h.state().optimize_draft.settings.target_mb, Some(20.0));
 }
 
 fn mixed_files(app: &PdfCraftApp) -> Vec<(String, Vec<u8>)> {

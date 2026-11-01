@@ -195,7 +195,7 @@ fn fresh_name(xobjects: &Dict, k: &mut usize) -> Vec<u8> {
 }
 
 /// Add `name` → `image` to the page's image resources, wherever they live.
-fn add_xobject(doc: &mut Document, page: ObjRef, name: &[u8], image: ObjRef) -> Result<(), OptimizeError> {
+pub(crate) fn add_xobject(doc: &mut Document, page: ObjRef, name: &[u8], image: ObjRef) -> Result<(), OptimizeError> {
     let res = doc.get(page).as_dict().and_then(|d| d.get(b"Resources").cloned());
     let put = |d: &mut Dict| {
         let mut x = d.get(b"XObject").and_then(Object::as_dict).cloned().unwrap_or_default();

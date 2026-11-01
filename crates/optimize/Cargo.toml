@@ -16,12 +16,15 @@ pdfcraft-filters = { workspace = true }
 pdfcraft-content = { workspace = true }
 pdfcraft-model = { workspace = true }
 pdfcraft-annot = { workspace = true }
+# Flattening tiled pages renders them (the only way to composite clipped, layered tiles faithfully).
+pdfcraft-render = { workspace = true }
 thiserror.workspace = true
 # JPEG decoding (zune-jpeg) and encoding, and bicubic resampling; already in the tree.
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 # The same JPEG decoder, used directly to read samples untransformed (/ColorTransform 0).
 zune-jpeg = "0.5"
+# JPEG 2000 decoding, the decoder pdfcraft-render already uses through hayro-syntax.
+hayro-jpeg2000 = "0.3.5"
 
 [dev-dependencies]
-pdfcraft-render = { workspace = true }
 proptest.workspace = true
