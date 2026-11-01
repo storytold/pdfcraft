@@ -2627,6 +2627,35 @@ fn rewriting_text_set_in_a_negative_font_size_keeps_it_upright() {
     }
 }
 
+/// A zero `Tf`, written with a sign or without, is not a negative size: asking for a size draws
+/// the text running right from where it started, through the single-style rewrite and through the
+/// styled one (which a line break takes), and keeping the size doesn't fail. Zero size has no
+/// direction, so `-0.0` must not mirror the new text.
+#[test]
+fn a_zero_font_size_is_read_and_rewritten_without_a_sign() {
+    for tf in ["0", "-0", "0.0", "-0.0"] {
+        let page = || text_page(&format!("BT /F1 {tf} Tf 72 700 Td (Zero size) Tj ET BT /F1 12 Tf 72 600 Td (Plain text) Tj ET"));
+        let doc = page();
+        let lines = text::text_lines(&doc, 0).unwrap();
+        assert!(lines.iter().all(|l| l.size >= 0.0 && l.size.is_finite()), "{tf}: {:?}", lines.iter().map(|l| l.size).collect::<Vec<_>>());
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        let block = blocks.iter().position(|b| b.text.contains("Zero")).unwrap();
+        for draft in ["Zero size now", "Zero size\nnow"] {
+            let sized = text::BlockStyle { size: Some(12.0), ..Default::default() };
+            let mut doc = page();
+            text::rewrite_block(&mut doc, 0, block, Some(draft), &sized).unwrap();
+            let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+            let rewritten: Vec<_> = lines.iter().filter(|l| l.text.contains("Zero")).map(|l| (&l.text, l.rect, l.size)).collect();
+            assert!(!rewritten.is_empty(), "{tf} {draft:?}: {:?}", lines.iter().map(|l| &l.text).collect::<Vec<_>>());
+            for (_, rect, size) in &rewritten {
+                assert!(rect[0] > 71.0 && rect[2] > 100.0 && (*size - 12.0).abs() < 0.01, "{tf} {draft:?}: {rewritten:?}");
+            }
+            let mut doc = page();
+            text::rewrite_block(&mut doc, 0, block, Some(draft), &text::BlockStyle::default()).unwrap();
+        }
+    }
+}
+
 /// Two subsets of one font can carry different encodings: here the second names `-` and `l`
 /// through `/Differences` (codes 33 and 34), so the same letters have different codes. The visual
 /// line still joins and reads in coding order (#3661).

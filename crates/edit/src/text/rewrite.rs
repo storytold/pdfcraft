@@ -755,7 +755,7 @@ fn paragraph_style(o: &Origin, style: &BlockStyle) -> Result<(String, ParaStyle)
     let k = o.k.max(1e-6);
     // The size in text space: points ÷ the text-to-user scale, with the sign of the source's `Tf`
     // (a negative size mirrors the glyphs, which a flipped CTM turns upright again).
-    let size = style.size.map_or(old_size, |pt| (pt / k).max(0.1).copysign(old_size));
+    let size = style.size.map_or(old_size, |pt| o.state.with_tf_sign((pt / k).max(0.1)));
     let mut state = o.state.clone();
     if let Some(c) = style.char_spacing {
         state.char_spacing = c / k;

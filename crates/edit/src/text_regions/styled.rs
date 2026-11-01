@@ -884,7 +884,7 @@ pub(crate) fn rewrite_styled_block(
     // negative `Tf` (mirrored glyphs under a flipped CTM) keeps its sign, or the text would flip.
     let size_of = |source: &TextLine, index: usize| {
         let points = overrides.get(&index).and_then(|r| r.size).or(style.size).unwrap_or(source.size).max(0.1);
-        (points / source.origin.k.max(1e-6)).copysign(source.origin.state.font.as_ref().map_or(1.0, |(_, size)| *size))
+        source.origin.state.with_tf_sign(points / source.origin.k.max(1e-6))
     };
     // A source run may carry TJ kerning/justification that is absent from its text state.
     // Keep its measured advance when rebuilding the run instead of making it wrap on entry.

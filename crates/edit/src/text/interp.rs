@@ -25,6 +25,12 @@ pub(super) struct TextState {
 }
 
 impl TextState {
+    /// `size` with the sign of this state's `Tf`: a negative one mirrors the glyphs, which a
+    /// flipped CTM turns upright again. A zero `Tf` has no direction, so `-0.0` counts as positive.
+    pub(super) fn with_tf_sign(&self, size: f64) -> f64 {
+        if self.font.as_ref().is_some_and(|(_, tf)| *tf < 0.0) { -size } else { size }
+    }
+
     pub(super) fn of(ts: &Ts) -> Self {
         TextState {
             font: ts.font.as_ref().map(|(n, _)| (String::from_utf8_lossy(n).into_owned(), ts.size)),
@@ -321,7 +327,7 @@ impl Shown {
         let dir = match self.state.vertical {
             // A column advances by `w1` times the size (`Tz` scales only horizontal advances).
             Some(w1) => {
-                let s = (w1 * self.state.size).signum();
+                let s = if self.state.size < 0.0 { -w1.signum() } else { w1.signum() };
                 direction(&Matrix([m.0[2] * s, m.0[3] * s, 0.0, 0.0, 0.0, 0.0]))
             }
             // Glyphs advance along text space x times the sign of the size and `Tz`: a negative
