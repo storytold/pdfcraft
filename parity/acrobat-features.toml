@@ -8108,7 +8108,7 @@ milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
 tools = ["doc_print"]
-evidence = ["crates/print/src/tests.rs::size_modes", "crates/print/src/tests.rs::architectural_sheets_preserve_full_scale", "crates/print/src/tests.rs::us_number_10_envelope_is_offered_and_fed_by_name", "crates/automation/tests/it/automation.rs::architectural_and_iso_papers_through_tools", "crates/ui-egui/tests/it/print.rs::architectural_page_can_be_matched_at_100_percent"]
+evidence = ["crates/print/src/tests.rs::size_modes", "crates/print/src/tests.rs::architectural_sheets_preserve_full_scale", "crates/print/src/tests.rs::us_number_10_envelope_is_offered_and_fed_by_name", "crates/print/src/tests.rs::a6_paper_size_matches_and_scales", "crates/automation/tests/it/automation.rs::architectural_and_iso_papers_through_tools", "crates/ui-egui/tests/it/print.rs::architectural_page_can_be_matched_at_100_percent"]
 notes = "fit, actual size, shrink oversized, custom %; ARCH A/B/C/D/E1/E, ANSI C/D/E, ISO A0/A1/A2, A6 and US #10 envelope presets; Match page at 100% matches the current page to a standard sheet. PDF scale shows the previewed source-to-sheet transform, not calibrated physical output; driver substitution/scaling remains possible"
 
 [[feature]]

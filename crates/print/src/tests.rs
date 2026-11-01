@@ -1144,3 +1144,14 @@ fn contents_pieces_join_with_a_space_across_a_trailing_comment() {
     let printed_ctrl = impose(&with_newline, &settings(vec![0], Layout::Size(SizeMode::Actual))).unwrap();
     assert_eq!(form_strings(printed_ctrl), [b"HIDDEN".to_vec(), b"SHOWN".to_vec()]);
 }
+
+#[test]
+fn a6_paper_size_matches_and_scales() {
+    let index = matching_paper((297.64, 419.53)).expect("A6 paper matches portrait");
+    assert_eq!(PAPERS[index].0, "A6");
+    assert_eq!(matching_paper((419.53, 297.64)), Some(index), "A6 paper matches landscape");
+    let s = Settings { pages: vec![0], paper: PAPERS[index].1, layout: Layout::Size(SizeMode::Actual), ..Settings::default() };
+    let sheets = layout(&[(297.64, 419.53)], &s).expect("layout succeeds");
+    assert_eq!(sheets[0].size, (297.64, 419.53));
+    assert_eq!(sheets[0].placed[0].matrix.0, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+}
