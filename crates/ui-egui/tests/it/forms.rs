@@ -99,6 +99,22 @@ fn a_blank_tooltip_shows_nothing() {
     assert!(egui::Tooltip::seconds_since_last_tooltip(&h.ctx).is_infinite(), "no tooltip was shown");
 }
 
+/// #5041: a field hidden while it has the keyboard (Hidden but printable in Field Properties,
+/// which leaves its editor open when entered from Fill) lets go of it, and keeps what was typed.
+#[test]
+fn a_field_hidden_while_it_is_being_typed_in_lets_go_and_keeps_the_text() {
+    let mut h = harness();
+    click_field(&mut h, "city", 0);
+    h.event(egui::Event::Text("Oslo".into()));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].forms.focus.as_ref().map(|f| f.text.as_str()), Some("Oslo"));
+    let props = pdfcraft_engine::FieldProps { display: Some(pdfcraft_engine::FieldDisplay::HiddenPrintable), ..Default::default() };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldProps { name: "city".into(), props: Box::new(props) }));
+    h.run_steps(4);
+    assert!(h.state().views[0].forms.focus.is_none(), "the hidden field's editor closed");
+    assert_eq!(value(&h, "city"), ["Oslo"], "what was typed is kept");
+}
+
 /// A text field that doesn't scroll (`DoNotScroll`) takes no more than it shows, measured as its
 /// appearance draws it: a long paste keeps what fits, typing into a full field adds nothing, and
 /// a field without the flag takes it all.
@@ -848,6 +864,100 @@ fn pressing_another_text_field_validates_the_refused_value_once() {
     assert_eq!(h.state().toast, None, "the release did not validate it again");
     let focus = h.state().views[0].forms.focus.clone().expect("the refused field stays open");
     assert_eq!((focus.name.as_str(), focus.text.as_str()), ("qty", "4500"));
+}
+
+/// #5041: a draft refused after its field was hidden while being typed in stays open for
+/// correcting: it is not committed (and refused, and alerted) again every frame, and a
+/// corrected value is taken.
+#[test]
+fn a_refused_draft_on_a_field_hidden_while_typed_in_can_be_corrected() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("order.pdf", None, validated_form()).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    h.run_steps(6);
+    click_field(&mut h, "qty", 0);
+    h.event(egui::Event::Text("500".into()));
+    h.run_steps(2);
+    let props = pdfcraft_engine::FieldProps { display: Some(pdfcraft_engine::FieldDisplay::HiddenPrintable), ..Default::default() };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldProps { name: "qty".into(), props: Box::new(props) }));
+    h.run_steps(4);
+    assert!(h.state().toast.is_some(), "the hidden field's draft was committed and refused");
+    h.state_mut().toast = None;
+    h.run_steps(6);
+    assert_eq!(h.state().toast, None, "the refused draft is not committed again");
+    let focus = h.state().views[0].forms.focus.clone().expect("the refused draft stays open");
+    assert_eq!(focus.name, "qty");
+    assert!(focus.text.contains("500"), "{:?}", focus.text);
+    // Corrected and left, it is taken.
+    h.state_mut().views[0].forms.focus.as_mut().unwrap().text = "50".into();
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    assert_eq!(value(&h, "qty"), ["50"]);
+    assert!(h.state().views[0].forms.focus.is_none());
+}
+
+fn validated_harness(bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("order.pdf", None, bytes).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    h.run_steps(6);
+    h
+}
+
+fn hide_field(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
+    let props = pdfcraft_engine::FieldProps { display: Some(pdfcraft_engine::FieldDisplay::HiddenPrintable), ..Default::default() };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldProps { name: name.into(), props: Box::new(props) }));
+}
+
+/// #5041: a draft refused while its field was visible, then corrected, is committed when the
+/// field is hidden: only the very draft that was refused stays open over a hidden field.
+#[test]
+fn a_corrected_draft_is_committed_when_its_field_is_hidden() {
+    let mut h = validated_harness(validated_form());
+    click_field(&mut h, "qty", 0);
+    h.event(egui::Event::Text("500".into()));
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    assert!(h.state().toast.is_some(), "Enter committed the draft and the field refused it");
+    h.state_mut().toast = None;
+    assert!(h.state().views[0].forms.focus.is_some(), "the refused draft reopened");
+    h.state_mut().views[0].forms.focus.as_mut().unwrap().text = "50".into();
+    h.run_steps(2);
+    hide_field(&mut h, "qty");
+    h.run_steps(4);
+    assert_eq!(value(&h, "qty"), ["50"], "hiding the field committed the corrected draft");
+    assert!(h.state().views[0].forms.focus.is_none());
+    assert_eq!(h.state().toast, None);
+}
+
+/// #5041: Tab from a refused draft kept open over its hidden field commits the corrected value
+/// and moves on to the next field in the tab order, as it would from the visible field.
+#[test]
+fn tab_from_a_refused_draft_on_a_hidden_field_moves_to_the_next_field() {
+    let mut h = validated_harness(validated_form_with_note());
+    click_field(&mut h, "qty", 0);
+    h.event(egui::Event::Text("500".into()));
+    h.run_steps(2);
+    hide_field(&mut h, "qty");
+    h.run_steps(4);
+    assert!(h.state().toast.is_some(), "the hidden field's draft was committed and refused");
+    h.state_mut().toast = None;
+    h.state_mut().views[0].forms.focus.as_mut().expect("the refused draft stays open").text = "50".into();
+    h.key_press(egui::Key::Tab);
+    h.run_steps(4);
+    assert_eq!(value(&h, "qty"), ["50"]);
+    assert_eq!(h.state().views[0].forms.focus.as_ref().map(|f| f.name.as_str()), Some("note"), "Tab moved on to the next field");
 }
 
 /// `validated_form` plus a plain text field, `note`, under `qty`.
