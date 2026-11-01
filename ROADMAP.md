@@ -213,8 +213,6 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
-- **2026-11-01 (M5/M14, #2664):** pt-BR Fill & Sign defaults and dynamic stamp by-lines follow the date language. Legacy US defaults migrate to automatic, including indistinguishable intentional old US choices; custom patterns and new explicit choices survive restart. Estimates unchanged.
-
 - **2026-10-31 (M2, PR #4172 review):** Added same-machine pixel oracles for GBK Song, Hei, Kai and FangSong, including all four subset-prefixed Founder aliases. Reference PDFs use explicit Unicode mappings and independently selected installed faces; font data and rasters remain in memory. All eight cases ran; wrong-glyph and wrong-family production mutations each failed the new assertion and were restored. Validation: 422 renderer unit tests, renderer all-target Clippy with -D warnings, formatting, layers/assets/parity and renderer WASM checks passed; existing optional-patch/WASM warnings and parity notes remain. Estimates unchanged.
 
 - **2026-10-31 (M2, PR #4172):** Integrated main fa5f9f8c, retaining both roadmap histories and raster regression groups. Restored display_config and thumbnail_config imports after the upstream explicit-import migration. Validation: 422 renderer unit tests, engine/UI all-target checks, scoped all-target Clippy with -D warnings, formatting, layers, assets, parity and renderer/engine WASM checks passed. Existing optional-patch/WASM warnings and parity notes remain; no full engine/UI runtime test rerun. Display-only font policy and estimates unchanged.
@@ -317,6 +315,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-15 (M5, PR #1971 refresh):** Nested FDF annotation values retain shared or cyclic copied graphs. Discovery borrows direct values and records annotation positions with lazy array owners; retained entries are budgeted before cloning. Synthetic stress fixtures include repeated aliases and saved-PDF cache eviction. Limits cover the copied graph; source parsing and page discovery retain their existing limits, with no total source-memory bound. FDF import semantics and estimates are unchanged.
 - **2026-10-13 (M5, nested FDF values):** Comment export copies and renumbers nested indirect values, retaining geometry, colours, borders and shared graphs. Graph/data limits return an error before the destination is written; synthetic saved-PDF and automation exchange regressions. Estimates unchanged.
 - **2026-10-18 (M2, #3086):** Text extraction estimates letter tracking without repeated punctuation gaps so dotted TOC leaders do not swallow word spaces. Synthetic PDF regressions cover leader lengths, phrase search and selection; strongly tracked text stays intact. Estimates unchanged.
+
+- **2026-11-01 (M5/M14, #2664):** pt-BR Fill & Sign defaults and dynamic stamp by-lines follow the date language. Legacy US defaults migrate to automatic, including indistinguishable intentional old US choices; custom patterns and new explicit choices survive restart. Estimates unchanged.
 
 - **2026-10-18 (M6, #2892):** Push-button normal labels are editable per widget through Options and form_set_props, independently of field names; rendering, undo/redo and incremental/full save/reopen are covered. Estimates unchanged.
 
