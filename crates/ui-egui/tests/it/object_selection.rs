@@ -598,6 +598,13 @@ fn the_level_buttons_are_always_shown_and_follow_any_selection() {
     }
     h.key_press(Key::Escape);
     h.run_steps(3);
+    // Esc leaves the text but selects the paragraph's box, as in Acrobat, so the buttons stay
+    // usable on it; a second Esc clears that selection and they go back to disabled.
+    for label in LEVEL_BUTTONS {
+        assert!(!h.get_by_label(label).accesskit_node().is_disabled(), "{label} follows the selected paragraph");
+    }
+    h.key_press(Key::Escape);
+    h.run_steps(3);
     for label in LEVEL_BUTTONS {
         assert!(h.get_by_label(label).accesskit_node().is_disabled(), "{label} goes back to disabled");
     }
