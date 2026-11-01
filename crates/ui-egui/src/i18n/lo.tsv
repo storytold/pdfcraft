@@ -786,14 +786,9 @@
 	Copy Image in Original Format	ສຳເນົາຮູບພາບໃນຮູບແບບຕົ້ນສະບັບ
 	The image has been copied as a {ext} file	ສຳເນົາຮູບພາບເປັນໄຟລ໌ {ext} ແລ້ວ
 	The page has changed; select the image again	ໜ້າປ່ຽນໄປແລ້ວ; ກະລຸນາເລືອກຮູບພາບອີກຄັ້ງ
-	Check for updates	ກວດສອບການອັບເດດ
 	No check has run yet.	ຍັງບໍ່ທັນມີການກວດສອບເທື່ອ.
-	Checking for a newer version…	ກຳລັງກວດສອບເວີຊັນໃໝ່…
 	PdfCraft {v} is available.	ມີ PdfCraft {v} ພ້ອມໃຫ້ໃຊ້ງານແລ້ວ.
 	You have version {c}. Download the new version from its release page.	ທ່ານກຳລັງໃຊ້ເວີຊັນ {c}. ດາວໂຫຼດເວີຊັນໃໝ່ໄດ້ຈາກໜ້າ release.
-	PdfCraft {c} is up to date.	PdfCraft {c} ເປັນເວີຊັນລ່າສຸດແລ້ວ.
-	Couldn't check for updates: {e}	ບໍ່ສາມາດກວດສອບການອັບເດດໄດ້: {e}
-	You have version {c}. All releases are listed at {page}.	ທ່ານກຳລັງໃຊ້ເວີຊັນ {c}. ລາຍການ release ທັງໝົດແມ່ນສະແດງຢູ່ທີ່ {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	ກວດສອບລຸ້ນລ່າສຸດຈາກ GitHub. ຈະບໍ່ມີການດາວໂຫຼດ ຫຼື ຕິດຕັ້ງໂດຍອັດຕະໂນມັດ.
 	Download	ດາວໂຫຼດ
 	Later	ພາຍຫຼັງ
@@ -2456,6 +2451,13 @@ animation effects	Off	ປິດ
 	Make properties default	ກຳນົດຄຸນສົມບັດເປັນຄ່າເລີ່ມຕົ້ນ
 	Pages selected	ໜ້າທີ່ເລືອກ
 	Page properties	ຄຸນສົມບັດໜ້າ
+	Arrange image	ຈັດຮູບພາບ
+	Bring forward	ນຳມາທາງໜ້າ
+	Bring to front	ນຳມາໄວ້ໜ້າສຸດ
+	Crop	ຕັດຂອບ
+	Remove crop	ຍົກເລີກການຕັດຂອບ
+	Send backward	ສົ່ງໄປທາງຫຼັງ
+	Send to back	ສົ່ງໄປໄວ້ຫຼັງສຸດ
 	Create & Edit	ສ້າງ & ແກ້ໄຂ
 	Review & Compare	ກວດກາຄືນ & ປຽບທຽບ
 	Forms & Signatures	ຟອມ & ລາຍເຊັນ
@@ -2486,3 +2488,33 @@ animation effects	Off	ປິດ
 	Unchecked reads	Unchecked reads
 	{field} reads fields named as it runs	{field} reads fields named as it runs
 	Some names are built as it runs	Some names are built as it runs
+
+# Image paste and Home notifications (AI-assisted; not separately native-reviewed)
+	Search…	ຄົ້ນຫາ…
+	Image pasted	ວາງຮູບແລ້ວ
+	No image on clipboard to paste	ບໍ່ມີຮູບໃນຄລິບບອດເພື່ອວາງ
+	Pinned {tool} to Home	ປັກໝຸດ {tool} ໄວ້ໜ້າຫຼັກແລ້ວ
+	Unpinned {tool} from Home	ຖອນໝຸດ {tool} ຈາກໜ້າຫຼັກແລ້ວ
+
+# Home tools (AI-assisted; not separately native-reviewed)
+	Clear search	ລ້າງການຄົ້ນຫາ
+	Pin	ປັກໝຸດ
+	Pin a tool…	ປັກໝຸດເຄື່ອງມື…
+	Pin to Home	ປັກໝຸດໄວ້ໜ້າຫຼັກ
+	Pin tools to Home	ປັກໝຸດເຄື່ອງມືໄວ້ໜ້າຫຼັກ
+	Pin your favorite tools here for quick access.	ປັກໝຸດເຄື່ອງມືທີ່ມັກໄວ້ທີ່ນີ້ເພື່ອເຂົ້າໃຊ້ໄດ້ໄວ.
+	Pinned	ປັກໝຸດແລ້ວ
+	Pinned Tools	ເຄື່ອງມືທີ່ປັກໝຸດ
+	Search tools…	ຄົ້ນຫາເຄື່ອງມື…
+	Select tools to display on your Home page for quick access.	ເລືອກເຄື່ອງມືໃຫ້ສະແດງໃນໜ້າຫຼັກເພື່ອເຂົ້າໃຊ້ໄດ້ໄວ.
+	Unpin from Home	ຖອນໝຸດຈາກໜ້າຫຼັກ
+	Unpin tool	ຖອນໝຸດເຄື່ອງມື
+	Transform image	ປ່ຽນຮູບຮ່າງຮູບ
+	Select Tool	ເຄື່ອງມືເລືອກ
+	Hand Tool	ເຄື່ອງມືມື
+	Marquee Zoom	ຊູມພື້ນທີ່ເລືອກ
+	Paste	ວາງ
+	Edit this PDF	ແກ້ໄຂ PDF ນີ້
+	Export this PDF	ສົ່ງອອກ PDF ນີ້
+	Find text or tools	ຊອກຫາຂໍ້ຄວາມ ຫຼື ເຄື່ອງມື
+	Crop image	ຕັດຂອບຮູບພາບ
