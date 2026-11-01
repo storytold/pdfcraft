@@ -3364,6 +3364,62 @@ fn a_caption_is_measured_in_the_font_and_paragraph_it_is_drawn_in() {
     assert!((left_next.y - left.y - (line + 4.0)).abs() < 0.01, "a one-line caption beside the box adds no height: {}", left_next.y - left.y);
 }
 
+/// The room a caption with no font and no reserve takes is worked out in its field's font,
+/// resolved before the room is: beside the box, the caption text's width; above it, one line.
+/// A 24pt field's caption takes four times the room of a 6pt one's, and neither takes the
+/// room of the 10pt Courier default.
+#[test]
+fn a_caption_without_a_font_or_a_reserve_takes_room_in_its_fields_font() {
+    // A 5in field at x=1in in 24pt or 6pt Arial, its caption naming no font and no reserve.
+    let field = |size: f64, placement: &str| {
+        let items = positioned(&format!(
+            r#"<field name="f" x="1in" y="0" w="5in" h="1in"><ui><textEdit/></ui><font typeface="Arial" size="{size}pt"/><caption placement="{placement}"><value><text>Name:</text></value></caption></field>"#
+        ));
+        let rect = items.iter().find_map(|i| if let Item::Widget(w) = i { Some(w.rect) } else { None }).expect("the field");
+        let cap = items.iter().find_map(|i| if let Item::Text(s) = i { Some((s.x, s.face.family, s.face.size)) } else { None }).expect("the caption");
+        (rect, cap)
+    };
+    let helvetica = |size: f64| text::Face {
+        family: crate::text::Family::Helvetica,
+        bold: false,
+        italic: false,
+        size,
+        color: [0.0; 3],
+        underline: false,
+        h_scale: 1.0,
+    };
+    let courier_room = text::Face { family: crate::text::Family::Courier, ..helvetica(10.0) }.width("Name:") + 2.0;
+    let mut rooms = Vec::new();
+    for size in [24.0, 6.0] {
+        let (rect, (cap_x, family, cap_size)) = field(size, "left");
+        // The box starts after the caption's room: its text's width in the field's font, plus 2pt.
+        let room = rect.x - cap_x;
+        let expected = helvetica(size).width("Name:") + 2.0;
+        assert!((room - expected).abs() < 0.05, "{size}pt: the caption takes {room}pt, not {expected}pt");
+        assert!((room - courier_room).abs() > 1.0, "{size}pt: not the default's {courier_room}pt");
+        // And it is drawn in that font, whole, in the room it was given.
+        assert_eq!((family, cap_size), (crate::text::Family::Helvetica, size), "drawn in the field's font");
+        rooms.push(room - 2.0);
+        // Above the box, the caption takes one line of the field's font.
+        // (The field's top is the box's, 0.5in down the page.)
+        let (top, _) = field(size, "top");
+        let above = top.y - 36.0;
+        assert!((above - text::line_height(size)).abs() < 0.05, "{size}pt: the top caption takes {above}pt");
+    }
+    assert!((rooms[0] / rooms[1] - 4.0).abs() < 0.01, "24pt against 6pt: {rooms:?}");
+}
+
+/// A caption font that names only a size takes the rest, its weight, style and family, from
+/// its field's font (XFA 3.3, "Formatting Text That Appears as Fixed or Variable Content", p. 43).
+#[test]
+fn a_caption_font_naming_only_a_size_takes_the_fields_weight_style_and_family() {
+    let items = positioned(
+        r#"<field name="f" x="1in" y="0" w="5in" h="0.5in"><ui><textEdit/></ui><font typeface="Times New Roman" size="8pt" weight="bold" posture="italic"/><caption reserve="2in"><font size="12pt"/><value><text>Name:</text></value></caption></field>"#,
+    );
+    let face = items.iter().find_map(|i| if let Item::Text(s) = i { Some(s.face.clone()) } else { None }).expect("the caption");
+    assert_eq!((face.family, face.bold, face.italic, face.size), (crate::text::Family::Times, true, true, 12.0));
+}
+
 /// A signature box the file already holds a signature for shows that signature, the file's own
 /// objects, and is locked; the other box stays unsigned.
 #[test]
