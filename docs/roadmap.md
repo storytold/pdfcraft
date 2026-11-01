@@ -1,7 +1,9 @@
 # PdfCraft roadmap: milestones and what's next
 
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M3, PR #1580: current fork pin verified live on GNOME/Wayland; PDF-only scaling and subsequent scrolling confirmed, no axis events during 17 captured pinch gestures; KDE/Sway and physical seat removal remain untested; estimates unchanged)
+>
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M3, PR #1580: native Wayland pinch port targets the resolved winit Git dependency via storytold/winit#20; focused Nix/winit tests passed, live hardware checks not repeated; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: integrate main fa5f9f8c; retain CJK viewer and upstream raster regressions, restore explicit display_config imports; estimates unchanged)
 > **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** patch (M2, PR #4172: integrate main 5af10276; retain both roadmap histories and viewer-only CJK font policy; estimates unchanged)

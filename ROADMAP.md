@@ -213,6 +213,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-01 (M3, #1580 review follow-up):** The contributor verified the current fork pin on GNOME Shell 50.5/Wayland: pinch scales only PDF content, the menu/toolbar stays the same size, and ordinary two-finger scrolling still works. Two completed traces captured 17 gestures, 987 updates and two cancellations, with no axis events inside the gesture intervals. KDE/Sway and physical seat removal remain untested. Dependency-origin CI remains blocked on storytold/winit#20; estimates unchanged.
+
 - **2026-10-31 (M3, #1580):** Refresh the native Wayland pinch candidate against `f137a289`. Pin the actual winit Git dependency to the pinch port proposed in storytold/winit#20; retained vendor code is provenance only. The Nix source build passed four egui pinch regressions, and winit passed 207 library tests plus four pinch tests and strict Clippy. Live hardware checks were not repeated; estimates unchanged.
 
 - **2026-10-31 (M2, PR #4172 review):** Added same-machine pixel oracles for GBK Song, Hei, Kai and FangSong, including all four subset-prefixed Founder aliases. Reference PDFs use explicit Unicode mappings and independently selected installed faces; font data and rasters remain in memory. All eight cases ran; wrong-glyph and wrong-family production mutations each failed the new assertion and were restored. Validation: 422 renderer unit tests, renderer all-target Clippy with -D warnings, formatting, layers/assets/parity and renderer WASM checks passed; existing optional-patch/WASM warnings and parity notes remain. Estimates unchanged.

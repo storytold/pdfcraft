@@ -17,6 +17,12 @@ The runtime port preserves the newer file-drag and IME seat teardown. Its four
 `winit_wayland_pinch` target additionally checks cumulative zoom through egui.
 The retained vendor pinch copy is provenance, not the runtime dependency.
 
+The 2026-11-01 review follow-up verified this runtime pin on GNOME Shell 50.5/Wayland:
+the contributor confirmed PDF-only pinch zoom in both directions and subsequent
+two-finger scrolling. Two completed traces showed no axis events during 17 pinch
+gestures, including two cancellations. KDE/Sway and physical seat removal remain
+untested; the winit fork's `PATCHES.md` records the upstream commit and adaptations.
+
 The retained winit copy has upstream base `e9809ef54b18499bb4f2cac945719ecc2a61061b`,
 as recorded in `vendor/winit/.cargo_vcs_info.json`. Its thirteen patch rows below
 match the fork's `PATCHES.md` entries W1–W13 commit for commit (W1 `b357a332`,
