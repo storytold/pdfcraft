@@ -97,12 +97,26 @@ impl OcgState {
     }
 
     pub(crate) fn begin_ocmd(&mut self, ocmd: &Dict<'_>) {
+        let visible = self.is_visible() && self.ocmd_is_active(ocmd);
+        self.visibility_stack.push(visible);
+    }
+
+    /// PdfCraft patch: whether an `/OC` entry outside marked content — an annotation's own `/OC` —
+    /// is visible under the document's layer configuration, without touching the visibility
+    /// stack. An annotation whose group or membership dictionary is OFF is not drawn.
+    pub(crate) fn oc_is_visible(&self, props: &Dict<'_>, ref_id: ObjectIdentifier) -> bool {
+        match props.get::<Name<'_>>(TYPE).as_deref() {
+            Some(OCMD) => self.is_visible() && self.ocmd_is_active(props),
+            _ => self.is_visible() && !self.inactive_ocgs.contains(&ref_id),
+        }
+    }
+
+    /// Whether an `/OCMD` membership dictionary's groups answer On for this configuration.
+    fn ocmd_is_active(&self, ocmd: &Dict<'_>) -> bool {
         // PdfCraft patch (40): a visibility expression takes precedence over /OCGs and /P
         // (ISO 32000-2 §8.11.2.2); a malformed one is ignored and they decide instead.
         if let Some(visible) = ocmd.get::<Array<'_>>(VE).and_then(|ve| self.visibility_expression(&ve, 0)) {
-            let visible = self.is_visible() && visible;
-            self.visibility_stack.push(visible);
-            return;
+            return visible;
         }
 
         let policy = ocmd
@@ -122,19 +136,15 @@ impl OcgState {
             ocg_ids.push(ref_.into());
         }
 
-        let is_active = if ocg_ids.is_empty() {
-            true
-        } else {
-            match policy {
-                OcmdPolicy::AllOn => ocg_ids.iter().all(|id| !self.inactive_ocgs.contains(id)),
-                OcmdPolicy::AnyOn => ocg_ids.iter().any(|id| !self.inactive_ocgs.contains(id)),
-                OcmdPolicy::AnyOff => ocg_ids.iter().any(|id| self.inactive_ocgs.contains(id)),
-                OcmdPolicy::AllOff => ocg_ids.iter().all(|id| self.inactive_ocgs.contains(id)),
-            }
-        };
-
-        let visible = self.is_visible() && is_active;
-        self.visibility_stack.push(visible);
+        if ocg_ids.is_empty() {
+            return true;
+        }
+        match policy {
+            OcmdPolicy::AllOn => ocg_ids.iter().all(|id| !self.inactive_ocgs.contains(id)),
+            OcmdPolicy::AnyOn => ocg_ids.iter().any(|id| !self.inactive_ocgs.contains(id)),
+            OcmdPolicy::AnyOff => ocg_ids.iter().any(|id| self.inactive_ocgs.contains(id)),
+            OcmdPolicy::AllOff => ocg_ids.iter().all(|id| self.inactive_ocgs.contains(id)),
+        }
     }
 
     /// PdfCraft patch (40): evaluate a visibility expression (`/VE`, PDF 1.6): `[/And e…]`,
