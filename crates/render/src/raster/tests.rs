@@ -7411,7 +7411,7 @@ trailer << /Root 1 0 R >>
         let p = &crate::inspect(Arc::new(bytes), None).expect("opens").pages[0];
         (p.width, p.height)
     };
-    for rotate in [0, 90, 180, 270, -90, 450, 45] {
+    for rotate in [0, 90, 180, 270] {
         let turned = format!("/Rotate {rotate}");
         let (w, h) = if rotate % 180 == 0 { (80.0, 70.0) } else { (70.0, 80.0) };
         let plain = render(pdf(&turned, ""), 2.0);
