@@ -152,7 +152,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "doc_save",
             "Save a document",
-            "Save to its own file (an incremental update, which keeps signatures valid) or to a new path (a full rewrite). The write is atomic. flatten_fill_sign bakes Fill & Sign text, marks and signatures into the page first and removes those annotations; other comments and form fields stay. Omit it, or pass false, to leave them editable.",
+            "Save to its own file (an incremental update, which keeps signatures valid) or to a new path (a full rewrite). The write is atomic. flatten_fill_sign bakes Fill & Sign text, marks and signatures into the page first and removes those annotations; other comments and form fields stay. Omit it, or pass false, to leave them editable. A file opened with on_disk saves as a copy of itself, so flatten_fill_sign and full are refused for it.",
         )
         .destructive()
         .cmd("file.save")
@@ -160,7 +160,7 @@ pub fn tools() -> Vec<ToolDef> {
             json!({
                 "doc": doc(),
                 "path": { "type": "string", "description": "Save as this file. Omit to save in place." },
-                "full": { "type": "boolean", "description": "Force a full rewrite (or, with false, an incremental update)." },
+                "full": { "type": "boolean", "description": "Force a full rewrite (or, with false, an incremental update). Refused for a file read from disk, which saves as a copy." },
                 "flatten_fill_sign": { "type": "boolean", "description": "Bake Fill & Sign marks into the page before writing. Default false." }
             }),
             &["doc"],

@@ -185,6 +185,9 @@ fn a_file_opened_on_disk_reads_saves_as_a_copy_and_refuses_edits() {
     let flattened = a.call("doc_save", &json!({ "doc": doc, "path": "flat.pdf", "flatten_fill_sign": true }));
     assert!(flattened.is_err(), "a copy is not a flattened file");
     assert!(!dir.join("flat.pdf").exists());
+    let rewritten = a.call("doc_save", &json!({ "doc": doc, "path": "full.pdf", "full": true }));
+    assert!(rewritten.is_err(), "and it is not a full rewrite");
+    assert!(!dir.join("full.pdf").exists());
     std::fs::remove_file(dir.join("large.pdf")).unwrap();
     json(&mut a, "doc_save", json!({ "doc": doc }));
     assert_eq!(std::fs::read(dir.join("large.pdf")).unwrap(), pdf, "a deleted file comes back");

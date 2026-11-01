@@ -153,7 +153,7 @@ impl Automation {
         let same_file = doc.path.as_deref().is_some_and(|p| Path::new(p) == target);
         // A file on disk is copied as it is: there is nothing else to write, and nothing in memory.
         if let Some(file) = doc.on_disk.clone() {
-            if a.opt_bool("flatten_fill_sign")?.unwrap_or(false) {
+            if a.opt_bool("flatten_fill_sign")?.unwrap_or(false) || a.opt_bool("full")?.unwrap_or(false) {
                 return Err(pdfcraft_engine::EditError::OnDisk.into());
             }
             if !same_file || pdfcraft_engine::on_disk::must_write_back(&target, file.size())? {
