@@ -42,6 +42,7 @@ fn an_upright_note_on_a_turned_page_is_in_view_where_it_is_drawn() {
         fill_sign: false,
         no_rotate,
         points: Vec::new(),
+        no_zoom: false,
     };
     let page = PageInfo { width: 140.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 200.0, 140.0], rotation: 90 };
     let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(140.0, 200.0)), rot: 0, pw: 140.0, ph: 200.0 };
@@ -62,6 +63,63 @@ fn an_upright_note_on_a_turned_page_is_in_view_where_it_is_drawn() {
             redact_mark: ([0.0; 3], 1.0),
         };
         assert_eq!(edited_in_view(&cx, 0, viewport), in_view, "no_rotate: {no_rotate}");
+    }
+}
+
+/// A redaction mark a file flags NoZoom shows, under the pointer, the areas applying it removes
+/// (its `/QuadPoints`, or its `/Rect` without them, ISO 32000-2 Table 195) at any zoom, not its
+/// appearance scaled to keep its size on the screen. At 50% that scale would double the fill
+/// over content the mark leaves in place.
+#[test]
+fn a_no_zoom_redaction_mark_shows_the_areas_it_removes() {
+    let mark = |quads: Vec<[f32; 8]>| Annotation {
+        page: 0,
+        subtype: "Redact".into(),
+        author: None,
+        contents: None,
+        modified: None,
+        name: None,
+        in_reply_to: None,
+        parent: None,
+        grouped: false,
+        rect: [40.0, 100.0, 80.0, 120.0],
+        color: None,
+        index: 0,
+        state: None,
+        quads,
+        locked: false,
+        intent: None,
+        fill_sign: false,
+        no_rotate: false,
+        points: Vec::new(),
+        no_zoom: true,
+    };
+    let page = PageInfo { width: 200.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 200.0, 200.0], rotation: 0 };
+    let prefs = CommentPrefs::default();
+    let quad = [40.0, 120.0, 80.0, 120.0, 40.0, 100.0, 80.0, 100.0];
+    for (magnification, scaled) in [(0.5, true), (1.0, false), (2.0, true)] {
+        let side = 200.0 * magnification * crate::canvas::PT;
+        let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(side, side)), rot: 0, pw: 200.0, ph: 200.0 };
+        for quads in [vec![quad], Vec::new()] {
+            let info = DocInfo { pages: vec![page.clone()], annotations: vec![mark(quads.clone())], ..Default::default() };
+            let cx = PageCx {
+                page: 0,
+                xf: &xf,
+                ptr: &PagePointer::default(),
+                info: &info,
+                tool: QuickTool::Select,
+                prefs: &prefs,
+                allowed: true,
+                hidden: false,
+                redact_mark: ([0.0; 3], 1.0),
+            };
+            let a = &info.annotations[0];
+            let removed = xf.user_rect(&info, 0, [40.0, 100.0, 80.0, 120.0]);
+            assert_eq!(cx.redact_rects(a), vec![removed], "{magnification}, quads: {}", quads.len());
+            if scaled {
+                assert_ne!(cx.screen_rect(a), removed, "{magnification}: the mark is drawn NoZoom");
+            }
+        }
     }
 }
 
@@ -87,6 +145,7 @@ fn listed(page: usize, index: usize, contents: &str, parent: Option<(usize, usiz
         fill_sign: false,
         no_rotate: false,
         points: Vec::new(),
+        no_zoom: false,
     }
 }
 
@@ -176,6 +235,7 @@ fn annotation(subtype: &str, contents: Option<&str>, fill_sign: bool) -> Annotat
         fill_sign,
         no_rotate: false,
         points: Vec::new(),
+        no_zoom: false,
     }
 }
 
@@ -381,6 +441,7 @@ fn context_menu_colour_submenu_keeps_its_picker_open_and_a_swatch_closes_the_men
             fill_sign: false,
             points: Vec::new(),
             no_rotate: false,
+            no_zoom: false,
         }],
         ..Default::default()
     };

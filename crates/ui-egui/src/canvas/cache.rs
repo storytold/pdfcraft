@@ -320,6 +320,7 @@ impl DocView {
                     tag: THUMB_TAG | u64::from(scale.to_bits()),
                     // Thumbnails are previews: tiny images are skipped for them.
                     preview: true,
+                    magnification: None,
                 })
             })
             .collect()
@@ -641,6 +642,29 @@ impl DocView {
         }
     }
 
+    /// Page rasters are drawn for the zoom as well as the scale: NoZoom comments and notes keep
+    /// their size on screen, drawn at the zoom as the magnification (ISO 32000-2 Table 167). The
+    /// cache knows a raster by its scale tag alone, and the scale is the zoom times the pixel
+    /// density, so a raster tagged with the current scale was drawn at the current zoom only
+    /// while the density is unchanged. When it changes (the window moved to another display),
+    /// every cached page raster is redrawn, as are the tiles at the current scale `tag`; each
+    /// stays on screen until its replacement arrives. Tiles of other scales carry the old density's
+    /// zoom too, and are dropped (as [`DocView::page_changed`] drops them).
+    pub(super) fn note_pixel_density(&mut self, ppp: f32, tag: u64) {
+        if self.raster_ppp.to_bits() == ppp.to_bits() {
+            return;
+        }
+        if self.raster_ppp != 0.0 {
+            for p in self.pages.values_mut() {
+                p.tag = STALE_TAG;
+            }
+            self.tiles.retain(|key, _| key.1 == tag);
+            self.stale_tiles.retain(|key| key.1 == tag);
+            self.stale_tiles.extend(self.tiles.keys().copied());
+        }
+        self.raster_ppp = ppp;
+    }
+
     pub(super) fn render_scale(&self, ppp: f32) -> f32 {
         // Exactly the device scale: a raster at any other scale is resampled on screen, which
         // blurs every line and glyph (#260).
@@ -668,7 +692,7 @@ impl DocView {
             let tag = scale_tag(scale) | PRINT_TAG | if self.grayscale { GRAYSCALE_TAG } else { 0 };
             let fresh = self.print_pages.get(&page).is_some_and(|(have, _)| *have == tag);
             if !fresh {
-                self.frame_queue.push(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale, tag, preview: false });
+                self.frame_queue.push(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale, tag, preview: false, magnification: None });
             }
         }
     }
