@@ -1429,13 +1429,17 @@ fn tracked_text_preserves_larger_word_gaps() {
 
 /// LibreOffice stretches a justified line on both sides of each space glyph, so a gap that reads
 /// as a space comes right before the space glyph it widens: one space, not two. A gap after the
-/// space glyph, and a space glyph with no gap before it, read as before.
+/// space glyph, a space glyph with no gap before it, and two space glyphs after a gap read as
+/// before.
 #[test]
 fn a_gap_before_a_space_glyph_reads_as_one_space() {
     for show in ["[(Word) -250 ( next) -250 ( last)] TJ", "[(Word ) -250 (next ) -250 (last)] TJ", "[(Word) -250 (next) 0 ( last)] TJ"] {
         let doc = text_page(&format!("BT /F1 10 Tf 72 700 Td {show} ET"));
         assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "Word next last", "{show}");
     }
+    // Only the first space glyph after the gap is the gap's: two real spaces stay two.
+    let doc = text_page("BT /F1 10 Tf 72 700 Td [(Word) -250 (  next)] TJ ET");
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "Word  next");
     // Down a vertical column the same.
     let doc = vertical_page("BT /V1 20 Tf 500 720 Td [<0041> 300 <00200042> 300 <00200043>] TJ ET");
     assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "A B C");
