@@ -4775,8 +4775,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.import_data"]
 tools = ["doc_import_data"]
-evidence = ["crates/xfdf/src/tests.rs::xfdf_import_keeps_text_around_xml_comments_and_instructions", "crates/xfdf/src/tests.rs::xfdf_round_trips_comments_and_values", "crates/xfdf/src/tests.rs::fdf_round_trips_values_and_comments", "crates/automation/tests/it/automation.rs::comments_and_form_data_travel_as_xfdf_fdf_and_text"]
-notes = "XFDF, FDF; XFDF text survives XML comments and processing instructions; values go through formats and validation; read-only fields take data; XFA forms also take XDP/XML data files (form.xfa-data)"
+evidence = ["crates/xfdf/src/tests.rs::xfdf_import_keeps_text_around_xml_comments_and_instructions", "crates/xfdf/src/tests.rs::xfdf_round_trips_comments_and_values", "crates/xfdf/src/tests.rs::fdf_round_trips_values_and_comments", "crates/automation/tests/it/automation.rs::comments_and_form_data_travel_as_xfdf_fdf_and_text", "crates/automation/src/tests.rs::doc_import_data_rejects_invalid_utf8_without_changing_form_values"]
+notes = "XFDF, FDF; XFDF text survives XML comments and processing instructions; values go through formats and validation; read-only fields take data; XFA forms also take XDP/XML data files (form.xfa-data). Malformed UTF-8 in generic XFDF import is refused before document state changes; binary FDF and separate XFA decoding are unchanged."
 
 [[feature]]
 id = "form.export-data"
@@ -4799,8 +4799,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.export_data", "form.import_data"]
 tools = ["doc_export_data", "doc_import_data"]
-evidence = ["crates/xfdf/src/tests.rs::form_data_as_xml_csv_and_text", "crates/automation/tests/it/automation.rs::comments_and_form_data_travel_as_xfdf_fdf_and_text", "crates/xfdf/src/tests.rs::xml_exports_preserve_whitespace_in_field_names", "crates/xfdf/src/tests.rs::xml_form_import_preserves_text_around_comments_and_instructions", "crates/xfdf/src/tests.rs::csv_headers_with_tabs_survive_export_import_and_save", "crates/xfdf/src/tests.rs::tabular_import_keeps_tsv_quotes_literal_and_csv_value_tabs"]
-notes = "Acrobat's XML (xfdf:original), CSV, tab-delimited; XML/XFDF exports retain tabs and line breaks in field identities through character references; plain AcroForm XML imports retain all direct text around comments and processing instructions, including CDATA and character references. Nested-element and XFA interpretation remain outside this flat exchange format. CSV export and spreadsheet merging quote tabs, and import distinguishes quoted tabs from TSV delimiters without changing field identities. Ambiguous externally authored tables remain heuristic."
+evidence = ["crates/xfdf/src/tests.rs::form_data_as_xml_csv_and_text", "crates/automation/tests/it/automation.rs::comments_and_form_data_travel_as_xfdf_fdf_and_text", "crates/xfdf/src/tests.rs::xml_exports_preserve_whitespace_in_field_names", "crates/xfdf/src/tests.rs::xml_form_import_preserves_text_around_comments_and_instructions", "crates/xfdf/src/tests.rs::csv_headers_with_tabs_survive_export_import_and_save", "crates/xfdf/src/tests.rs::tabular_import_keeps_tsv_quotes_literal_and_csv_value_tabs", "crates/xfdf/src/tests.rs::malformed_utf8_form_data_is_refused_without_changing_fields_or_comments"]
+notes = "Acrobat's XML (xfdf:original), CSV, tab-delimited; XML/XFDF exports retain tabs and line breaks in field identities through character references; plain AcroForm XML imports retain all direct text around comments and processing instructions, including CDATA and character references. Nested-element and XFA interpretation remain outside this flat exchange format. CSV export and spreadsheet merging quote tabs, and import distinguishes quoted tabs from TSV delimiters without changing field identities. Ambiguous externally authored tables remain heuristic. Generic XML/CSV/tab text imports refuse malformed UTF-8 before fields or comments change, while UTF-8 BOM and genuine U+FFFD remain accepted."
 
 [[feature]]
 id = "form.merge-to-spreadsheet"
@@ -4811,8 +4811,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.merge_data"]
 tools = ["form_merge_data"]
-evidence = ["crates/xfdf/src/tests.rs::data_files_merge_into_a_spreadsheet", "crates/automation/tests/it/automation.rs::merging_form_data_into_a_spreadsheet", "crates/ui-egui/tests/it/javascript.rs::merge_data_files_into_a_spreadsheet", "crates/xfdf/src/tests.rs::csv_headers_with_tabs_survive_export_import_and_save"]
-notes = "FDF, XFDF or filled-in PDF forms \u2192 CSV, a column per field and a row per file. CSV header tabs, quotes and line breaks retain field identities through import and save/reopen; ambiguous external table detection remains heuristic."
+evidence = ["crates/xfdf/src/tests.rs::data_files_merge_into_a_spreadsheet", "crates/automation/tests/it/automation.rs::merging_form_data_into_a_spreadsheet", "crates/ui-egui/tests/it/javascript.rs::merge_data_files_into_a_spreadsheet", "crates/xfdf/src/tests.rs::csv_headers_with_tabs_survive_export_import_and_save", "crates/automation/src/tests.rs::form_merge_data_keeps_existing_output_when_a_later_input_has_invalid_utf8", "crates/automation/src/tests.rs::form_merge_data_pdf_marker_classifies_xfdf_before_writing", "crates/xfdf/src/tests.rs::data_values_pdf_marker_fallback_preserves_binary_formats"]
+notes = "FDF, XFDF or filled-in PDF forms \u2192 CSV, a column per field and a row per file. CSV header tabs, quotes and line breaks retain field identities through import and save/reopen; ambiguous external table detection remains heuristic. Malformed UTF-8 XFDF makes the whole merge fail before creating or replacing CSV output; binary FDF/PDF decoding is unchanged. Recognizable XFDF roots keep embedded PDF markers on the strict UTF-8 text path; direct binary signatures and unrecognized prefixed PDFs retain their existing routing."
 
 [[feature]]
 id = "form.flatten-fields"
