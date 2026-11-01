@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use super::fallback::{same_font, same_paint};
 use super::interp::{Carry, Origin, Pen, Shown, TextState, Ts, direction, interpret, to_frame, union};
 use super::{DecodeBudget, Dict, Document, EditError, HashMap, Matrix, Object, Op, Pieces, Stream, TextLine, parse, serialize_ops};
@@ -452,8 +454,39 @@ impl FormBudget {
 pub(crate) struct FormCall {
     pub(crate) obj: Option<pdfcraft_cos::ObjRef>,
     pub(crate) data: Vec<u8>,
-    pub(crate) resources: Dict,
+    /// The form, and its `/Resources` when they are an object of their own, which is what
+    /// [`FormCall::resources`] reads.
+    form: Arc<Object>,
+    own: Option<Arc<Object>>,
     pub(crate) ctm: Matrix,
+}
+
+impl FormCall {
+    /// The resources its content is read with: its own, or if it has none, `drawn_with`, the ones
+    /// it was drawn with (PDF 1.1 files). Read in place, as a page can draw a form thousands of times:
+    /// a copy for each took time in the square of them.
+    pub(crate) fn resources<'a>(&'a self, drawn_with: &'a Dict) -> &'a Dict {
+        let direct = || match &*self.form {
+            Object::Stream(s) => s.dict.get(b"Resources").and_then(Object::as_dict),
+            _ => None,
+        };
+        self.own.as_deref().and_then(Object::as_dict).or_else(direct).unwrap_or(drawn_with)
+    }
+}
+
+/// `o` as a dictionary, read in place for the same reason as [`FormCall::resources`]. `held` keeps it
+/// when it is an object of its own. Nothing else is one, and [`Document::resolve`] would copy it.
+pub(crate) fn dict_in_place<'a>(doc: &Document, o: &'a Object, held: &'a mut Option<Arc<Object>>) -> Option<&'a Dict> {
+    match o {
+        Object::Dict(dict) => Some(dict),
+        Object::Ref(_) => held.insert(doc.resolve(o)).as_dict(),
+        _ => None,
+    }
+}
+
+/// The dictionary at `key` of `resources`, `/XObject` or `/Font`, say, as each form reads these.
+pub(crate) fn resource_dict<'a>(doc: &Document, resources: &'a Dict, key: &[u8], held: &'a mut Option<Arc<Object>>) -> Option<&'a Dict> {
+    dict_in_place(doc, resources.get(key)?, held)
 }
 
 /// The form XObject `name` in `resources`, drawn with `ctm`. `None` for images, missing names
@@ -472,13 +505,15 @@ pub(crate) fn form_call(
     if limited && budget.truncated {
         return None;
     }
-    let xobjects = resources.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned())?;
-    let o = xobjects.get(name)?;
-    let obj = o.as_ref();
+    let mut held = None;
+    let o = resource_dict(doc, resources, b"XObject", &mut held)?.get(name)?;
+    // Only a reference can name a stream, so nothing else needs reading, or copying.
+    let obj = Some(o.as_ref()?);
     if obj.is_some_and(|r| path.contains(&r)) {
         return None;
     }
-    let Object::Stream(s) = &*doc.resolve(o) else { return None };
+    let form = doc.resolve(o);
+    let Object::Stream(s) = &*form else { return None };
     if s.dict.name(b"Subtype") != Some(b"Form") {
         return None;
     }
@@ -492,8 +527,7 @@ pub(crate) fn form_call(
         let v: Vec<f64> = a.iter().filter_map(|x| doc.resolve(x).as_f64()).collect();
         <[f64; 6]>::try_from(v).ok().filter(|v| v.iter().all(|x| x.is_finite()))
     });
-    // A form without its own resources uses the ones it was drawn with (PDF 1.1 files).
-    let own = s.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned());
+    let own = s.dict.get(b"Resources").filter(|r| matches!(r, Object::Ref(_))).map(|r| doc.resolve(r));
     let data = match budget.decode.decode(s) {
         Ok(data) => data,
         Err(_) if budget.decode.remaining() == 0 => {
@@ -503,7 +537,7 @@ pub(crate) fn form_call(
         Err(_) => Vec::new(),
     };
     budget.visits = budget.visits.saturating_add(1);
-    Some(FormCall { obj, data, resources: own.unwrap_or_else(|| resources.clone()), ctm: m.map_or(ctm, |m| Matrix(m).then(&ctm)) })
+    Some(FormCall { obj, data, form, own, ctm: m.map_or(ctm, |m| Matrix(m).then(&ctm)) })
 }
 
 /// The lines a page shows as it reads, including text drawn by form XObjects (which
@@ -522,8 +556,9 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
     fn walk(w: &mut Walk, ops: &[Op], resources: &Dict, carry: &mut Carry, stream: &dyn Fn(usize) -> usize) -> Result<(), EditError> {
         let mut cache = HashMap::new();
         let mut invoked = Vec::new();
-        let properties = resources.get(b"Properties").and_then(|o| w.doc.dict(o)).unwrap_or_default();
-        let shown = interpret(w.doc, ops, resources, &mut cache, carry, Some(&mut invoked), Some(&properties))?;
+        let (mut held, none) = (None, Dict::new());
+        let properties = resource_dict(w.doc, resources, b"Properties", &mut held).unwrap_or(&none);
+        let shown = interpret(w.doc, ops, resources, &mut cache, carry, Some(&mut invoked), Some(properties))?;
         let mut last = None;
         let mut last_stream = None;
         let mut forms = invoked.into_iter().peekable();
@@ -556,7 +591,7 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
         if let Some(r) = form.obj {
             w.path.push(r);
         }
-        walk(w, &ops, &form.resources, &mut carry, &|_| stream)?;
+        walk(w, &ops, form.resources(resources), &mut carry, &|_| stream)?;
         *text_left = carry.text_left;
         if form.obj.is_some() {
             w.path.pop();

@@ -98,8 +98,13 @@ pub fn page_background(doc: &Document, page: usize) -> Result<Option<Rgb>, EditE
             }
             b"sc" | b"scn" => st.fill = colour(st.space, op),
             b"gs" => {
-                if let Some(g) = op.name(0).and_then(|n| gstates.get(n)).map(|g| doc.resolve(g)).and_then(|g| g.as_dict().cloned()) {
-                    apply_gstate(doc, &g, &mut st);
+                let mut held = None;
+                let gstate = match op.name(0).and_then(|n| gstates.get(n)) {
+                    Some(g) => crate::text::dict_in_place(doc, g, &mut held),
+                    None => None,
+                };
+                if let Some(g) = gstate {
+                    apply_gstate(doc, g, &mut st);
                 }
             }
             b"re" => match op.nums::<4>() {

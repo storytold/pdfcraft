@@ -9225,8 +9225,7 @@ fn page_of_pictures(count: usize, side: usize) -> Vec<u8> {
 
 /// The allowance is the export's, not each picture's: a page of many small pictures stops where it
 /// runs out, the rest are left out and counted, and the page is listed, which is what the export's
-/// warning goes by. A few large pictures are well within it, and all come through. 2,000 are enough
-/// to show it: 10,000 behave the same, and take half a minute to read in a test build.
+/// warning goes by. A few large pictures are well within it, and all come through.
 #[test]
 fn a_page_of_many_pictures_stops_at_the_exports_allowance() {
     let export = |pdf: Vec<u8>, work: &mut pdfcraft_cos::ImageBudget| {
@@ -9240,10 +9239,10 @@ fn a_page_of_many_pictures_stops_at_the_exports_allowance() {
     assert!(cost > 0);
 
     let mut work = pdfcraft_cos::ImageBudget::with_work(100 * cost);
-    let (pages, truncated) = export(page_of_pictures(2_000, 2), &mut work);
+    let (pages, truncated) = export(page_of_pictures(10_000, 2), &mut work);
     assert_eq!(pages[0].images.len(), 100);
     assert_eq!(truncated, vec![0]);
-    assert_eq!(work.refused(), 1_900);
+    assert_eq!(work.refused(), 9_900);
 
     let mut s = Session::new();
     let id = s.open("large.pdf", None, Arc::new(page_of_pictures(3, 1_000)), None).unwrap();
