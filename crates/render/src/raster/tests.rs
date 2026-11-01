@@ -2900,6 +2900,64 @@ fn jpx_decoded_on_several_threads_has_the_samples_of_one_thread() {
     }
 }
 
+/// A JP2 file of [`jpx_midpoint_pdf`]'s 8-bit codestream (every sample 128) with `components`
+/// components and the given boxes in its header after `ihdr`.
+fn midpoint_jp2(components: u16, header_boxes: &[(&[u8; 4], Vec<u8>)]) -> Vec<u8> {
+    let raw = jpx_midpoint_pdf(8, components);
+    let start = raw.windows(4).position(|w| w == [0xff, 0x4f, 0xff, 0x51]).unwrap();
+    let end = raw.windows(2).rposition(|w| w == [0xff, 0xd9]).unwrap() + 2;
+    let jp2_box = |kind: &[u8], body: &[u8]| [&((8 + body.len()) as u32).to_be_bytes()[..], kind, body].concat();
+    let ihdr = [&1_u32.to_be_bytes()[..], &1_u32.to_be_bytes(), &components.to_be_bytes(), &[7, 7, 0, 0]].concat();
+    let header =
+        [jp2_box(b"ihdr", &ihdr)].into_iter().chain(header_boxes.iter().map(|(kind, body)| jp2_box(*kind, body))).collect::<Vec<_>>().concat();
+    [
+        vec![0, 0, 0, 12, b'j', b'P', b' ', b' ', 0x0d, 0x0a, 0x87, 0x0a],
+        jp2_box(b"ftyp", b"jp2 \0\0\0\0jp2 "),
+        jp2_box(b"jp2h", &header),
+        jp2_box(b"jp2c", &raw[start..end]),
+    ]
+    .concat()
+}
+
+/// hayro-jpeg2000 patch (2): a CIELab image's b* channel is decoded with the b* range of its
+/// colour specification (ISO 15444-1 M.11.7.4.1), not the a* range. The ranges and offsets
+/// written out at their default values decode exactly as when they are left out.
+#[test]
+fn a_jp2_cielab_image_reads_its_b_range() {
+    let decode = |ep: &[u32]| {
+        let colr = [&[1, 0, 0][..], &14_u32.to_be_bytes(), &ep.iter().flat_map(|v| v.to_be_bytes()).collect::<Vec<_>>()].concat();
+        let jp2 = midpoint_jp2(3, &[(b"colr", colr)]);
+        hayro_jpeg2000::Image::new(&jp2, &hayro_jpeg2000::DecodeSettings::default()).and_then(|image| image.decode()).unwrap()
+    };
+    // RL, OL, RA, OA, RB, OB for 8 bits, and IL (D50).
+    let defaults = [100, 0, 170, 128, 200, 96, 0x0044_3530];
+    assert_eq!(decode(&defaults), decode(&[]));
+}
+
+/// hayro-jpeg2000 patch (3): a palette column deeper than the 31 bits the decoder handles (ISO
+/// 15444-1 allows 38, the descriptor can say 128) makes the palette box invalid, and the lenient
+/// decode sets an invalid palette aside, drawing the indices as they are (here the midpoint, 128).
+/// It overflowed the shift that rescales the colours to 8 bits, which panicked in debug builds.
+/// A 31-bit column is still applied.
+#[test]
+fn a_jp2_palette_deeper_than_31_bits_is_set_aside() {
+    let decode = |bits: u8| {
+        let bytes = usize::from(bits).div_ceil(8);
+        // 256 entries, all the column's largest value, so index 128 (the midpoint) is full scale.
+        let max = u128::MAX >> (128 - u32::from(bits));
+        let entry = &max.to_be_bytes()[16 - bytes..];
+        let pclr = [&[1, 0, 1, bits - 1][..], &entry.repeat(256)].concat();
+        let colr = [&[1, 0, 0][..], &17_u32.to_be_bytes()].concat(); // greyscale
+        let cmap = vec![0, 0, 1, 0]; // channel 0 from component 0 through palette column 0
+        let jp2 = midpoint_jp2(1, &[(b"colr", colr), (b"pclr", pclr), (b"cmap", cmap)]);
+        hayro_jpeg2000::Image::new(&jp2, &hayro_jpeg2000::DecodeSettings::default()).and_then(|image| image.decode())
+    };
+    assert_eq!(decode(31).unwrap(), vec![255]);
+    for bits in [32, 33, 38, 128] {
+        assert_eq!(decode(bits).unwrap(), vec![128], "a {bits}-bit palette column was applied");
+    }
+}
+
 #[test]
 fn jpx_32_bit_image_does_not_prevent_other_page_content_from_rendering() {
     for bpc in [8, 32] {

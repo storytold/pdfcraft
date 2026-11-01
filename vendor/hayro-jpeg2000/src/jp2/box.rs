@@ -85,7 +85,9 @@ pub(crate) fn read<'a>(reader: &mut BitReader<'a>) -> Option<Jp2Box<'a>> {
         // fields.
         1 => {
             let xl_box = reader.read_u64()?.checked_sub(16)?;
-            reader.read_bytes(xl_box as usize)?
+            // PdfCraft patch (4): a length past `usize` (on 32-bit targets, wasm) is refused,
+            // not truncated into a shorter box whose end puts the reader mid-box.
+            reader.read_bytes(usize::try_from(xl_box).ok()?)?
         }
         // This field specifies the length of the box, stored as a 4-byte big-endian unsigned integer.
         // This value includes all of the fields of the box, including the length and type.

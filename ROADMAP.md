@@ -213,6 +213,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-01 (M2, PR #5649 review):** JPEG 2000 helper threads share one process-wide budget; vendored hayro-jpeg2000 patches 2-4 from review: the CIELab b* range, palette columns past 31 bits set aside instead of overflowing, and 64-bit XLBox lengths refused on 32-bit targets. Each new test failed with its fix reverted; 488 renderer tests, the crate's tests, scoped Clippy with -D warnings, formatting, layers, assets and the no-`std` and wasm checks pass.
+
 - **2026-11-01 (M2, JPEG 2000 decode):** Vendored hayro-jpeg2000 0.3.5 with patch 1: a large tile decodes its code-blocks in disjoint row stripes, and transforms its components, on up to 8 threads (never on wasm or without `std`), with byte-identical samples. A 3320 × 4676 scanned page opens in about 600 ms instead of 1,060 ms. Validation: 99 single- vs multi-thread decodes of 33 synthetic and real codestreams at three sizes were identical; the new raster test failed when either parallel stage was broken on purpose; 486 renderer tests, scoped Clippy with -D warnings, formatting, layers, assets and the crate's no-`std` and wasm checks pass.
 
 - **2026-10-18 (M3, #1354, local candidate):** Integrated --two-paged with current main, retaining upstream modal/picker ownership and single-tab reuse. Native launch/opening/password regressions, negative checks against the old wrapper, visual inspection, formatting, strict scoped Clippy, layers, assets, parity and scoped WASM compilation pass. Three existing socket tests are unavailable in this workspace; one existing network test remains ignored. No push or GitHub merge; estimates unchanged.

@@ -9,7 +9,7 @@
 //! and the caller decodes on its own thread as before.
 
 use std::cell::Cell;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::thread;
 use std::vec::Vec;
@@ -48,17 +48,62 @@ fn threads() -> usize {
         .clamp(1, MAX_THREADS)
 }
 
-/// Runs `work` on up to `threads` threads, the calling one included. A thread the system will not
-/// start is simply not used: the calling thread does the work that thread would have done.
+/// Helper threads running for decodes anywhere in the process. Render workers can decode several
+/// images (or tiles of one) at once; together their helpers stay within [`helper_budget`].
+static HELPERS: AtomicUsize = AtomicUsize::new(0);
+
+/// The most helper threads all decodes together run: one fewer than the machine has, since every
+/// decode also works on its calling thread.
+fn helper_budget() -> usize {
+    thread::available_parallelism()
+        .map_or(1, |n| n.get())
+        .saturating_sub(1)
+}
+
+/// Helper slots taken from the shared budget, given back when dropped.
+struct Helpers(usize);
+
+impl Helpers {
+    /// Up to `wanted` slots: fewer, or none, while other decodes hold the rest of the budget.
+    fn reserve(wanted: usize) -> Self {
+        let budget = helper_budget();
+        let mut active = HELPERS.load(Ordering::Acquire);
+        loop {
+            let granted = wanted.min(budget.saturating_sub(active));
+            match HELPERS.compare_exchange_weak(
+                active,
+                active.saturating_add(granted),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Self(granted),
+                Err(now) => active = now,
+            }
+        }
+    }
+}
+
+impl Drop for Helpers {
+    fn drop(&mut self) {
+        HELPERS.fetch_sub(self.0, Ordering::AcqRel);
+    }
+}
+
+/// Runs `work` on up to `threads` threads, the calling one included, with as many helpers as the
+/// shared budget allows. A thread the system will not start is simply not used: the calling thread
+/// does the work that thread would have done.
 fn run_on_threads(threads: usize, work: &(impl Fn() + Sync)) {
+    // Held until every helper has joined at the end of the scope, panics included.
+    let helpers = Helpers::reserve(threads.saturating_sub(1));
     thread::scope(|scope| {
-        for _ in 1..threads {
+        for _ in 0..helpers.0 {
             if thread::Builder::new().spawn_scoped(scope, work).is_err() {
                 break;
             }
         }
         work();
     });
+    drop(helpers);
 }
 
 /// The code-blocks of one sub-band that share their first row. They cover whole rows of the
@@ -349,4 +394,21 @@ pub(super) fn idwt_and_store(
         }
     });
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Helpers, helper_budget};
+
+    /// Concurrent decodes share one budget of helper threads: what one holds, another cannot
+    /// take, and it is free again once dropped.
+    #[test]
+    fn decodes_share_one_helper_budget() {
+        let budget = helper_budget();
+        let first = Helpers::reserve(budget + 5);
+        assert_eq!(first.0, budget);
+        assert_eq!(Helpers::reserve(3).0, 0);
+        drop(first);
+        assert_eq!(Helpers::reserve(3).0, 3.min(budget));
+    }
 }
