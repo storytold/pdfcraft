@@ -531,8 +531,8 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         });
 }
 
-/// Draw the right tool rail with page navigation, history, zoom, rotation and page-display controls for the
-/// active view.
+/// Draw the navigation rail on the chosen side, with page navigation, history, zoom,
+/// rotation and page-display controls for the active view.
 pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let Some((index, id)) = app.active_ids() else { return };
@@ -571,8 +571,9 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     items.push(item(RightPanel::Tags, "tag", "Tags", None));
     let view = &mut app.views[index];
     let mut page_display = None;
+    let edge = if app.side_panels.side_on_right { Edge::End } else { Edge::Start };
     let rail = Rail::new(egui::Id::unique("rail"))
-        .edge(Edge::End)
+        .edge(edge)
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(6, 8)).stroke(Stroke::new(1.0, t.divider)))
         .show(ui, &items, app.right.as_ref(), |ui| {
             // Page navigation cluster at the bottom, a panel of its own so that in a short
