@@ -38,7 +38,7 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   twice; for a fax image's code, about a byte per pixel), are removed whole;
   cleared copies drop `/Alternates` so alternate pixels cannot survive. An image is measured by
   the part the clip in force shows: a cropped image (placed larger than its crop, as office
-  suites export them) is left alone when only its hidden part reaches an area;
+  suites export them) is left alone when only its hidden part reaches an area. The pixels the clip hides stay in the image stream, so a reader that ignores the clip, or anyone reading the stream, gets back what lies under such an area: redaction does not remove that data from the file;
   a run that would decode more of its images than one redaction may (`pdfcraft_cos::ImageBudget`,
   filters, decoders and pixels alike) is refused
   and changes nothing: such an image can't be cleared, and removing it whole would take what no mark
