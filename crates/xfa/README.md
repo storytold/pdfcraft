@@ -48,7 +48,10 @@ that warning and keeps the existing layout and accepted widget values.
 - **Data** (`data`): the `datasets` packet. On layout, a field takes its value from the data
   node at its data path: its SOM path without areas, which are named in SOM expressions but are
   not data scopes (`data_path`, as Adobe's viewers bind) (dates in ISO form, check and radio states by their on values), and a
-  repeating subform or row gets as many instances as the data has. `write_datasets` merges the
+  repeating subform or table row gets as many instances as the data has (in flowed and positioned
+  containers alike), up to its `occur max` and at
+  most 1 000 (`MAX_INSTANCES`, a work bound; the rows past it are left out with a layout
+  warning). `write_datasets` merges the
   AcroForm fields' values (by `/PCSom`, or by the Designer field names of a static form) into
   the existing `xfa:data`: only the bound nodes' text changes and missing nodes are added, so
   unbound data, other namespaces, attributes and comments stay byte for byte. Values it can't

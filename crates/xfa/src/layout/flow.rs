@@ -1,6 +1,6 @@
 use super::common::{clamp_opt, divide, is_row, moved, solid_extent, splittable};
 use super::items::Item;
-use super::{Ctx, Frame, Layout, Layouter, MAX_DEPTH, Node, Rect, SomIndices, Subform, XfaError, data_path, instance_count};
+use super::{Ctx, Frame, Layout, Layouter, MAX_DEPTH, MAX_INSTANCES, Node, Rect, SomIndices, Subform, XfaError, data_path, instance_count};
 
 impl Layouter<'_> {
     /// Place `node` as one block of size (`w`, `h`) at the cursor: in this content area when it fits,
@@ -158,8 +158,7 @@ impl Layouter<'_> {
             self.break_frames(0.0, true)?;
         }
         // Data adds instances of a repeating subform (rows added in another viewer).
-        let instances = self.instances(node, &ctx.som);
-        self.warn_truncated(node, &ctx.som, instances);
+        let instances = self.laid_out_instances(node, &ctx.som);
         let ctx_parent = ctx;
         for i in 0..instances {
             // Every instance spends budget, so nested repeats that place nothing still stop.
@@ -171,7 +170,7 @@ impl Layouter<'_> {
             let w = clamp_opt(sf.common.w.unwrap_or(w), sf.common.min_w, sf.common.max_w).min(w.max(1.0));
             if !matches!(sf.layout, Layout::Tb | Layout::Table) || sf.common.h.is_some() {
                 // Not splittable: one block.
-                let (_, h) = self.size_of(node, w, ctx_parent, depth);
+                let (_, h) = self.size_at(node, w, ctx_parent, depth, sib + i);
                 self.flow_block(node, x, (w, h), ctx_parent, depth, sib + i)?;
                 continue;
             }
@@ -202,8 +201,7 @@ impl Layouter<'_> {
                             self.flow_subform(child, Some((inner_x, inner_w)), &ctx, depth + 1, csib)?;
                             continue;
                         }
-                        let (cw, ch) = self.size_of(child, inner_w, &ctx, depth + 1);
-                        self.flow_block(child, inner_x, (cw, ch), &ctx, depth + 1, csib)?;
+                        self.flow_instances(child, inner_x, inner_w, &ctx, depth + 1, csib)?;
                     }
                 }
             }
@@ -235,8 +233,8 @@ impl Layouter<'_> {
             Some(Node::Subform(l)) => Some((li, l.as_ref())),
             _ => None,
         });
-        let lead_h = lead.map_or(0.0, |(_, l)| self.row_height(l, &cols, inner_w, ctx, depth + 1));
         let sibs = SomIndices::of(&sf.children);
+        let lead_h = lead.map_or(0.0, |(li, l)| self.row_height(l, &cols, inner_w, ctx, depth + 1, sibs.at(li)));
         for (ci, child) in sf.children.iter().enumerate() {
             if !child.common().presence.occupies() {
                 continue;
@@ -246,10 +244,9 @@ impl Layouter<'_> {
                 && row.layout == Layout::Row
             {
                 // Rows added as data (in another viewer) repeat the row.
-                let instances = self.instances(child, &ctx.som);
-                self.warn_truncated(child, &ctx.som, instances);
+                let instances = self.laid_out_instances(child, &ctx.som);
                 for inst in 0..instances {
-                    let h = self.row_height(row, &cols, inner_w, ctx, depth + 1);
+                    let h = self.row_height(row, &cols, inner_w, ctx, depth + 1, csib.saturating_add(inst));
                     let led = lead.filter(|(li, _)| *li != ci);
                     if self.make_room(h, led.map_or(0.0, |_| lead_h))?
                         && let Some((li, l)) = led
@@ -270,8 +267,23 @@ impl Layouter<'_> {
                 self.flow_subform(child, Some((x, inner_w)), ctx, depth + 1, csib)?;
                 continue;
             }
-            let (cw, ch) = self.size_of(child, inner_w, ctx, depth + 1);
-            self.flow_block(child, x, (cw, ch), ctx, depth + 1, csib)?;
+            self.flow_instances(child, x, inner_w, ctx, depth + 1, csib)?;
+        }
+        Ok(())
+    }
+
+    /// Flow `node`, which isn't split across content areas, as one block per instance (a
+    /// repeating positioned subform gets one for each row the data or its `occur` gives it, XFA
+    /// 3.3, "Repeating Elements using Occurrence Limits", p. 263), each as tall as its own
+    /// content; the data rows past them are reported.
+    fn flow_instances(&mut self, node: &Node, x: f64, inner_w: f64, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
+        for instance in 0..self.laid_out_instances(node, &ctx.som) {
+            // Every instance spends budget, so nested repeats that place nothing still stop.
+            self.measures.set(self.measures.get().saturating_add(1));
+            self.check_measures()?;
+            let sib = sib.saturating_add(instance);
+            let size = self.size_at(node, inner_w, ctx, depth, sib);
+            self.flow_block(node, x, size, ctx, depth, sib)?;
         }
         Ok(())
     }
@@ -292,19 +304,35 @@ impl Layouter<'_> {
         instance_count(&sf.occur, from_data)
     }
 
+    /// [`Self::instances`] for laying `node` out: the count every layout that repeats a subform
+    /// draws (flowed or positioned, top to bottom, wrapped or a table's rows), with the data rows
+    /// past it reported ([`Self::warn_truncated`]).
+    pub(super) fn laid_out_instances(&mut self, node: &Node, parent_som: &str) -> usize {
+        let instances = self.instances(node, parent_som);
+        self.warn_truncated(node, parent_som, instances);
+        instances
+    }
+
     /// The data holds more instances of `node` than `laid_out`: say so, since calculations
-    /// then see only those.
-    fn warn_truncated(&mut self, node: &Node, parent_som: &str, laid_out: usize) {
+    /// then see only those, and say why. (The template's own counts can't ask for more: the
+    /// parser reads `initial` and `max` up to [`MAX_INSTANCES`].)
+    pub(super) fn warn_truncated(&mut self, node: &Node, parent_som: &str, laid_out: usize) {
         let Node::Subform(sf) = node else { return };
         let from_data = match (&sf.common.name, self.data) {
             (Some(name), Some(d)) if sf.occur.max != Some(1) => d.count(&data_path(self.tpl, parent_som), name),
             _ => 0,
         };
-        if from_data > laid_out {
-            self.warn_once(format!(
-                "{}: the data holds {from_data} rows; only the first {laid_out} are laid out (calculations see those)",
-                sf.common.name.as_deref().unwrap_or("a subform")
-            ));
+        if from_data <= laid_out {
+            return;
         }
+        let name = sf.common.name.as_deref().unwrap_or("a subform");
+        // The template's own `occur max` is the form's rule: past it, the extra data is ignored
+        // (XFA 3.3, p. 336). Only the layout's own limit needs naming as a limit.
+        let why = if sf.occur.max.is_some_and(|m| m <= laid_out) {
+            String::new()
+        } else {
+            format!("; {MAX_INSTANCES} is the most one repeating subform lays out")
+        };
+        self.warn_once(format!("{name}: the data holds {from_data} rows; only the first {laid_out} are laid out (calculations see those){why}"));
     }
 }

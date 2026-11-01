@@ -6453,12 +6453,12 @@ fn xfa_data_import_adds_and_removes_rows_of_a_dynamic_form() {
     assert_eq!(names(&s).iter().filter(|n| n.starts_with("amount")).count(), 3, "{:?}", names(&s));
     assert_eq!(value(&s, "total"), vec!["15".to_string()], "qty 3 × price 5, calculated after the import: {:?}", s.take_js_output(id));
     assert_eq!(value(&s, "grand"), vec!["42.5".to_string()]);
-    // More rows than the layout shows: the document says so.
-    let rows: String = (0..60).map(|i| format!("<row><item>r{i}</item><amount>1</amount></row>")).collect();
+    // More rows than the layout shows (1 000 for one repeating subform): the document says so.
+    let rows: String = (0..1010).map(|i| format!("<row><item>r{i}</item><amount>1</amount></row>")).collect();
     let file = format!("<form><page1><qty>1</qty><table>{rows}</table></page1></form>");
     s.apply(id, Edit::ImportData { name: "many.xml".into(), bytes: Arc::new(file.into_bytes()) }).unwrap();
     let out = s.take_js_output(id);
-    assert!(out.errors.iter().chain(out.console.iter()).any(|l| l.contains("60 rows")), "{out:?}");
+    assert!(out.errors.iter().chain(out.console.iter()).any(|l| l.contains("1010 rows") && l.contains("first 1000")), "{out:?}");
     // A file with one row takes the others away.
     let file = "<form><page1><qty>1</qty><table><row><item>only</item><amount>7</amount></row></table></page1></form>";
     s.apply(id, Edit::ImportData { name: "one.xml".into(), bytes: Arc::new(file.as_bytes().to_vec()) }).unwrap();
