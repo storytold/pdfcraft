@@ -347,6 +347,19 @@ mod tests {
         }
     }
 
+    /// Text from a PDF is never a formula: what starts like one goes in as a string, and no cell
+    /// of an export holds a formula at all.
+    #[test]
+    fn text_that_looks_like_a_formula_stays_text() {
+        let lines = ["=1+1", "+1+1", "-1+1", "@SUM(A1)", "=HYPERLINK(1)"];
+        let s = part(&xlsx(&[lines_page(&lines)], "Report", XlsxSheets::WholeDocument), "xl/worksheets/sheet1.xml");
+        assert!(!s.contains("<f>") && !s.contains("<f "), "{s}");
+        for (i, line) in lines.iter().enumerate() {
+            let cell = format!("<c r=\"A{}\" s=\"1\" t=\"inlineStr\"><is><t xml:space=\"preserve\">{line}</t></is></c>", i + 1);
+            assert!(s.contains(&cell), "{cell} in {s}");
+        }
+    }
+
     #[test]
     fn xlsx_is_a_workbook_with_real_tables_and_numbers() {
         let x = xlsx(&[table_page(), page()], "Report", XlsxSheets::PerPage);
