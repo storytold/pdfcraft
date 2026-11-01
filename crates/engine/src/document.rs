@@ -215,14 +215,14 @@ impl Document {
 
     /// Edit a PDF: the images `page` draws (0-based).
     pub fn page_images(&self, page: usize) -> Vec<pdfcraft_edit::PageImage> {
-        self.editor.as_ref().and_then(|e| pdfcraft_edit::page_images(&e.cos, page).ok()).unwrap_or_default()
+        self.editor.as_ref().and_then(|e| pdfcraft_edit::page_images_with_layers(&e.cos, page, &self.config.layers).ok()).unwrap_or_default()
     }
 
     /// Mixed editable objects on one page. Source inventories are zero-based and added items
     /// appear once. Rectangles are user-space points, independent of the viewer's zoom.
     pub fn editable_objects(&self, page: usize) -> Result<Vec<EditableObject>, String> {
         let editor = self.editor.as_ref().ok_or("the document can't be read")?;
-        pdfcraft_edit::editable_objects(&editor.cos, page).map_err(|e| e.to_string())
+        pdfcraft_edit::editable_objects_with_layers(&editor.cos, page, &self.config.layers).map_err(|e| e.to_string())
     }
 
     /// Displayed top-left-origin motion to a user-space vector. Use the linear map only,

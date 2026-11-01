@@ -38,12 +38,18 @@ pub use backdrop::{Backdrop, backdrops_left_off, page_backdrop, page_backdrops};
 mod background;
 pub use background::page_background;
 pub mod objects;
-pub use objects::{EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget, editable_objects, move_objects};
+pub use objects::{
+    EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget, editable_objects, editable_objects_with_layers, move_objects,
+    move_objects_with_layers,
+};
 
 mod flatten;
 pub use flatten::{flatten, flatten_fill_sign};
 pub mod images;
-pub use images::{ImageChange, PageImage, change_image, page_images, reading_images, rect_to_rect, turn_about_centre, turn_by_degrees};
+pub use images::{
+    ImageChange, PageImage, change_image, change_image_with_layers, page_images, page_images_with_layers, reading_images, rect_to_rect,
+    turn_about_centre, turn_by_degrees,
+};
 pub mod bidi;
 pub mod indic;
 mod linebreak;
