@@ -3511,7 +3511,10 @@ fn page_content_bytes(doc: &Document, page: usize) -> Vec<u8> {
     }
 }
 
-/// A page drawing image XObject /Im0 at 100,100 size 200 × 100 (pixels 4 × 2).
+/// A page drawing image XObject /Im0 at 100,100 size 200 × 100 (pixels 4 × 2), on a real optional
+/// content layer: the catalog's `/OCProperties` declares object 7 as the only OCG and the page
+/// resources' `/Properties` maps `/L0` to it, so `/OC /L0 BDC` marks a valid optional-content
+/// member rather than a dangling name.
 fn image_page() -> Document {
     image_page_with("q 200 0 0 100 100 100 cm /Im0 Do Q BT /F1 12 Tf 72 700 Td (Caption) Tj ET")
 }
@@ -3531,12 +3534,13 @@ fn remove_crop(doc: &mut Document, page: usize, index: usize) -> Result<(), Edit
 
 fn image_page_with(content: &str) -> Document {
     let objs: Vec<String> = vec![
-        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [7 0 R] /D << /Order [7 0 R] >> >> >>".into(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
-        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im0 6 0 R >> /ExtGState << /GS0 << /Type /ExtGState /ca 0.5 /CA 0.5 >> /GSalpha << /Type /ExtGState /ca 0.6 >> /GSblend << /Type /ExtGState /BM /Multiply >> /GS_translucent << /Type /ExtGState /ca 0.5 >> >> >> >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im0 6 0 R >> /ExtGState << /GS0 << /Type /ExtGState /ca 0.5 /CA 0.5 >> /GSalpha << /Type /ExtGState /ca 0.6 >> /GSblend << /Type /ExtGState /BM /Multiply >> /GS_translucent << /Type /ExtGState /ca 0.5 >> >> /Properties << /L0 7 0 R >> >> >>".into(),
         format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
         "<< /Type /XObject /Subtype /Image /Width 4 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 8 >>\nstream\n\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\nendstream".into(),
+        "<< /Type /OCG /Name (Layer 0) >>".into(),
     ];
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offs = Vec::new();
@@ -3748,6 +3752,30 @@ fn repeated_group_moves_of_a_cropped_image_change_one_clip_transform() {
     assert!(close(images::page_images(&doc, 0).unwrap()[0].visible_rect.unwrap(), moved(start.visible_rect.unwrap())));
     let caption: Vec<_> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
     assert_eq!(caption, ["Caption"]);
+}
+
+#[test]
+fn moving_an_image_inside_marked_content_leaves_every_sequence_intact() {
+    // `translate_images` changes the image's own `cm`; its `Do` stays where it was, so a moved
+    // image stays in the sequence that tags it (an image on a layer sits in `/OC … BDC`).
+    for content in [
+        "/P <</MCID 0>> BDC q 100 0 0 100 50 50 cm /Im0 Do Q EMC /P <</MCID 1>> BDC BT /F1 12 Tf 72 700 Td (Text) Tj ET EMC",
+        "/OC /L0 BDC q 100 0 0 100 50 50 cm /Im0 Do Q EMC /P <</MCID 1>> BDC BT /F1 12 Tf 72 700 Td (Text) Tj ET EMC",
+    ] {
+        let mut doc = image_page_with(content);
+        let before = images::page_images(&doc, 0).unwrap()[0].rect;
+        images::translate_images(&mut doc, 0, &[0], [10.0, 0.0]).unwrap();
+        let after = images::page_images(&doc, 0).unwrap()[0].rect;
+        assert!(close(after, [before[0] + 10.0, before[1], before[2] + 10.0, before[3]]), "{content}: {after:?}");
+        let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+        let count = |name: &str| ops.iter().filter(|op| op.is(name)).count();
+        assert_eq!((count("BDC"), count("EMC")), (2, 2), "{content}: both sequences remain");
+        let first = ops.iter().position(|op| op.is("BDC")).unwrap();
+        let end = ops.iter().position(|op| op.is("EMC")).unwrap();
+        let image = ops.iter().position(|op| op.is("Do")).unwrap();
+        assert!(first < image && image < end, "{content}: the image is still inside its own sequence");
+        assert!(!ops[end..].iter().any(|op| op.is("Do")), "{content}: the other sequence gained no image");
+    }
 }
 
 #[test]
