@@ -999,13 +999,10 @@ impl Indexed {
         let hival = iter.next::<u32>()?.min(u8::MAX as u32) as u8;
 
         let values = {
-            let data = iter
-                .next::<Stream<'_>>()
-                .and_then(|s| s.decoded().ok())
-                .or_else(|| {
-                    iter.next::<object::String<'_>>()
-                        .map(|s| Cow::Owned(s.to_vec()))
-                })?;
+            // PdfCraft patch (60): read once and then by type, so a string lookup given by an
+            // indirect reference is found (a failed stream read had already consumed the
+            // reference).
+            let data = iter.next::<Object<'_>>().and_then(indexed_lookup)?;
 
             let num_components = base_color_space.num_components();
 
@@ -1036,8 +1033,10 @@ impl Indexed {
 /// PdfCraft patch (60): whether `object` is an `/Indexed` colour space that ISO 32000-2
 /// §8.6.6.3 rules out: `hival` is not an integer in 0..=255, or the lookup table is missing or
 /// shorter than m × (hival + 1) bytes for a base space of m components. A longer table is fine
-/// (its first bytes are used). An Indexed space whose base cannot be read is not judged here,
-/// so its existing handling is unchanged.
+/// (its first bytes are used). The lookup may be a string or a stream, given in place or by
+/// reference. An Indexed space whose base cannot be read is judged only by its `hival` (the
+/// table's size depends on the base), so with a usable `hival` its existing handling is
+/// unchanged.
 ///
 /// Upstream treated such a space as unreadable, and an image that named it then fell back to
 /// DeviceGray: its indices were drawn as near-black grey levels, even indices whose entries
@@ -1053,19 +1052,21 @@ pub(crate) fn is_malformed_indexed(object: &Object<'_>, cache: &Cache) -> bool {
     if !matches!(family.deref(), INDEXED | I) {
         return false;
     }
-    let Some(base) = iter
-        .next::<Object<'_>>()
-        .and_then(|o| ColorSpace::new(o, cache))
-    else {
-        return false;
-    };
+    let base = iter.next::<Object<'_>>();
     let Some(hival) = iter.next::<object::Number>().and_then(|n| {
         let value = n.as_f64();
-        // A real with a fraction, a negative number or one past 255 is not a usable `hival`.
+        // A real with a fraction, a negative number or one past 255 is not a usable `hival`
+        // (NaN and the infinities fail the range test too).
         (value.fract() == 0.0 && (0.0..=255.0).contains(&value)).then(|| n.as_i64())
     }) else {
+        // Judged before the base: an unusable `hival` rules the space out whatever the base.
         return true;
     };
+    let Some(base) = base.and_then(|o| ColorSpace::new(o, cache)) else {
+        return false;
+    };
+    // `hival` is at most 255 here, so this cannot overflow; it is checked all the same, and a
+    // size that did not fit would rule the space out rather than wrap.
     let Some(needed) = usize::try_from(hival)
         .ok()
         .and_then(|h| h.checked_add(1))
@@ -1074,10 +1075,21 @@ pub(crate) fn is_malformed_indexed(object: &Object<'_>, cache: &Cache) -> bool {
         return true;
     };
     let lookup_len = iter
-        .next::<Stream<'_>>()
-        .and_then(|s| s.decoded().ok().map(|d| d.len()))
-        .or_else(|| iter.next::<object::String<'_>>().map(|s| s.as_bytes().len()));
+        .next::<Object<'_>>()
+        .and_then(indexed_lookup)
+        .map(|d| d.len());
     lookup_len.is_none_or(|len| len < needed)
+}
+
+/// PdfCraft patch (60): an Indexed space's lookup table, a byte string or a stream (ISO 32000-2
+/// §8.6.6.3), with a stream's filters applied. `None` for any other object or a stream that
+/// cannot be decoded.
+fn indexed_lookup(lookup: Object<'_>) -> Option<Cow<'_, [u8]>> {
+    match lookup {
+        Object::Stream(s) => s.decoded().ok(),
+        Object::String(s) => Some(Cow::Owned(s.to_vec())),
+        _ => None,
+    }
 }
 
 impl ToRgb for Indexed {

@@ -173,3 +173,59 @@ fn a_page_with_several_malformed_images_reports_the_warning_once_and_draws_the_r
     let at = (195 * page.width as usize + 5) * 4;
     assert_eq!(page.rgba.get(at..at + 3), Some(&[0u8, 0, 255][..]), "content after the skipped images still draws");
 }
+
+#[test]
+fn a_lookup_string_given_by_reference_is_read() {
+    // A lookup is a byte string or a stream (ISO 32000-2 §8.6.6.3), and either may be indirect.
+    // A string by reference used to be missed: trying it as a stream consumed the reference.
+    let full: &[u8] = b"<FF0000 00FF00>";
+    assert_drawn("[/Indexed /DeviceRGB 1 6 0 R]", &[full]);
+    let short: &[u8] = b"<FF0000 00FF>";
+    assert_skipped("[/Indexed /DeviceRGB 1 6 0 R]", &[short]);
+    // Something that is neither a string nor a stream is no table.
+    let number: &[u8] = b"42";
+    assert_skipped("[/Indexed /DeviceRGB 1 6 0 R]", &[number]);
+}
+
+#[test]
+fn the_size_check_holds_at_the_bounds_of_hival_and_the_base() {
+    // Four components (DeviceCMYK): hival 1 needs exactly 8 bytes.
+    let cmyk = |table: &str| format!("[/Indexed /DeviceCMYK 1 <{table}>]");
+    let page = render(pdf(&cmyk("FF000000 00FF0000"), DRAW_IMAGE, &[]));
+    assert!(page.warnings.is_empty(), "exact length: {:?}", page.warnings);
+    assert_ne!(halves(&page), WHITE, "exact length draws");
+    assert_skipped(&cmyk("FF000000 00FF00"), &[]);
+    // One component (DeviceGray): hival 0 needs one byte, and none is not enough.
+    let page = render(pdf("[/Indexed /DeviceGray 0 <00>]", DRAW_IMAGE, &[]));
+    assert!(page.warnings.is_empty(), "{:?}", page.warnings);
+    assert_skipped("[/Indexed /DeviceGray 0 <>]", &[]);
+    // hival 255 over DeviceRGB needs 768 bytes: 767 is one short.
+    assert_skipped(&format!("[/Indexed /DeviceRGB 255 <FF0000 00FF00{}>]", "00".repeat(3 * 254 - 1)), &[]);
+}
+
+#[test]
+fn a_hival_that_would_overflow_a_size_is_ruled_out_without_panicking() {
+    // Values whose (hival + 1) × components would overflow a 32-bit or 64-bit size, or that do
+    // not fit an integer at all, never reach the multiplication: they fail the 0..=255 test.
+    for hival in ["4294967295", "4294967296", "18446744073709551615", "99999999999999999999999", "-2147483649", "256", "255.5"] {
+        assert_skipped(&format!("[/Indexed /DeviceRGB {hival} <FF0000 00FF00>]"), &[]);
+    }
+    // 255.0 written as a real is the integer 255.
+    assert_drawn(&format!("[/Indexed /DeviceRGB 255.0 <FF0000 00FF00{}>]", "00".repeat(3 * 254)), &[]);
+}
+
+#[test]
+fn an_unusable_hival_is_judged_even_when_the_base_cannot_be_read() {
+    // The base is unknown, so the table size cannot be judged, but hival 300 is out of range
+    // whatever the base.
+    assert_skipped("[/Indexed /NoSuchSpace 300 <00>]", &[]);
+    // With a usable hival, an unreadable base keeps its existing handling: no Indexed warning.
+    let page = render(pdf("[/Indexed /NoSuchSpace 1 <00>]", DRAW_IMAGE, &[]));
+    assert!(!page.warnings.contains(&RenderWarning::MalformedIndexedImage), "{:?}", page.warnings);
+}
+
+#[test]
+fn a_lookup_stream_that_cannot_be_decoded_is_no_table() {
+    let broken: &[u8] = b"<< /Length 6 /Filter /FlateDecode >>\nstream\nnot-zl\nendstream";
+    assert_skipped("[/Indexed /DeviceRGB 1 6 0 R]", &[broken]);
+}

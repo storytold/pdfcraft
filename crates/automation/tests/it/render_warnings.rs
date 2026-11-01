@@ -96,6 +96,33 @@ fn a_clean_page_renders_to_the_png_alone() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// An image whose Indexed lookup table is too short (ISO 32000-2 §8.6.6.3) is skipped, and
+/// `page_render` says so in the words `pdfcraft-cli render` prints.
+#[test]
+fn page_render_reports_a_skipped_malformed_indexed_image() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-render-warnings-indexed-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let content = "q 200 0 0 200 0 0 cm /Im Do Q";
+    // hival 7 over DeviceRGB needs 24 bytes; the table holds 6.
+    let pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /XObject << /Im 5 0 R >> >> /Contents 4 0 R >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         5 0 obj << /Type /XObject /Subtype /Image /Width 2 /Height 1 /BitsPerComponent 8 /ColorSpace [/Indexed /DeviceRGB 7 <FF0000 00FF00>] /Filter /ASCIIHexDecode /Length 5 >> stream\n0001>\nendstream endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF",
+        content.len()
+    );
+    std::fs::write(dir.join("indexed.pdf"), pdf).unwrap();
+    let mut a = Automation::new().with_root(&dir).unwrap();
+    let doc = open(&mut a, "indexed.pdf");
+    let out = a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72 })).unwrap();
+    let Some(Content::Json(report)) = out.get(1) else { panic!("expected the warnings as JSON: {out:?}") };
+    assert_eq!(report["warnings"], json!(["an image with a malformed Indexed colour table was not drawn"]));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// Over MCP the warnings are a text block after the image and the call's `structuredContent`.
 #[cfg(feature = "mcp")]
 #[test]

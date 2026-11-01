@@ -345,6 +345,7 @@ fn render_warning_text(warning: pdfcraft_render::RenderWarning) -> &'static str 
     match warning {
         RenderWarning::ContentTruncated => "content past the page's safety budget was skipped",
         RenderWarning::ColourFallback => "a colour that could not be computed was painted in a fallback colour",
+        RenderWarning::MalformedIndexedImage => "an image with a malformed Indexed colour table was not drawn",
     }
 }
 
