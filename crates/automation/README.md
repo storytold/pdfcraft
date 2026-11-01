@@ -51,7 +51,8 @@ do not keep an old PDF byte buffer alive.
 
 This bounds retained text-cache data, not total process memory: active extraction batches,
 renderers, document buffers and the requested output have separate lifetimes. Search still reads
-growing batches (8 to 128 pages), with one lookahead match to determine continuation.
+growing batches (8 to 128 pages), with one lookahead match to determine continuation, unless
+`stop_at_limit` is set (below), which starts at one page and looks no further than its limit.
 
 `text_find` keeps matches from readable pages when another reached page fails extraction. It
 returns `warnings` with 1-based `page`, `error` and `error_truncated`, plus `warning_count` and
@@ -64,6 +65,16 @@ matches. `next: {start_page, skip}` exists only when another match would exceed 
 that reaches the end with warnings therefore has `complete: false` **without** `next`. Callers
 should follow `next` when present and separately inspect warnings. A capped search can return
 both. The existing `query`, `count`, `matches` and rectangle semantics are unchanged.
+
+That lookahead means a search with exactly `limit` matches reads on to the end of the document to
+learn that no further match exists. `stop_at_limit: true` skips it: the search ends at the
+`limit`th match. It reads one page first, then batches of 2, 4, … up to 128 pages, so nothing past
+the batch holding that match is read or can add warnings (a match on the first page reads only that
+page). The answer carries
+`stopped_at_limit`. When that is `true`, `complete` is `false` and `next` is only the position just
+past the last match, not a promise of another one; following it may return no matches and
+`complete: true`. When it is `false`, the search ran out of pages first and `complete` means what
+it always does.
 
 `text_extract`, comment placement and redaction keep strict all-requested-pages-must-succeed
 semantics; they never silently act on partial text.

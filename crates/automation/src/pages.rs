@@ -222,6 +222,8 @@ impl Automation {
     /// `limit` is reached, so a bounded search doesn't extract (and cache) the whole document
     /// (#971). One match past the limit supplies `next`. Reached extraction failures are reported
     /// as bounded warnings; `complete` requires both no continuation and no failed pages.
+    /// `stop_at_limit` drops that lookahead: the search ends at the `limit`th match, so a lone match
+    /// never sends it to the end of the document, and `next` is only where to resume (#5328).
     pub(crate) fn text_find(&mut self, a: &Args) -> Result<Value> {
         self.text_find_with(a, &mut extract_parallel)
     }
@@ -241,11 +243,15 @@ impl Automation {
             Some(p) => return Err(ToolError::InvalidArgs(format!("start_page {p} is out of range: the document has {n} pages"))),
         };
         let skip = usize::try_from(a.opt_int("skip")?.unwrap_or(0).max(0)).unwrap_or(usize::MAX);
+        let stop_at_limit = a.opt_bool("stop_at_limit")?.unwrap_or(false);
         let mut matches = Vec::new();
         let mut next = None;
+        let mut stopped = false;
         let mut warnings = Vec::new();
         let mut warning_count = 0usize;
-        let (mut first, mut batch) = (start, FIND_FIRST_BATCH);
+        // A search that stops at its limit starts with one page, so a match on it reads nothing
+        // more; the batches still double for a match further in.
+        let (mut first, mut batch) = (start, if stop_at_limit { 1 } else { FIND_FIRST_BATCH });
         'search: while first < n {
             let end = first.saturating_add(batch).min(n);
             let pages: Vec<usize> = (first..end).collect();
@@ -267,13 +273,19 @@ impl Automation {
                 let skip_here = if p == start { skip } else { 0 };
                 // One extra match proves that the caller needs a continuation. Include skipped
                 // matches on the starting page when bounding the temporary per-page result.
-                let needed = limit.saturating_sub(matches.len()).saturating_add(skip_here).saturating_add(1);
+                let needed = limit.saturating_sub(matches.len()).saturating_add(skip_here).saturating_add(usize::from(!stop_at_limit));
                 for (k, r) in text.find_opts_limited(query, false, false, needed).into_iter().enumerate().skip(skip_here) {
                     if matches.len() == limit {
                         next = Some(json!({ "start_page": p + 1, "skip": k }));
                         break 'search;
                     }
                     matches.push(json!({ "page": p + 1, "text": text.text_of(r.clone()), "rects": text.line_rects(r) }));
+                    if stop_at_limit && matches.len() == limit {
+                        // Resume just past this match; whether another exists isn't looked at.
+                        next = Some(json!({ "start_page": p + 1, "skip": k.saturating_add(1) }));
+                        stopped = true;
+                        break 'search;
+                    }
                 }
             }
             first = end;
@@ -281,8 +293,13 @@ impl Automation {
         }
         let mut out = json!({ "query": query, "count": matches.len(), "complete": next.is_none() && warning_count == 0, "matches": matches,
             "warnings_truncated": warning_count > warnings.len(), "warning_count": warning_count, "warnings": warnings });
-        if let (Some(next), Some(o)) = (next, out.as_object_mut()) {
-            o.insert("next".into(), next);
+        if let Some(o) = out.as_object_mut() {
+            if let Some(next) = next {
+                o.insert("next".into(), next);
+            }
+            if stop_at_limit {
+                o.insert("stopped_at_limit".into(), stopped.into());
+            }
         }
         Ok(out)
     }
