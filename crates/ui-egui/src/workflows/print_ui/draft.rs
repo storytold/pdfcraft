@@ -83,6 +83,9 @@ pub struct PrintDraft {
     pub driver_options_loading: Option<String>,
     /// Properties… asked for this printer's options; the app starts the read on the next frame.
     pub read_options_for: Option<String>,
+    /// Whether each printer's driver takes two-sided settings, as read in the background for
+    /// the printer picked (see [`TwoSidedSource`](super::TwoSidedSource)); `None` when it couldn't be read.
+    pub two_sided: std::collections::BTreeMap<String, Option<bool>>,
 }
 
 impl Default for PrintDraft {
@@ -131,6 +134,7 @@ impl Default for PrintDraft {
             crop_pages: None,
             driver_options_loading: None,
             read_options_for: None,
+            two_sided: Default::default(),
         }
     }
 }

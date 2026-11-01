@@ -20,7 +20,7 @@ craft-quit = { git = "https://github.com/storytold/craft-libs", version = "0.1.0
 craft-menu = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7" }
 craft-keymap = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", default-features = false }
 # Shared system spooler; document composition remains in pdfcraft-print.
-craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7" }
+craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "6cadafd2bd4d29f75ccf38c0526ef94152ce7a0c" }
 # Whether a path stored in a document may be opened (GoToR link targets).
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7" }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
