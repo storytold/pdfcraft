@@ -597,6 +597,14 @@ impl std::fmt::Debug for PrivateKey {
     }
 }
 
+/// The PKCS #8 copy is the private key in the clear: wiped when the key goes, so it doesn't stay
+/// behind in freed memory (a browser tab's heap lives as long as the tab).
+impl Drop for PrivateKey {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.pkcs8);
+    }
+}
+
 impl PrivateKey {
     /// A key held outside PdfCraft's memory (its public half is `public`). It can't be
     /// exported to a PKCS #12 file.

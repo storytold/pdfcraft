@@ -5,6 +5,9 @@ use super::{
 
 /// Draw the signing dialogs; returns `true` when the dialog should close.
 pub(crate) fn dialog(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
+    // A file the browser's picker read: a digital ID, or the signature's image.
+    #[cfg(target_arch = "wasm32")]
+    app.take_signing_pick();
     let Some(step) = app.sign_draft.as_ref().map(|d| d.step) else { return true };
     match step {
         SignStep::Choose => choose(ui, app, t),
@@ -143,8 +146,6 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     let Some(d) = app.sign_draft.as_mut() else { return true };
     let mut close = false;
     let mut go = false;
-    // Browse… is desktop-only.
-    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     let mut browse = false;
     widgets::radio_value(ui, &mut d.new_id.create, false, tl!("Use a Digital ID from a file"));
     widgets::radio_value(ui, &mut d.new_id.create, true, tl!("Create a new Digital ID (self-signed, saved to a password-protected file)"));
@@ -165,12 +166,16 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             let l = ui.label(tl!("Country/Region"));
             ui.add(crate::widgets::line(&mut n.country).hint_text("US").char_limit(2).desired_width(60.0)).labelled_by(l.id);
             ui.end_row();
-            ui.label(tl!("Key Algorithm"));
-            craft_ui::ComboBox::from_id_salt("key-alg").selected_text(KEY_ALGORITHMS[n.key].0).show_ui(ui, |ui| {
-                for (i, (label, _)) in KEY_ALGORITHMS.iter().enumerate() {
-                    ui.selectable_value(&mut n.key, i, *label);
-                }
-            });
+            let l = ui.label(tl!("Key Algorithm"));
+            craft_ui::ComboBox::from_id_salt("key-alg")
+                .selected_text(KEY_ALGORITHMS[n.key].0)
+                .show_ui(ui, |ui| {
+                    for (i, (label, _)) in KEY_ALGORITHMS.iter().enumerate() {
+                        ui.selectable_value(&mut n.key, i, *label);
+                    }
+                })
+                .response
+                .labelled_by(l.id);
             ui.end_row();
             let l = ui.label(tl!("Password"));
             ui.add(crate::widgets::line(&mut n.password).password(true).desired_width(200.0)).labelled_by(l.id);
@@ -188,8 +193,11 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         egui::Grid::new("id-file").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
             let l = ui.label(tl!("File (.p12, .pfx)"));
             ui.horizontal(|ui| {
-                ui.add(crate::widgets::line(&mut n.file).desired_width(220.0)).labelled_by(l.id);
-                #[cfg(not(target_arch = "wasm32"))]
+                // A browser names no paths: the field shows the picked file's name.
+                let typed = ui.add_enabled(!cfg!(target_arch = "wasm32"), crate::widgets::line(&mut n.file).desired_width(220.0)).labelled_by(l.id);
+                if typed.changed() {
+                    n.picked = None;
+                }
                 if ui.button(tl!("Browse…")).clicked() {
                     browse = true;
                 }
@@ -245,7 +253,9 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         });
     }
     #[cfg(target_arch = "wasm32")]
-    let _ = browse;
+    if browse {
+        app.pick_id_file();
+    }
     close
 }
 
@@ -360,7 +370,6 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     let in_os_key_store = entry.path.starts_with("keychain:") || entry.path.starts_with("windows:");
     let mut close = false;
     let mut go = false;
-    #[cfg(not(target_arch = "wasm32"))]
     let mut pick = false;
     if d.rect.is_some() || d.field.is_some() {
         ui.label(egui::RichText::new(tl!("Appearance")).font(theme::semibold(12.5)));
@@ -400,7 +409,6 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
                     d.graphic = SignGraphic::Image(image.clone());
                 }
             });
-            #[cfg(not(target_arch = "wasm32"))]
             if widgets::pill_button(ui, tl!("Choose image…"), false).clicked() {
                 pick = true;
             }
@@ -468,7 +476,6 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             }
         });
     });
-    #[cfg(not(target_arch = "wasm32"))]
     if pick {
         app.pick_sign_graphic_image();
     }

@@ -184,6 +184,9 @@ impl PdfCraftApp {
             summary_sort: Default::default(),
             sign_draft: None,
             digital_ids: Vec::new(),
+            id_files: Vec::new(),
+            #[cfg(target_arch = "wasm32")]
+            web_signing: Default::default(),
             sig_expanded: Vec::new(),
             a11y_options: a11y_ui::A11yOptions::default(),
             ocr_draft: ocr_ui::OcrDraft::default(),
@@ -562,6 +565,8 @@ impl eframe::App for PdfCraftApp {
         self.process_file_requests();
         #[cfg(not(target_arch = "wasm32"))]
         self.process_picked();
+        #[cfg(target_arch = "wasm32")]
+        self.finish_browser_signatures();
         // Last, after everything that can open or answer the "save changes?" question.
         self.attend_save_prompt(ctx);
         self.sync_native_menu(ctx);

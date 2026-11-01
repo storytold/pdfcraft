@@ -59,6 +59,7 @@ pub use print_ui::{Handling as PrintHandling, OptionsSource, PrintDraft, Printer
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
 pub mod i18n;
 pub mod theme;
+mod web_sign;
 mod widgets;
 
 use pdfcraft_engine::{DocId, Session};
@@ -464,6 +465,11 @@ pub struct PdfCraftApp {
     pub sign_draft: Option<SignDraft>,
     /// Digital ID files the user has created or added.
     pub digital_ids: Vec<DigitalIdEntry>,
+    /// The digital ID files held in memory, listed as `browser:` (web: picked in the browser).
+    pub(crate) id_files: Vec<web_sign::IdFile>,
+    /// A digital ID file picked, and RSA signatures made, asynchronously by the browser.
+    #[cfg(target_arch = "wasm32")]
+    web_signing: web_sign::Inbox,
     /// Signatures panel: expanded entries (field names).
     pub sig_expanded: Vec<String>,
     /// Accessibility Checker: options, the last check, and rules skipped by hand.

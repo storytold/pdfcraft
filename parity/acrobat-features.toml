@@ -6513,11 +6513,11 @@ title = "Sign in the browser with a PKCS#12 file"
 area = "H"
 tier = "P1"
 milestone = "M9"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["sign.digital", "sign.certify", "sign.certify_invisible"]
+tools = ["sign_prepare", "sign_finish", "sign_document"]
+evidence = ["crates/engine/src/sign_steps.rs::two_rsa_steps_write_the_file_one_step_writes_and_it_validates", "crates/engine/src/sign_steps.rs::ecdsa_answers_as_der_or_raw_and_the_file_gets_der", "crates/engine/src/sign_steps.rs::an_edit_between_the_steps_refuses_the_second_and_writes_nothing", "crates/engine/src/sign_steps.rs::a_signature_by_another_key_or_over_other_bytes_is_refused", "crates/automation/src/signing.rs::an_outside_rsa_key_signs_in_two_steps_the_file_sign_document_writes", "crates/automation/src/signing.rs::an_outside_ecdsa_key_may_answer_with_raw_r_and_s", "crates/automation/src/signing.rs::a_wrong_signature_or_a_changed_document_is_refused_and_nothing_is_written", "crates/ui-egui/src/web_sign.rs::a_digital_id_file_held_in_memory_signs_and_never_reaches_the_settings", "crates/ui-egui/src/web_sign.rs::a_picked_file_is_checked_before_it_is_listed_and_the_same_name_replaces_it"]
+notes = "The web build signs as the desktop does: Digitally sign and Certify, visible or invisible, new or existing fields, PAdES B-B. Configure New Digital ID > Browse... opens the browser's file picker; the .p12/.pfx (at most 1 MiB) is held in memory for the session as browser:<name>, never written to the settings, and its password is asked at each signing. ECDSA P-256/P-384 keys sign in Rust (RFC 6979). RSA keys sign through the browser's Web Crypto (RSASSA-PKCS1-v1_5, key imported not extractable), since ADR-0009 keeps the rsa crate to verifying; browsers offer Web Crypto only in secure contexts, so RSA needs HTTPS or localhost and says so (ECDSA works anywhere). Web Crypto answers asynchronously, so the engine signs in two steps (Session::signing_request / complete_signing): the second checks the value against the certificate, refuses if the document changed meanwhile, and writes the file one-step signing writes. sign_prepare / sign_finish give the same steps to any outside key (HSM, signing service; ECDSA as DER or raw r||s). The signed file downloads as <name>_signed.pdf, or goes to the embedding page with ?host=parent. Create a new Digital ID in the browser makes a P-256 self-signed ID that downloads as .p12 (RSA keys are generated on the desktop only); Choose image... for the signature graphic uses the browser picker; validation already ran in the browser. The key's PKCS #8 copies (Rust's and the one handed to JavaScript) and the decrypted PKCS #12 key bags are wiped after use; the CryptoKey is left to the browser. Tests run on the host (two steps, tools, in-memory ID); the Web Crypto and picker glue was checked by hand in Chromium, with no automated browser test (the repo has no wasm test runner). Not in the browser: OS key stores and PKCS #11 tokens (no browser API reaches them), timestamps (not yet anywhere), keeping the ID file between sessions (by design)."
 
 [[feature]]
 id = "sign.aatl"

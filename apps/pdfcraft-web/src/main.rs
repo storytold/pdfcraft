@@ -23,6 +23,9 @@ fn main() {
                 options,
                 Box::new(|cc| {
                     let mut app = PdfCraftApp::new();
+                    // The browser's clock and time zone: the engine has neither in wasm (#2317), and
+                    // signatures, Fill & Sign dates and `/ModDate` take them.
+                    app.session = std::mem::take(&mut app.session).with_wall_clock(now, utc_offset);
                     // "printcraft": settings saved under the app's former name, PrintCraft.
                     if let Some(json) = cc.storage.and_then(|s| s.get_string("pdfcraft").or_else(|| s.get_string("printcraft"))) {
                         app.restore(&json);
@@ -102,6 +105,19 @@ fn warn_before_unload(unsaved: std::sync::Arc<std::sync::atomic::AtomicBool>) {
     if window.add_event_listener_with_callback("beforeunload", handler.as_ref().unchecked_ref()).is_ok() {
         handler.forget();
     }
+}
+
+/// Seconds since the Unix epoch, from the browser.
+#[cfg(target_arch = "wasm32")]
+fn now() -> i64 {
+    // A float to integer `as` saturates (and NaN is 0), so a strange clock can't panic.
+    (js_sys::Date::now() / 1000.0) as i64
+}
+
+/// The local time zone's seconds east of UTC now (`getTimezoneOffset` is minutes west).
+#[cfg(target_arch = "wasm32")]
+fn utc_offset() -> i64 {
+    (-js_sys::Date::new_0().get_timezone_offset() * 60.0) as i64
 }
 
 #[cfg(target_arch = "wasm32")]

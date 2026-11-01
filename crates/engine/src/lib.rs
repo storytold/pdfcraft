@@ -46,6 +46,7 @@ mod protection;
 mod scan_colours;
 mod scan_fields;
 mod session;
+mod sign_steps;
 pub mod signature_image;
 pub mod signature_scan;
 mod sources;
@@ -121,6 +122,7 @@ pub use pdfcraft_redact::sanitize::{HIDDEN, Hidden};
 pub use pdfcraft_sign as sign;
 pub use pdfcraft_sign::{SignOptions, SignatureInfo, Status as SignatureStatus, TrustStore};
 pub use pdfcraft_xfdf::Format as DataFormat;
+pub use sign_steps::SigningRequest;
 
 use bookmarks::outline_rows;
 pub use bookmarks::{BookmarkPage, BookmarkRow};
