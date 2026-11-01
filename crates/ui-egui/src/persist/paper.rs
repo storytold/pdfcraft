@@ -51,7 +51,15 @@ fn detect() -> Option<Paper> {
     if let Some(paper) = windows_paper().and_then(|v| paper_for_ipapersize(&v)) {
         return Some(paper);
     }
-    ["LC_ALL", "LC_PAPER", "LANG"].iter().find_map(|var| std::env::var(var).ok().filter(|v| !v.is_empty()).and_then(|v| paper_for_tag(&v)))
+    paper_for_tag(&locale_for_paper(|var| std::env::var(var).ok())?)
+}
+
+/// The locale that decides the paper, as POSIX picks it: the first of `LC_ALL`, `LC_PAPER` and
+/// `LANG` that is set and not empty, read through `var`. A later one never stands in for it, so
+/// `LC_ALL=C` with `LANG=de_DE` has no paper from the locale (CodeRabbit on #5651).
+#[cfg(any(test, not(target_arch = "wasm32")))]
+pub(crate) fn locale_for_paper(var: impl Fn(&str) -> Option<String>) -> Option<String> {
+    ["LC_ALL", "LC_PAPER", "LANG"].iter().find_map(|name| var(name).filter(|v| !v.is_empty()))
 }
 
 /// The paper for the Windows `iPaperSize` value (a `DMPAPER` number): "1" Letter, "9" A4. `None`
@@ -83,7 +91,7 @@ fn detect() -> Option<Paper> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Paper, paper_for_ipapersize, paper_for_tag};
+    use super::{Paper, locale_for_paper, paper_for_ipapersize, paper_for_tag};
 
     #[test]
     fn region_decides_the_paper() {
@@ -97,6 +105,23 @@ mod tests {
         assert_eq!(paper_for_tag("C"), None);
         assert_eq!(paper_for_tag("en"), None);
         assert_eq!(paper_for_tag(""), None);
+        // A BCP 47 extension is not the region (CodeRabbit on #5651): `nu` is a key, not Niue.
+        assert_eq!(paper_for_tag("en-US-u-nu-latn"), Some(Paper::Letter));
+        assert_eq!(paper_for_tag("de-DE-u-rg-uszzzz"), Some(Paper::A4));
+        assert_eq!(paper_for_tag("en-x-us"), None);
+    }
+
+    /// POSIX precedence (CodeRabbit on #5651): the first locale variable that is set decides, even
+    /// when it has no region; an empty one is not set.
+    #[test]
+    fn the_first_locale_variable_set_decides() {
+        let env =
+            |pairs: &'static [(&'static str, &'static str)]| move |name: &str| pairs.iter().find(|(k, _)| *k == name).map(|(_, v)| v.to_string());
+        assert_eq!(locale_for_paper(env(&[("LC_ALL", "C"), ("LANG", "de_DE.UTF-8")])).as_deref(), Some("C"));
+        assert_eq!(locale_for_paper(env(&[("LC_ALL", ""), ("LC_PAPER", "en_US"), ("LANG", "de_DE")])).as_deref(), Some("en_US"));
+        assert_eq!(locale_for_paper(env(&[("LANG", "fr_FR")])).as_deref(), Some("fr_FR"));
+        assert_eq!(locale_for_paper(env(&[])), None);
+        assert_eq!(locale_for_paper(env(&[("LC_ALL", "C.UTF-8"), ("LANG", "de_DE")])).and_then(|t| paper_for_tag(&t)), None);
     }
 
     #[test]
