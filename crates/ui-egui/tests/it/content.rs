@@ -938,26 +938,44 @@ fn the_text_editor_aligns_a_narrow_box_whose_lines_share_an_alignment() {
 }
 
 /// #4789: the Format panel's Fill colour gives new text a background of its own, apart from the
-/// text colour, and No fill takes it off again.
+/// text colour, and No fill takes it off again, both before typing and in an active draft.
 #[test]
 fn format_text_panel_sets_and_clears_the_background() {
-    let mut h = harness();
-    assert!(h.state_mut().execute("edit.text"));
-    h.run_steps(3);
-    assert_eq!(h.state().text_style.background, None, "no fill by default");
-    let text_colour = h.state().text_style.color;
-    h.get_by_label("Fill colour").click();
-    h.run_steps(3);
-    h.get_by_label("Red").click();
-    h.run_steps(3);
-    let red = h.state().text_style.background.expect("the swatch sets a background");
-    assert!(red[0] > 0.5 && red[1] < 0.5 && red[2] < 0.5, "red: {red:?}");
-    assert_eq!(h.state().text_style.color, text_colour, "the text colour is its own");
-    h.get_by_label("Fill colour").click();
-    h.run_steps(3);
-    h.get_by_label("No fill").click();
-    h.run_steps(3);
-    assert_eq!(h.state().text_style.background, None, "No fill takes it off");
+    for active in [false, true] {
+        let mut h = harness();
+        assert!(h.state_mut().execute("edit.text"));
+        h.run_steps(3);
+        assert_eq!(h.state().text_style.background, None, "no fill by default");
+        if active {
+            let p = at(&h, 40.0, 300.0);
+            click(&mut h, p);
+            h.event(egui::Event::Text("Hello".into()));
+            crate::support::settle(&mut h);
+            assert!(h.state().views[0].content.draft.is_some(), "typing opens an active draft");
+        }
+        let text_colour = h.state().text_style.color;
+        h.get_by_label("Fill colour").click();
+        h.run_steps(3);
+        h.get_by_label("Red").click();
+        h.run_steps(3);
+        let red = h.state().text_style.background.expect("the swatch sets a background");
+        assert!(red[0] > 0.5 && red[1] < 0.5 && red[2] < 0.5, "red: {red:?}");
+        if active {
+            let draft = h.state().views[0].content.draft.as_ref().expect("formatting keeps the draft open");
+            assert_eq!(draft.style.background, Some(red), "the active draft receives the fill");
+            assert_eq!(draft.style.color, text_colour, "the draft text colour is its own");
+        }
+        assert_eq!(h.state().text_style.color, text_colour, "the text colour is its own");
+        h.get_by_label("Fill colour").click();
+        h.run_steps(3);
+        h.get_by_label("No fill").click();
+        h.run_steps(3);
+        assert_eq!(h.state().text_style.background, None, "No fill takes it off");
+        if active {
+            let draft = h.state().views[0].content.draft.as_ref().expect("removing fill keeps the draft open");
+            assert_eq!(draft.style.background, None, "the active draft clears the fill");
+        }
+    }
 }
 
 /// #4789: the text editor draws the item's background while typing and when reopened: the page's

@@ -6,6 +6,8 @@
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 review follow-up: preserve image crop/tag/stream ownership, resize in page orientation, harden clipboard and text formatting, and reload installed fonts; estimates unchanged)
 
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7 #4789: Format-panel fill coverage exercises both defaults and active typed drafts; independent set/clear mutations fail the new assertions; 1910 UI tests pass (5 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm pass; production unchanged)
+
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7 #4789: rebase PR #4912 onto main 47f42ba0; 3030 scoped tests pass (9 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged)
 
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; estimates unchanged)
@@ -231,6 +233,9 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 - 2026-11-01: PR #2155 review follow-up preserves editor crops through group moves and keeps arranged artwork outside added-item streams; unsafe nested-tag extraction is refused. Image handles and flips follow page orientation, added images accept general transforms, and clipboard/text/Home/font-discovery edge cases have focused regressions. Candidate only; estimates unchanged.
 - 2026-11-01: PR #2155 maintainer edits remove redundant image/text helpers and add regressions for crop ownership, arrange scope/state fidelity, clipboard precedence, crop-drag bounds, and font scanning. Transform and Unicode-script tools complete the headless paths.
+- **2026-11-01 (M7, #4789 coverage):** M7 #4789: Format-panel fill coverage exercises both defaults and active typed drafts; independent set/clear mutations fail the new assertions; 1910 UI tests pass (5 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm pass; production unchanged.
+
+
 - **2026-11-01 (M7, #4789 rebase):** PR #4912 rebased onto main `47f42ba0`; resolved and auto-merged hunks reviewed. 3030 scoped tests passed, 9 existing ignored; formatting, strict Clippy, layers/assets/parity and wasm checks passed. Behavior and estimates unchanged.
 
 
@@ -750,6 +755,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | patch | M7 #4789: Format-panel fill coverage exercises both defaults and active typed drafts; independent set/clear mutations fail the new assertions; 1910 UI tests pass (5 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm pass; production unchanged. |
 | 2026-11-01 | patch | M7 #4789: rebase PR #4912 onto main 47f42ba0; 3030 scoped tests pass (9 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged. |
 | 2026-10-28 | patch | M2, PR #4172: integrate main 5af10276 and retain both roadmap histories; viewer-only CJK and print/output font policies and estimates unchanged. |
 | 2026-10-27 | minor | M10: OCR stages SHA-256-verified ONNX models after the upstream RTEN URL brownout; discovery prefers a complete ONNX pair per directory, falls back to a complete RTEN pair, and never mixes formats or directories; language/web limits and estimates unchanged. |
