@@ -12,8 +12,8 @@
 //! - A path on another network share or in a device namespace (`\\host\share`, `\\.\pipe\x`)
 //!   than the root's is refused by name, before anything is resolved: resolving it would contact
 //!   the host.
-//! - The result must lie inside the root, compared by whole components (`/work2` isn't inside
-//!   `/work`), without regard to case on Windows.
+//! - The result must lie inside the root, compared by whole canonical components (`/work2` isn't
+//!   inside `/work`), with the drive letter compared without regard to case on Windows.
 //! - Read and write access are separate: a root given alone grants only its own kind of access.
 //!
 //! Without roots nothing is checked. A path is checked, then opened: a process that can change the
@@ -179,22 +179,23 @@ fn resolve(shown: &str, absolute: &Path) -> Result<PathBuf, String> {
     }
 }
 
-/// Is `path` (resolved) `root` or inside it, component by component (without regard to case on
-/// Windows, whose file systems ignore it)?
+/// Is `path` (resolved) `root` or inside it, component by component (the drive letter without
+/// regard to case on Windows)?
 fn inside(path: &Path, root: &Path) -> bool {
     let mut path = path.components();
     root.components().all(|r| path.next().is_some_and(|p| same_component(p, r)))
 }
 
 fn same_component(a: Component, b: Component) -> bool {
+    use std::path::Prefix;
     if a == b {
         return true;
     }
-    if !cfg!(windows) {
-        return false;
-    }
-    match (a.as_os_str().to_str(), b.as_os_str().to_str()) {
-        (Some(a), Some(b)) => a.to_lowercase() == b.to_lowercase(),
+    match (a, b) {
+        (Component::Prefix(a), Component::Prefix(b)) => match (a.kind(), b.kind()) {
+            (Prefix::Disk(a) | Prefix::VerbatimDisk(a), Prefix::Disk(b) | Prefix::VerbatimDisk(b)) => a.eq_ignore_ascii_case(&b),
+            _ => false,
+        },
         _ => false,
     }
 }
@@ -382,6 +383,37 @@ mod tests {
         assert!(e.contains("reserved device names"), "{e}");
         assert!(roots.check(&s(base.join("out/com1.txt")), Access::Write).is_err());
         assert_eq!(roots.check(&s(base.join("out/console.txt")), Access::Write), Ok(()));
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// #4003: canonical path components are compared as the file system gave them, with only the
+    /// Windows drive letter matched ASCII case-insensitively, so a sibling whose name `to_lowercase`
+    /// folds onto the root's (`K` U+212A → `k`) or a differently-cased canonical component is not
+    /// taken as inside the root.
+    #[test]
+    fn canonical_components_are_compared_exactly() {
+        let (base, _) = folders("canonical-exact");
+        std::fs::create_dir_all(base.join("ink")).unwrap();
+        let kelvin = base.join("in\u{212A}");
+        std::fs::create_dir_all(&kelvin).unwrap();
+        std::fs::write(kelvin.join("secret.pdf"), "x").unwrap();
+        // U+212A folds to K. A case-insensitive volume stores both names as one directory, so
+        // `check` would be asked to reject a path inside its own root. The component comparison
+        // itself does not need that volume.
+        let distinct = base.join("ink").canonicalize().ok() != kelvin.canonicalize().ok();
+        if distinct {
+            let roots = AutomationRoots::new(Some(&base.join("ink")), None).unwrap().unwrap();
+            let e = roots.check(&s(kelvin.join("secret.pdf")), Access::Read).unwrap_err();
+            assert!(e.starts_with("automation path rejected: outside the read root"), "{e}");
+        }
+        assert!(!inside(Path::new("/work/in\u{212A}/secret.pdf"), Path::new("/work/ink")));
+        assert!(!inside(Path::new(r"\\?\C:\work\IN\a.pdf"), Path::new(r"\\?\C:\work\in")));
+        #[cfg(windows)]
+        {
+            assert!(inside(Path::new(r"\\?\c:\work\in\a.pdf"), Path::new(r"\\?\C:\work\in")));
+            assert!(inside(Path::new(r"c:\work\in\a.pdf"), Path::new(r"\\?\C:\work\in")));
+            assert!(!inside(Path::new(r"\\?\D:\work\in\a.pdf"), Path::new(r"\\?\C:\work\in")));
+        }
         let _ = std::fs::remove_dir_all(base);
     }
 
