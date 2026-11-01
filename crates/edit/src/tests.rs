@@ -2656,6 +2656,78 @@ fn a_zero_font_size_is_read_and_rewritten_without_a_sign() {
     }
 }
 
+/// A negative `Tf` with a positive `Tz` runs the glyphs against text space x: under a CTM turned
+/// half a turn they still read upright, left to right. Widths are lengths, so such a paragraph
+/// wraps, aligns and justifies in its box exactly as the same text set the ordinary way, and its
+/// alignment and underline go along the glyphs: it never wrapped, and aligning moved it off the page.
+#[test]
+fn text_running_against_text_space_wraps_and_aligns_like_any_other() {
+    use crate::added::Align;
+    let draft = "The assembler creates object files from every source file it is given and the linker joins them";
+    let written = |content: &str, draft: &str, align: Option<Align>| {
+        let mut doc = text_page(content);
+        let style = text::BlockStyle { width: Some(120.0), align, ..Default::default() };
+        text::rewrite_block(&mut doc, 0, 0, Some(draft), &style).unwrap();
+        text::text_lines(&reopen(&doc), 0).unwrap().iter().map(|l| (l.text.clone(), l.rect[0], l.rect[2])).collect::<Vec<_>>()
+    };
+    let rows = |content: &str, align: Option<Align>| written(content, draft, align);
+    let plain = "BT /F1 10 Tf 72 692 Td (The assembler creates) Tj ET";
+    let turned = "q -1 0 0 -1 612 792 cm BT /F1 -10 Tf 1 0 0 1 540 100 Tm (The assembler creates) Tj ET Q";
+    // The negative `Tz` turns the glyphs back along text space, so this one only keeps its sign.
+    let flipped = "1 0 0 1 0 792 cm 1 0 0 -1 0 0 cm BT /F1 -10 Tf -100 Tz 1 0 0 1 72 100 Tm (The assembler creates) Tj ET";
+    for source in [turned, flipped] {
+        for align in [None, Some(Align::Center), Some(Align::Right), Some(Align::Justify)] {
+            let (want, got) = (rows(plain, align), rows(source, align));
+            assert!(want.len() > 1, "{want:?}");
+            assert_eq!(got.len(), want.len(), "{source} {align:?}: {got:?}");
+            for (w, g) in want.iter().zip(&got) {
+                assert_eq!(w.0.trim(), g.0.trim(), "{align:?}");
+                assert!((w.1 - g.1).abs() < 1.0 && (w.2 - g.2).abs() < 1.0, "{source} {align:?}: {w:?} against {g:?}");
+            }
+        }
+    }
+    // A single line with no width asked for grows towards the margin the glyphs run to.
+    let mut doc = text_page(turned);
+    let longer = "The assembler creates object files from every source file";
+    text::rewrite_block(&mut doc, 0, 0, Some(longer), &text::BlockStyle::default()).unwrap();
+    assert_eq!(text::text_lines(&reopen(&doc), 0).unwrap().len(), 1);
+    // The underline runs along the glyphs too: towards negative x in this text space.
+    let mut doc = text_page(turned);
+    let style = text::BlockStyle { width: Some(400.0), underline: Some(true), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, None, &style).unwrap();
+    let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+    let at = |name: &str| ops.iter().find(|o| o.is(name)).and_then(|o| o.num(0)).unwrap();
+    assert!(at("l") < at("m"), "{ops:?}");
+
+    // Set to run left with nothing turning it back, the text keeps to its width and its page,
+    // also with a line break, which would otherwise take the styled path: that one lays rows out
+    // from their left edge. Formatting part of it is refused, as it is for turned text.
+    let with_break = format!("Short\n{draft}");
+    for run_left in
+        ["BT /F1 -10 Tf 1 0 0 1 300 600 Tm (The assembler creates) Tj ET", "BT /F1 10 Tf -100 Tz 1 0 0 1 300 600 Tm (The assembler creates) Tj ET"]
+    {
+        for align in [None, Some(Align::Center), Some(Align::Right), Some(Align::Justify)] {
+            for draft in [draft, with_break.as_str()] {
+                let got = written(run_left, draft, align);
+                assert!(got.len() > 1 && got.iter().all(|r| r.1 > 100.0 && r.2 < 320.0), "{run_left} {align:?}: {got:?}");
+            }
+        }
+        let mut doc = text_page(run_left);
+        let red_word = text::RangeStyle {
+            range: 0..3,
+            family: None,
+            resource: None,
+            size: None,
+            color: Some([1.0, 0.0, 0.0]),
+            underline: None,
+            char_spacing: None,
+            scale: None,
+        };
+        let style = text::BlockStyle { ranges: vec![red_word], ..Default::default() };
+        assert!(text::rewrite_block(&mut doc, 0, 0, Some("The assembler creates"), &style).is_err(), "{run_left}");
+    }
+}
+
 /// Two subsets of one font can carry different encodings: here the second names `-` and `l`
 /// through `/Differences` (codes 33 and 34), so the same letters have different codes. The visual
 /// line still joins and reads in coding order (#3661).

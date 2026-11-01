@@ -48,6 +48,11 @@ impl TextLine {
         (x - 1.0).abs() < 1e-3 && y.abs() < 1e-3
     }
 
+    /// Whether its glyphs advance against text space x: a negative `Tf` or `Tz`, but not both.
+    pub(super) fn runs_backwards(&self) -> bool {
+        self.origin.state.with_tf_sign(1.0) * self.origin.state.scale < 0.0
+    }
+
     /// Where it starts as `(along, across)` its baseline: user space turned to the text's direction.
     pub(crate) fn frame_origin(&self) -> (f64, f64) {
         to_frame(self.direction(), (self.origin.x, self.origin.baseline))
