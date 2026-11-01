@@ -4365,6 +4365,14 @@ fn redact_apply_reports_places_that_still_hold_the_removed_text() {
     ok(&mut a, "redact_mark", json!({ "doc": doc, "find": "Bluefin" }));
     let r = ok(&mut a, "redact_apply", json!({ "doc": doc }));
     assert_eq!(r["still_holding"], json!({ "bookmarks": 1, "attachments": 0, "comments": 1, "xmp": 0, "total": 2, "unsearched": false }), "{r}");
+    // Said in the warnings too, with the other edit notices.
+    assert_eq!(
+        r["warnings"],
+        json!([
+            "the redacted text also appears in 1 bookmark title and 1 comment, which redaction doesn't change (Remove hidden information removes them)"
+        ]),
+        "{r}"
+    );
     assert!(!page_text(&mut a, doc)[0].contains("Bluefin"));
     let titles: Vec<String> = ok(&mut a, "bookmark_list", json!({ "doc": doc }))["bookmarks"]
         .as_array()

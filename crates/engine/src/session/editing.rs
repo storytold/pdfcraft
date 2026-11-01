@@ -26,7 +26,6 @@ impl Session {
         let xfa_time_scale = self.xfa_time_scale.unwrap_or(1);
         let doc = self.doc_mut(id)?;
         doc.edit_notices.clear();
-        doc.redaction_elsewhere = None;
         let name = doc.name.clone();
         let is_xfa = doc.info.xfa.is_some();
         let mut scope = scope_of(&edit);
@@ -182,7 +181,9 @@ impl Session {
         if signed && ((rewrites(&next) && !rewrites(&editor.cos)) || (next.is_modified() && next.revisions().is_empty())) {
             return Err(EditError::SignedRewrite(edit.label().to_string()));
         }
-        let notices = edit_notices(&edit, &editor.cos, &next);
+        let mut notices = edit_notices(&edit, &editor.cos, &next);
+        // Places applied redactions left that still hold the removed text: said, not silent.
+        notices.extend(cx.redaction_elsewhere.filter(|e| e.total() > 0 || e.unsearched).map(EditNotice::RedactionElsewhere));
         let previous = std::mem::replace(&mut editor.cos, next);
         let keys = keys_after(&edit).unwrap_or_else(|| editor.keys.clone());
         let previous_keys = std::mem::replace(&mut editor.keys, keys);
@@ -211,7 +212,6 @@ impl Session {
         doc.dirty = true;
         doc.generation += 1;
         doc.edit_notices = notices;
-        doc.redaction_elsewhere = cx.redaction_elsewhere;
         if !cx.xfa_removed.is_empty() {
             let removed: Vec<String> = cx.xfa_removed.iter().map(|n| format!("{XFA_REMOVED_PREFIX}{n}")).collect();
             doc.xfa_warnings.retain(|w| w.starts_with(XFA_REMOVED_PREFIX));
@@ -257,7 +257,6 @@ impl Session {
             return Err(e);
         }
         doc.edit_notices.clear();
-        doc.redaction_elsewhere = None;
         Self::sync_dirty(doc);
         doc.generation += 1;
         Ok(label)
@@ -287,7 +286,6 @@ impl Session {
             return Err(e);
         }
         doc.edit_notices.clear();
-        doc.redaction_elsewhere = None;
         Self::sync_dirty(doc);
         doc.generation += 1;
         Ok(label)

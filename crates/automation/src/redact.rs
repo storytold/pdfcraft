@@ -166,7 +166,7 @@ impl Automation {
         out["applied"] = json!(before - after);
         out["marks_pending"] = json!(after);
         // Where the removed text is still held that applying leaves as it is.
-        let left = self.doc(a)?.redaction_elsewhere.unwrap_or_default();
+        let left = self.doc(a)?.redaction_elsewhere().unwrap_or_default();
         out["still_holding"] = json!({
             "bookmarks": left.bookmarks,
             "attachments": left.attachments,

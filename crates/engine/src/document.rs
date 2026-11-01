@@ -60,14 +60,10 @@ pub struct Document {
     /// (also in `info.warnings`, kept there when the document is re-read).
     pub xfa_warnings: Vec<String>,
     /// What the last successful [`Session::apply`](crate::Session::apply) wants said (see
-    /// [`EditNotice`]): text its fonts can't draw, pages whose own backdrop stays off. The
-    /// interface shows it; tools return it.
+    /// [`EditNotice`]): text its fonts can't draw, pages whose own backdrop stays off, places
+    /// applied redactions left that still hold the removed text. The interface shows it; tools
+    /// return it.
     pub edit_notices: Vec<EditNotice>,
-    /// What the last successful [`Session::apply`](crate::Session::apply), when it applied redactions,
-    /// found still holding the removed text in places applying leaves as they are (bookmark titles,
-    /// attachments, remaining comments, other XMP; see [`RedactionElsewhere`](crate::RedactionElsewhere)).
-    /// `None` after any other edit, an undo or a redo. The interface says so; tools return it.
-    pub redaction_elsewhere: Option<pdfcraft_redact::Elsewhere>,
 }
 
 /// Something the last successful edit did that the user should hear about, never left silent
@@ -81,6 +77,11 @@ pub enum EditNotice {
     /// turning it on could paint over something (`pdfcraft_edit::backdrops_left_off`). They look
     /// the same on white paper.
     BackdropsLeftOff { pages: Vec<usize> },
+    /// Applying redactions left these places as they were, and they still hold the removed text
+    /// (bookmark titles, attachments, the comments that remain, XMP on other objects; see
+    /// [`RedactionElsewhere`](crate::RedactionElsewhere)). Only when one is counted, or the text
+    /// couldn't be searched for.
+    RedactionElsewhere(pdfcraft_redact::Elsewhere),
 }
 
 impl std::fmt::Display for EditNotice {
@@ -95,7 +96,36 @@ impl std::fmt::Display for EditNotice {
                     page_runs(pages)
                 )
             }
+            EditNotice::RedactionElsewhere(e) => elsewhere_text(e, f),
         }
+    }
+}
+
+/// [`EditNotice::RedactionElsewhere`] in words (English; the interface has its own wording).
+fn elsewhere_text(e: &pdfcraft_redact::Elsewhere, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let count = |n: usize, one: &str, many: &str| match n {
+        0 => None,
+        1 => Some(format!("1 {one}")),
+        n => Some(format!("{n} {many}")),
+    };
+    let places: Vec<String> = [
+        count(e.bookmarks, "bookmark title", "bookmark titles"),
+        count(e.attachments, "attachment", "attachments"),
+        count(e.comments, "comment", "comments"),
+        count(e.xmp, "other metadata stream", "other metadata streams"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let list = match places.split_last() {
+        None => "no place counted".to_string(),
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+    };
+    if e.unsearched {
+        write!(f, "the redacted text couldn't be searched for, so {list} may still hold it (Remove hidden information removes them)")
+    } else {
+        write!(f, "the redacted text also appears in {list}, which redaction doesn't change (Remove hidden information removes them)")
     }
 }
 
@@ -185,6 +215,16 @@ pub(crate) fn undrawn_notices(prev: &pdfcraft_cos::Document, next: &pdfcraft_cos
 }
 
 impl Document {
+    /// The places the last edit's applied redactions left that still hold the removed text
+    /// ([`EditNotice::RedactionElsewhere`]), or `None` when there are none or the last edit
+    /// applied none.
+    pub fn redaction_elsewhere(&self) -> Option<pdfcraft_redact::Elsewhere> {
+        self.edit_notices.iter().find_map(|n| match n {
+            EditNotice::RedactionElsewhere(e) => Some(*e),
+            _ => None,
+        })
+    }
+
     /// How the document opens (Document Properties ▸ Initial View).
     /// Accessibility ▸ Check for accessibility: the full check (`None` if the document can't be
     /// read for editing).

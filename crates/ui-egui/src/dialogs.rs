@@ -1726,7 +1726,7 @@ fn finish_redactions_and_fields(app: &mut PdfCraftApp, req: &mut Pending) {
                 };
                 // Where the removed text is still held that applying leaves as it is: said in the
                 // same notification, so it can't replace the first sentence.
-                let left = app.active_ids().and_then(|(_, id)| app.session.get(id)).and_then(|d| d.redaction_elsewhere);
+                let left = app.active_ids().and_then(|(_, id)| app.session.get(id)).and_then(|d| d.redaction_elsewhere());
                 match left.and_then(|e| still_holding_note(&e)) {
                     Some(note) => app.notify(format!("{applied} {note}")),
                     None => app.notify(applied),
@@ -1782,7 +1782,7 @@ fn finish_redactions_and_fields(app: &mut PdfCraftApp, req: &mut Pending) {
 /// The sentence telling the user where the removed text is still held that applying redactions
 /// leaves as it is, or `None` when it is nowhere else. When the text couldn't be searched for,
 /// the places are those holding any text, and the sentence says they may hold it.
-fn still_holding_note(e: &pdfcraft_engine::RedactionElsewhere) -> Option<String> {
+pub(crate) fn still_holding_note(e: &pdfcraft_engine::RedactionElsewhere) -> Option<String> {
     let count = |n: usize, one: &str, many: &str| match n {
         0 => None,
         1 => Some(tl!(one).to_string()),

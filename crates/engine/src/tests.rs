@@ -2992,13 +2992,16 @@ fn applied_redactions_report_a_bookmark_that_still_holds_the_removed_text() {
     s.apply(id, Edit::AddBookmark { parent: vec![], index: 0, title: "Bluefin plans".into(), page: 0, left: None, top: None }).unwrap();
     s.apply(id, Edit::AddBookmark { parent: vec![], index: 1, title: "Annual figures".into(), page: 0, left: None, top: None }).unwrap();
     mark_shown_text(&mut s, id, "BLUEFIN");
-    assert_eq!(s.get(id).unwrap().redaction_elsewhere, None, "only applying redactions reports it");
+    assert_eq!(s.get(id).unwrap().redaction_elsewhere(), None, "only applying redactions reports it");
     s.apply(id, Edit::ApplyRedactions { pages: None }).unwrap();
-    let found = s.get(id).unwrap().redaction_elsewhere.expect("applying reports what it left");
+    let found = s.get(id).unwrap().redaction_elsewhere().expect("applying reports what it left");
     assert_eq!(found, crate::RedactionElsewhere { bookmarks: 1, ..Default::default() });
+    // One of the edit notices, so tools and the interface say it with the others.
+    let said: Vec<String> = s.get(id).unwrap().edit_notices.iter().map(ToString::to_string).collect();
+    assert_eq!(said, ["the redacted text also appears in 1 bookmark title, which redaction doesn't change (Remove hidden information removes them)"]);
     assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["Bluefin plans→1", "Annual figures→1"], "the bookmark is reported, not changed");
     s.undo(id).unwrap();
-    assert_eq!(s.get(id).unwrap().redaction_elsewhere, None, "an undo forgets it");
+    assert_eq!(s.get(id).unwrap().redaction_elsewhere(), None, "an undo forgets it");
 }
 
 /// A word whose font and size an ExtGState /Font entry (`gs`) sets is placed where the renderer
