@@ -2492,6 +2492,9 @@ fn edge_strokes_keep_their_own_dash_patterns() {
         ("dashDot", Stroke::DashDot, "[9 6 3 6] 0 d 2 J "),
         ("dashDotDot", Stroke::DashDotDot, "[9 6 3 6 3 6] 0 d 2 J "),
         ("lowered", Stroke::Relief, ""),
+        ("raised", Stroke::Relief, ""),
+        ("embossed", Stroke::Relief, ""),
+        ("etched", Stroke::Relief, ""),
     ];
     let body: String = strokes
         .iter()
@@ -2524,6 +2527,32 @@ fn edge_strokes_keep_their_own_dash_patterns() {
             assert_eq!(ops.contains(" d "), !dash.is_empty(), "{name}: {ops}");
         }
     }
+}
+
+/// A square border a page break cuts keeps its edges' stroke on both pages: each side edge is
+/// divided at the cut and both halves stay dashed, as do the top and bottom edges (#5561).
+#[test]
+fn a_dashed_border_cut_by_a_page_break_stays_dashed_on_each_page() {
+    // A 12-inch box in a 10-inch content area: it is cut at the area's bottom.
+    let body = r#"<subform name="body" layout="tb" w="7.5in"><subform name="tall" layout="position" w="7.5in" h="12in"><border><edge thickness="2pt" stroke="dashed"/></border><draw name="note" x="0in" y="0in" w="2in" h="0.3in"><value><text>Note</text></value></draw></subform></subform>"#;
+    let form = layout_xml(&one_area_form(r#"layout="tb""#, body)).unwrap();
+    assert_eq!(form.pages.len(), 2);
+    let mut side_length = 0.0;
+    for (n, page) in form.pages.iter().enumerate() {
+        let lines: Vec<_> = page
+            .items
+            .iter()
+            .filter_map(|it| if let Item::Line { from, to, width, color, stroke } = it { Some((*from, *to, *width, *color, *stroke)) } else { None })
+            .collect();
+        assert!(!lines.is_empty(), "page {n} has the box's edges");
+        for (from, to, width, color, stroke) in &lines {
+            assert_eq!(*stroke, Stroke::Dashed, "page {n}: {from:?}-{to:?}");
+            assert!(crate::pdf::line(*from, *to, *width, *color, *stroke, 792.0).contains("[8 4] 0 d 2 J "), "page {n}");
+        }
+        // The left edge's part on this page.
+        side_length += lines.iter().filter(|(f, t, ..)| (f.0 - t.0).abs() < 0.01 && f.0 < 100.0).map(|(f, t, ..)| (t.1 - f.1).abs()).sum::<f64>();
+    }
+    assert!((side_length - 12.0 * 72.0).abs() < 4.0, "the two parts of the left edge make the whole side: {side_length}");
 }
 
 /// A dash pattern scales with the edge's width, a dashed line's ink stays between its ends (its
