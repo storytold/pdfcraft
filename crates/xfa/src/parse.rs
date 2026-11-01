@@ -725,8 +725,8 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
             crate::MAX_XML_DEPTH
         )));
     }
-    let opts = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
-    let doc = roxmltree::Document::parse_with_options(xml, opts).map_err(|e| XfaError::Malformed(format!("template XML: {e}")))?;
+    let opts = || roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
+    let doc = roxmltree::Document::parse_with_options(xml, opts()).map_err(|e| XfaError::Malformed(format!("template XML: {e}")))?;
     let root = doc.root_element();
     // The XDP's config packet has a <template> element too: the one we want is in the
     // xfa-template namespace, or at least has a subform in it.
@@ -740,7 +740,21 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
     } else {
         root.descendants().find(is_template).ok_or_else(|| XfaError::Malformed("no <template> element".into()))?
     };
-    let mut warnings = Vec::new();
+    // Prototype references (`use`, `usehref`) are resolved first: the parser reads the template
+    // written again with them merged in. The saved state below still comes from `doc`.
+    let (expanded, mut warnings) = crate::proto::expand(template);
+    let expanded_doc;
+    let template = match expanded.as_deref().map(|x| roxmltree::Document::parse_with_options(x, opts())) {
+        Some(Ok(d)) => {
+            expanded_doc = d;
+            expanded_doc.root_element()
+        }
+        Some(Err(e)) => {
+            warnings.push(format!("the template with its prototypes resolved could not be read again ({e}); it is read without them"));
+            template
+        }
+        None => template,
+    };
     let sf = children(template, "subform").next().ok_or_else(|| XfaError::Malformed("the template has no root subform".into()))?;
     let mut root_sf = parse_subform(sf, &mut warnings, 0);
     if root_sf.page_set.is_none() {
