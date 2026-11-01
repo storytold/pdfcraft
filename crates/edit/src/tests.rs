@@ -8521,6 +8521,92 @@ fn q_inside_a_text_object_restores_the_text_matrices() {
     }
 }
 
+/// Listing keeps masks readable and numbered, but identifies the refusal before editing (#4786).
+#[test]
+fn paragraph_listing_flags_every_clipping_mode_without_losing_text() {
+    for mode in 0..=7 {
+        let doc = clipping_text_page(mode);
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].text, "MASK");
+        assert_eq!(blocks[0].editor_text, "MASK");
+        assert_eq!(blocks[0].lines, vec![0]);
+        if mode >= 4 {
+            assert!(
+                blocks[0].non_editable_reason.as_deref().is_some_and(|reason| reason.contains("clipping path")),
+                "mode {mode}: {:?}",
+                blocks[0].non_editable_reason
+            );
+        } else {
+            assert_eq!(blocks[0].non_editable_reason, None, "mode {mode}");
+        }
+    }
+}
+
+/// The preflight uses the same dropped runs as rewriting, including mixed runs and mask copies.
+#[test]
+fn paragraph_listing_flags_mixed_runs_and_coincident_masks() {
+    for content in [
+        "q BT /F1 48 Tf 40 60 Td 0 Tr (TITLE) Tj 7 Tr (MASK) Tj ET 1 0 0 rg 0 0 300 150 re f Q",
+        "q BT 0 Tr /F1 48 Tf 40 60 Td (MASK) Tj ET BT 7 Tr /F1 48 Tf 40 60 Td (MASK) Tj ET 1 0 0 rg 0 0 300 150 re f Q",
+    ] {
+        let doc = text_page(content);
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        assert!(!blocks.is_empty());
+        for block in &blocks {
+            assert!(block.non_editable_reason.as_deref().is_some_and(|reason| reason.contains("clipping path")));
+        }
+        for index in 0..blocks.len() {
+            let mut preview = doc.clone();
+            let before = pdfcraft_cos::write_full(&preview, &SaveOptions::default()).unwrap();
+            assert!(text::clear_block(&mut preview, 0, index).is_err());
+            assert_eq!(pdfcraft_cos::write_full(&preview, &SaveOptions::default()).unwrap(), before);
+            assert!(text::rewrite_block(&mut preview, 0, index, Some("EDITED"), &BlockStyle::default()).is_err());
+            assert_eq!(pdfcraft_cos::write_full(&preview, &SaveOptions::default()).unwrap(), before);
+        }
+    }
+}
+
+/// Text painted inside an existing path clip does not itself define the clip (#4708 is separate).
+#[test]
+fn paragraph_listing_keeps_ordinary_path_clipped_text_eligible() {
+    let doc = text_page("q 0 0 300 150 re W n BT /F1 12 Tf 40 60 Td (PLAIN) Tj ET Q");
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(blocks[0].text, "PLAIN");
+    assert_eq!(blocks[0].non_editable_reason, None);
+}
+
+/// ActualText collapses several glyph runs, but must retain every run's clipping hazard.
+#[test]
+fn actual_text_keeps_later_clipping_runs_and_refuses_without_changes() {
+    for mode in 4..=7 {
+        for nested in [false, true] {
+            let mask = format!("{mode} Tr (MASK) Tj");
+            let mask = if nested { format!("/Span << /ActualText (inner) >> BDC {mask} EMC") } else { mask };
+            let content = format!(
+                "q /Span << /ActualText (logical text) >> BDC BT /F1 48 Tf 40 60 Td 0 Tr (TITLE) Tj {mask} ET EMC 1 0 0 rg 0 0 300 150 re f Q"
+            );
+            let mut doc = text_page(&content);
+            let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+            let lines = text::text_lines(&doc, 0).unwrap();
+            assert_eq!(lines.len(), 1);
+            assert_eq!(lines[0].text, "logical text");
+            let blocks = text::text_blocks(&doc, 0).unwrap();
+            assert_eq!(blocks.len(), 1);
+            assert!(blocks[0].non_editable_reason.as_deref().unwrap().contains("clipping path"));
+            for result in [
+                text::replace_line(&mut doc, 0, 0, "EDITED").map(|_| ()),
+                text::rewrite_block(&mut doc, 0, 0, Some("EDITED"), &BlockStyle::default()).map(|_| ()),
+                text::clear_block(&mut doc, 0, 0),
+            ] {
+                assert!(matches!(result, Err(EditError::Invalid(ref reason)) if reason.contains("clipping path")), "{result:?}");
+                assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
+            }
+        }
+    }
+}
+
 /// Whole-paragraph alignment retains both soft wraps and typed hard breaks after save/reopen.
 /// Selected-row alignment for existing PDF content is withheld until it can persist safely.
 #[test]

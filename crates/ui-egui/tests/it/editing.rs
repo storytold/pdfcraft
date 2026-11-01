@@ -5246,6 +5246,7 @@ fn check_added_text_drag(panel_open: bool) {
     assert_dragged_paragraphs(&dragged_paragraphs(&reopened), &expected);
 }
 
+/// Known clipping-mask refusals stop the gesture before mutation or a late error toast.
 #[test]
 fn an_ordinary_paragraph_drag_refusal_never_rewrites_the_text() {
     let content = "q BT 4 Tr /F1 12 Tf 60 320 Td (Clipping text) Tj ET Q";
@@ -5261,7 +5262,8 @@ fn an_ordinary_paragraph_drag_refusal_never_rewrites_the_text() {
     assert!(doc.can_undo().is_none());
     assert!(!doc.dirty);
     assert_dragged_paragraphs(&dragged_paragraphs(&h), &before);
-    assert!(h.state().toast.as_ref().unwrap().0.contains("Text used as a clipping path cannot be moved with this selection."));
+    assert!(h.state().toast.is_none(), "a known refusal is explained before dragging, not as a late error");
+    assert!(doc.text_blocks(0).iter().all(|block| block.non_editable_reason.as_deref().is_some_and(|reason| reason.contains("clipping path"))));
 }
 
 /// A delete the engine refuses (text used as a clipping path) leaves the document as it was and
@@ -7643,6 +7645,134 @@ fn a_paragraph_selected_by_its_frame_deletes_with_one_key() {
         h.run_steps(2);
         assert_eq!(blocks(&h).iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), ["Page 1"], "undo restores it");
     }
+}
+
+/// #4786: a text clipping mask remains extractable, but the inline tool explains why it
+/// cannot be rewritten before a click. Repeated clicks and drags must not change the PDF.
+#[test]
+fn clipping_paragraphs_offer_a_reason_instead_of_an_editor() {
+    for mode in 4..=7 {
+        assert_clipping_paragraph_is_read_only(mode);
+    }
+}
+
+fn assert_clipping_width_handles_are_read_only(
+    h: &mut Harness<'static, PdfCraftApp>,
+    mask: &pdfcraft_engine::TextBlock,
+    page: egui::Rect,
+    point: egui::Pos2,
+    ordinary_point: egui::Pos2,
+    mode: u8,
+    before: &[u8],
+) {
+    let id = h.state().views[0].id;
+    // The router owns the initial press, including the outer half of a width handle.
+    // A quick flick that leaves the blocked box must not turn into a resize or another edit.
+    for x in [mask.rect[0], mask.rect[2]] {
+        let edge = egui::pos2(page.left() + x as f32 / 300.0 * page.width(), point.y);
+        let outward = if x == mask.rect[0] { -5.0 } else { 5.0 };
+        let edge = edge + egui::vec2(outward, 0.0);
+        h.hover_at(edge);
+        h.run_steps(2);
+        assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::NotAllowed, "blocked edge, mode {mode}");
+        flick(h, edge, ordinary_point);
+        assert!(h.state().views[0].block_drag.is_none());
+        assert!(h.state().views[0].line_editor.is_none());
+        assert_eq!(h.state().session.save_bytes(id).unwrap().as_slice(), before);
+        assert!(h.state().session.get(id).unwrap().can_undo().is_none());
+    }
+}
+
+fn assert_clipping_paragraph_is_read_only(mode: u8) {
+    let bytes = source_font_fixture_with_text(&format!(
+        "q BT /F1 18 Tf {mode} Tr 20 220 Td (Mask) Tj ET 0 0 300 300 re f Q BT /F1 18 Tf 20 120 Td (Ordinary) Tj ET"
+    ));
+    let mut builder = Harness::builder().with_size(egui::vec2(1400.0, 900.0));
+    if std::env::var_os("PDFCRAFT_CLIPPING_TEXT_SHOT").is_some() {
+        builder = builder.wgpu();
+    }
+    let mut h = builder.build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("clipping-text.pdf", None, bytes).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let id = h.state().views[0].id;
+    let before = h.state().session.save_bytes(id).unwrap();
+    let blocks = h.state().session.get(id).unwrap().text_blocks(0);
+    assert_eq!(blocks.len(), 2);
+    let mask = blocks.iter().find(|b| b.text == "Mask").unwrap();
+    let ordinary = blocks.iter().find(|b| b.text == "Ordinary").unwrap();
+    let page = h.state().views[0].page_screen_rect(0).unwrap();
+    let centre = |b: &pdfcraft_engine::TextBlock| {
+        egui::pos2(
+            page.left() + ((b.rect[0] + b.rect[2]) / 2.0) as f32 / 300.0 * page.width(),
+            page.top() + (300.0 - ((b.rect[1] + b.rect[3]) / 2.0) as f32) / 300.0 * page.height(),
+        )
+    };
+    let point = centre(mask);
+    h.hover_at(point);
+    h.run_steps(3);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::NotAllowed, "mode {mode}");
+    for _ in 0..40 {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(15));
+    }
+    assert!(h.query_all_by_label_contains("text used as a clipping path").next().is_some(), "the reason is visible before clicking");
+    if mode == 7
+        && let Ok(path) = std::env::var("PDFCRAFT_CLIPPING_TEXT_SHOT")
+    {
+        h.render().unwrap().save(path).unwrap();
+    }
+    for _ in 0..2 {
+        click_at(&mut h, point);
+        assert!(h.state().views[0].line_editor.is_none(), "mode {mode} must not open an editor");
+        assert!(h.state().toast.is_none(), "no late error toast for mode {mode}");
+    }
+    h.drag_at(point);
+    h.run_steps(1);
+    h.hover_at(point + egui::vec2(25.0, 10.0));
+    h.run_steps(2);
+    assert!(h.state().views[0].block_drag.is_none());
+    h.drop_at(point + egui::vec2(25.0, 10.0));
+    h.run_steps(3);
+    assert_eq!(h.state().session.save_bytes(id).unwrap(), before);
+    assert!(h.state().session.get(id).unwrap().can_undo().is_none());
+
+    assert_clipping_width_handles_are_read_only(&mut h, mask, page, point, centre(ordinary), mode, &before);
+
+    // Add Text routes source paragraphs through the same preflight rather than placing
+    // a second text layer on top of a mask that cannot be edited.
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(2);
+    click_at(&mut h, point);
+    assert!(h.state().views[0].line_editor.is_none());
+    assert!(h.state().views[0].content.draft.is_none());
+    assert!(h.state().session.get(id).unwrap().added().is_empty());
+    assert_eq!(h.state().session.save_bytes(id).unwrap(), before);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+
+    // The unchanged paragraph index after the mask is still a working editing target.
+    click_at(&mut h, centre(ordinary));
+    assert_eq!(h.state().views[0].line_editor.as_ref().unwrap().text, "Ordinary");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.event(egui::Event::Text("Changed".into()));
+    h.run_steps(3);
+    click_at(&mut h, point);
+    assert_eq!(h.state().views[0].line_editor.as_ref().unwrap().text, "Changed", "a blocked target keeps the draft open");
+    assert_eq!(h.state().session.save_bytes(id).unwrap(), before, "a blocked click must not apply the draft");
+    assert!(h.state().session.get(id).unwrap().can_undo().is_none());
+    // Continue typing in the same editor after the rejected target switch.
+    click_at(&mut h, centre(ordinary));
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Enter);
+    h.run_steps(3);
+    let after = h.state().session.get(id).unwrap().text_blocks(0);
+    assert!(after.iter().any(|b| b.text == "Mask"));
+    assert!(after.iter().any(|b| b.text == "Changed"));
 }
 
 /// Esc in an open paragraph leaves its text and selects its box, as in Acrobat, so Esc and

@@ -190,6 +190,17 @@ the PNG alone.
 
 ## Existing text and document fonts
 
+`text_paragraphs` retains all paragraphs, including text that defines a clipping path
+(rendering modes 4–7). Each entry adds `editable` and `non_editable_reason`: a known
+preflight refusal sets `editable: false` and gives its reason; otherwise the reason is
+`null`. This does not guarantee that every replacement can be written (for example, a
+chosen font may lack a requested glyph). Paragraph counts, numbers, text and source line
+indexes are unchanged. Mixed ink/mask runs and coincident clipping copies are also
+non-editable, because rewriting them would remove artwork masks. `text_edit` and editor
+previews still enforce their safety checks even if a caller ignores these fields. On unusually
+dense pages, a bounded clipping-eligibility lookup may instead report that its comparison
+limit was exceeded; the paragraph remains extractable but is not offered for editing.
+
 `text_font_files` discovers eligible installed files on request (or specified confined folders),
 `text_font_import` registers a full document face, and `text_fonts` lists source/full resources.
 Use `text_edit.font_resource` to choose a resource, or keep source faces and let matching full

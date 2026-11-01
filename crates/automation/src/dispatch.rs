@@ -442,6 +442,8 @@ impl Automation {
                             "paragraph": i + 1,
                             "text": b.text,
                             "editor_text": b.editor_text,
+                            "editable": b.non_editable_reason.is_none(),
+                            "non_editable_reason": b.non_editable_reason,
                             "rows": b.rows.iter().map(|row| row.iter().map(|i| i + 1).collect::<Vec<_>>()).collect::<Vec<_>>(),
                             "lines": b.lines.iter().map(|l| l + 1).collect::<Vec<_>>(),
                             "rect": [r(u[0].min(v[0])), r(u[1].min(v[1])), r(u[0].max(v[0])), r(u[1].max(v[1]))],

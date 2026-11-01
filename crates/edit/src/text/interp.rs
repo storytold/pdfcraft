@@ -301,6 +301,8 @@ pub(super) struct Shown {
     pub(super) paint: Paint,
     pub(super) logical_order: bool,
     pub(super) actual_text: bool,
+    /// Any represented glyph run adds to the clip, including merged ActualText runs.
+    pub(super) clips: bool,
     /// Set when a `/PCSoft` or `/PCHard` marker was seen since the previous text line.
     pub(super) soft_break: bool,
     pub(super) hard_break: bool,
@@ -520,6 +522,7 @@ impl MarkedContent {
             let mut items = tail.into_iter();
             if let Some(mut first) = items.next() {
                 for item in items {
+                    first.clips |= item.clips;
                     first.glyph_count = first.glyph_count.saturating_add(item.glyph_count);
                     first.extra_ops.push(item.op);
                     first.extra_ops.extend(item.extra_ops);
@@ -756,6 +759,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         paint: Paint { layers: marked.layers.iter().flatten().cloned().collect(), gs: ts.gs.clone() },
         logical_order: false,
         actual_text: false,
+        clips: ts.render_mode >= 4,
         soft_break: state.soft_break,
         hard_break: state.hard_break,
         soft_gap: state.soft_gap,

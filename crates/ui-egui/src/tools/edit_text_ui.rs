@@ -449,6 +449,11 @@ pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, lines: &[pdfcraft
     // Edges rewrap closed paragraphs only: around the open one lies its frame (`object_ui`).
     let (block, grip) = grab_at(&boxes, p, has_edges(info, page) && active.is_none())?;
     let paragraph = |part| Owner::Paragraph { block, part };
+    if let Some(reason) = lines.get(block).and_then(|line| line.non_editable_reason.as_ref()) {
+        let mut hit = Hit::new(paragraph(ParagraphPart::Body), Layer::Text, egui::CursorIcon::NotAllowed);
+        hit.tip = Some(reason.clone());
+        return Some(hit);
+    }
     Some(match (active, grip) {
         (None, Grip::Left) => Hit::new(paragraph(ParagraphPart::Left), Layer::Handle, egui::CursorIcon::ResizeHorizontal),
         (None, Grip::Right) => Hit::new(paragraph(ParagraphPart::Right), Layer::Handle, egui::CursorIcon::ResizeHorizontal),
@@ -471,6 +476,9 @@ fn open_editor(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::TextBlock], bo
     let PageToolContext { ui, xf, doc, page, .. } = cx;
     view.pending_text_open = None;
     let (Some(l), Some(b)) = (lines.get(block), boxes.get(block)) else { return };
+    if l.non_editable_reason.is_some() {
+        return;
+    }
     view.image_selection = None;
     let source_lines = doc.text_lines(page);
     let text = l.editor_text.clone();
@@ -520,7 +528,7 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
     let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(xf.rect.expand(1.0)));
     let active = view.line_editor.as_ref().filter(|e| e.page == page).map(|e| e.block);
     for (i, b) in boxes.iter().enumerate() {
-        if active != Some(i) {
+        if active != Some(i) && lines.get(i).is_some_and(|line| line.non_editable_reason.is_none()) {
             painter.rect_stroke(*b, CornerRadius::same(2), Stroke::new(0.75, ACCENT.gamma_multiply(0.35)), egui::StrokeKind::Outside);
         }
     }
@@ -601,6 +609,12 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
         Some(Owner::Paragraph { block, part }) => Some((block, part)),
         _ => None,
     };
+    // Consume a blocked paragraph's captured gesture even after the pointer leaves it.
+    // Do not apply another paragraph's draft through focus loss or let Add text fall through.
+    if owner.is_some_and(|(block, _)| lines.get(block).is_some_and(|line| line.non_editable_reason.is_some())) {
+        view.objects.hold_editor = view.line_editor.is_some();
+        return true;
+    }
     if resp.drag_started()
         && active.is_none()
         && let Some(o) = ptr.origin
@@ -617,6 +631,9 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
     let Some(p) = ptr.within(xf.rect) else { return false };
     // The paragraph under the pointer: outlined, with its width handles when closed.
     let Some((hovered, _)) = grab_at(&boxes, p, upright) else { return false };
+    if lines.get(hovered).is_some_and(|line| line.non_editable_reason.is_some()) {
+        return true;
+    }
     if active != Some(hovered) {
         painter.rect_stroke(boxes[hovered], CornerRadius::same(2), Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
     }

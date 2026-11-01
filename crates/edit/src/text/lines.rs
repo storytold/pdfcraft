@@ -252,7 +252,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
             l.decodable &= s.decodable;
             l.visual_order |= s.visual_order;
             l.actual_text |= s.actual_text;
-            l.clips |= s.state.render_mode >= 4;
+            l.clips |= s.clips;
             if l.unreadable_mode.is_none() {
                 l.unreadable_mode = s.state.unreadable.as_deref().map(str::to_owned);
             }
@@ -277,7 +277,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
                 paint: s.paint.clone(),
                 logical_order: s.logical_order,
                 actual_text: s.actual_text,
-                clips: s.state.render_mode >= 4,
+                clips: s.clips,
                 unreadable_mode: s.state.unreadable.as_deref().map(str::to_owned),
                 runs: vec![(s.text.clone(), s.ink.len(), false)],
                 soft_break: s.soft_break,
@@ -370,7 +370,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
         l.decodable &= s.decodable;
         l.visual_order |= s.visual_order;
         l.actual_text |= s.actual_text;
-        l.clips |= s.state.render_mode >= 4;
+        l.clips |= s.clips;
         if l.unreadable_mode.is_none() {
             l.unreadable_mode = s.state.unreadable.as_deref().map(str::to_owned);
         }
@@ -394,7 +394,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             paint: s.paint.clone(),
             logical_order: s.logical_order,
             actual_text: s.actual_text,
-            clips: s.state.render_mode >= 4,
+            clips: s.clips,
             unreadable_mode: s.state.unreadable.as_deref().map(str::to_owned),
             runs: vec![(s.text.clone(), s.ink.len(), false)],
             soft_break: s.soft_break,
