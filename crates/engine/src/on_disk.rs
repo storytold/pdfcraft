@@ -278,6 +278,19 @@ mod tests {
         assert!(page.error.is_some_and(|e| e.contains("could not be read")));
     }
 
+    #[test]
+    fn a_file_rewritten_at_its_size_stops_reading() {
+        let pdf = scanned();
+        let file = Temp::new(&pdf);
+        let (session, id) = open(&file.path).expect("stays on disk");
+        let mut renderer = pdfcraft_render::PageRenderer::new(session.get(id).unwrap().source(), Default::default());
+        let later = std::fs::metadata(&file.path).unwrap().modified().unwrap() + std::time::Duration::from_secs(5);
+        std::fs::write(&file.path, &pdf).unwrap();
+        File::options().write(true).open(&file.path).unwrap().set_modified(later).unwrap();
+        let page = renderer.render(Default::default());
+        assert!(page.error.is_some_and(|e| e.contains("could not be read")));
+    }
+
     /// A page of text whose content stream stays on disk.
     fn written() -> Vec<u8> {
         Pdf::new()
