@@ -2611,6 +2611,12 @@ animation effects	Off	Izklopljeni
 	Extract the selected pages…	Izvleci izbrane strani…
 	Delete the selected pages	Izbriši izbrane strani
 
+# Sanitize: removing a signed document's signatures (#4622) (AI-assisted, not separately native-reviewed)
+	Sanitize document and remove signatures	Očisti dokument in odstrani podpise
+	Sanitize document and flatten signatures	Očisti dokument in splošči podpise
+	Keep only how the signatures look, as page content (a name or date they show stays visible)	Ohrani samo videz podpisov kot vsebino strani (ime ali datum, ki ju prikazujejo, ostaneta vidna)
+	Remove the digital signatures: their fields, how they look on the page and their validation data	Odstrani digitalne podpise: njihova polja, njihov videz na strani in njihove podatke za preverjanje
+	This document is digitally signed. Sanitizing rewrites the whole file, which invalidates the signatures, so it can only go ahead without them.	Ta dokument je digitalno podpisan. Čiščenje na novo zapiše celotno datoteko, kar razveljavi podpise, zato se lahko nadaljuje le brez njih.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Možnosti tega odgovora
 	Export value	Izvozna vrednost

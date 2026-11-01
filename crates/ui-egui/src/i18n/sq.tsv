@@ -2592,6 +2592,12 @@ animation effects	Off	Joaktiv
 	Extract the selected pages…	Nxirr faqet e përzgjedhura…
 	Delete the selected pages	Fshi faqet e përzgjedhura
 
+# Sanitize: removing a signed document's signatures (#4622) (AI-assisted, not separately native-reviewed)
+	Sanitize document and remove signatures	Pastro dokumentin dhe hiq nënshkrimet
+	Sanitize document and flatten signatures	Pastro dokumentin dhe sheshoji nënshkrimet
+	Keep only how the signatures look, as page content (a name or date they show stays visible)	Mbaj vetëm pamjen e nënshkrimeve, si përmbajtje faqeje (emri ose data që shfaqin mbetet e dukshme)
+	Remove the digital signatures: their fields, how they look on the page and their validation data	Hiq nënshkrimet dixhitale: fushat e tyre, si duken në faqe dhe të dhënat e vërtetimit të tyre
+	This document is digitally signed. Sanitizing rewrites the whole file, which invalidates the signatures, so it can only go ahead without them.	Ky dokument është i nënshkruar dixhitalisht. Pastrimi rishkruan gjithë skedarin, gjë që i bën nënshkrimet të pavlefshme, ndaj mund të vazhdojë vetëm pa to.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opsionet për këtë përgjigje
 

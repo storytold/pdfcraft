@@ -2866,6 +2866,12 @@ theme	Appearance	Išvaizda
 	Extract the selected pages…	Išskleisti pasirinktus puslapius…
 	Delete the selected pages	Ištrinti pasirinktus puslapius
 
+# Sanitize: removing a signed document's signatures (#4622) (AI-assisted, not separately native-reviewed)
+	Sanitize document and remove signatures	Pašalinti dokumento paslėptą informaciją ir parašus
+	Sanitize document and flatten signatures	Pašalinti dokumento paslėptą informaciją ir suploti parašus
+	Keep only how the signatures look, as page content (a name or date they show stays visible)	Palikti tik parašų išvaizdą kaip puslapio turinį (jose rodomas vardas ar data lieka matomi)
+	Remove the digital signatures: their fields, how they look on the page and their validation data	Pašalinti skaitmeninius parašus: jų laukus, jų išvaizdą puslapyje ir jų patvirtinimo duomenis
+	This document is digitally signed. Sanitizing rewrites the whole file, which invalidates the signatures, so it can only go ahead without them.	Šis dokumentas pasirašytas skaitmeniniu parašu. Paslėptos informacijos šalinimas perrašo visą failą, todėl parašai tampa negaliojantys, tad tęsti galima tik be jų.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Šio atsakymo parinktys
 	Export value	Eksporto reikšmė

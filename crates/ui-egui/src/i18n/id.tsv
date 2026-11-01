@@ -2838,6 +2838,12 @@ theme	Appearance	Tampilan
 	Extract the selected pages…	Ekstrak halaman yang dipilih…
 	Delete the selected pages	Hapus halaman yang dipilih
 
+# Sanitize: removing a signed document's signatures (#4622) (AI-assisted, not separately native-reviewed)
+	Sanitize document and remove signatures	Bersihkan dokumen dan hapus tanda tangan
+	Sanitize document and flatten signatures	Bersihkan dokumen dan ratakan tanda tangan
+	Keep only how the signatures look, as page content (a name or date they show stays visible)	Simpan hanya tampilan tanda tangan, sebagai konten halaman (nama atau tanggal yang ditampilkan tetap terlihat)
+	Remove the digital signatures: their fields, how they look on the page and their validation data	Hapus tanda tangan digital: bidangnya, tampilannya di halaman, dan data validasinya
+	This document is digitally signed. Sanitizing rewrites the whole file, which invalidates the signatures, so it can only go ahead without them.	Dokumen ini ditandatangani secara digital. Pembersihan menulis ulang seluruh file, yang membuat tanda tangan tidak valid, jadi hanya dapat dilanjutkan tanpa tanda tangan.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opsi untuk balasan ini
 

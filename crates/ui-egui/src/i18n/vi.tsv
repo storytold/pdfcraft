@@ -2874,6 +2874,12 @@ key	Space	Space
 	Extract the selected pages…	Trích xuất các trang đã chọn…
 	Delete the selected pages	Xóa các trang đã chọn
 
+# Sanitize: removing a signed document's signatures (#4622) (AI-assisted, not separately native-reviewed)
+	Sanitize document and remove signatures	Làm sạch tài liệu và xóa chữ ký
+	Sanitize document and flatten signatures	Làm sạch tài liệu và làm phẳng chữ ký
+	Keep only how the signatures look, as page content (a name or date they show stays visible)	Chỉ giữ hình thức của chữ ký, dưới dạng nội dung trang (tên hoặc ngày hiển thị vẫn nhìn thấy được)
+	Remove the digital signatures: their fields, how they look on the page and their validation data	Xóa chữ ký số: các trường, hình thức hiển thị trên trang và dữ liệu xác thực của chúng
+	This document is digitally signed. Sanitizing rewrites the whole file, which invalidates the signatures, so it can only go ahead without them.	Tài liệu này có chữ ký số. Làm sạch sẽ ghi lại toàn bộ tệp, khiến chữ ký mất hiệu lực, nên chỉ có thể tiếp tục khi không có chúng.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tùy chọn cho câu trả lời này
 	Export value	Giá trị xuất

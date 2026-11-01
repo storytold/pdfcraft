@@ -765,7 +765,11 @@ impl PdfCraftApp {
                     self.dialog = Some(Dialog::RedactApply);
                 }
             }
-            "redact.sanitize" => self.dialog = Some(Dialog::Sanitize),
+            "redact.sanitize" => {
+                // Removing signatures is asked for each time, never remembered.
+                self.sanitize_signatures = None;
+                self.dialog = Some(Dialog::Sanitize);
+            }
             "redact.clear" => {
                 self.apply_edit(Edit::ClearRedactions);
             }

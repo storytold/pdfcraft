@@ -2751,6 +2751,12 @@ key	Space	Mellomrom
 	Extract the selected pages…	Trekk ut de valgte sidene…
 	Delete the selected pages	Slett de valgte sidene
 
+# Sanitize: removing a signed document's signatures (#4622) (AI-assisted, not separately native-reviewed)
+	Sanitize document and remove signatures	Rens dokumentet og fjern signaturene
+	Sanitize document and flatten signatures	Rens dokumentet og flat ut signaturene
+	Keep only how the signatures look, as page content (a name or date they show stays visible)	Behold bare hvordan signaturene ser ut, som sideinnhold (et navn eller en dato de viser, forblir synlig)
+	Remove the digital signatures: their fields, how they look on the page and their validation data	Fjern de digitale signaturene: feltene deres, hvordan de ser ut på siden og valideringsdataene deres
+	This document is digitally signed. Sanitizing rewrites the whole file, which invalidates the signatures, so it can only go ahead without them.	Dette dokumentet er digitalt signert. Rensing skriver hele filen på nytt, noe som gjør signaturene ugyldige, så det kan bare gjøres uten dem.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Alternativer for dette svaret
 # Untranslated: English text until a translator fills these in.

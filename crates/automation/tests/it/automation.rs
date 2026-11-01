@@ -9989,6 +9989,36 @@ fn page_render_draws_stamps_without_an_appearance() {
     assert!(grey > 100 && grey == custom.len(), "an unknown name is a grey placeholder: {grey} of {}", custom.len());
 }
 
+/// #4622: Sanitize refuses a signed document unless asked to remove its signatures.
+#[test]
+fn sanitizing_a_signed_document_through_tools_removes_its_signatures_when_asked() {
+    let dir = workdir("sanitize-signed");
+    std::fs::copy(Path::new(env!("CARGO_MANIFEST_DIR")).join("../sign/tests/data/ec-p256.p12"), dir.join("id.p12")).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "sign_document", json!({ "doc": doc, "id": "id.p12", "password": "test", "out": "signed.pdf" }));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "signed.pdf" }))["doc"].as_u64().unwrap();
+    assert!(matches!(a.call("doc_remove_hidden", &json!({ "doc": doc })), Err(ToolError::Failed(_))), "abort is the default");
+    assert!(matches!(a.call("doc_remove_hidden", &json!({ "doc": doc, "signatures": "abort" })), Err(ToolError::Failed(_))));
+    for bad in [json!({ "doc": doc, "signatures": "keep" }), json!({ "doc": doc, "signatures": "flatten", "categories": ["comments"] })] {
+        assert!(matches!(a.call("doc_remove_hidden", &bad), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+    let r = ok(&mut a, "doc_remove_hidden", json!({ "doc": doc, "signatures": "remove" }));
+    assert_eq!(r["undo"], "Sanitize document and remove signatures");
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "clean.pdf" }));
+    let bytes = std::fs::read(dir.join("clean.pdf")).unwrap();
+    assert!(!bytes.windows(10).any(|w| w == b"/ByteRange"), "no signature is left in the file");
+    let clean = ok(&mut a, "doc_open", json!({ "path": "clean.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "form_fields", json!({ "doc": clean }))["count"], 0);
+    // Flattened: the same, as one step of its own.
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    let r = ok(&mut a, "doc_remove_hidden", json!({ "doc": doc, "signatures": "flatten" }));
+    assert_eq!(r["undo"], "Sanitize document and flatten signatures");
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "flat.pdf" }));
+    let bytes = std::fs::read(dir.join("flat.pdf")).unwrap();
+    assert!(!bytes.windows(10).any(|w| w == b"/ByteRange"));
+}
+
 #[test]
 fn deleting_one_radio_button_through_tools_keeps_the_group() {
     let dir = workdir("delete-radio");

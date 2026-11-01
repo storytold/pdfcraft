@@ -2881,6 +2881,12 @@ certificate	Version	الإصدار
 	Extract the selected pages…	استخراج الصفحات المحددة…
 	Delete the selected pages	حذف الصفحات المحددة
 
+# Sanitize: removing a signed document's signatures (#4622) (AI-assisted, not separately native-reviewed)
+	Sanitize document and remove signatures	تنظيف المستند وإزالة التوقيعات
+	Sanitize document and flatten signatures	تنظيف المستند وتسطيح التوقيعات
+	Keep only how the signatures look, as page content (a name or date they show stays visible)	الاحتفاظ بشكل التوقيعات فقط كمحتوى للصفحة (يبقى الاسم أو التاريخ الظاهر فيها مرئيًا)
+	Remove the digital signatures: their fields, how they look on the page and their validation data	إزالة التوقيعات الرقمية: حقولها، وشكلها على الصفحة، وبيانات التحقق منها
+	This document is digitally signed. Sanitizing rewrites the whole file, which invalidates the signatures, so it can only go ahead without them.	هذا المستند موقّع رقميًا. التنظيف يعيد كتابة الملف كله، مما يُبطل التوقيعات، لذا لا يمكن المتابعة إلا بدونها.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	خيارات هذا الرد
 	Export value	قيمة التصدير

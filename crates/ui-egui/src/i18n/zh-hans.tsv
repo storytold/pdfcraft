@@ -2570,6 +2570,12 @@ animation effects	Off	关
 	Extract the selected pages…	提取所选页面…
 	Delete the selected pages	删除所选页面
 
+# Sanitize: removing a signed document's signatures (#4622) (AI-assisted, not separately native-reviewed)
+	Sanitize document and remove signatures	清理文档并删除签名
+	Sanitize document and flatten signatures	清理文档并拼合签名
+	Keep only how the signatures look, as page content (a name or date they show stays visible)	仅将签名的外观保留为页面内容（其中显示的姓名或日期仍可见）
+	Remove the digital signatures: their fields, how they look on the page and their validation data	删除数字签名：签名字段、在页面上的外观及其验证数据
+	This document is digitally signed. Sanitizing rewrites the whole file, which invalidates the signatures, so it can only go ahead without them.	此文档已进行数字签名。清理会重写整个文件，从而使签名失效，因此只能在删除签名后进行。
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	此回复的选项
 	Export value	导出值

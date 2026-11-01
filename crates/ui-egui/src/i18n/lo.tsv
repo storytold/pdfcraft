@@ -2483,6 +2483,12 @@ animation effects	Off	ປິດ
 	Extract the selected pages…	ແຍກໜ້າທີ່ເລືອກອອກ…
 	Delete the selected pages	ລຶບໜ້າທີ່ເລືອກ
 
+# Sanitize: removing a signed document's signatures (#4622) (AI-assisted, not separately native-reviewed)
+	Sanitize document and remove signatures	ລຶບລ້າງຂໍ້ມູນລັບໃນເອກະສານ ແລະ ລຶບລາຍເຊັນ
+	Sanitize document and flatten signatures	ລຶບລ້າງຂໍ້ມູນລັບໃນເອກະສານ ແລະ ແປງລາຍເຊັນເປັນເນື້ອຫາ
+	Keep only how the signatures look, as page content (a name or date they show stays visible)	ເກັບໄວ້ພຽງລັກສະນະຂອງລາຍເຊັນ ເປັນເນື້ອຫາຂອງໜ້າ (ຊື່ ຫຼື ວັນທີທີ່ສະແດງຍັງເຫັນໄດ້)
+	Remove the digital signatures: their fields, how they look on the page and their validation data	ລຶບລາຍເຊັນດິຈິຕອນ: ຊ່ອງຂອງມັນ, ລັກສະນະທີ່ເຫັນໃນໜ້າ ແລະ ຂໍ້ມູນການກວດສອບ
+	This document is digitally signed. Sanitizing rewrites the whole file, which invalidates the signatures, so it can only go ahead without them.	ເອກະສານນີ້ມີລາຍເຊັນດິຈິຕອນ. ການລຶບລ້າງຂໍ້ມູນລັບຈະຂຽນໄຟລ໌ທັງໝົດຄືນໃໝ່ ເຊິ່ງເຮັດໃຫ້ລາຍເຊັນບໍ່ຖືກຕ້ອງ, ສະນັ້ນມັນສາມາດດຳເນີນຕໍ່ໄດ້ໂດຍບໍ່ມີລາຍເຊັນເທົ່ານັ້ນ.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	ຕົວເລືອກຂອງການຕອບກັບນີ້
 # Untranslated: English text until a translator fills these in.

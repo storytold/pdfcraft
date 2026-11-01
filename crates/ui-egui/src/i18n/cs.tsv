@@ -2913,6 +2913,12 @@ certificate	Version	Verze
 	Extract the selected pages…	Extrahovat vybrané stránky…
 	Delete the selected pages	Odstranit vybrané stránky
 
+# Sanitize: removing a signed document's signatures (#4622) (AI-assisted, not separately native-reviewed)
+	Sanitize document and remove signatures	Vyčistit dokument a odebrat podpisy
+	Sanitize document and flatten signatures	Vyčistit dokument a sloučit podpisy
+	Keep only how the signatures look, as page content (a name or date they show stays visible)	Ponechat jen vzhled podpisů jako obsah stránky (jméno nebo datum, které ukazují, zůstane viditelné)
+	Remove the digital signatures: their fields, how they look on the page and their validation data	Odebrat digitální podpisy: jejich pole, jejich vzhled na stránce a jejich ověřovací data
+	This document is digitally signed. Sanitizing rewrites the whole file, which invalidates the signatures, so it can only go ahead without them.	Tento dokument je digitálně podepsán. Vyčištění přepíše celý soubor, čímž podpisy zneplatní, takže může pokračovat jen bez nich.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Možnosti této odpovědi
 	Export value	Exportní hodnota
