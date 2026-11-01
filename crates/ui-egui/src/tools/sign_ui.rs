@@ -294,10 +294,11 @@ impl PdfCraftApp {
         self.write_files(&[(name, std::sync::Arc::new(certificate_pem(c).into_bytes()))], "Export certificate");
     }
 
-    /// Start signing: the rectangle (or field) is known; show Sign with a Digital ID.
+    /// Start signing: the rectangle (or field) is known; show Sign with a Digital ID, after a
+    /// dynamic form's preSign scripts for the field.
     pub fn start_signing(&mut self, page: usize, rect: Option<[f64; 4]>, field: Option<String>, certify: Option<u8>) {
         self.refresh_os_key_store_ids();
-        let mut draft = SignDraft::new(page, rect, field, certify, &self.digital_ids);
+        let mut draft = SignDraft::new(page, rect, field.clone(), certify, &self.digital_ids);
         draft.graphic = match &self.sign_graphic {
             SignGraphic::FillSign if self.signature.is_none() => SignGraphic::Name,
             g => g.clone(),
@@ -307,6 +308,55 @@ impl PdfCraftApp {
         }
         self.sign_draft = Some(draft);
         self.dialog = Some(crate::Dialog::Sign);
+        // A dynamic form's preSign scripts run now, as signing the field begins, so what they
+        // change and say shows before the signer confirms (DA 31's date the signature and lock the
+        // date). Signing ended without a signature takes them back ([`Self::settle_presign`]).
+        if let Some(f) = &field
+            && let Some((_, doc)) = self.active_ids()
+        {
+            self.run_presign(doc, f);
+        }
+    }
+
+    /// Run signature field `field`'s preSign scripts in document `doc` and keep the step pending.
+    fn run_presign(&mut self, doc: pdfcraft_engine::DocId, field: &str) {
+        match self.session.run_sign_event(doc, field, pdfcraft_engine::js::SignEvent::Before) {
+            Ok(true) => {
+                self.presign = self.session.get(doc).map(|d| (doc, d.undo_depth()));
+                self.refresh_view_of(doc);
+                let out = self.session.take_js_output(doc);
+                self.handle_js(doc, out);
+            }
+            Ok(false) => {}
+            Err(e) => self.notify_error(e),
+        }
+    }
+
+    /// Take back a pending preSign step once signing has ended without a signature: the Sign
+    /// dialog closed and no save picker is open for it. Only a step still the last one is taken
+    /// back. Called every frame.
+    pub(crate) fn settle_presign(&mut self) {
+        let Some((doc, depth)) = self.presign else { return };
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.pickers.pending() {
+            return;
+        }
+        if self.dialog == Some(crate::Dialog::Sign) {
+            return;
+        }
+        self.presign = None;
+        if self.session.get(doc).is_some_and(|d| d.undo_depth() == depth) && self.session.undo(doc).is_ok() {
+            self.refresh_view_of(doc);
+        }
+    }
+
+    /// Show document `doc`'s changed form in its view.
+    fn refresh_view_of(&mut self, doc: pdfcraft_engine::DocId) {
+        if let Some(i) = self.views.iter().position(|v| v.id == doc)
+            && let Some(info) = self.session.get(doc).map(|d| d.info.clone())
+        {
+            self.views[i].document_changed(&info);
+        }
     }
 
     /// List OS key store signing identities (after the file-based IDs).
@@ -481,12 +531,31 @@ impl PdfCraftApp {
             if !app.commit_typing_in(doc_id) {
                 return Err(String::new());
             }
-            let signed = app.session.sign(doc_id, &id, opts).map_err(|e| e.to_string())?;
-            crate::editing::write_atomically(&path.to_string_lossy(), signed.as_slice()).map_err(|e| format!("Could not save: {e}"))?;
+            // The form's preSign step (run when signing began) is signed with it; if signing fails
+            // the step stays pending, and is taken back if signing ends without a signature.
+            let field = opts.field.clone();
+            let pending = app.presign.take();
+            let signed = match app.session.sign(doc_id, &id, opts) {
+                Ok(s) => s,
+                Err(e) => {
+                    app.presign = pending;
+                    return Err(e.to_string());
+                }
+            };
+            if let Err(e) = crate::editing::write_atomically(&path.to_string_lossy(), signed.as_slice()) {
+                // Not saved, so not signed: the preSign step stays pending as well.
+                app.presign = pending;
+                return Err(format!("Could not save: {e}"));
+            }
             // Our own write is not a change on disk to reload (#431).
             #[cfg(not(target_arch = "wasm32"))]
             app.watch.known_now(doc_id, &path.to_string_lossy());
             app.session.mark_signed(doc_id, signed, Some(path.to_string_lossy().into_owned())).map_err(|e| e.to_string())?;
+            // Then its postSign scripts; what they change is a change after signing, to save.
+            // What they say shows once signing is done, after the notice that it was saved.
+            // The file is signed and saved by now: a postSign step that fails is said, not a failure.
+            let after = field.as_deref().and_then(|f| app.session.run_sign_event(doc_id, f, pdfcraft_engine::js::SignEvent::After).err());
+            let said = app.session.take_js_output(doc_id);
             #[cfg(target_os = "macos")]
             crate::macos_association::repair(&path);
             app.sign_graphic = choice;
@@ -495,6 +564,10 @@ impl PdfCraftApp {
             }
             app.right = Some(crate::RightPanel::Signatures);
             app.notify_fmt("Signed and saved to {path}", &[("path", &path.display().to_string())]);
+            app.handle_js(doc_id, said);
+            if let Some(e) = after {
+                app.notify_fmt("Signed and saved, but the form's postSign script couldn't finish: {e}", &[("e", &e.to_string())]);
+            }
             Ok(())
         };
         match self.save_override.clone() {

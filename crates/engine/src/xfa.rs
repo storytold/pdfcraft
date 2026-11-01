@@ -908,12 +908,17 @@ pub(crate) fn on_event(doc: &mut pdfcraft_cos::Document, tpl: &Template, som: &s
 
 /// The SOM path of a generated field whose template has a click script.
 pub(crate) fn clickable_som(doc: &pdfcraft_cos::Document, tpl: &Template, field: &pdfcraft_forms::Field) -> Option<String> {
+    scripted_som(doc, tpl, field, "click")
+}
+
+/// The SOM path of a generated field whose template has an `activity` script.
+pub(crate) fn scripted_som(doc: &pdfcraft_cos::Document, tpl: &Template, field: &pdfcraft_forms::Field, activity: &str) -> Option<String> {
     // Page-master copies have distinct PDF field names but share a SOM path. Reversing
-    // fields_by_som would lose every copy except the last: use the clicked field itself.
+    // fields_by_som would lose every copy except the last: use the field itself.
     let object = doc.get(field.obj);
     let som = object.as_dict()?.get(pdfcraft_xfa::SOM_KEY).map(|s| doc.resolve(s))?.as_string()?.to_text();
     let live = pdfcraft_xfa::form_tree(tpl, pdfcraft_xfa::data_of(doc).as_ref(), &pdfcraft_xfa::overrides(doc));
-    live.events.iter().any(|e| e.som == som && e.activity == "click").then_some(som)
+    live.events.iter().any(|e| e.som == som && e.activity == activity).then_some(som)
 }
 
 /// The parsed template of a laid-out XFA form, kept for the document's life, when it has
