@@ -460,6 +460,7 @@ impl PdfCraftApp {
         if dropped.is_empty() {
             return;
         }
+        let dropped = if dropped.len() > MAX_DROPPED_FILES { &dropped[..MAX_DROPPED_FILES] } else { dropped };
         let mut incoming = Vec::new();
         for f in dropped {
             if let Some(clean_path) = clean_dropped_path(f.path()) {
@@ -1166,24 +1167,39 @@ impl PdfCraftApp {
     }
 }
 
+/// Maximum number of files processed from a single drag and drop action (#4985).
+pub(crate) const MAX_DROPPED_FILES: usize = 200;
+
 /// Resolve a dropped file path, stripping `file://` URI schemes and percent-decoding
 /// paths sent by Linux desktop environments (e.g. KDE Plasma / Dolphin) and other file managers.
+/// Rejects non-local schemes (`http://`, `https://`) and remote network / UNC paths (#4985).
 pub(crate) fn clean_dropped_path(raw: &std::path::Path) -> Option<std::path::PathBuf> {
-    if raw.is_absolute() {
-        let s = raw.to_string_lossy();
-        let lower = s.to_ascii_lowercase();
-        if !lower.starts_with("file:") {
-            return Some(raw.to_path_buf());
-        }
-    }
     let s = raw.to_string_lossy();
-    let s_no_lines = s.trim_end_matches(|c| c == '\r' || c == '\n');
+    let s_no_lines = s.trim_end_matches(['\r', '\n']);
     let lower = s_no_lines.to_ascii_lowercase();
+
+    // Reject non-file URI schemes (e.g. http://, https://, ftp://).
+    if lower.starts_with("http:") || lower.starts_with("https:") || lower.starts_with("ftp:") {
+        return None;
+    }
+
+    // Reject UNC and remote network paths (e.g. \\server\share or //server/share).
+    if s_no_lines.starts_with(r"\\") || s_no_lines.starts_with("//") {
+        return None;
+    }
+
+    if raw.is_absolute() && !lower.starts_with("file:") {
+        return Some(raw.to_path_buf());
+    }
+
     let cleaned = if let Some(rest) = lower.strip_prefix("file://") {
         let after_host = if rest.starts_with("localhost/") {
             s_no_lines.get("file://localhost".len()..).unwrap_or("")
-        } else {
+        } else if rest.starts_with('/') {
             s_no_lines.get("file://".len()..).unwrap_or("")
+        } else {
+            // Non-empty host that is not localhost (remote network share): reject.
+            return None;
         };
         decode_uri_path(after_host)
     } else if lower.starts_with("file:/") {
@@ -1193,7 +1209,7 @@ pub(crate) fn clean_dropped_path(raw: &std::path::Path) -> Option<std::path::Pat
         s_no_lines.to_string()
     };
 
-    if cleaned.is_empty() {
+    if cleaned.is_empty() || cleaned.starts_with(r"\\") || cleaned.starts_with("//") {
         return None;
     }
     let p = std::path::PathBuf::from(cleaned);
@@ -1364,6 +1380,11 @@ mod stem_tests {
 
         assert_eq!(clean_dropped_path(std::path::Path::new("")), None);
         assert_eq!(clean_dropped_path(std::path::Path::new("relative.pdf")), None);
+        assert_eq!(clean_dropped_path(std::path::Path::new("http://example.com/test.pdf")), None);
+        assert_eq!(clean_dropped_path(std::path::Path::new("https://example.com/test.pdf")), None);
+        assert_eq!(clean_dropped_path(std::path::Path::new(r"\\server\share\test.pdf")), None);
+        assert_eq!(clean_dropped_path(std::path::Path::new("//server/share/test.pdf")), None);
+        assert_eq!(clean_dropped_path(std::path::Path::new("file://remote-server/share/test.pdf")), None);
     }
 
     fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
