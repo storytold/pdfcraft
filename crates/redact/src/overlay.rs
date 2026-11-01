@@ -49,19 +49,24 @@ pub(super) fn content(marks: &[&Mark], remaining: &mut usize) -> Result<Vec<u8>,
     };
     let mut c = Output { bytes: Vec::new(), remaining };
     for m in marks {
-        let Some(fill) = m.fill else { continue };
-        if !fill.iter().all(|v| v.is_finite()) || m.rects.iter().flatten().any(|v| !v.is_finite()) {
+        // No fill (no /IC) leaves the area unfilled, but its overlay text is still drawn (ISO 32000-2 Table 195).
+        if m.fill.is_none() && m.overlay.is_empty() {
+            continue;
+        }
+        if m.fill.is_some_and(|f| !f.iter().all(|v| v.is_finite())) || m.rects.iter().flatten().any(|v| !v.is_finite()) {
             return Err(RedactError::OverlayLimit);
         }
-        c.push(format!("q {} {} {} rg\n", n(fill[0]), n(fill[1]), n(fill[2])))?;
-        for r in &m.rects {
-            let (w, h) = (r[2] - r[0], r[3] - r[1]);
-            if !w.is_finite() || !h.is_finite() {
-                return Err(RedactError::OverlayLimit);
+        if let Some(fill) = m.fill {
+            c.push(format!("q {} {} {} rg\n", n(fill[0]), n(fill[1]), n(fill[2])))?;
+            for r in &m.rects {
+                let (w, h) = (r[2] - r[0], r[3] - r[1]);
+                if !w.is_finite() || !h.is_finite() {
+                    return Err(RedactError::OverlayLimit);
+                }
+                c.push(format!("{} {} {} {} re f\n", n(r[0]), n(r[1]), n(w), n(h)))?;
             }
-            c.push(format!("{} {} {} {} re f\n", n(r[0]), n(r[1]), n(w), n(h)))?;
+            c.push(b"Q\n")?;
         }
-        c.push(b"Q\n")?;
         if m.overlay.is_empty() {
             continue;
         }

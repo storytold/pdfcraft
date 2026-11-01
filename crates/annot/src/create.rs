@@ -421,7 +421,10 @@ fn validate_style(style: &Style) -> Result<(), AnnotError> {
 
 fn set_redaction_properties(dict: &mut Dict, style: &Style, quads: &[[f64; 8]], overlay: &str, look: &OverlayLook) {
     dict.set(b"C".to_vec(), rgb(style.color));
-    dict.set(b"IC".to_vec(), rgb(style.fill.unwrap_or([0.0, 0.0, 0.0])));
+    // No /IC leaves the redacted area unfilled (ISO 32000-2 Table 195): "No colour".
+    if let Some(fill) = style.fill {
+        dict.set(b"IC".to_vec(), rgb(fill));
+    }
     dict.set(b"QuadPoints".to_vec(), num_array(&quads.concat()));
     if !overlay.is_empty() {
         dict.set(b"OverlayText".to_vec(), PdfString::text(overlay));
