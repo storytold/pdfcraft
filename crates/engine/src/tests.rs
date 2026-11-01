@@ -5686,7 +5686,7 @@ fn exporting_office_files_keeps_images() {
 }
 
 #[test]
-fn exporting_office_files_embeds_images_in_rtf() {
+fn exporting_office_files_omits_images_from_rtf() {
     let mut s = Session::new();
     let text = s.create_from_text("t", "Picture page").unwrap();
     let id = s.open("t.pdf", None, text, None).unwrap();
@@ -5700,8 +5700,8 @@ fn exporting_office_files_embeds_images_in_rtf() {
     let rtf = d.export_office_checked(compare::OfficeFormat::Rtf);
     assert!(rtf.truncated_pages.is_empty());
     let out = String::from_utf8(rtf.bytes).unwrap();
-    assert!(out.contains("\\pict\\pngblip"), "{out}");
-    assert!(out.contains("89504E470D0A1A0A"), "{out}");
+    assert!(!out.contains("\\pict\\pngblip"), "{out}");
+    assert!(!out.contains("89504E470D0A1A0A"), "{out}");
 }
 
 #[test]
