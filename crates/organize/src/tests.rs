@@ -1956,6 +1956,32 @@ fn bookmarks_name_their_pages_through_every_kind_of_destination() {
     assert_eq!(listed, ["Named@Some(0)", "GoTo@Some(1)", "Appendix@Some(1)", "Hi@Some(1)", "Padded@None"]);
 }
 
+/// Only a go-to's `/D` is a page of this document. A remote go-to's names a page or destination of
+/// the other file (ISO 32000-2 §12.6.4.3), so `[1 /Fit]` there is not this file's page 2, and a
+/// destination name is not looked up here; neither is any other action's `/D`. An action without
+/// a type is still read as the go-to its `/D` suggests.
+#[test]
+fn only_a_go_to_action_names_a_page_here() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Outlines 3 0 R /Names << /Dests 12 0 R >> >>".into(),
+        "<< /Type /Pages /Kids [4 0 R 5 0 R] /Count 2 /MediaBox [0 0 300 400] >>".into(),
+        "<< /Type /Outlines /First 6 0 R /Last 11 0 R /Count 6 >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Title (GoTo) /Parent 3 0 R /Next 7 0 R /A << /S /GoTo /D [5 0 R /Fit] >> >>".into(),
+        "<< /Title (Other file) /Parent 3 0 R /Prev 6 0 R /Next 8 0 R /A << /S /GoToR /F (other.pdf) /D [1 /Fit] >> >>".into(),
+        "<< /Title (Other file, named) /Parent 3 0 R /Prev 7 0 R /Next 9 0 R /A << /S /GoToR /F (other.pdf) /D (intro) >> >>".into(),
+        "<< /Title (Web) /Parent 3 0 R /Prev 8 0 R /Next 10 0 R /A << /S /URI /URI (https://example.org/) /D [5 0 R /Fit] >> >>".into(),
+        "<< /Title (Indirect type) /Parent 3 0 R /Prev 9 0 R /Next 11 0 R /A << /S 13 0 R /D [5 0 R /Fit] >> >>".into(),
+        "<< /Title (No type) /Parent 3 0 R /Prev 10 0 R /A << /D [5 0 R /Fit] >> >>".into(),
+        "<< /Names [(intro) [4 0 R /Fit]] >>".into(),
+        "/GoTo".into(),
+    ];
+    let d = open(build(&objs, "/Root 1 0 R"));
+    let listed: Vec<String> = crate::bookmarks(&d).iter().map(|b| format!("{}@{:?}", b.title, b.page)).collect();
+    assert_eq!(listed, ["GoTo@Some(1)", "Other file@None", "Other file, named@None", "Web@None", "Indirect type@Some(1)", "No type@Some(1)"]);
+}
+
 // ---- page labels (M4.4) ------------------------------------------------------------------------
 
 #[test]
