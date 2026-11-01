@@ -2,8 +2,8 @@ use super::marks::{
     Background, Context, HeaderFooter, MarkKind, Watermark, add_picture_resource, bates_start, expand, matrix_number, n, picture, rgb, shrink_matrix,
 };
 use super::place::{
-    END, Isolation, add_page_resources, add_resources, begin, check, check_on_top, contents, free_font_name, isolation, page_fonts, page_list, place,
-    place_inside_wrapper, stream_tag, text_op, undrawable, wrapper_role,
+    DerivedResources, END, Isolation, add_page_resources, add_resources, begin, check, check_on_top, contents, free_font_name, isolation, page_fonts,
+    page_list, place, place_inside_wrapper, stream_tag, text_op, undrawable, wrapper_role,
 };
 use super::{Document, EditError, Object, added, backdrop, helvetica_width};
 
@@ -55,8 +55,12 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
     if replace {
         remove_marks(doc, pages, MarkKind::HeaderFooter)?;
     }
+    // The page list is read once: the steps below change a page's resources and contents, which
+    // they read from the page object itself. Reading the whole list again for each page made a
+    // 3,753-page plot quadratic.
     let all = page_list(doc);
     let count = all.len();
+    let mut derived = DerivedResources::default();
     for (k, &i) in pages.iter().enumerate() {
         let page = &all[i];
         let (w, h) = page.display_size(doc);
@@ -108,13 +112,11 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
         content.extend_from_slice(END.as_bytes());
         // A name already there is that very font (see `free_font_name`): left as it is.
         if !page_fonts(doc, page).contains(resource.as_bytes()) {
-            add_page_resources(doc, page, None, &[(resource.into_bytes(), base)])?;
+            add_page_resources(doc, page, None, &[(resource.into_bytes(), base)], Some(&mut derived))?;
         }
-        let page = &page_list(doc)[i];
         place(doc, page, MarkKind::HeaderFooter, content, false)?;
         if let Some(Some(m)) = shrinks.get(k) {
             let cm = format!("{} cm\n", m.map(matrix_number).join(" "));
-            let page = &page_list(doc)[i];
             place_inside_wrapper(doc, page, MarkKind::HeaderFooter.tag(), cm.into_bytes())?;
         }
     }
@@ -150,17 +152,19 @@ pub fn add_watermark(doc: &mut Document, pages: &[usize], wm: &Watermark, replac
     }
     let opacity = wm.opacity.clamp(0.0, 1.0);
     let lines: Vec<&str> = text.lines().collect();
+    // Read once, as for headers and footers.
+    let all = page_list(doc);
+    let mut derived = DerivedResources::default();
     for &i in pages {
-        let page = page_list(doc)[i].clone();
+        let page = &all[i];
         let (w, h) = page.display_size(doc);
         if let Some(src) = &wm.source {
             let mut content = begin(MarkKind::Watermark, "Watermark", page.view_matrix(doc));
             content.push_str(&format!("/PCGS{} gs\n", (opacity * 100.0).round() as i64));
             content.push_str(&picture(src, (w, h), wm.scale, wm.rotation, wm.offset));
             content.push_str(END);
-            add_resources(doc, &page, Some(opacity), None)?;
-            add_picture_resource(doc, &page_list(doc)[i].clone(), src)?;
-            let page = &page_list(doc)[i];
+            add_resources(doc, page, Some(opacity), None, Some(&mut derived))?;
+            add_picture_resource(doc, page, src, Some(&mut derived))?;
             place(doc, page, MarkKind::Watermark, content.into_bytes(), wm.behind)?;
             continue;
         }
@@ -192,8 +196,7 @@ pub fn add_watermark(doc: &mut Document, pages: &[usize], wm: &Watermark, replac
         }
         content.extend_from_slice(b"ET\n");
         content.extend_from_slice(END.as_bytes());
-        add_resources(doc, &page, Some(opacity), None)?;
-        let page = &page_list(doc)[i];
+        add_resources(doc, page, Some(opacity), None, Some(&mut derived))?;
         place(doc, page, MarkKind::Watermark, content, wm.behind)?;
     }
     Ok(())
@@ -209,10 +212,14 @@ pub fn add_background(doc: &mut Document, pages: &[usize], bg: &Background, repl
         remove_marks(doc, pages, MarkKind::Background)?;
     }
     let opacity = if bg.opacity.is_finite() { bg.opacity.clamp(0.0, 1.0) } else { 1.0 };
+    // Read once, as for headers and footers: replacing a page's backdrop changes the page
+    // object's /Contents, which `place` reads from the object itself.
+    let all = page_list(doc);
+    let mut derived = DerivedResources::default();
     for &i in pages {
-        let mut page = page_list(doc)[i].clone();
-        if bg.replace_backdrop && backdrop::replace(doc, &page)? {
-            page = page_list(doc)[i].clone();
+        let page = &all[i];
+        if bg.replace_backdrop {
+            backdrop::replace(doc, page)?;
         }
         let (w, h) = page.display_size(doc);
         let mut content = begin(MarkKind::Background, "Background", page.view_matrix(doc));
@@ -224,11 +231,10 @@ pub fn add_background(doc: &mut Document, pages: &[usize], bg: &Background, repl
             None => content.push_str(&format!("/PCGS{} gs\n{}\n0 0 {} {} re f\n", (opacity * 100.0).round() as i64, rgb(bg.color), n(w), n(h))),
         }
         content.push_str(END);
-        add_resources(doc, &page, Some(opacity), None)?;
+        add_resources(doc, page, Some(opacity), None, Some(&mut derived))?;
         if let Some(src) = &bg.source {
-            add_picture_resource(doc, &page_list(doc)[i].clone(), src)?;
+            add_picture_resource(doc, page, src, Some(&mut derived))?;
         }
-        let page = &page_list(doc)[i];
         place(doc, page, MarkKind::Background, content.into_bytes(), true)?;
     }
     Ok(())

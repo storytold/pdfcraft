@@ -275,6 +275,136 @@ fn header_bates_start_that_would_overflow_is_refused_without_drawing() {
 }
 
 #[test]
+fn marked_pages_that_share_resources_share_one_extended_copy() {
+    let mut hf = HeaderFooter::default();
+    hf.text[5] = "Seite <<1>> von <<n>>".into();
+    type Mark = fn(&mut Document, &HeaderFooter);
+    let marks: [(&str, Mark); 3] = [
+        ("header and footer", |doc, hf| add_header_footer(doc, &[0, 1, 2], hf, false, &cx()).unwrap()),
+        ("watermark", |doc, _| add_watermark(doc, &[0, 1, 2], &Watermark { text: "DRAFT".into(), ..Watermark::default() }, false).unwrap()),
+        ("background", |doc, _| {
+            add_background(doc, &[0, 1, 2], &Background { color: [1.0, 1.0, 0.9], opacity: 1.0, ..Background::default() }, false).unwrap()
+        }),
+    ];
+    for (what, mark) in marks {
+        let mut doc = fixture();
+        mark(&mut doc, &hf);
+        let doc = reopen(&doc);
+        // The fixture's three pages inherit `6 0 R`: one copy with the mark's font for all three.
+        let refs: Vec<Option<ObjRef>> = pdfcraft_model::pages(&doc).iter().map(|p| p.dict.get(b"Resources").and_then(Object::as_ref)).collect();
+        assert!(refs[0].is_some() && refs.iter().all(|r| *r == refs[0]), "{what}: {refs:?}");
+        assert_ne!(refs[0], Some(ObjRef::new(6, 0)), "{what}");
+        let fonts = |r: ObjRef| doc.get(r).as_dict().and_then(|d| d.get(b"Font")).and_then(Object::as_dict).cloned().unwrap();
+        let copy = fonts(refs[0].unwrap());
+        assert!(copy.contains(b"F1") && copy.contains(b"PCHelv"), "{what}: the page keeps its own fonts");
+        assert_eq!(fonts(ObjRef::new(6, 0)).len(), 1, "{what}: the shared original stays as it was");
+    }
+}
+
+/// A picture watermark or background on pages that inherit one resource dictionary: one copy
+/// for all of them, naming the picture, as for text marks.
+#[test]
+fn picture_marks_on_pages_that_share_resources_share_one_extended_copy() {
+    type Mark = fn(&mut Document, MarkSource);
+    let marks: [(&str, Mark); 2] = [
+        ("picture watermark", |doc, source| add_watermark(doc, &[0, 1], &Watermark { source: Some(source), ..Watermark::default() }, false).unwrap()),
+        ("picture background", |doc, source| {
+            add_background(doc, &[0, 1], &Background { source: Some(source), opacity: 1.0, ..Background::default() }, false).unwrap()
+        }),
+    ];
+    for (what, mark) in marks {
+        let mut doc = fixture();
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("XObject"));
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(1));
+        d.set(b"Height".to_vec(), Object::Int(1));
+        d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        let xobject = doc.add(Object::Stream(Stream::from_raw(d, vec![128])));
+        mark(&mut doc, MarkSource { xobject, size: (100.0, 50.0), image: true });
+        let doc = reopen(&doc);
+        let pages = pdfcraft_model::pages(&doc);
+        let refs: Vec<Option<ObjRef>> = pages[..2].iter().map(|p| p.dict.get(b"Resources").and_then(Object::as_ref)).collect();
+        assert!(refs[0].is_some() && refs[1] == refs[0], "{what}: {refs:?}");
+        assert_ne!(refs[0], Some(ObjRef::new(6, 0)), "{what}");
+        let res = doc.get(refs[0].unwrap()).as_dict().cloned().unwrap();
+        let xo = res.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap();
+        assert_eq!(xo.get(format!("PCPic{}", xobject.num).as_bytes()).and_then(Object::as_ref), Some(xobject), "{what}: {xo:?}");
+        assert!(res.get(b"Font").and_then(Object::as_dict).is_some_and(|f| f.contains(b"F1")), "{what}: the page keeps its own fonts");
+        let original = doc.get(ObjRef::new(6, 0)).as_dict().cloned().unwrap();
+        assert!(original.get(b"XObject").is_none(), "{what}: the shared original stays as it was");
+        assert_eq!(pages[2].dict.get(b"Resources").and_then(Object::as_ref), Some(ObjRef::new(6, 0)), "{what}: the unmarked page keeps the original");
+    }
+}
+
+#[test]
+fn marking_pages_reads_the_page_tree_a_fixed_number_of_times() {
+    let mut hf = HeaderFooter::default();
+    hf.text[1] = "<<1>>".into();
+    let walks = |pages: &[usize]| {
+        let mut doc = fixture();
+        let before = place::PAGE_LISTS.with(std::cell::Cell::get);
+        add_header_footer(&mut doc, pages, &hf, false, &cx()).unwrap();
+        add_watermark(&mut doc, pages, &Watermark { text: "DRAFT".into(), ..Watermark::default() }, false).unwrap();
+        add_background(&mut doc, pages, &Background { color: [1.0, 1.0, 0.9], opacity: 1.0, ..Background::default() }, false).unwrap();
+        place::PAGE_LISTS.with(std::cell::Cell::get) - before
+    };
+    // Reading the whole list again for every page made a 3,753-page plot quadratic.
+    assert_eq!(walks(&[0]), walks(&[0, 1, 2]));
+}
+
+/// `o` with every reference followed: a shared copy and a copy per page are other objects, what
+/// they read as must not differ.
+fn read_through(doc: &Document, o: &Object, depth: usize) -> String {
+    let o = doc.resolve(o);
+    match &*o {
+        Object::Dict(d) if depth < 16 => {
+            format!(
+                "<<{}>>",
+                d.iter().map(|(k, v)| format!("/{} {}", String::from_utf8_lossy(k), read_through(doc, v, depth + 1))).collect::<Vec<_>>().join(" ")
+            )
+        }
+        Object::Array(a) if depth < 16 => format!("[{}]", a.iter().map(|v| read_through(doc, v, depth + 1)).collect::<Vec<_>>().join(" ")),
+        other => format!("{other:?}"),
+    }
+}
+
+/// The extended resources that marked pages share read exactly as the copy each page got of its
+/// own before (`DerivedResources` off): for a page that inherits one indirect dictionary from its
+/// parent, a page that names that dictionary itself, and a page with a direct one of its own. The
+/// dictionary they came from stays as it was either way.
+#[test]
+fn shared_extended_resources_read_as_a_copy_per_page() {
+    let marked = |share: bool| {
+        let mut doc = fixture();
+        let mut fonts = Dict::new();
+        fonts.set(b"F2".to_vec(), Object::Ref(ObjRef::new(8, 0)));
+        let mut own = Dict::new();
+        own.set(b"Font".to_vec(), Object::Dict(fonts));
+        doc.update_dict(ObjRef::new(4, 0), |d| d.set(b"Resources".to_vec(), Object::Dict(own))).unwrap();
+        doc.update_dict(ObjRef::new(5, 0), |d| d.set(b"Resources".to_vec(), Object::Ref(ObjRef::new(6, 0)))).unwrap();
+        let mut derived = place::DerivedResources::default();
+        for page in &pdfcraft_model::pages(&doc) {
+            place::add_resources(&mut doc, page, Some(0.5), Some(&b"/PCTimes 9 Tf"[..]), share.then_some(&mut derived)).unwrap();
+        }
+        reopen(&doc)
+    };
+    let (shared, own) = (marked(true), marked(false));
+    let read = |doc: &Document| -> Vec<String> {
+        pdfcraft_model::pages(doc).iter().map(|p| p.dict.get(b"Resources").map_or_else(String::new, |r| read_through(doc, r, 0))).collect()
+    };
+    assert_eq!(read(&shared), read(&own));
+    assert!(read(&shared).iter().all(|r| r.contains("/PCHelv") && r.contains("/PCTimes") && r.contains("/PCGS50")), "{:?}", read(&shared));
+    let refs: Vec<Option<ObjRef>> = pdfcraft_model::pages(&shared).iter().map(|p| p.dict.get(b"Resources").and_then(Object::as_ref)).collect();
+    assert!(refs[0].is_some() && refs[2] == refs[0], "the inheriting page and the naming one share one copy: {refs:?}");
+    assert_eq!(refs[1], None, "a direct dictionary stays the page's own: {refs:?}");
+    for doc in [&shared, &own] {
+        assert_eq!(read_through(doc, &Object::Ref(ObjRef::new(6, 0)), 0), read_through(&fixture(), &Object::Ref(ObjRef::new(6, 0)), 0));
+    }
+}
+
+#[test]
 fn replace_and_remove_restore_the_original_content() {
     let mut doc = fixture();
     let original = streams(&doc, 0);
