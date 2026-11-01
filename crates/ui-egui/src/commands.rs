@@ -519,7 +519,17 @@ impl PdfCraftApp {
             }
             "export.image" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::Image)),
             "export.text" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::Text)),
-            "ocr.recognize" => self.dialog = Some(Dialog::RecognizeText),
+            "ocr.recognize" => {
+                self.ocr_draft.recognize = true;
+                // Plain recognition never crops; only Enhance scanned file turns it on.
+                self.ocr_draft.auto_crop = false;
+                self.dialog = Some(Dialog::RecognizeText);
+            }
+            "ocr.enhance" => {
+                self.ocr_draft.recognize = false;
+                self.ocr_draft.auto_crop = true;
+                self.dialog = Some(Dialog::RecognizeText);
+            }
             "ocr.recognize_batch" => self.ocr_files_dialog(),
             "edit.edit_text" => {
                 self.quick_tool = crate::QuickTool::EditText;

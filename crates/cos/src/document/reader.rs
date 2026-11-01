@@ -658,7 +658,8 @@ impl Document {
         // A file whose only trailers are cross-reference streams (and whose `startxref` is gone
         // or points nowhere) keeps its /Info, /ID and /Encrypt this way.
         let rank = |at: usize, d: &Dict| {
-            let root = self.try_get(d.reference(b"Root")?.num).ok()?;
+            // The whole reference, generation included: `3 0 R` must not find object 3 1.
+            let root = self.try_get_reference(d.reference(b"Root")?).ok()?;
             let Object::Dict(c) = &*root else { return None };
             Some((c.name(b"Type") == Some(b"Catalog") || c.contains(b"Pages"), at))
         };

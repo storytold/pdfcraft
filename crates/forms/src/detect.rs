@@ -267,7 +267,16 @@ fn label_for(words: &[Word], rect: [f64; 4], right_of: bool) -> String {
     let h = (rect[3] - rect[1]).max(8.0);
     let same_line = |w: &Word| (mid(w.rect) - mid(rect)).abs() < h.max(10.0) * 0.7;
     let mut left: Vec<&Word> = if right_of {
-        words.iter().filter(|w| same_line(w) && w.rect[0] >= rect[2] - 1.0 && w.rect[0] - rect[2] < 200.0).collect()
+        words
+            .iter()
+            .filter(|w| {
+                // OCR may read the printed square together with its caption ("□Haupt").
+                // Accept that overlap only for an explicit box mark starting inside this
+                // box and extending to its right; ordinary overlapping text is not a label.
+                let includes_box = w.text.trim_start().starts_with(['□', '☐', '☑', '☒']) && w.rect[0] >= rect[0] - 1.0 && w.rect[2] > rect[2];
+                same_line(w) && (w.rect[0] >= rect[2] - 1.0 || includes_box) && w.rect[0] - rect[2] < 200.0
+            })
+            .collect()
     } else {
         words.iter().filter(|w| same_line(w) && w.rect[2] <= rect[0] + 1.0 && rect[0] - w.rect[2] < 250.0).collect()
     };

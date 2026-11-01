@@ -1,0 +1,6 @@
+#!/bin/sh
+# Stop an existing instance before the optional app is upgraded; keep all task data.
+set -eu
+if /bin/launchctl print system/ai.storyteller.pdfcraft.hot-folder >/dev/null 2>&1; then
+  /bin/launchctl bootout system/ai.storyteller.pdfcraft.hot-folder
+fi

@@ -16,7 +16,7 @@ sha256 = "cd7032ea33b71427f188e34ffb4aee9d6868a57fd196037c5c8b2be03a2a0352"
 [[document]]
 source = "NOTICE"
 destination = "NOTICE"
-sha256 = "9f854f730719af962cd840529324d089e05e68a30bd245c50e33f96e009b4314"
+sha256 = "fa1175dae1d6ec874df13204697a35b30a92982d2352c945df8f9b7453be2fcc"
 
 [[document]]
 source = "assets/app-icon/LICENSE-document.txt"
