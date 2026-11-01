@@ -4,7 +4,7 @@
 
 Every asset PdfCraft includes, bundles or uses to build its published material, with its author, source and licence. The policy is in [AGENTS.md](AGENTS.md) §1. The machine-readable list, with the SHA-256 of every asset but the translation catalogs, is [ATTRIBUTION.toml](ATTRIBUTION.toml). Licence texts are kept beside the assets and summarised in [NOTICE](NOTICE).
 
-## In this repository (289)
+## In this repository (290)
 
 | Asset | Title | Author | Licence | Source | Used for |
 |---|---|---|---|---|---|
