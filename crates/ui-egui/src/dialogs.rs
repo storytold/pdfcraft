@@ -128,6 +128,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
             Dialog::Print => 820.0,
             Dialog::FieldProps | Dialog::BulkFieldProps => 600.0,
             Dialog::About => 780.0,
+            Dialog::PinTool => 540.0,
             _ => 520.0,
         });
         if dialog_body(ui, app, dialog, &mut req) {
@@ -443,6 +444,11 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
         }
         Dialog::About => {
             if !dialog_about(ui, req) {
+                return false;
+            }
+        }
+        Dialog::PinTool => {
+            if !dialog_pin_tool(ui, app, req) {
                 return false;
             }
         }
@@ -1463,6 +1469,13 @@ fn dialog_shortcuts(ui: &mut egui::Ui) -> bool {
     let pair = |a, b| format!("{} / {}", key(a), key(b));
     // Key names, translated where a catalog has them (not scanned as UI literals).
     let named = |k: &str| tl!(k).to_string();
+    // Alt+← / Alt+→ (`canvas::shortcuts`): not a registered command, which has no Alt.
+    let alt_arrows = if crate::commands::mac_shortcuts(ui.ctx()) {
+        "⌥← / ⌥→".to_owned()
+    } else {
+        let alt = crate::i18n::key_name("Alt");
+        format!("{alt}+← / {alt}+→")
+    };
     let scroll = crate::i18n::fmt(tl!("Zoom in / out (also pinch or {key}-scroll)"), &[("key", crate::commands::command_modifier_label(ui.ctx()))]);
     for (k, v) in [
         (pair(FIND_NEXT, FIND_PREV), tl!("Next / previous match").to_string()),
@@ -1476,6 +1489,7 @@ fn dialog_shortcuts(ui: &mut egui::Ui) -> bool {
         (pair(ROTATE_CW, ROTATE_CCW), tl!("Rotate view").to_string()),
         (format!("{} / {}", crate::i18n::key_name("Home"), crate::i18n::key_name("End")), tl!("First / last page").to_string()),
         (format!("← / →, {}", pair(PAGE_PREV, PAGE_NEXT)), tl!("Previous / next page").to_string()),
+        (alt_arrows, format!("{} / {}", tl!("Previous view"), tl!("Next view"))),
         (named("V"), tl!("Select (V)").to_string()),
         (named("H / Space (hold)"), tl!("Hand (H)").to_string()),
         (crate::i18n::key_name("Delete").to_string(), tl!("Delete selected pages (Organize)").to_string()),
@@ -1498,7 +1512,7 @@ fn dialog_shortcuts(ui: &mut egui::Ui) -> bool {
 /// `Dialog::About` content. Returns `false` when it has its own buttons and no footer is wanted.
 fn dialog_about(ui: &mut egui::Ui, req: &mut Pending) -> bool {
     let t = Tokens::get(ui.ctx());
-    // Tabs About · Contributors · Models (craftrules standards/contributors.md).
+    // Tabs About · Contributors · Models.
     let tab_id = egui::Id::unique("about_tab");
     let mut tab = ui.data_mut(|d| d.get_temp::<u8>(tab_id)).unwrap_or(0);
     ui.horizontal_wrapped(|ui| {
@@ -1545,6 +1559,91 @@ fn dialog_about(ui: &mut egui::Ui, req: &mut Pending) -> bool {
     true
 }
 
+fn dialog_pin_tool(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> bool {
+    let t = Tokens::get(ui.ctx());
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(tl!("Pin tools to Home")).font(theme::semibold(18.0)));
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if widgets::ghost_button(ui, "x", tl!("Close")).clicked() {
+                req.close = true;
+            }
+        });
+    });
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new(tl!("Select tools to display on your Home page for quick access.")).color(t.text_muted));
+    ui.add_space(10.0);
+
+    ui.horizontal(|ui| {
+        let (icon_rect, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+        crate::icons::paint(ui, icon_rect, "search", 16.0, t.text_muted);
+        let search_resp =
+            ui.add(egui::TextEdit::singleline(&mut app.pin_tool_search).hint_text(tl!("Search tools…")).desired_width(ui.available_width() - 32.0));
+        search_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, ui.is_enabled(), tl!("Search tools…")));
+        if !app.pin_tool_search.is_empty() && widgets::ghost_button(ui, "x", tl!("Clear search")).clicked() {
+            app.pin_tool_search.clear();
+        }
+    });
+    ui.add_space(8.0);
+    ui.separator();
+    ui.add_space(6.0);
+
+    let query = app.pin_tool_search.trim().to_lowercase();
+    egui::ScrollArea::vertical().max_height(380.0).auto_shrink([false, true]).show(ui, |ui| {
+        let mut toggle = None;
+        for g in pdfcraft_engine::catalog::TOOL_GROUPS {
+            let label = tl!(g.label);
+            let blurb = g.sections.first().map(|s| s.items.iter().take(4).map(|i| tl!(i.label)).collect::<Vec<_>>().join(" • ")).unwrap_or_default();
+            if !query.is_empty()
+                && !label.to_lowercase().contains(&query)
+                && !blurb.to_lowercase().contains(&query)
+                && !g.id.to_lowercase().contains(&query)
+            {
+                continue;
+            }
+
+            let pinned = app.is_tool_pinned(g.id);
+            let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 44.0), egui::Sense::click());
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+            let press = theme::Press::track(ui, &resp);
+            press.wash(ui, rect, 6, false);
+            let body = rect.translate(press.offset());
+
+            let color = egui::Color32::from_rgb(g.hue[0], g.hue[1], g.hue[2]);
+            crate::icons::paint(ui, egui::Rect::from_min_size(body.min + egui::vec2(8.0, 11.0), egui::vec2(22.0, 22.0)), g.icon, 20.0, color);
+
+            let btn_w = 78.0;
+            let btn_rect = egui::Rect::from_center_size(body.right_center() - egui::vec2(btn_w / 2.0 + 8.0, 0.0), egui::vec2(btn_w, 26.0));
+            let btn_resp = ui.interact(btn_rect, ui.scope_id().with(("pin_modal_btn", g.id)), egui::Sense::click());
+            let btn_hovered = btn_resp.hovered();
+
+            let (btn_fill, btn_stroke, text_color, btn_label) = if pinned {
+                (t.accent, egui::Stroke::NONE, egui::Color32::WHITE, tl!("Pinned"))
+            } else if btn_hovered {
+                (t.hover, egui::Stroke::new(1.0, t.border), t.text, tl!("Pin"))
+            } else {
+                (egui::Color32::TRANSPARENT, egui::Stroke::new(1.0, t.border), t.text_muted, tl!("Pin"))
+            };
+            let tip = if pinned { tl!("Unpin from Home") } else { tl!("Pin to Home") };
+            btn_resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, pinned, format!("{tip}: {label}")));
+
+            ui.painter().rect(btn_rect, egui::CornerRadius::same(6), btn_fill, btn_stroke, egui::StrokeKind::Inside);
+            ui.painter().text(btn_rect.center(), egui::Align2::CENTER_CENTER, btn_label, theme::medium(12.0), text_color);
+
+            let max_w = (btn_rect.left() - body.left() - 44.0).max(10.0);
+            widgets::row_text(ui, body.min + egui::vec2(38.0, 6.0), label, theme::semibold(13.5), t.text, max_w);
+            widgets::row_text(ui, body.min + egui::vec2(38.0, 24.0), &blurb, theme::regular(11.0), t.text_muted, max_w);
+
+            if btn_resp.clicked() || resp.clicked() {
+                toggle = Some(g.id);
+            }
+        }
+        if let Some(id) = toggle {
+            app.toggle_pin_tool(id);
+        }
+    });
+    true
+}
+
 fn dialog_footer(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
     ui.add_space(16.0);
     let changed = draft_changes(app).is_some_and(|c| !c.is_empty());
@@ -1559,6 +1658,10 @@ fn dialog_footer(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: 
                 }
                 if widgets::pill_button(ui, tl!("Discard"), false).clicked() {
                     req.recover = Some(false);
+                    req.close = true;
+                }
+            } else if dialog == Dialog::PinTool {
+                if widgets::pill_button(ui, tl!("Done"), true).clicked() {
                     req.close = true;
                 }
             } else if dialog == Dialog::NumberPages {
@@ -1730,15 +1833,25 @@ fn finish_redactions_and_fields(app: &mut PdfCraftApp, req: &mut Pending) {
         let form = |app: &PdfCraftApp| app.active_ids().and_then(|(_, id)| app.session.get(id)).map(|doc| doc.form.clone());
         // A rename also renames the field in the formulas that read it.
         let before = props.name.as_ref().and_then(|_| form(app));
-        if app.apply_edit(Edit::SetFieldProps { name: d.field.clone(), props: Box::new(props) })
-            && let Some(i) = app.active
-        {
+        // The widget being edited, by object: a radio button that joins a group by its new name
+        // is appended after the group's own buttons, so its index changes.
+        let widget = before.as_ref().and_then(|all| all.iter().find(|f| f.name == d.field)?.widgets.get(d.widget).map(|w| w.obj));
+        let applied = app.apply_edit(Edit::SetFieldProps { name: d.field.clone(), props: Box::new(props) });
+        if !applied && app.active_ids().is_some() {
+            // A refused edit (its reason is in the notice) leaves the dialog open with what was
+            // typed into it, as the several-fields dialog does, so nothing is lost meanwhile.
+            app.field_props = Some(d);
+            req.close = false;
+        } else if applied && let Some(i) = app.active {
             // Keep the (possibly renamed) field selected.
             // A dotted name is the full name; a plain one renames the field within its parent.
             let typed = d.name.trim();
             let prefix = d.field.rsplit_once('.').filter(|_| !typed.contains('.')).map(|(p, _)| format!("{p}.")).unwrap_or_default();
             let name = format!("{prefix}{typed}");
-            if let (Some(before), Some(after)) = (before, form(app)) {
+            let after = form(app);
+            let index =
+                widget.and_then(|obj| after.as_ref()?.iter().find(|f| f.name == name)?.widgets.iter().position(|w| w.obj == obj)).unwrap_or(d.widget);
+            if let (Some(before), Some(after)) = (before, after) {
                 let n = pdfcraft_engine::form_calculations_changed(&before, &after).iter().filter(|f| **f != name).count();
                 if n > 0 {
                     app.notify(crate::i18n::trn(
@@ -1749,7 +1862,7 @@ fn finish_redactions_and_fields(app: &mut PdfCraftApp, req: &mut Pending) {
                     ));
                 }
             }
-            app.views[i].prepare.selected = Some((name, d.widget));
+            app.views[i].prepare.selected = Some((name, index));
         }
     }
 }
@@ -1823,6 +1936,7 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
         app.view_draft = None;
         app.custom_draft = None;
         app.bulk_field_props = None;
+        app.unmarked_page = Default::default();
     } else {
         app.dialog = Some(req.next.unwrap_or(dialog));
     }
