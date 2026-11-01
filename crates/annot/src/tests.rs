@@ -307,6 +307,231 @@ fn deleting_the_last_comment_removes_annots() {
 }
 
 #[test]
+fn delete_all_annotations_removes_comments_and_preserves_widgets_and_locked_threads() {
+    let mut doc = fixture();
+    // Add an unlocked note with a reply on page 0, plus a widget and a locked note with its own reply and checkmark.
+    let unlocked_idx = add_annotation(&mut doc, &new(0, Shape::Note { at: [80.0, 80.0], icon: NoteIcon::Comment }), &meta("u")).unwrap();
+    add_reply(&mut doc, 0, unlocked_idx, "reply to unlocked", "Bob", &meta("ur")).unwrap();
+
+    let locked_idx = add_annotation(&mut doc, &new(0, Shape::Note { at: [120.0, 120.0], icon: NoteIcon::Comment }), &meta("l")).unwrap();
+    add_reply(&mut doc, 0, locked_idx, "reply to locked", "Bob", &meta("lr")).unwrap();
+    set_marked(&mut doc, 0, locked_idx, true, "Bob", &meta("lm")).unwrap();
+    set_locked(&mut doc, 0, locked_idx, true).unwrap();
+
+    let widget_ref = {
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name("Widget"));
+        d.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(100), Object::Int(30)]));
+        d.set(b"T".to_vec(), PdfString::text("Field1"));
+        doc.add(Object::Dict(d))
+    };
+    let p0 = page_refs(&doc).unwrap()[0];
+    let mut annots_p0 = annots(&doc, p0);
+    annots_p0.push(Object::Ref(widget_ref));
+    set_annots(&mut doc, p0, annots_p0).unwrap();
+
+    // 1. Delete comments on page 1 only (the Stamp).
+    let removed_p1 = delete_all_annotations(&mut doc, Some(&[1])).unwrap();
+    assert_eq!(removed_p1, 1);
+    let doc = reopen(&doc);
+    assert!(list(&doc, 1).is_empty());
+
+    // 2. Delete all comments document-wide:
+    // On page 0, both the inline Square and the unlocked Note (+ its pop-up and reply) go;
+    // the Widget and the locked Note (+ its pop-up, reply, and checkmark) all stay.
+    let mut doc = doc;
+    let removed_all = delete_all_annotations(&mut doc, None).unwrap();
+    assert_eq!(removed_all, 2);
+    let doc = reopen(&doc);
+    let p0_left = list(&doc, 0);
+    let left_subtypes: Vec<String> = p0_left.iter().map(|d| String::from_utf8_lossy(d.name(b"Subtype").unwrap()).to_string()).collect();
+    assert_eq!(left_subtypes, vec!["Text", "Popup", "Text", "Text", "Widget"]);
+    let kept_summaries = summaries(&doc);
+    assert_eq!(kept_summaries.len(), 3, "locked note + its reply + its checkmark survive");
+    assert!(kept_summaries.iter().any(|s| s.contents.as_deref() == Some("reply to locked")));
+
+    // 3. Running again when only locked comments and widgets remain removes 0.
+    let mut doc = doc;
+    assert_eq!(delete_all_annotations(&mut doc, None).unwrap(), 0);
+}
+
+/// A locked reply keeps its whole thread, as deleting the one comment refuses it.
+#[test]
+fn delete_all_annotations_keeps_a_thread_with_a_locked_reply() {
+    let mut doc = fixture();
+    let before = delete_all_annotations(&mut fixture(), None).unwrap();
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [80.0, 80.0], icon: NoteIcon::Comment }), &meta("n")).unwrap();
+    let reply = add_reply(&mut doc, 0, note, "locked reply", "Bob", &meta("r")).unwrap();
+    set_locked(&mut doc, 0, reply, true).unwrap();
+    assert_eq!(delete_all_annotations(&mut doc, None).unwrap(), before);
+    let doc = reopen(&doc);
+    assert!(summaries(&doc).iter().any(|s| s.contents.as_deref() == Some("locked reply")));
+}
+
+/// Links are not comments: deleting all comments leaves them on the page.
+#[test]
+fn delete_all_annotations_keeps_links() {
+    use crate::links::{self, LinkAction, LinkStyle};
+    let mut doc = fixture();
+    links::add(&mut doc, 0, [10.0, 10.0, 110.0, 30.0], &LinkAction::Uri("https://example.org".into()), &LinkStyle::default()).unwrap();
+    let before = links::list(&doc).len();
+    assert!(before > 0);
+    delete_all_annotations(&mut doc, None).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(links::list(&doc).len(), before);
+}
+
+/// Two pages whose `/Annots` are `page0` and `page1`, with `objects` numbered from 5 on.
+fn two_pages(page0: &str, page1: &str, objects: &[String]) -> Document {
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 612 792] >>".to_string(),
+        format!("<< /Type /Page /Parent 2 0 R /Annots {page0} >>"),
+        format!("<< /Type /Page /Parent 2 0 R /Annots {page1} >>"),
+    ];
+    objs.extend_from_slice(objects);
+    doc_of(&objs)
+}
+
+/// An annotation named `nm` (`/NM`), with `extra` entries.
+fn named(subtype: &str, nm: &str, extra: &str) -> String {
+    format!("<< /Type /Annot /Subtype /{subtype} /Rect [0 0 10 10] /NM ({nm}) {extra} >>")
+}
+
+fn names_on(doc: &Document, page: usize) -> Vec<String> {
+    list(doc, page).iter().map(|d| text(d, b"NM")).collect()
+}
+
+#[test]
+fn delete_all_keeps_redaction_marks_and_fill_and_sign_items() {
+    let mut doc = two_pages(
+        "[5 0 R 6 0 R 7 0 R 8 0 R]",
+        "[]",
+        &[
+            named("Text", "note", ""),
+            named("Redact", "mark", ""),
+            named("Stamp", "check", "/Name /PCCheck"),
+            named("FreeText", "typed", "/PCFillSign true"),
+        ],
+    );
+    assert_eq!(delete_all_annotations(&mut doc, None).unwrap(), 1);
+    let mut doc = reopen(&doc);
+    assert_eq!(names_on(&doc, 0), ["mark", "check", "typed"], "the Redact and Fill & Sign tools own these");
+    assert_eq!(delete_all_annotations(&mut doc, Some(&[0])).unwrap(), 0);
+}
+
+#[test]
+fn delete_all_keeps_redaction_marks_and_fill_and_sign_items_linked_as_replies() {
+    // An `/IRT` to an ordinary comment doesn't make them go with its thread.
+    let mut doc = two_pages(
+        "[5 0 R]",
+        "[6 0 R 7 0 R 8 0 R 9 0 R]",
+        &[
+            named("Text", "note", ""),
+            named("Text", "reply", "/IRT 5 0 R"),
+            named("Redact", "mark", "/IRT 5 0 R"),
+            named("Stamp", "check", "/Name /PCCheck /IRT 5 0 R"),
+            named("FreeText", "typed", "/PCFillSign true /IRT 5 0 R"),
+        ],
+    );
+    assert_eq!(delete_all_annotations(&mut doc, Some(&[0])).unwrap(), 1);
+    let doc = reopen(&doc);
+    assert!(names_on(&doc, 0).is_empty());
+    assert_eq!(names_on(&doc, 1), ["mark", "check", "typed"], "the Redact and Fill & Sign tools own these");
+}
+
+#[test]
+fn delete_all_unlinks_kept_redaction_marks_and_fill_and_sign_items_from_a_deleted_comment() {
+    // Their `/IRT` would keep the deleted comment, and its text, in a saved copy.
+    let inline = named("Redact", "inline mark", "/IRT 5 0 R");
+    let mut doc = two_pages(
+        "[5 0 R]",
+        &format!("[6 0 R 7 0 R {inline}]"),
+        &[
+            named("Text", "note", "/Contents (deleted note text)"),
+            named("Redact", "mark", "/IRT 5 0 R"),
+            named("Stamp", "check", "/Name /PCCheck /IRT 5 0 R"),
+        ],
+    );
+    assert_eq!(delete_all_annotations(&mut doc, Some(&[0])).unwrap(), 1);
+    let saved = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!saved.windows(17).any(|w| w == b"deleted note text"), "the deleted comment is saved");
+    let doc = Document::open(Arc::new(saved)).unwrap();
+    assert_eq!(names_on(&doc, 1), ["mark", "check", "inline mark"]);
+    assert!(list(&doc, 1).iter().all(|d| d.get(b"IRT").is_none()), "a kept item still replies to the deleted comment");
+}
+
+#[test]
+fn delete_all_takes_replies_and_popups_on_other_pages() {
+    let objects = [
+        named("Text", "root", "/Popup 6 0 R"),
+        named("Popup", "root popup", "/Parent 5 0 R"),
+        named("Text", "reply", "/IRT 5 0 R /Popup 8 0 R"),
+        named("Popup", "reply popup", "/Parent 7 0 R"),
+        named("Square", "other", ""),
+    ];
+    // Clearing page 1 takes the whole thread of its comment; clearing the document counts the
+    // reply on page 2 as part of that thread, not as a comment of its own.
+    for (pages, removed, left) in [(Some(&[0][..]), 1, vec!["other"]), (None, 2, vec![])] {
+        let mut doc = two_pages("[5 0 R]", "[6 0 R 7 0 R 8 0 R 9 0 R]", &objects);
+        assert_eq!(delete_all_annotations(&mut doc, pages).unwrap(), removed, "{pages:?}");
+        let doc = reopen(&doc);
+        assert!(names_on(&doc, 0).is_empty());
+        assert_eq!(names_on(&doc, 1), left, "{pages:?}");
+    }
+}
+
+#[test]
+fn delete_all_keeps_an_unlocked_reply_to_a_locked_comment_on_another_page() {
+    for pages in [None, Some(&[1][..])] {
+        let mut doc = two_pages("[5 0 R]", "[6 0 R]", &[named("Text", "locked", "/F 128"), named("Text", "reply", "/IRT 5 0 R")]);
+        assert_eq!(delete_all_annotations(&mut doc, pages).unwrap(), 0, "{pages:?}");
+        assert_eq!((names_on(&doc, 0), names_on(&doc, 1)), (vec!["locked".to_string()], vec!["reply".to_string()]));
+    }
+}
+
+/// `/IRT` loops, an `/IRT` to itself and one to an object that isn't there leave comments of their
+/// own, as the comment list shows them; a locked one in a loop stays.
+#[test]
+fn delete_all_ends_on_reply_loops_and_treats_their_comments_as_their_own() {
+    let mut doc = two_pages(
+        "[5 0 R 6 0 R 7 0 R 8 0 R 9 0 R 10 0 R]",
+        "[]",
+        &[
+            named("Text", "a", "/IRT 6 0 R"),
+            named("Text", "b", "/IRT 5 0 R"),
+            named("Text", "self", "/IRT 7 0 R"),
+            named("Text", "locked", "/F 128 /IRT 9 0 R"),
+            named("Text", "c", "/IRT 8 0 R"),
+            named("Text", "dangling", "/IRT 99 0 R"),
+        ],
+    );
+    assert_eq!(delete_all_annotations(&mut doc, None).unwrap(), 5);
+    assert_eq!(names_on(&reopen(&doc), 0), ["locked"]);
+}
+
+/// An annotation listed on two pages, or an `/Annots` array two pages share, belongs to the first
+/// page (as the comment list has it), and every listing of a deleted annotation goes.
+#[test]
+fn delete_all_counts_a_comment_listed_twice_on_its_first_page() {
+    let objects = [named("Text", "twice", ""), named("Square", "other", "")];
+    let mut doc = two_pages("[5 0 R]", "[5 0 R 6 0 R]", &objects);
+    assert_eq!(delete_all_annotations(&mut doc, None).unwrap(), 2);
+    assert!(names_on(&doc, 0).is_empty() && names_on(&doc, 1).is_empty());
+    let mut doc = two_pages("[5 0 R]", "[5 0 R 6 0 R]", &objects);
+    assert_eq!(delete_all_annotations(&mut doc, Some(&[1])).unwrap(), 1);
+    assert_eq!((names_on(&doc, 0), names_on(&doc, 1)), (vec!["twice".to_string()], vec!["twice".to_string()]));
+
+    let shared = [named("Text", "shared", ""), "[5 0 R]".to_string()];
+    let mut doc = two_pages("6 0 R", "6 0 R", &shared);
+    assert_eq!(delete_all_annotations(&mut doc, Some(&[1])).unwrap(), 0, "the array's comments are on page 1");
+    assert_eq!(delete_all_annotations(&mut doc, None).unwrap(), 1);
+    let doc = reopen(&doc);
+    assert!(names_on(&doc, 0).is_empty() && names_on(&doc, 1).is_empty());
+}
+
+#[test]
 fn move_shifts_all_geometry_and_the_popup() {
     let mut doc = fixture();
     let q = [72.0, 712.0, 200.0, 712.0, 72.0, 700.0, 200.0, 700.0];

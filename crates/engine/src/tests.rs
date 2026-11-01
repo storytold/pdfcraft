@@ -2177,6 +2177,110 @@ fn comments_are_added_drawn_threaded_and_undone() {
 }
 
 #[test]
+fn delete_annotations_removes_all_comments_and_undo_restores_them() {
+    let (mut s, id) = session_with(2);
+    let rect = Shape::Rectangle { rect: [100.0, 100.0, 200.0, 200.0] };
+    let style = Style::default_for(&rect);
+    s.apply(
+        id,
+        Edit::AddAnnotation(NewAnnotation {
+            page: 0,
+            shape: rect.clone(),
+            style: style.clone(),
+            contents: "Page 0 note".into(),
+            author: "Marc".into(),
+        }),
+    )
+    .unwrap();
+    s.apply(id, Edit::AddAnnotation(NewAnnotation { page: 1, shape: rect, style, contents: "Page 1 note".into(), author: "Marc".into() })).unwrap();
+    assert_eq!(s.get(id).unwrap().info.annotations.len(), 2);
+
+    // Delete comments on page 1 only
+    s.apply(id, Edit::DeleteAnnotations { pages: Some(vec![1]) }).unwrap();
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Delete page comments"));
+    assert_eq!(s.get(id).unwrap().info.annotations.len(), 1);
+    assert_eq!(s.get(id).unwrap().info.annotations[0].page, 0);
+
+    // Deleting again on empty page 1 is refused rather than pushing a no-op undo step
+    assert!(s.apply(id, Edit::DeleteAnnotations { pages: Some(vec![1]) }).is_err());
+
+    // Delete all remaining comments
+    s.apply(id, Edit::DeleteAnnotations { pages: None }).unwrap();
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Delete all comments"));
+    assert!(s.get(id).unwrap().info.annotations.is_empty());
+
+    // Undo restores page 0 comment
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().info.annotations.len(), 1);
+    assert_eq!(s.get(id).unwrap().info.annotations[0].page, 0);
+
+    // Undo restores page 1 comment
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().info.annotations.len(), 2);
+}
+
+#[test]
+fn delete_annotations_on_several_pages_is_labelled_as_page_comments() {
+    let (mut s, id) = session_with(3);
+    let rect = Shape::Rectangle { rect: [100.0, 100.0, 200.0, 200.0] };
+    let style = Style::default_for(&rect);
+    for page in 0..3 {
+        s.apply(
+            id,
+            Edit::AddAnnotation(NewAnnotation { page, shape: rect.clone(), style: style.clone(), contents: "note".into(), author: "Marc".into() }),
+        )
+        .unwrap();
+    }
+
+    s.apply(id, Edit::DeleteAnnotations { pages: Some(vec![0, 1]) }).unwrap();
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Delete page comments"));
+    assert_eq!(s.get(id).unwrap().info.annotations.len(), 1);
+}
+
+/// Clearing one page takes a deleted comment's pop-up and reply from the next page too, and one
+/// undo step puts all of them back.
+#[test]
+fn deleting_page_comments_takes_their_thread_from_other_pages_and_undo_restores_it() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>",
+        "<< /Type /Annot /Subtype /Text /Rect [20 20 40 40] /Contents (Root) /Popup 6 0 R >>",
+        "<< /Type /Annot /Subtype /Popup /Rect [20 20 120 80] /Parent 5 0 R >>",
+        "<< /Type /Annot /Subtype /Text /Rect [20 20 40 40] /Contents (Reply) /IRT 5 0 R >>",
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("thread.pdf", None, Arc::new(pdf), None).expect("opens");
+    let listed = |s: &Session| -> Vec<String> {
+        s.get(id).unwrap().info.annotations.iter().map(|a| format!("{} {:?} {:?}", a.page, a.contents, a.parent)).collect()
+    };
+    let before = listed(&s);
+    assert_eq!(before, [r#"0 Some("Root") None"#, r#"1 Some("Reply") Some((0, 0))"#]);
+
+    s.apply(id, Edit::DeleteAnnotations { pages: Some(vec![0]) }).unwrap();
+    assert!(listed(&s).is_empty(), "the reply on page 2 went with its comment: {:?}", listed(&s));
+    let saved = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+    let pages = pdfcraft_annot::page_refs(&saved).unwrap();
+    assert!(pages.iter().all(|&p| !saved.get(p).as_dict().unwrap().contains(b"Annots")), "the pop-up went too");
+
+    s.undo(id).unwrap();
+    assert_eq!(listed(&s), before);
+}
+
+#[test]
 fn highlight_multiplies_over_text() {
     let (mut s, id) = session_with(1);
     // "Page 1" is drawn at 20,150 in 24 pt Helvetica.

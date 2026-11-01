@@ -13,7 +13,7 @@ use pdfcraft_engine::{Edit, NoteIcon, ReviewState, Shape};
 use pdfcraft_render::{Annotation, DocInfo};
 
 use crate::canvas::DocView;
-use crate::comments::{CommentPrefs, CommentTool, SortBy, color32, status_badge};
+use crate::comments::{CommentPrefs, CommentTool, SortBy, bulk_delete_counts, color32, status_badge};
 use crate::panels::Nav;
 use crate::theme::{self, Tokens};
 use crate::{icons, widgets};
@@ -699,6 +699,9 @@ fn legible(c: Color32, t: &Tokens) -> Color32 {
 /// command to run.
 pub(crate) fn header_controls(ui: &mut egui::Ui, info: &DocInfo, view: &mut DocView, hidden: bool) -> Option<&'static str> {
     let mut command = None;
+    // The unlocked comments the two delete commands would take, on the current page and in all.
+    let (_, on_page) = bulk_delete_counts(&info.annotations, Some(view.current));
+    let (_, in_all) = bulk_delete_counts(&info.annotations, None);
     let cv = &mut view.comments;
     let mut types: Vec<String> = info.annotations.iter().filter(|a| a.is_comment()).map(|a| kind_label(a).to_string()).collect();
     types.sort();
@@ -760,6 +763,15 @@ pub(crate) fn header_controls(ui: &mut egui::Ui, info: &DocInfo, view: &mut DocV
         ui.separator();
         if ui.button(tl!("Flatten comments")).clicked() {
             command = Some("comment.flatten");
+            ui.close();
+        }
+        ui.separator();
+        if ui.add_enabled(on_page > 0, egui::Button::new(tl!("Delete comments on this page"))).clicked() {
+            command = Some("comment.delete_page");
+            ui.close();
+        }
+        if ui.add_enabled(in_all > 0, egui::Button::new(tl!("Delete all comments"))).clicked() {
+            command = Some("comment.delete_all");
             ui.close();
         }
     });

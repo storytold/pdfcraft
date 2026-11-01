@@ -2,8 +2,8 @@ use super::create::{
     add_annotation, base_dict, bounds, callout_attach, ending_draws, ending_pair, finite, grow, normalize, num_array, rect_for, rgb,
 };
 use super::draw::{draw_appearance, redraw_or_restore, set_appearance};
-use super::info::{line_endings_of, text_value};
-use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, page_ref, set_annots};
+use super::info::{final_ref, is_comment_subtype, line_endings_of, text_value};
+use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, is_fill_sign, page_ref, page_refs, set_annots};
 use super::types::{
     FLAG_HIDDEN, FLAG_LOCKED, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NewAnnotation, ReviewState, Rgb, Shape, Style,
     StyleChange, TextReplacement,
@@ -115,6 +115,186 @@ pub fn lift_annotation(doc: &mut Document, page: usize, index: usize) -> Result<
 /// comment (which has none to collect) the pop-up it names, which still goes.
 fn seed(target: &Object) -> Option<ObjRef> {
     target.as_ref().or_else(|| target.as_dict().and_then(|d| d.reference(b"Popup")))
+}
+
+/// One `/Annots` entry as [`delete_all_annotations`] reads it, once, for every page at a time.
+struct Listed {
+    /// Position in the document's pages.
+    page: usize,
+    /// The annotation object the entry resolves to; `None` for one written inline.
+    key: Option<ObjRef>,
+    /// In the comment list (`pdfcraft_render::inspect`): a comment subtype, listed here first.
+    comment: bool,
+    /// Bulk deletion may remove it as the comment its thread starts at ([`bulk_removable`]).
+    removable: bool,
+    /// A redaction mark or a Fill & Sign item, which bulk deletion never removes, even as a reply.
+    own_tool: bool,
+    /// Locked (`/F` bit 8).
+    locked: bool,
+    popup_subtype: bool,
+    /// `/IRT`, `/Parent` and `/Popup`, resolved as the comment list resolves them.
+    irt: Option<ObjRef>,
+    parent: Option<ObjRef>,
+    popup: Option<ObjRef>,
+}
+
+impl Listed {
+    fn read(doc: &Document, page: usize, entry: &Object, key: Option<ObjRef>, first_listing: bool) -> Self {
+        let obj = key.map_or_else(|| doc.resolve(entry), |r| doc.get(r));
+        let d = obj.as_dict();
+        let subtype = d.and_then(|d| d.name(b"Subtype"));
+        let to = |k: &[u8]| d.and_then(|d| d.reference(k)).map(|r| final_ref(doc, r));
+        Listed {
+            page,
+            key,
+            comment: first_listing && subtype.is_some_and(|s| is_comment_subtype(&String::from_utf8_lossy(s))),
+            removable: d.zip(subtype).is_some_and(|(d, s)| bulk_removable(doc, d, s)),
+            own_tool: d.zip(subtype).is_some_and(|(d, s)| own_tool(doc, d, s)),
+            locked: d.is_some_and(|d| annotation_flags(doc, d) & FLAG_LOCKED != 0),
+            popup_subtype: matches!(subtype, Some(b"Popup")),
+            irt: to(b"IRT"),
+            parent: to(b"Parent"),
+            popup: to(b"Popup"),
+        }
+    }
+}
+
+/// Whether bulk deletion removes the comment `d` (of `subtype`) when its thread starts at it: not
+/// a status or checkmark, not locked, and not a redaction mark or a Fill & Sign item, which their
+/// own tools apply, clear and sign. The interface counts by the same rule
+/// (`in_bulk_delete` in `pdfcraft_ui_egui`).
+fn bulk_removable(doc: &Document, d: &Dict, subtype: &[u8]) -> bool {
+    text_value(doc, d, b"State").is_none() && annotation_flags(doc, d) & FLAG_LOCKED == 0 && !own_tool(doc, d, subtype)
+}
+
+/// A redaction mark or a Fill & Sign item, which their own tools apply, clear and sign.
+fn own_tool(doc: &Document, d: &Dict, subtype: &[u8]) -> bool {
+    subtype == b"Redact" || is_fill_sign(doc, d)
+}
+
+/// The comment the thread of entry `i` starts at, following `link` (each comment's `/IRT` to
+/// another listed comment) as `pdfcraft_render::link_replies` settles it: a chain that ends within
+/// 64 steps files under its end, and anything else (a loop, a longer chain) is a comment of its own.
+fn thread_root(i: usize, link: impl Fn(usize) -> Option<usize>) -> usize {
+    let mut at = i;
+    for _ in 0..=64 {
+        match link(at) {
+            Some(up) => at = up,
+            None => return at,
+        }
+    }
+    i
+}
+
+/// Delete every unlocked comment on `pages` (all pages when `None`) with its pop-up and its
+/// thread, as Acrobat's "Delete all" does, and return how many comments (threads) went.
+///
+/// What is a comment, and whose thread a reply is in, follows the comment list
+/// (`pdfcraft_render::inspect`), so the count matches what the Comments panel shows:
+/// - Only comment subtypes ([`is_comment_subtype`]) go: links, form widgets and the other
+///   non-markup annotations stay, and so do redaction marks and Fill & Sign items, even when
+///   their `/IRT` makes them replies in a thread that goes; they lose that `/IRT`, so a saved copy
+///   doesn't keep the deleted comment.
+/// - A comment starts a thread unless its `/IRT` chain reaches another listed comment within 64
+///   steps. An `/IRT` to an object that isn't listed, to itself or round a loop leaves it a
+///   comment of its own. Replies, statuses and checkmarks go with their thread, wherever it
+///   starts, and never on their own: a reply on a page being cleared stays when its thread starts
+///   at a locked comment or on another page.
+/// - A thread with a locked comment anywhere in it stays whole, as deleting its first comment would refuse.
+/// - A deleted comment's replies and pop-ups go from every page, as deleting one comment takes its
+///   whole thread.
+/// - An annotation listed on several pages, or an `/Annots` array several pages share, is on the
+///   first of them, and every listing of a deleted annotation goes.
+///
+/// Only pages whose `/Annots` change are written.
+pub fn delete_all_annotations(doc: &mut Document, pages: Option<&[usize]>) -> Result<usize, AnnotError> {
+    let refs = page_refs(doc)?;
+    let mut seen_arrays = HashSet::new();
+    let mut entries: Vec<(usize, Object)> = Vec::new();
+    for (pi, &p) in refs.iter().enumerate() {
+        if let Some(r) = doc.get(p).as_dict().and_then(|d| d.reference(b"Annots"))
+            && !seen_arrays.insert(final_ref(doc, r))
+        {
+            continue;
+        }
+        entries.extend(annots(doc, p).into_iter().map(|e| (pi, e)));
+    }
+    let keys: Vec<Option<ObjRef>> = entries.iter().map(|(_, e)| e.as_ref().map(|r| final_ref(doc, r))).collect();
+    let mut first: HashMap<ObjRef, usize> = HashMap::new();
+    for (i, key) in keys.iter().enumerate() {
+        if let Some(k) = key {
+            first.entry(*k).or_insert(i);
+        }
+    }
+    let listed: Vec<Listed> = entries
+        .iter()
+        .zip(&keys)
+        .enumerate()
+        .map(|(i, ((page, e), &key))| Listed::read(doc, *page, e, key, key.is_none_or(|k| first.get(&k) == Some(&i))))
+        .collect();
+    let link = |i: usize| {
+        let l = listed.get(i).filter(|l| l.comment)?;
+        first.get(&l.irt?).copied().filter(|&j| j != i && listed.get(j).is_some_and(|p| p.comment))
+    };
+    // A locked reply, status or checkmark keeps its thread, as `deletable` refuses it.
+    let blocked: HashSet<usize> = listed.iter().enumerate().filter(|(_, l)| l.comment && l.locked).map(|(i, _)| thread_root(i, link)).collect();
+    let roots: HashSet<usize> = listed
+        .iter()
+        .enumerate()
+        .filter(|(i, l)| {
+            l.comment && l.removable && !blocked.contains(i) && pages.is_none_or(|ps| ps.contains(&l.page)) && thread_root(*i, link) == *i
+        })
+        .map(|(i, _)| i)
+        .collect();
+    if roots.is_empty() {
+        return Ok(0);
+    }
+    let in_thread: Vec<bool> = listed.iter().enumerate().map(|(i, l)| l.comment && !l.own_tool && roots.contains(&thread_root(i, link))).collect();
+    let thread = || listed.iter().zip(&in_thread).filter(|(_, t)| **t).map(|(l, _)| l);
+    let going: HashSet<ObjRef> = thread().filter_map(|l| l.key).collect();
+    let going_popups: HashSet<ObjRef> = thread().filter_map(|l| l.popup).collect();
+    let gone: Vec<bool> = listed
+        .iter()
+        .zip(&in_thread)
+        .map(|(l, &t)| {
+            t || l.key.is_some_and(|k| going.contains(&k))
+                || (l.popup_subtype && (l.key.is_some_and(|k| going_popups.contains(&k)) || l.parent.is_some_and(|p| going.contains(&p))))
+        })
+        .collect();
+    // A redaction mark or Fill & Sign item that stays drops its `/IRT` to a comment that goes, which
+    // would otherwise keep that comment, and its text, in a saved copy.
+    let unlink: Vec<bool> = listed.iter().zip(&gone).map(|(l, &g)| !g && l.own_tool && l.irt.is_some_and(|r| going.contains(&r))).collect();
+    for (l, _) in listed.iter().zip(&unlink).filter(|(_, u)| **u) {
+        if let Some(k) = l.key {
+            doc.update_dict(k, |d| {
+                d.remove(b"IRT");
+            })?;
+        }
+    }
+
+    // Each page's entries are together and in order: what is left of each, and whether it changed.
+    let mut left: Vec<(usize, Vec<Object>, bool)> = Vec::new();
+    for (((page, mut e), gone), unlink) in entries.into_iter().zip(gone).zip(unlink) {
+        // An inline entry is changed where it is listed.
+        let inline_unlinked = unlink && e.as_dict_mut().is_some_and(|d| d.remove(b"IRT").is_some());
+        if left.last().is_none_or(|(p, ..)| *p != page) {
+            left.push((page, Vec::new(), false));
+        }
+        if let Some((_, kept, changed)) = left.last_mut() {
+            *changed |= inline_unlinked;
+            if gone {
+                *changed = true;
+            } else {
+                kept.push(e);
+            }
+        }
+    }
+    for (page, kept, changed) in left {
+        if changed && let Some(&p) = refs.get(page) {
+            set_annots(doc, p, kept)?;
+        }
+    }
+    Ok(roots.len())
 }
 
 /// Whether the `/Annots` entry `entry` goes with `going` (from [`with_replies_and_popups`]): it is

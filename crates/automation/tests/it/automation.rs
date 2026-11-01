@@ -6117,6 +6117,41 @@ fn fill_sign_marks_stay_upright_on_rotated_pages() {
     check(&mut a, reopened);
 }
 
+/// comments_delete (comment.delete_all) takes the unlocked comments of the pages it names, or of
+/// every page, with their replies; locked ones stay, and nothing left to delete fails.
+#[test]
+fn deleting_all_comments_through_tools() {
+    let dir = workdir("comments-delete");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let note = |a: &mut Automation, page: u64, text: &str| -> String {
+        let c = ok(a, "comment_add", json!({ "doc": doc, "page": page, "type": "note", "at": [20, 20], "contents": text }));
+        c["comment"]["id"].as_str().unwrap().to_string()
+    };
+    let first = note(&mut a, 1, "First");
+    ok(&mut a, "comment_reply", json!({ "doc": doc, "id": first, "text": "Reply", "author": "Bob" }));
+    note(&mut a, 2, "Second");
+    let locked = note(&mut a, 3, "Locked");
+    ok(&mut a, "comment_lock", json!({ "doc": doc, "id": locked }));
+    let contents = |a: &mut Automation| -> Vec<String> {
+        let list = ok(a, "comment_list", json!({ "doc": doc }));
+        list["comments"].as_array().unwrap().iter().map(|c| c["contents"].as_str().unwrap_or_default().to_string()).collect()
+    };
+
+    let r = ok(&mut a, "comments_delete", json!({ "doc": doc, "pages": [1] }));
+    assert_eq!(r["deleted"], 1, "{r}");
+    assert_eq!(contents(&mut a), ["Second", "Locked"], "the reply went with its comment");
+    assert!(matches!(a.call("comments_delete", &json!({ "doc": doc, "pages": [4] })), Err(ToolError::InvalidArgs(_))));
+
+    let r = ok(&mut a, "command_run", json!({ "id": "comment.delete_all", "params": { "doc": doc } }));
+    assert_eq!(r["deleted"], 1, "{r}");
+    assert_eq!(contents(&mut a), ["Locked"]);
+    assert!(matches!(a.call("comments_delete", &json!({ "doc": doc })), Err(ToolError::Failed(_))), "only a locked comment is left");
+
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert_eq!(contents(&mut a), ["Second", "Locked"]);
+}
+
 #[test]
 fn comment_checkmarks_locks_hiding_and_summaries_through_tools() {
     let dir = workdir("comment-polish");

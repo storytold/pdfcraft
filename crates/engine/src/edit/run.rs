@@ -50,6 +50,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::AddAnnotation(_)
         | Edit::AddCustomStamp { .. }
         | Edit::DeleteAnnotation { .. }
+        | Edit::DeleteAnnotations { .. }
         | Edit::SetAnnotationContents { .. }
         | Edit::ReplyToAnnotation { .. }
         | Edit::SetAnnotationStatus { .. }
@@ -510,6 +511,11 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_annot::orient_image_stamp(doc, *page, index, rotation)?;
         }
         Edit::DeleteAnnotation { page, index } => pdfcraft_annot::delete_annotation(doc, *page, *index)?,
+        Edit::DeleteAnnotations { pages } => {
+            if pdfcraft_annot::delete_all_annotations(doc, pages.as_deref())? == 0 {
+                return Err(EditError::Comment(pdfcraft_annot::AnnotError::Invalid("there are no unlocked comments to delete".into())));
+            }
+        }
         Edit::SetAnnotationContents { page, index, text } => pdfcraft_annot::set_contents(doc, *page, *index, text, &cx.meta())?,
         Edit::ReplyToAnnotation { page, index, text, author } => {
             pdfcraft_annot::add_reply(doc, *page, *index, text, author, &cx.meta())?;
