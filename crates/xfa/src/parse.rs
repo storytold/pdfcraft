@@ -198,6 +198,16 @@ fn parse_para(n: Option<XmlNode>) -> ParaSpec {
     }
 }
 
+/// `rotate` as quarter turns (XFA 3.3: degrees counter-clockwise, a multiple of 90, `deg` optional):
+/// anything else leaves the object as it stands.
+fn quarter_turns(rotate: Option<&str>) -> u8 {
+    let degrees = rotate.map(str::trim).map(|v| v.strip_suffix("deg").unwrap_or(v).trim_end());
+    let turns = degrees.and_then(|v| v.parse::<f64>().ok()).map(|v| v.rem_euclid(360.0) / 90.0);
+    // Whole, which NaN and infinities aren't, and in range, so the cast is exact; a tiny negative
+    // angle rounds to a full turn.
+    turns.filter(|t| t.fract() == 0.0).map_or(0, |t| t as u8 % 4)
+}
+
 fn parse_common(n: XmlNode) -> Common {
     Common {
         name: n.attribute("name").map(str::to_string).filter(|s| !s.is_empty()),
@@ -205,6 +215,7 @@ fn parse_common(n: XmlNode) -> Common {
         x: attr_measure(n, "x"),
         y: attr_measure(n, "y"),
         anchor: Anchor::parse(n.attribute("anchorType")),
+        rotate: quarter_turns(n.attribute("rotate")),
         w: attr_measure(n, "w"),
         h: attr_measure(n, "h"),
         min_w: attr_measure(n, "minW"),
