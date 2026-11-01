@@ -459,6 +459,12 @@ fn app_creator<'a>(
                 &[("folder", &w.folder.display().to_string()), ("error", &w.error)],
             );
         }
+        // An update that failed after the last session closed (#5546). Only the Windows update
+        // helper records one, and only Windows builds take craft-update.
+        #[cfg(windows)]
+        if let Ok(paths) = craft_update::Paths::for_app(&pdfcraft_ui_egui::UPDATE_APP) {
+            notify_failed_update(&mut app, &paths);
+        }
         let defer_layout = two_paged && !files.is_empty() && !create_images;
         if create_images {
             if let Err(e) = app.begin_image_import_paths(&files) {
@@ -487,6 +493,31 @@ fn app_creator<'a>(
 fn notify_software_renderer(app: &mut PdfCraftApp, device_type: eframe::wgpu::DeviceType) {
     if device_type == eframe::wgpu::DeviceType::Cpu {
         app.notify_tr("PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.");
+    }
+}
+
+/// Tell the user why the last update didn't install. On Windows a helper installs it once the app
+/// has closed; when that fails, the helper starts the old copy again and leaves the reason for its
+/// next start. Read by nothing, it left the reporter of #5546 with the same update offered again
+/// and no reason.
+#[cfg(windows)]
+fn notify_failed_update(app: &mut PdfCraftApp, paths: &craft_update::Paths) {
+    // The helper writes one line, but the file sits in the user's folder: a longer one is cut,
+    // so a notice can't fill the window and the log line stays a line. Both ends are kept, since
+    // an update that couldn't put the previous files back ends by saying where they are.
+    const KEEP: usize = 300;
+    if let Some(error) = craft_update::self_update::take_failure(paths) {
+        let error = error.trim();
+        let count = error.chars().count();
+        let shown = if count > KEEP.saturating_mul(2) {
+            let head: String = error.chars().take(KEEP).collect();
+            let tail: String = error.chars().skip(count.saturating_sub(KEEP)).collect();
+            format!("{head} … {tail}")
+        } else {
+            error.to_owned()
+        };
+        log::warn!("the last update didn't install: {shown}");
+        app.notify_fmt("The last update didn't install: {error}", &[("error", &shown)]);
     }
 }
 
