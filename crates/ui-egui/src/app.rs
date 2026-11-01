@@ -344,9 +344,13 @@ impl PdfCraftApp {
     }
 
     /// Notify with an error's own text. Engine and OS messages are not translated: matching their
-    /// English wording would break silently whenever it changes.
+    /// English wording would break silently whenever it changes. The toast goes after a few
+    /// seconds, so the error is logged too: a reporter who couldn't read it in time finds it in
+    /// `pdfcraft.log` (#5642).
     pub fn notify_error(&mut self, error: impl std::fmt::Display) {
-        self.notify(error.to_string());
+        let error = error.to_string();
+        log::warn!("shown to the user: {error}");
+        self.notify(error);
     }
 
     /// Notify with a `{name}`-style template in the UI language (placeholders filled once).
@@ -648,5 +652,43 @@ impl eframe::App for PdfCraftApp {
             control.finish_frame(&ctx, self);
             self.control = Some(control);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static LOGGED: RefCell<Vec<(log::Level, String)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// Keeps what each thread logs, for that thread's test to read.
+    struct Capture;
+
+    impl log::Log for Capture {
+        fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn log(&self, record: &log::Record<'_>) {
+            LOGGED.with(|l| l.borrow_mut().push((record.level(), record.args().to_string())));
+        }
+
+        fn flush(&self) {}
+    }
+
+    #[test]
+    fn an_error_the_toast_shows_is_logged_too() {
+        // #5642: a print error went from the toast before it could be read, and the log had
+        // nothing of it.
+        static CAPTURE: Capture = Capture;
+        let _ = log::set_logger(&CAPTURE);
+        log::set_max_level(log::LevelFilter::Info);
+        let mut app = super::PdfCraftApp::new();
+        app.notify_error("Failed to merge print tickets");
+        assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Failed to merge print tickets"));
+        let logged = LOGGED.with(|l| l.borrow().clone());
+        assert!(logged.contains(&(log::Level::Warn, "shown to the user: Failed to merge print tickets".into())), "{logged:?}");
     }
 }
