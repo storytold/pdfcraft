@@ -2330,6 +2330,38 @@ fn a_text_box_that_fits_its_text_keeps_fitting_it() {
     assert!(h[1] <= f[1] - 60.0 && h[3] == f[3], "the height made by hand stays: {h:?}");
 }
 
+/// A box sized to its text, at the edges. An empty text gets a box one em wide and one line
+/// tall. A text ending in a line break gets the line the cursor is on (`wrap` keeps the empty
+/// last line), at the width of the lines before it. A line with nowhere to break (CJK has no
+/// spaces) longer than the widest box wraps by character inside it, nothing cut. Widths are
+/// measured as the appearance draws the text: in Helvetica, and a character WinAnsi can't encode
+/// as the `?` drawn for it.
+#[test]
+fn a_text_box_sized_to_its_text_at_the_edges() {
+    let (size, pad) = (12.0, 2.0 + 2.0); // the style's 2 pt border
+    let close = |a: f64, b: f64| (a - b).abs() < 1e-6;
+    assert!(close(appearance::text_box_width("", size, pad), size + 2.0 * pad + 0.5), "empty: one em and the padding");
+    assert_eq!(appearance::wrap("", size, 100.0).len(), 1, "empty: one line");
+    let mut doc = fixture();
+    let w = appearance::text_box_width("OK", size, pad);
+    let shape = Shape::TextBox { rect: [100.0, 700.0 - appearance::text_box_height(1, size, pad), 100.0 + w, 700.0], font_size: size };
+    let t = add_annotation(&mut doc, &NewAnnotation { contents: "OK".into(), ..new(0, shape) }, &meta("t")).unwrap();
+    set_contents(&mut doc, 0, t, "OK\n", &meta("")).unwrap();
+    let r = rect(&list(&doc, 0)[t]);
+    assert!(close(r[2] - r[0], w), "as wide as its lines: {r:?}");
+    assert!(close(r[3] - r[1], appearance::text_box_height(2, size, pad)), "two lines, the second for the cursor: {r:?}");
+    let cjk = "検査済".repeat(20);
+    assert_eq!(appearance::text_width("検", size), appearance::text_width("?", size), "measured as drawn");
+    set_contents(&mut doc, 0, t, &cjk, &meta("")).unwrap();
+    let r = rect(&list(&doc, 0)[t]);
+    let inner = appearance::TEXT_BOX_MAX_WIDTH - 2.0 * pad;
+    let lines = appearance::wrap(&cjk, size, inner);
+    assert!(close(r[2] - r[0], appearance::TEXT_BOX_MAX_WIDTH), "at most the widest box: {r:?}");
+    assert!(lines.len() > 1 && lines.iter().all(|l| appearance::text_width(l, size) <= inner), "{lines:?}");
+    assert_eq!(lines.concat(), cjk, "broken by character, nothing cut");
+    assert!(close(r[3] - r[1], appearance::text_box_height(lines.len(), size, pad)), "as tall as its lines: {r:?}");
+}
+
 /// Spaces at either end of a text box's text take room on its line: a box sized to "Hallo "
 /// fits that text, and takes the next text's width.
 #[test]
