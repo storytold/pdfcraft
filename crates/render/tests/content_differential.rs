@@ -232,9 +232,10 @@ fn both_parsers_read_on_past_a_path_operator_with_too_few_operands() {
     assert_eq!(hayro_typed_len(b"0 0 100 100 re f BT /F1 12 Tf (After) Tj ET"), 6, "control: a complete re is read through");
 }
 
-/// hayro's operand stack used to hold ten entries, and an eleventh ended its stream. Closed by #4345 (hayro-syntax patch 28, #4260): an instruction keeps up to 256
-/// operands and past that drops the oldest, so both parsers read all eleven and go on, as MuPDF
-/// and pdftotext do (`AFTER` is shown).
+/// hayro's operand stack used to hold ten entries, and an eleventh ended its stream. Closed by
+/// #4345 (hayro-syntax patch 28, #4260): an instruction keeps up to 256 operands and past that
+/// drops the oldest, so both parsers read all eleven and go on, as MuPDF and pdftotext do
+/// (`AFTER` is shown).
 #[test]
 fn both_parsers_keep_more_than_ten_operands() {
     let data = b"1 2 3 4 5 6 7 8 9 10 11 d0 q Q";
