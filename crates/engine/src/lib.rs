@@ -35,6 +35,7 @@ mod history;
 pub mod js;
 mod layers;
 pub mod links;
+mod mark_picture;
 pub mod ocr;
 mod open;
 pub mod optimizer;
@@ -64,6 +65,7 @@ use std::sync::Arc;
 pub use links::{
     MAX_REMOTE_DOCUMENT_BYTES, RemoteDocumentPathError, read_remote_document, remote_document_path_is_absolute, resolve_remote_document_path,
 };
+pub use mark_picture::{MAX_MARK_PICTURE_SIDE, MarkPicture, mark_picture};
 pub use signature_image::{ImageSignaturePreview, SignatureImage};
 pub use signature_scan::{PhotoRect, ScanError, SignaturePhoto, Turn};
 pub use stamp_preview::{CommentLayer, StampPreview};
