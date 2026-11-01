@@ -4,10 +4,10 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
-use pdfcraft_render::{OpenError, PageText, RenderConfig, RenderPool, RenderRequest, RequestKind, inspect};
+use pdfcraft_render::{OpenError, PageText, RenderConfig, RenderPool, RenderRequest, RequestKind, Retiring, inspect};
 
 /// Files and folders looked at, at most, as in a batch job.
 pub const MAX_ENTRIES: usize = 10_000;
@@ -21,12 +21,17 @@ pub const DEFAULT_LIMIT: usize = 1_000;
 pub const MAX_QUERY_CHARS: usize = 1_000;
 /// Files that may run out of time before the search stops: each can leave a stuck thread behind.
 pub const MAX_SLOW_FILES: usize = 3;
+/// Threads earlier searches left running, at most, before a new search is refused.
+pub const MAX_LEFT_RUNNING: usize = 3 * MAX_SLOW_FILES;
 /// How long a file may take to open, and one page to read.
 pub const TIME_LIMIT: Duration = Duration::from_secs(20);
 /// Pages asked for at once.
 const PAGE_BATCH: usize = 16;
 /// Glyphs of context on each side of a match.
 const CONTEXT: usize = 36;
+
+/// Threads a search let go of. They can't be killed, so each counts until it exits.
+static LEFT_RUNNING: Mutex<Vec<Retiring>> = Mutex::new(Vec::new());
 
 /// What to look for, and where.
 #[derive(Clone, Debug)]
@@ -166,10 +171,10 @@ pub fn linked(metadata: &std::fs::Metadata) -> bool {
 /// Search every PDF in `options.folder`. `events` hears each result as it is found, and `cancel`
 /// ends the search at the next page. An `Err` means nothing was searched.
 pub fn search(options: &Options, cancel: &AtomicBool, mut events: impl FnMut(Event)) -> Result<Summary, String> {
-    crate::guard(|| search_inner(options, cancel, &mut events))?
+    crate::guard(|| search_inner(options, cancel, &mut events, &LEFT_RUNNING))?
 }
 
-fn search_inner(options: &Options, cancel: &AtomicBool, events: &mut impl FnMut(Event)) -> Result<Summary, String> {
+fn search_inner(options: &Options, cancel: &AtomicBool, events: &mut impl FnMut(Event), left: &Mutex<Vec<Retiring>>) -> Result<Summary, String> {
     let query = options.query.trim();
     if query.is_empty() {
         return Err("the search text is empty".into());
@@ -180,6 +185,9 @@ fn search_inner(options: &Options, cancel: &AtomicBool, events: &mut impl FnMut(
     let folder = options.folder.symlink_metadata().map_err(|e| format!("{}: {e}", options.folder.display()))?;
     if !folder.is_dir() {
         return Err(format!("{} is not a folder", options.folder.display()));
+    }
+    if running(left) >= MAX_LEFT_RUNNING {
+        return Err("files from earlier searches are still being read; wait for them to finish, or restart PdfCraft".into());
     }
     let mut walk = Walk::default();
     walk.folder(&options.folder, options.subfolders, 0);
@@ -199,7 +207,7 @@ fn search_inner(options: &Options, cancel: &AtomicBool, events: &mut impl FnMut(
             break;
         }
         events(Event::Reading { index, path: path.clone() });
-        let read = search_file(&path, query, options, options.limit.saturating_sub(summary.matches), cancel);
+        let read = search_file(&path, query, options, options.limit.saturating_sub(summary.matches), cancel, left);
         if !read.matches.is_empty() {
             summary.matches = summary.matches.saturating_add(read.matches.len());
             summary.files_with_matches = summary.files_with_matches.saturating_add(1);
@@ -293,7 +301,7 @@ struct FileRead {
     at_limit: bool,
 }
 
-fn search_file(path: &Path, query: &str, options: &Options, room: usize, cancel: &AtomicBool) -> FileRead {
+fn search_file(path: &Path, query: &str, options: &Options, room: usize, cancel: &AtomicBool, left: &Mutex<Vec<Retiring>>) -> FileRead {
     let mut read = FileRead::default();
     let bytes = match read_bytes(path) {
         Ok(bytes) => Arc::new(bytes),
@@ -302,7 +310,7 @@ fn search_file(path: &Path, query: &str, options: &Options, room: usize, cancel:
             return read;
         }
     };
-    let pages = match open(&bytes, options.open_limit, cancel) {
+    let pages = match open(&bytes, options.open_limit, cancel, left) {
         Opened::Pages(pages) => pages,
         Opened::Skip(skip) => {
             read.skip = Some(skip);
@@ -313,14 +321,42 @@ fn search_file(path: &Path, query: &str, options: &Options, room: usize, cancel:
             return read;
         }
     };
-    read_pages(bytes, pages, query, options, room, cancel)
+    read_pages(bytes, pages, query, options, room, cancel, left)
 }
 
-fn read_pages(bytes: Arc<Vec<u8>>, pages: usize, query: &str, options: &Options, room: usize, cancel: &AtomicBool) -> FileRead {
-    let mut read = FileRead::default();
+/// How many of the threads let go of are still running.
+fn running(left: &Mutex<Vec<Retiring>>) -> usize {
+    let mut left = left.lock().unwrap_or_else(PoisonError::into_inner);
+    left.retain_mut(|threads| threads.running() > 0);
+    left.iter_mut().map(Retiring::running).sum()
+}
+
+fn let_go(left: &Mutex<Vec<Retiring>>, threads: Retiring) {
+    left.lock().unwrap_or_else(PoisonError::into_inner).push(threads);
+}
+
+fn read_pages(
+    bytes: Arc<Vec<u8>>,
+    pages: usize,
+    query: &str,
+    options: &Options,
+    room: usize,
+    cancel: &AtomicBool,
+    left: &Mutex<Vec<Retiring>>,
+) -> FileRead {
     // The pool, not a bare renderer: its watchdog stops a page that would otherwise never end.
     let mut pool = RenderPool::new(bytes, 1, RenderConfig::default());
     pool.set_stuck_after(options.page_limit);
+    let read = read_queued(&mut pool, pages, query, options, room, cancel);
+    // With every page answered its worker is idle; otherwise it may be on a page that never ends.
+    if read.cancelled || read.at_limit || read.skip == Some(Skip::TooSlow) {
+        let_go(left, pool.retire());
+    }
+    read
+}
+
+fn read_queued(pool: &mut RenderPool, pages: usize, query: &str, options: &Options, room: usize, cancel: &AtomicBool) -> FileRead {
+    let mut read = FileRead::default();
     let mut unread = 0usize;
     let mut first = 0;
     'pages: while first < pages {
@@ -333,7 +369,6 @@ fn read_pages(bytes: Arc<Vec<u8>>, pages: usize, query: &str, options: &Options,
                 read.at_limit = true;
                 break 'pages;
             }
-            let started = Instant::now();
             let page = loop {
                 if cancel.load(Ordering::Relaxed) {
                     read.cancelled = true;
@@ -345,7 +380,7 @@ fn read_pages(bytes: Arc<Vec<u8>>, pages: usize, query: &str, options: &Options,
                 std::thread::sleep(Duration::from_millis(1));
             };
             match (page.error, page.text) {
-                (Some(_), _) if started.elapsed() >= options.page_limit => {
+                (Some(_), _) if pool.timed_out() => {
                     read.skip = Some(Skip::TooSlow);
                     return read;
                 }
@@ -387,28 +422,35 @@ enum Opened {
 }
 
 /// Open the file on a thread of its own: the render pool's watchdog doesn't cover parsing.
-fn open(bytes: &Arc<Vec<u8>>, limit: Duration, cancel: &AtomicBool) -> Opened {
+fn open(bytes: &Arc<Vec<u8>>, limit: Duration, cancel: &AtomicBool, left: &Mutex<Vec<Retiring>>) -> Opened {
     let (sender, receiver) = mpsc::channel();
     let bytes = bytes.clone();
     let spawned = std::thread::Builder::new().name("folder-search-open".into()).spawn(move || {
         let _ = sender.send(inspect(bytes, None));
     });
-    if let Err(error) = spawned {
-        return Opened::Skip(Skip::Unreadable(error.to_string()));
-    }
+    let thread = match spawned {
+        Ok(thread) => thread,
+        Err(error) => return Opened::Skip(Skip::Unreadable(error.to_string())),
+    };
     let started = Instant::now();
-    loop {
-        match receiver.recv_timeout(limit.min(Duration::from_millis(20))) {
+    let gave_up = loop {
+        if cancel.load(Ordering::Relaxed) {
+            break Opened::Cancelled;
+        }
+        if started.elapsed() >= limit {
+            break Opened::Skip(Skip::TooSlow);
+        }
+        match receiver.recv_timeout(Duration::from_millis(20)) {
             Ok(Ok(info)) if info.encrypted => return Opened::Skip(Skip::Secured),
             Ok(Ok(info)) => return Opened::Pages(info.pages.len()),
             Ok(Err(OpenError::NeedsPassword | OpenError::WrongPassword)) => return Opened::Skip(Skip::Secured),
             Ok(Err(error)) => return Opened::Skip(Skip::Damaged(error.to_string())),
             Err(mpsc::RecvTimeoutError::Disconnected) => return Opened::Skip(Skip::Damaged("the reader stopped unexpectedly".into())),
-            Err(mpsc::RecvTimeoutError::Timeout) if cancel.load(Ordering::Relaxed) => return Opened::Cancelled,
-            Err(mpsc::RecvTimeoutError::Timeout) if started.elapsed() >= limit => return Opened::Skip(Skip::TooSlow),
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
-    }
+    };
+    let_go(left, thread.into());
+    gave_up
 }
 
 /// Add the page's matches, up to `room` in all. Returns whether any had to be left out.

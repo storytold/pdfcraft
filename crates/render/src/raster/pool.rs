@@ -461,6 +461,12 @@ impl RenderPool {
 /// long operator (such as decoding a huge image) can delay.
 pub struct Retiring(pub(crate) Vec<JoinHandle<()>>);
 
+impl From<JoinHandle<()>> for Retiring {
+    fn from(thread: JoinHandle<()>) -> Self {
+        Self(vec![thread])
+    }
+}
+
 impl Retiring {
     /// The threads that haven't exited yet.
     pub fn running(&mut self) -> usize {
@@ -482,6 +488,11 @@ impl RenderPool {
     pub fn without_replacements(self) -> Self {
         *lock(&self.replacements_left) = 0;
         self
+    }
+
+    /// Whether the watchdog has given up on a render. An error answer alone can't say so.
+    pub fn timed_out(&self) -> bool {
+        *lock(&self.retired_workers) > 0
     }
 
     /// This pool's threads that haven't exited (workers and replacements; 0 when rendering inline).
