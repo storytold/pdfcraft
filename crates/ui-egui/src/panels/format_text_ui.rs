@@ -290,11 +290,20 @@ pub(crate) fn panel(
     // Bold, italic, underline, superscript, subscript.
     let mut extras = extras;
     row(ui, |ui| {
-        if icons::button(ui, "bold", 30.0, look.bold, tl!("Bold")).clicked() {
+        let styleable = look.font_resource.is_none();
+        let bold_btn = ui.add_enabled_ui(styleable, |ui| icons::button(ui, "bold", 30.0, look.bold && styleable, tl!("Bold"))).inner;
+        if styleable && bold_btn.clicked() {
             look.bold = !look.bold;
         }
-        if icons::button(ui, "italic", 30.0, look.italic, tl!("Italic")).clicked() {
+        if !styleable {
+            bold_btn.on_disabled_hover_text(tl!("Bold is determined by the selected document font"));
+        }
+        let italic_btn = ui.add_enabled_ui(styleable, |ui| icons::button(ui, "italic", 30.0, look.italic && styleable, tl!("Italic"))).inner;
+        if styleable && italic_btn.clicked() {
             look.italic = !look.italic;
+        }
+        if !styleable {
+            italic_btn.on_disabled_hover_text(tl!("Italic is determined by the selected document font"));
         }
         match extras.as_deref_mut() {
             Some(e) => {
