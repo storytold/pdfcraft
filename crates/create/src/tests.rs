@@ -2312,8 +2312,8 @@ fn flate_images_past_the_exports_allowance_are_left_out_with_the_reason() {
     assert_eq!(budget.refused(), 1);
 }
 
-/// A JPEG is written as it is, at no cost, unless a mask means decoding it: that pays for its
-/// samples, and past the allowance the image goes, with the reason, as it would come out without
+/// A JPEG is written as it is, at no cost, unless something means decoding it, here a mask: that
+/// pays for its samples, and past the allowance the image goes, with the reason, as it would come out without
 /// its transparency otherwise.
 #[test]
 fn a_jpeg_that_has_to_be_decoded_shares_the_allowance() {
@@ -2341,6 +2341,7 @@ fn a_jpeg_that_has_to_be_decoded_shares_the_allowance() {
     mask.set(b"BitsPerComponent".to_vec(), Object::Int(8));
     mask.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
     let mask = doc.add(Object::Stream(Stream::from_raw(mask, vec![0x80; 16])));
+    let doc_jpeg_len = jpeg.len();
     let masked = doc.add(Object::Stream(Stream::from_raw(image_dict(Some((b"SMask", Object::Ref(mask)))), jpeg.clone())));
     let plain = doc.add(Object::Stream(Stream::from_raw(image_dict(None), jpeg)));
 
@@ -2350,7 +2351,8 @@ fn a_jpeg_that_has_to_be_decoded_shares_the_allowance() {
     let mut budget = ImageBudget::with_work(u64::MAX);
     assert!(crate::extract::image_file_within(&doc, masked, &mut budget).is_ok());
     let cost = u64::MAX - budget.work_left();
-    assert_eq!(cost, 16 + 16 + 2 * 4 * 4 * 3, "the mask's bytes and pixels, and the JPEG's samples twice");
+    let read = 4 * doc_jpeg_len as u64;
+    assert_eq!(cost, 16 + 16 + 2 * 4 * 4 * 3 + read, "the mask's bytes and pixels, the JPEG's samples twice and its reading");
     let mut budget = ImageBudget::with_work(cost - 1);
     let refused = crate::extract::image_file_within(&doc, masked, &mut budget).unwrap_err();
     assert!(refused.contains("more image decoding than"), "{refused}");
@@ -2372,6 +2374,7 @@ fn a_jpeg_mask_pays_for_its_samples() {
     mask.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
     mask.set(b"Filter".to_vec(), Object::name("DCTDecode"));
     let mut doc = Document::new_empty();
+    let read = 4 * jpeg.len() as u64;
     let mask = doc.add(Object::Stream(Stream::from_raw(mask, jpeg)));
     let mut image = Dict::new();
     image.set(b"Subtype".to_vec(), Object::name("Image"));
@@ -2383,9 +2386,9 @@ fn a_jpeg_mask_pays_for_its_samples() {
     let image = doc.add(Object::Stream(Stream::from_raw(image, vec![0x80])));
     let mut budget = ImageBudget::with_work(u64::MAX);
     assert!(crate::extract::image_file_within(&doc, image, &mut budget).is_ok());
-    assert_eq!(u64::MAX - budget.work_left(), 2 * 4 * 4 + 2, "its samples twice, and the image's byte and pixel");
+    assert_eq!(u64::MAX - budget.work_left(), 2 * 4 * 4 + read + 2, "its samples twice, its reading, and the image's byte and pixel");
     // Just short of what the mask costs: it isn't decoded, and takes the image with it.
-    let mut budget = ImageBudget::with_work(2 * 4 * 4 - 1);
+    let mut budget = ImageBudget::with_work(2 * 4 * 4 + read - 1);
     let refused = crate::extract::image_file_within(&doc, image, &mut budget).unwrap_err();
     assert!(refused.contains("more image decoding than"), "{refused}");
     assert_eq!((budget.work_left(), budget.refused()), (0, 1));
@@ -2433,6 +2436,14 @@ fn a_jpeg_larger_than_its_dictionary_says_isnt_decoded() {
     image.set(b"SMask".to_vec(), Object::Ref(mask));
     let image = doc.add(Object::Stream(Stream::from_raw(image, vec![0x80])));
     assert_eq!(decodes(&doc, image), 0);
+    // Reading the header to find that out is paid for: a mask can be mostly tables, shared by
+    // every image of a file, and with nothing left it isn't read.
+    let mut budget = ImageBudget::with_work(u64::MAX);
+    assert!(crate::extract::image_file_within(&doc, image, &mut budget).is_ok());
+    assert_eq!(u64::MAX - budget.work_left(), 2 + 4 * jpeg.len() as u64 + 2, "its one declared sample twice, its bytes, the image's byte and pixel");
+    let mut budget = ImageBudget::with_work(0);
+    assert!(crate::extract::image_file_within(&doc, image, &mut budget).is_err());
+    assert_eq!(budget.refused(), 1, "the image goes, with its mask unread");
 }
 
 /// A mask past the allowance can't be left out as an unreadable one is, or the image comes out

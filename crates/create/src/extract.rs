@@ -185,7 +185,7 @@ fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'stat
     }
     let mut space = if mask { Space::Gray } else { space(doc, s.dict.get(b"ColorSpace"))? };
     let (samples, bpc) = if jpeg {
-        if !budget.pay_jpeg((w as u64).saturating_mul(h as u64).saturating_mul(space.components() as u64)) {
+        if !budget.pay_jpeg((w as u64).saturating_mul(h as u64).saturating_mul(space.components() as u64), &s.raw) {
             return Err(FilterError::Spent.to_string());
         }
         // Grey, RGB or CMYK samples (YCCK is converted); a JPEG that doesn't decode, or an
@@ -545,7 +545,7 @@ fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize, budget: &mut Image
     let mut px = match f.last().map(Vec::as_slice) {
         Some(b"DCTDecode" | b"DCT") if f.len() == 1 => {
             // Past the allowance the image goes too: `image` sees this one refused.
-            if jpeg_size(&m.raw)? != (mw, mh) || !budget.pay_jpeg((mw as u64).saturating_mul(mh as u64)) {
+            if !budget.pay_jpeg((mw as u64).saturating_mul(mh as u64), &m.raw) {
                 return None;
             }
             jpeg_of_size(&m.raw, mw, mh)?.into_luma8().into_raw()

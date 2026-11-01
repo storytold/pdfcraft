@@ -28,6 +28,9 @@ pub const MAX_PAGE_FORMS: usize = 50_000;
 /// The steps a sample of a JPEG costs: a few bytes can hold a page of one grey, and decoding,
 /// resampling and storing it took about 20 to 45 ns a sample.
 const JPEG_WORK: u64 = 2;
+/// The steps a byte of a JPEG costs to read: its tables took 24 ns a byte before a size was known,
+/// and images can share one, so reading it again for each has to count.
+const JPEG_READ_WORK: u64 = 4;
 
 /// A stream decode within a byte bound, with the bytes its filter stages decoded: the data or
 /// the error, each with that count.
@@ -77,7 +80,9 @@ impl ImageBudget {
     /// with its `/DecodeParms` given by reference read too ([`Document::with_direct_parms`]), for an
     /// image that has no fax or JBIG2 decoder to go through.
     pub fn decode_filters(&mut self, doc: &Document, s: &Stream, max: usize) -> Result<Vec<u8>, CosError> {
-        self.pay_size(s)?;
+        if s.filters().iter().all(|(f, _)| f.is_decodable()) {
+            self.pay_size(s)?;
+        }
         let decoded = doc.with_direct_parms(s).decoded_spending(max, &mut self.work);
         self.count_refused(s, &decoded);
         decoded
@@ -109,9 +114,11 @@ impl ImageBudget {
         paid
     }
 
-    /// Pays for decoding a JPEG of `samples`, as [`ImageBudget::pay_pixels`] does.
-    pub fn pay_jpeg(&mut self, samples: u64) -> bool {
-        self.pay_pixels(samples.saturating_mul(JPEG_WORK))
+    /// Pays for reading JPEG `data` and decoding its `samples`, as [`ImageBudget::pay_pixels`] does.
+    /// A caller pays before its tables are parsed, which can be most of the file.
+    pub fn pay_jpeg(&mut self, samples: u64, data: &[u8]) -> bool {
+        let reading = (data.len() as u64).saturating_mul(JPEG_READ_WORK);
+        self.pay_pixels(samples.saturating_mul(JPEG_WORK).saturating_add(reading))
     }
 
     /// Pays for the pixels of image `s`, unless it is JBIG2, whose decoder pays for its page, or
@@ -143,10 +150,15 @@ impl ImageBudget {
     }
 }
 
-/// Whether `s` takes only filters and decoders this charges.
+/// Whether `s` can be decoded here and so charged: general filters, a fax or JBIG2 decoder last at
+/// most. Those decoders anywhere else can't run.
 fn charged(s: &Stream) -> bool {
     use pdfcraft_filters::Filter;
-    s.readable_filters().is_ok_and(|chain| chain.iter().all(|(f, _)| f.is_decodable() || matches!(f, Filter::Jbig2 | Filter::CcittFax)))
+    s.readable_filters().is_ok_and(|chain| {
+        chain.split_last().is_none_or(|((last, _), before)| {
+            (last.is_decodable() || matches!(last, Filter::Jbig2 | Filter::CcittFax)) && before.iter().all(|(f, _)| f.is_decodable())
+        })
+    })
 }
 
 /// What one operation may still decode and enter across all the streams it reads.
@@ -507,11 +519,11 @@ mod image_tests {
         let mut budget = ImageBudget::with_work(u64::MAX);
         budget.decode(&doc, &Stream::from_raw(odd, vec![1, 2]), 1 << 24).unwrap();
         assert_eq!(u64::MAX - budget.work_left(), 2);
-        // A JPEG pays twice over for each sample, once decoded.
-        let mut budget = ImageBudget::with_work(20);
-        assert!(budget.pay_jpeg(9));
-        assert_eq!((budget.work_left(), budget.refused()), (2, 0));
-        assert!(!budget.pay_jpeg(2));
+        // A JPEG pays twice over for each sample, and four times for each byte it is read from.
+        let mut budget = ImageBudget::with_work(30);
+        assert!(budget.pay_jpeg(9, b"ab"));
+        assert_eq!((budget.work_left(), budget.refused()), (4, 0));
+        assert!(!budget.pay_jpeg(0, b"ab"));
         assert_eq!((budget.work_left(), budget.refused()), (0, 1));
     }
 
@@ -567,6 +579,25 @@ mod image_tests {
         let mut budget = ImageBudget::with_work(u64::MAX);
         assert!(budget.decode_filters(&doc, &jbig2(None), 1 << 20).is_err());
         assert_eq!(budget.work_left(), u64::MAX, "no decoder here, so nothing was read");
+        // Nor for a fax image, nor for a decoder that isn't last, however large they say they are.
+        for chain in [vec!["CCITTFaxDecode"], vec!["CCITTFaxDecode", "FlateDecode"], vec!["JBIG2Decode", "FlateDecode"]] {
+            let mut dict = Dict::new();
+            dict.set(b"Width".to_vec(), Object::Int(1000));
+            dict.set(b"Height".to_vec(), Object::Int(1000));
+            dict.set(b"Filter".to_vec(), Object::Array(chain.iter().map(|f| Object::name(f)).collect()));
+            let image = Stream::from_raw(dict, b"data".to_vec());
+            let mut budget = ImageBudget::with_work(u64::MAX);
+            assert!(budget.decode_filters(&doc, &image, 1 << 20).is_err());
+            assert_eq!(budget.work_left(), u64::MAX, "{chain:?}");
+        }
+        // Through `decode` a decoder that isn't last pays nothing either; one that is does.
+        let mut dict = Dict::new();
+        dict.set(b"Width".to_vec(), Object::Int(1000));
+        dict.set(b"Height".to_vec(), Object::Int(1000));
+        dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("JBIG2Decode"), Object::name("FlateDecode")]));
+        let mut budget = ImageBudget::with_work(u64::MAX);
+        assert!(budget.decode(&doc, &Stream::from_raw(dict, b"data".to_vec()), 1 << 20).is_err());
+        assert_eq!(budget.work_left(), u64::MAX);
     }
 
     /// The images of a file share its globals, so an image refused doesn't read them: this one's

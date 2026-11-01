@@ -33,7 +33,7 @@ whose JBIG2 page isn't its size (PdfCraft's renderer draws the whole page into t
 or whose globals can't be read or decode to more than 32 MiB (they are decoded before the page's size is known, so they have a
 limit of their own), is skipped, and such a mask is left out and the image exported opaque, as JPX and CCITT masks are.
 Past what one export may decode, which its images share, filters, decoders and pixels alike (`ImageBudget`; a JPEG when it has to be
-decoded, as a mask or to apply one, and not when it is written as it is), an image is skipped, and so is one whose mask is past it, which would otherwise come out showing what the mask hides. An export also stops at 2 GiB of files held, or twice the document if that
+decoded, as a mask, to apply one, or to undo a CMYK file's inversion, and not when it is written as it is), an image is skipped, and so is one whose mask is past it, which would otherwise come out showing what the mask hides. An export also stops at 2 GiB of files held, or twice the document if that
 is more, since they stay in memory until it ends.
 Indexed Decode values select palette entries after rounding and clipping. Color-key masks compare the original samples.
 Missing, null or malformed Decode arrays keep the default mapping.

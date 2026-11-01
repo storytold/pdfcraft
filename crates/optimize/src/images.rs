@@ -490,7 +490,7 @@ pub(crate) fn pixels(doc: &Document, s: &Stream, n: usize, budget: &mut ImageBud
         // never get here: the colour space check excludes them. The JPEG's own size must be the
         // dictionary's: `jpeg_samples` refuses another from its header, before any pixels.
         let ycc = n == 3 && ycc_encoded(doc, s)?;
-        if !budget.pay_jpeg(u64::try_from(bytes).ok()?) {
+        if !budget.pay_jpeg(u64::try_from(bytes).ok()?, &s.raw) {
             return None;
         }
         let v = jpeg_samples(&s.raw, usize::try_from(w).ok()?, usize::try_from(h).ok()?, n, ycc)?;
@@ -1559,10 +1559,11 @@ mod dimension_tests {
         dict.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
         let jpeg = image_stream(&dict, &[120; 16 * 8 * 3], 3, 16, 8, Compression::Jpeg(60), false).expect("a JPEG");
         let doc = Document::new_empty();
-        let mut budget = ImageBudget::with_work(2 * 16 * 8 * 3);
+        let cost = 2 * 16 * 8 * 3 + 4 * jpeg.raw.len() as u64;
+        let mut budget = ImageBudget::with_work(cost);
         assert_eq!(pixels(&doc, &jpeg, 3, &mut budget).map(|p| p.len()), Some(16 * 8 * 3));
         assert_eq!((budget.work_left(), budget.refused()), (0, 0), "exactly that");
-        let mut budget = ImageBudget::with_work(2 * 16 * 8 * 3 - 1);
+        let mut budget = ImageBudget::with_work(cost - 1);
         assert!(pixels(&doc, &jpeg, 3, &mut budget).is_none());
         assert_eq!((budget.work_left(), budget.refused()), (0, 1));
     }
