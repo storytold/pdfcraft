@@ -808,7 +808,9 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
                         }
                     }
                     // A move keeps the picture on its page, like a paragraph (#5264).
-                    DragTarget::Move => drag.initial_rect.translate(super::super::object_ui::keep_on_page(drag.initial_rect, xf.rect, p - drag.start)),
+                    DragTarget::Move => {
+                        drag.initial_rect.translate(super::super::object_ui::keep_on_page(drag.initial_rect, xf.rect, p - drag.start))
+                    }
                     _ => drag.initial_rect,
                 };
 
