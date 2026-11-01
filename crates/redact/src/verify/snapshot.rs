@@ -42,7 +42,7 @@ pub struct Snapshot {
     src: (String, String),
     /// The names of the document (structure redaction never edits), for the name allowance of
     /// needles added later.
-    names: Vec<Vec<u8>>,
+    names: BTreeMap<Vec<u8>, usize>,
     /// Digests of the decoded content of the streams this run created to draw the redaction
     /// boxes and labels (see [`Snapshot::set_overlay_streams`]).
     overlay: HashSet<String>,
@@ -155,9 +155,12 @@ impl Snapshot {
         // `/Subtype`, a `/Filter`, a `/BaseFont`): names are structure redaction never edits,
         // so the output may hold the input's own matches, and only a surplus is a survivor.
         let names = all_names(doc);
-        let name_allow: Vec<usize> = needles.iter().map(|n| count_name_matches(&names, n, &ctx)).collect();
+        let name_allow: Vec<Option<usize>> = needles.iter().map(|n| count_name_matches(&names, n, &ctx)).collect();
+        if name_allow.iter().any(Option::is_none) {
+            problems.push("the name allowances could not be counted in full, so names are swept with none of them allowed".into());
+        }
         for (n, allow) in needles.iter_mut().zip(name_allow) {
-            n.name_allowance = allow;
+            n.name_allowance = allow.unwrap_or(0);
         }
         Ok(Snapshot { regions, pages, needles, problems, src: (src_text, src_raw), names, overlay: HashSet::new() })
     }
@@ -201,9 +204,13 @@ impl Snapshot {
             add_needle(&mut self.needles, false, text.to_string(), None);
             if !known {
                 let ctx = Ctx::new(HashSet::new());
+                let matches = self.needles.last().map(|n| count_name_matches(&self.names, n, &ctx));
                 if let Some(n) = self.needles.last_mut() {
                     n.allowance = count(&self.src.0, &n.key);
-                    n.name_allowance = count_name_matches(&self.names, n, &ctx);
+                    n.name_allowance = matches.flatten().unwrap_or(0);
+                }
+                if matches == Some(None) {
+                    self.problems.push("the name allowances could not be counted in full, so names are swept with none of them allowed".into());
                 }
             }
         }
@@ -397,14 +404,16 @@ impl Snapshot {
 /// Per page: the digest of its content in the output and its glyph-operator count.
 type PagesAfter = BTreeMap<usize, (Option<String>, Option<usize>)>;
 
-/// Every name of the document (the values, wherever an object holds them).
-fn all_names(doc: &Document) -> Vec<Vec<u8>> {
-    let mut names = Vec::new();
+/// Every name of the document (the values, wherever an object holds them), with how often
+/// each occurs.
+fn all_names(doc: &Document) -> BTreeMap<Vec<u8>, usize> {
+    let mut names: BTreeMap<Vec<u8>, usize> = BTreeMap::new();
     for num in doc.object_numbers() {
         if let Ok(obj) = doc.try_get(num) {
             walk_strings(&obj, 0, &mut |o| {
                 if let Object::Name(n) = o {
-                    names.push(n.clone());
+                    let seen = names.entry(n.clone()).or_default();
+                    *seen = seen.saturating_add(1);
                 }
             });
         }
@@ -412,12 +421,20 @@ fn all_names(doc: &Document) -> Vec<Vec<u8>> {
     names
 }
 
-/// How many of `names` carry `needle`, by the same search the sweep runs on a name.
-fn count_name_matches(names: &[Vec<u8>], needle: &Needle, ctx: &Ctx) -> usize {
+/// How many of `names` carry `needle`, by the same search the sweep runs on a name. `None`
+/// when the search work ran out: an unknown allowance must not read as "none allowed", so the
+/// caller reports that (and sweeps names with no allowance).
+fn count_name_matches(names: &BTreeMap<Vec<u8>, usize>, needle: &Needle, ctx: &Ctx) -> Option<usize> {
     if needle.short() {
-        return 0;
+        return Some(0);
     }
-    names.iter().filter(|n| bytes_hits(std::slice::from_ref(needle), n, MIN_NEEDLE, ctx).is_some_and(|h| !h.is_empty())).count()
+    let mut total = 0usize;
+    for (name, seen) in names {
+        if !bytes_hits(std::slice::from_ref(needle), name, MIN_NEEDLE, ctx)?.is_empty() {
+            total = total.saturating_add(*seen);
+        }
+    }
+    Some(total)
 }
 
 /// The page's content digest and glyph-operator count in the output, and per region the glyphs
