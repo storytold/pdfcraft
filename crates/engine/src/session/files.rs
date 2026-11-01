@@ -114,6 +114,24 @@ impl Session {
         .map_err(EditError::Write)
     }
 
+    /// What Convert colours would change on `pages` of `id`, without changing the document.
+    pub fn count_colours(&self, id: DocId, pages: &[usize], settings: &pdfcraft_edit::ConvertColours) -> pdfcraft_edit::ColoursConverted {
+        let Some(doc) = self.get(id) else { return Default::default() };
+        let Some(editor) = doc.editor.as_ref() else { return Default::default() };
+        let mut cos = editor.cos.clone();
+        let mut recolour = |doc: &pdfcraft_cos::Document, s: &pdfcraft_cos::Stream, t: pdfcraft_edit::ColourTarget| {
+            let target = match t {
+                pdfcraft_edit::ColourTarget::Gray => pdfcraft_optimize::ImageTarget::Gray,
+                pdfcraft_edit::ColourTarget::Rgb => pdfcraft_optimize::ImageTarget::Rgb,
+                pdfcraft_edit::ColourTarget::Cmyk => pdfcraft_optimize::ImageTarget::Cmyk,
+            };
+            pdfcraft_optimize::recolour_image(doc, s, target)
+        };
+        // The preview runs the image decoders over the document's own bytes; a panic in one is
+        // a count of nothing, not a crash.
+        guard(|| pdfcraft_edit::convert_colours(&mut cos, pages, settings, &mut recolour).unwrap_or_default()).unwrap_or_default()
+    }
+
     /// The print-ready PDF for `settings` (sheets laid out for the paper; see `pdfcraft-print`).
     pub fn print_pdf(&self, id: DocId, settings: &print::Settings) -> Result<Vec<u8>, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;

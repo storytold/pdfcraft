@@ -317,6 +317,11 @@ pub enum Edit {
     DeleteAttachment {
         key: String,
     },
+    /// Print production ▸ Convert colours: every colour on the pages in grayscale, RGB or CMYK.
+    ConvertColours {
+        pages: Vec<usize>,
+        settings: pdfcraft_edit::ConvertColours,
+    },
     /// Build a tagged structure tree for an untagged, text-only document.
     AutoTagText,
     /// Add alternate text: set (or clear, with `None`) a figure's alternate text. `figure` is
