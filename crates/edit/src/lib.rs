@@ -44,7 +44,9 @@ pub use objects::{EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget, ed
 mod flatten;
 pub use flatten::{flatten, flatten_fill_sign};
 pub mod images;
+pub mod shapes;
 pub use images::{ArrangeOrder, ImageChange, PageImage, change_image, page_images, reading_images, rect_to_rect, turn_about_centre, turn_by_degrees};
+pub use shapes::{MAX_PAGE_SHAPES, PageShape, ReadingShapes, Stroke, Subpath, reading_shapes};
 pub mod bidi;
 pub mod indic;
 mod linebreak;
@@ -52,7 +54,8 @@ pub mod paragraph_align;
 pub mod text;
 pub use text::{
     BlockKey, BlockStyle, LineEdit, MAX_FORM_DEPTH, MAX_FORM_VISITS, RangeStyle, ReadingBlocks, TextBlock, TextLine, TextSession, block_overlapping,
-    clear_block, glyph_text_lines, reading_blocks, reading_blocks_checked, replace_block, replace_line, rewrite_block, text_blocks, text_lines,
+    clear_block, glyph_text_lines, reading_blocks, reading_blocks_and_lines_checked, reading_blocks_checked, replace_block, replace_line,
+    rewrite_block, text_blocks, text_lines,
 };
 pub mod added;
 pub use added::{

@@ -219,6 +219,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-01 (M10, gap 8):** Export ▸ Word keeps a form's layout. The paths a page paints are read (`pdfcraft_edit::reading_shapes`) and drawn as VML lines, rectangles and polylines behind the text; a positioned page places its text line by line, split at column gaps and joined within a row, in the PDF font's family; AcroForm text fields become Word form fields in frames with their `/MaxLen`, check boxes and lists content controls, in tab order, and a document with fields is protected for filling in forms. Pages with fields or text framed by rules are positioned, and so is every page of a document most of whose pages are. Every export declares Word 2013 compatibility. A 7-page claim form now exports as 7 pages with its boxes, comb cells and fields (checked in LibreOffice, WordCraft and Word). Estimates unchanged.
+
 - **2026-11-01 (M14, #5572):** Preferences ▸ Documents and view sets how many recent files to keep, from 0 to 50 with 12 by default. At 0 Home has no Recent section and File ▸ Open Recent is disabled. The list is cut when Preferences closes, so the number can pass through 0 on its way to another.
 
 - 2026-11-01: PR #2155 further review preserves inherited Form text state and soft-mask chronology during Arrange, composes crop-group moves in the proper scope, and uses affine/press-relative image resize plus a shared rotation pivot. No-op script buttons preserve hidden source text; paste coordinates, visible selection ownership, and Snapshot/Export permissions have dedicated regressions. Candidate only; estimates unchanged.

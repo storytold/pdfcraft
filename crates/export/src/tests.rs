@@ -12,9 +12,10 @@ fn varied_page(n: usize) -> Page {
             color: [(i % 256) as f64 / 255.0, (i / 256 % 256) as f64 / 255.0, 0.5],
             rotation: 0.0,
             space_around: [false; 2],
+            font: String::new(),
         })
         .collect();
-    Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None }
+    Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), ..Page::default() }
 }
 
 fn lookup_steps(f: impl FnOnce()) -> usize {
@@ -51,6 +52,7 @@ fn page() -> Page {
         color: [0.0; 3],
         rotation: 0.0,
         space_around: [false; 2],
+        font: String::new(),
     };
     Page {
         width: 612.0,
@@ -69,6 +71,7 @@ fn page() -> Page {
             rotation: 0.0,
         }],
         background: None,
+        ..Page::default()
     }
 }
 
@@ -107,7 +110,7 @@ fn word_does_not_invent_borders_for_aligned_invoice_fields() {
 
 #[test]
 fn word_table_cell_widths_follow_the_columns_they_span() {
-    let cell = |text: &str, span| Cell { text: text.into(), size: 11.0, bold: false, italic: false, color: [0.0; 3], span };
+    let cell = |text: &str, span| Cell { text: text.into(), size: 11.0, bold: false, italic: false, color: [0.0; 3], span, font: String::new() };
     let table = Table {
         rect: [0.0, 0.0, 300.0, 100.0],
         cols: vec![0.0, 50.0, 150.0],
@@ -155,6 +158,7 @@ fn word_overlap_does_not_consume_invoice_body_space() {
         color: [0.8; 3],
         rotation: 0.0,
         space_around: [false; 2],
+        font: String::new(),
     });
     p.images = page().images;
     let xml = part(&docx(&[p], "Invoice"), "word/document.xml");
@@ -206,7 +210,7 @@ fn docx_keeps_a_shared_page_background() {
     ] {
         let zip = docx(&pages, "Plain");
         assert!(!part(&zip, "word/document.xml").contains("<w:background"), "{why}");
-        assert!(!zip.windows(b"word/settings.xml".len()).any(|w| w == b"word/settings.xml"), "{why}");
+        assert!(!part(&zip, "word/settings.xml").contains("<w:displayBackgroundShape/>"), "{why}");
     }
 }
 
@@ -242,6 +246,7 @@ fn word_opens_text_with_control_characters_and_long_pages() {
         color: [0.0; 3],
         rotation: 0.0,
         space_around: [false; 2],
+        font: String::new(),
     });
     let xml = part(&docx(&[p.clone()], "Receipt\u{1}"), "word/document.xml");
     assert!(xml.contains(">Total 4.50\tGBP</w:t>"), "{xml}");
@@ -296,6 +301,7 @@ fn rtf_escapes_and_sizes() {
         color: [0.0; 3],
         rotation: 0.0,
         space_around: [false; 2],
+        font: String::new(),
     });
     let r = rtf(&[p]);
     assert!(r.starts_with("{\\rtf1") && r.ends_with('}'));
@@ -314,6 +320,7 @@ fn table_page() -> Page {
         color: [0.0; 3],
         rotation: 0.0,
         space_around: [false; 2],
+        font: String::new(),
     };
     Page {
         width: 612.0,
@@ -338,10 +345,12 @@ fn table_page() -> Page {
                 color: [0.0; 3],
                 rotation: 0.0,
                 space_around: [false; 2],
+                font: String::new(),
             },
         ],
         images: Vec::new(),
         background: None,
+        ..Page::default()
     }
 }
 
@@ -399,6 +408,7 @@ fn a_staircase_of_blocks_is_not_a_huge_table() {
                 color: [0.0; 3],
                 rotation: 0.0,
                 space_around: [false; 2],
+                font: String::new(),
             }
         })
         .collect();
@@ -427,12 +437,14 @@ fn word_opens_tables_up_to_its_column_limit() {
                         color: [0.0; 3],
                         rotation: 0.0,
                         space_around: [false; 2],
+                        font: String::new(),
                     }
                 })
             })
             .collect(),
         images: Vec::new(),
         background: None,
+        ..Page::default()
     };
     let grid_cols = |p: &Page| part(&docx(std::slice::from_ref(p), "Grid"), "word/document.xml").matches("<w:gridCol ").count();
     assert_eq!(grid_cols(&grid(63)), 63, "63 columns is still a table");
@@ -441,7 +453,17 @@ fn word_opens_tables_up_to_its_column_limit() {
 }
 
 fn block(t: &str, x0: f64, y0: f64, x1: f64, y1: f64) -> Block {
-    Block { text: t.into(), rect: [x0, y0, x1, y1], size: 12.0, bold: false, italic: false, color: [0.0; 3], rotation: 0.0, space_around: [false; 2] }
+    Block {
+        text: t.into(),
+        rect: [x0, y0, x1, y1],
+        size: 12.0,
+        bold: false,
+        italic: false,
+        color: [0.0; 3],
+        rotation: 0.0,
+        space_around: [false; 2],
+        font: String::new(),
+    }
 }
 
 /// #2806: a sentence whose link is set in another colour or font runs on as separate blocks
@@ -468,6 +490,7 @@ fn a_link_inside_a_sentence_is_not_a_table_column() {
         ],
         images: Vec::new(),
         background: None,
+        ..Page::default()
     };
     let h = html(std::slice::from_ref(&p), "Regulations");
     assert!(!h.contains("<table>"), "running text became a table: {h}");
@@ -489,7 +512,7 @@ fn sentences_that_run_on_into_links_are_not_a_table() {
         blocks.push(block(lead, 72.0, y, 211.0, y + 12.0));
         blocks.push(blue("https://example.org/event", 212.5, y, 360.0, y + 12.0));
     }
-    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None };
+    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), ..Page::default() };
     let h = html(std::slice::from_ref(&p), "Event");
     assert!(!h.contains("<table>"), "sentences became a table: {h}");
     assert_eq!(h.matches("https://example.org/event").count(), 3, "{h}");
@@ -540,7 +563,7 @@ fn a_superscript_beside_a_number_keeps_its_table() {
         blocks.push(Block { size: 8.0, ..block(sup, 106.0, y + 5.0, 113.0, y + 13.0) });
         blocks.push(block(&format!("{},000", 30 - 5 * n), 300.0, y, 340.0, y + 12.0));
     }
-    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None };
+    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), ..Page::default() };
     let h = html(std::slice::from_ref(&p), "Prizes");
     assert!(h.contains("<table>"), "the prize table was lost: {h}");
     assert!(h.contains("30,000") && h.contains("15,000"), "{h}");
@@ -561,6 +584,7 @@ fn two_column_body_text_is_not_mistaken_for_a_table() {
         color: [0.0; 3],
         rotation: 0.0,
         space_around: [false; 2],
+        font: String::new(),
     };
     let p = Page {
         width: 612.0,
@@ -573,6 +597,7 @@ fn two_column_body_text_is_not_mistaken_for_a_table() {
         ],
         images: Vec::new(),
         background: None,
+        ..Page::default()
     };
     let h = html(&[p], "Paper");
     assert!(!h.contains("<table>"), "tall two-column text must stay paragraphs: {h}");
@@ -657,7 +682,7 @@ fn italic_sentence() -> Vec<Block> {
 fn an_italic_word_stays_in_its_sentence() {
     let mut blocks = italic_sentence();
     blocks.push(block("The next line is a paragraph of its own.", 72.0, 684.0, 300.0, 696.0));
-    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None };
+    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), ..Page::default() };
     let xml = part(&docx(std::slice::from_ref(&p), "Opinion"), "word/document.xml");
     assert_eq!(
         word_paragraphs(&xml),
@@ -682,7 +707,7 @@ fn an_italic_word_stays_in_its_sentence() {
 fn a_sentence_keeps_its_reading_order() {
     let mut blocks = vec![block("Then the next line.", 72.0, 684.0, 200.0, 696.0)];
     blocks.extend(italic_sentence().into_iter().rev());
-    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None };
+    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), ..Page::default() };
     let xml = part(&docx(std::slice::from_ref(&p), "Opinion"), "word/document.xml");
     assert_eq!(
         word_paragraphs(&xml),
@@ -703,7 +728,7 @@ fn runs_keep_the_spaces_the_source_had_between_them() {
         block("E = mc", 72.0, 660.0, 110.0, 672.0),
         Block { size: 8.0, ..block("2", 110.0, 665.0, 115.0, 673.0) },
     ];
-    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None };
+    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), ..Page::default() };
     let xml = part(&docx(std::slice::from_ref(&p), "Spaces"), "word/document.xml");
     assert_eq!(
         word_paragraphs(&xml),
@@ -715,7 +740,7 @@ fn runs_keep_the_spaces_the_source_had_between_them() {
 #[test]
 fn turned_text_is_not_a_run_of_the_line_beside_it() {
     let blocks = vec![block("Before", 72.0, 700.0, 110.0, 712.0), Block { rotation: 90.0, ..block("SIDE", 111.0, 690.0, 123.0, 720.0) }];
-    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None };
+    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), ..Page::default() };
     let h = html(std::slice::from_ref(&p), "Turned");
     assert!(h.contains("<p>Before</p>") && h.contains("<p>SIDE</p>"), "{h}");
 }
@@ -726,7 +751,7 @@ fn a_block_on_the_next_line_starts_a_paragraph() {
         block("The first line ends here", 72.0, 700.0, 190.0, 712.0),
         Block { italic: true, ..block("and the next starts there.", 190.5, 690.0, 320.0, 702.0) },
     ];
-    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None };
+    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), ..Page::default() };
     let xml = part(&docx(std::slice::from_ref(&p), "Lines"), "word/document.xml");
     assert_eq!(word_paragraphs(&xml), vec![runs(&[("The first line ends here", false)]), runs(&[("and the next starts there.", true)])], "{xml}");
 }
@@ -743,7 +768,7 @@ fn table_cells_are_not_runs_of_a_paragraph() {
         blocks.push(block(&format!("{},000", 30 - 5 * n), 300.0, y, 340.0, y + 12.0));
     }
     blocks.extend(italic_sentence().into_iter().map(|b| Block { rect: [b.rect[0], b.rect[1] - 200.0, b.rect[2], b.rect[3] - 200.0], ..b }));
-    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None };
+    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), ..Page::default() };
     let xml = part(&docx(std::slice::from_ref(&p), "Prizes"), "word/document.xml");
     assert_eq!(xml.matches("<w:tbl>").count(), 1, "{xml}");
     for cell in ["st", "nd", "rd", "30,000"] {
@@ -763,7 +788,7 @@ fn a_paragraph_is_a_heading_only_when_its_text_is() {
         Block { bold: true, ..block("Summary", 72.0, 700.0, 125.0, 712.0) },
         block("the year closed with more members than it opened with, and fewer debts.", 128.0, 700.0, 540.0, 712.0),
     ];
-    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None };
+    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), ..Page::default() };
     let xml = part(&docx(std::slice::from_ref(&p), "Report"), "word/document.xml");
     assert_eq!(xml.matches("<w:pStyle w:val=\"Heading1\"/>").count(), 1, "{xml}");
     assert!(!xml.contains("Heading2"), "the lead-in made its paragraph a heading: {xml}");
@@ -799,6 +824,7 @@ fn markdown_escapes_markup_and_keeps_emphasis_and_tables() {
         color: [0.0; 3],
         rotation: 0.0,
         space_around: [false; 2],
+        font: String::new(),
     };
     let p = Page {
         width: 612.0,
@@ -812,6 +838,7 @@ fn markdown_escapes_markup_and_keeps_emphasis_and_tables() {
         ],
         images: Vec::new(),
         background: None,
+        ..Page::default()
     };
     let md = markdown(&[p]);
     assert!(md.contains("\\- not a list item"), "{md}");
@@ -840,4 +867,340 @@ fn markdown_escapes_markup_and_keeps_emphasis_and_tables() {
     assert_eq!(rows.get(1), Some(&"| --- | --- | --- |"), "{md}");
     assert!(rows.contains(&"| A1 | kWh | 37414.00 |"), "{md}");
     assert!(rows.iter().all(|r| r.matches(" | ").count() == 2), "every row has the header's three cells: {md}");
+}
+
+/// A stroked axis-aligned box around `r` ([x0, y0, x1, y1], y up).
+fn boxed(r: [f64; 4]) -> Shape {
+    Shape {
+        paths: vec![(vec![[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]], true)],
+        stroke: Some(Stroke { color: [0.0; 3], width: 0.7, dashed: false }),
+        fill: None,
+    }
+}
+
+/// A form page like a pension office's refund claim: labels in boxes, comb cells, and fields.
+fn form_page() -> Page {
+    let labels = ["Name", "First name", "Birth name", "Date of birth", "Street", "Postcode", "Town"];
+    let mut blocks = Vec::new();
+    let mut shapes = Vec::new();
+    for (i, t) in labels.iter().enumerate() {
+        let y = 700.0 - 30.0 * i as f64;
+        blocks.push(Block { size: 8.0, ..block(t, 60.0, y + 14.0, 120.0, y + 22.0) });
+        let mut frame = boxed([56.0, y, 540.0, y + 24.0]);
+        if i % 2 == 0 {
+            // Drawn as this claim form's producer draws them: four segments back to the corner,
+            // left open (`m l l l l S`).
+            let (points, _) = &frame.paths[0];
+            let mut open = points.clone();
+            open.push(points[0]);
+            frame.paths = vec![(open, false)];
+        }
+        shapes.push(frame);
+    }
+    // A comb cell's tick, a dashed rule and a free-form (curved) mark.
+    shapes.push(Shape { paths: vec![(vec![[80.0, 400.0], [80.0, 404.0]], false)], ..boxed([0.0; 4]) });
+    shapes.push(Shape {
+        stroke: Some(Stroke { color: [1.0, 0.0, 0.0], width: 0.0, dashed: true }),
+        paths: vec![(vec![[60.0, 380.0], [300.0, 380.0]], false)],
+        fill: None,
+    });
+    shapes.push(Shape { paths: vec![(vec![[100.0, 300.0], [120.0, 320.0], [140.0, 300.0]], true)], stroke: None, fill: Some([0.5; 3]) });
+    shapes.push(Shape { paths: vec![(vec![[60.0, 500.0], [70.0, 510.0]], false)], ..boxed([0.0; 4]) });
+    let fields = vec![
+        Field {
+            name: "Name".into(),
+            rect: [60.0, 700.0, 300.0, 712.0],
+            size: 0.0,
+            kind: FieldKind::Text { value: String::new(), multiline: false, comb: None, max_len: None },
+        },
+        Field {
+            name: "Postcode".into(),
+            rect: [60.0, 520.0, 160.0, 532.0],
+            size: 10.0,
+            kind: FieldKind::Text { value: "10115".into(), multiline: false, comb: Some(5), max_len: Some(5) },
+        },
+        Field {
+            name: "Notes".into(),
+            rect: [60.0, 200.0, 540.0, 260.0],
+            size: 9.0,
+            kind: FieldKind::Text { value: "a & b".into(), multiline: true, comb: None, max_len: None },
+        },
+        Field { name: "Yes".into(), rect: [60.0, 150.0, 70.0, 160.0], size: 0.0, kind: FieldKind::Check { checked: true } },
+        Field { name: "No".into(), rect: [90.0, 150.0, 100.0, 160.0], size: 0.0, kind: FieldKind::Check { checked: false } },
+        Field {
+            name: "Fund".into(),
+            rect: [120.0, 150.0, 300.0, 162.0],
+            size: 0.0,
+            kind: FieldKind::Choice { value: "Health".into(), options: vec!["Health".into(), "Pension".into()] },
+        },
+    ];
+    Page { width: 595.0, height: 842.0, blocks, shapes, fields, ..Page::default() }
+}
+
+/// A form exported to Word keeps its layout: its boxes, rules and comb cells are VML shapes
+/// behind the text, in painting order, and its labels stay where they were (gap 8: the boxes
+/// and fields were all lost, and the labels reflowed onto twice as many pages).
+#[test]
+fn word_keeps_a_forms_boxes_rules_and_labels_in_place() {
+    let xml = part(&docx(&[form_page()], "Claim"), "word/document.xml");
+    assert!(!xml.contains("<w:tbl>") && !xml.contains("<wp:inline>"), "nothing flows: {xml}");
+    // Boxes, closed or drawn back to their corner: an axis-aligned rectangle each, measured from
+    // the page's top-left corner (a free-form path showed a box as a diagonal in LibreOffice).
+    assert_eq!(xml.matches("<v:rect id=\"Shape").count(), 7, "{xml}");
+    assert!(xml.contains("margin-left:56.000pt;margin-top:118.000pt;width:484.000pt;height:24.000pt"), "{xml}");
+    assert!(xml.contains("stroked=\"t\" strokecolor=\"#000000\" strokeweight=\"0.70pt\" filled=\"f\""), "{xml}");
+    // A straight segment is a line, y down, written from its top end (LibreOffice drew nothing
+    // for the comb ticks this form draws upwards); a rising diagonal is a two-point polyline.
+    assert!(xml.contains("from=\"80.000pt,438.000pt\" to=\"80.000pt,442.000pt\""), "{xml}");
+    assert!(xml.contains("<v:polyline id=\"Shape11\" style=\"position:absolute;z-index:-4;mso-position-horizontal-relative:page;mso-position-vertical-relative:page\" points=\"60.000pt,342.000pt,70.000pt,332.000pt\""), "{xml}");
+    // A 0 pt line is drawn at the thinnest visible width.
+    assert!(xml.contains("strokecolor=\"#FF0000\" strokeweight=\"0.25pt\""), "{xml}");
+    assert!(xml.contains("<v:stroke dashstyle=\"dash\"/>"), "{xml}");
+    // Anything else is a polyline, closed back to its first point when it is closed or filled.
+    assert!(xml.contains("points=\"100.000pt,542.000pt,120.000pt,522.000pt,140.000pt,542.000pt,100.000pt,542.000pt\""), "{xml}");
+    assert!(xml.contains("filled=\"t\" fillcolor=\"#808080\""), "{xml}");
+    // Painting order: the first shape is furthest back, and every shape is behind the text.
+    let z: Vec<i64> =
+        xml.split("id=\"Shape").skip(1).map(|s| s.split("z-index:").nth(1).unwrap().split(';').next().unwrap().parse().unwrap()).collect();
+    assert_eq!(z.len(), 11);
+    assert!(z.windows(2).all(|w| w[0] < w[1]) && z.iter().all(|z| *z < -2), "{z:?}");
+    // The labels keep their places, one line each that never wraps (and has room to spare for
+    // readers that wrap anyway).
+    assert!(xml.contains("margin-left:60.000pt;margin-top:120.000pt;width:77.000pt;height:8.000pt;rotation:0.000;z-index:1;"), "{xml}");
+    // A long line's spare room ends at the page's edge: 60 + 480 × 1.25 + 2 would pass 595.
+    let mut long = form_page();
+    long.blocks.push(Block { size: 10.0, ..block("A line nearly as wide as the page", 60.0, 30.0, 540.0, 40.0) });
+    assert!(part(&docx(&[long], "Long"), "word/document.xml").contains("margin-left:60.000pt;margin-top:802.000pt;width:535.000pt;"));
+    // The width is fixed: Word caps a box that sizes itself at the width between the margins.
+    assert!(!xml.contains("mso-wrap-style"), "{xml}");
+}
+
+/// A form's fields become fields a Word user can fill in, over their boxes, limited to the
+/// PDF's maximum length, in a document protected for filling in forms.
+#[test]
+fn word_makes_a_forms_fields_fillable_within_their_limits() {
+    let xml = part(&docx(&[form_page()], "Claim"), "word/document.xml");
+    // Fields: framed paragraphs over the fields' boxes, which Word places out of the text flow.
+    assert_eq!(xml.matches("<w:framePr ").count(), 6, "{xml}");
+    // The comb field's frame reaches one cell (20 pt) past its box: Word spaces the last
+    // character too, and in Word the last digit of a postcode wrapped out of sight.
+    // Its line of 10 pt text (11.5 pt high) sits in the middle of the 12 pt box: the frame
+    // starts a quarter point lower, rather than its paragraph having space before it.
+    assert!(xml.contains("<w:framePr w:w=\"2400\" w:h=\"235\" w:hRule=\"exact\" w:wrap=\"around\" w:vAnchor=\"page\" w:hAnchor=\"page\" w:x=\"1200\" w:y=\"6205\"/><w:spacing w:before=\"0\""), "{xml}");
+    // The page places everything itself: a quarter-inch top margin, so that Word doesn't move
+    // a field framed near the top of the page down to a one-inch margin.
+    assert!(xml.contains("<w:pgMar w:top=\"360\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"180\""), "{xml}");
+    // Text fields are Word form fields named after the field; one with a maximum length in the
+    // PDF takes no more characters in Word either.
+    assert_eq!(xml.matches(" FORMTEXT ").count(), 3);
+    assert!(
+        xml.contains(
+            "<w:name w:val=\"Name\"/><w:enabled/><w:calcOnExit w:val=\"0\"/><w:statusText w:type=\"text\" w:val=\"Name\"/><w:textInput></w:textInput>"
+        ),
+        "{xml}"
+    );
+    assert!(xml.contains("<w:name w:val=\"Postcode\"/>") && xml.contains("<w:textInput><w:maxLength w:val=\"5\"/></w:textInput>"), "{xml}");
+    // A comb field spaces its characters one cell apart: 100 pt over 5 cells, 10 pt text.
+    assert!(xml.contains("<w:spacing w:val=\"290\"/><w:sz w:val=\"20\"/></w:rPr><w:t xml:space=\"preserve\">10115</w:t>"), "{xml}");
+    assert!(xml.contains(">a &amp; b</w:t>"), "{xml}");
+    // Check boxes and lists are content controls.
+    assert_eq!(xml.matches("<w:sdt>").count(), 3);
+    assert!(xml.contains("<w14:checked w14:val=\"1\"/>") && xml.contains("<w14:checked w14:val=\"0\"/>"), "{xml}");
+    assert!(xml.contains("<w:dropDownList><w:listItem w:displayText=\"Health\" w:value=\"Health\"/>"), "{xml}");
+    // Word reads the check boxes through the Word 2010 namespace, which older readers may skip.
+    assert!(xml.contains("mc:Ignorable=\"w14\""), "{xml}");
+    // The document is protected for filling in forms, without a password, so the limits hold
+    // and only the fields can be changed.
+    let zip = docx(&[form_page()], "Claim");
+    assert_eq!(
+        part(&zip, "word/settings.xml"),
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<w:settings xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:documentProtection w:edit=\"forms\" w:enforcement=\"1\"/><w:compat><w:compatSetting w:name=\"compatibilityMode\" w:uri=\"http://schemas.microsoft.com/office/word\" w:val=\"15\"/></w:compat></w:settings>"
+    );
+    assert!(part(&zip, "[Content_Types].xml").contains("/word/settings.xml"));
+    assert!(part(&zip, "word/_rels/document.xml.rels").contains("Target=\"settings.xml\""));
+}
+
+/// Word's form field names name bookmarks: letters, digits and `_`, starting with a letter, at
+/// most 20 characters and unique; a PDF's dotted, numbered, accented or repeated names become such.
+#[test]
+fn word_form_field_names_are_valid_and_unique() {
+    let mut p = form_page();
+    let text = |name: &str| Field {
+        name: name.into(),
+        rect: [60.0, 50.0, 200.0, 62.0],
+        size: 0.0,
+        kind: FieldKind::Text { value: String::new(), multiline: false, comb: None, max_len: Some(8) },
+    };
+    p.fields =
+        vec![text("Arbeitnehmeranteil.Betrag.1"), text("Arbeitnehmeranteil.Betrag.2"), text("1. Betrag (€)"), text("Name"), text("Name"), text("")];
+    let xml = part(&docx(&[p], "Names"), "word/document.xml");
+    let names: Vec<&str> = xml.split("<w:name w:val=\"").skip(1).map(|s| s.split('"').next().unwrap()).collect();
+    assert_eq!(names.len(), 6, "{xml}");
+    assert_eq!(names[0], "Arbeitnehmeranteil_B");
+    assert!(names[1].starts_with("Arbeitnehmeran") && names[1].len() <= 20 && names[1] != names[0], "{names:?}");
+    assert_eq!(names[2], "F1__Betrag____");
+    assert_eq!(names[3], "Name");
+    assert!(names[4].starts_with("Name_"));
+    assert_eq!(names[5], "F");
+    assert!(
+        names
+            .iter()
+            .all(|n| n.len() <= 20 && n.starts_with(|c: char| c.is_ascii_alphabetic()) && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+    );
+    let unique: std::collections::HashSet<_> = names.iter().collect();
+    assert_eq!(unique.len(), names.len());
+    assert_eq!(xml.matches("<w:maxLength w:val=\"8\"/>").count(), 6);
+}
+
+/// A page whose text is framed by boxes (a bordered table, a ruled form) keeps them even without
+/// form fields; a page of running text with a few horizontal rules (underlines, a header line)
+/// still flows as paragraphs, and Word leaves the rules out.
+#[test]
+fn word_positions_ruled_pages_and_lets_underlined_text_flow() {
+    let ruled = Page { fields: Vec::new(), ..form_page() };
+    assert!(part(&docx(&[ruled], "Ruled"), "word/document.xml").contains("<v:rect id=\"Shape"));
+
+    let mut text = page();
+    text.images.clear();
+    for y in [395.0, 500.0, 600.0, 690.0] {
+        text.shapes.push(Shape { paths: vec![(vec![[72.0, y], [500.0, y]], false)], ..boxed([0.0; 4]) });
+    }
+    let xml = part(&docx(&[text.clone()], "Report"), "word/document.xml");
+    assert!(!xml.contains("position:absolute"), "underlines alone don't hold a page in place: {xml}");
+    // Five upright boxes around text are not yet a form either; six are.
+    let mut framed = text.clone();
+    for i in 0..FRAMING_SHAPES - 1 {
+        framed.shapes.push(boxed([70.0, 398.0 - i as f64, 502.0, 413.0 + i as f64]));
+    }
+    assert!(!part(&docx(&[framed.clone()], "Report"), "word/document.xml").contains("position:absolute"));
+    framed.shapes.push(boxed([70.0, 690.0, 502.0, 726.0]));
+    assert!(part(&docx(&[framed], "Report"), "word/document.xml").contains("position:absolute"));
+}
+
+/// Hostile shapes and fields (no points, non-finite or huge coordinates, no paint, too many)
+/// write a package that still opens, within the page's shape budget.
+#[test]
+fn word_bounds_hostile_shapes_and_fields() {
+    let mut p = form_page();
+    p.shapes.push(Shape { paths: Vec::new(), ..boxed([0.0; 4]) });
+    p.shapes.push(Shape { paths: vec![(vec![[f64::NAN, 1.0], [f64::INFINITY, 2.0]], false)], ..boxed([0.0; 4]) });
+    p.shapes.push(Shape { stroke: None, fill: None, ..boxed([1.0, 1.0, 2.0, 2.0]) });
+    p.shapes
+        .push(Shape { stroke: Some(Stroke { color: [f64::NAN; 3], width: f64::INFINITY, dashed: false }), ..boxed([-1e300, -1e300, 1e300, 1e300]) });
+    p.fields.push(Field { name: "<&>\u{0}".into(), rect: [f64::NAN, 0.0, 1.0, 1.0], size: f64::NAN, kind: FieldKind::Check { checked: true } });
+    p.fields.push(Field {
+        name: "x".into(),
+        rect: [0.0, 0.0, 1e300, 1e300],
+        size: -5.0,
+        kind: FieldKind::Text { value: "1".into(), multiline: false, comb: Some(0), max_len: Some(0) },
+    });
+    for i in 0..MAX_DOCX_PAGE_SHAPES + 50 {
+        p.shapes.push(Shape { paths: vec![(vec![[1.0, i as f64 / 100.0], [2.0, 3.0]], false)], ..boxed([0.0; 4]) });
+    }
+    let xml = part(&docx(&[p], "Hostile"), "word/document.xml");
+    assert!(xml.matches("id=\"Shape").count() <= MAX_DOCX_PAGE_SHAPES);
+    assert!(!xml.contains("NaN") && !xml.contains("inf"), "no non-finite number reaches the XML");
+    assert!(!xml.contains('\u{0}'));
+}
+
+/// The PDF's font names become the families Word knows, so text keeps its face and width (the
+/// claim form's Arial showed in Word's default serif and overran its boxes).
+#[test]
+fn word_sets_text_in_the_family_of_its_pdf_font() {
+    for (base, family) in [
+        ("BFPKIJ+Arial-BoldMT", Some("Arial")),
+        ("ArialMT", Some("Arial")),
+        ("Helvetica-Oblique", Some("Arial")),
+        ("TimesNewRomanPSMT", Some("Times New Roman")),
+        ("Times-Roman", Some("Times New Roman")),
+        ("Courier", Some("Courier New")),
+        ("SegoeUI,Bold", Some("Segoe UI")),
+        ("ABCDEF+MinionPro-Regular", Some("Minion Pro")),
+        ("ITCAvantGarde", Some("ITC Avant Garde")),
+        ("Symbol", Some("Symbol")),
+        ("", None),
+        ("ABCDEF+", None),
+        ("-Bold", None),
+        ("MT", Some("MT")),
+    ] {
+        assert_eq!(word_font(base).as_deref(), family, "{base}");
+    }
+    assert!(word_font(&"VeryLongFamilyName".repeat(5)).is_some_and(|f| f.chars().count() <= 31));
+
+    let mut p = form_page();
+    p.blocks[0].font = "BFPKJL+ArialMT".into();
+    p.blocks[1].font = "Bad\"<Name>".into();
+    let xml = part(&docx(&[p.clone()], "Fonts"), "word/document.xml");
+    assert!(
+        xml.contains(
+            "<w:rFonts w:ascii=\"Arial\" w:hAnsi=\"Arial\" w:cs=\"Arial\"/><w:sz w:val=\"16\"/></w:rPr><w:t xml:space=\"preserve\">Name</w:t>"
+        ),
+        "{xml}"
+    );
+    assert!(xml.contains("w:ascii=\"Bad&quot;&lt;Name&gt;\""), "names are escaped: {xml}");
+    // Flowing pages and table cells carry it too.
+    let mut flowing = page();
+    flowing.blocks[0].font = "TimesNewRomanPSMT".into();
+    assert!(part(&docx(&[flowing], "Report"), "word/document.xml").contains("<w:rFonts w:ascii=\"Times New Roman\""));
+    let mut table = table_page();
+    for b in &mut table.blocks {
+        b.font = "Courier".into();
+    }
+    let xml = part(&docx(&[table], "Invoice"), "word/document.xml");
+    assert!(xml.contains("<w:tbl>") && xml.contains("<w:tc><w:tcPr>") && xml.contains("<w:rFonts w:ascii=\"Courier New\""), "{xml}");
+}
+
+/// A form whose last page holds only notes keeps that page's layout too, when most of its pages
+/// keep theirs: flowing it pushed its footer onto a page of its own (seven pages became eight).
+/// A report with one form page among flowing pages still flows.
+#[test]
+fn word_keeps_every_page_of_a_mostly_positioned_document_in_place() {
+    let mut notes = page();
+    notes.images.clear();
+    let positioned = |pages: &[Page]| part(&docx(pages, "Claim"), "word/document.xml").contains(">Annual Report</w:t></w:r></w:p></w:txbxContent>");
+    assert!(positioned(&[form_page(), form_page(), notes.clone()]), "two form pages of three");
+    assert!(!positioned(&[form_page(), notes.clone(), notes.clone()]), "one form page of three");
+    assert!(!positioned(&[form_page(), notes.clone()]), "half is not most");
+    // A flowing page keeps its one-inch margins.
+    let xml = part(&docx(&[form_page(), notes.clone()], "Claim"), "word/document.xml");
+    assert!(xml.contains("<w:pgMar w:top=\"360\"") && xml.contains("<w:pgMar w:top=\"1440\""), "{xml}");
+}
+
+/// Every shape Word draws counts against the page's limit, not every path: one path of many
+/// subpaths wrote a VML shape per subpath past the limit, without a word. A page that has to
+/// leave shapes, points or fields out is listed; one that fits is not.
+#[test]
+fn word_counts_every_subpath_against_the_page_limit() {
+    let tick = |i: usize| (vec![[1.0, 100.0 + i as f64 / 100.0], [2.0, 110.0]], false);
+    let with = |subpaths: usize| {
+        let mut p = form_page();
+        p.shapes.push(Shape { paths: (0..subpaths).map(tick).collect(), ..boxed([0.0; 4]) });
+        p
+    };
+    // The form page draws 11 shapes of its own.
+    let fits = with(MAX_DOCX_PAGE_SHAPES - 11);
+    let (zip, dropped) = docx_checked(&[fits], "Fits");
+    assert!(dropped.is_empty());
+    assert_eq!(part(&zip, "word/document.xml").matches("id=\"Shape").count(), MAX_DOCX_PAGE_SHAPES);
+    let (zip, dropped) = docx_checked(&[form_page(), with(MAX_DOCX_PAGE_SHAPES)], "Too many");
+    assert_eq!(dropped, [1], "the second page is cut short");
+    let xml = part(&zip, "word/document.xml");
+    let second = xml.split("<w:sectPr>").nth(1).unwrap();
+    assert_eq!(second.matches("id=\"Shape").count(), MAX_DOCX_PAGE_SHAPES, "it keeps the first ones");
+    // One polyline with more points than the page holds is left out, and the page listed.
+    let mut long = form_page();
+    long.shapes.push(Shape {
+        paths: vec![((0..=MAX_DOCX_PAGE_POINTS).map(|i| [i as f64 % 500.0, (i / 500) as f64 % 800.0]).collect(), false)],
+        ..boxed([0.0; 4])
+    });
+    assert_eq!(docx_checked(&[long], "Long").1, [0]);
+    // More fields than a page holds.
+    let mut fields = form_page();
+    let field = fields.fields[0].clone();
+    fields.fields = vec![field; MAX_DOCX_PAGE_SHAPES + 1];
+    assert_eq!(docx_checked(&[fields], "Fields").1, [0]);
+    // A flowing page draws no shapes, so it is never listed.
+    let mut text = page();
+    text.shapes = vec![Shape { paths: (0..MAX_DOCX_PAGE_SHAPES + 1).map(tick).collect(), ..boxed([0.0; 4]) }];
+    assert!(docx_checked(&[text], "Report").1.is_empty());
 }

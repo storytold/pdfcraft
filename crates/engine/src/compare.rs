@@ -173,15 +173,39 @@ pub struct OfficeExport {
     /// The exported file.
     pub bytes: Vec<u8>,
     /// Pages (0-based) that draw forms nested deeper than [`MAX_FORM_DEPTH`] or more of them
-    /// than [`MAX_FORM_VISITS`], or pictures past [`MAX_EXPORT_IMAGE_BYTES`]: export stops
-    /// reading there to stay bounded on hostile files, so the text and images of those forms, or
-    /// those pictures, are missing from `bytes`.
+    /// than [`MAX_FORM_VISITS`], pictures past [`MAX_EXPORT_IMAGE_BYTES`], or (Word) more paths
+    /// than [`pdfcraft_edit::MAX_PAGE_SHAPES`] or more shapes, points or fields than a Word page
+    /// holds ([`pdfcraft_export::docx_checked`]): export stops there to stay bounded on hostile
+    /// files, so the text and images of those forms, those pictures, shapes or fields are missing
+    /// from `bytes`.
     pub truncated_pages: Vec<usize>,
 }
 
 /// An image object prepared for Office export: its file extension and encoded bytes, or why it is
 /// left out (`Err(true)`: past [`MAX_EXPORT_IMAGE_BYTES`]; `Err(false)`: it can't be encoded).
 type PreparedImage = Result<(&'static str, Arc<[u8]>), bool>;
+
+/// A form field's widget as an exported field, its box on the visible page (`visible`).
+fn export_field(f: &pdfcraft_forms::Field, w: &pdfcraft_forms::Widget, visible: &dyn Fn([f64; 4]) -> [f64; 4]) -> Option<pdfcraft_export::Field> {
+    use pdfcraft_forms::{FieldKind, flags};
+    let kind = match f.kind {
+        FieldKind::Text => pdfcraft_export::FieldKind::Text {
+            value: f.value.join(""),
+            multiline: f.has(flags::MULTILINE),
+            comb: f.is_comb().then_some(f.max_len).flatten(),
+            max_len: f.max_len.filter(|n| *n > 0),
+        },
+        // A check box, or one button of a radio group: on when the value is its on state.
+        FieldKind::CheckBox | FieldKind::Radio => {
+            pdfcraft_export::FieldKind::Check { checked: w.on_state.as_ref().is_some_and(|on| f.value.iter().any(|v| v == on)) }
+        }
+        FieldKind::Combo | FieldKind::List => {
+            pdfcraft_export::FieldKind::Choice { value: f.display_value(), options: f.options.iter().map(|(_, shown)| shown.clone()).collect() }
+        }
+        FieldKind::PushButton | FieldKind::Signature => return None,
+    };
+    Some(pdfcraft_export::Field { name: f.name.clone(), rect: visible(w.rect), size: pdfcraft_forms::appearance::parse_da(&f.da).size, kind })
+}
 
 impl crate::Document {
     /// The pages as paragraphs and images (for Word, HTML and RTF export), including what
@@ -194,11 +218,34 @@ impl crate::Document {
     /// pictures went past `image_budget` bytes ([`OfficeExport::truncated_pages`]). Without
     /// `images` no picture is prepared.
     pub(crate) fn export_pages_checked(&self, images: bool, image_budget: usize) -> (Vec<pdfcraft_export::Page>, Vec<usize>) {
+        self.export_pages_with(images, image_budget, true)
+    }
+
+    /// [`Self::export_pages_checked`]; with `art` also the vector paths and form fields, which
+    /// only Word uses (a limit that cuts the paths short truncates the page too).
+    fn export_pages_with(&self, images: bool, image_budget: usize, art: bool) -> (Vec<pdfcraft_export::Page>, Vec<usize>) {
         let Some(cos) = self.editor.as_ref().map(|e| &e.cos) else { return (Vec::new(), Vec::new()) };
         let mut truncated = Vec::new();
         // Each image object is encoded once and shared by every place that draws it.
         let mut encoded: HashMap<ObjRef, PreparedImage> = HashMap::new();
         let mut image_bytes = image_budget;
+        // Form fields by page (0-based), read once: Word keeps them as content controls.
+        let mut fields_by_page: HashMap<usize, Vec<(&pdfcraft_forms::Field, &pdfcraft_forms::Widget)>> = HashMap::new();
+        let fields = if art { pdfcraft_forms::fields(cos) } else { Vec::new() };
+        for f in &fields {
+            if matches!(f.kind, pdfcraft_forms::FieldKind::PushButton | pdfcraft_forms::FieldKind::Signature) {
+                continue;
+            }
+            for w in f.widgets.iter().filter(|w| !w.hidden) {
+                if let Some(p) = w.page {
+                    fields_by_page.entry(p).or_default().push((f, w));
+                }
+            }
+        }
+        // In the page's tab order: a protected Word form tabs through its fields in body order.
+        for on_page in fields_by_page.values_mut() {
+            on_page.sort_by_key(|(_, w)| w.tab);
+        }
         let pages = self
             .info
             .pages
@@ -215,28 +262,31 @@ impl crate::Document {
                 let crop_width = f64::from(info.crop[2] - info.crop[0]);
                 let display_width = f64::from(if info.rotation % 180 == 0 { info.width } else { info.height });
                 let unit = if crop_width > 0.0 && crop_width.is_finite() && display_width.is_finite() { display_width / crop_width } else { 1.0 };
-                let reading = pdfcraft_edit::reading_blocks_checked(cos, i).unwrap_or_default();
+                // Word also places a positioned page's text line by line.
+                let (reading, lines) = if art {
+                    pdfcraft_edit::reading_blocks_and_lines_checked(cos, i).unwrap_or_default()
+                } else {
+                    (pdfcraft_edit::reading_blocks_checked(cos, i).unwrap_or_default(), Vec::new())
+                };
                 let forms_unread = reading.truncated;
-                let blocks = reading
-                    .blocks
-                    .into_iter()
-                    .filter(|b| !b.text.trim().is_empty())
-                    .map(|b| {
-                        let f = b.base_font.to_ascii_lowercase();
-                        // `text` is trimmed; the editor text keeps the source's own spaces.
-                        let space_around = [b.editor_text.starts_with(char::is_whitespace), b.editor_text.ends_with(char::is_whitespace)];
-                        pdfcraft_export::Block {
-                            space_around,
-                            text: b.text,
-                            rect: visible_rect(b.rect),
-                            size: b.size * unit,
-                            bold: f.contains("bold") || f.contains("black") || f.contains("heavy"),
-                            italic: f.contains("italic") || f.contains("oblique"),
-                            color: b.color,
-                            rotation: b.rotation - f64::from(info.rotation),
-                        }
-                    })
-                    .collect();
+                let to_block = |b: pdfcraft_edit::TextBlock| {
+                    let f = b.base_font.to_ascii_lowercase();
+                    // `text` is trimmed; the editor text keeps the source's own spaces.
+                    let space_around = [b.editor_text.starts_with(char::is_whitespace), b.editor_text.ends_with(char::is_whitespace)];
+                    pdfcraft_export::Block {
+                        space_around,
+                        font: pdfcraft_edit::strip_subset_tag(&b.base_font).to_string(),
+                        text: b.text,
+                        rect: visible_rect(b.rect),
+                        size: b.size * unit,
+                        bold: f.contains("bold") || f.contains("black") || f.contains("heavy"),
+                        italic: f.contains("italic") || f.contains("oblique"),
+                        color: b.color,
+                        rotation: b.rotation - f64::from(info.rotation),
+                    }
+                };
+                let blocks = reading.blocks.into_iter().filter(|b| !b.text.trim().is_empty()).map(to_block).collect();
+                let lines = lines.into_iter().filter(|b| !b.text.trim().is_empty()).map(to_block).collect();
                 let placed = if images { pdfcraft_edit::reading_images(cos, i).unwrap_or_default() } else { Vec::new() };
                 let mut over_budget = false;
                 let images = placed
@@ -259,12 +309,30 @@ impl crate::Document {
                         })
                     })
                     .collect();
-                if forms_unread || over_budget {
+                let art_read = if art { pdfcraft_edit::reading_shapes(cos, i).unwrap_or_default() } else { pdfcraft_edit::ReadingShapes::default() };
+                if forms_unread || over_budget || art_read.truncated {
                     truncated.push(i);
                 }
                 // The page colour (Edit a PDF ▸ Background, a producer's page fill) for formats that keep one.
                 let background = pdfcraft_edit::page_background(cos, i).ok().flatten();
-                pdfcraft_export::Page { width: info.width as f64, height: info.height as f64, blocks, images, background }
+                // Points on the visible page, y up (as the text and image boxes above).
+                let visible_point = |p: [f64; 2]| {
+                    let v = info.user_to_view(p[0] as f32, p[1] as f32);
+                    [f64::from(v[0]), f64::from(info.height - v[1])]
+                };
+                let shapes = art_read
+                    .shapes
+                    .into_iter()
+                    .map(|s| pdfcraft_export::Shape {
+                        paths: s.subpaths.into_iter().map(|p| (p.points.into_iter().map(visible_point).collect(), p.closed)).collect(),
+                        stroke: s.stroke.map(|st| pdfcraft_export::Stroke { color: st.color, width: st.width * unit, dashed: st.dashed }),
+                        fill: s.fill,
+                    })
+                    .collect();
+                let fields = fields_by_page
+                    .get(&i)
+                    .map_or_else(Vec::new, |on_page| on_page.iter().filter_map(|(f, w)| export_field(f, w, &visible_rect)).collect());
+                pdfcraft_export::Page { width: info.width as f64, height: info.height as f64, blocks, images, background, shapes, fields, lines }
             })
             .collect();
         (pages, truncated)
@@ -279,11 +347,21 @@ impl crate::Document {
     /// ([`OfficeExport::truncated_pages`]).
     pub fn export_office_checked(&self, format: OfficeFormat) -> OfficeExport {
         // RTF and Markdown leave pictures out.
-        let (pages, truncated_pages) =
-            self.export_pages_checked(!matches!(format, OfficeFormat::Rtf | OfficeFormat::Markdown), MAX_EXPORT_IMAGE_BYTES);
+        let (pages, mut truncated_pages) = self.export_pages_with(
+            !matches!(format, OfficeFormat::Rtf | OfficeFormat::Markdown),
+            MAX_EXPORT_IMAGE_BYTES,
+            matches!(format, OfficeFormat::Docx),
+        );
         let title = self.info.title.clone().unwrap_or_else(|| self.name.trim_end_matches(".pdf").to_string());
         let bytes = match format {
-            OfficeFormat::Docx => pdfcraft_export::docx(&pages, &title),
+            OfficeFormat::Docx => {
+                // The Word writer says which pages it had to cut short (shapes, points, fields).
+                let (bytes, dropped) = pdfcraft_export::docx_checked(&pages, &title);
+                truncated_pages.extend(dropped);
+                truncated_pages.sort_unstable();
+                truncated_pages.dedup();
+                bytes
+            }
             OfficeFormat::Pptx => pdfcraft_export::pptx(&pages, &title),
             OfficeFormat::Html => pdfcraft_export::html(&pages, &title).into_bytes(),
             OfficeFormat::Rtf => pdfcraft_export::rtf(&pages).into_bytes(),
