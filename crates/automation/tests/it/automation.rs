@@ -6170,11 +6170,13 @@ fn drawing_comments_through_tools() {
         a.call("comment_add", &json!({ "doc": doc, "page": 1, "type": "polygon", "points": [[1, 1]] })),
         Err(ToolError::Failed(_) | ToolError::InvalidArgs(_))
     ));
-    // Replace Text: a strikeout over the found text and a grouped caret.
+    // Replace Text: a strikeout over the found text, grouped under a caret holding the
+    // replacement (the group's primary, ISO 32000-2 §12.5.6.2).
     ok(&mut a, "comment_add", json!({ "doc": doc, "page": 2, "type": "replace", "find": "page 2", "contents": "second page" }));
     let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 2 }));
-    let strike = list["comments"].as_array().unwrap().iter().find(|c| c["type"] == "StrikeOut").unwrap().clone();
-    assert_eq!(strike["replies"][0]["contents"], "second page", "the caret threads under the strikeout");
+    let caret = list["comments"].as_array().unwrap().iter().find(|c| c["type"] == "Caret").unwrap().clone();
+    assert_eq!(caret["contents"], "second page", "the replacement is on the caret");
+    assert_eq!(caret["replies"][0]["type"], "StrikeOut", "the strikeout is grouped under the caret");
     assert!(matches!(a.call("comment_add", &json!({ "doc": doc, "page": 2, "type": "replace", "find": "page 2" })), Err(ToolError::InvalidArgs(_))));
     // A file attached as a comment.
     std::fs::write(dir.join("notes.txt"), b"remember").unwrap();

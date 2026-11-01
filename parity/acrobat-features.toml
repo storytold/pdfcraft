@@ -3680,7 +3680,7 @@ status = "shipped"
 commands = ["comment.replace"]
 tools = ["comment_add"]
 evidence = ["crates/annot/src/tests.rs::replace_text_groups_a_strikeout_and_a_caret", "crates/ui-egui/tests/it/comments.rs::replacing_text_strikes_it_and_adds_a_caret", "crates/automation/tests/it/automation.rs::drawing_comments_through_tools"]
-notes = "strikeout (/IT StrikeOutTextEdit) and a grouped caret (/RT /Group) with the replacement"
+notes = "a caret holding the replacement, the group's primary (/IT /Replace), with the strikeout (/IT /StrikeOutTextEdit) grouped under it (/IRT, /RT /Group), as ISO 32000-2 §12.5.6.2 reads a group's text from its primary; deleting either deletes both. Missing: /RT /Group is not read yet, so the Comments panel and comment_list show the strikeout as a reply of the caret (#4357)."
 
 [[feature]]
 id = "comment.insert-text"

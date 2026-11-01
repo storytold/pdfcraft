@@ -142,9 +142,9 @@ fn values(doc: &Document) -> Vec<(String, Vec<String>)> {
     fields(doc).into_iter().map(|f| (f.name, f.value)).collect()
 }
 
-/// #2666: Replace Text writes a StrikeOut and a Caret that replies to it. XFDF names a reply by
-/// the `/NM` of what it replies to, so when both carried one id the caret's `inreplyto` was its
-/// own `name`: importing it found a comment replying to itself and the pair was lost.
+/// #2666: Replace Text writes a Caret and a StrikeOut grouped under it. XFDF names the link by
+/// the `/NM` of the annotation it points at, so when both carried one id the `inreplyto` was the
+/// strikeout's own `name`: importing it found a comment replying to itself and the pair was lost.
 #[test]
 fn a_replace_text_pair_survives_an_xfdf_round_trip() {
     let mut src = blank();
@@ -169,8 +169,8 @@ fn a_replace_text_pair_survives_an_xfdf_round_trip() {
 
     let xfdf = export_xfdf(&src, true, false, "a.pdf");
     assert!(xfdf.contains("name=\"strike\"") && xfdf.contains("name=\"caret\""), "each gets its own name: {xfdf}");
-    assert!(xfdf.contains("inreplyto=\"strike\""), "the caret replies to the strikeout: {xfdf}");
-    assert!(!xfdf.contains("inreplyto=\"caret\""), "never a reply to itself");
+    assert!(xfdf.contains("inreplyto=\"caret\""), "the strikeout is grouped under the caret: {xfdf}");
+    assert!(!xfdf.contains("inreplyto=\"strike\""), "never a reply to itself");
 
     let mut dst = blank();
     let r = import(&mut dst, xfdf.as_bytes()).unwrap();

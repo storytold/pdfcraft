@@ -2205,15 +2205,18 @@ fn replacing_text_strikes_it_and_adds_a_caret() {
     let strike = c.iter().find(|a| a.subtype == "StrikeOut").expect("a strikeout");
     let caret = c.iter().find(|a| a.subtype == "Caret").expect("a caret");
     assert_eq!(caret.contents.as_deref(), Some("slow red"));
-    assert_eq!(caret.in_reply_to, strike.name, "grouped with the strikeout");
+    assert_eq!(strike.in_reply_to, caret.name, "the strikeout is grouped under the caret, which holds the text");
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Replace text"));
     assert_eq!(h.state().quick_tool, QuickTool::Select);
-    // The strikeout is the Replace text tool's, not Strikethrough's (#3947): the panel names it
-    // so, and Make Current Properties Default updates the Replace text tool.
+    // Both members are the Replace text tool's, not Strikethrough's or Insert text's (#3947), so
+    // Make Current Properties Default updates the Replace text tool.
     assert_eq!(pdfcraft_ui_egui::comments::tool_for(strike), Some(pdfcraft_ui_egui::comments::CommentTool::ReplaceText));
+    assert_eq!(pdfcraft_ui_egui::comments::tool_for(caret), Some(pdfcraft_ui_egui::comments::CommentTool::ReplaceText));
+    // The panel's card is the caret's, the group's primary: it shows the replacement, and
+    // nothing is named Strikethrough.
     h.state_mut().set_option("panel", "comments").unwrap();
     h.run_steps(3);
-    assert!(h.query_by_role_and_label(egui::accesskit::Role::Label, "Replace text").is_some(), "the panel names the comment Replace text");
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Label, "slow red").is_some(), "the panel shows the replacement");
     assert!(h.query_by_role_and_label(egui::accesskit::Role::Label, "Strikethrough").is_none(), "not Strikethrough");
 }
 
