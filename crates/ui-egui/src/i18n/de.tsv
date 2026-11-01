@@ -2618,3 +2618,8 @@ animation effects	Off	Aus
 	No image on clipboard to paste	Kein Bild in der Zwischenablage zum Einfügen
 	Pinned {tool} to Home	{tool} an Start angeheftet
 	Unpinned {tool} from Home	{tool} von Start gelöst
+	Ink	Tinte
+	Dark ink	Dunkle Tinte
+	Light ink	Helle Tinte
+	No signature was found. Adjust the ink sensitivity or keep the original image.	Keine Unterschrift gefunden. Passen Sie die Tintenempfindlichkeit an oder behalten Sie das Originalbild.
+	Signature cleanup stopped unexpectedly.	Die Bereinigung der Unterschrift wurde unerwartet beendet.

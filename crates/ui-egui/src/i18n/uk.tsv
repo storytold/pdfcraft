@@ -2639,3 +2639,8 @@ animation effects	Off	Вимкнено
 	No image on clipboard to paste	У буфері обміну немає зображення для вставлення
 	Pinned {tool} to Home	{tool} закріплено на головній
 	Unpinned {tool} from Home	{tool} відкріплено від головної
+	Ink	Чорнило
+	Dark ink	Темне чорнило
+	Light ink	Світле чорнило
+	No signature was found. Adjust the ink sensitivity or keep the original image.	Підпис не знайдено. Налаштуйте чутливість до чорнила або збережіть початкове зображення.
+	Signature cleanup stopped unexpectedly.	Очищення підпису несподівано зупинилося.

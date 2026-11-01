@@ -104,6 +104,10 @@ pub enum SignatureImageError {
     /// An image already in the document, which was stored at 4 megapixels or less when placed.
     #[error("This signature image is larger than 4 megapixels (or 4096 pixels per side), so it can't be previewed.")]
     PlacedSize,
+    #[error("No signature was found. Adjust the ink sensitivity or keep the original image.")]
+    NoInk,
+    #[error("Signature sensitivity must be between 0 and 100.")]
+    CleanupOptions,
     #[error("Couldn't read the signature image: {0}")]
     Read(#[from] std::io::Error),
     #[error("Couldn't decode the signature image: {0}")]
@@ -116,6 +120,134 @@ pub struct SignatureImage {
     bytes: Arc<Vec<u8>>,
     rgba: Arc<Vec<u8>>,
     size: [usize; 2],
+}
+
+/// An immutable decoded import, before enforcing the stored PNG byte limit. Source files still
+/// have the 4 MiB/32-megapixel limits; decoded pixels fit at most 4 megapixels. It cannot be placed
+/// or persisted until cleanup (or normalization without cleanup) returns a `SignatureImage`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SignatureImageSource {
+    rgba: Arc<Vec<u8>>,
+    size: [usize; 2],
+}
+
+impl From<SignatureImage> for SignatureImageSource {
+    /// Reuse validated pixels when editing an existing signature without another decode.
+    fn from(image: SignatureImage) -> Self {
+        Self { rgba: image.rgba, size: image.size }
+    }
+}
+
+impl SignatureImageSource {
+    /// Read the bounded original file; an intermediate PNG need not fit the stored-image limit.
+    pub fn read(reader: impl Read) -> Result<Self, SignatureImageError> {
+        let mut bytes = Vec::new();
+        reader.take(MAX_SIGNATURE_IMAGE_BYTES as u64 + 1).read_to_end(&mut bytes)?;
+        Self::from_bytes(&bytes)
+    }
+
+    /// Decode and orient within the normal source/pixel bounds, without encoding a stored image.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, SignatureImageError> {
+        let rgba = decode_source(bytes)?.into_rgba8();
+        Ok(Self { size: [rgba.width() as usize, rgba.height() as usize], rgba: Arc::new(rgba.into_raw()) })
+    }
+
+    pub(crate) fn size(&self) -> [usize; 2] {
+        self.size
+    }
+
+    pub(crate) fn rgba(&self) -> &[u8] {
+        &self.rgba
+    }
+
+    /// Only final output crosses into the validated, persistable signature type.
+    fn normalized(&self) -> Result<SignatureImage, SignatureImageError> {
+        let [w, h] = self.size;
+        let rgba = image::RgbaImage::from_raw(w as u32, h as u32, self.rgba.as_ref().clone()).ok_or(SignatureImageError::Size)?;
+        SignatureImage::from_rgba(rgba)
+    }
+
+    /// Extract existing ink locally, without generation or network access. Estimate paper with
+    /// the scan pipeline, remove isolated noise, trim empty margins and normalize the ink to
+    /// black. Always call on the original import, so slider changes cannot accumulate damage.
+    pub fn clean_background(&self, options: SignatureCleanup) -> Result<SignatureImage, SignatureImageError> {
+        if options.sensitivity > 100 {
+            return Err(SignatureImageError::CleanupOptions);
+        }
+        let [w, h] = self.size;
+        // An already isolated cutout retains its colour and canvas. Low but nonzero alpha on
+        // the border is not transparency: it is exactly the scanner haze we need to remove.
+        let transparent_border = self.rgba.as_chunks::<4>().0.iter().enumerate().all(|(i, p)| {
+            let (x, y) = (i % w, i / w);
+            !(x == 0 || y == 0 || x + 1 == w || y + 1 == h) || p[3] == 0
+        });
+        let transparent_pixels = self.rgba.as_chunks::<4>().0.iter().filter(|p| p[3] == 0).count();
+        if options.remove_background && transparent_border && transparent_pixels > w * h / 2 && transparent_pixels < w * h {
+            return self.normalized();
+        }
+        let image = if options.remove_background {
+            let [w, h] = self.size;
+            let light = match options.ink {
+                SignatureInk::Dark => false,
+                SignatureInk::Light => true,
+                SignatureInk::Auto => {
+                    let mut border = Vec::with_capacity((w + h) * 2);
+                    for (i, &[r, g, b, a]) in self.rgba.as_chunks::<4>().0.iter().enumerate() {
+                        let (x, y) = (i % w, i / w);
+                        if x == 0 || y == 0 || x + 1 == w || y + 1 == h {
+                            let visible = |c: u8| (u32::from(c) * u32::from(a) + 255 * (255 - u32::from(a))) / 255;
+                            border.push((299 * visible(r) + 587 * visible(g) + 114 * visible(b)) / 1000);
+                        }
+                    }
+                    border.sort_unstable();
+                    border.get(border.len() / 2).copied().unwrap_or(255) < 96
+                }
+            };
+            let photo = crate::SignaturePhoto::from_signature(self, light);
+            let frame = crate::PhotoRect { x: 0, y: 0, width: w as u32, height: h as u32 };
+            let scanned = photo.scan(frame, options.sensitivity, crate::signature_scan::SCAN_MAX_SIDE).map_err(|e| match e {
+                crate::signature_scan::ScanError::NoInk => SignatureImageError::NoInk,
+                crate::signature_scan::ScanError::Signature(e) => e,
+                crate::signature_scan::ScanError::Decode(e) => SignatureImageError::Decode(e),
+                crate::signature_scan::ScanError::Read(e) => SignatureImageError::Read(e),
+                crate::signature_scan::ScanError::Size => SignatureImageError::Size,
+                crate::signature_scan::ScanError::Format => SignatureImageError::Format,
+            })?;
+            let [sw, sh] = scanned.size();
+            let mut rgba = image::RgbaImage::from_raw(sw as u32, sh as u32, scanned.rgba().to_vec()).ok_or(SignatureImageError::Size)?;
+            for pixel in rgba.pixels_mut() {
+                pixel.0 = [0, 0, 0, pixel.0[3]];
+            }
+            SignatureImage::from_rgba(rgba)?
+        } else {
+            self.normalized()?
+        };
+        Ok(image)
+    }
+}
+
+/// Which side of the background is ink. Auto uses the visible border, not hidden RGB in alpha.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SignatureInk {
+    #[default]
+    Auto,
+    Dark,
+    Light,
+}
+
+/// Non-destructive image import settings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SignatureCleanup {
+    pub remove_background: bool,
+    pub ink: SignatureInk,
+    pub sensitivity: u8,
+}
+
+impl Default for SignatureCleanup {
+    /// Use automatic ink detection and medium sensitivity for a new image import.
+    fn default() -> Self {
+        Self { remove_background: true, ink: SignatureInk::Auto, sensitivity: 50 }
+    }
 }
 
 /// Decode an imported PNG or JPEG within the source limits (file size, 32 megapixels, 8192 pixels
@@ -188,6 +320,24 @@ impl SignatureImage {
         self.size
     }
 
+    /// Clean an already validated signature without changing its original pixels.
+    pub fn clean_background(&self, options: SignatureCleanup) -> Result<Self, SignatureImageError> {
+        if options.sensitivity > 100 {
+            return Err(SignatureImageError::CleanupOptions);
+        }
+        if !options.remove_background {
+            return Ok(self.clone());
+        }
+        SignatureImageSource::from(self.clone()).clean_background(options)
+    }
+
+    /// Normalize generated pixels through the same bounded PNG decoder as imported signatures.
+    fn from_rgba(rgba: image::RgbaImage) -> Result<Self, SignatureImageError> {
+        let mut png = Cursor::new(Vec::new());
+        DynamicImage::ImageRgba8(rgba).write_to(&mut png, ImageFormat::Png)?;
+        Self::from_bytes(&png.into_inner())
+    }
+
     /// This image as the graphic of a visible digital signature.
     pub fn graphic(&self) -> pdfcraft_sign::Graphic {
         // Sides are at most 4096 pixels; 0 would be refused by the signer, never drawn.
@@ -244,6 +394,70 @@ impl SignatureImage {
 mod tests {
     use super::*;
 
+    /// Build a synthetic closed pen loop with no personal signature data.
+    fn cleanup_fixture(background: [u8; 4], ink: [u8; 4]) -> SignatureImage {
+        let mut rgba = image::RgbaImage::from_pixel(200, 80, image::Rgba(background));
+        // Synthetic pen loops with a clear hole and detached dot; no personal signature assets.
+        for y in 25..55 {
+            for x in 30..170 {
+                if !(28..52).contains(&y) || !(33..167).contains(&x) {
+                    rgba.put_pixel(x, y, image::Rgba(ink));
+                }
+            }
+        }
+        SignatureImage::from_rgba(rgba).unwrap()
+    }
+
+    /// Paper and low-alpha haze disappear while holes, ink and reversible originals survive.
+    #[test]
+    fn signature_cleanup_removes_low_alpha_scanner_haze_and_coloured_paper() {
+        for background in [[0, 0, 128, 5], [235, 225, 195, 255], [245, 245, 245, 255]] {
+            let source = cleanup_fixture(background, [10, 10, 10, 220]);
+            let cleaned = source.clean_background(SignatureCleanup::default()).unwrap();
+            let pixels = cleaned.rgba().as_chunks::<4>().0;
+            assert_eq!(pixels[0][3], 0, "background {background:?}");
+            let [w, h] = cleaned.size();
+            assert_eq!(pixels[(h / 2) * w + w / 2][3], 0, "the loop remains transparent");
+            assert!(pixels.iter().any(|p| p[3] > 100), "ink survives");
+            assert!(pixels.iter().all(|p| p[..3] == [0, 0, 0]), "no coloured fringe");
+            assert_eq!(SignatureImage::from_bytes(cleaned.bytes()).unwrap(), cleaned);
+            assert_eq!(source, source.clean_background(SignatureCleanup { remove_background: false, ..Default::default() }).unwrap());
+        }
+    }
+
+    /// Light strokes keep their transparent holes even when a hazy border needs cleanup.
+    #[test]
+    fn signature_cleanup_light_ink_with_alpha_keeps_background_transparent() {
+        for background in [[0, 0, 128, 5], [0, 0, 0, 0]] {
+            let mut source = cleanup_fixture(background, [255, 255, 255, 220]);
+            // A faint border pixel prevents the already-isolated-cutout shortcut.
+            let mut pixels = image::RgbaImage::from_raw(200, 80, source.rgba().to_vec()).unwrap();
+            pixels.put_pixel(0, 0, image::Rgba([0, 0, 0, 5]));
+            source = SignatureImage::from_rgba(pixels).unwrap();
+            let cleaned = source.clean_background(SignatureCleanup { ink: SignatureInk::Light, ..Default::default() }).unwrap();
+            let [w, h] = cleaned.size();
+            let pixels = cleaned.rgba().as_chunks::<4>().0;
+            assert_eq!(pixels[(h / 2) * w + w / 2][3], 0, "the stroke loop stays empty");
+            assert!(pixels.iter().any(|p| p[3] > 100), "light strokes survive");
+            assert!(pixels.iter().all(|p| p[..3] == [0, 0, 0]), "extracted ink is black");
+        }
+    }
+
+    /// Automatic light-ink detection preserves strokes and rejects blank or invalid inputs.
+    #[test]
+    fn light_ink_cleanup_and_empty_input_are_handled() {
+        let source = cleanup_fixture([30, 35, 40, 255], [240, 240, 240, 255]);
+        let cleaned = source.clean_background(SignatureCleanup::default()).unwrap();
+        assert_eq!(cleaned.rgba()[3], 0);
+        assert!(cleaned.rgba().as_chunks::<4>().0.iter().any(|p| p[3] > 100));
+        let blank = SignatureImage::from_rgba(image::RgbaImage::from_pixel(100, 40, image::Rgba([230, 230, 230, 255]))).unwrap();
+        assert!(matches!(blank.clean_background(SignatureCleanup::default()), Err(SignatureImageError::NoInk)));
+        assert!(matches!(
+            source.clean_background(SignatureCleanup { sensitivity: 101, ..Default::default() }),
+            Err(SignatureImageError::CleanupOptions)
+        ));
+    }
+
     /// A 300 x 400 page shown turned `rotation` degrees clockwise.
     fn page(rotation: u16) -> PageInfo {
         let (width, height) = if rotation.is_multiple_of(180) { (300.0, 400.0) } else { (400.0, 300.0) };
@@ -277,6 +491,11 @@ mod tests {
         assert!(matches!(SignatureImage::from_bytes(&png(8193, 1)), Err(SignatureImageError::Size)));
         assert!(matches!(SignatureImage::from_bytes(&png(8192, 4097)), Err(SignatureImageError::Size)));
         assert!(SignatureImage::read(std::io::repeat(0)).is_err());
+        assert!(SignatureImageSource::from_bytes(b"not an image").is_err());
+        assert!(SignatureImageSource::from_bytes(&vec![0; MAX_SIGNATURE_IMAGE_BYTES + 1]).is_err());
+        assert!(matches!(SignatureImageSource::from_bytes(&png(8193, 1)), Err(SignatureImageError::Size)));
+        assert!(matches!(SignatureImageSource::from_bytes(&png(8192, 4097)), Err(SignatureImageError::Size)));
+        assert!(SignatureImageSource::read(std::io::repeat(0)).is_err());
         assert!(matches!(SignatureImage::from_bytes(b"GIF89a\x02\0\x02\0"), Err(SignatureImageError::Format)));
     }
 

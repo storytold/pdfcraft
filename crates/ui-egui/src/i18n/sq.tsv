@@ -2601,3 +2601,8 @@ animation effects	Off	Joaktiv
 	No image on clipboard to paste	Nuk ka imazh në kujtesën e përkohshme për të ngjitur
 	Pinned {tool} to Home	{tool} u fiksua te Kreu
 	Unpinned {tool} from Home	{tool} u hoq nga fiksimi te Kreu
+	Ink	Bojë
+	Dark ink	Bojë e errët
+	Light ink	Bojë e çelët
+	No signature was found. Adjust the ink sensitivity or keep the original image.	Nuk u gjet asnjë nënshkrim. Rregullo ndjeshmërinë ndaj bojës ose mbaj imazhin origjinal.
+	Signature cleanup stopped unexpectedly.	Pastrimi i nënshkrimit u ndërpre papritur.

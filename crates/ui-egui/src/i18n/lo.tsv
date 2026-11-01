@@ -2522,3 +2522,8 @@ animation effects	Off	ປິດ
 	Export this PDF	ສົ່ງອອກ PDF ນີ້
 	Find text or tools	ຊອກຫາຂໍ້ຄວາມ ຫຼື ເຄື່ອງມື
 	Crop image	ຕັດຂອບຮູບພາບ
+	Ink	ນ້ຳມຶກ
+	Dark ink	ນ້ຳມຶກສີເຂັ້ມ
+	Light ink	ນ້ຳມຶກສີອ່ອນ
+	No signature was found. Adjust the ink sensitivity or keep the original image.	ບໍ່ພົບລາຍເຊັນ. ປັບຄວາມໄວຕໍ່ນ້ຳມຶກ ຫຼືເກັບຮູບພາບຕົ້ນສະບັບໄວ້.
+	Signature cleanup stopped unexpectedly.	ການລ້າງລາຍເຊັນຢຸດໂດຍບໍ່ຄາດຄິດ.

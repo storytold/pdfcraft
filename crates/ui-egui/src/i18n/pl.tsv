@@ -2713,3 +2713,8 @@ animation effects	Off	Wyłączone
 	No image on clipboard to paste	Brak obrazu do wklejenia w schowku
 	Pinned {tool} to Home	Przypięto {tool} do strony głównej
 	Unpinned {tool} from Home	Odpięto {tool} od strony głównej
+	Ink	Atrament
+	Dark ink	Ciemny atrament
+	Light ink	Jasny atrament
+	No signature was found. Adjust the ink sensitivity or keep the original image.	Nie znaleziono podpisu. Dostosuj czułość na atrament lub zachowaj oryginalny obraz.
+	Signature cleanup stopped unexpectedly.	Czyszczenie podpisu zostało nieoczekiwanie przerwane.

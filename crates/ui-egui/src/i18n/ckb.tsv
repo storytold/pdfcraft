@@ -2810,3 +2810,8 @@ certificate	Version	وەشان
 	Export this PDF	هەناردەکردنی ئەم PDF ـە
 	Find text or tools	دۆزینەوەی دەق یان ئامراز
 	Crop image	بڕینەوەی وێنە
+	Ink	مەرەکەب
+	Dark ink	مەرەکەبی تاریک
+	Light ink	مەرەکەبی ڕوون
+	No signature was found. Adjust the ink sensitivity or keep the original image.	هیچ واژۆیەک نەدۆزرایەوە. هەستیاریی مەرەکەب ڕێک بخە یان وێنە ڕەسەنەکە بهێڵەرەوە.
+	Signature cleanup stopped unexpectedly.	پاککردنەوەی واژۆکە بە چاوەڕواننەکراوی وەستا.

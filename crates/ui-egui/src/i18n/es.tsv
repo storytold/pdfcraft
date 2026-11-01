@@ -2940,3 +2940,8 @@ theme	Appearance	Aspecto
 	No image on clipboard to paste	No hay ninguna imagen en el portapapeles para pegar
 	Pinned {tool} to Home	{tool} fijado en Inicio
 	Unpinned {tool} from Home	{tool} desfijado de Inicio
+	Ink	Tinta
+	Dark ink	Tinta oscura
+	Light ink	Tinta clara
+	No signature was found. Adjust the ink sensitivity or keep the original image.	No se encontró ninguna firma. Ajusta la sensibilidad de la tinta o conserva la imagen original.
+	Signature cleanup stopped unexpectedly.	La limpieza de la firma se detuvo inesperadamente.

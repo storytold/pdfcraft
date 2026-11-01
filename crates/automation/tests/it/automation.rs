@@ -3908,6 +3908,94 @@ fn image_signatures_through_tools_preserve_transparency_and_survive_save() {
     assert_eq!(ok(&mut a, "comment_list", json!({ "doc": doc }))["count"], 2, "errors leave the PDF intact");
 }
 
+/// A small photographic JPEG may expand past the stored PNG cap before its paper is removed.
+#[test]
+fn signature_cleanup_accepts_a_small_jpeg_before_normalized_png_limit() {
+    let dir = workdir("signature-large-normalized-png");
+    let mut photo = image::RgbImage::new(2000, 2000);
+    let mut noise = 0x1234_5678_u32;
+    for pixel in photo.pixels_mut() {
+        let mut channel = || {
+            noise = noise.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            215 + ((noise >> 24) % 40) as u8
+        };
+        *pixel = image::Rgb([channel(), channel(), channel()]);
+    }
+    for y in 900..1100 {
+        for x in 700..1300 {
+            if !(908..1092).contains(&y) || !(708..1292).contains(&x) {
+                photo.put_pixel(x, y, image::Rgb([10, 10, 10]));
+            }
+        }
+    }
+    let mut jpeg = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 90).encode_image(&photo).unwrap();
+    assert!(jpeg.len() <= pdfcraft_engine::signature_image::MAX_SIGNATURE_IMAGE_BYTES, "source is {} bytes", jpeg.len());
+    assert!(
+        matches!(pdfcraft_engine::SignatureImage::from_bytes(&jpeg), Err(pdfcraft_engine::signature_image::SignatureImageError::Size)),
+        "fixture must exceed the normalized PNG cap"
+    );
+    let source = pdfcraft_engine::signature_image::SignatureImageSource::from_bytes(&jpeg).unwrap();
+    assert!(
+        matches!(
+            source.clean_background(pdfcraft_engine::signature_image::SignatureCleanup { remove_background: false, ..Default::default() }),
+            Err(pdfcraft_engine::signature_image::SignatureImageError::Size)
+        ),
+        "uncleaned output must still respect the stored PNG cap"
+    );
+    std::fs::write(dir.join("photo.jpg"), jpeg).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({"from":"blank","width":300,"height":400}))["doc"].as_u64().unwrap();
+    ok(&mut a, "fill_sign_add", json!({"doc":doc,"page":1,"type":"signature","path":"photo.jpg","at":[30,100],"remove_background":true}));
+    let image = a.session().get(pdfcraft_engine::DocId(doc)).unwrap().image_signature_preview(0, 0).unwrap().unwrap().image;
+    assert!(image.bytes().len() <= pdfcraft_engine::signature_image::MAX_SIGNATURE_IMAGE_BYTES);
+    assert_eq!(image.rgba()[3], 0);
+    assert!(image.rgba().as_chunks::<4>().0.iter().any(|p| p[3] > 100));
+}
+
+/// Headless cleanup preserves transparency through save, undo and redo and validates its arguments.
+#[test]
+fn signature_background_cleanup_through_tools_survives_save_and_undo() {
+    let dir = workdir("signature-background-cleanup");
+    let mut rgba = image::RgbaImage::from_pixel(200, 80, image::Rgba([0, 0, 128, 5]));
+    for y in 25..55 {
+        for x in 30..170 {
+            if !(28..52).contains(&y) || !(33..167).contains(&x) {
+                rgba.put_pixel(x, y, image::Rgba([10, 10, 10, 220]));
+            }
+        }
+    }
+    rgba.save(dir.join("signature.png")).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({"from":"blank", "width":300,"height":400}))["doc"].as_u64().unwrap();
+    // Colored page content must remain visible through the cleaned signature's margin and hole.
+    ok(&mut a, "fill_sign_add", json!({"doc":doc,"page":1,"type":"signature","path":"signature.png","at":[30,100],"remove_background":true}));
+    let embedded = a.session().get(pdfcraft_engine::DocId(doc)).unwrap().image_signature_preview(0, 0).unwrap().unwrap().image;
+    assert_eq!(embedded.rgba()[3], 0);
+    let [w, h] = embedded.size();
+    assert_eq!(embedded.rgba().as_chunks::<4>().0[(h / 2) * w + w / 2][3], 0);
+    assert!(embedded.rgba().as_chunks::<4>().0.iter().any(|p| p[3] > 100));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"signed.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"signed.pdf"}))["doc"].as_u64().unwrap();
+    let again = a.session().get(pdfcraft_engine::DocId(reopened)).unwrap().image_signature_preview(0, 0).unwrap().unwrap().image;
+    assert_eq!(again, embedded);
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(ok(&mut a, "comment_list", json!({"doc":doc}))["count"], 0);
+    ok(&mut a, "edit_redo", json!({"doc":doc}));
+    for extra in [
+        json!({"remove_background":true,"scan":true}),
+        json!({"remove_background":true,"sensitivity":101}),
+        json!({"remove_background":true,"ink":"unknown"}),
+        json!({"ink":"dark"}),
+        json!({"remove_background":true,"path":"../outside.png"}),
+    ] {
+        let mut args = json!({"doc":doc,"page":1,"type":"signature","path":"signature.png","at":[30,100]});
+        args.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        assert!(a.call("fill_sign_add", &args).is_err(), "{args}");
+    }
+    assert_eq!(ok(&mut a, "comment_list", json!({"doc":doc}))["count"], 1);
+}
+
 #[test]
 fn scanned_signatures_through_tools_drop_the_paper_and_report_bad_arguments() {
     let dir = workdir("scanned-signatures");

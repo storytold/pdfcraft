@@ -2877,3 +2877,8 @@ theme	Appearance	Išvaizda
 	No image on clipboard to paste	Iškarpinėje nėra paveikslėlio įklijuoti
 	Pinned {tool} to Home	{tool} prisegtas pradžios puslapyje
 	Unpinned {tool} from Home	{tool} atsegtas nuo pradžios puslapio
+	Ink	Rašalas
+	Dark ink	Tamsus rašalas
+	Light ink	Šviesus rašalas
+	No signature was found. Adjust the ink sensitivity or keep the original image.	Parašas nerastas. Pakeiskite rašalo jautrumą arba palikite pradinį vaizdą.
+	Signature cleanup stopped unexpectedly.	Parašo valymas netikėtai sustojo.

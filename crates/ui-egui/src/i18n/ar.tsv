@@ -2892,3 +2892,8 @@ certificate	Version	الإصدار
 	No image on clipboard to paste	لا توجد صورة في الحافظة للصقها
 	Pinned {tool} to Home	تم تثبيت {tool} في الرئيسية
 	Unpinned {tool} from Home	تم إلغاء تثبيت {tool} من الرئيسية
+	Ink	الحبر
+	Dark ink	حبر داكن
+	Light ink	حبر فاتح
+	No signature was found. Adjust the ink sensitivity or keep the original image.	لم يتم العثور على توقيع. اضبط حساسية الحبر أو احتفظ بالصورة الأصلية.
+	Signature cleanup stopped unexpectedly.	توقفت معالجة التوقيع بشكل غير متوقع.

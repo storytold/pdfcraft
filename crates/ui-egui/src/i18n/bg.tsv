@@ -2580,3 +2580,8 @@ animation effects	Off	Изключени
 	No image on clipboard to paste	Няма изображение в клипборда за поставяне
 	Pinned {tool} to Home	{tool} е закачен в Начало
 	Unpinned {tool} from Home	{tool} е откачен от Начало
+	Ink	Мастило
+	Dark ink	Тъмно мастило
+	Light ink	Светло мастило
+	No signature was found. Adjust the ink sensitivity or keep the original image.	Не е намерен подпис. Регулирайте чувствителността към мастилото или запазете оригиналното изображение.
+	Signature cleanup stopped unexpectedly.	Почистването на подписа спря неочаквано.

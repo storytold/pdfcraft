@@ -2615,3 +2615,8 @@ animation effects	Off	Өшірулі
 	No image on clipboard to paste	Алмасу буферінде қоятын сурет жоқ
 	Pinned {tool} to Home	{tool} басты бетке бекітілді
 	Unpinned {tool} from Home	{tool} басты беттен ажыратылды
+	Ink	Сия
+	Dark ink	Қою сия
+	Light ink	Ашық сия
+	No signature was found. Adjust the ink sensitivity or keep the original image.	Қолтаңба табылмады. Сия сезімталдығын реттеңіз немесе бастапқы кескінді сақтаңыз.
+	Signature cleanup stopped unexpectedly.	Қолтаңбаны тазалау күтпеген жерден тоқтады.

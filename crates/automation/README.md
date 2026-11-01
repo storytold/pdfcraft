@@ -267,3 +267,24 @@ navigation-history tool; use the opt-in UI control channel to navigate the displ
 (`#RRGGBB`, default black) for `text` and `date`. The colour is saved in the
 FreeText appearance and survives reopening. Other mark/signature types reject
 `color`; their appearance controls are separate.
+
+## Signature image background cleanup
+
+`fill_sign_add` accepts `remove_background: true` with an image `path`, optionally
+`ink: "auto" | "dark" | "light"` and `sensitivity: 0..100` (default 50). It composites
+source alpha before estimating the paper, removes scanner haze and dust, trims the
+extracted ink and places it as black ink on real transparency. Already isolated
+cutouts retain their color and dimensions. This is local pixel extraction, not
+generated handwriting; textured backgrounds overlapping ink may need manual
+preparation. The existing `scan` mode and this option are mutually exclusive.
+Source JPEGs are decoded within the existing limits before cleanup; the final PNG
+still must fit 4 MiB, including when cleanup is disabled.
+
+The Image tab enables cleanup by default and previews actual transparency on a
+checkerboard. Clearing Remove background restores the original import if it fits the stored PNG
+limit; otherwise it reports the size error. Adjustments
+always start from that source. Desktop processing runs on a worker, with Apply
+disabled until the latest result is ready. Existing automation callers keep their
+original behavior because `remove_background` defaults to false. No stroke-width
+change is applied. The placed annotation remains movable, undoable and saved with
+its alpha mask.

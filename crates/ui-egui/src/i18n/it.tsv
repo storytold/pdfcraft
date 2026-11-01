@@ -2849,3 +2849,8 @@ certificate	SHA-256 digest	Impronta SHA-256
 	No image on clipboard to paste	Nessuna immagine negli appunti da incollare
 	Pinned {tool} to Home	{tool} fissato alla Home
 	Unpinned {tool} from Home	{tool} rimosso dai preferiti della Home
+	Ink	Inchiostro
+	Dark ink	Inchiostro scuro
+	Light ink	Inchiostro chiaro
+	No signature was found. Adjust the ink sensitivity or keep the original image.	Nessuna firma trovata. Regola la sensibilità all’inchiostro o mantieni l’immagine originale.
+	Signature cleanup stopped unexpectedly.	La pulizia della firma si è interrotta in modo imprevisto.

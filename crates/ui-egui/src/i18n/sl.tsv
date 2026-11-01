@@ -2622,3 +2622,8 @@ animation effects	Off	Izklopljeni
 	No image on clipboard to paste	V odložišču ni slike za lepljenje
 	Pinned {tool} to Home	{tool} pripeto na domačo stran
 	Unpinned {tool} from Home	{tool} odpeto z domače strani
+	Ink	Črnilo
+	Dark ink	Temno črnilo
+	Light ink	Svetlo črnilo
+	No signature was found. Adjust the ink sensitivity or keep the original image.	Podpis ni bil najden. Prilagodite občutljivost za črnilo ali ohranite izvirno sliko.
+	Signature cleanup stopped unexpectedly.	Čiščenje podpisa se je nepričakovano ustavilo.
