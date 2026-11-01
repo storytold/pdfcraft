@@ -737,6 +737,49 @@ fn added_arabic_text_keeps_copy_search_and_editor_order_after_retyping_and_reope
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Other languages written in the Arabic and Hebrew scripts take the same path: Persian (with a
+/// zero-width non-joiner and Persian digits), Urdu, Pashto, Central Kurdish, Uyghur, Sindhi,
+/// Kashmiri, Yiddish and Ladino keep their typing order through Add text, copy, search, retyping,
+/// a text box comment and a reopen.
+#[test]
+fn arabic_and_hebrew_script_languages_keep_typing_order_in_added_text_and_comments() {
+    if pdfcraft_fonts::document_arabic_font().is_none() || pdfcraft_fonts::document_hebrew_font(false).is_none() {
+        eprintln!("set CRAFT_FONTS_DIR to exercise Arabic- and Hebrew-script languages");
+        return;
+    }
+    let samples = [
+        ("persian", "این کتاب را می\u{200c}خواهم: پژوهش چاپ ۱۲۳ PDF گزارش"),
+        ("urdu", "اردو بولی جاتی ہے: ٹرین، ڈاک، گھڑی میں ۴۵۶"),
+        ("pashto", "پښتو ژبه: ټول ډېر ښه ځای څه ۷۸۹"),
+        ("kurdish", "کوردی سۆرانی: ڕۆژباش، ئێوە چۆنن 2026"),
+        ("uyghur", "ئۇيغۇرچە يېزىق: ئۆي ۋە ئۈزۈم 2026"),
+        ("sindhi", "سنڌي ٻولي: ڀاڻ ٺٽ ڪتاب ڳالهه 2026"),
+        ("kashmiri", "کٲشُر زَبان: ٲ ٳ ۄ ؠ 2026"),
+        ("yiddish", "ייִדיש: װאָס מאַכסטו? פֿון דײַן 2026"),
+        ("ladino", "לאדינו: ג׳ודיו אספאנייול 2026"),
+    ];
+    let dir = workdir("arabic-script-languages");
+    let mut a = auto(&dir);
+    for (i, (name, original)) in samples.iter().enumerate() {
+        let id = ok(&mut a, "doc_create", json!({"from":"blank","width":600,"height":400}))["doc"].as_u64().unwrap();
+        ok(&mut a, "page_add_text", json!({"doc":id,"page":1,"text":original,"at":[40,50],"width":500,"size":16,"align":"right"}));
+        assert_eq!(page_text(&mut a, id), [*original], "{name}");
+        assert_eq!(ok(&mut a, "text_lines", json!({"doc":id,"page":1}))["lines"][0]["text"], *original, "{name}");
+        let found = ok(&mut a, "text_find", json!({"doc":id,"query":original}));
+        assert_eq!(found["matches"].as_array().unwrap().len(), 1, "{name}");
+        let retyped = samples[(i + 1) % samples.len()].1;
+        ok(&mut a, "content_update", json!({"doc":id,"page":1,"index":1,"text":retyped}));
+        let added = ok(&mut a, "comment_add", json!({"doc":id,"page":1,"type":"textbox","rect":[50,200,540,260],"contents":original,"font_size":16}));
+        assert!(added.get("warnings").is_none(), "{name}: supported letters must be drawn: {added}");
+        let path = format!("{name}.pdf");
+        ok(&mut a, "doc_save", json!({"doc":id,"path":path}));
+        let re = ok(&mut a, "doc_open", json!({"path":path}))["doc"].as_u64().unwrap();
+        assert_eq!(ok(&mut a, "text_lines", json!({"doc":re,"page":1}))["lines"][0]["text"], retyped, "{name}");
+        assert_eq!(ok(&mut a, "comment_list", json!({"doc":re}))["comments"][0]["contents"], *original, "{name}");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn arabic_comments_render_edit_and_keep_their_thread_through_save_reopen() {
     if pdfcraft_fonts::document_arabic_font().is_none() {
