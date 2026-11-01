@@ -168,6 +168,59 @@ mod tests {
         assert!(Session::default().open_context().prepare_on_disk("large.pdf", &file.path).is_none());
     }
 
+    /// A page of text after a stream of `gap` bytes that the file system doesn't store.
+    #[cfg(unix)]
+    fn sparse_pdf(path: &Path, gap: u64) {
+        use std::io::{Seek, SeekFrom, Write};
+        let content = format!("BT /F 24 Tf 20 150 Td (Hello) Tj ET % {}", "x".repeat(30_000));
+        let parts = [
+            "1 0 obj\n<</Type/Catalog/Pages 2 0 R>>\nendobj\n".to_string(),
+            "2 0 obj\n<</Type/Pages/Kids[3 0 R]/Count 1/MediaBox[0 0 200 300]>>\nendobj\n".to_string(),
+            "3 0 obj\n<</Type/Page/Parent 2 0 R/Contents 5 0 R/Resources<</Font<</F 6 0 R>>>>>>\nendobj\n".to_string(),
+            format!("4 0 obj\n<</Length {gap}>>\nstream\n"),
+            "\nendstream\nendobj\n".to_string(),
+            format!("5 0 obj\n<</Length {}>>\nstream\n{content}\nendstream\nendobj\n", content.len()),
+            "6 0 obj\n<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>\nendobj\n".to_string(),
+        ];
+        let mut out = File::create(path).unwrap();
+        out.write_all(b"%PDF-1.7\n").unwrap();
+        let mut objects = Vec::new();
+        for (i, part) in parts.iter().enumerate() {
+            let at = out.stream_position().unwrap();
+            if !part.starts_with('\n') {
+                objects.push(at);
+            }
+            out.write_all(part.as_bytes()).unwrap();
+            if i == 3 {
+                out.seek(SeekFrom::Current(i64::try_from(gap).unwrap())).unwrap();
+            }
+        }
+        let xref = out.stream_position().unwrap();
+        let mut tail = format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1);
+        tail.extend(objects.iter().map(|at| format!("{at:010} 00000 n \n")));
+        tail.push_str(&format!("trailer\n<</Size {}/Root 1 0 R>>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1));
+        out.write_all(tail.as_bytes()).unwrap();
+    }
+
+    /// NTFS writes out the zeros of a hole unless asked not to, so this one needs a Unix file system.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_past_the_limit_opens_from_disk_with_offsets_past_32_bits() {
+        let file = Temp::new(b"");
+        sparse_pdf(&file.path, 5 << 30);
+        let mut session = Session::default();
+        let prepared = session.open_context().prepare_on_disk("large.pdf", &file.path).expect("stays on disk");
+        let id = session.commit_open(prepared);
+        let doc = session.get(id).unwrap();
+        assert!(doc.info.file_size as u64 > ON_DISK_FROM);
+        let held = doc.on_disk.as_ref().unwrap().held().len();
+        assert!(held < 4096, "only the structure is in memory: {held} bytes");
+        let page = pdfcraft_render::PageRenderer::new(doc.source(), Default::default()).render(Default::default());
+        assert_eq!(page.error, None);
+        assert_eq!(doc.source().failed_reads(), 0);
+        assert!(page.rgba.iter().step_by(4).any(|red| *red < 128), "the text past the hole is drawn");
+    }
+
     #[test]
     fn what_is_not_a_clean_pdf_is_read_whole() {
         let mut no_xref = scanned();
