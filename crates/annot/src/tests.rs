@@ -2471,3 +2471,42 @@ fn a_colour_or_size_change_keeps_the_drawn_face() {
     set_style(&mut d, 0, 0, StyleChange::new(Some([1.0, 0.0, 0.0]), None, None, None), &meta("")).unwrap();
     assert!(ap_content(&d, &list(&d, 0)[0]).contains("/Cour 12 Tf"));
 }
+
+/// A text box without an appearance is drawn from its `/DA` however the file wrote it: a `Tf`
+/// without a size, a zero size, a font name the form's `/DR` doesn't list, and hostile operands.
+/// The stream names the face the box is drawn in at a usable size, and no number in it is `NaN`
+/// or infinite.
+#[test]
+fn text_boxes_draw_from_any_da_string() {
+    let doc = |da: &str| {
+        let annot = format!("<< /Type /Annot /Subtype /FreeText /Rect [45 500 300 700] /Contents (Hi) /DA ({da}) >>");
+        document_of(&[
+            b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /DR << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Times-Bold >> >> >> >> >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+            b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+            annot.as_bytes(),
+        ])
+    };
+    for (da, tf, colour) in [
+        ("0 g /Cour Tf", "/Cour 12 Tf", "0 0 0 rg"),
+        ("0 g /Cour 0 Tf", "/Cour 12 Tf", "0 0 0 rg"),
+        ("0 g /Cour -5 Tf", "/Cour 12 Tf", "0 0 0 rg"),
+        ("NaN NaN NaN rg /Cour NaN Tf", "/Cour 12 Tf", "0 0 0 rg"),
+        ("inf g /Cour inf Tf", "/Cour 12 Tf", "0 0 0 rg"),
+        ("1 0 0 rg /Cour 1e300 Tf", "/Cour 400 Tf", "1 0 0 rg"),
+        // In `/DR`: Times Bold. Not in `/DR` and no standard name: Helvetica.
+        ("0 g /F1 Tf", "/TiBo 12 Tf", "0 0 0 rg"),
+        ("0 g /F9 11 Tf", "/Helv 11 Tf", "0 0 0 rg"),
+        // No Tf at all, or garbage.
+        ("0 0 1 rg", "/Helv 12 Tf", "0 0 1 rg"),
+        ("] [ << >> Tf", "/Helv 12 Tf", "0 0 0 rg"),
+    ] {
+        let mut d = doc(da);
+        set_appearance(&mut d, ObjRef::new(4, 0)).unwrap();
+        let content = ap_content(&d, &list(&d, 0)[0]);
+        assert!(content.contains(tf), "{da:?}: {content}");
+        assert!(content.contains(colour), "{da:?}: {content}");
+        let lower = content.to_ascii_lowercase();
+        assert!(!lower.contains("nan") && !lower.contains("inf"), "{da:?}: {content}");
+    }
+}

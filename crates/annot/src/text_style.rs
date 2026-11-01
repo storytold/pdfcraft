@@ -65,13 +65,20 @@ pub fn dr_face(doc: &Document, d: &Dict) -> Option<Std14> {
     Some(base.as_deref().and_then(base_font_face).unwrap_or(Std14::Helvetica))
 }
 
-/// The font resource name of the last `Tf` in `/DA` (without the slash).
+/// The font resource name of the last `Tf` in `/DA` (without the slash). `Tf` takes a name and
+/// a size; a name given without its size (`/TiRo Tf`) is still read, and the size then falls back
+/// as [`parse_da`] says.
 pub fn da_font_name(d: &Dict) -> Option<String> {
     let da = d.get(b"DA").and_then(Object::as_string)?;
     let da = String::from_utf8_lossy(&da.bytes);
     let toks: Vec<&str> = da.split_whitespace().collect();
     let tf = toks.iter().rposition(|t| *t == "Tf")?;
-    let name = toks.get(tf.checked_sub(2)?)?.strip_prefix('/')?;
+    let name = match toks.get(..tf)? {
+        [.., name, size] if !size.starts_with('/') => name,
+        [.., name] => name,
+        [] => return None,
+    };
+    let name = name.strip_prefix('/')?;
     (!name.is_empty()).then(|| name.to_string())
 }
 
@@ -407,6 +414,59 @@ mod tests {
         assert_eq!(text_style(&dict("1 0 0 rg /Cour 9 Tf", Some(&huge)), None).color, [0.0, 1.0, 0.0]);
         // Sizes are capped as /DA's are.
         assert_eq!(text_style(&dict("/Helv 9 Tf", Some("font-size: 1e300pt")), None).size, MAX_SIZE);
+    }
+
+    /// `/DA` strings as files give them: a `Tf` without a size, a zero size (auto-size in a form
+    /// field, which a text box doesn't have), and hostile operands. None panics, each keeps what it
+    /// can read, and nothing that isn't a finite number reaches the style.
+    #[test]
+    fn hostile_da_strings_keep_what_they_can() {
+        let style = |da: &str| text_style(&dict(da, None), None);
+        let black12 = |face| TextStyle { face, size: 12.0, color: [0.0; 3] };
+        for (da, want) in [
+            // A missing size keeps the named face at the default size.
+            ("/TiRo Tf", black12(Std14::TimesRoman)),
+            ("0 g /Cour Tf", black12(Std14::Courier)),
+            // Zero, negative, NaN, infinite or not a number: the default size.
+            ("/Cour 0 Tf", black12(Std14::Courier)),
+            ("/Cour -0 Tf", black12(Std14::Courier)),
+            ("/Cour -12 Tf", black12(Std14::Courier)),
+            ("/Cour NaN Tf", black12(Std14::Courier)),
+            ("/Cour inf Tf", black12(Std14::Courier)),
+            ("/Cour -inf Tf", black12(Std14::Courier)),
+            ("/Cour 1e999 Tf", black12(Std14::Courier)),
+            ("/Cour twelve Tf", black12(Std14::Courier)),
+            // No Tf at all, or one with nothing before it.
+            ("1 0 0 rg", TextStyle { color: [1.0, 0.0, 0.0], ..black12(Std14::Helvetica) }),
+            ("Tf", black12(Std14::Helvetica)),
+            ("Tf Tf Tf", black12(Std14::Helvetica)),
+            ("", black12(Std14::Helvetica)),
+            // Colour operands that aren't finite numbers leave the colour black.
+            ("NaN NaN NaN rg /Helv 9 Tf", TextStyle { size: 9.0, ..black12(Std14::Helvetica) }),
+            ("NaN g /Helv 9 Tf", TextStyle { size: 9.0, ..black12(Std14::Helvetica) }),
+            ("inf 0 0 rg /Helv 9 Tf", TextStyle { size: 9.0, ..black12(Std14::Helvetica) }),
+            ("rg g /Helv 9 Tf", TextStyle { size: 9.0, ..black12(Std14::Helvetica) }),
+            // Out-of-range colour components are clamped.
+            ("2 -1 0.5 rg /Helv 9 Tf", TextStyle { size: 9.0, color: [1.0, 0.0, 0.5], ..black12(Std14::Helvetica) }),
+            // Huge sizes are capped.
+            ("/Helv 1e300 Tf", TextStyle { size: MAX_SIZE, ..black12(Std14::Helvetica) }),
+            ("/Helv 100000 Tf", TextStyle { size: MAX_SIZE, ..black12(Std14::Helvetica) }),
+            // Garbage around a valid Tf: the last Tf is read.
+            ("\u{0} ] [ << /Helv 9 Tf >> /Cour 14 Tf )", TextStyle { size: 14.0, ..black12(Std14::Courier) }),
+        ] {
+            assert_eq!(style(da), want, "{da:?}");
+            let s = style(da);
+            assert!(s.size.is_finite() && s.size > 0.0 && s.color.iter().all(|c| (0.0..=1.0).contains(c)), "{da:?}: {s:?}");
+        }
+        // A font name that is no standard face and that no `/DR` lists keeps Helvetica.
+        assert_eq!(style("0 g /F9 11 Tf"), TextStyle { size: 11.0, ..black12(Std14::Helvetica) });
+        // Binary bytes that aren't UTF-8 don't panic.
+        let mut d = Dict::new();
+        d.set(b"DA".to_vec(), PdfString::literal(vec![0xFF, 0xFE, b' ', b'/', 0xC3, b' ', b'9', b' ', b'T', b'f']));
+        assert_eq!(text_style(&d, None).size, 9.0);
+        assert_eq!(da_font_name(&dict("/TiRo Tf", None)).as_deref(), Some("TiRo"));
+        assert_eq!(da_font_name(&dict("12 Tf", None)), None);
+        assert_eq!(da_font_name(&dict("0 g Tf", None)), None);
     }
 
     #[test]
