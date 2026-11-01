@@ -154,17 +154,30 @@ const BOOKMARK_URL: &str = "https://example.org/from-a-bookmark";
 /// Three 300×400 pages whose bookmarks open a web address, go to page 2 of `target.pdf` (a remote
 /// go-to, whose `[1 /Fit]` is the other file's page) and go to page 3 here.
 fn bookmark_fixture() -> Vec<u8> {
-    let objs = [
+    outline_pdf(&[
+        ("Website", format!("/A << /S /URI /URI ({BOOKMARK_URL}) >>")),
+        ("Chapter in target", "/A << /S /GoToR /F (target.pdf) /D [1 /Fit] >>".into()),
+        ("Appendix", "/Dest [5 0 R /Fit]".into()),
+    ])
+}
+
+/// Three 300×400 pages (objects 3–5) and a flat outline of `bookmarks`: each a title and the rest
+/// of its dictionary (its `/Dest` or `/A`).
+fn outline_pdf(bookmarks: &[(&str, String)]) -> Vec<u8> {
+    let n = bookmarks.len();
+    let mut objs = vec![
         "<< /Type /Catalog /Pages 2 0 R /Outlines 6 0 R >>".to_string(),
         "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 300 400] >>".to_string(),
         "<< /Type /Page /Parent 2 0 R >>".to_string(),
         "<< /Type /Page /Parent 2 0 R >>".to_string(),
         "<< /Type /Page /Parent 2 0 R >>".to_string(),
-        "<< /Type /Outlines /First 7 0 R /Last 9 0 R /Count 3 >>".to_string(),
-        format!("<< /Title (Website) /Parent 6 0 R /Next 8 0 R /A << /S /URI /URI ({BOOKMARK_URL}) >> >>"),
-        "<< /Title (Chapter in target) /Parent 6 0 R /Prev 7 0 R /Next 9 0 R /A << /S /GoToR /F (target.pdf) /D [1 /Fit] >> >>".to_string(),
-        "<< /Title (Appendix) /Parent 6 0 R /Prev 8 0 R /Dest [5 0 R /Fit] >>".to_string(),
+        format!("<< /Type /Outlines /First 7 0 R /Last {} 0 R /Count {n} >>", 6 + n),
     ];
+    for (k, (title, rest)) in bookmarks.iter().enumerate() {
+        let prev = if k == 0 { String::new() } else { format!(" /Prev {} 0 R", 6 + k) };
+        let next = if k + 1 == n { String::new() } else { format!(" /Next {} 0 R", 8 + k) };
+        objs.push(format!("<< /Title ({title}) /Parent 6 0 R{prev}{next} {rest} >>"));
+    }
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offs = Vec::new();
     for (i, o) in objs.iter().enumerate() {
@@ -183,10 +196,16 @@ fn bookmark_fixture() -> Vec<u8> {
 /// The app with [`bookmark_fixture`] open from `source_path` (in memory when `None`) and the
 /// Bookmarks panel showing.
 fn bookmark_harness(source_path: Option<String>) -> Harness<'static, PdfCraftApp> {
+    bookmark_harness_with(source_path, bookmark_fixture())
+}
+
+/// The app with `pdf` open from `source_path` (in memory when `None`) and the Bookmarks panel
+/// showing.
+fn bookmark_harness_with(source_path: Option<String>, pdf: Vec<u8>) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
-        app.open_bytes("source.pdf", source_path, bookmark_fixture()).unwrap();
+        app.open_bytes("source.pdf", source_path, pdf).unwrap();
         app.set_option("left", "closed").unwrap();
         app.set_option("panel", "bookmarks").unwrap();
         app
@@ -234,6 +253,44 @@ fn a_bookmark_to_another_pdf_opens_it_instead_of_moving_here() {
     assert_eq!(h.state().views[0].current, 0, "the source stays on its page");
     assert_eq!(h.state().active, Some(1));
     assert_eq!(h.state().views[1].current, 1, "the other file opens at the bookmark's page");
+}
+
+/// Bookmarks go through the link policy, not around it. A script action is named and not run (its
+/// `app.launchURL` asks for nothing), a Launch of a program is named and nothing starts, a
+/// destination that doesn't exist does nothing, and a remote go-to by an absolute path waits for
+/// consent before the file is touched.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn bookmarks_go_through_the_link_policy() {
+    let _gpu = gpu();
+    let dir = std::env::temp_dir().join(format!("pdfcraft-ui-bookmark-policy-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let target = dir.join("absent.pdf");
+    // A PDF string: backslashes and parentheses escaped.
+    let file = target.to_str().unwrap().replace('\\', "\\\\").replace('(', "\\(").replace(')', "\\)");
+    let pdf = outline_pdf(&[
+        ("Script", r#"/A << /S /JavaScript /JS (app.launchURL\("https://example.org/from-a-script", true\);) >>"#.into()),
+        ("Program", "/A << /S /Launch /F (tool.exe) >>".into()),
+        ("Missing", "/Dest (nowhere)".into()),
+        ("Absolute", format!("/A << /S /GoToR /F ({file}) /D [0 /Fit] >>")),
+    ]);
+    let mut h = bookmark_harness_with(None, pdf);
+    for (title, notice) in [
+        ("Script", Some("This PDF uses the unsupported JavaScript action.")),
+        ("Program", Some("This PDF uses the unsupported Launch action.")),
+        ("Missing", None),
+    ] {
+        h.state_mut().toast = None;
+        click_bookmark(&mut h, title);
+        let s = h.state();
+        assert_eq!(s.toast.as_ref().map(|t| t.0.as_str()), notice, "{title}");
+        assert_eq!((&s.pending_link, &s.last_opened_url, s.views.len(), s.views[0].current), (&None, &None, 1, 0), "{title}: nothing opened");
+    }
+    click_bookmark(&mut h, "Absolute");
+    assert_eq!(h.state().pending_remote_link.as_ref().map(|p| p.path.clone()), Some(target));
+    assert_eq!(h.state().views.len(), 1);
+    assert!(h.state().toast.is_none(), "the file is not touched before consent");
 }
 
 #[test]
