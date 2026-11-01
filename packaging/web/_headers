@@ -1,6 +1,7 @@
 # Netlify / Cloudflare Pages header rules (see HOSTING.md). Other hosts: set the same headers.
 /*
   X-Content-Type-Options: nosniff
+  Cross-Origin-Opener-Policy: same-origin
 
 /*.wasm
   Content-Type: application/wasm
