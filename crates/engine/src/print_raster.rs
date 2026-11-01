@@ -29,14 +29,15 @@ pub fn rasterize(doc: &Document, pages: &[usize], raster: &Raster, content: Cont
     })??;
     let mut renderer = PageRenderer::new(std::sync::Arc::new(printed), config);
     let mut images: Vec<(String, Vec<u8>)> = Vec::with_capacity(pages.len());
-    let mut used: Option<f64> = None;
+    // Every page of the image document shares one resolution, so its pages keep the source's
+    // sizes (and a label's or area's crop still fits its page): every page renders at the
+    // lowest scale a page needed.
+    let mut scale = (dpi / 72.0) as f32;
     for &page in pages {
         let (w, h) = src.sizes.get(page).copied().ok_or_else(|| format!("page {} does not exist", page + 1))?;
-        let scale = pdfcraft_render::effective_scale(w, h, (dpi / 72.0) as f32);
-        let page_dpi = f64::from(scale) * 72.0;
-        // Every page of the image document shares one resolution, so its pages keep the
-        // source's sizes; the lowest a page needed is used for all.
-        used = Some(used.map_or(page_dpi, |u: f64| u.min(page_dpi)));
+        scale = scale.min(pdfcraft_render::effective_scale(w, h, (dpi / 72.0) as f32));
+    }
+    for &page in pages {
         let r = renderer.render(RenderRequest { page, scale, tag: PRINT_TAG, ..Default::default() });
         if let Some(e) = r.error {
             return Err(format!("page {}: {e}", page + 1));
@@ -45,7 +46,7 @@ pub fn rasterize(doc: &Document, pages: &[usize], raster: &Raster, content: Cont
         over_white(&mut rgba, raster.grayscale);
         images.push((format!("page-{}.png", page + 1), encode_png(r.width, r.height, &rgba)?));
     }
-    let dpi = used.unwrap_or(dpi);
+    let dpi = f64::from(scale) * 72.0;
     let doc = pdfcraft_create::from_images_with_resolution(&images, ImageResolution::Dpi(dpi)).map_err(|e| e.to_string())?;
     pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions::default()).map_err(|e| e.to_string())
 }

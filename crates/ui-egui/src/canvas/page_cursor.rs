@@ -156,6 +156,7 @@ mod tests {
             QuickTool::SignArea { certify: false },
             QuickTool::MarqueeZoom,
             QuickTool::Snapshot,
+            QuickTool::PrintArea,
             QuickTool::ColumnSelect,
         ];
         for tool in &tools {
@@ -177,6 +178,7 @@ mod tests {
                 | QuickTool::SignArea { .. }
                 | QuickTool::MarqueeZoom
                 | QuickTool::Snapshot
+                | QuickTool::PrintArea
                 | QuickTool::ColumnSelect => {}
             }
         }
