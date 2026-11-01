@@ -217,6 +217,9 @@ fn the_default_panel_preference_picks_the_panel_a_document_opens_with() {
     assert_eq!(open("pages", "/PageMode /FullScreen"), None);
     assert_eq!(open("pages", "/PageMode /FullScreen /ViewerPreferences << /NonFullScreenPageMode /UseNone >>"), None);
     assert_eq!(open("pages", "/Outlines 9 0 R /PageMode /FullScreen /ViewerPreferences << /NonFullScreenPageMode /UseOutlines >>"), Some(Bookmarks));
+    // A document that asks for no panel in so many words gets none; naming none is not asking.
+    assert_eq!(open("pages", "/PageMode /UseNone"), None);
+    assert_eq!(open("comments", "/Outlines 9 0 R /PageMode /UseNone"), None);
     // F4 closes the panel the document opened with and opens that one again, not the one shown
     // before (CodeRabbit on #5599).
     let mut app = PdfCraftApp::new();
@@ -226,6 +229,14 @@ fn the_default_panel_preference_picks_the_panel_a_document_opens_with() {
     assert_eq!(app.right, None);
     app.execute("view.side_panel");
     assert_eq!(app.right, Some(Pages));
+    // The same for a panel the document names over the preference (CodeRabbit on #5599).
+    let mut app = PdfCraftApp::new();
+    app.set_option("default-panel", "pages").unwrap();
+    app.open_bytes("open.pdf", None, fixture("/Outlines 9 0 R /PageMode /UseOutlines")).expect("opens");
+    assert_eq!(app.right, Some(Bookmarks));
+    app.execute("view.side_panel");
+    app.execute("view.side_panel");
+    assert_eq!(app.right, Some(Bookmarks), "F4 brings back the document's panel");
     // The right panel is shared by the tabs and comes back from the last session: Automatic
     // leaves an open one alone, a chosen panel replaces it.
     let reopen = |panel: &str| {

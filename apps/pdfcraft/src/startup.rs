@@ -265,6 +265,26 @@ mod repeated_file_tests {
         with_options(&mut app, options, false, |app| open_files(app, &[file], false));
         assert_eq!(app.right, Some(pdfcraft_ui_egui::RightPanel::Pages), "the startup file opened with the default panel");
         assert!((app.views[0].zoom - 1.5).abs() < 1e-3, "--zoom still acts on the open document");
+        // FredApps on #5599: with Reopen documents from last session on, the files that come
+        // back open with it too, as does a file given on the command line after them.
+        let second = std::env::temp_dir().join(format!("pdfcraft-default-panel-restore-{}.pdf", std::process::id()));
+        std::fs::write(&second, include_bytes!("../../../crates/ui-egui/tests/data/form.pdf")).unwrap();
+        let mut last = PdfCraftApp::new();
+        last.reopen_last_session = true;
+        last.open_path(second.to_str().unwrap());
+        assert_eq!(last.views.len(), 1);
+        let saved = last.persist();
+        let mut app = PdfCraftApp::new();
+        app.restore(&saved);
+        let options = vec![("default-panel".to_string(), "pages".to_string())];
+        let file = path.to_str().unwrap().to_string();
+        with_options(&mut app, options, false, |app| {
+            app.reopen_last_files(std::slice::from_ref(&file));
+            open_files(app, std::slice::from_ref(&file), false);
+        });
+        assert_eq!(app.views.len(), 2, "the restored file and the command-line one");
+        assert_eq!(app.right, Some(pdfcraft_ui_egui::RightPanel::Pages));
+        std::fs::remove_file(second).unwrap();
         std::fs::remove_file(path).unwrap();
     }
 
