@@ -1524,3 +1524,101 @@ fn typing_in_one_tab_never_reaches_another_tabs_added_text() {
     h.run_steps(3);
     assert_eq!(h.state().views[1].content.draft.as_ref().map(|d| d.text.as_str()), Some("Reviewed"), "the other tab's typing stays out");
 }
+
+/// Added-image shortcuts trade only added-item slots, keep image identity across another image,
+/// and preserve editable metadata and selection through undo/redo. The original page stays put.
+#[test]
+fn arrange_shortcuts_keep_added_images_editable_with_the_image_controller() {
+    // The form fixture has no page artwork: add one original stream so preservation is real.
+    let mut cos = pdfcraft_cos::Document::open(std::sync::Arc::new(include_bytes!("../data/form.pdf").to_vec())).unwrap();
+    let page = pdfcraft_model::pages(&cos).remove(0);
+    let artwork = cos.add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::flate(pdfcraft_cos::Dict::new(), b"0.5 g 10 10 20 20 re f")));
+    cos.update_dict(page.obj, |dict| dict.set(b"Contents".to_vec(), pdfcraft_cos::Object::Ref(artwork))).unwrap();
+    let bytes = pdfcraft_cos::write_incremental(&cos, &pdfcraft_cos::SaveOptions::default()).unwrap();
+    let mut h = harness_bytes(bytes);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    for (i, word) in ["ONE", "TWO"].into_iter().enumerate() {
+        let text = pdfcraft_engine::AddedText { rect: [20.0, 300.0, 100.0, 314.0], text: word.into(), ..Default::default() };
+        assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text }));
+        let mut png = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut png, 30, 20);
+            enc.set_color(png::ColorType::Rgb);
+            enc.write_header().unwrap().write_image_data(&vec![90 + i as u8 * 30; 1800]).unwrap();
+        }
+        h.state_mut().add_image(format!("image-{i}.png"), png);
+        h.run_steps(3);
+        let mut content = added(&h).last().unwrap().content.clone();
+        let pdfcraft_engine::AddedContent::Image(image) = &mut content else { panic!() };
+        image.rect = [100.0 + i as f64 * 60.0, 250.0, 130.0 + i as f64 * 60.0, 270.0];
+        assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::UpdateContent { page: 0, index: i * 2 + 1, content }));
+    }
+    crate::support::settle(&mut h);
+    let original = added(&h);
+    let target = original[1].clone();
+    let point = at(&h, 115.0, 140.0);
+    click(&mut h, point);
+    assert!(h.state().views[0].image_selection.is_some(), "a real click uses the image controller");
+    assert_eq!(h.state().views[0].content.selected, Some((0, 1)));
+    let original_streams = |h: &Harness<'static, PdfCraftApp>| {
+        let doc = h.state().session.get(h.state().views[0].id).unwrap();
+        let cos = pdfcraft_cos::Document::open(doc.bytes.clone()).unwrap();
+        let page = pdfcraft_model::pages(&cos).remove(0);
+        let entries = cos.resolve(page.dict.get(b"Contents").unwrap());
+        entries
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, entry)| {
+                let obj = cos.resolve(entry);
+                let dict = obj.as_dict()?;
+                (dict.name(b"PCMark") != Some(b"Added")).then(|| (slot, entry.clone(), obj.clone()))
+            })
+            .collect::<Vec<_>>()
+    };
+    let page_before = original_streams(&h);
+    assert!(!page_before.is_empty(), "the fixture has ordinary page content to preserve");
+    let check = |h: &Harness<'static, PdfCraftApp>, expected: [usize; 4], selected: usize| {
+        assert_eq!(added(h), expected.map(|i| original[i].clone()), "only added slots trade places");
+        assert_eq!(h.state().views[0].content.selected, Some((0, selected)));
+        let sel = h.state().views[0].image_selection.as_ref().expect("image selection retained");
+        let doc = h.state().session.get(h.state().views[0].id).unwrap();
+        let image = &doc.page_images(0)[sel.index];
+        let pdfcraft_engine::AddedContent::Image(target_image) = &target.content else { panic!() };
+        assert_eq!(image.object, Some(target_image.image), "the same picture stays selected");
+        assert_eq!(original_streams(h), page_before, "ordinary page streams keep their slots and bytes");
+    };
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::ArrowUp);
+    h.run_steps(3);
+    check(&h, [0, 2, 1, 3], 2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::ArrowUp);
+    h.run_steps(3);
+    check(&h, [0, 2, 3, 1], 3);
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(3);
+    check(&h, [0, 2, 1, 3], 2);
+    assert!(h.state_mut().execute("edit.redo"));
+    h.run_steps(3);
+    check(&h, [0, 2, 3, 1], 3);
+    h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::ArrowDown);
+    h.run_steps(3);
+    check(&h, [1, 0, 2, 3], 0);
+    // The upstream image menu still arranges among ordinary page content, promoting the
+    // selected added image to an ordinary image. It is deliberately separate from the keys.
+    h.hover_at(point);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: point, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE });
+    }
+    h.run_steps(2);
+    h.get_by_label("Arrange image").click();
+    h.run_steps(2);
+    h.get_by_label("Send to back").click();
+    h.run_steps(3);
+    assert_eq!(added(&h), [0, 2, 3].map(|i| original[i].clone()), "the image menu retains its separate promotion behavior");
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    let sel = h.state().views[0].image_selection.as_ref().expect("the promoted picture stays selected");
+    let pdfcraft_engine::AddedContent::Image(image) = target.content else { panic!() };
+    assert_eq!(doc.page_images(0)[sel.index].object, Some(image.image));
+}

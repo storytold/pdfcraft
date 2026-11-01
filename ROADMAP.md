@@ -88,6 +88,7 @@
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M12 #2570: Dynamic XFA rich-text fields carry exData/maxLength into AcroForm MaxLen for reported and enforced Unicode character limits, retained after save/reopen. Estimates unchanged)
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M4 #3309: bounded iterative named-destination pruning on page deletion; estimates unchanged)
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M1 #2658: macOS atomic saves retain destination extended attributes, including Finder tags, and reject partial resource-fork reads after size changes. Metadata failures retain the original PDF and unsaved edit. Estimates unchanged)
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (PR #4914 rebased onto main 0cba87ae; added-only Arrange shortcuts preserve image-controller selection and editability, original page streams and the separate upstream image menu; both regression mutations fail and 3284 scoped tests pass (nine existing ignored), with strict Clippy and repository/wasm gates)
 
 PdfCraft's one-page summary: how close it is to Adobe Acrobat Pro's offline feature set, and what
 comes next. Adobe's cloud services (Document Cloud, Acrobat Sign requests, shared review, the AI
@@ -743,6 +744,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | patch | PR #4914 rebased onto main 0cba87ae; added-only Arrange shortcuts preserve image-controller selection and editability, original page streams and the separate upstream image menu; both regression mutations fail and 3284 scoped tests pass (nine existing ignored), with strict Clippy and repository/wasm gates. |
 | 2026-10-28 | patch | M2, PR #4172: integrate main 5af10276 and retain both roadmap histories; viewer-only CJK and print/output font policies and estimates unchanged. |
 | 2026-10-27 | minor | M10: OCR stages SHA-256-verified ONNX models after the upstream RTEN URL brownout; discovery prefers a complete ONNX pair per directory, falls back to a complete RTEN pair, and never mixes formats or directories; language/web limits and estimates unchanged. |
 | 2026-10-23 | minor | M8, #3205 follow-up: phone-pattern redaction includes the +39 country code on labelled Italian geographic numbers with a slash; dates, protocol identifiers and whole-run guards remain. Estimates unchanged. |
@@ -825,4 +827,6 @@ PR #1952 retains per-widget checkbox/radio export-value editing in the split for
 
 - **2026-10-31 (#1577):** Reconciled the page-shadow preference with split viewer, organizer, settings and control modules, preserving upstream page-gap shadow suppression. CI validation pending.
 - **2026-10-27 (M7, #3798):** Added text and images can be arranged in the drawing order: Ctrl/Cmd+Up and Down (with Shift to the front or back) in Edit a PDF, and `content_arrange` (`Edit::ArrangeContent`). The items trade places among themselves, one undo step each, saved in the file; the page's own content stays put, and there is no context-menu entry yet.
+
+- **2026-11-01 (M7, #3798 review):** PR #4914 rebased onto main 0cba87ae; added-only Arrange shortcuts preserve image-controller selection and editability, original page streams and the separate upstream image menu; both regression mutations fail and 3284 scoped tests pass (nine existing ignored), with strict Clippy and repository/wasm gates.
 

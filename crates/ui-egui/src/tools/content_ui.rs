@@ -584,9 +584,11 @@ pub(crate) fn release_image_selection(view: &mut DocView, added: &[Added]) {
 /// step over or under the next added item, and with Shift all the way to the front or the back
 /// (#3798).
 pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, added: &[Added], unobstructed: bool, image_controller_active: bool) {
-    if image_controller_active && view.image_selection.is_some()
-        || matches!(view.pending_edit.as_ref(), Some(Edit::EditPageImage { .. }))
-        || view.content.selected.is_none() || view.content.draft.is_some() || ctx.egui_wants_keyboard_input() {
+    if matches!(view.pending_edit.as_ref(), Some(Edit::EditPageImage { .. }))
+        || view.content.selected.is_none()
+        || view.content.draft.is_some()
+        || ctx.egui_wants_keyboard_input()
+    {
         return;
     }
     // Not under a dialog or the palette: the shortcut is left alone there.
@@ -617,6 +619,11 @@ pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, added: &[Added], uno
             // The item keeps the selection where it lands.
             view.content.selected = Some((page, target));
         }
+        return;
+    }
+    // The image controller keeps ownership of Delete/Escape; arranging above changes only
+    // editable added items, unlike the image menu's arrangement among all page content.
+    if image_controller_active && view.image_selection.is_some() {
         return;
     }
     let (del, esc) = ctx.input(|i| (i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace), i.key_pressed(egui::Key::Escape)));
