@@ -1922,6 +1922,7 @@
 	Rotate image	Кескінді бұру
 	Flip image	Кескінді аудару
 	Delete image	Кескінді жою
+	Ungroup artwork	Графиканы топтан шығару
 	Add header & footer	Үстіңгі және астыңғы колонтитулдарды қосу
 	Update header & footer	Үстіңгі және астыңғы колонтитулдарды жаңарту
 	Update watermark	Су белгісін жаңарту
@@ -2504,6 +2505,7 @@ animation effects	Off	Өшірулі
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Принтер мәтінді, көлеңкені немесе мөлдірлікті өткізіп жіберсе, қолданыңыз. Басылған құжат енді іздеуге болатын мәтін емес; сұр реңкпен басып шығарғанда суреттер сұр болады.
 	Crop Image	Суретті қию
 	Remove Crop	Қиюды алып тастау
+	Ungroup	Топтан шығару
 	Trim the picture with its handles; Enter or Done applies	Суретті тұтқаларымен қиыңыз; Enter немесе Дайын қолданады
 	Redaction mark appearance	Жасыру белгісінің көрінісі
 	Outline colour:	Контур түсі:

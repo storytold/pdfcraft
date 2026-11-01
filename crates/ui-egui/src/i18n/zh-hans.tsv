@@ -2037,6 +2037,7 @@
 	Delete document JavaScript	删除文档 JavaScript
 	Delete field	删除字段
 	Delete image	删除图像
+	Ungroup artwork	取消组合图稿
 	Delete link	删除链接
 	Delete page	删除页面
 	Device colour is used, but there is no PDF/A output intent	使用了设备颜色，但未设置 PDF/A 输出意图
@@ -2470,6 +2471,7 @@ animation effects	Off	关
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	当打印机漏印文字、渐变或透明效果时使用。打印结果不再是可搜索的文字；配合灰度打印时图像为灰色。
 	Crop Image	裁剪图像
 	Remove Crop	移除裁剪
+	Ungroup	取消组合
 	Trim the picture with its handles; Enter or Done applies	用控制柄裁剪图片;按 Enter 或“完成”应用
 	Redaction mark appearance	涂黑标记外观
 	Outline colour:	轮廓颜色:

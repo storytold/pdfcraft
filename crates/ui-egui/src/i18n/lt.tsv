@@ -2057,6 +2057,7 @@ comment menu	Edit	Redaguoti
 	Delete document JavaScript	Naikinti dokumento „JavaScript“ scenarijų
 	Delete field	Naikinti lauką
 	Delete image	Naikinti paveikslėlį
+	Ungroup artwork	Išgrupuoti grafiką
 	Delete link	Naikinti saitą
 	Delete page	Naikinti puslapį
 	Delete selected fields	Naikinti pasirinktus laukus
@@ -2756,6 +2757,7 @@ key	Space	Tarpas
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Naudokite, kai spausdintuvas praleidžia tekstą, šešėliavimą ar skaidrumą. Atspaudas nebėra ieškomas tekstas; spausdinant pilkais atspalviais vaizdai yra pilki.
 	Crop Image	Apkarpyti vaizdą
 	Remove Crop	Pašalinti apkarpymą
+	Ungroup	Išgrupuoti
 	Trim the picture with its handles; Enter or Done applies	Apkarpykite paveikslėlį rankenėlėmis; Enter arba Atlikta pritaiko
 	Redaction mark appearance	Užtamsinimo žymės išvaizda
 	Outline colour:	Kontūro spalva:

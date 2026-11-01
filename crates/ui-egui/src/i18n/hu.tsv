@@ -1921,6 +1921,7 @@
 	Rotate image	Kép forgatása
 	Flip image	Kép tükrözése
 	Delete image	Kép törlése
+	Ungroup artwork	Grafika csoportbontása
 	Add header & footer	Fejléc és lábléc hozzáadása
 	Update header & footer	Fejléc és lábléc frissítése
 	Update watermark	Vízjel frissítése
@@ -2505,6 +2506,7 @@ animation effects	Off	Ki
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Akkor használja, ha a nyomtató kihagy szöveget, árnyékolást vagy átlátszóságot. A nyomat már nem kereshető szöveg; szürkeárnyalatos nyomtatással a képek szürkék.
 	Crop Image	Kép körülvágása
 	Remove Crop	Körülvágás eltávolítása
+	Ungroup	Csoportbontás
 	Trim the picture with its handles; Enter or Done applies	Vágja körül a képet a fogantyúival; Enter vagy Kész alkalmazza
 	Redaction mark appearance	Kitakarási jelölés megjelenése
 	Outline colour:	Körvonal színe:

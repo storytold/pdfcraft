@@ -2810,3 +2810,6 @@ theme	Appearance	Tampilan
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opsi untuk balasan ini
+
+# AI-assisted addition for ungrouping Form artwork (#3067); not reviewed by a native speaker.
+	Ungroup	Pisahkan grup

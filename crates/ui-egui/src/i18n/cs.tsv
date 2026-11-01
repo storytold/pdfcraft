@@ -2050,6 +2050,7 @@ key	Space	Mezerník
 	Rotate image	Otočit obrázek
 	Flip image	Převrátit obrázek
 	Delete image	Odstranit obrázek
+	Ungroup artwork	Zrušit seskupení grafiky
 	Add header & footer	Přidat záhlaví a zápatí
 	Update header & footer	Aktualizovat záhlaví a zápatí
 	Update watermark	Aktualizovat vodoznak
@@ -2580,6 +2581,7 @@ animation effects	Off	Vypnuto
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Použijte, když tiskárna vynechává text, stínování nebo průhlednost. Výtisk už není prohledávatelný text; s tiskem v odstínech šedi jsou obrázky šedé.
 	Crop Image	Oříznout obrázek
 	Remove Crop	Odebrat oříznutí
+	Ungroup	Zrušit seskupení
 	Trim the picture with its handles; Enter or Done applies	Ořízněte obrázek úchyty; Enter nebo Hotovo použije
 	Redaction mark appearance	Vzhled značky začernění
 	Outline colour:	Barva obrysu:

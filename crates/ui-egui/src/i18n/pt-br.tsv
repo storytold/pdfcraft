@@ -1900,6 +1900,7 @@
 	Delete document JavaScript	Excluir JavaScript do documento
 	Delete field	Excluir campo
 	Delete image	Excluir imagem
+	Ungroup artwork	Desagrupar arte
 	Delete link	Excluir link
 	Delete page	Excluir página
 	Device colour is used, but there is no PDF/A output intent	A cor do dispositivo foi usada, mas não há intenção de saída PDF/A
@@ -2520,6 +2521,7 @@ animation effects	Off	Desativados
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Use quando uma impressora omite texto, sombreamento ou transparência. A impressão deixa de ser texto pesquisável; com Imprimir em tons de cinza, as imagens ficam cinza.
 	Crop Image	Cortar imagem
 	Remove Crop	Remover corte
+	Ungroup	Desagrupar
 	Trim the picture with its handles; Enter or Done applies	Corte a imagem com as alças; Enter ou Concluído aplica
 	Redaction mark appearance	Aparência da marca de redação
 	Outline colour:	Cor do contorno:

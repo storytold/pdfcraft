@@ -554,6 +554,7 @@
 	Delete document JavaScript	Izbriši JavaScript dokumenta
 	Delete field	Izbriši polje
 	Delete image	Izbriši sliko
+	Ungroup artwork	Razdruži grafiko
 	Delete link	Izbriši povezavo
 	Delete page	Izbriši stran
 	Delete pages	Izbriši strani
@@ -2511,6 +2512,7 @@ animation effects	Off	Izklopljeni
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Uporabite, ko tiskalnik izpusti besedilo, senčenje ali prosojnost. Natis ni več iskalno besedilo; s tiskanjem v sivinah so slike sive.
 	Crop Image	Obreži sliko
 	Remove Crop	Odstrani obrezovanje
+	Ungroup	Razdruži
 	Trim the picture with its handles; Enter or Done applies	Obrežite sliko z ročicami; Enter ali Končano uporabi
 	Redaction mark appearance	Videz oznake za zakritje
 	Outline colour:	Barva obrobe:

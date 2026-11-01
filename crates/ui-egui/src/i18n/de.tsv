@@ -1936,6 +1936,7 @@
 	Rotate image	Bild drehen
 	Flip image	Bild spiegeln
 	Delete image	Bild löschen
+	Ungroup artwork	Gruppierung der Grafik aufheben
 	Add header & footer	Kopf- und Fußzeile hinzufügen
 	Update header & footer	Kopf- und Fußzeile aktualisieren
 	Update watermark	Wasserzeichen aktualisieren
@@ -2507,6 +2508,7 @@ animation effects	Off	Aus
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Verwenden, wenn ein Drucker Text, Schattierungen oder Transparenz auslässt. Der Ausdruck ist kein durchsuchbarer Text mehr; mit Graustufendruck sind die Bilder grau.
 	Crop Image	Bild zuschneiden
 	Remove Crop	Zuschnitt entfernen
+	Ungroup	Gruppierung aufheben
 	Trim the picture with its handles; Enter or Done applies	Bild mit den Griffen zuschneiden; Eingabe oder Fertig übernimmt
 	Redaction mark appearance	Aussehen der Schwärzungsmarkierung
 	Outline colour:	Konturfarbe:

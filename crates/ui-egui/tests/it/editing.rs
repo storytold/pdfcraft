@@ -7679,3 +7679,66 @@ fn escape_in_an_open_paragraph_selects_its_box_for_delete() {
         assert_eq!(blocks(&h)[0].text, "Page 1");
     }
 }
+
+/// #3005: a table drawn inside one Form XObject is a single piece of artwork in Edit text &
+/// images. Its right-click menu offers Ungroup, which draws the form in place so the table's
+/// text can be edited; one Undo puts the form back.
+#[test]
+fn ungroup_in_the_artwork_menu_makes_a_forms_text_editable() {
+    let table = b"BT /F1 14 Tf 1 0 0 1 40 200 Tm (Revenue 153,300.00) Tj 1 0 0 1 40 170 Tm (Costs 382,110.00) Tj ET";
+    let stream = |dict: &str, data: &[u8]| [format!("{dict} /Length {} >>\nstream\n", data.len()).as_bytes(), data, b"\nendstream"].concat();
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents 4 0 R /Resources << /XObject << /Fm1 5 0 R >> >> >>".to_vec(),
+        stream("<<", b"q /Fm1 Do Q"),
+        stream("<< /Type /XObject /Subtype /Form /BBox [0 0 400 300] /Group << /S /Transparency >> /Resources << /Font << /F1 6 0 R >> >>", table),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_vec(),
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        pdf.extend_from_slice(o);
+        pdf.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("table.pdf", None, pdf.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    let blocks = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().text_blocks(0).len();
+    assert_eq!(blocks(&h), 0, "the table's text is inside the form");
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    // An empty spot of the form: the artwork, not a paragraph.
+    let at = r.left_top() + egui::vec2(r.width() * 0.8, r.height() * 0.85);
+    right_click_at(&mut h, at);
+    h.run_steps(1);
+    let selection = h.state().views[0].image_selection.as_ref().map(|s| (s.page, s.index));
+    assert_eq!(selection, Some((0, 0)), "the right-click selects the form");
+    assert!(h.query_by_label("Ungroup").is_some(), "the artwork menu offers Ungroup");
+    // The page's own menu opens over the artwork menu (#2637, fixed by #2155), so the item is
+    // applied the way it queues its edit rather than clicked through the overlap.
+    h.state_mut().views[0].pending_edit =
+        Some(pdfcraft_engine::Edit::EditPageImage { page: 0, index: 0, change: pdfcraft_engine::ImageEdit::Ungroup });
+    h.run_steps(4);
+    assert!(blocks(&h) >= 1, "the table's rows are page text now");
+    let images = h.state().session.get(id).unwrap().page_images(0);
+    assert!(images.is_empty(), "no artwork left: {images:?}");
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(3);
+    assert_eq!(blocks(&h), 0, "undo puts the form back");
+}
