@@ -10213,11 +10213,11 @@ title = "PDF preview in the Windows File Explorer preview pane"
 area = "N"
 tier = "P2"
 milestone = "M14"
-status = "shipped"
+status = "partial"
 commands = []
 tools = []
 evidence = ["crates/preview/src/lib.rs::the_first_page_is_fitted_into_the_pane", "crates/preview/src/windows.rs::explorer_gets_the_first_page_in_the_preview_pane", "crates/preview/src/windows.rs::unreadable_files_fail_without_panicking", "crates/preview/src/windows.rs::other_class_ids_are_refused", "crates/preview/src/windows.rs::com_guard_turns_an_escaped_panic_into_a_failure"]
-notes = "While PdfCraft is the default PDF app, selecting a PDF in File Explorer can show its first page in the preview pane (#3207). pdfcraft_preview.dll implements IPreviewHandler / IInitializeWithStream / IObjectWithSite, renders through this crate's render_page_fit (bounded file size and bitmap dimensions, catch_unwind at the COM boundary), and is registered only on PdfCraft.Document (never on .pdf itself). It does not link pdfcraft_thumbnails, so COM entry points are not duplicated at link time. Outlook and other preview hosts that use the same Windows API are expected to work but are not parity-evidence yet."
+notes = "While PdfCraft is the default PDF app, selecting a PDF in File Explorer can show its first page in the preview pane (#3207). pdfcraft_preview.dll implements IPreviewHandler / IInitializeWithStream / IObjectWithSite, renders through this crate's render_page_fit (bounded file size and bitmap dimensions, catch_unwind at the COM boundary), and is registered only on PdfCraft.Document (never on .pdf itself). It does not link pdfcraft_thumbnails, so COM entry points are not duplicated at link time. MSI registration is checked in test-msi.ps1; COM unit tests cover the handler on Windows. Still missing parity-evidence: preview appearance in Explorer on a real install, and Outlook or other hosts."
 [[feature]]
 id = "misc.web-deploy"
 title = "Hosted web app deployment"
