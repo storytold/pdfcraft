@@ -42,6 +42,11 @@
 //!   `theme=light|dark|system` changes the saved theme preference; `ui.state.theme_preference`
 //!   reports the choice and `ui.state.theme` reports the resolved light/dark colours.
 //!   `comment-tool-pinned=true|false` remembers the annotation quick bar's pin across restarts;
+//!   `hotbar-tools` accepts comma-separated command IDs (empty clears the bar), and
+//!   `hotbar-side=float|left|right|top|bottom` floats or docks the customizable hotbar;
+//!   `hotbar-full-side=true|false` extends a docked bar along the entire side.
+//!   `hotbar-size=24..64` controls its button size in logical pixels; `ui.state.hotbar`
+//!   reports its tools, relative position, orientation and strip preference. These options persist across restarts.
 //!   `ui.state.comment_tool_pinned` reports the same preference.
 //! - `ui.open {path}`: open a file. A file whose tab is already open focuses it
 //!   (`"focused": true`) instead of adding a tab; native opens report `pending: true` until

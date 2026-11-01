@@ -3,6 +3,11 @@
 # Clean-room translations of PdfCraft's English UI labels. Use standard Indonesian computing
 # terms; keep product and format names (PdfCraft, PDF, PDF/A, OCR, XFA, Word...) unchanged.
 # Indonesian does not inflect nouns for number, so @plural entries list one form.
+
+# Untranslated: English text until a translator fills these in.
+	Lowering this forgets the oldest files. At 0 there is no list.	Lowering this forgets the oldest files. At 0 there is no list.
+	Recent files to keep	Recent files to keep
+
 	Menu	Menu
 	Edit	Edit
 	Pages	Halaman
@@ -2794,6 +2799,31 @@ theme	Appearance	Tampilan
 	field names can't contain a period: {name}	nama kolom tidak boleh berisi titik: {name}
 	two cells would both be named {name}	dua sel akan sama-sama bernama {name}
 	a field named {name} already exists	kolom bernama {name} sudah ada
+	Clear search	Bersihkan pencarian
+	Edit this PDF	Edit PDF ini
+	Export this PDF	Ekspor PDF ini
+	Find text or tools	Temukan teks atau alat
+	Hand Tool	Alat Tangan
+	Marquee Zoom	Zoom Bidang
+	Pin	Sematkan
+	Pin a tool…	Sematkan alat…
+	Pin to Home	Sematkan ke Beranda
+	Pin tools to Home	Sematkan alat ke Beranda
+	Pin your favorite tools here for quick access.	Sematkan alat favorit Anda di sini untuk akses cepat.
+	Pinned	Disematkan
+	Pinned Tools	Alat yang Disematkan
+	Search tools…	Cari alat…
+	Select Tool	Alat Pemilih
+	Select tools to display on your Home page for quick access.	Pilih alat untuk ditampilkan di halaman Beranda Anda untuk akses cepat.
+	Unpin from Home	Lepas sematan dari Beranda
+	Unpin tool	Lepas sematan alat
+	Arrange image	Atur gambar
+	Bring forward	Maju Selangkah
+	Bring to front	Bawa ke Depan
+	Crop	Pangkas
+	Remove crop	Hapus pangkasan
+	Send backward	Mundur Selangkah
+	Send to back	Kirim ke Belakang
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hari ini
@@ -2817,3 +2847,10 @@ theme	Appearance	Tampilan
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opsi untuk balasan ini
+
+# Image paste and Home notifications (AI-assisted; not separately native-reviewed)
+	Search…	Cari…
+	Image pasted	Gambar ditempel
+	No image on clipboard to paste	Tidak ada gambar di papan klip untuk ditempel
+	Pinned {tool} to Home	{tool} disematkan ke Beranda
+	Unpinned {tool} from Home	{tool} dilepas dari Beranda
