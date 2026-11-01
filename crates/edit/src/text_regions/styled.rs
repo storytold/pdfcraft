@@ -369,6 +369,21 @@ fn bare_indents(
     lines.iter().enumerate().filter(|(_, source)| bare(source)).map(|(index, _)| index).collect()
 }
 
+/// Word spacing for a source run, omitting it only within a natural-width indent.
+fn run_word_spacing(source: &TextLine, index: usize, indent: bool, bare: &std::collections::HashSet<usize>) -> f64 {
+    if indent && bare.contains(&index) { 0.0 } else { source.origin.state.word_spacing }
+}
+
+/// Apply requested character spacing and horizontal scale before source calibration.
+fn apply_run_spacing(state: &mut super::super::interp::TextState, source: &TextLine, range: Option<&RangeStyle>, style: &BlockStyle) {
+    if let Some(c) = range.and_then(|r| r.char_spacing).or(style.char_spacing) {
+        state.char_spacing = c / source.origin.k.max(1e-6);
+    }
+    if let Some(s) = range.and_then(|r| r.scale).or(style.scale) {
+        state.scale = (s / 100.0).clamp(0.1, 10.0);
+    }
+}
+
 fn calibration_factors(
     lines: &[TextLine],
     metrics: &std::collections::BTreeMap<String, Metrics>,
@@ -1015,7 +1030,7 @@ pub(crate) fn rewrite_styled_block(
                 .and_then(|r| r.char_spacing)
                 .or(style.char_spacing)
                 .map_or(source.origin.state.char_spacing, |c| c / source.origin.k.max(1e-6)),
-            if indent && bare.contains(&item.1) { 0.0 } else { source.origin.state.word_spacing },
+            run_word_spacing(source, item.1, indent, &bare),
         ) * overrides.get(&item.1).and_then(|r| r.scale).or(style.scale).map_or(source.origin.state.scale, |s| (s / 100.0).clamp(0.1, 10.0))
             * across(source)
             * calibration.get(&item.1).copied().unwrap_or(1.0)
@@ -1041,7 +1056,7 @@ pub(crate) fn rewrite_styled_block(
                     .map_or(source.origin.state.char_spacing, |s| s / source.origin.k.max(1e-6));
                 width += (shaped.advance * size_of(source, item.1)
                     + spacing * string.chars().count() as f64
-                    + if indent && bare.contains(&item.1) { 0.0 } else { source.origin.state.word_spacing * string.matches(' ').count() as f64 })
+                    + run_word_spacing(source, item.1, indent, &bare) * string.matches(' ').count() as f64)
                     * scale
                     * source.origin.k;
             } else {
@@ -1156,15 +1171,8 @@ pub(crate) fn rewrite_styled_block(
             let m = metrics.get(&item.2).ok_or_else(|| EditError::Invalid("the paragraph font is missing".into()))?;
             let mut state = source.origin.state.clone();
             state.font = Some((item.2.clone(), size_of(source, item.1)));
-            if pos < indent && bare.contains(&item.1) {
-                state.word_spacing = 0.0;
-            }
-            if let Some(c) = overrides.get(&item.1).and_then(|r| r.char_spacing).or(style.char_spacing) {
-                state.char_spacing = c / source.origin.k.max(1e-6);
-            }
-            if let Some(s) = overrides.get(&item.1).and_then(|r| r.scale).or(style.scale) {
-                state.scale = (s / 100.0).clamp(0.1, 10.0);
-            }
+            state.word_spacing = run_word_spacing(source, item.1, pos < indent, &bare);
+            apply_run_spacing(&mut state, source, overrides.get(&item.1).copied(), style);
             if !shaped_runs.contains_key(&(row_index, pos)) {
                 state.scale *= calibration.get(&item.1).copied().unwrap_or(1.0);
             }
