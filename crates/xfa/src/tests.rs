@@ -4692,3 +4692,34 @@ fn bind_items_share_one_budget_per_form() {
     let by_bytes = layout_xml(&by_bytes).unwrap();
     assert_eq!((bound(&by_bytes), kept(&by_bytes)), (8, 4));
 }
+
+/// Finding a bound list is paid for too, out of the same per-form budget: every child a path step
+/// passes over counts, matching or not, and those an index skips. Here 60 fields each pass over
+/// 200,000 children to reach one item (12 million visits against 10 million), by `[*]` and by
+/// index; the fields past the budget keep their template items, with a warning.
+#[test]
+fn bind_items_searches_share_the_budget() {
+    let fields: String = (0..60)
+        .map(|i| {
+            let reference = if i % 2 == 0 { "!big.x[*]" } else { "!big.y[199999]" };
+            format!(
+                r#"<field name="s{i}" w="2in" h="0.3in"><ui><choiceList/></ui><bindItems ref="{reference}"/><items><text>Own</text></items></field>"#
+            )
+        })
+        .collect();
+    let xdp = format!(
+        r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+<pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium stock="letter" short="8.5in" long="11in"/></pageArea></pageSet>{fields}</subform></template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data/><big>{}<x>hit</x></big></xfa:datasets></xdp:xdp>"#,
+        "<y>miss</y>".repeat(200_000)
+    );
+    let form = layout_xml(&xdp).unwrap();
+    let options = choice_options(&form);
+    let own = vec![("Own".to_string(), "Own".to_string())];
+    let bound =
+        options.iter().filter(|(_, o)| *o == [("hit".to_string(), "hit".to_string())] || *o == [("miss".to_string(), "miss".to_string())]).count();
+    let kept = options.iter().filter(|(_, o)| *o == own).count();
+    assert_eq!(bound + kept, 60, "{options:?}");
+    assert!((45..=50).contains(&bound), "{bound} fields bound");
+    assert!(form.warnings.iter().any(|w| w.contains("reads for one form")), "{:?}", form.warnings);
+}

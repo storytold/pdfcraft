@@ -19,23 +19,82 @@ const MAX_NODES: u32 = 2_000_000;
 const MAX_IMAGE: usize = 32 << 20;
 /// Most items a choice list keeps.
 const MAX_ITEMS: usize = 1000;
+/// Longest text run kept.
+const MAX_TEXT: usize = 1 << 20;
 
 /// What every `<bindItems>` list in one template may still take from the data, together. Each
-/// field binds its own copy of the items, so without a shared limit many choice lists bound to
-/// one large list would multiply it (100,000 fields × 1,000 items from a few megabytes of XML).
+/// field binds and searches for its own copy of the items, so without a shared limit many choice
+/// lists bound to one large list would multiply it (100,000 fields × 1,000 items, or × a scan of
+/// a million-child list, from a few megabytes of XML).
 struct BindBudget {
+    /// Bound items kept.
     items: usize,
+    /// Bytes of the kept items' labels and saved values.
     bytes: usize,
+    /// Data nodes visited finding and reading them: every child passed over on a path step
+    /// (non-matching ones and those an index skips included) and every node read for text.
+    visits: usize,
 }
 
 impl BindBudget {
-    /// Most bound items, and bytes of their labels and saved values, a template keeps.
     const fn new() -> Self {
-        Self { items: 50 * MAX_ITEMS, bytes: 32 << 20 }
+        Self { items: 50 * MAX_ITEMS, bytes: 32 << 20, visits: 10_000_000 }
+    }
+
+    /// Takes `n` visits, or `Err` (and takes none) when fewer are left.
+    fn visit(&mut self, n: usize) -> Result<(), Unbound> {
+        self.visits = self.visits.checked_sub(n).ok_or(Unbound::OverBudget)?;
+        Ok(())
     }
 }
-/// Longest text run kept.
-const MAX_TEXT: usize = 1 << 20;
+
+/// Why a `<bindItems>` list was not bound, and the field keeps its template items.
+enum Unbound {
+    /// A ref this reader does not follow.
+    Unfollowable,
+    /// The form's [`BindBudget`] has not enough left for the list.
+    OverBudget,
+}
+
+/// The element children of `parent` named `name` (any element for `None`), past the first
+/// `skip`, until `out` holds `cap`. Every child passed over is a visit out of `budget`.
+fn named_children<'a, 'd>(
+    parent: XmlNode<'a, 'd>,
+    name: Option<&str>,
+    skip: usize,
+    cap: usize,
+    budget: &mut BindBudget,
+    out: &mut Vec<XmlNode<'a, 'd>>,
+) -> Result<(), Unbound> {
+    let mut seen = 0usize;
+    for c in parent.children() {
+        if out.len() >= cap {
+            break;
+        }
+        budget.visit(1)?;
+        if c.is_element() && name.is_none_or(|name| c.tag_name().name() == name) {
+            if seen >= skip {
+                out.push(c);
+            }
+            seen = seen.saturating_add(1);
+        }
+    }
+    Ok(())
+}
+
+/// The first element child of `parent` named `name` (any element for `None`), out of `budget`.
+fn first_child<'a, 'd>(parent: XmlNode<'a, 'd>, name: Option<&str>, budget: &mut BindBudget) -> Result<Option<XmlNode<'a, 'd>>, Unbound> {
+    let mut out = Vec::with_capacity(1);
+    named_children(parent, name, 0, 1, budget, &mut out)?;
+    Ok(out.pop())
+}
+
+/// [`text_of`] a bound data node, its descendants (each a visit) paid for out of `budget` first.
+fn bound_text(n: XmlNode, budget: &mut BindBudget) -> Result<String, Unbound> {
+    let walk = n.descendants().take(budget.visits.saturating_add(1)).count();
+    budget.visit(walk)?;
+    Ok(text_of(n).trim().to_string())
+}
 
 /// Parse a measurement such as `12.7mm`, `72pt`, `1in`, `2.54cm` into points. Bare numbers are
 /// points. `None` for anything else (including `em`).
@@ -505,51 +564,30 @@ fn parse_items(n: XmlNode, warnings: &mut Vec<String>) -> (Vec<String>, Vec<Stri
 /// (relative to the field's data, or a SOM predicate) or when there is no datasets packet;
 /// the template's own items then stay.
 ///
-/// The list comes out of `budget`, the template's shared [`BindBudget`]. A list that does not
-/// fit in what is left is not bound at all: the field keeps all its template items, with a
-/// warning, rather than a list cut short with no sign of it.
+/// The list, and the work of finding and reading it, comes out of `budget`, the template's
+/// shared [`BindBudget`]. A list that does not fit in what is left is not bound at all: the
+/// field keeps all its template items, with a warning, rather than a list cut short with no
+/// sign of it.
 fn bind_items(n: XmlNode, b: XmlNode, warnings: &mut Vec<String>, budget: &mut BindBudget) -> Option<(Vec<String>, Vec<String>)> {
     let field = || n.attribute("name").map_or_else(|| "a choice list".to_string(), |name| format!("the choice list {name}"));
     let reference = b.attribute("ref").map(str::trim).unwrap_or_default();
-    let Some(nodes) = bound_nodes(n, reference) else {
+    let mut unbound = |why: Unbound| {
         if warnings.len() < 100 {
-            warnings
-                .push(format!("{} takes its items from data PdfCraft cannot follow ({reference}); it lists the template's items instead", field()));
+            warnings.push(match why {
+                Unbound::Unfollowable => {
+                    format!("{} takes its items from data PdfCraft cannot follow ({reference}); it lists the template's items instead", field())
+                }
+                Unbound::OverBudget => {
+                    format!("{} needs more of the data than PdfCraft reads for one form; it lists the template's items instead", field())
+                }
+            });
         }
-        return None;
+        None
     };
-    // `$` (or nothing) is the node's own value; a name is its attribute or else its child.
-    let read = |node: XmlNode, r: Option<&str>| -> String {
-        let r = r.map(str::trim).map(|r| r.strip_prefix("$.").unwrap_or(r)).unwrap_or("$");
-        let r = r.strip_prefix('@').unwrap_or(r);
-        if r == "$" || r.is_empty() {
-            return text_of(node).trim().to_string();
-        }
-        node.attribute(r).map(str::to_string).or_else(|| child(node, r).map(|c| text_of(c).trim().to_string())).unwrap_or_default()
+    let (labels, values, over_cap) = match bound_list(b, reference, n, budget) {
+        Ok(list) => list,
+        Err(why) => return unbound(why),
     };
-    let label_ref = b.attribute("labelRef").filter(|r| !r.trim().is_empty());
-    let over_cap = nodes.len() > MAX_ITEMS;
-    let (mut labels, mut values) = (Vec::new(), Vec::new());
-    let mut bytes = 0usize;
-    for node in nodes.into_iter().take(MAX_ITEMS) {
-        let value = read(node, b.attribute("valueRef"));
-        let label = label_ref.map_or_else(|| value.clone(), |r| read(node, Some(r)));
-        bytes = bytes.saturating_add(label.len()).saturating_add(value.len());
-        // Checked as the list grows, so a list that will not fit stops allocating at once.
-        if labels.len() >= budget.items || bytes > budget.bytes {
-            if warnings.len() < 100 {
-                warnings.push(format!(
-                    "{} takes more items from the data than PdfCraft keeps for one form; it lists the template's items instead",
-                    field()
-                ));
-            }
-            return None;
-        }
-        labels.push(label);
-        values.push(value);
-    }
-    budget.items = budget.items.saturating_sub(labels.len());
-    budget.bytes = budget.bytes.saturating_sub(bytes);
     if over_cap && warnings.len() < 100 {
         warnings.push(format!("{} has more than {MAX_ITEMS} items; the rest are left out", field()));
     }
@@ -558,21 +596,65 @@ fn bind_items(n: XmlNode, b: XmlNode, warnings: &mut Vec<String>, budget: &mut B
     Some((labels, values))
 }
 
-/// The data nodes a `<bindItems>` ref names (see [`bind_items`]), at most one past the item cap;
-/// `None` when the ref is not one this reader follows.
-fn bound_nodes<'a, 'd>(n: XmlNode<'a, 'd>, reference: &'a str) -> Option<Vec<XmlNode<'a, 'd>>> {
-    let datasets = n.document().root_element().children().find(|c| c.is_element() && c.tag_name().name() == "datasets");
-    let data = datasets.and_then(|d| child(d, "data"));
-    let prefixes: [(&str, Option<XmlNode<'a, 'd>>); 6] = [
-        ("xfa.datasets.data.", data),
-        ("xfa.datasets.", datasets),
-        ("$datasets.", datasets),
-        ("!", datasets),
-        ("$data.", data),
-        ("$record.", data.and_then(|d| d.children().find(|c| c.is_element()))),
+/// The labels and saved values [`bind_items`] lists, and whether the data had more than the
+/// item cap. The budget is taken only when the whole list fits; it is checked as the list
+/// grows, so one that will not fit stops visiting and allocating at once.
+fn bound_list(b: XmlNode, reference: &str, n: XmlNode, budget: &mut BindBudget) -> Result<(Vec<String>, Vec<String>, bool), Unbound> {
+    let nodes = bound_nodes(n, reference, budget)?;
+    // `$` (or nothing) is the node's own value; a name is its attribute or else its child.
+    let read = |node: XmlNode, r: Option<&str>, budget: &mut BindBudget| -> Result<String, Unbound> {
+        let r = r.map(str::trim).map(|r| r.strip_prefix("$.").unwrap_or(r)).unwrap_or("$");
+        let r = r.strip_prefix('@').unwrap_or(r);
+        if r == "$" || r.is_empty() {
+            return bound_text(node, budget);
+        }
+        if let Some(a) = node.attribute(r) {
+            return Ok(a.to_string());
+        }
+        first_child(node, Some(r), budget)?.map_or_else(|| Ok(String::new()), |c| bound_text(c, budget))
+    };
+    let label_ref = b.attribute("labelRef").filter(|r| !r.trim().is_empty());
+    let over_cap = nodes.len() > MAX_ITEMS;
+    let (mut labels, mut values) = (Vec::new(), Vec::new());
+    let mut bytes = 0usize;
+    for node in nodes.into_iter().take(MAX_ITEMS) {
+        let value = read(node, b.attribute("valueRef"), budget)?;
+        let label = match label_ref {
+            Some(r) => read(node, Some(r), budget)?,
+            None => value.clone(),
+        };
+        bytes = bytes.saturating_add(label.len()).saturating_add(value.len());
+        if labels.len() >= budget.items || bytes > budget.bytes {
+            return Err(Unbound::OverBudget);
+        }
+        labels.push(label);
+        values.push(value);
+    }
+    budget.items = budget.items.saturating_sub(labels.len());
+    budget.bytes = budget.bytes.saturating_sub(bytes);
+    Ok((labels, values, over_cap))
+}
+
+/// The data nodes a `<bindItems>` ref names (see [`bind_items`]), at most one past the item cap,
+/// every node visited finding them out of `budget`.
+fn bound_nodes<'a, 'd>(n: XmlNode<'a, 'd>, reference: &str, budget: &mut BindBudget) -> Result<Vec<XmlNode<'a, 'd>>, Unbound> {
+    const STARTS: [(&str, &[Option<&str>]); 6] = [
+        ("xfa.datasets.data.", &[Some("datasets"), Some("data")]),
+        ("xfa.datasets.", &[Some("datasets")]),
+        ("$datasets.", &[Some("datasets")]),
+        ("!", &[Some("datasets")]),
+        ("$data.", &[Some("datasets"), Some("data")]),
+        // The record is the first element in `xfa:data`.
+        ("$record.", &[Some("datasets"), Some("data"), None]),
     ];
-    let (start, path) = prefixes.into_iter().find_map(|(prefix, start)| reference.strip_prefix(prefix).map(|path| (start, path)))?;
-    let mut nodes = vec![start?];
+    let (steps, path) =
+        STARTS.into_iter().find_map(|(prefix, steps)| reference.strip_prefix(prefix).map(|path| (steps, path))).ok_or(Unbound::Unfollowable)?;
+    // A missing packet, `xfa:data` or record is a ref with nothing to follow.
+    let mut start = n.document().root_element();
+    for step in steps {
+        start = first_child(start, *step, budget)?.ok_or(Unbound::Unfollowable)?;
+    }
+    let mut nodes = vec![start];
     let mut segments = path.split('.').peekable();
     while let Some(seg) = segments.next() {
         // Only the final step is capped. Capping a middle step would drop later matches (the
@@ -581,25 +663,28 @@ fn bound_nodes<'a, 'd>(n: XmlNode<'a, 'd>, reference: &'a str) -> Option<Vec<Xml
         // own nodes.
         let cap = if segments.peek().is_none() { MAX_ITEMS + 1 } else { usize::MAX };
         let (name, index) = match seg.split_once('[') {
-            Some((name, rest)) => (name, Some(rest.strip_suffix(']')?.trim())),
+            Some((name, rest)) => (name, Some(rest.strip_suffix(']').ok_or(Unbound::Unfollowable)?.trim())),
             None => (seg, None),
         };
         // A class name (`#dataGroup`) or an empty step is not followed.
         if name.is_empty() || name.starts_with('#') {
-            return None;
+            return Err(Unbound::Unfollowable);
         }
         let index = match index {
             Some("*") => None,
-            Some(i) => Some(i.parse::<usize>().ok()?),
+            Some(i) => Some(i.parse::<usize>().map_err(|_| Unbound::Unfollowable)?),
             // No index is the first of the name.
             None => Some(0),
         };
         let mut next = Vec::new();
         for node in &nodes {
-            let mut same = children(*node, name);
             match index {
-                None => next.extend(same.take(cap.saturating_sub(next.len()))),
-                Some(i) => next.extend(same.nth(i)),
+                None => named_children(*node, Some(name), 0, cap, budget, &mut next)?,
+                Some(i) => {
+                    let mut one = Vec::with_capacity(1);
+                    named_children(*node, Some(name), i, 1, budget, &mut one)?;
+                    next.append(&mut one);
+                }
             }
             if next.len() >= cap {
                 break;
@@ -607,7 +692,7 @@ fn bound_nodes<'a, 'd>(n: XmlNode<'a, 'd>, reference: &'a str) -> Option<Vec<Xml
         }
         nodes = next;
     }
-    Some(nodes)
+    Ok(nodes)
 }
 
 /// A `<field>` element as the model's [`Field`]: its widget kind, caption, value, items,
