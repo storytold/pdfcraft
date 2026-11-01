@@ -1,4 +1,4 @@
-use super::{CLICK_KEY, Dict, Document, IMAGE_FIELD_KEY, LAYOUT_KEY, NODE_KEY, ObjRef, Object, SOM_KEY, XfaError};
+use super::{CLICK_KEY, DATE_KEY, Dict, Document, IMAGE_FIELD_KEY, LAYOUT_KEY, NODE_KEY, ObjRef, Object, PdfString, SOM_KEY, XfaError, js_action};
 
 /// What laying a form out says when it took the usage rights off (see [`drop_usage_rights`]).
 pub(crate) const USAGE_RIGHTS_REMOVED: &str =
@@ -21,6 +21,8 @@ pub struct Stripped {
     pub usage_rights: bool,
     /// Private keys removed from field dictionaries (`/PCSom`, `/PCXfaClick`, …).
     pub field_keys: usize,
+    /// Date fields now holding and typed in the pattern they show ([`static_date`]).
+    pub date_fields: usize,
 }
 
 impl Stripped {
@@ -43,6 +45,12 @@ impl Stripped {
         }
         if self.usage_rights {
             out.push("Adobe Reader extended features were removed (changing the form voids them)".into());
+        }
+        if self.date_fields > 0 {
+            out.push(format!(
+                "{} date field(s) now hold and take their dates as they show them: a static form can't keep a date one way and show it another",
+                self.date_fields
+            ));
         }
         out
     }
@@ -80,6 +88,42 @@ pub fn xfa_shape(doc: &Document) -> Option<XfaShape> {
     let needs_rendering = bool_of(catalog.get(b"NeedsRendering")) || bool_of(acro.get(b"NeedsRendering"));
     let has_fields = acro.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().map(|a| !a.is_empty())).unwrap_or(false);
     Some(XfaShape { needs_rendering, has_fields, laid_out: acro.contains(LAYOUT_KEY) })
+}
+
+/// A field's values to write: the key (`/V` or `/DV`) and its new text.
+type NewValues = Vec<(&'static [u8], String)>;
+
+/// A date field PdfCraft laid out, made one a static form keeps working in other viewers. The
+/// layout keeps its value as an ISO date (or as typed), types it in its edit pattern (`/AA /K`)
+/// and shows it in its display pattern (`/AA /F`). A static form can do neither: another viewer
+/// checks typing against the keystroke pattern but reads the value again in the format's, so
+/// only dates that read both ways pass, and those show misread. So its keystroke takes the
+/// format's pattern, and its value and default value, when they read as dates in the edit
+/// pattern or as ISO dates, are written in it. The new `/AA` and values, or `None` when nothing
+/// changes.
+fn static_date(doc: &Document, d: &Dict) -> Option<(Dict, NewValues)> {
+    let aa = doc.resolve(d.get(b"AA")?).as_dict()?.clone();
+    let pattern = |key: &[u8], call: &str| {
+        let action = doc.resolve(aa.get(key)?).as_dict()?.clone();
+        let js = doc.resolve(action.get(b"JS")?).as_string()?.to_text();
+        let rest = js.trim().strip_prefix(call)?.trim_start().strip_prefix("(\"")?;
+        rest.split_once("\")").map(|(p, _)| p.to_string())
+    };
+    let shown = pattern(b"F", "AFDate_FormatEx")?;
+    let typed = pattern(b"K", "AFDate_KeystrokeEx")?;
+    let mut aa = aa;
+    if typed != shown {
+        aa.set(b"K".to_vec(), js_action(&format!("AFDate_KeystrokeEx(\"{shown}\");")));
+    }
+    let mut values = Vec::new();
+    for key in [b"V".as_slice(), b"DV"] {
+        let Some(text) = d.get(key).and_then(|v| doc.resolve(v).as_string().map(|s| s.to_text())) else { continue };
+        let iso = [typed.as_str(), "yyyy-mm-dd", "yyyymmdd"].iter().find_map(|p| crate::data::pattern_to_iso(&text, p));
+        if let Some(iso) = iso.map(|iso| crate::data::iso_to_pattern(&iso, &shown)).filter(|v| *v != text) {
+            values.push((key, iso));
+        }
+    }
+    (typed != shown || !values.is_empty()).then_some((aa, values))
 }
 
 /// Most field dictionaries walked for their private keys.
@@ -164,8 +208,22 @@ pub fn strip(doc: &mut Document) -> Result<Stripped, XfaError> {
         if d.contains(IMAGE_FIELD_KEY) {
             out.image_fields += 1;
         }
-        let private: Vec<Vec<u8>> =
-            [SOM_KEY, CLICK_KEY, IMAGE_FIELD_KEY, NODE_KEY, b"PCItems".as_slice()].iter().filter(|k| d.contains(k)).map(|k| k.to_vec()).collect();
+        if d.contains(DATE_KEY)
+            && let Some((aa, values)) = static_date(doc, &d)
+        {
+            out.date_fields += 1;
+            doc.update_dict(r, |d| {
+                d.set(b"AA".to_vec(), Object::Dict(aa));
+                for (k, v) in values {
+                    d.set(k.to_vec(), Object::String(PdfString::text(&v)));
+                }
+            })?;
+        }
+        let private: Vec<Vec<u8>> = [SOM_KEY, CLICK_KEY, IMAGE_FIELD_KEY, DATE_KEY, NODE_KEY, b"PCItems".as_slice()]
+            .iter()
+            .filter(|k| d.contains(k))
+            .map(|k| k.to_vec())
+            .collect();
         if !private.is_empty() {
             out.field_keys += private.len();
             doc.update_dict(r, |d| {

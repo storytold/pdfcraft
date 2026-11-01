@@ -39,7 +39,7 @@ that warning and keeps the existing layout and accepted widget values.
 - **PDF** (`pdf::write_form`): pages with content streams in the standard 14 fonts (Arial and
   friends → Helvetica, Courier New → Courier, serif faces → Times; nothing is embedded), JPEG
   XObjects, and widgets: text (multi-line, max length, alignment), date (Acrobat's `AFDate`
-  format and keystroke actions from the picture clause), check boxes and radio groups (from
+  format action from the display picture, keystroke action from the edit picture), check boxes and radio groups (from
   `exclGroup`), push buttons with Reset / Print / Save As / URI actions recognised from their
   scripts, and signature fields, each named by its SOM path (`form1[0].page1[0].sign[0]`, as
   fields under one for each step above it) because other viewers lay a dynamic form out again
@@ -88,6 +88,7 @@ be measured exponentially often in their nesting. A measurement budget backs thi
   | `/PCSom` | generated fields | the field's SOM path, so values go back to the data |
   | `/PCXfaLayout` | AcroForm | what laying out produced, so a saved form is not laid out again |
   | `/PCXfaOverrides` | AcroForm | `<< /Presence << /som (hidden) … >> /Access << /som (readOnly) … >> >>`: presence and access scripts set, by SOM path (instance 0 of a repeating subform stands for all); applied to the template before every layout, so undo, save and reopen keep them. Adobe's viewers draw from the XFA packets and don't read it; at most 10 000 entries are read or written |
+  | `/PCXfaDate` | generated date fields | `true`: text the field's date pattern doesn't read is kept, and shown, as typed rather than refused, as an XFA form keeps it; the forms layer reads it |
   | `/PCXfaNode` | generated fields above a signature field | `true`: the field names a step of the signature field's SOM path; a new layout replaces it with the fields it holds |
   | `/PCXfaClick` | generated push buttons | `true`: the template has a click script for this button. Such buttons carry no `/A`: XFA JavaScript is not Acrobat JavaScript, so it is never written as a `/S /JavaScript` action other viewers would run. PdfCraft finds the script by the field's `/PCSom` |
 

@@ -7877,6 +7877,125 @@ fn links_in_xfa_rich_text_are_listed_through_tools() {
     assert_eq!(urls(&mut a, doc), ["mailto:forms@example.com"], "one link after a save and a fresh open, not two");
 }
 
+/// What a date typed into an XFA date field leaves in the form's data, for each kind of picture:
+/// what another viewer kept for the same typing on a synthetic form. A date one of the edit
+/// picture's patterns reads is kept as an ISO date; anything else, ISO text included, as typed,
+/// and nothing is refused.
+#[test]
+fn xfa_date_fields_keep_typed_dates_as_another_viewer_does() {
+    let dir = workdir("xfa-typed-dates");
+    std::fs::write(dir.join("dates.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::date_pictures_template())).unwrap();
+    let mut a = auto(&dir);
+    // typed, then the data for display, edit, either and bare.
+    let seen = [
+        ("2016-10-18", ["2016-10-18", "2016-10-18", "2016-10-18", "2016-10-18"]),
+        ("10/18/2016", ["10/18/2016", "2016-10-18", "10/18/2016", "10/18/2016"]),
+        ("20161018", ["20161018", "20161018", "2016-10-18", "20161018"]),
+        ("18OCT16", ["18OCT16", "18OCT16", "2016-10-18", "18OCT16"]),
+        ("26 10 18", ["26 10 18", "26 10 18", "26 10 18", "26 10 18"]),
+        ("xyz", ["xyz", "xyz", "xyz", "xyz"]),
+    ];
+    for (typed, kept) in seen {
+        for (field, want) in ["display", "edit", "either", "bare"].into_iter().zip(kept) {
+            let doc = ok(&mut a, "doc_open", json!({ "path": "dates.pdf" }))["doc"].as_u64().unwrap();
+            ok(&mut a, "form_fill", json!({ "doc": doc, "values": { field: typed } }));
+            ok(&mut a, "doc_export_data", json!({ "doc": doc, "path": "data.xml", "what": "fields" }));
+            let xml = std::fs::read_to_string(dir.join("data.xml")).unwrap();
+            assert!(xml.contains(&format!("<{field}>{want}</{field}>")), "{typed} in {field}: want {want}, got {xml}");
+            ok(&mut a, "doc_close", json!({ "doc": doc, "discard_changes": true }));
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// What an XFA date field shows once a date is typed into it: through its display picture, as
+/// another viewer showed the same typing on a synthetic form (the field's `formattedValue`). A
+/// date is shown in the picture; text that isn't one, as typed.
+#[test]
+fn xfa_date_fields_show_typed_dates_through_their_display_picture() {
+    let dir = workdir("xfa-shown-dates");
+    std::fs::write(dir.join("dates.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::date_pictures_template())).unwrap();
+    let mut a = auto(&dir);
+    // typed, then what display, edit and either show (the field without pictures is left out:
+    // the other viewer shows it in its locale's default, which isn't followed yet).
+    let seen = [
+        ("2016-10-18", ["10/18/2016", "10/18/2016", "20161018"]),
+        ("10/18/2016", ["10/18/2016", "10/18/2016", "10/18/2016"]),
+        ("20161018", ["10/18/2016", "10/18/2016", "20161018"]),
+        ("18OCT16", ["18OCT16", "18OCT16", "20161018"]),
+        ("26 10 18", ["26 10 18", "26 10 18", "26 10 18"]),
+        ("xyz", ["xyz", "xyz", "xyz"]),
+    ];
+    for (typed, shown) in seen {
+        for (field, want) in ["display", "edit", "either"].into_iter().zip(shown) {
+            let doc = ok(&mut a, "doc_open", json!({ "path": "dates.pdf" }))["doc"].as_u64().unwrap();
+            ok(&mut a, "form_fill", json!({ "doc": doc, "values": { field: typed } }));
+            let text = page_text(&mut a, doc).join("\n");
+            assert_eq!(text, want, "{typed} in {field}");
+            ok(&mut a, "doc_close", json!({ "doc": doc, "discard_changes": true }));
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An XFA date field whose edit picture differs from its display picture reads a typed date with
+/// the edit picture and shows it with the display picture, as another viewer did for the same
+/// typing on a synthetic form: day first in, month first out. What the edit picture can't read is
+/// kept and shown as typed.
+#[test]
+fn xfa_date_fields_read_typed_dates_through_their_edit_picture() {
+    let dir = workdir("xfa-edit-dates");
+    std::fs::write(dir.join("dates.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::date_pictures_template())).unwrap();
+    let mut a = auto(&dir);
+    // typed, then what the field shows and what the data keeps.
+    let seen = [
+        ("18/10/2016", "10/18/2016", "2016-10-18"),
+        ("10/11/2016", "11/10/2016", "2016-11-10"),
+        ("10/18/2016", "10/18/2016", "10/18/2016"),
+        ("2016-10-18", "10/18/2016", "2016-10-18"),
+    ];
+    for (typed, shown, kept) in seen {
+        let doc = ok(&mut a, "doc_open", json!({ "path": "dates.pdf" }))["doc"].as_u64().unwrap();
+        ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "swapped": typed } }));
+        assert_eq!(page_text(&mut a, doc).join("\n"), shown, "{typed} shown");
+        ok(&mut a, "doc_export_data", json!({ "doc": doc, "path": "data.xml", "what": "fields" }));
+        let xml = std::fs::read_to_string(dir.join("data.xml")).unwrap();
+        assert!(xml.contains(&format!("<swapped>{kept}</swapped>")), "{typed} kept: want {kept}, got {xml}");
+        ok(&mut a, "doc_close", json!({ "doc": doc, "discard_changes": true }));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An XFA date field with a two-digit year in its edit picture shows the year through its display
+/// picture with the century split XFA picture clauses use, 30: `00` to `29` are 2000 to 2029,
+/// `30` to `99` are 1930 to 1999, for a date from the data and for one typed alike.
+#[test]
+fn xfa_date_fields_show_two_digit_years_with_the_century_split_of_30() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb" locale="en_US">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="born" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{DDMMMYY}</picture></ui><value><date/></value><format><picture>date{MM/DD/YYYY}</picture></format></field>
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><born>1945-10-18</born></form></xfa:data></xfa:datasets>
+</xdp:xdp>
+"##;
+    let dir = workdir("xfa-century-split");
+    std::fs::write(dir.join("born.pdf"), pdfcraft_xfa::fixtures::shell(xdp)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "born.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(page_text(&mut a, doc).join("\n"), "10/18/1945", "from the data");
+    for (typed, shown) in [("18OCT29", "10/18/2029"), ("18OCT30", "10/18/1930"), ("18OCT49", "10/18/1949"), ("18OCT50", "10/18/1950")] {
+        ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "born": typed } }));
+        assert_eq!(page_text(&mut a, doc).join("\n"), shown, "{typed}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A dynamic XFA form opens laid out from its template through the tools, renders, takes values
+/// and saves them.
 #[test]
 fn dynamic_xfa_forms_open_render_fill_and_save_through_tools() {
     let dir = workdir("xfa");
