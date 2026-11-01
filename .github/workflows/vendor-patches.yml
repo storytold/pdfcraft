@@ -19,13 +19,13 @@ on:
     paths:
       - 'vendor/**'
       - 'Cargo.toml'
-      - 'scripts/check-vendor-ledger.py'
+      - 'xtask/src/vendor_ledger.rs'
       - '.github/workflows/vendor-patches.yml'
   pull_request:
     paths:
       - 'vendor/**'
       - 'Cargo.toml'
-      - 'scripts/check-vendor-ledger.py'
+      - 'xtask/src/vendor_ledger.rs'
       - '.github/workflows/vendor-patches.yml'
   workflow_dispatch:
 
@@ -44,8 +44,10 @@ jobs:
           persist-credentials: false
       - name: Ledger check
         run: |
-          python3 scripts/test-check-vendor-ledger.py
-          python3 scripts/check-vendor-ledger.py
+          # Self-tests first (the negative cases keep the resolver honest),
+          # then the check itself — all Rust, no Python toolchain (AGENTS.md).
+          cargo test -p xtask vendor_ledger
+          cargo xtask vendor-ledger
 
   vendor-tests:
     name: vendor tests (${{ matrix.crate }})

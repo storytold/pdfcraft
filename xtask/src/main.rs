@@ -11,6 +11,7 @@ mod layers;
 mod macos_integration;
 mod parity;
 mod screenshots;
+mod vendor_ledger;
 mod version;
 
 type Command = fn(&[String]) -> anyhow::Result<()>;
@@ -39,6 +40,11 @@ const COMMANDS: &[(&str, &str, Command)] = &[
         gates::render_oracle,
     ),
     ("screenshots", "Regenerate the README screenshots in docs/images/ and their ATTRIBUTION entries", screenshots::run),
+    (
+        "vendor-ledger",
+        "Verify vendor/README.md against the vendored sources (versions, cited tests, coverage, markers); --list prints every citation",
+        vendor_ledger::run,
+    ),
     ("models", "Fetch the OCR models (ATTRIBUTION.toml kind = \"model\") into assets/models/, verified by SHA-256", assets::models),
     ("demo-pdf", "Build dist/demo/pdfcraft-showcase.pdf (needs Google Chrome or Chromium)", demo_pdf::run),
 ];
