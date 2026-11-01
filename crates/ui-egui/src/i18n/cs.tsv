@@ -2924,3 +2924,11 @@ certificate	Version	Verze
 	No image on clipboard to paste	Ve schránce není obrázek k vložení
 	Pinned {tool} to Home	{tool} připnuto na úvodní stránku
 	Unpinned {tool} from Home	{tool} odepnuto z úvodní stránky
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Okno
+	Move tab to new window	Přesunout kartu do nového okna
+	Merge all windows	Sloučit všechna okna
+	Close window	Zavřít okno
+	Move to new window	Přesunout do nového okna
+	Move to window	Přesunout do okna
+	Too many windows are open	Je otevřeno příliš mnoho oken

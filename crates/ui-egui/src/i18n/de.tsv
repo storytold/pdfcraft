@@ -2618,3 +2618,11 @@ animation effects	Off	Aus
 	No image on clipboard to paste	Kein Bild in der Zwischenablage zum Einfügen
 	Pinned {tool} to Home	{tool} an Start angeheftet
 	Unpinned {tool} from Home	{tool} von Start gelöst
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Fenster
+	Move tab to new window	Tab in neues Fenster verschieben
+	Merge all windows	Alle Fenster zusammenführen
+	Close window	Fenster schließen
+	Move to new window	In neues Fenster verschieben
+	Move to window	In Fenster verschieben
+	Too many windows are open	Es sind zu viele Fenster geöffnet

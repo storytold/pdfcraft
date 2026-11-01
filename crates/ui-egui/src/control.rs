@@ -13,7 +13,10 @@
 //!
 //! Methods (JSON in, JSON out):
 //! - `ui.state`: open documents, active document, page, zoom, page errors, mode, panels, dialog,
-//!   notice and observed window dimensions in logical points.
+//!   notice and observed window dimensions in logical points. With several windows (M14), the
+//!   documents and the active document are the focused window's (`window_id`), and `windows`
+//!   lists every window's `id`, `title`, `focused` and `tabs`; the other `ui.*` methods act on
+//!   the focused window too.
 //! - `ui.inspect {query?, role?, focused?, limit?}`: widgets in tree order with `id` (a string), `role`, `label`,
 //!   `value`, `rect` (points), `enabled`, `toggled`, `selected`, `clickable`, `focusable`, `focused`, `depth`.
 //! - `ui.click {id}` | `{label}` | `{x, y, button?}`: click a widget (by its AccessKit action) or a

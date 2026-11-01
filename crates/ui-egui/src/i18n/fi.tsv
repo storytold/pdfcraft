@@ -2886,3 +2886,11 @@ theme	Appearance	Teema
 	No image on clipboard to paste	Leikepöydällä ei ole liitettävää kuvaa
 	Pinned {tool} to Home	{tool} kiinnitetty aloitussivulle
 	Unpinned {tool} from Home	{tool} irrotettu aloitussivulta
+# Several windows (M14).
+	Window	Ikkuna
+	Move tab to new window	Siirrä välilehti uuteen ikkunaan
+	Merge all windows	Yhdistä kaikki ikkunat
+	Close window	Sulje ikkuna
+	Move to new window	Siirrä uuteen ikkunaan
+	Move to window	Siirrä ikkunaan
+	Too many windows are open	Liian monta ikkunaa on auki

@@ -656,6 +656,13 @@ fn the_control_file_replaces_the_one_a_previous_run_left() {
 
 /// X11 startup notification and docks match a window to its launcher by `StartupWMClass`,
 /// so it has to be the class the window carries: the app id, on Wayland and X11 alike.
+/// A tab dragged into a window of its own belongs to the same app: docks group it with the
+/// first window and the launcher.
+#[test]
+fn torn_off_windows_carry_the_app_id() {
+    assert_eq!(pdfcraft_ui_egui::windows::APP_ID, super::APP_ID);
+}
+
 #[test]
 fn the_desktop_entry_names_the_window_class() {
     let entry = include_str!("../../../packaging/linux/ai.storyteller.pdfcraft.desktop");

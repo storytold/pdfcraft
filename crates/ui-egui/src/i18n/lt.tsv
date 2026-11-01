@@ -2877,3 +2877,11 @@ theme	Appearance	Išvaizda
 	No image on clipboard to paste	Iškarpinėje nėra paveikslėlio įklijuoti
 	Pinned {tool} to Home	{tool} prisegtas pradžios puslapyje
 	Unpinned {tool} from Home	{tool} atsegtas nuo pradžios puslapio
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Langas
+	Move tab to new window	Perkelti kortelę į naują langą
+	Merge all windows	Sujungti visus langus
+	Close window	Užverti langą
+	Move to new window	Perkelti į naują langą
+	Move to window	Perkelti į langą
+	Too many windows are open	Atverta per daug langų

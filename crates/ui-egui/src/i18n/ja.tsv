@@ -2617,3 +2617,11 @@ animation effects	Off	オフ
 	No image on clipboard to paste	貼り付ける画像がクリップボードにありません
 	Pinned {tool} to Home	{tool} をホームにピン留めしました
 	Unpinned {tool} from Home	{tool} のホームへのピン留めを解除しました
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	ウィンドウ
+	Move tab to new window	タブを新しいウィンドウに移動
+	Merge all windows	すべてのウィンドウを統合
+	Close window	ウィンドウを閉じる
+	Move to new window	新しいウィンドウに移動
+	Move to window	ウィンドウに移動
+	Too many windows are open	開いているウィンドウが多すぎます

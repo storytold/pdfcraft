@@ -2882,3 +2882,11 @@ certificate	Version	Version
 	No image on clipboard to paste	Aucune image à coller dans le presse-papiers
 	Pinned {tool} to Home	{tool} épinglé à l’Accueil
 	Unpinned {tool} from Home	{tool} désépinglé de l’Accueil
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Fenêtre
+	Move tab to new window	Déplacer l’onglet dans une nouvelle fenêtre
+	Merge all windows	Fusionner toutes les fenêtres
+	Close window	Fermer la fenêtre
+	Move to new window	Déplacer dans une nouvelle fenêtre
+	Move to window	Déplacer dans la fenêtre
+	Too many windows are open	Trop de fenêtres sont ouvertes

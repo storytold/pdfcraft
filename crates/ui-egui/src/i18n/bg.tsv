@@ -2580,3 +2580,11 @@ animation effects	Off	Изключени
 	No image on clipboard to paste	Няма изображение в клипборда за поставяне
 	Pinned {tool} to Home	{tool} е закачен в Начало
 	Unpinned {tool} from Home	{tool} е откачен от Начало
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Прозорец
+	Move tab to new window	Преместване на раздела в нов прозорец
+	Merge all windows	Обединяване на всички прозорци
+	Close window	Затваряне на прозореца
+	Move to new window	Преместване в нов прозорец
+	Move to window	Преместване в прозорец
+	Too many windows are open	Отворени са твърде много прозорци

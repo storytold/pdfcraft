@@ -2885,3 +2885,11 @@ key	Space	Space
 	No image on clipboard to paste	Không có hình ảnh trong bảng nhớ tạm để dán
 	Pinned {tool} to Home	Đã ghim {tool} vào Trang chủ
 	Unpinned {tool} from Home	Đã bỏ ghim {tool} khỏi Trang chủ
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Cửa sổ
+	Move tab to new window	Chuyển thẻ sang cửa sổ mới
+	Merge all windows	Gộp tất cả cửa sổ
+	Close window	Đóng cửa sổ
+	Move to new window	Chuyển sang cửa sổ mới
+	Move to window	Chuyển sang cửa sổ
+	Too many windows are open	Đã mở quá nhiều cửa sổ

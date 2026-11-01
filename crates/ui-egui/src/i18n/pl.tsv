@@ -2713,3 +2713,11 @@ animation effects	Off	Wyłączone
 	No image on clipboard to paste	Brak obrazu do wklejenia w schowku
 	Pinned {tool} to Home	Przypięto {tool} do strony głównej
 	Unpinned {tool} from Home	Odpięto {tool} od strony głównej
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Okno
+	Move tab to new window	Przenieś kartę do nowego okna
+	Merge all windows	Scal wszystkie okna
+	Close window	Zamknij okno
+	Move to new window	Przenieś do nowego okna
+	Move to window	Przenieś do okna
+	Too many windows are open	Otwarto zbyt wiele okien
