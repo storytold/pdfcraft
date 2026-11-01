@@ -101,6 +101,8 @@ pub enum TagError {
     NotSiblings,
     #[error("the parent must list each tag exactly once in its /K array")]
     AmbiguousChildren,
+    #[error("the tag has too much or too deeply nested marked content")]
+    ContentLimit,
     #[error("the tag is already at the requested position")]
     AlreadyThere,
     #[error("{0} applies only to {1} tags")]
@@ -196,6 +198,7 @@ pub fn tags(doc: &Document) -> Vec<TagInfo> {
 }
 
 /// List marked-content references directly owned by an indirect tag.
+/// Returns `ContentLimit` rather than a partial list beyond 65,536 entries or 512 child/reference levels.
 pub fn tag_content(doc: &Document, object: ObjRef) -> Result<Vec<TagContentItem>, TagError> {
     let Some(element) = alt::elements(doc).into_iter().find(|e| e.object == object) else { return Err(TagError::NotATag(object)) };
     let pages = pdfcraft_model::pages(doc);
@@ -203,7 +206,7 @@ pub fn tag_content(doc: &Document, object: ObjRef) -> Result<Vec<TagContentItem>
     let mut marks = Vec::new();
     let mut seen = std::collections::HashSet::new();
     if let Some(kids) = element.dict.get(b"K") {
-        direct_marks(doc, kids, element.page, &mut seen, &mut marks);
+        direct_marks(doc, kids, element.page, &mut seen, &mut marks)?;
     }
     // Each page's content is parsed once, however many of its MCIDs the tag owns.
     let mut texts: std::collections::HashMap<usize, std::collections::HashMap<i64, String>> = std::collections::HashMap::new();
@@ -227,40 +230,41 @@ pub fn tag_content(doc: &Document, object: ObjRef) -> Result<Vec<TagContentItem>
         .collect())
 }
 
+/// Bound both graph work and the queued array entries. Following references never uses the
+/// call stack; the depth limit also rejects pathologically nested direct content explicitly.
 fn direct_marks(
     doc: &Document,
     item: &Object,
     page: Option<ObjRef>,
     seen: &mut std::collections::HashSet<ObjRef>,
     out: &mut Vec<(Option<ObjRef>, i64)>,
-) {
-    match item {
-        Object::Int(mcid) => out.push((page, *mcid)),
-        Object::Array(items) => items.iter().for_each(|item| direct_marks(doc, item, page, seen, out)),
-        Object::Dict(dict) if dict.get(b"Type").map(|t| doc.resolve(t)).as_deref().and_then(Object::as_name) == Some(b"MCR") => {
-            if let Some(mcid) = dict.get(b"MCID").map(|m| doc.resolve(m)).and_then(|m| m.as_int()) {
-                out.push((dict.get(b"Pg").and_then(Object::as_ref).or(page), mcid));
-            }
+) -> Result<(), TagError> {
+    const MAX_DEPTH: usize = 512;
+    let mut remaining = 65_536usize;
+    let mut stack = vec![(std::sync::Arc::new(item.clone()), 0usize)];
+    while let Some((item, depth)) = stack.pop() {
+        remaining = remaining.checked_sub(1).ok_or(TagError::ContentLimit)?;
+        if depth > MAX_DEPTH {
+            return Err(TagError::ContentLimit);
         }
-        Object::Ref(reference) => {
-            if !seen.insert(*reference) {
-                return;
-            }
-            let target = doc.get(*reference);
-            match &*target {
-                Object::Int(_) | Object::Array(_) | Object::Ref(_) => {
-                    direct_marks(doc, &target, page, seen, out);
+        match &*item {
+            Object::Int(mcid) => out.push((page, *mcid)),
+            Object::Array(items) => {
+                if items.len() > remaining.saturating_sub(stack.len()) {
+                    return Err(TagError::ContentLimit);
                 }
-                Object::Dict(dict) if dict.get(b"Type").map(|t| doc.resolve(t)).as_deref().and_then(Object::as_name) == Some(b"MCR") => {
-                    if let Some(mcid) = dict.get(b"MCID").map(|m| doc.resolve(m)).and_then(|m| m.as_int()) {
-                        out.push((dict.get(b"Pg").and_then(Object::as_ref).or(page), mcid));
-                    }
-                }
-                _ => {}
+                stack.extend(items.iter().rev().map(|item| (std::sync::Arc::new(item.clone()), depth + 1)));
             }
+            Object::Dict(dict) if dict.get(b"Type").map(|t| doc.resolve(t)).as_deref().and_then(Object::as_name) == Some(b"MCR") => {
+                if let Some(mcid) = dict.get(b"MCID").map(|m| doc.resolve(m)).and_then(|m| m.as_int()) {
+                    out.push((dict.get(b"Pg").and_then(Object::as_ref).or(page), mcid));
+                }
+            }
+            Object::Ref(reference) if seen.insert(*reference) => stack.push((doc.get(*reference), depth + 1)),
+            _ => {}
         }
-        _ => {}
     }
+    Ok(())
 }
 
 /// The attribute objects of a tag's `/A` entry (one object, or an array of them each optionally
@@ -456,6 +460,63 @@ mod tests {
         );
         let th_marks = tag_content(&doc, ObjRef::new(8, 0)).unwrap();
         assert_eq!(th_marks, [TagContentItem { page: Some(0), mcid: 0, text: "Hello".into() }]);
+    }
+
+    #[test]
+    fn move_tag_resolves_indirect_array_children_and_cycles() {
+        let mut doc = pdf(&[
+            "<< /Type /Catalog /StructTreeRoot 2 0 R >>".into(),
+            "<< /Type /StructTreeRoot /K 3 0 R >>".into(),
+            "<< /S /Document /P 2 0 R /K 6 0 R >>".into(),
+            "<< /S /P /P 3 0 R >>".into(),
+            "<< /S /P /P 3 0 R >>".into(),
+            "[4 0 R 6 0 R 5 0 R]".into(),
+        ]);
+        let first = ObjRef::new(4, 7);
+        let second = ObjRef::new(5, 9);
+        doc.set(first, (*doc.get(ObjRef::new(4, 0))).clone());
+        doc.set(second, (*doc.get(ObjRef::new(5, 0))).clone());
+        doc.set(ObjRef::new(6, 0), Object::Array(vec![Object::Ref(first), Object::Ref(ObjRef::new(6, 0)), Object::Ref(second)]));
+        assert_eq!(tags(&doc).iter().map(|t| t.object).collect::<Vec<_>>(), [ObjRef::new(3, 0), first, second]);
+        move_tag(&mut doc, second, first, TagPlacement::Before).unwrap();
+        assert_eq!(tags(&doc).iter().map(|t| t.object).collect::<Vec<_>>(), [ObjRef::new(3, 0), second, first]);
+    }
+
+    #[test]
+    fn tag_content_rejects_excessive_indirect_depth() {
+        let mut doc =
+            pdf(&["<< /Type /Catalog /StructTreeRoot 2 0 R >>".into(), "<< /Type /StructTreeRoot /K 3 0 R >>".into(), "<< /S /P /P 2 0 R >>".into()]);
+        let mut kid = doc.add(Object::Int(42));
+        for _ in 0..128 {
+            kid = doc.add(Object::Ref(kid));
+        }
+        doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"K".to_vec(), Object::Ref(kid))).unwrap();
+        assert_eq!(tag_content(&doc, ObjRef::new(3, 0)).unwrap().iter().map(|m| m.mcid).collect::<Vec<_>>(), [42]);
+        for _ in 0..1024 {
+            kid = doc.add(Object::Ref(kid));
+        }
+        doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"K".to_vec(), Object::Ref(kid))).unwrap();
+        assert_eq!(tag_content(&doc, ObjRef::new(3, 0)), Err(TagError::ContentLimit));
+    }
+
+    #[test]
+    fn tag_content_rejects_excessive_array_work() {
+        let mut doc =
+            pdf(&["<< /Type /Catalog /StructTreeRoot 2 0 R >>".into(), "<< /Type /StructTreeRoot /K 3 0 R >>".into(), "<< /S /P /P 2 0 R >>".into()]);
+        doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"K".to_vec(), Object::Array(vec![Object::Int(1); 65_537]))).unwrap();
+        assert_eq!(tag_content(&doc, ObjRef::new(3, 0)), Err(TagError::ContentLimit));
+    }
+
+    #[test]
+    fn tag_content_keeps_order_and_stops_indirect_cycles() {
+        let doc = pdf(&[
+            "<< /Type /Catalog /StructTreeRoot 2 0 R >>".into(),
+            "<< /Type /StructTreeRoot /K 3 0 R >>".into(),
+            "<< /S /P /P 2 0 R /K 4 0 R >>".into(),
+            "[1 5 0 R 4 0 R 3]".into(),
+            "<< /Type /MCR /MCID 2 >>".into(),
+        ]);
+        assert_eq!(tag_content(&doc, ObjRef::new(3, 0)).unwrap().iter().map(|m| m.mcid).collect::<Vec<_>>(), [1, 2, 3]);
     }
 
     #[test]
