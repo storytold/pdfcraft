@@ -18,7 +18,7 @@ use crate::x_object::{
 use hayro_syntax::content::TypedIter;
 use hayro_syntax::content::ops::TypedInstruction;
 use hayro_syntax::object::dict::keys::{
-    ACTUAL_TEXT, ANNOTS, AP, AS, C, CA, F, MCID, N, OC, QUADPOINTS, RECT, SUBTYPE,
+    ACTUAL_TEXT, ANNOTS, AP, AS, C, CA, F, IRT, MCID, N, OC, QUADPOINTS, RECT, RT, SUBTYPE,
 };
 use hayro_syntax::object::{Array, Dict, Object, Rect, Stream, dict_or_stream};
 use hayro_syntax::page::{ContentReader, Page, Resources, Rotation};
@@ -196,6 +196,16 @@ pub fn interpret_page<'a>(
             let subtype = annot.get::<hayro_syntax::object::Name<'_>>(SUBTYPE);
             if subtype.as_deref() == Some(b"Popup")
                 || (flags & 1 != 0 && !subtype.as_deref().is_some_and(is_standard_annotation_type))
+            {
+                continue;
+            }
+            // PdfCraft patch (71): a reply of type R (an `/IRT` to the annotation it answers, with
+            // no `/RT` or `/RT /R`) is not drawn, whatever its appearance or flags: "Interactive
+            // PDF processors shall not display replies to an annotation individually but together
+            // in the form of threaded comments" (ISO 32000-2 Table 172). A `/RT /Group` member is
+            // part of its group's look and still draws.
+            if annot.get::<Dict<'_>>(IRT).is_some()
+                && annot.get::<hayro_syntax::object::Name<'_>>(RT).as_deref().is_none_or(|rt| rt == b"R")
             {
                 continue;
             }

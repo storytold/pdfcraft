@@ -7282,3 +7282,51 @@ fn content_after_an_inline_image_holding_ei_is_still_read() {
     // `EI` inside the data was not taken for the end.
     assert!(page.contains("AFTER"), "the content after the image was lost: {page:?}");
 }
+
+/// #5631: a reply of type R (`/IRT`, no `/RT` or `/RT /R`) is not drawn on the page, whatever
+/// its appearance: ISO 32000-2 Table 172, "shall not display replies to an annotation
+/// individually". The comment it answers draws, and so does a `/RT /Group` member.
+#[test]
+fn replies_are_not_drawn_but_their_comment_and_group_members_are() {
+    let form = |rgb: &str| {
+        let content = format!("{rgb} rg 0 0 20 18 re f");
+        format!("<< /Type /XObject /Subtype /Form /BBox [0 0 20 18] /Length {} >>\nstream\n{content}\nendstream", content.len())
+    };
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Annots [4 0 R 5 0 R 6 0 R 7 0 R] >>".to_string(),
+        // The comment: blue.
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [10 40 30 58] /AP << /N 8 0 R >> >>".to_string(),
+        // A reply with no /RT, and one with /RT /R, to it and to that reply: red.
+        "<< /Type /Annot /Subtype /Text /F 28 /IRT 4 0 R /Rect [50 40 70 58] /AP << /N 9 0 R >> >>".to_string(),
+        "<< /Type /Annot /Subtype /Text /F 28 /IRT 5 0 R /RT /R /Rect [90 40 110 58] /AP << /N 9 0 R >> >>".to_string(),
+        // A member of the comment's group: green.
+        "<< /Type /Annot /Subtype /Square /F 4 /IRT 4 0 R /RT /Group /Rect [130 40 150 58] /AP << /N 10 0 R >> >>".to_string(),
+        form("0 0 1"),
+        form("1 0 0"),
+        form("0 1 0"),
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer << /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+    let p = r.render(RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+    assert!(p.error.is_none(), "{:?}", p.error);
+    // The middle of each annotation, top-left based at scale 1.
+    let px = |x: u32| -> [u8; 4] { p.rgba[((51 * p.width + x) * 4) as usize..][..4].try_into().unwrap() };
+    let (comment, reply, reply_r, member) = (px(20), px(60), px(100), px(140));
+    assert!(comment[2] > 200 && comment[0] < 60, "the comment draws: {comment:?}");
+    assert!(reply.iter().all(|v| *v > 240), "a reply with no /RT is not drawn: {reply:?}");
+    assert!(reply_r.iter().all(|v| *v > 240), "a reply with /RT /R is not drawn: {reply_r:?}");
+    assert!(member[1] > 200 && member[0] < 60, "a group member draws: {member:?}");
+}

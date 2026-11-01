@@ -4,7 +4,8 @@
 //! Each visible annotation's normal appearance (for check boxes and radio buttons, the one its
 //! `/AS` selects) is drawn into the page with the matrix of ISO 32000-2 §12.5.5 (Algorithm 8.1:
 //! the appearance's bounding box, transformed by its `/Matrix`, mapped onto `/Rect`). Hidden
-//! annotations are left alone; links are kept (they have no ink and stay clickable). Flattened
+//! annotations and replies are left alone (a reply is not shown on the page: [`is_reply`]);
+//! links are kept (they have no ink and stay clickable). Flattened
 //! comments take their pop-ups and replies with them; flattened widgets are removed from the
 //! form's field tree. An annotation whose appearance cannot be drawn is not flattened: it stays
 //! as it is, so no comment or field value is lost with nothing in its place.
@@ -18,6 +19,16 @@ use crate::{EditError, check, n, page_list, place_tagged};
 const HIDDEN: i64 = 2;
 const NO_ROTATE: i64 = 16;
 const NO_VIEW: i64 = 32;
+
+/// A reply of type R: an `/IRT` to the annotation it answers, with no `/RT` or `/RT /R`. It is
+/// shown in its comment's thread, never on the page ("Interactive PDF processors shall not
+/// display replies to an annotation individually", ISO 32000-2 Table 172), so flattening neither
+/// draws it nor builds it an appearance; it goes with its comment. A `/RT /Group` member is
+/// part of its group's look and is flattened as any other annotation.
+fn is_reply(doc: &Document, d: &Dict) -> bool {
+    d.get(b"IRT").is_some_and(|o| doc.resolve(o).as_dict().is_some())
+        && d.get(b"RT").map(|o| doc.resolve(o)).is_none_or(|rt| rt.as_name() == Some(b"R"))
+}
 
 fn nums(doc: &Document, o: Option<&Object>) -> Option<Vec<f64>> {
     let o = doc.resolve(o?);
@@ -229,7 +240,7 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
                 continue;
             }
             let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
-            if flags & (HIDDEN | NO_VIEW) != 0 || appearance(doc, &d).is_some() {
+            if flags & (HIDDEN | NO_VIEW) != 0 || is_reply(doc, &d) || appearance(doc, &d).is_some() {
                 continue;
             }
             // A subtype this build cannot draw fails here and is kept below, so the comment is
@@ -246,7 +257,8 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
                 continue;
             }
             let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
-            if flags & (HIDDEN | NO_VIEW) != 0 {
+            // Not on the page, so not drawn into it; a reply goes with its comment (below).
+            if flags & (HIDDEN | NO_VIEW) != 0 || is_reply(doc, d) {
                 continue;
             }
             let rect = nums(doc, d.get(b"Rect")).filter(|r| r.len() == 4).map(|r| [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])]);
@@ -293,8 +305,11 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
         if gone.is_empty() && gone_inline.is_empty() {
             continue;
         }
-        // Pop-ups and replies of what was flattened go too, except a reply that stayed because
-        // it could not be drawn: its content would go with nothing in its place.
+        // Pop-ups and replies of what was flattened go too, at any depth of the thread and in
+        // any order of `/Annots`, except a reply that stayed because it could not be drawn: its
+        // content would go with nothing in its place. What points at each annotation (a pop-up
+        // by `/Parent`, a reply by `/IRT`) is gathered once, then followed from what went.
+        let mut pointing: HashMap<ObjRef, Vec<ObjRef>> = HashMap::new();
         for entry in &list {
             let Some(r) = entry.as_ref() else { continue };
             if undrawn.contains(&r) {
@@ -302,9 +317,21 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
             }
             let obj = doc.get(r);
             let Some(d) = obj.as_dict() else { continue };
-            let points_at = |k: &[u8]| d.reference(k).is_some_and(|t| gone.contains(&t));
-            if points_at(b"Parent") && d.name(b"Subtype") == Some(b"Popup") || points_at(b"IRT") {
-                gone.insert(r);
+            if d.name(b"Subtype") == Some(b"Popup")
+                && let Some(p) = d.reference(b"Parent")
+            {
+                pointing.entry(p).or_default().push(r);
+            }
+            if let Some(p) = d.reference(b"IRT") {
+                pointing.entry(p).or_default().push(r);
+            }
+        }
+        let mut follow: Vec<ObjRef> = gone.iter().copied().collect();
+        while let Some(p) = follow.pop() {
+            for &r in pointing.get(&p).into_iter().flatten() {
+                if gone.insert(r) {
+                    follow.push(r);
+                }
             }
         }
         let kept: Vec<Object> = list
