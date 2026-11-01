@@ -4145,3 +4145,64 @@ fn clear_password_values_clears_static_xfa_password_fields() {
     let packets = read_packets(&doc).unwrap().unwrap();
     assert!(!packets.xdp.contains("hunter2"), "{}", packets.xdp);
 }
+
+/// The pages of `form[0].last[0].f[0]` and of the field `after` that follows `last`, when `last`
+/// holds `before` ahead of `f` and `after` behind it. A breakAfter acts after its subform, so the
+/// page of `after` shows whether it broke.
+fn pages_around_break(before: &str, after: &str) -> (Option<usize>, Option<usize>) {
+    let xml = format!(
+        r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="first" w="2in" h="0.3in"/><subform name="last" layout="tb">{before}<field name="f" w="2in" h="0.3in"/>{after}</subform><field name="after" w="2in" h="0.3in"/>
+</subform></template>"#
+    );
+    let t = crate::parse(&xml).unwrap().0;
+    let form = crate::layout::layout(&t, None).unwrap();
+    let page_of = |som: &str| form.pages.iter().position(|p| widgets(p).iter().any(|w| w.som == som));
+    (page_of("form[0].last[0].f[0]"), page_of("form[0].after[0]"))
+}
+
+/// A `<breakBefore/>` without a targetType breaks nothing: its default is `auto`, layout goes on
+/// in the current container (XFA 3.3 p. 638), as a public form's last section expects. Written
+/// out as `auto` it breaks nothing either. One to a page area, or a content area, still starts a
+/// new page; so does a `breakAfter` to one.
+#[test]
+fn a_break_before_without_a_target_type_does_not_start_a_page() {
+    let page_before = |brk: &str| pages_around_break(brk, "").0;
+    assert_eq!(page_before("<breakBefore/>"), Some(0), "auto: no break");
+    assert_eq!(page_before(r#"<breakBefore targetType="auto"/>"#), Some(0));
+    assert_eq!(page_before(r#"<breakBefore targetType="pageArea"/>"#), Some(1));
+    assert_eq!(page_before(r#"<breakBefore targetType="contentArea"/>"#), Some(1));
+    let page_after = |brk: &str| pages_around_break("", brk).1;
+    assert_eq!(page_after("<breakAfter/>"), Some(0), "auto: no break");
+    assert_eq!(page_after(r#"<breakAfter targetType="auto"/>"#), Some(0));
+    assert_eq!(page_after(r#"<breakAfter targetType="pageArea"/>"#), Some(1));
+    assert_eq!(page_after(r#"<breakAfter targetType="contentArea"/>"#), Some(1));
+}
+
+/// targetType is one of `auto`, `contentArea` and `pageArea` (XFA 3.3 pp. 636-638). An empty or
+/// unknown value, in either direction, names neither a page nor a content area, so it breaks
+/// nothing; the names are case-sensitive.
+#[test]
+fn a_break_with_an_empty_or_unknown_target_type_does_not_start_a_page() {
+    for value in ["", " ", "page", "pagearea", "PageArea", "next"] {
+        let before = format!(r#"<breakBefore targetType="{value}"/>"#);
+        assert_eq!(pages_around_break(&before, "").0, Some(0), "breakBefore targetType={value:?}");
+        let after = format!(r#"<breakAfter targetType="{value}"/>"#);
+        assert_eq!(pages_around_break("", &after).1, Some(0), "breakAfter targetType={value:?}");
+    }
+}
+
+/// The deprecated `<break before="...">` form (XFA 3.3 pp. 633-634): `auto`, its default, forces
+/// no transition; `pageArea` and `contentArea` start a new page; an empty or unknown value breaks
+/// nothing.
+#[test]
+fn the_deprecated_break_before_form_breaks_only_to_a_page_or_content_area() {
+    let page = |brk: &str| pages_around_break(brk, "").0;
+    assert_eq!(page("<break/>"), Some(0), "auto: no break");
+    assert_eq!(page(r#"<break before="auto"/>"#), Some(0));
+    assert_eq!(page(r#"<break before=""/>"#), Some(0));
+    assert_eq!(page(r#"<break before="next"/>"#), Some(0));
+    assert_eq!(page(r#"<break before="pageArea"/>"#), Some(1));
+    assert_eq!(page(r#"<break before="contentArea"/>"#), Some(1));
+}
