@@ -1635,6 +1635,60 @@ fn bookmarks_report_the_view_their_destination_asks_for() {
 }
 
 #[test]
+fn malformed_resource_categories_preserve_annotation_identity_when_combining_and_inserting() {
+    for typed in [true, false] {
+        for with_popups in [false, true] {
+            let mut source = doc_a();
+            let page = pages(&source).unwrap()[0].obj;
+            let mut annot = Dict::new();
+            if typed {
+                annot.set(b"Type".to_vec(), Object::name("Annot"));
+            }
+            annot.set(b"Subtype".to_vec(), Object::name("Text"));
+            annot.set(b"Rect".to_vec(), Object::Array([0, 0, 10, 10].map(Object::Int).to_vec()));
+            let first = source.add(Object::Dict(annot.clone()));
+            let second = source.add(Object::Dict(annot.clone()));
+            if with_popups {
+                annot.set(b"Subtype".to_vec(), Object::name("Popup"));
+                let popup1 = source.add(Object::Dict(annot.clone()));
+                let popup2 = source.add(Object::Dict(annot));
+                source.update_dict(first, |d| d.set(b"Popup".to_vec(), Object::Ref(popup1))).unwrap();
+                source.update_dict(second, |d| d.set(b"Popup".to_vec(), Object::Ref(popup2))).unwrap();
+            }
+            source
+                .update_dict(page, |d| {
+                    let mut resources = Dict::new();
+                    resources.set(b"Font".to_vec(), Object::Ref(first));
+                    resources.set(b"ExtGState".to_vec(), Object::Ref(second));
+                    d.set(b"Resources".to_vec(), Object::Dict(resources));
+                    d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(first), Object::Ref(second)]));
+                })
+                .unwrap();
+            let combined = crate::combine(&[("source", &source)]).unwrap();
+            let mut inserted = doc_a();
+            crate::import_pages(&mut inserted, &source, &[0], 0).unwrap();
+            for doc in [combined, inserted] {
+                let doc = full_roundtrip(&doc);
+                let page = pages(&doc).unwrap()[0].obj;
+                let refs = doc.get(page).as_dict().unwrap().get(b"Annots").unwrap().as_array().unwrap().clone();
+                assert_eq!(refs.len(), 2);
+                assert_ne!(refs[0], refs[1], "equal annotations retain their separate identities");
+                if with_popups {
+                    let popups: Vec<_> = refs.iter().map(|r| doc.resolve(r).as_dict().unwrap().reference(b"Popup").unwrap()).collect();
+                    assert_ne!(popups[0], popups[1], "malformed category entries must not merge distinct popups");
+                    for popup in popups {
+                        assert_eq!(doc.get(popup).as_dict().unwrap().name(b"Subtype"), Some(b"Popup".as_slice()));
+                    }
+                }
+                for r in refs {
+                    assert_eq!(doc.resolve(&r).as_dict().unwrap().name(b"Subtype"), Some(b"Text".as_slice()));
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn combine_and_insert_share_identical_resources() {
     let a = doc_a();
     let fonts = |d: &Document| {

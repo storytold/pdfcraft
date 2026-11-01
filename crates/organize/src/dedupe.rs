@@ -45,6 +45,23 @@ fn is_resource(o: &Object) -> bool {
 /// out on purpose: it names optional content groups, whose identity matters.
 const RESOURCE_CATEGORIES: &[&[u8]] = &[b"ExtGState", b"ColorSpace", b"Pattern", b"Shading", b"XObject", b"Font"];
 
+/// Whether a category member has the expected resource shape.
+/// This is a conservative container check, not full PDF validation.
+fn category_entry(doc: &Document, category: &[u8], value: &Object) -> bool {
+    let value = doc.resolve(value);
+    match category {
+        b"Font" | b"ExtGState" => matches!(&*value, Object::Dict(_)),
+        b"XObject" => matches!(&*value, Object::Stream(_)),
+        b"Pattern" | b"Shading" => matches!(&*value, Object::Dict(_) | Object::Stream(_)),
+        b"ColorSpace" => match &*value {
+            Object::Name(name) => matches!(name.as_slice(), b"DeviceGray" | b"DeviceRGB" | b"DeviceCMYK" | b"Pattern"),
+            Object::Array(items) => items.first().and_then(Object::as_name).is_some_and(|name| COLOR_SPACE_FAMILIES.contains(&name)),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 /// References listed in any `/Resources` dictionary reachable inside `o` (pages, forms, Type 3
 /// fonts, annotation appearances), including the `/Resources` dictionary itself when indirect.
 fn collect_resource_refs(doc: &Document, o: &Object, out: &mut HashSet<ObjRef>) {
@@ -67,11 +84,18 @@ fn collect_resource_refs(doc: &Document, o: &Object, out: &mut HashSet<ObjRef>) 
             let res = doc.resolve(v);
             if let Some(res) = res.as_dict() {
                 for cat in RESOURCE_CATEGORIES {
-                    if let Some(Object::Ref(cat_ref)) = res.get(cat) {
-                        out.insert(*cat_ref);
-                    }
                     let entries = res.get(cat).map(|c| doc.resolve(c));
                     if let Some(entries) = entries.as_ref().and_then(|e| e.as_dict()) {
+                        // A malformed category can point directly at an annotation or another
+                        // identity-bearing object. Only resource-name maps are containers.
+                        // Skip malformed maps and their members (e.g. annotation /Popup refs):
+                        // this only declines deduplication, preserving all their contents.
+                        if !entries.iter().all(|(_, value)| category_entry(doc, cat, value)) {
+                            continue;
+                        }
+                        if let Some(Object::Ref(cat_ref)) = res.get(cat) {
+                            out.insert(*cat_ref);
+                        }
                         out.extend(entries.iter().filter_map(|(_, v)| if let Object::Ref(r) = v { Some(*r) } else { None }));
                     }
                 }

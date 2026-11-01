@@ -810,3 +810,7 @@ PR #1952 retains per-widget checkbox/radio export-value editing in the split for
 - **2026-10-31 (#1577):** Reconciled the page-shadow preference with split viewer, organizer, settings and control modules, preserving upstream page-gap shadow suppression. CI validation pending.
 
 - **2026-11-01 (M4, PR #5612):** Resource deduplication normalizes repeated candidate references before merging, preventing self-maps and preserving canonical objects and reference generations. Synthetic regression coverage added; scope and estimates unchanged.
+
+- **2026-11-01 (M4, PR #5612 review):** Only resource-name maps qualify as indirect category containers for deduplication. A malformed category pointing at an annotation no longer merges distinct annotations; Combine and Insert regression coverage includes full-save reopening. Estimates unchanged.
+
+- **2026-11-01 (M4, PR #5612 popup review):** Malformed resource-category maps and their members are excluded from deduplication eligibility, preserving popup identities without altering or deleting malformed-map contents. Valid resource mappings still merge. This closes a pre-existing entry-collection defect; estimates unchanged.
