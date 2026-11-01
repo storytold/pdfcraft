@@ -51,7 +51,7 @@ fn fallback_names(face: &CraftFont, hebrew: bool) -> (&'static str, &'static str
 /// page owns is changed (a rewrite gives the page its own), and nothing is dropped unless every
 /// content stream that may name the page's fonts can be read: the page's own, and those of form
 /// XObjects and Type 3 glyphs that have no resources of their own and so use the page's.
-pub(super) fn drop_unused_fallback_fonts(doc: &mut Document, page: usize) {
+pub(crate) fn drop_unused_fallback_fonts(doc: &mut Document, page: usize) {
     let Ok(p) = page_dict(doc, page) else { return };
     let Some(Object::Dict(mut resources)) = p.dict.get(b"Resources").cloned() else { return };
     let Some(mut fonts) = resources.get(b"Font").and_then(|f| doc.dict(f)) else { return };
