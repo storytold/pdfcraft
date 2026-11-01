@@ -2866,6 +2866,25 @@ theme	Appearance	Išvaizda
 	Extract the selected pages…	Išskleisti pasirinktus puslapius…
 	Delete the selected pages	Ištrinti pasirinktus puslapius
 
+# Keyboard shortcuts dialog: custom shortcuts (#4635) (AI-assisted, not separately native-reviewed)
+	Change	Keisti
+	Reset	Atkurti
+	Reset all shortcuts	Atkurti visus sparčiuosius klavišus
+	Back to the default keys	Grįžti prie numatytųjų klavišų
+	Find a command	Rasti komandą
+	Keys of the document view	Dokumento rodinio klavišai
+	Choose new keys for {command}	Pasirinkite naujus klavišus komandai {command}
+	Press the new keys (Esc cancels)	Paspauskite naujus klavišus (Esc atšaukia)
+	Alt combinations can't be shortcuts. Try Ctrl or Shift.	Alt deriniai negali būti spartieji klavišai. Bandykite Ctrl arba Shift.
+	This key moves around the interface on its own. Add Ctrl to use it.	Šis klavišas pats savaime naršo sąsają. Pridėkite Ctrl, kad galėtumėte jį naudoti.
+	This key is used for “{what}” and can't be changed.	Šis klavišas naudojamas „{what}“ ir jo pakeisti negalima.
+	{key} was taken from “{other}”, which now has no shortcut.	{key} paimtas iš „{other}“, kuri dabar neturi sparčiojo klavišo.
+	{key} is already used by “{other}”.	{key} jau naudoja „{other}“.
+	Reassign	Priskirti iš naujo
+	Select tool	Žymėjimo įrankis
+	Hand tool	Rankos įrankis
+	Scroll the page	Slinkti puslapį
+	Delete the selection	Ištrinti pasirinkimą
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Šio atsakymo parinktys
 	Export value	Eksporto reikšmė

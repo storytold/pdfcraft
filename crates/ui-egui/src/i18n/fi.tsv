@@ -2877,6 +2877,25 @@ theme	Appearance	Teema
 	Extract the selected pages…	Pura valitut sivut…
 	Delete the selected pages	Poista valitut sivut
 
+# Keyboard shortcuts dialog: custom shortcuts (#4635) (AI-assisted, not separately native-reviewed)
+	Change	Muuta
+	Reset	Palauta
+	Reset all shortcuts	Palauta kaikki pikanäppäimet
+	Back to the default keys	Takaisin oletusnäppäimiin
+	Find a command	Etsi komento
+	Keys of the document view	Asiakirjanäkymän näppäimet
+	Choose new keys for {command}	Valitse uudet näppäimet komennolle {command}
+	Press the new keys (Esc cancels)	Paina uusia näppäimiä (Esc peruuttaa)
+	Alt combinations can't be shortcuts. Try Ctrl or Shift.	Alt-yhdistelmät eivät voi olla pikanäppäimiä. Kokeile Ctrl- tai Vaihto-näppäintä.
+	This key moves around the interface on its own. Add Ctrl to use it.	Tämä näppäin liikkuu käyttöliittymässä yksinään. Lisää Ctrl käyttääksesi sitä.
+	This key is used for “{what}” and can't be changed.	Tätä näppäintä käytetään toimintoon ”{what}”, eikä sitä voi muuttaa.
+	{key} was taken from “{other}”, which now has no shortcut.	{key} otettiin komennolta ”{other}”, jolla ei nyt ole pikanäppäintä.
+	{key} is already used by “{other}”.	{key} on jo komennon ”{other}” käytössä.
+	Reassign	Siirrä
+	Select tool	Valintatyökalu
+	Hand tool	Käsityökalu
+	Scroll the page	Vieritä sivua
+	Delete the selection	Poista valinta
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tämän vastauksen asetukset
 

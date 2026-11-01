@@ -2569,6 +2569,25 @@ animation effects	Off	Изключени
 	Extract the selected pages…	Извличане на избраните страници…
 	Delete the selected pages	Изтриване на избраните страници
 
+# Keyboard shortcuts dialog: custom shortcuts (#4635) (AI-assisted, not separately native-reviewed)
+	Change	Промяна
+	Reset	Нулиране
+	Reset all shortcuts	Нулиране на всички клавишни комбинации
+	Back to the default keys	Обратно към клавишите по подразбиране
+	Find a command	Търсене на команда
+	Keys of the document view	Клавиши на изгледа на документа
+	Choose new keys for {command}	Изберете нови клавиши за {command}
+	Press the new keys (Esc cancels)	Натиснете новите клавиши (Esc отказва)
+	Alt combinations can't be shortcuts. Try Ctrl or Shift.	Комбинациите с Alt не могат да бъдат клавишни комбинации. Опитайте с Ctrl или Shift.
+	This key moves around the interface on its own. Add Ctrl to use it.	Този клавиш сам по себе си придвижва из интерфейса. Добавете Ctrl, за да го използвате.
+	This key is used for “{what}” and can't be changed.	Този клавиш се използва за „{what}“ и не може да бъде променен.
+	{key} was taken from “{other}”, which now has no shortcut.	{key} беше взет от „{other}“, която вече няма клавишна комбинация.
+	{key} is already used by “{other}”.	{key} вече се използва от „{other}“.
+	Reassign	Преназначаване
+	Select tool	Инструмент за избор
+	Hand tool	Инструмент „Ръка“
+	Scroll the page	Превъртане на страницата
+	Delete the selection	Изтриване на избраното
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Опции за този отговор
 	Export value	Стойност за експортиране

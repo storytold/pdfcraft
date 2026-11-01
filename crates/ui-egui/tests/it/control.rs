@@ -916,6 +916,41 @@ fn middle_button_pans_while_held_outside_linux() {
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
 }
 
+/// #4635 (CodeRabbit on #4646): the control channel changes, removes and resets a command's
+/// shortcut by the dialog's rules, and `ui.commands` shows the binding the keys run.
+#[test]
+fn control_changes_removes_and_resets_shortcuts() {
+    let (mut h, c) = harness();
+    let shortcut = |h: &mut Harness<'static, PdfCraftApp>, id: &str| -> Value {
+        let list = ok(h, &c, "ui.commands", json!({}));
+        list["commands"].as_array().and_then(|l| l.iter().find(|x| x["id"] == id).cloned()).map(|x| x["shortcut"].clone()).unwrap_or(Value::Null)
+    };
+    let default = shortcut(&mut h, "file.properties");
+    assert!(default.as_str().is_some_and(|k| k.ends_with('D')), "{default}");
+    ok(&mut h, &c, "ui.set", json!({ "key": "shortcut", "value": "file.properties=cmd+shift+J" }));
+    assert!(shortcut(&mut h, "file.properties").as_str().is_some_and(|k| k.contains("Shift") && k.ends_with('J')), "the new key");
+    ok(&mut h, &c, "ui.set", json!({ "key": "shortcut", "value": "file.properties=none" }));
+    assert_eq!(shortcut(&mut h, "file.properties"), Value::Null, "no key");
+    ok(&mut h, &c, "ui.set", json!({ "key": "shortcut", "value": "file.properties=default" }));
+    assert_eq!(shortcut(&mut h, "file.properties"), default, "its own key back");
+    ok(&mut h, &c, "ui.set", json!({ "key": "shortcut", "value": "edit.find=cmd+shift+J" }));
+    ok(&mut h, &c, "ui.set", json!({ "key": "shortcut", "value": "all=default" }));
+    assert!(shortcut(&mut h, "edit.find").as_str().is_some_and(|k| k.ends_with('F')), "every command back");
+    for (value, says) in [
+        ("file.properties=alt+J", "is not a shortcut"),
+        ("file.properties=cmd+1", "can't be changed"),
+        ("file.properties=Escape", "moves around the interface"),
+        ("edit.copy=cmd+J", "system's own key"),
+        ("no.such.command=cmd+J", "unknown command"),
+        ("file.properties", "<command id>=<keys>"),
+        ("all=none", "all only takes default"),
+    ] {
+        let e = call(&mut h, &c, "ui.set", json!({ "key": "shortcut", "value": value })).unwrap_err();
+        assert!(e.contains(says), "{value}: {e}");
+    }
+    assert_eq!(shortcut(&mut h, "file.properties"), default, "refusals change nothing");
+}
+
 #[test]
 fn state_and_view_options() {
     let (mut h, c) = harness();

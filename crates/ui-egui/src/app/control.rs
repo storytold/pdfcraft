@@ -322,6 +322,7 @@ impl PdfCraftApp {
                 };
             }
             ("author", _) => self.comment_prefs.author = value.to_string(),
+            ("shortcut", _) => crate::custom_shortcuts::set_from_control(self, value)?,
             ("comment-tool-pinned", _) => {
                 self.comment_prefs.pinned = match value {
                     "true" => true,

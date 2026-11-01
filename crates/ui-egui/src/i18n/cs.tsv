@@ -2913,6 +2913,25 @@ certificate	Version	Verze
 	Extract the selected pages…	Extrahovat vybrané stránky…
 	Delete the selected pages	Odstranit vybrané stránky
 
+# Keyboard shortcuts dialog: custom shortcuts (#4635) (AI-assisted, not separately native-reviewed)
+	Change	Změnit
+	Reset	Obnovit
+	Reset all shortcuts	Obnovit všechny zkratky
+	Back to the default keys	Zpět na výchozí klávesy
+	Find a command	Najít příkaz
+	Keys of the document view	Klávesy zobrazení dokumentu
+	Choose new keys for {command}	Zvolte nové klávesy pro {command}
+	Press the new keys (Esc cancels)	Stiskněte nové klávesy (Esc zruší)
+	Alt combinations can't be shortcuts. Try Ctrl or Shift.	Kombinace s Alt nemohou být zkratkami. Zkuste Ctrl nebo Shift.
+	This key moves around the interface on its own. Add Ctrl to use it.	Tato klávesa sama o sobě pohybuje rozhraním. Přidejte Ctrl, abyste ji mohli použít.
+	This key is used for “{what}” and can't be changed.	Tato klávesa slouží pro „{what}“ a nelze ji změnit.
+	{key} was taken from “{other}”, which now has no shortcut.	{key} byla převzata od „{other}“, který teď nemá zkratku.
+	{key} is already used by “{other}”.	{key} už používá „{other}“.
+	Reassign	Přeřadit
+	Select tool	Nástroj výběru
+	Hand tool	Nástroj ruka
+	Scroll the page	Posouvat stránku
+	Delete the selection	Odstranit výběr
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Možnosti této odpovědi
 	Export value	Exportní hodnota

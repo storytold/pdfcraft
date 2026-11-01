@@ -2838,6 +2838,25 @@ theme	Appearance	Tampilan
 	Extract the selected pages…	Ekstrak halaman yang dipilih…
 	Delete the selected pages	Hapus halaman yang dipilih
 
+# Keyboard shortcuts dialog: custom shortcuts (#4635) (AI-assisted, not separately native-reviewed)
+	Change	Ubah
+	Reset	Atur ulang
+	Reset all shortcuts	Atur ulang semua pintasan
+	Back to the default keys	Kembali ke tombol bawaan
+	Find a command	Cari perintah
+	Keys of the document view	Tombol tampilan dokumen
+	Choose new keys for {command}	Pilih tombol baru untuk {command}
+	Press the new keys (Esc cancels)	Tekan tombol baru (Esc membatalkan)
+	Alt combinations can't be shortcuts. Try Ctrl or Shift.	Kombinasi Alt tidak dapat menjadi pintasan. Coba Ctrl atau Shift.
+	This key moves around the interface on its own. Add Ctrl to use it.	Tombol ini bergerak di antarmuka dengan sendirinya. Tambahkan Ctrl untuk menggunakannya.
+	This key is used for “{what}” and can't be changed.	Tombol ini digunakan untuk “{what}” dan tidak dapat diubah.
+	{key} was taken from “{other}”, which now has no shortcut.	{key} diambil dari “{other}”, yang sekarang tidak punya pintasan.
+	{key} is already used by “{other}”.	{key} sudah dipakai oleh “{other}”.
+	Reassign	Tetapkan ulang
+	Select tool	Alat pilih
+	Hand tool	Alat tangan
+	Scroll the page	Gulir halaman
+	Delete the selection	Hapus pilihan
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opsi untuk balasan ini
 

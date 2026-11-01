@@ -162,7 +162,7 @@ impl Host for crate::PdfCraftApp {
     fn commands(&self) -> Value {
         let mut list: Vec<Value> = pdfcraft_engine::commands::COMMANDS
             .iter()
-            .map(|c| json!({ "id": c.id, "label": c.label, "menu": c.menu, "enabled": self.command_enabled(c), "shortcut": c.shortcut.map(|s| s.label(cfg!(target_os = "macos"))) }))
+            .map(|c| json!({ "id": c.id, "label": c.label, "menu": c.menu, "enabled": self.command_enabled(c), "shortcut": self.shortcuts.get(c).map(|s| s.label(cfg!(target_os = "macos"))) }))
             .collect();
         list.push(json!({"id": "ui.panel", "label": "Side panel", "enabled": true, "params": "panel: tools or side; open: boolean; width: number (clamped to the panel's limits)"}));
         json!({ "commands": list })

@@ -2607,6 +2607,25 @@ animation effects	Off	Aus
 	Extract the selected pages…	Ausgewählte Seiten extrahieren…
 	Delete the selected pages	Ausgewählte Seiten löschen
 
+# Keyboard shortcuts dialog: custom shortcuts (#4635) (AI-assisted, not separately native-reviewed)
+	Change	Ändern
+	Reset	Zurücksetzen
+	Reset all shortcuts	Alle Tastenkürzel zurücksetzen
+	Back to the default keys	Zurück zu den Standardtasten
+	Find a command	Befehl suchen
+	Keys of the document view	Tasten der Dokumentansicht
+	Choose new keys for {command}	Neue Tasten für {command} wählen
+	Press the new keys (Esc cancels)	Drücke die neuen Tasten (Esc bricht ab)
+	Alt combinations can't be shortcuts. Try Ctrl or Shift.	Alt-Kombinationen können keine Tastenkürzel sein. Versuche Strg oder Umschalt.
+	This key moves around the interface on its own. Add Ctrl to use it.	Diese Taste bewegt sich allein durch die Oberfläche. Füge Strg hinzu, um sie zu verwenden.
+	This key is used for “{what}” and can't be changed.	Diese Taste wird für „{what}“ verwendet und kann nicht geändert werden.
+	{key} was taken from “{other}”, which now has no shortcut.	{key} wurde von „{other}“ übernommen, das jetzt kein Tastenkürzel mehr hat.
+	{key} is already used by “{other}”.	{key} wird bereits von „{other}“ verwendet.
+	Reassign	Neu zuweisen
+	Select tool	Auswahlwerkzeug
+	Hand tool	Hand-Werkzeug
+	Scroll the page	Seite scrollen
+	Delete the selection	Auswahl löschen
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Optionen für diese Antwort
 	Export value	Exportwert

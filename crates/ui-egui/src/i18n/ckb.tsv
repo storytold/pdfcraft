@@ -2767,6 +2767,25 @@ certificate	Version	وەشان
 	Extract the selected pages…	پەڕە هەڵبژێردراوەکان دەربهێنە…
 	Delete the selected pages	پەڕە هەڵبژێردراوەکان بسڕەوە
 
+# Keyboard shortcuts dialog: custom shortcuts (#4635) (AI-assisted, not separately native-reviewed)
+	Change	گۆڕین
+	Reset	ڕێکخستنەوە
+	Reset all shortcuts	ڕێکخستنەوەی هەموو کورتەڕێکان
+	Back to the default keys	گەڕانەوە بۆ کلیلە بنەڕەتییەکان
+	Find a command	گەڕان بەدوای فەرمانێک
+	Keys of the document view	کلیلەکانی پیشاندانی بەڵگەنامە
+	Choose new keys for {command}	کلیلی نوێ بۆ {command} هەڵبژێرە
+	Press the new keys (Esc cancels)	کلیلە نوێیەکان دابگرە (Esc هەڵدەوەشێنێتەوە)
+	Alt combinations can't be shortcuts. Try Ctrl or Shift.	تێکەڵەکانی Alt ناتوانن کورتەڕێ بن. Ctrl یان Shift تاقی بکەرەوە.
+	This key moves around the interface on its own. Add Ctrl to use it.	ئەم کلیلە بە تەنها لە ڕووکاردا دەجووڵێت. Ctrl زیاد بکە بۆ بەکارهێنانی.
+	This key is used for “{what}” and can't be changed.	ئەم کلیلە بۆ «{what}» بەکاردێت و ناگۆڕدرێت.
+	{key} was taken from “{other}”, which now has no shortcut.	{key} لە «{other}» وەرگیرا، کە ئێستا هیچ کورتەڕێیەکی نییە.
+	{key} is already used by “{other}”.	{key} پێشتر لەلایەن «{other}» بەکاردێت.
+	Reassign	دووبارە دیاریکردن
+	Select tool	ئامرازی هەڵبژاردن
+	Hand tool	ئامرازی دەست
+	Scroll the page	خشاندنی پەڕە
+	Delete the selection	سڕینەوەی هەڵبژاردە
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	هەڵبژاردەکانی ئەم وەڵامە
 # Untranslated: English text until a translator fills these in.

@@ -2592,6 +2592,25 @@ animation effects	Off	Joaktiv
 	Extract the selected pages…	Nxirr faqet e përzgjedhura…
 	Delete the selected pages	Fshi faqet e përzgjedhura
 
+# Keyboard shortcuts dialog: custom shortcuts (#4635) (AI-assisted, not separately native-reviewed)
+	Change	Ndrysho
+	Reset	Rivendos
+	Reset all shortcuts	Rivendos të gjitha shkurtoret
+	Back to the default keys	Kthehu te tastet e parazgjedhura
+	Find a command	Gjej një komandë
+	Keys of the document view	Tastet e pamjes së dokumentit
+	Choose new keys for {command}	Zgjidh taste të reja për {command}
+	Press the new keys (Esc cancels)	Shtyp tastet e reja (Esc anulon)
+	Alt combinations can't be shortcuts. Try Ctrl or Shift.	Kombinimet me Alt nuk mund të jenë shkurtore. Provo Ctrl ose Shift.
+	This key moves around the interface on its own. Add Ctrl to use it.	Ky tast lëviz vetë nëpër ndërfaqe. Shto Ctrl për ta përdorur.
+	This key is used for “{what}” and can't be changed.	Ky tast përdoret për “{what}” dhe nuk mund të ndryshohet.
+	{key} was taken from “{other}”, which now has no shortcut.	{key} u mor nga “{other}”, që tani nuk ka shkurtore.
+	{key} is already used by “{other}”.	{key} përdoret tashmë nga “{other}”.
+	Reassign	Ricakto
+	Select tool	Mjeti i përzgjedhjes
+	Hand tool	Mjeti i dorës
+	Scroll the page	Rrëshqit faqen
+	Delete the selection	Fshi përzgjedhjen
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opsionet për këtë përgjigje
 

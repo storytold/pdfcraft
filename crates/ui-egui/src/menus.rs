@@ -385,7 +385,8 @@ impl PdfCraftApp {
         let (english, shortcut) = match commands::command(id) {
             Some(spec) => {
                 let current = commands::current_label(spec, &self.session, self.active_ids().map(|(_, doc)| doc));
-                (crate::i18n::menu_label(id, &current), spec.shortcut.or((id == "edit.copy").then_some(crate::commands::COPY)))
+                // The user's own binding, as the keys run it (#4635).
+                (crate::i18n::menu_label(id, &current), self.shortcuts.get(spec).or((id == "edit.copy").then_some(crate::commands::COPY)))
             }
             None => match extra(id) {
                 Some((_, label, shortcut)) => (tl!(label).to_owned(), *shortcut),

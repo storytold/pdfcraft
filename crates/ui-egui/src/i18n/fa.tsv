@@ -2818,6 +2818,25 @@ theme	Appearance	ظاهر
 	a field named {name} already exists	فیلدی با نام {name} از قبل وجود دارد
 	Today	امروز
 
+# Keyboard shortcuts dialog: custom shortcuts (#4635) (AI-assisted, not separately native-reviewed)
+	Change	تغییر
+	Reset	بازنشانی
+	Reset all shortcuts	بازنشانی همهٔ میان‌برها
+	Back to the default keys	بازگشت به کلیدهای پیش‌فرض
+	Find a command	یافتن فرمان
+	Keys of the document view	کلیدهای نمای سند
+	Choose new keys for {command}	کلیدهای تازه برای {command} را انتخاب کنید
+	Press the new keys (Esc cancels)	کلیدهای تازه را فشار دهید (Esc لغو می‌کند)
+	Alt combinations can't be shortcuts. Try Ctrl or Shift.	ترکیب‌های Alt نمی‌توانند میان‌بر باشند. Ctrl یا Shift را امتحان کنید.
+	This key moves around the interface on its own. Add Ctrl to use it.	این کلید به‌تنهایی در رابط جابه‌جا می‌کند. برای استفاده از آن Ctrl را اضافه کنید.
+	This key is used for “{what}” and can't be changed.	این کلید برای «{what}» به کار می‌رود و تغییر نمی‌کند.
+	{key} was taken from “{other}”, which now has no shortcut.	{key} از «{other}» گرفته شد که اکنون میان‌بری ندارد.
+	{key} is already used by “{other}”.	{key} هم‌اکنون برای «{other}» به کار می‌رود.
+	Reassign	واگذاری دوباره
+	Select tool	ابزار انتخاب
+	Hand tool	ابزار دست
+	Scroll the page	پیمایش صفحه
+	Delete the selection	حذف موارد انتخاب‌شده
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	گزینه‌های این پاسخ
 

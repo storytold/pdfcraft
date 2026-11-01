@@ -2738,6 +2738,25 @@ theme	Appearance	ลักษณะที่ปรากฏ
 	Extract the selected pages…	แยกหน้าที่เลือกออก…
 	Delete the selected pages	ลบหน้าที่เลือก
 
+# Keyboard shortcuts dialog: custom shortcuts (#4635) (AI-assisted, not separately native-reviewed)
+	Change	เปลี่ยน
+	Reset	รีเซ็ต
+	Reset all shortcuts	รีเซ็ตทางลัดทั้งหมด
+	Back to the default keys	กลับไปใช้ปุ่มเริ่มต้น
+	Find a command	ค้นหาคำสั่ง
+	Keys of the document view	ปุ่มของมุมมองเอกสาร
+	Choose new keys for {command}	เลือกปุ่มใหม่สำหรับ {command}
+	Press the new keys (Esc cancels)	กดปุ่มใหม่ (Esc เพื่อยกเลิก)
+	Alt combinations can't be shortcuts. Try Ctrl or Shift.	ชุดปุ่มที่มี Alt ไม่สามารถเป็นทางลัดได้ ลองใช้ Ctrl หรือ Shift
+	This key moves around the interface on its own. Add Ctrl to use it.	ปุ่มนี้เคลื่อนที่ในอินเทอร์เฟซได้ด้วยตัวเอง เพิ่ม Ctrl เพื่อใช้งาน
+	This key is used for “{what}” and can't be changed.	ปุ่มนี้ใช้สำหรับ “{what}” และเปลี่ยนไม่ได้
+	{key} was taken from “{other}”, which now has no shortcut.	นำ {key} มาจาก “{other}” ซึ่งตอนนี้ไม่มีทางลัดแล้ว
+	{key} is already used by “{other}”.	{key} ถูกใช้โดย “{other}” อยู่แล้ว
+	Reassign	กำหนดใหม่
+	Select tool	เครื่องมือเลือก
+	Hand tool	เครื่องมือมือ
+	Scroll the page	เลื่อนหน้า
+	Delete the selection	ลบส่วนที่เลือก
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	ตัวเลือกของการตอบกลับนี้
 # Untranslated: English text until a translator fills these in.

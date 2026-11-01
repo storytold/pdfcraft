@@ -2867,6 +2867,25 @@ theme	Appearance	Aspect
 	Extract the selected pages…	Extrage paginile selectate…
 	Delete the selected pages	Șterge paginile selectate
 
+# Keyboard shortcuts dialog: custom shortcuts (#4635) (AI-assisted, not separately native-reviewed)
+	Change	Modifică
+	Reset	Resetează
+	Reset all shortcuts	Resetează toate comenzile rapide
+	Back to the default keys	Înapoi la tastele implicite
+	Find a command	Găsește o comandă
+	Keys of the document view	Tastele vizualizării documentului
+	Choose new keys for {command}	Alegeți taste noi pentru {command}
+	Press the new keys (Esc cancels)	Apăsați tastele noi (Esc anulează)
+	Alt combinations can't be shortcuts. Try Ctrl or Shift.	Combinațiile cu Alt nu pot fi comenzi rapide. Încercați Ctrl sau Shift.
+	This key moves around the interface on its own. Add Ctrl to use it.	Această tastă navighează singură prin interfață. Adăugați Ctrl pentru a o folosi.
+	This key is used for “{what}” and can't be changed.	Această tastă este folosită pentru „{what}” și nu poate fi modificată.
+	{key} was taken from “{other}”, which now has no shortcut.	{key} a fost luată de la „{other}”, care acum nu mai are comandă rapidă.
+	{key} is already used by “{other}”.	{key} este deja folosită de „{other}”.
+	Reassign	Reatribuie
+	Select tool	Instrument de selecție
+	Hand tool	Instrument mână
+	Scroll the page	Derulează pagina
+	Delete the selection	Șterge selecția
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opțiuni pentru acest răspuns
 

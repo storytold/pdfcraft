@@ -122,6 +122,9 @@ impl PdfCraftApp {
             recent_limit: crate::RECENT_FILES_DEFAULT,
             reopen_last_session: false,
             restore_last_view: true,
+            shortcuts: Default::default(),
+            shortcut_capture: None,
+            shortcut_conflict: None,
             last_views: Vec::new(),
             last_session: Default::default(),
             quit_session: None,
@@ -620,6 +623,11 @@ impl eframe::App for PdfCraftApp {
         i18n::set_current(i18n::Lang::from_pref(&self.language));
         // A language change switches stock chrome between LTR and RTL before anything is drawn.
         theme::sync_direction(&ctx);
+        custom_shortcuts::publish(&ctx, &self.shortcuts);
+        if self.dialog != Some(Dialog::Shortcuts) {
+            self.shortcut_capture = None;
+            self.shortcut_conflict = None;
+        }
         // Fonts registered via set_fonts only take effect next frame; named families would panic now.
         if !self.fonts_ready {
             ctx.request_repaint();
