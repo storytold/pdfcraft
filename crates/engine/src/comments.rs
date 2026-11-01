@@ -82,6 +82,7 @@ pub fn comment_type_name(subtype: &str) -> &str {
 /// [`comment_type_name`], telling callouts, clouds and typewriter text apart by `/IT`.
 pub fn comment_kind(a: &pdfcraft_render::Annotation) -> &str {
     match a.intent.as_deref() {
+        Some("FreehandHighlight") if a.subtype == "Ink" => "Freehand Highlight",
         Some("FreeTextCallout") => "Callout",
         Some("PolygonCloud") => "Cloud",
         Some("FreeTextTypeWriter") => "Typewriter",
