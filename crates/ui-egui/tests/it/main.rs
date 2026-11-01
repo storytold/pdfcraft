@@ -60,6 +60,7 @@ mod panel_snapshots;
 mod pdf_links;
 mod pickers;
 mod pointer;
+mod portfolio;
 mod preferences_layout;
 mod prepare;
 mod print;
