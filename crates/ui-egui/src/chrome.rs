@@ -1,6 +1,6 @@
 //! Window chrome: tab strip (with the integrated macOS title bar), mode bar, right rail.
 
-use craft_ui::panes::{Edge, Rail, RailItem, RailRequest};
+use craft_ui::panes::{Rail, RailItem, RailRequest};
 use egui::{Align, Color32, CornerRadius, Layout, Rect, Sense, Stroke, vec2};
 
 use crate::canvas::{DocView, Fit, PageLayout};
@@ -531,8 +531,8 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         });
 }
 
-/// Draw the right tool rail with page navigation, history, zoom, rotation and page-display controls for the
-/// active view.
+/// Draw the tool rail with page navigation, history, zoom, rotation and page-display controls for the
+/// active view: at the right edge, or the left with Preferences ▸ Side panels.
 pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let Some((index, id)) = app.active_ids() else { return };
@@ -572,7 +572,7 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let view = &mut app.views[index];
     let mut page_display = None;
     let rail = Rail::new(egui::Id::unique("rail"))
-        .edge(Edge::End)
+        .edge(app.side_panels.side_edge())
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(6, 8)).stroke(Stroke::new(1.0, t.divider)))
         .show(ui, &items, app.right.as_ref(), |ui| {
             // Page navigation cluster at the bottom, a panel of its own so that in a short

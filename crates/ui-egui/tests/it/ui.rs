@@ -59,6 +59,45 @@ fn tools_panel_side_preference_moves_and_persists() {
     assert!(!h.state().side_panels.tools_on_right());
 }
 
+/// Preferences ▸ Side panels moves the rail (page navigation, zoom) and the side panel it opens to
+/// the left of the page and back; Tools keeps its side, outermost there, the choice is kept with
+/// the preferences, and the control channel's `panels-side` sets it too.
+#[test]
+fn side_panels_preference_moves_the_rail_and_the_panel_and_persists() {
+    use pdfcraft_ui_egui::Dialog;
+
+    let mut h = harness(|app| {
+        app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens");
+        app.set_option("panel", "comments").unwrap();
+    });
+    let zoom_x = |h: &Harness<'static, PdfCraftApp>| h.get_by_label("Zoom").rect().center().x;
+    let page = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].viewport_rect();
+    let (window, start) = (h.ctx.content_rect(), page(&h));
+    assert!(zoom_x(&h) > start.right(), "the rail starts right of the page");
+    h.state_mut().dialog = Some(Dialog::Preferences);
+    h.run_steps(3);
+    h.get_by_label("Side panels Left").click();
+    h.run_steps(3);
+    assert!(h.state().side_panels.side_panels_on_left());
+    assert!(!h.state().side_panels.tools_on_right(), "Tools stays where it was");
+    h.state_mut().dialog = None;
+    h.run_steps(3);
+    let moved = page(&h);
+    assert!(zoom_x(&h) < moved.left() && zoom_x(&h) < window.left() + 60.0, "the rail is at the left edge: {} / {moved:?}", zoom_x(&h));
+    assert!(
+        moved.left() > start.left() + 200.0 && moved.right() > start.right() + 200.0,
+        "the Comments panel is left of the page: {moved:?} from {start:?}"
+    );
+    let saved = h.state().persist();
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&saved);
+    assert!(restored.side_panels.side_panels_on_left());
+    h.state_mut().set_option("panels-side", "right").unwrap();
+    h.run_steps(3);
+    assert!(zoom_x(&h) > page(&h).right());
+    assert!(h.state_mut().set_option("panels-side", "up").is_err());
+}
+
 /// Every piece of text painted on the last frame: its whole text, whether it was cut with "…",
 /// and where it was drawn.
 fn painted_text(h: &Harness<'static, PdfCraftApp>) -> Vec<(String, bool, egui::Rect)> {
