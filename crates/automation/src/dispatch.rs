@@ -1,7 +1,7 @@
 use super::error::{Result, ToolError, failed};
 use super::json::{Args, document_attachment_keys, info, one_based, parse_style_ranges, security, summary, text_style_levels};
 use super::paths::{read_input, write_atomic};
-use super::{Arc, Automation, Edit, Value, block_overlapping, comments, content, json, tools};
+use super::{Arc, Automation, Edit, Value, a11y, block_overlapping, comments, content, json, tools};
 
 /// One piece of a tool's result.
 #[derive(Clone, Debug, PartialEq)]
@@ -98,13 +98,15 @@ impl Automation {
                     Some(m) => pdfcraft_engine::camera_clean::Look::from_name(m)
                         .ok_or_else(|| ToolError::InvalidArgs(format!("unknown mode {m:?} (original, colour, greyscale, bw)")))?,
                 };
+                let mark = self.session.js_output_mark(id);
                 self.session.enhance_camera_page_at(id, page, corners, look, level).map_err(failed)?;
+                let warnings = self.session.take_js_output_since(id, mark).errors;
                 let r = |v: f32| (v * 100.0).round() / 100.0;
                 let used: Vec<f32> = corners.iter().flat_map(|&[x, y]| info.user_to_view(x as f32, y as f32)).map(r).collect();
                 let mut out = summary(self.doc(&a)?);
                 out["corners"] = json!(used);
                 out["detected"] = json!(given.is_none());
-                out
+                a11y::with_warnings(out, warnings)
             }
             "page_delete" => {
                 let pages = self.pages(&a, "pages")?;
