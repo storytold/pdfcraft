@@ -40,12 +40,17 @@ fn pdf(colour_space: &str, content: &str, extra: &[&[u8]]) -> Vec<u8> {
 
 /// As `pdf`, with the colour space resource named `resource` rather than `/P`.
 fn pdf_with_resource(resource: &str, colour_space: &str, content: &str, extra: &[&[u8]]) -> Vec<u8> {
+    pdf_with_resources(resource, colour_space, "", content, extra)
+}
+
+/// As `pdf_with_resource`, with `more` entries in the page's resource dictionary.
+fn pdf_with_resources(resource: &str, colour_space: &str, more: &str, content: &str, extra: &[&[u8]]) -> Vec<u8> {
     let mut objs: Vec<Vec<u8>> = vec![
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
         format!(
             "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R \
-             /Resources << /XObject << /Im 5 0 R >> /ColorSpace << /{resource} {colour_space} >> >> >>"
+             /Resources << /XObject << /Im 5 0 R >> /ColorSpace << /{resource} {colour_space} >> {more} >> >>"
         )
         .into_bytes(),
         format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()).into_bytes(),
@@ -427,5 +432,27 @@ fn a_fill_colour_in_a_space_with_no_table_keeps_the_fallback() {
         let page = render(pdf(&format!("[/Indexed /DeviceRGB 7 {lookup}]"), content, &[]));
         assert_eq!(columns(&page)[0], WHITE, "{lookup:?}: DeviceGray 1");
         assert_eq!(page.warnings, vec![RenderWarning::ColourFallback], "{lookup:?}");
+        // A stroke colour the same way.
+        let content = "1 0 0 rg 0 0 200 200 re f /P CS 1 SC 20 w 0 100 m 200 100 l S";
+        let page = render(pdf(&format!("[/Indexed /DeviceRGB 7 {lookup}]"), content, &[]));
+        assert_eq!(columns(&page)[0], WHITE, "{lookup:?}: a DeviceGray 1 stroke");
+        assert_eq!(page.warnings, vec![RenderWarning::ColourFallback], "{lookup:?}");
     }
+}
+
+/// Only images and the colour operators handle a space with no table: anything else reads it as
+/// upstream did, as a space that cannot be read. A shading in one is not drawn.
+#[test]
+fn a_shading_in_a_space_with_no_table_is_not_drawn() {
+    let shading = |cs: &str| {
+        format!(
+            "/Shading << /Sh << /ShadingType 2 /ColorSpace {cs} /Coords [0 0 200 0] \
+             /Function << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> /Extend [true true] >> >>"
+        )
+    };
+    let page = render(pdf_with_resources("P", "/DeviceRGB", &shading("[/Indexed /DeviceRGB 1 null]"), "/Sh sh", &[]));
+    assert_eq!(columns(&page), [WHITE; 8]);
+    // The same shading with a table draws.
+    let page = render(pdf_with_resources("P", "/DeviceRGB", &shading("[/Indexed /DeviceRGB 1 <FF0000 00FF00>]"), "/Sh sh", &[]));
+    assert_ne!(columns(&page), [WHITE; 8]);
 }
