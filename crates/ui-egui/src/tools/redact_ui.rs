@@ -370,9 +370,14 @@ pub(crate) fn pages_body(ui: &mut egui::Ui, d: &mut PagesDraft, pages: usize, _t
             to_field
         })
         .inner;
-    widgets::keep_range_ordered(d.from, &mut d.to, to_field.has_focus());
+    widgets::keep_range_ordered(d.from, &mut d.to, widgets::typing_into(&to_field));
     ui.add_space(12.0);
-    buttons(ui, "OK", true)
+    let (ok, cancel) = buttons(ui, "OK", true);
+    if ok {
+        // OK while the end is still being typed (a screen reader can press it).
+        widgets::keep_range_ordered(d.from, &mut d.to, false);
+    }
+    (ok, cancel)
 }
 
 /// Find text and redact. Returns (search, cancel, import a word list).
@@ -720,5 +725,64 @@ mod tests {
             h.run_steps(2);
             assert_eq!(*h.state(), PagesDraft { current: false, from: 5, to: expected }, "typed {typed:?}");
         }
+    }
+
+    /// The dialog with its OK result kept: (draft, OK pressed).
+    fn dialog() -> egui_kittest::Harness<'static, (PagesDraft, bool)> {
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::new_ui_state(
+            move |ui, (d, ok): &mut (PagesDraft, bool)| {
+                if !fonts {
+                    ui.ctx().set_fonts(crate::theme::font_definitions());
+                    fonts = true;
+                    return;
+                }
+                let t = Tokens::get(ui.ctx());
+                *ok |= pages_body(ui, d, 20, &t).0;
+            },
+            (PagesDraft { current: false, from: 5, to: 5 }, false),
+        );
+        h.run();
+        h
+    }
+
+    fn type_last_page(h: &mut egui_kittest::Harness<'static, (PagesDraft, bool)>, typed: &str) {
+        h.get_by_role_and_label(Role::SpinButton, "to").click();
+        h.run();
+        h.event(key(egui::Key::A, egui::Modifiers::COMMAND));
+        for c in typed.chars() {
+            h.event(egui::Event::Text(c.to_string()));
+            h.run_steps(2);
+        }
+    }
+
+    /// OK pressed while the end is still being typed (a screen reader's click leaves the field
+    /// focused) orders the range, so a reversed one never reaches the edit.
+    #[test]
+    fn ok_while_the_last_page_is_typed_orders_the_range() {
+        let mut h = dialog();
+        type_last_page(&mut h, "3");
+        assert_eq!(h.state().0.to, 3, "still typing");
+        h.get_by_label("OK").click_accesskit();
+        h.run_steps(2);
+        assert_eq!(*h.state(), (PagesDraft { current: false, from: 5, to: 5 }, true));
+    }
+
+    /// Switching to another window halfway through "12" leaves the typed "1" alone: the field
+    /// still has the keyboard when the window comes back.
+    #[test]
+    fn switching_windows_mid_number_keeps_what_is_typed() {
+        let mut h = dialog();
+        type_last_page(&mut h, "1");
+        h.input_mut().focused = false;
+        h.run_steps(2);
+        assert_eq!(h.state().0.to, 1, "the typed 1 stays while the window is in the background");
+        h.input_mut().focused = true;
+        h.run_steps(2);
+        h.event(egui::Event::Text("2".into()));
+        h.run_steps(2);
+        h.event(key(egui::Key::Enter, egui::Modifiers::NONE));
+        h.run_steps(2);
+        assert_eq!(h.state().0.to, 12);
     }
 }
