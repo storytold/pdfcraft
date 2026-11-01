@@ -924,6 +924,32 @@ mod tests {
         }
     }
 
+    /// A file name and a subject are data on every route: quotes and `$(...)` stay in their string
+    /// in AppleScript, base64 on PowerShell's standard input, one argument each for `xdg-email`.
+    #[test]
+    fn a_hostile_file_name_stays_data() {
+        let (path, subject) = ("/tmp/a\"b$(x).pdf", "s\"; do shell script \"x");
+        let c = Compose { path: PathBuf::from(path), subject: subject.into(), body: String::new(), to: Vec::new() };
+
+        for default in [DefaultMail::AppleMail, DefaultMail::Outlook] {
+            let p = plan_for("macos", &default, &c).unwrap();
+            let script = run_of(&p).2.unwrap();
+            assert!(script.contains("POSIX file \"/tmp/a\\\"b$(x).pdf\""), "{script}");
+            assert!(script.contains("subject:\"s\\\"; do shell script \\\"x\""), "{script}");
+        }
+
+        let p = plan_for("windows", &DefaultMail::Mapi("Outlook".into()), &c).unwrap();
+        let (_, args, input, _) = run_of(&p);
+        let input = input.unwrap();
+        assert!(!args.concat().contains("$(x)") && !input.contains("$(x)"), "{args:?} {input}");
+        assert_eq!(input.lines().next(), Some(base64(path.as_bytes()).as_str()));
+        assert_eq!(input.lines().nth(2), Some(base64(subject.as_bytes()).as_str()));
+
+        let p = plan_for("linux", &DefaultMail::XdgEmail("/usr/bin/xdg-email".into()), &c).unwrap();
+        let args = run_of(&p).1;
+        assert!(args.iter().any(|a| a == path) && args.iter().any(|a| a == subject), "{args:?}");
+    }
+
     #[test]
     fn macos_scripts_mail_and_outlook_and_falls_back_for_any_other_default() {
         let p = plan_for("macos", &DefaultMail::Outlook, &compose()).unwrap();
