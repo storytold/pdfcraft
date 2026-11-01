@@ -2628,6 +2628,12 @@ animation effects	Off	Вимкнено
 	Extract the selected pages…	Витягнути вибрані сторінки…
 	Delete the selected pages	Видалити вибрані сторінки
 
+# Add Watermark: saved settings (#4616) (AI-assisted, not separately native-reviewed)
+	Saved Settings	Збережені налаштування
+	Save Settings	Зберегти налаштування
+	Delete Settings	Видалити налаштування
+	[Custom]	[Власні]
+	Name a text watermark to save it	Назвіть текстовий водяний знак, щоб зберегти його
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Параметри цієї відповіді
 	Export value	Значення експорту

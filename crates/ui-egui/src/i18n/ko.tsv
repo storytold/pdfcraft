@@ -2837,6 +2837,12 @@ theme	Appearance	모양
 	Extract the selected pages…	선택한 페이지 추출…
 	Delete the selected pages	선택한 페이지 삭제
 
+# Add Watermark: saved settings (#4616) (AI-assisted, not separately native-reviewed)
+	Saved Settings	저장된 설정
+	Save Settings	설정 저장
+	Delete Settings	설정 삭제
+	[Custom]	[사용자 지정]
+	Name a text watermark to save it	저장하려면 텍스트 워터마크에 이름을 지정하세요
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	이 답글의 옵션
 

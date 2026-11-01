@@ -2519,6 +2519,12 @@ animation effects	Off	Выкл
 	Extract the selected pages…	Извлечь выбранные страницы…
 	Delete the selected pages	Удалить выбранные страницы
 
+# Add Watermark: saved settings (#4616) (AI-assisted, not separately native-reviewed)
+	Saved Settings	Сохранённые настройки
+	Save Settings	Сохранить настройки
+	Delete Settings	Удалить настройки
+	[Custom]	[Пользовательские]
+	Name a text watermark to save it	Назовите текстовый водяной знак, чтобы сохранить его
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Параметры этого ответа
 	Export value	Значение экспорта

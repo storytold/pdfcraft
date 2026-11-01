@@ -630,3 +630,73 @@ fn page_range_from_one_to_one_selects_only_the_first_page() {
     assert_eq!(corner(&mut r, 0), vec![red, green, blue, 255], "page 1 has the background");
     assert_eq!(corner(&mut r, 1), vec![255, 255, 255, 255], "page 2 does not");
 }
+
+/// #4616: Add Watermark ▸ Saved Settings keeps a watermark by name, for any document and the next
+/// session, and fills the dialog from it again.
+#[test]
+fn watermark_settings_are_saved_by_name_and_used_again() {
+    let mut h = harness();
+    h.state_mut().execute("edit.watermark");
+    h.run_steps(2);
+    assert!(h.query_by(|n| n.label().as_deref() == Some("Save Settings") && n.is_disabled()).is_some(), "a setting needs a name");
+    {
+        let d = &mut h.state_mut().marks_draft;
+        d.wm.text = "CONFIDENTIAL".into();
+        d.wm.rotation = -45.0;
+        d.wm.opacity = 0.25;
+        d.wm.color = [0.8, 0.1, 0.1];
+        d.wm.behind = true;
+        d.fit = false;
+        d.wm.font_size = 40.0;
+    }
+    h.run_steps(1);
+    let name = h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Name");
+    name.focus();
+    name.type_text("Red stamp");
+    h.run_steps(2);
+    h.get_by_label("Save Settings").click();
+    h.run_steps(2);
+    assert_eq!(h.state().marks_draft.saved.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["Red stamp"]);
+    combo(&h, "Red stamp");
+    // Changing the watermark shows [Custom]; the setting itself is kept as saved.
+    h.state_mut().marks_draft.wm.text = "DRAFT".into();
+    h.run_steps(2);
+    combo(&h, "[Custom]");
+    assert!(h.query_by(|n| n.label().as_deref() == Some("Delete Settings") && n.is_disabled()).is_some());
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    // The next session, another document: the dialog offers it, and choosing it fills the dialog.
+    let saved = h.state().persist();
+    let mut h = harness();
+    h.state_mut().restore(&saved);
+    h.state_mut().marks_draft.wm.text = "OTHER".into();
+    h.state_mut().execute("edit.watermark");
+    h.run_steps(2);
+    combo(&h, "[Custom]").click();
+    h.run_steps(2);
+    h.get_by_label("Red stamp").click();
+    h.run_steps(2);
+    {
+        let d = &h.state().marks_draft;
+        assert_eq!((d.wm.text.as_str(), d.wm.rotation, d.wm.opacity, d.wm.color, d.wm.behind), ("CONFIDENTIAL", -45.0, 0.25, [0.8, 0.1, 0.1], true));
+        assert_eq!((d.fit, d.wm.font_size), (false, 40.0));
+    }
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(marks(&h), [MarkKind::Watermark]);
+    // Delete Settings forgets it.
+    h.state_mut().execute("edit.watermark");
+    h.run_steps(2);
+    h.state_mut().marks_draft.saved_pick = Some(0);
+    h.run_steps(1);
+    h.get_by_label("Delete Settings").click();
+    h.run_steps(2);
+    assert!(h.state().marks_draft.saved.is_empty());
+}
+
+/// The combo box showing `value`.
+fn combo<'h>(h: &'h Harness<'static, PdfCraftApp>, value: &str) -> egui_kittest::Node<'h> {
+    h.query_all_by_role(egui::accesskit::Role::ComboBox)
+        .find(|n| n.value().as_deref() == Some(value))
+        .unwrap_or_else(|| panic!("no combo box shows {value}"))
+}

@@ -2606,6 +2606,12 @@ animation effects	Off	オフ
 	Extract the selected pages…	選択したページを抽出…
 	Delete the selected pages	選択したページを削除
 
+# Add Watermark: saved settings (#4616) (AI-assisted, not separately native-reviewed)
+	Saved Settings	保存された設定
+	Save Settings	設定を保存
+	Delete Settings	設定を削除
+	[Custom]	[カスタム]
+	Name a text watermark to save it	保存するにはテキストの透かしに名前を付けてください
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	この返信のオプション
 	Export value	書き出し値

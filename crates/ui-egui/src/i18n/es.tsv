@@ -2929,6 +2929,12 @@ theme	Appearance	Aspecto
 	Extract the selected pages…	Extraer las páginas seleccionadas…
 	Delete the selected pages	Eliminar las páginas seleccionadas
 
+# Add Watermark: saved settings (#4616) (AI-assisted, not separately native-reviewed)
+	Saved Settings	Configuración guardada
+	Save Settings	Guardar configuración
+	Delete Settings	Eliminar configuración
+	[Custom]	[Personalizado]
+	Name a text watermark to save it	Ponga nombre a una marca de agua de texto para guardarla
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opciones de esta respuesta
 	Export value	Valor de exportación

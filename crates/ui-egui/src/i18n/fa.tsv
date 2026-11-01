@@ -2818,6 +2818,12 @@ theme	Appearance	ظاهر
 	a field named {name} already exists	فیلدی با نام {name} از قبل وجود دارد
 	Today	امروز
 
+# Add Watermark: saved settings (#4616) (AI-assisted, not separately native-reviewed)
+	Saved Settings	تنظیمات ذخیره‌شده
+	Save Settings	ذخیرهٔ تنظیمات
+	Delete Settings	حذف تنظیمات
+	[Custom]	[سفارشی]
+	Name a text watermark to save it	برای ذخیرهٔ واترمارک متنی، برای آن نامی بگذارید
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	گزینه‌های این پاسخ
 

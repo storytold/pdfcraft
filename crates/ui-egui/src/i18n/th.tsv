@@ -2738,6 +2738,12 @@ theme	Appearance	ลักษณะที่ปรากฏ
 	Extract the selected pages…	แยกหน้าที่เลือกออก…
 	Delete the selected pages	ลบหน้าที่เลือก
 
+# Add Watermark: saved settings (#4616) (AI-assisted, not separately native-reviewed)
+	Saved Settings	การตั้งค่าที่บันทึกไว้
+	Save Settings	บันทึกการตั้งค่า
+	Delete Settings	ลบการตั้งค่า
+	[Custom]	[กำหนดเอง]
+	Name a text watermark to save it	ตั้งชื่อลายน้ำข้อความเพื่อบันทึก
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	ตัวเลือกของการตอบกลับนี้
 # Untranslated: English text until a translator fills these in.
