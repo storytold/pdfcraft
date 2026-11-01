@@ -121,12 +121,13 @@ fn a_kept_comment_is_found_where_a_delete_moved_it() {
     let mut view = CommentView::from_info(&info);
     view.selected = Some((0, 2));
     view.editing = Some((0, 3, "typed".into()));
-    view.annotation_deleted(&before, &after, gone);
+    view.annotation_deleted(&before, &DocInfo { annotations: after.clone(), ..Default::default() }, gone);
+    view.document_changed(&DocInfo { annotations: after.clone(), ..Default::default() });
     assert_eq!((view.selected, view.editing), (Some((0, 0)), Some((0, 1, "typed".into()))), "both follow");
     let mut view = CommentView::from_info(&info);
     view.editing = Some((0, 4, "typed".into()));
     view.editor_focus = Some(EditorFocus::Take);
-    view.annotation_deleted(&before, &after, gone);
+    view.annotation_deleted(&before, &DocInfo { annotations: after.clone(), ..Default::default() }, gone);
     assert_eq!((view.editing, view.editor_focus), (None, None), "the editor closes with the reply it was open on");
 }
 

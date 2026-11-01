@@ -294,16 +294,19 @@ impl CommentView {
         }
     }
 
-    /// The annotation at `gone` was just deleted; `before` and `after` are the document's
+    /// The annotation at `gone` was just deleted; `before` and `info` hold the document's
     /// annotations until then and now. The selection and the inline editor stay on what they
     /// were on, where it now is (deleting a reply keeps its comment selected), and close when it
     /// went too.
-    pub(crate) fn annotation_deleted(&mut self, before: &[Annotation], after: &[Annotation], gone: (usize, usize)) {
-        self.selected = self.selected.and_then(|k| after_delete(before, after, gone, k));
-        self.editing = self.editing.take().and_then(|(p, i, text)| after_delete(before, after, gone, (p, i)).map(|(p, i)| (p, i, text)));
-        if self.editing.is_none() {
-            self.editor_focus = None;
-        }
+    pub(crate) fn annotation_deleted(&mut self, before: &[Annotation], info: &DocInfo, gone: (usize, usize)) {
+        let selected = self.selected.and_then(|k| after_delete(before, &info.annotations, gone, k));
+        let editing = self.editing.take().and_then(|(p, i, text)| after_delete(before, &info.annotations, gone, (p, i)).map(|(p, i)| (p, i, text)));
+        let focus = self.editor_focus.take();
+        // Other transient state still needs conservative pruning; refresh the slot snapshot too.
+        self.document_changed(info);
+        self.selected = selected;
+        self.editor_focus = editing.as_ref().and(focus);
+        self.editing = editing;
     }
 
     /// Undo or Redo just ran. Either may have put annotations back or taken them away, on any
