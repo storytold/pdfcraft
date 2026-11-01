@@ -8,6 +8,7 @@ mod demo_pdf;
 mod fuzz;
 mod gates;
 mod layers;
+mod license_check;
 mod macos_integration;
 mod parity;
 mod screenshots;
@@ -19,9 +20,16 @@ type Command = fn(&[String]) -> anyhow::Result<()>;
 const COMMANDS: &[(&str, &str, Command)] = &[
     ("version", "Print the workspace version, or `version set X.Y.Z[-pre]` to change it and refresh Cargo.lock", version_cmd),
     ("layers", "Enforce the crate dependency layering (plan/architecture.md §3)", gates::layers),
-    ("wasm", "cargo check --target wasm32-unknown-unknown for every crate below L8", gates::wasm),
+    ("wasm", "cargo check --target wasm32-unknown-unknown for every crate below L8, in one call", gates::wasm),
     ("deny", "Dependency licences, bans, sources and advisories (deny.toml; needs cargo-deny)", gates::deny),
-    ("ci", "fmt --check, clippy -D warnings, test, layers, wasm, assets, deny, parity (stops at first failure)", gates::ci),
+    (
+        "ci",
+        "fmt --check, clippy -D warnings, the CLI without default features, test, i18n-report, layers, wasm, license-check, deny, parity (stops at first failure)",
+        gates::ci,
+    ),
+    ("test", "Workspace tests: cargo nextest (cargo test when it is missing), then doctests", gates::test),
+    ("i18n-report", "Print the strings each interface language lacks (counts and a few keys); never fails", gates::i18n_report),
+    ("license-check", "Offline source licence documents, attribution and metadata", license_check::run),
     ("assets", "Enforce the asset policy (AGENTS.md §1) against ATTRIBUTION.toml; --write regenerates ATTRIBUTION.md", assets::run),
     ("corpus", "Fetch the pinned pdf.js test corpus into corpus/ (git-ignored) and verify it; --update-pin re-records the pin", gates::corpus),
     ("check", "Robustness sweep over corpus/ with pdfcraft-cli; fails on crashes or regressions vs xtask/baselines", gates::check),
@@ -33,6 +41,11 @@ const COMMANDS: &[(&str, &str, Command)] = &[
         macos_integration::run,
     ),
     ("text-oracle", "Compare text extraction with pdftotext over corpus/ (word F1; target median ≥ 0.97)", gates::text_oracle),
+    (
+        "render-oracle",
+        "Compare page rendering with Poppler over corpus/ (pixel disagreement rate; --dir, --dpi, --limit, --tolerance, --hide-annotations)",
+        gates::render_oracle,
+    ),
     ("screenshots", "Regenerate the README screenshots in docs/images/ and their ATTRIBUTION entries", screenshots::run),
     ("models", "Fetch the OCR models (ATTRIBUTION.toml kind = \"model\") into assets/models/, verified by SHA-256", assets::models),
     ("demo-pdf", "Build dist/demo/pdfcraft-showcase.pdf (needs Google Chrome or Chromium)", demo_pdf::run),

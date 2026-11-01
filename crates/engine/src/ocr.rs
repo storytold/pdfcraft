@@ -24,11 +24,20 @@ pub struct OcrSettings {
     /// text" and skips them). When `false`, such pages are read too (a picture on a page that
     /// also has text, #1028) and only the words that aren't already there are added.
     pub skip_text_pages: bool,
+    /// What counts as the page's text when `skip_text_pages` is on: only its own (page content
+    /// and form fields). Comments and text boxes are left out, and are not drawn into the picture
+    /// that is read, so a scan with a few comments on it is still a scan. `false`: everything
+    /// the page shows.
+    pub native_text_only: bool,
 }
 
 /// A recognised word whose box is at least this much covered by the page's own text is that
 /// text read again, not a word in a picture.
 const ALREADY_ON_PAGE: f32 = 0.5;
+
+/// The long side of an A4 sheet in points (a letter page's, 792, is shorter): "Downsample to"
+/// is a resolution on paper this size or smaller.
+const SHEET: f32 = 842.0;
 
 /// How much of `word` the `text` boxes cover, from 0 to 1. Boxes are `[x0, y0, x1, y1]` in page
 /// view space. Overlaps between the text boxes are counted twice (glyphs rarely overlap), so the
@@ -47,7 +56,7 @@ fn covered(word: [f32; 4], text: &[[f32; 4]]) -> f32 {
 
 impl Default for OcrSettings {
     fn default() -> Self {
-        OcrSettings { dpi: 300.0, language: "en".into(), skip_text_pages: true }
+        OcrSettings { dpi: 300.0, language: "en".into(), skip_text_pages: true, native_text_only: false }
     }
 }
 
@@ -71,7 +80,7 @@ impl OcrPage {
 /// The recogniser, loaded once (it takes a moment) and shared.
 pub fn engine() -> Result<Arc<Ocr>, String> {
     static OCR: Mutex<Option<Arc<Ocr>>> = Mutex::new(None);
-    let mut slot = OCR.lock().unwrap_or_else(|e| e.into_inner());
+    let mut slot = OCR.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(o) = slot.as_ref() {
         return Ok(o.clone());
     }
@@ -101,7 +110,8 @@ impl OcrJob {
     /// Read the pages. `progress(done, total)` is called before each page; returning `false`
     /// stops (the pages read so far are returned).
     pub fn run(self, ocr: &Ocr, mut progress: impl FnMut(usize, usize) -> bool) -> Vec<OcrPage> {
-        let config = RenderConfig { password: self.password.as_deref().map(Arc::from), ..Default::default() };
+        let config =
+            RenderConfig { password: self.password.as_deref().map(Arc::from), hide_comments: self.settings.native_text_only, ..Default::default() };
         let mut r = PageRenderer::new(self.bytes.clone(), config);
         let mut out = Vec::new();
         let total = self.pages.len();
@@ -121,11 +131,7 @@ impl OcrJob {
                 out.push(skip("the page already contains text"));
                 continue;
             }
-            // A scan is read at its own resolution (enlarging it only blurs the letters), at most
-            // the chosen one.
-            let wanted = self.settings.dpi.clamp(72.0, 600.0) / 72.0;
-            let scale = self.native.get(page).copied().flatten().map_or(wanted, |n| n.clamp(1.0, wanted));
-            let shot = r.render(RenderRequest { page, scale, ..Default::default() });
+            let shot = r.render(RenderRequest { page, scale: self.scale(page, info), ..Default::default() });
             if let Some(e) = shot.error {
                 out.push(skip(&e));
                 continue;
@@ -150,6 +156,18 @@ impl OcrJob {
         }
         progress(total, total);
         out
+    }
+
+    /// The render scale (pixels per point) `page` is read at. A scan is read at its own
+    /// resolution (enlarging it only blurs the letters), at most the chosen one.
+    fn scale(&self, page: usize, info: &PageInfo) -> f32 {
+        let wanted = self.settings.dpi.clamp(72.0, 600.0) / 72.0;
+        let Some(native) = self.native.get(page).copied().flatten() else { return wanted };
+        // A scan whose page is larger than a sheet (often a box given in pixels, one point per
+        // pixel, #1848) is measured as if shrunk to one: otherwise 1 px/pt is already its full
+        // image, and no "Downsample to" choice could ask for less.
+        let fit = (SHEET / info.width.max(info.height).max(1e-3)).min(1.0);
+        native.clamp(fit, wanted * fit)
     }
 }
 
@@ -236,12 +254,16 @@ pub fn recognize_file(
     if s.apply_ocr(id, &pages).map_err(|e| e.to_string())? == 0 {
         return Ok(FileResult { bytes, pages });
     }
-    Ok(FileResult { bytes: s.save_bytes(id).map_err(|e| e.to_string())?, pages })
+    // Checked like a save before the caller writes it (#2166).
+    let bytes = s.save_bytes(id).map_err(|e| e.to_string())?;
+    s.check_save(id, &bytes).map_err(|e| e.to_string())?;
+    Ok(FileResult { bytes, pages })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::export;
 
     /// #1028: a recognised word over the page's own text is that text again; one in an empty
     /// part of the page (a picture) is new.
@@ -258,6 +280,28 @@ mod tests {
         assert!(covered([131.0, 52.0, 170.0, 61.0], &glyphs) < ALREADY_ON_PAGE);
         // A page without text has nothing to cover a word.
         assert_eq!(covered([100.5, 52.0, 134.0, 61.0], &[]), 0.0);
+    }
+
+    /// #1848: an A4 scan at 300 dpi whose page box is its pixel size (2480 x 3508 pt, one pixel
+    /// per point) gets a smaller bitmap for each lower "Downsample to" choice, and a low-resolution
+    /// letter page is still never shrunk below one pixel per point.
+    #[test]
+    fn downsample_shrinks_a_page_box_given_in_pixels() {
+        let mut s = Session::new();
+        let page = |w: u32, h: u32| export::encode_png(w, h, &vec![255; (w * h * 4) as usize]).unwrap();
+        let bytes = s.create_from_images(&[("a4.png".into(), page(2480, 3508)), ("letter.png".into(), page(612, 792))]).unwrap();
+        let id = s.open("scan.pdf", None, bytes, None).unwrap();
+        let mut r = PageRenderer::new(s.get(id).unwrap().bytes.clone(), RenderConfig::default());
+        for (dpi, a4) in [(72.0, [595, 842]), (150.0, [1240, 1754]), (300.0, [2480, 3508]), (600.0, [2480, 3508])] {
+            let job = s.ocr_job(id, &[], OcrSettings { dpi, ..Default::default() }).unwrap();
+            for (page, want) in [(0, a4), (1, [612, 792])] {
+                let scale = job.scale(page, &job.infos[page]);
+                let shot = r.render(RenderRequest { page, scale, ..Default::default() });
+                assert!(shot.error.is_none(), "{:?}", shot.error);
+                let near = |got: u32, want: u32| got.abs_diff(want) <= 1;
+                assert!(near(shot.width, want[0]) && near(shot.height, want[1]), "{dpi} dpi, page {page}: {}x{}", shot.width, shot.height);
+            }
+        }
     }
 
     #[test]
