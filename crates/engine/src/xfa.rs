@@ -1092,6 +1092,88 @@ mod tests {
         assert!(copy.upgrade().is_none(), "closing the form drops its copies at once");
     }
 
+    /// A live form node whose property tree is told apart by an attribute.
+    fn marked(mark: &str) -> FormNode {
+        FormNode { props: Arc::new(Props { attrs: vec![("mark".into(), mark.into())], elements: Vec::new() }), ..Default::default() }
+    }
+
+    /// The copy made of a tree is the one every later snapshot of the form gets, and the map
+    /// holds one entry for it.
+    #[test]
+    fn later_snapshots_of_a_form_get_the_same_copy() {
+        let tpl = Template::default();
+        let node = marked("a");
+        let first = to_js(&node, &tpl);
+        let second = to_js(&node, &tpl);
+        assert!(Arc::ptr_eq(&first.props, &second.props));
+        let copies = props_copies(&tpl).expect("the engine's map");
+        assert_eq!(copies.len(), 1);
+        assert!(copy_of(&copies, &node.props).is_some_and(|c| Arc::ptr_eq(&c, &first.props)));
+    }
+
+    /// The map is keyed by a tree's address, so a tree freed and another made at the same
+    /// address must never get the first one's copy (the ABA case). An entry's weak reference
+    /// keeps the freed tree's allocation, so its address is not reused while the entry exists;
+    /// the next use of the map drops the entry, and only then can a new tree take the address,
+    /// with no entry left to find. Each new tree below is dropped at the end of its turn, so the
+    /// allocator is free to put the next one where it was.
+    #[test]
+    fn a_freed_trees_copy_never_goes_to_a_tree_at_its_address() {
+        let tpl = Template::default();
+        let old = marked("old");
+        let addr = Arc::as_ptr(&old.props) as usize;
+        drop(to_js(&old, &tpl));
+        drop(old);
+        let made: Vec<Arc<Props>> = (0..4_096).map(|_| Arc::new(Props::default())).collect();
+        assert!(made.iter().all(|p| Arc::as_ptr(p) as usize != addr), "the address is held while the entry exists");
+        drop(made);
+        assert!(props_copies(&tpl).is_some_and(|c| c.is_empty()), "the next use drops the entry");
+        for i in 0..4_096 {
+            let node = marked(&format!("new {i}"));
+            assert_eq!(to_js(&node, &tpl).props.attrs, node.props.attrs);
+        }
+    }
+
+    /// An entry under a tree's address that was made from another tree is not that tree's copy:
+    /// a lookup passes it by, and the snapshot's own lookup replaces it with the tree's copy.
+    #[test]
+    fn an_entry_made_from_another_tree_is_not_returned() {
+        let tpl = Template::default();
+        let node = marked("this");
+        let other = Arc::new(Props { attrs: vec![("mark".into(), "other".into())], elements: Vec::new() });
+        let gone = Arc::new(Props { attrs: vec![("mark".into(), "gone".into())], elements: Vec::new() });
+        let key = Arc::as_ptr(&node.props) as usize;
+        let mut copies = PropsCopies::new();
+        // Its tree is alive but elsewhere.
+        copies.insert(key, (Arc::downgrade(&other), Arc::new(convert_props(&other))));
+        assert!(copy_of(&copies, &node.props).is_none());
+        // Its tree is gone.
+        copies.insert(key, (Arc::downgrade(&gone), Arc::new(convert_props(&gone))));
+        drop(gone);
+        assert!(copy_of(&copies, &node.props).is_none());
+        // Through a snapshot: the stray entry is passed by and replaced.
+        props_copies(&tpl).expect("the engine's map").insert(key, (Arc::downgrade(&other), Arc::new(convert_props(&other))));
+        assert_eq!(to_js(&node, &tpl).props.attrs, node.props.attrs);
+        assert!(props_copies(&tpl).and_then(|c| copy_of(&c, &node.props)).is_some_and(|c| c.attrs == node.props.attrs));
+    }
+
+    /// Trees of other templates (the template read again) that a snapshot met leave the map once
+    /// they are gone: however many come and go, it holds the form's own trees and no more.
+    #[test]
+    fn the_map_does_not_grow_with_trees_that_are_gone() {
+        let xml = r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb"><field name="a"><border><edge/></border></field><field name="b"/></subform></template>"#;
+        let (tpl, _) = pdfcraft_xfa::parse(xml).unwrap();
+        let live = pdfcraft_xfa::form_tree(&tpl, None, &Default::default());
+        drop(to_js(&live.root, &tpl));
+        let own = props_copies(&tpl).map_or(0, |c| c.len());
+        assert!(own >= 3, "{own}");
+        for _ in 0..500 {
+            let (again, _) = pdfcraft_xfa::parse(xml).unwrap();
+            drop(to_js(&pdfcraft_xfa::form_tree(&again, None, &Default::default()).root, &tpl));
+        }
+        assert_eq!(props_copies(&tpl).map_or(0, |c| c.len()), own);
+    }
+
     /// A field's click script reads its own and other objects' properties through a laid-out
     /// dynamic form: template values, the spec's defaults, and a write read back, which changes
     /// nothing on the form.
