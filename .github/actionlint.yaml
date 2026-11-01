@@ -2,4 +2,3 @@
 self-hosted-runner:
   labels:
     - macos-release
-    - pdfcraft-server-2019-disposable

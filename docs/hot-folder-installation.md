@@ -164,17 +164,30 @@ Official macOS PKG signing additionally requires a **Developer ID Installer** ce
 alongside the application's Developer ID Application certificate. Without signing credentials,
 preview apps are ad-hoc signed and their PKG is unsigned and not notarized.
 
-`.github/workflows/hot-folder-services.yml` exercises the real Windows Service Control Manager,
-Linux systemd and macOS launchd with a synthetic worker. It verifies boot registration, account,
-start/stop, startup enable/disable and graceful cancellation. Installer tests compile the actual
-MSI/PKG/DEB definitions around the synthetic worker and verify optional installation, task
-preservation and removal. These run only on disposable CI machines. They do not replace testing
-the final OCR executable and signed installer artifacts on each supported architecture.
+The service and installer suites below are not wired into this repository's CI: workflows here
+only call the shared `craft-common-actions` workflows, and running these needs a shared job that
+can act as administrator on disposable machines. Until one exists, run them by hand on a
+disposable machine or VM, never on a workstation you care about:
 
-`.github/workflows/hot-folder-server.yml` is the separate, manual acceptance suite for an
-already-successful matching installer build. It installs the real x64 OCR service on disposable
-Windows Server 2022/2025 hosts, exercises local folders and authenticated SMB, output outages,
-worker crashes, bounded cancellation and same-version account-preserving upgrade. The optional
-Server 2019 path requires an explicitly configured disposable self-hosted runner; hosted CI
-cannot establish Server 2019 compatibility. See `packaging/server-tests/README.txt` for the
-provenance checks and invocation. A checked-in suite is not evidence of a successful run.
+- `packaging/service-tests/unix.sh` (Linux systemd, macOS launchd), `windows.ps1` and
+  `check-stop-wait.ps1` (Windows Service Control Manager) exercise the real service managers with
+  a synthetic worker (`cargo build -p pdfcraft-hot-folder-service --example service_probe`). They
+  verify boot registration, account, start/stop, startup enable/disable and graceful cancellation.
+- `windows-msi.ps1` (WiX 5.0.2), `macos-pkg.sh` and `linux-deb.sh` (nfpm) compile the actual
+  MSI/PKG/DEB definitions around the synthetic worker and verify optional installation, task
+  preservation and removal.
+- The root-only Linux credential provisioning test is `#[ignore]`d in normal runs:
+  `sudo <engine test binary> --exact
+  hot_folder_sources::credentials::tests::unix_admin_provisioning_preserves_service_uid_gid_and_private_modes --ignored`.
+- `packaging/lint-hot-folder.sh` runs shellcheck, xmllint and the server-suite syntax check over
+  the Hot Folder installer scripts.
+
+None of this replaces testing the final OCR executable and signed installer artifacts on each
+supported architecture.
+
+`packaging/server-tests/` is the separate acceptance suite for an already-successful matching
+installer build. It installs the real x64 OCR service on disposable Windows Server 2022/2025
+hosts, exercises local folders and authenticated SMB, output outages, worker crashes, bounded
+cancellation and same-version account-preserving upgrade. The optional Server 2019 path requires
+an explicitly configured disposable self-hosted runner. See `packaging/server-tests/README.txt`
+for the provenance checks and invocation. A checked-in suite is not evidence of a successful run.

@@ -20,33 +20,20 @@ ephemeral and destroyed after every run, even when the workflow is cancelled.
 
 How to run
 ----------
-1. Review and push the exact source commit, including this suite.
-2. Finish a successful preview-installers.yml or release.yml workflow at that SHA.
-   Its event must be push, workflow_dispatch or release, in this repository.
-3. Dispatch hot-folder-server.yml on the same ref with installer_run_id,
-   expected_sha (full 40 characters), and artifact_name. The default artifact name
-   is pdfcraft-preview-windows-x64. The MSI SHA256 file must accompany the MSI.
-4. Read both hot-folder-server-windows-2022 and hot-folder-server-windows-2025
-   artifacts. A passing report.json and successful cleanup are required.
-
-Example (documentation only; replace all placeholders):
-  gh workflow run hot-folder-server.yml --ref REVIEWED_REF \
-    -f installer_run_id=SUCCESSFUL_RUN_ID -f expected_sha=FULL_COMMIT_SHA
-
-Before this new workflow reaches the default branch, an existing installer
-workflow can invoke it as a reusable workflow in a SECOND manual dispatch, passing
-the previous successful installer run ID and skipping its own build jobs. Calling
-it from the same still-running installer run is intentionally rejected. All jobs
-and the script require the original event to be workflow_dispatch; workflow_call
-does not provide a bypass for pull requests, pushes or other automatic callers.
-
-The preview workflow provides that second mode explicitly:
-  gh workflow run preview-installers.yml --ref REVIEWED_REF \
-    -f mode=server-acceptance -f installer_run_id=SUCCESSFUL_RUN_ID
-It skips all installer/processing builds, passes its own exact github.sha as the
-expected_sha, and invokes the local reusable workflow from that same commit.
-Do not advance REVIEWED_REF between the installer run and acceptance dispatch.
-The default mode remains build; pushes never launch the acceptance suite.
+The dispatch workflow that runs this suite is not part of this repository yet:
+workflows here only call shared craft-common-actions workflows, and this one needs
+a manual, elevated job on disposable Windows Server runners. The scripts expect to
+run inside such a job (acceptance.ps1 and verify-provenance.ps1 require
+GITHUB_ACTIONS, a workflow_dispatch event and an expected commit equal to
+GITHUB_SHA), so they refuse to start anywhere else. The job must:
+1. Check out the exact reviewed commit, including this suite.
+2. Download the Windows x64 installer artifact of a successful release or preview
+   build at that same SHA (push, workflow_dispatch or release event, this
+   repository), with its MSI SHA256 file, and verify it with verify-provenance.ps1.
+3. Run acceptance.ps1 on hosted Windows Server 2022 and 2025, and upload only the
+   bounded result/log folder. A passing report.json and successful cleanup are
+   required.
+Pull requests, pushes and other automatic events must never launch it.
 
 Windows Server 2019
 -------------------
@@ -91,8 +78,6 @@ Local validation without installation
 ------------------------------------
   pwsh -NoProfile -File packaging/server-tests/check.ps1
   pwsh -NoProfile -File packaging/server-tests/check.ps1 -Cli PATH/TO/pdfcraft-cli.exe
-  actionlint -config-file packaging/server-tests/actionlint.yaml \
-    .github/workflows/hot-folder-server.yml
 check.ps1 parses scripts, exercises confinement, preserves empty/single/multiple
 CLI-script arrays, rejects missing or changed originals and malformed ProductCodes,
 preserves primary failures through cleanup, and mocks the GitHub metadata verifier.

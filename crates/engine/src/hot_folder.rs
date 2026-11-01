@@ -1861,6 +1861,33 @@ mod tests {
     }
 
     #[test]
+    fn hot_folder_links_out_of_the_input_are_not_followed() {
+        let (dir, config, mut task) = setup();
+        task.recursive = true;
+        task.originals = Originals::Delete;
+        save_config(&config, &Config { tasks: vec![task.clone()] }, None).unwrap();
+        let outside = dir.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("secret.pdf"), b"%PDF-1.7 outside").unwrap();
+        #[cfg(unix)]
+        let linked = std::os::unix::fs::symlink(outside.join("secret.pdf"), task.input.join("file.pdf"))
+            .and_then(|()| std::os::unix::fs::symlink(&outside, task.input.join("folder")));
+        #[cfg(windows)]
+        let linked = std::os::windows::fs::symlink_file(outside.join("secret.pdf"), task.input.join("file.pdf"))
+            .and_then(|()| std::os::windows::fs::symlink_dir(&outside, task.input.join("folder")));
+        if linked.is_err() {
+            return; // Windows without the symlink privilege
+        }
+        let mut state = State::default();
+        for now in [10, 20] {
+            step(&task, &mut state, now, &config, None, &|| false).unwrap();
+        }
+        assert!(state.observations.is_empty());
+        assert!(fs::read_dir(&task.output).unwrap().next().is_none());
+        assert_eq!(fs::read(outside.join("secret.pdf")).unwrap(), b"%PDF-1.7 outside");
+    }
+
+    #[test]
     fn hot_folder_move_and_delete_happen_only_after_success() {
         if !ocr::available() {
             return;
