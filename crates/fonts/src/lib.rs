@@ -168,6 +168,11 @@ pub fn win_ansi(s: &str) -> Vec<u8> {
 /// 0x0C and 0x0D are skipped: viewers treat tab and line feed as white space when drawing, a
 /// literal string turns an unescaped carriage return into a line feed, and form feed separates
 /// pages in extracted text. In the standard-14 metrics each glyph has its base letter's advance width.
+///
+/// Limits: the standard-14 fonts are not embedded, so these letters are drawn only where the
+/// viewer substitutes a font that has the glyph, and the page then depends on the viewer. ISO
+/// 19005 (PDF/A) requires embedded fonts, so this output cannot meet a PDF/A profile. Text
+/// extraction does not depend on the viewer: the names above read back as the right Unicode.
 pub const LATIN_EXTRA: &[(char, u8, &str, char)] = &[
     ('ă', 0x01, "abreve", 'a'),
     ('Ă', 0x02, "Abreve", 'A'),
