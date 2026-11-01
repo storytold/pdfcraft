@@ -59,9 +59,19 @@ pub struct ImageBudget {
 }
 
 impl ImageBudget {
-    /// The allowance for an operation on `doc`, which a longer file makes larger.
+    /// The allowance for an operation on `doc`, which a longer file makes larger. The streams made
+    /// or changed since it was opened count as the file's bytes do, so a document built in memory
+    /// (combined, created, or given pages of scans) gets what it would once saved and opened again.
     pub fn new(doc: &Document) -> Self {
-        let bytes = u64::try_from(doc.bytes().len()).unwrap_or(u64::MAX);
+        let length = |n: usize| u64::try_from(n).unwrap_or(u64::MAX);
+        let edited = doc
+            .scan_objects_subset(doc.modified_objects())
+            .filter_map(|(_, object)| match &*object.ok()? {
+                Object::Stream(s) => Some(length(s.raw.len())),
+                _ => None,
+            })
+            .fold(0u64, u64::saturating_add);
+        let bytes = length(doc.bytes().len()).saturating_add(edited);
         Self::with_work(IMAGE_WORK.saturating_add(bytes.saturating_mul(IMAGE_WORK_PER_BYTE)))
     }
 
@@ -659,6 +669,24 @@ mod image_tests {
         let len = pdf.len() as u64;
         let doc = Document::open(std::sync::Arc::new(pdf)).unwrap();
         assert_eq!(ImageBudget::new(&doc).work_left(), IMAGE_WORK + len * IMAGE_WORK_PER_BYTE);
+    }
+
+    /// A document made in memory, as Combine, Create and inserted scans make one, gets for the
+    /// streams it was given what it would get for them once saved: what isn't a stream adds nothing.
+    #[test]
+    fn streams_made_in_memory_allow_more_decoding_too() {
+        let mut doc = Document::new_empty();
+        doc.add(Object::Stream(Stream::from_raw(Dict::new(), vec![0; 3000])));
+        doc.add(Object::Dict(Dict::new()));
+        doc.add(Object::Stream(Stream::flate(Dict::new(), &[1; 100])));
+        let flate = pdfcraft_filters::encode_flate(&[1; 100]).len() as u64;
+        assert_eq!(ImageBudget::new(&doc).work_left(), IMAGE_WORK + (3000 + flate) * IMAGE_WORK_PER_BYTE);
+        // A stream of an opened file changed in memory counts with the file.
+        let pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF".to_vec();
+        let len = pdf.len() as u64;
+        let mut doc = Document::open(std::sync::Arc::new(pdf)).unwrap();
+        doc.add(Object::Stream(Stream::from_raw(Dict::new(), vec![0; 500])));
+        assert_eq!(ImageBudget::new(&doc).work_left(), IMAGE_WORK + (len + 500) * IMAGE_WORK_PER_BYTE);
     }
 
     // What the constants' comments promise, for a page scanned at 300 dpi: about 1,000 of them
