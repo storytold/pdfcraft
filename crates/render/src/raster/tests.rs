@@ -4273,6 +4273,55 @@ fn a_rectangle_is_still_painted_as_a_rectangle() {
     }
 }
 
+/// The red channel of `content` drawn on a 40 × 40 pt page at 72 dpi, row by row, and the
+/// page's width in pixels.
+fn gray_page(content: &str) -> (usize, Vec<u8>) {
+    let pdf = one_page_pdf(content.as_bytes(), "");
+    let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+    let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+    assert!(page.error.is_none(), "{content}: {:?}", page.error);
+    (page.width as usize, page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect())
+}
+
+/// Issue #5532: a stroke thinner than a device pixel is drawn at least one pixel wide whichever
+/// way it runs, also under a matrix that shrinks one axis more than the other (vendored hayro
+/// patch (28)). The widening went by the larger axis scale alone, so under `1 0 0 0.25 cm` a
+/// horizontal line came out a quarter of a pixel thick and a quarter as dark; going by the
+/// smaller scale instead would have drawn a vertical line four pixels wide. Dashes keep the
+/// lengths the pattern gives them.
+#[test]
+fn a_thin_stroke_is_one_pixel_wide_under_a_squeezed_matrix() {
+    let ink = |gray: u8| f32::from(255 - gray) / 255.0;
+    let column = |content: &str, x: usize| {
+        let (width, grays) = gray_page(content);
+        grays.iter().skip(x).step_by(width).map(|g| ink(*g)).sum::<f32>()
+    };
+    let row = |content: &str, y: usize| {
+        let (width, grays) = gray_page(content);
+        grays.iter().skip(y * width).take(width).map(|g| ink(*g)).collect::<Vec<f32>>()
+    };
+    let one_pixel = 0.85..=1.3;
+
+    // Device y = 40 - 0.25 × 82 = 19.5, the middle of row 19.
+    let across = column("q 1 0 0 0.25 0 0 cm 0.3 w 4 82 m 36 82 l S Q", 20);
+    assert!(one_pixel.contains(&across), "a horizontal line is {across} px of ink thick");
+    // Device x = 20.5, the middle of column 20, from row 10 to row 30.
+    let along: f32 = row("q 1 0 0 0.25 0 0 cm 0.3 w 20.5 40 m 20.5 120 l S Q", 20).iter().sum();
+    assert!(one_pixel.contains(&along), "a vertical line is {along} px of ink wide");
+    // Shrunk on both axes, by different scales.
+    let both = column("q 0.5 0 0 0.25 0 0 cm 0.1 w 8 82 m 72 82 l S Q", 20);
+    assert!(one_pixel.contains(&both), "a line shrunk on both axes is {both} px thick");
+    // As before: an unscaled hairline is one pixel thick.
+    let plain = column("0.1 w 4 20.5 m 36 20.5 l S", 20);
+    assert!(one_pixel.contains(&plain), "a plain hairline is {plain} px thick");
+
+    // Dashes of 4 pt, gaps of 4 pt from x = 4: columns 4–7 and 12–15 are inked, 8–11 are not.
+    let dashes = row("q 1 0 0 0.25 0 0 cm 0.3 w [4 4] 0 d 4 82 m 36 82 l S Q", 19);
+    let (on, off) = (dashes.get(5..7).unwrap_or_default(), dashes.get(9..11).unwrap_or_default());
+    assert!(on.len() == 2 && on.iter().all(|i| *i > 0.85), "a dash is inked: {dashes:?}");
+    assert!(off.len() == 2 && off.iter().all(|i| *i < 0.05), "a gap is not: {dashes:?}");
+}
+
 /// A one-page PDF whose content is the stream `stream`, with the entries `dict` in its
 /// dictionary.
 fn one_page_pdf(stream: &[u8], dict: &str) -> Vec<u8> {
