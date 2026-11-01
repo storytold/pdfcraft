@@ -929,11 +929,18 @@ struct PageFrame<'a> {
     current_height: f32,
     pressed_page: Option<usize>,
     calc_hover: Option<crate::calc_order_ui::Focus>,
+    /// Where every page on screen is drawn while an item is moved, for a drop on a page below the
+    /// one it is on: that page is not in `screen_xforms` yet when the item's own page reads the
+    /// pointer.
+    page_frames: Vec<(usize, PageXform)>,
 }
 
 /// Visible heights (points) closer than this are equal: one page size can meet the viewport a
 /// fraction of a point differently once the scroll offset is applied.
 const PAGE_TIE: f32 = 0.5;
+
+/// Pages further than this, in points, from the viewport are not drawn or given input.
+const PAGE_CULL_MARGIN: f32 = 400.0;
 
 /// Draws page `i` of the visible pages: its raster, the tools' input and overlays.
 /// One visible page: its index, its rectangle on screen and the transform to and from the page.
@@ -1304,10 +1311,14 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
                 tool == QuickTool::AddText && !over_source,
                 matches!(tool, QuickTool::AddText | QuickTool::EditText),
                 text_style,
+                &frame.page_frames,
                 view,
             )
             || tool == QuickTool::AddText && !over_source
     };
+    if let Some(edit) = view.content.take_page_move(doc, added) {
+        view.pending_edit = Some(edit);
+    }
     // Added content owns its gesture; its source text must not queue a second edit.
     // Edit text & images boxes every paragraph and image whenever the tool is on. Only the
     // input waits while selected objects or added content own the pointer, or while page
@@ -1841,7 +1852,7 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
     let PageEnv { allowed, comments_hidden, doc, editing_content, info, ppp, prefs, rects, redact_mark, scale, t, tool, .. } = frame.env;
     let PageFrame { ptr, origin, visible, pressed, pointer, .. } = *frame;
     let r = snap_to_pixels(rects[i].translate(origin.to_vec2()), ppp);
-    if !r.intersects(visible.expand(400.0)) {
+    if !r.intersects(visible.expand(PAGE_CULL_MARGIN)) {
         return;
     }
     if pressed && frame.pressed_page.is_none() && pointer.is_some_and(|p| r.contains(p)) {
@@ -2053,7 +2064,31 @@ fn draw_pages(
         current_height: f32::INFINITY,
         pressed_page: None,
         calc_hover: None,
+        page_frames: if view.content.moving() {
+            visible_pages
+                .iter()
+                .filter_map(|&i| {
+                    let r = snap_to_pixels(env.rects[i].translate(origin.to_vec2()), env.ppp);
+                    let p = info.pages.get(i)?;
+                    r.intersects(visible).then(|| (i, PageXform { rect: r, rot: view.rotation, pw: p.width.max(1.0), ph: p.height.max(1.0) }))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        },
     };
+    // An item held while the view was scrolled far from its page: the loop doesn't draw that page
+    // (past the margin it culls), so its release is read here.
+    if let Some(gp) = view.content.grab_page()
+        && !ptr.primary_down
+        && let (Some(rect), Some(page)) = (env.rects.get(gp), info.pages.get(gp))
+    {
+        let r = snap_to_pixels(rect.translate(origin.to_vec2()), env.ppp);
+        if !r.intersects(visible.expand(PAGE_CULL_MARGIN)) {
+            let xf = PageXform { rect: r, rot: view.rotation, pw: page.width.max(1.0), ph: page.height.max(1.0) };
+            crate::content_ui::release_offscreen_grab(view, &xf, info, env.added, env.doc, pointer, &frame.page_frames);
+        }
+    }
     for &i in visible_pages {
         draw_page(ui, view, &mut frame, i);
     }

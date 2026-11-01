@@ -1425,3 +1425,332 @@ fn typing_in_one_tab_never_reaches_another_tabs_added_text() {
     h.run_steps(3);
     assert_eq!(h.state().views[1].content.draft.as_ref().map(|d| d.text.as_str()), Some("Reviewed"), "the other tab's typing stays out");
 }
+
+/// A PDF of two blank pages, 300 × 400 points.
+fn two_blank_pages() -> &'static [u8] {
+    b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R >> endobj\n4 0 obj << /Type /Page /Parent 2 0 R >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF"
+}
+
+/// Two blank pages, both on screen.
+fn two_pages() -> Harness<'static, PdfCraftApp> {
+    let mut h = harness_bytes(two_blank_pages().to_vec());
+    h.state_mut().set_option("zoom", "60").unwrap();
+    h.run_steps(5);
+    h
+}
+
+/// The screen rectangle of `page`.
+fn page_rect(h: &Harness<'static, PdfCraftApp>, page: usize) -> egui::Rect {
+    h.state().views[0].page_screen_rect(page).expect("on screen")
+}
+
+/// The page position (display space, y up) of `r` on `page`'s screen rectangle.
+fn on_page_at(h: &Harness<'static, PdfCraftApp>, page: usize, x: f64, y: f64) -> Pos2 {
+    let r = page_rect(h, page);
+    let k = r.width() / 300.0;
+    r.min + egui::vec2(x as f32 * k, (400.0 - y as f32) * k)
+}
+
+/// Presses at `from`, moves in steps to `to` and, when `release`, lets go there.
+fn drag_pointer(h: &mut Harness<'static, PdfCraftApp>, from: Pos2, to: Pos2, release: bool) {
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    for i in 1..=10 {
+        h.hover_at(from + (to - from) * (i as f32 / 10.0));
+        h.run_steps(1);
+    }
+    if release {
+        h.drop_at(to);
+    }
+    h.run_steps(3);
+}
+
+/// Types "MMMMMMMM" on the second page.
+fn text_on_second_page(h: &mut Harness<'static, PdfCraftApp>) -> [f64; 4] {
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(2);
+    let p = on_page_at(h, 1, 60.0, 300.0);
+    click(h, p);
+    h.event(egui::Event::Text("MMMMMMMM".into()));
+    h.run_steps(2);
+    h.get_by_label("Done adding text").click();
+    h.run_steps(3);
+    let a = added(h);
+    assert_eq!(a.len(), 1);
+    assert_eq!(a[0].page, 1, "the text is on the second page");
+    a[0].content.rect()
+}
+
+/// #4655: text dragged from the second page and released over the first lands on the first, as
+/// one undo step, and no longer sits (off the page, out of sight) on the second.
+#[test]
+fn text_dragged_onto_another_page_moves_there() {
+    let _gpu = gpu();
+    let mut h = two_pages();
+    let rect = text_on_second_page(&mut h);
+    let from = item_on_screen_on(&h, 1, rect).center();
+    // The text's centre lands at (150, 250) on the first page.
+    let to = on_page_at(&h, 0, 150.0, 250.0);
+    drag_pointer(&mut h, from, to, true);
+    let a = added(&h);
+    assert_eq!(a.len(), 1, "moved, not copied: {a:?}");
+    assert_eq!(a[0].page, 0, "the text is on the first page");
+    let r = a[0].content.rect();
+    let (cx, cy) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+    assert!((cx - 150.0).abs() < 4.0 && (cy - 250.0).abs() < 4.0, "it lands where it was dropped: {r:?}");
+    assert!(r[0] >= 0.0 && r[2] <= 300.0 && r[1] >= 0.0 && r[3] <= 400.0, "inside the page: {r:?}");
+    assert_eq!(h.state().views[0].content.selected, Some((0, 0)), "and stays selected");
+    let s = h.state();
+    assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), Some("Edit content"));
+    h.state_mut().undo();
+    h.run_steps(3);
+    let a = added(&h);
+    assert_eq!((a.len(), a[0].page, a[0].content.rect()), (1, 1, rect), "one undo puts it back");
+}
+
+/// The screen rectangle of an added item's display-space box on `page`.
+fn item_on_screen_on(h: &Harness<'static, PdfCraftApp>, page: usize, r: [f64; 4]) -> egui::Rect {
+    egui::Rect::from_two_pos(on_page_at(h, page, r[0], r[1]), on_page_at(h, page, r[2], r[3]))
+}
+
+/// While the text is over the other page it is drawn there, following the pointer, and the page
+/// it started on no longer shows it.
+#[test]
+fn text_dragged_over_another_page_follows_the_pointer_there() {
+    let _gpu = gpu();
+    let mut h = two_pages();
+    let rect = text_on_second_page(&mut h);
+    let start = item_on_screen_on(&h, 1, rect);
+    let mut base = 0;
+    for _ in 0..100 {
+        h.run_steps(2);
+        base = ink(&h.render().unwrap(), probe(start));
+        if base > 8 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(base > 8, "the text is on the page ({base} dark pixels)");
+    let to = on_page_at(&h, 0, 150.0, 250.0);
+    drag_pointer(&mut h, start.center(), to, false);
+    let there = start.translate(to - start.center());
+    let mut seen = (0, 0);
+    for _ in 0..100 {
+        h.run_steps(2);
+        seen = ink_at(&mut h, start, there);
+        if seen.0 == 0 && seen.1 > base / 2 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        h.render().unwrap().save(format!("{dir}/added-text-drag-between-pages.png")).unwrap();
+    }
+    assert!(seen.1 > base / 2 && seen.0 == 0, "the text is drawn over the first page, no longer on the second ({} old, {} new)", seen.0, seen.1);
+    assert_eq!(added(&h)[0].page, 1, "nothing is applied before release");
+    h.drop_at(to);
+    h.run_steps(3);
+    assert_eq!(added(&h)[0].page, 0);
+}
+
+/// A picture goes with it: its image object is reused, not embedded twice.
+#[test]
+fn a_picture_dragged_onto_another_page_moves_there() {
+    let _gpu = gpu();
+    let mut h = two_pages();
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 30, 20);
+        enc.set_color(png::ColorType::Rgb);
+        let mut w = enc.write_header().unwrap();
+        w.write_image_data(&[90u8; 1800]).unwrap();
+    }
+    h.state_mut().add_image("logo.png".into(), png);
+    h.run_steps(3);
+    let a = added(&h);
+    assert_eq!(a.len(), 1, "{:?}", h.state().toast);
+    let (page, rect) = (a[0].page, a[0].content.rect());
+    let pdfcraft_engine::AddedContent::Image(before) = &a[0].content else { panic!("an image") };
+    let image = before.image;
+    let other = 1 - page;
+    let from = item_on_screen_on(&h, page, rect).center();
+    let to = on_page_at(&h, other, 100.0, 120.0);
+    drag_pointer(&mut h, from, to, true);
+    let a = added(&h);
+    assert_eq!(a.len(), 1, "moved, not copied: {a:?}");
+    assert_eq!(a[0].page, other);
+    let r = a[0].content.rect();
+    assert!(((r[0] + r[2]) / 2.0 - 100.0).abs() < 4.0 && ((r[1] + r[3]) / 2.0 - 120.0).abs() < 4.0, "{r:?}");
+    assert!((r[2] - r[0] - 30.0).abs() < 0.01 && (r[3] - r[1] - 20.0).abs() < 0.01, "same size: {r:?}");
+    let pdfcraft_engine::AddedContent::Image(after) = &a[0].content else { panic!("an image") };
+    assert_eq!(after.image, image, "drawn from the same image object, not a second copy");
+}
+
+/// Dropped over the edge of the other page, the item stays whole on it.
+#[test]
+fn text_dropped_over_a_pages_edge_stays_on_the_page() {
+    let _gpu = gpu();
+    let mut h = two_pages();
+    let rect = text_on_second_page(&mut h);
+    let from = item_on_screen_on(&h, 1, rect).center();
+    // The box is 200 pt wide: its centre at 280 would put most of it past the right edge.
+    let to = on_page_at(&h, 0, 280.0, 5.0);
+    drag_pointer(&mut h, from, to, true);
+    let a = added(&h);
+    assert_eq!(a[0].page, 0);
+    let r = a[0].content.rect();
+    assert!(r[0] >= -0.01 && r[2] <= 300.01 && r[1] >= -0.01 && r[3] <= 400.01, "inside the page: {r:?}");
+}
+
+/// Released over the gap between pages, or still on its own page, nothing changes page.
+#[test]
+fn text_released_on_its_own_page_stays_on_it() {
+    let _gpu = gpu();
+    let mut h = two_pages();
+    let rect = text_on_second_page(&mut h);
+    let from = item_on_screen_on(&h, 1, rect).center();
+    drag_pointer(&mut h, from, from + egui::vec2(20.0, -30.0), true);
+    let a = added(&h);
+    assert_eq!((a.len(), a[0].page), (1, 1));
+    assert_ne!(a[0].content.rect(), rect, "it moved");
+}
+
+/// Where the display-space point (`x`, `y`, y up) of `page` is on screen, whichever way the view is turned.
+fn shown_at(h: &Harness<'static, PdfCraftApp>, page: usize, x: f64, y: f64) -> Pos2 {
+    let s = h.state();
+    let xf = pdfcraft_ui_egui::canvas::PageXform { rect: page_rect(h, page), rot: s.views[0].rotation, pw: 300.0, ph: 400.0 };
+    xf.norm_to_screen(x as f32 / 300.0, (400.0 - y as f32) / 400.0)
+}
+
+/// With the view turned, a drop over another page still lands the item whole, where it was
+/// dropped: the box's corners don't map to the destination's in the same order.
+#[test]
+fn text_dropped_on_another_page_in_a_turned_view_lands_where_it_was_dropped() {
+    let _gpu = gpu();
+    for rotate in ["90", "180", "270"] {
+        let mut h = two_pages();
+        let rect = text_on_second_page(&mut h);
+        h.state_mut().set_option("rotate", rotate).unwrap();
+        h.run_steps(5);
+        assert!(h.state().views[0].page_screen_rect(0).is_some() && h.state().views[0].page_screen_rect(1).is_some(), "{rotate}°: both pages show");
+        let from = shown_at(&h, 1, (rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0);
+        let to = shown_at(&h, 0, 150.0, 250.0);
+        drag_pointer(&mut h, from, to, true);
+        let a = added(&h);
+        assert_eq!((a.len(), a[0].page), (1, 0), "{rotate}°: moved to the first page");
+        let r = a[0].content.rect();
+        assert!(r[0] < r[2] && r[1] < r[3], "{rotate}°: a proper box: {r:?}");
+        assert!(r[0] >= -0.01 && r[2] <= 300.01 && r[1] >= -0.01 && r[3] <= 400.01, "{rotate}°: inside the page: {r:?}");
+        let (cx, cy) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+        assert!((cx - 150.0).abs() < 4.0 && (cy - 250.0).abs() < 4.0, "{rotate}°: lands where it was dropped: {r:?}");
+    }
+}
+
+/// A picture the document's security won't let out of it stays on its page, and the drag says why.
+#[test]
+fn a_picture_in_a_document_that_withholds_copying_stays_put_with_a_notice() {
+    let _gpu = gpu();
+    let plain = two_blank_pages();
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(plain.to_vec())).unwrap();
+    // Everything but copying (bit 5) is allowed.
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        permissions: -1 ^ 0b1_0000,
+        encrypt_metadata: true,
+        seed: [4; 32],
+    })
+    .unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let mut h = harness_bytes(bytes);
+    h.state_mut().set_option("zoom", "60").unwrap();
+    h.run_steps(5);
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 30, 20);
+        enc.set_color(png::ColorType::Rgb);
+        let mut w = enc.write_header().unwrap();
+        w.write_image_data(&[90u8; 1800]).unwrap();
+    }
+    h.state_mut().add_image("logo.png".into(), png);
+    h.run_steps(3);
+    let a = added(&h);
+    assert_eq!(a.len(), 1, "the image was added: {:?}", h.state().toast);
+    let (page, rect) = (a[0].page, a[0].content.rect());
+    let from = item_on_screen_on(&h, page, rect).center();
+    let to = on_page_at(&h, 1 - page, 100.0, 120.0);
+    h.state_mut().toast = None;
+    drag_pointer(&mut h, from, to, true);
+    let a = added(&h);
+    assert_eq!((a.len(), a[0].page), (1, page), "the picture is still on its own page");
+    assert_eq!(
+        h.state().toast.as_ref().map(|t| t.0.as_str()),
+        Some("The document's security settings don't allow copying text and images"),
+        "and the drag says why"
+    );
+}
+
+/// An item held while the view is scrolled until its page is far off the screen (the page loop
+/// stops drawing it, and giving it input) is still moved to the page it is let go over.
+#[test]
+fn an_item_let_go_after_scrolling_far_from_its_page_still_moves() {
+    let _gpu = gpu();
+    // Eight blank pages of 300 × 400 points.
+    let kids: Vec<String> = (0..8).map(|i| format!("{} 0 R", 3 + i)).collect();
+    let mut pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [{}] /Count 8 /MediaBox [0 0 300 400] >> endobj\n",
+        kids.join(" ")
+    );
+    for i in 0..8 {
+        pdf.push_str(&format!("{} 0 obj << /Type /Page /Parent 2 0 R >> endobj\n", 3 + i));
+    }
+    pdf.push_str("trailer << /Root 1 0 R >>\n%%EOF");
+    let mut h = harness_bytes(pdf.into_bytes());
+    h.state_mut().set_option("zoom", "60").unwrap();
+    h.run_steps(5);
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(2);
+    let p = on_page_at(&h, 0, 60.0, 300.0);
+    click(&mut h, p);
+    h.event(egui::Event::Text("MMMMMMMM".into()));
+    h.run_steps(2);
+    h.get_by_label("Done adding text").click();
+    h.run_steps(3);
+    let rect = added(&h)[0].content.rect();
+    let from = item_on_screen_on(&h, 0, rect).center();
+    let shown = |h: &Harness<'static, PdfCraftApp>| -> Vec<usize> { h.state().views[0].visible_page_rects().iter().map(|(i, _)| *i).collect() };
+    assert_eq!(shown(&h)[0], 0, "the item's page shows");
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    h.hover_at(from + egui::vec2(0.0, 60.0));
+    h.run_steps(1);
+    for _ in 0..12 {
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -300.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
+        });
+        h.run_steps(2);
+    }
+    let visible = shown(&h);
+    assert!(visible[0] >= 4, "the view left the item's page far behind: {visible:?}");
+    let target = *visible.last().unwrap();
+    let to = on_page_at(&h, target, 150.0, 200.0);
+    h.hover_at(to);
+    h.run_steps(2);
+    h.drop_at(to);
+    h.run_steps(4);
+    let a = added(&h);
+    assert_eq!((a.len(), a[0].page), (1, target), "the item landed on the page it was let go over: {a:?}");
+    // And the gesture is over: a later click doesn't find the item still held.
+    h.hover_at(to + egui::vec2(10.0, 10.0));
+    h.run_steps(2);
+    assert_eq!(added(&h)[0].page, target);
+}
