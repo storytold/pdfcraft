@@ -2111,8 +2111,13 @@ fn a_windows_store_identity_signs_with_its_issuers() {
 /// Documenso-style: an AcroForm signature field `Timestamp_1` whose `/V` is the document
 /// timestamp dictionary (`/Type /DocTimeStamp`, `/SubFilter /ETSI.RFC3161`).
 fn fixture_timestamped_in_a_field(tsa: &TestTsa) -> Vec<u8> {
+    timestamped_in_a_field(&fixture(), tsa)
+}
+
+/// [`fixture_timestamped_in_a_field`] on top of `base`.
+fn timestamped_in_a_field(base: &[u8], tsa: &TestTsa) -> Vec<u8> {
     let mut value_num = 0;
-    let base = edit_after(&fixture(), |doc| {
+    let base = edit_after(base, |doc| {
         let field = doc.add(Object::Null);
         // `timestamp_document` adds its dictionary next.
         value_num = field.num + 1;
@@ -2953,4 +2958,86 @@ fn signing_a_field_with_a_null_value_after_another_signature_keeps_the_first_val
         "{:?}",
         all.iter().map(|s| (&s.status, &s.modification)).collect::<Vec<_>>()
     );
+}
+
+// ── DocMDP P=1: no changes, but validation data may follow ───────────────────────────────────
+
+#[test]
+fn a_later_signature_breaks_a_no_changes_certification_but_a_timestamp_does_not() {
+    // DocMDP P=1 permits no changes (ISO 32000-2 §12.8.2.2): an approval signature added later, in
+    // a new field or in the empty one, is a change. Validation data is not: a document timestamp,
+    // standalone or held by a field, keeps the certification valid (what PAdES long-term
+    // archiving adds to certified documents). P=2 and P=3 permit signing.
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let second_id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let tsa = TestTsa {
+        id: pkcs12::open(&data("rsa-aes.p12"), "test").unwrap(),
+        time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 },
+    };
+    let certification =
+        |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.field == "Signature1").expect("the certification");
+    let countersigned = |certified: &[u8]| {
+        [
+            ("signed in a new field", pdfcraft_sign::sign(&open(certified), &second_id, &opts()).unwrap()),
+            (
+                "signed in the empty field",
+                pdfcraft_sign::sign(&open(certified), &second_id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap(),
+            ),
+        ]
+    };
+    let mut failures = Vec::new();
+    let certified = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { certify: Some(1), ..opts() }).unwrap();
+    for (how, bytes) in countersigned(&certified) {
+        let s = certification(&bytes);
+        if s.status != Status::Invalid || !matches!(&s.modification, Modification::Disallowed(k) if k.contains(&kind::SIGNATURE)) {
+            failures.push(format!("P=1, {how}: {:?}, {:?}", s.status, s.modification));
+        }
+    }
+    let stamped = pdfcraft_sign::timestamp_document(&open(&certified), &tsa, "D:20261006120000Z").unwrap();
+    for (how, bytes) in [("timestamped", stamped), ("timestamped in a field", timestamped_in_a_field(&certified, &tsa))] {
+        let s = certification(&bytes);
+        if s.status != Status::Valid {
+            failures.push(format!("P=1, {how}: {:?}, {:?}", s.status, s.modification));
+        }
+    }
+    for certify in [None, Some(2), Some(3)] {
+        let certified = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { certify, ..opts() }).unwrap();
+        for (how, bytes) in countersigned(&certified) {
+            let s = certification(&bytes);
+            if s.status != Status::Valid || s.modification != Modification::Allowed(vec![kind::SIGNATURE]) {
+                failures.push(format!("{certify:?}, {how}: {:?}, {:?}", s.status, s.modification));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn the_catalogs_perms_do_not_change_under_no_changes() {
+    // /Perms names the certification signature (DocMDP). Under P=1 nothing may change, so a later
+    // revision that drops it, or points it elsewhere, breaks the certification.
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let certified = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { certify: Some(1), ..opts() }).unwrap();
+    let elsewhere = dict_of(vec![("DocMDP", oref(5))]);
+    for (how, perms) in [("dropped", None), ("pointed elsewhere", Some(Object::Dict(elsewhere)))] {
+        let edited = edit_after(&certified, |doc| {
+            let root = doc.root().unwrap();
+            doc.update_dict(root, |c| match &perms {
+                Some(p) => c.set(b"Perms".to_vec(), p.clone()),
+                None => {
+                    c.remove(b"Perms");
+                }
+            })
+            .unwrap();
+        });
+        let s = signatures(&open(&edited), &edited, &trust).into_iter().find(|s| s.field == "Signature1").unwrap();
+        assert!(
+            s.status == Status::Invalid && matches!(&s.modification, Modification::Disallowed(k) if k.contains(&kind::STRUCTURE)),
+            "/Perms {how} under P=1: {:?}, {:?}",
+            s.status,
+            s.modification
+        );
+    }
 }
