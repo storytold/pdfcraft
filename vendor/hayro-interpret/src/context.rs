@@ -451,6 +451,8 @@ impl<'a> Context<'a> {
         self.get_mut().ctm *= transform;
     }
 
+    /// PdfCraft patch (60): an `/Indexed` resource with no lookup table is built, marked
+    /// tableless, for the image and colour operators to handle (see `Indexed::new`).
     pub(crate) fn get_color_space(
         &mut self,
         resources: &Resources<'_>,
@@ -460,7 +462,10 @@ impl<'a> Context<'a> {
         self.interpreter_cache
             .object_cache
             .get_or_insert_with(cs_object.cache_key(), || {
-                ColorSpace::new(cs_object.clone(), &self.interpreter_cache.object_cache)
+                ColorSpace::new_allowing_tableless(
+                    cs_object.clone(),
+                    &self.interpreter_cache.object_cache,
+                )
             })
     }
 

@@ -260,11 +260,12 @@ pub enum RenderWarning {
     /// A colour could not be computed (a colour space that cannot be read, or a Separation or
     /// DeviceN tint transform that cannot be evaluated) and was painted in a fallback colour.
     ColourFallback,
-    /// An image's `/Indexed` colour space is malformed (ISO 32000-2 §8.6.6.3) and the image was
-    /// drawn recovered, so its colours may be wrong: a lookup table shorter than m × (hival + 1)
-    /// bytes padded with zero bytes, a `hival` past 255 taken as 255, a real one truncated, or
-    /// (a `hival` below zero or not a number) the image drawn in DeviceGray. Reported once per
-    /// page however many images it affects.
+    /// An image's `/Indexed` colour space is malformed (ISO 32000-2 §8.6.6.3), so the image may be
+    /// drawn wrongly or not at all. It is drawn recovered when it can be: indices past a lookup
+    /// table shorter than m × (hival + 1) bytes in black, a `hival` past 255 taken as 255, a real
+    /// one truncated, or (a `hival` below zero or not a number) the image in DeviceGray. With no
+    /// lookup table at all (missing, not a string or a stream, or a stream that does not decode)
+    /// it is not drawn. Reported once per page however many images it affects.
     MalformedIndexedImage,
 }
 

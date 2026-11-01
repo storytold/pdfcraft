@@ -1,13 +1,16 @@
 //! An `/Indexed` image whose colour space breaks ISO 32000-2 §8.6.6.3 (a lookup table shorter
-//! than m × (hival + 1) bytes, or a `hival` past 255 or with a fraction) is drawn as other
+//! than m × (hival + 1) bytes, or a `hival` past 255 or with a fraction) is drawn as most
 //! readers draw it, and the render reports `RenderWarning::MalformedIndexedImage`:
-//! - a short table is padded with zero bytes, so the entries it has keep their colours;
+//! - a short table keeps the entries it holds in full, and an index past them is drawn black,
+//!   whatever the base space;
 //! - a `hival` past 255 is taken as 255;
 //! - a real `hival` is truncated toward zero.
 //!
-//! A `hival` that is negative or not a number keeps the upstream handling (the image falls back
-//! to DeviceGray), and is reported too. Upstream fell back to DeviceGray for every one of these,
-//! painting the indices as near-black grey levels, even those whose entries were present.
+//! An image whose lookup is missing, `null`, neither a string nor a stream, or a stream that
+//! does not decode is not drawn, and is reported. A `hival` that is negative or not a number
+//! keeps the upstream handling (the image falls back to DeviceGray), and is reported too.
+//! Upstream fell back to DeviceGray for every one of these, painting the indices as near-black
+//! grey levels, even those whose entries were present.
 //!
 //! The images are 8 × 1, samples 0 to 7, each column 25 px wide on a 200 × 200 page (the layout
 //! of the seven cases A to G a reviewer compared across readers on #4393).
@@ -94,7 +97,7 @@ fn columns(page: &RenderedPage) -> [[u8; 3]; 8] {
     })
 }
 
-/// The first `n` of `COLOURS`, then black: a table of `n` entries padded with zero bytes.
+/// The first `n` of `COLOURS`, then black: a table of `n` entries.
 fn padded(n: usize) -> [[u8; 3]; 8] {
     std::array::from_fn(|i| if i < n { COLOURS[i] } else { BLACK })
 }
@@ -119,18 +122,85 @@ fn a_full_table_draws_its_colours() {
     assert_page(&format!("[/Indexed /DeviceRGB 7.0 <{TABLE}>]"), &[], COLOURS, false);
 }
 
-/// Cases B and F: a short table is padded with zero bytes. The entries it has keep their
-/// colours, and the rest are black over DeviceRGB.
+/// Cases B and F: a short table keeps the entries it holds, and an index past them is black.
 #[test]
-fn a_short_table_is_padded_with_zero_bytes() {
+fn a_short_table_draws_its_entries_and_black_past_them() {
     // B: hival 7 needs 24 bytes; 6 are given. Indices 0 and 1 used to draw black.
     assert_page(&format!("[/Indexed /DeviceRGB 7 <{}>]", entries(2)), &[], padded(2), true);
     // F: one entry short.
     assert_page(&format!("[/Indexed /DeviceRGB 7 <{}>]", entries(7)), &[], padded(7), true);
-    // One byte short: entry 1 is 00FF plus a zero byte, green; indices past hival take entry 1.
-    let mut want = [COLOURS[1]; 8];
+    // One byte short: entry 1 is incomplete, so it is not held; indices past hival take it.
+    let mut want = [BLACK; 8];
     want[0] = COLOURS[0];
     assert_page("[/Indexed /DeviceRGB 1 <FF0000 00FF>]", &[], want, true);
+}
+
+/// The base space for each of the short-table tests below, with its two-entry table, and the
+/// stream objects it needs (numbered from 6).
+fn short_table_in(base: &str, table: &str) -> String {
+    format!("[/Indexed {base} 7 <{table}>]")
+}
+
+/// A short table over `base`: the two entries it holds draw as they do with a full table (the
+/// rest of which is white, never drawn black by a reader), and every index past them is black.
+/// Zero bytes would be white in DeviceCMYK, Separation and DeviceN, and blue in Lab.
+#[track_caller]
+fn assert_black_past_the_table(base: &str, two: &str, white: &str, extra: &[&[u8]]) {
+    let full = render(pdf(&short_table_in(base, &format!("{two} {}", white.repeat(6))), DRAW_IMAGE, extra));
+    assert!(full.warnings.is_empty(), "{base}: {:?}", full.warnings);
+    let full = columns(&full);
+    assert!(full[..2].iter().all(|c| *c != BLACK && *c != WHITE), "{base}: the two entries have colour: {full:?}");
+    let page = render(pdf(&short_table_in(base, two), DRAW_IMAGE, extra));
+    assert_eq!(page.warnings, MALFORMED, "{base}");
+    let mut want = [BLACK; 8];
+    want[..2].copy_from_slice(&full[..2]);
+    assert_eq!(columns(&page), want, "{base}: entries 2 to 7 are black");
+}
+
+/// DeviceGray: zero is black here, so a zero-padded table drew the same (a guard).
+#[test]
+fn indices_past_a_short_table_are_black_over_device_gray() {
+    assert_black_past_the_table("/DeviceGray", "40 80", "FF ", &[]);
+}
+
+/// DeviceCMYK: a zero entry would be white (no ink).
+#[test]
+fn indices_past_a_short_table_are_black_over_device_cmyk() {
+    assert_black_past_the_table("/DeviceCMYK", "FF000000 00FF0000", "00000000 ", &[]);
+}
+
+/// Lab: a zero entry would be L* 0 with a* and b* at the bottom of their ranges, blue.
+#[test]
+fn indices_past_a_short_table_are_black_over_lab() {
+    assert_black_past_the_table("[/Lab << /WhitePoint [0.9505 1 1.089] /Range [-128 127 -128 127] >>]", "80FF80 8080FF", "FF8080 ", &[]);
+}
+
+/// Separation (a spot orange: tint 1 is orange in DeviceCMYK): a zero entry would be tint 0,
+/// white.
+#[test]
+fn indices_past_a_short_table_are_black_over_separation() {
+    assert_black_past_the_table(
+        "[/Separation /Orange /DeviceCMYK << /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [0 0.5 1 0] /N 1 >>]",
+        "FF 80",
+        "00 ",
+        &[],
+    );
+}
+
+/// DeviceN (cyan and magenta, mapped onto DeviceCMYK by a Type 4 function): a zero entry would
+/// be white.
+#[test]
+fn indices_past_a_short_table_are_black_over_device_n() {
+    let tint: &[u8] = b"<< /FunctionType 4 /Domain [0 1 0 1] /Range [0 1 0 1 0 1 0 1] /Length 9 >>\nstream\n{ 0 0 }\nendstream";
+    assert_black_past_the_table("[/DeviceN [/Cyan /Magenta] /DeviceCMYK 6 0 R]", "FF00 00FF", "0000 ", &[tint]);
+}
+
+/// ICCBased with four components and no usable profile, drawn in its /Alternate DeviceCMYK: a
+/// zero entry would be white.
+#[test]
+fn indices_past_a_short_table_are_black_over_icc_based_with_four_components() {
+    let profile: &[u8] = b"<< /N 4 /Alternate /DeviceCMYK /Length 4 >>\nstream\nJUNK\nendstream";
+    assert_black_past_the_table("[/ICCBased 6 0 R]", "FF000000 00FF0000", "00000000 ", &[profile]);
 }
 
 /// Case C: an index past `hival` takes the nearest entry (ISO 32000-2 §8.6.6.3: "shall be
@@ -171,9 +241,10 @@ fn a_real_hival_is_truncated() {
     assert_page(&format!("[/Indexed /DeviceRGB 255.0 {full}]"), &[], COLOURS, false);
 }
 
-/// Case G: inline images, named through the resources or given in place, are padded too.
+/// Case G: inline images, named through the resources or given in place, are recovered too, and
+/// skipped when the space has no table.
 #[test]
-fn inline_images_with_a_short_table_are_padded_too() {
+fn inline_images_with_a_short_table_are_recovered_too() {
     let inline = |cs: &str| format!("q 200 0 0 200 0 0 cm BI /W 8 /H 1 /BPC 8 /CS {cs} /F /AHx ID 0001020304050607> EI Q");
     let short = format!("[/Indexed /DeviceRGB 7 <{}>]", entries(2));
     // Named through the page's resources.
@@ -189,6 +260,11 @@ fn inline_images_with_a_short_table_are_padded_too() {
     assert_eq!((columns(&page), page.warnings), (grey_fallback(), MALFORMED.to_vec()));
     let page = render(pdf("/DeviceRGB", &inline(&format!("[/I /RGB -1 <{TABLE}>]")), &[]));
     assert_eq!((columns(&page), page.warnings), (grey_fallback(), MALFORMED.to_vec()));
+    // No table: not drawn, named or in place.
+    let page = render(pdf("[/Indexed /DeviceRGB 7 null]", &inline("/P"), &[]));
+    assert_eq!((columns(&page), page.warnings), ([WHITE; 8], MALFORMED.to_vec()));
+    let page = render(pdf("/DeviceRGB", &inline("[/I /RGB 7]"), &[]));
+    assert_eq!((columns(&page), page.warnings), ([WHITE; 8], MALFORMED.to_vec()));
     // A well-formed one draws without a warning.
     let page = render(pdf(&format!("[/Indexed /DeviceRGB 7 <{TABLE}>]"), &inline("/P"), &[]));
     assert_eq!(columns(&page), COLOURS);
@@ -227,21 +303,23 @@ fn a_lookup_string_given_by_reference_is_read() {
     assert_page("[/Indexed /DeviceRGB 7 6 0 R]", &[full.as_bytes()], COLOURS, false);
     let short = format!("<{}>", entries(2));
     assert_page("[/Indexed /DeviceRGB 7 6 0 R]", &[short.as_bytes()], padded(2), true);
-    // Something that is neither a string nor a stream is no table: every entry is padding.
-    assert_page("[/Indexed /DeviceRGB 7 6 0 R]", &[b"42"], padded(0), true);
+    // Something that is neither a string nor a stream is no table: the image is not drawn.
+    assert_page("[/Indexed /DeviceRGB 7 6 0 R]", &[b"42"], [WHITE; 8], true);
 }
 
 #[test]
-fn padding_holds_at_the_bounds_of_hival_and_the_base() {
-    // Four components (DeviceCMYK): hival 1 needs 8 bytes. With 7, the missing byte is entry 1's
-    // black, and zero there is what the full table holds, so both draw the same.
+fn the_table_size_holds_at_the_bounds_of_hival_and_the_base() {
+    // Four components (DeviceCMYK): hival 1 needs 8 bytes. With 7, entry 1 is incomplete, so it
+    // is not held: index 1, and the indices past hival that take it, are black.
     let full = render(pdf("[/Indexed /DeviceCMYK 1 <FF000000 00FF0000>]", DRAW_IMAGE, &[]));
     assert!(full.warnings.is_empty(), "{:?}", full.warnings);
+    assert_ne!(columns(&full)[0], WHITE, "the image is drawn");
     let short = render(pdf("[/Indexed /DeviceCMYK 1 <FF000000 00FF00>]", DRAW_IMAGE, &[]));
     assert_eq!(short.warnings, MALFORMED);
-    assert_eq!(columns(&short), columns(&full));
-    assert_ne!(columns(&full)[0], WHITE, "the image is drawn");
-    // One component (DeviceGray): hival 0 needs one byte, and an empty table pads it.
+    let mut want = [BLACK; 8];
+    want[0] = columns(&full)[0];
+    assert_eq!(columns(&short), want);
+    // One component (DeviceGray): hival 0 needs one byte; an empty table holds no entry.
     assert_page("[/Indexed /DeviceGray 0 <80>]", &[], [[128; 3]; 8], false);
     assert_page("[/Indexed /DeviceGray 0 <>]", &[], [BLACK; 8], true);
     // hival 255 over DeviceRGB needs 768 bytes: 767 is one short.
@@ -266,10 +344,20 @@ fn a_negative_or_non_numeric_hival_falls_back_with_a_warning() {
     }
 }
 
+/// An empty string is a table that holds no entry: every index is black.
 #[test]
-fn an_empty_or_missing_lookup_is_all_padding() {
-    for lookup in ["<>", "()", "", "null"] {
+fn an_empty_table_draws_black() {
+    for lookup in ["<>", "()"] {
         assert_page(&format!("[/Indexed /DeviceRGB 1 {lookup}]"), &[], padded(0), true);
+    }
+}
+
+/// A lookup that is missing, `null` or a number is no table at all: the image is not drawn (the
+/// page stays white), and the warning is reported.
+#[test]
+fn a_missing_lookup_skips_the_image() {
+    for lookup in ["", "null", "42"] {
+        assert_page(&format!("[/Indexed /DeviceRGB 7 {lookup}]"), &[], [WHITE; 8], true);
     }
 }
 
@@ -280,14 +368,20 @@ fn a_lookup_stream_is_measured_after_decoding() {
     let mut want = [COLOURS[1]; 8];
     want[0] = COLOURS[0];
     assert_page("[/Indexed /DeviceRGB 1 6 0 R]", &[short], want, false);
+    // An empty stream decodes to an empty table, which holds no entry.
     let empty: &[u8] = b"<< /Length 0 >>\nstream\n\nendstream";
     assert_page("[/Indexed /DeviceRGB 1 6 0 R]", &[empty], padded(0), true);
 }
 
+/// A stream that does not decode is no table: the image is not drawn, and is reported.
 #[test]
-fn a_lookup_stream_that_cannot_be_decoded_is_all_padding() {
-    let broken: &[u8] = b"<< /Length 6 /Filter /FlateDecode >>\nstream\nnot-zl\nendstream";
-    assert_page("[/Indexed /DeviceRGB 1 6 0 R]", &[broken], padded(0), true);
+fn a_lookup_stream_that_cannot_be_decoded_skips_the_image() {
+    for broken in [
+        &b"<< /Length 12 /Filter /FlateDecode >>\nstream\nnot deflated\nendstream"[..],
+        b"<< /Length 6 /Filter /FlateDecode >>\nstream\nnot-zl\nendstream",
+    ] {
+        assert_page("[/Indexed /DeviceRGB 7 6 0 R]", &[broken], [WHITE; 8], true);
+    }
 }
 
 /// An Indexed space whose base cannot be read keeps the upstream handling (DeviceGray), whatever
@@ -299,17 +393,22 @@ fn an_unreadable_base_keeps_its_fallback() {
     }
 }
 
-/// A fill or stroke colour set in such a space (`cs`, `sc`, `CS`, `SC`) draws through the same recovered table, and
-/// the recovery is reported as `ColourFallback`, as the upstream DeviceGray fallback was.
+/// A fill or stroke colour set in such a space (`cs`, `sc`, `CS`, `SC`) draws through the same
+/// recovered table, and the recovery is reported as `ColourFallback`, as the upstream DeviceGray
+/// fallback was.
 #[test]
-fn a_fill_or_stroke_colour_in_a_short_table_is_padded_and_reported() {
+fn a_fill_or_stroke_colour_in_a_short_table_is_recovered_and_reported() {
     let fill = |index: u8| format!("/P cs {index} sc 0 0 200 200 re f");
     let short = format!("[/Indexed /DeviceRGB 7 <{}>]", entries(2));
     let page = render(pdf(&short, &fill(1), &[]));
     assert_eq!(columns(&page)[0], COLOURS[1], "entry 1 is green");
     assert_eq!(page.warnings, vec![RenderWarning::ColourFallback]);
     let page = render(pdf(&short, &fill(5), &[]));
-    assert_eq!(columns(&page)[0], BLACK, "entry 5 is padding");
+    assert_eq!(columns(&page)[0], BLACK, "entry 5 is past the table");
+    // Over DeviceCMYK too, where a zero entry would be white.
+    let cmyk = "[/Indexed /DeviceCMYK 7 <FF000000 00FF0000>]";
+    let page = render(pdf(cmyk, &fill(5), &[]));
+    assert_eq!(columns(&page)[0], BLACK, "DeviceCMYK entry 5 is past the table");
     // A stroke colour (`CS`, `SC`) the same way.
     let page = render(pdf(&short, "/P CS 1 SC 20 w 0 100 m 200 100 l S", &[]));
     assert_eq!(columns(&page)[0], COLOURS[1], "the stroke is green");
@@ -317,4 +416,16 @@ fn a_fill_or_stroke_colour_in_a_short_table_is_padded_and_reported() {
     let page = render(pdf(&format!("[/Indexed /DeviceRGB 7 <{TABLE}>]"), &fill(1), &[]));
     assert_eq!(columns(&page)[0], COLOURS[1]);
     assert!(page.warnings.is_empty(), "{:?}", page.warnings);
+}
+
+/// A fill colour in an Indexed space with no lookup table keeps the upstream fallback: DeviceGray,
+/// reported as `ColourFallback` (tint 1 is white, over a red fill).
+#[test]
+fn a_fill_colour_in_a_space_with_no_table_keeps_the_fallback() {
+    for lookup in ["", "null"] {
+        let content = "1 0 0 rg 0 0 200 200 re f /P cs 1 sc 0 0 200 200 re f";
+        let page = render(pdf(&format!("[/Indexed /DeviceRGB 7 {lookup}]"), content, &[]));
+        assert_eq!(columns(&page)[0], WHITE, "{lookup:?}: DeviceGray 1");
+        assert_eq!(page.warnings, vec![RenderWarning::ColourFallback], "{lookup:?}");
+    }
 }

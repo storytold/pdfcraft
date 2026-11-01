@@ -410,7 +410,7 @@ pub(crate) fn render(args: &[String]) -> Result<(), CliError> {
             pdfcraft_render::RenderWarning::MalformedIndexedImage => {
                 let _ = writeln!(
                     std::io::stderr().lock(),
-                    "warning: page {page}: an image with a malformed Indexed colour table was drawn, and its colours may be wrong"
+                    "warning: page {page}: an image with a malformed Indexed colour table may be drawn wrongly or not at all"
                 );
             }
         }

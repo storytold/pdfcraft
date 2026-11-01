@@ -162,9 +162,9 @@ pub enum InterpreterWarning {
     /// in a fallback colour. Reported at most once per content stream.
     ColorFallback,
     /// PdfCraft patch (60): an image's `/Indexed` colour space is malformed (ISO 32000-2
-    /// §8.6.6.3) and the image was drawn recovered: a lookup table shorter than its entries need
-    /// padded with zero bytes, a `hival` past 255 taken as 255, or a real one truncated. A `hival`
-    /// below zero or not a number cannot be recovered, and the image falls back to DeviceGray.
+    /// §8.6.6.3). The image was drawn recovered (indices past a short lookup table in black, a
+    /// `hival` past 255 taken as 255, a real one truncated), or, with a `hival` below zero or not a
+    /// number, in DeviceGray; with no lookup table at all it was not drawn.
     MalformedIndexedImage,
 }
 
@@ -656,13 +656,16 @@ fn interpret_window<'a>(
                 // PdfCraft patch (38): see `named_color_space`.
                 // PdfCraft patch (55): a space that cannot be read is drawn in DeviceGray, as
                 // before, and the fallback is reported.
+                // PdfCraft patch (60): an Indexed space with no lookup table counts as one that
+                // cannot be read, as upstream.
                 let cs = named_color_space(c.0, resources, &defaults, context)
+                    .filter(|cs| !cs.is_tableless_indexed())
                     .unwrap_or_else(|| {
                         crate::color::note_color_fallback();
                         ColorSpace::device_gray()
                     });
-                // PdfCraft patch (60): so is an Indexed space drawn recovered (a short lookup
-                // table padded, a `hival` clamped or truncated; see `Indexed::new`).
+                // PdfCraft patch (60): so is an Indexed space drawn recovered (indices past a
+                // short table drawn black, a `hival` clamped or truncated; see `Indexed::new`).
                 if cs.is_recovered_indexed() {
                     crate::color::note_color_fallback();
                 }
@@ -677,13 +680,16 @@ fn interpret_window<'a>(
                 // PdfCraft patch (38): see `named_color_space`.
                 // PdfCraft patch (55): a space that cannot be read is drawn in DeviceGray, as
                 // before, and the fallback is reported.
+                // PdfCraft patch (60): an Indexed space with no lookup table counts as one that
+                // cannot be read, as upstream.
                 let cs = named_color_space(c.0, resources, &defaults, context)
+                    .filter(|cs| !cs.is_tableless_indexed())
                     .unwrap_or_else(|| {
                         crate::color::note_color_fallback();
                         ColorSpace::device_gray()
                     });
-                // PdfCraft patch (60): so is an Indexed space drawn recovered (a short lookup
-                // table padded, a `hival` clamped or truncated; see `Indexed::new`).
+                // PdfCraft patch (60): so is an Indexed space drawn recovered (indices past a
+                // short table drawn black, a `hival` clamped or truncated; see `Indexed::new`).
                 if cs.is_recovered_indexed() {
                     crate::color::note_color_fallback();
                 }

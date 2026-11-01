@@ -533,7 +533,7 @@ impl<'a> ImageXObject<'a> {
                     .is_some_and(crate::color::has_unusable_hival);
                 cs_obj
                     .clone()
-                    .and_then(|c| ColorSpace::new(c, cache))
+                    .and_then(|c| ColorSpace::new_allowing_tableless(c, cache))
                     // Inline images can also refer to color spaces by name.
                     .or_else(|| {
                         cs_obj
@@ -550,6 +550,16 @@ impl<'a> ImageXObject<'a> {
         malformed_indexed |= image_cs
             .as_ref()
             .is_some_and(ColorSpace::is_recovered_indexed);
+        // PdfCraft patch (60): an Indexed space with no lookup table at all (missing, or not a
+        // string or a stream that decodes) leaves nothing to draw: the image is skipped, and
+        // reported. Upstream drew it in DeviceGray.
+        if image_cs
+            .as_ref()
+            .is_some_and(ColorSpace::is_tableless_indexed)
+        {
+            warning_sink(InterpreterWarning::MalformedIndexedImage);
+            return None;
+        }
 
         let interpolate = dict
             .get::<bool>(I)
