@@ -426,6 +426,8 @@ fn added_text_format(
         }
         Some(crate::format_text_ui::FontChoice::Resource(resource)) => {
             style.font_resource = Some(resource);
+            style.bold = false;
+            style.italic = false;
         }
         Some(crate::format_text_ui::FontChoice::Family(family)) => {
             style.family = family;
@@ -439,6 +441,8 @@ fn added_text_format(
             app.use_paths(crate::files::FilePurpose::TextFont { page }, &[path]);
             if let Some(r) = &app.text_style.font_resource {
                 style.font_resource = Some(r.clone());
+                style.bold = false;
+                style.italic = false;
             }
         }
         #[cfg(target_arch = "wasm32")]

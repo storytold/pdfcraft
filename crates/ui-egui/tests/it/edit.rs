@@ -134,3 +134,46 @@ fn add_text_ui_draft_with_custom_font_is_not_blocked() {
     assert_eq!(saved.text, "γραφή");
     assert_eq!(saved.font_resource.as_deref(), Some(resource.as_str()));
 }
+
+/// Verifies that adding multi-paragraph text with a custom font respects paragraph alignment and persists.
+#[test]
+fn add_text_with_custom_font_and_paragraph_alignment() {
+    let _gpu = gpu();
+    let mut h = harness();
+    let id = h.state().views[0].id;
+
+    let font_bytes = pdfcraft_fonts::INTER_REGULAR.to_vec();
+    assert!(h.state_mut().session.apply(id, Edit::RegisterTextFont { page: 0, bytes: Arc::new(font_bytes) }).is_ok());
+
+    let doc = h.state().session.get(id).unwrap();
+    let font_entry =
+        doc.text_editor_fonts(0).into_iter().find(|f| !f.resource.starts_with("PCApproved")).expect("embedded document font should be listed");
+    let resource = font_entry.resource.clone();
+
+    let text = "Paragraph 1 line\nParagraph 2 line";
+    let custom_added = AddedText {
+        rect: [40.0, 150.0, 240.0, 220.0],
+        text: text.to_string(),
+        font_resource: Some(resource.clone()),
+        align: pdfcraft_engine::TextAlign::Left,
+        aligns: vec![Some(pdfcraft_engine::TextAlign::Right)],
+        ..Default::default()
+    };
+
+    assert!(h.state_mut().apply_edit(Edit::AddText { page: 0, text: custom_added }));
+    h.run_steps(3);
+
+    let state = h.state();
+    let bytes = state.session.save_bytes(state.views[0].id).unwrap();
+    let mut reopened = Session::new();
+    let open_id = reopened.open("reopened.pdf", None, bytes, None).unwrap();
+    let reopened_doc = reopened.get(open_id).unwrap();
+    assert_eq!(reopened_doc.added().len(), 1);
+
+    let AddedContent::Text(saved_text) = &reopened_doc.added()[0].content else {
+        panic!("expected added text item");
+    };
+    assert_eq!(saved_text.text, text);
+    assert_eq!(saved_text.font_resource.as_deref(), Some(resource.as_str()));
+    assert_eq!(saved_text.align, pdfcraft_engine::TextAlign::Left);
+}
