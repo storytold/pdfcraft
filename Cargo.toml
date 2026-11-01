@@ -132,6 +132,7 @@ hayro-syntax = { path = "vendor/hayro-syntax" }
 hayro-cmap = { path = "vendor/hayro-cmap" }
 hayro-postscript = { path = "vendor/hayro-postscript" }
 hayro-jbig2 = { path = "vendor/hayro-jbig2" }
+hayro-jpeg2000 = { path = "vendor/hayro-jpeg2000" }
 lopdf = { path = "vendor/lopdf" }
 vello_common = { path = "vendor/vello_common" }
 vello_cpu = { path = "vendor/vello_cpu" }

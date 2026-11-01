@@ -2862,6 +2862,133 @@ fn jpx_gray_rgb_and_alpha_keep_eight_bit_samples() {
     }
 }
 
+/// hayro-jpeg2000 patch (1): a JPEG 2000 image large enough to be decoded on several threads has
+/// the samples it has when decoded on one, at full size and at the reduced sizes a decode hint
+/// asks for.
+#[test]
+fn jpx_decoded_on_several_threads_has_the_samples_of_one_thread() {
+    use hayro::hayro_syntax::object::stream::ImageDecodeParams;
+
+    // 768 × 512 RGB, irreversible, 32 × 32 code-blocks, five resolution levels: synthetic shapes
+    // and noise, so every code-block carries data.
+    let codestream = include_bytes!("../../tests/data/jpx-multithreaded-rgb.j2k");
+    let mut bytes = format!(
+        "%PDF-1.7\n\
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+2 0 obj << /Type /Pages /Kids [] /Count 0 >> endobj\n\
+3 0 obj << /Type /XObject /Subtype /Image /Width 768 /Height 512 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /JPXDecode /Length {} >> stream\n",
+        codestream.len()
+    )
+    .into_bytes();
+    bytes.extend_from_slice(codestream);
+    bytes.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF");
+    let pdf = Pdf::new(Arc::new(bytes)).unwrap();
+    let stream = pdf.objects().into_iter().filter_map(|object| object.into_stream()).find(|stream| !stream.filters().is_empty()).unwrap();
+
+    for target in [None, Some((384, 256)), Some((150, 100))] {
+        let decode = |threads| {
+            hayro_jpeg2000::set_decode_threads(Some(threads));
+            let decoded = stream.decoded_image(&ImageDecodeParams { target_dimension: target, ..Default::default() });
+            hayro_jpeg2000::set_decode_threads(None);
+            decoded.unwrap().data.into_owned()
+        };
+        let one = decode(1);
+        assert!(one.iter().any(|&sample| sample != one[0]), "{target:?}: the image decodes to detail");
+        for threads in [2, 3, 8] {
+            assert!(decode(threads) == one, "{target:?}: {threads} threads decode other samples than one");
+        }
+    }
+}
+
+/// A JP2 file of [`jpx_midpoint_pdf`]'s 8-bit codestream (every sample 128) with `components`
+/// components and the given boxes in its header after `ihdr`.
+fn midpoint_jp2(components: u16, header_boxes: &[(&[u8; 4], Vec<u8>)]) -> Vec<u8> {
+    let raw = jpx_midpoint_pdf(8, components);
+    let start = raw.windows(4).position(|w| w == [0xff, 0x4f, 0xff, 0x51]).unwrap();
+    let end = raw.windows(2).rposition(|w| w == [0xff, 0xd9]).unwrap() + 2;
+    let jp2_box = |kind: &[u8], body: &[u8]| [&((8 + body.len()) as u32).to_be_bytes()[..], kind, body].concat();
+    let ihdr = [&1_u32.to_be_bytes()[..], &1_u32.to_be_bytes(), &components.to_be_bytes(), &[7, 7, 0, 0]].concat();
+    let header =
+        [jp2_box(b"ihdr", &ihdr)].into_iter().chain(header_boxes.iter().map(|(kind, body)| jp2_box(*kind, body))).collect::<Vec<_>>().concat();
+    [
+        vec![0, 0, 0, 12, b'j', b'P', b' ', b' ', 0x0d, 0x0a, 0x87, 0x0a],
+        jp2_box(b"ftyp", b"jp2 \0\0\0\0jp2 "),
+        jp2_box(b"jp2h", &header),
+        jp2_box(b"jp2c", &raw[start..end]),
+    ]
+    .concat()
+}
+
+/// hayro-jpeg2000 patch (2): a CIELab image's b* channel is decoded with the b* range of its
+/// colour specification (ISO 15444-1 M.11.7.4.1), not the a* range. The ranges and offsets
+/// written out at their default values decode exactly as when they are left out.
+#[test]
+fn a_jp2_cielab_image_reads_its_b_range() {
+    let decode = |ep: &[u32]| {
+        let colr = [&[1, 0, 0][..], &14_u32.to_be_bytes(), &ep.iter().flat_map(|v| v.to_be_bytes()).collect::<Vec<_>>()].concat();
+        let jp2 = midpoint_jp2(3, &[(b"colr", colr)]);
+        hayro_jpeg2000::Image::new(&jp2, &hayro_jpeg2000::DecodeSettings::default()).and_then(|image| image.decode()).unwrap()
+    };
+    // RL, OL, RA, OA, RB, OB for 8 bits, and IL (D50).
+    let defaults = [100, 0, 170, 128, 200, 96, 0x0044_3530];
+    assert_eq!(decode(&defaults), decode(&[]));
+}
+
+/// hayro-jpeg2000 patch (3): palette columns of up to 38 bits (ISO 15444-1 I.5.3.4) are applied
+/// through every conversion a palette's depth reaches: the rescale to 8 bits (greyscale, sRGB),
+/// sYCC and CIELab. Each column holds the same fraction of its full scale at every depth, so every
+/// depth decodes as 8 bits does. From 32 bits the 32-bit shifts overflowed, which panicked in debug
+/// builds. A deeper column (the descriptor can say 128) makes the box invalid, and the lenient
+/// decode sets it aside, drawing the indices as they are: the midpoint, 128, in one grey channel.
+///
+/// Columns of different depths (from review on #5649) decode as equal ones do: sYCC brings Cb and
+/// Cr to Y's scale, and CIELab takes each default offset from its own channel's depth (ISO 15444-1
+/// M.11.7.4.1). Both converted every channel at the first one's depth, and the 8-bit rescale then
+/// read the converted a*/b* (or G/B) at their old depth.
+#[test]
+fn a_jp2_palette_of_up_to_38_bits_is_applied() {
+    const FRACTIONS: [f64; 3] = [200.0 / 255.0, 90.0 / 255.0, 160.0 / 255.0];
+    // A palette with one column per depth in `depths`.
+    let decode = |enumerated: u32, depths: &[u8]| {
+        // One entry: each column's fraction of its own full scale, in as many bytes as it needs.
+        let entry = depths
+            .iter()
+            .zip(FRACTIONS)
+            .flat_map(|(&bits, fraction)| {
+                let max = u128::MAX >> (128 - u32::from(bits));
+                let bytes = usize::from(bits).div_ceil(8);
+                ((max as f64 * fraction).round() as u128).to_be_bytes()[16 - bytes..].to_vec()
+            })
+            .collect::<Vec<_>>();
+        let columns = depths.len() as u8;
+        // 256 equal entries, so the midpoint index (128) picks one.
+        let descriptors = depths.iter().map(|bits| bits - 1).collect::<Vec<_>>();
+        let pclr = [&[1, 0, columns][..], &descriptors, &entry.repeat(256)].concat();
+        // Channel c from component 0 through palette column c.
+        let cmap = (0..columns).flat_map(|column| [0, 0, 1, column]).collect();
+        let colr = [&[1, 0, 0][..], &enumerated.to_be_bytes()].concat();
+        let jp2 = midpoint_jp2(1, &[(b"colr", colr), (b"pclr", pclr), (b"cmap", cmap)]);
+        hayro_jpeg2000::Image::new(&jp2, &hayro_jpeg2000::DecodeSettings::default()).and_then(|image| image.decode())
+    };
+    // Greyscale, sRGB, sYCC, CIELab.
+    for (enumerated, columns) in [(17, 1), (16, 3), (18, 3), (14, 3)] {
+        let eight = decode(enumerated, &vec![8; columns]).unwrap();
+        assert_eq!(eight.len(), columns, "colour space {enumerated} at 8 bits: {eight:?}");
+        let mut depths = [31, 32, 33, 38].map(|bits| vec![bits; columns]).to_vec();
+        if columns == 3 {
+            depths.extend([vec![8, 16, 38], vec![38, 8, 24]]);
+        }
+        for depths in depths {
+            let deep = decode(enumerated, &depths).unwrap_or_else(|e| panic!("colour space {enumerated}, {depths:?} bits: {e:?}"));
+            let close = deep.len() == eight.len() && deep.iter().zip(&eight).all(|(a, b)| a.abs_diff(*b) <= 1);
+            assert!(close, "colour space {enumerated}, {depths:?} bits: {deep:?}, at 8 bits {eight:?}");
+        }
+    }
+    for bits in [39, 128] {
+        assert_eq!(decode(17, &[bits]).unwrap(), vec![128], "a {bits}-bit palette column was applied");
+    }
+}
+
 #[test]
 fn jpx_32_bit_image_does_not_prevent_other_page_content_from_rendering() {
     for bpc in [8, 32] {

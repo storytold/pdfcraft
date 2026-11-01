@@ -31,3 +31,5 @@ getrandom = { version = "0.4", features = ["wasm_js"] }
 [dev-dependencies]
 # Builds the decompression-bomb streams in the raster tests.
 flate2 = { workspace = true }
+# Decodes a JPEG 2000 image on one thread and on several in the raster tests (vendored, patch 1).
+hayro-jpeg2000 = { version = "0.3.5", default-features = false }
