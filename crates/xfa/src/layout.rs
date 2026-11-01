@@ -138,8 +138,8 @@ struct Layouter<'t> {
     names: HashMap<String, usize>,
     /// Every PDF field name handed out so far.
     taken: HashSet<String>,
-    /// The names the template's fields and groups take as written ([`common::collect_names`]),
-    /// which a made-up `_2`, `_3` name must not take.
+    /// The names the template's fields, groups and groups' members take as written
+    /// ([`common::collect_names`]), which a made-up `_2`, `_3` name must not take.
     template_names: HashSet<String>,
     /// Field values by `id`, for embedded fields in rich text.
     values: HashMap<String, String>,

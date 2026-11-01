@@ -26,9 +26,10 @@ pub(super) fn collect_values(nodes: &[Node], out: &mut HashMap<String, String>, 
     }
 }
 
-/// The PDF field names the template's fields and exclusion groups take as written
-/// ([`clean_name`]): a name the layout makes up for a repeated field (`Cell4` → `Cell4_2`) must
-/// not be one of these, or two PDF fields would share it.
+/// The names the template's fields, exclusion groups and the groups' member fields take as
+/// written ([`clean_name`]): a name the layout makes up for a repeated field (`Cell4` →
+/// `Cell4_2`) must not be one of these, or two fields would share it. (A group's radio buttons
+/// are the group's PDF field; a member that isn't one is a PDF field with its own name.)
 pub(super) fn collect_names(nodes: &[Node], out: &mut HashSet<String>, depth: usize) {
     if depth > MAX_DEPTH {
         return;
@@ -43,6 +44,13 @@ pub(super) fn collect_names(nodes: &[Node], out: &mut HashSet<String>, depth: us
             Node::ExclGroup(g) => {
                 if let Some(name) = &g.common.name {
                     out.insert(clean_name(name));
+                }
+                // Its members are drawn as fields with their own names (`draw_field`), so a
+                // repeat drawn before the group must not take one.
+                for f in &g.fields {
+                    if let Some(name) = &f.common.name {
+                        out.insert(clean_name(name));
+                    }
                 }
             }
             Node::Subform(s) => {

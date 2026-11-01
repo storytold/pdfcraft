@@ -4118,6 +4118,26 @@ fn a_made_up_field_name_never_takes_one_the_template_uses() {
     }
 }
 
+/// #5225 review: a member of an exclusion group keeps the name the template gives it, whatever
+/// is drawn before it: a repeated field drawn first doesn't take it as its made-up name.
+#[test]
+fn a_made_up_field_name_never_takes_an_exclusion_group_members_name() {
+    let field = |name: &str| format!(r#"<field name="{name}" w="2in" h="0.3in"><ui><textEdit/></ui></field>"#);
+    let group = r#"<exclGroup name="Choice" layout="tb"><field name="Cell4_2" w="1in" h="0.3in"><ui><checkButton shape="round"/></ui><items><text>A</text></items></field><field name="Other" w="1in" h="0.3in"><ui><checkButton shape="round"/></ui><items><text>B</text></items></field></exclGroup>"#;
+    // The repeated field first, then the group; and the other way round.
+    for body in [format!("{}{}{group}", field("Cell4"), field("Cell4")), format!("{group}{}{}", field("Cell4"), field("Cell4"))] {
+        let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+        let all = widgets(&form.pages[0]);
+        let shown: Vec<(String, String)> = all.iter().map(|w| (w.som.clone(), w.name.clone())).collect();
+        let member = all.iter().find(|w| w.som.ends_with(".Choice[0].Cell4_2[0]")).map(|w| w.name.as_str());
+        assert_eq!(member, Some("Cell4_2"), "the member keeps its name: {shown:?}");
+        let mut names: Vec<&str> = all.iter().map(|w| w.name.as_str()).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), all.len(), "no two widgets share a name: {shown:?}");
+    }
+}
+
 /// #5225 review: a form whose fields don't repeat keeps every template name as it is, a name
 /// that looks like a made-up one (`Total_2`) included, in every subform. Reserving the template's
 /// names must not push a field off its own.
