@@ -144,13 +144,29 @@ pub(crate) fn printer_options_via_within(
 }
 
 pub fn submit(pdf: &[u8], job: &Job) -> Result<String, crate::PrintError> {
-    craft_print::submit(pdf, job).map_err(|e| crate::PrintError::Spool(e.to_string()))
+    let pdf = spooled(pdf, crate::font_names::RENAME_FOR_SPOOLER);
+    craft_print::submit(&pdf, job).map_err(|e| crate::PrintError::Spool(e.to_string()))
 }
 
 /// [`submit`], told `(sent, sheets)` as each sheet reaches the spooler (Windows; CUPS takes the
 /// whole PDF at once and reports nothing).
 pub fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize, usize)) -> Result<String, crate::PrintError> {
-    craft_print::submit_with_progress(pdf, job, progress).map_err(|e| crate::PrintError::Spool(e.to_string()))
+    let pdf = spooled(pdf, crate::font_names::RENAME_FOR_SPOOLER);
+    craft_print::submit_with_progress(&pdf, job, progress).map_err(|e| crate::PrintError::Spool(e.to_string()))
+}
+
+/// What goes to the spooler: with `rename` (Windows), the PDF with its embedded TrueType and
+/// OpenType programs renamed, so Windows can't draw a subset's glyph numbers with an installed
+/// font of the same name (#3132, [`crate::font_names`]). A PDF that can't be read back goes as it
+/// is: the renaming only protects the text from Windows, and the job shouldn't fail over it.
+pub(crate) fn spooled(pdf: &[u8], rename: bool) -> std::borrow::Cow<'_, [u8]> {
+    if !rename {
+        return std::borrow::Cow::Borrowed(pdf);
+    }
+    match crate::font_names::distinct(pdf) {
+        Ok(Some(renamed)) => std::borrow::Cow::Owned(renamed),
+        Ok(None) | Err(_) => std::borrow::Cow::Borrowed(pdf),
+    }
 }
 
 pub fn open_printer_preferences(printer: &str) -> Result<(), crate::PrintError> {
