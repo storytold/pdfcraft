@@ -337,7 +337,15 @@ fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer)
         .with_drag_and_drop(true)
         // Wayland app id: matches packaging/linux/ai.storyteller.pdfcraft.desktop.
         .with_app_id(APP_ID);
+    // eframe replaces ICON_BIG with a system-sized icon on its first active frame.
+    // An explicitly empty icon disables that setter (None selects eframe's default).
+    // Windows installs both sizes directly through winit in app_creator instead.
+    #[cfg(target_os = "windows")]
+    {
+        viewport = viewport.with_icon(egui::IconData::default());
+    }
     // Dock, taskbar, Alt-Tab and launcher icon when running unbundled.
+    #[cfg(not(target_os = "windows"))]
     match eframe::icon_data::from_png_bytes(APP_ICON_PNG) {
         Ok(icon) => viewport = viewport.with_icon(icon),
         Err(e) => log::warn!("app icon: {e}"),
@@ -386,6 +394,45 @@ fn native_wayland(_: &eframe::CreationContext<'_>) -> bool {
     false
 }
 
+/// Decode `png` as a [`winit::window::Icon`] for the Windows taskbar and Alt+Tab (`ICON_BIG`).
+#[cfg(target_os = "windows")]
+fn taskbar_icon(png: &[u8]) -> Option<winit::window::Icon> {
+    let icon = match eframe::icon_data::from_png_bytes(png) {
+        Ok(icon) => icon,
+        Err(e) => {
+            log::warn!("taskbar icon: {e}");
+            return None;
+        }
+    };
+    match winit::window::Icon::from_rgba(icon.rgba, icon.width, icon.height) {
+        Ok(icon) => Some(icon),
+        Err(e) => {
+            log::warn!("taskbar icon: {e}");
+            None
+        }
+    }
+}
+
+/// Install the decoded [`winit::window::Icon`] from `png` via `set` when decoding succeeds.
+#[cfg(target_os = "windows")]
+fn install_taskbar_icon(png: &[u8], set: impl FnOnce(winit::window::Icon)) {
+    if let Some(icon) = taskbar_icon(png) {
+        set(icon);
+    }
+}
+
+/// Install both window icons before the first frame. eframe's icon setter is disabled in
+/// `native_options`, so it cannot replace the full-resolution taskbar/Alt+Tab icon (#3818).
+#[cfg(target_os = "windows")]
+fn set_taskbar_icon(window: &winit::window::Window) {
+    use winit::platform::windows::WindowExtWindows as _;
+    install_taskbar_icon(APP_ICON_PNG, |icon| {
+        window.set_taskbar_icon(Some(icon.clone()));
+        window.set_window_icon(Some(icon));
+    });
+}
+
+/// Build the [`eframe::AppCreator`] closure that initializes [`PdfCraftApp`] once the window and renderer are ready.
 fn app_creator<'a>(
     launch: Launch,
     started: Rc<Cell<bool>>,
@@ -413,6 +460,9 @@ fn app_creator<'a>(
         // it is set to On or Off.
         #[cfg(target_os = "windows")]
         {
+            if let Some(window) = cc.winit_window() {
+                set_taskbar_icon(window);
+            }
             app.motion.source = Some(motion::source());
         }
         app.set_startup_update_check(true);
