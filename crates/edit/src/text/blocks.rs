@@ -7,6 +7,7 @@ use super::{Document, EditError, HashMap, Object, Op, Pieces, TextLine, group_bl
 /// A region may contain several source fonts, sizes, colours and weights.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextBlock {
+    pub text_direction: pdfcraft_fonts::TextDirection,
     /// The lines' text joined with spaces (lines that ended in a hyphen are joined directly).
     pub text: String,
     pub rect: [f64; 4],
@@ -397,6 +398,8 @@ pub fn replace_block(doc: &mut Document, page: usize, block: usize, text: &str) 
 /// Formatting for a rewritten paragraph (`None` keeps the paragraph's own).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct BlockStyle {
+    /// None preserves the source override; Auto restores automatic detection.
+    pub direction: Option<pdfcraft_fonts::TextDirection>,
     /// Disjoint UTF-8 ranges in the replacement, each preserving unspecified source style.
     pub ranges: Vec<RangeStyle>,
     /// Explicit page font resource (from register_text_font or the page font inventory).

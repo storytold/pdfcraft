@@ -7391,7 +7391,7 @@ fn detecting_form_fields_preserves_content_piece_comments() {
         let doc = ok(&mut a, "doc_open", json!({"path": "pieces.pdf"}))["doc"].as_u64().unwrap();
         let candidates = if visible { json!([{"page": 1, "kind": "text", "name": "Text1", "rect": [41.0, 121.0, 339.0, 149.0]}]) } else { json!([]) };
         let inventory = if visible {
-            json!([{"name": "Text1", "type": "text", "value": null, "page": 1, "rect": [41.0, 151.0, 339.0, 179.0], "rotation": 0, "read_only": false, "required": false, "multiline": false}])
+            json!([{"name": "Text1", "type": "text", "value": null, "page": 1, "rect": [41.0, 151.0, 339.0, 179.0], "rotation": 0, "direction": "auto", "read_only": false, "required": false, "multiline": false}])
         } else {
             json!([])
         };
@@ -10499,4 +10499,142 @@ fn mixed_script_tools_normalize_but_undo_restores_the_exact_mixture() {
         let reopened = ok(&mut a, "doc_open", json!({"path":path}))["doc"].as_u64().unwrap();
         assert_eq!(page_text(&mut a, reopened)[0], plain);
     }
+}
+
+#[test]
+fn explicit_direction_tools_keep_text_alignment_history_and_reopen() {
+    let dir = workdir("explicit-direction");
+    std::fs::write(dir.join("source.pdf"), fixture(1)).unwrap();
+    let mut a = auto(&dir);
+    let id = ok(&mut a, "doc_open", json!({"path":"source.pdf"}))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "doc_list", json!({}));
+    let layout = ok(&mut a, "text_edit_layout", json!({"doc":id,"page":1,"paragraph":1,"text":"123 ABC","direction":"rtl"}));
+    assert!(layout["draft_rect"].is_array());
+    assert_eq!(ok(&mut a, "doc_list", json!({})), before);
+    assert!(a.call("text_edit", &json!({"doc":id,"page":1,"paragraph":1,"direction":"sideways"})).is_err());
+    assert_eq!(ok(&mut a, "doc_list", json!({})), before);
+    ok(&mut a, "text_edit", json!({"doc":id,"page":1,"paragraph":1,"text":"123 ABC","direction":"rtl"}));
+    let paragraphs = ok(&mut a, "text_paragraphs", json!({"doc":id,"page":1}));
+    assert_eq!(paragraphs["paragraphs"][0]["direction"], "rtl");
+    assert_eq!(paragraphs["paragraphs"][0]["editor_text"], "123 ABC");
+    assert_eq!(page_text(&mut a, id), ["123 ABC"]);
+    let render = a.call("page_render", &json!({"doc":id,"page":1,"dpi":72})).unwrap();
+    ok(&mut a, "edit_undo", json!({"doc":id}));
+    assert_eq!(page_text(&mut a, id), ["Page 1"]);
+    ok(&mut a, "edit_redo", json!({"doc":id}));
+    assert_eq!(page_text(&mut a, id), ["123 ABC"]);
+    ok(&mut a, "doc_save", json!({"doc":id,"path":"saved.pdf"}));
+    let re = ok(&mut a, "doc_open", json!({"path":"saved.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "text_paragraphs", json!({"doc":re,"page":1}))["paragraphs"][0]["direction"], "rtl");
+    assert_eq!(render, a.call("page_render", &json!({"doc":re,"page":1,"dpi":72})).unwrap());
+    ok(&mut a, "text_edit", json!({"doc":re,"page":1,"paragraph":1,"direction":"auto"}));
+    assert_eq!(ok(&mut a, "text_paragraphs", json!({"doc":re,"page":1}))["paragraphs"][0]["direction"], "auto");
+    assert_eq!(page_text(&mut a, re), ["123 ABC"]);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn explicit_direction_is_advertised_as_a_root_tool_argument() {
+    let table = tools();
+    for name in ["page_add_text", "content_update", "text_edit", "text_edit_layout", "form_set_props"] {
+        let tool = table.iter().find(|t| t.name == name).unwrap();
+        let direction = &tool.input_schema["properties"]["direction"];
+        assert_eq!(direction["type"], "string", "{name}");
+        assert_eq!(direction["enum"], json!(["auto", "ltr", "rtl"]), "{name}");
+        assert!(!tool.input_schema["required"].as_array().unwrap().contains(&json!("direction")), "{name}: old scripts keep Auto defaults");
+    }
+}
+
+#[test]
+fn added_direction_round_trips_independently_of_alignment() {
+    let dir = workdir("added-explicit-direction");
+    let mut a = auto(&dir);
+    let id = ok(&mut a, "doc_create", json!({"from":"blank","width":400,"height":300}))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_add_text", json!({"doc":id,"page":1,"text":"123 ABC","at":[30,40],"width":300,"align":"left","direction":"rtl"}));
+    let list = ok(&mut a, "content_list", json!({"doc":id}));
+    assert_eq!(list["items"][0]["direction"], "rtl");
+    assert_eq!(page_text(&mut a, id), ["123 ABC"]);
+    let render = a.call("page_render", &json!({"doc":id,"page":1,"dpi":72})).unwrap();
+    ok(&mut a, "doc_save", json!({"doc":id,"path":"added.pdf"}));
+    let re = ok(&mut a, "doc_open", json!({"path":"added.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "content_list", json!({"doc":re}))["items"][0]["direction"], "rtl");
+    assert_eq!(render, a.call("page_render", &json!({"doc":re,"page":1,"dpi":72})).unwrap());
+    ok(&mut a, "content_update", json!({"doc":re,"page":1,"index":1,"direction":"ltr"}));
+    assert_eq!(page_text(&mut a, re), ["123 ABC"]);
+    assert_ne!(render, a.call("page_render", &json!({"doc":re,"page":1,"dpi":72})).unwrap());
+    ok(&mut a, "edit_undo", json!({"doc":re}));
+    assert_eq!(ok(&mut a, "content_list", json!({"doc":re}))["items"][0]["direction"], "rtl");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A direction-only edit must reuse explicit editor rows, rather than the flattened
+/// reading-order text returned for copy/search. Exercise both mutation tools.
+#[test]
+fn explicit_direction_only_keeps_multiline_editor_rows() {
+    let dir = workdir("direction-multiline");
+    let body = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (123 ABC.) Tj T* (456 DEF.) Tj ET";
+    std::fs::write(dir.join("rows.pdf"), helvetica_page(body)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"rows.pdf"}))["doc"].as_u64().unwrap();
+    let initial = ok(&mut a, "text_paragraphs", json!({"doc":doc,"page":1}));
+    assert_eq!(initial["paragraphs"].as_array().unwrap().len(), 1);
+    let editor_text = initial["paragraphs"][0]["editor_text"].clone();
+    assert_eq!(editor_text, "123 ABC.\n456 DEF.");
+    let initial_render = a.call("page_render", &json!({"doc":doc,"page":1,"dpi":36})).unwrap();
+    for direction in ["rtl", "ltr", "auto"] {
+        let layout = ok(&mut a, "text_edit_layout", json!({"doc":doc,"page":1,"paragraph":1,"direction":direction}));
+        assert!(layout["draft_rect"].is_array());
+        ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"direction":direction}));
+        let paragraphs = ok(&mut a, "text_paragraphs", json!({"doc":doc,"page":1}));
+        assert_eq!(paragraphs["paragraphs"].as_array().unwrap().len(), 1);
+        assert_eq!(paragraphs["paragraphs"][0]["editor_text"], editor_text);
+        assert_eq!(paragraphs["paragraphs"][0]["direction"], direction);
+    }
+    assert_eq!(a.call("page_render", &json!({"doc":doc,"page":1,"dpi":36})).unwrap(), initial_render);
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"saved-rows.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"saved-rows.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "text_paragraphs", json!({"doc":reopened,"page":1}))["paragraphs"][0]["editor_text"], editor_text);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The public form tool keeps logical values and quadding across directional
+/// appearance changes, history and persistence, and refuses invalid edits atomically.
+#[test]
+fn form_explicit_direction_tools_keep_values_history_and_reopen() {
+    let dir = workdir("form-direction");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({"from":"blank","width":400,"height":300}))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_add_field", json!({"doc":doc,"page":1,"type":"text","name":"mixed","rect":[20,30,300,60]}));
+    ok(&mut a, "form_set_props", json!({"doc":doc,"field":"mixed","align":"center"}));
+    ok(&mut a, "form_fill", json!({"doc":doc,"values":{"mixed":"123 ABC"}}));
+    let fields_before = ok(&mut a, "form_fields", json!({"doc":doc}));
+    let render_before = a.call("page_render", &json!({"doc":doc,"page":1,"dpi":36})).unwrap();
+    let inventory_before = ok(&mut a, "doc_list", json!({}));
+    for direction in [json!("RTL"), json!("sideways"), json!(true), json!(4)] {
+        assert!(matches!(
+            a.call("form_set_props", &json!({"doc":doc,"field":"mixed","name":"must-not-rename","direction":direction})),
+            Err(ToolError::InvalidArgs(_))
+        ));
+        assert_eq!(ok(&mut a, "form_fields", json!({"doc":doc})), fields_before);
+        assert_eq!(ok(&mut a, "doc_list", json!({})), inventory_before);
+    }
+    ok(&mut a, "form_set_props", json!({"doc":doc,"field":"mixed","direction":"rtl"}));
+    let directed = ok(&mut a, "form_fields", json!({"doc":doc}));
+    assert_eq!(directed["fields"][0]["value"], "123 ABC");
+    assert_eq!(directed["fields"][0]["direction"], "rtl");
+    let render_rtl = a.call("page_render", &json!({"doc":doc,"page":1,"dpi":36})).unwrap();
+    assert_ne!(render_rtl, render_before, "direction must change the appearance");
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(ok(&mut a, "form_fields", json!({"doc":doc})), fields_before);
+    assert_eq!(a.call("page_render", &json!({"doc":doc,"page":1,"dpi":36})).unwrap(), render_before);
+    ok(&mut a, "edit_redo", json!({"doc":doc}));
+    assert_eq!(ok(&mut a, "form_fields", json!({"doc":doc})), directed);
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"directed-form.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"directed-form.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "form_fields", json!({"doc":reopened})), directed);
+    assert_eq!(a.call("page_render", &json!({"doc":reopened,"page":1,"dpi":36})).unwrap(), render_rtl);
+    ok(&mut a, "form_set_props", json!({"doc":reopened,"field":"mixed","direction":"auto"}));
+    assert_eq!(ok(&mut a, "form_fields", json!({"doc":reopened})), fields_before);
+    assert_eq!(a.call("page_render", &json!({"doc":reopened,"page":1,"dpi":36})).unwrap(), render_before);
+    std::fs::remove_dir_all(dir).unwrap();
 }

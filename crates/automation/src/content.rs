@@ -52,6 +52,9 @@ fn style(a: &Args, t: &mut AddedText) -> Result<()> {
     if let Some(c) = a.opt_str("color")? {
         t.color = parse_color(c)?;
     }
+    if let Some(direction) = a.opt_str("direction")? {
+        t.direction = parse_direction(direction)?;
+    }
     if let Some(al) = a.opt_str("align")? {
         t.align = parse_align(al)?;
         // The whole box: no paragraph keeps an alignment of its own unless `aligns` gives it one.
@@ -68,6 +71,17 @@ fn style(a: &Args, t: &mut AddedText) -> Result<()> {
         t.char_spacing = c;
     }
     Ok(())
+}
+
+/// Strict public argument parser; malformed values cannot silently become Auto.
+pub(crate) fn parse_direction(value: &str) -> Result<pdfcraft_engine::TextDirection> {
+    use pdfcraft_engine::TextDirection as D;
+    match value {
+        "auto" => Ok(D::Auto),
+        "ltr" => Ok(D::LeftToRight),
+        "rtl" => Ok(D::RightToLeft),
+        _ => Err(bad("direction must be auto, ltr or rtl")),
+    }
 }
 
 pub(crate) fn parse_align(al: &str) -> Result<TextAlign> {
@@ -124,6 +138,7 @@ impl Automation {
                         v["bold"] = json!(t.bold);
                         v["italic"] = json!(t.italic);
                         v["char_spacing"] = json!(t.char_spacing);
+                        v["direction"] = json!(t.direction.name().to_ascii_lowercase());
                     }
                     AddedContent::Image(_) => v["type"] = json!("image"),
                 }
@@ -205,8 +220,8 @@ impl Automation {
                 if a.get("text").is_some() {
                     return Err(bad("images have no text"));
                 }
-                if ["font", "size", "bold", "italic", "color", "align", "aligns", "char_spacing"].iter().any(|k| a.get(k).is_some()) {
-                    return Err(bad("font, size, bold, italic, color, align, aligns and char_spacing apply to text"));
+                if ["font", "size", "bold", "italic", "color", "align", "aligns", "char_spacing", "direction"].iter().any(|k| a.get(k).is_some()) {
+                    return Err(bad("font, size, bold, italic, color, align, aligns, char_spacing and direction apply to text"));
                 }
                 if let Some(deg) = a.opt_int("rotate")? {
                     if deg.rem_euclid(90) != 0 {

@@ -17,6 +17,8 @@ pub mod pdf;
 mod script;
 mod shaping;
 pub mod source_shaping;
+pub mod text_direction;
+pub use text_direction::TextDirection;
 mod std14;
 mod std14_metrics;
 pub use craft::{

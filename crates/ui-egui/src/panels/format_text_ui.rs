@@ -235,6 +235,11 @@ pub(crate) fn panel(
     font_resp.on_hover_text(format!("{}\n{}", tl!("Font"), tl!("Thai and Arabic use regular fallback fonts when available.")));
     ui.add_space(4.0);
 
+    row(ui, |ui| {
+        ui.label(tl!("Text direction"));
+        widgets::direction_buttons(ui, &mut look.direction);
+    });
+
     // Size and colour | bullets, numbering and alignment.
     let mut size_committed = false;
     row(ui, |ui| {

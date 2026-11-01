@@ -4,6 +4,7 @@ fn same_plane(a: &TextLine, b: &TextLine) -> bool {
     let at = Matrix(a.origin.tm).then(&Matrix(a.origin.ctm));
     let bt = Matrix(b.origin.tm).then(&Matrix(b.origin.ctm));
     a.scope == b.scope
+        && a.text_direction == b.text_direction
         && a.paint == b.paint
         && [0, 2].iter().all(|axis| {
             let ax = at.0.get(*axis).copied().unwrap_or(0.0);
@@ -351,6 +352,7 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
                 spans: Vec::new(),
                 rect,
                 base_font: first.base_font.clone(),
+                text_direction: first.text_direction,
                 size: first.size,
                 bold: first.bold,
                 italic: first.italic,

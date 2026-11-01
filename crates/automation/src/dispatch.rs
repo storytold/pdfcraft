@@ -41,6 +41,24 @@ fn view_transform_to_user(info: &pdfcraft_render::PageInfo, m: [f64; 6]) -> Resu
     Ok(user)
 }
 
+fn refuse_line_direction(args: &Args) -> Result<()> {
+    if args.get("direction").is_some() {
+        return Err(ToolError::InvalidArgs("direction is a paragraph property; use paragraph from text_paragraphs".into()));
+    }
+    Ok(())
+}
+
+fn paragraph_replacement(args: &Args, block: pdfcraft_engine::TextBlock, width: Option<f64>) -> Result<String> {
+    // Explicit row alignments keep editor rows; a width-only edit rejoins soft wraps.
+    Ok(match args.opt_str("text")? {
+        Some(text) => text.to_owned(),
+        None if args.get("aligns").is_some() => block.editor_text,
+        None if width.is_some() => block.reflow_text.clone(),
+        None if args.get("direction").is_some() => block.editor_text,
+        None => block.text,
+    })
+}
+
 impl Automation {
     /// Run the tool `name` with JSON `args` (an object; `null` means no arguments).
     pub fn call(&mut self, name: &str, args: &Value) -> Result<Vec<Content>> {
@@ -490,6 +508,7 @@ impl Automation {
                             "paragraph": i + 1,
                             "text": b.text,
                             "editor_text": b.editor_text,
+                            "direction": b.text_direction.name().to_ascii_lowercase(),
                             "rows": b.rows.iter().map(|row| row.iter().map(|i| i + 1).collect::<Vec<_>>()).collect::<Vec<_>>(),
                             "lines": b.lines.iter().map(|l| l + 1).collect::<Vec<_>>(),
                             "rect": [r(u[0].min(v[0])), r(u[1].min(v[1])), r(u[0].max(v[0])), r(u[1].max(v[1]))],
@@ -563,6 +582,7 @@ impl Automation {
                     size: a.opt_num("size")?,
                     width: a.opt_num("width")?,
                     resource: a.opt_str("font_resource")?.map(str::to_owned),
+                    direction: a.opt_str("direction")?.map(crate::content::parse_direction).transpose()?,
                     ranges: parse_style_ranges(a.get("ranges"))?,
                     ..Default::default()
                 };
@@ -587,17 +607,12 @@ impl Automation {
                 let index = self.paragraph_index(id, page, k, &blocks)?;
                 let block = blocks.get(index).cloned().ok_or_else(|| ToolError::InvalidArgs(format!("paragraph {k} is out of range")))?;
                 let width = a.opt_num("width")?;
-                // Explicit row alignments keep the editor's row boundaries; a width-only
-                // reflow rejoins soft wraps while retaining typed newlines and spaces.
-                let text = match a.opt_str("text")? {
-                    Some(text) => text.to_owned(),
-                    None if a.get("aligns").is_some() => block.editor_text,
-                    None if width.is_some() => block.reflow_text.clone(),
-                    None => block.text,
-                };
+                let source_rect = block.rect;
+                let text = paragraph_replacement(&a, block, width)?;
                 let mut style = pdfcraft_engine::BlockStyle {
                     ranges: parse_style_ranges(a.get("ranges"))?,
                     resource: a.opt_str("font_resource")?.map(str::to_owned),
+                    direction: a.opt_str("direction")?.map(crate::content::parse_direction).transpose()?,
                     bold: a.opt_bool("bold")?,
                     size: a.opt_num("size")?,
                     underline: a.opt_bool("underline")?,
@@ -631,7 +646,7 @@ impl Automation {
                 }
                 // Where the paragraph is drawn after the edit: moved by dx, dy (up is +dy).
                 let [dx, dy] = style.offset.unwrap_or([0.0, 0.0]);
-                let moved = [block.rect[0] + dx, block.rect[1] + dy, block.rect[2] + dx, block.rect[3] + dy];
+                let moved = [source_rect[0] + dx, source_rect[1] + dy, source_rect[2] + dx, source_rect[3] + dy];
                 let wanted: String = text.split_whitespace().collect();
                 let mut out = self.apply(&a, Edit::EditTextBlock { page, block: index, text, style })?;
                 let doc = self.doc(&a)?;
@@ -658,6 +673,7 @@ impl Automation {
                 out
             }
             "text_edit" => {
+                refuse_line_direction(&a)?;
                 let page = self.page(&a)?;
                 let n = self.doc(&a)?.text_lines(page).len();
                 let line = a.int("line")?;
