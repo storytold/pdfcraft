@@ -219,6 +219,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-01 (M7, #5114):** Myanmar text is shaped when its paragraph is rewritten, so a medial ra, a vowel sign e and stacked consonants land where the font puts them instead of in typing order, and stay right after deselecting and in other readers. It takes the full face: a font subset without GSUB, as browsers embed, is refused and the error names the face to load. Replacing one line (`text_edit` with `line`) is refused for Myanmar, since that path can't shape. Add text still can't draw Myanmar, and there is no fallback Myanmar face. Estimates unchanged.
 - **2026-11-01 (M14, #5572):** Preferences ▸ Documents and view sets how many recent files to keep, from 0 to 50 with 12 by default. At 0 Home has no Recent section and File ▸ Open Recent is disabled. The list is cut when Preferences closes, so the number can pass through 0 on its way to another.
 
 - 2026-11-01: PR #2155 further review preserves inherited Form text state and soft-mask chronology during Arrange, composes crop-group moves in the proper scope, and uses affine/press-relative image resize plus a shared rotation pivot. No-op script buttons preserve hidden source text; paste coordinates, visible selection ownership, and Snapshot/Export permissions have dedicated regressions. Candidate only; estimates unchanged.

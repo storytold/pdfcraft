@@ -7423,6 +7423,66 @@ fn a_shaped_run_is_one_text_object_with_each_glyph_where_shaping_put_it() {
     assert_eq!(rise, 0.0, "the rise is reset after the run");
 }
 
+/// Issue #5114: Myanmar typed in a full face is written in the glyph order and forms the face's
+/// shaping gives it, not one glyph per character in typing order. A medial ra (U+103C) and a vowel
+/// sign e (U+1031) come after their consonant in the text but are drawn before it, and a virama
+/// (U+1039) stacks the next consonant: drawn in typing order, they land beside the wrong letter.
+/// Runs only when craft-fonts has a Myanmar (`Mymr`) face (`CRAFT_FONTS_DIR`).
+#[test]
+fn myanmar_is_drawn_in_the_order_its_face_shapes_it() {
+    let Some(face) = pdfcraft_fonts::CRAFT_FONTS.iter().find(|f| f.covers("Mymr")) else { return };
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Stable text) Tj ET");
+    let resource = text::register_text_font(&mut doc, 0, face.bytes).unwrap();
+    let typed = "မြန်မာ ကျောင်း ဗုဒ္ဓ";
+    let style = text::BlockStyle { width: Some(400.0), resource: Some(resource), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some(typed), &style).unwrap();
+    assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap()[0].editor_text, typed);
+    // The glyphs drawn, through each showing font's /CIDToGIDMap, in content order.
+    let page = pdfcraft_model::pages(&doc).remove(0);
+    let resources = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().unwrap().clone();
+    let fonts = doc.resolve(resources.get(b"Font").unwrap()).as_dict().unwrap().clone();
+    let glyph_map = |name: &[u8]| -> Option<Vec<u16>> {
+        let font = doc.resolve(fonts.get(name)?).as_dict()?.clone();
+        let descendant = doc.resolve(doc.resolve(font.get(b"DescendantFonts")?).as_array()?.first()?).as_dict()?.clone();
+        let pdfcraft_cos::Object::Stream(map) = &*doc.resolve(descendant.get(b"CIDToGIDMap")?) else { return None };
+        Some(map.decoded().ok()?.chunks(2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect())
+    };
+    let (mut map, mut drawn) = (None, Vec::new());
+    for op in pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops {
+        match op.op.as_slice() {
+            b"Tf" => map = glyph_map(op.operands[0].as_name().unwrap()),
+            b"Tj" | b"TJ" => {
+                let Some(gids) = &map else { continue };
+                let strings: Vec<_> = match op.operands[0].as_array() {
+                    Some(items) => items.iter().filter_map(|i| i.as_string()).cloned().collect(),
+                    None => vec![op.operands[0].as_string().unwrap().clone()],
+                };
+                for code in strings.iter().flat_map(|s| s.bytes.chunks(2).map(|c| usize::from(u16::from_be_bytes([c[0], c[1]])))) {
+                    drawn.push(u32::from(gids[code]));
+                }
+            }
+            _ => {}
+        }
+    }
+    let shaped: Vec<u32> = pdfcraft_fonts::source_shaping::shape(face.bytes, typed).unwrap().glyphs.iter().map(|g| g.id.to_u32()).collect();
+    assert_eq!(drawn, shaped);
+    // The check can tell shaped from typing order: the medial ra is drawn first, before the
+    // consonant ma (U+1019) typed ahead of it.
+    let ma = pdfcraft_fonts::source_shaping::shape(face.bytes, "\u{1019}").unwrap().glyphs[0].id.to_u32();
+    assert_ne!(drawn.first(), Some(&ma), "{drawn:?}");
+}
+
+/// Issue #5114: replacing a line writes one glyph per character, so Myanmar is refused there,
+/// with the page left alone, and the error says what does work.
+#[test]
+fn replacing_a_line_refuses_myanmar_and_points_at_the_paragraph() {
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Stable text) Tj ET");
+    let before = page_content_bytes(&doc, 0);
+    let err = text::replace_line(&mut doc, 0, 0, "မြန်မာ").unwrap_err().to_string();
+    assert!(err.contains("edit its paragraph"), "{err}");
+    assert_eq!(page_content_bytes(&doc, 0), before);
+}
+
 #[test]
 fn a_subset_program_is_not_trusted_for_new_characters_and_the_error_names_the_character() {
     let mut doc = embedded_program_page("BT /F1 12 Tf 72 700 Td (Stable text) Tj ET", "ABCDEF+Inter-Regular");
