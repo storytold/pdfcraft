@@ -1576,3 +1576,73 @@ fn a_form_button_shows_and_hides_the_attachments_panel() {
     h.run_steps(2);
     assert_eq!(h.state().right, None);
 }
+
+/// Which kids of check box `name` are ticked (their `/AS` is their on state).
+fn ticked(h: &Harness<'static, PdfCraftApp>, name: &str) -> Vec<bool> {
+    let s = h.state();
+    let f = s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == name).unwrap().clone();
+    (0..f.widgets.len()).map(|i| f.widget_on(i)).collect()
+}
+
+/// Check box fields of two kids each: `pair` with the on states A and B, `same` with Yes twice.
+fn check_box_kids() -> Harness<'static, PdfCraftApp> {
+    let kid = |parent: u32, y: u32, x: u32, state: &str| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /Parent {parent} 0 R /AS /Off /Rect [{x} {y} {} {}] /P 3 0 R /F 4 /AP << /N << /{state} 5 0 R /Off 5 0 R >> >> >>",
+            x + 16,
+            y + 16
+        )
+    };
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R 9 0 R] /DA (/Helv 0 Tf 0 g) >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [7 0 R 8 0 R 10 0 R 11 0 R] >>".into(),
+        "<< >>".into(),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 16 16] /Length 0 >>\nstream\n\nendstream".into(),
+        "<< /FT /Btn /T (pair) /V /Off /Kids [7 0 R 8 0 R] >>".into(),
+        kid(6, 350, 20, "A"),
+        kid(6, 350, 60, "B"),
+        "<< /FT /Btn /T (same) /V /Off /Kids [10 0 R 11 0 R] >>".into(),
+        kid(9, 300, 20, "Yes"),
+        kid(9, 300, 60, "Yes"),
+    ];
+    let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
+    let bytes = pdf_from_objects(&objs);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("kids.pdf", None, bytes).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    h.run_steps(6);
+    h
+}
+
+/// ISO 32000-2 §12.7.5.2.3: a check box field's value is the on state of the kid that is on, and
+/// its kids can have different on states (Table 230). Clicking B after A ticks B and clears A;
+/// clicking B again clears the field; kids sharing an on state tick together (EXAMPLE 2).
+#[test]
+fn clicking_check_box_kids_with_different_on_states() {
+    let mut h = check_box_kids();
+    click_field(&mut h, "pair", 0);
+    assert_eq!((ticked(&h, "pair"), value(&h, "pair")), (vec![true, false], vec!["A".to_string()]));
+    click_field(&mut h, "pair", 1);
+    assert_eq!((ticked(&h, "pair"), value(&h, "pair")), (vec![false, true], vec!["B".to_string()]), "B ticks and A clears");
+    click_field(&mut h, "pair", 1);
+    assert_eq!((ticked(&h, "pair"), value(&h, "pair")), (vec![false, false], vec![]), "clicking B again clears the field");
+    click_field(&mut h, "pair", 1);
+    click_field(&mut h, "pair", 0);
+    assert_eq!((ticked(&h, "pair"), value(&h, "pair")), (vec![true, false], vec!["A".to_string()]), "the tick moves back to A");
+    click_field(&mut h, "same", 0);
+    assert_eq!(ticked(&h, "same"), [true, true], "kids sharing Yes tick together");
+    click_field(&mut h, "same", 1);
+    assert_eq!(ticked(&h, "same"), [false, false], "and untick together");
+    // Space on the focused kid toggles that kid too.
+    click_field(&mut h, "pair", 1);
+    assert_eq!(value(&h, "pair"), ["B"]);
+    h.key_press(egui::Key::Space);
+    h.run_steps(3);
+    assert!(value(&h, "pair").is_empty(), "Space clears the ticked kid");
+}

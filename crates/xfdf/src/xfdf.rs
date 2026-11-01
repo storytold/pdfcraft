@@ -219,7 +219,7 @@ pub(crate) fn apply_values(doc: &mut Document, values: &[(String, Vec<String>)],
         let first = vals.first().cloned().unwrap_or_default();
         let v = match f.kind {
             FieldKind::Text => FieldValue::Text(first),
-            FieldKind::CheckBox => FieldValue::Check(!first.is_empty() && first != "Off"),
+            FieldKind::CheckBox => f.check_box_value(Some(first.as_str())),
             FieldKind::Radio => FieldValue::Radio((!first.is_empty() && first != "Off").then_some(first)),
             // XML, CSV and text hold a multi-select list's values in one cell, joined by ", "
             // (as export_data writes them); split it unless the whole cell is one option.

@@ -134,10 +134,18 @@ fn select_edit(f: &FormField, w: &FormWidget) -> Option<Edit> {
     (w.on_state.as_ref() != f.value.first()).then(|| Edit::SetFieldValue { name: f.name.clone(), value: FieldValue::Radio(w.on_state.clone()) })
 }
 
-/// What clicking a check box or radio button does.
-fn toggle_edit(f: &FormField, w: &FormWidget) -> Option<Edit> {
+/// What clicking widget `wi` of a check box or radio button does.
+fn toggle_edit(f: &FormField, wi: usize) -> Option<Edit> {
+    let w = f.widgets.get(wi)?;
     let value = match f.kind {
-        FormFieldKind::CheckBox => FieldValue::Check(f.value.is_empty()),
+        // A check box's kids can have different on states (ISO 32000-2 §12.7.5.2.3, Table 230):
+        // clicking one that is off turns on its state (it, and any kid sharing that state, on;
+        // the others off); clicking one that is on turns the field off.
+        FormFieldKind::CheckBox => match &w.on_state {
+            Some(s) if !f.widget_on(wi) => FieldValue::Text(s.clone()),
+            Some(_) => FieldValue::Check(false),
+            None => FieldValue::Check(f.value.is_empty()),
+        },
         FormFieldKind::Radio => {
             let on = w.on_state.clone();
             // Clicking the selected button again turns it off unless the group forbids it.
@@ -507,7 +515,7 @@ pub(crate) fn paint_page(
                 painter.rect_stroke(r.expand(1.0), CornerRadius::same(2), Stroke::new(2.0, FOCUS_BLUE), egui::StrokeKind::Outside);
             }
             if view.forms.unbaked.contains(&(f.name.clone(), page)) {
-                paint_unbaked_widget(painter, xf, f, w, r);
+                paint_unbaked_widget(painter, xf, f, wi, w, r);
             } else if fillable(f) && pointer.is_some_and(|p| r.contains(p)) {
                 painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, FOCUS_BLUE.gamma_multiply(0.8)), egui::StrokeKind::Outside);
             }
@@ -566,7 +574,7 @@ pub fn field_screen_font(painter: &egui::Painter, f: &FormField, w: &FormWidget,
     if font.is_nan() { 3.0 } else { font.clamp(3.0, MAX_SCREEN_FONT) }
 }
 
-fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, w: &FormWidget, r: Rect) {
+fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, wi: usize, w: &FormWidget, r: Rect) {
     match f.kind {
         FormFieldKind::Text | FormFieldKind::Combo => {
             let text = f.value.first().map(String::as_str).unwrap_or("");
@@ -625,7 +633,7 @@ fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, 
         FormFieldKind::CheckBox => {
             painter.rect_filled(r, CornerRadius::same(1), Color32::from_rgb(0xFF, 0xFF, 0xF4));
             painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, Color32::from_gray(180)), egui::StrokeKind::Inside);
-            let checked = f.value.first().is_some_and(|v| v != "Off" && !v.is_empty());
+            let checked = if w.on_state.is_some() { f.widget_on(wi) } else { f.value.first().is_some_and(|v| v != "Off" && !v.is_empty()) };
             if checked {
                 let sz = (r.height() * 0.75).clamp(8.0, 32.0);
                 painter.text(r.center(), egui::Align2::CENTER_CENTER, "✔", egui::FontId::proportional(sz), Color32::BLACK);
@@ -975,11 +983,11 @@ pub(crate) fn overlay(
             } else if toggle && view.pending_edit.is_some() {
                 view.forms.toggle = true;
             } else if toggle {
-                edit = toggle_edit(f, w);
+                edit = toggle_edit(f, focus.widget);
             } else if space {
                 // Space toggles a check box and selects a radio button, as in browsers: it never
                 // turns the selected button off.
-                edit = if f.kind == FormFieldKind::Radio { select_edit(f, w) } else { toggle_edit(f, w) };
+                edit = if f.kind == FormFieldKind::Radio { select_edit(f, w) } else { toggle_edit(f, focus.widget) };
             } else if let Some(forward) = step {
                 edit = step_radio(view, f, focus.widget, forward);
             }
