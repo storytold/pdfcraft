@@ -132,6 +132,11 @@ pub trait Device<'a> {
     /// other than `DeviceCMYK` is about to be drawn. A device drawing an enclosing group in CMYK
     /// can no longer draw that group right, since this one blends in its own space.
     fn group_blends_outside_device_cmyk(&mut self) {}
+    /// PdfCraft patch (71): the device has no more use for what it is drawn (an ink pass that
+    /// met something it has no tints for). Interpretation then stops, as when the caller cancels.
+    fn abandoned(&self) -> bool {
+        false
+    }
 }
 
 /// A device that discards all drawing operations.

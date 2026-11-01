@@ -7008,6 +7008,10 @@ mod devicen_inks;
 // patch 27).
 mod isolated_cmyk_groups;
 
+// #4887: a DeviceCMYK page group blends its page and the groups that inherit its space in CMYK
+// (vendored hayro-interpret patch 71).
+mod cmyk_page_groups;
+
 /// #3109 / #3116: clipping-only text (`7 Tr`) installs a clip for subsequent painting
 /// but draws no pixels itself.
 #[test]

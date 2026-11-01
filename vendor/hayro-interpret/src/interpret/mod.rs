@@ -174,7 +174,15 @@ pub fn interpret_page<'a>(
     // PdfCraft patch: the page's own contents count against its content budget too, where they
     // are decoded whole. Streamed content is only ever held a window at a time.
     crate::context::charge_content(content.materialized_len());
-    interpret_content(&mut content, resources, context, device);
+    // PdfCraft patch (71): a page group blending in DeviceCMYK composites the page's contents in
+    // CMYK when the device can (see `cmyk_group`); the annotations below are drawn as before.
+    let nested_paints = crate::context::nested_paints_used();
+    let blended_in_cmyk = crate::cmyk_group::page_blends_in_device_cmyk(page)
+        && device.draw_isolated_cmyk_group(&crate::cmyk_group::CmykGroup::for_page(page, context));
+    if !blended_in_cmyk {
+        crate::context::set_nested_paints_used(nested_paints);
+        interpret_content(&mut content, resources, context, device);
+    }
 
     if context.settings.render_annotations
         && let Some(annot_arr) = page.raw().get::<Array<'_>>(ANNOTS)
@@ -454,8 +462,9 @@ fn interpret_window<'a>(
     // device spaces that colour operators and images select (ISO 32000-2 §8.6.5.6).
     let defaults = DefaultColorSpaces::new(resources, &context.interpreter_cache.object_cache);
     while let Some(op) = ops.next() {
-        // PdfCraft patch: stop when the caller cancelled (see `InterpreterSettings::cancelled`).
-        if context.settings.cancelled.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
+        // PdfCraft patch: stop when the caller cancelled (see `InterpreterSettings::cancelled`),
+        // or (patch (71)) when the device has no more use for what it is drawn.
+        if context.settings.cancelled.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) || device.abandoned() {
             break;
         }
         match op {
@@ -1044,7 +1053,7 @@ const CONTENT_WINDOW: usize = 64 << 10;
 /// PdfCraft patch: interprets the content of a page a window at a time, so the decoded content is
 /// never all in memory (see `ContentReader`). A window ends at an instruction that is not complete
 /// yet: its bytes are kept, and the next window starts with them.
-fn interpret_content<'a>(
+pub(crate) fn interpret_content<'a>(
     content: &mut ContentReader<'_>,
     resources: &Resources<'a>,
     context: &mut Context<'a>,
@@ -1070,7 +1079,7 @@ fn interpret_content<'a>(
             .cancelled
             .as_ref()
             .is_some_and(|c| c.load(Ordering::Relaxed));
-        if !needs_more || cancelled || exhausted {
+        if !needs_more || cancelled || exhausted || device.abandoned() {
             break;
         }
         // A window that is still incomplete at its end waits for more of the stream. It doubles

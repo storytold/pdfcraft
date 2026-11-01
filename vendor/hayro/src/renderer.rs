@@ -1907,6 +1907,12 @@ impl<'a> Device<'a> for Renderer {
     /// before) under reading colours, inside a pass (a nested group then blends in the pass's
     /// own CMYK), while erasing for a knockout group (the contents must clear, not paint), and
     /// for contents a pass has no tints for.
+    /// PdfCraft patch (27), with hayro-interpret patch (71): an ink pass that met something it has
+    /// no tints for will be thrown away, so the rest of the contents needn't be drawn into it.
+    fn abandoned(&self) -> bool {
+        self.ink.pass.is_some() && self.ink.unsupported
+    }
+
     fn draw_isolated_cmyk_group(&mut self, group: &hayro_interpret::CmykGroup<'a, '_>) -> bool {
         if self.color_replacement.is_some() || self.ink.pass.is_some() || self.erasing {
             return false;
