@@ -776,13 +776,14 @@ fn paper_choice_survives_cancel_and_settings_restore() {
     h.get_by_label("A4").click();
     h.run_steps(2);
     assert_eq!(h.state().print_draft.paper, a4);
-    // Only paper should be added to persistence; these choices still belong to this session.
+    // Paper and booklet binding are remembered; other job-specific choices remain per-session.
     let draft = &mut h.state_mut().print_draft;
     draft.copies = 5;
     draft.which = pdfcraft_ui_egui::PrintWhich::Range;
     draft.range = "1".into();
     draft.orientation = Orientation::Landscape;
     draft.grayscale = true;
+    draft.binding = pdfcraft_engine::print::Binding::Right;
     let before_cancel = draft.clone();
     h.get_by_label("Cancel").click();
     h.run_steps(2);
@@ -791,15 +792,21 @@ fn paper_choice_survives_cancel_and_settings_restore() {
     let saved = h.state().persist();
     let json: serde_json::Value = serde_json::from_str(&saved).unwrap();
     assert_eq!(json["print_paper"], "A4", "store the canonical name, not its position");
+    assert_eq!(json["print_binding"], "Right", "store the booklet binding side");
     let mut app = PdfCraftApp::new();
     app.restore(&saved);
-    let expected = pdfcraft_ui_egui::PrintDraft { paper: a4, ..Default::default() };
-    assert_eq!(app.print_draft, expected, "no other print preference becomes persistent");
+    let expected = pdfcraft_ui_egui::PrintDraft {
+        paper: a4,
+        binding: pdfcraft_engine::print::Binding::Right,
+        ..Default::default()
+    };
+    assert_eq!(app.print_draft, expected, "only paper and booklet binding become persistent");
     let mut restarted = harness_with_settings(Some(saved));
     assert!(restarted.state_mut().execute("print.dialog"));
     restarted.run_steps(3);
     restarted.get_by_value("A4");
     assert_eq!(restarted.state().print_draft.paper, a4);
+    assert_eq!(restarted.state().print_draft.binding, pdfcraft_engine::print::Binding::Right);
     restarted.get_by_value("A4").click();
     restarted.run_steps(2);
     restarted.get_by_label("US Letter").click();
@@ -884,6 +891,40 @@ fn restored_paper_keeps_preview_and_saved_sheet_dimensions() {
     let size = pages[0].display_size(&printed);
     assert!((size.0 - a4.0).abs() < 0.01 && (size.1 - a4.1).abs() < 0.01, "saved sheet: {size:?}");
     std::fs::remove_file(out).unwrap();
+}
+
+#[test]
+fn booklet_binding_restore_accepts_only_known_sides() {
+    use pdfcraft_engine::print::Binding;
+
+    for (side, expected) in [("Left", Binding::Left), ("Right", Binding::Right)] {
+        let mut app = PdfCraftApp::new();
+        app.restore(&serde_json::json!({"print_binding": side}).to_string());
+        assert_eq!(app.print_draft.binding, expected, "{side}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&app.persist()).unwrap()["print_binding"],
+            side
+        );
+    }
+
+    for invalid in [
+        r#"{"print_binding":null}"#,
+        r#"{"print_binding":true}"#,
+        r#"{"print_binding":[]}"#,
+        r#"{"print_binding":{}}"#,
+        r#"{"print_binding":"left"}"#,
+        r#"{"print_binding":"right"}"#,
+        r#"{"print_binding":"unknown"}"#,
+    ] {
+        let mut app = PdfCraftApp::new();
+        let factory = app.print_draft.binding;
+        app.restore(invalid);
+        assert_eq!(app.print_draft.binding, factory, "{invalid}");
+
+        app.print_draft.binding = Binding::Right;
+        app.restore(invalid);
+        assert_eq!(app.print_draft.binding, Binding::Right, "invalid input must not replace a valid choice: {invalid}");
+    }
 }
 
 /// #2707: a booklet decides two-sided itself, as Acrobat does (its Print dialog hides Two-sided
