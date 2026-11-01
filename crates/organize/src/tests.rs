@@ -1657,8 +1657,11 @@ fn malformed_resource_categories_preserve_annotation_identity_when_combining_and
             }
             source
                 .update_dict(page, |d| {
+                    let mut font_map = Dict::new();
+                    font_map.set(b"F1".to_vec(), Object::Ref(first));
+                    font_map.set(b"F2".to_vec(), Object::Ref(second));
                     let mut resources = Dict::new();
-                    resources.set(b"Font".to_vec(), Object::Ref(first));
+                    resources.set(b"Font".to_vec(), Object::Dict(font_map));
                     resources.set(b"ExtGState".to_vec(), Object::Ref(second));
                     d.set(b"Resources".to_vec(), Object::Dict(resources));
                     d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(first), Object::Ref(second)]));

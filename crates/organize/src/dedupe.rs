@@ -45,14 +45,30 @@ fn is_resource(o: &Object) -> bool {
 /// out on purpose: it names optional content groups, whose identity matters.
 const RESOURCE_CATEGORIES: &[&[u8]] = &[b"ExtGState", b"ColorSpace", b"Pattern", b"Shading", b"XObject", b"Font"];
 
-/// Whether a category member has the expected resource shape.
-/// This is a conservative container check, not full PDF validation.
+/// Whether `d` carries annotation, page, field, or structure identity rather than resource data.
+/// Annotations often omit `/Type /Annot` (ISO 32000-2 Table 166 requires `/Subtype` and `/Rect`),
+/// whereas resource dictionaries and category maps never carry `/Rect`, `/Popup`, `/IRT`, or `/FT`.
+fn is_identity_dict(doc: &Document, d: &pdfcraft_cos::Dict) -> bool {
+    if let Some(t) = d.get(b"Type").map(|v| doc.resolve(v)).as_deref().and_then(Object::as_name)
+        && !RESOURCE_TYPES.contains(&t)
+    {
+        return true;
+    }
+    d.contains(b"Rect") || d.contains(b"Popup") || d.contains(b"IRT") || d.contains(b"FT") || d.contains(b"Parent")
+}
+
+/// Whether a category member has the expected resource shape and is not an identity-bearing
+/// dictionary such as an annotation or form field.
 fn category_entry(doc: &Document, category: &[u8], value: &Object) -> bool {
     let value = doc.resolve(value);
     match category {
-        b"Font" | b"ExtGState" => matches!(&*value, Object::Dict(_)),
-        b"XObject" => matches!(&*value, Object::Stream(_)),
-        b"Pattern" | b"Shading" => matches!(&*value, Object::Dict(_) | Object::Stream(_)),
+        b"Font" | b"ExtGState" => matches!(&*value, Object::Dict(d) if !is_identity_dict(doc, d)),
+        b"XObject" => matches!(&*value, Object::Stream(s) if !is_identity_dict(doc, &s.dict)),
+        b"Pattern" | b"Shading" => match &*value {
+            Object::Dict(d) => !is_identity_dict(doc, d),
+            Object::Stream(s) => !is_identity_dict(doc, &s.dict),
+            _ => false,
+        },
         b"ColorSpace" => match &*value {
             Object::Name(name) => matches!(name.as_slice(), b"DeviceGray" | b"DeviceRGB" | b"DeviceCMYK" | b"Pattern"),
             Object::Array(items) => items.first().and_then(Object::as_name).is_some_and(|name| COLOR_SPACE_FAMILIES.contains(&name)),
@@ -86,11 +102,10 @@ fn collect_resource_refs(doc: &Document, o: &Object, out: &mut HashSet<ObjRef>) 
                 for cat in RESOURCE_CATEGORIES {
                     let entries = res.get(cat).map(|c| doc.resolve(c));
                     if let Some(entries) = entries.as_ref().and_then(|e| e.as_dict()) {
-                        // A malformed category can point directly at an annotation or another
-                        // identity-bearing object. Only resource-name maps are containers.
-                        // Skip malformed maps and their members (e.g. annotation /Popup refs):
-                        // this only declines deduplication, preserving all their contents.
-                        if !entries.iter().all(|(_, value)| category_entry(doc, cat, value)) {
+                        // A malformed category can point directly at an annotation or list
+                        // annotations inside a category map. Only resource-name maps whose
+                        // members are non-identity resources are containers.
+                        if is_identity_dict(doc, entries) || !entries.iter().all(|(_, value)| category_entry(doc, cat, value)) {
                             continue;
                         }
                         if let Some(Object::Ref(cat_ref)) = res.get(cat) {
@@ -457,5 +472,25 @@ mod tests {
         assert_eq!(doc.get(p1).as_dict().unwrap().get(b"Resources"), Some(&Object::Ref(res1)));
         assert_eq!(doc.get(p2).as_dict().unwrap().get(b"Resources"), Some(&Object::Ref(res1)));
         assert_eq!(doc.get(res1).as_dict().unwrap().get(b"ExtGState"), Some(&Object::Ref(ext1)));
+
+        // Distinct font maps (`F1` and `F10` with different fonts on one page vs the same on another)
+        // deduplicate identical fonts while preserving distinct `F1`/`F10` entries.
+        let ff1 = doc.add(stream(b"font-f1"));
+        let ff10 = doc.add(stream(b"font-f10"));
+        let f1_a = font(&mut doc, ff1, "Helvetica");
+        let f10_a = font(&mut doc, ff10, "Courier");
+        let f1_b = font(&mut doc, ff1, "Helvetica");
+        let f10_b = font(&mut doc, ff10, "Times-Roman");
+        let mut fmap_a = Dict::new();
+        fmap_a.set(b"F1".to_vec(), Object::Ref(f1_a));
+        fmap_a.set(b"F10".to_vec(), Object::Ref(f10_a));
+        let fmap_a_ref = doc.add(Object::Dict(fmap_a));
+        let mut fmap_b = Dict::new();
+        fmap_b.set(b"F1".to_vec(), Object::Ref(f1_b));
+        fmap_b.set(b"F10".to_vec(), Object::Ref(f10_b));
+        let fmap_b_ref = doc.add(Object::Dict(fmap_b));
+        assert_eq!(dedupe_resources(&mut doc, &[f1_a, f10_a, f1_b, f10_b, fmap_a_ref, fmap_b_ref], false), 1);
+        assert_eq!(doc.get(fmap_b_ref).as_dict().unwrap().get(b"F1"), Some(&Object::Ref(f1_a)));
+        assert_eq!(doc.get(fmap_b_ref).as_dict().unwrap().get(b"F10"), Some(&Object::Ref(f10_b)));
     }
 }
