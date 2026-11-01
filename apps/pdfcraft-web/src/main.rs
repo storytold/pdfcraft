@@ -314,18 +314,37 @@ mod host {
         }
     }
 
+    /// The largest file the host may hand over to open, checked before it is copied (the app's own readers have their own limits).
+    const MAX_OPEN_BYTES: u64 = 512 << 20;
+
+    /// The longest file name taken from the host.
+    const MAX_NAME_CHARS: usize = 255;
+
     /// The `pdfcraft:open` payload, `{ name, bytes }` where `bytes` is an `ArrayBuffer` or
     /// `Uint8Array` holding a PDF: queue it like a `?file=` download and wake the app.
     fn queue_open(data: &JsValue, inbox: &pdfcraft_ui_egui::Inbox, ctx: &egui::Context) {
-        let name = string(data, "name").filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "document.pdf".to_string());
+        let name: String = string(data, "name")
+            .filter(|n| !n.trim().is_empty())
+            .unwrap_or_else(|| "document.pdf".to_string())
+            .chars()
+            .take(MAX_NAME_CHARS)
+            .collect();
         let Ok(bytes) = js_sys::Reflect::get(data, &JsValue::from_str("bytes")) else { return };
-        let bytes = if let Some(array) = bytes.dyn_ref::<js_sys::Uint8Array>() {
-            array.to_vec()
+        let view = if let Some(array) = bytes.dyn_ref::<js_sys::Uint8Array>() {
+            array.clone()
         } else if bytes.is_instance_of::<js_sys::ArrayBuffer>() {
-            js_sys::Uint8Array::new(&bytes).to_vec()
+            js_sys::Uint8Array::new(&bytes)
         } else {
             return;
         };
+        // A file from the host is untrusted input: refuse an oversized one before copying it into the app's memory.
+        if u64::from(view.length()) > MAX_OPEN_BYTES {
+            eframe::web_sys::console::warn_1(
+                &format!("PdfCraft: host file is {} bytes, over the {} MiB host open limit; not opened", view.length(), MAX_OPEN_BYTES >> 20).into(),
+            );
+            return;
+        }
+        let bytes = view.to_vec();
         if let Ok(mut q) = inbox.lock() {
             q.push((name, bytes));
         }
