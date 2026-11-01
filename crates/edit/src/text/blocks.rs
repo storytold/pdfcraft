@@ -326,8 +326,29 @@ pub struct ReadingBlocks {
 /// whose `/Contents` alone runs past its decode budget is an [`EditError::Invalid`], not a
 /// truncated result.
 pub fn reading_blocks_checked(doc: &Document, page: usize) -> Result<ReadingBlocks, EditError> {
-    let (lines, truncated) = reading_lines(doc, page)?;
+    let (mut lines, truncated) = reading_lines(doc, page)?;
+    // A reader sees letters the matrix leans as italic: that is how word processors draw italic in
+    // a face that has none, and the font's name and flags say nothing of it. Editing reads them as
+    // the upright face they are.
+    for line in lines.iter_mut().filter(|l| leans_right(l.origin.tm, l.origin.ctm)) {
+        line.italic = true;
+    }
     Ok(ReadingBlocks { blocks: regions::group_reading_blocks(&lines), truncated })
+}
+
+/// How far (degrees) text whose letters lean right through its matrix is from upright, at least
+/// and at most, to read as italic: LibreOffice leans them 15 degrees.
+const ITALIC_LEAN: std::ops::RangeInclusive<f64> = 5.0..=45.0;
+
+/// Whether the text matrix `tm` and the CTM `ctm` lean letters to the right by [`ITALIC_LEAN`]:
+/// the angle between text space's y axis and the upright of its baseline on the page, whatever
+/// way the baseline turns. Text leaning left, mirrored text and a degenerate matrix are upright.
+fn leans_right(tm: [f64; 6], ctm: [f64; 6]) -> bool {
+    // Text space's x and y axes on the page.
+    let x = (tm[0] * ctm[0] + tm[1] * ctm[2], tm[0] * ctm[1] + tm[1] * ctm[3]);
+    let y = (tm[2] * ctm[0] + tm[3] * ctm[2], tm[2] * ctm[1] + tm[3] * ctm[3]);
+    let (along, across) = (x.0 * y.0 + x.1 * y.1, x.0 * y.1 - x.1 * y.0);
+    across > 0.0 && ITALIC_LEAN.contains(&along.atan2(across).to_degrees())
 }
 
 // An ideographic space carries intentional Japanese spacing, including paragraph indentation.
