@@ -1393,6 +1393,53 @@ fn drawings_resize_by_scaling_their_strokes() {
     assert!(matches!(set_rect(&mut doc, 0, i, [100.0, 400.0, 101.0, 401.0], &meta("")), Err(AnnotError::Invalid(_))));
 }
 
+#[test]
+fn free_text_inferred_quadding_matches_appearance_and_rich_text() {
+    let make_doc = |q: Option<i64>| {
+        let mut doc = fixture();
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name("FreeText"));
+        d.set(b"Rect".to_vec(), Object::Array([100.0, 600.0, 300.0, 650.0].iter().map(|v| Object::Real(*v)).collect()));
+        d.set(b"DA".to_vec(), PdfString::literal(b"0 g /Helv 12 Tf".to_vec()));
+        d.set(b"Contents".to_vec(), PdfString::text("initial"));
+        if let Some(q) = q {
+            d.set(b"Q".to_vec(), Object::Int(q));
+        }
+        let r = doc.add(Object::Dict(d));
+        let page = page_ref(&doc, 0).unwrap();
+        let mut on_page = annots(&doc, page);
+        on_page.push(Object::Ref(r));
+        set_annots(&mut doc, page, on_page).unwrap();
+        let index = list(&doc, 0).len() - 1;
+        (doc, index)
+    };
+
+    for (contents, q, alignment, direction) in [("مرحبا", 2, "right", "rtl"), ("English مرحبا", 0, "left", "ltr")] {
+        let (mut inferred, inferred_index) = make_doc(None);
+        set_contents(&mut inferred, 0, inferred_index, contents, &meta("inferred")).unwrap();
+        let inferred_annotation = list(&inferred, 0)[inferred_index].clone();
+        assert!(!inferred_annotation.contains(b"Q"), "a default must not be persisted over a missing /Q");
+        assert!(text(&inferred_annotation, b"DS").contains(format!("text-align:{alignment}").as_str()));
+        assert!(text(&inferred_annotation, b"RC").contains(format!("text-align:{alignment}").as_str()));
+        assert!(text(&inferred_annotation, b"RC").contains(format!("<p dir=\"{direction}\">").as_str()));
+
+        let (mut explicit, explicit_index) = make_doc(Some(q));
+        set_contents(&mut explicit, 0, explicit_index, contents, &meta("explicit")).unwrap();
+        assert_eq!(
+            ap_content(&inferred, &inferred_annotation),
+            ap_content(&explicit, &list(&explicit, 0)[explicit_index]),
+            "the generated appearance uses the same inferred quadding as rich text"
+        );
+    }
+
+    let (mut centered, centered_index) = make_doc(Some(1));
+    set_contents(&mut centered, 0, centered_index, "مرحبا", &meta("centered")).unwrap();
+    let centered = list(&centered, 0)[centered_index].clone();
+    assert_eq!(centered.int(b"Q"), Some(1), "an explicit quadding value remains authoritative");
+    assert!(text(&centered, b"DS").contains("text-align:center"));
+}
+
 /// Comment text the standard fonts can't draw is kept, as Acrobat keeps it: a text box, Fill & Sign
 /// text or a dynamic stamp's by-line is added with its text as typed, its appearance draws `?` for
 /// those characters, and the comment is marked with the first one (cleared once all of it can be

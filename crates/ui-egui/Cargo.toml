@@ -42,7 +42,7 @@ png = "0.18"
 base64 = "0.23"
 # Unicode bidi paragraph segmentation for right-to-left comment wrapping; egui 0.37's epaint owns
 # display reordering. Already in the tree through egui’s epaint.
-unicode-bidi = "0.3"
+unicode-bidi = { workspace = true }
 # Checks that an installed fallback font parses and has the glyphs, and reads the vertical metrics
 # that put fallback faces on the interface's baseline (#1676); the same skrifa egui uses.
 skrifa = "0.44"

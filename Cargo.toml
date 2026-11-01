@@ -80,6 +80,8 @@ log = "0.4"
 kurbo = "0.13"
 # All date/time conversion goes through chrono (no hand-rolled calendar code beyond the 400-year range extension; AGENTS.md).
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+# Unicode paragraph direction for text editing and PDF comment appearances (UAX #9).
+unicode-bidi = "0.3"
 
 # testing
 proptest = "1"

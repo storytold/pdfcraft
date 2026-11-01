@@ -8,6 +8,15 @@ fn text_without_rtl_is_borrowed_unchanged() {
 }
 
 #[test]
+fn alignment_uses_the_first_strong_character_and_locale_as_fallback() {
+    assert!(!paragraph_is_rtl("English مرحبا", true), "a Latin-first paragraph stays left aligned in an RTL locale");
+    assert!(paragraph_is_rtl("مرحبا English", false), "an Arabic-first paragraph stays right aligned in an LTR locale");
+    assert!(paragraph_is_rtl("123 …", true), "neutral text follows the RTL locale until a strong character is entered");
+    assert!(!paragraph_is_rtl("123 …", false), "neutral text follows the LTR locale until a strong character is entered");
+    assert!(paragraph_is_rtl("\u{2066}English\u{2069} مرحبا", false), "isolated Latin text does not set the paragraph direction");
+}
+
+#[test]
 fn arabic_words_swap_and_the_extension_stays_last() {
     // The reported name: "one two.pdf" in Arabic.
     assert_eq!(visual("واحد اثنين.pdf"), "اثنين واحد.pdf");

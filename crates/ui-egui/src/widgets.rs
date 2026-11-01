@@ -67,7 +67,7 @@ pub fn begin_dialog(ui: &mut egui::Ui) {
 
 /// A single-line field tall enough to read and to click.
 pub fn line(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
-    let is_rtl = crate::bidi::has_rtl(text.as_str()) || crate::i18n::current().rtl();
+    let is_rtl = crate::bidi::paragraph_is_rtl(text.as_str(), crate::i18n::current().rtl());
     let mut edit = egui::TextEdit::singleline(text).margin(FIELD_MARGIN).min_size(vec2(0.0, FIELD_MIN_HEIGHT));
     if is_rtl {
         edit = edit.align(egui::Align2::RIGHT_TOP);
@@ -77,7 +77,7 @@ pub fn line(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
 
 /// A multiline field with the same horizontal inset as [`line`].
 pub fn block(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
-    let is_rtl = crate::bidi::has_rtl(text.as_str()) || crate::i18n::current().rtl();
+    let is_rtl = crate::bidi::paragraph_is_rtl(text.as_str(), crate::i18n::current().rtl());
     let mut edit = egui::TextEdit::multiline(text).margin(egui::Margin::symmetric(10, 6));
     if is_rtl {
         edit = edit.align(egui::Align2::RIGHT_TOP);

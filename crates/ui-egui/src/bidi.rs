@@ -10,7 +10,7 @@
 use std::borrow::Cow;
 use std::ops::Range;
 
-use unicode_bidi::BidiInfo;
+use unicode_bidi::{bidi_class, BidiClass, BidiInfo};
 #[cfg(test)]
 use unicode_bidi::{Level, ParagraphInfo};
 
@@ -91,6 +91,26 @@ pub struct Line {
 /// Whether `text` holds any right-to-left script, so [`wrap`] or [`visual_auto`] is needed.
 pub fn has_rtl(text: &str) -> bool {
     text.chars().any(is_rtl_script)
+}
+
+/// The first strong character sets the paragraph alignment; locale direction is the fallback
+/// for text that has no strong character yet (for example an empty field or punctuation only).
+pub fn paragraph_is_rtl(text: &str, fallback_rtl: bool) -> bool {
+    first_strong_rtl(text).unwrap_or(fallback_rtl)
+}
+
+fn first_strong_rtl(text: &str) -> Option<bool> {
+    let mut isolate_depth = 0_usize;
+    for c in text.chars() {
+        match bidi_class(c) {
+            BidiClass::LRI | BidiClass::RLI | BidiClass::FSI => isolate_depth = isolate_depth.saturating_add(1),
+            BidiClass::PDI => isolate_depth = isolate_depth.saturating_sub(1),
+            BidiClass::L if isolate_depth == 0 => return Some(false),
+            BidiClass::R | BidiClass::AL if isolate_depth == 0 => return Some(true),
+            _ => {}
+        }
+    }
+    None
 }
 
 /// The paragraph direction for translated interface text: explicitly right to left for Arabic,
