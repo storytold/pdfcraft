@@ -1776,8 +1776,8 @@ impl<'a> Device<'a> for Renderer {
                             && image_resampling_size(
                                 stencil.width,
                                 stencil.height,
-                                3,
-                                stencil.data.len().saturating_mul(3),
+                                4,
+                                stencil.data.len().saturating_mul(4),
                                 x.length() as f32,
                                 y.length() as f32,
                                 MAX_IMAGE_PIXELS,
