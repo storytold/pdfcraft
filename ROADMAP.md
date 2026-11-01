@@ -213,6 +213,10 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-01 (M7, PR #5602 refresh):** Integrated upstream `47f42ba0` and retained both roadmap histories. The old-classifier mutation fails the numeric-order regression; restored editor sources pass 359 tests. Scope remains numeric recovery only, with no readiness/estimate change.
+
+- **2026-10-31 (M7, Arabic numeric separators):** Edit-text visual/logical recovery classifies Unicode EN/AN sequences together, retaining Arabic decimal/group separators and Arabic/Persian digits in their original numeric order. Focused regressions and scope: `docs/arabic-numeric-separators.md`. No readiness/estimate change.
+
 - **2026-10-18 (M3, #1354, local candidate):** Integrated --two-paged with current main, retaining upstream modal/picker ownership and single-tab reuse. Native launch/opening/password regressions, negative checks against the old wrapper, visual inspection, formatting, strict scoped Clippy, layers, assets, parity and scoped WASM compilation pass. Three existing socket tests are unavailable in this workspace; one existing network test remains ignored. No push or GitHub merge; estimates unchanged.
 - **2026-10-31 (M2, PR #4172 review):** Added same-machine pixel oracles for GBK Song, Hei, Kai and FangSong, including all four subset-prefixed Founder aliases. Reference PDFs use explicit Unicode mappings and independently selected installed faces; font data and rasters remain in memory. All eight cases ran; wrong-glyph and wrong-family production mutations each failed the new assertion and were restored. Validation: 422 renderer unit tests, renderer all-target Clippy with -D warnings, formatting, layers/assets/parity and renderer WASM checks passed; existing optional-patch/WASM warnings and parity notes remain. Estimates unchanged.
 
