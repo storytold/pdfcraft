@@ -292,6 +292,8 @@ impl Automation {
                 out
             }
             "doc_protect" => self.doc_protect(&a)?,
+            "doc_protect_certificates" => self.doc_protect_certificates(&a)?,
+            "identity_add" => self.identity_add(&a)?,
             "page_replace" => {
                 let pages = self.pages(&a, "pages")?;
                 let path = self.resolve(a.str("path")?, false)?;

@@ -2,13 +2,14 @@
 
 use std::sync::{Arc, OnceLock};
 
-use pdfcraft_cos::{SaveOptions, write_incremental};
+use pdfcraft_cos::{SaveOptions, write_full, write_incremental};
 use pdfcraft_render::{DocInfo, RenderConfig, RenderPool};
 
 use crate::history::Editor;
 use crate::{
     CalculationOrder, CheckStyle, DocId, Edit, EditError, EditableObject, FormFieldKind, Hidden, InitialView, Label, MarkKind, SecuritySummary,
-    SignatureInfo, TabOrder, TrustStore, XfaLayout, a11y, form_appearance, guard, js, measure, optimize, renderer_password, unrestricted,
+    SignatureInfo, TabOrder, TrustStore, XfaLayout, a11y, certificate_secured, form_appearance, guard, js, measure, optimize, renderer_password,
+    unrestricted, working_file,
 };
 #[cfg(test)]
 use crate::{record_link_scan, record_marker_scan};
@@ -17,7 +18,9 @@ pub struct Document {
     pub id: DocId,
     pub name: String,
     pub path: Option<String>,
-    /// The working file: what Save writes.
+    /// What the renderer and inspector read: the working file, or for a certificate-protected
+    /// document (which they cannot open) a decrypted copy of it, never to be written anywhere.
+    /// Save writes from the editor, never from these.
     pub bytes: Arc<Vec<u8>>,
     /// What is displayed (the page view, `page_render`, page images): `bytes`, plus appearances
     /// drawn for display only for comments that have none ([`display_bytes`]). Never saved.
@@ -540,7 +543,13 @@ impl Document {
         };
         let pending = editor.cos.encryption_changed();
         let permissions = if pending { pdfcraft_cos::Permissions { bits: h.permissions().bits, owner: false } } else { h.permissions() };
-        Some(SecuritySummary { method: method.into(), owner: h.auth() == pdfcraft_cos::Auth::Owner && !pending, permissions, pending })
+        let method = if d.filter == pdfcraft_cos::PUBSEC_FILTER {
+            let n = d.recipients.len();
+            format!("{method} · certificates ({n} recipient{})", if n == 1 { "" } else { "s" })
+        } else {
+            method.to_string()
+        };
+        Some(SecuritySummary { method, owner: h.auth() == pdfcraft_cos::Auth::Owner && !pending, permissions, pending })
     }
 
     /// Comment properties of the comment at `(page, index)` (Comment Properties dialog).
@@ -627,6 +636,23 @@ impl Document {
         self.editor.as_ref().map_or_else(|| self.bytes.clone(), |e| e.saved.clone())
     }
 
+    /// The working file itself: [`Self::bytes`], except for a certificate-protected document,
+    /// whose `bytes` are a decrypted copy; its working file, written here when it has unsaved
+    /// edits, stays encrypted.
+    pub fn file_bytes(&self) -> Result<Arc<Vec<u8>>, EditError> {
+        match self.editor.as_ref().filter(|e| certificate_secured(&e.cos)) {
+            Some(e) => working_file(&e.cos),
+            None => Ok(self.bytes.clone()),
+        }
+    }
+
+    /// The first `len` bytes of [`Self::file_bytes`] (all of them when it is shorter): a saved
+    /// revision ([`Self::revision_ends`]) or the version a signature covers, as a file of its own.
+    pub fn file_prefix(&self, len: usize) -> Result<Arc<Vec<u8>>, EditError> {
+        let file = self.file_bytes()?;
+        Ok(Arc::new(file[..len.min(file.len())].to_vec()))
+    }
+
     /// Notes about damage repaired while opening (Document Properties ▸ Advanced, notices).
     pub fn repair_log(&self) -> Vec<String> {
         self.editor.as_ref().map(|e| e.cos.repair_log().to_vec()).unwrap_or_default()
@@ -650,10 +676,18 @@ pub(crate) fn display_bytes(editor: Option<&mut Editor>, bytes: &Arc<Vec<u8>>) -
     let Some(e) = editor else { return bytes.clone() };
     let comments = pdfcraft_annot::with_missing_appearances_cached(&e.cos, &mut e.appearances);
     let fields = pdfcraft_forms::with_field_appearances_cached(comments.as_ref().unwrap_or(&e.cos), &mut e.field_appearances);
-    let Some(display) = fields.or(comments) else {
+    let Some(mut display) = fields.or(comments) else {
         return bytes.clone();
     };
-    match write_incremental(&display, &SaveOptions::default()) {
+    // A certificate-protected file is shown from a decrypted copy (`bytes`): so is its display
+    // copy, or the renderer could not open it. It stays in memory, like `bytes`.
+    let written = if certificate_secured(&display) {
+        display.remove_encryption();
+        write_full(&display, &SaveOptions::default())
+    } else {
+        write_incremental(&display, &SaveOptions::default())
+    };
+    match written {
         Ok(written) => Arc::new(written),
         Err(err) => {
             e.cos.note_repair(format!("missing comment or field appearances could not be drawn ({err})"));
@@ -757,7 +791,15 @@ pub(crate) fn shown_under_redactions(
         let kept: Vec<Object> = list.into_iter().filter(|o| !o.as_ref().is_some_and(|r| overlays.contains(&r))).collect();
         shown.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), Object::Array(kept))).map_err(|e| EditError::Write(e.to_string()))?;
     }
-    let bytes = write_incremental(&shown, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string()))?;
+    // The renderer cannot open certificate security: it reads a decrypted copy, in memory only,
+    // as the page view does.
+    let bytes = if certificate_secured(&shown) {
+        shown.remove_encryption();
+        write_full(&shown, &SaveOptions::default())
+    } else {
+        write_incremental(&shown, &SaveOptions::default())
+    }
+    .map_err(|e| EditError::Write(e.to_string()))?;
     let config = RenderConfig { password: password.map(Arc::from), ..Default::default() };
     let mut renderer = pdfcraft_render::PageRenderer::new(Arc::new(bytes), config);
     let mut residue = 0;

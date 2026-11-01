@@ -14,6 +14,29 @@ pub(crate) struct Keys {
     pub(crate) render: Option<String>,
     /// What the editor re-opens a saved file with: the strongest password known (owner if any).
     pub(crate) reopen: Option<String>,
+    /// Certificate security: what the person's envelope held (the file key follows from it).
+    pub(crate) certificate: Option<CertificateKey>,
+}
+
+/// What opens a certificate-protected document (§7.6.5): the seed and permissions one of its
+/// envelopes gave up to one of the session's identities.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CertificateKey {
+    pub seed: [u8; 20],
+    pub permissions: i32,
+}
+
+impl Keys {
+    /// Open `bytes` the way this state of the document is opened.
+    pub(crate) fn open(&self, bytes: Arc<Vec<u8>>) -> Result<pdfcraft_cos::Document, pdfcraft_cos::CosError> {
+        match self.certificate {
+            Some(c) => pdfcraft_cos::Document::open_with_credential(
+                bytes,
+                &pdfcraft_cos::Credential::Certificate { seed: c.seed, permissions: c.permissions },
+            ),
+            None => pdfcraft_cos::Document::open_with_password(bytes, self.reopen.as_deref()),
+        }
+    }
 }
 
 /// What an edit can change, and so what the view data must be rebuilt from.
@@ -223,8 +246,14 @@ impl std::fmt::Display for Label {
 /// The passwords after `edit`, if it changes them.
 pub(crate) fn keys_after(edit: &Edit) -> Option<Keys> {
     match edit {
-        Edit::Protect(p) => {
-            Some(Keys { render: p.open_password.clone(), reopen: p.permissions_password.clone().or_else(|| p.open_password.clone()) })
+        Edit::Protect(p) => Some(Keys {
+            render: p.open_password.clone(),
+            reopen: p.permissions_password.clone().or_else(|| p.open_password.clone()),
+            certificate: None,
+        }),
+        // The author keeps everything: their envelope says so, and this is what opened it.
+        Edit::ProtectWithCertificates(p) => {
+            Some(Keys { render: None, reopen: None, certificate: Some(CertificateKey { seed: p.seed, permissions: -1 }) })
         }
         Edit::RemoveProtection => Some(Keys::default()),
         Edit::Batch { edits, .. } => edits.iter().rev().find_map(keys_after),
