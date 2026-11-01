@@ -2,7 +2,7 @@
 //! move/resize/retype/restyle it, delete it. Geometry is in points from the top-left of the
 //! displayed page (y down), like every other tool.
 
-use pdfcraft_engine::{AddedContent, AddedText, Edit, FontFamily, TextAlign};
+use pdfcraft_engine::{ADDED_CHAR_SPACING_LIMIT, AddedContent, AddedText, Edit, FontFamily, TextAlign};
 use serde_json::{Value, json};
 
 use crate::comments::parse_color;
@@ -53,15 +53,52 @@ fn style(a: &Args, t: &mut AddedText) -> Result<()> {
         t.color = parse_color(c)?;
     }
     if let Some(al) = a.opt_str("align")? {
-        t.align = match al {
-            "left" => TextAlign::Left,
-            "center" | "centre" => TextAlign::Center,
-            "right" => TextAlign::Right,
-            "justify" => TextAlign::Justify,
-            other => return Err(bad(format!("unknown align {other:?}"))),
-        };
+        t.align = parse_align(al)?;
+        // The whole box: no paragraph keeps an alignment of its own unless `aligns` gives it one.
+        t.aligns.clear();
+    }
+    if let Some(aligns) = opt_aligns(a)? {
+        let count = pdfcraft_engine::paragraph_align::count(&t.text);
+        t.aligns = pdfcraft_engine::paragraph_align::tidy(aligns.into_iter().take(count).collect(), t.align);
+    }
+    if let Some(c) = a.opt_num("char_spacing")? {
+        if !(-ADDED_CHAR_SPACING_LIMIT..=ADDED_CHAR_SPACING_LIMIT).contains(&c) {
+            return Err(bad(format!("char_spacing must be between -{ADDED_CHAR_SPACING_LIMIT} and {ADDED_CHAR_SPACING_LIMIT} points")));
+        }
+        t.char_spacing = c;
     }
     Ok(())
+}
+
+pub(crate) fn parse_align(al: &str) -> Result<TextAlign> {
+    Ok(match al {
+        "left" => TextAlign::Left,
+        "center" | "centre" => TextAlign::Center,
+        "right" => TextAlign::Right,
+        "justify" => TextAlign::Justify,
+        other => return Err(bad(format!("unknown align {other:?}"))),
+    })
+}
+
+/// Most entries `aligns` takes: one per paragraph, and no text has this many.
+const MAX_ALIGNS: usize = 4096;
+
+/// `aligns`: each paragraph's (line's) own alignment, or null where it follows `align`.
+pub(crate) fn opt_aligns(a: &Args) -> Result<Option<Vec<Option<TextAlign>>>> {
+    let Some(v) = a.get("aligns") else { return Ok(None) };
+    let items = v.as_array().ok_or_else(|| bad("aligns must be an array of left, center, right, justify or null"))?;
+    if items.len() > MAX_ALIGNS {
+        return Err(bad(format!("aligns takes at most {MAX_ALIGNS} entries")));
+    }
+    items
+        .iter()
+        .map(|v| match v {
+            Value::Null => Ok(None),
+            Value::String(s) => parse_align(s).map(Some),
+            _ => Err(bad("each entry of aligns is left, center, right, justify or null")),
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(Some)
 }
 
 impl Automation {
@@ -69,13 +106,13 @@ impl Automation {
         let doc = self.doc(a)?;
         let mut per_page: std::collections::HashMap<usize, usize> = Default::default();
         let items: Vec<Value> = doc
-            .added
+            .added()
             .iter()
             .map(|it| {
                 let index = per_page.entry(it.page).or_default();
-                let ph = doc.info.pages[it.page].height as f64;
-                let mut v =
-                    json!({ "page": it.page + 1, "index": *index + 1, "rect": to_view(it.content.rect(), ph).map(|x| (x * 100.0).round() / 100.0) });
+                // Unchanged on a page the viewer could not read (#2660), like `crate::view_rect`.
+                let rect = doc.info.pages.get(it.page).map_or(it.content.rect(), |p| to_view(it.content.rect(), p.height as f64));
+                let mut v = json!({ "page": it.page + 1, "index": *index + 1, "rect": rect.map(|x| (x * 100.0).round() / 100.0) });
                 *index += 1;
                 match &it.content {
                     AddedContent::Text(t) => {
@@ -85,6 +122,7 @@ impl Automation {
                         v["size"] = json!(t.size);
                         v["bold"] = json!(t.bold);
                         v["italic"] = json!(t.italic);
+                        v["char_spacing"] = json!(t.char_spacing);
                     }
                     AddedContent::Image(_) => v["type"] = json!("image"),
                 }
@@ -110,7 +148,7 @@ impl Automation {
         let mut t = AddedText { rect, text: a.str("text")?.to_string(), ..AddedText::default() };
         style(a, &mut t)?;
         let mut out = self.apply(a, Edit::AddText { page, text: t })?;
-        out["index"] = json!(self.doc(a)?.added.iter().filter(|x| x.page == page).count());
+        out["index"] = json!(self.doc(a)?.added().iter().filter(|x| x.page == page).count());
         Ok(out)
     }
 
@@ -118,12 +156,12 @@ impl Automation {
         let page = self.page(a)?;
         let ph = self.doc(a)?.info.pages[page].height as f64;
         let path = self.resolve(a.str("path")?, false)?;
-        let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+        let bytes = crate::read_input(&path)?;
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let rect = rect_arg(a, "rect")?.map(|r| to_display(r, ph));
         let mut out = self.apply(a, Edit::AddImage { page, rect, name, bytes: std::sync::Arc::new(bytes) })?;
         let doc = self.doc(a)?;
-        let mine: Vec<_> = doc.added.iter().filter(|x| x.page == page).collect();
+        let mine: Vec<_> = doc.added().iter().filter(|x| x.page == page).collect();
         out["index"] = json!(mine.len());
         out["rect"] = json!(mine.last().map(|x| to_view(x.content.rect(), ph)));
         Ok(out)
@@ -135,10 +173,10 @@ impl Automation {
         let index = a.int("index")?;
         let ph = doc.info.pages[page].height as f64;
         let it = doc
-            .added
+            .added()
             .iter()
             .filter(|x| x.page == page)
-            .nth((index - 1).max(0) as usize)
+            .nth(usize::try_from(index.saturating_sub(1)).unwrap_or(usize::MAX))
             .filter(|_| index >= 1)
             .ok_or_else(|| failed(format!("page {} has no added item {index} (see content_list)", page + 1)))?;
         Ok((page, index as usize - 1, it.content.clone(), ph))
@@ -153,6 +191,8 @@ impl Automation {
         match &mut content {
             AddedContent::Text(t) => {
                 if let Some(s) = a.opt_str("text")? {
+                    // Each paragraph keeps its own alignment through the retyping.
+                    t.aligns = pdfcraft_engine::paragraph_align::remap(&t.text, s, &t.aligns);
                     t.text = s.to_string();
                 }
                 style(a, t)?;
@@ -164,14 +204,15 @@ impl Automation {
                 if a.get("text").is_some() {
                     return Err(bad("images have no text"));
                 }
-                if ["font", "size", "bold", "italic", "color", "align"].iter().any(|k| a.get(k).is_some()) {
-                    return Err(bad("font, size, bold, italic, color and align apply to text"));
+                if ["font", "size", "bold", "italic", "color", "align", "aligns", "char_spacing"].iter().any(|k| a.get(k).is_some()) {
+                    return Err(bad("font, size, bold, italic, color, align, aligns and char_spacing apply to text"));
                 }
                 if let Some(deg) = a.opt_int("rotate")? {
                     if deg.rem_euclid(90) != 0 {
                         return Err(bad("rotate must be a multiple of 90"));
                     }
-                    i.rotation = ((i64::from(i.rotation) * 90 + deg).rem_euclid(360) / 90) as u8;
+                    // Reduce untrusted degrees before adding the current quarter turns.
+                    i.rotation = (i64::from(i.rotation) + deg.rem_euclid(360) / 90).rem_euclid(4) as u8;
                 }
                 if a.opt_bool("flip_h")? == Some(true) {
                     i.flip_h = !i.flip_h;
@@ -180,14 +221,16 @@ impl Automation {
                     i.flip_v = !i.flip_v;
                 }
                 if let Some(c) = rect_arg(a, "crop")? {
-                    if !c.iter().all(|v| (0.0..0.5).contains(v)) {
-                        return Err(bad("crop takes fractions from 0 to under 0.5 (left, bottom, right, top)"));
+                    if !pdfcraft_engine::AddedImage::crop_valid(c) {
+                        return Err(bad(
+                            "crop takes fractions from 0 to under 1 (left, bottom, right, top); left and right together, and bottom and top together, trim at most 0.95",
+                        ));
                     }
                     i.crop = c;
                 }
                 if let Some(p) = a.opt_str("image")? {
                     let path = self.resolve(p, false)?;
-                    let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+                    let bytes = crate::read_input(&path)?;
                     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                     // Box and transforms first, then the new picture.
                     self.apply(a, Edit::UpdateContent { page, index, content: content.clone() })?;
@@ -201,6 +244,63 @@ impl Automation {
     pub(crate) fn content_delete(&mut self, a: &Args) -> Result<Value> {
         let (page, index, _, _) = self.item(a)?;
         self.apply(a, Edit::DeleteContent { page, index })
+    }
+
+    /// Edit ▸ Copy, then Paste: an added item onto `to_page` of `to_doc` (its own page and
+    /// document by default), as it is, at `at` (its top-left) or where it was, stepped down and to
+    /// the right past copies of it already on that page.
+    pub(crate) fn content_copy(&mut self, a: &Args) -> Result<Value> {
+        let (page, index, content, _) = self.item(a)?;
+        let source = self.doc(a)?;
+        source.check_copying()?;
+        let from = source.id;
+        let file = match &content {
+            AddedContent::Text(_) => None,
+            AddedContent::Image(_) => {
+                let (ext, bytes) = source.added_image_file(page, index).map_err(failed)?;
+                Some((format!("Pasted image.{ext}"), std::sync::Arc::new(bytes)))
+            }
+        };
+        let to_doc = match a.opt_int("to_doc")? {
+            Some(d) => {
+                let d = u64::try_from(d).map_err(|_| bad("to_doc must be positive"))?;
+                self.session.get(pdfcraft_engine::DocId(d)).ok_or_else(|| failed(format!("no open document with id {d} (see doc_list)")))?.id
+            }
+            None => from,
+        };
+        let doc = self.session.get(to_doc).ok_or_else(|| failed("the document is no longer open"))?;
+        let n = doc.info.pages.len();
+        let to_page = match a.opt_int("to_page")? {
+            Some(p) => usize::try_from(p)
+                .ok()
+                .and_then(|p| p.checked_sub(1))
+                .filter(|p| *p < n)
+                .ok_or_else(|| bad(format!("to_page {p} is out of range: the document has {n} pages")))?,
+            None if page < n => page,
+            None => return Err(bad(format!("page {} is out of range in the target: it has {n} pages; pass to_page", page + 1))),
+        };
+        let info = doc.info.pages.get(to_page).ok_or_else(|| bad("the page no longer exists"))?;
+        let (pw, ph) = (f64::from(info.width), f64::from(info.height));
+        let at = match a.get("at") {
+            Some(v) => {
+                let p: Option<Vec<f64>> = v.as_array().and_then(|x| x.iter().map(Value::as_f64).collect());
+                let [x, y]: [f64; 2] = p.and_then(|p| p.try_into().ok()).ok_or_else(|| bad("at must be [x, y]"))?;
+                Some([x, ph - y])
+            }
+            None => None,
+        };
+        let on_page = || doc.added().iter().filter(|x| x.page == to_page);
+        let rect = match at {
+            Some(at) => pdfcraft_engine::added_paste_rect(content.rect(), [pw, ph], 0, Some(at)),
+            None => pdfcraft_engine::added_paste_place(on_page().map(|x| &x.content), &content, [pw, ph]),
+        };
+        let before = on_page().count();
+        let target = json!({ "doc": to_doc.0 });
+        let mut out = self.apply(&Args(&target), Edit::PasteContent { page: to_page, content: content.with_rect(rect), file })?;
+        out["page"] = json!(to_page + 1);
+        out["index"] = json!(before + 1);
+        out["rect"] = json!(to_view(rect, ph).map(|x| (x * 100.0).round() / 100.0));
+        Ok(out)
     }
 }
 

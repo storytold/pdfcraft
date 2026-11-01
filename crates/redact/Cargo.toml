@@ -16,6 +16,9 @@ pdfcraft-model = { workspace = true }
 pdfcraft-forms = { workspace = true }
 pdfcraft-edit = { workspace = true }
 pdfcraft-annot = { workspace = true }
+pdfcraft-xfa = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+pdfcraft-filters = { workspace = true }
+pdfcraft-testkit = { workspace = true }
