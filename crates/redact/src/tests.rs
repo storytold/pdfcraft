@@ -736,6 +736,335 @@ fn a_busy_fax_image_behind_another_filter_is_cleared() {
     assert_eq!((report.images_cleared, report.images_removed), (1, 0));
 }
 
+/// After a save no stream holds the pixels under a mark, read as it would be shown, JBIG2 included,
+/// on a scan coded with symbols and on one coded as a generic region. `COVERED` and `KEPT` are pixels
+/// found nowhere else in the image, one lot under the mark and one beside it, so the search is seen
+/// to find what stays. The one letter over and over, lower down, is what makes symbols worth coding.
+/// The picture saved is the one with every pixel under the mark cleared and no other changed, so a
+/// search that one cleared byte would blind isn't all that holds this.
+#[test]
+fn no_stream_holds_the_pixels_under_a_mark_on_a_jbig2_scan() {
+    const COVERED: [u8; 8] = [0x0F, 0x3C, 0x5A, 0xC3, 0x96, 0x69, 0xA5, 0x1E];
+    const KEPT: [u8; 8] = [0x87, 0x2D, 0x4B, 0xE1, 0x78, 0xD2, 0xB4, 0x1F];
+    const LETTER: [&str; 7] = ["#####", "#....", "####.", "#....", "#....", "#....", "#####"];
+    let (w, h) = (512usize, 64usize);
+    let stride = w / 8;
+    let mut bits = vec![0xFFu8; stride * h];
+    bits[stride * 2..stride * 2 + 8].copy_from_slice(&COVERED);
+    bits[stride * 2 + 16..stride * 2 + 24].copy_from_slice(&KEPT);
+    for top in (16..h - 8).step_by(10) {
+        for x in (4..w - 8).step_by(8) {
+            for (dy, row) in LETTER.iter().enumerate() {
+                for (dx, _) in row.bytes().enumerate().filter(|(_, c)| *c == b'#') {
+                    bits[(top + dy) * stride + (x + dx) / 8] &= !(0x80 >> ((x + dx) % 8));
+                }
+            }
+        }
+    }
+    let holds = |doc: &Document, pixels: &[u8]| {
+        doc.scan_objects().any(|(_, object)| match &*object {
+            Object::Stream(s) => doc.decoded_image(s).is_ok_and(|d| d.windows(pixels.len()).any(|w| w == pixels)),
+            _ => false,
+        })
+    };
+    // Columns 0 to 99 of rows 0 to 7.
+    let mut cleared = bits.clone();
+    for row in cleared.chunks_mut(stride).take(8) {
+        row[..12].fill(0);
+        row[12] &= 0x0F;
+    }
+    let symbols = pdfcraft_filters::encode_jbig2(&bits, w as u32, h as u32).unwrap();
+    let generic = pdfcraft_filters::encode_jbig2_generic(&bits, w as u32, h as u32).unwrap();
+    assert!(symbols.len() < generic.len(), "symbol coding has to be what this tests");
+    for coded in [symbols, generic] {
+        let dict = format!("/Type /XObject /Subtype /Image /Width {w} /Height {h} /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode");
+        // Half a point a pixel, its top row at y 132.
+        let mut doc = one_page(b"q 256 0 0 32 0 100 cm /Im Do Q", "/XObject << /Im 7 0 R >>", vec![stream(&dict, coded)]);
+        assert!(holds(&doc, &COVERED) && holds(&doc, &KEPT), "the pixels are there to be found");
+        mark(&mut doc, 0, &[[0.25, 128.25, 49.75, 132.0]], "");
+        assert_eq!(apply(&mut doc, None).unwrap().images_cleared, 1);
+        let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        assert!(!holds(&saved, &COVERED), "the covered pixels stayed in the file");
+        assert!(holds(&saved, &KEPT), "the pixels beside them stay");
+        assert!(holds(&saved, &cleared), "every pixel under the mark is cleared, and no other changed");
+    }
+}
+
+/// `/JBIG2Globals` data a decoder skips: one extension segment (ISO/IEC 14492 7.4.14) of a type it
+/// needn't read, holding `secret`; its 11-byte header gives the length of the data after it.
+fn jbig2_globals(secret: &[u8]) -> Vec<u8> {
+    let mut g = vec![0, 0, 0, 0, 0x3E, 0, 0];
+    g.extend_from_slice(&u32::try_from(4 + secret.len()).unwrap().to_be_bytes());
+    g.extend_from_slice(&[0, 0, 0, 1]);
+    g.extend_from_slice(secret);
+    g
+}
+
+/// A JBIG2 image (a scan the optimizer stored as JBIG2) has its covered pixels cleared in a copy,
+/// like a fax image, instead of being removed whole: with `/JBIG2Globals`, its `/DecodeParms` by
+/// reference, behind another filter with its globals at its own place, or as a mask, its decode
+/// array inverting it or not.
+#[test]
+fn a_jbig2_image_has_its_covered_pixels_cleared_instead_of_being_removed() {
+    // 16 × 2, all 1 bits (white), or all 0 bits (a mask painting everywhere); the left half of
+    // the top row is covered.
+    let white = pdfcraft_filters::encode_jbig2_generic(&[0xFF; 4], 16, 2).unwrap();
+    let painted = pdfcraft_filters::encode_jbig2_generic(&[0x00; 4], 16, 2).unwrap();
+    let hex: Vec<u8> = white.iter().map(|b| format!("{b:02x}")).collect::<String>().bytes().chain(*b">").collect();
+    let globals = stream("", jbig2_globals(b"shared"));
+    let image = "/Type /XObject /Subtype /Image /Width 16 /Height 2 /BitsPerComponent 1";
+    for (dict, data, extra, cleared) in [
+        (format!("{image} /ColorSpace /DeviceGray /Filter /JBIG2Decode"), white.clone(), vec![], [0x00, 0xFF, 0xFF, 0xFF]),
+        (
+            format!("{image} /ColorSpace /DeviceGray /Filter /JBIG2Decode /DecodeParms 8 0 R"),
+            white.clone(),
+            vec![b"<< /JBIG2Globals 9 0 R >>".to_vec(), globals.clone()],
+            [0x00, 0xFF, 0xFF, 0xFF],
+        ),
+        (
+            format!("{image} /ColorSpace /DeviceGray /Filter [/ASCIIHexDecode /JBIG2Decode] /DecodeParms [null << /JBIG2Globals 8 0 R >>]"),
+            hex,
+            vec![globals],
+            [0x00, 0xFF, 0xFF, 0xFF],
+        ),
+        // A mask's 0 bits paint: cleared bits are set to 1, which paints nothing.
+        (format!("{image} /ImageMask true /Filter /JBIG2Decode"), painted, vec![], [0xFF, 0x00, 0x00, 0x00]),
+        // With /Decode [1 0] a mask's 1 bits paint, and cleared bits are 0.
+        (format!("{image} /ImageMask true /Decode [1 0] /Filter /JBIG2Decode"), white, vec![], [0x00, 0xFF, 0xFF, 0xFF]),
+    ] {
+        let mut objs = vec![stream(&dict, data)];
+        objs.extend(extra);
+        let mut doc = one_page(b"q 160 0 0 20 0 0 cm /Im Do Q", "/XObject << /Im 7 0 R >>", objs);
+        mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!((report.images_cleared, report.images_removed), (1, 0), "{dict}");
+        let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        assert_eq!(named_image(&saved, 0, b"PCRedacted1").as_deref(), Some(&cleared[..]), "{dict}");
+    }
+}
+
+/// A JBIG2 image is removed whole when its covered pixels can't be cleared for certain: a JBIG2
+/// page taller than the image (the renderer draws the whole page into the image, so the rows cleared
+/// wouldn't be the ones shown)
+/// or shorter, or of another width; globals that can't be read; data cut short; an image of more
+/// than one bit or component, which JBIG2 doesn't code, even when its rows take as many bytes; and
+/// a page far past the image's raster, which isn't decoded.
+#[test]
+fn a_jbig2_image_that_cannot_be_cleared_for_certain_is_removed_whole() {
+    let white = |rows: u32| pdfcraft_filters::encode_jbig2_generic(&vec![0xFF; 2 * rows as usize], 16, rows).unwrap();
+    // The page information (the first segment's data, after its 11-byte header) claiming 20,000
+    // rows of 16.
+    let mut tall = white(2);
+    tall[15..19].copy_from_slice(&20_000u32.to_be_bytes());
+    let image = |size: &str, more: &str| {
+        format!("/Type /XObject /Subtype /Image {size} /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode {more}")
+    };
+    let size = "/Width 16 /Height 2";
+    for (dict, data, extra) in [
+        (image(size, ""), white(3), vec![]),
+        (image("/Width 16 /Height 3", ""), white(2), vec![]),
+        (image("/Width 15 /Height 2", ""), white(2), vec![]),
+        (image(size, "/DecodeParms << /JBIG2Globals 8 0 R >>"), white(2), vec![stream("", b"not JBIG2")]),
+        (image(size, ""), white(2)[..20].to_vec(), vec![]),
+        (image(size, "").replace("/BitsPerComponent 1", "/BitsPerComponent 8"), white(2), vec![]),
+        (image(size, "").replace("/DeviceGray", "/DeviceRGB"), white(2), vec![]),
+        // Two pixels of RGB at a bit take a byte a row, as JBIG2's rows do.
+        (
+            image("/Width 2 /Height 2", "").replace("/DeviceGray", "/DeviceRGB"),
+            pdfcraft_filters::encode_jbig2_generic(&[0xFF; 2], 2, 2).unwrap(),
+            vec![],
+        ),
+        (image(size, ""), tall, vec![]),
+    ] {
+        let mut objs = vec![stream(&dict, data)];
+        objs.extend(extra);
+        let mut doc = one_page(b"q 160 0 0 20 0 0 cm /Im Do Q", "/XObject << /Im 7 0 R >>", objs);
+        mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!((report.images_cleared, report.images_removed), (0, 1), "{dict}");
+    }
+}
+
+/// A scan stored as JBIG2 symbols, with globals, keeps every pixel outside the area once it is
+/// redacted and saved, and the pixels under it are cleared; neither its JBIG2 code nor its globals,
+/// which no other image uses, stay in the file.
+#[test]
+fn a_redacted_jbig2_scan_keeps_neither_its_code_nor_its_globals() {
+    const LETTERS: [[&str; 7]; 3] = [
+        ["#####", "#....", "####.", "#....", "#....", "#....", "#####"],
+        [".###.", "#...#", "#....", "#....", "#....", "#...#", ".###."],
+        ["#...#", "#...#", "#####", "#...#", "#...#", "#...#", "#...#"],
+    ];
+    let (w, h) = (400usize, 40usize);
+    let stride = w.div_ceil(8);
+    let mut bits = vec![0xFFu8; stride * h];
+    for (line, top) in [2usize, 12, 22, 32].into_iter().enumerate() {
+        for (k, x) in (3..w - 6).step_by(7).enumerate() {
+            for (dy, row) in LETTERS[(k + line) % 3].iter().enumerate() {
+                for (dx, _) in row.bytes().enumerate().filter(|(_, c)| *c == b'#') {
+                    bits[(top + dy) * stride + (x + dx) / 8] &= !(0x80 >> ((x + dx) % 8));
+                }
+            }
+        }
+    }
+    let coded = pdfcraft_filters::encode_jbig2(&bits, w as u32, h as u32).unwrap();
+    assert!(coded.len() < pdfcraft_filters::encode_jbig2_generic(&bits, w as u32, h as u32).unwrap().len(), "symbol coded");
+    let dict = format!(
+        "/Type /XObject /Subtype /Image /Width {w} /Height {h} /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode /DecodeParms << /JBIG2Globals 8 0 R >>"
+    );
+    // Half a point a pixel, its top row at y 120.
+    let mut doc = one_page(
+        b"q 200 0 0 20 0 100 cm /Im Do Q",
+        "/XObject << /Im 7 0 R >>",
+        vec![stream(&dict, coded), stream("", jbig2_globals(b"LEAK_GLOBALS"))],
+    );
+    // Columns 0 to 99 of rows 0 to 12.
+    mark(&mut doc, 0, &[[0.25, 113.75, 49.75, 120.0]], "");
+    let report = apply(&mut doc, None).unwrap();
+    assert_eq!((report.images_cleared, report.images_removed), (1, 0));
+    let mut cleared = bits.clone();
+    for y in 0..=12 {
+        for x in 0..=99 {
+            cleared[y * stride + x / 8] &= !(0x80 >> (x % 8));
+        }
+    }
+    let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    assert_eq!(named_image(&saved, 0, b"PCRedacted1"), Some(cleared));
+    assert_no_secret(&doc, b"LEAK_GLOBALS");
+    for (r, object) in saved.scan_objects() {
+        if let Object::Stream(s) = &*object {
+            assert_ne!(s.dict.name(b"Filter"), Some(&b"JBIG2Decode"[..]), "the JBIG2 image stays as {r:?}");
+        }
+    }
+}
+
+/// The segments of a JBIG2 stream `encode_jbig2` wrote, each with its header: a header is the
+/// segment's number (4 bytes), type, flags whose top three bits count the segments it refers to,
+/// those (a byte each), its page (a byte) and its data's length (4 bytes; ISO/IEC 14492 7.2).
+fn jbig2_segments(mut coded: &[u8]) -> Vec<Vec<u8>> {
+    let mut segments = Vec::new();
+    while !coded.is_empty() {
+        let refers = usize::from(coded[5] >> 5);
+        let header = 4 + 1 + 1 + refers + 1 + 4;
+        let length = u32::from_be_bytes(coded[header - 4..header].try_into().unwrap()) as usize;
+        segments.push(coded[..header + length].to_vec());
+        coded = &coded[header + length..];
+    }
+    segments
+}
+
+/// Two pages of a scan share one `/JBIG2Globals` stream holding the symbol dictionary, as
+/// `jbig2enc -s` and most scanners write them, and the first has a mark found nowhere else (a
+/// signature, say) under the area. The dictionary holds that mark's bitmap, so once the first page
+/// is redacted the second page's image is stored again without the globals, and neither the
+/// dictionary nor any stream naming globals stays in the saved file; both pages keep every pixel
+/// outside the area.
+#[test]
+fn globals_a_redacted_jbig2_image_shares_with_another_page_leave_the_file() {
+    const LETTER: [&str; 7] = ["#####", "#....", "####.", "#....", "#....", "#....", "#####"];
+    const SIGNATURE: [&str; 7] = ["#..#.##", ".##.#..", "#.#..##", "..##.#.", "##..#.#", ".#.##..", "#..#..#"];
+    let (w, h) = (400usize, 40usize);
+    let stride = w.div_ceil(8);
+    let draw = |bits: &mut [u8], shape: &[&str], top: usize, left: usize| {
+        for (dy, row) in shape.iter().enumerate() {
+            for (dx, _) in row.bytes().enumerate().filter(|(_, c)| *c == b'#') {
+                bits[(top + dy) * stride + (left + dx) / 8] &= !(0x80 >> ((left + dx) % 8));
+            }
+        }
+    };
+    // The letter over and over lower down, and the signature once, top left, under the mark.
+    let mut first = vec![0xFFu8; stride * h];
+    for top in [14usize, 24, 32] {
+        for x in (3..w - 6).step_by(7) {
+            draw(&mut first, &LETTER, top, x);
+        }
+    }
+    draw(&mut first, &SIGNATURE, 2, 10);
+    let mut second = vec![0xFFu8; stride * h];
+    for x in (3..w - 6).step_by(7) {
+        draw(&mut second, &LETTER, 20, x);
+    }
+    // The first page's symbol dictionary (its second segment) goes to the globals, on no page; the
+    // second page's segments are numbered past it.
+    let mut segments = jbig2_segments(&pdfcraft_filters::encode_jbig2(&first, w as u32, h as u32).unwrap());
+    assert_eq!(segments[1][4], 0, "the second segment is the symbol dictionary");
+    let mut dictionary = segments.remove(1);
+    dictionary[6] = 0;
+    let page_one: Vec<u8> = segments.concat();
+    let page_two: Vec<u8> = jbig2_segments(&pdfcraft_filters::encode_jbig2_generic(&second, w as u32, h as u32).unwrap())
+        .into_iter()
+        .enumerate()
+        .flat_map(|(k, mut s)| {
+            s[..4].copy_from_slice(&(100 + k as u32).to_be_bytes());
+            s
+        })
+        .collect();
+    let image = format!(
+        "/Type /XObject /Subtype /Image /Width {w} /Height {h} /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode /DecodeParms << /JBIG2Globals 9 0 R >>"
+    );
+    // Half a point a pixel, the image's top row at y 120.
+    let page = |content: u32, im: u32| {
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents {content} 0 R /Resources << /XObject << /Im {im} 0 R >> >> >>")
+            .into_bytes()
+    };
+    let build = |second_image: &str| {
+        pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_vec(),
+            page(5, 7),
+            page(6, 8),
+            stream("", b"q 200 0 0 20 0 100 cm /Im Do Q".as_slice()),
+            stream("", b"q 200 0 0 20 0 100 cm /Im Do Q".as_slice()),
+            stream(&image, page_one.clone()),
+            stream(second_image, page_two.clone()),
+            stream("", dictionary.clone()),
+        ])
+    };
+    let mut doc = build(&image);
+    // A page's picture as it is drawn, JBIG2 read with its globals.
+    let picture = |doc: &Document, page: usize, name: &[u8]| {
+        let p = pdfcraft_model::pages(doc).swap_remove(page);
+        let res = doc.resolve(p.dict.get(b"Resources")?).as_dict().cloned()?;
+        let xo = doc.resolve(res.get(b"XObject")?).as_dict().cloned()?;
+        match &*doc.get(xo.get(name)?.as_ref()?) {
+            Object::Stream(s) => doc.decoded_image(s).ok(),
+            _ => None,
+        }
+    };
+    assert_eq!(picture(&doc, 0, b"Im"), Some(first.clone()), "the first page reads its symbols from the globals");
+    assert_eq!(picture(&doc, 1, b"Im"), Some(second.clone()));
+    // Columns 0 to 99 of rows 0 to 12.
+    mark(&mut doc, 0, &[[0.25, 113.75, 49.75, 120.0]], "");
+    let report = apply(&mut doc, None).unwrap();
+    assert_eq!((report.images_cleared, report.images_removed, report.images_restored), (1, 0, 1));
+    let mut cleared = first.clone();
+    for y in 0..=12 {
+        for x in 0..=99 {
+            cleared[y * stride + x / 8] &= !(0x80 >> (x % 8));
+        }
+    }
+    let saved = reopen(&doc);
+    assert_eq!(picture(&saved, 0, b"PCRedacted1"), Some(cleared));
+    assert_eq!(picture(&saved, 1, b"Im"), Some(second), "the second page keeps its picture");
+    // The dictionary's data (after its 11-byte header) codes the signature's bitmap.
+    let coded = &dictionary[11..];
+    for (r, object) in saved.scan_objects() {
+        let mut bytes = Vec::new();
+        pdfcraft_cos::serialize(&object, &mut bytes);
+        assert!(!bytes.windows(b"JBIG2Globals".len()).any(|w| w == b"JBIG2Globals"), "{r:?} still names globals");
+        let data = match &*object {
+            Object::Stream(s) => s.decoded().unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        assert!(!bytes.windows(coded.len()).chain(data.windows(coded.len())).any(|w| w == coded), "the symbol dictionary stays as {r:?}");
+    }
+    // The second page's image can't be read for certain (its JBIG2 page is shorter than the
+    // image), so it can't be stored without the globals: the redaction is refused.
+    let mut doc = build(&image.replace(&format!("/Height {h}"), &format!("/Height {}", h + 1)));
+    mark(&mut doc, 0, &[[0.25, 113.75, 49.75, 120.0]], "");
+    assert!(matches!(apply(&mut doc, None), Err(RedactError::SharedJbig2Globals(1))));
+}
+
 /// Apply Redactions gives the page its own pruned /Resources, but the dictionary it drew through
 /// before (inherited from the /Pages node, or shared with another page) still named the removed
 /// image and form, so a full-rewrite save kept them.
