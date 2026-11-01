@@ -193,6 +193,30 @@ fn a_bounded_text_find_reads_only_the_pages_it_needs_and_says_it_stopped() {
 }
 
 #[test]
+fn a_save_without_a_path_stays_inside_the_root() {
+    let base = std::env::temp_dir().join(format!("pdfcraft-automation-save-root-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let root = base.join("root");
+    let outside = base.join("outside");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let mut a = Automation::new().with_root(&root).unwrap();
+    let bytes = Arc::new(numbered_pages(1));
+    // Remembered path inside the root: still saves.
+    let inside = root.canonicalize().unwrap().join("in.pdf");
+    let id = a.session.open("in.pdf", Some(inside.to_string_lossy().into_owned()), bytes.clone(), None).unwrap();
+    json(&mut a, "doc_save", json!({ "doc": id.0 }));
+    assert!(inside.exists());
+    // Remembered path outside the root: refused, and nothing is written there.
+    let escaped = outside.join("out.pdf");
+    let id = a.session.open("out.pdf", Some(escaped.to_string_lossy().into_owned()), bytes, None).unwrap();
+    let error = a.call("doc_save", &json!({ "doc": id.0 })).unwrap_err();
+    assert!(error.to_string().contains("outside the allowed directory"), "{error}");
+    assert!(!escaped.exists());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
 fn dot_dot_resolves_by_name_and_never_climbs_above_the_start() {
     let base = std::env::temp_dir();
     let l = |rel: &str| lexical(&base.join(rel));
