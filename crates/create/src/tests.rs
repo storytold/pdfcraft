@@ -2357,6 +2357,84 @@ fn a_jpeg_that_has_to_be_decoded_shares_the_allowance() {
     assert_eq!(budget.refused(), 1);
 }
 
+/// A JPEG that is itself a mask pays for its samples, each time an image reads it: images can
+/// share one, and only the images are ever seen once.
+#[test]
+fn a_jpeg_mask_pays_for_its_samples() {
+    use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
+    let mut jpeg = Vec::new();
+    image::GrayImage::from_pixel(4, 4, image::Luma([90])).write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
+    let mut mask = Dict::new();
+    mask.set(b"Subtype".to_vec(), Object::name("Image"));
+    mask.set(b"Width".to_vec(), Object::Int(4));
+    mask.set(b"Height".to_vec(), Object::Int(4));
+    mask.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    mask.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    mask.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+    let mut doc = Document::new_empty();
+    let mask = doc.add(Object::Stream(Stream::from_raw(mask, jpeg)));
+    let mut image = Dict::new();
+    image.set(b"Subtype".to_vec(), Object::name("Image"));
+    image.set(b"Width".to_vec(), Object::Int(1));
+    image.set(b"Height".to_vec(), Object::Int(1));
+    image.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    image.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    image.set(b"SMask".to_vec(), Object::Ref(mask));
+    let image = doc.add(Object::Stream(Stream::from_raw(image, vec![0x80])));
+    let mut budget = ImageBudget::with_work(u64::MAX);
+    assert!(crate::extract::image_file_within(&doc, image, &mut budget).is_ok());
+    assert_eq!(u64::MAX - budget.work_left(), 2 * 4 * 4 + 2, "its samples twice, and the image's byte and pixel");
+    // Just short of what the mask costs: it isn't decoded, and takes the image with it.
+    let mut budget = ImageBudget::with_work(2 * 4 * 4 - 1);
+    let refused = crate::extract::image_file_within(&doc, image, &mut budget).unwrap_err();
+    assert!(refused.contains("more image decoding than"), "{refused}");
+    assert_eq!((budget.work_left(), budget.refused()), (0, 1));
+}
+
+/// What decoding a JPEG takes goes by its header, so that is what has to agree with the
+/// dictionary before it is decoded: one image of a pixel can hold a page of 500 megapixels. The
+/// file comes out as it is either way, so what shows is whether it was decoded.
+#[test]
+fn a_jpeg_larger_than_its_dictionary_says_isnt_decoded() {
+    use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
+    let mut jpeg = Vec::new();
+    image::RgbImage::from_pixel(4, 4, image::Rgb([9, 9, 9])).write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
+    // A colour key means decoding it, to find the pixels it hides.
+    let keyed = |side: i64| {
+        let mut d = Dict::new();
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(side));
+        d.set(b"Height".to_vec(), Object::Int(side));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        d.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+        d.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+        d.set(b"Mask".to_vec(), Object::Array(vec![Object::Int(0); 6]));
+        Stream::from_raw(d, jpeg.clone())
+    };
+    let decodes = |doc: &Document, image: pdfcraft_cos::ObjRef| {
+        crate::extract::JPEGS_DECODED.with(|n| n.set(0));
+        assert!(crate::extract::image_file_within(doc, image, &mut ImageBudget::with_work(u64::MAX)).is_ok());
+        crate::extract::JPEGS_DECODED.with(std::cell::Cell::get)
+    };
+    let mut doc = Document::new_empty();
+    let (honest, lying) = (doc.add(Object::Stream(keyed(4))), doc.add(Object::Stream(keyed(1))));
+    assert_eq!(decodes(&doc, honest), 1);
+    assert_eq!(decodes(&doc, lying), 0);
+    // The same as a mask: read as none, without being decoded.
+    let mut mask = keyed(1);
+    mask.dict.remove(b"Mask");
+    let mask = doc.add(Object::Stream(mask));
+    let mut image = Dict::new();
+    image.set(b"Subtype".to_vec(), Object::name("Image"));
+    image.set(b"Width".to_vec(), Object::Int(1));
+    image.set(b"Height".to_vec(), Object::Int(1));
+    image.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    image.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    image.set(b"SMask".to_vec(), Object::Ref(mask));
+    let image = doc.add(Object::Stream(Stream::from_raw(image, vec![0x80])));
+    assert_eq!(decodes(&doc, image), 0);
+}
+
 /// A mask past the allowance can't be left out as an unreadable one is, or the image comes out
 /// opaque, showing what the mask hides: the image goes, with the reason.
 #[test]

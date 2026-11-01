@@ -285,6 +285,32 @@ fn size(w: i64, h: i64) -> Option<(usize, usize)> {
     (w > 0 && h > 0 && pixels <= MAX_PIXELS).then_some((w, h))
 }
 
+#[cfg(test)]
+thread_local! {
+    /// JPEGs decoded whole, for the tests that keep one from being decoded for nothing.
+    pub(crate) static JPEGS_DECODED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The size a JPEG's header gives, which is what decoding it goes by, whatever its dictionary
+/// says: an image of one pixel can hold a header of 500 megapixels.
+fn jpeg_size(data: &[u8]) -> Option<(usize, usize)> {
+    use zune_jpeg::zune_core::{bytestream::ZCursor, options::DecoderOptions};
+    let options = DecoderOptions::default().set_strict_mode(false).set_max_width(usize::from(u16::MAX)).set_max_height(usize::from(u16::MAX));
+    let mut dec = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(data), options);
+    dec.decode_headers().ok()?;
+    dec.dimensions()
+}
+
+/// JPEG `data`, decoded, if its header says it is `w` × `h`.
+fn jpeg_of_size(data: &[u8], w: usize, h: usize) -> Option<image::DynamicImage> {
+    if jpeg_size(data)? != (w, h) {
+        return None;
+    }
+    #[cfg(test)]
+    JPEGS_DECODED.with(|n| n.set(n.get() + 1));
+    image::load_from_memory_with_format(data, image::ImageFormat::Jpeg).ok()
+}
+
 /// A JPEG's samples (8 bits): grey for a grey image, CMYK as stored for a CMYK one, else RGB,
 /// with the space they are in.
 fn jpeg_samples(data: &[u8], space: &Space, w: usize, h: usize) -> Option<(Vec<u8>, Space)> {
@@ -293,10 +319,7 @@ fn jpeg_samples(data: &[u8], space: &Space, w: usize, h: usize) -> Option<(Vec<u
         Space::Cmyk => return cmyk_jpeg_samples(data, w, h).map(|px| (px, Space::Cmyk)),
         _ => {}
     }
-    let img = image::load_from_memory_with_format(data, image::ImageFormat::Jpeg).ok()?;
-    if img.width() as usize != w || img.height() as usize != h {
-        return None;
-    }
+    let img = jpeg_of_size(data, w, h)?;
     Some(match space {
         Space::Gray => (img.into_luma8().into_raw(), Space::Gray),
         _ => (img.into_rgb8().into_raw(), Space::Rgb),
@@ -521,8 +544,11 @@ fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize, budget: &mut Image
     let f = filters(m);
     let mut px = match f.last().map(Vec::as_slice) {
         Some(b"DCTDecode" | b"DCT") if f.len() == 1 => {
-            let img = image::load_from_memory_with_format(&m.raw, image::ImageFormat::Jpeg).ok()?.into_luma8();
-            (img.width() as usize == mw && img.height() as usize == mh).then(|| img.into_raw())?
+            // Past the allowance the image goes too: `image` sees this one refused.
+            if jpeg_size(&m.raw)? != (mw, mh) || !budget.pay_jpeg((mw as u64).saturating_mul(mh as u64)) {
+                return None;
+            }
+            jpeg_of_size(&m.raw, mw, mh)?.into_luma8().into_raw()
         }
         Some(b"DCTDecode" | b"DCT" | b"JPXDecode") => return None,
         _ => {
