@@ -114,13 +114,13 @@ pub(crate) fn child(dir: &Path, name: &str) -> PathBuf {
     dir.join(safe)
 }
 
-/// `<stem>.pdf` in `dir`, or `<stem> (2).pdf` and so on when that name is taken.
-pub(crate) fn unused(dir: &Path, stem: &str) -> PathBuf {
-    let first = child(dir, &format!("{stem}.pdf"));
+/// `<stem>.<ext>` in `dir`, or `<stem> (2).<ext>` and so on when that name is taken.
+pub(crate) fn unused(dir: &Path, stem: &str, ext: &str) -> PathBuf {
+    let first = child(dir, &format!("{stem}.{ext}"));
     if !first.exists() {
         return first;
     }
-    (2..10_000u32).map(|n| child(dir, &format!("{stem} ({n}).pdf"))).find(|p| !p.exists()).unwrap_or(first)
+    (2..10_000u32).map(|n| child(dir, &format!("{stem} ({n}).{ext}"))).find(|p| !p.exists()).unwrap_or(first)
 }
 
 /// Largest input file a tool reads into memory (512 MiB, matching `doc_batch`).

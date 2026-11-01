@@ -283,6 +283,32 @@ fn short_name(path: &str) -> String {
     std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string())
 }
 
+/// Download type by filename. Extensionless PDF names from web Save retain their old type.
+#[cfg(any(target_arch = "wasm32", test))]
+fn download_type(name: &str) -> &'static str {
+    pdfcraft_engine::mime_for_name(name).unwrap_or("application/pdf")
+}
+
+#[cfg(test)]
+mod download_tests {
+    use super::download_type;
+
+    #[test]
+    fn browser_downloads_name_their_format_and_keep_extensionless_pdf_saves() {
+        let word = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+        for (name, expected) in [
+            ("original.pdf", "application/pdf"),
+            ("report.docx", word),
+            ("report.DOCX", word),
+            ("measurements.csv", "text/csv"),
+            ("document-without-extension", "application/pdf"),
+            ("document.unknown", "application/pdf"),
+        ] {
+            assert_eq!(download_type(name), expected, "{name}");
+        }
+    }
+}
+
 /// Offer bytes as a browser download.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
@@ -291,7 +317,7 @@ pub(crate) fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
     let array = js_sys::Uint8Array::from(bytes);
     let parts = js_sys::Array::of1(&array);
     let opts = web_sys::BlobPropertyBag::new();
-    opts.set_type("application/pdf");
+    opts.set_type(download_type(name));
     let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &opts).map_err(err)?;
     let url = web_sys::Url::create_object_url_with_blob(&blob).map_err(err)?;
     let document = web_sys::window().and_then(|w| w.document()).ok_or("no document")?;
