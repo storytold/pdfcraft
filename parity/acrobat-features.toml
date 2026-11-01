@@ -10205,8 +10205,19 @@ status = "partial"
 commands = []
 tools = []
 evidence = []
-notes = "Release builds provide signed and notarized macOS artifacts and code-signed Windows installers when signing credentials are configured (packaging/macos/package.sh; packaging/windows/sign.ps1; README.md). Linux AppImage, Flatpak, deb and rpm packages ship, but are not code-signed. Windows MSI creates a Start menu shortcut, an optional (default on) desktop shortcut, an optional (default on, INSTALLPDFCONTEXTMENU) \"Edit with PdfCraft\" File Explorer menu entry for PDF files (#682) and an optional (default on, INSTALLIMAGECONTEXTMENU) \"Create PDF with PdfCraft…\" entry for images; an update keeps whichever of the three the installed version has (#1058, #305). It confirms full-UI completion with Finish (#143); packaging/windows/test-msi.ps1 checks the compiled MSI and windows-arm64.yml checks installation/removal. PDF files use a dedicated embedded document icon when PdfCraft is chosen as the default reader (confirmed in Windows Explorer); first-page thumbnails remain unsupported."
+notes = "Release builds provide signed and notarized macOS artifacts and code-signed Windows installers when signing credentials are configured (packaging/macos/package.sh; packaging/windows/sign.ps1; README.md). Linux AppImage, Flatpak, deb and rpm packages ship, but are not code-signed. Windows MSI creates a Start menu shortcut, an optional (default on) desktop shortcut, an optional (default on, INSTALLPDFCONTEXTMENU) \"Edit with PdfCraft\" File Explorer menu entry for PDF files (#682) and an optional (default on, INSTALLIMAGECONTEXTMENU) \"Create PDF with PdfCraft…\" entry for images; an update keeps whichever of the three the installed version has (#1058, #305). It confirms full-UI completion with Finish (#143); packaging/windows/test-msi.ps1 checks the compiled MSI and windows-arm64.yml checks installation/removal. PDF files use a dedicated embedded document icon when PdfCraft is chosen as the default reader (confirmed in Windows Explorer). The MSI registers pdfcraft_thumbnails.dll (crates/thumbnails) as PdfCraft.Document's File Explorer thumbnail handler and pdfcraft_preview.dll (crates/preview) as its preview-pane handler (HKMU, per-user or per-machine installs), so PDFs show their first page while PdfCraft is the default; COM behaviour is covered in each crate's src/windows.rs and test-msi.ps1 checks the registration. End-to-end thumbnail and preview-pane appearance in Explorer on real installs is not yet parity-evidence."
 
+[[feature]]
+id = "misc.windows-explorer-preview"
+title = "PDF preview in the Windows File Explorer preview pane"
+area = "N"
+tier = "P2"
+milestone = "M14"
+status = "partial"
+commands = []
+tools = []
+evidence = ["crates/preview/src/lib.rs::the_first_page_is_fitted_into_the_pane", "crates/preview/src/windows.rs::explorer_gets_the_first_page_in_the_preview_pane", "crates/preview/src/windows.rs::unreadable_files_fail_without_panicking", "crates/preview/src/windows.rs::other_class_ids_are_refused", "crates/preview/src/windows.rs::com_guard_turns_an_escaped_panic_into_a_failure"]
+notes = "While PdfCraft is the default PDF app, selecting a PDF in File Explorer can show its first page in the preview pane (#3207). pdfcraft_preview.dll implements IPreviewHandler / IInitializeWithStream / IObjectWithSite, renders through this crate's render_page_fit (bounded file size and bitmap dimensions, catch_unwind at the COM boundary), and is registered only on PdfCraft.Document (never on .pdf itself). It does not link pdfcraft_thumbnails, so COM entry points are not duplicated at link time. MSI registration is checked in test-msi.ps1; COM unit tests cover the handler on Windows. Still missing parity-evidence: preview appearance in Explorer on a real install, and Outlook or other hosts."
 [[feature]]
 id = "misc.web-deploy"
 title = "Hosted web app deployment"

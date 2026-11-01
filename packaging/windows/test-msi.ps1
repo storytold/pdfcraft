@@ -247,6 +247,47 @@ Assert-Equal $pdfCheckbox[1] 'INSTALLPDFCONTEXTMENU' 'Welcome PDF context-menu p
 if ($pdfCheckbox[2] -notmatch 'Edit with PdfCraft') { throw "Welcome PDF context-menu label: '$($pdfCheckbox[2])'" }
 $pdfChecked = Read-Row 'SELECT `Value` FROM `CheckBox` WHERE `Property` = ''INSTALLPDFCONTEXTMENU''' 1
 Assert-Equal $pdfChecked[0] '1' 'Welcome PDF context-menu value'
+# File Explorer thumbnails: pdfcraft_thumbnails.dll is the in-process COM server for the handler's
+# class id, registered as PdfCraft.Document's thumbnail handler only (never on .pdf itself, which
+# would replace another default app's thumbnails). All in one component keyed on the DLL.
+$thumbClsid = '{68E114F4-EB01-42A6-BD92-1695F3711CD1}'
+$thumbHandler = 'Software\Classes\PdfCraft.Document\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}'
+$thumbDll = Read-Row 'SELECT `Component_`, `FileName` FROM `File` WHERE `File` = ''PdfcraftThumbnailsDll''' 2
+Assert-Equal $thumbDll[0] 'PdfcraftThumbnails' 'Thumbnail handler component'
+if ($thumbDll[1] -notmatch 'pdfcraft_thumbnails\.dll$') { throw "Thumbnail handler file name: '$($thumbDll[1])'" }
+foreach ($value in @(
+    @("Software\Classes\CLSID\$thumbClsid\InprocServer32", '', '[#PdfcraftThumbnailsDll]'),
+    @("Software\Classes\CLSID\$thumbClsid\InprocServer32", 'ThreadingModel', 'Apartment'),
+    @($thumbHandler, '', $thumbClsid))) {
+  $name = if ($value[1]) { '`Name` = ''' + $value[1] + '''' } else { '`Name` IS NULL' }
+  $row = Read-Row ('SELECT `Value`, `Component_`, `Root` FROM `Registry` WHERE `Key` = ''' + $value[0] + ''' AND ' + $name) 3
+  Assert-Equal $row[0] $value[2] "Thumbnail handler $($value[0]) $($value[1])"
+  Assert-Equal $row[1] 'PdfcraftThumbnails' "Thumbnail handler $($value[0]) component"
+  Assert-Equal $row[2] '-1' "Thumbnail handler $($value[0]) HKMU root"
+}
+Assert-NoRow 'SELECT `Registry` FROM `Registry` WHERE `Key` = ''Software\Classes\.pdf\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}''' '.pdf thumbnail handler'
+Assert-NoRow 'SELECT `Registry` FROM `Registry` WHERE `Name` = ''DisableProcessIsolation''' 'thumbnail process-isolation opt-out'
+# File Explorer preview pane: pdfcraft_preview.dll is the in-process COM server for the handler's
+# class id, registered as PdfCraft.Document's preview handler only (never on .pdf itself).
+$previewClsid = '{C31A5F44-7E02-4D9A-A1B3-8F2E6D4C0A91}'
+$previewHandler = 'Software\Classes\PdfCraft.Document\ShellEx\{8895b1c6-b41f-4c1c-a562-0d564250836f}'
+$previewList = 'Software\Microsoft\Windows\CurrentVersion\PreviewHandlers\' + $previewClsid
+$previewDll = Read-Row 'SELECT `Component_`, `FileName` FROM `File` WHERE `File` = ''PdfcraftPreviewDll''' 2
+Assert-Equal $previewDll[0] 'PdfcraftPreview' 'Preview handler component'
+if ($previewDll[1] -notmatch 'pdfcraft_preview\.dll$') { throw "Preview handler file name: '$($previewDll[1])'" }
+foreach ($value in @(
+    @("Software\Classes\CLSID\$previewClsid\InprocServer32", '', '[#PdfcraftPreviewDll]'),
+    @("Software\Classes\CLSID\$previewClsid\InprocServer32", 'ThreadingModel', 'Apartment'),
+    @($previewHandler, '', $previewClsid),
+    @($previewList, '', 'PdfCraft PDF preview'),
+    @($previewList, 'AppId', $previewClsid))) {
+  $name = if ($value[1]) { '`Name` = ''' + $value[1] + '''' } else { '`Name` IS NULL' }
+  $row = Read-Row ('SELECT `Value`, `Component_`, `Root` FROM `Registry` WHERE `Key` = ''' + $value[0] + ''' AND ' + $name) 3
+  Assert-Equal $row[0] $value[2] "Preview handler $($value[0]) $($value[1])"
+  Assert-Equal $row[1] 'PdfcraftPreview' "Preview handler $($value[0]) component"
+  Assert-Equal $row[2] '-1' "Preview handler $($value[0]) HKMU root"
+}
+Assert-NoRow 'SELECT `Registry` FROM `Registry` WHERE `Key` = ''Software\Classes\.pdf\ShellEx\{8895b1c6-b41f-4c1c-a562-0d564250836f}''' '.pdf preview handler'
 Assert-NoRow 'SELECT `Registry` FROM `Registry` WHERE `Key` = ''Software\Classes\.pdf'' AND `Name` IS NULL' '.pdf default app'
 
 # Negative sequences are Windows Installer's success/user-exit/failure paths. Only full UI

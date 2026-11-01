@@ -15,7 +15,9 @@
     "LICENSE-document.txt",
     "NOTICE",
     "pdfcraft-cli.exe",
-    "pdfcraft.exe"
+    "pdfcraft.exe",
+    "pdfcraft_thumbnails.dll",
+    "pdfcraft_preview.dll"
   ],
   "registry": [
     [
@@ -47,6 +49,66 @@
       "Software\\Classes\\PdfCraft.Document",
       "TypeOverlay",
       ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\CLSID\\{68E114F4-EB01-42A6-BD92-1695F3711CD1}",
+      "",
+      "PdfCraft PDF thumbnails"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\CLSID\\{68E114F4-EB01-42A6-BD92-1695F3711CD1}\\InprocServer32",
+      "",
+      "[#PdfcraftThumbnailsDll]"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\CLSID\\{68E114F4-EB01-42A6-BD92-1695F3711CD1}\\InprocServer32",
+      "ThreadingModel",
+      "Apartment"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\PdfCraft.Document\\ShellEx\\{e357fccd-a995-4576-b01f-234630154e96}",
+      "",
+      "{68E114F4-EB01-42A6-BD92-1695F3711CD1}"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\CLSID\\{C31A5F44-7E02-4D9A-A1B3-8F2E6D4C0A91}",
+      "",
+      "PdfCraft PDF preview"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\CLSID\\{C31A5F44-7E02-4D9A-A1B3-8F2E6D4C0A91}\\InprocServer32",
+      "",
+      "[#PdfcraftPreviewDll]"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\CLSID\\{C31A5F44-7E02-4D9A-A1B3-8F2E6D4C0A91}\\InprocServer32",
+      "ThreadingModel",
+      "Apartment"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\PdfCraft.Document\\ShellEx\\{8895b1c6-b41f-4c1c-a562-0d564250836f}",
+      "",
+      "{C31A5F44-7E02-4D9A-A1B3-8F2E6D4C0A91}"
+    ],
+    [
+      "-1",
+      "Software\\Microsoft\\Windows\\CurrentVersion\\PreviewHandlers\\{C31A5F44-7E02-4D9A-A1B3-8F2E6D4C0A91}",
+      "",
+      "PdfCraft PDF preview"
+    ],
+    [
+      "-1",
+      "Software\\Microsoft\\Windows\\CurrentVersion\\PreviewHandlers\\{C31A5F44-7E02-4D9A-A1B3-8F2E6D4C0A91}",
+      "AppId",
+      "{C31A5F44-7E02-4D9A-A1B3-8F2E6D4C0A91}"
     ],
     [
       "-1",
