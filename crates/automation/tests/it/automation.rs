@@ -2772,11 +2772,82 @@ fn duplicating_and_cropping_through_tools() {
     let r = ok(&mut a, "page_set_box", json!({ "doc": doc, "pages": [2], "rect": [0, 0, 100, 150] }));
     assert_eq!(r["page_sizes"][1], json!([100.0, 150.0]));
     assert_eq!(page_text(&mut a, doc)[1], "Page 2", "the text at y = 150 is still inside");
+    // doc_info reads the boxes back in the same convention page_set_box takes them: the rect
+    // comes back as written, and the media box of the margin-cropped page starts above and to
+    // the left of the displayed (cropped) page.
+    let pages = ok(&mut a, "doc_info", json!({ "doc": doc }))["pages"].clone();
+    assert_eq!(pages[1]["boxes"]["crop"], json!([0.0, 0.0, 100.0, 150.0]), "{}", pages[1]);
+    assert_eq!(pages[1]["boxes"]["media"], json!([0.0, 0.0, 200.0, 300.0]), "{}", pages[1]);
+    assert_eq!(pages[0]["boxes"]["crop"], json!([0.0, 0.0, 160.0, 240.0]), "{}", pages[0]);
+    assert_eq!(pages[0]["boxes"]["media"], json!([-10.0, -40.0, 190.0, 260.0]), "{}", pages[0]);
+    assert_eq!(pages[0]["boxes"]["trim"], pages[0]["boxes"]["crop"], "an unset box is its parent");
+    // In user space the crop is where the file stores it, and the media box stays put.
+    assert_eq!(pages[0]["boxes_user"]["crop"], json!([10.0, 20.0, 170.0, 260.0]), "{}", pages[0]);
+    assert_eq!(pages[0]["boxes_user"]["media"], json!([0.0, 0.0, 200.0, 300.0]), "{}", pages[0]);
+    assert_eq!(pages[1]["boxes_user"]["crop"], json!([0.0, 150.0, 100.0, 300.0]), "the view rect's top is user y = 300");
     // Reset and errors.
     let r = ok(&mut a, "page_set_box", json!({ "doc": doc, "pages": [1] }));
     assert_eq!(r["page_sizes"][0], json!([200.0, 300.0]));
     assert!(matches!(a.call("page_set_box", &json!({ "doc": doc, "margins": [150, 0, 150, 0] })), Err(ToolError::Failed(_))));
     assert!(matches!(a.call("page_set_box", &json!({ "doc": doc, "rect": [0, 0, 10, 10] })), Err(ToolError::InvalidArgs(_))));
+}
+
+/// A two-page PDF whose trim and bleed boxes differ from the media box (no crop box, no art
+/// box); page 2 is the same page turned a quarter clockwise.
+fn page_boxes_pdf() -> Vec<u8> {
+    let boxes = "/MediaBox [0 0 200 300] /TrimBox [10 20 190 280] /BleedBox [5 10 195 290]";
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_vec(),
+        format!("<< /Type /Page /Parent 2 0 R {boxes} >>").into_bytes(),
+        format!("<< /Type /Page /Parent 2 0 R /Rotate 90 {boxes} >>").into_bytes(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// `doc_info` lists every page's five boxes: the ones the file sets, the defaults for the ones
+/// it doesn't (crop → media, art → crop), as points from the top-left of the displayed page,
+/// which on a page turned a quarter swaps the margins round, and untouched in user space.
+#[test]
+fn doc_info_reports_the_five_page_boxes() {
+    let dir = workdir("doc-info-boxes");
+    std::fs::write(dir.join("boxes.pdf"), page_boxes_pdf()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "boxes.pdf" }))["doc"].as_u64().unwrap();
+    let pages = ok(&mut a, "doc_info", json!({ "doc": doc }))["pages"].clone();
+    let upright = &pages[0]["boxes"];
+    assert_eq!(upright["media"], json!([0.0, 0.0, 200.0, 300.0]), "{upright}");
+    assert_eq!(upright["crop"], json!([0.0, 0.0, 200.0, 300.0]), "no crop box: the media box");
+    assert_eq!(upright["trim"], json!([10.0, 20.0, 190.0, 280.0]), "{upright}");
+    assert_eq!(upright["bleed"], json!([5.0, 10.0, 195.0, 290.0]), "{upright}");
+    assert_eq!(upright["art"], json!([0.0, 0.0, 200.0, 300.0]), "no art box: the crop box");
+    // Turned 90° clockwise the page displays 300 × 200; the trim's left margin (10) is now at
+    // the top and its bottom margin (20) at the left.
+    assert_eq!(pages[1]["width"], 300.0);
+    let turned = &pages[1]["boxes"];
+    assert_eq!(turned["media"], json!([0.0, 0.0, 300.0, 200.0]), "{turned}");
+    assert_eq!(turned["trim"], json!([20.0, 10.0, 280.0, 190.0]), "{turned}");
+    assert_eq!(turned["bleed"], json!([10.0, 5.0, 290.0, 195.0]), "{turned}");
+    // User space is what the file says, whatever the rotation.
+    for page in pages.as_array().unwrap() {
+        assert_eq!(page["boxes_user"]["trim"], json!([10.0, 20.0, 190.0, 280.0]), "{page}");
+        assert_eq!(page["boxes_user"]["bleed"], json!([5.0, 10.0, 195.0, 290.0]), "{page}");
+        assert_eq!(page["boxes_user"]["art"], json!([0.0, 0.0, 200.0, 300.0]), "{page}");
+    }
 }
 
 #[test]
