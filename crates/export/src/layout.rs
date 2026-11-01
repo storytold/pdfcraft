@@ -1,5 +1,104 @@
 use std::collections::HashMap;
 
+use unicode_bidi::{BidiClass, bidi_class};
+
+/// The strong direction of `c` by its Unicode bidi class: `Some(true)` for right to left (R, AL:
+/// Hebrew, Arabic, the RLM and ALM marks, Hebrew punctuation such as the maqaf…), `Some(false)`
+/// for left to right (L: letters of the left-to-right scripts, the LRM mark…), `None` for the weak
+/// and neutral characters (digits, punctuation, spaces).
+fn strong_direction(c: char) -> Option<bool> {
+    match bidi_class(c) {
+        BidiClass::R | BidiClass::AL => Some(true),
+        BidiClass::L => Some(false),
+        _ => None,
+    }
+}
+
+/// Whether `text` reads right to left: its first strong character is a right-to-left one, as the
+/// HTML `dir="auto"` rule has it (#4653).
+pub(crate) fn is_rtl(text: &str) -> bool {
+    text.chars().find_map(strong_direction).unwrap_or(false)
+}
+
+/// `text` cut into runs, each with whether it is marked right to left. A right-to-left run holds
+/// only what is right to left for certain: the strong right-to-left characters (bidi class R and
+/// AL), the combining marks and joiners that follow them, and the neutral characters (spaces,
+/// punctuation) strictly between two such characters, which the Unicode bidi algorithm resolves
+/// to right to left too. Everything else, Latin letters, digits and other weak characters, and
+/// the punctuation and brackets at the edges, is left in runs without `w:rtl`: Word marks every
+/// neutral and weak character in a `w:rtl` run as right to left, which would reverse numbers and
+/// misplace paired brackets, so they are left to be resolved in the paragraph's context (#4653).
+/// The runs cover `text` exactly, none empty unless `text` is.
+pub(crate) fn directional_runs(text: &str) -> Vec<(&str, bool)> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Kind {
+        /// Strong right to left.
+        R,
+        /// A mark or joiner that goes with what is before it.
+        Follows,
+        /// A space, punctuation or bracket: no direction of its own.
+        Neutral,
+        /// Anything else: Latin and other left-to-right letters, digits, weak characters.
+        Other,
+    }
+    let kind = |c: char| match bidi_class(c) {
+        BidiClass::R | BidiClass::AL => Kind::R,
+        BidiClass::NSM | BidiClass::BN => Kind::Follows,
+        BidiClass::WS | BidiClass::ON | BidiClass::S | BidiClass::B => Kind::Neutral,
+        _ => Kind::Other,
+    };
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    // For each character, whether it is in a right-to-left run: from a strong character through
+    // what follows it, over neutrals only when another strong character comes after them.
+    let mut rtl = vec![false; chars.len()];
+    let mut i = 0;
+    while i < chars.len() {
+        if chars.get(i).map(|(_, c)| kind(*c)) != Some(Kind::R) {
+            i += 1;
+            continue;
+        }
+        // A run starting at the strong character `i`; `end` is just past the last character it keeps.
+        let mut end = i + 1;
+        let mut at = i + 1;
+        while let Some((_, c)) = chars.get(at) {
+            match kind(*c) {
+                // A strong character commits the neutrals skipped since the last one.
+                Kind::R => {
+                    at += 1;
+                    end = at;
+                }
+                // A mark or joiner joins the run only when it is attached to it directly: after
+                // pending neutrals it is no second strong character, so it stays pending with them.
+                Kind::Follows => {
+                    if at == end {
+                        end = at + 1;
+                    }
+                    at += 1;
+                }
+                Kind::Neutral => at += 1,
+                Kind::Other => break,
+            }
+        }
+        for flag in rtl.iter_mut().take(end).skip(i) {
+            *flag = true;
+        }
+        i = end.max(i + 1);
+    }
+    // Consecutive characters with the same flag make one run. A mark or joiner left out of a
+    // right-to-left run keeps the flag of the character before it, so it is never split off alone.
+    let mut runs: Vec<(&str, bool)> = Vec::new();
+    let mut start = 0;
+    for (index, (at, _)) in chars.iter().enumerate() {
+        let direction = rtl.get(index).copied().unwrap_or(false);
+        if index > 0 && rtl.get(index - 1).copied().unwrap_or(false) != direction {
+            runs.push((text.get(start..*at).unwrap_or_default(), !direction));
+            start = *at;
+        }
+    }
+    runs.push((text.get(start..).unwrap_or_default(), rtl.last().copied().unwrap_or(false)));
+    runs
+}
+
 /// A paragraph of a page.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Block {
@@ -179,6 +278,11 @@ const WORD_GAP: f64 = 0.12;
 pub(crate) struct Run<'a> {
     pub(crate) block: &'a Block,
     pub(crate) text: String,
+}
+
+/// Whether a paragraph's runs read right to left: its first strong character, across the runs.
+pub(crate) fn paragraph_rtl(runs: &[Run]) -> bool {
+    runs.iter().flat_map(|r| r.text.chars()).find_map(strong_direction).unwrap_or(false)
 }
 
 /// A page's paragraphs, each a list of runs from left to right along its line. A block that
