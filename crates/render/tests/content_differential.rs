@@ -12,6 +12,11 @@
 //! is updated with it. Nothing in this file touches product code, and no oracle runs here: the
 //! MuPDF and pdftotext readings quoted in comments were taken by hand on one-page files built
 //! from the same bytes.
+//!
+//! Several tests pin what `vendor/hayro-syntax` does today, so a hayro upgrade or a new patch
+//! to it can fail them on purpose. When that happens, update the pinned side to the new
+//! behaviour and note the upstream change (the version or patch, and its PR) in that test's
+//! comment, as the tests under "divergences closed" do.
 
 use std::fmt::Write as _;
 
@@ -128,8 +133,8 @@ fn hayro(data: &[u8]) -> Vec<Tok> {
     out
 }
 
-/// How many instructions hayro's typed iterator yields before it stops. The typed layer, which
-/// the renderer consumes, ends the stream at a path operator whose operands don't convert.
+/// How many instructions hayro's typed iterator, the layer the renderer consumes, yields before
+/// it stops.
 fn hayro_typed_len(data: &[u8]) -> usize {
     let mut iter = TypedIter::new(data);
     let mut n = 0;
@@ -188,8 +193,9 @@ fn the_two_parsers_agree_on_well_formed_streams_and_common_damage() {
 /// The content crate exposes two operand conventions: `Op::nums::<N>` takes the last N, as
 /// hayro's typed operators do (`0 20 Tc` is `Tc 20` to the renderer), while `Op::num(i)` counts
 /// from the front. Both tokenizers keep every operand, so the choice is each consumer's: the
-/// edit reader reads `Tc` through `num(0)` and gets 0 where the renderer gets 20
-/// (`01-readers-map.md` B.5; MuPDF renders the 20). No issue is filed for the convention.
+/// edit reader reads `Tc` through `num(0)` and gets 0 where the renderer gets 20, so the editor
+/// and the renderer disagree on the character spacing (MuPDF renders the 20). No issue is filed
+/// for the convention.
 #[test]
 fn surplus_operands_are_read_from_the_end_by_hayro_and_either_way_by_the_content_crate() {
     let data = b"BT 0 20 Tc (x) Tj ET";
@@ -210,8 +216,8 @@ fn surplus_operands_are_read_from_the_end_by_hayro_and_either_way_by_the_content
 
 // ── divergences closed since this file was written: both parsers now agree ─────────────────
 
-/// `01-readers-map.md` B.3. The typed layer used to end the whole stream at a path operator
-/// whose operands don't convert, so the renderer and text extraction showed nothing after it.
+/// hayro's typed layer used to end the whole stream at a path operator whose operands don't
+/// convert, so the renderer and text extraction showed nothing after it.
 /// Closed by #3636 (30ed249a2): `TypedIter::next` (`vendor/hayro-syntax/src/content/mod.rs`)
 /// now yields such an operator as `Fallback`, which adds nothing to the path, and reads on, as
 /// the content crate, MuPDF and pdftotext do (`After` is shown).
@@ -226,8 +232,7 @@ fn both_parsers_read_on_past_a_path_operator_with_too_few_operands() {
     assert_eq!(hayro_typed_len(b"0 0 100 100 re f BT /F1 12 Tf (After) Tj ET"), 6, "control: a complete re is read through");
 }
 
-/// `01-readers-map.md` B.17. hayro's operand stack held ten entries and an eleventh ended its
-/// stream. Closed by #4345 (hayro-syntax patch 28, #4260): an instruction keeps up to 256
+/// hayro's operand stack used to hold ten entries, and an eleventh ended its stream. Closed by #4345 (hayro-syntax patch 28, #4260): an instruction keeps up to 256
 /// operands and past that drops the oldest, so both parsers read all eleven and go on, as MuPDF
 /// and pdftotext do (`AFTER` is shown).
 #[test]
