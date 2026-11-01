@@ -531,6 +531,23 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         });
 }
 
+/// Padding inside the rail's page and zoom fields.
+const RAIL_FIELD_MARGIN: egui::Vec2 = egui::vec2(1.0, 4.0);
+
+/// A field the rail can type in: boxed, and the same size whatever it holds, so the page and zoom
+/// fields match and fit the rail's width. Sized outright: a text field is at least a control wide.
+fn rail_field(ui: &mut egui::Ui, t: &Tokens, edit: egui::TextEdit<'_>) -> egui::Response {
+    egui::Frame::NONE
+        .fill(t.field)
+        .stroke(Stroke::new(1.0, t.border))
+        .corner_radius(CornerRadius::same(5))
+        .show(ui, |ui| {
+            ui.spacing_mut().interact_size.x = 0.0;
+            ui.add_sized([34.0, 22.0], edit)
+        })
+        .inner
+}
+
 /// Draw the right tool rail with page navigation, history, zoom, rotation and page-display controls for the
 /// active view.
 pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
@@ -573,20 +590,12 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let mut page_display = None;
     let rail = Rail::new(egui::Id::unique("rail"))
         .edge(Edge::End)
-        .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(6, 8)).stroke(Stroke::new(1.0, t.divider)))
+        .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(4, 8)).stroke(Stroke::new(1.0, t.divider)))
         .show(ui, &items, app.right.as_ref(), |ui| {
             // Page navigation cluster at the bottom, a panel of its own so that in a short
             // window the buttons above scroll instead of running into it (#3282).
             ui.with_layout(Layout::bottom_up(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
-                let tip = crate::commands::key_tip(ui.ctx(), tl!("Zoom out ({key})"), crate::commands::ZOOM_OUT);
-                if icons::button(ui, "zoom-out", 32.0, false, &tip).clicked() {
-                    view.zoom_step(false);
-                }
-                let tip = crate::commands::key_tip(ui.ctx(), tl!("Zoom in ({key})"), crate::commands::ZOOM_IN);
-                if icons::button(ui, "zoom-in", 32.0, false, &tip).clicked() {
-                    view.zoom_step(true);
-                }
                 // Between rotate and zoom, as in Acrobat. Its command runs once `view` is free.
                 let tip = crate::i18n::fmt(tl!("Page display: {layout}"), &[("layout", tl!(view.layout.label()))]);
                 let resp = icons::button(ui, view.layout.icon(), 32.0, false, &tip);
@@ -606,18 +615,29 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     view.fit = if view.fit == Fit::Width { Fit::Page } else { Fit::Width };
                     view.goto = Some((view.current, 0.0));
                 }
+                // Out and in side by side right under the zoom field, so they are found with it.
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    let tip = crate::commands::key_tip(ui.ctx(), tl!("Zoom out ({key})"), crate::commands::ZOOM_OUT);
+                    if icons::button(ui, "zoom-out", 17.0, false, &tip).clicked() {
+                        view.zoom_step(false);
+                    }
+                    let tip = crate::commands::key_tip(ui.ctx(), tl!("Zoom in ({key})"), crate::commands::ZOOM_IN);
+                    if icons::button(ui, "zoom-in", 17.0, false, &tip).clicked() {
+                        view.zoom_step(true);
+                    }
+                });
                 let id = egui::Id::unique("zoom-input");
                 let draft = id.with("draft");
                 let mut typed = ui.data(|d| d.get_temp::<String>(draft)).unwrap_or_else(|| format!("{:.0}%", view.zoom * 100.0));
                 let edit = egui::TextEdit::singleline(&mut typed)
                     .id(id)
-                    .desired_width(40.0)
-                    .align(egui::Align2::CENTER_TOP)
-                    .font(theme::medium(11.0))
-                    .text_color(t.text_muted)
+                    .align(egui::Align2::CENTER_CENTER)
+                    .font(theme::medium(12.0))
+                    .text_color(t.text)
                     .frame(egui::Frame::NONE)
-                    .margin(vec2(2.0, 2.0));
-                let r = ui.add(edit).on_hover_text(tl!("Zoom — type a percentage and press Enter"));
+                    .margin(RAIL_FIELD_MARGIN);
+                let r = rail_field(ui, &t, edit).on_hover_text(tl!("Zoom — type a percentage and press Enter"));
                 ui.ctx().accesskit_node_builder(id, |node| node.set_label(tl!("Zoom")));
                 if r.gained_focus() {
                     let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
@@ -677,16 +697,11 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 }
                 let edit = egui::TextEdit::singleline(&mut view.page_input)
                     .id(page_input_id)
-                    .desired_width(34.0)
-                    .align(egui::Align2::CENTER_TOP)
+                    .align(egui::Align2::CENTER_CENTER)
                     .font(theme::medium(12.0))
-                    .margin(vec2(2.0, 4.0));
-                let r = egui::Frame::NONE
-                    .fill(t.field)
-                    .stroke(Stroke::new(1.0, t.border))
-                    .corner_radius(CornerRadius::same(5))
-                    .show(ui, |ui| ui.add(edit))
-                    .inner
+                    .frame(egui::Frame::NONE)
+                    .margin(RAIL_FIELD_MARGIN);
+                let r = rail_field(ui, &t, edit)
                     .on_hover_text(tl!("Current page — type a page number or label (such as iv) and press Enter"))
                     .accessible_name(tl!("Current page"));
                 if r.lost_focus() {
