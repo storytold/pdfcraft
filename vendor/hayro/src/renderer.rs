@@ -236,6 +236,59 @@ fn nearest_premultiplied_rgba(
     Some(out)
 }
 
+/// PdfCraft patch: line weights off (`RenderSettings::hairline_strokes`). Every stroke that
+/// isn't text is one device pixel wide, however wide the document says: a plan's 0.7 mm walls
+/// and 0.13 mm dimension lines then read alike at any zoom, as in Acrobat with Line Weights
+/// unticked. The path is dashed in user space, where the dash array is defined, then mapped to
+/// the device and stroked there one pixel wide under the identity transform: no width in user
+/// space is one pixel in every direction under a matrix that scales the axes differently
+/// (`100 0 0 1 0 0 cm` would turn a horizontal line into a hundredth of a pixel). `None` when
+/// the transform maps nothing to the device (zero or non-finite scale): such a stroke is left
+/// to the usual path.
+fn hairline_stroke(
+    path: &BezPath,
+    transform: Affine,
+    stroke_props: &StrokeProps,
+) -> Option<(BezPath, kurbo::Stroke)> {
+    let scale = max_factor(&transform);
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    #[cfg(test)]
+    HAIRLINE_PATHS.with(|n| n.set(n.get() + 1));
+    let dashes = usable_dash_pattern(path, &stroke_props.dash_array);
+    let dashed = if dashes.is_empty() {
+        path.clone()
+    } else {
+        let offset = if stroke_props.dash_offset.is_finite() {
+            stroke_props.dash_offset as f64
+        } else {
+            0.0
+        };
+        kurbo::dash(path.elements().iter().copied(), offset, &dashes).collect()
+    };
+    Some((transform * dashed, hairline_pen(stroke_props)))
+}
+
+/// PdfCraft patch: the one-pixel pen [`hairline_stroke`] strokes with, under the identity.
+fn hairline_pen(stroke_props: &StrokeProps) -> kurbo::Stroke {
+    kurbo::Stroke {
+        width: 1.0,
+        join: stroke_props.line_join,
+        miter_limit: stroke_props.miter_limit as f64,
+        start_cap: stroke_props.line_cap,
+        end_cap: stroke_props.line_cap,
+        dash_pattern: Default::default(),
+        dash_offset: 0.0,
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// PdfCraft patch: strokes [`hairline_stroke`] has dashed and mapped to the device.
+    pub(crate) static HAIRLINE_PATHS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// PdfCraft patch: most pieces one dashed stroke may be cut into. Stroke expansion keeps every
 /// dash, so a pattern that is tiny next to its path asks for billions: a fuzzed `/D [[11] 0]` on
 /// a line from x = 92234775807 allocated over 5 GB, and `[0.000001] 0 d` on a 20 pt line over
@@ -470,6 +523,9 @@ pub(crate) struct Renderer {
     pub(crate) scaler: Scaler,
     /// PdfCraft patch: low-detail preview render (see `InterpreterSettings::preview`).
     pub(crate) preview: bool,
+    /// PdfCraft patch: every stroke that isn't text is one device pixel wide (see
+    /// `RenderSettings::hairline_strokes`).
+    pub(crate) hairline_strokes: bool,
     // TODO: Remove this once vello_cpu bug with non-transparent images is fixed
     image_transparency_stack: Vec<bool>,
     /// PdfCraft patch (27): set while this renderer draws one ink pass of a group blending
@@ -564,6 +620,7 @@ impl Renderer {
         cache: &RenderCache<'_>,
         color_replacement: Option<ColorReplacement>,
         preview: bool,
+        hairline_strokes: bool,
     ) -> Self {
         Self {
             ctx: RenderContext::new_with(width, height, settings),
@@ -580,6 +637,7 @@ impl Renderer {
             in_type3_glyph: false,
             scaler: Scaler::new(ResamplingFunction::CatmullRom),
             preview,
+            hairline_strokes,
             image_transparency_stack: Vec::new(),
             ink: InkState::default(),
         }
@@ -686,6 +744,7 @@ impl Renderer {
                 in_type3_glyph: false,
                 scaler: self.scaler,
                 preview: self.preview,
+                hairline_strokes: self.hairline_strokes,
                 image_transparency_stack: Vec::new(),
                 ink: InkState::default(),
             };
@@ -1179,6 +1238,7 @@ impl Renderer {
             in_type3_glyph: false,
             scaler: Scaler::new(ResamplingFunction::CatmullRom),
             preview: self.preview,
+            hairline_strokes: self.hairline_strokes,
             image_transparency_stack: Vec::new(),
             ink: InkState {
                 pass: Some(pass),
@@ -1456,6 +1516,7 @@ impl Renderer {
                                 in_type3_glyph: false,
                                 scaler: self.scaler,
                                 preview: self.preview,
+                                hairline_strokes: self.hairline_strokes,
                                 image_transparency_stack: Vec::new(),
                                 ink: InkState::default(),
                             };
@@ -1520,6 +1581,7 @@ impl Renderer {
                             in_type3_glyph: false,
                             scaler: self.scaler,
                             preview: self.preview,
+                            hairline_strokes: self.hairline_strokes,
                             image_transparency_stack: Vec::new(),
                             ink: InkState::default(),
                         };
@@ -1576,9 +1638,40 @@ impl Renderer {
         is_text: bool,
     ) {
         self.ctx.set_transform(transform);
-        let reach = self.set_stroke_properties(stroke_props, is_text, path);
-        // PdfCraft patch: see `may_paint_canvas`.
-        if !may_paint_canvas(path, transform, reach, self.ctx.width(), self.ctx.height()) {
+        let (width, height) = (self.ctx.width(), self.ctx.height());
+        // PdfCraft patch: line weights off, see `hairline_stroke`. Text outlines keep their
+        // widths: stroked glyphs are letterforms, not line art, and so are the strokes a Type 3
+        // glyph draws its letter with (they reach here as paths, not as text).
+        let hairline = if self.hairline_strokes && !is_text && !self.in_type3_glyph {
+            // Culled before the dashes are expanded and mapped: for one tile of a plan most
+            // strokes miss the canvas, and dashing them all cost as much as drawing them. The
+            // undashed path holds every dash, so this never drops a visible one.
+            if !may_paint_canvas(
+                path,
+                transform,
+                stroke_reach(&hairline_pen(stroke_props)),
+                width,
+                height,
+            ) {
+                return;
+            }
+            hairline_stroke(path, transform, stroke_props)
+        } else {
+            None
+        };
+        let visible = match &hairline {
+            Some((device_path, stroke)) => {
+                self.ctx.set_stroke(stroke.clone());
+                let reach = stroke_reach(stroke);
+                may_paint_canvas(device_path, Affine::IDENTITY, reach, width, height)
+            }
+            None => {
+                let reach = self.set_stroke_properties(stroke_props, is_text, path);
+                // PdfCraft patch: see `may_paint_canvas`.
+                may_paint_canvas(path, transform, reach, width, height)
+            }
+        };
+        if !visible {
             return;
         }
 
@@ -1588,7 +1681,19 @@ impl Renderer {
         if let Some(clip_path) = clip_path.as_ref() {
             self.push_clip_path_inner(clip_path, FillRule::NonZero);
         }
-        self.ctx.stroke_path(path);
+        match hairline {
+            Some((device_path, _)) => {
+                // The paint was set up for `transform`, which vello composes with the current
+                // transform when painting; the device path is stroked under the identity.
+                let paint_transform = *self.ctx.paint_transform();
+                self.ctx.set_paint_transform(transform * paint_transform);
+                self.ctx.set_transform(Affine::IDENTITY);
+                self.ctx.stroke_path(&device_path);
+                self.ctx.set_transform(transform);
+                self.ctx.set_paint_transform(paint_transform);
+            }
+            None => self.ctx.stroke_path(path),
+        }
         if clip_path.is_some() {
             self.ctx.pop_clip_path();
         }
@@ -1826,6 +1931,7 @@ impl<'a> Device<'a> for Renderer {
                                         in_type3_glyph: false,
                                         scaler: self.scaler,
                                         preview: self.preview,
+                                        hairline_strokes: self.hairline_strokes,
                                         image_transparency_stack: Vec::new(),
                                         ink: InkState::default(),
                                     };
@@ -2343,6 +2449,9 @@ fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, hei
         in_type3_glyph: false,
         scaler: Scaler::new(ResamplingFunction::CatmullRom),
         preview,
+        // PdfCraft patch: a soft mask's coverage is document geometry, not line art on show, so
+        // its strokes keep their widths whatever the viewer's line-weights setting.
+        hairline_strokes: false,
         image_transparency_stack: Vec::new(),
         ink: InkState::default(),
     };

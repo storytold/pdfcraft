@@ -2886,3 +2886,5 @@ theme	Appearance	Teema
 	No image on clipboard to paste	Leikepöydällä ei ole liitettävää kuvaa
 	Pinned {tool} to Home	{tool} kiinnitetty aloitussivulle
 	Unpinned {tool} from Home	{tool} irrotettu aloitussivulta
+# View ▸ Show line weights (M12).
+	Show line weights	Näytä viivanpaksuudet

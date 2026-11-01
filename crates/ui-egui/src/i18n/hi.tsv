@@ -2846,3 +2846,5 @@ theme	Appearance	स्वरूप
 	No image on clipboard to paste	चिपकाने के लिए क्लिपबोर्ड में कोई छवि नहीं है
 	Pinned {tool} to Home	{tool} को होम पर पिन किया गया
 	Unpinned {tool} from Home	{tool} को होम से अनपिन किया गया
+# View ▸ Show line weights (M12).
+	Show line weights	रेखा मोटाई दिखाएँ
