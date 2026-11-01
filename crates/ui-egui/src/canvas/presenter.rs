@@ -52,6 +52,13 @@ impl Presenter {
     pub(crate) fn turning(&self) -> bool {
         self.turn.is_some()
     }
+
+    /// Whether `page` is the page wholly in view: not while it comes in or waits for its raster,
+    /// nor in the frame that turns to it (this frame's [`frame`] hasn't caught up yet). While a
+    /// page turns, `shown` is `None`, so a transition under way needs no check of its own.
+    pub(crate) fn settled_on(&self, page: usize) -> bool {
+        self.shown.is_some_and(|(p, _)| p == page)
+    }
 }
 
 /// The transition and display time of page `page` (0-based), if it has either.

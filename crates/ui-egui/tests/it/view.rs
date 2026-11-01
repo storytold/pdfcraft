@@ -2598,6 +2598,74 @@ fn shift_ctrl_page_keys_and_arrows_go_to_the_first_and_last_page() {
     }
 }
 
+/// Two pages, the second with a text field and a five-second Wipe.
+const FIELD_BEHIND_TRANSITION: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /Annots [5 0 R] /Trans << /S /Wipe /D 5 >> >> endobj
+5 0 obj << /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Rect [50 100 250 140] /P 4 0 R /F 4 >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// #5316 review: while full screen turns to a page (its transition playing, or its raster on the
+/// way), the page isn't the one on screen yet, so a click there opens none of its fields; once
+/// the page is in, the same click does.
+#[test]
+fn full_screen_takes_no_page_input_until_the_page_is_on_screen() {
+    let mut h = presenting_pdf(FIELD_BEHIND_TRANSITION, &[]);
+    h.key_press(Key::ArrowRight);
+    h.run_steps(1);
+    assert_eq!(h.state().views[0].current, 1);
+    assert!(h.state().views[0].presenting_a_transition(), "page 2 comes in with its Wipe");
+    let r = h.state().views[0].page_screen_rect(1).expect("page 2 on screen");
+    let on_field = egui::pos2(r.left() + r.width() * 0.5, r.top() + r.height() * (400.0 - 120.0) / 400.0);
+    click_with(&mut h, on_field, Modifiers::NONE);
+    h.run_steps(2);
+    assert!(h.state().views[0].presenting_a_transition(), "the Wipe is still playing");
+    assert!(!h.ctx.egui_wants_keyboard_input(), "the field behind the transition isn't opened");
+    frames_until(&mut h, |a| !a.views[0].presenting_a_transition());
+    h.run_steps(1);
+    click_with(&mut h, on_field, Modifiers::NONE);
+    h.run_steps(4);
+    assert!(h.ctx.egui_wants_keyboard_input(), "once page 2 is in, the field opens");
+}
+
+/// [`FIELD_BEHIND_TRANSITION`] with a Wipe of 0.3 s, shorter than a click may be held.
+const FIELD_BEHIND_SHORT_TRANSITION: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /Annots [5 0 R] /Trans << /S /Wipe /D 0.3 >> >> endobj
+5 0 obj << /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Rect [50 100 250 140] /P 4 0 R /F 4 >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// #5316 review: a press made while full screen turns to a page belongs to nothing on it, through
+/// its release: let go on the field just after the transition ends, within a click's time, it
+/// still opens nothing.
+#[test]
+fn full_screen_press_made_during_a_transition_opens_nothing_when_released() {
+    let mut h = presenting_pdf(FIELD_BEHIND_SHORT_TRANSITION, &[]);
+    let r = h.state().views[0].page_screen_rect(0).expect("page 1 on screen");
+    let on_field = egui::pos2(r.left() + r.width() * 0.5, r.top() + r.height() * (400.0 - 120.0) / 400.0);
+    h.hover_at(on_field);
+    h.run_steps(1);
+    // Page 2 renders ahead: once nothing is left to render, its Wipe starts with the key.
+    settle(&mut h);
+    h.key_press(Key::ArrowRight);
+    h.run_steps(1);
+    assert!(h.state().views[0].presenting_a_transition(), "page 2 comes in with its Wipe");
+    h.event(egui::Event::PointerButton { pos: on_field, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    assert!(h.state().views[0].presenting_a_transition(), "pressed while the Wipe plays");
+    let frames = frames_until(&mut h, |a| !a.views[0].presenting_a_transition());
+    assert!(frames <= 4, "the Wipe ends within a click's time ({frames} frames of 0.1 s)");
+    h.event(egui::Event::PointerButton { pos: on_field, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(4);
+    assert!(!h.ctx.egui_wants_keyboard_input(), "released on the field once page 2 is in: nothing opens");
+}
+
 /// In full screen a double-click on a note opens it to edit, and turns no page: the pointer stays
 /// active "so that you can click links and open notes" (*Adobe Acrobat Help*, 2019, p. 65).
 #[test]

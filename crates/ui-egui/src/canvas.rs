@@ -1680,6 +1680,13 @@ fn finish_text_pointer_gesture(ui: &egui::Ui, view: &mut DocView, text: &PageTex
     }
 }
 
+/// Full screen is turning to the current page, or waiting for it to render: the page under the
+/// pointer isn't the one on screen, so its links, fields, text and comments take no input.
+/// Turning the page (a click, a key) is handled apart and still works.
+fn veiled(view: &DocView) -> bool {
+    view.presentation.is_some() && !view.presenter.settled_on(view.current)
+}
+
 /// Everything drawn over the page after its text: pictures, comments, content, links, fields, marks
 /// and badges.
 fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, slot: &PageSlot, input: &PageInput) {
@@ -1713,8 +1720,9 @@ fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_
     }
     crate::image_pick::drop_stale(doc, view);
     crate::image_pick::paint(painter, &xf, i, info, view);
-    // A cancelled press ends no selection: no markup or redaction is made from it.
-    if !view.press_cancelled {
+    // A cancelled press ends no selection: no markup or redaction is made from it, nor from a
+    // page full screen doesn't show yet.
+    if !view.press_cancelled && !veiled(view) {
         comments::page_after_text(resp, &pcx, view);
         if tool == QuickTool::Redact && can_modify {
             crate::redact_ui::after_text(resp, i, info, view);
@@ -1885,8 +1893,11 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
     }
 
     let slot = PageSlot { i, r, xf };
-    // A cancelled press takes nothing until the button is up.
-    let input = if view.press_cancelled { PageInput { consumed: true, area_tool: false } } else { page_tool_input(ui, view, frame, &slot) };
+    // A cancelled press takes nothing until the button is up, nor does a page full screen
+    // doesn't show yet. (A press there gives nothing on the page an owner, so its release, once
+    // the page is in, takes nothing either.)
+    let input =
+        if view.press_cancelled || veiled(view) { PageInput { consumed: true, area_tool: false } } else { page_tool_input(ui, view, frame, &slot) };
     let painter = ui.painter();
     let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
     let preview_target = (matches!(tool, QuickTool::Select | QuickTool::Fill(_)) && !comments_hidden).then_some(view.comments.selected).flatten();
