@@ -820,14 +820,9 @@
 	Copy Image in Original Format	Copia immagine nel formato originale
 	The image has been copied as a {ext} file	L'immagine è stata copiata come file {ext}
 	The page has changed; select the image again	La pagina è cambiata; seleziona di nuovo l'immagine
-	Check for updates	Verifica aggiornamenti
 	No check has run yet.	Nessuna verifica eseguita finora.
-	Checking for a newer version…	Ricerca di una versione più recente…
 	PdfCraft {v} is available.	PdfCraft {v} è disponibile.
 	You have version {c}. Download the new version from its release page.	Hai la versione {c}. Scarica la nuova versione dalla sua pagina di rilascio.
-	PdfCraft {c} is up to date.	PdfCraft {c} è aggiornato.
-	Couldn't check for updates: {e}	Impossibile verificare gli aggiornamenti: {e}
-	You have version {c}. All releases are listed at {page}.	Hai la versione {c}. Tutte le versioni sono elencate su {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Chiede a GitHub qual è l'ultima versione. Nulla viene scaricato o installato automaticamente.
 	Download	Scarica
 	Later	Più tardi
@@ -2732,6 +2727,26 @@ certificate	Key usage	Utilizzo chiave
 certificate	Self-signed	Autofirmato
 certificate	SHA-1 digest	Impronta SHA-1
 certificate	SHA-256 digest	Impronta SHA-256
+	Clear search	Cancella ricerca
+	Pin	Fissa
+	Pin a tool…	Fissa uno strumento…
+	Pin to Home	Fissa sulla Home
+	Pin tools to Home	Fissa strumenti sulla Home
+	Pin your favorite tools here for quick access.	Fissa qui i tuoi strumenti preferiti per un accesso rapido.
+	Pinned	Fissato
+	Pinned Tools	Strumenti fissati
+	Search tools…	Cerca strumenti…
+	Select tools to display on your Home page for quick access.	Seleziona gli strumenti da visualizzare nella pagina Home per un acceso rapido.
+	Unpin from Home	Rimuovi da Home
+	Unpin tool	Sblocca strumento dalla Home
+	Transform image	Trasforma immagine
+	Select Tool	Strumento Selezione
+	Hand Tool	Strumento Mano
+	Marquee Zoom	Ingrandimento selettivo
+	Paste	Incolla
+	Edit this PDF	Modifica questo PDF
+	Export this PDF	Esporta questo PDF
+	Find text or tools	Trova testo o strumenti
 	Create & Edit	Crea e modifica
 	Review & Compare	Revisione e confronto
 	Forms & Signatures	Moduli e firme
@@ -2799,6 +2814,13 @@ certificate	SHA-256 digest	Impronta SHA-256
 	field names can't contain a period: {name}	i nomi dei campi non possono contenere un punto: {name}
 	two cells would both be named {name}	due celle si chiamerebbero entrambe {name}
 	a field named {name} already exists	esiste già un campo chiamato {name}
+	Arrange image	Disponi immagine
+	Bring forward	Porta avanti
+	Bring to front	Porta in primo piano
+	Crop	Ritaglia
+	Remove crop	Rimuovi ritaglio
+	Send backward	Porta indietro
+	Send to back	Porta in secondo piano
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Oggi
@@ -2815,3 +2837,11 @@ certificate	SHA-256 digest	Impronta SHA-256
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opzioni per questa risposta
 	Export value	Valore di esportazione
+	Show Page Edge Shadows	Mostra le ombre ai bordi delle pagine
+
+# Image paste and Home notifications (AI-assisted; not separately native-reviewed)
+	Search…	Cerca…
+	Image pasted	Immagine incollata
+	No image on clipboard to paste	Nessuna immagine negli appunti da incollare
+	Pinned {tool} to Home	{tool} fissato alla Home
+	Unpinned {tool} from Home	{tool} rimosso dai preferiti della Home

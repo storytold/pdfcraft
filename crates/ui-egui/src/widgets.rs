@@ -70,7 +70,7 @@ pub fn line(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
     egui::TextEdit::singleline(text).margin(FIELD_MARGIN).min_size(vec2(0.0, FIELD_MIN_HEIGHT))
 }
 
-/// A multiline field with the same horizontal inset as [`line`].
+/// A multiline field with the same horizontal inset as [`line()`].
 pub fn block(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
     egui::TextEdit::multiline(text).margin(egui::Margin::symmetric(10, 6))
 }

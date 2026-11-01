@@ -890,8 +890,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["view.layout.two_up"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/view.rs::two_up_layout_places_pages_side_by_side", "crates/ui-egui/tests/it/viewer.rs::two_page_view_steps_a_spread_at_a_time"]
-notes = "next/previous page step a spread at a time"
+evidence = ["crates/ui-egui/tests/it/view.rs::two_up_layout_places_pages_side_by_side", "crates/ui-egui/tests/it/viewer.rs::two_page_view_steps_a_spread_at_a_time", "apps/pdfcraft/src/startup.rs::startup_override_is_per_file_and_does_not_persist", "crates/ui-egui/src/platform/open_worker/tests.rs::flagged_startup_opens_wait_for_password_ownership_before_the_first_frame"]
+notes = "Next/previous page step a spread at a time. Optional desktop --two-paged launches named PDFs in noncontinuous two-page view without changing saved defaults or unrelated restored tabs. Explicit --layout wins after flagged opens settle, including password retries; repeated files reuse their tab. This is a launch override, not a declarative configuration module."
 
 [[feature]]
 id = "view.layout-two-up-scrolling"
@@ -1287,7 +1287,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/ui-egui/tests/it/view.rs::pages_sidebar_select_all_keeps_current_page_and_keyboard_scope", "crates/ui-egui/tests/it/editing.rs::dragging_pages_panel_thumbnails_reorders_pages", "crates/ui-egui/tests/it/viewer.rs::pages_panel_thumbnails_have_a_context_menu", "crates/ui-egui/tests/it/editing.rs::split_from_pages_panel_context_menu", "crates/ui-egui/tests/it/editing.rs::deleting_pages_from_the_pages_panel_menu", "crates/ui-egui/tests/it/editing.rs::the_delete_key_deletes_pages_picked_in_the_pages_panel_but_never_every_page"]
-notes = "Ctrl/Cmd+A selects every page while the Pages sidebar owns the keyboard, without navigation; Escape clears that selection. Viewer and text-field shortcuts keep their own scope. Drag the selection (or the page grabbed) to reorder, with a drop bar and edge scrolling; right-click offers Split document…, Extract pages, Cut, Copy, Paste after and Delete pages (also the Delete key over the panel). Not yet: Rotate, Insert and Page labels in the menu, dragging pages between documents, or dropping files onto the panel."
+notes = "Ctrl/Cmd+A selects every page while the Pages sidebar owns the keyboard, without navigation; Escape clears that selection. Viewer and text-field shortcuts keep their own scope. Drag the selection (or the page grabbed) to reorder, with a drop bar and edge scrolling; right-click offers Split document…, Extract pages, Cut, Copy, Paste after and Delete pages (also the Delete key over the panel). Deleting pages makes the next Save a full rewrite (unsigned files), so the deleted pages leave the file; signed files stay incremental. Not yet: Rotate, Insert and Page labels in the menu, dragging pages between documents, or dropping files onto the panel."
 
 [[feature]]
 id = "view.bookmarks-panel"
@@ -1799,11 +1799,17 @@ title = "Customise the quick-action toolbar and pinned tools"
 area = "B"
 tier = "P2"
 milestone = "M14"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = [
+  "crates/ui-egui/tests/it/pinned_tools.rs::state_operations_and_validation",
+  "crates/ui-egui/tests/it/pinned_tools.rs::persistence_round_trip_and_sanitization",
+  "crates/ui-egui/tests/it/pinned_tools.rs::home_shows_pinned_tools_section_and_placeholder",
+  "crates/ui-egui/tests/it/pinned_tools.rs::pin_tool_dialog_workflow",
+  "crates/ui-egui/tests/it/pinned_tools.rs::sidebar_pin_toggle_unpins_and_pins",
+]
+notes = "Pin and unpin tools on the Home page via tool card hover button, All Tools row toggle, or 'Pin a tool' search dialog. Pinned tool order persists across sessions. Floating quick-action toolbar customisation remains planned."
 
 [[feature]]
 id = "view.restriction-notice"
@@ -1959,11 +1965,19 @@ title = "Superscript and subscript"
 area = "C"
 tier = "P2"
 milestone = "M7"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["edit.edit_text"]
+tools = ["text_script"]
+evidence = [
+  "crates/engine/src/text_script.rs::every_form_toggles_back_to_its_character",
+  "crates/engine/src/text_script.rs::text_with_characters_unicode_cannot_raise_toggles_back",
+  "crates/ui-egui/src/tools/edit_text_ui.rs::superscript_and_subscript_conversion",
+  "crates/ui-egui/tests/it/editing.rs::the_format_panel_toggles_superscript_and_subscript_on_selection",
+  "crates/automation/tests/it/automation.rs::superscript_and_subscript_through_tools",
+  "crates/engine/src/text_script.rs::mixed_plain_and_scripted_text_normalizes_instead_of_round_tripping",
+  "crates/automation/tests/it/automation.rs::mixed_script_tools_normalize_but_undo_restores_the_exact_mixture",
+]
+notes = "Toggled in the Format text panel for the selection, and headlessly with text_script on a paragraph or a byte range of it; each toggle of a paragraph is one undo step. Uses Unicode superscript and subscript forms (2 ↔ ²) rather than text rise (Ts) and font scaling, so the font must provide the corresponding glyphs and extracted text contains the Unicode characters. Characters Unicode has no form for (q, most capitals in subscript) stay unchanged and do not determine script state. Two toggles restore uniformly plain or uniformly scripted inputs. Mixed input normalizes (H₂2 → H₂₂ → H22), so a second toggle does not recover the original mixture; Undo restores the exact prior text. The mathematical minus sign U+2212 has its own script mapping, while ASCII hyphen-minus stays unchanged."
 
 [[feature]]
 id = "edit.paragraph-alignment"
@@ -2129,8 +2143,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.image"]
 tools = ["content_update", "image_edit"]
-evidence = ["crates/ui-egui/tests/it/editing.rs::cropping_a_picture_with_its_handles", "crates/engine/src/tests.rs::cropping_an_existing_image_clips_it_and_moves_with_it", "crates/automation/tests/it/automation.rs::editing_page_images_through_tools", "crates/engine/src/tests.rs::added_images_rotate_flip_and_crop_as_drawn", "crates/automation/tests/it/automation.rs::adding_content_through_tools"]
-notes = "Existing page images: right-click ▸ Crop Image puts the picture in crop mode: its eight handles trim (the inside pans), the part that will go is dimmed, Enter or Done applies, Esc or Cancel leaves it; Remove Crop shows the whole picture again. The pixels stay where they are (a clipping path inside the picture's own scope, so a later move or resize carries it along; cropping again replaces the earlier crop, so it can grow back); image_edit crop. Added images: trim each side by percent in Edit image, clipped. Not yet: cropping grouped Form artwork by handles is allowed the same way (it is a clip), but a shared clip of the original file is not changed."
+evidence = ["crates/edit/src/tests.rs::removing_a_crop_preserves_author_clips_and_works_under_outer_clip", "crates/ui-egui/tests/it/editing.rs::cropping_a_picture_with_its_handles", "crates/engine/src/tests.rs::cropping_an_existing_image_clips_it_and_moves_with_it", "crates/automation/tests/it/automation.rs::editing_page_images_through_tools", "crates/engine/src/tests.rs::added_images_rotate_flip_and_crop_as_drawn", "crates/automation/tests/it/automation.rs::adding_content_through_tools"]
+notes = "Existing page images: right-click ▸ Crop Image puts the picture in crop mode: its eight handles trim (the inside pans), the part that will go is dimmed, Enter or Done applies, Esc or Cancel leaves it; Remove Crop removes only a crop created by PdfCraft, preserving original document clips. The pixels stay where they are (a clipping path inside the picture's own scope, so a later move or resize carries it along; cropping again replaces the earlier crop, so it can grow back); image_edit crop. Added images: trim each side by percent in Edit image, clipped. Grouped Form artwork cannot be cropped. Shared clips and other clipping paths from the original file remain unchanged."
 
 [[feature]]
 id = "edit.image-rotate-flip"
@@ -2153,8 +2167,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.edit_text"]
 tools = ["image_edit", "image_hit"]
-evidence = ["crates/edit/src/tests.rs::private_image_crop_with_intervening_state_resizes_across_streams", "crates/automation/tests/it/automation.rs::private_crops_with_nested_state_resize_save_reopen_through_tools", "crates/edit/src/tests.rs::form_artwork_edits_only_the_selected_placement", "crates/ui-egui/tests/it/editing.rs::editing_existing_form_artwork_on_the_page", "crates/automation/tests/it/automation.rs::editing_form_artwork_through_tools", "crates/edit/src/tests.rs::page_images_move_turn_replace_and_delete", "crates/ui-egui/tests/it/editing.rs::editing_existing_images_on_the_page", "crates/automation/tests/it/automation.rs::editing_page_images_through_tools", "crates/edit/src/tests.rs::curved_image_clips_have_analytic_bounds_and_holes_do_not_capture_points", "crates/edit/src/tests.rs::cropped_image_resizing_moves_private_clips_and_keeps_shared_ones", "crates/ui-egui/tests/it/editing.rs::cropped_image_corner_resize_keeps_opposite_corner_and_scales_crop", "crates/edit/src/tests.rs::image_selection_bounds_respect_clips_and_restore_graphics_state", "crates/ui-egui/tests/it/editing.rs::cropped_images_do_not_intercept_text_and_stay_inside_each_page", "crates/automation/tests/it/automation.rs::clipped_image_bounds_and_text_edit_save_reopen_through_tools", "crates/edit/src/tests.rs::resizing_an_image_under_a_shared_clip_moves_its_own_clip"]
-notes = "existing raster images and grouped Form artwork: select, drag to move, drag a corner to resize keeping proportions; Delete removes one placement. Forms include their nested content as a group; individual internal elements and inline images are not supported. See docs/editing-images.md; added images too Since #1116: raster images and grouped Forms move/resize/turn as placements; selected grips own the gesture and opposite anchor, with no PDF writes during movement. Curved path frames use analytic Bezier extrema and hit testing evaluates actual nonzero/even-odd fill rules, excluding holes; intersections can retain a loose frame. Selection and resize use the visible (clipped) frame; exclusive image clips move with their pixels across nested states, intervening operators and content streams, also inside a clip the picture shares with other content (its own clip scales, the shared one stays); shared clips stay fixed. Inline images and Form internals remain unsupported; see docs/editing-images.md"
+evidence = ["crates/edit/src/tests.rs::private_image_crop_with_intervening_state_resizes_across_streams", "crates/automation/tests/it/automation.rs::private_crops_with_nested_state_resize_save_reopen_through_tools", "crates/edit/src/tests.rs::form_artwork_edits_only_the_selected_placement", "crates/ui-egui/tests/it/editing.rs::editing_existing_form_artwork_on_the_page", "crates/automation/tests/it/automation.rs::editing_form_artwork_through_tools", "crates/edit/src/tests.rs::page_images_move_turn_replace_and_delete", "crates/ui-egui/tests/it/editing.rs::editing_existing_images_on_the_page", "crates/automation/tests/it/automation.rs::editing_page_images_through_tools", "crates/edit/src/tests.rs::curved_image_clips_have_analytic_bounds_and_holes_do_not_capture_points", "crates/edit/src/tests.rs::cropped_image_resizing_moves_private_clips_and_keeps_shared_ones", "crates/ui-egui/tests/it/editing.rs::cropped_image_corner_resize_keeps_opposite_corner_and_scales_crop", "crates/edit/src/tests.rs::image_selection_bounds_respect_clips_and_restore_graphics_state", "crates/ui-egui/tests/it/editing.rs::cropped_images_do_not_intercept_text_and_stay_inside_each_page", "crates/automation/tests/it/automation.rs::clipped_image_bounds_and_text_edit_save_reopen_through_tools", "crates/edit/src/tests.rs::resizing_an_image_under_a_shared_clip_moves_its_own_clip", "crates/automation/tests/it/automation.rs::transforming_page_images_through_tools"]
+notes = "existing raster images and grouped Form artwork: select, drag to move, 8-point handles to resize (corners keep proportions, edges scale along axis, Shift inverts aspect lock); Delete removes one placement. Headless: image_edit action move (a new box) or transform (any finite, non-flat 6-number matrix in top-left-origin points, applied after the placement: the edit a resize of a turned image makes). Forms include their nested content as a group; individual internal elements and inline images are not supported. See docs/editing-images.md; added images too Since #1116: raster images and grouped Forms move/resize/turn as placements; selected grips own the gesture and opposite anchor, with no PDF writes during movement. Curved path frames use analytic Bezier extrema and hit testing evaluates actual nonzero/even-odd fill rules, excluding holes; intersections can retain a loose frame. Selection and resize use the visible (clipped) frame; exclusive image clips move with their pixels across nested states, intervening operators and content streams, also inside a clip the picture shares with other content (its own clip scales, the shared one stays); shared clips stay fixed. Inline images and Form internals remain unsupported; see docs/editing-images.md"
 
 [[feature]]
 id = "edit.image-extract"
@@ -2186,11 +2200,17 @@ title = "Arrange objects (bring forward, send backward)"
 area = "C"
 tier = "P1"
 milestone = "M7"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["image_edit"]
+evidence = [
+  "crates/edit/src/tests.rs::image_arrange_stacking_order_and_remove_crop",
+  "crates/edit/src/tests.rs::image_arrange_refuses_crossed_scope_boundaries_without_changes",
+  "crates/edit/src/tests.rs::arrange_refuses_unrestorable_extended_print_state",
+  "crates/automation/tests/it/automation.rs::arranging_page_images_through_tools",
+  "crates/ui-egui/tests/it/editing.rs::duplicate_xobject_at_different_rects_arrange_and_delete_keeps_other_instance_through_menu",
+]
+notes = "Image stacking order in content streams: Bring to Front, Send to Back, Bring Forward, Send Backward with undo/redo and persistence. Refuses arranging across shared marked content, unbalanced graphics/marked-content boundaries, or when clipping path transforms cannot be cleanly preserved. Stacking for arbitrary vector paths and inline images remains planned."
 
 [[feature]]
 id = "edit.align-distribute-objects"
@@ -9928,8 +9948,8 @@ milestone = "M14"
 status = "partial"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/view.rs::default_page_display_is_used_for_new_documents", "crates/ui-egui/tests/it/view.rs::default_zoom_is_used_for_new_documents", "crates/ui-egui/tests/it/view.rs::preferences_set_the_default_zoom", "crates/ui-egui/tests/it/view.rs::always_use_my_default_zoom_and_page_layout_ignores_what_the_pdf_asks_for"]
-notes = "Preferences ▸ Documents and view: Default page display and Default zoom (Fit to width, Zoom to page level or a percentage) for every new tab; a PDF that asks for a layout or zoom gets it, unless Always use my default zoom and page layout is on. Missing: Acrobat's resolution, rendering and page-content options"
+evidence = ["crates/ui-egui/tests/page_shadows.rs::viewport_fades_follow_the_preference_and_keep_other_scroll_areas_styled", "crates/ui-egui/tests/page_shadows.rs::rendered_page_content_is_identical_with_and_without_decoration", "crates/ui-egui/tests/page_shadows.rs::page_shadow_preference_round_trips_and_ignores_invalid_settings", "crates/ui-egui/tests/page_shadows.rs::viewer_shadows_follow_the_preference_without_moving_pages", "crates/ui-egui/tests/page_shadows.rs::organize_shadows_follow_the_preference", "crates/ui-egui/tests/it/control.rs::page_shadows_are_an_observable_app_wide_preference", "crates/ui-egui/tests/it/view.rs::default_page_display_is_used_for_new_documents", "crates/ui-egui/tests/it/view.rs::default_zoom_is_used_for_new_documents", "crates/ui-egui/tests/it/view.rs::preferences_set_the_default_zoom", "crates/ui-egui/tests/it/view.rs::always_use_my_default_zoom_and_page_layout_ignores_what_the_pdf_asks_for"]
+notes = "Preferences ▸ Documents and view: Default page display and Default zoom (Fit to width, Zoom to page level or a percentage) for every new tab; a PDF that asks for a layout or zoom gets it, unless Always use my default zoom and page layout is on. Preferences ▸ Appearance also has an app-wide, persistent Show Page Edge Shadows checkbox (on by default), exposed through ui.set and ui.state; it affects viewer and Organize decorations, including the viewport-edge gradients painted over pages, only. Missing: Acrobat's resolution, rendering and page-content options"
 
 [[feature]]
 id = "misc.prefs-documents"
