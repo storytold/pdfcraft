@@ -4143,3 +4143,77 @@ fn a_growable_lr_tb_subform_is_split_at_the_page_break() {
     assert_eq!(pages_of(r#"layout="lr-tb""#), [0, 0, 0, 0, 1, 1], "split at the break");
     assert_eq!(pages_of(r#"layout="lr-tb" h="6in""#), [1, 1, 1, 1, 1, 1], "a fixed height moves whole");
 }
+
+/// Where a row group lands against a page break, for each case the splitting rule tells apart:
+/// a growable `lr-tb`/`rl-tb` one that fits what is left stays whole on this page, one that
+/// doesn't is split at the break, and one taller than a whole page goes on over pages; one with
+/// a height, and a positioned one, move whole to the next page when they fit there.
+#[test]
+fn a_row_group_against_a_page_break_splits_only_when_growable_and_flowing() {
+    // A 6in field, then the group of `n` 1in rows (7in wide, one to a line) in a 10in area.
+    let pages_of = |attrs: &str, n: usize, positioned: bool| {
+        let rows: String = (0..n)
+            .map(|i| {
+                if positioned {
+                    format!(r#"<field name="f{i}" y="{i}in" w="7in" h="1in"/>"#)
+                } else {
+                    format!(r#"<field name="f{i}" w="7in" h="1in"/>"#)
+                }
+            })
+            .collect();
+        let xml = format!(
+            r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="tall" w="7in" h="6in"/><subform name="s" w="7.5in" {attrs}>{rows}</subform>
+</subform></template>"#
+        );
+        let t = crate::parse(&xml).unwrap().0;
+        let form = crate::layout::layout(&t, None).unwrap();
+        (0..n)
+            .map(|i| form.pages.iter().position(|p| widgets(p).iter().any(|w| w.som == format!("form[0].s[0].f{i}[0]"))).unwrap_or(99))
+            .collect::<Vec<_>>()
+    };
+    // Fits the 4in left: stays on this page, whole.
+    assert_eq!(pages_of(r#"layout="lr-tb""#, 3, false), [0, 0, 0], "a group that fits stays");
+    // Taller than a page (14in): starts here, 4 rows, then 10 on the next page.
+    let mut over = vec![0; 4];
+    over.extend([1; 10]);
+    assert_eq!(pages_of(r#"layout="lr-tb""#, 14, false), over, "a group taller than a page goes on over pages");
+    // Right-to-left rows split at the break as left-to-right ones do.
+    assert_eq!(pages_of(r#"layout="rl-tb""#, 6, false), [0, 0, 0, 0, 1, 1], "rl-tb splits at the break");
+    // A height, or a positioned layout: moved whole when it fits the next page.
+    assert_eq!(pages_of(r#"layout="lr-tb" h="6in""#, 6, false), [1; 6], "a fixed height moves whole");
+    assert_eq!(pages_of("", 6, true), [1; 6], "a positioned group moves whole");
+}
+
+/// The rows of a table whose cells are empty multi-line fields with a minimum height and no
+/// height start at that minimum (XFA 3.3 p. 731), so a table taller than a page puts as many of
+/// them on it as that height allows, and the rest on the next; cells with a height keep it.
+#[test]
+fn table_rows_of_minimum_height_cells_fill_the_page_at_that_height() {
+    let pages = |cell: &str, n: usize| {
+        let rows: String = (0..n)
+            .map(|i| format!(r#"<subform name="r{i}" layout="row"><field name="c" {cell}><ui><textEdit multiLine="1"/></ui></field><field name="d" {cell}><ui><textEdit multiLine="1"/></ui></field></subform>"#))
+            .collect();
+        let xml = format!(
+            r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="t" layout="table" columnWidths="2in 2in" w="4in">{rows}</subform>
+</subform></template>"#
+        );
+        let t = crate::parse(&xml).unwrap().0;
+        let form = crate::layout::layout(&t, None).unwrap();
+        let per_page: Vec<usize> = form.pages.iter().map(|p| widgets(p).iter().filter(|w| w.som.ends_with(".c[0]")).count()).collect();
+        let first_h = form.pages.first().and_then(|p| widgets(p).first().map(|w| w.rect.h)).unwrap_or(0.0);
+        (per_page, first_h)
+    };
+    // 0.4in (28.8pt) rows: 25 to a 10in page. At three lines (38.5pt), 18 would fit.
+    let (per_page, h) = pages(r#"minH="0.4in""#, 30);
+    assert_eq!(per_page, [25, 5], "row height {h}");
+    // A table that fits keeps all its rows on the page, each at the minimum.
+    let (per_page, h) = pages(r#"minH="0.4in""#, 10);
+    assert_eq!(per_page, [10]);
+    assert!(h <= 28.8 + 0.01, "a row starts at its minimum: {h}");
+    // Cells with a height: 0.5in rows, 20 to a page.
+    assert_eq!(pages(r#"h="0.5in""#, 30).0, [20, 10]);
+}
