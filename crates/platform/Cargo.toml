@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 
 [target.'cfg(target_os = "macos")'.dependencies]
+exacl = { version = "0.13", default-features = false }
 # `write_atomically`: a volume that refuses F_FULLFSYNC gets a plain fsync.
 rustix = { version = "1", features = ["fs"] }
 

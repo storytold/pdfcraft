@@ -1,0 +1,56 @@
+[package]
+name = "exacl"
+version = "0.13.0"
+authors = ["Bill Fisher <william.w.fisher@gmail.com>"]
+description = "Manipulate file system access control lists (ACL) on macOS, Linux, and FreeBSD"
+repository = "https://github.com/byllyfish/exacl"
+documentation = "https://byllyfish.github.io/exacl"
+license = "MIT"
+edition = "2024"
+keywords = ["acl", "access", "control"]
+categories = ["filesystem"]
+
+# Consider updating rust version to new floor 6-12 months after release of a new edition.
+# Prefer a MSRV tied to edition boundary.
+
+rust-version = "1.85"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+# There are two optional features that you can enable:
+#  - serde
+#  - buildtime_bindgen
+
+default = []
+
+# Use bindgen to build OS-specific bindings.
+#
+# On Linux, the bindings depend on the <sys/acl.h> system header. This header
+# is only present on systems that have the `libacl1-dev` package installed.
+
+buildtime_bindgen = ["bindgen"]
+
+[dependencies]
+bitflags = "2.11.1"
+log = "0.4.29"
+uuid = "1.23.1"
+scopeguard = "1.2.0"
+serde = { version = "1.0", optional = true, features = ["derive"] }
+
+[build-dependencies]
+bindgen = { version = "0.72.1", optional = true }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+# Used by exacl.rs example.
+clap = { version = "4.6.1", features = ["derive"] }
+env_logger = "0.11.10"
+serde_json = "1.0.149"
+
+[package.metadata.docs.rs]
+rustc-args = ["--cfg", "docsrs"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(_LABTEST)'] }
