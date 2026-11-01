@@ -83,7 +83,11 @@ impl PdfCraftApp {
         if self.combine_showing() && matches!(spec.needs, commands::Needs::Undo | commands::Needs::Redo) {
             return self.combine_can_undo(spec.needs == commands::Needs::Undo);
         }
-        commands::is_enabled(spec, &self.session, self.active_ids().map(|(_, id)| id))
+        // Undo also takes back typing in a box open on the page, and Redo what Undo took there,
+        // with no document step.
+        (commands::is_enabled(spec, &self.session, self.active_ids().map(|(_, id)| id))
+            || spec.needs == commands::Needs::Undo && self.page_typing_unapplied()
+            || spec.needs == commands::Needs::Redo && self.open_box_can_redo())
             && (spec.id != "edit.copy"
                 || self
                     .active
@@ -489,6 +493,7 @@ impl PdfCraftApp {
                     K::Background
                 };
                 self.marks_draft.replace = id.ends_with(".update");
+                self.marks_draft.opened(kind);
                 self.marks_draft.preview = None;
                 self.dialog = Some(Dialog::Marks(kind));
             }
@@ -797,7 +802,16 @@ impl PdfCraftApp {
             if matches!(spec.id, "view.previous_view" | "view.next_view") && !self.command_enabled(spec) {
                 continue;
             }
-            if typing && !spec.in_text {
+            // A box typed into on the page (a paragraph being edited, added text) keeps Undo and
+            // Redo only while it holds typing the page doesn't have, or Redo has typing to put
+            // back; then they reach the document. ⌘⇧Z is also ⌘Z to the Undo shortcut, so a
+            // Redo the box keeps is never taken as Undo.
+            let page_box = matches!(spec.id, "edit.undo" | "edit.redo")
+                && self.page_box_focused(ctx)
+                && !self.page_typing_unapplied()
+                && !(spec.id == "edit.redo" && self.page_box_can_redo(ctx))
+                && !(spec.id == "edit.undo" && ctx.input(|i| i.modifiers.shift));
+            if typing && !spec.in_text && !page_box {
                 continue;
             }
             let Some(key) = Key::from_name(s.key) else { continue };

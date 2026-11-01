@@ -1076,10 +1076,12 @@ fn solid_result(request: RenderRequest, w: u32, h: u32) -> pdfcraft_render::Rend
     }
 }
 
+/// Inject a deterministic pixel failure for exactly one rendering request.
 fn tile_error(request: RenderRequest) -> pdfcraft_render::RenderedPage {
     pdfcraft_render::RenderedPage { error: Some("synthetic tile failure".into()), ..solid_result(request, 0, 0) }
 }
 
+/// Hold asynchronous rasters so synthetic results control the tiled viewer state deterministically.
 fn tile_error_harness() -> egui_kittest::Harness<'static, PdfCraftApp> {
     let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 1000.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
@@ -1153,6 +1155,7 @@ fn tile_error_keeps_successful_pixels_in_both_result_orders() {
     }
 }
 
+/// Keep preview failures inspectable without showing a false error over successful main pixels.
 #[test]
 fn tile_followup_preview_failures_do_not_mark_the_main_canvas() {
     for main_fails in [false, true] {
@@ -1193,6 +1196,7 @@ fn tile_followup_preview_failures_do_not_mark_the_main_canvas() {
     }
 }
 
+/// Exercise actual oversized viewport demand beyond 64 failures and keep an untried tile schedulable.
 #[test]
 fn tile_followup_saturated_visible_failures_do_not_starve_a_healthy_tile() {
     // ui.resize supports 8192 logical points. The downlevel backend fits its surface to
@@ -1250,6 +1254,7 @@ fn tile_followup_saturated_visible_failures_do_not_starve_a_healthy_tile() {
     assert_eq!(h.state_mut().views[0].receive_result(&ctx, tile_error(healthy)), 0, "suspension still rejects stale results");
 }
 
+/// Hide recovered zoom diagnostics while retaining suppression history and current tile failures.
 #[test]
 fn tile_review_new_tiled_zoom_hides_history_but_keeps_current_failures() {
     let ctx = egui::Context::default();
@@ -1289,6 +1294,7 @@ fn tile_review_new_tiled_zoom_hides_history_but_keeps_current_failures() {
     assert!(view.page_errors().is_empty(), "invalidated demand cannot revive diagnostics");
 }
 
+/// Keep organizer sharpening independent of a failed main-page request.
 #[test]
 fn tile_review_main_failure_does_not_block_organize() {
     let mut h = tile_error_harness();
@@ -1311,6 +1317,7 @@ fn tile_review_main_failure_does_not_block_organize() {
     assert_eq!(h.state().views[0].grid_pages.len(), 1);
 }
 
+/// Allow thumbnail and print requests to complete despite a failure on the main canvas.
 #[test]
 fn tile_review_main_failure_does_not_block_thumbnail_or_print() {
     let ctx = egui::Context::default();
@@ -1351,6 +1358,7 @@ fn tile_review_main_failure_does_not_block_thumbnail_or_print() {
     assert_eq!(view.print_pages.len(), 1);
 }
 
+/// Stress distinct request histories and trim obsolete failures without retrying active demand.
 #[test]
 fn tile_review_failure_history_is_bounded_without_retrying_active_requests() {
     let ctx = egui::Context::default();
@@ -1400,6 +1408,7 @@ fn tile_review_failure_history_is_bounded_without_retrying_active_requests() {
     assert!(view.errors.is_empty() && view.last_queue.is_empty());
 }
 
+/// Require cached pixels to intersect the rotated viewport before showing a partial-error notice.
 #[test]
 fn tile_review_offscreen_tile_does_not_hide_the_no_content_error() {
     for rotation in [0, 90, 180, 270] {
@@ -1433,6 +1442,7 @@ fn tile_review_offscreen_tile_does_not_hide_the_no_content_error() {
     }
 }
 
+/// Keep the full-page diagnostic when every requested surface fails and suppress identical retries.
 #[test]
 fn tile_error_all_failures_keep_the_full_page_error_without_retrying() {
     let mut h = tile_error_harness();
@@ -1451,6 +1461,7 @@ fn tile_error_all_failures_keep_the_full_page_error_without_retrying() {
     assert!(pixels.pixels().filter(|p| p.0 == [0xFB, 0xF4, 0xF4, 0xFF]).count() > 100, "the existing error page is still painted");
 }
 
+/// Clear invalidated failure state and reject both successful and failed obsolete results.
 #[test]
 fn tile_error_invalidation_rejects_obsolete_successes_and_failures() {
     let ctx = egui::Context::default();
@@ -1494,6 +1505,7 @@ fn tile_error_invalidation_rejects_obsolete_successes_and_failures() {
     assert!(replacement.page_errors().is_empty(), "the old view's error does not belong to the replacement");
 }
 
+/// Recover with a complete new raster while rejecting late results from the old zoom.
 #[test]
 fn tile_error_a_new_complete_raster_recovers_and_old_zoom_results_stay_rejected() {
     let ctx = egui::Context::default();
@@ -1520,6 +1532,7 @@ fn tile_error_a_new_complete_raster_recovers_and_old_zoom_results_stay_rejected(
     assert!(view.page_errors().is_empty() && view.pages.is_empty(), "suspending the view also closes the result gate");
 }
 
+/// Retain a useful backdrop beneath a failed sharp tile and keep its diagnostic visible.
 #[test]
 fn tile_error_keeps_a_successful_backdrop_and_reports_the_failure() {
     let mut h = tile_error_harness();
@@ -1540,6 +1553,7 @@ fn tile_error_keeps_a_successful_backdrop_and_reports_the_failure() {
     }
 }
 
+/// Clear only failures superseded by admitted successful content, preserving independent failures.
 #[test]
 fn tile_error_success_only_clears_the_failure_it_supersedes() {
     let ctx = egui::Context::default();
@@ -1555,6 +1569,7 @@ fn tile_error_success_only_clears_the_failure_it_supersedes() {
     assert!(view.page_errors().is_empty(), "both requests eventually succeeded");
 }
 
+/// Retain a visible failure indicator even when the page sliver cannot contain the notice card.
 #[test]
 fn tile_error_notice_remains_visible_when_the_card_cannot_fit() {
     let ctx = egui::Context::default();
@@ -1821,6 +1836,7 @@ fn a_page_turned_back_to_is_still_cached() {
     assert!(v.prepare_render_queue(&info, 1.0).is_empty());
 }
 
+/// Prioritize missing main pixels, then admit independent preview and background text demand.
 #[test]
 fn visible_pages_render_before_thumbnails_and_text() {
     let ctx = egui::Context::default();

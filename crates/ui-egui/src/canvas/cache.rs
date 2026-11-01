@@ -51,6 +51,7 @@ const RESULTS_PER_FRAME: usize = 8;
 /// raises this allowance so every visible request can progress; it shrinks when demand ends.
 const RECENT_REQUEST_FAILURES: usize = 64;
 
+/// Separate main, thumbnail, grid and print history while retaining scale in each request key.
 fn failure_domain(request: RenderRequest) -> u64 {
     if request.tag & PRINT_TAG != 0 {
         PRINT_TAG
@@ -140,6 +141,7 @@ impl DocView {
         v
     }
 
+    /// Select the current failure across all consumers for aggregate automation diagnostics.
     pub(super) fn page_error(&self, page: usize) -> Option<&str> {
         self.request_error(page, false)
     }
@@ -149,6 +151,7 @@ impl DocView {
         self.request_error(page, true)
     }
 
+    /// Prefer current demand failures; retain a main failure during recovery until sharp pixels arrive.
     fn request_error(&self, page: usize, main_only: bool) -> Option<&str> {
         let errors = self.errors.get(&page)?;
         let relevant = |r: &RenderRequest| !main_only || failure_domain(*r) == 0;
@@ -162,6 +165,7 @@ impl DocView {
         pending.then(|| errors.iter().rev().find(|(r, _)| failure_domain(*r) == 0).map(|(_, e)| e.as_str())).flatten()
     }
 
+    /// Accept a current whole raster or a nonstale tile as completed main-canvas demand.
     fn main_request_ready(&self, request: RenderRequest) -> bool {
         if let Some(tile) = request.tile {
             let key = (request.page, request.tag, tile.x, tile.y);
@@ -171,10 +175,12 @@ impl DocView {
         }
     }
 
+    /// Suppress only an identical request, leaving other scales, tiles and consumers independent.
     fn request_failed(&self, request: RenderRequest) -> bool {
         self.errors.get(&request.page).is_some_and(|errors| errors.iter().any(|(r, _)| *r == request))
     }
 
+    /// Allow every currently demanded pixel request a history slot, with a 64-record minimum.
     fn failure_limit(&self, page: usize, domain: u64) -> usize {
         let demand = self.error_demand.as_deref().unwrap_or(&self.last_queue);
         RECENT_REQUEST_FAILURES
@@ -212,6 +218,7 @@ impl DocView {
         queue.retain(|r| r.kind != RequestKind::Pixels || !self.request_failed(*r));
     }
 
+    /// Replace duplicate failures and evict obsolete history within the request consumer allowance.
     fn record_request_failure(&mut self, request: RenderRequest, reason: String) {
         let demand = self.error_demand.as_deref().unwrap_or(&self.last_queue);
         let domain = failure_domain(request);
@@ -228,6 +235,7 @@ impl DocView {
         errors.push((request, reason));
     }
 
+    /// Report outstanding raster, text or content-move work for the viewer wakeup loop.
     pub fn render_pending(&self) -> bool {
         !self.last_queue.is_empty() || self.text_background.pending() || self.move_background.pending()
     }
@@ -573,6 +581,7 @@ impl DocView {
         self.texts.retain(|p, _| keep.contains(p));
     }
 
+    /// Submit current frame demand, discarding old geometry when page sizes change during layout.
     pub(crate) fn finish_render_frame(&mut self, ctx: &egui::Context, info: &DocInfo, pool: &RenderPool) {
         if self.frame_geometry_changed {
             // Dialogs and edits can replace pages after the canvas collected demand. Its
@@ -618,6 +627,7 @@ impl DocView {
         }
     }
 
+    /// Reject stale results before upload, record request failures and retain independently successful pixels.
     pub(super) fn receive_result(&mut self, ctx: &egui::Context, r: pdfcraft_render::RenderedPage) -> usize {
         if !self.last_queue.contains(&r.request) {
             return 0;

@@ -67,5 +67,23 @@ impl Content {
     }
 }
 
+fn align_code(a: Align) -> i64 {
+    match a {
+        Align::Left => 0,
+        Align::Center => 1,
+        Align::Right => 2,
+        Align::Justify => 3,
+    }
+}
+
+fn align_from(code: Option<i64>) -> Align {
+    match code {
+        Some(1) => Align::Center,
+        Some(2) => Align::Right,
+        Some(3) => Align::Justify,
+        _ => Align::Left,
+    }
+}
+
 #[cfg(test)]
 mod arabic_tests;
