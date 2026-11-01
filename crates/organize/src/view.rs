@@ -69,15 +69,35 @@ pub struct InitialView {
     pub non_full_screen: Navigation,
 }
 
+fn resolve(doc: &Document, obj: &Object) -> Object {
+    let mut cur = obj.clone();
+    for _ in 0..16 {
+        let Object::Ref(r) = cur else { break };
+        cur = (*doc.get(r)).clone();
+    }
+    cur
+}
+
+fn target_ref(doc: &Document, obj: &Object) -> Option<pdfcraft_cos::ObjRef> {
+    let mut cur = obj.as_ref()?;
+    for _ in 0..16 {
+        match &*doc.get(cur) {
+            Object::Ref(next) => cur = *next,
+            _ => return Some(cur),
+        }
+    }
+    None
+}
+
 fn catalog(doc: &Document) -> Result<(pdfcraft_cos::ObjRef, Dict), OrganizeError> {
-    let r = doc.root().ok_or(OrganizeError::NoPageTree)?;
+    let r = doc.trailer().get(b"Root").and_then(|root| target_ref(doc, root)).ok_or(OrganizeError::NoPageTree)?;
     Ok((r, doc.get(r).as_dict().cloned().ok_or(OrganizeError::NoPageTree)?))
 }
 
 /// The document's initial view as stored.
 pub fn initial_view(doc: &Document) -> InitialView {
     let Ok((_, c)) = catalog(doc) else { return InitialView::default() };
-    let name = |d: &Dict, k: &[u8]| d.get(k).map(|o| doc.resolve(o)).and_then(|o| o.as_name().map(<[u8]>::to_vec));
+    let name = |d: &Dict, k: &[u8]| d.get(k).and_then(|o| resolve(doc, o).as_name().map(<[u8]>::to_vec));
     let mut v = InitialView {
         navigation: match name(&c, b"PageMode").as_deref() {
             Some(b"UseOutlines") => Navigation::Bookmarks,
@@ -96,11 +116,11 @@ pub fn initial_view(doc: &Document) -> InitialView {
             Some(b"TwoColumnRight") => Layout::TwoUpContinuousCoverPage,
             _ => Layout::Default,
         },
-        language: c.get(b"Lang").map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(|s| s.to_text())).filter(|s| !s.is_empty()),
+        language: c.get(b"Lang").and_then(|o| resolve(doc, o).as_string().map(|s| s.to_text())).filter(|s| !s.is_empty()),
         ..InitialView::default()
     };
-    if let Some(vp) = c.get(b"ViewerPreferences").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()) {
-        let flag = |k: &[u8]| matches!(vp.get(k).map(|o| doc.resolve(o)).as_deref(), Some(Object::Bool(true)));
+    if let Some(vp) = c.get(b"ViewerPreferences").and_then(|o| resolve(doc, o).as_dict().cloned()) {
+        let flag = |k: &[u8]| matches!(vp.get(k).map(|o| resolve(doc, o)), Some(Object::Bool(true)));
         v.fit_window = flag(b"FitWindow");
         v.center_window = flag(b"CenterWindow");
         v.display_title = flag(b"DisplayDocTitle");
@@ -121,28 +141,32 @@ pub fn initial_view(doc: &Document) -> InitialView {
     // The opening destination: an explicit array, a GoTo action's `/D`, or a named destination (a
     // name or string, §12.3.2.4) as the explicit one it names, so that the page and magnification
     // read here are where the document opens. A name that names nothing reads as page 1.
-    let dest = c.get(b"OpenAction").map(|o| doc.resolve(o)).and_then(|o| match &*o {
+    let dest = c.get(b"OpenAction").map(|o| resolve(doc, o)).and_then(|o| match &o {
         Object::Array(_) | Object::Name(_) | Object::String(_) => crate::outline::resolve_dest(doc, &o),
-        Object::Dict(d) if d.name(b"S") == Some(b"GoTo") => d.get(b"D").and_then(|x| crate::outline::resolve_dest(doc, x)),
+        Object::Dict(d) if name(d, b"S").as_deref() == Some(b"GoTo") => {
+            d.get(b"D").map(|x| resolve(doc, x)).and_then(|x| crate::outline::resolve_dest(doc, &x))
+        }
         _ => None,
     });
     if let Some(d) = dest {
         let pages = crate::walk(doc).unwrap_or_default();
         v.page = d
             .first()
-            .and_then(|p| match p {
-                Object::Ref(r) => pages.iter().position(|(pr, _)| pr == r),
-                Object::Int(i) => usize::try_from(*i).ok(),
-                _ => None,
+            .and_then(|p| {
+                if let Some(r) = target_ref(doc, p) {
+                    pages.iter().position(|(pr, _)| *pr == r)
+                } else {
+                    resolve(doc, p).as_int().and_then(|i| usize::try_from(i).ok())
+                }
             })
             .unwrap_or(0);
-        let kind = d.get(1).and_then(|k| k.as_name().map(<[u8]>::to_vec));
+        let kind = d.get(1).and_then(|k| resolve(doc, k).as_name().map(<[u8]>::to_vec));
         v.magnification = match kind.as_deref() {
             Some(b"Fit") => Magnification::FitPage,
             Some(b"FitH") => Magnification::FitWidth,
             Some(b"FitV") => Magnification::FitHeight,
             Some(b"FitB" | b"FitBH" | b"FitBV") => Magnification::FitVisible,
-            Some(b"XYZ") => match d.get(4).and_then(|z| z.as_f64()) {
+            Some(b"XYZ") => match d.get(4).and_then(|z| resolve(doc, z).as_f64()) {
                 Some(z) if z > 0.0 && (z - 1.0).abs() < 1e-6 => Magnification::ActualSize,
                 Some(z) if z > 0.0 => Magnification::Percent(z * 100.0),
                 _ => Magnification::Default,
@@ -158,8 +182,7 @@ pub fn initial_view(doc: &Document) -> InitialView {
 pub fn displays_doc_title(doc: &Document) -> bool {
     let Ok((_, c)) = catalog(doc) else { return false };
     c.get(b"ViewerPreferences")
-        .map(|o| doc.resolve(o))
-        .and_then(|o| o.as_dict().map(|vp| matches!(vp.get(b"DisplayDocTitle").map(|x| doc.resolve(x)).as_deref(), Some(Object::Bool(true)))))
+        .and_then(|o| resolve(doc, o).as_dict().map(|vp| matches!(vp.get(b"DisplayDocTitle").map(|x| resolve(doc, x)), Some(Object::Bool(true)))))
         .unwrap_or(false)
 }
 
@@ -173,11 +196,10 @@ pub fn set_initial_view(doc: &mut Document, v: &InitialView) -> Result<(), Organ
     };
     let (root, c) = catalog(doc)?;
     let pages = crate::walk(doc)?;
-    if v.page >= pages.len() {
+    let Some(&(page_ref, _)) = pages.get(v.page) else {
         return Err(OrganizeError::NoSuchPage(v.page));
-    }
-    let page_ref = pages[v.page].0;
-    let mut vp = c.get(b"ViewerPreferences").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
+    };
+    let mut vp = c.get(b"ViewerPreferences").and_then(|o| resolve(doc, o).as_dict().cloned()).unwrap_or_default();
     for (k, on) in [
         (&b"FitWindow"[..], v.fit_window),
         (b"CenterWindow", v.center_window),
@@ -198,10 +220,11 @@ pub fn set_initial_view(doc: &mut Document, v: &InitialView) -> Result<(), Organ
         vp.remove(b"Direction");
     }
     // A destination, explicit or named (§12.3.2.4), or a GoTo action to one.
-    let open_action_is_dest = match c.get(b"OpenAction").map(|o| doc.resolve(o)) {
+    let open_action_is_dest = match c.get(b"OpenAction").map(|o| resolve(doc, o)) {
         None => true,
         Some(o) => {
-            matches!(&*o, Object::Array(_) | Object::Name(_) | Object::String(_)) || o.as_dict().is_some_and(|d| d.name(b"S") == Some(b"GoTo"))
+            matches!(&o, Object::Array(_) | Object::Name(_) | Object::String(_))
+                || o.as_dict().and_then(|d| d.get(b"S")).and_then(|s| resolve(doc, s).as_name().map(<[u8]>::to_vec)).as_deref() == Some(b"GoTo")
         }
     };
     let dest = match v.magnification {
@@ -355,5 +378,46 @@ mod tests {
             assert_eq!((v.navigation, v.non_full_screen), (Navigation::Pages, Navigation::PageOnly), "{mode}");
         }
         assert_eq!(initial_view(&with_modes("FullScreen", Object::Int(1))).non_full_screen, Navigation::PageOnly);
+    }
+
+    #[test]
+    fn initial_view_resolves_indirect_goto_action_and_dest_elements() {
+        let mut doc = Document::new_empty();
+        let pages_ref = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages"))).expect("pages");
+        let mut p1 = Dict::new();
+        p1.set(b"Type".to_vec(), Object::name("Page"));
+        p1.set(b"Parent".to_vec(), Object::Ref(pages_ref));
+        let p1_ref = doc.add(Object::Dict(p1));
+        let mut p2 = Dict::new();
+        p2.set(b"Type".to_vec(), Object::name("Page"));
+        p2.set(b"Parent".to_vec(), Object::Ref(pages_ref));
+        let p2_ref = doc.add(Object::Dict(p2));
+        doc.update_dict(pages_ref, |d| {
+            d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(p1_ref), Object::Ref(p2_ref)]));
+            d.set(b"Count".to_vec(), Object::Int(2));
+        })
+        .expect("update pages");
+
+        let p2_hop = doc.add(Object::Ref(p2_ref));
+        let xyz_ref = doc.add(Object::name("XYZ"));
+        let zoom_ref = doc.add(Object::Real(1.5));
+        let dest_arr = Object::Array(vec![Object::Ref(p2_hop), Object::Ref(xyz_ref), Object::Null, Object::Null, Object::Ref(zoom_ref)]);
+
+        let goto_name = doc.add(Object::name("GoTo"));
+        let mut action = Dict::new();
+        action.set(b"S".to_vec(), Object::Ref(goto_name));
+        action.set(b"D".to_vec(), dest_arr);
+        let action_ref = doc.add(Object::Dict(action));
+        let action_hop = doc.add(Object::Ref(action_ref));
+
+        let root = doc.root().expect("root");
+        doc.update_dict(root, |c| {
+            c.set(b"OpenAction".to_vec(), Object::Ref(action_hop));
+        })
+        .expect("set OpenAction");
+
+        let view = initial_view(&doc);
+        assert_eq!(view.page, 1);
+        assert_eq!(view.magnification, Magnification::Percent(150.0));
     }
 }

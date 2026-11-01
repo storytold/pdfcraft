@@ -17,6 +17,30 @@ const MAX_FORM_DEPTH: u8 = 8;
 /// Count every resource object and direct child; a graph beyond this is left unpruned.
 const MAX_GLYPH_RESOURCE_WORK: usize = 10_000;
 
+fn resolve(doc: &Document, obj: &Object) -> Object {
+    let mut cur = obj.clone();
+    for _ in 0..16 {
+        let Object::Ref(r) = cur else { break };
+        cur = (*doc.get(r)).clone();
+    }
+    cur
+}
+
+fn target_ref(doc: &Document, obj: &Object) -> Option<ObjRef> {
+    let mut cur = obj.as_ref()?;
+    for _ in 0..16 {
+        match &*doc.get(cur) {
+            Object::Ref(next) => cur = *next,
+            _ => return Some(cur),
+        }
+    }
+    None
+}
+
+fn dict_name(doc: &Document, d: &Dict, key: &[u8]) -> Option<Vec<u8>> {
+    d.get(key).and_then(|v| resolve(doc, v).as_name().map(<[u8]>::to_vec))
+}
+
 /// The dictionary a set of drawn names belongs to.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum XKey {
@@ -129,7 +153,7 @@ impl Pruner<'_> {
         if self.glyph_budget_exhausted {
             return;
         }
-        let Some(fonts) = resources.get(b"Font").map(|f| self.doc.resolve(f)) else { return };
+        let Some(fonts) = resources.get(b"Font").map(|f| resolve(self.doc, f)) else { return };
         let Some(fonts) = fonts.as_dict() else { return };
         // Bound discovery too, but don't spend the glyph-graph budget repeatedly examining an
         // ordinary shared font catalog on every page of a large document.
@@ -141,9 +165,9 @@ impl Pruner<'_> {
             if self.glyph_budget_exhausted {
                 return;
             }
-            let font_ref = font.as_ref();
-            let resolved = self.doc.resolve(font);
-            let Some(font) = resolved.as_dict().filter(|f| f.name(b"Subtype") == Some(b"Type3")) else { continue };
+            let font_ref = target_ref(self.doc, font);
+            let resolved = resolve(self.doc, font);
+            let Some(font) = resolved.as_dict().filter(|f| dict_name(self.doc, f, b"Subtype").as_deref() == Some(b"Type3")) else { continue };
             if let Some(glyph_resources) = font.get(b"Resources") {
                 if let Some(r) = font_ref
                     && !self.glyph_fonts.insert(r)
@@ -168,14 +192,14 @@ impl Pruner<'_> {
     /// The `/XObject` dictionary of `resources`, with the key its drawn names belong to.
     fn xobjects(&self, resources: &Dict, owner: Owner) -> Option<(Dict, XKey)> {
         let x = resources.get(b"XObject")?;
-        if let Some(r) = x.as_ref() {
-            return Some((self.doc.resolve(x).as_dict()?.clone(), XKey::XObject(r)));
+        if let Some(r) = target_ref(self.doc, x) {
+            return Some((self.doc.get(r).as_dict()?.clone(), XKey::XObject(r)));
         }
         let key = match owner {
             Owner::Resources(r) => XKey::Resources(r),
             Owner::Page(p) => XKey::Page(p),
         };
-        Some((self.doc.resolve(x).as_dict()?.clone(), key))
+        Some((resolve(self.doc, x).as_dict()?.clone(), key))
     }
 
     /// Record every XObject name `data` draws with `Do`, descending into form XObjects.
@@ -194,18 +218,18 @@ impl Pruner<'_> {
             }
             let Some(name) = op.name(0) else { continue };
             self.used.entry(key).or_default().insert(name.to_vec());
-            let Some(r) = xobjects.get(name).and_then(Object::as_ref) else { continue };
+            let Some(r) = xobjects.get(name).and_then(|v| target_ref(self.doc, v)) else { continue };
             let Object::Stream(s) = &*self.doc.get(r) else { continue };
-            if s.dict.name(b"Subtype") != Some(b"Form") {
+            if dict_name(self.doc, &s.dict, b"Subtype").as_deref() != Some(b"Form") {
                 continue;
             }
             let (inner, inner_owner) = match s.dict.get(b"Resources") {
-                Some(res) => match res.as_ref() {
+                Some(res) => match target_ref(self.doc, res) {
                     Some(rr) => match self.doc.get(rr).as_dict().cloned() {
                         Some(d) => (d, Owner::Resources(rr)),
                         None => continue,
                     },
-                    None => match self.doc.resolve(res).as_dict().cloned() {
+                    None => match resolve(self.doc, res).as_dict().cloned() {
                         // The form carries its resources inline: filter them on the form itself.
                         Some(d) => (d, Owner::Resources(r)),
                         None => continue,
@@ -246,11 +270,10 @@ pub(crate) fn content_bytes(doc: &Document, contents: &Object) -> Result<Vec<u8>
 
 /// The resources of a page (as `walk` reports them) with their owner.
 fn resolve_resources(doc: &Document, resources: &Object, page: ObjRef) -> Option<(Dict, Owner)> {
-    match resources {
-        Object::Ref(r) => doc.get(*r).as_dict().cloned().map(|d| (d, Owner::Resources(*r))),
-        Object::Dict(d) => Some((d.clone(), Owner::Page(page))),
-        _ => None,
+    if let Some(r) = target_ref(doc, resources) {
+        return doc.get(r).as_dict().cloned().map(|d| (d, Owner::Resources(r)));
     }
+    resolve(doc, resources).as_dict().cloned().map(|d| (d, Owner::Page(page)))
 }
 
 /// Drop the entries `names` never draws. Returns how many were removed.
@@ -273,10 +296,10 @@ fn filter_at(doc: &mut Document, key: XKey, names: &HashSet<Vec<u8>>) -> Result<
         XKey::Resources(r) => {
             let Some(d) = doc.get(r).as_dict().cloned() else { return Ok(0) };
             let Some(x) = d.get(b"XObject") else { return Ok(0) };
-            if x.as_ref().is_some() {
+            if target_ref(doc, x).is_some() {
                 return Ok(0); // recorded as XObject(r) instead
             }
-            let Some(mut xd) = doc.resolve(x).as_dict().cloned() else { return Ok(0) };
+            let Some(mut xd) = resolve(doc, x).as_dict().cloned() else { return Ok(0) };
             let removed = drop_unused(&mut xd, names);
             if removed > 0 {
                 doc.update_dict(r, |d| d.set(b"XObject".to_vec(), Object::Dict(xd.clone())))?;
@@ -286,15 +309,15 @@ fn filter_at(doc: &mut Document, key: XKey, names: &HashSet<Vec<u8>>) -> Result<
         XKey::Page(p) => {
             let Some(pd) = doc.get(p).as_dict().cloned() else { return Ok(0) };
             let Some(res) = pd.get(b"Resources") else { return Ok(0) };
-            if res.as_ref().is_some() {
+            if target_ref(doc, res).is_some() {
                 return Ok(0); // recorded as Resources(r) instead
             }
-            let Some(mut rd) = doc.resolve(res).as_dict().cloned() else { return Ok(0) };
+            let Some(mut rd) = resolve(doc, res).as_dict().cloned() else { return Ok(0) };
             let Some(x) = rd.get(b"XObject") else { return Ok(0) };
-            if x.as_ref().is_some() {
+            if target_ref(doc, x).is_some() {
                 return Ok(0);
             }
-            let Some(mut xd) = doc.resolve(x).as_dict().cloned() else { return Ok(0) };
+            let Some(mut xd) = resolve(doc, x).as_dict().cloned() else { return Ok(0) };
             let removed = drop_unused(&mut xd, names);
             if removed > 0 {
                 rd.set(b"XObject".to_vec(), Object::Dict(xd));
@@ -343,4 +366,97 @@ pub(crate) fn prune_unused_xobjects(doc: &mut Document) -> Result<usize, Organiz
         }
     }
     Ok(removed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pdfcraft_cos::Stream;
+
+    #[test]
+    fn prune_unused_xobjects_follows_form_with_indirect_subtype_and_chained_ref() {
+        let mut doc = Document::new_empty();
+        let used_img = doc.add(Object::Stream(Stream::from_raw(Dict::new(), Vec::new())));
+        let unused_img = doc.add(Object::Stream(Stream::from_raw(Dict::new(), Vec::new())));
+
+        let form_subtype_ref = doc.add(Object::Name(b"Form".to_vec()));
+        let mut form_dict = Dict::new();
+        form_dict.set(b"Subtype".to_vec(), Object::Ref(form_subtype_ref));
+        // Form has no /Resources of its own; it draws /ImUsed from the page's /Resources.
+        let form_ref = doc.add(Object::Stream(Stream::from_raw(form_dict, b"/ImUsed Do".to_vec())));
+        let form_hop = doc.add(Object::Ref(form_ref));
+
+        let mut xo = Dict::new();
+        xo.set(b"Fm1".to_vec(), Object::Ref(form_hop));
+        xo.set(b"ImUsed".to_vec(), Object::Ref(used_img));
+        xo.set(b"ImUnused".to_vec(), Object::Ref(unused_img));
+        let mut res = Dict::new();
+        res.set(b"XObject".to_vec(), Object::Dict(xo));
+
+        let contents = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"/Fm1 Do".to_vec())));
+        let pages_ref = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages"))).expect("pages");
+        let mut page = Dict::new();
+        page.set(b"Type".to_vec(), Object::name("Page"));
+        page.set(b"Parent".to_vec(), Object::Ref(pages_ref));
+        page.set(b"Resources".to_vec(), Object::Dict(res));
+        page.set(b"Contents".to_vec(), Object::Ref(contents));
+        let page_ref = doc.add(Object::Dict(page));
+        doc.update_dict(pages_ref, |d| {
+            d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page_ref)]));
+            d.set(b"Count".to_vec(), Object::Int(1));
+        })
+        .expect("update pages");
+
+        let removed = prune_unused_xobjects(&mut doc).expect("prune unused xobjects");
+        assert_eq!(removed, 1);
+        let page_obj = doc.get(page_ref);
+        let kept_xo = page_obj
+            .as_dict()
+            .and_then(|d| d.get(b"Resources"))
+            .and_then(Object::as_dict)
+            .and_then(|r| r.get(b"XObject"))
+            .and_then(Object::as_dict)
+            .expect("kept xo");
+        assert!(kept_xo.contains(b"Fm1"));
+        assert!(kept_xo.contains(b"ImUsed"), "image drawn by inheriting form with indirect /Subtype /Form must not be pruned");
+        assert!(!kept_xo.contains(b"ImUnused"));
+    }
+
+    #[test]
+    fn prune_unused_xobjects_distrusts_type3_font_with_indirect_subtype_and_chained_ref() {
+        let mut doc = Document::new_empty();
+        let img = doc.add(Object::Stream(Stream::from_raw(Dict::new(), Vec::new())));
+
+        let type3_ref = doc.add(Object::Name(b"Type3".to_vec()));
+        let mut font_dict = Dict::new();
+        font_dict.set(b"Subtype".to_vec(), Object::Ref(type3_ref));
+        let font_ref = doc.add(Object::Dict(font_dict));
+        let font_hop = doc.add(Object::Ref(font_ref));
+
+        let mut fonts = Dict::new();
+        fonts.set(b"F1".to_vec(), Object::Ref(font_hop));
+        let mut xo = Dict::new();
+        xo.set(b"ImGlyph".to_vec(), Object::Ref(img));
+        xo.set(b"ImPage".to_vec(), Object::Ref(img));
+        let mut res = Dict::new();
+        res.set(b"Font".to_vec(), Object::Dict(fonts));
+        res.set(b"XObject".to_vec(), Object::Dict(xo));
+
+        let contents = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"/ImPage Do BT /F1 12 Tf (a) Tj ET".to_vec())));
+        let pages_ref = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages"))).expect("pages");
+        let mut page = Dict::new();
+        page.set(b"Type".to_vec(), Object::name("Page"));
+        page.set(b"Parent".to_vec(), Object::Ref(pages_ref));
+        page.set(b"Resources".to_vec(), Object::Dict(res));
+        page.set(b"Contents".to_vec(), Object::Ref(contents));
+        let page_ref = doc.add(Object::Dict(page));
+        doc.update_dict(pages_ref, |d| {
+            d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page_ref)]));
+            d.set(b"Count".to_vec(), Object::Int(1));
+        })
+        .expect("update pages");
+
+        let removed = prune_unused_xobjects(&mut doc).expect("prune unused xobjects");
+        assert_eq!(removed, 0, "resources shared with a resourceless Type3 font must not be pruned");
+    }
 }
