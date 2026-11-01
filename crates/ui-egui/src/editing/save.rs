@@ -91,11 +91,15 @@ impl PdfCraftApp {
             };
             match delivered {
                 Ok(()) => {
-                    let _ = self.session.mark_saved(id, bytes, None);
+                    let marked_saved = self.session.mark_saved(id, bytes, None).is_ok();
                     if let Some(doc) = self.session.get(id)
                         && let Some(view) = self.views.get_mut(index)
                     {
                         view.document_changed(&doc.info);
+                        if marked_saved {
+                            view.imported_image_baseline = None;
+                            view.imported_image_dirty.set(None);
+                        }
                     }
                     // The host reports where the file went (and any failure) itself.
                     if !to_host {
@@ -198,6 +202,8 @@ impl PdfCraftApp {
                     view.document_changed(&doc.info);
                     // Saving over a version that changed on disk keeps this one: nothing to ask.
                     view.disk_changed = false;
+                    view.imported_image_baseline = None;
+                    view.imported_image_dirty.set(None);
                 }
                 self.notify_fmt("Saved {name}", &[("name", &short_name(dest))]);
                 #[cfg(target_os = "macos")]

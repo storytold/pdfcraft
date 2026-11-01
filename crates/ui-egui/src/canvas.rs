@@ -467,6 +467,10 @@ pub struct DocView {
     pub close_requested: bool,
     /// A historical snapshot of another document (see [`Snapshot`]): `None` for real documents.
     pub snapshot: Option<Snapshot>,
+    /// Baseline bytes of an imported image document used to detect user edits independently of undo history (#4942).
+    pub(crate) imported_image_baseline: Option<std::sync::Arc<Vec<u8>>>,
+    /// Cached dirty state for an imported image baseline: `(generation, dirty)`.
+    pub(crate) imported_image_dirty: std::cell::Cell<Option<(u64, bool)>>,
     /// Two-page view: show the first page alone, as a cover (View ▸ Page display).
     pub cover: bool,
     /// Previous view / Next view: pages visited before (and after, once going back).
@@ -893,6 +897,8 @@ impl DocView {
             disk_changed: false,
             close_requested: false,
             snapshot: None,
+            imported_image_baseline: None,
+            imported_image_dirty: std::cell::Cell::new(None),
             cover: false,
             back: Vec::new(),
             forward: Vec::new(),

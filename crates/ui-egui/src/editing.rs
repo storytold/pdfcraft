@@ -820,7 +820,21 @@ impl PdfCraftApp {
     pub(crate) fn has_unsaved_work(&self, index: usize) -> bool {
         let Some(v) = self.views.get(index) else { return false };
         let Some(doc) = self.session.get(v.id) else { return false };
-        doc.dirty
+        let dirty = if let Some(baseline) = &v.imported_image_baseline {
+            let generation = doc.edit_generation();
+            if let Some((cached_gen, cached_dirty)) = v.imported_image_dirty.get()
+                && cached_gen == generation
+            {
+                cached_dirty
+            } else {
+                let d = !std::sync::Arc::ptr_eq(&doc.bytes, baseline) && doc.bytes.as_slice() != baseline.as_slice();
+                v.imported_image_dirty.set(Some((generation, d)));
+                d
+            }
+        } else {
+            doc.dirty
+        };
+        dirty
             || v.pending_edit.is_some()
             || v.content.blocked().is_some()
             || v.forms.focus.as_ref().is_some_and(|f| crate::forms_ui::draft_edit(f, &doc.form).is_some())

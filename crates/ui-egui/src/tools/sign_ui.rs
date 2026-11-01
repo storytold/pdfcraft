@@ -492,6 +492,8 @@ impl PdfCraftApp {
             app.sign_graphic = choice;
             if let Some(view) = app.views.iter_mut().find(|v| v.id == doc_id) {
                 view.invalidate_content();
+                view.imported_image_baseline = None;
+                view.imported_image_dirty.set(None);
             }
             app.right = Some(crate::RightPanel::Signatures);
             app.notify_fmt("Signed and saved to {path}", &[("path", &path.display().to_string())]);
