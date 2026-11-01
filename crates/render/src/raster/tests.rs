@@ -2940,19 +2940,30 @@ fn a_jp2_cielab_image_reads_its_b_range() {
 /// depth decodes as 8 bits does. From 32 bits the 32-bit shifts overflowed, which panicked in debug
 /// builds. A deeper column (the descriptor can say 128) makes the box invalid, and the lenient
 /// decode sets it aside, drawing the indices as they are: the midpoint, 128, in one grey channel.
+///
+/// Columns of different depths (from review on #5649) decode as equal ones do: sYCC brings Cb and
+/// Cr to Y's scale, and CIELab takes each default offset from its own channel's depth (ISO 15444-1
+/// M.11.7.4.1). Both converted every channel at the first one's depth, and the 8-bit rescale then
+/// read the converted a*/b* (or G/B) at their old depth.
 #[test]
 fn a_jp2_palette_of_up_to_38_bits_is_applied() {
     const FRACTIONS: [f64; 3] = [200.0 / 255.0, 90.0 / 255.0, 160.0 / 255.0];
-    let decode = |enumerated: u32, columns: u8, bits: u8| {
-        let bytes = usize::from(bits).div_ceil(8);
-        let max = u128::MAX >> (128 - u32::from(bits));
-        // One entry: each column's fraction of the column's full scale, in `bytes` bytes.
-        let entry = FRACTIONS[..usize::from(columns)]
+    // A palette with one column per depth in `depths`.
+    let decode = |enumerated: u32, depths: &[u8]| {
+        // One entry: each column's fraction of its own full scale, in as many bytes as it needs.
+        let entry = depths
             .iter()
-            .flat_map(|fraction| ((max as f64 * fraction).round() as u128).to_be_bytes()[16 - bytes..].to_vec())
+            .zip(FRACTIONS)
+            .flat_map(|(&bits, fraction)| {
+                let max = u128::MAX >> (128 - u32::from(bits));
+                let bytes = usize::from(bits).div_ceil(8);
+                ((max as f64 * fraction).round() as u128).to_be_bytes()[16 - bytes..].to_vec()
+            })
             .collect::<Vec<_>>();
+        let columns = depths.len() as u8;
         // 256 equal entries, so the midpoint index (128) picks one.
-        let pclr = [&[1, 0, columns][..], &vec![bits - 1; usize::from(columns)], &entry.repeat(256)].concat();
+        let descriptors = depths.iter().map(|bits| bits - 1).collect::<Vec<_>>();
+        let pclr = [&[1, 0, columns][..], &descriptors, &entry.repeat(256)].concat();
         // Channel c from component 0 through palette column c.
         let cmap = (0..columns).flat_map(|column| [0, 0, 1, column]).collect();
         let colr = [&[1, 0, 0][..], &enumerated.to_be_bytes()].concat();
@@ -2961,16 +2972,20 @@ fn a_jp2_palette_of_up_to_38_bits_is_applied() {
     };
     // Greyscale, sRGB, sYCC, CIELab.
     for (enumerated, columns) in [(17, 1), (16, 3), (18, 3), (14, 3)] {
-        let eight = decode(enumerated, columns, 8).unwrap();
-        assert_eq!(eight.len(), usize::from(columns), "colour space {enumerated} at 8 bits: {eight:?}");
-        for bits in [31, 32, 33, 38] {
-            let deep = decode(enumerated, columns, bits).unwrap_or_else(|e| panic!("colour space {enumerated}, {bits} bits: {e:?}"));
+        let eight = decode(enumerated, &vec![8; columns]).unwrap();
+        assert_eq!(eight.len(), columns, "colour space {enumerated} at 8 bits: {eight:?}");
+        let mut depths = [31, 32, 33, 38].map(|bits| vec![bits; columns]).to_vec();
+        if columns == 3 {
+            depths.extend([vec![8, 16, 38], vec![38, 8, 24]]);
+        }
+        for depths in depths {
+            let deep = decode(enumerated, &depths).unwrap_or_else(|e| panic!("colour space {enumerated}, {depths:?} bits: {e:?}"));
             let close = deep.len() == eight.len() && deep.iter().zip(&eight).all(|(a, b)| a.abs_diff(*b) <= 1);
-            assert!(close, "colour space {enumerated}, {bits} bits: {deep:?}, at 8 bits {eight:?}");
+            assert!(close, "colour space {enumerated}, {depths:?} bits: {deep:?}, at 8 bits {eight:?}");
         }
     }
     for bits in [39, 128] {
-        assert_eq!(decode(17, 1, bits).unwrap(), vec![128], "a {bits}-bit palette column was applied");
+        assert_eq!(decode(17, &[bits]).unwrap(), vec![128], "a {bits}-bit palette column was applied");
     }
 }
 

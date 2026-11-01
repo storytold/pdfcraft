@@ -665,12 +665,13 @@ fn cielab_to_rgb<S: Simd>(
     let rb = lab.rb.unwrap_or(200);
     let ol = lab.ol.unwrap_or(0);
     // PdfCraft patch (3): the default offsets and every `2^bits - 1` below in 64 bits, for the
-    // palette columns of up to 38 bits (`bit_depth` is at least 4, checked above).
-    let oa = lab.oa.map_or(1_u64 << (bit_depth - 1), u64::from);
-    let ob = lab.ob.map_or(
-        (1_u64 << (bit_depth - 2)) + (1_u64 << (bit_depth - 3)),
-        u64::from,
-    );
+    // palette columns of up to 38 bits (each precision is at least 4, checked above). Each
+    // default offset is from its own channel's precision (ISO 15444-1 M.11.7.4.1), not the
+    // first channel's: palette columns, and components, can differ in depth.
+    let oa = lab.oa.map_or(1_u64 << (prec1 - 1), u64::from);
+    let ob = lab
+        .ob
+        .map_or((1_u64 << (prec2 - 2)) + (1_u64 << (prec2 - 3)), u64::from);
 
     // Copied from OpenJPEG.
     let min_l = -(rl as f32 * ol as f32) / max_sample(prec0);
@@ -724,6 +725,11 @@ fn cielab_to_rgb<S: Simd>(
         b_v.mul_add(b_scale_v, b_offset_v).store(b_chunk);
     }
 
+    // PdfCraft patch (3): all three channels now hold samples of `bit_depth` bits (scaled to
+    // `bit_max`), whatever depth a* and b* had, and are rescaled to 8 bits as such.
+    a.bit_depth = bit_depth;
+    b.bit_depth = bit_depth;
+
     Ok(())
 }
 
@@ -741,6 +747,13 @@ fn sycc_to_rgb<S: Simd>(simd: S, components: &mut [ComponentData], bit_depth: u8
         unreachable!();
     };
 
+    // PdfCraft patch (3): `bit_depth` is Y's. Cb and Cr can have depths of their own (palette
+    // columns, and components, can differ), so they are first brought to Y's scale. The factor
+    // is exactly 1 for equal depths, where every sample stays as it was.
+    let to_y_scale = |depth: u8| max_value / max_sample(depth);
+    let cb_scale_v = f32x8::splat(simd, to_y_scale(cb.bit_depth));
+    let cr_scale_v = f32x8::splat(simd, to_y_scale(cr.bit_depth));
+
     let offset_v = f32x8::splat(simd, offset);
     let max_v = f32x8::splat(simd, max_value);
     let zero_v = f32x8::splat(simd, 0.0);
@@ -756,8 +769,8 @@ fn sycc_to_rgb<S: Simd>(simd: S, components: &mut [ComponentData], bit_depth: u8
         .zip(cr.container.chunks_exact_mut(SIMD_WIDTH))
     {
         let y_v = f32x8::from_slice(simd, y_chunk);
-        let cb_v = f32x8::from_slice(simd, cb_chunk) - offset_v;
-        let cr_v = f32x8::from_slice(simd, cr_chunk) - offset_v;
+        let cb_v = f32x8::from_slice(simd, cb_chunk) * cb_scale_v - offset_v;
+        let cr_v = f32x8::from_slice(simd, cr_chunk) * cr_scale_v - offset_v;
 
         // r = y + 1.402 * cr
         let r = cr_v.mul_add(cr_to_r, y_v);
@@ -770,6 +783,10 @@ fn sycc_to_rgb<S: Simd>(simd: S, components: &mut [ComponentData], bit_depth: u8
         g.min(max_v).max(zero_v).store(cb_chunk);
         b.min(max_v).max(zero_v).store(cr_chunk);
     }
+
+    // PdfCraft patch (3): R, G and B all hold samples of Y's depth now.
+    cb.bit_depth = bit_depth;
+    cr.bit_depth = bit_depth;
 
     Ok(())
 }
