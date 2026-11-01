@@ -223,6 +223,12 @@ impl PdfCraftApp {
 
     fn quit(&mut self, ctx: &egui::Context) {
         self.allow_quit = true;
+        for view in &self.views {
+            if view.detached {
+                let id = egui::ViewportId::from_hash_of(("detached-doc", view.id));
+                ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Close);
+            }
+        }
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
@@ -272,6 +278,13 @@ impl PdfCraftApp {
         } else {
             // A clean quit: nothing is left to recover.
             self.shutdown_recovery();
+            self.allow_quit = true;
+            for view in &self.views {
+                if view.detached {
+                    let id = egui::ViewportId::from_hash_of(("detached-doc", view.id));
+                    ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Close);
+                }
+            }
         }
     }
 
