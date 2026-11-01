@@ -66,6 +66,63 @@ fn an_upright_note_on_a_turned_page_is_in_view_where_it_is_drawn() {
     }
 }
 
+/// A redaction mark a file flags NoZoom shows, under the pointer, the areas applying it removes
+/// (its `/QuadPoints`, or its `/Rect` without them, ISO 32000-2 Table 195) at any zoom, not its
+/// appearance scaled to keep its size on the screen. At 50% that scale would double the fill
+/// over content the mark leaves in place.
+#[test]
+fn a_no_zoom_redaction_mark_shows_the_areas_it_removes() {
+    let mark = |quads: Vec<[f32; 8]>| Annotation {
+        page: 0,
+        subtype: "Redact".into(),
+        author: None,
+        contents: None,
+        modified: None,
+        name: None,
+        in_reply_to: None,
+        parent: None,
+        grouped: false,
+        rect: [40.0, 100.0, 80.0, 120.0],
+        color: None,
+        index: 0,
+        state: None,
+        quads,
+        locked: false,
+        intent: None,
+        fill_sign: false,
+        no_rotate: false,
+        points: Vec::new(),
+        no_zoom: true,
+    };
+    let page = PageInfo { width: 200.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 200.0, 200.0], rotation: 0 };
+    let prefs = CommentPrefs::default();
+    let quad = [40.0, 120.0, 80.0, 120.0, 40.0, 100.0, 80.0, 100.0];
+    for (magnification, scaled) in [(0.5, true), (1.0, false), (2.0, true)] {
+        let side = 200.0 * magnification * crate::canvas::PT;
+        let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(side, side)), rot: 0, pw: 200.0, ph: 200.0 };
+        for quads in [vec![quad], Vec::new()] {
+            let info = DocInfo { pages: vec![page.clone()], annotations: vec![mark(quads.clone())], ..Default::default() };
+            let cx = PageCx {
+                page: 0,
+                xf: &xf,
+                ptr: &PagePointer::default(),
+                info: &info,
+                tool: QuickTool::Select,
+                prefs: &prefs,
+                allowed: true,
+                hidden: false,
+                redact_mark: ([0.0; 3], 1.0),
+            };
+            let a = &info.annotations[0];
+            let removed = xf.user_rect(&info, 0, [40.0, 100.0, 80.0, 120.0]);
+            assert_eq!(cx.redact_rects(a), vec![removed], "{magnification}, quads: {}", quads.len());
+            if scaled {
+                assert_ne!(cx.screen_rect(a), removed, "{magnification}: the mark is drawn NoZoom");
+            }
+        }
+    }
+}
+
 /// A listed comment or reply at `index` on `page`, replying to `parent`.
 fn listed(page: usize, index: usize, contents: &str, parent: Option<(usize, usize)>) -> Annotation {
     Annotation {

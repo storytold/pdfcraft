@@ -303,6 +303,15 @@ pub enum SortBy {
     Color,
 }
 
+/// The user-space bounds `[x0, y0, x1, y1]` of the `/QuadPoints` quadrilateral `q`.
+fn quad_bounds(q: &[f32; 8]) -> [f32; 4] {
+    let xs = [q[0], q[2], q[4], q[6]];
+    let ys = [q[1], q[3], q[5], q[7]];
+    let (x0, x1) = (xs.iter().copied().fold(f32::MAX, f32::min), xs.iter().copied().fold(f32::MIN, f32::max));
+    let (y0, y1) = (ys.iter().copied().fold(f32::MAX, f32::min), ys.iter().copied().fold(f32::MIN, f32::max));
+    [x0, y0, x1, y1]
+}
+
 /// What a page needs to know to handle comment input.
 pub(crate) struct PageCx<'a> {
     pub page: usize,
@@ -370,22 +379,20 @@ impl PageCx<'_> {
         quads.iter().map(|q| self.quad_screen_rect(a, q)).chain(fallback)
     }
 
-    /// A redaction mark's areas: one per marked quad, or its rectangle.
+    /// A redaction mark's areas: one per marked quad, or its rectangle. They are the content
+    /// regions that applying the mark removes (ISO 32000-2 §12.5.6.23, Table 195), so a NoZoom
+    /// flag doesn't scale them: the fill shown over the page is what goes, at any zoom.
     pub(super) fn redact_rects(&self, a: &Annotation) -> Vec<Rect> {
         if a.quads.is_empty() {
-            return vec![self.screen_rect(a)];
+            return vec![self.xf.user_rect(self.info, self.page, a.shown_rect(self.rotation()))];
         }
-        a.quads.iter().map(|q| self.quad_screen_rect(a, q)).collect()
+        a.quads.iter().map(|q| self.xf.user_rect(self.info, self.page, quad_bounds(q))).collect()
     }
 
     /// Where the `/QuadPoints` quadrilateral `q` of `a` is drawn on screen: its bounds, scaled
     /// with `a` as [`zoomed_quad`] scales them.
     fn quad_screen_rect(&self, a: &Annotation, q: &[f32; 8]) -> Rect {
-        let xs = [q[0], q[2], q[4], q[6]];
-        let ys = [q[1], q[3], q[5], q[7]];
-        let (x0, x1) = (xs.iter().copied().fold(f32::MAX, f32::min), xs.iter().copied().fold(f32::MIN, f32::max));
-        let (y0, y1) = (ys.iter().copied().fold(f32::MAX, f32::min), ys.iter().copied().fold(f32::MIN, f32::max));
-        let bounds = zoomed_quad(a, [x0, y0, x1, y1].map(f64::from), self.magnification());
+        let bounds = zoomed_quad(a, quad_bounds(q).map(f64::from), self.magnification());
         self.xf.user_rect(self.info, self.page, bounds.map(|v| v as f32))
     }
 
