@@ -17,9 +17,12 @@
 //!   `platform`, `setTimeOut`), `util` (`printf`, `printd`, `printx`, `scand`), `console` (`println`,
 //!   `show`, `clear`), `display` and `color`.
 //!
-//! The engine is a sandbox: no file, network or timer access exists, and loops and recursion
-//! are bounded. Side effects (alerts, field changes, resets, printing, navigation) are returned
-//! in an [`Outcome`] for the caller to apply.
+//! The engine is a sandbox: no file, network, clipboard or timer access exists, and loops and
+//! recursion are bounded; [`run_shared_within`] also holds a script to a wall-clock limit
+//! (scripts that run unasked, such as document scripts as a document opens). Memory is not
+//! bounded apart from boa's own limits (a string of at most 2^32 units). Side effects (alerts,
+//! field changes, resets, printing, navigation) are returned in an [`Outcome`] for the caller
+//! to apply.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -55,7 +58,7 @@ pub use model::{
 use run::SCRIPT_STACK;
 use run::refuse;
 pub(crate) use run::{CheckedCodeFromStrings, MAX_SCRIPT_BYTES};
-pub use run::{run, run_shared};
+pub use run::{run, run_shared, run_shared_within};
 
 pub mod formcalc;
 pub mod xfa;

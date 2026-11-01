@@ -2058,3 +2058,69 @@ fn a_plain_form_sees_the_xfa_version_but_not_installed() {
     assert_eq!(o.value, "undefined number 3.5");
     assert_eq!(o.alerts, [Message::plain("old viewer")]);
 }
+
+/// The sandbox offers no way to the file system, the network, the clipboard or other
+/// documents: none of the browser's, Node's or Acrobat's own such objects and methods exist.
+#[test]
+fn scripts_have_no_file_network_or_clipboard_access() {
+    let names = [
+        "fetch",
+        "XMLHttpRequest",
+        "WebSocket",
+        "require",
+        "process",
+        "Deno",
+        "navigator",
+        "window",
+        "document",
+        "SOAP",
+        "Net",
+        "app.openDoc",
+        "app.newDoc",
+        "app.browseForDoc",
+        "app.mailMsg",
+        "util.readFileIntoStream",
+        "this.exportDataObject",
+        "this.importDataObject",
+        "this.saveAs",
+        "this.importTextData",
+        "this.importAnFDF",
+        "this.importXFAData",
+        "this.createDataObject",
+    ];
+    let probe: Vec<String> =
+        names.iter().map(|n| format!("(function () {{ try {{ return typeof {n}; }} catch (e) {{ return 'undefined'; }} }})()")).collect();
+    let script = format!("event.value = [{}].join(',');", probe.join(","));
+    let o = go(&script, &Event::field("Calculate", "total", ""));
+    assert_eq!(o.error, None);
+    let found: Vec<(&str, &str)> = names.iter().copied().zip(o.value.split(',')).filter(|(_, t)| *t != "undefined").collect();
+    assert!(found.is_empty(), "reachable from a script: {found:?}");
+}
+
+/// boa's loop limit counts per call, so a script that calls a function with a long loop, again
+/// and again, stays inside it for hours: given a time limit, such a script is abandoned when
+/// the limit passes, and says so.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_script_given_a_time_limit_is_abandoned_when_it_passes() {
+    let ev = Event::field("Calculate", "total", "");
+    let started = std::time::Instant::now();
+    let o = run_shared_within(
+        "function spin() { for (var i = 0; i < 999999; i++) {} } for (;;) spin();",
+        &ev,
+        &doc(),
+        Arc::new(fields()),
+        &[],
+        Limits::default(),
+        std::time::Duration::from_millis(300),
+    );
+    assert!(started.elapsed().as_secs() < 10, "{:?}", started.elapsed());
+    assert!(o.abandoned, "{o:?}");
+    assert!(o.error.as_deref().is_some_and(|e| e.contains("longer than")), "{o:?}");
+    assert!(o.changed.is_empty() && o.requests.is_empty());
+    // A script that finishes in time comes back as `run_shared`'s would.
+    let quick = "event.value = this.getField('price').value * 2;";
+    let o = run_shared_within(quick, &ev, &doc(), Arc::new(fields()), &[], Limits::default(), std::time::Duration::from_secs(5));
+    assert_eq!(o, run_shared(quick, &ev, &doc(), Arc::new(fields()), &[], Limits::default()));
+    assert_eq!((o.value.as_str(), o.abandoned), ("25", false));
+}

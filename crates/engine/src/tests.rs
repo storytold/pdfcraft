@@ -5239,6 +5239,53 @@ fn opening_keeps_earlier_warnings_when_document_scripts_change_a_field() {
     assert!(warnings.iter().any(|w| w.starts_with("This document's scripts changed 1 form field on opening (banner)")), "{warnings:?}");
 }
 
+/// A document script that loops forever (`while (1) {}`) stops at the loop limit. One that keeps
+/// calling a function with a long loop, which the loop limit (counted per call) does not stop,
+/// is abandoned when the opening's time runs out. Either way the document opens as it was, and
+/// the console says why.
+#[test]
+fn a_document_script_that_never_ends_does_not_hang_the_opening() {
+    let scripts = [
+        ("while (1) {} this.getField('banner').hidden = true;", "iteration loops"),
+        ("function spin() { for (var i = 0; i < 999999; i++) {} } for (;;) spin(); this.getField('banner').hidden = true;", "longer than"),
+    ];
+    for (script, says) in scripts {
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let started = std::time::Instant::now();
+        let id = s.open("form.pdf", None, Arc::new(banner_form(script)), None).unwrap();
+        assert!(started.elapsed().as_secs() < 20, "{script}: {:?}", started.elapsed());
+        let doc = s.get(id).unwrap();
+        assert!(shows_banner(&doc.display, &doc.config), "{script}");
+        assert!(!doc.dirty, "{script}");
+        let out = s.take_js_output(id);
+        assert!(out.errors.iter().any(|e| e.contains(says)), "{script}: {out:?}");
+    }
+}
+
+/// Document scripts run unasked as the document opens, so what they ask for that a person
+/// should choose (opening a link, submitting or e-mailing the form, printing, saving, exporting
+/// an attachment) is not carried out: each is noted on the console. The fields they change
+/// still change.
+#[test]
+fn document_scripts_on_opening_open_no_link_and_submit_print_or_save_nothing() {
+    let script = "this.getField('banner').hidden = true; app.launchURL('https://example.com/'); \
+        this.submitForm('https://example.com/submit'); this.mailDoc(true); this.print(); app.execMenuItem('SaveAs'); \
+        this.getField('banner').setFocus(); this.resetForm(); this.exportDataObject({cName: 'a.txt', nLaunch: 2});";
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("form.pdf", None, Arc::new(banner_form(script)), None).unwrap();
+    let doc = s.get(id).unwrap();
+    assert!(!shows_banner(&doc.display, &doc.config), "the field change applies");
+    let out = s.take_js_output(id);
+    assert!(out.requests.is_empty(), "{:?}", out.requests);
+    for what in
+        ["open https://example.com/", "submit the form to https://example.com/submit", "print", "save the document", "move the focus", "reset"]
+    {
+        assert!(out.console.iter().any(|c| c.contains(what)), "{what}: {:?}", out.console);
+    }
+    // `exportDataObject` (writing an attachment out to a file) does not exist: calling it throws.
+    assert!(out.errors.iter().any(|e| e.contains("not a callable function")), "{:?}", out.errors);
+}
+
 #[test]
 fn active_xfa_does_not_run_pdf_container_scripts_but_keeps_requested_alerts() {
     let template = pdfcraft_xfa::fixtures::scripted_template().replace(
