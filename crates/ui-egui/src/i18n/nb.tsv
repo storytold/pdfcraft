@@ -341,12 +341,10 @@
 	Check Again	Sjekk igjen
 	Check again	Sjekk igjen
 	Check box is checked by default	Avkrysningsboksen er avkrysset som standard
-	Check for updates	Se etter oppdateringer
 	Check spelling	Stavekontroll
 	Check the pages	Kontroller sidene
 	Check the pages of {name}: {why}	Kontroller sidene i {name}: {why}
 	Checking Options ({on} of 32 in all categories)	Kontrollalternativer ({on} av 32 i alle kategorier)
-	Checking for a newer version…	Ser etter en nyere versjon…
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Velg et PNG- eller JPEG-bilde (opptil 4 MiB). Gjennomsiktighet bevares.
 	Choose a folder for the exported files	Velg en mappe for de eksporterte filene
 	Choose a folder for the extracted pages	Velg en mappe for de uttrukne sidene
@@ -406,7 +404,6 @@
 	Copies:	Antall kopier:
 	Copy selected text	Kopier merket tekst
 	Copy text	Kopier tekst
-	Couldn't check for updates: {e}	Kunne ikke se etter oppdateringer: {e}
 	Couldn't open the printer's preferences: {e}	Kunne ikke åpne skriverinnstillingene: {e}
 	Counterclockwise 90 degrees	90 grader mot klokka
 	Country/Region	Land/region
@@ -868,7 +865,6 @@
 	Patterns (graphics objects)	Mønstre (grafikkobjekter)
 	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft ble ikke avsluttet normalt. Disse dokumentene hadde endringer som ble autolagret:
 	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft fungerer uten nett. Ingen telemetri, ingen konto og ingen skybehandling med mindre du legger til en leverandør.
-	PdfCraft {c} is up to date.	PdfCraft {c} er oppdatert.
 	PdfCraft {v} is available.	PdfCraft {v} er tilgjengelig.
 	Percentage	Prosent
 	Permissions password	Tillatelsespassord
@@ -1289,7 +1285,6 @@
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	XFA-skjema: feltene og XFA-dataene holdes i takt, så andre visere viser det du fyller inn.
 	You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Du er i ferd med å bruke 1 sladdemarkering. Tekst, bilder og tegninger under markeringene, og kommentarer og skjemafelt som overlapper dem, fjernes permanent.
 	You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Du er i ferd med å bruke {n} sladdemarkeringer. Tekst, bilder og tegninger under markeringene, og kommentarer og skjemafelt som overlapper dem, fjernes permanent.
-	You have version {c}. All releases are listed at {page}.	Du har versjon {c}. Alle utgivelser er listet på {page}.
 	You have version {c}. Download the new version from its release page.	Du har versjon {c}. Last ned den nye versjonen fra utgivelsessiden.
 	Your changes will be lost if you don't save them.	Endringene dine går tapt hvis du ikke lagrer dem.
 	ZIP	ZIP

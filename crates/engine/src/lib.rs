@@ -158,5 +158,13 @@ use clock::{local_utc_offset, parse_ymd};
 pub use doc_state::{DocId, ImageEdit, OptimizeReport, RecoverySnapshot, SplitPart, guard, merge_data_files};
 use doc_state::{LOW_RESOLUTION_PRINT_DPI, render_threads, renderer_password, signatures_of, writable};
 
+/// The configuration of the pool that draws the viewer: the document's own, plus installed CJK
+/// fonts for fonts a PDF does not embed (`pdfcraft_render::RenderConfig::system_fonts`). Exports,
+/// printing, OCR and automation use the document configuration itself, so nothing drawn with an
+/// installed font is saved or printed (AGENTS.md §1.2, §1.4).
+fn display_config(config: &pdfcraft_render::RenderConfig) -> pdfcraft_render::RenderConfig {
+    config.clone().on_screen()
+}
+
 #[cfg(test)]
 mod tests;

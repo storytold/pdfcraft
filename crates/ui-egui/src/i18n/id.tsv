@@ -334,12 +334,10 @@
 	Check Again	Periksa Lagi
 	Check again	Periksa lagi
 	Check box is checked by default	Kotak centang tercentang secara bawaan
-	Check for updates	Periksa pembaruan
 	Check spelling	Periksa ejaan
 	Check the pages	Periksa halaman
 	Check the pages of {name}: {why}	Periksa halaman {name}: {why}
 	Checking Options ({on} of 32 in all categories)	Memeriksa Opsi ({on} dari 32 di semua kategori)
-	Checking for a newer version…	Mencari versi yang lebih baru…
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Pilih gambar PNG atau JPEG (hingga 4 MiB). Transparansi dipertahankan.
 	Choose a folder for the exported files	Pilih folder untuk file yang diekspor
 	Choose a folder for the extracted pages	Pilih folder untuk halaman yang diekstrak
@@ -398,7 +396,6 @@
 	Copies:	Salinan:
 	Copy selected text	Salin teks yang dipilih
 	Copy text	Salin teks
-	Couldn't check for updates: {e}	Tidak dapat memeriksa pembaruan: {e}
 	Couldn't open the printer's preferences: {e}	Tidak dapat membuka preferensi printer: {e}
 	Counterclockwise 90 degrees	90 derajat berlawanan arah jarum jam
 	Country/Region	Negara/Wilayah
@@ -859,7 +856,6 @@
 	Patterns (graphics objects)	Pola (objek grafis)
 	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft tidak berhenti secara normal. Dokumen-dokumen ini memiliki perubahan yang disimpan otomatis:
 	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft bekerja secara luring. Tidak ada telemetri, tidak ada akun, dan tidak ada pemrosesan awan kecuali Anda menambahkan penyedia.
-	PdfCraft {c} is up to date.	PdfCraft {c} sudah terbaru.
 	PdfCraft {v} is available.	PdfCraft {v} tersedia.
 	Percentage	Persentase
 	Permissions password	Kata sandi izin
@@ -1278,7 +1274,6 @@
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	Formulir XFA: kolom dan data XFA-nya dijaga tetap sinkron, sehingga penampil lain menampilkan yang Anda isi.
 	You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Anda akan menerapkan 1 tanda sensor. Teks, gambar, dan gambar-gambar di bawah tanda tersebut, serta komentar dan kolom formulir yang bertumpang tindih dengannya, akan dihapus permanen.
 	You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Anda akan menerapkan {n} tanda sensor. Teks, gambar, dan gambar-gambar di bawah tanda tersebut, serta komentar dan kolom formulir yang bertumpang tindih dengannya, akan dihapus permanen.
-	You have version {c}. All releases are listed at {page}.	Anda memiliki versi {c}. Semua rilis tercantum di {page}.
 	You have version {c}. Download the new version from its release page.	Anda memiliki versi {c}. Unduh versi baru dari halaman rilisnya.
 	Your changes will be lost if you don't save them.	Perubahan Anda akan hilang jika tidak Anda simpan.
 	ZIP	ZIP

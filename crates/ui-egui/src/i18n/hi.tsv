@@ -760,14 +760,9 @@
 	Copy Image in Original Format	छवि मूल प्रारूप में कॉपी करें
 	The image has been copied as a {ext} file	छवि {ext} फ़ाइल के रूप में कॉपी हो गई है
 	The page has changed; select the image again	पृष्ठ बदल गया है; छवि फिर से चुनें
-	Check for updates	अपडेट के लिए जाँचें
 	No check has run yet.	अभी तक कोई जाँच नहीं चली है।
-	Checking for a newer version…	नए संस्करण की जाँच हो रही है…
 	PdfCraft {v} is available.	PdfCraft {v} उपलब्ध है।
 	You have version {c}. Download the new version from its release page.	आपके पास संस्करण {c} है। नया संस्करण इसके रिलीज़ पृष्ठ से डाउनलोड करें।
-	PdfCraft {c} is up to date.	PdfCraft {c} अद्यतन है।
-	Couldn't check for updates: {e}	अपडेट की जाँच नहीं हो सकी: {e}
-	You have version {c}. All releases are listed at {page}.	आपके पास संस्करण {c} है। सभी रिलीज़ {page} पर सूचीबद्ध हैं।
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	GitHub से नवीनतम रिलीज़ की क्वेरी करता है। कुछ भी स्वतः डाउनलोड या इंस्टॉल नहीं होता।
 	Download	डाउनलोड
 	Later	बाद में

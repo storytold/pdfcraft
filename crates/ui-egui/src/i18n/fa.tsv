@@ -818,14 +818,9 @@
 	Copy Image in Original Format	کپی تصویر در قالب اصلی
 	The image has been copied as a {ext} file	تصویر به‌صورت یک فایل {ext} کپی شد
 	The page has changed; select the image again	صفحه تغییر کرده است؛ تصویر را دوباره انتخاب کنید
-	Check for updates	بررسی به‌روز‌رسانی‌ها
 	No check has run yet.	هنوز هیچ بررسیای انجام نشده است.
-	Checking for a newer version…	بررسی برای نگارش تازه‌تر…
 	PdfCraft {v} is available.	PdfCraft {v} در دسترس است.
 	You have version {c}. Download the new version from its release page.	شما نگارش {c} را دارید. نگارش جدید را از صفحه انتشار آن دانلود کنید.
-	PdfCraft {c} is up to date.	PdfCraft {c} به‌روز است.
-	Couldn't check for updates: {e}	بررسی به‌روز‌رسانی‌ها انجام نشد: {e}
-	You have version {c}. All releases are listed at {page}.	شما نگارش {c} را دارید. همه انتشار‌ها در {page} فهرست شدهاند.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	آخرین انتشار را از GitHub می‌پرسد. هیچ چیزی به‌طور خودکار دانلود یا نصب نمی‌شود.
 	Download	دانلود
 	Later	بعداً

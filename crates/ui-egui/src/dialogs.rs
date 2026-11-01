@@ -1506,7 +1506,7 @@ fn dialog_shortcuts(ui: &mut egui::Ui) -> bool {
 /// `Dialog::About` content. Returns `false` when it has its own buttons and no footer is wanted.
 fn dialog_about(ui: &mut egui::Ui, req: &mut Pending) -> bool {
     let t = Tokens::get(ui.ctx());
-    // Tabs About · Contributors · Models (craftrules standards/contributors.md).
+    // Tabs About · Contributors · Models.
     let tab_id = egui::Id::unique("about_tab");
     let mut tab = ui.data_mut(|d| d.get_temp::<u8>(tab_id)).unwrap_or(0);
     ui.horizontal_wrapped(|ui| {
