@@ -513,7 +513,9 @@ pub(super) fn text_layer(ui: &mut egui::Ui, view: &mut DocView, frame: &mut Page
     let PageFrame { resp, ptr, pointer, .. } = *frame;
     if let Some(text) = view.texts.get(&i).cloned() {
         paint_text_marks(ui, view, &text, i, xf, resp.dragged());
+        // A finger drags the page in the Select tool instead (`finger_pans` in `document_area`).
         if selects_text
+            && !(ptr.finger && tool == QuickTool::Select)
             && !input.consumed
             && let Some(p) = pointer.filter(|p| r.contains(*p))
         {

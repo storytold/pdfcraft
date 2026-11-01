@@ -566,18 +566,31 @@ const COMMENT_POINT_TESTERS: [(&str, &str, &str); 3] = [
 ];
 
 /// What reads who holds the press the pages hold.
-const ROUTER_READS: [&str; 6] =
-    ["router.press_for(", "router.owner(", "router.keeps_drag(", "PageRouter::press_for(", "PageRouter::owner(", "PageRouter::keeps_drag("];
+const ROUTER_READS: [&str; 8] = [
+    "router.press_for(",
+    "router.owner(",
+    "router.keeps_drag(",
+    "router.drag_moves_nothing(",
+    "PageRouter::press_for(",
+    "PageRouter::owner(",
+    "PageRouter::keeps_drag(",
+    "PageRouter::drag_moves_nothing(",
+];
 
 /// The functions that read who holds the press: (file, function, why). The page view asks once per
 /// page and tells each module what the press is to its page (`PagePress`); the Edit text group, the
 /// text layer and link following still ask, until they are told too (PR 4b), and an unused entry
 /// fails the test.
-const ROUTER_READERS: [(&str, &str, &str); 8] = [
+const ROUTER_READERS: [(&str, &str, &str); 9] = [
     (
         "canvas/page_input.rs",
         "page_tool_input",
         "the page view: what the press is to each page (`press_for`); Add text's paragraph and the pictures until 4b",
+    ),
+    (
+        "canvas.rs",
+        "document_area",
+        "a finger's drag pans the pages unless the press moves something (#5667): the scroll area is set up before the pages are drawn",
     ),
     ("canvas/page_input.rs", "update_selection_on_press", "the text layer selects no text under a press held by what keeps its drag (4b)"),
     ("canvas/page_input.rs", "finish_text_pointer_gesture", "a click held by what keeps its drag leaves the text selection alone (4b)"),

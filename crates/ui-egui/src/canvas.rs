@@ -553,6 +553,9 @@ pub struct DocView {
     /// The drag in progress started a text selection: the wheel scrolls the page during it
     /// (#721), which egui's scroll area refuses while anything is dragged.
     selection_drag: bool,
+    /// The press the pages hold came from a finger ([`PagePointer::finger`]), as of the last
+    /// frame: the scroll area is laid out before the pages read the pointer.
+    finger_press: bool,
     /// Clicks in the current run on the text layer: two select a word, three the line, four the page.
     clicks: u32,
     last_press_time: f64,
@@ -956,6 +959,7 @@ impl DocView {
             all_text: false,
             actions_dismissed: None,
             selection_drag: false,
+            finger_press: false,
             clicks: 0,
             last_press_time: 0.0,
             last_press_pos: None,
@@ -1652,6 +1656,7 @@ fn draw_pages(
     // The pointer as the pages see it: nothing over them (a dialog from the frame it opens),
     // or a press they hold. The page modules read it rather than egui's raw pointer state.
     let ptr = PagePointer::read(ui, &resp, modal);
+    view.finger_press = ptr.finger;
     cancel_on_escape(ui.ctx(), view, &ptr);
     view.router.settle(ptr.any_down, !ptr.edges.is_empty());
     // A new press is no longer the last one's, wherever it lands (the page it is on gives it
@@ -2411,6 +2416,7 @@ struct ScrollGeometry<'a> {
     content_h: f32,
     avail: Rect,
     middle_gesture: bool,
+    /// A drag of the pages pans them: the Hand tool's, or a finger's in the Select tool.
     hand: bool,
 }
 
@@ -2438,11 +2444,11 @@ fn page_scroll_area(ui: &egui::Ui, view: &mut DocView, geometry: &ScrollGeometry
     if !std::mem::replace(&mut view.shown, true) {
         scroll = scroll.scroll_offset(Vec2::ZERO);
     }
-    // The Hand tool pans here, before the pages are laid out, so the page moves with the pointer
-    // in the frame the pointer moves (#924). Scrolling by the drag from inside the area moved the
-    // page only after that frame was drawn, a frame behind. The frame egui tells the drag from a
-    // click, the page catches up with all the pointer has moved since the press. A jump asked for
-    // below still wins.
+    // The Hand tool, or a finger, pans here, before the pages are laid out, so the page moves with
+    // the pointer in the frame the pointer moves (#924). Scrolling by the drag from inside the area
+    // moved the page only after that frame was drawn, a frame behind. The frame egui tells the drag
+    // from a click, the page catches up with all the pointer has moved since the press. A jump
+    // asked for below still wins.
     if hand
         && !middle_gesture
         && let Some(id) = view.page_widget.filter(|id| ui.ctx().is_being_dragged(*id))
@@ -2948,11 +2954,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         }
     };
 
-    let mut scroll = page_scroll_area(
-        ui,
-        view,
-        &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand: app.quick_tool == QuickTool::Hand },
-    );
+    // A finger drags the page in the Select tool, as the Hand tool does, unless what it pressed
+    // moves with the drag (a comment): a touch screen scrolls that way (#5667). A link takes
+    // only a click, so a swipe from one pans too. A mouse or a pen still selects the text. The
+    // finger's press is known from its frame on, before egui reports a drag. The scroll area is
+    // set up here, before the pages are drawn, so this asks the router itself.
+    let finger_pans = view.finger_press && app.quick_tool == QuickTool::Select && !preparing && view.router.drag_moves_nothing();
+    let pans = app.quick_tool == QuickTool::Hand || finger_pans;
+    let mut scroll = page_scroll_area(ui, view, &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand: pans });
     let ppp = ui.ctx().pixels_per_point();
     let scale = view.render_scale(ppp);
     let tag = scale_tag(scale);
@@ -3008,7 +3017,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     view.move_background.prepare(ui.ctx(), doc, &view.content, scale);
 
-    scroll = refine_goto_point(scroll, view, &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand });
+    scroll = refine_goto_point(scroll, view, &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand: pans });
     let selection_wheel = view.selection_drag && navigation_enabled && unobstructed && !single_paging && ui.rect_contains_pointer(avail);
     let env = PageEnv {
         added: &added,
