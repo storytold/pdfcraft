@@ -3075,3 +3075,20 @@ fn a_card_out_of_view_that_grows_moves_the_cards_below_it() {
     let after = h.get_by_label("Card 61").rect().top();
     assert!(after > before + 40.0, "the cards below a grown card move down: {before} → {after}");
 }
+
+/// CodeRabbit on #5583: a card with an editor open on it is drawn wherever it is, so the cards
+/// below it make room for the editor rather than keep the card's height from before it opened.
+#[test]
+fn a_card_with_an_editor_open_out_of_view_is_drawn_at_its_size() {
+    let mut h = harness_with_bytes(one_comment_per_page(120), |app| app.set_option("panel", "comments").unwrap());
+    h.run_steps(4);
+    h.state_mut().views[0].comments.selected = Some((60, 0));
+    h.state_mut().views[0].comments.reveal = true;
+    h.run_steps(4);
+    assert!(h.query_by_label("Card 1").is_none(), "card 1 is out of view");
+    let before = h.get_by_label("Card 61").rect().top();
+    h.state_mut().views[0].comments.editing = Some((0, 0, "Card 1".into()));
+    h.run_steps(4);
+    let after = h.get_by_label("Card 61").rect().top();
+    assert!(after > before + 20.0, "the cards below make room for card 1's editor: {before} → {after}");
+}

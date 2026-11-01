@@ -273,12 +273,16 @@ pub(crate) fn show(
         let thread = replies_of(a);
         let selected = view.comments.selected == Some(key);
         // A height is kept for what the card showed when it was measured: its document, what the
-        // thread says and whether it was the selected card (which draws its menu and editor). An
+        // thread says, whether it was the selected card (which draws its menu and editor) and
+        // whether an editor was open on it. An
         // edit, undo or redo that changes the card measures it afresh; other cards keep theirs.
-        let id = ui.scope_id().with(("comment-card", view.id, key, card_signature(a, thread), selected));
+        // A card with an editor open on it or on a reply is always drawn too (CodeRabbit on
+        // #5583): a kept height would show it at its size before the editor opened.
+        let editing = view.comments.editing.as_ref().is_some_and(|(p, i, _)| (*p, *i) == key || thread.iter().any(|r| (r.page, r.index) == (*p, *i)));
+        let id = ui.scope_id().with(("comment-card", view.id, key, card_signature(a, thread), selected, editing));
         // The selected card is always drawn, so it can scroll itself into view and keep its menu
         // and editor.
-        if virtual_list && !selected && skip_if_hidden(ui, id) {
+        if virtual_list && !selected && !editing && skip_if_hidden(ui, id) {
             continue;
         }
         let rotation = info.pages.get(a.page).map_or(0, |p| p.rotation);
