@@ -6490,6 +6490,77 @@ fn interpolated_minified_image_edges_snap_to_whole_pixels() {
     }
 }
 
+/// #5530: an image placed turned or mirrored (by its own matrix or the page's `/Rotate`) snaps to
+/// whole pixels just as an upright one does. Before, only upright images were snapped, so a turned
+/// scan was resampled twice and every edge was a blended, soft pixel. This checks the edges, and
+/// which way a mirrored image faces; `rotated_image_snap` in the integration tests checks which
+/// way a turned page's image faces (`/Rotate` only turns, it never mirrors).
+#[test]
+fn a_turned_or_mirrored_minified_image_snaps_to_whole_pixels() {
+    let black = vec![0u8; 40 * 40];
+    let image = hex(&black);
+    // Each matrix maps the image onto the user box 0.6..10.6 × 0.4..10.4, a different way round.
+    for matrix in [
+        "0 10 -10 0 10.6 0.4",   // a quarter turn
+        "-10 0 0 -10 10.6 10.4", // a half turn
+        "0 -10 10 0 0.6 10.4",   // three quarters
+        "-10 0 0 10 10.6 0.4",   // mirrored left to right
+    ] {
+        let content = format!("q {matrix} cm /Im0 Do Q");
+        let pdf = format!(
+            "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 11 11] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n\
+                 4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+                 5 0 obj << /Type /XObject /Subtype /Image /Width 40 /Height 40 /ColorSpace /DeviceGray /BitsPerComponent 8 /Interpolate true /Filter /ASCIIHexDecode /Length {} >> stream\n{image}>\nendstream endobj\n\
+                 trailer << /Root 1 0 R >>\n%%EOF\n",
+            content.len(),
+            image.len() + 1
+        );
+        let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+        assert!(page.error.is_none(), "{matrix}: {:?}", page.error);
+        assert_eq!((page.width, page.height), (11, 11));
+        let gray = |x: usize, y: usize| page.rgba[(y * 11 + x) * 4];
+        // Device box 0.6..10.6 × 0.6..10.6 snaps to columns 1..11 and rows 1..11: no soft edge.
+        for y in 0..11 {
+            for x in 0..11 {
+                let inside = (1..11).contains(&x) && (1..11).contains(&y);
+                assert_eq!(gray(x, y), if inside { 0 } else { 255 }, "{matrix}: pixel ({x}, {y})");
+            }
+        }
+    }
+
+    // A uniform image looks the same mirrored, so mirror one whose left half (source columns
+    // 0..20) is black: drawn left to right reversed, the black half is on the right.
+    let halves: Vec<u8> = (0..40).flat_map(|_| (0..40).map(|x| if x < 20 { 0 } else { 255 })).collect();
+    let halves = hex(&halves);
+    let content = "q -10 0 0 10 10.6 0.4 cm /Im0 Do Q";
+    let pdf = format!(
+        "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 11 11] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+             5 0 obj << /Type /XObject /Subtype /Image /Width 40 /Height 40 /ColorSpace /DeviceGray /BitsPerComponent 8 /Interpolate true /Filter /ASCIIHexDecode /Length {} >> stream\n{halves}>\nendstream endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF\n",
+        content.len(),
+        halves.len() + 1
+    );
+    let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    let gray = |x: usize, y: usize| page.rgba[(y * 11 + x) * 4];
+    // The snapped box is columns 1..11; columns 1..3 and 8..11 are well clear of the change at 6.
+    for y in 2..10 {
+        for x in 1..4 {
+            assert_eq!(gray(x, y), 255, "mirrored: the left of the box shows the image's right (white) half, pixel ({x}, {y})");
+        }
+        for x in 8..11 {
+            assert_eq!(gray(x, y), 0, "mirrored: the right of the box shows the image's left (black) half, pixel ({x}, {y})");
+        }
+    }
+}
+
 #[test]
 fn non_interpolated_gray_images_are_not_smoothed_when_minified() {
     let levels = [0u8, 255, 85, 170, 40, 200, 120, 230];
