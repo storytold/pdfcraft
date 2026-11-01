@@ -70,8 +70,14 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
                 ComposerKind::Replace => tl!("Replacement text"),
                 _ => tl!("Add a comment"),
             };
+            let rtl_fallback = crate::i18n::current().rtl() && crate::bidi::first_strong_direction(&c.text).is_none();
+            let mut text_edit =
+                egui::TextEdit::multiline(&mut c.text).hint_text(hint).desired_rows(3).desired_width(f32::INFINITY).id_salt("composer-text");
+            if rtl_fallback {
+                text_edit = text_edit.align(egui::Align2::RIGHT_TOP);
+            }
             let edit = ui
-                .add(egui::TextEdit::multiline(&mut c.text).hint_text(hint).desired_rows(3).desired_width(f32::INFINITY).id_salt("composer-text"))
+                .add(text_edit)
                 // 0.37 kittest rejects an unnamed text input; the hint is its logical name.
                 .accessible_name(hint);
             if c.focus {

@@ -2,6 +2,7 @@
 
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: integrate main fa5f9f8c; retain CJK viewer and upstream raster regressions, restore explicit display_config imports; estimates unchanged)
+> **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M5/M14: RTL comment and Find fields align to the reading edge; FreeText annotations default to right alignment for RTL text; estimates unchanged)
 > **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** patch (M2, PR #4172: integrate main 5af10276; retain both roadmap histories and viewer-only CJK font policy; estimates unchanged)
 > **Last reviewed:** 2026-10-27 · **Last updated:** 2026-10-27 · **Change:** patch (M2, PR #4172: integrate main 1dd2737b; preserve viewer-only CJK fallback and regression coverage across engine, renderer and Combine module splits; estimates unchanged)
 > **Last reviewed:** 2026-10-27 · **Last updated:** 2026-10-27 · **Change:** patch (M2, PR #4172: integrate main 9a9813bf and migrate viewer-only CJK configuration to the split engine modules; estimates unchanged)
@@ -274,6 +275,8 @@ M2 (renderer), M7 (content editing), M10 (OCR and Office), M11 (Preflight and st
 
 ## Revision history
 
+**2026-10-28 · minor:** M5/M14: comment composer, Comments panel and Find text inputs align right for RTL text and preserve logical content through egui's bidi layout. FreeText annotations default to PDF right alignment only when `/Q` is absent. Arabic composer and reply integration regressions; broader native/browser workflows remain unqualified. Estimates unchanged.
+
 **2026-10-26 · patch:** M2/PR #4172: reconcile current main and preserve upstream Japanese serif/weight selection alongside the installed CJK viewer and preview fallback. Estimates unchanged.
 
 **2026-10-25 · minor:** M14 localization current state: Arabic catalogs stay logical, Arabic/Kurdish labels take an explicit RTL direction, and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native Simplified Chinese uses LXGW WenKai Lite; the web build has no Hans face. Estimates unchanged.
@@ -295,6 +298,7 @@ Estimates unchanged.
 | 2026-10-31 | patch | M2, PR #4172: eight GBK font/alias cases compare exact pixels with independent installed-face and explicit-Unicode references; wrong-glyph and wrong-family negative controls fail. Estimates unchanged. |
 | 2026-10-31 | patch | M2, PR #4172: integrate main fa5f9f8c, preserve both raster test groups and restore explicit display_config imports; display-only CJK policy and estimates unchanged. |
 | 2026-10-28 | patch | M2, PR #4172: integrate main 5af10276 and retain both roadmap histories; viewer-only CJK and print/output font policies and estimates unchanged. |
+| 2026-10-28 | minor | M5/M14: RTL comment and Find inputs align to their reading edge, while egui retains logical text and cursor order; FreeText defaults to `/Q 2` for RTL contents only when `/Q` is absent. Arabic UI regressions; estimates unchanged. |
 | 2026-10-24 | minor | M11: the PDF Optimizer and Reduce File Size store Group 3 fax images as Group 4 when smaller (`Document::fax_params`), and pack eight-bit `DeviceRGB` of only black and white (as grey) and indexed images of 2, 4 or 8 bits that use only palette entries 0 and 1 (keeping the palette) to one bit, so Monochrome Images compresses and downsamples them. Estimates unchanged. |
 | 2026-10-24 | minor | M11: monochrome downsampling: the PDF Optimizer and Reduce File Size average black-and-white images (1-bit, CCITT fax, eight-bit black-and-white grey) above 450 ppi down to 300 ppi, by area with ties black, as Monochrome Images ▸ Downsample to and `doc_optimize` `mono: { downsample, ppi, above_ppi }`; CCITT decoding moves into `pdfcraft-filters` (`decode_ccitt`) behind `Document::decoded_image`. Estimates unchanged. |
 | 2026-10-24 | minor | M11: Create PDF stores pictures of only black and white at one bit (Group 4 or Flate, whichever is smaller) instead of eight-bit grey; the optimizer packs eight-bit black-and-white grey images to one bit before Monochrome Images compresses them, unless the grey settings make them smaller, as they can a dithered scan, soft mask counted; Export ▸ Images decodes CCITT fax images. Estimates unchanged. |

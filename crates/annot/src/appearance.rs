@@ -12,6 +12,7 @@
 
 use pdfcraft_cos::{Dict, Object, PdfString, Stream};
 use pdfcraft_fonts::{first_undrawable, literal, win_ansi};
+use unicode_bidi::{bidi_class, BidiClass};
 pub use pdfcraft_fonts::{helvetica_width as text_width, wrap};
 
 use crate::{NOTE_SIZE, Rgb, n};
@@ -20,6 +21,39 @@ mod symbols;
 
 pub(crate) use symbols::display_stamp;
 use symbols::{CAPTION_SIZE, attach_icon, ellipse, line_caption, line_layout, note_icon, stamp};
+
+/// The `/Q` alignment used by both the generated appearance and rich-text fields.
+///
+/// A valid integer `/Q` is always explicit. Only when the key is absent do we use the first
+/// strong character of the text as the default paragraph direction.
+pub(crate) fn text_quadding(d: &Dict, text: &str) -> i64 {
+    if d.contains(b"Q") {
+        return d.int(b"Q").unwrap_or(0);
+    }
+    inferred_quadding(text)
+}
+
+fn inferred_quadding(text: &str) -> i64 {
+    if text_direction_is_rtl(text) { 2 } else { 0 }
+}
+
+pub(crate) fn text_direction_is_rtl(text: &str) -> bool {
+    first_strong_rtl(text).unwrap_or(false)
+}
+
+fn first_strong_rtl(text: &str) -> Option<bool> {
+    let mut isolate_depth = 0_usize;
+    for c in text.chars() {
+        match bidi_class(c) {
+            BidiClass::LRI | BidiClass::RLI | BidiClass::FSI => isolate_depth = isolate_depth.saturating_add(1),
+            BidiClass::PDI => isolate_depth = isolate_depth.saturating_sub(1),
+            BidiClass::L if isolate_depth == 0 => return Some(false),
+            BidiClass::R | BidiClass::AL if isolate_depth == 0 => return Some(true),
+            _ => {}
+        }
+    }
+    None
+}
 
 /// Length of an arrowhead for a line of width `w`.
 pub fn arrow_size(w: f64) -> f64 {
@@ -963,7 +997,7 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     let text = d.get(b"Contents").and_then(|o| o.as_string()).map(PdfString::to_text).unwrap_or_default();
     let pad = 2.0 + bw;
     let width = (rect[2] - rect[0] - 2.0 * pad).max(1.0);
-    let q = d.int(b"Q").unwrap_or(0);
+    let q = text_quadding(d, &text);
     c.push_str(&format!(
         "{} {} {} {} re W n\nBT\n/Helv {} Tf\n{}",
         n(rect[0]),

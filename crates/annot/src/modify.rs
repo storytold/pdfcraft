@@ -45,13 +45,19 @@ pub(crate) fn rich_text(d: &mut Dict) {
         (col[1].clamp(0.0, 1.0) * 255.0).round() as u8,
         (col[2].clamp(0.0, 1.0) * 255.0).round() as u8
     );
-    let align = match d.get(b"Q").and_then(Object::as_int) {
-        Some(1) => "center",
-        Some(2) => "right",
+    let align = match appearance::text_quadding(d, &text) {
+        1 => "center",
+        2 => "right",
         _ => "left",
     };
     let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;");
-    let body: String = text.split('\n').map(|line| format!("<p dir=\"ltr\">{}</p>", esc(line.trim_end_matches('\r')))).collect();
+    let body: String = text
+        .split('\n')
+        .map(|line| {
+            let direction = if appearance::text_direction_is_rtl(line) { "rtl" } else { "ltr" };
+            format!("<p dir=\"{direction}\">{}</p>", esc(line.trim_end_matches('\r')))
+        })
+        .collect();
     let style = format!(
         "font-size:{}pt;text-align:{align};color:{hex};font-weight:normal;font-style:normal;font-family:Helvetica;font-stretch:normal",
         n(size)
