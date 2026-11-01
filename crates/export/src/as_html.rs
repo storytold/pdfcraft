@@ -8,6 +8,20 @@ pub(crate) fn allowed(c: char) -> bool {
     matches!(c, '\t' | '\n' | '\r') || !(c.is_ascii_control() || c == '\u{FFFE}' || c == '\u{FFFF}')
 }
 
+/// `lang` when it is a well formed language tag (BCP 47, as a PDF's `/Lang` holds one): a primary
+/// language of two or three letters, then subtags of one to eight letters or digits, joined by
+/// hyphens, 35 characters at most. Anything else names no language.
+pub(crate) fn language_tag(lang: Option<&str>) -> Option<&str> {
+    let tag = lang?.trim();
+    let mut subtags = tag.split('-');
+    let primary = subtags.next()?;
+    let well_formed = tag.len() <= 35
+        && (2..=3).contains(&primary.len())
+        && primary.bytes().all(|b| b.is_ascii_alphabetic())
+        && subtags.all(|s| (1..=8).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphanumeric()));
+    well_formed.then_some(tag)
+}
+
 pub(crate) fn esc(s: &str) -> String {
     let mut o = String::with_capacity(s.len());
     for c in s.chars().filter(|c| allowed(*c)) {
@@ -38,8 +52,16 @@ pub(crate) fn base64(data: &[u8]) -> String {
 /// One HTML file: headings and paragraphs, tables as real `<table>` elements, images inline, a
 /// rule between pages.
 pub fn html(pages: &[Page], title: &str) -> String {
+    html_with_language(pages, title, None)
+}
+
+/// [`html`] for a document in `language` (a BCP 47 tag such as `bg-BG`, as a PDF's `/Lang` gives
+/// it), which the page names (`<html lang>`) for spell checking, speech and hyphenation. A
+/// language that is not a well formed tag is left out.
+pub fn html_with_language(pages: &[Page], title: &str, language: Option<&str>) -> String {
+    let lang = language_tag(language).map(|tag| format!(" lang=\"{}\"", esc(tag))).unwrap_or_default();
     let mut s = format!(
-        "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n<style>body{{max-width:46em;margin:2em auto;font-family:sans-serif;line-height:1.45}}\
+        "<!DOCTYPE html>\n<html{lang}>\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n<style>body{{max-width:46em;margin:2em auto;font-family:sans-serif;line-height:1.45}}\
 img{{max-width:100%}}hr{{border:0;border-top:1px solid #ccc;margin:2em 0}}\
 table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;padding:2px 6px;vertical-align:top}}</style>\n</head>\n<body>\n",
         esc(title)
