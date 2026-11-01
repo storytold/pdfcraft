@@ -1084,10 +1084,22 @@ impl PdfCraftApp {
         }
         self.active = match self.active {
             _ if self.views.is_empty() => None,
-            Some(a) if a > index => Some(a - 1),
-            // The tab after it in its strip comes forward (or the last).
-            Some(a) if a == index => self.after_close(place, index),
-            other => other,
+            Some(a) if a > index => {
+                let candidate = a - 1;
+                if self.views.get(candidate).is_some_and(|v| !v.detached) { Some(candidate) } else { self.nearest_docked_tab(candidate) }
+            }
+            // The tab after it in its strip comes forward (or the last), skipping one torn out.
+            Some(a) if a == index => {
+                self.after_close(place, index).filter(|&i| self.views.get(i).is_some_and(|v| !v.detached)).or_else(|| self.nearest_docked_tab(index))
+            }
+            Some(a) => {
+                if self.views.get(a).is_some_and(|v| !v.detached) {
+                    Some(a)
+                } else {
+                    self.nearest_docked_tab(a)
+                }
+            }
+            None => None,
         };
     }
 

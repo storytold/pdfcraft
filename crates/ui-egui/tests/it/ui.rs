@@ -2009,6 +2009,146 @@ fn dragging_tab_with_prior_detached_tab_translates_slot_to_views_index() {
     assert!(tab(&h, "middle.pdf").left() > tab(&h, "last.pdf").right(), "middle.pdf should be right of last.pdf");
 }
 
+#[test]
+fn closing_docked_tab_with_earlier_detached_tab_updates_active_to_docked_tab() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    // 3 tabs: first.pdf (ids[0]), middle.pdf (ids[1]), last.pdf (ids[2]).
+    // Detach first.pdf (ids[0]).
+    h.state_mut().detach_tab(ids[0]);
+    h.run_steps(3);
+    assert!(h.state().views[0].detached, "first.pdf should be detached");
+
+    // Activate middle.pdf (ids[1])
+    h.get_by_role_and_label(egui::accesskit::Role::Tab, "middle.pdf").click();
+    h.run_steps(3);
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[1]));
+
+    // Close middle.pdf (the active docked tab).
+    close_named_tab(&mut h, "middle.pdf");
+    h.run_steps(3);
+
+    // Active tab must now be last.pdf (docked, ids[2]), never detached first.pdf (ids[0])!
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[2]));
+    assert!(!h.state().views[h.state().active.unwrap()].detached);
+
+    // Now close last.pdf. Since first.pdf is detached, no docked tabs remain.
+    // Active must become None (Home screen), never first.pdf!
+    close_named_tab(&mut h, "last.pdf");
+    h.run_steps(3);
+    assert_eq!(h.state().active, None, "active must be None when no docked tabs remain");
+}
+
+#[test]
+fn detaching_active_tab_predictably_transfers_active_to_adjacent_docked_tab() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+    // Initially last.pdf (ids[2], index 2) is active.
+    assert_eq!(h.state().active, Some(2));
+
+    // Detach the active tab (last.pdf).
+    // Nearest docked tab is adjacent middle.pdf (index 1), not first.pdf (index 0).
+    h.state_mut().detach_tab(ids[2]);
+    h.run_steps(3);
+
+    assert!(h.state().views[2].detached);
+    assert_eq!(h.state().active, Some(1), "detaching last tab transfers to adjacent middle.pdf");
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[1]));
+
+    // Now middle.pdf is active (index 1). Detach middle.pdf.
+    // Remaining docked tab is first.pdf (index 0).
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(3);
+
+    assert!(h.state().views[1].detached);
+    assert_eq!(h.state().active, Some(0), "detaching middle tab transfers to remaining docked first.pdf");
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[0]));
+}
+
+#[test]
+fn detaching_all_tabs_sets_active_to_none_and_shows_home() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    // Detach all three tabs
+    h.state_mut().detach_tab(ids[0]);
+    h.state_mut().detach_tab(ids[1]);
+    h.state_mut().detach_tab(ids[2]);
+    h.run_steps(4);
+
+    assert!(h.state().views.iter().all(|v| v.detached));
+    assert_eq!(h.state().active, None, "active must be None when all tabs are detached");
+
+    // Home screen is shown in the main window
+    assert!(h.query_by_label("Welcome to PdfCraft").is_some() || h.query_by_label("Open file").is_some());
+    // No tabs in the main window tab strip
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Tab, "first.pdf").is_none());
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Tab, "middle.pdf").is_none());
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Tab, "last.pdf").is_none());
+}
+
+#[test]
+fn keyboard_tab_navigation_cycles_exclusively_through_docked_tabs() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    // Detach the middle tab (ids[1])
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(3);
+    assert!(h.state().views[1].detached);
+
+    // Focus first tab (ids[0], index 0)
+    h.get_by_role_and_label(egui::accesskit::Role::Tab, "first.pdf").click();
+    h.run_steps(3);
+    assert_eq!(h.state().active, Some(0));
+
+    // Next tab shortcut (Ctrl+Tab / view.next_tab) should skip detached middle.pdf (index 1)
+    // and go directly to last.pdf (index 2)!
+    let ctrl = egui::Modifiers::CTRL | egui::Modifiers::COMMAND;
+    h.key_press_modifiers(ctrl, egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(h.state().active, Some(2), "next tab should skip detached tab and jump to last.pdf");
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[2]));
+
+    // Next tab again should wrap around directly to first.pdf (index 0)
+    h.key_press_modifiers(ctrl, egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(h.state().active, Some(0), "next tab should wrap back to first.pdf");
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[0]));
+
+    // Previous tab shortcut (Ctrl+Shift+Tab / view.previous_tab) should go to last.pdf (index 2)
+    h.key_press_modifiers(ctrl | egui::Modifiers::SHIFT, egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(h.state().active, Some(2), "previous tab should wrap to last.pdf, skipping middle");
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[2]));
+}
+
+#[test]
+fn resolve_close_saving_detached_tab_preserves_main_window_active_tab() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    // Detach middle.pdf (index 1)
+    h.state_mut().detach_tab(ids[1]);
+    // Set active tab to first.pdf (index 0)
+    h.state_mut().active = Some(0);
+    h.run_steps(3);
+
+    // Make middle.pdf dirty so close requests a save
+    h.state_mut().session.apply(ids[1], pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    h.state_mut().request_close_tab(1);
+    assert!(h.state().close_request.is_some());
+
+    // Resolve save with Save (choice = Some(true))
+    let ctx = h.ctx.clone();
+    h.state_mut().resolve_close(&ctx, Some(true));
+    h.run_steps(3);
+
+    // Active tab in main window must still be first.pdf (index 0), NOT detached middle.pdf!
+    assert_eq!(h.state().active, Some(0));
+}
+
 /// The Edit tab turns on Edit text & images at once, as Acrobat does, so every paragraph and image
 /// is boxed and editable with one click; another tab puts the tool down again.
 #[test]
