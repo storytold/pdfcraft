@@ -590,7 +590,8 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let mut page_display = None;
     let rail = Rail::new(egui::Id::unique("rail"))
         .edge(Edge::End)
-        .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(4, 8)).stroke(Stroke::new(1.0, t.divider)))
+        .width(49.0)
+        .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(1, 8)).stroke(Stroke::new(1.0, t.divider)))
         .show(ui, &items, app.right.as_ref(), |ui| {
             // Page navigation cluster at the bottom, a panel of its own so that in a short
             // window the buttons above scroll instead of running into it (#3282).
@@ -618,12 +619,14 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 // Out and in side by side right under the zoom field, so they are found with it.
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 0.0;
+                    // Two buttons across the rail, each leaving a pixel to the rail's edge.
+                    let side = (ui.available_width() / 2.0).floor();
                     let tip = crate::commands::key_tip(ui.ctx(), tl!("Zoom out ({key})"), crate::commands::ZOOM_OUT);
-                    if icons::button(ui, "zoom-out", 17.0, false, &tip).clicked() {
+                    if icons::button(ui, "zoom-out", side, false, &tip).clicked() {
                         view.zoom_step(false);
                     }
                     let tip = crate::commands::key_tip(ui.ctx(), tl!("Zoom in ({key})"), crate::commands::ZOOM_IN);
-                    if icons::button(ui, "zoom-in", 17.0, false, &tip).clicked() {
+                    if icons::button(ui, "zoom-in", side, false, &tip).clicked() {
                         view.zoom_step(true);
                     }
                 });

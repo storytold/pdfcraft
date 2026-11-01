@@ -32,7 +32,9 @@ impl DocView {
         // of pages of different heights, whose shorter page can start below it), else the
         // nearest one below.
         let top = self.viewport_screen.top();
-        let showing = || self.screen_xforms.iter().filter(|(_, xf)| xf.rect.bottom() > top);
+        // A page showing less than a pixel is rounding, not what the reader is looking at: a jump
+        // to the next page leaves the previous one's bottom edge within a pixel of the top.
+        let showing = || self.screen_xforms.iter().filter(|(_, xf)| xf.rect.bottom() > top + 1.0);
         let (page, xf) = showing()
             .filter(|(_, xf)| xf.rect.top() <= top)
             .min_by_key(|(p, _)| *p)
