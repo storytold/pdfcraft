@@ -1,25 +1,33 @@
 //! Print as image (Acrobat's Advanced Print Setup ▸ Print As Image): every page
 //! sent to the printer as a picture at a chosen resolution, for printers that skip text,
 //! shading or transparency. The pages are rendered the way the viewer shows them (reading
-//! colours off, the print's own colours), made into an image-only document, and that document
-//! is imposed on the paper like any other. The print is no longer searchable text.
+//! colours off, the print's own colours) with only what the print's content choice keeps, made
+//! into an image-only document, and that document is imposed on the paper like any other. The
+//! print is no longer searchable text.
 
+use pdfcraft_cos::{SaveOptions, write_incremental};
 use pdfcraft_create::ImageResolution;
-use pdfcraft_print::Raster;
+use pdfcraft_print::{Content, Raster};
 use pdfcraft_render::{PRINT_TAG, PageRenderer, RenderRequest};
 
-use crate::Document;
 use crate::export::encode_png;
+use crate::{Document, guard};
 
 /// `doc`'s pages `pages` (0-based, each once, in the order given) as an image-only PDF, one
-/// page per entry, the size of the source page as displayed. Pages too large for the renderer
-/// at `raster.dpi` render at the largest resolution it allows.
-pub fn rasterize(doc: &Document, pages: &[usize], raster: &Raster, hide_comments: bool) -> Result<Vec<u8>, String> {
+/// page per entry, the size of the source page as displayed, drawing what `content` prints.
+/// Pages too large for the renderer at `raster.dpi` render at the largest resolution it allows.
+pub fn rasterize(doc: &Document, pages: &[usize], raster: &Raster, content: Content) -> Result<Vec<u8>, String> {
     let dpi = raster.dpi.clamp(72.0, 600.0);
     let src = doc.export_source();
     let mut config = src.config.clone();
-    config.hide_comments = hide_comments;
-    let mut renderer = PageRenderer::new(src.bytes, config);
+    // The copy below holds only what prints, so the viewer's own comment hiding plays no part.
+    config.hide_comments = false;
+    let printed = guard(|| -> Result<Vec<u8>, String> {
+        let mut cos = pdfcraft_cos::Document::open_with_password(src.bytes.clone(), config.password.as_deref()).map_err(|e| e.to_string())?;
+        pdfcraft_print::keep_printed(&mut cos, content);
+        write_incremental(&cos, &SaveOptions::default()).map_err(|e| e.to_string())
+    })??;
+    let mut renderer = PageRenderer::new(std::sync::Arc::new(printed), config);
     let mut images: Vec<(String, Vec<u8>)> = Vec::with_capacity(pages.len());
     let mut used: Option<f64> = None;
     for &page in pages {

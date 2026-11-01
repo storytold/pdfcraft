@@ -11,27 +11,24 @@ workspace = true
 [dependencies]
 # Help ▸ Check for updates (issue #28): one HTTPS request to GitHub, over rustls with the OS's
 # trusted roots. No bundled root list (webpki-roots and webpki-root-certs are CDLA-licensed).
-ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "_ring"] }
-rustls-native-certs = "0.8"
 pdfcraft-ui-egui = { workspace = true }
 # `build_info`: the version and compile-time build label for `--version` and the log.
 pdfcraft-engine = { workspace = true }
 # wgpu draws; OpenGL (glow) is the fallback when wgpu can't start on an old or unusual GPU or
 # driver (#461, #435, #392), and can be chosen with PDFCRAFT_RENDERER=gl.
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "glow", "accesskit", "wayland", "x11", "persistence", "links"] }
-egui = { workspace = true }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "glow", "accesskit", "wayland", "x11", "persistence", "links", "clipboard"] }
+egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
 serde_json = { workspace = true }
 # Records from every crate go to standard error and the log file (src/logging.rs).
 log = { workspace = true }
+# The log timestamp goes through chrono (no hand-rolled calendar code).
+chrono = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Finder double-click / Open With / Dock drops arrive as Apple events (#73); this small audited
 # crate registers the handler (Objective-C interop needs unsafe, which our workspace forbids)
 # behind a safe API. Same version as PhotoCraft. Pinned exactly: review the diff before bumping.
 fmv-macos-events = "=0.1.0"
-# ⌘Q asks about unsaved changes like the close button (#1136): an app menu whose Quit asks the
-# window to close instead of winit's, which ends the process without asking.
-craft-quit = { workspace = true, features = ["menu"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Asks the Wayland compositor which GPU it draws with (linux-dmabuf feedback), so the window is
@@ -54,8 +51,9 @@ winit = { version = "0.30", default-features = false, features = ["wayland"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Which GPU drives which display (EnumDisplayDevices), so the window is drawn on the GPU that
-# shows it (issue #378). Safe wrappers over Win32; only the `user` feature (which brings `kernel` with it).
-winsafe = { version = "0.0.29", default-features = false, features = ["user"] }
+# shows it (issue #378). Safe wrappers over Win32; only the `user` feature (which brings `kernel` with it),
+# and `advapi` for the session id that names the single-instance socket (#3338).
+winsafe = { version = "0.0.29", default-features = false, features = ["user", "advapi"] }
 # Settings ▸ Accessibility ▸ Visual effects ▸ Animation effects (src/motion.rs), through WinRT's
 # `UISettings`, whose bindings are safe to call (winsafe's `SystemParametersInfo` is an unsafe
 # fn). Already in the tree through wgpu's DX12 backend; this adds one small namespace to it.
@@ -68,3 +66,6 @@ uds_windows = "=1.2.1"
 [build-dependencies]
 # Icon + VERSIONINFO for pdfcraft.exe; build.rs only uses it when targeting Windows.
 winresource = "0.1"
+
+[target.'cfg(windows)'.dependencies]
+craft-update = { workspace = true }
