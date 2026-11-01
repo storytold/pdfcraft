@@ -142,6 +142,7 @@ impl PdfCraftApp {
         v["default_page_gaps"] = serde_json::Value::Bool(self.view_defaults.show_page_gaps);
         v["fill_text_color"] = serde_json::json!(self.fill_text_color);
         v["redact_prefs"] = self.redact_defaults.to_json();
+        v["pinned_tools"] = serde_json::json!(self.pinned_tools);
         // Set outside json! above, which is at serde_json's macro recursion limit.
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
         v["show_page_edge_shadows"] = self.show_page_edge_shadows.into();
@@ -209,6 +210,18 @@ impl PdfCraftApp {
         }
         self.pinned.restore(&v["pinned_folders"]);
         self.marks_draft.saved = marks_ui::saved_from_json(&v["watermark_settings"]);
+        if let Some(items) = v.get("pinned_tools").and_then(serde_json::Value::as_array) {
+            let mut tools = Vec::new();
+            for item in items {
+                if let Some(id) = item.as_str()
+                    && pdfcraft_engine::catalog::group(id).is_some()
+                    && !tools.iter().any(|t| t == id)
+                {
+                    tools.push(id.to_string());
+                }
+            }
+            self.pinned_tools = tools;
+        }
         if let Ok(preference) = serde_json::from_value::<ThemePreference>(v["theme"].clone()) {
             self.set_theme_preference(preference);
         }

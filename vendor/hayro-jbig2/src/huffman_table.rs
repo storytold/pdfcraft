@@ -448,11 +448,11 @@ impl HuffmanNode {
                     // 4) "Otherwise, if table line I is the lower range table line for this
                     //    table, then set: HTVAL = RANGELOW[I] − HTOFFSET"
                     // 5) "Otherwise, set: HTVAL = RANGELOW[I] + HTOFFSET"
-                    // `HTVAL`
+                    // `HTVAL`. Wrapping: a range line's offset can take it past what an `i32` holds.
                     let value = if leaf.is_lower {
-                        leaf.range_low - range_offset
+                        leaf.range_low.wrapping_sub(range_offset)
                     } else {
-                        leaf.range_low + range_offset
+                        leaf.range_low.wrapping_add(range_offset)
                     };
 
                     return Ok(Some(value));

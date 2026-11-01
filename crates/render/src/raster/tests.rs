@@ -3591,6 +3591,86 @@ fn jbig2_symbol_dictionaries_that_never_advance_terminate() {
     }
 }
 
+/// A JBIG2 stream can put a region, a reference or a symbol at the very end of what an `i32` holds,
+/// where adding to it overflowed: a panic wherever overflow is checked, a build's own tests included.
+/// A region or a symbol out there is off the page, so nothing draws. Vendored hayro-jbig2 patch: the arithmetic wraps, as
+/// a release build's did, or in `Bitmap::combine` saturates, which comes to the same. Three of the text
+/// streams are arithmetic-coded: one symbol on a strip of -2^31 + 1, with its bottom left as the corner
+/// placed, one on a strip of -2^31, and one refined by an offset of `i32::MIN`, which reads nothing of
+/// the old symbol and still draws. Two are Huffman-coded, each with its first S at an offset of
+/// 0x7FFFFFFF on a table's 32-bit range line, past what an `i32` holds, and are refused further on.
+#[test]
+fn jbig2_placements_at_the_end_of_an_i32_draw_nothing() {
+    const FAR_CORNER: &str = "0000000030000100000013000000100000000c0000000000000000420000000000010000010000001e000003fffdff02fefefe00000001000000014fdc3ce0205df55c36bfffac00000002062001010000001f000000100000000c000000000000000004000000000001969747cbe88bffac";
+    const STRIP: &str = "0000000030000100000013000000100000000c0000000000000000420000000000010000010000001e000003fffdff02fefefe00000001000000014fdda25e46956d3e0d3fffac00000002062001010000001f000000100000000c000000000000000004001000000001969747cbe5dbffac";
+    const UPPER_LINE: &str = "0000000030000100000013000000100000000c0000000000000000420000000000010000010000001d000003fffdff02fefefe00000001000000014fdaea38c99641e0c8ffac000000020620010100000038000000100000000c00000000000000000400110000000000010100000000000000000000000000000000003f7fffffff0000000000000000";
+    const LOWER_LINE: &str = "0000000030000100000013000000100000000c0000000000000000420000000000010000010000001d000003fffdff02fefefe00000001000000014fdaea38c99641e0c8ffac000000020620010100000038000000100000000c00000000000000000400110000000000010100000000000000000000000000000000003e7fffffff0000000000000000";
+    const OFFSET: &str = "0000000030000100000013000000100000000c0000000000000000420000000000010000010000001e000003fffdff02fefefe00000001000000014fdda9172f614a037ddfffac0000000206200101000000260000000800000006000000000000000004801200000001a9695690b3e5f44a2f105e30d3ffac";
+    let segment = |number: u32, kind: u8, data: &[u8]| {
+        let mut out = number.to_be_bytes().to_vec();
+        out.extend_from_slice(&[kind, 0, 1]);
+        out.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
+        out.extend_from_slice(data);
+        out
+    };
+    let side = 8u32.to_be_bytes();
+    let page = |width: u32| {
+        let mut page = [width.to_be_bytes(), side].concat();
+        page.extend_from_slice(&[0; 8]); // resolution
+        page.extend_from_slice(&[0, 0, 0]); // flags, striping
+        segment(0, 48, &page)
+    };
+    let region = |width: u32, kind: u8, x: u32, y: u32, header: &[u8]| {
+        let mut region = [width.to_be_bytes(), side, x.to_be_bytes(), y.to_be_bytes()].concat();
+        region.push(0); // combination operator
+        region.extend_from_slice(header);
+        region.extend_from_slice(&[0x5a; 64]);
+        [page(width), segment(1, kind, &region)].concat()
+    };
+    let generic = |x, y| region(8, 38, x, y, &[0, 3, 0xff, 0xfd, 0xff, 2, 0xfe, 0xfe, 0xfe]); // template 0, AT pixels
+    // Immediate refinements of the page: template 0 with its usual AT pixels, with others, with typical
+    // prediction, and template 1.
+    let refined = |width, x, y, form: usize| {
+        region(width, 42, x, y, [&[0, 0xff, 0xff, 0xff, 0xff][..], &[0, 0xff, 0xff, 127, 127], &[2, 0xff, 0xff, 0xff, 0xff], &[1]][form])
+    };
+    let hex = |text: &str| (0..text.len() / 2).map(|i| u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).unwrap()).collect::<Vec<u8>>();
+    let ink = |jbig2: Vec<u8>, width: u32, height: u32| {
+        let content = b"q 20 0 0 20 5 5 cm /Im1 Do Q";
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n".to_vec();
+        pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n", content.len()).as_bytes());
+        pdf.extend_from_slice(content);
+        pdf.extend_from_slice(b"\nendstream endobj\n");
+        pdf.extend_from_slice(
+            format!("5 0 obj << /Type /XObject /Subtype /Image /Width {width} /Height {height} /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode /Length {} >> stream\n", jbig2.len())
+                .as_bytes(),
+        );
+        pdf.extend_from_slice(&jbig2);
+        pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+        let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        page.rgba.as_chunks::<4>().0.iter().filter(|p| p[0] < 128).count()
+    };
+    assert!(ink(generic(2, 0), 8, 8) > 0, "a region on the page draws");
+    for form in 0..4 {
+        assert!(ink(refined(8, 0, 0, form), 8, 8) > 0, "a refinement on the page draws: {form}");
+    }
+    let end = 0x7FFF_FFFFu32;
+    for (x, y) in [(end, 0), (0, end), (end - 7, 0), (0, end - 7), (end - 129, 0), (0, end - 129)] {
+        assert_eq!(ink(generic(x, y), 8, 8), 0, "generic at {x:#x}, {y:#x}");
+        for form in 0..4 {
+            assert_eq!(ink(refined(8, x, y, form), 8, 8), 0, "refinement {form} at {x:#x}, {y:#x}");
+        }
+    }
+    // Past a 32-bit word of the row, where the reference is read again.
+    assert_eq!(ink(refined(64, 0, end, 0), 64, 8), 0, "a wide refinement");
+    assert_eq!(ink(hex(FAR_CORNER), 16, 12), 0, "a symbol's far side past the end");
+    assert_eq!(ink(hex(STRIP), 16, 12), 0, "a strip of -2^31");
+    assert!(ink(hex(OFFSET), 16, 12) > 0, "a symbol refined by an offset of i32::MIN");
+    assert_eq!(ink(hex(UPPER_LINE), 16, 12), 0, "an upper range line past an i32");
+    assert_eq!(ink(hex(LOWER_LINE), 16, 12), 0, "a lower range line past an i32");
+}
+
 /// Item 1 of storytold/pdfcraft#623: a page's content used to be cut at `MAX_DECODED_STREAM`,
 /// so everything after the cut was lost (the text and the title block of the A1 sample). Content
 /// that expands by a few times over is read to its end, however large it is.

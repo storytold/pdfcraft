@@ -2724,6 +2724,13 @@ key	Space	Mellomrom
 # Page gaps (AI-assisted, not separately native-reviewed)
 	Show gaps between pages	Vis mellomrom mellom sidene
 	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Skjul mellomrommene slik at sidekantene møtes. Margene inne i PDF-en endres ikke.
+	Arrange image	Ranger bilde
+	Bring forward	Flytt fremover
+	Bring to front	Plasser lengst frem
+	Crop	Beskjær
+	Remove crop	Fjern beskjæring
+	Send backward	Flytt bakover
+	Send to back	Plasser lengst bak
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	I dag
@@ -2760,3 +2767,32 @@ key	Space	Mellomrom
 @plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	{n} more formula reads a missing field.|{n} more formulas read missing fields.
 @plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.
 @plural	{fields} is missing|{fields} are missing	{fields} is missing|{fields} are missing
+
+# Image paste and Home notifications (AI-assisted; not separately native-reviewed)
+	Search…	Søk…
+	Image pasted	Bilde limt inn
+	No image on clipboard to paste	Ingen bilder på utklippstavlen å lime inn
+	Pinned {tool} to Home	Festet {tool} til Hjem
+	Unpinned {tool} from Home	Løsnet {tool} fra Hjem
+
+# Home tools (AI-assisted; not separately native-reviewed)
+	Clear search	Tøm søk
+	Pin	Fest
+	Pin a tool…	Fest et verktøy…
+	Pin to Home	Fest til Hjem
+	Pin tools to Home	Fest verktøy til Hjem
+	Pin your favorite tools here for quick access.	Fest favorittverktøyene dine her for rask tilgang.
+	Pinned	Festet
+	Pinned Tools	Festede verktøy
+	Search tools…	Søk etter verktøy…
+	Select tools to display on your Home page for quick access.	Velg verktøy som skal vises på hjemmesiden for rask tilgang.
+	Unpin from Home	Løsne fra Hjem
+	Unpin tool	Løsne verktøy
+	Transform image	Transformer bilde
+	Select Tool	Markeringsverktøy
+	Hand Tool	Håndverktøy
+	Marquee Zoom	Områdezoom
+	Edit this PDF	Rediger denne PDF-en
+	Export this PDF	Eksporter denne PDF-en
+	Find text or tools	Finn tekst eller verktøy
+	Crop image	Beskjær bilde
