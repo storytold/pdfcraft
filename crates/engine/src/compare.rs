@@ -174,9 +174,9 @@ pub struct OfficeExport {
     pub bytes: Vec<u8>,
     /// Pages (0-based) that draw forms nested deeper than [`MAX_FORM_DEPTH`] or more of them
     /// than [`MAX_FORM_VISITS`], pictures past [`MAX_EXPORT_IMAGE_BYTES`], or (Word) more paths
-    /// than [`pdfcraft_edit::MAX_PAGE_SHAPES`] or more paths or fields than a Word page draws
-    /// ([`pdfcraft_export::MAX_DOCX_PAGE_SHAPES`]): export stops there to stay bounded on hostile
-    /// files, so the text and images of those forms, those pictures, paths or fields are missing
+    /// than [`pdfcraft_edit::MAX_PAGE_SHAPES`] or more shapes, points or fields than a Word page
+    /// holds ([`pdfcraft_export::docx_checked`]): export stops there to stay bounded on hostile
+    /// files, so the text and images of those forms, those pictures, shapes or fields are missing
     /// from `bytes`.
     pub truncated_pages: Vec<usize>,
 }
@@ -310,11 +310,7 @@ impl crate::Document {
                     })
                     .collect();
                 let art_read = if art { pdfcraft_edit::reading_shapes(cos, i).unwrap_or_default() } else { pdfcraft_edit::ReadingShapes::default() };
-                // Word draws at most so many shapes and fields a page: past that the rest are left out.
-                let art_dropped = art
-                    && (art_read.shapes.len() > pdfcraft_export::MAX_DOCX_PAGE_SHAPES
-                        || fields_by_page.get(&i).is_some_and(|f| f.len() > pdfcraft_export::MAX_DOCX_PAGE_SHAPES));
-                if forms_unread || over_budget || art_read.truncated || art_dropped {
+                if forms_unread || over_budget || art_read.truncated {
                     truncated.push(i);
                 }
                 // The page colour (Edit a PDF ▸ Background, a producer's page fill) for formats that keep one.
@@ -351,14 +347,21 @@ impl crate::Document {
     /// ([`OfficeExport::truncated_pages`]).
     pub fn export_office_checked(&self, format: OfficeFormat) -> OfficeExport {
         // RTF and Markdown leave pictures out.
-        let (pages, truncated_pages) = self.export_pages_with(
+        let (pages, mut truncated_pages) = self.export_pages_with(
             !matches!(format, OfficeFormat::Rtf | OfficeFormat::Markdown),
             MAX_EXPORT_IMAGE_BYTES,
             matches!(format, OfficeFormat::Docx),
         );
         let title = self.info.title.clone().unwrap_or_else(|| self.name.trim_end_matches(".pdf").to_string());
         let bytes = match format {
-            OfficeFormat::Docx => pdfcraft_export::docx(&pages, &title),
+            OfficeFormat::Docx => {
+                // The Word writer says which pages it had to cut short (shapes, points, fields).
+                let (bytes, dropped) = pdfcraft_export::docx_checked(&pages, &title);
+                truncated_pages.extend(dropped);
+                truncated_pages.sort_unstable();
+                truncated_pages.dedup();
+                bytes
+            }
             OfficeFormat::Pptx => pdfcraft_export::pptx(&pages, &title),
             OfficeFormat::Html => pdfcraft_export::html(&pages, &title).into_bytes(),
             OfficeFormat::Rtf => pdfcraft_export::rtf(&pages).into_bytes(),

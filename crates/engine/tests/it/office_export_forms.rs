@@ -120,27 +120,33 @@ fn exporting_a_form_to_word_keeps_its_boxes_text_and_fields_in_place() {
     assert!(!html.is_empty());
 }
 
-/// A page that paints more paths than a Word page draws says so: Word export lists it among its
-/// truncated pages, where the paths past the writer's limit used to go missing without a word.
-/// The other formats don't read paths, so they leave it out.
+/// A form page that paints more shapes than a Word page holds says so: Word export lists it among
+/// its truncated pages. Every subpath counts, so one path of many subpaths is listed too: it
+/// wrote a shape per subpath past the limit without a word. The other formats don't read paths,
+/// so they leave the page out of the list.
 #[test]
 fn word_export_reports_a_page_whose_paths_it_leaves_out() {
-    let page = |paths: usize| {
-        let content = "0 G 0 0 m 1 1 l S\n".repeat(paths);
+    // A form page (one text field) that paints `content`.
+    let page = |content: String| {
         pdf(&[
-            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>".into(),
             "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Annots [5 0 R] >>".into(),
             stream("", &content),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (Name) /Rect [10 10 100 22] /P 3 0 R >>".into(),
         ])
     };
-    let truncated = |paths: usize, format: OfficeFormat| {
+    let truncated = |content: String, format: OfficeFormat| {
         let mut s = Session::new();
-        let id = s.open("paths.pdf", None, Arc::new(page(paths)), None).unwrap();
+        let id = s.open("paths.pdf", None, Arc::new(page(content)), None).unwrap();
         s.get(id).unwrap().export_office_checked(format).truncated_pages
     };
+    let paths = |n: usize| "0 G 0 0 m 1 1 l S\n".repeat(n);
+    let subpaths = |n: usize| format!("0 G {}S", "0 0 m 1 1 l ".repeat(n));
     let limit = pdfcraft_export::MAX_DOCX_PAGE_SHAPES;
-    assert_eq!(truncated(limit, OfficeFormat::Docx), Vec::<usize>::new());
-    assert_eq!(truncated(limit + 1, OfficeFormat::Docx), [0]);
-    assert_eq!(truncated(limit + 1, OfficeFormat::Html), Vec::<usize>::new());
+    assert_eq!(truncated(paths(limit), OfficeFormat::Docx), Vec::<usize>::new());
+    assert_eq!(truncated(paths(limit + 1), OfficeFormat::Docx), [0]);
+    assert_eq!(truncated(subpaths(limit), OfficeFormat::Docx), Vec::<usize>::new());
+    assert_eq!(truncated(subpaths(limit + 1), OfficeFormat::Docx), [0], "one path of many subpaths");
+    assert_eq!(truncated(paths(limit + 1), OfficeFormat::Html), Vec::<usize>::new());
 }

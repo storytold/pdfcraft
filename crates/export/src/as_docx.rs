@@ -264,9 +264,38 @@ fn axis_rect(points: &[[f64; 2]]) -> Option<[f64; 4]> {
     ])
 }
 
-/// Most shapes, and most fields, one Word page draws; a page with more keeps the first ones,
-/// and the engine reports it among the export's truncated pages.
+/// Most shapes (one per subpath a path draws), and most fields, one Word page holds. A page with
+/// more keeps the first ones and is listed by [`docx_checked`].
 pub const MAX_DOCX_PAGE_SHAPES: usize = 5000;
+
+/// Most points all of one Word page's shapes hold together (a hostile path of millions of
+/// segments); past it a page keeps the shapes that fit and is listed by [`docx_checked`].
+pub const MAX_DOCX_PAGE_POINTS: usize = 200_000;
+
+/// What one Word page may still draw, and whether it had to leave something out.
+struct ArtBudget {
+    shapes: usize,
+    points: usize,
+    dropped: bool,
+}
+
+impl ArtBudget {
+    fn new() -> Self {
+        Self { shapes: MAX_DOCX_PAGE_SHAPES, points: MAX_DOCX_PAGE_POINTS, dropped: false }
+    }
+
+    /// Room for one more shape of `points` points: `false`, and the page marked as having
+    /// dropped something, when there is none.
+    fn take(&mut self, points: usize) -> bool {
+        if self.shapes == 0 || points > self.points {
+            self.dropped = true;
+            return false;
+        }
+        self.shapes -= 1;
+        self.points -= points;
+        true
+    }
+}
 
 /// A subpath as drawn: an open path that ends where it started is closed (a box drawn as four
 /// `l` segments back to its corner), and a filled one is closed as filling implies.
@@ -283,8 +312,9 @@ fn normalized(points: &[[f64; 2]], closed: bool, filled: bool) -> (Vec<[f64; 2]>
 
 /// One painted path as VML shapes behind the text: a line for a single straight segment, a
 /// rectangle for an axis-aligned box, otherwise a polyline per subpath (holes in a fill are not
-/// kept). `None` for a shape without points or paint.
-fn shape_xml(s: &Shape, page_height: f64, id: &mut usize, z: i64) -> Option<String> {
+/// kept). Each shape it writes counts against the page's `budget`. `None` for a shape without
+/// points or paint, or when the budget has no room for any of it.
+fn shape_xml(s: &Shape, page_height: f64, id: &mut usize, z: i64, budget: &mut ArtBudget) -> Option<String> {
     if s.stroke.is_none() && s.fill.is_none() {
         return None;
     }
@@ -310,14 +340,21 @@ fn shape_xml(s: &Shape, page_height: f64, id: &mut usize, z: i64) -> Option<Stri
     };
     let place = "mso-position-horizontal-relative:page;mso-position-vertical-relative:page";
     let wrap = "<w10:wrap type=\"none\"/>";
-    let subpaths: Vec<(Vec<[f64; 2]>, bool)> = s
+    let subpaths = s
         .paths
         .iter()
-        .map(|(p, closed)| normalized(p, *closed, s.fill.is_some()))
-        .filter(|(p, _)| p.iter().flatten().all(|v| v.is_finite()) && !p.is_empty())
-        .collect();
+        .filter(|(p, _)| p.len() > 1 && p.iter().flatten().all(|v| v.is_finite()))
+        .map(|(p, closed)| normalized(p, *closed, s.fill.is_some()));
     let mut out = String::new();
-    for (points, closed) in &subpaths {
+    for (points, closed) in subpaths {
+        // Every subpath left has two points or more, so it writes one shape.
+        if budget.shapes == 0 {
+            budget.dropped = true;
+            break;
+        }
+        if !budget.take(points.len()) {
+            continue;
+        }
         *id = id.saturating_add(1);
         let n = *id;
         // A line runs from its top (then left) end down to the other: LibreOffice draws nothing
@@ -340,7 +377,7 @@ fn shape_xml(s: &Shape, page_height: f64, id: &mut usize, z: i64) -> Option<Stri
                 b[1],
                 paint(false)
             ));
-        } else if let Some(r) = axis_rect(points).filter(|_| *closed) {
+        } else if let Some(r) = axis_rect(&points).filter(|_| closed) {
             out.push_str(&format!(
                 "<w:r><w:pict><v:rect id=\"Shape{n}\" style=\"position:absolute;margin-left:{:.3}pt;margin-top:{:.3}pt;width:{:.3}pt;height:{:.3}pt;z-index:{z};{place}\"{}>{inner}{wrap}</v:rect></w:pict></w:r>",
                 x(r[0]),
@@ -351,13 +388,13 @@ fn shape_xml(s: &Shape, page_height: f64, id: &mut usize, z: i64) -> Option<Stri
             ));
         } else if points.len() > 1 {
             let mut list: Vec<String> = points.iter().map(|p| format!("{:.3}pt,{:.3}pt", x(p[0]), y(p[1]))).collect();
-            if *closed && let Some(first) = list.first().cloned() {
+            if closed && let Some(first) = list.first().cloned() {
                 list.push(first);
             }
             out.push_str(&format!(
                 "<w:r><w:pict><v:polyline id=\"Shape{n}\" style=\"position:absolute;z-index:{z};{place}\" points=\"{}\"{}>{inner}{wrap}</v:polyline></w:pict></w:r>",
                 list.join(","),
-                paint(*closed)
+                paint(closed)
             ));
         }
     }
@@ -528,18 +565,26 @@ fn rows(lines: &[Block]) -> Vec<Vec<&Block>> {
     out
 }
 
-fn positioned_page<'a>(page: &'a Page, media: &mut Vec<(String, &'a Image)>, shape_id: &mut usize, form: &mut Form) -> String {
+/// A page that keeps its layout, and whether it had to leave shapes or fields out to stay within
+/// [`MAX_DOCX_PAGE_SHAPES`] and [`MAX_DOCX_PAGE_POINTS`].
+fn positioned_page<'a>(page: &'a Page, media: &mut Vec<(String, &'a Image)>, shape_id: &mut usize, form: &mut Form) -> (String, bool) {
     // One 1 pt paragraph anchors the whole page. Shapes never reserve body space, so even a
     // page-sized watermark cannot push the invoice footer onto another page.
     let mut s = String::from("<w:p><w:pPr><w:spacing w:before=\"0\" w:after=\"0\" w:line=\"20\" w:lineRule=\"exact\"/></w:pPr>");
     let body = body_size(std::slice::from_ref(page)).max(1.0);
     // Vector art goes behind everything else, in painting order: the first shape is furthest
     // back, the last just behind watermark-sized text (z-index -2) and the text (1).
-    let shapes = page.shapes.len().min(MAX_DOCX_PAGE_SHAPES);
-    for (i, shape) in page.shapes.iter().take(MAX_DOCX_PAGE_SHAPES).enumerate() {
+    // Each shape written (a subpath) counts, not each path: one path can hold thousands.
+    let mut budget = ArtBudget::new();
+    let shapes = page.shapes.len();
+    for (i, shape) in page.shapes.iter().enumerate() {
         let z = i64::try_from(i).unwrap_or(i64::MAX).saturating_sub(i64::try_from(shapes).unwrap_or(i64::MAX)).saturating_sub(3);
-        if let Some(xml) = shape_xml(shape, page.height, shape_id, z) {
+        if let Some(xml) = shape_xml(shape, page.height, shape_id, z, &mut budget) {
             s.push_str(&xml);
+        }
+        if budget.dropped && budget.shapes == 0 {
+            // Nothing more fits; the page is already marked.
+            break;
         }
     }
     // Lines are placed in rows: the pieces of one visual line that follow each other within
@@ -630,7 +675,7 @@ fn positioned_page<'a>(page: &'a Page, media: &mut Vec<(String, &'a Image)>, sha
             s.push_str(&xml);
         }
     }
-    s
+    (s, budget.dropped || page.fields.len() > MAX_DOCX_PAGE_SHAPES)
 }
 
 fn word_page_size(page: &Page) -> (i64, i64) {
@@ -665,6 +710,14 @@ fn word_background(pages: &[Page]) -> Option<String> {
 /// rules use floating shapes to retain their layout, and so does every page of a document where
 /// most pages do.
 pub fn docx(pages: &[Page], title: &str) -> Vec<u8> {
+    docx_checked(pages, title).0
+}
+
+/// [`docx`], and the pages (0-based) that kept their layout but had more shapes, points or fields
+/// than a Word page holds ([`MAX_DOCX_PAGE_SHAPES`], [`MAX_DOCX_PAGE_POINTS`]): the rest of
+/// those are missing from the document.
+pub fn docx_checked(pages: &[Page], title: &str) -> (Vec<u8>, Vec<usize>) {
+    let mut dropped = Vec::new();
     let mut body = String::new();
     let mut media: Vec<(String, &Image)> = Vec::new();
     // Word needs a paragraph between adjacent tables and after the last one in the body.
@@ -680,7 +733,11 @@ pub fn docx(pages: &[Page], title: &str) -> Vec<u8> {
         let text_w = (pw - 2 * (pw / 8).min(1440)) as f64 / 20.0;
         let kept = all_kept || layouts.get(page_index).copied().unwrap_or(false);
         if kept {
-            body.push_str(&positioned_page(page, &mut media, &mut shape_id, &mut form));
+            let (xml, left_out) = positioned_page(page, &mut media, &mut shape_id, &mut form);
+            body.push_str(&xml);
+            if left_out {
+                dropped.push(page_index);
+            }
             after_table = false;
         } else {
             for it in items(std::slice::from_ref(page)) {
@@ -802,5 +859,5 @@ xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" xmlns:mc=\"ht
     for (name, im) in &media {
         z.add(&format!("word/media/{name}"), &im.bytes, false);
     }
-    z.finish()
+    (z.finish(), dropped)
 }

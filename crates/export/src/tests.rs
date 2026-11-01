@@ -1165,3 +1165,42 @@ fn word_keeps_every_page_of_a_mostly_positioned_document_in_place() {
     let xml = part(&docx(&[form_page(), notes.clone()], "Claim"), "word/document.xml");
     assert!(xml.contains("<w:pgMar w:top=\"360\"") && xml.contains("<w:pgMar w:top=\"1440\""), "{xml}");
 }
+
+/// Every shape Word draws counts against the page's limit, not every path: one path of many
+/// subpaths wrote a VML shape per subpath past the limit, without a word. A page that has to
+/// leave shapes, points or fields out is listed; one that fits is not.
+#[test]
+fn word_counts_every_subpath_against_the_page_limit() {
+    let tick = |i: usize| (vec![[1.0, 100.0 + i as f64 / 100.0], [2.0, 110.0]], false);
+    let with = |subpaths: usize| {
+        let mut p = form_page();
+        p.shapes.push(Shape { paths: (0..subpaths).map(tick).collect(), ..boxed([0.0; 4]) });
+        p
+    };
+    // The form page draws 11 shapes of its own.
+    let fits = with(MAX_DOCX_PAGE_SHAPES - 11);
+    let (zip, dropped) = docx_checked(&[fits], "Fits");
+    assert!(dropped.is_empty());
+    assert_eq!(part(&zip, "word/document.xml").matches("id=\"Shape").count(), MAX_DOCX_PAGE_SHAPES);
+    let (zip, dropped) = docx_checked(&[form_page(), with(MAX_DOCX_PAGE_SHAPES)], "Too many");
+    assert_eq!(dropped, [1], "the second page is cut short");
+    let xml = part(&zip, "word/document.xml");
+    let second = xml.split("<w:sectPr>").nth(1).unwrap();
+    assert_eq!(second.matches("id=\"Shape").count(), MAX_DOCX_PAGE_SHAPES, "it keeps the first ones");
+    // One polyline with more points than the page holds is left out, and the page listed.
+    let mut long = form_page();
+    long.shapes.push(Shape {
+        paths: vec![((0..=MAX_DOCX_PAGE_POINTS).map(|i| [i as f64 % 500.0, (i / 500) as f64 % 800.0]).collect(), false)],
+        ..boxed([0.0; 4])
+    });
+    assert_eq!(docx_checked(&[long], "Long").1, [0]);
+    // More fields than a page holds.
+    let mut fields = form_page();
+    let field = fields.fields[0].clone();
+    fields.fields = vec![field; MAX_DOCX_PAGE_SHAPES + 1];
+    assert_eq!(docx_checked(&[fields], "Fields").1, [0]);
+    // A flowing page draws no shapes, so it is never listed.
+    let mut text = page();
+    text.shapes = vec![Shape { paths: (0..MAX_DOCX_PAGE_SHAPES + 1).map(tick).collect(), ..boxed([0.0; 4]) }];
+    assert!(docx_checked(&[text], "Report").1.is_empty());
+}

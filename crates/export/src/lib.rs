@@ -27,7 +27,7 @@ mod layout;
 pub(crate) use as_docx::hex;
 #[cfg(test)]
 use as_docx::{FRAMING_SHAPES, MAX_MEDIA, docx_table, word_font};
-pub use as_docx::{MAX_DOCX_PAGE_SHAPES, docx};
+pub use as_docx::{MAX_DOCX_PAGE_POINTS, MAX_DOCX_PAGE_SHAPES, docx, docx_checked};
 pub(crate) use as_html::esc;
 pub use as_html::html;
 #[cfg(test)]
