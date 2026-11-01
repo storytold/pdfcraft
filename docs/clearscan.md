@@ -1,5 +1,6 @@
 # ClearScan
 
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** minor (the progress log names downsample; a coarse scan may be raised to the page-fit floor; missing models fail the call)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** minor (on the web, ClearScan runs one page at a time so the stage notice and Cancel stay live)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** minor (a split letter is searchable once; only redrawn ink is painted out)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** minor (Recognize Text ▸ Editable text and images runs ClearScan)
@@ -47,24 +48,27 @@ pdfcraft-cli run --root . --script clearscan.json
 
 The result is JSON. `pages` is one object per page (1-based): recognised `text` when the
 document allows copying, `glyphs`, `clusters` and `erased`, or `skipped` / `error`.
-`progress` is the stage log. It can include `skipped` for text pages. Normal stages are
-`render`, `preprocess`, `recognize`, `components`, `align`, `cluster`, `vectorize`, `compose`
-and `done`. The call is synchronous, so the log arrives with the result. Successful pages
+`progress` is the stage log. It can include `skipped` for text pages and `downsample`,
+before `preprocess`, when `downsample` is greater than 1. Normal stages are `render`,
+`preprocess`, `recognize`, `components`, `align`, `cluster`, `vectorize`, `compose` and
+`done`. The call is synchronous, so the log arrives with the result. Successful pages
 are one undoable step named ClearScan.
 
 | Argument | Meaning |
 |---|---|
 | `pages` | 1-based pages. Omit it to read every page. |
-| `dpi` | Render resolution, 72–600. Default 300. A scan is not enlarged past its own pixels. |
+| `dpi` | Render resolution, 72–600. Default 300. A scan at or above the page-fit floor is not enlarged past its own pixels. The floor is one pixel per point, and lower on a page longer than an A4 sheet. A coarser image may be raised to that floor. |
 | `sensitivity` | Binarizer, 0–100. 0 keeps only the darkest ink. 100 picks up faint strokes. 50 is the ordinary paper setting (Sauvola `k` = 0.34). |
 | `downsample` | Integer box shrink after rendering, 1–8. Default 1. The page keeps its size in points. |
 | `language` | Hint. `en` only. The models read the Latin alphabet without accents. |
 | `skip_text_pages` | Default true. A page that already has text is left alone. |
 
-A page is refused, with a message, when the image is empty, the dimensions overflow, or
-the models are not installed (`ocr_status`). A panic in the pipeline is reported on that
-page and does not discard the other pages. The models are required only when a page is
-actually read; a document whose pages already contain text does not load them.
+A page is refused, with a message on that page, when the image is empty or the dimensions
+overflow. A panic in the pipeline is reported on that page and does not discard the other
+pages. Missing models are not a page error: the call fails with `ClearScanError::NoModels`
+and `ocr_clearscan` returns that error, so nothing from the call is applied. The models
+are required only when a page is actually read; a document whose pages already contain
+text does not load them. `ocr_status` reports whether they are installed.
 
 ## What the page becomes
 
@@ -104,6 +108,7 @@ is not claimed to match Acrobat.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | minor | The progress log names the optional `downsample` stage. A coarse scan may be raised to the page-fit floor. Missing recognition models fail the call instead of one page. |
 | 2026-10-31 | minor | On the web, ClearScan runs one page at a time so the stage notice can repaint and Cancel is read before the next page. |
 | 2026-10-31 | minor | A split letter is searchable once. Only ink that was redrawn is painted out. A ClearScan result is dropped when the document changed, and it does not run beside optimization. |
 | 2026-10-31 | minor | Recognize Text ▸ Editable text and images runs ClearScan on a worker, with progress, cancel and one undo step. |
