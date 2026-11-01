@@ -109,16 +109,15 @@ fn title_format(item: &OutlineItem, depth: usize, t: &Tokens) -> egui::TextForma
 /// selected, so typing replaces the old title instead of landing at a random caret position.
 fn rename_field(ui: &mut egui::Ui, text: &mut String, id: egui::Id) -> egui::Response {
     let resp = ui.add(crate::widgets::line(text).desired_width(ui.available_width() - 8.0).id(id));
-    // Select the whole title once the field has focus: a selection stored before that is
-    // collapsed to the cursor, because an unfocused field doesn't own the IME events.
-    if resp.gained_focus() {
+    if !resp.has_focus() && !resp.lost_focus() {
+        resp.request_focus();
+        // Store the selection after the field has drawn: drawn without focus, it collapses any
+        // stored selection to the cursor (it doesn't own the IME events), and from the next
+        // frame on it has focus and keeps this one.
         let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
         let end = egui::text::CCursor::new(text.chars().count());
         state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), end)));
         state.store(ui.ctx(), id);
-    }
-    if !resp.has_focus() && !resp.lost_focus() {
-        resp.request_focus();
     }
     resp
 }
