@@ -44,6 +44,8 @@ impl Layouter<'_> {
     /// `avail_w`) and anything else takes `avail_w`; without a height, it is as tall as its content.
     fn measure(&self, node: &Node, avail_w: f64, ctx: &Ctx, depth: usize) -> (f64, f64) {
         let c = node.common();
+        // A field's caption is measured in the paragraph around the field, as it is drawn.
+        let outer_para = &ctx.para;
         // The node's own SOM: its repeating children count their instances under it, and a
         // growing text field finds its value at it. Measurements are cached per template node,
         // so instance 0 stands for all of them.
@@ -63,7 +65,7 @@ impl Layouter<'_> {
                 Node::Field(f) if f.ui == Ui::Button => f
                     .caption
                     .as_ref()
-                    .and_then(|cap| self.natural_width(&cap.value, &ctx.font.apply(&cap.font), &ctx.para.apply(&cap.para)))
+                    .and_then(|cap| self.natural_width(&cap.value, &ctx.font.apply(&cap.font), &outer_para.apply(&cap.para)))
                     .map_or(avail_w, |t| (t + c.margin.horizontal() + f.ui_margin.horizontal()).min(avail_w)),
                 Node::Field(_) => avail_w,
             },
@@ -75,7 +77,7 @@ impl Layouter<'_> {
                 let inner_w = (w - c.margin.horizontal()).max(1.0);
                 let content = match node {
                     Node::Draw(d) => self.value_height(&d.value, inner_w, &ctx),
-                    Node::Field(f) => self.field_height(f, inner_w, &ctx),
+                    Node::Field(f) => self.field_height(f, inner_w, &ctx, outer_para),
                     Node::ExclGroup(g) => self.group_height(g, inner_w, &ctx, depth),
                     Node::Area(a) => self.positioned_height(&a.children, inner_w, &ctx, depth),
                     Node::Subform(s) => match s.layout {
@@ -175,8 +177,12 @@ impl Layouter<'_> {
     }
 
     /// Where field `f`'s caption goes and how much room it takes from the field's box, or `None`
-    /// when it has no caption that takes room (a button's is drawn inside its box).
-    pub(super) fn caption_reserve(&self, f: &Field, inner_w: f64, ctx: &Ctx) -> Option<(Placement, f64)> {
+    /// when it has no caption that takes room (a button's is drawn inside its box). `ctx` is the
+    /// field's own and `outer_para` the paragraph around the field: the caption is measured in
+    /// the field's font (XFA 3.3, "Formatting Text That Appears as Fixed or Variable Content",
+    /// p. 43) and the outer paragraph, each with the caption's own properties on top, as it is
+    /// drawn.
+    pub(super) fn caption_reserve(&self, f: &Field, inner_w: f64, ctx: &Ctx, outer_para: &Para) -> Option<(Placement, f64)> {
         let cap = f.caption.as_ref()?;
         if !cap.presence.occupies() || f.ui == Ui::Button {
             return None;
@@ -190,7 +196,7 @@ impl Layouter<'_> {
         }
         let placement = if cap.placement == Placement::Inline { Placement::Left } else { cap.placement };
         let font = ctx.font.apply(&cap.font);
-        let para = ctx.para.apply(&cap.para);
+        let para = outer_para.apply(&cap.para);
         let reserve = cap.reserve.unwrap_or_else(|| match placement {
             Placement::Top | Placement::Bottom => {
                 let rich = match &cap.value {
@@ -207,7 +213,8 @@ impl Layouter<'_> {
     /// The height of field `f`'s content within `inner_w` (inside its margins): its widget (a check
     /// box, a button's caption, or one line of text or three when multi-line, more for a text field
     /// that grows) plus a caption above or below it, or the taller of the two for one beside it.
-    fn field_height(&self, f: &Field, inner_w: f64, ctx: &Ctx) -> f64 {
+    /// `ctx` is the field's own and `outer_para` the paragraph around it, which its caption takes.
+    fn field_height(&self, f: &Field, inner_w: f64, ctx: &Ctx, outer_para: &Para) -> f64 {
         let font = ctx.font.apply(&f.common.font);
         let lines = if f.multiline { 3.0 } else { 1.0 };
         let ui = match f.ui {
@@ -220,13 +227,13 @@ impl Layouter<'_> {
                         other => text::plain(&other.plain().unwrap_or_default()),
                     };
                     let w = (inner_w - f.ui_margin.horizontal()).max(1.0);
-                    text::measure_height(&rich, w, &ctx.para.apply(&c.para), &Face::of(&ctx.font.apply(&c.font)), &|id, max| self.embed(id, max))
+                    text::measure_height(&rich, w, &outer_para.apply(&c.para), &Face::of(&ctx.font.apply(&c.font)), &|id, max| self.embed(id, max))
                 });
                 cap + f.ui_margin.vertical()
             }
-            _ => (text::line_height(font.size) * lines).max(self.grown_text_height(f, inner_w, ctx)) + 4.0 + f.ui_margin.vertical(),
+            _ => (text::line_height(font.size) * lines).max(self.grown_text_height(f, inner_w, ctx, outer_para)) + 4.0 + f.ui_margin.vertical(),
         };
-        match self.caption_reserve(f, inner_w, ctx) {
+        match self.caption_reserve(f, inner_w, ctx, outer_para) {
             Some((Placement::Top | Placement::Bottom, r)) => ui + r,
             Some((placement, r)) => {
                 // A check box's caption without a reserve is drawn in all the box leaves.
@@ -239,7 +246,7 @@ impl Layouter<'_> {
                         Value::Rich(r) => r.clone(),
                         other => text::plain(&other.plain().unwrap_or_default()),
                     };
-                    text::measure_height(&rich, w.max(1.0), &ctx.para.apply(&c.para), &Face::of(&ctx.font.apply(&c.font)), &|id, max| {
+                    text::measure_height(&rich, w.max(1.0), &outer_para.apply(&c.para), &Face::of(&ctx.font.apply(&c.font)), &|id, max| {
                         self.embed(id, max)
                     })
                 });
@@ -259,8 +266,9 @@ impl Layouter<'_> {
 
     /// The height the text of a multi-line text field takes (its value in the data, else the
     /// template's), for a field without a fixed height, which grows to hold its text. `ctx`
-    /// is the field's own (its SOM ends in the field). Zero for anything else.
-    fn grown_text_height(&self, f: &Field, inner_w: f64, ctx: &Ctx) -> f64 {
+    /// is the field's own (its SOM ends in the field) and `outer_para` the paragraph around it.
+    /// Zero for anything else.
+    fn grown_text_height(&self, f: &Field, inner_w: f64, ctx: &Ctx, outer_para: &Para) -> f64 {
         if !f.grows_with_text() || f.common.name.is_none() {
             return 0.0;
         }
@@ -269,7 +277,7 @@ impl Layouter<'_> {
         // Beside a caption the text has what the caption leaves; a widget's text has 2pt of
         // padding on each side, a non-interactive field's (drawn as text) none, so it wraps
         // where it is drawn.
-        let beside = match self.caption_reserve(f, inner_w, ctx) {
+        let beside = match self.caption_reserve(f, inner_w, ctx, outer_para) {
             Some((Placement::Top | Placement::Bottom, _)) | None => 0.0,
             Some((_, r)) => r,
         };
