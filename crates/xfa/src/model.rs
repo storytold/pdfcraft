@@ -428,6 +428,9 @@ pub struct Subform {
     /// `<breakBefore targetType="pageArea">`: start on a new page.
     pub break_before_page: bool,
     pub break_after_page: bool,
+    /// Parsed from a `subformSet`: transparent to layout (XFA 3.3 p. 357), so in a flowing
+    /// container its members are laid out among their parent's other children.
+    pub set: bool,
     /// Tables: the width of each column.
     pub column_widths: Vec<f64>,
     /// `<overflow leader="…">`: the named child (a header row) is repeated after a page break.
