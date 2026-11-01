@@ -2864,6 +2864,12 @@ key	Space	Space
 
 # AI-assisted additions for restoring the last view (#1767) (2026-10-16); not reviewed by a native speaker.
 	Restore the last view (page, zoom and page display) when a document is opened again	Khôi phục chế độ xem gần nhất (trang, thu phóng và hiển thị trang) khi mở lại tài liệu
+	Inserted page	Trang đã chèn
+	Deleted page	Trang đã xóa
+	Moved page	Trang đã chuyển
+	Page {old} → Page {new}	Trang {old} → trang {new}
+	+ Page {p}	+ Trang {p}
+	− Page {p}	− Trang {p}
 @plural	{n} reply|{n} replies	{n} câu trả lời
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

@@ -9276,8 +9276,8 @@ milestone = "M12"
 status = "shipped"
 commands = ["doc.compare"]
 tools = ["doc_compare", "doc_compare_mark"]
-evidence = ["crates/compare/src/lib.rs::insertions_deletions_and_replacements", "crates/engine/src/tests.rs::comparing_two_versions_of_a_document", "crates/automation/tests/it/automation.rs::comparing_documents_through_tools", "crates/ui-egui/tests/it/compare.rs::compare_two_versions"]
-notes = "Word-level Myers diff with patience anchors for long files; replaced/inserted/deleted shaded on the new file, listed in the Compare panel, or added as comments."
+evidence = ["crates/compare/src/lib.rs::insertions_deletions_and_replacements", "crates/engine/src/tests.rs::comparing_two_versions_of_a_document", "crates/automation/tests/it/automation.rs::comparing_documents_through_tools", "crates/automation/tests/it/automation.rs::inserted_blank_page_is_reported_by_doc_compare", "crates/ui-egui/tests/it/compare.rs::compare_two_versions"]
+notes = "Word-level Myers diff with patience anchors for long files; replaced/inserted/deleted shaded on the new file, listed in the Compare panel, or added as comments. Inserted, deleted and moved pages are listed too. doc_compare returns page_changes and page_pairs; identical is false when the words or the page order differ, even if every word count is zero."
 
 [[feature]]
 id = "misc.compare-visual"
@@ -9289,7 +9289,7 @@ status = "shipped"
 commands = ["doc.compare"]
 tools = ["doc_compare"]
 evidence = ["crates/compare/src/lib.rs::finds_changed_regions", "crates/engine/src/tests.rs::comparing_two_versions_of_a_document", "crates/automation/tests/it/automation.rs::comparing_documents_through_tools"]
-notes = "Pages rendered at 72 dpi and compared page by page; differing regions shaded orange where no text change explains them."
+notes = "Matched pages are rendered at 72 dpi (an inserted or deleted page is not compared with the page at the same index). Differing regions are shaded orange where no text change explains them. Inserted, deleted and moved pages are reported as page changes."
 
 [[feature]]
 id = "misc.compare-side-by-side"
@@ -9301,7 +9301,7 @@ status = "shipped"
 commands = ["doc.compare"]
 tools = []
 evidence = ["crates/ui-egui/tests/it/compare.rs::compare_two_versions"]
-notes = "After Compare files the document area splits (when the old version is open in a tab and the window is at least 1000 px wide; the Compare panel's Side by side / New file only toggles it): the old file on the left, the new on the right, each a page view of its own with its shading (deleted and replaced on the old, inserted and replaced on the new, visual differences on both). The half the pointer is over leads: the other takes its zoom, fit, layout, rotation and scroll offset; a change clicked in the panel jumps both halves to their side of it. Clear ends it. Still missing against Acrobat: scrolling by matching content rather than by offset (pages of different sizes drift), and the comparison kept when the old file's tab closes."
+notes = "After Compare files the document area splits (when the old version is open in a tab and the window is at least 1000 px wide; the Compare panel's Side by side / New file only toggles it): the old file on the left, the new on the right, each a page view of its own with its shading (deleted and replaced on the old, inserted and replaced on the new, visual differences on both). The half the pointer is over leads: the other takes its zoom, fit, layout, rotation and the matched page's top (not the page at the same index); a change clicked in the panel jumps both halves to their side of it. Clear ends it. Still missing against Acrobat: locking the scroll to matching content when the pages differ in size, and keeping the comparison when the old file's tab closes."
 
 [[feature]]
 id = "misc.compare-report"
@@ -9325,7 +9325,7 @@ status = "partial"
 commands = ["doc.compare"]
 tools = []
 evidence = ["crates/ui-egui/tests/it/compare.rs::compare_filters_hide_text_or_visual_changes"]
-notes = "The Compare panel's Show: Text / Visual checkboxes (both on after Compare files) hide that kind of change on both halves of a side-by-side view and bring it back: Text takes the text changes out of the list and the shading, Visual takes the visual differences out of the shading (the list holds only text changes; visual differences are counted, not listed); hiding the text does not uncover the visual differences a text change explains. The counts, Mark as comments and Report… still cover every change. Still missing against Acrobat's Filter menu: telling images, annotations, formatting and background/header-footer changes apart (the comparison finds text changes and pixel differences only, so those all fall under Visual), and Acrobat's defaults with annotations, formatting and background off. Headless: doc_compare returns every change with its kind, so an agent filters the result itself."
+notes = "The Compare panel's Show: Text / Visual checkboxes (both on after Compare files) hide that kind of change on both halves of a side-by-side view and bring it back: Text takes the word changes out of the list and the shading (inserted, deleted and moved pages stay listed), Visual takes the visual differences out of the shading (visual differences are counted, not listed); hiding the text does not uncover the visual differences a text change explains. The counts, Mark as comments and Report… still cover every change. Still missing against Acrobat's Filter menu: telling images, annotations, formatting and background/header-footer changes apart (the comparison finds text changes and pixel differences only, so those all fall under Visual), and Acrobat's defaults with annotations, formatting and background off. Headless: doc_compare returns every word change and page change with its kind, so an agent filters the result itself."
 
 [[feature]]
 id = "misc.compare-page-ranges"

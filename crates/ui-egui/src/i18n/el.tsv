@@ -2603,6 +2603,12 @@ animation effects	Off	Ανενεργά
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Σήμερα
+	Inserted page	Εισαγμένη σελίδα
+	Deleted page	Διαγραμμένη σελίδα
+	Moved page	Μετακινημένη σελίδα
+	Page {old} → Page {new}	Σελίδα {old} → σελίδα {new}
+	+ Page {p}	+ Σελίδα {p}
+	− Page {p}	− Σελίδα {p}
 @plural	{n} reply|{n} replies	{n} απάντηση|{n} απαντήσεις
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

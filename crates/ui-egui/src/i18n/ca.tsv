@@ -2857,6 +2857,12 @@ theme	Appearance	Aspecte
 	Attaching files is not available on the web yet	Encara no es poden adjuntar fitxers al web
 	Delete attachment	Elimina l'adjunt
 	Delete attachment {key}	Elimina l'adjunt {key}
+	Inserted page	Pàgina inserida
+	Deleted page	Pàgina eliminada
+	Moved page	Pàgina moguda
+	Page {old} → Page {new}	Pàgina {old} → pàgina {new}
+	+ Page {p}	+ Pàgina {p}
+	− Page {p}	− Pàgina {p}
 @plural	{n} reply|{n} replies	{n} resposta|{n} respostes
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

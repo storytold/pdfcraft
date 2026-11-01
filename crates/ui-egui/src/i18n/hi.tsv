@@ -2827,6 +2827,12 @@ theme	Appearance	स्वरूप
 	Attaching files is not available on the web yet	वेब पर अभी फ़ाइलें संलग्न करना उपलब्ध नहीं है
 	Delete attachment	अनुलग्नक हटाएँ
 	Delete attachment {key}	अनुलग्नक {key} हटाएँ
+	Inserted page	जोड़ा गया पृष्ठ
+	Deleted page	हटाया गया पृष्ठ
+	Moved page	स्थानांतरित पृष्ठ
+	Page {old} → Page {new}	पृष्ठ {old} → पृष्ठ {new}
+	+ Page {p}	+ पृष्ठ {p}
+	− Page {p}	− पृष्ठ {p}
 @plural	{n} reply|{n} replies	{n} जवाब
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

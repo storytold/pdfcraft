@@ -2618,6 +2618,12 @@ animation effects	Off	Вимкнено
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Сьогодні
+	Inserted page	Вставлена сторінка
+	Deleted page	Видалена сторінка
+	Moved page	Переміщена сторінка
+	Page {old} → Page {new}	Сторінка {old} → сторінка {new}
+	+ Page {p}	+ Сторінка {p}
+	− Page {p}	− Сторінка {p}
 @plural	{n} reply|{n} replies	{n} відповідь|{n} відповіді|{n} відповідей
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

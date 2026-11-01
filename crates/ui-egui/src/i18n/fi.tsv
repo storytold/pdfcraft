@@ -2867,6 +2867,12 @@ theme	Appearance	Teema
 	Attaching files is not available on the web yet	Tiedostojen liittäminen ei ole vielä käytettävissä verkossa
 	Delete attachment	Poista liite
 	Delete attachment {key}	Poista liite {key}
+	Inserted page	Lisätty sivu
+	Deleted page	Poistettu sivu
+	Moved page	Siirretty sivu
+	Page {old} → Page {new}	Sivu {old} → sivu {new}
+	+ Page {p}	+ Sivu {p}
+	− Page {p}	− Sivu {p}
 @plural	{n} reply|{n} replies	{n} vastaus|{n} vastausta
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

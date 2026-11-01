@@ -2582,6 +2582,12 @@ animation effects	Off	Joaktiv
 	Attaching files is not available on the web yet	Bashkëngjitja e skedarëve nuk është ende e disponueshme në ueb
 	Delete attachment	Fshi bashkëngjitjen
 	Delete attachment {key}	Fshi bashkëngjitjen {key}
+	Inserted page	Faqe e futur
+	Deleted page	Faqe e fshirë
+	Moved page	Faqe e zhvendosur
+	Page {old} → Page {new}	Faqja {old} → faqja {new}
+	+ Page {p}	+ Faqja {p}
+	− Page {p}	− Faqja {p}
 @plural	{n} reply|{n} replies	{n} përgjigje|{n} përgjigje
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

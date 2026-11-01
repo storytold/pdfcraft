@@ -7483,6 +7483,21 @@ fn comparing_documents_through_tools() {
 }
 
 #[test]
+fn inserted_blank_page_is_reported_by_doc_compare() {
+    let dir = workdir("compare-pages");
+    let mut a = auto(&dir);
+    let text = json!({ "from": "text", "text": "The same words here." });
+    let v1 = ok(&mut a, "doc_create", text.clone())["doc"].as_u64().unwrap();
+    let v2 = ok(&mut a, "doc_create", text)["doc"].as_u64().unwrap();
+    ok(&mut a, "page_insert_blank", json!({ "doc": v2, "at": 2 }));
+    let r = ok(&mut a, "doc_compare", json!({ "doc": v2, "other": v1 }));
+    assert_eq!(r["identical"], false, "{r}");
+    assert_eq!((r["replaced"].as_u64(), r["inserted"].as_u64(), r["deleted"].as_u64()), (Some(0), Some(0), Some(0)), "{r}");
+    assert_eq!(r["page_changes"], json!([{ "kind": "inserted", "old_page": 1, "new_page": 2 }]), "{r}");
+    assert_eq!(r["page_pairs"], json!([{ "old": 1, "new": 1 }]), "{r}");
+}
+
+#[test]
 fn actions_through_tools() {
     let dir = workdir("actions");
     let mut a = auto(&dir);

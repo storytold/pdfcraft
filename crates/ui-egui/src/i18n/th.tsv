@@ -2728,6 +2728,12 @@ theme	Appearance	ลักษณะที่ปรากฏ
 
 # AI-assisted additions for restoring the last view (#1767) (2026-10-22); not reviewed by a native speaker.
 	Restore the last view (page, zoom and page display) when a document is opened again	คืนค่ามุมมองล่าสุด (หน้า การซูม และการแสดงหน้า) เมื่อเปิดเอกสารอีกครั้ง
+	Inserted page	หน้าที่แทรก
+	Deleted page	หน้าที่ลบ
+	Moved page	หน้าที่ย้าย
+	Page {old} → Page {new}	หน้า {old} → หน้า {new}
+	+ Page {p}	+ หน้า {p}
+	− Page {p}	− หน้า {p}
 @plural	{n} reply|{n} replies	การตอบกลับ {n} รายการ
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

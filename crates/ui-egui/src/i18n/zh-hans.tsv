@@ -2560,6 +2560,12 @@ animation effects	Off	关
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	今天
+	Inserted page	插入的页
+	Deleted page	删除的页
+	Moved page	移动的页
+	Page {old} → Page {new}	第 {old} 页 → 第 {new} 页
+	+ Page {p}	+ 第 {p} 页
+	− Page {p}	− 第 {p} 页
 @plural	{n} reply|{n} replies	{n} 条回复
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

@@ -2596,6 +2596,12 @@ animation effects	Off	オフ
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	今日
+	Inserted page	挿入したページ
+	Deleted page	削除したページ
+	Moved page	移動したページ
+	Page {old} → Page {new}	{old} ページ → {new} ページ
+	+ Page {p}	+ {p} ページ
+	− Page {p}	− {p} ページ
 @plural	{n} reply|{n} replies	{n} 件の返信
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

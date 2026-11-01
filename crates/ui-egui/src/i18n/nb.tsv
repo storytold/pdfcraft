@@ -2741,6 +2741,12 @@ key	Space	Mellomrom
 
 # AI-assisted additions for restoring the last view (#1767) (2026-10-22); not reviewed by a native speaker.
 	Restore the last view (page, zoom and page display) when a document is opened again	Gjenopprett den siste visningen (side, zoom og sidevisning) når et dokument åpnes igjen
+	Inserted page	Innsatt side
+	Deleted page	Slettet side
+	Moved page	Flyttet side
+	Page {old} → Page {new}	Side {old} → side {new}
+	+ Page {p}	+ Side {p}
+	− Page {p}	− Side {p}
 @plural	{n} reply|{n} replies	{n} svar|{n} svar
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

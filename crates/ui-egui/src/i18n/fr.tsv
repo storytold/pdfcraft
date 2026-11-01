@@ -2861,6 +2861,12 @@ certificate	Version	Version
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Aujourd'hui
+	Inserted page	Page insérée
+	Deleted page	Page supprimée
+	Moved page	Page déplacée
+	Page {old} → Page {new}	Page {old} → page {new}
+	+ Page {p}	+ Page {p}
+	− Page {p}	− Page {p}
 @plural	{n} reply|{n} replies	{n} réponse|{n} réponses
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

@@ -2828,6 +2828,12 @@ certificate	SHA-256 digest	Impronta SHA-256
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Oggi
+	Inserted page	Pagina inserita
+	Deleted page	Pagina eliminata
+	Moved page	Pagina spostata
+	Page {old} → Page {new}	Pagina {old} → pagina {new}
+	+ Page {p}	+ Pagina {p}
+	− Page {p}	− Pagina {p}
 @plural	{n} reply|{n} replies	{n} risposta|{n} risposte
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

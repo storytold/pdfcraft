@@ -2856,6 +2856,12 @@ theme	Appearance	Išvaizda
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Šiandien
+	Inserted page	Įterptas puslapis
+	Deleted page	Ištrintas puslapis
+	Moved page	Perkeltas puslapis
+	Page {old} → Page {new}	{old} puslapis → {new} puslapis
+	+ Page {p}	+ {p} puslapis
+	− Page {p}	− {p} puslapis
 @plural	{n} reply|{n} replies	{n} atsakymas|{n} atsakymai|{n} atsakymų
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

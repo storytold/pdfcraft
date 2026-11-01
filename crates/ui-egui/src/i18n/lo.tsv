@@ -2473,6 +2473,12 @@ animation effects	Off	ປິດ
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	ມື້ນີ້
+	Inserted page	ໜ້າທີ່ແຊກ
+	Deleted page	ໜ້າທີ່ລຶບ
+	Moved page	ໜ້າທີ່ຍ້າຍ
+	Page {old} → Page {new}	ໜ້າ {old} → ໜ້າ {new}
+	+ Page {p}	+ ໜ້າ {p}
+	− Page {p}	− ໜ້າ {p}
 @plural	{n} reply|{n} replies	ການຕອບກັບ {n} ລາຍການ
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

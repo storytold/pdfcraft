@@ -2828,6 +2828,12 @@ theme	Appearance	Tampilan
 	Attaching files is not available on the web yet	Melampirkan file belum tersedia di web
 	Delete attachment	Hapus lampiran
 	Delete attachment {key}	Hapus lampiran {key}
+	Inserted page	Halaman disisipkan
+	Deleted page	Halaman dihapus
+	Moved page	Halaman dipindah
+	Page {old} → Page {new}	Halaman {old} → halaman {new}
+	+ Page {p}	+ Halaman {p}
+	− Page {p}	− Halaman {p}
 @plural	{n} reply|{n} replies	{n} balasan
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

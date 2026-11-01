@@ -173,7 +173,7 @@ impl Automation {
     }
 
     pub(crate) fn doc_compare(&self, a: &Args) -> Result<Value> {
-        use pdfcraft_engine::compare::Kind;
+        use pdfcraft_engine::compare::{Kind, PageKind};
         let (old, new) = self.compare_ids(a)?;
         let c = self.session.compare(old, new).map_err(failed)?;
         let limit = a.opt_int("limit")?.unwrap_or(500).max(1) as usize;
@@ -186,8 +186,21 @@ impl Automation {
             .take(limit)
             .map(|ch| json!({ "kind": ch.kind.label().to_lowercase(), "old": side(&ch.old), "new": side(&ch.new) }))
             .collect();
+        let page_kind = |k: PageKind| match k {
+            PageKind::Inserted => "inserted",
+            PageKind::Deleted => "deleted",
+            PageKind::Moved => "moved",
+        };
+        let page_changes: Vec<Value> =
+            c.page_changes.iter().map(|pc| json!({ "kind": page_kind(pc.kind), "old_page": pc.old_page + 1, "new_page": pc.new_page + 1 })).collect();
+        let page_pairs: Vec<Value> = c.page_pairs.iter().map(|&(old_page, new_page)| json!({ "old": old_page + 1, "new": new_page + 1 })).collect();
         let visual: Vec<Value> = if a.opt_bool("visual")?.unwrap_or(false) {
-            self.session.compare_visual(old, new, 72.0).map_err(failed)?.iter().map(|(p, r)| json!({ "page": p + 1, "rect": r2(r) })).collect()
+            self.session
+                .compare_visual_pairs(old, new, &c.page_pairs, 72.0)
+                .map_err(failed)?
+                .iter()
+                .map(|(p, r)| json!({ "page": p + 1, "rect": r2(r) }))
+                .collect()
         } else {
             Vec::new()
         };
@@ -200,6 +213,8 @@ impl Automation {
             "old_words": c.old_words,
             "new_words": c.new_words,
             "changes": list,
+            "page_changes": page_changes,
+            "page_pairs": page_pairs,
         }))
     }
 
