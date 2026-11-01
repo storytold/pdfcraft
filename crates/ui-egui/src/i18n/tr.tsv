@@ -2602,6 +2602,13 @@ animation effects	Off	Kapalı
 	Extract the selected pages…	Seçili sayfaları ayıkla…
 	Delete the selected pages	Seçili sayfaları sil
 
+# Advanced search: pages whose text couldn't be read (#4334) (AI-assisted, not separately native-reviewed)
+	Pages whose text couldn't be read: {n}. A match on them isn't listed.	Metni okunamayan sayfalar: {n}. Bu sayfalardaki eşleşmeler listelenmez.
+
+# Search results: select or copy the pages with a match (#4334) (AI-assisted, not separately native-reviewed)
+	Copy page numbers	Sayfa numaralarını kopyala
+	Copy the pages with a match as a list such as 1-3, 7	Eşleşme olan sayfaları 1-3, 7 gibi bir liste olarak kopyala
+	Select the {n} pages with a match, for Extract, Print or Delete	Ayıklamak, yazdırmak veya silmek için eşleşme olan {n} sayfayı seç
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Bu yanıtın seçenekleri
 	Export value	Dışa aktarma değeri

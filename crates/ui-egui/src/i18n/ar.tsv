@@ -2881,6 +2881,13 @@ certificate	Version	الإصدار
 	Extract the selected pages…	استخراج الصفحات المحددة…
 	Delete the selected pages	حذف الصفحات المحددة
 
+# Advanced search: pages whose text couldn't be read (#4334) (AI-assisted, not separately native-reviewed)
+	Pages whose text couldn't be read: {n}. A match on them isn't listed.	صفحات تعذّرت قراءة نصها: {n}. لا تُدرج أي مطابقة فيها.
+
+# Search results: select or copy the pages with a match (#4334) (AI-assisted, not separately native-reviewed)
+	Copy page numbers	نسخ أرقام الصفحات
+	Copy the pages with a match as a list such as 1-3, 7	نسخ الصفحات التي بها تطابق كقائمة مثل 1-3، 7
+	Select the {n} pages with a match, for Extract, Print or Delete	تحديد الصفحات الـ{n} التي بها تطابق، للاستخراج أو الطباعة أو الحذف
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	خيارات هذا الرد
 	Export value	قيمة التصدير

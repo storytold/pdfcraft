@@ -2751,6 +2751,13 @@ key	Space	Mellomrom
 	Extract the selected pages…	Trekk ut de valgte sidene…
 	Delete the selected pages	Slett de valgte sidene
 
+# Advanced search: pages whose text couldn't be read (#4334) (AI-assisted, not separately native-reviewed)
+	Pages whose text couldn't be read: {n}. A match on them isn't listed.	Sider der teksten ikke kunne leses: {n}. Treff på dem er ikke oppført.
+
+# Search results: select or copy the pages with a match (#4334) (AI-assisted, not separately native-reviewed)
+	Copy page numbers	Kopier sidetall
+	Copy the pages with a match as a list such as 1-3, 7	Kopier sidene med treff som en liste, for eksempel 1-3, 7
+	Select the {n} pages with a match, for Extract, Print or Delete	Merk de {n} sidene med treff, for å trekke ut, skrive ut eller slette
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Alternativer for dette svaret
 # Untranslated: English text until a translator fills these in.

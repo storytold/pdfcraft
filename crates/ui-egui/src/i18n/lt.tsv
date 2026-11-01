@@ -2866,6 +2866,13 @@ theme	Appearance	Išvaizda
 	Extract the selected pages…	Išskleisti pasirinktus puslapius…
 	Delete the selected pages	Ištrinti pasirinktus puslapius
 
+# Advanced search: pages whose text couldn't be read (#4334) (AI-assisted, not separately native-reviewed)
+	Pages whose text couldn't be read: {n}. A match on them isn't listed.	Puslapiai, kurių teksto nepavyko perskaityti: {n}. Atitikmenys juose neišvardyti.
+
+# Search results: select or copy the pages with a match (#4334) (AI-assisted, not separately native-reviewed)
+	Copy page numbers	Kopijuoti puslapių numerius
+	Copy the pages with a match as a list such as 1-3, 7	Kopijuoti puslapius su atitikmeniu kaip sąrašą, pvz., 1-3, 7
+	Select the {n} pages with a match, for Extract, Print or Delete	Pažymėti {n} puslapius su atitikmeniu išskleidimui, spausdinimui ar trynimui
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Šio atsakymo parinktys
 	Export value	Eksporto reikšmė

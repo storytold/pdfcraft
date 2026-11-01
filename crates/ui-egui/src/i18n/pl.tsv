@@ -2702,6 +2702,13 @@ animation effects	Off	Wyłączone
 	Extract the selected pages…	Wyodrębnij zaznaczone strony…
 	Delete the selected pages	Usuń zaznaczone strony
 
+# Advanced search: pages whose text couldn't be read (#4334) (AI-assisted, not separately native-reviewed)
+	Pages whose text couldn't be read: {n}. A match on them isn't listed.	Strony, których tekstu nie udało się odczytać: {n}. Dopasowania na nich nie są wymienione.
+
+# Search results: select or copy the pages with a match (#4334) (AI-assisted, not separately native-reviewed)
+	Copy page numbers	Kopiuj numery stron
+	Copy the pages with a match as a list such as 1-3, 7	Kopiuje strony z dopasowaniem jako listę, np. 1-3, 7
+	Select the {n} pages with a match, for Extract, Print or Delete	Zaznacza {n} stron z dopasowaniem do wyodrębnienia, wydruku lub usunięcia
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opcje tej odpowiedzi
 	Export value	Wartość eksportowa

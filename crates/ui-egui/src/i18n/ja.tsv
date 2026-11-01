@@ -2606,6 +2606,13 @@ animation effects	Off	オフ
 	Extract the selected pages…	選択したページを抽出…
 	Delete the selected pages	選択したページを削除
 
+# Advanced search: pages whose text couldn't be read (#4334) (AI-assisted, not separately native-reviewed)
+	Pages whose text couldn't be read: {n}. A match on them isn't listed.	テキストを読み取れなかったページ：{n}。そのページの一致は一覧に含まれません。
+
+# Search results: select or copy the pages with a match (#4334) (AI-assisted, not separately native-reviewed)
+	Copy page numbers	ページ番号をコピー
+	Copy the pages with a match as a list such as 1-3, 7	一致したページを 1-3, 7 のような一覧としてコピー
+	Select the {n} pages with a match, for Extract, Print or Delete	一致した {n} ページを選択（抽出、印刷、削除用）
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	この返信のオプション
 	Export value	書き出し値

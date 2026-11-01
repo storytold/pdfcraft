@@ -2483,6 +2483,13 @@ animation effects	Off	ປິດ
 	Extract the selected pages…	ແຍກໜ້າທີ່ເລືອກອອກ…
 	Delete the selected pages	ລຶບໜ້າທີ່ເລືອກ
 
+# Advanced search: pages whose text couldn't be read (#4334) (AI-assisted, not separately native-reviewed)
+	Pages whose text couldn't be read: {n}. A match on them isn't listed.	ໜ້າທີ່ອ່ານຂໍ້ຄວາມບໍ່ໄດ້: {n}. ຜົນທີ່ກົງກັນໃນໜ້າເຫຼົ່ານັ້ນບໍ່ໄດ້ຖືກລາຍການ.
+
+# Search results: select or copy the pages with a match (#4334) (AI-assisted, not separately native-reviewed)
+	Copy page numbers	ສຳເນົາເລກໜ້າ
+	Copy the pages with a match as a list such as 1-3, 7	ສຳເນົາໜ້າທີ່ກົງກັນເປັນລາຍການເຊັ່ນ 1-3, 7
+	Select the {n} pages with a match, for Extract, Print or Delete	ເລືອກ {n} ໜ້າທີ່ກົງກັນ ເພື່ອແຍກອອກ, ພິມ ຫຼື ລຶບ
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	ຕົວເລືອກຂອງການຕອບກັບນີ້
 # Untranslated: English text until a translator fills these in.

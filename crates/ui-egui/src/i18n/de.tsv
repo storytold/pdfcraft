@@ -2607,6 +2607,13 @@ animation effects	Off	Aus
 	Extract the selected pages…	Ausgewählte Seiten extrahieren…
 	Delete the selected pages	Ausgewählte Seiten löschen
 
+# Advanced search: pages whose text couldn't be read (#4334) (AI-assisted, not separately native-reviewed)
+	Pages whose text couldn't be read: {n}. A match on them isn't listed.	Seiten, deren Text nicht gelesen werden konnte: {n}. Treffer darauf werden nicht aufgeführt.
+
+# Search results: select or copy the pages with a match (#4334) (AI-assisted, not separately native-reviewed)
+	Copy page numbers	Seitenzahlen kopieren
+	Copy the pages with a match as a list such as 1-3, 7	Die Seiten mit einem Treffer als Liste wie 1-3, 7 kopieren
+	Select the {n} pages with a match, for Extract, Print or Delete	Die {n} Seiten mit einem Treffer auswählen, zum Extrahieren, Drucken oder Löschen
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Optionen für diese Antwort
 	Export value	Exportwert

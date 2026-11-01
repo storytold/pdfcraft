@@ -2913,6 +2913,13 @@ certificate	Version	Verze
 	Extract the selected pages…	Extrahovat vybrané stránky…
 	Delete the selected pages	Odstranit vybrané stránky
 
+# Advanced search: pages whose text couldn't be read (#4334) (AI-assisted, not separately native-reviewed)
+	Pages whose text couldn't be read: {n}. A match on them isn't listed.	Stránky, jejichž text nešlo přečíst: {n}. Shody na nich nejsou uvedeny.
+
+# Search results: select or copy the pages with a match (#4334) (AI-assisted, not separately native-reviewed)
+	Copy page numbers	Kopírovat čísla stránek
+	Copy the pages with a match as a list such as 1-3, 7	Zkopíruje stránky se shodou jako seznam, například 1-3, 7
+	Select the {n} pages with a match, for Extract, Print or Delete	Vybere {n} stránek se shodou pro extrakci, tisk nebo odstranění
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Možnosti této odpovědi
 	Export value	Exportní hodnota

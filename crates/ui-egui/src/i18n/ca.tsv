@@ -2867,6 +2867,13 @@ theme	Appearance	Aspecte
 	Extract the selected pages…	Extreu les pàgines seleccionades…
 	Delete the selected pages	Suprimeix les pàgines seleccionades
 
+# Advanced search: pages whose text couldn't be read (#4334) (AI-assisted, not separately native-reviewed)
+	Pages whose text couldn't be read: {n}. A match on them isn't listed.	Pàgines el text de les quals no s'ha pogut llegir: {n}. Les coincidències que hi hagi no es mostren.
+
+# Search results: select or copy the pages with a match (#4334) (AI-assisted, not separately native-reviewed)
+	Copy page numbers	Copia els números de pàgina
+	Copy the pages with a match as a list such as 1-3, 7	Copia les pàgines amb coincidències com una llista, per exemple 1-3, 7
+	Select the {n} pages with a match, for Extract, Print or Delete	Selecciona les {n} pàgines amb coincidències, per extreure, imprimir o suprimir
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opcions d'aquesta resposta
 

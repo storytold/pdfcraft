@@ -1280,6 +1280,46 @@ fn advanced_search_lists_results_with_context() {
     assert!(!h.state().views[i].find.as_ref().unwrap().in_panel);
 }
 
+/// #4334: once every page is searched, the results offer Select pages (the pages with a match
+/// become the selection Extract, Print and Delete act on) and Copy page numbers (a page list
+/// such as "1-3, 7" on the clipboard).
+#[test]
+fn advanced_search_selects_or_copies_the_pages_with_a_match() {
+    let mut h = harness();
+    let i = h.state().active.unwrap();
+    assert!(h.state_mut().execute("edit.advanced_search"));
+    h.run_steps(2);
+    h.state_mut().views[i].find.as_mut().unwrap().query = "page".into();
+    // The buttons show once every page has been searched.
+    for _ in 0..3000 {
+        h.run_steps(2);
+        if h.query_by_label("Select pages").is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.run_steps(2);
+    let found: std::collections::BTreeSet<usize> = h.state().views[i].find.as_ref().unwrap().matches.iter().map(|(p, _)| *p).collect();
+    assert!(found.len() > 1, "{found:?}");
+    h.get_by_label("Select pages").click();
+    h.run_steps(2);
+    let selected: std::collections::BTreeSet<usize> = h.state().views[i].selected.iter().copied().collect();
+    assert_eq!(selected, found, "the pages with a match are selected");
+    assert_eq!(h.state().views[i].target_pages().into_iter().collect::<std::collections::BTreeSet<_>>(), found, "page actions use them");
+    h.get_by_label("Copy page numbers").click();
+    h.step();
+    let copied: Vec<String> = h
+        .output()
+        .platform_output
+        .commands
+        .iter()
+        .filter_map(|c| if let egui::OutputCommand::CopyText(t) = c { Some(t.clone()) } else { None })
+        .collect();
+    let expected = format!("1-{}", found.len());
+    assert!(found.iter().copied().eq(0..found.len()), "the fixture has a match on every page: {found:?}");
+    assert_eq!(copied, [expected], "a page list a page field reads");
+}
+
 #[test]
 fn optimizer_audits_space_usage() {
     let mut h = harness();

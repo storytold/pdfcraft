@@ -2556,6 +2556,13 @@ animation effects	Off	關
 	Extract the selected pages…	擷取所選頁面…
 	Delete the selected pages	刪除所選頁面
 
+# Advanced search: pages whose text couldn't be read (#4334) (AI-assisted, not separately native-reviewed)
+	Pages whose text couldn't be read: {n}. A match on them isn't listed.	無法讀取文字的頁面：{n}。這些頁面上的相符項目未列出。
+
+# Search results: select or copy the pages with a match (#4334) (AI-assisted, not separately native-reviewed)
+	Copy page numbers	複製頁碼
+	Copy the pages with a match as a list such as 1-3, 7	將有符合項目的頁面複製為清單，例如 1-3, 7
+	Select the {n} pages with a match, for Extract, Print or Delete	選取有符合項目的 {n} 個頁面，用於擷取、列印或刪除
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	此回覆的選項
 	Export value	匯出值

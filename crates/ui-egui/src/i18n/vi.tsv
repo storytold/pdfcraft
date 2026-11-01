@@ -2874,6 +2874,13 @@ key	Space	Space
 	Extract the selected pages…	Trích xuất các trang đã chọn…
 	Delete the selected pages	Xóa các trang đã chọn
 
+# Advanced search: pages whose text couldn't be read (#4334) (AI-assisted, not separately native-reviewed)
+	Pages whose text couldn't be read: {n}. A match on them isn't listed.	Các trang không đọc được văn bản: {n}. Các kết quả khớp trên các trang đó không được liệt kê.
+
+# Search results: select or copy the pages with a match (#4334) (AI-assisted, not separately native-reviewed)
+	Copy page numbers	Sao chép số trang
+	Copy the pages with a match as a list such as 1-3, 7	Sao chép các trang có kết quả khớp dưới dạng danh sách như 1-3, 7
+	Select the {n} pages with a match, for Extract, Print or Delete	Chọn {n} trang có kết quả khớp, để trích xuất, in hoặc xóa
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tùy chọn cho câu trả lời này
 	Export value	Giá trị xuất

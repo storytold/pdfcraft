@@ -2611,6 +2611,13 @@ animation effects	Off	Izklopljeni
 	Extract the selected pages…	Izvleci izbrane strani…
 	Delete the selected pages	Izbriši izbrane strani
 
+# Advanced search: pages whose text couldn't be read (#4334) (AI-assisted, not separately native-reviewed)
+	Pages whose text couldn't be read: {n}. A match on them isn't listed.	Strani, katerih besedila ni bilo mogoče prebrati: {n}. Zadetki na njih niso navedeni.
+
+# Search results: select or copy the pages with a match (#4334) (AI-assisted, not separately native-reviewed)
+	Copy page numbers	Kopiraj številke strani
+	Copy the pages with a match as a list such as 1-3, 7	Kopira strani z zadetkom kot seznam, na primer 1-3, 7
+	Select the {n} pages with a match, for Extract, Print or Delete	Izbere {n} strani z zadetkom za izvleček, tiskanje ali brisanje
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Možnosti tega odgovora
 	Export value	Izvozna vrednost
