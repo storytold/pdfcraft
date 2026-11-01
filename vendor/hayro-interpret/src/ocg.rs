@@ -152,7 +152,7 @@ impl OcgState {
             MaybeRef::NotRef(Object::Name(name)) => name,
             _ => return None,
         };
-        let (mut count, mut all, mut any) = (0usize, true, false);
+        let (mut count, mut all, mut any) = (0_usize, true, false);
         for item in items {
             let value = match item {
                 MaybeRef::Ref(r) => {

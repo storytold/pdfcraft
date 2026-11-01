@@ -2281,6 +2281,106 @@ trailer << /Root 1 0 R >>
     assert_eq!(t.find("world").len(), 1);
 }
 
+/// Contributor-original vector annotations, with an ordinary classic xref and no fonts or images.
+fn annotation_layer_pdf(ap: bool, on: bool, annotation_oc: &str, policy: &str, form_oc: &str) -> Arc<Vec<u8>> {
+    let controlled = if ap {
+        format!("/Subtype /Square /AP << /N 8 0 R >> /OC {annotation_oc}")
+    } else {
+        format!("/Subtype /Highlight /QuadPoints [20 60 60 60 20 20 60 20] /C [1 1 0] /CA 1 /OC {annotation_oc}")
+    };
+    let page = "0 0 0 rg 100 10 10 10 re f 40 35 8 8 re f\n";
+    let blue = "0 0 1 rg 0 0 40 40 re f\n";
+    let green = "0 1 0 rg 0 0 30 30 re f\n";
+    let objects = [
+        format!(
+            "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [6 0 R 7 0 R] /D << /BaseState /ON /ON [{}] /OFF [7 0 R {}] >> >> >>",
+            if on { "6 0 R" } else { "" },
+            if on { "" } else { "6 0 R" }
+        ),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << >> /Contents 4 0 R /Annots [5 0 R 10 0 R] >>".into(),
+        format!("<< /Length {} >>\nstream\n{page}endstream", page.len()),
+        format!("<< /Type /Annot {controlled} /Rect [20 20 60 60] >>"),
+        "<< /Type /OCG /Name (A) >>".into(),
+        "<< /Type /OCG /Name (B) >>".into(),
+        format!("<< /Type /XObject /Subtype /Form /Resources << >> /BBox [0 0 40 40] {form_oc} /Length {} >>\nstream\n{blue}endstream", blue.len()),
+        format!("<< /Type /OCMD /OCGs [6 0 R 7 0 R] {policy} >>"),
+        "<< /Type /Annot /Subtype /Square /Rect [150 20 180 50] /AP << /N 11 0 R >> >>".into(),
+        format!("<< /Type /XObject /Subtype /Form /Resources << >> /BBox [0 0 30 30] /Length {} >>\nstream\n{green}endstream", green.len()),
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", index + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(b"xref\n0 12\n0000000000 65535 f \n");
+    for offset in offsets {
+        bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer << /Size 12 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    Arc::new(bytes)
+}
+
+fn annotation_layer_pixels(bytes: Arc<Vec<u8>>, config: RenderConfig, expected: [u8; 4], fallback: bool) {
+    // Settings are immutable: recreate the renderer after a layer override, as callers invalidate their raster.
+    let mut renderer = PageRenderer::new(bytes, config);
+    let output = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+    assert!(output.error.is_none(), "{:?}", output.error);
+    assert_eq!((output.width, output.height), (200, 100));
+    let pixel = |x: usize, y: usize| &output.rgba[(y * 200 + x) * 4..][..4];
+    // Validate ordinary page ink and the following ungrouped annotation before the causal pixel assertion.
+    assert_eq!(pixel(105, 85), &[0, 0, 0, 255]);
+    assert_eq!(pixel(165, 65), &[0, 255, 0, 255], "annotation visibility must not leak into the next annotation");
+    assert_eq!(pixel(30, 50), &expected, "annotation /OC controls its appearance");
+    if fallback {
+        assert_eq!(pixel(44, 61), &[0, 0, 0, 255], "the Highlight fallback still multiplies over page ink");
+    }
+}
+
+#[test]
+fn annotation_layers_follow_catalog_and_render_overrides() {
+    for ap in [true, false] {
+        for on in [false, true] {
+            let bytes = annotation_layer_pdf(ap, on, "6 0 R", "", "");
+            for override_visible in [None, Some(false), Some(true)] {
+                let config = RenderConfig {
+                    layers: Arc::new(override_visible.map(|visible| vec![(6, 0, visible)]).unwrap_or_default()),
+                    ..Default::default()
+                };
+                let colored = if ap { [0, 0, 255, 255] } else { [255, 255, 0, 255] };
+                let expected = if override_visible.unwrap_or(on) { colored } else { [255, 255, 255, 255] };
+                // The first case is a catalog-OFF normal AP, after valid dimensions and independent controls.
+                annotation_layer_pixels(bytes.clone(), config, expected, !ap);
+            }
+        }
+    }
+}
+
+#[test]
+fn annotation_memberships_and_appearance_layers_keep_independent_visibility() {
+    // A is ON, B is OFF: the existing default AnyOn is visible, while AllOn is hidden.
+    for (policy, visible) in [("", true), ("/P /AllOn", false)] {
+        for indirect in [true, false] {
+            let member = if indirect { "9 0 R".into() } else { format!("<< /Type /OCMD /OCGs [6 0 R 7 0 R] {policy} >>") };
+            for ap in [true, false] {
+                let colored = if ap { [0, 0, 255, 255] } else { [255, 255, 0, 255] };
+                annotation_layer_pixels(
+                    annotation_layer_pdf(ap, true, &member, policy, ""),
+                    RenderConfig::default(),
+                    if visible { colored } else { [255, 255, 255, 255] },
+                    !ap,
+                );
+            }
+        }
+    }
+    // An annotation's ON layer cannot override the appearance form's own OFF layer, or vice versa.
+    for (annotation_oc, form_oc) in [("6 0 R", "/OC 7 0 R"), ("7 0 R", "/OC 6 0 R")] {
+        annotation_layer_pixels(annotation_layer_pdf(true, true, annotation_oc, "", form_oc), RenderConfig::default(), [255, 255, 255, 255], false);
+    }
+}
+
 #[test]
 fn layer_override_hides_content() {
     let pdf = b"%PDF-1.7

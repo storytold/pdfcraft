@@ -45,16 +45,16 @@ pub(crate) struct Type0Font {
     /// PdfCraft patch: whether the CIDs belong to an Adobe character collection (Japan1, GB1,
     /// CNS1, Korea1), whose glyph numbering no substitute other than a CID-keyed CFF font shares.
     adobe_collection: bool,
-    /// PdfCraft patch: `/ToUnicode /Identity-H` (a name, not a CMap stream), which CAD exporters
+    /// PdfCraft patch: `/ToUnicode /Identity-H` (a name, not a `CMap` stream), which CAD exporters
     /// such as WSCAD write for fonts whose two-byte codes are UTF-16 code units. Acrobat shows
-    /// such text as the code's Unicode value; the identity CMap the name resolves to maps codes
+    /// such text as the code's Unicode value; the identity `CMap` the name resolves to maps codes
     /// to CIDs only and gave no text at all.
     identity_to_unicode: bool,
 }
 
 impl Type0Font {
-    /// Reads a Type 0 font from its dictionary: the descendant CID font, the encoding CMap and
-    /// the code-to-Unicode map (`/ToUnicode`, the `/Identity-H` name, or the UCS2 CMap).
+    /// Reads a Type 0 font from its dictionary: the descendant CID font, the encoding `CMap` and
+    /// the code-to-Unicode map (`/ToUnicode`, the `/Identity-H` name, or the UCS2 `CMap`).
     pub(crate) fn new(
         dict: &Dict<'_>,
         font_resolver: &FontResolverFn,
@@ -512,11 +512,10 @@ impl FontType {
         } else if let Some(cff) = CffFontBlob::new(data.clone()) {
             // It's a CFF font.
             Self::Cff(cff)
-        } else if let Some(t1) = Type1FontBlob::new(data) {
+        } else {
+            let t1 = Type1FontBlob::new(data)?;
             // It's a Type1 (PFB) font.
             Self::Type1(t1)
-        } else {
-            return None;
         };
 
         Some(parsed)
@@ -546,7 +545,7 @@ impl CidToGIdMap {
             let mut forward = HashMap::new();
             let mut inverse = HashMap::new();
 
-            for (cid, gid) in decoded.chunks_exact(2).enumerate() {
+            for (cid, gid) in decoded.as_chunks::<2>().0.iter().enumerate() {
                 let gid = GlyphId::new(u16::from_be_bytes([gid[0], gid[1]]) as u32);
 
                 forward.insert(cid as u16, gid);

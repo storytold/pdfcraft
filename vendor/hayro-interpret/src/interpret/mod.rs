@@ -158,7 +158,7 @@ pub enum InterpreterWarning {
     /// PdfCraft patch (18): a page content stream was skipped after exhausting its safety budget.
     ContentTruncated,
     /// PdfCraft patch (55): a colour could not be computed (a colour space that cannot be
-    /// read, or a Separation or DeviceN tint transform that cannot be evaluated) and was painted
+    /// read, or a Separation or `DeviceN` tint transform that cannot be evaluated) and was painted
     /// in a fallback colour. Reported at most once per content stream.
     ColorFallback,
 }
@@ -204,6 +204,21 @@ pub fn interpret_page<'a>(
                 && !matches!(annot.get::<hayro_syntax::object::Name<'_>>(SUBTYPE).as_deref(), Some(b"Widget" | b"Link"))
             {
                 continue;
+            }
+
+            // PdfCraft patch: annotation /OC gates its appearance and Highlight fallback.
+            // Use current layer choices and balance this scope before any later skip.
+            if let Some(oc_dict) = annot.get::<Dict<'_>>(OC) {
+                if let Some(oc_ref) = annot.get_ref(OC) {
+                    context.ocg_state.begin_ocg(&oc_dict, oc_ref.into());
+                } else {
+                    context.ocg_state.begin_ocmd(&oc_dict);
+                }
+                let visible = context.ocg_state.is_visible();
+                context.ocg_state.end_marked_content();
+                if !visible {
+                    continue;
+                }
             }
 
             // PdfCraft patch: `/N` may be a stream or a dictionary of appearance states selected
@@ -338,7 +353,7 @@ fn is_standard_annotation_type(subtype: &[u8]) -> bool {
     )
 }
 
-/// PdfCraft patch (59): whether the NoRotate flag turns this annotation's appearance. Form fields
+/// PdfCraft patch (59): whether the `NoRotate` flag turns this annotation's appearance. Form fields
 /// and links are left in `/Rect`: PdfCraft takes their click targets from it.
 fn no_rotate_applies(annot: &Dict<'_>) -> bool {
     !matches!(
@@ -347,7 +362,7 @@ fn no_rotate_applies(annot: &Dict<'_>) -> bool {
     )
 }
 
-/// PdfCraft patch (59): the user-space turn that keeps a NoRotate annotation upright on a page
+/// PdfCraft patch (59): the user-space turn that keeps a `NoRotate` annotation upright on a page
 /// with `/Rotate`. The page is shown turned clockwise, so the appearance (already fitted to
 /// `/Rect`) is turned as far counterclockwise about the rectangle's upper-left corner, which stays
 /// where it is on the page (ISO 32000-2 §12.5.3). Its width then runs across the displayed page
@@ -364,9 +379,9 @@ fn no_rotate_turn(rotation: Rotation, rect: &kurbo::Rect) -> Affine {
 }
 
 /// PdfCraft patch: the normal appearance of a Highlight annotation that has none (ISO 32000-2
-/// §12.5.6.10), drawn as PdfCraft draws its own highlights (pdfcraft-annot): each /QuadPoints
+/// §12.5.6.10), drawn as PdfCraft draws its own highlights (pdfcraft-annot): each `/QuadPoints`
 /// quadrilateral filled with /C at /CA opacity, blended with Multiply so the marked-up content
-/// stays legible. /QuadPoints that aren't groups of eight numbers, or a /C that isn't a gray, RGB
+/// stays legible. `/QuadPoints` that aren't groups of eight numbers, or a /C that isn't a gray, RGB
 /// or CMYK colour (absent or empty means transparent), draw nothing.
 fn draw_highlight_without_appearance<'a>(
     annot: &Dict<'a>,
