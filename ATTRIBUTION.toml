@@ -223,7 +223,6 @@ kind = "translation"
 usage = "Persian UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
-[[asset]]
 path = "crates/ui-egui/src/i18n/he.tsv"
 title = "Hebrew interface translation catalog"
 author = "PdfCraft contributors"
@@ -233,6 +232,7 @@ licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Hebrew UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
+[[asset]]
 path = "crates/ui-egui/src/i18n/tr.tsv"
 title = "Turkish interface translation catalog"
 author = "PdfCraft contributors"
