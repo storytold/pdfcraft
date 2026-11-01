@@ -21,6 +21,8 @@ pub enum BmAction {
     Outdent(Vec<usize>),
     /// Bookmarks from the tagged headings, under a new first "Untitled" bookmark.
     FromStructure,
+    /// Open New bookmarks from text styles, to choose a style per bookmark level (#1693).
+    FromTextStyles,
 }
 
 /// Matching titles plus their ancestors, keeping document paths rather than filtered indexes.

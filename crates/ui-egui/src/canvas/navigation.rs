@@ -369,10 +369,14 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
         view.rotate_view(false);
     }
     zoom_shortcuts(view, &pressed);
-    if pressed(cmd(Key::OpenBracket)) {
+    // Alt+← / Alt+→ (⌥ on macOS) too, as in Acrobat and browsers, back to where a link was
+    // followed from (#3632). Consumed here, before ← / → turn the page. egui matches the pattern
+    // logically, so an extra Shift is ignored and Shift+Alt+← goes back as well (harmless).
+    let alt = |k| KeyboardShortcut::new(Modifiers::ALT, k);
+    if pressed(cmd(Key::OpenBracket)) || pressed(alt(Key::ArrowLeft)) {
         view.view_history(false);
     }
-    if pressed(cmd(Key::CloseBracket)) {
+    if pressed(cmd(Key::CloseBracket)) || pressed(alt(Key::ArrowRight)) {
         view.view_history(true);
     }
     let key = |k| (arrows || !matches!(k, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown)) && ctx.input(|i| i.key_pressed(k));

@@ -34,8 +34,8 @@ pub use combine::{
     CombineOutcome, Combiner, Run, SplitBy, combine, combine_grouped, combine_grouped_with, combine_selected, combine_selected_with, combine_with,
     extract_pages, split, split_ranges,
 };
-pub(crate) use copy::copy_object;
-use copy::{Copier, SKIP_ON_PAGE};
+use copy::SKIP_ON_PAGE;
+pub(crate) use copy::{Copier, copy_object};
 use fields::{add_kid, field_and_widget, register_fields, resolve_field_conflicts, split_own_field};
 pub use fields::{combine_field_conflicts, field_name_conflicts};
 
@@ -432,18 +432,22 @@ pub(crate) fn name_tree_entries(src: &Document, node: &Object, depth: u8, seen: 
 
 /// Register copied optional content groups in the destination's `/OCProperties`, keeping each
 /// layer's default visibility from the source.
-fn register_layers(dst: &mut Document, src: &Document, ocgs: &[(ObjRef, ObjRef)]) -> Result<(), OrganizeError> {
+pub(crate) fn register_layers(dst: &mut Document, src: &Document, ocgs: &[(ObjRef, ObjRef)]) -> Result<(), OrganizeError> {
     if ocgs.is_empty() {
         return Ok(());
     }
-    let src_off: Vec<Object> = src
+    let src_config: Dict = src
         .root()
         .and_then(|r| src.get(r).as_dict().cloned())
         .and_then(|c| c.get(b"OCProperties").map(|o| src.resolve(o)))
         .and_then(|o| o.as_dict().and_then(|d| d.get(b"D")).map(|d| src.resolve(d)))
-        .and_then(|d| d.as_dict().and_then(|d| d.get(b"OFF")).map(|o| src.resolve(o)))
-        .and_then(|o| o.as_array().cloned())
+        .and_then(|d| d.as_dict().cloned())
         .unwrap_or_default();
+    let src_list = |k: &[u8]| src_config.get(k).map(|v| src.resolve(v)).and_then(|v| v.as_array().cloned()).unwrap_or_default();
+    let (src_on, src_off) = (src_list(b"ON"), src_list(b"OFF"));
+    // With `/BaseState /OFF`, a layer is hidden unless `/ON` lists it (§8.11.4.3, Table 101).
+    let base_off = src_config.get(b"BaseState").map(|b| src.resolve(b)).is_some_and(|b| b.as_name() == Some(b"OFF".as_slice()));
+    let hidden = |r: &Object| src_off.contains(r) || (base_off && !src_on.contains(r));
     let root = dst.root().ok_or(OrganizeError::NoPageTree)?;
     let catalog = dst.get(root).as_dict().cloned().ok_or(OrganizeError::NoPageTree)?;
     let (props_ref, mut props) = match catalog.get(b"OCProperties") {
@@ -462,7 +466,7 @@ fn register_layers(dst: &mut Document, src: &Document, ocgs: &[(ObjRef, ObjRef)]
         }
         all.push(r.clone());
         order.push(r.clone());
-        if src_off.contains(&Object::Ref(*from)) { off.push(r) } else { on.push(r) }
+        if hidden(&Object::Ref(*from)) { off.push(r) } else { on.push(r) }
     }
     props.set(b"OCGs".to_vec(), Object::Array(all));
     config.set(b"ON".to_vec(), Object::Array(on));

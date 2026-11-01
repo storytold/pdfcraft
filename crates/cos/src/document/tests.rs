@@ -1,5 +1,210 @@
 use super::*;
 
+/// /DecodeParms given by reference, whole, as array entries or as the numbers inside, are read
+/// once made direct: here a Flate predictor, which the stream alone doesn't see. Only the entries the filters use are
+/// resolved, and nothing is for a chain longer than a decoder takes.
+#[test]
+fn decode_parms_given_by_reference_are_read_once_direct() {
+    let rows = [1u8, 2, 3, 4, 5, 6, 7, 8];
+    let params = pdfcraft_filters::Params { predictor: 12, colors: 1, bits_per_component: 8, columns: 4, early_change: 1 };
+    let coded = pdfcraft_filters::encode(&pdfcraft_filters::Filter::Flate, &params, &rows).unwrap();
+    let mut parms = Dict::new();
+    parms.set(b"Predictor".to_vec(), Object::Int(12));
+    parms.set(b"Columns".to_vec(), Object::Int(4));
+    let mut doc = Document::new_empty();
+    let r = doc.add(Object::Dict(parms.clone()));
+    let array = doc.add(Object::Array(vec![Object::Ref(r)]));
+    let stream = |filters: usize, p: Object| {
+        let mut d = Dict::new();
+        d.set(b"Filter".to_vec(), Object::Array(vec![Object::name("FlateDecode"); filters]));
+        d.set(b"DecodeParms".to_vec(), p);
+        Stream::from_raw(d, coded.clone())
+    };
+    for p in [Object::Ref(r), Object::Array(vec![Object::Ref(r)]), Object::Ref(array)] {
+        let s = stream(1, p.clone());
+        assert_ne!(s.decoded().unwrap(), rows, "{p:?} read as it is");
+        assert_eq!(doc.with_direct_parms(&s).decoded().unwrap(), rows, "{p:?}");
+    }
+    // A number inside given by reference, which `Dict::int` doesn't follow: in the dictionary
+    // itself, and in an array's entry.
+    let twelve = doc.add(Object::Int(12));
+    let mut inner = parms.clone();
+    inner.set(b"Predictor".to_vec(), Object::Ref(twelve));
+    for p in [Object::Dict(inner.clone()), Object::Array(vec![Object::Dict(inner)])] {
+        let s = stream(1, p.clone());
+        assert_ne!(s.decoded().unwrap(), rows, "{p:?} read as it is");
+        assert_eq!(doc.with_direct_parms(&s).decoded().unwrap(), rows, "{p:?}");
+    }
+    // Only numbers and flags are copied: a key naming a big array, or an entry that is no
+    // dictionary, is left out (a file could name one big object from every key and filter).
+    let big = doc.add(Object::Array(vec![Object::Int(1); 100_000]));
+    let mut hostile = Dict::new();
+    hostile.set(b"Predictor".to_vec(), Object::Ref(big));
+    hostile.set(b"Columns".to_vec(), Object::Ref(big));
+    hostile.set(b"Colors".to_vec(), Object::Ref(twelve));
+    let entry = doc.add(Object::Dict(hostile));
+    let two = stream(2, Object::Array(vec![Object::Ref(entry), Object::Ref(big)]));
+    let made = doc.with_direct_parms(&two);
+    let made = made.dict.get(b"DecodeParms").and_then(Object::as_array).unwrap();
+    let first = made[0].as_dict().unwrap();
+    assert_eq!((first.contains(b"Predictor"), first.contains(b"Columns"), first.int(b"Colors")), (false, false, Some(12)));
+    assert!(matches!(made[1], Object::Null), "{:?}", made[1]);
+    let direct = stream(1, Object::Dict(parms));
+    assert!(matches!(doc.with_direct_parms(&direct), Cow::Borrowed(_)), "nothing to resolve");
+    assert_eq!(direct.decoded().unwrap(), rows);
+    // Entries past the filters' are left out, unresolved; so is everything past the chain limit.
+    let many = stream(1, Object::Array(vec![Object::Ref(r); 1000]));
+    let made = doc.with_direct_parms(&many);
+    assert_eq!(made.dict.get(b"DecodeParms").and_then(Object::as_array).map(Vec::len), Some(1));
+    let long = stream(pdfcraft_filters::MAX_CHAIN + 1, Object::Array(vec![Object::Ref(r); 9]));
+    assert!(matches!(doc.with_direct_parms(&long), Cow::Borrowed(_)));
+    // A chain as long as a decoder takes is resolved, and a `/Crypt` in it doesn't count, as
+    // the decoders leave it out: ASCIIHex as often as the limit allows, then the predictor's
+    // Flate, its parameters by reference.
+    let hex = |b: &[u8]| b.iter().flat_map(|x| format!("{x:02X}").into_bytes()).chain(*b">").collect::<Vec<u8>>();
+    let wrapped = (1..pdfcraft_filters::MAX_CHAIN).fold(coded.clone(), |data, _| hex(&data));
+    for crypt in [false, true] {
+        let mut names = vec![Object::name("ASCIIHexDecode"); pdfcraft_filters::MAX_CHAIN - 1];
+        names.push(Object::name("FlateDecode"));
+        if crypt {
+            names.insert(0, Object::name("Crypt"));
+        }
+        let mut entries = vec![Object::Null; names.len() - 1];
+        entries.push(Object::Ref(r));
+        let mut d = Dict::new();
+        d.set(b"Filter".to_vec(), Object::Array(names));
+        d.set(b"DecodeParms".to_vec(), Object::Array(entries));
+        let s = Stream::from_raw(d, wrapped.clone());
+        assert_eq!(doc.with_direct_parms(&s).decoded().unwrap(), rows, "with /Crypt: {crypt}");
+    }
+}
+
+/// A CCITT fax image reads through its /DecodeParms, given directly, in an array or by
+/// reference (its numbers too), with /BlackIs1, and behind other filters; one whose /Columns
+/// aren't its /Width is refused, /Height rows are decoded whatever /Rows says, and other images
+/// decode through their filters.
+#[test]
+fn fax_images_decode_with_their_parameters() {
+    // 10 × 3: the first five samples of each row white, the rest black.
+    let bits = [0b1111_1000, 0, 0b1111_1000, 0, 0b1111_1000, 0];
+    let coded = pdfcraft_filters::encode_g4(&bits, 10, 3).unwrap();
+    let mut doc = Document::new_empty();
+    let mut parms = Dict::new();
+    parms.set(b"K".to_vec(), Object::Int(-1));
+    parms.set(b"Columns".to_vec(), Object::Int(10));
+    let indirect = doc.add(Object::Dict(parms.clone()));
+    let image = |doc: &Document, parms: Option<Object>, width: i64, height: i64| {
+        let mut d = Dict::new();
+        d.set(b"Width".to_vec(), Object::Int(width));
+        d.set(b"Height".to_vec(), Object::Int(height));
+        d.set(b"Filter".to_vec(), Object::name("CCITTFaxDecode"));
+        if let Some(p) = parms {
+            d.set(b"DecodeParms".to_vec(), p);
+        }
+        doc.decoded_image(&Stream::from_raw(d, coded.clone()))
+    };
+    for p in [
+        Object::Dict(parms.clone()),
+        Object::Array(vec![Object::Dict(parms.clone())]),
+        Object::Ref(indirect),
+        Object::Array(vec![Object::Ref(indirect)]),
+    ] {
+        assert_eq!(image(&doc, Some(p.clone()), 10, 3).unwrap(), bits, "{p:?}");
+    }
+    let mut inverted = parms.clone();
+    inverted.set(b"BlackIs1".to_vec(), Object::Bool(true));
+    assert_eq!(
+        image(&doc, Some(Object::Dict(inverted)), 10, 3).unwrap(),
+        [0b0000_0111, 0b1100_0000, 0b0000_0111, 0b1100_0000, 0b0000_0111, 0b1100_0000]
+    );
+    assert_eq!(image(&doc, Some(Object::Dict(parms.clone())), 10, 2).unwrap(), bits[..4], "at most /Height rows");
+    // Within a bound: no more rows than it holds.
+    let mut bounded = Dict::new();
+    bounded.set(b"Width".to_vec(), Object::Int(10));
+    bounded.set(b"Height".to_vec(), Object::Int(3));
+    bounded.set(b"Filter".to_vec(), Object::name("CCITTFaxDecode"));
+    bounded.set(b"DecodeParms".to_vec(), Object::Dict(parms.clone()));
+    assert_eq!(doc.decoded_image_within(&Stream::from_raw(bounded, coded.clone()), 5).unwrap(), bits[..4], "two rows of two bytes in five");
+    let mut by_reference = Dict::new();
+    by_reference.set(b"K".to_vec(), Object::Ref(doc.add(Object::Int(-1))));
+    by_reference.set(b"Columns".to_vec(), Object::Ref(doc.add(Object::Int(10))));
+    assert_eq!(image(&doc, Some(Object::Dict(by_reference)), 10, 3).unwrap(), bits, "/K and /Columns by reference");
+    let mut understated = parms.clone();
+    understated.set(b"Rows".to_vec(), Object::Int(1));
+    assert_eq!(image(&doc, Some(Object::Dict(understated.clone())), 10, 3).unwrap(), bits, "/Height rows, whatever /Rows says");
+    // The parameters as the file gives them, /Rows included, and Table 11's defaults.
+    let mut d = Dict::new();
+    d.set(b"Filter".to_vec(), Object::name("CCITTFaxDecode"));
+    d.set(b"DecodeParms".to_vec(), Object::Dict(understated));
+    let p = doc.fax_params(&Stream::from_raw(d.clone(), Vec::new())).unwrap();
+    assert_eq!((p.k, p.columns, p.rows, p.end_of_block, p.black_is_1), (-1, 10, 1, true, false));
+    d.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+    assert!(doc.fax_params(&Stream::from_raw(d, Vec::new())).is_none(), "not a fax image");
+    assert!(matches!(image(&doc, Some(Object::Dict(parms.clone())), 12, 3), Err(CosError::Filter(_))), "/Columns other than /Width");
+    assert!(matches!(image(&doc, None, 10, 3), Err(CosError::Filter(_))), "the default 1728 /Columns");
+    let mut plain = Dict::new();
+    plain.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+    assert_eq!(doc.decoded_image(&Stream::from_raw(plain, pdfcraft_filters::encode_flate(&bits))).unwrap(), bits);
+
+    // Behind other filters, its parameters at its own place in the array (/Crypt counts).
+    let behind = |filters: &[Object], parms: &[Object], data: Vec<u8>| {
+        let mut d = Dict::new();
+        d.set(b"Width".to_vec(), Object::Int(10));
+        d.set(b"Height".to_vec(), Object::Int(3));
+        d.set(b"Filter".to_vec(), Object::Array(filters.to_vec()));
+        d.set(b"DecodeParms".to_vec(), Object::Array(parms.to_vec()));
+        doc.decoded_image(&Stream::from_raw(d, data))
+    };
+    let (fax, null, own) = (Object::name("CCITTFaxDecode"), Object::Null, Object::Dict(parms.clone()));
+    let hex = coded.iter().map(|b| format!("{b:02x}")).chain([">".to_string()]).collect::<String>().into_bytes();
+    let flated = pdfcraft_filters::encode_flate(&coded);
+    let ahx = [Object::name("AHx"), fax.clone()];
+    assert_eq!(behind(&ahx, &[null.clone(), Object::Ref(indirect)], hex.clone()).unwrap(), bits, "behind ASCIIHexDecode");
+    assert_eq!(
+        behind(&[Object::name("FlateDecode"), Object::name("CCF")], &[null.clone(), own.clone()], flated.clone()).unwrap(),
+        bits,
+        "behind Flate"
+    );
+    assert_eq!(behind(&[Object::name("Crypt"), fax.clone()], &[null.clone(), own.clone()], coded.clone()).unwrap(), bits, "after /Crypt");
+    // A /Crypt belongs first (§7.4.10); one after the fax filter leaves it its own entry.
+    assert_eq!(behind(&[fax.clone(), Object::name("Crypt")], &[own.clone(), null.clone()], coded.clone()).unwrap(), bits, "before /Crypt");
+    assert!(behind(&ahx, &[own.clone(), null.clone()], hex).is_err(), "the first entry is the other filter's");
+    assert!(behind(&[fax.clone(), Object::name("FlateDecode")], &[own.clone(), null.clone()], flated).is_err(), "CCITT, then Flate");
+    assert!(behind(&[Object::Int(5), fax], &[null, own], coded.clone()).is_err(), "a /Filter entry that isn't a name");
+}
+
+#[test]
+fn a_missing_file_id_is_derived_from_the_encryption_seed() {
+    let mut doc = Document::new_empty();
+    let seed = [9u8; 32];
+    doc.set_encryption(&pdfcraft_crypt::NewEncryption {
+        algorithm: pdfcraft_crypt::Algorithm::Aes256,
+        user_password: "user",
+        owner_password: "owner",
+        permissions: -4,
+        encrypt_metadata: true,
+        seed,
+    })
+    .unwrap();
+    let id = doc.trailer().get(b"ID").and_then(|o| o.as_array()).and_then(|a| a.first()).and_then(|o| o.as_string()).map(|s| s.bytes.clone());
+    assert_eq!(id.as_deref(), Some(pdfcraft_crypt::file_id(&seed).as_slice()));
+
+    let mut kept = Document::new_empty();
+    let fixed = Object::String(crate::PdfString { bytes: b"0123456789abcdef".to_vec(), hex: true });
+    kept.trailer_mut().set(b"ID".to_vec(), Object::Array(vec![fixed.clone(), fixed]));
+    kept.set_encryption(&pdfcraft_crypt::NewEncryption {
+        algorithm: pdfcraft_crypt::Algorithm::Aes256,
+        user_password: "user",
+        owner_password: "owner",
+        permissions: -4,
+        encrypt_metadata: true,
+        seed,
+    })
+    .unwrap();
+    let still = kept.trailer().get(b"ID").and_then(|o| o.as_array()).and_then(|a| a.first()).and_then(|o| o.as_string()).map(|s| s.bytes.clone());
+    assert_eq!(still.as_deref(), Some(b"0123456789abcdef".as_slice()));
+}
+
 #[test]
 fn a_read_state_matches_a_clone_and_no_changed_document() {
     let mut doc = Document::new_empty();
