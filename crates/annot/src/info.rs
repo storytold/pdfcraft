@@ -70,7 +70,7 @@ pub(crate) fn own_popup(doc: &Document, own: Option<ObjRef>, annot: &Dict) -> Op
 
 /// The comment's own pop-up (see [`own_popup`]), as [`PopupInfo`]: `None` when it has none or it
 /// is unreadable.
-fn popup_info(doc: &Document, own: Option<ObjRef>, annot: &Dict) -> Option<PopupInfo> {
+pub(crate) fn popup_info(doc: &Document, own: Option<ObjRef>, annot: &Dict) -> Option<PopupInfo> {
     // Another annotation's rectangle and open state aren't this comment's (review on #2137).
     let r = own_popup(doc, own, annot)?;
     let p = doc.get(r);

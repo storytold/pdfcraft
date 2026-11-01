@@ -2300,3 +2300,23 @@ fn foreign_pop_ups_are_not_the_marks(doc: &mut Document, note: ObjRef, mark: usi
     doc.update_dict(mr, |m| m.set(b"Popup".to_vec(), Object::Ref(orphan))).unwrap();
     assert_eq!(popup_of_mark(doc), Some(PopupInfo { rect: [0.0, 0.0, 50.0, 50.0], open: false }), "no /Parent");
 }
+
+/// #2137 review: a comment's own pop-up without a `/Rect` of four numbers reads as none; opening
+/// it gives it the place a new pop-up gets, so the window shows again.
+#[test]
+fn opening_a_pop_up_without_a_rect_gives_it_one() {
+    let mut doc = fixture();
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [20.0, 280.0], icon: NoteIcon::Comment }), &meta("n1")).unwrap();
+    let (_, r) = annot_ref(&mut doc, 0, note).unwrap();
+    let pr = annot_dict(&doc, r).reference(b"Popup").expect("new notes have a pop-up");
+    doc.update_dict(pr, |p| {
+        p.remove(b"Rect");
+    })
+    .unwrap();
+    assert_eq!(summaries(&doc).into_iter().find(|s| s.index == note).unwrap().popup, None, "no /Rect reads as no pop-up");
+    set_popup(&mut doc, 0, note, None, Some(true), &meta("n1")).unwrap();
+    let popup = summaries(&doc).into_iter().find(|s| s.index == note).unwrap().popup.expect("the pop-up reads again");
+    assert!(popup.open);
+    assert!(popup.rect[2] - popup.rect[0] >= 100.0 && popup.rect[3] - popup.rect[1] >= 100.0, "a window's size: {:?}", popup.rect);
+    assert_eq!(annot_dict(&doc, r).reference(b"Popup"), Some(pr), "the same pop-up, not a new one");
+}

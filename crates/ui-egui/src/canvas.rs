@@ -2733,7 +2733,12 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
         view.pending_edit = Some(e);
     }
     if let Some(e) = comments::popups(ui.ctx(), view, info, prefs, comments_hidden, allowed) {
-        view.pending_edit = Some(e);
+        // A click on the composer's Post also takes the focus from a pop-up's box, saving what
+        // was typed there: both edits land in this frame, so both are kept, in one batch.
+        view.pending_edit = Some(match view.pending_edit.take() {
+            Some(first) => Edit::Batch { label: "Edit comment".into(), edits: vec![first, e] },
+            None => e,
+        });
     }
     if let Some(e) = crate::edit_text_ui::overlay(ui.ctx(), view, info) {
         view.pending_edit = Some(e);

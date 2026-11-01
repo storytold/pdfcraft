@@ -1904,3 +1904,15 @@ trailer << /Root 1 0 R >>
     assert!((p.width - 3874.96).abs() < 0.1, "width expected ~3874.96, got {}", p.width);
     assert!((p.height - 5493.54).abs() < 0.1, "height expected ~5493.54, got {}", p.height);
 }
+
+/// #2137 review: a pop-up without a `/Rect` of four numbers reads as no pop-up, as
+/// `pdfcraft_annot::summaries` reads it, so the two lists of comments agree.
+#[test]
+fn a_pop_up_without_a_four_number_rect_is_none() {
+    let bytes = "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Annots [4 0 R 5 0 R] >> endobj\n4 0 obj << /Type /Annot /Subtype /Text /Rect [20 260 40 280] /Contents (Hi) /Popup 5 0 R >> endobj\n5 0 obj << /Type /Annot /Subtype /Popup RECT /Parent 4 0 R /Open true >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n";
+    for (rect, read) in [("", false), ("/Rect [0 0 50]", false), ("/Rect (box)", false), ("/Rect [0 0 50 /x]", false), ("/Rect [0 0 50 60]", true)] {
+        let info = inspect(Arc::new(bytes.replace("RECT", rect).into_bytes()), None).expect("opens");
+        let note = info.annotations.iter().find(|a| a.subtype == "Text").expect("the note");
+        assert_eq!(note.popup.is_some(), read, "{rect:?}");
+    }
+}

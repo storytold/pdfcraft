@@ -242,16 +242,59 @@ impl CommentView {
         if self.editing.is_none() {
             self.editor_focus = None;
         }
+        // What is typed in a pop-up, and a window being dragged or resized, follow theirs too.
+        let moved = |k: (usize, usize)| after_delete(before, after, gone, k);
+        self.popup_text = self.popup_text.take().and_then(|(p, i, text)| moved((p, i)).map(|(p, i)| (p, i, text)));
+        self.popup_reply = self.popup_reply.take().and_then(|(p, i, text)| moved((p, i)).map(|(p, i)| (p, i, text)));
+        self.popup_drag = self.popup_drag.and_then(|(p, i, at)| moved((p, i)).map(|(p, i)| (p, i, at)));
+        self.popup_resize = self.popup_resize.and_then(|(p, i, size)| moved((p, i)).map(|(p, i)| (p, i, size)));
     }
 
     /// Undo or Redo just ran. Either may have put annotations back or taken them away, on any
     /// page, so a (page, index) held here may now name another one. The selection and the inline
     /// editor close, its unsaved text with it, rather than Save writing that text over whatever
-    /// took its place.
+    /// took its place; so do the pop-ups' unsaved text and drags.
     pub(crate) fn history_stepped(&mut self) {
         self.selected = None;
         self.editing = None;
         self.editor_focus = None;
+        self.popup_text = None;
+        self.popup_reply = None;
+        self.popup_drag = None;
+        self.popup_resize = None;
+    }
+
+    /// The comments the pop-ups hold unsaved text, a reply or a drag for.
+    pub(crate) fn popup_keys(&self) -> Vec<(usize, usize)> {
+        let text = self.popup_text.as_ref().map(|(p, i, _)| (*p, *i));
+        let reply = self.popup_reply.as_ref().map(|(p, i, _)| (*p, *i));
+        let drag = self.popup_drag.map(|(p, i, _)| (p, i));
+        let resize = self.popup_resize.map(|(p, i, _)| (p, i));
+        [text, reply, drag, resize].into_iter().flatten().collect()
+    }
+
+    /// An edit other than a deletion just ran: `before` are the comments at [`Self::popup_keys`]
+    /// until then, `after` the document's annotations now. When pages moved, came or went, a pop-up's (page, index)
+    /// may now name another comment: what was typed in that pop-up and not saved, and a window
+    /// being dragged or resized, are dropped rather than written to whatever took its place.
+    pub(crate) fn popups_after_edit(&mut self, before: &[Annotation], after: &[Annotation]) {
+        // The same comment: its kind, author and `/NM`, at that place before and after.
+        let who = |list: &[Annotation], k: (usize, usize)| {
+            list.iter().find(|a| (a.page, a.index) == k).map(|a| (a.subtype.clone(), a.author.clone(), a.name.clone()))
+        };
+        let kept = |p: usize, i: usize| who(before, (p, i)).is_some_and(|w| who(after, (p, i)) == Some(w));
+        if self.popup_text.as_ref().is_some_and(|(p, i, _)| !kept(*p, *i)) {
+            self.popup_text = None;
+        }
+        if self.popup_reply.as_ref().is_some_and(|(p, i, _)| !kept(*p, *i)) {
+            self.popup_reply = None;
+        }
+        if self.popup_drag.is_some_and(|(p, i, _)| !kept(p, i)) {
+            self.popup_drag = None;
+        }
+        if self.popup_resize.is_some_and(|(p, i, _)| !kept(p, i)) {
+            self.popup_resize = None;
+        }
     }
 }
 

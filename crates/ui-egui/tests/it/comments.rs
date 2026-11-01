@@ -3439,3 +3439,73 @@ fn a_pop_up_resized_on_a_turned_page_stays_in_place() {
     // Taller by the drag, less what its text had already stretched it.
     assert!(resized.height() > window.height() + 50.0, "taller: {window:?} -> {resized:?}");
 }
+
+/// #2137 review: the composer's Post, clicked while a pop-up's box holds unsaved text, also
+/// saves that text as the box loses the focus. Both land in one frame and both are kept.
+#[test]
+fn posting_from_the_composer_keeps_a_pop_ups_unsaved_text() {
+    let mut h = harness_with_bytes(BLUE_NOTE_WITH_OPEN_POP_UP.to_vec(), |app| app.set_option("quick", "note").unwrap());
+    // Low on the left, so the composer stays clear of the window.
+    click_pt(&mut h, (30.0, 40.0));
+    // The composer opens with its editor focused.
+    h.run_steps(2);
+    h.event(egui::Event::Text("New note".into()));
+    h.run_steps(2);
+    let box_at = h.query_all_by(|n| shows_text(n, "A note")).next().expect("the pop-up's box").rect().right_center() - egui::vec2(4.0, 0.0);
+    click(&mut h, box_at);
+    h.event(egui::Event::Text(" edited".into()));
+    h.run_steps(2);
+    assert!(h.state().views[0].comments.composer.is_some(), "the composer is still open");
+    let post = h.get_by_label("Post").rect().center();
+    click(&mut h, post);
+    h.run_steps(3);
+    let all = comments(&h);
+    assert!(
+        all.iter().any(|a| a.contents.as_deref() == Some("New note")),
+        "the composer's note: {:?}",
+        all.iter().map(|a| &a.contents).collect::<Vec<_>>()
+    );
+    assert!(
+        all.iter().any(|a| a.contents.as_deref() == Some("A note edited")),
+        "the pop-up's text: {:?}",
+        all.iter().map(|a| &a.contents).collect::<Vec<_>>()
+    );
+}
+
+/// #2137 review: what a pop-up holds for a comment (a reply being typed, unsaved text) follows
+/// that comment when a deletion moves it, and is dropped when an undo or a page edit leaves its
+/// (page, index) naming another; other edits keep it.
+#[test]
+fn a_pop_ups_unsaved_work_follows_its_comment_or_is_dropped() {
+    use pdfcraft_engine::Edit;
+    let mut h = harness_with_bytes(NOTE_WITH_A_THREAD.to_vec(), |_| {});
+    let key = |h: &Harness<'static, PdfCraftApp>, text: &str| {
+        comments(h).into_iter().find(|a| a.contents.as_deref() == Some(text)).map(|a| (a.page, a.index)).expect(text)
+    };
+    let (second, third) = (key(&h, "Second"), key(&h, "Third"));
+    h.state_mut().views[0].comments.popup_reply = Some((third.0, third.1, "draft".into()));
+
+    // Another edit, on another comment: the draft stays.
+    assert!(h.state_mut().apply_edit(Edit::SetAnnotationContents { page: second.0, index: second.1, text: "Second!".into() }));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.popup_reply, Some((third.0, third.1, "draft".into())));
+
+    // Deleting "Second" (and its answer) moves "Third" up: the draft goes with it.
+    assert!(h.state_mut().apply_edit(Edit::DeleteAnnotation { page: second.0, index: second.1 }));
+    h.run_steps(2);
+    let moved = key(&h, "Third");
+    assert_ne!(moved, third, "Third moved up");
+    assert_eq!(h.state().views[0].comments.popup_reply, Some((moved.0, moved.1, "draft".into())), "the draft is still Third's");
+
+    // Undo puts the thread back: the draft is dropped rather than left on another reply.
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.popup_reply, None);
+
+    // A page inserted before it: the comment's (page, index) now names nothing of it.
+    let note = key(&h, "First");
+    h.state_mut().views[0].comments.popup_text = Some((note.0, note.1, "unsaved".into()));
+    assert!(h.state_mut().apply_edit(Edit::InsertBlankPage { at: 0, width: 300.0, height: 200.0 }));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.popup_text, None);
+}
