@@ -736,6 +736,8 @@ pub enum ViewAction {
     CameraLevel,
     /// After Enhance page: leave the tool for this command (Crop pages, Organize pages).
     CameraNext(&'static str),
+    /// Run a registered command on the app (e.g. from a context menu or panel).
+    Command(&'static str),
 }
 
 /// Default page right-click menu actions.
