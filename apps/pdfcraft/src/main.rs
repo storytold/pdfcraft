@@ -609,17 +609,29 @@ fn configure_gpu(native: &mut eframe::NativeOptions) {
         setup.power_preference = eframe::wgpu::PowerPreference::LowPower;
         let displays = display_gpus();
         let compositor = compositor_gpu::compositor_gpu();
-        if !displays.is_empty() || compositor.is_some() {
+        // Always on Windows, so that an OpenGL-only GPU is declined (`wgpu_draws_with`) even when
+        // no display names its GPU, as over Remote Desktop; `pick_adapter` then ranks by kind,
+        // most frugal first, as wgpu's own low-power choice does.
+        if !displays.is_empty() || compositor.is_some() || cfg!(target_os = "windows") {
             setup.native_adapter_selector = Some(std::sync::Arc::new(move |adapters, surface| {
                 let usable: Vec<&eframe::wgpu::Adapter> = adapters.iter().filter(|a| surface.is_none_or(|s| a.is_surface_supported(s))).collect();
-                let infos: Vec<(u32, u32, eframe::wgpu::DeviceType)> = usable
+                let infos: Vec<(u32, u32, eframe::wgpu::DeviceType, eframe::wgpu::Backend)> = usable
                     .iter()
                     .map(|a| {
                         let info = a.get_info();
-                        (info.vendor, info.device, info.device_type)
+                        (info.vendor, info.device, info.device_type, info.backend)
                     })
                     .collect();
                 let picked = pick_adapter(&infos, &displays, compositor).and_then(|i| usable.get(i)).map(|a| (*a).clone());
+                if let Some(a) = &picked
+                    && !wgpu_draws_with(a.get_info().backend, cfg!(target_os = "windows"), std::env::var_os("WGPU_BACKEND").is_some())
+                {
+                    log::warn!(
+                        "wgpu found no Direct3D 12 adapter for {}, only its OpenGL backend: drawing with eframe's OpenGL renderer instead",
+                        a.get_info().name
+                    );
+                    return Err("wgpu would draw through its OpenGL backend".to_string());
+                }
                 match &picked {
                     // Which GPU draws is the first question when a window stays black (#8, #378, #445).
                     Some(a) => {
@@ -638,6 +650,16 @@ fn configure_gpu(native: &mut eframe::NativeOptions) {
     if cfg!(target_os = "windows") {
         setup.instance_descriptor.backend_options.dx12.presentation_system = dx12_presentation(eframe::wgpu::Dx12SwapchainKind::from_env());
     }
+}
+
+/// Whether wgpu should draw with the adapter it picked on `backend`. On Windows (`windows`) wgpu
+/// reaches its OpenGL backend only for a GPU with no Direct3D 12 driver, such as Intel's Ivy
+/// Bridge, and there that backend fails in `Surface::configure` a few seconds after the window
+/// opens: too late for the start-up retry with OpenGL, so the app closed (#519, #4134, #5553).
+/// eframe's own OpenGL renderer works on the same GPUs, so wgpu declines and that retry takes over.
+/// A backend asked for with `WGPU_BACKEND` (`backend_chosen`) is kept.
+fn wgpu_draws_with(backend: eframe::wgpu::Backend, windows: bool, backend_chosen: bool) -> bool {
+    !(windows && backend == eframe::wgpu::Backend::Gl && !backend_chosen)
 }
 
 /// How Direct3D 12 presents on Windows: through a DirectComposition visual (issue #2738), unless
@@ -767,14 +789,25 @@ fn linux_display_gpus(drm: &std::path::Path) -> Vec<DisplayGpu> {
 /// primary display (a hybrid laptop's panel, #8; the primary display on Windows, #378), or else,
 /// with no primary display known (a Linux desktop with a monitor on each GPU, #445), the discrete
 /// one. Otherwise the most frugal kind: integrated, discrete, other, virtual, software.
-fn pick_adapter(adapters: &[(u32, u32, eframe::wgpu::DeviceType)], displays: &[DisplayGpu], compositor: Option<(u32, u32)>) -> Option<usize> {
-    use eframe::wgpu::DeviceType;
+///
+/// On Windows wgpu offers a Direct3D 12 GPU through OpenGL too, and declines OpenGL there
+/// (`wgpu_draws_with`), so an OpenGL adapter comes after another adapter of its vendor. wgpu's
+/// OpenGL adapter has no device id and guesses its kind (every Intel GPU is integrated), so it is
+/// matched by vendor alone, before its kind is compared: an Intel discrete GPU's Direct3D 12
+/// adapter beats its own OpenGL one. A GPU with only OpenGL (Intel's Ivy Bridge) still beats the
+/// software adapter, Microsoft's.
+fn pick_adapter(
+    adapters: &[(u32, u32, eframe::wgpu::DeviceType, eframe::wgpu::Backend)],
+    displays: &[DisplayGpu],
+    compositor: Option<(u32, u32)>,
+) -> Option<usize> {
+    use eframe::wgpu::{Backend, DeviceType};
     let display = |pci: (u32, u32)| displays.iter().find(|g| g.pci == pci);
     let multi_gpu_desktop = displays.len() > 1 && !displays.iter().any(|g| g.primary);
     adapters
         .iter()
         .enumerate()
-        .min_by_key(|(_, (vendor, device, kind))| {
+        .min_by_key(|(_, (vendor, device, kind, backend))| {
             let shown = display((*vendor, *device));
             let drives_display = shown.is_some();
             let drives_primary = shown.is_some_and(|g| g.primary);
@@ -788,7 +821,9 @@ fn pick_adapter(adapters: &[(u32, u32, eframe::wgpu::DeviceType)], displays: &[D
                 DeviceType::VirtualGpu => 4,
                 DeviceType::Cpu => 5,
             };
-            (compositor != Some((*vendor, *device)), !drives_display, !drives_primary, rank)
+            let gl = *backend == Backend::Gl;
+            let vendor_has_more = gl && adapters.iter().any(|(v, _, _, b)| v == vendor && *b != Backend::Gl);
+            (compositor != Some((*vendor, *device)), !drives_display, !drives_primary, vendor_has_more, rank, gl)
         })
         .map(|(i, _)| i)
 }

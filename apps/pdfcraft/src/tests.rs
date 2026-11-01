@@ -111,6 +111,58 @@ fn path_from_arg_leaves_plain_paths_and_other_schemes_alone() {
 }
 
 #[test]
+fn on_windows_wgpu_leaves_an_opengl_only_gpu_to_eframes_opengl_renderer() {
+    use eframe::wgpu::Backend;
+    // Issues #4134 and #5553: an Intel HD 4000 has no Direct3D 12 driver, so wgpu picks its
+    // OpenGL backend, which fails a few seconds after the window opens.
+    assert!(!super::wgpu_draws_with(Backend::Gl, true, false), "declined, so the start-up retry uses glow");
+    // Everything else draws with wgpu as before.
+    assert!(super::wgpu_draws_with(Backend::Dx12, true, false));
+    assert!(super::wgpu_draws_with(Backend::Gl, true, true), "WGPU_BACKEND asked for it");
+    for backend in [Backend::Gl, Backend::Vulkan, Backend::Metal] {
+        assert!(super::wgpu_draws_with(backend, false, false), "{backend:?} off Windows");
+    }
+}
+
+#[test]
+fn pick_adapter_takes_a_gpus_opengl_adapter_last_and_an_opengl_only_gpu_over_software() {
+    use eframe::wgpu::{Backend, DeviceType};
+    // wgpu's OpenGL adapter has its vendor's id, no device id, and a kind guessed from its
+    // strings: every Intel GPU is integrated, and most others are "other" (wgpu-hal's gles
+    // `make_info`).
+    let gl = |vendor: u32, kind| (vendor, 0, kind, Backend::Gl);
+    // A GPU offered through OpenGL and through Direct3D 12 or Vulkan, in either order, with or
+    // without a known display: never OpenGL, which `wgpu_draws_with` declines on Windows.
+    const ARC: (u32, u32) = (0x8086, 0x56a0);
+    for other in [Backend::Dx12, Backend::Vulkan] {
+        for (gpu, kind, guessed) in [
+            (INTEL_IGPU, DeviceType::IntegratedGpu, DeviceType::IntegratedGpu),
+            // An Intel discrete GPU, which wgpu's OpenGL backend calls integrated (CodeRabbit).
+            (ARC, DeviceType::DiscreteGpu, DeviceType::IntegratedGpu),
+            (NVIDIA, DeviceType::DiscreteGpu, DeviceType::Other),
+        ] {
+            let gl_first = [gl(gpu.0, guessed), (gpu.0, gpu.1, kind, other)];
+            for displays in [&[panel(gpu)][..], &[]] {
+                assert_eq!(super::pick_adapter(&gl_first, displays, None), Some(1), "{gpu:x?} {other:?} {displays:?}");
+                assert_eq!(super::pick_adapter(&[gl_first[1], gl_first[0]], displays, None), Some(0), "{gpu:x?} {other:?} {displays:?}");
+            }
+        }
+    }
+    // Issue #4134: an Intel HD 4000 has only OpenGL, and the Microsoft Basic Render Driver (in
+    // software) has Direct3D 12. The GPU is still picked, by kind, with or without a known
+    // display, as over Remote Desktop; declining it then starts glow on that GPU.
+    const HD_4000: (u32, u32) = (0x8086, 0x0166);
+    let ivy_bridge = [(0x1414, 0x008c, DeviceType::Cpu, Backend::Dx12), gl(HD_4000.0, DeviceType::IntegratedGpu)];
+    assert_eq!(super::pick_adapter(&ivy_bridge, &[panel(HD_4000)], None), Some(1));
+    assert_eq!(super::pick_adapter(&ivy_bridge, &[], None), Some(1));
+    assert!(!super::wgpu_draws_with(Backend::Gl, true, false));
+    // Only OpenGL, or only software: that adapter.
+    assert_eq!(super::pick_adapter(&ivy_bridge[1..], &[], None), Some(0));
+    assert_eq!(super::pick_adapter(&ivy_bridge[..1], &[], None), Some(0));
+    assert_eq!(super::pick_adapter(&[], &[], None), None);
+}
+
+#[test]
 fn opengl_is_the_fallback_unless_a_renderer_was_chosen() {
     use super::{RendererChoice, native_options, renderer_choice, retry_with_gl};
     assert_eq!(renderer_choice(None), RendererChoice::Auto);
@@ -436,9 +488,13 @@ const NVIDIA: (u32, u32) = (0x10de, 0x2684);
 const NVIDIA_3090: (u32, u32) = (0x10de, 0x2204);
 const AMD_IGPU: (u32, u32) = (0x1002, 0x164e);
 
-fn adapters() -> Vec<(u32, u32, eframe::wgpu::DeviceType)> {
-    use eframe::wgpu::DeviceType;
-    vec![(NVIDIA.0, NVIDIA.1, DeviceType::DiscreteGpu), (AMD_IGPU.0, AMD_IGPU.1, DeviceType::IntegratedGpu), (0, 0, DeviceType::Cpu)]
+fn adapters() -> Vec<(u32, u32, eframe::wgpu::DeviceType, eframe::wgpu::Backend)> {
+    use eframe::wgpu::{Backend, DeviceType};
+    vec![
+        (NVIDIA.0, NVIDIA.1, DeviceType::DiscreteGpu, Backend::Vulkan),
+        (AMD_IGPU.0, AMD_IGPU.1, DeviceType::IntegratedGpu, Backend::Vulkan),
+        (0, 0, DeviceType::Cpu, Backend::Vulkan),
+    ]
 }
 
 const INTEL_IGPU: (u32, u32) = (0x8086, 0xa780);
@@ -505,8 +561,12 @@ fn pick_adapter_keeps_the_integrated_gpu_on_hybrid_laptops() {
 #[test]
 fn pick_adapter_prefers_the_discrete_gpu_on_desktops_with_a_monitor_on_each() {
     // Issue #445: one monitor on the Intel iGPU, one on the NVIDIA card, no built-in panel.
-    use eframe::wgpu::DeviceType;
-    let desktop = [(INTEL_IGPU.0, INTEL_IGPU.1, DeviceType::IntegratedGpu), (NVIDIA.0, NVIDIA.1, DeviceType::DiscreteGpu), (0, 0, DeviceType::Cpu)];
+    use eframe::wgpu::{Backend, DeviceType};
+    let desktop = [
+        (INTEL_IGPU.0, INTEL_IGPU.1, DeviceType::IntegratedGpu, Backend::Vulkan),
+        (NVIDIA.0, NVIDIA.1, DeviceType::DiscreteGpu, Backend::Vulkan),
+        (0, 0, DeviceType::Cpu, Backend::Vulkan),
+    ];
     assert_eq!(super::pick_adapter(&desktop, &[monitor(INTEL_IGPU), monitor(NVIDIA)], None), Some(1));
     assert_eq!(super::pick_adapter(&desktop, &[monitor(NVIDIA), monitor(INTEL_IGPU)], None), Some(1));
     // A GPU driving no display still loses to one that does.
