@@ -2580,3 +2580,10 @@ animation effects	Off	Aus
 	Options for this reply	Optionen für diese Antwort
 	Export value	Exportwert
 	Show Page Edge Shadows	Schatten an Seitenrändern anzeigen
+
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Ebenen verwalten
+	Bring to front	In den Vordergrund
+	Bring forward	Eine Ebene nach vorne
+	Send backward	Eine Ebene nach hinten
+	Send to back	In den Hintergrund

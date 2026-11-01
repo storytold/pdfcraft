@@ -2886,3 +2886,10 @@ certificate	Version	Verze
 	Options for this reply	Možnosti této odpovědi
 	Export value	Exportní hodnota
 	Show Page Edge Shadows	Zobrazovat stíny okrajů stránek
+
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Správa vrstev
+	Bring to front	Do popředí
+	Bring forward	O úroveň dopředu
+	Send backward	O úroveň dozadu
+	Send to back	Do pozadí

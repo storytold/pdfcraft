@@ -2855,3 +2855,10 @@ certificate	Version	الإصدار
 	Options for this reply	خيارات هذا الرد
 	Export value	قيمة التصدير
 	Show Page Edge Shadows	إظهار ظلال حواف الصفحات
+
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	إدارة المستويات
+	Bring to front	إحضار إلى الأمام
+	Bring forward	تقديم مستوى واحد
+	Send backward	إرسال مستوى واحد للخلف
+	Send to back	إرسال إلى الخلف

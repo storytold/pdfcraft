@@ -104,6 +104,8 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::AddImage { .. }
         | Edit::UpdateContent { .. }
         | Edit::MoveObjects { .. }
+        | Edit::RestackObject { .. }
+        | Edit::RestackObjects { .. }
         | Edit::DeleteContent { .. }
         | Edit::ReplaceImage { .. }
         | Edit::PasteContent { .. }
@@ -142,6 +144,8 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::EditTextBlock { .. }
         | Edit::RegisterTextFont { .. }
         | Edit::EditPageImage { .. }
+        | Edit::DeletePageGraphic { .. }
+        | Edit::ResizePageGraphic { .. }
         | Edit::Flatten { .. }
         | Edit::FlattenFillSign => {
             if p.modify() {
@@ -559,7 +563,11 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             };
             pdfcraft_edit::change_image(doc, *page, *index, &c)?;
         }
+        Edit::DeletePageGraphic { page, index } => pdfcraft_edit::delete_graphic(doc, *page, *index)?,
+        Edit::ResizePageGraphic { page, index, rect } => pdfcraft_edit::resize_graphic(doc, *page, *index, *rect)?,
         Edit::MoveObjects { page, objects, offset } => pdfcraft_edit::move_objects(doc, *page, objects, *offset)?,
+        Edit::RestackObject { page, object, direction } => pdfcraft_edit::restack_object(doc, *page, *object, *direction)?,
+        Edit::RestackObjects { page, objects, direction } => pdfcraft_edit::restack_objects(doc, *page, objects, *direction)?,
         Edit::EditTextBlock { page, block, text, style } => {
             pdfcraft_edit::rewrite_block(doc, *page, *block, Some(text), style)?;
         }

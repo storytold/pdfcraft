@@ -2575,3 +2575,10 @@ animation effects	Off	Kapalı
 	Options for this reply	Bu yanıtın seçenekleri
 	Export value	Dışa aktarma değeri
 	Show Page Edge Shadows	Sayfa kenarı gölgelerini göster
+
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Katmanları yönet
+	Bring to front	En öne
+	Bring forward	Bir katman öne
+	Send backward	Bir katman geri
+	Send to back	En arkaya

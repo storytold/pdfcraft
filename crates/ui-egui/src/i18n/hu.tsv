@@ -2578,3 +2578,10 @@ animation effects	Off	Ki
 	Options for this reply	A válasz beállításai
 	Export value	Exportérték
 	Show Page Edge Shadows	Oldalszéli árnyékok megjelenítése
+
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Szintek kezelése
+	Bring to front	Legelőre
+	Bring forward	Egy szinttel előre
+	Send backward	Egy szinttel hátra
+	Send to back	Leghátra

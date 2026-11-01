@@ -2542,3 +2542,10 @@ animation effects	Off	Изключени
 	Options for this reply	Опции за този отговор
 	Export value	Стойност за експортиране
 	Show Page Edge Shadows	Показване на сенки по краищата на страниците
+
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Управление на нивата
+	Bring to front	Най-отпред
+	Bring forward	Напред с едно ниво
+	Send backward	Назад с едно ниво
+	Send to back	Най-отзад

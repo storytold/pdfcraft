@@ -2864,3 +2864,10 @@ theme	Appearance	Aparência
 	Options for this reply	Opções desta resposta
 	Export value	Valor de exportação
 	Show Page Edge Shadows	Mostrar sombras nas bordas das páginas
+
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Gerenciar níveis
+	Bring to front	Para a frente
+	Bring forward	Um nível à frente
+	Send backward	Um nível atrás
+	Send to back	Para o fundo

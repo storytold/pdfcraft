@@ -2675,3 +2675,10 @@ animation effects	Off	Wyłączone
 	Options for this reply	Opcje tej odpowiedzi
 	Export value	Wartość eksportowa
 	Show Page Edge Shadows	Pokaż cienie krawędzi stron
+
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Zarządzaj poziomami
+	Bring to front	Na wierzch
+	Bring forward	O poziom w przód
+	Send backward	O poziom w tył
+	Send to back	Na spód

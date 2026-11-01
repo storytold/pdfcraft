@@ -336,9 +336,12 @@ fn validated_ranges<'a>(draft: &str, style: &'a BlockStyle) -> Result<Vec<&'a Ra
     Ok(ranges)
 }
 
-fn replacement_text<'a>(block: &'a TextBlock, text: Option<&'a str>) -> Result<&'a str, EditError> {
+fn replacement_text<'a>(block: &'a TextBlock, text: Option<&'a str>, style: &BlockStyle) -> Result<&'a str, EditError> {
     let draft = match text {
         Some(text) if text != block.text => text,
+        // A width change with the text untouched reflows the paragraph's own text, whose rows
+        // join with spaces; the editor text's row breaks would become hard breaks and distort it.
+        _ if style.width.is_some() => &block.text,
         _ => &block.editor_text,
     };
     if draft.len() > 4_000_000 {
@@ -850,7 +853,7 @@ pub(crate) fn rewrite_styled_block(
     max_glyphs: usize,
 ) -> Result<LineEdit, EditError> {
     let first = block.lines.first().and_then(|i| lines.get(*i)).ok_or_else(|| EditError::Invalid("the paragraph has no source runs".into()))?;
-    let draft = replacement_text(block, text)?;
+    let draft = replacement_text(block, text, style)?;
     if has_no_effective_style_change(block, draft, style) {
         return Ok(LineEdit { substituted: None });
     }

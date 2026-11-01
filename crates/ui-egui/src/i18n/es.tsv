@@ -2023,6 +2023,7 @@ action wizard	Start	Iniciar
 	Add image	Añadir imagen
 	Edit content	Editar contenido
 	Delete content	Eliminar contenido
+	Delete graphic	Eliminar gráfico
 	Remove redaction marks	Quitar marcas de censura
 	Add link	Añadir enlace
 	Change link properties	Cambiar propiedades del enlace
@@ -2902,3 +2903,10 @@ theme	Appearance	Aspecto
 	Options for this reply	Opciones de esta respuesta
 	Export value	Valor de exportación
 	Show Page Edge Shadows	Mostrar sombras en los bordes de las páginas
+
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Gestionar niveles
+	Bring to front	Traer al frente
+	Bring forward	Traer un nivel adelante
+	Send backward	Enviar un nivel atrás
+	Send to back	Enviar al fondo
