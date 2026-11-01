@@ -929,6 +929,43 @@ fn a_document_copy_reads_in_page_order_and_stops_when_cancelled() {
     assert_eq!(job().text(&std::sync::atomic::AtomicBool::new(true)), None, "cancelled");
 }
 
+/// A failed page of a file on disk may have failed with the file: a copy reads it again, so the
+/// text isn't short of it unsaid, and that holds with no other page left to read.
+#[test]
+fn a_document_copy_tries_a_failed_page_of_a_file_on_disk_again() {
+    let content = |page: usize| format!("BT /F 24 Tf 20 150 Td (Page {page}) Tj ET % {}", "x".repeat(30_000));
+    let pdf = pdfcraft_testkit::Pdf::new()
+        .obj("<</Type/Catalog/Pages 2 0 R>>")
+        .obj("<</Type/Pages/Kids[3 0 R 4 0 R]/Count 2/MediaBox[0 0 200 300]>>")
+        .obj("<</Type/Page/Parent 2 0 R/Contents 5 0 R/Resources<</Font<</F 7 0 R>>>>>>")
+        .obj("<</Type/Page/Parent 2 0 R/Contents 6 0 R/Resources<</Font<</F 7 0 R>>>>>>")
+        .stream("", content(1))
+        .stream("", content(2))
+        .obj("<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>")
+        .build();
+    let dir = std::env::temp_dir().join(format!("pdfcraft-failed-page-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("large.pdf");
+    std::fs::write(&path, pdf).unwrap();
+    let mut app = PdfCraftApp::new();
+    app.session = pdfcraft_engine::Session::default().with_on_disk_from(0);
+    app.open_path(&path.to_string_lossy());
+    let doc = app.session.get(app.views[0].id).unwrap();
+    assert!(doc.on_disk.is_some());
+    let mut r = pdfcraft_render::PageRenderer::new(doc.source(), Default::default());
+    let first = r.render(RenderRequest { page: 0, kind: RequestKind::Text, ..Default::default() }).text.unwrap();
+    app.views[0].texts.insert(0, first);
+    app.views[0].text_failed.insert(1);
+    app.views[0].all_text = true;
+    std::fs::File::options().write(true).open(&path).unwrap().set_len(1_000).unwrap();
+    let job = crate::DocumentCopyJob::of(&app.views[0], app.session.get(app.views[0].id).unwrap());
+    assert_eq!(job.text(&std::sync::atomic::AtomicBool::new(false)), Some(Err(pdfcraft_render::PART_UNREAD)));
+    assert!(app.copy_selected_text(0, &egui::Context::default()));
+    assert!(app.document_copy.is_some(), "read again, not copied from the pages at hand");
+    drop(app);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Select All keeps to the page shown one page at a time, and in a document of one page; of
 /// the document, it reads the text already read and doesn't ask again for failed pages.
 #[test]
