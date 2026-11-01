@@ -338,3 +338,16 @@ fn odd_input_never_panics() {
         assert!(v.chars().count() <= s.chars().count(), "{:?}", s.chars().take(12).collect::<String>());
     }
 }
+
+#[test]
+fn hebrew_ui_labels_use_rtl_paragraphs_without_mirroring_stock_controls() {
+    let previous = crate::i18n::current();
+    let hebrew = crate::i18n::Lang::from_code("he").expect("Hebrew is registered");
+    crate::i18n::set_current(hebrew);
+
+    assert_eq!(ui_direction(), egui::epaint::text::TextDirection::RightToLeft);
+    assert!(!hebrew.mirrors_chrome(), "Hebrew keeps the existing control and button layout");
+
+    crate::i18n::set_current(previous);
+}
+
