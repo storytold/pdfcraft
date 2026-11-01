@@ -4148,7 +4148,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/ui-egui/tests/it/comments.rs::a_connector_line_joins_a_comment_to_its_open_pop_up_while_the_pointer_is_on_either"]
-notes = "a line in the comment's colour from the comment to its open pop-up while the pointer is on either or the comment is selected (Acrobat's roll-over lines). Not yet: the preference to turn them off"
+notes = "a faint wedge in the comment's colour from the comment's edge nearest its open pop-up, widening to the window's side that faces it, while the pointer is on either or the comment is selected (Acrobat's roll-over lines). Not yet: the preference to turn them off"
 
 [[feature]]
 id = "comment.review-history"

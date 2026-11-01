@@ -3199,11 +3199,20 @@ const BLUE_NOTE_WITH_OPEN_POP_UP: &[u8] = b"%PDF-1.7
 trailer << /Root 1 0 R >>
 %%EOF";
 
-/// The line segments of colour `color` the last frame painted.
-fn line_segments(h: &Harness<'static, PdfCraftApp>, color: egui::Color32) -> Vec<[Pos2; 2]> {
-    fn walk(shape: &egui::Shape, color: egui::Color32, out: &mut Vec<[Pos2; 2]>) {
+/// What the connectors of comments in colour `color` painted in the last frame: each wedge
+/// (its point, the two ends of its base, its colour: `color`, faded).
+fn connectors(h: &Harness<'static, PdfCraftApp>, color: egui::Color32) -> Vec<(Pos2, [Pos2; 2], egui::Color32)> {
+    fn walk(shape: &egui::Shape, color: egui::Color32, out: &mut Vec<(Pos2, [Pos2; 2], egui::Color32)>) {
         match shape {
-            egui::Shape::LineSegment { points, stroke } if stroke.color == color => out.push(*points),
+            egui::Shape::Mesh(m) => {
+                if let [tip, b0, b1] = m.vertices.as_slice()
+                    && tip.color.a() > 0
+                    && tip.color.a() < 255
+                    && tip.color.to_opaque() == color
+                {
+                    out.push((tip.pos, [b0.pos, b1.pos], tip.color));
+                }
+            }
             egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, color, out)),
             _ => {}
         }
@@ -3215,10 +3224,11 @@ fn line_segments(h: &Harness<'static, PdfCraftApp>, color: egui::Color32) -> Vec
     out
 }
 
-/// A comment's connector line (comment.connector-lines): in the comment's colour, from the
-/// edge of the comment nearest its open pop-up to the edge of the window nearest that point,
-/// shown while the pointer is on the comment or on the window or the comment is selected, and
-/// not otherwise.
+/// A comment's connector (comment.connector-lines): a faint wedge in the comment's colour from
+/// the edge of the comment nearest its open pop-up to a base on the window's edge around the
+/// point nearest the comment; shown
+/// while the pointer is on the comment or on the window or the comment is selected, and not
+/// otherwise.
 #[test]
 fn a_connector_line_joins_a_comment_to_its_open_pop_up_while_the_pointer_is_on_either() {
     let mut h = harness_with_bytes(BLUE_NOTE_WITH_OPEN_POP_UP.to_vec(), |_| {});
@@ -3229,27 +3239,33 @@ fn a_connector_line_joins_a_comment_to_its_open_pop_up_while_the_pointer_is_on_e
         r.expand(1.0).contains(p) && [p.x - r.left(), r.right() - p.x, p.y - r.top(), r.bottom() - p.y].iter().any(|d| d.abs() < 1.0)
     };
 
-    // Away from both: no line.
+    // Away from both: no connector.
     h.hover_at(at(&h, 280.0, 190.0));
     h.run_steps(2);
-    assert!(line_segments(&h, blue).is_empty(), "no line with the pointer elsewhere");
+    assert!(connectors(&h, blue).is_empty(), "no connector with the pointer elsewhere");
 
-    // On the note or on its window: one line, from the note's edge to the window's.
+    // On the note or on its window: one wedge, from the note's edge to the window's.
     for (what, pointer) in [("the note", mark.center()), ("the window", window.center())] {
         h.hover_at(pointer);
         h.run_steps(2);
-        let lines = line_segments(&h, blue);
-        assert_eq!(lines.len(), 1, "one line with the pointer on {what}: {lines:?}");
-        let [from, to] = lines[0];
-        assert!(on_edge(mark, from), "starts on the note's edge {mark:?}: {from:?}");
-        assert!(on_edge(window, to), "ends on the window's edge {window:?}: {to:?}");
-        // The nearest points: the note's lower right corner, the window's upper left one.
-        assert!(from.distance(mark.right_bottom()) < 1.0 && to.distance(window.left_top()) < 1.0, "{from:?} -> {to:?}");
+        let found = connectors(&h, blue);
+        assert_eq!(found.len(), 1, "one connector with the pointer on {what}: {found:?}");
+        let (tip, [b0, b1], base) = found[0];
+        assert!(on_edge(mark, tip), "its point is on the note's edge {mark:?}: {tip:?}");
+        // The nearest point of the note: its lower right corner.
+        assert!(tip.distance(mark.right_bottom()) < 1.0, "{tip:?}");
+        assert!(on_edge(window, b0) && on_edge(window, b1), "its base is on the window's edge {window:?}: {b0:?} {b1:?}");
+        // The base lies along one side, around the window's upper left corner, and is wider than a line.
+        assert!((b0.x - b1.x).abs() < 0.5 || (b0.y - b1.y).abs() < 0.5, "along one side: {b0:?} {b1:?}");
+        assert!(b0.distance(b1) >= 10.0, "a base, not a line: {b0:?} {b1:?}");
+        assert!(b0.distance(window.left_top()).min(b1.distance(window.left_top())) < 1.0, "at the corner: {b0:?} {b1:?}");
+        // The wedge is faint, in the comment's hue.
+        assert!(base.a() < 255 && base.a() > 0 && base.to_opaque() == blue, "the wedge is faint blue: {base:?}");
     }
 
-    // Selected, the note keeps its line with the pointer elsewhere.
+    // Selected, the note keeps its connector with the pointer elsewhere.
     h.state_mut().views[0].comments.selected = Some((0, 0));
     h.hover_at(at(&h, 280.0, 190.0));
     h.run_steps(2);
-    assert_eq!(line_segments(&h, blue).len(), 1, "a selected comment shows its line");
+    assert_eq!(connectors(&h, blue).len(), 1, "a selected comment shows its connector");
 }

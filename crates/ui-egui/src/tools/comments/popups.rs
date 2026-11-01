@@ -1,7 +1,6 @@
 use super::state::PageCx;
 use super::{
-    Annotation, Color32, CommentPrefs, CornerRadius, DocInfo, DocView, Edit, PagePointer, PageXform, Pos2, QuickTool, Rect, Stroke, Tokens, pos2,
-    theme,
+    Annotation, Color32, CommentPrefs, CornerRadius, DocInfo, DocView, Edit, PagePointer, PageXform, Pos2, QuickTool, Rect, Tokens, pos2, theme,
 };
 
 /// A comment with a pop-up window of its own: not a text box, a Fill & Sign mark, a reply or a
@@ -10,10 +9,11 @@ pub(super) fn has_popup(a: &Annotation) -> bool {
     a.subtype != "FreeText" && !a.fill_sign && a.is_comment()
 }
 
-/// The line from a comment to its open pop-up, in the comment's colour, while the pointer is on
-/// either or the comment is selected (Acrobat's "lines connecting comment markups to their
-/// pop-ups on mouse rollover"). It runs from the point of the comment nearest the window to the
-/// point of the window nearest the comment.
+/// The connector from a comment to its open pop-up, in the comment's colour, while the pointer is
+/// on either or the comment is selected (Acrobat's "lines connecting comment markups to their
+/// pop-ups on mouse rollover"). It is a faint wedge: a point on the comment where it is
+/// nearest the window, widening to a base on the window's side that faces
+/// the comment ([`wedge_base`]).
 pub(super) fn paint_connectors(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, pointer: Option<Pos2>) {
     let cv = &view.comments;
     for ((page, index), window) in &cv.popup_rects {
@@ -38,7 +38,42 @@ pub(super) fn paint_connectors(painter: &egui::Painter, cx: &PageCx<'_>, view: &
         let color = a
             .color
             .map_or(Color32::from_rgb(0xDC, 0x26, 0x26), |c| Color32::from_rgb((c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8));
-        painter.line_segment([from, to], Stroke::new(1.5, color));
+        let faded = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), WEDGE_ALPHA);
+        let [b0, b1] = wedge_base(*window, from, to);
+        let mut wedge = egui::Mesh::default();
+        for p in [from, b0, b1] {
+            wedge.colored_vertex(p, faded);
+        }
+        wedge.add_triangle(0, 1, 2);
+        painter.add(egui::Shape::mesh(wedge));
+    }
+}
+
+/// How opaque a connector's wedge is (of 255).
+const WEDGE_ALPHA: u8 = 90;
+
+/// The two ends of a connector's base on `window`: centred on `to` (the point of the window
+/// nearest the comment) along the side that faces `from`, as wide as a small part of the window
+/// and kept on that side. At a corner, the side is the one the comment lies further beyond.
+fn wedge_base(window: Rect, from: Pos2, to: Pos2) -> [Pos2; 2] {
+    let half = (window.width().min(window.height()) * 0.08).clamp(5.0, 18.0);
+    // `half` along [lo, hi] around `c`, moved in to stay on the side (a side shorter than the
+    // base gives all of it).
+    let spread = |c: f32, lo: f32, hi: f32| {
+        let h = half.min((hi - lo).max(0.0) / 2.0);
+        let c = c.clamp(lo + h, hi - h);
+        (c - h, c + h)
+    };
+    let on_horizontal = (to.y - window.top()).abs() < 0.5 || (to.y - window.bottom()).abs() < 0.5;
+    let on_vertical = (to.x - window.left()).abs() < 0.5 || (to.x - window.right()).abs() < 0.5;
+    let beyond_x = (from.x - to.x).abs() / window.width().max(1.0);
+    let beyond_y = (from.y - to.y).abs() / window.height().max(1.0);
+    if on_horizontal && !(on_vertical && beyond_x > beyond_y) {
+        let (a, b) = spread(to.x, window.left(), window.right());
+        [pos2(a, to.y), pos2(b, to.y)]
+    } else {
+        let (a, b) = spread(to.y, window.top(), window.bottom());
+        [pos2(to.x, a), pos2(to.x, b)]
     }
 }
 
