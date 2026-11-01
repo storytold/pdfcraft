@@ -192,11 +192,15 @@ fn contains_ref(o: &Object, map: &HashMap<ObjRef, ObjRef>) -> bool {
 /// Merge duplicate resources among `candidates` (into each other or into equal objects already
 /// in `doc`), rewrite references inside `candidates`, and free the merged-away objects.
 /// When `index_existing` is false, only candidates are compared (a brand-new document).
+/// Repeated candidates are processed once, by complete object reference.
 /// Returns how many objects were removed.
 pub fn dedupe_resources(doc: &mut Document, candidates: &[ObjRef], index_existing: bool) -> usize {
     let cand: HashSet<ObjRef> = candidates.iter().copied().collect();
     let mut sorted: Vec<ObjRef> = candidates.to_vec();
-    sorted.sort_unstable_by_key(|r| r.num);
+    sorted.sort_unstable_by_key(|r| (r.num, r.generation));
+    // A repeated candidate must not merge into itself: that would cycle `canon` and free
+    // the canonical object. Keep generations distinct when normalizing references.
+    sorted.dedup();
     // Existing objects first, so candidates merge into them rather than the reverse.
     let mut all: Vec<(ObjRef, std::sync::Arc<Object>)> = Vec::new();
     if index_existing {
@@ -274,6 +278,37 @@ mod tests {
         d.set(b"BaseFont".to_vec(), Object::name(name));
         d.set(b"FontFile".to_vec(), Object::Ref(file));
         doc.add(Object::Dict(d))
+    }
+
+    #[test]
+    fn repeated_candidate_keeps_the_canonical_object() {
+        for index_existing in [false, true] {
+            let mut doc = Document::new_empty();
+            let r = doc.add(stream(b"glyphs"));
+            assert_eq!(dedupe_resources(&mut doc, &[r, r], index_existing), 0);
+            assert_eq!(*doc.get(r), stream(b"glyphs"));
+        }
+    }
+
+    #[test]
+    fn repeated_candidate_with_referrer_terminates_and_keeps_generations() {
+        for index_existing in [false, true] {
+            let mut doc = Document::new_empty();
+            let r = ObjRef::new(20, 7);
+            doc.set(r, stream(b"glyphs"));
+            let s = font(&mut doc, r, "A");
+            assert_eq!(dedupe_resources(&mut doc, &[r, r, s], index_existing), 0);
+            assert_eq!(*doc.get(r), stream(b"glyphs"));
+            assert_eq!(doc.generation(r.num), 7);
+            assert_eq!(doc.get(s).as_dict().unwrap().get(b"FontFile"), Some(&Object::Ref(r)));
+
+            let duplicate = ObjRef::new(30, 9);
+            doc.set(duplicate, stream(b"glyphs"));
+            let t = font(&mut doc, duplicate, "B");
+            assert_eq!(dedupe_resources(&mut doc, &[r, r, s, duplicate, duplicate, t], index_existing), 1);
+            assert_eq!(*doc.get(r), stream(b"glyphs"));
+            assert_eq!(doc.get(t).as_dict().unwrap().get(b"FontFile"), Some(&Object::Ref(r)));
+        }
     }
 
     #[test]
