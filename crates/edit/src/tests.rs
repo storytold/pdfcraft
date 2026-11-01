@@ -1360,6 +1360,101 @@ fn text_page(content: &str) -> Document {
     Document::open(Arc::new(out)).unwrap()
 }
 
+/// The width (third number) of the first `re` rectangle in a content stream.
+fn first_re_width(content: &str) -> Option<f64> {
+    let at = content.find(" re")?;
+    let nums: Vec<f64> = content[..at].split_whitespace().rev().take(4).filter_map(|t| t.parse().ok()).collect();
+    // The four tokens before `re` are `x y w h`; reversed that is `[h, w, y, x]`.
+    nums.get(1).copied()
+}
+
+#[test]
+fn a_tight_clip_around_an_edited_line_is_widened_to_fit_a_longer_replacement() {
+    // #5207: a run boxed in a tight clip (`re W n`, as HTML-to-PDF generators emit per text box)
+    // had its longer replacement cut off at the clip edge, so the new text seemed to vanish. The
+    // clip now widens to hold it. The clip starts at the run's width (helvetica "abc" at 10 pt).
+    let content = "q 72 698 17 14 re W n BT /F1 10 Tf 72 702 Td (abc) Tj ET Q";
+    let mut doc = text_page(content);
+    assert_eq!(first_re_width(&streams(&doc, 0).concat()), Some(17.0));
+
+    text::replace_line(&mut doc, 0, 0, "abcdefghijklmnop").unwrap();
+    let widened = first_re_width(&streams(&doc, 0).concat()).unwrap();
+    // Wide enough for the new text (which is far wider than the original 17 pt box).
+    assert!(widened >= pdfcraft_fonts::helvetica_width("abcdefghijklmnop", 10.0), "clip not widened to fit: {widened}");
+
+    // A replacement that already fits leaves the clip untouched.
+    let mut fits = text_page(content);
+    text::replace_line(&mut fits, 0, 0, "ab").unwrap();
+    assert_eq!(first_re_width(&streams(&fits, 0).concat()), Some(17.0), "a shorter line must not touch the clip");
+
+    // A clip that does not bound the run (a page-wide band) is left alone, not scaled by the text.
+    let wide = "q 0 698 600 14 re W n BT /F1 10 Tf 72 702 Td (abc) Tj ET Q";
+    let mut loose = text_page(wide);
+    text::replace_line(&mut loose, 0, 0, "abcdefghijklmnop").unwrap();
+    assert_eq!(first_re_width(&streams(&loose, 0).concat()), Some(600.0), "a loose clip must not be widened");
+}
+
+/// A negative-width clipping rectangle is legal PDF syntax but must not be enlarged in the
+/// positive direction: doing so could shrink the visible area instead of showing more text.
+#[test]
+fn replacing_text_does_not_widen_a_negative_width_clip() {
+    let content = "q 89 698 -17 14 re W n BT /F1 10 Tf 72 702 Td (abc) Tj ET Q";
+    let mut doc = text_page(content);
+    text::replace_line(&mut doc, 0, 0, "abcdefghijklmnop").unwrap();
+    assert_eq!(first_re_width(&streams(&doc, 0).concat()), Some(-17.0));
+}
+
+/// The rectangular bounding box of turned text is not its advance along the baseline.
+#[test]
+fn replacing_turning_text_does_not_widen_a_horizontal_clip() {
+    let content = "q 72 698 17 14 re W n BT /F1 10 Tf 0 1 -1 0 72 702 Tm (abc) Tj ET Q";
+    let mut doc = text_page(content);
+    text::replace_line(&mut doc, 0, 0, "abcdefghijklmnop").unwrap();
+    assert_eq!(first_re_width(&streams(&doc, 0).concat()), Some(17.0));
+}
+
+/// A negative Tz reverses the glyph advance even if the text matrix itself is upright.
+/// Increasing the rectangle to its right would hide more of the replacement, not show it.
+#[test]
+fn a_negative_horizontal_text_scale_does_not_widen_the_wrong_edge() {
+    let content = "q 72 698 17 14 re W n BT /F1 10 Tf -100 Tz 89 702 Td (abc) Tj ET Q";
+    let mut doc = text_page(content);
+    text::replace_line(&mut doc, 0, 0, "abcdefghijklmnop").unwrap();
+    assert_eq!(first_re_width(&streams(&doc, 0).concat()), Some(17.0));
+}
+
+/// Mirroring the text matrix and horizontal scale together yields rightward advance again.
+#[test]
+fn two_horizontal_reflections_allow_widening_on_the_right() {
+    let content = "q 72 698 17 14 re W n BT /F1 10 Tf -100 Tz -1 0 0 1 72 702 Tm (abc) Tj ET Q";
+    let mut doc = text_page(content);
+    text::replace_line(&mut doc, 0, 0, "abcdefghijklmnop").unwrap();
+    let width = first_re_width(&streams(&doc, 0).concat()).unwrap();
+    assert!(width > 17.0, "two reflections restore rightward advance: {width}");
+}
+
+/// When a replacement requires Type3 glyphs the original font cannot encode, its original
+/// metrics cannot be used to measure the replacement (they would discard unsupported glyphs).
+#[test]
+fn clipped_text_uses_type3_fallback_advances_for_longer_replacements() {
+    let content = "q 72 698 17 14 re W n BT /F1 10 Tf 72 702 Td (abc) Tj ET Q";
+    let mut doc = text_page(content);
+    let changed = text::replace_line(&mut doc, 0, 0, "ўзбекча ғўза ўзбекча ғўза").unwrap();
+    assert_eq!(changed.substituted.as_deref(), Some("Inter Type3"));
+    let width = first_re_width(&streams(&doc, 0).concat()).unwrap();
+    assert!(width > 17.0, "a long Type3 replacement must expand its tight clipping rectangle: {width}");
+}
+
+#[test]
+fn a_tight_clip_is_not_widened_over_text_beside_it() {
+    // #5207: the run's neighbour sits on the same band, just past the clip. Widening the clip for a
+    // longer replacement would draw it over that neighbour, so the clip stays as it was.
+    let content = "q 72 698 17 14 re W n BT /F1 10 Tf 72 702 Td (abc) Tj ET Q BT /F1 10 Tf 140 702 Td (xyz) Tj ET";
+    let mut doc = text_page(content);
+    text::replace_line(&mut doc, 0, 0, "abcdefghijklmnop").unwrap();
+    assert_eq!(first_re_width(&streams(&doc, 0).concat()), Some(17.0), "a neighbour in the way keeps the clip");
+}
+
 #[test]
 fn tracked_text_keeps_words_in_paragraphs_and_objects() {
     let expected = "TRACKED SAMPLE TEXT";
