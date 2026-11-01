@@ -9,7 +9,9 @@
 //! names, `"out"` included, must be inside DIR, and relative paths resolve inside it.
 //!
 //! The MCP server never starts on its own: it runs only when this command is launched (normally
-//! by an agent configured to use it), talks only over stdio, and exits when stdin closes.
+//! by an agent configured to use it), talks only over stdio, and exits when stdin closes. With
+//! `--connect FILE` its tools act on the documents of the open window started with
+//! `pdfcraft --control FILE`, through that window's authenticated control channel (`control`).
 //!
 //! `check` is the robustness harness: every file is opened, inspected and fully rendered in a
 //! *separate child process* with a wall-clock timeout, so hangs, panics and aborts in any
@@ -35,9 +37,11 @@ use pdfcraft_render::{PageRenderer, RenderConfig, RenderRequest, RequestKind, in
 macro_rules! mcp_usage {
     () => {
         "\
-pdfcraft-cli mcp    [--root DIR] [--compact] [--automation-read-root DIR] [--automation-write-root DIR]
+pdfcraft-cli mcp    [--root DIR] [--compact] [--connect FILE] [--automation-read-root DIR] [--automation-write-root DIR]
                                                            MCP server on stdin/stdout (opt-in)
                                                            --compact lists a core set of tools plus tool_search and tool_call
+                                                           --connect FILE: tools act on the open window started with
+                                                           `pdfcraft --control FILE`, plus read-only ui_* inspection tools
                                                            --automation-read-root / --automation-write-root confine the files the
                                                            agent's tools read (open, combine, import, fonts, certificates…) and
                                                            write (save, export, extract, split, reports…) to DIR, links followed;
@@ -55,6 +59,7 @@ macro_rules! mcp_usage {
 
 mod check;
 mod commands;
+mod control;
 mod options;
 mod run;
 mod ui;
