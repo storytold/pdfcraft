@@ -698,6 +698,10 @@ fn runs(fmt: &str) -> Vec<(char, usize, bool)> {
 /// letters is copied as is; a month or day out of range shows as its number.
 pub fn format_day(fmt: &str, (y, m, d): (i64, u32, u32), lang: &DateLanguage) -> String {
     let runs = runs(fmt);
+    // Preserve the established whole-pattern inflection used by languages such as Russian.
+    let with_day = runs.iter().any(|&(c, n, escaped)| !escaped && c == 'd' && n <= 2);
+    // Hebrew's prefixed forms are used only when the day has already appeared before the month.
+    let preceding_day_controls_month = lang.months_short_with_day.is_some();
     let month = (m as usize).checked_sub(1);
     let weekday = weekday(y, m, d);
     let mut out = String::new();
@@ -708,8 +712,9 @@ pub fn format_day(fmt: &str, (y, m, d): (i64, u32, u32), lang: &DateLanguage) ->
             ('y', 4..) => out.push_str(&format!("{:04}", y.clamp(0, 9999))),
             ('y', _) => out.push_str(&format!("{:02}", y.rem_euclid(100))),
             ('m', 3..) => {
+                let use_contextual_form = if preceding_day_controls_month { day_before_month } else { with_day };
                 let names = if n >= 4 {
-                    lang.months_with_day.filter(|_| day_before_month).unwrap_or(lang.months)
+                    lang.months_with_day.filter(|_| use_contextual_form).unwrap_or(lang.months)
                 } else {
                     lang.months_short_with_day.filter(|_| day_before_month).unwrap_or(lang.months_short)
                 };
@@ -836,6 +841,14 @@ mod tests {
         assert_eq!(format_day("mmm d, yyyy", day, lang), "אפר׳ 8, 2026");
         assert_eq!(format_day("mmmm", day, lang), "אפריל");
         assert_eq!(format_day("mmm", day, lang), "אפר׳");
+    }
+
+    #[test]
+    fn existing_inflected_months_keep_whole_pattern_behavior() {
+        let day = (2026, 4, 8);
+        let russian = date_language("ru").unwrap();
+        assert_eq!(format_day("d mmmm yyyy", day, russian), "8 апреля 2026");
+        assert_eq!(format_day("mmmm d, yyyy", day, russian), "апреля 8, 2026");
     }
 
     #[test]
