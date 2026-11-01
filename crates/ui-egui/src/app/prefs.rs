@@ -244,10 +244,14 @@ impl PdfCraftApp {
             self.print_draft.paper = paper;
         }
         if let Some(on) = v.get("print_eco_mode").and_then(serde_json::Value::as_bool) {
+            let was_eco = self.print_draft.eco_mode;
             self.print_draft.eco_mode = on;
             if on {
                 self.print_draft.grayscale = true;
                 self.print_draft.duplex = Some(pdfcraft_engine::print::spool::Duplex::LongEdge);
+            } else if was_eco {
+                self.print_draft.grayscale = false;
+                self.print_draft.duplex = None;
             }
         }
         if let Some(on) = v["highlight_fields"].as_bool() {

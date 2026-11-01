@@ -959,10 +959,50 @@ fn eco_mode_enables_grayscale_and_duplex_and_persists() {
     assert!(h.state().print_draft.grayscale);
     assert_eq!(h.state().print_draft.duplex, Some(Duplex::LongEdge));
 
+    // Changing Two-sided combo away from "Flip on long edge" unsets eco_mode while keeping grayscale.
+    h.get_by(|n| n.role() == egui::accesskit::Role::ComboBox && n.value().as_deref() == Some("Flip on long edge")).click();
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Off").click();
+    h.run_steps(2);
+    assert!(!h.state().print_draft.eco_mode);
+    assert!(h.state().print_draft.grayscale);
+    assert_eq!(h.state().print_draft.duplex, Some(Duplex::Off));
+
+    // Selecting "Flip on long edge" again re-synchronizes eco_mode back to true.
+    h.get_by(|n| n.role() == egui::accesskit::Role::ComboBox && n.value().as_deref() == Some("Off")).click();
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Flip on long edge").click();
+    h.run_steps(2);
+    assert!(h.state().print_draft.eco_mode);
+    assert!(h.state().print_draft.grayscale);
+    assert_eq!(h.state().print_draft.duplex, Some(Duplex::LongEdge));
+
     // Unticking Eco mode resets grayscale and duplex.
     h.get_by_label("Eco mode (Grayscale, two-sided)").click();
     h.run_steps(2);
     assert!(!h.state().print_draft.eco_mode);
     assert!(!h.state().print_draft.grayscale);
     assert_eq!(h.state().print_draft.duplex, None);
+
+    // Restoring print_eco_mode = false clears eco settings if eco was previously active.
+    let mut eco_app = PdfCraftApp::new();
+    eco_app.print_draft.eco_mode = true;
+    eco_app.print_draft.grayscale = true;
+    eco_app.print_draft.duplex = Some(Duplex::LongEdge);
+    eco_app.restore(r#"{"print_eco_mode": false}"#);
+    assert!(!eco_app.print_draft.eco_mode);
+    assert!(!eco_app.print_draft.grayscale);
+    assert_eq!(eco_app.print_draft.duplex, None);
+
+    // Simplex printer drops duplex when job is created.
+    let mut simplex_draft = h.state().print_draft.clone();
+    simplex_draft.printer = Some("SimplexPrinter".into());
+    simplex_draft.printers = vec![pdfcraft_engine::print::spool::Printer {
+        name: "SimplexPrinter".into(),
+        default: false,
+        two_sided: Some(false),
+        description: String::new(),
+    }];
+    simplex_draft.duplex = Some(Duplex::LongEdge);
+    assert_eq!(simplex_draft.job("doc.pdf").duplex, None);
 }
