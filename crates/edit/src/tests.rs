@@ -2553,6 +2553,181 @@ fn lines_in_a_font_without_a_base_font_stay_one_block() {
     assert_eq!(reading[0].text, "First second");
 }
 
+/// Some producers flip the CTM and set a negative `Tf` size (with a negative `Tz`) so the text
+/// still reads upright, and place every word with its own `Tm`. The line's size is the size's
+/// magnitude, so the words join into lines and the lines into one paragraph instead of a block
+/// per word, whose negative size also made the Office and Markdown exports call every longer
+/// word a heading.
+#[test]
+fn words_set_in_a_negative_font_size_under_a_flipped_ctm_join_into_a_paragraph() {
+    let doc = text_page(
+        "1 0 0 1 0 792 cm 1 0 0 -1 0 0 cm BT /F1 -10 Tf -100 Tz \
+         1 0 0 1 72 100 Tm (The) Tj 1 0 0 1 94 100 Tm (assembler) Tj 1 0 0 1 143.5 100 Tm (creates) Tj \
+         1 0 0 1 72 111 Tm (object) Tj 1 0 0 1 104 111 Tm (files.) Tj ET",
+    );
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert!(lines.iter().all(|l| (l.size - 10.0).abs() < 0.01), "{:?}", lines.iter().map(|l| l.size).collect::<Vec<_>>());
+    let reading = text::reading_blocks(&doc, 0).unwrap();
+    assert_eq!(reading.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), ["The assembler creates object files."]);
+    assert!((reading[0].size - 10.0).abs() < 0.01, "{}", reading[0].size);
+}
+
+/// A negative `Tf` under a CTM turned half a turn (with a positive `Tz`) also reads upright, its
+/// glyphs advancing right on the page though text space runs left: the words join with their
+/// spaces. A run set in the opposite sign on the same baseline is drawn upside down, and stays a
+/// line of its own.
+#[test]
+fn a_negative_font_size_under_a_half_turned_ctm_joins_words_and_keeps_opposite_signs_apart() {
+    let doc = text_page(
+        "-1 0 0 -1 600 800 cm BT /F1 -10 Tf \
+         1 0 0 1 528 700 Tm (The) Tj 1 0 0 1 506 700 Tm (assembler) Tj 1 0 0 1 456.5 700 Tm (creates) Tj ET",
+    );
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["The assembler creates"]);
+    let doc = text_page(
+        "1 0 0 1 0 792 cm 1 0 0 -1 0 0 cm BT /F1 -10 Tf -100 Tz 1 0 0 1 72 100 Tm (Upright) Tj \
+         /F1 10 Tf 100 Tz 1 0 0 1 112 100 Tm (Over) Tj ET",
+    );
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["Upright", "Over"]);
+}
+
+/// An underline added to such a paragraph has a positive line width.
+#[test]
+fn underlining_text_set_in_a_negative_font_size_writes_a_positive_line_width() {
+    let mut doc = text_page("1 0 0 1 0 792 cm 1 0 0 -1 0 0 cm BT /F1 -10 Tf -100 Tz 1 0 0 1 72 100 Tm (Underlined words) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { underline: Some(true), ..Default::default() }).unwrap();
+    let content = page_content(&doc);
+    let widths: Vec<f64> =
+        content.split_whitespace().collect::<Vec<_>>().windows(2).filter(|w| w[1] == "w").filter_map(|w| w[0].parse().ok()).collect();
+    assert!(!widths.is_empty() && widths.iter().all(|w| *w > 0.0), "{widths:?}\n{content}");
+}
+
+/// Rewriting such a paragraph keeps the source's negative `Tf`, whether the paragraph is one style
+/// or mixed (here a word in red) and whether or not a new size is asked for: a positive one under
+/// the flipped CTM would draw the text mirrored, running left from where it started.
+#[test]
+fn rewriting_text_set_in_a_negative_font_size_keeps_it_upright() {
+    let page = |red: &str| {
+        text_page(&format!(
+            "1 0 0 1 0 792 cm 1 0 0 -1 0 0 cm BT /F1 -10 Tf -100 Tz \
+             1 0 0 1 72 100 Tm (The) Tj 1 0 0 1 94 100 Tm (assembler) Tj {red} 1 0 0 1 143.5 100 Tm (creates) Tj ET"
+        ))
+    };
+    let sized = text::BlockStyle { size: Some(12.0), ..Default::default() };
+    for (red, style) in [("", text::BlockStyle::default()), ("", sized.clone()), ("1 0 0 rg", text::BlockStyle::default()), ("1 0 0 rg", sized)] {
+        let mut doc = page(red);
+        text::rewrite_block(&mut doc, 0, 0, Some("The assembler creates object files"), &style).unwrap();
+        let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+        let shown = || lines.iter().map(|l| (&l.text, l.rect)).collect::<Vec<_>>();
+        assert!(lines.iter().all(|l| l.rect[0] > 71.0), "{red:?} {:?}: {:?}", style.size, shown());
+        assert!(lines.iter().any(|l| l.rect[2] > 200.0), "{red:?} {:?}: {:?}", style.size, shown());
+        let want = style.size.unwrap_or(10.0);
+        assert!(lines.iter().all(|l| (l.size - want).abs() < 0.01), "{red:?} {:?}", lines.iter().map(|l| l.size).collect::<Vec<_>>());
+    }
+}
+
+/// A zero `Tf`, written with a sign or without, is not a negative size: asking for a size draws
+/// the text running right from where it started, through the single-style rewrite and through the
+/// styled one (which a line break takes), and keeping the size doesn't fail. Zero size has no
+/// direction, so `-0.0` must not mirror the new text.
+#[test]
+fn a_zero_font_size_is_read_and_rewritten_without_a_sign() {
+    for tf in ["0", "-0", "0.0", "-0.0"] {
+        let page = || text_page(&format!("BT /F1 {tf} Tf 72 700 Td (Zero size) Tj ET BT /F1 12 Tf 72 600 Td (Plain text) Tj ET"));
+        let doc = page();
+        let lines = text::text_lines(&doc, 0).unwrap();
+        assert!(lines.iter().all(|l| l.size >= 0.0 && l.size.is_finite()), "{tf}: {:?}", lines.iter().map(|l| l.size).collect::<Vec<_>>());
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        let block = blocks.iter().position(|b| b.text.contains("Zero")).unwrap();
+        for draft in ["Zero size now", "Zero size\nnow"] {
+            let sized = text::BlockStyle { size: Some(12.0), ..Default::default() };
+            let mut doc = page();
+            text::rewrite_block(&mut doc, 0, block, Some(draft), &sized).unwrap();
+            let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+            let rewritten: Vec<_> = lines.iter().filter(|l| l.text.contains("Zero")).map(|l| (&l.text, l.rect, l.size)).collect();
+            assert!(!rewritten.is_empty(), "{tf} {draft:?}: {:?}", lines.iter().map(|l| &l.text).collect::<Vec<_>>());
+            for (_, rect, size) in &rewritten {
+                assert!(rect[0] > 71.0 && rect[2] > 100.0 && (*size - 12.0).abs() < 0.01, "{tf} {draft:?}: {rewritten:?}");
+            }
+            let mut doc = page();
+            text::rewrite_block(&mut doc, 0, block, Some(draft), &text::BlockStyle::default()).unwrap();
+        }
+    }
+}
+
+/// A negative `Tf` with a positive `Tz` runs the glyphs against text space x: under a CTM turned
+/// half a turn they still read upright, left to right. Widths are lengths, so such a paragraph
+/// wraps, aligns and justifies in its box exactly as the same text set the ordinary way, and its
+/// alignment and underline go along the glyphs: it never wrapped, and aligning moved it off the page.
+#[test]
+fn text_running_against_text_space_wraps_and_aligns_like_any_other() {
+    use crate::added::Align;
+    let draft = "The assembler creates object files from every source file it is given and the linker joins them";
+    let written = |content: &str, draft: &str, align: Option<Align>| {
+        let mut doc = text_page(content);
+        let style = text::BlockStyle { width: Some(120.0), align, ..Default::default() };
+        text::rewrite_block(&mut doc, 0, 0, Some(draft), &style).unwrap();
+        text::text_lines(&reopen(&doc), 0).unwrap().iter().map(|l| (l.text.clone(), l.rect[0], l.rect[2])).collect::<Vec<_>>()
+    };
+    let rows = |content: &str, align: Option<Align>| written(content, draft, align);
+    let plain = "BT /F1 10 Tf 72 692 Td (The assembler creates) Tj ET";
+    let turned = "q -1 0 0 -1 612 792 cm BT /F1 -10 Tf 1 0 0 1 540 100 Tm (The assembler creates) Tj ET Q";
+    // The negative `Tz` turns the glyphs back along text space, so this one only keeps its sign.
+    let flipped = "1 0 0 1 0 792 cm 1 0 0 -1 0 0 cm BT /F1 -10 Tf -100 Tz 1 0 0 1 72 100 Tm (The assembler creates) Tj ET";
+    for source in [turned, flipped] {
+        for align in [None, Some(Align::Center), Some(Align::Right), Some(Align::Justify)] {
+            let (want, got) = (rows(plain, align), rows(source, align));
+            assert!(want.len() > 1, "{want:?}");
+            assert_eq!(got.len(), want.len(), "{source} {align:?}: {got:?}");
+            for (w, g) in want.iter().zip(&got) {
+                assert_eq!(w.0.trim(), g.0.trim(), "{align:?}");
+                assert!((w.1 - g.1).abs() < 1.0 && (w.2 - g.2).abs() < 1.0, "{source} {align:?}: {w:?} against {g:?}");
+            }
+        }
+    }
+    // A single line with no width asked for grows towards the margin the glyphs run to.
+    let mut doc = text_page(turned);
+    let longer = "The assembler creates object files from every source file";
+    text::rewrite_block(&mut doc, 0, 0, Some(longer), &text::BlockStyle::default()).unwrap();
+    assert_eq!(text::text_lines(&reopen(&doc), 0).unwrap().len(), 1);
+    // The underline runs along the glyphs too: towards negative x in this text space.
+    let mut doc = text_page(turned);
+    let style = text::BlockStyle { width: Some(400.0), underline: Some(true), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, None, &style).unwrap();
+    let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+    let at = |name: &str| ops.iter().find(|o| o.is(name)).and_then(|o| o.num(0)).unwrap();
+    assert!(at("l") < at("m"), "{ops:?}");
+
+    // Set to run left with nothing turning it back, the text keeps to its width and its page,
+    // also with a line break, which would otherwise take the styled path: that one lays rows out
+    // from their left edge. Formatting part of it is refused, as it is for turned text.
+    let with_break = format!("Short\n{draft}");
+    for run_left in
+        ["BT /F1 -10 Tf 1 0 0 1 300 600 Tm (The assembler creates) Tj ET", "BT /F1 10 Tf -100 Tz 1 0 0 1 300 600 Tm (The assembler creates) Tj ET"]
+    {
+        for align in [None, Some(Align::Center), Some(Align::Right), Some(Align::Justify)] {
+            for draft in [draft, with_break.as_str()] {
+                let got = written(run_left, draft, align);
+                assert!(got.len() > 1 && got.iter().all(|r| r.1 > 100.0 && r.2 < 320.0), "{run_left} {align:?}: {got:?}");
+            }
+        }
+        let mut doc = text_page(run_left);
+        let red_word = text::RangeStyle {
+            range: 0..3,
+            family: None,
+            resource: None,
+            size: None,
+            color: Some([1.0, 0.0, 0.0]),
+            underline: None,
+            char_spacing: None,
+            scale: None,
+        };
+        let style = text::BlockStyle { ranges: vec![red_word], ..Default::default() };
+        assert!(text::rewrite_block(&mut doc, 0, 0, Some("The assembler creates"), &style).is_err(), "{run_left}");
+    }
+}
+
 /// Two subsets of one font can carry different encodings: here the second names `-` and `l`
 /// through `/Differences` (codes 33 and 34), so the same letters have different codes. The visual
 /// line still joins and reads in coding order (#3661).
@@ -7173,6 +7348,15 @@ fn vertical_text_lines_are_columns_and_editing_one_keeps_its_neighbour() {
         assert!(texts.contains(&(470.0, "ABCDEF")), "{texts:?}");
         assert!(texts.contains(&(300.0, "ABCD")), "{texts:?}");
     }
+}
+
+/// A vertical column set in a negative `Tf` under a flipped CTM still runs down the page: two runs
+/// a small gap apart join with their word space.
+#[test]
+fn a_vertical_column_set_in_a_negative_font_size_joins_with_its_space() {
+    let doc = vertical_page("1 0 0 -1 0 800 cm BT /V1 -20 Tf 1 0 0 1 500 80 Tm <00410042> Tj 1 0 0 1 500 125 Tm <00430044> Tj ET");
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["AB CD"]);
 }
 
 /// Gives `/V1` an embedded CMap that uses itself: which way its glyphs advance can't be known.
