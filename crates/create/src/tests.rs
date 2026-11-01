@@ -2237,12 +2237,14 @@ fn a_stencil_masks_decode_array_can_hold_references() {
     for decode in ["[0 5 0 R]", "[6 0 R 1]", "[6 0 R 5 0 R]"] {
         assert_eq!(export(decode), identity, "{decode}");
     }
-    // A reference that only leads back to itself holds no number. The read ends, and the file comes
-    // out one way round or the other.
-    for decode in ["[7 0 R 0]", "[1 7 0 R]", "[8 0 R 0]", "[1 8 0 R]", "[7 0 R 8 0 R]"] {
-        let file = export(decode);
-        assert!(file == inverted || file == identity, "{decode}");
+    // A reference that only leads back to itself holds no number, and an end that is missing or isn't
+    // a number leaves the default mapping, whichever end it is.
+    for decode in ["[7 0 R 0]", "[1 7 0 R]", "[8 0 R 0]", "[1 8 0 R]", "[7 0 R 8 0 R]", "[1]", "[1 /Name]", "[/Name 0]"] {
+        assert_eq!(export(decode), identity, "{decode}");
     }
+    // Equal ends aren't the two ways round either, and a number too long to hold reads as infinite.
+    assert_eq!(export("[1 1]"), identity);
+    assert_eq!(export(&format!("[{} 0]", "9".repeat(400))), identity);
 }
 
 /// A mask of other proportions than its image is scaled to it, however far apart they are: the
