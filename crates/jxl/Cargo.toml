@@ -1,0 +1,16 @@
+[package]
+name = "pdfcraft-jxl"
+description = "JPEG XL for PDF images: reversible JPEG recompression and reconstruction (thin, panic-guarded wrappers around jixel and jxl-oxide)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# The encoder: pure Rust (BSD-3-Clause OR Apache-2.0), a port of libjxl-tiny. Pinned exactly: a young
+# crate, updated on purpose after a spike (the same version PhotoCraft pins).
+jixel = { version = "=0.4.2", default-features = false, features = ["avx", "neon", "sse", "wasm"] }
+# The decoder, already used for reading JPEG XL images (vendored hayro-syntax patch 29).
+jxl-oxide = { version = "=0.12.6", default-features = false }
