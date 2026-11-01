@@ -62,8 +62,9 @@ windows = { version = "0.62", default-features = false, features = ["std", "UI_V
 # socket. `std` has no Unix sockets on Windows, and calling Winsock directly needs unsafe, which
 # our workspace forbids. Already in the lockfile through zbus; pinned exactly, review before bumping.
 uds_windows = "=1.2.1"
-# Taskbar and Alt+Tab icon (`ICON_BIG`, issue #3818): `ViewportBuilder::with_icon` only sets the
-# title bar's small icon (`ICON_SMALL`). Already in the tree through eframe, patched to vendor/winit.
+# Full-resolution taskbar and Alt+Tab icon (`ICON_BIG`, issue #3818). Set both window icons
+# directly so eframe cannot replace ICON_BIG with a system-sized copy. Already in the tree
+# through eframe and covered by the workspace's winit patch.
 winit = { version = "0.30", default-features = false }
 
 [build-dependencies]

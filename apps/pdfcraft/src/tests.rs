@@ -139,11 +139,20 @@ fn the_desktop_frame_is_turned_off_only_when_the_app_draws_one() {
 
 #[test]
 fn the_window_and_windows_taskbar_icons_load_from_the_bundled_png() {
-    let icon = super::native_options(false, false, eframe::Renderer::Glow).viewport.icon.expect("the bundled PNG decodes as the window icon");
+    let icon = eframe::icon_data::from_png_bytes(super::APP_ICON_PNG).expect("the bundled PNG decodes as the window icon");
     assert!(icon.width > 0 && icon.height > 0);
     assert_eq!(icon.rgba.len(), (icon.width as usize) * (icon.height as usize) * 4);
+    #[cfg(not(target_os = "windows"))]
+    assert_eq!(super::native_options(false, false, eframe::Renderer::Glow).viewport.icon.as_deref(), Some(&icon));
     #[cfg(target_os = "windows")]
     {
+        // None would load eframe's default icon; only the explicit empty sentinel prevents
+        // its first-frame setter from overwriting our full-resolution ICON_BIG.
+        for renderer in [eframe::Renderer::Glow, eframe::Renderer::Wgpu] {
+            let viewport = super::native_options(false, false, renderer).viewport;
+            assert_eq!(viewport.icon.as_deref(), Some(&egui::IconData::default()));
+        }
+        assert_eq!((icon.width, icon.height), (256, 256));
         let mut installed = None;
         super::install_taskbar_icon(super::APP_ICON_PNG, |icon| installed = Some(icon));
         assert!(installed.is_some(), "issue #3818: ICON_BIG loads and installs from APP_ICON_PNG");
