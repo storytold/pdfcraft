@@ -1,7 +1,7 @@
 use super::error::{Result, ToolError, failed};
 use super::json::{Args, nest_rows, security, summary};
 use super::paths::{child, read_input, write_atomic};
-use super::{Arc, Automation, BlockKey, DocId, Document, Edit, Path, PathBuf, TextBlock, Value, comments, file_access, json};
+use super::{Arc, Automation, BlockKey, DocId, Document, Edit, Path, TextBlock, Value, comments, json};
 
 /// How far a watermark may be moved from the page centre, in points (a page is at most 14,400).
 const WATERMARK_MAX_OFFSET: f64 = 20_000.0;
@@ -130,18 +130,18 @@ impl Automation {
     pub(crate) fn doc_save_with(&mut self, a: &Args, write: impl FnOnce(&Path, &[u8]) -> Result<()>) -> Result<Value> {
         let doc = self.doc(a)?;
         let id = doc.id;
-        let target = match a.opt_str("path")? {
+        let explicit = a.opt_str("path")?;
+        let target = match explicit {
             Some(p) => self.resolve(p, true)?,
             None => {
                 // Saving in place writes where the file was opened from, which the read root
-                // allows and the write root may not.
+                // allows and the write root may not. It also goes through --root again: a
+                // folder on the remembered path may have become a link out since (#1791).
                 let own = doc.path.clone().ok_or_else(|| failed("the document has never been saved: pass a path"))?;
-                let own_path = PathBuf::from(&own);
-                self.check_roots(&own, &own_path, file_access::Access::Write)?;
-                own_path
+                self.resolve(&own, true)?
             }
         };
-        let same_file = doc.path.as_deref().is_some_and(|p| Path::new(p) == target);
+        let same_file = explicit.is_none() || doc.path.as_deref().is_some_and(|p| Path::new(p) == target);
         // Saving to a new file is a full rewrite unless asked otherwise, like Save As.
         let full = a.opt_bool("full")?.unwrap_or(!same_file);
         let flatten_fill_sign = a.opt_bool("flatten_fill_sign")?.unwrap_or(false);
