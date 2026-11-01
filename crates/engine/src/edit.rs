@@ -347,6 +347,11 @@ pub enum Edit {
     MarkTagArtifact {
         object: pdfcraft_cos::ObjRef,
     },
+    /// A layout table as plain blocks: the table, its row groups and rows become Div tags and its
+    /// cells P tags (Div when they hold tags), without their Table attributes.
+    LayoutTableToBlocks {
+        object: pdfcraft_cos::ObjRef,
+    },
     /// Document JavaScripts: add, replace (`script`) or remove (`None`) the document-level
     /// script `name`.
     SetDocumentScript {
