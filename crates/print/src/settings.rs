@@ -180,7 +180,13 @@ impl Default for Settings {
 }
 
 /// Common paper sizes (points, portrait).
-pub const PAPERS: [(&str, (f64, f64)); 21] = [
+///
+/// The Japanese sheets are the JIS sizes (JIS P 0138 defines the B series), which Japanese
+/// printing uses: JIS B4 257 × 364 mm and JIS B5 182 × 257 mm are not the ISO 216 B sheets
+/// (250 × 353 mm and 176 × 250 mm), which are listed next to them unqualified. はがき and
+/// 往復はがき, the 長形 and 角形 envelopes and 四六判 are the sizes of Japanese office and book
+/// printing.
+pub const PAPERS: [(&str, (f64, f64)); 33] = [
     ("US Letter", (612.0, 792.0)),
     ("US Legal", (612.0, 1008.0)),
     ("Tabloid", (792.0, 1224.0)),
@@ -188,6 +194,18 @@ pub const PAPERS: [(&str, (f64, f64)); 21] = [
     ("A4", (595.28, 841.89)),
     ("A5", (419.53, 595.28)),
     ("A6", (297.64, 419.53)),
+    ("B4", (708.66, 1000.63)),
+    ("B5", (498.90, 708.66)),
+    ("B4 (JIS)", (728.50, 1031.81)),
+    ("B5 (JIS)", (515.91, 728.50)),
+    ("B6 (JIS)", (362.83, 515.91)),
+    ("Japanese Postcard", (283.46, 419.53)),
+    ("Japanese Double Postcard", (419.53, 566.93)),
+    ("Japanese Envelope #3", (340.16, 666.14)),
+    ("Japanese Envelope #4", (255.12, 581.10)),
+    ("Kaku #2", (680.31, 941.10)),
+    ("Kaku #3", (612.28, 785.20)),
+    ("Yonroku-ban", (360.0, 532.91)),
     ("ARCH A (9 x 12 in)", (648.0, 864.0)),
     ("ARCH B (12 x 18 in)", (864.0, 1296.0)),
     ("ARCH C (18 x 24 in)", (1296.0, 1728.0)),
@@ -205,7 +223,7 @@ pub const PAPERS: [(&str, (f64, f64)); 21] = [
 ];
 
 /// `PAPERS` index of the 4 × 6 in shipping label.
-pub const LABEL_PAPER: usize = 19;
+pub const LABEL_PAPER: usize = 31;
 
 /// The CUPS media name for `PAPERS[index]`, so the spooler feeds the sheet the PDF was laid out
 /// on rather than the queue's default; `None` only past the end of `PAPERS`. The common sizes
@@ -214,6 +232,12 @@ pub const LABEL_PAPER: usize = 19;
 /// spec and the IANA registry have them: a driverless printer may take only the names it
 /// advertises. They carry their dimensions, so CUPS feeds the PPD size of those dimensions
 /// whatever the driver calls it (`ARCHD`, `AnsiD`) (#3752).
+///
+/// The Japanese sheets keep the names Japanese queues take: the JIS B series by its PPD names
+/// (JIS P 0138 defines the B series, and those PPD keywords are the JIS sheets, not the ISO
+/// ones), and the papers without one as `Custom.<width>x<height>mm`, the form CUPS documents
+/// and the system's media lookup recognises. The 4 × 6 shipping label keeps `w288h432`, the
+/// path that works today.
 pub fn cups_media(index: usize) -> Option<&'static str> {
     Some(match PAPERS.get(index)?.0 {
         "US Letter" => "Letter",
@@ -223,6 +247,18 @@ pub fn cups_media(index: usize) -> Option<&'static str> {
         "A4" => "A4",
         "A5" => "A5",
         "A6" => "iso_a6_105x148mm",
+        "B4 (JIS)" => "B4",
+        "B5 (JIS)" => "B5",
+        "B6 (JIS)" => "B6",
+        "B4" => "Custom.250x353mm",
+        "B5" => "Custom.176x250mm",
+        "Japanese Postcard" => "Custom.100x148mm",
+        "Japanese Double Postcard" => "Custom.148x200mm",
+        "Japanese Envelope #3" => "Custom.120x235mm",
+        "Japanese Envelope #4" => "Custom.90x205mm",
+        "Kaku #2" => "Custom.240x332mm",
+        "Kaku #3" => "Custom.216x277mm",
+        "Yonroku-ban" => "Custom.127x188mm",
         "ARCH A (9 x 12 in)" => "na_arch-a_9x12in",
         "ARCH B (12 x 18 in)" => "na_arch-b_12x18in",
         "ARCH C (18 x 24 in)" => "na_arch-c_18x24in",
@@ -247,4 +283,30 @@ pub fn cups_media(index: usize) -> Option<&'static str> {
 /// dialog's jobs and `doc_print`'s alike.
 pub fn media_option(index: usize) -> Option<(String, String)> {
     cups_media(index).map(|m| ("media".to_string(), m.to_string()))
+}
+
+/// The index in [`PAPERS`] of the paper a person or an agent names: its label, the name before a
+/// label's notes ("ARCH D" for "ARCH D (24 x 36 in)", "4 x 6 in label", "US Letter" as
+/// "Letter"), compared ignoring case and anything that is not a letter or a digit, so
+/// `"B5 (JIS)"`, `"b5 (jis)"` and `"b5jis"` all name JIS B5. A B size without "(JIS)" is the ISO
+/// sheet, as the PDF standard defines it, and `None` means no paper is called that.
+pub fn find_paper(name: &str) -> Option<usize> {
+    let key = paper_key(name);
+    if key.is_empty() {
+        return None;
+    }
+    PAPERS.iter().position(|(label, _)| key == paper_key(label) || key == paper_key(label_name(label)) || key == paper_key(&label.replace("US ", "")))
+}
+
+/// `s` in lower case with everything but letters and digits removed, for comparing paper names.
+fn paper_key(s: &str) -> String {
+    s.chars().filter(|c| c.is_alphanumeric()).map(|c| c.to_ascii_lowercase()).collect()
+}
+
+/// A paper label's name without its notes: "ARCH D (24 x 36 in)" is "ARCH D", but "B4 (JIS)"
+/// keeps its brackets, which qualify the name rather than measure it.
+fn label_name(label: &str) -> &str {
+    let Some((name, notes)) = label.split_once(" (") else { return label };
+    let measures = notes.chars().any(|c| c.is_ascii_digit()) && (notes.contains("mm") || notes.contains(" in"));
+    if measures { name } else { label }
 }

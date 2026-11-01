@@ -1122,6 +1122,24 @@ fn bundled_catalogs_are_consistent() {
     }
 }
 
+/// The Japanese paper labels the Print dialog offers are in **every** bundled catalog. `tl!`
+/// falls back to English, so a missing key is silent; this pins the seven the paper list added.
+/// It asks nothing of the rest of a catalog, which stays allowed to be partial.
+#[test]
+fn the_japanese_paper_labels_are_in_every_bundled_catalog() {
+    const LABELS: [&str; 7] =
+        ["Japanese Postcard", "Japanese Double Postcard", "Japanese Envelope #3", "Japanese Envelope #4", "Kaku #2", "Kaku #3", "Yonroku-ban"];
+    for l in LANGUAGES.iter().filter(|l| l.code != "en") {
+        let (entries, errors) = parse_entries(l.source, l.plural_forms());
+        assert!(errors.is_empty(), "{}: {errors:?}", l.code);
+        for label in LABELS {
+            let entry = entries.iter().find(|e| e.context.is_empty() && e.source == label);
+            let Some(entry) = entry else { panic!("{}: no entry for {label:?}", l.code) };
+            assert!(!entry.translation.trim().is_empty(), "{}: {label:?} has an empty translation", l.code);
+        }
+    }
+}
+
 /// The translation gaps report (`cargo xtask i18n-report`, a step of `cargo xtask ci`): for
 /// each language, how many English strings it has no translation for, and the first few.
 /// It never fails: a missing string shows in English.

@@ -22,6 +22,16 @@ fn duplex(value: &str, cut_stack: bool) -> Result<Option<spool::Duplex>> {
     })
 }
 
+/// Adds the sheet the PDF was laid out on to a job's driver options, so a queue does not print
+/// on its default paper. It goes **after** the caller's `printer_options`, which is the order
+/// `main` has always sent: the sheets are already laid out for that paper, so it wins over a
+/// `media` the caller also named.
+fn add_media(options: &mut Vec<(String, String)>, paper: usize) {
+    if let Some(media) = print::cups_media(paper) {
+        options.push(("media".to_string(), media.to_string()));
+    }
+}
+
 /// [`duplex`] for a job laid out as `layout`: the name is checked either way, and a booklet
 /// decides two-sided itself (#2707), as the Print dialog does (`print::booklet_duplex`).
 fn job_duplex(value: &str, layout: &Layout) -> Result<Option<spool::Duplex>> {
@@ -40,29 +50,20 @@ fn bad(m: impl Into<String>) -> ToolError {
 /// `doc_print`'s `paper`, by its name or a short form ("Letter", "ARCH D"), as its `PAPERS`
 /// index and size; US Letter when none is given.
 fn paper_named(name: Option<&str>) -> Result<(usize, (f64, f64))> {
-    let mut papers = PAPERS.iter().enumerate();
-    let found = match name {
-        None => papers.next(),
-        Some(p) => papers.find(|(_, (n, _))| {
-            n.eq_ignore_ascii_case(p)
-                || n.replace("US ", "").eq_ignore_ascii_case(p)
-                || n.split(" (").next().is_some_and(|name| name.eq_ignore_ascii_case(p))
-        }),
+    let index = match name {
+        None => 0,
+        Some(p) => print::find_paper(p).ok_or_else(|| {
+            bad(format!("unknown paper {p:?}; choose one of {}", PAPERS.iter().map(|(name, _)| *name).collect::<Vec<_>>().join(", ")))
+        })?,
     };
-    found.map(|(index, (_, size))| (index, *size)).ok_or_else(|| {
-        bad(format!(
-            "unknown paper {:?}; choose one of {}",
-            name.unwrap_or_default(),
-            PAPERS.iter().map(|(name, _)| *name).collect::<Vec<_>>().join(", ")
-        ))
-    })
+    Ok((index, PAPERS[index].1))
 }
 
 /// The spooler job for `doc_print` to `printer`. It feeds the paper the PDF was laid out on
 /// (`PAPERS[paper]`, as `media` after the driver's `options`) rather than the queue's default
 /// paper, which a job naming none got (A4 under Letter sheets on the queue in #3752).
 fn spool_job(a: &Args, printer: &str, title: String, duplex: Option<spool::Duplex>, paper: usize) -> Result<spool::Job> {
-    let options = match a.get("options") {
+    let mut options = match a.get("options") {
         None => Vec::new(),
         Some(Value::Object(m)) => m
             .iter()
@@ -73,6 +74,7 @@ fn spool_job(a: &Args, printer: &str, title: String, duplex: Option<spool::Duple
             .collect::<Result<Vec<_>>>()?,
         Some(_) => return Err(bad("options must be an object of option keys and choices from printer_options")),
     };
+    add_media(&mut options, paper);
     Ok(spool::Job {
         printer: if printer == "default" { None } else { Some(printer.to_string()) },
         copies: a.opt_int("copies")?.unwrap_or(1).clamp(1, 999) as u32,
@@ -81,7 +83,7 @@ fn spool_job(a: &Args, printer: &str, title: String, duplex: Option<spool::Duple
         scaling: spool::Scaling::Exact,
         grayscale: a.opt_bool("grayscale")?.unwrap_or(false),
         title,
-        options: options.into_iter().chain(print::media_option(paper)).collect(),
+        options,
     })
 }
 
@@ -249,6 +251,22 @@ mod tests {
         assert_eq!(duplex("short-edge", false).ok(), Some(Some(spool::Duplex::ShortEdge)));
         assert!(duplex("long-edge", true).is_err());
         assert!(duplex("sideways", false).is_err());
+    }
+
+    /// The job names the sheet the PDF was laid out on, so the queue does not fall back to its
+    /// own default paper. It comes after the caller's `printer_options`, as `main` sends it, so
+    /// the laid-out paper wins over a `media` the caller also named.
+    #[test]
+    fn job_media_follows_the_callers_options_and_names_the_laid_out_paper() {
+        let postcard = print::find_paper("Japanese Postcard").expect("Japanese Postcard is a paper");
+        let mut options = vec![("InputSlot".to_string(), "Tray2".to_string())];
+        add_media(&mut options, postcard);
+        assert_eq!(options, vec![("InputSlot".to_string(), "Tray2".to_string()), ("media".to_string(), "Custom.100x148mm".to_string()),]);
+
+        // A `media` from `printer_options` stays, but the laid-out paper follows it and wins.
+        let mut explicit = vec![("Media".to_string(), "A4".to_string())];
+        add_media(&mut explicit, postcard);
+        assert_eq!(explicit, vec![("Media".to_string(), "A4".to_string()), ("media".to_string(), "Custom.100x148mm".to_string()),]);
     }
 
     /// #3752: `doc_print` to a printer sent no paper, so the queue's default paper stood in for

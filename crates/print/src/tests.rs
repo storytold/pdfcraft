@@ -696,7 +696,7 @@ fn paper_matching_accepts_rounded_metric_sizes_but_not_custom_or_invalid_sizes()
 /// paper (A4 on the report's queue) whatever the sheets were laid out on.
 #[test]
 fn every_paper_reaches_the_spooler_by_a_name_of_its_size() {
-    let ppd_keywords = ["Letter", "Legal", "Tabloid", "A3", "A4", "A5", "w288h432", "Env10"];
+    let ppd_keywords = ["Letter", "Legal", "Tabloid", "A3", "A4", "A5", "B4", "B5", "B6", "w288h432", "Env10"];
     for (i, (name, (w, h))) in PAPERS.iter().enumerate() {
         let media = cups_media(i).unwrap_or_else(|| panic!("{name} has no media name"));
         assert_eq!(media_option(i), Some(("media".to_string(), media.to_string())));
@@ -705,9 +705,11 @@ fn every_paper_reaches_the_spooler_by_a_name_of_its_size() {
         if ppd_keywords.contains(&media) {
             continue;
         }
-        // The rest are PWG 5101.1 names, which end in their dimensions: CUPS feeds the driver's
-        // size of those dimensions, so they must be the paper's.
+        // The rest are PWG 5101.1 names or the Japanese papers' `Custom.<w>x<h>mm`, which end in
+        // their dimensions: CUPS feeds the driver's size of those dimensions, so they must be the
+        // paper's.
         let dims = media.rsplit('_').next().unwrap_or_default();
+        let dims = dims.strip_prefix("Custom.").unwrap_or(dims);
         let (dims, points_per_unit) = match (dims.strip_suffix("mm"), dims.strip_suffix("in")) {
             (Some(mm), _) => (mm, 72.0 / 25.4),
             (_, Some(inches)) => (inches, 72.0),
@@ -733,6 +735,18 @@ fn every_paper_reaches_the_spooler_by_a_name_of_its_size() {
             ("A4", "A4"),
             ("A5", "A5"),
             ("A6", "iso_a6_105x148mm"),
+            ("B4", "Custom.250x353mm"),
+            ("B5", "Custom.176x250mm"),
+            ("B4 (JIS)", "B4"),
+            ("B5 (JIS)", "B5"),
+            ("B6 (JIS)", "B6"),
+            ("Japanese Postcard", "Custom.100x148mm"),
+            ("Japanese Double Postcard", "Custom.148x200mm"),
+            ("Japanese Envelope #3", "Custom.120x235mm"),
+            ("Japanese Envelope #4", "Custom.90x205mm"),
+            ("Kaku #2", "Custom.240x332mm"),
+            ("Kaku #3", "Custom.216x277mm"),
+            ("Yonroku-ban", "Custom.127x188mm"),
             ("ARCH A (9 x 12 in)", "na_arch-a_9x12in"),
             ("ARCH B (12 x 18 in)", "na_arch-b_12x18in"),
             ("ARCH C (18 x 24 in)", "na_arch-c_18x24in"),
@@ -753,6 +767,119 @@ fn every_paper_reaches_the_spooler_by_a_name_of_its_size() {
 
 /// #2734: the US #10 envelope (4.125 × 9.5 in) is offered, fed by its PPD name and laid out at
 /// its own size.
+#[test]
+fn japanese_papers_keep_their_measured_sizes_and_names() {
+    let at = |name: &str| find_paper(name).unwrap_or_else(|| panic!("no paper named {name:?}"));
+    let near = |name: &str, w: f64, h: f64| {
+        let (pw, ph) = PAPERS[at(name)].1;
+        assert!((pw - w).abs() < 0.02 && (ph - h).abs() < 0.02, "{name}: {pw} x {ph}, not {w} x {h}");
+    };
+    // JIS B (JIS P 0138) is not ISO B: the two are separate papers of different sizes.
+    near("B4 (JIS)", 728.50, 1031.81);
+    near("B5 (JIS)", 515.91, 728.50);
+    near("B6 (JIS)", 362.83, 515.91);
+    near("B4", 708.66, 1000.63);
+    near("B5", 498.90, 708.66);
+    // はがき, 往復はがき, 封筒 長形3号/長形4号, 角形2号/角形3号 and 四六判.
+    near("Japanese Postcard", 283.46, 419.53);
+    near("Japanese Double Postcard", 419.53, 566.93);
+    near("Japanese Envelope #3", 340.16, 666.14);
+    near("Japanese Envelope #4", 255.12, 581.10);
+    near("Kaku #2", 680.31, 941.10);
+    near("Kaku #3", 612.28, 785.20);
+    near("Yonroku-ban", 360.0, 532.91);
+    assert_ne!(at("B4"), at("B4 (JIS)"), "a B size without (JIS) is the ISO sheet");
+    assert_ne!(at("B5"), at("B5 (JIS)"));
+
+    // Case, spaces and punctuation do not matter, whether the label or its short name is given.
+    for (name, want) in [
+        ("b5 (jis)", "B5 (JIS)"),
+        ("B5(JIS)", "B5 (JIS)"),
+        ("b5jis", "B5 (JIS)"),
+        ("JapanesePostcard", "Japanese Postcard"),
+        ("japanese postcard", "Japanese Postcard"),
+        ("kaku#2", "Kaku #2"),
+        ("arch d", "ARCH D (24 x 36 in)"),
+        ("ARCHD", "ARCH D (24 x 36 in)"),
+        ("letter", "US Letter"),
+        ("4 x 6 in label", "4 x 6 in label (101.6 x 152.4 mm)"),
+    ] {
+        assert_eq!(PAPERS[at(name)].0, want, "{name}");
+    }
+    assert_eq!(find_paper("ARCH Z"), None);
+    assert_eq!(find_paper(""), None);
+    assert_eq!(find_paper("   "), None);
+    // Every paper is found by its own label, and the CUPS media name of the label still exists.
+    for (i, (name, _)) in PAPERS.iter().enumerate() {
+        assert_eq!(find_paper(name), Some(i), "{name}");
+    }
+    assert_eq!(cups_media(LABEL_PAPER), Some("w288h432"), "4×6 ラベルは今までどおり PPD のキーワード");
+    for (name, media) in [
+        ("A6", "iso_a6_105x148mm"),
+        ("B4 (JIS)", "B4"),
+        ("B5 (JIS)", "B5"),
+        ("B6 (JIS)", "B6"),
+        ("B4", "Custom.250x353mm"),
+        ("B5", "Custom.176x250mm"),
+        ("Japanese Postcard", "Custom.100x148mm"),
+        ("Japanese Double Postcard", "Custom.148x200mm"),
+        ("Japanese Envelope #3", "Custom.120x235mm"),
+        ("Japanese Envelope #4", "Custom.90x205mm"),
+        ("Kaku #2", "Custom.240x332mm"),
+        ("Kaku #3", "Custom.216x277mm"),
+        ("Yonroku-ban", "Custom.127x188mm"),
+    ] {
+        assert_eq!(cups_media(at(name)), Some(media), "{name}");
+    }
+}
+
+#[test]
+fn japanese_papers_reach_the_spooler_as_a_custom_media_size() {
+    let at = |name: &str| find_paper(name).unwrap_or_else(|| panic!("no paper named {name:?}"));
+    // What the queue is asked to feed the sheet with: a standard PPD name where one exists,
+    // otherwise the CUPS custom-size form. The older `w<h>` PPD keywords are gone — they only
+    // work on a queue that advertises that exact keyword.
+    for (name, media) in [("Japanese Postcard", "Custom.100x148mm"), ("B4", "Custom.250x353mm"), ("Kaku #2", "Custom.240x332mm")] {
+        let job = Job { options: vec![("media".to_string(), cups_media(at(name)).unwrap().to_string())], ..Job::default() };
+        let args = lp_args(&job).join(" ");
+        assert!(args.contains(&format!("-o media={media}")), "{name}: {args}");
+    }
+    // No Japanese sheet is asked for as a PPD keyword any more: every one without a standard
+    // name uses the custom-size form. The 4 x 6 label keeps its `w288h432` keyword, which is the
+    // path that works today (shipping-label printing) and is unchanged by this PR.
+    for (i, (name, _)) in PAPERS.iter().enumerate() {
+        if i == LABEL_PAPER {
+            continue;
+        }
+        let Some(media) = cups_media(i) else { continue };
+        assert!(!(media.starts_with('w') && media.contains('h')), "{name}: {media} is a PPD keyword, not a custom size");
+    }
+}
+
+#[test]
+fn printed_sheets_use_the_japanese_paper_as_their_media_box() {
+    let doc = fixture(1);
+    // The sheet the job is laid out on is the printed page's /MediaBox, so a Japanese sheet prints
+    // at its own size rather than being scaled onto the queue's paper.
+    for (name, w, h) in [
+        ("Japanese Postcard", 283.46, 419.53),
+        ("B5 (JIS)", 515.91, 728.50),
+        ("B6 (JIS)", 362.83, 515.91),
+        ("Yonroku-ban", 360.0, 532.91),
+        ("B5", 498.90, 708.66),
+        ("A4", 595.28, 841.89),
+    ] {
+        let paper = PAPERS[find_paper(name).unwrap()].1;
+        let s = Settings { pages: vec![0], paper, layout: Layout::Size(SizeMode::Fit), orientation: Orientation::Portrait, ..Settings::default() };
+        let out = impose(&doc, &s).unwrap();
+        let printed = Document::open(Arc::new(out)).unwrap();
+        let pages = pdfcraft_model::pages(&printed);
+        assert_eq!(pages.len(), 1, "{name}");
+        let (pw, ph) = pages[0].display_size(&printed);
+        assert!((pw - w).abs() < 0.02 && (ph - h).abs() < 0.02, "{name}: {pw} x {ph}, not {w} x {h}");
+    }
+}
+
 #[test]
 fn us_number_10_envelope_is_offered_and_fed_by_name() {
     let index = matching_paper((684.0, 297.0)).unwrap();
