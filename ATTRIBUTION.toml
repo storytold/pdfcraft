@@ -2509,6 +2509,50 @@ adobe_data = true
 usage = "Character-code mapping tables required to read CJK PDFs. Non-visual data, allowed by AGENTS.md §1.1"
 sha256 = "ddf37af521d904d5646c2fc37b2b7e912dc1b56f0d210190b61f598154758e46"
 
+[[asset]]
+path = "vendor/hayro-jpeg2000/assets/CGATS001Compat-v2-micro.icc"
+title = "CGATS001Compat-v2-micro ICC profile (CMYK)"
+author = "saucecontrol (Compact-ICC-Profiles)"
+source = "https://github.com/saucecontrol/Compact-ICC-Profiles (via hayro-jpeg2000 0.3.5 assets/)"
+licence = "CC0-1.0"
+licence_file = "vendor/hayro-jpeg2000/assets/LICENSE.txt"
+kind = "data"
+usage = "Colour profile the JPEG 2000 decoder assumes for CMYK images. Non-visual data"
+sha256 = "73e1ba37d2bad5bab2a964f40a9eed96209666efc067c3322626214bbef234a0"
+
+[[asset]]
+path = "vendor/hayro-jpeg2000/assets/LAB.icc"
+title = "LAB ICC profile"
+author = "The Hayro Authors"
+source = "hayro-jpeg2000 0.3.5 assets/ (made with lcms)"
+licence = "CC0-1.0"
+licence_file = "vendor/hayro-jpeg2000/assets/LICENSE.txt"
+kind = "data"
+usage = "Colour profile the JPEG 2000 decoder uses for CIELab images. Non-visual data"
+sha256 = "a6efc5c30ece826eba2a83ddf5aa7026289b0c5ffa90acb129bc59ab8d7f5c59"
+
+[[asset]]
+path = "vendor/hayro-jpeg2000/assets/ProPhoto-v2-micro.icc"
+title = "ProPhoto-v2-micro ICC profile"
+author = "saucecontrol (Compact-ICC-Profiles)"
+source = "https://github.com/saucecontrol/Compact-ICC-Profiles (via hayro-jpeg2000 0.3.5 assets/)"
+licence = "CC0-1.0"
+licence_file = "vendor/hayro-jpeg2000/assets/LICENSE.txt"
+kind = "data"
+usage = "Colour profile the JPEG 2000 decoder uses for ROMM-RGB images. Non-visual data"
+sha256 = "00b0ac58f99189b071bfca63b5434fd9f48ad08c92b17e6ce525e54b9d1a8319"
+
+[[asset]]
+path = "crates/render/tests/data/jpx-multithreaded-rgb.j2k"
+title = "Synthetic 768 × 512 JPEG 2000 codestream (shapes and noise) for the multithreaded decode test"
+author = "PdfCraft contributors"
+source = "Contributor-original: seeded random rectangles, ellipses and noise drawn with Pillow, encoded with OpenJPEG (irreversible, 32 × 32 code-blocks, five resolution levels)"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "image"
+usage = "Raster test fixture (crates/render/src/raster/tests.rs, jpx_decoded_on_several_threads_has_the_samples_of_one_thread)"
+sha256 = "eeaaed7542b428dec86cdbaa8cbc9aad9c2b8a9dabb97a0b5b645a72b16cede3"
+
 [[bundled]]
 crate = "hayro-interpret"
 version = "0.7.0"

@@ -2862,6 +2862,44 @@ fn jpx_gray_rgb_and_alpha_keep_eight_bit_samples() {
     }
 }
 
+/// hayro-jpeg2000 patch (1): a JPEG 2000 image large enough to be decoded on several threads has
+/// the samples it has when decoded on one, at full size and at the reduced sizes a decode hint
+/// asks for.
+#[test]
+fn jpx_decoded_on_several_threads_has_the_samples_of_one_thread() {
+    use hayro::hayro_syntax::object::stream::ImageDecodeParams;
+
+    // 768 × 512 RGB, irreversible, 32 × 32 code-blocks, five resolution levels: synthetic shapes
+    // and noise, so every code-block carries data.
+    let codestream = include_bytes!("../../tests/data/jpx-multithreaded-rgb.j2k");
+    let mut bytes = format!(
+        "%PDF-1.7\n\
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+2 0 obj << /Type /Pages /Kids [] /Count 0 >> endobj\n\
+3 0 obj << /Type /XObject /Subtype /Image /Width 768 /Height 512 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /JPXDecode /Length {} >> stream\n",
+        codestream.len()
+    )
+    .into_bytes();
+    bytes.extend_from_slice(codestream);
+    bytes.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF");
+    let pdf = Pdf::new(Arc::new(bytes)).unwrap();
+    let stream = pdf.objects().into_iter().filter_map(|object| object.into_stream()).find(|stream| !stream.filters().is_empty()).unwrap();
+
+    for target in [None, Some((384, 256)), Some((150, 100))] {
+        let decode = |threads| {
+            hayro_jpeg2000::set_decode_threads(Some(threads));
+            let decoded = stream.decoded_image(&ImageDecodeParams { target_dimension: target, ..Default::default() });
+            hayro_jpeg2000::set_decode_threads(None);
+            decoded.unwrap().data.into_owned()
+        };
+        let one = decode(1);
+        assert!(one.iter().any(|&sample| sample != one[0]), "{target:?}: the image decodes to detail");
+        for threads in [2, 3, 8] {
+            assert!(decode(threads) == one, "{target:?}: {threads} threads decode other samples than one");
+        }
+    }
+}
+
 #[test]
 fn jpx_32_bit_image_does_not_prevent_other_page_content_from_rendering() {
     for bpc in [8, 32] {
