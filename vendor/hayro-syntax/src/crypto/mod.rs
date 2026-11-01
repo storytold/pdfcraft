@@ -145,7 +145,9 @@ pub(crate) fn get(
     };
 
     let byte_length = length / 8;
-    if byte_length == 0 {
+    // PdfCraft patch: revisions 2-4 derive an RC4 or AES-128 key from a 16-byte MD5 hash, so
+    // a longer /Length is malformed (and would slice past the end of the hash).
+    if byte_length == 0 || (revision <= 4 && byte_length > 16) {
         return Err(InvalidEncryption);
     }
 
@@ -901,5 +903,17 @@ mod pdfcraft_password_tests {
         let user = rev56_dict(6, "caf\u{E9}".as_bytes(), b"owner", &key);
         assert_eq!(unlock(&user, "cafe\u{301}"), ok, "R6");
         assert_eq!(unlock(&user, "cafe"), wrong, "R6");
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn legacy_key_length_above_128_bits_is_refused_not_a_panic() {
+        use crate::reader::{Reader, ReaderContext, ReaderExt};
+        let hex32 = "00".repeat(32);
+        for (length, expected) in [(128, DecryptionError::PasswordProtected), (256, InvalidEncryption)] {
+            let dict = format!("<< /Filter /Standard /V 2 /R 3 /Length {length} /P -4 /O <{hex32}> /U <{hex32}> >>");
+            let dict = Reader::new(dict.as_bytes()).read_with_context::<Dict<'_>>(&ReaderContext::dummy());
+            assert_eq!(get(&dict.unwrap(), b"", b"").err(), Some(expected), "/Length {length}");
+        }
     }
 }
