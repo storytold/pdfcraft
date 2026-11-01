@@ -714,7 +714,7 @@ impl DocView {
             page_widget: None,
             pan_hold_until: 0.0,
             slow_pages: HashSet::new(),
-            comments: Default::default(),
+            comments: crate::comments::CommentView::from_info(info),
             measure: Default::default(),
             forms: Default::default(),
             prepare: Default::default(),
@@ -765,6 +765,7 @@ impl DocView {
         // Thumbnail drags hold page indexes from before the change.
         self.panel_drag = None;
         self.org_drag = None;
+        self.comments.document_changed(info);
         self.reset_coarse_state();
     }
 
@@ -3287,7 +3288,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // One crop, then back to selecting (as Acrobat does).
     let cropped = view.pending_edit.as_ref().is_some_and(|e| matches!(e, pdfcraft_engine::Edit::SetPageBox { .. }));
     let mut tool = app.quick_tool;
-    comments::keys(ui.ctx(), view, &mut tool, allowed);
+    comments::keys(ui.ctx(), view, info, &mut tool, allowed);
     if preparing {
         crate::prepare::keys(ui.ctx(), view);
     }

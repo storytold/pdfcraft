@@ -82,6 +82,10 @@ pub fn delete_annotation(doc: &mut Document, page: usize, index: usize) -> Resul
 pub fn deletable(doc: &Document, page: usize, index: usize) -> Result<(), AnnotError> {
     let list = annots(doc, page_ref(doc, page)?);
     let target = list.get(index).ok_or(AnnotError::NoSuchAnnotation { page, index })?;
+    let target_obj = target.as_ref().map_or_else(|| doc.resolve(target), |r| doc.get(super::info::final_ref(doc, r)));
+    if !target_obj.as_dict().is_some_and(super::lookup::is_comment_dict) {
+        return Err(AnnotError::NoSuchAnnotation { page, index });
+    }
     if let Some(r) = target.as_ref() {
         unlocked(doc, r)?;
     }

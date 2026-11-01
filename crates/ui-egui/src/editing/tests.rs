@@ -365,6 +365,40 @@ fn save_commits_the_open_text_box() {
 }
 
 #[test]
+fn moving_pages_cancels_an_in_progress_drawing() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] >>",
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+
+    let mut app = crate::PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    app.open_bytes("a.pdf", None, pdf).unwrap();
+    let drawing =
+        || Some(crate::comments::Gesture::Draw { page: 0, tool: crate::comments::CommentTool::Ink, points: vec![[10.0, 10.0], [30.0, 20.0]] });
+    app.views[0].comments.gesture = drawing();
+    assert!(app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
+    assert!(app.views[0].comments.gesture.is_some(), "rotating the page keeps the drawing on it");
+    app.views[0].comments.gesture = drawing();
+    assert!(app.apply_edit(pdfcraft_engine::Edit::MovePages { pages: vec![1], to: 0 }));
+    assert!(app.views[0].comments.gesture.is_none(), "the drawing's page index would now be a different page");
+}
+
+#[test]
 fn save_asks_where_to_keep_an_email_attachment_and_leaves_the_temporary_copy_alone() {
     let dir = staging_dir("mail-temp");
     let cache = dir.join("INetCache").join("Content.Outlook").join("AB12CD34");

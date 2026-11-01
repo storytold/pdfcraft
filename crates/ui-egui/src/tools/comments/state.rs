@@ -172,6 +172,17 @@ pub struct CommentView {
     pub tool_done: bool,
     /// What the inline editor (`editing`) does with the keyboard the next time it is drawn.
     pub(crate) editor_focus: Option<EditorFocus>,
+    /// Snapshot of `(page, index)` comment slot identity from the last `DocInfo`, used to detect
+    /// when an edit removes or shifts `/Annots` entries under an active selection or editor.
+    slots: std::collections::HashMap<(usize, usize), CommentSlot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CommentSlot {
+    subtype: String,
+    name: Option<String>,
+    page_ord: usize,
+    page_count: usize,
 }
 
 /// A one-off change to the keyboard focus of the Comments panel's inline editor. The editor
@@ -186,6 +197,70 @@ pub(crate) enum EditorFocus {
 }
 
 impl CommentView {
+    /// Initial commenting state for `info`, recording its current annotation slots.
+    pub(crate) fn from_info(info: &DocInfo) -> Self {
+        Self { slots: Self::snapshot_slots(info), ..Default::default() }
+    }
+
+    /// Captures `(page, index)` comment slot identity for every comment in `info`.
+    fn snapshot_slots(info: &DocInfo) -> std::collections::HashMap<(usize, usize), CommentSlot> {
+        let mut by_page = std::collections::HashMap::<usize, Vec<usize>>::new();
+        for a in &info.annotations {
+            by_page.entry(a.page).or_default().push(a.index);
+        }
+        for indices in by_page.values_mut() {
+            indices.sort_unstable();
+            indices.dedup();
+        }
+        let mut slots = std::collections::HashMap::with_capacity(info.annotations.len());
+        for a in &info.annotations {
+            let indices = by_page.get(&a.page).map(Vec::as_slice).unwrap_or_default();
+            let page_ord = indices.binary_search(&a.index).unwrap_or(0);
+            let page_count = indices.len();
+            slots.insert((a.page, a.index), CommentSlot { subtype: a.subtype.clone(), name: a.name.clone(), page_ord, page_count });
+        }
+        slots
+    }
+
+    /// Prunes comment state whose `(page, index)` slot was removed or shifted by a document change.
+    pub(crate) fn document_changed(&mut self, info: &DocInfo) {
+        let next = Self::snapshot_slots(info);
+        let page_count = info.pages.len();
+        let same_slot = |page: usize, index: usize| -> bool {
+            let Some(cur) = next.get(&(page, index)) else {
+                return false;
+            };
+            if self.slots.is_empty() {
+                return true;
+            }
+            self.slots.get(&(page, index)).is_some_and(|old| {
+                cur.subtype == old.subtype && cur.name == old.name && cur.page_ord == old.page_ord && cur.page_count >= old.page_count
+            })
+        };
+        if self.selected.is_some_and(|(p, i)| !same_slot(p, i)) {
+            self.selected = None;
+        }
+        if self.editing.as_ref().is_some_and(|(p, i, _)| !same_slot(*p, *i)) {
+            self.editing = None;
+            self.editor_focus = None;
+        }
+        if self.composer.as_ref().is_some_and(|c| match c.kind {
+            ComposerKind::Edit(i) => !same_slot(c.page, i),
+            _ => c.page >= page_count,
+        }) {
+            self.composer = None;
+        }
+        if self.gesture.as_ref().is_some_and(|g| match g {
+            Gesture::Draw { page, .. } => *page >= page_count,
+            Gesture::Move { page, index, .. } | Gesture::Resize { page, index, .. } | Gesture::Reshape { page, index, .. } => {
+                !same_slot(*page, *index)
+            }
+        }) {
+            self.gesture = None;
+        }
+        self.slots = next;
+    }
+
     /// Takes back the last point of a polygon, cloud or connected lines being drawn; the first
     /// point's removal cancels the drawing. Returns whether there was such a drawing.
     pub fn undo_point(&mut self) -> bool {
@@ -219,16 +294,19 @@ impl CommentView {
         }
     }
 
-    /// The annotation at `gone` was just deleted; `before` and `after` are the document's
+    /// The annotation at `gone` was just deleted; `before` and `info` hold the document's
     /// annotations until then and now. The selection and the inline editor stay on what they
     /// were on, where it now is (deleting a reply keeps its comment selected), and close when it
     /// went too.
-    pub(crate) fn annotation_deleted(&mut self, before: &[Annotation], after: &[Annotation], gone: (usize, usize)) {
-        self.selected = self.selected.and_then(|k| after_delete(before, after, gone, k));
-        self.editing = self.editing.take().and_then(|(p, i, text)| after_delete(before, after, gone, (p, i)).map(|(p, i)| (p, i, text)));
-        if self.editing.is_none() {
-            self.editor_focus = None;
-        }
+    pub(crate) fn annotation_deleted(&mut self, before: &[Annotation], info: &DocInfo, gone: (usize, usize)) {
+        let selected = self.selected.and_then(|k| after_delete(before, &info.annotations, gone, k));
+        let editing = self.editing.take().and_then(|(p, i, text)| after_delete(before, &info.annotations, gone, (p, i)).map(|(p, i)| (p, i, text)));
+        let focus = self.editor_focus.take();
+        // Other transient state still needs conservative pruning; refresh the slot snapshot too.
+        self.document_changed(info);
+        self.selected = selected;
+        self.editor_focus = editing.as_ref().and(focus);
+        self.editing = editing;
     }
 
     /// Undo or Redo just ran. Either may have put annotations back or taken them away, on any

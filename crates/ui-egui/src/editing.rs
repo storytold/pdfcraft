@@ -27,28 +27,41 @@ fn new_text_typed(v: &crate::DocView) -> bool {
     v.content.draft.as_ref().is_some_and(|d| d.index.is_none() && !d.text.trim().is_empty())
 }
 
-/// Keeps the pages (or comment) the user acted on selected, where they now are. `annots_before`
-/// is a deleted annotation's page's annotations before the delete (empty for other edits).
-fn select_after_edit(
-    view: &mut crate::DocView,
-    edit: Edit,
-    info: &pdfcraft_render::DocInfo,
-    annots_before: &[pdfcraft_render::Annotation],
-    quick_tool: crate::QuickTool,
-) {
+/// Clear an unfinished page-anchored drawing or composer when a page edit shifts or removes `page`.
+fn clear_shifted_page_comment_state(view: &mut crate::DocView, shifted_from: usize) {
+    if matches!(view.comments.gesture, Some(crate::comments::Gesture::Draw { page, .. }) if page >= shifted_from) {
+        view.comments.gesture = None;
+    }
+    if view.comments.composer.as_ref().is_some_and(|c| !matches!(c.kind, crate::comments::ComposerKind::Edit(_)) && c.page >= shifted_from) {
+        view.comments.composer = None;
+    }
+}
+
+/// Keeps the pages (or newly added comment) the user acted on selected, where they now are.
+fn select_after_edit(view: &mut crate::DocView, edit: Edit, info: &pdfcraft_render::DocInfo, quick_tool: crate::QuickTool) {
     match edit {
         Edit::MovePages { pages, to } => {
+            clear_shifted_page_comment_state(view, 0);
             let n = pages.iter().collect::<std::collections::BTreeSet<_>>().len();
             let to = to.min(info.pages.len() - n);
             view.select_pages(&(to..to + n).collect::<Vec<_>>());
         }
         Edit::DuplicatePages { pages, at: Some(at) } => {
+            clear_shifted_page_comment_state(view, at);
             let n = pages.iter().collect::<std::collections::BTreeSet<_>>().len();
             let at = at.min(info.pages.len().saturating_sub(n));
             view.select_pages(&(at..at + n).collect::<Vec<_>>());
         }
-        Edit::InsertBlankPage { at, .. } => view.select_pages(&[at.min(info.pages.len() - 1)]),
-        Edit::DeletePages { .. } => view.select_pages(&[]),
+        Edit::InsertBlankPage { at, .. } => {
+            clear_shifted_page_comment_state(view, at);
+            view.select_pages(&[at.min(info.pages.len() - 1)]);
+        }
+        Edit::DeletePages { pages } => {
+            if let Some(&first) = pages.iter().min() {
+                clear_shifted_page_comment_state(view, first);
+            }
+            view.select_pages(&[]);
+        }
         // A stroke drawn with the pen stays unselected, so the selection box and
         // author popup don't sit over the next stroke (#429).
         Edit::AddAnnotation(a)
@@ -71,7 +84,6 @@ fn select_after_edit(
                 view.comments.open_editor(a.page, n, String::new());
             }
         }
-        Edit::DeleteAnnotation { page, index } => view.comments.annotation_deleted(annots_before, &info.annotations, (page, index)),
         _ => {}
     }
 }
@@ -148,6 +160,12 @@ impl PdfCraftApp {
                 if let Some(page) = comment_page(&edit).or_else(|| content_page(&edit)) {
                     // Comment and content edits change one page: keep every other raster.
                     view.page_changed(page);
+                    if let Edit::DeleteAnnotation { page, index } = &edit {
+                        // Remap surviving comments before generic slot pruning loses their state.
+                        view.comments.annotation_deleted(&annots_before, info, (*page, *index));
+                    } else {
+                        view.comments.document_changed(info);
+                    }
                 } else if let Some(form_before) = form_before
                     && doc.info.pages.len() == page_count_before
                     && doc.xfa.is_some() == had_xfa
@@ -159,6 +177,7 @@ impl PdfCraftApp {
                     for page in changed_pages {
                         view.page_changed(page);
                     }
+                    view.comments.document_changed(info);
                 } else {
                     view.document_changed(info);
                 }
@@ -166,7 +185,7 @@ impl PdfCraftApp {
                     view.comments.comment_added();
                 }
                 // Keep the pages the user acted on selected, where they now are.
-                select_after_edit(view, edit, info, &annots_before, self.quick_tool);
+                select_after_edit(view, edit, info, self.quick_tool);
                 if std::mem::take(&mut view.comments.tool_done) && !self.comment_prefs.pinned {
                     self.quick_tool = crate::QuickTool::Select;
                 }
