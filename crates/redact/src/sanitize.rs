@@ -521,6 +521,7 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
     let count = |h: Hidden| counts.iter().find(|c| c.0 == h).map_or(0, |c| c.1);
     let (root, _) = catalog(doc).ok_or(RedactError::NothingToApply)?;
     let mut done = Vec::new();
+    let kept_before = crate::globals::kept(doc);
     // Every annotation the pages list now: whatever is no longer listed at the end (flattened
     // widgets included) leaves the structure tree too.
     let listed_before = listed_annotations(doc);
@@ -673,6 +674,7 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
     if done.is_empty() {
         return Err(RedactError::NothingToApply);
     }
+    crate::globals::unshare(doc, &kept_before)?;
     doc.require_full_save();
     Ok(done)
 }

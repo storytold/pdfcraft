@@ -276,36 +276,9 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     let mut reader = doc.object_reader();
     stamp_mod_date(&mut reader.document, opts);
     let trailer_in = reader.document.trailer().clone();
-    // Breadth-first walk from the trailer, assigning new numbers in visit order.
-    let mut map: HashMap<ObjRef, u32> = HashMap::new();
-    // Record the type while traversing so classifying packed objects needs no second parse.
-    let mut order: Vec<(ObjRef, bool)> = Vec::new();
-    let mut queue: VecDeque<ObjRef> = VecDeque::new();
-    let visit_refs = |o: &Object, queue: &mut VecDeque<ObjRef>| collect_refs(o, &mut |r| queue.push_back(r));
-    for key in [&b"Root"[..], b"Info", b"Encrypt"] {
-        if let Some(r) = trailer_in.reference(key) {
-            queue.push_back(r);
-        }
-    }
-    // Unknown trailer entries are document data. Objects they alone reference must be written
-    // too, or a full rewrite would keep the key and drop its value.
-    for (key, value) in trailer_in.iter() {
-        if !trailer_key_rewritten(key) {
-            collect_refs(value, &mut |r| queue.push_back(r));
-        }
-    }
-    while let Some(r) = queue.pop_front() {
-        if map.contains_key(&r) {
-            continue;
-        }
-        let o = reader.get(r);
-        if matches!(*o, Object::Null) {
-            continue; // dangling reference: written as null by renumbering below
-        }
-        map.insert(r, output_number(order.len())?);
-        order.push((r, matches!(*o, Object::Stream(_))));
-        visit_refs(&o, &mut queue);
-    }
+    // New numbers go in visit order.
+    let order = walk(&mut reader, &trailer_in);
+    let map: HashMap<ObjRef, u32> = order.iter().enumerate().map(|(i, (r, _))| Ok((*r, output_number(i)?))).collect::<Result<_, CosError>>()?;
     let version = reader.document.version().chars().take(3).collect::<String>();
     let version = if opts.object_streams && version.as_str() < "1.5" { "1.5".to_string() } else { version };
     let mut out = Vec::new();
@@ -484,6 +457,47 @@ pub(crate) fn unlinked_additions(doc: &Document) -> HashSet<u32> {
         }
     }
     pending.into_keys().collect()
+}
+
+/// The objects a full save keeps: breadth first from `trailer`, each with whether it is a stream, so
+/// classifying packed objects needs no second parse. A dangling reference is left out, and written
+/// as null by renumbering.
+fn walk(reader: &mut ObjectReader, trailer: &Dict) -> Vec<(ObjRef, bool)> {
+    let mut seen: HashSet<ObjRef> = HashSet::new();
+    let mut order: Vec<(ObjRef, bool)> = Vec::new();
+    let mut queue: VecDeque<ObjRef> = VecDeque::new();
+    for key in [&b"Root"[..], b"Info", b"Encrypt"] {
+        if let Some(r) = trailer.reference(key) {
+            queue.push_back(r);
+        }
+    }
+    // Unknown trailer entries are document data. Objects they alone reference must be written
+    // too, or a full rewrite would keep the key and drop its value.
+    for (key, value) in trailer.iter() {
+        if !trailer_key_rewritten(key) {
+            collect_refs(value, &mut |r| queue.push_back(r));
+        }
+    }
+    while let Some(r) = queue.pop_front() {
+        if seen.contains(&r) {
+            continue;
+        }
+        let o = reader.get(r);
+        if matches!(*o, Object::Null) {
+            continue;
+        }
+        seen.insert(r);
+        order.push((r, matches!(*o, Object::Stream(_))));
+        collect_refs(&o, &mut |r| queue.push_back(r));
+    }
+    order
+}
+
+/// The objects [`write_full`] would keep of `doc`: anything else leaves the file on a full save.
+pub fn reachable(doc: &Document) -> HashSet<ObjRef> {
+    let mut reader = doc.object_reader();
+    let trailer = reader.document.trailer().clone();
+    walk(&mut reader, &trailer).into_iter().map(|(r, _)| r).collect()
 }
 
 fn collect_refs(o: &Object, f: &mut impl FnMut(ObjRef)) {

@@ -11,9 +11,9 @@ use pdfcraft_content::{Matrix, overlaps};
 use pdfcraft_cos::{Dict, Document, Object, Stream};
 
 /// Most pixels an image may have to be cleared in place (larger ones are removed).
-const MAX_PIXELS: u64 = 64 << 20;
+pub(crate) const MAX_PIXELS: u64 = 64 << 20;
 
-fn components(doc: &Document, s: &Stream) -> Option<usize> {
+pub(crate) fn components(doc: &Document, s: &Stream) -> Option<usize> {
     let cs = doc.resolve(s.dict.get(b"ColorSpace")?);
     let cs = &*cs;
     let name = match cs {
@@ -175,7 +175,7 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
 /// is), whichever is smallest as stored, dictionary included (a tiny image can lose by Group 4's
 /// parameters). Both decode to `data`, cleared before it is coded, so nothing of the original's
 /// code is carried over; Group 4 or JBIG2 that can't code the rows (too wide) is left out.
-fn smallest(dict: Dict, data: &[u8], w: usize, h: usize, bilevel: bool, jbig2: bool) -> Stream {
+pub(crate) fn smallest(dict: Dict, data: &[u8], w: usize, h: usize, bilevel: bool, jbig2: bool) -> Stream {
     let flate = Stream::flate(dict.clone(), data);
     let Some((columns, rows)) = u32::try_from(w).ok().zip(u32::try_from(h).ok()).filter(|_| bilevel) else { return flate };
     let g4 = pdfcraft_filters::encode_g4(data, columns, rows).ok().map(|coded| {
@@ -201,39 +201,4 @@ fn stored_len(s: &Stream) -> usize {
     let mut dict = Vec::new();
     pdfcraft_cos::serialize(&Object::Dict(s.dict.clone()), &mut dict);
     dict.len().saturating_add(s.raw.len())
-}
-
-/// JBIG2 image `s` stored again without its `/JBIG2Globals`: decoded through them, as it is drawn,
-/// and written as the same samples, Flate, Group 4 or JBIG2 coded alone, whichever is smallest
-/// (`smallest`), its other entries kept. `None` when it can't
-/// be decoded for certain (too large, data that doesn't decode, a JBIG2 page of another size than
-/// the image, or not a one-bit image of one component). Redaction does this to every image that
-/// shares a redacted image's globals, since their symbol dictionary holds the shapes of marks drawn
-/// under the area too.
-pub(crate) fn without_globals(doc: &Document, s: &Stream) -> Option<Stream> {
-    let (w, h) = (s.dict.int(b"Width")?, s.dict.int(b"Height")?);
-    if w <= 0 || h <= 0 || (w as u64) * (h as u64) > MAX_PIXELS {
-        return None;
-    }
-    let (w, h) = (w as usize, h as usize);
-    let mask = matches!(s.dict.get(b"ImageMask"), Some(Object::Bool(true)));
-    // JBIG2 codes one-bit images of one component (ISO 32000-2 §7.4.7).
-    if !mask && (components(doc, s)?, s.dict.int(b"BitsPerComponent")?) != (1, 1) {
-        return None;
-    }
-    let bytes = w.div_ceil(8).checked_mul(h)?;
-    // As for `clear`: the filters before the JBIG2 decoder may give up to three bytes for each one
-    // of the raster and a byte a row.
-    let allowance = bytes.checked_add(h)?.checked_mul(3)?.checked_add(4096)?;
-    let mut data = doc.decoded_image_within(s, allowance).ok()?;
-    if data.len() < bytes {
-        return None;
-    }
-    data.truncate(bytes);
-    let mut dict = s.dict.clone();
-    dict.remove(b"Length");
-    // The globals are named in the parameters; the copy is coded alone, as `clear`'s are.
-    dict.remove(b"DecodeParms");
-    dict.remove(b"Alternates");
-    Some(smallest(dict, &data, w, h, true, true))
 }

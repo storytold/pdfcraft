@@ -1242,6 +1242,470 @@ fn globals_a_redacted_jbig2_image_shares_with_another_page_leave_the_file() {
     assert!(matches!(apply(&mut doc, None), Err(RedactError::SharedJbig2Globals(1))));
 }
 
+/// A scan's parts when it keeps its symbols in `/JBIG2Globals`: the dictionary, moved out as segment
+/// data belonging to no page, and the page information and regions that are left.
+struct SharedScan {
+    bits: Vec<u8>,
+    symbols: Vec<u8>,
+    page: Vec<u8>,
+}
+
+fn shared_scan() -> SharedScan {
+    const LETTERS: [[&str; 7]; 3] = [
+        ["#####", "#....", "####.", "#....", "#....", "#....", "#####"],
+        [".###.", "#...#", "#....", "#....", "#....", "#...#", ".###."],
+        ["#...#", "#...#", "#####", "#...#", "#...#", "#...#", "#...#"],
+    ];
+    let (w, h) = (400usize, 40usize);
+    let stride = w / 8;
+    let mut bits = vec![0xFFu8; stride * h];
+    for (line, top) in [2usize, 12, 22, 32].into_iter().enumerate() {
+        for (k, x) in (3..w - 6).step_by(7).enumerate() {
+            for (dy, row) in LETTERS[(k + line) % 3].iter().enumerate() {
+                for (dx, _) in row.bytes().enumerate().filter(|(_, c)| *c == b'#') {
+                    bits[(top + dy) * stride + (x + dx) / 8] &= !(0x80 >> ((x + dx) % 8));
+                }
+            }
+        }
+    }
+    let coded = pdfcraft_filters::encode_jbig2(&bits, w as u32, h as u32).unwrap();
+    // The end of the segment at `at`, and where its page association is (7.2.2 to 7.2.7).
+    let end = |at: usize| {
+        let page = at + 6 + usize::from(coded[at + 5] >> 5);
+        let length = u32::from_be_bytes(coded[page + 1..page + 5].try_into().unwrap());
+        (page + 5 + length as usize, page)
+    };
+    let (dictionary, _) = end(0);
+    assert_eq!(coded[dictionary + 4], 0, "the second segment is the symbol dictionary");
+    let (rest, page) = end(dictionary);
+    let mut symbols = coded[dictionary..rest].to_vec();
+    symbols[page - dictionary] = 0;
+    SharedScan { page: [&coded[..dictionary], &coded[rest..]].concat(), symbols, bits }
+}
+
+/// An image of [`SharedScan`]'s size that uses the dictionary, object 9, by `parms`.
+fn shared_image(parms: &str) -> String {
+    format!("/Type /XObject /Subtype /Image /Width 400 /Height 40 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode {parms}")
+}
+
+/// Two pages of a scan sharing object 9: its symbols, and `LEAK_GLOBALS`, for the shape of a mark found
+/// only under the area. The first page draws image 7 unless told otherwise; the second draws image 8.
+/// `extra` are objects 10 on.
+struct SharedPages {
+    /// What the first page draws, its `/Resources` entries and anything else in its dictionary.
+    content: Vec<u8>,
+    resources: String,
+    page: String,
+    /// Image 7's dictionary and data; image 8's.
+    first: String,
+    first_data: Vec<u8>,
+    other: String,
+    other_data: Vec<u8>,
+    extra: Vec<Vec<u8>>,
+}
+
+const DRAWS: &[u8] = b"q 200 0 0 20 0 100 cm /Im Do Q";
+
+impl SharedPages {
+    fn new(scan: &SharedScan) -> Self {
+        let image = shared_image(SHARED);
+        Self {
+            content: DRAWS.to_vec(),
+            resources: "/XObject << /Im 7 0 R >>".into(),
+            page: String::new(),
+            first: image.clone(),
+            first_data: scan.page.clone(),
+            other: image,
+            other_data: scan.page.clone(),
+            extra: vec![],
+        }
+    }
+
+    fn build(self, scan: &SharedScan) -> Document {
+        let Self { content, resources, page, first, first_data, other, other_data, extra } = self;
+        let mut objs: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_vec(),
+            format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 5 0 R /Resources << {resources} >> {page} >>").into_bytes(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 6 0 R /Resources << /XObject << /Im 8 0 R >> >> >>".to_vec(),
+            stream("", content),
+            stream("", DRAWS),
+            stream(&first, first_data),
+            stream(&other, other_data),
+            stream("", [jbig2_globals(b"LEAK_GLOBALS"), scan.symbols.clone()].concat()),
+        ];
+        objs.extend(extra);
+        pdf(objs)
+    }
+}
+
+/// The samples of the image the page draws as `/Im`.
+fn drawn_samples(doc: &Document, page: usize) -> Vec<u8> {
+    let p = pdfcraft_model::pages(doc).swap_remove(page);
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let xo = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+    match &*doc.get(xo.get(b"Im").unwrap().as_ref().unwrap()) {
+        Object::Stream(s) => doc.decoded_image(s).unwrap(),
+        other => panic!("not an image: {other:?}"),
+    }
+}
+
+const SHARED: &str = "/DecodeParms << /JBIG2Globals 9 0 R >>";
+const CLEARS: [f64; 4] = [0.25, 113.75, 49.75, 120.0];
+const COVERS: [f64; 4] = [0.0, 100.0, 200.0, 120.0];
+
+/// The ways image 7 can leave the document while taking the dictionary's only reason to stay with it.
+fn ways_out(scan: &SharedScan) -> Vec<(&'static str, [f64; 4], SharedPages)> {
+    let base = || SharedPages::new(scan);
+    let in_form = |filter: &str, data: &[u8]| {
+        stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /XObject << /Im 7 0 R >> >> {filter}"), data)
+    };
+    let plain = "/Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceGray";
+    let through_form = |filter: &str, data: &[u8]| SharedPages {
+        content: b"/Fm Do".to_vec(),
+        resources: "/XObject << /Fm 10 0 R >>".into(),
+        extra: vec![in_form(filter, data)],
+        ..base()
+    };
+    let annotated = |subtype: &str| SharedPages {
+        content: Vec::new(),
+        resources: String::new(),
+        page: "/Annots [10 0 R]".into(),
+        extra: vec![
+            format!("<< /Type /Annot /Subtype /{subtype} /T (Field) /FT /Tx /Rect [0 100 200 120] /AP << /N 11 0 R >> >>").into_bytes(),
+            in_form("", DRAWS),
+        ],
+        ..base()
+    };
+    let glyph = SharedPages {
+        content: b"BT /T3 200 Tf 0 100 Td (a) Tj ET".to_vec(),
+        resources: "/Font << /T3 10 0 R >>".into(),
+        extra: vec![
+            b"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /a 11 0 R >> \
+              /Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [1000] /Resources << /XObject << /Im 7 0 R >> >> >>"
+                .to_vec(),
+            stream("", b"1000 0 d0 q 1000 0 0 100 0 0 cm /Im Do Q"),
+        ],
+        ..base()
+    };
+    vec![
+        ("cleared", CLEARS, base()),
+        ("removed", COVERS, base()),
+        ("in a form", COVERS, through_form("", DRAWS)),
+        ("in a form that can't be read", COVERS, through_form("/Filter /FlateDecode", b"not Flate")),
+        ("a stamp's appearance", COVERS, annotated("Stamp")),
+        ("a widget's appearance", COVERS, annotated("Widget")),
+        ("a Type 3 glyph", COVERS, glyph),
+        (
+            "a mask",
+            COVERS,
+            SharedPages { first: format!("{plain} /SMask 10 0 R"), extra: vec![stream(&shared_image(SHARED), scan.page.clone())], ..base() },
+        ),
+        (
+            "an alternate",
+            COVERS,
+            SharedPages {
+                first: format!("{plain} /Alternates [<< /Image 10 0 R >>]"),
+                extra: vec![stream(&shared_image(SHARED), scan.page.clone())],
+                ..base()
+            },
+        ),
+        (
+            "/Filter by reference",
+            COVERS,
+            SharedPages {
+                first: shared_image("/DecodeParms [null << /JBIG2Globals 9 0 R >>]").replace("/Filter /JBIG2Decode", "/Filter 10 0 R"),
+                extra: vec![b"[/ASCIIHexDecode /JBIG2Decode]".to_vec()],
+                ..base()
+            },
+        ),
+        (
+            "a reference to it",
+            COVERS,
+            SharedPages { first: shared_image("/DecodeParms << /JBIG2Globals 10 0 R >>"), extra: vec![b"9 0 R".to_vec()], ..base() },
+        ),
+        (
+            "parameters through a reference to them",
+            COVERS,
+            SharedPages {
+                first: shared_image("/DecodeParms 10 0 R"),
+                extra: vec![b"11 0 R".to_vec(), b"<< /JBIG2Globals 9 0 R >>".to_vec()],
+                ..base()
+            },
+        ),
+        (
+            "an entry through a reference to it",
+            COVERS,
+            SharedPages {
+                first: shared_image("/DecodeParms [10 0 R]"),
+                extra: vec![b"11 0 R".to_vec(), b"<< /JBIG2Globals 9 0 R >>".to_vec()],
+                ..base()
+            },
+        ),
+        (
+            "an array of them through a reference to it",
+            COVERS,
+            SharedPages {
+                first: shared_image("/DecodeParms 10 0 R"),
+                extra: vec![b"11 0 R".to_vec(), b"[<< /JBIG2Globals 9 0 R >>]".to_vec()],
+                ..base()
+            },
+        ),
+        ("/DP", COVERS, SharedPages { first: shared_image("/DP << /JBIG2Globals 9 0 R >>"), ..base() }),
+        ("another generation", COVERS, SharedPages { first: shared_image("/DecodeParms << /JBIG2Globals 9 1 R >>"), ..base() }),
+    ]
+}
+
+/// Scanners and `jbig2enc -s` share one symbol dictionary across a scan's pages, and it holds the
+/// shape of every distinct mark, one found only under a redaction included: a signature, a stamp.
+/// The dictionary stayed in the file while any other image used it. Now the image left on the second
+/// page is stored again without it, whichever way the first one left the document.
+#[test]
+fn a_redacted_scans_shared_jbig2_dictionary_leaves_the_file() {
+    let scan = shared_scan();
+    for (way, rect, pages) in ways_out(&scan) {
+        let mut doc = pages.build(&scan);
+        assert_eq!(drawn_samples(&doc, 1), scan.bits, "{way}: the second page reads through the dictionary");
+        mark(&mut doc, 0, &[rect], "");
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!(report.images_restored, 1, "{way}");
+        assert_gone(&doc, b"LEAK_GLOBALS");
+        assert_gone(&doc, b"JBIG2Globals");
+        assert_eq!(drawn_samples(&reopen(&doc), 1), scan.bits, "{way}: its pixels are unchanged");
+    }
+}
+
+/// However the image that stays names the dictionary, it comes out without it: its parameters by
+/// reference, behind another filter, or a copy of the dictionary, as a file put back together from
+/// pages split apart has, each page with its own. It is also read when its size or filter is given
+/// by reference, which `decoded_image` alone refuses.
+#[test]
+fn what_stays_is_stored_without_the_dictionary_however_it_names_it() {
+    let scan = shared_scan();
+    let hex: Vec<u8> = scan.page.iter().map(|b| format!("{b:02x}")).collect::<String>().bytes().chain(*b">").collect();
+    let copy = stream("", [jbig2_globals(b"LEAK_GLOBALS"), scan.symbols.clone()].concat());
+    let image = shared_image(SHARED);
+    for (other, data, extra) in [
+        (shared_image("/DecodeParms 10 0 R"), scan.page.clone(), vec![b"<< /JBIG2Globals 9 0 R >>".to_vec()]),
+        (
+            shared_image("/DecodeParms [null << /JBIG2Globals 9 0 R >>]").replace("/Filter /JBIG2Decode", "/Filter [/ASCIIHexDecode /JBIG2Decode]"),
+            hex.clone(),
+            vec![],
+        ),
+        (shared_image("/DecodeParms << /JBIG2Globals 10 0 R >>"), scan.page.clone(), vec![copy]),
+        (image.replace("/Width 400", "/Width 10 0 R"), scan.page.clone(), vec![b"400".to_vec()]),
+        (image.replace("/Height 40", "/Height 10 0 R"), scan.page.clone(), vec![b"40".to_vec()]),
+        (image.replace("/Filter /JBIG2Decode", "/Filter 10 0 R"), scan.page.clone(), vec![b"/JBIG2Decode".to_vec()]),
+        (
+            shared_image("/DecodeParms [null << /JBIG2Globals 9 0 R >>]").replace("/Filter /JBIG2Decode", "/Filter [/ASCIIHexDecode 10 0 R]"),
+            hex.clone(),
+            vec![b"/JBIG2Decode".to_vec()],
+        ),
+        (image.replace("/ColorSpace /DeviceGray ", ""), scan.page.clone(), vec![]),
+        (
+            image.replace("/ColorSpace /DeviceGray", "/ColorSpace [/DeviceN [/Black] /DeviceGray 10 0 R]"),
+            scan.page.clone(),
+            vec![b"<< /FunctionType 2 /Domain [0 1] /N 1 >>".to_vec()],
+        ),
+        // Parameters no filter reads, on a picture that needs no dictionary.
+        (shared_image("/DP << /JBIG2Globals 9 0 R >>"), pdfcraft_filters::encode_jbig2_generic(&scan.bits, 400, 40).unwrap(), vec![]),
+    ] {
+        let mut doc = SharedPages { other: other.clone(), other_data: data, extra, ..SharedPages::new(&scan) }.build(&scan);
+        mark(&mut doc, 0, &[CLEARS], "");
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!(report.images_restored, 1, "{other}");
+        assert_gone(&doc, b"LEAK_GLOBALS");
+        assert_eq!(drawn_samples(&reopen(&doc), 1), scan.bits, "{other}: its pixels are unchanged");
+    }
+}
+
+/// JBIG2 is drawn as one bit of one component whatever the dictionary says, so the Flate copy has to
+/// say so too: a stream with no `/BitsPerComponent`, or 8, shows the same picture stored again.
+#[test]
+fn a_stored_jbig2_image_is_one_bit_whatever_its_dictionary_said() {
+    let scan = shared_scan();
+    let hex: Vec<u8> = scan.page.iter().map(|b| format!("{b:02x}")).collect::<String>().bytes().chain(*b">").collect();
+    let chained =
+        shared_image("/DecodeParms [null << /JBIG2Globals 9 0 R >>]").replace("/Filter /JBIG2Decode", "/Filter [/ASCIIHexDecode /JBIG2Decode]");
+    let lone = shared_image(SHARED).replace("/Filter /JBIG2Decode", "/Filter [/JBIG2Decode]");
+    for (other, other_data, bits) in [
+        (shared_image(SHARED), scan.page.clone(), ""),
+        (shared_image(SHARED), scan.page.clone(), "/BitsPerComponent 8"),
+        (chained, hex, ""),
+        (lone, scan.page.clone(), ""),
+    ] {
+        let other = other.replace("/BitsPerComponent 1", bits);
+        let mut doc = SharedPages { other, other_data, ..SharedPages::new(&scan) }.build(&scan);
+        mark(&mut doc, 0, &[CLEARS], "");
+        apply(&mut doc, None).unwrap();
+        let saved = reopen(&doc);
+        assert_eq!(drawn_samples(&saved, 1), scan.bits, "{bits}");
+        let p = pdfcraft_model::pages(&saved).swap_remove(1);
+        let res = saved.resolve(p.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+        let xo = saved.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+        let image = saved.get(xo.get(b"Im").unwrap().as_ref().unwrap());
+        let Object::Stream(s) = &*image else { panic!("not an image") };
+        assert_eq!(s.dict.int(b"BitsPerComponent"), Some(1), "{bits}");
+    }
+}
+
+/// A mark that takes nothing using the dictionary leaves it, and what uses it, alone: here it covers
+/// text in a form that also draws the scan, away from the scan. A stream nothing reaches isn't decoded
+/// for nothing either: this one can't be, and it uses the dictionary.
+#[test]
+fn a_dictionary_stays_when_nothing_using_it_left() {
+    let scan = shared_scan();
+    let text = b"BT /F1 10 Tf 10 250 Td (SECRET) Tj ET q 200 0 0 20 0 100 cm /Im Do Q";
+    let pages = SharedPages {
+        content: b"/Fm Do".to_vec(),
+        resources: "/XObject << /Fm 10 0 R >>".into(),
+        extra: vec![
+            stream(
+                "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> /XObject << /Im 7 0 R >> >>",
+                text,
+            ),
+            stream(&shared_image(SHARED), b"not JBIG2"),
+        ],
+        ..SharedPages::new(&scan)
+    };
+    let mut doc = pages.build(&scan);
+    mark(&mut doc, 0, &[[0.0, 240.0, 200.0, 270.0]], "");
+    let report = apply(&mut doc, None).unwrap();
+    assert_eq!((report.images_removed, report.images_cleared, report.images_restored), (0, 0, 0));
+    assert_eq!(drawn_samples(&reopen(&doc), 1), scan.bits);
+}
+
+/// A dictionary of other bytes is another dictionary: the scan using it keeps it and isn't stored again.
+#[test]
+fn another_jbig2_dictionary_is_left_alone() {
+    let scan = shared_scan();
+    let own = stream("", [jbig2_globals(b"OWN_GLOBALS"), scan.symbols.clone()].concat());
+    let other = shared_image("/DecodeParms << /JBIG2Globals 10 0 R >>");
+    let mut doc = SharedPages { other, extra: vec![own], ..SharedPages::new(&scan) }.build(&scan);
+    mark(&mut doc, 0, &[CLEARS], "");
+    assert_eq!(apply(&mut doc, None).unwrap().images_restored, 0);
+    let saved = reopen(&doc);
+    let holds = |secret: &[u8]| {
+        saved.scan_objects().any(|(_, o)| matches!(&*o, Object::Stream(s) if s.decoded().is_ok_and(|d| d.windows(secret.len()).any(|w| w == secret))))
+    };
+    assert!(!holds(b"LEAK_GLOBALS") && holds(b"OWN_GLOBALS"));
+    assert_eq!(drawn_samples(&saved, 1), scan.bits);
+}
+
+/// An image that can't be stored without the dictionary may still be drawn: the renderer draws a
+/// JBIG2 page of another size than its image, which `decoded_image` refuses, and draws three components
+/// of one bit as grey. Removing it would lose a page no mark reached, and keeping the dictionary would
+/// keep what the mark covered, so the redaction refuses and the document stays as it was. So it does
+/// for anything else that refers to the dictionary, a reference that holds a reference to it among them.
+#[test]
+fn a_shared_jbig2_dictionary_that_cant_leave_refuses_the_redaction() {
+    let scan = shared_scan();
+    let image = shared_image(SHARED);
+    let elsewhere = "/Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 1 /ColorSpace /DeviceGray /Note 9 0 R";
+    let not_jbig2 = image.replace("/Filter /JBIG2Decode", "/Filter /FlateDecode");
+    for (other, data, extra) in [
+        (image.replace("/Height 40", "/Height 41"), scan.page.clone(), vec![]),
+        (image.replace("/DeviceGray", "/DeviceRGB"), scan.page.clone(), vec![]),
+        (shared_image("/DecodeParms << /JBIG2Globals 10 0 R >>"), scan.page.clone(), vec![b"9 0 R".to_vec()]),
+        (elsewhere.to_string(), vec![0], vec![]),
+        (not_jbig2, pdfcraft_filters::encode_flate(&scan.bits), vec![]),
+        // A copy with its filter by reference is known for a copy, and the decoder doesn't read it.
+        (
+            shared_image("/DecodeParms << /JBIG2Globals 10 0 R >>"),
+            scan.page.clone(),
+            vec![
+                stream("/Filter 11 0 R", pdfcraft_filters::encode_flate(&[jbig2_globals(b"LEAK_GLOBALS"), scan.symbols.clone()].concat())),
+                b"/FlateDecode".to_vec(),
+            ],
+        ),
+    ] {
+        let mut doc = SharedPages { other: other.clone(), other_data: data, extra, ..SharedPages::new(&scan) }.build(&scan);
+        mark(&mut doc, 0, &[CLEARS], "");
+        let before = doc.clone();
+        assert!(matches!(apply(&mut doc, None), Err(RedactError::SharedJbig2Globals(_))), "{other}");
+        assert_eq!(drawn_samples(&doc, 0), drawn_samples(&before, 0), "{other}: nothing was redacted");
+    }
+}
+
+/// What is stored again is bounded as what is cleared is: an image of [`image::MAX_PIXELS`] is, and one
+/// past it, which decodes, refuses the redaction.
+#[test]
+fn an_image_past_the_size_redaction_clears_refuses_it() {
+    let scan = shared_scan();
+    let h = 8192u32;
+    for (w, stored) in [(8192u32, true), (8200, false)] {
+        let blank = vec![0xFFu8; (w as usize).div_ceil(8) * h as usize];
+        let other = shared_image(SHARED).replace("/Width 400", &format!("/Width {w}")).replace("/Height 40", &format!("/Height {h}"));
+        let data = pdfcraft_filters::encode_jbig2_generic(&blank, w, h).unwrap();
+        let mut doc = SharedPages { other, other_data: data, ..SharedPages::new(&scan) }.build(&scan);
+        mark(&mut doc, 0, &[CLEARS], "");
+        let run = apply(&mut doc, None);
+        assert_eq!(run.as_ref().is_ok_and(|r| r.images_restored == 1), stored, "{w}");
+        assert_eq!(matches!(run, Err(RedactError::SharedJbig2Globals(1))), !stored, "{w}");
+    }
+}
+
+/// An alternate of an image stored again stays with it, stored without the dictionary in turn: a page
+/// no mark reached keeps what it had.
+#[test]
+fn an_alternate_of_what_stays_stays() {
+    let scan = shared_scan();
+    let other = format!("{} /Alternates [<< /Image 10 0 R >>]", shared_image(SHARED));
+    let mut doc = SharedPages { other, extra: vec![stream(&shared_image(SHARED), scan.page.clone())], ..SharedPages::new(&scan) }.build(&scan);
+    mark(&mut doc, 0, &[CLEARS], "");
+    assert_eq!(apply(&mut doc, None).unwrap().images_restored, 2);
+    assert_gone(&doc, b"LEAK_GLOBALS");
+    let saved = reopen(&doc);
+    let kept = saved.scan_objects().filter(|(_, o)| matches!(&**o, Object::Stream(s) if s.dict.contains(b"Alternates"))).count();
+    assert_eq!(kept, 1);
+}
+
+/// The refusal counts the images that can't be stored, or says 1 for something else that refers to
+/// the dictionary.
+#[test]
+fn a_refused_redaction_counts_what_cant_be_stored() {
+    let scan = shared_scan();
+    let wrong = shared_image(SHARED).replace("/Height 40", "/Height 41");
+    let other = format!("{wrong} /SMask 10 0 R");
+    let mut doc = SharedPages { other, extra: vec![stream(&wrong, scan.page.clone())], ..SharedPages::new(&scan) }.build(&scan);
+    mark(&mut doc, 0, &[CLEARS], "");
+    assert!(matches!(apply(&mut doc, None), Err(RedactError::SharedJbig2Globals(2))));
+}
+
+/// Remove Hidden Information leaves the same way: comments go, with what their appearances drew.
+#[test]
+fn removing_hidden_information_takes_a_shared_jbig2_dictionary_too() {
+    let scan = shared_scan();
+    let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /XObject << /Im 7 0 R >> >>", DRAWS);
+    let annotation = b"<< /Type /Annot /Subtype /Stamp /Rect [0 100 200 120] /AP << /N 11 0 R >> >>".to_vec();
+    let mut doc = SharedPages {
+        content: Vec::new(),
+        resources: String::new(),
+        page: "/Annots [10 0 R]".into(),
+        extra: vec![annotation, form],
+        ..SharedPages::new(&scan)
+    }
+    .build(&scan);
+    crate::sanitize::remove_hidden(&mut doc, &[crate::sanitize::Hidden::Comments]).unwrap();
+    assert_gone(&doc, b"LEAK_GLOBALS");
+    assert_eq!(drawn_samples(&reopen(&doc), 1), scan.bits);
+}
+
+/// [`assert_no_secret`] for a file that may hold JBIG2 streams, which `decoded` doesn't read: a stream
+/// stored again can be coded alone.
+fn assert_gone(doc: &Document, secret: &[u8]) {
+    for (r, object) in reopen(doc).scan_objects() {
+        let mut bytes = Vec::new();
+        pdfcraft_cos::serialize(&object, &mut bytes);
+        assert!(!bytes.windows(secret.len()).any(|w| w == secret), "secret remains in object {r:?}");
+        if let Object::Stream(s) = &*object
+            && let Ok(data) = s.decoded()
+        {
+            assert!(!data.windows(secret.len()).any(|w| w == secret), "secret remains in stream {r:?}");
+        }
+    }
+}
+
 /// Apply Redactions gives the page its own pruned /Resources, but the dictionary it drew through
 /// before (inherited from the /Pages node, or shared with another page) still named the removed
 /// image and form, so a full-rewrite save kept them.
