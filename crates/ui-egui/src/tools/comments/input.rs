@@ -1,6 +1,6 @@
 use super::geometry::{
-    CARET_SIZE, HANDLES, clamp_to, corner_ratio, drawn_box, grabs_points, handle_pos, is_markup, point_handle, reshapable, reshaped, resizable,
-    resized, snapped_caret,
+    CARET_SIZE, HANDLES, TURN_HANDLE_REACH, clamp_to, corner_ratio, drawn_box, grabs_points, handle_pos, is_markup, point_handle, reshapable,
+    reshaped, resizable, resized, snapped_caret, turn_degrees, turn_handle, turnable,
 };
 use super::paint::{drawn_shape, edit_anchor, erase, new_comment};
 use super::state::{Composer, ComposerKind, Gesture, PageCx};
@@ -73,6 +73,10 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2) -> Option<Hit> {
     };
     let bodies = matches!(cx.tool, QuickTool::Select | QuickTool::Fill(_));
     if let Some(a) = view.comments.selected.filter(|(page, _)| *page == cx.page).and_then(|(_, i)| cx.get(i)).filter(|a| pick(a) && cx.allowed) {
+        // The rotate handle above the frame.
+        if turnable(a) && turn_handle(cx.screen_rect(a).expand(2.0)).distance(p) <= TURN_HANDLE_REACH {
+            return Some(Hit::new(Owner::Comment { index: a.index, part: CommentPart::Turn }, Layer::Handle, egui::CursorIcon::Grab));
+        }
         if grabs_points(cx.tool)
             && reshapable(a)
             && let Some(point) = point_handle(cx, a, p)
@@ -80,6 +84,7 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2) -> Option<Hit> {
             return Some(Hit::new(Owner::Comment { index: a.index, part: CommentPart::Point(point) }, Layer::Handle, egui::CursorIcon::Crosshair));
         }
         if resizable(a)
+            && a.turn.is_none()
             && let Some((x, y)) = HANDLES.into_iter().find(|h| handle_pos(cx.screen_rect(a), *h).distance(p) <= 7.0)
         {
             let icon = match (x, y) {
@@ -109,8 +114,10 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2) -> Option<Hit> {
 /// under the pointer), so the tools beneath leave it: a live move, resize or reshape, or a press
 /// held by a comment that keeps its drag.
 fn grabs(cx: &PageCx<'_>, view: &DocView) -> bool {
-    if matches!(view.comments.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. }) if page == cx.page)
-    {
+    if matches!(
+        view.comments.gesture,
+        Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. } | Gesture::Rotate { page, .. }) if page == cx.page
+    ) {
         return true;
     }
     if cx.ptr.any_down {
@@ -183,6 +190,10 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
         && let (Some((a, part)), Some(o)) = (owner, origin)
     {
         match part {
+            CommentPart::Turn => {
+                cv.gesture = Some(Gesture::Rotate { page: cx.page, index: a.index, centre: cx.turn_centre(a), from: o, quarter: None });
+                consumed = true;
+            }
             CommentPart::Point(point) => {
                 let points = a.points.iter().map(|q| [f64::from(q[0]), f64::from(q[1])]).collect();
                 cv.gesture = Some(Gesture::Reshape { page: cx.page, index: a.index, point, points });
@@ -211,44 +222,18 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
             CommentPart::Body => {}
         }
     }
-    if matches!(cv.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. }) if page == cx.page) {
+    if matches!(
+        cv.gesture,
+        Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. } | Gesture::Rotate { page, .. }) if page == cx.page
+    ) {
         consumed = true;
     }
     if resp.drag_stopped()
         && let Some(p) = pointer
     {
-        match cv.gesture.clone() {
-            Some(Gesture::Move { page, index, from }) if page == cx.page => {
-                cv.gesture = None;
-                let (a, b) = (cx.to_user(from), cx.to_user(p));
-                let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-                if from.distance(p) >= 2.0 {
-                    view.pending_edit = Some(Edit::MoveAnnotation { page, index, dx, dy });
-                }
-            }
-            Some(Gesture::Resize { page, index, handle, from, aspect_ratio }) if page == cx.page => {
-                cv.gesture = None;
-                if let Some(a) = cx.get(index) {
-                    let from_rect = cx.screen_rect(a);
-                    let shift = ui.input(|i| i.modifiers.shift);
-                    let r = resized(from_rect, handle, p - from, corner_ratio(from_rect, aspect_ratio, shift));
-                    let rect = a.rect_for_shown(cx.rect_to_user(r), cx.rotation());
-                    if r.width() >= 4.0 && r.height() >= 4.0 {
-                        view.pending_edit = Some(Edit::ResizeAnnotation { page, index, rect });
-                    }
-                }
-            }
-            Some(Gesture::Reshape { page, index, point, points }) if page == cx.page => {
-                cv.gesture = None;
-                let shift = ui.input(|i| i.modifiers.shift);
-                let moved = points.get(point).is_some_and(|q| cx.to_screen(*q).distance(p) >= 2.0);
-                if moved {
-                    view.pending_edit = Some(Edit::ReshapeAnnotation { page, index, points: reshaped(&points, point, cx.to_user(p), shift) });
-                }
-            }
-            _ => {}
-        }
+        finish_select_gesture(ui, cx, view, p);
     }
+    let cv = &mut view.comments;
     // (egui clears the press origin on release, so clicks are located by the pointer.)
     let on_page = pointer.is_some_and(|p| cx.xf.rect.contains(p));
     if resp.clicked() && on_page {
@@ -279,6 +264,49 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
         consumed = true;
     }
     consumed
+}
+
+/// The end of a move, resize, reshape or turn the Select tool began on this page: the edit it
+/// makes, for the pointer released at `p`.
+fn finish_select_gesture(ui: &egui::Ui, cx: &PageCx<'_>, view: &mut DocView, p: Pos2) {
+    match view.comments.gesture.clone() {
+        Some(Gesture::Move { page, index, from }) if page == cx.page => {
+            view.comments.gesture = None;
+            let (a, b) = (cx.to_user(from), cx.to_user(p));
+            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+            if from.distance(p) >= 2.0 {
+                view.pending_edit = Some(Edit::MoveAnnotation { page, index, dx, dy });
+            }
+        }
+        Some(Gesture::Resize { page, index, handle, from, aspect_ratio }) if page == cx.page => {
+            view.comments.gesture = None;
+            if let Some(a) = cx.get(index) {
+                let from_rect = cx.screen_rect(a);
+                let shift = ui.input(|i| i.modifiers.shift);
+                let r = resized(from_rect, handle, p - from, corner_ratio(from_rect, aspect_ratio, shift));
+                let rect = a.rect_for_shown(cx.rect_to_user(r), cx.rotation());
+                if r.width() >= 4.0 && r.height() >= 4.0 {
+                    view.pending_edit = Some(Edit::ResizeAnnotation { page, index, rect });
+                }
+            }
+        }
+        Some(Gesture::Reshape { page, index, point, points }) if page == cx.page => {
+            view.comments.gesture = None;
+            let shift = ui.input(|i| i.modifiers.shift);
+            let moved = points.get(point).is_some_and(|q| cx.to_screen(*q).distance(p) >= 2.0);
+            if moved {
+                view.pending_edit = Some(Edit::ReshapeAnnotation { page, index, points: reshaped(&points, point, cx.to_user(p), shift) });
+            }
+        }
+        Some(Gesture::Rotate { page, index, centre, from, quarter }) if page == cx.page => {
+            view.comments.gesture = None;
+            let degrees = turn_degrees(centre, from, p, ui.input(|i| i.modifiers.shift), quarter);
+            if degrees.abs() >= 0.5 {
+                view.pending_edit = Some(Edit::RotateAnnotation { page, index, degrees });
+            }
+        }
+        _ => {}
+    }
 }
 
 /// After text selection ran: a markup tool turns a finished selection into a comment; Replace

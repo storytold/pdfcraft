@@ -341,6 +341,10 @@ pub struct Annotation {
     /// The points that shape a line (its two ends, `/L`) or connected lines, a polygon or a
     /// cloud (their corners, `/Vertices`), in user space; empty for other comments.
     pub points: Vec<[f32; 2]>,
+    /// A turned rectangle, oval, text box or typewriter text (PdfCraft's `/PCAngle` and
+    /// `/PCBox`): degrees counterclockwise, and its own box before turning, about whose centre it
+    /// turned. `None` when it is upright.
+    pub turn: Option<(f32, [f32; 4])>,
 }
 
 impl Annotation {

@@ -2794,3 +2794,8 @@ key	Space	Mellomrom
 	Export this PDF	Eksporter denne PDF-en
 	Find text or tools	Finn tekst eller verktøy
 	Crop image	Beskjær bilde
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Roter kommentar
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Dra for å rotere · Shift: trinn på 15° · Tab mens du drar: kvarte omdreininger

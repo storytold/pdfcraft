@@ -2877,3 +2877,8 @@ theme	Appearance	Išvaizda
 	No image on clipboard to paste	Iškarpinėje nėra paveikslėlio įklijuoti
 	Pinned {tool} to Home	{tool} prisegtas pradžios puslapyje
 	Unpinned {tool} from Home	{tool} atsegtas nuo pradžios puslapio
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Pasukti komentarą
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Vilkite, kad pasuktumėte · Shift: 15° žingsniai · Tab vilkdami: ketvirčio posūkiai

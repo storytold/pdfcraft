@@ -2530,3 +2530,8 @@ animation effects	Off	Выкл
 	No image on clipboard to paste	В буфере обмена нет изображения для вставки
 	Pinned {tool} to Home	{tool} закреплён на главной
 	Unpinned {tool} from Home	{tool} откреплён от главной
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Повернуть комментарий
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Перетащите, чтобы повернуть · Shift: шаг 15° · Tab при перетаскивании: на четверть оборота

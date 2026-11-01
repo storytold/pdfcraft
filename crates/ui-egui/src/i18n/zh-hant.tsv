@@ -2567,3 +2567,8 @@ animation effects	Off	關
 	No image on clipboard to paste	剪貼簿中沒有可貼上的影像
 	Pinned {tool} to Home	已將 {tool} 釘選至首頁
 	Unpinned {tool} from Home	已從首頁取消釘選 {tool}
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	旋轉註解
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	拖曳以旋轉 · Shift：以 15° 為間隔 · 拖曳時按 Tab：每次 90°

@@ -2846,3 +2846,8 @@ theme	Appearance	स्वरूप
 	No image on clipboard to paste	चिपकाने के लिए क्लिपबोर्ड में कोई छवि नहीं है
 	Pinned {tool} to Home	{tool} को होम पर पिन किया गया
 	Unpinned {tool} from Home	{tool} को होम से अनपिन किया गया
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	टिप्पणी घुमाएँ
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	घुमाने के लिए खींचें · Shift: 15° के चरण · खींचते समय Tab: चौथाई घुमाव

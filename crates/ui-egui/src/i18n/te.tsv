@@ -2526,3 +2526,8 @@ animation effects	Off	ఆఫ్
 	No image on clipboard to paste	అతికించడానికి క్లిప్‌బోర్డ్‌లో చిత్రం లేదు
 	Pinned {tool} to Home	{tool} హోమ్‌కు పిన్ చేయబడింది
 	Unpinned {tool} from Home	{tool} హోమ్ నుండి అన్‌పిన్ చేయబడింది
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	వ్యాఖ్యను తిప్పు
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	తిప్పడానికి లాగండి · Shift: 15° అడుగులు · లాగుతున్నప్పుడు Tab: పావు మలుపులు

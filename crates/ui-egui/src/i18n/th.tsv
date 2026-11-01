@@ -2776,3 +2776,8 @@ theme	Appearance	ลักษณะที่ปรากฏ
 	Export this PDF	ส่งออก PDF นี้
 	Find text or tools	ค้นหาข้อความหรือเครื่องมือ
 	Crop image	ครอบตัดรูปภาพ
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	หมุนความคิดเห็น
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	ลากเพื่อหมุน · Shift: ทีละ 15° · Tab ระหว่างลาก: ทีละ 90°

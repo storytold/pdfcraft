@@ -2849,3 +2849,8 @@ certificate	SHA-256 digest	Impronta SHA-256
 	No image on clipboard to paste	Nessuna immagine negli appunti da incollare
 	Pinned {tool} to Home	{tool} fissato alla Home
 	Unpinned {tool} from Home	{tool} rimosso dai preferiti della Home
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Ruota commento
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Trascina per ruotare · Shift: passi di 15° · Tab durante il trascinamento: quarti di giro

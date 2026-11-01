@@ -2940,3 +2940,8 @@ theme	Appearance	Aspecto
 	No image on clipboard to paste	No hay ninguna imagen en el portapapeles para pegar
 	Pinned {tool} to Home	{tool} fijado en Inicio
 	Unpinned {tool} from Home	{tool} desfijado de Inicio
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Girar comentario
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Arrastre para girar · Shift: pasos de 15° · Tab al arrastrar: cuartos de vuelta
