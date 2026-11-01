@@ -24,6 +24,7 @@ use crate::EditError;
 mod regions;
 #[path = "text_session.rs"]
 mod session;
+pub use fallback::strip_subset_tag;
 use regions::{alignment_frame, group_blocks, is_centred, rewrite_styled_block};
 pub use session::TextSession;
 
@@ -47,7 +48,7 @@ pub use editor::{TextEditLayout, TextEditorFont, register_text_font, text_edit_l
 pub(crate) use fallback::SOURCE_SPACE_CALLS;
 use fallback::{
     MAX_TYPE3_GLYPHS, Type3Glyph, fallback_face, needs_type3, no_fallback_font, no_glyph_for, same_base_font, same_font, source_encodes,
-    source_family, source_program, source_space, source_width, strip_subset_tag, type3_faces, type3_glyph, write_type3_glyphs,
+    source_family, source_program, source_space, source_width, type3_faces, type3_glyph, write_type3_glyphs,
 };
 #[cfg(test)]
 use fallback::{add_type3_font, is_type3_fallback};

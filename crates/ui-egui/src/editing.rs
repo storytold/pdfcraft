@@ -31,7 +31,7 @@ fn new_text_typed(v: &crate::DocView) -> bool {
 /// is a deleted annotation's page's annotations before the delete (empty for other edits).
 fn select_after_edit(
     view: &mut crate::DocView,
-    edit: Edit,
+    edit: &Edit,
     info: &pdfcraft_render::DocInfo,
     annots_before: &[pdfcraft_render::Annotation],
     quick_tool: crate::QuickTool,
@@ -39,15 +39,15 @@ fn select_after_edit(
     match edit {
         Edit::MovePages { pages, to } => {
             let n = pages.iter().collect::<std::collections::BTreeSet<_>>().len();
-            let to = to.min(info.pages.len() - n);
+            let to = (*to).min(info.pages.len() - n);
             view.select_pages(&(to..to + n).collect::<Vec<_>>());
         }
         Edit::DuplicatePages { pages, at: Some(at) } => {
             let n = pages.iter().collect::<std::collections::BTreeSet<_>>().len();
-            let at = at.min(info.pages.len().saturating_sub(n));
+            let at = (*at).min(info.pages.len().saturating_sub(n));
             view.select_pages(&(at..at + n).collect::<Vec<_>>());
         }
-        Edit::InsertBlankPage { at, .. } => view.select_pages(&[at.min(info.pages.len() - 1)]),
+        Edit::InsertBlankPage { at, .. } => view.select_pages(&[(*at).min(info.pages.len() - 1)]),
         Edit::DeletePages { .. } => view.select_pages(&[]),
         // A stroke drawn with the pen stays unselected, so the selection box and
         // author popup don't sit over the next stroke (#429).
@@ -71,7 +71,7 @@ fn select_after_edit(
                 view.comments.open_editor(a.page, n, String::new());
             }
         }
-        Edit::DeleteAnnotation { page, index } => view.comments.annotation_deleted(annots_before, &info.annotations, (page, index)),
+        Edit::DeleteAnnotation { page, index } => view.comments.annotation_deleted(annots_before, &info.annotations, (*page, *index)),
         _ => {}
     }
 }
@@ -112,6 +112,25 @@ impl PdfCraftApp {
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
         let Some((i, id)) = self.active_ids() else { return false };
         let label = edit.label();
+        let target_arrange_image = match &edit {
+            Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Arrange(_) } => {
+                let doc = self.session.get(id);
+                let target = doc.and_then(|d| d.page_images(*page).get(*index).cloned());
+                let ambiguous = doc.is_some_and(|d| {
+                    if let Some(t) = &target {
+                        d.page_images(*page)
+                            .iter()
+                            .filter(|img| img.name == t.name && img.object == t.object && rect_matches(img.rect, t.rect))
+                            .count()
+                            > 1
+                    } else {
+                        false
+                    }
+                });
+                target.map(|t| (t, ambiguous))
+            }
+            _ => None,
+        };
         let (form_before, page_count_before, had_xfa) = if let Some(d) = self.session.get(id) {
             (Some(std::sync::Arc::clone(&d.form)), d.info.pages.len(), d.xfa.is_some())
         } else {
@@ -166,7 +185,11 @@ impl PdfCraftApp {
                     view.comments.comment_added();
                 }
                 // Keep the pages the user acted on selected, where they now are.
-                select_after_edit(view, edit, info, &annots_before, self.quick_tool);
+                select_after_edit(view, &edit, info, &annots_before, self.quick_tool);
+                if let (Some((target, ambiguous_before)), Edit::EditPageImage { page, .. }) = (target_arrange_image, &edit) {
+                    let page_images = doc.page_images(*page);
+                    re_resolve_image_selection(view, *page, &target, ambiguous_before, &page_images);
+                }
                 if std::mem::take(&mut view.comments.tool_done) && !self.comment_prefs.pinned {
                     self.quick_tool = crate::QuickTool::Select;
                 }
@@ -187,6 +210,9 @@ impl PdfCraftApp {
                 if let Some(view) = self.views.get_mut(i) {
                     // A drawing whose annotation wasn't added must not stay painted.
                     view.comments.drawings_refused();
+                    if matches!(&edit, Edit::EditPageImage { change, .. } if !matches!(change, pdfcraft_engine::ImageEdit::Arrange(_))) {
+                        view.image_selection = None;
+                    }
                     // A paragraph that couldn't be applied opens again with its typing, instead of
                     // the box the click moved to.
                     if let Edit::EditTextBlock { page, block, .. } = &edit
@@ -287,13 +313,34 @@ impl PdfCraftApp {
         if !self.close_text_editors(i, id) {
             return;
         }
+        let target_image = self.views.get(i).and_then(|v| v.image_selection.as_ref()).and_then(|s| {
+            let doc = self.session.get(id)?;
+            let images = doc.page_images(s.page);
+            let target = images.get(s.index).cloned()?;
+            let ambiguous =
+                images.iter().filter(|img| img.name == target.name && img.object == target.object && rect_matches(img.rect, target.rect)).count() > 1;
+            Some((s.page, target, ambiguous))
+        });
+        let had_selection = self.views.get(i).and_then(|v| v.image_selection.as_ref()).is_some();
         let result = if undo { self.session.undo(id) } else { self.session.redo(id) };
         match result {
             Ok(label) => {
-                if let Some(doc) = self.session.get(id) {
-                    self.views[i].document_changed(&doc.info);
+                if let Some(doc) = self.session.get(id)
+                    && let Some(view) = self.views.get_mut(i)
+                {
+                    view.document_changed(&doc.info);
+                    view.picked_image = None;
+                    if let Some((page, target, ambiguous_before)) = target_image {
+                        let page_images = doc.page_images(page);
+                        re_resolve_image_selection(view, page, &target, ambiguous_before, &page_images);
+                    } else if had_selection {
+                        view.image_selection = None;
+                    }
                 }
-                self.views[i].comments.history_stepped();
+                if let Some(view) = self.views.get_mut(i) {
+                    view.comments.selected = None;
+                    view.comments.history_stepped();
+                }
                 let label = crate::i18n::edit_label(&label);
                 if undo {
                     self.notify_fmt("Undid {label}", &[("label", &label)]);
@@ -780,6 +827,48 @@ impl PdfCraftApp {
             || v.fill_text.as_ref().is_some_and(|t| !t.text.trim().is_empty())
             || new_text_typed(v)
             || v.line_editor.as_ref().map_or_else(|| false, |ed| ed.has_unsaved_text())
+    }
+}
+
+fn rect_matches(a: [f64; 4], b: [f64; 4]) -> bool {
+    a.iter().zip(b.iter()).all(|(x, y)| (x - y).abs() < 1e-3)
+}
+
+fn re_resolve_image_selection(
+    view: &mut crate::DocView,
+    page: usize,
+    target: &pdfcraft_engine::PageImage,
+    ambiguous_before: bool,
+    page_images: &[pdfcraft_engine::PageImage],
+) {
+    let exact_matches: Vec<usize> = page_images
+        .iter()
+        .enumerate()
+        .filter(|(_, img)| img.name == target.name && img.object == target.object && rect_matches(img.rect, target.rect))
+        .map(|(idx, _)| idx)
+        .collect();
+    let new_idx = if !ambiguous_before && exact_matches.len() == 1 {
+        exact_matches.first().copied()
+    } else if !ambiguous_before && exact_matches.is_empty() {
+        let name_obj_matches: Vec<usize> =
+            page_images.iter().enumerate().filter(|(_, img)| img.name == target.name && img.object == target.object).map(|(idx, _)| idx).collect();
+        if name_obj_matches.len() == 1 {
+            name_obj_matches.first().copied()
+        } else if name_obj_matches.is_empty() {
+            let name_matches: Vec<usize> = page_images.iter().enumerate().filter(|(_, img)| img.name == target.name).map(|(idx, _)| idx).collect();
+            if name_matches.len() == 1 { name_matches.first().copied() } else { None }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    if let Some(s) = view.image_selection.as_mut().filter(|s| s.page == page) {
+        if let Some(idx) = new_idx {
+            s.index = idx;
+        } else {
+            view.image_selection = None;
+        }
     }
 }
 
