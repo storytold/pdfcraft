@@ -167,6 +167,10 @@ fn preferences_checkboxes_and_preset_change_the_list() {
     set(&mut h, &c, "left", "closed");
     set(&mut h, &c, "dialog", "preferences");
     assert!(shown(&mut h, &c, "Tools shown in All tools") > 0);
+    // Under a preset the checkboxes are folded away.
+    assert_eq!(shown(&mut h, &c, "Compress a PDF"), 0);
+    ok(&mut h, &c, "ui.click", json!({"label": "Choose individual tools"}));
+    h.run_steps(2);
     ok(&mut h, &c, "ui.click", json!({"label": "Compress a PDF"}));
     h.run_steps(2);
     let state = ok(&mut h, &c, "ui.state", json!({}));

@@ -93,7 +93,7 @@ fn preset_label(preset: &ToolPreset) -> &'static str {
     }
 }
 
-/// The Preferences section: a preset, one checkbox per tool, and what hiding does.
+/// The Preferences section: a preset, one checkbox per tool under a fold, and what hiding does.
 pub(crate) fn preferences_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
     ui.label(egui::RichText::new(tl!("Tools shown in All tools")).font(theme::semibold(13.0)));
     ui.horizontal(|ui| {
@@ -113,16 +113,21 @@ pub(crate) fn preferences_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &
             .response
             .labelled_by(preset_caption.id);
     });
-    egui::Grid::new("shown-tools").num_columns(2).spacing([24.0, 2.0]).show(ui, |ui| {
-        for (i, g) in TOOL_GROUPS.iter().enumerate() {
-            let mut shown = app.hidden_tools.shows(g.id);
-            if ui.add(widgets::checkbox(&mut shown, tl!(g.label))).changed() {
-                app.hidden_tools.set_shown(g.id, shown);
+    // Folded while a preset applies, so one checkbox per tool doesn't push the rest of Preferences
+    // out of view; a custom selection opens it.
+    let custom = app.hidden_tools.preset().is_none();
+    egui::CollapsingHeader::new(tl!("Choose individual tools")).default_open(custom).show(ui, |ui| {
+        egui::Grid::new("shown-tools").num_columns(2).spacing([24.0, 2.0]).show(ui, |ui| {
+            for (i, g) in TOOL_GROUPS.iter().enumerate() {
+                let mut shown = app.hidden_tools.shows(g.id);
+                if ui.add(widgets::checkbox(&mut shown, tl!(g.label))).changed() {
+                    app.hidden_tools.set_shown(g.id, shown);
+                }
+                if i % 2 == 1 {
+                    ui.end_row();
+                }
             }
-            if i % 2 == 1 {
-                ui.end_row();
-            }
-        }
+        });
     });
     ui.label(
         egui::RichText::new(tl!("Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts.")).small().color(t.text_muted),
