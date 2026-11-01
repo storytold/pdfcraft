@@ -38,3 +38,10 @@ keeps pointing PDF files at the removed entry), then run:
   Remove-Item -Path "HKCU:\Software\Classes\PdfCraft.Portable", "HKCU:\Software\PdfCraft.Portable" -Recurse -ErrorAction SilentlyContinue
   Remove-ItemProperty -Path "HKCU:\Software\Classes\.pdf\OpenWithProgids" -Name PdfCraft.Portable -ErrorAction SilentlyContinue
   Remove-ItemProperty -Path "HKCU:\Software\RegisteredApplications" -Name "PdfCraft (portable)" -ErrorAction SilentlyContinue
+  foreach ($k in "HKCU:\Software\Classes\.pdf\OpenWithProgids", "HKCU:\Software\Classes\.pdf") {
+    $i = Get-Item -Path $k -ErrorAction SilentlyContinue
+    if ($i -and $i.ValueCount -eq 0 -and $i.SubKeyCount -eq 0) { Remove-Item -Path $k }
+  }
+
+The last lines delete the .pdf keys only when nothing else is left in them, so another app's entry
+there stays.
