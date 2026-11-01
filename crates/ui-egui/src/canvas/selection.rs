@@ -156,6 +156,9 @@ enum SelectionAction {
     Copy,
 }
 
+/// The selection bar's width before it has been laid out once (English labels).
+const SELECTION_BAR_GUESS: f32 = 520.0;
+
 /// Actions on an existing text selection, next to the selected words.
 pub(super) fn selection_actions(
     ui: &mut egui::Ui,
@@ -187,32 +190,33 @@ pub(super) fn selection_actions(
     if !viewport.intersects(rect) {
         return false;
     }
-    let x = rect.left().clamp(viewport.left() + 8.0, (viewport.right() - 520.0).max(viewport.left() + 8.0));
+    let id = egui::Id::unique(("text-selection-actions", view.id.0));
+    // The bar stays inside the pages' area, by the width it had last frame (its labels make it
+    // wider in some languages), so it never covers a side panel; a first guess before it has one.
+    let width = egui::AreaState::load(ui.ctx(), id).and_then(|a| a.size).map_or(SELECTION_BAR_GUESS, |s| s.x);
+    let x = rect.left().clamp(viewport.left() + 8.0, (viewport.right() - width - 8.0).max(viewport.left() + 8.0));
     let y = if rect.bottom() + 48.0 < viewport.bottom() { rect.bottom() + 6.0 } else { (rect.top() - 44.0).max(viewport.top() + 6.0) };
     let mut chosen = None;
-    egui::Area::new(egui::Id::unique(("text-selection-actions", view.id.0))).order(egui::Order::Foreground).fixed_pos(pos2(x, y)).show(
-        ui.ctx(),
-        |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    for (label, action) in [
-                        (tl!("Add comment"), SelectionAction::Note),
-                        (tl!("Highlight"), SelectionAction::Markup(comments::CommentTool::Highlight)),
-                        (tl!("Underline"), SelectionAction::Markup(comments::CommentTool::Underline)),
-                        (tl!("Strikethrough"), SelectionAction::Markup(comments::CommentTool::StrikeOut)),
-                        (tl!("Replace text"), SelectionAction::Replace),
-                    ] {
-                        if ui.add_enabled(can_comment, egui::Button::new(label)).clicked() {
-                            chosen = Some(action);
-                        }
+    egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(pos2(x, y)).show(ui.ctx(), |ui| {
+        egui::Frame::popup(ui.style()).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                for (label, action) in [
+                    (tl!("Add comment"), SelectionAction::Note),
+                    (tl!("Highlight"), SelectionAction::Markup(comments::CommentTool::Highlight)),
+                    (tl!("Underline"), SelectionAction::Markup(comments::CommentTool::Underline)),
+                    (tl!("Strikethrough"), SelectionAction::Markup(comments::CommentTool::StrikeOut)),
+                    (tl!("Replace text"), SelectionAction::Replace),
+                ] {
+                    if ui.add_enabled(can_comment, egui::Button::new(label)).clicked() {
+                        chosen = Some(action);
                     }
-                    if ui.add_enabled(can_copy, egui::Button::new(tl!("Copy"))).clicked() {
-                        chosen = Some(SelectionAction::Copy);
-                    }
-                });
+                }
+                if ui.add_enabled(can_copy, egui::Button::new(tl!("Copy"))).clicked() {
+                    chosen = Some(SelectionAction::Copy);
+                }
             });
-        },
-    );
+        });
+    });
     let Some(action) = chosen else { return false };
     if let SelectionAction::Copy = action {
         // Copying closes the bar but keeps the words selected, for ⌘C or a second action.

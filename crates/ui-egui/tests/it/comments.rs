@@ -3022,3 +3022,28 @@ fn an_upright_comment_on_a_turned_page_is_drawn_where_it_goes_before_release() {
     h.drop_at(from + delta);
     h.run_steps(3);
 }
+
+/// The selection bar stays inside the pages' area: its place was worked out for a 520 pt bar,
+/// so longer labels (German here) pushed it over the side panel next to a selection on the right.
+#[test]
+fn the_selection_bar_stays_inside_the_pages_area() {
+    let mut h = harness(|app| app.set_option("language", "de").unwrap());
+    // Narrower than the harness, as with a side panel open.
+    h.set_size(egui::vec2(1100.0, 900.0));
+    h.run_steps(4);
+    // The rightmost glyph of "The quick brown fox": the bar opens at its left.
+    let last = (0..64).filter_map(|i| h.state().views[0].glyph_screen_pos(0, i).map(|p| (i, p.x))).max_by(|a, b| a.1.total_cmp(&b.1)).unwrap().0;
+    h.state_mut().views[0].select_text(0, last, last);
+    h.run_steps(4);
+    let viewport = h.state().views[0].viewport_rect();
+    let (first, copy) = (h.get_by_label("Kommentar hinzufügen").rect(), h.get_by_label("Kopieren").rect());
+    let glyph = h.state().views[0].glyph_screen_pos(0, last).unwrap();
+    // The setup puts a bar opening at the glyph past the area's right edge.
+    assert!(
+        glyph.x + (copy.right() - first.left()) > viewport.right(),
+        "glyph at {}, bar {} wide, area {viewport:?}",
+        glyph.x,
+        copy.right() - first.left()
+    );
+    assert!(first.left() >= viewport.left() && copy.right() <= viewport.right(), "bar {first:?}..{copy:?} inside {viewport:?}");
+}
