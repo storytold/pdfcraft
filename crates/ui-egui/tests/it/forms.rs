@@ -250,6 +250,8 @@ fn check_box_harness() -> Harness<'static, PdfCraftApp> {
     h
 }
 
+/// Tab stops on a check box between two text fields, Space ticks and clears it, and Shift+Tab
+/// comes back to it (#2223).
 #[test]
 fn tab_and_space_fill_in_a_check_box_between_text_fields() {
     // Issue #2223: Tab went from `first` straight to `last`, and Space could not tick `agree`.
@@ -277,6 +279,104 @@ fn tab_and_space_fill_in_a_check_box_between_text_fields() {
     assert_eq!(focused(&h), Some(("agree".into(), 0)), "Shift+Tab comes back to it");
 }
 
+/// A text field, then read-only fields (`/Ff` 1) of every kind that takes the focus, one under
+/// the other: a text field holding "Fixed", a check box, a radio group of two buttons, a list box
+/// on "one" and a combo box on "Alpha"; then another text field.
+fn read_only_harness() -> Harness<'static, PdfCraftApp> {
+    let bytes = pdf_from_objects(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 6 0 R 9 0 R 12 0 R 13 0 R 14 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 7 0 R >> >> >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R 10 0 R 11 0 R 12 0 R 13 0 R 14 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (first) /Rect [20 350 280 372] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (locked) /Ff 1 /V (Fixed) /Rect [20 320 280 342] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (tick) /Ff 1 /V /Off /AS /Off /Rect [20 290 36 306] /P 3 0 R /F 4 /AP << /N << /Yes 8 0 R /Off 8 0 R >> >> >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 16 16] /Length 0 >>\nstream\n\nendstream",
+        "<< /FT /Btn /T (pick) /Ff 32769 /V /Off /Kids [10 0 R 11 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 9 0 R /AS /Off /Rect [20 260 36 276] /P 3 0 R /F 4 /AP << /N << /A 8 0 R /Off 8 0 R >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 9 0 R /AS /Off /Rect [60 260 76 276] /P 3 0 R /F 4 /AP << /N << /B 8 0 R /Off 8 0 R >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /T (list) /Ff 1 /Opt [(one) (two) (three)] /V (one) /Rect [20 200 120 250] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /T (combo) /Ff 131073 /Opt [(Alpha) (Beta)] /V (Alpha) /Rect [20 170 120 190] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (last) /Rect [20 130 280 152] /P 3 0 R /F 4 >>",
+    ]);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("read-only.pdf", None, bytes).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    h.run_steps(6);
+    h
+}
+
+/// Tab stops on a read-only field, as another viewer does on a read-only XFA field, and Shift+Tab
+/// goes back through it. The field takes the focus, but typing doesn't change it.
+#[test]
+fn tab_stops_on_a_read_only_text_field_and_typing_leaves_it_alone() {
+    let mut h = read_only_harness();
+    click_field(&mut h, "first", 0);
+    h.event(egui::Event::Text("Ada".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(value(&h, "first"), ["Ada"]);
+    assert_eq!(focused(&h), Some(("locked".into(), 0)), "Tab stops on the read-only field");
+    h.event(egui::Event::Text("Bob".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Backspace);
+    h.run_steps(1);
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert_eq!(focused(&h), Some(("locked".into(), 0)), "it keeps the focus");
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(value(&h, "locked"), ["Fixed"], "nothing typed reached it");
+    assert_eq!(focused(&h), Some(("tick".into(), 0)));
+    h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(focused(&h), Some(("locked".into(), 0)), "Shift+Tab comes back to it");
+    h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(focused(&h), Some(("first".into(), 0)));
+    assert_eq!(value(&h, "locked"), ["Fixed"]);
+}
+
+/// Read-only check boxes, radio buttons, list boxes and combo boxes are Tab stops too, forward
+/// and back, but Space and the arrows change none of them, and the combo box opens no list.
+#[test]
+fn read_only_boxes_buttons_and_lists_take_the_focus_without_changing() {
+    let mut h = read_only_harness();
+    click_field(&mut h, "first", 0);
+    let stops = [("locked", 0), ("tick", 0), ("pick", 0), ("pick", 1), ("list", 0), ("combo", 0)];
+    for (name, widget) in stops {
+        h.key_press(egui::Key::Tab);
+        h.run_steps(3);
+        assert_eq!(focused(&h), Some((name.into(), widget)), "Tab");
+        for key in [egui::Key::Space, egui::Key::ArrowDown, egui::Key::ArrowRight] {
+            h.key_press(key);
+            h.run_steps(2);
+        }
+        assert_eq!(focused(&h), Some((name.into(), widget)), "{name} keeps the focus");
+        if name == "combo" {
+            assert!(h.query_by_label("Beta").is_none(), "the read-only combo box opened no list");
+        }
+    }
+    assert!(value(&h, "tick").is_empty() && value(&h, "pick").is_empty(), "nothing was ticked or chosen");
+    assert_eq!((value(&h, "list"), value(&h, "combo")), (vec!["one".to_string()], vec!["Alpha".to_string()]));
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(focused(&h), Some(("last".into(), 0)));
+    for (name, widget) in stops.into_iter().rev().chain([("first", 0)]) {
+        h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
+        h.run_steps(3);
+        assert_eq!(focused(&h), Some((name.into(), widget)), "Shift+Tab goes back the same way");
+    }
+}
+
+/// Clicking a check box while typing keeps the typed text and focuses the box, so Tab goes on
+/// from it (#2223).
 #[test]
 fn clicking_a_check_box_while_typing_keeps_the_text_and_focuses_the_box() {
     // Issue #2223: the click ticked the box but left no field focused, so Tab started over.
@@ -756,12 +856,16 @@ fn type_then_save_in_one_frame(h: &mut Harness<'static, PdfCraftApp>, name: &str
     h.run_steps(3);
 }
 
+/// Keystrokes typed in the same frame as ⌘S are saved, read back once the save has written
+/// the file. Its scratch folder is its own: `tabbing_back_to_the_same_field_then_saving_keeps_the_committed_value`
+/// has a `same-frame` case, and the two run in parallel.
 #[test]
 fn typing_and_saving_in_the_same_frame_saves_the_last_keystrokes() {
-    let dir = scratch("same-frame");
+    let dir = scratch("typed-same-frame");
     let out = dir.join("saved.pdf");
     let mut h = harness();
     type_then_save_in_one_frame(&mut h, "name", "Browser", egui::Event::Text(" Form 123".into()), &out);
+    wait_for_file(&mut h, &out);
     assert_eq!(saved_value(&out, "name"), ["Browser Form 123"]);
     let _ = std::fs::remove_dir_all(&dir);
 }
