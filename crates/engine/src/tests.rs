@@ -2219,6 +2219,24 @@ fn delete_annotations_removes_all_comments_and_undo_restores_them() {
     assert_eq!(s.get(id).unwrap().info.annotations.len(), 2);
 }
 
+#[test]
+fn delete_annotations_on_several_pages_is_labelled_as_page_comments() {
+    let (mut s, id) = session_with(3);
+    let rect = Shape::Rectangle { rect: [100.0, 100.0, 200.0, 200.0] };
+    let style = Style::default_for(&rect);
+    for page in 0..3 {
+        s.apply(
+            id,
+            Edit::AddAnnotation(NewAnnotation { page, shape: rect.clone(), style: style.clone(), contents: "note".into(), author: "Marc".into() }),
+        )
+        .unwrap();
+    }
+
+    s.apply(id, Edit::DeleteAnnotations { pages: Some(vec![0, 1]) }).unwrap();
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Delete page comments"));
+    assert_eq!(s.get(id).unwrap().info.annotations.len(), 1);
+}
+
 /// Clearing one page takes a deleted comment's pop-up and reply from the next page too, and one
 /// undo step puts all of them back.
 #[test]
