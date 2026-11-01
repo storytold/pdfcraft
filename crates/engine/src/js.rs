@@ -11,6 +11,15 @@ pub use pdfcraft_js::{Limits, Message, MessageButtons, MessageIcon, Outcome, Pan
 
 use crate::{DocId, Edit, EditError, Session};
 
+/// A field gaining or losing focus ([`Session::field_focus`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FieldFocus {
+    /// The field gained focus: its `enter` scripts run.
+    Enter,
+    /// The field lost focus: its `exit` scripts run.
+    Exit,
+}
+
 /// What scripts produced for the viewer since it last looked.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct JsOutput {
@@ -261,6 +270,36 @@ impl Session {
     /// What scripts printed or asked for since the last call (alerts, console, print, …).
     pub fn take_js_output(&mut self, id: DocId) -> JsOutput {
         self.docs.iter_mut().find(|d| d.id == id).map(|d| std::mem::take(&mut d.js_output)).unwrap_or_default()
+    }
+
+    /// Widget `widget` of field `name` in document `id` gained or lost focus: on a laid-out XFA form,
+    /// run the field's `enter` or `exit` scripts, as one undoable edit when they change something
+    /// (and none when they don't). An exit that the field's new value already ran (the value's
+    /// change runs it) isn't run a second time. Returns whether the document changed; what the
+    /// scripts showed or asked for is in [`Session::take_js_output`].
+    pub fn field_focus(&mut self, id: DocId, name: &str, widget: usize, focus: FieldFocus) -> Result<bool, EditError> {
+        if self.js_off {
+            return Ok(false);
+        }
+        let doc = self.doc_mut(id)?;
+        let Some(tpl) = doc.xfa_template.clone().filter(|t| pdfcraft_xfa::has_focus_scripts(t)) else { return Ok(false) };
+        let Some(cos) = doc.editor.as_ref().map(|e| &e.cos) else { return Ok(false) };
+        let Some(som) = doc.form.iter().find(|f| f.name == name).and_then(|f| crate::xfa::widget_som(cos, f, widget)) else { return Ok(false) };
+        let activity = match focus {
+            FieldFocus::Enter => "enter",
+            FieldFocus::Exit => "exit",
+        };
+        if !crate::xfa::has_event(cos, &tpl, &som, activity) {
+            doc.xfa_exited.remove(&som);
+            return Ok(false);
+        }
+        // Gaining focus starts afresh; losing it runs the exit unless the change just did.
+        if doc.xfa_exited.remove(&som) && focus == FieldFocus::Exit {
+            return Ok(false);
+        }
+        let before = doc.generation;
+        self.apply(id, Edit::XfaEvent { som, activity: activity.into() })?;
+        Ok(self.get(id).is_some_and(|d| d.generation != before))
     }
 
     /// Run `script` in document `id`, for a button (`target`: the field, event "Mouse Up") or
