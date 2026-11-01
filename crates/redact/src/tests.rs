@@ -2164,12 +2164,12 @@ fn overlay_text_takes_its_font_size_colour_alignment_and_repeats() {
 }
 
 /// "No colour" in Redaction Tool Properties (#3883): a mark with no fill has no `/IC`, so applying
-/// it removes what is under it and draws no box (ISO 32000-2 Table 195).
+/// it removes what is under it and draws no box (ISO 32000-2 Table 195), but still its overlay text.
 #[test]
-fn a_mark_with_no_fill_colour_draws_no_box() {
-    let applied = |fill| {
+fn a_mark_with_no_fill_colour_draws_its_overlay_text_but_no_box() {
+    let applied = |fill, overlay: &str| {
         let mut doc = one_page(b"BT /F1 12 Tf 20 250 Td (Secret salary figures) Tj ET", "", Vec::new());
-        let shape = Shape::Redact { quads: vec![rect_quad([10.0, 240.0, 290.0, 270.0])], overlay: String::new(), look: Default::default() };
+        let shape = Shape::Redact { quads: vec![rect_quad([10.0, 240.0, 290.0, 270.0])], overlay: overlay.into(), look: Default::default() };
         let mut style = Style::default_for(&shape);
         style.fill = fill;
         add_annotation(&mut doc, &NewAnnotation { page: 0, shape, style, contents: String::new(), author: "T".into() }, &Meta::default()).unwrap();
@@ -2177,10 +2177,12 @@ fn a_mark_with_no_fill_colour_draws_no_box() {
         apply(&mut doc, None).unwrap();
         content(&reopen(&doc), 0)
     };
-    let red = applied(Some([1.0, 0.0, 0.0]));
+    let red = applied(Some([1.0, 0.0, 0.0]), "");
     assert!(red.contains("1 0 0 rg") && red.contains(" re f"), "{red}");
-    let none = applied(None);
+    let none = applied(None, "");
     assert!(!none.contains(" re f") && !none.contains("Secret"), "{none}");
+    let text = applied(None, "REDACTED");
+    assert!(text.contains("(REDACTED) Tj") && !text.contains(" re f") && !text.contains("Secret"), "{text}");
 }
 
 fn repeated_overlay_document(width: f64, height: f64, repeat: bool) -> Document {
