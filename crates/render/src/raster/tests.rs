@@ -8765,3 +8765,53 @@ fn content_after_an_inline_image_holding_ei_is_still_read() {
     // `EI` inside the data was not taken for the end.
     assert!(page.contains("AFTER"), "the content after the image was lost: {page:?}");
 }
+
+/// Issue #4800: MRC scanned PDFs store the text layer as a high-resolution 1-bit `/ImageMask
+/// true` stencil without `/Interpolate`. Shrinking that stencil by nearest-neighbour keeps one
+/// sample in N and drops strokes thinner than N mask pixels, leaving text broken and jagged.
+#[test]
+fn shrunk_stencil_mask_keeps_thin_strokes() {
+    let mask: [u8; 1] = [0b1101_1111];
+    let content = "q 4 0 0 1 0 0 cm /Im0 Do Q";
+    let pdf = format!(
+        "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 4 1] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         5 0 obj << /Type /XObject /Subtype /Image /Width 8 /Height 1 /ImageMask true /BitsPerComponent 1 /Filter /ASCIIHexDecode /Length {} >> stream\n{}>\nendstream endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF\n",
+        content.len(),
+        hex(&mask).len() + 1,
+        hex(&mask)
+    );
+    let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    assert_eq!((page.width, page.height), (4, 1));
+    let grays: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
+    assert!((64..=191).contains(&grays[1]), "the stroke is lost or not a mid-tone: {grays:?}");
+    assert_eq!(grays[3], 255, "{grays:?}");
+
+    // A stencil wider than the filter's 2^20-sample side cap falls back to bounded
+    // nearest-neighbour resampling rather than being skipped.
+    let wide_samples: u32 = (1 << 20) + 8;
+    let wide_bytes = (wide_samples / 8) as usize;
+    let mut wide_pdf = format!(
+        "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 4 1] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         5 0 obj << /Type /XObject /Subtype /Image /Width {wide_samples} /Height 1 /ImageMask true /BitsPerComponent 1 /Length {wide_bytes} >> stream\n",
+        content.len(),
+    )
+    .into_bytes();
+    let half_bytes = wide_bytes / 2;
+    wide_pdf.extend(std::iter::repeat_n(0u8, half_bytes));
+    wide_pdf.extend(std::iter::repeat_n(0xFFu8, wide_bytes - half_bytes));
+    wide_pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+    let mut wide_renderer = PageRenderer::new(Arc::new(wide_pdf), RenderConfig::default());
+    let wide_page = wide_renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+    assert!(wide_page.error.is_none(), "{:?}", wide_page.error);
+    assert_eq!(&wide_page.rgba[..4], &[0, 0, 0, 255], "first half is black");
+    assert_eq!(&wide_page.rgba[12..16], &[255, 255, 255, 255], "second half is unpainted white");
+}
