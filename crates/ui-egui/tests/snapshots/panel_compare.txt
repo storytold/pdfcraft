@@ -1,0 +1,19 @@
+Label = "Compare"
+Label = "2"
+Button "Close" [off]
+Label = "2 Replaced"
+Label = "0 Inserted"
+Label = "0 Deleted"
+Label = "1 Visual"
+Label = "Show:"
+CheckBox "Text" [on]
+CheckBox "Visual" [on]
+Button "Side by side"
+Button "New file only"
+Button "Mark as comments"
+Button "Report…"
+Button "Clear"
+Label = "Replaced · page 1"
+Button "\"five\" → \"three\"" [off]
+Label = "Replaced · page 1"
+Button "\"accepted.\" → \"accepted for a week.\"" [off]

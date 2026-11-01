@@ -15,6 +15,12 @@ tools() -> Vec<ToolDef>                                  // name, title, descrip
 mcp::McpServer::new(a).serve(stdin, stdout)?             // newline-delimited JSON-RPC 2.0
 ```
 
+`content_update.rotate` rotates an added image counter-clockwise by an integer multiple of
+90 degrees. Large positive and negative signed 64-bit angles are normalized before combining
+them with the image's current orientation. Full turns retain its appearance, rectangle, crop
+and flips. Angles that are not multiples of 90 are refused without changing the document or
+its undo/redo history.
+
 `Content` is `Json(Value)` or `Png { data, width, height }`. Errors are `UnknownTool`, `InvalidArgs` (the call didn't match the schema) or `Failed` (a readable message for the agent).
 
 ## Conventions
@@ -25,10 +31,15 @@ mcp::McpServer::new(a).serve(stdin, stdout)?             // newline-delimited JS
 - Tools that change a document return its summary (`doc`, `pages`, `dirty`, `undo`, `redo`, …).
 - `comment_image_preview` returns JSON and a PNG: `layer: "background"` (the default) gives the page without the selected image signature/initials; `layer: "image"` gives its embedded image with alpha. The metadata supplies its displayed rectangle, document rotation, `image_rotation` (how far clockwise the image is shown turned: 0 for one placed by PdfCraft, which keeps it upright as displayed) and annotation opacity. Each result can be saved with the CLI's `--out`. Cache the background and transform the image for live movement/resizing; `comment_edit` commits the final geometry in one undo step. Previewing never changes the document.
 - For proportional image signature resizing, use the embedded image layer's width/height ratio rather than a previously stretched annotation rectangle. The GUI preserves this ratio at corners with the opposite corner anchored; edge midpoint handles change only their own axis. `comment_edit` accepts the resulting rectangle.
-- `doc_close` refuses to drop unsaved changes unless `discard_changes: true`. `doc_save` writes atomically, incrementally in place, and in full for a new path.
+- `doc_close` refuses to drop unsaved changes unless `discard_changes: true`. `doc_save` writes atomically, incrementally in place, and in full for a new path. Atomic output writes call `sync_all` on the staging file before replacing the destination. A write or sync error leaves the destination intact, removes staging and leaves the document dirty for retry. A filesystem that does not support syncing returns an error; there is no unsynced fallback. This flushes file contents, but does not guarantee persistence of the parent-directory rename across power loss.
 - With a root set, every read and write path must resolve inside it (symlinks and `..` included). Relative paths resolve inside the root, and `..` is resolved by name before the check. Every path outside the root gets the same refusal (`<path> is outside the allowed directory <root>`), whether or not it exists, so a confined agent can't probe the rest of the disk; on Windows another network share or device path (`\\host\share`, `\\?\UNC\…`, `\\.\…`) is refused without being contacted. "Not found" and other filesystem errors are reported only for paths inside the root. Tools that write several files into a folder name them after the document or input file, with separators, colons and control characters replaced by `_`, so a name can't lead them out of the folder. The root itself must be a folder.
+- `Automation::with_automation_roots` holds a read folder and a write folder (`pdfcraft-cli mcp --automation-read-root DIR --automation-write-root DIR`, see [docs/mcp.md](../../docs/mcp.md)). Reads must lie inside the read root and writes inside the write root, links followed. A root left out grants none of its access. Refusals read `automation path rejected: outside the read root <root>: <path>`. As with a root set, on Windows a path on another network share or device path is refused with that refusal without being contacted (#4003). It applies on top of `with_root`.
 
 ## Text search and cache limits
+
+`text_word_count` counts the current snapshot without filling the text cache. It returns totals
+and per-page Unicode word/character counts, with optional tagged-table, tagged-code and
+image/OCR exclusions. See [word count](../../docs/word-count.md) for counting rules and limits.
 
 Extracted page text is reused in a session-wide LRU cache: at most **64 MiB** of estimated owned
 text storage and **4,096 pages**, shared by all open documents. Accounting includes glyph-vector
@@ -59,6 +70,20 @@ semantics; they never silently act on partial text.
 
 ## Shared field properties
 
+For an individual push button, `form_set_props` also edits its visible normal label:
+
+```json
+{"doc": 1, "field": "clear_button", "caption": "Clear Form", "widget": 1}
+```
+
+`widget` is a 1-based index (default 1), used only with `caption`; an empty caption clears the
+label. Neither renames the field. `form_fields` returns the first widget's `caption` and all
+`captions` as `[{"widget": 1, "caption": "Clear Form"}]`. Other widgets and icon-only layouts
+keep their settings. CLI and MCP use the same edit, including undo/redo and save/reopen.
+The desktop exposes it as **Button Properties → Options → Label**. Rollover/down labels and
+icon layout are not edited here; the existing caption font and unsupported-character warning
+policy apply.
+
 `form_set_props` accepts either `field` (one name) or `fields` (1–1000 unique names):
 
 ```json
@@ -70,7 +95,7 @@ The batch is atomic and creates one undo step. A missing or locked field, invali
 unknown argument or malformed appearance refuses the whole edit. Set `locked: false` to
 unlock and change fields together. Only supplied properties change: each field/widget keeps
 its other colours, fonts, values and unknown PDF dictionary keys. `"none"` removes a border
-or fill colour. Names, rectangles and rotations require the single-field form. Results keep
+or fill colour. Names, rectangles, rotations and captions require the single-field form. Results keep
 `field` for single edits and return `fields` for batches. CLI and MCP use the same tool.
 
 ## MCP server
@@ -87,13 +112,13 @@ The release packages ship `pdfcraft-cli` alongside the desktop app, so no build 
 
 | Install | CLI |
 |---|---|
-| Windows (MSI) | `C:\Program Files\PdfCraft\pdfcraft-cli.exe` by default (wherever you installed it otherwise), not on `PATH` |
+| Windows (MSI) | `%LOCALAPPDATA%\Programs\ArtCraft\PdfCraft\pdfcraft-cli.exe` by default (`C:\Program Files\ArtCraft\PdfCraft\pdfcraft-cli.exe` for an all-users install, under `Program Files (x86)` instead for the 32-bit build, or wherever you installed it otherwise), not on `PATH` |
 | Linux (deb, rpm) | `/usr/bin/pdfcraft-cli` |
 | macOS | the separate `pdfcraft-cli-<version>-macos-<arch>.zip` release asset (the `.app` holds only the desktop app) |
 
 ```sh
-# Windows, default install folder
-claude mcp add pdfcraft -- "C:\Program Files\PdfCraft\pdfcraft-cli.exe" mcp --root <dir>
+# Windows (PowerShell), default install folder
+claude mcp add pdfcraft -- "$env:LOCALAPPDATA\Programs\ArtCraft\PdfCraft\pdfcraft-cli.exe" mcp --root <dir>
 # Linux, or macOS with the CLI unzipped onto PATH
 claude mcp add pdfcraft -- pdfcraft-cli mcp --root <dir>
 ```
@@ -103,7 +128,7 @@ claude mcp add pdfcraft -- pdfcraft-cli mcp --root <dir>
 1. Add the engine capability first, with its tests (the tool is a thin adapter).
 2. Add a `ToolDef` in `src/tools.rs`: a precise description, the schema, `ro()`/`destructive()`, and `cmd()` if a registry command exists.
 3. Handle it in `Automation::call`, validating pages and positions with the existing helpers.
-4. Add an end-to-end test in `tests/automation.rs`. `tool_table_is_well_formed` checks names, schemas and command links.
+4. Add an end-to-end test in `tests/it/automation.rs`. `tool_table_is_well_formed` checks names, schemas and command links.
 
 
 ## Moving several page objects
@@ -152,6 +177,16 @@ For inline editor previews, `page_render` accepts `hide_text_block` (a 1-based i
 `text_paragraphs`). It renders the page without that paragraph’s source glyphs and leaves the
 working document unchanged.
 
+`page_render.hide_added_text` does the same for an added text item's 1-based index from
+`content_list` or `object_list`. It removes only that item in a read-only preview and is
+mutually exclusive with `hide_text_block`.
+
+When the renderer reports a warning for the page, `page_render` and `render_preview` return a
+JSON part after the PNG, `{ "page": 1, "warnings": [...] }`, with the sentences
+`pdfcraft-cli render` prints: "content past the page's safety budget was skipped" and "a colour
+that could not be computed was painted in a fallback colour". A page without warnings returns
+the PNG alone.
+
 
 ## Existing text and document fonts
 
@@ -184,3 +219,38 @@ unapplied with a warning.
 `doc_batch` runs conversion, OCR and compression over files and optionally recursive
 folders. The CLI also exposes it as `pdfcraft-cli batch`. See the
 [batch guide](../../docs/cli-batch.md) for examples, output protection, errors and limits.
+
+## Editing button export values
+
+Use `form_set_props` with `field`, `export_value` and optional `widget`
+(1-based, default 1) to change a checkbox or radio button export value.
+`form_fields` returns `export_values` in widget order. The selected/default
+appearance states are preserved; the operation is undoable and survives saving.
+Widgets sharing an appearance state keep one export value. Bulk edits are not
+supported for this widget-specific property. Empty values, `Off`, conflicting
+choices and values over 4096 UTF-8 bytes return an error.
+
+Example: `form_set_props doc=1 field=agree export_value=Accepted widget=1`.
+
+## Viewer navigation history
+
+A running PdfCraft instance launched with `--control FILE` exposes its per-tab history through
+`pdfcraft-cli ui --control FILE command id=view.previous_view` and
+`pdfcraft-cli ui --control FILE command id=view.next_view`. `commands` reports whether each action
+is enabled for the active document. These are the same actions as the rail buttons, View → Page
+navigation, and Ctrl+[ / Ctrl+] (⌘[ / ⌘] on macOS).
+
+Explicit page jumps, including search-result selection and Next/Previous match, enter history
+when the page changes. Automatic search refresh, continuous scrolling, and within-page scroll
+movement do not. Existing page-step commands and single-page wheel turns retain their history
+behavior. Back/Forward
+returns to page tops, does not restore zoom, does not switch documents, and is not saved across
+restarts. Standalone engine/MCP sessions have no viewport, so they do not have a separate
+navigation-history tool; use the opt-in UI control channel to navigate the displayed document.
+
+## Fill & Sign text appearance
+
+`fill_sign_add` accepts `font_size` (4–300 pt, default 10) and `color`
+(`#RRGGBB`, default black) for `text` and `date`. The colour is saved in the
+FreeText appearance and survives reopening. Other mark/signature types reject
+`color`; their appearance controls are separate.
