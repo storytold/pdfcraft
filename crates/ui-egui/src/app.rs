@@ -391,6 +391,16 @@ impl PdfCraftApp {
         self.active.and_then(|i| self.views.get(i).map(|v| (i, v.id)))
     }
 
+    /// Returns the index of the nearest docked (non-detached) view to `target`.
+    /// Searches at or after `target` first, then before `target`.
+    pub(crate) fn nearest_docked_tab(&self, target: usize) -> Option<usize> {
+        if let Some(idx) = (target..self.views.len()).find(|&i| self.views.get(i).is_some_and(|v| !v.detached)) {
+            return Some(idx);
+        }
+        let limit = target.min(self.views.len());
+        (0..limit).rfind(|&i| self.views.get(i).is_some_and(|v| !v.detached))
+    }
+
     /// Detaches a document tab into its own window (view.multiple-windows).
     pub fn detach_tab(&mut self, id: DocId) {
         if self.views.len() <= 1 {
@@ -398,9 +408,8 @@ impl PdfCraftApp {
         }
         if let Some(i) = self.views.iter().position(|v| v.id == id) {
             self.views[i].detached = true;
-            if self.active == Some(i) {
-                // Switch to the first non-detached view, or None if none remain.
-                self.active = self.views.iter().enumerate().position(|(idx, v)| idx != i && !v.detached);
+            if self.active == Some(i) || self.active.is_some_and(|a| self.views.get(a).is_some_and(|v| v.detached)) {
+                self.active = self.nearest_docked_tab(i);
             }
         }
     }

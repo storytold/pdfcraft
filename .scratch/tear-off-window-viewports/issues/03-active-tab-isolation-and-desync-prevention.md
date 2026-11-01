@@ -9,10 +9,10 @@
 
 **Blocked by:** 01-wasm-gating-and-sole-tab-guard
 
-**Status:** ready-for-agent
+**Status:** complete
 
-- [ ] `self.active` never references an index where `views[i].detached == true`.
-- [ ] `detach_tab` shifts `self.active` to the nearest non-detached tab, or `None` if no docked tabs remain.
-- [ ] `close_tab` and `close_and_continue` in `crates/ui-egui/src/app/files.rs` and `crates/ui-egui/src/editing/close.rs` only select non-detached tabs for `self.active`.
-- [ ] `resolve_close` saves detached documents directly without mutating `self.active`.
-- [ ] Integration tests in `crates/ui-egui/tests/it/ui.rs` verify focus transitions when detaching active tabs and closing docked tabs with detached windows present.
+- [x] `self.active` never references an index where `views[i].detached == true`.
+- [x] `detach_tab` shifts `self.active` to the nearest non-detached tab, or `None` if no docked tabs remain.
+- [x] `close_tab` and `close_and_continue` in `crates/ui-egui/src/app/files.rs` and `crates/ui-egui/src/editing/close.rs` only select non-detached tabs for `self.active`.
+- [x] `resolve_close` saves detached documents directly without mutating `self.active`.
+- [x] Integration tests in `crates/ui-egui/tests/it/ui.rs` verify focus transitions when detaching active tabs and closing docked tabs with detached windows present.
