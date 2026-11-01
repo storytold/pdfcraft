@@ -1217,3 +1217,9 @@ fn date_languages_are_the_interface_languages() {
     let dates: Vec<(&str, &str)> = pdfcraft_engine::dates::DATE_LANGUAGES.iter().map(|l| (l.code, l.name)).collect();
     assert_eq!(dates, interface);
 }
+
+/// The stale-draft notice remains discoverable after the UI modules are reorganized.
+#[test]
+fn properties_stale_notice_is_in_translation_scan() {
+    assert!(ui_literals().contains("The document changed. Reopen Document Properties to edit the current version."));
+}

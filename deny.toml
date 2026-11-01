@@ -34,7 +34,10 @@ unknown-registry = "deny"
 unknown-git = "deny"
 # Shared UI components and spooler; Cargo.toml pins the immutable revision. craft-print pins
 # storytold's winprint fork (Windows printing, #1107) to an immutable revision of its own.
+# Contributor-owned pilot: CI restricts edit-session to the exact package, version
+# and immutable revision. This source-policy proposal still needs maintainer approval.
 allow-git = [
+    "https://github.com/PerchAnton/edit-session",
     "https://github.com/storytold/craft-libs",
     "https://github.com/storytold/winprint.rs",
     # The reviewed egui 0.37 and winit 0.30.13 fork revisions (immutable pins in Cargo.toml).

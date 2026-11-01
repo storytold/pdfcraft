@@ -22,7 +22,7 @@ pub(super) mod word_count_ui;
 pub(crate) use prompts::{PromptButton, save_prompt_key};
 use prompts::{full_screen_prompt, link_prompt, password, remote_link_prompt, save_prompt, unlock};
 
-const INFO_KEYS: [&str; 4] = ["Title", "Author", "Subject", "Keywords"];
+use crate::properties_session::INFO_KEYS;
 
 /// What the dialog's widgets asked for this frame; acted on after the modal is drawn.
 #[derive(Default)]
@@ -93,17 +93,18 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     if app.dialog != Some(Dialog::FieldTable) {
         app.field_table_draft = None;
     }
+    if !matches!(app.dialog, Some(Dialog::Properties(_))) {
+        app.discard_properties();
+    }
     // A movable window, not this modal: the page under it shows the table as it changes.
     if app.dialog == Some(Dialog::FieldTable) {
         crate::field_table_ui::show(app, ctx);
         return;
     }
-    let Some(dialog) = app.dialog else {
-        app.props_draft = None;
-        app.view_draft = None;
-        app.custom_draft = None;
+    let Some(dialog) = app.dialog else { return };
+    if matches!(dialog, Dialog::Properties(_)) && !app.prepare_properties() {
         return;
-    };
+    }
     // Properties ▸ Fonts shows the fonts as they are now, after any content edits.
     if let (Dialog::Properties(PropsTab::Fonts), Some((_, id))) = (dialog, app.active_ids()) {
         app.session.refresh_fonts(id);
@@ -111,15 +112,6 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     // Properties ▸ Space Audit walks the whole file, so it is measured once per edit, not per frame.
     if dialog == Dialog::Properties(PropsTab::SpaceAudit) {
         app.refresh_space_audit();
-    }
-    // Seed the editable Description fields from the document when the dialog opens.
-    if let (Dialog::Properties(_), Some((_, id))) = (dialog, app.active_ids())
-        && app.props_draft.as_ref().is_none_or(|(d, _)| *d != id)
-        && let Some(doc) = app.session.get(id)
-    {
-        app.props_draft = Some((id, INFO_KEYS.map(|k| doc.info_value(k).unwrap_or_default())));
-        app.view_draft = Some((id, doc.initial_view()));
-        app.custom_draft = Some((id, crate::CustomDraft { props: doc.custom_info(), ..Default::default() }));
     }
     let mut req = Pending::default();
     let modal = widgets::show_modal(ctx, "dialog", |ui| {
@@ -1555,7 +1547,8 @@ fn dialog_about(ui: &mut egui::Ui, req: &mut Pending) -> bool {
 
 fn dialog_footer(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
     ui.add_space(16.0);
-    let changed = draft_changes(app).is_some_and(|c| !c.is_empty());
+    app.stage_properties();
+    let changed = app.properties_changed();
     // One row high: on its own, a right-to-left layout centres the buttons in all the height
     // left, which after a taller Properties tab is the room that tab left behind.
     ui.horizontal(|ui| {
@@ -1824,10 +1817,8 @@ fn finish_edits(app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
     if let Some(by) = req.split_now.take() {
         app.split_active(&by);
     }
-    if req.apply
-        && let Some(edits) = draft_changes(app)
-    {
-        app.apply_edit(Edit::Batch { label: "Change document properties".into(), edits });
+    if req.apply && matches!(dialog, Dialog::Properties(_)) {
+        req.close = app.finish_properties();
     }
 }
 
@@ -1837,9 +1828,7 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
     let replaces = req.link_command.is_some_and(|c| c.starts_with("protect.")) || req.open_revision.is_some();
     if modal_closed || req.close || replaces {
         app.dialog = None;
-        app.props_draft = None;
-        app.view_draft = None;
-        app.custom_draft = None;
+        app.discard_properties();
         app.bulk_field_props = None;
         app.unmarked_page = Default::default();
     } else {
@@ -1874,37 +1863,6 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
         }
         app.run_accessibility_check();
     }
-}
-
-/// Info edits needed to make the document match the Description draft.
-fn draft_changes(app: &PdfCraftApp) -> Option<Vec<Edit>> {
-    let (id, draft) = app.props_draft.as_ref()?;
-    let doc = app.session.get(*id)?;
-    let mut edits: Vec<Edit> = INFO_KEYS
-        .iter()
-        .zip(draft.iter())
-        .filter(|(k, v)| doc.info_value(k).unwrap_or_default().trim() != v.trim())
-        .map(|(k, v)| Edit::SetInfo { key: (*k).to_string(), value: v.clone() })
-        .collect();
-    if let Some((vid, v)) = &app.view_draft
-        && vid == id
-        && *v != doc.initial_view()
-    {
-        edits.push(Edit::SetInitialView(Box::new(v.clone())));
-    }
-    // Custom: deleted properties are cleared, then added and changed ones are set.
-    if let Some((cid, d)) = &app.custom_draft
-        && cid == id
-    {
-        let before = doc.custom_info();
-        for (k, _) in before.iter().filter(|(k, _)| !d.props.iter().any(|(n, _)| n == k)) {
-            edits.push(Edit::SetInfo { key: k.clone(), value: String::new() });
-        }
-        for (k, v) in d.props.iter().filter(|(k, v)| !before.iter().any(|(n, w)| n == k && w == v)) {
-            edits.push(Edit::SetInfo { key: k.clone(), value: v.clone() });
-        }
-    }
-    Some(edits)
 }
 
 fn yes(b: bool) -> String {

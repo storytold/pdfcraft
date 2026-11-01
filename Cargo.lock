@@ -1697,6 +1697,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "edit-session"
+version = "0.1.0-alpha.2"
+source = "git+https://github.com/PerchAnton/edit-session?rev=033f7c3a67b825b8f222288788cc61234c0c945d#033f7c3a67b825b8f222288788cc61234c0c945d"
+
+[[package]]
 name = "eframe"
 version = "0.37.0"
 source = "git+https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc799681571963842f95b55a6b68431b15a"
@@ -4661,6 +4666,7 @@ dependencies = [
  "craft-quit",
  "craft-ui",
  "craft-update",
+ "edit-session",
  "eframe",
  "egui",
  "egui_extras",

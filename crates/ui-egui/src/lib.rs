@@ -41,6 +41,7 @@ pub use combine_ui::{Columns as CombineColumns, CombineView, Lock as CombineLock
 mod commands;
 pub mod control;
 mod menus;
+mod properties_session;
 /// Header & footer / watermark / background dialog types (tests and automation).
 pub mod marks {
     pub use crate::marks_ui::{MarksDraft, PageRange, Subset};
@@ -444,6 +445,8 @@ pub struct PdfCraftApp {
     pub view_draft: Option<(DocId, pdfcraft_engine::InitialView)>,
     /// Document Properties ▸ Custom being edited.
     pub custom_draft: Option<(DocId, CustomDraft)>,
+    /// Original values and document revision for the editable Properties tabs.
+    pub(crate) props_session: Option<properties_session::Draft>,
     /// Files picked asynchronously for combine / insert (web).
     pub requests: files::Requests,
     /// Native file pickers in flight (they never block the frame; see `pickers`).

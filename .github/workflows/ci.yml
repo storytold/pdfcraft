@@ -21,10 +21,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # The shared gate doesn't check where git dependencies come from; release.yml runs the same job.
+  # The shared gate doesn't check where git dependencies come from.
   git-sources:
     if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
-    name: Git dependencies come from storytold
+    name: Git dependencies match source policy
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -35,7 +35,7 @@ jobs:
       - name: Windows font notice regressions
         shell: pwsh
         run: ./packaging/windows/test-font-notices.ps1
-      - name: Git dependencies come from storytold
+      - name: Git dependencies match source policy
         run: |
           set -euo pipefail
           test -f Cargo.lock || { echo "Cargo.lock is missing"; exit 1; }
@@ -59,11 +59,19 @@ jobs:
           python3 - <<'PY'
           import sys, tomllib
           lock = tomllib.load(open("Cargo.lock", "rb"))
+          # Deliberately narrow pilot exception: one package/version/immutable revision.
+          # A new release or another contributor-owned dependency needs explicit review.
+          edit_session = (
+              "edit-session", "0.1.0-alpha.2",
+              "git+https://github.com/PerchAnton/edit-session?rev=033f7c3a67b825b8f222288788cc61234c0c945d"
+              "#033f7c3a67b825b8f222288788cc61234c0c945d",
+          )
           bad = sorted({p["source"] for p in lock.get("package", [])
                         if p.get("source", "").startswith("git+")
-                        and not p["source"].startswith("git+https://github.com/storytold/")})
+                        and not p["source"].startswith("git+https://github.com/storytold/")
+                        and (p["name"], p["version"], p["source"]) != edit_session})
           if bad:
-              print("Git dependencies outside github.com/storytold:", *bad, sep="\n")
+              print("Unapproved Git dependencies:", *bad, sep="\n")
               sys.exit(1)
           PY
 

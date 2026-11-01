@@ -10,6 +10,7 @@
 > **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** patch (M2, PR #4172: reconcile current main while retaining display-only CJK fallback and upstream Japanese font selection; estimates unchanged)
 > **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M2, PR #4172: extend on-screen CJK fallback to Combine thumbnails and figure previews; recognise FangSong and subset-prefixed Founder names; estimates unchanged)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (typed small Edit font sizes and Fill & Sign text/date colour, #2444/#2496; estimates unchanged)
+> **Last reviewed:** 2026-10-25 | **Last updated:** 2026-10-25 | **Change:** minor (M4: Document Properties draft safety; estimates unchanged)
 
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
@@ -719,8 +720,13 @@ Newest first: the date, what moved, and the new overall estimate.
 - M13: common command, batch, inspection and bounded preview tools share the existing confined automation path. MCP tools carry complete hints and reject unknown top-level keys as invalid parameters.
 - **2026-10-10 (UI docking):** Tools and Inspector can be regrouped, split beside the PDF, or floated inside the app window. Existing toggles reopen panels at their saved locations; UI commands arrange/reset panels, and preferences retain their layout. Read/full-screen modes preserve the focused document view. No milestone percentage change.
 
+- **2026-10-25 (M4, #4594 review):** Documented the session bridge and replay adapter; the stale notice now participates in translation-gap scanning, with a regression test. Adoption remains pending both external-dependency decisions and the shared release gate proposal (craft-common-actions #84); behavior and estimates unchanged.
+
+- **2026-10-25 (M4):** Document Properties drafts now reject changed document identities/revisions, including reload and Undo/Redo, through pinned edit-session; real UI JSONL scenarios replay with interaction-check. Broader dialog invalidation remains separate (#3917); estimates unchanged.
+
 ## Revision history
 
+- **2026-10-25 · minor:** Document Properties drafts now reject changed document identities/revisions, including reload and Undo/Redo, through pinned edit-session; real UI JSONL scenarios replay with interaction-check. Broader dialog invalidation remains separate (#3917); estimates unchanged.
 **2026-10-25 · minor:** M14 localization current state: Arabic catalogs stay logical, Arabic/Kurdish labels take an explicit RTL direction, and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native Simplified Chinese uses LXGW WenKai Lite; the web build has no Hans face. Estimates unchanged.
 
 **2026-10-15 · minor:** M14/#2383 candidate: GPU device requests clamp unsupported limits while retaining the adapter texture extent. Synthetic V3D/downlevel regressions and Windows GPU-required tests pass; Raspberry Pi hardware remains unverified. Estimates unchanged.
