@@ -2846,6 +2846,10 @@ theme	Appearance	Aspecte
 	Unpin tool	Desenganxa l'eina
 	Arrange image	Organitza la imatge
 	Crop	Escapça
+	Add a paper size of your own to the list	Afegeix una mida de paper pròpia a la llista
+	Custom…	Personalitzada…
+	Remember this paper for {printer}	Recorda aquest paper per a {printer}
+	Take this paper size off the list	Treu aquesta mida de paper de la llista
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Avui

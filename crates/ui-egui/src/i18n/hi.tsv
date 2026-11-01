@@ -2816,6 +2816,10 @@ theme	Appearance	स्वरूप
 	Remove crop	क्रॉप हटाएँ
 	Send backward	पीछे भेजें
 	Send to back	सबसे पीछे भेजें
+	Add a paper size of your own to the list	सूची में अपना कस्टम पेपर आकार जोड़ें
+	Custom…	कस्टम…
+	Remember this paper for {printer}	{printer} के लिए यह पेपर याद रखें
+	Take this paper size off the list	इस पेपर आकार को सूची से हटाएँ
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	आज

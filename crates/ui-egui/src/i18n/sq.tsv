@@ -2571,6 +2571,10 @@ animation effects	Off	Joaktiv
 	Remove crop	Hiq prerjen
 	Send backward	Kalo prapa
 	Send to back	Dërgo mbrapa
+	Add a paper size of your own to the list	Shto në listë një madhësi letre të tuajën
+	Custom…	E personalizuar…
+	Remember this paper for {printer}	Kujto këtë letër për {printer}
+	Take this paper size off the list	Hiq këtë madhësi letre nga lista
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Sot

@@ -2856,6 +2856,10 @@ theme	Appearance	Teema
 	Unpin tool	Irrota työkalu
 	Arrange image	Järjestä kuva
 	Crop	Rajaa
+	Add a paper size of your own to the list	Lisää oma paperikoko luetteloon
+	Custom…	Mukautettu…
+	Remember this paper for {printer}	Muista tämä paperi tulostimelle {printer}
+	Take this paper size off the list	Poista tämä paperikoko luettelosta
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Tänään

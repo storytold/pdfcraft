@@ -2846,6 +2846,10 @@ theme	Appearance	Aspect
 	Unpin tool	Anulează fixarea instrumentului
 	Arrange image	Aranjează imaginea
 	Crop	Decupare
+	Add a paper size of your own to the list	Adăugați o dimensiune de hârtie proprie în listă
+	Custom…	Personalizat…
+	Remember this paper for {printer}	Reține această hârtie pentru {printer}
+	Take this paper size off the list	Scoateți această dimensiune de hârtie din listă
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Astăzi

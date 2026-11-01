@@ -2817,6 +2817,10 @@ theme	Appearance	Tampilan
 	Remove crop	Hapus pangkasan
 	Send backward	Mundur Selangkah
 	Send to back	Kirim ke Belakang
+	Add a paper size of your own to the list	Tambahkan ukuran kertas Anda sendiri ke daftar
+	Custom…	Kustom…
+	Remember this paper for {printer}	Ingat kertas ini untuk {printer}
+	Take this paper size off the list	Hapus ukuran kertas ini dari daftar
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hari ini
