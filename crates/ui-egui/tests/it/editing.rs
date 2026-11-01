@@ -4643,7 +4643,7 @@ fn a_double_click_on_a_menu_item_over_a_group_does_not_ungroup_it() {
     let r = h.state().views[0].page_screen_rect(0).expect("on screen");
     right_click_at(&mut h, r.center());
     h.run_steps(1);
-    let item = h.get_by_label("Flip Horizontal").rect().center();
+    let item = h.get_by_label("Flip horizontal").rect().center();
     assert!(r.contains(item), "the item lies over the group: {item:?} in {r:?}");
     double_click_at(&mut h, item);
     let doc = h.state().session.get(id).unwrap();
