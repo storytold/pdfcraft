@@ -2360,7 +2360,7 @@ fn root_window_close_sequence_prompts_sequentially_across_docked_and_detached_an
     // After discarding first.pdf, next prompt sequentially asks about dirty detached middle.pdf on main window
     h.get_by_label_contains("Save changes to “middle.pdf” before closing?");
     h.get_by_label("Don't save").click();
-    h.run_steps(3);
+    h.step();
 
     // Once all dirty documents are resolved, quit completes: allow_quit is true, no prompts remain
     assert!(h.state().close_request.is_none());
