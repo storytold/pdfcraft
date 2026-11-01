@@ -529,6 +529,10 @@ impl PdfCraftApp {
                 self.reveal_tools();
                 self.notify_tr("Click text or an image to edit it");
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            "edit.search_folder" => self.dialog = Some(crate::Dialog::FolderSearch),
+            #[cfg(target_arch = "wasm32")]
+            "edit.search_folder" => self.notify_tr("Searching a folder needs the desktop app"),
             "edit.advanced_search" => {
                 if let Some(i) = self.active {
                     let f = self.views[i].find.get_or_insert_with(Default::default);

@@ -1489,7 +1489,7 @@ fn files_for_combine_are_made_into_pdfs_and_pdfs_pass_through() {
     assert!(matches!(err, EditError::Source(m) if m.starts_with("report.docx: this file type can't be converted")));
 }
 
-fn protected(user: &str, owner: &str, permissions: i32) -> Arc<Vec<u8>> {
+pub(crate) fn protected(user: &str, owner: &str, permissions: i32) -> Arc<Vec<u8>> {
     let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(2))).unwrap();
     doc.set_encryption(&pdfcraft_cos::NewEncryption {
         algorithm: pdfcraft_cos::Algorithm::Aes256,

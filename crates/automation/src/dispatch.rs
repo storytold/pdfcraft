@@ -55,6 +55,7 @@ impl Automation {
         let out = match name {
             "doc_open" => self.doc_open(&a)?,
             "doc_batch" => self.doc_batch(&a)?,
+            "folder_search" => self.folder_search(&a)?,
             "doc_list" => json!({ "documents": self.session.docs().iter().map(summary).collect::<Vec<_>>() }),
             "doc_info" => {
                 let id = self.doc(&a)?.id;
