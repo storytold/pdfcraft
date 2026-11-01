@@ -8805,10 +8805,13 @@ fn shrunk_stencil_mask_keeps_thin_strokes() {
         content.len(),
     )
     .into_bytes();
-    wide_pdf.extend(std::iter::repeat_n(0u8, wide_bytes));
+    let half_bytes = wide_bytes / 2;
+    wide_pdf.extend(std::iter::repeat_n(0u8, half_bytes));
+    wide_pdf.extend(std::iter::repeat_n(0xFFu8, wide_bytes - half_bytes));
     wide_pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
     let mut wide_renderer = PageRenderer::new(Arc::new(wide_pdf), RenderConfig::default());
     let wide_page = wide_renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
     assert!(wide_page.error.is_none(), "{:?}", wide_page.error);
-    assert_eq!(&wide_page.rgba[..4], &[0, 0, 0, 255], "wide stencil was skipped");
+    assert_eq!(&wide_page.rgba[..4], &[0, 0, 0, 255], "first half is black");
+    assert_eq!(&wide_page.rgba[12..16], &[255, 255, 255, 255], "second half is unpainted white");
 }
