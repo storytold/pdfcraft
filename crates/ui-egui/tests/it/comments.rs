@@ -3055,3 +3055,23 @@ fn the_comments_panel_lays_out_only_the_cards_in_view() {
     assert!(h.query_by_label("Card 101").is_some(), "the selected card is drawn and scrolled to");
     assert!(h.query_by_label("Card 1").is_none(), "the top of the list scrolled out of view");
 }
+
+/// CodeRabbit on #5583: a card's measured height belongs to what it showed. Card 1, far above the
+/// cards in view, grows by two replies; the cards in view move down by its growth, not stay where
+/// card 1's old height would put them.
+#[test]
+fn a_card_out_of_view_that_grows_moves_the_cards_below_it() {
+    let mut h = harness_with_bytes(one_comment_per_page(120), |app| app.set_option("panel", "comments").unwrap());
+    h.run_steps(4);
+    h.state_mut().views[0].comments.selected = Some((60, 0));
+    h.state_mut().views[0].comments.reveal = true;
+    h.run_steps(4);
+    assert!(h.query_by_label("Card 1").is_none(), "card 1 is out of view");
+    let before = h.get_by_label("Card 61").rect().top();
+    for text in ["A first reply", "A second reply"] {
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::ReplyToAnnotation { page: 0, index: 0, text: text.into(), author: "Bo".into() });
+    }
+    h.run_steps(4);
+    let after = h.get_by_label("Card 61").rect().top();
+    assert!(after > before + 40.0, "the cards below a grown card move down: {before} → {after}");
+}

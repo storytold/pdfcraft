@@ -256,7 +256,8 @@ pub(crate) fn show(
             }
         } else if a.page != page {
             page = a.page;
-            let header = ui.scope_id().with(("comment-page-header", page));
+            // Per document: two documents shown at the same width don't share heights.
+            let header = ui.scope_id().with(("comment-page-header", view.id, page));
             if !(virtual_list && skip_if_hidden(ui, header)) {
                 let top = ui.cursor().min.y;
                 page_header(ui, t, info, page, page_counts.get(&page).copied().unwrap_or_default(), &mut view.comments.collapsed_pages);
@@ -269,13 +270,17 @@ pub(crate) fn show(
             continue;
         }
         let key = (a.page, a.index);
+        let thread = replies_of(a);
+        let selected = view.comments.selected == Some(key);
+        // A height is kept for what the card showed when it was measured: its document, what the
+        // thread says and whether it was the selected card (which draws its menu and editor). An
+        // edit, undo or redo that changes the card measures it afresh; other cards keep theirs.
+        let id = ui.scope_id().with(("comment-card", view.id, key, card_signature(a, thread), selected));
         // The selected card is always drawn, so it can scroll itself into view and keep its menu
         // and editor.
-        let id = ui.scope_id().with(("comment-card", key));
-        if virtual_list && view.comments.selected != Some(key) && skip_if_hidden(ui, id) {
+        if virtual_list && !selected && skip_if_hidden(ui, id) {
             continue;
         }
-        let thread = replies_of(a);
         let rotation = info.pages.get(a.page).map_or(0, |p| p.rotation);
         let top = ui.cursor().min.y;
         if let Some(e) = card(ui, view, CardContext { theme: t, annotation: a, rotation, thread, doc, prefs, allowed, nav }) {
@@ -317,6 +322,19 @@ fn page_header(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, page: usize, n: us
             collapsed.retain(|&c| c != page);
         }
     }
+}
+
+/// What a card's height depends on in the document: the comment and its replies as shown (their
+/// kind, author, text, date, status, colour and lock). Two cards with the same signature lay out
+/// alike at one width.
+fn card_signature(a: &Annotation, thread: &[&Annotation]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for x in std::iter::once(a).chain(thread.iter().copied()) {
+        (&x.subtype, &x.author, &x.contents, &x.modified, &x.state, x.locked).hash(&mut h);
+        x.color.map(|c| c.map(f32::to_bits)).hash(&mut h);
+    }
+    h.finish()
 }
 
 /// Comment lists up to this long are laid out whole; longer ones lay out only what is in view.
