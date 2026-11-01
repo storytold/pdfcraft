@@ -40,6 +40,10 @@ pub trait ByteSource: Send + Sync {
     fn size(&self) -> u64;
     /// Fill `out` from `offset`; anything short of that is an error.
     fn read_at(&self, offset: u64, out: &mut [u8]) -> std::io::Result<()>;
+    /// When the file was last written, if the source can tell.
+    fn modified(&self) -> Option<std::time::SystemTime> {
+        None
+    }
 }
 
 /// A stream body left on disk.
@@ -109,6 +113,11 @@ impl OnDiskFile {
     /// The size of the file.
     pub fn size(&self) -> u64 {
         self.size
+    }
+
+    /// When the file was last written, as far as its source can tell.
+    pub fn modified(&self) -> Option<std::time::SystemTime> {
+        self.source.modified()
     }
 
     /// How many stream bodies stayed on disk.

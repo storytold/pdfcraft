@@ -130,20 +130,28 @@ fn saving_in_place_puts_back_a_file_that_was_deleted() {
     std::fs::remove_file(&file.path).unwrap();
     assert!(h.state_mut().save_active(SaveTarget::InPlace));
     assert_eq!(std::fs::read(&file.path).unwrap(), pdf);
+    assert!(h.state_mut().save_active(SaveTarget::InPlace), "it is the same file again");
 }
 
 #[test]
 fn saving_in_place_leaves_a_file_that_took_its_name() {
-    let file = Temp::new("replaced", &large());
-    let mut h = harness(true);
-    h.state_mut().open_path(&file.path);
-    h.run_steps(4);
-    assert!(on_disk(h.state()));
-    let newer = file.dir.join("newer.pdf");
-    std::fs::write(&newer, b"another program's newer file").unwrap();
-    std::fs::rename(&newer, &file.path).unwrap();
-    assert!(!h.state_mut().save_active(SaveTarget::InPlace));
-    assert_eq!(std::fs::read(&file.path).unwrap(), b"another program's newer file");
+    let pdf = large();
+    let mut same_size = pdf.clone();
+    same_size[0] ^= 1;
+    for bytes in [b"another program's newer file".to_vec(), same_size] {
+        let file = Temp::new("replaced", &pdf);
+        let mut h = harness(true);
+        h.state_mut().open_path(&file.path);
+        h.run_steps(4);
+        assert!(on_disk(h.state()));
+        let newer = file.dir.join("newer.pdf");
+        std::fs::write(&newer, &bytes).unwrap();
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+        std::fs::File::options().write(true).open(&newer).unwrap().set_modified(later).unwrap();
+        std::fs::rename(&newer, &file.path).unwrap();
+        assert!(!h.state_mut().save_active(SaveTarget::InPlace));
+        assert_eq!(std::fs::read(&file.path).unwrap(), bytes);
+    }
 }
 
 #[test]

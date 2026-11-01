@@ -191,6 +191,7 @@ fn a_file_opened_on_disk_reads_saves_as_a_copy_and_refuses_edits() {
     std::fs::remove_file(dir.join("large.pdf")).unwrap();
     json(&mut a, "doc_save", json!({ "doc": doc }));
     assert_eq!(std::fs::read(dir.join("large.pdf")).unwrap(), pdf, "a deleted file comes back");
+    json(&mut a, "doc_save", json!({ "doc": doc }));
     std::fs::write(dir.join("large.pdf"), b"another program's newer file").unwrap();
     assert!(a.call("doc_save", &json!({ "doc": doc })).is_err());
     assert_eq!(std::fs::read(dir.join("large.pdf")).unwrap(), b"another program's newer file", "and a newer file stays");

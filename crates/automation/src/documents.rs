@@ -156,8 +156,10 @@ impl Automation {
             if a.opt_bool("flatten_fill_sign")?.unwrap_or(false) || a.opt_bool("full")?.unwrap_or(false) {
                 return Err(pdfcraft_engine::EditError::OnDisk.into());
             }
-            if !same_file || pdfcraft_engine::on_disk::must_write_back(&target, file.size())? {
+            if !same_file {
                 write_atomic_from(&target, |out| file.copy_to(out))?;
+            } else if pdfcraft_engine::on_disk::must_write_back(&target, &file)? {
+                write_atomic_from(&target, |out| pdfcraft_engine::on_disk::write_back(&file, out))?;
             }
             return Ok(json!({ "path": target.to_string_lossy(), "bytes": file.size(), "incremental": false, "document": summary(doc) }));
         }

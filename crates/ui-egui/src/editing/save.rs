@@ -224,7 +224,7 @@ impl PdfCraftApp {
         let own = self.session.get(id).and_then(|d| d.path.as_deref()).is_some_and(|p| crate::same_file(p, dest));
         let path = std::path::Path::new(dest);
         if own {
-            match pdfcraft_engine::on_disk::must_write_back(path, file.size()) {
+            match pdfcraft_engine::on_disk::must_write_back(path, file) {
                 Ok(true) => {}
                 Ok(false) => return true,
                 Err(e) => {
@@ -233,8 +233,8 @@ impl PdfCraftApp {
                 }
             }
         }
-        match pdfcraft_platform::staging::write_atomically_from(path, pdfcraft_platform::staging::StagingName::TagThenSuffix, |out| file.copy_to(out))
-        {
+        let copy = |out: &mut std::fs::File| if own { pdfcraft_engine::on_disk::write_back(file, out) } else { file.copy_to(out) };
+        match pdfcraft_platform::staging::write_atomically_from(path, pdfcraft_platform::staging::StagingName::TagThenSuffix, copy) {
             Ok(()) => {
                 self.notify_fmt("Saved {name}", &[("name", &short_name(dest))]);
                 true
