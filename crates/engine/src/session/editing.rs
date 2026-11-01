@@ -411,6 +411,7 @@ impl Session {
                     | Edit::AddImage { .. }
                     | Edit::UpdateContent { .. }
                     | Edit::DeleteContent { .. }
+                    | Edit::ArrangeContent { .. }
                     | Edit::ReplaceImage { .. }
                     | Edit::PasteContent { .. }
                     | Edit::EditPageImage { .. }

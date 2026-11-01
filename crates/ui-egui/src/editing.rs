@@ -115,25 +115,28 @@ impl PdfCraftApp {
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
         let Some((i, id)) = self.active_ids() else { return false };
         let label = edit.label();
-        let target_arrange_image = match &edit {
-            Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Arrange(_) } => {
-                let doc = self.session.get(id);
-                let target = doc.and_then(|d| d.page_images(*page).get(*index).cloned());
-                let ambiguous = doc.is_some_and(|d| {
-                    if let Some(t) = &target {
-                        d.page_images(*page)
-                            .iter()
-                            .filter(|img| img.name == t.name && img.object == t.object && rect_matches(img.rect, t.rect))
-                            .count()
-                            > 1
-                    } else {
-                        false
-                    }
-                });
-                target.map(|t| (t, ambiguous))
-            }
+        let arrange_target = match &edit {
+            Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Arrange(_) } => Some((*page, *index)),
+            // Added-image shortcuts can change the image inventory's order too. Preserve the
+            // controller's selected picture by identity, just as the image menu does.
+            Edit::ArrangeContent { page, .. } => self
+                .views
+                .get(i)
+                .and_then(|view| view.image_selection.as_ref())
+                .filter(|selection| selection.page == *page)
+                .map(|selection| (*page, selection.index)),
             _ => None,
         };
+        let target_arrange_image = arrange_target.and_then(|(page, index)| {
+            let images = self.session.get(id)?.page_images(page);
+            let target = images.get(index)?.clone();
+            let ambiguous = images
+                .iter()
+                .filter(|image| image.name == target.name && image.object == target.object && rect_matches(image.rect, target.rect))
+                .count()
+                > 1;
+            Some((page, target, ambiguous))
+        });
         let (form_before, page_count_before, had_xfa) = if let Some(d) = self.session.get(id) {
             (Some(std::sync::Arc::clone(&d.form)), d.info.pages.len(), d.xfa.is_some())
         } else {
@@ -189,9 +192,9 @@ impl PdfCraftApp {
                 }
                 // Keep the pages the user acted on selected, where they now are.
                 select_after_edit(view, &edit, info, &annots_before, self.quick_tool);
-                if let (Some((target, ambiguous_before)), Edit::EditPageImage { page, .. }) = (target_arrange_image, &edit) {
-                    let page_images = doc.page_images(*page);
-                    re_resolve_image_selection(view, *page, &target, ambiguous_before, &page_images);
+                if let Some((page, target, ambiguous_before)) = target_arrange_image {
+                    let page_images = doc.page_images(page);
+                    re_resolve_image_selection(view, page, &target, ambiguous_before, &page_images);
                 }
                 if std::mem::take(&mut view.comments.tool_done) && !self.comment_prefs.pinned {
                     self.quick_tool = crate::QuickTool::Select;
@@ -325,6 +328,12 @@ impl PdfCraftApp {
             Some((s.page, target, ambiguous))
         });
         let had_selection = self.views.get(i).and_then(|v| v.image_selection.as_ref()).is_some();
+        // The selected added item, by its place in the page's content: the undo may reorder them.
+        let selected = self.views[i].content.selected.and_then(|(page, index)| {
+            let doc = self.session.get(id)?;
+            let item = doc.added().iter().filter(|a| a.page == page).nth(index)?;
+            Some((page, item.obj))
+        });
         let result = if undo { self.session.undo(id) } else { self.session.redo(id) };
         match result {
             Ok(label) => {
@@ -332,6 +341,10 @@ impl PdfCraftApp {
                     && let Some(view) = self.views.get_mut(i)
                 {
                     view.document_changed(&doc.info);
+                    // Keep the same added item selected across reorders and history steps.
+                    if let Some((page, obj)) = selected {
+                        view.content.selected = doc.added().iter().filter(|a| a.page == page).position(|a| a.obj == obj).map(|index| (page, index));
+                    }
                     view.picked_image = None;
                     if let Some((page, target, ambiguous_before)) = target_image {
                         let page_images = doc.page_images(page);
@@ -887,6 +900,7 @@ fn content_page(edit: &Edit) -> Option<usize> {
         | Edit::AddImage { page, .. }
         | Edit::UpdateContent { page, .. }
         | Edit::DeleteContent { page, .. }
+        | Edit::ArrangeContent { page, .. }
         | Edit::ReplaceImage { page, .. } => Some(*page),
         _ => None,
     }
