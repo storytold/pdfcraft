@@ -194,6 +194,14 @@ pub(super) fn notices(
         })
     } else if form.is_some() {
         form
+    } else if doc.from_book {
+        // A conversion with nothing to report (a fixed-layout book) has no Details to point to.
+        let text = if repaired {
+            tl!("Converted from an EPUB book. Details lists how it was laid out and what was left out.")
+        } else {
+            tl!("Converted from an EPUB book.")
+        };
+        Some(("book-open", text.to_string(), false))
     } else if repaired {
         Some(("bandage", tl!("This file was damaged and has been repaired. Saving keeps the repaired version.").to_string(), false))
     } else if !info.warnings.is_empty() {
