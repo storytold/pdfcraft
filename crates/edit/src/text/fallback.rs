@@ -1,3 +1,4 @@
+use super::HashSet;
 use super::interp::Ts;
 use super::lines::page_dict;
 use super::{
@@ -507,6 +508,21 @@ pub(super) fn type3_encode(fallback: &Type3Fallback, text: &str) -> Option<Vec<(
     runs.into_iter().map(|(font, bytes)| Some((fallback.names.get(font)?.clone(), bytes))).collect()
 }
 
+/// Consecutive source/fallback runs, without allocating a list of input-derived runs.
+pub(super) fn source_fallback_runs<'a>(mut text: &'a str, source_chars: Option<&'a HashSet<char>>) -> impl Iterator<Item = (bool, &'a str)> + 'a {
+    std::iter::from_fn(move || {
+        let first = text.chars().next()?;
+        let source = source_chars.is_some_and(|chars| chars.contains(&first));
+        let end = source_chars
+            .and_then(|chars| text.char_indices().find(|(_, ch)| chars.contains(ch) != source).map(|(offset, _)| offset))
+            .unwrap_or(text.len());
+        // char_indices supplies UTF-8 boundaries; get also handles an invalid range safely.
+        let run = text.get(..end)?;
+        text = text.get(end..)?;
+        Some((source, run))
+    })
+}
+
 /// The source font's own TrueType/OpenType program, when the document embeds a complete one whose
 /// licence allows editable embedding. A subset (an `ABCDEF+` name) is left out: a character can keep
 /// its mapping there after the subsetter dropped its outline.
@@ -577,6 +593,25 @@ pub(crate) fn source_width(metrics: &Metrics, text: &str, size: f64, space: f64,
         .map(|b| metrics.codes(&b).iter().map(|(c, _)| metrics.width(*c) * size + char_spacing).sum::<f64>())
         .sum();
     words + text.matches(' ').count() as f64 * (space * size + char_spacing + word_spacing)
+}
+
+#[cfg(test)]
+thread_local! {
+    static SOURCE_CHARACTER_MEASUREMENTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn take_source_character_measurements() -> usize {
+    SOURCE_CHARACTER_MEASUREMENTS.with(|count| count.replace(0))
+}
+
+/// An actually encodable source character in the normalized `Tw = 0` drawing state.
+pub(super) fn source_character_advance(metrics: &Metrics, ch: char, size: f64, char_spacing: f64) -> Option<f64> {
+    #[cfg(test)]
+    SOURCE_CHARACTER_MEASUREMENTS.with(|count| count.set(count.get().saturating_add(1)));
+    let mut utf8 = [0; 4];
+    let bytes = metrics.encode(ch.encode_utf8(&mut utf8))?;
+    Some(metrics.codes(&bytes).iter().map(|(code, _)| metrics.width(*code) * size + char_spacing).sum())
 }
 
 pub(crate) fn source_show(metrics: &Metrics, text: &str, size: f64, space: f64, char_spacing: f64, word_spacing: f64) -> Result<Vec<Op>, EditError> {
