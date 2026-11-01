@@ -6291,6 +6291,30 @@ fn xfa_calculations_rerun_only_where_what_they_read_changed() {
     assert_eq!(value(&s, "shared"), ["A"]);
 }
 
+/// A chain of calculations settles one link after another, as another viewer does (black-box,
+/// on a form shaped like this fixture): `top` reads `mid`, `mid` reads `base`, and they come in
+/// that order in the document, so one pass in document order would leave `top` a step behind.
+/// Changing `base` reruns `mid`, whose new value reruns `top`, which ends with the right value.
+/// Changing a field none of them reads reruns nothing.
+#[test]
+fn xfa_a_chain_of_calculations_reruns_link_by_link() {
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::calculation_chain_template()));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("chain.pdf", None, bytes, None).expect("opens");
+    let value = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).map(|f| f.value.clone()).unwrap_or_default();
+    s.take_js_output(id);
+    assert_eq!(value(&s, "top"), ["2"], "settled on opening");
+    s.apply(id, Edit::SetFieldValue { name: "base".into(), value: FieldValue::Text("5".into()) }).unwrap();
+    let out = s.take_js_output(id);
+    assert_eq!(calculations_ran(&out.console), ["mid", "top"], "mid first, then top in the next round: {:?}", out.errors);
+    assert_eq!(value(&s, "mid"), ["6"]);
+    assert_eq!(value(&s, "top"), ["7"]);
+    s.apply(id, Edit::SetFieldValue { name: "other".into(), value: FieldValue::Text("9".into()) }).unwrap();
+    let out = s.take_js_output(id);
+    assert_eq!(calculations_ran(&out.console), Vec::<String>::new(), "nothing reads other: {:?}", out.errors);
+    assert_eq!(value(&s, "top"), ["7"]);
+}
+
 /// When another script writes a field that has a calculation of its own, that calculation
 /// runs again, as another viewer does (black-box, on a form shaped like this fixture). The
 /// hidden copy writes the visible copy's total after the visible copy emptied it, and the

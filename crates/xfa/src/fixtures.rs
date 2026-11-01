@@ -657,6 +657,21 @@ pub fn recalculation_template() -> String {
     one_page_form(&body.join("\n"))
 }
 
+/// A chain of calculations, listed against the order the chain runs in: `top` (printing
+/// `ran top`) adds one to `mid`, `mid` (printing `ran mid`) adds one to `base`, and `base` and
+/// `other` are plain fields that no calculation reads except as said.
+pub fn calculation_chain_template() -> String {
+    let calc = |name: &str, js: &str| {
+        format!(
+            r#"  <field name="{name}" w="2in" h="0.3in" access="readOnly"><ui><textEdit/></ui><calculate><script contentType="application/x-javascript">console.println("ran {name}"); {js}</script></calculate></field>"#
+        )
+    };
+    let plain = |name: &str| format!(r#"  <field name="{name}" w="2in" h="0.3in"><ui><textEdit/></ui></field>"#);
+    let body =
+        [calc("top", "Number(form1.page.mid.rawValue) + 1"), calc("mid", "Number(form1.page.base.rawValue) + 1"), plain("base"), plain("other")];
+    one_page_form(&body.join("\n"))
+}
+
 /// A section with a hidden second copy, as real forms carry for another route through them.
 /// Each copy's `total` calculation (printing `ran P` or `ran E`) writes the visible copy's
 /// `total` through its full path, then empties its own `total` while `days` is empty. The

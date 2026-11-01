@@ -148,6 +148,9 @@ pub(crate) struct XfaRun<'a> {
 
 /// What each calculation read when it last ran (XFA dependency tracking), kept for the
 /// document's life: after a change, only the calculations that read what changed run again.
+/// Only reads of fields are recorded: the date or time is not tracked, so a calculation that
+/// reads the clock runs again when a field it reads changes, or when every calculation runs
+/// (on opening, after a reset, a requested recalculation, a row added or removed, or replaced data).
 #[derive(Clone, Debug, Default)]
 pub(crate) struct CalcDeps {
     /// By calculation (the SOM of its field): the fields it read.
