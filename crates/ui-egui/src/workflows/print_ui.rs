@@ -38,12 +38,16 @@ pub fn system_printers() -> PrinterSource {
     std::sync::Arc::new(spool::printers)
 }
 
+/// Maximum duration to wait for the system spooler to return printers before timing out (#5020).
+pub const PRINTER_SEARCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// The Print dialog's work in the background: the printer list being read, and the jobs being
 /// spooled, oldest first.
 #[derive(Default)]
 pub(crate) struct PrintTasks {
+    /// Background receiver for the printer list, paired with the start instant for timeout handling.
     #[cfg(not(target_arch = "wasm32"))]
-    printers: Option<std::sync::mpsc::Receiver<Vec<spool::Printer>>>,
+    printers: Option<(std::sync::mpsc::Receiver<Vec<spool::Printer>>, std::time::Instant)>,
     #[cfg(not(target_arch = "wasm32"))]
     jobs: Vec<PrintJob>,
     /// The progress card is showing a print job (it is shared with other long jobs).
@@ -218,6 +222,7 @@ impl PdfCraftApp {
         self.print_draft.crop_pages = Some(pages);
     }
 
+    /// Dispatches a background thread to discover available printers from `source` (#5020).
     #[cfg(not(target_arch = "wasm32"))]
     fn list_printers_in_background(&mut self, source: PrinterSource) {
         // A list already being read is as fresh as a new one would be.
@@ -232,7 +237,7 @@ impl PdfCraftApp {
             // The receiver may be gone (the app quit): nothing to report to then.
             let _ = tx.send(source());
         });
-        self.print_tasks.printers = Some(rx);
+        self.print_tasks.printers = Some((rx, std::time::Instant::now()));
     }
 
     /// Read `printer`'s driver options off the GUI thread (#1818); `poll_print` picks them up.
@@ -299,7 +304,8 @@ impl PdfCraftApp {
             for (printer, options) in arrived {
                 self.receive_options(printer, options);
             }
-            if let Some(rx) = &self.print_tasks.printers {
+            if let Some((rx, started)) = &self.print_tasks.printers {
+                let timeout = started.elapsed() >= PRINTER_SEARCH_TIMEOUT;
                 let printers = match rx.try_recv() {
                     Ok(p) => Some(p),
                     Err(std::sync::mpsc::TryRecvError::Empty) => None,
@@ -308,14 +314,28 @@ impl PdfCraftApp {
                 };
                 if let Some(printers) = printers {
                     self.print_tasks.printers = None;
+                    let had_timed_out = !self.print_draft.printers_loading;
                     let d = &mut self.print_draft;
                     // A picked printer that is no longer listed falls back to the default too.
-                    if !d.printer_picked || !offered(d.printer.as_deref(), &printers) {
+                    // If printer search timed out, preserve "Save as PDF" so the user's action
+                    // does not unexpectedly flip from saving to printing (#5020).
+                    if !d.printer_picked {
+                        if !had_timed_out {
+                            d.printer = default_printer(&printers);
+                        }
+                    } else if !offered(d.printer.as_deref(), &printers) {
                         d.printer_picked = false;
                         d.printer = default_printer(&printers);
                     }
                     d.printers = printers;
                     d.printers_loading = false;
+                } else if timeout {
+                    // Still searching after timeout: stop saying so, so Save as PDF can be used immediately.
+                    // A list that arrives later still fills the dropdown without restarting the worker thread (#5020).
+                    self.print_draft.printers_loading = false;
+                } else if let Some(ctx) = &self.ctx {
+                    let remaining = PRINTER_SEARCH_TIMEOUT.saturating_sub(started.elapsed());
+                    ctx.request_repaint_after(remaining);
                 }
             }
             let mut finished = Vec::new();
