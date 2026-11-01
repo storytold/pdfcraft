@@ -6,8 +6,9 @@ use std::sync::Arc;
 
 const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
 
-fn fixture(test: &str) -> PathBuf {
-    let xdp = r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+/// The synthetic dynamic form the other XFA tests use: a one-page placeholder PDF whose XFA
+/// stream lays out into two pages.
+const XDP: &str = r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
 <template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
 <subform name="form" layout="tb">
  <pageSet><pageArea name="page"><occur max="-1"/>
@@ -20,6 +21,14 @@ fn fixture(test: &str) -> PathBuf {
   <draw w="160pt" h="20pt"><value><text>Second XFA page</text></value></draw>
  </subform>
 </subform></template></xdp:xdp>"#;
+
+fn fixture(test: &str) -> PathBuf {
+    fixture_with_xdp(test, XDP)
+}
+
+/// The same placeholder PDF, with a different XFA stream: a variant template (or no template
+/// at all) is a different dynamic form for one test.
+fn fixture_with_xdp(test: &str, xdp: &str) -> PathBuf {
     let objects = [
         "<< /Type /Catalog /Pages 2 0 R /NeedsRendering true /AcroForm << /XFA 5 0 R /Fields [] >> >>".to_string(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
@@ -133,4 +142,64 @@ fn a_laid_out_form_keeps_the_original_copy_permissions() {
     assert_eq!(info["encrypted"], true);
     assert_eq!(info["file_size"], original.len());
     assert_eq!(std::fs::read(path).unwrap(), original);
+}
+
+/// `check` opens and renders what the app shows, so a dynamic XFA form is checked after it is
+/// laid out: its two laid-out pages, not the one placeholder page the file's page tree holds
+/// (#1645: page commands use the same layout).
+#[test]
+fn check_reports_and_renders_the_laid_out_pages_of_a_dynamic_xfa_form() {
+    let path = fixture("check");
+    let original = std::fs::read(&path).unwrap();
+    let report = std::env::temp_dir().join(format!("pdfcraft-cli-xfa-check-report-{}.json", std::process::id()));
+    let output = Command::new(BIN).arg("check").arg(&path).args(["--json"]).arg(&report).output().unwrap();
+    success(&output);
+    let results: Vec<serde_json::Value> = serde_json::from_slice(&std::fs::read(&report).unwrap()).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["file"], path.to_string_lossy().as_ref());
+    assert_eq!(results[0]["pages"], 2, "check counts the laid-out pages, like `info`'s `pages`");
+    assert_eq!(results[0]["status"], "ok");
+    assert_eq!(results[0]["failed_pages"], 0);
+    assert_eq!(std::fs::read(path).unwrap(), original, "checking must not write the layout to the input");
+}
+
+/// A dynamic form without a template still opens: the placeholder page stays and the reason is
+/// a warning (the engine's
+/// `an_xfa_form_without_a_template_opens_with_its_placeholder_and_a_warning`). That placeholder
+/// renders, so `check` must not call the file ok — the layout failure is the finding, with its
+/// reason as the detail.
+#[test]
+fn check_reports_a_failed_xfa_layout() {
+    let path = fixture_with_xdp("check-failed-layout", "<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"></xdp:xdp>");
+    let original = std::fs::read(&path).unwrap();
+    let report = std::env::temp_dir().join(format!("pdfcraft-cli-xfa-check-failed-report-{}.json", std::process::id()));
+    let output = Command::new(BIN).arg("check").arg(&path).args(["--json"]).arg(&report).output().unwrap();
+    success(&output);
+    let results: Vec<serde_json::Value> = serde_json::from_slice(&std::fs::read(&report).unwrap()).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["status"], "xfa-layout-failed");
+    assert_eq!(results[0]["pages"], 1, "only the placeholder page is there");
+    assert_eq!(results[0]["failed_pages"], 1);
+    let detail = results[0]["detail"].as_str().unwrap_or_default();
+    assert!(detail.contains("could not be laid out"), "{:?}", detail);
+    assert!(results[0]["warnings"].as_u64().unwrap_or(0) >= 1, "the reason is among the warnings");
+    assert_eq!(std::fs::read(path).unwrap(), original, "checking must not write the layout to the input");
+}
+
+/// A successful layout's warnings live in the layout report (`doc.xfa`), not in the file
+/// inspection's `warnings`: this form's field value asks for a glyph the field's font can't
+/// draw, laying it out draws `?` in its place and warns, and `check` must count that warning.
+#[test]
+fn check_counts_a_successful_layouts_own_warnings() {
+    let value = XDP.replace("Ada", "\u{e000}");
+    let path = fixture_with_xdp("check-layout-warnings", &value);
+    let report = std::env::temp_dir().join(format!("pdfcraft-cli-xfa-check-warning-report-{}.json", std::process::id()));
+    let output = Command::new(BIN).arg("check").arg(&path).args(["--json"]).arg(&report).output().unwrap();
+    success(&output);
+    let results: Vec<serde_json::Value> = serde_json::from_slice(&std::fs::read(&report).unwrap()).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["pages"], 2);
+    assert_eq!(results[0]["status"], "ok");
+    let warnings = results[0]["warnings"].as_u64().unwrap_or(0);
+    assert!(warnings >= 1, "the layout's own warning is counted, head of detail: {:?}", results[0]["detail"]);
 }
