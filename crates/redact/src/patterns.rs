@@ -231,6 +231,14 @@ fn email(s: &[char], i: usize) -> Option<usize> {
     while k < s.len() && (address_char(s[k]) || s[k] == '-' || s[k] == '.' && s.get(k + 1).is_some_and(|c| address_char(*c))) {
         k += 1;
     }
+    // A domain label cannot end with a hyphen, so hyphens right after the TLD letters end the
+    // domain when nothing else of the label follows or the next address starts there
+    // ("bob@example.com-", "bob@example.com-bob2@example.org"). "co-uk" is left alone.
+    let label = s[d0..k].iter().rposition(|&c| c == '.').map_or(d0, |p| d0 + p + 1);
+    let tld_end = label + s[label..k].iter().take_while(|c| c.is_alphabetic()).count();
+    if tld_end < k && s[tld_end] == '-' && (s[tld_end..k].iter().all(|&c| c == '-') || s.get(k) == Some(&'@')) {
+        k = tld_end;
+    }
     let domain: String = s[d0..k].iter().collect();
     let tld = domain.rsplit('.').next().unwrap_or("");
     (domain.contains('.') && tld.chars().count() >= 2 && tld.chars().all(char::is_alphabetic)).then_some(k - i)
@@ -571,6 +579,14 @@ mod tests {
             found(Pattern::Email, "Write to ada.lovelace+pdf@example.co.uk, or bob@host (no TLD) or x@y.z."),
             ["ada.lovelace+pdf@example.co.uk"]
         );
+    }
+
+    #[test]
+    fn emails_followed_by_a_hyphen() {
+        assert!(found(Pattern::Email, "bob@example.co-uk").is_empty());
+        assert_eq!(found(Pattern::Email, "mail bob@example.com- next"), ["bob@example.com"]);
+        assert_eq!(found(Pattern::Email, "bob@example.com-"), ["bob@example.com"]);
+        assert_eq!(found(Pattern::Email, "bob@example.com-bob2@example.org")[0], "bob@example.com");
     }
 
     #[test]
