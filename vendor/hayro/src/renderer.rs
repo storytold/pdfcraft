@@ -592,7 +592,7 @@ impl Renderer {
         is_text: bool,
         path: &BezPath,
     ) -> f64 {
-        let threshold = if is_text { 0.25 } else { 1.0 };
+        let threshold = thinnest_stroke(is_text);
 
         // Best-effort attempt to ensure a line width of at least 1.0, as required by the PDF
         // specification. If we are stroking text, we reduce the threshold as it will otherwise
@@ -1575,6 +1575,38 @@ impl Renderer {
         stroke_props: &StrokeProps,
         is_text: bool,
     ) {
+        // PdfCraft patch (28): a stroke under a matrix that shrinks one direction more than
+        // another is drawn with a pen at least one device pixel across in every direction (see
+        // `thin_stroke_pen`). The path, dashed where it is dashed, is drawn in the pen's space.
+        let pen = if self.inside_pattern || self.in_type3_glyph {
+            None
+        } else {
+            thin_stroke_pen(transform, stroke_props.line_width, thinnest_stroke(is_text))
+        };
+        let (pen_path, solid);
+        let (path, transform, stroke_props) = match pen {
+            Some((pen, to_pen)) => {
+                let dashes = usable_dash_pattern(path, &stroke_props.dash_array);
+                let offset = if stroke_props.dash_offset.is_finite() {
+                    f64::from(stroke_props.dash_offset)
+                } else {
+                    0.0
+                };
+                let laid: BezPath = if dashes.is_empty() {
+                    path.clone()
+                } else {
+                    kurbo::dash(path.iter(), offset, &dashes).collect()
+                };
+                pen_path = to_pen * laid;
+                solid = StrokeProps {
+                    dash_array: Default::default(),
+                    ..stroke_props.clone()
+                };
+                (&pen_path, transform * pen, &solid)
+            }
+            None => (path, transform, stroke_props),
+        };
+
         self.ctx.set_transform(transform);
         let reach = self.set_stroke_properties(stroke_props, is_text, path);
         // PdfCraft patch: see `may_paint_canvas`.
@@ -2409,6 +2441,55 @@ pub(crate) fn max_factor(transform: &Affine) -> f32 {
         .max(y_advance.to_vec2().length()) as f32
 }
 
+/// PdfCraft patch (28): the device width, in pixels, below which a stroke is widened, shared by
+/// `set_stroke_properties` (which had it inline) and `thin_stroke_pen`: one pixel, as ISO
+/// 32000-2 §8.4.3.2 asks of a zero-width line, and a quarter of one for stroked text, which
+/// would otherwise look very bold at low resolutions.
+fn thinnest_stroke(is_text: bool) -> f32 {
+    if is_text { 0.25 } else { 1.0 }
+}
+
+/// PdfCraft patch (28): the pen a stroke of `line_width` under `transform` is drawn with when it
+/// would be thinner than `threshold` device pixels in some direction, but not in all by the same
+/// factor; `None` when it needs no widening or the same widening in every direction, which
+/// `set_stroke_properties` does by scaling the line width.
+///
+/// The pen is a matrix `A` of user space, returned with its inverse: drawing `A⁻¹ × path` with
+/// `transform × A` at the same line width puts the stroke along the same device curve, with a
+/// round pen that `transform × A` maps to an ellipse no axis of which is under `threshold`. `A`
+/// stretches each principal direction of `transform` (its right singular vectors) by what that
+/// direction needs, so a direction that is already wide enough keeps its width. Widening by the
+/// larger scale alone left a line that ran along the shrunk direction too thin (a quarter of a
+/// pixel under `1 0 0 0.25 cm`), and by the smaller one, every other line too wide.
+fn thin_stroke_pen(transform: Affine, line_width: f32, threshold: f32) -> Option<(Affine, Affine)> {
+    let [a, b, c, d, _, _] = transform.as_coeffs();
+    // `transformᵀ × transform`, whose eigenvalues are the squared singular values.
+    let (p, q, r) = (a * a + b * b, a * c + b * d, c * c + d * d);
+    let mean = (p + r) / 2.0;
+    let spread = ((p - r) / 2.0).hypot(q);
+    let wide = (mean + spread).max(0.0).sqrt();
+    let narrow = (mean - spread).max(0.0).sqrt();
+    // The principal direction of the larger scale; the other is perpendicular to it.
+    let angle = 0.5 * (2.0 * q).atan2(p - r);
+    let width = f64::from(line_width.max(0.01));
+    let threshold = f64::from(threshold);
+    let stretch = |scale: f64| (threshold / (width * scale)).max(1.0);
+    let (along, across) = (stretch(wide), stretch(narrow));
+    // A singular or extreme matrix: no device width to speak of, so it is drawn as before.
+    const MAX_STRETCH: f64 = 1e9;
+    if ![angle, along, across].iter().all(|v| v.is_finite()) || across > MAX_STRETCH {
+        return None;
+    }
+    // `across >= along`, as `narrow <= wide`. Nothing to widen, or the same in every direction.
+    if across <= 1.0 || across - along <= 1e-9 * across {
+        return None;
+    }
+    let turn = Affine::rotate(angle);
+    let pen = turn * Affine::scale_non_uniform(along, across) * turn.inverse();
+    let to_pen = turn * Affine::scale_non_uniform(1.0 / along, 1.0 / across) * turn.inverse();
+    Some((pen, to_pen))
+}
+
 pub(crate) fn x_y_advances(transform: &Affine) -> (Vec2, Vec2) {
     let scale_skew_transform = {
         let c = transform.as_coeffs();
@@ -2580,4 +2661,71 @@ pub fn tiling_cell_pixels(scale: f32, step: f32, max_pixels: f32) -> (u16, f64) 
     // `pixels` is in 1..=u16::MAX, so the cast is exact; `step` is positive and finite here
     // (`exact` is), so the division is too.
     (pixels as u16, pixels / step)
+}
+
+#[cfg(test)]
+mod thin_stroke_pen_tests {
+    use super::thin_stroke_pen;
+    use kurbo::Affine;
+
+    /// The larger and smaller singular values of `m`'s linear part, from its Frobenius norm and
+    /// determinant (`s1² + s2²` and `s1 × s2`), independently of how `thin_stroke_pen` finds them.
+    /// Equal values lose about half their digits to the square root, hence the 1e-6 tolerances.
+    fn scales(m: Affine) -> (f64, f64) {
+        let [a, b, c, d, _, _] = m.as_coeffs();
+        let (sum, product) = (a * a + b * b + c * c + d * d, (a * d - b * c).abs());
+        let root = (sum * sum / 4.0 - product * product).max(0.0).sqrt();
+        ((sum / 2.0 + root).sqrt(), (sum / 2.0 - root).max(0.0).sqrt())
+    }
+
+    /// Patch (28): under matrices that shrink one direction more than another (scaled, turned,
+    /// skewed, mirrored), the pen's matrix and its inverse undo each other, and the stroke's
+    /// device pen is at least the threshold across in every direction, and no wider than the
+    /// threshold where the matrix alone made it thinner: a direction already wide enough keeps
+    /// its width.
+    #[test]
+    fn the_pen_is_wide_enough_every_way_and_no_wider() {
+        let matrices = [
+            Affine::new([1.0, 0.0, 0.0, 0.25, 5.0, 7.0]),
+            Affine::new([0.5, 0.0, 0.0, 0.25, 0.0, 0.0]),
+            Affine::new([4.0, 0.0, 0.0, 0.02, 0.0, 0.0]),
+            Affine::new([-3.0, 0.0, 0.0, 0.1, 0.0, 0.0]),
+            Affine::rotate(0.7) * Affine::new([2.0, 0.0, 0.0, 0.05, 0.0, 0.0]) * Affine::rotate(-1.9),
+            Affine::new([1.0, 0.0, 0.9, 0.2, 0.0, 0.0]),
+            Affine::new([0.0, 0.3, -2.0, 0.0, 0.0, 0.0]),
+        ];
+        for m in matrices {
+            for (width, threshold) in [(0.3_f32, 1.0_f32), (0.0, 1.0), (1.0, 1.0), (0.5, 0.25)] {
+                let (wide, narrow) = scales(m);
+                let w = f64::from(width.max(0.01));
+                let t = f64::from(threshold);
+                let Some((pen, to_pen)) = thin_stroke_pen(m, width, threshold) else {
+                    assert!(narrow * w >= t - 1e-9, "{m:?} at {width}: {narrow} needs a pen");
+                    continue;
+                };
+                let identity = (pen * to_pen).as_coeffs();
+                for (got, want) in identity.iter().zip([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]) {
+                    assert!((got - want).abs() < 1e-9, "{m:?}: {identity:?}");
+                }
+                let (pen_wide, pen_narrow) = scales(m * pen);
+                assert!(pen_narrow * w >= t * (1.0 - 1e-6), "{m:?} at {width}: {pen_narrow}");
+                let want = (wide * w).max(t);
+                assert!((pen_wide * w - want).abs() <= 1e-6 * want, "{m:?} at {width}: {pen_wide} × {w} for {want}");
+            }
+        }
+    }
+
+    /// Patch (28): no pen when nothing needs widening or every direction needs the same (which
+    /// `set_stroke_properties` does by scaling the width), or when the matrix has no usable size.
+    #[test]
+    fn no_pen_when_uniform_or_unusable() {
+        for m in [Affine::IDENTITY, Affine::scale(0.2), Affine::rotate(1.1) * Affine::scale(0.3), Affine::new([0.0, 0.5, -0.5, 0.0, 0.0, 0.0])] {
+            assert!(thin_stroke_pen(m, 0.1, 1.0).is_none(), "{m:?}");
+        }
+        assert!(thin_stroke_pen(Affine::new([1.0, 0.0, 0.0, 0.25, 0.0, 0.0]), 8.0, 1.0).is_none());
+        for m in [Affine::new([1.0, 0.0, 0.0, 0.0, 0.0, 0.0]), Affine::new([1.0, 2.0, 2.0, 4.0, 0.0, 0.0]), Affine::new([f64::NAN, 0.0, 0.0, 1.0, 0.0, 0.0]), Affine::new([f64::INFINITY, 0.0, 0.0, 1.0, 0.0, 0.0]), Affine::new([1.0, 0.0, 0.0, 1e-300, 0.0, 0.0])] {
+            assert!(thin_stroke_pen(m, 0.3, 1.0).is_none(), "{m:?}");
+        }
+        assert!(thin_stroke_pen(Affine::new([1.0, 0.0, 0.0, 0.25, 0.0, 0.0]), f32::NAN, 1.0).is_some());
+    }
 }
