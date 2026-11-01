@@ -25,15 +25,17 @@ impl Session {
         self.write_new(&pdfcraft_create::from_images_with_resolution(images, resolution)?)
     }
 
-    /// A new document from plain text (US Letter, 11 pt Helvetica). Text Helvetica can't draw is
+    /// A new document from plain text (US Letter, 11 pt Helvetica, or the bundled Inter face for
+    /// text with Latin, Greek or Cyrillic letters Helvetica can't draw). Text neither can draw is
     /// refused, naming the line and the character (never set as `?`).
     pub fn create_from_text(&self, title: &str, text: &str) -> Result<Arc<Vec<u8>>, EditError> {
         self.write_new(&pdfcraft_create::from_text(title, text, pdfcraft_create::LETTER, 11.0)?)
     }
 
     /// [`Self::create_from_text`] for a report PdfCraft writes from documents (comment summaries,
-    /// compare reports), which can quote any language: characters Helvetica can't draw are written
-    /// as `[U+XXXX]`, and the report's first line says so, rather than the report being refused.
+    /// compare reports), which can quote any language: when the bundled Inter face can't draw it
+    /// all, characters Helvetica can't draw are written as `[U+XXXX]`, and the report's first line
+    /// says so, rather than the report being refused.
     pub(crate) fn create_report(&self, title: &str, text: &str) -> Result<Arc<Vec<u8>>, EditError> {
         let (doc, _escaped) = pdfcraft_create::from_text_escaped(title, text, pdfcraft_create::LETTER, 11.0)?;
         self.write_new(&doc)

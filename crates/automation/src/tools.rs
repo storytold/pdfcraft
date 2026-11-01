@@ -1324,7 +1324,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "doc_create",
             "Create a PDF",
-            "Create a new, unsaved document and return it like doc_open: `blank` (pages, width, height in points; default 1 US Letter page), `images` (paths of PNG, JPEG, TIFF (every page), GIF or BMP files, one page each at the image's resolution) or `text` (a .txt path, or `text` directly; Western European (WinAnsi) characters only, others are refused). Save it with doc_save and a path.",
+            "Create a new, unsaved document and return it like doc_open: `blank` (pages, width, height in points; default 1 US Letter page), `images` (paths of PNG, JPEG, TIFF (every page), GIF or BMP files, one page each at the image's resolution) or `text` (a .txt path, or `text` directly; set in Helvetica, or in the bundled Inter face when it has Latin, Greek or Cyrillic letters outside Western European (WinAnsi); other characters are refused). Save it with doc_save and a path.",
         )
         .with(schema(
             json!({
