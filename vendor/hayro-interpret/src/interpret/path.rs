@@ -2,7 +2,7 @@ use crate::color::{Color, ColorSpace, device_cmyk_to_gray};
 use crate::context::{Context, path_as_rect};
 use crate::device::Device;
 use crate::util::{BezPathExt, Float32Ext};
-use crate::{FillRule, Paint, PathDrawMode, StrokeProps};
+use crate::{BlendMode, FillRule, Paint, PathDrawMode, StrokeProps};
 use kurbo::{BezPath, Cap, Join, PathEl};
 use smallvec::smallvec;
 
@@ -29,11 +29,60 @@ pub(crate) fn fill_stroke_path<'a>(
     device: &mut impl Device<'a>,
     fill_rule: FillRule,
 ) {
-    fill_path_impl(context, device, fill_rule, None);
-    stroke_path_impl(context, device, None);
+    with_fill_stroke_group(context, device, |context, device| {
+        fill_path_impl(context, device, fill_rule, None);
+        stroke_path_impl(context, device, None);
+    });
     apply_pending_clip(context, device);
 
     context.path_mut().truncate(0);
+}
+
+/// PdfCraft patch: when one operator both fills and strokes a path (`B`, `B*`, `b`, `b*`) or
+/// paints a glyph in text rendering mode 2 or 6, the fill and stroke form an implicit
+/// non-isolated knockout transparency group that is composited as a unit with the current
+/// soft mask and blend mode (ISO 32000-2 §11.7.4.4).
+pub(crate) fn with_fill_stroke_group<'a, D: Device<'a>>(
+    context: &mut Context<'a>,
+    device: &mut D,
+    f: impl FnOnce(&mut Context<'a>, &mut D),
+) {
+    let gs = &context.get().graphics_state;
+    let has_pattern = gs.stroke_cs.is_pattern()
+        || gs.stroke_pattern.is_some()
+        || gs.none_stroke_cs.is_pattern()
+        || gs.non_stroke_pattern.is_some();
+    let needs_group = context.ocg_state.is_visible()
+        && !device.in_knockout_group()
+        && (gs.stroke_alpha < 1.0
+            || gs.non_stroke_alpha < 1.0
+            || gs.soft_mask.is_some()
+            || gs.blend_mode != BlendMode::Normal
+            || has_pattern);
+
+    if !needs_group {
+        f(context, device);
+        return;
+    }
+
+    let soft_mask = context.get_mut().graphics_state.soft_mask.take();
+    let blend_mode = std::mem::replace(
+        &mut context.get_mut().graphics_state.blend_mode,
+        BlendMode::Normal,
+    );
+
+    device.set_soft_mask(None);
+    device.push_transparency_group(1.0, soft_mask.clone(), blend_mode);
+    device.set_knockout();
+    device.set_blend_mode(BlendMode::Normal);
+
+    f(context, device);
+
+    device.pop_transparency_group();
+    context.get_mut().graphics_state.soft_mask = soft_mask.clone();
+    context.get_mut().graphics_state.blend_mode = blend_mode;
+    device.set_soft_mask(soft_mask);
+    device.set_blend_mode(blend_mode);
 }
 
 /// PdfCraft patch: a clip set by `W` / `W*` takes effect once the path-painting operator that
