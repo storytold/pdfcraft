@@ -33,6 +33,7 @@ default = [
     "images",
 ]
 images = [
+    "dep:jxl-oxide",
     "dep:zune-jpeg",
     "dep:hayro-ccitt",
     "dep:hayro-jbig2",
@@ -70,6 +71,11 @@ path = "examples/iterate.rs"
 [dependencies.flate2]
 version = "1"
 optional = true
+
+[dependencies.jxl-oxide]
+version = "0.12.6"
+optional = true
+default-features = false
 
 [dependencies.hayro-ccitt]
 version = "0.3.0"
