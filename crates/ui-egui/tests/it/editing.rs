@@ -6084,6 +6084,60 @@ fn deleting_pages_from_the_pages_panel_menu() {
 }
 
 #[test]
+fn duplicating_pages_from_the_pages_panel_menu_preserves_targets_and_undo() {
+    for (selection, clicked, expected) in [
+        (vec![], "Page 2", vec!["Page 1", "Page 2", "Page 2", "Page 3"]),
+        (vec![0, 2], "Page 3", vec!["Page 1", "Page 2", "Page 3", "Page 1", "Page 3"]),
+        (vec![0, 2], "Page 2", vec!["Page 1", "Page 2", "Page 2", "Page 3"]),
+    ] {
+        let mut h = pages_panel(3);
+        h.state_mut().views[0].select_pages(&selection);
+        h.run_steps(2);
+        let at = panel_thumb(&h, clicked);
+        right_click_at(&mut h, at);
+        for label in ["Extract pages", "Split document…", "Replace pages…", "Cut", "Copy", "Paste after", "Delete pages"] {
+            h.get_by_label(label);
+        }
+        h.get_by_label("Duplicate pages").click();
+        h.run_steps(4);
+        assert_eq!(page_texts(h.state()), expected);
+        assert!(h.state_mut().execute("edit.undo"));
+        h.run_steps(3);
+        assert_eq!(page_texts(h.state()), ["Page 1", "Page 2", "Page 3"]);
+        assert!(h.state_mut().execute("edit.redo"));
+        h.run_steps(3);
+        assert_eq!(page_texts(h.state()), expected);
+    }
+}
+
+#[test]
+fn the_pages_panel_duplicate_menu_respects_assembly_permissions() {
+    let mut h = harness(3, |app| {
+        app.apply_edit(pdfcraft_engine::Edit::Protect(pdfcraft_engine::Protection {
+            permissions_password: Some("owner".into()),
+            changes: pdfcraft_engine::Changes::None,
+            ..Default::default()
+        }));
+        let bytes = app.session.save_bytes(app.views[0].id).unwrap();
+        app.open_bytes("restricted.pdf", None, bytes.as_ref().clone()).unwrap();
+        app.set_option("panel", "pages").unwrap();
+    });
+    let at = panel_thumb(&h, "Page 1");
+    right_click_at(&mut h, at);
+    for label in ["Duplicate pages", "Cut", "Replace pages…", "Delete pages"] {
+        assert!(h.get_by_label(label).accesskit_node().is_disabled(), "{label}");
+    }
+    assert!(!h.get_by_label("Copy").accesskit_node().is_disabled());
+    assert!(!h.state_mut().execute("page.duplicate"));
+    h.run_steps(2);
+    let app = h.state();
+    let doc = app.session.get(app.views[app.active.unwrap()].id).unwrap();
+    assert_eq!(doc.info.pages.len(), 3);
+    assert!(!doc.dirty);
+    assert!(doc.can_undo().is_none());
+}
+
+#[test]
 fn the_delete_key_deletes_pages_picked_in_the_pages_panel_but_never_every_page() {
     let mut h = pages_panel(3);
     // ⌘-click picks pages 2 and 3 (and the current page, 1: the first ⌘-click keeps it).
