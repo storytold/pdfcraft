@@ -1,5 +1,6 @@
 # PdfCraft roadmap: milestones and what's next
 
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** minor (M10 #2269: exported images keep the page's CMYK and ICC colours; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: integrate main fa5f9f8c; retain CJK viewer and upstream raster regressions, restore explicit display_config imports; estimates unchanged)
 > **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** patch (M2, PR #4172: integrate main 5af10276; retain both roadmap histories and viewer-only CJK font policy; estimates unchanged)
@@ -342,6 +343,7 @@ Estimates unchanged.
 | 2026-10-13 | minor | M6: XML/XFDF attribute whitespace survives form and comment export/import; estimates unchanged |
 | 2026-10-14 | minor | M1: raw-deflate fallback preserves decoding-limit errors in strict and tolerant decoding; synthetic filter and COS stream regressions. Estimates unchanged. |
 | 2026-10-16 | minor | M5 #2669, item 5: the Comments panel groups replies and counts all page roots once per frame. Estimates unchanged. |
+| 2026-10-16 | minor | M10 #2269: Export all images, Save Image As and Word export convert CMYK and ICCBased images to sRGB as the page draws them (vendored hayro patch 71). Estimates unchanged. |
 | 2026-10-15 | minor | M9 #1895: generic appearance rewriting deferred; separate validation overlays preserve original artwork, exports and printing. Baked captions remain unchanged (#79 open). Estimates unchanged. |
 | 2026-10-16 | minor | M10 #1201 partial: lossless image export applies component Decode pairs and Indexed mapping. Estimates unchanged. |
 | 2026-10-15 | minor | M6: CSV export and spreadsheet merging quote tabs, and import distinguishes quoted tabs from TSV delimiters without changing field identities. Estimates unchanged. |
