@@ -8979,6 +8979,105 @@ fn exporting_office_keeps_dotted_leader_entries_as_paragraphs() {
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "reading order: {html}");
 }
 
+/// `run_javascript` runs an XFA click script only for a push button, as the app does: a text
+/// field with a click event of its own, named as the target, asks to open no attached file.
+#[test]
+fn run_javascript_runs_xfa_click_scripts_only_for_buttons() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="guide" w="2in" h="0.3in"><ui><button/></ui><caption><value><text>Instructions</text></value></caption>
+  <event activity="click"><script contentType="application/x-javascript">event.target.exportDataObject({cName: "Guide.pdf", nLaunch: 2});</script></event></field>
+ <field name="note" w="2in" h="0.3in"><ui><textEdit/></ui>
+  <event activity="click"><script contentType="application/x-javascript">event.target.exportDataObject({cName: "Guide.pdf", nLaunch: 2});</script></event></field>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut s = Session::new();
+    let id = s.open("guide.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    s.take_js_output(id);
+    let o = s.run_javascript(id, "", Some("guide")).unwrap();
+    assert_eq!(o.requests, [pdfcraft_js::Request::OpenAttachment { name: "Guide.pdf".into(), open: true }], "the button's click: {o:?}");
+    let o = s.run_javascript(id, "", Some("note")).unwrap();
+    assert!(o.requests.is_empty(), "a text field's click script doesn't run here: {o:?}");
+}
+
+/// In an XFA form a button's click script may open an attached file; the same request from a
+/// text field's exit script is noted in the console and not made.
+#[test]
+fn an_xfa_button_may_open_an_attached_file_and_other_events_may_not() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="guide" w="2in" h="0.3in"><ui><button/></ui><caption><value><text>Instructions</text></value></caption>
+  <event activity="click"><script contentType="application/x-javascript">event.target.exportDataObject({cName: "Guide.pdf", nLaunch: 2});</script></event></field>
+ <field name="note" w="2in" h="0.3in"><ui><textEdit/></ui>
+  <event activity="exit"><script contentType="application/x-javascript">event.target.exportDataObject({cName: "Guide.pdf", nLaunch: 2});</script></event></field>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut s = Session::new();
+    let id = s.open("guide.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    s.take_js_output(id);
+    s.apply(id, Edit::XfaEvent { som: "form[0].guide[0]".into(), activity: "click".into() }).unwrap();
+    let out = s.take_js_output(id);
+    assert_eq!(out.requests, [pdfcraft_js::Request::OpenAttachment { name: "Guide.pdf".into(), open: true }], "{out:?}");
+    s.apply(id, Edit::SetFieldValue { name: "note".into(), value: FieldValue::Text("x".into()) }).unwrap();
+    let out = s.take_js_output(id);
+    assert!(out.requests.is_empty(), "only a click opens a file: {out:?}");
+    assert!(out.console.iter().any(|c| c.contains("open an attached file")), "{:?}", out.console);
+}
+
+/// In a two-page XFA form a button's click script sees the bare `event` as another viewer
+/// gives it: named `Mouse Up`, of type `Field`, its target the document with `numPages` 2 (what
+/// `xfa.layout.pageCount()` says too); a text field's change and exit scripts see `Keystroke`
+/// and `Blur`.
+#[test]
+fn xfa_scripts_see_the_field_event_name_type_and_page_count_in_event() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="first" layout="tb">
+  <field name="go" w="2in" h="0.3in"><ui><button/></ui><caption><value><text>Go</text></value></caption>
+   <event activity="click"><script contentType="application/x-javascript">log.rawValue = event.name + "|" + event.type + "|" + event.target.numPages + "|" + xfa.layout.pageCount();</script></event></field>
+  <field name="log" w="4in" h="0.3in"><ui><textEdit/></ui></field>
+  <field name="typed" w="2in" h="0.3in"><ui><textEdit/></ui>
+   <event activity="change"><script contentType="application/x-javascript">changed.rawValue = event.name + "|" + event.type;</script></event>
+   <event activity="exit"><script contentType="application/x-javascript">left.rawValue = event.name + "|" + event.type;</script></event></field>
+  <field name="changed" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  <field name="left" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+ </subform>
+ <subform name="second" layout="tb"><breakBefore targetType="pageArea"/>
+  <field name="later" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut s = Session::new();
+    let id = s.open("events.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 2, "the form is laid out on two pages");
+    s.take_js_output(id);
+    let value = |s: &Session, n: &str| {
+        s.get(id).unwrap().form.iter().find(|f| f.name == n).map(|f| f.value.clone()).unwrap_or_else(|| panic!("no field {n}"))
+    };
+    let o = s.run_javascript(id, "", Some("go")).unwrap();
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(value(&s, "log"), ["Mouse Up|Field|2|2"], "{o:?}");
+    s.apply(id, Edit::SetFieldValue { name: "typed".into(), value: FieldValue::Text("x".into()) }).unwrap();
+    let out = s.take_js_output(id);
+    assert_eq!(value(&s, "changed"), ["Keystroke|Field"], "{out:?}");
+    assert_eq!(value(&s, "left"), ["Blur|Field"], "{out:?}");
+}
+
 /// A date typed in another of an XFA date field's edit patterns is kept in its first: yymmdd and
 /// yyyymd are rewritten as yyyymmdd, a date none of them reads is refused, and the data holds the date.
 #[test]

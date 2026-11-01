@@ -237,6 +237,9 @@ struct PendingOpen {
     stamp: Option<file_watch::Stamp>,
     activate: bool,
     after_open: Option<pdfcraft_render::RemoteDestination>,
+    /// The document and attached file this one was opened from: its tab keeps that origin once
+    /// it opens, after the password ([`crate::canvas::DocView::from_attachment`]).
+    from_attachment: Option<(DocId, pdfcraft_render::AttachmentSource, String)>,
     recovered: Option<RecoveryMeta>,
     then: Option<&'static str>,
     display_override: Option<(canvas::PageLayout, bool)>,

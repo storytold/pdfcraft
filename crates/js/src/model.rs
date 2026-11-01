@@ -236,6 +236,12 @@ pub enum Request {
     Beep,
     /// `app.execMenuItem("SaveAs")` (XFA forms' Save buttons).
     SaveAs,
+    /// `this.exportDataObject(cName, …, nLaunch)`: the attached file `name`, to open (`nLaunch`
+    /// 1 or 2) or to save (0).
+    OpenAttachment {
+        name: String,
+        open: bool,
+    },
     /// `app.execMenuItem("ShowHide…")`: show the side panel, or hide it when it is showing.
     ShowPanel(Panel),
 }

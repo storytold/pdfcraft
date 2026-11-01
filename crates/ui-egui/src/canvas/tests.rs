@@ -304,6 +304,18 @@ fn automatic_search_updates_do_not_record_history_or_discard_forward() {
     assert_eq!(v.forward, vec![4]);
 }
 
+/// A tab whose document is replaced (reloaded from its file) is still the tab opened from
+/// its attachment, so asking for that attachment again comes back to it.
+#[test]
+fn a_replaced_document_keeps_the_attachment_its_tab_was_opened_from() {
+    let info = thumbnail_info(3);
+    let mut v = DocView::new(DocId(2), &info, ViewDefaults::default());
+    let origin = (DocId(1), pdfcraft_render::AttachmentSource::Annotation { page: 0, index: 1 }, "a.pdf".to_string());
+    v.from_attachment = Some(origin.clone());
+    v.document_replaced(&thumbnail_info(2));
+    assert_eq!(v.from_attachment, Some(origin));
+}
+
 /// One glyph per character on one line, for the search-order tests below.
 fn find_test_text(s: &str) -> PageText {
     PageText {
