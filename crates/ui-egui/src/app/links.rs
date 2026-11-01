@@ -33,6 +33,37 @@ impl PdfCraftApp {
         }
     }
 
+    /// Show page `page` of the file at `path`: its tab if it has one, else the file opened at it.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn open_at_page(&mut self, path: &str, page: usize) {
+        if let Some(index) = self.tab_showing(path) {
+            self.active = Some(index);
+            if let Some(view) = self.views.get_mut(index) {
+                view.go_to_page(page);
+            }
+            return;
+        }
+        let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
+        let stamp = file_watch::Stamp::at(path);
+        let result = self.schedule_open(OpenRequest {
+            name: name.clone(),
+            path: Some(path.to_string()),
+            stamp,
+            input: open_worker::Input::Path(std::path::PathBuf::from(path)),
+            password: None,
+            activate: true,
+            after_open: Some(pdfcraft_render::RemoteDestination::Page { page, view: Default::default() }),
+            recovered: None,
+            then: None,
+        });
+        if let Err(error) = result {
+            self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &error)]);
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn open_at_page(&mut self, _path: &str, _page: usize) {}
+
     #[cfg(not(target_arch = "wasm32"))]
     fn open_resolved_remote_link(&mut self, path: std::path::PathBuf, destination: pdfcraft_render::RemoteDestination) {
         let path = path.to_string_lossy().into_owned();

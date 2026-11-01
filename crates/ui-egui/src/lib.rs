@@ -101,6 +101,7 @@ use dialogs::appearance;
 pub use dialogs::bookmark_styles_ui;
 use dialogs::comment_props;
 use dialogs::credits;
+use dialogs::folder_search_ui;
 use dialogs::marks_ui;
 use dialogs::pageboxes;
 use dialogs::palette;
@@ -607,6 +608,7 @@ pub struct PdfCraftApp {
     /// Number pages dialog settings (1-based pages).
     pub number_draft: NumberDraft,
     pub(crate) word_count_draft: word_count_ui::Draft,
+    pub(crate) folder_search: folder_search_ui::State,
     /// Protect Using Password dialog state.
     pub protect_draft: protect::ProtectDraft,
     /// New bookmarks from text styles dialog state (#1693).

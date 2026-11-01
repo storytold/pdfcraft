@@ -5,6 +5,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use pdfcraft_engine::folder_search::linked;
 use pdfcraft_engine::{Session, ocr, optimize};
 use serde_json::{Value, json};
 
@@ -110,18 +111,6 @@ impl<'a> Recipe<'a> {
 }
 
 // Windows junctions are reparse points too; do not descend into them as ordinary folders.
-fn linked(metadata: &std::fs::Metadata) -> bool {
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        metadata.file_attributes() & 0x400 != 0
-    }
-    #[cfg(not(windows))]
-    {
-        metadata.file_type().is_symlink()
-    }
-}
-
 /// Canonicalize the existing ancestor, including when the requested output does not exist yet.
 fn absolute(path: &Path) -> Result<PathBuf> {
     let mut ancestor = path;

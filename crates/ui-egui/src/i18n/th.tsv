@@ -8,6 +8,27 @@
 # plural form.
 
 # Untranslated: English text until a translator fills these in.
+	A link or special file, which isn't followed	A link or special file, which isn't followed
+	Couldn't be read: {reason}	Couldn't be read: {reason}
+	Include subfolders	Include subfolders
+	Larger than 512 MiB	Larger than 512 MiB
+	Listing the folder…	Listing the folder…
+	Matches: {matches}. Files with matches: {files}. PDFs read to the end: {searched} of {found}.	Matches: {matches}. Files with matches: {files}. PDFs read to the end: {searched} of {found}.
+	Not searched: {n}	Not searched: {n}
+	Pages that couldn't be read: {n}	Pages that couldn't be read: {n}
+	Reading file {n} of {total}: {name}	Reading file {n} of {total}: {name}
+	Search a folder	Search a folder
+	Search a folder…	Search a folder…
+	Searching a folder needs the desktop app	Searching a folder needs the desktop app
+	Secured	Secured
+	Stop	Stop
+	Stopped at {limit} matches.	Stopped at {limit} matches.
+	Stopped before the end.	Stopped before the end.
+	Stopped: too many files took too long to read.	Stopped: too many files took too long to read.
+	The rest are left out of this list.	The rest are left out of this list.
+	The search stopped unexpectedly.	The search stopped unexpectedly.
+	This folder is too large or too deep to search all of it.	This folder is too large or too deep to search all of it.
+	Took too long to read	Took too long to read
 	Lowering this forgets the oldest files. At 0 there is no list.	Lowering this forgets the oldest files. At 0 there is no list.
 	Recent files to keep	Recent files to keep
 
