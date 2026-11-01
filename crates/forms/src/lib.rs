@@ -229,6 +229,29 @@ impl Field {
         }
     }
 
+    /// Whether widget `i` of a check box or radio group is on: its `/AS` is its on state. Widgets
+    /// sharing an on state tell themselves apart only by `/AS`, which ISO 32000-2 §12.7.5.2.3 and
+    /// §12.7.5.2.4 make the deciding entry where it and `/V` differ. A widget without `/AS`
+    /// follows the field's value, except that in a radio group without RadiosInUnison at most one
+    /// button is on (Table 229): of the widgets sharing that state, none when one of them has it
+    /// as its `/AS`, else only the first without `/AS`.
+    pub fn widget_on(&self, i: usize) -> bool {
+        let Some(w) = self.widgets.get(i) else { return false };
+        let Some(on) = w.on_state.as_deref() else { return false };
+        if let Some(s) = w.state.as_deref() {
+            return s == on;
+        }
+        if self.value.first().map(String::as_str) != Some(on) {
+            return false;
+        }
+        if self.kind != FieldKind::Radio || self.has(flags::RADIOS_IN_UNISON) {
+            return true;
+        }
+        let sharing = |x: &Widget| x.on_state.as_deref() == Some(on);
+        !self.widgets.iter().any(|x| sharing(x) && x.state.as_deref() == Some(on))
+            && self.widgets.iter().position(|x| sharing(x) && x.state.is_none()) == Some(i)
+    }
+
     /// The value as one string: text, the state name, or the selected display texts.
     pub fn display_value(&self) -> String {
         match self.kind {
@@ -249,8 +272,13 @@ pub enum FieldValue {
     Text(String),
     /// Check box: checked or not.
     Check(bool),
-    /// Radio group: the on-state to select (`None`: none selected).
+    /// Radio group: the on-state to select (`None`: none selected). Of radio buttons sharing that
+    /// state, the one already on stays on, else the first, unless the group has RadiosInUnison.
     Radio(Option<String>),
+    /// Check box or radio group: turn on widget `i` (an index into [`Field::widgets`]); it never
+    /// turns it off. A radio button sharing its on state with others is the only one turned on
+    /// unless the group has RadiosInUnison (ISO 32000-2 Table 229).
+    Widget(usize),
     /// Combo box or list box: export values (several only for multi-select lists).
     Choice(Vec<String>),
 }
