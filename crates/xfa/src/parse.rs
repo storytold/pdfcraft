@@ -19,6 +19,21 @@ const MAX_NODES: u32 = 2_000_000;
 const MAX_IMAGE: usize = 32 << 20;
 /// Most items a choice list keeps.
 const MAX_ITEMS: usize = 1000;
+
+/// What every `<bindItems>` list in one template may still take from the data, together. Each
+/// field binds its own copy of the items, so without a shared limit many choice lists bound to
+/// one large list would multiply it (100,000 fields × 1,000 items from a few megabytes of XML).
+struct BindBudget {
+    items: usize,
+    bytes: usize,
+}
+
+impl BindBudget {
+    /// Most bound items, and bytes of their labels and saved values, a template keeps.
+    const fn new() -> Self {
+        Self { items: 50 * MAX_ITEMS, bytes: 32 << 20 }
+    }
+}
 /// Longest text run kept.
 const MAX_TEXT: usize = 1 << 20;
 
@@ -489,7 +504,11 @@ fn parse_items(n: XmlNode, warnings: &mut Vec<String>) -> (Vec<String>, Vec<Stri
 /// `xfa:data` and `$record.` at its record. `None` for a ref this reader cannot follow
 /// (relative to the field's data, or a SOM predicate) or when there is no datasets packet;
 /// the template's own items then stay.
-fn bind_items(n: XmlNode, b: XmlNode, warnings: &mut Vec<String>) -> Option<(Vec<String>, Vec<String>)> {
+///
+/// The list comes out of `budget`, the template's shared [`BindBudget`]. A list that does not
+/// fit in what is left is not bound at all: the field keeps all its template items, with a
+/// warning, rather than a list cut short with no sign of it.
+fn bind_items(n: XmlNode, b: XmlNode, warnings: &mut Vec<String>, budget: &mut BindBudget) -> Option<(Vec<String>, Vec<String>)> {
     let field = || n.attribute("name").map_or_else(|| "a choice list".to_string(), |name| format!("the choice list {name}"));
     let reference = b.attribute("ref").map(str::trim).unwrap_or_default();
     let Some(nodes) = bound_nodes(n, reference) else {
@@ -499,9 +518,6 @@ fn bind_items(n: XmlNode, b: XmlNode, warnings: &mut Vec<String>) -> Option<(Vec
         }
         return None;
     };
-    if nodes.len() > MAX_ITEMS && warnings.len() < 100 {
-        warnings.push(format!("{} has more than {MAX_ITEMS} items; the rest are left out", field()));
-    }
     // `$` (or nothing) is the node's own value; a name is its attribute or else its child.
     let read = |node: XmlNode, r: Option<&str>| -> String {
         let r = r.map(str::trim).map(|r| r.strip_prefix("$.").unwrap_or(r)).unwrap_or("$");
@@ -512,14 +528,31 @@ fn bind_items(n: XmlNode, b: XmlNode, warnings: &mut Vec<String>) -> Option<(Vec
         node.attribute(r).map(str::to_string).or_else(|| child(node, r).map(|c| text_of(c).trim().to_string())).unwrap_or_default()
     };
     let label_ref = b.attribute("labelRef").filter(|r| !r.trim().is_empty());
-    let (labels, values): (Vec<String>, Vec<String>) = nodes
-        .into_iter()
-        .take(MAX_ITEMS)
-        .map(|node| {
-            let value = read(node, b.attribute("valueRef"));
-            (label_ref.map_or_else(|| value.clone(), |r| read(node, Some(r))), value)
-        })
-        .unzip();
+    let over_cap = nodes.len() > MAX_ITEMS;
+    let (mut labels, mut values) = (Vec::new(), Vec::new());
+    let mut bytes = 0usize;
+    for node in nodes.into_iter().take(MAX_ITEMS) {
+        let value = read(node, b.attribute("valueRef"));
+        let label = label_ref.map_or_else(|| value.clone(), |r| read(node, Some(r)));
+        bytes = bytes.saturating_add(label.len()).saturating_add(value.len());
+        // Checked as the list grows, so a list that will not fit stops allocating at once.
+        if labels.len() >= budget.items || bytes > budget.bytes {
+            if warnings.len() < 100 {
+                warnings.push(format!(
+                    "{} takes more items from the data than PdfCraft keeps for one form; it lists the template's items instead",
+                    field()
+                ));
+            }
+            return None;
+        }
+        labels.push(label);
+        values.push(value);
+    }
+    budget.items = budget.items.saturating_sub(labels.len());
+    budget.bytes = budget.bytes.saturating_sub(bytes);
+    if over_cap && warnings.len() < 100 {
+        warnings.push(format!("{} has more than {MAX_ITEMS} items; the rest are left out", field()));
+    }
     // Saved values are kept only when some differ from the shown text, as for `<items>`.
     let values = if labels == values { Vec::new() } else { values };
     Some((labels, values))
@@ -579,7 +612,7 @@ fn bound_nodes<'a, 'd>(n: XmlNode<'a, 'd>, reference: &'a str) -> Option<Vec<Xml
 
 /// A `<field>` element as the model's [`Field`]: its widget kind, caption, value, items,
 /// pictures (edit and data), scripts and access.
-fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
+fn parse_field(n: XmlNode, warnings: &mut Vec<String>, budget: &mut BindBudget) -> Field {
     let ui = child(n, "ui");
     let ui_el = ui.and_then(|u| u.children().find(|c| c.is_element() && c.tag_name().name() != "extras" && c.tag_name().name() != "picture"));
     let kind = match ui_el.map(|e| e.tag_name().name()) {
@@ -609,7 +642,7 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         || value_el.is_some_and(|v| v.children().any(|c| c.is_element() && matches!(c.tag_name().name(), "decimal" | "integer" | "float")));
     let (mut items, mut item_values) = parse_items(n, warnings);
     if kind == Ui::ChoiceList
-        && let Some((bound, bound_values)) = child(n, "bindItems").and_then(|b| bind_items(n, b, warnings))
+        && let Some((bound, bound_values)) = child(n, "bindItems").and_then(|b| bind_items(n, b, warnings, budget))
     {
         (items, item_values) = (bound, bound_values);
     }
@@ -695,7 +728,7 @@ fn parse_occur(n: Option<XmlNode>) -> Occur {
     Occur { min, max, initial: max.map_or(initial, |m| initial.min(m)) }
 }
 
-fn parse_page_set(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> PageSet {
+fn parse_page_set(n: XmlNode, warnings: &mut Vec<String>, budget: &mut BindBudget, depth: usize) -> PageSet {
     let mut areas = Vec::new();
     for pa in children(n, "pageArea") {
         let medium = child(pa, "medium");
@@ -715,7 +748,7 @@ fn parse_page_set(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> PageS
         if content.is_empty() {
             content.push(Rect::new(0.0, 0.0, width, height));
         }
-        let items = pa.children().filter(|c| c.is_element()).filter_map(|c| parse_node(c, warnings, depth + 1)).collect();
+        let items = pa.children().filter(|c| c.is_element()).filter_map(|c| parse_node(c, warnings, budget, depth + 1)).collect();
         // A page area with no `<occur>` has no limit and no minimum (a subform's default of one
         // would exhaust it, and demand a page for every master).
         let occur = child(pa, "occur").map(|o| parse_occur(Some(o)));
@@ -725,21 +758,21 @@ fn parse_page_set(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> PageS
     // Nested page sets: take their areas too.
     for ps in children(n, "pageSet") {
         if depth < MAX_DEPTH {
-            areas.extend(parse_page_set(ps, warnings, depth + 1).areas);
+            areas.extend(parse_page_set(ps, warnings, budget, depth + 1).areas);
         }
     }
     PageSet { areas }
 }
 
-fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Subform {
+fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, budget: &mut BindBudget, depth: usize) -> Subform {
     let common = parse_common(n);
     let mut children_out = Vec::new();
     let mut page_set = None;
     for c in n.children().filter(|c| c.is_element()) {
         match c.tag_name().name() {
-            "pageSet" => page_set = Some(parse_page_set(c, warnings, depth + 1)),
+            "pageSet" => page_set = Some(parse_page_set(c, warnings, budget, depth + 1)),
             _ => {
-                if let Some(node) = parse_node(c, warnings, depth + 1) {
+                if let Some(node) = parse_node(c, warnings, budget, depth + 1) {
                     children_out.push(node);
                 }
             }
@@ -763,28 +796,28 @@ fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Subfor
     }
 }
 
-fn parse_node(c: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Option<Node> {
+fn parse_node(c: XmlNode, warnings: &mut Vec<String>, budget: &mut BindBudget, depth: usize) -> Option<Node> {
     if depth > MAX_DEPTH {
         return None;
     }
     Some(match c.tag_name().name() {
-        "subform" => Node::Subform(Box::new(parse_subform(c, warnings, depth))),
+        "subform" => Node::Subform(Box::new(parse_subform(c, warnings, budget, depth))),
         "subformSet" => {
             // A set of alternative subforms: lay out its members in order.
-            let mut sf = parse_subform(c, warnings, depth);
+            let mut sf = parse_subform(c, warnings, budget, depth);
             sf.layout = Layout::Tb;
             Node::Subform(Box::new(sf))
         }
         "area" => Node::Area(Box::new(Area {
             common: parse_common(c),
-            children: c.children().filter(|k| k.is_element()).filter_map(|k| parse_node(k, warnings, depth + 1)).collect(),
+            children: c.children().filter(|k| k.is_element()).filter_map(|k| parse_node(k, warnings, budget, depth + 1)).collect(),
         })),
-        "field" => Node::Field(Box::new(parse_field(c, warnings))),
+        "field" => Node::Field(Box::new(parse_field(c, warnings, budget))),
         "draw" => Node::Draw(Box::new(Draw { common: parse_common(c), value: parse_value(child(c, "value"), warnings) })),
         "exclGroup" => Node::ExclGroup(Box::new(ExclGroup {
             common: parse_common(c),
             layout: Layout::parse(c.attribute("layout")),
-            fields: children(c, "field").map(|f| parse_field(f, warnings)).collect(),
+            fields: children(c, "field").map(|f| parse_field(f, warnings, budget)).collect(),
             tooltip: child(c, "assist").and_then(|a| child(a, "toolTip")).map(text_of).map(|t| t.trim().to_string()).filter(|t| !t.is_empty()),
             scripts: parse_events(c),
         })),
@@ -854,11 +887,12 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
         root.descendants().find(is_template).ok_or_else(|| XfaError::Malformed("no <template> element".into()))?
     };
     let mut warnings = Vec::new();
+    let mut budget = BindBudget::new();
     let sf = children(template, "subform").next().ok_or_else(|| XfaError::Malformed("the template has no root subform".into()))?;
-    let mut root_sf = parse_subform(sf, &mut warnings, 0);
+    let mut root_sf = parse_subform(sf, &mut warnings, &mut budget, 0);
     if root_sf.page_set.is_none() {
         // A page set may sit beside the root subform.
-        root_sf.page_set = child(template, "pageSet").map(|ps| parse_page_set(ps, &mut warnings, 0));
+        root_sf.page_set = child(template, "pageSet").map(|ps| parse_page_set(ps, &mut warnings, &mut budget, 0));
     }
     // The form packet beside the template holds the state the form was saved in.
     let saved = root

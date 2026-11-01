@@ -4660,3 +4660,35 @@ fn bind_items_empty_duplicate_and_huge_lists() {
     assert_eq!(huge.last().map(|(v, _)| v.as_str()), Some("999"));
     assert!(form.warnings.iter().any(|w| w.contains("huge") && w.contains("1000")), "{:?}", form.warnings);
 }
+
+/// Choice lists bound to one shared list draw on one budget for the whole form, so many fields
+/// cannot multiply a large list. A field whose list does not fit in what is left keeps all its
+/// template items, with a warning, rather than a list cut short: here by item count (60 fields
+/// of 1,000 items against 50,000) and by bytes (2 KB items, 4 MB a field, against 32 MB).
+#[test]
+fn bind_items_share_one_budget_per_form() {
+    let field = |name: &str, i: usize, list: &str| {
+        format!(
+            r#"<field name="{name}{i}" w="2in" h="0.3in"><ui><choiceList/></ui><bindItems ref="!{list}.i[*]"/><items><text>Own</text></items></field>"#
+        )
+    };
+    let form = |fields: String, list: &str, items: String| {
+        format!(
+            r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+<pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium stock="letter" short="8.5in" long="11in"/></pageArea></pageSet>{fields}</subform></template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data/><{list}>{items}</{list}></xfa:datasets></xdp:xdp>"#
+        )
+    };
+    let bound = |form: &Form| choice_options(form).iter().filter(|(_, o)| o.len() > 1).count();
+    let kept = |form: &Form| choice_options(form).iter().filter(|(_, o)| *o == [("Own".to_string(), "Own".to_string())]).count();
+
+    let by_count = form((0..60).map(|i| field("n", i, "many")).collect(), "many", (0..1000).map(|i| format!("<i>{i}</i>")).collect());
+    let by_count = layout_xml(&by_count).unwrap();
+    assert_eq!((bound(&by_count), kept(&by_count)), (50, 10));
+    assert!(by_count.warnings.iter().any(|w| w.contains("n50") && w.contains("template's items")), "{:?}", by_count.warnings);
+
+    let long = "x".repeat(2000);
+    let by_bytes = form((0..12).map(|i| field("b", i, "long")).collect(), "long", (0..1000).map(|_| format!("<i>{long}</i>")).collect());
+    let by_bytes = layout_xml(&by_bytes).unwrap();
+    assert_eq!((bound(&by_bytes), kept(&by_bytes)), (8, 4));
+}
