@@ -4688,6 +4688,31 @@ fn a_sliver_field_moves_on_as_a_field_kept_intact_does() {
     assert_eq!(at.map(|(page, _)| page), Some(1), "on the second page");
 }
 
+/// #5525 review: a field laid out again to move on whole (no room above the break for a line)
+/// counts its items once against `MAX_ITEMS`, as a field kept intact does: what the first try
+/// drew is taken off the page, and its count with it.
+#[test]
+fn a_field_laid_out_again_counts_its_items_once() {
+    let laid_out = |keep: &str| {
+        let body = format!(
+            r#"<subform name="sec" layout="tb" w="7.5in">
+ <draw name="filler" w="7.5in" h="9.9in"><value><text>above</text></value></draw>
+ <field name="notes" w="7.5in" minH="3in">{keep}
+  <border><edge/></border>
+  <ui><textEdit multiLine="1"/></ui>
+  <caption reserve="0.5in" placement="top"><value><text>Notes</text></value></caption>
+ </field>
+</subform>"#
+        );
+        let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+        let on_pages: usize = form.pages.iter().map(|p| p.items.len()).sum();
+        (form.pages.len(), on_pages, crate::layout::LAID_OUT_ITEMS.with(std::cell::Cell::get))
+    };
+    let (pages, on_pages, counted) = laid_out("");
+    assert_eq!(pages, 2, "the field moves on to page 2");
+    assert_eq!((pages, on_pages, counted), laid_out(r#"<keep intact="contentArea"/>"#), "laid out again, as kept intact");
+}
+
 /// #5525 review: the level lines about `len` long on `page` (a border's top and bottom edges),
 /// top to bottom.
 fn level_lines(page: &Page, len: f64) -> Vec<f64> {

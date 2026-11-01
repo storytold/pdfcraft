@@ -24,8 +24,10 @@ impl Layouter<'_> {
         let (rect, y, _) = self.cursor();
         let first = self.pages.last().map_or(0, |p| p.items.len());
         // What drawing it changes besides the page, to undo if it then isn't split: only a field that
-        // doesn't fit here can turn out so.
-        let undo = (splits && y + h > rect.bottom() + 0.01).then(|| (self.fields, self.names.clone()));
+        // doesn't fit here can turn out so. The item count goes back with the items taken off the
+        // page; the measurement budget doesn't, as that work was done. (A text field draws no
+        // picture, so the picture budget is untouched.)
+        let undo = (splits && y + h > rect.bottom() + 0.01).then(|| (self.fields, self.names.clone(), self.items));
         self.leaves.clear();
         self.field_border = None;
         self.draw_node(node, Rect::new(x, y, w, h), ctx, depth, sib)?;
@@ -48,7 +50,7 @@ impl Layouter<'_> {
             return Ok(());
         }
         let Some(som) = (if splits { self.splittable_widget_since(first, rect.bottom() - self.frames_bottom()) } else { None }) else {
-            if let Some((fields, names)) = undo {
+            if let Some((fields, names, items)) = undo {
                 // Not split after all (a value, or no room for a line of it here): undone, and
                 // placed as before, moving to the next content area whole.
                 if let Some(p) = self.pages.last_mut() {
@@ -56,6 +58,7 @@ impl Layouter<'_> {
                 }
                 self.fields = fields;
                 self.names = names;
+                self.items = items;
                 self.leaves.clear();
                 return self.place_block(node, x, (w, h), ctx, depth, sib, false);
             }
