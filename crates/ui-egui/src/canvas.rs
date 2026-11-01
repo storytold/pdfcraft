@@ -1461,6 +1461,17 @@ pub(crate) struct PageToolContext<'a> {
     pub info: &'a DocInfo,
 }
 
+fn maybe_route_press(view: &mut DocView, hits: &PageHits<'_>, ptr: &PagePointer, xf_rect: Rect, page: usize, tool: QuickTool) {
+    let handle_reach = crate::tools::comments::HANDLE_HIT_RADIUS + 2.0;
+    if let Some(o) = ptr.pressed().filter(|o| xf_rect.expand(handle_reach).contains(*o)) {
+        let at = hits.at(view, o);
+        let on_handle = at.iter().any(|h| matches!(h.layer, crate::page_cursor::Layer::Handle));
+        if xf_rect.contains(o) || on_handle {
+            view.router.press(page, at, tool);
+        }
+    }
+}
+
 /// Comments: tools, selection, moving and resizing come before text selection. Form fields take
 /// clicks first with the Select tool (as Acrobat fills fields in every viewing mode); then
 /// comments; then text selection.
@@ -1524,12 +1535,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
         images: &images,
         clip: ui.clip_rect(),
     };
-    if let Some(o) = ptr.pressed().filter(|o| xf.rect.expand(12.0).contains(*o)) {
-        let at = hits.at(view, o);
-        if xf.rect.contains(o) || !at.is_empty() {
-            view.router.press(i, at, tool);
-        }
-    }
+    maybe_route_press(view, &hits, ptr, xf.rect, i, tool);
     if let QuickTool::Measure(measure_tool) = tool {
         crate::measure_ui::page_input(ui, resp, doc, view, &pcx, measure_tool, units);
     }
