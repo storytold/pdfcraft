@@ -1625,6 +1625,113 @@ fn rounded_pixel_budget_invalid_requests_never_reach_allocator() {
     }
 }
 
+/// #3962: FrameMaker files distilled with Distiller 3 embed TrueType subsets that are symbolic,
+/// with no `/Encoding` and no `/ToUnicode`, whose codes are glyph positions in the Macintosh
+/// order, 29 below ASCII; the font's own `cmap` maps them to the right glyphs. Read as WinAnsi
+/// the text came out shifted (`Solid` as `6ROLG`), in the editor and in Word export alike. The
+/// `post` table names the glyph each code selects, which gives the text (vendored
+/// hayro-interpret patch 53). A font with an `/Encoding` still reads its codes through it.
+#[test]
+fn a_symbolic_truetype_font_without_an_encoding_reads_its_glyph_names() {
+    use skrifa::MetadataProvider;
+    use skrifa::raw::TableProvider;
+    const TEXT: &str = "Solid state";
+    // Four more codes: 0x3D selects `W.cv07`, a variant whose suffix is dropped (`W`); 0x3E a
+    // glyph named `uniXXXX`, that code point; 0x3F `EMquad`, a name with no text, so the code
+    // reads as WinAnsi (`?`); 0x40 the ligature `less_equal.liga`, two characters (`<=`).
+    const SUFFIXED: u16 = 0x3D;
+    const UNI: u16 = 0x3E;
+    const UNNAMED: u16 = 0x3F;
+    const LIGATURE: u16 = 0x40;
+    let font = include_bytes!("../../../../assets/fonts/JetBrainsMono-Regular.ttf");
+    let face = skrifa::FontRef::new(font).expect("the test font parses");
+    let charmap = face.charmap();
+    let post = face.post().expect("the test font has a post table");
+    let glyphs = face.maxp().expect("the test font has a maxp table").num_glyphs();
+    let named = |name: &str| {
+        (1..glyphs).find(|&g| post.glyph_name(skrifa::raw::types::GlyphId16::new(g)) == Some(name)).expect("the test font has the glyph")
+    };
+    let (uni, uni_char) = (1..glyphs)
+        .find_map(|g| {
+            let name = post.glyph_name(skrifa::raw::types::GlyphId16::new(g))?;
+            let c = char::from_u32(u32::from_str_radix(name.strip_prefix("uni")?, 16).ok()?)?;
+            (!c.is_control()).then_some((g, c))
+        })
+        .expect("the test font names a glyph uniXXXX");
+    // Codes 29 below ASCII, mapped by a (3,0) symbol cmap at 0xF000 + code.
+    let mut map: Vec<(u16, u16)> =
+        TEXT.chars().map(|c| (0xF000 + c as u16 - 29, charmap.map(c).expect("the test font has the letter").to_u32() as u16)).collect();
+    map.push((0xF000 + SUFFIXED, named("W.cv07")));
+    map.push((0xF000 + UNI, uni));
+    map.push((0xF000 + UNNAMED, named("EMquad")));
+    map.push((0xF000 + LIGATURE, named("less_equal.liga")));
+    map.sort_unstable();
+    map.dedup();
+    // A format 4 subtable: one segment per code, then the closing 0xFFFF segment.
+    let segments: Vec<(u16, u16)> = map.iter().copied().chain([(0xFFFF, 0)]).collect();
+    let n = segments.len() as u16;
+    let mut sub = Vec::new();
+    let words = |v: &mut Vec<u8>, w: &[u16]| w.iter().for_each(|w| v.extend_from_slice(&w.to_be_bytes()));
+    words(&mut sub, &[4, 16 + 8 * n, 0, 2 * n, 2, 0, 2 * n - 2]);
+    words(&mut sub, &segments.iter().map(|s| s.0).collect::<Vec<_>>());
+    words(&mut sub, &[0]);
+    words(&mut sub, &segments.iter().map(|s| s.0).collect::<Vec<_>>());
+    words(&mut sub, &segments.iter().map(|&(code, gid)| if code == 0xFFFF { 1 } else { gid.wrapping_sub(code) }).collect::<Vec<_>>());
+    words(&mut sub, &vec![0; segments.len()]);
+    let mut cmap = Vec::new();
+    words(&mut cmap, &[0, 1, 3, 0]);
+    cmap.extend_from_slice(&12u32.to_be_bytes());
+    cmap.extend(sub);
+    // The new cmap goes at the end; the table directory's `cmap` entry points at it.
+    let mut program = font.to_vec();
+    while !program.len().is_multiple_of(4) {
+        program.push(0);
+    }
+    let at = program.len();
+    program.extend(&cmap);
+    let tables = usize::from(u16::from_be_bytes([font[4], font[5]]));
+    let entry = (0..tables).map(|i| 12 + 16 * i).find(|&e| &font[e..e + 4] == b"cmap").expect("the test font has a cmap");
+    program[entry + 8..entry + 12].copy_from_slice(&(at as u32).to_be_bytes());
+    program[entry + 12..entry + 16].copy_from_slice(&(cmap.len() as u32).to_be_bytes());
+
+    let text_of = |encoding: &str| -> String {
+        let codes: String = TEXT.chars().map(|c| format!("{:02X}", c as u8 - 29)).collect::<String>()
+            + &format!("{SUFFIXED:02X}{UNI:02X}{UNNAMED:02X}{LIGATURE:02X}");
+        let content = format!("BT /F1 14 Tf 10 40 Td <{codes}> Tj ET");
+        let objects: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 80] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()).into_bytes(),
+            format!("<< /Type /Font /Subtype /TrueType /BaseFont /ABCDEF+JetBrainsMono-Regular /FirstChar 0 /LastChar 255 /Widths [{}] /FontDescriptor 6 0 R {encoding}>>", vec!["600"; 256].join(" ")).into_bytes(),
+            b"<< /Type /FontDescriptor /FontName /ABCDEF+JetBrainsMono-Regular /Flags 4 /FontBBox [-500 -300 1200 1000] /ItalicAngle 0 /Ascent 1020 /Descent -300 /CapHeight 730 /StemV 80 /FontFile2 7 0 R >>".to_vec(),
+            [format!("<< /Length {} >>\nstream\n", program.len()).into_bytes(), program.clone(), b"\nendstream".to_vec()].concat(),
+        ];
+        let mut pdf = b"%PDF-1.3\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, object) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend(format!("{} 0 obj\n", i + 1).into_bytes());
+            pdf.extend(object);
+            pdf.extend(b"\nendobj\n");
+        }
+        let xref = pdf.len();
+        pdf.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).into_bytes());
+        for offset in offsets {
+            pdf.extend(format!("{offset:010} 00000 n \n").into_bytes());
+        }
+        pdf.extend(format!("trailer << /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).into_bytes());
+        let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+        let page = r.filtered_text(0, crate::text::TextFilter::default()).expect("the page has text");
+        page.glyphs.iter().map(|g| g.text.as_str()).collect()
+    };
+    assert_eq!(text_of(""), format!("Solid stateW{uni_char}?<="));
+    // An encoding says what the codes are, so they read through it.
+    assert_eq!(text_of("/Encoding /WinAnsiEncoding "), "6ROLGVWDWH=>?@");
+    // `/Differences` still names its code: 0x36 reads `A`, not the glyph's `S`.
+    assert_eq!(text_of("/Encoding << /Differences [54 /A] >> "), format!("Aolid stateW{uni_char}?<="));
+}
+
 /// Issue #102: an A4 page (595.28×841.89 pt) rendered 595×841 at 72 dpi, dropping the last
 /// partial row and column. Like pdftoppm it is now 596×842, the edge pixels partly covered.
 #[test]
