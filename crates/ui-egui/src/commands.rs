@@ -710,6 +710,7 @@ impl PdfCraftApp {
     fn run_secure_command(&mut self, id: &str, active: Option<usize>) -> Option<bool> {
         match id {
             "a11y.check" => self.start_accessibility_check(),
+            "a11y.check_pdfua" => self.check_pdfua(),
             "a11y.find_untagged" => self.find_untagged_content(),
             "tools.js_console" => self.dialog = Some(Dialog::JsConsole),
             "tools.document_js" => {

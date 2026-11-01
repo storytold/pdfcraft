@@ -10,6 +10,13 @@ Today it holds what generated appearances need without a font program:
   `adobe_data = true` in `ATTRIBUTION.toml`. **No font program or typeface from any vendor is
   bundled** — widths and encodings only. Reach for `Std14` directly for any other face.
 - `wrap`: greedy line breaking with that measure (paragraphs on newlines, long words split).
+- `program`: what an embedded font program holds, read with skrifa/read-fonts (TrueType,
+  OpenType, CFF, Type 1) within a size limit: glyph count, names and CIDs, built-in encoding,
+  cmap subtables, advance widths and which glyphs have outlines. Nothing is drawn; a program
+  that doesn't parse is `Unreadable`, not empty. PDF/UA verification compares font dictionaries
+  against it. `pdf::BaseEncoding` names the glyphs of the three Annex D base encodings,
+  `pdf::cmap_program` reads an embedded CMap's `WMode` and `usecmap`, and
+  `Metrics::to_unicode_code_with` finds the code a ToUnicode value holds a given unit for.
 - `win_ansi`: Unicode → WinAnsiEncoding bytes (`?` for characters it can't represent), and
   `literal` to write bytes as a PDF literal string. Nothing writes that `?` silently. Callers
   check `first_undrawable` (or `UnicodeCMap::first_unencodable`, for a character beyond U+FFFF in
