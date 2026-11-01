@@ -42,7 +42,13 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   part of it, removed whole, together with any PDF/A identification in that packet. The removed
   glyphs' text is collected in runs by position (character and word spacing included, so
   letter-spaced text stays one word), and each run (two or more letters or digits) and each of
-  its words of three or more are matched without regard to case or spacing. A value that shares
+  its words of three or more are matched without regard to case or spacing, and also by their
+  letters and digits alone when they have three or more: "Blue fin" and "BLUE-FIN" hold
+  "Bluefin", and so does a heading whose letters `TJ` numbers spread apart (collected as
+  "B L U E F I N", since a `TJ` gap can't be told from a word space). A value is wholly part of
+  a run when its letters and digits are, starting and ending where the run's words do, so
+  "True" isn't part of "untrue". This over-matches only towards removal: "is a" also holds
+  "Lisa". A value that shares
   only words of one or two letters with the removed text, and isn't wholly part of it, stays:
   Sanitize's metadata category removes the rest. `Report::metadata` counts what went.
   - **Fail-closed.** When the check can't know what the removed text was, every `/Info`

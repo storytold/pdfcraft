@@ -16,7 +16,9 @@
 //! one filter (it is decoded strictly, so nothing after damage goes unsearched), goes; text too
 //! large to search against every term counts as matching, and when the removed text itself was cut short (too many runs or terms,
 //! or a run too long to keep) every `/Info` string and every XMP stream goes, since what was
-//! never collected can't be searched for. Terms are matched without regard to case or spacing.
+//! never collected can't be searched for. Terms are matched without regard to case or spacing,
+//! and by their letters and digits alone, so "Blue fin", "BLUE-FIN" and a tracked heading
+//! collected as "B L U E F I N" all match "Bluefin" (#2539 review).
 
 use std::collections::HashSet;
 
@@ -39,6 +41,50 @@ fn normalize(s: &str) -> String {
 
 fn significant(s: &str, min: usize) -> bool {
     s.chars().filter(|c| c.is_alphanumeric()).count() >= min
+}
+
+/// The letters and digits of `s` alone: "blue-fin" and "b l u e f i n" are both "bluefin".
+fn squeeze(s: &str) -> String {
+    s.chars().filter(|c| c.is_alphanumeric()).collect()
+}
+
+/// A removed run (normalized), and its letters and digits alone with where its words begin and
+/// end among them, so a value can be found in it whatever its spacing but still as whole words.
+struct Run {
+    text: String,
+    letters: String,
+    /// `edges[i]`: byte `i` of `letters` begins a word (something other than a letter or digit
+    /// comes before it in the run, or nothing does), or `i` is the end. One entry per byte of
+    /// `letters`, and one for the end.
+    edges: Vec<bool>,
+}
+
+impl Run {
+    fn new(text: String) -> Self {
+        let mut letters = String::new();
+        let mut edges = Vec::new();
+        let mut gap = true;
+        for c in text.chars() {
+            if c.is_alphanumeric() {
+                edges.resize(letters.len(), false);
+                edges.push(gap);
+                letters.push(c);
+                gap = false;
+            } else {
+                gap = true;
+            }
+        }
+        edges.resize(letters.len(), false);
+        edges.push(true);
+        Self { text, letters, edges }
+    }
+
+    /// Are the letters and digits `value` (squeezed) among the run's, beginning and ending at
+    /// word edges? "bluefin" is in "b l u e f i n" and "bluef in"; "true" isn't in "untrue".
+    fn holds_letters(&self, value: &str) -> bool {
+        let edge = |i: usize| self.edges.get(i).copied().unwrap_or(false);
+        !value.is_empty() && self.letters.match_indices(value).any(|(at, m)| edge(at) && edge(at.saturating_add(m.len())))
+    }
 }
 
 /// The terms to look for: each removed run (at least two letters or digits), and each of its
@@ -67,6 +113,14 @@ pub(crate) fn terms(removed: &[String]) -> Option<Vec<String>> {
     Some(out)
 }
 
+/// The terms ([`terms`]) with three letters or digits or more, by their letters and digits
+/// alone, each once: "blue fin" holds the term "bluefin" this way, and "bluefin" the run
+/// "b l u e f i n".
+fn squeezed_terms(terms: &[String]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    terms.iter().filter(|t| significant(t, 3)).map(|t| squeeze(t)).filter(|t| seen.insert(t.clone())).collect()
+}
+
 /// The searching one scrub may do, across every `/Info` entry and XMP value: past it, each
 /// further question is answered "yes" (fail-closed), so a packet of many small values can't add
 /// up to more than one large one.
@@ -92,28 +146,35 @@ impl Work {
     }
 }
 
-fn mentions(text: &str, terms: &[String], work: &Work) -> bool {
+/// Does `text` hold a term, as written or, for `squeezed` terms, by its letters and digits alone?
+fn mentions(text: &str, terms: &[String], squeezed: &[String], work: &Work) -> bool {
     let text = normalize(text);
-    !work.spend(text.len().saturating_mul(terms.len())) || terms.iter().any(|t| text.contains(t.as_str()))
+    let letters = squeeze(&text);
+    !work.spend(text.len().saturating_mul(terms.len().saturating_add(squeezed.len())))
+        || terms.iter().any(|t| text.contains(t.as_str()))
+        || squeezed.iter().any(|t| letters.contains(t.as_str()))
 }
 
-/// Is `value` itself part of one of the removed `runs` (normalized), as whole words? It needs
-/// three letters or digits, so an entry such as "by" doesn't go with every sentence that
-/// contains it, and word boundaries, so an XMP value "True" doesn't go with "untrue". Too much
-/// text to search counts as part (fail-closed).
-fn within(value: &str, runs: &[String], work: &Work) -> bool {
+/// Is `value` itself part of one of the removed `runs`, as whole words, compared as written or by
+/// letters and digits alone ("Bluefin" is part of "b l u e f i n")? It needs three letters or
+/// digits, so an entry such as "by" doesn't go with every sentence that contains it, and word
+/// edges, so an XMP value "True" doesn't go with "untrue". Too much text to search counts as
+/// part (fail-closed).
+fn within(value: &str, runs: &[Run], work: &Work) -> bool {
     let value = normalize(value);
     if !significant(&value, 3) {
         return false;
     }
-    let total = runs.iter().map(String::len).fold(0usize, usize::saturating_add);
+    let letters = squeeze(&value);
+    let total = runs.iter().map(|r| r.text.len().saturating_add(r.letters.len())).fold(0usize, usize::saturating_add);
     let word = |c: Option<char>| c.is_some_and(char::is_alphanumeric);
-    let whole = |r: &String| {
-        r.match_indices(value.as_str()).any(|(at, m)| {
-            let before = r.get(..at).and_then(|s| s.chars().next_back());
-            let after = r.get(at.saturating_add(m.len())..).and_then(|s| s.chars().next());
-            !(word(before) && value.starts_with(char::is_alphanumeric)) && !(word(after) && value.ends_with(char::is_alphanumeric))
-        })
+    let whole = |r: &Run| {
+        r.holds_letters(&letters)
+            || r.text.match_indices(value.as_str()).any(|(at, m)| {
+                let before = r.text.get(..at).and_then(|s| s.chars().next_back());
+                let after = r.text.get(at.saturating_add(m.len())..).and_then(|s| s.chars().next());
+                !(word(before) && value.starts_with(char::is_alphanumeric)) && !(word(after) && value.ends_with(char::is_alphanumeric))
+            })
     };
     !work.spend(value.len().saturating_mul(total)) || runs.iter().any(whole)
 }
@@ -297,8 +358,9 @@ enum Lookup {
     /// The removed text couldn't be collected or searched for in full: everything counts as
     /// holding it (fail-closed).
     Everything,
-    /// The terms ([`terms`]) and the distinct runs, normalized.
-    Terms(Vec<String>, Vec<String>),
+    /// The terms ([`terms`]), the same by their letters and digits alone ([`squeezed_terms`]),
+    /// and the distinct runs, normalized.
+    Terms(Vec<String>, Vec<String>, Vec<Run>),
 }
 
 impl Search {
@@ -311,8 +373,9 @@ impl Search {
             Some(t) => {
                 // The same run removed many times is searched for once.
                 let mut seen = HashSet::new();
-                let runs: Vec<String> = removed.iter().map(|r| normalize(r)).filter(|r| seen.insert(r.clone())).collect();
-                Lookup::Terms(t, runs)
+                let runs: Vec<Run> = removed.iter().map(|r| normalize(r)).filter(|r| seen.insert(r.clone())).map(Run::new).collect();
+                let squeezed = squeezed_terms(&t);
+                Lookup::Terms(t, squeezed, runs)
             }
             None => Lookup::Everything,
         };
@@ -340,7 +403,7 @@ impl Search {
         match &self.lookup {
             Lookup::Nothing => false,
             Lookup::Everything => true,
-            Lookup::Terms(terms, runs) => mentions(text, terms, &self.work) || within(text, runs, &self.work),
+            Lookup::Terms(terms, squeezed, runs) => mentions(text, terms, squeezed, &self.work) || within(text, runs, &self.work),
         }
     }
 
@@ -350,8 +413,8 @@ impl Search {
         match &self.lookup {
             Lookup::Nothing => false,
             Lookup::Everything => true,
-            Lookup::Terms(terms, runs) => xmp_values(doc, o)
-                .is_none_or(|values| mentions(&values.join(" "), terms, &self.work) || values.iter().any(|v| within(v, runs, &self.work))),
+            Lookup::Terms(terms, squeezed, runs) => xmp_values(doc, o)
+                .is_none_or(|values| mentions(&values.join(" "), terms, squeezed, &self.work) || values.iter().any(|v| within(v, runs, &self.work))),
         }
     }
 }

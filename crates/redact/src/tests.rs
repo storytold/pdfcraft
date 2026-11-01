@@ -3229,6 +3229,7 @@ mod elsewhere;
 mod inline_images;
 mod limits;
 mod metadata_fail_closed;
+mod metadata_matching;
 mod property_retirement;
 mod surviving_references;
 mod text_state;
