@@ -1,7 +1,7 @@
 //! The pre-index algorithm is kept independently as an output oracle. Compare float bits so
 //! NaNs and signed zero can be checked without changing their existing shading semantics.
 
-use super::{Color32, CompareState, Comparison, DocId, Kind, VISUAL, colour, shading};
+use super::{Color32, CompareState, Comparison, DocId, Kind, VISUAL, colour, shading, shading_with_work};
 use pdfcraft_engine::compare::{Change, Side};
 use std::collections::HashMap;
 
@@ -205,6 +205,19 @@ fn shading_operation_counts_are_page_local() {
                 s.show_text = text;
                 s.show_visual = visual;
                 for old in [false, true] {
+                    if name == "sparse_200_pages" && visual {
+                        let (actual, observed) = shading_with_work(&s, old);
+                        assert_eq!(bits(actual), bits(original(&s, old)), "production old={old}");
+                        assert_eq!(observed.text_page_lookups, 400, "actual text-page bucket lookups, old={old}");
+                        assert_eq!(observed.same_page_rect_checks, 400, "actual same-page rectangle checks, old={old}");
+                        assert_eq!(observed.text_index_insertions, 200, "actual text-index insertions, old={old}");
+                        if !old {
+                            println!(
+                                "OBSERVED_PRODUCTION_WORK: pages=200,text_page_lookups={},same_page_rect_checks={},text_index_insertions={}",
+                                observed.text_page_lookups, observed.same_page_rect_checks, observed.text_index_insertions
+                            );
+                        }
+                    }
                     let (scan, indexed) = count_work(&s, old);
                     rows.push(format!(
                         "{name},{pages},{marks_per_page},{overlap},{text},{visual},{old},{},{},{},{},{},{}",
