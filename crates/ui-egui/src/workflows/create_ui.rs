@@ -143,7 +143,7 @@ impl PdfCraftApp {
 
     /// Create ▸ Blank page: a new untitled document on the system region's paper (#5644).
     pub(crate) fn create_blank(&mut self) {
-        let (w, h) = crate::paper::Paper::system().points();
+        let (w, h) = self.blank_paper.points();
         let created = self.session.create_blank(w, h, 1).map_err(|e| e.to_string());
         if let Err(e) = self.open_created_bytes("Untitled.pdf", created) {
             self.notify_fmt("Couldn't create a PDF: {e}", &[("e", &e.to_string())]);

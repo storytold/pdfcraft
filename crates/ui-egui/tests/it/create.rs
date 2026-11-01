@@ -381,13 +381,23 @@ fn multiple_files_past_a_thousand_are_all_used() {
     assert_eq!(doc.info.pages.len(), 1001, "every picked file is used, in order");
 }
 
-/// Create ▸ Blank page uses the system region's paper, not always US Letter (#5644).
+/// Create ▸ Blank page uses the system region's paper, not always US Letter (#5644): the app
+/// starts with the system's, and a blank page is on A4 and on Letter as the paper says
+/// (CodeRabbit on #5651: a Letter host alone would not tell a hard-coded Letter apart).
 #[test]
 fn a_blank_page_is_on_the_system_regions_paper() {
-    let mut app = PdfCraftApp::new();
-    assert!(app.execute("create.blank"));
-    let docs = app.session.docs();
-    let crop = docs.last().and_then(|d| d.info.pages.first()).map(|p| p.crop).unwrap();
-    let (w, h) = pdfcraft_ui_egui::paper::Paper::system().points();
-    assert!(((crop[2] - crop[0]) as f64 - w).abs() < 0.01 && ((crop[3] - crop[1]) as f64 - h).abs() < 0.01, "{crop:?} is not {w} × {h}");
+    use pdfcraft_ui_egui::paper::Paper;
+    assert_eq!(PdfCraftApp::new().blank_paper, Paper::system());
+    for paper in [Paper::A4, Paper::Letter] {
+        let mut app = PdfCraftApp::new();
+        app.blank_paper = paper;
+        assert!(app.execute("create.blank"));
+        let docs = app.session.docs();
+        let crop = docs.last().and_then(|d| d.info.pages.first()).map(|p| p.crop).unwrap();
+        let (w, h) = paper.points();
+        assert!(
+            ((crop[2] - crop[0]) as f64 - w).abs() < 0.01 && ((crop[3] - crop[1]) as f64 - h).abs() < 0.01,
+            "{paper:?}: {crop:?} is not {w} × {h}"
+        );
+    }
 }
