@@ -2,8 +2,10 @@
 //! whose footprint intersects a region is set to zero (no ink for image masks), and the result is
 //! written as a new Flate image; the original object is untouched (other pages may use it).
 //! DCT (JPEG) images in supported 8-bit grayscale and RGB layouts are decoded so unmarked samples
-//! remain. Unsupported codecs/layouts (JPX, JBIG2, CCITT and other DCT cases) return `None`, and
-//! the caller removes the whole image instead; that is fail-closed.
+//! remain, and CCITT fax images decode through `Document::decoded_image_within`; Group 3 on bytes
+//! is refused, which PdfCraft's renderer may draw as other rows. Images whose codec PdfCraft
+//! can't decode (JPX, JBIG2, and the other DCT cases) return `None`, and the caller removes the
+//! whole image instead; that is fail-closed.
 
 use pdfcraft_content::{Matrix, overlaps};
 use pdfcraft_cos::{Document, Object, Stream};
@@ -136,7 +138,18 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     // The JPEG decoder consumes the raw bytes, so accept DCT only as a single filter. Other filter
     // chains retain the upstream supported-filter rules and bounded PDF stream decoder below.
     let dct = matches!(filters.as_slice(), [b"DCTDecode"] | [b"DCT"]);
-    if !dct && !filters.iter().all(|n| supported(n)) {
+    // A CCITT fax image (its last filter) decodes through `Document::decoded_image_within`, after the
+    // filters before it, so a scan stored as Group 4 is cleared like any other image.
+    let is_fax = filters.last().is_some_and(|n| matches!(*n, b"CCITTFaxDecode" | b"CCF"));
+    let body = if is_fax { &filters[..filters.len() - 1] } else { &filters[..] };
+    if !dct && !body.iter().all(|n| supported(n)) {
+        return None;
+    }
+    // Group 3 on bytes is removed whole for now. The decoder reads it by its end-of-line codes
+    // when the data starts with one, but PdfCraft's renderer draws such rows (the fill ending
+    // each code on a byte) as other rows, so the pixels a mark covers on screen needn't be the
+    // ones cleared.
+    if is_fax && doc.fax_params(s).is_none_or(|p| p.k >= 0 && p.encoded_byte_align) {
         return None;
     }
     let (w, h) = (s.dict.int(b"Width")?, s.dict.int(b"Height")?);
@@ -172,11 +185,20 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
         }
         jpeg_samples(&s.raw, ncomp, w, h)?
     } else {
-        // Decode no further than the raster can need: a filter stage may legitimately produce up
-        // to twice it (ASCIIHex text under Flate) plus a PNG predictor's byte per row. Data past
-        // that can only be a decompression bomb; the image is then removed whole.
-        let allowance = bytes.checked_add(h)?.checked_mul(2)?.checked_add(4096)?;
-        s.decoded_within(allowance).ok()?
+        // Decode no further than the raster can need: a filter stage may legitimately produce up to
+        // three bytes for each of it and a PNG predictor's byte per row (ASCIIHex text under Flate,
+        // two digits a byte broken into lines or spaced), as the optimizer allows. A fax image's
+        // code, which the filters before its decoder produce, takes at most about a byte per pixel
+        // plus each row's end. Data past that can only be a decompression bomb; the image is then
+        // removed whole.
+        let allowance = if is_fax {
+            w.checked_mul(h)?.checked_add(h.checked_mul(4)?)?.checked_add(4096)?
+        } else {
+            bytes.checked_add(h)?.checked_mul(3)?.checked_add(4096)?
+        };
+        // Through the document, which reads `/DecodeParms` given by reference (`Stream::decoded*`
+        // alone would skip such a predictor, and the cleared bytes would then miss the covered pixels).
+        doc.decoded_image_within(s, allowance).ok()?
     };
     if data.len() < bytes {
         return None;
@@ -184,7 +206,10 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     data.truncate(bytes);
     // Image masks: a sample of 0 paints unless /Decode is [1 0]; cleared samples must not paint.
     let clear_bit = if mask {
-        let inverted = s.dict.get(b"Decode").and_then(Object::as_array).and_then(|d| d.first()).and_then(Object::as_f64) == Some(1.0);
+        // The array, and its first number, given by reference too.
+        let decode = s.dict.get(b"Decode").map(|d| doc.resolve(d));
+        let first = decode.as_deref().and_then(Object::as_array).and_then(|d| d.first()).map(|v| doc.resolve(v));
+        let inverted = first.as_deref().and_then(Object::as_f64) == Some(1.0);
         !inverted
     } else {
         false

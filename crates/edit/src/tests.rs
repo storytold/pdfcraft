@@ -76,12 +76,38 @@ fn an_image_turns_by_any_angle_about_its_centre_and_saves_the_matrix() {
 }
 
 #[test]
+fn an_added_image_crop_keeps_some_of_each_axis() {
+    use crate::added::AddedImage;
+    assert!(AddedImage::crop_valid([0.7, 0.0, 0.0, 0.95]));
+    assert!(AddedImage::crop_valid([0.5, 0.45, 0.45, 0.5]));
+    // 0.05 + 0.9 rounds to just above 0.95: still the 5 % kept, accepted and left as it is.
+    assert!(AddedImage::crop_valid([0.05, 0.0, 0.9, 0.0]));
+    assert_eq!(AddedImage::clamp_crop([0.05, 0.0, 0.9, 0.0]), [0.05, 0.0, 0.9, 0.0]);
+    assert!(!AddedImage::crop_valid([0.06, 0.0, 0.9, 0.0]), "more than 95 % across");
+    assert!(!AddedImage::crop_valid([0.6, 0.0, 0.4, 0.0]), "nothing left across");
+    assert!(!AddedImage::crop_valid([-0.1, 0.0, 0.0, 0.0]));
+    assert!(!AddedImage::crop_valid([f64::NAN, 0.0, 0.0, 0.0]));
+    assert_eq!(AddedImage::clamp_crop([0.7, 0.0, 0.0, 0.0]), [0.7, 0.0, 0.0, 0.0], "a valid crop stays as it is");
+    // From a file: too much across keeps the two sides' proportion; nonsense trims nothing.
+    let [l, b, r, t] = AddedImage::clamp_crop([0.6, f64::INFINITY, 0.6, -1.0]);
+    assert!((l - 0.475).abs() < 1e-12 && (r - 0.475).abs() < 1e-12 && b == 0.0 && t == 0.0);
+    // Sides beyond the whole image keep their proportion too, and huge ones don't overflow.
+    let [l, _, r, _] = AddedImage::clamp_crop([1.5, 0.0, 0.5, 0.0]);
+    assert!((l - 0.7125).abs() < 1e-12 && (r - 0.2375).abs() < 1e-12, "{l} {r}");
+    let [l, _, r, _] = AddedImage::clamp_crop([f64::MAX, 0.0, f64::MAX, 0.0]);
+    assert!((l - 0.475).abs() < 1e-12 && (r - 0.475).abs() < 1e-12, "{l} {r}");
+    let [l, _, r, _] = AddedImage::clamp_crop([1.5, 0.0, 0.0, 0.0]);
+    assert!((l - 0.95).abs() < 1e-12 && r == 0.0, "one side alone is capped at the limit");
+}
+
+#[test]
 fn tokens_expand() {
     let c = cx();
     assert_eq!(expand("Page <<1>> of <<n>>", 3, 10, 0, &c), "Page 3 of 10");
     assert_eq!(expand("<<1 of n>> · <<Page 1>> · <<1/n>>", 2, 5, 0, &c), "2 of 5 · Page 2 · 2/5");
     assert_eq!(expand("<<m/d/yyyy>> <<yyyy-mm-dd>> <<mmmm d, yyyy>>", 1, 1, 0, &c), "10/1/2026 2026-10-01 October 1, 2026");
     assert_eq!(expand("<<yyyy/mm/dd>> <<yyyy/m/d>>", 1, 1, 0, &c), "2026/10/01 2026/10/1");
+    assert_eq!(expand("<<dd.mm.yyyy>> <<d.m.yyyy>> <<dd.mm.yy>> <<d.m.yy>>", 1, 1, 0, &c), "01.10.2026 1.10.2026 01.10.26 1.10.26");
     assert_eq!(expand("<<Bates Number#6#100#ABC#-X>>", 1, 1, 104, &c), "ABC000104-X");
     assert_eq!(expand("keep <<unknown>> and <<unclosed", 1, 1, 0, &c), "keep <<unknown>> and <<unclosed");
     assert_eq!(bates_start("x <<Bates Number#6#100#A#B>>"), Some(100));
@@ -479,6 +505,42 @@ fn flattening_draws_appearances_into_the_page_and_removes_the_comments() {
     let xo = doc.resolve(res.as_dict().unwrap().get(b"XObject").unwrap());
     assert!(xo.as_dict().unwrap().contains(b"PCFl1"));
     assert!(marks_present(&doc).is_empty(), "flattened content is not a removable mark");
+}
+
+/// #2368: a widget with /NoRotate on a rotated page is shown upright, turned with the page's
+/// /Rotate about its rectangle's upper-left corner (§12.5.3, as MuPDF and Poppler draw it).
+/// Flattening drew its appearance at the rectangle as it is, so the widget turned sideways and
+/// moved; a neighbour without the flag is unchanged, and so is everything on an unrotated page.
+#[test]
+fn flattening_keeps_a_no_rotate_widget_upright_on_a_rotated_page() {
+    let page = stream("", " ");
+    let form = "<< /Type /XObject /Subtype /Form /BBox [0 0 100 50] /Length 15 >>\nstream\n0 0 100 50 re f\nendstream";
+    for (rotate, plain, upright) in [
+        (0, "q 1 0 0 1 100 500 cm /PCFl0 Do Q", "q 1 0 0 1 100 500 cm /PCFl1 Do Q"),
+        (90, "q 1 0 0 1 100 500 cm /PCFl0 Do Q", "q 0 1 -1 0 150 550 cm /PCFl1 Do Q"),
+        (180, "q 1 0 0 1 100 500 cm /PCFl0 Do Q", "q -1 0 0 -1 100 600 cm /PCFl1 Do Q"),
+        (270, "q 1 0 0 1 100 500 cm /PCFl0 Do Q", "q 0 -1 1 0 50 550 cm /PCFl1 Do Q"),
+    ] {
+        let widget =
+            |flags: i64| format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (f{flags}) /Rect [100 500 200 550] /F {flags} /AP << /N 7 0 R >> >>");
+        let mut doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] >> >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            &format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Rotate {rotate} /Resources << >> /Contents 6 0 R /Annots [4 0 R 5 0 R] >>"
+            ),
+            &widget(4),
+            &widget(4 | 16),
+            &page,
+            form,
+        ]);
+        assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 2);
+        let doc = reopen(&doc);
+        let s = streams(&doc, 0);
+        let flat = s.last().unwrap();
+        assert!(flat.contains(plain), "/Rotate {rotate}: {flat}");
+        assert!(flat.contains(upright), "/Rotate {rotate}: {flat}");
+    }
 }
 
 /// #1317: a cloudy square this builder cannot draw stays on the page. A solid square, a hidden
@@ -981,6 +1043,74 @@ fn added_text_and_images_are_page_content_that_stays_editable() {
     assert!(add_content(&mut doc, 0, &Content::Text(AddedText { rect: [0.0, 0.0, 100.0, 10.0], ..AddedText::default() })).is_err(), "empty text");
     // Page marks ignore added items.
     assert!(marks_present(&doc).is_empty());
+}
+
+/// #4464: a page left with one added item draws that item and nothing else.
+#[test]
+fn an_isolated_item_is_all_that_is_left_on_its_page() {
+    let mut doc = fixture();
+    let first = AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: "First".into(), size: 14.0, ..AddedText::default() };
+    let second = AddedText { rect: [72.0, 400.0, 300.0, 500.0], text: "Second".into(), ..first.clone() };
+    add_content(&mut doc, 0, &Content::Text(first)).unwrap();
+    add_content(&mut doc, 0, &Content::Text(second)).unwrap();
+    let before = streams(&doc, 0).join("\n");
+    assert!(before.contains("(First) Tj") && before.contains("(Second) Tj"), "{before}");
+    assert!(isolate_content(&mut doc, 0, 2).is_err(), "no third item");
+    assert!(isolate_content(&mut doc, 9, 0).is_err(), "no such page");
+    let page = pdfcraft_model::pages(&doc).swap_remove(0);
+    doc.update_dict(page.obj, |d| d.set(b"Annots".to_vec(), Object::Array(Vec::new()))).unwrap();
+    isolate_content(&mut doc, 0, 1).unwrap();
+    let after = streams(&doc, 0).join("\n");
+    assert!(after.contains("(Second) Tj") && !after.contains("(First) Tj"), "{after}");
+    let page = pdfcraft_model::pages(&doc).swap_remove(0);
+    assert!(page.dict.get(b"Annots").is_none(), "no annotations are drawn over it");
+    assert_eq!(list_added(&doc).len(), 1);
+}
+
+/// Edit ▸ Paste (#2636): where a pasted item lands.
+#[test]
+fn a_paste_lands_where_the_copy_was_offset_per_paste_and_stays_on_the_page() {
+    use crate::added::{PASTE_STEP, paste_rect};
+    let page = [300.0, 400.0];
+    let rect = [40.0, 300.0, 140.0, 320.0];
+    assert_eq!(paste_rect(rect, page, 0, None), rect, "in place");
+    let d = 2.0 * PASTE_STEP;
+    assert_eq!(paste_rect(rect, page, 2, None), [40.0 + d, 300.0 - d, 140.0 + d, 320.0 - d], "two steps down and right");
+    assert_eq!(paste_rect(rect, page, 1, Some([10.0, 50.0])), [10.0, 30.0, 110.0, 50.0], "its top-left corner at the point");
+    assert_eq!(paste_rect(rect, page, 0, Some([290.0, 5.0])), [200.0, 0.0, 300.0, 20.0], "pulled back onto the page");
+    assert_eq!(paste_rect([0.0, 0.0, 500.0, 600.0], page, 0, Some([10.0, 10.0])), [0.0, -200.0, 500.0, 400.0], "too large: left and top on the page");
+    assert_eq!(paste_rect([140.0, 320.0, 40.0, 300.0], page, 0, None), rect, "a reversed box is normalized");
+    assert_eq!(paste_rect(rect, [f64::NAN, 400.0], 1, None), rect, "a page without a size leaves the box alone");
+    assert_eq!(paste_rect(rect, page, 1, Some([f64::INFINITY, 5.0])), rect, "so does a point that isn't a number");
+    assert_eq!(paste_rect(rect, page, u32::MAX, None), [200.0, 0.0, 300.0, 20.0], "many pastes stop at the page's corner");
+}
+
+/// A paste steps on past exact copies of the item (its original, earlier pastes), and only those.
+#[test]
+fn a_paste_steps_past_copies_of_itself_only() {
+    use crate::added::{PASTE_STEP, paste_place};
+    let page = [300.0, 400.0];
+    let text = |rect, t: &str| Content::Text(AddedText { rect, text: t.into(), ..AddedText::default() });
+    let item = text([40.0, 300.0, 140.0, 314.4], "Note");
+    let step = |n: f64| [40.0 + n * PASTE_STEP, 300.0 - n * PASTE_STEP, 140.0 + n * PASTE_STEP, 314.4 - n * PASTE_STEP];
+    assert_eq!(paste_place([], &item, page), step(0.0), "an empty page: where it was");
+    assert_eq!(paste_place([&item], &item, page), step(1.0), "beside its original");
+    let first = item.with_rect(step(1.0));
+    assert_eq!(paste_place([&item, &first], &item, page), step(2.0), "beside the last copy");
+    assert_eq!(paste_place([&first], &item, page), step(0.0), "its place is free again (the original was cut)");
+    let other = text(step(0.0), "Other text");
+    assert_eq!(paste_place([&other], &item, page), step(0.0), "a different item in the way doesn't count");
+    // A page full of copies at its corner: the search ends.
+    let corner = item.with_rect([200.0, 0.0, 300.0, 14.4]);
+    let stuck = paste_place([&corner], &item.with_rect([200.0, 0.0, 300.0, 14.4]), page);
+    assert_eq!(stuck, [200.0, 0.0, 300.0, 14.4]);
+    // An image pasted into another document draws its picture from an object of that document:
+    // still a copy, so the next paste steps past it.
+    let image = Content::Image(AddedImage { crop: [0.1, 0.0, 0.0, 0.0], ..AddedImage::new(step(0.0), pdfcraft_cos::ObjRef::new(7, 0)) });
+    let pasted = Content::Image(AddedImage { crop: [0.1, 0.0, 0.0, 0.0], ..AddedImage::new(step(0.0), pdfcraft_cos::ObjRef::new(42, 0)) });
+    assert_eq!(paste_place([&pasted], &image, page), step(1.0), "a copy whose picture is stored anew");
+    let turned = Content::Image(AddedImage { rotation: 1, ..AddedImage::new(step(0.0), pdfcraft_cos::ObjRef::new(7, 0)) });
+    assert_eq!(paste_place([&turned], &image, page), step(0.0), "the same picture turned or cropped otherwise isn't a copy");
 }
 
 #[test]
@@ -1683,6 +1813,214 @@ fn japanese_replacement_over_240_unique_glyphs_is_split_across_fallback_fonts() 
         glyphs += count;
     }
     assert_eq!(glyphs, 300);
+}
+
+#[test]
+fn styled_paragraph_batches_cyrillic_without_changing_source_fonts() {
+    if without_craft_fonts("styled_paragraph_batches_cyrillic_without_changing_source_fonts") {
+        return;
+    }
+    let mut doc = text_page(
+        "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (The quick brown fox jumps over the lazy dog) Tj T* (and keeps running through the long field.) Tj ET",
+    );
+    let replacement = "The quick brown fox jumps over the lazy dog шалом\nand keeps running through the long field.";
+    text::rewrite_block(&mut doc, 0, 0, Some(replacement), &text::BlockStyle { width: Some(520.0), ..Default::default() }).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(fallback_fonts(&doc).len(), 1, "the five letters must share one font");
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert!(lines.iter().any(|l| l.base_font == "Helvetica" && l.text.starts_with("The quick brown fox")), "{lines:?}");
+    let fallback: Vec<_> = lines.iter().filter(|l| l.font.starts_with("PCJp")).collect();
+    assert_eq!(fallback.len(), 1, "one word must be one text run: {fallback:?}");
+    assert_eq!(fallback[0].text, "шалом");
+    assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<String>().replace(' ', ""), replacement.replace([' ', '\n'], ""));
+}
+
+#[test]
+fn styled_paragraph_over_240_fallback_glyphs_splits_and_refuses_atomically() {
+    let replacement = format!("{}\nLatin", covered_japanese_chars(300));
+    let mut doc = text_page("BT /F1 12 Tf 14.4 TL 72 700 Td (Original) Tj T* (Latin) Tj ET");
+    let original = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    if without_craft_fonts("styled_paragraph_over_240_fallback_glyphs_splits_and_refuses_atomically") {
+        assert!(text::replace_block(&mut doc, 0, 0, &replacement).is_err());
+        assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), original);
+        return;
+    }
+    text::rewrite_block(&mut doc, 0, 0, Some(&replacement), &text::BlockStyle { width: Some(14000.0), ..Default::default() }).unwrap();
+    let reopened = reopen(&doc);
+    let fonts = fallback_fonts(&reopened);
+    assert_eq!(fonts.len(), 2, "300 glyphs need two fonts, not an error at glyph 241");
+    let counts: Vec<_> = fonts.iter().map(|(_, f)| reopened.dict(f.get(b"CharProcs").unwrap()).unwrap().len()).collect();
+    assert_eq!(counts.iter().sum::<usize>(), 300);
+    assert!(counts.iter().all(|n| *n <= 240));
+    assert_eq!(text::text_lines(&reopened, 0).unwrap().iter().map(|l| l.text.as_str()).collect::<String>(), replacement.replace('\n', ""));
+    let before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let snapshot = doc.clone();
+    let err = text::replace_block(&mut doc, 0, 0, &format!("{replacement}\u{10ffff}")).unwrap_err();
+    assert!(err.to_string().contains("U+10FFFF"), "{err}");
+    assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before);
+    assert_eq!(write_incremental(&snapshot, &SaveOptions::default()).unwrap(), before);
+}
+
+#[test]
+fn styled_fallback_batches_keep_face_choices_and_range_styles() {
+    if without_craft_fonts("styled_fallback_batches_keep_face_choices_and_range_styles") {
+        return;
+    }
+    if !pdfcraft_fonts::CRAFT_FONTS.iter().any(|f| f.family == "BIZ UDPGothic" && f.style == "Bold") {
+        eprintln!("skipping: no bold Gothic face");
+        return;
+    }
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Original) Tj ET");
+    let range = |range, family, bold| text::RangeStyle {
+        range,
+        family: Some((family, bold, false)),
+        resource: None,
+        size: None,
+        color: None,
+        underline: None,
+        char_spacing: None,
+        scale: None,
+    };
+    let style = text::BlockStyle {
+        width: Some(520.0),
+        ranges: vec![
+            range(3..6, added::Family::Times, false),
+            range(6..9, added::Family::Helvetica, true),
+            range(9..11, added::Family::Times, false),
+        ],
+        ..Default::default()
+    };
+    let original = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let err = text::rewrite_block(&mut doc, 0, 0, Some("見見見ш見ш\nLatin\u{10ffff}"), &style).unwrap_err();
+    assert!(err.to_string().contains("U+10FFFF"), "{err}");
+    assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), original, "all faces must validate before writing fallback objects");
+    text::rewrite_block(&mut doc, 0, 0, Some("見見見ш見ш\nLatin"), &style).unwrap();
+    let doc = reopen(&doc);
+    let fonts = fallback_fonts(&doc);
+    let mut summary: Vec<_> = fonts
+        .iter()
+        .map(|(_, f)| {
+            let face = pdfcraft_fonts::pdf::Metrics::from_dict(&doc, f).base_font;
+            let count = doc.dict(f.get(b"CharProcs").unwrap()).unwrap().len();
+            (face, count)
+        })
+        .collect();
+    summary.sort();
+    assert_eq!(
+        summary,
+        [
+            ("BIZUDMincho-Regular".into(), 1),
+            ("BIZUDPGothic-Bold".into(), 1),
+            ("BIZUDPGothic-Regular".into(), 2),
+            ("ShipporiMincho-Regular".into(), 1)
+        ]
+    );
+    assert_eq!(text::text_lines(&doc, 0).unwrap().iter().map(|l| l.text.as_str()).collect::<String>(), "見見見ш見шLatin");
+}
+
+#[test]
+fn styled_fallback_budget_is_enforced_before_objects_are_written() {
+    let glyphs = covered_japanese_chars(65);
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Original) Tj ET");
+    let original = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let snapshot = doc.clone();
+    let style = text::BlockStyle { width: Some(14000.0), ..Default::default() };
+    let over_budget = format!("{glyphs}\nLatin");
+    let err = text::rewrite_block_with_limit(&mut doc, 0, 0, Some(&over_budget), &style, 1).unwrap_err().to_string();
+    assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), original, "refusal must add no objects");
+    assert_eq!(write_incremental(&snapshot, &SaveOptions::default()).unwrap(), original);
+    if without_craft_fonts("styled_fallback_budget_is_enforced_before_objects_are_written") {
+        assert!(err.contains("CRAFT_FONTS_DIR"), "{err}");
+        return;
+    }
+    assert!(err.contains("more than 64 fallback glyphs"), "{err}");
+    // One glyph per font gives a small, real budget of 64 distinct glyphs. At the
+    // boundary a repeated glyph is free: this is not a limit on text length.
+    let at_budget: String = glyphs.chars().take(64).chain(glyphs.chars().take(1)).collect();
+    text::rewrite_block_with_limit(&mut doc, 0, 0, Some(&format!("{at_budget}\nLatin")), &style, 1).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(fallback_fonts(&doc).len(), 64);
+    assert_eq!(text::text_lines(&doc, 0).unwrap().iter().map(|l| l.text.as_str()).collect::<String>(), format!("{at_budget}Latin"));
+}
+
+#[test]
+fn styled_fallback_same_base_font_and_character_keep_both_weights() {
+    if without_craft_fonts("styled_fallback_same_base_font_and_character_keep_both_weights") {
+        return;
+    }
+    if !pdfcraft_fonts::CRAFT_FONTS.iter().any(|f| f.family == "BIZ UDPGothic" && f.style == "Bold") {
+        eprintln!("skipping: no bold Gothic face");
+        return;
+    }
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td (alpha ) Tj /F2 12 Tf (beta ) Tj ET");
+    let source = doc.get(pdfcraft_cos::ObjRef::new(5, 0)).as_dict().unwrap().clone();
+    for (object, weight) in [(5, 400), (6, 700)] {
+        let mut font = source.clone();
+        // The same BaseFont can have different descriptor weights. Changing a
+        // RangeStyle family would also rename BaseFont and miss this cache key.
+        font.set(b"BaseFont".to_vec(), Object::name("NeutralFace"));
+        let mut descriptor = Dict::new();
+        descriptor.set(b"FontName".to_vec(), Object::name("NeutralFace"));
+        descriptor.set(b"FontWeight".to_vec(), Object::Int(weight));
+        font.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
+        doc.set(pdfcraft_cos::ObjRef::new(object, 0), Object::Dict(font));
+    }
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0].base_font, lines[1].base_font);
+    assert_eq!((lines[0].bold, lines[1].bold), (false, true));
+    // Unchanged words anchor each inserted copy of the same letter in its own source style.
+    let block = text::text_blocks(&doc, 0).unwrap().remove(0);
+    let mut inherited = Vec::new();
+    for (range, source) in block.edited_spans("alpha ш beta ш") {
+        for _ in "alpha ш beta ш".get(range).unwrap().chars().filter(|ch| *ch == 'ш') {
+            inherited.push(lines[source].bold);
+        }
+    }
+    assert_eq!(inherited, [false, true], "the fixture must exercise both weights of the same BaseFont");
+    text::replace_block(&mut doc, 0, 0, "alpha ш beta ш").unwrap();
+    let doc = reopen(&doc);
+    let fonts = fallback_fonts(&doc);
+    let mut names: Vec<_> = fonts.iter().map(|(_, f)| pdfcraft_fonts::pdf::Metrics::from_dict(&doc, f).base_font).collect();
+    names.sort();
+    assert_eq!(names, ["BIZUDPGothic-Bold", "BIZUDPGothic-Regular"]);
+    let outlines: Vec<_> = fonts
+        .iter()
+        .map(|(_, f)| {
+            let procs = doc.dict(f.get(b"CharProcs").unwrap()).unwrap();
+            assert_eq!(procs.len(), 1, "each weight needs just the shared letter");
+            stream_bytes(&doc, procs.iter().next().unwrap().1).unwrap()
+        })
+        .collect();
+    assert_ne!(outlines[0], outlines[1], "weight must change the outline, not only the descriptor");
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<String>(), "alpha ш beta ш");
+}
+
+#[test]
+fn styled_fallback_shards_keep_text_advances_and_alignment() {
+    if without_craft_fonts("styled_fallback_shards_keep_text_advances_and_alignment") {
+        return;
+    }
+    let source = "BT /F1 12 Tf 0.5 Tc 5 Tw 80 Tz 14.4 TL 72 700 Td (Original row) Tj T* (Second row) Tj ET";
+    let style =
+        text::BlockStyle { width: Some(520.0), align: Some(added::Align::Center), char_spacing: Some(0.7), scale: Some(80.0), ..Default::default() };
+    let mut whole = text_page(source);
+    let mut split = text_page(source);
+    let replacement = "Latin шалом ш\nSecond row";
+    text::rewrite_block_with_limit(&mut whole, 0, 0, Some(replacement), &style, 240).unwrap();
+    text::rewrite_block_with_limit(&mut split, 0, 0, Some(replacement), &style, 2).unwrap();
+    let (whole, split) = (reopen(&whole), reopen(&split));
+    assert_eq!(fallback_fonts(&whole).len(), 1);
+    assert_eq!(fallback_fonts(&split).len(), 3);
+    let (one, many) = (text::text_lines(&whole, 0).unwrap(), text::text_lines(&split, 0).unwrap());
+    assert_eq!(one.len(), many.len(), "{one:?} vs {many:?}");
+    for (a, b) in one.iter().zip(&many) {
+        assert_eq!(a.text, b.text);
+        for (a, b) in a.rect.iter().zip(b.rect) {
+            assert!((a - b).abs() < 0.002, "sharding must preserve alignment and advances: {a} vs {b}");
+        }
+    }
 }
 
 /// A replacement whose last glyph no face draws (in a later font) changes nothing: neither the
@@ -2412,6 +2750,681 @@ fn missing_glyphs_substitute_helvetica_and_impossible_text_is_refused() {
     let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello) Tj ET");
     assert!(text::replace_line(&mut doc, 0, 0, "\u{1f4a9}").is_err());
     assert!(text::replace_line(&mut doc, 0, 5, "x").is_err(), "no such line");
+}
+
+/// #4280: two paragraphs in subsets without Ç or Ã, one regular and one bold. Each edit that adds
+/// an accent sets the paragraph in a standard font of its own weight. Editing the bold one must
+/// not turn the regular one, set in its stand-in earlier, bold too, and the editor's frame for the
+/// bold one must not reach the regular one.
+#[test]
+fn a_bold_stand_in_font_leaves_an_earlier_regular_one_alone() {
+    let widths = vec!["600"; 26].join(" ");
+    let font = |base: &str| {
+        format!("<< /Type /Font /Subtype /Type1 /BaseFont /{base} /FirstChar 65 /LastChar 90 /Widths [{widths}] /Encoding /WinAnsiEncoding >>")
+    };
+    let (regular, bold) = (font("ABCDEF+Garamond"), font("ABCDEF+Garamond-Bold"));
+    let content = stream("", "BT /F1 12 Tf 72 700 Td (ACAO) Tj ET BT /F2 12 Tf 300 400 Td (TENSAO) Tj ET");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>",
+        &content,
+        &regular,
+        &bold,
+    ]);
+    let block = |doc: &Document, text: &str| text::text_blocks(doc, 0).unwrap().iter().position(|b| b.text == text).unwrap();
+    let acao = block(&doc, "ACAO");
+    assert_eq!(text::replace_block(&mut doc, 0, acao, "AÇÃO").unwrap().substituted.as_deref(), Some("Times-Roman"));
+    let first = text::text_lines(&doc, 0).unwrap().into_iter().find(|l| l.text == "AÇÃO").unwrap();
+
+    let tensao = block(&doc, "TENSAO");
+    let layout = text::text_edit_layout(&doc, 0, tensao, "TENSÃO", &text::BlockStyle::default()).unwrap();
+    let draft = layout.draft_rect.unwrap();
+    assert!(draft[3] < first.rect[1] || draft[1] > first.rect[3], "the frame {draft:?} reaches the regular paragraph at {:?}", first.rect);
+    assert_eq!(text::replace_block(&mut doc, 0, tensao, "TENSÃO").unwrap().substituted.as_deref(), Some("Times-Bold"));
+
+    let doc = reopen(&doc);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let font_of = |text: &str| lines.iter().find(|l| l.text == text).map(|l| l.base_font.clone());
+    assert_eq!(font_of("AÇÃO").as_deref(), Some("Times-Roman"), "{lines:?}");
+    assert_eq!(font_of("TENSÃO").as_deref(), Some("Times-Bold"), "{lines:?}");
+}
+
+/// #2517: one blank line at ordinary leading (2 × 1.2 × the font size) is a paragraph break.
+/// Editing the first paragraph must leave the second one in place.
+#[test]
+fn a_blank_line_keeps_the_next_paragraph() {
+    let src = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (First paragraph, first row.) Tj T* (First paragraph, second row.) Tj ET \
+               BT /F1 12 Tf 14.4 TL 1 0 0 1 72 656.8 Tm (Second paragraph, first row.) Tj T* (Second paragraph, second row.) Tj ET";
+    let mut doc = text_page(src);
+    let before = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(before.len(), 2, "{:?}", before.iter().map(|b| b.text.as_str()).collect::<Vec<_>>());
+    text::replace_block(&mut doc, 0, 0, "First paragraph, edited row.\nFirst paragraph, second row.").unwrap();
+    let after = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(after.len(), 2, "{:?}", after.iter().map(|b| b.text.as_str()).collect::<Vec<_>>());
+    assert!(after[0].text.contains("edited row") && after[0].text.contains("second row"), "{:?}", after[0].text);
+    assert!(after[1].text.contains("Second paragraph"), "{:?}", after[1].text);
+    // The second row is left in the source stream. A marker around only the rewritten row
+    // would split the paragraph; either there is no marker, or it covers both rows and not the next paragraph.
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    if content.contains("/P BMC") {
+        let marked = region_through_matching_close(&content, "/P BMC");
+        assert!(marked.contains("edited row") && marked.contains("second row"), "marker split the paragraph: {content}");
+        assert!(!marked.contains("Second paragraph"), "marker swallowed the next paragraph: {content}");
+    }
+}
+
+/// #2517: adding a row must not pull in a paragraph that was 3 × the font size below.
+#[test]
+fn a_grown_paragraph_does_not_swallow_the_next_one() {
+    let src = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (One) Tj T* (Two) Tj ET \
+               BT /F1 12 Tf 1 0 0 1 72 649.6 Tm (Neighbour) Tj ET";
+    let mut doc = text_page(src);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap().len(), 2);
+    text::replace_block(&mut doc, 0, 0, "One\nTwo\nThree").unwrap();
+    let after = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(after.len(), 2, "{:?}", after.iter().map(|b| b.text.as_str()).collect::<Vec<_>>());
+    assert!(after[1].text.contains("Neighbour"), "{:?}", after[1].text);
+}
+
+/// An explicit `TL` is the leading `T*` moves by. Rows at that gap are one paragraph, including
+/// when the gap is larger than twice the font size. A following paragraph that starts two
+/// leadings lower stays separate. The numbers are the gaps under test, not a claim about how a
+/// word processor derives them: this repo's Helvetica box is 0.925 em (ascent 0.718, descent
+/// 0.207), so twice that box at 12 pt is 22.2 pt, while 27.6 pt is 12 × 2.3.
+#[test]
+fn explicit_leading_is_the_measured_baseline_gap() {
+    for tl in [14.4_f64, 18.0, 22.2, 24.0, 27.6, 28.8] {
+        let src = format!("BT /F1 12 Tf {tl} TL 1 0 0 1 72 700 Tm (One) Tj T* (Two) Tj T* (Three) Tj ET");
+        let doc = text_page(&src);
+        let lines = text::text_lines(&doc, 0).unwrap();
+        let gaps: Vec<f64> = lines.windows(2).map(|w| w[0].origin_baseline() - w[1].origin_baseline()).collect();
+        assert!(gaps.iter().all(|gap| (gap - tl).abs() < 0.05), "TL {tl} did not move the baselines: {gaps:?}");
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(blocks.len(), 1, "TL {tl}, measured gaps {gaps:?}: {:?}", blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>());
+    }
+    // Two rows at the TL, then a paragraph whose first baseline is two TLs below the second row.
+    let tl = 14.4_f64;
+    let next = 700.0 - tl - 2.0 * tl;
+    let blank = format!(
+        "BT /F1 12 Tf {tl} TL 1 0 0 1 72 700 Tm (One) Tj T* (Two) Tj ET \
+         BT /F1 12 Tf {tl} TL 1 0 0 1 72 {next} Tm (Neighbour) Tj ET"
+    );
+    let doc = text_page(&blank);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let between = lines[1].origin_baseline() - lines[2].origin_baseline();
+    assert!((between - 2.0 * tl).abs() < 0.05, "the blank line measured {between}, not {}", 2.0 * tl);
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.len(), 2, "{:?}", blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>());
+}
+
+/// The neighbour starts one blank line below (two leadings under the second row). Adding a row
+/// puts the new baseline one leading above that neighbour, inside the join window. The neighbour
+/// still has to survive the edit, both saves, and a second edit.
+#[test]
+fn growing_into_a_blank_line_keeps_the_neighbour_after_save() {
+    let tl = 14.4_f64;
+    let src = format!(
+        "BT /F1 12 Tf {tl} TL 1 0 0 1 72 700 Tm (One) Tj T* (Two) Tj ET \
+         BT /F1 12 Tf {tl} TL 1 0 0 1 72 {} Tm (Neighbour) Tj ET",
+        700.0 - 3.0 * tl
+    );
+    let mut doc = text_page(&src);
+    let before = text::text_lines(&doc, 0).unwrap();
+    let opening = before[1].origin_baseline() - before[2].origin_baseline();
+    assert!((opening - 2.0 * tl).abs() < 0.05, "fixture gap {opening} is not a blank line");
+    assert_eq!(text::text_blocks(&doc, 0).unwrap().len(), 2);
+    text::replace_block(&mut doc, 0, 0, "One\nTwo\nThree").unwrap();
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let bases: Vec<f64> = lines.iter().map(|l| l.origin_baseline()).collect();
+    assert_eq!(bases.len(), 4, "{bases:?}");
+    let grown = bases[2] - bases[3];
+    assert!((grown - tl).abs() < 0.05, "the new row is {grown} pt above the neighbour, not one leading");
+    assert!(grown < tl * 1.5, "this gap is outside the join window, so the test would pass without the marker");
+    let texts = |doc: &Document| text::text_blocks(doc, 0).unwrap().into_iter().map(|b| b.text).collect::<Vec<_>>();
+    assert_eq!(texts(&doc), ["One Two Three", "Neighbour"]);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    let marked = region_through_matching_close(&content, "/P BMC");
+    for row in ["(One)", "(Two)", "(Three)"] {
+        assert!(marked.contains(row), "{row} is outside the marker: {content}");
+    }
+    assert!(!marked.contains("Neighbour"), "the neighbour was pulled into the marker: {content}");
+    for saved in [reopen(&doc), Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap()] {
+        assert_eq!(texts(&saved), ["One Two Three", "Neighbour"]);
+        let mut again = saved;
+        text::replace_block(&mut again, 0, 0, "One\nTwo\nFour").unwrap();
+        assert_eq!(texts(&reopen(&again)), ["One Two Four", "Neighbour"]);
+    }
+}
+
+/// No `TL`: `Td` does not set the leading (`TD` does). Three rows at one repeated step are one
+/// paragraph. A single large gap, with no third row at that step, stays a break.
+#[test]
+fn a_repeated_step_without_tl_is_the_paragraph_leading() {
+    let step = 27.6_f64;
+    let bodies = [
+        format!("BT /F1 12 Tf 1 0 0 1 72 700 Tm (One) Tj 0 -{step} Td (Two) Tj 0 -{step} Td (Three) Tj ET"),
+        format!(
+            "BT /F1 12 Tf 1 0 0 1 72 700 Tm (One) Tj ET BT /F1 12 Tf 1 0 0 1 72 {} Tm (Two) Tj ET BT /F1 12 Tf 1 0 0 1 72 {} Tm (Three) Tj ET",
+            700.0 - step,
+            700.0 - 2.0 * step
+        ),
+        format!(
+            "BT /F1 12 Tf 72 700 Td (One) Tj ET BT /F1 12 Tf 72 {} Td (Two) Tj ET BT /F1 12 Tf 72 {} Td (Three) Tj ET",
+            700.0 - step,
+            700.0 - 2.0 * step
+        ),
+    ];
+    for body in bodies {
+        let doc = text_page(&body);
+        let lines = text::text_lines(&doc, 0).unwrap();
+        let gaps: Vec<f64> = lines.windows(2).map(|w| w[0].origin_baseline() - w[1].origin_baseline()).collect();
+        assert!(gaps.iter().all(|gap| (gap - step).abs() < 0.05), "step {step} measured {gaps:?} in {body}");
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(blocks.len(), 1, "{body} -> {:?}", blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>());
+    }
+    // Two rows and nothing after them: one gap cannot be told from a paragraph break.
+    let pair = format!("BT /F1 12 Tf 72 700 Td (One) Tj ET BT /F1 12 Tf 72 {} Td (Two) Tj ET", 700.0 - step);
+    assert_eq!(text::text_blocks(&text_page(&pair), 0).unwrap().len(), 2);
+    // The original blank line, written with Td instead of TL: the inner step repeats, the break does not.
+    let inner = 14.4_f64;
+    let blank = format!(
+        "BT /F1 12 Tf 72 700 Td (One) Tj ET BT /F1 12 Tf 72 {} Td (Two) Tj ET \
+         BT /F1 12 Tf 72 {} Td (Neighbour) Tj ET BT /F1 12 Tf 72 {} Td (Line) Tj ET",
+        700.0 - inner,
+        700.0 - 3.0 * inner,
+        700.0 - 4.0 * inner
+    );
+    let doc = text_page(&blank);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let break_gap = lines[1].origin_baseline() - lines[2].origin_baseline();
+    assert!((break_gap - 2.0 * inner).abs() < 0.05, "blank line measured {break_gap}");
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.len(), 2, "{:?}", blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>());
+}
+
+/// The first row is unchanged, so the rewrite leaves it in the source stream and skips the
+/// paragraph marker. The added row then sits one leading above the neighbour.
+#[test]
+fn a_partial_rewrite_that_adds_a_row_keeps_the_neighbour() {
+    let src = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET \
+               BT /F1 12 Tf 14.4 TL 1 0 0 1 72 656.8 Tm (Neighbor stays.) Tj ET";
+    let mut doc = text_page(src);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap().len(), 2);
+    text::replace_block(&mut doc, 0, 0, "Alpha first row.\nTwo\nThree").unwrap();
+    let texts = |doc: &Document| text::text_blocks(doc, 0).unwrap().into_iter().map(|b| b.text).collect::<Vec<_>>();
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert_eq!(texts(&doc), ["Alpha first row. Two Three", "Neighbor stays."], "{content}");
+    for saved in [reopen(&doc), Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap()] {
+        assert_eq!(texts(&saved), ["Alpha first row. Two Three", "Neighbor stays."]);
+        let mut again = saved;
+        text::replace_block(&mut again, 0, 0, "Alpha first row.\nTwo\nFour").unwrap();
+        assert_eq!(texts(&reopen(&again)), ["Alpha first row. Two Four", "Neighbor stays."]);
+    }
+}
+
+/// Both paragraphs share one text object, with a blank line between them. The paragraph
+/// marker has to close before the neighbour, not after the shared `ET`.
+#[test]
+fn a_partial_rewrite_inside_one_text_object_keeps_the_neighbour() {
+    let src = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj T* T* (Neighbor stays.) Tj ET";
+    let mut doc = text_page(src);
+    let texts = |doc: &Document| text::text_blocks(doc, 0).unwrap().into_iter().map(|b| b.text).collect::<Vec<_>>();
+    assert_eq!(texts(&doc), ["Alpha first row. Alpha next row.", "Neighbor stays."], "the blank line is a paragraph break");
+    text::replace_block(&mut doc, 0, 0, "Alpha first row.\nTwo\nThree").unwrap();
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert_eq!(texts(&doc), ["Alpha first row. Two Three", "Neighbor stays."], "{content}");
+    for saved in [reopen(&doc), Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap()] {
+        assert_eq!(texts(&saved), ["Alpha first row. Two Three", "Neighbor stays."], "save joined the neighbour");
+        let mut again = saved;
+        text::replace_block(&mut again, 0, 0, "Alpha first row.\nTwo\nFour").unwrap();
+        assert_eq!(texts(&reopen(&again)), ["Alpha first row. Two Four", "Neighbor stays."]);
+    }
+}
+
+/// The last paragraph of a shared text object has no neighbour after it. The marker still has
+/// to open after the preceding paragraph, not at the shared `BT`, or that paragraph joins it.
+#[test]
+fn a_partial_rewrite_of_the_last_paragraph_in_one_text_object_keeps_the_one_before_it() {
+    let src =
+        "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj T* T* (Neighbor stays.) Tj T* (Neighbor next.) Tj ET";
+    let mut doc = text_page(src);
+    let texts = |doc: &Document| text::text_blocks(doc, 0).unwrap().into_iter().map(|b| b.text).collect::<Vec<_>>();
+    assert_eq!(texts(&doc), ["Alpha first row. Alpha next row.", "Neighbor stays. Neighbor next."], "the blank line is a paragraph break");
+    text::replace_block(&mut doc, 0, 1, "Neighbor stays.\nChanged.").unwrap();
+    let content = page_content(&doc);
+    assert_eq!(texts(&doc), ["Alpha first row. Alpha next row.", "Neighbor stays. Changed."], "{content}");
+    let alpha = content.find("(Alpha first row.)").expect("the preceding paragraph");
+    let open = content.find("/P BMC").expect("marker");
+    assert!(alpha < open, "the marker swallowed the preceding paragraph: {content}");
+    let neighbour = content.find("(Neighbor stays.)").expect("the kept row");
+    assert!(open < neighbour, "the kept row is outside the marker: {content}");
+    for saved in [reopen(&doc), Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap()] {
+        assert_eq!(texts(&saved), ["Alpha first row. Alpha next row.", "Neighbor stays. Changed."], "save joined the preceding paragraph");
+        let mut again = saved;
+        text::replace_block(&mut again, 0, 1, "Neighbor stays.\nEdited.").unwrap();
+        assert_eq!(texts(&reopen(&again)), ["Alpha first row. Alpha next row.", "Neighbor stays. Edited."]);
+    }
+}
+
+/// Three paragraphs share one text object. Rewriting the middle one must leave the paragraph
+/// before it and the paragraph after it outside the marker.
+#[test]
+fn a_partial_rewrite_of_the_middle_paragraph_in_one_text_object_keeps_both_neighbours() {
+    let src = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj \
+               T* T* (Mid stays.) Tj T* (Mid next.) Tj T* T* (End stays.) Tj T* (End next.) Tj ET";
+    let mut doc = text_page(src);
+    let texts = |doc: &Document| text::text_blocks(doc, 0).unwrap().into_iter().map(|b| b.text).collect::<Vec<_>>();
+    assert_eq!(
+        texts(&doc),
+        ["Alpha first row. Alpha next row.", "Mid stays. Mid next.", "End stays. End next."],
+        "each blank line is a paragraph break"
+    );
+    text::replace_block(&mut doc, 0, 1, "Mid stays.\nChanged.").unwrap();
+    let content = page_content(&doc);
+    assert_eq!(texts(&doc), ["Alpha first row. Alpha next row.", "Mid stays. Changed.", "End stays. End next."], "{content}");
+    let alpha = content.find("(Alpha first row.)").expect("the preceding paragraph");
+    let open = content.find("/P BMC").expect("marker");
+    let end = content.find("(End stays.)").expect("the following paragraph");
+    assert!(alpha < open, "the marker swallowed the preceding paragraph: {content}");
+    assert!(open < end, "the following paragraph is inside the marker: {content}");
+    let close = content[open..].find("EMC").map(|at| open + at).expect("close");
+    assert!(close < end, "the marker closed after the following paragraph: {content}");
+    for saved in [reopen(&doc), Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap()] {
+        assert_eq!(texts(&saved), ["Alpha first row. Alpha next row.", "Mid stays. Changed.", "End stays. End next."]);
+        let mut again = saved;
+        text::replace_block(&mut again, 0, 1, "Mid stays.\nEdited.").unwrap();
+        assert_eq!(texts(&reopen(&again)), ["Alpha first row. Alpha next row.", "Mid stays. Edited.", "End stays. End next."]);
+    }
+}
+
+/// #2516's published steps: adding a row must not make the next edit-by-number rewrite Charlie.
+/// The issue also asks for a stable paragraph id. That is #2508, and this test does not add one.
+#[test]
+fn adding_a_row_does_not_make_the_next_paragraph_number_mean_charlie() {
+    let src = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha paragraph, first row of text.) Tj T* (Alpha paragraph, second row.) Tj ET \
+               BT /F1 12 Tf 14.4 TL 1 0 0 1 72 650 Tm (Bravo paragraph, a single row.) Tj ET \
+               BT /F1 12 Tf 14.4 TL 1 0 0 1 72 600 Tm (Charlie paragraph, first row of text.) Tj T* (Charlie paragraph, second row.) Tj ET";
+    let mut doc = text_page(src);
+    let names = |doc: &Document| text::text_blocks(doc, 0).unwrap().into_iter().map(|b| b.text).collect::<Vec<_>>();
+    assert_eq!(names(&doc).len(), 3, "{:?}", names(&doc));
+    text::replace_block(&mut doc, 0, 0, "Alpha paragraph, first row of text.\nAlpha paragraph, second row.\nAlpha paragraph, a third row.").unwrap();
+    let after = names(&doc);
+    assert!(after.iter().any(|t| t.contains("Bravo") && !t.contains("Alpha")), "Bravo was absorbed: {after:?}");
+    assert!(after.iter().any(|t| t.contains("Charlie")), "Charlie is gone: {after:?}");
+    let bravo = after.iter().position(|t| t.contains("Bravo")).unwrap();
+    text::replace_block(&mut doc, 0, bravo, "Bravo paragraph, edited.").unwrap();
+    let done = names(&doc);
+    assert!(done.iter().any(|t| t.contains("Charlie")), "editing Bravo removed Charlie: {done:?}");
+    assert!(done.iter().any(|t| t.contains("Bravo paragraph, edited.")), "{done:?}");
+}
+
+/// The paragraph is the last thing on the page. Editing the first row and leaving the second
+/// in the source must keep both rows inside one marker, including after a save.
+#[test]
+fn a_partial_rewrite_of_the_only_paragraph_stays_one_block() {
+    let src = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET";
+    let mut doc = text_page(src);
+    text::replace_block(&mut doc, 0, 0, "One.\nAlpha next row.").unwrap();
+    let texts: Vec<_> = text::text_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["One. Alpha next row."], "{texts:?}");
+    assert_marker_wraps(&page_content(&doc), "/P BMC", "(One.)", "(Alpha next row.)");
+    let doc = reopen(&doc);
+    let texts: Vec<_> = text::text_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["One. Alpha next row."], "{texts:?}");
+    assert_marker_wraps(&page_content(&doc), "/P BMC", "(One.)", "(Alpha next row.)");
+    let mut doc = doc;
+    text::replace_block(&mut doc, 0, 0, "One.\nTwo.").unwrap();
+    let texts: Vec<_> = text::text_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["One. Two."], "{texts:?}");
+    assert_marker_wraps(&page_content(&doc), "/P BMC", "(One.)", "(Two.)");
+}
+
+/// The same rewrite when an operator follows the paragraph's `ET`. The close belongs before
+/// that operator, and still after the kept row.
+#[test]
+fn a_partial_rewrite_closes_before_the_operator_that_follows_the_paragraph() {
+    let src = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET 0 0 0 RG";
+    let mut doc = text_page(src);
+    text::replace_block(&mut doc, 0, 0, "One.\nAlpha next row.").unwrap();
+    let doc = reopen(&doc);
+    let texts: Vec<_> = text::text_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["One. Alpha next row."], "{texts:?}");
+    let content = page_content(&doc);
+    assert_marker_wraps(&content, "/P BMC", "(One.)", "(Alpha next row.)");
+    let start = content.find("/P BMC").expect("marker");
+    let close = content[start..].find("EMC").map(|at| start + at).expect("close");
+    let after = content.find("0 0 0 RG").expect("the following operator is gone");
+    assert!(close < after, "the marker swallowed the operator after the paragraph: {content}");
+}
+
+/// The last paragraph on the page is already inside a marked region. A partial rewrite stays
+/// one paragraph, and that region's close still comes after both rows.
+#[test]
+fn a_partial_rewrite_of_the_last_marked_paragraph_stays_inside_its_region() {
+    let src = "/H1 << /MCID 0 >> BDC BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET EMC";
+    let mut doc = text_page(src);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap().len(), 1);
+    text::replace_block(&mut doc, 0, 0, "One.\nAlpha next row.").unwrap();
+    let doc = reopen(&doc);
+    let texts: Vec<_> = text::text_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["One. Alpha next row."], "{texts:?}");
+    assert_marker_wraps(&page_content(&doc), "/MCID 0", "(One.)", "(Alpha next row.)");
+}
+
+/// A partial rewrite must not insert `/P BMC` across two existing marked-content regions.
+/// The neighbour's own marker has to keep wrapping its text.
+#[test]
+fn a_partial_rewrite_keeps_the_next_marked_region_closed() {
+    let src = "/H1 << /MCID 0 >> BDC BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET EMC \
+               /P << /MCID 1 >> BDC BT /F1 12 Tf 14.4 TL 1 0 0 1 72 656.8 Tm (Neighbor stays.) Tj ET EMC";
+    let mut doc = text_page(src);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap().len(), 2);
+    text::replace_block(&mut doc, 0, 0, "One.\nAlpha next row.").unwrap();
+    let doc = reopen(&doc);
+    let texts: Vec<_> = text::text_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["One. Alpha next row.", "Neighbor stays."], "{texts:?}");
+    let content = page_content(&doc);
+    assert_marker_wraps(&content, "/MCID 0", "(One.)", "(Alpha next row.)");
+    assert_marker_wraps(&content, "/MCID 1", "(Neighbor stays.)", "(Neighbor stays.)");
+    let neighbour = content.find("/MCID 1").expect("neighbour region");
+    let close = content[neighbour..].find("EMC").map(|at| neighbour + at).expect("neighbour close");
+    assert!(!content[neighbour..close].contains("(One.)"), "the rewrite was pulled into the neighbour's marker: {content}");
+}
+
+/// The paragraph being edited is not in a marked region. The next one is. Closing the new
+/// marker at the neighbour's `BT` would land after that region's `BDC` and close it early.
+#[test]
+fn a_partial_rewrite_of_an_unmarked_paragraph_leaves_the_marked_neighbour_closed() {
+    let src = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET \
+               /P << /MCID 1 >> BDC BT /F1 12 Tf 14.4 TL 1 0 0 1 72 656.8 Tm (Neighbor stays.) Tj ET EMC";
+    let mut doc = text_page(src);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap().len(), 2);
+    text::replace_block(&mut doc, 0, 0, "One.\nAlpha next row.").unwrap();
+    let doc = reopen(&doc);
+    let texts: Vec<_> = text::text_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["One. Alpha next row.", "Neighbor stays."], "{texts:?}");
+    let content = page_content(&doc);
+    assert_marker_wraps(&content, "/MCID 1", "(Neighbor stays.)", "(Neighbor stays.)");
+    assert!(!region_through_matching_close(&content, "/MCID 1").contains("(One.)"), "the rewrite was pulled into the neighbour: {content}");
+}
+
+/// Both paragraphs already share one marked region, separated by a blank line. The extra marker
+/// around the edit has to close itself, not the region, so the neighbour stays inside it.
+#[test]
+fn a_partial_rewrite_inside_one_marked_region_leaves_the_neighbour_inside_it() {
+    let src = "/P << /MCID 0 >> BDC BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET \
+               BT /F1 12 Tf 14.4 TL 1 0 0 1 72 656.8 Tm (Neighbor stays.) Tj ET EMC";
+    let mut doc = text_page(src);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap().len(), 2);
+    text::replace_block(&mut doc, 0, 0, "One.\nAlpha next row.").unwrap();
+    let doc = reopen(&doc);
+    let texts: Vec<_> = text::text_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["One. Alpha next row.", "Neighbor stays."], "{texts:?}");
+    let content = page_content(&doc);
+    let region = region_through_matching_close(&content, "/MCID 0");
+    assert!(region.contains("(One.)") && region.contains("(Neighbor stays.)"), "the region closed before the neighbour: {content}");
+}
+
+/// Bytes from `open` through the `EMC` that balances the marked region it begins.
+fn region_through_matching_close<'a>(content: &'a str, open: &str) -> &'a str {
+    let start = content.find(open).unwrap_or_else(|| panic!("missing {open}: {content}"));
+    let bytes = content.as_bytes();
+    let mut index = start;
+    let mut depth = 0i32;
+    while index < bytes.len() {
+        let rest = &bytes[index..];
+        let boundary = index == 0 || !bytes[index - 1].is_ascii_alphanumeric();
+        if boundary && (rest.starts_with(b"BMC") || rest.starts_with(b"BDC")) && rest.get(3).is_none_or(|b| !b.is_ascii_alphanumeric()) {
+            depth += 1;
+            index += 3;
+            continue;
+        }
+        if boundary && rest.starts_with(b"EMC") && rest.get(3).is_none_or(|b| !b.is_ascii_alphanumeric()) {
+            depth -= 1;
+            if depth == 0 {
+                return &content[start..index];
+            }
+            index += 3;
+            continue;
+        }
+        index += 1;
+    }
+    panic!("unbalanced region {open}: {content}");
+}
+
+fn page_content(doc: &Document) -> String {
+    String::from_utf8_lossy(&page_content_bytes(doc, 0)).into_owned()
+}
+
+/// `open` through the next `EMC` contains both strings, and no `EMC` sits inside a text object.
+fn assert_marker_wraps(content: &str, open: &str, first: &str, second: &str) {
+    let marked = region_through_matching_close(content, open);
+    assert!(marked.contains(first) && marked.contains(second), "{open} closed too early: {content}");
+    assert!(!marker_crosses_a_text_object(content), "a marker opened outside a text object and closed inside it: {content}");
+}
+
+/// A marker may sit inside one text object. It may not open outside one and close inside it.
+fn marker_crosses_a_text_object(content: &str) -> bool {
+    let mut text = 0i32;
+    let mut opened_outside = 0i32;
+    let mut opened_inside = 0i32;
+    for token in content.split_whitespace() {
+        match token {
+            "BT" => text += 1,
+            "ET" => text -= 1,
+            "BMC" | "BDC" => {
+                if text == 0 {
+                    opened_outside += 1;
+                } else {
+                    opened_inside += 1;
+                }
+            }
+            "EMC" => {
+                if text > 0 {
+                    if opened_inside > 0 {
+                        opened_inside -= 1;
+                    } else {
+                        return true;
+                    }
+                } else if opened_outside > 0 {
+                    opened_outside -= 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    text != 0 || opened_outside != 0 || opened_inside != 0
+}
+
+/// A blank line is one extra leading, so the fourth row of a grown paragraph sits on the
+/// neighbour's baseline. Changing the box width must not treat that neighbour as a duplicate
+/// drawing and delete it.
+#[test]
+fn resizing_a_grown_paragraph_keeps_the_neighbour() {
+    let src = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 410 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET \
+               BT /F1 12 Tf 14.4 TL 1 0 0 1 72 366.8 Tm (Neighbor stays.) Tj ET";
+    let mut doc = text_page(src);
+    let text = "Alpha first row.\nthis is another\nalpha test\nAlpha next row.";
+    text::replace_block(&mut doc, 0, 0, text).unwrap();
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let added = lines.iter().find(|l| l.text.contains("Alpha next row.")).unwrap();
+    let neighbour = lines.iter().find(|l| l.text.contains("Neighbor")).unwrap();
+    assert!((added.origin_baseline() - neighbour.origin_baseline()).abs() < 0.5, "the new row is not on the neighbour");
+    let width = text::text_blocks(&doc, 0).unwrap()[0].rect[2] - text::text_blocks(&doc, 0).unwrap()[0].rect[0];
+    for factor in [0.6_f64, 1.6] {
+        let mut copy = doc.clone();
+        text::rewrite_block(&mut copy, 0, 0, Some(text), &text::BlockStyle { width: Some((width * factor).max(40.0)), ..Default::default() })
+            .unwrap();
+        let texts = text::text_blocks(&copy, 0).unwrap().into_iter().map(|b| b.text).collect::<Vec<_>>();
+        assert!(texts.iter().any(|t| t.contains("Neighbor stays.")), "width ×{factor} removed the neighbour: {texts:?}");
+    }
+}
+
+/// Narrowing wraps a line. Widening it again rejoins that wrap. A newline that was typed stays.
+#[test]
+fn a_wrapped_line_rejoins_when_widened_and_a_typed_break_stays() {
+    let mut doc = text_page("BT /F1 24 Tf 20 150 Td (Page 1) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(45.0), ..Default::default() }).unwrap();
+    let block = text::text_blocks(&doc, 0).unwrap().into_iter().next().unwrap();
+    assert!(block.editor_text.contains('\n'), "the narrow box did not wrap: {}", block.editor_text);
+    assert_eq!(block.reflow_text, "Page 1", "a wrap was kept as a hard break: {}", block.reflow_text);
+    text::rewrite_block(&mut doc, 0, 0, Some(&block.reflow_text), &text::BlockStyle { width: Some(200.0), ..Default::default() }).unwrap();
+    let lines: Vec<_> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+    assert_eq!(lines, ["Page 1"]);
+
+    let mut typed = text_page("BT /F1 12 Tf 72 700 Td (One) Tj ET");
+    text::replace_block(&mut typed, 0, 0, "One\nTwo\nThree\nfour").unwrap();
+    let block = text::text_blocks(&typed, 0).unwrap().into_iter().next().unwrap();
+    assert_eq!(block.reflow_text, "One\nTwo\nThree\nfour", "a typed break was rejoined: {}", block.reflow_text);
+    let width = (block.rect[2] - block.rect[0]) * 6.0;
+    text::rewrite_block(&mut typed, 0, 0, Some(&block.reflow_text), &text::BlockStyle { width: Some(width.max(180.0)), ..Default::default() })
+        .unwrap();
+    assert_eq!(text::text_blocks(&typed, 0).unwrap()[0].editor_text, "One\nTwo\nThree\nfour");
+}
+
+/// #2529 (reviewer): a run of typed spaces that happens to fall at a wrap point is not the same
+/// as the single space an ordinary word gap leaves. Narrowing drops the whole gap, as any wrap
+/// does (#4199's own test: `wrapped("aa  bb  cc", 6.0) == ["aa  bb", "cc"]`); widening it back
+/// must not quietly turn two typed spaces into one. The count is stored on the wrap marker, so
+/// it has to survive an incremental save and a full rewrite, not only the in-memory rewrite.
+#[test]
+fn narrowing_then_widening_keeps_a_typed_double_space() {
+    let fresh = text_page("BT /F1 24 Tf 20 150 Td (One  Two) Tj ET");
+    let wide_width = {
+        let wide = text::text_blocks(&fresh, 0).unwrap().into_iter().next().unwrap().rect;
+        wide[2] - wide[0]
+    };
+    for (save, reopen_as) in
+        [("incremental", reopen(&fresh)), ("full", Document::open(Arc::new(write_full(&fresh, &SaveOptions::default()).unwrap())).unwrap())]
+    {
+        let mut doc = reopen_as;
+        text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(45.0), ..Default::default() }).unwrap();
+        let doc =
+            if save == "incremental" { reopen(&doc) } else { Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap() };
+        let block = text::text_blocks(&doc, 0).unwrap().into_iter().next().unwrap();
+        assert_eq!(block.editor_text, "One\nTwo", "{save}: the narrow box did not wrap between the two typed spaces: {}", block.editor_text);
+        assert_eq!(block.reflow_text, "One  Two", "{save}: the saved wrap did not remember both spaces: {:?}", block.reflow_text);
+        let mut doc = doc;
+        text::rewrite_block(&mut doc, 0, 0, Some(&block.reflow_text), &text::BlockStyle { width: Some(wide_width), ..Default::default() }).unwrap();
+        let doc =
+            if save == "incremental" { reopen(&doc) } else { Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap() };
+        let rewidened = text::text_blocks(&doc, 0).unwrap().into_iter().next().unwrap();
+        assert_eq!(rewidened.editor_text, "One  Two", "{save}: the second typed space was lost: {:?}", rewidened.editor_text);
+    }
+}
+
+/// #2529: a Chinese/Japanese word split has no space of its own (`wrap`'s own doc comment: "those
+/// pieces join without a space"). Narrowing a paragraph until it wraps inside such a word, then
+/// widening it back, must restore the two pieces exactly as they were, not insert a space between
+/// them. Checked on both the single-style rewrite path and the row-editor (mixed-style) path.
+#[test]
+fn narrowing_then_widening_a_japanese_word_adds_no_space() {
+    if pdfcraft_fonts::document_japanese_font().is_none() {
+        eprintln!("skipping narrowing_then_widening_a_japanese_word_adds_no_space: built without craft-fonts (set CRAFT_FONTS_DIR)");
+        return;
+    }
+    let text = "日本語の文章です";
+    for draft in [text.to_string(), format!("見出し\n{text}")] {
+        let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Placeholder text) Tj ET");
+        text::rewrite_block(&mut doc, 0, 0, Some(&draft), &text::BlockStyle { width: Some(400.0), ..Default::default() }).unwrap();
+        let wide = text::text_blocks(&reopen(&doc), 0).unwrap().into_iter().next().unwrap();
+        let wide_width = wide.rect[2] - wide.rect[0];
+
+        // Narrow enough to force a wrap inside the Japanese word, not just between the two rows.
+        // A width-only change must pass `reflow_text` explicitly, as the editor UI does: `None`
+        // falls back to the paragraph's space-joined display text and would not keep a typed break.
+        text::rewrite_block(&mut doc, 0, 0, Some(&wide.reflow_text), &text::BlockStyle { width: Some(60.0), ..Default::default() }).unwrap();
+        let narrow = text::text_blocks(&reopen(&doc), 0).unwrap().into_iter().next().unwrap();
+        assert!(narrow.rows.len() > draft.matches('\n').count() + 1, "the narrow box did not wrap: {:?}", narrow.editor_text);
+        assert_eq!(
+            narrow.editor_text.replace('\n', ""),
+            draft.replace('\n', ""),
+            "wrapping must not add or drop characters: {:?}",
+            narrow.editor_text
+        );
+
+        text::rewrite_block(&mut doc, 0, 0, Some(&narrow.reflow_text), &text::BlockStyle { width: Some(wide_width), ..Default::default() }).unwrap();
+        let rewidened = text::text_blocks(&reopen(&doc), 0).unwrap().into_iter().next().unwrap();
+        assert_eq!(rewidened.editor_text, draft, "a Japanese word split gained a space it never had: {:?}", rewidened.editor_text);
+    }
+}
+
+/// A file that did not mark its breaks still rejoins a line that fills the measure, and keeps a
+/// short line that had room.
+#[test]
+fn an_unmarked_full_line_rejoins_and_a_short_break_stays() {
+    let long = "BT /F1 12 Tf 1 0 0 1 72 700 Tm (This sentence is long enough to fill a measure.) Tj ET \
+                BT /F1 12 Tf 1 0 0 1 72 685.6 Tm (Tail) Tj ET";
+    let doc = text_page(long);
+    let block = text::text_blocks(&doc, 0).unwrap().into_iter().next().unwrap();
+    assert_eq!(block.rows.len(), 2, "{}", block.editor_text);
+    assert_eq!(block.reflow_text, "This sentence is long enough to fill a measure. Tail", "{}", block.reflow_text);
+
+    let short = "BT /F1 12 Tf 1 0 0 1 72 700 Tm (One) Tj ET BT /F1 12 Tf 1 0 0 1 72 685.6 Tm (Two) Tj ET";
+    let doc = text_page(short);
+    let block = text::text_blocks(&doc, 0).unwrap().into_iter().next().unwrap();
+    assert_eq!(block.reflow_text, "One\nTwo", "{}", block.reflow_text);
+}
+
+/// The letter the screenshots edit. Widening example 1, or adding a row there, must leave the
+/// heading above it and both paragraphs under example 2 as they were.
+fn letter_page() -> &'static str {
+    "BT /F1 14 Tf 72 740 Td (1. Repeated step, no TL. Click Two.) Tj ET \
+     BT /F1 12 Tf 72 700 Td (One) Tj ET \
+     BT /F1 12 Tf 72 672.4 Td (Two) Tj ET \
+     BT /F1 12 Tf 72 644.8 Td (Three) Tj ET \
+     BT /F1 14 Tf 72 590 Td (2. Blank line. Edit the first paragraph.) Tj ET \
+     BT /F1 12 Tf 14.4 TL 1 0 0 1 72 550 Tm (First paragraph, first row.) Tj T* (First paragraph, second row.) Tj ET \
+     BT /F1 12 Tf 14.4 TL 1 0 0 1 72 506.8 Tm (Second paragraph, first row.) Tj T* (Second paragraph, second row.) Tj ET \
+     BT /F1 14 Tf 72 450 Td (3. Add a row under Alpha. Neighbor stays.) Tj ET \
+     BT /F1 12 Tf 14.4 TL 1 0 0 1 72 410 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET \
+     BT /F1 12 Tf 14.4 TL 1 0 0 1 72 366.8 Tm (Neighbor stays.) Tj ET"
+}
+
+fn block_texts(doc: &Document) -> Vec<String> {
+    text::text_blocks(doc, 0).unwrap().into_iter().map(|b| b.text).collect()
+}
+
+#[test]
+fn widening_example_one_does_not_swallow_the_heading_or_split_the_next_paragraph() {
+    let mut doc = text_page(letter_page());
+    let before = block_texts(&doc);
+    assert!(before.iter().any(|t| t == "1. Repeated step, no TL. Click Two."), "{before:?}");
+    assert!(before.iter().any(|t| t.contains("One") && t.contains("Three") && !t.contains("Repeated")), "{before:?}");
+    assert!(before.iter().any(|t| t.contains("First paragraph, first row") && t.contains("second row")), "{before:?}");
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    let idx = blocks.iter().position(|b| b.text.contains("One") && b.text.contains("Three")).unwrap();
+    // What the editor committed, including the line breaks. A later width change must keep them.
+    text::replace_block(&mut doc, 0, idx, "One\nTwo\nThree\nfour").unwrap();
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    let idx = blocks.iter().position(|b| b.text.contains("four") || b.editor_text.contains("four")).unwrap();
+    assert_eq!(blocks[idx].reflow_text, "One\nTwo\nThree\nfour", "a typed break was treated as a wrap: {}", blocks[idx].reflow_text);
+    let shown = blocks[idx].reflow_text.clone();
+    let width = blocks[idx].rect[2] - blocks[idx].rect[0];
+    text::rewrite_block(&mut doc, 0, idx, Some(&shown), &text::BlockStyle { width: Some((width * 6.0).max(180.0)), ..Default::default() }).unwrap();
+    let doc = reopen(&doc);
+    let after = block_texts(&doc);
+    let kept = text::text_blocks(&doc, 0).unwrap().into_iter().find(|b| b.editor_text.contains("four")).unwrap();
+    assert_eq!(kept.editor_text, "One\nTwo\nThree\nfour", "a wider box flattened the line breaks: {:?}", kept.editor_text);
+    assert!(after.iter().any(|t| t == "1. Repeated step, no TL. Click Two."), "the heading joined the resized box: {after:?}");
+    assert!(
+        after.iter().any(|t| t.contains("First paragraph, first row") && t.contains("First paragraph, second row")),
+        "widening example 1 split the next paragraph: {after:?}"
+    );
+    assert!(after.iter().any(|t| t.contains("Second paragraph, first row") && t.contains("second row")), "{after:?}");
+    assert!(after.iter().any(|t| t.contains("Neighbor stays.") && !t.contains("Alpha")), "{after:?}");
+}
+
+#[test]
+fn a_row_added_one_leading_above_the_neighbour_does_not_absorb_it() {
+    let mut doc = text_page(letter_page());
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    let idx = blocks.iter().position(|b| b.text.contains("Alpha first row")).unwrap();
+    text::replace_block(&mut doc, 0, idx, "Alpha first row.\ntest\nAlpha next row.").unwrap();
+    let doc = reopen(&doc);
+    let after = block_texts(&doc);
+    assert!(after.iter().any(|t| t.contains("Neighbor stays.") && !t.contains("Alpha")), "the added row absorbed the neighbour: {after:?}");
 }
 
 #[test]
@@ -4686,6 +5699,40 @@ fn cropped_image_resizing_moves_private_clips_and_keeps_shared_ones() {
     assert_eq!(text::text_lines(&doc, 0).unwrap().len(), 1);
 }
 
+/// Report generators draw each picture as `q re W n cm Do Q` inside a section's clip that the
+/// section's text shares. Resizing the picture scales its own clip with it (the enlarged picture
+/// used to show only through its old box) while the section's clip and text stay put.
+#[test]
+fn resizing_an_image_under_a_shared_clip_moves_its_own_clip() {
+    // The picture's own clip as wide as the picture, and wider (both seen in one report).
+    for clip_width in [61.2, 85.0] {
+        let mut doc = image_page_with(&format!(
+            "q 20 20 560 760 re W n q 162 79 {clip_width} 28.3 re W n 61.2 0 0 28.3 162 79 cm /Im0 Do Q BT /F1 12 Tf 30 50 Td (Section text) Tj ET Q"
+        ));
+        let before = images::page_images(&doc, 0).unwrap()[0].clone();
+        assert!(close(before.visible_rect.unwrap(), [162.0, 79.0, 223.2, 107.3]), "{:?}", before.visible_rect);
+        let caption = text::text_lines(&doc, 0).unwrap();
+        let target = [162.0, 79.0, 284.4, 135.6];
+        let transform = images::rect_to_rect(before.visible_rect.unwrap(), target);
+        images::change_image(&mut doc, 0, 0, &images::ImageChange::Transform(transform)).unwrap();
+        doc = reopen(&doc);
+        let after = images::page_images(&doc, 0).unwrap()[0].clone();
+        let near = |a: [f64; 4], b: [f64; 4]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.05);
+        assert!(near(after.visible_rect.unwrap(), target), "clip {clip_width}: the whole enlarged picture shows, {:?}", after.visible_rect);
+        assert_eq!(after.object, before.object, "pixels are never resampled or replaced");
+        assert_eq!(
+            text::text_lines(&doc, 0).unwrap().iter().map(|l| (&l.text, l.rect, l.baseline())).collect::<Vec<_>>(),
+            caption.iter().map(|l| (&l.text, l.rect, l.baseline())).collect::<Vec<_>>(),
+            "the section's text stays where it was"
+        );
+        // The section's clip is shared, so it still bounds the picture: past it, nothing shows.
+        let past = images::rect_to_rect(after.visible_rect.unwrap(), [500.0, 79.0, 700.0, 135.6]);
+        images::change_image(&mut doc, 0, 0, &images::ImageChange::Transform(past)).unwrap();
+        let clipped = images::page_images(&reopen(&doc), 0).unwrap()[0].visible_rect.unwrap();
+        assert!(clipped[2] <= 580.05, "the section's clip stays in force: {clipped:?}");
+    }
+}
+
 #[test]
 fn private_image_crop_with_intervening_state_resizes_across_streams() {
     let variants: Vec<Vec<&[u8]>> = vec![
@@ -6290,12 +7337,124 @@ fn actual_text_pairs_past_the_marked_content_cap() {
     }
 }
 
-/// #2992: the colour a page is painted with before anything else is its background, for exports
-/// that keep a page colour. Edit a PDF ▸ Background's fill is found under the text it goes
-/// behind; a page that paints anything else first, a fill that doesn't cover the page, a
-/// translucent or clipped one, or a colour that isn't plain gray, RGB or CMYK has none.
+fn page_background_from_content(content: &str, resources: &str) -> Option<[f64; 3]> {
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /CropBox [0 0 500 700] /Contents 4 0 R /Resources << {resources} >> >>"),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", index + 1).as_bytes());
+    }
+    let xref_offset = bytes.len();
+    bytes.extend_from_slice(b"xref\n0 5\n0000000000 65535 f \n");
+    for offset in offsets {
+        bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n").as_bytes());
+    page_background(&Document::open(Arc::new(bytes)).unwrap(), 0).unwrap()
+}
+
+fn assert_page_background_fill_cases(gs: &str) {
+    assert_eq!(page_background_from_content("1 g 0 0 600 800 re f", ""), Some([1.0; 3]), "a producer's white page fill");
+    assert_eq!(page_background_from_content("0 0 1 0 k 0 0 500 700 re f", ""), Some([1.0, 1.0, 0.0]), "CMYK, covering the crop box");
+    assert_eq!(page_background_from_content("/DeviceRGB cs 1 0 0 sc 0 0 500 700 re f", ""), Some([1.0, 0.0, 0.0]), "cs and sc");
+    assert_eq!(page_background_from_content("/Full gs q 2 0 0 2 0 0 cm 0 1 0 rg 0 0 300 400 re f Q", gs), Some([0.0, 1.0, 0.0]), "under a cm");
+    assert_eq!(page_background_from_content("1 0 0 rg 0 0 300 800 re f", ""), None, "half the page");
+    assert_eq!(page_background_from_content("1 0 0 rg 0 0 300 800 re 300 0 300 800 re f", ""), None, "two halves are not one covering rectangle");
+    assert_eq!(
+        page_background_from_content("1 0 0 rg 0 0 300 800 re 0 0 600 800 re f", ""),
+        Some([1.0, 0.0, 0.0]),
+        "one of the rectangles covers it"
+    );
+    // #2994 review: a second rectangle that cuts a hole: any one under even-odd, one wound the
+    // other way under nonzero.
+    assert_eq!(page_background_from_content("1 0 0 rg 0 0 600 800 re 100 100 200 200 re f*", ""), None, "even-odd hole");
+    assert_eq!(page_background_from_content("1 0 0 rg 0 0 600 800 re 300 100 -200 200 re f", ""), None, "nonzero, reversed inner rectangle");
+    assert_eq!(
+        page_background_from_content("1 0 0 rg 0 0 600 800 re 100 100 200 200 re f", ""),
+        Some([1.0, 0.0, 0.0]),
+        "nonzero, same winding: no hole"
+    );
+    assert_eq!(
+        page_background_from_content("1 0 0 rg q -1 0 0 1 600 0 cm 0 0 600 800 re Q 100 100 200 200 re f", ""),
+        None,
+        "reversed by a mirroring cm"
+    );
+    assert_eq!(page_background_from_content("/Half gs 1 0 0 rg 0 0 600 800 re f", gs), None, "translucent");
+    assert_eq!(page_background_from_content("/Mul gs 1 0 0 rg 0 0 600 800 re f", gs), None, "blended");
+    assert_eq!(page_background_from_content("0 0 100 100 re W n 1 0 0 rg 0 0 600 800 re f", ""), None, "clipped to a corner");
+    assert_eq!(page_background_from_content("0 0 600 800 re W n 1 0 0 rg 0 0 600 800 re f", ""), Some([1.0, 0.0, 0.0]), "a page-sized clip");
+    assert_eq!(page_background_from_content("/Pattern cs /P1 scn 0 0 600 800 re f", ""), None, "a pattern");
+    assert_eq!(page_background_from_content("BT ET 0 0 600 800 re S 1 0 0 rg 0 0 600 800 re f", ""), None, "a stroke first");
+    assert_eq!(page_background_from_content("0 0 m 600 0 l 600 800 l 0 800 l h f", ""), None, "a path that isn't a rectangle");
+    assert_eq!(
+        page_background_from_content("1 0 0 rg 0 0 600 800 re 100 100 m 200 100 l 200 200 l h f*", ""),
+        None,
+        "a page fill with a hole cut in it"
+    );
+}
+
+fn assert_page_background_transform_and_clip_cases() {
+    // #2994 review: a rectangle turned 45° about the crop box's centre covers it only if the crop
+    // box's corners are inside it; its bounding box covering the crop box isn't enough. This one
+    // reaches 500 from the centre along each axis (its box covers the 500 × 700 crop box) but
+    // 354 along the diagonals, short of the corners. One reaching 707 covers them.
+    let turned = "0.70710678 0.70710678 -0.70710678 0.70710678 250 350 cm";
+    assert_eq!(
+        page_background_from_content(&format!("1 0 0 rg {turned} -353.553 -353.553 707.107 707.107 re f"), ""),
+        None,
+        "a turned fill short of the corners"
+    );
+    assert_eq!(
+        page_background_from_content(&format!("1 0 0 rg {turned} -500 -500 1000 1000 re f"), ""),
+        Some([1.0, 0.0, 0.0]),
+        "a turned fill over them"
+    );
+    // The same for a clip.
+    assert_eq!(
+        page_background_from_content(&format!("{turned} -353.553 -353.553 707.107 707.107 re W n 1 0 0 rg -2000 -2000 4000 4000 re f"), ""),
+        None,
+        "a turned clip"
+    );
+    assert_eq!(
+        page_background_from_content(&format!("{turned} -500 -500 1000 1000 re W n 1 0 0 rg -2000 -2000 4000 4000 re f"), ""),
+        Some([1.0, 0.0, 0.0]),
+        "a turned clip over the corners"
+    );
+    // Clips add up: two that each cover the page leave it covered, one that doesn't among them
+    // doesn't.
+    assert_eq!(
+        page_background_from_content("0 0 600 800 re W n 0 0 550 750 re W n 1 0 0 rg 0 0 600 800 re f", ""),
+        Some([1.0, 0.0, 0.0]),
+        "two covering clips"
+    );
+    assert_eq!(
+        page_background_from_content("0 0 600 800 re W n 0 0 300 750 re W n 1 0 0 rg 0 0 600 800 re f", ""),
+        None,
+        "the second clip doesn't cover"
+    );
+    // Past 64 clipping rectangles the clip counts as unknown.
+    let clips = "0 0 600 800 re W n ".repeat(65);
+    assert_eq!(page_background_from_content(&format!("{clips}1 0 0 rg 0 0 600 800 re f"), ""), None, "too many clips to follow");
+    // A rectangle drawn the other way round (negative width) covers the page all the same.
+    assert_eq!(page_background_from_content("1 0 0 rg 600 0 -600 800 re f", ""), Some([1.0, 0.0, 0.0]), "drawn clockwise");
+    // The crop box counts as covered within half a percent of its size (2.5 × 3.5 here), the
+    // edge of that included.
+    assert_eq!(page_background_from_content("1 0 0 rg 2 3 496 694 re f", ""), Some([1.0, 0.0, 0.0]), "within the tolerance");
+    assert_eq!(page_background_from_content("1 0 0 rg 2.5 3.5 495 693 re f", ""), Some([1.0, 0.0, 0.0]), "on the tolerance's edge");
+    assert_eq!(page_background_from_content("1 0 0 rg 3 4 494 692 re f", ""), None, "past the tolerance");
+}
+
+/// #2992: page background detection follows the first full-page fill under text and ignores
+/// partial, translucent, clipped, or unsupported fills.
 #[test]
 fn a_page_painted_first_with_a_full_page_fill_has_that_background() {
+    let gs = "/ExtGState << /Half << /ca 0.5 >> /Mul << /BM /Multiply >> /Full << /ca 1 /SMask /None >> >>";
     let mut doc = fixture();
     assert_eq!(page_background(&doc, 0).unwrap(), None, "text first");
     add_background(&mut doc, &[0, 1], &Background { color: [0.0, 0.5, 0.5], opacity: 1.0, ..Background::default() }, false).unwrap();
@@ -6306,77 +7465,8 @@ fn a_page_painted_first_with_a_full_page_fill_has_that_background() {
     assert_eq!(page_background(&doc, 2).unwrap(), None, "a page with no content");
     assert!(page_background(&doc, 9).is_err());
 
-    let page = |content: &str, resources: &str| {
-        let objs: Vec<String> = vec![
-            "<< /Type /Catalog /Pages 2 0 R >>".into(),
-            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
-            format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /CropBox [0 0 500 700] /Contents 4 0 R /Resources << {resources} >> >>"),
-            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
-        ];
-        let mut out = b"%PDF-1.7\n".to_vec();
-        let mut offs = Vec::new();
-        for (i, o) in objs.iter().enumerate() {
-            offs.push(out.len());
-            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
-        }
-        let x = out.len();
-        out.extend_from_slice(b"xref\n0 5\n0000000000 65535 f \n");
-        for o in offs {
-            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
-        }
-        out.extend_from_slice(format!("trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n").as_bytes());
-        page_background(&Document::open(Arc::new(out)).unwrap(), 0).unwrap()
-    };
-    let gs = "/ExtGState << /Half << /ca 0.5 >> /Mul << /BM /Multiply >> /Full << /ca 1 /SMask /None >> >>";
-    assert_eq!(page("1 g 0 0 600 800 re f", ""), Some([1.0; 3]), "a producer's white page fill");
-    assert_eq!(page("0 0 1 0 k 0 0 500 700 re f", ""), Some([1.0, 1.0, 0.0]), "CMYK, covering the crop box");
-    assert_eq!(page("/DeviceRGB cs 1 0 0 sc 0 0 500 700 re f", ""), Some([1.0, 0.0, 0.0]), "cs and sc");
-    assert_eq!(page("/Full gs q 2 0 0 2 0 0 cm 0 1 0 rg 0 0 300 400 re f Q", gs), Some([0.0, 1.0, 0.0]), "under a cm");
-    assert_eq!(page("1 0 0 rg 0 0 300 800 re f", ""), None, "half the page");
-    assert_eq!(page("1 0 0 rg 0 0 300 800 re 300 0 300 800 re f", ""), None, "two halves are not one covering rectangle");
-    assert_eq!(page("1 0 0 rg 0 0 300 800 re 0 0 600 800 re f", ""), Some([1.0, 0.0, 0.0]), "one of the rectangles covers it");
-    // #2994 review: a second rectangle that cuts a hole: any one under even-odd, one wound the
-    // other way under nonzero.
-    assert_eq!(page("1 0 0 rg 0 0 600 800 re 100 100 200 200 re f*", ""), None, "even-odd hole");
-    assert_eq!(page("1 0 0 rg 0 0 600 800 re 300 100 -200 200 re f", ""), None, "nonzero, reversed inner rectangle");
-    assert_eq!(page("1 0 0 rg 0 0 600 800 re 100 100 200 200 re f", ""), Some([1.0, 0.0, 0.0]), "nonzero, same winding: no hole");
-    assert_eq!(page("1 0 0 rg q -1 0 0 1 600 0 cm 0 0 600 800 re Q 100 100 200 200 re f", ""), None, "reversed by a mirroring cm");
-    assert_eq!(page("/Half gs 1 0 0 rg 0 0 600 800 re f", gs), None, "translucent");
-    assert_eq!(page("/Mul gs 1 0 0 rg 0 0 600 800 re f", gs), None, "blended");
-    assert_eq!(page("0 0 100 100 re W n 1 0 0 rg 0 0 600 800 re f", ""), None, "clipped to a corner");
-    assert_eq!(page("0 0 600 800 re W n 1 0 0 rg 0 0 600 800 re f", ""), Some([1.0, 0.0, 0.0]), "a page-sized clip");
-    assert_eq!(page("/Pattern cs /P1 scn 0 0 600 800 re f", ""), None, "a pattern");
-    assert_eq!(page("BT ET 0 0 600 800 re S 1 0 0 rg 0 0 600 800 re f", ""), None, "a stroke first");
-    assert_eq!(page("0 0 m 600 0 l 600 800 l 0 800 l h f", ""), None, "a path that isn't a rectangle");
-    assert_eq!(page("1 0 0 rg 0 0 600 800 re 100 100 m 200 100 l 200 200 l h f*", ""), None, "a page fill with a hole cut in it");
-    // #2994 review: a rectangle turned 45° about the crop box's centre covers it only if the crop
-    // box's corners are inside it; its bounding box covering the crop box isn't enough. This one
-    // reaches 500 from the centre along each axis (its box covers the 500 × 700 crop box) but
-    // 354 along the diagonals, short of the corners. One reaching 707 covers them.
-    let turned = "0.70710678 0.70710678 -0.70710678 0.70710678 250 350 cm";
-    assert_eq!(page(&format!("1 0 0 rg {turned} -353.553 -353.553 707.107 707.107 re f"), ""), None, "a turned fill short of the corners");
-    assert_eq!(page(&format!("1 0 0 rg {turned} -500 -500 1000 1000 re f"), ""), Some([1.0, 0.0, 0.0]), "a turned fill over them");
-    // The same for a clip.
-    assert_eq!(page(&format!("{turned} -353.553 -353.553 707.107 707.107 re W n 1 0 0 rg -2000 -2000 4000 4000 re f"), ""), None, "a turned clip");
-    assert_eq!(
-        page(&format!("{turned} -500 -500 1000 1000 re W n 1 0 0 rg -2000 -2000 4000 4000 re f"), ""),
-        Some([1.0, 0.0, 0.0]),
-        "a turned clip over the corners"
-    );
-    // Clips add up: two that each cover the page leave it covered, one that doesn't among them
-    // doesn't.
-    assert_eq!(page("0 0 600 800 re W n 0 0 550 750 re W n 1 0 0 rg 0 0 600 800 re f", ""), Some([1.0, 0.0, 0.0]), "two covering clips");
-    assert_eq!(page("0 0 600 800 re W n 0 0 300 750 re W n 1 0 0 rg 0 0 600 800 re f", ""), None, "the second clip doesn't cover");
-    // Past 64 clipping rectangles the clip counts as unknown.
-    let clips = "0 0 600 800 re W n ".repeat(65);
-    assert_eq!(page(&format!("{clips}1 0 0 rg 0 0 600 800 re f"), ""), None, "too many clips to follow");
-    // A rectangle drawn the other way round (negative width) covers the page all the same.
-    assert_eq!(page("1 0 0 rg 600 0 -600 800 re f", ""), Some([1.0, 0.0, 0.0]), "drawn clockwise");
-    // The crop box counts as covered within half a percent of its size (2.5 × 3.5 here), the
-    // edge of that included.
-    assert_eq!(page("1 0 0 rg 2 3 496 694 re f", ""), Some([1.0, 0.0, 0.0]), "within the tolerance");
-    assert_eq!(page("1 0 0 rg 2.5 3.5 495 693 re f", ""), Some([1.0, 0.0, 0.0]), "on the tolerance's edge");
-    assert_eq!(page("1 0 0 rg 3 4 494 692 re f", ""), None, "past the tolerance");
+    assert_page_background_fill_cases(gs);
+    assert_page_background_transform_and_clip_cases();
 }
 
 #[test]
@@ -6432,6 +7522,35 @@ fn added_text_is_wrapped_once_per_write() {
     add_content(&mut doc, 0, &Content::Text(text)).unwrap();
     let calls = added::WRAP_CALLS.with(std::cell::Cell::get);
     assert!(calls <= 4, "the text was wrapped {calls} times for 40 lines");
+}
+
+/// Character spacing on added text (#4245) is the PDF's `Tc`, kept in `/PCAdded` so the item
+/// reopens with it; an item written without it reads 0.
+#[test]
+fn added_text_character_spacing_is_drawn_and_reopens() {
+    let mut doc = fixture();
+    let plain = AddedText { rect: [72.0, 600.0, 400.0, 700.0], text: "Approved".into(), size: 10.0, ..AddedText::default() };
+    add_content(&mut doc, 0, &Content::Text(plain.clone())).unwrap();
+    add_content(&mut doc, 0, &Content::Text(AddedText { char_spacing: 2.5, ..plain })).unwrap();
+    let doc = reopen(&doc);
+    let spacings: Vec<f64> = list_added(&doc).iter().map(|a| if let Content::Text(t) = &a.content { t.char_spacing } else { f64::NAN }).collect();
+    assert_eq!(spacings, [0.0, 2.5]);
+    let page = streams(&doc, 0);
+    let tc: Vec<bool> = page.iter().filter(|s| s.contains("(Approved) Tj")).map(|s| s.contains("2.5 Tc")).collect();
+    assert_eq!(tc, [false, true], "{page:?}");
+}
+
+/// Spacing widens every measure the layout takes: the widest line and wrapping.
+#[test]
+fn added_text_character_spacing_widens_its_layout() {
+    let plain = AddedText { rect: [0.0, 0.0, 1000.0, 100.0], text: "Approved".into(), size: 10.0, ..AddedText::default() };
+    let spaced = AddedText { char_spacing: 3.0, ..plain.clone() };
+    // After each of the 8 letters, like `Tc`.
+    assert!((added::text_width(&spaced) - added::text_width(&plain) - 24.0).abs() < 1e-9);
+    let w = added::text_width(&plain);
+    let narrow = |t: &AddedText| AddedText { text: "Approved Approved".into(), rect: [0.0, 0.0, 2.0 * w + 5.0, 100.0], ..t.clone() };
+    assert_eq!(added::lines(&narrow(&plain)).len(), 1);
+    assert_eq!(added::lines(&narrow(&spaced)).len(), 2, "the spaced words no longer fit one line");
 }
 
 /// A field tree whose every node lists its child twice is pruned in work linear in its nodes, not
@@ -6637,4 +7756,823 @@ fn a_flatten_refused_on_a_later_page_changes_nothing() {
     let before = (*doc.get(first)).clone();
     assert!(matches!(flatten(&mut doc, &[0, 1], true, false), Err(EditError::Invalid(_))));
     assert_eq!((*doc.get(first)).clone(), before, "the first page keeps its comment and content");
+}
+
+/// Existing-row alignment is explicitly refused without mutating the paragraph.
+#[test]
+fn one_row_of_a_paragraph_takes_its_own_alignment_is_refused_without_changing_the_document() {
+    for align in [added::Align::Left, added::Align::Center, added::Align::Right, added::Align::Justify] {
+        let mut doc = text_page("BT /F1 10 Tf 12 TL 72 700 Td (First row) Tj T* (Second row) Tj ET");
+        let before = page_content_bytes(&doc, 0);
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        let style = text::BlockStyle { aligns: vec![None, Some(align)], ..Default::default() };
+        let error = text::rewrite_block(&mut doc, 0, 0, Some(&blocks[0].editor_text), &style).unwrap_err();
+        assert!(error.to_string().contains("selected-row alignment"));
+        assert_eq!(page_content_bytes(&doc, 0), before);
+        assert_eq!(page_content_bytes(&reopen(&doc), 0), before);
+    }
+}
+
+/// Refusal preserves all existing rows and their saved content stream.
+#[test]
+fn rows_without_their_own_alignment_keep_their_operators_is_refused_without_changing_the_document() {
+    for align in [added::Align::Left, added::Align::Center, added::Align::Right, added::Align::Justify] {
+        let mut doc = text_page("BT /F1 10 Tf 12 TL 72 700 Td (First row) Tj T* (Second row) Tj ET");
+        let before = page_content_bytes(&doc, 0);
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        let style = text::BlockStyle { aligns: vec![None, Some(align)], ..Default::default() };
+        let error = text::rewrite_block(&mut doc, 0, 0, Some(&blocks[0].editor_text), &style).unwrap_err();
+        assert!(error.to_string().contains("selected-row alignment"));
+        assert_eq!(page_content_bytes(&doc, 0), before);
+        assert_eq!(page_content_bytes(&reopen(&doc), 0), before);
+    }
+}
+
+/// Mixed-style rows also refuse unsupported per-row intent before writing.
+#[test]
+fn one_row_of_a_styled_region_takes_its_own_alignment_is_refused_without_changing_the_document() {
+    for align in [added::Align::Left, added::Align::Center, added::Align::Right, added::Align::Justify] {
+        let mut doc = mixed_region_page();
+        let before = page_content_bytes(&doc, 0);
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        let style = text::BlockStyle { aligns: vec![None, Some(align)], ..Default::default() };
+        let error = text::rewrite_block(&mut doc, 0, 1, Some(&blocks[1].editor_text), &style).unwrap_err();
+        assert!(error.to_string().contains("selected-row alignment"));
+        assert_eq!(page_content_bytes(&doc, 0), before);
+        assert_eq!(page_content_bytes(&reopen(&doc), 0), before);
+    }
+}
+
+/// Added text: each paragraph is laid out with its own alignment, a justified paragraph's last
+/// line isn't stretched, and the alignments survive saving and reopening.
+#[test]
+fn added_text_paragraphs_keep_their_own_alignments() {
+    let mut doc = fixture();
+    let text = AddedText {
+        rect: [72.0, 600.0, 372.0, 700.0],
+        text: "Left line\nRight line\nCentred line".into(),
+        size: 12.0,
+        aligns: vec![None, Some(Align::Right), Some(Align::Center)],
+        ..AddedText::default()
+    };
+    assert_eq!(text.paragraph_align(1), Align::Right);
+    add_content(&mut doc, 0, &Content::Text(text.clone())).unwrap();
+    let doc = reopen(&doc);
+    let Content::Text(t) = &list_added(&doc)[0].content else { panic!() };
+    assert_eq!(t.aligns, text.aligns, "saved with the item");
+    let page = streams(&doc, 0).join("\n");
+    let x_of = |s: &str| -> f64 {
+        let at = page.find(&format!("({s}) Tj")).unwrap();
+        let tm = page[..at].rfind(" Tm").unwrap();
+        let nums: Vec<f64> = page[..tm].rsplit("1 0 0 1 ").next().unwrap().split_whitespace().filter_map(|v| v.parse().ok()).collect();
+        nums[0]
+    };
+    let w = |s: &str| Family::Helvetica.width(s, 12.0, false, false);
+    assert!((x_of("Left line") - 72.0).abs() < 0.01);
+    assert!((x_of("Right line") - (372.0 - w("Right line"))).abs() < 0.01);
+    assert!((x_of("Centred line") - (72.0 + (300.0 - w("Centred line")) / 2.0)).abs() < 0.01);
+    // A paragraph's own alignment the same as the box's is no entry at all.
+    let tidy = paragraph_align::tidy(vec![Some(Align::Left), Some(Align::Right)], Align::Left);
+    assert_eq!(tidy, [None, Some(Align::Right)]);
+}
+
+/// With character spacing, a paragraph aligned on its own is placed by its spaced width: a
+/// right-aligned line still ends at the box's right edge, and a centred one sits in the middle.
+#[test]
+fn added_text_paragraphs_align_by_their_spaced_width() {
+    let mut doc = fixture();
+    let text = AddedText {
+        rect: [72.0, 600.0, 372.0, 700.0],
+        text: "Left line\nRight line\nCentred line".into(),
+        size: 12.0,
+        aligns: vec![None, Some(Align::Right), Some(Align::Center)],
+        char_spacing: 2.0,
+        ..AddedText::default()
+    };
+    add_content(&mut doc, 0, &Content::Text(text)).unwrap();
+    let page = streams(&reopen(&doc), 0).join("\n");
+    assert!(page.contains("2 Tc"), "{page}");
+    let x_of = |s: &str| -> f64 {
+        let at = page.find(&format!("({s}) Tj")).unwrap();
+        let tm = page[..at].rfind(" Tm").unwrap();
+        let nums: Vec<f64> = page[..tm].rsplit("1 0 0 1 ").next().unwrap().split_whitespace().filter_map(|v| v.parse().ok()).collect();
+        nums[0]
+    };
+    let w = |s: &str| Family::Helvetica.width(s, 12.0, false, false) + 2.0 * s.chars().count() as f64;
+    assert!((x_of("Left line") - 72.0).abs() < 0.01);
+    assert!((x_of("Right line") - (372.0 - w("Right line"))).abs() < 0.01);
+    assert!((x_of("Centred line") - (72.0 + (300.0 - w("Centred line")) / 2.0)).abs() < 0.01);
+}
+
+/// A one-row title over a body column: an alignment picked for it is measured across the column.
+/// Left puts it on the column's left edge, and centring it again leaves it where it is, rather
+/// than aligning it in its own box (a no-op) or toward the page's margin (moving it right each
+/// time). It is aligned as the editor aligns a selected row, in whichever paragraph holds it.
+#[test]
+fn a_lone_row_aligns_across_the_column_it_sits_in() {
+    let mut doc = text_page(
+        "BT /F1 24 Tf 1 0 0 1 250 700 Tm (Title) Tj ET          BT /F1 10 Tf 12 TL 72 650 Td (The body of the page runs across the whole column here.) Tj T* (It has a second row that is a little shorter.) Tj ET",
+    );
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks[0].text, "Title");
+    let column = [blocks[1].rect[0], blocks[1].rect[2]];
+    let title = |doc: &Document| text::text_lines(doc, 0).unwrap().into_iter().find(|l| l.text == "Title").unwrap().rect;
+    let align = |doc: &mut Document, a: added::Align| {
+        let lines = text::text_lines(doc, 0).unwrap();
+        let line = lines.iter().position(|l| l.text == "Title").unwrap();
+        let blocks = text::text_blocks(doc, 0).unwrap();
+        let (index, block) = blocks.iter().enumerate().find(|(_, b)| b.lines.contains(&line)).unwrap();
+        // The title is the paragraph's first row.
+        let style = text::BlockStyle { align: Some(a), ..Default::default() };
+        text::rewrite_block(doc, 0, index, Some(&block.editor_text), &style).unwrap();
+    };
+    align(&mut doc, added::Align::Center);
+    let centred = title(&doc);
+    assert!(((centred[0] + centred[2]) / 2.0 - (column[0] + column[1]) / 2.0).abs() < 1.0, "centred in the column: {centred:?} vs {column:?}");
+    align(&mut doc, added::Align::Center);
+    assert!((title(&doc)[0] - centred[0]).abs() < 0.5, "centring again leaves it where it is: {:?} vs {centred:?}", title(&doc));
+    align(&mut doc, added::Align::Left);
+    assert!((title(&doc)[0] - column[0]).abs() < 0.5, "left: back on the column's edge, {:?} vs {column:?}", title(&doc));
+    align(&mut doc, added::Align::Right);
+    assert!((title(&doc)[2] - column[1]).abs() < 1.0, "right: on the column's right edge, {:?} vs {column:?}", title(&doc));
+}
+
+/// An edited paragraph's text has a line break between its source rows (`editor_text`), as the
+/// paragraph editor sends it. Those are the rows of one paragraph, not paragraph ends: justified
+/// in a font of its own (the single-style rewrite), every row but the last still fills the width.
+#[test]
+fn a_justified_paragraph_from_the_editor_fills_its_rows() {
+    let mut doc =
+        text_page("BT /F1 10 Tf 12 TL 100 700 Td (One two three four five six seven) Tj T* (eight nine ten eleven twelve) Tj T* (end) Tj ET");
+    let block = text::text_blocks(&doc, 0).unwrap()[0].clone();
+    assert_eq!(block.editor_text.matches('\n').count(), 2);
+    let style = text::BlockStyle { align: Some(added::Align::Justify), family: Some((Family::Helvetica, true, false)), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some(&block.editor_text), &style).unwrap();
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let row = |t: &str| lines.iter().find(|l| l.text.starts_with(t)).unwrap().rect;
+    let right = row("One")[2];
+    assert!((row("eight")[2] - right).abs() < 1.0, "the second row is stretched: {:?} vs {right}", row("eight"));
+    assert!(row("end")[2] < right - 20.0, "the last row isn't");
+}
+
+/// An alignment for a row the draft doesn't have names no row: a one-row title given one for a
+/// second row only stays where it is, not moved to its column's edge. Nor does a row of the draft
+/// with no alignment of its own move because another row has one (CodeRabbit on 648dd428).
+#[test]
+fn a_title_moves_to_its_column_only_for_an_alignment_of_its_own() {
+    let page = "BT /F1 24 Tf 1 0 0 1 250 700 Tm (Title) Tj ET          BT /F1 10 Tf 12 TL 72 650 Td (The body of the page runs across the whole column here.) Tj T* (It has a second row that is a little shorter.) Tj ET";
+    let title = |doc: &Document| text::text_lines(doc, 0).unwrap().into_iter().find(|l| l.text == "Title").unwrap().rect;
+    let before = title(&text_page(page));
+    for draft in ["Title", "Title\nSub"] {
+        let mut doc = text_page(page);
+        let style = text::BlockStyle { aligns: vec![None, Some(added::Align::Right)], ..Default::default() };
+        assert!(text::rewrite_block(&mut doc, 0, 0, Some(draft), &style).is_err());
+        assert!((title(&doc)[0] - before[0]).abs() < 0.5, "{draft:?}: the title stays put, {:?} vs {before:?}", title(&doc));
+    }
+}
+
+/// A column whose rows are several runs (a second style on the same baseline) reaches the right
+/// edge of its whole rows, not of the run at the left edge: a title wider than that first run is
+/// still held by the column and aligns to it (CodeRabbit on b9940d7d).
+#[test]
+fn a_column_is_measured_by_its_whole_rows_not_its_first_runs() {
+    let page = "BT /F1 18 Tf 1 0 0 1 100 672 Tm (A longer title) Tj ET                 BT /F1 10 Tf 12 TL 50 610 Td (The first column runs to here.) Tj ET                 BT /F1 11 Tf 1 0 0 rg 1 0 0 1 185 610 Tm (and keeps going on.) Tj ET                 BT /F1 10 Tf 12 TL 50 598 Td (A second row of it.) Tj ET";
+    let blocks = text::text_blocks(&text_page(page), 0).unwrap();
+    let body = blocks.iter().find(|b| b.text.starts_with("The first")).expect("the body is a block");
+    assert!(body.rows.first().is_some_and(|row| row.len() >= 2), "the body's first row is several runs: {:?}", body.rows);
+    let lines = text::text_lines(&text_page(page), 0).unwrap();
+    let column_right =
+        body.rows.iter().filter_map(|row| row.iter().filter_map(|i| lines.get(*i)).map(|l| l.rect[2]).reduce(f64::max)).fold(f64::MIN, f64::max);
+    let mut doc = text_page(page);
+    let index = blocks.iter().position(|b| b.text == "A longer title").expect("the title is a block of its own");
+    let style = text::BlockStyle { align: Some(added::Align::Right), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, index, Some("A longer title"), &style).unwrap();
+    let title = text::text_lines(&doc, 0).unwrap().into_iter().find(|l| l.text == "A longer title").unwrap().rect;
+    assert!((title[2] - column_right).abs() < 1.0, "right: on the whole row's right edge, {title:?} vs {column_right}");
+}
+
+/// A row with no column of its own is aligned in its own box, but that box is not the width its new
+/// text wraps at: changing the text together with an alignment keeps a single row on one row, as
+/// it does without the alignment (CodeRabbit on b9940d7d).
+#[test]
+fn an_isolated_row_edited_with_an_alignment_does_not_wrap_at_its_old_width() {
+    for align in [added::Align::Center, added::Align::Right] {
+        let mut doc = text_page("BT /F1 18 Tf 1 0 0 1 100 700 Tm (Title) Tj ET");
+        let longer = "A much longer title for the page";
+        let style = text::BlockStyle { align: Some(align), ..Default::default() };
+        text::rewrite_block(&mut doc, 0, 0, Some(longer), &style).unwrap();
+        let lines = text::text_lines(&doc, 0).unwrap();
+        assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), [longer], "{align:?}: the title stays on one row");
+    }
+}
+
+/// A heading across the whole page sits closer to the title than the title's own column does: the
+/// title is still aligned in its own column, not across the heading's page-wide frame (FredApps's
+/// review of 43f848d5). Centre and right both go by the column.
+#[test]
+fn a_lone_row_aligns_in_its_own_column_not_a_closer_full_width_heading() {
+    let page = "BT /F1 12 Tf 1 0 0 1 50 700 Tm (A heading that runs across both columns of the page, well past the first column, to the far margin.) Tj ET                 BT /F1 18 Tf 1 0 0 1 120 672 Tm (Title) Tj ET                 BT /F1 10 Tf 12 TL 50 610 Td (The first column runs to here.) Tj T* (A second row of it.) Tj ET                 BT /F1 10 Tf 12 TL 320 610 Td (The second column has more rows.) Tj T* (One.) Tj T* (Two.) Tj T* (Three.) Tj ET";
+    let blocks = text::text_blocks(&text_page(page), 0).unwrap();
+    let column = blocks.iter().find(|b| b.text.starts_with("The first")).unwrap().rect;
+    let heading = blocks.iter().find(|b| b.text.starts_with("A heading")).unwrap().rect;
+    let title_block = blocks.iter().find(|b| b.text == "Title").expect("the title is a block of its own").rect;
+    let gap = |other: [f64; 4]| (other[1] - title_block[3]).max(title_block[1] - other[3]).max(0.0);
+    assert!(gap(heading) < gap(column), "the heading is the nearer block: {} vs {}", gap(heading), gap(column));
+    assert!(heading[2] - heading[0] > 2.0 * (column[2] - column[0]), "the heading is page-wide: {heading:?} vs {column:?}");
+    let title_after = |align: added::Align| {
+        let mut doc = text_page(page);
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        let index = blocks.iter().position(|b| b.text == "Title").unwrap();
+        let style = text::BlockStyle { align: Some(align), ..Default::default() };
+        text::rewrite_block(&mut doc, 0, index, Some("Title"), &style).unwrap();
+        text::text_lines(&doc, 0).unwrap().into_iter().find(|l| l.text == "Title").unwrap().rect
+    };
+    let centred = title_after(added::Align::Center);
+    assert!(((centred[0] + centred[2]) / 2.0 - (column[0] + column[2]) / 2.0).abs() < 1.0, "centred in its own column: {centred:?} vs {column:?}");
+    let right = title_after(added::Align::Right);
+    assert!((right[2] - column[2]).abs() < 1.0, "right: on its own column's right edge, {right:?} vs {column:?}");
+}
+
+/// The same on a page of two columns, where the other column has more rows: a title over the
+/// first column is aligned across the first column, not its own box.
+#[test]
+fn a_lone_row_aligns_across_its_own_column_of_two() {
+    let mut doc = text_page(
+        "BT /F1 18 Tf 1 0 0 1 120 700 Tm (Title) Tj ET \
+         BT /F1 10 Tf 12 TL 50 660 Td (The first column runs to here.) Tj T* (A second row of it.) Tj ET \
+         BT /F1 10 Tf 12 TL 320 660 Td (The second column has more rows.) Tj T* (One.) Tj T* (Two.) Tj T* (Three.) Tj T* (Four.) Tj ET",
+    );
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    let column = blocks.iter().find(|b| b.text.starts_with("The first")).unwrap().rect;
+    let index = blocks.iter().position(|b| b.text == "Title").unwrap();
+    let style = text::BlockStyle { align: Some(added::Align::Left), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, index, Some("Title"), &style).unwrap();
+    let title = text::text_lines(&doc, 0).unwrap().into_iter().find(|l| l.text == "Title").unwrap().rect;
+    assert!((title[0] - column[0]).abs() < 0.5, "left: on the first column's edge, {title:?} vs {column:?}");
+}
+
+/// A one-row title in two colours is rewritten by the styled-region path, which is given the
+/// same column frame: centred twice, it stays centred in the column instead of moving right.
+#[test]
+fn a_lone_row_of_two_styles_aligns_across_its_column() {
+    let mut doc = text_page(
+        "BT /F1 18 Tf 1 0 0 1 250 700 Tm (Big ) Tj 1 0 0 rg (Title) Tj ET \
+         BT 0 g /F1 10 Tf 12 TL 72 650 Td (The body of the page runs across the whole column here.) Tj T* (It has a second row that is a little shorter.) Tj ET",
+    );
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks[0].text, "Big Title");
+    let column = [blocks[1].rect[0], blocks[1].rect[2]];
+    let title = |doc: &Document| {
+        let lines = text::text_lines(doc, 0).unwrap();
+        let block = text::text_blocks(doc, 0).unwrap().into_iter().find(|b| b.text == "Big Title").unwrap();
+        block.lines.iter().map(|i| lines[*i].rect).reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]).unwrap()
+    };
+    let centre = |doc: &mut Document| {
+        let blocks = text::text_blocks(doc, 0).unwrap();
+        let (index, block) = blocks.iter().enumerate().find(|(_, b)| b.text == "Big Title").unwrap();
+        let style = text::BlockStyle { align: Some(added::Align::Center), ..Default::default() };
+        text::rewrite_block(doc, 0, index, Some(&block.editor_text), &style).unwrap();
+    };
+    centre(&mut doc);
+    let centred = title(&doc);
+    assert!(((centred[0] + centred[2]) / 2.0 - (column[0] + column[1]) / 2.0).abs() < 1.0, "centred in the column: {centred:?} vs {column:?}");
+    centre(&mut doc);
+    assert!((title(&doc)[0] - centred[0]).abs() < 0.5, "centring again leaves it where it is: {:?} vs {centred:?}", title(&doc));
+}
+
+#[test]
+fn a_titles_column_ignores_distant_full_width_headers_and_footers() {
+    for (title_x, column_prefix) in [(95, "The first"), (365, "The second")] {
+        for mixed in [false, true] {
+            for title_y in [710, 580] {
+                let title = if mixed { "(Big ) Tj 1 0 0 rg (Title) Tj" } else { "(Title) Tj" };
+                let name = if mixed { "Big Title" } else { "Title" };
+                let mut doc = text_page(&format!(
+                    "BT /F1 10 Tf 12 TL 50 780 Td (A page-wide header extending well beyond either body column on this page and continuing all the way to the right margin.) Tj T* (A repeated page-wide heading across both columns and continuing to the right margin of the page.) Tj ET \
+                 BT /F1 18 Tf 1 0 0 1 {title_x} {title_y} Tm {title} ET \
+                 BT 0 g /F1 10 Tf 12 TL 50 660 Td (The first column runs to here.) Tj T* (A second row of it.) Tj ET \
+                 BT /F1 10 Tf 12 TL 320 660 Td (The second column runs to here.) Tj T* (Another row.) Tj ET \
+                 BT /F1 10 Tf 50 40 Td (A page-wide footer extending well beyond either body column on this page and continuing all the way to the right margin.) Tj ET"
+                ));
+                let rect = |doc: &Document, prefix: &str| {
+                    let blocks = text::text_blocks(doc, 0).unwrap();
+                    blocks.iter().find(|b| b.text.starts_with(prefix)).unwrap_or_else(|| panic!("missing {prefix:?} in {blocks:?}")).rect
+                };
+                let column = rect(&doc, column_prefix);
+                let header = rect(&doc, "A page-wide header");
+                let footer = rect(&doc, "A page-wide footer");
+                assert!(header[2] > column[2] + 20.0 && footer[2] > column[2] + 20.0);
+                for align in [added::Align::Center, added::Align::Center, added::Align::Right, added::Align::Left] {
+                    let blocks = text::text_blocks(&doc, 0).unwrap();
+                    let (index, block) = blocks.iter().enumerate().find(|(_, b)| b.text == name).unwrap();
+                    let style = text::BlockStyle { align: Some(align), ..Default::default() };
+                    text::rewrite_block(&mut doc, 0, index, Some(&block.editor_text), &style).unwrap();
+                    doc = reopen(&doc);
+                    let title = rect(&doc, name);
+                    let error = match align {
+                        added::Align::Center => ((title[0] + title[2]) - (column[0] + column[2])).abs() / 2.0,
+                        added::Align::Right => (title[2] - column[2]).abs(),
+                        _ => (title[0] - column[0]).abs(),
+                    };
+                    assert!(error < 1.0, "{align:?}, mixed={mixed}, title_y={title_y}: {title:?} must use {column:?}");
+                    assert_eq!(rect(&doc, "A page-wide header"), header);
+                    assert_eq!(rect(&doc, "A page-wide footer"), footer);
+                    assert_eq!(rect(&doc, column_prefix), column);
+                }
+            }
+        }
+    }
+}
+
+/// How each glyph-showing operator on page 0 is painted, read the way a renderer reads the page:
+/// its text, `Tr`, stroke colour operators, line width (from `w` or an ExtGState's `/LW`) and
+/// the ExtGStates selected before it, following `q`/`Q`.
+#[derive(Clone, Debug, PartialEq)]
+struct Painted {
+    text: String,
+    render_mode: i64,
+    stroke: Vec<String>,
+    line_width: f64,
+    gs: Vec<String>,
+}
+
+fn painted_shows(doc: &Document) -> Vec<Painted> {
+    let (_, ops) = joined_ops(doc);
+    let p = &pdfcraft_model::pages(doc)[0];
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+    let ext = res.as_dict().unwrap().get(b"ExtGState").map(|g| doc.resolve(g).as_dict().cloned().unwrap()).unwrap_or_default();
+    let mut state = Painted { text: String::new(), render_mode: 0, stroke: Vec::new(), line_width: 1.0, gs: Vec::new() };
+    let mut stack = Vec::new();
+    let mut out = Vec::new();
+    let show = |op: &pdfcraft_content::Op| String::from_utf8_lossy(&pdfcraft_content::serialize_ops(std::slice::from_ref(op))).trim().to_string();
+    for op in ops {
+        match op.op.as_slice() {
+            b"q" => stack.push(state.clone()),
+            b"Q" => state = stack.pop().unwrap(),
+            b"Tr" => state.render_mode = op.operands[0].as_int().unwrap(),
+            b"G" | b"RG" | b"K" | b"CS" => state.stroke = vec![show(&op)],
+            b"SC" | b"SCN" => state.stroke.push(show(&op)),
+            b"w" => state.line_width = op.num(0).unwrap(),
+            b"gs" => {
+                let name = op.name(0).unwrap();
+                state.gs.push(String::from_utf8_lossy(name).into_owned());
+                let lw = ext.get(name).and_then(|g| doc.resolve(g).as_dict().and_then(|g| g.get(b"LW")).and_then(|w| w.as_f64()));
+                state.line_width = lw.unwrap_or(state.line_width);
+            }
+            b"Tj" => {
+                let Some(Object::String(s)) = op.operands.last() else { continue };
+                if !s.bytes.is_empty() {
+                    out.push(Painted { text: String::from_utf8_lossy(&s.bytes).into_owned(), ..state.clone() });
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// A page with Helvetica as /F1, /GS1, an ExtGState that paints at 20 % opacity, /GS2, one that
+/// sets the line width to 4, /GS3, another at 20 % opacity, and /GS4, at 20 % opacity and dashed.
+fn faint_page(content: &str) -> Document {
+    build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /ExtGState << /GS1 6 0 R /GS2 7 0 R /GS3 8 0 R /GS4 9 0 R >> >> >>",
+        &format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        "<< /Type /ExtGState /ca 0.2 >>",
+        "<< /Type /ExtGState /LW 4 >>",
+        "<< /Type /ExtGState /ca 0.2 >>",
+        "<< /Type /ExtGState /ca 0.2 /D [[6 3] 0] >>",
+    ])
+}
+
+/// Rewriting a paragraph drew it before its text object, restating only the font, spacing and
+/// fill: a `1 Tr 1 0 0 RG 2 w` set inside `BT` was lost, and red outline text came back filled
+/// black, even with the text unchanged (#3508). Set before `BT` (the control), it already worked.
+#[test]
+fn a_rewritten_paragraph_keeps_the_rendering_mode_stroke_and_width_set_inside_its_text_object() {
+    let outline = |text: &str| Painted { text: text.into(), render_mode: 1, stroke: vec!["1 0 0 RG".into()], line_width: 2.0, gs: Vec::new() };
+    for content in ["BT /F1 72 Tf 1 Tr 1 0 0 RG 2 w 40 400 Td (OUTLINE) Tj ET\n", "1 Tr 1 0 0 RG 2 w BT /F1 72 Tf 40 400 Td (OUTLINE) Tj ET\n"] {
+        assert_eq!(painted_shows(&text_page(content)), [outline("OUTLINE")], "the fixture: {content}");
+        for new in ["OUTLINE", "OUTLINED"] {
+            let mut doc = text_page(content);
+            text::rewrite_block(&mut doc, 0, 0, Some(new), &BlockStyle::default()).unwrap();
+            let doc = reopen(&doc);
+            assert_eq!(painted_shows(&doc), [outline(new)], "{content} -> {new}: {}", streams(&doc, 0).join("\n"));
+        }
+    }
+}
+
+/// The same for transparency: `/GS1 gs` (`/ca 0.2`) inside `BT` was not in force for the
+/// rewritten paragraph, so 20 % blue text came back opaque (#3509).
+#[test]
+fn a_rewritten_paragraph_keeps_the_extgstate_selected_inside_its_text_object() {
+    for content in ["BT /GS1 gs /F1 72 Tf 0 0 1 rg 40 400 Td (FAINT) Tj ET\n", "/GS1 gs BT /F1 72 Tf 0 0 1 rg 40 400 Td (FAINT) Tj ET\n"] {
+        for new in ["FAINT", "FAINTER"] {
+            let mut doc = faint_page(content);
+            text::rewrite_block(&mut doc, 0, 0, Some(new), &BlockStyle::default()).unwrap();
+            let doc = reopen(&doc);
+            let shows = painted_shows(&doc);
+            assert_eq!(shows.len(), 1, "{content} -> {new}: {shows:?}");
+            assert_eq!(
+                (shows[0].text.as_str(), shows[0].gs.as_slice()),
+                (new, ["GS1".to_string()].as_slice()),
+                "{content} -> {new}: {}",
+                streams(&doc, 0).join("\n")
+            );
+        }
+    }
+}
+
+/// A paragraph of differently coloured runs goes through the styled rewrite, which draws each
+/// run in its own text object: each keeps the state its source set inside `BT`.
+#[test]
+fn a_styled_rewrite_keeps_the_paint_state_set_inside_the_text_object() {
+    let content = "BT /GS1 gs 1 Tr 1 0 0 RG 2 w /F1 72 Tf 40 400 Td (FAI) Tj 0 0 1 rg (NT) Tj ET\n";
+    let mut doc = faint_page(content);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].rows[0].len(), 2, "two runs on one row");
+    text::rewrite_block(&mut doc, 0, 0, Some("FAINTS"), &BlockStyle::default()).unwrap();
+    let doc = reopen(&doc);
+    let shows = painted_shows(&doc);
+    let joined = streams(&doc, 0).join("\n");
+    assert_eq!(shows.iter().map(|s| s.text.as_str()).collect::<String>(), "FAINTS", "{joined}");
+    for s in &shows {
+        assert_eq!((s.render_mode, s.stroke.as_slice(), s.line_width), (1, ["1 0 0 RG".to_string()].as_slice(), 2.0), "{s:?}: {joined}");
+        assert_eq!(s.gs, ["GS1"], "{s:?}: {joined}");
+    }
+}
+
+/// A `gs` has no inverse, so one run's ExtGState stayed in force for the runs the styled rewrite
+/// drew after it. Two ExtGStates at the same opacity paint the same (see `Paint`), so their runs
+/// share a paragraph, but either may set what that doesn't compare (a dash, a line cap): each run
+/// is drawn with only the ones its source selected.
+#[test]
+fn a_styled_rewrite_does_not_carry_one_runs_extgstate_into_the_next() {
+    // "FAI" ends at 40 + 72 * (0.611 + 0.667 + 0.278) = 152.032; "NT" is blue, so another run.
+    let content = "q BT /GS3 gs /F1 72 Tf 40 400 Td (FAI) Tj ET Q BT /GS1 gs /F1 72 Tf 0 0 1 rg 152.032 400 Td (NT) Tj ET
+";
+    for new in ["FAINT", "FAINTS"] {
+        let mut doc = faint_page(content);
+        assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].rows[0].len(), 2, "two runs on one row");
+        text::rewrite_block(&mut doc, 0, 0, Some(new), &BlockStyle::default()).unwrap();
+        let doc = reopen(&doc);
+        let shows = painted_shows(&doc);
+        let joined = streams(&doc, 0).join(
+            "
+",
+        );
+        assert_eq!(shows.iter().map(|s| s.text.as_str()).collect::<String>(), new, "{joined}");
+        let gs: Vec<_> = shows.iter().map(|s| (s.text.as_str(), s.gs.as_slice())).collect();
+        assert_eq!(gs.first(), Some(&("FAI", ["GS3".to_string()].as_slice())), "{gs:?}: {joined}");
+        assert!(gs.iter().skip(1).all(|(_, gs)| *gs == ["GS1"]), "{gs:?}: {joined}");
+    }
+}
+
+/// An ExtGState's `/LW` sets the line width as `w` does: `2 w /GS2 gs` (`/LW 4`) outlines at 4,
+/// and the rewrite replayed `/GS2 gs` and then `2 w`. `/GS2 gs 1 w` outlines at 1, and the
+/// rewrite replayed only `/GS2 gs`, since 1 is the initial width.
+#[test]
+fn a_rewritten_paragraph_keeps_the_line_width_an_extgstate_set() {
+    for (content, width) in [
+        ("BT /F1 72 Tf 1 Tr 2 w /GS2 gs 40 400 Td (OUTLINE) Tj ET\n", 4.0),
+        ("BT /F1 72 Tf 1 Tr /GS2 gs 2 w 40 400 Td (OUTLINE) Tj ET\n", 2.0),
+        ("BT /F1 72 Tf 1 Tr /GS2 gs 1 w 40 400 Td (OUTLINE) Tj ET\n", 1.0),
+    ] {
+        assert_eq!(painted_shows(&faint_page(content))[0].line_width, width, "the fixture: {content}");
+        for new in ["OUTLINE", "OUTLINED"] {
+            let mut doc = faint_page(content);
+            text::rewrite_block(&mut doc, 0, 0, Some(new), &BlockStyle::default()).unwrap();
+            let doc = reopen(&doc);
+            let shows = painted_shows(&doc);
+            assert_eq!(
+                shows.iter().map(|s| (s.text.as_str(), s.render_mode, s.line_width)).collect::<Vec<_>>(),
+                [(new, 1, width)],
+                "{content} -> {new}: {}",
+                streams(&doc, 0).join("\n")
+            );
+        }
+    }
+}
+
+/// A line is rewritten in the state of its first run, so outline text partway through a text
+/// object came back filled: "FAI" filled and "NT" a red outline came back all filled. The change
+/// of `Tr` now starts a run. (A `gs` partway already starts a paragraph; see `Paint`.)
+#[test]
+fn a_rendering_mode_partway_through_a_line_starts_a_run_of_its_own() {
+    let content = "BT /F1 72 Tf 40 400 Td (FAI) Tj 1 Tr 1 0 0 RG 2 w (NT) Tj ET
+";
+    for new in ["FAINT", "FAINTS"] {
+        let mut doc = faint_page(content);
+        assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].rows[0].len(), 2, "two runs on one row");
+        text::rewrite_block(&mut doc, 0, 0, Some(new), &BlockStyle::default()).unwrap();
+        let doc = reopen(&doc);
+        let shows = painted_shows(&doc);
+        let joined = streams(&doc, 0).join(
+            "
+",
+        );
+        assert_eq!(shows.iter().map(|s| s.text.as_str()).collect::<String>(), new, "{joined}");
+        let modes: Vec<_> = shows.iter().map(|s| (s.text.as_str(), s.render_mode, s.stroke.as_slice(), s.line_width)).collect();
+        assert_eq!(modes.first().map(|m| (m.0, m.1)), Some(("FAI", 0)), "{modes:?}: {joined}");
+        let outline = ["1 0 0 RG".to_string()];
+        assert!(modes.iter().skip(1).all(|m| (m.1, m.2, m.3) == (1, outline.as_slice(), 2.0)), "{modes:?}: {joined}");
+    }
+}
+
+/// Two ExtGStates at the same opacity paint text the same (see `Paint`), but one of them dashes
+/// its outline: a dashed outline after a solid one in the same text object joined its line and
+/// came back solid, drawn with the first run's selections. A different dash now starts a run.
+#[test]
+fn a_dash_partway_through_an_outlined_line_starts_a_run_of_its_own() {
+    let content = "BT /GS3 gs /F1 72 Tf 1 Tr 1 0 0 RG 2 w 40 400 Td (FAI) Tj /GS4 gs (NT) Tj ET
+";
+    for new in ["FAINT", "FAINTS"] {
+        let mut doc = faint_page(content);
+        assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].rows[0].len(), 2, "two runs on one row");
+        text::rewrite_block(&mut doc, 0, 0, Some(new), &BlockStyle::default()).unwrap();
+        let doc = reopen(&doc);
+        let shows = painted_shows(&doc);
+        let joined = streams(&doc, 0).join(
+            "
+",
+        );
+        assert_eq!(shows.iter().map(|s| s.text.as_str()).collect::<String>(), new, "{joined}");
+        let gs: Vec<_> = shows.iter().map(|s| (s.text.as_str(), s.gs.as_slice())).collect();
+        assert_eq!(gs.first(), Some(&("FAI", ["GS3".to_string()].as_slice())), "{gs:?}: {joined}");
+        assert!(gs.iter().skip(1).all(|(_, gs)| gs.last().is_some_and(|g| g == "GS4")), "{gs:?}: {joined}");
+    }
+}
+
+/// The dash and cap are compared as the operators set them too: `d` or `J` partway through an
+/// outlined line starts a run, and a malformed one (too long, not numbers, out of range) is ignored.
+#[test]
+fn a_dash_or_cap_operator_partway_through_an_outlined_line_starts_a_run() {
+    let long = format!("[{}] 0 d", "1 ".repeat(40));
+    for (change, runs) in [("[6 3] 0 d", 2), ("1 J", 2), (long.as_str(), 1), ("[(a) 3] 0 d", 1), ("[6 3] /x d", 1), ("7 J", 1), ("J", 1)] {
+        let content = format!("BT /F1 72 Tf 1 Tr 1 0 0 RG 2 w 40 400 Td (FAI) Tj {change} (NT) Tj ET\n");
+        let mut doc = faint_page(&content);
+        assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].rows[0].len(), runs, "{change}");
+        text::rewrite_block(&mut doc, 0, 0, Some("FAINTS"), &BlockStyle::default()).unwrap();
+        let shows = painted_shows(&reopen(&doc));
+        assert_eq!(shows.iter().map(|s| s.text.as_str()).collect::<String>(), "FAINTS", "{change}");
+    }
+}
+
+/// #4199, #3797: every space typed into a paragraph is saved, not folded into one.
+#[test]
+fn an_edited_paragraph_keeps_every_space_typed() {
+    for typed in ["Hello  world", "Hello     world   end", "  indented and trailing  "] {
+        let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+        assert_eq!(text::replace_block(&mut doc, 0, 0, typed).unwrap().substituted, None);
+        let doc = reopen(&doc);
+        let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+        assert!(content.contains(&format!("({typed}) Tj")), "{typed:?}: {content}");
+        assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, typed);
+    }
+}
+
+/// Spaces after a row's last word are kept but take no part in its alignment: a justified row
+/// still reaches the margin, and a centred or right-aligned one sits where it would without them.
+#[test]
+fn spaces_after_a_rows_last_word_do_not_move_its_alignment() {
+    let shown = |text: &str, align: added::Align| {
+        let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+        let style =
+            text::BlockStyle { family: Some((added::Family::Helvetica, false, false)), align: Some(align), width: Some(300.0), ..Default::default() };
+        text::rewrite_block(&mut doc, 0, 0, Some(text), &style).unwrap();
+        String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned()
+    };
+    for (plain, trailing, align) in [
+        ("aaa bbb ccc\nddd eee", "aaa bbb ccc  \nddd eee", added::Align::Justify),
+        ("Title", "Title   ", added::Align::Center),
+        ("Title", "Title   ", added::Align::Right),
+    ] {
+        let first = trailing.split('\n').next().unwrap();
+        let expected = shown(plain, align);
+        let actual = shown(trailing, align).replace(&format!("({first})"), &format!("({})", first.trim_end()));
+        assert_eq!(actual, expected, "{trailing:?} {align:?}");
+    }
+}
+
+/// A justified row runs from the paragraph's left edge to the margin. Word spacing reaches only
+/// the spaces between its words: the spaces before its first word and after its last are left
+/// out of a stretched row (as before #4199), so the reopened rows stay inside the paragraph and
+/// can be edited again in place.
+#[test]
+fn a_justified_row_keeps_its_indent_and_ends_at_the_margin() {
+    let style = text::BlockStyle {
+        family: Some((added::Family::Helvetica, false, false)),
+        align: Some(added::Align::Justify),
+        width: Some(300.0),
+        ..Default::default()
+    };
+    for typed in ["    Pack my box with five dozen jugs\nof liquor", "    Pack my box with five dozen jugs   \nof liquor"] {
+        let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+        text::rewrite_block(&mut doc, 0, 0, Some(typed), &style).unwrap();
+        let mut doc = reopen(&doc);
+        let lines = text::text_lines(&doc, 0).unwrap();
+        let first = lines.iter().find(|l| l.text.contains("Pack")).unwrap();
+        assert_eq!(first.text, "Pack my box with five dozen jugs", "{typed:?}");
+        assert!((first.rect[0] - 72.0).abs() < 0.5, "{typed:?}: {:?}", first.rect);
+        assert!(lines.iter().all(|l| l.rect[0] >= 72.0 - 0.5 && l.rect[2] <= 372.5), "{typed:?}: {lines:?}");
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(blocks.len(), 1, "{typed:?}: {blocks:?}");
+        text::replace_block(&mut doc, 0, 0, "Edited again").unwrap();
+        let again = text::text_lines(&reopen(&doc), 0).unwrap();
+        assert!(again.iter().all(|l| l.rect[0] >= 0.0 && l.rect[2] <= 600.0), "{typed:?}: {again:?}");
+    }
+}
+
+/// A justified paragraph whose first row was typed with an indent is edited again through the
+/// styled path (a draft with a line break): its rows keep their scaling and stay one paragraph
+/// inside its width.
+#[test]
+fn a_justified_paragraph_with_an_indent_edits_again_at_its_own_scale() {
+    let style = text::BlockStyle {
+        family: Some((added::Family::Helvetica, false, false)),
+        align: Some(added::Align::Justify),
+        width: Some(300.0),
+        ..Default::default()
+    };
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, Some("    aaa bbb ccc  \nddd"), &style).unwrap();
+    let mut doc = reopen(&doc);
+    let draft = text::text_blocks(&doc, 0).unwrap()[0].editor_text.replacen("ccc", "cc", 1);
+    assert!(draft.contains('\n'), "{draft:?}");
+    text::replace_block(&mut doc, 0, 0, &draft).unwrap();
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    let scales: Vec<&str> = content.lines().filter(|l| l.ends_with(" Tz")).collect();
+    assert!(scales.iter().all(|l| *l == "100 Tz"), "{scales:?}: {content}");
+    let doc = reopen(&doc);
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.len(), 1, "{blocks:?}");
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert!(lines.iter().all(|l| l.rect[0] >= 72.0 - 0.5 && l.rect[2] <= 372.5), "{lines:?}");
+}
+
+/// A paragraph drawn at `0 Tz` has no width to justify into: nothing is divided by it. The
+/// writer writes a number that isn't finite as 0, so the test looks for the word spacing and
+/// the move a division by zero would add, rather than for `NaN`.
+#[test]
+fn justifying_text_at_zero_horizontal_scaling_divides_by_nothing() {
+    let mut doc = text_page("BT /F1 12 Tf 0 Tz 72 700 Td (Hello world) Tj ET");
+    let style = text::BlockStyle { family: Some((added::Family::Helvetica, false, false)), align: Some(added::Align::Justify), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some("    aaa bbb\nccc"), &style).unwrap();
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    let block = content.split("ET").next().unwrap();
+    assert_eq!(block.matches(" Tw").count(), 1, "only the paragraph's own 0 Tw: {content}");
+    let first_row = block.split(" Tm").nth(1).and_then(|rest| rest.split(" Tj").next()).unwrap();
+    assert!(!first_row.contains(" Td"), "no move before the first row: {content}");
+}
+
+/// The preview's box is the box of the rows Apply writes, measured to their last glyphs.
+#[test]
+fn a_drafts_box_is_the_box_apply_draws() {
+    let doc = text_page("BT /F1 12 Tf 14 TL 72 700 Td [(First) -2000 (row here )] TJ T* (Second row ) Tj ET");
+    let source = text::text_blocks(&doc, 0).unwrap().swap_remove(0);
+    let draft = source.editor_text.replacen("Second", "Third", 1);
+    let layout = text::text_edit_layout(&doc, 0, 0, &draft, &text::BlockStyle::default()).unwrap();
+    let mut applied = doc.clone();
+    text::replace_block(&mut applied, 0, 0, &draft).unwrap();
+    let boxed = text::text_lines(&applied, 0)
+        .unwrap()
+        .into_iter()
+        .map(|l| {
+            let end = l.ink.iter().map(|r| r[2]).fold(f64::NEG_INFINITY, f64::max);
+            [l.rect[0], l.rect[1], if end.is_finite() { end.min(l.rect[2]) } else { l.rect[2] }, l.rect[3]]
+        })
+        .reduce(|a, r| [a[0].min(r[0]), a[1].min(r[1]), a[2].max(r[2]), a[3].max(r[3])]);
+    let (d, b) = (layout.draft_rect.unwrap(), boxed.unwrap());
+    assert!(d.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.01), "{draft:?}: preview {d:?}, applied {b:?}");
+}
+
+/// The draft's box is measured to its last glyph, not over the spaces typed after it.
+#[test]
+fn a_drafts_box_leaves_out_spaces_after_the_last_word() {
+    let doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+    let layout = |text: &str| text::text_edit_layout(&doc, 0, 0, text, &text::BlockStyle::default()).unwrap().draft_rect;
+    assert_eq!(layout("Hello there     "), layout("Hello there"));
+}
+
+/// A lone carriage return (an old Mac line ending) breaks the row, as `\n` and `\r\n` do.
+#[test]
+fn a_lone_carriage_return_breaks_an_edited_paragraph() {
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+    text::replace_block(&mut doc, 0, 0, "one\rtwo").unwrap();
+    let lines: Vec<String> = text::text_lines(&reopen(&doc), 0).unwrap().into_iter().map(|l| l.text).collect();
+    assert_eq!(lines, ["one", "two"]);
+}
+
+/// On the styled rewrite path too, `\r\n` is one row break and a lone `\r` another, and no
+/// carriage return reaches the page: with no other formatting, and with a part set in red.
+#[test]
+fn carriage_returns_break_rows_on_the_styled_path() {
+    let draft = "one\r\ntwo\rthree";
+    let red = text::RangeStyle {
+        range: 0..3,
+        family: None,
+        resource: None,
+        size: None,
+        color: Some([1.0, 0.0, 0.0]),
+        underline: None,
+        char_spacing: None,
+        scale: None,
+    };
+    for style in [text::BlockStyle::default(), text::BlockStyle { ranges: vec![red], ..Default::default() }] {
+        let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+        text::rewrite_block(&mut doc, 0, 0, Some(draft), &style).unwrap();
+        let doc = reopen(&doc);
+        let content = page_content_bytes(&doc, 0);
+        assert!(!content.contains(&b'\r') && !content.windows(2).any(|w| w == b"\\r"), "{}", String::from_utf8_lossy(&content));
+        let lines: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+        assert_eq!(lines, ["one", "two", "three"], "{style:?}");
+    }
+}
+
+/// A subset with no space glyph shows each space as a positioning gap one space wide, so a run
+/// of spaces still takes a run's width (#4199).
+#[test]
+fn a_run_of_spaces_in_a_subset_without_a_space_glyph_keeps_its_width() {
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj /F1 12 Tf ( ) Tj /F2 12 Tf (ba) Tj ET");
+    assert_eq!(text::replace_block(&mut doc, 0, 0, "ab  ba   ab").unwrap().substituted, None);
+    let content = String::from_utf8_lossy(&page_content_bytes(&reopen(&doc), 0)).into_owned();
+    assert_eq!(content.matches("[-330] TJ").count(), 5, "{content}");
+}
+
+/// Inside a text object `q`/`Q` save and restore the text and text line matrices (ISO 32000-2
+/// §9.4.1, as corrected by the PDF Association's errata, issue 368), as the renderer does: the
+/// text after `Q` is found, and stays, where it is drawn.
+#[test]
+fn q_inside_a_text_object_restores_the_text_matrices() {
+    for (content, text, baseline) in [
+        ("BT /F1 12 Tf 72 700 Td q 0 -100 Td Q (After) Tj ET", "After", [72.0, 700.0]),
+        ("BT /F1 12 Tf 72 700 Td q 1 0 0 1 300 300 Tm Q (After) Tj ET", "After", [72.0, 700.0]),
+        // `T*` moves from the restored line, not the one set inside q/Q.
+        ("BT /F1 12 Tf 14 TL 72 700 Td q 0 -100 Td Q T* (Next) Tj ET", "Next", [72.0, 686.0]),
+    ] {
+        let mut doc = text_page(content);
+        let lines = text::text_lines(&doc, 0).unwrap();
+        assert_eq!((lines[0].text.as_str(), lines[0].baseline()), (text, baseline), "{content}");
+        text::replace_line(&mut doc, 0, 0, "Edited").unwrap();
+        let doc = reopen(&doc);
+        let lines = text::text_lines(&doc, 0).unwrap();
+        assert_eq!((lines[0].text.as_str(), lines[0].baseline()), ("Edited", baseline), "{content} after editing");
+    }
+}
+
+/// Whole-paragraph alignment retains both soft wraps and typed hard breaks after save/reopen.
+/// Selected-row alignment for existing PDF content is withheld until it can persist safely.
+#[test]
+fn wrapped_rows_keep_whole_paragraph_alignment_and_hard_break_markers() {
+    let mut doc = text_page("BT /F1 10 Tf 12 TL 72 700 Td (Old) Tj ET");
+    let style = text::BlockStyle { width: Some(60.0), align: Some(added::Align::Left), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some("One two three four five six\nTail"), &style).unwrap();
+    let doc = reopen(&doc);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert!(lines.len() > 2, "the first logical row must wrap");
+    let tail = lines.iter().find(|line| line.text == "Tail").unwrap();
+    assert!((tail.rect[0] - 72.0).abs() < 1.0, "the second logical row keeps the paragraph alignment: {:?}", tail.rect);
+    for line in lines.iter().filter(|line| line.text != "Tail") {
+        assert!((line.rect[0] - 72.0).abs() < 1.0, "soft-wrapped rows stay left-aligned: {:?}", line.rect);
+    }
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("/PCSoft") && content.contains("/PCHard"), "both break kinds survive: {content}");
+}
+
+#[test]
+fn hostile_soft_wrap_counts_fail_before_reflow_allocates() {
+    for marker in [
+        "/PCSoft << /N 9223372036854775807 >> BDC EMC",
+        "/PCSoft << /N 16777217 >> BDC EMC",
+        "/PCSoft << /N 8388608 >> BDC EMC /PCSoft << /N 8388609 >> BDC EMC",
+    ] {
+        let doc = text_page(&format!("BT /F1 12 Tf 20 700 Td (First) Tj {marker} 0 -14 Td (Second) Tj ET"));
+        let error = text::text_lines(&doc, 0).unwrap_err();
+        assert!(error.to_string().contains("too large"), "{marker}: {error}");
+    }
+}
+
+#[test]
+fn ordinary_soft_wrap_counts_keep_their_spaces() {
+    for gap in [0, 1, 2, 8] {
+        let doc = text_page(&format!("BT /F1 12 Tf 20 700 Td (First) Tj /PCSoft << /N {gap} >> BDC EMC 0 -14 Td (Second) Tj ET"));
+        let lines = text::text_lines(&doc, 0).unwrap();
+        assert_eq!(lines.len(), 2);
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].reflow_text, format!("First{}Second", " ".repeat(gap)));
+    }
+}
+
+#[test]
+fn styled_existing_justification_is_refused_instead_of_silently_left_aligning() {
+    let mut doc = mixed_region_page();
+    let before = page_content_bytes(&doc, 0);
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    let style = text::BlockStyle { align: Some(added::Align::Justify), ..Default::default() };
+    let error = text::rewrite_block(&mut doc, 0, 1, Some(&blocks[1].editor_text), &style).unwrap_err();
+    assert!(error.to_string().contains("justification"));
+    assert_eq!(page_content_bytes(&doc, 0), before);
+    assert_eq!(page_content_bytes(&reopen(&doc), 0), before);
 }

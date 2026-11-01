@@ -380,7 +380,7 @@ fn table_doc(th: &str, extra: &[&str], kids: &str) -> Document {
         th.to_string(),
         "<< /S /TD >>".to_string(),
     ];
-    objs.extend(extra.iter().map(|s| s.to_string()));
+    objs.extend(extra.iter().map(ToString::to_string));
     pdf(&objs, "")
 }
 
@@ -1233,6 +1233,19 @@ fn headings_drawn_glyph_by_glyph_keep_their_words() {
             "Chapter Nine"
         ]
     );
+}
+
+/// Inside a text object `q`/`Q` save and restore the text matrices (ISO 32000-2 §9.4.1, as
+/// corrected by the PDF Association's errata, issue 368), as the renderer does: a word whose
+/// glyphs continue after a `Q` stays one word.
+#[test]
+fn q_inside_a_text_object_restores_the_text_matrices() {
+    let doc = heading_page(&[
+        "BT /F1 20 Tf 72 700 Td (Chap) Tj q 0 -100 Td Q (ter One) Tj ET".into(),
+        "BT /F1 20 Tf 72 650 Td (Chap) Tj q 1 0 0 1 300 300 Tm Q (ter Two) Tj ET".into(),
+    ]);
+    let titles: Vec<String> = headings(&doc).into_iter().map(|h| h.title).collect();
+    assert_eq!(titles, ["Chapter One", "Chapter Two"]);
 }
 
 #[test]

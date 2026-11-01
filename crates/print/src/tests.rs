@@ -283,8 +283,8 @@ fn spooler_arguments_and_printer_list() {
     assert_eq!(
         parse_lpstat(out),
         [
-            spool::Printer { name: "Office_Laser".into(), default: true, two_sided: None },
-            spool::Printer { name: "Label_Writer".into(), default: false, two_sided: None }
+            spool::Printer { name: "Office_Laser".into(), default: true, two_sided: None, description: String::new() },
+            spool::Printer { name: "Label_Writer".into(), default: false, two_sided: None, description: String::new() }
         ]
     );
     assert!(parse_lpstat("lpstat: No destinations added.\nno system default destination\n").is_empty());
@@ -327,18 +327,21 @@ fn driverless_printers_join_the_list_without_a_queue() {
     assert_eq!(
         spool::printers_parsed(queues, Some("Basement_Color\nOffice_Laser\n")),
         [
-            spool::Printer { name: "Office_Laser".into(), default: true, two_sided: None },
-            spool::Printer { name: "Basement_Color".into(), default: false, two_sided: None },
+            spool::Printer { name: "Office_Laser".into(), default: true, two_sided: None, description: String::new() },
+            spool::Printer { name: "Basement_Color".into(), default: false, two_sided: None, description: String::new() },
         ],
         "queues first, then the driverless destination; the queue listed twice is not doubled"
     );
     // An old spooler without `-e` (CUPS < 1.7) keeps its queues; only the driverless names are lost.
-    assert_eq!(spool::printers_parsed(queues, None), [spool::Printer { name: "Office_Laser".into(), default: true, two_sided: None }]);
+    assert_eq!(
+        spool::printers_parsed(queues, None),
+        [spool::Printer { name: "Office_Laser".into(), default: true, two_sided: None, description: String::new() }]
+    );
     // The default can itself be driverless (`lpoptions -d` names a destination no queue exists
     // for): it keeps its marker, so the dialog preselects the user's default, not the first queue.
     assert_eq!(
         spool::printers_parsed("system default destination: Basement_Color\n", Some("Basement_Color\n")),
-        [spool::Printer { name: "Basement_Color".into(), default: true, two_sided: None }],
+        [spool::Printer { name: "Basement_Color".into(), default: true, two_sided: None, description: String::new() }],
         "a default destination without a queue is still the default"
     );
     assert!(spool::parse_lpstat_e("\n \n").is_empty(), "no destinations is empty, not [\"\"]");
@@ -414,17 +417,17 @@ fn windows_printers_carry_one_default_and_keep_their_names() {
     // Windows marks the system default with a `*` no queue name may contain; names hold spaces,
     // parentheses and non-ASCII letters, and the lines end with CRLF.
     let printers = parse_windows_printers("*Microsoft Print to PDF\r\nHP LaserJet 400 (Copy 2)\r\nКопир Canon iR\r\n\r\n*XPS via USB\r\n");
-    assert_eq!(printers[0], Printer { name: "Microsoft Print to PDF".into(), default: true, two_sided: None });
-    assert_eq!(printers[1], Printer { name: "HP LaserJet 400 (Copy 2)".into(), default: false, two_sided: None });
-    assert_eq!(printers[2], Printer { name: "Копир Canon iR".into(), default: false, two_sided: None });
+    assert_eq!(printers[0], Printer { name: "Microsoft Print to PDF".into(), default: true, two_sided: None, description: String::new() });
+    assert_eq!(printers[1], Printer { name: "HP LaserJet 400 (Copy 2)".into(), default: false, two_sided: None, description: String::new() });
+    assert_eq!(printers[2], Printer { name: "Копир Canon iR".into(), default: false, two_sided: None, description: String::new() });
     // A spooler marking two defaults: the first still wins, so the dialog has one to preselect.
-    assert_eq!(printers[3], Printer { name: "XPS via USB".into(), default: false, two_sided: None });
+    assert_eq!(printers[3], Printer { name: "XPS via USB".into(), default: false, two_sided: None, description: String::new() });
     assert_eq!(parse_windows_printers("\r\n"), Vec::new());
     // After a tab, whether the driver reports two-sided printing; a tab inside a name stays.
     let sided = parse_windows_printers("*Office PCL\t2\r\nOffice PS\t1\r\nTab\tName\t2\r\n");
-    assert_eq!(sided[0], Printer { name: "Office PCL".into(), default: true, two_sided: Some(true) });
-    assert_eq!(sided[1], Printer { name: "Office PS".into(), default: false, two_sided: Some(false) });
-    assert_eq!(sided[2], Printer { name: "Tab\tName".into(), default: false, two_sided: Some(true) });
+    assert_eq!(sided[0], Printer { name: "Office PCL".into(), default: true, two_sided: Some(true), description: String::new() });
+    assert_eq!(sided[1], Printer { name: "Office PS".into(), default: false, two_sided: Some(false), description: String::new() });
+    assert_eq!(sided[2], Printer { name: "Tab\tName".into(), default: false, two_sided: Some(true), description: String::new() });
 }
 
 /// A PPD shaped like a Fiery's: installable options, multi-line PostScript in the choices, Latin-1
@@ -674,6 +677,8 @@ fn architectural_sheets_preserve_full_scale() {
     assert!(fit[0].placed[0].matrix.0[0] < 1.0, "Fit adds margins and must not masquerade as full scale");
 }
 
+/// A sheet matches a preset either way round and rounded to whole points, but not half a point off;
+/// empty, negative, infinite, NaN and custom sizes match none.
 #[test]
 fn paper_matching_accepts_rounded_metric_sizes_but_not_custom_or_invalid_sizes() {
     for (i, (_, (w, h))) in PAPERS.iter().enumerate() {
@@ -687,9 +692,69 @@ fn paper_matching_accepts_rounded_metric_sizes_but_not_custom_or_invalid_sizes()
     }
 }
 
+/// #3752: 13 of the 21 sizes had no media name, so their jobs went out on the queue's default
+/// paper (A4 on the report's queue) whatever the sheets were laid out on.
+#[test]
+fn every_paper_reaches_the_spooler_by_a_name_of_its_size() {
+    let ppd_keywords = ["Letter", "Legal", "Tabloid", "A3", "A4", "A5", "w288h432", "Env10"];
+    for (i, (name, (w, h))) in PAPERS.iter().enumerate() {
+        let media = cups_media(i).unwrap_or_else(|| panic!("{name} has no media name"));
+        assert_eq!(media_option(i), Some(("media".to_string(), media.to_string())));
+        let args = lp_args(&Job { options: media_option(i).into_iter().collect(), ..Job::default() });
+        assert!(args.contains(&format!("media={media}")), "{name}: lp is given it: {args:?}");
+        if ppd_keywords.contains(&media) {
+            continue;
+        }
+        // The rest are PWG 5101.1 names, which end in their dimensions: CUPS feeds the driver's
+        // size of those dimensions, so they must be the paper's.
+        let dims = media.rsplit('_').next().unwrap_or_default();
+        let (dims, points_per_unit) = match (dims.strip_suffix("mm"), dims.strip_suffix("in")) {
+            (Some(mm), _) => (mm, 72.0 / 25.4),
+            (_, Some(inches)) => (inches, 72.0),
+            _ => panic!("{name}: {media} is not a PWG name"),
+        };
+        let (pw, ph) = dims.split_once('x').unwrap_or_else(|| panic!("{name}: {media} has no dimensions"));
+        let (pw, ph) = (pw.parse::<f64>().unwrap() * points_per_unit, ph.parse::<f64>().unwrap() * points_per_unit);
+        assert!((pw - w).abs() < 0.5 && (ph - h).abs() < 0.5, "{name}: {media} is {pw:.2} x {ph:.2} pt, not {w} x {h}");
+    }
+    assert_eq!((cups_media(PAPERS.len()), media_option(PAPERS.len())), (None, None));
+    // The names themselves, spelled as PWG 5101.1 has them: a driverless printer may take only the
+    // names it advertises, so one CUPS can merely parse (ARCH A was `arch_a_9x12in`) is not enough.
+    // ARCH E1 is 5101.1's `wide-format` size: `na_arch-e1_30x42in` was asked for once and never
+    // registered.
+    let names: Vec<(&str, &str)> = PAPERS.iter().enumerate().map(|(i, (name, _))| (*name, cups_media(i).unwrap_or_default())).collect();
+    assert_eq!(
+        names,
+        [
+            ("US Letter", "Letter"),
+            ("US Legal", "Legal"),
+            ("Tabloid", "Tabloid"),
+            ("A3", "A3"),
+            ("A4", "A4"),
+            ("A5", "A5"),
+            ("A6", "iso_a6_105x148mm"),
+            ("ARCH A (9 x 12 in)", "na_arch-a_9x12in"),
+            ("ARCH B (12 x 18 in)", "na_arch-b_12x18in"),
+            ("ARCH C (18 x 24 in)", "na_arch-c_18x24in"),
+            ("ARCH D (24 x 36 in)", "na_arch-d_24x36in"),
+            ("ARCH E1 (30 x 42 in)", "na_wide-format_30x42in"),
+            ("ARCH E (36 x 48 in)", "na_arch-e_36x48in"),
+            ("ANSI C (17 x 22 in)", "na_c_17x22in"),
+            ("ANSI D (22 x 34 in)", "na_d_22x34in"),
+            ("ANSI E (34 x 44 in)", "na_e_34x44in"),
+            ("A2", "iso_a2_420x594mm"),
+            ("A1", "iso_a1_594x841mm"),
+            ("A0", "iso_a0_841x1189mm"),
+            ("4 x 6 in label (101.6 x 152.4 mm)", "w288h432"),
+            ("US #10 Envelope (4.125 x 9.5 in)", "Env10"),
+        ]
+    );
+}
+
+/// #2734: the US #10 envelope (4.125 × 9.5 in) is offered, fed by its PPD name and laid out at
+/// its own size.
 #[test]
 fn us_number_10_envelope_is_offered_and_fed_by_name() {
-    // 4.125 × 9.5 in (#2734).
     let index = matching_paper((684.0, 297.0)).unwrap();
     assert_eq!(PAPERS[index].0, "US #10 Envelope (4.125 x 9.5 in)");
     assert_eq!(PAPERS[index].1, (297.0, 684.0));
@@ -960,4 +1025,122 @@ fn odd_and_even_pages_are_page_numbers_not_places_in_the_range() {
     assert_eq!(select_pages(12, Some("10, 3, 4"), &[], Subset::Even, true).unwrap(), [3, 9]);
     // A range with no page of the kind prints nothing.
     assert_eq!(select_pages(12, Some("3, 5"), &[], Subset::Even, false), Err(PrintError::NoPages));
+}
+
+/// ISO 32000-2 Table 167: an Invisible annotation of a type that isn't standard does not print,
+/// even with its Print flag; Invisible means nothing for a standard type.
+#[test]
+fn invisible_annotations_of_unknown_types_do_not_print() {
+    let doc = fixture(1);
+    let annot = |subtype: Option<&str>, flags: i64| {
+        let mut d = Dict::new();
+        if let Some(s) = subtype {
+            d.set(b"Subtype".to_vec(), Object::name(s));
+        }
+        d.set(b"F".to_vec(), Object::Int(flags));
+        d
+    };
+    let all = Content::DocumentAndMarkups;
+    assert!(prints(&doc, &annot(Some("MyCustomType"), 4), all), "an unknown type prints without Invisible");
+    assert!(!prints(&doc, &annot(Some("MyCustomType"), 5), all), "Invisible + Print on an unknown type");
+    assert!(!prints(&doc, &annot(None, 5), all), "no Subtype is no standard type");
+    assert!(prints(&doc, &annot(Some("Square"), 5), all), "Invisible doesn't apply to a standard type");
+    assert!(prints(&doc, &annot(Some("Widget"), 5), Content::FormFieldsOnly), "nor to a field");
+
+    // An indirect `/Subtype` (§7.3.10) is resolved: a standard type stays standard.
+    let mut doc = doc;
+    let square = doc.add(Object::name("Square"));
+    let mut indirect = annot(None, 5);
+    indirect.set(b"Subtype".to_vec(), Object::Ref(square));
+    assert!(prints(&doc, &indirect, all), "an indirect standard Subtype");
+}
+
+/// #2707: a booklet's two-sided setting follows its subset.
+#[test]
+fn a_booklet_prints_both_sides_on_the_short_edge() {
+    assert_eq!(booklet_duplex(BookletSubset::BothSides), spool::Duplex::ShortEdge);
+    assert_eq!(booklet_duplex(BookletSubset::FrontOnly), spool::Duplex::Off);
+    assert_eq!(booklet_duplex(BookletSubset::BackOnly), spool::Duplex::Off);
+}
+
+/// #3502: `/Contents` array pieces are joined with a space, matching the renderer, so a `%`
+/// comment at the end of a piece without a line break continues through the first line of the
+/// next piece in both `impose` and `text_reads_up`.
+#[test]
+fn contents_pieces_join_with_a_space_across_a_trailing_comment() {
+    let build_doc = |first_piece: &[u8]| {
+        let mut doc = Document::new_empty();
+        let font = doc.add(
+            [
+                (b"Type".to_vec(), Object::name("Font")),
+                (b"Subtype".to_vec(), Object::name("Type1")),
+                (b"BaseFont".to_vec(), Object::name("Helvetica")),
+            ]
+            .into_iter()
+            .collect::<Dict>(),
+        );
+        let s1 = doc.add(Stream::from_raw(Dict::new(), first_piece.to_vec()));
+        // Line 1 of s2 draws sideways ("HIDDEN") and 4 characters reading up; line 2 draws upright ("SHOWN").
+        let s2 = doc.add(Stream::from_raw(
+            Dict::new(),
+            b"BT /F1 18 Tf 0 1 -1 0 50 50 Tm (HIDDEN) Tj ET\nBT /F1 18 Tf 1 0 0 1 20 100 Tm (SHOWN) Tj ET".to_vec(),
+        ));
+        let fonts: Dict = [(b"F1".to_vec(), Object::Ref(font))].into_iter().collect();
+        let res: Dict = [(b"Font".to_vec(), Object::Dict(fonts))].into_iter().collect();
+        let pages_root = doc.add(Object::Null);
+        let page = doc.add(
+            [
+                (b"Type".to_vec(), Object::name("Page")),
+                (b"Parent".to_vec(), Object::Ref(pages_root)),
+                (b"MediaBox".to_vec(), Object::Array([0.0, 0.0, 200.0, 300.0].into_iter().map(Object::Real).collect())),
+                (b"Resources".to_vec(), Object::Dict(res)),
+                (b"Contents".to_vec(), Object::Array(vec![Object::Ref(s1), Object::Ref(s2)])),
+            ]
+            .into_iter()
+            .collect::<Dict>(),
+        );
+        doc.set(
+            pages_root,
+            Object::Dict(
+                [
+                    (b"Type".to_vec(), Object::name("Pages")),
+                    (b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)])),
+                    (b"Count".to_vec(), Object::Int(1)),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+        );
+        let cat = doc.add([(b"Type".to_vec(), Object::name("Catalog")), (b"Pages".to_vec(), Object::Ref(pages_root))].into_iter().collect::<Dict>());
+        doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(cat));
+        doc
+    };
+
+    let form_strings = |imposed: Vec<u8>| -> Vec<Vec<u8>> {
+        let out = Document::open(Arc::new(imposed)).unwrap();
+        let page = &pdfcraft_model::pages(&out)[0];
+        let res = out.resolve(page.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+        let xo = out.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+        let form_obj = out.resolve(xo.get(b"P0").unwrap());
+        let Object::Stream(form) = &*form_obj else { panic!("form stream") };
+        let body = form.decoded().unwrap();
+        pdfcraft_content::parse(&body)
+            .ops
+            .into_iter()
+            .filter(|op| op.op == b"Tj")
+            .filter_map(|op| op.operands.first().and_then(Object::as_string).map(|s| s.bytes.to_vec()))
+            .collect()
+    };
+
+    // Without a newline at the end of s1, `% comment` swallows line 1 of s2 (`(HIDDEN) Tj`).
+    let commented = build_doc(b"q Q % trailing comment");
+    assert!(!text_reads_up(&commented, 0), "commented-out vertical text on piece 2's first line is not counted");
+    let printed = impose(&commented, &settings(vec![0], Layout::Size(SizeMode::Actual))).unwrap();
+    assert_eq!(form_strings(printed), [b"SHOWN".to_vec()], "impose does not un-comment piece 2's first line");
+
+    // Control: when s1 terminates the comment with a newline, line 1 of s2 is drawn and counted.
+    let with_newline = build_doc(b"q Q % trailing comment\n");
+    assert!(text_reads_up(&with_newline, 0), "6 vertical vs 5 horizontal chars when line 1 is not commented out");
+    let printed_ctrl = impose(&with_newline, &settings(vec![0], Layout::Size(SizeMode::Actual))).unwrap();
+    assert_eq!(form_strings(printed_ctrl), [b"HIDDEN".to_vec(), b"SHOWN".to_vec()]);
 }

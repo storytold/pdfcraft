@@ -342,12 +342,10 @@
 	Check Again	Verificare din nou
 	Check again	Verificare din nou
 	Check box is checked by default	Caseta de selectare este bifată implicit
-	Check for updates	Căutare actualizări
 	Check spelling	Verificare ortografică
 	Check the pages	Verificați paginile
 	Check the pages of {name}: {why}	Verificați paginile din {name}: {why}
 	Checking Options ({on} of 32 in all categories)	Opțiuni de verificare ({on} din 32 în toate categoriile)
-	Checking for a newer version…	Se caută o versiune mai nouă…
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Alegeți o imagine PNG sau JPEG (până la 4 MiB). Transparența se păstrează.
 	Choose a folder for the exported files	Alegeți un folder pentru fișierele exportate
 	Choose a folder for the extracted pages	Alegeți un folder pentru paginile extrase
@@ -407,7 +405,6 @@
 	Copies:	Copii:
 	Copy selected text	Copiere text selectat
 	Copy text	Copiere text
-	Couldn't check for updates: {e}	Nu s-au putut căuta actualizări: {e}
 	Couldn't open the printer's preferences: {e}	Nu s-au putut deschide preferințele imprimantei: {e}
 	Counterclockwise 90 degrees	90 de grade în sens invers acelor de ceasornic
 	Country/Region	Țară/regiune
@@ -868,7 +865,6 @@
 	Patterns (graphics objects)	Modele (obiecte grafice)
 	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft nu s-a închis normal. Aceste documente aveau modificări salvate automat:
 	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft funcționează offline. Fără telemetrie, fără cont și fără procesare în cloud, cu excepția cazului în care adăugați un furnizor.
-	PdfCraft {c} is up to date.	PdfCraft {c} este la zi.
 	PdfCraft {v} is available.	Este disponibil PdfCraft {v}.
 	Percentage	Procent
 	Permissions password	Parolă de permisiuni
@@ -933,6 +929,8 @@
 	Redaction code:	Cod de anonimizare:
 	Reload	Reîncărcare
 	Reload documents when their files change on disk	Reîncarcă documentele când fișierele lor se modifică pe disc
+	Don't show again	Nu mai afișa
+	Show a notice when a document is secured	Afișează o notificare când un document este securizat
 	Remove checkmark	Eliminare bifă
 	Remove invalid links and bookmarks	Eliminare linkuri și semne de carte nevalide
 	Remove page	Eliminare pagină
@@ -953,6 +951,14 @@
 	Replacement text	Text de înlocuire
 	Replacement: pages of {name}	Înlocuire: pagini din {name}
 	Replaces the existing one on those pages.	Înlocuiește-l pe cel existent pe acele pagini.
+	Checking pages…	Se verifică paginile…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Pagina {pages} are o umplere albă proprie, care ar ascunde fundalul. Înlocuiește-o
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Paginile {pages} au o umplere albă proprie, care ar ascunde fundalul. Înlocuiește-o
+	Removing the background puts the page's own backdrop back.	Eliminarea fundalului readuce umplerea albă proprie a paginii.
+	A picture covers page {pages} (a scan?), so the background won't show there.	O imagine acoperă pagina {pages} (o scanare?), deci fundalul nu se va vedea acolo.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Imagini acoperă paginile {pages} (scanări?), deci fundalul nu se va vedea acolo.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Pagina {pages} s-a schimbat după adăugarea fundalului, așa că umplerea ei albă proprie rămâne oprită. Pe hârtie albă arată la fel.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Paginile {pages} s-au schimbat după adăugarea fundalului, așa că umplerile lor albe proprii rămân oprite. Pe hârtie albă arată la fel.
 	Report	Raport
 	Report…	Raport…
 	Requires user to enter a password for:	Utilizatorul trebuie să introducă o parolă pentru:
@@ -1018,6 +1024,15 @@
 	Scroll tabs right	Derulare file la dreapta
 	Search comments	Căutare în comentarii
 	Search tools and commands…	Căutare instrumente și comenzi…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Text adăugat
+	Link URL	URL-ul linkului
+	Search tools and commands	Căutare instrumente și comenzi
+	Text editing line	Linie de editare a textului
+	Text to place	Text de plasat
+	Tooltip	Sfat ecran
+	Words or phrases to redact	Cuvinte sau expresii de anonimizat
 	Searchable Image (Exact)	Imagine în care se poate căuta (exactă)
 	Searching… {s} of {p} pages	Se caută… {s} din {p} pagini
 	Searching… {s}/{p}	Se caută… {s}/{p}
@@ -1228,6 +1243,7 @@
 	Update	Actualizare
 	Use 72 DPI (one point per pixel)	Folosire 72 DPI (un punct pe pixel)
 	Use Flate to encode streams that are not encoded	Folosire Flate pentru codarea fluxurilor necodate
+	In streams that use LZW encoding, use Flate instead	Folosire Flate în locul LZW pentru fluxurile codate LZW
 	Use a Digital ID from a file	Folosire ID digital dintr-un fișier
 	Use custom DPI	Folosire DPI personalizat
 	Use each image's embedded DPI; use 72 DPI when it is absent.	Folosește DPI-ul încorporat al fiecărei imagini; 72 DPI când lipsește.
@@ -1267,7 +1283,6 @@
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	Formular XFA: câmpurile și datele XFA sunt sincronizate, ca alte vizualizatoare să arate ce completați.
 	You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Urmează să aplicați 1 marcaj de anonimizare. Textul, imaginile și desenele de sub marcaje, precum și comentariile și câmpurile de formular care se suprapun cu ele, se elimină definitiv.
 	You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Urmează să aplicați {n} marcaje de anonimizare. Textul, imaginile și desenele de sub marcaje, precum și comentariile și câmpurile de formular care se suprapun cu ele, se elimină definitiv.
-	You have version {c}. All releases are listed at {page}.	Aveți versiunea {c}. Toate versiunile sunt listate la {page}.
 	You have version {c}. Download the new version from its release page.	Aveți versiunea {c}. Descărcați versiunea nouă de pe pagina ei de lansare.
 	Your changes will be lost if you don't save them.	Modificările se vor pierde dacă nu le salvați.
 	ZIP	ZIP
@@ -1399,6 +1414,10 @@
 	Draw freehand	Desenare liberă
 	Drawing	Desen
 	Drawing scale	Scara desenului
+	Scale	Scară
+	Common scales	Scări uzuale
+	Enter a scale such as 1:50.	Introduceți o scară, de exemplu 1:50.
+	Applying a scale switches units to m / mm.	Aplicarea unei scări schimbă unitățile în m / mm.
 	Drop-down list	Listă derulantă
 	Duplicate pages	Duplicare pagini
 	Edit a PDF	Editare PDF
@@ -2050,6 +2069,9 @@ comment menu	Edit	Editare
 	Formulas and similar non-text elements need alternate text. Add alternate text to them.	Formulele și alte elemente non-text similare au nevoie de text alternativ. Adăugați-le text alternativ.
 	Gray	Gri
 	Grayscale Images	Imagini în tonuri de gri
+	Monochrome Images	Imagini monocrome
+	CCITT Group 4	CCITT grupa 4
+	JBIG2 (lossless)	JBIG2 (fără pierderi)
 	Green	Verde
 	Green on black	Verde pe negru
 	H / Space (hold)	H / Spațiu (ținut apăsat)
@@ -2647,6 +2669,14 @@ key	Space	Spațiu
 	Optimizing… merging image fragments	Se optimizează… unificare fragmente de imagine
 	Outline colour:	Culoare contur:
 	Page properties	Proprietăți pagină
+	Create & Edit	Creare și editare
+	Review & Compare	Revizuire și comparare
+	Forms & Signatures	Formulare și semnături
+	Protect & Standardize	Protejare și standardizare
+	Customize & Automate	Personalizare și automatizare
+	No tools match your search.	Niciun instrument nu corespunde căutării.
+	Expand all tools	Extinderea tuturor instrumentelor
+	Collapse all tools	Restrângerea tuturor instrumentelor
 	Pages counted	Pagini numărate
 	Pages selected	Pagini selectate
 	Print as image	Imprimare ca imagine
@@ -2699,6 +2729,12 @@ theme	Appearance	Aspect
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Citește {names}, care îl citesc la rândul lor. Nicio ordine nu poate rezolva o buclă: modificați una dintre formule.
 	Not in order	În afara ordinii
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Lipsește din ordinea de calcul salvată în PDF: alte aplicații de vizualizare PDF s-ar putea să nu-l calculeze.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Citește {name}, care nu există în formular, deci nu primește nicio valoare de acolo.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Scriptul său citește și câmpuri ale căror nume le construiește în timpul rulării, deci aceste citiri nu pot fi verificate.
+	Missing field	Câmp lipsă
+	Unchecked reads	Citiri neverificate
+	{field} reads fields named as it runs	{field} citește câmpuri numite în timpul rulării
+	Some names are built as it runs	Unele nume sunt construite în timpul rulării
 	Back to Prepare a form	Înapoi la Pregătire formular
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Niciun câmp din acest formular nu își calculează încă valoarea. Adăugați un calcul unui câmp în fila Calcul din proprietățile lui și va apărea aici.
 	{names} and {last}	{names} și {last}
@@ -2726,6 +2762,11 @@ theme	Appearance	Aspect
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} se calculează înaintea câmpului {fields}, pe care îl citește.|{field} se calculează înaintea câmpurilor {fields}, pe care le citește.|{field} se calculează înaintea câmpurilor {fields}, pe care le citește.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	Încă {n} câmp se calculează prea devreme.|Încă {n} câmpuri se calculează prea devreme.|Încă {n} de câmpuri se calculează prea devreme.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} lipsește din ordinea salvată în PDF, deci alte aplicații de vizualizare PDF s-ar putea să nu-l calculeze.|{fields} lipsesc din ordinea salvată în PDF, deci alte aplicații de vizualizare PDF s-ar putea să nu le calculeze.|{fields} lipsesc din ordinea salvată în PDF, deci alte aplicații de vizualizare PDF s-ar putea să nu le calculeze.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} formulă citește un câmp care nu există în formular|{n} formule citesc câmpuri care nu există în formular|{n} de formule citesc câmpuri care nu există în formular
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} citește {fields}, care nu există în formular.|{field} citește {fields}, care nu există în formular.|{field} citește {fields}, care nu există în formular.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	Încă {n} formulă citește un câmp lipsă.|Încă {n} formule citesc câmpuri lipsă.|Încă {n} de formule citesc câmpuri lipsă.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} construiește unele nume de câmpuri în timpul rulării, deci aceste citiri nu sunt verificate.|{fields} construiesc unele nume de câmpuri în timpul rulării, deci aceste citiri nu sunt verificate.|{fields} construiesc unele nume de câmpuri în timpul rulării, deci aceste citiri nu sunt verificate.
+@plural	{fields} is missing|{fields} are missing	{fields} lipsește|{fields} lipsesc|{fields} lipsesc
 	Bulleted list	Listă cu marcatori
 	Numbered list	Listă numerotată
 	Alignment	Aliniere
@@ -2774,3 +2815,26 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Astăzi
+
+# AI-assisted additions for restoring the last view (#1767) (2026-10-22); not reviewed by a native speaker.
+	Restore the last view (page, zoom and page display) when a document is opened again	Restabilește ultima vizualizare (pagina, zoomul și afișarea paginilor) când un document este redeschis
+	Attach a file…	Atașare fișier…
+	Attach {name}	Atașare {name}
+	Attaching files is not available on the web yet	Atașarea fișierelor nu este încă disponibilă pe web
+	Delete attachment	Ștergere atașament
+	Delete attachment {key}	Ștergere atașament {key}
+@plural	{n} reply|{n} replies	{n} răspuns|{n} răspunsuri|{n} de răspunsuri
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Instrumente pentru pagini
+	Insert pages from a file after the selection…	Inserează pagini dintr-un fișier după selecție…
+	Rotate the selected pages counterclockwise	Rotește paginile selectate în sens antiorar
+	Rotate the selected pages clockwise	Rotește paginile selectate în sens orar
+	Extract the selected pages…	Extrage paginile selectate…
+	Delete the selected pages	Șterge paginile selectate
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Opțiuni pentru acest răspuns

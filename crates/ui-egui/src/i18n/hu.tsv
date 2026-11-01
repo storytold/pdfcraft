@@ -155,6 +155,15 @@
 	Available	Elérhető
 	Ready	Kész
 	Search tools and commands…	Eszközök és parancsok keresése…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Hozzáadott szöveg
+	Link URL	Hivatkozás URL-je
+	Search tools and commands	Eszközök és parancsok keresése
+	Text editing line	Szövegszerkesztő sor
+	Text to place	Elhelyezendő szöveg
+	Tooltip	Elemleírás
+	Words or phrases to redact	Kitakarni kívánt szavak vagy kifejezések
 	No matching tools	Nincs illeszkedő eszköz
 	Tool	Eszköz
 	Command	Parancs
@@ -503,6 +512,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Ezeket olvassa: {names}, amelyek visszaolvassák. Hurkot semmilyen sorrend nem javít meg: módosítsd az egyik képletet.
 	Not in order	Nincs a sorrendben
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Hiányzik a PDF-ben mentett számítási sorrendből: más PDF-megjelenítők talán nem számítják ki.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Ezt olvassa: {name}, amely nincs az űrlapon, így onnan nem kap értéket.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	A szkriptje olyan mezőket is olvas, amelyek nevét futás közben állítja össze, így ezek az olvasások nem ellenőrizhetők.
+	Missing field	Hiányzó mező
+	Unchecked reads	Ellenőrizetlen olvasások
+	{field} reads fields named as it runs	{field} futás közben elnevezett mezőket olvas
+	Some names are built as it runs	Néhány név futás közben áll össze
 	Back to Prepare a form	Vissza az Űrlap előkészítéséhez
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Ennek az űrlapnak még egyik mezője sem számítja ki az értékét. Adj egy mezőnek számítást a tulajdonságai Számítás lapján, és itt megjelenik.
 	{names} and {last}	{names} és {last}
@@ -559,6 +574,9 @@
 	Clean Up	Tisztítás
 	Color Images	Színes képek
 	Grayscale Images	Szürkeárnyalatos képek
+	Monochrome Images	Monokróm képek
+	CCITT Group 4	CCITT 4. csoport
+	JBIG2 (lossless)	JBIG2 (veszteségmentes)
 	Bicubic downsampling to	Kettős köbös újramintázás erre
 	for images above	az ennél nagyobb képeknél
 	Compression	Tömörítés
@@ -582,6 +600,7 @@
 	Discard private data of other applications	Más alkalmazások privát adatainak elvetése
 	Discard hidden text	Rejtett szöveg elvetése
 	Use Flate to encode streams that are not encoded	A kódolatlan adatfolyamok Flate kódolása
+	In streams that use LZW encoding, use Flate instead	Az LZW kódolású adatfolyamok Flate kódolása
 	Remove invalid links and bookmarks	Érvénytelen hivatkozások és könyvjelzők eltávolítása
 	Remove unreferenced named destinations	Hivatkozás nélküli elnevezett célok eltávolítása
 	Compress document structure (object streams)	Dokumentumszerkezet tömörítése (objektumfolyamok)
@@ -775,14 +794,9 @@
 	Copy Image in Original Format	Kép másolása eredeti formátumban
 	The image has been copied as a {ext} file	A kép {ext}-fájlként a vágólapra került
 	The page has changed; select the image again	Az oldal megváltozott; jelölje ki újra a képet
-	Check for updates	Frissítések keresése
 	No check has run yet.	Még nem futott ellenőrzés.
-	Checking for a newer version…	Újabb verzió keresése…
 	PdfCraft {v} is available.	Elérhető a PdfCraft {v}.
 	You have version {c}. Download the new version from its release page.	A jelenlegi verzió: {c}. Töltsd le az újat a kiadási oldaláról.
-	PdfCraft {c} is up to date.	A PdfCraft {c} naprakész.
-	Couldn't check for updates: {e}	A frissítések keresése nem sikerült: {e}
-	You have version {c}. All releases are listed at {page}.	A jelenlegi verzió: {c}. Minden kiadás itt található: {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	A GitHubtól kéri le a legújabb kiadást. Semmi sem töltődik le vagy települ automatikusan.
 	Download	Letöltés
 	Later	Később
@@ -827,6 +841,14 @@
 	Applies to 1 page	1 oldalra vonatkozik
 	Applies to {n} pages	{n} oldalra vonatkozik
 	Replaces the existing one on those pages.	Lecseréli a meglévőt ezeken az oldalakon.
+	Checking pages…	Oldalak ellenőrzése…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Ennek az oldalnak saját fehér kitöltése van, amely eltakarná a hátteret: {pages}. Csere
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Ezeknek az oldalaknak saját fehér kitöltése van, amely eltakarná a hátteret: {pages}. Csere
+	Removing the background puts the page's own backdrop back.	A háttér eltávolítása visszaállítja az oldal saját fehér kitöltését.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Egy kép fedi le ezt az oldalt: {pages} (szkennelt?), így ott nem látszik a háttér.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Képek fedik le ezeket az oldalakat: {pages} (szkenneltek?), így ott nem látszik a háttér.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Ez az oldal megváltozott a háttér hozzáadása után, ezért a saját fehér kitöltése kikapcsolva marad: {pages}. Fehér papíron ugyanúgy néz ki.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Ezek az oldalak megváltoztak a háttér hozzáadása után, ezért a saját fehér kitöltésük kikapcsolva marad: {pages}. Fehér papíron ugyanúgy néznek ki.
 	PDF or image	PDF vagy kép
 	No file chosen	Nincs fájl kiválasztva
 	Page number	Oldalszám
@@ -1961,6 +1983,10 @@
 	Perimeter	Kerület
 	Area	Terület
 	Drawing scale	Rajz méretaránya
+	Scale	Méretarány
+	Common scales	Gyakori méretarányok
+	Enter a scale such as 1:50.	Adjon meg egy méretarányt, például 1:50.
+	Applying a scale switches units to m / mm.	A méretarány alkalmazása m / mm mértékegységre vált.
 	Snapping	Illesztés
 	Export measurements	Mérések exportálása
 	Open a PDF to measure it.	Nyiss meg egy PDF-et a méréshez.
@@ -2170,6 +2196,7 @@ comment menu	Edit	Szerkesztés
 signature pad	Type	Gépelés
 action wizard	Start	Indítás
 	Reopen the files that were open when PdfCraft last closed	A PdfCraft legutóbbi bezárásakor megnyitott fájlok újranyitása
+	Restore the last view (page, zoom and page display) when a document is opened again	A legutóbbi nézet (oldal, nagyítás és oldalmegjelenítés) visszaállítása a dokumentum újbóli megnyitásakor
 	Clear Recent Files	Legutóbbi fájlok listájának törlése
 	Remove from Recent	Eltávolítás a legutóbbiak közül
 	Remove {name} from Recent	{name} eltávolítása a legutóbbiak közül
@@ -2318,6 +2345,8 @@ key	Space	Szóköz
 	Printer paper and scaling may differ. Check driver settings.	A nyomtató papírja és méretezése eltérhet. Ellenőrizze az illesztőprogram beállításait.
 	Drawing scale changes. Use Actual size for full-scale plans.	A rajz méretaránya változik. Méretarányos tervekhez használja a Tényleges méret beállítást.
 	Reload documents when their files change on disk	Dokumentumok újratöltése, ha a fájljuk megváltozik a lemezen
+	Don't show again	Ne jelenjen meg újra
+	Show a notice when a document is secured	Értesítés megjelenítése, ha egy dokumentum védett
 	Always use my default zoom and page layout	Mindig az alapértelmezett nagyításom és oldalelrendezésem használata
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Ez a fájl megváltozott a lemezen. Az Újratöltés az új változatot mutatja, és eldobja a nem mentett módosításokat; a Mentés erre a változatra cseréli le.
 	Reload	Újratöltés
@@ -2387,6 +2416,11 @@ animation effects	Off	Ki
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} előbb számítódik, mint {fields}, amelyet olvas.|{field} előbb számítódik, mint {fields}, amelyeket olvas.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	További {n} mező túl korán számítódik.|További {n} mező túl korán számítódik.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} hiányzik a PDF-ben mentett sorrendből, ezért más PDF-megjelenítők esetleg nem számítják ki.|{fields} hiányoznak a PDF-ben mentett sorrendből, ezért más PDF-megjelenítők esetleg nem számítják ki őket.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} képlet olyan mezőt olvas, amely nincs az űrlapon|{n} képlet olyan mezőket olvas, amelyek nincsenek az űrlapon
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} ezt olvassa: {fields}, amely nincs az űrlapon.|{field} ezeket olvassa: {fields}, amelyek nincsenek az űrlapon.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	További {n} képlet hiányzó mezőt olvas.|További {n} képlet hiányzó mezőket olvas.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} futás közben állít össze néhány mezőnevet, így ezek az olvasások nincsenek ellenőrizve.|{fields} futás közben állítanak össze néhány mezőnevet, így ezek az olvasások nincsenek ellenőrizve.
+@plural	{fields} is missing|{fields} are missing	{fields} hiányzik|{fields} hiányoznak
 	Scan	Beolvasás
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Írja alá a nevét egy fehér papírlapon, és fényképezze le erős, egyenletes fényben (vakuval). Válassza ki a fényképet, vagy húzza ide: a PdfCraft megkeresi az aláírást, és eltávolítja a papírt.
 	Choose photo…	Fénykép kiválasztása…
@@ -2480,6 +2514,19 @@ animation effects	Off	Ki
 	Make properties default	Tulajdonságok beállítása alapértelmezettként
 	Pages selected	Kijelölt oldalak
 	Page properties	Oldaltulajdonságok
+	Create & Edit	Létrehozás és szerkesztés
+	Review & Compare	Áttekintés és összehasonlítás
+	Forms & Signatures	Űrlapok és aláírások
+	Protect & Standardize	Védelem és szabványosítás
+	Customize & Automate	Testreszabás és automatizálás
+	No tools match your search.	Egy eszköz sem felel meg a keresésnek.
+	Expand all tools	Az összes eszköz kibontása
+	Collapse all tools	Az összes eszköz összecsukása
+	Attach a file…	Fájl csatolása…
+	Delete attachment	Melléklet törlése
+	Attaching files is not available on the web yet	Fájlok csatolása a weben még nem érhető el
+	Attach {name}	{name} csatolása
+	Delete attachment {key}	{key} melléklet törlése
 	Font	Betűtípus
 	Bulleted list	Felsorolás
 	Numbered list	Számozott lista
@@ -2514,3 +2561,20 @@ animation effects	Off	Ki
 	field names can't contain a period: {name}	a mezőnevek nem tartalmazhatnak pontot: {name}
 	two cells would both be named {name}	két cella neve is {name} lenne
 	a field named {name} already exists	már van {name} nevű mező
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Ma
+@plural	{n} reply|{n} replies	{n} válasz|{n} válasz
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Oldaleszközök
+	Insert pages from a file after the selection…	Oldalak beszúrása fájlból a kijelölés után…
+	Rotate the selected pages counterclockwise	A kijelölt oldalak forgatása az óramutató járásával ellentétesen
+	Rotate the selected pages clockwise	A kijelölt oldalak forgatása az óramutató járásával megegyezően
+	Extract the selected pages…	A kijelölt oldalak kibontása…
+	Delete the selected pages	A kijelölt oldalak törlése
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	A válasz beállításai
+	Export value	Exportérték
+	Show Page Edge Shadows	Oldalszéli árnyékok megjelenítése

@@ -22,6 +22,7 @@ thiserror = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 
 [dev-dependencies]
+pdfcraft-filters = { workspace = true }
 pdfcraft-testkit = { workspace = true }
 # Test fixtures: a DCTDecode image is built with the JPEG encoder.
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
