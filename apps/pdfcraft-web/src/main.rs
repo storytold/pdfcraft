@@ -70,6 +70,10 @@ fn main() {
                         app.host_save = Some(bridge.save_fn());
                         app.host_dirty = Some(bridge.dirty_fn());
                         bridge.post_ready();
+                    } else if query_param("host").as_deref() == Some("parent") {
+                        eframe::web_sys::console::warn_1(
+                            &"PdfCraft: ?host=parent needs a framing page on the same origin; saves download instead".into(),
+                        );
                     }
                     Ok(Box::new(app))
                 }),
@@ -130,7 +134,8 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 /// - `pdfcraft:dirty` (to the parent): `{ dirty }` whenever unsaved work appears or goes away.
 /// - `pdfcraft:failed` (to the parent): `{ error }` when the app couldn't start.
 ///
-/// Only the parent window on the app's own origin is heard or answered.
+/// Only the parent window on the app's own origin is heard or answered. With a parent on
+/// another origin there is no bridge: the app runs as if unframed and saves download.
 #[cfg(target_arch = "wasm32")]
 mod host {
     use eframe::wasm_bindgen::{JsCast, JsValue, closure::Closure};
@@ -143,7 +148,9 @@ mod host {
     }
 
     impl Bridge {
-        /// `None` when the page isn't framed (there is no parent to talk to).
+        /// `None` when the page isn't framed (there is no parent to talk to), or when the parent
+        /// is on another origin: messages only go to this origin, so the browser would drop
+        /// every save without an error while the document showed as saved (#2167).
         pub fn new() -> Option<Self> {
             let window = web_sys::window()?;
             let parent = window.parent().ok().flatten()?;
@@ -151,6 +158,10 @@ mod host {
                 return None;
             }
             let origin = window.location().origin().ok()?;
+            // Reading another origin's location throws, which is `None` too.
+            if parent.location().origin().ok()? != origin {
+                return None;
+            }
             Some(Self { window, parent, origin })
         }
 

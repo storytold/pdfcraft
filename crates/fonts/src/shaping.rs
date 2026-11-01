@@ -1,4 +1,4 @@
-//! Arabic and Thai text shaping with the matching craft-fonts face and bounded glyph outlines.
+//! Arabic, Hebrew and Thai text shaping with the matching craft-fonts face and bounded glyph outlines.
 
 use std::sync::OnceLock;
 
@@ -26,6 +26,7 @@ pub struct ShapedCluster {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ShapedScript {
     Arabic,
+    Hebrew,
     Thai,
 }
 
@@ -33,6 +34,7 @@ impl ShapedScript {
     pub fn font(self) -> Option<&'static crate::CraftFont> {
         match self {
             Self::Arabic => crate::document_arabic_font(),
+            Self::Hebrew => crate::document_hebrew_font(false),
             Self::Thai => crate::document_thai_font(),
         }
     }
@@ -40,9 +42,11 @@ impl ShapedScript {
 
 fn face(script: ShapedScript) -> Option<&'static (FontRef<'static>, ShaperData)> {
     static FACE: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
+    static HEBREW: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
     static THAI: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
     let cache = match script {
         ShapedScript::Arabic => &FACE,
+        ShapedScript::Hebrew => &HEBREW,
         ShapedScript::Thai => &THAI,
     };
     cache
@@ -66,6 +70,17 @@ pub fn shape_arabic(text: &str, rtl: bool) -> Result<Vec<ShapedCluster>, GlyphEr
     shape_script(text, rtl, ShapedScript::Arabic)
 }
 
+/// Whether the Hebrew document face has a glyph for `c` (false without the face).
+pub fn hebrew_has(c: char) -> bool {
+    face(ShapedScript::Hebrew).is_some_and(|(font, _)| font.charmap().map(c).is_some())
+}
+
+/// Shape one directional run of `text` with the Hebrew document face, clusters in drawing order.
+/// Points (niqqud) and cantillation marks stay in their letter's cluster, positioned by the face.
+pub fn shape_hebrew(text: &str, rtl: bool) -> Result<Vec<ShapedCluster>, GlyphError> {
+    shape_script(text, rtl, ShapedScript::Hebrew)
+}
+
 pub fn thai_has(c: char) -> bool {
     face(ShapedScript::Thai).is_some_and(|(font, _)| font.charmap().map(c).is_some())
 }
@@ -85,12 +100,13 @@ fn shape_script(text: &str, rtl: bool, kind: ShapedScript) -> Result<Vec<ShapedC
     buffer.set_direction(if rtl { Direction::RightToLeft } else { Direction::LeftToRight });
     buffer.set_script(match kind {
         ShapedScript::Arabic => script::ARABIC,
+        ShapedScript::Hebrew => script::HEBREW,
         ShapedScript::Thai => script::THAI,
     });
-    // Preserve the historical Arabic per-character mapping; Thai marks stay with their base.
+    // Preserve the historical Arabic per-character mapping; Hebrew and Thai marks stay with their base.
     buffer.set_cluster_level(match kind {
         ShapedScript::Arabic => BufferClusterLevel::Characters,
-        ShapedScript::Thai => BufferClusterLevel::MonotoneGraphemes,
+        ShapedScript::Hebrew | ShapedScript::Thai => BufferClusterLevel::MonotoneGraphemes,
     });
     let shaped = shaper.shape(buffer, ShapeOptions::new());
     // Clusters are byte offsets into `text`; a cluster shows the characters up to the next one.
@@ -248,5 +264,38 @@ mod thai_tests {
         assert!(stacked[0].glyphs.iter().any(|(_, p)| p[0] != 0.0 || p[1] != 0.0));
         assert_eq!(shape_thai("日"), Err(GlyphError::Missing));
         assert_eq!(shaped_glyph(ShapedScript::Thai, u32::MAX).map(|_| ()), Err(GlyphError::Missing));
+    }
+}
+
+#[cfg(test)]
+mod hebrew_tests {
+    use super::*;
+
+    #[test]
+    fn hebrew_runs_are_drawn_from_their_last_letter_with_points_on_their_letter() {
+        if crate::document_hebrew_font(false).is_none() {
+            eprintln!("skipping the Hebrew shaping checks: built without a craft-fonts Hebr face (set CRAFT_FONTS_DIR)");
+            assert_eq!(shape_hebrew("ש", true), Err(GlyphError::NoFont));
+            assert!(!hebrew_has('ש'));
+            return;
+        }
+        let g = shape_hebrew("שלום", true).unwrap();
+        assert!(g.iter().all(|c| c.script == ShapedScript::Hebrew && c.advance > 0.0 && !c.glyphs.is_empty()), "{g:?}");
+        let drawn: String = g.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(drawn.chars().rev().collect::<String>(), "שלום");
+        // A point (qamats) is one cluster with its letter, so copy and search get it once.
+        let pointed = shape_hebrew("שָׁ", true).unwrap();
+        assert_eq!(pointed.len(), 1, "{pointed:?}");
+        assert_eq!(pointed[0].text, "שָׁ");
+        assert!(pointed[0].glyphs.len() >= 2);
+        for c in shape_hebrew("שָׁלוֹם 123", true).unwrap() {
+            for (id, pos) in c.glyphs {
+                assert!(pos.iter().all(|v| v.is_finite()));
+                shaped_glyph(c.script, id).unwrap();
+            }
+        }
+        assert!(hebrew_has('א') && hebrew_has('\u{05B8}') && !hebrew_has('日'));
+        assert_eq!(shape_hebrew("日", true), Err(GlyphError::Missing));
+        assert!(shape_hebrew("", true).unwrap().is_empty());
     }
 }

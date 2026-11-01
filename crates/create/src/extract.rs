@@ -1,7 +1,7 @@
 //! Export a PDF ▸ Image ▸ Export all images, and Edit ▸ Save image as: the images that pages
 //! use, as files. JPEG images are written unchanged; other images, and JPEG images with
 //! transparency or with CMYK samples a viewer would read inverted, are decoded and written as PNG with their soft mask, stencil mask or colour
-//! key as alpha. Images PdfCraft can't decode yet (JPEG 2000, JBIG2, CCITT, separations) are
+//! key as alpha. Images PdfCraft can't decode yet (JPEG 2000, separations) are
 //! reported, never silently left out.
 
 use std::collections::HashSet;
@@ -100,6 +100,116 @@ fn filters(s: &Stream) -> Vec<Vec<u8>> {
     }
 }
 
+/// The samples of image `s`, decoded: through its filters, with a `/DecodeParms` dictionary given
+/// by reference, or as an array's entry, or with numbers inside by reference, read too (a predictor
+/// given so would otherwise be lost), or, for a JBIG2 image
+/// (its only filter), through a JBIG2 decoder with its `/JBIG2Globals`, as rows of one-bit samples
+/// each starting on a byte, with black as 0, as `JBIG2Decode` gives them (ISO 32000-2 §7.4.7).
+fn decoded(doc: &Document, s: &Stream) -> Result<Vec<u8>, String> {
+    match filters(s).as_slice() {
+        [f] if f == b"JBIG2Decode" => jbig2(doc, s),
+        _ => doc.decoded_image(s).map_err(|e| e.to_string()),
+    }
+}
+
+/// The `/DecodeParms` of a stream with one filter: a dictionary, or the one in an array (7.4.2).
+fn decode_parms(doc: &Document, s: &Stream) -> Dict {
+    let Some(p) = s.dict.get(b"DecodeParms").map(|p| doc.resolve(p)) else { return Dict::default() };
+    let p = match &*p {
+        Object::Array(a) => match a.first() {
+            Some(first) => doc.resolve(first),
+            None => return Dict::default(),
+        },
+        _ => p,
+    };
+    p.as_dict().cloned().unwrap_or_default()
+}
+
+/// The most an image's `/JBIG2Globals` decode to: the symbol and pattern dictionaries an encoder
+/// shares between pages, themselves coded, so far less than any stream may decode to
+/// ([`pdfcraft_cos::MAX_DECODED`], 1 GiB). Globals past it refuse the image.
+const MAX_GLOBALS: usize = 32 << 20;
+
+/// [`decoded`] for a JBIG2 image. Its JBIG2 page has to be the image's width, which the caller
+/// checked against the export's size limit, and within that limit itself: the decoder decodes the
+/// whole page, rows past the image's height too, so a small `/Height` over a far taller page
+/// would cost more than the limit allows. Rows past the image's height are dropped, and too few
+/// rows are refused by the caller. Globals that can't be read refuse the image, rather than
+/// decoding it without them. They are decoded before the page's size is known, so the page's
+/// limit can't bound them; they have [`MAX_GLOBALS`] of their own.
+fn jbig2(doc: &Document, s: &Stream) -> Result<Vec<u8>, String> {
+    let globals = match decode_parms(doc, s).get(b"JBIG2Globals").map(|g| doc.resolve(g)).as_deref() {
+        Some(Object::Stream(g)) => {
+            Some(doc.with_direct_parms(g).decoded_within(MAX_GLOBALS).map_err(|e| format!("the JBIG2 globals can't be read: {e}"))?)
+        }
+        _ => None,
+    };
+    let image = hayro_jbig2::Image::new_embedded(&s.raw, globals.as_deref()).map_err(|e| format!("the JBIG2 image can't be read: {e}"))?;
+    if s.dict.int(b"Width") != Some(i64::from(image.width())) {
+        return Err("the JBIG2 image's width isn't the image's width".into());
+    }
+    if u64::from(image.width()).saturating_mul(u64::from(image.height())) > MAX_PIXELS {
+        return Err(format!("the JBIG2 page, {} × {}, is too large to export", image.width(), image.height()));
+    }
+    let height = s.dict.int(b"Height").and_then(|h| usize::try_from(h).ok()).unwrap_or(0);
+    let mut rows = Rows::new(image.width() as usize, height);
+    image.decode(&mut rows).map_err(|e| format!("the JBIG2 image can't be decoded: {e}"))?;
+    Ok(rows.out)
+}
+
+/// Rows of one-bit samples, each starting on a byte, filled from a decoder's pixels: `columns`
+/// a row and at most `rows` rows. Pixels past a row's end and rows past the last are dropped, so
+/// the output is bounded by the size the caller gave.
+struct Rows {
+    out: Vec<u8>,
+    row: Vec<u8>,
+    x: usize,
+    columns: usize,
+    rows: usize,
+    done: usize,
+}
+
+impl Rows {
+    fn new(columns: usize, rows: usize) -> Self {
+        Rows { out: Vec::new(), row: vec![0; columns.div_ceil(8)], x: 0, columns, rows, done: 0 }
+    }
+
+    /// `count` pixels, as 1 samples when `one`.
+    fn push(&mut self, one: bool, count: usize) {
+        let end = self.x.saturating_add(count);
+        if one {
+            for x in self.x..end.min(self.columns) {
+                if let Some(b) = self.row.get_mut(x / 8) {
+                    *b |= 0x80 >> (x % 8);
+                }
+            }
+        }
+        self.x = end;
+    }
+
+    fn end_row(&mut self) {
+        if self.done < self.rows {
+            self.out.extend_from_slice(&self.row);
+            self.done += 1;
+        }
+        self.row.fill(0);
+        self.x = 0;
+    }
+}
+
+/// JBIG2 codes black as 1, which `JBIG2Decode` gives as 0.
+impl hayro_jbig2::Decoder for Rows {
+    fn push_pixel(&mut self, black: bool) {
+        self.push(!black, 1);
+    }
+    fn push_pixel_chunk(&mut self, black: bool, chunks: u32) {
+        self.push(!black, (chunks as usize).saturating_mul(8));
+    }
+    fn next_line(&mut self) {
+        self.end_row();
+    }
+}
+
 /// The file for one image: its JPEG data as is, or a PNG. An image with transparency (a soft
 /// mask, a stencil `/Mask` or a colour-key `/Mask`) is always a PNG with that transparency as
 /// alpha, JPEG images included, so cut-out images keep their transparent background.
@@ -108,8 +218,7 @@ fn image(doc: &Document, s: &Stream) -> Result<(&'static str, Vec<u8>), String> 
     let jpeg = matches!(f.last().map(Vec::as_slice), Some(b"DCTDecode" | b"DCT")) && f.len() == 1;
     match f.last().map(Vec::as_slice) {
         Some(b"JPXDecode") => return Err("JPEG 2000 images can't be exported yet".into()),
-        Some(b"JBIG2Decode") => return Err("JBIG2 images can't be exported yet".into()),
-        Some(b"CCITTFaxDecode" | b"CCF") => return Err("CCITT fax images can't be exported yet".into()),
+        Some(b"JBIG2Decode") if f.len() > 1 => return Err("JBIG2 images inside other filters can't be exported yet".into()),
         Some(b"DCTDecode" | b"DCT") if !jpeg => return Err("JPEG images inside other filters can't be exported yet".into()),
         _ => {}
     }
@@ -126,13 +235,13 @@ fn image(doc: &Document, s: &Stream) -> Result<(&'static str, Vec<u8>), String> 
     // A stencil mask (`ImageMask true`) has no /SMask or /Mask of its own (8.9.6.2).
     let mut alpha = if mask { None } else { soft_mask(doc, s, w, h).or_else(|| stencil_mask(doc, s, w, h)) };
     let key = if mask { None } else { colour_key(doc, s) };
-    // Decode arrays: only inversion ([1 0] per component) is honoured, the common case.
-    let inverted = s
-        .dict
-        .get(b"Decode")
-        .map(|d| doc.resolve(d))
-        .and_then(|d| d.as_array().map(|a| a.first().and_then(Object::as_f64) > a.get(1).and_then(Object::as_f64)))
-        .unwrap_or(false);
+    // Keep the existing JPEG and stencil-mask Decode handling separate from lossless colour images.
+    let inverted = (jpeg || mask)
+        && s.dict
+            .get(b"Decode")
+            .map(|d| doc.resolve(d))
+            .and_then(|d| d.as_array().map(|a| a.first().and_then(Object::as_f64) > a.get(1).and_then(Object::as_f64)))
+            .unwrap_or(false);
     // In a PDF a CMYK JPEG's samples are ink amounts unless /Decode inverts them, while image
     // viewers read a CMYK JPEG file as inverted (Adobe's convention): as is, it would show as
     // a negative.
@@ -148,7 +257,7 @@ fn image(doc: &Document, s: &Stream) -> Result<(&'static str, Vec<u8>), String> 
         space = decoded;
         (samples, 8)
     } else {
-        let data = s.decoded().map_err(|e| e.to_string())?;
+        let data = decoded(doc, s)?;
         let bpc = if mask { 1 } else { s.dict.int(b"BitsPerComponent").unwrap_or(8) };
         let bpc = match bpc {
             1 => 1,
@@ -161,6 +270,7 @@ fn image(doc: &Document, s: &Stream) -> Result<(&'static str, Vec<u8>), String> 
         (unpack(&data, w, h, space.components(), bpc).ok_or("the image data is shorter than its size says")?, bpc)
     };
     let n = space.components();
+    let decode = if jpeg || mask { None } else { decode(doc, s, n) };
     if alpha.is_none() {
         alpha = key.and_then(|k| keyed_alpha(&samples, n, bpc, &k));
     }
@@ -168,10 +278,21 @@ fn image(doc: &Document, s: &Stream) -> Result<(&'static str, Vec<u8>), String> 
         return as_is();
     }
     let invert = inverted ^ mask; // a stencil mask paints its 0 samples
+    // `unpack` keeps only the high byte at 16 bits, so Decode uses an effective maximum of 255 too.
     let max = (1u32 << bpc.min(8)) - 1;
     let mut rgb = Vec::with_capacity(w * h * 3);
     for px in samples.chunks_exact(n) {
+        let decoded = |i: usize| {
+            decode.as_ref().and_then(|pairs| pairs.get(i)).map(|&[lo, hi]| {
+                let t = f64::from(px.get(i).copied().unwrap_or(0)) / f64::from(max);
+                // Avoid overflowing hi - lo for finite endpoints with opposite signs.
+                (1.0 - t) * lo + t * hi
+            })
+        };
         let v = |i: usize| {
+            if let Some(value) = decoded(i) {
+                return (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+            }
             let x = (px.get(i).copied().unwrap_or(0) as u32 * 255 / max) as u8;
             if invert { 255 - x } else { x }
         };
@@ -179,8 +300,13 @@ fn image(doc: &Document, s: &Stream) -> Result<(&'static str, Vec<u8>), String> 
             Space::Gray => rgb.extend_from_slice(&[v(0); 3]),
             Space::Rgb => rgb.extend_from_slice(&[v(0), v(1), v(2)]),
             Space::Cmyk => rgb.extend_from_slice(&cmyk(v(0), v(1), v(2), v(3))),
-            Space::Indexed(base, table) => {
-                let i = px.first().copied().unwrap_or(0) as usize;
+            Space::Indexed(base, hival, table) => {
+                // Explicit Decode maps into index units, rounded then clipped (8.6.6.3).
+                // Without Decode, retain raw indices rather than normalizing to hival.
+                let i = match decoded(0) {
+                    Some(value) => value.round().clamp(0.0, f64::from(*hival)) as usize,
+                    None => px.first().copied().unwrap_or(0).min(*hival) as usize,
+                };
                 let k = base.components();
                 let e = table.get(i * k..i * k + k).unwrap_or(&[0, 0, 0, 0][..k]);
                 rgb.extend_from_slice(&match **base {
@@ -195,6 +321,24 @@ fn image(doc: &Document, s: &Stream) -> Result<(&'static str, Vec<u8>), String> 
         unpremultiply(&mut rgb, a, matte);
     }
     png(w as u32, h as u32, &rgb, alpha.as_deref()).map(|p| ("png", p))
+}
+
+/// The explicit Decode intervals for a lossless colour image (8.9.5.2, Table 90).
+///
+/// A malformed array (not an array, the wrong length, a non-number or non-finite entry) gives
+/// the default mapping, so the image still exports.
+fn decode(doc: &Document, s: &Stream, n: usize) -> Option<Vec<[f64; 2]>> {
+    let value = doc.resolve(s.dict.get(b"Decode")?);
+    let values = value.as_array()?;
+    if Some(values.len()) != n.checked_mul(2) {
+        return None;
+    }
+    let endpoint = |value: &Object| doc.resolve(value).as_f64().filter(|v| v.is_finite());
+    let mut pairs = Vec::with_capacity(n);
+    for [lo, hi] in values.as_chunks::<2>().0 {
+        pairs.push([endpoint(lo)?, endpoint(hi)?]);
+    }
+    Some(pairs)
 }
 
 /// Width and height as sizes, when both are positive and the image is at most `MAX_PIXELS`.
@@ -310,8 +454,8 @@ enum Space {
     Gray,
     Rgb,
     Cmyk,
-    /// Base space and lookup table (one byte per base component).
-    Indexed(Box<Space>, Vec<u8>),
+    /// Base space, highest valid palette index, and lookup table.
+    Indexed(Box<Space>, u8, Vec<u8>),
 }
 
 impl Space {
@@ -323,6 +467,9 @@ impl Space {
         }
     }
 }
+
+/// A lookup table holds at most 256 entries of 4 bytes; decoding stops well past that.
+const MAX_LOOKUP: usize = 64 << 10;
 
 fn space(doc: &Document, cs: Option<&Object>) -> Result<Space, String> {
     let Some(cs) = cs else { return Err("the image has no colour space".into()) };
@@ -348,16 +495,31 @@ fn space(doc: &Document, cs: Option<&Object>) -> Result<Space, String> {
             Some(b"CalGray") => Ok(Space::Gray),
             Some(b"CalRGB") => Ok(Space::Rgb),
             Some(b"Indexed" | b"I") => {
-                let base = space(doc, a.get(1))?;
-                if matches!(base, Space::Indexed(..)) {
+                // Checked before recursing: Indexed is the only space that recurses, so refusing
+                // an Indexed base here also ends a cyclic base reference.
+                let nested = match a.get(1).map(|b| doc.resolve(b)).as_deref() {
+                    Some(Object::Array(b)) => matches!(b.first().and_then(Object::as_name), Some(b"Indexed" | b"I")),
+                    Some(Object::Name(n)) => matches!(n.as_slice(), b"Indexed" | b"I"),
+                    _ => false,
+                };
+                if nested {
                     return Err("nested indexed colour spaces aren't valid".into());
                 }
+                let base = space(doc, a.get(1))?;
+                let hival = match a.get(2).map(|value| doc.resolve(value)).as_deref() {
+                    Some(Object::Int(value)) if (0..=255).contains(value) => *value as u8,
+                    _ => return Err("an indexed colour space with an invalid hival".into()),
+                };
                 let table = match a.get(3).map(|t| doc.resolve(t)).as_deref() {
                     Some(Object::String(s)) => s.bytes.clone(),
-                    Some(Object::Stream(t)) => t.decoded().map_err(|e| e.to_string())?,
+                    // Through its parameters given by reference too, as the image's samples.
+                    Some(Object::Stream(t)) => doc
+                        .with_direct_parms(t)
+                        .decoded_within(MAX_LOOKUP)
+                        .map_err(|_| "an indexed colour space with an oversized or damaged lookup table".to_string())?,
                     _ => return Err("an indexed colour space without a lookup table".into()),
                 };
-                Ok(Space::Indexed(Box::new(base), table))
+                Ok(Space::Indexed(Box::new(base), hival, table))
             }
             Some(other) => unsupported(other),
             None => Err("a damaged colour space".into()),
@@ -414,8 +576,8 @@ fn stencil_mask(doc: &Document, s: &Stream, w: usize, h: usize) -> Option<Vec<u8
     Some(gray_plane(doc, m, w, h)?.into_iter().map(|v| 255 - v).collect())
 }
 
-/// A one-component mask image as 8-bit values (its `/Decode` inversion applied), scaled to
-/// `w` × `h`. `None` when it can't be decoded (JPEG 2000, JBIG2 and CCITT masks).
+/// A one-component mask image as 8-bit values (its `/Decode` interval applied), scaled to
+/// `w` × `h`. `None` when it can't be decoded (JPEG 2000 masks).
 fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize) -> Option<Vec<u8>> {
     let (mw, mh) = size(m.dict.int(b"Width")?, m.dict.int(b"Height")?)?;
     let stencil = m.dict.get(b"ImageMask").is_some_and(|v| matches!(&*doc.resolve(v), Object::Bool(true)));
@@ -425,7 +587,7 @@ fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize) -> Option<Vec<u8>>
             let img = image::load_from_memory_with_format(&m.raw, image::ImageFormat::Jpeg).ok()?.into_luma8();
             (img.width() as usize == mw && img.height() as usize == mh).then(|| img.into_raw())?
         }
-        Some(b"DCTDecode" | b"DCT" | b"JPXDecode" | b"JBIG2Decode" | b"CCITTFaxDecode" | b"CCF") => return None,
+        Some(b"DCTDecode" | b"DCT" | b"JPXDecode") => return None,
         _ => {
             let bpc = if stencil { 1 } else { m.dict.int(b"BitsPerComponent").unwrap_or(8) };
             let bpc = match bpc {
@@ -437,17 +599,14 @@ fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize) -> Option<Vec<u8>>
                 _ => return None,
             };
             let max = (1u32 << bpc.min(8)) - 1;
-            unpack(&m.decoded().ok()?, mw, mh, 1, bpc)?.into_iter().map(|v| (v as u32 * 255 / max) as u8).collect()
+            unpack(&decoded(doc, m).ok()?, mw, mh, 1, bpc)?.into_iter().map(|v| (v as u32 * 255 / max) as u8).collect()
         }
     };
-    let invert = m
-        .dict
-        .get(b"Decode")
-        .map(|d| doc.resolve(d))
-        .and_then(|d| d.as_array().map(|a| a.first().and_then(Object::as_f64) > a.get(1).and_then(Object::as_f64)))
-        .unwrap_or(false);
-    if invert {
-        px.iter_mut().for_each(|v| *v = 255 - *v);
+    if let Some([lo, hi]) = decode(doc, m, 1).and_then(|pairs| pairs.first().copied()) {
+        for value in &mut px {
+            let t = f64::from(*value) / 255.0;
+            *value = (((1.0 - t) * lo + t * hi).clamp(0.0, 1.0) * 255.0).round() as u8;
+        }
     }
     if (mw, mh) == (w, h) {
         return Some(px);
