@@ -9932,6 +9932,57 @@ fn text_paragraphs_report_clipping_eligibility_without_filtering() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// #4806: a real dense page exhausts the production budget without filtering its text.
+#[test]
+fn text_paragraphs_keep_dense_page_text_when_clipping_budget_is_exhausted() {
+    let dir = workdir("paragraph-clipping-budget");
+    let mut body = String::new();
+    // Overlapping, differently worded masks cannot be pruned by bounds or mistaken for
+    // copies of the ordinary text. Do not lower the production budget in this test.
+    for (mode, prefix) in [(7, "MASK"), (0, "INK")] {
+        for index in 0..512 {
+            body.push_str(&format!("q BT {mode} Tr /F1 24 Tf 40 500 Td ({prefix}{index:04}) Tj ET Q\n"));
+        }
+    }
+    std::fs::write(dir.join("dense.pdf"), win_ansi_paragraph_pdf(&body)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"dense.pdf"}))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "doc_info", json!({"doc":doc}));
+    let bytes = a.session().save_bytes(pdfcraft_engine::DocId(doc)).unwrap();
+    let listed = ok(&mut a, "text_paragraphs", json!({"doc":doc,"page":1}));
+    let paragraphs = listed["paragraphs"].as_array().unwrap();
+    assert_eq!(listed["count"], 1024);
+    assert_eq!(paragraphs.len(), 1024, "no paragraph is filtered by the budget");
+    let mut texts = std::collections::BTreeSet::new();
+    let mut limited = 0;
+    let mut eligible = 0;
+    for (index, paragraph) in paragraphs.iter().enumerate() {
+        assert_eq!(paragraph["paragraph"], index + 1, "paragraph numbers stay contiguous");
+        let text = paragraph["text"].as_str().unwrap();
+        texts.insert(text.to_owned());
+        if text.starts_with("MASK") {
+            assert_eq!(paragraph["editable"], false);
+            assert!(paragraph["non_editable_reason"].as_str().unwrap().contains("clipping path"));
+        } else if paragraph["editable"] == true {
+            eligible += 1;
+            assert_eq!(paragraph["non_editable_reason"], Value::Null);
+        } else {
+            limited += 1;
+            assert_eq!(paragraph["editable"], false);
+            assert!(paragraph["non_editable_reason"].as_str().unwrap().contains("clipping comparison limit exceeded"));
+        }
+    }
+    for index in 0..512 {
+        assert!(texts.contains(&format!("MASK{index:04}")));
+        assert!(texts.contains(&format!("INK{index:04}")));
+    }
+    assert!(eligible > 0 && limited > 0, "the real page budget must be reached: eligible={eligible}, limited={limited}");
+    assert_eq!(ok(&mut a, "text_paragraphs", json!({"doc":doc,"page":1})), listed, "repeat listing is stable");
+    assert_eq!(ok(&mut a, "doc_info", json!({"doc":doc})), before);
+    assert_eq!(a.session().save_bytes(pdfcraft_engine::DocId(doc)).unwrap(), bytes, "listing never mutates the document");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// #4806: ActualText's logical replacement must retain clipping from every physical run.
 #[test]
 fn actualtext_clipping_state_reaches_listings_and_refuses_mutations() {
