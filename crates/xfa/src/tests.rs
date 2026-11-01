@@ -2728,9 +2728,11 @@ fn the_form_packet_restores_the_presence_and_access_the_form_was_saved_with() {
 }
 
 /// A subform without a height, flowed or positioned, is as tall as what it holds, whatever its
-/// `minH`: readers don't stretch it. Four public immigration forms end their first page with
-/// a positioned section at `minH="58.274mm"` holding about 80pt, then an office-use box; read
-/// as 165pt, the section pushed the box onto a page of its own.
+/// `minH`. XFA 3.3 p. 847 makes `minH` the minimum of a growable subform; this follows Adobe
+/// Acrobat instead. IRCC's IMM 5257 (04-2022, visitor visa) ends its first page with section 10
+/// (`MaritalStatus`), a positioned subform at `minH="58.274mm"` holding about 80pt, then an
+/// office-use box: Acrobat draws the section as tall as its fields, the box after it on page 1
+/// (5 pages); stretched to 165pt, the section pushed the box onto a page of its own.
 #[test]
 fn a_subform_is_as_tall_as_its_content_whatever_its_minimum_height() {
     // A bar with a stale 3in `minH` holds one 0.2in line; the row after it follows directly.
@@ -2750,8 +2752,9 @@ fn a_subform_is_as_tall_as_its_content_whatever_its_minimum_height() {
 }
 
 /// The cases around a positioned subform's `minH`: a `minH` below the content, content taller
-/// than `minH`, a fixed `h`, and hidden children (which take no room). A table row, which no
-/// form we test gives a `minH` without an `h`, keeps its `minH` as XFA 3.3 p. 719 says.
+/// than `minH`, a `minH` above the content, a fixed `h` (alone and with a `minH` below it), and
+/// hidden children (which take no room). A table row, which no form we test gives a `minH`
+/// without an `h`, keeps its `minH` as XFA 3.3 p. 847 (subform, `minH`) says.
 #[test]
 fn a_positioned_subform_takes_its_content_height_and_a_row_keeps_its_minimum() {
     // The field after a positioned 7.5in-wide bar starts where the bar ends.
@@ -2769,9 +2772,15 @@ fn a_positioned_subform_takes_its_content_height_and_a_row_keeps_its_minimum() {
     assert!((after(r#"minH="0.1in""#, &line("0.2in")) - bare).abs() < 0.01);
     assert!((after(r#"minH="0.1in""#, &line("1in")) - after("", &line("1in"))).abs() < 0.01);
     assert!(after("", &line("1in")) - bare > 0.7 * inch, "taller content pushes the field down");
+    // A `minH` above the content: still the content's height, not the 3in.
+    let above = after(r#"minH="3in""#, &line("0.2in"));
+    assert!((above - bare).abs() < 0.01, "{above} against {bare}");
+    assert!((after(r#"minH="3in""#, &line("1in")) - after("", &line("1in"))).abs() < 0.01);
     // A fixed `h` is the height, whatever the content.
     assert!((after(r#"h="2in""#, &line("0.2in")) - after(r#"h="2in""#, &line("1in"))).abs() < 0.01);
     assert!(after(r#"h="2in""#, &line("0.2in")) - bare > 1.7 * inch, "h=2in, not the 0.2in content");
+    let fixed = after(r#"h="2in" minH="1in""#, &line("0.2in"));
+    assert!((fixed - after(r#"h="2in""#, &line("0.2in"))).abs() < 0.01, "a minH below h changes nothing: {fixed}");
     // A hidden child takes no room.
     let hidden = format!(r#"{}<draw w="7.5in" h="2in" presence="hidden"><value><text>Hidden</text></value></draw>"#, line("0.2in"));
     assert!((after(r#"minH="3in""#, &hidden) - bare).abs() < 0.01, "{} against {bare}", after(r#"minH="3in""#, &hidden));
