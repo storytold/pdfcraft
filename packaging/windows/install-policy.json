@@ -1,0 +1,329 @@
+{
+  "id": "pdfcraft",
+  "name": "PdfCraft",
+  "upgradeCode": "EA00C367-7270-4C50-9D8B-A7A5C88AD27F",
+  "sources": [
+    "pdfcraft.wxs",
+    "installer-ui.wxs"
+  ],
+  "icon": "assets/app-icon/pdfcraft.ico",
+  "localization": [],
+  "extensions": [],
+  "payloads": [
+    "LICENSE-APACHE",
+    "LICENSE-MIT",
+    "LICENSE-document.txt",
+    "NOTICE",
+    "pdfcraft-cli.exe",
+    "pdfcraft.exe"
+  ],
+  "registry": [
+    [
+      "-1",
+      "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\pdfcraft.exe",
+      "",
+      "[#PdfcraftExe]"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\PdfCraft.Document",
+      "",
+      "PDF Document"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\PdfCraft.Document\\DefaultIcon",
+      "",
+      "\"[#PdfcraftExe]\",-2"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\PdfCraft.Document\\shell\\open\\command",
+      "",
+      "\"[#PdfcraftExe]\" \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\PdfCraft.Document",
+      "TypeOverlay",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.pdf\\OpenWithProgids",
+      "PdfCraft.Document",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\Applications\\pdfcraft.exe",
+      "FriendlyAppName",
+      "PdfCraft"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\Applications\\pdfcraft.exe\\DefaultIcon",
+      "",
+      "\"[#PdfcraftExe]\",-2"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\Applications\\pdfcraft.exe\\SupportedTypes",
+      ".pdf",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\Applications\\pdfcraft.exe\\shell\\open\\command",
+      "",
+      "\"[#PdfcraftExe]\" \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\PdfCraft\\Capabilities",
+      "ApplicationName",
+      "PdfCraft"
+    ],
+    [
+      "-1",
+      "Software\\PdfCraft\\Capabilities",
+      "ApplicationDescription",
+      "Open-source PDF workbench"
+    ],
+    [
+      "-1",
+      "Software\\PdfCraft\\Capabilities",
+      "ApplicationIcon",
+      "[#PdfcraftExe],0"
+    ],
+    [
+      "-1",
+      "Software\\PdfCraft\\Capabilities\\FileAssociations",
+      ".pdf",
+      "PdfCraft.Document"
+    ],
+    [
+      "-1",
+      "Software\\RegisteredApplications",
+      "PdfCraft",
+      "Software\\PdfCraft\\Capabilities"
+    ],
+    [
+      "-1",
+      "Software\\PdfCraft\\Shortcuts",
+      "StartMenu",
+      "#1"
+    ],
+    [
+      "-1",
+      "Software\\PdfCraft\\Shortcuts",
+      "Desktop",
+      "#1"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.pdf\\shell\\PdfCraft.Edit",
+      "",
+      "Edit with PdfCraft"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.pdf\\shell\\PdfCraft.Edit",
+      "Icon",
+      "\"[#PdfcraftExe]\",0"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.pdf\\shell\\PdfCraft.Edit",
+      "MultiSelectModel",
+      "Document"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.pdf\\shell\\PdfCraft.Edit\\command",
+      "",
+      "\"[#PdfcraftExe]\" \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.png\\shell\\PdfCraft.CreatePdf",
+      "",
+      "Create PDF with PdfCraft\u2026"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.png\\shell\\PdfCraft.CreatePdf",
+      "MultiSelectModel",
+      "Single"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.png\\shell\\PdfCraft.CreatePdf\\command",
+      "",
+      "\"[#PdfcraftExe]\" --create-images \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.jpg\\shell\\PdfCraft.CreatePdf",
+      "",
+      "Create PDF with PdfCraft\u2026"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.jpg\\shell\\PdfCraft.CreatePdf",
+      "MultiSelectModel",
+      "Single"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.jpg\\shell\\PdfCraft.CreatePdf\\command",
+      "",
+      "\"[#PdfcraftExe]\" --create-images \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.jpeg\\shell\\PdfCraft.CreatePdf",
+      "",
+      "Create PDF with PdfCraft\u2026"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.jpeg\\shell\\PdfCraft.CreatePdf",
+      "MultiSelectModel",
+      "Single"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.jpeg\\shell\\PdfCraft.CreatePdf\\command",
+      "",
+      "\"[#PdfcraftExe]\" --create-images \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.tif\\shell\\PdfCraft.CreatePdf",
+      "",
+      "Create PDF with PdfCraft\u2026"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.tif\\shell\\PdfCraft.CreatePdf",
+      "MultiSelectModel",
+      "Single"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.tif\\shell\\PdfCraft.CreatePdf\\command",
+      "",
+      "\"[#PdfcraftExe]\" --create-images \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.tiff\\shell\\PdfCraft.CreatePdf",
+      "",
+      "Create PDF with PdfCraft\u2026"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.tiff\\shell\\PdfCraft.CreatePdf",
+      "MultiSelectModel",
+      "Single"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.tiff\\shell\\PdfCraft.CreatePdf\\command",
+      "",
+      "\"[#PdfcraftExe]\" --create-images \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.gif\\shell\\PdfCraft.CreatePdf",
+      "",
+      "Create PDF with PdfCraft\u2026"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.gif\\shell\\PdfCraft.CreatePdf",
+      "MultiSelectModel",
+      "Single"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.gif\\shell\\PdfCraft.CreatePdf\\command",
+      "",
+      "\"[#PdfcraftExe]\" --create-images \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.bmp\\shell\\PdfCraft.CreatePdf",
+      "",
+      "Create PDF with PdfCraft\u2026"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.bmp\\shell\\PdfCraft.CreatePdf",
+      "MultiSelectModel",
+      "Single"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.bmp\\shell\\PdfCraft.CreatePdf\\command",
+      "",
+      "\"[#PdfcraftExe]\" --create-images \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.jp2\\shell\\PdfCraft.CreatePdf",
+      "",
+      "Create PDF with PdfCraft\u2026"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.jp2\\shell\\PdfCraft.CreatePdf",
+      "MultiSelectModel",
+      "Single"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.jp2\\shell\\PdfCraft.CreatePdf\\command",
+      "",
+      "\"[#PdfcraftExe]\" --create-images \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.j2k\\shell\\PdfCraft.CreatePdf",
+      "",
+      "Create PDF with PdfCraft\u2026"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.j2k\\shell\\PdfCraft.CreatePdf",
+      "MultiSelectModel",
+      "Single"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.j2k\\shell\\PdfCraft.CreatePdf\\command",
+      "",
+      "\"[#PdfcraftExe]\" --create-images \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.jpx\\shell\\PdfCraft.CreatePdf",
+      "",
+      "Create PDF with PdfCraft\u2026"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.jpx\\shell\\PdfCraft.CreatePdf",
+      "MultiSelectModel",
+      "Single"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.jpx\\shell\\PdfCraft.CreatePdf\\command",
+      "",
+      "\"[#PdfcraftExe]\" --create-images \"%1\""
+    ]
+  ],
+  "mode": "dualScope"
+}

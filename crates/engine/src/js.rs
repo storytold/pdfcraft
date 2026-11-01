@@ -7,14 +7,15 @@
 //! off, scripts don't run and AF calls keep working natively.
 
 use pdfcraft_forms::{Field, FieldChange, FieldEvent, FieldKind, FieldProps, ScriptResult, Scripts};
-pub use pdfcraft_js::{Limits, Outcome, Panel, Request};
+pub use pdfcraft_js::{Limits, Message, MessageButtons, MessageIcon, Outcome, Panel, Request};
 
 use crate::{DocId, Edit, EditError, Session};
 
 /// What scripts produced for the viewer since it last looked.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct JsOutput {
-    pub alerts: Vec<String>,
+    /// The messages scripts showed, in order, with their titles, icons and buttons.
+    pub alerts: Vec<Message>,
     pub console: Vec<String>,
     pub requests: Vec<Request>,
     /// Script errors (as Acrobat's console shows them).
@@ -195,6 +196,8 @@ fn info(cos: &pdfcraft_cos::Document) -> Vec<(String, String)> {
 }
 
 impl Scripts for JsRunner {
+    /// Run field `target`'s script for `event` over the form's fields, keeping what it showed and
+    /// asked for; a refusal carries its last message.
     fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field]) -> ScriptResult {
         let states: Vec<_> = fields
             .iter()
@@ -218,7 +221,7 @@ impl Scripts for JsRunner {
             rc: o.rc,
             value: o.value.clone(),
             changes: changes(&states, &o.changed),
-            message: (!o.rc).then(|| o.alerts.last().cloned()).flatten(),
+            message: (!o.rc).then(|| o.alerts.last().map(|m| m.text.clone())).flatten(),
         }
     }
 }

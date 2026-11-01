@@ -586,19 +586,61 @@ pub fn rerender(doc: &mut Document, tpl: &Template) -> Result<Report, XfaError> 
     if form.pages.is_empty() {
         return Err(XfaError::Malformed("the template laid out to no pages".into()));
     }
-    // The AcroForm keeps only the fields PdfCraft did not generate.
+    // The fields an earlier pass generated give way to the new layout's, after it is written: it
+    // keeps a signature one of them holds. The AcroForm keeps every field PdfCraft did not generate.
     let Some(root) = doc.root() else { return Err(XfaError::NotXfa) };
-    if let Some((acro_ref, mut acro)) = acroform(doc) {
-        let fields = acro.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()).unwrap_or_default();
-        let kept: Vec<Object> =
-            fields.into_iter().filter(|f| f.as_ref().is_none_or(|r| doc.get(r).as_dict().is_none_or(|d| !d.contains(crate::pdf::SOM_KEY)))).collect();
+    let top = |doc: &Document| -> Vec<Object> {
+        acroform(doc).and_then(|(_, acro)| acro.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned())).unwrap_or_default()
+    };
+    let generated: std::collections::HashSet<pdfcraft_cos::ObjRef> = top(doc)
+        .iter()
+        .filter_map(Object::as_ref)
+        .filter(|r| doc.get(*r).as_dict().is_some_and(|d| d.contains(crate::pdf::SOM_KEY) || d.contains(crate::pdf::NODE_KEY)))
+        .collect();
+    let written = crate::pdf::write_form(doc, &form)?;
+    if !generated.is_empty()
+        && let Some((acro_ref, mut acro)) = acroform(doc)
+    {
+        let kept: Vec<Object> = top(doc).into_iter().filter(|f| f.as_ref().is_none_or(|r| !generated.contains(&r))).collect();
         acro.set(b"Fields".to_vec(), Object::Array(kept));
         match acro_ref {
             Some(r) => doc.set(r, Object::Dict(acro)),
             None => doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Dict(acro)))?,
         }
+        // A generated field edited in this overlay is freed with its appearance and widget kids,
+        // so a replaced password widget's value or masked appearance cannot stay in the overlay.
+        // Signature fields, and the fields that name them by their SOM path, stay: the new
+        // layout's signature field took their value and appearance.
+        let free_ap = |doc: &mut Document, d: &Dict| {
+            if let Some(ap) = d.get(b"AP").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned())
+                && let Some(n) = ap.get(b"N").and_then(Object::as_ref)
+                && doc.is_edited(n.num)
+            {
+                doc.free(n);
+            }
+        };
+        let signature = |d: &Dict| d.name(b"FT") == Some(b"Sig".as_slice()) || d.contains(crate::pdf::NODE_KEY);
+        for r in generated {
+            let Some(d) = doc.get(r).as_dict().cloned().filter(|d| !signature(d)) else { continue };
+            free_ap(doc, &d);
+            if let Some(kids) = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()) {
+                for k in kids.iter().filter_map(Object::as_ref) {
+                    if let Some(kd) = doc.get(k).as_dict().cloned() {
+                        if signature(&kd) {
+                            continue;
+                        }
+                        free_ap(doc, &kd);
+                    }
+                    if doc.is_edited(k.num) {
+                        doc.free(k);
+                    }
+                }
+            }
+            if doc.is_edited(r.num) {
+                doc.free(r);
+            }
+        }
     }
-    let written = crate::pdf::write_form(doc, &form)?;
     let mut warnings = form.warnings;
     warnings.extend(written.warnings);
     if written.usage_rights {

@@ -243,4 +243,40 @@ mod page_argument_tests {
             assert_eq!(std::fs::read(&source).unwrap(), bytes);
         }
     }
+
+    #[test]
+    fn text_clips_glyphs_outside_the_crop_box() {
+        let dir = PageDir::new();
+        let path = dir.0.join("cropped.pdf");
+        let body = "BT /F1 12 Tf 20 260 Td (Outside header) Tj 0 -110 Td (Visible body) Tj 0 -120 Td (Outside footer) Tj ET";
+        let objs: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /CropBox [0 100 200 200] /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_vec(),
+            format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()).into_bytes(),
+        ];
+        let mut pdf = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+            pdf.extend_from_slice(o);
+            pdf.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = pdf.len();
+        pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        std::fs::write(&path, pdf).unwrap();
+
+        for args in [vec![], vec!["--page", "1"]] {
+            let out = Command::new(BIN).arg("text").arg(&path).args(&args).output().unwrap();
+            assert!(out.status.success(), "{args:?}: {out:?}");
+            assert!(out.stderr.is_empty(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+            assert_eq!(String::from_utf8(out.stdout).unwrap().trim(), "Visible body", "{args:?}");
+        }
+    }
 }

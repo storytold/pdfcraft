@@ -198,6 +198,16 @@ fn parse_para(n: Option<XmlNode>) -> ParaSpec {
     }
 }
 
+/// `rotate` as quarter turns (XFA 3.3: degrees counter-clockwise, a multiple of 90, `deg` optional):
+/// anything else leaves the object as it stands.
+fn quarter_turns(rotate: Option<&str>) -> u8 {
+    let degrees = rotate.map(str::trim).map(|v| v.strip_suffix("deg").unwrap_or(v).trim_end());
+    let turns = degrees.and_then(|v| v.parse::<f64>().ok()).map(|v| v.rem_euclid(360.0) / 90.0);
+    // Whole, which NaN and infinities aren't, and in range, so the cast is exact; a tiny negative
+    // angle rounds to a full turn.
+    turns.filter(|t| t.fract() == 0.0).map_or(0, |t| t as u8 % 4)
+}
+
 fn parse_common(n: XmlNode) -> Common {
     Common {
         name: n.attribute("name").map(str::to_string).filter(|s| !s.is_empty()),
@@ -205,6 +215,7 @@ fn parse_common(n: XmlNode) -> Common {
         x: attr_measure(n, "x"),
         y: attr_measure(n, "y"),
         anchor: Anchor::parse(n.attribute("anchorType")),
+        rotate: quarter_turns(n.attribute("rotate")),
         w: attr_measure(n, "w"),
         h: attr_measure(n, "h"),
         min_w: attr_measure(n, "minW"),
@@ -725,7 +736,7 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
             crate::MAX_XML_DEPTH
         )));
     }
-    let opts = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES };
+    let opts = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
     let doc = roxmltree::Document::parse_with_options(xml, opts).map_err(|e| XfaError::Malformed(format!("template XML: {e}")))?;
     let root = doc.root_element();
     // The XDP's config packet has a <template> element too: the one we want is in the

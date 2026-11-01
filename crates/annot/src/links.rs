@@ -320,7 +320,7 @@ pub fn delete(doc: &mut Document, page: usize, index: usize) -> Result<(), Annot
     let (p, _) = link_at(doc, page, index)?;
     let mut list = annots(doc, p);
     list.remove(index);
-    set_annots(doc, p, list)
+    Ok(set_annots(doc, p, list)?)
 }
 
 /// Remove every link on `pages` (all when `None`). Returns how many went.

@@ -514,97 +514,161 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
             issue("6.5.2", "Page {} has additional actions", Some((i + 1).to_string()), Some(i), true);
         }
     }
-    for (r, o) in &objs {
-        let Some(d) = dict_of(o) else { continue };
-        let ty = d.name(b"Type");
-        let sub = d.name(b"Subtype");
-        // Actions anywhere (structure elements also have /S: their role), with the actions they
-        // chain to and those written directly in an /A or /OpenAction.
-        let own = (d.get(b"S").is_some() && is_action(d)).then_some(d);
-        let direct = [b"A".as_slice(), b"OpenAction"].map(|k| d.get(k).and_then(|a| a.as_dict()));
-        for a in [own].into_iter().chain(direct).flatten() {
-            if let Some(s) = chain_forbidden(doc, a) {
-                issue("6.5.1", "A {} action isn't allowed", Some(s), None, true);
-            }
-        }
-        // Annotations.
-        if ty == Some(b"Annot") || (sub.is_some() && d.get(b"Rect").is_some() && d.get(b"P").is_some()) {
-            let page = page_of(*r);
-            let name = sub.map(|s| String::from_utf8_lossy(s).into_owned()).unwrap_or_default();
-            if sub.is_some_and(|s| FORBIDDEN_ANNOTS.contains(&s)) {
-                issue("6.3.1", "{} annotations aren't allowed", Some(name), page, true);
-                continue;
-            }
-            let f = d.int(b"F").unwrap_or(0);
-            if sub != Some(b"Popup") && (f & 4 == 0 || f & (1 | 2 | 32) != 0) {
-                issue("6.3.2", "A {} annotation isn't set to print, or is hidden", Some(name.clone()), page, true);
-            }
-            let has_ap = d.get(b"AP").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned()).is_some_and(|a| a.get(b"N").is_some());
-            if !has_ap && !matches!(sub, Some(b"Popup") | Some(b"Link")) {
-                let zero = d.get(b"Rect").map(|x| doc.resolve(x)).and_then(|x| x.as_array().cloned()).is_some_and(|a| {
-                    let v: Vec<f64> = a.iter().filter_map(|n| doc.resolve(n).as_f64()).collect();
-                    v.len() == 4 && (v[2] - v[0]).abs() < 1e-6 && (v[3] - v[1]).abs() < 1e-6
-                });
-                if !zero {
-                    issue("6.3.3", "A {} annotation has no appearance stream", Some(name.clone()), page, false);
-                }
-            }
-            if d.get(b"AA").is_some() {
-                issue("6.5.2", "A {} annotation has additional actions", Some(name), page, true);
-            }
-        }
-        // Form fields with additional actions (non-widget fields).
-        if d.get(b"FT").is_some() && d.get(b"AA").is_some() && ty != Some(b"Annot") {
-            issue("6.5.2", "A form field has additional actions", None, None, true);
-        }
-        // Fonts.
-        if ty == Some(b"Font") || d.get(b"BaseFont").is_some() && sub.is_some() {
-            check_font(doc, d, &mut issue);
-        }
-        // Streams.
-        if let Object::Stream(s) = &**o {
-            let filters: Vec<Vec<u8>> = match s.dict.get(b"Filter").map(|f| doc.resolve(f)) {
-                Some(f) => match &*f {
-                    Object::Name(n) => vec![n.clone()],
-                    Object::Array(a) => a.iter().filter_map(|x| x.as_name().map(<[u8]>::to_vec)).collect(),
-                    _ => Vec::new(),
-                },
-                None => Vec::new(),
-            };
-            if filters.iter().any(|f| f == b"LZWDecode") {
-                issue("6.1.7.2", "A stream uses LZW compression", None, None, false);
-            }
-            if s.dict.get(b"F").is_some() || s.dict.get(b"FFilter").is_some() {
-                issue("6.1.7.1", "A stream refers to an external file", None, None, false);
-            }
-            if sub == Some(b"Image") {
-                if matches!(s.dict.get(b"Interpolate"), Some(Object::Bool(true))) {
-                    issue("6.2.8", "An image asks to be interpolated", None, None, true);
-                }
-                if s.dict.get(b"Alternates").is_some() || s.dict.get(b"OPI").is_some() {
-                    issue("6.2.8", "An image has alternates or OPI information", None, None, true);
-                }
-            }
-            if sub == Some(b"PS") {
-                issue("6.2.9", "PostScript XObjects aren't allowed", None, None, false);
-            }
-        }
-        // Embedded files.
-        if ty == Some(b"Filespec") && d.get(b"EF").is_some() {
-            match level {
-                Level::A2b => issue("6.8", "Embedded files must be PDF/A files themselves (use PDF/A-3 for others)", None, None, false),
-                Level::A3b => {
-                    if d.get(b"AFRelationship").is_none() {
-                        issue("6.8", "An embedded file has no AFRelationship", None, None, true);
-                    }
-                }
-            }
-        }
-    }
+    check_objects(doc, level, &objs, &page_of, &mut issue);
     // One message per kind of problem is enough for repeated ones (as preflight summaries do).
     let mut seen = std::collections::HashSet::new();
     out.retain(|i| seen.insert((i.clause, i.message.clone(), i.page)));
     out
+}
+
+fn check_objects(
+    doc: &Document,
+    level: Level,
+    objects: &[(ObjRef, std::sync::Arc<Object>)],
+    page_of: &impl Fn(ObjRef) -> Option<usize>,
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
+    for (r, o) in objects {
+        let Some(d) = dict_of(o) else { continue };
+        check_one_object(doc, level, *r, d, o, page_of, issue);
+    }
+}
+
+fn check_one_object(
+    doc: &Document,
+    level: Level,
+    reference: ObjRef,
+    dict: &Dict,
+    object: &Object,
+    page_of: &impl Fn(ObjRef) -> Option<usize>,
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
+    let ty = dict.name(b"Type");
+    let subtype = dict.name(b"Subtype");
+    check_actions(doc, dict, issue);
+    if is_annotation(dict, ty, subtype) && check_annotation(doc, dict, subtype, page_of(reference), issue) {
+        // A forbidden annotation stops every later check for its object, as the scan did before
+        // it was split into helpers: the rest of its own checks and the form field, font, stream
+        // and embedded file below all came after that `continue`.
+        return;
+    }
+    if dict.get(b"FT").is_some() && dict.get(b"AA").is_some() && ty != Some(b"Annot") {
+        issue("6.5.2", "A form field has additional actions", None, None, true);
+    }
+    if ty == Some(b"Font") || dict.get(b"BaseFont").is_some() && subtype.is_some() {
+        check_font(doc, dict, issue);
+    }
+    if let Object::Stream(stream) = object {
+        check_stream(doc, stream, subtype, issue);
+    }
+    if ty == Some(b"Filespec") && dict.get(b"EF").is_some() {
+        check_embedded_file(level, dict, issue);
+    }
+}
+
+fn check_actions(doc: &Document, dict: &Dict, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
+    let own = (dict.get(b"S").is_some() && is_action(dict)).then_some(dict);
+    let direct = [b"A".as_slice(), b"OpenAction"].map(|key| dict.get(key).and_then(|action| action.as_dict()));
+    for action in [own].into_iter().chain(direct).flatten() {
+        if let Some(name) = chain_forbidden(doc, action) {
+            issue("6.5.1", "A {} action isn't allowed", Some(name), None, true);
+        }
+    }
+}
+
+fn is_annotation(dict: &Dict, ty: Option<&[u8]>, subtype: Option<&[u8]>) -> bool {
+    ty == Some(b"Annot") || (subtype.is_some() && dict.get(b"Rect").is_some() && dict.get(b"P").is_some())
+}
+
+fn check_annotation(
+    doc: &Document,
+    dict: &Dict,
+    subtype: Option<&[u8]>,
+    page: Option<usize>,
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) -> bool {
+    let name = subtype.map(|bytes| String::from_utf8_lossy(bytes).into_owned()).unwrap_or_default();
+    if subtype.is_some_and(|value| FORBIDDEN_ANNOTS.contains(&value)) {
+        issue("6.3.1", "{} annotations aren't allowed", Some(name), page, true);
+        return true;
+    }
+    let flags = dict.int(b"F").unwrap_or(0);
+    if subtype != Some(b"Popup") && (flags & 4 == 0 || flags & (1 | 2 | 32) != 0) {
+        issue("6.3.2", "A {} annotation isn't set to print, or is hidden", Some(name.clone()), page, true);
+    }
+    check_annotation_appearance(doc, dict, subtype, &name, page, issue);
+    if dict.get(b"AA").is_some() {
+        issue("6.5.2", "A {} annotation has additional actions", Some(name), page, true);
+    }
+    false
+}
+
+fn check_annotation_appearance(
+    doc: &Document,
+    dict: &Dict,
+    subtype: Option<&[u8]>,
+    name: &str,
+    page: Option<usize>,
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
+    let has_appearance = dict
+        .get(b"AP")
+        .map(|appearance| doc.resolve(appearance))
+        .and_then(|appearance| appearance.as_dict().cloned())
+        .is_some_and(|appearance| appearance.get(b"N").is_some());
+    if has_appearance || matches!(subtype, Some(b"Popup") | Some(b"Link")) {
+        return;
+    }
+    let zero_area = dict.get(b"Rect").map(|rect| doc.resolve(rect)).and_then(|rect| rect.as_array().cloned()).is_some_and(|values| {
+        let values: Vec<f64> = values.iter().filter_map(|value| doc.resolve(value).as_f64()).collect();
+        values.len() == 4 && (values[2] - values[0]).abs() < 1e-6 && (values[3] - values[1]).abs() < 1e-6
+    });
+    if !zero_area {
+        issue("6.3.3", "A {} annotation has no appearance stream", Some(name.to_owned()), page, false);
+    }
+}
+
+fn check_stream(
+    doc: &Document,
+    stream: &pdfcraft_cos::Stream,
+    subtype: Option<&[u8]>,
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
+    let filters: Vec<Vec<u8>> = match stream.dict.get(b"Filter").map(|filter| doc.resolve(filter)) {
+        Some(filter) => match &*filter {
+            Object::Name(name) => vec![name.clone()],
+            Object::Array(filters) => filters.iter().filter_map(|filter| filter.as_name().map(<[u8]>::to_vec)).collect(),
+            _ => Vec::new(),
+        },
+        None => Vec::new(),
+    };
+    if filters.iter().any(|filter| filter == b"LZWDecode") {
+        issue("6.1.7.2", "A stream uses LZW compression", None, None, false);
+    }
+    if stream.dict.get(b"F").is_some() || stream.dict.get(b"FFilter").is_some() {
+        issue("6.1.7.1", "A stream refers to an external file", None, None, false);
+    }
+    if subtype == Some(b"Image") {
+        if matches!(stream.dict.get(b"Interpolate"), Some(Object::Bool(true))) {
+            issue("6.2.8", "An image asks to be interpolated", None, None, true);
+        }
+        if stream.dict.get(b"Alternates").is_some() || stream.dict.get(b"OPI").is_some() {
+            issue("6.2.8", "An image has alternates or OPI information", None, None, true);
+        }
+    }
+    if subtype == Some(b"PS") {
+        issue("6.2.9", "PostScript XObjects aren't allowed", None, None, false);
+    }
+}
+
+fn check_embedded_file(level: Level, dict: &Dict, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
+    match level {
+        Level::A2b => issue("6.8", "Embedded files must be PDF/A files themselves (use PDF/A-3 for others)", None, None, false),
+        Level::A3b if dict.get(b"AFRelationship").is_none() => {
+            issue("6.8", "An embedded file has no AFRelationship", None, None, true);
+        }
+        Level::A3b => {}
+    }
 }
 
 fn check_font(doc: &Document, d: &Dict, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {

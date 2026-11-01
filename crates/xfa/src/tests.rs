@@ -1508,8 +1508,15 @@ fn top_fields(doc: &Document) -> Vec<(String, pdfcraft_cos::Dict)> {
         .collect()
 }
 
+/// Choice lists, a password, a signature and pictures in the template become their kinds of
+/// widget, and their AcroForm fields and image XObjects once written.
 #[test]
 fn choice_lists_signatures_passwords_and_pictures_become_fields_and_images() {
+    assert_choice_widget_layout();
+    assert_choice_fields_and_picture_streams();
+}
+
+fn assert_choice_widget_layout() {
     let form = layout_xml(&fields_template("")).unwrap();
     let p1 = &form.pages[0];
     let w = widgets(p1);
@@ -1544,7 +1551,9 @@ fn choice_lists_signatures_passwords_and_pictures_become_fields_and_images() {
     assert!(t.iter().any(|s| s == "12345"), "the barcode's value as text: {t:?}");
     assert!(form.warnings.iter().any(|w| w.contains("barcode")), "{:?}", form.warnings);
     assert!(!form.warnings.iter().any(|w| w.contains("can't be chosen")), "pictures can be chosen now: {:?}", form.warnings);
+}
 
+fn assert_choice_fields_and_picture_streams() {
     // Written into the PDF: /Ch fields with their options and flags, a /Sig field, a password
     // field, and Flate images (the PNG with a soft mask).
     let mut doc = Document::open(Arc::new(shell(&fields_template("")))).unwrap();
@@ -1570,7 +1579,11 @@ fn choice_lists_signatures_passwords_and_pictures_become_fields_and_images() {
     assert_eq!(opt[0].as_string().unwrap().to_text(), "English", "same shown text and value: a plain string");
     assert_eq!(field("other").int(b"Ff"), Some((1 << 17) | (1 << 18)), "an editable combo box");
     assert_eq!(field("pin").int(b"Ff"), Some(1 << 13), "a password field");
-    assert_eq!(field("sign").name(b"FT"), Some(b"Sig".as_slice()));
+    // The signature field is named by its SOM path, under a generated field for each step above it.
+    assert!(fields.iter().all(|(name, _)| name != "sign"));
+    let named = full_names(&doc);
+    let sign = named.iter().find(|(name, _)| name == "form[0].page1[0].sign[0]").map(|(_, d)| d).expect("named by its SOM path");
+    assert_eq!(sign.name(b"FT"), Some(b"Sig".as_slice()));
     let streams: Vec<pdfcraft_cos::Stream> = doc
         .object_numbers()
         .into_iter()
@@ -1786,6 +1799,62 @@ fn pictures_are_embedded_once_across_relayouts_and_bad_data_pictures_are_reporte
         })
     }
     assert!(find_image(&t.root.children).is_some_and(|n| n > 1_200_000));
+}
+
+/// #4937: LiveCycle wrote BMPs whose header gives the pixel data's offset as 0. Read literally,
+/// the pixels start at the file header, so the image is drawn shifted and wrapped around.
+#[test]
+fn a_bmp_whose_pixel_offset_points_into_its_headers_is_read_from_after_them() {
+    use crate::image::{bmp_with_pixel_offset, decode, size};
+    for palette in [false, true] {
+        let intact = tiny_bmp(palette);
+        assert!(matches!(bmp_with_pixel_offset(&intact), std::borrow::Cow::Borrowed(_)), "an intact file is not copied");
+        for bad in [0u32, 14, 53] {
+            let mut bmp = intact.clone();
+            bmp[10..14].copy_from_slice(&bad.to_le_bytes());
+            let d = decode(&bmp).unwrap();
+            assert_eq!(d.samples, vec![255, 0, 0, 0, 0, 255], "offset {bad}, palette: {palette}");
+            assert_eq!(size(&bmp), Some((2, 1)));
+            assert_eq!(bmp_with_pixel_offset(&bmp).as_ref(), &intact[..], "offset {bad}, palette: {palette}");
+        }
+    }
+    // Too short to hold the pixels after the headers: left alone, not grown.
+    let mut cut = tiny_bmp(true);
+    cut[10..14].copy_from_slice(&0u32.to_le_bytes());
+    cut.truncate(60);
+    assert_eq!(bmp_with_pixel_offset(&cut).as_ref(), &cut[..]);
+    // A truncated header, and bytes that are not a BMP: left alone.
+    assert_eq!(bmp_with_pixel_offset(b"BM  ").as_ref(), b"BM  ");
+    assert_eq!(bmp_with_pixel_offset(TINY_GIF).as_ref(), TINY_GIF);
+    // BI_BITFIELDS in a 40-byte header: three masks follow the header.
+    let mut fields = tiny_bmp(false);
+    fields[30..34].copy_from_slice(&3u32.to_le_bytes());
+    fields[10..14].copy_from_slice(&0u32.to_le_bytes());
+    fields.splice(54..54, [0u8; 12]);
+    assert_eq!(bmp_with_pixel_offset(&fields).get(10..14), Some(&66u32.to_le_bytes()[..]));
+    // Pointing at the end of the 40-byte header, before the masks.
+    fields[10..14].copy_from_slice(&54u32.to_le_bytes());
+    assert_eq!(bmp_with_pixel_offset(&fields).get(10..14), Some(&66u32.to_le_bytes()[..]));
+    // A colour count no file could hold: left alone.
+    let mut huge = tiny_bmp(true);
+    huge[46..50].copy_from_slice(&u32::MAX.to_le_bytes());
+    huge[10..14].copy_from_slice(&0u32.to_le_bytes());
+    assert_eq!(bmp_with_pixel_offset(&huge).as_ref(), &huge[..]);
+    // A 12-byte core header: 16-bit fields and 3-byte palette entries, `1 << bpp` of them.
+    let mut core = b"BM".to_vec();
+    core.extend_from_slice(&[0; 8]);
+    core.extend_from_slice(&0u32.to_le_bytes());
+    core.extend_from_slice(&12u32.to_le_bytes());
+    for v in [2u16, 1, 1, 1] {
+        core.extend_from_slice(&v.to_le_bytes());
+    }
+    core.extend_from_slice(&[0, 0, 255, 255, 0, 0, 0b0100_0000, 0, 0, 0]);
+    assert_eq!(bmp_with_pixel_offset(&core).get(10..14), Some(&32u32.to_le_bytes()[..]));
+    let mut at_table = core.clone();
+    at_table[10..14].copy_from_slice(&26u32.to_le_bytes());
+    assert_eq!(bmp_with_pixel_offset(&at_table).get(10..14), Some(&32u32.to_le_bytes()[..]), "before the colour table");
+    let d = decode(&bmp_with_pixel_offset(&core)).unwrap();
+    assert_eq!(d.samples, vec![255, 0, 0, 0, 0, 255], "core header");
 }
 
 /// Designer forms often carry BMP and TIFF pictures, declared as `image/bmp` and `image/tif`
@@ -3009,6 +3078,213 @@ fn a_zero_caption_reserve_sizes_the_caption_as_none_does() {
     assert!((x_of("withZero") - x_of("without")).abs() < 0.01, "as without a reserve: {} {}", x_of("withZero"), x_of("without"));
 }
 
+/// The terminal fields by full name, down the field tree.
+fn full_names(doc: &Document) -> Vec<(String, Dict)> {
+    let root = doc.get(doc.root().unwrap());
+    let acro = doc.resolve(root.as_dict().unwrap().get(b"AcroForm").unwrap());
+    let mut todo: Vec<(Object, String)> =
+        doc.resolve(acro.as_dict().unwrap().get(b"Fields").unwrap()).as_array().unwrap().iter().map(|f| (f.clone(), String::new())).collect();
+    let mut out = Vec::new();
+    while let Some((f, prefix)) = todo.pop() {
+        let d = doc.resolve(&f).as_dict().unwrap().clone();
+        let t = d.get(b"T").map(|t| doc.resolve(t)).and_then(|t| t.as_string().map(|t| t.to_text()));
+        let name = match t {
+            Some(t) if prefix.is_empty() => t,
+            Some(t) => format!("{prefix}.{t}"),
+            None => prefix,
+        };
+        match d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()) {
+            Some(kids) if kids.iter().any(|k| doc.resolve(k).as_dict().is_some_and(|k| k.contains(b"T"))) => {
+                todo.extend(kids.into_iter().map(|k| (k, name.clone())));
+            }
+            _ => out.push((name, d)),
+        }
+    }
+    out
+}
+
+/// A laid-out signature field is named by its SOM path, under a generated field for each step
+/// above it, as other viewers lay a dynamic form out again and find its signature by that name.
+/// Boxes in one subform share those fields; a new layout replaces them rather than adding more;
+/// taking the XFA out leaves them as ordinary fields.
+#[test]
+fn signature_fields_are_named_by_their_som_path() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="body" layout="tb" w="7.5in">
+  <field name="name" w="3in" h="0.3in"><ui><textEdit/></ui></field>
+  <field name="sign" w="3in" h="1in"><ui><signature/></ui></field>
+  <field name="other" w="3in" h="1in"><ui><signature/></ui></field>
+ </subform>
+ <subform name="end" layout="tb" w="7.5in">
+  <field name="last" w="3in" h="1in"><ui><signature/></ui></field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut doc = Document::open(Arc::new(shell(xdp))).unwrap();
+    let report = render_into(&mut doc).unwrap();
+    assert_eq!(report.fields, 4, "name and the three signature fields");
+    let doc = Document::open(Arc::new(write_incremental(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    let check = |doc: &Document| {
+        let top: Vec<String> = pdfcraft_forms_free_fields(doc).into_iter().map(|(name, _)| name).collect();
+        assert_eq!(top.iter().filter(|n| *n == "form[0]").count(), 1, "one field for the root subform: {top:?}");
+        assert!(top.iter().any(|n| n == "name"), "other fields keep their names: {top:?}");
+        let named = full_names(doc);
+        for som in ["form[0].body[0].sign[0]", "form[0].body[0].other[0]", "form[0].end[0].last[0]"] {
+            let (_, d) = named.iter().find(|(name, _)| name == som).unwrap_or_else(|| panic!("{som} in {named:?}"));
+            assert_eq!(d.name(b"FT"), Some(b"Sig".as_slice()));
+            assert_eq!(fields_by_som(doc).get(som).map(String::as_str), Some(som), "the data finds it by its SOM path");
+        }
+        assert_eq!(named.len(), 4, "{named:?}");
+    };
+    check(&doc);
+    let body = |doc: &Document| {
+        let named = full_names(doc);
+        let parent = |som: &str| named.iter().find(|(name, _)| name == som).and_then(|(_, d)| d.get(b"Parent").and_then(Object::as_ref));
+        (parent("form[0].body[0].sign[0]"), parent("form[0].body[0].other[0]"))
+    };
+    let (a, b) = body(&doc);
+    assert!(a.is_some() && a == b, "the two boxes of one subform share its field");
+    // Laid out again: the same fields, not a second set.
+    let mut doc = doc;
+    let tpl = crate::script::template_of(&doc).unwrap();
+    rerender(&mut doc, &tpl).unwrap();
+    check(&doc);
+    // The XFA taken out: ordinary fields with the same names, without the private key.
+    strip(&mut doc).unwrap();
+    let named = full_names(&doc);
+    assert!(named.iter().any(|(name, _)| name == "form[0].end[0].last[0]"), "{named:?}");
+    let top = pdfcraft_forms_free_fields(&doc);
+    let node = top.iter().find(|(name, _)| name == "form[0]").map(|(_, d)| d.clone()).expect("the root subform's field");
+    assert!(!node.contains(NODE_KEY));
+}
+
+/// The terminal field named `full`, down the field tree.
+fn field_ref(doc: &Document, full: &str) -> Option<pdfcraft_cos::ObjRef> {
+    let root = doc.get(doc.root()?);
+    let acro = doc.resolve(root.as_dict()?.get(b"AcroForm")?);
+    let mut todo: Vec<(pdfcraft_cos::ObjRef, String)> =
+        doc.resolve(acro.as_dict()?.get(b"Fields")?).as_array()?.iter().filter_map(Object::as_ref).map(|r| (r, String::new())).collect();
+    while let Some((r, prefix)) = todo.pop() {
+        let d = doc.get(r).as_dict()?.clone();
+        let t = d.get(b"T").map(|t| doc.resolve(t)).and_then(|t| t.as_string().map(|t| t.to_text())).unwrap_or_default();
+        let name = if prefix.is_empty() { t } else { format!("{prefix}.{t}") };
+        if name == full {
+            return Some(r);
+        }
+        let kids = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
+        todo.extend(kids.iter().filter_map(Object::as_ref).map(|k| (k, name.clone())));
+    }
+    None
+}
+
+/// A box signed on a laid-out form stays signed when the form is laid out again (as after a
+/// script adds a row): the new layout's field, named by the same SOM path, holds the same
+/// signature and is locked, and the old field is gone from the AcroForm.
+#[test]
+fn a_signature_on_a_laid_out_box_survives_a_new_layout() {
+    let mut doc = Document::open(Arc::new(shell(&fields_template("")))).unwrap();
+    render_into(&mut doc).unwrap();
+    let som = "form[0].page1[0].sign[0]";
+    let old = field_ref(&doc, som).expect("the box");
+    // Signed as signing does it: a signature dictionary as the field's value, and a picture.
+    let mut sig = Dict::new();
+    sig.set(b"Type".to_vec(), Object::name("Sig"));
+    let sig = doc.add(Object::Dict(sig));
+    let picture = doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(Dict::new(), b"0 0 1 rg 0 0 10 10 re f".to_vec())));
+    doc.update_dict(old, |d| {
+        d.set(b"V".to_vec(), Object::Ref(sig));
+        let mut ap = Dict::new();
+        ap.set(b"N".to_vec(), Object::Ref(picture));
+        d.set(b"AP".to_vec(), Object::Dict(ap));
+    })
+    .unwrap();
+    let tpl = crate::script::template_of(&doc).unwrap();
+    rerender(&mut doc, &tpl).unwrap();
+    let new = field_ref(&doc, som).expect("still named by its SOM path");
+    assert_ne!(new, old, "a field of the new layout");
+    let d = doc.get(new).as_dict().unwrap().clone();
+    assert_eq!(d.get(b"V").and_then(Object::as_ref), Some(sig), "the same signature");
+    let shown = d.get(b"AP").map(|ap| doc.resolve(ap)).and_then(|ap| ap.as_dict().and_then(|ap| ap.get(b"N").and_then(Object::as_ref)));
+    assert_eq!(shown, Some(picture), "and the same picture");
+    assert!(matches!(&*doc.get(picture), Object::Stream(_)), "which is still in the file");
+    assert!(matches!(&*doc.get(sig), Object::Dict(_)), "as is the signature");
+    assert_eq!(d.int(b"Ff").unwrap_or(0) & 1, 1, "a signed box is not signed again");
+    let top = pdfcraft_forms_free_fields(&doc);
+    assert_eq!(top.iter().filter(|(name, _)| name == "form[0]").count(), 1, "the old fields are gone");
+}
+
+/// A box right in the form's root subform, signed and then laid out again, keeps its signature
+/// and picture in the file: its field sits just under the one naming it, and the old fields that
+/// give way to the new layout's (freed when this session made them) take nothing it still uses.
+#[test]
+fn a_signed_box_in_the_root_subform_keeps_its_picture_through_a_new_layout() {
+    let xdp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb"><pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+<field name="sign" w="3in" h="1in"><ui><signature/></ui></field>
+</subform></template></xdp:xdp>"#;
+    let mut doc = Document::open(Arc::new(shell(xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    let som = "form[0].sign[0]";
+    let old = field_ref(&doc, som).expect("the box");
+    let sig = doc.add(Object::Dict(Dict::new()));
+    let picture = doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(Dict::new(), b"0 0 1 rg 0 0 10 10 re f".to_vec())));
+    doc.update_dict(old, |d| {
+        d.set(b"V".to_vec(), Object::Ref(sig));
+        let mut ap = Dict::new();
+        ap.set(b"N".to_vec(), Object::Ref(picture));
+        d.set(b"AP".to_vec(), Object::Dict(ap));
+    })
+    .unwrap();
+    let tpl = crate::script::template_of(&doc).unwrap();
+    rerender(&mut doc, &tpl).unwrap();
+    let new = field_ref(&doc, som).expect("still named by its SOM path");
+    let d = doc.get(new).as_dict().unwrap().clone();
+    let shown = d.get(b"AP").map(|ap| doc.resolve(ap)).and_then(|ap| ap.as_dict().and_then(|ap| ap.get(b"N").and_then(Object::as_ref)));
+    assert_eq!(shown, Some(picture));
+    assert!(matches!(&*doc.get(picture), Object::Stream(_)), "the picture is still in the file");
+    assert!(matches!(&*doc.get(sig), Object::Dict(_)), "and the signature");
+}
+
+/// A field of the same pass keeps a signature field named by its SOM path from repeating its
+/// name, written before the box or after it: with a text field named `form[0]` (as a hostile
+/// template may name one), the box keeps its own name and no two fields share one.
+#[test]
+fn a_signature_field_does_not_repeat_a_name_another_field_has() {
+    let text = r#"<field name="form[0]" w="3in" h="0.3in"><ui><textEdit/></ui></field>"#;
+    let sign = r#"<field name="sign" w="3in" h="1in"><ui><signature/></ui></field>"#;
+    for (first, second) in [(text, sign), (sign, text)] {
+        let xdp = format!(
+            r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="body" layout="tb" w="7.5in">{first}{second}</subform>
+</subform>
+</template>
+</xdp:xdp>
+"##
+        );
+        let mut doc = Document::open(Arc::new(shell(&xdp))).unwrap();
+        render_into(&mut doc).unwrap();
+        let mut top: Vec<String> = pdfcraft_forms_free_fields(&doc).into_iter().map(|(name, _)| name).collect();
+        assert!(top.iter().any(|n| n == "sign"), "the box keeps its own name: {top:?}");
+        top.sort();
+        let len = top.len();
+        top.dedup();
+        assert_eq!(top.len(), len, "no name twice: {top:?}");
+    }
+}
+
+/// A signature box the file already holds a signature for shows that signature, the file's own
+/// objects, and is locked; the other box stays unsigned.
 #[test]
 fn a_signed_signature_box_shows_the_signature_the_file_holds() {
     let mut doc = Document::open(Arc::new(crate::fixtures::signed_shell())).unwrap();
@@ -3017,7 +3293,10 @@ fn a_signed_signature_box_shows_the_signature_the_file_holds() {
     let acro = doc.resolve(catalog.as_dict().unwrap().get(b"AcroForm").unwrap());
     let fields = doc.resolve(acro.as_dict().unwrap().get(b"Fields").unwrap()).as_array().unwrap().clone();
     let laid: Vec<_> = fields.iter().map(|f| doc.resolve(f)).filter(|f| f.as_dict().unwrap().contains(SOM_KEY)).collect();
+    // The file has a field named `form[0]` already: the unsigned box keeps its own name rather
+    // than repeat that one.
     let (signed, unsigned) = (laid[0].as_dict().unwrap(), laid[1].as_dict().unwrap());
+    assert_eq!(unsigned.get(b"T").and_then(|t| t.as_string()).map(|t| t.to_text()).as_deref(), Some("other"));
     // The signature dictionary and the picture are the file's own objects, not copies.
     let value = doc.resolve(signed.get(b"V").unwrap());
     assert_eq!(value.as_dict().unwrap().name(b"Type"), Some(&b"Sig"[..]));
@@ -3340,6 +3619,11 @@ fn laying_a_form_out_takes_off_the_usage_rights_it_voids() {
 
 #[test]
 fn stripping_takes_the_xfa_out_and_leaves_an_ordinary_document() {
+    assert_stripping_leaves_ordinary_document();
+    assert_stripping_handles_unbound_data_and_shared_field_tree();
+}
+
+fn assert_stripping_leaves_ordinary_document() {
     use crate::pdf::strip;
     let mut doc = Document::open(Arc::new(shell(&fields_template("<form><page1><country>JP</country></page1></form>")))).unwrap();
     render_into(&mut doc).unwrap();
@@ -3350,6 +3634,7 @@ fn stripping_takes_the_xfa_out_and_leaves_an_ordinary_document() {
     ur.set(b"UR3".to_vec(), Object::Dict(pdfcraft_cos::Dict::new()));
     doc.update_dict(root, |d| d.set(b"Perms".to_vec(), Object::Dict(ur))).unwrap();
     let r = strip(&mut doc).unwrap();
+    assert!(doc.full_save_required());
     assert_eq!(r.packets, vec!["template".to_string(), "datasets".to_string()]);
     assert_eq!(r.unbound_data, Some(0));
     assert_eq!((r.script_buttons, r.image_fields), (0, 1), "{r:?}");
@@ -3389,6 +3674,10 @@ fn stripping_takes_the_xfa_out_and_leaves_an_ordinary_document() {
     let r = strip(&mut doc).unwrap();
     assert_eq!(r, crate::Stripped::default());
     assert!(!doc.is_modified());
+}
+
+fn assert_stripping_handles_unbound_data_and_shared_field_tree() {
+    use crate::pdf::strip;
     // Data no field holds is counted; a form whose click buttons ran scripts too; the shape
     // check needs no packet decoded and tells a never-laid-out dynamic form from one to strip.
     let mut doc = Document::open(Arc::new(shell(&scripted_template().replace("</template>", "</template><xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data><form><page1><qty>3</qty><extra>kept nowhere</extra><more2>x</more2></page1></form></xfa:data></xfa:datasets>")))).unwrap();
@@ -3433,6 +3722,16 @@ fn stripping_takes_the_xfa_out_and_leaves_an_ordinary_document() {
     let r = strip(&mut doc).unwrap();
     assert_eq!(r.field_keys, 2000);
     assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+}
+
+#[test]
+fn strip_marks_document_as_requiring_full_save() {
+    use crate::pdf::strip;
+    let mut doc = Document::open(Arc::new(shell(&fields_template("<form><page1><country>JP</country></page1></form>")))).unwrap();
+    render_into(&mut doc).unwrap();
+    assert!(!doc.full_save_required());
+    strip(&mut doc).unwrap();
+    assert!(doc.full_save_required(), "stripping XFA packets must require a full save to prevent data exposure in incremental saves");
 }
 
 #[test]
@@ -3779,4 +4078,456 @@ fn faces_measure_text_at_their_standard_14_widths() {
     // A condensed face is narrower by its scale.
     let condensed = text::Face { h_scale: 0.8, ..face(text::Family::Times, true, false) };
     assert!((condensed.width(sample) - 0.8 * Std14::TimesBold.text_width(sample, 10.0)).abs() < 1e-9);
+}
+
+/// #3944: clearing XFA password values removes values typed into `<passwordEdit/>` fields from the
+/// datasets packet (including across repeating subforms), restores a field's template default
+/// `<value><text>…</text></value>` when it has one, and replaces the datasets stream in place so
+/// the typed password is not left in an unreferenced stream in the overlay.
+#[test]
+fn clear_password_values_removes_typed_passwords_from_datasets_in_place() {
+    let xdp = r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page1" layout="tb">
+  <field name="user" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  <field name="pin" w="2in" h="0.3in"><ui><passwordEdit/></ui></field>
+  <field name="preset" w="2in" h="0.3in"><ui><passwordEdit/></ui><value><text>0000</text></value></field>
+  <subform name="row" layout="lr-tb"><occur min="1" max="-1"/>
+   <field name="secret" w="2in" h="0.3in"><ui><passwordEdit/></ui></field>
+  </subform>
+ </subform>
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/">
+<xfa:data><form><page1><user>Ada</user><pin>hunter2</pin><preset>9999</preset><row><secret>first</secret></row><row><secret>second</secret></row></page1></form></xfa:data>
+</xfa:datasets>
+</xdp:xdp>"#;
+    let mut doc = Document::open(Arc::new(shell(xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    assert!(has_password_values(&doc));
+    let cleared = clear_password_values(&mut doc).unwrap();
+    assert_eq!(cleared, 4);
+    assert!(!has_password_values(&doc), "only default and non-password values remain");
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 0);
+
+    let packets = read_packets(&doc).unwrap().unwrap();
+    assert!(packets.xdp.contains("<user>Ada</user>"), "non-password fields stay: {}", packets.xdp);
+    assert!(packets.xdp.contains("<preset>0000</preset>"), "template default restored: {}", packets.xdp);
+    for secret in ["hunter2", "9999", "first", "second"] {
+        assert!(!packets.xdp.contains(secret), "{secret} still in datasets: {}", packets.xdp);
+    }
+    let written = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let reopened = Document::open(Arc::new(written)).unwrap();
+    for num in reopened.object_numbers() {
+        if let Object::Stream(st) = &*reopened.get(pdfcraft_cos::ObjRef::new(num, 0)) {
+            let decoded = st.decoded().unwrap_or_default();
+            let text = String::from_utf8_lossy(&decoded);
+            for secret in ["hunter2", "9999", "first", "second"] {
+                assert!(!text.contains(secret), "object {num} still holds {secret}: {text}");
+            }
+        }
+    }
+}
+
+/// #3944: a static XFA form whose AcroForm field sets the Password flag (`/Ff 8192`) also has its
+/// typed value cleared from the datasets packet.
+#[test]
+fn clear_password_values_clears_static_xfa_password_fields() {
+    let pdf = String::from_utf8(static_shell("<form1><page1><name>hunter2</name></page1></form1>"))
+        .unwrap()
+        .replace("/T (name[0])", "/T (name[0]) /Ff 8192");
+    let mut doc = Document::open(Arc::new(pdf.into_bytes())).unwrap();
+    assert!(has_password_values(&doc));
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
+    assert!(!has_password_values(&doc));
+    let packets = read_packets(&doc).unwrap().unwrap();
+    assert!(!packets.xdp.contains("hunter2"), "{}", packets.xdp);
+}
+
+/// A form with `draws` in a subform placed by position, on a letter page whose content area is a
+/// quarter inch in, with `master` on the page itself.
+fn form_of_draws(master: &str, draws: &str) -> String {
+    format!(
+        r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb"><pageSet><pageArea name="p">{master}<contentArea x="0.25in" y="0.25in" w="8in" h="10.5in"/><medium stock="letter" short="8.5in" long="11in"/></pageArea></pageSet><subform name="s" w="8in" h="2.5in">{draws}</subform></subform></template></xdp:xdp>"#
+    )
+}
+
+/// A line from the top-left to the bottom-right of a box 0.7in × 0.4in, as #5561's form draws.
+fn line_draw(x: &str, y: &str, rotate: &str) -> String {
+    format!(r#"<draw x="{x}" y="{y}" w="0.7in" h="0.4in" {rotate}><value><line><edge thickness="2.5pt"/></line></value></draw>"#)
+}
+
+/// `xdp` laid out into its document, and that document's first page.
+fn written(xdp: &str) -> (Document, Dict) {
+    let mut doc = Document::open(Arc::new(shell(xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    let root = doc.get(doc.root().unwrap());
+    let pages = doc.get(root.as_dict().unwrap().reference(b"Pages").unwrap());
+    let kids = pages.as_dict().unwrap().get(b"Kids").map(|k| doc.resolve(k)).unwrap();
+    let page = doc.get(kids.as_array().unwrap()[0].as_ref().unwrap());
+    let page = page.as_dict().unwrap().clone();
+    (doc, page)
+}
+
+fn page_content(doc: &Document, page: &Dict) -> String {
+    let contents = doc.get(page.reference(b"Contents").unwrap());
+    let Object::Stream(s) = &*contents else { panic!("not a stream") };
+    String::from_utf8_lossy(&s.decoded().unwrap()).into_owned()
+}
+
+/// The ends of each line `content` strokes, on the page: through the matrices around it.
+fn stroked_lines(content: &str) -> Vec<[(f64, f64); 2]> {
+    let (mut stack, mut matrix) = (Vec::new(), [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    let (mut numbers, mut from, mut lines): (Vec<f64>, _, _) = (Vec::new(), (0.0, 0.0), Vec::new());
+    for token in content.split_whitespace() {
+        let at = |m: [f64; 6], x: f64, y: f64| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]);
+        let last = |numbers: &[f64]| (numbers[numbers.len() - 2], numbers[numbers.len() - 1]);
+        match token {
+            "q" => stack.push(matrix),
+            "Q" => matrix = stack.pop().unwrap(),
+            "cm" => {
+                let n: [f64; 6] = numbers[numbers.len() - 6..].try_into().unwrap();
+                let m = matrix;
+                matrix = [
+                    n[0] * m[0] + n[1] * m[2],
+                    n[0] * m[1] + n[1] * m[3],
+                    n[2] * m[0] + n[3] * m[2],
+                    n[2] * m[1] + n[3] * m[3],
+                    n[4] * m[0] + n[5] * m[2] + m[4],
+                    n[4] * m[1] + n[5] * m[3] + m[5],
+                ];
+            }
+            "m" => {
+                let (x, y) = last(&numbers);
+                from = at(matrix, x, y);
+            }
+            "l" => {
+                let (x, y) = last(&numbers);
+                lines.push([from, at(matrix, x, y)]);
+            }
+            _ => {}
+        }
+        match token.parse() {
+            Ok(v) => numbers.push(v),
+            Err(_) => numbers.clear(),
+        }
+    }
+    lines
+}
+
+fn turned(page: &Page) -> Vec<&crate::layout::Turned> {
+    page.items.iter().filter_map(|i| if let Item::Turned(t) = i { Some(t.as_ref()) } else { None }).collect()
+}
+
+/// A draw turns counter-clockwise about its anchor. The figures are where Acrobat put these lines
+/// on the page it flattened for #5561's form: from the anchor by (+50.4, -28.8) unturned, and by
+/// (+28.8, +50.4), (-50.4, +28.8) and (-28.8, -50.4) at 90, 180 and 270 degrees.
+#[test]
+fn a_draw_turns_counter_clockwise_about_its_anchor() {
+    let draws = [
+        line_draw("1in", "0.95in", ""),
+        line_draw("3in", "0.95in", r#"rotate="90""#),
+        line_draw("5in", "0.95in", r#"rotate="180""#),
+        line_draw("7in", "0.95in", r#"rotate="270""#),
+    ]
+    .concat();
+    let (doc, page) = written(&form_of_draws("", &draws));
+    let lines = stroked_lines(&page_content(&doc, &page));
+    assert_eq!(lines.len(), 4, "{lines:?}");
+    let top = 792.0 - 18.0 - 0.95 * 72.0;
+    let acrobat = [((90.0, top), (50.4, -28.8)), ((234.0, top), (28.8, 50.4)), ((378.0, top), (-50.4, 28.8)), ((522.0, top), (-28.8, -50.4))];
+    for ([from, to], (anchor, by)) in lines.iter().zip(acrobat) {
+        assert!((from.0 - anchor.0).abs() < 0.01 && (from.1 - anchor.1).abs() < 0.01, "{from:?} for {anchor:?}");
+        let moved = (to.0 - from.0, to.1 - from.1);
+        assert!((moved.0 - by.0).abs() < 0.01 && (moved.1 - by.1).abs() < 0.01, "{moved:?} for {by:?}");
+    }
+}
+
+/// The anchor is the point it turns about, whichever corner that is: a box anchored at its bottom
+/// right stands up and to the left of it, not where a top-left anchor would turn it.
+#[test]
+fn a_draw_turns_about_the_anchor_it_names() {
+    let draw = r#"<draw x="3in" y="1in" w="0.7in" h="0.4in" anchorType="bottomRight" rotate="90"><value><line><edge thickness="1pt"/></line></value></draw>"#;
+    let (doc, page) = written(&form_of_draws("", draw));
+    let lines = stroked_lines(&page_content(&doc, &page));
+    let anchor = (18.0 + 216.0, 792.0 - 18.0 - 72.0);
+    // Its bottom right is 0.7in right and 0.4in down of its top left, here turned to 0.7in up and
+    // 0.4in right: so the top left is that far back from the anchor, and the line ends on it.
+    let [from, to] = lines[0];
+    assert!((to.0 - anchor.0).abs() < 0.01 && (to.1 - anchor.1).abs() < 0.01, "{to:?} for {anchor:?}");
+    assert!((from.0 - (anchor.0 - 28.8)).abs() < 0.01 && (from.1 - (anchor.1 - 50.4)).abs() < 0.01, "{from:?}");
+}
+
+/// Each of the nine anchors stays where it is, and the box goes round it at each turn. What is
+/// asked for comes from the box's corners here, not from layout: from the anchor, y up, the line
+/// runs from the top left to the bottom right, and a quarter turn takes (x, y) to (-y, x).
+#[test]
+fn a_draw_turns_about_each_of_the_nine_anchors() {
+    let (w, h) = (50.4, 28.8);
+    let anchor = (18.0 + 216.0, 792.0 - 18.0 - 72.0);
+    for (name, down) in [("top", 0.0), ("middle", 0.5), ("bottom", 1.0)] {
+        for (side, across) in [("Left", 0.0), ("Center", 0.5), ("Right", 1.0)] {
+            for quarters in 0..4 {
+                let rotate = quarters * 90;
+                let draw = format!(
+                    r#"<draw x="3in" y="1in" w="0.7in" h="0.4in" anchorType="{name}{side}" rotate="{rotate}"><value><line><edge thickness="1pt"/></line></value></draw>"#
+                );
+                let (doc, page) = written(&form_of_draws("", &draw));
+                let lines = stroked_lines(&page_content(&doc, &page));
+                assert_eq!(lines.len(), 1, "{name}{side} at {rotate}: {lines:?}");
+                let (left, top) = (-across * w, down * h);
+                for (got, corner) in lines[0].iter().zip([(left, top), (left + w, top - h)]) {
+                    let turned = (0..quarters).fold(corner, |(x, y), _| (-y, x));
+                    let want = (anchor.0 + turned.0, anchor.1 + turned.1);
+                    assert!((got.0 - want.0).abs() < 0.01 && (got.1 - want.1).abs() < 0.01, "{name}{side} at {rotate}: {got:?} for {want:?}");
+                }
+            }
+        }
+    }
+}
+
+/// A draw that stands past the edge of the page once turned stays where it turned to: nothing moves
+/// it back or cuts it, as for an upright one. From the page's top left corner of the content area
+/// it goes off to the left and above the page, and from its right side, off to the right.
+#[test]
+fn a_turned_draw_stands_past_the_edge_of_the_page() {
+    for (x, rotate, anchor, by) in [("0in", "180", 18.0, (-50.4, 28.8)), ("8in", "90", 594.0, (28.8, 50.4))] {
+        let draw = line_draw(x, "0in", &format!(r#"rotate="{rotate}""#));
+        let (doc, page) = written(&form_of_draws("", &draw));
+        let content = page_content(&doc, &page);
+        assert!(!content.split_whitespace().any(|t| t == "W" || t == "W*"), "{rotate}: nothing clips it: {content}");
+        let lines = stroked_lines(&content);
+        assert_eq!(lines.len(), 1, "{rotate}: {lines:?}");
+        let [from, to] = lines[0];
+        assert!((from.0 - anchor).abs() < 0.01 && (from.1 - 774.0).abs() < 0.01, "{rotate}: {from:?}");
+        assert!((to.0 - (anchor + by.0)).abs() < 0.01 && (to.1 - (774.0 + by.1)).abs() < 0.01, "{rotate}: {to:?}");
+        assert!(to.0 < 0.0 || to.0 > 612.0, "{rotate}: it does stand past the edge, at {to:?}");
+    }
+}
+
+/// Everything a draw shows turns with it, under one matrix: its text, its picture and its border,
+/// rounded or not, each written as if it stood upright.
+#[test]
+fn text_pictures_and_borders_turn_with_their_draw() {
+    let picture = format!(
+        r#"<draw x="1in" y="1in" w="1in" h="1in" rotate="90"><value><image contentType="image/png">{}</image></value></draw>"#,
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, tiny_png())
+    );
+    for (draw, shows) in [
+        (r#"<draw x="1in" y="1in" w="2in" h="0.5in" rotate="90"><value><text>upright</text></value></draw>"#.to_string(), "(upright) Tj"),
+        (picture, " Do "),
+        (r#"<draw x="1in" y="1in" w="2in" h="0.5in" rotate="90"><value><rectangle><edge thickness="1pt"/></rectangle></value></draw>"#.to_string(), " l S"),
+        (
+            r#"<draw x="1in" y="1in" w="2in" h="0.5in" rotate="90"><value><rectangle><edge thickness="1pt"/><corner radius="5pt"/></rectangle></value></draw>"#.to_string(),
+            " c",
+        ),
+        (r#"<draw x="1in" y="1in" w="2in" h="0.5in" rotate="90"><border><fill><color value="255,0,0"/></fill></border><value><text>x</text></value></draw>"#.to_string(), " re f"),
+    ] {
+        let (doc, page) = written(&form_of_draws("", &draw));
+        let content = page_content(&doc, &page);
+        let open = content.find("0 1 -1 0 ").unwrap_or_else(|| panic!("no matrix for {draw}: {content}"));
+        let close = open + content[open..].find("\nQ\n").unwrap_or_else(|| panic!("no end for {draw}: {content}"));
+        assert!(content[open..close].contains(shows), "{shows} outside the matrix: {content}");
+    }
+}
+
+/// `rotate` as a multiple of 90 degrees, with a unit or not, past a full turn or below none;
+/// anything else leaves the draw as it stands.
+#[test]
+fn rotate_reads_as_quarter_turns() {
+    let quarters = |rotate: &str| {
+        let form = layout_xml(&form_of_draws("", &line_draw("1in", "1in", &format!(r#"rotate="{rotate}""#)))).unwrap();
+        turned(&form.pages[0]).first().map_or(0, |t| t.quarters)
+    };
+    for (rotate, want) in [("90", 1), ("180", 2), ("270", 3), ("0", 0), ("360", 0), ("450", 1), ("-90", 3), ("90deg", 1), (" 90 ", 1), ("90.0", 1)] {
+        assert_eq!(quarters(rotate), want, "{rotate}");
+    }
+    for rotate in ["45", "89.5", "135", "225", "abc", "", "deg", "NaN", "inf", "-inf"] {
+        assert_eq!(quarters(rotate), 0, "{rotate}");
+    }
+    // Far past what a turn can be told apart at, or just under none: in range whatever it reads as.
+    for rotate in ["1e300", "-1e-300"] {
+        assert!(quarters(rotate) < 4, "{rotate}");
+    }
+}
+
+/// A turned draw is one item: a page break moves it whole, what it holds moving with the point it
+/// turns about, and doesn't cut it, and the draws around it stay where they belong.
+#[test]
+fn a_page_break_moves_a_turned_draw_whole() {
+    let draws = format!(
+        r#"<draw x="6in" y="10.4in" w="1in" h="0.5in"><border><edge thickness="1pt"/></border><value><text>across</text></value></draw><draw x="1in" y="1in" w="2in" h="0.5in"><value><text>first</text></value></draw>{}{}<draw x="1in" y="13in" w="2in" h="0.5in"><value><text>last</text></value></draw>"#,
+        [
+            line_draw("3in", "12in", r#"rotate="90""#),
+            r#"<draw x="5in" y="12in" w="2in" h="0.5in" rotate="90"><border><edge thickness="1pt"/></border><value><text>sideways</text></value></draw>"#.to_string(),
+        ]
+        .concat(),
+        (2..8).map(|y| line_draw("1in", &format!("{y}in"), "")).collect::<String>()
+    );
+    let xdp = form_of_draws("", &draws).replace(r#"h="2.5in""#, r#"h="14in""#);
+    let form = layout_xml(&xdp).unwrap();
+    assert!(form.pages.len() >= 2, "{}", form.pages.len());
+    assert_eq!(texts(&form.pages[0]), ["first"]);
+    // Written after the turned draws, these lines still belong at the top of the block: what the
+    // break knew of the draw's many items mustn't carry over to those that now stand in their places.
+    let lines = form.pages[0].items.iter().filter(|i| matches!(i, Item::Line { .. })).count();
+    assert_eq!(lines, 6, "{:?}", form.pages[0].items);
+    assert_eq!(turned(&form.pages[0]).len(), 0);
+    let moved = turned(&form.pages[1]);
+    assert_eq!(moved.len(), 2, "{:?}", form.pages[1].items);
+    let Item::Line { from, .. } = &moved[0].items[0] else { panic!("not a line") };
+    assert_eq!(*from, moved[0].about, "the line moved with the point it turns about");
+    // Turned 90 degrees, a box 0.7in wide stands 0.7in up from its anchor, on a second page.
+    assert!(moved[0].about.1 < 792.0, "{:?}", moved[0].about);
+    assert!((moved[0].extent.1 - moved[0].about.1).abs() < 0.01, "{:?}", moved[0]);
+    assert!((moved[0].about.1 - moved[0].extent.0 - 50.4).abs() < 0.01, "{:?}", moved[0]);
+    let moved_text = texts(&form.pages[1]);
+    assert!(moved_text.contains(&"last".to_string()) && moved_text.contains(&"across".to_string()), "{moved_text:?}");
+}
+
+/// What a page break goes by is the box as it stands once turned, whichever way, about whichever
+/// corner: from a top-left anchor, it stands up, up or down of it; from a bottom-right one, the
+/// box starts behind the anchor and the same turns take it the other way.
+#[test]
+fn a_turned_draw_knows_where_it_stands() {
+    let box_at = |anchor: &str, rotate: u32| {
+        let draw = format!(
+            r#"<draw x="3in" y="1in" w="0.7in" h="0.4in" {anchor} rotate="{rotate}"><value><line><edge thickness="1pt"/></line></value></draw>"#
+        );
+        let form = layout_xml(&form_of_draws("", &draw)).unwrap();
+        let held = turned(&form.pages[0]);
+        let t = held.first().expect("turned");
+        (t.extent.0 - t.about.1, t.extent.1 - t.about.1)
+    };
+    let close = |got: (f64, f64), want: (f64, f64)| (got.0 - want.0).abs() < 0.01 && (got.1 - want.1).abs() < 0.01;
+    for (rotate, want) in [(90, (-50.4, 0.0)), (180, (-28.8, 0.0)), (270, (0.0, 50.4))] {
+        assert!(close(box_at("", rotate), want), "{rotate}: {:?}", box_at("", rotate));
+    }
+    for (rotate, want) in [(90, (0.0, 50.4)), (180, (0.0, 28.8)), (270, (-50.4, 0.0))] {
+        let got = box_at(r#"anchorType="bottomRight""#, rotate);
+        assert!(close(got, want), "{rotate}: {got:?}");
+    }
+}
+
+/// The page count is filled in inside a turned draw too, as it comes last, when every page is known.
+#[test]
+fn the_page_count_reaches_a_turned_draw() {
+    let master = r##"<draw x="7in" y="10in" w="1in" h="0.2in" rotate="90"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml"><p>of <span xfa:embed="#pageCount" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"/></p></body></exData></value></draw><field name="pageCount" id="pageCount" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = xfa.layout.pageCount();</script></event></field>"##;
+    let form = layout_xml(&form_of_draws(master, &line_draw("1in", "1in", ""))).unwrap();
+    let held = turned(&form.pages[0]);
+    assert_eq!(held.len(), 1, "{:?}", form.pages[0].items);
+    let text: Vec<&str> = held[0].items.iter().filter_map(|i| if let Item::Text(s) = i { Some(s.text.as_str()) } else { None }).collect();
+    assert_eq!(text.concat().trim(), "of 1", "{text:?}");
+}
+
+/// A link in turned text is clicked where the text is drawn, whichever way it turned: the box it
+/// has unturned, turned about the draw's anchor.
+#[test]
+fn a_link_turns_with_its_text() {
+    let rect_at = |rotate: &str| {
+        let draw = format!(
+            r#"<draw x="1in" y="3in" w="2in" h="0.5in" {rotate}><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml"><p><a href="https://example.com/a">a link in turned text</a></p></body></exData></value></draw>"#
+        );
+        let (doc, page) = written(&form_of_draws("", &draw));
+        let annots = page.get(b"Annots").map(|a| doc.resolve(a)).expect("the link");
+        let annot = doc.get(annots.as_array().unwrap()[0].as_ref().unwrap());
+        let rect: Vec<f64> = annot.as_dict().unwrap().get(b"Rect").unwrap().as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+        rect
+    };
+    let upright = rect_at("");
+    let (ax, ay) = (18.0 + 72.0, 792.0 - 18.0 - 216.0);
+    let (left, bottom, right, top) = (upright[0] - ax, upright[1] - ay, upright[2] - ax, upright[3] - ay);
+    assert!(left >= -0.01 && top <= 0.01 && right - left > 3.0 * (top - bottom), "it stands right and down of its anchor: {upright:?}");
+    for (rotate, want) in [
+        ("90", [ax - top, ay + left, ax - bottom, ay + right]),
+        ("180", [ax - right, ay - top, ax - left, ay - bottom]),
+        ("270", [ax + bottom, ay - right, ax + top, ay - left]),
+    ] {
+        let got = rect_at(&format!(r#"rotate="{rotate}""#));
+        assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 0.01), "{rotate}: {got:?} for {want:?}");
+    }
+}
+
+/// Only a draw placed by position turns: a field, and a draw in a flow, stand as they did.
+#[test]
+fn only_positioned_draws_turn() {
+    let field = r#"<field name="f" x="1in" y="1in" w="2in" h="0.5in" rotate="90"><ui><textEdit/></ui></field>"#;
+    let form = layout_xml(&form_of_draws("", field)).unwrap();
+    assert!(turned(&form.pages[0]).is_empty());
+    assert_eq!(widgets(&form.pages[0]).len(), 1);
+    let flowed = form_of_draws("", &line_draw("1in", "1in", r#"rotate="90""#))
+        .replace(r#"<subform name="s" w="8in" h="2.5in">"#, r#"<subform name="s" w="8in" layout="tb">"#);
+    let form = layout_xml(&flowed).unwrap();
+    assert!(turned(&form.pages[0]).is_empty(), "{:?}", form.pages[0].items);
+    assert!(form.pages[0].items.iter().any(|i| matches!(i, Item::Line { .. })), "it is still drawn");
+    // A draw that shows nothing has nothing to turn.
+    let form = layout_xml(&form_of_draws("", &line_draw("1in", "1in", r#"rotate="90" presence="invisible""#))).unwrap();
+    assert!(form.pages[0].items.is_empty(), "{:?}", form.pages[0].items);
+}
+
+/// A block carried over to a content area further across takes a turned draw with it, point and
+/// items both.
+#[test]
+fn a_turned_draw_moves_across_with_its_content_area() {
+    let xdp = form_of_draws("", &line_draw("1in", "6in", r#"rotate="90""#))
+        .replace(
+            r#"<contentArea x="0.25in" y="0.25in" w="8in" h="10.5in"/>"#,
+            r#"<contentArea x="0.25in" y="0.25in" w="3in" h="5in"/><contentArea x="4in" y="0.25in" w="3in" h="5in"/>"#,
+        )
+        .replace(r#"h="2.5in""#, r#"h="7in""#);
+    let form = layout_xml(&xdp).unwrap();
+    let moved = form.pages.iter().flat_map(turned).next().expect("turned");
+    let Item::Line { from, .. } = &moved.items[0] else { panic!("not a line") };
+    assert_eq!(*from, moved.about);
+    assert!((moved.about.0 - (4.0 + 1.0) * 72.0).abs() < 0.01, "{:?}", moved.about);
+}
+
+/// A positioned subform with no height grows to hold what it holds as it stands, so what comes next
+/// neither runs through a turned draw nor leaves the room its upright box would have had.
+#[test]
+fn a_container_grows_to_a_turned_draw_as_it_stands() {
+    let next = r#"</subform><subform name="next" w="8in" h="1in"><draw x="0in" y="0in" w="2in" h="0.5in"><value><text>next</text></value></draw></subform></subform></template>"#;
+    let baseline = |rotate: &str| {
+        let xdp = form_of_draws("", &line_draw("1in", "1in", rotate)).replace(r#" h="2.5in""#, "").replace("</subform></subform></template>", next);
+        let form = layout_xml(&xdp).unwrap();
+        assert_eq!(form.pages.len(), 1);
+        form.pages[0].items.iter().find_map(|i| if let Item::Text(s) = i { Some(s.baseline) } else { None }).expect("the next block")
+    };
+    // Upright the box ends 0.4in below the anchor, and the next block starts there.
+    let upright = baseline("");
+    for (rotate, bottom) in [("90", 0.0), ("180", 0.0), ("270", 50.4)] {
+        let got = baseline(&format!(r#"rotate="{rotate}""#)) - (upright - 28.8);
+        assert!((got - bottom).abs() < 0.01, "{rotate}: the next block starts {got} below the anchor, not {bottom}");
+    }
+}
+
+/// A subform with no width is as wide as what it holds as it stands, whichever way that turned,
+/// so a neighbour in a row doesn't stand off from it or over it.
+#[test]
+fn a_container_is_as_wide_as_a_turned_draw_stands() {
+    let row = |rotate: &str| {
+        let xdp = form_of_draws(
+            "",
+            &format!(
+                r#"<subform name="turned">{}</subform><subform name="beside" w="1in" h="1in"><draw x="0in" y="0in" w="1in" h="0.5in"><value><text>beside</text></value></draw></subform>"#,
+                line_draw("1in", "1in", rotate)
+            ),
+        )
+        .replace(r#"<subform name="s" w="8in" h="2.5in">"#, r#"<subform name="s" w="8in" h="2.5in" layout="lr-tb">"#);
+        let form = layout_xml(&xdp).unwrap();
+        form.pages[0].items.iter().find_map(|i| if let Item::Text(s) = i { Some(s.x) } else { None }).expect("the neighbour")
+    };
+    let upright = row("");
+    // Upright it ends 0.7in right of the anchor; turned, 0.4in right, at the anchor, and at it again.
+    for (rotate, right) in [("90", 28.8), ("180", 0.0), ("270", 0.0)] {
+        let got = row(&format!(r#"rotate="{rotate}""#)) - (upright - 50.4);
+        assert!((got - right).abs() < 0.01, "{rotate}: the neighbour stands {got} right of the anchor, not {right}");
+    }
+    // From a bottom-right anchor the box starts behind it, and the same turns take it the other way.
+    for (rotate, right) in [("90", 0.0), ("180", 50.4), ("270", 28.8)] {
+        let got = row(&format!(r#"anchorType="bottomRight" rotate="{rotate}""#)) - (upright - 50.4);
+        assert!((got - right).abs() < 0.01, "{rotate}: the neighbour stands {got} right of the anchor, not {right}");
+    }
 }

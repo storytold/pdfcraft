@@ -4,13 +4,52 @@
 //! text, from a
 //! document's working file (so unsaved edits and hidden layers are respected, as on screen).
 
+use std::collections::BTreeMap;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Condvar, Mutex, PoisonError, mpsc};
+
 use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
 
 use crate::Document;
 
+/// At most this many pages are drawn at once by [`Exporter::images`].
+const MAX_IMAGE_WORKERS: usize = 8;
+/// Bytes of rasters [`Exporter::images`] may hold at once: 1 GiB, about 16 Letter pages at 300 dpi.
+/// Each worker holds one page (the raster, its RGB copy and the encoded file), so large pages run
+/// on fewer workers; a page over the cap still exports, on one worker, as it did before.
+const IMAGE_MEMORY: f64 = 1024.0 * 1024.0 * 1024.0;
+
+/// Page `page` drawn at `dpi` and encoded as `format`, saying it was drawn at `used` dpi.
+fn draw_image(renderer: &mut PageRenderer, page: usize, dpi: f64, format: ImageFormat, used: f64) -> Result<Vec<u8>, String> {
+    let r = renderer.render(RenderRequest { page, scale: (dpi.clamp(18.0, 1200.0) / 72.0) as f32, ..Default::default() });
+    if let Some(e) = r.error {
+        return Err(format!("page {}: {e}", page + 1));
+    }
+    encode_image(r.width, r.height, &r.rgba, format, used)
+}
+
+/// Tells the workers of [`Exporter::images`] to stop when dropped.
+struct StopWorkers<'a> {
+    stop: &'a AtomicBool,
+    handed_over: &'a (Mutex<usize>, Condvar),
+}
+
+impl Drop for StopWorkers<'_> {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        // Taken under the lock, so a worker between its check and its wait still sees it.
+        drop(self.handed_over.0.lock().unwrap_or_else(PoisonError::into_inner));
+        self.handed_over.1.notify_all();
+    }
+}
+
 /// Renders and extracts pages of one document state.
 pub struct Exporter {
     renderer: PageRenderer,
+    /// What the renderer draws, for the extra renderers [`Exporter::images`] starts.
+    bytes: std::sync::Arc<Vec<u8>>,
+    config: pdfcraft_render::RenderConfig,
     pages: usize,
     /// Each page's displayed size in points, for [`Exporter::dpi_used`].
     sizes: Vec<(f32, f32)>,
@@ -65,7 +104,13 @@ impl Exporter {
     /// resolution they allow, as the interactive Export does; [`Exporter::dpi_used`] says at what.
     /// A source whose `config.reject_oversize` is set refuses such pages instead.
     pub fn from_source(src: ExportSource) -> Self {
-        Self { renderer: PageRenderer::new(src.bytes, src.config), pages: src.pages, sizes: src.sizes }
+        Self {
+            renderer: PageRenderer::new(src.bytes.clone(), src.config.clone()),
+            bytes: src.bytes,
+            config: src.config,
+            pages: src.pages,
+            sizes: src.sizes,
+        }
     }
 
     /// The resolution page `page` is actually exported at when asked for `dpi`: lower than asked
@@ -96,11 +141,146 @@ impl Exporter {
     /// Page `page` as an image file of `format`, which says the resolution it was drawn at.
     pub fn image(&mut self, page: usize, dpi: f64, format: ImageFormat) -> Result<Vec<u8>, String> {
         self.check(page)?;
-        let r = self.renderer.render(RenderRequest { page, scale: (dpi.clamp(18.0, 1200.0) / 72.0) as f32, ..Default::default() });
-        if let Some(e) = r.error {
-            return Err(format!("page {}: {e}", page + 1));
+        let used = self.dpi_used(page, dpi);
+        draw_image(&mut self.renderer, page, dpi, format, used)
+    }
+
+    /// Pages `pages` as image files of `format`, handed to `sink` in order with their page
+    /// number: the same files as [`Exporter::image`] for each page in turn. Encoding a page costs
+    /// several times what drawing it does, so several pages are drawn and encoded at once on
+    /// worker threads, each with its own renderer, while `sink` runs on the calling thread.
+    /// Workers draw at most one page each ahead of `sink`, and fewer run when the pages are
+    /// large, so memory stays bounded. Stops at the first page that fails or the first error `sink`
+    /// returns, and returns it; every page before it has been handed to `sink`.
+    pub fn images(
+        &mut self,
+        pages: &[usize],
+        dpi: f64,
+        format: ImageFormat,
+        sink: impl FnMut(usize, Vec<u8>) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let workers = self.image_workers(pages, dpi);
+        self.images_on(workers, pages, dpi, format, sink)
+    }
+
+    /// [`Exporter::images`] with `workers` pages drawn at once (one: in turn, on this thread).
+    pub(crate) fn images_on(
+        &mut self,
+        workers: usize,
+        pages: &[usize],
+        dpi: f64,
+        format: ImageFormat,
+        mut sink: impl FnMut(usize, Vec<u8>) -> Result<(), String>,
+    ) -> Result<(), String> {
+        if workers <= 1 {
+            for &p in pages {
+                let img = self.image(p, dpi, format)?;
+                sink(p, img)?;
+            }
+            return Ok(());
         }
-        encode_image(r.width, r.height, &r.rgba, format, self.dpi_used(page, dpi))
+        let used: Vec<f64> = pages.iter().map(|p| self.dpi_used(*p, dpi)).collect();
+        let count = self.pages;
+        let (bytes, config) = (&self.bytes, &self.config);
+        let next = AtomicUsize::new(0);
+        let stop = AtomicBool::new(false);
+        // How many pages `sink` has taken; a worker waits while its page is `workers` past it.
+        let handed_over = (Mutex::new(0usize), Condvar::new());
+        let (tx, rx) = mpsc::channel::<(usize, Result<Vec<u8>, String>)>();
+        let mut first = Some(&mut self.renderer);
+        std::thread::scope(|s| {
+            let handles: Vec<_> = (0..workers)
+                .map(|_| {
+                    let tx = tx.clone();
+                    let (first, used, next, stop, handed_over) = (first.take(), &used, &next, &stop, &handed_over);
+                    s.spawn(move || {
+                        let mut own = None;
+                        let renderer = match first {
+                            Some(r) => r,
+                            None => own.insert(PageRenderer::new(bytes.clone(), config.clone())),
+                        };
+                        loop {
+                            let i = next.fetch_add(1, Ordering::Relaxed);
+                            let (Some(&page), Some(&used)) = (pages.get(i), used.get(i)) else { break };
+                            let mut taken = handed_over.0.lock().unwrap_or_else(PoisonError::into_inner);
+                            while i >= taken.saturating_add(workers) && !stop.load(Ordering::Relaxed) {
+                                taken = handed_over.1.wait(taken).unwrap_or_else(PoisonError::into_inner);
+                            }
+                            drop(taken);
+                            if stop.load(Ordering::Relaxed) {
+                                break;
+                            }
+                            let img = if page < count {
+                                catch_unwind(AssertUnwindSafe(|| draw_image(renderer, page, dpi, format, used)))
+                                    .unwrap_or_else(|_| Err(format!("page {}: the export crashed", page + 1)))
+                            } else {
+                                Err(format!("page {} does not exist", page + 1))
+                            };
+                            if tx.send((i, img)).is_err() {
+                                break;
+                            }
+                        }
+                    })
+                })
+                .collect();
+            drop(tx);
+            // Stops the workers however this ends, a panicking `sink` included: waiting ones
+            // would otherwise keep the scope from returning.
+            let stopper = StopWorkers { stop: &stop, handed_over: &handed_over };
+            let mut ready = BTreeMap::new();
+            let mut result = Ok(());
+            let mut taken = 0;
+            while let Some(&page) = pages.get(taken) {
+                let Some(img) = ready.remove(&taken) else {
+                    match rx.recv() {
+                        Ok((i, img)) => {
+                            ready.insert(i, img);
+                        }
+                        Err(_) => {
+                            result = Err(format!("page {}: the export stopped unexpectedly", page + 1));
+                            break;
+                        }
+                    }
+                    continue;
+                };
+                if let Err(e) = img.and_then(|img| sink(page, img)) {
+                    result = Err(e);
+                    break;
+                }
+                taken += 1;
+                *handed_over.0.lock().unwrap_or_else(PoisonError::into_inner) = taken;
+                handed_over.1.notify_all();
+            }
+            drop(stopper);
+            // Joined here, so a worker that panicked outside a page is not re-raised by the scope.
+            for h in handles {
+                let _ = h.join();
+            }
+            result
+        })
+    }
+
+    /// How many pages [`Exporter::images`] draws at once: one per core but one, up to
+    /// [`MAX_IMAGE_WORKERS`], as many as [`IMAGE_MEMORY`] holds of the largest page, and one
+    /// when there is nothing to share or no threads (wasm).
+    fn image_workers(&self, pages: &[usize], dpi: f64) -> usize {
+        if cfg!(target_arch = "wasm32") || pages.len() < 2 {
+            return 1;
+        }
+        // One core is left for the interface, which keeps drawing while an export runs.
+        let cores = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get).saturating_sub(1).min(MAX_IMAGE_WORKERS);
+        // The raster (RGBA), the RGB copy the encoders take, and room for the encoded file.
+        let largest = pages
+            .iter()
+            .filter_map(|p| {
+                let (w, h) = *self.sizes.get(*p)?;
+                let k = self.dpi_used(*p, dpi) / 72.0;
+                Some((f64::from(w) * k).ceil() * (f64::from(h) * k).ceil() * 8.0)
+            })
+            .fold(0.0, f64::max);
+        // A float-to-integer cast saturates (and NaN is 0).
+        let by_memory = if largest > 0.0 { (IMAGE_MEMORY / largest) as usize } else { cores };
+        cores.min(by_memory).min(pages.len()).max(1)
     }
 
     /// The reading-order text of a page.

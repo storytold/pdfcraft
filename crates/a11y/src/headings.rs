@@ -188,7 +188,10 @@ pub(crate) fn mcid_texts(doc: &Document, page: &Dict) -> HashMap<i64, String> {
     // Where each id's last glyph ended, in user space.
     let mut ends: HashMap<i64, (f64, f64)> = HashMap::new();
     let mut gs = TextState::default();
-    let mut saved: Vec<TextState> = Vec::new();
+    // With each saved state, the text and text line matrices: inside a text object `q`/`Q`
+    // save and restore them too (ISO 32000-2 §9.4.1, as corrected by the PDF Association's
+    // errata, issue 368), as the renderer does.
+    let mut saved: Vec<(TextState, Matrix, Matrix)> = Vec::new();
     let mut unsaved = 0usize;
     let (mut tm, mut tlm) = (Matrix::IDENTITY, Matrix::IDENTITY);
     for op in pdfcraft_content::parse(&page_content(doc, page)).ops {
@@ -209,12 +212,12 @@ pub(crate) fn mcid_texts(doc: &Document, page: &Dict) -> HashMap<i64, String> {
             b"EMC" => {
                 stack.pop();
             }
-            b"q" if saved.len() < MAX_SAVED => saved.push(gs.clone()),
+            b"q" if saved.len() < MAX_SAVED => saved.push((gs.clone(), tm, tlm)),
             b"q" => unsaved += 1,
             b"Q" if unsaved > 0 => unsaved -= 1,
             b"Q" => {
                 if let Some(saved) = saved.pop() {
-                    gs = saved;
+                    (gs, tm, tlm) = saved;
                 }
             }
             b"cm" => {

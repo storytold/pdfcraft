@@ -7,10 +7,11 @@
 //! first (see `japanese_fallback` in `raster.rs`); this module is the last resort: one face
 //! already installed on this machine, used for the viewer only (`RenderConfig::system_fonts`, off
 //! for exports, printing and OCR). It is read at runtime and never embedded or shipped
-//! (AGENTS.md §1.4), no font an Adobe product installs is a candidate (§1.1), and
+//! (AGENTS.md §1.4), Noto CJK and Source Han are left out on purpose (§1.1), and
 //! `PDFCRAFT_SYSTEM_FONTS=0` turns it off, as for the interface font.
 
 use std::collections::HashMap;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
@@ -37,6 +38,8 @@ enum Script {
 }
 
 impl Script {
+    /// Map the four supported Adobe CJK collections to their writing systems. Identity and
+    /// custom collections provide no regional hint and cannot select an installed face here.
     fn of(family: &CidFamily) -> Option<Self> {
         match family {
             CidFamily::AdobeJapan1 => Some(Self::Japanese),
@@ -67,6 +70,47 @@ struct Candidate {
     region: &'static [&'static str],
 }
 
+/// Keep named Windows body, heading, calligraphic and FangSong faces distinct. A cache keyed only
+/// by script and weight would make the first Chinese font on a page stand in for all of them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum ChineseFamily {
+    Default,
+    Song,
+    Hei,
+    Kai,
+    FangSong,
+}
+
+impl ChineseFamily {
+    /// The family a font name asks for: the Windows and Founder (方正) names that Chinese PDFs,
+    /// CNKI papers in particular, use without embedding the font. FangSong is tested first, as
+    /// its names contain "song" too. Founder PostScript names are matched by prefix (`FZSSK--GBK1-0`
+    /// is 方正书宋, `FZXBSK--GBK1-0` 方正小标宋, `FZHTK--GBK1-0` 方正黑体, `FZKTK--GBK1-0` 方正楷体,
+    /// `FZFSK--GBK1-0` 方正仿宋).
+    fn of(name: &str) -> Self {
+        // PDF subset names prepend six uppercase ASCII letters and '+'. Match the actual
+        // PostScript name so Founder prefixes work for subsets too.
+        let name = match name.split_once('+') {
+            Some((tag, family)) if tag.len() == 6 && tag.bytes().all(|b| b.is_ascii_uppercase()) => family,
+            _ => name,
+        };
+        let name = name.to_ascii_lowercase();
+        let has = |hints: &[&str]| hints.iter().any(|hint| name.contains(hint));
+        let starts = |prefixes: &[&str]| prefixes.iter().any(|p| name.starts_with(p));
+        if has(&["fangsong", "simfang", "仿宋"]) || starts(&["fzfs"]) {
+            Self::FangSong
+        } else if has(&["simsun", "stsong", "songti", "song", "宋"]) || starts(&["fzss", "fzbs", "fzxbs", "fzcs"]) {
+            Self::Song
+        } else if has(&["simhei", "stheiti", "stxihei", "heiti", "黑"]) || starts(&["fzht", "fzhei", "fzlth", "fzdh"]) {
+            Self::Hei
+        } else if has(&["kaiti", "stkaiti", "kai", "楷"]) || starts(&["fzkt", "fzkai"]) {
+            Self::Kai
+        } else {
+            Self::Default
+        }
+    }
+}
+
 /// The installed face to draw a CID font of `query`'s collection with, as `(data, face index)`.
 /// `None` when it is turned off, the collection isn't one of the four, or nothing fits.
 pub(crate) fn fallback(query: &FallbackFontQuery) -> Option<(FontData, u32)> {
@@ -75,19 +119,25 @@ pub(crate) fn fallback(query: &FallbackFontQuery) -> Option<(FontData, u32)> {
     }
     let script = Script::of(&query.character_collection.as_ref()?.family)?;
     let bold = query.is_bold || query.font_weight >= 600;
+    let family = ChineseFamily::of(query.post_script_name.as_deref().unwrap_or_default());
     /// A face file and the index of the chosen face in it, or `None` when nothing fits.
     type Face = Option<(Arc<Vec<u8>>, u32)>;
-    static CACHE: Mutex<Option<HashMap<(Script, bool), Face>>> = Mutex::new(None);
+    type Faces = HashMap<(Script, bool, ChineseFamily), Face>;
+    static CACHE: Mutex<Option<Faces>> = Mutex::new(None);
     let mut cache = CACHE.lock().unwrap_or_else(PoisonError::into_inner);
-    let found = cache.get_or_insert_with(HashMap::new).entry((script, bold)).or_insert_with(|| {
-        candidates(script)
-            .iter()
-            .find_map(|c| read(c, script.probe(), bold))
-            .inspect(|(_, index)| log::info!("CJK font fallback for {script:?}: face {index}"))
+    let found = cache.get_or_insert_with(HashMap::new).entry((script, bold, family)).or_insert_with(|| {
+        candidates(script, family, bold).iter().find_map(|c| {
+            read(c, script.probe(), bold).inspect(|(_, index)| {
+                log::info!("CJK font fallback for {script:?}/{family:?}: {} (face {index})", c.path.display());
+            })
+        })
     });
     found.as_ref().map(|(bytes, index)| (Arc::clone(bytes) as FontData, *index))
 }
 
+/// Read a candidate through the bounded file cache and select a face that maps `probe`,
+/// preferring the requested region and weight. Unreadable files and unsuitable faces return
+/// `None`, allowing the caller to try the next candidate without changing the PDF.
 fn read(candidate: &Candidate, probe: char, bold: bool) -> Option<(Arc<Vec<u8>>, u32)> {
     let bytes = file_bytes(&candidate.path)?;
     let index = pick_face(&bytes, probe, candidate.region, bold)?;
@@ -97,7 +147,7 @@ fn read(candidate: &Candidate, probe: char, bold: bool) -> Option<(Arc<Vec<u8>>,
 /// The bytes of an installed font file, read once for the whole process and shared: a collection
 /// such as `PingFang.ttc` is tens of megabytes and is the candidate of several scripts and both
 /// weights, so the per-script cache keeps only a handle and a face index. A file that cannot be
-/// used is remembered too, so it is not tried again for every script.
+/// used is remembered too, so it is not tried again for every script or family.
 fn file_bytes(path: &Path) -> Option<Arc<Vec<u8>>> {
     /// The bytes of each file tried, or `None` for one that cannot be used.
     type Files = HashMap<PathBuf, Option<Arc<Vec<u8>>>>;
@@ -108,11 +158,20 @@ fn file_bytes(path: &Path) -> Option<Arc<Vec<u8>>> {
 
 /// A regular file of at most `max` bytes, or `None`: a font path is untrusted input.
 fn read_file(path: &Path, max: u64) -> Option<Vec<u8>> {
+    // Reject special files before opening them (in particular a FIFO can block on open).
     let meta = std::fs::metadata(path).ok()?;
     if !meta.is_file() || meta.len() > max {
         return None;
     }
-    std::fs::read(path).ok()
+    let file = std::fs::File::open(path).ok()?;
+    let meta = file.metadata().ok()?;
+    if !meta.is_file() || meta.len() > max {
+        return None;
+    }
+    // Bound the actual read too: the file can grow after the metadata check.
+    let mut bytes = Vec::new();
+    file.take(max.saturating_add(1)).read_to_end(&mut bytes).ok()?;
+    (bytes.len() as u64 <= max).then_some(bytes)
 }
 
 /// The best face of the file that parses and maps `probe`: the region's face when the file has
@@ -143,7 +202,11 @@ fn pick_face(bytes: &[u8], probe: char, region: &[&str], bold: bool) -> Option<u
     best.map(|(index, _)| index)
 }
 
-fn candidates(script: Script) -> Vec<Candidate> {
+/// List installed-font paths in preference order, with regional face-name hints for collections.
+/// Windows Simplified Chinese first tries the named document family; its generic list also
+/// prefers a bold face for bold requests. macOS includes bounded downloaded-font locations.
+/// Only fixed platform filenames are used: a PDF font name never becomes a filesystem path.
+fn candidates(script: Script, family: ChineseFamily, bold: bool) -> Vec<Candidate> {
     let region: &'static [&'static str] = match script {
         Script::Japanese => &["JP", "Japanese"],
         Script::SimplifiedChinese => &["SC", "GB"],
@@ -154,7 +217,14 @@ fn candidates(script: Script) -> Vec<Candidate> {
         let dir = windows_fonts();
         let names: &[&str] = match script {
             Script::Japanese => &["YuGothR.ttc", "meiryo.ttc", "msgothic.ttc"],
-            Script::SimplifiedChinese => &["msyh.ttc", "simsun.ttc", "msjh.ttc"],
+            Script::SimplifiedChinese => match family {
+                ChineseFamily::Song => &["simsun.ttc", "msyh.ttc", "msjh.ttc"],
+                ChineseFamily::Hei => &["simhei.ttf", "msyh.ttc", "simsun.ttc", "msjh.ttc"],
+                ChineseFamily::Kai => &["simkai.ttf", "simsun.ttc", "msyh.ttc", "msjh.ttc"],
+                ChineseFamily::FangSong => &["simfang.ttf", "simsun.ttc", "msyh.ttc", "msjh.ttc"],
+                ChineseFamily::Default if bold => &["msyhbd.ttc", "msyh.ttc", "simsun.ttc", "msjh.ttc"],
+                ChineseFamily::Default => &["msyh.ttc", "simsun.ttc", "msjh.ttc"],
+            },
             Script::TraditionalChinese => &["msjh.ttc", "mingliu.ttc", "msyh.ttc"],
             Script::Korean => &["malgun.ttf", "gulim.ttc"],
         };
@@ -222,6 +292,8 @@ fn macos_font_asset_dirs() -> &'static [PathBuf] {
     })
 }
 
+/// Locate the Windows Fonts directory using `WINDIR`, then `SystemRoot`, then `C:\Windows`.
+/// This only constructs the path; candidate reads still enforce regular-file and size limits.
 fn windows_fonts() -> PathBuf {
     let dir = std::env::var_os("WINDIR").or_else(|| std::env::var_os("SystemRoot")).map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
     dir.join("Fonts")
@@ -233,6 +305,56 @@ mod tests {
 
     const SCRIPTS: [Script; 4] = [Script::Japanese, Script::SimplifiedChinese, Script::TraditionalChinese, Script::Korean];
 
+    /// Standard, localized and subset-prefixed names retain their Chinese family hint;
+    /// unrelated Latin names and generic YaHei requests use the default candidate list.
+    #[test]
+    fn chinese_family_hints_include_subset_and_localized_names() {
+        for name in ["SimSun", "ABCDEF+SimSun", "STSong-Light", "宋体"] {
+            assert_eq!(ChineseFamily::of(name), ChineseFamily::Song, "{name}");
+        }
+        for name in ["SimHei", "STHeiti", "黑体"] {
+            assert_eq!(ChineseFamily::of(name), ChineseFamily::Hei, "{name}");
+        }
+        for name in ["KaiTi", "STKaiti", "楷体"] {
+            assert_eq!(ChineseFamily::of(name), ChineseFamily::Kai, "{name}");
+        }
+        assert_eq!(ChineseFamily::of("Helvetica"), ChineseFamily::Default);
+        assert_eq!(ChineseFamily::of("MicrosoftYaHei"), ChineseFamily::Default);
+    }
+
+    /// FangSong names contain "song" and must not become Song; Founder (方正) names in CNKI papers
+    /// pick the matching installed family instead of YaHei for everything (#3587).
+    #[test]
+    fn fangsong_and_founder_names_pick_their_family() {
+        for name in ["FangSong", "FangSong_GB2312", "STFangsong", "SimFang", "仿宋", "FZFSK--GBK1-0", "ABCDEF+FZFSK--GBK1-0"] {
+            assert_eq!(ChineseFamily::of(name), ChineseFamily::FangSong, "{name}");
+        }
+        for name in ["FZSSK--GBK1-0", "FZBSK--GBK1-0", "FZXBSK--GBK1-0", "FZShuSong-Z01", "STZhongsong", "NSimSun", "ABCDEF+FZSSK--GBK1-0"] {
+            assert_eq!(ChineseFamily::of(name), ChineseFamily::Song, "{name}");
+        }
+        for name in ["FZHTK--GBK1-0", "FZLTHJW--GB1-0", "STXihei", "ABCDEF+FZHTK--GBK1-0"] {
+            assert_eq!(ChineseFamily::of(name), ChineseFamily::Hei, "{name}");
+        }
+        for name in ["FZKTK--GBK1-0", "KaiTi_GB2312", "ABCDEF+FZKTK--GBK1-0"] {
+            assert_eq!(ChineseFamily::of(name), ChineseFamily::Kai, "{name}");
+        }
+    }
+
+    /// Every family has a Windows list that ends in faces any Chinese Windows has, so a missing
+    /// named face still draws the text.
+    #[cfg(windows)]
+    #[test]
+    fn every_windows_chinese_family_falls_back_to_common_faces() {
+        for family in [ChineseFamily::Default, ChineseFamily::Song, ChineseFamily::Hei, ChineseFamily::Kai, ChineseFamily::FangSong] {
+            let list = candidates(Script::SimplifiedChinese, family, false);
+            assert!(list.iter().any(|c| c.path.ends_with("msyh.ttc")), "{family:?}");
+        }
+        let fangsong = candidates(Script::SimplifiedChinese, ChineseFamily::FangSong, false);
+        assert!(fangsong.first().is_some_and(|c| c.path.ends_with("simfang.ttf")));
+    }
+
+    /// Invalid font bytes, missing paths and directories produce no candidate face rather
+    /// than preventing the resolver from trying a later installed font.
     #[test]
     fn broken_and_missing_files_are_skipped() {
         assert_eq!(pick_face(b"", '\u{7269}', &[], false), None);
@@ -265,6 +387,8 @@ mod tests {
         assert!(file_bytes(missing).is_none() && file_bytes(missing).is_none());
     }
 
+    /// A Latin-only face fails every CJK probe even though its Latin glyph remains readable,
+    /// distinguishing unsupported script coverage from an unparseable font file.
     #[test]
     fn a_latin_face_is_rejected_for_every_script() {
         let inter = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
@@ -274,20 +398,27 @@ mod tests {
         assert_eq!(pick_face(inter, 'A', &[], false), Some(0));
     }
 
+    /// Platform candidates are absolute TrueType paths and exclude the font families barred
+    /// by the asset policy, independently of whether those files are installed locally.
     #[test]
     fn candidates_are_absolute_font_files_without_adobe_designs() {
         for script in SCRIPTS {
-            let list = candidates(script);
+            let list = candidates(script, ChineseFamily::Default, false);
             assert!(!list.is_empty(), "{script:?}");
             for c in list {
                 assert!(c.path.is_absolute(), "{}", c.path.display());
                 assert!(c.path.extension().is_some_and(|e| e == "ttf" || e == "ttc"), "{}", c.path.display());
                 let name = c.path.to_string_lossy().to_lowercase();
-                assert!(!["adobe", "kozuka", "minion", "myriad"].iter().any(|b| name.contains(b)), "{name}");
+                assert!(
+                    !["notosanscjk", "notoserifcjk", "sourcehan", "source-han", "adobe", "kozuka", "minion"].iter().any(|b| name.contains(b)),
+                    "{name}"
+                );
             }
         }
     }
 
+    /// The four regional Adobe collections select their corresponding scripts; Identity
+    /// carries no regional information and must not acquire an installed fallback by guess.
     #[test]
     fn only_the_four_adobe_collections_have_a_script() {
         assert_eq!(Script::of(&CidFamily::AdobeCNS1), Some(Script::TraditionalChinese));
@@ -297,13 +428,44 @@ mod tests {
         assert_eq!(Script::of(&CidFamily::AdobeIdentity), None);
     }
 
+    /// A real Windows GBK book names these faces. Replacing both with YaHei hides the
+    /// distinction between serif body text and sans headings even when the exact face exists.
+    #[cfg(windows)]
+    #[test]
+    fn windows_preserves_installed_chinese_document_families() {
+        use hayro::hayro_interpret::hayro_cmap::CharacterCollection;
+        for (name, expected, file) in [
+            ("SimSun", "SimSun", "simsun.ttc"),
+            ("SimHei", "SimHei", "simhei.ttf"),
+            ("KaiTi", "KaiTi", "simkai.ttf"),
+            ("FangSong", "FangSong", "simfang.ttf"),
+            ("ABCDEF+FZSSK--GBK1-0", "SimSun", "simsun.ttc"),
+            ("ABCDEF+FZHTK--GBK1-0", "SimHei", "simhei.ttf"),
+            ("ABCDEF+FZKTK--GBK1-0", "KaiTi", "simkai.ttf"),
+            ("ABCDEF+FZFSK--GBK1-0", "FangSong", "simfang.ttf"),
+        ] {
+            if !windows_fonts().join(file).is_file() {
+                continue;
+            }
+            let query = FallbackFontQuery {
+                post_script_name: Some(name.into()),
+                character_collection: Some(CharacterCollection { family: CidFamily::AdobeGB1, supplement: 4 }),
+                ..FallbackFontQuery::default()
+            };
+            let (bytes, index) = fallback(&query).expect("installed Chinese font");
+            let font = skrifa::FontRef::from_index(bytes.as_ref().as_ref(), index).unwrap();
+            let names: Vec<String> = font.localized_strings(StringId::POSTSCRIPT_NAME).map(|n| n.chars().collect()).collect();
+            assert!(names.iter().any(|n| n.eq_ignore_ascii_case(expected)), "{name} resolved to {names:?}, expected {expected}");
+        }
+    }
+
     /// On a Mac the face for Traditional Chinese is the TC one of PingFang, not the first of the
     /// collection (which is another region's), and it maps a character only Traditional has.
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_picks_the_regional_pingfang_face() {
         // Found where this macOS keeps it: the system folder, or the downloaded font assets.
-        let path = candidates(Script::TraditionalChinese)
+        let path = candidates(Script::TraditionalChinese, ChineseFamily::Default, false)
             .into_iter()
             .map(|c| c.path)
             .find(|p| p.file_name().is_some_and(|n| n == "PingFang.ttc") && p.is_file());
@@ -324,6 +486,8 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_candidates_include_a_pingfang_that_lives_in_the_font_assets() {
+        /// Independently locate an installed asset by filename within the test's depth limit,
+        /// providing an oracle for the production candidate list without using its discovery.
         fn find(dir: &Path, name: &str, depth: u32) -> Option<PathBuf> {
             for entry in std::fs::read_dir(dir).ok()?.flatten() {
                 let path = entry.path();
@@ -345,7 +509,11 @@ mod tests {
             return;
         };
         for script in [Script::SimplifiedChinese, Script::TraditionalChinese] {
-            assert!(candidates(script).iter().any(|c| c.path == asset), "{script:?}: {} is not a candidate", asset.display());
+            assert!(
+                candidates(script, ChineseFamily::Default, false).iter().any(|c| c.path == asset),
+                "{script:?}: {} is not a candidate",
+                asset.display()
+            );
         }
     }
 }
