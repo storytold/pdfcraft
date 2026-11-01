@@ -83,7 +83,7 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
             metrics,
             &shown,
             target.origin.state.font.as_ref().map_or(target.size, |(_, size)| *size),
-            source_space(doc, &fonts_res, metrics),
+            source_space(doc, &fonts_res, &target.font, metrics),
             target.origin.state.char_spacing,
             target.origin.state.word_spacing,
         )?),
@@ -775,7 +775,7 @@ fn source_font(doc: &Document, fonts_res: &Dict, font_name: &str, first: &TextLi
     let visual_indic = metrics.as_ref().is_some_and(|m| m.visual_order) || first.visual_order;
     let indic_text = if visual_indic { crate::indic::to_visual(flat) } else { flat.to_owned() };
     let reuse = style.family.is_none() && style.bold.is_none() && metrics.as_ref().is_some_and(|m| source_encodes(m, &indic_text));
-    let space = metrics.as_ref().map_or(0.33, |m| source_space(doc, fonts_res, m));
+    let space = metrics.as_ref().map_or(0.33, |m| source_space(doc, fonts_res, font_name, m));
     SourceFont { metrics, reuse, space }
 }
 

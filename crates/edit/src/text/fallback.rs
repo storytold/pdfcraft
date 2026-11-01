@@ -541,7 +541,9 @@ thread_local! {
     pub(crate) static SOURCE_SPACE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-pub(crate) fn source_space(doc: &Document, fonts: &Dict, metrics: &Metrics) -> f64 {
+/// A missing PDF space uses the validated complete source program only after encoded widths.
+/// Callers cache this per resource: program decoding must not run once per character.
+pub(crate) fn source_space(doc: &Document, fonts: &Dict, name: &str, metrics: &Metrics) -> f64 {
     #[cfg(test)]
     SOURCE_SPACE_CALLS.with(|c| c.set(c.get().saturating_add(1)));
     let width = |m: &Metrics| m.encode(" ").map(|b| m.codes(&b).iter().map(|(c, _)| m.width(*c)).sum::<f64>());
@@ -559,7 +561,14 @@ pub(crate) fn source_space(doc: &Document, fonts: &Dict, metrics: &Metrics) -> f
             }
         }
     }
-    0.33
+    // A complete source can contain a space outline even when this PDF resource's
+    // encoding omits it. Use the same advance that a later contextual encoding of
+    // that program will expose, rather than changing from an estimate after an edit.
+    source_program(doc, fonts, name)
+        .and_then(|bytes| pdfcraft_fonts::source_shaping::shape(&bytes, " ").ok())
+        .map(|run| run.advance)
+        .filter(|advance| (0.0..=16.0).contains(advance))
+        .unwrap_or(0.33)
 }
 
 pub(crate) fn source_width(metrics: &Metrics, text: &str, size: f64, space: f64, char_spacing: f64, word_spacing: f64) -> f64 {
@@ -598,4 +607,64 @@ pub(crate) fn source_show(metrics: &Metrics, text: &str, size: f64, space: f64, 
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod space_tests {
+    use super::*;
+
+    #[test]
+    fn an_unencoded_space_uses_the_complete_source_program_advance() {
+        let bytes = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+        let mut doc = Document::new_empty();
+        let mut fonts = Dict::new();
+        let shaped = pdfcraft_fonts::source_shaping::shape(bytes, "A").unwrap();
+        let name = pdfcraft_fonts::embedding::embed_mapping(&mut doc, &mut fonts, bytes, "Inter", &shaped.pdf_mappings(bytes).unwrap()).unwrap();
+        let font = doc.dict(fonts.get(name.as_bytes()).unwrap()).unwrap();
+        let metrics = Metrics::from_dict(&doc, &font);
+        assert!(metrics.encode(" ").is_none(), "the PDF encoding deliberately omits space");
+        let expected = pdfcraft_fonts::source_shaping::shape(bytes, " ").unwrap().advance;
+        let actual = source_space(&doc, &fonts, &name, &metrics);
+        assert!((actual - expected).abs() < 1e-9, "unencoded space: {actual}, source program: {expected}");
+        let font_ref = fonts.get(name.as_bytes()).unwrap().as_ref().unwrap();
+        let mut unavailable = font.clone();
+        unavailable.set(b"BaseFont".to_vec(), Object::name("ABCDEF+Inter"));
+        doc.set(font_ref, Object::Dict(unavailable.clone()));
+        let metrics = Metrics::from_dict(&doc, &unavailable);
+        assert_eq!(source_space(&doc, &fonts, &name, &metrics), 0.33, "a subset's unused glyphs are not trusted");
+        unavailable.set(b"BaseFont".to_vec(), Object::name("Inter"));
+        unavailable.remove(b"DescendantFonts");
+        doc.set(font_ref, Object::Dict(unavailable.clone()));
+        let metrics = Metrics::from_dict(&doc, &unavailable);
+        assert_eq!(source_space(&doc, &fonts, &name, &metrics), 0.33, "a missing source program retains the bounded fallback");
+    }
+
+    #[test]
+    fn encoded_pdf_space_widths_take_precedence_over_the_program() {
+        let bytes = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+        let mut doc = Document::new_empty();
+        let mut fonts = Dict::new();
+        let shaped = pdfcraft_fonts::source_shaping::shape(bytes, " ").unwrap();
+        let name = pdfcraft_fonts::embedding::embed_mapping(&mut doc, &mut fonts, bytes, "Inter", &shaped.pdf_mappings(bytes).unwrap()).unwrap();
+        let font = doc.dict(fonts.get(name.as_bytes()).unwrap()).unwrap();
+        let descendant = font.get(b"DescendantFonts").unwrap().as_array().unwrap()[0].as_ref().unwrap();
+        let letters = pdfcraft_fonts::source_shaping::shape(bytes, "A").unwrap();
+        let unencoded =
+            pdfcraft_fonts::embedding::embed_mapping(&mut doc, &mut fonts, bytes, "Inter", &letters.pdf_mappings(bytes).unwrap()).unwrap();
+        let unencoded_font = doc.dict(fonts.get(unencoded.as_bytes()).unwrap()).unwrap();
+        let unencoded_metrics = Metrics::from_dict(&doc, &unencoded_font);
+        // A PDF may explicitly request a space advance unlike the font's own hmtx.
+        for width in [0.0, 470.0] {
+            doc.update_dict(descendant, |cid| {
+                cid.set(b"W".to_vec(), Object::Array(vec![Object::Int(1), Object::Array(vec![Object::Real(width)])]));
+            })
+            .unwrap();
+            let metrics = Metrics::from_dict(&doc, &font);
+            assert!((source_space(&doc, &fonts, &name, &metrics) - width / 1000.0).abs() < 1e-9);
+            assert!(
+                (source_space(&doc, &fonts, &unencoded, &unencoded_metrics) - width / 1000.0).abs() < 1e-9,
+                "a sibling's encoded width wins over the program too"
+            );
+        }
+    }
 }

@@ -1,5 +1,8 @@
 # Editing existing text and source subsets
 
+For the supported Arabic features, exact verification results and remaining limits,
+see [Arabic feature record](arabic-features.md).
+
 Click a text region in **Edit a PDF → Edit text and images**. One editor contains its
 source rows and mixed styles. Embedded TrueType and OpenType/CFF faces are used in memory;
 source font programs, colour, size and baseline anchors stay intact. A textless preview

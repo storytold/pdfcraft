@@ -1,0 +1,107 @@
+ARABIC EDITING - FEATURES, TESTS AND PROGRESS
+Date: 2026-11-01
+Verified core checkpoint: a8a1e696230582e41c97ba212c1d2c580f709949
+
+PROBLEM AND RESULT
+Supported Arabic paragraphs with a complete editable embedded source face retain
+their font, logical Unicode, baseline and appearance through repeated edits,
+undo/redo and incremental save/reopen. Latin-to-Arabic-to-Latin space drift and
+tracking that displaced marks/dots are fixed. Strict pixel assertions remain active.
+
+FEATURES INCLUDED AT THE CORE CHECKPOINT
+- Complete source-font reuse and uniform contextual encoding after repeated edits.
+- Guarded baseline recovery for leading zero-advance Arabic marks.
+- Cluster Unicode ownership on advancing bodies, with unchanged glyph positions.
+- Explicit empty CMap destinations and empty auxiliary glyph handling.
+- Source-program space advances after explicit PDF/sibling widths; bounded fallback.
+- Uniform span completion to remove split-text-matrix rounding drift.
+- Tracking between complete clusters; horizontal-scale qualification.
+- Preview/Apply bounds, exact copy/search text, history, incremental save and reopen.
+- Atomic refusal of unsupported mixed contextual styles and existing font safeguards.
+
+FAILURE-BEFORE / PASS-AFTER EVIDENCE
+A4 source-space unit: 0 passed / 1 failed before correction (0.33 vs 0.28125 em).
+A4 strict engine reproduction: 5 passed / 1 failed / 0 ignored before correction.
+Metrics alone still failed strict pixels with 0.000047968 pt residual drift.
+Uniform span completion removed the residual; final engine passes strict pixels.
+A5 tracking: 0 passed / 1 failed before correction (mark displaced 1.625 pt).
+Correction-only reversions reproduced both failures with assertions unchanged.
+Restored corrections pass focused tests and combined runtime checks.
+
+COMPLETED CHECKS AT THE VERIFIED CORE CHECKPOINT
+Native fonts/editor/renderer: 945 passed, 0 failed, 1 existing corpus ignore.
+  Editor: 365 passed, 0 failed, 0 ignored (final source rerun).
+  Fonts: 92 unit + 3 build-input integration passed.
+  Renderer: 422 unit + 63 integration passed, 1 existing corpus ignore.
+Engine integration: 20 passed, 0 failed, 2 existing private-input ignores.
+Focused controls: 2 space tests, 1 cache test, 1 tracking/scale test (36 controls).
+Clippy: four packages, all targets, -D warnings, two compiler jobs; passed.
+WASM: four packages, wasm32-unknown-unknown; passed, five existing render warnings.
+Formatting: passed. Layers: 37 crates, no violations. Assets: passed.
+CLI: rebuilt from checkpoint, 34 operations, 8 exact Unicode states, 5 strict PNG
+comparisons; preview/history/search/incremental prefix/reopen verified.
+Arabic renders before save and after reopen were visually inspected and match.
+
+EXISTING IGNORES (NOT ARABIC ACCEPTANCE BYPASSES)
+Renderer: jbig2_invariants::every_jbig2_conformance_fixture_decodes_to_the_same_picture
+  Requires the separately supplied corpus.
+Engine: private_image_resize::private_cropped_images_resize_save_reopen_and_undo
+  Requires private artwork input.
+Engine: private_text_glyphs::private_new_chinese_glyphs_keep_face_position_save_reopen_and_undo
+  Requires a private Chinese PDF and approved full face.
+
+QUALIFICATION ENVIRONMENT AND LIMITS
+Rust 1.95.0, mandatory external font-input gates, two compiler jobs.
+Pinned craft-fonts: b076417b5880bd4154bd22f00695b1d28c6bea83.
+Static Noto Sans Arabic SHA-256:
+65efad4885c590b640d9601b8cc6d9b66026e9ff74154ac600207600842c0f70
+Local-only Boa dev optimization override; no JavaScript performance qualification.
+No font/PDF/image binaries, private handoffs or new CI changes are included.
+PRs #5602 and #5603 are separate contributions.
+
+UPSTREAM INTEGRATION / PUBLICATION CHECKS
+Upstream snapshot: eea00a61 (35 fetched commits integrated).
+Roadmap insertion conflicts retained both upstream and Arabic progress records.
+Combined-code engine suite: 393 unit passed / 0 failed / 2 existing manual probes
+ignored; 20 integration passed / 0 failed / 2 existing private-fixture ignores.
+Command: cargo test --offline --locked -p pdfcraft-engine --lib --test it -j 2 -- --test-threads=1
+Initial parallel engine run: 391 passed, 2 timing failures, 2 existing ignores.
+The two failures were hostile_xfa_open_scripts_are_merged_capped_kept_from_printing_and_noted
+and runaway_xfa_calculations_at_open_end_quickly_with_a_report. Both passed unchanged
+in the serial suite; local unoptimized Boa plus contention hit existing wall-clock
+guards. No test, timeout or assertion was weakened; no JS performance claim is made.
+The manual unit ignores are acroform_interaction_benchmark and
+probe_edit_latency_on_a_large_signed_document.
+Combined-code Clippy (four packages/all targets/-D warnings), WASM (four packages,
+five existing render warnings), formatting, layers and source license-check passed.
+The license-check includes assets: 289 repository / 6 dependency / 22 build-input assets.
+Rebuilt combined-code CLI: 34 steps, 8 exact Unicode states, 5 strict PNG pairs;
+incremental original-byte prefix, history, preview, search and reopen passed again.
+Native fonts/editor/renderer production sources are unchanged by this integration;
+their previously recorded 945-pass qualification is retained, not double-counted.
+
+DEFERRED FOLLOW-UP (EXCLUDED FROM THIS PUBLICATION)
+Explicit Auto/LTR/RTL controls for page text, added text and form properties.
+The unfinished direction-control work is preserved locally, outside tracked files.
+Windows desktop launch qualification also remains pending. The first desktop build
+was interrupted to prioritize publication; no runnable Windows GUI binary is claimed.
+Core counts do not qualify these follow-ups.
+
+PR #5623 REVIEW FOLLOW-UP / 2026-11-01
+Upstream 47f42ba0 integrated; no Rust production changes in the review follow-up.
+Fresh native: editor 365 + fonts 95 + renderer 485 = 945 passed, one corpus ignore.
+Fresh engine: 393 unit + 20 integration passed; two manual and two private-input ignores.
+The formerly ignored leading-mark position test is active and passing.
+Fresh formatting, scoped all-target Clippy (-D warnings), scoped WASM, layers,
+assets and parity passed. Five existing renderer WASM warnings remain.
+Required Arabic font gates and pinned source/static font hashes were verified.
+Old local Boa opt-level=0 caused two serial engine attempts to report 391/2/2 and
+392/1/2 (passed/failed/ignored). Both affected XFA tests passed isolated unchanged.
+The final full engine run above uses the repository dependency opt-level=2, with
+the local override removed. No test/assertion/timeout was weakened. Earlier CLI
+results remain historical; local tests do not replace exact-head GitHub CI or
+independent native Arabic reader review.
+
+NOT A COMPLETE ARABIC SUPPORT CLAIM
+Precise caret/selection, native/browser IME, rich mixed formatting, arbitrary PDF
+compatibility, Arabic form appearance coverage, OCR and export require further work.

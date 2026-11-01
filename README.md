@@ -439,6 +439,12 @@ PdfCraft is young and moving fast. The aim is a workbench where you can view, or
 
 The summary is in **[ROADMAP.md](ROADMAP.md)**; the full assessment by dimension and area is in [docs/target-app-parity.md](docs/target-app-parity.md), the ranked gaps in [docs/gaps.md](docs/gaps.md), and the milestones in [docs/roadmap.md](docs/roadmap.md).
 
+**Arabic core-editing checkpoint:** supported complete-source paragraphs now retain exact Unicode,
+mark positions, spacing and appearance through repeated Arabic/Latin edits, history and save/reopen.
+See the [feature and qualification record](docs/arabic-features.md) and
+[test/progress report](docs/arabic-editing-pr-summary.txt). Explicit direction controls and wider
+UI/IME, form-appearance and mixed-formatting qualification remain follow-up work.
+
 ---
 
 ## Downloads
