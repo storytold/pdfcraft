@@ -8200,8 +8200,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
 tools = ["doc_print"]
-evidence = ["crates/print/src/tests.rs::size_modes", "crates/print/src/tests.rs::architectural_sheets_preserve_full_scale", "crates/automation/tests/it/automation.rs::architectural_and_iso_papers_through_tools", "crates/ui-egui/tests/it/print.rs::architectural_page_can_be_matched_at_100_percent"]
-notes = "auto portrait/landscape"
+evidence = ["crates/print/src/tests.rs::size_modes", "crates/print/src/tests.rs::architectural_sheets_preserve_full_scale", "crates/automation/tests/it/automation.rs::architectural_and_iso_papers_through_tools", "crates/ui-egui/tests/it/print.rs::architectural_page_can_be_matched_at_100_percent", "crates/print/src/tests.rs::landscape_sheets_ask_cups_to_turn_the_page", "crates/print/src/tests.rs::a_job_that_names_its_orientation_keeps_it", "crates/automation/src/printing.rs::printing_landscape_sheets_to_a_printer_asks_cups_to_turn_them", "crates/ui-egui/tests/it/print.rs::printing_landscape_sheets_tells_cups_to_turn_them"]
+notes = "auto portrait/landscape. CUPS jobs carry orientation-requested=4 when every sheet is landscape, so a landscape sheet fills its portrait paper instead of being shrunk into it or, with the Mac's filters, printed unrotated and cut off at the paper's edge (#2713, #3739); an orientation the job already names (a driver choice, or doc_print's options) stands, and a job that mixes orientations is left to the spooler, so its landscape sheets still print unturned. Windows sets orientation in its own print ticket. The CUPS option was checked against Apple's filters (cupsfilter on an AirPrint PPD, no paper printed), and #3068's author printed one landscape page with it on a physical printer on macOS; the tests check the job both submission paths send, not a spooler's output, and physical output is otherwise unvalidated."
 
 [[feature]]
 id = "print.comments-and-forms"
