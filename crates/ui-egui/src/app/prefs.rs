@@ -72,7 +72,7 @@ impl PdfCraftApp {
         date_text(&self.session, fmt)
     }
 
-    /// Serialize the user's persistent state (recent files, theme). Local only.
+    /// Serialize the user's persistent state (recent files, theme, print paper and booklet binding). Local only.
     pub fn persist(&self) -> String {
         let trusted: Vec<String> = self.session.trusted_certificates().iter().map(pdfcraft_engine::sign::x509::to_pem).collect();
         let mut v = serde_json::json!({
@@ -229,7 +229,7 @@ impl PdfCraftApp {
         }
     }
 
-    /// Switches for reopening, window chrome and file watching.
+    /// Restore reopening, window-chrome, print-paper and booklet-binding preferences.
     fn restore_behavior_prefs(&mut self, v: &serde_json::Value) {
         if let Some(show) = v["default_page_gaps"].as_bool() {
             self.view_defaults.show_page_gaps = show;
