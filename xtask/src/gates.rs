@@ -133,7 +133,8 @@ pub fn ci(_: &[String]) -> anyhow::Result<()> {
 
 /// `cargo xtask i18n-report`: the strings each interface language has no translation for, as
 /// counts and the first few keys, from the UI crate's `translation_gaps_report` test. It always
-/// passes: a missing string shows in English. `--workspace` runs the test from the workspace
+/// passes: a missing string shows in English. Under GitHub Actions the report is also appended to
+/// the job summary (`GITHUB_STEP_SUMMARY`). `--workspace` runs the test from the workspace
 /// test build, which `xtask ci` has just made; without it only the UI crate is built.
 pub fn i18n_report(args: &[String]) -> anyhow::Result<()> {
     const TEST: &str = "i18n::tests::translation_gaps_report";
@@ -155,8 +156,14 @@ pub fn i18n_report(args: &[String]) -> anyhow::Result<()> {
     if report.is_empty() {
         println!("i18n-report: no report (cargo test exited with {})", out.status);
     }
-    for line in report {
+    for line in &report {
         println!("{line}");
+    }
+    // Under GitHub Actions, also show the report in the job summary. Best effort: never fails the build.
+    if let (Some(path), false) = (std::env::var_os("GITHUB_STEP_SUMMARY"), report.is_empty()) {
+        use std::io::Write;
+        let text = format!("### Translation gaps\n\n```\n{}\n```\n", report.join("\n"));
+        let _ = std::fs::OpenOptions::new().append(true).create(true).open(path).and_then(|mut f| f.write_all(text.as_bytes()));
     }
     Ok(())
 }
