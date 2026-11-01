@@ -276,11 +276,30 @@ fn notice_bar(ui: &mut egui::Ui, t: &Tokens, icon: &str, icon_color: Color32, te
     });
 }
 
-/// The floating quick-action bar at the left edge of the document area.
-pub(super) fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
+/// The bar's narrowest form: one 32 pt button, 6 pt margins and a 1 pt border each side.
+const QUICK_BAR_WIDTH: f32 = 46.0;
+const QUICK_BAR_EDGE: f32 = 14.0;
+
+/// How far from the side panel the quick-action bar stands, given the width of the margin between
+/// the panel and the page and the bar's own width: centred in the margin when it holds the bar,
+/// else 14 pt in (a page filling the width). With no page on screen the caller passes a margin of 0,
+/// which is 14 pt too.
+fn quick_bar_offset(margin: f32, width: f32) -> f32 {
+    // shortcut: centred in at most 100 pt of margin, so a wide margin keeps the bar by the panel.
+    // `f32::min` returns the other operand for NaN, which would pass the fit check below.
+    let margin = if margin.is_nan() { 0.0 } else { margin.min(100.0) };
+    if margin >= width + 2.0 * 8.0 { (margin - width) / 2.0 } else { QUICK_BAR_EDGE }
+}
+
+/// The floating quick-action bar in the margin between the side panel and the page.
+pub(super) fn quick_bar(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    let pos = area.left_top() + vec2(14.0, 14.0);
-    egui::Area::new(egui::Id::unique("quick-bar")).order(egui::Order::Middle).fixed_pos(pos).show(ui.ctx(), |ui| {
+    let id = egui::Id::unique("quick-bar");
+    // Last frame's bar: Fill & Sign's Text and Date tools add a wider row of controls to it.
+    let width = ui.ctx().memory(|m| m.area_rect(id)).map_or(QUICK_BAR_WIDTH, |bar| bar.width().max(QUICK_BAR_WIDTH));
+    let x = quick_bar_offset(page_left.map_or(0.0, |left| left - area.left()), width);
+    let pos = area.left_top() + vec2(x, QUICK_BAR_EDGE);
+    egui::Area::new(id).order(egui::Order::Middle).fixed_pos(pos).show(ui.ctx(), |ui| {
         egui::Frame::NONE
             .fill(t.card)
             .stroke(Stroke::new(1.0, t.border))
@@ -495,4 +514,39 @@ pub(super) fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                 });
             });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::quick_bar_offset;
+
+    #[test]
+    fn the_quick_bar_centres_in_the_margin_that_holds_it() {
+        assert_eq!(quick_bar_offset(72.0, 46.0), 13.0);
+        assert_eq!(quick_bar_offset(62.0, 46.0), 8.0);
+        // A wide margin centres in its first 100 pt, not all of it.
+        assert_eq!(quick_bar_offset(400.0, 46.0), 27.0);
+    }
+
+    #[test]
+    fn the_margin_that_just_holds_the_bar_centres_and_a_point_less_does_not() {
+        // 46 pt of bar and 8 pt to spare each side: 62 pt.
+        assert_eq!(quick_bar_offset(62.0, 46.0), 8.0);
+        assert_eq!(quick_bar_offset(61.0, 46.0), 14.0);
+        assert_eq!(quick_bar_offset(1000.0, 46.0), 27.0);
+    }
+
+    #[test]
+    fn a_wider_quick_bar_centres_by_its_own_width_and_needs_a_wider_margin() {
+        // Fill & Sign's Text tool widens the bar to 70 pt: it centres by that, and 72 pt no longer holds it.
+        assert_eq!(quick_bar_offset(120.0, 70.0), 15.0);
+        assert_eq!(quick_bar_offset(72.0, 70.0), 14.0);
+    }
+
+    #[test]
+    fn the_quick_bar_keeps_14_pt_in_when_the_margin_cannot_hold_it() {
+        for margin in [61.9, 30.0, 0.0, -50.0, f32::NEG_INFINITY, f32::NAN] {
+            assert_eq!(quick_bar_offset(margin, 46.0), 14.0, "{margin}");
+        }
+    }
 }
