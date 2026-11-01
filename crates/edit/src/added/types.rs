@@ -58,7 +58,7 @@ impl Family {
     /// `italic` matters: the item is written out as the oblique/italic face (see [`Family::base_font`]),
     /// whose published widths differ from the upright face (Times-Italic `A` is 611, Times-Roman 722).
     pub fn width(self, s: &str, size: f64, bold: bool, italic: bool) -> f64 {
-        self.std14(bold, italic).text_width(s, size)
+        self.std14(bold, italic).latin_text_width(s, size)
     }
 
     /// The standard-14 face this family means at the given style.

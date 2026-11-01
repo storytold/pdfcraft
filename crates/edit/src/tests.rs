@@ -6960,6 +6960,132 @@ fn a_clipping_copy_on_the_same_baseline_is_refused() {
     assert_eq!(text::text_lines(&doc, 0).unwrap().len(), 2, "refused means untouched");
 }
 
+/// #2098: the Central European letters the standard fonts carry but WinAnsi has no code for
+/// (č ć đ ł ő …) are added in those fonts, through an `/Encoding` whose `/Differences` names
+/// them. Two items with different letters get different font entries, so neither redraws the
+/// other's codes; the text reads back as typed; the comma-accent letters, which aren't among the
+/// extra letters yet, are still refused.
+#[test]
+fn central_european_letters_on_several_lines_keep_their_codes() {
+    // Review on #3076: the line separator counted as a letter no standard font has, so text on
+    // two lines got no codes for its extra letters and they were written as `?`.
+    assert!(pdfcraft_fonts::LatinEncoding::for_text("č\nć").is_some());
+    let mut doc = fixture();
+    let item = AddedText { rect: [72.0, 600.0, 500.0, 700.0], text: "Đakovo čćđ\nŁódź ťuk".into(), size: 14.0, ..AddedText::default() };
+    add_content(&mut doc, 0, &Content::Text(item)).unwrap();
+    let doc = reopen(&doc);
+    let texts: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+    for want in ["Đakovo čćđ", "Łódź ťuk"] {
+        assert!(texts.iter().any(|t| t == want), "{want:?} in {texts:?}");
+    }
+}
+
+/// Review on #3076, checked in a widely used viewer: a font with extra letters carries their
+/// widths and their text by code (`/FirstChar 0 /LastChar 255 /Widths`, `/ToUnicode`), as that
+/// viewer took neither from the glyph names; and Courier refuses them, since its stand-in for
+/// Courier draws boxes for them.
+#[test]
+fn central_european_letters_carry_widths_and_text_and_courier_refuses_them() {
+    let mut doc = fixture();
+    let item = AddedText { rect: [72.0, 600.0, 500.0, 700.0], text: "Đakovo čć".into(), size: 14.0, ..AddedText::default() };
+    add_content(&mut doc, 0, &Content::Text(item)).unwrap();
+    let doc = reopen(&doc);
+    let page = page_list(&doc).swap_remove(0);
+    let res = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap();
+    let fonts = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap();
+    let font =
+        fonts.iter().find_map(|(k, v)| k.starts_with(b"PCFHelveticaL").then(|| doc.resolve(v).as_dict().cloned()).flatten()).expect("the font");
+    assert_eq!((font.get(b"FirstChar").and_then(Object::as_int), font.get(b"LastChar").and_then(Object::as_int)), (Some(0), Some(255)));
+    let widths = font.get(b"Widths").map(|o| doc.resolve(o)).and_then(|o| o.as_array().map(Vec::len));
+    assert_eq!(widths, Some(256));
+    let cmap = font.get(b"ToUnicode").map(|o| doc.resolve(o)).expect("a ToUnicode CMap");
+    let Object::Stream(cmap) = &*cmap else { panic!("not a stream") };
+    let cmap = String::from_utf8(cmap.decoded().unwrap().to_vec()).unwrap();
+    assert!(cmap.contains("<0110>") && cmap.contains("<010D>") && cmap.contains("<0107>"), "{cmap}");
+
+    let mut doc = fixture();
+    let courier =
+        AddedText { rect: [72.0, 600.0, 500.0, 700.0], text: "Đakovo".into(), size: 14.0, family: Family::Courier, ..AddedText::default() };
+    assert_eq!(first_undrawable(&courier), Some('Đ'));
+    let err = add_content(&mut doc, 0, &Content::Text(courier)).unwrap_err().to_string();
+    assert_eq!(err, crate::courier_undrawable_message('Đ'));
+    let plain =
+        AddedText { rect: [72.0, 600.0, 500.0, 700.0], text: "Zagreb šuma".into(), size: 14.0, family: Family::Courier, ..AddedText::default() };
+    add_content(&mut doc, 0, &Content::Text(plain)).unwrap();
+}
+
+#[test]
+fn central_european_letters_are_added_in_the_standard_fonts() {
+    // Review on #3076: more extra letters than the codes the text leaves to spare is refused,
+    // naming the letter that would be written as `?`, rather than written with it.
+    let mut doc = fixture();
+    let all: String = ('\u{100}'..='\u{17F}').filter(|c| pdfcraft_fonts::extra_letter(*c).is_some()).collect();
+    let high: String = ('\u{A1}'..='\u{FF}').collect();
+    let crowded = AddedText { rect: [72.0, 100.0, 560.0, 760.0], text: format!("{all}{high}"), size: 8.0, ..AddedText::default() };
+    let err = add_content(&mut doc, 0, &Content::Text(crowded.clone())).unwrap_err();
+    let left_out = pdfcraft_fonts::LatinEncoding::first_without_code(&crowded.text).expect("the codes run out");
+    assert!(err.to_string().contains(left_out), "{err}");
+    assert!(first_undrawable(&crowded).is_some());
+
+    let mut doc = fixture();
+    let item = |text: &str, top: f64| AddedText { rect: [72.0, top - 40.0, 500.0, top], text: text.into(), size: 14.0, ..AddedText::default() };
+    add_content(&mut doc, 0, &Content::Text(item("Đakovo: čćđ ČĆĐ", 700.0))).unwrap();
+    add_content(&mut doc, 0, &Content::Text(item("Łódź, Győr, Plzeň, ťuk", 640.0))).unwrap();
+    add_content(&mut doc, 0, &Content::Text(item("Zagreb šuma", 580.0))).unwrap();
+    let doc = reopen(&doc);
+    let texts: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+    for want in ["Đakovo: čćđ ČĆĐ", "Łódź, Győr, Plzeň, ťuk", "Zagreb šuma"] {
+        assert!(texts.iter().any(|t| t == want), "{want:?} in {texts:?}");
+    }
+    let page = page_list(&doc).swap_remove(0);
+    let res = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap();
+    let fonts = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap();
+    let ours: Vec<(Vec<u8>, Dict)> = fonts
+        .iter()
+        .filter(|(k, _)| k.starts_with(b"PCFHelvetica"))
+        .filter_map(|(k, v)| doc.resolve(v).as_dict().cloned().map(|d| (k.clone(), d)))
+        .collect();
+    // Plain WinAnsi text keeps the plain font; each set of extra letters has its own.
+    assert_eq!(ours.len(), 3, "{:?}", ours.iter().map(|(k, _)| String::from_utf8_lossy(k).into_owned()).collect::<Vec<_>>());
+    let encoding = |name: &[u8]| ours.iter().find(|(k, _)| k == name).map(|(_, d)| doc.resolve(d.get(b"Encoding").unwrap()));
+    assert_eq!(encoding(b"PCFHelvetica").and_then(|e| e.as_name().map(<[u8]>::to_vec)), Some(b"WinAnsiEncoding".to_vec()));
+    let names: Vec<Vec<String>> = ours
+        .iter()
+        .filter(|(k, _)| k != b"PCFHelvetica")
+        .map(|(_, d)| {
+            let e = doc.resolve(d.get(b"Encoding").unwrap());
+            let e = e.as_dict().unwrap();
+            assert_eq!(e.name(b"BaseEncoding"), Some(&b"WinAnsiEncoding"[..]));
+            let diffs = doc.resolve(e.get(b"Differences").unwrap());
+            diffs.as_array().unwrap().iter().filter_map(|o| o.as_name().map(|n| String::from_utf8_lossy(n).into_owned())).collect()
+        })
+        .collect();
+    assert!(
+        names.iter().any(|n| n.contains(&"dcroat".to_string()) && n.contains(&"Dcroat".to_string()) && n.contains(&"cacute".to_string())),
+        "{names:?}"
+    );
+    assert!(
+        names.iter().any(|n| n.contains(&"Lslash".to_string()) && n.contains(&"ohungarumlaut".to_string()) && n.contains(&"tcaron".to_string())),
+        "{names:?}"
+    );
+    // Retyped with other letters, an item reads back as typed and the other items are unchanged.
+    let mut doc = doc;
+    update_content(&mut doc, 0, 0, &Content::Text(item("Kraków: ąę żź", 700.0))).unwrap();
+    let doc = reopen(&doc);
+    let texts: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+    for want in ["Kraków: ąę żź", "Łódź, Győr, Plzeň, ťuk", "Zagreb šuma"] {
+        assert!(texts.iter().any(|t| t == want), "{want:?} in {texts:?}");
+    }
+    // Measured with the letters' standard widths (Helvetica ď is 643/1000 em), so wrapping and
+    // alignment place them right.
+    let wide = AddedText { text: "ďďďď".into(), size: 10.0, ..AddedText::default() };
+    assert!((crate::added::text_width(&wide) - 25.72).abs() < 1e-9, "{}", crate::added::text_width(&wide));
+    // A comma accent (Romanian ș) is still refused, as before.
+    let mut doc = doc;
+    let err = add_content(&mut doc, 0, &Content::Text(item("Brașov", 520.0))).unwrap_err().to_string();
+    assert!(err.contains("U+0219"), "{err}");
+}
+
 /// #2512: a session's drafts are laid out from the document as it was opened, never from each
 /// other, and its commit writes what a one-shot rewrite writes, whatever was laid out before.
 #[test]
@@ -8575,4 +8701,22 @@ fn styled_existing_justification_is_refused_instead_of_silently_left_aligning() 
     assert!(error.to_string().contains("justification"));
     assert_eq!(page_content_bytes(&doc, 0), before);
     assert_eq!(page_content_bytes(&reopen(&doc), 0), before);
+}
+
+/// Review on #3076: Thai text is laid out by `draw_shaped`, which writes its Latin runs in WinAnsi,
+/// so a Central European letter beside Thai has no code there and would be saved as `?`. It is
+/// refused, as in Arabic or Hebrew text; on its own the same letter is written (#2098).
+#[test]
+fn central_european_letters_beside_thai_are_refused() {
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        return;
+    }
+    let t = AddedText { rect: [20.0, 100.0, 250.0, 300.0], text: "ทดสอบ čć".into(), size: 16.0, ..AddedText::default() };
+    assert_eq!(first_undrawable(&t), Some('č'));
+    let mut doc = fixture();
+    let before = list_added(&doc);
+    let err = add_content(&mut doc, 0, &Content::Text(t.clone())).unwrap_err().to_string();
+    assert!(err.contains("U+010D"), "{err}");
+    assert_eq!(list_added(&doc), before);
+    assert_eq!(first_undrawable(&AddedText { text: "čć".into(), ..t }), None);
 }

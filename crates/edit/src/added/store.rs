@@ -156,6 +156,9 @@ fn validate(c: &Content) -> Result<(), EditError> {
                 first_undrawable(t)
             };
             if let Some(c) = undrawable {
+                if t.family == Family::Courier && pdfcraft_fonts::extra_letter(c).is_some() {
+                    return Err(EditError::Invalid(crate::courier_undrawable_message(c)));
+                }
                 return Err(crate::undrawable(c));
             }
         }

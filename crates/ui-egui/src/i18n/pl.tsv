@@ -2658,6 +2658,7 @@ animation effects	Off	Wyłączone
 	field names can't contain a period: {name}	nazwy pól nie mogą zawierać kropki: {name}
 	two cells would both be named {name}	dwie komórki miałyby nazwę {name}
 	a field named {name} already exists	pole o nazwie {name} już istnieje
+	Courier can't draw “{c}” ({code}) in other PDF viewers. Choose Helvetica or Times.	Czcionka Courier nie wyświetli znaku „{c}” ({code}) w innych przeglądarkach PDF. Wybierz Helvetica lub Times.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Dzisiaj

@@ -2838,6 +2838,7 @@ certificate	Version	الإصدار
 	field names can't contain a period: {name}	لا يمكن أن تحتوي أسماء الحقول على نقطة: {name}
 	two cells would both be named {name}	ستحمل خليتان الاسم نفسه {name}
 	a field named {name} already exists	يوجد حقل باسم {name} بالفعل
+	Courier can't draw “{c}” ({code}) in other PDF viewers. Choose Helvetica or Times.	لا يستطيع خط Courier عرض «{c}» ({code}) في عارضات PDF الأخرى. اختر Helvetica أو Times.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	اليوم
