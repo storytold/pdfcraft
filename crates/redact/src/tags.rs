@@ -281,11 +281,11 @@ pub(crate) fn clean_within(
         }
         doc.update_dict(r, |e| {
             if sensitive {
-                for key in [&b"Alt"[..], b"ActualText", b"E"] {
+                for key in [&b"Alt"[..], b"ActualText", b"T", b"E"] {
                     e.remove(key);
                 }
             }
-            if array {
+            if array && !keep.is_empty() {
                 e.set(b"K".to_vec(), Object::Array(keep));
             } else if let Some(k) = keep.into_iter().next() {
                 e.set(b"K".to_vec(), k);
@@ -420,17 +420,130 @@ fn kids_of(doc: &Document, d: &Dict) -> Vec<Object> {
 /// The most ancestors [`inherited_page`] looks through; deeper trees, and cycles, go unanswered.
 const MAX_PARENTS: usize = 256;
 
-/// Whether `o` is an object reference (`/Type /OBJR`, direct or indirect) to one of `gone`.
+/// Whether `o` is a direct reference, an object reference (`/Type /OBJR`), or a marked-content
+/// reference (`/Type /MCR`) to one of `gone`.
 fn refers_to(doc: &Document, o: &Object, gone: &HashSet<ObjRef>) -> bool {
-    doc.resolve(o)
-        .as_dict()
-        .is_some_and(|d| d.name(b"Type") == Some(b"OBJR") && d.get(b"Obj").and_then(Object::as_ref).is_some_and(|r| gone.contains(&r)))
+    if o.as_ref().is_some_and(|r| gone.contains(&r)) {
+        return true;
+    }
+    doc.resolve(o).as_dict().is_some_and(|d| {
+        (d.name(b"Type") == Some(b"OBJR") && d.get(b"Obj").and_then(Object::as_ref).is_some_and(|r| gone.contains(&r)))
+            || (d.name(b"Type") == Some(b"MCR")
+                && (d.get(b"Stm").and_then(Object::as_ref).is_some_and(|r| gone.contains(&r))
+                    || d.get(b"StmOwn").and_then(Object::as_ref).is_some_and(|r| gone.contains(&r))))
+    })
 }
 
 /// What a number or name tree node leads on to: its `/Nums` or `/Names` array (keys and values
 /// alike; the walk ignores numbers and strings) and its `/Kids`.
 fn tree_node_entries(d: &Dict) -> Vec<Object> {
     [&b"Nums"[..], b"Names", b"Kids"].iter().filter_map(|key| d.get(key).cloned()).collect()
+}
+
+fn clean_tree_dict(
+    doc: &mut Document,
+    d: &mut Dict,
+    all_gone: &HashSet<ObjRef>,
+    struct_parents: &HashSet<i64>,
+    emptied_elems: &HashSet<ObjRef>,
+) -> bool {
+    let is_empty_elem = |o: &Object| -> bool { o.as_ref().is_some_and(|r| emptied_elems.contains(&r)) };
+    let mut changed = false;
+    if let Some(nums_obj) = d.get(b"Nums").cloned()
+        && let Some(nums) = doc.resolve(&nums_obj).as_array().cloned()
+    {
+        let mut kept = Vec::with_capacity(nums.len());
+        for pair in nums.chunks(2) {
+            let [k, v] = pair else {
+                kept.extend_from_slice(pair);
+                continue;
+            };
+            if k.as_int().is_some_and(|key| struct_parents.contains(&key)) || refers_to(doc, v, all_gone) || is_empty_elem(v) {
+                changed = true;
+                continue;
+            }
+            if let Some(arr) = doc.resolve(v).as_array().cloned() {
+                let mut new_arr = Vec::with_capacity(arr.len());
+                let mut arr_changed = false;
+                for item in arr {
+                    if refers_to(doc, &item, all_gone) || is_empty_elem(&item) {
+                        new_arr.push(Object::Null);
+                        arr_changed = true;
+                    } else {
+                        new_arr.push(item);
+                    }
+                }
+                if new_arr.iter().all(|x| matches!(x, Object::Null)) {
+                    changed = true;
+                    continue;
+                }
+                if arr_changed {
+                    changed = true;
+                    if let Some(arr_ref) = v.as_ref()
+                        && doc.get(arr_ref).as_array().is_some()
+                    {
+                        doc.set(arr_ref, Object::Array(new_arr.clone()));
+                    }
+                    kept.push(k.clone());
+                    kept.push(Object::Array(new_arr));
+                    continue;
+                }
+            }
+            kept.push(k.clone());
+            kept.push(v.clone());
+        }
+        if changed {
+            if let Some(nums_ref) = nums_obj.as_ref()
+                && doc.get(nums_ref).as_array().is_some()
+            {
+                doc.set(nums_ref, Object::Array(kept.clone()));
+            }
+            d.set(b"Nums".to_vec(), Object::Array(kept));
+        }
+    }
+    if let Some(names_obj) = d.get(b"Names").cloned()
+        && let Some(names) = doc.resolve(&names_obj).as_array().cloned()
+    {
+        let mut kept = Vec::with_capacity(names.len());
+        let mut names_changed = false;
+        for pair in names.chunks(2) {
+            let [k, v] = pair else {
+                kept.extend_from_slice(pair);
+                continue;
+            };
+            if refers_to(doc, v, all_gone) {
+                names_changed = true;
+                continue;
+            }
+            kept.push(k.clone());
+            kept.push(v.clone());
+        }
+        if names_changed {
+            changed = true;
+            if let Some(names_ref) = names_obj.as_ref()
+                && doc.get(names_ref).as_array().is_some()
+            {
+                doc.set(names_ref, Object::Array(kept.clone()));
+            }
+            d.set(b"Names".to_vec(), Object::Array(kept));
+        }
+    }
+    if let Some(Object::Array(mut kids)) = d.get(b"Kids").cloned() {
+        let mut kids_changed = false;
+        for kid in &mut kids {
+            if let Object::Dict(kd) = kid
+                && !kd.contains(b"S")
+                && clean_tree_dict(doc, kd, all_gone, struct_parents, emptied_elems)
+            {
+                kids_changed = true;
+            }
+        }
+        if kids_changed {
+            changed = true;
+            d.set(b"Kids".to_vec(), Object::Array(kids));
+        }
+    }
+    changed
 }
 
 /// Drop the structure tree's object references (OBJR) to `gone`, annotations removed from their
@@ -446,6 +559,11 @@ pub(crate) fn drop_object_refs(doc: &mut Document, gone: &HashSet<ObjRef>) -> Re
     drop_object_refs_within(doc, gone, MAX_STRUCT_REFS)
 }
 
+/// Retain parent-tree keys still declared by live replacement objects.
+pub(crate) fn drop_object_refs_preserving(doc: &mut Document, gone: &HashSet<ObjRef>, replacements: &HashSet<ObjRef>) -> Result<usize, RedactError> {
+    drop_object_refs_within_preserving(doc, gone, replacements, MAX_STRUCT_REFS)
+}
+
 /// The most structure-tree references [`drop_object_refs`] visits.
 const MAX_STRUCT_REFS: usize = 2_000_000;
 
@@ -455,16 +573,49 @@ const MAX_STRUCT_REFS: usize = 2_000_000;
 /// a cleanup that leaves the annotation reachable (removing only the tree would not: an outline
 /// item's `/SE` or a link's `/SD` still reaches its elements).
 pub(crate) fn drop_object_refs_within(doc: &mut Document, gone: &HashSet<ObjRef>, limit: usize) -> Result<usize, RedactError> {
+    drop_object_refs_within_preserving(doc, gone, &HashSet::new(), limit)
+}
+
+fn drop_object_refs_within_preserving(
+    doc: &mut Document,
+    gone: &HashSet<ObjRef>,
+    replacements: &HashSet<ObjRef>,
+    limit: usize,
+) -> Result<usize, RedactError> {
     if gone.is_empty() {
         return Ok(0);
     }
-    let Some(root) = doc
-        .root()
-        .and_then(|r| doc.get(r).as_dict().cloned())
-        .and_then(|c| c.get(b"StructTreeRoot").map(|s| doc.resolve(s)).and_then(|s| s.as_dict().cloned()))
-    else {
+    let Some(cat_ref) = doc.root() else {
         return Ok(0);
     };
+    let Some(st_obj) = doc.get(cat_ref).as_dict().and_then(|c| c.get(b"StructTreeRoot").cloned()) else {
+        return Ok(0);
+    };
+    let st_ref = st_obj.as_ref();
+    let Some(root) = doc.resolve(&st_obj).as_dict().cloned() else {
+        return Ok(0);
+    };
+    let mut struct_parents = HashSet::new();
+    for &r in gone {
+        if let Some(d) = doc.get(r).as_dict() {
+            if let Some(sp) = d.int(b"StructParent") {
+                struct_parents.insert(sp);
+            }
+            if let Some(sp) = d.int(b"StructParents") {
+                struct_parents.insert(sp);
+            }
+        }
+    }
+    for r in replacements.difference(gone) {
+        if let Some(d) = doc.get(*r).as_dict() {
+            for key in [b"StructParent".as_slice(), b"StructParents"] {
+                if let Some(sp) = d.int(key) {
+                    struct_parents.remove(&sp);
+                }
+            }
+        }
+    }
+    let mut all_gone = gone.clone();
     // Elements are reached from the root's /K, and also from the parent tree and the ID tree:
     // one listed only there (left behind by an editor, say) still points at its annotation.
     let mut todo: Vec<(Object, Above)> =
@@ -472,6 +623,7 @@ pub(crate) fn drop_object_refs_within(doc: &mut Document, gone: &HashSet<ObjRef>
     let mut seen = HashSet::new();
     let mut parents = Parents::new();
     let mut hits: Vec<ObjRef> = Vec::new();
+    let mut tree_nodes: Vec<ObjRef> = Vec::new();
     while let Some((k, above)) = todo.pop() {
         match k {
             Object::Array(a) => todo.extend(a.into_iter().map(|x| (x, above))),
@@ -479,7 +631,7 @@ pub(crate) fn drop_object_refs_within(doc: &mut Document, gone: &HashSet<ObjRef>
             // removed annotation can't be changed here (see above).
             Object::Dict(d) if d.contains(b"S") => {
                 let kids = kids_of(doc, &d);
-                if kids.iter().any(|x| refers_to(doc, x, gone)) {
+                if kids.iter().any(|x| refers_to(doc, x, &all_gone)) {
                     return Err(RedactError::Tags);
                 }
                 let above = above.through(&d);
@@ -488,6 +640,9 @@ pub(crate) fn drop_object_refs_within(doc: &mut Document, gone: &HashSet<ObjRef>
             // A number or name tree node written in place (§7.9.6, §7.9.7): its values and kids.
             Object::Dict(d) => todo.extend(tree_node_entries(&d).into_iter().map(|x| (x, above))),
             Object::Ref(r) => {
+                if refers_to(doc, &Object::Ref(r), gone) {
+                    all_gone.insert(r);
+                }
                 parents.record(r, above);
                 if !seen.insert(r) {
                     continue;
@@ -503,11 +658,21 @@ pub(crate) fn drop_object_refs_within(doc: &mut Document, gone: &HashSet<ObjRef>
                 let Some(d) = object.as_dict() else { continue };
                 if !d.contains(b"S") {
                     // A parent tree or ID tree node: its values may be elements.
+                    if d.contains(b"Nums") || d.contains(b"Names") || d.contains(b"Kids") {
+                        tree_nodes.push(r);
+                    }
                     todo.extend(tree_node_entries(d).into_iter().map(|x| (x, above)));
                     continue;
                 }
                 let kids = kids_of(doc, d);
-                if kids.iter().any(|x| refers_to(doc, x, gone)) {
+                for x in &kids {
+                    if let Some(xr) = x.as_ref()
+                        && refers_to(doc, x, gone)
+                    {
+                        all_gone.insert(xr);
+                    }
+                }
+                if kids.iter().any(|x| refers_to(doc, x, &all_gone)) {
                     hits.push(r);
                 }
                 todo.extend(kids.into_iter().map(|x| (x, Above::element(r))));
@@ -516,6 +681,7 @@ pub(crate) fn drop_object_refs_within(doc: &mut Document, gone: &HashSet<ObjRef>
         }
     }
     let mut n = 0;
+    let mut emptied_elems = HashSet::new();
     for &r in &hits {
         let Some(d) = doc.get(r).as_dict().cloned() else { continue };
         let kids = d.get(b"K").map(|k| doc.resolve(k));
@@ -526,10 +692,13 @@ pub(crate) fn drop_object_refs_within(doc: &mut Document, gone: &HashSet<ObjRef>
             None => Vec::new(),
         };
         let before = list.len();
-        let keep: Vec<Object> = list.into_iter().filter(|x| !refers_to(doc, x, gone)).collect();
+        let keep: Vec<Object> = list.into_iter().filter(|x| !refers_to(doc, x, &all_gone)).collect();
         n += before - keep.len();
+        if keep.is_empty() {
+            emptied_elems.insert(r);
+        }
         doc.update_dict(r, |e| {
-            if array {
+            if array && !keep.is_empty() {
                 e.set(b"K".to_vec(), Object::Array(keep.clone()));
             } else if let Some(k) = keep.first().cloned() {
                 e.set(b"K".to_vec(), k);
@@ -545,6 +714,29 @@ pub(crate) fn drop_object_refs_within(doc: &mut Document, gone: &HashSet<ObjRef>
         })?;
     }
     clear_ancestors(doc, &hits, &parents, limit)?;
+    for r in tree_nodes {
+        let Some(mut d) = doc.get(r).as_dict().cloned() else { continue };
+        if clean_tree_dict(doc, &mut d, &all_gone, &struct_parents, &emptied_elems) {
+            doc.set(r, Object::Dict(d));
+        }
+    }
+    let mut new_root = root.clone();
+    let mut root_changed = false;
+    for key in [&b"ParentTree"[..], b"IDTree"] {
+        if let Some(Object::Dict(mut td)) = new_root.get(key).cloned()
+            && clean_tree_dict(doc, &mut td, &all_gone, &struct_parents, &emptied_elems)
+        {
+            new_root.set(key.to_vec(), Object::Dict(td));
+            root_changed = true;
+        }
+    }
+    if root_changed {
+        if let Some(r) = st_ref {
+            doc.set(r, Object::Dict(new_root));
+        } else {
+            doc.update_dict(cat_ref, |c| c.set(b"StructTreeRoot".to_vec(), Object::Dict(new_root)))?;
+        }
+    }
     Ok(n)
 }
 

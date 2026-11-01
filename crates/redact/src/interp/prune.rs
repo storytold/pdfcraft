@@ -20,6 +20,55 @@ pub(crate) fn prune(xo: &mut Dict, replaced: &[Vec<u8>], content: &[Vec<u8>]) {
     }
 }
 
+pub(crate) fn prune_patterns(pat: &mut Dict, replaced: &[Vec<u8>], ops: &[Op]) {
+    if replaced.is_empty() {
+        return;
+    }
+    let still_used =
+        |n: &[u8]| ops.iter().any(|op| matches!(op.op.as_slice(), b"scn" | b"SCN") && op.operands.last().and_then(Object::as_name) == Some(n));
+    for n in replaced {
+        if !still_used(n) {
+            pat.remove(n);
+        }
+    }
+}
+
+pub(crate) fn prune_extgstates(egs: &mut Dict, replaced: &[Vec<u8>], ops: &[Op]) {
+    if replaced.is_empty() {
+        return;
+    }
+    let still_used = |n: &[u8]| ops.iter().any(|op| op.is("gs") && op.name(0) == Some(n));
+    for n in replaced {
+        if !still_used(n) {
+            egs.remove(n);
+        }
+    }
+}
+
+fn extgstate_mentions_doomed(doc: &Document, val: &Object, doomed: &HashSet<ObjRef>) -> bool {
+    if val.as_ref().is_some_and(|r| doomed.contains(&r)) {
+        return true;
+    }
+    let Some(d) = doc.resolve(val).as_dict().cloned() else { return false };
+    if let Some(smask) = d.get(b"SMask") {
+        if smask.as_ref().is_some_and(|r| doomed.contains(&r)) {
+            return true;
+        }
+        if doc.resolve(smask).as_dict().and_then(|sd| sd.get(b"G")).and_then(Object::as_ref).is_some_and(|r| doomed.contains(&r)) {
+            return true;
+        }
+    }
+    if let Some(font) = d.get(b"Font") {
+        if font.as_ref().is_some_and(|r| doomed.contains(&r)) {
+            return true;
+        }
+        if doc.resolve(font).as_array().and_then(|a| a.first()).and_then(Object::as_ref).is_some_and(|r| doomed.contains(&r)) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Whether `content` draws the XObject `name` of the resource dictionary `xo`: directly, or
 /// through a form that has no /Resources of its own (such a form draws through its caller's).
 /// `None` when that cannot be told (a form that will not decode, or nesting past the limit).
@@ -100,9 +149,13 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
         };
         let mut xo = res_dict(doc, &res, b"XObject");
         let names: Vec<Vec<u8>> = xo.iter().filter(|(_, v)| v.as_ref().is_some_and(|r| doomed.contains(&r))).map(|(n, _)| n.to_vec()).collect();
+        let mut pat = res_dict(doc, &res, b"Pattern");
+        let pat_names: Vec<Vec<u8>> = pat.iter().filter(|(_, v)| v.as_ref().is_some_and(|r| doomed.contains(&r))).map(|(n, _)| n.to_vec()).collect();
+        let mut egs = res_dict(doc, &res, b"ExtGState");
+        let egs_names: Vec<Vec<u8>> = egs.iter().filter(|(_, v)| extgstate_mentions_doomed(doc, v, &doomed)).map(|(n, _)| n.to_vec()).collect();
         let properties = res_dict(doc, &res, b"Properties");
         let property_names: Vec<Vec<u8>> = properties.iter().filter(|(_, v)| retired_properties.contains(v)).map(|(n, _)| n.to_vec()).collect();
-        if names.is_empty() && property_names.is_empty() {
+        if names.is_empty() && pat_names.is_empty() && egs_names.is_empty() && property_names.is_empty() {
             continue;
         }
         let mut contents = Vec::with_capacity(users.len());
@@ -131,6 +184,51 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
         }
         if pruned {
             res.set(b"XObject".to_vec(), Object::Dict(xo));
+        }
+        if !pat_names.is_empty() || !egs_names.is_empty() {
+            let mut used_pat = HashSet::new();
+            let mut used_egs = HashSet::new();
+            for content in &contents {
+                for op in resource_ops(doc, &res, content)? {
+                    if matches!(op.op.as_slice(), b"scn" | b"SCN")
+                        && let Some(n) = op.operands.last().and_then(Object::as_name)
+                    {
+                        used_pat.insert(n.to_vec());
+                    } else if op.is("gs")
+                        && let Some(n) = op.name(0)
+                    {
+                        used_egs.insert(n.to_vec());
+                    }
+                }
+            }
+            let mut pat_pruned = false;
+            for n in pat_names {
+                if !used_pat.contains(&n) {
+                    pat_pruned |= pat.remove(&n).is_some();
+                }
+            }
+            if pat_pruned {
+                pruned = true;
+                if pat.is_empty() {
+                    res.remove(b"Pattern");
+                } else {
+                    res.set(b"Pattern".to_vec(), Object::Dict(pat));
+                }
+            }
+            let mut egs_pruned = false;
+            for n in egs_names {
+                if !used_egs.contains(&n) {
+                    egs_pruned |= egs.remove(&n).is_some();
+                }
+            }
+            if egs_pruned {
+                pruned = true;
+                if egs.is_empty() {
+                    res.remove(b"ExtGState");
+                } else {
+                    res.set(b"ExtGState".to_vec(), Object::Dict(egs));
+                }
+            }
         }
         pruned |= prune_retired_properties(doc, &mut res, &property_names, &contents)?;
         if pruned {
@@ -270,15 +368,29 @@ pub(crate) fn resource_ops(doc: &Document, res: &Dict, content: &[Vec<u8>]) -> R
     }
     let mut ops = parsed.ops;
     let xobjects = res_dict(doc, res, b"XObject");
+    let patterns = res_dict(doc, res, b"Pattern");
+    let ext_gstates = res_dict(doc, res, b"ExtGState");
     let mut seen = HashSet::new();
     let mut cursor = 0;
     while cursor < ops.len() {
         let op = &ops[cursor];
-        if op.is("Do")
-            && let Some(r) = op.last_name().and_then(|n| xobjects.get(n)).and_then(Object::as_ref)
+        let nested = if op.is("Do") {
+            op.last_name().and_then(|n| xobjects.get(n)).and_then(Object::as_ref)
+        } else if matches!(op.op.as_slice(), b"scn" | b"SCN") {
+            op.operands.last().and_then(Object::as_name).and_then(|n| patterns.get(n)).and_then(Object::as_ref)
+        } else if op.is("gs") {
+            op.name(0)
+                .and_then(|n| ext_gstates.get(n))
+                .and_then(|g| doc.resolve(g).as_dict().cloned())
+                .and_then(|d| d.get(b"SMask").map(|s| doc.resolve(s)))
+                .and_then(|s| s.as_dict().and_then(|sd| sd.get(b"G")).and_then(Object::as_ref))
+        } else {
+            None
+        };
+        if let Some(r) = nested
             && seen.insert(r)
             && let Object::Stream(s) = &*doc.get(r)
-            && s.dict.name(b"Subtype") == Some(b"Form")
+            && (s.dict.name(b"Subtype") == Some(b"Form") || s.dict.int(b"PatternType") == Some(1) || s.dict.contains(b"PaintType"))
             && s.dict.get(b"Resources").is_none_or(|r| doc.resolve(r).as_dict().is_none())
         {
             let parsed = pdfcraft_content::parse(&s.decoded()?);
@@ -325,6 +437,34 @@ pub(super) fn prune_form_resources(doc: &Document, res: &mut Dict, content: &[Ve
         }
     }
     res.set(b"XObject".to_vec(), Object::Dict(xo));
+    if res.contains(b"Pattern") {
+        let mut pat = res_dict(doc, res, b"Pattern");
+        let pnames: Vec<Vec<u8>> = pat.iter().map(|(n, _)| n.to_vec()).collect();
+        for name in pnames {
+            if !ops.iter().any(|op| matches!(op.op.as_slice(), b"scn" | b"SCN") && op.operands.last().and_then(Object::as_name) == Some(&name)) {
+                pat.remove(&name);
+            }
+        }
+        if pat.is_empty() {
+            res.remove(b"Pattern");
+        } else {
+            res.set(b"Pattern".to_vec(), Object::Dict(pat));
+        }
+    }
+    if res.contains(b"ExtGState") {
+        let mut egs = res_dict(doc, res, b"ExtGState");
+        let gnames: Vec<Vec<u8>> = egs.iter().map(|(n, _)| n.to_vec()).collect();
+        for name in gnames {
+            if !ops.iter().any(|op| op.is("gs") && op.name(0) == Some(&name)) {
+                egs.remove(&name);
+            }
+        }
+        if egs.is_empty() {
+            res.remove(b"ExtGState");
+        } else {
+            res.set(b"ExtGState".to_vec(), Object::Dict(egs));
+        }
+    }
     Ok(())
 }
 
