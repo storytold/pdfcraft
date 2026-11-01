@@ -110,7 +110,12 @@ fn form_edit_pages(
 impl PdfCraftApp {
     /// Apply an edit to the active document. Returns `true` on success; failures are shown.
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
-        let Some((i, id)) = self.active_ids() else { return false };
+        self.try_apply_edit(edit).is_ok()
+    }
+
+    /// [`Self::apply_edit`], returning why it failed (already shown to the user).
+    fn try_apply_edit(&mut self, edit: Edit) -> Result<(), pdfcraft_engine::EditError> {
+        let Some((i, id)) = self.active_ids() else { return Err(pdfcraft_engine::EditError::NoDocument) };
         let label = edit.label();
         let target_arrange_image = match &edit {
             Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Arrange(_) } => {
@@ -144,7 +149,7 @@ impl PdfCraftApp {
         };
         match self.session.apply(id, edit.clone()) {
             Ok(()) => {
-                let Some(doc) = self.session.get(id) else { return true };
+                let Some(doc) = self.session.get(id) else { return Ok(()) };
                 let info = &doc.info;
                 let view = &mut self.views[i];
                 view.applied_editor = None;
@@ -204,7 +209,7 @@ impl PdfCraftApp {
                 }
                 let out = self.session.take_js_output(id);
                 self.handle_js(id, out);
-                true
+                Ok(())
             }
             Err(e) => {
                 if let Some(view) = self.views.get_mut(i) {
@@ -225,7 +230,7 @@ impl PdfCraftApp {
                 }
                 let message = if matches!(edit, Edit::MoveObjects { .. }) { crate::object_ui::move_error(&e) } else { e.to_string() };
                 self.notify_fmt("{label} failed: {e}", &[("label", &crate::i18n::edit_label(&label)), ("e", &message)]);
-                false
+                Err(e)
             }
         }
     }
@@ -437,15 +442,16 @@ impl PdfCraftApp {
     }
 
     /// Apply any edit a view queued this frame (organize toolbar, keys).
-    /// Returns false when a field refused the typing queued for it (its editor is open again).
+    /// Returns false when a field refused the typing queued for it (see [`Self::apply_queued_edit`]).
     pub(crate) fn process_pending_edits(&mut self) -> bool {
         let Some(i) = self.active else { return true };
         let applied = self.apply_queued_edit(i);
         if !applied {
-            // Nor may a shortcut pressed with it (⌘S right after Enter) run behind the refusal.
+            // Nor may a shortcut pressed with it (⌘S right after Enter) run behind the refusal,
+            // nor a toolbar action queued in the same frame (Organize ▸ Save pages).
             self.deferred_commands.clear();
         }
-        match self.views.get_mut(i).and_then(|v| v.pending_action.take()) {
+        match self.views.get_mut(i).and_then(|v| v.pending_action.take()).filter(|_| applied) {
             Some(crate::canvas::ViewAction::InsertFromFile) => self.insert_from_file_dialog(),
             Some(crate::canvas::ViewAction::InsertFromFileAt(at)) => self.insert_from_file_at(Some(at)),
             Some(crate::canvas::ViewAction::ReplacePages) => self.replace_pages_dialog(),
@@ -634,9 +640,10 @@ impl PdfCraftApp {
     /// anything reads the document: Save, Print, Export, Optimize, Sign, Extract, Split, Copy
     /// pages and button scripts.
     ///
-    /// Returns false when the field rejects the value (a validation script or format; the user
-    /// is told why). The editor stays open with the text, and the caller must stop: nothing is
-    /// saved, printed or exported without it.
+    /// Returns false when the field refuses the value (the user is told why), and the caller
+    /// must stop: nothing is saved, printed or exported behind the refusal. A value the field's
+    /// format refuses stays in the open editor, to be fixed; one its validate action rejects is
+    /// dropped and the field keeps its value (see [`Self::apply_queued_edit`]).
     pub(crate) fn commit_form_typing(&mut self) -> bool {
         let Some((i, id)) = self.active_ids() else { return true };
         if !self.apply_queued_edit(i) {
@@ -649,8 +656,11 @@ impl PdfCraftApp {
         if let Some(view) = self.views.get_mut(i) {
             view.forms.focus = None;
         }
-        if self.apply_edit(edit) {
-            return true;
+        match self.try_apply_edit(edit) {
+            Ok(()) => return true,
+            // The editor stays closed: the field shows the value it kept.
+            Err(e) if e.is_rejected_value() => return false,
+            Err(_) => {}
         }
         if let Some(view) = self.views.get_mut(i) {
             let mut draft = draft;
@@ -661,8 +671,11 @@ impl PdfCraftApp {
     }
 
     /// Apply the edit queued on tab `i` (the active one). Returns false only when it was a
-    /// field's typing and the field refused it (#166): the editor reopens with the text, and the
-    /// user has been told why, so the typing isn't lost and the caller can stop.
+    /// field's typing and the field refused it, after telling the user why, so the caller can
+    /// stop. Typing the field's format refuses reopens in its editor (#166), so it isn't lost.
+    /// A value the field's validate action rejects (ISO 32000-2 Table 199 `/V`) is dropped
+    /// instead, as other readers do: the field keeps the value it had, and the editor Tab or a
+    /// click opened on the next field stays open, so the user can go on filling the form.
     fn apply_queued_edit(&mut self, i: usize) -> bool {
         let Some(edit) = self.views.get_mut(i).and_then(|v| v.pending_edit.take()) else { return true };
         let signature_page = self.views.get_mut(i).and_then(|v| v.fill_signature_page.take());
@@ -671,43 +684,43 @@ impl PdfCraftApp {
             (Edit::SetFieldValue { name, .. }, Some(draft)) => *name == draft.name,
             _ => false,
         };
-        if self.apply_edit(edit) {
-            // Tab can wrap to the same field (including another widget of that field).
-            // Its new editor was opened before this edit ran, so it still holds the old
-            // value. Refresh from the accepted form before Save can commit that stale draft.
-            if typed
-                && let Some(view) = self.views.get_mut(i)
-                && let Some(focus) = view.forms.focus.as_mut()
-                && focus.request_focus
-                && committed.as_ref().is_some_and(|draft| draft.name == focus.name)
-                && let Some(field) = self.session.get(view.id).and_then(|doc| doc.form.iter().find(|field| field.name == focus.name))
-            {
-                focus.text = crate::forms_ui::draft_text(field);
-                focus.picked = field.value.clone();
+        if let Err(e) = self.try_apply_edit(edit) {
+            if !typed {
+                return true;
             }
-            if let Some(page) = signature_page
-                && let Some(view) = self.views.get_mut(i)
+            if !e.is_rejected_value()
+                && let (Some(mut draft), Some(view)) = (committed, self.views.get_mut(i))
             {
-                // Signature imports are a labeled batch; select their appended stamp just
-                // as AddAnnotation selects a typed or drawn signature.
-                let newest = self
-                    .session
-                    .get(view.id)
-                    .and_then(|d| d.info.annotations.iter().filter(|a| a.page == page && !a.is_reply()).map(|a| a.index).max());
-                view.comments.selected = newest.map(|index| (page, index));
-                view.comments.reveal = true;
-                self.quick_tool = crate::QuickTool::Select;
+                draft.request_focus = true;
+                view.forms.focus = Some(draft);
             }
-            return true;
+            return false;
         }
-        if !typed {
-            return true;
+        // Tab can wrap to the same field (including another widget of that field).
+        // Its new editor was opened before this edit ran, so it still holds the old
+        // value. Refresh from the accepted form before Save can commit that stale draft.
+        if typed
+            && let Some(view) = self.views.get_mut(i)
+            && let Some(focus) = view.forms.focus.as_mut()
+            && focus.request_focus
+            && committed.as_ref().is_some_and(|draft| draft.name == focus.name)
+            && let Some(field) = self.session.get(view.id).and_then(|doc| doc.form.iter().find(|field| field.name == focus.name))
+        {
+            focus.text = crate::forms_ui::draft_text(field);
+            focus.picked = field.value.clone();
         }
-        if let (Some(mut draft), Some(view)) = (committed, self.views.get_mut(i)) {
-            draft.request_focus = true;
-            view.forms.focus = Some(draft);
+        if let Some(page) = signature_page
+            && let Some(view) = self.views.get_mut(i)
+        {
+            // Signature imports are a labeled batch; select their appended stamp just
+            // as AddAnnotation selects a typed or drawn signature.
+            let newest =
+                self.session.get(view.id).and_then(|d| d.info.annotations.iter().filter(|a| a.page == page && !a.is_reply()).map(|a| a.index).max());
+            view.comments.selected = newest.map(|index| (page, index));
+            view.comments.reveal = true;
+            self.quick_tool = crate::QuickTool::Select;
         }
-        false
+        true
     }
 
     /// [`Self::commit_form_typing`] for document `id`, which may not be the active tab (a save
@@ -1304,5 +1317,72 @@ mod attention_tests {
         app.close_and_continue(&ctx, 0, CloseRequest::Quit);
         assert_eq!(app.close_request, Some(CloseRequest::Tab(c)), "the newer question stands");
         assert!(attend(&mut app, &ctx, false).is_empty(), "the user has seen it");
+    }
+}
+
+#[cfg(test)]
+mod rejected_value_tests {
+    use crate::PdfCraftApp;
+    use crate::canvas::ViewAction;
+    use crate::forms_ui::Focus;
+    use pdfcraft_engine::Edit;
+
+    /// One page with a text field `qty` (value 4) whose validate action (ISO 32000-2 Table 199
+    /// `/V`) rejects anything over 100.
+    fn validated_form() -> Vec<u8> {
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (qty) /V (4) /Rect [20 350 280 372] /P 3 0 R /F 4 /AA << /V << /S /JavaScript /JS (if (event.value > 100) { app.alert('At most 100'); event.rc = false; }) >> >> >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+
+    /// A toolbar Save (Organize ▸ Save pages) queued in the frame whose typed value the validate
+    /// action rejects does not run behind the refusal, just as a ⌘S pressed with it does not.
+    #[test]
+    fn a_save_action_queued_with_a_rejected_value_does_not_run() {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-ui-rejected-action-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("saved.pdf");
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("order.pdf", None, validated_form()).unwrap();
+        app.active = Some(0);
+        app.save_override = Some(out.to_string_lossy().into_owned());
+        let view = &mut app.views[0];
+        view.forms.committed = Some(Focus {
+            name: "qty".into(),
+            widget: 0,
+            text: "4500".into(),
+            picked: Vec::new(),
+            request_focus: false,
+            select_all: false,
+            press: None,
+            calendar: None,
+            calendar_rect: None,
+            calendar_text: None,
+            had_focus: false,
+        });
+        view.pending_edit = Some(Edit::SetFieldValue { name: "qty".into(), value: pdfcraft_engine::FieldValue::Text("4500".into()) });
+        view.pending_action = Some(ViewAction::Save);
+        assert!(!app.process_pending_edits(), "the validate action rejects 4500");
+        assert!(!out.exists(), "the queued Save does not run behind the refusal");
+        assert!(app.views[0].pending_action.is_none(), "nor is it left to run later");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

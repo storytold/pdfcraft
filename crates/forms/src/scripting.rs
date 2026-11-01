@@ -84,7 +84,12 @@ pub(crate) fn accept(doc: &mut Document, f: &Field, value: &str, scripts: &mut d
         let r = scripts.run(event, js, f, &v, &all);
         apply_changes(doc, &r.changes, &f.name)?;
         if !r.rc {
-            return Err(FormError::Invalid(r.message.unwrap_or_else(|| format!("{default} [ {} ]", f.name))));
+            let message = r.message.unwrap_or_else(|| format!("{default} [ {} ]", f.name));
+            // A keystroke refusal is about the typing; a validate refusal is about the value.
+            return Err(match event {
+                FieldEvent::Validate => FormError::Rejected(message),
+                _ => FormError::Invalid(message),
+            });
         }
         v = r.value;
     }

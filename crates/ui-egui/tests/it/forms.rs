@@ -846,8 +846,10 @@ fn pressing_another_text_field_validates_the_refused_value_once() {
     h.drop_at(p);
     h.run_steps(3);
     assert_eq!(h.state().toast, None, "the release did not validate it again");
-    let focus = h.state().views[0].forms.focus.clone().expect("the refused field stays open");
-    assert_eq!((focus.name.as_str(), focus.text.as_str()), ("qty", "4500"));
+    // The rejected value is dropped: qty keeps its value and the pressed field keeps the focus.
+    assert_eq!(value(&h, "qty"), ["4"]);
+    let focus = h.state().views[0].forms.focus.clone().expect("the pressed field is open");
+    assert_eq!((focus.name.as_str(), focus.text.as_str()), ("note", ""));
 }
 
 /// `validated_form` plus a plain text field, `note`, under `qty`.
@@ -860,6 +862,79 @@ fn validated_form_with_note() -> Vec<u8> {
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (note) /Rect [20 300 280 322] /P 3 0 R /F 4 >>",
     ])
+}
+
+/// Three blank text fields in tab order: `G_range` validates with the range function (1 to
+/// 100), `H_short` with a script that alerts and sets `event.rc` false past 3 characters, and
+/// `note` takes anything.
+fn range_and_script_validated_form() -> Vec<u8> {
+    pdf_from_objects(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 7 0 R >> >> >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (G_range) /Rect [20 350 280 372] /P 3 0 R /F 4 /AA << /V << /S /JavaScript /JS (AFRange_Validate\\(true, 1, true, 100\\);) >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (H_short) /Rect [20 300 280 322] /P 3 0 R /F 4 /AA << /V << /S /JavaScript /JS (if \\(event.value.length > 3\\) { app.alert\\(\"At most 3 characters\"\\); event.rc = false; }) >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (note) /Rect [20 250 280 272] /P 3 0 R /F 4 >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ])
+}
+
+/// A value a field's validate action rejects (ISO 32000-2 Table 199 `/V`) is dropped, as other
+/// readers do: the message shows, the field keeps its value, nothing is added to undo, and Tab
+/// goes on to the next field instead of holding the user in the rejected one.
+#[test]
+fn a_value_the_validate_action_rejects_reverts_and_tab_moves_on() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("rows.pdf", None, range_and_script_validated_form()).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    h.run_steps(6);
+    let toast = |h: &Harness<'static, PdfCraftApp>| h.state().toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    let unchanged = |h: &Harness<'static, PdfCraftApp>| {
+        let doc = h.state().session.get(h.state().views[0].id).unwrap();
+        !doc.dirty && doc.can_undo().is_none()
+    };
+    let type_and_tab = |h: &mut Harness<'static, PdfCraftApp>, text: &str| {
+        h.event(egui::Event::Text(text.into()));
+        h.run_steps(2);
+        h.key_press(egui::Key::Tab);
+        h.run_steps(3);
+    };
+
+    click_field(&mut h, "G_range", 0);
+    type_and_tab(&mut h, "150");
+    assert!(toast(&h).contains("Invalid value"), "the range's message shows: {:?}", toast(&h));
+    assert!(value(&h, "G_range").is_empty(), "G keeps its blank value");
+    assert_eq!(focused(&h).map(|(n, _)| n).as_deref(), Some("H_short"), "Tab moved on");
+    assert_eq!(h.state().views[0].forms.focus.as_ref().map(|f| f.text.as_str()), Some(""));
+    assert!(unchanged(&h), "a rejected value is no change and no undo step");
+
+    h.state_mut().toast = None;
+    type_and_tab(&mut h, "abcd");
+    assert!(toast(&h).contains("At most 3 characters"), "the script's alert shows: {:?}", toast(&h));
+    assert!(value(&h, "H_short").is_empty());
+    assert_eq!(focused(&h).map(|(n, _)| n).as_deref(), Some("note"));
+    assert!(unchanged(&h));
+
+    // The next field fills in as usual, and so does a value in range.
+    type_and_tab(&mut h, "x");
+    assert_eq!(value(&h, "note"), ["x"]);
+    click_field(&mut h, "G_range", 0);
+    type_and_tab(&mut h, "50");
+    assert_eq!(value(&h, "G_range"), ["50"]);
+    // Undo steps through the two accepted values only.
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert!(value(&h, "G_range").is_empty());
+    assert_eq!(value(&h, "note"), ["x"]);
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert!(value(&h, "note").is_empty());
+    assert!(h.state().session.get(h.state().views[0].id).unwrap().can_undo().is_none(), "and nothing else is left to undo");
 }
 
 fn pdf_from_objects(objs: &[&str]) -> Vec<u8> {
@@ -951,7 +1026,7 @@ fn buttons_over_text_show_the_pointing_hand_not_the_i_beam() {
 }
 
 #[test]
-fn a_rejected_value_keeps_the_typing_and_stops_the_save() {
+fn a_rejected_value_is_dropped_and_stops_the_save() {
     let dir = scratch("rejected");
     let out = dir.join("saved.pdf");
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
@@ -969,13 +1044,15 @@ fn a_rejected_value_keeps_the_typing_and_stops_the_save() {
     h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::S);
     h.run_steps(4);
-    assert!(!out.exists(), "nothing is saved without the typed value");
+    assert!(!out.exists(), "the save stops at the refusal, so the user sees it first");
+    assert!(h.state().toast.as_ref().is_some_and(|t| t.0.contains("At most 100")), "the script's message is shown: {:?}", h.state().toast);
     assert_eq!(value(&h, "qty"), ["4"], "the field keeps its valid value");
-    let focus = h.state().views[0].forms.focus.clone().expect("the editor stays open");
-    assert_eq!(focus.text, "4500", "with the text (typed after the 4), so the user can fix it");
-    // And closing asks rather than dropping it.
+    assert!(h.state().views[0].forms.focus.is_none(), "the rejected 4500 is dropped, not held in an editor");
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    assert!(!doc.dirty && doc.can_undo().is_none(), "a rejected value is no change and no undo step");
+    // Closing has nothing to ask about.
     h.state_mut().request_close_tab(0);
-    assert!(h.state().close_request.is_some());
+    assert!(h.state().close_request.is_none());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1027,11 +1104,11 @@ fn refused_value_stops_save(commit_key: egui::Key, case: &str) {
     h.run_steps(3);
     assert_eq!(value(&h, "qty"), ["4"]);
     assert!(!out.exists(), "nothing is saved right after the field refused its value");
-    // The refused text is back in the field, so a later ⌘S stops again instead of saving 4.
-    assert_eq!(h.state().views[0].forms.focus.as_ref().map(|f| f.text.as_str()), Some("4500"));
-    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::S);
-    h.run_steps(4);
-    assert!(!out.exists());
+    // The rejected text is dropped: Enter closes the editor, and Tab wraps to the only field,
+    // which shows the value it kept.
+    let expected = if commit_key == egui::Key::Tab { Some("4") } else { None };
+    assert_eq!(h.state().views[0].forms.focus.as_ref().map(|f| f.text.as_str()), expected);
+    assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1109,7 +1186,8 @@ mod revert_tests {
         h.run_steps(2);
         h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::S);
         h.run_steps(4);
-        assert_eq!(h.state().views[0].forms.focus.as_ref().unwrap().text, "99");
+        assert!(h.state().views[0].forms.focus.is_none(), "the rejected 99 is dropped");
+        assert_eq!(value(&h, "name"), ["Saved original"]);
         assert_eq!(std::fs::read(&path).unwrap(), saved, "rejection leaves the saved file untouched");
         assert!(h.state_mut().execute("file.revert"));
         h.run_steps(2);
