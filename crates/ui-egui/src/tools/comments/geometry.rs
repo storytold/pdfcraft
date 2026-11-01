@@ -27,9 +27,11 @@ pub(super) fn grabs_points(tool: QuickTool) -> bool {
     !matches!(tool, QuickTool::Comment(t) if t.draws() || t.clicks_points())
 }
 
+pub(crate) const HANDLE_HIT_RADIUS: f32 = 7.0;
+
 /// The point of `a` (an end or a corner) whose handle is at `p` on screen.
 pub(super) fn point_handle(cx: &PageCx<'_>, a: &Annotation, p: Pos2) -> Option<usize> {
-    a.points.iter().position(|q| cx.to_screen([f64::from(q[0]), f64::from(q[1])]).distance(p) <= 7.0)
+    a.points.iter().position(|q| cx.to_screen([f64::from(q[0]), f64::from(q[1])]).distance(p) <= HANDLE_HIT_RADIUS)
 }
 
 /// `points` with point `i` moved to `to`; with Shift, held to the nearest 45° from the point
