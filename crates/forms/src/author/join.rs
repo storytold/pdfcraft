@@ -5,16 +5,17 @@
 use std::collections::{HashMap, HashSet};
 
 use super::lifecycle::{drop_from_calculation_order, split_merged, split_triggers};
-use super::tree::{detach, list_of};
+use super::tree::{ancestor_sets, detach, list_of};
 use super::{Dict, Document, Field, FormError, ObjRef, Object, invalid};
 
 /// The keys a field that is also its own widget sheds when it becomes only a widget. Its `/AA`
 /// keeps only the widget's own triggers.
 const FIELD_ONLY_KEYS: [&[u8]; 15] = [b"T", b"FT", b"Kids", b"Ff", b"V", b"DV", b"Opt", b"TU", b"TM", b"MaxLen", b"Q", b"DS", b"RV", b"TI", b"I"];
 
-/// Whether `field` holds `/Opt`, which its buttons' export values index (ISO 32000-2 §12.7.5.2).
+/// Whether `field` holds or inherits `/Opt`, which its buttons' export values index (ISO 32000-2 §12.7.5.2).
 fn has_opt(doc: &Document, field: ObjRef) -> bool {
-    doc.get(field).as_dict().is_some_and(|d| d.contains(b"Opt"))
+    doc.get(field).as_dict().and_then(|d| d.get(b"Opt")).is_some_and(|v| !matches!(*doc.resolve(v), Object::Null))
+        || ancestor_sets(doc, field, b"Opt")
 }
 
 /// Refuse what [`join_radio_group`] can't do, before anything is written.
@@ -126,4 +127,27 @@ fn rename_state(doc: &Document, d: &mut Dict, old: &str, new: &str) -> bool {
     }
     d.set(b"AP".to_vec(), Object::Dict(ap));
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn has_opt_ignores_null_and_detects_inherited_opt() {
+        let mut doc = Document::new_empty();
+        let mut parent = Dict::new();
+        parent.set(b"Opt".to_vec(), Object::Array(vec![]));
+        let parent_ref = doc.add(Object::Dict(parent));
+
+        let mut f_null = Dict::new();
+        f_null.set(b"Opt".to_vec(), Object::Null);
+        let f_null_ref = doc.add(Object::Dict(f_null));
+        assert!(!has_opt(&doc, f_null_ref));
+
+        let mut f_inherited = Dict::new();
+        f_inherited.set(b"Parent".to_vec(), Object::Ref(parent_ref));
+        let f_inherited_ref = doc.add(Object::Dict(f_inherited));
+        assert!(has_opt(&doc, f_inherited_ref));
+    }
 }

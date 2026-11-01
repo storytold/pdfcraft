@@ -4643,8 +4643,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.field.properties"]
 tools = ["form_set_props", "form_fill"]
-evidence = ["crates/forms/src/af/tests.rs::validation_and_calculation", "crates/forms/src/tests.rs::formats_validation_and_calculations_run_like_acrobat", "crates/automation/tests/it/automation.rs::form_formats_and_calculations_through_tools"]
-notes = "AFRange_Validate with Acrobat's messages"
+evidence = ["crates/forms/src/af/tests.rs::validation_and_calculation", "crates/forms/src/tests.rs::formats_validation_and_calculations_run_like_acrobat", "crates/forms/src/tests.rs::unsupported_first_validation_call_preserves_custom_script_dispatch", "crates/automation/tests/it/automation.rs::form_formats_and_calculations_through_tools"]
+notes = "AFRange_Validate with Acrobat's messages; unsupported arguments in the first genuine call preserve the complete custom script for the supplied interpreter, rather than selecting a later literal call (save/reopen and validation dispatch covered)."
 
 [[feature]]
 id = "form.af-simple-calculate"
@@ -5141,7 +5141,7 @@ status = "shipped"
 commands = ["form.prepare"]
 tools = ["form_set_props"]
 evidence = ["crates/forms/src/tests.rs::locked_fields_only_take_unlocking", "crates/ui-egui/tests/it/prepare.rs::preview_fills_the_form_and_locked_fields_keep_their_properties", "crates/forms/src/tests.rs::renaming_a_kid_is_checked_against_the_full_name_it_takes", "crates/forms/src/tests.rs::renaming_a_top_level_field_is_still_checked_against_top_level_names", "crates/forms/src/tests.rs::dotted_field_names_are_made_with_parent_fields"]
-notes = "rename in Field Properties ▸ General, which shows the full name; a dotted name (MASTER.first) is a full name and makes or joins parent fields, as Acrobat does, moving a renamed field with what it inherited (#2696); Prepare a form's table tool still refuses a period in the cell names it makes; a plain name renames the field within its parent, so the GUI cannot yet move a nested field to the top level; Locked sets the widgets' annotation Locked flag (/F bit 8) and greys out the properties until unlocked; values can still be filled in"
+notes = "rename in Field Properties ▸ General, which shows the full name; a dotted name (MASTER.first) is a full name and makes or joins parent fields, as Acrobat does, moving a renamed field with what it inherited (#2696); inherited checkbox/radio export options survive a move and save/reopen, while choice fields keep only their own options; Prepare a form's table tool still refuses a period in the cell names it makes; a plain name renames the field within its parent, so the GUI cannot yet move a nested field to the top level; Locked sets the widgets' annotation Locked flag (/F bit 8) and greys out the properties until unlocked; values can still be filled in"
 
 [[feature]]
 id = "form.tab-order"
