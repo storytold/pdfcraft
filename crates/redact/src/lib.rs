@@ -70,6 +70,10 @@ pub enum RedactError {
     /// could not be shown complete.
     #[error("the document's objects nest too deeply to remove hidden information completely; the operation was refused")]
     TooDeep,
+    /// Past what one redaction may decode an image can't be cleared, and removing it whole would
+    /// take what no mark covers with it, unreported.
+    #[error("the images under these marks are more than one redaction can decode, so nothing was changed; redact fewer pages at a time")]
+    ImagesPastAllowance,
     /// A JBIG2 image shares its `/JBIG2Globals` with a redacted one and can't be stored again
     /// without them, so the shapes they hold, those of marks under the area included, would stay.
     #[error(
@@ -386,6 +390,12 @@ pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Reda
 
 /// [`apply`] without the copy: an error can leave `doc` part redacted.
 fn apply_to(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, RedactError> {
+    let images = pdfcraft_cos::ImageBudget::new(doc);
+    apply_within(doc, pages, images)
+}
+
+/// [`apply_to`], its images decoded within `images`.
+fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_cos::ImageBudget) -> Result<Report, RedactError> {
     let (all_marks, unreadable) = marks_checked(doc);
     // A mark with no readable area is not applied, and applying the others would look complete:
     // refuse before anything changes. Only the pages being applied count.
@@ -428,6 +438,7 @@ fn apply_to(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Redac
         retired_properties: Vec::new(),
         widget_owner,
         removed_everywhere: HashSet::new(),
+        images,
     };
     for &(pi, page_marks) in &groups {
         let page = pdfcraft_model::pages(doc).swap_remove(pi);
@@ -435,7 +446,10 @@ fn apply_to(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Redac
         redact_page_content(doc, &mut applying, pi, &page, &rects)?;
         remove_page_annotations(doc, &mut applying, &page, &rects, page_marks)?;
     }
-    let Applying { mut report, doomed_fields, doomed_xobjects, retired_properties, mut removed_everywhere, .. } = applying;
+    if applying.images.refused() > 0 {
+        return Err(RedactError::ImagesPastAllowance);
+    }
+    let Applying { mut report, doomed_fields, doomed_xobjects, retired_properties, mut removed_everywhere, mut images, .. } = applying;
 
     // 2b. Replies and pop-ups of a removed annotation can be listed on another page than their
     // parent: their `/IRT` or `/Parent` would keep the removed comment reachable.
@@ -518,7 +532,7 @@ fn apply_to(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Redac
     // A removed image or form must not stay reachable through another resource dictionary (an
     // inherited or shared /Resources): a full save keeps whatever is still referenced.
     interp::unlink_doomed(doc, &doomed_xobjects, &retired_properties)?;
-    report.images_restored = restore_shared_jbig2(doc, &doomed_xobjects)?;
+    report.images_restored = restore_shared_jbig2(doc, &doomed_xobjects, &mut images)?;
 
     // 5. Verify: nothing readable may remain under a region.
     let mut residue = 0;
@@ -532,7 +546,9 @@ fn apply_to(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Redac
             list.iter().zip(data).filter(|(o, _)| !o.as_ref().is_some_and(|r| report.overlays.contains(&r))).map(|(_, d)| d).collect();
         let resources = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
         let mut scratch = Report::default();
-        let mut scope = Scope::new(&rects, Mode::Verify, &mut scratch, budget);
+        // Verifying doesn't decode images: what clearing left is read as the page draws it.
+        let mut images = pdfcraft_cos::ImageBudget::with_work(0);
+        let mut scope = Scope::new(&rects, Mode::Verify, &mut scratch, budget, &mut images);
         residue += process(doc, &mut scope, &original, &resources, pdfcraft_content::Matrix::IDENTITY).residue;
     }
     if residue > 0 {
@@ -554,8 +570,10 @@ const MAX_JBIG2_WALK: usize = 100_000;
 /// and stored again in place without them, as a cleared copy is, and a full save then leaves them
 /// out. An image that can't be stored again refuses the redaction (nothing changes, as `apply`
 /// works on a copy), but for a removed or replaced one, which is either unlinked or still drawn
-/// whole on another page. Returns how many images that weren't removed or replaced were stored again.
-fn restore_shared_jbig2(doc: &mut Document, doomed: &[ObjRef]) -> Result<usize, RedactError> {
+/// whole on another page. They are decoded within what is left of the run's allowance (`images`);
+/// past it the redaction is refused as one clearing too many images is. Returns how many images
+/// that weren't removed or replaced were stored again.
+fn restore_shared_jbig2(doc: &mut Document, doomed: &[ObjRef], images: &mut pdfcraft_cos::ImageBudget) -> Result<usize, RedactError> {
     let mut globals = HashSet::new();
     let mut seen = HashSet::new();
     let mut stack: Vec<ObjRef> = doomed.to_vec();
@@ -587,18 +605,23 @@ fn restore_shared_jbig2(doc: &mut Document, doomed: &[ObjRef]) -> Result<usize, 
         .map(|(r, _)| r)
         .collect();
     let doomed: HashSet<ObjRef> = doomed.iter().copied().collect();
-    let (mut restored, mut stuck) = (0, 0);
+    let (mut restored, mut stuck, mut past_allowance) = (0, 0, false);
     for r in sharing {
         let object = doc.get(r);
         let Object::Stream(s) = &*object else { continue };
-        match image::without_globals(doc, s) {
+        let refused = images.refused();
+        match image::without_globals(doc, s, images) {
             Some(new) => {
                 doc.set(r, Object::Stream(new));
                 restored += usize::from(!doomed.contains(&r));
             }
             None if doomed.contains(&r) => {}
+            None if images.refused() > refused => past_allowance = true,
             None => stuck += 1,
         }
+    }
+    if past_allowance {
+        return Err(RedactError::ImagesPastAllowance);
     }
     if stuck > 0 {
         return Err(RedactError::SharedJbig2Globals(stuck));
@@ -615,6 +638,8 @@ struct Applying {
     retired_properties: Vec<Object>,
     widget_owner: Vec<(ObjRef, ObjRef)>,
     removed_everywhere: HashSet<ObjRef>,
+    /// What clearing images may spend, across the run's pages.
+    images: pdfcraft_cos::ImageBudget,
 }
 
 /// Step 1 for one page: rewrites its content so nothing readable stays under a mark, and cleans the tags it no longer shows.
@@ -625,13 +650,13 @@ fn redact_page_content(
     page: &pdfcraft_model::Page,
     rects: &[[f64; 4]],
 ) -> Result<(), RedactError> {
-    let Applying { report, doomed_xobjects, retired_properties, .. } = applying;
+    let Applying { report, doomed_xobjects, retired_properties, images, .. } = applying;
     // 1. Content.
     let mut budget = pdfcraft_cos::DecodeBudget::page();
     let (list, data) = page_streams_within(doc, &page.dict, pi, &mut budget)?;
     let resources = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     let out = {
-        let mut scope = Scope::new(rects, Mode::Apply, report, budget);
+        let mut scope = Scope::new(rects, Mode::Apply, report, budget, images);
         process(doc, &mut scope, &data, &resources, pdfcraft_content::Matrix::IDENTITY)
     };
     // Fail closed: the interpreter lays vertical-writing text out horizontally, so it cannot

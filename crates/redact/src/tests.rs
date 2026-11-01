@@ -52,7 +52,8 @@ fn under(doc: &mut Document, page: usize, rects: &[[f64; 4]]) -> usize {
     let (_, data) = page_streams_within(doc, &p.dict, page, &mut budget).unwrap();
     let res = p.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     let mut rep = Report::default();
-    let mut scope = Scope::new(rects, Mode::Verify, &mut rep, budget);
+    let mut images = pdfcraft_cos::ImageBudget::with_work(0);
+    let mut scope = Scope::new(rects, Mode::Verify, &mut rep, budget, &mut images);
     process(doc, &mut scope, &data, &res, pdfcraft_content::Matrix::IDENTITY).residue
 }
 
@@ -806,6 +807,61 @@ fn jbig2_globals(secret: &[u8]) -> Vec<u8> {
     g
 }
 
+/// An image the run's allowance can't decode can't be cleared. Removed whole, like an image that
+/// can't be read, it would take what no mark covers with it without a word, so the run stops there,
+/// and [`apply`] leaves the document as it was.
+#[test]
+fn a_jbig2_image_past_the_runs_allowance_stops_the_run() {
+    let mut dict = Dict::new();
+    dict.set(b"Width".to_vec(), Object::Int(16));
+    dict.set(b"Height".to_vec(), Object::Int(2));
+    dict.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+    dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    dict.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
+    let image = Stream::from_raw(dict, pdfcraft_filters::encode_jbig2_generic(&[0xFF; 4], 16, 2).unwrap());
+    let doc = Document::new_empty();
+    let half = [[0.0, 0.0, 0.5, 1.0]];
+    let clear = |work| crate::image::clear(&doc, &image, &pdfcraft_content::Matrix::IDENTITY, &half, &mut pdfcraft_cos::ImageBudget::with_work(work));
+    assert!(matches!(clear(u64::MAX), Ok(Some(_))), "cleared in a copy");
+    assert!(matches!(clear(0), Err(())), "it can't be cleared");
+
+    let coded = pdfcraft_filters::encode_jbig2_generic(&[0xFF; 4], 16, 2).unwrap();
+    let dict = "/Type /XObject /Subtype /Image /Width 16 /Height 2 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode";
+    let mut doc = one_page(b"q 160 0 0 20 0 0 cm /Im Do Q", "/XObject << /Im 7 0 R >>", vec![stream(dict, coded)]);
+    mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
+    let refused = crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(0));
+    assert!(matches!(refused, Err(crate::RedactError::ImagesPastAllowance)), "{refused:?}");
+    let mut doc = one_page(
+        b"q 160 0 0 20 0 0 cm /Im Do Q",
+        "/XObject << /Im 7 0 R >>",
+        vec![stream(dict, pdfcraft_filters::encode_jbig2_generic(&[0xFF; 4], 16, 2).unwrap())],
+    );
+    mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
+    assert!(crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(u64::MAX)).is_ok());
+}
+
+/// A Flate image past the run's allowance stops the run as a JBIG2 image does: removed whole, it
+/// would take what no mark covers with it, unreported. A JPEG, which clearing doesn't read, is
+/// removed whole as it always was, and spends nothing.
+#[test]
+fn a_flate_image_past_the_runs_allowance_stops_the_run() {
+    let dict = "/Type /XObject /Subtype /Image /Width 2 /Height 2 /BitsPerComponent 8 /ColorSpace /DeviceGray /Filter /FlateDecode";
+    let page = || one_page(b"q 160 0 0 20 0 0 cm /Im Do Q", "/XObject << /Im 7 0 R >>", vec![stream(dict, pdfcraft_filters::encode_flate(&[9; 4]))]);
+    let mut doc = page();
+    mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
+    let refused = crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(0));
+    assert!(matches!(refused, Err(crate::RedactError::ImagesPastAllowance)), "{refused:?}");
+    let mut doc = page();
+    mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
+    assert!(crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(u64::MAX)).is_ok());
+
+    let dict = "/Type /XObject /Subtype /Image /Width 2 /Height 2 /BitsPerComponent 8 /ColorSpace /DeviceGray /Filter /DCTDecode";
+    let mut doc = one_page(b"q 160 0 0 20 0 0 cm /Im Do Q", "/XObject << /Im 7 0 R >>", vec![stream(dict, b"not read")]);
+    mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
+    let report = crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(0)).unwrap();
+    assert_eq!(report.images_removed, 1);
+}
+
 /// A JBIG2 image (a scan the optimizer stored as JBIG2) has its covered pixels cleared in a copy,
 /// like a fax image, instead of being removed whole: with `/JBIG2Globals`, its `/DecodeParms` by
 /// reference, behind another filter with its globals at its own place, or as a mask, its decode
@@ -830,6 +886,13 @@ fn a_jbig2_image_has_its_covered_pixels_cleared_instead_of_being_removed() {
         (
             format!("{image} /ColorSpace /DeviceGray /Filter [/ASCIIHexDecode /JBIG2Decode] /DecodeParms [null << /JBIG2Globals 8 0 R >>]"),
             hex,
+            vec![globals.clone()],
+            [0x00, 0xFF, 0xFF, 0xFF],
+        ),
+        // `/Crypt` was undone on load, and takes a place in the parameters.
+        (
+            format!("{image} /ColorSpace /DeviceGray /Filter [/Crypt /JBIG2Decode] /DecodeParms [null << /JBIG2Globals 8 0 R >>]"),
+            white.clone(),
             vec![globals],
             [0x00, 0xFF, 0xFF, 0xFF],
         ),
@@ -1240,6 +1303,15 @@ fn globals_a_redacted_jbig2_image_shares_with_another_page_leave_the_file() {
     let mut doc = build(&image.replace(&format!("/Height {h}"), &format!("/Height {}", h + 1)));
     mark(&mut doc, 0, &[[0.25, 113.75, 49.75, 120.0]], "");
     assert!(matches!(apply(&mut doc, None), Err(RedactError::SharedJbig2Globals(1))));
+    // Storing the second page's image again decodes it, within what is left of the run's
+    // allowance: with nothing left the redaction is refused as one past the allowance, not
+    // reported as an image that can't be read.
+    let mut doc = build(&image);
+    let first_image = [ObjRef::new(7, 0)];
+    let refused = crate::restore_shared_jbig2(&mut doc, &first_image, &mut pdfcraft_cos::ImageBudget::with_work(0));
+    assert!(matches!(refused, Err(RedactError::ImagesPastAllowance)), "{refused:?}");
+    let restored = crate::restore_shared_jbig2(&mut doc, &first_image, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX));
+    assert_eq!(restored.ok(), Some(1));
 }
 
 /// Apply Redactions gives the page its own pruned /Resources, but the dictionary it drew through

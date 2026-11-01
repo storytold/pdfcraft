@@ -3603,7 +3603,7 @@ fn create_and_reduce() {
     )
     .unwrap();
     let full = s2.save_full_bytes(id2).unwrap();
-    let (reduced, _) = s2.reduced_bytes(id2).unwrap();
+    let (reduced, ..) = s2.reduced_bytes(id2).unwrap();
     assert!(reduced.len() <= full.len(), "{} > {}", reduced.len(), full.len());
     let mut s3 = Session::new();
     let r = s3.open("r.pdf", None, reduced, None).unwrap();
@@ -8244,6 +8244,31 @@ fn copy_image_reads_the_globals_of_a_jbig2_picture() {
     let (w, h, rgba) = d.page_image_rgba(0, 0).unwrap();
     assert_eq!((w, h), (16, 2));
     assert!(rgba.chunks(4).all(|p| p == [0, 0, 0, 255]), "the page's default pixel, from the globals");
+    // An Office export shares one allowance across its pictures. One past it is left out, and the
+    // export says the page is missing something, as for a picture past its bytes.
+    let (pages, truncated) = d.export_pages_within(true, 1 << 20, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX));
+    assert_eq!((pages[0].images.len(), truncated.len()), (1, 0));
+    let (pages, truncated) = d.export_pages_within(true, 1 << 20, &mut pdfcraft_cos::ImageBudget::with_work(0));
+    assert!(pages[0].images.is_empty());
+    assert_eq!(truncated, [0]);
+}
+
+/// An Office export leaves out a picture it can't encode, as it did. That isn't a page cut short:
+/// only a picture past what the export may do is reported as one.
+#[test]
+fn an_office_export_doesnt_call_an_unreadable_picture_truncated() {
+    let pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+        2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >> endobj\n\
+        3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n\
+        4 0 obj << /Length 31 >> stream\nq 160 0 0 20 20 100 cm /Im1 Do Q\nendstream endobj\n\
+        5 0 obj << /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /JPXDecode /Length 4 >> stream\nnone\nendstream endobj\n\
+        trailer << /Root 1 0 R >>\n%%EOF"
+        .to_vec();
+    let mut s = Session::new();
+    let id = s.open("picture.pdf", None, Arc::new(pdf), None).unwrap();
+    let (pages, truncated) = s.get(id).unwrap().export_pages_within(true, 1 << 20, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX));
+    assert!(pages[0].images.is_empty());
+    assert_eq!(truncated, Vec::<usize>::new());
 }
 
 /// Copy Image takes a JBIG2 picture as its pixels and as a PNG file, behind another filter
@@ -9213,6 +9238,61 @@ fn a_fields_own_script_may_not_save_as_or_show_a_panel() {
     // A button's script may.
     let o = s.run_javascript(id, "app.execMenuItem('SaveAs');", Some("go")).unwrap();
     assert_eq!(o.requests, [js::Request::SaveAs]);
+}
+
+/// A page of `count` pictures of one flat grey, `side` pixels square, each an object of its own.
+fn page_of_pictures(count: usize, side: usize) -> Vec<u8> {
+    let data = pdfcraft_filters::encode_flate(&vec![0x80; side * side]);
+    let names: String = (0..count).map(|i| format!("/Im{i} {} 0 R ", 5 + i)).collect();
+    let content: String = (0..count).map(|i| format!("q 10 0 0 10 0 0 cm /Im{i} Do Q\n")).collect();
+    let mut pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << {names}>> >> >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n",
+        content.len()
+    )
+    .into_bytes();
+    for i in 0..count {
+        let dict = format!(
+            "{} 0 obj << /Type /XObject /Subtype /Image /Width {side} /Height {side} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /Length {} >> stream\n",
+            5 + i,
+            data.len()
+        );
+        pdf.extend_from_slice(dict.as_bytes());
+        pdf.extend_from_slice(&data);
+        pdf.extend_from_slice(b"\nendstream endobj\n");
+    }
+    pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF");
+    pdf
+}
+
+/// The allowance is the export's, not each picture's: a page of many small pictures stops where it
+/// runs out, the rest are left out and counted, and the page is listed, which is what the export's
+/// warning goes by. A few large pictures are well within it, and all come through.
+#[test]
+fn a_page_of_many_pictures_stops_at_the_exports_allowance() {
+    let export = |pdf: Vec<u8>, work: &mut pdfcraft_cos::ImageBudget| {
+        let mut s = Session::new();
+        let id = s.open("pictures.pdf", None, Arc::new(pdf), None).unwrap();
+        s.get(id).unwrap().export_pages_within(true, 1 << 30, work)
+    };
+    let mut one = pdfcraft_cos::ImageBudget::with_work(u64::MAX);
+    export(page_of_pictures(1, 2), &mut one);
+    let cost = u64::MAX - one.work_left();
+    assert!(cost > 0);
+
+    let mut work = pdfcraft_cos::ImageBudget::with_work(100 * cost);
+    let (pages, truncated) = export(page_of_pictures(10_000, 2), &mut work);
+    assert_eq!(pages[0].images.len(), 100);
+    assert_eq!(truncated, vec![0]);
+    assert_eq!(work.refused(), 9_900);
+
+    let mut s = Session::new();
+    let id = s.open("large.pdf", None, Arc::new(page_of_pictures(3, 1_000)), None).unwrap();
+    let (pages, truncated) = s.get(id).unwrap().export_pages_checked(true, 1 << 30);
+    assert_eq!(pages[0].images.len(), 3);
+    assert_eq!(truncated, Vec::<usize>::new());
 }
 
 /// A page whose forms go past the reading limit and whose picture goes past the image budget is

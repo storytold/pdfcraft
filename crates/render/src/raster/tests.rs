@@ -4058,7 +4058,10 @@ fn jbig2_image_draws_with(stream: &[u8], space: &str, entries: &str, objects: &[
     pdf.extend_from_slice(b"\nendstream endobj\n");
     pdf.extend_from_slice(objects);
     pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
-    let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+    // What one image may take, which the page's allowance, tested on its own, would otherwise reach
+    // first: it is the same size, and the page itself comes out of it.
+    let config = RenderConfig { jbig2_work: Some(u64::MAX), ..RenderConfig::default() };
+    let mut r = PageRenderer::new(Arc::new(pdf), config);
     let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
     assert!(page.error.is_none(), "{:?}", page.error);
     assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "the rest of the page draws");
@@ -4068,6 +4071,217 @@ fn jbig2_image_draws_with(stream: &[u8], space: &str, entries: &str, objects: &[
         [255, 255, 255, 255] => false,
         other => panic!("neither the image nor the page: {other:?}"),
     }
+}
+
+/// The JBIG2 images of a page share one allowance, down to the step, and the next page starts with
+/// its own. The images differ by an extension segment: one image decoded again isn't decoded twice.
+#[test]
+fn the_jbig2_images_of_a_page_share_one_allowance() {
+    let image = |number: u8, id: u8| {
+        let mut stream = black_jbig2_page();
+        jbig2_segment(&mut stream, 1, 62, &[], &[0, 0, 0, 0, id]);
+        let mut object = format!(
+            "{number} 0 obj << /Type /XObject /Subtype /Image /Width 16 /Height 2 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode /Length {} >> stream\n",
+            stream.len()
+        )
+        .into_bytes();
+        object.extend_from_slice(&stream);
+        object.extend_from_slice(b"\nendstream endobj\n");
+        object
+    };
+    let page = |number: u8, content: u8, xobjects: &str| {
+        format!("{number} 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents {content} 0 R /Resources << /XObject << {xobjects} >> >> >> endobj\n").into_bytes()
+    };
+    let content = |number: u8, text: &str| format!("{number} 0 obj << /Length {} >> stream\n{text}\nendstream endobj\n", text.len()).into_bytes();
+    let mut pdf =
+        b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj\n".to_vec();
+    pdf.extend(page(3, 5, "/A 7 0 R /B 8 0 R"));
+    pdf.extend(page(4, 6, "/C 9 0 R"));
+    pdf.extend(content(5, "q 20 0 0 40 0 0 cm /A Do Q q 20 0 0 40 20 0 cm /B Do Q"));
+    pdf.extend(content(6, "q 20 0 0 40 0 0 cm /C Do Q"));
+    pdf.extend(image(7, 1));
+    pdf.extend(image(8, 2));
+    pdf.extend(image(9, 3));
+    pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
+    let pdf = Arc::new(pdf);
+    let black = |page: &RenderedPage, x: usize| match &page.rgba[((20 * 40 + x) * 4)..][..4] {
+        [0, 0, 0, 255] => true,
+        [255, 255, 255, 255] => false,
+        other => panic!("neither an image nor the page: {other:?}"),
+    };
+    let pages = |work: u64| {
+        let mut renderer = PageRenderer::new(pdf.clone(), RenderConfig { jbig2_work: Some(work), ..RenderConfig::default() });
+        [0, 1].map(|page| renderer.render(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() }))
+    };
+    let drawn = |work: u64| {
+        let [first, _] = pages(work);
+        assert!(first.error.is_none(), "{:?}", first.error);
+        (black(&first, 10), black(&first, 30))
+    };
+    let one = (1..1_000).find(|work| drawn(*work).0).expect("a small image is cheap");
+    assert_eq!(drawn(one - 1), (false, false), "a step short of the first");
+    assert_eq!(drawn(one), (true, false), "enough for one");
+    assert_eq!(drawn(2 * one - 1), (true, false), "a step short of both");
+    assert_eq!(drawn(2 * one), (true, true), "enough for both");
+    let [first, second] = pages(one);
+    assert!(first.warnings.contains(&RenderWarning::ContentTruncated), "the page says it left something out: {:?}", first.warnings);
+    assert!(pages(2 * one)[0].warnings.is_empty(), "and only then");
+    assert!(black(&second, 10), "the next page has its own allowance, though this one spent all of it");
+    let usual = PageRenderer::new(pdf.clone(), RenderConfig::default()).render(RenderRequest {
+        page: 0,
+        kind: RequestKind::Pixels,
+        tile: None,
+        scale: 1.0,
+        tag: 0,
+        ..Default::default()
+    });
+    assert!(black(&usual, 10) && black(&usual, 30), "the usual allowance is far above a page like this");
+}
+
+/// Without its mask a picture would show what the mask hides, so a JBIG2 mask past the page's
+/// allowance takes the picture with it, and the page says so. A mask that can't be read for any
+/// other reason leaves the picture, as it did.
+#[test]
+fn a_picture_whose_jbig2_mask_is_past_the_pages_allowance_is_not_drawn() {
+    let draw = |entry: &str, filter: &str, mask: &[u8], work: u64| {
+        let content = b"q 20 0 0 20 5 5 cm /Im1 Do Q";
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n".to_vec();
+        pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n", content.len()).as_bytes());
+        pdf.extend_from_slice(content);
+        pdf.extend_from_slice(b"\nendstream endobj\n");
+        pdf.extend_from_slice(
+            format!("5 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceGray {entry} 6 0 R /Length 1 >> stream\n\0\nendstream endobj\n").as_bytes(),
+        );
+        let kind = if entry == "/Mask" { "/ImageMask true" } else { "/ColorSpace /DeviceGray" };
+        pdf.extend_from_slice(
+            format!(
+                "6 0 obj << /Type /XObject /Subtype /Image /Width 16 /Height 2 /BitsPerComponent 1 {kind} /Filter {filter} /Length {} >> stream\n",
+                mask.len()
+            )
+            .as_bytes(),
+        );
+        pdf.extend_from_slice(mask);
+        pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+        let config = RenderConfig { jbig2_work: Some(work), ..RenderConfig::default() };
+        let page = PageRenderer::new(Arc::new(pdf), config).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            ..Default::default()
+        });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        let shown = match &page.rgba[((25 * 40 + 15) * 4)..][..4] {
+            [0, 0, 0, 255] => true,
+            [255, 255, 255, 255] => false,
+            other => panic!("neither the picture nor the page: {other:?}"),
+        };
+        (shown, page.warnings.contains(&RenderWarning::ContentTruncated))
+    };
+    let mask = black_jbig2_page();
+    let jbig2 = "/JBIG2Decode";
+    assert_eq!(draw("/SMask", jbig2, &mask, u64::MAX), (false, false), "the mask hides all of it");
+    assert_eq!(draw("/SMask", jbig2, &mask, 0), (false, true), "past the allowance a soft mask hides it too");
+    assert_eq!(draw("/Mask", jbig2, &mask, 0), (false, true), "and so does a stencil mask");
+    assert_eq!(draw("/SMask", jbig2, b"no JBIG2 here", 1 << 20), (true, false), "any other bad mask is no mask");
+    let other = draw("/SMask", "/DCTDecode", b"no JPEG here", 0);
+    assert_eq!(other, (true, false), "and a page with nothing left says nothing of a mask that isn't JBIG2");
+}
+
+/// A page's allowance ends with it, so what decodes on its thread afterwards has no page to run out
+/// on, and a `Context` used again starts afresh.
+#[test]
+fn a_pages_jbig2_allowance_ends_with_the_page() {
+    use hayro::hayro_interpret::font::Glyph;
+    use hayro::hayro_interpret::hayro_syntax::Pdf;
+    use hayro::hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        TransformExt, interpret_page,
+    };
+    use hayro_syntax::page_jbig2_work_spent;
+    use kurbo::{Affine, BezPath, Rect};
+
+    /// Notes at each path whether the page has run out.
+    struct Spent(Vec<bool>);
+    impl<'a> Device<'a> for Spent {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'a>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &BezPath, _: Affine, _: &Paint<'a>, _: &PathDrawMode) {
+            self.0.push(page_jbig2_work_spent());
+        }
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'a>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, _: &Glyph<'a>, _: Affine, _: Affine, _: &Paint<'a>, _: &GlyphDrawMode) {}
+        fn draw_image(&mut self, _: Image<'a, '_>, _: Affine) {}
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+
+    let content = "0 0 4 4 re f";
+    let bytes = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R >> endobj\n4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n",
+        content.len()
+    );
+    let pdf = Pdf::new(Arc::new(bytes.into_bytes())).expect("parses");
+    let page = &pdf.pages()[0];
+    let cache = InterpreterCache::new();
+    let settings = InterpreterSettings { jbig2_work: 0, ..InterpreterSettings::default() };
+    let mut ctx = Context::new(page.initial_transform(true).to_kurbo(), Rect::new(0.0, 0.0, 40.0, 40.0), &cache, page.xref(), settings);
+    let mut device = Spent(Vec::new());
+    for _ in 0..2 {
+        interpret_page(page, &mut ctx, &mut device);
+        assert!(!page_jbig2_work_spent(), "no page is being drawn");
+    }
+    assert_eq!(device.0, [true, true], "each time, the page has what its settings give it");
+}
+
+/// An image that can't be decoded has still cost its reading, which a page repeats for each time
+/// it draws one, since such an image isn't kept. So what it reads comes out of the page's allowance,
+/// and an image after it has less. Allowed exactly what the good one takes, it isn't drawn behind
+/// the bad one, and is drawn alone.
+#[test]
+fn an_image_that_fails_spends_the_pages_allowance_too() {
+    let image = |number: u8, stream: &[u8]| {
+        let mut object = format!(
+            "{number} 0 obj << /Type /XObject /Subtype /Image /Width 16 /Height 2 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode /Length {} >> stream\n",
+            stream.len()
+        )
+        .into_bytes();
+        object.extend_from_slice(stream);
+        object.extend_from_slice(b"\nendstream endobj\n");
+        object
+    };
+    let pdf = |content: &str| {
+        let mut pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Bad 5 0 R /Good 6 0 R >> >> >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n",
+            content.len()
+        )
+        .into_bytes();
+        pdf.extend(image(5, &[0xFF; 64]));
+        pdf.extend(image(6, &black_jbig2_page()));
+        pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
+        Arc::new(pdf)
+    };
+    let good = "q 40 0 0 40 0 0 cm /Good Do Q";
+    let drawn = |content: &str, work: u64| {
+        let config = RenderConfig { jbig2_work: Some(work), ..RenderConfig::default() };
+        let page = PageRenderer::new(pdf(content), config).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            ..Default::default()
+        });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        page.rgba[((20 * 40 + 20) * 4)..][..4] == [0, 0, 0, 255]
+    };
+    let cost = (1..2_000).find(|work| drawn(good, *work)).expect("a small image is cheap");
+    assert!(!drawn(&format!("q 1 0 0 1 0 0 cm /Bad Do Q {good}"), cost), "the bad one spent some of it");
+    assert!(drawn(&format!("q 1 0 0 1 0 0 cm /Bad Do Q {good}"), cost + 4 * 64), "and what it spent is its reading");
 }
 
 /// Bits written from the top of each byte, as JBIG2's Huffman-coded data is.
