@@ -381,6 +381,41 @@ fn content_colour(data: &[u8], used: &mut DeviceColour) -> usize {
     read
 }
 
+/// Records any device colour space named directly or used as the base or alternate space of a
+/// colour-space object (`Name` or `Array` such as `[/Indexed base …]`, `[/Separation _ alt …]`,
+/// or `[/DeviceN _ alt …]`).
+fn mark_cs_object(doc: &Document, cs: &Object, used: &mut DeviceColour, depth: u8) {
+    if depth > MAX_DIRECT_DEPTH {
+        return;
+    }
+    match cs {
+        Object::Ref(r) => mark_cs_object(doc, &doc.get(*r), used, depth + 1),
+        Object::Name(n) => used.mark(n, false),
+        Object::Array(a) => {
+            let mut kind = a.first().map(|o| doc.resolve(o));
+            for _ in 0..MAX_DIRECT_DEPTH {
+                let Some(&Object::Ref(r)) = kind.as_deref() else { break };
+                kind = Some(doc.get(r));
+            }
+            match kind.as_deref().and_then(Object::as_name) {
+                Some(n) if a.len() == 1 => used.mark(n, false),
+                Some(b"I" | b"Indexed" | b"Pattern") => {
+                    if let Some(base) = a.get(1) {
+                        mark_cs_object(doc, base, used, depth + 1);
+                    }
+                }
+                Some(b"Separation" | b"DeviceN") => {
+                    if let Some(alt) = a.get(2) {
+                        mark_cs_object(doc, alt, used, depth + 1);
+                    }
+                }
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Whether any content or object uses a device colour space.
 fn uses_device_colour(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> DeviceColour {
     let mut used = DeviceColour::default();
@@ -396,15 +431,15 @@ fn uses_device_colour(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)])
             {
                 used.default_rgb |= spaces.get(b"DefaultRGB").is_some();
                 used.default_cmyk |= spaces.get(b"DefaultCMYK").is_some();
+                for (k, entry) in spaces.iter() {
+                    if !matches!(k.as_slice(), b"DefaultGray" | b"DefaultRGB" | b"DefaultCMYK") {
+                        mark_cs_object(doc, entry, &mut used, 0);
+                    }
+                }
             }
         }
-        if let Some(cs) = d.get(b"ColorSpace").map(|c| doc.resolve(c)) {
-            match &*cs {
-                Object::Name(n) if n == b"DeviceGray" => used.gray = true,
-                Object::Name(n) if n == b"DeviceRGB" => used.rgb = true,
-                Object::Name(n) if n == b"DeviceCMYK" => used.cmyk = true,
-                _ => {}
-            }
+        if let Some(cs) = d.get(b"ColorSpace") {
+            mark_cs_object(doc, cs, &mut used, 0);
         }
         // Content streams only: a font program or an ICC profile is data, whatever bytes it holds.
         // Parsing is the expensive part, so once content has used all three spaces no more is read.
@@ -530,29 +565,41 @@ fn check_objects(
 ) {
     for (r, o) in objects {
         let Some(d) = dict_of(o) else { continue };
-        check_one_object(doc, level, *r, d, o, page_of, issue);
+        check_one_object(doc, level, d, o, page_of(*r), issue);
+    }
+    for (i, p) in pdfcraft_model::pages(doc).into_iter().enumerate() {
+        if let Some(a) = p.dict.get(b"Annots").map(|a| doc.resolve(a))
+            && let Some(a) = a.as_array()
+        {
+            for entry in a {
+                if let Object::Dict(d) = entry {
+                    check_one_object(doc, level, d, entry, Some(i), issue);
+                }
+            }
+        }
     }
 }
 
+/// Checks a single object against the PDF/A rules for `level`.
 fn check_one_object(
     doc: &Document,
     level: Level,
-    reference: ObjRef,
     dict: &Dict,
     object: &Object,
-    page_of: &impl Fn(ObjRef) -> Option<usize>,
+    page: Option<usize>,
     issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
 ) {
     let ty = dict.name(b"Type");
     let subtype = dict.name(b"Subtype");
     check_actions(doc, dict, issue);
-    if is_annotation(dict, ty, subtype) && check_annotation(doc, dict, subtype, page_of(reference), issue) {
+    let is_annot = matches!(object, Object::Dict(_)) && is_annotation(doc, dict, ty, subtype, page.is_some());
+    if is_annot && check_annotation(doc, dict, subtype, page, issue) {
         // A forbidden annotation stops every later check for its object, as the scan did before
         // it was split into helpers: the rest of its own checks and the form field, font, stream
         // and embedded file below all came after that `continue`.
         return;
     }
-    if dict.get(b"FT").is_some() && dict.get(b"AA").is_some() && ty != Some(b"Annot") {
+    if dict.get(b"FT").is_some() && dict.get(b"AA").is_some() && !is_annot {
         issue("6.5.2", "A form field has additional actions", None, None, true);
     }
     if ty == Some(b"Font") || dict.get(b"BaseFont").is_some() && subtype.is_some() {
@@ -576,8 +623,11 @@ fn check_actions(doc: &Document, dict: &Dict, issue: &mut impl FnMut(&'static st
     }
 }
 
-fn is_annotation(dict: &Dict, ty: Option<&[u8]>, subtype: Option<&[u8]>) -> bool {
-    ty == Some(b"Annot") || (subtype.is_some() && dict.get(b"Rect").is_some() && dict.get(b"P").is_some())
+/// Whether `dict` is an annotation dictionary (`/Type /Annot`, or a dictionary with the required
+/// `/Subtype` and `/Rect` array entries that either sits in a page's `/Annots` list or carries `/P`).
+fn is_annotation(doc: &Document, dict: &Dict, ty: Option<&[u8]>, subtype: Option<&[u8]>, on_page: bool) -> bool {
+    ty == Some(b"Annot")
+        || (subtype.is_some() && dict.get(b"Rect").is_some_and(|r| doc.resolve(r).as_array().is_some()) && (on_page || dict.get(b"P").is_some()))
 }
 
 fn check_annotation(
@@ -628,6 +678,7 @@ fn check_annotation_appearance(
     }
 }
 
+/// Checks a stream's compression filters, external file keys, and image/PostScript subtype rules.
 fn check_stream(
     doc: &Document,
     stream: &pdfcraft_cos::Stream,
@@ -637,12 +688,12 @@ fn check_stream(
     let filters: Vec<Vec<u8>> = match stream.dict.get(b"Filter").map(|filter| doc.resolve(filter)) {
         Some(filter) => match &*filter {
             Object::Name(name) => vec![name.clone()],
-            Object::Array(filters) => filters.iter().filter_map(|filter| filter.as_name().map(<[u8]>::to_vec)).collect(),
+            Object::Array(filters) => filters.iter().filter_map(|filter| doc.resolve(filter).as_name().map(<[u8]>::to_vec)).collect(),
             _ => Vec::new(),
         },
         None => Vec::new(),
     };
-    if filters.iter().any(|filter| filter == b"LZWDecode") {
+    if filters.iter().any(|filter| filter == b"LZWDecode" || filter == b"LZW") {
         issue("6.1.7.2", "A stream uses LZW compression", None, None, false);
     }
     if stream.dict.get(b"F").is_some() || stream.dict.get(b"FFilter").is_some() {
@@ -791,6 +842,86 @@ fn strip_actions(doc: &Document, d: &mut Dict) -> bool {
     changed
 }
 
+/// Collects every indirect annotation reference listed in any page's `/Annots` array.
+fn page_annot_refs(doc: &Document) -> std::collections::HashSet<ObjRef> {
+    let mut refs = std::collections::HashSet::new();
+    for p in pdfcraft_model::pages(doc) {
+        if let Some(a) = p.dict.get(b"Annots").map(|a| doc.resolve(a))
+            && let Some(a) = a.as_array()
+        {
+            refs.extend(a.iter().filter_map(Object::as_ref));
+        }
+    }
+    refs
+}
+
+/// Removes annotation `r` from every page's `/Annots` list and replaces its indirect object with `Null`.
+fn remove_annot_from_pages(doc: &mut Document, r: ObjRef) -> Result<(), pdfcraft_cos::CosError> {
+    for p in pdfcraft_model::pages(doc) {
+        let annots = p.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
+        if annots.iter().any(|a| a.as_ref() == Some(r)) {
+            let kept: Vec<Object> = annots.into_iter().filter(|a| a.as_ref() != Some(r)).collect();
+            doc.update_dict(p.obj, |pd| pd.set(b"Annots".to_vec(), Object::Array(kept)))?;
+        }
+    }
+    doc.set(r, Object::Null);
+    Ok(())
+}
+
+fn fix_annot_or_field(doc: &Document, nd: &mut Dict, is_annot: bool, sub: Option<&[u8]>, actions: &mut usize, flags: &mut usize) -> bool {
+    let mut changed = strip_actions(doc, nd);
+    *actions += changed as usize;
+    if is_annot && sub != Some(b"Popup") {
+        let f = nd.int(b"F").unwrap_or(0);
+        let want = (f | 4) & !(1 | 2 | 32);
+        if want != f {
+            nd.set(b"F".to_vec(), Object::Int(want));
+            *flags += 1;
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn convert_direct_page_annots(
+    doc: &mut Document,
+    page: &pdfcraft_model::Page,
+    actions: &mut usize,
+    flags: &mut usize,
+    removed: &mut usize,
+) -> Result<(), pdfcraft_cos::CosError> {
+    let Some(annots) = page.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()) else {
+        return Ok(());
+    };
+    if !annots.iter().any(|a| a.as_dict().is_some()) {
+        return Ok(());
+    }
+    let mut kept = Vec::with_capacity(annots.len());
+    let mut changed = false;
+    for entry in annots {
+        let Object::Dict(mut nd) = entry else {
+            kept.push(entry);
+            continue;
+        };
+        let ty = nd.name(b"Type").map(<[u8]>::to_vec);
+        let sub = nd.name(b"Subtype").map(<[u8]>::to_vec);
+        let is_annot = is_annotation(doc, &nd, ty.as_deref(), sub.as_deref(), true);
+        if is_annot && sub.as_deref().is_some_and(|s| FORBIDDEN_ANNOTS.contains(&s)) {
+            *removed += 1;
+            changed = true;
+            continue;
+        }
+        if is_annot || nd.get(b"FT").is_some() {
+            changed |= fix_annot_or_field(doc, &mut nd, is_annot, sub.as_deref(), actions, flags);
+        }
+        kept.push(Object::Dict(nd));
+    }
+    if changed {
+        doc.update_dict(page.obj, |pd| pd.set(b"Annots".to_vec(), Object::Array(kept)))?;
+    }
+    Ok(())
+}
+
 /// Make `doc` conform to `level` as far as possible, then re-check it.
 pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos::CosError> {
     let mut fixed = Vec::new();
@@ -858,42 +989,26 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
 
     // Pages, annotations, fields, images, embedded files.
     let (mut actions, mut flags, mut images, mut removed, mut files) = (0, 0, 0, 0, 0);
+    let page_annots = page_annot_refs(doc);
     for p in pdfcraft_model::pages(doc) {
         let mut changed = false;
         doc.update_dict(p.obj, |d| changed = d.remove(b"AA").is_some())?;
         actions += changed as usize;
+        convert_direct_page_annots(doc, &p, &mut actions, &mut flags, &mut removed)?;
     }
     for (r, o) in objects(doc) {
         let Some(d) = dict_of(&o).cloned() else { continue };
         let ty = d.name(b"Type").map(<[u8]>::to_vec);
         let sub = d.name(b"Subtype").map(<[u8]>::to_vec);
-        let is_annot = ty.as_deref() == Some(b"Annot");
+        let is_annot = matches!(&*o, Object::Dict(_)) && is_annotation(doc, &d, ty.as_deref(), sub.as_deref(), page_annots.contains(&r));
         if is_annot && sub.as_deref().is_some_and(|s| FORBIDDEN_ANNOTS.contains(&s)) {
-            // Take it off its page.
-            for p in pdfcraft_model::pages(doc) {
-                let annots = p.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
-                if annots.iter().any(|a| a.as_ref() == Some(r)) {
-                    let kept: Vec<Object> = annots.into_iter().filter(|a| a.as_ref() != Some(r)).collect();
-                    doc.update_dict(p.obj, |pd| pd.set(b"Annots".to_vec(), Object::Array(kept)))?;
-                }
-            }
+            remove_annot_from_pages(doc, r)?;
             removed += 1;
             continue;
         }
         if matches!(&*o, Object::Dict(_)) && (is_annot || d.get(b"FT").is_some()) {
             let mut nd = d.clone();
-            let mut changed = strip_actions(doc, &mut nd);
-            actions += changed as usize;
-            if is_annot && sub.as_deref() != Some(b"Popup") {
-                let f = nd.int(b"F").unwrap_or(0);
-                let want = (f | 4) & !(1 | 2 | 32);
-                if want != f {
-                    nd.set(b"F".to_vec(), Object::Int(want));
-                    flags += 1;
-                    changed = true;
-                }
-            }
-            if changed {
+            if fix_annot_or_field(doc, &mut nd, is_annot, sub.as_deref(), &mut actions, &mut flags) {
                 doc.set(r, Object::Dict(nd));
             }
             continue;
