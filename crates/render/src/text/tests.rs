@@ -1966,7 +1966,6 @@ fn text_outside_the_crop_box_is_clipped() {
     }
 }
 
-
 /// An embedded TrueType font as a Type 0 font (`Identity-H`, CID = glyph index), `to_unicode`
 /// being the font's `/ToUnicode` value if any, drawing "Zażółć gęślą jaźń, Grüße".
 fn identity_h_text(to_unicode: Option<lopdf::Object>) -> String {
