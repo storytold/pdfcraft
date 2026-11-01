@@ -64,6 +64,11 @@ fn side_by_side() -> Harness<'static, PdfCraftApp> {
     let s = Session::new();
     let v1 = s.create_from_text("t", "Delivery within five days. Returns accepted.").unwrap().to_vec();
     let v2 = s.create_from_text("t", "Delivery within three days. Returns accepted for a week.").unwrap().to_vec();
+    side_by_side_bytes(v1, v2)
+}
+
+/// Compare two supplied documents in the same shell as the other comparison regressions.
+fn side_by_side_bytes(v1: Vec<u8>, v2: Vec<u8>) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
@@ -278,4 +283,33 @@ fn export_to_word_html_and_rtf() {
         assert!(std::fs::metadata(&out).unwrap().len() > 40, "{ext}");
     }
     assert!(std::fs::read_to_string(dir.join("e.html")).unwrap().contains("Exported words"));
+}
+
+/// #4908: with the page size always on, each half of a side-by-side comparison shows its own label.
+#[test]
+fn each_half_of_a_comparison_shows_its_own_page_size() {
+    let session = Session::new();
+    let [old, new] = [("Old version", [200, 300]), ("New version", [400, 250])].map(|(text, [width, height])| {
+        let bytes = session.create_from_text("t", text).unwrap();
+        let mut doc = pdfcraft_cos::Document::open(bytes).unwrap();
+        let page = pdfcraft_model::pages(&doc).remove(0);
+        doc.update_dict(page.obj, |dict| {
+            dict.set(b"MediaBox".to_vec(), pdfcraft_cos::Object::Array([0, 0, width, height].map(pdfcraft_cos::Object::Int).to_vec()));
+        })
+        .unwrap();
+        pdfcraft_cos::write_incremental(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap()
+    });
+    let mut h = side_by_side_bytes(old, new);
+    h.state_mut().units = pdfcraft_ui_egui::units::Unit::Points;
+    let labels = |h: &Harness<'static, PdfCraftApp>| h.query_all_by_label_contains(" × ").count();
+    assert_eq!(labels(&h), 0, "off by default, with the pointer away from the corners");
+    h.state_mut().set_option("always-show-page-size", "on").unwrap();
+    h.run_steps(4);
+    assert_eq!(labels(&h), 2, "one label per half");
+    let comparison = h.state().compare.as_ref().unwrap();
+    for (id, expected) in [(comparison.old, "200.0 × 300.0 pt"), (comparison.new, "400.0 × 250.0 pt")] {
+        assert_eq!(h.query_all_by_label_contains(expected).count(), 1, "each document shows its exact size once: {expected}");
+        let view = h.state().views.iter().find(|view| view.id == id).unwrap();
+        assert!(view.viewport_rect().contains(h.get_by_label(expected).rect().center()), "{expected} belongs in its document's half");
+    }
 }

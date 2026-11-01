@@ -2333,3 +2333,18 @@ fn a_document_press_releases_pages_keyboard_focus_without_escape() {
     sidebar_key(&mut h, Key::A, Modifiers::COMMAND);
     assert!(h.state().views[0].selected.is_empty(), "Ctrl+A now belongs to the viewer, not page thumbnails");
 }
+
+#[test]
+fn always_show_the_page_size_survives_a_restart() {
+    let mut app = PdfCraftApp::new();
+    assert!(!app.always_show_page_size, "off by default");
+    app.always_show_page_size = true;
+    let mut restarted = PdfCraftApp::new();
+    restarted.restore(&app.persist());
+    assert!(restarted.always_show_page_size, "the choice is kept");
+    restarted.restore(r#"{"always_show_page_size":"bogus"}"#);
+    assert!(restarted.always_show_page_size, "garbage leaves it alone");
+    let mut legacy = PdfCraftApp::new();
+    legacy.restore("{}");
+    assert!(!legacy.always_show_page_size, "a legacy file without the key keeps it off");
+}

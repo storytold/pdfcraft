@@ -481,8 +481,8 @@ pub struct DocView {
     /// Pending keyboard scrolling, in points down (negative: up): ↓ / ↑, and Page Down /
     /// Page Up where the pages scroll.
     pub key_scroll: f32,
-    /// Single-page view, as last drawn: the page shown and whether the view was at its top and
-    /// at its bottom, so ↑ / ↓ turn the page there instead of doing nothing (#273).
+    /// Noncontinuous view, as last drawn: the first page of the shown row and whether the view
+    /// was at its top and bottom, so ↑ / ↓ turn the page or spread at an edge (#273).
     single_edges: Option<(usize, bool, bool)>,
     /// Briefly outline an annotation after navigating to it from a panel.
     pub flash: Option<(usize, [f32; 4], f64)>,
@@ -1099,6 +1099,8 @@ type PageRenders = (Vec<(usize, f32, u64, Option<Tile>)>, Vec<usize>);
 struct PageEnv<'a> {
     added: &'a Vec<pdfcraft_engine::Added>,
     allowed: bool,
+    /// Keep the page size up wherever the pointer is (#4908).
+    always_page_size: bool,
     author: &'a String,
     auto_delta: Vec2,
     avail: Rect,
@@ -2549,7 +2551,8 @@ fn draw_pages(
     if let Some(p) = pressed_page {
         current = p;
     }
-    if view.continuous {
+    // Either page of a noncontinuous spread can be current without changing the shown row.
+    if view.continuous || (view.layout == PageLayout::TwoUp && pressed_page.is_some()) {
         view.current = current;
     }
     resp.context_menu(|ui| {
@@ -3171,7 +3174,7 @@ fn track_scroll<T>(ui: &egui::Ui, view: &mut DocView, out: &egui::containers::sc
 /// The hover tip, find bar, size hint and the in-place editors drawn over the pages. Whether the
 /// text editor was finished.
 fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, primary_down: bool, hover_text: Option<(Pos2, String)>) -> bool {
-    let PageEnv { added, author, avail, can_modify, doc, form, info, prefs, t, today, tool, units, unobstructed, .. } = *env;
+    let PageEnv { added, always_page_size, author, avail, can_modify, doc, form, info, prefs, t, today, tool, units, unobstructed, .. } = *env;
     if let Some((pos, text)) = hover_text {
         // Click-through, as a tooltip is: the pages lose the pointer under anything that isn't.
         let tip = egui::Area::new(egui::Id::unique("canvas-hover")).order(egui::Order::Tooltip).interactable(false);
@@ -3183,7 +3186,8 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
         });
     }
     find_bar(view, info.pages.len(), avail, ui, t);
-    page_size_hint(view, info, units, avail, unobstructed, ui, t);
+    let page_size = info.pages.get(view.current).map(|p| (p.width, p.height));
+    page_size_hint(page_size, units, always_page_size, avail, unobstructed, ui, t);
     if tool == QuickTool::EnhanceCamera {
         crate::camera_ui::bar(ui.ctx(), view, avail, t, can_modify);
     }
@@ -3642,6 +3646,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let env = PageEnv {
         added: &added,
         allowed,
+        always_page_size: app.always_show_page_size,
         author: &author,
         auto_delta,
         avail,

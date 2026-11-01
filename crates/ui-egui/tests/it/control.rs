@@ -23,12 +23,19 @@ fn page_texts(app: &PdfCraftApp) -> Vec<String> {
 }
 
 fn fixture(n: usize) -> Vec<u8> {
+    fixture_boxes(&vec![None; n])
+}
+
+/// One page per entry: 200 × 300 pt from the page tree, or its own `/MediaBox` width and height.
+fn fixture_boxes(boxes: &[Option<(u32, u32)>]) -> Vec<u8> {
+    let n = boxes.len();
     let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
     let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 4 + 2 * i)).collect();
     objs.push(format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 200 300] >>", kids.join(" ")));
     objs.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into());
-    for i in 0..n {
-        objs.push(format!("<< /Type /Page /Parent 2 0 R /Contents {} 0 R /Resources << /Font << /F1 3 0 R >> >> >>", 5 + 2 * i));
+    for (i, own) in boxes.iter().enumerate() {
+        let media = own.map(|(w, h)| format!(" /MediaBox [0 0 {w} {h}]")).unwrap_or_default();
+        objs.push(format!("<< /Type /Page /Parent 2 0 R{media} /Contents {} 0 R /Resources << /Font << /F1 3 0 R >> >> >>", 5 + 2 * i));
         let body = format!("BT /F1 24 Tf 20 150 Td (Page {}) Tj ET", i + 1);
         objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()));
     }
@@ -56,13 +63,17 @@ fn harness_pages(pages: usize) -> (Harness<'static, PdfCraftApp>, ControlClient)
 }
 
 fn harness_pages_at(pages: usize, width: f32, scale: f32) -> (Harness<'static, PdfCraftApp>, ControlClient) {
+    harness_bytes_at(fixture(pages), width, scale)
+}
+
+fn harness_bytes_at(bytes: Vec<u8>, width: f32, scale: f32) -> (Harness<'static, PdfCraftApp>, ControlClient) {
     let slot: Arc<Mutex<Option<ControlClient>>> = Arc::default();
     let s = slot.clone();
     let mut h = Harness::builder().with_size(egui::vec2(width, 900.0)).with_pixels_per_point(scale).build_eframe(move |cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
         *s.lock().unwrap() = Some(app.attach_control(&cc.egui_ctx));
-        app.open_bytes("doc.pdf", None, fixture(pages)).unwrap();
+        app.open_bytes("doc.pdf", None, bytes).unwrap();
         app
     });
     h.run_steps(4);
@@ -1996,28 +2007,192 @@ fn click_and_drag_refuse_coordinates_that_overflow_like_move() {
     ok(&mut h, &c, "ui.drag", json!({ "from": [x, y], "to": [x + 10.0, y], "steps": 2 }));
 }
 
+/// How many page-size labels (`612 × 792 pt`) are on screen.
+fn size_labels(h: &Harness<'static, PdfCraftApp>) -> usize {
+    h.query_all_by_label_contains(" × ").count()
+}
+
 #[test]
 fn page_size_shows_while_the_pointer_is_in_the_bottom_left_quadrant() {
     let (mut h, _c) = harness();
     let area = h.state().views[0].viewport_rect();
-    let shown = |h: &Harness<'static, PdfCraftApp>| {
-        let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("page-size-hint"));
-        h.ctx.memory(|m| m.areas().visible_last_frame(&layer))
-    };
+    let shown = size_labels;
     let away = area.center() + egui::vec2(300.0, -200.0);
     h.event(egui::Event::PointerMoved(away));
     h.run_steps(3);
-    assert!(!shown(&h), "top-right: hidden");
+    assert_eq!(shown(&h), 0, "top-right: hidden");
     h.event(egui::Event::PointerMoved(area.left_bottom() + egui::vec2(80.0, -80.0)));
     h.run_steps(3);
-    assert!(shown(&h), "bottom-left: shown");
+    assert_eq!(shown(&h), 1, "bottom-left: shown");
     if let Ok(dir) = std::env::var("PDFCRAFT_SHOT_DIR") {
         let _gpu = crate::gpu();
         h.render().unwrap().save(format!("{dir}/page-size-hint.png")).unwrap();
     }
     h.event(egui::Event::PointerMoved(away));
     h.run_steps(3);
-    assert!(!shown(&h), "pointer left: hidden again");
+    assert_eq!(shown(&h), 0, "pointer left: hidden again");
+}
+
+/// #4908: with "Always show the page size" on, the label stays up wherever the pointer is.
+#[test]
+fn page_size_stays_up_when_always_show_is_on() {
+    let (mut h, _c) = harness();
+    let area = h.state().views[0].viewport_rect();
+    let shown = size_labels;
+    let away = area.center() + egui::vec2(300.0, -200.0);
+    h.event(egui::Event::PointerMoved(away));
+    h.run_steps(3);
+    assert_eq!(shown(&h), 0, "off by default: hidden away from the corner");
+    h.state_mut().set_option("always-show-page-size", "on").unwrap();
+    h.run_steps(3);
+    assert_eq!(shown(&h), 1, "on: shown with the pointer elsewhere");
+    h.state_mut().set_option("always-show-page-size", "off").unwrap();
+    h.run_steps(3);
+    assert_eq!(shown(&h), 0, "off again: hidden");
+    assert!(h.state_mut().set_option("always-show-page-size", "maybe").is_err());
+}
+
+/// The label follows the current page: after going to a page of another size it shows that size,
+/// not the first page's.
+#[test]
+fn page_size_follows_the_current_page() {
+    let (mut h, c) = harness_bytes_at(fixture_boxes(&[None, Some((400, 250)), None]), 1400.0, 1.0);
+    h.state_mut().units = pdfcraft_ui_egui::units::Unit::Points;
+    h.state_mut().set_option("always-show-page-size", "on").unwrap();
+    h.run_steps(3);
+    let label = |h: &Harness<'static, PdfCraftApp>, text: &str| h.query_all_by_label_contains(text).count();
+    assert_eq!((label(&h, "200.0 × 300.0 pt"), size_labels(&h)), (1, 1), "page 1: its own size");
+    ok(&mut h, &c, "ui.set", json!({ "key": "page", "value": 2 }));
+    h.run_steps(3);
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["page"], 2);
+    assert_eq!((label(&h, "400.0 × 250.0 pt"), size_labels(&h)), (1, 1), "page 2: the new size, and only it");
+    ok(&mut h, &c, "ui.set", json!({ "key": "page", "value": 3 }));
+    h.run_steps(3);
+    assert_eq!((label(&h, "200.0 × 300.0 pt"), size_labels(&h)), (1, 1), "page 3: back to 200 × 300");
+}
+
+/// Pressing either page of a noncontinuous spread updates its size without moving that spread.
+#[test]
+fn page_size_tracks_the_pressed_page_without_moving_its_two_page_spread() {
+    for cover in [false, true] {
+        let bytes = fixture_boxes(&[None, Some((400, 250)), None, Some((400, 250)), None]);
+        let (mut h, c) = harness_bytes_at(bytes, 1400.0, 1.0);
+        h.state_mut().units = pdfcraft_ui_egui::units::Unit::Points;
+        for (key, value) in [("layout", "two-page"), ("zoom", "100"), ("always-show-page-size", "on")] {
+            h.state_mut().set_option(key, value).unwrap();
+        }
+        h.state_mut().views[0].cover = cover;
+        let first = usize::from(cover);
+        h.state_mut().views[0].go_to_page(first);
+        h.run_steps(4);
+        assert!(!h.state().views[0].continuous);
+        let rects = [first, first + 1].map(|p| h.state().views[0].page_screen_rect(p).expect("both pages are shown"));
+        for side in [1, 0, 1] {
+            let page = first + side;
+            let point = rects[side].max - egui::vec2(15.0, 15.0);
+            ok(&mut h, &c, "ui.click", json!({ "x": point.x, "y": point.y }));
+            h.run_steps(3);
+            assert_eq!(h.state().views[0].current, page, "cover={cover}: the pressed page is current");
+            assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["page"], page + 1);
+            let size = if page % 2 == 0 { "200.0 × 300.0 pt" } else { "400.0 × 250.0 pt" };
+            assert_eq!((h.query_all_by_label_contains(size).count(), size_labels(&h)), (1, 1), "cover={cover}: the pressed page's size");
+            assert_eq!([first, first + 1].map(|p| h.state().views[0].page_screen_rect(p).unwrap()), rects, "pressing keeps the spread in place");
+        }
+        // Navigation still advances and returns by a complete spread after selecting its second page.
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::ArrowRight);
+        h.run_steps(4);
+        assert_eq!(h.state().views[0].current, first + 2, "next spread");
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::ArrowLeft);
+        h.run_steps(4);
+        assert_eq!(h.state().views[0].current, first, "previous spread");
+    }
+}
+
+/// A tall middle spread at an edge, with its second page selected by a real control click.
+fn selected_second_page_at_spread_edge(cover: bool, forward: bool) -> (Harness<'static, PdfCraftApp>, usize) {
+    let boxes: Vec<_> = (0..8).map(|p| Some((if p % 2 == 0 { 200 } else { 400 }, 1400))).collect();
+    let (mut h, c) = harness_bytes_at(fixture_boxes(&boxes), 1400.0, 1.0);
+    for (key, value) in [("layout", "two-page"), ("zoom", "100"), ("always-show-page-size", "on")] {
+        h.state_mut().set_option(key, value).unwrap();
+    }
+    let first = if cover { 3 } else { 2 };
+    {
+        let view = &mut h.state_mut().views[0];
+        view.cover = cover;
+        view.go_to_page(first);
+        view.goto = Some((first, if forward { 1.0 } else { 0.0 }));
+    }
+    h.run_steps(6);
+    let viewport = h.state().views[0].viewport_rect();
+    let page = h.state().views[0].page_screen_rect(first + 1).unwrap();
+    assert!(page.height() > viewport.height() + 300.0, "the spread has room to pan");
+    let point = page.intersect(viewport).center();
+    ok(&mut h, &c, "ui.click", json!({ "x": point.x, "y": point.y }));
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].current, first + 1, "the second page is selected");
+    assert!(h.state().views[0].goto.is_none(), "the jump has settled");
+    let page = h.state().views[0].page_screen_rect(first + 1).unwrap();
+    let edge = if forward { viewport.bottom() - page.bottom() } else { page.top() - viewport.top() };
+    assert!((-40.0..=80.0).contains(&edge), "the requested edge is visible: {edge}");
+    (h, first)
+}
+
+/// Up/Down turn a tall spread at its edges even when the selected page is its second page.
+#[test]
+fn a_selected_spread_second_page_keeps_arrow_edge_navigation() {
+    let mut stuck = Vec::new();
+    for cover in [false, true] {
+        for forward in [false, true] {
+            let (mut h, first) = selected_second_page_at_spread_edge(cover, forward);
+            h.key_press(if forward { egui::Key::ArrowDown } else { egui::Key::ArrowUp });
+            h.run_steps(6);
+            let expected = if forward { first + 2 } else { first - 2 };
+            if h.state().views[0].current != expected {
+                stuck.push((cover, forward, h.state().views[0].current, expected));
+            }
+        }
+    }
+    assert!(stuck.is_empty(), "arrow edge navigation stayed on the selected second page: {stuck:?}");
+}
+
+/// A wheel notch at either edge still turns a tall spread with its second page selected.
+#[test]
+fn a_selected_spread_second_page_keeps_wheel_edge_navigation() {
+    let mut stuck = Vec::new();
+    for cover in [false, true] {
+        for forward in [false, true] {
+            let (mut h, first) = selected_second_page_at_spread_edge(cover, forward);
+            h.input_mut().events.push(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: egui::vec2(0.0, if forward { -1.0 } else { 1.0 }),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+                source: egui::MouseWheelSource::Unknown,
+            });
+            h.step();
+            h.run_steps(8);
+            let expected = if forward { first + 2 } else { first - 2 };
+            if h.state().views[0].current != expected {
+                stuck.push((cover, forward, h.state().views[0].current, expected));
+            }
+        }
+    }
+    assert!(stuck.is_empty(), "wheel edge navigation stayed on the selected second page: {stuck:?}");
+}
+
+/// The label stays under a dialog: ticking the preference in an open dialog does not bring it up.
+#[test]
+fn page_size_stays_hidden_under_a_dialog_even_when_always_show_is_on() {
+    let (mut h, _c) = harness();
+    h.state_mut().set_option("dialog", "preferences").unwrap();
+    h.run_steps(4);
+    h.state_mut().set_option("always-show-page-size", "on").unwrap();
+    h.run_steps(4);
+    assert!(h.state().dialog.is_some());
+    assert_eq!(size_labels(&h), 0, "hidden under Preferences");
+    h.state_mut().dialog = None;
+    h.run_steps(4);
+    assert_eq!(size_labels(&h), 1, "back once the dialog is closed");
 }
 
 #[test]

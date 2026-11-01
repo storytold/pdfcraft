@@ -129,6 +129,7 @@ impl PdfCraftApp {
             reload_changed_files: true,
             show_secured_notice: true,
             always_default_view: false,
+            always_show_page_size: false,
             #[cfg(not(target_arch = "wasm32"))]
             watch: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
