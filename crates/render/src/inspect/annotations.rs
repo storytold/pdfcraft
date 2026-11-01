@@ -1,6 +1,7 @@
 use super::core::{limited_pdf_string, pretty_date, spend};
 use super::model::{Annotation, AttachmentSource, DestView, Field, FieldKind, LayerOp, Link, LinkTarget, RemoteDestination, link_replies};
 use super::navigation::text_string;
+use super::rich_media::{LEGACY_FLASH_WARNING, MediaBudget};
 use super::{Dictionary, DocInfo, Entry, HashMap, HashSet, Inspector, Object, ObjectId};
 
 /// At most this many `/State` entries of a set-layer-visibility action are read.
@@ -87,6 +88,7 @@ impl<'a> Inspector<'a> {
                 entries.push((page, index, a));
             }
         }
+        let mut media_budget = MediaBudget::default();
         let mut kept = 0usize;
         // Once the comment budget is spent, comments are no longer built, but links and attachments
         // are still listed.
@@ -99,6 +101,10 @@ impl<'a> Inspector<'a> {
             {
                 let fallback = |budget: &mut usize| self.budgeted_text(d, b"Contents", budget);
                 info.attachments.push(self.attachment(fs, AttachmentSource::Annotation { page, index }, text_budget, fallback));
+            }
+            if subtype == "RichMedia" {
+                self.rich_media(info, page, index, d, text_budget, &mut media_budget);
+                continue;
             }
             if subtype == "Link" {
                 if let Some(link) = self.link(page, index, d, text_budget) {
@@ -187,6 +193,12 @@ impl<'a> Inspector<'a> {
                 continue;
             }
             info.annotations.push(annotation);
+        }
+        if info.has_legacy_flash {
+            info.warnings.push(LEGACY_FLASH_WARNING.to_string());
+        }
+        if media_budget.visits == 0 || media_budget.assets == 0 {
+            info.warnings.push("The rich-media inventory limit was reached; additional embedded assets may be omitted.".into());
         }
         info.annotations.sort_by(|a, b| a.page.cmp(&b.page).then(b.rect[3].total_cmp(&a.rect[3])));
         link_replies(&mut info.annotations);

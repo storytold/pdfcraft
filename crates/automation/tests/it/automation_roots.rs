@@ -206,6 +206,7 @@ fn tools_that_write_a_path_are_held_to_the_write_root() {
         let file = |name: &str| s(&base.join(dir).join(name));
         vec![
             ("doc_save", json!({"doc": 1, "path": file("saved.pdf")})),
+            ("attachment_save", json!({"doc": 1, "index": 1, "path": file("asset.swf")})),
             ("page_extract", json!({"doc": 1, "pages": [1], "out": file("extract.pdf")})),
             ("page_extract", json!({"doc": 1, "pages": [1], "separate": true, "out_dir": file("pages")})),
             ("doc_combine", json!({"paths": [input("a.pdf"), input("b.pdf")], "out": file("combined.pdf")})),

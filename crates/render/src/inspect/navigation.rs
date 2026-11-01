@@ -14,6 +14,13 @@ pub(super) const OUTLINE_WINDOW: usize = 10_000;
 /// Deepest level `DocInfo::outline` nests (the top level is 0); deeper bookmarks are left out.
 pub(super) const OUTLINE_DEPTH: usize = 32;
 
+/// A budgeted display key and its borrowed source identity; the raw bytes are not copied here.
+pub(super) struct NameTreeEntry<'a> {
+    pub key: String,
+    pub raw_key: Option<&'a [u8]>,
+    pub value: &'a Object,
+}
+
 impl<'a> Inspector<'a> {
     /// The destination `/OpenAction` opens at (ISO 32000-2 §7.7.2 Table 29): an explicit
     /// destination array, a `/GoTo` action's `/D`, or (leniently, since Table 29 asks for an array
@@ -112,29 +119,51 @@ impl<'a> Inspector<'a> {
         seen: &mut HashSet<*const Dictionary>,
         depth: u32,
         text_budget: &mut usize,
-    ) -> Vec<(String, &'a Object)> {
+    ) -> Vec<NameTreeEntry<'a>> {
+        let mut visits = usize::MAX;
+        self.name_tree_limited(node, seen, depth, text_budget, &mut visits)
+    }
+
+    /// The same name-tree walk with a caller's total node/edge/entry work allowance.
+    pub(super) fn name_tree_limited(
+        &self,
+        node: &'a Dictionary,
+        seen: &mut HashSet<*const Dictionary>,
+        depth: u32,
+        text_budget: &mut usize,
+        visits: &mut usize,
+    ) -> Vec<NameTreeEntry<'a>> {
         let mut out = Vec::new();
-        if depth > 32 || !seen.insert(node as *const _) {
+        if *visits == 0 || depth > 32 || !seen.insert(node as *const _) {
             return out;
         }
+        *visits = visits.saturating_sub(1);
         if let Ok(Object::Array(pairs)) = node.get(b"Names").map(|o| self.resolve(o)) {
             for pair in pairs.chunks(2) {
+                if *visits == 0 {
+                    break;
+                }
+                *visits = visits.saturating_sub(1);
                 if let [k, v] = pair {
-                    let key = match self.resolve(k) {
+                    let (key, raw_key) = match self.resolve(k) {
                         Object::String(bytes, _) => match spend(bytes, text_budget, text_string) {
-                            Some(key) => key,
+                            Some(key) => (key, Some(bytes.as_slice())),
                             None => continue,
                         },
-                        _ => String::new(),
+                        _ => (String::new(), None),
                     };
-                    out.push((key, v));
+                    out.push(NameTreeEntry { key, raw_key, value: v });
                 }
             }
         }
         if let Ok(Object::Array(kids)) = node.get(b"Kids").map(|o| self.resolve(o)) {
             for k in kids {
+                if *visits == 0 {
+                    break;
+                }
+                *visits = visits.saturating_sub(1);
                 if let Some(d) = self.dict(k) {
-                    out.extend(self.name_tree(d, seen, depth + 1, text_budget));
+                    out.extend(self.name_tree_limited(d, seen, depth + 1, text_budget, visits));
                 }
             }
         }
@@ -146,6 +175,29 @@ impl<'a> Inspector<'a> {
     /// object or `/Names` array that several places reference only once (a second visit cannot
     /// match, since the first would have returned).
     pub(super) fn name_tree_find(&self, node: &'a Dictionary, key: &str, seen: &mut NameTreeSeen, depth: u32) -> Option<&'a Object> {
+        self.name_tree_find_matching(
+            node,
+            &|value| match value {
+                Object::String(bytes, _) => text_string(bytes) == key,
+                _ => key.is_empty(),
+            },
+            seen,
+            depth,
+        )
+    }
+
+    /// Find the exact string key selected by inventory, without decoding aliases to the same text.
+    pub(super) fn name_tree_find_raw(&self, node: &'a Dictionary, key: &[u8], seen: &mut NameTreeSeen, depth: u32) -> Option<&'a Object> {
+        self.name_tree_find_matching(node, &|value| matches!(value, Object::String(bytes, _) if bytes == key), seen, depth)
+    }
+
+    fn name_tree_find_matching(
+        &self,
+        node: &'a Dictionary,
+        matches_key: &impl Fn(&Object) -> bool,
+        seen: &mut NameTreeSeen,
+        depth: u32,
+    ) -> Option<&'a Object> {
         if depth > 32 || !seen.nodes.insert(node as *const _) {
             return None;
         }
@@ -159,11 +211,7 @@ impl<'a> Inspector<'a> {
                     if self.resolved_id(k).is_some_and(|id| !seen.objects.insert(id)) {
                         continue;
                     }
-                    let found = match self.resolve(k) {
-                        Object::String(bytes, _) => text_string(bytes) == key,
-                        _ => key.is_empty(),
-                    };
-                    if found {
+                    if matches_key(self.resolve(k)) {
                         return Some(v);
                     }
                 }
@@ -172,7 +220,7 @@ impl<'a> Inspector<'a> {
         if let Ok(Object::Array(kids)) = node.get(b"Kids").map(|o| self.resolve(o)) {
             for k in kids {
                 if let Some(d) = self.dict(k)
-                    && let Some(v) = self.name_tree_find(d, key, seen, depth + 1)
+                    && let Some(v) = self.name_tree_find_matching(d, matches_key, seen, depth + 1)
                 {
                     return Some(v);
                 }

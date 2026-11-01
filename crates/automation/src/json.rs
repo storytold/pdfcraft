@@ -151,14 +151,14 @@ impl Args<'_> {
     }
 }
 
-/// The name-tree keys of a document's own attachments, leaving out the files attached to pages as comments.
+/// The name-tree keys of a document's own attachments, leaving out page comments and RichMedia assets.
 pub(crate) fn document_attachment_keys(doc: &Document) -> Vec<String> {
     doc.info
         .attachments
         .iter()
         .filter_map(|x| match &x.source {
-            pdfcraft_render::AttachmentSource::Document { key } => Some(key.clone()),
-            pdfcraft_render::AttachmentSource::Annotation { .. } => None,
+            pdfcraft_render::AttachmentSource::Document { key, .. } => Some(key.clone()),
+            pdfcraft_render::AttachmentSource::Annotation { .. } | pdfcraft_render::AttachmentSource::RichMedia { .. } => None,
         })
         .collect()
 }
@@ -297,6 +297,7 @@ pub(crate) fn info(d: &Document) -> Value {
         "creator": i.creator, "producer": i.producer,
         "tagged": i.tagged,
         "has_javascript": i.has_javascript,
+        "has_legacy_flash": i.has_legacy_flash,
         // Where the document opens (/OpenAction, named destinations resolved): 1-based page and
         // destination, null without one.
         "open_destination": i.open_dest.as_ref().map(|(p, view)| json!({ "page": page1(*p), "destination": i.pages.get(*p).and_then(|pg| destination(view, pg)) })),
