@@ -494,6 +494,15 @@ impl Automation {
         let at = to_user(&info, x, y);
         let author = a.opt_str("author")?.unwrap_or(DEFAULT_AUTHOR).to_string();
         let kind = a.str("type")?;
+        let requested_signature_style = a.opt_str("style")?;
+        if requested_signature_style.is_some() && !matches!(kind, "signature" | "initials") {
+            return Err(ToolError::InvalidArgs("style is only for a typed signature or initials".into()));
+        }
+        let signature_style = match requested_signature_style {
+            None | Some("script") => pdfcraft_engine::SignatureStyle::Script,
+            Some("print") => pdfcraft_engine::SignatureStyle::Print,
+            Some(other) => return Err(ToolError::InvalidArgs(format!("unknown signature style {other:?}; use script or print"))),
+        };
         let scan = a.opt_bool("scan")?.unwrap_or(false);
         let sensitivity = a.opt_int("sensitivity")?;
         if (scan || sensitivity.is_some()) && a.opt_str("path")?.is_none() {
@@ -517,6 +526,9 @@ impl Automation {
         if let Some(path) = a.opt_str("path")? {
             if !matches!(kind, "signature" | "initials") || a.opt_str("text")?.is_some() {
                 return Err(ToolError::InvalidArgs("path is only for an image signature or initials; pass either path or text".into()));
+            }
+            if requested_signature_style.is_some() {
+                return Err(ToolError::InvalidArgs("style is only for a typed signature or initials, not an image".into()));
             }
             let path = self.resolve(path, false)?;
             let file = std::fs::File::open(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
@@ -560,15 +572,15 @@ impl Automation {
             kind @ ("signature" | "initials") => {
                 let t = a.str("text")?;
                 // Nobody sees a preview here: refuse what the script font would leave out.
-                if let Some(c) = pdfcraft_engine::script_missing(t) {
+                if let Some(c) = pdfcraft_engine::signature_missing(t, signature_style) {
                     return Err(ToolError::InvalidArgs(format!(
-                        "the signature script font can't draw \"{}\" (U+{:04X}); type the {kind} in Latin, Cyrillic or Greek letters, or pass `path` to a PNG or JPEG image of it instead of `text`",
+                        "the selected signature style can't draw \"{}\" (U+{:04X}); choose another style or pass `path` to a PNG or JPEG image of it instead of `text`",
                         c.escape_debug(),
                         u32::from(c)
                     )));
                 }
                 let h = if kind == "initials" { 24.0 } else { 32.0 };
-                let shape = pdfcraft_engine::typed_signature_shape(at, t, h, i64::from(info.rotation))
+                let shape = pdfcraft_engine::typed_signature_shape_with_style(at, t, h, i64::from(info.rotation), signature_style)
                     .ok_or_else(|| ToolError::InvalidArgs("text has nothing to draw".into()))?;
                 (shape, String::new())
             }

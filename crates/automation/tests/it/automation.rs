@@ -3781,6 +3781,43 @@ fn fill_and_sign_through_tools() {
 }
 
 #[test]
+fn fill_sign_typed_signature_style_reaches_the_placed_appearance() {
+    let dir = workdir("fill-sign-style");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "blank", "width": 400, "height": 300, "pages": 1 }))["doc"].as_u64().unwrap();
+    ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": 1, "type": "signature", "at": [20, 80], "text": "Ada Lovelace" }));
+    ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": 1, "type": "signature", "at": [20, 160], "text": "Ada Lovelace", "style": "print" }));
+    let listed = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    let comments = listed["comments"].as_array().unwrap();
+    assert_eq!(comments.len(), 2);
+    let widths: Vec<f64> = comments
+        .iter()
+        .map(|c| {
+            let r = c["rect"].as_array().unwrap();
+            r[2].as_f64().unwrap() - r[0].as_f64().unwrap()
+        })
+        .collect();
+    assert_ne!(widths[0], widths[1], "the selected style must change the placed outline");
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "styled.pdf", "full": true }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "styled.pdf" }))["doc"].as_u64().unwrap();
+    let saved = ok(&mut a, "comment_list", json!({ "doc": reopened }));
+    let saved_widths: Vec<f64> = saved["comments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            let r = c["rect"].as_array().unwrap();
+            r[2].as_f64().unwrap() - r[0].as_f64().unwrap()
+        })
+        .collect();
+    assert_eq!(saved_widths, widths, "both chosen outlines survive save and reopen");
+    assert!(
+        a.call("fill_sign_add", &json!({ "doc": doc, "page": 1, "type": "signature", "at": [20, 240], "text": "Ada", "style": "cursive" })).is_err()
+    );
+    assert!(a.call("fill_sign_add", &json!({ "doc": doc, "page": 1, "type": "text", "at": [20, 260], "text": "Ada", "style": "print" })).is_err());
+}
+
+#[test]
 fn fill_sign_text_font_size_is_saved_and_validated() {
     let dir = workdir("fill-sign-text-size");
     let mut a = auto(&dir);
