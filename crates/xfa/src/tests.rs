@@ -4187,3 +4187,191 @@ fn a_flowed_subform_in_a_table_cell_is_as_tall_as_its_content() {
     };
     assert!((narrow - (36.0 + 43.2)).abs() < 0.5, "measured at the column's width: the next object at {narrow}");
 }
+
+/// The page and top of the field `after` once `body` is laid out in a top-to-bottom root whose
+/// content area starts 0.5in (36pt) down the page.
+fn page_and_y_of_after(body: &str) -> (usize, f64) {
+    let form = layout_xml(&one_area_form(r#"layout="tb""#, body)).unwrap();
+    form.pages
+        .iter()
+        .enumerate()
+        .find_map(|(i, p)| widgets(p).iter().find(|w| w.som.ends_with(".after[0]") || w.name == "after").map(|w| (i, w.rect.y)))
+        .unwrap()
+}
+
+/// A 2in by 0.3in text field.
+fn text_field(name: &str) -> String {
+    format!(r#"<field name="{name}" w="2in" h="0.3in"><ui><textEdit/></ui></field>"#)
+}
+
+/// `cell` as the only cell of a one-row table with `columns`, followed by the field `after`.
+fn table_then_after(columns: &str, cell: &str) -> String {
+    format!(
+        r#"<subform name="t" layout="table" columnWidths="{columns}"><subform name="r" layout="row">{cell}</subform></subform>{}"#,
+        text_field("after")
+    )
+}
+
+/// #5370 review: moving the measurement of a node with no height into `content_height` leaves
+/// each kind of node as tall as its content: a draw, a field, an exclusion group, an area and a
+/// subform of every layout, each followed by a field that starts where it ends.
+#[test]
+fn every_kind_of_node_without_a_height_is_as_tall_as_its_content() {
+    let after = |node: &str| {
+        let (page, y) = page_and_y_of_after(&format!("{node}{}", text_field("after")));
+        assert_eq!(page, 0, "{node}");
+        y - 36.0
+    };
+    let two = format!("{}{}", text_field("a"), text_field("b"));
+    // Containers of 0.3in fields: their heights are exact.
+    let area = after(r#"<area name="box" x="0in" y="0in"><field name="a" x="0in" y="1in" w="2in" h="0.3in"><ui><textEdit/></ui></field></area>"#);
+    assert!((area - 93.6).abs() < 0.5, "area: {area}");
+    let positioned = after(r#"<subform name="s" w="5in"><field name="a" x="0in" y="1in" w="2in" h="0.3in"><ui><textEdit/></ui></field></subform>"#);
+    assert!((positioned - 93.6).abs() < 0.5, "positioned subform: {positioned}");
+    let tb = after(&format!(r#"<subform name="s" layout="tb" w="5in">{two}</subform>"#));
+    assert!((tb - 43.2).abs() < 0.5, "tb subform: {tb}");
+    let lr_tb = after(&format!(r#"<subform name="s" layout="lr-tb" w="3in">{two}</subform>"#));
+    assert!((lr_tb - 43.2).abs() < 0.5, "lr-tb subform, one field a line: {lr_tb}");
+    let rl_tb = after(&format!(r#"<subform name="s" layout="rl-tb" w="5in">{two}</subform>"#));
+    assert!((rl_tb - 21.6).abs() < 0.5, "rl-tb subform, both fields on a line: {rl_tb}");
+    let table =
+        after(&format!(r#"<subform name="s" layout="table" columnWidths="2.5in 2.5in"><subform name="r" layout="row">{two}</subform></subform>"#));
+    assert!((table - 21.6).abs() < 0.5, "table subform: {table}");
+    let group = after(
+        r#"<exclGroup name="g" w="2in"><field name="a" x="0in" y="0in" w="2in" h="0.3in"><ui><checkButton/></ui></field><field name="b" x="0in" y="0.5in" w="2in" h="0.3in"><ui><checkButton/></ui></field></exclGroup>"#,
+    );
+    assert!((group - 57.6).abs() < 0.5, "exclusion group: {group}");
+    let margins = after(&format!(r#"<subform name="s" layout="tb" w="5in"><margin topInset="0.1in" bottomInset="0.2in"/>{two}</subform>"#));
+    assert!((margins - (43.2 + 21.6)).abs() < 0.5, "tb subform with margins: {margins}");
+    // A field and a draw are as tall as a line of their text: more than its 10pt size, and one
+    // line, not two.
+    let field = after(r#"<field name="a" w="2in"><ui><textEdit/></ui><font size="10pt"/></field>"#);
+    assert!(field > 10.0 && field < 20.0, "field: {field}");
+    let draw = after(r#"<draw name="d" w="2in"><value><text>One line</text></value><font size="10pt"/></draw>"#);
+    assert!(draw > 10.0 && draw < 20.0, "draw: {draw}");
+}
+
+/// #5370 review: a flowed subform in a table cell grows to its content when the height it gives
+/// is too small or zero, its margins count, a `maxH` still caps it, and a cell that spans two
+/// columns is measured at both columns' width.
+#[test]
+fn a_flowed_cell_grows_past_a_small_height_and_keeps_margins_and_max_height() {
+    let after = |cell: &str| {
+        let (page, y) = page_and_y_of_after(&table_then_after("5in", cell));
+        assert_eq!(page, 0, "{cell}");
+        y - 36.0
+    };
+    let two = format!("{}{}", text_field("a"), text_field("b"));
+    let small = after(&format!(r#"<subform name="c" layout="tb" w="5in" h="0.2in">{two}</subform>"#));
+    assert!((small - 43.2).abs() < 0.5, "a 0.2in cell holding 0.6in: {small}");
+    let zero = after(&format!(r#"<subform name="c" layout="tb" w="5in" h="0in">{two}</subform>"#));
+    assert!((zero - 43.2).abs() < 0.5, "a zero-height cell: {zero}");
+    let margins = after(&format!(r#"<subform name="c" layout="tb" w="5in" h="5in"><margin topInset="0.1in" bottomInset="0.1in"/>{two}</subform>"#));
+    assert!((margins - 57.6).abs() < 0.5, "content and margins: {margins}");
+    let three = format!("{two}{}", text_field("x"));
+    let capped = after(&format!(r#"<subform name="c" layout="tb" w="5in" h="0.2in" maxH="0.5in">{three}</subform>"#));
+    assert!((capped - 36.0).abs() < 0.5, "maxH caps the content height: {capped}");
+    let table = after(&format!(
+        r#"<subform name="c" layout="table" w="5in" h="5in" columnWidths="2.5in 2.5in"><subform name="r2" layout="row">{two}</subform></subform>"#
+    ));
+    assert!((table - 21.6).abs() < 0.5, "a table-layout cell: {table}");
+    // Two 1in columns; a 1in-wide lr-tb cell spanning both fits two 0.8in fields on one line.
+    let spanned = {
+        let two_narrow =
+            r#"<field name="a" w="0.8in" h="0.3in"><ui><textEdit/></ui></field><field name="b" w="0.8in" h="0.3in"><ui><textEdit/></ui></field>"#;
+        let (_, y) = page_and_y_of_after(&table_then_after(
+            "1in 1in",
+            &format!(r#"<subform name="c" layout="lr-tb" w="1in" h="5in" colSpan="2">{two_narrow}</subform>"#),
+        ));
+        y - 36.0
+    };
+    assert!((spanned - 21.6).abs() < 0.5, "measured across both spanned columns: {spanned}");
+}
+
+/// #5370 review: only a flowed subform in a cell gives up its height. A field, an exclusion
+/// group and a positioned or row subform in a cell keep theirs, and the row is as tall as its
+/// tallest cell.
+#[test]
+fn other_cells_keep_their_heights_and_the_row_takes_the_tallest() {
+    let after = |cells: &str| page_and_y_of_after(&table_then_after("2.5in 2.5in", cells)).1 - 36.0;
+    let field = after(r#"<field name="f" w="2in" h="2in"><ui><textEdit/></ui></field>"#);
+    assert!((field - 144.0).abs() < 0.5, "a field cell: {field}");
+    let group =
+        after(r#"<exclGroup name="g" w="2in" h="2in"><field name="a" x="0in" y="0in" w="2in" h="0.3in"><ui><checkButton/></ui></field></exclGroup>"#);
+    assert!((group - 144.0).abs() < 0.5, "an exclusion group cell: {group}");
+    let positioned = after(&format!(r#"<subform name="c" w="2in" h="2in">{}</subform>"#, text_field("a")));
+    assert!((positioned - 144.0).abs() < 0.5, "a positioned cell: {positioned}");
+    let row = after(&format!(r#"<subform name="c" layout="row" w="2in" h="2in">{}</subform>"#, text_field("a")));
+    assert!((row - 144.0).abs() < 0.5, "a row-layout cell: {row}");
+    // A flowed cell beside a 2in field: the field is the taller.
+    let beside = after(&format!(
+        r#"<field name="f" w="2in" h="2in"><ui><textEdit/></ui></field><subform name="c" layout="tb" w="2in" h="5in">{}</subform>"#,
+        text_field("a")
+    ));
+    assert!((beside - 144.0).abs() < 0.5, "the taller cell sets the row: {beside}");
+}
+
+/// #5370 review: an empty flowed cell is as tall as nothing, so its row is as tall as its other
+/// cell; a flowed cell inside a flowed cell of a nested table gives up its height too.
+#[test]
+fn an_empty_flowed_cell_and_a_nested_one_are_as_tall_as_their_content() {
+    let after = |cells: &str| page_and_y_of_after(&table_then_after("2.5in 2.5in", cells)).1 - 36.0;
+    let empty = after(&format!(r#"{}<subform name="c" layout="tb" w="2in" h="5in"></subform>"#, text_field("f")));
+    assert!((empty - 21.6).abs() < 0.5, "an empty flowed cell: {empty}");
+    let alone = after(r#"<subform name="c" layout="tb" w="2in" h="5in"><margin topInset="2pt" bottomInset="3pt"/></subform>"#);
+    assert!((alone - 5.0).abs() < 0.5, "an empty flowed cell is as tall as its margins: {alone}");
+    let two = format!("{}{}", text_field("a"), text_field("b"));
+    let nested = after(&format!(
+        r#"<subform name="c" layout="tb" w="2.5in" h="5in"><subform name="t2" layout="table" columnWidths="2.5in"><subform name="r2" layout="row"><subform name="c2" layout="tb" w="2.5in" h="5in">{two}</subform></subform></subform></subform>"#
+    ));
+    assert!((nested - 43.2).abs() < 0.5, "a nested table's flowed cell: {nested}");
+}
+
+/// #5370 review: a flowed cell holding a repeating subform counts each instance, and a repeating
+/// row of such cells takes each row's content height. The repeated fields are found by SOM path,
+/// since their PDF names are made up.
+#[test]
+fn repeating_content_and_repeating_rows_of_flowed_cells_take_their_content_height() {
+    let line = format!(r#"<subform name="line" layout="tb"><occur initial="3" max="-1"/>{}</subform>"#, text_field("v"));
+    let (_, y) = page_and_y_of_after(&table_then_after("5in", &format!(r#"<subform name="c" layout="tb" w="5in" h="5in">{line}</subform>"#)));
+    assert!((y - 36.0 - 64.8).abs() < 0.5, "three 0.3in instances: {}", y - 36.0);
+    let form = layout_xml(&one_area_form(
+        r#"layout="tb""#,
+        &format!(
+            r#"<subform name="t" layout="table" columnWidths="5in"><subform name="r" layout="row"><occur initial="2" max="-1"/><subform name="c" layout="tb" w="5in" h="5in">{}{}</subform></subform></subform>{}"#,
+            text_field("a"),
+            text_field("b"),
+            text_field("after")
+        ),
+    ))
+    .unwrap();
+    let ws = widgets(&form.pages[0]);
+    let top = |som: &str| {
+        ws.iter()
+            .find(|w| w.som.ends_with(som))
+            .map(|w| w.rect.y)
+            .unwrap_or_else(|| panic!("no {som} in {:?}", ws.iter().map(|w| &w.som).collect::<Vec<_>>()))
+    };
+    assert!((top("r[1].c[0].a[0]") - top("r[0].c[0].a[0]") - 43.2).abs() < 0.5, "the second row starts 0.6in below the first");
+    assert!((top("after[0]") - 36.0 - 86.4).abs() < 0.5, "two rows of 0.6in: {}", top("after[0]") - 36.0);
+}
+
+/// #5370 review: a flowed cell giving a height taller than the page no longer pushes what follows
+/// it to another page; huge margins in a narrow column and flowed cells nested deeper than the
+/// template reader follows are laid out without panicking.
+#[test]
+fn a_flowed_cell_taller_than_the_page_huge_margins_and_deep_nesting_stay_bounded() {
+    let two = format!("{}{}", text_field("a"), text_field("b"));
+    let (page, y) = page_and_y_of_after(&table_then_after("5in", &format!(r#"<subform name="c" layout="tb" w="5in" h="20in">{two}</subform>"#)));
+    assert_eq!(page, 0, "the next object stays on the first page");
+    assert!((y - 36.0 - 43.2).abs() < 0.5, "{}", y - 36.0);
+    let (_, y) = page_and_y_of_after(&table_then_after(
+        "1in",
+        &format!(r#"<subform name="c" layout="tb" w="1in" h="5in"><margin leftInset="10in" rightInset="10in" topInset="0.1in"/>{two}</subform>"#),
+    ));
+    assert!(y.is_finite() && (y - 36.0 - 50.4).abs() < 0.5, "margins wider than the column: {}", y - 36.0);
+    // Flowed cells nested 200 tables deep are cut off where the template is, not followed.
+    let open = r#"<subform layout="table" columnWidths="1in"><subform layout="row"><subform layout="tb" w="1in" h="1in">"#;
+    let deep = format!("{}{}{}", open.repeat(200), text_field("a"), "</subform></subform></subform>".repeat(200));
+    assert!(layout_xml(&one_area_form(r#"layout="tb""#, &deep)).is_ok());
+}
