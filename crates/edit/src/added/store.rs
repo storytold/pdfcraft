@@ -236,7 +236,7 @@ fn find(doc: &Document, page: usize, index: usize) -> Result<Added, EditError> {
         .into_iter()
         .filter(|a| a.page == page)
         .nth(index)
-        .ok_or_else(|| EditError::Invalid(format!("page {} has no added item {}", page + 1, index + 1)))
+        .ok_or_else(|| EditError::Invalid(format!("page {} has no added item {}", page.saturating_add(1), index.saturating_add(1))))
 }
 
 /// Replace item `index` of `page` (moved, resized, retyped or reformatted).

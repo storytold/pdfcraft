@@ -3968,6 +3968,39 @@ fn exported_pages_record_the_resolution_they_were_drawn_at() {
     assert!(unit == 2 && (x - used).abs() < 0.01 && (y - used).abs() < 0.01, "{x} × {y}, drawn at {used}");
 }
 
+/// The other page-indexed edits reject invalid pages below the session panic guard.
+#[test]
+fn add_text_and_rotate_validate_page_bounds_before_indexing() {
+    for (count, page) in [(0, 0), (1, 1), (2, 2), (1, usize::MAX)] {
+        let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(count))).unwrap();
+        let text = AddedText { rect: [20.0, 20.0, 120.0, 50.0], text: "valid text".into(), ..AddedText::default() };
+        let result = run_edit(&mut doc, &Edit::AddText { page, text }, &mut EditCtx::new(None, 0));
+        assert!(matches!(result, Err(EditError::Edit(pdfcraft_edit::EditError::NoSuchPage(p))) if p == page), "{result:?}");
+        let result = run_edit(
+            &mut doc,
+            &Edit::RotatePages { pages: if count == 0 { vec![page] } else { vec![0, page] }, degrees: 90 },
+            &mut EditCtx::new(None, 0),
+        );
+        if count == 0 {
+            assert!(matches!(result, Err(EditError::Organize(pdfcraft_organize::OrganizeError::Invalid(_)))), "{result:?}");
+        } else {
+            assert!(matches!(result, Err(EditError::Organize(pdfcraft_organize::OrganizeError::NoSuchPage(p))) if p == page), "{result:?}");
+        }
+        assert!(!doc.is_modified(), "refused edits do not change the document");
+    }
+}
+
+/// A missing native image keeps its precise error even for the largest image index.
+#[test]
+fn missing_page_image_indices_return_errors_below_the_panic_guard() {
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(1))).unwrap();
+    for index in [0, usize::MAX] {
+        let result = run_edit(&mut doc, &Edit::EditPageImage { page: 0, index, change: ImageEdit::Delete }, &mut EditCtx::new(None, 0));
+        assert_eq!(result, Err(EditError::Edit(pdfcraft_edit::EditError::Invalid(format!("page 1 has no image {}", index.saturating_add(1))))));
+        assert!(!doc.is_modified());
+    }
+}
+
 /// Generates a synthetic one-pixel RGB PNG for image page-validation tests.
 fn add_image_page_test_png() -> Arc<Vec<u8>> {
     let mut bytes = Vec::new();
