@@ -118,6 +118,101 @@ pub(crate) fn clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     decode_and_clear(doc, s, ctm, rects).ok_or(())
 }
 
+/// The raster the image dict describes, with every size checked on construction: an overflowing
+/// product refuses the image instead of sizing the writes below.
+struct Raster {
+    w: usize,
+    h: usize,
+    ncomp: usize,
+    bpc: usize,
+    bits_per_pixel: usize,
+    bytes: usize,
+    row_bits: usize,
+}
+
+impl Raster {
+    /// `None` when a dimension or product overflows or is otherwise unusable.
+    fn checked(ncomp: usize, bpc: usize, w: usize, h: usize) -> Option<Self> {
+        let bits_per_pixel = ncomp.checked_mul(bpc)?;
+        let row = w.checked_mul(bits_per_pixel)?.div_ceil(8);
+        let bytes = row.checked_mul(h)?;
+        let row_bits = row.checked_mul(8)?;
+        bytes.checked_mul(8)?;
+        Some(Self { w, h, ncomp, bpc, bits_per_pixel, bytes, row_bits })
+    }
+}
+
+/// Decode the image's samples, bounded to exactly the raster's `bytes`. `None` on any layout
+/// the decoders can't take (the caller removes the image whole).
+fn decode_samples(doc: &Document, s: &Stream, r: &Raster, dct: bool, is_fax: bool) -> Option<Vec<u8>> {
+    let mut data = if dct {
+        if r.bpc != 8 {
+            return None;
+        }
+        jpeg_samples(&s.raw, r.ncomp, r.w, r.h)?
+    } else {
+        // Decode no further than the raster can need: a filter stage may legitimately produce up to
+        // three bytes for each of it and a PNG predictor's byte per row (ASCIIHex text under Flate,
+        // two digits a byte broken into lines or spaced), as the optimizer allows. A fax image's
+        // code, which the filters before its decoder produce, takes at most about a byte per pixel
+        // plus each row's end. Data past that can only be a decompression bomb; the image is then
+        // removed whole.
+        let allowance = if is_fax {
+            r.w.checked_mul(r.h)?.checked_add(r.h.checked_mul(4)?)?.checked_add(4096)?
+        } else {
+            r.bytes.checked_add(r.h)?.checked_mul(3)?.checked_add(4096)?
+        };
+        // Through the document, which reads `/DecodeParms` given by reference (`Stream::decoded*`
+        // alone would skip such a predictor, and the cleared bytes would then miss the covered pixels).
+        doc.decoded_image_within(s, allowance).ok()?
+    };
+    if data.len() < r.bytes {
+        return None;
+    }
+    data.truncate(r.bytes);
+    Some(data)
+}
+
+/// Clear every sample the redaction rectangles cover. Conservative on purpose: a rotated or
+/// skewed image's pixel boxes may cover extra samples, and a touched sample must never survive
+/// in the file. Returns the number of cleared samples.
+fn clear_covered_pixels(data: &mut [u8], ctm: &Matrix, rects: &[[f64; 4]], r: &Raster, clear_bit: bool) -> Option<usize> {
+    let mut cleared = 0usize;
+    for j in 0..r.h {
+        // Image space has its origin at the bottom left; row 0 is at the top.
+        let v0 = 1.0 - (j + 1) as f64 / r.h as f64;
+        let v1 = 1.0 - j as f64 / r.h as f64;
+        let row_box = ctm.bbox([0.0, v0, 1.0, v1]);
+        if !rects.iter().any(|x| overlaps(*x, row_box, 0.0)) {
+            continue;
+        }
+        for i in 0..r.w {
+            let u0 = i as f64 / r.w as f64;
+            let u1 = (i + 1) as f64 / r.w as f64;
+            // The bounding box may cover extra pixels for a rotated or skewed image; that
+            // conservative over-clear prevents a touched sample surviving in the file.
+            let pixel_box = ctm.bbox([u0, v0, u1, v1]);
+            if !rects.iter().any(|x| overlaps(*x, pixel_box, 0.0)) {
+                continue;
+            }
+            cleared += 1;
+            // Every bit index is below `bytes * 8`, checked in `Raster::checked`, so this
+            // arithmetic can't overflow.
+            let start = j * r.row_bits + i * r.bits_per_pixel;
+            for bit in start..start + r.bits_per_pixel {
+                let (byte, shift) = (bit / 8, 7 - bit % 8);
+                let b = data.get_mut(byte)?;
+                if clear_bit {
+                    *b |= 1 << shift;
+                } else {
+                    *b &= !(1 << shift);
+                }
+            }
+        }
+    }
+    Some(cleared)
+}
+
 fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]) -> Option<Option<Stream>> {
     // Separate masks can retain the original image data.
     if s.dict.contains(b"SMask") || s.dict.contains(b"Mask") {
@@ -174,36 +269,8 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     }
     // Every size comes from the file: multiply checked, so an overflowing product refuses the image
     // instead of sizing the writes below.
-    let bits_per_pixel = ncomp.checked_mul(bpc)?;
-    let row = w.checked_mul(bits_per_pixel)?.div_ceil(8);
-    let bytes = row.checked_mul(h)?;
-    let row_bits = row.checked_mul(8)?;
-    bytes.checked_mul(8)?;
-    let mut data = if dct {
-        if bpc != 8 {
-            return None;
-        }
-        jpeg_samples(&s.raw, ncomp, w, h)?
-    } else {
-        // Decode no further than the raster can need: a filter stage may legitimately produce up to
-        // three bytes for each of it and a PNG predictor's byte per row (ASCIIHex text under Flate,
-        // two digits a byte broken into lines or spaced), as the optimizer allows. A fax image's
-        // code, which the filters before its decoder produce, takes at most about a byte per pixel
-        // plus each row's end. Data past that can only be a decompression bomb; the image is then
-        // removed whole.
-        let allowance = if is_fax {
-            w.checked_mul(h)?.checked_add(h.checked_mul(4)?)?.checked_add(4096)?
-        } else {
-            bytes.checked_add(h)?.checked_mul(3)?.checked_add(4096)?
-        };
-        // Through the document, which reads `/DecodeParms` given by reference (`Stream::decoded*`
-        // alone would skip such a predictor, and the cleared bytes would then miss the covered pixels).
-        doc.decoded_image_within(s, allowance).ok()?
-    };
-    if data.len() < bytes {
-        return None;
-    }
-    data.truncate(bytes);
+    let r = Raster::checked(ncomp, bpc, w, h)?;
+    let mut data = decode_samples(doc, s, &r, dct, is_fax)?;
     // Image masks: a sample of 0 paints unless /Decode is [1 0]; cleared samples must not paint.
     let clear_bit = if mask {
         // The array, and its first number, given by reference too.
@@ -214,38 +281,7 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     } else {
         false
     };
-    let mut cleared = 0usize;
-    for j in 0..h {
-        // Image space has its origin at the bottom left; row 0 is at the top.
-        let v0 = 1.0 - (j + 1) as f64 / h as f64;
-        let v1 = 1.0 - j as f64 / h as f64;
-        let row_box = ctm.bbox([0.0, v0, 1.0, v1]);
-        if !rects.iter().any(|r| overlaps(*r, row_box, 0.0)) {
-            continue;
-        }
-        for i in 0..w {
-            let u0 = i as f64 / w as f64;
-            let u1 = (i + 1) as f64 / w as f64;
-            // The bounding box may cover extra pixels for a rotated or skewed image; that
-            // conservative over-clear prevents a touched sample surviving in the file.
-            let pixel_box = ctm.bbox([u0, v0, u1, v1]);
-            if !rects.iter().any(|r| overlaps(*r, pixel_box, 0.0)) {
-                continue;
-            }
-            cleared += 1;
-            // `bytes * 8` fits, and every bit index is below it, so this arithmetic can't overflow.
-            let start = j * row_bits + i * bits_per_pixel;
-            for bit in start..start + bits_per_pixel {
-                let (byte, shift) = (bit / 8, 7 - bit % 8);
-                let b = data.get_mut(byte)?;
-                if clear_bit {
-                    *b |= 1 << shift;
-                } else {
-                    *b &= !(1 << shift);
-                }
-            }
-        }
-    }
+    let cleared = clear_covered_pixels(&mut data, ctm, rects, &r, clear_bit)?;
     if cleared == 0 {
         return Some(None);
     }
