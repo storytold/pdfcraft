@@ -3834,6 +3834,92 @@ fn trailing_spaces_do_not_shift_centered_or_right_aligned_text() {
     assert!((left_edge("right", "TITLE   ") - (36.0 + w - ink)).abs() < 1e-6);
 }
 
+/// `ready` is two events: `ref="$layout"` is layout:ready (`layoutReady`), anything else stays
+/// form:ready (`ready`), in the template and in the live form; page numbering is recognized.
+/// A field's page-number role comes from its layout:ready scripts, also when a form:ready script
+/// comes first; a field whose layout:ready script only reads the count gets none.
+#[test]
+fn page_roles_come_from_layout_ready_scripts() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+<pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/>
+ <field name="no" id="no" w="1in" h="0.3in"><ui><textEdit/></ui>
+  <event activity="ready" ref="$form"><script contentType="application/x-javascript">this.access = "readOnly";</script></event>
+  <event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = xfa.layout.page(this);</script></event>
+ </field>
+ <field name="reads" id="reads" w="1in" h="0.3in"><ui><textEdit/></ui>
+  <event activity="ready" ref="$layout"><script contentType="application/x-javascript">var n = xfa.layout.pageCount(); this.rawValue = "pages: " + n;</script></event>
+ </field>
+</pageArea></pageSet>
+<field name="body" w="1in" h="0.3in"><ui><textEdit/></ui></field>
+</subform></template></xdp:xdp>"##;
+    let (tpl, _) = parse(xdp).unwrap();
+    assert_eq!(tpl.page_roles, vec![("no".to_string(), PageRole::Number)]);
+}
+
+/// A `layout:ready` script is an activity of its own (`layoutReady`), told apart from `form:ready`
+/// (`ready`), in the template and in the live form's events.
+#[test]
+fn a_layout_ready_event_is_told_apart_from_form_ready() {
+    let (tpl, _) = parse(&crate::fixtures::layout_ready_template()).unwrap();
+    assert_eq!(tpl.root.scripts.iter().map(|s| s.activity.as_str()).collect::<Vec<_>>(), ["layoutReady"]);
+    let Node::Subform(page) = &tpl.root.children[0] else { panic!() };
+    let activity = |name: &str| match page.children.iter().find(|n| n.common().name.as_deref() == Some(name)) {
+        Some(Node::Field(f)) => f.scripts.iter().map(|s| s.activity.clone()).collect::<Vec<_>>(),
+        _ => panic!("no field {name}"),
+    };
+    assert_eq!(activity("stamp"), ["layoutReady"]);
+    assert_eq!(activity("note"), ["ready"], "form:ready keeps its name");
+    // The live form's events carry the same names.
+    let live = form_tree(&tpl, None, &Overrides::default());
+    assert!(live.events.iter().any(|e| e.som == "form[0]" && e.activity == "layoutReady"), "{:?}", live.events);
+}
+
+/// A script numbers its own field's page when it gives that field a layout page call's result
+/// (`page`, `absPage`, `pageCount`): read from its code, not a comment or a string, by whole
+/// names, over several lines, and in bounded time for a hostile script. Page numbering is what
+/// the layout does itself.
+#[test]
+fn a_script_that_gives_its_field_a_page_call_numbers_it() {
+    let js = |s: &str| crate::numbers_pages(s, false);
+    let formcalc = |s: &str| crate::numbers_pages(s, true);
+    assert!(js("this.rawValue = xfa.layout.page(this);"));
+    assert!(js("this.rawValue = xfa.layout.pageCount();"));
+    assert!(!js("this.rawValue = \"laid out\";"));
+    // Only the code counts: a mention in a comment or a string is not a page number.
+    assert!(!js("// xfa.layout.pageCount() was here\nthis.rawValue = \"ready\";"));
+    assert!(!js("/* xfa.layout.page(this) */ this.rawValue = 'see pageCount';"));
+    assert!(!js("this.rawValue = \"it's \\\"pageCount\\\"\";"));
+    assert!(js("var s = 'pageCount'; this.rawValue = xfa.layout.pageCount();"), "a string before the call");
+    assert!(formcalc("$ = xfa.layout.pageCount()"));
+    assert!(!formcalc("; xfa.layout.pageCount()\n$ = \"pageCount \"\" here\""));
+    assert!(formcalc("$ = \"a;b\" ; not a comment's end\n$ = xfa.layout.page($)"), "a ; inside a string isn't a comment");
+    // Only a script that gives its own field the page call's result numbers that field.
+    assert!(!js("other.rawValue = xfa.layout.pageCount(); this.rawValue = 'x';"), "it numbers another field");
+    assert!(!js("var n = xfa.layout.pageCount(); this.rawValue = 'pages: ' + n;"), "it only reads the count");
+    assert!(!js("if (this.rawValue == xfa.layout.page(this)) { }"), "a comparison, not an assignment");
+    assert!(formcalc("$.rawValue = xfa.layout.page($)"));
+    // The calls are matched as whole names, spaces allowed before the parenthesis.
+    assert!(!js("var pageCounter = 1; this.rawValue = pageCounter;"));
+    assert!(!js("this.rawValue = mylayout.page(this);"));
+    assert!(js("this.rawValue = xfa.layout.page (this);"));
+    assert!(js("this.rawValue = xfa . layout . absPage(this);"));
+    // An assignment over several lines is read whole; the next statement is not part of it.
+    assert!(js("this.rawValue =\n    xfa.layout.page(this);"));
+    assert!(js("this.rawValue = 'Page ' +\n  xfa.layout.page(this)"));
+    assert!(!js("this.rawValue = 'x'\nother.rawValue = xfa.layout.page(this)"), "the next line is another statement");
+    assert!(js("if (true) { this.rawValue = xfa.layout.page(this) }"));
+    assert!(!js("that.this.rawValue = xfa.layout.page(this);"), "not the script's own field");
+    assert!(formcalc("$ =\n xfa.layout.page($)"));
+    assert!(!formcalc("$record.x = xfa.layout.page($)"), "not the field");
+    // A hostile script (a bracket left open, then a name repeated many times) is read in bounded
+    // time: each expression stops at its length cap, and only so many places are looked at.
+    let hostile = "$ = (\n".repeat(200_000);
+    let started = std::time::Instant::now();
+    assert!(!formcalc(&hostile));
+    assert!(started.elapsed() < std::time::Duration::from_secs(2), "took {:?}", started.elapsed());
+}
+
 /// `typed_date` rewrites a date typed by another of a field's edit-picture patterns in the first
 /// one, and leaves alone a date the first pattern reads, text no pattern reads, a field with one
 /// pattern and a field that isn't a date.

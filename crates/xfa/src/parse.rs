@@ -563,6 +563,9 @@ fn parse_events(n: XmlNode) -> Vec<Script> {
     for ev in children(n, "event").take(64) {
         if let Some(s) = child(ev, "script") {
             let activity = ev.attribute("activity").unwrap_or("click");
+            // `ready` is two events, told apart by `ref`: layout:ready (`$layout`, once the form
+            // is laid out) and form:ready (`$form`).
+            let activity = if activity == "ready" && ev.attribute("ref").is_some_and(|r| r.trim() == "$layout") { "layoutReady" } else { activity };
             scripts.push(parse_script(s, activity));
         }
     }
@@ -679,16 +682,156 @@ fn parse_node(c: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Option<No
     })
 }
 
-/// Which page-number role a field with a layout:ready script plays, if any.
-fn page_role(f: &Field) -> Option<PageRole> {
-    let script = f.scripts.iter().find(|s| s.activity == "ready" || s.activity == "layoutReady")?;
-    if script.text.contains("pageCount") {
+/// Whether a `layout:ready` script numbers its own field: assigns it (`this.rawValue = …`, and in
+/// FormCalc `$ = …` or `$.rawValue = …`) an expression that calls `xfa.layout.page(…)`,
+/// `absPage(…)` or `pageCount()`. Such a field is one the layout numbers itself, page by page.
+/// Its code is read (JavaScript, or FormCalc when `formcalc`), not its comments and strings, and
+/// the calls are matched as whole names, with or without spaces before the parenthesis.
+pub fn numbers_pages(script: &str, formcalc: bool) -> bool {
+    own_page_role(script, formcalc).is_some()
+}
+
+/// The page-number role a `layout:ready` script gives its own field ([`numbers_pages`]): the page
+/// count when what it assigns calls `pageCount()`, else the page number.
+fn own_page_role(script: &str, formcalc: bool) -> Option<PageRole> {
+    let code = code_of(script, formcalc);
+    let own = own_assignments(&code, formcalc);
+    if own.iter().any(|rhs| calls_layout(rhs, "pageCount")) {
         Some(PageRole::Count)
-    } else if script.text.contains("layout.page(") || script.text.contains("layout.absPage(") {
+    } else if own.iter().any(|rhs| calls_layout(rhs, "page") || calls_layout(rhs, "absPage")) {
         Some(PageRole::Number)
     } else {
         None
     }
+}
+
+/// Most places a name is looked at as an assignment to the script's own field ([`own_assignments`]).
+const MAX_ASSIGNMENTS: usize = 256;
+/// Most bytes of an assignment's expression read ([`expression`]); a page-number expression is short.
+const MAX_EXPRESSION: usize = 4096;
+
+/// What the statements of `code` assign to the script's own field: the expression after `=` of
+/// each `this.rawValue = …` (in FormCalc also `$.rawValue = …` and `$ = …`) that starts a
+/// statement. The expression runs to a `;` (JavaScript) or to the end of a line that completes it:
+/// brackets closed and not ending in an operator, so `this.rawValue =` with its value on the next
+/// line, or a sum broken over lines, is read whole.
+fn own_assignments(code: &str, formcalc: bool) -> Vec<&str> {
+    let targets: &[&str] = if formcalc { &["this.rawValue", "$.rawValue", "$"] } else { &["this.rawValue"] };
+    let ident = |c: char| c.is_alphanumeric() || c == '_' || c == '$' || c == '.';
+    let mut out = Vec::new();
+    for t in targets {
+        // At most MAX_ASSIGNMENTS places looked at per name, each expression read at most
+        // MAX_EXPRESSION bytes: a hostile script can't make this scan quadratic.
+        for (i, _) in code.match_indices(t).take(MAX_ASSIGNMENTS) {
+            // A statement's start: nothing before it on its line but spaces, or a `;`, `{` or `}`.
+            let before = code.get(..i).unwrap_or_default().trim_end_matches([' ', '\t']);
+            if !(before.is_empty() || before.ends_with(['\n', '\r', ';', '{', '}'])) {
+                continue;
+            }
+            let Some(rest) = code.get(i + t.len()..) else { continue };
+            // `$` is the whole name (not `$record`, not `$.rawValue`, a target of its own).
+            if rest.chars().next().is_some_and(ident) {
+                continue;
+            }
+            let Some(rhs) = rest.trim_start().strip_prefix('=').filter(|r| !r.starts_with('=')) else { continue };
+            out.push(expression(rhs, formcalc));
+        }
+    }
+    out
+}
+
+/// The expression at the start of `rhs` (what follows an `=`): to a `;` outside brackets in
+/// JavaScript, or to a line break once something is written, the brackets are closed and the
+/// line doesn't end in an operator that continues it.
+fn expression(rhs: &str, formcalc: bool) -> &str {
+    // Read no further than MAX_EXPRESSION bytes (cut at a character boundary).
+    let cap = (0..=MAX_EXPRESSION.min(rhs.len())).rev().find(|&n| rhs.is_char_boundary(n)).unwrap_or(0);
+    let rhs = rhs.get(..cap).unwrap_or_default();
+    let mut depth = 0i32;
+    let mut last: Option<char> = None;
+    for (j, c) in rhs.char_indices() {
+        match c {
+            '(' | '[' | '{' => depth = depth.saturating_add(1),
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            ';' if !formcalc && depth <= 0 => return rhs.get(..j).unwrap_or(rhs),
+            '\n' if depth <= 0 && last.is_some_and(|l| !"+-*/%=,(&|?:.<>!".contains(l)) => return rhs.get(..j).unwrap_or(rhs),
+            _ => {}
+        }
+        if !c.is_whitespace() {
+            last = Some(c);
+        }
+    }
+    rhs
+}
+
+/// Whether `code` calls `layout.<method>(…)`: the method's whole name after `layout.` (spaces
+/// allowed around the dot), then `(` after any spaces.
+fn calls_layout(code: &str, method: &str) -> bool {
+    let ident = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
+    code.match_indices(method).any(|(i, _)| {
+        let before = code.get(..i).unwrap_or_default().trim_end();
+        let after = code.get(i + method.len()..).unwrap_or_default();
+        !after.chars().next().is_some_and(ident)
+            && after.trim_start().starts_with('(')
+            && before
+                .strip_suffix('.')
+                .map(str::trim_end)
+                .and_then(|b| b.strip_suffix("layout"))
+                .is_some_and(|rest| !rest.chars().next_back().is_some_and(ident))
+    })
+}
+
+/// `script` with its comments blanked out and each string literal left as a bare `"`: `//` and
+/// `/* */` comments and `'…'`, `"…"` and `` `…` `` strings (with `\` escapes) in JavaScript; `;`
+/// and `//` comments and `"…"` strings (a doubled `""` inside) in FormCalc. Line breaks stay. An
+/// unclosed comment or string runs to the end.
+fn code_of(script: &str, formcalc: bool) -> String {
+    let mut out = String::with_capacity(script.len());
+    let mut chars = script.chars().peekable();
+    while let Some(c) = chars.next() {
+        let line_comment = (c == '/' && chars.peek() == Some(&'/')) || (formcalc && c == ';');
+        if line_comment {
+            for n in chars.by_ref() {
+                if n == '\n' {
+                    out.push('\n');
+                    break;
+                }
+            }
+        } else if !formcalc && c == '/' && chars.peek() == Some(&'*') {
+            chars.next();
+            let mut star = false;
+            for n in chars.by_ref() {
+                if star && n == '/' {
+                    break;
+                }
+                star = n == '*';
+            }
+            out.push(' ');
+        } else if c == '"' || (!formcalc && (c == '\'' || c == '`')) {
+            while let Some(n) = chars.next() {
+                if !formcalc && n == '\\' {
+                    chars.next();
+                } else if n == c {
+                    if formcalc && chars.peek() == Some(&c) {
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            // A mark where the string was: the expression it ends is still seen to end there.
+            out.push('"');
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Which page-number role a field with a layout:ready script plays, if any.
+fn page_role(f: &Field) -> Option<PageRole> {
+    // Any of its layout:ready scripts, past a form:ready one.
+    f.scripts.iter().filter(|s| s.activity == "layoutReady").find_map(|s| own_page_role(&s.text, s.formcalc))
 }
 
 fn collect_page_roles(nodes: &[Node], out: &mut Vec<(String, PageRole)>, depth: usize) {
