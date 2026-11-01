@@ -69,12 +69,20 @@ impl Unit {
 /// The unit for a locale tag's region: `en_US.UTF-8`, `en-US`, `bg-BG`, `zh-Hans-CN`, `en_GB@euro`.
 /// `None` without a region (`C`, `POSIX`, `en`).
 pub(crate) fn unit_for_tag(tag: &str) -> Option<Unit> {
-    let tag = tag.split(['.', '@']).next().unwrap_or_default();
-    let region = tag.split(['-', '_']).skip(1).filter(|p| p.len() == 2 && p.chars().all(|c| c.is_ascii_alphabetic())).last()?;
-    Some(match region.to_ascii_uppercase().as_str() {
+    Some(match region_of(tag)?.as_str() {
         "US" | "LR" | "MM" => Unit::Inches,
         _ => Unit::Millimetres,
     })
+}
+
+/// The upper-case two-letter region of a locale tag; `None` without one (`C`, `POSIX`, `en`).
+/// Only the base tag counts: a BCP 47 extension or private use part (`-u-nu-latn`, `-x-…`, each
+/// after a one-letter singleton) is not a region (CodeRabbit on #5651).
+pub(crate) fn region_of(tag: &str) -> Option<String> {
+    let tag = tag.split(['.', '@']).next().unwrap_or_default();
+    let region =
+        tag.split(['-', '_']).skip(1).take_while(|p| p.len() != 1).filter(|p| p.len() == 2 && p.chars().all(|c| c.is_ascii_alphabetic())).last()?;
+    Some(region.to_ascii_uppercase())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
