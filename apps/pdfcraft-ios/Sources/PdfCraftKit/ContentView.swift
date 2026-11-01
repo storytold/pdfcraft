@@ -40,7 +40,8 @@ public struct PdfCraftRootView: View {
                 pageCount: pageCount,
                 image: viewModel.currentPageImage,
                 onPrev: { viewModel.goToPage(page - 1) },
-                onNext: { viewModel.goToPage(page + 1) }
+                onNext: { viewModel.goToPage(page + 1) },
+                onGoToPage: { viewModel.goToPage($0) }
             )
         }
     }
@@ -53,13 +54,17 @@ public struct PdfCraftRootView: View {
     }
 }
 
-/// The current page, full-bleed, with a prev/next bar. No pinch-to-zoom yet (Milestone 1).
+/// The current page, full-bleed, with pinch-to-zoom, a prev/next bar and a jump slider.
 private struct PageView: View {
     let page: Int
     let pageCount: Int
     let image: CGImage?
     let onPrev: () -> Void
     let onNext: () -> Void
+    let onGoToPage: (Int) -> Void
+
+    @State private var zoom: CGFloat = 1.0
+    @GestureState private var pinchDelta: CGFloat = 1.0
 
     var body: some View {
         VStack {
@@ -68,11 +73,18 @@ private struct PageView: View {
                     Image(decorative: image, scale: 1.0)
                         .resizable()
                         .scaledToFit()
+                        .scaleEffect(zoom * pinchDelta)
+                        .gesture(
+                            MagnificationGesture()
+                                .updating($pinchDelta) { value, state, _ in state = value }
+                                .onEnded { value in zoom = min(max(zoom * value, 1.0), 5.0) }
+                        )
                 } else {
                     ProgressView()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .onChange(of: page) { _ in zoom = 1.0 }
 
             HStack(spacing: 24) {
                 Button(action: onPrev) { Image(systemName: "chevron.left") }
@@ -81,7 +93,19 @@ private struct PageView: View {
                 Button(action: onNext) { Image(systemName: "chevron.right") }
                     .disabled(page == pageCount - 1)
             }
-            .padding()
+            .padding(.horizontal)
+
+            if pageCount > 1 {
+                Slider(
+                    value: Binding(
+                        get: { Double(page) },
+                        set: { onGoToPage(Int($0.rounded())) }
+                    ),
+                    in: 0...Double(pageCount - 1),
+                    step: 1
+                )
+                .padding([.horizontal, .bottom])
+            }
         }
     }
 }
