@@ -229,10 +229,12 @@ impl Layouter<'_> {
         match self.caption_reserve(f, inner_w, ctx) {
             Some((Placement::Top | Placement::Bottom, r)) => ui + r,
             Some((placement, r)) => {
-                // A check box's caption without a reserve is drawn in all the box leaves.
+                // A check box's caption without a reserve is drawn in all the box leaves; any
+                // other caption beside the widget is as wide as its reserve (XFA 3.3 p. 645), the
+                // width `draw_field` gives it.
                 let w = match auto_check_reserve(f, placement, inner_w, None) {
                     Some(auto) => auto,
-                    None => inner_w - r,
+                    None => r.min(inner_w),
                 };
                 let cap = f.caption.as_ref().map(|c| {
                     let rich = match &c.value {
