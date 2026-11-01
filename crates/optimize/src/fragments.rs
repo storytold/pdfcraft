@@ -98,8 +98,9 @@ fn same_y(a: &Fragment, b: &Fragment) -> bool {
 
 /// Whether `run` tiles one rectangle edge to edge (stacked top to bottom, placed side by side,
 /// or arranged in a grid of rows and columns). Sorts it from the top row down, and left to right
-/// within each row.
-fn stacked(run: &mut [Fragment]) -> bool {
+/// within each row. Returns that exact row partition: tolerance-based membership is not
+/// transitive, so assembly must not regroup after the horizontal sort changes each row's anchor.
+fn stacked(run: &mut [Fragment]) -> Option<Vec<std::ops::Range<usize>>> {
     if run.is_empty()
         || run.iter().any(|f| {
             let [x0, y0, x1, y1] = f.rect;
@@ -107,10 +108,11 @@ fn stacked(run: &mut [Fragment]) -> bool {
             !(x0.is_finite() && y0.is_finite() && x1.is_finite() && y1.is_finite() && w.is_finite() && w > 0.0 && h.is_finite() && h > 0.0)
         })
     {
-        return false;
+        return None;
     }
     run.sort_by(|a, b| b.rect[3].total_cmp(&a.rect[3]));
     let mut row_bounds: Vec<[f64; 4]> = Vec::new();
+    let mut rows = Vec::new();
     let mut start = 0;
     while start < run.len() {
         let mut end = start + 1;
@@ -123,25 +125,29 @@ fn stacked(run: &mut [Fragment]) -> bool {
             [a, b] => (a.rect[2] - b.rect[0]).abs() <= 0.01 * (a.rect[2] - a.rect[0]).min(b.rect[2] - b.rect[0]),
             _ => true,
         }) {
-            return false;
+            return None;
         }
-        let (Some(first), Some(last)) = (row.first(), row.last()) else { return false };
+        let (Some(first), Some(last)) = (row.first(), row.last()) else { return None };
         row_bounds.push([first.rect[0], first.rect[1], last.rect[2], first.rect[3]]);
+        rows.push(start..end);
         start = end;
     }
-    let (Some(&[x0, _, x1, y1]), Some(&[_, y0, _, _])) = (row_bounds.first(), row_bounds.last()) else { return false };
+    let (Some(&[x0, _, x1, y1]), Some(&[_, y0, _, _])) = (row_bounds.first(), row_bounds.last()) else { return None };
     let (width, height) = (x1 - x0, y1 - y0);
     if !(width.is_finite() && width > 0.0 && height.is_finite() && height > 0.0) {
-        return false;
+        return None;
     }
     let tol_x = 1e-3 * width.max(1.0);
     if row_bounds.iter().any(|r| (r[0] - x0).abs() > tol_x || (r[2] - x1).abs() > tol_x) {
-        return false;
+        return None;
     }
-    row_bounds.windows(2).all(|w| match w {
-        [a, b] => (a[1] - b[3]).abs() <= 0.01 * (a[3] - a[1]).min(b[3] - b[1]),
-        _ => true,
-    })
+    row_bounds
+        .windows(2)
+        .all(|w| match w {
+            [a, b] => (a[1] - b[3]).abs() <= 0.01 * (a[3] - a[1]).min(b[3] - b[1]),
+            _ => true,
+        })
+        .then_some(rows)
 }
 
 /// The fragment groups from `i` on (at most `limit`) while they form a picture drawn row by row
@@ -246,19 +252,10 @@ fn run_end(ops: &[Op], i: usize, count: usize) -> usize {
 }
 
 /// The run's pixels as one image, top row first: `(pixels, width, height)`.
-fn merge(doc: &Document, run: &[Fragment], n: usize) -> Option<(Vec<u8>, u32, u32)> {
+fn merge(doc: &Document, run: &[Fragment], partition: &[std::ops::Range<usize>], n: usize) -> Option<(Vec<u8>, u32, u32)> {
     let (first, last) = (run.first()?, run.last()?);
     let (left, right, top, bottom) = (first.rect[0], last.rect[2], first.rect[3], last.rect[1]);
-    let mut rows: Vec<&[Fragment]> = Vec::new();
-    let mut start = 0;
-    while start < run.len() {
-        let mut end = start + 1;
-        while end < run.len() && same_y(&run[start], &run[end]) {
-            end += 1;
-        }
-        rows.push(&run[start..end]);
-        start = end;
-    }
+    let rows: Vec<&[Fragment]> = partition.iter().map(|range| run.get(range.clone())).collect::<Option<_>>()?;
     // Pixels per unit along each axis: the finest fragment's.
     let density_x = run.iter().map(|f| f.width as f64 / (f.rect[2] - f.rect[0])).fold(0.0, f64::max);
     let density_y = run.iter().map(|f| f.height as f64 / (f.rect[3] - f.rect[1])).fold(0.0, f64::max);
@@ -279,16 +276,16 @@ fn merge(doc: &Document, run: &[Fragment], n: usize) -> Option<(Vec<u8>, u32, u3
     let mut out = vec![255u8; stride.checked_mul(height as usize)?];
     let mut r0 = 0u32;
     for (row_idx, row) in rows.iter().enumerate() {
-        let r1 = if row_idx + 1 == rows.len() { height } else { (((top - row[0].rect[1]) * density_y).round().max(0.0) as u32).min(height) };
+        let r1 = if row_idx + 1 == rows.len() { height } else { (((top - row.first()?.rect[1]) * density_y).round().max(0.0) as u32).min(height) };
         if r1 <= r0 {
-            continue;
+            return None;
         }
         let th = r1 - r0;
         let mut c0 = 0u32;
         for (col_idx, f) in row.iter().enumerate() {
             let c1 = if col_idx + 1 == row.len() { width } else { (((f.rect[2] - left) * density_x).round().max(0.0) as u32).min(width) };
             if c1 <= c0 {
-                continue;
+                return None;
             }
             let tw = c1 - c0;
             let obj = doc.get(f.image);
@@ -396,12 +393,14 @@ fn merge_page(doc: &mut Document, page: ObjRef, report: &mut Report, progress: &
         }
         scanned = scanned.saturating_add(run.len()).saturating_add(1);
         // Not one picture as a whole: a prefix drawn row by row or strip by strip may be.
-        if run.len() >= MIN_FRAGMENTS && !stacked(&mut run) {
+        let mut rows = if run.len() >= MIN_FRAGMENTS { stacked(&mut run) } else { None };
+        if run.len() >= MIN_FRAGMENTS && rows.is_none() {
             run = drawn_in_sequence(&ops, i, run.len(), &xobjects, doc);
             j = run_end(&ops, i, run.len());
             scanned = scanned.saturating_add(run.len().saturating_mul(2)).saturating_add(2);
+            rows = stacked(&mut run);
         }
-        let Some((cs, n)) = kind.filter(|_| run.len() >= MIN_FRAGMENTS && stacked(&mut run)) else {
+        let Some(((cs, n), rows)) = kind.zip(rows).filter(|_| run.len() >= MIN_FRAGMENTS) else {
             // Not a run: keep this op and look again from the next one.
             if let Some(op) = ops.get(i) {
                 out.push(op.clone());
@@ -412,7 +411,7 @@ fn merge_page(doc: &mut Document, page: ObjRef, report: &mut Report, progress: &
         if !progress(Stage::Fragments) {
             return Err(OptimizeError::Cancelled);
         }
-        let Some((px, w, h)) = merge(doc, &run, n) else {
+        let Some((px, w, h)) = merge(doc, &run, &rows, n) else {
             out.extend(ops.get(i..j).unwrap_or_default().iter().cloned());
             i = j;
             continue;
@@ -471,12 +470,34 @@ mod tests {
             Fragment { image, rect: [0.0, edge, 1.0, 1.0], width: 1 << 16, height: 1 },
             Fragment { image, rect: [0.0, 0.0, 1.0, edge], width: 1 << 16, height: 1 },
         ];
-        assert!(merge(&Document::new_empty(), &vertical, 3).is_none());
+        assert!(merge(&Document::new_empty(), &vertical, &[0..1, 1..2], 3).is_none());
         let horizontal = [
             Fragment { image, rect: [0.0, 0.0, edge, 1.0], width: 1, height: 1 << 16 },
             Fragment { image, rect: [edge, 0.0, 1.0, 1.0], width: 1, height: 1 << 16 },
         ];
-        assert!(merge(&Document::new_empty(), &horizontal, 3).is_none());
+        assert!(merge(&Document::new_empty(), &horizontal, std::slice::from_ref(&(0..2)), 3).is_none());
+    }
+
+    /// Even an inconsistent partition must not silently omit a row or tile from its report.
+    #[test]
+    fn assembly_refuses_collapsed_output_rows_and_tiles() {
+        let mut doc = Document::new_empty();
+        let mut dict = Dict::new();
+        dict.set(b"Width".to_vec(), Object::Int(10));
+        dict.set(b"Height".to_vec(), Object::Int(10));
+        dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        let image = doc.add(Object::Stream(Stream::flate(dict, &[80; 100])));
+        let mut run: Vec<_> = (0..4)
+            .map(|col| Fragment { image, rect: [10.0 * f64::from(col), 0.0, 10.0 * f64::from(col + 1), 10.0], width: 10, height: 10 })
+            .collect();
+        // The first supposed row consumes the entire height; the second cannot be discarded.
+        assert!(merge(&doc, &run, &[0..2, 2..4], 1).is_none());
+        // Likewise, a tile whose right edge does not advance cannot simply vanish.
+        if let Some(tile) = run.get_mut(1) {
+            tile.rect = [0.0, 0.0, 10.0, 10.0];
+        }
+        assert!(merge(&doc, &run, std::slice::from_ref(&(0..4)), 1).is_none());
     }
 
     /// Many images drawn on top of each other are not one picture; looking for runs among them reads

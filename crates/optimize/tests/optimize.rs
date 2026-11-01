@@ -904,6 +904,52 @@ fn drawn_images(doc: &Document) -> Vec<Stream> {
         .collect()
 }
 
+/// A tolerated row must not be regrouped after its highest tile moves during X sorting.
+#[test]
+fn fragment_row_tolerance_preserves_every_tiles_pixels() {
+    for aligned in [true, false] {
+        for merge_fragments in [false, true] {
+            let mut doc = Document::new_empty();
+            let mut refs = Vec::new();
+            for gray in [20u8, 80, 140, 220] {
+                let mut d = Dict::new();
+                d.set(b"Type".to_vec(), Object::name("XObject"));
+                d.set(b"Subtype".to_vec(), Object::name("Image"));
+                d.set(b"Width".to_vec(), Object::Int(10));
+                d.set(b"Height".to_vec(), Object::Int(10));
+                d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+                d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+                refs.push(doc.add(Object::Stream(Stream::flate(d, &[gray; 100]))));
+            }
+            let content = if aligned {
+                "q 10 0 0 10 0 0 cm /T0 Do Q q 10 0 0 10 10 0 cm /T1 Do Q q 10 0 0 10 20 0 cm /T2 Do Q q 10 0 0 10 30 0 cm /T3 Do Q"
+            } else {
+                "q 10 0 0 10 0 0 cm /T0 Do Q q 10 0 0 9.992 10 0.009 cm /T1 Do Q q 10 0 0 9.982 20 0.018 cm /T2 Do Q q 10 0 0 9.991 30 0.009 cm /T3 Do Q"
+            };
+            page(&mut doc, &[("T0", refs[0]), ("T1", refs[1]), ("T2", refs[2]), ("T3", refs[3])], content);
+            let off = ImageSettings { downsample: false, compression: Compression::Retain, ..ImageSettings::REDUCE };
+            let report = optimize(&mut doc, &Settings { merge_fragments, color: off, gray: off, ..Settings::default() }).unwrap();
+            // Save and reopen, then inspect only images still drawn by the optimized page.
+            let doc = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+            let drawn = drawn_images(&doc);
+            if report.fragments_merged == 0 {
+                assert_eq!(report.merged_images, 0);
+                assert_eq!(drawn.len(), 4);
+                for (image, gray) in drawn.iter().zip([20u8, 80, 140, 220]) {
+                    assert_eq!(image.decoded().unwrap(), [gray; 100]);
+                }
+            } else {
+                assert!(merge_fragments);
+                assert_eq!((report.fragments_merged, report.merged_images, drawn.len()), (4, 1, 1));
+                let image = &drawn[0];
+                assert_eq!((image.dict.int(b"Width"), image.dict.int(b"Height")), (Some(40), Some(10)));
+                let row: Vec<_> = [20u8, 80, 140, 220].into_iter().flat_map(|gray| [gray; 10]).collect();
+                assert_eq!(image.decoded().unwrap(), row.repeat(10), "aligned={aligned}");
+            }
+        }
+    }
+}
+
 #[test]
 fn a_page_picture_printed_as_one_pixel_strips_is_merged_into_one_image() {
     // 120 strips, every other one JPEG and half as wide (as one PDF printer writes them).
