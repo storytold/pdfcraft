@@ -979,6 +979,8 @@ mod tests {
         assert_eq!(in_lang("mmmm yyyy", "cs"), "březen 2026");
         assert_eq!(in_lang("d mmmm yyyy", "ru"), "7 марта 2026");
         assert_eq!(in_lang("mmmm yyyy", "ru"), "март 2026");
+        // The after-a-day (genitive) form only after the day number: a month first is named plainly.
+        assert_eq!(in_lang("mmmm d, yyyy", "ru"), "март 7, 2026");
         // A weekday (dddd) is not a day number.
         assert_eq!(in_lang("dddd, mmmm", "cs"), "sobota, březen");
     }

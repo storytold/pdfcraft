@@ -1173,7 +1173,12 @@ fn hebrew_labels_have_glyphs() {
     }
     let he = hebrew();
     let (entries, _) = parse_entries(he.0.source, he.0.plural_forms());
-    let labels: String = entries.iter().flat_map(|e| e.translation.chars()).chain(he.name().chars()).filter(|c| !c.is_control()).collect();
+    // The date names too: the abbreviated ones carry a geresh ("ינו׳").
+    let dates = pdfcraft_engine::dates::date_language("he").expect("Hebrew date names");
+    let date_names = dates.months.iter().chain(&dates.months_short).chain(&dates.days).chain(&dates.days_short).flat_map(|n| n.chars());
+    let labels: String =
+        entries.iter().flat_map(|e| e.translation.chars()).chain(he.name().chars()).chain(date_names).filter(|c| !c.is_control()).collect();
+    assert!(labels.contains('׳'), "the geresh is checked");
     let mut fonts = egui::epaint::text::Fonts::new(egui::epaint::text::TextOptions::default(), crate::theme::font_definitions());
     for id in [egui::FontId::proportional(13.0), egui::FontId::monospace(13.0), crate::theme::medium(13.0), crate::theme::semibold(17.0)] {
         let missing: std::collections::BTreeSet<char> = labels.chars().filter(|c| !fonts.has_glyphs(&id, &c.to_string())).collect();

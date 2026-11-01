@@ -509,9 +509,9 @@ fn auto_lang_from_tag(tag: &str) -> Option<Lang> {
     lang_from_tag(tag).filter(|lang| auto_can_draw(*lang))
 }
 
-/// The Hebrew letters, final forms included, that the interface fonts must have for Auto to pick
-/// Hebrew.
-const HEBREW_LETTERS: &str = "אבגדהוזחטיךכלםמןנסעףפץצקרשת";
+/// The Hebrew letters, final forms included, and the geresh of the abbreviated date names
+/// ("ינו׳"), which the interface fonts must have for Auto to pick Hebrew.
+const HEBREW_LETTERS: &str = "אבגדהוזחטיךכלםמןנסעףפץצקרשת׳";
 
 /// Whether Auto may pick `lang`. Hebrew is drawn with the craft-fonts `Hebr` face, or on desktop
 /// with an installed Hebrew face; a build and machine with neither would show a Hebrew system an
