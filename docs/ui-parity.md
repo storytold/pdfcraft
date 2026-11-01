@@ -9,6 +9,8 @@ interface is copied. Gaps ranked in [gaps.md](gaps.md).
 
 **UI/UX fidelity ≈ 55% ready** (estimated), **30–60 h** additional to the features total.
 
+The [PDF workflow research reference](research/pdf-workflows/README.md) collects comparative source locators, interaction evidence and evaluation criteria. It does not change this checklist.
+
 ## Measured
 
 - **184 registered commands** (`crates/engine/src/commands.rs`), every one in the menus, the
