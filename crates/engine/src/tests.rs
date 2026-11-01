@@ -6606,11 +6606,22 @@ fn xfa_initialize_scripts_that_hide_subforms_lay_the_form_out_once() {
     let opened = names(&s, id);
     assert!(opened.iter().all(|n| !n.contains("note")), "every extra section is hidden on opening: {opened:?}");
     assert!(opened.iter().any(|n| n.contains("wanted")), "{opened:?}");
-    // The saved form opens as it was saved.
-    let saved = s.save_bytes(id).unwrap();
-    let again = s.open("again.pdf", None, saved, None).expect("reopens");
-    assert!(s.take_js_output(again).errors.is_empty());
-    assert_eq!(names(&s, again), opened);
+    // User input survives repeated saves and openings, with stable field and page counts
+    // (strengthened by wireless89 in the review of #4791).
+    let wanted = opened.iter().find(|n| n.contains("wanted")).unwrap().clone();
+    s.apply(id, Edit::SetFieldValue { name: wanted.clone(), value: FieldValue::Check(true) }).unwrap();
+    let pages = s.get(id).unwrap().info.pages.len();
+    let mut saved = s.save_bytes(id).unwrap();
+    for cycle in 0..3 {
+        let again = s.open("again.pdf", None, saved, None).expect("reopens");
+        let out = s.take_js_output(again);
+        assert!(out.errors.is_empty(), "cycle {cycle}: {out:?}");
+        assert_eq!(names(&s, again), opened, "cycle {cycle}: stable fields");
+        let doc = s.get(again).unwrap();
+        assert_eq!(doc.info.pages.len(), pages, "cycle {cycle}: stable pages");
+        assert_eq!(doc.form.iter().find(|f| f.name == wanted).unwrap().value, ["1"], "cycle {cycle}: input survives");
+        saved = s.save_bytes(again).unwrap();
+    }
 }
 
 /// A script that resets several subforms one after another (`xfa.host.resetData` once for
@@ -10287,4 +10298,98 @@ fn an_opening_reset_clears_structured_picks_of_a_field_without_a_widget() {
     assert_eq!(data.value_at(&pdfcraft_xfa::som_to_path("form[0].page1[0].details[0].tags[0]")).unwrap_or_default(), "", "picks reset in the data");
     assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form[0].page1[0].details[0].note[0]")), Some("kept"));
     assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form[0].page1[0].qty[0]")), Some("3"));
+}
+
+/// A later opening script resets a section shown by an earlier one, including its datasets
+/// value: the shown field and the saved form hold the template default, not the pre-reset
+/// value, through three save/reopen cycles. Test by wireless89 (review of #4791, 2026-10-27).
+#[test]
+fn xfa_opening_reset_reaches_a_section_shown_by_an_earlier_script() {
+    let tpl = r#"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><occur max="-1"/><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="show" w="1in" h="0.3in"><ui><textEdit/></ui>
+  <event activity="initialize"><script contentType="application/x-javascript">extra.presence = "visible";</script></event>
+ </field>
+ <field name="reset" w="1in" h="0.3in"><ui><textEdit/></ui>
+  <event activity="initialize"><script contentType="application/x-javascript">xfa.host.resetData("form.extra");</script></event>
+ </field>
+ <subform name="extra" layout="tb" presence="hidden">
+  <field name="note" w="3in" h="0.3in"><ui><textEdit/></ui><value><text>default</text></value></field>
+ </subform>
+ <field name="keep" w="1in" h="0.3in"><ui><textEdit/></ui></field>
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><extra><note>previous input</note></extra><keep>unrelated input</keep></form></xfa:data></xfa:datasets>
+</xdp:xdp>"#;
+    let mut s = Session::new().with_clock(|| 1_700_000_000).with_xfa_time_scale(100);
+    let mut bytes = Arc::new(pdfcraft_xfa::fixtures::shell(tpl));
+    for opening in 0..3 {
+        let id = s.open("reset.pdf", None, bytes, None).unwrap();
+        let out = s.take_js_output(id);
+        assert!(out.errors.is_empty(), "opening {opening}: {out:?}");
+        let doc = s.get(id).unwrap();
+        let note = doc.form.iter().find(|f| f.name == "note").expect("shown section has a widget");
+        let shown = note.value.clone();
+        assert_eq!(doc.form.iter().find(|f| f.name == "keep").unwrap().value, ["unrelated input"]);
+        assert_eq!(doc.info.pages.len(), 1);
+        bytes = s.save_bytes(id).unwrap();
+        let cos = pdfcraft_cos::Document::open(bytes.clone()).unwrap();
+        let data = pdfcraft_xfa::data_of(&cos).unwrap();
+        let saved = data.text_at(&pdfcraft_xfa::som_to_path("form[0].extra[0].note[0]"));
+        assert_eq!((shown, saved), (vec!["default".to_string()], Some("default")), "opening {opening}: displayed and saved values reset");
+    }
+}
+
+/// A reset of a choice list in a section an earlier opening script showed (so it has no widget
+/// yet when the reset runs) puts the template default back in the shown widget, the open
+/// document's datasets and the saved datasets alike, through three openings: a multi-select
+/// with structured `<value>` picks and an empty or set default, and a single choice whose
+/// default is a display label saved as its export value. Test by wireless89 (review of #4791,
+/// 2026-10-30).
+#[test]
+fn xfa_deferred_choice_resets_preserve_the_reset_value_through_reopen() {
+    let cases = [
+        ("multi_empty", r#"<choiceList open="multiSelect"/>"#, "", "<value>A</value><value>B</value>", ""),
+        ("multi_default", r#"<choiceList open="multiSelect"/>"#, "A", "<value>B</value>", "A"),
+        ("choice_export", "<choiceList/>", "Alpha", "B", "A"),
+    ];
+    let mut failures = Vec::new();
+    for (case, ui, default, initial, expected) in cases {
+        let xml = format!(
+            r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+<pageSet><pageArea name="front"><contentArea w="540pt" h="700pt"/><medium short="612pt" long="792pt"/></pageArea></pageSet>
+<field name="show" w="30pt" h="20pt"><ui><textEdit/></ui><event activity="initialize"><script contentType="application/x-javascript">extra.presence = "visible";</script></event></field>
+<field name="reset" w="30pt" h="20pt"><ui><textEdit/></ui><event activity="initialize"><script contentType="application/x-javascript">xfa.host.resetData("form.extra");</script></event></field>
+<subform name="extra" presence="hidden" layout="tb"><field name="choice" w="120pt" h="40pt"><ui>{ui}</ui>
+<items><text>Alpha</text><text>Beta</text></items><items save="1" presence="hidden"><text>A</text><text>B</text></items><value><text>{default}</text></value></field></subform>
+<field name="keep" w="100pt" h="20pt"><ui><textEdit/></ui></field>
+</subform></template><xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><extra><choice>{initial}</choice></extra><keep>KEEP</keep></form></xfa:data></xfa:datasets></xdp:xdp>"#
+        );
+        let mut s = Session::new().with_clock(|| 1_700_000_000).with_xfa_time_scale(100);
+        let mut bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&xml));
+        for cycle in 0..3 {
+            let id = s.open("choices.pdf", None, bytes, None).unwrap();
+            assert!(s.take_js_output(id).errors.is_empty(), "{case}, cycle {cycle}: reset script must execute");
+            let doc = s.get(id).unwrap();
+            let shown = doc.form.iter().find(|f| f.name == "choice").expect("shown choice has a widget").value.clone();
+            assert_eq!(doc.form.iter().find(|f| f.name == "keep").unwrap().value, ["KEEP"]);
+            let opened_data = pdfcraft_xfa::data_of(&doc.editor.as_ref().unwrap().cos).unwrap();
+            let path = pdfcraft_xfa::som_to_path("form[0].extra[0].choice[0]");
+            let opened = opened_data.value_at(&path).unwrap_or_default();
+            bytes = s.save_bytes(id).unwrap();
+            let cos = pdfcraft_cos::Document::open(bytes.clone()).unwrap();
+            let data = pdfcraft_xfa::data_of(&cos).unwrap();
+            let stored = data.value_at(&path).unwrap_or_default();
+            assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form[0].keep[0]")), Some("KEEP"));
+            let expected_shown: Vec<String> = if expected.is_empty() { Vec::new() } else { vec![expected.into()] };
+            if shown != expected_shown || opened != expected || stored != expected {
+                failures.push(format!("{case}, cycle {cycle}: shown={shown:?}, opened={opened:?}, stored={stored:?}, expected={expected:?}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
