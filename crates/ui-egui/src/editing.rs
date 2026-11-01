@@ -256,13 +256,13 @@ impl PdfCraftApp {
     fn undo_in_page_box(&mut self) -> bool {
         let Some(ctx) = self.ctx.clone() else { return false };
         let Some(view) = self.active.and_then(|i| self.views.get_mut(i)) else { return false };
-        let doc = view.id;
+        let (doc, place) = (view.id, view.place());
         if let Some(ed) = view.line_editor.as_mut().filter(|ed| ed.has_unsaved_text()) {
-            ed.claim_typing(&ctx, doc);
-            let Some(text) = typing_step(&ctx, crate::edit_text_ui::input_id(), &ed.text, true) else { return false };
+            ed.claim_typing(&ctx, doc, place);
+            let Some(text) = typing_step(&ctx, crate::edit_text_ui::input_id(place), &ed.text, true) else { return false };
             let before = std::mem::replace(&mut ed.text, text);
             ed.selection = None;
-            ed.follow_typed_rows(&ctx, &before);
+            ed.follow_typed_rows(&ctx, &before, place);
             return true;
         }
         if let Some(d) = view.content.draft.as_mut().filter(|d| d.has_unapplied_typing()) {
@@ -291,13 +291,13 @@ impl PdfCraftApp {
     fn redo_in_page_box(&mut self) -> bool {
         let Some(ctx) = self.ctx.clone() else { return false };
         let Some(view) = self.active.and_then(|i| self.views.get_mut(i)) else { return false };
-        let doc = view.id;
+        let (doc, place) = (view.id, view.place());
         if let Some(ed) = view.line_editor.as_mut() {
-            ed.claim_typing(&ctx, doc);
-            let Some(text) = typing_step(&ctx, crate::edit_text_ui::input_id(), &ed.text, false) else { return ed.has_unsaved_text() };
+            ed.claim_typing(&ctx, doc, place);
+            let Some(text) = typing_step(&ctx, crate::edit_text_ui::input_id(place), &ed.text, false) else { return ed.has_unsaved_text() };
             let before = std::mem::replace(&mut ed.text, text);
             ed.selection = None;
-            ed.follow_typed_rows(&ctx, &before);
+            ed.follow_typed_rows(&ctx, &before, place);
             return true;
         }
         if let Some(d) = view.content.draft.as_mut() {
@@ -396,7 +396,8 @@ impl PdfCraftApp {
     /// text.
     pub(crate) fn page_box_focused(&self, ctx: &egui::Context) -> bool {
         let focused = ctx.memory(|m| m.focused());
-        focused == Some(crate::edit_text_ui::input_id()) || focused == Some(crate::content_ui::input_id())
+        let paragraph = self.active.and_then(|i| self.views.get(i)).map(|v| crate::edit_text_ui::input_id(v.place()));
+        focused.is_some() && (focused == paragraph || focused == Some(crate::content_ui::input_id()))
     }
 
     /// Whether the focused box on the page has typing its own Redo would put back: after Undo in
@@ -405,10 +406,10 @@ impl PdfCraftApp {
     pub(crate) fn page_box_can_redo(&self, ctx: &egui::Context) -> bool {
         let Some(view) = self.active.and_then(|i| self.views.get(i)) else { return false };
         let focused = ctx.memory(|m| m.focused());
-        let (id, text) = if focused == Some(crate::edit_text_ui::input_id())
+        let (id, text) = if focused == Some(crate::edit_text_ui::input_id(view.place()))
             && let Some(ed) = &view.line_editor
         {
-            (crate::edit_text_ui::input_id(), &ed.text)
+            (crate::edit_text_ui::input_id(view.place()), &ed.text)
         } else if focused == Some(crate::content_ui::input_id())
             && let Some(d) = &view.content.draft
         {
@@ -426,7 +427,7 @@ impl PdfCraftApp {
         let Some(ctx) = &self.ctx else { return false };
         let Some(view) = self.active.and_then(|i| self.views.get(i)) else { return false };
         if let Some(ed) = &view.line_editor {
-            return has_typing_to_redo(ctx, crate::edit_text_ui::input_id(), &ed.text);
+            return has_typing_to_redo(ctx, crate::edit_text_ui::input_id(view.place()), &ed.text);
         }
         view.content.draft.as_ref().is_some_and(|d| has_typing_to_redo(ctx, crate::content_ui::input_id(), &d.text))
     }
@@ -443,7 +444,11 @@ impl PdfCraftApp {
     /// Returns false when a field refused the typing queued for it (its editor is open again).
     pub(crate) fn process_pending_edits(&mut self) -> bool {
         let Some(i) = self.active else { return true };
-        let applied = self.apply_queued_edit(i);
+        // Split view: the other pane's tab can hold an edit too (its field committed when the
+        // click that brought this pane forward took the focus). It goes in first, as it came first.
+        let (other_applied, stay) = self.apply_other_pane_edit(i);
+        let modal = self.modal_open();
+        let applied = self.apply_queued_edit(i) && other_applied;
         if !applied {
             // Nor may a shortcut pressed with it (⌘S right after Enter) run behind the refusal.
             self.deferred_commands.clear();
@@ -483,7 +488,54 @@ impl PdfCraftApp {
             }
             None => {}
         }
+        // That tab comes forward when its value was refused (its editor is open again with the
+        // text) or its edit opened a dialog for its document, unless this tab's action opened one.
+        if let Some(key) = stay
+            && self.active == Some(i)
+            && (modal || !self.modal_open())
+        {
+            self.active = self.tab_with_key(key).or(self.active);
+        }
         applied
+    }
+
+    /// Split view: apply the edit queued on the tab the other pane shows, with that tab active
+    /// while it goes in (tab `i`, the active one, is active again afterwards). Left queued, it was
+    /// lost when the next frame replaced that tab to follow a change made through tab `i`
+    /// (`settle_panes`). Returns false when a field refused it, and that tab's view key when it
+    /// should come forward: its value was refused, or its edit opened a dialog.
+    fn apply_other_pane_edit(&mut self, i: usize) -> (bool, Option<u64>) {
+        use crate::panes::Place;
+        let Some(place) = self.views.get(i).map(|v| v.place()) else { return (true, None) };
+        let other = if place == Place::Main { Place::Second } else { Place::Main };
+        let Some((k, key, id)) = self
+            .panes
+            .split
+            .and_then(|_| self.pane_front(other))
+            .filter(|&k| k != i)
+            .and_then(|k| self.views.get(k).filter(|v| v.pending_edit.is_some()).map(|v| (k, v.view_key(), v.id)))
+        else {
+            return (true, None);
+        };
+        let generation = |app: &Self| app.session.get(id).map(|d| d.edit_generation());
+        let (before, modal) = (generation(self), self.modal_open());
+        self.active = Some(k);
+        let applied = self.apply_queued_edit(k);
+        let opened = !modal && self.modal_open();
+        self.active = Some(i);
+        // Tab `i` on the same document catches up now, keeping what it holds (this frame's click
+        // may have queued an edit or opened a field): the next frame replaces only the tab that
+        // isn't active, as if this change had come through the active one.
+        if generation(self) != before
+            && let Some(doc) = self.session.get(id)
+        {
+            for (j, v) in self.views.iter_mut().enumerate() {
+                if j != k && v.id == id {
+                    v.document_changed(&doc.info);
+                }
+            }
+        }
+        (applied, (!applied || opened).then_some(key))
     }
 
     /// Enhance ▸ Camera image ▸ clean-up slider: undo the enhancement (and the turns made since)
@@ -716,8 +768,27 @@ impl PdfCraftApp {
     /// [`Self::commit_form_typing`] for document `id`, which may not be the active tab (a save
     /// panel answering later, Close All). If its tab has typing or a queued edit, the tab is
     /// brought forward first, so the commit and any field scripts act on that document.
+    ///
+    /// Each tab of the document holds typing of its own (split view). The tab in use stays active
+    /// when the others have been committed.
     pub(crate) fn commit_typing_in(&mut self, id: pdfcraft_engine::DocId) -> bool {
-        let Some(i) = self.views.iter().position(|v| v.id == id) else { return true };
+        let keep = self.active_ids().filter(|(_, active)| *active == id).and_then(|(i, _)| self.views.get(i)).map(|v| v.pane.key);
+        let tabs: Vec<u64> = self.views.iter().filter(|v| v.id == id).map(|v| v.pane.key).collect();
+        for key in tabs {
+            if let Some(i) = self.tab_with_key(key)
+                && !self.commit_typing_of_tab(i, id)
+            {
+                return false;
+            }
+        }
+        if let Some(i) = keep.and_then(|k| self.tab_with_key(k)) {
+            self.active = Some(i);
+        }
+        true
+    }
+
+    /// [`Self::commit_typing_in`] for one tab of the document.
+    fn commit_typing_of_tab(&mut self, i: usize, id: pdfcraft_engine::DocId) -> bool {
         // Added text the standard fonts can't draw can't be saved: show it rather than drop it.
         // Its page is brought into view, so the text, the warning and Discard are on screen.
         let blocked = self.views.get_mut(i).and_then(|v| {
@@ -746,15 +817,15 @@ impl PdfCraftApp {
             }
             self.active = Some(i);
         }
-        self.commit_form_typing() && self.commit_open_fill_text(id) && self.commit_open_text_edits(id)
+        self.commit_form_typing() && self.commit_open_fill_text(i, id) && self.commit_open_text_edits(i, id)
     }
 
     /// The Edit a PDF ▸ Text boxes (new text, and a paragraph open for editing) commit on
     /// click-away. Save does that first, so the typed text is in the file instead of being left
     /// open on the screen (#3496).
-    fn commit_open_text_edits(&mut self, id: pdfcraft_engine::DocId) -> bool {
+    fn commit_open_text_edits(&mut self, i: usize, id: pdfcraft_engine::DocId) -> bool {
         let Some(doc) = self.session.get(id) else { return true };
-        let Some(view) = self.views.iter_mut().find(|v| v.id == id) else { return true };
+        let Some(view) = self.views.get_mut(i) else { return true };
         // Both are taken out of the view before either edit runs, so keep what is needed to put
         // back whichever one the document refuses: typed text must not be lost.
         let (draft, select_added, editor) = (view.content.draft.clone(), view.content.select_added, view.line_editor.clone());
@@ -762,7 +833,7 @@ impl PdfCraftApp {
         let paragraph = view.line_editor.take_if(|ed| ed.has_changes()).and_then(crate::edit_text_ui::finished_edit);
         let added_ok = added.is_none_or(|edit| self.apply_edit(edit));
         let paragraph_ok = paragraph.is_none_or(|edit| self.apply_edit(edit));
-        if let Some(view) = self.views.iter_mut().find(|v| v.id == id) {
+        if let Some(view) = self.views.get_mut(i) {
             if !added_ok {
                 (view.content.draft, view.content.select_added) = (draft, select_added);
             }
@@ -775,9 +846,8 @@ impl PdfCraftApp {
 
     /// The Fill & Sign type box commits on click-away. Save does that first, so the text is in
     /// the file (and can be flattened) instead of being left on the screen.
-    fn commit_open_fill_text(&mut self, id: pdfcraft_engine::DocId) -> bool {
-        let Some(i) = self.views.iter().position(|v| v.id == id) else { return true };
-        let Some(tb) = self.views[i].fill_text.clone() else { return true };
+    fn commit_open_fill_text(&mut self, i: usize, id: pdfcraft_engine::DocId) -> bool {
+        let Some(tb) = self.views.get(i).and_then(|v| v.fill_text.clone()) else { return true };
         let text = tb.text.trim().to_string();
         if text.is_empty() {
             if let Some(view) = self.views.get_mut(i) {
@@ -812,8 +882,9 @@ impl PdfCraftApp {
         let after = self.session.get(id).map(|d| d.edit_generation());
         if before != after
             && let Some(doc) = self.session.get(id)
-            && let Some(view) = self.views.iter_mut().find(|v| v.id == id)
+            && let Some(view) = self.asking_tab(id).and_then(|i| self.views.get_mut(i))
         {
+            // The tab in use: `sync_views` brings any other tab of the document up to date.
             view.document_changed(&doc.info);
         }
         true
@@ -821,10 +892,16 @@ impl PdfCraftApp {
 
     /// Whether tab `index` has work that isn't saved: edits, or form typing not committed yet.
     pub(crate) fn has_unsaved_work(&self, index: usize) -> bool {
+        self.views.get(index).and_then(|v| self.session.get(v.id)).is_some_and(|doc| doc.dirty) || self.has_unsaved_typing(index)
+    }
+
+    /// Whether tab `index` holds work of its own that isn't in its document yet: form typing not
+    /// committed, an edit waiting, text being typed. (The document's own edits are shared with
+    /// any other tab of it, in split view.)
+    pub(crate) fn has_unsaved_typing(&self, index: usize) -> bool {
         let Some(v) = self.views.get(index) else { return false };
         let Some(doc) = self.session.get(v.id) else { return false };
-        doc.dirty
-            || v.pending_edit.is_some()
+        v.pending_edit.is_some()
             || v.content.blocked().is_some()
             || v.forms.focus.as_ref().is_some_and(|f| crate::forms_ui::draft_edit(f, &doc.form).is_some())
             || v.fill_text.as_ref().is_some_and(|t| !t.text.trim().is_empty())
