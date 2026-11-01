@@ -6,7 +6,16 @@
 //! into page content: invisible text (rendering mode 3) over each word, so the page becomes a
 //! searchable image (Acrobat's "Searchable Image (Exact)": the image is left untouched).
 //!
-//! The models read the Latin alphabet (English and other languages written without accents).
+//! The bundled upstream recognition model uses a 96-character alphabet. Accented Western European
+//! text (for example, German `ä ö ü ß` and French `é è ê ë à ç œ`) is supported only when the
+//! installed recognition model was trained with the matching 182-character [`LATIN_ALPHABET`]
+//! (183 output classes including the CTC blank), or a matching custom alphabet sidecar is supplied.
+//! Changing an alphabet mapping alone cannot teach new characters to an existing model.
+//!
+//! The extended alphabet is limited to characters that can be represented by the PDF text layer's
+//! standard Helvetica / WinAnsi encoding. It does not cover every Latin-script language; for
+//! example, Polish `ł`, Turkish `ı`, Vietnamese tone-mark combinations, and Unicode combining marks
+//! require a different alphabet/model and potentially a Unicode-capable PDF text font.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -14,28 +23,77 @@ use std::path::{Path, PathBuf};
 
 pub use pdfcraft_fonts::helvetica_width;
 
-/// The model files, as named in ATTRIBUTION.toml.
+/// The current (ONNX) model files, as named in ATTRIBUTION.toml.
 pub const DETECTION_MODEL: &str = "text-detection.onnx";
 pub const RECOGNITION_MODEL: &str = "text-recognition.onnx";
+/// The legacy (RTEN) model files, still accepted so existing installations keep working.
+pub const LEGACY_DETECTION_MODEL: &str = "text-detection.rten";
+pub const LEGACY_RECOGNITION_MODEL: &str = "text-recognition.rten";
+/// Optional custom alphabet file placed alongside the recognition model (either format).
+pub const ALPHABET_FILE: &str = "text-recognition.alphabet";
 
-/// The recognition model's alphabet, as it was trained (ocrs-models' `DEFAULT_ALPHABET`): its
-/// output classes follow this order. The ocrs crate's own copy has an `E` where the training had
-/// `€`, which made a scanned "€250" read as "E250".
+/// The base recognition model's 96-character alphabet, as it was trained (ocrs-models'
+/// `DEFAULT_ALPHABET`): its output classes follow this order. The ocrs crate's own copy has an `E`
+/// where the training had `€`, which made a scanned "€250" read as "E250".
 pub const ALPHABET: &str = " 0123456789!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~€ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
-/// The languages the models read (ISO 639-1); all use the Latin alphabet without accents.
-pub const LANGUAGES: &[(&str, &str)] = &[("en", "English")];
+/// The extended Western European (WinAnsi / Latin-1 + CP1252) alphabet (182 characters):
+/// [`ALPHABET`] (96) followed by 14 punctuation/currency symbols and 72 accented letters
+/// (32 uppercase Latin-1 letters, 32 lowercase, and `ŒœŠšŸŽžƒ`), all drawable by standard
+/// Helvetica in `WinAnsiEncoding`.
+///
+/// The order is the model's output-class order, so it must match the alphabet the extended
+/// recognition model was trained with. A model with `LATIN_ALPHABET.chars().count() + 1`
+/// (183) output classes selects this alphabet; see [`Models::alphabet_for`].
+///
+/// The first literal intentionally duplicates [`ALPHABET`] because `concat!` only accepts
+/// literals. Keep the two in sync; `the_alphabet_is_the_trained_one` verifies the prefix.
+pub const LATIN_ALPHABET: &str = concat!(
+    " 0123456789!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~€ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+    "¡¢£¥§«¬°±µ¶·»¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿŒœŠšŸŽžƒ"
+);
+
+/// Languages whose common spellings can be represented by [`LATIN_ALPHABET`] (ISO 639-1).
+///
+/// This is capability metadata for a compatible extended recognition model, not a claim that the
+/// bundled 96-character model recognizes every listed language. The model's output-class count
+/// determines which alphabet [`Ocr::load`] selects. Nothing in this crate enforces a language hint.
+pub const LANGUAGES: &[(&str, &str)] = &[
+    ("en", "English"),
+    ("de", "German"),
+    ("fr", "French"),
+    ("es", "Spanish"),
+    ("it", "Italian"),
+    ("pt", "Portuguese"),
+    ("nl", "Dutch"),
+    ("da", "Danish"),
+    ("no", "Norwegian"),
+    ("sv", "Swedish"),
+    ("fi", "Finnish"),
+    ("is", "Icelandic"),
+    ("ca", "Catalan"),
+    ("gl", "Galician"),
+    ("eu", "Basque"),
+    ("af", "Afrikaans"),
+    ("id", "Indonesian"),
+    ("ms", "Malay"),
+    ("sw", "Swahili"),
+];
 
 #[derive(Debug, thiserror::Error)]
 pub enum OcrError {
     /// Shown to end users (release packages ship the models; a source build fetches them with
-    /// `cargo xtask models`). The UI catalogs key this exact text.
+    /// `cargo xtask models`). The exact string in `#[error(...)]` is a UI catalog key; changing it
+    /// requires updating the catalogs as well.
     #[error("the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)")]
     NoModels,
+    /// A model or OCR configuration file could not be loaded or validated.
     #[error("loading {0}: {1}")]
     Load(String, String),
+    /// The OCR engine rejected the image or failed during recognition.
     #[error("text recognition failed: {0}")]
     Recognize(String),
+    /// The supplied image has zero dimensions or no pixel data.
     #[error("the image is empty")]
     EmptyImage,
 }
@@ -43,7 +101,9 @@ pub enum OcrError {
 /// Where the two model files are.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Models {
+    /// Path to the text-detection model file.
     pub detection: PathBuf,
+    /// Path to the text-recognition model file.
     pub recognition: PathBuf,
 }
 
@@ -51,23 +111,41 @@ impl Models {
     /// A complete model pair in `dir`, preferring current ONNX files over legacy RTEN files.
     /// An incomplete update never mixes formats or hides an intact legacy pair.
     pub fn in_dir(dir: &Path) -> Option<Models> {
-        [(DETECTION_MODEL, RECOGNITION_MODEL), ("text-detection.rten", "text-recognition.rten")].into_iter().find_map(|(detection, recognition)| {
+        [(DETECTION_MODEL, RECOGNITION_MODEL), (LEGACY_DETECTION_MODEL, LEGACY_RECOGNITION_MODEL)].into_iter().find_map(|(detection, recognition)| {
             let m = Models { detection: dir.join(detection), recognition: dir.join(recognition) };
             (m.detection.is_file() && m.recognition.is_file()).then_some(m)
         })
     }
 
+    /// Look for the models in the supplied directories, in order.
+    ///
+    /// This helper also lets tests provide paths without mutating the process-global
+    /// `PDFCRAFT_MODELS` environment variable, which can race with parallel tests.
+    pub fn find_in(dirs: &[PathBuf]) -> Option<Models> {
+        dirs.iter().find_map(|dir| Self::in_dir(dir.as_path()))
+    }
+
     /// Look for the models: `$PDFCRAFT_MODELS`, then where the release packages install them
     /// beside the executable ([`Models::dirs_beside_exe`]), then the source tree's `assets/models/`.
     pub fn find() -> Option<Models> {
-        Self::search_dirs().iter().find_map(|d| Self::in_dir(d))
+        Self::find_in(&Self::search_dirs())
     }
 
-    /// The directories [`Models::find`] looks in, in order.
+    /// The directories [`Models::find`] looks in, in order. An empty `PDFCRAFT_MODELS` value
+    /// is ignored rather than being treated as the current working directory.
     pub fn search_dirs() -> Vec<PathBuf> {
+        let override_dir = std::env::var_os("PDFCRAFT_MODELS").map(PathBuf::from);
+        Self::search_dirs_with_override(override_dir)
+    }
+
+    /// Build the search list with an explicit override. Keeping this logic separate lets tests
+    /// exercise precedence without mutating process-global environment variables.
+    fn search_dirs_with_override(override_dir: Option<PathBuf>) -> Vec<PathBuf> {
         let mut dirs = Vec::new();
-        if let Some(d) = std::env::var_os("PDFCRAFT_MODELS") {
-            dirs.push(PathBuf::from(d));
+        if let Some(dir) = override_dir
+            && !dir.as_os_str().is_empty()
+        {
+            dirs.push(dir);
         }
         if let Some(exe) = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)) {
             dirs.extend(Self::dirs_beside_exe(&exe));
@@ -82,28 +160,126 @@ impl Models {
     /// - `../Resources/models`: the macOS app bundle (`Contents/MacOS` → `Contents/Resources`);
     /// - `../share/pdfcraft/models`: the FHS-style trees (`bin/` → `share/`) of the Linux
     ///   deb/rpm/tar.gz/AppImage/Flatpak and the FreeBSD tarball, wherever they are installed.
+    ///
+    /// The returned paths may contain `..`; they are not canonicalized because some candidate
+    /// paths may not exist. Callers that need a canonical path can use `std::fs::canonicalize`.
     pub fn dirs_beside_exe(exe_dir: &Path) -> Vec<PathBuf> {
         vec![exe_dir.join("models"), exe_dir.join("../Resources/models"), exe_dir.join("../share/pdfcraft/models")]
+    }
+
+    /// The alphabet for the recognition model. `output_classes` is the model's last output
+    /// dimension, which is `alphabet.chars().count() + 1` (the extra class is the CTC blank), or
+    /// `None` when the dimension is symbolic.
+    ///
+    /// 1. A custom alphabet file (`text-recognition.alphabet`) beside the model wins. It must be
+    ///    non-empty, drawable in the text layer, and (when the class count is known) exactly
+    ///    `output_classes - 1` characters long.
+    /// 2. Otherwise the class count picks [`ALPHABET`] or [`LATIN_ALPHABET`].
+    /// 3. A class count that matches neither is an error rather than a silent fallback, because
+    ///    a misaligned alphabet reads as garbage.
+    /// 4. A symbolic dimension keeps the base [`ALPHABET`].
+    pub fn alphabet_for(&self, output_classes: Option<usize>) -> Result<String, OcrError> {
+        let sidecar = self.recognition.with_file_name(ALPHABET_FILE);
+        let custom = match std::fs::read_to_string(&sidecar) {
+            Ok(contents) => Some(contents),
+            // A missing sidecar is expected: use the alphabet selected by the model's class count.
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+            // Do not silently ignore a present but unreadable or invalid-UTF-8 configuration file.
+            Err(err) => {
+                return Err(OcrError::Load(sidecar.display().to_string(), err.to_string()));
+            }
+        };
+
+        if let Some(custom) = custom {
+            let fail = |msg: String| OcrError::Load(sidecar.display().to_string(), msg);
+            let alphabet = custom.trim_end_matches(['\r', '\n']).to_owned();
+            if alphabet.is_empty() {
+                return Err(fail("the alphabet file is empty".into()));
+            }
+            if let Some(c) = pdfcraft_fonts::first_undrawable(&alphabet) {
+                return Err(fail(format!("{c:?} cannot be drawn in the text layer")));
+            }
+            let len = alphabet.chars().count();
+            let unique_len = alphabet.chars().collect::<std::collections::HashSet<_>>().len();
+            if unique_len != len {
+                return Err(fail("the alphabet contains duplicate characters".into()));
+            }
+            if let Some(n) = output_classes
+                && len + 1 != n
+            {
+                return Err(fail(format!("the alphabet has {len} characters but the model has {n} output classes")));
+            }
+            return Ok(alphabet);
+        }
+
+        let base = ALPHABET.chars().count() + 1;
+        let latin = LATIN_ALPHABET.chars().count() + 1;
+        match output_classes {
+            Some(n) if n == base => Ok(ALPHABET.to_owned()),
+            Some(n) if n == latin => Ok(LATIN_ALPHABET.to_owned()),
+            Some(n) => Err(OcrError::Load(
+                self.recognition.display().to_string(),
+                format!("the model has {n} output classes; expected {base} or {latin}, or provide {ALPHABET_FILE}"),
+            )),
+            None => Ok(ALPHABET.to_owned()),
+        }
     }
 }
 
 /// A recognised word: its text and its box in image pixels `[left, top, right, bottom]`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Word {
+    /// Recognized text for this word.
     pub text: String,
+    /// Bounding rectangle in image pixels as `[left, top, right, bottom]`.
     pub rect: [f32; 4],
 }
 
 /// A recognised line of words, in reading order.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Line {
+    /// Words in reading order within this line.
     pub words: Vec<Word>,
 }
 
 impl Line {
+    /// Join the words in this line with single spaces, preserving their reading order.
     pub fn text(&self) -> String {
         self.words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ")
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ImageLayout {
+    Grayscale,
+    Rgb,
+    Rgba,
+}
+
+/// Validate image dimensions and identify the supported packed pixel layout.
+/// Keeping this independent of the OCR engine makes malformed-buffer cases testable.
+fn validate_image_buffer(buffer_len: usize, width: u32, height: u32) -> Result<(usize, ImageLayout), OcrError> {
+    let total_px =
+        (width as usize).checked_mul(height as usize).ok_or_else(|| OcrError::Recognize("image dimensions overflow addressable memory".into()))?;
+    if total_px == 0 || buffer_len == 0 {
+        return Err(OcrError::EmptyImage);
+    }
+
+    let expected_rgb = total_px.checked_mul(3).ok_or_else(|| OcrError::Recognize("RGB image buffer size overflow".into()))?;
+    let expected_rgba = total_px.checked_mul(4).ok_or_else(|| OcrError::Recognize("RGBA image buffer size overflow".into()))?;
+    let layout = if buffer_len == total_px {
+        ImageLayout::Grayscale
+    } else if buffer_len == expected_rgb {
+        ImageLayout::Rgb
+    } else if buffer_len == expected_rgba {
+        ImageLayout::Rgba
+    } else {
+        return Err(OcrError::Recognize(format!(
+            "invalid image buffer length: got {buffer_len} bytes for {width}x{height}; expected {total_px} (grayscale), {expected_rgb} (RGB), or {expected_rgba} (RGBA)"
+        )));
+    };
+
+    Ok((total_px, layout))
 }
 
 /// A loaded recogniser. Loading takes a moment; keep one and reuse it.
@@ -112,12 +288,37 @@ pub struct Ocr {
 }
 
 impl Ocr {
+    /// Load the detection and recognition models and select an alphabet compatible with the
+    /// recognition model's output-class count or adjacent custom alphabet sidecar.
+    ///
+    // NOTE: the ONNX-side version of this file did not include `Ocr::load`, so the loading code
+    // below is the RTEN-based version. If ONNX files are loaded through a different API, adapt
+    // the `load` closure and the output-class lookup here; `Models::in_dir` may now return either
+    // format.
     pub fn load(models: &Models) -> Result<Ocr, OcrError> {
         let load = |p: &Path| rten::Model::load_file(p).map_err(|e| OcrError::Load(p.display().to_string(), e.to_string()));
+        let detection = load(&models.detection)?;
+        let recognition = load(&models.recognition)?;
+
+        // Inspect the recognition model's final dimension (CTC classes = alphabet_len + 1) so
+        // both the 96-char base model and the extended Western European model work seamlessly.
+        let output_classes = recognition
+            .output_ids()
+            .first()
+            .and_then(|&id| recognition.node_info(id))
+            .and_then(|info| info.shape())
+            // `shape()` returns an owned Vec, so consume its last dimension instead of
+            // returning a reference to the vector from the closure.
+            .and_then(|mut dims| match dims.pop()? {
+                rten::Dimension::Fixed(n) => Some(n),
+                rten::Dimension::Symbolic(_) => None,
+            });
+
+        let alphabet = models.alphabet_for(output_classes)?;
         let params = ocrs::OcrEngineParams {
-            detection_model: Some(load(&models.detection)?),
-            recognition_model: Some(load(&models.recognition)?),
-            alphabet: Some(ALPHABET.into()),
+            detection_model: Some(detection),
+            recognition_model: Some(recognition),
+            alphabet: Some(alphabet),
             ..Default::default()
         };
         let engine = ocrs::OcrEngine::new(params).map_err(|e| OcrError::Load("ocr engine".into(), e.to_string()))?;
@@ -131,12 +332,20 @@ impl Ocr {
 
     /// Recognise the text in an RGBA (or RGB, or grey) image, `width` × `height` pixels.
     pub fn recognize(&self, pixels: &[u8], width: u32, height: u32) -> Result<Vec<Line>, OcrError> {
-        if width == 0 || height == 0 || pixels.is_empty() {
-            return Err(OcrError::EmptyImage);
-        }
-        // ocrs wants 1 or 3 channels.
-        let rgb: std::borrow::Cow<[u8]> = if pixels.len() == (width * height * 4) as usize {
-            pixels.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect::<Vec<u8>>().into()
+        let (_, layout) = validate_image_buffer(pixels.len(), width, height)?;
+
+        // ocrs wants 1 or 3 channels. Composite RGBA onto white so transparent backgrounds stay white.
+        let rgb: std::borrow::Cow<[u8]> = if layout == ImageLayout::Rgba {
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|&[r, g, b, a]| {
+                    let blend = |c: u8| (255 - ((255 - u16::from(c)) * u16::from(a)) / 255) as u8;
+                    [blend(r), blend(g), blend(b)]
+                })
+                .collect::<Vec<u8>>()
+                .into()
         } else {
             pixels.into()
         };
@@ -169,9 +378,13 @@ impl Ocr {
 /// vectors along its bottom edge (`across`, left → right as read) and its left edge (`up`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlacedWord {
+    /// Word text to write into the invisible PDF text layer.
     pub text: String,
+    /// Bottom-left origin of the word in PDF user-space coordinates.
     pub origin: [f64; 2],
+    /// Vector from the left to the right side of the word, in PDF user space.
     pub across: [f64; 2],
+    /// Vector from the bottom to the top side of the word, in PDF user space.
     pub up: [f64; 2],
 }
 
@@ -194,20 +407,35 @@ const DESCENT: f64 = 0.21;
 const CAP_HEIGHT: f64 = 0.718;
 const X_HEIGHT: f64 = 0.523;
 
+/// Accented or ascending lowercase letters whose ink reaches the cap/ascender line. Listed
+/// explicitly: `æ œ ø µ ç` are x-height letters and are deliberately absent.
+const TALL_LOWER_ACCENTED: &str = "àáâãäåèéêëìíîïñòóôõöùúûüýÿšžßðþƒ";
+
+/// True if `c` rises to or near the cap/ascender line in Helvetica.
+fn is_tall_glyph(c: char) -> bool {
+    c.is_uppercase() || c.is_ascii_digit() || "bdfhijklt!?/\\()[]{}|'\"#$%&@€£¥§¶¡¿".contains(c) || TALL_LOWER_ACCENTED.contains(c)
+}
+
+/// True if `c` reaches below the baseline (descenders, cedillas, brackets, inverted Spanish
+/// punctuation).
+fn is_low_glyph(c: char) -> bool {
+    "gjpqyçÇýÿþƒµ()[]{}|_¡¿§¶".contains(c)
+}
+
 /// How far `text`'s ink reaches above and below the baseline, in em fractions: a word box is
-/// tight around the ink, so "DT" spans the cap height only, "sun" the x-height, and "gap" reaches
-/// down to the descender. Text without letters or digits keeps the full ascender-descender span.
+/// tight around the ink, so "DT" spans the cap height only, "sun" the x-height, and "gap" or
+/// "reçu" reaches down to the descender. Text without letters or digits keeps the full
+/// ascender-descender span.
 fn ink_extent(text: &str) -> (f64, f64) {
     if !text.chars().any(char::is_alphanumeric) {
         return (BOX_EM - DESCENT, -DESCENT);
     }
-    let tall = text
-        .chars()
-        .any(|c| c.is_uppercase() || c.is_ascii_digit() || "bdfhijklt!?/\\()[]{}|'\"#$%&@".contains(c) || (c.is_alphabetic() && !c.is_ascii()));
-    let low = text.chars().any(|c| "gjpqy()[]{}|_".contains(c));
+    let tall = text.chars().any(is_tall_glyph);
+    let low = text.chars().any(is_low_glyph);
     (if tall { CAP_HEIGHT } else { X_HEIGHT }, if low { -DESCENT } else { 0.0 })
 }
 
+/// Format a finite PDF numeric operand compactly, avoiding scientific notation and negative zero.
 fn num(v: f64) -> String {
     let s = format!("{:.4}", if v.abs() < 1e-9 { 0.0 } else { v });
     let s = s.trim_end_matches('0').trim_end_matches('.');
@@ -223,9 +451,15 @@ pub fn text_layer(words: &[PlacedWord]) -> Vec<u8> {
     // header or footer) drew invisibly (#3029).
     let mut out = b"/OCR BMC\nq\nBT\n3 Tr\n/PCHelv 1 Tf\n".to_vec();
     for w in words {
+        // Public fields allow callers to construct invalid placements. Never emit NaN or infinity
+        // as a PDF numeric operand; skip malformed words because this API returns raw content bytes.
+        if !w.origin.iter().chain(w.across.iter()).chain(w.up.iter()).all(|value| value.is_finite()) {
+            continue;
+        }
+
         let width = helvetica_width(&w.text, 1.0);
         let height = w.up[0].hypot(w.up[1]);
-        if width <= 0.0 || height <= 0.0 {
+        if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
             continue;
         }
         // The em square: the word's own ink (cap height or x-height, descenders or not) spans the
@@ -235,6 +469,10 @@ pub fn text_layer(words: &[PlacedWord]) -> Vec<u8> {
         let ax = [w.across[0] / width, w.across[1] / width];
         let o = [w.origin[0] - em[0] * bottom, w.origin[1] - em[1] * bottom];
         let m = [ax[0], ax[1], em[0], em[1], o[0], o[1]];
+        // Finite inputs can still overflow during arithmetic, so check the final text matrix too.
+        if !m.iter().all(|value| value.is_finite()) {
+            continue;
+        }
         let nums: Vec<String> = m.iter().map(|v| num(*v)).collect();
         out.extend_from_slice(nums.join(" ").as_bytes());
         out.extend_from_slice(b" Tm ");
@@ -246,9 +484,72 @@ pub fn text_layer(words: &[PlacedWord]) -> Vec<u8> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 
+    /// Scratch paths include a per-test label because tests run in parallel and share a process ID.
+    /// The directory is removed on drop, including when an assertion fails.
+    struct ScratchDir(PathBuf);
+
+    impl ScratchDir {
+        /// Create a clean temporary directory uniquely named for the current test label.
+        fn new(label: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("pdfcraft-ocr-{label}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("create scratch dir");
+            Self(dir)
+        }
+
+        /// Return the scratch directory's path.
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for ScratchDir {
+        /// Remove the temporary directory when the guard leaves scope.
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Create placeholder files with the given names in `dir`.
+    fn write_files(dir: &Path, files: &[&str]) {
+        std::fs::create_dir_all(dir).unwrap();
+        for file in files {
+            std::fs::write(dir.join(file), b"model").unwrap();
+        }
+    }
+
+    /// Create a placeholder current (ONNX) model pair for model-path discovery tests.
+    fn write_models(dir: &Path) {
+        write_files(dir, &[DETECTION_MODEL, RECOGNITION_MODEL]);
+    }
+
+    /// The legacy RTEN pair in `dir`, as `Models::in_dir` should report it.
+    fn legacy_pair(dir: &Path) -> Models {
+        Models { detection: dir.join(LEGACY_DETECTION_MODEL), recognition: dir.join(LEGACY_RECOGNITION_MODEL) }
+    }
+
+    /// Check that tightly packed grayscale, RGB, and RGBA images are accepted.
+    #[test]
+    fn image_buffer_validation_accepts_gray_rgb_and_rgba() {
+        assert_eq!(validate_image_buffer(6, 3, 2).unwrap(), (6, ImageLayout::Grayscale));
+        assert_eq!(validate_image_buffer(18, 3, 2).unwrap(), (6, ImageLayout::Rgb));
+        assert_eq!(validate_image_buffer(24, 3, 2).unwrap(), (6, ImageLayout::Rgba));
+    }
+
+    /// Check that empty, mismatched, and overflowing image buffers are rejected.
+    #[test]
+    fn image_buffer_validation_rejects_empty_or_malformed_buffers() {
+        assert!(matches!(validate_image_buffer(0, 3, 2), Err(OcrError::EmptyImage)));
+        assert!(matches!(validate_image_buffer(6, 0, 2), Err(OcrError::EmptyImage)));
+        assert!(matches!(validate_image_buffer(7, 3, 2), Err(OcrError::Recognize(_))));
+        assert!(matches!(validate_image_buffer(usize::MAX, u32::MAX, u32::MAX), Err(OcrError::Recognize(_))));
+    }
+
+    /// Verify image-pixel coordinates are mapped correctly into PDF user space.
     #[test]
     fn places_words_through_the_mapping() {
         // 2 pixels per point, page 612 × 792, y flipped.
@@ -259,28 +560,102 @@ mod tests {
         assert_eq!(w.up, [0.0, 20.0]);
     }
 
-    /// The text layer is Helvetica in WinAnsiEncoding: every character the model can recognise
-    /// must be one it can hold, or recognised text would be saved as `?`. A model with a wider
-    /// alphabet (Chinese, for example) needs a text layer in another font first.
+    /// Verify all built-in model alphabets are drawable by the PDF text-layer font.
     #[test]
-    fn the_model_alphabet_fits_the_text_layer_font() {
+    fn model_alphabets_fit_the_text_layer_font() {
         assert_eq!(pdfcraft_fonts::first_undrawable(ALPHABET), None);
+        assert_eq!(pdfcraft_fonts::first_undrawable(LATIN_ALPHABET), None);
+        for sample in [
+            "Münchner Straße",        // German: ü, ß
+            "français déjà vu, cœur", // French: ç, é, à, œ
+            "¡Qué año!",              // Spanish: ¿, ¡, é, ñ
+            "Smørrebrød",             // Danish/Norwegian: ø
+            "Ærø",                    // Nordic: Æ, ø
+            "Þingvellir",             // Icelandic: Þ, þ
+        ] {
+            assert!(sample.chars().all(|ch| LATIN_ALPHABET.contains(ch)), "extended alphabet cannot represent sample {sample:?}");
+            assert_eq!(pdfcraft_fonts::first_undrawable(sample), None);
+        }
     }
 
+    /// Verify German, French, Spanish, and Nordic text retains valid sizing and WinAnsi encoding.
+    #[test]
+    fn western_european_words_encode_and_size_accurately() {
+        assert_eq!(ink_extent("reçu"), (X_HEIGHT, -DESCENT));
+        assert_eq!(ink_extent("garçon"), (X_HEIGHT, -DESCENT));
+        assert_eq!(ink_extent("été"), (CAP_HEIGHT, 0.0));
+        assert_eq!(ink_extent("größe"), (CAP_HEIGHT, -DESCENT));
+        assert_eq!(ink_extent("español"), (CAP_HEIGHT, -DESCENT));
+        assert_eq!(ink_extent("¿qué?"), (CAP_HEIGHT, -DESCENT));
+        assert_eq!(ink_extent("æon"), (X_HEIGHT, 0.0));
+        assert_eq!(ink_extent("œuvre"), (X_HEIGHT, 0.0));
+        assert_eq!(ink_extent("ø"), (X_HEIGHT, 0.0));
+        assert_eq!(ink_extent("µ"), (X_HEIGHT, -DESCENT));
+        assert_eq!(ink_extent("ý"), (CAP_HEIGHT, -DESCENT));
+        assert_eq!(ink_extent("þ"), (CAP_HEIGHT, -DESCENT));
+        assert_eq!(ink_extent("Ça"), (CAP_HEIGHT, -DESCENT));
+
+        let encoded = pdfcraft_fonts::win_ansi("üß");
+        assert_eq!(&encoded[..], &[0xFC, 0xDF][..]);
+
+        let text = "Münchner Straße";
+        let w = PlacedWord { text: text.into(), origin: [10.0, 20.0], across: [80.0, 0.0], up: [0.0, 10.0] };
+        let layer = text_layer(&[w]);
+        assert!(layer.starts_with(b"/OCR BMC\nq\nBT\n3 Tr\n/PCHelv 1 Tf\n"));
+        assert!(layer.ends_with(b"ET\nQ\nEMC\n"));
+        assert!(helvetica_width(text, 1.0) > 0.0);
+        let literal = pdfcraft_fonts::literal(&pdfcraft_fonts::win_ansi(text));
+        assert!(layer.windows(literal.len()).any(|w| w == &literal[..]));
+
+        // Check a French phrase as well: the invisible PDF text must preserve accented letters
+        // and the œ ligature instead of replacing them with question marks.
+        let french_text = "français déjà vu, cœur";
+        let french_word = PlacedWord { text: french_text.into(), origin: [10.0, 40.0], across: [120.0, 0.0], up: [0.0, 10.0] };
+        let french_layer = text_layer(&[french_word]);
+        let french_literal = pdfcraft_fonts::literal(&pdfcraft_fonts::win_ansi(french_text));
+        assert!(french_layer.windows(french_literal.len()).any(|w| w == &french_literal[..]));
+    }
+
+    /// Verify invisible PDF text is scaled and placed inside its word rectangle.
     #[test]
     fn text_layer_is_invisible_text_fitted_to_each_box() {
         let w = PlacedWord { text: "Hi".into(), origin: [10.0, 20.0], across: [30.0, 0.0], up: [0.0, 9.3] };
         let s = String::from_utf8(text_layer(&[w])).unwrap();
         assert!(s.contains("3 Tr") && s.contains("/PCHelv 1 Tf"), "{s}");
         let width = helvetica_width("Hi", 1.0);
-        // "Hi" has no descender: its box spans the cap height, from the baseline up.
         assert!(s.contains(&format!("{} 0 0 {} 10 20 Tm (Hi) Tj", num(30.0 / width), num(9.3 / CAP_HEIGHT))), "{s}");
         assert!(s.starts_with("/OCR BMC") && s.ends_with("EMC\n"));
     }
 
-    /// #3029: the layer's invisible rendering mode and font end with the layer. Every operator
-    /// that sets them sits inside a `q … Q` pair that the layer closes itself, so content drawn
-    /// after it on the page starts from the graphics state it had before.
+    /// Verify non-finite and overflowing placements are omitted from generated PDF operators.
+    #[test]
+    fn invalid_coordinates_are_not_written_to_pdf_content() {
+        let overflow = PlacedWord { text: "Gap".into(), origin: [10.0, f64::MAX * 0.9], across: [30.0, 0.0], up: [0.0, f64::MAX * 0.835] };
+        let (top, bottom) = ink_extent(&overflow.text);
+        let em_y = overflow.up[1] / (top - bottom);
+        assert!(overflow.origin[1].is_finite() && overflow.up[1].is_finite() && em_y.is_finite());
+        assert!((overflow.origin[1] - em_y * bottom).is_infinite(), "the finite overflow fixture must overflow while building the text matrix");
+
+        let invalid = [
+            PlacedWord { text: "Hi".into(), origin: [f64::NAN, 20.0], across: [30.0, 0.0], up: [0.0, 9.3] },
+            PlacedWord { text: "Hi".into(), origin: [10.0, f64::INFINITY], across: [30.0, 0.0], up: [0.0, 9.3] },
+            PlacedWord { text: "Hi".into(), origin: [10.0, 20.0], across: [f64::NEG_INFINITY, 0.0], up: [0.0, 9.3] },
+            PlacedWord { text: "Hi".into(), origin: [10.0, 20.0], across: [30.0, f64::NAN], up: [0.0, 9.3] },
+            PlacedWord { text: "Hi".into(), origin: [10.0, 20.0], across: [30.0, 0.0], up: [f64::INFINITY, 9.3] },
+            PlacedWord { text: "Hi".into(), origin: [10.0, 20.0], across: [30.0, 0.0], up: [0.0, f64::NEG_INFINITY] },
+            overflow,
+        ];
+        let layer = String::from_utf8(text_layer(&invalid)).unwrap();
+
+        assert!(!layer.contains("NaN"), "{layer}");
+        assert!(!layer.contains("inf"), "{layer}");
+        assert!(!layer.contains(" Tm "), "invalid placements emitted a text matrix: {layer}");
+        assert!(!layer.contains(" Tj\n"), "invalid placements emitted a text-show operator: {layer}");
+        assert!(layer.starts_with("/OCR BMC\nq\nBT\n3 Tr\n/PCHelv 1 Tf\n"));
+        assert!(layer.ends_with("ET\nQ\nEMC\n"));
+    }
+
+    /// Verify the OCR text layer balances its graphics-state and marked-content operators.
     #[test]
     fn the_layer_restores_the_graphics_state_it_changes() {
         let w = PlacedWord { text: "Hi".into(), origin: [10.0, 20.0], across: [30.0, 0.0], up: [0.0, 9.3] };
@@ -298,10 +673,9 @@ mod tests {
         assert_eq!(depth, 0, "the layer leaves a q open: {s:?}");
     }
 
-    /// A word box is tight around the ink, so the text's size and baseline come from the letters:
-    /// capitals, lowercase without ascenders, descenders.
+    /// Verify measured text height follows capitals, x-height letters, and descenders.
     #[test]
-    fn the_text_is_as_tall_as_the_scanned_word() {
+    fn text_height_tracks_caps_x_height_and_descenders() {
         assert_eq!(ink_extent("DT"), (CAP_HEIGHT, 0.0));
         assert_eq!(ink_extent("402337"), (CAP_HEIGHT, 0.0));
         assert_eq!(ink_extent("sun"), (X_HEIGHT, 0.0));
@@ -315,77 +689,90 @@ mod tests {
         assert!(s.contains(&format!(" 0 0 {} 0 {} Tm (gap) Tj", num(em), num(100.0 + em * DESCENT))), "{s}");
     }
 
+    /// Verify rotated-page mappings preserve the recognized word reading direction.
     #[test]
     fn rotated_pages_keep_the_reading_direction() {
-        // A page turned 90°: image x runs up the page.
         let to_user = |x: f32, y: f32| [y as f64, x as f64];
         let w = PlacedWord::place(&Word { text: "Up".into(), rect: [0.0, 0.0, 50.0, 10.0] }, to_user);
         assert_eq!(w.across, [0.0, 50.0]);
         assert_eq!(w.up, [-10.0, 0.0]);
     }
 
-    /// The current ONNX pair wins when an installation also retains both legacy models.
+    /// Verify explicit model directories are searched in priority order.
+    #[test]
+    fn finds_models_in_known_locations_and_in_directory_order() {
+        let scratch = ScratchDir::new("model-discovery");
+        let first = scratch.path().join("first");
+        let second = scratch.path().join("second");
+        write_models(&first);
+        write_models(&second);
+
+        let from_dir = Models::in_dir(&first).unwrap();
+        assert_eq!(from_dir.detection, first.join(DETECTION_MODEL));
+        assert_eq!(from_dir.recognition, first.join(RECOGNITION_MODEL));
+
+        let found = Models::find_in(&[second.clone(), first.clone()]).unwrap();
+        assert_eq!(found.detection, second.join(DETECTION_MODEL));
+        assert_eq!(found.recognition, second.join(RECOGNITION_MODEL));
+
+        // Exercise PDFCRAFT_MODELS precedence through the pure helper rather than mutating the
+        // process environment. set_var/remove_var can be unsound in a multithreaded Unix process.
+        let dirs = Models::search_dirs_with_override(Some(first.clone()));
+        assert_eq!(dirs.first(), Some(&first));
+        let dirs = Models::search_dirs_with_override(Some(PathBuf::new()));
+        assert_ne!(dirs.first(), Some(&PathBuf::new()));
+    }
+
+    /// A complete ONNX pair is sufficient, and takes precedence over a legacy pair beside it.
     #[test]
     fn model_discovery_prefers_the_complete_onnx_pair() {
-        let dir = tempfile::tempdir().unwrap();
-        for file in ["text-detection.onnx", "text-recognition.onnx"] {
-            std::fs::write(dir.path().join(file), b"model").unwrap();
-        }
-        let expected = Some(Models { detection: dir.path().join("text-detection.onnx"), recognition: dir.path().join("text-recognition.onnx") });
-        assert_eq!(Models::in_dir(dir.path()), expected, "a complete ONNX pair is sufficient");
-        for file in ["text-detection.rten", "text-recognition.rten"] {
-            std::fs::write(dir.path().join(file), b"model").unwrap();
-        }
-        assert_eq!(Models::in_dir(dir.path()), expected, "the complete ONNX pair takes precedence over legacy models");
+        let scratch = ScratchDir::new("prefers-onnx");
+        let dir = scratch.path();
+        let expected = Some(Models { detection: dir.join(DETECTION_MODEL), recognition: dir.join(RECOGNITION_MODEL) });
+        write_models(dir);
+        assert_eq!(Models::in_dir(dir), expected, "a complete ONNX pair is sufficient");
+        write_files(dir, &[LEGACY_DETECTION_MODEL, LEGACY_RECOGNITION_MODEL]);
+        assert_eq!(Models::in_dir(dir), expected, "the complete ONNX pair takes precedence over legacy models");
     }
 
     /// An interrupted ONNX update still permits an intact legacy pair in the same directory.
     #[test]
     fn model_discovery_falls_back_to_legacy_when_the_onnx_pair_is_incomplete() {
-        for current in ["text-detection.onnx", "text-recognition.onnx"] {
-            let dir = tempfile::tempdir().unwrap();
-            for file in [current, "text-detection.rten", "text-recognition.rten"] {
-                std::fs::write(dir.path().join(file), b"model").unwrap();
-            }
-            assert_eq!(
-                Models::in_dir(dir.path()),
-                Some(Models { detection: dir.path().join("text-detection.rten"), recognition: dir.path().join("text-recognition.rten") }),
-                "{current} alone must not hide a complete legacy pair"
-            );
+        for current in [DETECTION_MODEL, RECOGNITION_MODEL] {
+            let scratch = ScratchDir::new(&format!("legacy-fallback-{current}"));
+            let dir = scratch.path();
+            write_files(dir, &[current, LEGACY_DETECTION_MODEL, LEGACY_RECOGNITION_MODEL]);
+            assert_eq!(Models::in_dir(dir), Some(legacy_pair(dir)), "{current} alone must not hide a complete legacy pair");
         }
     }
 
     /// Detection and recognition must come from one complete format pair, never a mixed update.
     #[test]
     fn model_discovery_refuses_mixed_format_pairs() {
-        for pair in [["text-detection.onnx", "text-recognition.rten"], ["text-detection.rten", "text-recognition.onnx"]] {
-            let dir = tempfile::tempdir().unwrap();
-            for file in pair {
-                std::fs::write(dir.path().join(file), b"model").unwrap();
-            }
-            assert_eq!(Models::in_dir(dir.path()), None, "{pair:?} is not a complete model pair");
+        for pair in [[DETECTION_MODEL, LEGACY_RECOGNITION_MODEL], [LEGACY_DETECTION_MODEL, RECOGNITION_MODEL]] {
+            let scratch = ScratchDir::new(&format!("mixed-{}", pair[0]));
+            write_files(scratch.path(), &pair);
+            assert_eq!(Models::in_dir(scratch.path()), None, "{pair:?} is not a complete model pair");
         }
     }
 
     /// Existing source builds and PDFCRAFT_MODELS overrides retain their complete RTEN pair.
     #[test]
     fn model_discovery_keeps_legacy_only_installations() {
-        let dir = tempfile::tempdir().unwrap();
-        assert_eq!(Models::in_dir(dir.path()), None);
-        std::fs::write(dir.path().join("text-detection.rten"), b"model").unwrap();
-        assert_eq!(Models::in_dir(dir.path()), None, "one legacy model is incomplete");
-        std::fs::write(dir.path().join("text-recognition.rten"), b"model").unwrap();
-        assert_eq!(
-            Models::in_dir(dir.path()),
-            Some(Models { detection: dir.path().join("text-detection.rten"), recognition: dir.path().join("text-recognition.rten") })
-        );
+        let scratch = ScratchDir::new("legacy-only");
+        let dir = scratch.path();
+        assert_eq!(Models::in_dir(dir), None);
+        write_files(dir, &[LEGACY_DETECTION_MODEL]);
+        assert_eq!(Models::in_dir(dir), None, "one legacy model is incomplete");
+        write_files(dir, &[LEGACY_RECOGNITION_MODEL]);
+        assert_eq!(Models::in_dir(dir), Some(legacy_pair(dir)));
     }
 
-    /// #103: every release package's layout puts the models where the installed app looks.
-    /// Mirrors packaging/{windows/package.ps1,macos/package.sh,linux/package.sh,freebsd/package.sh}.
+    /// Verify model discovery matches all documented release package layouts.
     #[test]
-    fn finds_the_models_in_every_release_package_layout() {
-        let base = std::env::temp_dir().join(format!("pdfcraft-ocr-layouts-{}", std::process::id()));
+    fn finds_models_in_every_release_package_layout() {
+        let scratch = ScratchDir::new("package-layouts");
+        let base = scratch.path();
         let layouts = [
             ("windows", "PdfCraft", "PdfCraft/models"),
             ("macos", "PdfCraft.app/Contents/MacOS", "PdfCraft.app/Contents/Resources/models"),
@@ -397,21 +784,20 @@ mod tests {
         ];
         for (name, exe_dir, models_dir) in layouts {
             let root = base.join(name);
-            let (exe_dir, models_dir) = (root.join(exe_dir), root.join(models_dir));
+            let exe_dir = root.join(exe_dir);
+            let models_dir = root.join(models_dir);
             std::fs::create_dir_all(&exe_dir).unwrap();
-            std::fs::create_dir_all(&models_dir).unwrap();
-            let found = || Models::dirs_beside_exe(&exe_dir).iter().find_map(|d| Models::in_dir(d));
-            assert_eq!(found(), None, "{name}: no models yet");
-            for file in [DETECTION_MODEL, RECOGNITION_MODEL] {
-                std::fs::write(models_dir.join(file), b"model").unwrap();
-            }
-            let models = found().unwrap_or_else(|| panic!("{name}: models in {} not found", models_dir.display()));
-            assert_eq!(models.detection.canonicalize().unwrap(), models_dir.join(DETECTION_MODEL).canonicalize().unwrap(), "{name}");
+            assert_eq!(Models::dirs_beside_exe(&exe_dir).iter().find_map(|d| Models::in_dir(d)), None, "{name}: no models yet");
+            write_models(&models_dir);
+            let found = Models::dirs_beside_exe(&exe_dir)
+                .iter()
+                .find_map(|d| Models::in_dir(d))
+                .unwrap_or_else(|| panic!("{name}: models in {} not found", models_dir.display()));
+            assert_eq!(found.detection.canonicalize().unwrap(), models_dir.join(DETECTION_MODEL).canonicalize().unwrap(), "{name}");
         }
-        let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// The message tells end users what to do; release builds have no cargo.
+    /// Verify built-in alphabet lengths, order, and uniqueness match trained output classes.
     #[test]
     fn the_alphabet_is_the_trained_one() {
         let chars: Vec<char> = ALPHABET.chars().collect();
@@ -419,32 +805,146 @@ mod tests {
         // The euro sign follows the ASCII punctuation (class 44; 0 is the CTC blank), not a second E.
         assert_eq!(chars.iter().position(|&c| c == '€'), Some(43));
         assert_eq!(chars.iter().filter(|&&c| c == 'E').count(), 1);
+
+        let latin_chars: Vec<char> = LATIN_ALPHABET.chars().collect();
+        assert_eq!(latin_chars.len(), 182);
+        assert!(LATIN_ALPHABET.starts_with(ALPHABET));
+        let mut seen = std::collections::HashSet::new();
+        assert!(latin_chars.iter().all(|c| seen.insert(*c)), "duplicate character in LATIN_ALPHABET");
     }
 
+    /// Verify output-class counts and custom alphabet files select or reject alphabets correctly.
+    #[test]
+    fn alphabet_for_follows_the_model_class_count() {
+        let scratch = ScratchDir::new("alphabet");
+        let dir = scratch.path();
+        let models = Models { detection: dir.join(DETECTION_MODEL), recognition: dir.join(RECOGNITION_MODEL) };
+
+        assert_eq!(models.alphabet_for(Some(97)).unwrap(), ALPHABET);
+        assert_eq!(models.alphabet_for(Some(183)).unwrap(), LATIN_ALPHABET);
+        assert_eq!(models.alphabet_for(None).unwrap(), ALPHABET);
+        assert!(models.alphabet_for(Some(169)).is_err(), "unknown class count must not fall back silently");
+        assert!(models.alphabet_for(Some(0)).is_err(), "zero output classes must be rejected");
+
+        let sidecar = dir.join(ALPHABET_FILE);
+        std::fs::write(&sidecar, "abc\n").unwrap();
+        assert_eq!(models.alphabet_for(Some(4)).unwrap(), "abc");
+        std::fs::write(&sidecar, "abca\n").unwrap();
+        assert!(models.alphabet_for(Some(5)).is_err(), "duplicate characters must be rejected");
+        std::fs::write(&sidecar, "abc\n").unwrap();
+        assert!(models.alphabet_for(Some(5)).is_err(), "class count mismatch must be rejected");
+        std::fs::write(&sidecar, "ab中\n").unwrap();
+        assert!(models.alphabet_for(Some(4)).is_err(), "undrawable character must be rejected");
+        std::fs::write(&sidecar, "\n").unwrap();
+        assert!(models.alphabet_for(None).is_err(), "empty alphabet must be rejected");
+
+        std::fs::write(&sidecar, [0xFF]).unwrap();
+        assert!(models.alphabet_for(None).is_err(), "invalid UTF-8 must be reported");
+        std::fs::remove_file(&sidecar).unwrap();
+        std::fs::create_dir(&sidecar).unwrap();
+        assert!(models.alphabet_for(None).is_err(), "sidecar read errors must be reported");
+    }
+
+    /// The sidecar sits beside the recognition model whichever format it is in.
+    #[test]
+    fn alphabet_sidecar_is_found_beside_a_legacy_recognition_model() {
+        let scratch = ScratchDir::new("alphabet-legacy");
+        let dir = scratch.path();
+        let models = legacy_pair(dir);
+        std::fs::write(dir.join(ALPHABET_FILE), "abc\n").unwrap();
+        assert_eq!(models.alphabet_for(Some(4)).unwrap(), "abc");
+    }
+
+    /// Verify missing-model errors give actionable guidance without build-tool references.
     #[test]
     fn missing_models_message_is_for_end_users() {
         let message = OcrError::NoModels.to_string();
-        assert!(!message.contains("cargo") && message.contains("PDFCRAFT_MODELS"), "{message}");
+        let lower = message.to_lowercase();
+        assert!(!lower.contains("cargo") && !lower.contains("xtask"), "message mentions build tools: {message}");
+        assert!(message.contains("PDFCRAFT_MODELS"), "message must name the environment override: {message}");
     }
 
-    /// End to end on rendered text, when the models are installed (`cargo xtask models`).
+    /// Run end-to-end OCR smoke tests when model assets are installed.
+    ///
+    /// In CI, set `PDFCRAFT_REQUIRE_OCR_MODELS=1` to require the ASCII smoke-test model and
+    /// `PDFCRAFT_REQUIRE_LATIN_OCR_MODELS=1` to require a faithful 183-class model. Supply the
+    /// latter in `PDFCRAFT_LATIN_MODELS`, a directory containing a complete ONNX or RTEN pair.
     #[test]
     fn reads_rendered_text() {
-        let Some(models) = Models::find() else {
-            eprintln!("skipped: OCR models not installed");
-            return;
+        // The default model and the extended model are independent fixtures. In particular,
+        // an explicitly configured 183-class model must still be tested when no default model
+        // pair is installed or discoverable.
+        let models = Models::find();
+        if let Some(models) = models.as_ref() {
+            // Keep the existing ASCII smoke test: it exercises the installed default model and
+            // verifies that model loading, detection, recognition, and word geometry still work.
+            let ocr = Ocr::load(models).unwrap();
+            let (w, h, px) = test_image::hello();
+            let lines = ocr.recognize(&px, w, h).unwrap();
+            let text: Vec<String> = lines.iter().map(Line::text).collect();
+            assert!(text.iter().any(|t| t.contains("HELL") && t.contains("WOR")), "{text:?}");
+            let word =
+                lines.iter().flat_map(|line| &line.words).find(|word| word.text.contains("HELL")).expect("no word containing 'HELL' in OCR output");
+            let x0 = test_image::X0 as f32;
+            assert!(word.rect[0] >= x0 - 30.0 && word.rect[0] < x0 + 20.0, "first word should start near x={x0}, got {word:?}");
+        } else {
+            let required = std::env::var_os("PDFCRAFT_REQUIRE_OCR_MODELS").is_some_and(|value| !value.is_empty());
+            if required {
+                panic!("default OCR models are required for the ASCII smoke test but were not found");
+            }
+            eprintln!("skipped ASCII OCR check: no default models found (set PDFCRAFT_REQUIRE_OCR_MODELS=1 in CI to require them)");
+        }
+
+        // Prefer an explicitly supplied extended model. If the default model itself has 183
+        // output classes, it is also a valid fixture for this part of the smoke test.
+        let latin_models = match std::env::var_os("PDFCRAFT_LATIN_MODELS") {
+            Some(dir) if !dir.is_empty() => {
+                Models::in_dir(Path::new(&dir)).unwrap_or_else(|| panic!("PDFCRAFT_LATIN_MODELS must contain a complete ONNX or RTEN model pair"))
+            }
+            Some(_) => panic!("PDFCRAFT_LATIN_MODELS must name a non-empty model directory"),
+            None => match models.as_ref() {
+                Some(models) if recognition_output_classes(models) == Some(183) => models.clone(),
+                _ => {
+                    let required = std::env::var_os("PDFCRAFT_REQUIRE_LATIN_OCR_MODELS").is_some_and(|value| !value.is_empty());
+                    if required {
+                        panic!("a 183-class OCR model is required; set PDFCRAFT_LATIN_MODELS to its model directory");
+                    }
+                    eprintln!(
+                        "skipped extended OCR check: no 183-class model found (set PDFCRAFT_LATIN_MODELS and PDFCRAFT_REQUIRE_LATIN_OCR_MODELS=1 in CI)"
+                    );
+                    return;
+                }
+            },
         };
-        let ocr = Ocr::load(&models).unwrap();
-        let (w, h, px) = test_image::hello();
-        let lines = ocr.recognize(&px, w, h).unwrap();
+
+        assert_eq!(
+            recognition_output_classes(&latin_models),
+            Some(183),
+            "extended OCR test requires a recognition model with exactly 183 output classes"
+        );
+        let latin_ocr = Ocr::load(&latin_models).unwrap();
+        let (w, h, px) = test_image::accented();
+        let lines = latin_ocr.recognize(&px, w, h).unwrap();
         let text: Vec<String> = lines.iter().map(Line::text).collect();
-        assert!(text.iter().any(|t| t.contains("HELL") && t.contains("WOR")), "{text:?}");
-        let word = lines.iter().flat_map(|l| &l.words).find(|w| w.text.contains("HELL")).unwrap();
-        assert!(word.rect[0] >= 10.0 && word.rect[0] < 60.0, "{word:?}");
+        assert!(text.iter().any(|line| line.contains('É')), "183-class OCR did not recognize the accented É in the rendered fixture: {text:?}");
+    }
+
+    /// Read the recognition model's final output dimension, using the same CTC class convention
+    /// as `Ocr::load`. A fixed dimension of 183 means 182 alphabet characters plus the blank.
+    fn recognition_output_classes(models: &Models) -> Option<usize> {
+        let recognition = rten::Model::load_file(&models.recognition).ok()?;
+        recognition.output_ids().first().and_then(|&id| recognition.node_info(id)).and_then(|info| info.shape()).and_then(|mut dims| {
+            match dims.pop()? {
+                rten::Dimension::Fixed(n) => Some(n),
+                rten::Dimension::Symbolic(_) => None,
+            }
+        })
     }
 
     mod test_image {
-        /// "HELLO WORLD" drawn with blocky 5×7 letters, 4 pixels per dot, black on white.
+        pub const X0: u32 = 40;
+
+        /// Render `HELLO WORLD` as blocky 5×7 letters, 4 pixels per dot, black on white RGBA.
         pub fn hello() -> (u32, u32, Vec<u8>) {
             const GLYPHS: &[(char, [&str; 7])] = &[
                 ('H', ["X...X", "X...X", "X...X", "XXXXX", "X...X", "X...X", "X...X"]),
@@ -456,22 +956,60 @@ mod tests {
                 ('D', ["XXXX.", "X...X", "X...X", "X...X", "X...X", "X...X", "XXXX."]),
             ];
             let text = "HELLO WORLD";
-            let (dot, x0, y0) = (4u32, 40u32, 40u32);
-            let (w, h) = (x0 * 2 + text.len() as u32 * 6 * dot, y0 * 2 + 7 * dot);
-            let mut px = vec![255u8; (w * h * 4) as usize];
+            let (dot, y0) = (4u32, 40u32);
+            let glyph_count = text.chars().count() as u32;
+            let (w, h) = (X0 * 2 + glyph_count * 6 * dot, y0 * 2 + 7 * dot);
+            let mut px = vec![255u8; (w as usize) * (h as usize) * 4];
             for (i, c) in text.chars().enumerate() {
-                let Some((_, rows)) = GLYPHS.iter().find(|g| g.0 == c) else { continue };
+                if c == ' ' {
+                    continue;
+                }
+                let (_, rows) = GLYPHS.iter().find(|glyph| glyph.0 == c).unwrap_or_else(|| panic!("no glyph for {c:?}"));
                 for (ry, row) in rows.iter().enumerate() {
-                    for (rx, b) in row.bytes().enumerate() {
-                        if b != b'X' {
+                    for (rx, byte) in row.bytes().enumerate() {
+                        if byte != b'X' {
                             continue;
                         }
                         for dy in 0..dot {
                             for dx in 0..dot {
-                                let x = x0 + (i as u32 * 6 + rx as u32) * dot + dx;
+                                let x = X0 + (i as u32 * 6 + rx as u32) * dot + dx;
                                 let y = y0 + ry as u32 * dot + dy;
-                                let o = ((y * w + x) * 4) as usize;
-                                px[o..o + 3].copy_from_slice(&[0, 0, 0]);
+                                let offset = ((y as usize) * (w as usize) + (x as usize)) * 4;
+                                px[offset..offset + 3].copy_from_slice(&[0, 0, 0]);
+                            }
+                        }
+                    }
+                }
+            }
+            (w, h, px)
+        }
+
+        /// Render `ÉTÉ` as blocky 5×7 letters, with the acute accent drawn as part of each É.
+        /// This synthetic fixture makes the expected non-ASCII output deterministic and keeps
+        /// the extended-model test independent of external image files.
+        pub fn accented() -> (u32, u32, Vec<u8>) {
+            const GLYPHS: &[(char, [&str; 7])] = &[
+                ('É', ["...XX", "..X..", "XXXXX", "X....", "XXXX.", "X....", "XXXXX"]),
+                ('T', ["XXXXX", "..X..", "..X..", "..X..", "..X..", "..X..", "..X.."]),
+            ];
+            let text = "ÉTÉ";
+            let (dot, y0) = (8u32, 40u32);
+            let glyph_count = text.chars().count() as u32;
+            let (w, h) = (X0 * 2 + glyph_count * 6 * dot, y0 * 2 + 7 * dot);
+            let mut px = vec![255u8; (w as usize) * (h as usize) * 4];
+            for (i, c) in text.chars().enumerate() {
+                let (_, rows) = GLYPHS.iter().find(|glyph| glyph.0 == c).unwrap_or_else(|| panic!("no glyph for {c:?}"));
+                for (ry, row) in rows.iter().enumerate() {
+                    for (rx, byte) in row.bytes().enumerate() {
+                        if byte != b'X' {
+                            continue;
+                        }
+                        for dy in 0..dot {
+                            for dx in 0..dot {
+                                let x = X0 + (i as u32 * 6 + rx as u32) * dot + dx;
+                                let y = y0 + ry as u32 * dot + dy;
+                                let offset = ((y as usize) * (w as usize) + (x as usize)) * 4;
+                                px[offset..offset + 3].copy_from_slice(&[0, 0, 0]);
                             }
                         }
                     }

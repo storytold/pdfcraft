@@ -12,9 +12,9 @@ workspace = true
 
 [dependencies]
 pdfcraft-fonts = { workspace = true }
+# `rten` loads both model formats: ONNX (current) and RTEN (legacy fallback in `Models::in_dir`).
 ocrs = { version = "0.13.1", default-features = false, features = ["rten"] }
 rten = { version = "0.26.0", default-features = false, features = ["onnx_format", "rten_format"] }
 thiserror.workspace = true
 
-[dev-dependencies]
-tempfile = "3.27"
+# `tempfile` is gone: the merged tests use their own `ScratchDir` guard.
