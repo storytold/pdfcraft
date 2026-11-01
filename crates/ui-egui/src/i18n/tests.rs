@@ -785,6 +785,27 @@ fn catalan_is_registered_and_persists() {
     assert_eq!(restored.language, "ca");
 }
 
+/// Bosnian locales select the Latin catalog, its counts take one/few/other, and the choice persists.
+#[test]
+fn bosnian_is_registered_and_persists() {
+    let bs = Lang::from_code("bs").expect("bs registered");
+    assert_eq!(bs.name(), "Bosanski");
+    assert_eq!(normalize_pref("BS"), Some("bs"));
+    for tag in ["bs", "bs-BA", "bs_BA.UTF-8", "BS-ba", "bs-Latn-BA"] {
+        assert_eq!(lang_from_tag(tag), Some(bs), "{tag}");
+    }
+    assert_eq!(first_supported("bs-BA\r\nen-US"), Some(bs));
+    // one (1, 21), few (2-4, 22-24), other (0, 5-20, 25 ...)
+    assert_eq!([0, 1, 2, 4, 5, 11, 12, 14, 21, 22, 25, 111].map(bs.0.plural), [2, 0, 1, 1, 2, 2, 2, 2, 0, 1, 2, 2]);
+    assert_eq!(trn(bs, 3, "{n} reply", "{n} replies"), "3 odgovora");
+    let mut app = crate::PdfCraftApp::default();
+    app.set_option("language", "BS").unwrap();
+    assert_eq!(app.language, "bs");
+    let mut restored = crate::PdfCraftApp::default();
+    restored.restore(&app.persist());
+    assert_eq!(restored.language, "bs");
+}
+
 #[test]
 fn slovene_is_registered_and_persists() {
     let sl = Lang::from_code("sl").expect("sl registered");

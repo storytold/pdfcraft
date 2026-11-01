@@ -1,0 +1,2810 @@
+# Bosnian (bs) catalog, Latin script, Ijekavian. Format: see the header of ja.tsv
+# (context <TAB> source <TAB> translation; @id, @plural and other contexts; escapes \n \t \\).
+# Plural forms (see `plural_russian` in i18n.rs): one (1, 21, 101 ...) | few (2-4, 22-24 ..., not 12-14) | other.
+#
+# Clean-room: every entry was written from the plain meaning of the English label using ordinary
+# Bosnian computing vocabulary (historija, sačuvaj, tačka, datoteka, postavke). No proprietary
+# localisation resource, string table or product UI (Acrobat's included) was consulted or copied;
+# add entries the same way. AI-assisted (Claude Code), not yet reviewed by a native speaker; the
+# wording is shared with storytold/craft-i18n (locales/bs/pdfcraft.tsv and common.tsv).
+# Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) are not translated;
+# the trailing "…" of dialog commands is kept.
+
+	Menu	Meni
+	File	Datoteka
+	Edit	Uredi
+	Pages	Stranice
+	View	Prikaz
+	Help	Pomoć
+	Preferences	Postavke
+	Preferences…	Postavke…
+	Interface language	Jezik interfejsa
+@plural	{n} page|{n} pages	{n} stranica|{n} stranice|{n} stranica
+	  · not fixable here	  · ovdje se ne može popraviti
+	 (page {p})	 (stranica {p})
+	 (searching… {s} of {p} pages)	 (pretraga… {s} od {p} stranica)
+	 ({s} not exported: {first})	 ({s} nije izvezeno: {first})
+	 on page {p}	 na stranici {p}
+	 · password-protected	 · zaštićeno lozinkom
+	% of all commits	% svih commitova
+	(none)	(nijedno)
+	+Bin	+Bin
+	+LOC	+LOC
+	, Expires: 	, Ističe: 
+	Digitally signed by	Digitalno potpisao
+	DN: 	DN: 
+	Reason: 	Razlog: 
+	Location: 	Lokacija: 
+	Date: 	Datum: 
+	The labels are in English: the signature's font can't draw them in this language.	Oznake su na engleskom: font potpisa ih ne može iscrtati na ovom jeziku.
+	1 difference found	Pronađena 1 razlika
+	1 file	1 datoteka
+	1 file done	1 datoteka završena
+	1 file needs attention	1 datoteka zahtijeva pažnju
+	1 instance	1 pojavljivanje
+	1 issue	1 problem
+	1 mark	1 oznaka
+	1 page	1 stranica
+	1 page selected	Odabrana 1 stranica
+	1 page selected.	Odabrana 1 stranica.
+	180 degrees	180 stepeni
+	9 digit, A letter, O letter or digit, X any character	9 cifra, A slovo, O slovo ili cifra, X bilo koji znak
+	; 1 page already had text	; 1 stranica je već imala tekst
+	; failed: {list}	; nije uspjelo: {list}
+	; {n} pages already had text	; stranica koje su već imale tekst: {n}
+	? of {n}	? od {n}
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}	@{login}: PR-ova: {prs}, commitova: {commits}, +{added} / −{deleted} linija (Δ {delta}), +{bin_added} / −{bin_deleted} binarnih resursa, {first} – {last}
+	A button	Dugme
+	A clean-room, open-source PDF application written in Rust. MIT OR Apache-2.0.	PDF aplikacija otvorenog koda, napisana od nule u Rustu. MIT OR Apache-2.0.
+	A diagonal CONFIDENTIAL watermark on every page.	Dijagonalni vodeni žig POVJERLJIVO na svakoj stranici.
+	A document needs at least one page: copy instead	Dokument treba barem jednu stranicu: kopirajte umjesto toga
+	A form field has additional actions	Polje obrasca ima dodatne akcije
+	A link	Veza
+	A script	Skripta
+	A stream refers to an external file	Tok se odnosi na vanjsku datoteku
+	A stream uses LZW compression	Tok koristi LZW kompresiju
+	A summary describes the table's purpose and layout. Add a Summary attribute to each table.	Sažetak opisuje svrhu i raspored tabele. Dodajte atribut Summary svakoj tabeli.
+	AI assistant	AI asistent
+	About	O programu
+	About PdfCraft	O PdfCraftu
+	Accepted	Prihvaćeno
+	Accessibility	Pristupačnost
+	Accessibility Checker	Provjera pristupačnosti
+	Accessibility Checker Options	Opcije provjere pristupačnosti
+	Accessibility permission flag	Oznaka dozvole za pristupačnost
+	Accessibility permission flag is set	Oznaka dozvole za pristupačnost je postavljena
+	Acrobat 3.0 and later (40-bit RC4)	Acrobat 3.0 i noviji (40-bitni RC4)
+	Acrobat 5.0 and later (128-bit RC4)	Acrobat 5.0 i noviji (128-bitni RC4)
+	Acrobat 7.0 and later (128-bit AES)	Acrobat 7.0 i noviji (128-bitni AES)
+	Acrobat X and later (256-bit AES)	Acrobat X i noviji (256-bitni AES)
+	Action Wizard	Čarobnjak za akcije
+	Action Wizard…	Čarobnjak za akcije…
+	Action name:	Naziv akcije:
+	Actions	Akcije
+	Actions list	Lista akcija
+	Actual Size	Stvarna veličina
+	Actual size	Stvarna veličina
+	Add	Dodaj
+	Add Bates numbering…	Dodaj Bates numerisanje…
+	Add Page Numbers	Dodaj brojeve stranica
+	Add Step	Dodaj korak
+	Add a button	Dodaj dugme
+	Add a callout	Dodaj oblačić s tekstom
+	Add a checkbox	Dodaj polje za potvrdu
+	Add a comment	Dodaj komentar
+	Add a date field	Dodaj polje datuma
+	Add a digital signature field	Dodaj polje digitalnog potpisa
+	Add a drop-down list	Dodaj padajuću listu
+	Add a list box	Dodaj okvir s listom
+	Add a radio button	Dodaj radio dugme
+	Add a reply	Dodaj odgovor
+	Add a stamp	Dodaj pečat
+	Add a sticky note	Dodaj ljepljivu bilješku
+	Add a sticky note here	Dodaj ljepljivu bilješku ovdje
+	Add a text box	Dodaj okvir za tekst
+	Add a text field	Dodaj tekstualno polje
+	Add alternate text	Dodaj alternativni tekst
+	Add alternate text…	Dodaj alternativni tekst…
+	Add an Action	Dodaj akciju
+	Add an image field	Dodaj polje za sliku
+	Add arrow	Dodaj strelicu
+	Add at least two files	Dodajte barem dvije datoteke
+	Add background	Dodaj pozadinu
+	Add background…	Dodaj pozadinu…
+	Add bookmark	Dodaj zabilješku
+	Add callout	Dodaj oblačić s tekstom
+	Add checkmark	Dodaj kvačicu
+	Add cloud	Dodaj oblak
+	Add comments	Dodaj komentare
+	Add connected lines	Dodaj povezane linije
+	Add content	Dodaj sadržaj
+	Add cross	Dodaj križić
+	Add dot	Dodaj tačku
+	Add drawing	Dodaj crtež
+	Add field	Dodaj polje
+	Add file attachment	Dodaj prilog
+	Add files to combine	Dodaj datoteke za kombinovanje
+	Add files…	Dodaj datoteke…
+	Add folder	Dodaj folder
+	Add folder and subfolders	Dodaj folder i podfoldere
+	Add folder and subfolders…	Dodaj folder i podfoldere…
+	Add folder…	Dodaj folder…
+	Add footer	Dodaj podnožje
+	Add form components	Dodaj komponente obrasca
+	Add header	Dodaj zaglavlje
+	Add header & footer	Dodaj zaglavlje i podnožje
+	Add header & footer…	Dodaj zaglavlje i podnožje…
+	Add highlight	Dodaj isticanje
+	Add image	Dodaj sliku
+	Add image…	Dodaj sliku…
+	Add inserted text	Dodaj umetnuti tekst
+	Add line	Dodaj liniju
+	Add link	Dodaj vezu
+	Add open documents	Dodaj otvorene dokumente
+	Add or edit links	Dodaj ili uredi veze
+	Add oval	Dodaj oval
+	Add polygon	Dodaj mnogougao
+	Add printer marks	Dodaj štamparske oznake
+	Add rectangle	Dodaj pravougaonik
+	Add redaction mark	Dodaj oznaku za redigovanje
+	Add search index	Dodaj indeks pretrage
+	Add signature	Dodaj potpis
+	Add squiggly underline	Dodaj valovito podvlačenje
+	Add stamp	Dodaj pečat
+	Add sticky note	Dodaj ljepljivu bilješku
+	Add strikethrough	Dodaj precrtavanje
+	Add text	Dodaj tekst
+	Add text box	Dodaj okvir za tekst
+	Add the PDFs to combine	Dodajte PDF-ove za kombinovanje
+	Add the choices people pick from.	Dodajte izbore između kojih ljudi biraju.
+	Add the steps this action runs, in order.	Dodajte korake koje ova akcija izvršava, redom.
+	Add to Trusted Certificates	Dodaj u pouzdane certifikate
+	Add to trusted certificates	Dodaj u pouzdane certifikate
+	Add underline	Dodaj podvlačenje
+	Add watermark	Dodaj vodeni žig
+	Add watermark…	Dodaj vodeni žig…
+	Add {what}	Dodaj: {what}
+	Added 1 comment	Dodan 1 komentar
+	Added more than once	Dodano više puta
+	Added the first {n} PDFs in {folder}	Dodano prvih {n} PDF-ova iz {folder}
+	Added {n} comments	Dodano komentara: {n}
+	Adding images arrives on the web with file pickers for images	Dodavanje slika stiže na web s biračima datoteka za slike
+	Adds invisible text over each word; the page image is not changed	Dodaje nevidljiv tekst preko svake riječi; slika stranice se ne mijenja
+	Advanced	Napredno
+	Advanced Options {chevron}	Napredne opcije {chevron}
+	Advanced optimization	Napredna optimizacija
+	Advanced options	Napredne opcije
+	Advanced search…	Napredna pretraga…
+	Algorithm	Algoritam
+	Align	Poravnaj
+	Align fields	Poravnaj polja
+	Align left	Poravnaj lijevo
+	Align right	Poravnaj desno
+	Alignment:	Poravnanje:
+	All	Sve
+	All annotations are tagged	Sve napomene su označene tagovima
+	All document contents	Sav sadržaj dokumenta
+	All document contents except metadata	Sav sadržaj dokumenta osim metapodataka
+	All form fields are tagged	Sva polja obrasca su označena tagovima
+	All form fields have description	Sva polja obrasca imaju opis
+	All multimedia objects are tagged	Svi multimedijalni objekti su označeni tagovima
+	All open documents	Svi otvoreni dokumenti
+	All page content is tagged	Sav sadržaj stranica je označen tagovima
+	All pages	Sve stranice
+	All pages in document	Sve stranice u dokumentu
+	All pages in range	Sve stranice u rasponu
+	All tools	Svi alati
+	Allow Rich Text Formatting	Dozvoli oblikovanje obogaćenog teksta
+	Allow user to enter custom text	Dozvoli korisniku unos prilagođenog teksta
+	Allowed	Dozvoljeno
+	Alternate Text	Alternativni tekst
+	Alternate text	Alternativni tekst
+	Alternate text inside an element that already has alternate text is never read. Remove the inner alternate text.	Alternativni tekst unutar elementa koji već ima alternativni tekst nikad se ne čita. Uklonite unutrašnji alternativni tekst.
+	Alternate text must be associated with some content	Alternativni tekst mora biti povezan s nekim sadržajem
+	Alternate text on an element that contains a link or field hides that annotation from assistive technology. Move the alternate text.	Alternativni tekst na elementu koji sadrži vezu ili polje skriva tu napomenu od pomoćne tehnologije. Premjestite alternativni tekst.
+	Alternate text on an element without page content is never reached. Remove it or attach the element to content.	Alternativni tekst na elementu bez sadržaja stranice nikad se ne dosegne. Uklonite ga ili povežite element sa sadržajem.
+	Alternate text should not hide annotation	Alternativni tekst ne bi trebao skrivati napomenu
+	Alternate text that will never be read	Alternativni tekst koji se nikad neće pročitati
+	An action is already running	Akcija se već izvršava
+	An action with this name already exists.	Akcija s ovim nazivom već postoji.
+	An embedded file has no AFRelationship	Ugrađena datoteka nema AFRelationship
+	An image asks to be interpolated	Slika traži interpolaciju
+	An image has alternates or OPI information	Slika ima alternative ili OPI informacije
+	An open-source PDF workbench — local, private, and scriptable.	PDF radionica otvorenog koda — lokalna, privatna i skriptabilna.
+	Angle	Ugao
+	Animation that flashes can cause seizures. Check scripts and media for flicker.	Animacija koja treperi može izazvati napade. Provjerite skripte i medije na treperenje.
+	Annotations, form fill-in, and digital signatures	Napomene, popunjavanje obrazaca i digitalni potpisi
+	Another file dialog is still open. Finish with it first.	Drugi dijalog za datoteke je još otvoren. Prvo završite s njim.
+	Any	Bilo koje
+	Any except extracting pages	Sve osim izdvajanja stranica
+	Anyone opening the document will need this password. It's applied when you save.	Svako ko otvori dokument trebat će ovu lozinku. Primjenjuje se pri čuvanju.
+	Appear behind page	Prikaži iza stranice
+	Appear on top of page	Prikaži iznad stranice
+	Appearance	Izgled
+	Application	Aplikacija
+	Applied 1 redaction mark. Save to remove the content from the file.	Primijenjena 1 oznaka za redigovanje. Sačuvajte da uklonite sadržaj iz datoteke.
+	Applied {n} redaction marks. Save to remove the content from the file.	Primijenjeno oznaka za redigovanje: {n}. Sačuvajte da uklonite sadržaj iz datoteke.
+	Applies to 1 page	Odnosi se na 1 stranicu
+	Applies to {n} pages	Odnosi se na stranica: {n}
+	Apply	Primijeni
+	Apply PDF standards	Primijeni PDF standarde
+	Apply redactions	Primijeni redigovanja
+	Apply redactions…	Primijeni redigovanja…
+	Apply scale	Primijeni skalu
+	Appropriate nesting	Odgovarajuće ugnježđivanje
+	April	April
+	Arbitrary Mask	Proizvoljna maska
+	Archive documents	Arhiviraj dokumente
+	Area	Područje
+	Arrow	Strelica
+	ArtCraft website	Web stranica ArtCrafta
+	Ask about this document	Pitaj o ovom dokumentu
+	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Traži od GitHuba najnovije izdanje. Ništa se ne preuzima niti instalira automatski.
+	Associated with content	Povezano sa sadržajem
+	At least one signature has problems.	Barem jedan potpis ima problema.
+	At least one signature is invalid.	Barem jedan potpis je nevažeći.
+	At most	Najviše
+	Attach a file	Priloži datoteku
+	Attach file	Priloži datoteku
+	Attachment	Prilog
+	Attachments	Prilozi
+	Attachments Panel and Page	Panel priloga i stranica
+	Audit space usage	Provjera iskorištenosti prostora
+	Audit space usage…	Provjera iskorištenosti prostora…
+	August	August
+	Author	Autor
+	Auto	Automatski
+	Auto portrait/landscape	Automatski uspravno/položeno
+	Auto-rotate pages	Automatski rotiraj stranice
+	Auto-size text to fit redaction region	Automatski prilagodi veličinu teksta području redigovanja
+	Automatically tag PDF	Automatski označi PDF tagovima
+	Available	Dostupno
+	Back	Nazad
+	Back side only	Samo poleđina
+	Back to all tools	Nazad na sve alate
+	Back to the document	Nazad na dokument
+	Background	Pozadina
+	Basic constraints	Osnovna ograničenja
+	Bates numbering	Bates numerisanje
+	Before each selected page (select pages in Organize)	Prije svake odabrane stranice (odaberite stranice u Organizuj)
+	Before the number	Prije broja
+	Beveled	Zakošeno
+	Bicubic downsampling to	Bikubično smanjivanje uzorkovanja na
+	Binary assets added	Dodani binarni resursi
+	Binary assets removed	Uklonjeni binarni resursi
+	Binding	Uvez
+	Binding:	Uvez:
+	Black	Crna
+	Blank page	Prazna stranica
+	Blue	Plava
+	Bold	Podebljano
+	Booklet	Knjižica
+	Booklet subset:	Podskup knjižice:
+	Bookmark options	Opcije zabilješki
+	Bookmarks	Zabilješke
+	Bookmarks Panel and Page	Panel zabilješki i stranica
+	Bookmarks are present in large documents	Zabilješke su prisutne u velikim dokumentima
+	Border Color:	Boja okvira:
+	Borders and Colors	Okviri i boje
+	Both	Oboje
+	Both sides	Obje strane
+	Bottom	Dno
+	Bottom:	Dno:
+	Box	Okvir
+	Bring your own model (off by default)	Donesite vlastiti model (isključeno prema zadanom)
+	Browse…	Pregledaj…
+	Button	Dugme
+	Button Properties	Svojstva dugmeta
+	Button Style:	Stil dugmeta:
+	Button is checked by default	Dugme je označeno prema zadanom
+	Buttons with the same name and value are selected in unison	Dugmad s istim nazivom i vrijednošću biraju se zajedno
+	Bytes	Bajtovi
+	Calculate	Izračunaj
+	Calibrate from two points	Kalibriraj iz dvije tačke
+	Callout	Oblačić s tekstom
+	Can't be read: {e}	Ne može se pročitati: {e}
+	Cancel	Otkaži
+	Cancelled	Otkazano
+	Cancelling…	Otkazivanje…
+	Case-sensitive	Razlikuje velika i mala slova
+	Category:	Kategorija:
+	Center	Sredina
+	Center Footer Text	Tekst podnožja po sredini
+	Center Header Text	Tekst zaglavlja po sredini
+	Center horizontally	Centriraj vodoravno
+	Center vertically	Centriraj okomito
+	Center window on screen	Centriraj prozor na ekranu
+	Centre	Sredina
+	Certificate Viewer	Preglednik certifikata
+	Certificates	Certifikati
+	Certified by {by}	Certificirao {by}
+	Certify	Certificiraj
+	Certify (invisible signature)	Certificiraj (nevidljiv potpis)
+	Certify (visible signature)	Certificiraj (vidljiv potpis)
+	Change comment properties	Promijeni svojstva komentara
+	Change document properties	Promijeni svojstva dokumenta
+	Change field properties	Promijeni svojstva polja
+	Change initial view	Promijeni početni prikaz
+	Change initials	Promijeni inicijale
+	Change link properties	Promijeni svojstva veze
+	Change reading options	Promijeni opcije čitanja
+	Change reading options…	Promijeni opcije čitanja…
+	Change settings…	Promijeni postavke…
+	Change signature	Promijeni potpis
+	Change {key}	Promijeni {key}
+	Change {what}	Promijeni: {what}
+	Changes allowed	Dozvoljene promjene
+	Changing the document	Mijenjanje dokumenta
+	Character encoding	Kodiranje znakova
+	Character spacing	Razmak znakova
+	Check	Provjeri
+	Check Again	Provjeri ponovo
+	Check Box Properties	Svojstva polja za potvrdu
+	Check Box Style:	Stil polja za potvrdu:
+	Check again	Provjeri ponovo
+	Check box is checked by default	Polje za potvrdu je označeno prema zadanom
+	Check for accessibility	Provjeri pristupačnost
+	Check for accessibility…	Provjeri pristupačnost…
+	Check for updates	Provjeri ažuriranja
+	Check for updates…	Provjeri ažuriranja…
+	Check spelling	Provjeri pravopis
+	Check that the tags read in the order a sighted reader would. Use the Reading Order tool or the Tags panel to correct it.	Provjerite da se tagovi čitaju redoslijedom kojim bi čitao čitalac koji vidi. Za ispravku koristite alat Redoslijed čitanja ili panel Tagovi.
+	Check the pages of {name}: {why}	Provjeri stranice dokumenta {name}: {why}
+	CheckBox	Polje za potvrdu
+	Checkbox	Polje za potvrdu
+	Checked	Označeno
+	Checking Options ({on} of 32 in all categories)	Opcije provjere ({on} od 32 u svim kategorijama)
+	Checking for a newer version…	Provjera nove verzije…
+	Checkmark	Kvačica
+	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Odaberite PNG ili JPEG sliku (do 4 MiB). Prozirnost se čuva.
+	Choose a folder for the exported files	Odaberite folder za izvezene datoteke
+	Choose a folder for the extracted pages	Odaberite folder za izdvojene stranice
+	Choose a folder for the results	Odaberite folder za rezultate
+	Choose a folder for the searchable files	Odaberite folder za datoteke s mogućnošću pretrage
+	Choose a folder for the split files	Odaberite folder za razdvojene datoteke
+	Choose a folder on this computer to pin	Odaberite folder na ovom računaru za prikvačivanje
+	Choose a layout:	Odaberite raspored:
+	Choose a stamp, then click on the page to place it.	Odaberite pečat, zatim kliknite na stranicu da ga postavite.
+	Choose an image	Odaberite sliku
+	Choose images	Odaberite slike
+	Choose the digital ID that you want to use for signing:	Odaberite digitalni ID koji želite koristiti za potpisivanje:
+	Circle	Krug
+	Clean Up	Očisti
+	Clear	Očisti
+	Clear All	Očisti sve
+	Clear Recent Files	Očisti nedavne datoteke
+	Clear all	Očisti sve
+	Clear form	Očisti obrazac
+	Clear redaction marks	Očisti oznake za redigovanje
+	Clear selection / close find	Očisti odabir / zatvori pretragu
+	Click on the page to add a {tool}, or drag to set its size	Kliknite na stranicu da dodate {tool} ili prevucite da postavite veličinu
+	Click on the page to add text; each click starts a new box, and ✓ finishes. Drag items to move them, drag a corner to resize, double-click text to edit it.	Kliknite na stranicu da dodate tekst; svaki klik započinje novi okvir, a ✓ završava. Prevucite stavke da ih pomjerite, prevucite ugao da promijenite veličinu, dvostruki klik na tekst da ga uredite.
+	Click text or an image to edit it	Kliknite tekst ili sliku da ih uredite
+	Click the first point to begin.	Kliknite prvu tačku za početak.
+	Click to sort, drag to move the column. Drag its edge to resize it.	Kliknite za sortiranje, prevucite da pomjerite kolonu. Prevucite njenu ivicu da promijenite veličinu.
+	Click vertices. Enter or double-click finishes a perimeter or area. Click the first point to close an area.	Kliknite tjemena. Enter ili dvostruki klik završava obim ili površinu. Kliknite prvu tačku da zatvorite površinu.
+	Clipboard	Međuspremnik
+	Clockwise 90 degrees	U smjeru kazaljke na satu za 90 stepeni
+	Close	Zatvori
+	Close (Esc)	Zatvori (Esc)
+	Close all	Zatvori sve
+	Close file	Zatvori datoteku
+	Close panel	Zatvori panel
+	Cloud	Oblak
+	Collapse	Skupi
+	Collapse all bookmarks	Skupi sve zabilješke
+	Collate	Složi po kopijama
+	Color Images	Slike u boji
+	Color Spaces	Prostori boja
+	Color contrast	Kontrast boja
+	Color:	Boja:
+	Colour	Boja
+	Comb of	Češalj od
+	Combine	Kombinuj
+	Combine files	Kombinuj datoteke
+	Combine files…	Kombinuj datoteke…
+	Combined {n} files	Kombinovano datoteka: {n}
+	Combo	Kombinovani okvir
+	Coming in milestone	Stiže u fazi
+	Coming in milestone {m}. Items marked Ready work today.	Stiže u fazi {m}. Stavke označene kao Spremno rade već danas.
+	Command	Naredba
+	Comment and form data	Komentari i podaci obrasca
+	Comment list	Lista komentara
+	Commenting	Komentarisanje
+	Commenting, filling in form fields, and signing existing signature fields	Komentarisanje, popunjavanje polja obrasca i potpisivanje postojećih polja za potpis
+	Comments	Komentari
+	Comments & Forms	Komentari i obrasci
+	Comments and markups	Komentari i oznake
+	Comments only	Samo komentari
+	Comments panel	Panel komentara
+	Comments, links and fields must be in the tag tree to be announced. Tag the annotations.	Komentari, veze i polja moraju biti u stablu tagova da bi se najavili. Označite napomene tagovima.
+	Commit selected value immediately	Odmah potvrdi odabranu vrijednost
+	Commits	Commitovi
+	Common Properties	Zajednička svojstva
+	Company	Firma
+	Compare	Uporedi
+	Compare Files	Uporedi datoteke
+	Compare files	Uporedi datoteke
+	Compare files…	Uporedi datoteke…
+	Compare this file with an older version: Compare files… in All tools.	Uporedite ovu datoteku sa starijom verzijom: Uporedi datoteke… u Svi alati.
+	Compatibility	Kompatibilnost
+	Completed	Završeno
+	Compress a PDF	Komprimiraj PDF
+	Compress document structure (object streams)	Komprimiraj strukturu dokumenta (tokovi objekata)
+	Compression	Kompresija
+	Configure New Digital ID	Podesi novi digitalni ID
+	Remove "{name}" from this list? The file itself is not deleted.	Ukloniti "{name}" s ove liste? Sama datoteka se ne briše.
+	Configure a Digital ID for Signing	Podesi digitalni ID za potpisivanje
+	Confirm Password	Potvrdi lozinku
+	Conformance level:	Nivo usklađenosti:
+	Connected lines	Povezane linije
+	Console	Konzola
+	Content Streams	Tokovi sadržaja
+	Content copying	Kopiranje sadržaja
+	Content copying for accessibility	Kopiranje sadržaja radi pristupačnosti
+	Continue	Nastavi
+	Continuous scrolling	Neprekidno pomjeranje
+	Show gaps between pages	Prikaži razmake između stranica
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Sakrij razmake da se ivice stranica spoje. Margine unutar PDF-a ostaju nepromijenjene.
+	Contributors	Saradnici
+	Convert	Pretvori
+	Convert colors	Pretvori boje
+	Copied {what}	Kopirano: {what}
+	Copies:	Kopije:
+	Copy	Kopiraj
+	Copy or cut pages first	Prvo kopirajte ili izrežite stranice
+	Copy pages	Kopiraj stranice
+	Copy selected text	Kopiraj odabrani tekst
+	Copy text	Kopiraj tekst
+	Correct recognized text	Ispravi prepoznati tekst
+	Could not save: {e}	Nije moguće sačuvati: {e}
+	Couldn't add {name}: {e}	Nije moguće dodati {name}: {e}
+	Couldn't check for updates: {e}	Nije moguće provjeriti ažuriranja: {e}
+	Couldn't combine files: {e}	Nije moguće kombinovati datoteke: {e}
+	Couldn't create a PDF: {e}	Nije moguće kreirati PDF: {e}
+	Couldn't download {name}: {e}	Nije moguće preuzeti {name}: {e}
+	Couldn't extract pages: {e}	Nije moguće izdvojiti stranice: {e}
+	Couldn't fit the visible content: {e}	Nije moguće uklopiti vidljivi sadržaj: {e}
+	Couldn't import the signature image: {e}	Nije moguće uvesti sliku potpisa: {e}
+	Couldn't open revision {n}: {e}	Nije moguće otvoriti reviziju {n}: {e}
+	Couldn't open the result: {e}	Nije moguće otvoriti rezultat: {e}
+	Couldn't open the signed version: {e}	Nije moguće otvoriti potpisanu verziju: {e}
+	Couldn't open {name}: {e}	Nije moguće otvoriti {name}: {e}
+	Couldn't optimize the file	Nije moguće optimizirati datoteku
+	Couldn't optimize the file: {e}	Nije moguće optimizirati datoteku: {e}
+	Couldn't read {name}: {e}	Nije moguće pročitati {name}: {e}
+	Couldn't recover {name}: {e}	Nije moguće oporaviti {name}: {e}
+	Couldn't save the image: {e}	Nije moguće sačuvati sliku: {e}
+	Couldn't save {name}: {e}	Nije moguće sačuvati {name}: {e}
+	Couldn't save: {e}	Nije moguće sačuvati: {e}
+	Couldn't show the file picker. Please try again.	Nije moguće prikazati birač datoteka. Pokušajte ponovo.
+	Couldn't split: {e}	Nije moguće razdvojiti: {e}
+	Couldn't summarize comments: {e}	Nije moguće sažeti komentare: {e}
+	Couldn't take the snapshot: {e}	Nije moguće napraviti snimak: {e}
+	Couldn't use {name}: {e}	Nije moguće koristiti {name}: {e}
+	Couldn't write {name}: {e}	Nije moguće zapisati {name}: {e}
+	the name is not a plain file name	naziv nije običan naziv datoteke
+	Couldn't write {path}: {e}	Nije moguće zapisati {path}: {e}
+	Counterclockwise 90 degrees	Suprotno od kazaljke na satu za 90 stepeni
+	Country/Region	Država/regija
+	Create	Kreiraj
+	Create Custom Stamp	Kreiraj prilagođeni pečat
+	Create Link	Kreiraj vezu
+	Create PDF Comment Summary	Kreiraj sažetak PDF komentara
+	Create PDF comment summary…	Kreiraj sažetak PDF komentara…
+	Create PDF from clipboard	Kreiraj PDF iz međuspremnika
+	Create PDF from file…	Kreiraj PDF iz datoteke…
+	Create PDF from images	Kreiraj PDF iz slika
+	Create PDF from images…	Kreiraj PDF iz slika…
+	Create PDF from multiple files…	Kreiraj PDF iz više datoteka…
+	Create separate PDFs…	Kreiraj zasebne PDF-ove…
+	Create a PDF	Kreiraj PDF
+	Create a new Digital ID (self-signed, saved to a password-protected file)	Kreiraj novi digitalni ID (samopotpisan, sačuvan u datoteci zaštićenoj lozinkom)
+	Create accessibility report	Kreiraj izvještaj o pristupačnosti
+	Create custom stamp…	Kreiraj prilagođeni pečat…
+	Create from	Kreiraj iz
+	Create link	Kreiraj vezu
+	Create links from URLs	Kreiraj veze iz URL-ova
+	Create {what}	Kreiraj: {what}
+	Created 1 link	Kreirana 1 veza
+	Created a PDF from the first {n} files	Kreiran PDF iz prvih {n} datoteka
+	Created a PDF from {n} files	Kreiran PDF iz datoteka: {n}
+	Created a PDF from {n} files; left out: {names}	Kreiran PDF iz datoteka: {n}; izostavljeno: {names}
+	Created a comment summary	Kreiran sažetak komentara
+	Created {n} links	Kreirano veza: {n}
+	Creates 1 file from {n} pages.	Kreira 1 datoteku iz stranica: {n}.
+	Creates {f} files from {n} pages.	Kreira datoteka: {f}, iz stranica: {n}.
+	Credit Cards	Kreditne kartice
+	Crop (% trimmed from each side)	Izreži (% odsječeno sa svake strane)
+	Crop page	Izreži stranicu
+	Crop pages	Izreži stranice
+	Cross	Križ
+	Currency symbol:	Simbol valute:
+	Current page	Trenutna stranica
+	Current page ({n})	Trenutna stranica ({n})
+	Current page — type a page number or label (such as iv) and press Enter	Trenutna stranica — upišite broj ili oznaku stranice (npr. iv) i pritisnite Enter
+	Zoom — type a percentage and press Enter	Zum — unesite procenat i pritisnite Enter
+	Custom	Prilagođeno
+	Custom scale:	Prilagođena skala:
+	Custom stamps arrive on the web with file pickers for images	Prilagođeni pečati stižu na web s biračima datoteka za slike
+	Custom text:	Prilagođeni tekst:
+	Custom:	Prilagođeno:
+	Cut	Izreži
+	Cut and stack	Izreži i složi
+	Cut marks	Oznake za rezanje
+	Cut pages	Izreži stranice
+	Cut {what}	Izreži: {what}
+	DPI sets the printed page size without resampling the image.	DPI postavlja veličinu štampane stranice bez ponovnog uzorkovanja slike.
+	Dark gray	Tamnosiva
+	Dark gray theme	Tamnosiva tema
+	Dashed	Isprekidano
+	Date	Datum
+	Date field	Polje datuma
+	Dates	Datumi
+	December	Decembar
+	Decimal places:	Decimalna mjesta:
+	Decimals	Decimale
+	Declared conformance: {shown}	Deklarisana usklađenost: {shown}
+	Decorative figure	Ukrasna slika
+	Default	Zadano
+	Default Value:	Zadana vrijednost:
+	Default page display	Zadani prikaz stranice
+	Default workspace mode	Zadani način radnog prostora
+	Default zoom	Zadano zumiranje
+	Default:	Zadano:
+	Delete	Izbriši
+	Delete bookmark	Izbriši zabilješku
+	Delete comment	Izbriši komentar
+	Delete content	Izbriši sadržaj
+	Delete document JavaScript	Izbriši JavaScript dokumenta
+	Delete field	Izbriši polje
+	Delete image	Izbriši sliku
+	Delete link	Izbriši vezu
+	Delete page	Izbriši stranicu
+	Delete pages	Izbriši stranice
+	Delete pages (Delete)	Izbriši stranice (Delete)
+	Delete pages after extracting	Izbriši stranice nakon izdvajanja
+	Delete selected fields	Izbriši odabrana polja
+	Delete selected pages (Organize)	Izbriši odabrane stranice (Organizuj)
+	Delete stamp	Izbriši pečat
+	Delete {o}	Izbriši {o}
+	Deleted	Izbrisano
+	Describe the figure	Opišite sliku
+	Description	Opis
+	Description:	Opis:
+	Details	Detalji
+	Detect form fields	Otkrij polja obrasca
+	Detected 1 form field	Otkriveno 1 polje obrasca
+	Detected {n} form fields	Otkriveno polja obrasca: {n}
+	Device colour is used, but there is no PDF/A output intent	Koristi se boja uređaja, ali nema PDF/A izlazne namjene
+	DeviceCMYK is used: it needs a CMYK output intent (not added automatically)	Koristi se DeviceCMYK: potrebna je CMYK izlazna namjena (ne dodaje se automatski)
+	Diagnostic details	Dijagnostički detalji
+	Diamond	Romb
+	Digital ID	Digitalni ID
+	Digital ID password	Lozinka digitalnog ID-a
+	Digital Signature Properties	Svojstva digitalnog potpisa
+	Digital signature	Digitalni potpis
+	Digitally sign	Digitalno potpiši
+	Direction:	Smjer:
+	Discard	Odbaci
+	Discard Objects	Odbaci objekte
+	Discard User Data	Odbaci korisničke podatke
+	Discard all comments, forms and multimedia	Odbaci sve komentare, obrasce i multimediju
+	Discard all links, actions and JavaScript	Odbaci sve veze, akcije i JavaScript
+	Discard all object data (file attachments)	Odbaci sve podatke objekata (priloge)
+	Discard alternate images	Odbaci alternativne slike
+	Discard bookmarks	Odbaci zabilješke
+	Discard document information and metadata	Odbaci informacije o dokumentu i metapodatke
+	Discard document tags	Odbaci tagove dokumenta
+	Discard embedded page thumbnails	Odbaci ugrađene sličice stranica
+	Discard embedded print settings	Odbaci ugrađene postavke štampanja
+	Discard hidden layer content	Odbaci sadržaj skrivenih slojeva
+	Discard hidden text	Odbaci skriveni tekst
+	Discard private data of other applications	Odbaci privatne podatke drugih aplikacija
+	Dismiss	Odbaci
+	Display name	Ime za prikaz
+	Display theme	Tema prikaza
+	Distance	Udaljenost
+	Distinguished name	Razlikovno ime
+	Distribute	Rasporedi ravnomjerno
+	Distribute fields	Rasporedi polja
+	Document	Dokument
+	Document JavaScripts	JavaScript skripte dokumenta
+	Document JavaScripts…	JavaScript skripte dokumenta…
+	Document Overhead	Opterećenje dokumenta
+	Document Properties	Svojstva dokumenta
+	Document Title	Naslov dokumenta
+	Document actions	Akcije dokumenta
+	Document and markups	Dokument i oznake
+	Document and stamps	Dokument i pečati
+	Document assembly	Sastavljanje dokumenta
+	Document has appropriate color contrast	Dokument ima odgovarajući kontrast boja
+	Document is not image-only PDF	Dokument nije PDF samo sa slikama
+	Document is tagged PDF	Dokument je PDF s tagovima
+	Document language	Jezik dokumenta
+	Document properties (⌘D)	Svojstva dokumenta (⌘D)
+	Document properties…	Svojstva dokumenta…
+	Document sanitized. Save to finish: saving rewrites the whole file.	Dokument je očišćen. Sačuvajte za završetak: čuvanje ponovo zapisuje cijelu datoteku.
+	Document structure provides a logical reading order	Struktura dokumenta pruža logičan redoslijed čitanja
+	Document title is showing in title bar	Naslov dokumenta se prikazuje u naslovnoj traci
+	Documents and view	Dokumenti i prikaz
+	Documents of more than 20 pages need bookmarks for navigation. Add bookmarks for the main sections.	Dokumenti s više od 20 stranica trebaju zabilješke za navigaciju. Dodajte zabilješke za glavne odjeljke.
+	Don't save	Nemoj sačuvati
+	Done	Gotovo
+	Dot	Tačka
+	Double-click	Dvostruki klik
+	Download	Preuzmi
+	Downloaded {name}	Preuzeto: {name}
+	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	Preuzimanje priloga na webu stiže s M3.10 ({n} bajtova spremno)
+	Downsample to	Smanji uzorkovanje na
+	Also recognize pages that already have text	Prepoznaj i stranice koje već imaju tekst
+	Pictures on those pages are recognized too; words already in the page's text are not added again	Slike na tim stranicama se također prepoznaju; riječi koje su već u tekstu stranice ne dodaju se ponovo
+	Drag a rectangle around the area to copy	Prevucite pravougaonik oko područja za kopiranje
+	Drag a rectangle on a page to crop it; double-click a page for Set Page Boxes	Prevucite pravougaonik na stranici da je izrežete; dvostruki klik na stranicu za Postavi okvire stranice
+	Drag a rectangle to create a link; double-click a link to edit it	Prevucite pravougaonik da kreirate vezu; dvostruki klik na vezu da je uredite
+	Drag to draw the area where the signature should appear.	Prevucite da nacrtate područje gdje se treba pojaviti potpis.
+	Drag to reorder	Prevucite za promjenu redoslijeda
+	Draw	Crtaj
+	Draw a cloud	Nacrtaj oblak
+	Draw a line	Nacrtaj liniju
+	Draw a polygon	Nacrtaj mnogougao
+	Draw a rectangle	Nacrtaj pravougaonik
+	Draw an arrow	Nacrtaj strelicu
+	Draw an oval	Nacrtaj oval
+	Draw connected lines	Nacrtaj povezane linije
+	Draw freehand	Crtaj prostoručno
+	Draw your {what} below.	Nacrtajte {what} ispod.
+	Drawing	Crtež
+	Drawing scale	Skala crteža
+	Scale	Skaliraj
+	Common scales	Uobičajene razmjere
+	Enter a scale such as 1:50.	Unesite razmjer, npr. 1:50.
+	Applying a scale switches units to m / mm.	Primjena razmjera mijenja jedinice u m / mm.
+	Drop PDFs or folders here, or choose them.	Ispustite PDF-ove ili foldere ovdje ili ih odaberite.
+	Drop-down list	Padajuća lista
+	Dropdown Properties	Svojstva padajuće liste
+	Duplicate "{name}" onto:	Dupliciraj "{name}" na:
+	Duplicate Field	Dupliciraj polje
+	Duplicate field	Dupliciraj polje
+	Duplicate page	Dupliciraj stranicu
+	Duplicate pages	Dupliciraj stranice
+	Duplicate…	Dupliciraj…
+	Dynamic	Dinamično
+	Dynamic XFA form laid out from its template: {pages}, {fields}.	Dinamički XFA obrazac raspoređen iz predloška: {pages}, {fields}.
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Skripte ovog obrasca su isključene jer se jedna izvršavala predugo. Ponovo otvorite dokument da ih ponovo pokrenete.
+	E-Sign	E-potpis
+	Each field needs a tooltip that says what to enter. Add one in Field Properties > General > Tooltip.	Svako polje treba opis alata koji kaže šta treba unijeti. Dodajte ga u Svojstva polja > Općenito > Opis alata.
+	Each file holds as many of the {n} pages as fit.	Svaka datoteka sadrži onoliko od {n} stranica koliko stane.
+	Each image is measured where pages draw it; an image is replaced only if the result is smaller.	Svaka slika se mjeri tamo gdje je stranice crtaju; slika se zamjenjuje samo ako je rezultat manji.
+	Each image once, named after the document and page. JPEG images are saved unchanged; others as PNG.	Svaka slika jednom, nazvana po dokumentu i stranici. JPEG slike se čuvaju nepromijenjene; ostale kao PNG.
+	Earlier in tab order	Ranije u redoslijedu tabulatora
+	Edit Action	Uredi akciju
+	Edit a PDF	Uredi PDF
+	Edit comment	Uredi komentar
+	Edit content	Uredi sadržaj
+	Edit document JavaScript	Uredi JavaScript dokumenta
+	Edit fields	Uredi polja
+	Edit image	Uredi sliku
+	Edit script of {name}	Uredi skriptu za {name}
+	Edit text	Uredi tekst
+	Load document font	Učitaj font dokumenta
+	Edit text & images	Uredi tekst i slike
+	Edit text…	Uredi tekst…
+	Editing	Uređivanje
+	Edit…	Uredi…
+	Email Address	E-mail adresa
+	Email Addresses	E-mail adrese
+	Embedded Files	Ugrađene datoteke
+	Embedded files must be PDF/A files themselves (use PDF/A-3 for others)	Ugrađene datoteke moraju i same biti PDF/A datoteke (za ostale koristite PDF/A-3)
+	Enable Acrobat JavaScript	Omogući Acrobat JavaScript
+	Enable copying of text, images, and other content	Omogući kopiranje teksta, slika i ostalog sadržaja
+	Enable text access for screen reader devices for the visually impaired	Omogući pristup tekstu čitačima ekrana za slabovidne
+	Encrypt	Šifruj
+	Encrypt with certificate	Šifruj certifikatom
+	Encryption	Šifrovanje
+	Endpoint	Krajnja tačka
+	Endpoints	Krajnje tačke
+	Enhance scanned file	Poboljšaj skeniranu datoteku
+	Enter the password that opens it	Unesite lozinku kojom se otvara
+	Enter the permissions password to allow combining	Unesite lozinku za dozvole da omogućite kombinovanje
+	Entire page	Cijela stranica
+	Erase	Briši
+	Erase drawings	Izbriši crteže
+	Eraser	Gumica
+	Even Pages Only	Samo parne stranice
+	Even and Odd Pages	Parne i neparne stranice
+	Even pages	Parne stranice
+	Even pages only	Samo parne stranice
+	Every PDF in the folder	Svaki PDF u folderu
+	Every PDF in the folder and the folders inside it	Svaki PDF u folderu i folderima unutar njega
+	Everything on a page must be tagged or marked as an artifact (decoration, headers, footers). Tag the untagged content.	Sve na stranici mora biti označeno tagom ili kao artefakt (ukras, zaglavlja, podnožja). Označite neoznačeni sadržaj.
+	Example: {sample}	Primjer: {sample}
+	Exclude images smaller than	Isključi slike manje od
+	Execute a menu item	Izvrši stavku menija
+	Expand	Proširi
+	Expand all bookmarks	Proširi sve zabilješke
+	Expand top-level bookmarks	Proširi zabilješke najvišeg nivoa
+	Explain	Objasni
+	Export	Izvezi
+	Export All Images	Izvezi sve slike
+	Export Value: {on}	Izvozna vrijednost: {on}
+	Export a PDF	Izvezi PDF
+	Export all comments to data file…	Izvezi sve komentare u datoteku podataka…
+	Export all images	Izvezi sve slike
+	Export all images…	Izvezi sve slike…
+	Export all to data file…	Izvezi sve u datoteku podataka…
+	Export certificate	Izvezi certifikat
+	Export certificate…	Izvezi certifikat…
+	Export comments	Izvezi komentare
+	Export data	Izvezi podatke
+	Export form data	Izvezi podatke obrasca
+	Export form data…	Izvezi podatke obrasca…
+	Export measurements	Izvezi mjerenja
+	Export measurements as CSV	Izvezi mjerenja kao CSV
+	Export stopped: {e}	Izvoz zaustavljen: {e}
+	Export to	Izvezi u
+	Export to HTML…	Izvezi u HTML…
+	Export to Image	Izvezi u sliku
+	Export to RTF…	Izvezi u RTF…
+	Export to Text	Izvezi u tekst
+	Export to Word…	Izvezi u Word…
+	Export to PowerPoint…	Izvezi u PowerPoint…
+	Export to image…	Izvezi u sliku…
+	Export to text…	Izvezi u tekst…
+	Exported 1 image	Izvezena 1 slika
+	Exported the text of 1 page	Izvezen tekst 1 stranice
+	Exported the text of {n} pages	Izvezen tekst stranica: {n}
+	Exported to {path}	Izvezeno u {path}
+	Exported {n} images	Izvezeno slika: {n}
+	Exporting… {d} of {t}	Izvoz… {d} od {t}
+	Export…	Izvezi…
+	Extended Graphics States	Prošireni grafički režimi
+	Extract	Izdvoji
+	Extract pages	Izdvoji stranice
+	Extract pages as separate files	Izdvoji stranice kao zasebne datoteke
+	Extract pages to a new document	Izdvoji stranice u novi dokument
+	Extract pages…	Izdvoji stranice…
+	Extracted 1 page	Izdvojena 1 stranica
+	Extracted {n} pages	Izdvojeno stranica: {n}
+	Failed	Nije uspjelo
+	February	Februar
+	Field	Polje
+	Field descriptions	Opisi polja
+	Field is used for file selection	Polje se koristi za odabir datoteke
+	Field list	Lista polja
+	Field names (comma-separated)	Nazivi polja (odvojeni zarezom)
+	Field names with + - * / and parentheses; put \\ before spaces in names.	Nazivi polja s + - * / i zagradama; stavite \\ ispred razmaka u nazivima.
+	Field properties	Svojstva polja
+	Field properties…	Svojstva polja…
+	Field value is in range:	Vrijednost polja je u rasponu:
+	Field value is not validated	Vrijednost polja se ne provjerava
+	Field: {field} on page {p}	Polje: {field} na stranici {p}
+	Fields	Polja
+	Fields to reset (comma-separated; empty: all)	Polja za resetovanje (odvojena zarezom; prazno: sva)
+	Figure {i} of {n}{page}	Slika {i} od {n}{page}
+	Figures alternate text	Alternativni tekst slika
+	Figures require alternate text	Slike zahtijevaju alternativni tekst
+	File (.p12, .pfx)	Datoteka (.p12, .pfx)
+	File Name	Naziv datoteke
+	File attachments	Prilozi
+	File name	Naziv datoteke
+	File size	Veličina datoteke
+	Files are combined from top to bottom. Leave Pages empty to take every page.	Datoteke se kombinuju odozgo prema dolje. Ostavite Stranice prazno da uzmete svaku stranicu.
+	Files are combined in this order. Leave Pages empty to take every page.	Datoteke se kombinuju ovim redoslijedom. Ostavite Stranice prazno da uzmete svaku stranicu.
+	Files for {name}	Datoteke za {name}
+	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	Datoteke koje otvorite u PdfCraftu pojavljuju se ovdje. Ispustite PDF bilo gdje da ga otvorite.
+	Fill	Ispuna
+	Fill & Sign	Popuni i potpiši
+	Fill & Sign: add text	Popuni i potpiši: dodaj tekst
+	Fill & Sign: change initials	Popuni i potpiši: promijeni inicijale
+	Fill & Sign: change signature	Popuni i potpiši: promijeni potpis
+	Fill & Sign: checkmark	Popuni i potpiši: kvačica
+	Fill & Sign: cross	Popuni i potpiši: križić
+	Fill & Sign: date	Popuni i potpiši: datum
+	Fill & Sign: dot	Popuni i potpiši: tačka
+	Fill & Sign: initials	Popuni i potpiši: inicijali
+	Fill & Sign: line	Popuni i potpiši: linija
+	Fill & Sign: remove saved initials	Popuni i potpiši: ukloni sačuvane inicijale
+	Fill & Sign: remove saved signature	Popuni i potpiši: ukloni sačuvani potpis
+	Fill & Sign: sign	Popuni i potpiši: potpiši
+	Fill Color:	Boja ispune:
+	Fill in {name}	Popuni {name}
+	Filling in form fields and signing existing signature fields	Popunjavanje polja obrasca i potpisivanje postojećih polja za potpis
+	Filling of form fields	Popunjavanje polja obrasca
+	Filter comments	Filtriraj komentare
+	Find options	Opcije pretrage
+	Find text	Pronađi tekst
+	Find text and redact	Pronađi tekst i rediguj
+	Find text and redact…	Pronađi tekst i rediguj…
+	Find tools and commands	Pronađi alate i naredbe
+	Find tools and commands…	Pronađi alate i naredbe…
+	Find…	Pronađi…
+	First	Prvo
+	First / last page	Prva / posljednja stranica
+	First commit	Prvi commit
+	Fit	Uklopi
+	Fit Height	Uklopi visinu
+	Fit Page	Uklopi stranicu
+	Fit Visible	Uklopi vidljivo
+	Fit Width	Uklopi širinu
+	Fit one full page	Uklopi jednu cijelu stranicu
+	Fit to height	Uklopi po visini
+	Fit to page	Uklopi stranicu
+	Fit to width	Uklopi po širini
+	Fit to width scrolling	Pomjeranje s uklapanjem po širini
+	Fit visible	Uklopi vidljivo
+	Fix	Popravi
+	Fix hairlines	Popravi tanke linije
+	Fix reading order	Popravi redoslijed čitanja
+	Fixed what could be fixed; 1 problem remains	Popravljeno je što se moglo; preostaje 1 problem
+	Fixed what could be fixed; {n} problems remain	Popravljeno je što se moglo; preostalo problema: {n}
+	Flatten	Spljošti
+	Flatten comments	Spljošti komentare
+	Flatten form fields	Spljošti polja obrasca
+	Flip Horizontal	Preokreni vodoravno
+	Flip Vertical	Preokreni okomito
+	Flip horizontal	Preokreni vodoravno
+	Flip image	Preokreni sliku
+	Flip on long edge	Okreni po dužoj ivici
+	Flip on short edge	Okreni po kraćoj ivici
+	Printer default	Zadano za štampač
+	Flip vertical	Preokreni okomito
+	Folders	Folderi
+	Font Size:	Veličina fonta:
+	Font colour:	Boja fonta:
+	Font size:	Veličina fonta:
+	Font size	Veličina fonta
+	Font:	Font:
+	Font: Helvetica	Font: Helvetica
+	Fonts	Fontovi
+	Fonts must map their characters to Unicode so text can be read and copied. Fix the fonts or recreate the PDF.	Fontovi moraju preslikavati svoje znakove u Unicode da bi se tekst mogao čitati i kopirati. Popravite fontove ili ponovo kreirajte PDF.
+	Form data and PDF forms	Podaci obrazaca i PDF obrasci
+	Form fields	Polja obrasca
+	Form fields are flattened: their values stay visible. Saving rewrites the whole file.	Polja obrasca su spljoštena: njihove vrijednosti ostaju vidljive. Čuvanje ponovo zapisuje cijelu datoteku.
+	Form fields must be in the tag tree (Form tags) to be announced. Tag the form fields.	Polja obrasca moraju biti u stablu tagova (Form tagovi) da bi se najavila. Označite polja obrasca tagovima.
+	Form fields only	Samo polja obrasca
+	Form fields panel	Panel polja obrasca
+	Form fill-in and digital signatures	Popunjavanje obrazaca i digitalni potpisi
+	Format	Format
+	Finding document fonts…	Traženje fontova dokumenta…
+	Installed fonts…	Instalirani fontovi…
+	Keep source fonts	Zadrži izvorne fontove
+	Load font…	Učitaj font…
+	No openly licensed document fonts found. Load a font file.	Nisu pronađeni fontovi dokumenta s otvorenom licencom. Učitajte datoteku fonta.
+	Format text	Oblikuj tekst
+	Format:	Format:
+	Forms	Obrasci
+	Formulas and similar non-text elements need alternate text. Add alternate text to them.	Formule i slični netekstualni elementi trebaju alternativni tekst. Dodajte im alternativni tekst.
+	From	Od
+	From a PDF page or an image	Iz PDF stranice ili slike
+	From colour	Iz boje
+	From {file}	Iz {file}
+	From:	Od:
+	Front side only	Samo prednja strana
+	Full screen mode	Način rada preko cijelog ekrana
+	General	Općenito
+	Geospatial location	Geoprostorna lokacija
+	Get help, share feedback and follow development on Discord.	Potražite pomoć, podijelite povratne informacije i pratite razvoj na Discordu.
+	Go to a page view	Idi na prikaz stranice
+	Go to page {p}	Idi na stranicu {p}
+	Go to page…	Idi na stranicu…
+	Go to the page	Idi na stranicu
+	Go to this result	Idi na ovaj rezultat
+	Grab bag	Svaštara
+	Gray	Siva
+	Grayscale Images	Slike u nijansama sive
+	Green	Zelena
+	H / Space (hold)	H / razmak (držanje)
+	HTML web page	HTML web stranica
+	Hand (H)	Ruka (H)
+	Has JavaScript actions (run in M6)	Ima JavaScript akcije (pokreću se u M6)
+	Header and footer	Zaglavlje i podnožje
+	Header cells (TH) tell listeners what each column or row holds. Mark the header cells.	Ćelije zaglavlja (TH) govore slušaocima šta sadrži svaka kolona ili red. Označite ćelije zaglavlja.
+	Headers	Zaglavlja
+	Heading levels shouldn't skip (an H1 followed by an H3). Retag the headings.	Nivoi naslova ne bi trebali preskakati (H1 nakon kojeg slijedi H3). Ponovo označite naslove.
+	Headings	Naslovi
+	Height	Visina
+	Height:	Visina:
+	Hidden layers	Skriveni slojevi
+	Hidden text	Skriveni tekst
+	Hide a field	Sakrij polje
+	Hide all comments	Sakrij sve komentare
+	Hide field highlights	Sakrij isticanje polja
+	Hide layer	Sakrij sloj
+	Layer options	Opcije sloja
+	Reset to Initial Visibility	Vrati početnu vidljivost
+	Hide menu bar	Sakrij traku menija
+	Hide password	Sakrij lozinku
+	Hide toolbars	Sakrij trake s alatima
+	Hide window controls	Sakrij kontrole prozora
+	Hides annotation	Skriva napomenu
+	High	Visoko
+	High Resolution	Visoka rezolucija
+	High resolution	Visoka rezolucija
+	Highlight	Istakni
+	Highlight Style:	Stil isticanja:
+	Highlight fields	Istakni polja
+	Highlight text	Istakni tekst
+	Home	Početna
+	Home / End	Home / End
+	Horizontal	Vodoravno
+	Horizontal reversed	Vodoravno obrnuto
+	Horizontal scale	Vodoravna skala
+	Horizontally	Vodoravno
+	Icon	Ikona
+	Identity	Identitet
+	Image	Slika
+	Image (PNG)	Slika (PNG)
+	Image field	Polje za sliku
+	Image-only PDF	PDF samo sa slikama
+	Images	Slike
+	Images and text	Slike i tekst
+	Images and text (converted to PDF)	Slike i tekst (pretvoreno u PDF)
+	Import comments…	Uvezi komentare…
+	Import data	Uvezi podatke
+	Import form data…	Uvezi podatke obrasca…
+	Import {name}	Uvezi {name}
+	Importing data arrives on the web with file pickers for data files	Uvoz podataka stiže na web s biračima datoteka za datoteke podataka
+	In multiple files	U više datoteka
+	In this file	U ovoj datoteci
+	Includes unsaved changes	Uključuje nesačuvane promjene
+	Incorrect password. Try again.	Pogrešna lozinka. Pokušajte ponovo.
+	Indent	Uvlaka
+	Index	Indeks
+	Initial View	Početni prikaz
+	Initials	Inicijali
+	Insert	Umetni
+	Insert Date	Umetni datum
+	Insert Page Number	Umetni broj stranice
+	Insert a blank page after the selection	Umetni praznu stranicu nakon odabira
+	Insert a file at the end	Umetni datoteku na kraj
+	Insert a file before page {label}	Umetni datoteku prije stranice {label}
+	Insert blank page	Umetni praznu stranicu
+	Insert pages	Umetni stranice
+	Insert pages from a file…	Umetni stranice iz datoteke…
+	Insert pages from file…	Umetni stranice iz datoteke…
+	Insert pages from {name}	Umetni stranice iz {name}
+	Insert pages from {name} — 1 field renamed	Umetni stranice iz {name} — preimenovano 1 polje
+	Insert pages from {name} — fields renamed	Umetni stranice iz {name} — polja su preimenovana
+	Insert text	Umetni tekst
+	Inserted	Umetnuto
+	Inserted text	Umetnuti tekst
+	Inserting, deleting, and rotating pages	Umetanje, brisanje i rotiranje stranica
+	Inset	Udubljeno
+	Intended usage	Namjena
+	Intersection	Presjek
+	Intersections	Presjeci
+	Invert	Obrni
+	Invisible Rectangle	Nevidljivi pravougaonik
+	Irregular tables confuse cell navigation. Give every row the same number of cells (counting spans).	Nepravilne tabele zbunjuju navigaciju po ćelijama. Dajte svakom redu isti broj ćelija (računajući spojene).
+	Issued by	Izdao
+	Issued by: 	Izdao: 
+	Issued to	Izdano za
+	Issuer	Izdavalac
+	Italic	Kurziv
+	Item List	Lista stavki
+	Item:	Stavka:
+	Items marked Ready work today.	Stavke označene kao Spremno rade već danas.
+	Its security settings don't allow copying pages	Njegove sigurnosne postavke ne dozvoljavaju kopiranje stranica
+	January	Januar
+	JavaScript	JavaScript
+	JavaScript Console	JavaScript konzola
+	JavaScript console…	JavaScript konzola…
+	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript je isključen (Postavke ▸ JavaScript).
+	JavaScript, e.g. getField("total").value	JavaScript, npr. getField("total").value
+	Join our Discord	Pridružite nam se na Discordu
+	Join the ArtCraft Discord	Pridružite se ArtCraft Discordu
+	Join the ArtCraft community	Pridružite se ArtCraft zajednici
+	July	Juli
+	June	Juni
+	Justify	Poravnaj obostrano
+	Keep tool selected	Zadrži alat odabranim
+	Keep tool selected: on	Zadrži alat odabranim: uključeno
+	Key Algorithm	Algoritam ključa
+	Key usage	Upotreba ključa
+	Keyboard shortcuts	Prečice na tastaturi
+	Keychain  ·  	Privjesak ključeva  ·  
+	Keywords	Ključne riječi
+	LI must be a child of L	LI mora biti podređen elementu L
+	Label	Oznaka
+	Labels	Oznake
+	Labels: {preview}. Later pages keep their labels.	Oznake: {preview}. Kasnije stranice zadržavaju svoje oznake.
+	Landscape	Položeno
+	Landscape Pages	Položene stranice
+	Landscape and Portrait Pages	Položene i uspravne stranice
+	Landscape pages	Položene stranice
+	Language	Jezik
+	Last	Posljednje
+	Last commit	Posljednji commit
+	Later	Kasnije
+	Later in tab order	Kasnije u redoslijedu tabulatora
+	Calculation order	Redoslijed izračunavanja
+	Fix order	Popravi redoslijed
+	Move only what must move, so every field calculates after the fields it reads.	Pomjeri samo ono što mora, tako da se svako polje izračunava nakon polja koja čita.
+	Earlier in calculation order	Ranije u redoslijedu izračunavanja
+	Later in calculation order	Kasnije u redoslijedu izračunavanja
+	Too early	Prerano
+	Reads {name}, which calculates later, so it shows an old value.	Čita {name}, koje se izračunava kasnije, pa prikazuje staru vrijednost.
+	Loop	Petlja
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Čita {names}, koja ga čitaju nazad. Nijedan redoslijed ne može popraviti petlju: promijenite jednu od formula.
+	Not in order	Nije u redoslijedu
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Nedostaje u redoslijedu izračunavanja sačuvanom u PDF-u: drugi PDF preglednici ga možda neće izračunati.
+	Back to Prepare a form	Nazad na Pripremi obrazac
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Nijedno polje u ovom obrascu još ne izračunava svoju vrijednost. Dodijelite polju izračun na kartici Izračunaj u njegovim svojstvima i pojavit će se ovdje.
+	{names} and {last}	{names} i {last}
+	{field} reads no other field	{field} ne čita nijedno drugo polje
+	{field} reads {fields}	{field} čita {fields}
+	No field reads it	Nijedno polje ga ne čita
+	The order saved in the PDF needs tidying	Redoslijed sačuvan u PDF-u treba srediti
+	Moves only what must move	Pomjera samo ono što mora
+	Every field calculates after the fields it reads.	Svako polje se izračunava nakon polja koja čita.
+	Every field outside a loop calculates after the fields it reads.	Svako polje izvan petlje izračunava se nakon polja koja čita.
+	{field} reads its own value	{field} čita vlastitu vrijednost
+	{fields} read each other	{fields} čitaju jedno drugo
+	No order can fix a loop. Change one of the formulas.	Nijedan redoslijed ne može popraviti petlju. Promijenite jednu od formula.
+	Edit {field}'s formula	Uredi formulu polja {field}
+	Order · top calculates first	Redoslijed · gornje se izračunava prvo
+	Script	Skripta
+	Links on page	Veze na stranici
+	Show on the page which fields each field reads	Prikaži na stranici koja polja svako polje čita
+	Drag a field to move it, or select it and press {up} or {down}.	Prevucite polje da ga pomjerite ili ga odaberite i pritisnite {up} ili {down}.
+	Layers	Slojevi
+	Layers Panel and Page	Panel slojeva i stranica
+	Layout and Magnification	Raspored i uvećanje
+	Lbl and LBody	Lbl i LBody
+	Lbl and LBody must be children of LI	Lbl i LBody moraju biti podređeni elementu LI
+	Left	Lijevo
+	Left Edge	Lijeva ivica
+	Left Footer Text	Tekst podnožja lijevo
+	Left Header Text	Tekst zaglavlja lijevo
+	Left:	Lijevo:
+	Light blue	Svijetloplava
+	Light gray	Svijetlosiva
+	Light theme	Svijetla tema
+	Limit of	Ograničenje od
+	Line	Linija
+	Line Style:	Stil linije:
+	Line Thickness:	Debljina linije:
+	Line delta	Razlika u linijama
+	Line spacing	Prored
+	Line thickness	Debljina linije
+	Lines +/−	Linije +/−
+	Lines added	Dodane linije
+	Lines deleted	Izbrisane linije
+	Link	Veza
+	Link Action	Akcija veze
+	Link Appearance	Izgled veze
+	Link Properties	Svojstva veze
+	Link Type:	Vrsta veze:
+	Links, actions and JavaScripts	Veze, akcije i JavaScript skripte
+	List	Lista
+	List Box Properties	Svojstva okvira s listom
+	List box	Okvir s listom
+	List items	Stavke liste
+	List items belong in a list. Fix the list's tags.	Stavke liste pripadaju listi. Popravite tagove liste.
+	List labels and bodies belong in a list item. Fix the list's tags.	Oznake i tijela liste pripadaju stavci liste. Popravite tagove liste.
+	Lists	Liste
+	Location	Lokacija
+	Lock comment	Zaključaj komentar
+	Locked	Zaključano
+	Logical Reading Order	Logičan redoslijed čitanja
+	Looking for PDFs…	Traženje PDF-ova…
+	Low	Nisko
+	Low Resolution (150 dpi)	Niska rezolucija (150 dpi)
+	Low resolution	Niska rezolucija
+	Magnification	Uvećanje
+	Make Current Properties Default	Postavi trenutna svojstva kao zadana
+	Make Properties Default	Postavi svojstva kao zadana
+	Make accessible	Učini pristupačnim
+	Make scans searchable, then make them smaller.	Omogućite pretragu skenova, zatim ih smanjite.
+	Manage embedded index	Upravljaj ugrađenim indeksom
+	March	Mart
+	Margins (in)	Margine (in)
+	Mark Page Range	Označi raspon stranica
+	Mark all	Označi sve
+	Mark as Confidential	Označi kao povjerljivo
+	Mark as comments	Označi kao komentare
+	Mark differences	Označi razlike
+	Mark figure as decorative	Označi sliku kao ukrasnu
+	Mark for redaction	Označi za redigovanje
+	Mark pages for redaction	Označi stranice za redigovanje
+	Mark with checkmark	Označi kvačicom
+	Marked	Označeno
+	Markup	Oznake
+	Marquee zoom	Zumiranje okvirom
+	Mask:	Maska:
+	Match field sizes	Uskladi veličine polja
+	Maximum	Maksimum
+	May	Maj
+	Measure	Mjeri
+	Measure area	Izmjeri površinu
+	Measure distance	Izmjeri udaljenost
+	Measure objects	Izmjeri objekte
+	Measure perimeter	Izmjeri obim
+	Measurement information	Informacije o mjerenju
+	Measurement snapping	Hvatanje pri mjerenju
+	Measuring tool	Alat za mjerenje
+	Medium	Srednje
+	Merge data files into spreadsheet…	Spoji datoteke podataka u proračunsku tabelu…
+	Merged 1 file into {path}	Spojena 1 datoteka u {path}
+	Merged PRs	Spojeni PR-ovi
+	Merged {n} files into {path}	Spojeno datoteka u {path}: {n}
+	Merging data files needs the desktop app	Spajanje datoteka podataka zahtijeva desktop aplikaciju
+	Metadata	Metapodaci
+	Microsoft Word (.docx)	Microsoft Word (.docx)
+	Midpoint	Srednja tačka
+	Midpoints	Srednje tačke
+	Minimum	Minimum
+	Model	Model
+	Models	Modeli
+	Modified	Izmijenjeno
+	Modify page	Izmijeni stranicu
+	More	Više
+	More options	Više opcija
+	More options:	Više opcija:
+	More ways to add files	Više načina za dodavanje datoteka
+	Mouse Down	Pritisak miša
+	Mouse Enter	Ulazak miša
+	Mouse Exit	Izlazak miša
+	Mouse Up	Otpuštanje miša
+	Move bookmark	Premjesti zabilješku
+	Move comment	Premjesti komentar
+	Move down	Pomakni dolje
+	Move earlier	Pomakni ranije
+	Move image	Premjesti sliku
+	Move later	Pomakni kasnije
+	Move page	Premjesti stranicu
+	Move pages	Premjesti stranice
+	Move up	Pomakni gore
+	Multi-line	Višeredno
+	Multiple	Višestruko
+	Multiple files	Više datoteka
+	Separate PDFs	Zasebni PDF-ovi
+	Multiple selection	Višestruki odabir
+	Name	Naziv
+	Name (A–Z)	Naziv (A–Z)
+	Name on new comments	Ime na novim komentarima
+	Hide hover previews for highlights without comment text	Sakrij preglede pri prelasku za isticanja bez teksta komentara
+	Name:	Naziv:
+	Named Destinations	Imenovana odredišta
+	Navigation links	Navigacijske veze
+	Navigation links are not repetitive	Navigacijske veze se ne ponavljaju
+	Navigation tab	Navigacijska kartica
+	Needs manual check	Potrebna je ručna provjera
+	Negative number style:	Stil negativnih brojeva:
+	Nested alternate text	Ugniježđeni alternativni tekst
+	New Action	Nova akcija
+	New Action…	Nova akcija…
+	New blank PDF	Novi prazan PDF
+	New bookmark	Nova zabilješka
+	New bookmark (⌘B)	Nova zabilješka (⌘B)
+	New file:	Nova datoteka:
+	New {tool} comments will look like this one	Novi komentari alata {tool} izgledat će kao ovaj
+	Next (⌘G)	Sljedeće (⌘G)
+	Next / previous match	Sljedeće / prethodno podudaranje
+	Next figure	Sljedeća slika
+	Next month	Sljedeći mjesec
+	Next page	Sljedeća stranica
+	Next sheet	Sljedeći list
+	Next view	Sljedeći prikaz
+	No	Ne
+	No PDFs found in {folder}	Nisu pronađeni PDF-ovi u {folder}
+	No PDFs in this folder yet	U ovom folderu još nema PDF-ova
+	No actions	Nema akcija
+	No changes allowed	Promjene nisu dozvoljene
+	No changes to save	Nema promjena za čuvanje
+	No check has run yet.	Još nije pokrenuta nijedna provjera.
+	No color	Bez boje
+	No colour	Bez boje
+	No comments match.	Nijedan komentar ne odgovara.
+	No comments yet.	Još nema komentara.
+	No contributor data was built into this copy.	U ovu kopiju nisu ugrađeni podaci o saradnicima.
+	No differences in the text.	Nema razlika u tekstu.
+	No digital IDs yet.	Još nema digitalnih ID-ova.
+	No documents are open	Nijedan dokument nije otvoren
+	No file chosen	Nije odabrana datoteka
+	No fonts are referenced by the pages.	Stranice ne upućuju ni na jedan font.
+	No form fields were detected	Nisu otkrivena polja obrasca
+	No inaccessible scripts	Nema nepristupačnih skripti
+	No issues found	Nisu pronađeni problemi
+	No limit	Bez ograničenja
+	No matches	Nema podudaranja
+	No matches.	Nema podudaranja.
+	No matching tools	Nema odgovarajućih alata
+	No model credits were built into this copy.	U ovu kopiju nisu ugrađene zasluge za modele.
+	No pages match those choices	Nijedna stranica ne odgovara tim izborima
+	No pages selected	Nisu odabrane stranice
+	No preview	Nema pregleda
+	No problems found: the document conforms to {level}.	Nisu pronađeni problemi: dokument je usklađen s {level}.
+	No recent files	Nema nedavnih datoteka
+	No security	Bez zaštite
+	No sheets	Nema listova
+	No status has been set.	Status nije postavljen.
+	No unlinked web addresses were found in the text	U tekstu nisu pronađene nepovezane web adrese
+	None	Ništa
+	None (prefix only)	Ništa (samo prefiks)
+	None found	Ništa nije pronađeno
+	None of those files can be made into a PDF; use PDFs, images or .txt files	Nijedna od tih datoteka ne može se pretvoriti u PDF; koristite PDF-ove, slike ili .txt datoteke
+	None — everything is allowed	Ništa — sve je dozvoljeno
+	Not allowed	Nije dozvoljeno
+	Not present	Nije prisutno
+	Note	Bilješka
+	Nothing to redo	Nema ničeg za ponavljanje
+	Nothing to undo	Nema ničeg za poništavanje
+	November	Novembar
+	Number	Broj
+	Number every page in the footer.	Numeriši svaku stranicu u podnožju.
+	Number of pages	Broj stranica
+	Number pages	Numeriši stranice
+	Number pages…	Numeriši stranice…
+	OK	U redu
+	October	Oktobar
+	Odd Pages Only	Samo neparne stranice
+	Odd pages	Neparne stranice
+	Odd pages only	Samo neparne stranice
+	Off	Isključeno
+	Old file:	Stara datoteka:
+	On Blur	Pri gubitku fokusa
+	On Focus	Pri fokusu
+	On the web, open or drop an image to convert it	Na webu otvorite ili ispustite sliku da je pretvorite
+	One {f} file per page, named after the document.	Jedna {f} datoteka po stranici, nazvana po dokumentu.
+	Only continue if you trust this document. An address can carry information from the document, such as what you typed into its form.	Nastavite samo ako vjerujete ovom dokumentu. Adresa može prenijeti informacije iz dokumenta, npr. ono što ste upisali u njegov obrazac.
+	Only the document's owner can change its security (open it with the permissions password)	Samo vlasnik dokumenta može promijeniti njegovu zaštitu (otvorite ga lozinkom za dozvole)
+	Only the page content changes: links, comments, form fields and bookmarks on the original pages stay.	Mijenja se samo sadržaj stranice: veze, komentari, polja obrasca i zabilješke na originalnim stranicama ostaju.
+	Opacity	Neprozirnost
+	Open	Otvori
+	Open Recent	Otvori nedavno
+	Open a PDF (⌘O)	Otvori PDF (⌘O)
+	Open a PDF to measure it.	Otvorite PDF da ga izmjerite.
+	Open a document first	Prvo otvorite dokument
+	Open a web link	Otvori web vezu
+	Open a web page	Otvori web stranicu
+	Open accessibility report	Otvori izvještaj o pristupačnosti
+	Open email app	Otvori aplikaciju za e-mail
+	Open file	Otvori datoteku
+	Open in Full Screen mode	Otvori u načinu rada preko cijelog ekrana
+	Open in a new tab	Otvori u novoj kartici
+	Open link	Otvori vezu
+	Open the file as it was saved then	Otvori datoteku onakvu kakva je tada sačuvana
+	Open the older version first	Prvo otvorite stariju verziju
+	Open this web page?	Otvoriti ovu web stranicu?
+	Open to page	Otvori na stranici
+	Opened with	Otvoreno pomoću
+	Opened, but its security settings don't allow combining. Enter the permissions password.	Otvoreno, ali njegove sigurnosne postavke ne dozvoljavaju kombinovanje. Unesite lozinku za dozvole.
+	Open…	Otvori…
+	Optimization cancelled	Optimizacija otkazana
+	Optimization is already running	Optimizacija je već u toku
+	Optimize	Optimiziraj
+	Optimize PDF…	Optimiziraj PDF…
+	Optimize Scanned Documents	Optimiziraj skenirane dokumente
+	Optimize scanned documents	Optimiziraj skenirane dokumente
+	Optimize scanned documents…	Optimiziraj skenirane dokumente…
+	Optimizing… cleaning up	Optimizacija… čišćenje
+	Optimizing… image {d} of {t}	Optimizacija… slika {d} od {t}
+	Optimizing… merging identical objects	Optimizacija… spajanje identičnih objekata
+	Optimizing… removing user data	Optimizacija… uklanjanje korisničkih podataka
+	Optimizing… writing the copy	Optimizacija… zapisivanje kopije
+	Optional	Neobavezno
+	Optional: needs an AI provider you configure	Neobavezno: zahtijeva AI pružaoca kojeg podesite
+	Options	Opcije
+	Options…	Opcije…
+	Orange	Narandžasta
+	Organization Name	Naziv organizacije
+	Organizational Unit	Organizaciona jedinica
+	Organize pages	Organizuj stranice
+	Orientation:	Orijentacija:
+	Original: replace pages	Original: zamijeni stranice
+	Other elements alternate text	Alternativni tekst ostalih elemenata
+	Other elements that require alternate text	Ostali elementi koji zahtijevaju alternativni tekst
+	Outdent	Smanji uvlaku
+	Outline	Obris
+	Output	Izlaz
+	Output appears here.	Izlaz se pojavljuje ovdje.
+	Output intent: {list}	Izlazna namjena: {list}
+	Output preview	Pregled izlaza
+	Oval	Oval
+	Overlap:	Preklapanje:
+	Owner password (no restrictions apply)	Lozinka vlasnika (ne važe ograničenja)
+	PDF Optimizer	PDF optimizator
+	PDF or image	PDF ili slika
+	PDF producer	PDF proizvođač
+	PDF version	PDF verzija
+	PDF, images and text	PDF, slike i tekst
+	PDF/A…	PDF/A…
+	PRs	PR-ovi
+	Page	Stranica
+	Page Content	Sadržaj stranice
+	Page Only	Samo stranica
+	Page Range	Raspon stranica
+	Page Range Options	Opcije raspona stranica
+	Page Sizing & Handling	Veličina i rukovanje stranicama
+	Page display	Prikaz stranice
+	Page display: {layout}	Prikaz stranice: {layout}
+	Page does not require timed responses	Stranica ne zahtijeva vremenski ograničene odgovore
+	Page grid	Mreža stranice
+	Page labels	Oznake stranica
+	Page layout	Raspored stranice
+	Page navigation	Navigacija stranicama
+	Page number	Broj stranice
+	Page options	Opcije stranice
+	Page order:	Redoslijed stranica:
+	Page size	Veličina stranice
+	Page thumbnails	Sličice stranica
+	Page transitions	Prijelazi stranica
+	Page will not cause screen flicker	Stranica neće izazvati treperenje ekrana
+	Page {label}	Stranica {label}
+	Page {p} of {n}	Stranica {p} od {n}
+	Pages Panel and Page	Panel stranica i stranica
+	Pages from	Stranice od
+	Pages of {name} to combine, e.g. 1-3, 6	Stranice dokumenta {name} za kombinovanje, npr. 1-3, 6
+	Pages per file	Stranica po datoteci
+	Pages per sheet:	Stranica po listu:
+	Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.	Stranice koje su samo slike teksta ne mogu se čitati naglas niti pretraživati. Prepoznajte tekst (OCR) da dodate tekstualni sloj.
+	Pages to Print	Stranice za štampanje
+	Pages with links, comments or fields should tab in structure order. The fix sets each page's tab order to Use Document Structure.	Stranice s vezama, komentarima ili poljima trebaju prelaziti tabulatorom redoslijedom strukture. Popravak postavlja redoslijed tabulatora svake stranice na Koristi strukturu dokumenta.
+	Pages:	Stranice:
+	Paper:	Papir:
+	Part of	Dio od
+	Passed	Prošlo
+	Password	Lozinka
+	Password protection will be applied when you save	Zaštita lozinkom bit će primijenjena pri čuvanju
+	Password required	Potrebna je lozinka
+	Password security	Zaštita lozinkom
+	Password-protected	Zaštićeno lozinkom
+	Paste after	Zalijepi nakon
+	Paste pages	Zalijepi stranice
+	Path	Putanja
+	Paths	Putanje
+	Patterns	Uzorci
+	Patterns (graphics objects)	Uzorci (grafički objekti)
+	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft se nije normalno ugasio. Ovi dokumenti su imali promjene koje su automatski sačuvane:
+	PdfCraft on GitHub	PdfCraft na GitHubu
+	PdfCraft web page	Web stranica PdfCrafta
+	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft radi van mreže. Bez telemetrije, bez računa i bez obrade u oblaku osim ako ne dodate pružaoca.
+	PdfCraft {c} is up to date.	PdfCraft {c} je ažuran.
+	PdfCraft {v} is available.	Dostupan je PdfCraft {v}.
+	People may need more time to respond. Check that nothing has a time limit.	Ljudima može trebati više vremena da odgovore. Provjerite da ništa nema vremensko ograničenje.
+	Percentage	Procenat
+	Perimeter	Obim
+	Permitted actions after certifying	Dozvoljene radnje nakon certificiranja
+	Phone Number	Broj telefona
+	Phone Numbers	Brojevi telefona
+	Pick a tool in the quick bar, or type above.	Odaberite alat u brzoj traci ili upišite iznad.
+	Pictures need alternate text that describes them, or must be marked decorative. Add alternate text to each figure.	Slike trebaju alternativni tekst koji ih opisuje ili moraju biti označene kao ukrasne. Dodajte alternativni tekst svakoj slici.
+	Pin a folder to Home	Prikvači folder na Početnu
+	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	Prikvačite folder da se ovdje prikazuju njegovi najnoviji PDF-ovi, npr. tamo gdje ih skener ili sinhronizovani disk u oblaku sprema.
+	Pin a folder…	Prikvači folder…
+	Pin folder to Home…	Prikvači folder na Početnu…
+	Pink	Ružičasta
+	Pinned folders need the desktop app	Prikvačeni folderi zahtijevaju desktop aplikaciju
+	Pinned {folder} to Home	{folder} je prikvačen na Početnu
+	Place saved {what}	Postavi sačuvano: {what}
+	Plain text in reading order; pages are separated by form feeds.	Običan tekst redoslijedom čitanja; stranice su odvojene znakovima za novu stranicu.
+	Planned	Planirano
+	Planned for milestone	Planirano za fazu
+	Planned for milestone {m} — open to see what it will include	Planirano za fazu {m} — otvorite da vidite šta će uključivati
+	Planned · {m}	Planirano · {m}
+	Points from the page's bottom-left corner.	Tačke od donjeg lijevog ugla stranice.
+	Polygon	Mnogougao
+	Polyline	Izlomljena linija
+	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	Prenosivi način je isključen: u {folder} se ne može pisati ({error}). Postavke se umjesto toga čuvaju u vašem korisničkom folderu.
+	Portrait	Uspravno
+	Portrait Pages	Uspravne stranice
+	Portrait pages	Uspravne stranice
+	Position	Položaj
+	Post	Objava
+	PostScript / EPS	PostScript / EPS
+	PostScript XObjects aren't allowed	PostScript XObjekti nisu dozvoljeni
+	Poster	Poster
+	Prefix	Prefiks
+	Preflight	Predprovjera
+	Prepare a form	Pripremi obrazac
+	Prepare for Distribution	Pripremi za distribuciju
+	Prepare for accessibility	Pripremi za pristupačnost
+	Prepare for distribution	Pripremi za distribuciju
+	Prepare for distribution…	Pripremi za distribuciju…
+	Presentation (.pptx)	Prezentacija (.pptx)
+	Preview	Pregled
+	Preview: page {p} of {n}	Pregled: stranica {p} od {n}
+	Previous (⇧⌘G)	Prethodno (⇧⌘G)
+	Previous / next page	Prethodna / sljedeća stranica
+	Previous figure	Prethodna slika
+	Previous month	Prethodni mjesec
+	Previous page	Prethodna stranica
+	Previous sheet	Prethodni list
+	Previous view	Prethodni prikaz
+	Primary language	Primarni jezik
+	Print	Štampaj
+	Print (⌘P)	Štampaj (⌘P)
+	Print in grayscale	Štampaj u nijansama sive
+	Print page border	Štampaj okvir stranice
+	Print production	Štamparska produkcija
+	Print single-sided. Keep the sheets in order, cut at the marks, then stack the piles left to right, top to bottom.	Štampajte jednostrano. Držite listove po redu, režite po oznakama, zatim složite hrpe s lijeva nadesno, odozgo prema dolje.
+	Print, NextPage, PrevPage, FirstPage or LastPage	Print, NextPage, PrevPage, FirstPage ili LastPage
+	Printer:	Štampač:
+	Printing	Štampanje
+	Printing allowed	Štampanje dozvoljeno
+	Print…	Štampaj…
+	Privacy	Privatnost
+	Private data of other applications	Privatni podaci drugih aplikacija
+	Properties…	Svojstva…
+	Protect	Zaštiti
+	Protect Using Password	Zaštiti lozinkom
+	Protect a PDF	Zaštiti PDF
+	Protect using password…	Zaštiti lozinkom…
+	Protect with password	Zaštiti lozinkom
+	Protected: the combined file won't keep its security settings	Zaštićeno: kombinovana datoteka neće zadržati svoje sigurnosne postavke
+	Public key	Javni ključ
+	Purple	Ljubičasta
+	PushButton	Dugme
+	Quality	Kvalitet
+	Radio	Radio
+	Radio Button Properties	Svojstva radio dugmeta
+	Radio button	Radio dugme
+	Re-type Password	Ponovo upišite lozinku
+	Read	Čitanje
+	Read Only	Samo za čitanje
+	Read mode	Način čitanja
+	Next tab	Sljedeća kartica
+	Previous tab	Prethodna kartica
+	Ready	Spremno
+	Real name	Pravo ime
+	Reason	Razlog
+	Recent	Nedavno
+	Recognize Text	Prepoznaj tekst
+	Recognize text	Prepoznaj tekst
+	Recognize text in multiple files…	Prepoznaj tekst u više datoteka…
+	Recognize text…	Prepoznaj tekst…
+	Recognized 1 word	Prepoznata 1 riječ
+	Recognized {n} words	Prepoznato riječi: {n}
+	Recognized {w} words in 1 file	Prepoznato riječi u 1 datoteci: {w}
+	Recognized {w} words in {n} files	Prepoznato riječi: {w}, u datoteka: {n}
+	Recognizing text… file {d} of {t}	Prepoznavanje teksta… datoteka {d} od {t}
+	Recognizing text… page {d} of {t}	Prepoznavanje teksta… stranica {d} od {t}
+	Recommended tools	Preporučeni alati
+	Recover	Oporavi
+	Recover unsaved documents?	Oporaviti nesačuvane dokumente?
+	Rectangle	Pravougaonik
+	Red	Crvena
+	Redact	Rediguj
+	Redact a PDF	Rediguj PDF
+	Redact all	Rediguj sve
+	Redact pages	Rediguj stranice
+	Redact pages…	Rediguj stranice…
+	Redact text and images	Rediguj tekst i slike
+	Redacted area fill colour:	Boja ispune redigovanog područja:
+	Redaction Tool Properties	Svojstva alata za redigovanje
+	Redaction properties…	Svojstva redigovanja…
+	Redid {label}	Ponovljeno: {label}
+	Redo	Ponovi
+	Redo {action}	Ponovi: {action}
+	Reduce file size	Smanji veličinu datoteke
+	Reduce file size…	Smanji veličinu datoteke…
+	Regularity	Pravilnost
+	Rejected	Odbijeno
+	Reliable character encoding is provided	Obezbijeđeno je pouzdano kodiranje znakova
+	Remove	Ukloni
+	Remove all links	Ukloni sve veze
+	No links to remove	Nema veza za uklanjanje
+	Removed 1 link	Uklonjena 1 veza
+	Removed {n} links	Uklonjeno veza: {n}
+	Remove background	Ukloni pozadinu
+	Remove checkmark	Ukloni kvačicu
+	Remove from Recent	Ukloni iz nedavnih
+	Remove header & footer	Ukloni zaglavlje i podnožje
+	Remove hidden information	Ukloni skrivene informacije
+	Remove hidden information and flatten comments and form fields, so recipients see only the pages.	Ukloni skrivene informacije i spljošti komentare i polja obrasca, tako da primaoci vide samo stranice.
+	Remove hidden information, metadata, scripts and embedded content, and rewrite the files.	Ukloni skrivene informacije, metapodatke, skripte i ugrađeni sadržaj i ponovo zapiši datoteke.
+	Remove hidden information…	Ukloni skrivene informacije…
+	Remove invalid links and bookmarks	Ukloni nevažeće veze i zabilješke
+	Remove redaction marks	Ukloni oznake za redigovanje
+	Remove saved {what}	Ukloni sačuvano: {what}
+	Remove security	Ukloni zaštitu
+	Remove unreferenced named destinations	Ukloni nereferencirana imenovana odredišta
+	Remove unused objects and merge identical ones	Ukloni nekorištene objekte i spoji identične
+	Remove watermark	Ukloni vodeni žig
+	Remove {name}	Ukloni {name}
+	Remove {name} from Recent	Ukloni {name} iz nedavnih
+	Remove {n} files	Ukloni datoteke: {n}
+	Removed 1 hidden item. Save to remove them from the file.	Uklonjena 1 skrivena stavka. Sačuvajte da je uklonite iz datoteke.
+	Removed {n} hidden items. Save to remove them from the file.	Uklonjeno skrivenih stavki: {n}. Sačuvajte da ih uklonite iz datoteke.
+	Rename	Preimenuj
+	Rename bookmark	Preimenuj zabilješku
+	Rendering: hayro (bootstrap) · UI: egui · Icons: Lucide (ISC) · Fonts: Inter, JetBrains Mono, Dancing Script (OFL)	Iscrtavanje: hayro (bootstrap) · Interfejs: egui · Ikone: Lucide (ISC) · Fontovi: Inter, JetBrains Mono, Dancing Script (OFL)
+	Reopen the files that were open when PdfCraft last closed	Ponovo otvori datoteke koje su bile otvorene kad je PdfCraft posljednji put zatvoren
+	Restore the last view (page, zoom and page display) when a document is opened again	Vrati posljednji prikaz (stranicu, zum i prikaz stranica) kada se dokument ponovo otvori
+	Repair log	Zapisnik popravki
+	Repairs	Popravke
+	Repeat overlay text	Ponavljaj tekst preklopa
+	Repeated navigation links should be skippable. Check links that appear on every page.	Ponavljajuće navigacijske veze trebale bi se moći preskočiti. Provjerite veze koje se pojavljuju na svakoj stranici.
+	Replace	Zamijeni
+	Replace Image…	Zamijeni sliku…
+	Replace Pages	Zamijeni stranice
+	Replace image	Zamijeni sliku
+	Replace page	Zamijeni stranicu
+	Replace pages	Zamijeni stranice
+	Replace pages…	Zamijeni stranice…
+	Replace text	Zamijeni tekst
+	Replaced	Zamijenjeno
+	Replacement text	Zamjenski tekst
+	Replacement: pages of {name}	Zamjena: stranice dokumenta {name}
+	Replaces the existing one on those pages.	Zamjenjuje postojeći na tim stranicama.
+	Replacing images arrives on the web with image file pickers	Zamjena slika stiže na web s biračima datoteka za slike
+	Replacing images on page {p} arrives on the web with image pickers ({i})	Zamjena slika na stranici {p} stiže na web s biračima slika ({i})
+	Reply	Odgovori
+	Report	Izvještaj
+	Report Options	Opcije izvještaja
+	Report…	Izvještaj…
+	Required	Obavezno
+	Requires user to enter a password for:	Zahtijeva od korisnika unos lozinke za:
+	Reset a form	Resetuj obrazac
+	Reset columns	Resetuj kolone
+	Resize comment	Promijeni veličinu komentara
+	Resize window to initial page	Prilagodi prozor početnoj stranici
+	Resolution	Rezolucija
+	Restrictions	Ograničenja
+	Retain existing	Zadrži postojeće
+	Reverse pages	Obrni redoslijed stranica
+	Reverse the order	Obrni redoslijed
+	Revert	Vrati na sačuvano
+	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	Vratiti na prethodno sačuvanu verziju dokumenta „{name}”? Promjene od tada se poslije ne mogu poništiti.
+	Save over the changed file?	Sačuvati preko promijenjene datoteke?
+	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	„{name}” je promijenjen na disku nakon otvaranja ili posljednjeg čuvanja. Čuvanje sada zamjenjuje tu noviju verziju ovom.
+	Save anyway	Ipak sačuvaj
+	Reverted to the last saved version	Vraćeno na posljednju sačuvanu verziju
+	Review	Pregled izmjena
+	Review History	Historija pregleda
+	Revisions	Revizije
+	Rich Text Format (.rtf)	Rich Text Format (.rtf)
+	Right	Desno
+	Right Edge	Desna ivica
+	Right Footer Text	Tekst podnožja desno
+	Right Header Text	Tekst zaglavlja desno
+	Rotate	Rotiraj
+	Rotate Clockwise	Rotiraj u smjeru kazaljke na satu
+	Rotate Counterclockwise	Rotiraj suprotno od kazaljke na satu
+	Rotate Pages	Rotiraj stranice
+	Rotate clockwise	Rotiraj u smjeru kazaljke na satu
+	Rotate counterclockwise	Rotiraj suprotno od kazaljke na satu
+	Rotate image	Rotiraj sliku
+	Rotate page	Rotiraj stranicu
+	Rotate pages	Rotiraj stranice
+	Rotate pages clockwise	Rotiraj stranice u smjeru kazaljke na satu
+	Rotate pages counterclockwise	Rotiraj stranice suprotno od kazaljke na satu
+	Rotate pages…	Rotiraj stranice…
+	Rotate view	Rotiraj prikaz
+	Rotate view clockwise	Rotiraj prikaz u smjeru kazaljke na satu
+	Rotate view clockwise (⇧⌘+)	Rotiraj prikaz u smjeru kazaljke na satu (⇧⌘+)
+	Rotate view counterclockwise	Rotiraj prikaz suprotno od kazaljke na satu
+	Rotate:	Rotiraj:
+	Rotation	Rotacija
+	Rows	Redovi
+	Run	Pokreni
+	Run JavaScript	Pokreni JavaScript
+	Run a JavaScript	Pokreni JavaScript
+	Run form script	Pokreni skriptu obrasca
+	Running action… file {d} of {t}	Izvršavanje akcije… datoteka {d} od {t}
+	SHA-1 digest	SHA-1 sažetak
+	SHA-256 digest	SHA-256 sažetak
+	Sanitize	Očisti
+	Sanitize Documents	Očisti dokumente
+	Sanitize document	Očisti dokument
+	Sanitize document…	Očisti dokument…
+	Sanitizing removes hidden information from the document: metadata, file attachments, comments, form fields (flattened), hidden text and layers, bookmarks, links, actions and scripts, and private application data.	Čišćenje uklanja skrivene informacije iz dokumenta: metapodatke, priloge, komentare, polja obrasca (spljoštena), skriveni tekst i slojeve, zabilješke, veze, akcije i skripte te privatne podatke aplikacija.
+	Save	Sačuvaj
+	Save & Close	Sačuvaj i zatvori
+	Save (M4)	Sačuvaj (M4)
+	Save Image As…	Sačuvaj sliku kao…
+	Copy Image	Kopiraj sliku
+	The image has been copied ({w} × {h} pixels)	Slika je kopirana ({w} × {h} piksela)
+	Couldn't copy the image: {e}	Nije moguće kopirati sliku: {e}
+	Copy Image in Original Format	Kopiraj sliku u originalnom formatu
+	The image has been copied as a {ext} file	Slika je kopirana kao {ext} datoteka
+	The page has changed; select the image again	Stranica se promijenila; ponovo odaberite sliku
+	Save as PDF	Sačuvaj kao PDF
+	Save as PDF/A	Sačuvaj kao PDF/A
+	Save as PDF/A-1b	Sačuvaj kao PDF/A-1b
+	Save as PDF/A-2b	Sačuvaj kao PDF/A-2b
+	Save as PDF/A-3b	Sačuvaj kao PDF/A-3b
+	Save as PDF/UA	Sačuvaj kao PDF/UA
+	Save as PDF/X	Sačuvaj kao PDF/X
+	Save as…	Sačuvaj kao…
+	Save attachment…	Sačuvaj prilog…
+	Save changes to “{name}” before closing?	Sačuvati promjene u „{name}” prije zatvaranja?
+	Save image	Sačuvaj sliku
+	Save pages	Sačuvaj stranice
+	Save the accessibility report	Sačuvaj izvještaj o pristupačnosti
+	Save the document afterwards: saving rewrites the whole file so no trace of the removed content stays in it.	Nakon toga sačuvajte dokument: čuvanje ponovo zapisuje cijelu datoteku tako da u njoj ne ostane trag uklonjenog sadržaja.
+	Save the document afterwards; saving rewrites the whole file so nothing removed stays in it.	Nakon toga sačuvajte dokument; čuvanje ponovo zapisuje cijelu datoteku tako da ništa uklonjeno ne ostane u njoj.
+	Save the spreadsheet	Sačuvaj proračunsku tabelu
+	Save these pages as one PDF	Sačuvaj ove stranice kao jedan PDF
+	Saved measurements	Sačuvana mjerenja
+	Saved measurements.	Mjerenja sačuvana.
+	Saved the print-ready PDF to {path}	PDF spreman za štampu sačuvan u {path}
+	Saved {name}	Sačuvano: {name}
+	Saved {place}: {before} → {after} ({pct}% smaller){detail}	Sačuvano {place}: {before} → {after} ({pct}% manje){detail}
+	Saved, but reopening failed: {e}	Sačuvano, ali ponovno otvaranje nije uspjelo: {e}
+	Scale relative to target page	Skala u odnosu na ciljnu stranicu
+	Scan & OCR	Skeniranje i OCR
+	Screen flicker	Treperenje ekrana
+	Screen readers choose their voice from the document's language. Set it in Document Properties > Advanced > Language.	Čitači ekrana biraju glas prema jeziku dokumenta. Postavite ga u Svojstva dokumenta > Napredno > Jezik.
+	Script Name:	Naziv skripte:
+	Script:	Skripta:
+	Scripted content must be usable with a keyboard and assistive technology. Check the document's scripts.	Skriptovani sadržaj mora biti upotrebljiv tastaturom i pomoćnom tehnologijom. Provjerite skripte dokumenta.
+	Scripts	Skripte
+	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	Skripte se izvršavaju u izoliranom okruženju bez pristupa datotekama ili mreži. Skripta koja traži otvaranje web stranice prvo treba vašu dozvolu. Kad je JavaScript isključen, Acrobatove standardne funkcije formatiranja, provjere i izračuna i dalje rade.
+	Scripts run in a sandbox without file or network access. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	Skripte se izvršavaju u izoliranom okruženju bez pristupa datotekama ili mreži. Kad je JavaScript isključen, Acrobatove standardne funkcije formatiranja, provjere i izračuna i dalje rade.
+	Scroll long text	Pomjeraj dugi tekst
+	Search	Pretraga
+	Search comments	Pretraži komentare
+	Search tools and commands…	Pretraži alate i naredbe…
+	Added text	Dodani tekst
+	Link URL	URL veze
+	Search tools and commands	Pretraži alate i naredbe
+	Text editing line	Red za uređivanje teksta
+	Text to place	Tekst za postavljanje
+	Tooltip	Opis alata
+	Words or phrases to redact	Riječi ili fraze za redigovanje
+	Searchable Image (Exact)	Slika s mogućnošću pretrage (tačna)
+	Searching… {s} of {p} pages	Pretraga… {s} od {p} stranica
+	Searching… {s}/{p}	Pretraga… {s}/{p}
+	Security	Sigurnost
+	Security method	Metoda zaštite
+	Security properties	Sigurnosna svojstva
+	Security properties…	Sigurnosna svojstva…
+	Security settings	Sigurnosne postavke
+	Security settings must allow assistive technology to read the content ("Enable text access for screen reader devices"). Change the document's security to allow it.	Sigurnosne postavke moraju dozvoliti pomoćnoj tehnologiji čitanje sadržaja („Omogući pristup tekstu čitačima ekrana”). Promijenite zaštitu dokumenta da to dozvolite.
+	Security will be removed when you save	Zaštita će biti uklonjena pri čuvanju
+	Select (V)	Odaberi (V)
+	Select Action:	Odaberite akciju:
+	Select All	Odaberi sve
+	Select Icon	Odaberi ikonu
+	Select Trigger:	Odaberite okidač:
+	Select a file first	Prvo odaberite datoteku
+	Select a file for the stamp	Odaberite datoteku za pečat
+	Select a password-protected file first	Prvo odaberite datoteku zaštićenu lozinkom
+	Select a word	Odaberi riječ
+	Select all pages (Organize)	Odaberi sve stranice (Organizuj)
+	Select data files to merge	Odaberite datoteke podataka za spajanje
+	Select files to compare	Odaberite datoteke za poređenje
+	Select format category:	Odaberite kategoriju formata:
+	Select pages	Odaberi stranice
+	Select the items to remove from this document.	Odaberite stavke za uklanjanje iz ovog dokumenta.
+	Selected image files: {count}	Odabrane slikovne datoteke: {count}
+	Selected pages	Odabrane stranice
+	Selection	Odabir
+	Self-signed	Samopotpisan
+	Sensitivity	Osjetljivost
+	Sent to {printer}	Poslano na {printer}
+	Sent to {printer}: {msg}	Poslano na {printer}: {msg}
+	Separator style:	Stil razdjelnika:
+	September	Septembar
+	Serial number	Serijski broj
+	Set Alternate Text	Postavi alternativni tekst
+	Set Fields to Same Size	Postavi polja na istu veličinu
+	Set Page Boxes	Postavi okvire stranice
+	Set alternate text	Postavi alternativni tekst
+	Set bookmark destination	Postavi odredište zabilješke
+	Set document title	Postavi naslov dokumenta
+	Set layer visibility	Postavi vidljivost sloja
+	Set measurement scale	Postavi skalu mjerenja
+	Set page boxes	Postavi okvire stranice
+	Set page transitions	Postavi prijelaze stranica
+	Set page boxes…	Postavi okvire stranice…
+	Set properties	Postavi svojstva
+	Set status	Postavi status
+	Set status Accepted	Postavi status Prihvaćeno
+	Set status Cancelled	Postavi status Otkazano
+	Set status Completed	Postavi status Završeno
+	Set status None	Postavi status Nijedan
+	Set status Rejected	Postavi status Odbijeno
+	Set status Unmarked	Postavi status Neoznačeno
+	Set tab order	Postavi redoslijed tabulatora
+	Set calculation order	Postavi redoslijed izračunavanja
+	Set the image of {name}	Postavi sliku za {name}
+	Set to current page ({n})	Postavi na trenutnu stranicu ({n})
+	Set to zero	Postavi na nulu
+	Settings	Postavke
+	Shadings	Sjenčenja
+	Sheet {s} of {n}	List {s} od {n}
+	Shift constrains to 45 degrees. Backspace removes a vertex. Escape cancels.	Shift ograničava na 45 stepeni. Backspace uklanja tjeme. Escape otkazuje.
+	Show	Prikaži
+	Show Report	Prikaži izvještaj
+	Show a field	Prikaži polje
+	Show all	Prikaži sve
+	Show all comments	Prikaži sve komentare
+	Show certificate…	Prikaži certifikat…
+	Show cover page in two-page view	Prikaži naslovnu stranicu u prikazu dvije stranice
+	Show layer	Prikaži sloj
+	Show less	Prikaži manje
+	Show password	Prikaži lozinku
+	Show the accessibility report	Prikaži izvještaj o pristupačnosti
+	Show this dialog when the Checker starts	Prikaži ovaj dijalog kad se provjera pokrene
+	Show {n} more	Prikaži još {n}
+	Show:	Prikaži:
+	Shrink oversized pages	Smanji prevelike stranice
+	Side panels	Bočni paneli
+	Sign	Potpiši
+	Sign Here	Potpišite ovdje
+	Sign this field…	Potpiši ovo polje…
+	Sign with a Digital ID	Potpiši digitalnim ID-om
+	Sign yourself	Potpišite sami
+	Signature	Potpis
+	Signature Details	Detalji potpisa
+	Signature is INVALID:	Potpis je NEVAŽEĆI:
+	Signature is valid:	Potpis je važeći:
+	Signature panel	Panel potpisa
+	Signature validity is UNKNOWN:	Važenje potpisa je NEPOZNATO:
+	Signatures	Potpisi
+	Signatures panel	Panel potpisa
+	Signed and all signatures are valid.	Potpisano i svi potpisi su važeći.
+	Signed and saved to {path}	Potpisano i sačuvano u {path}
+	Signer	Potpisnik
+	Signing time	Vrijeme potpisivanja
+	Simplified field notation:	Pojednostavljena notacija polja:
+	Single Page	Jedna stranica
+	Single Page Continuous	Jedna stranica, neprekidno
+	Single file	Jedna datoteka
+	Single page	Jedna stranica
+	Single word or phrase	Jedna riječ ili izraz
+	Size	Veličina
+	Skip Rule	Preskoči pravilo
+	Skipped	Preskočeno
+	Snap to drawing	Hvatanje uz crtež
+	Snapping	Hvatanje
+	Social Security Number	Broj socijalnog osiguranja
+	Social Security Numbers	Brojevi socijalnog osiguranja
+	Solid	Puno
+	Some page content couldn't be read; snapping uses the rest.	Neki sadržaj stranice nije moguće pročitati; hvatanje koristi ostatak.
+	Sort	Sortiraj
+	Sort by	Sortiraj po
+	Sort comments by:	Sortiraj komentare po:
+	Sort items	Sortiraj stavke
+	Source	Izvor
+	Space Audit	Provjera prostora
+	What takes up the space in this file, by kind of content.	Šta zauzima prostor u ovoj datoteci, po vrsti sadržaja.
+	Special	Posebno
+	Split	Razdvoji
+	Split document	Razdvoji dokument
+	Split document…	Razdvoji dokument…
+	Split into files…	Razdvoji u datoteke…
+	Spreadsheet (.xlsx)	Proračunska tabela (.xlsx)
+	Square	Kvadrat
+	Squiggly	Valovito
+	Squiggly underline	Valovito podvlačenje
+	Squiggly underline text	Valovito podvuci tekst
+	Stamp	Pečat
+	Stamp palette	Paleta pečata
+	Stamps	Pečati
+	Standard Business	Standardni poslovni
+	Thai and Arabic use regular fallback fonts when available.	Tajlandski i arapski koriste obične zamjenske fontove kad su dostupni.
+	Standards	Standardi
+	Star	Zvijezda
+	Start	Početak
+	Start Checking	Pokreni provjeru
+	Start page number	Broj početne stranice
+	Shrink the page content to make room for the header and footer	Smanji sadržaj stranice da se napravi mjesto za zaglavlje i podnožje
+	Status	Status
+	Steps	Koraci
+	Sticky note	Ljepljiva bilješka
+	Strength: {s}	Jačina: {s}
+	Strikethrough	Precrtano
+	Strikethrough text	Precrtaj tekst
+	Strong	Snažno
+	Structure Info	Informacije o strukturi
+	Style	Stil
+	Subject	Predmet
+	Submit a form	Pošalji obrazac
+	Subset	Podskup
+	Summarize	Sažmi
+	Summarize Options	Opcije sažimanja
+	Summarize comments	Sažmi komentare
+	Summary	Sažetak
+	Switch light / dark theme	Prebaci svijetlu / tamnu temu
+	Switch to two-page view first to show the cover page	Prvo se prebacite na prikaz dvije stranice da prikažete naslovnu stranicu
+	TH and TD	TH i TD
+	TH and TD must be children of TR	TH i TD moraju biti podređeni elementu TR
+	TR must be a child of Table, THead, TBody, or TFoot	TR mora biti podređen elementu Table, THead, TBody ili TFoot
+	Tab order	Redoslijed tabulatora
+	Tab order by columns	Redoslijed tabulatora po kolonama
+	Tab order by rows	Redoslijed tabulatora po redovima
+	Tab order is consistent with structure order	Redoslijed tabulatora usklađen je s redoslijedom strukture
+	Tab order: by columns	Redoslijed tabulatora: po kolonama
+	Tab order: by document structure	Redoslijed tabulatora: po strukturi dokumenta
+	Tab order: by rows	Redoslijed tabulatora: po redovima
+	Tab order: move a field with its arrows.	Redoslijed tabulatora: pomjerite polje njegovim strelicama.
+	Table	Tabela
+	Table cells belong in a row. Fix the table's tags.	Ćelije tabele pripadaju redu. Popravite tagove tabele.
+	Table rows belong directly in a table or its head, body or foot. Fix the table's tags.	Redovi tabele pripadaju direktno tabeli ili njenom zaglavlju, tijelu ili podnožju. Popravite tagove tabele.
+	Tables	Tabele
+	Tables must contain the same number of columns in each row and rows in each column	Tabele moraju sadržavati isti broj kolona u svakom redu i redova u svakoj koloni
+	Tables must have a summary	Tabele moraju imati sažetak
+	Tables should have headers	Tabele bi trebale imati zaglavlja
+	Tagged PDF	PDF s tagovima
+	Tagged annotations	Napomene s tagovima
+	Tagged content	Sadržaj s tagovima
+	Tagged form fields	Polja obrasca s tagovima
+	Tagged multimedia	Multimedija s tagovima
+	Tags give the document a logical structure that assistive technology follows. Tag the document (Automatically tag PDF).	Tagovi daju dokumentu logičnu strukturu koju pomoćna tehnologija prati. Označite dokument tagovima (Automatski označi PDF tagovima).
+	Take a snapshot	Napravi snimak
+	Text	Tekst
+	Text (plain)	Tekst (običan)
+	Text Color:	Boja teksta:
+	Text Field Properties	Svojstva tekstualnog polja
+	Text alignment:	Poravnanje teksta:
+	Text box	Okvir za tekst
+	Text field	Tekstualno polje
+	Text in images isn't found; recognise text (OCR) first.	Tekst na slikama se ne pronalazi; prvo prepoznajte tekst (OCR).
+	Text is compared word by word; the differences are shown on the new file.	Tekst se upoređuje riječ po riječ; razlike se prikazuju na novoj datoteci.
+	Text language is specified	Jezik teksta je naveden
+	Text must contrast enough with its background for people with low vision. Check the colours by eye or with a contrast tool.	Tekst mora imati dovoljan kontrast prema pozadini za slabovidne osobe. Provjerite boje okom ili alatom za kontrast.
+	Text recognition is already running	Prepoznavanje teksta je već u toku
+	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	Prepoznavanje teksta nije instalirano: nedostaju modeli (pokrenite `cargo xtask models` ili postavite PDFCRAFT_MODELS).
+	Text to find	Tekst za pretragu
+	Text to insert	Tekst za umetanje
+	That didn't work: an internal error stopped it ({m}).	To nije uspjelo: zaustavila ga je interna greška ({m}).
+	That didn't work: an internal error stopped it ({m}). Your documents are unchanged.	To nije uspjelo: zaustavila ga je interna greška ({m}). Vaši dokumenti su nepromijenjeni.
+	The Keychain's digital IDs couldn't be listed: {e}	Digitalne ID-ove iz privjeska ključeva nije moguće izlistati: {e}
+	The Windows store's digital IDs couldn't be listed: {e}	Digitalne ID-ove iz Windows skladišta nije moguće izlistati: {e}
+	The checker found 1 problem which may prevent the document from being fully accessible.	Provjera je pronašla 1 problem koji može spriječiti potpunu pristupačnost dokumenta.
+	The checker found no problems in this document.	Provjera nije pronašla probleme u ovom dokumentu.
+	The checker found {n} problems which may prevent the document from being fully accessible.	Provjera je pronašla problema koji mogu spriječiti potpunu pristupačnost dokumenta: {n}.
+	The clipboard has no image or text	Međuspremnik nema sliku ni tekst
+	The document changed while you were choosing a file, so nothing was changed.	Dokument se promijenio dok ste birali datoteku, pa ništa nije promijenjeno.
+	The document has additional actions (/AA)	Dokument ima dodatne akcije (/AA)
+	The document has document-level JavaScript	Dokument ima JavaScript na nivou dokumenta
+	The document has no XMP metadata	Dokument nema XMP metapodatke
+	The document is encrypted	Dokument je šifrovan
+	The document now conforms to {level}; save it to keep the changes	Dokument je sada usklađen s {level}; sačuvajte ga da zadržite promjene
+	The document opens without a password; this password is needed to change the restrictions. It's applied when you save.	Dokument se otvara bez lozinke; ova lozinka je potrebna za promjenu ograničenja. Primjenjuje se pri čuvanju.
+	The document was closed before it could be saved.	Dokument je zatvoren prije nego što je mogao biti sačuvan.
+	The document's security settings don't allow filling in form fields	Sigurnosne postavke dokumenta ne dozvoljavaju popunjavanje polja obrasca
+	The document's security settings don't allow this change	Sigurnosne postavke dokumenta ne dozvoljavaju ovu promjenu
+	The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.	Obrazac traži slanje na {u}; PdfCraft ne šalje podatke obrazaca. Sačuvajte dokument da zadržite unose.
+	The form asks viewers to make appearances (NeedAppearances)	Obrazac traži od preglednika da kreiraju izgled (NeedAppearances)
+	The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.	Ključ je u Windows skladištu certifikata, koje može tražiti dozvolu da ga PdfCraft koristi.
+	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	Ključ je u macOS privjesku ključeva, koji može tražiti dozvolu da ga PdfCraft koristi.
+	The newest {n} of {total} PDFs	Najnovijih {n} od {total} PDF-ova
+	The operation failed.	Operacija nije uspjela.
+	The pages were extracted but not deleted, because the document changed while you were choosing a folder.	Stranice su izdvojene, ali ne i izbrisane, jer se dokument promijenio dok ste birali folder.
+	The password is only used to read the file; it isn't saved.	Lozinka se koristi samo za čitanje datoteke; ne čuva se.
+	The passwords don't match.	Lozinke se ne podudaraju.
+	The replacement file doesn't have that many pages.	Zamjenska datoteka nema toliko stranica.
+	The same password is tried on each file.	Ista lozinka se pokušava na svakoj datoteci.
+	The selected area has been copied ({w} × {h} pixels)	Odabrano područje je kopirano ({w} × {h} piksela)
+	The signature will be invisible.	Potpis će biti nevidljiv.
+	The existing action will be preserved.	Postojeća akcija bit će sačuvana.
+	The text is the same	Tekst je isti
+	The title in the metadata and the document information differ	Naslov u metapodacima i u informacijama o dokumentu se razlikuju
+	The value is shown as typed.	Vrijednost se prikazuje kako je upisana.
+	The window should show a meaningful title rather than the file name. Set a title and Initial View > Show: Document Title.	Prozor bi trebao prikazivati smislen naslov umjesto naziva datoteke. Postavite naslov i Početni prikaz > Prikaži: Naslov dokumenta.
+	There are no redaction marks (mark text, areas or pages first)	Nema oznaka za redigovanje (prvo označite tekst, područja ili stranice)
+	There are no redaction marks to apply	Nema oznaka za redigovanje za primjenu
+	Thick	Debelo
+	Thickness	Debljina
+	Thin	Tanko
+	This area has too many overlapping paths; intersection snapping is limited.	Ovo područje ima previše preklapajućih putanja; hvatanje presjeka je ograničeno.
+	This certificate is in your list of trusted certificates.	Ovaj certifikat je na vašoj listi pouzdanih certifikata.
+	This certificate is not trusted. Signatures made with it show an unknown identity.	Ovaj certifikat nije pouzdan. Potpisi napravljeni njime prikazuju nepoznat identitet.
+	This certificate is trusted through a certificate above it in the chain.	Ovaj certifikat je pouzdan putem certifikata iznad njega u lancu.
+	This comment's appearance can't be changed yet.	Izgled ovog komentara se još ne može promijeniti.
+	This compatibility level supports only plain ASCII passwords.	Ovaj nivo kompatibilnosti podržava samo obične ASCII lozinke.
+	This dialog shows the details of a certificate and its chain.	Ovaj dijalog prikazuje detalje certifikata i njegovog lanca.
+	This document can't be checked: it couldn't be read for editing	Ovaj dokument se ne može provjeriti: nije ga moguće pročitati za uređivanje
+	This document contains {n} interactive form fields.	Ovaj dokument sadrži interaktivnih polja obrasca: {n}.
+	This document has no attachments.	Ovaj dokument nema priloga.
+	This document has no bookmarks.	Ovaj dokument nema zabilješki.
+	This document has no comments to flatten	Ovaj dokument nema komentara za spljoštavanje
+	This document has no document-level scripts.	Ovaj dokument nema skripti na nivou dokumenta.
+	This document has no form fields to flatten	Ovaj dokument nema polja obrasca za spljoštavanje
+	This document has no form fields you can fill in	Ovaj dokument nema polja obrasca koja možete popuniti
+	This document has no form fields.	Ovaj dokument nema polja obrasca.
+	This document has no layers.	Ovaj dokument nema slojeva.
+	This document has no pages.	Ovaj dokument nema stranica.
+	This document has no signatures.	Ovaj dokument nema potpisa.
+	This document has no tagged figures.	Ovaj dokument nema slika s tagovima.
+	This document has no {kind} to change	Ovaj dokument nema {kind} za promjenu
+	This document hasn't been checked yet.	Ovaj dokument još nije provjeren.
+	This document is secured. Some changes are restricted by its security settings.	Ovaj dokument je zaštićen. Neke promjene su ograničene njegovim sigurnosnim postavkama.
+	This document isn't password-protected	Ovaj dokument nije zaštićen lozinkom
+	This drawing exceeds the snapping limit; only the first paths are used.	Ovaj crtež premašuje ograničenje hvatanja; koriste se samo prve putanje.
+	This field is locked. Unlock it to change its properties.	Ovo polje je zaključano. Otključajte ga da promijenite njegova svojstva.
+	This file was damaged and has been repaired. Saving keeps the repaired version.	Ova datoteka je bila oštećena i popravljena je. Čuvanje zadržava popravljenu verziju.
+	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Ovaj folder trenutno nije dostupan. Možda je premješten ili je njegov disk ili sinhronizacija s oblakom van mreže.
+	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	Ovaj obrazac sadrži i XFA podatke, koje PdfCraft još ne čita. Možete popuniti njegova polja, ali Acrobat može umjesto toga prikazati XFA vrijednosti.
+	This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.	Ovo je dinamički XFA obrazac, koji PdfCraft još ne može prikazati. Ono što vidite je zamjenska stranica datoteke.
+	This measurement needs at least {n} points.	Ovo mjerenje treba najmanje {n} tačaka.
+	This page couldn't be displayed.\n{e}	Ovu stranicu nije moguće prikazati.\n{e}
+	This web address mixes letters from different alphabets, a common way to imitate another site's name.	Ova web adresa miješa slova iz različitih pisama, što je čest način oponašanja naziva drugog sajta.
+	This web address uses letters from another alphabet, which can look like familiar ones.	Ova web adresa koristi slova iz drugog pisma, koja mogu izgledati kao poznata.
+	Thumbnails	Sličice
+	Tile scale:	Skala pločica:
+	Time	Vrijeme
+	Timed responses	Vremenski ograničeni odgovori
+	Timestamp	Vremenski žig
+	Title	Naslov
+	To:	Za:
+	Toggle fit page / fit width	Prebaci uklapanje stranice / širine
+	Tool	Alat
+	Tooltip:	Opis alata:
+	Top	Vrh
+	Top-level bookmarks ({n})	Zabilješke najvišeg nivoa ({n})
+	Total	Ukupno
+	Translate	Prevedi
+	Trust	Povjerenje
+	Try the form as people filling it in will see it	Isprobajte obrazac onako kako će ga vidjeti oni koji ga popunjavaju
+	Two-Up (Cover Page)	Dvije stranice (naslovna stranica)
+	Two-Up (Facing)	Dvije stranice (jedna naspram druge)
+	Two-Up Continuous (Cover Page)	Dvije stranice neprekidno (naslovna stranica)
+	Two-Up Continuous (Facing)	Dvije stranice neprekidno (jedna naspram druge)
+	Two-page view	Prikaz dvije stranice
+	Two-sided:	Obostrano:
+	Type	Vrsta
+	Type Password	Upišite lozinku
+	Type a password.	Upišite lozinku.
+	Type text	Upiši tekst
+	Type the web address.	Upišite web adresu.
+	Type your {what}.	Upišite {what}.
+	Typewriter	Pisaća mašina
+	URL to submit to	URL za slanje
+	Unchecked	Neoznačeno
+	Underline	Podvučeno
+	Underline text	Podvuci tekst
+	Undid {label}	Poništeno: {label}
+	Undo	Poništi
+	Undo {action}	Poništi: {action}
+	Unit	Jedinica
+	Units	Jedinice
+	Unknown	Nepoznato
+	Unknown author	Nepoznat autor
+	Unlock	Otključaj
+	Unlock comment	Otključaj komentar
+	Unlock {name}	Otključaj {name}
+	Unlock {n} files	Otključaj datoteke: {n}
+	Unlocked {n} of {m} files	Otključano {n} od {m} datoteka
+	Unlocked: the combined file won't be password-protected	Otključano: kombinovana datoteka neće biti zaštićena lozinkom
+	Unlock…	Otključaj…
+	Unpin	Otkvači
+	Unpin {folder}	Otkvači {folder}
+	Unplaced	Nepostavljeno
+	Unsupported measurements	Nepodržana mjerenja
+	Up	Gore
+	Update	Ažuriraj
+	Update background	Ažuriraj pozadinu
+	Update background…	Ažuriraj pozadinu…
+	Update header & footer	Ažuriraj zaglavlje i podnožje
+	Update header & footer…	Ažuriraj zaglavlje i podnožje…
+	Update watermark	Ažuriraj vodeni žig
+	Update watermark…	Ažuriraj vodeni žig…
+	Use 72 DPI (one point per pixel)	Koristi 72 DPI (jedna tačka po pikselu)
+	Use Flate to encode streams that are not encoded	Koristi Flate za kodiranje tokova koji nisu kodirani
+	In streams that use LZW encoding, use Flate instead	U tokovima koji koriste LZW kodiranje koristi Flate
+	Use JavaScript	Koristi JavaScript
+	Use a Digital ID from a file	Koristi digitalni ID iz datoteke
+	Use a certificate	Koristi certifikat
+	Use custom DPI	Koristi prilagođeni DPI
+	Use each image's embedded DPI; use 72 DPI when it is absent.	Koristi ugrađeni DPI svake slike; koristi 72 DPI kad ga nema.
+	Use guided actions	Koristi vođene akcije
+	Use image resolution	Koristi rezoluciju slike
+	Use now	Koristi sada
+	Use overlay text	Koristi tekst preklopa
+	Use print production	Koristi štamparsku produkciju
+	Use system setting	Koristi sistemsku postavku
+	Use {what}	Koristi: {what}
+	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	Koristi se kad PDF ne traži raspored ili zumiranje. Neprekidno pomjeranje nikad ne skače između stranica.
+	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	Koristi se pri otvaranju PDF-ova. Izričito pokretanje ili kontrolni način ima prednost za sesiju.
+	User Interface Options	Opcije korisničkog interfejsa
+	User password	Korisnička lozinka
+	Username	Korisničko ime
+	Valid	Važeće
+	Valid for 5 years, for digital signatures. Self-signed IDs are usually not trusted by others.	Važi 5 godina, za digitalne potpise. Samopotpisanim ID-ovima drugi obično ne vjeruju.
+	Valid from	Važi od
+	Valid to	Važi do
+	Validate	Potvrdi
+	Validate all	Potvrdi sve
+	Validate all signatures	Potvrdi sve potpise
+	Validity ends	Važenje završava
+	Validity starts	Važenje počinje
+	Value is not calculated	Vrijednost se ne izračunava
+	Value is the	Vrijednost je
+	Value:	Vrijednost:
+	Verify	Verificiraj
+	Verify to see what the document needs.	Verificirajte da vidite šta dokumentu treba.
+	Version	Verzija
+	Version {v}	Verzija {v}
+	Vertical	Okomito
+	Vertical reversed	Okomito obrnuto
+	Vertically	Okomito
+	Video, sound and rich media must be tagged to be announced. Tag the multimedia annotations.	Video, zvuk i obogaćeni mediji moraju biti označeni tagovima da bi se najavili. Označite multimedijalne napomene tagovima.
+	View less	Prikaži manje
+	View more	Prikaži više
+	View revision {n}	Prikaži reviziju {n}
+	View signed version	Prikaži potpisanu verziju
+	Viewing	Pregled
+	Viewport	Prozor prikaza
+	Viewport rectangle in page points (x, y, width, height)	Pravougaonik prozora prikaza u tačkama stranice (x, y, širina, visina)
+	Visible Rectangle	Vidljivi pravougaonik
+	Visual	Vizuelno
+	Warnings	Upozorenja
+	Watermark	Vodeni žig
+	Weak	Slabo
+	Welcome to PdfCraft	Dobro došli u PdfCraft
+	What word or phrase would you like to search for?	Koju riječ ili izraz želite potražiti?
+	Whole words only	Samo cijele riječi
+	Width	Širina
+	Width:	Širina:
+	Window Options	Opcije prozora
+	Windows store  ·  	Windows skladište  ·  
+	Write this email?	Napisati ovaj e-mail?
+	Wrong password	Pogrešna lozinka
+	Wrote 1 file to {dir}	Zapisana 1 datoteka u {dir}
+	Wrote {n} files to {dir}	Zapisano datoteka u {dir}: {n}
+	X Object Forms	X Object obrasci
+	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	XFA obrazac: njegova polja i XFA podaci se drže usklađenim, pa drugi preglednici prikazuju ono što popunite.
+	Yellow	Žuta
+	Yes	Da
+	You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Spremate se primijeniti 1 oznaku za redigovanje. Tekst, slike i crteži ispod oznaka te komentari i polja obrasca koji ih preklapaju trajno se uklanjaju.
+	You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Spremate se primijeniti oznake za redigovanje: {n}. Tekst, slike i crteži ispod oznaka te komentari i polja obrasca koji ih preklapaju trajno se uklanjaju.
+	You can pin up to {n} folders. Unpin one first.	Možete prikvačiti najviše {n} foldera. Prvo otkvačite jedan.
+	You have version {c}. All releases are listed at {page}.	Imate verziju {c}. Sva izdanja su navedena na {page}.
+	You have version {c}. Download the new version from its release page.	Imate verziju {c}. Preuzmite novu verziju s njene stranice izdanja.
+	Your changes will be lost if you don't save them.	Vaše promjene će biti izgubljene ako ih ne sačuvate.
+	Your name	Vaše ime
+	ZIP	ZIP
+	Zip Code	Poštanski broj
+	Zip Code + 4	Poštanski broj + 4
+	Zoom	Zumiranje
+	Zoom in	Uvećaj
+	Zoom in (⌘+)	Uvećaj (⌘+)
+	Zoom in / out (also pinch or ⌘-scroll)	Uvećaj / umanji (također štipanjem ili ⌘+pomjeranje)
+	Zoom out	Umanji
+	Zoom out (⌘−)	Umanji (⌘−)
+	Zoom to page level	Zumiraj na nivo stranice
+	`{command}` {when}	`{command}` {when}
+	a bookmark cannot be moved inside itself	zabilješka se ne može premjestiti unutar same sebe
+	a document must keep at least one page	dokument mora zadržati barem jednu stranicu
+	average	prosjek
+	background	pozadina
+	characters	znakova
+	e.g. My stamps	npr. Moji pečati
+	e.g. en-US	npr. bs-BA
+	for images above	za slike iznad
+	header or footer	zaglavlje ili podnožje
+	initials	inicijali
+	is available	je dostupno
+	is not available yet	još nije dostupno
+	just now	upravo sada
+	maximum	maksimum
+	minimum	minimum
+	needs an AI provider (off by default)	zahtijeva AI pružaoca (isključeno prema zadanom)
+	no such document	nema takvog dokumenta
+	none	nijedno
+	nothing in the file matches this document	ništa u datoteci ne odgovara ovom dokumentu
+	nothing to redo	nema ničeg za ponavljanje
+	nothing to undo	nema ničeg za poništavanje
+	of the following fields:	sljedećih polja:
+	of {name}	od {name}
+	of {pages}	od {pages}
+	on page {label}	na stranici {label}
+	open to see what it will include	otvorite da vidite šta će uključivati
+	pages	stranice
+	product (x)	proizvod (x)
+	ships in milestone {m}	stiže u fazi {m}
+	signature	potpis
+	sorted ascending	sortirano uzlazno
+	sorted descending	sortirano silazno
+	sum (+)	zbir (+)
+	the document has no form fields	dokument nema polja obrasca
+	the document has no page tree	dokument nema stablo stranica
+	the document has no tags	dokument nema tagove
+	the document is protected by a password	dokument je zaštićen lozinkom
+	the image is empty	slika je prazna
+	the password is incorrect	lozinka nije tačna
+	the title must not be empty	naslov ne smije biti prazan
+	there are no pages to print	nema stranica za štampanje
+	there are no redaction marks to apply	nema oznaka za redigovanje za primjenu
+	this document is signed: rewriting it would invalidate its signatures (save it incrementally instead)	ovaj dokument je potpisan: ponovno zapisivanje bi poništilo njegove potpise (umjesto toga sačuvajte ga inkrementalno)
+	this file isn't XFDF, FDF, XML or text form data	ova datoteka nije XFDF, FDF, XML niti tekstualni podaci obrasca
+	to	do
+	to {n}	do {n}
+	watermark	vodeni žig
+	yesterday	jučer
+	{0}: {1}	{0}: {1}
+	{c} of {n}{more}	{c} od {n}{more}
+	{dpi} pixels/inch	{dpi} piksela/inču
+	{field}: {e}	{field}: {e}
+	{file} is too large for a stamp (at most {n} MB)	{file} je prevelika za pečat (najviše {n} MB)
+	{folder} is already pinned to Home	{folder} je već prikvačen na Početnu
+	{kind} Properties	Svojstva: {kind}
+	{kind} field	Polje: {kind}
+	{kind} · page {p}	{kind} · stranica {p}
+	{kind} — click to show it on the page	{kind} — kliknite da se prikaže na stranici
+	{k} of {n}	{k} od {n}
+	{label} (1 issue)	{label} (1 problem)
+	{label} ({n} issues)	{label} (problema: {n})
+	{label} failed: {e}	{label} nije uspjelo: {e}
+	{month} {day}, {y}	{day}. {month} {y}.
+	{month} {y}	{month} {y}.
+	{msg} to {dir}	{msg} u {dir}
+	{name} (default)	{name} (zadano)
+	{name} can't be combined: {why}	{name} se ne može kombinovati: {why}
+	{name} has no action	{name} nema akciju
+	{name} is read-only	{name} je samo za čitanje
+	{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.	{name} šalje obrazac na {url}; PdfCraft ne šalje podatke obrazaca. Sačuvajte dokument da zadržite unose.
+	{name} — unsaved changes	{name} — nesačuvane promjene
+	{name}: choosing images arrives on the web with file pickers for images	{name}: odabir slika stiže na web s biračima datoteka za slike
+	{name}: the {other} action isn't supported yet	{name}: akcija {other} još nije podržana
+	{n} contributors · {c} commits	Saradnika: {n} · commitova: {c}
+	{n} days ago	prije {n} dana
+	{n} differences found	Pronađeno razlika: {n}
+	{n} files	{n} datoteka
+	{n} files done	Završeno datoteka: {n}
+	{n} files need attention	Datoteka koje zahtijevaju pažnju: {n}
+	{n} h ago	prije {n} h
+	{n} instances	Pojavljivanja: {n}
+	{n} issues	Problema: {n}
+	{n} marks	Oznaka: {n}
+	{n} match(es) marked for redaction.	Podudaranja označena za redigovanje: {n}.
+	{n} measurements use an unsupported format and are left out.	Mjerenja u nepodržanom formatu su izostavljena: {n}.
+	{n} min ago	prije {n} min
+	{n} pages	Stranica: {n}
+	{n} pages selected	Odabrano stranica: {n}
+	{n} pages selected.	Odabrano stranica: {n}.
+	{n} selected	Odabrano: {n}
+	{n} {kind}	{n} {kind}
+	{rule} - {status}	{rule} - {status}
+	{s} action	Akcija {s}
+	This PDF uses the unsupported {s} action.	Ovaj PDF koristi nepodržanu akciju {s}.
+	{verb} Background	{verb} pozadinu
+	{verb} Header and Footer	{verb} zaglavlje i podnožje
+	{verb} Watermark	{verb} vodeni žig
+	{verb} as "{name}"	{verb} kao "{name}"
+	{who} in this document tried to open an address PdfCraft won't open: {e}.	{who} u ovom dokumentu pokušao je otvoriti adresu koju PdfCraft neće otvoriti: {e}.
+	{who} in this document tried to open an address PdfCraft won't open: {e}. Only web (http, https) and email (mailto) links open from documents.	{who} u ovom dokumentu pokušao je otvoriti adresu koju PdfCraft neće otvoriti: {e}. Iz dokumenata se otvaraju samo web (http, https) i e-mail (mailto) veze.
+	{who} in this document wants to open this address in your browser:	{who} u ovom dokumentu želi otvoriti ovu adresu u vašem pregledniku:
+	{who} in this document wants to open your email app with this address:	{who} u ovom dokumentu želi otvoriti vašu aplikaciju za e-mail s ovom adresom:
+	{words} on {pages}	{words} na {pages}
+	ΔLOC	ΔLOC
+	— (protection is applied when you save)	— (zaštita se primjenjuje pri čuvanju)
+	“{name}” is protected. Enter a password to open it.	„{name}” je zaštićen. Unesite lozinku da ga otvorite.
+	−Bin	−Bin
+	−LOC	−LOC
+action wizard	Start	Pokreni
+certificate	Subject	Subjekt
+comment menu	Edit	Uredi
+signature pad	Type	Upiši
+@plural	{n} field|{n} fields	{n} polje|{n} polja|{n} polja
+	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} pri {dpi} dpi, najveća veličina u kojoj se mogu iscrtati)
+	A selected field has no widget on any page, so the fields can't be edited together.	Odabrano polje nema widget ni na jednoj stranici, pa se polja ne mogu uređivati zajedno.
+	Butt	Ravno
+	Character limit 0 means no limit. A comb of characters needs a limit.	Ograničenje znakova 0 znači bez ograničenja. Češalj znakova treba ograničenje.
+	Character limit:	Ograničenje znakova:
+	Closed arrow	Zatvorena strelica
+	Comb of characters	Češalj znakova
+	Couldn't open the printer's preferences: {e}	Nije moguće otvoriti postavke štampača: {e}
+	Custom font	Prilagođeni font
+	Date format	Format datuma
+	Document properties ({key})	Svojstva dokumenta ({key})
+	Fill & Sign dates	Datumi za Popuni i potpiši
+	Flatten Fill & Sign when saving	Spljošti Popuni i potpiši pri čuvanju
+	Font size 0 uses automatic sizing.	Veličina fonta 0 koristi automatsku veličinu.
+	Import list…	Uvezi listu…
+	Larger pages	Veće stranice
+	Line ending	Završetak linije
+	Mixed	Mješovito
+	Multiple words or phrases	Više riječi ili izraza
+	New bookmark ({key})	Nova zabilješka ({key})
+	New bookmarks from structure	Nove zabilješke iz strukture
+	Next ({key})	Sljedeće ({key})
+	One word or phrase per line	Jedna riječ ili izraz po redu
+	Only checked properties will change. Mixed means the selected fields have different values.	Promijenit će se samo označena svojstva. Mješovito znači da odabrana polja imaju različite vrijednosti.
+	Open a PDF ({key})	Otvori PDF ({key})
+	Open arrow	Otvorena strelica
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	Otvara postavke upravljačkog programa štampača. Čuvaju se za svako štampanje s ovog računara; kopije, obostrano štampanje, nijanse sive i papir odabrani ovdje i dalje važe.
+	Pattern	Uzorak
+	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft crta bez grafičkog procesora, pa može biti spor. Ažuriranje upravljačkog programa za grafiku može pomoći.
+	Previous ({key})	Prethodno ({key})
+	Print ({key})	Štampaj ({key})
+	Printer properties	Svojstva štampača
+	Redaction code:	Kod redigovanja:
+	Reset page size	Resetuj veličinu stranice
+	Reset to printer defaults	Vrati na zadane postavke štampača
+	Reverse closed arrow	Obrnuta zatvorena strelica
+	Reverse open arrow	Obrnuta otvorena strelica
+	Rotate view clockwise ({key})	Rotiraj prikaz u smjeru kazaljke na satu ({key})
+	Rotation:	Rotacija:
+	Same as interface ({language})	Isto kao interfejs ({language})
+	Scroll tabs left	Pomjeri kartice ulijevo
+	Scroll tabs right	Pomjeri kartice udesno
+	Shared Field Properties	Zajednička svojstva polja
+	Shift- or Ctrl/Command-click to select several fields.	Shift ili Ctrl/Command klik za odabir više polja.
+	Slash	Kosa crta
+	Smaller pages	Manje stranice
+	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	Prepoznavanje teksta nije instalirano: nedostaju datoteke modela. Ponovo instalirajte PdfCraft ili postavite PDFCRAFT_MODELS na folder koji ih sadrži.
+	Text, marks and signatures become part of the page. Other comments stay editable.	Tekst, oznake i potpisi postaju dio stranice. Ostali komentari ostaju uredivi.
+	The document changed while you were editing field properties.	Dokument se promijenio dok ste uređivali svojstva polja.
+	The document is no longer open.	Dokument više nije otvoren.
+	The field properties could not be changed.	Svojstva polja nije moguće promijeniti.
+	The field properties dialog is no longer open.	Dijalog svojstava polja više nije otvoren.
+	The field {name} no longer exists.	Polje {name} više ne postoji.
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	Vlastite postavke upravljačkog programa štampača za ovo štampanje: ladica za papir, vrsta papira, dorada i drugo.
+	The selected fields could not be found. Select them again.	Odabrana polja nije moguće pronaći. Ponovo ih odaberite.
+	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	Fontovi PDF teksta ne mogu iscrtati „{c}” ({code}). Odaberite podržani tekst.
+	This printer offers no settings of its own.	Ovaj štampač nema vlastitih postavki.
+	To change locked fields, also set Locked to No.	Da promijenite zaključana polja, postavite i Zaključano na Ne.
+	Today: {date}	Danas: {date}
+	Zoom in ({key})	Uvećaj ({key})
+	Zoom in / out (also pinch or {key}-scroll)	Uvećaj / umanji (također štipanjem ili {key}+pomjeranje)
+	Zoom out ({key})	Umanji ({key})
+	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	modeli za prepoznavanje teksta nisu instalirani (ponovo instalirajte PdfCraft ili postavite PDFCRAFT_MODELS na folder koji ih sadrži)
+	yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is.	yyyy ili yy godina · m ili mm mjesec · mmm ili mmmm naziv mjeseca · d ili dd dan · ddd ili dddd dan u sedmici. H, h, M, s i t su slova za vrijeme i ne mogu se koristiti sama: stavite {escape} ispred slova da se prikaže kakvo jeste.
+	{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy.	{chars} se još ne mogu upisati u PDF: tekst za Popuni i potpiši je samo zapadnoevropski. Odaberite numerički format kao dd.mm.yyyy.
+	{name} is too large for a word list (at most 1 MB).	{name} je prevelika za listu riječi (najviše 1 MB).
+	{n} fields selected	Odabrano polja: {n}
+	{n} word(s) or phrase(s)	Riječi ili izraza: {n}
+	Auto ({percent}%)	Automatski ({percent}%)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	Automatski prati veličinu teksta sistema. Stranice se uvijek iscrtavaju u punoj rezoluciji ekrana.
+	Check the pages	Provjeri stranice
+	Collapse all	Skupi sve
+	Collapse all pages	Skupi sve stranice
+	Expand all pages	Proširi sve stranice
+	Column select	Odabir kolone
+	Drag the selection to move it. Esc clears the selection.	Prevucite odabir da ga pomjerite. Esc briše odabir.
+	Expand all	Proširi sve
+	Files are combined in the order shown. Drag them to change it.	Datoteke se kombinuju prikazanim redoslijedom. Prevucite ih da ga promijenite.
+	Fill colour	Boja ispune
+	Fill colour: none	Boja ispune: nijedna
+	Finish or discard the text being edited before selecting several objects.	Završite ili odbacite tekst koji se uređuje prije odabira više objekata.
+	Grid view	Prikaz mreže
+	Interface size	Veličina interfejsa
+	List view	Prikaz liste
+	Move object	Premjesti objekat
+	Move objects	Premjesti objekte
+	No fill	Bez ispune
+	Pages: {k} of {n}	Stranice: {k} od {n}
+	Preview unavailable: {e}	Pregled nije dostupan: {e}
+	Remove page	Ukloni stranicu
+	Remove {n} pages	Ukloni stranice: {n}
+	Saved {place}: {before} → {after} (not smaller){detail}	Sačuvano {place}: {before} → {after} (nije manje){detail}
+	Select at most 1000 objects at a time.	Odaberite najviše 1000 objekata odjednom.
+	Shift-click to select several objects. Drag empty space to select an area.	Shift klik za odabir više objekata. Prevucite po praznom prostoru za odabir područja.
+	Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth.	Neke zabilješke nisu prikazane ovdje: panel prikazuje ograničen broj, ugniježđen do ograničene dubine.
+	Switch to List view to change the pages it takes.	Prebacite se na prikaz liste da promijenite stranice koje uzima.
+	Text used as a clipping path cannot be moved with this selection.	Tekst korišten kao putanja isijecanja ne može se pomjeriti ovim odabirom.
+	These objects could not be moved. Select them again and try a smaller move.	Ove objekte nije moguće pomjeriti. Ponovo ih odaberite i pokušajte s manjim pomakom.
+	This file is already as small as it can be made ({size}). No copy was saved.	Ova datoteka je već najmanja moguća ({size}). Kopija nije sačuvana.
+	This page contains objects that cannot be selected together.	Ova stranica sadrži objekte koji se ne mogu odabrati zajedno.
+	Vertical text cannot be moved with this selection.	Okomiti tekst se ne može pomjeriti ovim odabirom.
+key	Ctrl	Ctrl
+key	Delete	Delete
+key	End	End
+key	Esc	Esc
+key	Home	Home
+key	Shift	Shift
+key	Space	Razmak
+@plural	{n} object selected|{n} objects selected	Odabran {n} objekat|Odabrana {n} objekta|Odabrano {n} objekata
+	Looking for printers…	Traženje štampača…
+	Sending sheet {s} of {n} to {printer}…	Slanje lista {s} od {n} na {printer}…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Nisu pronađeni štampači. Provjerite je li štampač instaliran i radi li red za štampanje, zatim ponovo otvorite Štampaj.
+	Reading the printer's settings…	Čitanje postavki štampača…
+	Sending to {printer}…	Slanje na {printer}…
+	Float panel	Odvoji panel
+	Inspector	Inspektor
+	Move to group	Premjesti u grupu
+	Panels	Paneli
+	Reset panel layout	Vrati raspored panela na početno
+	Resize panel window	Promijeni veličinu prozora panela
+	Resize panels	Promijeni veličinu panela
+	Tools	Alati
+	Appearance mode	Način izgleda
+	Light	Svijetlo
+	Dark	Tamno
+	Active	Aktivno
+	Dark theme	Tamna tema
+	Appearance settings…	Postavke izgleda…
+	Save ({key})	Sačuvaj ({key})
+	Select page {label}	Odaberi stranicu {label}
+	Rotate page {label} counterclockwise	Rotiraj stranicu {label} suprotno od kazaljke na satu
+	Rotate page {label} clockwise	Rotiraj stranicu {label} u smjeru kazaljke na satu
+	Delete page {label}	Izbriši stranicu {label}
+	Offset from centre	Pomak od središta
+	Graphic	Grafika
+	Signer's name	Ime potpisnika
+	Fill & Sign signature	Potpis za Popuni i potpiši
+	Choose image…	Odaberi sliku…
+	Enter permissions password…	Unesite lozinku za dozvole…
+	Permissions password	Lozinka za dozvole
+	“{name}” has security restrictions. Enter its permissions password to lift them.	„{name}” ima sigurnosna ograničenja. Unesite njegovu lozinku za dozvole da ih ukinete.
+	Restrictions lifted	Ograničenja ukinuta
+	Couldn't unlock {name}: {e}	Nije moguće otključati {name}: {e}
+	This document has no restrictions to lift	Ovaj dokument nema ograničenja za ukidanje
+	The document's security settings don't allow copying text and images	Sigurnosne postavke dokumenta ne dozvoljavaju kopiranje teksta i slika
+	The document's security settings don't allow printing	Sigurnosne postavke dokumenta ne dozvoljavaju štampanje
+	Add the files to combine	Dodajte datoteke za kombinovanje
+	Leave out files that can't be read?	Izostaviti datoteke koje se ne mogu pročitati?
+	These files can't be read, so they won't be in the combined PDF:	Ove datoteke se ne mogu pročitati, pa neće biti u kombinovanom PDF-u:
+	Combine the rest	Kombinuj ostale
+	and {n} more	i još {n}
+	Drop PDFs, images, text files or folders here, or choose them.	Ispustite PDF-ove, slike, tekstualne datoteke ili foldere ovdje ili ih odaberite.
+	Every PDF, image and text file in the folder	Svaki PDF, slika i tekstualna datoteka u folderu
+	Every PDF, image and text file in the folder and the folders inside it	Svaki PDF, slika i tekstualna datoteka u folderu i folderima unutar njega
+	No PDFs, images or text files found in {folder}	Nisu pronađeni PDF-ovi, slike ni tekstualne datoteke u {folder}
+	Added the first {n} files in {folder}	Dodano prvih {n} datoteka iz {folder}
+	Margins	Margine
+	For page sizes and margins.	Za veličine stranica i margine.
+	PDF page: {size}	PDF stranica: {size}
+	Match page at 100%	Prikaži stranicu na 100%
+	PDF scale: {scale}%	PDF skala: {scale}%
+	Printer paper and scaling may differ. Check driver settings.	Papir i skaliranje štampača mogu se razlikovati. Provjerite postavke upravljačkog programa.
+	Drawing scale changes. Use Actual size for full-scale plans.	Skala crteža se mijenja. Za planove u punoj skali koristite Stvarna veličina.
+	Reload documents when their files change on disk	Ponovo učitaj dokumente kad se njihove datoteke promijene na disku
+	Don't show again	Ne prikazuj ponovo
+	Show a notice when a document is secured	Prikaži obavještenje kada je dokument zaštićen
+	Always use my default zoom and page layout	Uvijek koristi moj zadani zum i raspored stranica
+	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Ova datoteka se promijenila na disku. Ponovo učitaj prikazuje novu verziju i odbacuje vaše nesačuvane promjene; Sačuvaj je zamjenjuje ovom verzijom.
+	Reload	Ponovo učitaj
+	Couldn't reload {name}: {e}	Nije moguće ponovo učitati {name}: {e}
+	Scroll speed (mouse wheel and arrow keys)	Brzina pomjeranja (točkić miša i tipke sa strelicama)
+scroll speed	Slow	Sporo
+scroll speed	Normal	Normalno
+scroll speed	Fast	Brzo
+	Animation effects	Animacijski efekti
+animation effects	On	Uključeno
+animation effects	Off	Isključeno
+	Enhance camera image	Poboljšaj sliku s kamere
+	Drag the corners onto the document's edges, then choose Enhance page.	Prevucite uglove na ivice dokumenta, zatim odaberite Poboljšaj stranicu.
+	Enhance page	Poboljšaj stranicu
+	Done adding text	Završi dodavanje teksta
+	Discard this text (Esc)	Odbaci ovaj tekst (Esc)
+	Clean-up	Čišćenje
+	Original	Original
+	Greyscale	Nijanse sive
+	Black and white	Crno-bijelo
+	Reading colours	Boje za čitanje
+	Replace document colours	Zamijeni boje dokumenta
+	Black on white	Crno na bijelom
+	White on black	Bijelo na crnom
+	Yellow on black	Žuto na crnom
+	Green on black	Zeleno na crnom
+	Page background	Pozadina stranice
+	Only change the colour of black text or line art	Promijeni boju samo crnog teksta ili linijske grafike
+	Change the colour of line art as well as text	Promijeni boju linijske grafike kao i teksta
+	Colours are remapped while rendering; the document itself never changes.	Boje se preslikavaju pri iscrtavanju; sam dokument se nikad ne mijenja.
+	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	Upravljački program ovog štampača ne prihvata postavke obostranog štampanja od drugih programa, pa važi njegova vlastita postavka. Promijenite je u Svojstva…
+	This field's font can't draw “{c}” ({code}), so PdfCraft shows ? in its place. The value is saved, and other PDF viewers redraw the field from it.	Font ovog polja ne može iscrtati „{c}” ({code}), pa PdfCraft na tom mjestu prikazuje ?. Vrijednost je sačuvana i drugi PDF preglednici ponovo iscrtavaju polje iz nje.
+	The fonts PdfCraft writes with can't draw “{c}” ({code}), so it shows as ? in every PDF viewer. The text is saved.	Fontovi kojima PdfCraft piše ne mogu iscrtati „{c}” ({code}), pa se u svakom PDF pregledniku prikazuje kao ?. Tekst je sačuvan.
+	Browser's print dialog	Dijalog za štampanje preglednika
+	Copies, two-sided printing and colour are chosen in the browser's print dialog.	Kopije, obostrano štampanje i boja biraju se u dijalogu za štampanje preglednika.
+	Preparing {n} sheets for printing…	Priprema listova za štampanje: {n}…
+	Preparing sheet {done} of {total} for printing…	Priprema lista {done} od {total} za štampanje…
+	Opening the browser's print dialog…	Otvaranje dijaloga za štampanje preglednika…
+	Couldn't print from the browser ({e}); downloaded {name} to print instead	Nije moguće štampati iz preglednika ({e}); umjesto toga preuzeto je {name} za štampanje
+	Tools panel side	Strana panela alata
+	Add comment	Dodaj komentar
+	Change tag properties	Promijeni svojstva taga
+	Tags panel	Panel tagova
+	Tags	Tagovi
+	Tag type	Vrsta taga
+	Actual text	Stvarni tekst
+	Find a tag	Pronađi tag
+	Collapse tag	Skupi tag
+	Expand tag	Proširi tag
+	Revert changes	Vrati promjene
+	Save tag properties	Sačuvaj svojstva taga
+	This document has no editable structure tags.	Ovaj dokument nema strukturnih tagova koji se mogu uređivati.
+	{n} tags	Tagova: {n}
+	Save or revert changes before selecting another tag.	Sačuvajte ili vratite promjene prije odabira drugog taga.
+	Left out: {names}	Izostavljeno: {names}
+	already a PDF	već je PDF
+	no unused output name	nema neiskorištenog izlaznog naziva
+	no output folder was chosen	nije odabran izlazni folder
+@plural	Downloaded {n} PDF|Downloaded {n} PDFs	Preuzet {n} PDF|Preuzeta {n} PDF-a|Preuzeto {n} PDF-ova
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} izračun sada koristi novi naziv.|{n} izračuna sada koriste novi naziv.|{n} izračuna sada koristi novi naziv.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	Redoslijed izračunavanja ima {n} unos koji ništa ne izračunava. Popravi redoslijed ga uklanja.|Redoslijed izračunavanja ima {n} unosa koji ništa ne izračunavaju. Popravi redoslijed ih uklanja.|Redoslijed izračunavanja ima {n} unosa koji ništa ne izračunavaju. Popravi redoslijed ih uklanja.
+@plural	{fields} reads it|{fields} read it	{fields} ga čita|{fields} ga čitaju|{fields} ga čitaju
+@plural	{n} field shows an old value|{n} fields show old values	{n} polje prikazuje staru vrijednost|{n} polja prikazuju stare vrijednosti|{n} polja prikazuje stare vrijednosti
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} se izračunava prije polja {fields}, koja čita.|{field} se izračunava prije polja {fields}, koja čita.|{field} se izračunava prije polja {fields}, koja čita.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	Još {n} polje se izračunava prerano.|Još {n} polja se izračunavaju prerano.|Još {n} polja se izračunava prerano.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} nedostaje u redoslijedu sačuvanom u PDF-u, pa ga drugi PDF preglednici možda neće izračunati.|{fields} nedostaju u redoslijedu sačuvanom u PDF-u, pa ih drugi PDF preglednici možda neće izračunati.|{fields} nedostaju u redoslijedu sačuvanom u PDF-u, pa ih drugi PDF preglednici možda neće izračunati.
+@plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} naziv polja se poklapa s ranijim datotekama i bit će preimenovan: {list}|{n} naziva polja se poklapaju s ranijim datotekama i bit će preimenovana: {list}|{n} naziva polja se poklapa s ranijim datotekama i bit će preimenovano: {list}
+	Scan	Skeniraj
+	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Potpišite list bijelog papira i fotografišite ga pri jakom, ravnomjernom svjetlu (koristite blic). Odaberite fotografiju ili je ispustite ovdje: PdfCraft pronalazi potpis i uklanja papir.
+	Choose photo…	Odaberi fotografiju…
+	No photo chosen	Nije odabrana fotografija
+	Photo	Fotografija
+	Ink sensitivity	Osjetljivost rukopisa
+	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	U okviru nije pronađen potpis. Pomjerite okvir preko potpisa ili povećajte osjetljivost rukopisa.
+	Couldn't use the photo: {e}	Nije moguće koristiti fotografiju: {e}
+	Close Tab	Zatvori karticu
+	Reopen Closed Tab	Ponovo otvori zatvorenu karticu
+	Reveal in Finder	Prikaži u Finderu
+	Reveal in File Explorer	Prikaži u File Exploreru
+	Other colour…	Druga boja…
+	Recent colours	Nedavne boje
+	Couldn't follow linked PDF: {reason}	Nije moguće pratiti povezani PDF: {reason}
+	The linked PDF opened, but its named destination was not applied.	Povezani PDF je otvoren, ali njegovo imenovano odredište nije primijenjeno.
+	The linked PDF opened, but its page destination was out of range.	Povezani PDF je otvoren, ali odredišna stranica je izvan raspona.
+	Local cross-PDF links require the desktop app	Lokalne veze između PDF-ova zahtijevaju desktop aplikaciju
+	Cut Image	Izreži sliku
+	Redact Image	Rediguj sliku
+	Create Link…	Kreiraj vezu…
+	Recognize Text…	Prepoznaj tekst…
+	Minimize	Minimiziraj
+	Maximize	Maksimiziraj
+	Restore	Vrati
+	Use system title bar	Koristi sistemsku naslovnu traku
+	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Prikaži osnovnu naslovnu traku za dugmad prozora umjesto trake kartica. GNOME ne crta naslovne trake za aplikacije, pa ova ne prati njegovu temu.
+	Allow	Dozvoli
+	Only allow this if you trust the source document.	Dozvolite ovo samo ako vjerujete izvornom dokumentu.
+	Open in Full Screen mode?	Otvoriti u načinu rada preko cijelog ekrana?
+	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Ovaj dokument traži otvaranje u načinu rada preko cijelog ekrana: stranica ispunjava ekran i ništa drugo se ne prikazuje. Pritisnite Esc bilo kada da izađete.
+	Full Screen	Cijeli ekran
+	Not now	Ne sada
+	Open this local PDF?	Otvoriti ovaj lokalni PDF?
+	This document is trying to open a local file:	Ovaj dokument pokušava otvoriti lokalnu datoteku:
+	Move tag earlier	Pomakni tag ranije
+	Move tag later	Pomakni tag kasnije
+	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Pregledate potpisanu verziju dokumenta „{from}” (revizija {rev}). To je snimak: promjene ovdje neće uticati na original.
+	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Pregledate reviziju {rev} dokumenta „{from}”. To je snimak: promjene ovdje neće uticati na original.
+	Turn upside down (180°)	Okreni naopako (180°)
+	4 x 6 in label (101.6 x 152.4 mm)	Naljepnica 4 x 6 in (101,6 x 152,4 mm)
+	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Reže svaku stranicu na njeno štampano područje, uspravlja je i uklapa u list bez razvlačenja. Jedna naljepnica po listu.
+	Find untagged content	Pronađi neoznačeni sadržaj
+	No untagged content was found.	Nije pronađen neoznačeni sadržaj.
+	Found {n} untagged content problems.	Pronađeno problema s neoznačenim sadržajem: {n}.
+	Tag form fields	Označi polja obrasca tagovima
+	Mark as artifact	Označi kao artefakt
+	Remove this leaf tag from reading order and mark its direct content as an artifact	Ukloni ovaj krajnji tag iz redoslijeda čitanja i označi njegov direktni sadržaj kao artefakt
+	Mark content as artifact	Označi sadržaj kao artefakt
+	Word count	Broj riječi
+	Current page only	Samo trenutna stranica
+	Exclude tagged tables	Isključi tabele s tagovima
+	Exclude tagged code blocks	Isključi blokove koda s tagovima
+	Exclude image/OCR text	Isključi tekst slika/OCR-a
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	Isključenja koriste PDF tagove. Tabele i kod bez tagova ostaju uključeni. Isključivanje slika uklanja i nevidljivi tekst.
+	Words	Riječi
+	Characters	Znakovi
+	Characters without spaces	Znakovi bez razmaka
+	Pages counted	Prebrojane stranice
+	Some pages contain no countable text. Scanned images need OCR first.	Neke stranice ne sadrže tekst koji se može brojati. Skenirane slike prvo trebaju OCR.
+	Some content could not be classified safely and was kept in the count.	Neki sadržaj nije bilo moguće sigurno klasificirati pa je zadržan u brojanju.
+	Counting words… {n} pages read	Brojanje riječi… pročitano stranica: {n}
+	Word counting stopped unexpectedly.	Brojanje riječi se neočekivano zaustavilo.
+	Word count…	Broj riječi…
+@id	file.word_count	Broj riječi…
+	Standard	Standardno
+	Mobile	Mobilno
+	Merge image fragments	Spoji fragmente slika
+	Optimizing… merging image fragments	Optimizacija… spajanje fragmenata slika
+	Side by side	Jedno pored drugog
+	New file only	Samo nova datoteka
+	Old file: {name}	Stara datoteka: {name}
+	New file: {name}	Nova datoteka: {name}
+	Print as image	Štampaj kao sliku
+	Resolution:	Rezolucija:
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Koristite ovo kad štampač preskače tekst, sjenčenje ili prozirnost. Ispis više nije tekst koji se može pretraživati; uz Štampaj u nijansama sive, slike su sive.
+	Crop Image	Izreži sliku
+	Remove Crop	Ukloni izrezivanje
+	Trim the picture with its handles; Enter or Done applies	Obrežite sliku njenim ručkama; Enter ili Gotovo primjenjuje
+	Redaction mark appearance	Izgled oznake za redigovanje
+	Outline colour:	Boja obrisa:
+	Fill colour:	Boja ispune:
+	Shown while the pointer is over a mark.	Prikazuje se dok je pokazivač iznad oznake.
+	Opacity:	Neprozirnost:
+	Make properties default	Postavi svojstva kao zadana
+	Pages selected	Odabrane stranice
+	Page properties	Svojstva stranice
+	Create & Edit	Kreiranje i uređivanje
+	Review & Compare	Pregled i poređenje
+	Forms & Signatures	Obrasci i potpisi
+	Protect & Standardize	Zaštita i standardizacija
+	Customize & Automate	Prilagođavanje i automatizacija
+	No tools match your search.	Nijedan alat ne odgovara pretrazi.
+	Expand all tools	Proširi sve alate
+	Collapse all tools	Sažmi sve alate
+	Attach a file…	Priloži datoteku…
+	Delete attachment	Izbriši prilog
+	Attaching files is not available on the web yet	Prilaganje datoteka još nije dostupno na webu
+	Attach {name}	Priloži {name}
+	Delete attachment {key}	Izbriši prilog {key}
+	Font	Font
+	Bulleted list	Lista s oznakama
+	Numbered list	Numerisana lista
+	Alignment	Poravnanje
+	Superscript	Eksponent
+	Subscript	Indeks
+	Paragraph spacing	Razmak između pasusa
+	Less	Manje
+	Other options	Druge opcije
+	Thumbnail size	Veličina sličica
+	Smaller thumbnails	Manje sličice
+	Larger thumbnails	Veće sličice
+	Reshape comment	Preoblikuj komentar
+	Add text field table	Dodaj tabelu tekstualnih polja
+	Text field table	Tabela tekstualnih polja
+	Text Field Table	Tabela tekstualnih polja
+	Columns	Kolone
+	Row spacing	Razmak između redova
+	Column spacing	Razmak između kolona
+	First row number	Broj prvog reda
+	Column widths	Širine kolona
+	Distribute evenly	Rasporedi ravnomjerno
+	Field names	Nazivi polja
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N ili {row} je broj reda, {col} broj kolone, {seq} broj ćelije. Ako nijedan nije naveden, broj reda ide na kraj.
+	Column {n}	Kolona {n}
+	Add fields	Dodaj polja
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	redovi su prekratki: povećajte visinu oblasti ili koristite manje redova ili manji razmak između redova
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	kolona je preuska: proširite oblast, dajte koloni veći dio ili koristite manje kolona ili manji razmak između kolona
+	field names can't contain a period: {name}	nazivi polja ne mogu sadržavati tačku: {name}
+	two cells would both be named {name}	dvije ćelije bi imale isti naziv {name}
+	a field named {name} already exists	polje s nazivom {name} već postoji
+	Today	Danas
+@plural	{n} reply|{n} replies	{n} odgovor|{n} odgovora|{n} odgovora
+	Page tools	Alati za stranice
+	Insert pages from a file after the selection…	Umetni stranice iz datoteke nakon odabira…
+	Rotate the selected pages counterclockwise	Rotiraj odabrane stranice suprotno od kazaljke na satu
+	Rotate the selected pages clockwise	Rotiraj odabrane stranice u smjeru kazaljke na satu
+	Extract the selected pages…	Izdvoji odabrane stranice…
+	Delete the selected pages	Izbriši odabrane stranice
+calendar date	January	januar
+calendar date	February	februar
+calendar date	March	mart
+calendar date	April	april
+calendar date	May	maj
+calendar date	June	juni
+calendar date	July	juli
+calendar date	August	august
+calendar date	September	septembar
+calendar date	October	oktobar
+calendar date	November	novembar
+calendar date	December	decembar
+	Certificate authority	Certifikaciono tijelo
+	End entity	Krajnji entitet
+	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	Standardni fontovi ne mogu iscrtati „{c}” ({code}). Za sada se kao tekst mogu dodati samo zapadnoevropski znakovi.
+	 on page {label}	 na stranici {label}
+	A font isn't embedded	Font nije ugrađen
+	A {} action isn't allowed	Akcija {} nije dozvoljena
+	A {} annotation has additional actions	Napomena {} ima dodatne akcije
+	A {} annotation has no appearance stream	Napomena {} nema tok izgleda
+	A {} annotation isn't set to print, or is hidden	Napomena {} nije postavljena za štampanje ili je skrivena
+	Accessibility Report	Izvještaj o pristupačnosti
+	Always	Uvijek
+	Automatically	Automatski
+	CRL Signing	Potpisivanje CRL-a
+	Certificate Signing	Potpisivanje certifikata
+	Change Author	Promijeni autora
+	Change Keywords	Promijeni ključne riječi
+	Change Subject	Promijeni predmet
+	Change Title	Promijeni naslov
+	Choose a digital ID.	Odaberite digitalni ID.
+	Choose a file…	Odaberi datoteku…
+	Choose a folder…	Odaberi folder…
+	Choose…	Odaberi…
+	Color	Boja
+	Comment	Komentar
+	Comment and review	Komentarisanje i pregled
+	Copied to clipboard	Kopirano u međuspremnik
+	Copy to clipboard	Kopiraj u međuspremnik
+	Create folder	Kreiraj folder
+	Create links	Kreiraj veze
+	Creator	Kreator
+	Cut and stack needs Two-sided: Off. Print single-sided sheets.	Izreži i složi zahtijeva Obostrano: isključeno. Štampajte jednostrane listove.
+	Data Encipherment	Šifrovanje podataka
+	Decipher Only	Samo dešifrovanje
+	Detailed Report	Detaljan izvještaj
+	DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile	Koristi se DeviceCMYK, ali PDF/A izlazna namjena nije CMYK profil
+	DeviceRGB is used, but the PDF/A output intent isn't an RGB profile	Koristi se DeviceRGB, ali PDF/A izlazna namjena nije RGB profil
+	Digital Signature	Digitalni potpis
+	Disabled	Onemogućeno
+	Duplicate	Dupliciraj
+	Enabled	Omogućeno
+	Encipher Only	Samo šifrovanje
+	English	Engleski
+	Enter a URL	Unesite URL
+	Enter a name.	Unesite naziv.
+	Enter a page number	Unesite broj stranice
+	Enter the field names	Unesite nazive polja
+	Error	Greška
+	Field "{}" on page {p} has no description (tooltip)	Polje "{}" na stranici {p} nema opis (opis alata)
+	Filename	Naziv datoteke
+	Flatten Fill & Sign	Spljošti Popuni i potpiši
+	Folder	Folder
+	Font (unnamed) on page {p} doesn't map its characters to Unicode	Font (bez naziva) na stranici {p} ne preslikava svoje znakove u Unicode
+	Font {} on page {p} doesn't map its characters to Unicode	Font {} na stranici {p} ne preslikava svoje znakove u Unicode
+	Form field on page {p} isn't tagged	Polje obrasca na stranici {p} nije označeno tagom
+	Help…	Pomoć…
+	H{n} follows an H{d}; headings should not skip levels	H{n} slijedi nakon H{d}; naslovi ne bi trebali preskakati nivoe
+	Import	Uvezi
+	Information	Informacije
+	Key Agreement	Dogovor o ključu
+	Key Encipherment	Šifrovanje ključa
+	Loading…	Učitavanje…
+	Move	Pomakni
+	Never	Nikad
+	Next	Sljedeće
+	No document language is set	Jezik dokumenta nije postavljen
+	No page has text: the document appears to be images of pages	Nijedna stranica nema tekst: dokument se čini kao slike stranica
+	No results	Nema rezultata
+	Non-Repudiation	Nepobitnost
+	On	Uključeno
+	Open folder	Otvori folder
+	Organize	Organizuj
+	Page {n}	Stranica {n}
+	Page {n} of {total}	Stranica {n} od {total}
+	Page {p} doesn't tab in structure order	Stranica {p} ne prelazi tabulatorom redoslijedom strukture
+	Page {p}: {n} untagged content item	Stranica {p}: neoznačenih stavki sadržaja: {n}
+	Page {p}: {n} untagged content items	Stranica {p}: neoznačenih stavki sadržaja: {n}
+	Page {} has additional actions	Stranica {} ima dodatne akcije
+	Panel layout could not be restored: {error}	Raspored panela nije moguće vratiti: {error}
+	Panel move was not applied: {error}	Premještanje panela nije primijenjeno: {error}
+	Paste	Zalijepi
+	PdfCraft can't check this signature yet: {}.	PdfCraft još ne može provjeriti ovaj potpis: {}.
+	Previous	Prethodno
+	Producer	Proizvođač
+	Refresh	Osvježi
+	Rendering…	Iscrtavanje…
+	Report created	Izvještaj je kreiran
+	Rev. {rev}: Certified by an unknown signer	Rev. {rev}: certificirao nepoznati potpisnik
+	Rev. {rev}: Certified by {name}	Rev. {rev}: certificirao {name}
+	Rev. {rev}: Signed by an unknown signer	Rev. {rev}: potpisao nepoznati potpisnik
+	Rev. {rev}: Signed by {name}	Rev. {rev}: potpisao {name}
+	Rule Name	Naziv pravila
+	Save as {level}	Sačuvaj kao {level}
+	Save changes?	Sačuvati promjene?
+	Save file	Sačuvaj datoteku
+	Search results	Rezultati pretrage
+	Select all	Odaberi sve
+	Signature is invalid	Potpis je nevažeći
+	Signature is valid	Potpis je važeći
+	Signature validity is unknown	Važenje potpisa je nepoznato
+	Signing time is from the clock on the signer's computer.	Vrijeme potpisivanja je sa sata na računaru potpisnika.
+	Still rendering — this page is unusually complex…	Još se iscrtava — ova stranica je neobično složena…
+	Success	Uspjeh
+	System	Sistem
+	The ECDSA signature is not in canonical DER (trailing bytes, padding or a missing sign byte); it was read anyway.	ECDSA potpis nije u kanonskom DER obliku (prateći bajtovi, dopuna ili nedostaje bajt znaka); ipak je pročitan.
+	The ECDSA signature is the raw r and s values instead of a DER sequence; it was read anyway.	ECDSA potpis sadrži sirove vrijednosti r i s umjesto DER niza; ipak je pročitan.
+	The RSA signature value does not have the length of the key's modulus (leading zero bytes dropped or added); it was read anyway.	Vrijednost RSA potpisa nema dužinu modula ključa (vodeći nulti bajtovi izostavljeni ili dodani); ipak je pročitana.
+	The RSA signature's DigestInfo has no NULL parameter (older signers write it so); it was read anyway.	DigestInfo RSA potpisa nema NULL parametar (stariji potpisnici ga tako pišu); ipak je pročitan.
+	The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.	Certifikat za {} ne dozvoljava ovoliko CA certifikata ispod sebe (dužina putanje), pa se ne koristi za jamčenje za {}.
+	The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.	Certifikat za {} nije CA certifikat koji smije izdavati certifikate, pa se ne koristi za jamčenje za {}.
+	The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.	Certifikat za {} nije bio važeći u vrijeme potpisivanja, pa se ne koristi za jamčenje za {}.
+	The checker found problems which may prevent the document from being fully accessible.	Provjera je pronašla probleme koji mogu spriječiti potpunu pristupačnost dokumenta.
+	The document has been altered or corrupted since the signature was applied.	Dokument je izmijenjen ili oštećen nakon što je potpis primijenjen.
+	The document has been altered or corrupted since the timestamp was applied.	Dokument je izmijenjen ili oštećen nakon što je vremenski žig primijenjen.
+	The document has been altered since this signature was applied in ways it does not permit ({}).	Dokument je nakon primjene ovog potpisa izmijenjen na načine koje ne dozvoljava ({}).
+	The document has been altered since this timestamp was applied in ways it does not permit ({}).	Dokument je nakon primjene ovog vremenskog žiga izmijenjen na načine koje ne dozvoljava ({}).
+	The document has been modified since this signature was applied, but the changes are permitted ({}).	Dokument je izmijenjen nakon primjene ovog potpisa, ali promjene su dozvoljene ({}).
+	The document has been modified since this timestamp was applied, but the changes are permitted ({}).	Dokument je izmijenjen nakon primjene ovog vremenskog žiga, ali promjene su dozvoljene ({}).
+	The document has no tags (structure tree)	Dokument nema tagove (stablo strukture)
+	The document has no title	Dokument nema naslov
+	The document isn't marked as tagged (MarkInfo Marked)	Dokument nije označen kao dokument s tagovima (MarkInfo Marked)
+	The document isn't tagged, so none of its content is	Dokument nema tagove, pa ni njegov sadržaj nije označen
+	The document's embedded revocation information shows that the signer's certificate has not been revoked.	Ugrađene informacije o opozivu u dokumentu pokazuju da certifikat potpisnika nije opozvan.
+	The embedded timestamp token is valid and its authority is trusted; trusted time is {}.	Ugrađeni token vremenskog žiga je važeći i njegovo tijelo je pouzdano; pouzdano vrijeme je {}.
+	The font {} isn't embedded	Font {} nije ugrađen
+	The metadata doesn't identify the file as {}	Metapodaci ne identifikuju datoteku kao {}
+	The password is incorrect.	Lozinka nije tačna.
+	The password must have at least 6 characters.	Lozinka mora imati najmanje 6 znakova.
+	The passwords do not match.	Lozinke se ne podudaraju.
+	The security settings don't allow screen readers to read the text	Sigurnosne postavke ne dozvoljavaju čitačima ekrana čitanje teksta
+	The signature algorithm and the SignerInfo's digest algorithm name different hashes; the signature was made with the SignerInfo's.	Algoritam potpisa i algoritam sažetka u SignerInfo navode različite heš funkcije; potpis je napravljen onom iz SignerInfo.
+	The signature carries an unverified timestamp ({}): the timestamp authority is not in your list of trusted certificates, so the signing time claimed by the signer is used instead.	Potpis nosi neprovjereni vremenski žig ({}): tijelo za vremenske žigove nije na vašoj listi pouzdanih certifikata, pa se umjesto toga koristi vrijeme potpisivanja koje navodi potpisnik.
+	The signature contents are not hexadecimal.	Sadržaj potpisa nije heksadecimalan.
+	The signature could not be checked ({}).	Potpis nije moguće provjeriti ({}).
+	The signature could not be read ({}).	Potpis nije moguće pročitati ({}).
+	The signature could not be verified ({}).	Potpis nije moguće verificirati ({}).
+	The signature has no valid byte range.	Potpis nema važeći raspon bajtova.
+	The signature includes an embedded timestamp.	Potpis uključuje ugrađeni vremenski žig.
+	The signature is BER-encoded (indefinite lengths) rather than DER; it was read leniently.	Potpis je BER-kodiran (neodređene dužine) umjesto DER; pročitan je popustljivo.
+	The signature uses the legacy adbe.x509.rsa_sha1 format.	Potpis koristi zastarjeli format adbe.x509.rsa_sha1.
+	The signature value does not match the signer's certificate: the signature is corrupt.	Vrijednost potpisa ne odgovara certifikatu potpisnika: potpis je oštećen.
+	The signature's byte range does not exclude exactly its contents.	Raspon bajtova potpisa ne isključuje tačno njegov sadržaj.
+	The signature's byte range does not match the file.	Raspon bajtova potpisa ne odgovara datoteci.
+	The signature's timestamp token could not be verified ({}).	Token vremenskog žiga potpisa nije moguće verificirati ({}).
+	The signature's timestamp token does not cover the signature value.	Token vremenskog žiga potpisa ne pokriva vrijednost potpisa.
+	The signed content is a constructed (segmented) OCTET STRING, as BER allows; it was read anyway.	Potpisani sadržaj je složeni (segmentirani) OCTET STRING, kako BER dozvoljava; ipak je pročitan.
+	The signer's certificate does not allow digital signatures (its key usage has neither digital signature nor non-repudiation).	Certifikat potpisnika ne dozvoljava digitalne potpise (njegova upotreba ključa nema ni digitalni potpis ni nepobitnost).
+	The signer's certificate has been revoked ({}).	Certifikat potpisnika je opozvan ({}).
+	The signer's certificate has critical extensions PdfCraft does not recognize ({}).	Certifikat potpisnika ima kritična proširenja koja PdfCraft ne prepoznaje ({}).
+	The signer's certificate is not in the signature.	Certifikat potpisnika nije u potpisu.
+	The signer's certificate is not issued for signing documents (its extended key usage has no document-signing purpose).	Certifikat potpisnika nije izdan za potpisivanje dokumenata (njegova proširena upotreba ključa nema svrhu potpisivanja dokumenata).
+	The signer's certificate was not valid at the time of signing.	Certifikat potpisnika nije bio važeći u vrijeme potpisivanja.
+	The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.	Identitet potpisnika je nepoznat jer nije uključen u vašu listu pouzdanih certifikata i nijedan od njegovih nadređenih certifikata nije pouzdan.
+	The signer's identity is valid.	Identitet potpisnika je važeći.
+	The timestamp authority's certificate was not valid at the time of timestamping.	Certifikat tijela za vremenske žigove nije bio važeći u vrijeme izdavanja vremenskog žiga.
+	The timestamp contents are not hexadecimal.	Sadržaj vremenskog žiga nije heksadecimalan.
+	The timestamp has no valid byte range.	Vremenski žig nema važeći raspon bajtova.
+	The timestamp token could not be read ({}).	Token vremenskog žiga nije moguće pročitati ({}).
+	The timestamp token is valid and its authority is trusted.	Token vremenskog žiga je važeći i njegovo tijelo je pouzdano.
+	The timestamp token is valid, but the timestamp authority is not in your list of trusted certificates.	Token vremenskog žiga je važeći, ali tijelo za vremenske žigove nije na vašoj listi pouzdanih certifikata.
+	The timestamp's byte range does not exclude exactly its contents.	Raspon bajtova vremenskog žiga ne isključuje tačno njegov sadržaj.
+	The timestamp's byte range does not match the file.	Raspon bajtova vremenskog žiga ne odgovara datoteci.
+	The window shows the file name, not the title (Initial View > Show)	Prozor prikazuje naziv datoteke, a ne naslov (Početni prikaz > Prikaži)
+	Theme	Tema
+	There is no folder to save the digital ID in.	Nema foldera u koji bi se sačuvao digitalni ID.
+	This document has not been modified since this signature was applied.	Ovaj dokument nije izmijenjen otkako je ovaj potpis primijenjen.
+	This document has not been modified since this timestamp was applied.	Ovaj dokument nije izmijenjen otkako je ovaj vremenski žig primijenjen.
+	This signature uses RIPEMD-160, a legacy 160-bit hash algorithm that is no longer recommended for signatures. It still validates, but it should not be relied on.	Ovaj potpis koristi RIPEMD-160, zastarjeli 160-bitni heš algoritam koji se više ne preporučuje za potpise. I dalje se potvrđuje, ali se na njega ne treba oslanjati.
+	This signature uses SHA-1, a weak hash algorithm: collisions in it have been demonstrated. It still validates because many documents signed years ago use it, but it should not be relied on.	Ovaj potpis koristi SHA-1, slab heš algoritam: kolizije u njemu su dokazane. I dalje se potvrđuje jer ga koriste mnogi dokumenti potpisani prije mnogo godina, ali se na njega ne treba oslanjati.
+	Unsigned signature field	Nepotpisano polje za potpis
+	Unsigned signature field: {name}	Nepotpisano polje za potpis: {name}
+	Warning	Upozorenje
+	alternate text hides an annotation inside it	alternativni tekst skriva napomenu unutar sebe
+	alternate text on an element with no page content	alternativni tekst na elementu bez sadržaja stranice
+	comments	komentari
+	document security store	sigurnosno skladište dokumenta
+	document structure	struktura dokumenta
+	form fill	popunjavanje obrasca
+	its alternate text is inside another element's and will never be read	njegov alternativni tekst je unutar alternativnog teksta drugog elementa i nikad se neće pročitati
+	links	veze
+	metadata	metapodaci
+	no alternate text	nema alternativnog teksta
+	no header cells (TH)	nema ćelija zaglavlja (TH)
+	no summary	nema sažetka
+	not in a TR	nije u TR
+	not in a Table, THead, TBody or TFoot	nije u Table, THead, TBody ili TFoot
+	not in an L (list)	nije u L (lista)
+	not in an LI (list item)	nije u LI (stavka liste)
+	of	od
+	other changes	ostale promjene
+	page content	sadržaj stranice
+	page {n} is out of range (1–{count})	stranica {n} je izvan raspona (1–{count})
+	pages added or removed	dodane ili uklonjene stranice
+	rows have between {min} and {max} columns	redovi imaju između {min} i {max} kolona
+	the first heading is an H{n}; headings should not skip levels	prvi naslov je H{n}; naslovi ne bi trebali preskakati nivoe
+	the signed version could not be read	potpisanu verziju nije moguće pročitati
+	{n} pages and no bookmarks	Stranica: {n}, bez zabilješki
+	{page} is not a page number or label	{page} nije broj ni oznaka stranice
+	{ty} element on page {p}: {what}	Element {ty} na stranici {p}: {what}
+	{ty} element: {what}	Element {ty}: {what}
+	{who}, certificate issued by an unknown issuer.	{who}, certifikat izdao nepoznati izdavalac.
+	{who}, certificate issued by {issuer}.	{who}, certifikat izdao {issuer}.
+	{} annotation on page {p} isn't tagged	Napomena {} na stranici {p} nije označena tagom
+	{} annotations aren't allowed	Napomene {} nisu dozvoljene
+	… and {n} more	… i još {n}
+@plural	Delete {n} field|Delete {n} fields	Izbriši {n} polje|Izbriši {n} polja|Izbriši {n} polja
+@plural	{n} byte|{n} bytes	{n} bajt|{n} bajta|{n} bajtova
+@plural	{n} comment|{n} comments	{n} komentar|{n} komentara|{n} komentara
+@plural	{n} file|{n} files	{n} datoteka|{n} datoteke|{n} datoteka
+@plural	{n} image optimized|{n} images optimized	Optimizirana {n} slika|Optimizirane {n} slike|Optimizirano {n} slika
+@plural	{n} item discarded|{n} items discarded	Odbačena {n} stavka|Odbačene {n} stavke|Odbačeno {n} stavki
+@plural	{n} pixel|{n} pixels	{n} piksel|{n} piksela|{n} piksela
+@plural	{n} result|{n} results	{n} rezultat|{n} rezultata|{n} rezultata
+calendar weekday	Fr	Pe
+calendar weekday	Mo	Po
+calendar weekday	Sa	Su
+calendar weekday	Su	Ne
+calendar weekday	Th	Če
+calendar weekday	Tu	Ut
+calendar weekday	We	Sr
+certificate	Basic constraints	Osnovna ograničenja
+certificate	Intended usage	Namjena
+certificate	Issued by	Izdao
+certificate	Issued to	Izdano za
+certificate	Issuer	Izdavalac
+certificate	Key usage	Upotreba ključa
+certificate	Public key	Javni ključ
+certificate	SHA-1 digest	SHA-1 sažetak
+certificate	SHA-256 digest	SHA-256 sažetak
+certificate	Self-signed	Samopotpisan
+certificate	Serial number	Serijski broj
+certificate	Valid from	Važi od
+certificate	Valid to	Važi do
+certificate	Validity ends	Važenje završava
+certificate	Validity starts	Važenje počinje
+certificate	Version	Verzija
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Ova datoteka se promijenila na disku. Ponovo je učitajte da vidite novu verziju; vaše nesačuvane promjene bit će izgubljene.
+	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.	Certifikat za {} ima kritična proširenja koja PdfCraft ne prepoznaje, pa se ne koristi kao jamstvo za {}.
+	The timestamp authority's certificate is not issued for time stamping.	Certifikat vremenskog autoriteta nije izdat za vremensko označavanje.
+	Mouse wheel scroll speed	Brzina pomjeranja točkićem miša
+	The password must have at least 8 characters.	Lozinka mora imati najmanje 8 znakova.
+theme	Appearance	Izgled
+	The signature's signed attributes have no content type, which CMS requires; it was read anyway.	Potpisani atributi potpisa nemaju vrstu sadržaja, što CMS zahtijeva; ipak su pročitani.
+	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.	Ovaj potpis koristi RSA ključ kraći od 2048 bita, koji se više ne smatra dovoljno jakim za potpise. I dalje se potvrđuje, ali se ne treba oslanjati na njega.
+	The signature's signed attributes have no message digest, so the signature does not cover the document.	Potpisani atributi potpisa nemaju sažetak poruke, pa potpis ne obuhvata dokument.
+	The signature's signed attributes name a content type other than data, so it is not a signature of the document.	Potpisani atributi potpisa navode vrstu sadržaja različitu od podataka, pa to nije potpis dokumenta.
+	Remove {standard} identification	Ukloni identifikaciju {standard}
+	a table has 1 to {max} rows	tabela ima od 1 do {max} redova
+	a table has 1 to {max} columns	tabela ima od 1 do {max} kolona
+	the first row number can be at most {max}	broj prvog reda može biti najviše {max}
+	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	oblast, razmak i širine kolona moraju biti brojevi, razmak 0 ili veći, a svaka širina veća od 0

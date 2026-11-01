@@ -3425,6 +3425,16 @@ kind = "translation"
 usage = "Vietnamese UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
+path = "crates/ui-egui/src/i18n/bs.tsv"
+title = "Bosnian interface translation catalog"
+author = "Nine (@nine-codes) with Claude Code"
+source = "Contributor-original: AI-assisted clean-room translations of PdfCraft's English UI labels, shared with storytold/craft-i18n locales/bs/; no proprietary localisation resources; not yet reviewed by a native speaker"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Bosnian UI strings, compiled in by crates/ui-egui/src/i18n.rs"
+
+[[asset]]
 path = "crates/ui-egui/src/i18n/sl.tsv"
 title = "Slovene interface translation catalog"
 author = "PdfCraft contributors"
