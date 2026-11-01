@@ -2581,3 +2581,7 @@ animation effects	Off	关
 	No image on clipboard to paste	剪贴板中没有可粘贴的图像
 	Pinned {tool} to Home	已将 {tool} 固定到主页
 	Unpinned {tool} from Home	已从主页取消固定 {tool}
+	Text opacity	文本不透明度
+	Border opacity	边框不透明度
+	Line opacity	线条不透明度
+	Fill opacity	填充不透明度

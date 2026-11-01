@@ -2876,3 +2876,7 @@ theme	Appearance	Aspect
 	No image on clipboard to paste	Nicio imagine în clipboard de lipit
 	Pinned {tool} to Home	{tool} fixat pe pagina principală
 	Unpinned {tool} from Home	{tool} desprins de pe pagina principală
+	Text opacity	Opacitatea textului
+	Border opacity	Opacitatea chenarului
+	Line opacity	Opacitatea liniei
+	Fill opacity	Opacitatea umplerii

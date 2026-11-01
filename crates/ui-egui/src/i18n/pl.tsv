@@ -2713,3 +2713,7 @@ animation effects	Off	Wyłączone
 	No image on clipboard to paste	Brak obrazu do wklejenia w schowku
 	Pinned {tool} to Home	Przypięto {tool} do strony głównej
 	Unpinned {tool} from Home	Odpięto {tool} od strony głównej
+	Text opacity	Krycie tekstu
+	Border opacity	Krycie obramowania
+	Line opacity	Krycie linii
+	Fill opacity	Krycie wypełnienia

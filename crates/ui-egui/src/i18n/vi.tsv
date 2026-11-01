@@ -2885,3 +2885,7 @@ key	Space	Space
 	No image on clipboard to paste	Không có hình ảnh trong bảng nhớ tạm để dán
 	Pinned {tool} to Home	Đã ghim {tool} vào Trang chủ
 	Unpinned {tool} from Home	Đã bỏ ghim {tool} khỏi Trang chủ
+	Text opacity	Độ mờ văn bản
+	Border opacity	Độ mờ viền
+	Line opacity	Độ mờ đường
+	Fill opacity	Độ mờ màu tô

@@ -2624,3 +2624,7 @@ animation effects	Off	Ανενεργά
 	No image on clipboard to paste	Δεν υπάρχει εικόνα στο πρόχειρο για επικόλληση
 	Pinned {tool} to Home	Το {tool} καρφιτσώθηκε στην Αρχική
 	Unpinned {tool} from Home	Το {tool} ξεκαρφιτσώθηκε από την Αρχική
+	Text opacity	Αδιαφάνεια κειμένου
+	Border opacity	Αδιαφάνεια περιγράμματος
+	Line opacity	Αδιαφάνεια γραμμής
+	Fill opacity	Αδιαφάνεια γεμίσματος

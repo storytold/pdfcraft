@@ -2886,3 +2886,7 @@ theme	Appearance	Teema
 	No image on clipboard to paste	Leikepöydällä ei ole liitettävää kuvaa
 	Pinned {tool} to Home	{tool} kiinnitetty aloitussivulle
 	Unpinned {tool} from Home	{tool} irrotettu aloitussivulta
+	Text opacity	Tekstin peittävyys
+	Border opacity	Reunan peittävyys
+	Line opacity	Viivan peittävyys
+	Fill opacity	Täytön peittävyys
