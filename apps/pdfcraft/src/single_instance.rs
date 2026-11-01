@@ -4,8 +4,9 @@
 //! Outlook attachments, Explorer double-clicks and Open With all start `pdfcraft.exe "<file>"`, and
 //! a file manager or `xdg-open` starts `pdfcraft <file>` the same way, so until now every file got
 //! its own process and window. The first PdfCraft listens on a Unix domain socket. On Windows (10
-//! 1803 and later) it is in `%LOCALAPPDATA%\PdfCraft`, or in the data folder of a portable copy,
-//! and is named after the Windows session (`instance-Console.sock`), so two sign-ins of the same
+//! 1803 and later) it is in `%LOCALAPPDATA%\PdfCraft` (a portable copy's too, as
+//! `portable-instance-…` and never in its own folder, #889) and is named after the Windows
+//! session (`instance-s1.sock` for session 1), so two sign-ins of the same
 //! user never open files in each other's windows. On Linux and the BSDs it is in
 //! `$XDG_RUNTIME_DIR/pdfcraft` and is named after the display (`instance-wayland-0.sock`), so a
 //! launch on another display or seat opens its own window there. Either way it lives in a folder
