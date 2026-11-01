@@ -682,7 +682,11 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                     update_bates_token(&mut d.hf, d.focused_box, d.bates_digits, d.bates_start, &d.bates_prefix, &d.bates_suffix);
                 }
                 let l_start = ui.label(tl!("Start:"));
-                if ui.add(egui::DragValue::new(&mut d.bates_start).range(1..=999_999)).labelled_by(l_start.id).changed() {
+                if ui
+                    .add(egui::DragValue::new(&mut d.bates_start).range(1..=999_999).clamp_existing_to_range(false))
+                    .labelled_by(l_start.id)
+                    .changed()
+                {
                     update_bates_token(&mut d.hf, d.focused_box, d.bates_digits, d.bates_start, &d.bates_prefix, &d.bates_suffix);
                 }
                 let l_prefix = ui.label(tl!("Prefix:"));
