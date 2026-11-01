@@ -73,6 +73,7 @@ mod app;
 mod hooks;
 mod persist;
 mod platform;
+mod preflight_ui;
 mod state;
 mod tools;
 mod workflows;
@@ -482,6 +483,8 @@ pub struct PdfCraftApp {
     pub action_files_override: Option<Vec<String>>,
     /// Standards ▸ PDF/A: level and last result.
     pub pdfa: standards_ui::PdfaState,
+    /// Standards ▸ PDF/X: level and last result.
+    pub pdfx: standards_ui::PdfxState,
     /// Compare files: the chosen older document and the last result.
     pub compare_old: Option<DocId>,
     pub compare: Option<compare_ui::CompareState>,
@@ -489,6 +492,8 @@ pub struct PdfCraftApp {
     pub js_console: js_ui::JsConsole,
     pub doc_js: js_ui::DocJsDraft,
     pub a11y: a11y_ui::A11yState,
+    /// Print production ▸ Preflight: the chosen profile and the last results.
+    pub preflight: preflight_ui::PreflightState,
     pub(crate) tags_state: tags_ui::State,
     /// Rules skipped by hand, for the document they were skipped in.
     pub a11y_skipped: std::collections::HashSet<(DocId, pdfcraft_engine::a11y::Rule)>,

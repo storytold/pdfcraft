@@ -224,6 +224,7 @@ fn tools_that_write_a_path_are_held_to_the_write_root() {
             ("measure_export", json!({"doc": 1, "out": file("measurements.csv")})),
             ("comments_summarize", json!({"doc": 1, "out": file("summary.pdf")})),
             ("accessibility_report", json!({"doc": 1, "path": file("report.html")})),
+            ("preflight_report", json!({"doc": 1, "profile": "commercial-print", "path": file("preflight.txt")})),
             ("accessibility_review_record", json!({"before": 1, "after": 2, "path": file("record.json")})),
             ("doc_compare_report", json!({"doc": 1, "other": 2, "path": file("compare.pdf")})),
             ("form_merge_data", json!({"paths": [input("a.pdf")], "path": file("merged.csv")})),

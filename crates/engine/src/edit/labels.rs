@@ -102,6 +102,11 @@ pub const EDIT_LABELS: &[&str] = &[
     "Run JavaScript",
     "Run form script",
     "Save as {level}",
+    "Set missing TrimBoxes from the CropBox",
+    "Set Trapped to False",
+    "Set Trapped to True",
+    "Remove JavaScript and actions",
+    "Apply preflight fixups",
     "Remove {standard} identification",
     "Edit script of {name}",
     "Delete document JavaScript",
@@ -245,6 +250,10 @@ impl Edit {
             Edit::XfaEvent { .. } => Label::of("Run form script"),
             // The level is the standard's own name ("PDF/A-2b"), so it goes in as it stands.
             Edit::ConvertPdfA { level } => Label::with("Save as {level}", level.label()),
+            Edit::PreflightFix { fixups } => match fixups.as_slice() {
+                [one] => Label::of(one.label()),
+                _ => Label::of("Apply preflight fixups"),
+            },
             Edit::RemoveStandardId { standard } => Label::with("Remove {standard} identification", standard.label()),
             Edit::SetFieldScript { name, .. } => Label::with("Edit script of {name}", name.as_str()),
             Edit::SetDocumentScript { script: None, .. } => Label::of("Delete document JavaScript"),

@@ -54,9 +54,39 @@ impl PdfCraftApp {
                     "tags" => Some(RightPanel::Tags),
                     "search" => Some(RightPanel::Search),
                     "compare" => Some(RightPanel::Compare),
+                    "preflight" => Some(RightPanel::Preflight),
                     "none" => None,
                     other => return Err(format!("unknown panel {other}")),
                 }
+            }
+            // Print production ▸ Preflight: run a profile (or a single check, `check:<id>`) over
+            // the active document; then select a hit, `CHECK:HIT` (0-based, as the panel lists them).
+            ("preflight", _) => {
+                if pdfcraft_engine::preflight::find(value).is_none() {
+                    return Err(format!("unknown preflight profile {value}"));
+                }
+                if self.active_ids().is_none() {
+                    return Err("no document".into());
+                }
+                self.preflight.profile = value.to_string();
+                self.run_preflight();
+            }
+            ("preflight-hit", _) => {
+                let (check, hit) =
+                    value.split_once(':').and_then(|(c, h)| Some((c.parse().ok()?, h.parse().ok()?))).ok_or("preflight-hit: CHECK:HIT")?;
+                let active = self.active_ids().map(|(_, id)| id);
+                let found = self
+                    .preflight
+                    .results
+                    .as_ref()
+                    .filter(|(doc, _)| Some(*doc) == active)
+                    .and_then(|(_, r)| r.checks.get(check))
+                    .is_some_and(|c: &pdfcraft_engine::preflight::CheckResult| c.hits.len() > hit);
+                if !found {
+                    return Err(format!("no preflight hit {value}"));
+                }
+                let index = self.active.ok_or("no document")?;
+                self.preflight_action(index, preflight_ui::PanelAction::Select(check, hit));
             }
             ("mode", _) => {
                 let mode = Mode::parse(value).unwrap_or(Mode::AllTools);
@@ -110,6 +140,11 @@ impl PdfCraftApp {
                     "compare-files" => Some(Dialog::CompareFiles),
                     "action-wizard" => Some(Dialog::ActionWizard),
                     "pdfa" => Some(Dialog::PdfA),
+                    "pdfx" => {
+                        // Same path as the menu, so the dialog starts on the declared level.
+                        self.open_pdfx();
+                        self.dialog
+                    }
                     "signature" => Some(Dialog::Signature),
                     "optimize" => Some(Dialog::Optimize),
                     "sign" | "certify" => {

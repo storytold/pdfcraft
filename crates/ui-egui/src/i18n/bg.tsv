@@ -2077,6 +2077,7 @@
 	open to see what it will include	отворете, за да видите какво ще включва
 	Page {p} of {n}	Страница {p} от {n}
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	Planned	Планирано
 	Planned for milestone	Планирано за етап
 	PostScript / EPS	PostScript / EPS
@@ -2097,6 +2098,7 @@
 	Save as PDF/A-3b	Запиши като PDF/A-3b
 	Save as PDF/UA	Запиши като PDF/UA
 	Save as PDF/X	Запиши като PDF/X
+	Verify PDF/X	Провери PDF/X
 	Select a file for the stamp	Изберете файл за печата
 	Select Icon	Избери икона
 	Set bookmark destination	Задай местоназначение на отметката

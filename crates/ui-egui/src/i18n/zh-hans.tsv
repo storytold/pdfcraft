@@ -2087,6 +2087,7 @@
 	open to see what it will include	打开以查看计划包含的功能
 	Page {p} of {n}	第 {p} 页，共 {n} 页
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	Planned	计划中
 	Planned for milestone	计划推出的里程碑
 	PostScript / EPS	PostScript / EPS
@@ -2107,6 +2108,7 @@
 	Save as PDF/A-3b	另存为 PDF/A-3b
 	Save as PDF/UA	另存为 PDF/UA
 	Save as PDF/X	另存为 PDF/X
+	Verify PDF/X	验证 PDF/X
 	Select a file for the stamp	选择图章文件
 	Select Icon	选择图标
 	Set bookmark destination	设置书签目标
