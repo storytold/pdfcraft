@@ -422,6 +422,26 @@ fn delete_all_keeps_redaction_marks_and_fill_and_sign_items() {
 }
 
 #[test]
+fn delete_all_keeps_redaction_marks_and_fill_and_sign_items_linked_as_replies() {
+    // An `/IRT` to an ordinary comment doesn't make them go with its thread.
+    let mut doc = two_pages(
+        "[5 0 R]",
+        "[6 0 R 7 0 R 8 0 R 9 0 R]",
+        &[
+            named("Text", "note", ""),
+            named("Text", "reply", "/IRT 5 0 R"),
+            named("Redact", "mark", "/IRT 5 0 R"),
+            named("Stamp", "check", "/Name /PCCheck /IRT 5 0 R"),
+            named("FreeText", "typed", "/PCFillSign true /IRT 5 0 R"),
+        ],
+    );
+    assert_eq!(delete_all_annotations(&mut doc, Some(&[0])).unwrap(), 1);
+    let doc = reopen(&doc);
+    assert!(names_on(&doc, 0).is_empty());
+    assert_eq!(names_on(&doc, 1), ["mark", "check", "typed"], "the Redact and Fill & Sign tools own these");
+}
+
+#[test]
 fn delete_all_takes_replies_and_popups_on_other_pages() {
     let objects = [
         named("Text", "root", "/Popup 6 0 R"),

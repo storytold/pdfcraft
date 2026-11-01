@@ -127,6 +127,8 @@ struct Listed {
     comment: bool,
     /// Bulk deletion may remove it as the comment its thread starts at ([`bulk_removable`]).
     removable: bool,
+    /// A redaction mark or a Fill & Sign item, which bulk deletion never removes, even as a reply.
+    own_tool: bool,
     /// Locked (`/F` bit 8).
     locked: bool,
     popup_subtype: bool,
@@ -147,6 +149,7 @@ impl Listed {
             key,
             comment: first_listing && subtype.is_some_and(|s| is_comment_subtype(&String::from_utf8_lossy(s))),
             removable: d.zip(subtype).is_some_and(|(d, s)| bulk_removable(doc, d, s)),
+            own_tool: d.zip(subtype).is_some_and(|(d, s)| own_tool(doc, d, s)),
             locked: d.is_some_and(|d| annotation_flags(doc, d) & FLAG_LOCKED != 0),
             popup_subtype: matches!(subtype, Some(b"Popup")),
             irt: to(b"IRT"),
@@ -161,7 +164,12 @@ impl Listed {
 /// own tools apply, clear and sign. The interface counts by the same rule
 /// (`in_bulk_delete` in `pdfcraft_ui_egui`).
 fn bulk_removable(doc: &Document, d: &Dict, subtype: &[u8]) -> bool {
-    text_value(doc, d, b"State").is_none() && annotation_flags(doc, d) & FLAG_LOCKED == 0 && subtype != b"Redact" && !is_fill_sign(doc, d)
+    text_value(doc, d, b"State").is_none() && annotation_flags(doc, d) & FLAG_LOCKED == 0 && !own_tool(doc, d, subtype)
+}
+
+/// A redaction mark or a Fill & Sign item, which their own tools apply, clear and sign.
+fn own_tool(doc: &Document, d: &Dict, subtype: &[u8]) -> bool {
+    subtype == b"Redact" || is_fill_sign(doc, d)
 }
 
 /// The comment the thread of entry `i` starts at, following `link` (each comment's `/IRT` to
@@ -184,7 +192,8 @@ fn thread_root(i: usize, link: impl Fn(usize) -> Option<usize>) -> usize {
 /// What is a comment, and whose thread a reply is in, follows the comment list
 /// (`pdfcraft_render::inspect`), so the count matches what the Comments panel shows:
 /// - Only comment subtypes ([`is_comment_subtype`]) go: links, form widgets and the other
-///   non-markup annotations stay, and so do redaction marks and Fill & Sign items.
+///   non-markup annotations stay, and so do redaction marks and Fill & Sign items, even when
+///   their `/IRT` makes them replies in a thread that goes.
 /// - A comment starts a thread unless its `/IRT` chain reaches another listed comment within 64
 ///   steps. An `/IRT` to an object that isn't listed, to itself or round a loop leaves it a
 ///   comment of its own. Replies, statuses and checkmarks go with their thread, wherever it
@@ -239,7 +248,7 @@ pub fn delete_all_annotations(doc: &mut Document, pages: Option<&[usize]>) -> Re
     if roots.is_empty() {
         return Ok(0);
     }
-    let in_thread: Vec<bool> = listed.iter().enumerate().map(|(i, l)| l.comment && roots.contains(&thread_root(i, link))).collect();
+    let in_thread: Vec<bool> = listed.iter().enumerate().map(|(i, l)| l.comment && !l.own_tool && roots.contains(&thread_root(i, link))).collect();
     let thread = || listed.iter().zip(&in_thread).filter(|(_, t)| **t).map(|(l, _)| l);
     let going: HashSet<ObjRef> = thread().filter_map(|l| l.key).collect();
     let going_popups: HashSet<ObjRef> = thread().filter_map(|l| l.popup).collect();
