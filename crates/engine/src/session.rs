@@ -34,8 +34,12 @@ pub struct Session {
     /// injected time AS local time and zeroes the zone, so injecting only it leaves either the
     /// local dates or the UTC ones wrong by the zone's offset.
     utc_offset: Option<fn() -> i64>,
-    /// Certificates trusted for signing (Acrobat: Trusted Certificates).
+    /// What is trusted for signing: the user's certificates (Acrobat: Trusted Certificates) and the
+    /// trust lists they loaded.
     pub(crate) trust: Arc<TrustStore>,
+    /// How often every open document's signatures were validated again after a trust change.
+    #[cfg(test)]
+    pub(crate) revalidations: usize,
     /// Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript, inverted (on by default).
     pub(crate) js_off: bool,
     /// Preferences ▸ Date format, when not the default (see [`dates`]).

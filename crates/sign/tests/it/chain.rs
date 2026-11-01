@@ -189,7 +189,7 @@ fn verdict(leaf: Party, embedded: Vec<Certificate>, anchor: &Certificate) -> (St
     let doc = Document::open(Arc::new(fixture())).unwrap();
     let opts = SignOptions { page: 0, rect: None, date: "D:20260601120000Z".into(), ..SignOptions::default() };
     let signed = pdfcraft_sign::sign(&doc, &id, &opts).unwrap();
-    let trust = TrustStore { certs: vec![anchor.clone()] };
+    let trust = TrustStore { certs: vec![anchor.clone()], ..TrustStore::default() };
     let s = signatures(&Document::open(Arc::new(signed.clone())).unwrap(), &signed, &trust).into_iter().rfind(|s| s.signed).unwrap();
     // The details as they read in English; what an interface says in another language is checked in
     // `tests/it/pdf.rs`.
@@ -361,4 +361,109 @@ fn an_issuer_with_an_unprocessed_critical_extension_does_not_vouch() {
     let l = end_entity("Leaf", &i);
     let pool = [i.cert.clone(), constrained_root.cert.clone()];
     assert_eq!(names(&build_chain(&l.cert, &pool, None)), ["Leaf", "Under Constrained Root", "Name Constrained Root"]);
+}
+
+/// Like `verdict`, but with a whole `TrustStore`.
+fn verdict_with(leaf: Party, embedded: Vec<Certificate>, trust: &TrustStore) -> (Status, Vec<String>) {
+    let id = DigitalId { key: leaf.key, certificate: leaf.cert, chain: embedded, friendly_name: None };
+    let doc = Document::open(Arc::new(fixture())).unwrap();
+    let opts = SignOptions { page: 0, rect: None, date: "D:20260601120000Z".into(), ..SignOptions::default() };
+    let signed = pdfcraft_sign::sign(&doc, &id, &opts).unwrap();
+    let s = signatures(&Document::open(Arc::new(signed.clone())).unwrap(), &signed, trust).into_iter().rfind(|s| s.signed).unwrap();
+    (s.status, s.details.iter().map(|d| d.message.clone()).collect())
+}
+
+#[test]
+fn a_trust_list_is_off_by_default_and_named_when_it_vouches() {
+    use pdfcraft_sign::trust::TrustList;
+    let r = root();
+    let i = ca("Issuing CA", &r, None);
+    let leaf = |cn: &str| end_entity(cn, &i);
+    let list = TrustList::from_bytes("Test List", &r.cert.raw).unwrap();
+
+    // Nothing is trusted unless asked for.
+    let none = TrustStore::default();
+    assert!(none.lists.is_empty() && none.certs.is_empty());
+    let (status, details) = verdict_with(leaf("Signer A"), vec![i.cert.clone()], &none);
+    assert_eq!(status, Status::Unknown, "{details:?}");
+
+    // With the list loaded, the same signature is valid and says which list vouched.
+    let with_list = TrustStore { lists: vec![list.clone()], ..TrustStore::default() };
+    let (status, details) = verdict_with(leaf("Signer B"), vec![i.cert.clone()], &with_list);
+    assert_eq!(status, Status::Valid, "{details:?}");
+    assert!(details.iter().any(|d| d.contains("Test List")), "{details:?}");
+
+    // The user's own list wins over a loaded one that holds the same certificate.
+    let both = TrustStore { certs: vec![r.cert.clone()], lists: vec![list.clone()] };
+    assert_eq!(both.source_of(&r.cert), Some(pdfcraft_sign::TrustSource::User));
+    assert_eq!(with_list.source_of(&r.cert), Some(pdfcraft_sign::TrustSource::List("Test List".into())));
+    assert_eq!(none.source_of(&r.cert), None);
+
+    // A list does not make a subscriber a CA: the forged identity stays unknown.
+    let subscriber = end_entity("Ordinary Subscriber", &r);
+    let forged = end_entity("Forged Identity", &subscriber);
+    let (status, details) = verdict_with(forged, vec![subscriber.cert.clone()], &with_list);
+    assert_eq!(status, Status::Unknown, "{details:?}");
+}
+
+/// A time-stamp authority that answers in-process, with whatever certificate it is given.
+struct Stamper {
+    key: PrivateKey,
+    cert: Certificate,
+    time: Time,
+}
+
+impl pdfcraft_sign::TimestampAuthority for Stamper {
+    fn timestamp(&self, request: &[u8]) -> Result<Vec<u8>, pdfcraft_sign::SignError> {
+        let q = pdfcraft_sign::timestamp::parse_request(request)?;
+        pdfcraft_sign::timestamp::respond(&self.key, &self.cert, &[], pdfcraft_sign::DigestAlg::Sha256, &q, "1.2.3.4", self.time, 7)
+    }
+}
+
+#[test]
+fn a_list_vouches_for_a_signer_whose_file_carries_only_its_leaf_and_never_for_a_time_stamp_authority() {
+    use pdfcraft_sign::trust::TrustList;
+    // The shape of a CAdES signature under a qualified service (#775): the list holds the issuing
+    // CA (not a root), the CMS embeds only the leaf, and the time-stamp authority is not the user's.
+    let r = root();
+    let i = ca("Issuing CA", &r, None);
+    let leaf = end_entity("Signer", &i);
+    // A real time-stamp authority: its certificate is issued for time stamping (RFC 3161 §2.3).
+    let tsa = issue(
+        "Some Stamper",
+        Some(&root()),
+        FOREVER,
+        &[basic_constraints(false, None), key_usage(DIGITAL_SIGNATURE), extended_key_usage(&["1.3.6.1.5.5.7.3.8"])],
+    );
+    let stamped_at = time(2026);
+    let stamper = Stamper { key: tsa.key, cert: tsa.cert.clone(), time: stamped_at };
+    let id = DigitalId { key: leaf.key, certificate: leaf.cert, chain: Vec::new(), friendly_name: None };
+    let doc = Document::open(Arc::new(fixture())).unwrap();
+    let opts = SignOptions { page: 0, rect: None, date: "D:20260601120000Z".into(), ..SignOptions::default() };
+    let signed = pdfcraft_sign::sign_with_timestamp(&doc, &id, &opts, &stamper).unwrap();
+    let check =
+        |trust: &TrustStore| signatures(&Document::open(Arc::new(signed.clone())).unwrap(), &signed, trust).into_iter().rfind(|s| s.signed).unwrap();
+    let said = |s: &pdfcraft_sign::SignatureInfo, what: &str| s.details.iter().any(|d| d.message.contains(what));
+
+    // Nothing loaded: unknown.
+    let s = check(&TrustStore::default());
+    assert_eq!(s.status, Status::Unknown, "{:?}", s.details);
+
+    // The list with the issuing CA completes the chain the file leaves out: valid, and named.
+    let list = TrustList::from_bytes("Test List", &i.cert.raw).unwrap();
+    let s = check(&TrustStore { lists: vec![list.clone()], ..TrustStore::default() });
+    assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+    assert!(said(&s, "trust list “Test List”"), "{:?}", s.details);
+    assert!(s.timestamp && s.timestamp_time.is_none(), "{:?}", s.details);
+
+    // A list that holds the authority's own certificate does not make its time trusted.
+    let both = TrustList::from_bytes("Both", &[i.cert.raw.clone(), tsa.cert.raw.clone()].concat()).unwrap();
+    let s = check(&TrustStore { lists: vec![both], ..TrustStore::default() });
+    assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+    assert_eq!(s.timestamp_time, None, "{:?}", s.details);
+    assert!(said(&s, "unverified timestamp"), "{:?}", s.details);
+
+    // The user's own certificate for the authority is their decision, and it does.
+    let s = check(&TrustStore { certs: vec![tsa.cert.clone()], lists: vec![list] });
+    assert_eq!((s.status, s.timestamp_time), (Status::Valid, Some(stamped_at)), "{:?}", s.details);
 }
