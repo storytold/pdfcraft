@@ -1,6 +1,6 @@
-//! Frame-time budget on a 500-page document (parity view.large-document-performance): scrolling
-//! continuously must keep the UI's own per-frame work far below a 60 fps frame. Rendering runs on
-//! worker threads and is not part of the measurement.
+//! Frame-time budget on a 500-page document (parity view.large-document-performance). The budget
+//! scales with a plain egui layout workload on slow machines. Rendering runs on worker threads and
+//! is not part of the measurement.
 
 use egui_kittest::Harness;
 use pdfcraft_ui_egui::PdfCraftApp;
@@ -32,15 +32,49 @@ fn overloaded() -> bool {
 /// runs would charge it for the other's work on a small CI machine.
 static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Generous for debug builds and shared CI machines; release builds are ~10× faster.
+/// Base budget for debug builds. Calibration can increase it by at most three times.
 const BUDGET: std::time::Duration = std::time::Duration::from_millis(40);
+const CALIBRATION_REFERENCE: std::time::Duration = std::time::Duration::from_millis(16);
 
-/// The average frame over `frames` steps, best of up to three rounds: another process taking the
-/// CPU only ever adds time, so the fastest round is the closest to the UI's own cost, and a real
-/// regression is over budget in every round. Later rounds run only when a round is over budget.
-fn best_average(label: &str, frames: usize, mut step: impl FnMut(usize)) -> std::time::Duration {
+fn budget_scale(calibration: std::time::Duration) -> f64 {
+    (calibration.as_secs_f64() / CALIBRATION_REFERENCE.as_secs_f64()).clamp(1.0, 3.0)
+}
+
+#[test]
+fn calibration_scales_slow_machines_without_exceeding_the_cap() {
+    assert_eq!(budget_scale(std::time::Duration::from_millis(8)), 1.0);
+    assert_eq!(budget_scale(std::time::Duration::from_millis(16)), 1.0);
+    assert_eq!(budget_scale(std::time::Duration::from_millis(40)), 2.5);
+    assert_eq!(budget_scale(std::time::Duration::from_millis(64)), 3.0);
+}
+
+/// Lay out labels through egui without running PdfCraft code.
+fn calibration_average() -> std::time::Duration {
+    let ctx = egui::Context::default();
     let mut best = std::time::Duration::MAX;
+    for _ in 0..3 {
+        let start = std::time::Instant::now();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            for i in 0..10_000 {
+                ui.label(format!("Calibration label {i} with text"));
+            }
+        });
+        output.drop_without_applying_deltas();
+        best = best.min(start.elapsed());
+    }
+    best
+}
+
+/// Measure calibration just before each frame round. The lowest average-to-budget ratio determines the result.
+/// Later rounds run only when the measured average exceeds that round's calibrated budget.
+fn best_average(label: &str, frames: usize, mut step: impl FnMut(usize)) -> (std::time::Duration, std::time::Duration) {
+    let mut best = std::time::Duration::MAX;
+    let mut best_budget = BUDGET;
+    let mut best_ratio = f64::INFINITY;
     for round in 1..=3 {
+        let calibration = calibration_average();
+        let scale = budget_scale(calibration);
+        let budget = BUDGET.mul_f64(scale);
         let start = std::time::Instant::now();
         let mut worst = std::time::Duration::ZERO;
         for f in 0..frames {
@@ -49,13 +83,20 @@ fn best_average(label: &str, frames: usize, mut step: impl FnMut(usize)) -> std:
             worst = worst.max(t.elapsed());
         }
         let avg = start.elapsed() / frames as u32;
-        eprintln!("PERF {label} round {round}: avg frame {avg:?}, worst {worst:?}");
-        best = best.min(avg);
-        if best < BUDGET {
+        eprintln!(
+            "PERF {label} round {round}: calibration {calibration:?}, factor {scale:.2}, budget {budget:?}, avg frame {avg:?}, worst {worst:?}"
+        );
+        let ratio = avg.as_secs_f64() / budget.as_secs_f64();
+        if ratio < best_ratio {
+            best = avg;
+            best_budget = budget;
+            best_ratio = ratio;
+        }
+        if avg < budget {
             break;
         }
     }
-    best
+    (best, best_budget)
 }
 
 /// `n` text pages with a few comments each, so panels and overlays have work to do.
@@ -140,8 +181,8 @@ fn collapsed_comments_with_ten_thousand_named_roots_stay_within_the_frame_budget
         assert_eq!(state.views[0].comments.collapsed_pages, [0]);
     }
     // Folding removes card layout cost, so this measures filtering and thread lookup work.
-    let avg = best_average("collapsed named comments", 30, |_| h.step());
-    assert!(avg < BUDGET, "collapsed comments: average frame {avg:?}");
+    let (avg, budget) = best_average("collapsed named comments", 30, |_| h.step());
+    assert!(avg < budget, "collapsed comments: average frame {avg:?}, budget {budget:?}");
 }
 
 #[test]
@@ -161,11 +202,11 @@ fn scrolling_a_500_page_document_stays_within_the_frame_budget() {
     h.run_steps(4);
     eprintln!("PERF open {:?}", t0.elapsed());
     // Scroll through the document: 200 frames, jumping ~2 pages per frame.
-    let avg = best_average("scroll", 200, |f| {
+    let (avg, budget) = best_average("scroll", 200, |f| {
         h.state_mut().views[0].goto = Some(((f * 5) / 2 % 500, 0.3));
         h.step();
     });
-    assert!(avg < BUDGET, "average frame {avg:?}");
+    assert!(avg < budget, "average frame {avg:?}, budget {budget:?}");
 }
 
 #[test]
@@ -185,10 +226,10 @@ fn panels_with_hundreds_of_items_stay_within_the_frame_budget() {
             app
         });
         h.run_steps(4);
-        let avg = best_average(panel, 100, |f| {
+        let (avg, budget) = best_average(panel, 100, |f| {
             h.state_mut().views[0].goto = Some(((f * 5) % 500, 0.3));
             h.step();
         });
-        assert!(avg < BUDGET, "{panel}: average frame {avg:?}");
+        assert!(avg < budget, "{panel}: average frame {avg:?}, budget {budget:?}");
     }
 }
