@@ -2602,6 +2602,9 @@ animation effects	Off	Kapalı
 	Extract the selected pages…	Seçili sayfaları ayıkla…
 	Delete the selected pages	Seçili sayfaları sil
 
+# Undo and Redo buttons in the mode bar (#4050): the command's name and its shortcut, as Save ({key}) (AI-assisted, not separately native-reviewed)
+	Undo ({key})	Geri al ({key})
+	Redo ({key})	Yinele ({key})
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Bu yanıtın seçenekleri
 	Export value	Dışa aktarma değeri

@@ -2874,6 +2874,9 @@ key	Space	Space
 	Extract the selected pages…	Trích xuất các trang đã chọn…
 	Delete the selected pages	Xóa các trang đã chọn
 
+# Undo and Redo buttons in the mode bar (#4050): the command's name and its shortcut, as Save ({key}) (AI-assisted, not separately native-reviewed)
+	Undo ({key})	Hoàn tác ({key})
+	Redo ({key})	Làm lại ({key})
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tùy chọn cho câu trả lời này
 	Export value	Giá trị xuất

@@ -1972,6 +1972,25 @@ fn a_wrong_polygon_point_is_taken_back_with_backspace_or_undo() {
     assert_eq!(comments(&h).len(), 1);
 }
 
+/// CodeRabbit on #4562: while a polygon is drawn, the mode bar's Undo button takes back its last
+/// point as Edit ▸ Undo does, even in a document with no earlier change to undo.
+#[test]
+fn the_undo_button_takes_back_a_polygon_point_in_an_unchanged_document() {
+    use egui_kittest::kittest::NodeT;
+    let mut h = harness(|app| app.set_option("quick", "polygon").unwrap());
+    let undo = "Undo (Ctrl+Z)";
+    assert!(h.get_by_label(undo).accesskit_node().is_disabled(), "nothing to undo before the drawing");
+    for p in [(40.0, 40.0), (120.0, 40.0)] {
+        click_pt(&mut h, p);
+    }
+    assert_eq!(drawn_points(&h), 2);
+    assert!(!h.get_by_label(undo).accesskit_node().is_disabled(), "a point to take back");
+    h.get_by_label(undo).click();
+    h.run_steps(2);
+    assert_eq!(drawn_points(&h), 1);
+    assert!(comments(&h).is_empty());
+}
+
 #[test]
 fn inserted_text_snaps_to_the_gap_between_characters_on_the_baseline() {
     let mut h = harness(|app| app.set_option("quick", "caret").unwrap());

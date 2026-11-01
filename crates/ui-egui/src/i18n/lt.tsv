@@ -2866,6 +2866,9 @@ theme	Appearance	Išvaizda
 	Extract the selected pages…	Išskleisti pasirinktus puslapius…
 	Delete the selected pages	Ištrinti pasirinktus puslapius
 
+# Undo and Redo buttons in the mode bar (#4050): the command's name and its shortcut, as Save ({key}) (AI-assisted, not separately native-reviewed)
+	Undo ({key})	Anuliuoti ({key})
+	Redo ({key})	Pakartoti ({key})
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Šio atsakymo parinktys
 	Export value	Eksporto reikšmė
