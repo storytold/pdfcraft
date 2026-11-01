@@ -250,6 +250,97 @@ trailer << /Root 1 0 R >>
     }
 }
 
+/// Two pages whose chapter and section headings are set apart only by style (#1693).
+fn styled_pdf() -> Vec<u8> {
+    let page1 = "BT /FB 18 Tf 72 700 Td (Introduction) Tj ET BT /FR 11 Tf 72 670 Td (Some text) Tj ET BT /FB 14 Tf 72 640 Td (Background) Tj ET";
+    let page2 = "BT /FB 18 Tf 72 700 Td (Results) Tj ET BT /FR 11 Tf 72 670 Td (More text) Tj ET";
+    format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 612 792] /Resources << /Font << /FB 7 0 R /FR 8 0 R >> >> >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Contents 5 0 R >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /Contents 6 0 R >> endobj
+5 0 obj << /Length {} >>
+stream
+{page1}
+endstream
+endobj
+6 0 obj << /Length {} >>
+stream
+{page2}
+endstream
+endobj
+7 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >> endobj
+8 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        page1.len(),
+        page2.len()
+    )
+    .into_bytes()
+}
+
+/// #1693: Bookmark options ▸ New bookmarks from text styles… lists the document's styles with a
+/// sample, offers the largest for level 1, and Create makes the bookmarks (sections under
+/// their chapter) as one undo step. Cancel changes nothing; a document without text says so.
+#[test]
+fn new_bookmarks_from_text_styles_from_the_bookmark_options() {
+    let mut h = harness();
+    h.state_mut().open_bytes("styled.pdf", None, styled_pdf()).unwrap();
+    h.run_steps(3);
+    let id = h.state().active.and_then(|i| h.state().views.get(i)).unwrap().id;
+    let open = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.get_by_label("Bookmark options").click();
+        h.run_steps(2);
+        h.get_by_label("New bookmarks from text styles…").click();
+        h.run_steps(3);
+    };
+    open(&mut h);
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::BookmarksFromTextStyles));
+    assert_eq!(h.state().text_style_draft.levels, [Some(0), None, None, None], "the largest style is offered for level 1");
+    // Cancel: nothing made.
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, None);
+    assert!(h.state().session.get(id).unwrap().info.outline.is_empty());
+    // Level 2 from its list: the sections' style.
+    open(&mut h);
+    // Each level's list is named after it, for screen readers too.
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Level 2").click();
+    h.run_steps(2);
+    // It lists every style, by font, size, weight and a sample.
+    h.get_by_label("Helvetica-Bold, 18 pt, bold · “Introduction” (2 lines)");
+    h.get_by_label("Helvetica, 11 pt · “Some text” (2 lines)");
+    h.run_steps(2);
+    h.get_by_label("Helvetica-Bold, 14 pt, bold · “Background” (1 line)").click();
+    h.run_steps(2);
+    assert_eq!(h.state().text_style_draft.levels, [Some(0), Some(1), None, None]);
+    h.get_by_label("Create").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None);
+    let outline = h.state().session.get(id).unwrap().info.outline.clone();
+    assert_eq!(outline.len(), 1);
+    assert_eq!(outline[0].title, "Untitled");
+    let titles: Vec<(&str, Option<usize>)> = outline[0].children.iter().map(|o| (o.title.as_str(), o.page)).collect();
+    assert_eq!(titles, [("Introduction", Some(0)), ("Results", Some(1))]);
+    assert_eq!(outline[0].children[0].children[0].title, "Background");
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("New bookmarks from text styles"));
+    assert_eq!(h.state().right, Some(pdfcraft_ui_egui::RightPanel::Bookmarks));
+    // A document with no text: nothing to choose from.
+    h.state_mut().open_bytes("pages.pdf", None, PAGES.to_vec()).unwrap();
+    h.run_steps(3);
+    open(&mut h);
+    let message = h.get_by_label("This document has no text to make bookmarks from.").rect();
+    // The dialog's Close, below the message (the panel has a Close of its own).
+    h.get_all_by_label("Close").find(|n| n.rect().top() > message.bottom()).expect("the dialog's Close").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, None);
+    // The command (Pages menu, command palette) opens it too.
+    assert!(h.state_mut().execute("bookmark.from_text_styles"));
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::BookmarksFromTextStyles));
+}
+
 #[test]
 fn expanding_and_collapsing_all_bookmarks() {
     use pdfcraft_engine::Edit;
