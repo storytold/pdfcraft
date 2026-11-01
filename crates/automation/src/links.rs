@@ -262,6 +262,15 @@ impl Automation {
         if choices.len() > 32 || choices.iter().any(|v| !v.is_string() && !v.is_null()) {
             return Err(bad("invalid menu_choices"));
         }
+        let source = self.doc(a)?;
+        let page_number = a.int("page")?;
+        let index_number = a.int("index")?;
+        if page >= source.info.pages.len() {
+            return Err(bad(format!("page {page_number} is out of range: the document has {} pages", source.info.pages.len())));
+        }
+        if !source.info.links.iter().any(|link| link.page == page && link.index == index) {
+            return Err(failed(format!("page {page_number} has no link {index_number} (see link_list)")));
+        }
         let input = self.session.prepare_link_javascript(id, page, index).map_err(failed)?;
         #[allow(unused_mut)]
         let mut menus: Vec<Value> = Vec::new();
@@ -269,7 +278,7 @@ impl Automation {
         let outcome = {
             let events = input.start().map_err(failed)?;
             loop {
-                match events.recv_timeout(std::time::Duration::from_secs(10)).map_err(failed)? {
+                match events.recv_timeout(std::time::Duration::from_secs(10)).map_err(|e| failed(format!("link JavaScript stopped waiting for the worker after up to 10 seconds per event: {e}; no result was applied, and abandoning the result does not terminate the worker")))? {
                     pdfcraft_engine::js::InteractiveEvent::Menu(items, reply) => {
                         if menus.len() >= 32 {
                             return Err(failed("too many popup menus"));
@@ -289,7 +298,8 @@ impl Automation {
         };
         let out = self.session.finish_link_javascript(&input, outcome).map_err(failed)?;
         let requests: Vec<_> = out.requests.iter().map(crate::a11y::request_json).collect();
-        Ok(json!({ "menus": menus, "alerts": out.alerts, "console": out.console, "requests": requests, "error": out.error }))
+        let alerts: Vec<_> = out.alerts.iter().map(crate::a11y::alert_json).collect();
+        Ok(json!({ "menus": menus, "alerts": alerts, "console": out.console, "requests": requests, "error": out.error }))
     }
 }
 

@@ -315,12 +315,13 @@ mod tests {
     }
 
     /// `build.rs` embeds the Japanese CJK faces whole and any other CJK face only up to
-    /// `MAX_OTHER_CJK_BYTES`, so a checkout with a large Chinese or Korean face (craft-fonts has the
+    /// `MAX_OTHER_CJK_BYTES` (the explicitly pinned native-only LXGW UI fallback has a separate
+    /// 16 MiB cap), so a checkout with a large Chinese or Korean face (craft-fonts has the
     /// 16.4 MB Noto Sans CJK SC) leaves it out. The four Japanese faces of the pinned craft-fonts
     /// are 24.1 MB.
     #[test]
     fn cjk_faces_follow_the_size_rule() {
-        use crate::cjk_scripts::{MAX_OTHER_CJK_BYTES, WHOLE_CJK_FAMILIES, is_cjk_script};
+        use crate::cjk_scripts::{MAX_NATIVE_UI_CJK_BYTES, MAX_OTHER_CJK_BYTES, NATIVE_UI_CJK_FAMILIES, WHOLE_CJK_FAMILIES, is_cjk_script};
         // A tag can carry a region after the code: craft-fonts tags Noto Sans HK UI `Hant-HK`.
         assert!(["Hant-HK", "Hans", "Jpan", "Hang"].iter().all(|s| is_cjk_script(s)));
         assert!(!["Latn", "Arab", "Hebr"].iter().any(|s| is_cjk_script(s)));
@@ -328,7 +329,10 @@ mod tests {
         let (whole, other): (Vec<_>, Vec<_>) = cjk.partition(|f| WHOLE_CJK_FAMILIES.contains(&f.family));
         for face in &other {
             let len = face.bytes.len();
-            assert!(u64::try_from(len).is_ok_and(|n| n <= MAX_OTHER_CJK_BYTES), "{} is embedded at {len} bytes", face.name());
+            let native_ui = NATIVE_UI_CJK_FAMILIES.contains(&face.family);
+            assert!(!cfg!(target_arch = "wasm32") || !native_ui, "native UI face in web payload");
+            let cap = if native_ui { MAX_NATIVE_UI_CJK_BYTES } else { MAX_OTHER_CJK_BYTES };
+            assert!(u64::try_from(len).is_ok_and(|n| n <= cap), "{} is embedded at {len} bytes", face.name());
         }
         let bytes: usize = whole.iter().map(|f| f.bytes.len()).sum();
         assert!(bytes < 25_000_000, "{bytes} bytes of Japanese faces");

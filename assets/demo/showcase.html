@@ -14,27 +14,27 @@
   (highlight, sticky note, stamp, ...), so annotation geometry follows the layout.
 -->
 <style>
-@font-face { font-display: block; font-family: "PC Mono"; src: url("{{ASSETS}}/fonts/JetBrainsMono-Regular.ttf"); }
-@font-face { font-display: block; font-family: "PC Inter"; src: url("{{FONTS}}/Inter[opsz,wght].ttf"); font-weight: 100 900; }
-@font-face { font-display: block; font-family: "PC Inter"; src: url("{{FONTS}}/Inter-Italic[opsz,wght].ttf"); font-weight: 100 900; font-style: italic; }
-@font-face { font-display: block; font-family: "PC Garamond"; src: url("{{FONTS}}/EBGaramond[wght].ttf"); font-weight: 400 800; }
-@font-face { font-display: block; font-family: "PC Garamond"; src: url("{{FONTS}}/EBGaramond-Italic[wght].ttf"); font-weight: 400 800; font-style: italic; }
-@font-face { font-display: block; font-family: "PC Playfair"; src: url("{{FONTS}}/PlayfairDisplay[wght].ttf"); font-weight: 400 900; }
-@font-face { font-display: block; font-family: "PC Playfair"; src: url("{{FONTS}}/PlayfairDisplay-Italic[wght].ttf"); font-weight: 400 900; font-style: italic; }
-@font-face { font-display: block; font-family: "PC Vibes"; src: url("{{FONTS}}/GreatVibes-Regular.ttf"); }
-@font-face { font-display: block; font-family: "PC Math"; src: url("{{FONTS}}/STIXTwoMath-Regular.ttf"); }
-@font-face { font-display: block; font-family: "PC Amiri"; src: url("{{FONTS}}/Amiri-Regular.ttf"); }
-@font-face { font-display: block; font-family: "PC Hebrew"; src: url("{{FONTS}}/NotoSansHebrew[wdth,wght].ttf"); font-weight: 100 900; }
-@font-face { font-display: block; font-family: "PC Devanagari"; src: url("{{FONTS}}/NotoSansDevanagari[wdth,wght].ttf"); font-weight: 100 900; }
-@font-face { font-display: block; font-family: "PC Thai"; src: url("{{FONTS}}/NotoSansThai[wdth,wght].ttf"); font-weight: 100 900; }
-@font-face { font-display: block; font-family: "PC Armenian"; src: url("{{FONTS}}/NotoSansArmenian[wdth,wght].ttf"); font-weight: 100 900; }
-@font-face { font-display: block; font-family: "PC Georgian"; src: url("{{FONTS}}/NotoSansGeorgian[wdth,wght].ttf"); font-weight: 100 900; }
-@font-face { font-display: block; font-family: "PC Tamil"; src: url("{{FONTS}}/NotoSansTamil[wdth,wght].ttf"); font-weight: 100 900; }
-@font-face { font-display: block; font-family: "PC Charis"; src: url("{{FONTS}}/CharisSIL-Regular.ttf"); }
-@font-face { font-display: block; font-family: "PC XiaoWei"; src: url("{{FONTS}}/ZCOOLXiaoWei-Regular.ttf"); }
-@font-face { font-display: block; font-family: "PC Mincho"; src: url("{{FONTS}}/ShipporiMincho-Regular.ttf"); }
-@font-face { font-display: block; font-family: "PC Gowun"; src: url("{{FONTS}}/GowunBatang-Regular.ttf"); }
-@font-face { font-display: block; font-family: "PC Emoji"; src: url("{{FONTS}}/NotoColorEmoji-Regular.ttf"); }
+@font-face { font-display: swap; font-family: "PC Mono"; src: url("{{ASSETS}}/fonts/JetBrainsMono-Regular.ttf"); }
+@font-face { font-display: swap; font-family: "PC Inter"; src: url("{{FONTS}}/Inter[opsz,wght].ttf"); font-weight: 100 900; }
+@font-face { font-display: swap; font-family: "PC Inter"; src: url("{{FONTS}}/Inter-Italic[opsz,wght].ttf"); font-weight: 100 900; font-style: italic; }
+@font-face { font-display: swap; font-family: "PC Garamond"; src: url("{{FONTS}}/EBGaramond[wght].ttf"); font-weight: 400 800; }
+@font-face { font-display: swap; font-family: "PC Garamond"; src: url("{{FONTS}}/EBGaramond-Italic[wght].ttf"); font-weight: 400 800; font-style: italic; }
+@font-face { font-display: swap; font-family: "PC Playfair"; src: url("{{FONTS}}/PlayfairDisplay[wght].ttf"); font-weight: 400 900; }
+@font-face { font-display: swap; font-family: "PC Playfair"; src: url("{{FONTS}}/PlayfairDisplay-Italic[wght].ttf"); font-weight: 400 900; font-style: italic; }
+@font-face { font-display: swap; font-family: "PC Vibes"; src: url("{{FONTS}}/GreatVibes-Regular.ttf"); }
+@font-face { font-display: swap; font-family: "PC Math"; src: url("{{FONTS}}/STIXTwoMath-Regular.ttf"); }
+@font-face { font-display: swap; font-family: "PC Amiri"; src: url("{{FONTS}}/Amiri-Regular.ttf"); }
+@font-face { font-display: swap; font-family: "PC Hebrew"; src: url("{{FONTS}}/NotoSansHebrew[wdth,wght].ttf"); font-weight: 100 900; }
+@font-face { font-display: swap; font-family: "PC Devanagari"; src: url("{{FONTS}}/NotoSansDevanagari[wdth,wght].ttf"); font-weight: 100 900; }
+@font-face { font-display: swap; font-family: "PC Thai"; src: url("{{FONTS}}/NotoSansThai[wdth,wght].ttf"); font-weight: 100 900; }
+@font-face { font-display: swap; font-family: "PC Armenian"; src: url("{{FONTS}}/NotoSansArmenian[wdth,wght].ttf"); font-weight: 100 900; }
+@font-face { font-display: swap; font-family: "PC Georgian"; src: url("{{FONTS}}/NotoSansGeorgian[wdth,wght].ttf"); font-weight: 100 900; }
+@font-face { font-display: swap; font-family: "PC Tamil"; src: url("{{FONTS}}/NotoSansTamil[wdth,wght].ttf"); font-weight: 100 900; }
+@font-face { font-display: swap; font-family: "PC Charis"; src: url("{{FONTS}}/CharisSIL-Regular.ttf"); }
+@font-face { font-display: swap; font-family: "PC XiaoWei"; src: url("{{FONTS}}/ZCOOLXiaoWei-Regular.ttf"); }
+@font-face { font-display: swap; font-family: "PC Mincho"; src: url("{{FONTS}}/ShipporiMincho-Regular.ttf"); }
+@font-face { font-display: swap; font-family: "PC Gowun"; src: url("{{FONTS}}/GowunBatang-Regular.ttf"); }
+@font-face { font-display: swap; font-family: "PC Emoji"; src: url("{{FONTS}}/NotoColorEmoji-Regular.ttf"); }
 
 @page { size: Letter; margin: 0; }
 

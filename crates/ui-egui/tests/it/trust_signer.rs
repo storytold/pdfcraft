@@ -3,6 +3,7 @@
 //! certificate whose CMS carries its issuer chain gives a signature whose `chain.last()` (the
 //! self-signed root) differs from its `certificate` (the signer); the click must trust the signer.
 
+use crate::support;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_engine::SignatureStatus;
@@ -58,7 +59,7 @@ fn one_click_trust_stores_the_displayed_signer_not_the_embedded_root() {
         d.password = "test".into();
     }
     h.run_steps(2);
-    h.get_by_label("Sign").click();
+    support::outside_menus(&h, "Sign").click();
     h.run_steps(6);
 
     // The signature validates as Unknown and carries a two-certificate chain whose top (the root)

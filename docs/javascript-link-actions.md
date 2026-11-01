@@ -126,14 +126,23 @@ The engine rechecks JavaScript enablement and the source generation before apply
 The frontend cancels a pending menu on document close, edits, undo/redo or JavaScript disablement.
 Form changes and resets use the existing single undoable batch. A failed link script does not
 commit form changes or dispatch its requests; its errors and diagnostic output remain visible.
+If applying a successful script is refused (for example by form permissions), its console and
+messages are retained, the edit error is shown, and none of its viewer requests is dispatched.
 
 ## Headless access
 
 `link_run_javascript {doc, page, index, menu_choices?}` uses one-based `link_list` numbering.
 Pass the exact `page` and `index` returned by `link_list`: `index` is the position in that
 page's `/Annots` array, not a row number in a filtered list of links; gaps are possible.
-It returns `menus`, `alerts`, `console`, `requests`, and `error`. `menu_choices` is an optional
-array of `cReturn` strings or null, consumed in popup order, maximum 32 entries. Omitted choices
+It returns `menus`, `alerts`, `console`, `requests`, and `error`.
+Following the upstream message contract, `alerts` contains objects with `message`, `title`
+(null if absent), `icon` and `buttons`, as `js_run` does, rather than plain strings.
+This is an output-shape change for callers of the earlier #2081 branch. Titles and buttons
+are retained through the desktop message queue; alert responses still return OK upstream. `menu_choices` is an optional
+array of `cReturn` strings or null, consumed in nonempty popup order, maximum 32 entries.
+A call with no menu entries returns null without requesting interaction or consuming a choice.
+Disabled-only and separator-only menus remain nonempty. The 32-call interactive budget still
+counts empty calls; their removal from the interaction stream does not remove that limit. Omitted choices
 or explicit null cancel only that popup and return JavaScript `null`. The script then resumes;
 it may change fields and issue viewer requests, and a successful completion applies its edits
 in the usual Undo batch. This differs from desktop cancellation of a waiting menu, which retires

@@ -240,7 +240,7 @@ impl PdfCraftApp {
         #[cfg(target_arch = "wasm32")]
         {
             let _ = (id, page, annotation, anchor, frame);
-            self.notify("Interactive JavaScript menus require the desktop application");
+            self.notify_tr("Interactive JavaScript menus require the desktop application");
         }
     }
 
@@ -341,8 +341,16 @@ impl PdfCraftApp {
                             }
                             complete = true;
                         }
-                        Ok(InteractiveEvent::Complete(out)) => {
+                        Ok(InteractiveEvent::Complete(mut out)) => {
                             job.popup.release_focus(ctx);
+                            let id = job.pending.input.document_id();
+                            let diagnostics = JsOutput {
+                                alerts: std::mem::take(&mut out.alerts),
+                                console: std::mem::take(&mut out.console),
+                                errors: out.error.iter().cloned().collect(),
+                                doc_errors: std::mem::take(&mut out.doc_errors),
+                                requests: Vec::new(),
+                            };
                             match self.session.finish_link_javascript(&job.pending.input, out) {
                                 Ok(out) => {
                                     let id = job.pending.input.document_id();
@@ -351,18 +359,12 @@ impl PdfCraftApp {
                                     {
                                         view.document_changed(&doc.info);
                                     }
-                                    self.handle_js(
-                                        id,
-                                        JsOutput {
-                                            alerts: out.alerts,
-                                            console: out.console,
-                                            requests: out.requests,
-                                            errors: out.error.into_iter().collect(),
-                                            doc_errors: out.doc_errors,
-                                        },
-                                    );
+                                    self.handle_js(id, JsOutput { requests: out.requests, ..diagnostics });
                                 }
-                                Err(e) => self.notify_error(e),
+                                Err(e) => {
+                                    self.notify_error(e);
+                                    self.handle_js(id, diagnostics);
+                                }
                             }
                             complete = true;
                         }
@@ -417,7 +419,7 @@ impl PdfCraftApp {
                     if dismiss || escape {
                         state.retire(job, Some(ctx));
                     } else if let Some((items, reply)) = job.menu.take() {
-                        let id = egui::Id::new(("pdf-js-menu", job.serial, job.popup_number));
+                        let id = egui::Id::unique(("pdf-js-menu", job.serial, job.popup_number));
                         match job.popup.show(ctx, id, job.pending.anchor, &items) {
                             Some(Some(choice)) => {
                                 if reply.send(Some(choice)).is_ok() {
@@ -579,8 +581,13 @@ impl MenuView {
         let mut choice = None;
         if let Some(response) = menu_popup(ctx, id, anchor, width).show(|ui| {
             self.rows(ui, items, &mut Vec::new(), width, height, &mut choice);
+            ui.is_visible()
         }) {
-            self.rects.push(response.response.rect);
+            // egui 0.37 measures new Areas invisibly first. Publish interaction bounds
+            // only once their widgets are painted and available to accessibility/control.
+            if response.inner {
+                self.rects.push(response.response.rect);
+            }
         }
         choice.map(Some)
     }
@@ -627,7 +634,11 @@ impl MenuView {
                         .width(child_width)
                         .style(egui::containers::menu::menu_style)
                         .close_behavior(egui::PopupCloseBehavior::IgnoreClicks);
-                    if let Some(sub) = popup.show(|ui| self.rows(ui, &item.children, path, child_width, height, choice)) {
+                    if let Some(sub) = popup.show(|ui| {
+                        self.rows(ui, &item.children, path, child_width, height, choice);
+                        ui.is_visible()
+                    }) && sub.inner
+                    {
                         self.rects.push(sub.response.rect);
                     }
                 }
@@ -658,6 +669,11 @@ mod tests {
     use super::*;
     use egui_kittest::{Harness, kittest::Queryable};
     use pdfcraft_cos::{Dict, Object, PdfString};
+    fn synthetic_path(name: &str) -> String {
+        let path = std::env::current_dir().unwrap().join("pdfcraft-synthetic 'é").join(name);
+        assert!(path.is_absolute());
+        path.to_string_lossy().into_owned()
+    }
     fn fixture() -> Vec<u8> {
         let bytes = pdfcraft_engine::Session::new().create_blank(300.0, 300.0, 2).unwrap();
         let mut cos = pdfcraft_cos::Document::open(bytes).unwrap();
@@ -667,7 +683,7 @@ mod tests {
         let page = kids.as_array().unwrap()[0].as_ref().unwrap();
         let mut action = Dict::new();
         action.set(b"S".to_vec(), Object::Name(b"JavaScript".to_vec()));
-        action.set(b"JS".to_vec(),Object::String(PdfString::text("var c=app.popUpMenuEx({cName:'Next',cReturn:'next'},{cName:'URL',cReturn:'url'},{cName:'File',cReturn:'file'},{cName:'Unavailable',bEnabled:false}); if(c==='next')this.pageNum=1; if(c==='url')app.launchURL('https://example.org'); if(c==='file')app.openDoc('C:/pdfcraft-test/other.pdf');")));
+        action.set(b"JS".to_vec(),Object::String(PdfString::text(&"var c=app.popUpMenuEx({cName:'Next',cReturn:'next'},{cName:'URL',cReturn:'url'},{cName:'File',cReturn:'file'},{cName:'Unavailable',bEnabled:false}); if(c==='next')this.pageNum=1; if(c==='url')app.launchURL('https://example.org'); if(c==='file')app.openDoc(OTHER_PATH);".replace("OTHER_PATH", &serde_json::to_string(&synthetic_path("other.pdf")).unwrap()))));
         let action = cos.add(action);
         let mut ann = Dict::new();
         ann.set(b"Subtype".to_vec(), Object::Name(b"Link".to_vec()));
@@ -707,7 +723,7 @@ mod tests {
         let mut h = harness();
         let id = h.state().active_ids().unwrap().1;
         h.state_mut().run_link_script(id, 0, 0);
-        wait(&mut h, |a| a.link_script.as_ref().is_some_and(|j| j.menu.is_some()));
+        wait(&mut h, ready_menu);
         h.get_by_label("Next");
         h.get_by_label("Unavailable");
         if let Ok(path) = std::env::var("PDFCRAFT_SHOT") {
@@ -727,14 +743,14 @@ mod tests {
         assert_eq!(h.state().views[0].current, 1);
         assert!(!h.state().session.get(id).unwrap().dirty);
         h.state_mut().run_link_script(id, 0, 0);
-        wait(&mut h, |a| a.link_script.as_ref().is_some_and(|j| j.menu.is_some()));
+        wait(&mut h, ready_menu);
         h.get_by_label("URL").click();
         wait(&mut h, |a| a.link_script.is_none());
         assert_eq!(h.state().pending_link.as_ref().unwrap().origin, crate::LinkOrigin::Script);
         h.state_mut().pending_link = None;
         h.state_mut().run_link_script(id, 0, 0);
-        wait(&mut h, |a| a.link_script.as_ref().is_some_and(|j| j.menu.is_some()));
-        h.get_by_label("File").click();
+        wait(&mut h, ready_menu);
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "File").click();
         wait(&mut h, |a| a.link_script.is_none());
         assert!(h.state().pending_remote_link.is_some());
         assert_eq!(h.state().views.len(), 1, "no file is read/opened before consent");
@@ -757,7 +773,7 @@ mod tests {
                     h.state_mut().handle_js(
                         id,
                         pdfcraft_engine::js::JsOutput {
-                            requests: vec![pdfcraft_engine::js::Request::OpenDoc("C:/synthetic/first.pdf".into())],
+                            requests: vec![pdfcraft_engine::js::Request::OpenDoc(synthetic_path("first.pdf"))],
                             ..Default::default()
                         },
                     );
@@ -772,7 +788,7 @@ mod tests {
                 h.state_mut().handle_js(
                     id,
                     pdfcraft_engine::js::JsOutput {
-                        requests: vec![pdfcraft_engine::js::Request::OpenDoc("C:/synthetic/ignored.pdf".into())],
+                        requests: vec![pdfcraft_engine::js::Request::OpenDoc(synthetic_path("ignored.pdf"))],
                         ..Default::default()
                     },
                 );
@@ -898,7 +914,10 @@ mod tests {
             let b = at(&h, 230.0, 230.0);
             click_at(&mut h, b);
             wait(&mut h, |a| {
-                a.link_script.as_ref().is_some_and(|j| j.menu.as_ref().is_some_and(|m| m.0.first().is_some_and(|i| i.name == "Second component")))
+                ready_menu(a)
+                    && a.link_script
+                        .as_ref()
+                        .is_some_and(|j| j.menu.as_ref().is_some_and(|m| m.0.first().is_some_and(|i| i.name == "Second component")))
             });
             let job = h.state().link_script.as_ref().unwrap();
             assert_eq!(job.serial, first + 1);
@@ -1163,6 +1182,7 @@ mod tests {
         h.hover_at(rect.center());
         h.step();
         h.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Point,
             delta: egui::vec2(0.0, -300.0),
             modifiers: egui::Modifiers::NONE,
@@ -1244,7 +1264,7 @@ mod tests {
                 let tip = painted_text(&h, label).unwrap_or_else(|| panic!("missing {label:?}, menu_open={menu_open}"));
                 assert_ne!(
                     h.ctx.layer_id_at(tip.center()),
-                    Some(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("canvas-hover"))),
+                    Some(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("canvas-hover"))),
                     "informational tooltips must not intercept pointer events"
                 );
                 assert_eq!(ready_menu(h.state()), menu_open);
@@ -1315,6 +1335,7 @@ mod tests {
             }
             h.hover_at(egui::pos2(1000.0, 650.0));
             h.event(egui::Event::MouseWheel {
+                source: egui::MouseWheelSource::Unknown,
                 unit: egui::MouseWheelUnit::Point,
                 delta: egui::vec2(0.0, -30.0),
                 modifiers: egui::Modifiers::NONE,
@@ -1627,10 +1648,10 @@ mod tests {
             rc: true,
             changed: vec![field],
             console: vec!["verified completion".into()],
-            alerts: vec!["verified alert".into()],
+            alerts: vec![pdfcraft_engine::js::Message::plain("verified alert")],
             requests: vec![
                 pdfcraft_engine::js::Request::GoToPage(1),
-                pdfcraft_engine::js::Request::OpenDoc("C:/synthetic/other.pdf".into()),
+                pdfcraft_engine::js::Request::OpenDoc(synthetic_path("other.pdf")),
                 pdfcraft_engine::js::Request::LaunchUrl("https://example.org/verify".into()),
             ],
             ..Default::default()
@@ -1787,7 +1808,7 @@ mod tests {
         let mut raw = egui::RawInput { focused: false, ..Default::default() };
         raw.viewports.entry(egui::ViewportId::ROOT).or_default().minimized = Some(true);
         let job = h.state().link_script.active.as_ref().unwrap();
-        let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new(("pdf-js-menu", job.serial, job.popup_number)));
+        let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::unique(("pdf-js-menu", job.serial, job.popup_number)));
         let before = ctx.graphics(|g| g.get(layer).map(|p| p.next_idx().0).unwrap_or(0));
         let _ = ctx.run_logic(&raw, |ctx| h.state_mut().poll_link_script(ctx));
         let after = ctx.graphics(|g| g.get(layer).map(|p| p.next_idx().0).unwrap_or(0));
@@ -1921,6 +1942,91 @@ mod tests {
         assert_eq!(h.state().session.get(id).unwrap().form.iter().find(|f| f.name == "price").unwrap().value, ["17"]);
         assert!(!h.state().js_console.log.iter().any(|s| s == "verified completion"));
         assert!(h.state().pending_link.is_none());
+        assert!(h.state().pending_remote_link.is_none());
+    }
+    #[test]
+    fn empty_popup_reaches_the_next_desktop_menu_without_dismissal() {
+        let mut h = scripted_harness(
+            "if(app.popUpMenuEx()!==null)throw Error('empty');var c=app.popUpMenuEx({cName:'Proceed',cReturn:'pick'});console.println(c);this.pageNum=1;",
+        );
+        h.get_by_label("Proceed").click();
+        wait(&mut h, |a| a.link_script.is_none());
+        assert!(h.state().js_console.log.iter().any(|line| line == "pick"));
+        assert_eq!(h.state().views[0].current, 1);
+    }
+
+    #[test]
+    fn link_messages_preserve_metadata_and_queue_order() {
+        use pdfcraft_engine::js::{MessageButtons, MessageIcon};
+        let mut h =
+            scripted_harness("app.popUpMenuEx({cName:'Proceed'});app.alert({cMsg:'First',cTitle:'Link',nIcon:2,nType:3});app.alert('Second');");
+        h.get_by_label("Proceed").click();
+        wait(&mut h, |a| a.link_script.is_none());
+        let message = h.state().toast_script.as_ref().unwrap();
+        assert_eq!(
+            (message.text.as_str(), message.title.as_deref(), message.icon, message.buttons),
+            ("First", Some("Link"), MessageIcon::Question, MessageButtons::YesNoCancel)
+        );
+        assert_eq!(h.state().script_messages.front().unwrap().text, "Second");
+        h.state_mut().toast = None;
+        h.run_steps(2);
+        assert_eq!(h.state().toast_script.as_ref().unwrap().text, "Second");
+    }
+
+    #[test]
+    fn refused_link_edits_keep_diagnostics_without_dispatching_requests() {
+        let mut session = pdfcraft_engine::Session::new();
+        let id = session
+            .open(
+                "source.pdf",
+                None,
+                std::sync::Arc::new(scripted_fixture(
+                    "console.println('permission diagnostic');app.alert('Field unchanged');getField('price').value='99';app.openDoc('other.pdf');",
+                )),
+                None,
+            )
+            .unwrap();
+        session
+            .apply(
+                id,
+                pdfcraft_engine::Edit::AddField {
+                    page: 0,
+                    rect: [110.0, 110.0, 200.0, 130.0],
+                    kind: pdfcraft_engine::NewField::Text { multiline: false },
+                    name: Some("price".into()),
+                },
+            )
+            .unwrap();
+        session
+            .apply(id, pdfcraft_engine::Edit::SetFieldValue { name: "price".into(), value: pdfcraft_engine::FieldValue::Text("17".into()) })
+            .unwrap();
+        session
+            .apply(
+                id,
+                pdfcraft_engine::Edit::Protect(pdfcraft_engine::Protection {
+                    permissions_password: Some("synthetic-owner".into()),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let bytes = session.save_bytes(id).unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("protected.pdf", None, (*bytes).clone()).unwrap();
+            app
+        });
+        wait(&mut h, |a| a.active_ids().is_some());
+        let id = h.state().active_ids().unwrap().1;
+        assert!(!h.state().session.get(id).unwrap().allows_form_filling());
+        h.state_mut().run_link_script(id, 0, 0);
+        wait(&mut h, |a| a.link_script.is_none());
+        assert!(h.state().js_console.log.iter().any(|line| line == "permission diagnostic"), "a denied edit must retain diagnostic output");
+        assert!(h.state().script_messages.iter().chain(h.state().toast_script.iter()).any(|m| m.text == "Field unchanged"));
+        let doc = h.state().session.get(id).unwrap();
+        assert_eq!(doc.form.iter().find(|f| f.name == "price").unwrap().value, ["17"]);
+        assert!(!doc.dirty);
+        assert_eq!(doc.can_undo(), None);
         assert!(h.state().pending_remote_link.is_none());
     }
 }

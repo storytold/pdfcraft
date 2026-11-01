@@ -118,10 +118,12 @@ pub fn initial_view(doc: &Document) -> InitialView {
             };
         }
     }
-    // The opening destination: an explicit array, or a GoTo action's.
+    // The opening destination: an explicit array, a GoTo action's `/D`, or a named destination (a
+    // name or string, §12.3.2.4) as the explicit one it names, so that the page and magnification
+    // read here are where the document opens. A name that names nothing reads as page 1.
     let dest = c.get(b"OpenAction").map(|o| doc.resolve(o)).and_then(|o| match &*o {
-        Object::Array(a) => Some(a.clone()),
-        Object::Dict(d) if d.name(b"S") == Some(b"GoTo") => d.get(b"D").map(|x| doc.resolve(x)).and_then(|x| x.as_array().cloned()),
+        Object::Array(_) | Object::Name(_) | Object::String(_) => crate::outline::resolve_dest(doc, &o),
+        Object::Dict(d) if d.name(b"S") == Some(b"GoTo") => d.get(b"D").and_then(|x| crate::outline::resolve_dest(doc, x)),
         _ => None,
     });
     if let Some(d) = dest {
@@ -195,9 +197,12 @@ pub fn set_initial_view(doc: &mut Document, v: &InitialView) -> Result<(), Organ
     } else {
         vp.remove(b"Direction");
     }
+    // A destination, explicit or named (§12.3.2.4), or a GoTo action to one.
     let open_action_is_dest = match c.get(b"OpenAction").map(|o| doc.resolve(o)) {
         None => true,
-        Some(o) => matches!(&*o, Object::Array(_)) || o.as_dict().is_some_and(|d| d.name(b"S") == Some(b"GoTo")),
+        Some(o) => {
+            matches!(&*o, Object::Array(_) | Object::Name(_) | Object::String(_)) || o.as_dict().is_some_and(|d| d.name(b"S") == Some(b"GoTo"))
+        }
     };
     let dest = match v.magnification {
         Magnification::Default if v.page == 0 => None,
