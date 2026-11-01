@@ -430,8 +430,9 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
         // (a modifier let go in the same frame doesn't make Shift+J plain), and not while a form
         // field has the keyboard, a check box included. H stays the Hand tool, so there is no
         // H / L.
+        let vim_enabled = form_box.is_none() && view.forms.focus.is_none();
         let vim = |k| {
-            form_box.is_none()
+            vim_enabled
                 && ctx.input(|i| {
                     i.events.iter().any(|e| matches!(e, egui::Event::Key { key, pressed: true, modifiers, .. } if *key == k && modifiers.is_none()))
                 })

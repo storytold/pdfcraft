@@ -1576,3 +1576,71 @@ fn a_form_button_shows_and_hides_the_attachments_panel() {
     h.run_steps(2);
     assert_eq!(h.state().right, None);
 }
+
+/// #3247: a list box owns J/K even though it has no egui text editor or toggle-key widget.
+/// In continuous view, arrows still select options; Escape returns J/K to scrolling or page turning.
+#[test]
+fn a_focused_list_box_keeps_j_and_k_from_scrolling_or_turning_pages() {
+    use egui::Key;
+    let bytes = pdf_from_objects(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R] /DA (/Helv 10 Tf 0 g) /DR << /Font << /Helv 7 0 R >> >> >> >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 400 1000] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /T (FirstList) /Opt [(Red) (Green) (Blue)] /Rect [50 850 200 920] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /T (SecondList) /Opt [(Red) (Green) (Blue)] /Rect [50 850 200 920] /P 4 0 R /F 4 >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ]);
+    for (zoom, continuous, page) in [("100", true, 0), ("50", false, 0), ("50", false, 1)] {
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("lists.pdf", None, bytes.clone()).unwrap();
+            app.set_option("left", "closed").unwrap();
+            app.set_option("zoom", zoom).unwrap();
+            app.animation_effects = pdfcraft_ui_egui::motion::AnimationEffects::Off;
+            app.views[0].continuous = continuous;
+            app.views[0].go_to_page(page);
+            app
+        });
+        crate::support::settle(&mut h);
+        let top = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].page_screen_rect(page).expect("current page is visible").top();
+        let press = |h: &mut Harness<'static, PdfCraftApp>, key| {
+            h.key_press(key);
+            h.run_steps(4);
+        };
+        if continuous {
+            let before = top(&h);
+            press(&mut h, Key::J);
+            assert!(top(&h) < before - 1.0, "unfocused J scrolls the tall page");
+        } else {
+            let view = &h.state().views[0];
+            assert!(view.page_screen_rect(page).unwrap().height() < view.viewport_rect().height(), "single page fits, so J/K can turn it");
+        }
+        let name = if page == 0 { "FirstList" } else { "SecondList" };
+        click_field(&mut h, name, 0);
+        assert_eq!(h.state().views[0].forms.focus.as_ref().map(|f| f.name.as_str()), Some(name), "real click focuses the list box");
+        let before = (top(&h), h.state().views[0].current);
+        let choice = value(&h, name);
+        for key in [Key::J, Key::K] {
+            press(&mut h, key);
+            assert_eq!(h.state().views[0].current, before.1, "{key:?} cannot turn a page while the list owns the keyboard");
+            assert!((top(&h) - before.0).abs() < 0.5, "{key:?} cannot scroll while the list owns the keyboard");
+            assert_eq!(value(&h, name), choice, "J/K do not alter the list selection");
+        }
+        if continuous {
+            // Keep the existing list-arrow behavior, including its page scrolling.
+            press(&mut h, if choice == ["Blue"] { Key::ArrowUp } else { Key::ArrowDown });
+            assert_ne!(value(&h, name), choice, "arrow changes the selected option");
+        }
+        let resume_top = top(&h);
+        press(&mut h, Key::Escape);
+        assert!(h.state().views[0].forms.focus.is_none());
+        press(&mut h, if page == 0 { Key::J } else { Key::K });
+        if continuous {
+            assert!(top(&h) < resume_top - 1.0, "J scrolls after focus is released");
+        } else {
+            assert_ne!(h.state().views[0].current, before.1, "J/K turn pages after focus is released");
+        }
+    }
+}
