@@ -706,7 +706,8 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
         let p = ptr.pos.unwrap_or(d.start);
         let dx = p.x - d.start.x;
         let preview = match d.grip {
-            Grip::Move => b.translate(p - d.start),
+            // The paragraph itself stays on the page, not its padded outline.
+            Grip::Move => b.translate(super::object_ui::keep_on_page(b.shrink(2.0), xf.rect, p - d.start)),
             Grip::Left => Rect::from_min_max(Pos2::new((b.left() + dx).min(b.right() - 12.0), b.min.y), b.max),
             Grip::Right => Rect::from_min_max(b.min, Pos2::new((b.right() + dx).max(b.left() + 12.0), b.max.y)),
         };

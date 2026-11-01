@@ -250,9 +250,14 @@ fn a_group_drag_released_beyond_the_page_finishes_once() {
     let (a, b) = (at(&h, 55.0, 70.0), at(&h, 415.0, 100.0));
     drag(&mut h, a, b);
     let after = objects(&h);
+    // The group stops at the page's right edge (#5264), and every object in it moves once, by the same amount.
+    let moved =
+        before.iter().zip(&after).find(|(old, _)| old.text.as_deref() != Some("Keep here")).map(|(old, new)| new.rect[0] - old.rect[0]).unwrap();
+    assert!(moved > 0.0 && moved < 360.0, "the group stops at the page edge: moved {moved}");
     for (old, new) in before.iter().zip(&after) {
-        let delta = if old.text.as_deref() == Some("Keep here") { 0.0 } else { 360.0 };
+        let delta = if old.text.as_deref() == Some("Keep here") { 0.0 } else { moved };
         assert!((new.rect[0] - old.rect[0] - delta).abs() < 0.01);
+        assert!(new.rect[2] <= 400.01, "an object left the page: {:?}", new.rect);
     }
     h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     h.run_steps(4);

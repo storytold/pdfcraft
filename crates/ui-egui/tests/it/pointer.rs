@@ -286,10 +286,11 @@ fn edit_text_over_a_linked_word_offers_the_move_arrow() {
     let id = h.state().views[0].id;
     let before = h.state().session.get(id).unwrap().text_blocks(0)[0].rect;
     let k = page(&h).width() / 300.0;
-    mouse_drag(&mut h, linked, egui::vec2(20.0 * k, 0.0));
+    // To the left, where the paragraph has room on the page (#5264).
+    mouse_drag(&mut h, linked, egui::vec2(-20.0 * k, 0.0));
     let after = h.state().session.get(id).unwrap().text_blocks(0)[0].rect;
     assert_eq!(off, egui::CursorIcon::Move, "a closed paragraph offers the four-way arrow (#1717)");
-    assert!((after[0] - before[0] - 20.0).abs() < 1.5, "a drag from the linked word moves the paragraph: {before:?} → {after:?}");
+    assert!((before[0] - after[0] - 20.0).abs() < 1.5, "a drag from the linked word moves the paragraph: {before:?} → {after:?}");
     assert_eq!(on, off, "the linked words belong to the same paragraph, and a drag there moves it too");
 }
 
