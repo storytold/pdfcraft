@@ -24,7 +24,7 @@ use crate::EditError;
 mod regions;
 #[path = "text_session.rs"]
 mod session;
-use regions::{group_blocks, is_centred, rewrite_styled_block};
+use regions::{alignment_frame, group_blocks, is_centred, rewrite_styled_block};
 pub use session::TextSession;
 
 mod blocks;
@@ -118,6 +118,14 @@ pub struct TextLine {
     /// `ink`, and whether joining put a space before it. Empty when the line's text was put
     /// into another order (see [`TextLine::runs`]).
     runs: Vec<(String, usize, bool)>,
+    /// This line continues the previous one because a rewrite wrapped it (`/PCSoft`).
+    soft_break: bool,
+    /// This line starts after a break a rewrite kept on purpose (`/PCHard`).
+    hard_break: bool,
+    /// When `soft_break`: the exact number of separator characters the wrap consumed (0 for a
+    /// Chinese/Japanese word split), from `/PCSoft`'s `/N`; 1 when the marker carried none
+    /// (#2529). Meaningless otherwise.
+    soft_gap: usize,
 }
 
 impl TextLine {
@@ -154,6 +162,7 @@ mod tests {
             lines: Vec::new(),
             rows: Vec::new(),
             editor_text: text.into(),
+            reflow_text: text.into(),
             spans: Vec::new(),
             invisible: false,
         }
@@ -204,40 +213,62 @@ mod tests {
         assert!(!same_base_font("Arial", ""));
     }
 
+    fn wrapped(text: &str, width: f64) -> Vec<String> {
+        wrap(text, width, |s| s.chars().count() as f64).into_iter().map(|(line, _, _)| line).collect()
+    }
+
     #[test]
     fn paragraph_wrapping_keeps_ideographic_spaces() {
+        assert_eq!(wrapped("A　　B C", 4.0), ["A　　B", "C"]);
+        assert_eq!(wrapped("A\u{a0}B C", 3.0), ["A B", "C"]);
+        assert_eq!(wrapped("A\u{2028}B C", 3.0), ["A B", "C"]);
+        // `wrap` treats every whitespace character, including `\r`, as a separator to keep
+        // (#4199); the caller turns `\r\n` and `\r` into `\n` before calling it.
+        assert_eq!(wrapped(" \tA  B\r\nC ", 3.0), ["  A", "B ", "C "]);
+    }
+
+    #[test]
+    fn a_wrap_is_marked_soft_and_a_newline_is_not() {
         let width = |s: &str| s.chars().count() as f64;
-        assert_eq!(wrap("A　　B C", 4.0, width), ["A　　B", "C"]);
-        assert_eq!(wrap("A\u{a0}B C", 3.0, width), ["A B", "C"]);
-        assert_eq!(wrap("A\u{2028}B C", 3.0, width), ["A B", "C"]);
+        assert_eq!(wrap("Page 1", 5.0, width), [("Page".into(), false, 0), ("1".into(), true, 1)]);
+        assert_eq!(wrap("One\nTwo", 10.0, width), [("One".into(), false, 0), ("Two".into(), false, 0)]);
+    }
+
+    /// #2529: a run of spaces that happens to fall at a wrap point is recorded exactly, not
+    /// assumed to be one space; a Chinese/Japanese word split, which has no space of its own,
+    /// is recorded as none.
+    #[test]
+    fn a_wrap_records_how_many_spaces_it_consumed() {
+        let width = |s: &str| s.chars().count() as f64;
+        assert_eq!(wrap("One  Two", 5.0, width), [("One".into(), false, 0), ("Two".into(), true, 2)]);
+        assert_eq!(wrap("One   Two", 5.0, width), [("One".into(), false, 0), ("Two".into(), true, 3)]);
+        assert_eq!(wrap("日本語の文章です", 3.0, width), [("日本語".into(), false, 0), ("の文章".into(), true, 0), ("です".into(), true, 0)]);
     }
 
     /// #4199: a run of spaces stays a run, before, between and after words; the spaces where a
     /// row wraps go, and each other white-space character is one space.
     #[test]
     fn paragraph_wrapping_keeps_every_space_typed() {
-        let width = |s: &str| s.chars().count() as f64;
-        assert_eq!(wrap("a  b   c", 20.0, width), ["a  b   c"]);
-        assert_eq!(wrap("  a b  ", 20.0, width), ["  a b  "]);
-        assert_eq!(wrap("a\t\tb", 20.0, width), ["a  b"]);
-        assert_eq!(wrap("aa  bb  cc", 6.0, width), ["aa  bb", "cc"]);
+        assert_eq!(wrapped("a  b   c", 20.0), ["a  b   c"]);
+        assert_eq!(wrapped("  a b  ", 20.0), ["  a b  "]);
+        assert_eq!(wrapped("a\t\tb", 20.0), ["a  b"]);
+        assert_eq!(wrapped("aa  bb  cc", 6.0), ["aa  bb", "cc"]);
         // An indent alone on a row doesn't wrap before its first word.
-        assert_eq!(wrap("    abc", 3.0, width), ["    abc"]);
+        assert_eq!(wrapped("    abc", 3.0), ["    abc"]);
         // The rewrite turns `\r\n` and `\r` into `\n` before wrapping.
-        assert_eq!(wrap(" \tA  B\nC ", 3.0, width), ["  A", "B", "C "]);
-        assert_eq!(wrap("   ", 3.0, width), ["   "]);
-        assert_eq!(wrap("", 3.0, width), [""]);
+        assert_eq!(wrapped(" \tA  B\nC ", 3.0), ["  A", "B", "C "]);
+        assert_eq!(wrapped("   ", 3.0), ["   "]);
+        assert_eq!(wrapped("", 3.0), [""]);
     }
 
     #[test]
     fn japanese_text_wraps_between_characters_but_not_before_closing_marks() {
-        let width = |s: &str| s.chars().count() as f64;
-        assert_eq!(wrap("日本語の文章です。", 3.0, width), ["日本語", "の文章", "です。"]);
+        assert_eq!(wrapped("日本語の文章です。", 3.0), ["日本語", "の文章", "です。"]);
         // The comma can't begin a row, so the character before it moves down with it.
-        assert_eq!(wrap("あいう、えお", 3.0, width), ["あい", "う、え", "お"]);
+        assert_eq!(wrapped("あいう、えお", 3.0), ["あい", "う、え", "お"]);
         // Pieces of one word join without a space; separate words keep theirs.
-        assert_eq!(wrap("Edit PDFを編集", 6.0, width), ["Edit", "PDFを編集"]);
-        assert_eq!(wrap("一行目　二行目", 4.0, width), ["一行目　", "二行目"]);
+        assert_eq!(wrapped("Edit PDFを編集", 6.0), ["Edit", "PDFを編集"]);
+        assert_eq!(wrapped("一行目　二行目", 4.0), ["一行目　", "二行目"]);
     }
 
     #[test]

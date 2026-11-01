@@ -1,4 +1,4 @@
-use super::calc::{js_tokens, notation_js, notation_range};
+use super::calc::{js_tokens, notation_js, notation_range, notation_tokens};
 use super::format::{DATE_PRESETS, TIME_PRESETS};
 use super::{CalcOp, Calculate, Format, Validate};
 
@@ -255,7 +255,7 @@ pub fn parse_calculate(js: &str) -> Option<Calculate> {
     if js.contains("BVCALC")
         && let Some(range) = notation_range(js, &js_tokens(js).1)
     {
-        return Some(Calculate::Notation(js.get(range)?.trim().to_string()));
+        return Some(Calculate::Notation(notation_text(js.get(range)?).to_string()));
     }
     let args = call(js, "AFSimple_Calculate")?;
     let op = match args.first().and_then(Arg::string)?.as_str() {
@@ -322,6 +322,29 @@ pub fn validate_js(v: &Validate) -> Option<String> {
         Validate::Range { min, max } => {
             Some(format!("AFRange_Validate({}, {}, {}, {});", min.is_some(), min.unwrap_or(0.0), max.is_some(), max.unwrap_or(0.0)))
         }
+    }
+}
+
+/// Why [`notation_storable`] refuses a notation, in the words the Calculate tab and the tools say it.
+pub const NOTATION_NOT_STORABLE: &str = "the notation can't be stored as written: it is empty, or holds EVCALC or */, or ends in a lone \\";
+
+/// Whether simplified field notation `expr` can be stored: the script keeps it in a comment,
+/// between `BVCALC` and `EVCALC`, and it has to read back from there as the same names and
+/// operators. One holding `EVCALC` or `*/` ends early, and one ending in a lone `\` escapes the
+/// space after it. An empty one is refused too: it would be stored as `event.value = ;`.
+pub fn notation_storable(expr: &str) -> bool {
+    let tokens = |s: &str| notation_tokens(s).into_iter().map(|(range, _)| s.get(range).unwrap_or_default().to_owned()).collect::<Vec<_>>();
+    let read = calculate_js(&Calculate::Notation(expr.to_owned())).and_then(|js| parse_calculate(&js));
+    !tokens(expr).is_empty() && matches!(read, Some(Calculate::Notation(n)) if tokens(&n) == tokens(expr))
+}
+
+/// `src` from its first notation token to its last: the spaces around it left out, but not an
+/// escaped space that ends the last name (`Total\ `), as `str::trim` would.
+fn notation_text(src: &str) -> &str {
+    let tokens = notation_tokens(src);
+    match (tokens.first(), tokens.last()) {
+        (Some((first, _)), Some((last, _))) => src.get(first.start..last.end).unwrap_or_default(),
+        _ => "",
     }
 }
 

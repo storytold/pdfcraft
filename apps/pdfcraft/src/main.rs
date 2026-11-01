@@ -1,6 +1,8 @@
 //! PdfCraft desktop app.
 //!
 //! Usage: `pdfcraft [options] [files…]` (`-h` / `--help` prints a short version of this, [`USAGE`]).
+//! `--two-paged` opens each command-line PDF in noncontinuous two-page view, without changing defaults.
+//! An explicit `--layout` takes precedence for the active document, regardless of argument order.
 //! `--create-images [images…]` stages the images in one PDF and asks for the page DPI.
 //!
 //! View options (applied after the files open; also the seed of the UI control channel):
@@ -40,6 +42,7 @@ mod motion;
 mod reopen;
 mod settings;
 mod single_instance;
+mod startup;
 mod text_scale;
 #[cfg(test)]
 #[path = "windows_manifest.rs"]
@@ -63,6 +66,7 @@ Usage: pdfcraft [options] [files…]
 Opens the files in the PdfCraft desktop app.
 
 Options:
+  --two-paged                 open command-line PDFs in noncontinuous two-page view
   --new-window                open a window of its own instead of passing the files to a running PdfCraft
   --create-images [images…]   put the images in one PDF and ask for the page DPI
   --control <file>            enable the UI control channel (pdfcraft-cli ui --control <file> …)
@@ -196,7 +200,7 @@ fn rejoin_split_paths(args: Vec<String>, exists: impl Fn(&str) -> bool) -> Vec<S
 fn main() -> eframe::Result {
     // Windows: the update helper is a copy of this program started with `--finish-update`.
     #[cfg(windows)]
-    if let Some(result) = craft_update::self_update::finish(&craft_update::suite::PDFCRAFT, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
+    if let Some(result) = craft_update::self_update::finish(&pdfcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
         std::process::exit(i32::from(result.is_err()));
     }
     // First, so the panic hook and every start-up warning are recorded (`logging`).
@@ -218,28 +222,16 @@ fn main() -> eframe::Result {
             let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("pdfcraft: {report}\n"));
         }
     }));
-    let mut files = Vec::new();
-    let mut options: Vec<(String, String)> = Vec::new();
-    let mut control_file: Option<String> = None;
-    let mut create_images = false;
-    let mut new_window = false;
-    let mut args = std::env::args().skip(1);
-    while let Some(a) = args.next() {
-        match a.as_str() {
-            "--version" => return print_and_exit(&format!("pdfcraft {}", pdfcraft_engine::build_info::version())),
-            // Before any window or log file, so a scripted call returns (#4076).
-            "-h" | "--help" => return print_and_exit(USAGE),
-            "--control" => control_file = args.next(),
-            "--create-images" => create_images = true,
-            "--new-window" => new_window = true,
-            flag if flag.starts_with("--") => {
-                let value = args.next().unwrap_or_default();
-                options.push((flag.trim_start_matches("--").to_string(), value));
-            }
-            _ => files.push(path_from_arg(a)),
-        }
+    let mut startup = startup::Arguments::parse(std::env::args().skip(1));
+    if startup.version {
+        return print_and_exit(&format!("pdfcraft {}", pdfcraft_engine::build_info::version()));
     }
-    let files = rejoin_split_paths(files, |p| std::path::Path::new(p).is_file());
+    if startup.help {
+        return print_and_exit(USAGE);
+    }
+    startup.files = rejoin_split_paths(startup.files, |p| std::path::Path::new(p).is_file());
+    let may_hand_off = startup.may_hand_off();
+    let startup::Arguments { files, options, control_file, create_images, two_paged, .. } = startup;
     let integrated = cfg!(target_os = "macos");
     // GNOME on Wayland leaves the window frame to the app (src/decorations.rs).
     let window_controls = if cfg!(any(target_os = "macos", target_os = "windows")) { None } else { decorations::app_drawn() };
@@ -260,7 +252,6 @@ fn main() -> eframe::Result {
     // Explorer double-click, a file manager or `xdg-open`) hands them to the PdfCraft already
     // running and exits (#282, #317, #1726). Any option means the caller wants this launch's own
     // window.
-    let may_hand_off = !new_window && !files.is_empty() && options.is_empty() && control_file.is_none() && !create_images;
     // Absolute for this instance too: links relative to a document resolve against its folder,
     // never the working directory.
     let files = single_instance::absolute(&files);
@@ -270,7 +261,7 @@ fn main() -> eframe::Result {
         single_instance::Claim::Alone => None,
     };
     let choice = renderer_choice(std::env::var("PDFCRAFT_RENDERER").ok().as_deref());
-    let launch = Launch { files, options, control_file, create_images, integrated, window_controls };
+    let launch = Launch { files, options, control_file, create_images, integrated, window_controls, two_paged };
     // Finder, Open With and the Dock deliver files as Apple events, not arguments; catch the one
     // that launched us as well as later ones. Lives until the event loop returns.
     #[cfg(target_os = "macos")]
@@ -380,6 +371,7 @@ struct Launch {
     integrated: bool,
     /// The window buttons the app draws, when the desktop leaves the frame to it.
     window_controls: Option<pdfcraft_ui_egui::window_controls::Layout>,
+    two_paged: bool,
 }
 
 /// Whether the window is a native Wayland one (not X11 or XWayland).
@@ -400,7 +392,7 @@ fn app_creator<'a>(
     instance: Option<&'a single_instance::Server>,
     #[cfg(target_os = "macos")] apple_events: &'a apple_events::AppleEvents,
 ) -> eframe::AppCreator<'a> {
-    let Launch { files, options, control_file, create_images, integrated, window_controls } = launch;
+    let Launch { files, options, control_file, create_images, integrated, window_controls, two_paged } = launch;
     Box::new(move |cc| {
         started.set(true);
         let mut app = PdfCraftApp::new();
@@ -467,6 +459,7 @@ fn app_creator<'a>(
                 &[("folder", &w.folder.display().to_string()), ("error", &w.error)],
             );
         }
+        let defer_layout = two_paged && !files.is_empty() && !create_images;
         if create_images {
             if let Err(e) = app.begin_image_import_paths(&files) {
                 app.notify(e);
@@ -475,12 +468,11 @@ fn app_creator<'a>(
             // With the preference on, last session's files come back first; files named on
             // the command line open after them, in front (#442).
             app.reopen_last_files(&files);
-            for f in files {
-                app.open_path(&f);
-            }
+            startup::open_files(&mut app, &files, two_paged);
         }
         for (k, v) in options {
-            if let Err(e) = app.set_option(&k, &v) {
+            let result = if defer_layout && k == "layout" { app.set_launch_layout(&v) } else { app.set_option(&k, &v) };
+            if let Err(e) = result {
                 log::warn!("--{k} {v}: {e}");
             }
         }

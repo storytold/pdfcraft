@@ -20,18 +20,19 @@ use crate::QuickTool;
 pub(crate) enum Layer {
     /// The page under the active tool: the crosshair it places or draws with, its I-beam or hand.
     ToolArea,
-    /// The page's text, to select, and Edit text's paragraphs.
+    /// The page's text, to select; Edit text's paragraphs, and its pictures beneath them.
     Text,
     /// Links.
     Link,
-    /// Comments: notes, shapes and markup.
+    /// Text markup (highlights, underlines…), which lies on the text: under a form field.
     Comment,
     /// Form fields.
     Field,
-    /// What a drag moves whole: signatures and Fill & Sign's marks, added text and images,
-    /// selected objects, pictures in Edit text.
+    /// What a drag moves whole: notes, shapes, signatures and Fill & Sign's marks, added text and
+    /// pictures, the objects selected together, Prepare's fields.
     Placed,
-    /// The grips of the selected item: resize, rewrap and crop handles, paragraph edges.
+    /// The grips of the selected item: resize, rewrap, rotate and crop handles, paragraph edges,
+    /// the frame of the paragraph open for typing.
     Handle,
     /// An open editor: a paragraph being typed in, a picture being cropped.
     Editor,
@@ -45,9 +46,10 @@ const LAYERS: [Layer; 9] =
 
 impl Layer {
     /// Whether a press with `tool` acts on what lies on this layer, so that the layer's claims
-    /// count. Only the Select tool follows links (the Link tool edits them) and picks up
-    /// comments: every other tool draws, places or selects text over them. The other layers are
-    /// claimed only by the modules of the tools that act on them, so they count for every tool.
+    /// count. Only the Select tool follows links (the Link tool edits them) and selects text
+    /// markup: every other tool draws, places or selects text over them. The other layers are
+    /// claimed only by the modules of the tools that act on them (each module's hit test filters
+    /// by tool), so they count for every tool.
     pub(crate) fn reached_by(self, tool: QuickTool) -> bool {
         match self {
             Layer::Link => matches!(tool, QuickTool::Select | QuickTool::Link),

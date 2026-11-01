@@ -301,6 +301,14 @@ pub(super) struct Shown {
     pub(super) paint: Paint,
     pub(super) logical_order: bool,
     pub(super) actual_text: bool,
+    /// Set when a `/PCSoft` or `/PCHard` marker was seen since the previous text line.
+    pub(super) soft_break: bool,
+    pub(super) hard_break: bool,
+    /// The `/N` a `/PCSoft` marker carried: how many separator characters the wrap consumed (0
+    /// for a Chinese/Japanese word split). Meaningless unless `soft_break` is set; 1 for a
+    /// `/PCSoft` with no `/N` (a file saved before this was tracked, or by another writer),
+    /// matching the single space a rejoin always used before #2529.
+    pub(super) soft_gap: usize,
 }
 
 impl Shown {
@@ -549,6 +557,9 @@ struct TextRunState<'a> {
     marked: &'a MarkedContent,
     carry: &'a mut Carry,
     out: &'a mut Vec<Shown>,
+    soft_break: bool,
+    hard_break: bool,
+    soft_gap: usize,
 }
 
 fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), EditError> {
@@ -745,6 +756,9 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         paint: Paint { layers: marked.layers.iter().flatten().cloned().collect(), gs: ts.gs.clone() },
         logical_order: false,
         actual_text: false,
+        soft_break: state.soft_break,
+        hard_break: state.hard_break,
+        soft_gap: state.soft_gap,
     });
     Ok(())
 }
@@ -769,11 +783,39 @@ pub(super) fn interpret(
     let mut bt = 0usize;
     let mut marked =
         MarkedContent { regions: std::mem::take(&mut carry.marked), layers: std::mem::take(&mut carry.layers), ..MarkedContent::default() };
+    // A rewrite names a wrap (`/PCSoft`) or a break it kept (`/PCHard`) in an empty marker
+    // before the next line. Neither name is a paragraph region, so it does not change scope.
+    let mut soft_break = false;
+    let mut hard_break = false;
+    // `/PCSoft`'s `/N` property: how many separator characters the wrap consumed. A `/PCSoft`
+    // with no properties dict (a file saved before this was tracked, or by another writer) reads
+    // as 1, the single space a rejoin always used before #2529.
+    let mut soft_gap = 1usize;
     for (i, op) in ops.iter().enumerate() {
         match op.op.as_slice() {
             // No depth cap: every `EMC` pops, so a capped push would pair it with the enclosing
             // sequence (#3573). Both stacks stay bounded by the number of operators.
             b"BMC" | b"BDC" => {
+                if op.name(0) == Some(b"PCSoft") {
+                    soft_break = true;
+                    hard_break = false;
+                    soft_gap = op
+                        .operands
+                        .get(1)
+                        .and_then(Object::as_dict)
+                        .and_then(|d| d.get(b"N"))
+                        .and_then(Object::as_int)
+                        .and_then(|n| usize::try_from(n).ok())
+                        .unwrap_or(1);
+                    // The marker is untrusted and later expands into spaces during reflow.
+                    // Charge it to the same page-wide budget as glyph text, so many individually
+                    // small markers cannot multiply the allocation past the limit either.
+                    carry.text_left =
+                        carry.text_left.checked_sub(soft_gap).ok_or_else(|| EditError::Invalid("the page's text is too large to read".into()))?;
+                } else if op.name(0) == Some(b"PCHard") {
+                    hard_break = true;
+                    soft_break = false;
+                }
                 marked.begin(doc, op, i, logical_text, out.len());
             }
             b"EMC" => {
@@ -878,8 +920,28 @@ pub(super) fn interpret(
                 tm = tlm;
             }
             b"Tj" | b"TJ" | b"'" | b"\"" => {
-                let mut state = TextRunState { ts: &mut ts, tm: &mut tm, tlm: &mut tlm, at_bt: &at_bt, bt, marked: &marked, carry, out: &mut out };
+                let before = out.len();
+                let mut state = TextRunState {
+                    ts: &mut ts,
+                    tm: &mut tm,
+                    tlm: &mut tlm,
+                    at_bt: &at_bt,
+                    bt,
+                    marked: &marked,
+                    carry,
+                    out: &mut out,
+                    soft_break,
+                    hard_break,
+                    soft_gap,
+                };
                 show_text(op, i, &mut state)?;
+                // A numeric-only TJ adjustment shows no glyphs and pushes nothing: the break
+                // belongs to whichever text-showing operator comes next.
+                if out.len() > before {
+                    soft_break = false;
+                    hard_break = false;
+                    soft_gap = 1;
+                }
             }
             _ => {}
         }
