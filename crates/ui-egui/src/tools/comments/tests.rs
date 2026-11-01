@@ -482,3 +482,35 @@ fn text_boxes_fit_their_text() {
     assert_eq!(long[2], 300.0);
     assert!(long[3] - long[1] > 50.0);
 }
+
+/// Review on #4358: a Replace Text group is selected by its caret, the group's primary (ISO
+/// 32000-2 §12.5.6.2), and Make Current Properties Default on it updates the Replace Text tool. A
+/// caret of its own (Insert Text) still updates the Insert Text tool.
+#[test]
+fn a_replace_text_group_makes_replace_text_defaults() {
+    let annot = |index: usize, subtype: &str, intent: Option<&str>, parent: Option<(usize, usize)>| Annotation {
+        page: 0,
+        subtype: subtype.into(),
+        author: None,
+        contents: None,
+        modified: None,
+        name: None,
+        in_reply_to: None,
+        parent,
+        grouped: parent.is_some(),
+        rect: [10.0, 10.0, 20.0, 20.0],
+        color: None,
+        index,
+        state: None,
+        quads: Vec::new(),
+        locked: false,
+        intent: intent.map(Into::into),
+        fill_sign: false,
+        no_rotate: false,
+        points: Vec::new(),
+    };
+    let all =
+        vec![annot(0, "Caret", Some("Replace"), None), annot(1, "StrikeOut", Some("StrikeOutTextEdit"), Some((0, 0))), annot(2, "Caret", None, None)];
+    assert_eq!(tool_for_default(&all, &all[0], None), Some(CommentTool::ReplaceText));
+    assert_eq!(tool_for_default(&all, &all[2], None), Some(CommentTool::Caret));
+}

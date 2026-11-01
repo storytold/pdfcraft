@@ -34,6 +34,12 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
         && page == cx.page
         && let Some(a) = cx.get(index)
     {
+        // The rest of the group is selected with its primary.
+        for (m, _) in cx.group_members().into_iter().filter(|(_, p)| p.index == index) {
+            for r in cx.screen_rects(m) {
+                painter.rect_stroke(r.expand(2.0), CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
+            }
+        }
         if is_markup(&a.subtype) && !a.quads.is_empty() {
             for r in cx.screen_rects(a) {
                 painter.rect_stroke(r.expand(2.0), CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);

@@ -2205,7 +2205,9 @@ fn replacing_text_strikes_it_and_adds_a_caret() {
     let strike = c.iter().find(|a| a.subtype == "StrikeOut").expect("a strikeout");
     let caret = c.iter().find(|a| a.subtype == "Caret").expect("a caret");
     assert_eq!(caret.contents.as_deref(), Some("slow red"));
-    assert_eq!(caret.in_reply_to, strike.name, "grouped with the strikeout");
+    // The caret is the group's primary, the strikeout its `/RT /Group` subordinate (ISO 32000-2 §12.5.6.2).
+    assert_eq!(strike.in_reply_to, caret.name, "the strikeout is grouped with the caret");
+    assert!(strike.is_group_member() && !caret.grouped && !caret.is_reply());
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Replace text"));
     assert_eq!(h.state().quick_tool, QuickTool::Select);
     // The strikeout is the Replace text tool's, not Strikethrough's (#3947): the panel names it
@@ -2213,7 +2215,13 @@ fn replacing_text_strikes_it_and_adds_a_caret() {
     assert_eq!(pdfcraft_ui_egui::comments::tool_for(strike), Some(pdfcraft_ui_egui::comments::CommentTool::ReplaceText));
     h.state_mut().set_option("panel", "comments").unwrap();
     h.run_steps(3);
+    // One card, the caret's, showing the replacement text; sorted by type, its group is named
+    // Replace text (not Insert text, and no Strikethrough).
+    assert_eq!(h.query_all_by_label("slow red").count(), 1, "one comment with the replacement text");
+    h.state_mut().views[0].comments.sort = pdfcraft_ui_egui::comments::SortBy::Type;
+    h.run_steps(3);
     assert!(h.query_by_role_and_label(egui::accesskit::Role::Label, "Replace text").is_some(), "the panel names the comment Replace text");
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Label, "Insert text").is_none(), "not Insert text");
     assert!(h.query_by_role_and_label(egui::accesskit::Role::Label, "Strikethrough").is_none(), "not Strikethrough");
 }
 
@@ -3021,4 +3029,81 @@ fn an_upright_comment_on_a_turned_page_is_drawn_where_it_goes_before_release() {
     assert_eq!(h.state().session.get(id).unwrap().edit_generation(), generation, "pointer frames never edit the document");
     h.drop_at(from + delta);
     h.run_steps(3);
+}
+
+// Contributor-original PDF: a Square, a Circle grouped with it (`/RT /Group`) that keeps its own
+// author, text and colour, an ordinary reply and a reply to the Circle.
+const GROUP_FIXTURE: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R 6 0 R 7 0 R 8 0 R] >> endobj
+5 0 obj << /Type /Annot /Subtype /Square /Rect [20 20 100 80] /NM (sq-primary) /T (Alice) /Contents (Primary) /C [1 0 0] >> endobj
+6 0 obj << /Type /Annot /Subtype /Circle /Rect [180 120 260 180] /NM (circ-sub) /T (Bob) /Contents (Subordinate) /C [0 0 1] /IRT 5 0 R /RT /Group >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [120 20 140 40] /NM (reply) /T (Carol) /Contents (Plain reply) /IRT 5 0 R >> endobj
+8 0 obj << /Type /Annot /Subtype /Text /Rect [120 50 140 70] /NM (sub-reply) /T (Dan) /Contents (Reply to the subordinate) /IRT 6 0 R >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// ISO 32000-2 §12.5.6.2: a group is one comment, its primary's. The panel lists the Square
+/// with both replies (the one to the Circle joins its thread) and not the Circle's own author
+/// or text; clicking the Circle on the page selects the group, which is the Square's card.
+#[test]
+fn a_group_is_one_comment_in_the_panel_and_on_the_page() {
+    let mut h = harness_with_bytes(GROUP_FIXTURE.to_vec(), |app| app.set_option("panel", "comments").unwrap());
+    h.get_by_label("Primary");
+    h.get_by_label("Plain reply");
+    h.get_by_label("Reply to the subordinate");
+    assert_eq!(h.query_all_by_label("Subordinate").count(), 0, "the subordinate's own text is ignored");
+    assert_eq!(h.query_all_by_label("Bob").count(), 0, "the subordinate's own author is ignored");
+    let p = at(&h, 220.0, 150.0);
+    click(&mut h, p);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "clicking the Circle selects its group");
+    h.state_mut().views[0].comments.selected = None;
+    let p = at(&h, 60.0, 50.0);
+    click(&mut h, p);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
+    // #4358 review: a right-click on the Circle selects the group too, so the menu is the
+    // comment's, and a double-click there edits the group's text, which is the Square's.
+    h.state_mut().views[0].comments.selected = None;
+    let p = at(&h, 220.0, 150.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "a right-click on the Circle selects its group");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    h.state_mut().views[0].comments.selected = None;
+    crate::support::input::double_click(&mut h, p);
+    let composer = h.state().views[0].comments.composer.as_ref().map(|c| c.text.clone());
+    assert_eq!(composer.as_deref(), Some("Primary"), "a double-click on the Circle edits its group's text");
+}
+
+/// As in Acrobat desktop, Delete deletes the group member clicked and keeps the rest of its
+/// group, although ISO 32000-2 §12.5.6.2 lists deletion among the operations that act on the
+/// entire group. The Circle goes with its reply and the Square stays; the Square goes with its
+/// reply and the Circle stays, a comment of its own.
+#[test]
+fn delete_deletes_the_group_member_clicked() {
+    let shapes = |h: &Harness<'static, PdfCraftApp>| -> Vec<(String, bool)> {
+        let mut out: Vec<(String, bool)> = comments(h).iter().filter(|a| a.subtype != "Text").map(|a| (a.subtype.clone(), a.is_comment())).collect();
+        out.sort();
+        out
+    };
+    let mut h = harness_with_bytes(GROUP_FIXTURE.to_vec(), |_| {});
+    click_pt(&mut h, (220.0, 150.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the group is selected");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert_eq!(shapes(&h), [("Square".to_string(), true)], "the Circle goes, the Square stays");
+    let texts: Vec<String> = comments(&h).iter().filter_map(|a| a.contents.clone()).collect();
+    assert!(!texts.iter().any(|c| c == "Reply to the subordinate") && texts.iter().any(|c| c == "Plain reply"), "{texts:?}");
+    h.state_mut().undo();
+    h.run_steps(3);
+
+    click_pt(&mut h, (60.0, 50.0));
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert_eq!(shapes(&h), [("Circle".to_string(), true)], "the Square goes, the Circle stays as a comment of its own");
 }
