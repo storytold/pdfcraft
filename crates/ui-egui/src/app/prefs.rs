@@ -56,7 +56,11 @@ fn restore_text_style(style: &mut pdfcraft_engine::AddedText, v: &serde_json::Va
     if let Some(size) = v["size"].as_f64().filter(|s| pdfcraft_engine::ADDED_FONT_SIZE_RANGE.contains(s)) {
         style.size = size;
     }
-    if let Some(color) = rgb_triple(&v["color"]) {
+    let color = v["color"].as_array().and_then(|channels| {
+        let [r, g, b] = channels.as_slice() else { return None };
+        fill_sign::valid_text_color([r.as_f64()?, g.as_f64()?, b.as_f64()?])
+    });
+    if let Some(color) = color {
         style.color = color;
     }
     if let Some(gap) = v["char_spacing"].as_f64().filter(|g| g.abs() <= pdfcraft_engine::ADDED_CHAR_SPACING_LIMIT) {
