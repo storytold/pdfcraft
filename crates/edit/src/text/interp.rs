@@ -107,6 +107,37 @@ impl TextState {
 pub(super) struct Paint {
     layers: Vec<Vec<u8>>,
     gs: Gs,
+    /// The clipping path in force; text in different clips (table cells) is never one paragraph.
+    clip: Clip,
+}
+
+/// The user-space bounding box of the clipping path (`W`/`W*`), intersected as clips accumulate.
+/// Two clips are the same cell when their boxes agree to a hundredth of a unit.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct Clip(Option<[f64; 4]>);
+
+impl PartialEq for Clip {
+    fn eq(&self, other: &Clip) -> bool {
+        match (self.0, other.0) {
+            (None, None) => true,
+            (Some(a), Some(b)) => a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 0.01),
+            _ => false,
+        }
+    }
+}
+
+/// The points a path-construction operator adds, in user space.
+fn path_points(op: &Op, ctm: &Matrix) -> Vec<(f64, f64)> {
+    let pts: Vec<(f64, f64)> = match op.op.as_slice() {
+        b"re" => match op.nums::<4>() {
+            Some([x, y, w, h]) => vec![(x, y), (x + w, y), (x + w, y + h), (x, y + h)],
+            None => Vec::new(),
+        },
+        b"c" => op.nums::<6>().map_or_else(Vec::new, |[a, b, c, d, e, f]| vec![(a, b), (c, d), (e, f)]),
+        b"v" | b"y" => op.nums::<4>().map_or_else(Vec::new, |[a, b, c, d]| vec![(a, b), (c, d)]),
+        _ => op.nums::<2>().map_or_else(Vec::new, |[x, y]| vec![(x, y)]),
+    };
+    pts.into_iter().map(|(x, y)| ctm.apply(x, y)).collect()
 }
 
 /// The transparency parameters of the graphics state: what the `gs` operators have set, resolved,
@@ -197,6 +228,8 @@ pub(crate) fn union(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
 #[derive(Clone)]
 pub(super) struct Ts {
     pub(super) ctm: Matrix,
+    /// The clipping path's bounding box in user space (see [`Clip`]).
+    pub(super) clip: Clip,
     /// The operators that set the current fill colour (`g`, `rg`, `k`, or `cs` + `sc`/`scn`).
     pub(super) fill: Vec<Op>,
     pub(super) font: Option<(Vec<u8>, Rc<Metrics>)>,
@@ -453,6 +486,7 @@ impl Carry {
     pub(super) fn new() -> Self {
         let ts = Ts {
             ctm: Matrix::IDENTITY,
+            clip: Clip::default(),
             fill: Vec::new(),
             font: None,
             face: None,
@@ -753,7 +787,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         visual_order: m.visual_order,
         decodable,
         scope: marked.regions.last().copied().flatten(),
-        paint: Paint { layers: marked.layers.iter().flatten().cloned().collect(), gs: ts.gs.clone() },
+        paint: Paint { layers: marked.layers.iter().flatten().cloned().collect(), gs: ts.gs.clone(), clip: ts.clip },
         logical_order: false,
         actual_text: false,
         soft_break: state.soft_break,
@@ -781,6 +815,9 @@ pub(super) fn interpret(
     let mut stack: Vec<(Ts, Matrix, Matrix)> = std::mem::take(&mut carry.stack);
     let (mut tm, mut tlm) = (Matrix::IDENTITY, Matrix::IDENTITY);
     let mut bt = 0usize;
+    // The bounding box of the path under construction, and whether `W`/`W*` made it the next clip.
+    let mut path_box: Option<[f64; 4]> = None;
+    let mut clip_pending = false;
     let mut marked =
         MarkedContent { regions: std::mem::take(&mut carry.marked), layers: std::mem::take(&mut carry.layers), ..MarkedContent::default() };
     // A rewrite names a wrap (`/PCSoft`) or a break it kept (`/PCHard`) in an empty marker
@@ -831,6 +868,20 @@ pub(super) fn interpret(
                 if let Some(m) = op.nums::<6>() {
                     ts.ctm = Matrix(m).then(&ts.ctm);
                 }
+            }
+            b"m" | b"l" | b"re" | b"c" | b"v" | b"y" => {
+                for (x, y) in path_points(op, &ts.ctm) {
+                    path_box = Some(path_box.map_or([x, y, x, y], |b| [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)]));
+                }
+            }
+            b"W" | b"W*" => clip_pending = true,
+            b"n" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" => {
+                if clip_pending && let Some(b) = path_box {
+                    let clipped = ts.clip.0.map_or(b, |c| [c[0].max(b[0]), c[1].max(b[1]), c[2].min(b[2]), c[3].min(b[3])]);
+                    ts.clip = Clip(Some(clipped));
+                }
+                path_box = None;
+                clip_pending = false;
             }
             b"BT" => {
                 tm = Matrix::IDENTITY;
