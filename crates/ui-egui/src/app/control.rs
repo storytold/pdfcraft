@@ -283,7 +283,10 @@ impl PdfCraftApp {
                     measure if measure.starts_with("measure-") => QuickTool::Measure(
                         measure_ui::Tool::from_name(measure.trim_start_matches("measure-")).ok_or_else(|| format!("unknown tool {measure}"))?,
                     ),
-                    "hand" => QuickTool::Hand,
+                    "hand" => {
+                        self.space_hand = None;
+                        QuickTool::Hand
+                    }
                     "crop" => QuickTool::Crop,
                     "enhance-camera" => QuickTool::EnhanceCamera,
                     "redact" => QuickTool::Redact,

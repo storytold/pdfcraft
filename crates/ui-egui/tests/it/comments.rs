@@ -870,6 +870,66 @@ fn choosing_a_tool_while_e_is_held_ends_the_hold() {
     assert_eq!(tool_and_bar(&h), (ERASER, CommentTool::Eraser), "choosing the Eraser while E is held keeps it");
 }
 
+/// A temporary Eraser borrow ends when E is released, even if a modifier was pressed meanwhile.
+#[test]
+fn a_held_e_returns_to_draw_on_a_modified_release() {
+    use eraser_key::*;
+    for modifiers in [egui::Modifiers::SHIFT, egui::Modifiers::ALT, egui::Modifiers::COMMAND] {
+        let mut h = eraser_harness();
+        keys_in_one_frame(&mut h, 100.0, &[(egui::Key::E, true)]);
+        h.input_mut().time = Some(100.5);
+        h.input_mut().events.push(egui::Event::ModifiersChanged(modifiers));
+        h.input_mut().events.push(egui::Event::Key { key: egui::Key::E, physical_key: None, pressed: false, repeat: false, modifiers });
+        h.step();
+        assert_eq!(tool_and_bar(&h), (DRAW, CommentTool::Ink), "{modifiers:?} on release must not strand a borrowed Eraser");
+    }
+}
+
+/// Hand chosen deliberately replaces both temporary gestures, regardless of which key comes up first.
+#[test]
+fn deliberate_hand_choices_outlast_held_e_and_space_in_either_release_order() {
+    use eraser_key::*;
+    let mut overwritten = Vec::new();
+    for choice in ["control", "toolbar", "page menu"] {
+        for e_first in [false, true] {
+            let mut h = eraser_harness();
+            keys_in_one_frame(&mut h, 100.0, &[(egui::Key::E, true)]);
+            keys_in_one_frame(&mut h, 100.5, &[(egui::Key::Space, true)]);
+            assert_eq!(h.state().quick_tool, QuickTool::Hand, "Space overlays the Eraser");
+            match choice {
+                "control" => h.state_mut().set_option("quick", "hand").unwrap(),
+                "toolbar" => h.get_by_label("Hand (H)").click(),
+                "page menu" => {
+                    let pos = at(&h, 250.0, 50.0);
+                    h.event(egui::Event::PointerMoved(pos));
+                    for pressed in [true, false] {
+                        h.event(egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Secondary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        });
+                    }
+                    h.run_steps(2);
+                    h.get_by_label("Hand Tool").click();
+                }
+                _ => unreachable!(),
+            }
+            h.run_steps(2);
+            assert_eq!(h.state().quick_tool, QuickTool::Hand, "Hand was deliberately chosen");
+            let order = if e_first { [egui::Key::E, egui::Key::Space] } else { [egui::Key::Space, egui::Key::E] };
+            for key in order {
+                h.key_up(key);
+                h.run_steps(2);
+                if h.state().quick_tool != QuickTool::Hand {
+                    overwritten.push(format!("{choice}, E first={e_first}, after {key:?}: {:?}", h.state().quick_tool));
+                }
+            }
+        }
+    }
+    assert!(overwritten.is_empty(), "a temporary gesture overwrote the deliberate Hand choice: {overwritten:?}");
+}
+
 /// #3900: Space's temporary Hand on top of a held E returns to Draw, whichever key comes up first.
 #[test]
 fn a_held_e_and_a_held_space_unwind_in_either_order() {

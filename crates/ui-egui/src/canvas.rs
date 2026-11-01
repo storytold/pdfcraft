@@ -3977,6 +3977,8 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
             app.quick_tool = QuickTool::Select;
         }
         Some(PageMenuAction::HandTool) => {
+            app.space_hand = None;
+            app.eraser_key = None;
             app.quick_tool = QuickTool::Hand;
         }
         Some(PageMenuAction::MarqueeZoom) => {

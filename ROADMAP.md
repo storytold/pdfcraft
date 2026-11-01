@@ -88,6 +88,7 @@
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M12 #2570: Dynamic XFA rich-text fields carry exData/maxLength into AcroForm MaxLen for reported and enforced Unicode character limits, retained after save/reopen. Estimates unchanged)
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M4 #3309: bounded iterative named-destination pruning on page deletion; estimates unchanged)
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M1 #2658: macOS atomic saves retain destination extended attributes, including Finder tags, and reject partial resource-fork reads after size changes. Metadata failures retain the original PDF and unsaved edit. Estimates unchanged)
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (Deliberate Hand choices through the control option, quick toolbar and page menu clear temporary Space/E ownership; all three paths and both release orders fail without the fix. Modified releases still end an owned Eraser borrow, with a test that fails under the suggested modifier-skip mutation. 2054 UI tests pass, 5 existing ignored; strict Clippy and repository/wasm gates pass)
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (E release events end the previous Eraser hold before a fresh press in the same frame; short taps, long holds and the quick bar have a regression proven to fail without the fix. 2052 UI tests pass, 5 existing ignored; strict Clippy, repository gates and UI wasm pass)
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M5 #3900: rebase PR #4916 onto main b36bdaea; 2051 scoped tests pass (5 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged)
 
@@ -239,9 +240,13 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 - **2026-10-27 (M5, #3900):** E and B swap the Draw tool and the Eraser: a tap of E switches to the Eraser and stays (E again or B goes back), and holding E is the Eraser only while held.
 
+- **2026-11-01 (M5, #3900 review):** Deliberate Hand choices through the control option, quick toolbar and page menu clear temporary Space/E ownership; all three paths and both release orders fail without the fix. Modified releases still end an owned Eraser borrow, with a test that fails under the suggested modifier-skip mutation. 2054 UI tests pass, 5 existing ignored; strict Clippy and repository/wasm gates pass.
+
 - **2026-11-01 (M5, #3900 review):** E release events end the previous Eraser hold before a fresh press in the same frame; short taps, long holds and the quick bar have a regression proven to fail without the fix. 2052 UI tests pass, 5 existing ignored; strict Clippy, repository gates and UI wasm pass.
 
 - **2026-11-01 (M5, #3900 rebase):** PR #4916 rebased onto main `b36bdaea`; resolved and auto-merged hunks reviewed. 2051 scoped tests passed, 5 existing ignored; formatting, strict Clippy, layers/assets/parity and wasm checks passed. Behavior and estimates unchanged.
+
+
 
 
 
@@ -752,6 +757,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | patch | Deliberate Hand choices through the control option, quick toolbar and page menu clear temporary Space/E ownership; all three paths and both release orders fail without the fix. Modified releases still end an owned Eraser borrow, with a test that fails under the suggested modifier-skip mutation. 2054 UI tests pass, 5 existing ignored; strict Clippy and repository/wasm gates pass. |
 | 2026-11-01 | patch | E release events end the previous Eraser hold before a fresh press in the same frame; short taps, long holds and the quick bar have a regression proven to fail without the fix. 2052 UI tests pass, 5 existing ignored; strict Clippy, repository gates and UI wasm pass. |
 | 2026-11-01 | patch | M5 #3900: rebase PR #4916 onto main b36bdaea; 2051 scoped tests pass (5 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged. |
 | 2026-10-28 | patch | M2, PR #4172: integrate main 5af10276 and retain both roadmap histories; viewer-only CJK and print/output font policies and estimates unchanged. |
