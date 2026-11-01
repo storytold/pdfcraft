@@ -54,7 +54,8 @@ pub(super) fn data_date_pattern(tpl: Option<&Template>, som: &str) -> Option<Str
 }
 
 /// The century split of a two-digit year (`yy`), XFA picture clauses' default: `00` to `29` are
-/// 2000 to 2029 and `30` to `99` are 1930 to 1999.
+/// 2000 to 2029 and `30` to `99` are 1930 to 1999 (XFA 3.3, chapter 26, Picture Clause Reference,
+/// p. 1171, which makes 30 the default and lets the century split be set otherwise).
 const CENTURY_SPLIT: u32 = 30;
 
 const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];

@@ -50,7 +50,8 @@ pub(super) fn civil_from_days(n: i64) -> (i64, u32, u32) {
 pub(super) const MAX_DAYS: f64 = 1e8;
 
 /// The century split of a two-digit year (`YY`), XFA picture clauses' default: `00` to `29` are
-/// 2000 to 2029 and `30` to `99` are 1930 to 1999.
+/// 2000 to 2029 and `30` to `99` are 1930 to 1999 (XFA 3.3, chapter 26, Picture Clause Reference,
+/// p. 1171, which makes 30 the default and lets the century split be set otherwise).
 const CENTURY_SPLIT: i64 = 30;
 
 const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
