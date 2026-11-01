@@ -442,6 +442,27 @@ fn delete_all_keeps_redaction_marks_and_fill_and_sign_items_linked_as_replies() 
 }
 
 #[test]
+fn delete_all_unlinks_kept_redaction_marks_and_fill_and_sign_items_from_a_deleted_comment() {
+    // Their `/IRT` would keep the deleted comment, and its text, in a saved copy.
+    let inline = named("Redact", "inline mark", "/IRT 5 0 R");
+    let mut doc = two_pages(
+        "[5 0 R]",
+        &format!("[6 0 R 7 0 R {inline}]"),
+        &[
+            named("Text", "note", "/Contents (deleted note text)"),
+            named("Redact", "mark", "/IRT 5 0 R"),
+            named("Stamp", "check", "/Name /PCCheck /IRT 5 0 R"),
+        ],
+    );
+    assert_eq!(delete_all_annotations(&mut doc, Some(&[0])).unwrap(), 1);
+    let saved = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!saved.windows(17).any(|w| w == b"deleted note text"), "the deleted comment is saved");
+    let doc = Document::open(Arc::new(saved)).unwrap();
+    assert_eq!(names_on(&doc, 1), ["mark", "check", "inline mark"]);
+    assert!(list(&doc, 1).iter().all(|d| d.get(b"IRT").is_none()), "a kept item still replies to the deleted comment");
+}
+
+#[test]
 fn delete_all_takes_replies_and_popups_on_other_pages() {
     let objects = [
         named("Text", "root", "/Popup 6 0 R"),
