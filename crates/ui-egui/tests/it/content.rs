@@ -793,6 +793,102 @@ fn the_text_editor_aligns_a_narrow_box_to_its_own_edge() {
     );
 }
 
+/// #4789: a narrow reopened box keeps its fill inside the PDF rectangle, independently of
+/// the wider editor's alignment and whether the textless page background has arrived yet.
+#[test]
+fn a_narrow_text_editors_fill_stays_inside_its_pdf_rectangle() {
+    use egui::{Color32, Shape};
+    use pdfcraft_engine::TextAlign;
+    let fill = Color32::from_rgb(43, 99, 156);
+    for align in [TextAlign::Left, TextAlign::Center, TextAlign::Right, TextAlign::Justify] {
+        let mut h = harness();
+        // Prime the floating editor's geometry using a real empty draft. Reopening below can
+        // then paint immediately, before its textless page background is requested next frame.
+        assert!(h.state_mut().execute("edit.text"));
+        h.run_steps(3);
+        let empty = at(&h, 40.0, 300.0);
+        click(&mut h, empty);
+        assert!(h.state().views[0].content.draft.as_ref().is_some_and(|d| d.index.is_none()));
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(h.state().views[0].content.draft.is_none());
+        let rect = [100.0, 195.0, 120.0, 210.0];
+        let text = pdfcraft_engine::AddedText {
+            rect,
+            text: "Hi".into(),
+            align,
+            color: [1.0; 3],
+            background: Some([43.0 / 255.0, 99.0 / 255.0, 156.0 / 255.0]),
+            ..Default::default()
+        };
+        assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text }));
+        let rect = added(&h)[0].content.rect();
+        assert!(h.state_mut().execute("edit.text"));
+        crate::support::settle(&mut h);
+        let r = item_on_screen(&h, rect);
+        assert!(r.width() < 60.0, "narrow-box precondition");
+        let point = r.center();
+        h.hover_at(point);
+        h.run_steps(1);
+        h.drag_at(point);
+        h.run_steps(1);
+        // One release frame only: drop_at also queues PointerGone, which would draw a
+        // second frame and allow the background worker to finish before this check.
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos: point,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.step();
+        assert_eq!(h.state().views[0].content.draft.as_ref().and_then(|d| d.index), Some(0), "click reopens {align:?} text");
+        assert!(h.get_by_label("Added text").rect().width() >= 60.0, "the editor still has room to click and type");
+        let check = |h: &Harness<'static, PdfCraftApp>, background_ready: bool| {
+            let draft = h.state().views[0].content.draft.as_ref().unwrap();
+            assert_eq!(draft.rect, rect, "reopening preserves the PDF rectangle");
+            let r = item_on_screen(h, draft.rect);
+            let painted: Vec<_> = h
+                .output()
+                .shapes
+                .iter()
+                .enumerate()
+                .filter_map(|(i, shape)| match &shape.shape {
+                    Shape::Rect(box_) if box_.fill == fill && box_.rect.intersects(r) => Some((i, box_.rect)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(painted.len(), 1, "{align:?}, ready={background_ready}: one visible fill");
+            let (fill_index, actual) = painted[0];
+            assert!(
+                actual.min.distance(r.min) < 0.1 && actual.max.distance(r.max) < 0.1,
+                "{align:?}, ready={background_ready}: fill {actual:?} must match PDF rectangle {r:?}"
+            );
+            let fallback = h.output().shapes.iter().enumerate().find_map(|(i, shape)| match &shape.shape {
+                Shape::Rect(box_)
+                    if box_.fill == Color32::WHITE
+                        && box_.rect.min.distance(r.expand(1.0).min) < 0.1
+                        && box_.rect.max.distance(r.expand(1.0).max) < 0.1 =>
+                {
+                    Some(i)
+                }
+                _ => None,
+            });
+            assert_eq!(fallback.is_none(), background_ready, "{align:?}: exercise both page-background states");
+            if let Some(mask_index) = fallback {
+                assert!(mask_index < fill_index, "the temporary source mask must not cover the fill");
+            }
+        };
+        check(&h, false);
+        crate::support::settle(&mut h);
+        check(&h, true);
+        if let Ok(dir) = std::env::var("PDFCRAFT_NARROW_FILL_SHOTS") {
+            let _gpu = gpu();
+            std::fs::create_dir_all(&dir).unwrap();
+            h.render().unwrap().save(std::path::Path::new(&dir).join(format!("{align:?}.png"))).unwrap();
+        }
+    }
+}
+
 /// Added text takes character spacing from Format text (#4245), typed like a paragraph's; its
 /// line spacing and horizontal scale stay disabled until added text has them.
 #[test]
@@ -839,6 +935,91 @@ fn the_text_editor_aligns_a_narrow_box_whose_lines_share_an_alignment() {
         inside > 20 && edge > 0 && past == 0,
         "the text is drawn in its box, up to its right edge ({inside} dark pixels in it, {edge} in its last quarter, {past} past it)"
     );
+}
+
+/// #4789: the Format panel's Fill colour gives new text a background of its own, apart from the
+/// text colour, and No fill takes it off again, both before typing and in an active draft.
+#[test]
+fn format_text_panel_sets_and_clears_the_background() {
+    for active in [false, true] {
+        let mut h = harness();
+        assert!(h.state_mut().execute("edit.text"));
+        h.run_steps(3);
+        assert_eq!(h.state().text_style.background, None, "no fill by default");
+        if active {
+            let p = at(&h, 40.0, 300.0);
+            click(&mut h, p);
+            h.event(egui::Event::Text("Hello".into()));
+            crate::support::settle(&mut h);
+            assert!(h.state().views[0].content.draft.is_some(), "typing opens an active draft");
+        }
+        let text_colour = h.state().text_style.color;
+        h.get_by_label("Fill colour").click();
+        h.run_steps(3);
+        h.get_by_label("Red").click();
+        h.run_steps(3);
+        let red = h.state().text_style.background.expect("the swatch sets a background");
+        assert!(red[0] > 0.5 && red[1] < 0.5 && red[2] < 0.5, "red: {red:?}");
+        if active {
+            let draft = h.state().views[0].content.draft.as_ref().expect("formatting keeps the draft open");
+            assert_eq!(draft.style.background, Some(red), "the active draft receives the fill");
+            assert_eq!(draft.style.color, text_colour, "the draft text colour is its own");
+        }
+        assert_eq!(h.state().text_style.color, text_colour, "the text colour is its own");
+        h.get_by_label("Fill colour").click();
+        h.run_steps(3);
+        h.get_by_label("No fill").click();
+        h.run_steps(3);
+        assert_eq!(h.state().text_style.background, None, "No fill takes it off");
+        if active {
+            let draft = h.state().views[0].content.draft.as_ref().expect("removing fill keeps the draft open");
+            assert_eq!(draft.style.background, None, "the active draft clears the fill");
+        }
+    }
+}
+
+/// #4789: the text editor draws the item's background while typing and when reopened: the page's
+/// copy of the item is left out of the preview, so without it white text on a dark fill would be
+/// white on white.
+#[test]
+fn the_text_editor_shows_the_background_fill() {
+    let _gpu = gpu();
+    // Real-time frames, so the two clicks of the double click are close enough together.
+    let mut h = harness_with_step_dt(1.0 / 60.0);
+    h.state_mut().text_style =
+        pdfcraft_engine::AddedText { color: [1.0, 1.0, 1.0], background: Some([0.0, 0.0, 0.4]), ..pdfcraft_engine::AddedText::default() };
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(2);
+    let p = at(&h, 40.0, 300.0);
+    click(&mut h, p);
+    h.event(egui::Event::Text("Hello".into()));
+    crate::support::settle(&mut h);
+    // A pixel just inside the editor's corner: past its focus outline, clear of the glyphs.
+    let corner = |h: &mut Harness<'static, PdfCraftApp>| {
+        let r = h.get_by_label("Added text").rect();
+        let shot = h.render().unwrap();
+        shot.get_pixel(r.min.x as u32 + 6, r.min.y as u32 + 3).0
+    };
+    let dark = |[r, g, b, _]: [u8; 4]| r < 40 && g < 40 && (80..140).contains(&b);
+    let typing = corner(&mut h);
+    assert!(dark(typing), "the new text's fill shows while typing: {typing:?}");
+    h.get_by_label("Done adding text").click();
+    h.run_steps(3);
+    let rect = added(&h)[0].content.rect();
+    let center = at(&h, ((rect[0] + rect[2]) / 2.0) as f32, (400.0 - (rect[1] + rect[3]) / 2.0) as f32);
+    h.run_steps(60);
+    h.hover_at(center);
+    h.run_steps(1);
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: center, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        }
+        h.run_steps(1);
+    }
+    crate::support::settle(&mut h);
+    assert!(h.state().views[0].content.draft.as_ref().is_some_and(|d| d.index == Some(0)), "double click reopens the text");
+    let reopened = corner(&mut h);
+    assert!(dark(reopened), "the fill shows when the text is reopened: {reopened:?}");
 }
 
 /// Where a mode bar tab is, by its label.

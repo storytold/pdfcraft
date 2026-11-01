@@ -4837,6 +4837,30 @@ fn printing_through_tools() {
     assert!(matches!(a.call("doc_print", &json!({ "doc": doc, "pages": "99", "path": "x.pdf" })), Err(ToolError::InvalidArgs(_))));
 }
 
+/// #4789: a text box takes a background of its own, apart from the text colour; content_list
+/// reports it; `none` takes it off; a bad colour is refused and changes nothing.
+#[test]
+fn added_text_takes_a_background_through_tools() {
+    let dir = workdir("text-background");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_add_text", json!({ "doc": doc, "page": 1, "text": "NOTE", "at": [20, 20], "color": "#0000ff", "background": "#ffff00" }));
+    let list = ok(&mut a, "content_list", json!({ "doc": doc }));
+    assert_eq!(list["items"][0]["background"], "#ffff00");
+    ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 1, "background": "#00ff00" }));
+    assert_eq!(ok(&mut a, "content_list", json!({ "doc": doc }))["items"][0]["background"], "#00ff00");
+    assert!(matches!(
+        a.call("content_update", &json!({ "doc": doc, "page": 1, "index": 1, "background": "not-a-colour" })),
+        Err(ToolError::InvalidArgs(_))
+    ));
+    assert_eq!(ok(&mut a, "content_list", json!({ "doc": doc }))["items"][0]["background"], "#00ff00", "a refused colour changes nothing");
+    ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 1, "background": "none" }));
+    assert!(ok(&mut a, "content_list", json!({ "doc": doc }))["items"][0]["background"].is_null());
+    // Without one, the item has none.
+    ok(&mut a, "page_add_text", json!({ "doc": doc, "page": 1, "text": "PLAIN", "at": [20, 60] }));
+    assert!(ok(&mut a, "content_list", json!({ "doc": doc }))["items"][1]["background"].is_null());
+}
+
 #[test]
 fn adding_content_through_tools() {
     let dir = workdir("content");
@@ -10520,4 +10544,37 @@ fn mixed_script_tools_normalize_but_undo_restores_the_exact_mixture() {
         let reopened = ok(&mut a, "doc_open", json!({"path":path}))["doc"].as_u64().unwrap();
         assert_eq!(page_text(&mut a, reopened)[0], plain);
     }
+}
+
+/// Changing or clearing a fill preserves per-line alignment through save and reopen.
+#[test]
+fn added_text_fills_keep_per_line_alignment_through_updates_and_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut a = auto(dir.path());
+    let doc = ok(&mut a, "doc_create", json!({"from":"blank","width":600,"height":400}))["doc"].as_u64().unwrap();
+    ok(
+        &mut a,
+        "page_add_text",
+        json!({"doc":doc,"page":1,"text":"Left line\nRight line","at":[40,50],"width":500,"size":12,"aligns":[null,"right"],"background":"#00CCFF"}),
+    );
+    let verify = |a: &mut Automation, doc: u64, background: Value, phase: &str| {
+        let items = ok(a, "content_list", json!({"doc":doc}));
+        assert_eq!(items["count"], 1, "{phase}: {items}");
+        assert_eq!(items["items"][0]["background"], background, "{phase}");
+        let lines = ok(a, "text_lines", json!({"doc":doc,"page":1}));
+        let edge =
+            |text: &str, side: usize| lines["lines"].as_array().unwrap().iter().find(|l| l["text"] == text).unwrap()["rect"][side].as_f64().unwrap();
+        assert!((edge("Left line", 0) - 40.0).abs() < 1.0, "{phase}: left alignment: {lines}");
+        assert!((edge("Right line", 2) - 540.0).abs() < 1.0, "{phase}: right alignment: {lines}");
+    };
+    verify(&mut a, doc, json!("#00ccff"), "created together");
+    ok(&mut a, "content_update", json!({"doc":doc,"page":1,"index":1,"background":"none"}));
+    verify(&mut a, doc, Value::Null, "cleared fill");
+    ok(&mut a, "content_update", json!({"doc":doc,"page":1,"index":1,"background":"#FFCC00"}));
+    verify(&mut a, doc, json!("#ffcc00"), "changed fill");
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"both.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"both.pdf"}))["doc"].as_u64().unwrap();
+    verify(&mut a, reopened, json!("#ffcc00"), "saved and reopened");
+    ok(&mut a, "content_update", json!({"doc":reopened,"page":1,"index":1,"background":"none"}));
+    verify(&mut a, reopened, Value::Null, "cleared after reopening");
 }

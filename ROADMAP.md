@@ -6,6 +6,8 @@
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 review follow-up: preserve image crop/tag/stream ownership, resize in page orientation, harden clipboard and text formatting, and reload installed fonts; estimates unchanged)
 
+
+
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: integrate main fa5f9f8c; retain CJK viewer and upstream raster regressions, restore explicit display_config imports; estimates unchanged)
 > **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** patch (M2, PR #4172: integrate main 5af10276; retain both roadmap histories and viewer-only CJK font policy; estimates unchanged)
@@ -21,6 +23,10 @@
 
 > **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M7 #2517: a narrowed then widened paragraph keeps the typed spaces the wrap consumed, after save and reopen; estimates unchanged)
 > **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: OCR model downloads use verified ONNX pairs with legacy discovery fallback; estimates unchanged)
+> **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** patch (M7 #4789: keep narrow added-text preview fills inside the PDF text rectangle for every alignment, before and after the clean background arrives; estimates unchanged)
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7 #4789: rebase PR #4912 onto main 0cba87ae; 3284 scoped tests pass (9 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged)
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7 #4789: Format-panel fill coverage exercises both defaults and active typed drafts; independent set/clear mutations fail the new assertions; 1910 UI tests pass (5 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm pass; production unchanged)
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7 #4789: rebase PR #4912 onto main 47f42ba0; 3030 scoped tests pass (9 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged)
 > **Last reviewed:** 2026-10-25 | **Last updated:** 2026-10-25 | **Change:** minor (M14 localization current state: Arabic logical catalog, explicit RTL label direction and mirrored stock chrome; native/browser RTL workflows unqualified. Native release Hans face via LXGW WenKai Lite; estimates unchanged)
 > **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M7, #2636 partial: pasting added text boxes and images in the engine and through `content_copy`; estimates unchanged)
 > **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M11: image optimization accounts for page-local UserUnit; estimates unchanged)
@@ -229,6 +235,9 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - 2026-11-01: PR #2155 review follow-up preserves editor crops through group moves and keeps arranged artwork outside added-item streams; unsafe nested-tag extraction is refused. Image handles and flips follow page orientation, added images accept general transforms, and clipboard/text/Home/font-discovery edge cases have focused regressions. Candidate only; estimates unchanged.
 - 2026-11-01: PR #2155 maintainer edits remove redundant image/text helpers and add regressions for crop ownership, arrange scope/state fidelity, clipboard precedence, crop-drag bounds, and font scanning. Transform and Unicode-script tools complete the headless paths.
 
+
+
+
 - **2026-10-18 (M3, #1354, local candidate):** Integrated --two-paged with current main, retaining upstream modal/picker ownership and single-tab reuse. Native launch/opening/password regressions, negative checks against the old wrapper, visual inspection, formatting, strict scoped Clippy, layers, assets, parity and scoped WASM compilation pass. Three existing socket tests are unavailable in this workspace; one existing network test remains ignored. No push or GitHub merge; estimates unchanged.
 - **2026-10-31 (M2, PR #4172 review):** Added same-machine pixel oracles for GBK Song, Hei, Kai and FangSong, including all four subset-prefixed Founder aliases. Reference PDFs use explicit Unicode mappings and independently selected installed faces; font data and rasters remain in memory. All eight cases ran; wrong-glyph and wrong-family production mutations each failed the new assertion and were restored. Validation: 422 renderer unit tests, renderer all-target Clippy with -D warnings, formatting, layers/assets/parity and renderer WASM checks passed; existing optional-patch/WASM warnings and parity notes remain. Estimates unchanged.
 
@@ -245,6 +254,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-29 (M7, #2517):** Widening a paragraph rejoins a wrap with the number of spaces that wrap consumed, including a typed run and none for a Chinese or Japanese word split. The count survives an incremental save and a full rewrite, and a width-only `text_edit` uses it. Estimates unchanged.
 - **2026-10-26 (M11, JBIG2 symbols):** Lossless JBIG2 now stores each distinct mark of a black-and-white image once, as a symbol, and places its exact copies, when that is smaller than the generic region: on six pages of rendered 300 dpi text 28% of the generic region's size and 17% of Group 4's, and the same bits back through two independent decoders (hayro-jbig2 and Poppler). Scans, whose letters are seldom identical, gain little until refinement coding; a dictionary shared between pages (`/JBIG2Globals`) is next. Estimates unchanged.
 - **2026-10-25 (M5, comment replies):** One reply can be deleted from the Comments panel without its thread. On the selected card each reply has its own "…" menu (Edit, Copy text, Delete); Delete takes that reply with its pop-up and the replies to it, as `comment_delete` already did headlessly, and the comment and its other replies stay. The card stays selected, and the panel's editor stays open, on what they were on though the delete moved it in `/Annots`. Undo and Redo close the editor, since either can move what it was open on. A locked reply can't be deleted. Estimates unchanged.
+- **2026-10-29 (M7, #4789 review):** A narrow added-text editor paints its background only inside the saved PDF text rectangle. Its wider click area stays transparent over surrounding content; left, centre, right and justified alignment and both background-readiness states have a synthetic UI regression. Estimates unchanged.
+
 - **2026-10-24 (M10, #4158 partial):** Word, HTML, RTF and PowerPoint export keep a block that continues another on its line (an italic case name, a link, a superscript) as a run in its own style inside that paragraph, with the source's word space, instead of a paragraph of its own. Style changes that wrap onto the next line still split paragraphs (the reading blocks keep style boundaries). Estimates unchanged.
 - **2026-10-24 (M3, window move on Wayland, #3970 follow-up):** After a move or resize by PdfCraft's own title bar or edges, the button release given back to egui goes before the pointer leaving the window, so hover no longer sticks at the old place until the pointer moves. Found by CodeRabbit in review of #3970; a unit test covers it. Estimates unchanged.
 - **2026-10-24 (M14, #4253):** The annotation quick bar remembers Keep tool selected across restarts, including unpinning. Old and malformed settings keep safe defaults; the opt-in UI control channel reads and changes the same preference. Estimates unchanged.
@@ -743,6 +754,9 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | patch | M7 #4789: rebase PR #4912 onto main 0cba87ae; 3284 scoped tests pass (9 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged. |
+| 2026-11-01 | patch | M7 #4789: Format-panel fill coverage exercises both defaults and active typed drafts; independent set/clear mutations fail the new assertions; 1910 UI tests pass (5 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm pass; production unchanged. |
+| 2026-11-01 | patch | M7 #4789: rebase PR #4912 onto main 47f42ba0; 3030 scoped tests pass (9 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged. |
 | 2026-10-28 | patch | M2, PR #4172: integrate main 5af10276 and retain both roadmap histories; viewer-only CJK and print/output font policies and estimates unchanged. |
 | 2026-10-27 | minor | M10: OCR stages SHA-256-verified ONNX models after the upstream RTEN URL brownout; discovery prefers a complete ONNX pair per directory, falls back to a complete RTEN pair, and never mixes formats or directories; language/web limits and estimates unchanged. |
 | 2026-10-23 | minor | M8, #3205 follow-up: phone-pattern redaction includes the +39 country code on labelled Italian geographic numbers with a slash; dates, protocol identifiers and whole-run guards remain. Estimates unchanged. |
@@ -824,3 +838,10 @@ PR #2133 retains document-local Pages sidebar focus for Ctrl/Cmd+A and Escape af
 PR #1952 retains per-widget checkbox/radio export-value editing in the split form-authoring and Prepare modules. Caption editing remains supported. Tests cover preserved appearances and selection, invalid/locked refusals, data-format round trips, and Apply/Cancel/Undo. Current-head hosted validation is pending; feature estimates are unchanged.
 
 - **2026-10-31 (#1577):** Reconciled the page-shadow preference with split viewer, organizer, settings and control modules, preserving upstream page-gap shadow suppression. CI validation pending.
+- **2026-10-27 (M7, #4789):** Add text can have a background fill of its own, apart from the text colour: Format text ▸ Fill colour (and No fill), `background` on `page_add_text`/`content_update` (`none` removes it), listed by `content_list`; drawn as a filled rectangle under the text and kept through save and reopen.
+
+- **2026-11-01 (M7, #4789 coverage):** M7 #4789: Format-panel fill coverage exercises both defaults and active typed drafts; independent set/clear mutations fail the new assertions; 1910 UI tests pass (5 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm pass; production unchanged.
+
+- **2026-11-01 (M7, #4789 rebase):** PR #4912 rebased onto main `47f42ba0`; resolved and auto-merged hunks reviewed. 3030 scoped tests passed, 9 existing ignored; formatting, strict Clippy, layers/assets/parity and wasm checks passed. Behavior and estimates unchanged.
+
+- **2026-11-01 (M7, #4789 rebase):** PR #4912 rebased onto main `0cba87ae`; resolved and auto-merged hunks reviewed. 3284 scoped tests passed, 9 existing ignored; formatting, strict Clippy, layers/assets/parity and wasm checks passed. Behavior and estimates unchanged.
