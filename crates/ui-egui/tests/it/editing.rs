@@ -370,6 +370,42 @@ fn reverse_pages_reverses_the_selection_or_else_the_whole_document() {
 }
 
 #[test]
+fn reverse_pages_command_disabled_on_single_page_document() {
+    let mut h = harness(1, |_| ());
+    let spec = pdfcraft_engine::commands::command("page.reverse").unwrap();
+    assert!(!h.state().command_enabled(spec));
+    assert!(!h.state_mut().execute("page.reverse"));
+}
+
+#[test]
+fn reverse_pages_from_organize_panel_reverses_and_preserves_selection() {
+    let mut h = organize(3);
+    h.get_by_label("Reverse pages").click();
+    h.run_steps(3);
+    assert_eq!(page_texts(h.state()), ["Page 3", "Page 2", "Page 1"]);
+    assert_eq!(h.state().views[0].selected.iter().copied().collect::<Vec<_>>(), [0, 1, 2]);
+}
+
+#[test]
+fn reverse_pages_from_thumbnail_context_menu() {
+    let mut h = organize(3);
+    h.get_by_label("Page 2").click_button(egui::PointerButton::Secondary);
+    h.run_steps(2);
+    h.get_all_by_label("Reverse pages").last().unwrap().click();
+    h.run_steps(3);
+    assert_eq!(page_texts(h.state()), ["Page 3", "Page 2", "Page 1"]);
+    assert_eq!(h.state().views[0].selected.iter().copied().collect::<Vec<_>>(), [0, 1, 2]);
+}
+
+#[test]
+fn reverse_pages_context_menu_disabled_on_single_page() {
+    let mut h = organize(1);
+    h.get_by_label("Page 1").click_button(egui::PointerButton::Secondary);
+    h.run_steps(2);
+    assert!(h.query_by(|n| n.label().as_deref() == Some("Reverse pages") && n.is_disabled()).is_some());
+}
+
+#[test]
 fn command_click_toggles_and_rotation_applies_to_selection() {
     let mut h = organize(3);
     h.get_by_label("Page 1").click();

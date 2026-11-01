@@ -78,7 +78,7 @@ pub(crate) fn command_tip(ctx: &egui::Context, template: &str, id: &str) -> Stri
 impl PdfCraftApp {
     /// Whether a registered command can run now. The engine judges the document (security,
     /// contents, undo history); view state it can't see is checked here.
-    pub(crate) fn command_enabled(&self, spec: &CommandSpec) -> bool {
+    pub fn command_enabled(&self, spec: &CommandSpec) -> bool {
         // Undo and Redo act on the Combine files list while its tab shows.
         if self.combine_showing() && matches!(spec.needs, commands::Needs::Undo | commands::Needs::Redo) {
             return self.combine_can_undo(spec.needs == commands::Needs::Undo);
@@ -97,6 +97,7 @@ impl PdfCraftApp {
             && match spec.id {
                 "view.previous_view" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.back.is_empty()),
                 "view.next_view" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.forward.is_empty()),
+                "page.reverse" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| v.page_count() >= 2),
                 _ => true,
             }
     }
