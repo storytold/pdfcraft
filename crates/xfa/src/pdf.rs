@@ -16,8 +16,8 @@ mod common;
 mod strip;
 
 pub use common::jpeg_size;
-pub(crate) use common::rounded;
 use common::{all_faces, content_hash, empty_form, hex32, jpeg_info, js_action, n, parse_hex32, rgb, rgb_array, standard_font, state_name};
+pub(crate) use common::{line, rounded};
 pub(crate) use strip::USAGE_RIGHTS_REMOVED;
 use strip::drop_usage_rights;
 pub use strip::{Stripped, XfaShape, existing_layout, strip, xfa_shape};
@@ -586,21 +586,7 @@ impl Emitter<'_> {
                     content.extend(format!("{} rg {} {} {} {} re f\n", rgb(*color), n(rect.x), n(h - rect.bottom()), n(rect.w), n(rect.h)).bytes());
                 }
                 Item::Rounded(r) => content.extend(rounded(r, h).bytes()),
-                Item::Line { from, to, width, color, dashed } => {
-                    content.extend(
-                        format!(
-                            "q {} RG {} w {}{} {} m {} {} l S Q\n",
-                            rgb(*color),
-                            n(*width),
-                            if *dashed { "[2 2] 0 d " } else { "" },
-                            n(from.0),
-                            n(h - from.1),
-                            n(to.0),
-                            n(h - to.1)
-                        )
-                        .bytes(),
-                    );
-                }
+                Item::Line { from, to, width, color, stroke } => content.extend(line(*from, *to, *width, *color, *stroke, h).bytes()),
                 Item::Text(s) => {
                     // The form's own text, set in the standard fonts: what they can't draw is
                     // shown as `?` and reported once (the layout goes on), never silently.

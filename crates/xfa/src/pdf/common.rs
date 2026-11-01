@@ -1,4 +1,5 @@
 use super::{Dict, Document, Family, Object, PdfString, Rect, Rounded, Stream};
+use crate::model::Stroke;
 
 /// Width and height of a JPEG from its first frame header (SOF0–SOF15, not the DNL/JPG/DAC/DHT
 /// markers). `None` for anything else.
@@ -114,7 +115,7 @@ pub(crate) fn rounded(r: &Rounded, page_h: f64) -> String {
     if let Some(color) = r.fill {
         c.push_str(&format!("{} rg {}f\n", rgb(color), outline(r.rect, r.radii, r.inverted, (false, false), page_h)));
     }
-    if let Some((w, color, dashed)) = r.edge {
+    if let Some((w, color, stroke)) = r.edge {
         // The edge's centre line, half its width inside the box, so the edge stays in: a corner
         // curving around the box tightens by as much, and one curving into it widens.
         let inset = Rect::new(r.rect.x + w / 2.0, r.rect.y + w / 2.0, (r.rect.w - w).max(0.0), (r.rect.h - w).max(0.0));
@@ -125,9 +126,44 @@ pub(crate) fn rounded(r: &Rounded, page_h: f64) -> String {
             (v, false) => (v - w / 2.0).clamp(0.0, most),
         });
         let path = outline(inset, radii, r.inverted, (r.open_top, r.open_bottom), page_h);
-        c.push_str(&format!("q {} RG {} w {}{path}S Q\n", rgb(color), n(w), if dashed { "[2 2] 0 d " } else { "" }));
+        c.push_str(&format!("q {} RG {} w {}{path}S Q\n", rgb(color), n(w), dash(stroke, w)));
     }
     c
+}
+
+/// The content that draws a straight line from `from` to `to` (top-left based, on a page
+/// `page_h` tall), `width` thick, in `color`, with `stroke`'s dash pattern.
+pub(crate) fn line(from: (f64, f64), to: (f64, f64), width: f64, color: [f64; 3], stroke: Stroke, page_h: f64) -> String {
+    format!(
+        "q {} RG {} w {}{} {} m {} {} l S Q\n",
+        rgb(color),
+        n(width),
+        dash(stroke, width),
+        n(from.0),
+        n(page_h - from.1),
+        n(to.0),
+        n(page_h - to.1)
+    )
+}
+
+/// The operators that set `stroke`'s dash pattern for an edge `width` thick, with a trailing
+/// space, or nothing for a solid (or 3-D) stroke.
+///
+/// Dashes and gaps are multiples of the width, drawn with projecting caps: for a 3pt edge that is
+/// `[12 6]` dashed, `[3 6]` dotted, `[9 6 3 6]` dash-dot and `[9 6 3 6 3 6]` dash-dot-dot, the
+/// patterns Acrobat flattens those strokes to (#5561). A width under 0.01pt dashes as if it were
+/// 0.01pt (so no dash rounds to zero) and a width that isn't finite as if it were 1pt.
+pub(crate) fn dash(stroke: Stroke, width: f64) -> String {
+    let units: &[f64] = match stroke {
+        Stroke::Solid | Stroke::Relief => return String::new(),
+        Stroke::Dashed => &[4.0, 2.0],
+        Stroke::Dotted => &[1.0, 2.0],
+        Stroke::DashDot => &[3.0, 2.0, 1.0, 2.0],
+        Stroke::DashDotDot => &[3.0, 2.0, 1.0, 2.0, 1.0, 2.0],
+    };
+    let w = if width.is_finite() { width.max(0.01) } else { 1.0 };
+    let array: Vec<String> = units.iter().map(|u| n(u * w)).collect();
+    format!("[{}] 0 d 2 J ", array.join(" "))
 }
 
 /// The path around `rect` (top-left based, on a page `page_h` tall) with the corners `radii`

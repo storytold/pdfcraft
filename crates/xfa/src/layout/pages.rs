@@ -3,7 +3,7 @@ use super::EMBED_COPIED;
 use super::items::{Item, Page, UNDERLINE_DROP};
 use super::{
     Block, Border, Ctx, Cursor, FlowMark, Font, Frame, Layouter, MAX_ITEMS, MAX_MEASURES, MAX_PAGES, PAGE_COUNT_MARK, PageRole, Para, Rc, Rect,
-    SomIndices, XfaError, text,
+    SomIndices, Stroke, XfaError, text,
 };
 
 impl Layouter<'_> {
@@ -56,7 +56,13 @@ impl Layouter<'_> {
             if s.face.underline {
                 let w = s.face.width(&s.text);
                 let y = s.baseline + s.face.size * UNDERLINE_DROP;
-                self.push(Item::Line { from: (s.x, y), to: (s.x + w, y), width: (s.face.size * 0.06).max(0.3), color: s.face.color, dashed: false })?;
+                self.push(Item::Line {
+                    from: (s.x, y),
+                    to: (s.x + w, y),
+                    width: (s.face.size * 0.06).max(0.3),
+                    color: s.face.color,
+                    stroke: Stroke::Solid,
+                })?;
             }
             if !s.text.trim().is_empty() {
                 self.push(Item::Text(s))?;
