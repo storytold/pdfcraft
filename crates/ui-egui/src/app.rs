@@ -1029,6 +1029,18 @@ impl PdfCraftApp {
                             if is_dirty {
                                 ui.label(egui::RichText::new("(edited)").font(theme::regular(11.0)).color(t.text_muted));
                             }
+                            if let (Some(view), Some(doc)) = (self.views.get(idx), self.session.get(doc_id)) {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "Page {} of {} • {:.0}%",
+                                        view.page.saturating_add(1),
+                                        doc.info.pages.len(),
+                                        view.zoom * 100.0,
+                                    ))
+                                    .font(theme::regular(11.0))
+                                    .color(t.text_muted),
+                                );
+                            }
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 if ui.button(tl!("Re-attach Tab")).clicked() {
                                     reattach = true;
