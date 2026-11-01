@@ -73,6 +73,20 @@ pub struct FormView {
     /// The widget holding egui's keyboard focus for the focused check box or radio button, and
     /// whether it takes the arrows (radio buttons). The page keys still work around it.
     pub(crate) keys: Option<(egui::Id, bool)>,
+    /// The field and widget that had focus when it was last looked at: when the focus moves, the
+    /// one it left runs its XFA exit scripts and the one it reached its enter scripts
+    /// (`PdfCraftApp::run_focus_scripts`).
+    pub(crate) focused: Option<(String, usize)>,
+    /// The field and widget under the pointer when it was last looked at, and the one this
+    /// frame's pages found under it: when they differ, the one left runs its Mouse Exit action
+    /// and the one reached its Mouse Enter (`PdfCraftApp::run_pointer_triggers`).
+    pub(crate) hovered: Option<(String, usize)>,
+    pub(crate) hover_seen: Option<(String, usize)>,
+    /// Mouse Down actions this frame's presses set off, run before what the press commits.
+    pub(crate) pressed_on: Vec<(String, usize)>,
+    /// Fields (not push buttons, whose click is `button`) a click released on: their Mouse Up
+    /// actions run once the focus scripts have, as another viewer orders them.
+    pub(crate) released_on: Vec<(String, usize)>,
 }
 
 /// A form message for the app to show, with document data kept separate so the visible
@@ -113,6 +127,7 @@ pub(crate) fn draft_text(f: &FormField) -> String {
     value
 }
 
+/// The editor's draft for widget `widget` of field `f`, opened on the field's value.
 fn open_focus(f: &FormField, widget: usize) -> Focus {
     Focus {
         name: f.name.clone(),
@@ -126,6 +141,17 @@ fn open_focus(f: &FormField, widget: usize) -> Focus {
         calendar_rect: None,
         calendar_text: None,
         had_focus: false,
+    }
+}
+
+/// After a script changed the field being edited from `before` to `after`, each given as its
+/// editor text ([`draft_text`]: a combo box's shown option) and its value: the editor shows
+/// `after`, as [`open_focus`] would, unless the person has typed there already (the draft no
+/// longer holds `before`), whose typing then stays theirs to commit.
+pub(crate) fn refresh_draft(focus: &mut Focus, before: (&str, &[String]), after: (String, &[String])) {
+    if focus.picked.as_slice() == before.1 && focus.text == before.0 {
+        focus.text = after.0;
+        focus.picked = after.1.to_vec();
     }
 }
 
@@ -186,17 +212,29 @@ pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, form: &[FormField
 /// `true` while a field holds the press.
 pub(crate) fn page_input(cx: PageToolContext<'_>, form: &[FormField], allowed: bool, view: &mut DocView) -> bool {
     let PageToolContext { ui, resp, xf, ptr, page, info, .. } = cx;
+    // The field under the pointer, for its tooltip and its Mouse Enter and Exit actions.
+    let hovered = ptr.within(xf.rect).and_then(|p| hit(xf, info, page, form, allowed, p)).and_then(|h| match h.owner {
+        Owner::Field { field, widget } => form.get(field).map(|f| (f, widget)),
+        _ => None,
+    });
+    // Its Mouse Enter and Exit actions run where the form may be filled in, as its other
+    // actions do: elsewhere a script changing a value would only be refused, on every pass.
+    if allowed && let Some((f, wi)) = hovered {
+        view.forms.hover_seen = Some((f.name.clone(), wi));
+    }
     // The field's tooltip (`/TU`) under the pointer, as Acrobat shows it on hover (#3854). ISO
     // 32000-2 Table 226 makes it the name the user interface identifies the field by.
-    if let Some(p) = ptr.within(xf.rect)
-        && let Some(Owner::Field { field, .. }) = hit(xf, info, page, form, allowed, p).map(|h| h.owner)
-        && let Some(tip) = form.get(field).and_then(|f| f.tooltip.as_deref()).filter(|t| !t.trim().is_empty())
-    {
+    if let Some(tip) = hovered.and_then(|(f, _)| f.tooltip.as_deref()).filter(|t| !t.trim().is_empty()) {
         resp.clone().on_hover_text_at_pointer(tip);
     }
     let Some(Owner::Field { field, widget: wi }) = view.router.owner(page) else { return false };
     let Some((f, w)) = form.get(field).and_then(|f| f.widgets.get(wi).map(|w| (f, w))) else { return false };
     let usable = usable(f, w, allowed);
+    // A press on a field that takes input runs its Mouse Down action first, before the field
+    // the focus leaves commits (another viewer's order).
+    if allowed && !f.read_only() && !w.read_only && resp.is_pointer_button_down_on() && ptr.pressed().is_some() {
+        view.forms.pressed_on.push((f.name.clone(), wi));
+    }
     // A text field opens on the press rather than the click, so a drag that starts on it
     // selects its text (#2213).
     if f.kind == FormFieldKind::Text
@@ -217,6 +255,9 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, form: &[FormField], allowed: b
     if !allowed {
         view.forms.notice = Some(FormNotice::Security);
         return true;
+    }
+    if allowed && !f.read_only() && !w.read_only && f.kind != FormFieldKind::PushButton {
+        view.forms.released_on.push((f.name.clone(), wi));
     }
     match f.kind {
         _ if f.read_only() || w.read_only => view.forms.notice = Some(FormNotice::ReadOnly(f.name.clone())),
@@ -1005,8 +1046,49 @@ pub fn field_screen_rect(view: &DocView, info: &DocInfo, f: &FormField, widget: 
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_SCREEN_FONT, bounded_line_width};
+    use super::*;
     use std::cell::Cell;
+
+    /// A draft as the editor opens it on a field holding `value`.
+    fn draft(value: &[&str]) -> Focus {
+        Focus {
+            name: "hint".into(),
+            widget: 0,
+            text: value.first().map(|s| s.to_string()).unwrap_or_default(),
+            picked: value.iter().map(|s| s.to_string()).collect(),
+            request_focus: true,
+            select_all: false,
+            press: None,
+            calendar: None,
+            calendar_rect: None,
+            calendar_text: None,
+            had_focus: false,
+        }
+    }
+
+    /// An untouched draft takes the value a script gave the field; typing is kept.
+    #[test]
+    fn a_draft_follows_a_scripts_change_until_something_is_typed() {
+        let before = vec!["Type here".to_string()];
+        let mut untouched = draft(&["Type here"]);
+        refresh_draft(&mut untouched, ("Type here", &before), (String::new(), &[]));
+        assert_eq!((untouched.text.as_str(), untouched.picked.len()), ("", 0));
+        let mut typed = draft(&["Type here"]);
+        typed.text = "Ann".into();
+        refresh_draft(&mut typed, ("Type here", &before), (String::new(), &[]));
+        assert_eq!(typed.text, "Ann", "the person's typing stays");
+        // A list's choices count as typing too.
+        let mut picked = draft(&["a"]);
+        picked.picked.push("b".into());
+        refresh_draft(&mut picked, ("a", &["a".to_string()]), ("c".into(), &["c".to_string()]));
+        assert_eq!(picked.picked, ["a", "b"]);
+        // A combo box's editor shows the option's shown text, not its export value: that is
+        // what an untouched draft holds, and what it takes.
+        let mut combo = draft(&["a"]);
+        combo.text = "Apple".into();
+        refresh_draft(&mut combo, ("Apple", &["a".to_string()]), ("Banana".into(), &["b".to_string()]));
+        assert_eq!((combo.text.as_str(), combo.picked.as_slice()), ("Banana", ["b".to_string()].as_slice()));
+    }
 
     #[test]
     fn a_line_is_never_laid_out_above_the_screen_font_bound() {
