@@ -27,6 +27,33 @@ pub struct DocJsDraft {
 /// script engine's own limit), so only runs in quick succession reach it.
 const MAX_WAITING_MESSAGES: usize = 100;
 
+/// Most characters of a script's error the failure notice quotes; the console keeps it whole.
+const MAX_FAILURE_CHARS: usize = 120;
+
+/// How long the notice that a form script failed stays, in seconds: longer than other notices,
+/// as it has a button to reach, and it stays on while the pointer is over it.
+pub(crate) const FAILURE_NOTICE_SECONDS: f64 = 6.0;
+
+/// The notice that a form script failed, quoting `error` (already clipped) when it says anything.
+pub(crate) fn failure_notice(error: &str) -> String {
+    if error.is_empty() {
+        return tl!("A script in this form failed.").to_string();
+    }
+    crate::i18n::fmt(tl!("A script in this form failed: {error}"), &[("error", error)])
+}
+
+/// `error`'s first line, cut to [`MAX_FAILURE_CHARS`] characters with an ellipsis when longer:
+/// what the failure notice quotes.
+fn clip_error(error: &str) -> String {
+    let line = error.trim().lines().next().unwrap_or_default().trim_end();
+    let mut chars = line.chars();
+    let mut out: String = chars.by_ref().take(MAX_FAILURE_CHARS).collect();
+    if chars.next().is_some() || line.len() < error.trim().len() {
+        out.push('…');
+    }
+    out
+}
+
 /// The icon a script message's toast shows for `icon`.
 pub(crate) fn message_icon(icon: MessageIcon) -> &'static str {
     match icon {
@@ -53,12 +80,14 @@ impl PdfCraftApp {
         // working, and the error is only in the console. Say so once, and bring the notice bar
         // (which keeps saying so) back if it was closed. A message of the form's own, below,
         // takes the toast's place.
+        let mut turned_off = false;
         if let Some(v) = view.and_then(|i| self.views.get_mut(i))
             && !v.scripts_off_noted
             && self.session.get(id).is_some_and(|d| d.xfa_scripts_off())
         {
             v.scripts_off_noted = true;
             v.notice_dismissed = false;
+            turned_off = true;
             self.notify(scripts_off_notice());
         }
         if out.is_empty() {
@@ -97,6 +126,36 @@ impl PdfCraftApp {
             }
         }
         self.show_script_messages(out.alerts);
+        // A failing script otherwise leaves only a console line, and the button or field just
+        // looks broken: say so once for what the user did, however many scripts failed, after
+        // what they showed. Not while the console is open (its log shows the error), nor when
+        // the scripts were just turned off (said above, and the error is why).
+        if !turned_off
+            && self.dialog != Some(crate::Dialog::JsConsole)
+            && let Some(e) = out.errors.first()
+        {
+            self.note_script_failure(e);
+        }
+    }
+
+    /// Say in the toast that a form script failed with `error`, quoted clipped, with a button to
+    /// the JavaScript console. It waits, like a script message, for what the toast shows and the
+    /// messages ahead of it; one waits at most, the latest action's. When the toast already says
+    /// a script failed and nothing waits, that notice says this one instead, from its start, so
+    /// failures in a row are one notice.
+    pub fn note_script_failure(&mut self, error: &str) {
+        let error = clip_error(error);
+        if self.toast_failure.is_some() && self.script_messages.is_empty() && self.script_messages_dropped == 0 {
+            self.toast = Some((failure_notice(&error), 0.0));
+            self.toast_failure = Some(error);
+            // The latest action's failure is the one said.
+            self.script_failure = None;
+            return;
+        }
+        self.script_failure = Some(error);
+        if self.toast.is_none() {
+            self.next_script_message();
+        }
     }
 
     /// Show form script messages `messages` in order, each in the toast with its title and icon.
@@ -114,12 +173,21 @@ impl PdfCraftApp {
     }
 
     /// Put the next waiting script message in the toast, or, once none waits, a notice of how many
-    /// the queue had no room for. False when there is neither.
+    /// the queue had no room for, then the notice that a form script failed
+    /// ([`Self::note_script_failure`]). False when there is none of these.
     pub fn next_script_message(&mut self) -> bool {
+        // A failure notice the toast lost before its time waits again, unless a newer one does.
+        if let Some(e) = self.toast_failure.take() {
+            self.script_failure.get_or_insert(e);
+        }
         let Some(m) = self.script_messages.pop_front() else {
             // Every message the queue held has been shown: say how many it had no room for.
             if self.script_messages_dropped == 0 {
-                return false;
+                let Some(e) = self.script_failure.take() else { return false };
+                self.toast = Some((failure_notice(&e), 0.0));
+                self.toast_script = None;
+                self.toast_failure = Some(e);
+                return true;
             }
             let n = std::mem::take(&mut self.script_messages_dropped);
             self.notify(crate::i18n::trn(
@@ -150,13 +218,20 @@ impl PdfCraftApp {
                 {
                     self.views[i].document_changed(&info);
                 }
-                let out = JsOutput {
+                let mut out = JsOutput {
                     alerts: o.alerts,
                     console: o.console,
                     requests: o.requests,
                     errors: o.error.into_iter().collect(),
                     doc_errors: Vec::new(),
                 };
+                // What the script's changes set off (calculations, validations) is part of the
+                // same click, after it: one failure notice for both.
+                let then = self.session.take_js_output(id);
+                out.alerts.extend(then.alerts);
+                out.console.extend(then.console);
+                out.requests.extend(then.requests);
+                out.errors.extend(then.errors);
                 self.handle_js(id, out);
             }
             Err(e) => self.notify_fmt("{field}: {e}", &[("field", field), ("e", &e.to_string())]),
@@ -741,6 +816,23 @@ fn reading_colours_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The failure notice quotes an error's first line, cut at a character (not a byte) past
+    /// the limit, with an ellipsis whenever something was left out, and says no quote at all
+    /// for an error that is only blank.
+    #[test]
+    fn a_failure_notice_quotes_the_first_line_clipped() {
+        assert_eq!(clip_error("  ReferenceError: x is not defined \n"), "ReferenceError: x is not defined");
+        assert_eq!(clip_error("TypeError: boom\n    at line 2"), "TypeError: boom…");
+        let long = "é".repeat(MAX_FAILURE_CHARS + 5);
+        let clipped = clip_error(&long);
+        assert_eq!(clipped.chars().count(), MAX_FAILURE_CHARS + 1);
+        assert!(clipped.ends_with('…') && clipped.starts_with('é'));
+        assert_eq!(clip_error(&"x".repeat(MAX_FAILURE_CHARS)), "x".repeat(MAX_FAILURE_CHARS), "at the limit nothing is cut");
+        assert_eq!(clip_error(" \n "), "");
+        assert_eq!(failure_notice(""), "A script in this form failed.");
+        assert_eq!(failure_notice("TypeError: boom"), "A script in this form failed: TypeError: boom");
+    }
 
     #[test]
     fn date_language_names_fall_back_when_the_native_name_cannot_be_drawn() {

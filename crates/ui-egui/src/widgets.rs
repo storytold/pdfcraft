@@ -448,7 +448,8 @@ fn wrapped_lines(ui: &egui::Ui, text: &str, font: &egui::FontId, width: f32, tru
     lines
 }
 
-/// Transient message at the bottom centre.
+/// Transient message at the bottom center: an app notice, a form script's message, or the notice
+/// that a form script failed, which has a button to the JavaScript console.
 pub fn toast(app: &mut PdfCraftApp, ctx: &egui::Context) {
     // A form script message waiting its turn takes the toast once it is free.
     if app.toast.is_none() {
@@ -461,23 +462,27 @@ pub fn toast(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let now = ctx.input(|i| i.time);
     let start = if start == 0.0 { now } else { start };
     app.toast = Some((msg.clone(), start));
-    if now - start > 3.5 {
+    let failure = app.toast_failure.is_some();
+    let lasts = if failure { crate::js_ui::FAILURE_NOTICE_SECONDS } else { 3.5 };
+    if now - start > lasts {
         app.toast = None;
         app.toast_script = None;
-        // Shown its time: a left-out count it said is done.
+        // Shown its time: a left-out count or a script failure it said is done.
         app.toast_dropped = 0;
+        app.toast_failure = None;
         if app.next_script_message() {
             ctx.request_repaint();
         }
         return;
     }
     let script = app.toast_script.as_ref().map(|m| (m.title.clone(), crate::js_ui::message_icon(m.icon)));
+    let mut open_console = false;
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
     // Above the progress notice while a job runs.
     let card = if app.progress_notice.is_some() { ctx.data(|d| d.get_temp::<f32>(egui::Id::unique(PROGRESS_HEIGHT))).unwrap_or(0.0) } else { 0.0 };
     let lift = if card > 0.0 { 28.0 + card + 10.0 } else { 28.0 };
-    egui::Area::new(egui::Id::unique("toast"))
+    let shown = egui::Area::new(egui::Id::unique("toast"))
         .order(egui::Order::Tooltip)
         .pivot(Align2::CENTER_BOTTOM)
         .fixed_pos(screen.center_bottom() - vec2(0.0, lift))
@@ -510,10 +515,33 @@ pub fn toast(app: &mut PdfCraftApp, ctx: &egui::Context) {
                                 });
                             });
                         }
+                        // A form script failed: what it said, over a button to the console that
+                        // has the whole error. The button takes focus only when clicked, so
+                        // typing goes on where it was.
+                        None if failure => {
+                            ui.horizontal_top(|ui| {
+                                ui.add(icons::image("circle-x", 16.0, ink));
+                                ui.vertical(|ui| {
+                                    text(ui);
+                                    ui.add_space(6.0);
+                                    open_console = pill_button(ui, tl!("JavaScript Console"), false).clicked();
+                                });
+                            });
+                        }
                         None => text(ui),
                     }
                 });
         });
+    if open_console {
+        app.toast = None;
+        app.toast_failure = None;
+        app.run_command("tools.js_console");
+    } else if failure && shown.response.contains_pointer() {
+        // Kept while the pointer is over it, so its button can be reached.
+        if let Some(t) = app.toast.as_mut() {
+            t.1 = now;
+        }
+    }
     ctx.request_repaint_after(std::time::Duration::from_millis(100));
 }
 

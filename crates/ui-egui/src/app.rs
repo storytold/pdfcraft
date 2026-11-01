@@ -150,6 +150,8 @@ impl PdfCraftApp {
             script_messages: std::collections::VecDeque::new(),
             script_messages_dropped: 0,
             toast_dropped: 0,
+            script_failure: None,
+            toast_failure: None,
             integrated_titlebar: false,
             window_controls: None,
             system_title_bar: false,
@@ -337,6 +339,10 @@ impl PdfCraftApp {
     pub fn notify(&mut self, msg: impl Into<String>) {
         // A left-out count it replaces is said again once the toast is free.
         self.script_messages_dropped = self.script_messages_dropped.saturating_add(std::mem::take(&mut self.toast_dropped));
+        // So is a script failure notice, unless a newer one waits.
+        if let Some(e) = self.toast_failure.take() {
+            self.script_failure.get_or_insert(e);
+        }
         self.toast = Some((msg.into(), 0.0));
         self.toast_script = None;
     }
