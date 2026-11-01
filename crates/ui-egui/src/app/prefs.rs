@@ -149,6 +149,11 @@ impl PdfCraftApp {
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language.
         v["print_paper"] = serde_json::json!(pdfcraft_engine::print::PAPERS.get(self.print_draft.paper).map(|(name, _)| *name));
+        // Remember the booklet binding direction across dialogs and application restarts (#5046).
+        v["print_binding"] = serde_json::json!(match self.print_draft.binding {
+            pdfcraft_engine::print::Binding::Left => "Left",
+            pdfcraft_engine::print::Binding::Right => "Right",
+        });
         v.to_string()
     }
 
@@ -241,6 +246,14 @@ impl PdfCraftApp {
             .and_then(|name| pdfcraft_engine::print::PAPERS.iter().position(|(canonical, _)| *canonical == name))
         {
             self.print_draft.paper = paper;
+        }
+        // Unknown values are ignored, preserving the current booklet side.
+        if let Some(binding) = v.get("print_binding").and_then(serde_json::Value::as_str).and_then(|side| match side {
+            "Left" => Some(pdfcraft_engine::print::Binding::Left),
+            "Right" => Some(pdfcraft_engine::print::Binding::Right),
+            _ => None,
+        }) {
+            self.print_draft.binding = binding;
         }
         if let Some(on) = v["highlight_fields"].as_bool() {
             self.view_defaults.highlight_fields = on;
