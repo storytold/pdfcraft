@@ -4038,6 +4038,7 @@ fn pasted_added_content_keeps_its_style_and_picture() {
     let text = AddedText {
         rect: [20.0, 250.0, 180.0, 264.4],
         text: "Styled note".into(),
+        direction: TextDirection::Auto,
         family: FontFamily::Times,
         bold: true,
         italic: true,
@@ -7961,6 +7962,7 @@ fn content_edit_keeps_pages_annotations_fields_and_links() {
     let text = AddedText {
         rect: [20.0, 20.0, 200.0, 60.0],
         text: "hello".into(),
+        direction: TextDirection::Auto,
         family: FontFamily::Helvetica,
         bold: false,
         italic: false,
@@ -8002,6 +8004,7 @@ fn content_refresh_lists_match_the_storages_an_edit_touches() {
             text: AddedText {
                 rect: [0.0, 0.0, 10.0, 10.0],
                 text: String::new(),
+                direction: TextDirection::Auto,
                 family: FontFamily::Helvetica,
                 bold: false,
                 italic: false,

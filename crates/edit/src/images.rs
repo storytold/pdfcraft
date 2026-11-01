@@ -239,11 +239,9 @@ impl ImageState {
                     self.path.curve_to(p1, end, end);
                 }
             }
-            b"h" => {
+            b"h" if self.has_current_point() => {
                 // ClosePath with no subpath panics by the same contract (#3581).
-                if self.has_current_point() {
-                    self.path.close_path();
-                }
+                self.path.close_path();
             }
             b"re" => {
                 if let Some([x, y, w, h]) = op.nums::<4>()

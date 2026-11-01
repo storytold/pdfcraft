@@ -124,6 +124,7 @@ pub struct FieldDraft {
     pub locked: bool,
     /// `/Q`: 0 left, 1 centre, 2 right.
     pub quadding: i64,
+    pub text_direction: pdfcraft_engine::TextDirection,
     /// `/DV` (text and choices), or the default state (buttons: empty = off).
     pub default: String,
     /// Check boxes and radio buttons: this widget's "on" state (export value).
@@ -200,6 +201,7 @@ impl FieldDraft {
             flags: f.flags,
             locked: f.locked(),
             quadding: f.quadding,
+            text_direction: f.text_direction,
             default: f.default.first().cloned().unwrap_or_default(),
             on_state: f.widgets.get(widget).and_then(|w| w.on_state.clone()).unwrap_or_default(),
             export_value: f.export_of(widget).unwrap_or_default().to_string(),
@@ -274,6 +276,7 @@ impl FieldDraft {
             calculate: (self.calculate != o.calculate).then(|| self.calculate.clone()),
             flags: OPTION_FLAGS.iter().filter(|b| (self.flags ^ o.flags) & **b != 0).map(|b| (*b, self.flags & b != 0)).collect(),
             quadding: (self.quadding != o.quadding).then_some(self.quadding),
+            text_direction: (self.text_direction != o.text_direction).then_some(self.text_direction),
             locked: ch(self.locked, o.locked),
             actions: (self.actions != o.actions).then(|| self.actions.clone()),
             default_value: (self.default != o.default).then(|| (!self.default.is_empty()).then(|| self.default.clone())),

@@ -2892,3 +2892,8 @@ certificate	Version	الإصدار
 	No image on clipboard to paste	لا توجد صورة في الحافظة للصقها
 	Pinned {tool} to Home	تم تثبيت {tool} في الرئيسية
 	Unpinned {tool} from Home	تم إلغاء تثبيت {tool} من الرئيسية
+
+	Text direction	اتجاه النص
+	Automatic text direction	اتجاه النص التلقائي
+	Left to right (LTR)	من اليسار إلى اليمين (LTR)
+	Right to left (RTL)	من اليمين إلى اليسار (RTL)

@@ -75,6 +75,15 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
   dictionary keys are preserved. It is mutually exclusive with the complete `look` replacement.
   Use the engine's `Edit::Batch` to change several fields atomically in one undo step.
 - `/RV` (rich text) is removed when a value is set so it can't contradict `/V`.
+- `Field::text_direction` reads the inherited PdfCraft `PCTextDirection` override.
+  `FieldProps::text_direction` sets Auto/LTR/RTL for text and choice fields,
+  independently of `/Q` alignment and logical `/V`. Auto writes an explicit local
+  override of any inherited direction. Simple appearance text uses Unicode bidi
+  ordering and logical `/ActualText` when reordered; passwords retain masking.
+  This does not supply complex Arabic shaping or new form fonts. Existing
+  unsupported-character warnings still apply. Explicit overrides on comb fields
+  are refused. Directional text is bounded to 262,144 UTF-8 bytes; a loaded
+  oversized appearance reports `Overflow::DirectionBudget` without changing `/V`.
 - New fields follow Acrobat: names Text1, Check Box1, Group1 (radio groups), Dropdown1, List Box1,
   Button1, Date1, Signature1; `/Helv` is added to `/DR`; appearances are drawn at once. Radio
   buttons joining a group become kid widgets with their own export state. Renaming changes only

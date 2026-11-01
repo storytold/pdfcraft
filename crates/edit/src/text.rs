@@ -86,6 +86,8 @@ pub struct TextLine {
     pub decodable: bool,
     /// Whether the font requires visual-order Indic text.
     pub visual_order: bool,
+    /// Explicit paragraph direction, independent of the baseline vector.
+    pub text_direction: pdfcraft_fonts::TextDirection,
     /// The Japanese or Hebrew fallback face the font subsets, when the line is in one (see [`same_font`]).
     face: Option<String>,
     /// Its box along and across its baseline, `[along0, across0, along1, across1]` (see
@@ -166,6 +168,7 @@ mod tests {
             reflow_text: text.into(),
             spans: Vec::new(),
             invisible: false,
+            text_direction: pdfcraft_fonts::TextDirection::Auto,
         }
     }
 

@@ -18,11 +18,18 @@ pub struct ShapedRun {
 
 /// Complex scripts/marks require shaping instead of independently encoding characters.
 pub fn required(text: &str) -> bool {
-    text.chars()
-        .any(|c| matches!(u32::from(c), 0x0300..=0x036f | 0x0590..=0x0fff | 0x1780..=0x17ff | 0x200c..=0x200f | 0x202a..=0x202e | 0x2066..=0x2069))
+    text.chars().any(|c| {
+        unicode_bidi::bidi_class(c) == unicode_bidi::BidiClass::NSM
+            || matches!(u32::from(c), 0x0300..=0x036f | 0x0590..=0x0fff | 0x1780..=0x17ff | 0x200c..=0x200f | 0x202a..=0x202e | 0x2066..=0x2069)
+    })
 }
 
 pub fn shape(bytes: &[u8], text: &str) -> Result<ShapedRun, String> {
+    shape_with_direction(bytes, text, crate::TextDirection::Auto)
+}
+
+/// Shape logical text with an explicit paragraph base, without inserting controls.
+pub fn shape_with_direction(bytes: &[u8], text: &str, direction: crate::TextDirection) -> Result<ShapedRun, String> {
     if text.len() > 262_144 || text.contains(['\n', '\r']) {
         return Err("shape one bounded text row at a time".into());
     }
@@ -36,7 +43,7 @@ pub fn shape(bytes: &[u8], text: &str) -> Result<ShapedRun, String> {
     let data = ShaperData::new(&face);
     let shaper = data.shaper(&face).build();
     let em = f64::from(shaper.units_per_em().max(1));
-    let base = if unicode_bidi::get_base_direction(text) == unicode_bidi::Direction::Rtl { Level::rtl() } else { Level::ltr() };
+    let base = direction.level(text);
     let bidi = ParagraphBidiInfo::new(text, Some(base));
     let (levels, runs) = bidi.visual_runs(0..text.len());
     let mut glyphs = Vec::new();
@@ -73,4 +80,21 @@ pub fn shape(bytes: &[u8], text: &str) -> Result<ShapedRun, String> {
         return Err("shaped row exceeds its geometry budget".into());
     }
     Ok(ShapedRun { glyphs, advance: x })
+}
+
+#[cfg(test)]
+mod direction_tests {
+    use super::*;
+    #[test]
+    fn forced_paragraph_base_reorders_the_same_source_glyphs() {
+        let bytes = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+        let logical = "123 ABC";
+        let auto = shape(bytes, logical).unwrap();
+        let rtl = shape_with_direction(bytes, logical, crate::TextDirection::RightToLeft).unwrap();
+        let text = |run: &ShapedRun| run.glyphs.iter().map(|glyph| glyph.text.as_str()).collect::<String>();
+        assert_eq!(text(&auto), "123 ABC");
+        assert_eq!(text(&rtl), "ABC 123");
+        assert!((auto.advance - rtl.advance).abs() < 1e-9);
+        assert_eq!(auto.glyphs.len(), rtl.glyphs.len());
+    }
 }

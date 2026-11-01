@@ -1360,6 +1360,37 @@ fn text_page(content: &str) -> Document {
     Document::open(Arc::new(out)).unwrap()
 }
 
+/// PDF property lists may be inline or named in /Resources /Properties. Nested
+/// marked spans inherit the paragraph base; an explicit Auto overrides it.
+#[test]
+fn explicit_direction_reads_named_properties_and_nested_overrides() {
+    use pdfcraft_fonts::TextDirection as D;
+    for indirect in [false, true] {
+        let mut doc = text_page(
+            "/P /Base BDC /Span BMC BT /F1 12 Tf 72 700 Td (123 ABC) Tj ET EMC EMC \
+             /P /Base BDC /Span << /PCTextDirection /Auto >> BDC BT /F1 12 Tf 72 650 Td (456 DEF) Tj ET EMC EMC \
+             BT /F1 12 Tf 72 600 Td (789 GHI) Tj ET",
+        );
+        let mut base = pdfcraft_cos::Dict::new();
+        base.set(b"PCTextDirection".to_vec(), Object::name("RTL"));
+        let base = if indirect { Object::Ref(doc.add(Object::Dict(base))) } else { Object::Dict(base) };
+        let mut properties = pdfcraft_cos::Dict::new();
+        properties.set(b"Base".to_vec(), base);
+        let page = pdfcraft_model::pages(&doc)[0].obj;
+        doc.update_dict(page, |dict| {
+            let mut resources = dict.get(b"Resources").and_then(Object::as_dict).unwrap().clone();
+            resources.set(b"Properties".to_vec(), Object::Dict(properties));
+            dict.set(b"Resources".to_vec(), Object::Dict(resources));
+        })
+        .unwrap();
+        for doc in [&doc, &reopen(&doc)] {
+            let lines = text::text_lines(doc, 0).unwrap();
+            assert_eq!(lines.iter().map(|l| l.text_direction).collect::<Vec<_>>(), [D::RightToLeft, D::Auto, D::Auto], "indirect={indirect}");
+            assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["123 ABC", "456 DEF", "789 GHI"]);
+        }
+    }
+}
+
 #[test]
 fn tracked_text_keeps_words_in_paragraphs_and_objects() {
     let expected = "TRACKED SAMPLE TEXT";
@@ -7332,6 +7363,35 @@ fn embedded_program_page(content: &str, base_font: &str) -> Document {
     reopen(&doc)
 }
 
+/// Source shaping measures in font units; paragraph alignment is in page units.
+/// A nonuniform text transform must scale shaped advance along the writing axis.
+#[test]
+fn explicit_direction_shaped_text_aligns_under_nonuniform_transform() {
+    use pdfcraft_fonts::TextDirection;
+    let typed = "123 Cafe\u{301}";
+    for across in [0.5, 2.0] {
+        let mut doc = embedded_program_page(&format!("BT /F1 12 Tf {across} 0 0 1 72 700 Tm (Stable text) Tj ET"), "Inter-Regular");
+        let original = text::text_blocks(&doc, 0).unwrap().remove(0);
+        let width = 220.0;
+        let resource = text::register_text_font(&mut doc, 0, include_bytes!("../../../assets/fonts/Inter-Regular.ttf")).unwrap();
+        let style = text::BlockStyle {
+            width: Some(width),
+            align: Some(added::Align::Right),
+            direction: Some(TextDirection::RightToLeft),
+            resource: Some(resource),
+            ..Default::default()
+        };
+        assert_eq!(text::rewrite_block(&mut doc, 0, 0, Some(typed), &style).unwrap().substituted, None);
+        let reopened = reopen(&doc);
+        let block = text::text_blocks(&reopened, 0).unwrap().remove(0);
+        assert_eq!(block.editor_text, typed);
+        assert_eq!(block.text_direction, TextDirection::RightToLeft);
+        let right = text::text_lines(&reopened, 0).unwrap()[0].rect[2];
+        let target = original.rect[0] + width;
+        assert!((right - target).abs() < 0.2, "across={across}: right={right}, target={target}");
+    }
+}
+
 /// The font programs and subtypes of the page's font resources.
 fn page_font_programs(doc: &Document) -> Vec<(Vec<u8>, Option<Vec<u8>>)> {
     let page = pdfcraft_model::pages(doc).remove(0);
@@ -10301,5 +10361,23 @@ fn review_inside_scope_group_move_matches_direct_transform_under_outer_scale() {
                 "group and direct transforms must agree, preserving other artwork"
             );
         }
+    }
+}
+
+#[test]
+fn explicit_direction_justification_is_refused_without_changing_content() {
+    for per_row in [false, true] {
+        let mut doc = text_page("BT /F1 12 Tf 72 700 Td (123 ABC) Tj ET");
+        let before = page_content_bytes(&doc, 0);
+        let mut style = text::BlockStyle { direction: Some(pdfcraft_fonts::TextDirection::RightToLeft), ..Default::default() };
+        if per_row {
+            style.aligns = vec![Some(added::Align::Justify)];
+        } else {
+            style.align = Some(added::Align::Justify);
+        }
+        let error = text::rewrite_block(&mut doc, 0, 0, None, &style).unwrap_err();
+        let expected = if per_row { "selected-row alignment" } else { "justification" };
+        assert!(error.to_string().contains(expected), "{error}");
+        assert_eq!(page_content_bytes(&doc, 0), before);
     }
 }

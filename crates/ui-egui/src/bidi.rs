@@ -93,6 +93,15 @@ pub fn has_rtl(text: &str) -> bool {
     text.chars().any(is_rtl_script)
 }
 
+/// Explicit document direction is independent of the interface language and alignment.
+pub(crate) fn text_direction(direction: pdfcraft_engine::TextDirection) -> egui::epaint::text::TextDirection {
+    match direction {
+        pdfcraft_engine::TextDirection::Auto => egui::epaint::text::TextDirection::Auto,
+        pdfcraft_engine::TextDirection::LeftToRight => egui::epaint::text::TextDirection::LeftToRight,
+        pdfcraft_engine::TextDirection::RightToLeft => egui::epaint::text::TextDirection::RightToLeft,
+    }
+}
+
 /// The paragraph direction for translated interface text: explicitly right to left for Arabic,
 /// Kurdish and Persian, and `TextDirection::Auto` otherwise. A label whose first strong character is
 /// Latin or a `{placeholder}` must not fall back to a left-to-right paragraph in an RTL locale.

@@ -109,6 +109,8 @@ pub struct FieldProps {
     pub flags: Vec<(u32, bool)>,
     /// Alignment (`/Q`): 0 left, 1 centre, 2 right.
     pub quadding: Option<i64>,
+    /// Explicit paragraph direction; Auto clears the override.
+    pub text_direction: Option<pdfcraft_fonts::TextDirection>,
     /// Default value (`/DV`): what Reset form restores.
     pub default_value: Option<Option<String>>,
     /// Lock or unlock the field (its widgets' Locked flag).
