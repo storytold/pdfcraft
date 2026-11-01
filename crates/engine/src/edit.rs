@@ -97,6 +97,12 @@ pub enum Edit {
     DeleteBookmark {
         path: Vec<usize>,
     },
+    /// Delete several bookmarks, each with the bookmarks under it, as one undoable step. All
+    /// paths are read against the outline as it is before the edit; one that names no bookmark
+    /// fails the edit without changing anything.
+    DeleteBookmarks {
+        paths: Vec<Vec<usize>>,
+    },
     /// Move a bookmark to child `index` of `to_parent` (indices after removing it).
     MoveBookmark {
         from: Vec<usize>,

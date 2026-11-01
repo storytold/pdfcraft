@@ -459,3 +459,167 @@ trailer << /Root 1 0 R >>
     h.run_steps(3);
     assert!(!shown(&h, "Closed child B") && !shown(&h, "Open child B"), "search leaves the open state alone");
 }
+
+/// Intro, Body[Detail], Notes, Index, each going to a page of the document.
+fn outline_of_five() -> Harness<'static, PdfCraftApp> {
+    let mut h = harness();
+    let add = |h: &mut Harness<'static, PdfCraftApp>, parent: Vec<usize>, index: usize, title: &str, page: usize| {
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::AddBookmark { parent, index, title: title.into(), page, left: None, top: None });
+    };
+    add(&mut h, vec![], 0, "Intro", 0);
+    add(&mut h, vec![], 1, "Body", 1);
+    add(&mut h, vec![1], 0, "Detail", 1);
+    add(&mut h, vec![], 2, "Notes", 2);
+    add(&mut h, vec![], 3, "Index", 0);
+    h.run_steps(4);
+    h
+}
+
+fn titles(h: &Harness<'static, PdfCraftApp>) -> Vec<String> {
+    outline(h).into_iter().map(|(title, _, _)| title).collect()
+}
+
+fn undo_label(h: &Harness<'static, PdfCraftApp>) -> Option<String> {
+    h.state().session.get(h.state().views[0].id).unwrap().can_undo().map(str::to_owned)
+}
+
+#[test]
+fn ctrl_click_picks_several_bookmarks_and_delete_removes_them_in_one_undo_step() {
+    let mut h = outline_of_five();
+    assert_eq!(titles(&h), ["Intro", "Body", "Detail", "Notes", "Index"]);
+    let page_before = h.state().views[0].current;
+    h.get_by_label("Intro").click_modifiers(Modifiers::COMMAND);
+    h.get_by_label("Notes").click_modifiers(Modifiers::COMMAND);
+    h.get_by_label("Index").click_modifiers(Modifiers::COMMAND);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].current, page_before, "picking does not move the document");
+    // Ctrl-click again takes one back out of the pick.
+    h.get_by_label("Notes").click_modifiers(Modifiers::COMMAND);
+    h.run_steps(2);
+
+    h.key_press(Key::Delete);
+    h.run_steps(3);
+    assert_eq!(titles(&h), ["Body", "Detail", "Notes"], "Notes was not picked and stays");
+    assert_eq!(undo_label(&h).as_deref(), Some("Delete bookmarks"));
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(3);
+    assert_eq!(titles(&h), ["Intro", "Body", "Detail", "Notes", "Index"], "one undo brings all of them back");
+    assert_eq!(outline(&h)[0].1, Some(0), "with their destinations");
+    assert_eq!(outline(&h)[4].1, Some(0));
+}
+
+#[test]
+fn shift_click_picks_the_rows_between_and_the_menu_deletes_them() {
+    let mut h = outline_of_five();
+    h.get_by_label("Intro").click();
+    h.run_steps(2);
+    h.get_by_label("Detail").click_modifiers(Modifiers::SHIFT);
+    h.run_steps(2);
+    // Intro, Body and Detail are picked; right-click inside the pick keeps it and offers all three.
+    h.get_by_label("Body").click_secondary();
+    h.run_steps(2);
+    for item in ["Rename", "Style", "Colour", "Move up", "Move down", "Indent", "Outdent"] {
+        assert!(h.query_by(|n| n.label().as_deref() == Some(item) && n.is_disabled()).is_some(), "{item} is off for several bookmarks");
+    }
+    h.get_by_label("Delete 3 bookmarks").click();
+    h.run_steps(3);
+    assert_eq!(titles(&h), ["Notes", "Index"]);
+}
+
+#[test]
+fn a_picked_parent_takes_its_children_and_a_plain_click_still_goes_to_the_page() {
+    let mut h = outline_of_five();
+    h.get_by_label("Notes").click();
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 2, "a plain click goes to the bookmark's page");
+    h.get_by_label("Body").click_modifiers(Modifiers::COMMAND);
+    h.get_by_label("Detail").click_modifiers(Modifiers::COMMAND);
+    h.get_by_label("Notes").click_modifiers(Modifiers::COMMAND); // Notes leaves the pick
+    h.run_steps(2);
+    h.key_press(Key::Delete);
+    h.run_steps(3);
+    // The plain click picked Notes; the Ctrl-clicks added Body and Detail and took Notes out again.
+    assert_eq!(titles(&h), ["Intro", "Notes", "Index"], "Body went with its picked child");
+}
+
+#[test]
+fn a_pick_made_before_the_outline_changed_is_dropped_not_applied_to_other_bookmarks() {
+    let mut h = outline_of_five();
+    h.get_by_label("Body").click_modifiers(Modifiers::COMMAND); // [1]
+    h.get_by_label("Notes").click_modifiers(Modifiers::COMMAND); // [2]
+    h.run_steps(2);
+    // The outline changes behind the panel's back: [1] and [2] still exist, but are now Notes and
+    // Index, which were never picked.
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::DeleteBookmark { path: vec![0] });
+    h.run_steps(3);
+    assert_eq!(titles(&h), ["Body", "Detail", "Notes", "Index"]);
+    h.key_press(Key::Delete);
+    h.run_steps(3);
+    assert_eq!(titles(&h), ["Body", "Detail", "Notes", "Index"], "the stale pick deleted nothing");
+}
+
+#[test]
+fn escape_drops_the_pick_so_delete_has_nothing_to_remove() {
+    let mut h = outline_of_five();
+    h.get_by_label("Intro").click_modifiers(Modifiers::COMMAND);
+    h.get_by_label("Notes").click_modifiers(Modifiers::COMMAND);
+    h.run_steps(2);
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    h.key_press(Key::Delete);
+    h.run_steps(3);
+    assert_eq!(titles(&h).len(), 5, "nothing is picked after Escape");
+}
+
+#[test]
+fn delete_and_escape_belong_to_a_rename_while_bookmarks_are_picked() {
+    let mut h = outline_of_five();
+    h.get_by_label("Intro").click_modifiers(Modifiers::COMMAND);
+    h.get_by_label("Notes").click_modifiers(Modifiers::COMMAND);
+    h.run_steps(2);
+    h.get_by_label("Body").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Rename").click();
+    h.run_steps(3);
+    field(&h, "Body").type_text("zzz");
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert_eq!(titles(&h), ["Intro", "Body", "Detail", "Notes", "Index"], "Escape cancelled the rename and nothing was deleted");
+}
+
+/// Two top-level bookmarks that look exactly alike: the same title, the same page.
+fn two_alike() -> Harness<'static, PdfCraftApp> {
+    let mut h = harness();
+    for index in 0..2 {
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::AddBookmark { parent: vec![], index, title: "Same".into(), page: 0, left: None, top: None });
+    }
+    h.run_steps(4);
+    assert_eq!(titles(&h), ["Same", "Same"]);
+    h
+}
+
+#[test]
+fn a_pick_survives_neither_a_reorder_nor_an_undo_that_leave_the_outline_looking_the_same() {
+    // Swapping two look-alike bookmarks changes what every path means and nothing on screen.
+    let mut h = two_alike();
+    h.get_all_by_label("Same").next().unwrap().click_modifiers(Modifiers::COMMAND); // the first one
+    h.run_steps(2);
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::MoveBookmark { from: vec![0], to_parent: vec![], index: 1 });
+    h.run_steps(3);
+    h.key_press(Key::Delete);
+    h.run_steps(3);
+    assert_eq!(titles(&h), ["Same", "Same"], "the old pick deleted a bookmark that was never picked");
+
+    // An edit and its undo leave the outline as it was, but it is no longer the pick's outline.
+    let mut h = two_alike();
+    h.get_all_by_label("Same").next().unwrap().click_modifiers(Modifiers::COMMAND);
+    h.run_steps(2);
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::RenameBookmark { path: vec![1], title: "Other".into() });
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(3);
+    assert_eq!(titles(&h), ["Same", "Same"]);
+    h.key_press(Key::Delete);
+    h.run_steps(3);
+    assert_eq!(titles(&h), ["Same", "Same"], "a pick made before an edit and its undo is dropped");
+}
