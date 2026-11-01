@@ -99,19 +99,52 @@ impl PdfCraftApp {
     ///
     /// Only one password prompt can wait at a time: the first encrypted file asks for its
     /// password and later ones stay closed (they are in the recent-files list).
+    ///
+    /// Pinned tabs (#2926) open first, whatever the preference says: they are the files meant
+    /// to be open at every start. One that is missing now (a drive not connected) stays pinned.
     pub fn reopen_last_files(&mut self, skip: &[String]) {
         let last = std::mem::take(&mut self.last_session);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // A file with a recovery snapshot is the Recovery dialog's to offer, as below: opening it
+            // here as well would leave two tabs on one file once it is recovered.
+            let skip: Vec<String> =
+                skip.iter().map(|p| absolute(p)).chain(self.recoverable.iter().filter_map(|m| m.path.as_deref().map(absolute))).collect();
+            let mut prompt = self.password_prompt.take();
+            for path in self.pinned_tabs.clone() {
+                let open =
+                    self.views.iter().any(|v| self.session.get(v.id).and_then(|d| d.path.as_deref()).map(absolute).as_deref() == Some(path.as_str()));
+                if skip.contains(&path) || open || !std::path::Path::new(&path).is_file() {
+                    continue;
+                }
+                self.open_path(&path);
+                if let Some(p) = self.password_prompt.take() {
+                    prompt.get_or_insert(p);
+                }
+            }
+            self.password_prompt = prompt;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if self.reopen_last_session {
             let skip: Vec<String> =
                 skip.iter().map(|p| absolute(p)).chain(self.recoverable.iter().filter_map(|m| m.path.as_deref().map(absolute))).collect();
-            let mut active = None;
             let mut prompt = self.password_prompt.take();
             for f in &last.files {
                 let open = |app: &Self| {
                     app.views.iter().any(|v| app.session.get(v.id).and_then(|d| d.path.as_deref()).map(absolute).as_deref() == Some(f.path.as_str()))
                 };
-                if skip.contains(&f.path) || !std::path::Path::new(&f.path).is_file() || open(self) {
+                if skip.contains(&f.path) || !std::path::Path::new(&f.path).is_file() {
+                    continue;
+                }
+                // A pinned file the loop above opened: back to the page the session left it on.
+                if open(self) {
+                    if let Some(view) = self
+                        .views
+                        .iter_mut()
+                        .find(|v| self.session.get(v.id).and_then(|d| d.path.as_deref()).map(absolute).as_deref() == Some(f.path.as_str()))
+                    {
+                        view.go_to_page(f.page);
+                    }
                     continue;
                 }
                 let before = self.views.len();
@@ -123,16 +156,21 @@ impl PdfCraftApp {
                     && let Some(view) = self.views.last_mut()
                 {
                     view.go_to_page(f.page);
-                    if last.active.as_ref() == Some(&f.path) {
-                        active = Some(self.views.len() - 1);
-                    }
                 }
             }
             self.password_prompt = prompt;
+            // The tab that was active, found by its file once every tab is open: a pinned file
+            // opened above, before this loop, is active again too.
+            let active = last.active.as_ref().and_then(|a| {
+                self.views.iter().position(|v| self.session.get(v.id).and_then(|d| d.path.as_deref()).map(absolute).as_deref() == Some(a.as_str()))
+            });
             if active.is_some() {
                 self.active = active;
             }
         }
+        // Pinned tabs lead the strip, whichever loop opened them.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.pinned_tabs_first();
         #[cfg(target_arch = "wasm32")]
         let _ = (last, skip);
     }

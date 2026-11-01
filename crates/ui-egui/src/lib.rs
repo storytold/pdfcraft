@@ -346,6 +346,9 @@ pub struct PdfCraftApp {
     /// Restore last view settings when reopening documents (Preferences ▸ Documents and view;
     /// #1767): the page, zoom and page display a file was last shown with. On by default.
     pub restore_last_view: bool,
+    /// Pinned tabs (#2926): the files (absolute paths) whose tabs are pinned. They open at
+    /// every start, first in the tab strip, until unpinned.
+    pub pinned_tabs: Vec<String>,
     /// How files were last shown, most recent first (see `last_view`).
     pub last_views: Vec<last_view::LastView>,
     /// The files open when PdfCraft last closed, read from the settings for

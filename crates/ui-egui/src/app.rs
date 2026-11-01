@@ -120,6 +120,7 @@ impl PdfCraftApp {
             recent: Vec::new(),
             reopen_last_session: false,
             restore_last_view: true,
+            pinned_tabs: Vec::new(),
             last_views: Vec::new(),
             last_session: Default::default(),
             quit_session: None,

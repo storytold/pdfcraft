@@ -87,6 +87,7 @@ impl PdfCraftApp {
             "reload_changed_files": self.reload_changed_files,
             "system_title_bar": self.system_title_bar,
             "pinned_folders": self.pinned.folders,
+            "pinned_tabs": self.pinned_tabs,
             "theme": self.theme_preference,
             "scroll_speed": self.scroll_speed,
             "animation_effects": self.animation_effects,
@@ -207,6 +208,7 @@ impl PdfCraftApp {
             self.show_secured_notice = on;
         }
         self.pinned.restore(&v["pinned_folders"]);
+        self.pinned_tabs = tab_context::pinned_from_json(&v["pinned_tabs"]);
         if let Ok(preference) = serde_json::from_value::<ThemePreference>(v["theme"].clone()) {
             self.set_theme_preference(preference);
         }

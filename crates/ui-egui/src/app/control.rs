@@ -316,6 +316,7 @@ impl PdfCraftApp {
                 };
             }
             ("author", _) => self.comment_prefs.author = value.to_string(),
+            ("tab-pinned", _) => self.set_tab_pinned(value)?,
             ("comment-tool-pinned", _) => {
                 self.comment_prefs.pinned = match value {
                     "true" => true,

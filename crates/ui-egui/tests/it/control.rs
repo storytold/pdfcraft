@@ -1801,6 +1801,45 @@ fn read_mode_retains_existing_rail_click_to_close_policy() {
     assert_eq!(h.state().mode, pdfcraft_ui_egui::Mode::Read);
 }
 
+/// #2926 (CodeRabbit on #4575): the control channel pins and unpins the active tab as its menu
+/// does, and `ui.state` lists the pinned files. A tab without a file can't be pinned.
+#[test]
+fn control_pins_and_unpins_the_active_tab() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-ui-pin-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("pin.pdf").to_string_lossy().into_owned();
+    std::fs::write(&path, fixture(2)).unwrap();
+    let slot: Arc<Mutex<Option<ControlClient>>> = Arc::default();
+    let s = slot.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_eframe(move |cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.run_inline = true;
+        // A tab with no file first: nothing to pin.
+        app.open_bytes("unsaved.pdf", None, fixture(1)).unwrap();
+        *s.lock().unwrap() = Some(app.attach_control(&cc.egui_ctx));
+        app
+    });
+    h.run_steps(4);
+    let c = slot.lock().unwrap().take().unwrap();
+    let refused = call(&mut h, &c, "ui.set", json!({ "key": "tab-pinned", "value": "true" })).unwrap_err();
+    assert!(refused.contains("saved to a file"), "{refused}");
+    ok(&mut h, &c, "ui.open", json!({ "path": path }));
+    h.run_steps(2);
+    let bad = call(&mut h, &c, "ui.set", json!({ "key": "tab-pinned", "value": "yes" })).unwrap_err();
+    assert!(bad.contains("true or false"), "{bad}");
+    ok(&mut h, &c, "ui.set", json!({ "key": "tab-pinned", "value": "true" }));
+    h.run_steps(3);
+    let s = ok(&mut h, &c, "ui.state", json!({}));
+    let pinned = s["pinned_tabs"].as_array().cloned().unwrap_or_default();
+    assert_eq!(pinned.len(), 1, "{s}");
+    assert!(pinned[0].as_str().is_some_and(|p| p.ends_with("pin.pdf")), "{s}");
+    assert_eq!(s["documents"][0]["name"], "pin.pdf", "the pinned tab leads the strip: {s}");
+    ok(&mut h, &c, "ui.set", json!({ "key": "tab-pinned", "value": "false" }));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["pinned_tabs"], json!([]));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn control_open_of_an_already_open_file_replies_ok_and_focuses_its_tab() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-ui-open-{}", std::process::id()));

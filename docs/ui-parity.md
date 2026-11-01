@@ -1,6 +1,6 @@
 # UI and interaction parity
 
-> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-21 · **Change:** minor (Pages inspector thumbnail size slider and buttons #3808; full screen presents one page at a time #1459; the selected field nudges with the arrow keys in Prepare a form #2608) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-25 · **Change:** minor (pinned tabs, #2926; Pages inspector thumbnail size slider and buttons #3808; full screen presents one page at a time #1459; the selected field nudges with the arrow keys in Prepare a form #2608) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How PdfCraft's tools, panels, shortcuts and feel compare with Acrobat Pro's current interface (the
 2023+ "new Acrobat": All tools pane on the left, quick-action toolbar, Home view). Behaviour is
@@ -29,6 +29,7 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | Quick-action toolbar, customisable | yes | fixed | partial (`view.customize-quick-tools` planned) |
 | Command search | "Search tools" | command palette (⌘K), matches translated and English labels | shipped |
 | Document tabs | yes | yes, with unsaved marker | shipped |
+| Pinned tabs that open at every start | not checked | a tab's menu ▸ Pin Tab: a pin icon, first in the strip, reopened at each start (#2926) | shipped |
 | Multiple windows, drag a tab out | yes | no | planned |
 | Split window, spreadsheet split | yes | no | planned |
 | Read mode, full screen | yes | yes; full screen is one fitted page at a time on black, click/keys turn pages (#1459) | shipped; auto-advance, loop and transitions planned |
@@ -82,6 +83,7 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | minor | Pinned tabs: a tab's menu pins it; pinned tabs show a pin, lead the strip and open at every start (#2926); score unchanged (estimated) |
 | 2026-10-21 | minor | Pages inspector thumbnail sizing (#3808), separate from page and Organize zoom; view setting retained on reload and exposed through UI control. Not persisted between sessions. |
 | 2026-10-15 | minor | A selected field nudges with the arrow keys in Prepare a form: a point, Shift ten points, one undo step per press (#2608) |
 | 2026-10-14 | minor | Full screen shows one fitted page (or spread) at a time on black with click and key paging, as Acrobat's Full Screen Mode (#379, #1459, #1353) |
