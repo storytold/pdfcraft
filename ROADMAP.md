@@ -213,6 +213,10 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-01 (M2, PR #5603 refresh):** Integrated upstream `47f42ba0`, preserving both roadmap histories. Restoring upstream ordering fails the Arabic regressions; corrected renderer sources pass 425 unit and 63 integration tests, with one existing corpus ignore. Semantics only: no Arabic-outline or native clipboard claim, and estimates unchanged.
+
+- **2026-10-31 (M2, RTL mapped-mark copy):** Separately mapped nonspacing marks stay with their visual base during RTL copy/extraction, selection and search. Synthetic semantic PDF tests preserve glyph geometry and cover save/reopen. See `docs/rtl-combining-mark-copy.md` for the focused scope and validation; no readiness/estimate change.
+
 - **2026-10-18 (M3, #1354, local candidate):** Integrated --two-paged with current main, retaining upstream modal/picker ownership and single-tab reuse. Native launch/opening/password regressions, negative checks against the old wrapper, visual inspection, formatting, strict scoped Clippy, layers, assets, parity and scoped WASM compilation pass. Three existing socket tests are unavailable in this workspace; one existing network test remains ignored. No push or GitHub merge; estimates unchanged.
 - **2026-10-31 (M2, PR #4172 review):** Added same-machine pixel oracles for GBK Song, Hei, Kai and FangSong, including all four subset-prefixed Founder aliases. Reference PDFs use explicit Unicode mappings and independently selected installed faces; font data and rasters remain in memory. All eight cases ran; wrong-glyph and wrong-family production mutations each failed the new assertion and were restored. Validation: 422 renderer unit tests, renderer all-target Clippy with -D warnings, formatting, layers/assets/parity and renderer WASM checks passed; existing optional-patch/WASM warnings and parity notes remain. Estimates unchanged.
 
