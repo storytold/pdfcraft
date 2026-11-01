@@ -946,8 +946,11 @@ pub(crate) fn rewrite_block_from(
         Some(m) => m.encode(" ").is_some_and(|b| m.codes(&b).iter().all(|(c, len)| m.is_space(*c, *len))),
         None => type3.is_none(),
     };
+    // block_ops clears inherited Tw; row measurements must use the same base spacing.
+    // Wrapping above still uses the source advance, preserving its existing break decisions.
+    let output_advance = Advance { word_spacing: 0.0, ..advance };
     let writer = LineWriter {
-        advance: &advance,
+        advance: &output_advance,
         alignment: Alignment { width, k, anchored_right, right_edge, rtl },
         encode: &font.encode,
         source: source_metrics,

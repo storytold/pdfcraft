@@ -10354,3 +10354,25 @@ fn an_indent_drawn_with_word_spacing_keeps_it_when_edited_again() {
     let after = first_ink(&doc);
     assert!((after - before).abs() < 0.5, "the first word moved: {before} -> {after}: {content}");
 }
+
+/// #4487: the writer replaces the source Tw, so reused-font measurements must match that output.
+/// Both the natural-width indent and the last word's requested margin survive save/reopen.
+#[test]
+fn a_justified_indent_from_a_spaced_source_reaches_the_margin() {
+    let style = text::BlockStyle { align: Some(added::Align::Justify), width: Some(300.0), ..Default::default() };
+    // A long final word forces a soft wrap without changing the source font or taking the
+    // mixed-style path (explicit mixed-style justification remains unsupported).
+    let typed = format!("    aaa bbb ccc {}", "W".repeat(24));
+    for source_tw in [0.0, 4.0, -2.0] {
+        let mut doc = text_page(&format!("BT /F1 12 Tf {source_tw} Tw 72 700 Td (Old words) Tj ET"));
+        assert_eq!(text::rewrite_block(&mut doc, 0, 0, Some(&typed), &style).unwrap().substituted, None, "the source font is reused");
+        let doc = reopen(&doc);
+        let lines = text::text_lines(&doc, 0).unwrap();
+        let first = lines.iter().find(|line| line.text.contains("aaa")).unwrap();
+        assert_eq!(first.text, "    aaa bbb ccc", "source Tw {source_tw}");
+        let left = first.ink.iter().map(|ink| ink[0]).fold(f64::INFINITY, f64::min);
+        let right = first.ink.iter().map(|ink| ink[2]).fold(f64::NEG_INFINITY, f64::max);
+        assert!((left - (72.0 + 4.0 * 0.278 * 12.0)).abs() < 0.5, "source Tw {source_tw}: natural indent, first ink {left}");
+        assert!((right - 372.0).abs() < 0.5, "source Tw {source_tw}: requested margin 372, last ink {right}");
+    }
+}
