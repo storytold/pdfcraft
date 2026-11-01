@@ -23,6 +23,7 @@ mod bars;
 mod cache;
 pub(super) mod crop;
 mod find;
+mod find_comments;
 pub(super) mod fling;
 pub(super) mod image_pick;
 mod navigation;
@@ -54,8 +55,8 @@ use cache::{
     rgba_bytes,
 };
 use cache::{OLD_TILES, PageTex, STALE_TAG, TEXT_TAG, TILE_BYTES, scale_tag, tag_scale, texture_bytes, tile_side};
-pub use find::Find;
 use find::find_bar;
+pub use find::{Find, FindHit};
 pub use navigation::shortcuts;
 pub(crate) use organize::drop_gap;
 #[cfg(test)]
@@ -522,6 +523,9 @@ pub struct DocView {
     pub(crate) texts: HashMap<usize, Arc<PageText>>,
     pub(crate) text_failed: HashSet<usize>,
     pub find: Option<Find>,
+    /// Comments the Find bar searches when Include comments is on. Rebuilt from the document
+    /// while a search is open.
+    find_comments: Vec<find::FindComment>,
     selection: Option<Selection>,
     /// Select All while scrolling continuously (#2639): the text of every page of the document,
     /// highlighted on each page as its text arrives and copied whole ([`DocView::whole_text`]).
@@ -920,6 +924,7 @@ impl DocView {
             texts: HashMap::new(),
             text_failed: HashSet::new(),
             find: None,
+            find_comments: Vec::new(),
             selection: None,
             all_text: false,
             actions_dismissed: None,
@@ -1875,7 +1880,8 @@ fn paint_text_marks(ui: &egui::Ui, view: &DocView, text: &PageText, page: usize,
     let painter = ui.painter();
     let to_screen = |g: [f32; 4]| xf.view_rect(g);
     if let Some(find) = &view.find {
-        for (index, (match_page, range)) in find.matches.iter().enumerate() {
+        for (index, hit) in find.matches.iter().enumerate() {
+            let FindHit::Text { page: match_page, range } = hit else { continue };
             if *match_page != page {
                 continue;
             }
@@ -3182,7 +3188,7 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
             });
         });
     }
-    find_bar(view, info.pages.len(), avail, ui, t);
+    find_bar(view, info.pages.len(), &info.annotations, avail, ui, t);
     page_size_hint(view, info, units, avail, unobstructed, ui, t);
     if tool == QuickTool::EnhanceCamera {
         crate::camera_ui::bar(ui.ctx(), view, avail, t, can_modify);
@@ -3447,6 +3453,29 @@ fn refine_goto_point(mut scroll: egui::ScrollArea, view: &mut DocView, geometry:
     scroll
 }
 
+/// Load the open document's comments into the active view before a find command searches.
+pub(crate) fn sync_active_find_comments(app: &mut PdfCraftApp) {
+    let Some(index) = app.active else { return };
+    let Some(id) = app.views.get(index).map(|view| view.id) else { return };
+    let next = {
+        let Some(doc) = app.session.get(id) else { return };
+        find_comments::comment_find_index(&doc.info)
+    };
+    if let Some(view) = app.views.get_mut(index) {
+        view.set_find_comments(next);
+    }
+}
+
+/// Search again, reading comment text from the open document rather than a stored copy.
+pub(crate) fn rerun_active_find(app: &mut PdfCraftApp) {
+    let Some(index) = app.active else { return };
+    let Some(id) = app.views.get(index).map(|view| view.id) else { return };
+    let PdfCraftApp { session, views, .. } = app;
+    let Some(view) = views.get_mut(index) else { return };
+    let annotations = session.get(id).map(|doc| doc.info.annotations.as_slice()).unwrap_or(&[]);
+    view.rerun_find_in(annotations);
+}
+
 /// Draws the document tab at `index`: its notice bars, then its pages (or the Organize grid) in a
 /// scroll area with this frame's zoom, scrolling, tool input, overlays and render requests.
 pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
@@ -3514,6 +3543,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let unobstructed = !modal && !app.palette_open;
     let organize_zoom = app.organize_zoom;
     let view = &mut app.views[index];
+    if view.find.is_some() {
+        view.sync_find_comments(info);
+    }
     if view.organize {
         // One remembered grid size for every document, kept in the settings.
         view.set_grid_zoom(organize_zoom);

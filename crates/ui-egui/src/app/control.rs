@@ -14,6 +14,9 @@ impl PdfCraftApp {
     ///
     /// This is the seed of the UI control channel (M3.9): the same verbs become `ui.set` calls.
     pub fn set_option(&mut self, key: &str, value: &str) -> Result<(), String> {
+        if key == "find" || key == "find-comments" {
+            crate::canvas::sync_active_find_comments(self);
+        }
         let view = self.active.and_then(|i| self.views.get_mut(i));
         match (key, view) {
             ("language", _) => {
@@ -267,7 +270,24 @@ impl PdfCraftApp {
                 if let Some(f) = v.find.as_mut() {
                     f.query = value.to_string();
                 }
-                v.rerun_find();
+            }
+            // `--find-comments on`: the Find bar's Include comments option.
+            ("find-comments", Some(v)) => {
+                let on = match value {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err("find-comments must be on or off".into()),
+                };
+                if v.find.is_none() && !on {
+                    return Ok(());
+                }
+                if v.find.is_none() {
+                    v.open_find();
+                }
+                if let Some(f) = v.find.as_mut() {
+                    f.include_comments = on;
+                    f.case_query.clear();
+                }
             }
             ("fields", Some(v)) => v.highlight_fields = value != "off",
             ("select", Some(v)) => {
@@ -393,6 +413,7 @@ impl PdfCraftApp {
                     "thumbnail-zoom",
                     "fields",
                     "find",
+                    "find-comments",
                     "rotate",
                     "select",
                     "notice",
@@ -403,6 +424,9 @@ impl PdfCraftApp {
                 return Err(format!("`{k}` needs an open document"));
             }
             (other, _) => return Err(format!("unknown option {other}")),
+        }
+        if key == "find" || key == "find-comments" {
+            crate::canvas::rerun_active_find(self);
         }
         Ok(())
     }
