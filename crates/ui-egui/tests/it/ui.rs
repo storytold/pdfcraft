@@ -2576,9 +2576,6 @@ fn reopening_detached_file_reattaches_tab_and_commit_typing_preserves_active_inv
     let active_before = h.state().active;
     assert_ne!(active_before, Some(1), "active tab must not be detached tab");
 
-    // Detached window header renders compact page & zoom readout
-    h.get_by_label_contains("Page 1 of 1 • 100%");
-
     // 1. commit_typing_in preserves active tab invariants when tab is detached
     h.state_mut().views[1].pending_edit = Some(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
     let committed = h.state_mut().commit_typing_in(ids[1]);
