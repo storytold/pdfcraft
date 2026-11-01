@@ -32,6 +32,7 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
     }
     if let Some((page, index)) = cv.selected
         && page == cx.page
+        && cv.inline.as_ref().is_none_or(|it| (it.page, it.index) != (page, Some(index)))
         && let Some(a) = cx.get(index)
     {
         if is_markup(&a.subtype) && !a.quads.is_empty() {

@@ -356,6 +356,27 @@ fn restyle_and_resize_redraw_the_appearance() {
     assert!(matches!(set_rect(&mut doc, 0, l, [0.0, 0.0, 5.0, 5.0], &meta("")), Err(AnnotError::Invalid(_))));
 }
 
+/// A text box that fits its text keeps fitting it with a thicker border: it grows by the change on
+/// every side, so its text keeps its place and its lines (it wrapped in the box it had). One sized
+/// by hand keeps its box.
+#[test]
+fn a_text_box_that_fits_its_text_grows_with_its_border() {
+    let mut doc = fixture();
+    let (w, h) = (appearance::text_box_width("Testtext", 12.0, 2.0), appearance::text_box_height(1, 12.0, 2.0));
+    let mut b = new(0, Shape::TextBox { rect: [100.0, 700.0 - h, 100.0 + w, 700.0], font_size: 12.0 });
+    (b.contents, b.style.width) = ("Testtext".into(), 0.0);
+    let t = add_annotation(&mut doc, &b, &meta("t")).unwrap();
+    set_style(&mut doc, 0, t, StyleChange::new(None, None, Some(1.0), None), &meta("")).unwrap();
+    let r = rect(&list(&doc, 0)[t]);
+    let want = [99.0, 699.0 - h, 101.0 + w, 701.0];
+    assert!(r.iter().zip(want).all(|(a, b)| (a - b).abs() < 0.01), "1 pt on every side: {r:?}");
+    assert_eq!(ap_content(&doc, &list(&doc, 0)[t]).matches(" Tj").count(), 1, "Testtext on one line");
+    b.shape = Shape::TextBox { rect: [100.0, 500.0, 200.0, 540.0], font_size: 12.0 };
+    let o = add_annotation(&mut doc, &b, &meta("o")).unwrap();
+    set_style(&mut doc, 0, o, StyleChange::new(None, None, Some(1.0), None), &meta("")).unwrap();
+    assert_eq!(rect(&list(&doc, 0)[o]), vec![100.0, 500.0, 200.0, 540.0]);
+}
+
 #[test]
 fn shapes_can_be_filled_and_unfilled() {
     let mut doc = fixture();
@@ -423,12 +444,12 @@ fn text_box_text_and_colour_changes_are_drawn() {
     assert!(rc.starts_with("<?xml") && rc.contains("<p dir=\"ltr\">Caf\u{e9} (draft) \u{2014} 100%</p>") && rc.contains("color:#FF0000"), "{rc}");
 }
 
-/// The rectangle a text box needs for `text` (the appearance's padding plus the 2 pt slack):
-/// the wrap width and top edge stay, the height fits the wrapped lines.
+/// The rectangle a text box needs for `text` (inside the appearance's padding): the wrap width
+/// and top edge stay, the height fits the wrapped lines.
 fn expected_box(top: f64, w: f64, text: &str, size: f64, border: f64) -> [f64; 4] {
     let pad = 2.0 + border;
-    let lines = appearance::wrap(text, size, w - 2.0 * pad).len().max(1) as f64;
-    [0.0, top - lines * size * 1.2 - 2.0 * pad - 2.0, w, 0.0]
+    let lines = appearance::wrap(text, size, w - 2.0 * pad).len();
+    [0.0, top - appearance::text_box_height(lines, size, pad), w, 0.0]
 }
 
 #[test]
@@ -2193,4 +2214,166 @@ fn degenerate_and_absurd_leader_and_caption_values_do_not_panic() {
     ));
     assert!(long.contains(&format!("({}) Tj", "w".repeat(256))), "cut to 256");
     assert!(!long.contains(&"w".repeat(257)));
+}
+
+/// A text box sized to its text has its padding on every side: 2 pt inside the border from the
+/// first line's accented capitals, from the last line's descenders, and from either end of the
+/// longest line.
+#[test]
+fn a_text_box_sized_to_its_text_is_padded_alike_on_every_side() {
+    let mut doc = fixture();
+    let (size, pad) = (12.0, 2.0 + 2.0); // the style's 2 pt border
+    for text in ["Ägypten gibt", "Abnahme ok\nRestpunkte: gering"] {
+        let shape = Shape::TextBox { rect: [100.0, 680.0, 140.0, 700.0], font_size: size };
+        let t = add_annotation(&mut doc, &NewAnnotation { contents: "x".into(), ..new(0, shape) }, &meta("t")).unwrap();
+        set_contents(&mut doc, 0, t, text, &meta("")).unwrap();
+        let d = &list(&doc, 0)[t];
+        let r = rect(d);
+        let ap = ap_content(&doc, d);
+        let at: Vec<[f64; 2]> = ap
+            .lines()
+            .filter_map(|l| l.strip_prefix("1 0 0 1 ")?.split(" Tm").next().map(str::to_owned))
+            .map(|xy| {
+                let v: Vec<f64> = xy.split(' ').map(|n| n.parse().unwrap()).collect();
+                [v[0], v[1]]
+            })
+            .collect();
+        let (first, last) = (at[0], at[at.len() - 1]);
+        let longest = text.lines().map(|l| appearance::text_width(l, size)).fold(0.0, f64::max);
+        let close = |a: f64, b: f64| (a - b).abs() < 0.3;
+        assert!(close(first[0] - r[0], pad), "left: {r:?} {at:?}");
+        assert!(close(r[2] - first[0] - longest, pad + 0.5), "right: {r:?} {at:?}");
+        assert!(close(r[3] - first[1] - 0.9 * size, pad), "top: {r:?} {at:?}");
+        assert!(close(last[1] - 0.21 * size - r[1], pad), "bottom: {r:?} {at:?}");
+    }
+}
+
+/// A text box that fits its text keeps fitting it: shorter text narrows it and longer text widens
+/// it (up to 300 pt, past which lines wrap), and a smaller font size shrinks it in both
+/// directions. A box sized by hand keeps its width (and, for a smaller font, its height).
+/// Text added to a turned page reads upright as the page is displayed (`/PCTextRotate`): on a
+/// quarter turn its lines run along `/Rect`'s height. New text refits the box as it reads, from
+/// the corner where its first line starts. It used to keep `/Rect`'s top edge, which on a page
+/// turned 90° is the box's right side as displayed, so longer text grew back over its start.
+#[test]
+fn a_text_box_on_a_turned_page_refits_as_it_reads() {
+    let pad = 2.0 + 2.0; // the style's 2 pt border
+    let (first, longer) = ("Abnahme ok", "Abnahme ok, Restpunkte siehe Liste");
+    let (w0, w1) = (appearance::text_box_width(first, 12.0, pad), appearance::text_box_width(longer, 12.0, pad));
+    let h = appearance::text_box_height(1, 12.0, pad);
+    // `/Rect` of a one-line box `w` wide as it reads, its first line starting at (200, 300):
+    // `/Rect`'s lower left on a page turned 90°, its lower right at 180°, its upper right at 270°.
+    let placed = |turn: i64, w: f64| match turn {
+        90 => vec![200.0, 300.0, 200.0 + h, 300.0 + w],
+        180 => vec![200.0 - w, 300.0, 200.0, 300.0 + h],
+        _ => vec![200.0 - h, 300.0 - w, 200.0, 300.0],
+    };
+    for turn in [90, 180, 270] {
+        let mut doc = fixture();
+        let p = page_refs(&doc).unwrap()[0];
+        doc.update_dict(p, |d| d.set(b"Rotate".to_vec(), Object::Int(turn))).unwrap();
+        let p = placed(turn, w0);
+        let shape = Shape::TextBox { rect: [p[0], p[1], p[2], p[3]], font_size: 12.0 };
+        let t = add_annotation(&mut doc, &NewAnnotation { contents: first.into(), ..new(0, shape) }, &meta("t")).unwrap();
+        assert_eq!(appearance::text_turn(&list(&doc, 0)[t]), turn, "laid out for the turned page");
+        assert_eq!(rect(&list(&doc, 0)[t]), placed(turn, w0), "{turn}°: as placed");
+        set_contents(&mut doc, 0, t, longer, &meta("")).unwrap();
+        assert_eq!(rect(&list(&doc, 0)[t]), placed(turn, w1), "{turn}°: longer as it reads, from the same start");
+    }
+}
+
+#[test]
+fn a_text_box_that_fits_its_text_keeps_fitting_it() {
+    let mut doc = fixture();
+    let pad = 2.0 + 2.0; // the style's 2 pt border
+    let fitted = |text: &str, size: f64| {
+        let w = appearance::text_box_width(text, size, pad);
+        let lines = appearance::wrap(text, size, w - 2.0 * pad).len();
+        [100.0, 700.0 - appearance::text_box_height(lines, size, pad), 100.0 + w, 700.0]
+    };
+    // Made the way the composer makes one: sized to its text, 2 pt inside the border.
+    let first = "Abnahme ok";
+    let w = appearance::text_box_width(first, 12.0, pad);
+    let shape = Shape::TextBox { rect: [100.0, 680.0, 100.0 + w, 700.0], font_size: 12.0 };
+    let t = add_annotation(&mut doc, &NewAnnotation { contents: first.into(), ..new(0, shape) }, &meta("t")).unwrap();
+    let longer = "Abnahme ok, Restpunkte siehe Liste";
+    set_contents(&mut doc, 0, t, longer, &meta("")).unwrap();
+    assert_eq!(rect(&list(&doc, 0)[t]), fitted(longer, 12.0), "wider for longer text, one line");
+    set_contents(&mut doc, 0, t, "OK", &meta("")).unwrap();
+    assert_eq!(rect(&list(&doc, 0)[t]), fitted("OK", 12.0), "narrower for shorter text");
+    let long = "the quick brown fox jumps over the lazy dog and keeps going until the line wraps";
+    set_contents(&mut doc, 0, t, long, &meta("")).unwrap();
+    let r = rect(&list(&doc, 0)[t]);
+    assert_eq!((r[2] - r[0], r), (appearance::TEXT_BOX_MAX_WIDTH, fitted(long, 12.0).to_vec()), "at most 300 pt wide, wrapped");
+    set_contents(&mut doc, 0, t, "OK", &meta("")).unwrap();
+    // A smaller font: narrower and shorter.
+    set_font_size(&mut doc, 0, t, 8.0, &meta("")).unwrap();
+    assert_eq!(rect(&list(&doc, 0)[t]), fitted("OK", 8.0));
+    set_font_size(&mut doc, 0, t, 20.0, &meta("")).unwrap();
+    assert_eq!(rect(&list(&doc, 0)[t]), fitted("OK", 20.0));
+    // Sized by hand: the width stays, whatever the text.
+    set_rect(&mut doc, 0, t, [100.0, 600.0, 260.0, 700.0], &meta("")).unwrap();
+    set_contents(&mut doc, 0, t, "OK", &meta("")).unwrap();
+    let r = rect(&list(&doc, 0)[t]);
+    assert_eq!((r[0], r[2], r[3]), (100.0, 260.0, 700.0));
+    set_font_size(&mut doc, 0, t, 10.0, &meta("")).unwrap();
+    let s = rect(&list(&doc, 0)[t]);
+    assert_eq!((s[0], s[2]), (100.0, 260.0));
+    assert!(s[1] <= r[1], "a box sized by hand never shrinks: {s:?} from {r:?}");
+    // Made taller by hand, its width still its text's: a new font size keeps that height too.
+    let f = fitted("Höhe", 12.0);
+    let shape = Shape::TextBox { rect: f, font_size: 12.0 };
+    let u = add_annotation(&mut doc, &NewAnnotation { contents: "Höhe".into(), ..new(0, shape) }, &meta("u")).unwrap();
+    set_rect(&mut doc, 0, u, [f[0], f[1] - 60.0, f[2], f[3]], &meta("")).unwrap();
+    set_font_size(&mut doc, 0, u, 10.0, &meta("")).unwrap();
+    let h = rect(&list(&doc, 0)[u]);
+    assert!(h[1] <= f[1] - 60.0 && h[3] == f[3], "the height made by hand stays: {h:?}");
+}
+
+/// A box sized to its text, at the edges. An empty text gets a box one em wide and one line
+/// tall. A text ending in a line break gets the line the cursor is on (`wrap` keeps the empty
+/// last line), at the width of the lines before it. A line with nowhere to break (CJK has no
+/// spaces) longer than the widest box wraps by character inside it, nothing cut. Widths are
+/// measured as the appearance draws the text: in Helvetica, and a character WinAnsi can't encode
+/// as the `?` drawn for it.
+#[test]
+fn a_text_box_sized_to_its_text_at_the_edges() {
+    let (size, pad) = (12.0, 2.0 + 2.0); // the style's 2 pt border
+    let close = |a: f64, b: f64| (a - b).abs() < 1e-6;
+    assert!(close(appearance::text_box_width("", size, pad), size + 2.0 * pad + 0.5), "empty: one em and the padding");
+    assert_eq!(appearance::wrap("", size, 100.0).len(), 1, "empty: one line");
+    let mut doc = fixture();
+    let w = appearance::text_box_width("OK", size, pad);
+    let shape = Shape::TextBox { rect: [100.0, 700.0 - appearance::text_box_height(1, size, pad), 100.0 + w, 700.0], font_size: size };
+    let t = add_annotation(&mut doc, &NewAnnotation { contents: "OK".into(), ..new(0, shape) }, &meta("t")).unwrap();
+    set_contents(&mut doc, 0, t, "OK\n", &meta("")).unwrap();
+    let r = rect(&list(&doc, 0)[t]);
+    assert!(close(r[2] - r[0], w), "as wide as its lines: {r:?}");
+    assert!(close(r[3] - r[1], appearance::text_box_height(2, size, pad)), "two lines, the second for the cursor: {r:?}");
+    let cjk = "検査済".repeat(20);
+    assert_eq!(appearance::text_width("検", size), appearance::text_width("?", size), "measured as drawn");
+    set_contents(&mut doc, 0, t, &cjk, &meta("")).unwrap();
+    let r = rect(&list(&doc, 0)[t]);
+    let inner = appearance::TEXT_BOX_MAX_WIDTH - 2.0 * pad;
+    let lines = appearance::wrap(&cjk, size, inner);
+    assert!(close(r[2] - r[0], appearance::TEXT_BOX_MAX_WIDTH), "at most the widest box: {r:?}");
+    assert!(lines.len() > 1 && lines.iter().all(|l| appearance::text_width(l, size) <= inner), "{lines:?}");
+    assert_eq!(lines.concat(), cjk, "broken by character, nothing cut");
+    assert!(close(r[3] - r[1], appearance::text_box_height(lines.len(), size, pad)), "as tall as its lines: {r:?}");
+}
+
+/// Spaces at either end of a text box's text take room on its line: a box sized to "Hallo "
+/// fits that text, and takes the next text's width.
+#[test]
+fn a_text_box_sized_to_its_text_with_a_trailing_space_keeps_fitting_it() {
+    let mut doc = fixture();
+    let pad = 2.0 + 2.0;
+    let fitted = |text: &str| {
+        let w = appearance::text_box_width(text, 12.0, pad);
+        [100.0, 700.0 - appearance::text_box_height(1, 12.0, pad), 100.0 + w, 700.0]
+    };
+    let shape = Shape::TextBox { rect: fitted("Hallo "), font_size: 12.0 };
+    let v = add_annotation(&mut doc, &NewAnnotation { contents: "Hallo ".into(), ..new(0, shape) }, &meta("v")).unwrap();
+    set_contents(&mut doc, 0, v, "Hallo Welt, ok", &meta("")).unwrap();
+    assert_eq!(rect(&list(&doc, 0)[v]), fitted("Hallo Welt, ok"), "it fit its text with the space");
 }

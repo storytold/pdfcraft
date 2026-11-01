@@ -1,3 +1,4 @@
+use super::state::edits_in_place;
 use super::*;
 
 /// A selected line is drawn where it is going: moved by its body (both ends follow the
@@ -41,6 +42,7 @@ fn an_upright_note_on_a_turned_page_is_in_view_where_it_is_drawn() {
         intent: None,
         fill_sign: false,
         no_rotate,
+        text_turn: 0,
         points: Vec::new(),
     };
     let page = PageInfo { width: 140.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 200.0, 140.0], rotation: 90 };
@@ -87,6 +89,7 @@ fn listed(page: usize, index: usize, contents: &str, parent: Option<(usize, usiz
         fill_sign: false,
         no_rotate: false,
         points: Vec::new(),
+        text_turn: 0,
     }
 }
 
@@ -175,6 +178,7 @@ fn annotation(subtype: &str, contents: Option<&str>, fill_sign: bool) -> Annotat
         intent: None,
         fill_sign,
         no_rotate: false,
+        text_turn: 0,
         points: Vec::new(),
     }
 }
@@ -381,6 +385,7 @@ fn context_menu_colour_submenu_keeps_its_picker_open_and_a_swatch_closes_the_men
             fill_sign: false,
             points: Vec::new(),
             no_rotate: false,
+            text_turn: 0,
         }],
         ..Default::default()
     };
@@ -413,6 +418,197 @@ fn context_menu_colour_submenu_keeps_its_picker_open_and_a_swatch_closes_the_men
         matches!(actions.as_slice(), [CanvasAction::Edit(e)] if matches!(**e, Edit::StyleAnnotation { page: 0, index: 0, color: Some(_), .. })),
         "{actions:?}"
     );
+}
+
+/// What counts as a change to text typed on the page is what keeping it does: trailing spaces
+/// don't, nor a new box with nothing but spaces in it (no "Save changes?" for nothing).
+/// A text box is typed into on the page where its lines read upright on screen: the page's
+/// `/Rotate` and the view's turn add up to the turn its text is laid out for (`/PCTextRotate`,
+/// which PdfCraft writes when it adds text to a turned page). Elsewhere, and for a callout, the
+/// composer card edits it.
+#[test]
+fn text_boxes_are_typed_into_on_the_page_where_they_read_upright() {
+    let info = |rotation| DocInfo {
+        pages: vec![PageInfo { width: 200.0, height: 300.0, label: String::new(), crop: [0.0, 0.0, 300.0, 200.0], rotation }],
+        ..Default::default()
+    };
+    let text = |text_turn| Annotation { text_turn, ..annotation("FreeText", Some("30.10.2026"), true) };
+    // (page /Rotate, view turn, text turn) → typed on the page.
+    for (page, view, turn, in_place) in [
+        (0, 0, 0, true),
+        (90, 0, 90, true),
+        (270, 0, 270, true),
+        (90, 270, 0, true),
+        (0, 90, 90, true),
+        (90, 0, 0, false),
+        (90, 90, 90, false),
+        (0, 90, 0, false),
+        (180, 0, 90, false),
+    ] {
+        assert_eq!(edits_in_place(&text(turn), &info(page), view), in_place, "page {page}°, view {view}°, text {turn}°");
+    }
+    let callout = Annotation { intent: Some("FreeTextCallout".into()), ..text(90) };
+    assert!(!edits_in_place(&callout, &info(90), 0), "a callout's box sits inside its rectangle");
+    assert!(!edits_in_place(&Annotation { text_turn: 90, ..annotation("Text", Some("Note"), false) }, &info(90), 0), "a note");
+}
+
+#[test]
+fn inline_text_changes_are_what_keeping_it_changes() {
+    let info = DocInfo {
+        pages: vec![PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 }],
+        // The box the drafts with an index edit: it still has the text they started from.
+        annotations: vec![Annotation {
+            page: 0,
+            subtype: "FreeText".into(),
+            author: None,
+            contents: Some("Box".into()),
+            modified: None,
+            name: None,
+            in_reply_to: None,
+            parent: None,
+            grouped: false,
+            rect: [10.0, 10.0, 80.0, 30.0],
+            color: None,
+            index: 0,
+            state: None,
+            quads: Vec::new(),
+            locked: false,
+            intent: None,
+            fill_sign: false,
+            points: Vec::new(),
+            no_rotate: false,
+            text_turn: 0,
+        }],
+        ..Default::default()
+    };
+    let prefs = CommentPrefs::default();
+    let it = |index: Option<usize>, original: &str, text: &str| InlineText {
+        page: 0,
+        index,
+        at: [20.0, 380.0],
+        size: None,
+        text: text.into(),
+        original: original.into(),
+        name: None,
+        focus: false,
+    };
+    for (t, changed) in [
+        (it(Some(0), "Box", "Box"), false),
+        (it(Some(0), "Box", "Box  \n"), false),
+        (it(Some(0), "Box", "Boxes"), true),
+        (it(None, "", " \n "), false),
+        (it(None, "", "New"), true),
+    ] {
+        assert_eq!(t.has_changes(), changed, "{:?} after {:?}", t.text, t.original);
+        assert_eq!(inline_edit(&t, &info, &prefs).is_some(), changed, "{:?} after {:?}", t.text, t.original);
+    }
+}
+
+/// A draft finds its comment again by `/NM` when the page's comments shift under it, and a
+/// draft of a comment without one goes nowhere once another comment sits at its index.
+#[test]
+fn an_inline_draft_keeps_to_its_comment() {
+    let freetext = |index: usize, name: Option<&str>, contents: &str| Annotation {
+        page: 0,
+        subtype: "FreeText".into(),
+        author: None,
+        contents: Some(contents.into()),
+        modified: None,
+        name: name.map(str::to_owned),
+        in_reply_to: None,
+        parent: None,
+        grouped: false,
+        rect: [10.0, 10.0, 80.0, 30.0],
+        color: None,
+        index,
+        state: None,
+        quads: Vec::new(),
+        locked: false,
+        intent: None,
+        fill_sign: false,
+        points: Vec::new(),
+        no_rotate: false,
+        text_turn: 0,
+    };
+    let page = PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 };
+    let draft = |name: Option<&str>| InlineText {
+        page: 0,
+        index: Some(0),
+        at: [0.0; 2],
+        size: None,
+        text: "Edited".into(),
+        original: "Mine".into(),
+        name: name.map(str::to_owned),
+        focus: false,
+    };
+    // A comment added before it moved it from index 0 to 1.
+    let info = DocInfo {
+        pages: vec![page.clone()],
+        annotations: vec![freetext(0, Some("other"), "Other"), freetext(1, Some("mine"), "Mine")],
+        ..Default::default()
+    };
+    let prefs = CommentPrefs::default();
+    assert!(matches!(inline_edit(&draft(Some("mine")), &info, &prefs), Some(Edit::SetAnnotationContents { index: 1, .. })));
+    // Without a name, the comment now at index 0 is another one: nothing is overwritten.
+    let unnamed = DocInfo { pages: vec![page], annotations: vec![freetext(0, None, "Other"), freetext(1, None, "Mine")], ..Default::default() };
+    assert!(inline_edit(&draft(None), &unnamed, &prefs).is_none());
+}
+
+/// "Edit text…" from the menu, with no page drawn (the Comments panel's menu for a page that
+/// isn't on screen): a text box is typed into on the page in an upright view, and in the
+/// composer when the view is turned.
+#[test]
+fn edit_text_from_the_menu_follows_the_view_rotation_without_a_drawn_page() {
+    use egui_kittest::kittest::Queryable;
+    let info = DocInfo {
+        pages: vec![PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 }],
+        annotations: vec![Annotation {
+            page: 0,
+            subtype: "FreeText".into(),
+            author: None,
+            contents: Some("Box".into()),
+            modified: None,
+            name: None,
+            in_reply_to: None,
+            parent: None,
+            grouped: false,
+            rect: [10.0, 10.0, 80.0, 30.0],
+            color: None,
+            index: 0,
+            state: None,
+            quads: Vec::new(),
+            locked: false,
+            intent: None,
+            fill_sign: false,
+            points: Vec::new(),
+            no_rotate: false,
+            text_turn: 0,
+        }],
+        ..Default::default()
+    };
+    for (rotation, in_place) in [(0, true), (90, false)] {
+        let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default());
+        view.rotation = rotation;
+        view.comments.selected = Some((0, 0));
+        assert!(view.page_xform(0).is_none(), "no page drawn");
+        let prefs = CommentPrefs::default();
+        let mut h = egui_kittest::Harness::new_ui_state(
+            |ui, view: &mut DocView| {
+                ui.button("Page").context_menu(|ui| {
+                    let _ = context_menu(ui, view, &info, &|_, _| true, &prefs, true, true);
+                });
+            },
+            view,
+        );
+        h.run();
+        h.get_by_label("Page").click_secondary();
+        h.run();
+        h.get_by_label("Edit text…").click();
+        h.run();
+        let cv = &h.state().comments;
+        assert_eq!(cv.inline.is_some(), in_place, "view turned {rotation}°: on the page");
+        assert_eq!(cv.composer.is_some(), !in_place, "view turned {rotation}°: in the composer");
+    }
 }
 
 #[test]
@@ -475,10 +671,10 @@ fn drawn_shapes_ignore_slips() {
 
 #[test]
 fn text_boxes_fit_their_text() {
-    let r = text_box_rect([100.0, 500.0], "Hi", 12.0, 0);
+    let r = text_box_rect([100.0, 500.0], "Hi", 12.0, 0.0, 0);
     assert_eq!((r[0], r[3]), (100.0, 500.0));
     assert!(r[2] - r[0] < 60.0);
-    let long = text_box_rect([0.0, 500.0], &"word ".repeat(80), 12.0, 0);
+    let long = text_box_rect([0.0, 500.0], &"word ".repeat(80), 12.0, 0.0, 0);
     assert_eq!(long[2], 300.0);
     assert!(long[3] - long[1] > 50.0);
 }

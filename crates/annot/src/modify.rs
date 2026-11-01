@@ -2,7 +2,7 @@ use super::create::{
     add_annotation, base_dict, bounds, callout_attach, ending_draws, ending_pair, finite, grow, normalize, num_array, rect_for, rgb,
 };
 use super::draw::{draw_appearance, redraw_or_restore, set_appearance};
-use super::info::{line_endings_of, text_value};
+use super::info::{contents_as_drawn, line_endings_of};
 use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, page_ref, set_annots};
 use super::types::{
     FLAG_HIDDEN, FLAG_LOCKED, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NewAnnotation, ReviewState, Rgb, Shape, Style,
@@ -159,10 +159,13 @@ pub fn with_replies_and_popups(doc: &Document, list: &[Object], doomed: impl Int
 }
 
 /// Change a comment's text. Text boxes are redrawn to show it, and their rectangle follows the
-/// new text: the wrap width and top edge stay, the height fits the wrapped lines.
+/// new text: the top edge stays and the height fits the wrapped lines; a box that fit its old
+/// text takes the new text's width too, while one sized by hand keeps its wrap width.
 pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, meta: &Meta) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     let free_text = annot_dict(doc, r).name(b"Subtype") == Some(b"FreeText");
+    let old = annot_dict(doc, r);
+    let was = (contents_as_drawn(doc, &old), appearance::parse_da(&old).1);
     doc.update_dict(r, |d| {
         d.set(b"Contents".to_vec(), PdfString::text(text));
         // The rich-text version follows the new plain text (text boxes), or would contradict it.
@@ -178,18 +181,51 @@ pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, m
         // text editable (as in Acrobat), so the re-fit ignores the lock. New text is drawn even
         // where the standard fonts can't draw some of it (marked and reported, see
         // `draw_appearance`).
-        match fitted_box(doc, r, text) {
-            Some(rect) => apply_text_box(doc, r, rect, meta, true)?,
+        match fitted_box(doc, r, text, Some((was.0.as_str(), was.1))) {
+            Some((rect, _)) => apply_text_box(doc, r, rect, meta, true)?,
             None => draw_appearance(doc, r)?,
         }
     }
     Ok(())
 }
 
-/// The rectangle a FreeText annotation's text box needs for `text`: the current wrap width and
-/// top edge stay and the height fits the wrapped lines, as at creation. `None` keeps the old
-/// rectangle (the box can't be measured, so only the appearance is redrawn).
-fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
+/// Whether a text box `w` wide (inside padding `pad`) fits `text` at `size`: it is as wide as
+/// [`appearance::text_box_width`] makes it, or as boxes were once made (the longest line and
+/// 8 pt, at least 40 pt). A box sized by hand doesn't fit.
+fn fits_text(w: f64, text: &str, size: f64, pad: f64) -> bool {
+    let fits = |want: f64| (w - want).abs() <= 1.5;
+    let longest = text.lines().map(|l| appearance::text_width(l, size)).fold(0.0, f64::max);
+    fits(appearance::text_box_width(text, size, pad))
+        || fits((longest + 8.0).min(appearance::TEXT_BOX_MAX_WIDTH).max(size + 8.0))
+        || ((w - 40.0).abs() <= 0.5 && longest + 8.0 <= 40.0)
+}
+
+/// Whether FreeText `d`'s upright box fits its text as it is: as wide as [`fits_text`] takes and as
+/// tall as its lines.
+fn fits_its_text(d: &Dict) -> bool {
+    let Some(rect) = d.get(b"Rect").and_then(|o| o.as_array()).and_then(|a| four(&a.iter().filter_map(|o| o.as_f64()).collect::<Vec<f64>>())) else {
+        return false;
+    };
+    let rect = normalize(rect);
+    let upright = d.get(b"PCTextRotate").and_then(Object::as_int).unwrap_or(0).rem_euclid(360) == 0;
+    let text = d.get(b"Contents").and_then(|o| o.as_string()).map(PdfString::to_text).unwrap_or_default();
+    let (_, size) = appearance::parse_da(d);
+    let pad = 2.0 + border_width_of(d);
+    let w = rect[2] - rect[0];
+    let lines = appearance::wrap(&text, size, (w - 2.0 * pad).max(1.0)).len();
+    upright && fits_text(w, &text, size, pad) && ((rect[3] - rect[1]) - appearance::text_box_height(lines, size, pad)).abs() <= 1.5
+}
+
+/// The rectangle a FreeText annotation's text box needs for `text`: the top edge stays and the
+/// height fits the wrapped lines, as at creation. The width stays too, unless the box fit `was`
+/// (its text and font size before the change): then it fits `text` as a new box would, and the
+/// second value says so. `None` keeps the old rectangle (the box can't be measured, so only the
+/// appearance is redrawn).
+///
+/// Text added to a turned page is laid out for the page as displayed (`/PCTextRotate`), so its box
+/// is fitted as it reads there: its lines run along `/Rect`'s height on a quarter turn, and the
+/// corner where the first line starts stays (on a page turned 90°, `/Rect`'s lower left).
+fn fitted_box(doc: &Document, r: ObjRef, text: &str, was: Option<(&str, f64)>) -> Option<([f64; 4], bool)> {
     let d = annot_dict(doc, r);
     let nums = |key: &[u8]| -> Option<Vec<f64>> { d.get(key)?.as_array()?.iter().map(|o| o.as_f64()).collect() };
     let (_, size) = appearance::parse_da(&d);
@@ -203,17 +239,31 @@ fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
     } else {
         rect
     };
-    let (x0, top) = (tb[0].min(tb[2]), tb[1].max(tb[3]));
-    let w = tb[2] - tb[0];
-    let w = if w.is_finite() && w >= 1.0 {
+    let turn = if d.contains(b"CL") { 0 } else { appearance::text_turn(&d) };
+    let (x0, y0, x1, y1) = (tb[0].min(tb[2]), tb[1].min(tb[3]), tb[0].max(tb[2]), tb[1].max(tb[3]));
+    // The box as it reads: its lines' width and its height.
+    let (w, h) = if matches!(turn, 90 | 270) { (y1 - y0, x1 - x0) } else { (x1 - x0, y1 - y0) };
+    // A box made taller or shorter by hand doesn't fit its text either, whatever its width.
+    let hug = was.is_some_and(|(t, s)| {
+        let lines = appearance::wrap(t, s, (w - 2.0 * pad).max(1.0)).len();
+        w.is_finite() && fits_text(w, t, s, pad) && (h - appearance::text_box_height(lines, s, pad)).abs() <= 1.5
+    });
+    let w = if w.is_finite() && w >= 1.0 && !hug {
         w
     } else {
-        // No usable old width: fall back to the creation-time width (at most 300 pt).
-        let longest = text.lines().map(|l| appearance::text_width(l, size)).fold(0.0, f64::max);
-        (longest + 2.0 * pad + 4.0).clamp(40.0, 300.0)
+        // Sized to the text, as a new box (also when there is no usable old width).
+        appearance::text_box_width(text, size, pad)
     };
-    let lines = appearance::wrap(text, size, (w - 2.0 * pad).max(1.0)).len().max(1) as f64;
-    Some([x0, top - lines * size * 1.2 - 2.0 * pad - 2.0, x0 + w, top])
+    let lines = appearance::wrap(text, size, (w - 2.0 * pad).max(1.0)).len();
+    let h = appearance::text_box_height(lines, size, pad);
+    // From the corner where the first line starts, as the page is displayed.
+    let rect = match turn {
+        90 => [x0, y0, x0 + h, y0 + w],
+        180 => [x1 - w, y0, x1, y0 + h],
+        270 => [x1 - h, y1 - w, x1, y1],
+        _ => [x0, y1 - h, x0 + w, y1],
+    };
+    Some((rect, hug))
 }
 
 /// Reply to a comment; returns the reply's index in the page's `/Annots`.
@@ -555,8 +605,19 @@ pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleCha
     }
     refuse_foreign_text(doc, &d)?;
     let free_text = subtype == "FreeText";
+    // A text box that fits its text keeps fitting it with a thicker or thinner border: the box
+    // grows (or shrinks) by the change on every side, so the text keeps its place and its lines.
+    let regrow = width.filter(|_| free_text && !d.contains(b"CL") && fits_its_text(&d)).and_then(|w| {
+        let by = w.max(0.0) - if d.contains(b"BS") || d.contains(b"Border") { border_width_of(&d) } else { 0.0 };
+        let rect: Vec<f64> = d.get(b"Rect")?.as_array()?.iter().filter_map(|o| o.as_f64()).collect();
+        let rect = grow(normalize(four(&rect)?), by);
+        (by != 0.0 && finite(&rect) && rect[2] - rect[0] >= 1.0 && rect[3] - rect[1] >= 1.0).then_some(rect)
+    });
     let before = d;
     doc.update_dict(r, |d| {
+        if let Some(rect) = regrow {
+            d.set(b"Rect".to_vec(), num_array(&rect));
+        }
         if let Some(c) = color {
             if free_text {
                 let (_, size) = appearance::parse_da(d);
@@ -597,8 +658,9 @@ pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleCha
 }
 
 /// Change the font size of a text box, typewriter text or callout (`/DA` keeps its colour; the
-/// rich-text strings follow) and redraw it. The box grows to hold the wrapped text at the new
-/// size and never shrinks, so a box the user drew large stays large. Sizes are 1 to 400 pt.
+/// rich-text strings follow) and redraw it. A box that fit its text fits it at the new size,
+/// narrower and shorter too; one sized by hand grows to hold the wrapped text and never
+/// shrinks, so a box the user drew large stays large. Sizes are 1 to 400 pt.
 pub fn set_font_size(doc: &mut Document, page: usize, index: usize, size: f64, meta: &Meta) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     unlocked(doc, r)?;
@@ -610,6 +672,7 @@ pub fn set_font_size(doc: &mut Document, page: usize, index: usize, size: f64, m
         return Err(AnnotError::Invalid("font size must be 1\u{2013}400 pt".into()));
     }
     refuse_foreign_text(doc, &d)?;
+    let was_size = appearance::parse_da(&d).1;
     let before = d;
     doc.update_dict(r, |d| {
         let (col, _) = appearance::parse_da(d);
@@ -617,9 +680,11 @@ pub fn set_font_size(doc: &mut Document, page: usize, index: usize, size: f64, m
         rich_text(d);
         touch(d, meta);
     })?;
-    let text = text_value(doc, &annot_dict(doc, r), b"Contents").unwrap_or_default();
-    let result = match fitted_box(doc, r, &text) {
-        Some(fit) => {
+    let text = contents_as_drawn(doc, &annot_dict(doc, r));
+    let result = match fitted_box(doc, r, &text, Some((text.as_str(), was_size))) {
+        // A box that fit its text fits it at the new size, smaller as well as larger.
+        Some((fit, true)) => apply_text_box(doc, r, fit, meta, false),
+        Some((fit, false)) => {
             let cur = annot_dict(doc, r);
             let nums: Vec<f64> =
                 cur.get(b"Rect").and_then(|o| o.as_array()).map(|a| a.iter().filter_map(|x| x.as_f64()).collect()).unwrap_or_default();
