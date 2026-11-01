@@ -800,7 +800,14 @@ impl PdfCraftApp {
     /// Open Recent and the Home view's list share this).
     pub fn open_recent(&mut self, path: &str) {
         if let Some(i) = self.tab_showing(path) {
-            self.active = Some(i);
+            if let Some(view) = self.views.get(i) {
+                if view.detached {
+                    let id = view.id;
+                    self.attach_tab(id);
+                } else {
+                    self.active = Some(i);
+                }
+            }
         } else {
             #[cfg(not(target_arch = "wasm32"))]
             self.open_path(path);
@@ -846,7 +853,14 @@ impl PdfCraftApp {
         // and the tool it was opened for runs on it. One still being opened is left to that.
         if let Some(i) = self.tab_showing(path) {
             self.startup_superseded = true;
-            self.active = Some(i);
+            if let Some(view) = self.views.get(i) {
+                if view.detached {
+                    let id = view.id;
+                    self.attach_tab(id);
+                } else {
+                    self.active = Some(i);
+                }
+            }
             if let Some((layout, continuous)) = display_override
                 && let Some(view) = self.views.get_mut(i)
             {

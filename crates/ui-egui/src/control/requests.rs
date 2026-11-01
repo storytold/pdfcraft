@@ -396,10 +396,11 @@ fn parse_doc_or_tab(p: &Value, host: &impl Host, method: &str) -> Result<pdfcraf
         return Ok(pdfcraft_engine::DocId(id_num));
     }
     if let Some(tab_val) = p.get("tab").or_else(|| p.get("index")) {
-        let tab_idx = tab_val
+        let tab_num = tab_val
             .as_u64()
             .or_else(|| tab_val.as_str().and_then(|s| s.parse::<u64>().ok()))
-            .ok_or_else(|| format!("{method}: tab index must be a non-negative integer"))? as usize;
+            .ok_or_else(|| format!("{method}: tab index must be a non-negative integer"))?;
+        let tab_idx = usize::try_from(tab_num).map_err(|_| format!("{method}: tab index out of range"))?;
         return host.doc_id_from_tab(tab_idx).ok_or_else(|| format!("{method}: tab index {tab_idx} out of range"));
     }
     if let Some(id_val) = p.get("id")
