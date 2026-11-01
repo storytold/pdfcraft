@@ -143,24 +143,38 @@ impl Session {
         out
     }
 
-    /// The addresses written as plain text on each page that the viewer makes clickable
-    /// ([`crate::text_links::find_text_links`]): (0-based page, address), leaving out any a link
-    /// annotation lies over.
-    pub fn text_links(&self, id: DocId) -> Vec<(usize, crate::text_links::TextLink)> {
-        let Some(doc) = self.get(id) else { return Vec::new() };
+    /// The addresses written as plain text that the viewer makes clickable
+    /// ([`crate::text_links::find_text_links`]), leaving out any a link annotation lies over, from
+    /// the 0-based page `from` on. One call reads at most
+    /// [`MAX_TEXT_LINK_PAGES_PER_SCAN`](crate::text_links::MAX_TEXT_LINK_PAGES_PER_SCAN) pages
+    /// and stops after the page that brings it to
+    /// [`MAX_TEXT_LINKS_PER_SCAN`](crate::text_links::MAX_TEXT_LINKS_PER_SCAN) addresses; then
+    /// `next_page` says where to go on.
+    pub fn text_links(&self, id: DocId, from: usize) -> crate::text_links::TextLinkScan {
+        use crate::text_links::{MAX_TEXT_LINK_PAGES_PER_SCAN, MAX_TEXT_LINKS_PER_SCAN, TextLinkScan};
+        let Some(doc) = self.get(id) else { return TextLinkScan::default() };
         // The viewer's settings, so text on a layer it hides is not a link.
         let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), doc.config.clone());
-        let mut out = Vec::new();
-        for (page, info) in doc.info.pages.iter().enumerate() {
+        let mut scan = TextLinkScan::default();
+        let pages = doc.info.pages.len();
+        for (page, info) in doc.info.pages.iter().enumerate().skip(from).take(MAX_TEXT_LINK_PAGES_PER_SCAN) {
             let res = r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
-            let Some(text) = res.text else { continue };
-            for link in crate::text_links::find_text_links(&text) {
-                if !doc.info.links.iter().any(|l| l.page == page && link.covered_by(info, l.rect)) {
-                    out.push((page, link));
+            if let Some(text) = res.text {
+                let annotations: Vec<_> = doc.info.links.iter().filter(|l| l.page == page).collect();
+                for link in crate::text_links::find_text_links(&text) {
+                    if !annotations.iter().any(|l| link.covered_by(info, l.rect)) {
+                        scan.links.push((page, link));
+                    }
                 }
             }
+            let next = page.saturating_add(1);
+            let read = next.saturating_sub(from);
+            if next < pages && (read >= MAX_TEXT_LINK_PAGES_PER_SCAN || scan.links.len() >= MAX_TEXT_LINKS_PER_SCAN) {
+                scan.next_page = Some(next);
+                break;
+            }
         }
-        out
+        scan
     }
 
     /// A page of the bookmark list in outline order: up to `limit` bookmarks from position `offset`.

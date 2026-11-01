@@ -14,6 +14,23 @@ pub const MAX_TEXT_LINK_GLYPHS: usize = 200_000;
 /// At most this many addresses are found on one page.
 pub const MAX_TEXT_LINKS_PER_PAGE: usize = 512;
 
+/// A scan of a document's pages for addresses ([`crate::Session::text_links`]) reads at most this
+/// many pages, and says where the next one starts: a 10,000-page document is read a share at a
+/// time, never all at once. The viewer reads only the pages in view.
+pub const MAX_TEXT_LINK_PAGES_PER_SCAN: usize = 100;
+
+/// A scan stops after the page on which it has found this many addresses.
+pub const MAX_TEXT_LINKS_PER_SCAN: usize = 2_000;
+
+/// The addresses one scan of a document found ([`crate::Session::text_links`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TextLinkScan {
+    /// (0-based page, address), in page order.
+    pub links: Vec<(usize, TextLink)>,
+    /// The 0-based page the next scan starts on, when the scan stopped before the last page.
+    pub next_page: Option<usize>,
+}
+
 /// An address written in a page's text.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextLink {
@@ -156,6 +173,111 @@ mod tests {
         for s in ["example.com", "http://", "https://x", "www.", "user@localhost", "a@b.c", "notwww.example.com", "Version 1.2.3", "@example.com"] {
             assert_eq!(uris(s), Vec::<String>::new(), "{s}");
         }
+    }
+
+    /// Only `http`, `https` and `mailto` addresses are offered, whatever letter case another
+    /// scheme is written in: `javascript:`, `file:`, `data:` and any other scheme never become a
+    /// link.
+    #[test]
+    fn only_web_and_email_addresses_are_offered() {
+        for s in [
+            "JaVaScRiPt:alert(1)",
+            "javascript:void(0)",
+            "file:///etc/passwd",
+            "FILE://server/share/report.pdf",
+            "ftp://ftp.example.com/pub/file.txt",
+            "data:text/html,<b>example.com</b>",
+            "data:text/html;base64,PGI+ZXhhbXBsZTwvYj4=",
+            "myapp://open?doc=example.com",
+            "vbscript:msgbox(1)",
+            "tel:+15551234567",
+        ] {
+            assert_eq!(uris(s), Vec::<String>::new(), "{s}");
+        }
+        // An address inside one written with another scheme is not taken out of it and opened
+        // with a scheme the text doesn't say.
+        for s in [
+            "ftp://www.example.com/pub",
+            "file://www.example.com/share",
+            "JavaScript:www.example.com",
+            "ftp://user@example.com/pub",
+            "smb://admin@example.org/share",
+        ] {
+            assert_eq!(uris(s), Vec::<String>::new(), "{s}");
+        }
+        // Every address offered opens with one of the three schemes, and passes the check every
+        // document link gets.
+        let offered = uris("a https://a.example b HTTP://B.EXAMPLE c www.c.example d d@example.org");
+        assert_eq!(offered.len(), 4, "{offered:?}");
+        for uri in offered {
+            let scheme = uri.split_once(':').map(|(s, _)| s.to_ascii_lowercase()).unwrap_or_default();
+            assert!(["http", "https", "mailto"].contains(&scheme.as_str()), "{uri}");
+            assert!(crate::links::document_url(&uri).is_ok(), "{uri}");
+        }
+    }
+
+    /// The text the hand appears over is the address that opens: the rectangle covers exactly
+    /// the characters of the address, the link check passes the address on unchanged, and the
+    /// only addition is the scheme a `www.` or email address is written without.
+    #[test]
+    fn the_address_opened_is_the_address_written() {
+        for (s, written, opened) in [
+            ("Visit https://example.com/a?b=c&d=%20e#f now", "https://example.com/a?b=c&d=%20e#f", "https://example.com/a?b=c&d=%20e#f"),
+            ("Visit HTTPS://EXAMPLE.COM/Path now", "HTTPS://EXAMPLE.COM/Path", "HTTPS://EXAMPLE.COM/Path"),
+            ("Go to www.Example.com/X now", "www.Example.com/X", "https://www.Example.com/X"),
+            ("Mail Some.One+x@Example.org now", "Some.One+x@Example.org", "mailto:Some.One+x@Example.org"),
+            // Internationalized and punycode host names are kept as written; the confirmation
+            // shows the host and warns about mixed scripts (`links::display_host`).
+            ("See https://bücher.example/straße now", "https://bücher.example/straße", "https://bücher.example/straße"),
+            ("See https://xn--bcher-kva.example/ now", "https://xn--bcher-kva.example/", "https://xn--bcher-kva.example/"),
+        ] {
+            let links = find_text_links(&page_text(s));
+            assert_eq!(links.len(), 1, "{s}");
+            assert_eq!(links[0].uri, opened, "{s}");
+            assert!(opened.ends_with(written), "{s}: only a scheme is added");
+            assert_eq!(crate::links::document_url(&links[0].uri).ok().as_deref(), Some(opened), "{s}: opened unchanged");
+            // `page_text` gives every character, spaces included, 6 points.
+            let at = s.find(written).and_then(|b| s.get(..b)).map(|p| p.chars().count()).expect("written in s");
+            let len = written.chars().count();
+            assert_eq!(links[0].rects, vec![[at as f32 * 6.0, 10.0, (at + len) as f32 * 6.0, 22.0]], "{s}");
+        }
+        // An address hiding characters is offered as written, and the link check refuses it.
+        let hidden = uris("https://exa\u{200B}mple.com/x");
+        assert_eq!(hidden, ["https://exa\u{200B}mple.com/x"]);
+        assert!(crate::links::document_url(&hidden[0]).is_err());
+    }
+
+    /// A full stop, comma or closing bracket after an address belongs to the sentence; brackets
+    /// inside an address (a Wikipedia title) belong to it when they pair up.
+    #[test]
+    fn punctuation_after_an_address_is_left_out_and_paired_brackets_kept() {
+        for (s, uri) in [
+            ("See https://example.com/x.", "https://example.com/x"),
+            ("See https://example.com/x...", "https://example.com/x"),
+            ("Is it https://example.com/x?", "https://example.com/x"),
+            ("(see https://example.com/x).", "https://example.com/x"),
+            ("[https://example.com/x]", "https://example.com/x"),
+            ("\"https://example.com/x\",", "https://example.com/x"),
+            ("<https://example.com/x>", "https://example.com/x"),
+            ("See https://en.wikipedia.org/wiki/Mercury_(planet).", "https://en.wikipedia.org/wiki/Mercury_(planet)"),
+            ("(see https://en.wikipedia.org/wiki/Mercury_(planet)).", "https://en.wikipedia.org/wiki/Mercury_(planet)"),
+            ("See www.example.com/a_(b)_c, then", "https://www.example.com/a_(b)_c"),
+            ("See https://example.com/a(b and more", "https://example.com/a"),
+            ("See https://example.com/a)b", "https://example.com/a"),
+            ("(someone@example.com).", "mailto:someone@example.com"),
+        ] {
+            assert_eq!(uris(s), [uri], "{s}");
+        }
+    }
+
+    /// An address ends where its line ends: the next line is never joined to it, because the page
+    /// text can't tell an address wrapped onto it from the start of the next sentence.
+    #[test]
+    fn an_address_ends_at_the_end_of_its_line() {
+        let links = find_text_links(&page_text("Read https://example.com/first\npart and more"));
+        assert_eq!(links.iter().map(|l| l.uri.as_str()).collect::<Vec<_>>(), ["https://example.com/first"]);
+        assert_eq!(links[0].rects.len(), 1, "one line");
+        assert!(!links[0].contains(3.0, 35.0), "nothing on the next line is part of it");
     }
 
     #[test]

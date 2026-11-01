@@ -847,3 +847,42 @@ fn addresses_written_in_the_page_text_open_like_links() {
     click_link_at(&mut h, 204.0);
     assert_eq!(h.state().pending_link, pending(LINK_URL, LinkOrigin::Link), "a link annotation is unaffected");
 }
+
+/// A drag that starts on an address written as page text selects its text, as from any other
+/// text; only a click opens it (#4207, review).
+#[test]
+fn a_drag_from_an_address_in_the_page_text_selects_it() {
+    let _gpu = gpu();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("text-links.pdf", None, text_links_fixture()).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("panel", "none").unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    h.run_steps(8);
+    // Once a click asks to open the address, its text and the address are known.
+    assert!(click_text_until_pending(&mut h, 350.0), "the address opens on a click");
+    h.get_by_label("Cancel").click();
+    h.run_steps(4);
+    // Glyphs 2 to 12 of the first line are inside "https://example.com/plain-text-url.".
+    let (from, to) = {
+        let v = &h.state().views[0];
+        (v.glyph_screen_pos(0, 2).expect("text layer"), v.glyph_screen_pos(0, 12).expect("glyph"))
+    };
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(from + (to - from) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to);
+    h.run_steps(3);
+    let selected = h.state().views[0].selected_text();
+    assert!(selected.as_deref().is_some_and(|t| t.starts_with("tp")), "the drag selects the address's text: {selected:?}");
+    assert_eq!(h.state().pending_link, None, "a drag opens nothing");
+}

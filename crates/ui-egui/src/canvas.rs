@@ -1949,7 +1949,12 @@ fn text_link_hit(view: &DocView, info: &DocInfo, xf: &PageXform, page: usize, p:
     let (vx, vy) = xf.screen_to_view(p);
     let (index, link) = view.text_link_at(info, page, vx, vy)?;
     let owner = crate::page_router::Owner::TextLink { index };
-    Some(crate::page_router::Hit { tip: Some(link.uri.clone()), ..crate::page_router::Hit::new(owner, Layer::Link, egui::CursorIcon::PointingHand) })
+    // A drag from the address selects its text, as from any other text: only a click opens it.
+    Some(crate::page_router::Hit {
+        tip: Some(link.uri.clone()),
+        declines_drag: true,
+        ..crate::page_router::Hit::new(owner, Layer::Link, egui::CursorIcon::PointingHand)
+    })
 }
 
 /// Escape while the pages hold a press abandons the gesture it drives, whichever tool's: nothing is
