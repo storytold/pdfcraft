@@ -959,3 +959,27 @@ fn hung_printer_source_resets_printers_loading_on_timeout() {
     // Save as PDF is now offered and enabled.
     assert!(h.query_by_role_and_label(Role::Button, "Save as PDF").is_some());
 }
+
+/// #5020: a slow printer discovery that takes longer than the 3s timeout still arrives
+/// and updates the dialog without being discarded or restarting a background search.
+#[test]
+fn a_slow_printer_list_still_arrives() {
+    use pdfcraft_engine::print::spool::Printer;
+    let mut h = harness();
+    h.state_mut().printer_source = Some(std::sync::Arc::new(|| {
+        std::thread::sleep(std::time::Duration::from_millis(3500));
+        vec![Printer { name: "Office".into(), default: true, two_sided: None, description: String::new() }]
+    }));
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    assert!(h.state().print_draft.printers_loading);
+    // After 3.1 s, the timeout has elapsed, so printers_loading is false and Save as PDF is usable.
+    std::thread::sleep(std::time::Duration::from_millis(3200));
+    h.run_steps(2);
+    assert!(!h.state().print_draft.printers_loading);
+    // Give the background search thread time to finish and deliver the late printer arrival.
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    h.run_steps(2);
+    let names: Vec<String> = h.state().print_draft.printers.iter().map(|p| p.name.clone()).collect();
+    assert_eq!(names, ["Office"]);
+}

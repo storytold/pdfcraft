@@ -308,10 +308,6 @@ impl PdfCraftApp {
                 let timeout = started.elapsed() >= PRINTER_SEARCH_TIMEOUT;
                 let printers = match rx.try_recv() {
                     Ok(p) => Some(p),
-                    Err(std::sync::mpsc::TryRecvError::Empty) if timeout => {
-                        // The search took too long (e.g. hung Windows spooler or offline network printer; #5020).
-                        Some(self.print_draft.printers.clone())
-                    }
                     Err(std::sync::mpsc::TryRecvError::Empty) => None,
                     // A source that died lists nothing new; the dialog keeps what it has.
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(self.print_draft.printers.clone()),
@@ -326,6 +322,10 @@ impl PdfCraftApp {
                     }
                     d.printers = printers;
                     d.printers_loading = false;
+                } else if timeout {
+                    // Still searching after timeout: stop saying so, so Save as PDF can be used immediately.
+                    // A list that arrives later still fills the dropdown without restarting the worker thread (#5020).
+                    self.print_draft.printers_loading = false;
                 } else if let Some(ctx) = &self.ctx {
                     let remaining = PRINTER_SEARCH_TIMEOUT.saturating_sub(started.elapsed());
                     ctx.request_repaint_after(remaining);
