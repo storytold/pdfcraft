@@ -54,12 +54,11 @@ pub(crate) fn validate_options(command: &str, args: &[String], specs: &[OptionSp
             let Some(spec) = specs.iter().find(|spec| spec.name == arg) else {
                 return Err(format!("{command}: unknown option --{name}").into());
             };
-            // A file's name is not another option, which also closes the gap the walk left for
-            // those: an unknown option in that value position was skipped along with it. Other
-            // values, missing or malformed, are left to the command, which reports them in its
-            // own terms (`text` and `extract` explain what a page value must be).
             i += if spec.takes_value {
                 let value = args.get(i + 1).map(String::as_str);
+                if value.is_none() {
+                    return Err(needs_value(command, spec.name, value).into());
+                }
                 if !can_be_path_value(spec.name, value) {
                     return Err(needs_value(command, spec.name, value).into());
                 }
