@@ -1,9 +1,10 @@
 //! Unicode embedding of an explicitly supplied, embeddable TrueType face. Font files are
 //! document inputs or the optional craft-fonts build input, never system-interface fallbacks.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use pdfcraft_cos::{Dict, Document, Object, PdfString, Stream};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 use skrifa::{
     FontRef, MetadataProvider,
     instance::{LocationRef, Size},
@@ -172,6 +173,11 @@ pub fn embed_mapping(
     if name.is_empty() || name.len() > 128 {
         return Err("the font family name is invalid".into());
     }
+    let glyph_map = if cff { cid_encoding.as_bytes() } else { gids.as_slice() };
+    let mut programs = ProgramMatch::new(bytes);
+    if let Some(resource) = same_resource(doc, fonts, &name, &mut programs, glyph_map, cmap.as_bytes()) {
+        return Ok(resource);
+    }
     let mut descriptor = Dict::new();
     descriptor.set(b"Type".to_vec(), Object::name("FontDescriptor"));
     descriptor.set(b"FontName".to_vec(), Object::name(&name));
@@ -187,11 +193,9 @@ pub fn embed_mapping(
         b"FontBBox".to_vec(),
         Object::Array([bounds.x_min, bounds.y_min, bounds.x_max, bounds.y_max].map(|v| Object::Real(f64::from(v) * scale)).to_vec()),
     );
-    // Reuse a full program registered on another page; source subset programs stay untouched.
-    let existing = doc.scan_objects().take(8192).find_map(|(r, o)| match o.as_ref() {
-        Object::Stream(s) if s.dict.get(b"PCFullFont").is_some() && s.raw.as_ref() == bytes => Some(Object::Ref(r)),
-        _ => None,
-    });
+    // Reuse the program another resource of this page already has, else one registered on another
+    // page; source subset programs stay untouched.
+    let existing = existing_program(doc, fonts, &mut programs);
     let program = existing.unwrap_or_else(|| {
         let mut d = Dict::new();
         d.set(b"Length1".to_vec(), Object::Int(bytes.len() as i64));
@@ -199,7 +203,7 @@ pub fn embed_mapping(
             d.set(b"Subtype".to_vec(), Object::name("OpenType"));
         }
         d.set(b"PCFullFont".to_vec(), Object::Bool(true));
-        Object::Ref(doc.add(Object::Stream(Stream::from_raw(d, bytes.to_vec()))))
+        Object::Ref(doc.add(Object::Stream(Stream::flate(d, bytes))))
     });
     descriptor.set(if cff { b"FontFile3".to_vec() } else { b"FontFile2".to_vec() }, program);
     let desc = Object::Ref(doc.add(Object::Dict(descriptor)));
@@ -239,6 +243,100 @@ pub fn embed_mapping(
     Ok(resource)
 }
 
+/// Whether the stream `object` refers to decodes to `expected`.
+fn stream_is(doc: &Document, object: Option<&Object>, expected: &[u8]) -> bool {
+    object.is_some_and(|o| match doc.resolve(o).as_ref() {
+        Object::Stream(s) => s.decoded_within(expected.len()).is_ok_and(|d| d == expected),
+        _ => false,
+    })
+}
+
+/// Full programs one embedding decodes at most while looking for its own. A real match passes
+/// the cheap checks and decodes once; many candidates that pass them come from a hostile file.
+const MAX_PROGRAM_DECODES: usize = 16;
+
+/// Recognises the full program written for `bytes`: each candidate stream decodes at most once
+/// and within `bytes.len()`, and at most [`MAX_PROGRAM_DECODES`] decode in all.
+struct ProgramMatch<'a> {
+    bytes: &'a [u8],
+    known: HashMap<ObjRef, bool>,
+    decodes: usize,
+}
+
+impl<'a> ProgramMatch<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, known: HashMap::new(), decodes: 0 }
+    }
+
+    /// Whether `r`, holding `object`, is the program.
+    fn is(&mut self, doc: &Document, r: ObjRef, object: &Object) -> bool {
+        if let Some(&known) = self.known.get(&r) {
+            return known;
+        }
+        let found = match object {
+            Object::Stream(s)
+                if s.dict.get(b"PCFullFont").is_some()
+                    && s.dict.get(b"Length1").and_then(|l| doc.resolve(l).as_int()) == i64::try_from(self.bytes.len()).ok()
+                    && self.decodes < MAX_PROGRAM_DECODES =>
+            {
+                self.decodes = self.decodes.saturating_add(1);
+                s.decoded_within(self.bytes.len()).is_ok_and(|data| data == self.bytes)
+            }
+            _ => false,
+        };
+        self.known.insert(r, found);
+        found
+    }
+
+    /// Whether the resource's program is this one.
+    fn written(&mut self, doc: &Document, w: &Written) -> bool {
+        w.program.as_ref().is_some_and(|r| self.is(doc, r, &doc.get(r)))
+    }
+}
+
+/// The program for `programs.bytes` that this page's `PCFull` resources, or else the first
+/// objects of the document, already have.
+fn existing_program(doc: &Document, fonts: &Dict, programs: &mut ProgramMatch) -> Option<Object> {
+    written(doc, fonts)
+        .find(|w| programs.written(doc, w))
+        .map(|w| w.program)
+        .or_else(|| doc.scan_objects().take(8192).find_map(|(r, o)| programs.is(doc, r, &o).then_some(Object::Ref(r))))
+}
+
+/// A `PCFull` resource that [`embed_mapping`] wrote.
+struct Written {
+    resource: String,
+    top: Dict,
+    cid: Dict,
+    /// The reference to its full program.
+    program: Object,
+}
+
+/// The `PCFull` resources in `fonts`, in order.
+fn written<'a>(doc: &'a Document, fonts: &'a Dict) -> impl Iterator<Item = Written> + 'a {
+    fonts.iter().filter(|(key, _)| key.starts_with(b"PCFull")).take(256).filter_map(move |(key, value)| {
+        let top = doc.dict(value)?;
+        let cid = doc.dict(doc.resolve(top.get(b"DescendantFonts")?).as_array()?.first()?)?;
+        let descriptor = doc.dict(cid.get(b"FontDescriptor")?)?;
+        let program = descriptor.get(b"FontFile2").or_else(|| descriptor.get(b"FontFile3")).filter(|p| matches!(p, Object::Ref(_)))?.clone();
+        Some(Written { resource: String::from_utf8_lossy(key).into_owned(), top, cid, program })
+    })
+}
+
+/// A resource in `fonts` that already is this embedding: the same font name, program, glyph map
+/// and Unicode map. Editing the same text again reuses it instead of adding another copy.
+fn same_resource(doc: &Document, fonts: &Dict, name: &str, programs: &mut ProgramMatch, glyph_map: &[u8], unicode: &[u8]) -> Option<String> {
+    written(doc, fonts)
+        .find(|w| {
+            let glyphs = w.cid.get(b"CIDToGIDMap").or_else(|| w.top.get(b"Encoding"));
+            w.top.name(b"BaseFont") == Some(name.as_bytes())
+                && stream_is(doc, w.top.get(b"ToUnicode"), unicode)
+                && stream_is(doc, glyphs, glyph_map)
+                && programs.written(doc, w)
+        })
+        .map(|w| w.resource)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -273,5 +371,120 @@ mod tests {
         embed(&mut doc, &mut second, bytes, "Inter").unwrap();
         assert_eq!(doc.scan_objects().filter(|(_, o)| matches!(o.as_ref(), Object::Stream(s) if s.dict.get(b"PCFullFont").is_some())).count(), 1);
         assert_eq!(face_key("ABCDEF+Droid-Sans-Fallback"), face_key("Droid Sans Fallback"));
+    }
+
+    #[test]
+    fn embedding_the_same_text_again_reuses_its_resource_and_program() {
+        let bytes = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+        let face = FontRef::new(bytes).unwrap();
+        let glyph = |c| face.charmap().map(c).unwrap();
+        let programs = |doc: &Document| {
+            doc.scan_objects().filter(|(_, o)| matches!(o.as_ref(), Object::Stream(s) if s.dict.get(b"PCFullFont").is_some())).count()
+        };
+        // Objects before the program push it past the first 8192 that the document-wide search reads.
+        let mut doc = Document::new_empty();
+        for _ in 0..9000 {
+            doc.add(Object::Null);
+        }
+        let mut fonts = Dict::new();
+        let full = embed(&mut doc, &mut fonts, bytes, "Inter").unwrap();
+        let objects = doc.scan_objects().count();
+        assert_eq!(embed(&mut doc, &mut fonts, bytes, "Inter").unwrap(), full, "the same embedding is the same resource");
+        let shaped = [("fi".to_string(), glyph('f')), ("é".to_string(), glyph('é'))];
+        let first = embed_mapping(&mut doc, &mut fonts, bytes, "Inter", &shaped).unwrap();
+        assert_ne!(first, full, "another mapping is another resource");
+        assert_eq!(embed_mapping(&mut doc, &mut fonts, bytes, "Inter", &shaped).unwrap(), first);
+        assert_eq!(embed_mapping(&mut doc, &mut fonts, bytes, "Inter", &shaped[..1]).map(|r| r != first), Ok(true), "a different mapping");
+        assert_eq!(programs(&doc), 1, "one program for every mapping");
+        assert_eq!(fonts.iter().count(), 3);
+        assert!(doc.scan_objects().count() > objects);
+        // Another writer may have compressed the streams since; the page still recognises them.
+        for (r, o) in doc.scan_objects().collect::<Vec<_>>() {
+            if let Object::Stream(st) = o.as_ref()
+                && st.dict.get(b"Filter").is_none()
+            {
+                let data = st.decoded().unwrap();
+                doc.set(r, Object::Stream(Stream::flate(st.dict.clone(), &data)));
+            }
+        }
+        let objects = doc.scan_objects().count();
+        assert_eq!(embed(&mut doc, &mut fonts, bytes, "Inter").unwrap(), full);
+        assert_eq!(embed_mapping(&mut doc, &mut fonts, bytes, "Inter", &shaped).unwrap(), first);
+        assert_eq!(doc.scan_objects().count(), objects, "nothing new is written");
+        // A different program under the same name is not taken for this one.
+        let other = include_bytes!("../../../assets/fonts/Inter-Medium.ttf");
+        let mut more = fonts.clone();
+        let medium = embed(&mut doc, &mut more, other, "Inter").unwrap();
+        assert!(!fonts.contains(medium.as_bytes()), "{medium} is new");
+        assert_eq!(programs(&doc), 2);
+    }
+
+    #[test]
+    fn the_program_search_decodes_each_candidate_once_and_few_in_all() {
+        let bytes = b"the program".as_slice();
+        let decoy = |doc: &mut Document| {
+            let mut d = Dict::new();
+            d.set(b"PCFullFont".to_vec(), Object::Bool(true));
+            d.set(b"Length1".to_vec(), Object::Int(bytes.len() as i64));
+            doc.add(Object::Stream(Stream::flate(d, &[0; 4096])))
+        };
+        let resource = |doc: &mut Document, program: ObjRef| {
+            let mut descriptor = Dict::new();
+            descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
+            let mut cid = Dict::new();
+            cid.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
+            let mut top = Dict::new();
+            top.set(b"DescendantFonts".to_vec(), Object::Array(vec![Object::Dict(cid)]));
+            doc.add(Object::Dict(top))
+        };
+        // 200 resources sharing one decoy program decode it once.
+        let mut doc = Document::new_empty();
+        let shared = decoy(&mut doc);
+        let mut fonts = Dict::new();
+        for i in 0..200 {
+            let r = resource(&mut doc, shared);
+            fonts.set(format!("PCFull{i}").into_bytes(), Object::Ref(r));
+        }
+        let mut programs = ProgramMatch::new(bytes);
+        assert_eq!(existing_program(&doc, &fonts, &mut programs), None);
+        assert_eq!(programs.decodes, 1);
+        // 100 distinct decoys decode a bounded number of times.
+        let mut doc = Document::new_empty();
+        let mut fonts = Dict::new();
+        for i in 0..100 {
+            let program = decoy(&mut doc);
+            let r = resource(&mut doc, program);
+            fonts.set(format!("PCFull{i}").into_bytes(), Object::Ref(r));
+        }
+        let mut programs = ProgramMatch::new(bytes);
+        assert_eq!(existing_program(&doc, &fonts, &mut programs), None);
+        assert_eq!(programs.decodes, MAX_PROGRAM_DECODES);
+    }
+
+    #[test]
+    fn the_full_program_is_written_compressed_and_another_page_reuses_it() {
+        let bytes = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+        let mut doc = Document::new_empty();
+        let mut first = Dict::new();
+        embed(&mut doc, &mut first, bytes, "Inter").unwrap();
+        let program = || {
+            doc.scan_objects()
+                .find_map(|(_, o)| match o.as_ref() {
+                    Object::Stream(s) if s.dict.get(b"PCFullFont").is_some() => Some(s.clone()),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let stream = program();
+        assert_eq!(stream.dict.name(b"Filter"), Some(b"FlateDecode".as_slice()));
+        assert!(stream.raw.len() < bytes.len(), "{} of {} bytes", stream.raw.len(), bytes.len());
+        assert_eq!(stream.decoded().unwrap(), bytes);
+        // Another page's resources don't have it, so it is found among the document's objects.
+        let objects = doc.scan_objects().count();
+        let mut second = Dict::new();
+        embed(&mut doc, &mut second, bytes, "Inter").unwrap();
+        let programs = doc.scan_objects().filter(|(_, o)| matches!(o.as_ref(), Object::Stream(s) if s.dict.get(b"PCFullFont").is_some())).count();
+        assert_eq!(programs, 1, "one program for both pages");
+        assert!(doc.scan_objects().count() > objects, "the second page gets its own resource");
     }
 }
