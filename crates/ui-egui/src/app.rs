@@ -97,6 +97,8 @@ impl PdfCraftApp {
             #[cfg(target_os = "linux")]
             desktop_theme_enabled: false,
             scroll_speed: scroll_speed::ScrollSpeed::default(),
+            tab_cycle: tab_cycle::TabCycle::default(),
+            recent_tabs: tab_cycle::RecentTabs::default(),
             animation_effects: motion::AnimationEffects::default(),
             motion: motion::Motion::default(),
             language: i18n::AUTO.to_string(),

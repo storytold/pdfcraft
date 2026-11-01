@@ -2877,6 +2877,10 @@ theme	Appearance	Teema
 	Extract the selected pages…	Pura valitut sivut…
 	Delete the selected pages	Poista valitut sivut
 
+# Ctrl+Tab: most recently used order (#2063) (AI-assisted, not separately native-reviewed)
+	Next tab and Previous tab	Seuraava ja edellinen välilehti
+	In tab order	Välilehtien järjestyksessä
+	Most recently used first	Viimeksi käytetyt ensin
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tämän vastauksen asetukset
 

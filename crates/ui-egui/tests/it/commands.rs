@@ -692,3 +692,105 @@ fn ctrl_tab_steps_through_the_tabs_in_order_and_wraps_around() {
         assert!(!doc.dirty, "switching tabs changes no document");
     }
 }
+
+/// A direct command immediately after Ctrl is released must not inherit the previous frame's
+/// held modifier state; back-to-back commands each go to the tab shown before.
+#[test]
+fn direct_recent_tab_commands_reconcile_a_released_modifier() {
+    let mut h = harness();
+    for name in ["second.pdf", "third.pdf", "fourth.pdf"] {
+        h.state_mut().open_bytes(name, None, fixture(1)).unwrap();
+    }
+    h.state_mut().set_option("tab_cycle", "recent").unwrap();
+    h.run_steps(2);
+    let ids: Vec<_> = h.state().views.iter().map(|v| v.id).collect();
+    for tab in [0, 3] {
+        h.state_mut().active = Some(tab);
+        h.run_steps(2);
+    }
+    let ctrl = Modifiers::CTRL | Modifiers::COMMAND;
+    h.event(egui::Event::ModifiersChanged(ctrl));
+    h.event(egui::Event::Key { key: Key::Tab, pressed: true, modifiers: ctrl, repeat: false, physical_key: None });
+    h.event(egui::Event::Key { key: Key::Tab, pressed: false, modifiers: ctrl, repeat: false, physical_key: None });
+    h.run_steps(2);
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[0]));
+    // Release Ctrl without advancing a frame, so the recent-tab cycle still remembers it as held.
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.state_mut().execute("view.next_tab");
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[3]));
+    h.state_mut().execute("view.next_tab");
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[0]));
+}
+
+/// With Preferences ▸ Next tab and Previous tab ▸ Most recently used first (#2063), Ctrl+Tab
+/// goes to the tab shown before, as Alt+Tab does. Held down, Ctrl keeps the order of the first
+/// press: Tab again goes on to the tab shown before that. Letting go makes the tab landed on the
+/// most recent one. The choice is saved with the other settings.
+#[test]
+fn ctrl_tab_goes_through_the_most_recently_shown_tabs_when_chosen() {
+    let mut h = harness();
+    for name in ["second.pdf", "third.pdf", "fourth.pdf"] {
+        h.state_mut().open_bytes(name, None, fixture(1)).unwrap();
+    }
+    h.state_mut().set_option("tab_cycle", "recent").unwrap();
+    h.run_steps(2);
+    let ids: Vec<_> = h.state().views.iter().map(|v| v.id).collect();
+    let shown = |h: &Harness<'static, PdfCraftApp>| h.state().active_ids().map(|(_, id)| id).and_then(|id| ids.iter().position(|i| *i == id));
+    // Show the first, then the fourth, as a click on their tabs does: most recent first 3, 0.
+    for tab in [0, 3] {
+        h.state_mut().active = Some(tab);
+        h.run_steps(2);
+    }
+    let ctrl = Modifiers::CTRL | Modifiers::COMMAND;
+    let tab = |h: &mut Harness<'static, PdfCraftApp>, modifiers: Modifiers| {
+        h.event(egui::Event::Key { key: Key::Tab, pressed: true, modifiers, repeat: false, physical_key: None });
+        h.event(egui::Event::Key { key: Key::Tab, pressed: false, modifiers, repeat: false, physical_key: None });
+        h.run_steps(2);
+    };
+    // One press and release of Ctrl goes back and forth between the two most recent tabs.
+    h.event(egui::Event::ModifiersChanged(ctrl));
+    tab(&mut h, ctrl);
+    assert_eq!(shown(&h), Some(0), "back to the tab shown before");
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    h.event(egui::Event::ModifiersChanged(ctrl));
+    tab(&mut h, ctrl);
+    assert_eq!(shown(&h), Some(3), "and back again");
+    // Ctrl still held: on down the history as it was at this press (0, 3, then the tabs never
+    // shown, in strip order), not back to the first.
+    tab(&mut h, ctrl);
+    assert_eq!(shown(&h), Some(1), "on to the tab shown before those two");
+    tab(&mut h, ctrl);
+    assert_eq!(shown(&h), Some(2));
+    tab(&mut h, ctrl | Modifiers::SHIFT);
+    assert_eq!(shown(&h), Some(1), "Shift steps back in the same order");
+    tab(&mut h, ctrl);
+    tab(&mut h, ctrl);
+    assert_eq!(shown(&h), Some(0), "and wraps around");
+    tab(&mut h, ctrl);
+    assert_eq!(shown(&h), Some(3));
+    tab(&mut h, ctrl);
+    assert_eq!(shown(&h), Some(1));
+    // Let go on the second: it is the most recent now, and the next press goes back to the tab
+    // the cycle started from.
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    h.event(egui::Event::ModifiersChanged(ctrl));
+    tab(&mut h, ctrl);
+    assert_eq!(shown(&h), Some(0));
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    // Tab order is still there, and the choice is a saved setting.
+    let json = h.state().persist();
+    let saved: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(saved["tab_cycle"], "recent");
+    let mut restarted = PdfCraftApp::new();
+    restarted.restore(&json);
+    assert_eq!(restarted.tab_cycle, pdfcraft_ui_egui::tab_cycle::TabCycle::Recent, "kept across a restart");
+    h.state_mut().set_option("tab_cycle", "tabs").unwrap();
+    h.run_steps(1);
+    h.key_press_modifiers(ctrl, Key::Tab);
+    h.run_steps(2);
+    assert_eq!(shown(&h), Some(1), "in tab order, from the first tab to the next in the strip");
+    assert!(h.state_mut().set_option("tab_cycle", "mru").is_err());
+}

@@ -2569,6 +2569,10 @@ animation effects	Off	Изключени
 	Extract the selected pages…	Извличане на избраните страници…
 	Delete the selected pages	Изтриване на избраните страници
 
+# Ctrl+Tab: most recently used order (#2063) (AI-assisted, not separately native-reviewed)
+	Next tab and Previous tab	Следващ и предишен раздел
+	In tab order	По реда на разделите
+	Most recently used first	Последно използваните първо
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Опции за този отговор
 	Export value	Стойност за експортиране

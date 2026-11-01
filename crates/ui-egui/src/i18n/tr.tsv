@@ -2602,6 +2602,10 @@ animation effects	Off	Kapalı
 	Extract the selected pages…	Seçili sayfaları ayıkla…
 	Delete the selected pages	Seçili sayfaları sil
 
+# Ctrl+Tab: most recently used order (#2063) (AI-assisted, not separately native-reviewed)
+	Next tab and Previous tab	Sonraki sekme ve önceki sekme
+	In tab order	Sekme sırasına göre
+	Most recently used first	En son kullanılanlar önce
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Bu yanıtın seçenekleri
 	Export value	Dışa aktarma değeri

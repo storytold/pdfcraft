@@ -2838,6 +2838,10 @@ theme	Appearance	Tampilan
 	Extract the selected pages…	Ekstrak halaman yang dipilih…
 	Delete the selected pages	Hapus halaman yang dipilih
 
+# Ctrl+Tab: most recently used order (#2063) (AI-assisted, not separately native-reviewed)
+	Next tab and Previous tab	Tab berikutnya dan tab sebelumnya
+	In tab order	Sesuai urutan tab
+	Most recently used first	Yang terakhir dipakai lebih dulu
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opsi untuk balasan ini
 

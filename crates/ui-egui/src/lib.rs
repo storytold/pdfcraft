@@ -60,6 +60,7 @@ mod panels;
 pub use print_ui::{Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSource, Which as PrintWhich, system_printers};
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
 pub mod i18n;
+pub mod tab_cycle;
 pub mod theme;
 mod widgets;
 
@@ -306,6 +307,10 @@ pub struct PdfCraftApp {
     desktop_theme_enabled: bool,
     /// How far a mouse-wheel notch scrolls.
     pub scroll_speed: scroll_speed::ScrollSpeed,
+    /// The order Next tab and Previous tab go through the tabs (#2063).
+    pub tab_cycle: tab_cycle::TabCycle,
+    /// The tabs most recently shown first, for [`tab_cycle::TabCycle::Recent`].
+    pub(crate) recent_tabs: tab_cycle::RecentTabs,
     /// Preferences ▸ Animation effects: on, off, or as the system's animation setting says.
     pub animation_effects: motion::AnimationEffects,
     /// Whether the system asked for no animations, and how the desktop app asks it.

@@ -2613,6 +2613,10 @@ animation effects	Off	Ανενεργά
 	Extract the selected pages…	Εξαγωγή των επιλεγμένων σελίδων…
 	Delete the selected pages	Διαγραφή των επιλεγμένων σελίδων
 
+# Ctrl+Tab: most recently used order (#2063) (AI-assisted, not separately native-reviewed)
+	Next tab and Previous tab	Επόμενη και προηγούμενη καρτέλα
+	In tab order	Με τη σειρά των καρτελών
+	Most recently used first	Οι πιο πρόσφατα χρησιμοποιημένες πρώτα
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Επιλογές για αυτήν την απάντηση
 	Export value	Τιμή εξαγωγής
