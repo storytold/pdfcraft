@@ -170,6 +170,12 @@ impl PdfCraftApp {
                     _ => return Err("default-page-gaps must be on or off".into()),
                 };
             }
+            ("recent-files", _) => {
+                let max = crate::RECENT_FILES_MAX;
+                let limit = value.parse().ok().filter(|n| *n <= max).ok_or_else(|| format!("recent-files must be between 0 and {max}"))?;
+                self.recent_limit = limit;
+                self.recent.truncate(limit);
+            }
             ("cover", Some(v)) => {
                 let on = match value {
                     "on" => true,

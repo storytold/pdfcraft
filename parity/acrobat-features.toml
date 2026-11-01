@@ -9957,11 +9957,11 @@ title = "Preferences: documents (autosave interval, recent count)"
 area = "N"
 tier = "P1"
 milestone = "M14"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/it/recent_files.rs::preferences_cuts_the_list_when_it_closes_and_not_before", "crates/ui-egui/tests/it/recent_files.rs::at_zero_home_has_no_recent_section", "crates/ui-egui/tests/it/recent_files.rs::a_settings_file_can_not_ask_for_a_limit_that_is_not_one"]
+notes = "Preferences ▸ Documents and view: Recent files to keep, from 0 to 50 with 12 by default (#5572). At 0 Home has no Recent section and File ▸ Open Recent is disabled; Restore the last view keeps its own record of paths under its own switch. Still missing: the autosave interval (recovery snapshots run every AUTOSAVE_SECS, 60 s) and the rest of Acrobat's Documents page."
 
 [[feature]]
 id = "misc.prefs-commenting"

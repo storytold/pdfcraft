@@ -7,6 +7,10 @@
 # Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) are not translated;
 # the trailing "…" of dialog commands is kept.
 
+# Untranslated: English text until a translator fills these in.
+	Lowering this forgets the oldest files. At 0 there is no list.	Lowering this forgets the oldest files. At 0 there is no list.
+	Recent files to keep	Recent files to keep
+
 	Allow	Tillat
 	Cancel	Avbryt
 	Only allow this if you trust the source document.	Tillat dette bare hvis du stoler på kildedokumentet.

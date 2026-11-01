@@ -78,7 +78,7 @@ impl PdfCraftApp {
         let mut v = serde_json::json!({
             "side_panels": self.side_panels.to_json(self.left_open),
             "docking_right": self.right,
-            "recent": self.recent,
+            "recent": self.recent.iter().take(self.recent_limit).collect::<Vec<_>>(),
             "reopen_last_session": self.reopen_last_session,
             "restore_last_view": self.restore_last_view,
             "last_views": self.last_views_to_save(),
@@ -139,6 +139,7 @@ impl PdfCraftApp {
         });
         // Set apart: one more key inside the macro above passes serde_json's recursion limit.
         v["default_page_gaps"] = serde_json::Value::Bool(self.view_defaults.show_page_gaps);
+        v["recent_limit"] = serde_json::json!(self.recent_limit);
         v["fill_text_color"] = serde_json::json!(self.fill_text_color);
         v["redact_prefs"] = self.redact_defaults.to_json();
         v["pinned_tools"] = serde_json::json!(self.pinned_tools);
@@ -181,6 +182,11 @@ impl PdfCraftApp {
             let r: Vec<RecentFile> = r.into_iter().filter(|f| std::path::Path::new(&f.path).exists()).collect();
             self.recent = r;
         }
+        // Nonsense keeps the limit it had; settings from before the limit have none.
+        if let Some(limit) = v["recent_limit"].as_u64() {
+            self.recent_limit = usize::try_from(limit).map_or(crate::RECENT_FILES_MAX, |n| n.min(crate::RECENT_FILES_MAX));
+        }
+        self.recent.truncate(self.recent_limit);
         self.restore_layout_prefs(&v);
         self.restore_behavior_prefs(&v);
         self.restore_view_prefs(&v);

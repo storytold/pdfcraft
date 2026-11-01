@@ -18,6 +18,10 @@
 # Integer plurals (CLDR uk): one (1, 21) | few (2–4, 22–24) | many (0, 5–19); 11–14 take many.
 # Commands use infinitives. Fixed-count templates use count-neutral wording.
 
+# Untranslated: English text until a translator fills these in.
+	Lowering this forgets the oldest files. At 0 there is no list.	Lowering this forgets the oldest files. At 0 there is no list.
+	Recent files to keep	Recent files to keep
+
 	Menu	Меню
 	File	Файл
 	Edit	Редагування

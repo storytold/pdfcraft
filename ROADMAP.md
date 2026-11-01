@@ -219,6 +219,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-01 (M14, #5572):** Preferences ▸ Documents and view sets how many recent files to keep, from 0 to 50 with 12 by default. At 0 Home has no Recent section and File ▸ Open Recent is disabled. The list is cut when Preferences closes, so the number can pass through 0 on its way to another.
+
 - 2026-11-01: PR #2155 further review preserves inherited Form text state and soft-mask chronology during Arrange, composes crop-group moves in the proper scope, and uses affine/press-relative image resize plus a shared rotation pivot. No-op script buttons preserve hidden source text; paste coordinates, visible selection ownership, and Snapshot/Export permissions have dedicated regressions. Candidate only; estimates unchanged.
 
 - 2026-11-01: PR #2155 latest follow-up handles explicit image-paste events without release-time guesses, refreshes the font-size field when a selection becomes mixed, and specifies mixed-script normalization with exact Undo restoration. Candidate only; estimates unchanged.

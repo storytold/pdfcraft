@@ -2,6 +2,11 @@
 # Partial, clean-room initial contribution. Entries not yet translated fall back to English.
 # Translate from English meanings; retain placeholders and trailing ellipses.
 # Greek plural forms: one (1) | other (0, 2+).
+
+# Untranslated: English text until a translator fills these in.
+	Lowering this forgets the oldest files. At 0 there is no list.	Lowering this forgets the oldest files. At 0 there is no list.
+	Recent files to keep	Recent files to keep
+
 	Menu	Μενού
 	File	Αρχείο
 	Edit	Επεξεργασία
