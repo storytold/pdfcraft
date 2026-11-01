@@ -104,7 +104,14 @@ session date language. `set_date_format("auto")` restores automatic selection. P
 including an explicit US pattern, remain distinct after restart. The UI saves this under
 `date_format_override`; the legacy `date_format` key migrates
 `m/d/yyyy` to automatic (the old setter normalized it to the default), preserving other
-custom patterns. A new explicit US choice remains explicit.
+custom patterns. Old profiles did not record whether `m/d/yyyy` was chosen intentionally or
+was the untouched default: both migrate to automatic, so a Brazilian Portuguese user who
+intentionally chose US dates must select `m/d/yyyy` again after upgrading. That new explicit
+choice is saved in `date_format_override` and survives language changes and restarts.
+The UI regression `legacy_date_settings_migrate_without_losing_custom_or_new_explicit_patterns`
+covers old default/custom profiles and new-key precedence;
+`intentional_legacy_us_dates_are_indistinguishable_and_can_be_selected_again` covers the
+ambiguous old US choice and its explicit recovery.
 
 Dynamic stamp by-lines follow the same effective date language, independently of the Fill &
 Sign pattern. Brazilian Portuguese uses `Por Ana às 15:45, 15/10/2026`; other languages retain

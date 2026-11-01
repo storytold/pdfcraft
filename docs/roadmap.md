@@ -10,7 +10,6 @@
 > **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** patch (M2, PR #4172: reconcile current main and retain Japanese serif/weight selection alongside display-only CJK fallback; estimates unchanged)
 > **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M7 #2517: a narrowed then widened paragraph keeps the typed spaces the wrap consumed, after save and reopen; estimates unchanged)
 > **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: OCR model downloads use verified ONNX pairs with legacy discovery fallback; estimates unchanged)
-> **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** minor (PR #2732 review: distinguish completed Fontconfig work from M14 gaps and align date-migration parity notes with tested behavior; estimates unchanged)
 
 > **Last reviewed:** 2026-10-25 | **Last updated:** 2026-10-25 | **Change:** minor (M5: one reply in the Comments panel is edited, copied or deleted from its own "…" menu; estimates unchanged)
 > **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** minor (M11: lossless JBIG2 stores each distinct mark once, as a symbol; estimates unchanged)
@@ -57,7 +56,6 @@
 > **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-18 · **Change:** minor (M3, PR #3101: optional gapless page display with translations in all 22 catalogs; organizer and comparison toggles corrected; estimates unchanged)
 
 > **Last reviewed:** 2026-10-19 · **Last updated:** 2026-10-19 · **Change:** minor (M5/M14 #2664: migrate legacy default date settings to automatic; preserve custom and new explicit patterns; estimates unchanged)
-> **Last reviewed:** 2026-10-19 · **Last updated:** 2026-10-19 · **Change:** minor (M5/M14 #2664: refreshed against upstream `4db6ac4a`; locale behavior and estimates unchanged)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (M14/#2383 GPU-limit candidate; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-20 - **Last updated:** 2026-10-20 - **Change:** minor (M6, #3502: form detection uses the existing content-stream boundary policy; estimates unchanged)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (M7: the Edit text caret is as tall as the row it is on; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -307,8 +305,6 @@ Estimates unchanged.
 | 2026-10-23 | minor | M6: calculation checks: a formula reading a field the form doesn't have, and a script building the names it reads, are flagged by `form_calculation_order` and on the Calculation order page (a red mark, a card naming the broken formulas, a note for built names); `form_calculation_order` gives each formula and `form_fields` a custom Calculate script. Estimates unchanged. |
 | 2026-10-29 | minor | M7 #2517: widening a paragraph rejoins a wrap with the spaces that wrap consumed, including a typed run and none for a Chinese or Japanese word split, after an incremental save and a full rewrite. Estimates unchanged. |
 | 2026-10-27 | minor | M10: OCR stages SHA-256-verified ONNX models after the upstream RTEN URL brownout; discovery prefers a complete ONNX pair per directory, falls back to a complete RTEN pair, and never mixes formats or directories; language/web limits and estimates unchanged. |
-| 2026-10-26 | minor | PR #2732 review: separate completed Fontconfig and other M14 work from the remaining gaps; date-migration parity notes now describe legacy defaults as automatic and preserve custom/new explicit patterns. No runtime behavior or estimate changes. |
-| 2026-10-26 | minor | M5/M14 #2664: integrated upstream `13bfbd07`, preserving locale behavior, upstream automation cases and contributor credits; estimates unchanged. |
 | 2026-10-24 | minor | M3, #3970 follow-up: the button release given back after a window move or resize goes before the pointer leaving, so hover doesn't stick. Estimates unchanged. |
 | 2026-10-23 | minor | M8, #3205 follow-up: phone-pattern redaction includes the +39 country code on labelled Italian geographic numbers with a slash; dates, protocol identifiers and whole-run guards remain. Estimates unchanged. |
 | 2026-10-23 | minor | M10: Word table cells use the grid columns they span, including cells after a merged cell; synthetic export regression and CLI reproduction. Estimates unchanged. |
@@ -340,9 +336,7 @@ Estimates unchanged.
 | 2026-10-15 | minor | M5: budget retained FDF entries before cloning; discovery keeps lazy array owners and annotation positions, with alias/cache-eviction stress fixtures. Limits cover the copied graph; source parsing/page discovery retain existing COS/parser limits, with no total source-memory bound. FDF import semantics and estimates unchanged. |
 
 | 2026-10-19 | minor | M5/M14 #2664: migrate legacy default dates to automatic using a distinct override key; preserve old custom and new explicit patterns, including US dates. Upgrade/restart and malformed-settings regressions; estimates unchanged. |
-| 2026-10-19 | minor | M5/M14 #2664: integrated upstream `4db6ac4a`, preserving both roadmap histories and existing contributor credits. The locale implementation and regression changes remain unchanged relative to upstream; estimates unchanged. |
-| 2026-10-18 | minor | M5/M14 #2664: integrated upstream `d8b27058`, preserving both roadmap histories and the existing locale fix. Resolution changes only documentation; Rust 1.95 format, scoped clippy, 1,931 tests (9 existing ignored), layers, assets, parity and 31-crate wasm checks pass. Estimates unchanged. |
-| 2026-10-16 | minor | M5/M14 #2664: pt-BR Fill & Sign defaults and dynamic stamp by-lines; automatic and explicit date choices persist separately. Other locales retain the existing fallback; legacy pattern strings remain explicit. Engine, automation and UI regressions pass; estimates unchanged. |
+| 2026-10-16 | minor | M5/M14 #2664: pt-BR Fill & Sign defaults and dynamic stamp by-lines; automatic and explicit date choices persist separately. Other locales retain the existing fallback; legacy custom patterns remain explicit, while old US patterns (including indistinguishable intentional choices) migrate to automatic. Engine, automation and UI regressions pass; estimates unchanged. |
 | 2026-10-15 | minor | M7: Edit text caret height follows its row, with a kittest regression; estimates unchanged |
 | 2026-10-19 | minor | M3 #3360: retain each document’s scroll position when switching Read and the docking workspace at fixed zoom. Estimates unchanged. |
 | 2026-10-18 | minor | M4, PR #1919 review: repeated page indices apply each rotation to the latest page-local value, preserving indirect/inherited angles. Synthetic adjacent/interleaved duplicates retain siblings and page contents through incremental and full saves. Estimates unchanged. |

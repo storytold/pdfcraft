@@ -278,3 +278,30 @@ fn malformed_or_missing_date_settings_keep_the_current_valid_choice() {
         assert_eq!(app.session.date_format_override(), Some("yyyy-mm-dd"), "{saved}");
     }
 }
+
+#[test]
+fn intentional_legacy_us_dates_are_indistinguishable_and_can_be_selected_again() {
+    // Before the override key existed, an untouched default and an intentionally
+    // selected US pattern produced this same profile. Intent cannot be recovered.
+    let legacy_profile = r#"{"language":"pt-br","date_format":"m/d/yyyy"}"#;
+    let mut app = PdfCraftApp::new();
+    app.restore(legacy_profile);
+    assert_eq!(app.session.date_format_override(), None);
+    assert_eq!(app.session.date_format_for_language(Some("pt-br")), "dd/mm/yyyy");
+    let migrated = app.persist();
+    let mut restarted = PdfCraftApp::new();
+    restarted.restore(&migrated);
+    assert_eq!(restarted.session.date_format_override(), None);
+    assert_eq!(restarted.session.date_format_for_language(Some("pt-br")), "dd/mm/yyyy");
+
+    // Selecting US dates again records intent in the new key, including on restart.
+    restarted.set_option("date-format", "m/d/yyyy").unwrap();
+    let saved: serde_json::Value = serde_json::from_str(&restarted.persist()).unwrap();
+    assert_eq!(saved["date_format_override"], "m/d/yyyy");
+    app.restore(&restarted.persist());
+    assert_eq!(app.session.date_format_override(), Some("m/d/yyyy"));
+    for language in ["en", "pt-br"] {
+        app.set_option("language", language).unwrap();
+        assert_eq!(app.session.date_format_for_language(Some(language)), "m/d/yyyy");
+    }
+}
