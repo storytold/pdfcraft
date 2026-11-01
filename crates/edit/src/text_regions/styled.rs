@@ -230,6 +230,17 @@ struct StyledLines<'a> {
 }
 
 type StyledChar = (char, usize, String);
+
+/// End of a contiguous run sharing both its style and font resource.
+fn styled_run_end(items: &[StyledChar], start: usize) -> usize {
+    let Some(first) = items.get(start) else { return start };
+    let mut end = start + 1;
+    while items.get(end).is_some_and(|next| next.1 == first.1 && next.2 == first.2) {
+        end += 1;
+    }
+    end
+}
+
 type StyledRows = Vec<Vec<StyledChar>>;
 type RowRanges = Vec<std::ops::Range<usize>>;
 type ShapedRunCache = HashMap<(usize, usize), (Vec<u8>, pdfcraft_fonts::source_shaping::ShapedRun, String)>;
@@ -237,6 +248,7 @@ type ShapedRunCache = HashMap<(usize, usize), (Vec<u8>, pdfcraft_fonts::source_s
 struct ShapedRows {
     runs: ShapedRunCache,
     advances: HashMap<(usize, usize), f64>,
+    char_advances: HashMap<(usize, usize), Vec<f64>>,
 }
 
 fn prepare_shaped_rows(
@@ -248,15 +260,15 @@ fn prepare_shaped_rows(
 ) -> Result<ShapedRows, EditError> {
     let mut runs = HashMap::new();
     let mut advances = HashMap::new();
+    let mut char_advances = HashMap::new();
     for (row_index, row) in rows.iter().enumerate().filter(|(index, _)| !kept.get(*index).copied().unwrap_or(false)) {
         let mut at = 0;
         while let Some(item) = row.get(at) {
-            let mut end = at + 1;
-            while row.get(end).is_some_and(|next| next.1 == item.1 && next.2 == item.2) {
-                end += 1;
-            }
+            let end = styled_run_end(row, at);
             let segment = row.get(at..end).unwrap_or_default();
-            advances.insert((row_index, at), segment.iter().map(&advance).sum::<f64>());
+            let widths: Vec<f64> = segment.iter().map(&advance).collect();
+            advances.insert((row_index, at), widths.iter().copied().sum());
+            char_advances.insert((row_index, at), widths);
             let text: String = segment.iter().map(|character| character.0).collect();
             if let Some((bytes, shaped, family)) = shape_source(doc, fonts, &item.2, &text)? {
                 runs.insert((row_index, at), (bytes, shaped, family));
@@ -264,7 +276,7 @@ fn prepare_shaped_rows(
             at = end;
         }
     }
-    Ok(ShapedRows { runs, advances })
+    Ok(ShapedRows { runs, advances, char_advances })
 }
 
 fn embed_shaped_resources(doc: &mut Document, fonts: &mut Dict, runs: &ShapedRunCache) -> Result<HashMap<(usize, usize), String>, EditError> {
@@ -638,6 +650,70 @@ fn untouched_rows(block: &TextBlock, draft: &str, rows: &[std::ops::Range<usize>
         .collect()
 }
 
+fn segment_underline_runs(
+    widths: &[f64],
+    segment_width: f64,
+    x: f64,
+    default_style: usize,
+    row_styles: Option<&[Option<usize>]>,
+    pos: usize,
+) -> Vec<(usize, f64, f64)> {
+    let width_sum = widths.iter().copied().sum::<f64>();
+    let width_scale = if width_sum > 1e-6 { segment_width / width_sum } else { 0.0 };
+    let mut cursor = x;
+    let mut runs: Vec<(usize, f64, f64)> = Vec::new();
+    for (offset, width) in widths.iter().enumerate() {
+        let style_index = row_styles.and_then(|styles| styles.get(pos.saturating_add(offset))).and_then(|style| *style).unwrap_or(default_style);
+        let next = cursor + *width * width_scale;
+        match runs.last_mut() {
+            Some((prev, _, to)) if *prev == style_index => *to = next,
+            _ => runs.push((style_index, cursor, next)),
+        }
+        cursor = next;
+    }
+    runs
+}
+
+/// Keep spaces in a subset without a space glyph attached to an adjacent glyph-bearing segment on
+/// the same row so `source_show` wraps them in one `/ActualText` span (#4229).
+///
+/// The returned slot is the space's style index from before that reassignment, where the
+/// grouping key changed. Underlines stay with that style; the row itself keeps the neighbour's
+/// key so the space is not a group of its own.
+fn assign_subset_space_fonts(row: &mut [(char, usize, String)], metrics: &std::collections::BTreeMap<String, Metrics>) -> Vec<Option<usize>> {
+    let mut right_any = vec![None; row.len()];
+    let mut next_any: Option<(usize, String)> = None;
+    for (i, item) in row.iter().enumerate().rev() {
+        if item.0 != ' ' {
+            next_any = Some((item.1, item.2.clone()));
+        } else if let Some(slot) = right_any.get_mut(i) {
+            *slot = next_any.clone();
+        }
+    }
+    let mut prev_any: Option<(usize, String)> = None;
+    let mut underline_style = vec![None; row.len()];
+    for (i, item) in row.iter_mut().enumerate() {
+        if item.0 != ' ' {
+            prev_any = Some((item.1, item.2.clone()));
+            continue;
+        }
+        if metrics.get(&item.2).is_none_or(|m| m.encode(" ").is_some()) {
+            continue;
+        }
+        if let Some((style, font)) = prev_any.as_ref().or_else(|| right_any.get(i).and_then(Option::as_ref)) {
+            let original = item.1;
+            item.1 = *style;
+            item.2 = font.clone();
+            if let Some(slot) = underline_style.get_mut(i)
+                && item.1 != original
+            {
+                *slot = Some(original);
+            }
+        }
+    }
+    underline_style
+}
+
 /// Operator index of the paragraph's first text object, and of the next line's text object
 /// when one follows.
 fn paragraph_span(block: &TextBlock, lines: &[TextLine]) -> Option<(usize, Option<usize>)> {
@@ -922,10 +998,7 @@ pub(crate) fn rewrite_styled_block(
         let mut width = 0.0;
         let mut at = 0;
         while let Some(item) = items.get(at) {
-            let mut end = at + 1;
-            while items.get(end).is_some_and(|v| v.1 == item.1 && v.2 == item.2) {
-                end += 1;
-            }
+            let end = styled_run_end(items, at);
             let segment = items.get(at..end).unwrap_or_default();
             let string: String = segment.iter().map(|v| v.0).collect();
             if let Some((_, shaped, _)) = shape_source(doc, &fonts, &item.2, &string)? {
@@ -949,7 +1022,8 @@ pub(crate) fn rewrite_styled_block(
         }
         Ok(width)
     };
-    let (rows, row_ranges, row_lines, row_soft, row_gap) = wrap_styled_rows(&chars, width, measure)?;
+    let (mut rows, row_ranges, row_lines, row_soft, row_gap) = wrap_styled_rows(&chars, width, measure)?;
+    let space_styles: Vec<_> = rows.iter_mut().map(|row| assign_subset_space_fonts(row, &metrics)).collect();
     let streams = content_streams(doc, &p.dict)?;
     let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
@@ -979,7 +1053,7 @@ pub(crate) fn rewrite_styled_block(
     validate_contextual_rows(&rows, &kept)?;
     let measured: Vec<_> = rows.iter().map(|row| measure(row)).collect::<Result<_, _>>()?;
     let shaped = prepare_shaped_rows(doc, &fonts, &rows, &kept, advance)?;
-    let ShapedRows { runs: shaped_runs, advances: segment_advances } = shaped;
+    let ShapedRows { runs: shaped_runs, advances: segment_advances, char_advances } = shaped;
     let glyph_resources = embed_shaped_resources(doc, &mut fonts, &shaped_runs)?;
     let n = pdfcraft_content::num;
     let mut block_ops = vec![Op::new("q", vec![])];
@@ -1042,10 +1116,7 @@ pub(crate) fn rewrite_styled_block(
         while pos < row.len() {
             let Some(item) = row.get(pos) else { break };
             let source = lines.get(item.1).unwrap_or(first);
-            let mut end = pos + 1;
-            while row.get(end).is_some_and(|other| other.1 == item.1 && other.2 == item.2) {
-                end += 1;
-            }
+            let end = styled_run_end(row, pos);
             let segment = row.get(pos..end).unwrap_or_default();
             let string: String = segment.iter().map(|c| c.0).collect();
             let m = metrics.get(&item.2).ok_or_else(|| EditError::Invalid("the paragraph font is missing".into()))?;
@@ -1149,11 +1220,20 @@ pub(crate) fn rewrite_styled_block(
                 )?);
                 block_ops.push(Op::new("ET", vec![]));
             }
-            if underlines.get(&item.1).copied().or(style.underline) == Some(true) {
-                let [r, g, b] = overrides.get(&item.1).and_then(|r| r.color).or(style.color).unwrap_or(source.color);
-                let underline_size = size_of(source, item.1) * source.origin.k;
-                let (x0, y0) = back.apply(x - o.ctm[4], baseline - o.ctm[5] - underline_size * 0.12);
-                let (x1, y1) = back.apply(x + segment_width - o.ctm[4], baseline - o.ctm[5] - underline_size * 0.12);
+            // A space reassigned onto a neighbour keeps that neighbour's grouping key, and its
+            // own style for the underline. Stroke each run of one underline style separately.
+            let widths = char_advances.get(&(row_index, pos)).map(Vec::as_slice).unwrap_or(&[]);
+            for (style_index, from, to) in
+                segment_underline_runs(widths, segment_width, x, item.1, space_styles.get(row_index).map(Vec::as_slice), pos)
+            {
+                let source = lines.get(style_index).unwrap_or(first);
+                if underlines.get(&style_index).copied().or(style.underline) != Some(true) || to <= from {
+                    continue;
+                }
+                let [r, g, b] = overrides.get(&style_index).and_then(|r| r.color).or(style.color).unwrap_or(source.color);
+                let underline_size = size_of(source, style_index) * source.origin.k;
+                let (x0, y0) = back.apply(from - o.ctm[4], baseline - o.ctm[5] - underline_size * 0.12);
+                let (x1, y1) = back.apply(to - o.ctm[4], baseline - o.ctm[5] - underline_size * 0.12);
                 block_ops.push(Op::new("RG", vec![n(r), n(g), n(b)]));
                 block_ops.push(Op::new("w", vec![n(underline_size * 0.06 / o.ctm[2].hypot(o.ctm[3]).max(1e-6))]));
                 block_ops.push(Op::new("m", vec![n(x0), n(y0)]));
@@ -1191,4 +1271,20 @@ pub(crate) fn rewrite_styled_block(
         d.set(b"Resources".to_vec(), Object::Dict(res));
     })?;
     Ok(LineEdit { substituted })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::styled_run_end;
+
+    #[test]
+    fn styled_runs_stop_at_style_or_font_changes() {
+        let items = vec![('a', 0, "F1".into()), (' ', 0, "F1".into()), ('b', 1, "F1".into()), ('c', 1, "F2".into())];
+        assert_eq!(styled_run_end(&items, 0), 2);
+        assert_eq!(styled_run_end(&items, 1), 2);
+        assert_eq!(styled_run_end(&items, 2), 3);
+        assert_eq!(styled_run_end(&items, 3), 4);
+        assert_eq!(styled_run_end(&items, 4), 4);
+        assert_eq!(styled_run_end(&[], 0), 0);
+    }
 }
