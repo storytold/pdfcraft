@@ -603,6 +603,8 @@
 	Discard hidden text	Ausgeblendeten Text verwerfen
 	Use Flate to encode streams that are not encoded	Nicht codierte Streams mit Flate codieren
 	In streams that use LZW encoding, use Flate instead	In LZW-codierten Streams stattdessen Flate verwenden
+	Store JPEG images as JPEG XL (smaller, can be undone; needs a reader that supports JPEG XL)	JPEG-Bilder als JPEG XL speichern (kleiner, rückgängig zu machen; erfordert ein Programm mit JPEG-XL-Unterstützung)
+	Turn JPEG XL images back into the JPEGs they were made from	JPEG-XL-Bilder wieder in die JPEGs umwandeln, aus denen sie erstellt wurden
 	Remove invalid links and bookmarks	Ungültige Links und Lesezeichen entfernen
 	Remove unreferenced named destinations	Nicht referenzierte benannte Ziele entfernen
 	Compress document structure (object streams)	Dokumentstruktur komprimieren (Objekt-Streams)

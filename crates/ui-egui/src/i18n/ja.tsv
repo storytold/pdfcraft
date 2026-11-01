@@ -630,6 +630,8 @@
 	Discard hidden text	非表示テキストを破棄
 	Use Flate to encode streams that are not encoded	未エンコードのストリームを Flate でエンコード
 	In streams that use LZW encoding, use Flate instead	LZW エンコードのストリームを Flate でエンコード
+	Store JPEG images as JPEG XL (smaller, can be undone; needs a reader that supports JPEG XL)	JPEG 画像を JPEG XL で保存（小さくなり、元に戻せます。JPEG XL 対応のリーダーが必要です）
+	Turn JPEG XL images back into the JPEGs they were made from	JPEG XL 画像を元の JPEG に戻す
 	Remove invalid links and bookmarks	無効なリンクとしおりを削除
 	Remove unreferenced named destinations	参照されていない名前付き移動先を削除
 	Compress document structure (object streams)	文書構造を圧縮（オブジェクトストリーム）

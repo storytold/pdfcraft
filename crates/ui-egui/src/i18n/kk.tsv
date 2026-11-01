@@ -590,6 +590,8 @@
 	Discard hidden text	Жасырын мәтінді алып тастау
 	Use Flate to encode streams that are not encoded	Кодталмаған ағындарды Flate көмегімен кодтау
 	In streams that use LZW encoding, use Flate instead	LZW кодталған ағындарда оның орнына Flate қолдану
+	Store JPEG images as JPEG XL (smaller, can be undone; needs a reader that supports JPEG XL)	JPEG кескіндерін JPEG XL ретінде сақтау (кішірек, қайтаруға болады; JPEG XL қолдайтын оқу бағдарламасы қажет)
+	Turn JPEG XL images back into the JPEGs they were made from	JPEG XL кескіндерін олар жасалған JPEG-ке қайтару
 	Remove invalid links and bookmarks	Жарамсыз сілтемелерді және бетбелгілерді алып тастау
 	Remove unreferenced named destinations	Сілтеме берілмеген атаулы межелерді алып тастау
 	Compress document structure (object streams)	Құжат құрылымын сығу (нысан ағындары)

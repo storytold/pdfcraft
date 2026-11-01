@@ -592,6 +592,8 @@
 	Discard hidden text	ຕັດຂໍ້ຄວາມທີ່ເຊື່ອງໄວ້ອອກ
 	Use Flate to encode streams that are not encoded	ໃຊ້ Flate ເພື່ອເຂົ້າລະຫັດສະຕຣີມທີ່ຍັງບໍ່ໄດ້ເຂົ້າລະຫັດ
 	In streams that use LZW encoding, use Flate instead	ໃຊ້ Flate ແທນ LZW ໃນສະຕຣີມທີ່ເຂົ້າລະຫັດດ້ວຍ LZW
+	Store JPEG images as JPEG XL (smaller, can be undone; needs a reader that supports JPEG XL)	ບັນທຶກຮູບ JPEG ເປັນ JPEG XL (ນ້ອຍກວ່າ, ຍ້ອນກັບໄດ້; ຕ້ອງການໂປຣແກຣມອ່ານທີ່ຮອງຮັບ JPEG XL)
+	Turn JPEG XL images back into the JPEGs they were made from	ປ່ຽນຮູບ JPEG XL ກັບເປັນ JPEG ທີ່ສ້າງມາຈາກ
 	Remove invalid links and bookmarks	ລຶບລິ້ງຄ໌ ແລະ ບຸກມາກທີ່ໃຊ້ການບໍ່ໄດ້
 	Remove unreferenced named destinations	ລຶບຈຸດໝາຍປາຍທາງທີ່ມີຊື່ເຊິ່ງບໍ່ມີການອ້າງອີງ
 	Compress document structure (object streams)	ບີບອັດໂຄງສ້າງເອກະສານ (ສະຕຣີມວັດຖຸ)

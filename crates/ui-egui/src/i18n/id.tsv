@@ -1235,6 +1235,8 @@
 	Use 72 DPI (one point per pixel)	Gunakan 72 DPI (satu titik per piksel)
 	Use Flate to encode streams that are not encoded	Gunakan Flate untuk mengodekan stream yang belum dikodekan
 	In streams that use LZW encoding, use Flate instead	Pada stream yang memakai pengodean LZW, gunakan Flate sebagai gantinya
+	Store JPEG images as JPEG XL (smaller, can be undone; needs a reader that supports JPEG XL)	Simpan gambar JPEG sebagai JPEG XL (lebih kecil, dapat dibatalkan; memerlukan pembaca yang mendukung JPEG XL)
+	Turn JPEG XL images back into the JPEGs they were made from	Ubah gambar JPEG XL kembali menjadi JPEG asalnya
 	Use a Digital ID from a file	Gunakan ID Digital dari file
 	Use custom DPI	Gunakan DPI kustom
 	Use each image's embedded DPI; use 72 DPI when it is absent.	Gunakan DPI tertanam pada setiap gambar; gunakan 72 DPI jika tidak ada.

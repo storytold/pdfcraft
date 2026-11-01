@@ -627,6 +627,8 @@
 	Discard hidden text	دور انداختن متن پنهان
 	Use Flate to encode streams that are not encoded	استفاده از Flate برای کد‌گذاری جریان‌هایی که کد‌گذاری نشدهاند
 	In streams that use LZW encoding, use Flate instead	در جریان‌هایی که از کد‌گذاری LZW استفاده می‌کنند، به‌جای آن از Flate استفاده کنید
+	Store JPEG images as JPEG XL (smaller, can be undone; needs a reader that supports JPEG XL)	ذخیره تصاویر JPEG به‌صورت JPEG XL (کوچک‌تر، قابل بازگردانی؛ به برنامهٔ خواننده‌ای با پشتیبانی از JPEG XL نیاز دارد)
+	Turn JPEG XL images back into the JPEGs they were made from	بازگرداندن تصاویر JPEG XL به JPEGهایی که از آن‌ها ساخته شده‌اند
 	Remove invalid links and bookmarks	حذف پیوند‌ها و نشانک‌های نامعتبر
 	Remove unreferenced named destinations	حذف مقصد‌های نامدار بدون ارجاع
 	Compress document structure (object streams)	فشرده‌سازی ساختار سند (جریان‌های شیء)

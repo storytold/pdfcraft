@@ -254,6 +254,8 @@
 	Discard hidden text	捨棄隱藏文字
 	Use Flate to encode streams that are not encoded	使用 Flate 編碼未編碼的流
 	In streams that use LZW encoding, use Flate instead	在使用 LZW 編碼的流中改用 Flate
+	Store JPEG images as JPEG XL (smaller, can be undone; needs a reader that supports JPEG XL)	將 JPEG 影像儲存為 JPEG XL（更小，可復原；需要支援 JPEG XL 的閱讀器）
+	Turn JPEG XL images back into the JPEGs they were made from	將 JPEG XL 影像還原為產生它們的 JPEG
 	Remove invalid links and bookmarks	刪除無效連結和書籤
 	Remove unreferenced named destinations	刪除未引用的命名目標
 	Compress document structure (object streams)	壓縮文件結構（物件流）

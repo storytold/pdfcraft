@@ -581,6 +581,8 @@
 	Discard hidden text	ละทิ้งข้อความที่ซ่อนอยู่
 	Use Flate to encode streams that are not encoded	ใช้ Flate เข้ารหัสสตรีมที่ยังไม่ได้เข้ารหัส
 	In streams that use LZW encoding, use Flate instead	ใช้ Flate แทนในสตรีมที่เข้ารหัสแบบ LZW
+	Store JPEG images as JPEG XL (smaller, can be undone; needs a reader that supports JPEG XL)	จัดเก็บภาพ JPEG เป็น JPEG XL (ขนาดเล็กลง ย้อนกลับได้ ต้องใช้โปรแกรมอ่านที่รองรับ JPEG XL)
+	Turn JPEG XL images back into the JPEGs they were made from	แปลงภาพ JPEG XL กลับเป็น JPEG ต้นฉบับ
 	Remove invalid links and bookmarks	เอาลิงก์และบุ๊กมาร์กที่ใช้ไม่ได้ออก
 	Remove unreferenced named destinations	เอาปลายทางที่มีชื่อซึ่งไม่ถูกอ้างถึงออก
 	Compress document structure (object streams)	บีบอัดโครงสร้างเอกสาร (object streams)

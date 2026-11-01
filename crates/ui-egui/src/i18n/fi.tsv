@@ -587,6 +587,8 @@
 	Discard hidden text	Hylkää piilotettu teksti
 	Use Flate to encode streams that are not encoded	Koodaa koodaamattomat virrat Flate-menetelmällä
 	In streams that use LZW encoding, use Flate instead	Koodaa LZW-koodatut virrat Flate-menetelmällä
+	Store JPEG images as JPEG XL (smaller, can be undone; needs a reader that supports JPEG XL)	Tallenna JPEG-kuvat JPEG XL -muodossa (pienempiä, peruttavissa; vaatii JPEG XL:ää tukevan lukuohjelman)
+	Turn JPEG XL images back into the JPEGs they were made from	Muuta JPEG XL -kuvat takaisin JPEG-kuviksi, joista ne tehtiin
 	Remove invalid links and bookmarks	Poista virheelliset linkit ja kirjanmerkit
 	Remove unreferenced named destinations	Poista viittaamattomat nimetyt kohteet
 	Compress document structure (object streams)	Pakkaa asiakirjan rakenne (objektivirrat)

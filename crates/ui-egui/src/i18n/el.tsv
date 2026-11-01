@@ -1941,6 +1941,8 @@
 	Discard hidden text	Αφαίρεση κρυφού κειμένου
 	Use Flate to encode streams that are not encoded	Χρήση συμπίεσης Flate για ροές που δεν είναι συμπιεσμένες
 	In streams that use LZW encoding, use Flate instead	Χρήση Flate αντί για LZW στις ροές με κωδικοποίηση LZW
+	Store JPEG images as JPEG XL (smaller, can be undone; needs a reader that supports JPEG XL)	Αποθήκευση εικόνων JPEG ως JPEG XL (μικρότερο μέγεθος, αναιρέσιμο· απαιτεί πρόγραμμα ανάγνωσης με υποστήριξη JPEG XL)
+	Turn JPEG XL images back into the JPEGs they were made from	Επαναφορά των εικόνων JPEG XL στα JPEG από τα οποία δημιουργήθηκαν
 	Remove invalid links and bookmarks	Αφαίρεση μη έγκυρων συνδέσμων και σελιδοδεικτών
 	Remove unreferenced named destinations	Αφαίρεση ονομασμένων προορισμών χωρίς αναφορές
 	Compress document structure (object streams)	Συμπίεση δομής εγγράφου (ροές αντικειμένων)

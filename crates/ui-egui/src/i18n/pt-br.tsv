@@ -249,6 +249,8 @@
 	Discard hidden text	Descartar texto oculto
 	Use Flate to encode streams that are not encoded	Usar Flate para codificar fluxos não codificados
 	In streams that use LZW encoding, use Flate instead	Em fluxos que usam codificação LZW, usar Flate
+	Store JPEG images as JPEG XL (smaller, can be undone; needs a reader that supports JPEG XL)	Armazenar imagens JPEG como JPEG XL (menores, reversível; requer um leitor com suporte a JPEG XL)
+	Turn JPEG XL images back into the JPEGs they were made from	Converter imagens JPEG XL de volta nos JPEGs de origem
 	Remove invalid links and bookmarks	Remover links e marcadores inválidos
 	Remove unreferenced named destinations	Remover destinos nomeados não referenciados
 	Compress document structure (object streams)	Compactar estrutura do documento (fluxos de objetos)

@@ -601,6 +601,8 @@
 	Discard hidden text	Rejtett szöveg elvetése
 	Use Flate to encode streams that are not encoded	A kódolatlan adatfolyamok Flate kódolása
 	In streams that use LZW encoding, use Flate instead	Az LZW kódolású adatfolyamok Flate kódolása
+	Store JPEG images as JPEG XL (smaller, can be undone; needs a reader that supports JPEG XL)	JPEG-képek tárolása JPEG XL-ként (kisebb, visszaállítható; JPEG XL-t támogató olvasó szükséges)
+	Turn JPEG XL images back into the JPEGs they were made from	JPEG XL-képek visszaalakítása az eredeti JPEG-ekké
 	Remove invalid links and bookmarks	Érvénytelen hivatkozások és könyvjelzők eltávolítása
 	Remove unreferenced named destinations	Hivatkozás nélküli elnevezett célok eltávolítása
 	Compress document structure (object streams)	Dokumentumszerkezet tömörítése (objektumfolyamok)

@@ -588,6 +588,8 @@
 	Discard hidden text	Gizli metni at
 	Use Flate to encode streams that are not encoded	Kodlanmamış akışları kodlamak için Flate kullan
 	In streams that use LZW encoding, use Flate instead	LZW kodlamalı akışlarda bunun yerine Flate kullan
+	Store JPEG images as JPEG XL (smaller, can be undone; needs a reader that supports JPEG XL)	JPEG görüntülerini JPEG XL olarak sakla (daha küçük, geri alınabilir; JPEG XL destekleyen bir okuyucu gerekir)
+	Turn JPEG XL images back into the JPEGs they were made from	JPEG XL görüntülerini oluşturuldukları JPEG’lere geri çevir
 	Remove invalid links and bookmarks	Geçersiz bağlantıları ve yer işaretlerini kaldır
 	Remove unreferenced named destinations	Referans verilmeyen adlandırılmış hedefleri kaldır
 	Compress document structure (object streams)	Belge yapısını sıkıştır (nesne akışları)
