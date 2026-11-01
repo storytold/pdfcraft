@@ -2660,7 +2660,8 @@ fn draw_pages(
                 }
             };
             if let Some(image) = hit {
-                if ui.button(tl!("Replace Image…")).clicked() {
+                let is_raster = doc.page_images(page).get(image).is_some_and(|img| !img.is_form);
+                if is_raster && ui.button(tl!("Replace Image…")).clicked() {
                     copy_image = Some(comments::CanvasAction::ReplaceImage(page, image));
                     ui.close();
                 }
