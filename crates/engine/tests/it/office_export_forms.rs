@@ -119,3 +119,28 @@ fn exporting_a_form_to_word_keeps_its_boxes_text_and_fields_in_place() {
     let html = d.export_office(OfficeFormat::Html);
     assert!(!html.is_empty());
 }
+
+/// A page that paints more paths than a Word page draws says so: Word export lists it among its
+/// truncated pages, where the paths past the writer's limit used to go missing without a word.
+/// The other formats don't read paths, so they leave it out.
+#[test]
+fn word_export_reports_a_page_whose_paths_it_leaves_out() {
+    let page = |paths: usize| {
+        let content = "0 G 0 0 m 1 1 l S\n".repeat(paths);
+        pdf(&[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>".into(),
+            stream("", &content),
+        ])
+    };
+    let truncated = |paths: usize, format: OfficeFormat| {
+        let mut s = Session::new();
+        let id = s.open("paths.pdf", None, Arc::new(page(paths)), None).unwrap();
+        s.get(id).unwrap().export_office_checked(format).truncated_pages
+    };
+    let limit = pdfcraft_export::MAX_DOCX_PAGE_SHAPES;
+    assert_eq!(truncated(limit, OfficeFormat::Docx), Vec::<usize>::new());
+    assert_eq!(truncated(limit + 1, OfficeFormat::Docx), [0]);
+    assert_eq!(truncated(limit + 1, OfficeFormat::Html), Vec::<usize>::new());
+}

@@ -264,8 +264,9 @@ fn axis_rect(points: &[[f64; 2]]) -> Option<[f64; 4]> {
     ])
 }
 
-/// Most shapes one Word page draws (a VML shape each); a page with more keeps the first ones.
-pub(crate) const MAX_PAGE_SHAPES: usize = 5000;
+/// Most shapes, and most fields, one Word page draws; a page with more keeps the first ones,
+/// and the engine reports it among the export's truncated pages.
+pub const MAX_DOCX_PAGE_SHAPES: usize = 5000;
 
 /// A subpath as drawn: an open path that ends where it started is closed (a box drawn as four
 /// `l` segments back to its corner), and a filled one is closed as filling implies.
@@ -534,8 +535,8 @@ fn positioned_page<'a>(page: &'a Page, media: &mut Vec<(String, &'a Image)>, sha
     let body = body_size(std::slice::from_ref(page)).max(1.0);
     // Vector art goes behind everything else, in painting order: the first shape is furthest
     // back, the last just behind watermark-sized text (z-index -2) and the text (1).
-    let shapes = page.shapes.len().min(MAX_PAGE_SHAPES);
-    for (i, shape) in page.shapes.iter().take(MAX_PAGE_SHAPES).enumerate() {
+    let shapes = page.shapes.len().min(MAX_DOCX_PAGE_SHAPES);
+    for (i, shape) in page.shapes.iter().take(MAX_DOCX_PAGE_SHAPES).enumerate() {
         let z = i64::try_from(i).unwrap_or(i64::MAX).saturating_sub(i64::try_from(shapes).unwrap_or(i64::MAX)).saturating_sub(3);
         if let Some(xml) = shape_xml(shape, page.height, shape_id, z) {
             s.push_str(&xml);
@@ -623,7 +624,7 @@ fn positioned_page<'a>(page: &'a Page, media: &mut Vec<(String, &'a Image)>, sha
     s.push_str("</w:p>");
     // Fields follow as framed paragraphs over their boxes (a form field in a text box can't be
     // filled in once the document is protected), in front of the shapes behind the text.
-    for f in page.fields.iter().take(MAX_PAGE_SHAPES) {
+    for f in page.fields.iter().take(MAX_DOCX_PAGE_SHAPES) {
         *shape_id = shape_id.saturating_add(1);
         if let Some(xml) = field_xml(f, page.height, *shape_id, form) {
             s.push_str(&xml);

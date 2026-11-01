@@ -1094,11 +1094,11 @@ fn word_bounds_hostile_shapes_and_fields() {
         size: -5.0,
         kind: FieldKind::Text { value: "1".into(), multiline: false, comb: Some(0), max_len: Some(0) },
     });
-    for i in 0..MAX_PAGE_SHAPES + 50 {
+    for i in 0..MAX_DOCX_PAGE_SHAPES + 50 {
         p.shapes.push(Shape { paths: vec![(vec![[1.0, i as f64 / 100.0], [2.0, 3.0]], false)], ..boxed([0.0; 4]) });
     }
     let xml = part(&docx(&[p], "Hostile"), "word/document.xml");
-    assert!(xml.matches("id=\"Shape").count() <= MAX_PAGE_SHAPES);
+    assert!(xml.matches("id=\"Shape").count() <= MAX_DOCX_PAGE_SHAPES);
     assert!(!xml.contains("NaN") && !xml.contains("inf"), "no non-finite number reaches the XML");
     assert!(!xml.contains('\u{0}'));
 }

@@ -174,9 +174,10 @@ pub struct OfficeExport {
     pub bytes: Vec<u8>,
     /// Pages (0-based) that draw forms nested deeper than [`MAX_FORM_DEPTH`] or more of them
     /// than [`MAX_FORM_VISITS`], pictures past [`MAX_EXPORT_IMAGE_BYTES`], or (Word) more paths
-    /// than [`pdfcraft_edit::MAX_PAGE_SHAPES`]: export stops reading there to stay bounded on
-    /// hostile files, so the text and images of those forms, those pictures or those paths are
-    /// missing from `bytes`.
+    /// than [`pdfcraft_edit::MAX_PAGE_SHAPES`] or more paths or fields than a Word page draws
+    /// ([`pdfcraft_export::MAX_DOCX_PAGE_SHAPES`]): export stops there to stay bounded on hostile
+    /// files, so the text and images of those forms, those pictures, paths or fields are missing
+    /// from `bytes`.
     pub truncated_pages: Vec<usize>,
 }
 
@@ -309,7 +310,11 @@ impl crate::Document {
                     })
                     .collect();
                 let art_read = if art { pdfcraft_edit::reading_shapes(cos, i).unwrap_or_default() } else { pdfcraft_edit::ReadingShapes::default() };
-                if forms_unread || over_budget || art_read.truncated {
+                // Word draws at most so many shapes and fields a page: past that the rest are left out.
+                let art_dropped = art
+                    && (art_read.shapes.len() > pdfcraft_export::MAX_DOCX_PAGE_SHAPES
+                        || fields_by_page.get(&i).is_some_and(|f| f.len() > pdfcraft_export::MAX_DOCX_PAGE_SHAPES));
+                if forms_unread || over_budget || art_read.truncated || art_dropped {
                     truncated.push(i);
                 }
                 // The page colour (Edit a PDF ▸ Background, a producer's page fill) for formats that keep one.

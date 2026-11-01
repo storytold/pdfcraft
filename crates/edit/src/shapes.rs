@@ -76,6 +76,9 @@ enum Space {
 }
 
 impl Space {
+    /// The colour an `SC`/`sc`/`SCN`/`scn` (or `G`, `RG`, `K` and their fill forms) sets in this
+    /// space, components clamped to 0..=1; `None` when the space or the operand count has no
+    /// plain colour.
     fn colour(self, op: &Op) -> Option<Rgb> {
         let n = op.operands.iter().filter(|o| o.as_f64().is_some()).count();
         let unit = |v: f64| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
@@ -162,6 +165,7 @@ struct State {
 }
 
 impl State {
+    /// The initial graphics state (§8.4.1): black, 1 pt, solid, opaque, clipped to `clip`.
     fn new(ctm: Matrix, clip: [f64; 4]) -> Self {
         State {
             ctm,
@@ -184,6 +188,7 @@ impl State {
         if w.is_finite() { w.min(MAX_COORD) } else { 0.0 }
     }
 
+    /// The line width, opacities and dash pattern an ExtGState sets (`LW`, `CA`, `ca`, `D`).
     fn apply_gstate(&mut self, doc: &Document, g: &Dict) {
         let num = |k: &[u8]| g.get(k).and_then(|v| doc.resolve(v).as_f64()).filter(|v| v.is_finite());
         if let Some(w) = num(b"LW") {
@@ -222,11 +227,13 @@ impl Path {
         Some(first)
     }
 
+    /// A new subpath at `p` (`m`, `re`).
     fn start(&mut self, p: [f64; 2]) {
         self.subpaths.push(Subpath { points: vec![p], closed: false });
         self.points = self.points.saturating_add(1);
     }
 
+    /// A straight segment to `p` on the last subpath.
     fn to(&mut self, p: [f64; 2]) {
         if let Some(s) = self.subpaths.last_mut() {
             s.points.push(p);
@@ -234,6 +241,7 @@ impl Path {
         }
     }
 
+    /// Close the last subpath (`h`, and the closing paint operators).
     fn close(&mut self) {
         if let Some(s) = self.subpaths.last_mut() {
             s.closed = true;
@@ -255,6 +263,7 @@ fn point(m: &Matrix, x: f64, y: f64) -> Option<[f64; 2]> {
     (x.is_finite() && y.is_finite() && x.abs() <= MAX_COORD && y.abs() <= MAX_COORD).then_some([x, y])
 }
 
+/// The bounding box of the subpaths' points, or `None` when they have none.
 fn bounds(subpaths: &[Subpath]) -> Option<[f64; 4]> {
     let mut b = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
     for p in subpaths.iter().flat_map(|s| &s.points) {
@@ -263,11 +272,14 @@ fn bounds(subpaths: &[Subpath]) -> Option<[f64; 4]> {
     b.iter().all(|v| v.is_finite()).then_some(b)
 }
 
+/// Whether two boxes meet (touching edges count; an empty or inverted box meets nothing).
 fn touches(a: [f64; 4], b: [f64; 4]) -> bool {
     a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3]
 }
 
 impl Walk<'_> {
+    /// Walk one content stream's operators with `resources`, from the state `st` (a form starts
+    /// from the state at its `Do`), recording what it paints and entering the forms it draws.
     fn ops(&mut self, ops: &[Op], resources: &Dict, st: &mut State) {
         let doc = self.doc;
         let gstates = resources.get(b"ExtGState").and_then(|g| doc.dict(g)).unwrap_or_default();
@@ -446,6 +458,9 @@ impl Walk<'_> {
         }
     }
 
+    /// Record a path painted by `paint` (`S`, `f`, `B` …) in the state `st`, unless it paints
+    /// nothing, lies outside the clip, or the page's budget is spent (which marks the result
+    /// truncated).
     fn paint(&mut self, paint: &[u8], subpaths: Vec<Subpath>, bounds: [f64; 4], st: &State) {
         let strokes = matches!(paint, b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*");
         let fills = matches!(paint, b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*");

@@ -24,10 +24,10 @@ mod as_markdown;
 mod as_rtf;
 mod layout;
 
-pub use as_docx::docx;
 pub(crate) use as_docx::hex;
 #[cfg(test)]
-use as_docx::{FRAMING_SHAPES, MAX_MEDIA, MAX_PAGE_SHAPES, docx_table, word_font};
+use as_docx::{FRAMING_SHAPES, MAX_MEDIA, docx_table, word_font};
+pub use as_docx::{MAX_DOCX_PAGE_SHAPES, docx};
 pub(crate) use as_html::esc;
 pub use as_html::html;
 #[cfg(test)]
