@@ -337,6 +337,7 @@ pub fn remove_marks(doc: &mut Document, pages: &[usize], kind: MarkKind) -> Resu
         }
         if before != kept.len() {
             doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), Object::Array(kept)))?;
+            crate::text::fallback::drop_unused_fallback_fonts(doc, i);
         }
     }
     Ok(removed)

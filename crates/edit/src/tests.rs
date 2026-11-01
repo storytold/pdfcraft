@@ -8649,8 +8649,94 @@ fn decomposed_vietnamese_in_a_header_is_composed() {
         ..HeaderFooter::default()
     };
     add_header_footer(&mut doc, &[0], &hf, false, &cx()).unwrap();
+    let wm = Watermark { text: "Ba\u{0309}n ve\u{0303} hoa\u{0300}n co\u{0302}ng".into(), ..Watermark::default() };
+    assert_eq!(wm.first_undrawable(), None);
+    add_watermark(&mut doc, &[0], &wm, false).unwrap();
     let read: String = text::text_lines(&reopen(&doc), 0).unwrap().iter().map(|l| l.text.clone()).collect::<Vec<_>>().join("\n");
-    assert!(read.contains("Tiếng Việt"), "{read:?}");
+    assert!(read.contains("Tiếng Việt") && read.contains("Bản vẽ hoàn công"), "{read:?}");
+}
+
+/// Mixed ASCII/WinAnsi and Vietnamese text in the same mark or across header boxes shares the
+/// Type 3 Inter font cleanly and extracts back without garbling either script.
+#[test]
+fn mixed_latin_and_vietnamese_marks_share_type3_and_extract_cleanly() {
+    let mut doc = fixture();
+    let hf = HeaderFooter {
+        text: [
+            "Project 101 - Hạng mục: Cầu Mỹ Thuận (±0.000)".into(),
+            String::new(),
+            "Page <<1 of n>>".into(),
+            String::new(),
+            String::new(),
+            String::new(),
+        ],
+        ..HeaderFooter::default()
+    };
+    assert_eq!(hf.first_undrawable(), None);
+    add_header_footer(&mut doc, &[0], &hf, false, &cx()).unwrap();
+    let wm = Watermark { text: "DRAFT - BẢN VẼ THI CÔNG".into(), ..Watermark::default() };
+    assert_eq!(wm.first_undrawable(), None);
+    add_watermark(&mut doc, &[0], &wm, false).unwrap();
+
+    let reopened = reopen(&doc);
+    let page0 = streams(&reopened, 0).join("\n");
+    assert!(page0.contains("/PCMk0") && !page0.contains("/PCHelv"), "{page0}");
+    let read: String = text::text_lines(&reopened, 0).unwrap().iter().map(|l| l.text.clone()).collect::<Vec<_>>().join("\n");
+    assert!(read.contains("Project 101 - Hạng mục: Cầu Mỹ Thuận (±0.000)"), "{read:?}");
+    assert!(read.contains("Page 1 of 3"), "{read:?}");
+    assert!(read.contains("DRAFT - BẢN VẼ THI CÔNG"), "{read:?}");
+}
+
+/// A long Vietnamese watermark applied across multiple pages shares a single Type 3 font object
+/// rather than duplicating glyph outlines per page or embedding the 412 KB Inter TTF program, and
+/// removing or replacing a mark drops only unreferenced Type 3 font resources while keeping any
+/// active header/footer Type 3 font intact.
+#[test]
+fn long_vietnamese_watermark_keeps_file_size_bounded() {
+    let long_text = "BẢN VẼ HOÀN CÔNG - DỰ ÁN CẦU MỸ THUẬN 2 - TÀI LIỆU KỸ THUẬT NỘI BỘ - KHÔNG SAO CHÉP KHI CHƯA CÓ SỰ ĐỒNG Ý CỦA CHỦ ĐẦU TƯ (2026)";
+    assert!(long_text.chars().count() > 100);
+    let wm = Watermark { text: long_text.into(), ..Watermark::default() };
+    assert_eq!(wm.first_undrawable(), None);
+
+    // Measure 1-page vs 3-page size growth: because MarkFont shares a single Type 3 font object
+    // across all pages in the run, pages 2 and 3 add only their content streams (< 2 KB total).
+    let mut doc_one = fixture();
+    let before_len = write_incremental(&doc_one, &SaveOptions::default()).unwrap().len();
+    add_watermark(&mut doc_one, &[0], &wm, false).unwrap();
+    let one_page_growth = write_incremental(&doc_one, &SaveOptions::default()).unwrap().len().saturating_sub(before_len);
+
+    let mut doc_all = fixture();
+    add_watermark(&mut doc_all, &[0, 1, 2], &wm, false).unwrap();
+    let after_bytes = write_incremental(&doc_all, &SaveOptions::default()).unwrap();
+    let all_pages_growth = after_bytes.len().saturating_sub(before_len);
+
+    assert!(all_pages_growth < pdfcraft_fonts::INTER_REGULAR.len() / 4, "unexpected PDF size growth: {all_pages_growth} bytes");
+    assert!(all_pages_growth.saturating_sub(one_page_growth) < 2048, "font was not shared across pages: 1p={one_page_growth}, 3p={all_pages_growth}");
+
+    let reopened = Document::open(Arc::new(after_bytes)).unwrap();
+    for page in 0..3 {
+        let read: String = text::text_lines(&reopened, page).unwrap().iter().map(|l| l.text.clone()).collect::<Vec<_>>().join("\n");
+        assert!(read.contains("BẢN VẼ HOÀN CÔNG - DỰ ÁN CẦU MỸ THUẬN 2"), "missing watermark on page {page}: {read:?}");
+    }
+
+    // Also verify that removing or replacing a watermark drops its unused Type 3 font entry
+    // (`PCMk1`) while keeping an active Vietnamese header's font (`PCMk0`) intact.
+    let mut doc = fixture();
+    let hf = HeaderFooter {
+        text: ["Dự án: Cầu Mỹ Thuận".into(), String::new(), String::new(), String::new(), String::new(), String::new()],
+        ..HeaderFooter::default()
+    };
+    add_header_footer(&mut doc, &[0], &hf, false, &cx()).unwrap();
+    add_watermark(&mut doc, &[0], &wm, false).unwrap();
+    // Replacing the watermark reuses `PCMk1` instead of accumulating `PCMk2`.
+    let wm2 = Watermark { text: "BẢN VẼ CẬP NHẬT".into(), ..Watermark::default() };
+    add_watermark(&mut doc, &[0], &wm2, true).unwrap();
+    let fonts_after_replace = page_fonts(&doc, &page_list(&doc)[0]);
+    assert!(fonts_after_replace.contains(b"PCMk0") && fonts_after_replace.contains(b"PCMk1") && !fonts_after_replace.contains(b"PCMk2"));
+    // Removing the watermark drops `PCMk1` (now unreferenced) while keeping `PCMk0` (used by header).
+    remove_marks(&mut doc, &[0], MarkKind::Watermark).unwrap();
+    let fonts_after_remove = page_fonts(&doc, &page_list(&doc)[0]);
+    assert!(fonts_after_remove.contains(b"PCMk0") && !fonts_after_remove.contains(b"PCMk1"));
 }
 
 /// Western-European text keeps the standard face: nothing is generated for it.
