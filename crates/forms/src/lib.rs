@@ -236,18 +236,26 @@ impl Field {
     pub fn display_value(&self) -> String {
         match self.kind {
             FieldKind::Combo | FieldKind::List => {
-                let by_idx: Option<Vec<&str>> = (self.indices.len() == self.value.len())
-                    .then(|| self.indices.iter().map(|&i| self.options.get(i).map(|(_, d)| d.as_str())).collect())
-                    .flatten();
-                if let Some(texts) = by_idx {
-                    texts.join(", ")
-                } else {
-                    self.value
-                        .iter()
-                        .map(|v| self.options.iter().find(|(e, _)| e == v).map_or(v.clone(), |(_, d)| d.clone()))
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                let mut used = vec![false; self.indices.len()];
+                let mut texts = Vec::with_capacity(self.value.len());
+                for v in &self.value {
+                    let matched = self.indices.iter().enumerate().find_map(|(pos, &idx)| {
+                        if !used[pos] && self.options.get(idx).is_some_and(|(e, _)| e == v) {
+                            used[pos] = true;
+                            self.options.get(idx).map(|(_, d)| d.as_str())
+                        } else {
+                            None
+                        }
+                    });
+                    if let Some(d) = matched {
+                        texts.push(d);
+                    } else if let Some((_, d)) = self.options.iter().find(|(e, _)| e == v) {
+                        texts.push(d.as_str());
+                    } else {
+                        texts.push(v.as_str());
+                    }
                 }
+                texts.join(", ")
             }
             _ => self.value.join(", "),
         }

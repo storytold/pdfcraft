@@ -5538,4 +5538,12 @@ fn list_box_duplicate_exports_and_single_select_array_value() {
     let reopened_ap = ap(&reopened, &reopened_dup.widgets[0]);
     assert_eq!(reopened_ap.matches("0.6 0.75 0.86 rg").count(), 1, "{reopened_ap}");
     assert!(reopened_ap.contains("0 16.7 190 12.65 re f"), "{reopened_ap}");
+
+    // Multi-select display value matches /V order even when /I is sorted ascending.
+    let mut f_order = reopened_dup.clone();
+    f_order.kind = FieldKind::List;
+    f_order.value = vec!["Why".into(), "Ex".into()];
+    f_order.indices = vec![0, 1];
+    f_order.options = vec![("Ex".into(), "Export-X".into()), ("Why".into(), "Export-Y".into())];
+    assert_eq!(f_order.display_value(), "Export-Y, Export-X");
 }
