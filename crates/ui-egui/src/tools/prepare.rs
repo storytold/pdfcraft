@@ -576,16 +576,17 @@ pub(crate) fn paint_page(cx: PageToolContext<'_>, form: &[FormField], view: &Doc
     for f in form {
         for (wi, w) in f.widgets.iter().enumerate().filter(|(_, w)| w.page == Some(page)) {
             let mut r = screen_rect(xf, info, page, w.rect);
-            let selected = prep.selected.as_ref().is_some_and(|(n, i)| n == &f.name && *i == wi);
+            let primary = prep.selected.as_ref().is_some_and(|(n, i)| n == &f.name && *i == wi);
             let also = prep.also.iter().any(|(n, i)| n == &f.name && *i == wi);
-            if selected && let (Some((_, g, start)), Some(p)) = (grab, pointer) {
+            let selected = primary || also;
+            if primary && let (Some((_, g, start)), Some(p)) = (grab, pointer) {
                 r = dragged(r, g, p - start, ui.input(|i| i.modifiers.shift));
             }
             painter.rect_filled(r, CornerRadius::ZERO, FIELD_FILL);
             painter.rect_stroke(
                 r,
                 CornerRadius::ZERO,
-                Stroke::new(if also { 2.0 } else { 1.0 }, if selected || also { SELECT_BLUE } else { Color32::from_gray(90) }),
+                Stroke::new(1.0, if selected { SELECT_BLUE } else { Color32::from_gray(90) }),
                 egui::StrokeKind::Inside,
             );
             // The name tag: white text on black, clipped to the field.
@@ -601,6 +602,8 @@ pub(crate) fn paint_page(cx: PageToolContext<'_>, form: &[FormField], view: &Doc
             p2.galley(tag.min + vec2(3.0, 1.0), galley, Color32::WHITE);
             if selected {
                 painter.rect_stroke(r.expand(1.0), CornerRadius::ZERO, Stroke::new(2.0, SELECT_BLUE), egui::StrokeKind::Outside);
+            }
+            if primary {
                 for (c, ..) in handles(r) {
                     painter.circle(c, 3.5, Color32::WHITE, Stroke::new(1.5, SELECT_BLUE));
                 }
