@@ -55,7 +55,9 @@ impl PdfCraftApp {
                 (_, _, Some(p)) => p.clone(),
                 // An email attachment's temporary copy is no place to keep work: ask, as for a new
                 // document (`is_mail_temp_copy`).
-                (SaveTarget::InPlace, Some(p), _) if !is_mail_temp_copy(&p) => p,
+                // Neither is a path read back from a recovery sidecar until a save confirms it:
+                // anyone who can write the recovery folder can name any file there (#3923).
+                (SaveTarget::InPlace, Some(p), _) if !is_mail_temp_copy(&p) && !self.recovered_paths.contains(&id) => p,
                 _ => {
                     let name = if name.to_ascii_lowercase().ends_with(".pdf") { name } else { format!("{name}.pdf") };
                     let dialog = rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(name);
@@ -162,11 +164,12 @@ impl PdfCraftApp {
         if !self.commit_typing_in(id) || !self.flatten_fill_sign_for_save(id) {
             return false;
         }
+        let recovered = self.recovered_paths.contains(&id);
         let Some((name, full)) = self.session.get(id).map(|d| {
-            // Save As to another file is a clean copy, without the earlier revisions that still
-            // hold deleted pages or replaced text (#2165). A signed document stays incremental so
-            // its signatures keep covering the file.
-            let full = target == SaveTarget::As
+            // Save As to another file and a recovered document are clean copies, without earlier
+            // revisions that may retain deleted pages or replaced text (#2165, #3923). A signed
+            // document stays incremental so its signatures keep covering the file.
+            let full = (target == SaveTarget::As || recovered)
                 && !d.path.as_deref().is_some_and(|p| crate::same_file(p, dest))
                 && d.read_only_reason.is_none()
                 && !d.is_signed();
