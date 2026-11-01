@@ -206,7 +206,7 @@ impl PdfCraftApp {
     /// Request a normal application exit, preserving every unsaved document until answered.
     /// Returns false while the existing save/discard/cancel prompt needs a decision, or while an
     /// OCR review is still to be accepted or rejected.
-    pub(crate) fn request_quit(&mut self, ctx: &egui::Context) -> bool {
+    pub fn request_quit(&mut self, ctx: &egui::Context) -> bool {
         if self.hold_for_any_ocr_review() {
             ctx.request_repaint();
             false
