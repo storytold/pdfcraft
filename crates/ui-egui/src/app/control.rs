@@ -283,7 +283,10 @@ impl PdfCraftApp {
                     measure if measure.starts_with("measure-") => QuickTool::Measure(
                         measure_ui::Tool::from_name(measure.trim_start_matches("measure-")).ok_or_else(|| format!("unknown tool {measure}"))?,
                     ),
-                    "hand" => QuickTool::Hand,
+                    "hand" => {
+                        self.space_hand = None;
+                        QuickTool::Hand
+                    }
                     "crop" => QuickTool::Crop,
                     "enhance-camera" => QuickTool::EnhanceCamera,
                     "redact" => QuickTool::Redact,
@@ -320,6 +323,8 @@ impl PdfCraftApp {
                         QuickTool::Comment(t)
                     }
                 };
+                // A tool chosen on purpose: a held E no longer owns it, as with the command (#3900).
+                self.eraser_key = None;
             }
             ("author", _) => self.comment_prefs.author = value.to_string(),
             ("comment-tool-pinned", _) => {
