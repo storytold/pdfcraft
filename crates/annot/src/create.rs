@@ -217,13 +217,33 @@ impl Side {
 }
 
 /// The side of the text box `rect` that faces `knee`: the one [`callout_attach`] attaches to.
+///
+/// Every position has one side (review on #4094):
+/// - left or right of the box (`x < x0`, `x > x1`): that side, whatever `y` is, so a knee off a
+///   corner diagonally, or on the line of the top or bottom edge past the box, is beside it;
+/// - otherwise above or below it (`y > y1`, `y < y0`): that side, so a knee on the line of the
+///   left or right edge past the box is above or below it;
+/// - on the box's outline, or within `CALLOUT_SLACK` (0.01 pt) inside it, since the page hands
+///   positions back as `f32` values: the side whose edge it lies on, the left or right edge
+///   first, so a corner takes the left or right side as a knee beside the box does. The line
+///   stays out of the box (it was sent across the box to the bottom side);
+/// - inside the box, or with a coordinate that isn't a number: the bottom side.
 pub fn callout_side(rect: [f64; 4], knee: [f64; 2]) -> Side {
-    let [x0, _, x1, y1] = normalize(rect);
-    if knee[0] < x0 {
+    let [x0, y0, x1, y1] = normalize(rect);
+    let [x, y] = knee;
+    if x < x0 {
         Side::Left
-    } else if knee[0] > x1 {
+    } else if x > x1 {
         Side::Right
-    } else if knee[1] > y1 {
+    } else if y > y1 {
+        Side::Top
+    } else if y < y0 {
+        Side::Bottom
+    } else if x - x0 < CALLOUT_SLACK {
+        Side::Left
+    } else if x1 - x < CALLOUT_SLACK {
+        Side::Right
+    } else if y1 - y < CALLOUT_SLACK {
         Side::Top
     } else {
         Side::Bottom
