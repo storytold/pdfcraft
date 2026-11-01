@@ -2526,16 +2526,25 @@ fn edge_strokes_keep_their_own_dash_patterns() {
     }
 }
 
-/// A dash pattern scales with the edge's width, a rounded box's edge is dashed like a square
-/// one, and a width that would round every dash to zero, or isn't a number, still gives a valid
-/// pattern.
+/// A dash pattern scales with the edge's width, a dashed line's ink stays between its ends (its
+/// path shortened for the projecting caps), a rounded box's edge is dashed like a square one, and
+/// a width that would round every dash to zero, or isn't a number, still gives a valid pattern.
 #[test]
 fn dash_patterns_scale_with_width_and_stay_valid() {
     use crate::layout::Rounded;
     use crate::pdf::line;
-    assert_eq!(line((0.0, 0.0), (10.0, 0.0), 0.5, [0.0; 3], Stroke::Dashed, 100.0), "q 0 0 0 RG 0.5 w [2 1] 0 d 2 J 0 100 m 10 100 l S Q\n");
+    // The path is shortened by half the width at each end, so the projecting caps end at the
+    // line's own ends; a solid line keeps its ends and butt caps.
+    assert_eq!(line((0.0, 0.0), (10.0, 0.0), 0.5, [0.0; 3], Stroke::Dashed, 100.0), "q 0 0 0 RG 0.5 w [2 1] 0 d 2 J 0.25 100 m 9.75 100 l S Q\n");
+    assert_eq!(line((0.0, 0.0), (10.0, 0.0), 0.5, [0.0; 3], Stroke::Solid, 100.0), "q 0 0 0 RG 0.5 w 0 100 m 10 100 l S Q\n");
+    // A vertical (border) edge is shortened along its own direction.
+    assert!(line((5.0, 0.0), (5.0, 20.0), 2.0, [0.0; 3], Stroke::Dotted, 100.0).contains(" 5 99 m 5 81 l "));
+    // A dashed line no longer than its width keeps its ends, with butt caps.
+    let short = line((0.0, 0.0), (2.0, 0.0), 3.0, [0.0; 3], Stroke::Dashed, 100.0);
+    assert!(short.contains("[12 6] 0 d 0 100 m 2 100 l ") && !short.contains(" J "), "{short}");
     assert!(line((0.0, 0.0), (10.0, 0.0), 0.0001, [0.0; 3], Stroke::Dotted, 100.0).contains("[0.01 0.02] 0 d "));
-    assert!(line((0.0, 0.0), (10.0, 0.0), f64::NAN, [0.0; 3], Stroke::DashDot, 100.0).contains("[3 2 1 2] 0 d "));
+    let nan = line((0.0, 0.0), (10.0, 0.0), f64::NAN, [0.0; 3], Stroke::DashDot, 100.0);
+    assert!(nan.contains("[3 2 1 2] 0 d 0 100 m 10 100 l "), "{nan}");
     let rounded = Rounded {
         rect: Rect::new(36.0, 36.0, 144.0, 72.0),
         radii: [18.0; 4],
