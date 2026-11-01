@@ -176,4 +176,5 @@ fn add_text_with_custom_font_and_paragraph_alignment() {
     assert_eq!(saved_text.text, text);
     assert_eq!(saved_text.font_resource.as_deref(), Some(resource.as_str()));
     assert_eq!(saved_text.align, pdfcraft_engine::TextAlign::Left);
+    assert_eq!(saved_text.aligns, vec![Some(pdfcraft_engine::TextAlign::Right)]);
 }
