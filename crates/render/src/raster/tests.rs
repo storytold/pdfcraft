@@ -2673,6 +2673,11 @@ fn a_large_step_still_tiles_where_the_next_cell_shows() {
 /// no decomposition, reversible wavelet, and one empty packet per component. Empty
 /// coefficients decode to the midpoint (128) after the unsigned DC level shift.
 fn jpx_midpoint_pdf(bpc: u8, components: u16) -> Vec<u8> {
+    jpx_midpoint_pdf_drawn_with(bpc, components, "20 0 0 20 5 5")
+}
+
+/// [`jpx_midpoint_pdf`] with the image drawn by the `cm` operands `matrix`.
+fn jpx_midpoint_pdf_drawn_with(bpc: u8, components: u16, matrix: &str) -> Vec<u8> {
     let mut codestream = vec![0xff, 0x4f, 0xff, 0x51]; // SOC, SIZ.
     codestream.extend_from_slice(&(38 + 3 * components).to_be_bytes());
     codestream.extend_from_slice(&0_u16.to_be_bytes()); // Rsiz.
@@ -2693,7 +2698,7 @@ fn jpx_midpoint_pdf(bpc: u8, components: u16) -> Vec<u8> {
     codestream.extend(std::iter::repeat_n(0, usize::from(components)));
     codestream.extend_from_slice(&[0xff, 0xd9]); // EOC.
 
-    let content = "q 20 0 0 20 5 5 cm /Im1 Do Q 1 0 0 rg 0 0 4 4 re f";
+    let content = format!("q {matrix} cm /Im1 Do Q 1 0 0 rg 0 0 4 4 re f");
     let mut pdf = format!(
         "%PDF-1.7\n\
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
@@ -2872,6 +2877,21 @@ fn jpx_32_bit_image_does_not_prevent_other_page_content_from_rendering() {
         if bpc == 8 {
             assert_eq!(&page.rgba[((25 * 40 + 15) * 4)..][..4], &[128, 128, 128, 255], "the valid image paints gray");
         }
+    }
+}
+
+/// Issue #1761: a JPEG 2000 image drawn with `100 0 0 9223372036854775807 0 0 cm` got a NaN drawn
+/// length, which `as u32` turned into a decode size hint of 0, and hayro-jpeg2000 divided by it.
+/// The same happened when a turned or flipped image put a corner on the device origin (#2423).
+/// The vendored hayro patch `decode_target_size` drops a hint that is not positive.
+#[test]
+fn jpx_image_drawn_with_an_out_of_range_or_turned_cm_does_not_stop_the_page() {
+    for matrix in ["100 0 0 9223372036854775807 0 0", "0 40 -40 0 40 0", "0 -40 40 0 0 40", "40 0 0 -40 0 40"] {
+        let pdf = jpx_midpoint_pdf_drawn_with(8, 1, matrix);
+        let mut renderer = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+        let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        assert!(page.error.is_none(), "{matrix}: {:?}", page.error);
+        assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "{matrix}: other page content draws");
     }
 }
 

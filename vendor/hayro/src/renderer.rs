@@ -401,6 +401,15 @@ fn may_paint_rect(rect: Rect, transform: Affine, width: u16, height: u16) -> boo
     paints_canvas(device, width, height)
 }
 
+/// PdfCraft patch: the decode size hint for an image drawn `width` x `height` device pixels
+/// across, or `None` (decode at full size) when either length is not a finite positive number.
+/// A huge `cm` operand makes the lengths NaN; `NaN as u32` is 0, which the JPEG 2000 decoder
+/// divides by.
+fn decode_target_size(width: f64, height: f64) -> Option<(u32, u32)> {
+    let valid = |v: f64| v.is_finite() && v > 0.0;
+    (valid(width) && valid(height)).then(|| (width.ceil() as u32, height.ceil() as u32))
+}
+
 /// PdfCraft patch: the whole-pixel device rectangle of a shrunk, axis-aligned image, as
 /// `(width, height, x0, y0)`. `transform` maps source pixels to device pixels and `planned` is the
 /// size [`image_resampling_size`] chose; `None` (draw as before) for rotated, skewed or flipped
@@ -849,8 +858,10 @@ impl Renderer {
     /// `may_paint_rect`; checked before decoding, so a tile no longer decodes every image on its
     /// page), or, in a preview, covering only a few device pixels (PdfCraft patch; final renders
     /// always draw them). The tiny-image test measures axis lengths: the size returned maps a
-    /// point, so it includes the translation and only suits the decode hint.
-    fn image_draw_size(&self, width: u32, height: u32, transform: Affine) -> Option<(u32, u32)> {
+    /// point, so it includes the translation and only suits the decode hint. The inner `Option` is
+    /// that hint, `None` (decode at full size) when a length is not a finite positive number
+    /// (PdfCraft patch: see `decode_target_size`).
+    fn image_draw_size(&self, width: u32, height: u32, transform: Affine) -> Option<Option<(u32, u32)>> {
         if !may_paint_rect(
             Rect::new(0.0, 0.0, f64::from(width), f64::from(height)),
             transform,
@@ -859,14 +870,8 @@ impl Renderer {
         ) {
             return None;
         }
-        let target_width = (transform * Point::new(width as f64, 0.0))
-            .to_vec2()
-            .length()
-            .ceil() as u32;
-        let target_height = (transform * Point::new(0.0, height as f64))
-            .to_vec2()
-            .length()
-            .ceil() as u32;
+        let target_width = (transform * Point::new(width as f64, 0.0)).to_vec2().length();
+        let target_height = (transform * Point::new(0.0, height as f64)).to_vec2().length();
         if self.preview {
             let c = transform.as_coeffs();
             let tiny_w = (f64::from(width) * (c[0] * c[0] + c[1] * c[1]).sqrt()).ceil() as u32;
@@ -875,7 +880,7 @@ impl Renderer {
                 return None;
             }
         }
-        Some((target_width, target_height))
+        Some(decode_target_size(target_width, target_height))
     }
 
     fn draw_image(&mut self, image_data: ImageData, alpha_data: Option<LumaData>) {
@@ -1718,9 +1723,7 @@ impl<'a> Device<'a> for Renderer {
         if self.erasing {
             return;
         }
-        let Some((target_width, target_height)) =
-            self.image_draw_size(image.width(), image.height(), transform)
-        else {
+        let Some(decode_target) = self.image_draw_size(image.width(), image.height(), transform) else {
             return;
         };
         self.ctx.set_paint_transform(Affine::IDENTITY);
@@ -1868,7 +1871,7 @@ impl<'a> Device<'a> for Renderer {
                             }
                         };
                     },
-                    Some((target_width, target_height)),
+                    decode_target,
                 );
             }
             hayro_interpret::Image::Raster(r) => {
@@ -1879,7 +1882,7 @@ impl<'a> Device<'a> for Renderer {
                         self.ctx.set_transform(transform);
                         self.draw_image(image, alpha);
                     },
-                    Some((target_width, target_height)),
+                    decode_target,
                 );
             }
         }
@@ -2110,7 +2113,7 @@ impl<'a> Device<'a> for Renderer {
             return;
         };
         let mut decodes = false;
-        image.with_rgba(|_, _| decodes = true, Some(size));
+        image.with_rgba(|_, _| decodes = true, size);
         if decodes {
             let rect = Rect::new(0.0, 0.0, f64::from(image.width()), f64::from(image.height()));
             self.knockout_shape(&(transform * rect.to_path(0.1)));
@@ -2556,6 +2559,25 @@ pub fn tiling_cell_scale(scale: f32, step: f32, max_pixels: f32) -> f32 {
         max_pixels / step
     } else {
         scale
+    }
+}
+
+// PdfCraft patch: the decode size hint must never be zero (issue #1761).
+#[cfg(test)]
+mod decode_target_tests {
+    use super::decode_target_size;
+
+    #[test]
+    fn non_finite_or_empty_lengths_give_no_hint() {
+        assert_eq!(decode_target_size(f64::NAN, 10.0), None);
+        assert_eq!(decode_target_size(10.0, f64::NAN), None);
+        assert_eq!(decode_target_size(f64::INFINITY, 10.0), None);
+        assert_eq!(decode_target_size(0.0, 10.0), None);
+    }
+
+    #[test]
+    fn finite_lengths_round_up() {
+        assert_eq!(decode_target_size(10.2, 0.5), Some((11, 1)));
     }
 }
 
