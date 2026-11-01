@@ -6,7 +6,6 @@
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 review follow-up: preserve image crop/tag/stream ownership, resize in page orientation, harden clipboard and text formatting, and reload installed fonts; estimates unchanged)
 
-> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M12 #1276: rebase Flash explanation and asset extraction onto main 47f42ba0; behavior, bounds and estimates unchanged)
 
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: integrate main fa5f9f8c; retain CJK viewer and upstream raster regressions, restore explicit display_config imports; estimates unchanged)
@@ -90,6 +89,8 @@
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M12 #2570: Dynamic XFA rich-text fields carry exData/maxLength into AcroForm MaxLen for reported and enforced Unicode character limits, retained after save/reopen. Estimates unchanged)
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M4 #3309: bounded iterative named-destination pruning on page deletion; estimates unchanged)
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M1 #2658: macOS atomic saves retain destination extended attributes, including Finder tags, and reject partial resource-fork reads after size changes. Metadata failures retain the original PDF and unsaved edit. Estimates unchanged)
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M12 #1276: rebase PR #5249 onto main 0cba87ae; 3378 scoped tests pass (10 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged)
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M12 #1276: rebase Flash explanation and asset extraction onto main 47f42ba0; behavior, bounds and estimates unchanged)
 
 PdfCraft's one-page summary: how close it is to Adobe Acrobat Pro's offline feature set, and what
 comes next. Adobe's cloud services (Document Cloud, Acrobat Sign requests, shared review, the AI
@@ -230,7 +231,6 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 - 2026-11-01: PR #2155 review follow-up preserves editor crops through group moves and keeps arranged artwork outside added-item streams; unsafe nested-tag extraction is refused. Image handles and flips follow page orientation, added images accept general transforms, and clipboard/text/Home/font-discovery edge cases have focused regressions. Candidate only; estimates unchanged.
 - 2026-11-01: PR #2155 maintainer edits remove redundant image/text helpers and add regressions for crop ownership, arrange scope/state fidelity, clipboard precedence, crop-drag bounds, and font scanning. Transform and Unicode-script tools complete the headless paths.
-- **2026-11-01 (M12, #1276 rebase):** Rebased onto main `47f42ba0`, retaining upstream test additions, roadmap histories and the normal-dependency placement of skrifa. Production logic and added test bodies are unchanged. Scoped render/engine/automation/UI tests: 3,158 passed, 10 existing ignored; strict Clippy, formatting, layers/assets/parity and UI wasm checks passed. Bounds, behavior and estimates unchanged.
 
 
 - **2026-10-18 (M3, #1354, local candidate):** Integrated --two-paged with current main, retaining upstream modal/picker ownership and single-tab reuse. Native launch/opening/password regressions, negative checks against the old wrapper, visual inspection, formatting, strict scoped Clippy, layers, assets, parity and scoped WASM compilation pass. Three existing socket tests are unavailable in this workspace; one existing network test remains ignored. No push or GitHub merge; estimates unchanged.
@@ -248,6 +248,11 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-29 (M12, #1276 review):** Attachment saving advertises overwrite capability to MCP clients; signed-document notices retain the legacy Flash warning. Estimates unchanged.
 
 - **2026-10-29 (M12, #1276 partial):** Explain recognised legacy Flash/SWF diagrams and list RichMedia embedded assets in Attachments. Save them without activation through the panel or `attachment_save`, using the existing password-aware decoder and atomic, confined output. Inventory has work, asset and depth limits; Flash playback and other legacy containers remain unsupported. Estimates unchanged.
+
+- **2026-11-01 (M12, #1276 rebase):** Rebased onto main `47f42ba0`, retaining upstream test additions, roadmap histories and the normal-dependency placement of skrifa. Production logic and added test bodies are unchanged. Scoped render/engine/automation/UI tests: 3,158 passed, 10 existing ignored; strict Clippy, formatting, layers/assets/parity and UI wasm checks passed. Bounds, behavior and estimates unchanged.
+
+- **2026-11-01 (M12, #1276 rebase):** PR #5249 rebased onto main `0cba87ae`; resolved and auto-merged hunks reviewed. 3378 scoped tests passed, 10 existing ignored; formatting, strict Clippy, layers/assets/parity and wasm checks passed. Behavior and estimates unchanged.
+
 - **2026-10-27 (M10, OCR models):** Model staging downloads and verifies the ONNX pair after the upstream RTEN URL brownout; runtime discovery prefers complete ONNX pairs per directory, retains complete RTEN fallback and preserves directory precedence.
 
 - **2026-10-26 (M2, PR #4172):** Reconciled current main, preserving its Japanese serif/weight selection and both branches' progress records. Installed CJK viewer and preview fallback remains display-only; estimates unchanged.
@@ -753,6 +758,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | patch | M12 #1276: rebase PR #5249 onto main 0cba87ae; 3378 scoped tests pass (10 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged. |
 | 2026-11-01 | patch | M12 #1276: rebase onto main 47f42ba0, preserving both automation test groups and upstream dependency changes; 3,158 scoped tests pass (10 existing ignored), strict Clippy, formatting, layers/assets/parity and UI wasm checks pass; behavior and estimates unchanged. |
 | 2026-10-28 | patch | M2, PR #4172: integrate main 5af10276 and retain both roadmap histories; viewer-only CJK and print/output font policies and estimates unchanged. |
 | 2026-10-27 | minor | M10: OCR stages SHA-256-verified ONNX models after the upstream RTEN URL brownout; discovery prefers a complete ONNX pair per directory, falls back to a complete RTEN pair, and never mixes formats or directories; language/web limits and estimates unchanged. |
