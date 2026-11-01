@@ -783,6 +783,31 @@ fn flattening_draws_no_reply_and_takes_the_thread_with_its_comment() {
     assert_eq!(drawn, [10, 12], "the comment's and the member's appearances; not the reply's, and none built for the other");
 }
 
+/// #5632 review: a reply's text never blocks flattening (a reply is not drawn into the page, so
+/// it can't bake in a `?`), and a `/RT /Group` member that flattening skipped (Hidden here)
+/// stays when its primary is flattened: only replies go with what they answer.
+#[test]
+fn flattening_skips_replies_in_the_question_mark_check_and_keeps_skipped_group_members() {
+    let page = stream("", " ");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R 7 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype /Square /Rect [10 10 60 40] /F 4 /AP << /N 8 0 R >> >>",
+        // A text-box reply whose text Helvetica can't draw, with no appearance.
+        "<< /Type /Annot /Subtype /FreeText /Rect [10 50 150 80] /DA (0 g /Helv 12 Tf) /Contents <FEFF6B228FCE> /F 4 /IRT 5 0 R >>",
+        // A hidden member of the square's group.
+        "<< /Type /Annot /Subtype /Circle /Rect [70 10 100 40] /F 6 /IRT 5 0 R /RT /Group /AP << /N 8 0 R >> >>",
+        &stream("/Type /XObject /Subtype /Form /BBox [0 0 50 30]", "0 0 1 rg 0 0 50 30 re f"),
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), 1, "flattened, the square drawn");
+    let doc = reopen(&doc);
+    let p = &pdfcraft_model::pages(&doc)[0];
+    let left: Vec<u32> = doc.resolve(p.dict.get(b"Annots").unwrap()).as_array().unwrap().iter().filter_map(|f| f.as_ref()).map(|r| r.num).collect();
+    assert_eq!(left, [7], "the reply went with the square; the hidden group member stays");
+}
+
 /// Flattening never makes a `?` permanent: it refuses, changing nothing, a text box without an
 /// appearance whose text Helvetica can't draw (another program's), and a comment or form field
 /// whose appearance PdfCraft drew with `?` (marked `PCUndrawn`). A comment another program drew

@@ -171,7 +171,8 @@ fn undrawn_on(doc: &Document, all: &[pdfcraft_model::Page], pages: &[usize], whi
         for entry in &list {
             let Some(d) = doc.resolve(entry).as_dict().cloned() else { continue };
             let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
-            if !selected(doc, &d, which) || flags & (HIDDEN | NO_VIEW) != 0 {
+            // A reply is never drawn into the page (`is_reply`), so its text can't bake in a `?`.
+            if !selected(doc, &d, which) || flags & (HIDDEN | NO_VIEW) != 0 || is_reply(doc, &d) {
                 continue;
             }
             let widget = d.name(b"Subtype") == Some(b"Widget");
@@ -322,7 +323,11 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
             {
                 pointing.entry(p).or_default().push(r);
             }
-            if let Some(p) = d.reference(b"IRT") {
+            // Only a reply goes with what it answers: a `/RT /Group` member was drawn (and went) or
+            // stays, hidden or undrawable, as any annotation.
+            if is_reply(doc, d)
+                && let Some(p) = d.reference(b"IRT")
+            {
                 pointing.entry(p).or_default().push(r);
             }
         }
