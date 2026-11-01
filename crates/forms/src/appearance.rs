@@ -273,6 +273,12 @@ pub struct Da {
     pub color: String,
 }
 
+/// Whether `t` is a plain PDF number (optional sign, digits, optional point), unlike Rust's float syntax.
+fn is_pdf_number(t: &str) -> bool {
+    let d = t.strip_prefix(['+', '-']).unwrap_or(t);
+    d.bytes().any(|b| b.is_ascii_digit()) && d.bytes().all(|b| b.is_ascii_digit() || b == b'.') && d.matches('.').count() <= 1
+}
+
 pub fn parse_da(da: &str) -> Da {
     let toks: Vec<&str> = da.split_whitespace().collect();
     let mut out = Da { font: "Helv".into(), size: 0.0, color: "0 g".into() };
@@ -282,9 +288,9 @@ pub fn parse_da(da: &str) -> Da {
                 out.font = toks[i - 2].trim_start_matches('/').to_string();
                 out.size = toks[i - 1].parse::<f64>().ok().filter(|s| s.is_finite() && *s >= 0.0).unwrap_or(0.0).min(300.0);
             }
-            "g" if i >= 1 && toks[i - 1].parse::<f64>().is_ok() => out.color = format!("{} g", toks[i - 1]),
-            "rg" if i >= 3 && toks[i - 3..i].iter().all(|x| x.parse::<f64>().is_ok()) => out.color = format!("{} rg", toks[i - 3..i].join(" ")),
-            "k" if i >= 4 && toks[i - 4..i].iter().all(|x| x.parse::<f64>().is_ok()) => out.color = format!("{} k", toks[i - 4..i].join(" ")),
+            "g" if i >= 1 && is_pdf_number(toks[i - 1]) => out.color = format!("{} g", toks[i - 1]),
+            "rg" if i >= 3 && toks[i - 3..i].iter().all(|x| is_pdf_number(x)) => out.color = format!("{} rg", toks[i - 3..i].join(" ")),
+            "k" if i >= 4 && toks[i - 4..i].iter().all(|x| is_pdf_number(x)) => out.color = format!("{} k", toks[i - 4..i].join(" ")),
             _ => {}
         }
     }
@@ -1132,6 +1138,16 @@ pub(crate) fn push_button_shown(doc: &Document, f: &Field, w: &Widget) -> Stream
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_appearance_rejects_non_pdf_colour_numbers() {
+        for c in ["nan g", "inf 0 0 rg", "1e3 g", "infinity 0 0 1 k", "0 0 NaN rg"] {
+            assert_eq!(parse_da(&format!("/Helv 12 Tf {c}")).color, "0 g", "{c}");
+        }
+        for c in ["0.5 g", "1 0 0 rg", "0 0 0 1 k", "-.5 g"] {
+            assert_eq!(parse_da(&format!("/Helv 12 Tf {c}")).color, c, "{c}");
+        }
+    }
 
     #[test]
     fn default_appearance_strings_parse() {
