@@ -134,6 +134,8 @@ impl Host for crate::PdfCraftApp {
             "mode": format!("{:?}", self.mode),
             "default_mode": self.default_mode,
             "hotbar": self.hotbar,
+            "hidden_tools": self.hidden_tools.ids(),
+            "tool_preset": self.hidden_tools.preset_id(),
             "comment_tool_pinned": self.comment_prefs.pinned,
             "left_panel": if self.left_open { json!(format!("{:?}", self.left)) } else { Value::Null },
             "tools_side": if self.side_panels.tools_on_right() { "right" } else { "left" },

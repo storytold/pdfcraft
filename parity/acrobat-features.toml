@@ -1813,8 +1813,13 @@ evidence = [
   "crates/ui-egui/tests/it/comments.rs::hotbar_vertical_size_and_docking",
   "crates/ui-egui/tests/it/comments.rs::hotbar_settings_reopen_even_with_remembered_collapsed_state",
   "crates/ui-egui/tests/it/comments.rs::hotbar_full_side_strip_spans_each_edge_and_returns_to_float",
+  "crates/ui-egui/tests/it/tool_visibility.rs::a_preset_tidies_all_tools_and_the_palette_but_ui_set_still_opens_a_hidden_tool",
+  "crates/ui-egui/tests/it/tool_visibility.rs::home_recommends_only_shown_tools_and_keeps_open_file",
+  "crates/ui-egui/tests/it/tool_visibility.rs::preferences_checkboxes_and_preset_change_the_list",
+  "crates/ui-egui/src/tool_visibility.rs::hidden_tools_survive_a_restart",
+  "crates/engine/src/catalog.rs::a_hidden_list_names_its_preset_whatever_the_order",
 ]
-notes = "Pin and unpin tools on the Home page via tool card hover button, All Tools row toggle, or 'Pin a tool' search dialog. Pinned tool order persists across sessions. Customizable document hotbar searches the command registry, adds/removes tools, resizes buttons from 24 to 64 pixels, floats or docks on any side with an optional full-side chrome strip, and persists preferences (UI control: hotbar-tools, hotbar-size, hotbar-side, hotbar-full-side). Missing: hotbar shortcut reordering and full Acrobat customization-dialog parity."
+notes = "Pin and unpin tools on the Home page via tool card hover button, All Tools row toggle, or 'Pin a tool' search dialog. Pinned tool order persists across sessions. Customizable document hotbar searches the command registry, adds/removes tools, resizes buttons from 24 to 64 pixels, floats or docks on any side with an optional full-side chrome strip, and persists preferences (UI control: hotbar-tools, hotbar-size, hotbar-side, hotbar-full-side). Preferences chooses which tools All tools, the ⌘K palette and Home list (presets All tools, Read and comment, Forms and signing, or one checkbox per tool; ui.set tool-preset / hidden-tools); hidden tools stay in the menus, mode tabs and shortcuts. Missing: hotbar shortcut reordering and full Acrobat customization-dialog parity."
 
 [[feature]]
 id = "view.restriction-notice"

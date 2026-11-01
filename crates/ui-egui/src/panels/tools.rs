@@ -76,14 +76,23 @@ fn all_tools(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         // The scrollbar floats over the right edge: keep the rows (and their rounded hover wash) clear of it.
         ui.set_max_width((ui.available_width() - SCROLLBAR_GUTTER).max(0.0));
         ui.add_space(2.0);
-        let shown = if app.all_tools_expanded { TOOL_GROUPS.len() } else { COLLAPSED_TOOLS.min(TOOL_GROUPS.len()) };
-        for g in &TOOL_GROUPS[..shown] {
+        // Tools hidden in Preferences are left out; the menus and mode tabs still reach them.
+        let visible: Vec<&'static ToolGroup> = TOOL_GROUPS.iter().filter(|g| app.hidden_tools.shows(g.id)).collect();
+        if visible.is_empty() {
+            ui.label(egui::RichText::new(tl!("No tools are shown. Choose them in Preferences.")).color(t.text_muted));
+            return;
+        }
+        let shown = if app.all_tools_expanded { visible.len() } else { COLLAPSED_TOOLS.min(visible.len()) };
+        for g in visible.iter().take(shown) {
             let (resp, pin_clicked) = tool_row(ui, t, g, app.is_tool_pinned(g.id));
             if pin_clicked {
                 app.toggle_pin_tool(g.id);
             } else if resp.clicked() {
                 app.select_tool(g.id);
             }
+        }
+        if visible.len() <= COLLAPSED_TOOLS {
+            return;
         }
         ui.add_space(4.0);
         let more = if app.all_tools_expanded { "View less" } else { "View more" };
