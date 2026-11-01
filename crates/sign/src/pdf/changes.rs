@@ -1,9 +1,35 @@
 use super::types::{Modification, kind};
 use super::{Arc, Dict, Document, HashMap, HashSet, ObjRef, Object};
 
+/// Where a signature's own dictionary lives: the field that holds it and, when `/V` is indirect,
+/// the dictionary's object. A signature is the signer's only when both are part of the revision
+/// its byte range covers and are unchanged since. A copy added later under another field (the
+/// same `/ByteRange` and `/Contents`, a reason of the forger's choosing) has bytes that check out
+/// but was never signed, and so has a new field whose `/V` names the signer's own dictionary: its
+/// name, page and appearance were never signed.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct Own {
+    pub(super) field: Option<ObjRef>,
+    pub(super) value: Option<ObjRef>,
+}
+
+impl Own {
+    /// Whether the signature's field, and its dictionary when indirect, are in `old` (the signed
+    /// revision) as they are in `doc`, under the same fully qualified name: renaming an ancestor
+    /// leaves the field's own objects untouched but shows the signature under a name the signer
+    /// never signed. A field that is a direct object can't be found there, so it is never the
+    /// signed one (ISO 32000-2 requires fields to be indirect).
+    fn unchanged(&self, doc: &Document, old: &Document) -> bool {
+        let same = |r: ObjRef| old.generation(r.num) == r.generation && old.try_get(r.num).ok().is_some_and(|o| *o == *doc.get(r));
+        let name = |d: &Document| super::listing::sig_fields(d).into_iter().find(|f| f.r.is_some() && f.r == self.field).map(|f| f.name);
+        self.field.is_some_and(same) && self.value.is_none_or(same) && name(doc) == name(old)
+    }
+}
+
 /// What later revisions changed, classified as Acrobat reports it, under DocMDP `p` (or none:
-/// an approval signature permits form fill, comments and further signatures).
-pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<u8>) -> Modification {
+/// an approval signature permits form fill, comments and further signatures). `own` is the
+/// signature being validated, whose field and dictionary must be the signed ones, unchanged.
+pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<u8>, own: Option<Own>) -> Modification {
     let Some(old) = old else {
         return Modification::Disallowed(vec![kind::UNREADABLE]);
     };
@@ -118,6 +144,11 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
         if !list.contains(&what) {
             list.push(what);
         }
+    }
+    // The field and dictionary this signature was validated from are not the signed ones:
+    // rewritten since, or a copy or reuse under a field added later.
+    if own.is_some_and(|own| !own.unchanged(doc, &old)) && !disallowed.contains(&kind::OTHER) {
+        disallowed.push(kind::OTHER);
     }
     // An object the signed revision had and this one frees is a change too, and the loop above
     // only sees objects that still exist. File plumbing (cross-reference and object streams) is
