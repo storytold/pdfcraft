@@ -841,3 +841,95 @@ fn markdown_escapes_markup_and_keeps_emphasis_and_tables() {
     assert!(rows.contains(&"| A1 | kWh | 37414.00 |"), "{md}");
     assert!(rows.iter().all(|r| r.matches(" | ").count() == 2), "every row has the header's three cells: {md}");
 }
+
+/// #3657: two-column text finishes the left column before starting the right column across
+/// Word, HTML, RTF, Markdown and PowerPoint, and text turned 90° exports in reading order rather
+/// than last line first.
+#[test]
+fn two_column_and_turned_text_export_in_reading_order() {
+    let para = |t: &str, x: f64, y0: f64, y1: f64, size: f64| Block {
+        text: t.into(),
+        rect: [x, y0, x + 130.0, y1],
+        size,
+        bold: false,
+        italic: false,
+        color: [0.0; 3],
+        rotation: 0.0,
+        space_around: [false; 2],
+    };
+    let columns = Page {
+        width: 595.0,
+        height: 842.0,
+        blocks: vec![
+            para("Two columns", 50.0, 790.0, 808.0, 18.0),
+            para("A1 first paragraph A2 first paragraph A3 first paragraph", 50.0, 720.0, 762.0, 12.0),
+            para("B1 second paragraph B2 second paragraph", 50.0, 675.0, 702.0, 12.0),
+            para("B3 second paragraph B4 second paragraph", 320.0, 735.0, 762.0, 12.0),
+            para("C1 third paragraph C2 third paragraph", 320.0, 695.0, 722.0, 12.0),
+        ],
+        images: Vec::new(),
+        background: None,
+    };
+    let expected_cols = ["Two columns", "A1 first paragraph", "B1 second paragraph", "B3 second paragraph", "C1 third paragraph"];
+    for (fmt, out) in [
+        ("html", html(std::slice::from_ref(&columns), "Columns")),
+        ("docx", part(&docx(std::slice::from_ref(&columns), "Columns"), "word/document.xml")),
+        ("rtf", rtf(std::slice::from_ref(&columns))),
+        ("md", markdown(std::slice::from_ref(&columns))),
+        ("pptx", part(&pptx(std::slice::from_ref(&columns), "Columns"), "ppt/slides/slide1.xml")),
+    ] {
+        let positions: Vec<usize> = expected_cols.iter().map(|s| out.find(s).unwrap_or_else(|| panic!("{s} missing in {fmt}: {out}"))).collect();
+        assert!(positions.windows(2).all(|w| w[0] < w[1]), "{fmt} out of order: {positions:?}\n{out}");
+    }
+
+    // Text turned 90 degrees clockwise (rotation = -90°): lines run top to bottom (y = 540
+    // down to 468) and follow each other right to left (x = 676, 654.4, 632.8, 611.2).
+    let turned_line = |t: &str, x: f64, size: f64| Block {
+        text: t.into(),
+        rect: [x - size, 468.0, x, 540.0],
+        size,
+        bold: false,
+        italic: false,
+        color: [0.0; 3],
+        rotation: -90.0,
+        space_around: [false; 2],
+    };
+    let rotated = Page {
+        width: 792.0,
+        height: 612.0,
+        blocks: vec![
+            turned_line("Line one", 676.0, 20.0),
+            turned_line("Line two", 654.4, 18.0),
+            turned_line("Line three", 632.8, 18.0),
+            turned_line("Line four", 611.2, 18.0),
+        ],
+        images: Vec::new(),
+        background: None,
+    };
+    let expected_lines = ["Line one", "Line two", "Line three", "Line four"];
+    for (fmt, out) in [
+        ("html", html(std::slice::from_ref(&rotated), "Rotated")),
+        ("docx", part(&docx(std::slice::from_ref(&rotated), "Rotated"), "word/document.xml")),
+        ("rtf", rtf(std::slice::from_ref(&rotated))),
+        ("md", markdown(std::slice::from_ref(&rotated))),
+        ("pptx", part(&pptx(std::slice::from_ref(&rotated), "Rotated"), "ppt/slides/slide1.xml")),
+    ] {
+        let positions: Vec<usize> = expected_lines.iter().map(|s| out.find(s).unwrap_or_else(|| panic!("{s} missing in {fmt}: {out}"))).collect();
+        assert!(positions.windows(2).all(|w| w[0] < w[1]), "{fmt} out of order: {positions:?}\n{out}");
+    }
+
+    // The same lines, stored bottom-to-top. Rotated lines do not join one paragraph, and
+    // Word's positioned boxes must follow reading order rather than the file's block order.
+    let mut shuffled = rotated.clone();
+    shuffled.blocks.reverse();
+    for (fmt, out) in [
+        ("html", html(std::slice::from_ref(&shuffled), "Rotated")),
+        ("docx", part(&docx(std::slice::from_ref(&shuffled), "Rotated"), "word/document.xml")),
+        ("rtf", rtf(std::slice::from_ref(&shuffled))),
+        ("md", markdown(std::slice::from_ref(&shuffled))),
+        ("pptx", part(&pptx(std::slice::from_ref(&shuffled), "Rotated"), "ppt/slides/slide1.xml")),
+    ] {
+        let positions: Vec<usize> = expected_lines.iter().map(|s| out.find(s).unwrap_or_else(|| panic!("{s} missing in {fmt}: {out}"))).collect();
+        assert!(positions.windows(2).all(|w| w[0] < w[1]), "{fmt} shuffled out of order: {positions:?}\n{out}");
+    }
+}
