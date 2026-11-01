@@ -5358,6 +5358,91 @@ fn a_document_script_that_throws_still_lets_the_form_calculate() {
     assert_eq!((o.error, o.result.as_deref(), o.doc_errors.len()), (None, Some("6"), 1));
 }
 
+/// A dynamic form whose scripts reach the document through `event.target`: `out`'s initialize
+/// script looks the signature box `sig` up through `getField` (not found while initializing)
+/// and sets `t` through it; the button `check` reads `sig` through it; the button `clear` sets
+/// `t`, then resets it with `resetForm`.
+const EVENT_TARGET_TEMPLATE: &str = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form1" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="body" layout="tb" w="7.5in">
+  <field name="t" w="3in" h="0.3in"><ui><textEdit/></ui><value><text>default</text></value></field>
+  <field name="out" w="7in" h="0.3in"><ui><textEdit/></ui>
+   <event activity="initialize"><script contentType="application/x-javascript">
+    var d = event.target;
+    d.getField("form1[0].body[0].t[0]").value = "set through getField";
+    this.rawValue = [d.getField("form1[0].foot[0].sig[0]") == null, d.getField("form1[0].foot[0].nothing[0]") == null].join("|");
+   </script></event></field>
+  <field name="check" w="2in" h="0.3in"><ui><button/></ui>
+   <event activity="click"><script contentType="application/x-javascript">
+    var sig = event.target.getField("form1[0].foot[0].sig[0]");
+    out.rawValue = [sig.name, sig.signatureInfo().status, sig.signatureValidate()].join("|");
+   </script></event></field>
+  <field name="clear" w="2in" h="0.3in"><ui><button/></ui>
+   <event activity="click"><script contentType="application/x-javascript">
+    t.rawValue = "changed"; event.target.resetForm("form1[0].body[0].t[0]"); out.rawValue = t.rawValue;
+   </script></event></field>
+ </subform>
+ <subform name="foot" layout="tb" w="7.5in">
+  <field name="sig" w="3in" h="0.6in"><ui><signature/></ui></field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+
+/// In a dynamic XFA form's scripts, `event.target.getField` gives the document's field for its
+/// SOM expression (null for one the form doesn't have, and for a signature box while the form
+/// initializes), a value set through it reaches the field, a click finds the signature box and
+/// its `signatureInfo()` and `signatureValidate()` say it is unsigned (0), and `resetForm`
+/// resets the field it names at once.
+#[test]
+fn xfa_scripts_reach_the_document_fields_through_the_event_target() {
+    let mut s = Session::new();
+    let id = s.open("form.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(EVENT_TARGET_TEMPLATE)), None).unwrap();
+    let out = s.take_js_output(id);
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    let value = |s: &Session, name: &str| s.get(id).unwrap().form.iter().find(|f| f.name == name).map(|f| f.value.clone()).unwrap_or_default();
+    assert_eq!(value(&s, "out"), ["true|true"]);
+    assert_eq!(value(&s, "t"), ["set through getField"]);
+    let o = s.run_javascript(id, "", Some("check")).unwrap();
+    assert!(o.error.is_none(), "{o:?}");
+    assert_eq!(value(&s, "out"), ["form1[0].foot[0].sig[0]|0|0"]);
+    let o = s.run_javascript(id, "", Some("clear")).unwrap();
+    assert!(o.error.is_none(), "{o:?}");
+    assert_eq!((value(&s, "t"), value(&s, "out")), (vec!["default".to_string()], vec!["default".to_string()]));
+}
+
+/// A signed signature box reads as signed, with its signature's state: the stand-in signature
+/// [`pdfcraft_xfa::fixtures::signed_shell`] holds has no byte range, so it checks as invalid (2);
+/// the other box is unsigned (0).
+#[test]
+fn xfa_scripts_see_a_signed_box_through_the_event_target() {
+    let script = r#"<field name="out" w="7in" h="0.3in"><ui><textEdit/></ui></field>
+        <field name="check" w="2in" h="0.3in"><ui><button/></ui><event activity="click"><script contentType="application/x-javascript">
+        var d = event.target; out.rawValue = d.getField("form[0].body[0].sign[0]").signatureInfo().status + "|" + d.getField("form[0].body[0].other[0]").signatureValidate();
+        </script></event></field>"#;
+    let mut s = Session::new();
+    let id = s.open("signed.pdf", None, Arc::new(pdfcraft_xfa::fixtures::signed_shell_with(script)), None).unwrap();
+    let o = s.run_javascript(id, "", Some("check")).unwrap();
+    assert!(o.error.is_none(), "{o:?}");
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.form.iter().find(|f| f.name == "out").map(|f| f.value.clone()), Some(vec!["2|0".to_string()]));
+}
+
+/// Form scripts outside XFA (here the console) see a signature field's state too, as the
+/// document's signatures were checked: the signed box's stand-in signature checks as invalid (2).
+#[test]
+fn form_scripts_see_a_signature_fields_state() {
+    let mut s = Session::new();
+    let id = s.open("signed.pdf", None, Arc::new(pdfcraft_xfa::fixtures::signed_shell()), None).unwrap();
+    let script = "getField('form[0].body[0].sign[0]').signatureInfo().status + '|' + getField('form[0].body[0].sign[0]').signatureValidate()";
+    let o = s.run_javascript(id, script, None).unwrap();
+    assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("2|2")));
+}
+
 #[test]
 fn active_xfa_does_not_run_pdf_container_scripts_but_keeps_requested_alerts() {
     let template = pdfcraft_xfa::fixtures::scripted_template().replace(
@@ -9020,6 +9105,61 @@ fn exporting_office_keeps_dotted_leader_entries_as_paragraphs() {
     let entries = ["Art.1. Scope .................... 3", "Art.2. Eligibility .................... 7", "Art.3. Application .................... 12"];
     let positions: Vec<_> = entries.iter().map(|entry| html.find(&format!("<p>{entry}</p>")).expect("one paragraph per entry")).collect();
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "reading order: {html}");
+}
+
+/// `run_javascript` runs an XFA click script only for a push button, as the app does: a text
+/// field with a click event of its own, named as the target, asks to open no attached file.
+#[test]
+fn run_javascript_runs_xfa_click_scripts_only_for_buttons() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="guide" w="2in" h="0.3in"><ui><button/></ui><caption><value><text>Instructions</text></value></caption>
+  <event activity="click"><script contentType="application/x-javascript">event.target.exportDataObject({cName: "Guide.pdf", nLaunch: 2});</script></event></field>
+ <field name="note" w="2in" h="0.3in"><ui><textEdit/></ui>
+  <event activity="click"><script contentType="application/x-javascript">event.target.exportDataObject({cName: "Guide.pdf", nLaunch: 2});</script></event></field>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut s = Session::new();
+    let id = s.open("guide.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    s.take_js_output(id);
+    let o = s.run_javascript(id, "", Some("guide")).unwrap();
+    assert_eq!(o.requests, [pdfcraft_js::Request::OpenAttachment { name: "Guide.pdf".into(), open: true }], "the button's click: {o:?}");
+    let o = s.run_javascript(id, "", Some("note")).unwrap();
+    assert!(o.requests.is_empty(), "a text field's click script doesn't run here: {o:?}");
+}
+
+/// In an XFA form a button's click script may open an attached file; the same request from a
+/// text field's exit script is noted in the console and not made.
+#[test]
+fn an_xfa_button_may_open_an_attached_file_and_other_events_may_not() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="guide" w="2in" h="0.3in"><ui><button/></ui><caption><value><text>Instructions</text></value></caption>
+  <event activity="click"><script contentType="application/x-javascript">event.target.exportDataObject({cName: "Guide.pdf", nLaunch: 2});</script></event></field>
+ <field name="note" w="2in" h="0.3in"><ui><textEdit/></ui>
+  <event activity="exit"><script contentType="application/x-javascript">event.target.exportDataObject({cName: "Guide.pdf", nLaunch: 2});</script></event></field>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut s = Session::new();
+    let id = s.open("guide.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    s.take_js_output(id);
+    s.apply(id, Edit::XfaEvent { som: "form[0].guide[0]".into(), activity: "click".into() }).unwrap();
+    let out = s.take_js_output(id);
+    assert_eq!(out.requests, [pdfcraft_js::Request::OpenAttachment { name: "Guide.pdf".into(), open: true }], "{out:?}");
+    s.apply(id, Edit::SetFieldValue { name: "note".into(), value: FieldValue::Text("x".into()) }).unwrap();
+    let out = s.take_js_output(id);
+    assert!(out.requests.is_empty(), "only a click opens a file: {out:?}");
+    assert!(out.console.iter().any(|c| c.contains("open an attached file")), "{:?}", out.console);
 }
 
 /// A date typed in another of an XFA date field's edit patterns is kept in its first: yymmdd and

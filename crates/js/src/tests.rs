@@ -363,6 +363,7 @@ fn app_alert_titles_are_clipped_and_charged() {
         doc: doc(),
         kept: 0,
         dropped: 0,
+        xfa: false,
     };
     h.alert(Message { title: Some("Order form".into()), ..Message::plain("Saved") });
     assert_eq!(h.kept, "Saved".len() + "Order form".len());
@@ -525,6 +526,20 @@ fn scripts_cannot_compile_code_from_strings() {
     }
 }
 
+/// A signature field's `signatureInfo().status` and `signatureValidate()` give its signature
+/// state as a number; any other field gives -1.
+#[test]
+fn signature_fields_report_their_signature_state() {
+    let mut sig = FieldState::new("sig", FieldType::Signature, vec![]);
+    sig.signature = SignatureState::Valid;
+    let mut all = fields();
+    all.push(sig);
+    let script = "[getField('sig').signatureInfo().status, getField('sig').signatureValidate(), getField('price').signatureInfo().status].join('|')";
+    let o = run(script, &Event::doc("Console"), &doc(), &all, &[], Limits::default());
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(o.result.as_deref(), Some("4|4|-1"));
+}
+
 mod xfa_model {
     use crate::xfa::*;
     use crate::{Limits, Message, MessageButtons, MessageIcon};
@@ -595,7 +610,7 @@ mod xfa_model {
     /// Run the JavaScript `script` for `activity` on the test form, from the node at `target`.
     fn go(script: &str, target: &str, activity: &str) -> XfaOutcome {
         let ev = XfaEvent { activity: activity.into(), target: target.into(), ..Default::default() };
-        let doc = XfaDoc { file_name: "f.pdf".into(), page: 1, page_count: 3 };
+        let doc = XfaDoc { file_name: "f.pdf".into(), page: 1, page_count: 3, ..Default::default() };
         run_xfa(script, &ev, &doc, &form(), Limits::default())
     }
 
@@ -997,6 +1012,120 @@ mod xfa_model {
         let o = run_within_limits("test", ms(10_000), ms(200), |_| XfaOutcome { error: Some("refused".into()), ..Default::default() });
         assert!(!o.abandoned && o.error.as_deref() == Some("refused"), "{o:?}");
     }
+
+    /// The document's fields as the engine hands them to the test form's scripts, each named by
+    /// its SOM expression: `qty` and `price` (text fields also in [`form`], `qty` with a default
+    /// value), and a signature field in each state under `form1[0].foot[0]`.
+    fn doc_fields() -> std::sync::Arc<Vec<crate::FieldState>> {
+        use crate::{FieldState, FieldType, SignatureState};
+        let signature = |name: &str, state: SignatureState| {
+            let mut f = FieldState::new(format!("form1[0].foot[0].{name}[0]"), FieldType::Signature, Vec::new());
+            f.signature = state;
+            f
+        };
+        let mut qty = FieldState::new("form1[0].page1[0].qty[0]", FieldType::Text, vec!["4".into()]);
+        qty.default = vec!["1".into()];
+        std::sync::Arc::new(vec![
+            qty,
+            FieldState::new("form1[0].page1[0].price[0]", FieldType::Text, vec!["2.5".into()]),
+            signature("blank", SignatureState::Unsigned),
+            signature("unknown", SignatureState::Unknown),
+            signature("invalid", SignatureState::Invalid),
+            signature("valid", SignatureState::Valid),
+        ])
+    }
+
+    /// `script` run for `activity` on the button `go`, with the document's fields
+    /// ([`doc_fields`]).
+    fn go_with_fields(script: &str, activity: &str) -> XfaOutcome {
+        let ev = XfaEvent { activity: activity.into(), target: "form1[0].page1[0].go[0]".into(), ..Default::default() };
+        let doc = XfaDoc { file_name: "f.pdf".into(), page: 1, page_count: 3, fields: doc_fields() };
+        run_xfa(script, &ev, &doc, &form(), Limits::default())
+    }
+
+    /// `event.target.getField` finds a field only by its SOM expression with every index written
+    /// (how form tools name an XFA form's PDF fields, XFA 3.3 ch. 2 pp. 72-74); other spellings,
+    /// short names and unknown names give null, a subform's SOM expression an object naming it,
+    /// and no name at all is an error.
+    #[test]
+    fn event_target_get_field_finds_a_field_by_its_full_som_expression() {
+        let o = go_with_fields(
+            "var d = event.target; [d.getField('form1[0].page1[0].qty[0]').name, d.getField('form1[0].page1[0].qty[0]').value, \
+             d.getField('form1[0].page1[0].qty[0]').type, d.getField('form.form1.page1.qty'), d.getField('form1.page1.qty'), \
+             d.getField('xfa[0].form[0].form1[0].page1[0].qty[0]'), d.getField('form1[0].page1[0].qty'), d.getField('qty'), \
+             d.getField('form1[0].page1[0].nothing[0]'), d.getField(''), d.getField('form1[0].page1[0]').name, \
+             d.getField('form1[0].page1[0]').type].join('|')",
+            "click",
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("form1[0].page1[0].qty[0]|4|text||||||||form1[0].page1[0]|"));
+        let o = go_with_fields("event.target.getField()", "click");
+        assert!(o.error.as_deref().is_some_and(|e| e.contains("field name is required")), "{o:?}");
+        // Without the document's fields, nothing is found (and nothing fails).
+        let o = go("event.target.getField('form1[0].page1[0].qty[0]') === null", "form1[0].page1[0].go[0]", "click");
+        assert_eq!((o.error, o.result.as_deref()), (None, Some("true")));
+    }
+
+    /// A signature field's `signatureInfo().status` and `signatureValidate()` give its state as a
+    /// number (0 unsigned, 1 unknown, 2 invalid, 4 valid); other fields have neither method; an
+    /// initialize script doesn't find signature fields at all.
+    #[test]
+    fn signature_info_and_validate_report_the_signature_state() {
+        let o = go_with_fields(
+            "var d = event.target, out = []; \
+             ['blank', 'unknown', 'invalid', 'valid'].forEach(function (n) { var f = d.getField('form1[0].foot[0].' + n + '[0]'); \
+             out.push(f.signatureInfo().status + '/' + f.signatureValidate()); }); \
+             var q = d.getField('form1[0].page1[0].qty[0]'); out.push(typeof q.signatureInfo, typeof q.signatureValidate); out.join('|')",
+            "click",
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("0/0|1/1|2/2|4/4|undefined|undefined"));
+        let o = go_with_fields(
+            "[event.target.getField('form1[0].foot[0].valid[0]') === null, event.target.getField('form1[0].page1[0].qty[0]').value].join('|')",
+            "initialize",
+        );
+        assert_eq!((o.error, o.result.as_deref()), (None, Some("true|4")));
+    }
+
+    /// A value set through `getField` sets the XFA field, as `rawValue` would (the script reads
+    /// it back there); a property the XFA field doesn't take this way is noted and left alone.
+    #[test]
+    fn a_value_set_through_get_field_sets_the_xfa_field() {
+        let o = go_with_fields(
+            "var f = event.target.getField('form1[0].page1[0].qty[0]'); f.value = 7; f.readonly = true; qty.rawValue + '|' + f.value",
+            "click",
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("7|7"));
+        assert_eq!(o.effects, vec![XfaEffect::SetValue { som: "form1[0].page1[0].qty[0]".into(), value: "7".into() }]);
+        assert!(o.notes.iter().any(|n| n.contains("form1[0].page1[0].qty[0]: readonly")), "{:?}", o.notes);
+    }
+
+    /// `event.target.resetForm` resets the fields it names (one name, or an array whose missing
+    /// entries are skipped; full SOM expressions or dotted names without indexes), or every
+    /// field when it names none; a list naming nothing resets nothing. The script reads the
+    /// default back at once (an empty numeric field reads null).
+    #[test]
+    fn event_target_reset_form_resets_the_named_fields_or_all() {
+        let reset = |script: &str| {
+            let o = go_with_fields(script, "click");
+            assert_eq!(o.error, None, "{script}: {o:?}");
+            (o.effects, o.result.unwrap_or_default())
+        };
+        let names = |n: &[&str]| vec![XfaEffect::ResetData(n.iter().map(|s| s.to_string()).collect())];
+        let read = "; qty.rawValue + '|' + price.rawValue + '|' + event.target.getField('form1[0].page1[0].qty[0]').value";
+        assert_eq!(
+            reset(&format!("event.target.resetForm('form1[0].page1[0].qty[0]'){read}")),
+            (names(&["form1[0].page1[0].qty[0]"]), "1|2.5|1".into())
+        );
+        assert_eq!(
+            reset(&format!("var f = new Array(1); f[1] = 'form1.page1.qty'; event.target.resetForm(f){read}")),
+            (names(&["form1.page1.qty"]), "1|2.5|1".into())
+        );
+        assert_eq!(reset(&format!("event.target.resetForm(){read}")), (names(&[]), "1|null|1".into()));
+        assert_eq!(reset(&format!("event.target.resetForm([]){read}")), (Vec::new(), "4|2.5|4".into()));
+        assert_eq!(reset(&format!("event.target.resetForm(['']){read}")), (Vec::new(), "4|2.5|4".into()));
+    }
 }
 
 mod formcalc {
@@ -1007,7 +1136,7 @@ mod formcalc {
 
     fn go(script: &str, target: &str, activity: &str) -> XfaOutcome {
         let ev = XfaEvent { activity: activity.into(), target: target.into(), ..Default::default() };
-        let doc = XfaDoc { file_name: "f.pdf".into(), page: 1, page_count: 3 };
+        let doc = XfaDoc { file_name: "f.pdf".into(), page: 1, page_count: 3, ..Default::default() };
         run_formcalc(script, &ev, &doc, &form(), Limits::default())
     }
 
@@ -1663,6 +1792,7 @@ mod session {
             root: form(),
             limits: Limits::default(),
             timeout: std::time::Duration::from_secs(3),
+            fields: None,
         }
     }
 
@@ -1788,6 +1918,61 @@ fn shared_field_snapshots_isolate_writes_errors_and_script_globals() {
     assert_eq!(read.error, None);
     assert_eq!(read.value, "undefined:4:false");
     assert!(read.changed.is_empty());
+}
+
+mod data_objects {
+    use super::*;
+    use crate::xfa::{XfaDoc, XfaEffect, XfaEvent, run_xfa};
+
+    /// `exportDataObject`, as a document method or a bare global, asks to open the named attached
+    /// file when `nLaunch` is 1 or 2 and to save it otherwise; without `cName` it is an error.
+    #[test]
+    fn export_data_object_asks_to_open_or_save_an_attached_file() {
+        let o = go(
+            "this.exportDataObject({cName: 'Guide.pdf', nLaunch: 2}); exportDataObject('notes.txt'); \
+             this.exportDataObject({cName: 'form.pdf', nLaunch: 1});",
+            &Event::field("Mouse Up", "total", ""),
+        );
+        assert_eq!(o.error, None);
+        assert_eq!(
+            o.requests,
+            [
+                Request::OpenAttachment { name: "Guide.pdf".into(), open: true },
+                Request::OpenAttachment { name: "notes.txt".into(), open: false },
+                Request::OpenAttachment { name: "form.pdf".into(), open: true },
+            ]
+        );
+        let o = go("this.exportDataObject({nLaunch: 2})", &Event::field("Mouse Up", "total", ""));
+        assert!(o.error.as_deref().is_some_and(|e| e.contains("cName")), "{:?}", o.error);
+        assert!(o.requests.is_empty());
+    }
+
+    /// Only `nLaunch` 1 and 2 open the file: other values (1.5, 3, a huge number) save it, as the
+    /// default 0 does.
+    #[test]
+    fn export_data_object_opens_only_for_n_launch_1_and_2() {
+        for launch in ["1.5", "3", "1e9", "-1"] {
+            let o = go(&format!("this.exportDataObject({{cName: 'Guide.pdf', nLaunch: {launch}}});"), &Event::field("Mouse Up", "total", ""));
+            assert_eq!(o.requests, [Request::OpenAttachment { name: "Guide.pdf".into(), open: false }], "nLaunch {launch}");
+        }
+    }
+
+    /// In an XFA script `event.target` is the document, so `exportDataObject` works on it, while
+    /// `xfa.event.target` is still the node the event happened on.
+    #[test]
+    fn in_xfa_scripts_event_target_is_the_document_and_xfa_event_target_the_node() {
+        let event = XfaEvent { activity: "click".into(), target: "form1[0].page1[0].go[0]".into(), ..Default::default() };
+        let o = run_xfa(
+            "event.target.exportDataObject({cName: 'Guide.pdf', nLaunch: 2}); xfa.event.target.name",
+            &event,
+            &XfaDoc::default(),
+            &super::xfa_model::form(),
+            Limits::default(),
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("go"), "xfa.event.target is still the button");
+        assert!(o.effects.contains(&XfaEffect::OpenAttachment { name: "Guide.pdf".into(), open: true }), "{:?}", o.effects);
+    }
 }
 
 mod scand {

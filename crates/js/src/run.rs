@@ -210,6 +210,7 @@ fn run_here(
         doc: doc.clone(),
         kept: 0,
         dropped: 0,
+        xfa: false,
     }));
     let mut out = Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), ..Default::default() };
     let mut doc_errors: Vec<(usize, String)> = skipped.iter().map(|(i, why)| (*i, doc_error(*i, why))).collect();

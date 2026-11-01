@@ -682,6 +682,11 @@ pub fn usage_rights_shell(xdp: &str, others: &str, indirect: bool) -> Vec<u8> {
 /// field a signing application leaves (named by its SOM path, its value a signature dictionary)
 /// and the picture drawn in the box, a solid blue rectangle.
 pub fn signed_shell() -> Vec<u8> {
+    signed_shell_with("")
+}
+
+/// [`signed_shell`] with `more` (template objects) after the two signature boxes.
+pub fn signed_shell_with(more: &str) -> Vec<u8> {
     let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
 <xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
 <template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
@@ -690,11 +695,13 @@ pub fn signed_shell() -> Vec<u8> {
  <subform name="body" layout="tb" w="7.5in">
   <field name="sign" w="3in" h="1in"><ui><signature/></ui></field>
   <field name="other" w="3in" h="1in"><ui><signature/></ui></field>
+  MORE
  </subform>
 </subform>
 </template>
 </xdp:xdp>
-"##;
+"##
+    .replace("MORE", more);
     let picture = "0 0 1 rg 0 0 100 40 re f";
     let objs: Vec<Vec<u8>> = vec![
         b"<< /Type /Catalog /Pages 2 0 R /NeedsRendering true /AcroForm << /XFA 5 0 R /Fields [6 0 R] /SigFlags 3 >> >>".to_vec(),
