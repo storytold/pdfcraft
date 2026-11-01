@@ -2019,6 +2019,38 @@ fn annots_of(doc: &Document) -> Vec<Dict> {
         .collect()
 }
 
+/// #3945: Password-flag text fields (`/Ff` bit 14) are omitted from exported form data across
+/// XFDF, FDF, XML, CSV, tab-delimited text and `data_values` (matching Acrobat's `bNoPassword`
+/// default on `exportAsFDF` and `exportAsXFDF`).
+#[test]
+fn password_flag_fields_are_excluded_from_exported_form_data() {
+    let mut doc = one_field();
+    add_field(&mut doc, 0, [50.0, 650.0, 250.0, 670.0], &NewField::Text { multiline: false }, Some("pin")).unwrap();
+    let pin = fields(&doc).into_iter().find(|f| f.name == "pin").unwrap().obj;
+    doc.update_dict(pin, |d| d.set(b"Ff".to_vec(), Object::Int(pdfcraft_forms::flags::PASSWORD as i64))).unwrap();
+    set_value(&mut doc, "Name", &FieldValue::Text("Ada".into())).unwrap();
+    set_value(&mut doc, "pin", &FieldValue::Text("hunter2".into())).unwrap();
+
+    let xfdf = export_xfdf(&doc, false, true, "form.pdf");
+    assert!(xfdf.contains("<field name=\"Name\"><value>Ada</value></field>"), "{xfdf}");
+    assert!(!xfdf.contains("pin") && !xfdf.contains("hunter2"), "XFDF leaked password field: {xfdf}");
+
+    let fdf_bytes = export_fdf(&doc, false, true, "form.pdf").unwrap();
+    let fdf_str = String::from_utf8_lossy(&fdf_bytes);
+    assert!(fdf_str.contains("Ada"), "{fdf_str}");
+    assert!(!fdf_str.contains("pin") && !fdf_str.contains("hunter2"), "FDF leaked password field: {fdf_str}");
+    assert_eq!(data_values(&fdf_bytes).unwrap(), vec![("Name".to_string(), vec!["Ada".to_string()])]);
+
+    for format in [Format::Xml, Format::Csv, Format::Txt] {
+        let out = export_data(&doc, format);
+        assert!(out.contains("Ada"), "{format:?}: {out}");
+        assert!(!out.contains("pin") && !out.contains("hunter2"), "{format:?} leaked password field: {out}");
+    }
+
+    let raw_pdf = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert_eq!(data_values(&raw_pdf).unwrap(), vec![("Name".to_string(), vec!["Ada".to_string()])]);
+}
+
 /// An empty text field exports as a `<field>` with no `<value>`, and the import skipped such a
 /// field, so importing the data left the target's old text in place. FDF, XML, CSV and text
 /// carry the same empty value and clear the field.
