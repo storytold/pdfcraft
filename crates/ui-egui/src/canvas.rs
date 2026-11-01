@@ -1468,6 +1468,14 @@ pub(crate) struct PageToolContext<'a> {
     pub info: &'a DocInfo,
 }
 
+fn handle_zoom_tools(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, ptr: &PagePointer, page: usize, view: &mut DocView, tool: QuickTool) {
+    if matches!(tool, QuickTool::MarqueeZoom | QuickTool::Snapshot) {
+        crate::zoom_snap::page_input(ui, resp, xf, ptr, page, view);
+    } else if tool == QuickTool::DynamicZoom {
+        crate::zoom_snap::dynamic_zoom_input(ui, resp, xf, ptr, page, view);
+    }
+}
+
 /// Comments: tools, selection, moving and resizing come before text selection. Form fields take
 /// clicks first with the Select tool (as Acrobat fills fields in every viewing mode); then
 /// comments; then text selection.
@@ -1620,12 +1628,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
     if matches!(tool, QuickTool::SignArea { .. }) {
         crate::sign_ui::page_input(ui, resp, &xf, ptr, i, info, view);
     }
-    if matches!(tool, QuickTool::MarqueeZoom | QuickTool::Snapshot) {
-        crate::zoom_snap::page_input(ui, resp, &xf, ptr, i, view);
-    }
-    if tool == QuickTool::DynamicZoom {
-        crate::zoom_snap::dynamic_zoom_input(ui, resp, &xf, ptr, i, view);
-    }
+    handle_zoom_tools(ui, resp, &xf, ptr, i, view, tool);
     if tool == QuickTool::EnhanceCamera {
         crate::camera_ui::page_input(resp, &xf, ptr, i, view, can_modify);
     }
