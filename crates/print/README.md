@@ -27,6 +27,8 @@ spool::submit(&pdf, &spool::Job { printer: None, copies: 2, ..Default::default()
 - **Poster**: tile scale, overlap shared by neighbouring tiles, cut marks.
 - **Comments & forms**: document, + markups, + stamps, or form fields only; annotations print
   only with their Print flag, drawn from their appearance streams (Algorithm 8.1).
+  Existing Link appearances are document content in the first three modes; Link appearances
+  are not synthesized when absent, and form fields only excludes them.
 - **Properties… on CUPS** reads the queue's PPD and its current defaults (`lpoptions -l`) off
   the GUI thread, and gives `lpoptions` ten seconds: a CUPS that has stopped answering leaves
   the PPD's own defaults in force instead of holding the dialog (#1818; `spool::output_within`

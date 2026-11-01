@@ -85,6 +85,44 @@ fn xobject(doc: &Document, owner: &Dict, name: &[u8]) -> ObjRef {
     objects.as_dict().unwrap().get(name).unwrap().as_ref().unwrap()
 }
 
+/// Existing Link artwork prints as document content only when its flags allow printing.
+#[test]
+fn printable_link_appearance_survives_vector_print() {
+    for flags in [0, 2, 4, 6, 5] {
+        for content in [Content::Document, Content::DocumentAndMarkups, Content::DocumentAndStamps, Content::FormFieldsOnly] {
+            let (mut doc, _, annot) = widget_fixture(Some(Object::name("Form")), None);
+            doc.update_dict(annot, |d| {
+                d.set(b"Subtype".to_vec(), Object::name("Link"));
+                d.set(b"F".to_vec(), Object::Int(flags));
+            })
+            .unwrap();
+            let before = saved(&doc);
+            let expected = flags & 4 != 0 && flags & 2 == 0 && content != Content::FormFieldsOnly;
+            let printed = render(impose(&doc, &print_settings(content)).unwrap());
+            let color = if expected { [0, 255, 0, 255] } else { [255, 255, 255, 255] };
+            assert_eq!(pixel(&printed, 30, 70), color, "flags={flags}, content={content:?}");
+            let mut raster_source = doc.clone();
+            keep_printed(&mut raster_source, content);
+            let page = &pdfcraft_model::pages(&raster_source)[0];
+            let annots = raster_source.resolve(page.dict.get(b"Annots").unwrap());
+            assert_eq!(annots.as_array().unwrap().len(), usize::from(expected), "raster flags={flags}, content={content:?}");
+            assert_eq!(saved(&doc), before, "source remains unchanged");
+        }
+    }
+    for subtype in ["Link", "Popup"] {
+        let (mut doc, _, annot) = widget_fixture(Some(Object::name("Form")), None);
+        doc.update_dict(annot, |d| {
+            d.set(b"Subtype".to_vec(), Object::name(subtype));
+            if subtype == "Link" {
+                d.remove(b"AP");
+            }
+        })
+        .unwrap();
+        let printed = render(impose(&doc, &print_settings(Content::DocumentAndMarkups)).unwrap());
+        assert_eq!(pixel(&printed, 30, 70), [255, 255, 255, 255], "{subtype} must not acquire an appearance");
+    }
+}
+
 /// Printing keeps occupied page resource names and distinct annotation appearances intact,
 /// whether the page resources are direct or inherited from the page tree.
 #[test]
