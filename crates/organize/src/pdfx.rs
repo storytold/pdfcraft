@@ -17,6 +17,19 @@ use crate::OrganizeError;
 /// Decoding limit for an output profile or an XMP packet (ICC profiles are a few MB at most).
 const MAX_DECODED: usize = 64 << 20;
 
+fn resolve(doc: &Document, obj: &Object) -> Object {
+    let mut cur = obj.clone();
+    for _ in 0..16 {
+        let Object::Ref(r) = cur else { break };
+        cur = (*doc.get(r)).clone();
+    }
+    cur
+}
+
+fn dict_name(doc: &Document, d: &Dict, key: &[u8]) -> Option<Vec<u8>> {
+    d.get(key).and_then(|v| resolve(doc, v).as_name().map(<[u8]>::to_vec))
+}
+
 /// What a document declares about the print standard it meets.
 #[derive(Debug, Default)]
 pub(crate) struct PrintStandard {
@@ -37,17 +50,18 @@ pub(crate) struct PrintStandard {
 impl PrintStandard {
     /// What `doc` declares.
     pub(crate) fn of(doc: &Document) -> Self {
-        let catalog = doc.root().and_then(|r| doc.get(r).as_dict().cloned()).unwrap_or_default();
+        let catalog = doc.root().and_then(|r| resolve(doc, &Object::Ref(r)).as_dict().cloned()).unwrap_or_default();
         let intents = catalog.get(b"OutputIntents").cloned();
-        let list = intents.as_ref().and_then(|o| doc.resolve(o).as_array().cloned()).unwrap_or_default();
+        let list = intents.as_ref().and_then(|o| resolve(doc, o).as_array().cloned()).unwrap_or_default();
         let conditions = list
             .iter()
             .map(|oi| {
-                let oi = doc.resolve(oi);
+                let oi = resolve(doc, oi);
                 let d = oi.as_dict();
-                let kind = d.and_then(|d| d.name(b"S")).unwrap_or_default().to_vec();
-                let id = d.and_then(|d| d.get(b"OutputConditionIdentifier")).and_then(|v| doc.resolve(v).as_string().map(|s| s.bytes.clone()));
-                let profile = d.and_then(|d| d.get(b"DestOutputProfile")).map(|p| doc.resolve(p)).and_then(|p| match &*p {
+                let kind = d.and_then(|d| dict_name(doc, d, b"S")).unwrap_or_default();
+                let id =
+                    d.and_then(|d| d.get(b"OutputConditionIdentifier")).and_then(|v| resolve(doc, v).as_string().map(|s| s.to_text().into_bytes()));
+                let profile = d.and_then(|d| d.get(b"DestOutputProfile")).map(|p| resolve(doc, p)).and_then(|p| match &p {
                     // Undecodable: compare the bytes as stored.
                     Object::Stream(s) => Some(s.decoded_within(MAX_DECODED).unwrap_or_else(|_| s.raw.to_vec())),
                     _ => None,
@@ -57,7 +71,8 @@ impl PrintStandard {
             .collect();
         let xmp = metadata(doc, &catalog);
         let declared = |info_key: &str, xmp_key: &str| {
-            crate::info(doc, info_key)
+            info_string(doc, info_key.as_bytes())
+                .or_else(|| crate::info(doc, info_key))
                 .map(|v| v.trim().to_string())
                 .filter(|v| !v.is_empty())
                 .or_else(|| xmp.as_deref().and_then(|x| xmp_value(x, xmp_key)))
@@ -143,13 +158,20 @@ fn packet(doc: &Document, standard: &PrintStandard, version: &str) -> String {
     )
 }
 
+/// A string entry from `/Info`, resolving chained indirect references.
+fn info_string(doc: &Document, key: &[u8]) -> Option<String> {
+    let info = resolve(doc, doc.trailer().get(b"Info")?);
+    let v = resolve(doc, info.as_dict()?.get(key)?);
+    v.as_string().map(|s| s.to_text())
+}
+
 /// The document information's `/Trapped` (a name, or a string in older files).
 fn info_trapped(doc: &Document) -> Option<&'static str> {
-    let info = doc.resolve(doc.trailer().get(b"Info")?);
-    let v = doc.resolve(info.as_dict()?.get(b"Trapped")?);
-    match &*v {
+    let info = resolve(doc, doc.trailer().get(b"Info")?);
+    let v = resolve(doc, info.as_dict()?.get(b"Trapped")?);
+    match &v {
         Object::Name(n) => trapped(n),
-        Object::String(s) => trapped(&s.bytes),
+        Object::String(s) => trapped(s.to_text().as_bytes()),
         _ => None,
     }
 }
@@ -165,7 +187,7 @@ fn trapped(v: &[u8]) -> Option<&'static str> {
 
 /// The catalog's XMP metadata, as text.
 fn metadata(doc: &Document, catalog: &Dict) -> Option<String> {
-    match &*doc.resolve(catalog.get(b"Metadata")?) {
+    match resolve(doc, catalog.get(b"Metadata")?) {
         Object::Stream(s) => s.decoded_within(MAX_DECODED).ok().map(|b| String::from_utf8_lossy(&b).into_owned()),
         _ => None,
     }
@@ -186,8 +208,44 @@ fn xmp_value(xmp: &str, key: &str) -> Option<String> {
     Some(unescape(value.trim())).filter(|v| !v.is_empty())
 }
 
-fn unescape(s: &str) -> String {
-    s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
+fn unescape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find('&') {
+        out.push_str(rest.get(..i).unwrap_or_default());
+        let after = rest.get(i..).unwrap_or_default();
+        let Some(semi) = after.find(';').filter(|&n| n <= 12) else {
+            out.push('&');
+            rest = after.get(1..).unwrap_or_default();
+            continue;
+        };
+        let entity = after.get(1..semi).unwrap_or_default();
+        let c = match entity {
+            "amp" => Some('&'),
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            _ => entity
+                .strip_prefix("#x")
+                .or_else(|| entity.strip_prefix("#X"))
+                .and_then(|h| u32::from_str_radix(h, 16).ok())
+                .or_else(|| entity.strip_prefix('#').and_then(|d| d.parse().ok()))
+                .and_then(char::from_u32),
+        };
+        match c {
+            Some(c) => {
+                out.push(c);
+                rest = after.get(semi + 1..).unwrap_or_default();
+            }
+            None => {
+                out.push('&');
+                rest = after.get(1..).unwrap_or_default();
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// `s` as XML text: markup escaped, and characters XML 1.0 does not allow left out.
@@ -199,4 +257,78 @@ pub(crate) fn esc(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unescape_does_not_double_decode_amp_sequences_and_handles_numeric_entities() {
+        assert_eq!(unescape("PDF/X &amp;lt;4&amp;gt; &#65;&#x42;"), "PDF/X &lt;4&gt; AB");
+    }
+
+    #[test]
+    fn print_standard_normalizes_utf16be_condition_and_trapped_and_resolves_indirect_fields() {
+        let mut doc1 = Document::new_empty();
+        let s_name = doc1.add(Object::Name(b"GTS_PDFX".to_vec()));
+        let mut oi1 = Dict::new();
+        oi1.set(b"S".to_vec(), Object::Ref(s_name));
+        oi1.set(b"OutputConditionIdentifier".to_vec(), Object::String(PdfString::literal(b"FOGRA39".to_vec())));
+        let oi1_ref = doc1.add(Object::Dict(oi1));
+        let oi1_hop = doc1.add(Object::Ref(oi1_ref));
+        let intents1_ref = doc1.add(Object::Array(vec![Object::Ref(oi1_hop)]));
+        let intents1_hop = doc1.add(Object::Ref(intents1_ref));
+        let root1 = doc1.root().expect("root1");
+        doc1.update_dict(root1, |c| {
+            c.set(b"OutputIntents".to_vec(), Object::Ref(intents1_hop));
+        })
+        .expect("set OutputIntents");
+        let mut info1 = Dict::new();
+        info1.set(b"GTS_PDFXVersion".to_vec(), Object::String(PdfString::text("PDF/X-4")));
+        // UTF-16BE "True"
+        info1.set(b"Trapped".to_vec(), Object::String(PdfString::literal(vec![0xFE, 0xFF, 0x00, b'T', 0x00, b'r', 0x00, b'u', 0x00, b'e'])));
+        let info1_ref = doc1.add(Object::Dict(info1));
+        let info1_hop = doc1.add(Object::Ref(info1_ref));
+        doc1.trailer_mut().set(b"Info".to_vec(), Object::Ref(info1_hop));
+
+        let mut doc2 = Document::new_empty();
+        let mut oi2 = Dict::new();
+        oi2.set(b"S".to_vec(), Object::Name(b"GTS_PDFX".to_vec()));
+        // UTF-16BE "FOGRA39"
+        oi2.set(
+            b"OutputConditionIdentifier".to_vec(),
+            Object::String(PdfString::literal(vec![0xFE, 0xFF, 0x00, b'F', 0x00, b'O', 0x00, b'G', 0x00, b'R', 0x00, b'A', 0x00, b'3', 0x00, b'9'])),
+        );
+        let root2 = doc2.root().expect("root2");
+        doc2.update_dict(root2, |c| {
+            c.set(b"OutputIntents".to_vec(), Object::Array(vec![Object::Dict(oi2)]));
+        })
+        .expect("set OutputIntents 2");
+        let mut info2 = Dict::new();
+        info2.set(b"GTS_PDFXVersion".to_vec(), Object::String(PdfString::text("PDF/X-4")));
+        info2.set(b"Trapped".to_vec(), Object::Name(b"True".to_vec()));
+        let info2_ref = doc2.add(Object::Dict(info2));
+        doc2.trailer_mut().set(b"Info".to_vec(), Object::Ref(info2_ref));
+
+        let std1 = PrintStandard::of(&doc1);
+        let std2 = PrintStandard::of(&doc2);
+        assert_eq!(std1.trapped, Some("True"));
+        assert!(std1.same_as(&std2), "equivalent PDFDocEncoding and UTF-16BE OutputConditionIdentifier/Trapped must match");
+    }
+
+    #[test]
+    fn print_standard_terminates_on_cyclic_output_intents_ref() {
+        let mut doc = Document::new_empty();
+        let a = doc.add(Object::Null);
+        let b = doc.add(Object::Ref(a));
+        doc.set(a, Object::Ref(b));
+        let root = doc.root().expect("root");
+        doc.update_dict(root, |c| {
+            c.set(b"OutputIntents".to_vec(), Object::Ref(a));
+        })
+        .expect("set cyclic OutputIntents");
+        let std = PrintStandard::of(&doc);
+        assert!(std.conditions.is_empty());
+    }
 }
