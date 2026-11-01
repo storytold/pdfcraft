@@ -2,6 +2,29 @@
 //! zero-height rectangle paints a line 1 pixel wide", and "the clipping region consists of the
 //! set of pixels that would be included by a fill operation").
 //!
+//! Which row (or column) a line on a pixel boundary marks is not left open. §10.7.4, "Scan
+//! conversion rules", in device space:
+//!
+//! > Pixel boundaries always fall on integer coordinates in device space. A pixel is a square
+//! > region identified by the location of its corner with minimum horizontal and vertical
+//! > coordinates. The region is half-open, meaning that it includes its lower but not its upper
+//! > boundaries. More precisely, for any point whose real-number coordinates are (x, y), let
+//! > i = floor(x) and j = floor(y). The pixel that contains this point is the one identified as
+//! > (i, j).
+//!
+//! > Like pixels, shapes to be painted by filling (8.5.3.3, "Filling") and stroking (8.5.3.2,
+//! > "Stroking") operations are also treated as half-open regions that include the boundaries
+//! > along their "floor" sides, but not along their "ceiling" sides.
+//!
+//! > A shape shall be scan-converted by painting any pixel whose half-open square region
+//! > intersects the shape, no matter how small the intersection is.
+//!
+//! So a line at device y = 150 lies in pixel row floor(150) = 150 and not in row 149, whose
+//! region stops short of 150; a line from device x = 10 to x = 110 marks columns 10 to 109, as
+//! its ceiling end at 110 is not part of it. Off a boundary, a line at y = 149.5 marks row
+//! floor(149.5) = 149. The rule is stated in device space, whose y axis here points down the
+//! page, so row 150 is the one just below the line as the page is seen.
+//!
 //! Every page is 200 × 200 pt rendered at scale 1, so user `(x, y)` lands on device
 //! `(x, 200 - y)`: a line at user `y = 50` lies on the boundary between device rows 149 and
 //! 150, and by the half-open rule marks row 150.
@@ -130,6 +153,29 @@ fn zero_height_and_zero_width_fills_paint_one_pixel_lines() {
     let fill = render("1 0 0 rg 10 50.5 100 0 re f");
     let clip = render(&format!("q 10 50.5 100 0 re W n {FLOOD} Q"));
     assert_eq!(red_pixels(&fill), red_pixels(&clip));
+}
+
+/// Each of the four cases (zero-height and zero-width, fill and clip) on a pixel boundary and
+/// off one, by the half-open rule quoted above: a line on a boundary marks the row or column on
+/// its floor side, one off it marks the row or column it runs through, and its ends mark every
+/// pixel they reach into but not one they only meet at the ceiling side.
+#[test]
+fn zero_height_and_zero_width_fills_and_clips_on_and_off_a_pixel_boundary() {
+    let cases = [
+        // (the line, its device columns, its device rows, what)
+        ("10 50 100 0 re", (10, 110), (150, 151), "zero-height on a boundary"),
+        ("10 50.5 100 0 re", (10, 110), (149, 150), "zero-height off a boundary"),
+        ("10.5 50.5 99 0 re", (10, 110), (149, 150), "zero-height, ends inside pixels"),
+        ("50 10 0 100 re", (50, 51), (90, 190), "zero-width on a boundary"),
+        ("50.5 10 0 100 re", (50, 51), (90, 190), "zero-width off a boundary"),
+        ("50.5 10.5 0 99 re", (50, 51), (90, 190), "zero-width, ends inside pixels"),
+    ];
+    for (line, columns, rows, what) in cases {
+        let fill = render(&format!("1 0 0 rg {line} f"));
+        assert_only_red_run(&fill, columns, rows, &format!("{what}: fill"));
+        let clip = render(&format!("q {line} W n {FLOOD} Q"));
+        assert_only_red_run(&clip, columns, rows, &format!("{what}: clip"));
+    }
 }
 
 #[test]
