@@ -1812,3 +1812,75 @@ fn mode_tabs_keep_the_hand_over_a_type_box_scrolled_under_them() {
     h.run_steps(3);
     assert_eq!(h.state().mode, pdfcraft_ui_egui::Mode::Convert, "the tab takes the click, not the text box");
 }
+
+/// #4864: the format Add text gives new text survives a restart; a damaged value keeps the
+/// current one, field by field.
+#[test]
+fn add_text_format_survives_settings_restore() {
+    use pdfcraft_engine::{AddedText, FontFamily, TextAlign};
+    let mut app = PdfCraftApp::new();
+    app.text_style = AddedText {
+        family: FontFamily::Courier,
+        bold: true,
+        italic: true,
+        size: 24.0,
+        color: [1.0, 0.0, 0.5],
+        align: TextAlign::Justify,
+        char_spacing: 2.0,
+        ..AddedText::default()
+    };
+    let settings = app.persist();
+
+    let mut restored = PdfCraftApp::new();
+    assert_ne!(restored.text_style, app.text_style);
+    restored.restore(&settings);
+    assert_eq!(restored.text_style, app.text_style);
+
+    // Every size the edit accepts (1 to 500 pt) comes back, including those outside Fill & Sign's.
+    for size in [1.0, 3.5, 400.0, 500.0] {
+        let mut app = PdfCraftApp::new();
+        app.text_style.size = size;
+        let mut back = PdfCraftApp::new();
+        back.restore(&app.persist());
+        assert_eq!(back.text_style.size, size);
+    }
+    for size in [0.5, 500.5] {
+        let mut app = PdfCraftApp::new();
+        app.text_style.size = size;
+        let mut back = PdfCraftApp::new();
+        back.restore(&app.persist());
+        assert_eq!(back.text_style.size, 12.0, "{size} pt is refused");
+    }
+
+    // Each field is judged alone: the bad ones keep what was there, the good one applies.
+    restored.restore(r#"{"text_style":{"family":"comic","bold":"yes","size":1e9,"color":[2,0],"align":7,"char_spacing":1e9,"italic":false}}"#);
+    let want = AddedText { italic: false, ..app.text_style.clone() };
+    assert_eq!(restored.text_style, want);
+    restored.restore(r#"{"text_style":"junk"}"#);
+    restored.restore(r#"{"text_style":{"size":null,"color":[0,0,0]}}"#);
+    assert_eq!(restored.text_style, AddedText { color: [0.0; 3], ..want });
+}
+
+/// Invalid RGB components keep Add Text's current color while independently valid fields restore.
+#[test]
+fn add_text_format_rejects_out_of_range_colours_without_changing_other_fields() {
+    let mut app = PdfCraftApp::new();
+    let original = [0.2, 0.4, 0.6];
+    let mut changed = Vec::new();
+    for color in ["[2,0,0]", "[0,2,0]", "[0,0,2]", "[-0.1,0,0]", "[0,-0.1,0]", "[0,0,-0.1]", "[null,0,0]", "[true,0,0]", "[0,0]", "\"red\""] {
+        app.text_style.color = original;
+        app.text_style.bold = false;
+        app.restore(&format!(r#"{{"text_style":{{"color":{color},"bold":true}}}}"#));
+        assert!(app.text_style.bold, "a valid neighboring field restores: {color}");
+        if app.text_style.color != original {
+            changed.push(color);
+        }
+    }
+    assert!(changed.is_empty(), "invalid colors changed the current format: {changed:?}");
+    for color in [[0.0; 3], [1.0; 3], [0.25, 0.5, 0.75]] {
+        app.text_style.color = color;
+        let mut restored = PdfCraftApp::new();
+        restored.restore(&app.persist());
+        assert_eq!(restored.text_style.color, color, "valid color round trip");
+    }
+}
