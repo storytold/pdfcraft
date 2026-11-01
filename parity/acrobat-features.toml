@@ -2302,9 +2302,9 @@ tier = "P1"
 milestone = "M7"
 status = "partial"
 commands = ["edit.link"]
-tools = ["link_add"]
-evidence = ["crates/annot/src/tests.rs::links_are_added_edited_listed_and_removed", "crates/ui-egui/tests/it/pdf_links.rs::drawing_editing_and_deleting_links"]
-notes = "go to a page (Fit view); named destinations and zoom pending"
+tools = ["link_add", "link_edit", "link_list"]
+evidence = ["crates/annot/src/tests.rs::links_are_added_edited_listed_and_removed", "crates/ui-egui/tests/it/pdf_links.rs::drawing_editing_and_deleting_links", "crates/annot/src/tests.rs::page_links_keep_their_zoom", "crates/automation/tests/it/automation.rs::link_zoom_through_tools", "crates/ui-egui/tests/it/pdf_links.rs::link_properties_sets_the_page_view_zoom", "crates/ui-egui/tests/it/pdf_links.rs::an_appearance_edit_keeps_the_destination_as_written", "crates/annot/src/tests.rs::a_rewritten_link_keeps_its_own_zoom_factor", "crates/annot/src/tests.rs::an_unchanged_go_to_keeps_its_destination_and_a_new_page_keeps_its_fit", "crates/automation/tests/it/automation.rs::link_edit_keeps_a_links_own_zoom_outside_the_range_it_writes"]
+notes = "go to a page at a zoom: Fit Page, Fit Width, Fit Height, Fit Visible, Actual Size, Inherit Zoom or a percentage (Link Properties ▸ Zoom; link_add and link_edit zoom), written as /Fit, /FitH, /FitV, /FitB or /XYZ with the position null (ISO 32000-2 Table 149). Links other tools wrote read as the nearest zoom. One given a new page with its zoom unchanged keeps how that zoom is written (a /FitBH or /FitBV fit, its own /XYZ factor even outside the 1–6400% a chosen zoom is written within) but not its position; one edited with its own page and zoom (Link Properties, link_edit) is left as it is, position included. Missing: named destinations as targets, and a position on the page (Acrobat's Set Link takes the current view)"
 
 [[feature]]
 id = "edit.action-uri"

@@ -8,11 +8,75 @@ use crate::{AnnotError, annots, page_ref, page_refs, set_annots};
 /// Where a link goes.
 #[derive(Clone, Debug, PartialEq)]
 pub enum LinkAction {
-    /// A page of this document (0-based), shown fitting the window (`/Fit`).
-    Page(usize),
+    /// A page of this document (0-based), shown at `zoom`.
+    Page {
+        page: usize,
+        zoom: LinkZoom,
+    },
     Uri(String),
     /// Something PdfCraft doesn't edit yet (named destination, JavaScript…): kept as is.
     Other(String),
+}
+
+/// How a go-to-page link shows its page: Acrobat's Go to a page view zoom, written as an
+/// explicit destination (ISO 32000-2 §12.3.2.2, Table 149). Positions are written `null`, so the
+/// reader keeps its position in that direction, as a new bookmark does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LinkZoom {
+    /// `/Fit`: the whole page in the window.
+    FitPage,
+    /// `/FitH null`: the page's width across the window.
+    FitWidth,
+    /// `/FitV null`: the page's height down the window.
+    FitHeight,
+    /// `/FitB`: the page's content (its bounding box) in the window.
+    FitVisible,
+    /// `/XYZ null null null`: the reader's zoom is kept.
+    Inherit,
+    /// `/XYZ null null z` with z = percent / 100; 100 is Actual Size. A new zoom is written
+    /// within 1–6400%; a link rewritten with the zoom it has keeps its own factor.
+    Percent(f64),
+}
+
+impl LinkZoom {
+    /// The zoom an explicit destination array (`[page /XYZ …]`, `[page /Fit]`, …) asks for. The
+    /// boxed variants read as their unboxed ones, and a `/FitR` rectangle or a missing or unknown
+    /// type as Fit Page, the view links had before they carried a zoom. A link whose page and zoom
+    /// are unchanged is not rewritten, so its position is kept; one given a new page keeps how its
+    /// zoom is written (`write_action`) but not its position.
+    fn of_dest(doc: &Document, dest: &[Object]) -> Self {
+        let kind = dest.get(1).map(|k| doc.resolve(k)).and_then(|k| k.as_name().map(<[u8]>::to_vec));
+        match kind.as_deref() {
+            Some(b"FitB") => LinkZoom::FitVisible,
+            Some(b"FitH" | b"FitBH") => LinkZoom::FitWidth,
+            Some(b"FitV" | b"FitBV") => LinkZoom::FitHeight,
+            Some(b"XYZ") => match dest.get(4).and_then(|z| doc.resolve(z).as_f64()) {
+                // Finite even for a factor near f64::MAX. A link given a new page with this zoom
+                // keeps the factor itself, however far outside 1–6400% (`write_action`).
+                Some(z) if z.is_finite() && z > 0.0 => LinkZoom::Percent((z * 100.0).min(f64::MAX)),
+                // A zoom of 0 or null keeps the reader's (Table 149).
+                _ => LinkZoom::Inherit,
+            },
+            _ => LinkZoom::FitPage,
+        }
+    }
+
+    /// The destination's elements after the page reference.
+    fn operands(self) -> Result<Vec<Object>, AnnotError> {
+        Ok(match self {
+            LinkZoom::FitPage => vec![Object::name("Fit")],
+            LinkZoom::FitWidth => vec![Object::name("FitH"), Object::Null],
+            LinkZoom::FitHeight => vec![Object::name("FitV"), Object::Null],
+            LinkZoom::FitVisible => vec![Object::name("FitB")],
+            LinkZoom::Inherit => vec![Object::name("XYZ"), Object::Null, Object::Null, Object::Null],
+            LinkZoom::Percent(p) => {
+                if !(p.is_finite() && p > 0.0) {
+                    return Err(AnnotError::Invalid("the link's zoom must be a positive percentage".into()));
+                }
+                vec![Object::name("XYZ"), Object::Null, Object::Null, Object::Real((p / 100.0).clamp(0.01, 64.0))]
+            }
+        })
+    }
 }
 
 /// Acrobat's Link Properties ▸ Appearance.
@@ -87,17 +151,18 @@ fn nums(doc: &Document, o: Option<&Object>) -> Vec<f64> {
 }
 
 fn action_of(doc: &Document, d: &Dict, pages: &[ObjRef], uri_budget: &mut usize) -> LinkAction {
-    let dest_page = |dest: &Object| -> Option<usize> {
+    let page_view = |dest: &Object| -> Option<LinkAction> {
         let a = doc.resolve(dest);
-        let first = a.as_array()?.first()?.clone();
-        match first {
-            Object::Ref(r) => pages.iter().position(|p| *p == r),
-            Object::Int(i) => usize::try_from(i).ok(),
+        let a = a.as_array()?;
+        let page = match a.first()? {
+            Object::Ref(r) => pages.iter().position(|p| p == r),
+            Object::Int(i) => usize::try_from(*i).ok(),
             _ => None,
-        }
+        }?;
+        Some(LinkAction::Page { page, zoom: LinkZoom::of_dest(doc, a) })
     };
     if let Some(dest) = d.get(b"Dest") {
-        return dest_page(dest).map_or_else(|| LinkAction::Other("named destination".into()), LinkAction::Page);
+        return page_view(dest).unwrap_or_else(|| LinkAction::Other("named destination".into()));
     }
     let Some(a) = d.get(b"A").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned()) else { return LinkAction::Other("no action".into()) };
     match a.name(b"S") {
@@ -115,7 +180,7 @@ fn action_of(doc: &Document, d: &Dict, pages: &[ObjRef], uri_budget: &mut usize)
                 None => LinkAction::Other("web address too long".into()),
             }
         }
-        Some(b"GoTo") => a.get(b"D").and_then(dest_page).map_or_else(|| LinkAction::Other("named destination".into()), LinkAction::Page),
+        Some(b"GoTo") => a.get(b"D").and_then(page_view).unwrap_or_else(|| LinkAction::Other("named destination".into())),
         Some(s) => LinkAction::Other(String::from_utf8_lossy(s).into_owned()),
         None => LinkAction::Other("no action".into()),
     }
@@ -214,12 +279,52 @@ fn uri_bytes(u: &str) -> Vec<u8> {
     out
 }
 
+/// The explicit destination array link `d` goes to now: its `/Dest`, or a GoTo action's `/D`.
+fn current_dest(doc: &Document, d: &Dict) -> Option<Vec<Object>> {
+    let dest = match d.get(b"Dest") {
+        Some(dest) => doc.resolve(dest),
+        None => {
+            let action = doc.resolve(d.get(b"A")?);
+            let go_to = action.as_dict().filter(|a| a.name(b"S") == Some(b"GoTo"))?;
+            doc.resolve(go_to.get(b"D")?)
+        }
+    };
+    dest.as_array().cloned()
+}
+
 fn write_action(doc: &Document, d: &mut Dict, a: &LinkAction) -> Result<(), AnnotError> {
     match a {
-        LinkAction::Page(p) => {
-            let target = page_ref(doc, *p)?;
+        LinkAction::Page { page, zoom } => {
+            let target = page_ref(doc, *page)?;
+            let mut operands = zoom.operands()?;
+            let current = current_dest(doc, d).filter(|c| LinkZoom::of_dest(doc, c) == *zoom);
+            if let Some(c) = current {
+                // The page and zoom the link has (`link_edit` naming its own page): the
+                // destination is left as it is, position on the page and GoTo form included.
+                let same_page = match c.first() {
+                    Some(Object::Ref(r)) => *r == target,
+                    Some(Object::Int(i)) => usize::try_from(*i).ok() == Some(*page),
+                    _ => false,
+                };
+                if same_page {
+                    return Ok(());
+                }
+                // A new page with the zoom the link has keeps how that zoom is written: a boxed
+                // fit (`/FitBH`, `/FitBV`) and its own `/XYZ` factor, even one outside the 1–6400%
+                // a new zoom is written within. Positions belong to the old page and are dropped.
+                let (slot, own) = match zoom {
+                    LinkZoom::Percent(_) => (operands.get_mut(3), c.get(4)),
+                    LinkZoom::FitWidth | LinkZoom::FitHeight => (operands.get_mut(0), c.get(1)),
+                    _ => (None, None),
+                };
+                if let (Some(slot), Some(own)) = (slot, own) {
+                    *slot = doc.resolve(own).as_ref().clone();
+                }
+            }
+            let mut dest = vec![Object::Ref(target)];
+            dest.extend(operands);
             d.remove(b"A");
-            d.set(b"Dest".to_vec(), Object::Array(vec![Object::Ref(target), Object::name("Fit")]));
+            d.set(b"Dest".to_vec(), Object::Array(dest));
         }
         LinkAction::Uri(u) => {
             let u = u.trim();

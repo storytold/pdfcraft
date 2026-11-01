@@ -688,7 +688,7 @@ fn image_signature_preview_follows_pointer_at_page_size_with_zoom_and_rotation()
     h.state_mut().apply_edit(pdfcraft_engine::Edit::AddLink {
         page: 0,
         rect: [30.0, 230.0, 60.0, 270.0],
-        action: pdfcraft_engine::LinkAction::Page(0),
+        action: pdfcraft_engine::LinkAction::Page { page: 0, zoom: pdfcraft_engine::LinkZoom::FitPage },
         style: pdfcraft_engine::LinkStyle::default(),
     });
     h.state_mut().signature = Some(SavedSig::Image(image));

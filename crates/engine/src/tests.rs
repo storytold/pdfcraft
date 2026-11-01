@@ -4280,6 +4280,25 @@ fn split_by_size_and_bookmarks_and_page_filters() {
     assert_eq!(filter_pages(info, &all, PageParity::Odd, PageOrientation::Portrait), [0, 2, 4]);
 }
 
+/// A zoomed link follows its target page, not its number: deleting a page before the target keeps
+/// the link on that page at its zoom. Deleting the target page drops the link's destination, as
+/// for any link to a deleted page, and undo brings it back with its zoom.
+#[test]
+fn a_zoomed_link_follows_its_page_and_loses_it_when_the_page_is_deleted() {
+    let (mut s, id) = session_with(3);
+    let zoom = LinkZoom::Percent(200.0);
+    let rect = [10.0, 10.0, 60.0, 30.0];
+    s.apply(id, Edit::AddLink { page: 0, rect, action: LinkAction::Page { page: 2, zoom }, style: LinkStyle::default() }).unwrap();
+    let action = |s: &Session| s.get(id).unwrap().links()[0].action.clone();
+    s.apply(id, Edit::DeletePages { pages: vec![1] }).unwrap();
+    assert_eq!(action(&s), LinkAction::Page { page: 1, zoom }, "the link follows its page");
+    s.apply(id, Edit::DeletePages { pages: vec![1] }).unwrap();
+    // The destination is removed, not left pointing at a page that is gone.
+    assert_eq!(action(&s), LinkAction::Other("no action".into()), "no destination left");
+    s.undo(id).unwrap();
+    assert_eq!(action(&s), LinkAction::Page { page: 1, zoom }, "undo restores the destination and its zoom");
+}
+
 #[test]
 fn links_from_urls_and_link_edits() {
     // One page whose text contains a web address.
@@ -4321,8 +4340,12 @@ fn links_from_urls_and_link_edits() {
     assert_eq!(s.get(id).unwrap().links().len(), 1);
     // Link Properties and delete.
     let l = s.get(id).unwrap().links()[0].clone();
-    s.apply(id, Edit::SetLink { page: 0, index: l.index, rect: None, action: Some(LinkAction::Page(0)), style: None }).unwrap();
-    assert_eq!(s.get(id).unwrap().links()[0].action, LinkAction::Page(0));
+    s.apply(
+        id,
+        Edit::SetLink { page: 0, index: l.index, rect: None, action: Some(LinkAction::Page { page: 0, zoom: LinkZoom::FitPage }), style: None },
+    )
+    .unwrap();
+    assert_eq!(s.get(id).unwrap().links()[0].action, LinkAction::Page { page: 0, zoom: LinkZoom::FitPage });
     s.apply(id, Edit::DeleteLink { page: 0, index: l.index }).unwrap();
     assert!(s.get(id).unwrap().links().is_empty());
     assert!(s.apply(id, Edit::RemoveLinks { pages: None }).is_err(), "nothing left to remove");

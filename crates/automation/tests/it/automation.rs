@@ -5570,6 +5570,80 @@ fn links_through_tools() {
     assert!(matches!(a.call("link_add", &json!({ "doc": doc, "page": 1, "rect": [0, 0, 50, 20] })), Err(ToolError::InvalidArgs(_))));
 }
 
+#[test]
+fn link_zoom_through_tools() {
+    let dir = workdir("link-zoom");
+    std::fs::write(dir.join("notes.txt"), "Contents").unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "text", "path": "notes.txt" }))["doc"].as_u64().unwrap();
+    let link = |a: &mut Automation| ok(a, "link_list", json!({ "doc": doc }))["links"][0].clone();
+    // A page link opens at Fit Page unless told otherwise.
+    ok(&mut a, "link_add", json!({ "doc": doc, "page": 1, "rect": [72, 300, 200, 320], "to_page": 1 }));
+    assert_eq!((link(&mut a)["to_page"].clone(), link(&mut a)["zoom"].clone()), (json!(1), json!("fit_page")));
+    let index = link(&mut a)["index"].clone();
+    // A zoom alone keeps the page; a page alone keeps the zoom.
+    ok(&mut a, "link_edit", json!({ "doc": doc, "page": 1, "index": index, "zoom": 200 }));
+    let l = link(&mut a);
+    assert_eq!((l["to_page"].clone(), l["zoom"].clone()), (json!(1), json!(200.0)));
+    assert_eq!(l["destination"]["zoom"], 2.0, "the viewer reads the zoom the link writes: {l}");
+    ok(&mut a, "link_edit", json!({ "doc": doc, "page": 1, "index": index, "zoom": "fit_width" }));
+    ok(&mut a, "link_edit", json!({ "doc": doc, "page": 1, "index": index, "to_page": 1 }));
+    assert_eq!(link(&mut a)["zoom"], "fit_width");
+    for (name, zoom) in [("actual", json!(100.0)), ("inherit", json!("inherit")), ("fit_visible", json!("fit_visible"))] {
+        ok(&mut a, "link_edit", json!({ "doc": doc, "page": 1, "index": index, "zoom": name }));
+        assert_eq!(link(&mut a)["zoom"], zoom, "{name}");
+    }
+    // A zoom needs a page to show: refused with a web address, unknown, or not positive.
+    for args in [
+        json!({ "doc": doc, "page": 1, "rect": [72, 400, 200, 420], "url": "https://example.org", "zoom": "fit_page" }),
+        json!({ "doc": doc, "page": 1, "rect": [72, 400, 200, 420], "zoom": "fit_page" }),
+        json!({ "doc": doc, "page": 1, "rect": [72, 400, 200, 420], "to_page": 1, "zoom": "sideways" }),
+        json!({ "doc": doc, "page": 1, "rect": [72, 400, 200, 420], "to_page": 1, "zoom": 0 }),
+        json!({ "doc": doc, "page": 1, "rect": [72, 400, 200, 420], "to_page": 1, "zoom": [2] }),
+    ] {
+        assert!(matches!(a.call("link_add", &args), Err(ToolError::InvalidArgs(_))), "{args}");
+    }
+    ok(&mut a, "link_edit", json!({ "doc": doc, "page": 1, "index": index, "url": "https://example.org" }));
+    assert!(matches!(a.call("link_edit", &json!({ "doc": doc, "page": 1, "index": index, "zoom": 150 })), Err(ToolError::InvalidArgs(_))));
+}
+
+/// `link_edit` with a page and no zoom keeps the link's zoom, and with it the link's own `/XYZ`
+/// factor, even outside the 1–6400% a chosen zoom is written within: 0.5% and 10000% stay so, in
+/// link_list and in the viewer's destination. Naming the link's own page changes nothing, so its
+/// position stays too. A zoom chosen anew is still kept within 1–6400%.
+#[test]
+fn link_edit_keeps_a_links_own_zoom_outside_the_range_it_writes() {
+    let (_base, root) = sandbox("link-own-zoom");
+    let pdf = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R 7 0 R] >>",
+        "<< /Type /Page /Parent 2 0 R >>",
+        "<< /Type /Annot /Subtype /Link /Rect [10 10 100 30] /Border [0 0 0] /Dest [3 0 R /XYZ null null 0.005] >>",
+        "<< /Type /Annot /Subtype /Link /Rect [10 50 100 70] /Border [0 0 0] /Dest [3 0 R /XYZ null null 100] >>",
+        "<< /Type /Annot /Subtype /Link /Rect [10 90 100 110] /Border [0 0 0] /Dest [3 0 R /XYZ 72 300 2] >>",
+    ]);
+    std::fs::write(root.join("zooms.pdf"), pdf).unwrap();
+    let mut a = auto(&root);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "zooms.pdf" }))["doc"].as_u64().unwrap();
+    let link = |a: &mut Automation, index: u64| {
+        ok(a, "link_list", json!({ "doc": doc }))["links"].as_array().unwrap().iter().find(|l| l["index"] == index).unwrap().clone()
+    };
+    for (index, percent, factor) in [(1, 0.5, 0.005), (2, 10000.0, 100.0)] {
+        ok(&mut a, "link_edit", json!({ "doc": doc, "page": 1, "index": index, "to_page": 2 }));
+        let l = link(&mut a, index);
+        assert_eq!((l["to_page"].clone(), l["zoom"].clone()), (json!(2), json!(percent)), "{l}");
+        let shown = l["destination"]["zoom"].as_f64().unwrap();
+        assert!((shown - factor).abs() <= factor * 1e-6, "the viewer's zoom is the link's own: {l}");
+    }
+    ok(&mut a, "link_edit", json!({ "doc": doc, "page": 1, "index": 3, "to_page": 1 }));
+    let l = link(&mut a, 3);
+    // `/XYZ 72 300` on a 400 pt page: 72 from the left and 100 from the top, as the tools measure.
+    assert_eq!((&l["zoom"], &l["destination"]["left"], &l["destination"]["top"]), (&json!(200.0), &json!(72.0), &json!(100.0)), "{l}");
+    ok(&mut a, "link_edit", json!({ "doc": doc, "page": 1, "index": 1, "zoom": 10000 }));
+    assert_eq!(link(&mut a, 1)["zoom"], json!(6400.0));
+}
+
 /// #4168: a Launch action whose file is a PDF (here with Windows `\` separators, relative to the
 /// source as a remote link is) opens that PDF in PdfCraft through link_open, within the root; one
 /// naming a program is listed but never followed.
