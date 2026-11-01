@@ -164,7 +164,7 @@ pub fn first_undrawable(t: &AddedText) -> Option<char> {
 fn shaped_by_a_face(t: &AddedText) -> bool {
     (pdfcraft_fonts::document_arabic_font().is_some() && t.text.chars().any(is_arabic))
         || (pdfcraft_fonts::document_hebrew_font(false).is_some() && t.text.chars().any(is_hebrew))
-        || t.text.chars().any(pdfcraft_fonts::embedding::default_ignorable)
+        || (t.text.chars().any(pdfcraft_fonts::embedding::default_ignorable) && pdfcraft_fonts::appearance_text::can_shape(&t.text))
 }
 
 /// An Arabic character the face shapes and draws (U+061C, a direction mark, is dropped).

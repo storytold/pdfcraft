@@ -557,3 +557,23 @@ fn the_hover_outline_goes_round_what_a_press_would_take() {
     let selected = CommentView { selected: Some((0, 0)), ..CommentView::default() };
     assert!(hover_outline(&cx, &selected, Some(&comment)).is_none(), "the selected comment has its own frame");
 }
+
+#[test]
+fn text_boxes_fit_the_ink_height_of_large_arabic_marks() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let mut clipped = Vec::new();
+    for (text, size) in [("السَّلَامُ", 24.0), ("قُرْآنٌ", 40.0), ("نَصٌّ عَرَبِيٌّ", 72.0)] {
+        let rect = text_box_rect([100.0, 500.0], text, size, 0);
+        // Fill & Sign has no border, so its actual appearance insets the rectangle by 2 pt.
+        let inner_width = rect[2] - rect[0] - 4.0;
+        let inner_height = rect[3] - rect[1] - 4.0;
+        let lines = pdfcraft_fonts::appearance_text::wrap(text, size, inner_width).unwrap();
+        let ink_height = pdfcraft_fonts::appearance_text::height(&lines, size);
+        if inner_height + 0.001 < ink_height {
+            clipped.push(format!("{text:?} at {size} pt needs {ink_height:.3} pt, but its box leaves {inner_height:.3} pt"));
+        }
+    }
+    assert!(clipped.is_empty(), "Arabic marks must stay inside the Fill & Sign box: {clipped:#?}");
+}

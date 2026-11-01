@@ -45,18 +45,21 @@ pub(crate) fn rich_text(d: &mut Dict) {
         (col[1].clamp(0.0, 1.0) * 255.0).round() as u8,
         (col[2].clamp(0.0, 1.0) * 255.0).round() as u8
     );
-    let align = match d.get(b"Q").and_then(Object::as_int) {
-        Some(1) => "center",
-        Some(2) => "right",
+    let q = d.get(b"Q").and_then(Object::as_int).unwrap_or(0);
+    let align = match q {
+        1 => "center",
+        2 => "right",
         _ => "left",
     };
     let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;");
     let body: String = text
-        .split('\n')
+        .replace("\r\n", "\n")
+        .split(['\r', '\n'])
         .map(|line| {
-            let line = line.trim_end_matches('\r');
-            let direction = if pdfcraft_fonts::appearance_text::paragraph_rtl(line) { "rtl" } else { "ltr" };
-            format!("<p dir=\"{direction}\">{}</p>", esc(line))
+            let rtl = pdfcraft_fonts::appearance_text::paragraph_rtl(line);
+            let direction = if rtl { "rtl" } else { "ltr" };
+            let paragraph_style = if q == 0 && rtl { " style=\"text-align:right\"" } else { "" };
+            format!("<p dir=\"{direction}\"{paragraph_style}>{}</p>", esc(line))
         })
         .collect();
     let style = format!(
