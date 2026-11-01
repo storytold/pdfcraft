@@ -166,19 +166,20 @@ impl<'a> Scope<'a> {
         self.rects.iter().any(|r| contains(*r, b, 0.01))
     }
 
-    /// Does a glyph box count as under a region? Any real overlap does (more than a fifth of
-    /// the glyph or a point, whichever is less, in both directions), so neighbours that only
-    /// touch an edge survive while partly covered glyphs go. Degenerate boxes (zero-size text)
-    /// count when their origin is inside.
+    /// Does a glyph box count as under a region? Horizontal overlap must cover more than a fifth
+    /// of the glyph or a point, whichever is less. For glyphs taller than 12 points, vertical
+    /// overlap must cover more than a fifth of their height; shorter glyphs keep the one-point
+    /// tolerance. Degenerate boxes (zero-size text) count when their origin is inside.
     fn glyph_hit(&self, b: [f64; 4], origin: (f64, f64)) -> bool {
         let (gw, gh) = (b[2] - b[0], b[3] - b[1]);
         if gw < 0.01 || gh < 0.01 {
             return self.rects.iter().any(|r| origin.0 >= r[0] && origin.0 <= r[2] && origin.1 >= r[1] && origin.1 <= r[3]);
         }
-        let (mx, my) = ((gw * 0.2).min(1.0), (gh * 0.2).min(1.0));
+        let mx = (gw * 0.2).min(1.0);
         self.rects.iter().any(|r| {
             let ox = b[2].min(r[2]) - b[0].max(r[0]);
             let oy = b[3].min(r[3]) - b[1].max(r[1]);
+            let my = if gh > 12.0 { gh * 0.2 } else { (gh * 0.2).min(1.0) };
             ox > mx && oy > my
         })
     }
@@ -908,5 +909,21 @@ fn xobject(
             Some(Some(Op::new("Do", vec![Object::Name(n)])))
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod glyph_hit_tests {
+    use super::*;
+
+    #[test]
+    fn solid_leading_does_not_redact_the_line_below() {
+        let marked = [10.0, 100.0, 20.0, 115.0];
+        let mut report = Report::default();
+        let rects = [marked];
+        let scope = Scope::new(&rects, Mode::Verify, &mut report, DecodeBudget::page());
+
+        assert!(scope.glyph_hit([10.0, 102.0, 20.0, 114.0], (10.0, 102.0)));
+        assert!(!scope.glyph_hit([10.0, 88.0, 20.0, 103.0], (10.0, 88.0)));
     }
 }
