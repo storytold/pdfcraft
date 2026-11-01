@@ -246,6 +246,19 @@ undoable and survive saving/reopening. `image_hit` shares the UI's curve and hol
 The bounds, limits and font requirements are in [existing-text editing](../../docs/editing-existing-text.md)
 and [image editing](../../docs/editing-images.md).
 
+### Superscript and subscript normalization
+
+`text_script` changes characters to their Unicode superscript or subscript forms; it does not
+change the font size or baseline. For characters that have such forms, uniformly plain text
+toggles to the requested script, and uniformly scripted text toggles back to plain text.
+Characters without a matching form stay unchanged and do not determine the selection's state.
+
+A selection mixing plain and target-script characters normalizes to the requested script.
+For example, subscript changes `H₂2` to `H₂₂`, then to `H22` on the next call; superscript
+changes `Q²2` to `Q²²`, then to `Q22`. A second toggle does not reconstruct the original
+mixture. Each call is one undoable text edit: `edit_undo` restores the exact prior text,
+including its original mixture. Save/reopen preserves the resulting normalized characters.
+
 ## Opening local GoToR links
 
 `link_open {doc, page, index, password?}` follows a local PDF link using `link_list`

@@ -180,7 +180,7 @@ pub fn tools() -> Vec<ToolDef> {
             }), &["doc", "page"])),
         t("object_list", "List editable objects", "List existing paragraphs, Image/Form artwork and added content once, with source kind/index references, displayed rectangles and document generation. Indexes change when content changes; use generation in object_move to reject stale references.")
             .ro().with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1}}), &["doc","page"])),
-        t("object_move", "Move objects together", "Atomically translate 1–1000 mixed references from object_list by [dx, dy] in displayed points (right/down). Preserves glyph codes, fonts, image data and relative spacing; success is one undo step. Clipping and vertical text are refused. A bad/stale reference refuses the entire move.")
+        t("object_move", "Move objects together", "Atomically translate 1–1000 mixed references from object_list by [dx, dy] in displayed points (right/down). Preserves glyph codes, fonts, image data and relative spacing; success is one undo step. Text used as a clipping path and vertical text are refused. A bad/stale reference refuses the entire move.")
             .with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},
                 "objects":{"type":"array","minItems":1,"maxItems":1000,"uniqueItems":true,"items":{
                     "type":"object","properties":{"kind":{"type":"string","enum":["added","text","image"]},"index":{"type":"integer","minimum":1}},"required":["kind","index"],"additionalProperties":false}},
@@ -1403,17 +1403,18 @@ pub fn tools() -> Vec<ToolDef> {
             .ro()
             .cmd("edit.edit_text")
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 } }), &["doc", "page"])),
-        t("image_edit", "Edit an image", "Change one of a page's images (number from page_images): action move (rect: new full placement box in top-left-origin points, based on page_images.rect), crop (rect: the part to keep, top-left-origin points; the pixels stay in place and page_images.visible_rect shows the result; a later move carries the crop along), rotate (quarters clockwise, default 1), rotate_by (degrees: any angle clockwise about the visible centre; the box in page_images then becomes the turned image's bounding box), flip_horizontal, flip_vertical, replace (path: an image file, drawn in the same place) or delete. Undoable. The selected image crop transforms with its pixels, isolating shared path scopes while retaining neighboring painting. Text-outline clips return a clear error. Rotation/flip use the visible centre. Form artwork supports move/resize/rotate/flip/delete as a group; replace and image_save only support raster images.")
+        t("image_edit", "Edit an image", "Change one of a page's images (number from page_images): action move (rect: new full placement box in top-left-origin points, based on page_images.rect), crop (rect: the part to keep, top-left-origin points; the pixels stay in place and page_images.visible_rect shows the result; a later move carries the crop along), remove_crop (remove a crop created by PdfCraft while preserving clipping paths from the original document), rotate (quarters clockwise, default 1), rotate_by (degrees: any angle clockwise about the visible centre; the box in page_images then becomes the turned image's bounding box), transform (matrix: 6 numbers [a, b, c, d, e, f] in top-left-origin points, applied after the current placement so a point (x, y) of the image moves to (a·x + c·y + e, b·x + d·y + f); finite, with a·d − b·c not 0; the box in page_images becomes the transformed image's bounding box), flip_horizontal (reflect left/right on the displayed page), flip_vertical (reflect top/bottom on the displayed page; both flip actions follow the page rotation), replace (path: an image file, drawn in the same place), delete, or arrange: bring_to_front, send_to_back, bring_forward, send_backward (reorder stacking order among content on the page; errors when the image is already at the requested limit; arranging an added image converts it into an ordinary page image). Undoable. The selected image crop transforms with its pixels, isolating shared path scopes while retaining neighboring painting. Text-outline clips return a clear error. Rotation/flip use the visible centre. Form artwork supports move/resize/rotate/flip/delete as a group; replace and image_save only support raster images.")
             .cmd("edit.edit_text")
             .with(schema(
                 json!({
                     "doc": doc(),
                     "page": { "type": "integer", "minimum": 1 },
                     "image": { "type": "integer", "minimum": 1 },
-                    "action": { "type": "string", "enum": ["move", "crop", "rotate", "rotate_by", "flip_horizontal", "flip_vertical", "replace", "delete"] },
+                    "action": { "type": "string", "enum": ["move", "crop", "rotate", "rotate_by", "transform", "flip_horizontal", "flip_vertical", "replace", "delete", "bring_to_front", "send_to_back", "bring_forward", "send_backward", "remove_crop"] },
                     "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
                     "quarters": { "type": "integer" },
                     "degrees": { "type": "number" },
+                    "matrix": { "type": "array", "items": { "type": "number" }, "minItems": 6, "maxItems": 6 },
                     "path": { "type": "string" },
                 }),
                 &["doc", "page", "image", "action"],
@@ -1462,6 +1463,14 @@ pub fn tools() -> Vec<ToolDef> {
                     "char_spacing": { "type": "number", "description": "Points." },
                     "scale": { "type": "number", "description": "Horizontal scale in percent." } }),
                 &["doc", "page"],
+            )),
+        t("text_script", "Superscript or subscript", "Format text ▸ Superscript or Subscript on one paragraph (paragraph, from text_paragraphs), or on range [start, end): UTF-8 byte offsets of its editor_text. The characters take the Unicode superscript or subscript forms (2 → ², 2 → ₂; the font must have those glyphs, and extracted text contains them); text already in that script goes back to plain characters. Characters Unicode has no such form for (q, a space) stay unchanged and do not determine the selection's script state. Mixed plain and target-script characters normalize to that script, then to plain text on the next call (H₂2 → H₂₂ → H22); a second toggle does not reconstruct the original mixture. Use Undo to restore the exact prior text. The paragraph is then rewritten as text_edit rewrites it, with the same result fields. Refused when no character would change. Undoable. Mathematical minus U+2212 has its own script mapping; ASCII hyphen-minus stays unchanged.")
+            .cmd("edit.edit_text")
+            .with(schema(
+                json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "paragraph": { "type": "integer", "minimum": 1 },
+                    "script": { "type": "string", "enum": ["superscript", "subscript"] },
+                    "range": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "minItems": 2, "maxItems": 2, "description": "UTF-8 byte offsets [start, end) of the paragraph's editor_text; the whole paragraph when omitted." } }),
+                &["doc", "page", "paragraph", "script"],
             )),
         t("doc_revisions", "List revisions", "List the document's saved revisions (oldest first): each incremental update is one. Returns revision number, where it ends in the file and its size, and which signatures sign exactly that revision.")
             .with(schema(json!({ "doc": doc() }), &["doc"])),

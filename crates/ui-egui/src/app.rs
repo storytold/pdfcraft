@@ -141,6 +141,8 @@ impl PdfCraftApp {
             #[cfg(all(test, not(target_arch = "wasm32")))]
             open_prepare_gate: None,
             pinned: Default::default(),
+            pinned_tools: Vec::new(),
+            pin_tool_search: String::new(),
             toast: None,
             toast_script: None,
             script_messages: std::collections::VecDeque::new(),
@@ -228,7 +230,6 @@ impl PdfCraftApp {
             last_copied_file: None,
             system_clipboard: true,
             clipboard_override: None,
-            v_pressed: false,
             attach_override: None,
             duplicate_draft: None,
             page_props_draft: None,
@@ -357,6 +358,46 @@ impl PdfCraftApp {
     /// `true` while any open document still waits for page renders (used by headless capture).
     pub fn render_pending(&self) -> bool {
         self.views.iter().any(|v| v.render_pending())
+    }
+
+    /// Check whether a tool group is pinned to Home.
+    pub fn is_tool_pinned(&self, id: &str) -> bool {
+        self.pinned_tools.iter().any(|t| t == id)
+    }
+
+    /// Pin a tool group to Home. Returns true if newly pinned.
+    pub fn pin_tool(&mut self, id: &str) -> bool {
+        if pdfcraft_engine::catalog::group(id).is_none() {
+            return false;
+        }
+        if !self.is_tool_pinned(id) {
+            self.pinned_tools.push(id.to_string());
+            if let Some(g) = pdfcraft_engine::catalog::group(id) {
+                self.notify_fmt("Pinned {tool} to Home", &[("tool", tl!(g.label))]);
+            }
+            return true;
+        }
+        false
+    }
+
+    /// Unpin a tool group from Home.
+    pub fn unpin_tool(&mut self, id: &str) {
+        if let Some(pos) = self.pinned_tools.iter().position(|t| t == id) {
+            self.pinned_tools.remove(pos);
+            if let Some(g) = pdfcraft_engine::catalog::group(id) {
+                self.notify_fmt("Unpinned {tool} from Home", &[("tool", tl!(g.label))]);
+            }
+        }
+    }
+
+    /// Toggle a tool group's pinned state on Home. Returns whether it is now pinned.
+    pub fn toggle_pin_tool(&mut self, id: &str) -> bool {
+        if self.is_tool_pinned(id) {
+            self.unpin_tool(id);
+            false
+        } else {
+            self.pin_tool(id)
+        }
     }
 }
 

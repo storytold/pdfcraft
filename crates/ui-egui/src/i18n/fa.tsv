@@ -2816,3 +2816,10 @@ theme	Appearance	ظاهر
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	گزینه‌های این پاسخ
+
+# Image paste and Home notifications (AI-assisted; not separately native-reviewed)
+	Search…	جستجو…
+	Image pasted	تصویر چسبانده شد
+	No image on clipboard to paste	تصویری در حافظهٔ موقت برای چسباندن نیست
+	Pinned {tool} to Home	{tool} به خانه سنجاق شد
+	Unpinned {tool} from Home	{tool} از خانه جدا شد
