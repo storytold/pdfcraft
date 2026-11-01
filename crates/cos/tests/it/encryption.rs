@@ -1172,8 +1172,32 @@ fn encrypt_strings_given_by_reference_stay_as_stored() {
     }
 }
 
+/// A save keeps what a file is protected with: its `/Encrypt`, which holds the handler and the
+/// permissions, its `/ID`, and so its file key, under every algorithm and by either kind of save.
+#[test]
+fn a_save_keeps_the_handler_the_key_and_the_permissions() {
+    for alg in ALL {
+        let doc = Document::open_with_password(Arc::new(protect(alg, "user", "owner", -1 ^ 0b1_0000)), Some("user")).unwrap();
+        let held = |d: &Document| {
+            let encrypt = d.resolve(d.trailer().get(b"Encrypt").unwrap()).as_dict().unwrap().clone();
+            (encrypt, d.trailer().get(b"ID").cloned(), d.security().unwrap().file_key().to_vec(), format!("{:?}", d.permissions()))
+        };
+        let before = held(&doc);
+        let mut edited = doc.clone();
+        let _ = edited.add(Object::Int(1));
+        for (save, saved) in [
+            ("incremental", write_incremental(&edited, &SaveOptions::default()).unwrap()),
+            ("full", write_full(&doc, &SaveOptions::default()).unwrap()),
+        ] {
+            let back = Document::open_with_password(Arc::new(saved), Some("user")).unwrap();
+            assert!(held(&back) == before, "{alg:?}: a {save} save");
+            assert_eq!(content(&back), SECRET, "{alg:?}: a {save} save");
+        }
+    }
+}
+
 /// `/ID` has to be direct in an encrypted file, but one that isn't has its key made from the same
-/// bytes, and a full save writes it direct.
+/// bytes. A full save writes it direct, and an incremental one leaves it as it was.
 #[test]
 fn a_file_identifier_given_by_reference_is_read() {
     let file = classic_file();
@@ -1190,6 +1214,11 @@ fn a_file_identifier_given_by_reference_is_read() {
         let back = Document::open(Arc::new(write_full(&source, &SaveOptions::default()).unwrap())).unwrap();
         assert_eq!(content(&back), SECRET);
         assert!(matches!(back.trailer().get(b"ID"), Some(Object::Array(_))), "written direct");
+        let mut edited = source.clone();
+        let _ = edited.add(Object::Int(1));
+        let back = Document::open(Arc::new(write_incremental(&edited, &SaveOptions::default()).unwrap())).unwrap();
+        assert_eq!(content(&back), SECRET, "an incremental save");
+        assert_eq!(back.trailer().get(b"ID"), edited.trailer().get(b"ID"), "and leaves it as it was");
     }
 }
 
