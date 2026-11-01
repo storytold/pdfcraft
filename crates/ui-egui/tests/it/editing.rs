@@ -9646,3 +9646,36 @@ fn affine_review_cropped_rotation_preview_matches_saved_corners() {
         );
     }
 }
+
+/// #4915: In Edit PDF mode, selected items are deleted when pressing Delete or Backspace.
+/// Also verifies that Delete removes the selected item even when a toolbar button has focus (#4915).
+#[test]
+fn delete_key_removes_selected_items_in_edit_pdf() {
+    for key in [Key::Delete, Key::Backspace] {
+        let mut h = harness(1, |_| {});
+        assert!(h.state_mut().execute("edit.edit_text"));
+        h.run_steps(2);
+        let id = h.state().views[0].id;
+        let blocks = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().text_blocks(0);
+        let b = blocks(&h)[0].clone();
+        let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+        let k = r.width() / 200.0;
+        let screen = |x: f64, y: f64| egui::pos2(r.left() + x as f32 * k, r.top() + (300.0 - y as f32) * k);
+        click_at(&mut h, screen((b.rect[0] + b.rect[2]) / 2.0, (b.rect[1] + b.rect[3]) / 2.0));
+        assert!(h.state().views[0].line_editor.is_some(), "a click on the text opens it for typing");
+        click_at(&mut h, screen((b.rect[0] + b.rect[2]) / 2.0, b.rect[3]) - egui::vec2(0.0, 4.0));
+        assert!(h.state().views[0].line_editor.is_none(), "the frame selects the box");
+
+        // Focus a toolbar button: egui_wants_keyboard_input() becomes true, but text_edit_focused()
+        // remains false, so Delete still removes the selected item (#4915).
+        let btn = h.get_by_label("Edit text & images");
+        btn.focus();
+        h.run_steps(1);
+
+        press(&mut h, Modifiers::NONE, key);
+        assert!(blocks(&h).is_empty(), "{key:?} deletes the selected item");
+        assert!(h.state_mut().execute("edit.undo"));
+        h.run_steps(2);
+        assert_eq!(blocks(&h).len(), 1, "undo restores the deleted item");
+    }
+}
