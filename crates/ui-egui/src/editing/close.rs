@@ -287,7 +287,11 @@ impl PdfCraftApp {
     /// about when quitting is a new question, so one that opens in the background asks even after
     /// a question the user saw; a request that still stands carries over to it.
     pub(crate) fn attend_save_prompt(&mut self, ctx: &egui::Context) {
-        let open = self.close_request.is_some();
+        let open = match self.close_request {
+            Some(CloseRequest::Tab(id)) => !self.views.iter().any(|v| v.id == id && v.detached),
+            Some(_) => true,
+            None => false,
+        };
         let focused = ctx.input(|i| i.focused);
         if self.save_prompt_attention {
             if focused || !open {

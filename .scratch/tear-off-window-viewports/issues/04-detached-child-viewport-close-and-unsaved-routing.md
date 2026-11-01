@@ -7,12 +7,12 @@
 
 **Blocked by:** 03-active-tab-isolation-and-desync-prevention
 
-**Status:** ready-for-agent
+**Status:** closed
 
-- [ ] Detached windows check `child_ui.input(|i| i.viewport().close_requested())`.
-- [ ] If the detached view has unsaved changes, issue `egui::ViewportCommand::CancelClose` to `viewport_id` and display the save prompt within the child viewport.
-- [ ] Choosing "Don't Save" discards changes and closes the child window.
-- [ ] Choosing "Cancel" dismisses the prompt and leaves the child window open with unsaved changes preserved.
-- [ ] Choosing "Save" saves the document and closes the window once the write completes.
-- [ ] Clean detached windows close immediately.
-- [ ] Integration tests in `crates/ui-egui/tests/it/ui.rs` verify all close paths for detached viewports.
+- [x] Detached windows check `child_ui.input(|i| i.viewport().close_requested())`.
+- [x] If the detached view has unsaved changes, issue `egui::ViewportCommand::CancelClose` to `viewport_id` and display the save prompt within the child viewport.
+- [x] Choosing "Don't Save" discards changes and closes the child window.
+- [x] Choosing "Cancel" dismisses the prompt and leaves the child window open with unsaved changes preserved.
+- [x] Choosing "Save" saves the document and closes the window once the write completes.
+- [x] Clean detached windows close immediately.
+- [x] Integration tests in `crates/ui-egui/tests/it/ui.rs` verify all close paths for detached viewports.

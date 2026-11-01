@@ -2149,6 +2149,142 @@ fn resolve_close_saving_detached_tab_preserves_main_window_active_tab() {
     assert_eq!(h.state().active, Some(0));
 }
 
+#[test]
+fn closing_clean_detached_window_immediately_closes_tab() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    // Detach middle.pdf (index 1)
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(3);
+    assert!(h.state().views[1].detached);
+
+    // Request OS close on detached child viewport
+    let child_viewport_id = egui::ViewportId::from_hash_of(("detached-doc", ids[1]));
+    h.input_mut().viewports.entry(child_viewport_id).or_default().events.push(egui::ViewportEvent::Close);
+    h.run_steps(3);
+
+    // Clean detached window immediately closes and removes tab from self.views
+    assert_eq!(h.state().views.len(), 2);
+    assert!(h.state().views.iter().all(|v| v.id != ids[1]));
+    assert!(h.state().session.get(ids[1]).is_none());
+    assert!(h.state().close_request.is_none());
+}
+
+#[test]
+fn closing_dirty_detached_window_intercepts_close_and_prompts_inside_child_viewport() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    // Detach middle.pdf (index 1) and make it dirty
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(3);
+    h.state_mut().session.apply(ids[1], pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+
+    // Request OS close on detached child viewport
+    let child_viewport_id = egui::ViewportId::from_hash_of(("detached-doc", ids[1]));
+    h.input_mut().viewports.entry(child_viewport_id).or_default().events.push(egui::ViewportEvent::Close);
+    h.step();
+
+    // CancelClose command must be sent to abort premature OS destruction
+    let cancel_close_sent =
+        h.output().viewport_output.values().flat_map(|v| v.commands.iter()).any(|c| matches!(c, egui::ViewportCommand::CancelClose));
+    assert!(cancel_close_sent, "CancelClose command must be sent to child viewport");
+
+    // Close request is flagged for this detached document
+    assert_eq!(h.state().close_request, Some(pdfcraft_ui_egui::CloseRequest::Tab(ids[1])));
+
+    h.run_steps(2);
+
+    // Save confirmation prompt is displayed inside the detached window
+    h.get_by_label_contains("Save changes to “middle.pdf”");
+    h.get_by_label("Save");
+    h.get_by_label("Don't save");
+    h.get_by_label("Cancel");
+
+    // Middle tab still exists, is dirty, and remains detached
+    assert_eq!(h.state().views.len(), 3);
+    let view = h.state().views.iter().find(|v| v.id == ids[1]).unwrap();
+    assert!(view.detached);
+    assert!(h.state().session.get(ids[1]).unwrap().dirty);
+}
+
+#[test]
+fn cancelling_save_prompt_in_detached_window_leaves_tab_open_detached_and_dirty() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(3);
+    h.state_mut().session.apply(ids[1], pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+
+    let child_viewport_id = egui::ViewportId::from_hash_of(("detached-doc", ids[1]));
+    h.input_mut().viewports.entry(child_viewport_id).or_default().events.push(egui::ViewportEvent::Close);
+    h.run_steps(3);
+
+    // Clicking "Cancel" in detached save prompt leaves tab open, detached, and dirty
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+
+    assert_eq!(h.state().views.len(), 3);
+    let view = h.state().views.iter().find(|v| v.id == ids[1]).unwrap();
+    assert!(view.detached);
+    assert!(h.state().session.get(ids[1]).unwrap().dirty);
+    assert!(h.state().close_request.is_none());
+}
+
+#[test]
+fn dont_save_in_detached_window_discards_changes_and_closes_tab() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(3);
+    h.state_mut().session.apply(ids[1], pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+
+    let child_viewport_id = egui::ViewportId::from_hash_of(("detached-doc", ids[1]));
+    h.input_mut().viewports.entry(child_viewport_id).or_default().events.push(egui::ViewportEvent::Close);
+    h.run_steps(3);
+
+    // Clicking "Don't save" discards changes and closes the detached tab
+    h.get_by_label("Don't save").click();
+    h.run_steps(3);
+
+    assert_eq!(h.state().views.len(), 2);
+    assert!(h.state().views.iter().all(|v| v.id != ids[1]));
+    assert!(h.state().session.get(ids[1]).is_none());
+    assert!(h.state().close_request.is_none());
+}
+
+#[test]
+fn save_in_detached_window_saves_changes_and_closes_tab() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-ui-test-save-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let save_path = dir.join("middle_saved.pdf");
+
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    h.state_mut().save_override = Some(save_path.to_string_lossy().into_owned());
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(3);
+    h.state_mut().session.apply(ids[1], pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+
+    let child_viewport_id = egui::ViewportId::from_hash_of(("detached-doc", ids[1]));
+    h.input_mut().viewports.entry(child_viewport_id).or_default().events.push(egui::ViewportEvent::Close);
+    h.run_steps(3);
+
+    // Clicking "Save" saves changes and closes the detached tab once written
+    h.get_by_label("Save").click();
+    h.run_steps(5);
+
+    assert!(save_path.exists());
+    assert_eq!(h.state().views.len(), 2);
+    assert!(h.state().views.iter().all(|v| v.id != ids[1]));
+    assert!(h.state().session.get(ids[1]).is_none());
+    assert!(h.state().close_request.is_none());
+}
+
 /// The Edit tab turns on Edit text & images at once, as Acrobat does, so every paragraph and image
 /// is boxed and editable with one click; another tab puts the tool down again.
 #[test]
