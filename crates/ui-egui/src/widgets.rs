@@ -77,9 +77,9 @@ pub fn line(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
 
 /// A multiline field with the same horizontal inset as [`line`].
 pub fn block(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
-    let is_rtl = crate::bidi::paragraph_is_rtl(text.as_str(), crate::i18n::current().rtl());
+    let rtl_fallback = crate::i18n::current().rtl() && crate::bidi::first_strong_direction(text.as_str()).is_none();
     let mut edit = egui::TextEdit::multiline(text).margin(egui::Margin::symmetric(10, 6));
-    if is_rtl {
+    if rtl_fallback {
         edit = edit.align(egui::Align2::RIGHT_TOP);
     }
     edit

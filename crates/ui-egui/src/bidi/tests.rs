@@ -9,6 +9,10 @@ fn text_without_rtl_is_borrowed_unchanged() {
 
 #[test]
 fn alignment_uses_the_first_strong_character_and_locale_as_fallback() {
+    assert_eq!(first_strong_direction("English مرحبا"), Some(false));
+    assert_eq!(first_strong_direction("مرحبا English"), Some(true));
+    assert_eq!(first_strong_direction("123 …"), None);
+    assert_eq!(first_strong_direction("\u{2066}English\u{2069}"), None, "isolated text does not set paragraph direction");
     assert!(!paragraph_is_rtl("English مرحبا", true), "a Latin-first paragraph stays left aligned in an RTL locale");
     assert!(paragraph_is_rtl("مرحبا English", false), "an Arabic-first paragraph stays right aligned in an LTR locale");
     assert!(paragraph_is_rtl("123 …", true), "neutral text follows the RTL locale until a strong character is entered");

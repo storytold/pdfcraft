@@ -70,10 +70,10 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
                 ComposerKind::Replace => tl!("Replacement text"),
                 _ => tl!("Add a comment"),
             };
-            let is_rtl = crate::bidi::paragraph_is_rtl(&c.text, crate::i18n::current().rtl());
+            let rtl_fallback = crate::i18n::current().rtl() && crate::bidi::first_strong_direction(&c.text).is_none();
             let mut text_edit =
                 egui::TextEdit::multiline(&mut c.text).hint_text(hint).desired_rows(3).desired_width(f32::INFINITY).id_salt("composer-text");
-            if is_rtl {
+            if rtl_fallback {
                 text_edit = text_edit.align(egui::Align2::RIGHT_TOP);
             }
             let edit = ui

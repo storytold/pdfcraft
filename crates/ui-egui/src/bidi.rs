@@ -96,10 +96,12 @@ pub fn has_rtl(text: &str) -> bool {
 /// The first strong character sets the paragraph alignment; locale direction is the fallback
 /// for text that has no strong character yet (for example an empty field or punctuation only).
 pub fn paragraph_is_rtl(text: &str, fallback_rtl: bool) -> bool {
-    first_strong_rtl(text).unwrap_or(fallback_rtl)
+    first_strong_direction(text).unwrap_or(fallback_rtl)
 }
 
-fn first_strong_rtl(text: &str) -> Option<bool> {
+/// The first strong paragraph direction: `Some(true)` for right to left and `Some(false)` for
+/// left to right. Strong characters inside isolates do not set the paragraph direction.
+pub(crate) fn first_strong_direction(text: &str) -> Option<bool> {
     let mut isolate_depth = 0_usize;
     for c in text.chars() {
         match bidi_class(c) {
