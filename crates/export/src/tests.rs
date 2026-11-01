@@ -841,3 +841,241 @@ fn markdown_escapes_markup_and_keeps_emphasis_and_tables() {
     assert!(rows.contains(&"| A1 | kWh | 37414.00 |"), "{md}");
     assert!(rows.iter().all(|r| r.matches(" | ").count() == 2), "every row has the header's three cells: {md}");
 }
+
+/// A line of 10 pt text from `x0` to `x1` whose box starts at `y0`: 12 pt tall, so lines 14 pt
+/// apart leave 2 pt between their boxes.
+fn line(t: &str, x0: f64, x1: f64, y0: f64) -> Block {
+    Block { size: 10.0, ..block(t, x0, y0, x1, y0 + 12.0) }
+}
+
+/// The text of each flowing paragraph Word gets for a page of `blocks`.
+fn word_texts(blocks: Vec<Block>) -> Vec<String> {
+    let p = Page { width: 612.0, height: 792.0, blocks, ..Page::default() };
+    let xml = part(&docx(&[p], "Lines"), "word/document.xml");
+    word_paragraphs(&xml).into_iter().map(|runs| runs.into_iter().map(|(t, _)| t).collect()).collect()
+}
+
+/// A sentence over three lines, as the reading blocks give it: split at each style change, a
+/// bold name in the first line and a slanted name in the second whose box leans 2.5 pt into the
+/// comma after it (#4158). The next paragraph follows after paragraph space.
+fn wrapped_sentence() -> Vec<Block> {
+    vec![
+        line("The parties to this lease are the owner,", 72.0, 262.0, 700.0),
+        Block { bold: true, ..line("Harbour Lane Properties", 265.0, 400.0, 700.0) },
+        line(", of 4 Quay Street, and the", 400.5, 540.0, 700.0),
+        line("tenant named in the schedule,", 72.0, 215.0, 686.0),
+        Block { italic: true, ..line("Blue Finch Studio", 218.0, 312.0, 686.0) },
+        line(", who agree as follows to rent the upper", 309.5, 538.0, 686.0),
+        line("rooms for the whole of the term.", 72.0, 230.0, 672.0),
+        line("Rent is paid monthly in advance.", 72.0, 230.0, 640.0),
+    ]
+}
+
+/// #4158: a sentence that wraps onto the next line after a change of style is one paragraph in
+/// every format, its lines joined by a word space.
+#[test]
+fn a_sentence_that_wraps_after_a_style_change_is_one_paragraph() {
+    let sentence = "The parties to this lease are the owner, Harbour Lane Properties, of 4 Quay Street, and the tenant named in the \
+schedule, Blue Finch Studio, who agree as follows to rent the upper rooms for the whole of the term.";
+    assert_eq!(word_texts(wrapped_sentence()), [sentence, "Rent is paid monthly in advance."]);
+    let p = Page { width: 612.0, height: 792.0, blocks: wrapped_sentence(), ..Page::default() };
+    let h = html(std::slice::from_ref(&p), "Lease");
+    assert_eq!(h.matches("<p>").count(), 2, "{h}");
+    assert!(
+        h.contains(
+            "<p>The parties to this lease are the owner, <strong>Harbour Lane Properties</strong>, of 4 Quay Street, and the tenant \
+named in the schedule, <em>Blue Finch Studio</em>, who agree as follows to rent the upper rooms for the whole of the term.</p>"
+        ),
+        "{h}"
+    );
+    let r = rtf(std::slice::from_ref(&p));
+    assert_eq!(r.matches("{\\pard").count(), 2, "{r}");
+    let md = markdown(std::slice::from_ref(&p));
+    assert_eq!(md.trim().split("\n\n").count(), 2, "{md}");
+    assert!(md.contains("of 4 Quay Street, and the tenant named in the schedule, "), "{md}");
+    // On a slide the last of the paragraphs set largest is the title; the sentence is one paragraph.
+    let s = part(&pptx(std::slice::from_ref(&p), "Lease"), "ppt/slides/slide1.xml");
+    let slide: Vec<String> =
+        s.split("<a:p>").skip(1).map(|p| p.split("<a:t>").skip(1).filter_map(|t| t.split_once("</a:t>").map(|(t, _)| t)).collect()).collect();
+    assert!(slide.iter().any(|p| p == sentence), "{s}");
+}
+
+/// A slanted word's box leans into the word after it by about a quarter of its size, so that
+/// word still runs on from it; text that starts further back is drawn over the text before it,
+/// not after it.
+#[test]
+fn a_slanted_word_that_leans_into_the_next_stays_in_its_line() {
+    let leaning = vec![
+        line("named in the schedule,", 72.0, 180.0, 700.0),
+        Block { italic: true, ..line("Blue Finch Studio", 183.0, 276.0, 700.0) },
+        line(", who agree", 273.5, 330.0, 700.0),
+    ];
+    assert_eq!(word_texts(leaning), ["named in the schedule, Blue Finch Studio, who agree"]);
+    let over = vec![line("A label", 72.0, 120.0, 700.0), line("over another", 115.0, 180.0, 700.0)];
+    assert_eq!(word_texts(over), ["A label", "over another"]);
+}
+
+/// A line runs on into the next only when it reaches the right edge of the text and the next
+/// starts just below at the same left edge, in the same size. A line that ends a sentence or ends
+/// short, and a next line that is a heading, a list item, indented or after paragraph space, keep
+/// their paragraph break. Each case is a page of its own.
+#[test]
+fn a_paragraph_breaks_where_its_line_does_not_run_on() {
+    let full = "The tenant keeps the rooms, the stairs and the shared yard clean and in good repair";
+    let next = "throughout the term of the lease";
+    let first = |t: &str| line(t, 72.0, 540.0, 700.0);
+    let second = |t: &str| line(t, 72.0, 240.0, 686.0);
+    assert_eq!(word_texts(vec![first(full), second(next)]), [format!("{full} {next}")]);
+    assert_eq!(word_texts(vec![first("Изпълнителят поддържа сървърите и мрежата на"), second("възложителя в работно състояние")]).len(), 1);
+    // Chinese and Japanese wrap between characters: their lines join without a space. Korean
+    // spaces its words, so its lines join with one.
+    let zh = ("本合同自双方签字之日起生效，有效期", "为一年，期满前一个月双方协商续签事宜");
+    assert_eq!(word_texts(vec![first(zh.0), second(zh.1)]), [format!("{}{}", zh.0, zh.1)]);
+    assert_eq!(
+        word_texts(vec![first("この契約は双方が署名した日から"), second("一年間有効とする")]),
+        ["この契約は双方が署名した日から一年間有効とする"]
+    );
+    assert_eq!(word_texts(vec![first("임차인은 방과 계단을 깨끗하게"), second("유지합니다")]), ["임차인은 방과 계단을 깨끗하게 유지합니다"]);
+    let heading = |b: Block| Block { bold: true, ..b };
+    for (why, blocks) in [
+        ("a sentence ends", vec![first(&format!("{full}.")), second(next)]),
+        ("a sentence ends in quotes", vec![first("Страните се договориха „за срок от една година.“"), second(next)]),
+        ("a Chinese sentence ends", vec![first("本合同自双方签字之日起生效。"), second(zh.1)]),
+        ("a Japanese sentence ends in quotes", vec![first("「この契約は一年間有効ですか？」"), second("双方が署名した日から")]),
+        ("the line ends short", vec![line(next, 72.0, 240.0, 700.0), line(full, 72.0, 540.0, 686.0)]),
+        ("paragraph space", vec![first(full), line(next, 72.0, 240.0, 676.0)]),
+        ("an indent", vec![first(full), line(next, 90.0, 258.0, 686.0)]),
+        ("a larger size", vec![first(full), Block { size: 12.0, ..second(next) }]),
+        ("a numbered item", vec![first(full), second("2. The tenant pays the rent")]),
+        ("a lettered item", vec![first(full), second("а) поддръжка на сървърите")]),
+        ("a bulleted item", vec![first(full), second("• the stairs")]),
+        ("a heading below", vec![first(full), heading(second("Rent and deposit"))]),
+        ("a heading above", vec![heading(first("Obligations of the tenant")), second(next)]),
+    ] {
+        assert_eq!(word_texts(blocks).len(), 2, "{why}");
+    }
+}
+
+#[test]
+fn list_items_are_told_from_text() {
+    for item in ["• item", "\u{F0B7} item", "- item", "\u{2013} item", "* item", "1. Term", "12) Rent", "3.", "a) rooms", "а) стаи"] {
+        assert!(list_item(item), "{item}");
+    }
+    for text in ["1.5 kg of", "2026. Year", "i.e. this", "т.е. така", "38 rooms", "Rent 12)", "1234) many", ""] {
+        assert!(!list_item(text), "{text}");
+    }
+}
+
+/// Wrapped lines join on hostile boxes and sizes without a panic, and never lose a line's text.
+#[test]
+fn joining_lines_survives_hostile_boxes() {
+    let mut blocks = Vec::new();
+    for (i, v) in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0, 0.0, 1e300].into_iter().enumerate() {
+        let y = 700.0 - 14.0 * i as f64;
+        blocks.push(Block { size: v, ..line(&format!("size {i}"), 72.0, 540.0, y) });
+        blocks.push(Block { rect: [v, y, 540.0, y + 12.0], ..line(&format!("left {i}"), 72.0, 540.0, y) });
+        blocks.push(Block { rect: [72.0, v, v, y + 12.0], ..line(&format!("box {i}"), 72.0, 540.0, y) });
+        blocks.push(Block { rotation: v, ..line(&format!("turn {i}"), 72.0, 540.0, y) });
+    }
+    let p = Page { width: 612.0, height: 792.0, blocks, ..Page::default() };
+    let outputs = [
+        html(std::slice::from_ref(&p), "Hostile"),
+        rtf(std::slice::from_ref(&p)),
+        part(&pptx(std::slice::from_ref(&p), "Hostile"), "ppt/slides/slide1.xml"),
+        word_texts(p.blocks.clone()).concat(),
+    ];
+    for output in outputs {
+        for b in &p.blocks {
+            assert!(output.contains(&b.text), "{} was lost", b.text);
+        }
+    }
+}
+
+/// A bulleted list as Word and LibreOffice draw one: each bullet a block of its own in a symbol
+/// font, a tab stop before its item's text, between a lead-in line and the next paragraph.
+fn bulleted_list(bullet: &str) -> Vec<Block> {
+    let mut blocks = vec![line("The tenant looks after:", 72.0, 180.0, 700.0)];
+    for (n, (text, end)) in
+        [("the stairs and the landing;", 230.0), ("the shared yard and its gate;", 240.0), ("the bins, every week.", 200.0)].into_iter().enumerate()
+    {
+        let y = 686.0 - 14.0 * n as f64;
+        blocks.push(line(bullet, 90.0, 94.6, y));
+        blocks.push(line(text, 108.0, end, y));
+    }
+    blocks.push(line("Rent is paid monthly in advance.", 72.0, 230.0, 630.0));
+    blocks
+}
+
+/// A bulleted list whose bullets are blocks of their own is one paragraph per item, each item's
+/// text after its bullet, in every format: not a two-column table of bullets and text. The
+/// Symbol and Wingdings bullets Word writes count, and so does a dash that opens its line.
+#[test]
+fn a_bulleted_list_is_paragraphs_not_a_table() {
+    for bullet in ["•", "\u{F0B7}", "\u{F0A7}", "\u{2013}"] {
+        let p = Page { width: 612.0, height: 792.0, blocks: bulleted_list(bullet), ..Page::default() };
+        let (found, _) = tables(&p.blocks);
+        assert!(found.is_empty(), "{bullet}: {found:?}");
+        let items = ["the stairs and the landing;", "the shared yard and its gate;", "the bins, every week."].map(|t| format!("{bullet} {t}"));
+        let mut expected = vec!["The tenant looks after:".to_string()];
+        expected.extend(items.iter().cloned());
+        expected.push("Rent is paid monthly in advance.".into());
+        assert_eq!(word_texts(p.blocks.clone()), expected, "{bullet}");
+        let h = html(std::slice::from_ref(&p), "List");
+        assert!(!h.contains("<table>") && items.iter().all(|i| h.contains(&format!("<p>{i}</p>"))), "{bullet}: {h}");
+        assert!(!rtf(std::slice::from_ref(&p)).contains("\\trowd"), "{bullet}");
+        let s = part(&pptx(std::slice::from_ref(&p), "List"), "ppt/slides/slide1.xml");
+        assert!(!s.contains("<a:tbl>"), "{bullet}: {s}");
+    }
+}
+
+/// A dash in a table row stands for "none": it is a cell like the others, not a bullet, so the
+/// table keeps all its rows.
+#[test]
+fn a_dash_in_a_table_row_stays_a_cell() {
+    let mut blocks = Vec::new();
+    for (n, (name, first, second)) in [("Apples", "\u{2013}", "5"), ("Pears", "3", "4"), ("Plums", "2", "6")].into_iter().enumerate() {
+        let y = 700.0 - 14.0 * n as f64;
+        blocks.push(line(name, 72.0, 110.0, y));
+        blocks.push(line(first, 200.0, 205.0, y));
+        blocks.push(line(second, 225.0, 230.0, y));
+    }
+    let (found, consumed) = tables(&blocks);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].rows.len(), 3, "{found:?}");
+    assert!(consumed.iter().all(|used| *used), "{consumed:?}");
+}
+
+/// A bullet is never a table cell, even when its items carry a second column such as an amount:
+/// every item keeps its bullet in front of its text.
+#[test]
+fn a_bullet_is_never_a_table_cell() {
+    let mut blocks = Vec::new();
+    for (n, (item, amount)) in [("apples", "5 kg"), ("pears", "4 kg"), ("plums", "2 kg")].into_iter().enumerate() {
+        let y = 700.0 - 14.0 * n as f64;
+        blocks.push(line("•", 90.0, 94.6, y));
+        blocks.push(line(item, 108.0, 140.0, y));
+        blocks.push(line(amount, 300.0, 325.0, y));
+    }
+    let (found, _) = tables(&blocks);
+    assert!(found.iter().flat_map(|t| &t.rows).flatten().all(|cell| cell.text != "•"), "{found:?}");
+    let paragraphs = word_texts(blocks);
+    for item in ["• apples", "• pears", "• plums"] {
+        assert!(paragraphs.iter().any(|p| p.starts_with(item)), "{item}: {paragraphs:?}");
+    }
+}
+
+/// Every item of a long list keeps its bullet, though all the items' texts start at one tab stop.
+#[test]
+fn a_long_bulleted_list_keeps_every_bullet_with_its_item() {
+    let mut blocks = Vec::new();
+    for n in 0..150 {
+        let y = 2200.0 - 14.0 * f64::from(n);
+        blocks.push(line("\u{F0B7}", 90.0, 94.6, y));
+        blocks.push(line(&format!("item {n};"), 108.0, 160.0, y));
+    }
+    let (found, _) = tables(&blocks);
+    assert!(found.is_empty(), "{found:?}");
+    let paragraphs = word_texts(blocks);
+    assert_eq!(paragraphs.len(), 150, "{paragraphs:?}");
+    assert!(paragraphs.iter().enumerate().all(|(n, p)| *p == format!("\u{F0B7} item {n};")), "{paragraphs:?}");
+}
