@@ -2847,3 +2847,27 @@ theme	Appearance	Teema
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tämän vastauksen asetukset
+	Window	Ikkuna
+	Show or hide the side panel	Näytä tai piilota sivupaneeli
+	Show or hide the Tools panel	Näytä tai piilota työkalupaneeli
+	Reset side panels	Palauta sivupaneelit
+	Custom scale	Mukautettu skaala
+	1 line	1 rivi
+	{n} lines	{n} riviä
+	Every line set in the style chosen for a level becomes a bookmark of that level, under a new first bookmark.	Jokaisesta rivistä, joka on tasolle valitussa tyylissä, tulee sen tason kirjanmerkki uuden ensimmäisen kirjanmerkin alle.
+	Export value	Vientiarvo
+	Level {n}	Taso {n}
+	New bookmarks from text styles	Uudet kirjanmerkit tekstityyleistä
+	New bookmarks from text styles…	Uudet kirjanmerkit tekstityyleistä…
+	Page Properties	Sivun ominaisuudet
+	Page properties…	Sivun ominaisuudet…
+	Show Page Edge Shadows	Näytä sivun reunojen varjot
+	Tab Order	Sarkainjärjestys
+	This document has no text to make bookmarks from.	Tässä asiakirjassa ei ole tekstiä, josta voisi tehdä kirjanmerkkejä.
+	Unspecified	Määrittämätön
+	Use Column Order	Käytä sarakejärjestystä
+	Use Document Structure	Käytä asiakirjan rakennetta
+	Use Row Order	Käytä rivijärjestystä
+	bold	lihavoitu
+	italic	kursivoitu
+	{font}, {size} pt	{font}, {size} pt
