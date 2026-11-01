@@ -1513,16 +1513,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
     // An empty field a click would sign carries a small tab saying so, shown only while
     // a click on the field signs it (the Select tool, not while preparing a form). The tab
     // is drawn over every field, so a click on it signs its field (`forms_ui::hit`).
-    let tabs: Vec<(&str, SignTab)> = if tool == QuickTool::Select && !preparing {
-        sign_tabs(&doc.signatures, form, i, can_fill)
-            .into_iter()
-            .filter_map(|(name, [x0, y0, x1, y1])| {
-                sign_tab_at(ui, xf.user_rect(info, i, [x0 as f32, y0 as f32, x1 as f32, y1 as f32]), xf.rect).map(|tab| (name, tab))
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let tabs = page_sign_tabs(ui, doc, form, info, slot, can_fill, tool == QuickTool::Select && !preparing);
     let hits = PageHits {
         page: i,
         xf: &xf,
@@ -1740,6 +1731,30 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
         }
     }
     PageInput { consumed, area_tool, sign_tabs: tabs.into_iter().map(|(_, tab)| tab).collect() }
+}
+
+/// The sign tabs on the slot's page, on empty fields a click would sign, each with the field it
+/// signs; none unless `shown`.
+fn page_sign_tabs<'a>(
+    ui: &egui::Ui,
+    doc: &'a pdfcraft_engine::Document,
+    form: &[pdfcraft_engine::FormField],
+    info: &DocInfo,
+    slot: &PageSlot,
+    can_fill: bool,
+    shown: bool,
+) -> Vec<(&'a str, SignTab)> {
+    let PageSlot { i, xf, .. } = slot;
+    let i = *i;
+    if !shown {
+        return Vec::new();
+    }
+    sign_tabs(&doc.signatures, form, i, can_fill)
+        .into_iter()
+        .filter_map(|(name, [x0, y0, x1, y1])| {
+            sign_tab_at(ui, xf.user_rect(info, i, [x0 as f32, y0 as f32, x1 as f32, y1 as f32]), xf.rect).map(|tab| (name, tab))
+        })
+        .collect()
 }
 
 /// Edit text's paragraphs and pictures on page `i`, kept while the document is unchanged.
