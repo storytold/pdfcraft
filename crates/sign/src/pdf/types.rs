@@ -1,4 +1,4 @@
-use super::*;
+use super::Certificate;
 
 /// Certificates the user trusts for signing (Acrobat: Trusted Certificates).
 #[derive(Clone, Debug, Default)]

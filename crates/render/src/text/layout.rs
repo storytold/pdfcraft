@@ -1,6 +1,6 @@
 use super::device::{DIRECTION_TOLERANCE, Drawn, WORD_GAP};
-use super::order::{NONE, REDRAW_CANDIDATES, Run, Scratch, Seg, fingerprint, place_glyphs, redraws, restarts_run, reverse_rtl};
-use super::*;
+use super::order::{NONE, REDRAW_CANDIDATES, Run, Scratch, Seg, fingerprint, is_script_on, place_glyphs, redraws, restarts_run, reverse_rtl};
+use super::{HashMap, PageText, TextGlyph};
 
 /// Glyphs in reading order, as indices into the page's glyphs, with their lines and word gaps.
 pub(super) struct Flow {
@@ -177,14 +177,19 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
     let mut furthest_progress = 0.0;
     for i in 0..n {
         let g = glyphs[i].rect;
+        let hi = height(i);
         let cont = segs.last().is_some_and(|s| {
             let Some(p) = s.first.end.checked_sub(1) else { return false };
-            let ph = height(p).min(height(i));
+            let ph = height(p).min(hi);
+            let sh = s.h.min(hi);
             let gap = g[0] - glyphs[p].rect[2];
             // A sub- or superscript is a smaller glyph on a shifted baseline: its em box centre sits off the line by
             // more than half its own height, but by less than half the height of the full-size glyph beside it.
-            let centre_limit = if gap.abs() < ph { height(p).max(height(i)) * 0.5 } else { ph * 0.5 };
-            (cy(i) - cy(p)).abs() < centre_limit && gap < ph * 3.0 && g[0] > glyphs[p].rect[0] - ph * 2.0
+            let centre_limit = if gap.abs() < ph { height(p).max(hi) * 0.5 } else { ph * 0.5 };
+            let same_line = ((cy(i) - cy(p)).abs() < centre_limit && gap < ph * 3.0)
+                || ((cy(i) - s.cy()).abs() < sh * 0.3 && (s.h / hi - 1.0).abs() < 0.35 && gap < sh * 3.0);
+            let on_seg = gap < s.h * 1.2 && (is_script_on(&s.bbox, s.h, &g, hi) || is_script_on(&g, hi, &s.bbox, s.h));
+            (same_line || on_seg) && g[0] > glyphs[p].rect[0] - sh * 2.0
         });
         let reset = cont && segs.last().is_some_and(|s| restarts_run(&glyphs, s.first.start, i, furthest_progress));
         if cont
@@ -192,11 +197,10 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
             && let Some(s) = segs.last_mut()
         {
             s.first.end = i + 1;
-            union(&mut s.bbox, &g);
-            s.h = s.h.max(height(i));
+            s.extend_box(&g, hi);
             furthest_progress = furthest_progress.max((g[0] - run_start_x).abs()).max((g[2] - run_start_x).abs());
         } else {
-            segs.push(Seg::new(Run { start: i, end: i + 1 }, g, height(i)));
+            segs.push(Seg::new(Run { start: i, end: i + 1 }, g, hi));
             run_start_x = g[0];
             furthest_progress = 0.0;
         }
@@ -245,7 +249,8 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
         kept_runs
     };
     segs.truncate(retained);
-    // Merge same-baseline segments that nearly touch.
+    // Merge same-baseline segments that nearly touch, then attach any remaining superscript or
+    // subscript segments to the closest host line segment they sit on.
     let mut merged = true;
     while merged {
         merged = false;
@@ -263,6 +268,30 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
                     segs[a].merge(sb);
                     merged = true;
                     break 'outer;
+                }
+            }
+        }
+        if !merged {
+            let mut b = 0;
+            while b < segs.len() {
+                let sb = &segs[b];
+                let best_host = (0..segs.len())
+                    .filter(|&a| {
+                        if a == b {
+                            return false;
+                        }
+                        let sa = &segs[a];
+                        let gap = (sb.bbox[0] - sa.bbox[2]).max(sa.bbox[0] - sb.bbox[2]);
+                        sa.bbox[2] - sa.bbox[0] > sb.bbox[2] - sb.bbox[0] && gap < sa.h * 1.2 && is_script_on(&sa.bbox, sa.h, &sb.bbox, sb.h)
+                    })
+                    .min_by(|&a1, &a2| (segs[a1].cy() - sb.cy()).abs().total_cmp(&(segs[a2].cy() - sb.cy()).abs()));
+                if let Some(a) = best_host {
+                    let sb = segs.remove(b);
+                    let a = if b < a { a - 1 } else { a };
+                    segs[a].merge(sb);
+                    merged = true;
+                } else {
+                    b += 1;
                 }
             }
         }

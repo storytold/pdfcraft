@@ -1,4 +1,9 @@
-use super::*;
+use super::{
+    AddedContent, Arc, Edit, EditError, FieldValue, ImageEdit, NewAnnotation, Shape, a11y, copy_image, decode_data_file, embed_image, fit_picture,
+    image_content_type, is_xfa_data_file, js, mark_source, measure, open_source, strip_xfa, unrestricted, xfa, xfa_after_data_change,
+};
+use crate::SourceProblem;
+use crate::sources::{comment_source, import_pdf_comments};
 
 /// Whether the opening password allows an edit (§7.6.4.2, Table 22).
 pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), EditError> {
@@ -27,6 +32,17 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
                 Ok(())
             } else {
                 Err(EditError::NotPermitted("page changes"))
+            }
+        }
+        // Creates bookmarks (assembly), and their titles are the document's text, copied out of it
+        // (Table 22, bit 5), as an export of it would be.
+        Edit::BookmarksFromTextStyles { .. } => {
+            if !p.assemble() {
+                Err(EditError::NotPermitted("page changes"))
+            } else if !p.copy() {
+                Err(EditError::NotPermitted("copying text and images"))
+            } else {
+                Ok(())
             }
         }
         Edit::AddMeasurement(_)
@@ -103,6 +119,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::XfaToStatic
         | Edit::SetFieldProps { .. }
         | Edit::DeleteField { .. }
+        | Edit::DeleteWidget { .. }
         | Edit::DuplicateField { .. }
         | Edit::SetTabOrder { .. }
         | Edit::MoveInTabOrder { .. }
@@ -160,6 +177,8 @@ pub(crate) struct EditCtx {
     pub(crate) today: (i64, u32, u32),
     pub(crate) seed: u64,
     pub(crate) count: u64,
+    /// Platform CSPRNG (`getrandom::fill`). Tests replace it so Protect can fail closed.
+    pub(crate) rng: fn(&mut [u8]) -> Result<(), getrandom::Error>,
     /// Fields the edit renamed to keep imported names separate (old → new), for the repair
     /// log and the undo label.
     pub(crate) renamed_fields: Vec<(String, String)>,
@@ -192,24 +211,21 @@ impl EditCtx {
             today: (1970, 1, 1),
             seed,
             count: 0,
+            rng: getrandom::fill,
             renamed_fields: Vec::new(),
             redaction_overlays: Vec::new(),
         }
     }
 
-    /// 32 bytes of entropy for new encryption keys and salts. `RandomState` is seeded by the
-    /// operating system, so no extra dependency is needed.
-    fn entropy(&mut self) -> [u8; 32] {
-        use std::hash::{BuildHasher, Hasher};
+    /// 32 bytes of entropy for new encryption keys, salts and generated owner passwords from the
+    /// platform CSPRNG. Fails closed when secure randomness is unavailable.
+    fn entropy(&mut self) -> Result<[u8; 32], EditError> {
         let mut out = [0u8; 32];
-        for (i, chunk) in out.chunks_mut(8).enumerate() {
-            let mut h = std::collections::hash_map::RandomState::new().build_hasher();
-            h.write_u64(self.seed ^ i as u64);
-            h.write_u64(self.count);
-            self.count += 1;
-            chunk.copy_from_slice(&h.finish().to_le_bytes());
+        (self.rng)(&mut out).map_err(|e| EditError::Protection(format!("no secure randomness available: {e}")))?;
+        if out == [0u8; 32] {
+            return Err(EditError::Protection("no secure randomness available".into()));
         }
-        out
+        Ok(out)
     }
 
     /// A fresh `/NM`: a random-looking UUID (version 4 layout) from a splitmix64 stream.
@@ -277,8 +293,28 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::BookmarksFromStructure => {
             let entries: Vec<_> = pdfcraft_a11y::headings(doc)
                 .into_iter()
-                .map(|h| pdfcraft_organize::OutlineEntry { level: h.level, title: h.title, page: h.page, element: h.obj })
+                .map(|h| pdfcraft_organize::OutlineEntry { level: h.level, title: h.title, page: h.page, element: h.obj, top: None })
                 .collect();
+            pdfcraft_organize::add_bookmark_tree(doc, "Untitled", &entries)?;
+        }
+        Edit::BookmarksFromTextStyles { levels } => {
+            if levels.is_empty() {
+                return Err(EditError::Invalid("choose a text style for at least one bookmark level".into()));
+            }
+            // Each line goes to the first level whose style it is in: a style given again, or one
+            // within the size tolerance of an earlier level's, would leave its level empty.
+            for (i, a) in levels.iter().enumerate() {
+                if let Some(j) = levels.iter().skip(i.saturating_add(1)).position(|b| a.matches(b)) {
+                    let (first, second) = (i.saturating_add(1), i.saturating_add(j).saturating_add(2));
+                    return Err(EditError::Invalid(format!(
+                        "bookmark levels {first} and {second} have the same text style: choose a different one for each level"
+                    )));
+                }
+            }
+            let entries = crate::text_style_bookmarks::headings(doc, levels);
+            if entries.is_empty() {
+                return Err(EditError::Invalid("no text is set in the chosen styles".into()));
+            }
             pdfcraft_organize::add_bookmark_tree(doc, "Untitled", &entries)?;
         }
         Edit::NumberPages { from, to, style, prefix, first } => pdfcraft_organize::number_pages(doc, *from, *to, *style, prefix, *first)?,
@@ -328,7 +364,19 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             // One `/NM` each: the caret replies to the strikeout, and XFDF names that reply by
             // the strikeout's `/NM` (#2666).
             let (strike_meta, caret_meta) = (cx.meta(), cx.meta());
-            pdfcraft_annot::add_text_replacement(doc, *page, quads, text, author, strike, caret, &strike_meta, &caret_meta)?;
+            pdfcraft_annot::add_text_replacement(
+                doc,
+                pdfcraft_annot::TextReplacement {
+                    page: *page,
+                    quads,
+                    replacement: text,
+                    author,
+                    strike,
+                    caret,
+                    strike_meta: &strike_meta,
+                    caret_meta: &caret_meta,
+                },
+            )?;
         }
         Edit::MarkAnnotation { page, index, marked, author } => {
             pdfcraft_annot::set_marked(doc, *page, *index, *marked, author, &cx.meta())?;
@@ -338,7 +386,13 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::ReshapeAnnotation { page, index, points } => pdfcraft_annot::set_points(doc, *page, *index, points, &cx.meta())?,
         Edit::ResizeAnnotation { page, index, rect } => pdfcraft_annot::set_rect(doc, *page, *index, *rect, &cx.meta())?,
         Edit::StyleAnnotation { page, index, color, opacity, width, endings } => {
-            pdfcraft_annot::set_style(doc, *page, *index, *color, *opacity, *width, endings.as_deref(), &cx.meta())?;
+            pdfcraft_annot::set_style(
+                doc,
+                *page,
+                *index,
+                pdfcraft_annot::StyleChange { color: *color, opacity: *opacity, width: *width, endings: endings.clone() },
+                &cx.meta(),
+            )?;
         }
         Edit::FillAnnotation { page, index, fill } => pdfcraft_annot::set_fill(doc, *page, *index, *fill, &cx.meta())?,
         Edit::FontSizeAnnotation { page, index, size } => pdfcraft_annot::set_font_size(doc, *page, *index, *size, &cx.meta())?,
@@ -425,6 +479,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             }
         }
         Edit::DeleteField { name } => pdfcraft_forms::delete_field(doc, name)?,
+        Edit::DeleteWidget { name, widget } => pdfcraft_forms::delete_widget(doc, name, *widget)?,
         Edit::SetTabOrder { pages, order } => pdfcraft_forms::set_tab_order(doc, pages, *order)?,
         Edit::MoveInTabOrder { name, earlier } => pdfcraft_forms::move_in_tab_order(doc, name, *earlier)?,
         // As after a script edit: the values the new order gives show at once.
@@ -612,7 +667,11 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("no web addresses were found".into())));
             }
         }
-        Edit::ImportData { bytes, .. } => {
+        Edit::ImportData { name, bytes } if bytes.starts_with(b"%PDF-") => {
+            let src = comment_source(bytes).map_err(|p| EditError::Source(format!("{name}: {p}")))?;
+            import_pdf_comments(doc, &src)?;
+        }
+        Edit::ImportData { name, bytes } => {
             // An XFA form takes XFA data files (XDP, datasets, or a data document) as its data;
             // XFDF, FDF, Acrobat's XML and tables go the usual way.
             let text = (pdfcraft_xfa::read_packets(doc).ok().flatten().is_some()).then(|| decode_data_file(bytes)).flatten();
@@ -626,9 +685,21 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                     cx.xfa_out.console.push(format!("Imported XFA data: {} node(s)", r.nodes));
                     xfa_after_data_change(doc, cx, true)?;
                 }
-                Some(Err(why)) => return Err(EditError::Invalid(why)),
+                Some(Err(why)) if !bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-") => return Err(EditError::Invalid(why)),
                 _ => {
-                    pdfcraft_xfdf::import(doc, bytes)?;
+                    // A PDF with bytes before its header, within the 1,024 the reader allows, is read
+                    // as a PDF when it is not a data file. A file the PDF reader cannot open keeps
+                    // the data importer's error.
+                    let mut data = doc.clone();
+                    match pdfcraft_xfdf::import(&mut data, bytes) {
+                        Ok(_) => *doc = data,
+                        Err(e) if bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-") => match comment_source(bytes) {
+                            Ok(src) => import_pdf_comments(doc, &src)?,
+                            Err(SourceProblem::Unreadable(_)) => return Err(e.into()),
+                            Err(p) => return Err(EditError::Source(format!("{name}: {p}"))),
+                        },
+                        Err(e) => return Err(e.into()),
+                    }
                 }
             }
         }
@@ -666,10 +737,13 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::Protect(p) => {
             p.validate()?;
-            let seed = cx.entropy();
+            let seed = cx.entropy()?;
             // Without a permissions password nothing is restricted, so the owner password is a
             // random one nobody needs.
-            let random_owner: String = cx.entropy().iter().map(|b| format!("{b:02x}")).collect();
+            let random_owner = match p.permissions_password {
+                Some(_) => String::new(),
+                None => cx.entropy()?.iter().map(|b| format!("{b:02x}")).collect(),
+            };
             let params = pdfcraft_cos::NewEncryption {
                 algorithm: p.algorithm,
                 user_password: p.open_password.as_deref().unwrap_or(""),

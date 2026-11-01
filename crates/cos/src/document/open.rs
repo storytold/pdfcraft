@@ -1,7 +1,7 @@
-use super::reader::{find, generated_id};
+use super::reader::find;
 use super::state::Credentials;
 use super::xref::XrefIndex;
-use super::*;
+use super::{Arc, BTreeMap, CosError, Dict, Document, ObjRef, Object};
 
 impl Document {
     /// A new document with an empty page tree (for split / extract / combine). It has no
@@ -271,8 +271,7 @@ impl Document {
         let id0 = match self.trailer.get(b"ID") {
             Some(Object::Array(a)) if a.len() == 2 => a[0].as_string().map(|s| s.bytes.clone()).unwrap_or_default(),
             _ => {
-                let mut id = generated_id(&params.seed);
-                id.truncate(16);
+                let id = pdfcraft_crypt::file_id(&params.seed);
                 let s = Object::String(crate::PdfString { bytes: id.clone(), hex: true });
                 self.trailer.set(b"ID".to_vec(), Object::Array(vec![s.clone(), s]));
                 id

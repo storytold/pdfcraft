@@ -556,55 +556,117 @@ fn tool_picker_keeps_picked_recipient_when_other_open_is_ready() {
         held.release.send(()).expect("release ordinary B");
         held.finished.recv_timeout(Duration::from_secs(5)).expect("ordinary B reply is also ready");
         assert_eq!(harness.state().pending_opens.len(), 2);
+        let files = PickerFiles {
+            picked: &picked,
+            other: &other,
+            insert: &insert,
+            original_a: &original_a,
+            original_b: &original_b,
+            original_c: &original_c,
+        };
+        let a_id = assert_picker_keeps_a_visible(&mut harness, &files);
+        assert_picker_completion_releases_b(&mut harness, a_id, cancel, &files);
+    }
+}
 
-        // Poll admission separately from consuming the picker callback: this reproduces
-        // the same ordering as a UI frame, with both worker replies already available.
-        harness.state_mut().poll_pending_opens();
-        assert_eq!(harness.state().views.len(), 1, "ready B must wait for A's Insert pages picker");
-        assert_eq!(harness.state().active, Some(0));
-        assert!(harness.state().dialog.is_none() && harness.state().password_prompt.is_none());
-        let a_id = harness.state().views[0].id;
-        let doc = harness.state().session.get(a_id).expect("picked A before picker completion");
-        assert_eq!(doc.path.as_deref(), Some(picked.0.to_string_lossy().as_ref()));
+struct PickerFiles<'a> {
+    picked: &'a ToolOpenFile,
+    other: &'a ToolOpenFile,
+    insert: &'a ToolOpenFile,
+    original_a: &'a [u8],
+    original_b: &'a [u8],
+    original_c: &'a [u8],
+}
+
+fn assert_picker_keeps_a_visible(harness: &mut Harness<'static, PdfCraftApp>, files: &PickerFiles<'_>) -> pdfcraft_engine::DocId {
+    // Poll admission separately from consuming the picker callback: this reproduces
+    // the same ordering as a UI frame, with both worker replies already available.
+    harness.state_mut().poll_pending_opens();
+    assert_eq!(harness.state().views.len(), 1, "ready B must wait for A's Insert pages picker");
+    assert_eq!(harness.state().active, Some(0));
+    assert!(harness.state().dialog.is_none() && harness.state().password_prompt.is_none());
+    let a_id = harness.state().views[0].id;
+    let doc = harness.state().session.get(a_id);
+    assert!(doc.is_some(), "picked A before picker completion");
+    if let Some(doc) = doc {
+        assert_eq!(doc.path.as_deref(), Some(files.picked.0.to_string_lossy().as_ref()));
         assert_eq!(doc.info.pages.len(), 2);
         assert!(!doc.dirty && doc.can_undo().is_none() && doc.can_redo().is_none());
-        assert_eq!(harness.state().pending_opens.len(), 1);
-        assert_eq!(harness.state().pending_opens[0].path.as_deref(), Some(other.0.to_string_lossy().as_ref()));
-        harness.state_mut().poll_pending_opens();
-        assert_eq!(harness.state().views.len(), 1, "B remains held until the queued picker result is consumed");
-        assert_eq!(harness.state().active, Some(0));
+    }
+    assert_eq!(harness.state().pending_opens.len(), 1);
+    assert_eq!(harness.state().pending_opens[0].path.as_deref(), Some(files.other.0.to_string_lossy().as_ref()));
+    harness.state_mut().poll_pending_opens();
+    assert_eq!(harness.state().views.len(), 1, "B remains held until the queued picker result is consumed");
+    assert_eq!(harness.state().active, Some(0));
+    a_id
+}
 
-        // Consume the actual native-picker callback (or its empty-path cancellation).
-        harness.state_mut().process_picked();
-        let doc = harness.state().session.get(a_id).expect("A after picker completion");
-        assert_eq!(doc.info.pages.len(), if cancel { 2 } else { 3 });
+fn assert_picker_completion_releases_b(
+    harness: &mut Harness<'static, PdfCraftApp>,
+    a_id: pdfcraft_engine::DocId,
+    cancel: bool,
+    files: &PickerFiles<'_>,
+) {
+    // Consume the actual native-picker callback (or its empty-path cancellation).
+    harness.state_mut().process_picked();
+    assert_document_a_after_picker(harness, a_id, cancel);
+    assert_eq!(harness.state().views.len(), 1);
+    assert_eq!(harness.state().pending_opens.len(), 1);
+    assert_eq!(harness.state().active, Some(0));
+
+    harness.step();
+    assert!(harness.state().pending_opens.is_empty());
+    assert_eq!(harness.state().views.len(), 2, "picker completion releases B exactly once");
+    let active = harness.state().active;
+    assert!(active.is_some(), "B activates after picker completion");
+    if let Some(active) = active {
+        assert_document_b_after_picker(harness, active, files);
+    }
+    harness.run_steps(2);
+    assert!(harness.state().pending_opens.is_empty() && harness.state().dialog.is_none());
+    assert_eq!(harness.state().views.len(), 2);
+    assert_eq!(harness.state().active, active);
+    assert_document_a_after_picker(harness, a_id, cancel);
+    assert_a_saved_source(harness, a_id, files.original_a);
+    assert_picker_files_unchanged(files);
+}
+
+fn assert_document_a_after_picker(harness: &Harness<'static, PdfCraftApp>, a_id: pdfcraft_engine::DocId, cancel: bool) {
+    let expected_pages = if cancel { 2 } else { 3 };
+    let doc = harness.state().session.get(a_id);
+    assert!(doc.is_some(), "A after picker completion");
+    if let Some(doc) = doc {
+        assert_eq!(doc.info.pages.len(), expected_pages);
         assert_eq!(doc.dirty, !cancel);
         assert_eq!(doc.can_undo().is_some(), !cancel);
         assert!(doc.can_redo().is_none());
-        assert_eq!(harness.state().views.len(), 1);
-        assert_eq!(harness.state().pending_opens.len(), 1);
-        assert_eq!(harness.state().active, Some(0));
+    }
+}
 
-        harness.step();
-        assert!(harness.state().pending_opens.is_empty());
-        assert_eq!(harness.state().views.len(), 2, "picker completion releases B exactly once");
-        let active = harness.state().active.expect("B activates after picker completion");
-        let doc = harness.state().session.get(harness.state().views[active].id).expect("ordinary B document");
-        assert_eq!(doc.path.as_deref(), Some(other.0.to_string_lossy().as_ref()));
+fn assert_document_b_after_picker(harness: &Harness<'static, PdfCraftApp>, active: usize, files: &PickerFiles<'_>) {
+    let doc = harness.state().session.get(harness.state().views[active].id);
+    assert!(doc.is_some(), "ordinary B document");
+    if let Some(doc) = doc {
+        assert_eq!(doc.path.as_deref(), Some(files.other.0.to_string_lossy().as_ref()));
         assert_eq!(doc.info.pages.len(), 1);
         assert!(!doc.dirty && doc.can_undo().is_none() && doc.can_redo().is_none());
-        harness.run_steps(2);
-        assert!(harness.state().pending_opens.is_empty() && harness.state().dialog.is_none());
-        assert_eq!(harness.state().views.len(), 2);
-        assert_eq!(harness.state().active, Some(active));
-        let doc = harness.state().session.get(a_id).expect("A retains exactly one insertion or cancellation");
-        assert_eq!(doc.info.pages.len(), if cancel { 2 } else { 3 });
-        assert_eq!(doc.dirty, !cancel);
-        assert_eq!(doc.can_undo().is_some(), !cancel);
-        assert!(doc.can_redo().is_none());
-        assert_eq!(doc.saved_bytes().as_slice(), original_a.as_slice(), "insertion preserves A's saved source");
-        for (file, original) in [(&picked, &original_a), (&other, &original_b), (&insert, &original_c)] {
-            assert_eq!(std::fs::read(&file.0).expect("read unchanged original picker fixture"), *original);
+    }
+}
+
+fn assert_a_saved_source(harness: &Harness<'static, PdfCraftApp>, a_id: pdfcraft_engine::DocId, original: &[u8]) {
+    let doc = harness.state().session.get(a_id);
+    assert!(doc.is_some(), "A retains exactly one insertion or cancellation");
+    if let Some(doc) = doc {
+        assert_eq!(doc.saved_bytes().as_slice(), original, "insertion preserves A's saved source");
+    }
+}
+
+fn assert_picker_files_unchanged(files: &PickerFiles<'_>) {
+    for (file, original) in [(files.picked, files.original_a), (files.other, files.original_b), (files.insert, files.original_c)] {
+        let bytes = std::fs::read(&file.0);
+        assert!(bytes.is_ok(), "read unchanged original picker fixture: {bytes:?}");
+        if let Ok(bytes) = bytes {
+            assert_eq!(bytes, original);
         }
     }
 }
@@ -669,6 +731,146 @@ fn startup_files_wait_for_absolute_link_consent_and_preparation() {
     assert_eq!(app.session.get(app.views[2].id).expect("startup document").name, "startup.pdf");
     assert_eq!(app.active, Some(1), "the user's approved navigation keeps focus");
     let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn launch_layout_waits_for_cli_opens_and_preserves_restored_tabs() {
+    use crate::canvas::PageLayout;
+    // Controlled worker replies exercise both completion orders without scheduling races.
+    for reverse in [false, true] {
+        for count in [1, 2] {
+            for restored in [false, true] {
+                let mut app = PdfCraftApp::new();
+                app.set_option("default-layout", "continuous").unwrap();
+                if restored {
+                    app.open_bytes("restored.pdf", None, fixture(1)).unwrap();
+                }
+                let offset = usize::from(restored);
+                let mut replies = Vec::new();
+                for token in 0..count {
+                    let name = format!("cli-{token}.pdf");
+                    let bytes = Arc::new(fixture(2));
+                    let prepared = app.session.prepare_open(&name, None, bytes.clone(), None);
+                    let (sender, receiver) = std::sync::mpsc::channel();
+                    app.pending_opens.push(crate::PendingOpen {
+                        token,
+                        receiver,
+                        name,
+                        path: None,
+                        stamp: None,
+                        activate: true,
+                        after_open: None,
+                        recovered: None,
+                        then: None,
+                        display_override: Some((PageLayout::TwoUp, false)),
+                    });
+                    replies.push((
+                        sender,
+                        open_worker::ResultMessage { token, kind: open_worker::ResultKind::Prepared { bytes, result: Box::new(prepared) } },
+                    ));
+                }
+                app.set_launch_layout("single").unwrap();
+                if restored {
+                    assert!(app.views[0].continuous(), "pending --layout must not target the restored tab");
+                }
+                if reverse {
+                    replies.reverse();
+                }
+                for (index, (sender, reply)) in replies.into_iter().enumerate() {
+                    let name = format!("cli-{}.pdf", reply.token);
+                    sender.send(reply).unwrap();
+                    app.poll_pending_opens();
+                    let view = &app.views[index + offset];
+                    assert_eq!(view.layout, if index + 1 == count as usize { PageLayout::Single } else { PageLayout::TwoUp });
+                    assert!(!view.continuous());
+                    assert_eq!(app.session.get(view.id).unwrap().name, name);
+                }
+                assert_eq!(app.active, Some(count as usize + offset - 1));
+                if restored {
+                    assert_eq!(app.views[0].layout, PageLayout::Single);
+                    assert!(app.views[0].continuous());
+                }
+                assert_eq!(app.view_defaults.layout, PageLayout::Single);
+                assert!(app.view_defaults.continuous);
+                assert_eq!(serde_json::from_str::<Value>(&app.persist()).unwrap()["default_layout"], "continuous");
+                // Ordinary later opens cannot inherit either launch override.
+                app.open_bytes("later.pdf", None, fixture(1)).unwrap();
+                assert!(app.views.last().unwrap().continuous());
+            }
+        }
+    }
+}
+
+#[test]
+fn launch_layout_failed_or_cancelled_opens_do_not_target_existing_documents() {
+    use crate::canvas::PageLayout;
+    for cancel in [false, true] {
+        let mut app = PdfCraftApp::new();
+        app.set_option("default-layout", "continuous").unwrap();
+        app.open_bytes("restored.pdf", None, fixture(1)).unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        app.pending_opens.push(crate::PendingOpen {
+            token: 0,
+            receiver,
+            name: "cli.pdf".into(),
+            path: None,
+            stamp: None,
+            activate: true,
+            after_open: None,
+            recovered: None,
+            then: None,
+            display_override: Some((PageLayout::TwoUp, false)),
+        });
+        app.set_launch_layout("single").unwrap();
+        assert!(app.set_launch_layout("invalid").is_err());
+        let kind = if cancel {
+            open_worker::ResultKind::Prepared { bytes: Arc::new(fixture(1)), result: Box::new(Err(pdfcraft_render::OpenError::NeedsPassword)) }
+        } else {
+            open_worker::ResultKind::ReadFailed("synthetic read failure".into())
+        };
+        sender.send(open_worker::ResultMessage { token: 0, kind }).unwrap();
+        app.poll_pending_opens();
+        if cancel {
+            app.submit_password(None);
+        }
+        assert!(app.launch_layout.is_none());
+        assert_eq!(app.views.len(), 1);
+        assert!(app.views[0].continuous());
+        app.open_bytes("later.pdf", None, fixture(1)).unwrap();
+        assert!(app.views[1].continuous());
+    }
+}
+
+#[test]
+fn flagged_startup_opens_wait_for_password_ownership_before_the_first_frame() {
+    use crate::canvas::PageLayout;
+    let locked = tool_open_file("launch-locked", "pdf", &encrypted_tool_fixture());
+    let second = tool_open_file("launch-second", "pdf", &fixture(2));
+    let mut app = PdfCraftApp::new();
+    app.set_option("default-layout", "continuous").unwrap();
+    app.open_path_with_display(locked.0.to_str().unwrap(), PageLayout::TwoUp, false);
+    let bytes = app.password_prompt.as_ref().unwrap().bytes.clone();
+    app.open_path_with_display(locked.0.to_str().unwrap(), PageLayout::TwoUp, false);
+    assert!(app.pending_opens.is_empty(), "repeating the locked file keeps its original prompt");
+    app.open_path_with_display(second.0.to_str().unwrap(), PageLayout::TwoUp, false);
+    assert_eq!(app.pending_opens.len(), 1);
+    assert!(Arc::ptr_eq(&app.password_prompt.as_ref().unwrap().bytes, &bytes));
+    app.set_launch_layout("single").unwrap();
+    app.submit_password(Some("wrong".into()));
+    assert!(app.password_prompt.as_ref().unwrap().error.is_some());
+    app.submit_password(Some("tool-password".into()));
+    assert_eq!(app.views.len(), 1);
+    assert_eq!(app.views[0].layout, PageLayout::TwoUp);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !app.pending_opens.is_empty() {
+        assert!(std::time::Instant::now() < deadline);
+        app.poll_pending_opens();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(app.views.len(), 2);
+    assert_eq!(app.views[1].layout, PageLayout::Single);
+    assert!(!app.views[1].continuous());
+    assert!(app.view_defaults.continuous);
 }
 
 /// #1928: a new file handed over by the OS (Finder, or another launch) raises the window at once,

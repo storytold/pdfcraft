@@ -1,6 +1,6 @@
+use super::Zip;
 use super::as_html::esc;
 use super::layout::{Image, Item, Page, Table, body_size, items};
-use super::*;
 
 /// A colour's 8-bit sRGB components (NaN and out-of-range values clamp; NaN reads as 0).
 pub(crate) fn rgb8(c: [f64; 3]) -> [u8; 3] {

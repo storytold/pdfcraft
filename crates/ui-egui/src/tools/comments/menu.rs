@@ -1,6 +1,9 @@
 use super::paint::edit_anchor;
 use super::state::{Composer, ComposerKind};
-use super::*;
+use super::{
+    Annotation, Color32, CommentPrefs, CommentTool, DocInfo, DocView, Edit, Rect, ReviewState, Rgb, SELECT_BLUE, SWATCHES, Sense, Stroke, color32,
+    icons, theme, tool_for, vec2,
+};
 
 /// Save attachment… and, for a PDF, Open in a new tab, first in a file attachment comment's
 /// menus as in the Attachments panel: the comment is where the reader finds its file. Reading
@@ -21,10 +24,13 @@ pub(crate) fn attachment_items(ui: &mut egui::Ui, view: &mut DocView, info: &Doc
 
 /// Items of the canvas context menu for the selected comment (or the page).
 /// `can_modify`: the document's pages may change (Flatten comments draws into them).
+/// `deletable`: whether Delete would delete the comment at (page, index) (the engine's
+/// `Document::annotation_deletable`: unlocked, and no locked reply to it).
 pub(crate) fn context_menu(
     ui: &mut egui::Ui,
     view: &mut DocView,
     info: &DocInfo,
+    deletable: &dyn Fn(usize, usize) -> bool,
     prefs: &CommentPrefs,
     allowed: bool,
     can_modify: bool,
@@ -86,7 +92,8 @@ pub(crate) fn context_menu(
                 ui.close();
             }
             ui.separator();
-            if ui.add_enabled(allowed && !a.locked, egui::Button::new(tl!("Delete"))).clicked() {
+            // The engine's own check: a locked comment, or one with a locked reply, stays.
+            if ui.add_enabled(allowed && deletable(page, index), egui::Button::new(tl!("Delete"))).clicked() {
                 view.comments.selected = None;
                 action = Some(CanvasAction::Edit(Box::new(Edit::DeleteAnnotation { page, index })));
                 ui.close();

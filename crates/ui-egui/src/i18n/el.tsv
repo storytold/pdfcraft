@@ -272,7 +272,6 @@
 	General	Γενικά
 	About	Πληροφορίες
 	About PdfCraft	Σχετικά με το PdfCraft
-	Check for updates	Έλεγχος για ενημερώσεις
 	Keyboard shortcuts	Συντομεύσεις πληκτρολογίου
 	Default	Προεπιλογή
 	Custom	Προσαρμοσμένο
@@ -394,12 +393,8 @@
 	Replace Image…	Αντικατάσταση εικόνας…
 	Save Image As…	Αποθήκευση εικόνας ως…
 	No check has run yet.	Δεν έχει πραγματοποιηθεί ακόμη έλεγχος.
-	Checking for a newer version…	Έλεγχος για νεότερη έκδοση…
 	PdfCraft {v} is available.	Η έκδοση {v} του PdfCraft είναι διαθέσιμη.
 	You have version {c}. Download the new version from its release page.	Έχετε την έκδοση {c}. Κάντε λήψη της νέας έκδοσης από τη σελίδα εκδόσεών της.
-	PdfCraft {c} is up to date.	Το PdfCraft {c} είναι ενημερωμένο.
-	Couldn't check for updates: {e}	Δεν ήταν δυνατός ο έλεγχος για ενημερώσεις: {e}
-	You have version {c}. All releases are listed at {page}.	Έχετε την έκδοση {c}. Όλες οι εκδόσεις βρίσκονται στη διεύθυνση {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Αναζητά την τελευταία έκδοση στο GitHub. Δεν γίνεται αυτόματα λήψη ή εγκατάσταση.
 	Later	Αργότερα
 	none	κανένα
@@ -438,6 +433,14 @@
 	Applies to 1 page	Εφαρμόζεται σε 1 σελίδα
 	Applies to {n} pages	Εφαρμόζεται σε {n} σελίδες
 	Replaces the existing one on those pages.	Αντικαθιστά το υπάρχον στοιχείο στις συγκεκριμένες σελίδες.
+	Checking pages…	Έλεγχος σελίδων…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Η σελίδα {pages} έχει δική της λευκή γέμιση, που θα έκρυβε το φόντο. Αντικατάσταση
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Οι σελίδες {pages} έχουν δική τους λευκή γέμιση, που θα έκρυβε το φόντο. Αντικατάσταση
+	Removing the background puts the page's own backdrop back.	Η αφαίρεση του φόντου επαναφέρει τη λευκή γέμιση της σελίδας.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Μια εικόνα καλύπτει τη σελίδα {pages} (σάρωση;), οπότε το φόντο δεν θα φαίνεται εκεί.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Εικόνες καλύπτουν τις σελίδες {pages} (σαρώσεις;), οπότε το φόντο δεν θα φαίνεται εκεί.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Η σελίδα {pages} άλλαξε μετά την προσθήκη του φόντου, οπότε η δική της λευκή γέμιση μένει απενεργοποιημένη. Σε λευκό χαρτί φαίνεται ίδια.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Οι σελίδες {pages} άλλαξαν μετά την προσθήκη του φόντου, οπότε οι δικές τους λευκές γεμίσεις μένουν απενεργοποιημένες. Σε λευκό χαρτί φαίνονται ίδιες.
 	PDF or image	PDF ή εικόνα
 	No file chosen	Δεν έχει επιλεγεί αρχείο
 	Scale relative to target page	Κλίμακα ως προς τη σελίδα προορισμού
@@ -1852,6 +1855,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Διαβάζει τα {names}, που με τη σειρά τους το διαβάζουν. Καμία σειρά δεν διορθώνει έναν βρόχο: αλλάξτε έναν από τους τύπους.
 	Not in order	Εκτός σειράς
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Λείπει από τη σειρά υπολογισμού που είναι αποθηκευμένη στο PDF: άλλα προγράμματα προβολής PDF ίσως δεν το υπολογίζουν.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Διαβάζει το {name}, που δεν υπάρχει στη φόρμα, οπότε δεν παίρνει τιμή από εκεί.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Η δέσμη ενεργειών του διαβάζει επίσης πεδία των οποίων τα ονόματα σχηματίζει κατά την εκτέλεση, οπότε αυτές οι αναγνώσεις δεν μπορούν να ελεγχθούν.
+	Missing field	Λείπει πεδίο
+	Unchecked reads	Μη ελεγμένες αναγνώσεις
+	{field} reads fields named as it runs	Το {field} διαβάζει πεδία που ονομάζονται κατά την εκτέλεση
+	Some names are built as it runs	Ορισμένα ονόματα σχηματίζονται κατά την εκτέλεση
 	Back to Prepare a form	Επιστροφή στην Προετοιμασία φόρμας
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Κανένα πεδίο αυτής της φόρμας δεν υπολογίζει ακόμη την τιμή του. Δώστε σε ένα πεδίο υπολογισμό στην καρτέλα Υπολογισμός των ιδιοτήτων του και θα εμφανιστεί εδώ.
 	{names} and {last}	{names} και {last}
@@ -1906,6 +1915,9 @@
 	Clean Up	Εκκαθάριση
 	Color Images	Έγχρωμες εικόνες
 	Grayscale Images	Εικόνες σε κλίμακα του γκρι
+	Monochrome Images	Μονόχρωμες εικόνες
+	CCITT Group 4	CCITT Ομάδα 4
+	JBIG2 (lossless)	JBIG2 (χωρίς απώλειες)
 	Bicubic downsampling to	Δικυβική μείωση ανάλυσης σε
 	for images above	για εικόνες πάνω από
 	ZIP	ZIP
@@ -2402,6 +2414,11 @@ animation effects	Off	Ανενεργά
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} υπολογίζεται πριν από {fields}, που διαβάζει.|{field} υπολογίζεται πριν από {fields}, που διαβάζει.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	Ακόμη {n} πεδίο υπολογίζεται πολύ νωρίς.|Ακόμη {n} πεδία υπολογίζονται πολύ νωρίς.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} λείπει από τη σειρά που είναι αποθηκευμένη στο PDF, οπότε άλλα προγράμματα PDF ίσως δεν το υπολογίσουν.|{fields} λείπουν από τη σειρά που είναι αποθηκευμένη στο PDF, οπότε άλλα προγράμματα PDF ίσως δεν τα υπολογίσουν.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} τύπος διαβάζει πεδίο που δεν υπάρχει στη φόρμα|{n} τύποι διαβάζουν πεδία που δεν υπάρχουν στη φόρμα
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	Το {field} διαβάζει το {fields}, που δεν υπάρχει στη φόρμα.|Το {field} διαβάζει τα {fields}, που δεν υπάρχουν στη φόρμα.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	Ακόμη {n} τύπος διαβάζει πεδίο που λείπει.|Ακόμη {n} τύποι διαβάζουν πεδία που λείπουν.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	Το {fields} σχηματίζει ορισμένα ονόματα πεδίων κατά την εκτέλεση, οπότε αυτές οι αναγνώσεις δεν ελέγχονται.|Τα {fields} σχηματίζουν ορισμένα ονόματα πεδίων κατά την εκτέλεση, οπότε αυτές οι αναγνώσεις δεν ελέγχονται.
+@plural	{fields} is missing|{fields} are missing	Το {fields} λείπει|Τα {fields} λείπουν
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} όνομα πεδίου συγκρούεται με προηγούμενα αρχεία και θα μετονομαστεί: {list}|{n} ονόματα πεδίων συγκρούονται με προηγούμενα αρχεία και θα μετονομαστούν: {list}
 	Scan	Σάρωση
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Υπογράψτε σε ένα λευκό φύλλο χαρτιού και φωτογραφίστε το σε έντονο, ομοιόμορφο φως (χρησιμοποιήστε το φλας). Επιλέξτε τη φωτογραφία ή αφήστε την εδώ: το PdfCraft βρίσκει την υπογραφή και αφαιρεί το χαρτί.
@@ -2563,3 +2580,8 @@ animation effects	Off	Ανενεργά
 	Rotate the selected pages clockwise	Περιστροφή των επιλεγμένων σελίδων δεξιόστροφα
 	Extract the selected pages…	Εξαγωγή των επιλεγμένων σελίδων…
 	Delete the selected pages	Διαγραφή των επιλεγμένων σελίδων
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Επιλογές για αυτήν την απάντηση
+	Export value	Τιμή εξαγωγής
+	Show Page Edge Shadows	Εμφάνιση σκιών στα άκρα των σελίδων

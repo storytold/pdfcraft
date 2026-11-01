@@ -32,6 +32,9 @@ impl PdfCraftApp {
                 };
                 self.set_theme_preference(preference);
             }
+            ("show_page_edge_shadows", _) => {
+                self.show_page_edge_shadows = value.parse::<bool>().map_err(|_| "show_page_edge_shadows must be true or false")?;
+            }
             ("scroll_speed", _) => {
                 self.scroll_speed = scroll_speed::ScrollSpeed::parse(value).ok_or("scroll_speed must be slow, normal, or fast")?;
             }
@@ -120,8 +123,16 @@ impl PdfCraftApp {
                         self.execute("page.number");
                         Some(Dialog::NumberPages)
                     }
+                    "page-properties" => {
+                        // Same path as the panel, so the selected pages and their order are seeded.
+                        self.execute("page.properties");
+                        self.dialog
+                    }
                     "none" => None,
                     _ => Some(Dialog::About),
+                };
+                if let Some(Dialog::Marks(kind)) = self.dialog {
+                    self.marks_draft.opened(kind);
                 }
             }
             ("tools", _) if value == "full" => self.expand_all_tools(),

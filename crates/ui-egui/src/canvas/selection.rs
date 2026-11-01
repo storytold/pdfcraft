@@ -1,4 +1,4 @@
-use super::*;
+use super::{Arc, DocInfo, DocView, Edit, HashMap, PageText, Pos2, Range, Rect, comments, pos2};
 
 /// A text selection on one page.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -93,13 +93,17 @@ impl DocView {
         Some(s.text(t)).filter(|x| !x.is_empty())
     }
 
-    /// Select all: every page in Organize, or every word on the current page.
+    /// Select every page without navigating; shared by Organize and the Pages sidebar.
+    pub fn select_all_pages(&mut self) -> bool {
+        self.selected = (0..self.page_count).collect();
+        self.select_anchor = (self.page_count > 0).then_some(self.current);
+        !self.selected.is_empty()
+    }
+
+    /// Select all words on the current page, or every page in Organize.
     pub fn select_all(&mut self) -> bool {
         if self.organize {
-            self.selected = (0..self.page_count).collect();
-            // Keep the current page as the anchor for the next Shift-click.
-            self.select_anchor = (self.page_count > 0).then_some(self.current);
-            return !self.selected.is_empty();
+            return self.select_all_pages();
         }
         // Scrolling continuously, Select All takes the whole document's text (#2639); one page at
         // a time, the page shown.

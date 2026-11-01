@@ -1,5 +1,5 @@
 use super::marks::{MarkKind, matrix_number, n};
-use super::*;
+use super::{Dict, Document, EditError, ObjRef, Object, Stream, literal, win_ansi};
 
 pub(crate) fn page_list(doc: &Document) -> Vec<pdfcraft_model::Page> {
     pdfcraft_model::pages(doc)

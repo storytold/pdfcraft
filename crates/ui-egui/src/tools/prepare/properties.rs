@@ -1,6 +1,6 @@
 use super::draft::{FieldDraft, FieldTab};
 use super::tabs::{actions_tab, calculate_tab, format_tab, validate_tab};
-use super::*;
+use super::{BorderStyle, FieldFont, FormFieldKind, theme, widgets};
 
 /// A check box for a `/Ff` bit (`inverted`: checked when the bit is clear).
 fn flag_box(ui: &mut egui::Ui, flags: &mut u32, bit: u32, inverted: bool, label: &str) {
@@ -227,7 +227,10 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                 FormFieldKind::CheckBox | FormFieldKind::Radio => {
                     use pdfcraft_engine::field_flags as ff;
                     let on = d.on_state.clone();
-                    ui.label(crate::i18n::fmt(tl!("Export Value: {on}"), &[("on", &on)]));
+                    ui.horizontal(|ui| {
+                        let label = ui.label(tl!("Export value"));
+                        ui.text_edit_singleline(&mut d.export_value).labelled_by(label.id);
+                    });
                     let mut checked = !d.default.is_empty() && d.default == on;
                     let label =
                         if d.kind == FormFieldKind::CheckBox { tl!("Check box is checked by default") } else { tl!("Button is checked by default") };

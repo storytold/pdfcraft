@@ -1,7 +1,7 @@
 use super::globals::{event_object, install};
 use super::host::{Host, Shared, text};
 use super::model::{DocInfo, Event, FieldState, Limits, Outcome};
-use super::*;
+use super::{Arc, Attribute, BTreeSet, Context, HostHooks, JsNativeError, JsResult, JsString, Realm, RefCell, Source, js_string};
 
 /// Longest script, in bytes.
 pub(crate) const MAX_SCRIPT_BYTES: usize = 256 * 1024;

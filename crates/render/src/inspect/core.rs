@@ -1,7 +1,10 @@
 use super::annotations::MAX_LINK_ATTACHMENT_TEXT_BYTES;
 use super::model::{AttachmentSource, PageInfo, Xfa};
 use super::navigation::text_string;
-use super::*;
+use super::{
+    Arc, AssertUnwindSafe, DecryptionError, Dictionary, DocInfo, Document, HashMap, HashSet, LazyStructure, LoadOptions, LoadPdfError, Object,
+    ObjectId, OnceCell, OpenError, Pdf, Structure, catch_unwind,
+};
 
 /// lopdf decodes object and cross-reference streams while it loads, with no limit unless one is
 /// set: a few hundred bytes of nested FlateDecode then inflate to gigabytes. Real object and

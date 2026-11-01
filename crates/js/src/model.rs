@@ -115,6 +115,111 @@ pub struct DocInfo {
     pub xfa: bool,
 }
 
+/// The icon a script's message shows: `app.alert`'s `nIcon` and `xfa.host.messageBox`'s
+/// icon, numbered 0 to 3 in the JavaScript for Acrobat API Reference and the XFA
+/// specification alike.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MessageIcon {
+    /// 0, the default.
+    #[default]
+    Error,
+    /// 1.
+    Warning,
+    /// 2.
+    Question,
+    /// 3.
+    Status,
+}
+
+impl MessageIcon {
+    /// The icon numbered `code`; a missing, fractional or out-of-range number is the default.
+    pub fn from_code(code: Option<f64>) -> MessageIcon {
+        match whole_code(code) {
+            Some(1) => MessageIcon::Warning,
+            Some(2) => MessageIcon::Question,
+            Some(3) => MessageIcon::Status,
+            _ => MessageIcon::Error,
+        }
+    }
+
+    /// A stable name for tools and logs: `error`, `warning`, `question` or `status`.
+    pub fn name(self) -> &'static str {
+        match self {
+            MessageIcon::Error => "error",
+            MessageIcon::Warning => "warning",
+            MessageIcon::Question => "question",
+            MessageIcon::Status => "status",
+        }
+    }
+}
+
+/// The buttons a script's message offers: `app.alert`'s `nType` and `xfa.host.messageBox`'s
+/// buttons, numbered 0 to 3 in both references.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MessageButtons {
+    /// 0, the default.
+    #[default]
+    Ok,
+    /// 1.
+    OkCancel,
+    /// 2.
+    YesNo,
+    /// 3.
+    YesNoCancel,
+}
+
+impl MessageButtons {
+    /// The buttons numbered `code`; a missing, fractional or out-of-range number is the default.
+    pub fn from_code(code: Option<f64>) -> MessageButtons {
+        match whole_code(code) {
+            Some(1) => MessageButtons::OkCancel,
+            Some(2) => MessageButtons::YesNo,
+            Some(3) => MessageButtons::YesNoCancel,
+            _ => MessageButtons::Ok,
+        }
+    }
+
+    /// A stable name for tools and logs: `ok`, `ok_cancel`, `yes_no` or `yes_no_cancel`.
+    pub fn name(self) -> &'static str {
+        match self {
+            MessageButtons::Ok => "ok",
+            MessageButtons::OkCancel => "ok_cancel",
+            MessageButtons::YesNo => "yes_no",
+            MessageButtons::YesNoCancel => "yes_no_cancel",
+        }
+    }
+}
+
+/// `code` as one of the numbers 0 to 3 the references define, when it is exactly one.
+fn whole_code(code: Option<f64>) -> Option<u8> {
+    let c = code.filter(|c| c.is_finite() && c.fract() == 0.0 && (0.0..=3.0).contains(c))?;
+    // In 0..=3 and whole, so the cast is exact.
+    Some(c as u8)
+}
+
+/// A message a script showed (`app.alert`, `xfa.host.messageBox`), with the title, icon and
+/// buttons it asked for. Its text and title are cut to a message's length.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Message {
+    pub text: String,
+    /// The dialog's title, when the script gave one.
+    pub title: Option<String>,
+    pub icon: MessageIcon,
+    pub buttons: MessageButtons,
+}
+
+impl Message {
+    /// A message with only text: no title, the default icon and an OK button.
+    pub fn plain(text: impl Into<String>) -> Message {
+        Message { text: text.into(), ..Default::default() }
+    }
+
+    /// Bytes of text the message holds, charged to a run's budget.
+    pub(crate) fn bytes(&self) -> usize {
+        self.text.len().saturating_add(self.title.as_ref().map_or(0, String::len))
+    }
+}
+
 /// Something a script asked the viewer to do.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Request {
@@ -173,7 +278,8 @@ pub struct Outcome {
     pub change: String,
     /// Fields whose value or properties the script changed, as they are now.
     pub changed: Vec<FieldState>,
-    pub alerts: Vec<String>,
+    /// The messages the script showed, in order.
+    pub alerts: Vec<Message>,
     pub console: Vec<String>,
     pub requests: Vec<Request>,
     /// The script's error (syntax error, exception, or a limit reached), if it failed.
