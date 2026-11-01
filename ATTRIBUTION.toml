@@ -3311,6 +3311,17 @@ usage = "Signature validation tests (crates/sign/tests/it/pdf.rs): a signature P
 sha256 = "8b91c3b4e39c4a31717a0dd0685bd7d0468671df32aee5b9818d44dc72c2bc3c"
 
 [[asset]]
+path = "crates/redact/tests/data/cmyk.jpg"
+title = "16×16 CMYK JPEG that the standard decoder converts to RGB"
+author = "PdfCraft contributors"
+source = "Contributor-original: synthetic 16×16 four-component (CMYK) JPEG with an APP14 transform marker, generated for the redaction regression; no third-party content"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "image"
+usage = "DCT redaction test (crates/redact/src/tests.rs): a CMYK JPEG declared /DeviceRGB is removed, not cleared"
+sha256 = "ee688af975e1a9c1c445468887351bea1df2429049c43cdaac7a28aae00b6757"
+
+[[asset]]
 path = "assets/icons/clipboard-paste.svg"
 title = "Lucide icon \"clipboard-paste\""
 author = "Lucide Contributors (portions Cole Bemis, Feather)"
