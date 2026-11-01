@@ -128,6 +128,50 @@ fn a_mark_over_only_an_accent_removes_the_glyph_when_its_outline_is_known() {
     assert!(!c.contains("\\311") && c.contains("(E)"), "É removed, E kept: {c}");
 }
 
+/// Italic overhang (#5298): ink that runs past a glyph's advance is under the mark, so the glyph goes.
+/// The page's widths say 0.6 em; a mark that covers only what the outline draws beyond that removes
+/// the glyph, and a metrics-only box would keep it.
+#[test]
+fn a_mark_over_only_a_glyphs_overhang_removes_it_when_its_outline_is_known() {
+    const SCRIPT: &[u8] = include_bytes!("../../../assets/fonts/DancingScript.ttf");
+    let widths = format!("[{}]", vec!["600"; 224].join(" "));
+    let build = |body: &[u8]| {
+        pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+            stream("", body),
+            format!("<< /Type /Font /Subtype /TrueType /BaseFont /Script /Encoding /WinAnsiEncoding /FirstChar 32 /LastChar 255 /Widths {widths} /FontDescriptor 6 0 R >>").into_bytes(),
+            b"<< /Type /FontDescriptor /FontName /Script /Flags 32 /Ascent 969 /Descent -242 /FontFile2 7 0 R >>".to_vec(),
+            stream("", SCRIPT),
+        ])
+    };
+    let probe = build(b"BT /F1 24 Tf 10 100 Td (A) Tj ET");
+    let font = pdfcraft_model::pages(&probe)[0].dict.get(b"Resources").and_then(|r| probe.resolve(r).as_dict().cloned()).unwrap();
+    let font = font.get(b"Font").and_then(|f| probe.resolve(f).as_dict().cloned()).unwrap();
+    let font = probe.resolve(font.get(b"F1").unwrap()).as_dict().cloned().unwrap();
+    let metrics = pdfcraft_fonts::pdf::Metrics::from_dict(&probe, &font);
+    let ink = pdfcraft_fonts::pdf::GlyphInk::from_dict(&probe, &font, &metrics, &mut pdfcraft_cos::DecodeBudget::page()).unwrap();
+    // The letter whose outline runs furthest past the 0.6 em the page's widths give it.
+    let (letter, outline) = (b'A'..=b'z')
+        .filter(|c| c.is_ascii_alphabetic())
+        .filter_map(|c| match ink.ink(&metrics, u32::from(c)) {
+            pdfcraft_fonts::pdf::Ink::Box(b) => Some((c, b)),
+            _ => None,
+        })
+        .max_by(|a, b| a.1[2].total_cmp(&b.1[2]))
+        .expect("the script face has letters that draw");
+    assert!(outline[2] > 0.6 + 0.08, "{} overhangs its advance by under 2 pt at 24 pt: {outline:?}", char::from(letter));
+    let page = format!("BT /F1 24 Tf 10 100 Td ({}) Tj ET BT /F1 24 Tf 10 200 Td (E) Tj ET", char::from(letter));
+    let mut doc = build(page.as_bytes());
+    // Only the part of the outline beyond the advance, over the outline's own height.
+    mark(&mut doc, 0, &[[10.0 + 0.6 * 24.0 + 0.2, 100.0 + outline[1] * 24.0, 10.0 + outline[2] * 24.0, 100.0 + outline[3] * 24.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.glyphs, r.glyphs_beside_marks), (1, 0), "{r:?}");
+    let c = content(&doc, 0);
+    assert!(!c.contains(&format!("({})", char::from(letter))) && c.contains("(E)"), "the overhanging glyph is removed, the other line is kept: {c}");
+}
+
 /// A form's `/F1` is its own font. The page primes `/F1` = Inter; the form names `/F1` for a
 /// standard font with no program, so its "É" has no readable outline and must not be measured
 /// with Inter's: a mark over only the strip above one em keeps it, counted beside the mark.
