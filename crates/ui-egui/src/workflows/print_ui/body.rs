@@ -4,6 +4,11 @@ use super::{
     Subset, Tokens, pos2, print, printer_label, spool, still_looking, theme, vec2, widgets,
 };
 
+/// The narrowest the title is still worth cutting: an ellipsis and a couple of pixels at the title's
+/// font. Given less room than this, [`egui::Sides::truncate`] cannot cut any further and the label
+/// is painted back over the buttons, which is the defect of #5545; the title is left out instead.
+const TITLE_MIN_WIDTH: f32 = 16.0;
+
 /// The panel's own header: "Printer properties" on the left, Done and Reset on the right.
 ///
 /// The buttons take their room first, from the right (`shrink_left`), and the title gets what is
@@ -11,10 +16,16 @@ use super::{
 /// spill over it. Laid out the other way round, the label is placed first at its natural width and
 /// the buttons are painted back over it, which is what a translation of "Reset to printer
 /// defaults" long enough to fill the row did in Italian (#5545).
-fn driver_options_header(ui: &mut egui::Ui, show: &mut bool, can_reset: bool) -> (egui::Response, egui::Response) {
+///
+/// The title comes back as `None` when the row is too narrow for even an ellipsis, which a catalog
+/// whose two buttons nearly fill the row reaches (Bulgarian, Ukrainian, Spanish at about 450 px).
+fn driver_options_header(ui: &mut egui::Ui, show: &mut bool, can_reset: bool) -> (Option<egui::Response>, egui::Response) {
     egui::Sides::new().shrink_left().truncate().show(
         ui,
-        |ui| ui.add(egui::Label::new(egui::RichText::new(tl!("Printer properties")).font(theme::semibold(13.0)))),
+        |ui| {
+            let room = ui.available_width();
+            (room >= TITLE_MIN_WIDTH).then(|| ui.add(egui::Label::new(egui::RichText::new(tl!("Printer properties")).font(theme::semibold(13.0)))))
+        },
         |ui| {
             if ui.button(tl!("Done")).clicked() {
                 *show = false;
@@ -563,47 +574,109 @@ pub(crate) fn body(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::i18n::Lang;
 
-    /// The two rectangles the header puts in a row `width` wide, drawn in the app's own fonts.
-    fn header_at(lang: &str, width: f32) -> (egui::Rect, egui::Rect) {
-        crate::i18n::set_current(crate::i18n::Lang::from_code(lang).expect("a catalogued language"));
+    /// The row the settings column really gives the header: `body` sets it to 470 px, less the
+    /// frame's 10 px margins.
+    const PANEL_ROW: f32 = 450.0;
+
+    /// One frame of the header at `width`, drawn in the app's own fonts; with `hover`, the pointer
+    /// is parked on the title and the frames after the first are run so that a tooltip can come up.
+    /// Returns the title's rectangle (none when the title was left out), the reset button's, and
+    /// whether a tooltip layer is open.
+    fn header_frame(lang: &str, width: f32, hover: bool) -> (Option<egui::Rect>, egui::Rect, bool) {
+        crate::i18n::set_current(Lang::from_code(lang).expect("a catalogued language"));
         let ctx = egui::Context::default();
         ctx.set_fonts(theme::font_definitions());
+        // Without this the tooltip would need half a second of frames to show.
+        ctx.all_styles_mut(|style| style.interaction.tooltip_delay = 0.0);
         let row = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 400.0));
-        let rects = std::cell::Cell::new(None);
-        let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(row), ..Default::default() }, |ui| {
-            let mut show = true;
-            let (title, reset) = driver_options_header(ui, &mut show, true);
-            rects.set(Some((title.rect, reset.rect)));
-        });
-        // Nothing draws the frame, but epaint's deltas must be taken anyway.
-        output.textures_delta.clear();
-        crate::i18n::set_current(crate::i18n::Lang::EN);
-        rects.take().expect("the header is laid out")
+        let pointer = std::cell::Cell::new(None);
+        let seen = std::cell::Cell::new((None, egui::Rect::NOTHING));
+        for _ in 0..3 {
+            let mut input = egui::RawInput { screen_rect: Some(row), ..Default::default() };
+            if let Some(at) = hover.then(|| pointer.get()).flatten() {
+                input.events.push(egui::Event::PointerMoved(at));
+            }
+            let mut output = ctx.run_ui(input, |ui| {
+                let mut show = true;
+                let (title, reset) = driver_options_header(ui, &mut show, true);
+                let title = title.map(|title| title.rect);
+                pointer.set(title.map(|title| title.center()));
+                seen.set((title, reset.rect));
+            });
+            // Nothing draws the frame, but epaint's deltas must be taken anyway.
+            output.textures_delta.clear();
+        }
+        let tooltip = ctx.memory(|memory| memory.areas().visible_layer_ids().iter().any(|layer| layer.order == egui::Order::Tooltip));
+        crate::i18n::set_current(Lang::EN);
+        let (title, reset) = seen.get();
+        (title, reset, tooltip)
+    }
+
+    fn header_at(lang: &str, width: f32) -> (Option<egui::Rect>, egui::Rect) {
+        let (title, reset, _) = header_frame(lang, width, false);
+        (title, reset)
     }
 
     /// #5545: in a long locale the reset label is wider than the row, and it used to be painted
-    /// over the title. At every width the header keeps the two in separate rectangles.
-    ///
-    /// The settings column is a fixed 470 px wide (`body`), so this row is about 450 in the app;
-    /// the narrower widths add slack for a longer catalog, down to the point where the two buttons
-    /// alone fill the row (392 px with the Italian labels), which the fixed column never reaches.
+    /// over the title. Every catalogued language is checked at the row the panel really gives the
+    /// header, so the longest translation of "Reset to printer defaults" is covered by the run
+    /// rather than by a guess at which locale is the worst one.
     #[test]
-    fn the_reset_button_never_covers_the_title() {
-        for (lang, width) in [("en", 450.0), ("it", 450.0), ("it", 410.0), ("de", 450.0), ("en", 260.0)] {
-            let (title, reset) = header_at(lang, width);
-            assert!(!title.intersects(reset), "{lang} at {width}px: the title {title:?} is drawn on top of the reset button {reset:?}");
+    fn the_reset_button_never_covers_the_title_in_any_language() {
+        for lang in Lang::all() {
+            let (title, reset) = header_at(lang.code(), PANEL_ROW);
+            assert!(
+                title.is_none_or(|title| !title.intersects(reset)),
+                "{} at {PANEL_ROW}px: the title {title:?} is drawn on top of the reset button {reset:?}",
+                lang.code()
+            );
+            assert!(reset.right() <= PANEL_ROW, "{}: the reset button {reset:?} runs out of the row", lang.code());
         }
+    }
+
+    /// A row narrower than the buttons plus one ellipsis cannot be cut any further: the title is
+    /// left out instead of being painted back over the buttons. Bulgarian, Ukrainian and Spanish
+    /// are the catalogs that get there first, at the row's own width.
+    #[test]
+    fn a_row_without_room_for_a_title_leaves_it_out() {
+        for width in [449.0, 440.0, 400.0, 300.0] {
+            for lang in ["bg", "uk", "es", "it", "en"] {
+                let (title, reset) = header_at(lang, width);
+                assert!(
+                    title.is_none_or(|title| !title.intersects(reset)),
+                    "{lang} at {width}px: the title {title:?} is drawn on top of the reset button {reset:?}"
+                );
+            }
+        }
+        let (title, reset) = header_at("bg", 440.0);
+        assert!(title.is_none(), "the title is dropped, not squeezed to a sliver: {:?} next to {reset:?}", title);
     }
 
     /// The title is what gives way: it truncates in a narrow row while the buttons keep their
     /// size, and a wide row keeps it whole instead of cutting it for nothing.
     #[test]
     fn the_title_truncates_and_leaves_the_buttons_whole() {
-        let (wide_title, wide_reset) = header_at("en", 520.0);
-        let (narrow_title, narrow_reset) = header_at("en", 260.0);
+        let (wide_title, wide_reset) = header_at("en", 620.0);
+        let (narrow_title, narrow_reset) = header_at("en", 300.0);
+        let (wide_title, narrow_title) = (wide_title.expect("the wide row keeps the title"), narrow_title.expect("the narrow row keeps a title"));
         assert!(narrow_title.width() < wide_title.width(), "the title shrinks in a narrow row");
         assert_eq!(narrow_reset.width(), wide_reset.width(), "the buttons keep their size");
-        assert!(narrow_reset.right() <= 261.0, "the reset button stays inside the row");
+        assert!(narrow_reset.right() <= 301.0, "the reset button stays inside the row");
+    }
+
+    /// The cut title stays reachable: hovering it shows the full string in a tooltip (egui's
+    /// `Label` does that by itself when it elides), and a title that fits whole shows none.
+    #[test]
+    fn the_truncated_title_is_reachable_through_a_tooltip() {
+        let (whole, _, _) = header_frame("it", 620.0, false);
+        let whole = whole.expect("a wide row keeps the title");
+        let (cut, _, tooltip) = header_frame("it", PANEL_ROW, true);
+        let cut = cut.expect("the Italian title is elided, not dropped");
+        assert!(cut.width() < whole.width(), "the Italian title is cut at {PANEL_ROW}px: {} of {}", cut.width(), whole.width());
+        assert!(tooltip, "hovering the elided title opens a tooltip with the full string");
+        let (_, _, tooltip) = header_frame("en", 620.0, true);
+        assert!(!tooltip, "a title that fits whole needs no tooltip");
     }
 }
