@@ -128,7 +128,7 @@ claude mcp add pdfcraft -- pdfcraft-cli mcp --root <dir>
 1. Add the engine capability first, with its tests (the tool is a thin adapter).
 2. Add a `ToolDef` in `src/tools.rs`: a precise description, the schema, `ro()`/`destructive()`, and `cmd()` if a registry command exists.
 3. Handle it in `Automation::call`, validating pages and positions with the existing helpers.
-4. Add an end-to-end test in `tests/it/automation.rs`. `tool_table_is_well_formed` checks names, schemas and command links.
+4. Add an end-to-end test in `tests/it/automation.rs`. `tool_table_is_well_formed` checks names, schemas and command links, which only proves the tool is registered. Call the tool on a synthetic fixture and assert the outcome it promises: the text, the page count, the bitmap size, the byte size, or a capped count. A later edit can keep the name and the schema while returning the wrong result; that assertion is what fails. For a bug, revert the fix and watch it fail. Do not assert CPU percent: it depends on the core count and the load, so it cannot pin the behaviour. When the bug is the cost, assert the size of the work (pixels, bytes, or pages) instead.
 
 
 ## Moving several page objects
