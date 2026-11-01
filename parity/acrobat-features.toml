@@ -1430,7 +1430,7 @@ milestone = "M3"
 status = "shipped"
 commands = ["edit.find"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/viewer.rs::view_history_select_all_and_find_options", "crates/render/src/text.rs::whole_words_ignore_neighbours_in_scripts_written_without_spaces"]
+evidence = ["crates/ui-egui/tests/it/viewer.rs::view_history_select_all_and_find_options", "crates/render/src/text/tests.rs::whole_words_ignore_neighbours_in_scripts_written_without_spaces", "crates/render/tests/it/search.rs::whole_words_follow_the_unicode_blocks_of_unspaced_scripts"]
 notes = "whole words only, case-sensitive. Whole words: a neighbouring letter bounds the match only in a script that writes spaces between words; next to Han, kana, bopomofo, Thai, Lao, Myanmar, Khmer or Tibetan letters the match stands, so 台北 is found in 台北市 as in Acrobat"
 
 [[feature]]
