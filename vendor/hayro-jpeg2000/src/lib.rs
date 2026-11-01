@@ -490,12 +490,20 @@ fn interleave_and_convert(image: &mut DecodedImage<'_>, buf: &mut [u8]) {
         for sample in 0..max_len {
             for channel in components.iter() {
                 *output_iter.next().unwrap() = math::round_f32(
-                    (channel.container[sample] / ((1_u32 << channel.bit_depth) - 1) as f32)
-                        * mul_factor,
+                    (channel.container[sample] / max_sample(channel.bit_depth)) * mul_factor,
                 ) as u8;
             }
         }
     }
+}
+
+// PdfCraft patch (3).
+/// The largest sample of `bit_depth` bits, `2^bit_depth - 1`. Computed in 64 bits: a palette
+/// column holds up to 38 (ISO 15444-1 I.5.3.4), and `1_u32 << bit_depth` overflowed from 32. For
+/// up to 30 bits the result is the `f32` the 32-bit shifts gave.
+fn max_sample(bit_depth: u8) -> f32 {
+    // Depths come from the codestream (at most 31) and the palette (at most 38).
+    ((1_u64 << u32::from(bit_depth).min(63)) - 1) as f32
 }
 
 fn convert_color_space(image: &mut DecodedImage<'_>, bit_depth: u8) -> Result<()> {
@@ -656,30 +664,33 @@ fn cielab_to_rgb<S: Simd>(
     // PdfCraft patch (2): the b* range, not the a* range (as upstream has since fixed).
     let rb = lab.rb.unwrap_or(200);
     let ol = lab.ol.unwrap_or(0);
-    let oa = lab.oa.unwrap_or(1 << (bit_depth - 1));
-    let ob = lab
-        .ob
-        .unwrap_or((1 << (bit_depth - 2)) + (1 << (bit_depth - 3)));
+    // PdfCraft patch (3): the default offsets and every `2^bits - 1` below in 64 bits, for the
+    // palette columns of up to 38 bits (`bit_depth` is at least 4, checked above).
+    let oa = lab.oa.map_or(1_u64 << (bit_depth - 1), u64::from);
+    let ob = lab.ob.map_or(
+        (1_u64 << (bit_depth - 2)) + (1_u64 << (bit_depth - 3)),
+        u64::from,
+    );
 
     // Copied from OpenJPEG.
-    let min_l = -(rl as f32 * ol as f32) / ((1 << prec0) - 1) as f32;
+    let min_l = -(rl as f32 * ol as f32) / max_sample(prec0);
     let max_l = min_l + rl as f32;
-    let min_a = -(ra as f32 * oa as f32) / ((1 << prec1) - 1) as f32;
+    let min_a = -(ra as f32 * oa as f32) / max_sample(prec1);
     let max_a = min_a + ra as f32;
-    let min_b = -(rb as f32 * ob as f32) / ((1 << prec2) - 1) as f32;
+    let min_b = -(rb as f32 * ob as f32) / max_sample(prec2);
     let max_b = min_b + rb as f32;
 
-    let bit_max = (1_u32 << bit_depth) - 1;
+    let bit_max = max_sample(bit_depth);
 
     // Note that we are not doing the actual conversion with the ICC profile yet,
     // just decoding the raw LAB values.
     // We leave applying the ICC profile to the user.
-    let divisor_l = ((1 << prec0) - 1) as f32;
-    let divisor_a = ((1 << prec1) - 1) as f32;
-    let divisor_b = ((1 << prec2) - 1) as f32;
+    let divisor_l = max_sample(prec0);
+    let divisor_a = max_sample(prec1);
+    let divisor_b = max_sample(prec2);
 
-    let scale_l_final = bit_max as f32 / 100.0;
-    let scale_ab_final = bit_max as f32 / 255.0;
+    let scale_l_final = bit_max / 100.0;
+    let scale_ab_final = bit_max / 255.0;
 
     let l_offset = min_l * scale_l_final;
     let l_scale = (max_l - min_l) / divisor_l * scale_l_final;
@@ -718,8 +729,9 @@ fn cielab_to_rgb<S: Simd>(
 
 #[inline(always)]
 fn sycc_to_rgb<S: Simd>(simd: S, components: &mut [ComponentData], bit_depth: u8) -> Result<()> {
-    let offset = (1_u32 << (bit_depth as u32 - 1)) as f32;
-    let max_value = ((1_u32 << bit_depth as u32) - 1) as f32;
+    // PdfCraft patch (3): in 64 bits, for palette columns of up to 38 bits.
+    let offset = (1_u64 << u32::from(bit_depth).saturating_sub(1).min(63)) as f32;
+    let max_value = max_sample(bit_depth);
 
     let (head, _) = components
         .split_at_mut_checked(3)

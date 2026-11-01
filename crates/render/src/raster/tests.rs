@@ -2934,27 +2934,43 @@ fn a_jp2_cielab_image_reads_its_b_range() {
     assert_eq!(decode(&defaults), decode(&[]));
 }
 
-/// hayro-jpeg2000 patch (3): a palette column deeper than the 31 bits the decoder handles (ISO
-/// 15444-1 allows 38, the descriptor can say 128) makes the palette box invalid, and the lenient
-/// decode sets an invalid palette aside, drawing the indices as they are (here the midpoint, 128).
-/// It overflowed the shift that rescales the colours to 8 bits, which panicked in debug builds.
-/// A 31-bit column is still applied.
+/// hayro-jpeg2000 patch (3): palette columns of up to 38 bits (ISO 15444-1 I.5.3.4) are applied
+/// through every conversion a palette's depth reaches: the rescale to 8 bits (greyscale, sRGB),
+/// sYCC and CIELab. Each column holds the same fraction of its full scale at every depth, so every
+/// depth decodes as 8 bits does. From 32 bits the 32-bit shifts overflowed, which panicked in debug
+/// builds. A deeper column (the descriptor can say 128) makes the box invalid, and the lenient
+/// decode sets it aside, drawing the indices as they are: the midpoint, 128, in one grey channel.
 #[test]
-fn a_jp2_palette_deeper_than_31_bits_is_set_aside() {
-    let decode = |bits: u8| {
+fn a_jp2_palette_of_up_to_38_bits_is_applied() {
+    const FRACTIONS: [f64; 3] = [200.0 / 255.0, 90.0 / 255.0, 160.0 / 255.0];
+    let decode = |enumerated: u32, columns: u8, bits: u8| {
         let bytes = usize::from(bits).div_ceil(8);
-        // 256 entries, all the column's largest value, so index 128 (the midpoint) is full scale.
         let max = u128::MAX >> (128 - u32::from(bits));
-        let entry = &max.to_be_bytes()[16 - bytes..];
-        let pclr = [&[1, 0, 1, bits - 1][..], &entry.repeat(256)].concat();
-        let colr = [&[1, 0, 0][..], &17_u32.to_be_bytes()].concat(); // greyscale
-        let cmap = vec![0, 0, 1, 0]; // channel 0 from component 0 through palette column 0
+        // One entry: each column's fraction of the column's full scale, in `bytes` bytes.
+        let entry = FRACTIONS[..usize::from(columns)]
+            .iter()
+            .flat_map(|fraction| ((max as f64 * fraction).round() as u128).to_be_bytes()[16 - bytes..].to_vec())
+            .collect::<Vec<_>>();
+        // 256 equal entries, so the midpoint index (128) picks one.
+        let pclr = [&[1, 0, columns][..], &vec![bits - 1; usize::from(columns)], &entry.repeat(256)].concat();
+        // Channel c from component 0 through palette column c.
+        let cmap = (0..columns).flat_map(|column| [0, 0, 1, column]).collect();
+        let colr = [&[1, 0, 0][..], &enumerated.to_be_bytes()].concat();
         let jp2 = midpoint_jp2(1, &[(b"colr", colr), (b"pclr", pclr), (b"cmap", cmap)]);
         hayro_jpeg2000::Image::new(&jp2, &hayro_jpeg2000::DecodeSettings::default()).and_then(|image| image.decode())
     };
-    assert_eq!(decode(31).unwrap(), vec![255]);
-    for bits in [32, 33, 38, 128] {
-        assert_eq!(decode(bits).unwrap(), vec![128], "a {bits}-bit palette column was applied");
+    // Greyscale, sRGB, sYCC, CIELab.
+    for (enumerated, columns) in [(17, 1), (16, 3), (18, 3), (14, 3)] {
+        let eight = decode(enumerated, columns, 8).unwrap();
+        assert_eq!(eight.len(), usize::from(columns), "colour space {enumerated} at 8 bits: {eight:?}");
+        for bits in [31, 32, 33, 38] {
+            let deep = decode(enumerated, columns, bits).unwrap_or_else(|e| panic!("colour space {enumerated}, {bits} bits: {e:?}"));
+            let close = deep.len() == eight.len() && deep.iter().zip(&eight).all(|(a, b)| a.abs_diff(*b) <= 1);
+            assert!(close, "colour space {enumerated}, {bits} bits: {deep:?}, at 8 bits {eight:?}");
+        }
+    }
+    for bits in [39, 128] {
+        assert_eq!(decode(17, 1, bits).unwrap(), vec![128], "a {bits}-bit palette column was applied");
     }
 }
 

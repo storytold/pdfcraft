@@ -7,8 +7,8 @@ use crate::jp2::ImageBoxes;
 use crate::reader::BitReader;
 
 // PdfCraft patch (3).
-/// The deepest palette column decoded, as deep as a codestream component.
-const MAX_BIT_DEPTH: u8 = 31;
+/// The deepest palette column, as ISO 15444-1 I.5.3.4 allows.
+const MAX_BIT_DEPTH: u8 = 38;
 
 pub(crate) fn parse(boxes: &mut ImageBoxes, data: &[u8]) -> Result<()> {
     let mut reader = BitReader::new(data);
@@ -31,11 +31,10 @@ pub(crate) fn parse(boxes: &mut ImageBoxes, data: &[u8]) -> Result<()> {
             bail!(FormatError::InvalidBox);
         }
 
-        // PdfCraft patch (3): ISO 15444-1 I.5.3.4 allows columns of 1 to 38 bits, and the
-        // descriptor can say 128. Like the codestream's components (`BITPLANE_BIT_SIZE`), this
-        // decoder handles at most 31: a deeper column overflowed the shifts that rescale its
-        // colours (`1_u32 << bit_depth`), which panicked in debug builds. The box is invalid
-        // then, and a lenient decode sets it aside as it does any invalid palette box.
+        // PdfCraft patch (3): ISO 15444-1 I.5.3.4 allows columns of 1 to 38 bits, which the
+        // colour conversions take in 64 bits (`max_sample`), but the descriptor can say 128.
+        // A deeper column makes the box invalid, and a lenient decode sets it aside as it does
+        // any invalid palette box.
         if bit_depth > MAX_BIT_DEPTH {
             bail!(FormatError::InvalidBox);
         }
