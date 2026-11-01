@@ -1,6 +1,8 @@
 use super::fallback::{same_font, same_paint};
 use super::interp::{Carry, Origin, Pen, Shown, TextState, Ts, direction, interpret, to_frame, union};
-use super::{DecodeBudget, Dict, Document, EditError, HashMap, Matrix, Object, Op, Pieces, Stream, TextLine, parse, serialize_ops};
+use super::{
+    DecodeBudget, Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, Pieces, Stream, TextBlock, TextLine, parse, serialize_ops,
+};
 
 impl TextLine {
     /// The baseline's height in user space.
@@ -180,22 +182,30 @@ fn fill_color(fill: &[Op]) -> [f64; 3] {
 
 /// The lines of text on a page (0-based), in content order.
 pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditError> {
-    text_lines_in(doc, &page_dict(doc, page)?, true)
+    text_lines_in(doc, &page_dict(doc, page)?, true, false).map(|(lines, _)| lines)
 }
 
-/// The lines `page`'s glyphs show, in content order, without `/ActualText` replacements: what the
-/// page draws, not what its marked-content metadata says the glyphs mean. For checks that must
-/// not trust that metadata (the redaction audit). Takes the page itself, so a caller going
-/// through every page doesn't walk the page tree again for each.
+/// Private state runs refine each public line, never its public index or paragraph membership.
+pub(super) fn text_lines_with_runs(doc: &Document, page: usize, keep_runs: bool) -> Result<(Vec<TextLine>, Vec<Vec<TextLine>>), EditError> {
+    text_lines_in(doc, &page_dict(doc, page)?, true, keep_runs)
+}
+
+/// The page's drawn glyphs without ActualText replacements, for redaction auditing.
 pub fn glyph_text_lines(doc: &Document, page: &pdfcraft_model::Page) -> Result<Vec<TextLine>, EditError> {
-    text_lines_in(doc, page, false)
+    text_lines_in(doc, page, false, false).map(|(lines, _)| lines)
 }
 
-/// [`text_lines`] of `p`; with `actual_text`, `/ActualText` replaces the glyphs it spans.
-fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) -> Result<Vec<TextLine>, EditError> {
+fn text_lines_in(
+    doc: &Document,
+    p: &pdfcraft_model::Page,
+    actual_text: bool,
+    keep_runs: bool,
+) -> Result<(Vec<TextLine>, Vec<Vec<TextLine>>), EditError> {
     let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut cache = HashMap::new();
     let mut lines: Vec<TextLine> = Vec::new();
+    let mut runs: Vec<Vec<TextLine>> = Vec::new();
+    let mut run_last = None;
     let mut carry = Carry::new();
     // The streams are one stream in pieces (§7.8.2), split between any two tokens: parse them
     // joined, so an operator whose operands end one piece still has them.
@@ -236,6 +246,15 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
                 // only across a word space, not across a table cell or a tab stop.
                 && (s.state.render_mode != 3 || gap < pen.size * 0.6)
         });
+        if keep_runs {
+            if !joins {
+                runs.push(Vec::new());
+                run_last = None;
+            }
+            if let Some(parts) = runs.last_mut() {
+                add_shown(parts, &mut run_last, &s, si, true);
+            }
+        }
         if joins && let Some(l) = lines.last_mut() {
             let gap = last.map_or(0.0, |(_, pen)| pen.continues(&s, 0.0).1);
             let spaced = gap - s.tracking > l.size * s.state.scale.abs() * 0.2 && !l.text.ends_with(' ') && !s.text.starts_with(' ');
@@ -253,6 +272,8 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
             l.visual_order |= s.visual_order;
             l.actual_text |= s.actual_text;
             l.clips |= s.state.render_mode >= 4;
+            l.positioned |= !sequential_show(last.map(|(_, pen)| pen), &s);
+            l.mixed_appearance |= l.origin.state.render_mode != s.state.render_mode || l.origin.state.rise != s.state.rise;
             if l.unreadable_mode.is_none() {
                 l.unreadable_mode = s.state.unreadable.as_deref().map(str::to_owned);
             }
@@ -278,6 +299,8 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
                 logical_order: s.logical_order,
                 actual_text: s.actual_text,
                 clips: s.state.render_mode >= 4,
+                positioned: false,
+                mixed_appearance: false,
                 unreadable_mode: s.state.unreadable.as_deref().map(str::to_owned),
                 runs: vec![(s.text.clone(), s.ink.len(), false)],
                 soft_break: s.soft_break,
@@ -300,7 +323,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
         last = Some((si, Pen::after(&s)));
     }
     // Content streams draw right-to-left lines in visual order; the editor works in typing order.
-    for l in lines.iter_mut().filter(|l| !l.logical_order) {
+    for l in lines.iter_mut().chain(runs.iter_mut().flatten()).filter(|l| !l.logical_order) {
         // A visual-order Indic font draws pre-base vowel signs before their consonant.
         let shown = l.text.clone();
         if l.visual_order && !l.actual_text {
@@ -313,8 +336,455 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
         }
     }
     // Lines of only spaces aren't editable text.
-    lines.retain(|l| !l.text.trim().is_empty());
-    Ok(lines)
+    if keep_runs {
+        Ok(lines.into_iter().zip(runs).filter(|(line, _)| !line.text.trim().is_empty()).unzip())
+    } else {
+        lines.retain(|l| !l.text.trim().is_empty());
+        Ok((lines, runs))
+    }
+}
+
+/// Only allow arithmetic roundoff when checking whether shows use sequential pen positions.
+fn sequential_show(last: Option<Pen>, shown: &Shown) -> bool {
+    let Some(last) = last else { return true };
+    let (_, start, _, across) = shown.span();
+    let same = |a: f64, b: f64| a.is_finite() && b.is_finite() && (a - b).abs() <= f64::EPSILON * 8.0 * a.abs().max(b.abs()).max(1.0);
+    same(last.end, start) && same(last.across, across)
+}
+
+/// One public line as an editor row, without selecting its neighbouring paragraph lines.
+pub(super) fn single_line_block(line: &TextLine, index: usize) -> TextBlock {
+    TextBlock {
+        text: line.text.clone(),
+        editor_text: line.text.clone(),
+        reflow_text: line.text.clone(),
+        rect: line.rect,
+        base_font: line.base_font.clone(),
+        size: line.size,
+        bold: line.bold,
+        italic: line.italic,
+        color: line.color,
+        rotation: line.rotation(),
+        lines: vec![index],
+        rows: vec![vec![index]],
+        spans: vec![(0..line.text.len(), index)],
+        invisible: line.origin.state.render_mode == 3,
+    }
+}
+
+/// A separate paragraph text object cannot preserve an unselected show that relies on the
+/// selected show's advance. Absolute/line positioning ends that dependency; a line splice
+/// does not need this restriction because it retains the original text matrix.
+pub(super) fn refuse_dependent_following_text(doc: &Document, page: usize, dropped: &std::collections::HashSet<usize>) -> Result<(), EditError> {
+    let page = page_dict(doc, page)?;
+    let pieces = Pieces::join(&content_streams(doc, &page.dict)?.into_iter().map(|(_, data)| data).collect::<Vec<_>>());
+    let mut dependent = false;
+    for (index, op) in pieces.parse().ops.iter().enumerate() {
+        if matches!(op.op.as_slice(), b"BT" | b"ET" | b"Tm" | b"Td" | b"TD" | b"T*" | b"'" | b"\"") {
+            dependent = false;
+        }
+        if dropped.contains(&index) {
+            dependent = true;
+        } else if dependent && matches!(op.op.as_slice(), b"Tj" | b"TJ") {
+            return Err(EditError::Invalid(
+                "mixed text spacing cannot be rewritten without moving following text; the document was not changed".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Sparse, retained TJ displacements in page points. Internal boundaries are emitted after
+/// their left glyph, never as an indent on a newly wrapped row. Only source start sentinels
+/// are emitted before a glyph. Numeric-only source operators are consumed exactly once.
+#[derive(Clone, Default)]
+pub(super) struct TextPositioning {
+    pub(super) source: bool,
+    pub(super) ends: std::collections::HashSet<usize>,
+    pub(super) before: std::collections::BTreeMap<usize, Vec<f64>>,
+    pub(super) after: std::collections::BTreeMap<usize, Vec<f64>>,
+    pub(super) drops: std::collections::HashSet<usize>,
+}
+
+impl TextPositioning {
+    pub(super) fn is_empty(&self) -> bool {
+        self.before.is_empty() && self.after.is_empty()
+    }
+
+    pub(super) fn internal_after(&self, byte: usize, ch: char) -> f64 {
+        let end = byte.saturating_add(ch.len_utf8());
+        if self.ends.contains(&end) { 0.0 } else { self.after.get(&end).into_iter().flatten().sum() }
+    }
+
+    pub(super) fn advance(&self, byte: usize, ch: char) -> f64 {
+        self.before.get(&byte).into_iter().flatten().chain(self.after.get(&byte.saturating_add(ch.len_utf8())).into_iter().flatten()).sum()
+    }
+}
+
+pub(super) struct SpacingExpansion {
+    pub(super) lines: Vec<TextLine>,
+    pub(super) block: TextBlock,
+    pub(super) positioning: TextPositioning,
+}
+
+/// Decode only selected sequential-horizontal TJ programs. Unicode must round-trip to the
+/// original code bytes: a second code for the same character may have a different width.
+/// State at each numeric operand matters, including numeric-only TJ between state changes.
+fn text_positioning(
+    doc: &Document,
+    fonts: &Dict,
+    ops: &[Op],
+    lines: &[TextLine],
+    runs: &[Vec<TextLine>],
+    block: &TextBlock,
+    draft: &str,
+) -> Result<(TextPositioning, std::collections::HashSet<usize>), EditError> {
+    let invalid = || EditError::Invalid("the source TJ positioning cannot be mapped safely; the document was not changed".into());
+    let mut source = Vec::new();
+    let mut positioned = std::collections::HashSet::new();
+    let mut result = TextPositioning::default();
+    let mut count = 0_usize;
+    for (range, index) in &block.spans {
+        let line = lines.get(*index).ok_or_else(invalid)?;
+        let first = line.ops.iter().min().copied().ok_or_else(invalid)?;
+        let last = line.ops.iter().max().copied().ok_or_else(invalid)?;
+        let interval = ops.get(first..=last).ok_or_else(invalid)?;
+        if !interval.iter().any(|op| {
+            op.is("TJ")
+                && op.operands.last().and_then(Object::as_array).is_some_and(|values| values.iter().any(|v| v.as_f64().is_some_and(|n| n != 0.0)))
+        }) {
+            continue;
+        }
+        let font = fonts.get(line.font.as_bytes()).and_then(|f| doc.dict(f)).ok_or_else(invalid)?;
+        let metrics = Metrics::from_dict(doc, &font);
+        let mut state = line.origin.state.clone();
+        let size = state.font.as_ref().map(|(_, size)| *size).ok_or_else(invalid)?;
+        let matrix = Matrix(line.origin.tm).then(&Matrix(line.origin.ctm));
+        let across = matrix.0[0].hypot(matrix.0[1]);
+        let states: HashMap<_, _> =
+            runs.get(*index).ok_or_else(invalid)?.iter().flat_map(|part| part.ops.iter().map(move |op| (*op, &part.origin.state))).collect();
+        let mut decoded = String::new();
+        let mut advance = 0.0;
+        let mut gaps: std::collections::BTreeMap<usize, Vec<f64>> = std::collections::BTreeMap::new();
+        for (offset, op) in interval.iter().enumerate() {
+            let at = first.checked_add(offset).ok_or_else(invalid)?;
+            match op.op.as_slice() {
+                b"Tc" => state.char_spacing = op.num(0).ok_or_else(invalid)?,
+                b"Tw" => state.word_spacing = op.num(0).ok_or_else(invalid)?,
+                b"Tz" => state.scale = op.num(0).ok_or_else(invalid)? / 100.0,
+                b"Tf" => {
+                    if op.name(0) != Some(line.font.as_bytes()) || op.num(1) != Some(size) {
+                        return Err(invalid());
+                    }
+                }
+                b"Tj" | b"TJ" | b"'" | b"\"" => {
+                    if at != first && matches!(op.op.as_slice(), b"'" | b"\"") {
+                        return Err(invalid());
+                    }
+                    let pieces = if op.is("TJ") {
+                        op.operands.last().and_then(Object::as_array).ok_or_else(invalid)?.as_slice()
+                    } else {
+                        std::slice::from_ref(op.operands.last().ok_or_else(invalid)?)
+                    };
+                    if let Some(original) = states.get(&at) {
+                        if state.char_spacing != original.char_spacing || state.word_spacing != original.word_spacing || state.scale != original.scale
+                        {
+                            return Err(invalid());
+                        }
+                    } else if pieces.iter().any(|v| matches!(v, Object::String(s) if !s.bytes.is_empty())) {
+                        return Err(invalid());
+                    } else {
+                        result.drops.insert(at);
+                    }
+                    for piece in pieces {
+                        if let Object::String(string) = piece {
+                            let mut byte = 0_usize;
+                            for (code, len) in metrics.codes(&string.bytes) {
+                                let end = byte.checked_add(len).ok_or_else(invalid)?;
+                                let raw = string.bytes.get(byte..end).ok_or_else(invalid)?;
+                                let text = metrics.text_of(code).ok_or_else(invalid)?;
+                                if text.chars().count() != 1 || metrics.encode(&text).as_deref() != Some(raw) {
+                                    return Err(invalid());
+                                }
+                                advance += (metrics.width(code) * size
+                                    + state.char_spacing
+                                    + if metrics.is_space(code, len) { state.word_spacing } else { 0.0 })
+                                    * state.scale
+                                    * across;
+                                if !advance.is_finite() {
+                                    return Err(invalid());
+                                }
+                                decoded.push_str(&text);
+                                if decoded.len() > 4_000_000 {
+                                    return Err(invalid());
+                                }
+                                byte = end;
+                            }
+                            if byte != string.bytes.len() {
+                                return Err(invalid());
+                            }
+                        } else {
+                            let number = piece.as_f64().ok_or_else(invalid)?;
+                            let gap = -number / 1000.0 * size * state.scale * across;
+                            if !number.is_finite() || !gap.is_finite() || !state.scale.is_finite() || state.scale <= 0.0 {
+                                return Err(invalid());
+                            }
+                            advance += gap;
+                            if !advance.is_finite() {
+                                return Err(invalid());
+                            }
+                            if number != 0.0 {
+                                count = count.checked_add(1).filter(|n| *n <= 100_000).ok_or_else(invalid)?;
+                                gaps.entry(range.start.checked_add(decoded.len()).ok_or_else(invalid)?).or_default().push(gap);
+                            }
+                        }
+                    }
+                }
+                // These do not move the text matrix. All explicit positioning, graphics
+                // transforms/restores and unknown operators remain outside this bounded path.
+                b"TL" | b"Tr" | b"Ts" | b"g" | b"rg" | b"k" | b"cs" | b"sc" | b"scn" | b"BMC" | b"BDC" | b"EMC" | b"MP" | b"DP" => {}
+                _ => return Err(invalid()),
+            }
+        }
+        if decoded != line.text || block.editor_text.get(range.clone()) != Some(decoded.as_str()) {
+            return Err(invalid());
+        }
+        // Large positive offsets between letters are inferred tracking/word gaps, whose
+        // extraction changes when the retained neighbour count changes. Do not normalize them.
+        let minimum_em = states.values().map(|s| size * s.scale * across).fold(f64::INFINITY, f64::min);
+        for (at, values) in &gaps {
+            let local = at.checked_sub(range.start).ok_or_else(invalid)?;
+            let left = decoded.get(..local).and_then(|s| s.chars().next_back());
+            let right = decoded.get(local..).and_then(|s| s.chars().next());
+            if left.is_some_and(|c| !c.is_whitespace())
+                && right.is_some_and(|c| !c.is_whitespace())
+                && values.iter().any(|gap| *gap > minimum_em * 0.2)
+            {
+                return Err(invalid());
+            }
+        }
+        result.source = true;
+        positioned.insert(*index);
+        for (at, values) in gaps {
+            source.push((range.clone(), at, values));
+        }
+    }
+    if source.is_empty() {
+        return Ok((result, positioned));
+    }
+    let mapping = block.edited_char_sources(draft);
+    let new: Vec<_> = draft.char_indices().collect();
+    let wanted: std::collections::HashSet<_> = source
+        .iter()
+        .flat_map(|(range, at, _)| {
+            [(*at < range.end).then_some(*at), block.editor_text.get(range.start..*at).and_then(|s| s.chars().next_back()).map(|c| at - c.len_utf8())]
+        })
+        .flatten()
+        .collect();
+    let retained: HashMap<_, _> =
+        mapping.iter().enumerate().filter_map(|(i, (_, old))| old.filter(|old| wanted.contains(old)).map(|old| (old, i))).collect();
+    for (range, at, values) in source {
+        let left = block.editor_text.get(range.start..at).and_then(|s| s.chars().next_back()).map(|c| at - c.len_utf8());
+        let right = (at < range.end).then_some(at);
+        let boundary = match (left, right) {
+            (Some(left), Some(right)) => retained
+                .get(&left)
+                .zip(retained.get(&right))
+                .filter(|(a, b)| a.checked_add(1) == Some(**b))
+                .and_then(|(_, b)| new.get(*b).map(|(byte, _)| *byte)),
+            (None, Some(right)) => retained
+                .get(&right)
+                .filter(|i| **i == 0 || i.checked_sub(1).and_then(|n| mapping.get(n)).and_then(|(_, old)| *old).is_some_and(|old| old < range.start))
+                .and_then(|i| new.get(*i).map(|(byte, _)| *byte)),
+            (Some(left), None) => retained
+                .get(&left)
+                .filter(|i| {
+                    i.checked_add(1) == Some(mapping.len())
+                        || i.checked_add(1).and_then(|n| mapping.get(n)).and_then(|(_, old)| *old).is_some_and(|old| old >= range.end)
+                })
+                .and_then(|i| new.get(*i).map(|(byte, ch)| byte.saturating_add(ch.len_utf8()))),
+            _ => None,
+        };
+        if let Some(byte) = boundary {
+            if right.is_none() {
+                result.ends.insert(byte);
+            }
+            let target = if left.is_none() { &mut result.before } else { &mut result.after };
+            target.entry(byte).or_default().extend(values);
+        }
+    }
+    Ok((result, positioned))
+}
+
+/// Refine selected public rows, preserving their exact text, boundaries and source operators.
+/// Unselected page lines remain available to the existing coincidence/clipping checks.
+pub(super) fn expand_spacing_runs(
+    doc: &Document,
+    page: usize,
+    lines: &[TextLine],
+    runs: &[Vec<TextLine>],
+    block: &TextBlock,
+    draft: &str,
+    paragraph: bool,
+) -> Result<Option<SpacingExpansion>, EditError> {
+    if !block.lines.iter().any(|i| runs.get(*i).is_some_and(|parts| parts.len() > 1)) {
+        return Ok(None);
+    }
+    let invalid = || EditError::Invalid("mixed text spacing cannot be mapped safely to this text; the document was not changed".into());
+    if draft.len() > 4_000_000
+        || block.editor_text.len() > 4_000_000
+        || draft.chars().any(crate::bidi::is_rtl)
+        || pdfcraft_fonts::source_shaping::required(draft)
+    {
+        return Err(invalid());
+    }
+    // Exact TJ boundaries are retained separately from style inheritance. Explicit matrix
+    // positioning remains unsupported, even when it has the same net advance.
+    let page_dict = page_dict(doc, page)?;
+    let pieces = Pieces::join(&content_streams(doc, &page_dict.dict)?.into_iter().map(|(_, data)| data).collect::<Vec<_>>());
+    let ops = pieces.parse().ops;
+    let resources = page_dict.dict.get(b"Resources").and_then(|r| doc.dict(r)).unwrap_or_default();
+    let fonts = resources.get(b"Font").and_then(|f| doc.dict(f)).unwrap_or_default();
+    let (positioning, positioned) = text_positioning(doc, &fonts, &ops, lines, runs, block, draft)?;
+    // Adjacent public font/color runs are not row-edge sentinels. Preserve their established
+    // writer until source-glyph identity across those separate semantic lines is supported.
+    if block.rows.iter().any(|row| row.len() > 1 && row.iter().any(|index| positioned.contains(index))) {
+        return Err(invalid());
+    }
+    for index in &block.lines {
+        let line = lines.get(*index).ok_or_else(invalid)?;
+        let first = line.ops.iter().min().copied().ok_or_else(invalid)?;
+        let last = line.ops.iter().max().copied().ok_or_else(invalid)?;
+        let start = first.checked_add(1).ok_or_else(invalid)?;
+        // Upstream groups sequential words across separate BT/ET objects. Their initial
+        // matrices are safe only when every show exactly continues the preceding pen.
+        let sequential_objects =
+            paragraph && !line.positioned && runs.get(*index).is_some_and(|parts| parts.iter().any(|part| part.origin.bt_op != line.origin.bt_op));
+        let mut shown = true;
+        for op in ops.get(start..=last).unwrap_or_default() {
+            match op.op.as_slice() {
+                b"BT" if sequential_objects => shown = false,
+                b"ET" if sequential_objects => {}
+                b"Tm" | b"Td" | b"TD" if sequential_objects && !shown => {}
+                b"Tj" | b"TJ" => shown = true,
+                b"Tm" | b"Td" | b"TD" | b"T*" | b"'" | b"\"" | b"BT" | b"ET" => return Err(invalid()),
+                _ => {}
+            }
+        }
+    }
+    for row in &block.rows {
+        let first = row.first().and_then(|i| lines.get(*i)).ok_or_else(invalid)?;
+        if row.iter().filter_map(|i| lines.get(*i)).any(|line| {
+            line.origin.tm.get(..4) != first.origin.tm.get(..4)
+                || line.origin.ctm != first.origin.ctm
+                || line.origin.baseline != first.origin.baseline
+        }) {
+            return Err(invalid());
+        }
+    }
+    let selected: std::collections::HashSet<_> = block.lines.iter().copied().collect();
+    let mut refined = Vec::new();
+    let mut indexes: Vec<Vec<usize>> = Vec::with_capacity(lines.len());
+    for (index, line) in lines.iter().enumerate() {
+        let parts = if selected.contains(&index) { runs.get(index).map(Vec::as_slice).ok_or_else(invalid)? } else { std::slice::from_ref(line) };
+        if selected.contains(&index) {
+            if parts.is_empty()
+                || !line.upright()
+                || line.visual_order
+                || line.actual_text
+                || (line.positioned && !positioned.contains(&index))
+                || line.mixed_appearance
+                || line.text.chars().any(crate::bidi::is_rtl)
+            {
+                return Err(invalid());
+            }
+            let text: String = parts.iter().map(|part| part.text.as_str()).collect();
+            let source_ops: std::collections::HashSet<_> = line.ops.iter().copied().collect();
+            let private_ops: std::collections::HashSet<_> = parts.iter().flat_map(|part| part.ops.iter().copied()).collect();
+            if text != line.text
+                || source_ops != private_ops
+                || parts.iter().any(|part| {
+                    let transform = Matrix(part.origin.tm).then(&Matrix(part.origin.ctm));
+                    let across = transform.0[0].hypot(transform.0[1]);
+                    !part.upright()
+                        || !across.is_finite()
+                        || across <= 0.0
+                        || transform.0.get(1) != Some(&0.0)
+                        || transform.0.get(2) != Some(&0.0)
+                        || part.origin.state.scale <= 0.0
+                        || part.origin.state.font.as_ref().is_none_or(|(_, size)| !size.is_finite() || *size <= 0.0)
+                        || !part.rect.iter().all(|n| n.is_finite())
+                        || part.rect.first().is_some_and(|left| *left < part.origin.x)
+                        || part.rect.get(2).zip(part.rect.first()).is_none_or(|(right, left)| right <= left)
+                        || part.visual_order
+                        || part.origin.tm.get(..4) != line.origin.tm.get(..4)
+                        || part.origin.ctm != line.origin.ctm
+                        || part.origin.state.font.as_ref().map(|(_, size)| size) != line.origin.state.font.as_ref().map(|(_, size)| size)
+                        || !part
+                            .origin
+                            .tm
+                            .iter()
+                            .chain(&part.origin.ctm)
+                            .chain([&part.origin.state.char_spacing, &part.origin.state.word_spacing, &part.origin.state.scale])
+                            .all(|n| n.is_finite())
+                })
+            {
+                return Err(invalid());
+            }
+        }
+        let mut mapped = Vec::with_capacity(parts.len());
+        for part in parts {
+            mapped.push(refined.len());
+            refined.push(part.clone());
+        }
+        indexes.push(mapped);
+    }
+    let map_indices = |source: &[usize]| -> Result<Vec<usize>, EditError> {
+        let mut result = Vec::new();
+        for index in source {
+            result.extend(indexes.get(*index).ok_or_else(invalid)?.iter().copied());
+        }
+        Ok(result)
+    };
+    let mut expanded = block.clone();
+    expanded.lines = map_indices(&block.lines)?;
+    expanded.rows = block.rows.iter().map(|row| map_indices(row)).collect::<Result<_, _>>()?;
+    expanded.spans.clear();
+    for (range, index) in &block.spans {
+        let line = lines.get(*index).ok_or_else(invalid)?;
+        if block.editor_text.get(range.clone()) != Some(line.text.as_str()) {
+            return Err(invalid());
+        }
+        let mut start = range.start;
+        for mapped in indexes.get(*index).ok_or_else(invalid)? {
+            let part = refined.get(*mapped).ok_or_else(invalid)?;
+            let end = start.checked_add(part.text.len()).ok_or_else(invalid)?;
+            if end > range.end || block.editor_text.get(start..end) != Some(part.text.as_str()) {
+                return Err(invalid());
+            }
+            expanded.spans.push((start..end, *mapped));
+            start = end;
+        }
+        if start != range.end {
+            return Err(invalid());
+        }
+    }
+    Ok(Some(SpacingExpansion { lines: refined, block: expanded, positioning }))
+}
+
+/// Do not round authoring-state precision: tiny spacing can be magnified by a text/CTM scale.
+pub(super) fn spacing_ops(state: &TextState) -> Vec<Op> {
+    vec![
+        Op::new("Tc", vec![Object::Real(state.char_spacing)]),
+        Op::new("Tw", vec![Object::Real(state.word_spacing)]),
+        Op::new("Tz", vec![Object::Real(state.scale * 100.0)]),
+    ]
+}
+
+/// Private authoring runs retain exact Tc/Tz, including producer jitter. Public lines keep
+/// their existing grouping; only the rewrite needs these state boundaries.
+fn same_character_spacing_and_scale(line: &TextLine, shown: &Shown) -> bool {
+    line.origin.state.char_spacing == shown.state.char_spacing && line.origin.state.scale == shown.state.scale
 }
 
 /// Joining independent text objects is safe only when they use the same text and graphics
@@ -338,11 +808,12 @@ fn compatible_word(line: &TextLine, shown: &Shown) -> bool {
 
 /// The line `s` continues, or a new one: `last` is the previous run of the same stream
 /// (`bt`, baseline, end x, size).
-fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream: usize) {
+fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: &Shown, stream: usize, exact_spacing: bool) {
     let joins = last.is_some_and(|pen| {
         let bt = pen.bt;
         lines.last().is_some_and(|l| l.scope == s.scope && l.paint == s.paint && l.logical_order == s.logical_order)
-            && (bt == s.bt || lines.last().is_some_and(|l| compatible_word(l, &s)))
+            && (bt == s.bt || lines.last().is_some_and(|l| compatible_word(l, s)))
+            && (!exact_spacing || s.text.trim().is_empty() || lines.last().is_some_and(|l| same_character_spacing_and_scale(l, s)))
             && (s.text.trim().is_empty() || lines.last().is_some_and(|l| same_font(l, &s.font, &s.base_font, s.face.as_deref())))
             && (s.text.trim().is_empty()
                 || lines.last().is_some_and(|l| {
@@ -352,10 +823,10 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
                         && fill_color(&s.state.fill) == l.color
                         && same_paint(l, &s.state)
                 }))
-            && pen.continues(&s, if bt == s.bt { 3.0 } else { 1.5 }).0
+            && pen.continues(s, if bt == s.bt { 3.0 } else { 1.5 }).0
     });
     if joins && let Some(l) = lines.last_mut() {
-        let gap = last.map_or(0.0, |pen| pen.continues(&s, 0.0).1);
+        let gap = last.map_or(0.0, |pen| pen.continues(s, 0.0).1);
         let spaced = gap - s.tracking > l.size * s.state.scale.abs() * 0.2 && !l.text.ends_with(' ') && !s.text.starts_with(' ');
         if spaced {
             l.text.push(' ');
@@ -371,6 +842,8 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
         l.visual_order |= s.visual_order;
         l.actual_text |= s.actual_text;
         l.clips |= s.state.render_mode >= 4;
+        l.positioned |= !sequential_show(*last, s);
+        l.mixed_appearance |= l.origin.state.render_mode != s.state.render_mode || l.origin.state.rise != s.state.rise;
         if l.unreadable_mode.is_none() {
             l.unreadable_mode = s.state.unreadable.as_deref().map(str::to_owned);
         }
@@ -395,6 +868,8 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             logical_order: s.logical_order,
             actual_text: s.actual_text,
             clips: s.state.render_mode >= 4,
+            positioned: false,
+            mixed_appearance: false,
             unreadable_mode: s.state.unreadable.as_deref().map(str::to_owned),
             runs: vec![(s.text.clone(), s.ink.len(), false)],
             soft_break: s.soft_break,
@@ -414,7 +889,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             },
         });
     }
-    *last = Some(Pen::after(&s));
+    *last = Some(Pen::after(s));
 }
 
 /// How deep form XObjects nest before reading stops (they may also refer to themselves). The
@@ -538,7 +1013,7 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
             if last_stream.replace(si).is_some_and(|prev| prev != si) {
                 last = None;
             }
-            add_shown(&mut w.lines, &mut last, s, si);
+            add_shown(&mut w.lines, &mut last, &s, si, false);
         }
         for (_, name, ts) in forms {
             enter(w, resources, &name, ts, &mut carry.text_left)?;

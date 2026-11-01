@@ -1,9 +1,9 @@
 use super::grouping::{across, is_centred, row_rect};
 use super::{
     BlockStyle, CraftFont, Dict, Document, EditError, HashMap, LineEdit, MAX_TYPE3_GLYPHS, Matrix, Metrics, Object, Op, PdfString, Pieces,
-    RangeStyle, TextBlock, TextLine, Type3Glyph, coincident_ops, content_streams, fallback_face, japanese_glyph_from, needs_type3, no_fallback_font,
-    no_glyph_for, page_dict, reveal_ops, rewritten_contents, source_encodes, source_family, source_program, source_show, source_space, source_width,
-    splice, type3_faces, type3_glyph, write_type3_glyphs,
+    RangeStyle, TextBlock, TextLine, TextPositioning, TextState, Type3Glyph, coincident_ops, content_streams, fallback_face, japanese_glyph_from,
+    needs_type3, no_fallback_font, no_glyph_for, page_dict, positioned_show, reveal_ops, rewritten_contents, source_encodes, source_family,
+    source_program, source_space, source_width, spacing_ops, splice, type3_faces, type3_glyph, write_type3_glyphs,
 };
 
 // The draft is capped at 4 MiB; also bound the outline data prepared across all fallback faces.
@@ -130,15 +130,15 @@ impl CharacterPreparation<'_> {
         let mut resolver = FontResolver { doc, fonts, metrics, full_faces: HashMap::new(), programs: HashMap::new() };
         for (range, index) in spans {
             let source = lines.get(index).unwrap_or(first);
-            let start = range.start;
-            for (offset, ch) in draft.get(range).unwrap_or_default().char_indices() {
+            for (offset, ch) in draft.get(range.clone()).unwrap_or_default().char_indices() {
+                let byte = range.start.saturating_add(offset);
                 if ch == '\n' {
-                    chars.push((ch, index, source.font.clone()));
+                    chars.push((ch, index, source.font.clone(), byte));
                     continue;
                 }
                 if ch == '\r' {
-                    let crlf = start.checked_add(offset).and_then(|at| draft.get(at.saturating_add(1)..)).is_some_and(|rest| rest.starts_with('\n'));
-                    chars.push((if crlf { '\r' } else { '\n' }, index, source.font.clone()));
+                    let crlf = draft.get(byte.saturating_add(1)..).is_some_and(|rest| rest.starts_with('\n'));
+                    chars.push((if crlf { '\r' } else { '\n' }, index, source.font.clone(), byte));
                     continue;
                 }
                 let text = ch.to_string();
@@ -152,7 +152,7 @@ impl CharacterPreparation<'_> {
                     substituted = Some(source_family(&source.base_font).base_font(source.bold, source.italic).to_owned());
                     name
                 };
-                chars.push((ch, index, name));
+                chars.push((ch, index, name, byte));
             }
         }
         drop(resolver);
@@ -229,7 +229,7 @@ struct StyledLines<'a> {
     overrides: HashMap<usize, &'a RangeStyle>,
 }
 
-type StyledChar = (char, usize, String);
+type StyledChar = (char, usize, String, usize);
 type StyledRows = Vec<Vec<StyledChar>>;
 type RowRanges = Vec<std::ops::Range<usize>>;
 type ShapedRunCache = HashMap<(usize, usize), (Vec<u8>, pdfcraft_fonts::source_shaping::ShapedRun, String)>;
@@ -407,6 +407,7 @@ fn wrap_styled_rows(
     chars: &[StyledChar],
     width: f64,
     measure: impl Fn(&[StyledChar]) -> Result<f64, EditError>,
+    positioning: &TextPositioning,
 ) -> Result<WrappedStyledRows, EditError> {
     let mut rows: Vec<Vec<StyledChar>> = Vec::new();
     let mut row_ranges = Vec::new();
@@ -457,7 +458,8 @@ fn wrap_styled_rows(
         }
         let word = chars.get(at..end).unwrap_or_default();
         let word_width = measure(word)?;
-        if !row.is_empty() && !item.0.is_whitespace() && row_width + word_width > width + 0.5 {
+        let mut bridge = row.last().map_or(0.0, |last: &StyledChar| positioning.internal_after(last.3, last.0));
+        if !row.is_empty() && !item.0.is_whitespace() && row_width + bridge + word_width > width + 0.5 {
             let mut trimmed = 0usize;
             while row.last().is_some_and(|c: &StyledChar| c.0.is_whitespace()) {
                 row.pop();
@@ -472,9 +474,10 @@ fn wrap_styled_rows(
             rows.push(std::mem::take(&mut row));
             row_width = 0.0;
             row_start = at;
+            bridge = 0.0;
         }
         row.extend_from_slice(word);
-        row_width += word_width;
+        row_width += bridge + word_width;
         at = end;
     }
     if !row.is_empty() {
@@ -738,6 +741,7 @@ fn rewrite_anchor<'a>(
     ops: &[Op],
     kept_lines: &std::collections::HashSet<usize>,
     kept: &mut [bool],
+    semantic_drops: Option<&std::collections::HashSet<usize>>,
 ) -> RewriteAnchor<'a> {
     let rewritten: Vec<&TextLine> = block.lines.iter().filter(|index| !kept_lines.contains(index)).filter_map(|index| lines.get(*index)).collect();
     let lead = rewritten
@@ -754,8 +758,14 @@ fn rewrite_anchor<'a>(
         }
     };
     let origin = &lead.origin;
-    let mut drop = coincident_ops(lines, &members);
-    drop.extend(members.iter().flat_map(|line| line.ops.iter().copied()));
+    // Public selection remains authoritative when private spacing fragments are rewritten.
+    let drop = if let Some(drop) = semantic_drops {
+        drop.clone()
+    } else {
+        let mut drop = coincident_ops(lines, &members);
+        drop.extend(members.iter().flat_map(|line| line.ops.iter().copied()));
+        drop
+    };
     let start = lead.ops.first().copied().unwrap_or(origin.bt_op);
     let split = ops
         .get(origin.bt_op..start)
@@ -764,6 +774,114 @@ fn rewrite_anchor<'a>(
         .enumerate()
         .any(|(index, op)| matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"") && !drop.contains(&(origin.bt_op + index)));
     RewriteAnchor { lead, drop, start, split }
+}
+
+fn clear_wrapped_gaps(rows: &[Vec<StyledChar>], positioning: &mut TextPositioning) {
+    // A retained pair separated by wrapping is no longer adjacent on the page. Drop its
+    // internal gap from both final measurement and emission, not just from the next row.
+    for row in rows {
+        if let Some(last) = row.last() {
+            let end = last.3.saturating_add(last.0.len_utf8());
+            if !positioning.ends.contains(&end) {
+                positioning.after.remove(&end);
+            }
+        }
+    }
+}
+
+fn aligned_row_x(
+    block: &TextBlock,
+    lines: &[TextLine],
+    style: &BlockStyle,
+    row_index: usize,
+    width: f64,
+    measured: f64,
+    alignment: (bool, Option<crate::added::Align>),
+) -> f64 {
+    let (centered, asked) = alignment;
+    let align = asked.unwrap_or(if centered { crate::added::Align::Center } else { crate::added::Align::Left });
+    let original_rect = block.rows.get(row_index).and_then(|row| row_rect(row, lines)).unwrap_or(block.rect);
+    let left = if style.width.is_none() && asked.is_none() { original_rect[0] } else { block.rect[0] };
+    let available = if style.width.is_none() && asked.is_none() { original_rect[2] - original_rect[0] } else { width };
+    left + match align {
+        crate::added::Align::Center => (available - measured) / 2.0,
+        crate::added::Align::Right => available - measured,
+        _ => 0.0,
+    }
+}
+
+fn styled_state_ops(state: &TextState, exact_spacing: bool) -> Vec<Op> {
+    let mut ops = state.ops();
+    if exact_spacing {
+        ops.retain(|op| !matches!(op.op.as_slice(), b"Tc" | b"Tw" | b"Tz"));
+        ops.extend(spacing_ops(state));
+        for op in &mut ops {
+            match op.op.as_slice() {
+                b"Tf" => {
+                    if let Some((_, size)) = &state.font
+                        && let Some(value) = op.operands.get_mut(1)
+                    {
+                        *value = Object::Real(*size);
+                    }
+                }
+                b"TL" => op.operands = vec![Object::Real(state.leading)],
+                b"Ts" => op.operands = vec![Object::Real(state.rise)],
+                _ => {}
+            }
+        }
+    }
+    ops
+}
+
+fn emit_shaped_text(
+    ops: &mut Vec<Op>,
+    shaped: &pdfcraft_fonts::source_shaping::ShapedRun,
+    shown: &Metrics,
+    state: &mut TextState,
+    tm: &[f64; 6],
+    size: f64,
+    per_unit: f64,
+) -> Result<f64, EditError> {
+    let n = pdfcraft_content::num;
+    // Spacing is part of each glyph's position, so the run itself has none.
+    let (char_spacing, word_spacing, rise) = (state.char_spacing, state.word_spacing, state.rise);
+    state.char_spacing = 0.0;
+    state.word_spacing = 0.0;
+    ops.push(Op::new("BT", vec![]));
+    ops.extend(state.ops());
+    ops.push(Op::new("Tm", tm.iter().map(|v| n(*v)).collect()));
+    // `pen`: where the next glyph would start, in thousandths of the font size.
+    let (mut pen, mut extra, mut raised) = (0.0, 0.0, rise);
+    let mut shown_glyphs: Vec<Object> = Vec::new();
+    for (i, glyph) in shaped.glyphs.iter().enumerate() {
+        let target = (glyph.position[0] * size + extra) * per_unit;
+        let glyph_rise = rise + glyph.position[1] * size;
+        if (glyph_rise - raised).abs() > 1e-9 || shown_glyphs.len() >= 4096 {
+            if !shown_glyphs.is_empty() {
+                ops.push(Op::new("TJ", vec![Object::Array(std::mem::take(&mut shown_glyphs))]));
+            }
+            if (glyph_rise - raised).abs() > 1e-9 {
+                ops.push(Op::new("Ts", vec![n(glyph_rise)]));
+                raised = glyph_rise;
+            }
+        }
+        if (target - pen).abs() > 1e-6 {
+            shown_glyphs.push(n(pen - target));
+        }
+        let code = u16::try_from(i + 1).map_err(|_| EditError::Invalid("shaped glyph limit".into()))?;
+        shown_glyphs.push(Object::String(PdfString::literal(code.to_be_bytes().to_vec())));
+        pen = target + shown.width(u32::from(code)) * 1000.0;
+        extra += char_spacing * glyph.text.chars().count() as f64 + word_spacing * glyph.text.matches(' ').count() as f64;
+    }
+    if !shown_glyphs.is_empty() {
+        ops.push(Op::new("TJ", vec![Object::Array(shown_glyphs)]));
+    }
+    if (raised - rise).abs() > 1e-9 {
+        ops.push(Op::new("Ts", vec![n(rise)]));
+    }
+    ops.push(Op::new("ET", vec![]));
+    (state.char_spacing, state.word_spacing) = (char_spacing, word_spacing);
+    Ok(shaped.advance * size + extra)
 }
 
 /// Open (`op` is `"BMC"`) or close (`"EMC"`) the `/P` marker that wraps the whole rewrite when
@@ -843,12 +961,16 @@ fn splice_with_marker(
 pub(crate) fn rewrite_styled_block(
     doc: &mut Document,
     page: usize,
-    block: &TextBlock,
-    lines: &[TextLine],
+    source: (&TextBlock, &[TextLine]),
     text: Option<&str>,
     style: &BlockStyle,
+    exact: Option<(&std::collections::HashSet<usize>, &TextPositioning)>,
     max_glyphs: usize,
 ) -> Result<LineEdit, EditError> {
+    let (block, lines) = source;
+    let semantic_drops = exact.map(|(drops, _)| drops);
+    let mut positioning = exact.map(|(_, positioning)| positioning.clone()).unwrap_or_default();
+    let exact_spacing = semantic_drops.is_some();
     let first = block.lines.first().and_then(|i| lines.get(*i)).ok_or_else(|| EditError::Invalid("the paragraph has no source runs".into()))?;
     let draft = replacement_text(block, text)?;
     if has_no_effective_style_change(block, draft, style) {
@@ -881,7 +1003,20 @@ pub(crate) fn rewrite_styled_block(
     let chars = prepared.values;
     let substituted = prepared.substituted;
     let size_of = |source: &TextLine, index: usize| {
-        overrides.get(&index).and_then(|r| r.size).or(style.size).unwrap_or(source.size).max(0.1) / source.origin.k.max(1e-6)
+        let size = overrides.get(&index).and_then(|r| r.size).or(style.size);
+        if exact_spacing && size.is_none() {
+            source.origin.state.font.as_ref().map_or(source.size, |(_, size)| *size)
+        } else {
+            size.unwrap_or(source.size).max(0.1) / source.origin.k.max(1e-6)
+        }
+    };
+    let across_of = |source: &TextLine| {
+        if exact_spacing {
+            let matrix = Matrix(source.origin.tm).then(&Matrix(source.origin.ctm));
+            matrix.0[0].hypot(matrix.0[1])
+        } else {
+            across(source)
+        }
     };
     // A source run may carry TJ kerning/justification that is absent from its text state.
     // Keep its measured advance when rebuilding the run instead of making it wrap on entry.
@@ -899,8 +1034,8 @@ pub(crate) fn rewrite_styled_block(
         spaces.borrow_mut().insert(name.to_owned(), w);
         w
     };
-    let calibration = calibration_factors(lines, &metrics, style, &overrides, space_of);
-    let advance = |item: &(char, usize, String)| -> f64 {
+    let calibration = if exact_spacing { HashMap::new() } else { calibration_factors(lines, &metrics, style, &overrides, space_of) };
+    let advance = |item: &StyledChar, positioning: &TextPositioning| -> f64 {
         let source = lines.get(item.1).unwrap_or(first);
         let Some(m) = metrics.get(&item.2) else { return 0.0 };
         source_width(
@@ -915,10 +1050,11 @@ pub(crate) fn rewrite_styled_block(
                 .map_or(source.origin.state.char_spacing, |c| c / source.origin.k.max(1e-6)),
             source.origin.state.word_spacing,
         ) * overrides.get(&item.1).and_then(|r| r.scale).or(style.scale).map_or(source.origin.state.scale, |s| (s / 100.0).clamp(0.1, 10.0))
-            * across(source)
+            * across_of(source)
             * calibration.get(&item.1).copied().unwrap_or(1.0)
+            + positioning.advance(item.3, item.0)
     };
-    let measure = |items: &[(char, usize, String)]| -> Result<f64, EditError> {
+    let measure = |items: &[(char, usize, String, usize)], positioning: &TextPositioning| -> Result<f64, EditError> {
         let mut width = 0.0;
         let mut at = 0;
         while let Some(item) = items.get(at) {
@@ -943,13 +1079,17 @@ pub(crate) fn rewrite_styled_block(
                     * scale
                     * source.origin.k;
             } else {
-                width += segment.iter().map(&advance).sum::<f64>();
+                width += segment.iter().map(|item| advance(item, positioning)).sum::<f64>();
             }
             at = end;
         }
+        if let Some(last) = items.last() {
+            width -= positioning.internal_after(last.3, last.0);
+        }
         Ok(width)
     };
-    let (rows, row_ranges, row_lines, row_soft, row_gap) = wrap_styled_rows(&chars, width, measure)?;
+    let (rows, row_ranges, row_lines, row_soft, row_gap) = wrap_styled_rows(&chars, width, |row| measure(row, &positioning), &positioning)?;
+    clear_wrapped_gaps(&rows, &mut positioning);
     let streams = content_streams(doc, &p.dict)?;
     let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
@@ -957,7 +1097,7 @@ pub(crate) fn rewrite_styled_block(
     // glyph widths stay exactly as they were instead of being rebuilt from the text state. A row
     // aligned on its own is reached; the rows around it are not.
     let plain = BlockStyle { ranges: Vec::new(), aligns: Vec::new(), ..style.clone() } == BlockStyle::default();
-    let mut kept = if plain {
+    let mut kept = if plain && !exact_spacing {
         untouched_rows(block, draft, &row_ranges)
             .into_iter()
             .zip(&rows)
@@ -971,14 +1111,14 @@ pub(crate) fn rewrite_styled_block(
         kept.iter().enumerate().filter(|(_, k)| **k).filter_map(|(r, _)| block.rows.get(r)).flatten().copied().collect();
     // The rewrite is placed after the last rewritten row unless a text-show operator there
     // would make a kept following row depend on that position.
-    let anchor = rewrite_anchor(block, lines, first, &ops, &kept_lines, &mut kept);
+    let anchor = rewrite_anchor(block, lines, first, &ops, &kept_lines, &mut kept, semantic_drops);
     let RewriteAnchor { lead, drop, start, split } = anchor;
     let o = &lead.origin;
     // What is in force where the rewrite is drawn, and what the text after it expects.
     let after = if split { &o.state } else { &o.bt_state };
     validate_contextual_rows(&rows, &kept)?;
-    let measured: Vec<_> = rows.iter().map(|row| measure(row)).collect::<Result<_, _>>()?;
-    let shaped = prepare_shaped_rows(doc, &fonts, &rows, &kept, advance)?;
+    let measured: Vec<_> = rows.iter().map(|row| measure(row, &positioning)).collect::<Result<_, _>>()?;
+    let shaped = prepare_shaped_rows(doc, &fonts, &rows, &kept, |item| advance(item, &positioning))?;
     let ShapedRows { runs: shaped_runs, advances: segment_advances } = shaped;
     let glyph_resources = embed_shaped_resources(doc, &mut fonts, &shaped_runs)?;
     let n = pdfcraft_content::num;
@@ -1026,18 +1166,30 @@ pub(crate) fn rewrite_styled_block(
             push_row_break_marker(&mut block_ops, &row_soft, &row_gap, row_index);
         }
         let w = measured.get(row_index).copied().unwrap_or(0.0);
-        // The row's own alignment, or the paragraph's.
-        let asked = row_lines.get(row_index).and_then(|l| style.aligns.get(*l)).copied().flatten().or(style.align);
-        let align = asked.unwrap_or(if centered { crate::added::Align::Center } else { crate::added::Align::Left });
-        let original_rect = block.rows.get(row_index).and_then(|row| row_rect(row, lines)).unwrap_or(block.rect);
-        let left = if style.width.is_none() && asked.is_none() { original_rect[0] } else { block.rect[0] };
-        let available = if style.width.is_none() && asked.is_none() { original_rect[2] - original_rect[0] } else { width };
-        let mut x = left
-            + match align {
-                crate::added::Align::Center => (available - w) / 2.0,
-                crate::added::Align::Right => available - w,
-                _ => 0.0,
-            };
+        let asked = row_lines.get(row_index).and_then(|line| style.aligns.get(*line)).copied().flatten().or(style.align);
+        let mut x = aligned_row_x(block, lines, style, row_index, width, w, (centered, asked));
+        // Exact spacing refinements remain one text object per semantic row, so public
+        // line grouping does not fragment again after a paragraph is saved and reopened.
+        let mut row_underlines = Vec::new();
+        if exact_spacing {
+            // A shared text object preserves the sequential pen. Its graphics stack must
+            // stay outside BT/ET (PDF 1.x); PDF 2.0 q/Q also restore the text matrices.
+            // Share only an identical paint program from the same baseline; otherwise a
+            // gs has no inverse and one segment could silently repaint its neighbour.
+            let source = row.first().and_then(|item| lines.get(item.1)).unwrap_or(first);
+            let paint = source.origin.state.paint_ops(after);
+            if row.iter().any(|item| {
+                let other = lines.get(item.1).unwrap_or(first);
+                other.origin.state.render_mode != source.origin.state.render_mode || other.origin.state.paint_ops(after) != paint
+            }) {
+                return Err(EditError::Invalid(
+                    "mixed text spacing with incompatible row paint is not supported; the document was not changed".into(),
+                ));
+            }
+            block_ops.push(Op::new("q", vec![]));
+            block_ops.extend(paint);
+            block_ops.push(Op::new("BT", vec![]));
+        }
         let mut pos = 0;
         while pos < row.len() {
             let Some(item) = row.get(pos) else { break };
@@ -1072,8 +1224,10 @@ pub(crate) fn rewrite_styled_block(
             // Each run in its own graphics state, restating what its source set inside its text
             // object (`gs`, stroke, line width, `Tr`; #3508/#3509) from the state the rewrite is
             // drawn in: a `gs` has no inverse, so one run's ExtGState would stay for the next.
-            block_ops.push(Op::new("q", vec![]));
-            block_ops.extend(state.paint_ops(after));
+            if !exact_spacing {
+                block_ops.push(Op::new("q", vec![]));
+                block_ops.extend(state.paint_ops(after));
+            }
             if let Some((_, shaped, _)) = shaped_runs.get(&(row_index, pos)) {
                 let resource = glyph_resources.get(&(row_index, pos)).ok_or_else(|| EditError::Invalid("shaped font is missing".into()))?;
                 let mut properties = Dict::new();
@@ -1095,74 +1249,60 @@ pub(crate) fn rewrite_styled_block(
                     .and_then(|f| doc.resolve(f).as_dict().cloned())
                     .map(|d| Metrics::from_dict(doc, &d))
                     .ok_or_else(|| EditError::Invalid("shaped font is missing".into()))?;
-                // Spacing is part of each glyph's position, so the run itself has none.
-                let (char_spacing, word_spacing, rise) = (state.char_spacing, state.word_spacing, state.rise);
-                state.char_spacing = 0.0;
-                state.word_spacing = 0.0;
-                block_ops.push(Op::new("BT", vec![]));
-                block_ops.extend(state.ops());
-                block_ops.push(Op::new("Tm", tm.iter().map(|v| n(*v)).collect()));
-                // `pen`: where the next glyph would start, in thousandths of the font size.
-                let (mut pen, mut extra, mut raised) = (0.0, 0.0, rise);
-                let mut shown_glyphs: Vec<Object> = Vec::new();
-                for (i, glyph) in shaped.glyphs.iter().enumerate() {
-                    let target = (glyph.position[0] * size + extra) * per_unit;
-                    let glyph_rise = rise + glyph.position[1] * size;
-                    if (glyph_rise - raised).abs() > 1e-9 || shown_glyphs.len() >= 4096 {
-                        if !shown_glyphs.is_empty() {
-                            block_ops.push(Op::new("TJ", vec![Object::Array(std::mem::take(&mut shown_glyphs))]));
-                        }
-                        if (glyph_rise - raised).abs() > 1e-9 {
-                            block_ops.push(Op::new("Ts", vec![n(glyph_rise)]));
-                            raised = glyph_rise;
-                        }
-                    }
-                    if (target - pen).abs() > 1e-6 {
-                        shown_glyphs.push(n(pen - target));
-                    }
-                    let code = u16::try_from(i + 1).map_err(|_| EditError::Invalid("shaped glyph limit".into()))?;
-                    shown_glyphs.push(Object::String(PdfString::literal(code.to_be_bytes().to_vec())));
-                    pen = target + shown.width(u32::from(code)) * 1000.0;
-                    extra += char_spacing * glyph.text.chars().count() as f64 + word_spacing * glyph.text.matches(' ').count() as f64;
-                }
-                if !shown_glyphs.is_empty() {
-                    block_ops.push(Op::new("TJ", vec![Object::Array(shown_glyphs)]));
-                }
-                if (raised - rise).abs() > 1e-9 {
-                    block_ops.push(Op::new("Ts", vec![n(rise)]));
-                }
-                block_ops.push(Op::new("ET", vec![]));
-                (state.char_spacing, state.word_spacing) = (char_spacing, word_spacing);
+                let advance = emit_shaped_text(&mut block_ops, shaped, &shown, &mut state, &tm, size, per_unit)?;
                 block_ops.push(Op::new("EMC", vec![]));
-                segment_width = (shaped.advance * size + extra) * state.scale * source.origin.k;
+                segment_width = advance * state.scale * source.origin.k;
             } else {
-                block_ops.push(Op::new("BT", vec![]));
-                block_ops.extend(state.ops());
-                block_ops.push(Op::new("Tm", tm.iter().map(|v| n(*v)).collect()));
-                block_ops.extend(source_show(
+                if !exact_spacing {
+                    block_ops.push(Op::new("BT", vec![]));
+                }
+                block_ops.extend(styled_state_ops(&state, exact_spacing));
+                if !exact_spacing || pos == 0 {
+                    block_ops.push(Op::new("Tm", tm.iter().map(|v| if exact_spacing { Object::Real(*v) } else { n(*v) }).collect()));
+                }
+                block_ops.extend(positioned_show(
                     m,
                     &string,
-                    size_of(source, item.1),
+                    item.3,
+                    &state,
+                    across_of(source),
                     spaces.borrow().get(&item.2).copied().unwrap_or_else(|| source_space(doc, &fonts, m)),
-                    state.char_spacing,
-                    state.word_spacing,
+                    &positioning,
                 )?);
-                block_ops.push(Op::new("ET", vec![]));
+                if !exact_spacing {
+                    block_ops.push(Op::new("ET", vec![]));
+                }
             }
             if underlines.get(&item.1).copied().or(style.underline) == Some(true) {
+                let out = if exact_spacing { &mut row_underlines } else { &mut block_ops };
+                if exact_spacing {
+                    // Deferred path operators run after the text run's Q; restore its paint too.
+                    out.push(Op::new("q", vec![]));
+                    out.extend(state.paint_ops(after));
+                }
                 let [r, g, b] = overrides.get(&item.1).and_then(|r| r.color).or(style.color).unwrap_or(source.color);
                 let underline_size = size_of(source, item.1) * source.origin.k;
                 let (x0, y0) = back.apply(x - o.ctm[4], baseline - o.ctm[5] - underline_size * 0.12);
                 let (x1, y1) = back.apply(x + segment_width - o.ctm[4], baseline - o.ctm[5] - underline_size * 0.12);
-                block_ops.push(Op::new("RG", vec![n(r), n(g), n(b)]));
-                block_ops.push(Op::new("w", vec![n(underline_size * 0.06 / o.ctm[2].hypot(o.ctm[3]).max(1e-6))]));
-                block_ops.push(Op::new("m", vec![n(x0), n(y0)]));
-                block_ops.push(Op::new("l", vec![n(x1), n(y1)]));
-                block_ops.push(Op::new("S", vec![]));
+                out.push(Op::new("RG", vec![n(r), n(g), n(b)]));
+                out.push(Op::new("w", vec![n(underline_size * 0.06 / o.ctm[2].hypot(o.ctm[3]).max(1e-6))]));
+                out.push(Op::new("m", vec![n(x0), n(y0)]));
+                out.push(Op::new("l", vec![n(x1), n(y1)]));
+                out.push(Op::new("S", vec![]));
+                if exact_spacing {
+                    out.push(Op::new("Q", vec![]));
+                }
             }
-            block_ops.push(Op::new("Q", vec![]));
+            if !exact_spacing {
+                block_ops.push(Op::new("Q", vec![]));
+            }
             x += segment_width;
             pos = end;
+        }
+        if exact_spacing {
+            block_ops.push(Op::new("ET", vec![]));
+            block_ops.push(Op::new("Q", vec![]));
+            block_ops.extend(row_underlines);
         }
         baseline -= if style.line_spacing.is_none() && style.size.is_none() {
             source_leading
@@ -1172,11 +1312,11 @@ pub(crate) fn rewrite_styled_block(
     }
     push_whole_paragraph_marker(&mut block_ops, marked, "EMC");
     block_ops.push(Op::new("Q", vec![]));
-    block_ops.extend(after.ops());
+    block_ops.extend(styled_state_ops(after, exact_spacing));
     if split {
         block_ops.insert(0, Op::new("ET", vec![]));
         block_ops.push(Op::new("BT", vec![]));
-        block_ops.push(Op::new("Tm", o.tlm.iter().map(|v| n(*v)).collect()));
+        block_ops.push(Op::new("Tm", o.tlm.iter().map(|v| if exact_spacing { Object::Real(*v) } else { n(*v) }).collect()));
     }
     let at = if split { start } else { o.bt_op };
     // A kept source row sits outside `block_ops`. Bound the whole paragraph when a marker is
