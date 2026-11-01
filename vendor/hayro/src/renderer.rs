@@ -1768,9 +1768,23 @@ impl<'a> Device<'a> for Renderer {
                         // PdfCraft patch (#4800): as with a shrunk soft mask (#1649), a stencil
                         // mask (`/ImageMask true`) shrunk by nearest-neighbour keeps one sample in
                         // N and drops every stroke thinner than N mask pixels. A shrunk stencil is
-                        // filtered whatever its `/Interpolate`.
+                        // filtered whatever its `/Interpolate` when filtered resampling fits; if
+                        // a wide stencil exceeds the filter limits, keeping `interpolate = false`
+                        // lets `draw_image` fall back to bounded nearest-neighbour resampling.
                         let (x, y) = x_y_advances(&transform);
-                        if x.length() < 1.0 || y.length() < 1.0 {
+                        if (x.length() < 1.0 || y.length() < 1.0)
+                            && image_resampling_size(
+                                stencil.width,
+                                stencil.height,
+                                3,
+                                stencil.data.len().saturating_mul(3),
+                                x.length() as f32,
+                                y.length() as f32,
+                                MAX_IMAGE_PIXELS,
+                                true,
+                            )
+                            .is_some()
+                        {
                             stencil.interpolate = true;
                         }
 
