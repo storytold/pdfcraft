@@ -150,9 +150,12 @@ impl PdfCraftApp {
             Some(false) => self.close_and_continue(ctx, index, req),
             Some(true) => {
                 let Some(id) = self.views.get(index).map(|v| v.id) else { return };
-                // Bring the document forward: what's typed in its form is committed and saved
-                // with it, and a field that rejects the value is shown where the user can fix it.
-                self.active = Some(index);
+                // Bring the document forward if it's docked in the main window: what's typed
+                // in its form is committed and saved with it, and a field that rejects the value
+                // is shown where the user can fix it. Detached windows keep their own viewport.
+                if !self.views[index].detached {
+                    self.active = Some(index);
+                }
                 // Close only once the save has actually been written, which may be on a later
                 // frame when the user has to choose where. A failed or cancelled save keeps the
                 // document open.
