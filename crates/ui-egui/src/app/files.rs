@@ -567,6 +567,13 @@ impl PdfCraftApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn open_path_request(&mut self, path: &str, then: Option<&'static str>, display_override: Option<(canvas::PageLayout, bool)>) -> OpenOutcome {
+        // `manual.pdf#nameddest=Intro`, as a help system starts a PDF reader (#3425): the file,
+        // shown at that destination once open. A path that names a file is never split.
+        let parameters = pdfcraft_engine::open_parameters::split(path, |p| std::path::Path::new(p).is_file());
+        let (path, after_open) = match &parameters {
+            Some((file, destination)) => (file.as_str(), Some(destination.clone())),
+            None => (path, None),
+        };
         // One file, one tab (#2166): a file that is open already comes to the front instead,
         // and the tool it was opened for runs on it. One still being opened is left to that.
         if let Some(i) = self.tab_showing(path) {
@@ -578,6 +585,9 @@ impl PdfCraftApp {
                 view.set_display(layout, continuous);
                 self.launch_display_target = Some(view.id);
             }
+            if let Some(destination) = after_open {
+                self.apply_destination_at(i, destination);
+            }
             if let Some(command) = then {
                 self.execute(command);
             }
@@ -586,6 +596,10 @@ impl PdfCraftApp {
         if let Some(pending) = self.pending_opens.iter_mut().find(|p| p.path.as_deref().is_some_and(|p| same_file(p, path))) {
             if display_override.is_some() {
                 pending.display_override = display_override;
+            }
+            // Asked for another place before it finished opening: it opens at the latest one.
+            if after_open.is_some() {
+                pending.after_open = after_open;
             }
             return OpenOutcome::Pending;
         }
@@ -614,9 +628,10 @@ impl PdfCraftApp {
                     if let Some(prompt) = self.password_prompt.as_mut().filter(|p| {
                         p.path.as_deref() == Some(path) && previous_prompt.as_ref().is_none_or(|bytes| !std::sync::Arc::ptr_eq(bytes, &p.bytes))
                     }) {
-                        // Encrypted: the tool runs once the password is in.
+                        // Encrypted: the destination, the layout and the tool wait for the password.
                         prompt.then = then;
                         prompt.display_override = display_override;
+                        prompt.after_open = after_open;
                     } else if self.views.len() > before {
                         if let Some((layout, continuous)) = display_override
                             && let Some(view) = self.views.last_mut()
@@ -626,6 +641,9 @@ impl PdfCraftApp {
                         }
                         if let Some(doc) = self.views.last().map(|view| view.id) {
                             self.watch.known_as(doc, stamp);
+                        }
+                        if let Some(destination) = after_open {
+                            self.apply_remote_destination(destination);
                         }
                         if let Some(command) = then {
                             self.execute(command);
@@ -651,7 +669,7 @@ impl PdfCraftApp {
                 input: open_worker::Input::Path(std::path::PathBuf::from(path)),
                 password: None,
                 activate: true,
-                after_open: None,
+                after_open,
                 recovered: None,
                 then,
             }) {

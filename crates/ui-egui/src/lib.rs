@@ -242,6 +242,15 @@ struct PendingOpen {
     display_override: Option<(canvas::PageLayout, bool)>,
 }
 
+/// A named destination being looked up off the UI thread: reading a large document's name tree
+/// takes a noticeable moment.
+#[cfg(not(target_arch = "wasm32"))]
+struct PendingDestination {
+    doc: DocId,
+    name: String,
+    receiver: std::sync::mpsc::Receiver<Option<(usize, pdfcraft_render::DestView)>>,
+}
+
 pub struct PdfCraftApp {
     /// Tools side and pane widths; which panes are open is `left_open` and `right`.
     pub side_panels: side_panels::SidePanels,
@@ -369,6 +378,8 @@ pub struct PdfCraftApp {
     open_worker: Option<open_worker::OpenWorker>,
     #[cfg(not(target_arch = "wasm32"))]
     pending_opens: Vec<PendingOpen>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pending_destinations: Vec<PendingDestination>,
     #[cfg(not(target_arch = "wasm32"))]
     next_open_token: u64,
     /// Explicit CLI layout waits for flagged launch opens, never targeting restored tabs.
