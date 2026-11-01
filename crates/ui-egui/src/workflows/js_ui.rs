@@ -366,6 +366,10 @@ fn date_language_picker_name(l: &pdfcraft_engine::dates::DateLanguage, drawable:
 /// area; [`preferences_buttons`] goes below it, outside the scroll, so OK is always in reach.
 pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
     ui.label(egui::RichText::new(tl!("Preferences")).font(theme::semibold(18.0)));
+    ui.label(egui::RichText::new(tl!("Appearance")).font(theme::semibold(13.0)));
+    if ui.add(widgets::checkbox(&mut app.show_page_edge_shadows, tl!("Show Page Edge Shadows"))).changed() {
+        ui.ctx().request_repaint();
+    }
     ui.horizontal(|ui| {
         let label = ui.label(tl!("Interface language"));
         // A native name is only drawn when these fonts can draw it; otherwise the English name
@@ -499,6 +503,15 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
         }
     });
     ui.label(egui::RichText::new(tl!("For page sizes and margins.")).small().color(t.text_muted));
+    // The web build has no file paths to list.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        ui.horizontal(|ui| {
+            let label = ui.label(tl!("Recent files to keep"));
+            ui.add(egui::DragValue::new(&mut app.recent_limit).range(0..=crate::RECENT_FILES_MAX)).labelled_by(label.id);
+        });
+        ui.label(egui::RichText::new(tl!("Lowering this forgets the oldest files. At 0 there is no list.")).small().color(t.text_muted));
+    }
     // The web build has no file paths to reopen.
     #[cfg(not(target_arch = "wasm32"))]
     ui.add(widgets::checkbox(&mut app.reopen_last_session, tl!("Reopen the files that were open when PdfCraft last closed")));

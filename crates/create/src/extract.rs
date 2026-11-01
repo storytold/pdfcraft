@@ -236,11 +236,16 @@ fn image(doc: &Document, s: &Stream) -> Result<(&'static str, Vec<u8>), String> 
     let mut alpha = if mask { None } else { soft_mask(doc, s, w, h).or_else(|| stencil_mask(doc, s, w, h)) };
     let key = if mask { None } else { colour_key(doc, s) };
     // Keep the existing JPEG and stencil-mask Decode handling separate from lossless colour images.
+    let endpoint = |value: Option<&Object>| value.map(|v| doc.resolve(v)).and_then(|v| v.as_f64()).filter(|v| v.is_finite());
     let inverted = (jpeg || mask)
         && s.dict
             .get(b"Decode")
             .map(|d| doc.resolve(d))
-            .and_then(|d| d.as_array().map(|a| a.first().and_then(Object::as_f64) > a.get(1).and_then(Object::as_f64)))
+            // Both ends have to be finite numbers, as for lossless images, or the default mapping stands.
+            .and_then(|d| {
+                let a = d.as_array()?;
+                Some(endpoint(a.first())? > endpoint(a.get(1))?)
+            })
             .unwrap_or(false);
     // In a PDF a CMYK JPEG's samples are ink amounts unless /Decode inverts them, while image
     // viewers read a CMYK JPEG file as inverted (Adobe's convention): as is, it would show as
@@ -612,7 +617,23 @@ fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize) -> Option<Vec<u8>>
         return Some(px);
     }
     let img = image::GrayImage::from_raw(mw as u32, mh as u32, px)?;
-    Some(image::imageops::resize(&img, w as u32, h as u32, image::imageops::FilterType::Triangle).into_raw())
+    Some(scaled(&img, w as u32, h as u32).into_raw())
+}
+
+/// `img` scaled to `w` × `h`. Scaling goes down first, through a buffer of `img`'s width by `h` at
+/// 16 bytes a pixel, which a mask of other proportions than its image can make larger than any
+/// machine: 100,000 × 1 on an image of 1 × 100,000 asks for 160 GB, and that aborts the process.
+/// Such a mask is scaled across first, which holds no more pixels than one of the two has. Past a
+/// quarter over the larger of them, so that rounding leaves a mask of its image's shape as it was.
+pub(crate) fn scaled(img: &image::GrayImage, w: u32, h: u32) -> image::GrayImage {
+    use image::imageops::{FilterType, resize};
+    let (mw, mh) = (u64::from(img.width()), u64::from(img.height()));
+    let largest = (mw * mh).max(u64::from(w) * u64::from(h));
+    if (mw * u64::from(h)).saturating_mul(4) > largest.saturating_mul(5) {
+        resize(&resize(img, w, img.height(), FilterType::Triangle), w, h, FilterType::Triangle)
+    } else {
+        resize(img, w, h, FilterType::Triangle)
+    }
 }
 
 fn png(w: u32, h: u32, rgb: &[u8], alpha: Option<&[u8]>) -> Result<Vec<u8>, String> {
