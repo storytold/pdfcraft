@@ -442,6 +442,24 @@ const MAX_QUADS: usize = 50_000;
 /// other entry are kept. A locked markup, another kind of comment, a redaction (its area is what
 /// is removed) or an empty or non-finite area is refused, and nothing changes.
 pub fn set_quads(doc: &mut Document, page: usize, index: usize, quads: &[[f64; 8]], meta: &Meta) -> Result<(), AnnotError> {
+    if quads.len() > MAX_QUADS {
+        return Err(AnnotError::Invalid(format!("at most {MAX_QUADS} text areas")));
+    }
+    let bad_area = || AnnotError::Invalid("text areas need quadrilaterals with nonzero finite area".into());
+    if quads.is_empty() {
+        return Err(bad_area());
+    }
+    // Non-collinear corners span an area in either Z-order or perimeter order. Validate every
+    // quad before annot_ref can promote an inline annotation to a reference.
+    for quad in quads {
+        let [x0, y0, x1, y1, x2, y2, x3, y3] = *quad;
+        let (a, b, c) = ([x1 - x0, y1 - y0], [x2 - x0, y2 - y0], [x3 - x0, y3 - y0]);
+        let cross = |[ax, ay]: [f64; 2], [bx, by]: [f64; 2]| ax * by - ay * bx;
+        let areas = [cross(a, b), cross(a, c), cross(b, c)];
+        if !areas.iter().all(|area| area.is_finite()) || areas.iter().all(|area| *area == 0.0) {
+            return Err(bad_area());
+        }
+    }
     let (_, r) = annot_ref(doc, page, index)?;
     unlocked(doc, r)?;
     let d = annot_dict(doc, r);
@@ -453,10 +471,7 @@ pub fn set_quads(doc: &mut Document, page: usize, index: usize, quads: &[[f64; 8
         "Squiggly" => Markup::Squiggly,
         other => return Err(AnnotError::Invalid(format!("{other} comments have no text range to change"))),
     };
-    if quads.len() > MAX_QUADS {
-        return Err(AnnotError::Invalid(format!("at most {MAX_QUADS} text areas")));
-    }
-    // Checks the area too: not empty, finite.
+    // Derive the bounds from the validated quadrilaterals.
     let rect = rect_for(&Shape::TextMarkup { kind, quads: quads.to_vec() }, &Style::default())?;
     let before = d;
     doc.update_dict(r, |d| {

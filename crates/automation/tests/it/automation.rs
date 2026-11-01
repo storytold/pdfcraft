@@ -2215,6 +2215,35 @@ fn a_markups_marked_text_can_be_changed() {
     assert_eq!(get(&mut a, &id)["rect"], whole["rect"]);
 }
 
+/// A bad range in a compound comment edit keeps the annotation, document bytes and undo
+/// history, even when another property was queued before its invalid geometry.
+#[test]
+fn comment_edit_rejects_zero_area_quads_without_changing_the_document() {
+    let dir = workdir("markup-zero-area");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let id = ok(&mut a, "comment_add", json!({ "doc": doc, "page": 2, "type": "highlight", "find": "Page 2", "contents": "keep" }))["comment"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let before = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    let bytes = a.session().get(pdfcraft_engine::DocId(doc)).unwrap().bytes.clone();
+    let undo = a.session().get(pdfcraft_engine::DocId(doc)).unwrap().can_undo().map(str::to_owned);
+    let valid = json!([20, 140, 60, 140, 20, 156, 60, 156]);
+    // Quarter-page coordinates keep the diagonal exactly collinear through the view's f32 transform.
+    for quads in [json!([[0, 0, 0, 0, 0, 0, 0, 0]]), json!([[0, 0, 50, 75, 100, 150, 150, 225]]), json!([valid, [0, 0, 0, 0, 0, 0, 0, 0]])] {
+        let result = a.call("comment_edit", &json!({ "doc": doc, "id": id, "contents": "discard", "quads": quads }));
+        assert!(result.is_err(), "zero-area range was accepted: {quads}: {result:?}");
+        assert_eq!(ok(&mut a, "comment_list", json!({ "doc": doc })), before);
+        let current = a.session().get(pdfcraft_engine::DocId(doc)).unwrap();
+        assert_eq!(current.bytes.as_ref(), bytes.as_ref(), "the entire compound edit was refused");
+        assert_eq!(current.can_undo().map(str::to_owned), undo, "no undo step was added");
+    }
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "id": id, "find": "Page" }));
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert_eq!(ok(&mut a, "comment_list", json!({ "doc": doc })), before, "valid edits still undo to the original markup");
+}
+
 fn add_comment_examples(a: &mut Automation, doc: u64) -> String {
     // "Page 2" sits at y = 150 (user space) = 150 from the top of the 300 pt page.
     let hl = ok(a, "comment_add", json!({ "doc": doc, "page": 2, "type": "highlight", "find": "page 2", "contents": "check", "author": "Ada" }));

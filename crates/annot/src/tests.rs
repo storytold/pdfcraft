@@ -366,6 +366,46 @@ fn set_quads_bounds_the_squiggly_appearance_as_a_whole() {
     assert_eq!(content.matches(" m\n").count(), 50_000, "every area is still drawn");
 }
 
+/// Zero-area quadrilaterals, including collinear diagonals with a nonempty bounding box,
+/// never replace a markup. Reject them before even promoting an inline annotation to a reference.
+#[test]
+fn set_quads_rejects_zero_area_quads_without_changing_the_markup() {
+    let valid = [72.0, 712.0, 200.0, 712.0, 72.0, 700.0, 200.0, 700.0];
+    for inline in [false, true] {
+        let mut doc = fixture();
+        let h = add_annotation(&mut doc, &new(0, Shape::TextMarkup { kind: Markup::Highlight, quads: vec![valid] }), &meta("h")).unwrap();
+        let page = page_refs(&doc).unwrap()[0];
+        if inline {
+            let dict = list(&doc, 0)[h].clone();
+            let mut entries = annots(&doc, page);
+            entries[h] = Object::Dict(dict);
+            set_annots(&mut doc, page, entries).unwrap();
+        }
+        let snapshot = |doc: &Document| {
+            (format!("{:?}", list(doc, 0)), format!("{:?}", doc.get(page)), doc.object_numbers().len(), ap_content(doc, &list(doc, 0)[h]))
+        };
+        let before = snapshot(&doc);
+        for quads in [
+            vec![[0.0; 8]],
+            vec![[0.0, 1.0, 10.0, 1.0, 20.0, 1.0, 30.0, 1.0]],
+            vec![[1.0, 0.0, 1.0, 10.0, 1.0, 20.0, 1.0, 30.0]],
+            vec![[0.0, 0.0, 10.0, 10.0, 20.0, 20.0, 30.0, 30.0]],
+            vec![valid, [0.0; 8]],
+            vec![[0.0; 8], valid],
+            vec![[-f64::MAX, 0.0, f64::MAX, 0.0, 0.0, 1.0, 1.0, 1.0]],
+            Vec::new(),
+        ] {
+            assert!(set_quads(&mut doc, 0, h, &quads, &meta("bad")).is_err(), "inline={inline}, {quads:?}");
+            assert_eq!(snapshot(&doc), before, "no dictionary, appearance or page reference changed: {quads:?}");
+        }
+        // Area does not depend on the point order: both Z-order and perimeter-order corners
+        // span the same rectangle, and a rotated/skewed area is valid too.
+        for quad in [valid, [72.0, 712.0, 200.0, 712.0, 200.0, 700.0, 72.0, 700.0], [0.0, 0.0, 10.0, 10.0, -2.0, 2.0, 8.0, 12.0]] {
+            set_quads(&mut doc, 0, h, &[quad], &meta("good")).unwrap();
+        }
+    }
+}
+
 /// #4824: what is refused changes nothing.
 #[test]
 fn set_quads_refuses_other_comments_locked_markup_and_bad_areas() {
