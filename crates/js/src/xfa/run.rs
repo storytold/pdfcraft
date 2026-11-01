@@ -160,7 +160,8 @@ pub(crate) fn run_here(script: &str, event: &XfaEvent, doc: &XfaDoc, root: XfaNo
         out.error = Some(e.to_string());
     }
     if let Some(h) = ctx.remove_data::<Shared>() {
-        let h = h.into_inner();
+        let mut h = h.into_inner();
+        (out.reads, out.reads_cut) = h.take_reads();
         out.notes = h.notes();
         out.effects = h.effects;
         out.console = h.console;

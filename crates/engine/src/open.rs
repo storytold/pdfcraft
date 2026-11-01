@@ -84,6 +84,8 @@ impl Session {
         Ok(self.commit_open(prepared))
     }
 
+    /// Read `bytes` as a document, laying out and scripting an XFA form, without the panic
+    /// guard the caller puts around it.
     fn prepare_open_unguarded(
         context: &OpenContext,
         name: String,
@@ -173,6 +175,7 @@ impl Session {
         // Acrobat; what they change is one more revision, still nothing to save.
         let mut script_output = js::JsOutput::default();
         let mut ran_away = false;
+        let mut calc_deps = xfa::CalcDeps::default();
         let xfa_template = match (&xfa, &cos) {
             (Some(_), Ok(Ok(c))) => xfa::template(c),
             _ => None,
@@ -188,6 +191,7 @@ impl Session {
                             out: &mut script_output,
                             datasets: None,
                             ran_away: false,
+                            deps: &mut calc_deps,
                             time_scale: context.xfa_time_scale,
                         };
                         let changes = xfa::on_open(&mut work, &tpl, &mut run);
@@ -211,12 +215,15 @@ impl Session {
                             }
                             Err(e) => {
                                 script_output.errors.push(format!("The form's scripts could not be applied: {e}"));
+                                // What the calculations read was read from changes now dropped.
+                                calc_deps = xfa::CalcDeps::default();
                                 (bytes, info, Ok(Ok(cos)))
                             }
                         },
                         Ok(_) => (bytes, info, Ok(Ok(cos))),
                         Err(e) => {
                             script_output.errors.push(format!("The form's scripts could not run: {e}"));
+                            calc_deps = xfa::CalcDeps::default();
                             (bytes, info, Ok(Ok(cos)))
                         }
                     }
@@ -256,6 +263,7 @@ impl Session {
             Self::build_document(&context.trust, DocumentOpenData { name, path, bytes, info, structure: cos, render_password, password, xfa });
         // A script that ran away on open turns the form's scripts off for this document.
         document.xfa_template = if ran_away { None } else { xfa_template };
+        document.xfa_calc_deps = Arc::new(calc_deps);
         document.js_output.append(script_output);
         if ran_away {
             document.xfa_scripts_off = true;
@@ -348,6 +356,7 @@ impl Session {
             js_output: Default::default(),
             xfa,
             xfa_template: None,
+            xfa_calc_deps: Arc::default(),
             xfa_scripts_off: false,
             fonts_stale: false,
             xfa_warnings: Vec::new(),

@@ -25,7 +25,7 @@ mod nodes;
 mod run;
 
 pub(crate) use host::{HNode, XHost};
-pub use model::{MAX_ALERTS, MAX_CONSOLE, MAX_EFFECTS, XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaOutcome};
+pub use model::{MAX_ALERTS, MAX_CONSOLE, MAX_EFFECTS, MAX_READS, XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaOutcome};
 pub(crate) use model::{MAX_LINE, MAX_PAYLOAD, clip, clip_result, reset_names};
 pub(crate) use nodes::{child_named, descendants_named, instances, resolve_som};
 #[cfg(test)]
