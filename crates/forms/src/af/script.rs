@@ -17,7 +17,7 @@ impl Arg {
         match self {
             Arg::Num(n) => Some(*n),
             Arg::Bool(b) => Some(f64::from(u8::from(*b))),
-            Arg::Str(s) => s.trim().parse().ok(),
+            Arg::Str(s) => s.trim().parse::<f64>().ok().filter(|n| n.is_finite()),
             Arg::List(_) => None,
         }
     }
@@ -102,14 +102,13 @@ impl Parser<'_> {
                         b'u' => {
                             let code = hex4(self.s.get(self.i..self.i.checked_add(4)?)?)?;
                             self.i += 4;
-                            let code = if (0xD800..=0xDBFF).contains(&code) && self.s.get(self.i..self.i.checked_add(6)?)?.starts_with(b"\\u") {
-                                let low = hex4(self.s.get(self.i.checked_add(2)?..self.i.checked_add(6)?)?)?;
-                                if (0xDC00..=0xDFFF).contains(&low) {
-                                    self.i += 6;
-                                    0x10000 + ((u32::from(code) - 0xD800) << 10) + (u32::from(low) - 0xDC00)
-                                } else {
-                                    u32::from(code)
-                                }
+                            let code = if (0xD800..=0xDBFF).contains(&code)
+                                && let Some(pair) = self.i.checked_add(6).and_then(|end| self.s.get(self.i..end))
+                                && pair.starts_with(b"\\u")
+                                && let Some(low) = hex4(&pair[2..6]).filter(|low| (0xDC00..=0xDFFF).contains(low))
+                            {
+                                self.i += 6;
+                                0x10000 + ((u32::from(code) - 0xD800) << 10) + (u32::from(low) - 0xDC00)
                             } else {
                                 u32::from(code)
                             };
@@ -158,7 +157,7 @@ impl Parser<'_> {
                 while self.i < self.s.len() && (self.s[self.i].is_ascii_digit() || matches!(self.s[self.i], b'.' | b'-' | b'+' | b'e' | b'E')) {
                     self.i += 1;
                 }
-                std::str::from_utf8(&self.s[start..self.i]).ok()?.parse().ok().map(Arg::Num)
+                std::str::from_utf8(&self.s[start..self.i]).ok()?.parse::<f64>().ok().filter(|n| n.is_finite()).map(Arg::Num)
             }
         }
     }
@@ -198,13 +197,28 @@ impl Parser<'_> {
 
 /// The first call to `name(` in `js` and its arguments.
 pub(super) fn call(js: &str, name: &str) -> Option<Vec<Arg>> {
-    let at = js.find(&format!("{name}("))?;
-    // Not part of a longer identifier (AFDate_Format vs AFDate_FormatEx).
-    if js[..at].chars().last().is_some_and(|c| c.is_alphanumeric() || c == '_') {
-        return None;
+    let (tokens, _) = js_tokens(js);
+    for (k, (range, tok)) in tokens.iter().enumerate() {
+        if *tok != super::calc::Js::Ident {
+            continue;
+        }
+        if k > 0 && matches!(tokens.get(k - 1), Some((_, super::calc::Js::Punct('.')))) {
+            continue;
+        }
+        let Some(target_end) = range.start.checked_add(name.len()) else { continue };
+        if js.get(range.start..target_end) != Some(name) {
+            continue;
+        }
+        let Some(end_k) = (k..tokens.len()).take_while(|&m| tokens[m].0.end <= target_end).find(|&m| tokens[m].0.end == target_end) else {
+            continue;
+        };
+        let Some((open, super::calc::Js::Punct('('))) = tokens.get(end_k + 1) else { continue };
+        let mut p = Parser { s: js.as_bytes(), i: open.end, depth: 0 };
+        if let Some(args) = p.list(b')') {
+            return Some(args);
+        }
     }
-    let mut p = Parser { s: js.as_bytes(), i: at + name.len() + 1, depth: 0 };
-    p.list(b')')
+    None
 }
 
 pub fn parse_format(js: &str) -> Option<Format> {
@@ -359,5 +373,24 @@ pub fn calculate_js(c: &Calculate) -> Option<String> {
         // Acrobat's own translation follows the comment, so a viewer that runs the script instead
         // of reading the comment computes the same value (a placeholder here showed 0).
         Calculate::Notation(expr) => Some(format!("/** BVCALC {expr} EVCALC **/ event.value = {};", notation_js(expr))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unpaired_high_surrogate_at_end_of_string_does_not_abort_parsing() {
+        let js = "AFDate_FormatEx(\"\\uD800\")";
+        assert_eq!(parse_format(js), Some(Format::Date("\u{FFFD}".to_owned())));
+    }
+
+    #[test]
+    fn call_skips_commented_or_prefixed_identifiers_and_rejects_infinite_numbers() {
+        let js = "// AFPercent_Format(0, 0);\nmy_AFPercent_Format(0, 0); $AFPercent_Format(0, 0); AFPercent_Format (2, 1);";
+        assert_eq!(parse_format(js), Some(Format::Percent { decimals: 2, sep: 1 }));
+
+        assert_eq!(parse_validate("AFRange_Validate(true, 1e500, false, 0);"), None);
     }
 }

@@ -137,23 +137,34 @@ pub fn tab_orders(doc: &Document) -> Vec<TabOrder> {
 /// annotations keep their places.
 pub fn move_in_tab_order(doc: &mut Document, name: &str, earlier: bool) -> Result<(), FormError> {
     let all = fields(doc);
-    let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
-    let page = f.widgets.iter().filter_map(|w| w.page).min().ok_or_else(|| FormError::Invalid(format!("{name} is not on a page")))?;
+    if !all.iter().any(|f| f.name == name) {
+        return Err(FormError::NoSuchField(name.into()));
+    }
+    let (target_fi, page) = all
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.name == name)
+        .find_map(|(fi, f)| Some((fi, f.widgets.iter().filter_map(|w| w.page).min()?)))
+        .ok_or_else(|| FormError::Invalid(format!("{name} is not on a page")))?;
     // The page's fields in their current tab order (a field counts once, at its first widget).
-    let mut order: Vec<(usize, &str)> =
-        all.iter().filter_map(|g| g.widgets.iter().filter(|w| w.page == Some(page)).map(|w| w.tab).min().map(|t| (t, g.name.as_str()))).collect();
+    let mut order: Vec<(usize, usize)> = all
+        .iter()
+        .enumerate()
+        .filter_map(|(fi, g)| g.widgets.iter().filter(|w| w.page == Some(page)).map(|w| w.tab).min().map(|t| (t, fi)))
+        .collect();
     order.sort();
-    let names: Vec<&str> = order.iter().map(|(_, n)| *n).collect();
-    let Some(i) = names.iter().position(|n| *n == name) else { return invalid(format!("{name} is not on a page")) };
-    let j = if earlier { i.checked_sub(1) } else { Some(i + 1).filter(|j| *j < names.len()) };
+    let Some(i) = order.iter().position(|&(_, fi)| fi == target_fi) else { return invalid(format!("{name} is not on a page")) };
+    let j = if earlier { i.checked_sub(1) } else { Some(i + 1).filter(|j| *j < order.len()) };
     let Some(j) = j else { return Ok(()) };
-    let mut names = names.into_iter().map(str::to_string).collect::<Vec<_>>();
-    names.swap(i, j);
-    // The widgets of this page in the new order.
+    order.swap(i, j);
+    // The widgets of this page in the new order, preserving each field's relative widget tab order.
     let mut widgets: Vec<ObjRef> = Vec::new();
-    for n in &names {
-        if let Some(g) = all.iter().find(|g| &g.name == n) {
-            widgets.extend(g.widgets.iter().filter(|w| w.page == Some(page)).map(|w| w.obj));
+    let mut queued = std::collections::HashSet::new();
+    for &(_, fi) in &order {
+        if let Some(g) = all.get(fi) {
+            let mut own: Vec<(usize, ObjRef)> = g.widgets.iter().filter(|w| w.page == Some(page)).map(|w| (w.tab, w.obj)).collect();
+            own.sort_by_key(|&(tab, _)| tab);
+            widgets.extend(own.into_iter().map(|(_, obj)| obj).filter(|obj| queued.insert(*obj)));
         }
     }
     let pr = *page_refs(doc).get(page).ok_or_else(|| FormError::Invalid("no such page".into()))?;
@@ -162,10 +173,11 @@ pub fn move_in_tab_order(doc: &mut Document, name: &str, earlier: bool) -> Resul
     let list = doc.resolve(&annots_obj).as_array().cloned().unwrap_or_default();
     let mut next = widgets.into_iter();
     let set: std::collections::HashSet<ObjRef> = all.iter().flat_map(|g| g.widgets.iter().filter(|w| w.page == Some(page)).map(|w| w.obj)).collect();
+    let mut seen_slots = std::collections::HashSet::new();
     let new_list: Vec<Object> = list
         .iter()
         .map(|o| match o.as_ref() {
-            Some(r) if set.contains(&r) => next.next().map(Object::Ref).unwrap_or_else(|| o.clone()),
+            Some(r) if set.contains(&r) && seen_slots.insert(r) => next.next().map(Object::Ref).unwrap_or_else(|| o.clone()),
             _ => o.clone(),
         })
         .collect();
@@ -177,4 +189,74 @@ pub fn move_in_tab_order(doc: &mut Document, name: &str, earlier: bool) -> Resul
         d.remove(b"Tabs");
     })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pdfcraft_cos::{Dict, PdfString};
+
+    #[test]
+    fn move_in_tab_order_preserves_multi_widget_relative_tab_order() {
+        let mut doc = Document::new_empty();
+        let pages_ref = doc.add(Object::Null);
+        let page_ref = doc.add(Object::Null);
+
+        let mut w1 = Dict::new();
+        w1.set(b"Subtype".to_vec(), Object::name("Widget"));
+        w1.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(200), Object::Int(700), Object::Int(220), Object::Int(720)]));
+        let w1_ref = doc.add(Object::Dict(w1));
+
+        let mut w2 = Dict::new();
+        w2.set(b"Subtype".to_vec(), Object::name("Widget"));
+        w2.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(50), Object::Int(700), Object::Int(70), Object::Int(720)]));
+        let w2_ref = doc.add(Object::Dict(w2));
+
+        let mut radio = Dict::new();
+        radio.set(b"FT".to_vec(), Object::name("Btn"));
+        radio.set(b"Ff".to_vec(), Object::Int(1 << 15));
+        radio.set(b"T".to_vec(), PdfString::text("choice"));
+        // /Kids order is [w1 (right), w2 (left)], opposite to /R (Row) left-to-right order.
+        radio.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(w1_ref), Object::Ref(w2_ref)]));
+        let radio_ref = doc.add(Object::Dict(radio));
+        doc.update_dict(w1_ref, |d| d.set(b"Parent".to_vec(), Object::Ref(radio_ref))).unwrap();
+        doc.update_dict(w2_ref, |d| d.set(b"Parent".to_vec(), Object::Ref(radio_ref))).unwrap();
+
+        let mut text = Dict::new();
+        text.set(b"FT".to_vec(), Object::name("Tx"));
+        text.set(b"Subtype".to_vec(), Object::name("Widget"));
+        text.set(b"T".to_vec(), PdfString::text("note"));
+        text.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(50), Object::Int(600), Object::Int(150), Object::Int(620)]));
+        let text_ref = doc.add(Object::Dict(text));
+
+        let mut page = Dict::new();
+        page.set(b"Type".to_vec(), Object::name("Page"));
+        page.set(b"Parent".to_vec(), Object::Ref(pages_ref));
+        page.set(b"Tabs".to_vec(), Object::name("R"));
+        page.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(w1_ref), Object::Ref(w2_ref), Object::Ref(text_ref)]));
+        doc.set(page_ref, Object::Dict(page));
+
+        let mut pages = Dict::new();
+        pages.set(b"Type".to_vec(), Object::name("Pages"));
+        pages.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page_ref)]));
+        pages.set(b"Count".to_vec(), Object::Int(1));
+        doc.set(pages_ref, Object::Dict(pages));
+
+        let mut af = Dict::new();
+        af.set(b"Fields".to_vec(), Object::Array(vec![Object::Ref(radio_ref), Object::Ref(text_ref)]));
+        let af_ref = doc.add(Object::Dict(af));
+
+        let mut catalog = Dict::new();
+        catalog.set(b"Type".to_vec(), Object::name("Catalog"));
+        catalog.set(b"Pages".to_vec(), Object::Ref(pages_ref));
+        catalog.set(b"AcroForm".to_vec(), Object::Ref(af_ref));
+        let root_ref = doc.root().unwrap();
+        doc.set(root_ref, Object::Dict(catalog));
+
+        // Move "note" earlier (before "choice"): "choice"'s own buttons should stay in their
+        // /R tab order (w2 then w1), not revert to /Kids order (w1 then w2).
+        move_in_tab_order(&mut doc, "note", true).unwrap();
+        let annots = doc.get(page_ref).as_dict().and_then(|d| d.get(b"Annots")).and_then(Object::as_array).cloned().unwrap();
+        assert_eq!(annots, vec![Object::Ref(text_ref), Object::Ref(w2_ref), Object::Ref(w1_ref)]);
+    }
 }

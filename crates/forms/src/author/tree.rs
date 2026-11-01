@@ -112,6 +112,11 @@ pub(crate) fn form_fonts_as_objects(doc: &mut Document, all: &[crate::Field]) ->
     Ok(())
 }
 
+/// Whether `d` has a non-null entry `key` (a `null` entry is absent per ISO 32000-2 §7.3.9).
+fn dict_has(doc: &Document, d: &Dict, key: &[u8]) -> bool {
+    d.get(key).is_some_and(|v| !matches!(*doc.resolve(v), Object::Null))
+}
+
 /// Whether the field `r`, or the nearest ancestor that has one, holds a `/V` (the entry is
 /// inheritable, ISO 32000-2 §12.7.4). The `/Parent` chain is followed at most 64 deep, as deep
 /// as the field walk goes, so a cyclic chain ends.
@@ -120,7 +125,7 @@ fn holds_value(doc: &Document, r: ObjRef) -> bool {
     for _ in 0..=64 {
         let obj = doc.get(at);
         let Some(d) = obj.as_dict() else { return false };
-        if d.contains(b"V") {
+        if dict_has(doc, d, b"V") {
             return true;
         }
         match d.reference(b"Parent") {
@@ -234,7 +239,7 @@ pub(super) fn check_place(doc: &Document, af: ObjRef, field: ObjRef, parts: &[&s
             break;
         };
         // A value, reset value or length limit held by a parent would pass to this field.
-        let held = doc.get(r).as_dict().is_some_and(|d| PASSED_VALUES.iter().any(|k| d.contains(k) && !owned.contains(k)));
+        let held = doc.get(r).as_dict().is_some_and(|d| PASSED_VALUES.iter().any(|k| dict_has(doc, d, k) && !dict_has(doc, &owned, k)));
         if held {
             return invalid(format!("{part:?} holds a value for the fields under it, so {:?} can't be put there", parts.join(".")));
         }
@@ -259,7 +264,7 @@ pub(super) fn attach(doc: &mut Document, af: ObjRef, field: ObjRef, parts: &[&st
     for part in parents {
         let next = match child_named(doc, af, parent, part) {
             Some(r) => {
-                inherits |= doc.get(r).as_dict().is_some_and(|d| d.contains(b"Ff") || d.contains(b"Q"));
+                inherits |= doc.get(r).as_dict().is_some_and(|d| dict_has(doc, d, b"Ff") || dict_has(doc, d, b"Q"));
                 r
             }
             None => {
@@ -308,7 +313,7 @@ pub(super) fn inherited(doc: &Document, field: ObjRef) -> Dict {
         }
         let Some(d) = doc.get(p).as_dict().cloned() else { break };
         for k in INHERITED_KEYS {
-            if let Some(v) = d.get(k).filter(|_| !own.contains(k) && !add.contains(k)) {
+            if let Some(v) = d.get(k).filter(|_| dict_has(doc, &d, k) && !dict_has(doc, &own, k) && !add.contains(k)) {
                 add.set(k.to_vec(), v.clone());
             }
         }
@@ -327,7 +332,7 @@ pub(crate) fn ancestor_sets(doc: &Document, field: ObjRef, key: &[u8]) -> bool {
             return false;
         }
         let Some(d) = doc.get(p).as_dict().cloned() else { return false };
-        if d.contains(key) {
+        if dict_has(doc, &d, key) {
             return true;
         }
         parent = d.reference(b"Parent");
@@ -395,4 +400,43 @@ pub(super) fn top_names(doc: &Document) -> Vec<String> {
     };
     let list = af.get(b"Fields").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
     list.iter().filter_map(|o| doc.resolve(o).as_dict().and_then(|d| d.get(b"T").cloned())).filter_map(|t| crate::text_of(&doc.resolve(&t))).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn null_entries_on_parents_and_unsigned_signatures_are_treated_as_absent() {
+        let mut doc = Document::new_empty();
+        let mut sig = Dict::new();
+        sig.set(b"FT".to_vec(), Object::name("Sig"));
+        sig.set(b"T".to_vec(), PdfString::text("sig"));
+        sig.set(b"V".to_vec(), Object::Null);
+        let sig_ref = doc.add(Object::Dict(sig));
+        assert!(!holds_value(&doc, sig_ref));
+
+        let mut grand = Dict::new();
+        grand.set(b"FT".to_vec(), Object::name("Tx"));
+        grand.set(b"MaxLen".to_vec(), Object::Int(10));
+        let grand_ref = doc.add(Object::Dict(grand));
+
+        let mut parent = Dict::new();
+        parent.set(b"Parent".to_vec(), Object::Ref(grand_ref));
+        parent.set(b"T".to_vec(), PdfString::text("group"));
+        parent.set(b"V".to_vec(), Object::Null);
+        parent.set(b"MaxLen".to_vec(), Object::Null);
+        let parent_ref = doc.add(Object::Dict(parent));
+
+        let mut child = Dict::new();
+        child.set(b"Parent".to_vec(), Object::Ref(parent_ref));
+        child.set(b"T".to_vec(), PdfString::text("item"));
+        let child_ref = doc.add(Object::Dict(child));
+
+        let inh = inherited(&doc, child_ref);
+        assert_eq!(inh.get(b"MaxLen"), Some(&Object::Int(10)));
+        assert!(!inh.contains(b"V"));
+        assert!(!ancestor_sets(&doc, child_ref, b"V"));
+        assert!(ancestor_sets(&doc, child_ref, b"MaxLen"));
+    }
 }

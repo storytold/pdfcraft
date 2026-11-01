@@ -90,7 +90,12 @@ pub(super) fn js_tokens(js: &str) -> (Vec<Token>, Vec<Range<usize>>) {
                 loop {
                     match s.get(j) {
                         None => break 'scan,
-                        Some(b'\\') => j += 2,
+                        Some(b'\\') => {
+                            let Some(step) = js.get(j + 1..).and_then(|r| r.chars().next()).map(char::len_utf8) else {
+                                break 'scan;
+                            };
+                            j += 1 + step;
+                        }
                         Some(b'`') => break,
                         Some(_) => j += 1,
                     }
@@ -106,7 +111,14 @@ pub(super) fn js_tokens(js: &str) -> (Vec<Token>, Vec<Range<usize>>) {
                     match s.get(j) {
                         None => break None,
                         Some(_) if line_ends_at(s, j) => break None,
-                        Some(b'\\') => j += 2,
+                        Some(b'\\') => {
+                            if s.get(j + 1).is_none() || line_ends_at(s, j + 1) {
+                                j += 1;
+                                break None;
+                            }
+                            let step = js.get(j + 1..).and_then(|r| r.chars().next()).map_or(1, char::len_utf8);
+                            j += 1 + step;
+                        }
                         Some(b'/') if !class => break Some(j),
                         Some(b) => {
                             class = match b {
@@ -507,6 +519,10 @@ pub(super) fn eval_notation(src: &str, value_of: &dyn Fn(&str) -> f64) -> Option
                 *i += 1;
                 Some(*n)
             }
+            T::Op('+') => {
+                *i += 1;
+                factor(t, i, d + 1)
+            }
             T::Op('-') => {
                 *i += 1;
                 factor(t, i, d + 1).map(|v| -v)
@@ -552,5 +568,30 @@ pub fn calculate(c: &Calculate, values: &dyn Fn(&str) -> Vec<String>) -> Option<
             let v = eval_notation(expr, &|name| values(name).first().map(num).unwrap_or(0.0))?;
             Some(js_number(v))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn regex_scan_does_not_cross_line_break_after_backslash_or_split_utf8() {
+        let js = "x = /a\\\nthis.getField(\"price\").value / 2;";
+        assert_eq!(calculation_reads(js), vec!["price".to_owned()]);
+
+        let js_utf8 = "var r = /\\é/; event.value = this.getField(\"tax\").value;";
+        assert_eq!(calculation_reads(js_utf8), vec!["tax".to_owned()]);
+    }
+
+    #[test]
+    fn eval_notation_supports_unary_plus() {
+        let c = Calculate::Notation("+a + (+b)".to_owned());
+        let out = calculate(&c, &|name| match name {
+            "a" => vec!["3".to_owned()],
+            "b" => vec!["4".to_owned()],
+            _ => Vec::new(),
+        });
+        assert_eq!(out.as_deref(), Some("7"));
     }
 }
