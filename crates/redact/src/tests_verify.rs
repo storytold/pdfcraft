@@ -347,6 +347,41 @@ fn a_survivor_in_an_unused_object_is_found() {
     assert!(!proof.passed(), "{}", proof.to_text());
 }
 
+/// The page draws "(Image)" under the marked region, and keeps an image XObject whose
+/// `/Subtype /Image` is the same word.
+fn image_word_doc() -> Document {
+    let image = stream("/Type /XObject /Subtype /Image /Width 20 /Height 20 /ColorSpace /DeviceGray /BitsPerComponent 8", &[0x80u8; 400]);
+    let content = b"BT /F1 10 Tf 10 100 Td (Image) Tj ET";
+    let spec = Spec { resources: "/XObject << /Im1 7 0 R >>", extra: vec![image], ..Spec::default() };
+    let mut doc = open(build_with(content, spec));
+    mark(&mut doc, &[[0.0, 90.0, 40.0, 115.0]]);
+    doc
+}
+
+#[test]
+fn a_word_that_remains_in_a_structural_name_does_not_fail_the_proof() {
+    // "Image" is redacted from the page, and is also the /Subtype of the image the page keeps.
+    // The name is structure redaction never edits, not a leftover copy: the proof must pass,
+    // and the name surface must read clean, not unswept.
+    let mut doc = image_word_doc();
+    let (r, proof) = run(&mut doc);
+    r.unwrap();
+    assert!(proof.passed(), "{}", proof.to_text());
+    assert_eq!(surface(&proof, Surface::ObjectStrings).verdict, Verdict::Clean);
+
+    // But a name the input did not have is a copy like any other: a surplus of name matches
+    // is a survivor, wherever it sits.
+    let snap = Snapshot::capture(&image_word_doc(), None).unwrap();
+    let image = stream("/Type /XObject /Subtype /Image /Width 20 /Height 20 /ColorSpace /DeviceGray /BitsPerComponent 8", &[0x80u8; 400]);
+    let spec = Spec { resources: "/XObject << /Im1 7 0 R >>", catalog: "/Extra << /Stolen /Image >>", extra: vec![image], ..Spec::default() };
+    let mut shown = open(build_with(b"BT /F1 10 Tf 10 200 Td (Public) Tj ET", spec));
+    mark(&mut shown, &[[0.0, 90.0, 40.0, 115.0]]);
+    shown.require_full_save();
+    let proof = snap.prove(&shown, None, &ProofOptions::default());
+    assert_eq!(surface(&proof, Surface::ObjectStrings).verdict, Verdict::Survivor, "{}", proof.to_text());
+    assert!(!proof.passed(), "{}", proof.to_text());
+}
+
 fn attachment_spec(payload: &[u8]) -> Spec<'static> {
     Spec {
         catalog: "/Names << /EmbeddedFiles << /Names [(a.bin) 7 0 R] >> >>",
@@ -968,6 +1003,9 @@ fn the_sweep_is_bounded() {
     assert!(!tests_support::walks_in_full(200));
     assert_eq!(tests_support::decode_budget_runs_out(), (true, true));
     assert_eq!(tests_support::search_budget_runs_out(), (true, true));
+    // A decode that fails past the one-stream cap pays for the attempt: the same bomb cannot
+    // be decoded (and fail) again and again for free.
+    assert_eq!(tests_support::failed_decode_charges_the_budget(), (true, true, true));
 }
 
 #[test]

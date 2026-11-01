@@ -16,6 +16,9 @@ pub(super) struct Ctx {
     /// Digests of the decoded content of the overlay streams (their boxes and labels are drawn
     /// on purpose and are neither text to look for nor paint to flag).
     pub(super) overlay: HashSet<String>,
+    /// Decoded bytes of the proof so far: one allowance for the whole proof, failures charged
+    /// too (see [`Ctx::decode`]), so a stream referenced many times, or one that fails after
+    /// decoding part of itself, cannot decode again for free.
     pub(super) decoded: Cell<u64>,
     pub(super) work: Cell<u64>,
 }
@@ -25,21 +28,22 @@ impl Ctx {
         Ctx { overlay, decoded: Cell::new(0), work: Cell::new(0) }
     }
 
-    /// Decode `s` strictly: a stream that is damaged, longer than [`MAX_STREAM`], or one more than
-    /// [`MAX_TOTAL_DECODED`] allows is an error (never silently truncated data).
+    /// Decode `s` strictly: a stream that is damaged, longer than [`MAX_STREAM`], or one more
+    /// than [`MAX_TOTAL_DECODED`] allows is an error (never silently truncated data). Every
+    /// attempt is charged to the cumulative allowance, failures included: a decode that fails
+    /// past the one-stream cap pays the cap, and one that fails mid-way pays what it decoded
+    /// before the error — the work of finding out is not work a repeated reference gets for free.
     pub(super) fn decode(&self, s: &Stream) -> Result<Vec<u8>, ()> {
         let left = MAX_TOTAL_DECODED.saturating_sub(self.decoded.get());
         let cap = usize::try_from(left).unwrap_or(usize::MAX).min(MAX_STREAM);
-        // Strict and within the cap, charged to a one-stream allowance (what is left of the
-        // proof's decode budget is tracked here, by decoded output length).
-        let data = DecodeBudget::new(cap, usize::MAX).decode_strict(s).map_err(|_| ())?;
-        // The decode is bounded by the cap; the check keeps an over-long stream an error
-        // whatever the reader does.
-        if data.len() > cap {
-            return Err(());
-        }
-        self.decoded.set(self.decoded.get().saturating_add(data.len() as u64));
-        Ok(data)
+        let mut budget = DecodeBudget::new(cap, usize::MAX);
+        let result = budget.decode_strict(s);
+        // The attempt's own accounting covers a success (what it decoded), a stream cut short
+        // by corruption (what it decoded first) and one refused past the cap (the cap): charge
+        // it through, whichever way the attempt went.
+        let spent = cap.saturating_sub(budget.remaining());
+        self.decoded.set(self.decoded.get().saturating_add(spent as u64));
+        result.map_err(|_| ())
     }
 
     /// Spend `n` units of search work; false once [`MAX_WORK`] is used up.
@@ -52,6 +56,12 @@ impl Ctx {
     /// Is this decoded content one of the overlay streams this run created?
     pub(super) fn is_overlay(&self, data: &[u8]) -> bool {
         !self.overlay.is_empty() && self.overlay.contains(&sha256(&[data]))
+    }
+
+    /// (tests) A context whose cumulative decode allowance has `left` bytes left.
+    #[cfg(test)]
+    pub(super) fn with_decode_left(left: u64) -> Self {
+        Ctx { overlay: HashSet::new(), decoded: Cell::new(MAX_TOTAL_DECODED.saturating_sub(left)), work: Cell::new(0) }
     }
 }
 

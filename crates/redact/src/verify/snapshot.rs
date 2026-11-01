@@ -8,7 +8,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, write_full};
 
 use super::extract::extract_page;
 use super::geometry::{Finding, check_geometry};
-use super::sweep::{Acc, Needle, add_needle, sweep_doc};
+use super::sweep::{Acc, Needle, add_needle, bytes_hits, sweep_doc, walk_strings};
 use super::util::{Ctx, count, latin1, sha256, squash, words};
 use super::{Excision, Proof, ProofOptions, SURFACES, Status, Surface};
 use crate::interp::{Mode, Removed, Scope, process};
@@ -40,6 +40,9 @@ pub struct Snapshot {
     /// The document's page text before redaction (decoded view, code view), for the allowance
     /// of needles added later.
     src: (String, String),
+    /// The names of the document (structure redaction never edits), for the name allowance of
+    /// needles added later.
+    names: Vec<Vec<u8>>,
     /// Digests of the decoded content of the streams this run created to draw the redaction
     /// boxes and labels (see [`Snapshot::set_overlay_streams`]).
     overlay: HashSet<String>,
@@ -148,7 +151,15 @@ impl Snapshot {
             let (src, cut) = if n.raw_view { (&src_raw, &cut_raw) } else { (&src_text, &cut_text) };
             n.allowance = count(src, &n.key).saturating_sub(count(cut, &n.key));
         }
-        Ok(Snapshot { regions, pages, needles, problems, src: (src_text, src_raw), overlay: HashSet::new() })
+        // The names the removed text legitimately sits in (a redacted word that is also a
+        // `/Subtype`, a `/Filter`, a `/BaseFont`): names are structure redaction never edits,
+        // so the output may hold the input's own matches, and only a surplus is a survivor.
+        let names = all_names(doc);
+        let name_allow: Vec<usize> = needles.iter().map(|n| count_name_matches(&names, n, &ctx)).collect();
+        for (n, allow) in needles.iter_mut().zip(name_allow) {
+            n.name_allowance = allow;
+        }
+        Ok(Snapshot { regions, pages, needles, problems, src: (src_text, src_raw), names, overlay: HashSet::new() })
     }
 
     /// Tell the proof which streams this run created to draw the redaction boxes and labels
@@ -188,8 +199,12 @@ impl Snapshot {
             let known = self.needles.iter().any(|n| !n.raw_view && n.key == key);
             // No owner: a survivor fails the proof through its surface; no region carries it.
             add_needle(&mut self.needles, false, text.to_string(), None);
-            if !known && let Some(n) = self.needles.last_mut() {
-                n.allowance = count(&self.src.0, &n.key);
+            if !known {
+                let ctx = Ctx::new(HashSet::new());
+                if let Some(n) = self.needles.last_mut() {
+                    n.allowance = count(&self.src.0, &n.key);
+                    n.name_allowance = count_name_matches(&self.names, n, &ctx);
+                }
             }
         }
     }
@@ -381,6 +396,29 @@ impl Snapshot {
 
 /// Per page: the digest of its content in the output and its glyph-operator count.
 type PagesAfter = BTreeMap<usize, (Option<String>, Option<usize>)>;
+
+/// Every name of the document (the values, wherever an object holds them).
+fn all_names(doc: &Document) -> Vec<Vec<u8>> {
+    let mut names = Vec::new();
+    for num in doc.object_numbers() {
+        if let Ok(obj) = doc.try_get(num) {
+            walk_strings(&obj, 0, &mut |o| {
+                if let Object::Name(n) = o {
+                    names.push(n.clone());
+                }
+            });
+        }
+    }
+    names
+}
+
+/// How many of `names` carry `needle`, by the same search the sweep runs on a name.
+fn count_name_matches(names: &[Vec<u8>], needle: &Needle, ctx: &Ctx) -> usize {
+    if needle.short() {
+        return 0;
+    }
+    names.iter().filter(|n| bytes_hits(std::slice::from_ref(needle), n, MIN_NEEDLE, ctx).is_some_and(|h| !h.is_empty())).count()
+}
 
 /// The page's content digest and glyph-operator count in the output, and per region the glyphs
 /// still placed inside it (`None` when the page's text can't be placed). The digest covers the

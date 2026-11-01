@@ -41,7 +41,12 @@
 //! Limits, stated plainly: text that exists only as pixels of an image is not text; a string
 //! that also appears in content that was *not* redacted is counted, over the whole document, on
 //! the page text, the raw file and the decoded streams (those hold the kept copy too) and fails
-//! on a surplus; every other surface is swept with no allowance. The raw file and the decoded
+//! on a surplus; names are swept against the matches the input itself had, since a redacted word
+//! that is also a `/Subtype` or a `/BaseFont` is structure, not a leftover copy, and a surplus of
+//! matches still fails; every other surface is swept with no allowance. A word of six characters or more
+//! that also spells a structural name (`/Filter`, `/MediaBox`) can still be reported by the raw-file and
+//! decoded-stream surfaces, which search stored bytes and cannot tell a name from a copy: that is
+//! over-reporting, never a pass. The raw file and the decoded
 //! streams are searched for strings of at least six characters only (shorter ones match object
 //! syntax and numbers by chance), skipping the trailer's file identifier and the
 //! pixels of an image codec (DCT, JPX, JBIG2, CCITT), which are searched as stored bytes only; shorter strings are still found on the page text,
@@ -248,7 +253,7 @@ pub(crate) mod tests_support {
     use pdfcraft_cos::{Dict, Object, Stream};
 
     use super::extract::{carries_glyphs, parse_cmap};
-    use super::limits::{MAX_TOTAL_DECODED, MAX_WORK, MIN_STRUCTURED_NEEDLE};
+    use super::limits::{MAX_STREAM, MAX_TOTAL_DECODED, MAX_WORK, MIN_STRUCTURED_NEEDLE};
     use super::sweep::{Needle, add_needle, bytes_counts, bytes_hits, walk_strings};
     use super::util::Ctx;
     pub(crate) use super::util::survivor_encodings;
@@ -302,8 +307,23 @@ pub(crate) mod tests_support {
         let ctx = Ctx::new(Default::default());
         let s = Stream::from_raw(Dict::new(), vec![0u8; 100]);
         let before = ctx.decode(&s).is_ok();
-        ctx.decoded.set(MAX_TOTAL_DECODED - 50);
-        (before, ctx.decode(&s).is_err())
+        let spent = Ctx::with_decode_left(50);
+        (before, spent.decode(&s).is_err())
+    }
+
+    /// Does a decode that fails past the one-stream cap pay for the attempt, so the same bomb
+    /// cannot be decoded (and fail) again and again for free?
+    /// `(refused, charged, then refused for want of allowance)`.
+    pub fn failed_decode_charges_the_budget() -> (bool, bool, bool) {
+        let big = vec![0u8; MAX_STREAM + (1 << 20)];
+        let bomb = Stream::flate(Dict::new(), &big);
+        drop(big);
+        let small = Stream::from_raw(Dict::new(), vec![0u8; 100]);
+        let ctx = Ctx::with_decode_left(u64::try_from(MAX_STREAM + 50).unwrap_or(u64::MAX));
+        let refused = ctx.decode(&bomb).is_err();
+        let charged = ctx.decoded.get() == MAX_TOTAL_DECODED - 50;
+        let gone = ctx.decode(&small).is_err();
+        (refused, charged, gone)
     }
 
     /// Does the byte search report `None` once the work budget is used up (and not before)?

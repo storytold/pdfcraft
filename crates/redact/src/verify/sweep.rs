@@ -27,6 +27,11 @@ pub(super) struct Needle {
     /// the whole document and fail on a surplus; every other surface (strings, Info, XMP,
     /// attachments) is swept with no allowance.
     pub(super) allowance: usize,
+    /// Names of the input that carry this needle (a redacted word that is also a `/Subtype`, a
+    /// `/Filter`, a `/BaseFont`). Names are structure redaction never edits, so the name surface
+    /// is swept against the input's own matches: the output may hold as many as the input did,
+    /// and only a surplus is a survivor.
+    pub(super) name_allowance: usize,
 }
 
 impl Needle {
@@ -56,7 +61,7 @@ pub(super) fn add_needle(set: &mut Vec<Needle>, raw_view: bool, shown: String, o
     } else {
         survivor_encodings(&shown)
     };
-    set.push(Needle { raw_view, shown, key, bytes, owners: owner.into_iter().collect(), allowance: 0 });
+    set.push(Needle { raw_view, shown, key, bytes, owners: owner.into_iter().collect(), allowance: 0, name_allowance: 0 });
 }
 
 pub(super) struct Acc {
@@ -170,8 +175,18 @@ impl Tally {
     /// Report what is left of each needle's occurrences after its allowance (none inside an
     /// attachment, where nothing legitimately remains).
     pub(super) fn settle(self, surface: Surface, needles: &[Needle], depth: usize, acc: &mut Acc) {
+        self.settle_with(surface, needles, depth, acc, |n| n.allowance)
+    }
+
+    /// The name surface: the input's own name matches are the allowance (redaction never edits
+    /// names), so what is left is a surplus of matches over the input.
+    pub(super) fn settle_names(self, surface: Surface, needles: &[Needle], depth: usize, acc: &mut Acc) {
+        self.settle_with(surface, needles, depth, acc, |n| n.name_allowance)
+    }
+
+    fn settle_with(self, surface: Surface, needles: &[Needle], depth: usize, acc: &mut Acc, allow_of: impl Fn(&Needle) -> usize) {
         for (ni, places) in self.0 {
-            let mut allow = if depth == 0 { needles.get(ni).map_or(0, |n| n.allowance) } else { 0 };
+            let mut allow = if depth == 0 { needles.get(ni).map_or(0, &allow_of) } else { 0 };
             for (loc, count) in places {
                 let used = count.min(allow);
                 allow -= used;
@@ -349,6 +364,7 @@ fn sweep_objects(needles: &[Needle], doc: &Document, depth: usize, tag: &str, ac
     let mut embedded: BTreeSet<u32> = BTreeSet::new();
     let mut overlay_raw: Vec<Vec<u8>> = Vec::new();
     let mut in_streams = Tally::default();
+    let mut in_names = Tally::default();
     let lookup = lookup_streams(doc);
     for num in doc.object_numbers() {
         let loc = format!("{tag}object {num}");
@@ -377,7 +393,9 @@ fn sweep_objects(needles: &[Needle], doc: &Document, depth: usize, tag: &str, ac
                 None => spent = true,
             },
             Object::Name(n) => match bytes_hits(needles, n, MIN_NEEDLE, ctx) {
-                Some(h) => hits.extend(h),
+                // A name the input had its own matches in is structure, not a leftover copy:
+                // the matches are tallied and settled against the input's count.
+                Some(h) => h.into_iter().for_each(|ni| in_names.add(ni, &loc, 1)),
                 None => spent = true,
             },
             _ => {}
@@ -457,6 +475,7 @@ fn sweep_objects(needles: &[Needle], doc: &Document, depth: usize, tag: &str, ac
             }
         }
     }
+    in_names.settle_names(Surface::ObjectStrings, needles, depth, acc);
     in_streams.settle(Surface::DecodedStreams, needles, depth, acc);
     (embedded, overlay_raw)
 }
