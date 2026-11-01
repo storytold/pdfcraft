@@ -16,11 +16,13 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
   Group 4 whenever that is smaller.
 - **Merge image fragments** (`fragments`, on by default): some PDF printers draw a page picture
   as thousands of images one pixel row high. Runs of upright 8-bit grey or RGB images in one
-  colour space, sharing their left and right edges and stacked edge to edge (at least four,
+  colour space, tiled edge to edge in stacks, side-by-side strips or rectangular grids (at least four,
   drawn with nothing else between them), become one lossless image at their finest resolution,
   which the image settings then resample; the strips are dropped by Clean Up. A real page
   printed this way went from 4.3 MB to 231 KB (Standard) and 161 KB (Mobile). Not merged yet:
-  side-by-side tiles, rotated strips, masks. Content arrays use the shared space boundary
+  rotated strips or masks. Assembly preserves the validated row partition, including near-aligned
+  tiles, and leaves the original drawing untouched if an output row or tile collapses.
+  Content arrays use the shared space boundary
   policy, so trailing comments, split operands and graphics state keep their meaning after merging.
 - **Images:** the effective resolution of each image is measured where pages draw it (the CTM
   through form XObjects, up to 12 deep; the smallest over all uses).
