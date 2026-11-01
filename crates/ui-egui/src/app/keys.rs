@@ -111,7 +111,11 @@ impl PdfCraftApp {
             self.eraser_key = None;
             return;
         }
-        if ctx.input(|input| input.key_down(egui::Key::E)) {
+        // E may be down again at frame end; its release still ends the previous hold before
+        // tool_keys handles a fresh press.
+        let released =
+            ctx.input(|input| input.events.iter().any(|event| matches!(event, egui::Event::Key { key: egui::Key::E, pressed: false, .. })));
+        if !released && ctx.input(|input| input.key_down(egui::Key::E)) {
             return;
         }
         self.eraser_key = None;

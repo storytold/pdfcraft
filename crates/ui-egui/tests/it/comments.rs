@@ -756,6 +756,24 @@ fn a_tap_of_e_within_one_frame_stays_on_the_eraser_after_a_pause() {
     assert_eq!(tool_and_bar(&h), (ERASER, CommentTool::Eraser), "the tap stays on the Eraser");
 }
 
+/// A release ends the old borrow before a fresh press, even when E is down again by frame end.
+#[test]
+fn an_e_release_is_settled_before_a_new_press_in_the_same_frame() {
+    use eraser_key::*;
+    for (duration, expected) in [(0.1, DRAW), (0.5, ERASER)] {
+        let mut h = eraser_harness();
+        keys_in_one_frame(&mut h, 100.0, &[(egui::Key::E, true)]);
+        assert_eq!(tool_and_bar(&h), (ERASER, CommentTool::Eraser));
+        keys_in_one_frame(&mut h, 100.0 + duration, &[(egui::Key::E, false), (egui::Key::E, true)]);
+        assert!(h.ctx.input(|i| i.key_down(egui::Key::E)), "the fixture ends with E held again");
+        let bar = if expected == DRAW { CommentTool::Ink } else { CommentTool::Eraser };
+        assert_eq!(tool_and_bar(&h), (expected, bar), "release after {duration}s is settled before the new E press");
+        // After a tap the new press toggled Draw on; after a hold it started a fresh Eraser borrow.
+        keys_in_one_frame(&mut h, 101.0 + duration, &[(egui::Key::E, false)]);
+        assert_eq!(tool_and_bar(&h), (DRAW, CommentTool::Ink), "the final release leaves Draw active");
+    }
+}
+
 /// #3900: B and E in one frame are taken in the order they came: B goes back to Draw, then E
 /// goes to the Eraser.
 #[test]
