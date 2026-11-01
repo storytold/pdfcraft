@@ -18,9 +18,19 @@ pub(super) fn latin_width(t: &AddedText, s: &str) -> f64 {
     t.family.width(s, t.size, t.bold, t.italic) + t.char_spacing * s.chars().count() as f64
 }
 
-/// The lines of a text item after wrapping to its box width.
+/// The lines of a text item after wrapping to its box width, as drawn: the spaces where a line
+/// wraps hang past its end (they stay in [`wrapped`], whose lines join back into the text).
 pub fn lines(t: &AddedText) -> Vec<String> {
-    wrapped(t).into_iter().map(|(line, ..)| line).collect()
+    let all = wrapped(t);
+    let paragraphs: Vec<usize> = all.iter().map(|(.., p)| *p).collect();
+    all.into_iter()
+        .enumerate()
+        .map(
+            |(i, (line, _, p))| {
+                if paragraphs.get(i + 1) == Some(&p) { line.trim_end_matches(pdfcraft_fonts::appearance_text::soft_space).to_owned() } else { line }
+            },
+        )
+        .collect()
 }
 
 #[cfg(test)]
@@ -230,7 +240,7 @@ pub fn first_undrawable(t: &AddedText) -> Option<char> {
 fn shaped_by_a_face(t: &AddedText) -> bool {
     (pdfcraft_fonts::document_arabic_font().is_some() && t.text.chars().any(is_arabic))
         || (pdfcraft_fonts::document_hebrew_font(false).is_some() && t.text.chars().any(is_hebrew))
-        || t.text.chars().any(pdfcraft_fonts::embedding::default_ignorable)
+        || (t.text.chars().any(pdfcraft_fonts::embedding::default_ignorable) && pdfcraft_fonts::appearance_text::can_shape(&t.text))
 }
 
 /// An Arabic character the face shapes and draws (U+061C, a direction mark, is dropped).

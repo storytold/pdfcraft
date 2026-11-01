@@ -20,6 +20,7 @@ pub(super) fn eligible(members: &[&TextLine], text: &str, style: &BlockStyle) ->
                 .chars()
                 .any(|c| matches!(u32::from(c), 0x0600..=0x06ff | 0x0750..=0x077f | 0x0870..=0x08ff | 0xfb50..=0xfdff | 0xfe70..=0xfefc)))
         || !style.ranges.is_empty()
+        || style.aligns.iter().any(Option::is_some)
         || style.resource.is_some()
         || style.family.is_some()
         || style.bold.is_some()
