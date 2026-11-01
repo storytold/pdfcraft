@@ -412,7 +412,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                 item("Convert colors", "palette", "prepress.convert_colors", Planned("M11")),
                 item("Set page boxes", "square-dashed-mouse-pointer", "page.boxes", Ready),
                 item("Add printer marks", "ruler", "prepress.marks", Planned("M11")),
-                item("Fix hairlines", "minus", "prepress.hairlines", Planned("M11")),
+                item("Fix hairlines", "minus", "prepress.hairlines", Ready),
             ],
         }],
     },

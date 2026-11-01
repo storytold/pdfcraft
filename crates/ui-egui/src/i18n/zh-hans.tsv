@@ -2503,6 +2503,16 @@ animation effects	Off	关
 	Edit this PDF	编辑此 PDF
 	Export this PDF	导出此 PDF
 	Find text or tools	查找文本或工具
+	Narrower than	细于
+	New width	新宽度
+	Zero-width lines always count as narrower.	零宽度的线始终视为更细。
+	Also	同时
+	Type 3 font glyphs	Type 3 字体字形
+	Pattern strokes	图案描边
+	Lines drawn inside Type 3 glyphs and tiling patterns; off by default.	绘制在 Type 3 字形和平铺图案内部的线；默认关闭。
+	No hairlines found on those pages	这些页面上未找到细线
+	Fixed {n} hairlines on {p} pages	已修复 {p} 页上的 {n} 条细线
+	Fix hairlines…	修复细线…
 	Create & Edit	创建和编辑
 	Review & Compare	审阅和比较
 	Forms & Signatures	表单和签名

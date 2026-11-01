@@ -2544,6 +2544,16 @@ animation effects	Off	Izklopljeni
 	Edit this PDF	Uredi ta PDF
 	Export this PDF	Izvozi ta PDF
 	Find text or tools	Poišči besedilo ali orodja
+	Narrower than	Ožje od
+	New width	Nova širina
+	Zero-width lines always count as narrower.	Črte z ničelno širino vedno štejejo za ožje.
+	Also	Tudi
+	Type 3 font glyphs	Glifi pisav Type 3
+	Pattern strokes	Poteze vzorcev
+	Lines drawn inside Type 3 glyphs and tiling patterns; off by default.	Črte, narisane znotraj glifov Type 3 in tlakovanih vzorcev; privzeto izklopljeno.
+	No hairlines found on those pages	Na teh straneh ni najdenih lasnih črt
+	Fixed {n} hairlines on {p} pages	Popravljenih {n} lasnih črt na {p} straneh
+	Fix hairlines…	Popravi tanke črte…
 	Create & Edit	Ustvarjanje in urejanje
 	Review & Compare	Pregled in primerjava
 	Forms & Signatures	Obrazci in podpisi
