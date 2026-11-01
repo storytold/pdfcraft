@@ -986,12 +986,20 @@ impl PdfCraftApp {
                 .with_min_inner_size([400.0, 300.0]);
 
             let mut reattach = false;
-            let mut close = false;
+            let mut close_clean = false;
 
             ctx.show_viewport_immediate(viewport_id, builder, |child_ui, _class| {
-                if child_ui.input(|i| i.viewport().close_requested()) {
-                    close = true;
-                    return;
+                let close_requested =
+                    child_ui.input(|i| i.viewport().close_requested() || i.raw.viewports.get(&viewport_id).is_some_and(|v| v.close_requested()));
+                if close_requested {
+                    if self.has_unsaved_work(idx) {
+                        child_ui.ctx().send_viewport_cmd_to(viewport_id, egui::ViewportCommand::CancelClose);
+                        child_ui.ctx().send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                        self.close_request = Some(crate::CloseRequest::Tab(doc_id));
+                    } else {
+                        close_clean = true;
+                        return;
+                    }
                 }
                 let t = theme::Tokens::get(child_ui.ctx());
                 egui::Panel::top("detached_header").frame(egui::Frame::NONE.fill(t.panel).inner_margin(egui::Margin::symmetric(8, 4))).show(
@@ -1014,12 +1022,21 @@ impl PdfCraftApp {
                 egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.pasteboard)).show(child_ui, |ui| {
                     crate::canvas::document_area(self, idx, ui);
                 });
+
+                if self.close_request == Some(crate::CloseRequest::Tab(doc_id)) {
+                    if let Some(choice) = crate::dialogs::save_prompt_key(child_ui.ctx(), &mut self.save_prompt_button) {
+                        self.resolve_close(child_ui.ctx(), choice);
+                    }
+                    if self.close_request == Some(crate::CloseRequest::Tab(doc_id)) {
+                        crate::dialogs::show_save_prompt_modal(self, child_ui.ctx(), idx);
+                    }
+                }
             });
 
             if reattach {
                 self.attach_tab(doc_id);
-            } else if close {
-                self.request_close_tab(idx);
+            } else if close_clean {
+                self.close_tab(idx);
             }
         }
     }
