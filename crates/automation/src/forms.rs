@@ -208,17 +208,39 @@ fn kind_name(k: FormFieldKind) -> &'static str {
     }
 }
 
+/// A JSON number as the radio option it names: its integer spelling when it is a whole number
+/// (`1`, `1.0` and `1e0` are all `1`; `-0` is `0`), otherwise JSON's own spelling (`1.5`), which
+/// names only an option exported as exactly that text. A whole number at or past 2^53, where a
+/// float no longer holds every integer, keeps JSON's spelling too (`1e300`), so it names no option
+/// by accident.
+fn number_option(n: &serde_json::Number) -> String {
+    // Integers as parsed (u64, i64) print exactly.
+    if n.is_u64() || n.is_i64() {
+        return n.to_string();
+    }
+    const EXACT: f64 = 9_007_199_254_740_992.0; // 2^53
+    match n.as_f64() {
+        // Finite, whole and below 2^53 in magnitude, so the cast is exact and in range.
+        Some(x) if x.is_finite() && x.fract() == 0.0 && x.abs() < EXACT => (x as i64).to_string(),
+        _ => n.to_string(),
+    }
+}
+
 /// A JSON value → the value for this field (booleans for check boxes, arrays for lists…).
 fn value_for(f: &FormField, v: &Value) -> Result<FieldValue> {
     let wrong = |what: &str| ToolError::InvalidArgs(format!("{}: {what}", f.name));
     Ok(match (f.kind, v) {
         (FormFieldKind::CheckBox, Value::Bool(b)) => FieldValue::Check(*b),
         (FormFieldKind::Radio, Value::Null) => FieldValue::Radio(None),
-        // An option as `form_fields` lists it (an export value) names its button's on state.
+        // An option as `form_fields` lists it (an export value) names its button's on state. The
+        // export values are matched first and the on-state names after them
+        // (`Field::state_for_export`): with `/Opt [(1) (2)]` and states `/0` `/1`, `1` is the first
+        // button, not the second one's state. A value matching neither is refused when written,
+        // with the options listed.
         (FormFieldKind::Radio, Value::String(s)) => FieldValue::Radio(Some(f.state_for_export(s).unwrap_or(s).to_owned())),
         // A number is the same option written without quotes (`1` for the export value `1`).
         (FormFieldKind::Radio, Value::Number(n)) => {
-            let s = n.to_string();
+            let s = number_option(n);
             FieldValue::Radio(Some(f.state_for_export(&s).map_or_else(|| s.clone(), str::to_owned)))
         }
         (FormFieldKind::Combo | FormFieldKind::List, Value::Array(a)) => FieldValue::Choice(

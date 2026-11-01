@@ -218,7 +218,9 @@ impl Field {
     /// options [`Field::export_of`] lists. A field with one `/Opt` entry per widget matches those
     /// entries first and its on-state names only after them: the names may be positions (`/0`,
     /// `/1`; ISO 32000-2 Table 230), so the export value `1` is the first widget, not the second
-    /// one's state `/1`. Elsewhere this is [`Field::state_for`].
+    /// one's state `/1`. The order is (1) an `/Opt` export value, (2) an on-state name: when one
+    /// button's on state is named `1` and another button exports `1`, `1` selects the one that
+    /// exports it. Elsewhere this is [`Field::state_for`].
     pub fn state_for_export(&self, value: &str) -> Option<&str> {
         let by_export = self.button_exports().and_then(|exports| {
             let i = exports.iter().position(|(e, _)| e == value)?;
