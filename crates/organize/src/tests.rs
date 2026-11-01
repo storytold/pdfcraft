@@ -405,6 +405,31 @@ fn move_pages_reorders() {
 }
 
 #[test]
+fn reorder_pages_puts_every_page_where_the_order_says() {
+    let mut doc = open(fixture());
+    reorder_pages(&mut doc, &[2, 0, 1]).unwrap();
+    assert_eq!(labels(&doc), ["Page 3", "Page 1", "Page 2"]);
+    // The order is relative to what the document has now.
+    reorder_pages(&mut doc, &[1, 2, 0]).unwrap();
+    assert_eq!(labels(&doc), ["Page 1", "Page 2", "Page 3"]);
+    reorder_pages(&mut doc, &[2, 1, 0]).unwrap();
+    let doc = save_and_reopen(&doc);
+    assert_eq!(labels(&doc), ["Page 3", "Page 2", "Page 1"]);
+}
+
+#[test]
+fn reorder_pages_refuses_anything_but_a_permutation_and_changes_nothing() {
+    let mut doc = open(fixture());
+    // Too few, too many, a page twice, a page that is not there (also a huge index).
+    for order in [&[0usize, 1][..], &[0, 1, 2, 0], &[0, 0, 1], &[0, 1, 3], &[0, 1, usize::MAX], &[]] {
+        assert!(reorder_pages(&mut doc, order).is_err(), "{order:?}");
+    }
+    assert_eq!(reorder_pages(&mut doc, &[0, 1, 7]), Err(OrganizeError::NoSuchPage(7)));
+    assert_eq!(labels(&doc), ["Page 1", "Page 2", "Page 3"]);
+    assert!(!doc.is_modified(), "refused orders leave the document untouched");
+}
+
+#[test]
 fn reverse_pages_reorders() {
     let mut doc = open(fixture());
     reverse_pages(&mut doc, &[0, 1, 2]).unwrap();
