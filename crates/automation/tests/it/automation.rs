@@ -4556,6 +4556,56 @@ fn auditing_faux_redactions_through_tools() {
     assert_eq!(ok(&mut a, "doc_audit_redactions", json!({ "doc": clean }))["count"], 0);
 }
 
+/// A tagged one-page file in `lang` with a heading and a paragraph, as an office suite exports it.
+fn tagged_fixture(lang: &str) -> Vec<u8> {
+    let content = "/H1 <</MCID 0>> BDC BT /F1 18 Tf 72 700 Td (Guide) Tj ET EMC /P <</MCID 1>> BDC BT /F1 11 Tf 72 670 Td (Body text.) Tj ET EMC";
+    let objs: Vec<String> = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 6 0 R /MarkInfo << /Marked true >> /Lang ({lang}) >>"),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /StructParents 0 >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        "<< /Type /StructTreeRoot /K 7 0 R /ParentTree << /Nums [0 [8 0 R 9 0 R]] >> /ParentTreeNextKey 1 >>".into(),
+        "<< /Type /StructElem /S /Document /P 6 0 R /K [8 0 R 9 0 R] >>".into(),
+        "<< /Type /StructElem /S /H1 /P 7 0 R /Pg 3 0 R /K 0 >>".into(),
+        "<< /Type /StructElem /S /P /P 7 0 R /Pg 3 0 R /K 1 >>".into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// Combining two tagged files gives a tagged file in the first one's language: the accessibility
+/// checker's document rules that the inputs pass, the result passes too (it used to fail them).
+#[test]
+fn combining_tagged_files_keeps_them_tagged() {
+    let dir = workdir("combine-tagged");
+    std::fs::write(dir.join("guide.pdf"), tagged_fixture("en-US")).unwrap();
+    std::fs::write(dir.join("annex.pdf"), tagged_fixture("fr-CA")).unwrap();
+    let mut a = auto(&dir);
+    ok(&mut a, "doc_combine", json!({ "paths": ["guide.pdf", "annex.pdf"], "out": "combined.pdf" }));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "combined.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "accessibility_check", json!({ "doc": doc, "rules": ["tagged-pdf", "primary-language", "tagged-content"] }));
+    let status: Vec<(String, String)> =
+        r["results"].as_array().unwrap().iter().map(|x| (x["rule"].as_str().unwrap().to_owned(), x["status"].as_str().unwrap().to_owned())).collect();
+    for rule in ["tagged-pdf", "primary-language", "tagged-content"] {
+        assert_eq!(status.iter().find(|(id, _)| id == rule).map(|(_, s)| s.as_str()), Some("passed"), "{rule}: {r}");
+    }
+    let tags = ok(&mut a, "accessibility_tags", json!({ "doc": doc }));
+    let types: Vec<&str> = tags["tags"].as_array().unwrap().iter().filter_map(|t| t["type"].as_str()).collect();
+    assert_eq!(types.iter().filter(|t| **t == "H1").count(), 2, "{tags}");
+}
+
 /// An applied redaction at the end of a line leaves the words before it, then a gap the text
 /// matrix jumps over and the redaction box: nothing is under the box any more, so the audit must
 /// not report the words beside it as covered. In the middle of a line it never did.

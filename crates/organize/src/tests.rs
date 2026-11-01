@@ -1575,6 +1575,237 @@ fn combine_nests_source_bookmarks_and_keeps_attachments() {
     assert_eq!(keys, ["notes.txt", "notes.txt (2)"]);
 }
 
+// ── Combine keeps tags ─────────────────────────────────────────────────────────────────────────
+
+/// A tagged two-page document in language `lang`: a custom `Heading` (role-mapped to `role`, with
+/// element ID `id`) and a paragraph on page 1, a paragraph and a link annotation on page 2.
+fn tagged(lang: &str, role: &str, id: &str) -> Document {
+    open(build(&tagged_objects(lang, role, id), "/Root 1 0 R"))
+}
+
+/// The objects of [`tagged`].
+fn tagged_objects(lang: &str, role: &str, id: &str) -> Vec<String> {
+    vec![
+        format!("<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 8 0 R /MarkInfo << /Marked true >> /Lang ({lang}) >>"), // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>".into(),                               // 2
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 7 0 R >> >> /StructParents 0 >>".into(), // 3
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Resources << /Font << /F1 7 0 R >> >> /StructParents 1 /Annots [15 0 R] >>".into(), // 4
+        {
+            let s = "/Heading <</MCID 0>> BDC BT /F1 12 Tf 20 180 Td (Title) Tj ET EMC /P <</MCID 1>> BDC BT /F1 10 Tf 20 150 Td (One) Tj ET EMC";
+            format!("<< /Length {} >>\nstream\n{s}\nendstream", s.len())
+        }, // 5
+        {
+            let s = "/P <</MCID 0>> BDC BT /F1 10 Tf 20 180 Td (Two) Tj ET EMC";
+            format!("<< /Length {} >>\nstream\n{s}\nendstream", s.len())
+        }, // 6
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),                                                // 7
+        format!(
+            "<< /Type /StructTreeRoot /K 9 0 R /ParentTree 14 0 R /ParentTreeNextKey 3 /RoleMap << /Heading /{role} >> /IDTree << /Names [({id}) 10 0 R] >> >>"
+        ), // 8
+        "<< /Type /StructElem /S /Document /P 8 0 R /K [10 0 R 11 0 R 12 0 R 13 0 R] >>".into(),                        // 9
+        format!("<< /Type /StructElem /S /Heading /P 9 0 R /Pg 3 0 R /K 0 /ID ({id}) >>"),                              // 10
+        "<< /Type /StructElem /S /P /P 9 0 R /Pg 3 0 R /K 1 >>".into(),                                                 // 11
+        "<< /Type /StructElem /S /P /P 9 0 R /Pg 4 0 R /K 0 >>".into(),                                                 // 12
+        "<< /Type /StructElem /S /Link /P 9 0 R /Pg 4 0 R /K << /Type /OBJR /Obj 15 0 R >> >>".into(),                  // 13
+        "<< /Nums [0 [10 0 R 11 0 R] 1 [12 0 R] 2 13 0 R] >>".into(),                                                   // 14
+        "<< /Type /Annot /Subtype /Link /Rect [20 20 80 40] /StructParent 2 /A << /S /URI /URI (https://example.com) >> >>".into(), // 15
+    ]
+}
+
+/// What the structure tree says about every page's marked content, read the way a screen reader
+/// finds it: page (0-based), MCID, element type, and its language if it has one. Each element the
+/// parent tree names must be on that page, hold that MCID and reach the root through `/P`.
+fn tags_of(doc: &Document) -> Vec<(usize, i64, String)> {
+    let cat = catalog(doc);
+    let root_ref = cat.reference(b"StructTreeRoot").expect("a structure tree");
+    let root = doc.get(root_ref).as_dict().cloned().unwrap();
+    let nums = doc.resolve(root.get(b"ParentTree").unwrap()).as_dict().unwrap().get(b"Nums").unwrap().as_array().unwrap().clone();
+    let entry = |k: i64| nums.chunks(2).find(|p| p[0].as_int() == Some(k)).map(|p| p[1].clone());
+    let mut out = Vec::new();
+    for (i, page) in pages(doc).unwrap().iter().enumerate() {
+        let Some(key) = doc.get(page.obj).as_dict().unwrap().int(b"StructParents") else { continue };
+        let arr = doc.resolve(&entry(key).expect("an entry for the page")).as_array().cloned().unwrap();
+        for (mcid, e) in arr.iter().enumerate() {
+            let e_ref = e.as_ref().expect("an element");
+            let d = doc.get(e_ref).as_dict().cloned().unwrap();
+            assert_eq!(d.reference(b"Pg"), Some(page.obj), "the element is on the page");
+            let k = doc.resolve(d.get(b"K").unwrap()).as_ref().clone();
+            let has = |o: &Object| o.as_int() == Some(mcid as i64);
+            assert!(has(&k) || k.as_array().is_some_and(|a| a.iter().any(has)), "the element holds the MCID");
+            let mut up = d.reference(b"P");
+            for _ in 0..8 {
+                if up == Some(root_ref) {
+                    break;
+                }
+                up = up.and_then(|p| doc.get(p).as_dict().and_then(|d| d.reference(b"P")));
+            }
+            assert_eq!(up, Some(root_ref), "the element reaches the root");
+            out.push((i, mcid as i64, String::from_utf8_lossy(d.name(b"S").unwrap()).into_owned()));
+        }
+    }
+    out
+}
+
+#[test]
+fn combine_keeps_the_tags_of_tagged_files() {
+    let (a, b) = (tagged("en-US", "H1", "h"), tagged("en-US", "H1", "h"));
+    let out = full_roundtrip(&combine(&[("A", &a), ("B", &b)]).unwrap());
+    let cat = catalog(&out);
+    assert_eq!(out.resolve(cat.get(b"MarkInfo").expect("marked")).as_dict().unwrap().get(b"Marked"), Some(&Object::Bool(true)));
+    assert_eq!(cat.get(b"Lang").and_then(|l| l.as_string()).map(|s| s.to_text()).as_deref(), Some("en-US"));
+    let one = [(0, 0, "Heading"), (0, 1, "P"), (1, 0, "P")];
+    let both: Vec<(usize, i64, String)> =
+        one.iter().chain(one.iter()).enumerate().map(|(n, (p, m, s))| (p + 2 * (n / 3), *m, s.to_string())).collect();
+    assert_eq!(tags_of(&out), both);
+    // Two documents under the root; the pages' parent tree keys don't collide.
+    let root = out.get(cat.reference(b"StructTreeRoot").unwrap()).as_dict().cloned().unwrap();
+    assert_eq!(root.get(b"K").and_then(|k| k.as_array()).map(Vec::len), Some(2));
+    let keys: Vec<i64> = pages(&out).unwrap().iter().map(|p| out.get(p.obj).as_dict().unwrap().int(b"StructParents").unwrap()).collect();
+    assert_eq!(keys, [0, 1, 3, 4]);
+    assert_eq!(root.int(b"ParentTreeNextKey"), Some(6));
+    assert_eq!(root.get(b"RoleMap").and_then(|r| r.as_dict()).and_then(|r| r.name(b"Heading")), Some(&b"H1"[..]));
+    // Each link annotation is its own Link element's content.
+    let nums = out.resolve(root.get(b"ParentTree").unwrap()).as_dict().unwrap().get(b"Nums").unwrap().as_array().unwrap().clone();
+    for (page, key) in [(1, 2), (3, 5)] {
+        let annot = annots_refs(&out, page)[0];
+        assert_eq!(out.get(annot).as_dict().unwrap().int(b"StructParent"), Some(key));
+        let link = nums.chunks(2).find(|p| p[0].as_int() == Some(key)).unwrap()[1].as_ref().unwrap();
+        let objr = out.get(link).as_dict().unwrap().get(b"K").and_then(|k| k.as_dict()).cloned().unwrap();
+        assert_eq!(objr.reference(b"Obj"), Some(annot));
+    }
+    // The second copy's element ID is renamed, and the ID tree lists both.
+    let ids = out.resolve(root.get(b"IDTree").unwrap()).as_dict().unwrap().get(b"Names").unwrap().as_array().unwrap().clone();
+    let names: Vec<String> = ids.chunks(2).map(|p| p[0].as_string().unwrap().to_text()).collect();
+    assert_eq!(names, ["h", "h-2"]);
+    for pair in ids.chunks(2) {
+        let id = out.get(pair[1].as_ref().unwrap()).as_dict().unwrap().get(b"ID").and_then(|i| i.as_string()).map(|s| s.to_text());
+        assert_eq!(id, Some(pair[0].as_string().unwrap().to_text()));
+    }
+}
+
+#[test]
+fn combine_keeps_each_files_language_and_role_names_apart() {
+    let (a, b) = (tagged("en-US", "H1", "h"), tagged("fr-FR", "P", "h"));
+    let out = full_roundtrip(&combine(&[("A", &a), ("B", &b)]).unwrap());
+    let root = out.get(catalog(&out).reference(b"StructTreeRoot").unwrap()).as_dict().cloned().unwrap();
+    let docs: Vec<Dict> =
+        root.get(b"K").and_then(|k| k.as_array()).unwrap().iter().map(|d| out.get(d.as_ref().unwrap()).as_dict().cloned().unwrap()).collect();
+    let lang = |d: &Dict| d.get(b"Lang").and_then(|l| l.as_string()).map(|s| s.to_text());
+    assert_eq!((lang(&docs[0]), lang(&docs[1]).as_deref()), (None, Some("fr-FR")), "the result is in English; the French file says so");
+    // B maps Heading to P, A to H1: B's headings are renamed and mapped on their own.
+    let roles = root.get(b"RoleMap").and_then(|r| r.as_dict()).cloned().unwrap();
+    assert_eq!((roles.name(b"Heading"), roles.name(b"Heading_2")), (Some(&b"H1"[..]), Some(&b"P"[..])));
+    let types: Vec<String> = tags_of(&out).into_iter().map(|t| t.2).collect();
+    assert_eq!(types, ["Heading", "P", "P", "Heading_2", "P", "P"]);
+}
+
+/// A role map entry can name another of the file's types: when that type is renamed, the entry
+/// follows it, so B's headings still end at P and not at A's H1.
+#[test]
+fn combine_renames_role_map_values_that_name_a_renamed_type() {
+    let (a, b) = (tagged("en-US", "H1 /Title /H1", "h"), tagged("fr-FR", "Title /Title /P", "h"));
+    let out = full_roundtrip(&combine(&[("A", &a), ("B", &b)]).unwrap());
+    let root = out.get(catalog(&out).reference(b"StructTreeRoot").unwrap()).as_dict().cloned().unwrap();
+    let roles = root.get(b"RoleMap").and_then(|r| r.as_dict()).cloned().unwrap();
+    assert_eq!((roles.name(b"Title_2"), roles.name(b"Heading_2")), (Some(&b"P"[..]), Some(&b"Title_2"[..])));
+    assert_eq!((roles.name(b"Title"), roles.name(b"Heading")), (Some(&b"H1"[..]), Some(&b"H1"[..])));
+}
+
+#[test]
+fn combine_with_an_untagged_file_keeps_the_tags_but_claims_no_tagged_pdf() {
+    let a = tagged("en-US", "H1", "h");
+    let out = full_roundtrip(&combine(&[("A", &a), ("B", &doc_b())]).unwrap());
+    let cat = catalog(&out);
+    assert_eq!(tags_of(&out), [(0, 0, "Heading".into()), (0, 1, "P".into()), (1, 0, "P".into())]);
+    assert!(!cat.contains(b"MarkInfo"), "B's pages have no tags");
+}
+
+#[test]
+fn combining_some_pages_keeps_the_elements_on_them() {
+    let a = tagged("en-US", "H1", "h");
+    let out = full_roundtrip(&crate::combine_selected(&[("A", &a, Some(&[1])), ("B", &doc_b(), None)]).unwrap());
+    assert_eq!(tags_of(&out), [(0, 0, "P".into())]);
+    let root = out.get(catalog(&out).reference(b"StructTreeRoot").unwrap()).as_dict().cloned().unwrap();
+    let document = out.get(root.get(b"K").and_then(|k| k.as_array()).unwrap()[0].as_ref().unwrap()).as_dict().cloned().unwrap();
+    let kids: Vec<String> = document
+        .get(b"K")
+        .and_then(|k| k.as_array())
+        .unwrap()
+        .iter()
+        .map(|k| String::from_utf8_lossy(out.get(k.as_ref().unwrap()).as_dict().unwrap().name(b"S").unwrap()).into_owned())
+        .collect();
+    assert_eq!(kids, ["P", "Link"], "the heading and first paragraph were on the page left out");
+    assert!(!root.contains(b"IDTree"), "the element with the ID was left out");
+}
+
+#[test]
+fn combine_grouped_keeps_the_tags_of_a_file_split_around_another() {
+    let (a, b) = (tagged("en-US", "H1", "h"), tagged("en-US", "H1", "k"));
+    let runs = [(0, "A", &a, Some(&[0][..])), (1, "B", &b, None), (0, "A", &a, Some(&[1][..]))];
+    let out = full_roundtrip(&crate::combine_grouped(&runs).unwrap());
+    assert_eq!(labels(&out), ["Title", "Title", "Two", "Two"], "A1, B1, B2, A2");
+    let tags: Vec<(usize, i64, String)> =
+        [(0, 0, "Heading"), (0, 1, "P"), (1, 0, "Heading"), (1, 1, "P"), (2, 0, "P"), (3, 0, "P")].map(|(p, m, s)| (p, m, s.to_string())).to_vec();
+    assert_eq!(tags_of(&out), tags);
+}
+
+/// A structure tree that lists an element among its own kids and twice, and a parent tree that
+/// is its own kid, read once each: the result has each element once.
+#[test]
+fn combining_a_file_with_a_cyclic_structure_tree_writes_each_element_once() {
+    let mut objs = tagged_objects("en-US", "H1", "h");
+    objs[8] = "<< /Type /StructElem /S /Document /P 8 0 R /K [10 0 R 9 0 R 11 0 R 12 0 R 13 0 R 10 0 R] >>".into();
+    objs[13] = "<< /Kids [14 0 R] /Nums [0 [10 0 R 11 0 R] 1 [12 0 R] 2 13 0 R] >>".into();
+    let a = open(build(&objs, "/Root 1 0 R"));
+    let out = full_roundtrip(&combine(&[("A", &a), ("B", &doc_b())]).unwrap());
+    assert_eq!(tags_of(&out), [(0, 0, "Heading".into()), (0, 1, "P".into()), (1, 0, "P".into())]);
+    let root = out.get(catalog(&out).reference(b"StructTreeRoot").unwrap()).as_dict().cloned().unwrap();
+    let document = out.get(root.get(b"K").and_then(|k| k.as_array()).unwrap()[0].as_ref().unwrap()).as_dict().cloned().unwrap();
+    let kids: Vec<String> = document
+        .get(b"K")
+        .and_then(|k| k.as_array())
+        .unwrap()
+        .iter()
+        .map(|k| String::from_utf8_lossy(out.get(k.as_ref().unwrap()).as_dict().unwrap().name(b"S").unwrap()).into_owned())
+        .collect();
+    assert_eq!(kids, ["Heading", "P", "P", "Link"]);
+}
+
+/// Elements nested past the depth the merge follows: that file is combined as before, untagged,
+/// rather than with part of its tree.
+#[test]
+fn a_structure_tree_nested_too_deep_is_left_behind() {
+    let mut objs = tagged_objects("en-US", "H1", "h");
+    let first = objs.len() + 1;
+    objs[8] = format!("<< /Type /StructElem /S /Document /P 8 0 R /K [{first} 0 R 10 0 R 11 0 R 12 0 R 13 0 R] >>");
+    for i in 0..300 {
+        let n = first + i;
+        let kid = if i == 299 { String::new() } else { format!("/K {} 0 R", n + 1) };
+        objs.push(format!("<< /Type /StructElem /S /Div /P {} 0 R {kid} >>", if i == 0 { 9 } else { n - 1 }));
+    }
+    let a = open(build(&objs, "/Root 1 0 R"));
+    let out = full_roundtrip(&combine(&[("A", &a), ("B", &tagged("en-US", "H1", "h"))]).unwrap());
+    assert_eq!(tags_of(&out), [(2, 0, "Heading".into()), (2, 1, "P".into()), (3, 0, "P".into())], "only B's tags");
+    assert!(!catalog(&out).contains(b"MarkInfo"));
+}
+
+#[test]
+fn combine_takes_the_first_files_language_even_untagged() {
+    let mut objs = tagged_objects("de-DE", "H1", "h");
+    objs[0] = "<< /Type /Catalog /Pages 2 0 R /Lang (de-DE) >>".into();
+    let a = open(build(&objs, "/Root 1 0 R"));
+    let out = full_roundtrip(&combine(&[("A", &a), ("B", &doc_b())]).unwrap());
+    let cat = catalog(&out);
+    assert_eq!(cat.get(b"Lang").and_then(|l| l.as_string()).map(|s| s.to_text()).as_deref(), Some("de-DE"));
+    assert!(!cat.contains(b"StructTreeRoot") && !cat.contains(b"MarkInfo"));
+}
+
+/// The references in page `page`'s `/Annots`.
+fn annots_refs(doc: &Document, page: usize) -> Vec<ObjRef> {
+    let p = doc.get(pages(doc).unwrap()[page].obj);
+    doc.resolve(p.as_dict().unwrap().get(b"Annots").unwrap()).as_array().unwrap().iter().filter_map(|a| a.as_ref()).collect()
+}
+
 /// Insert Pages from File brings the inserted file's bookmarks along (they used to be dropped),
 /// collapsed under one bookmark named after the file at its first inserted page, placed among the
 /// host's bookmarks where the pages went. Destinations follow the copies; named ones are resolved.
@@ -3238,6 +3469,81 @@ fn combine_field_conflicts_previews_each_file_in_order() {
     assert_eq!(preview[0], [], "the first file collides with nothing");
     assert_eq!(preview[1], [("Text1".to_string(), "Text1-1".to_string())]);
     assert_eq!(preview[2], [("Text1".to_string(), "Text1-2".to_string())], "the cascade continues past the earlier rename");
+}
+
+#[test]
+fn review_classmap_array_references_are_copied() {
+    let mut objs = tagged_objects("en-US", "H1", "h");
+    objs[7] = objs[7].replace("/RoleMap", "/ClassMap << /TableClass [16 0 R] >> /RoleMap");
+    objs[9] = objs[9].replace("/ID", "/C /TableClass /ID");
+    objs.push("<< /O /Table /Scope /Column >>".into());
+    let source = open(build(&objs, "/Root 1 0 R"));
+    let out = full_roundtrip(&combine(&[("A", &source), ("B", &source)]).unwrap());
+    let root = out.get(catalog(&out).reference(b"StructTreeRoot").unwrap());
+    let classes = out.resolve(root.as_dict().unwrap().get(b"ClassMap").unwrap());
+    let attrs = classes.as_dict().unwrap().get(b"TableClass").unwrap().as_array().unwrap();
+    assert_eq!(out.resolve(&attrs[0]).as_dict().and_then(|d| d.name(b"O")), Some(&b"Table"[..]));
+}
+#[test]
+fn review_role_rename_reserves_later_source_names() {
+    let a = tagged("en-US", "H1", "h");
+    let mut objs = tagged_objects("en-US", "P", "k");
+    objs[7] = objs[7].replace("/Heading /P", "/Heading /P /Heading_2 /H2");
+    objs[10] = objs[10].replace("/S /P", "/S /Heading_2");
+    let b = open(build(&objs, "/Root 1 0 R"));
+    let out = full_roundtrip(&combine(&[("A", &a), ("B", &b)]).unwrap());
+    let tags = tags_of(&out);
+    let root = out.get(catalog(&out).reference(b"StructTreeRoot").unwrap());
+    let roles = root.as_dict().unwrap().get(b"RoleMap").unwrap().as_dict().unwrap();
+    let source_b_second_tag = &tags.iter().find(|(p, m, _)| *p == 2 && *m == 1).unwrap().2;
+    assert_eq!(roles.name(source_b_second_tag.as_bytes()), Some(&b"H2"[..]));
+}
+
+#[test]
+fn combine_leaves_a_too_deep_class_map_untagged() {
+    let mut objs = tagged_objects("en-US", "H1", "h");
+    objs[7] = objs[7].replace("/RoleMap", "/ClassMap << /Deep [16 0 R] >> /RoleMap");
+    for next in 17..287 {
+        objs.push(format!("<< /Next {next} 0 R >>"));
+    }
+    objs.push("<< /O /Layout >>".into());
+    let source = open(build(&objs, "/Root 1 0 R"));
+    let out = full_roundtrip(&combine(&[("A", &source)]).unwrap());
+    assert!(!catalog(&out).contains(b"StructTreeRoot"), "the map exceeds the bounded copy depth");
+    assert_eq!(pages(&out).unwrap().len(), 2, "the pages are still copied");
+}
+
+#[test]
+fn combine_bounds_the_first_copy_path_through_shared_class_attributes() {
+    let mut objs = tagged_objects("en-US", "H1", "h");
+    objs[7] = objs[7].replace("/RoleMap", "/ClassMap << /Deep 16 0 R /Tail 136 0 R >> /RoleMap");
+    for next in 17..256 {
+        objs.push(format!("<< /Next {next} 0 R >>"));
+    }
+    objs.push("<< /O /Layout >>".into());
+    let source = open(build(&objs, "/Root 1 0 R"));
+    let out = full_roundtrip(&combine(&[("A", &source)]).unwrap());
+    assert!(!catalog(&out).contains(b"StructTreeRoot"), "the first copy path exceeds the depth bound even with a shared tail");
+    assert_eq!(pages(&out).unwrap().len(), 2);
+}
+
+#[test]
+fn combine_bounds_class_maps_that_reenter_their_own_map() {
+    let mut objs = tagged_objects("en-US", "H1", "h");
+    objs[7] = objs[7].replace("/RoleMap", "/ClassMap 16 0 R /RoleMap");
+    objs.push("<< /Deep [17 0 R] /Tail [137 0 R] >>".into());
+    for next in 18..137 {
+        objs.push(format!("<< /Next {next} 0 R >>"));
+    }
+    objs.push("<< /Next 16 0 R >>".into());
+    for next in 138..257 {
+        objs.push(format!("<< /Next {next} 0 R >>"));
+    }
+    objs.push("<< /O /Layout >>".into());
+    let source = open(build(&objs, "/Root 1 0 R"));
+    let out = full_roundtrip(&combine(&[("A", &source)]).unwrap());
+    assert!(!catalog(&out).contains(b"StructTreeRoot"), "the copy reenters the map and follows its unseen tail past the depth bound");
+    assert_eq!(pages(&out).unwrap().len(), 2);
 }
 
 /// A one-page source whose page refers (`/Foo`) to object 6, followed by `tail` as objects 6, 7, …
