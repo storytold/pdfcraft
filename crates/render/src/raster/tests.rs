@@ -3350,11 +3350,12 @@ fn jpx_32_bit_image_does_not_prevent_other_page_content_from_rendering() {
 /// with "attempt to divide by zero". The decode-size hint mapped the image's corners as points,
 /// so it took in the translation, and on a rotated page one corner lands on the device origin:
 /// a hint side of 0, which `hayro-jpeg2000` divides the image size by. The hint now comes from
-/// the transform's linear part and is never below one pixel.
+/// the transform's linear part and is never below one pixel. Negative, past-360 and
+/// non-multiple-of-90 `/Rotate` values (invalid, ISO 32000-2 §7.7.3.3) must not panic either.
 #[test]
 fn jpx_image_on_a_rotated_page_draws_instead_of_crashing() {
     let codestream = jpx_midpoint_codestream(1);
-    for rotate in [0, 90, 180, 270] {
+    for rotate in [0, 90, 180, 270, -90, 450, 45] {
         let content = "q 40 0 0 40 0 0 cm /Im1 Do Q";
         let mut bytes = format!(
             "%PDF-1.7\n\
@@ -7410,7 +7411,7 @@ trailer << /Root 1 0 R >>
         let p = &crate::inspect(Arc::new(bytes), None).expect("opens").pages[0];
         (p.width, p.height)
     };
-    for rotate in [0, 90, 180, 270] {
+    for rotate in [0, 90, 180, 270, -90, 450, 45] {
         let turned = format!("/Rotate {rotate}");
         let (w, h) = if rotate % 180 == 0 { (80.0, 70.0) } else { (70.0, 80.0) };
         let plain = render(pdf(&turned, ""), 2.0);
