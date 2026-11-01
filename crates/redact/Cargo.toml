@@ -18,6 +18,8 @@ pdfcraft-edit = { workspace = true }
 pdfcraft-annot = { workspace = true }
 pdfcraft-xfa = { workspace = true }
 thiserror = { workspace = true }
+# NFKC for the metadata check; already in the build through pdfcraft-crypt (stringprep).
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 pdfcraft-filters = { workspace = true }

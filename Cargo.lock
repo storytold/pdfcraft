@@ -4586,6 +4586,7 @@ dependencies = [
  "pdfcraft-testkit",
  "pdfcraft-xfa",
  "thiserror 2.0.21",
+ "unicode-normalization",
 ]
 
 [[package]]

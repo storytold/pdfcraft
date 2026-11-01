@@ -23,6 +23,7 @@
 use std::collections::HashSet;
 
 use pdfcraft_cos::{Document, ObjRef, Object};
+use unicode_normalization::UnicodeNormalization;
 
 /// Terms longer than this are cut (matching still finds the prefix).
 const MAX_TERM_CHARS: usize = 4096;
@@ -33,10 +34,34 @@ pub(crate) const MAX_XMP_BYTES: usize = 16 * 1024 * 1024;
 /// do in all; past it every entry and packet counts as matching (fail-closed), so a page of
 /// removed text against a large packet, or against very many small values, stays quick.
 const MAX_WORK: usize = 1 << 28;
+/// Normalized text longer than this many times its input (plus 64 bytes) isn't searched: it
+/// counts as matching. Ordinary text barely changes length; a few compatibility characters
+/// (U+FDFA, the square katakana words) decompose to many.
+const MAX_GROWTH: usize = 4;
 
-/// Lower-case `s` with every run of whitespace made one space, trimmed.
-fn normalize(s: &str) -> String {
-    s.split_whitespace().flat_map(|w| w.chars().flat_map(char::to_lowercase).chain(std::iter::once(' '))).collect::<String>().trim_end().to_string()
+/// `s` in Unicode compatibility form (NFKC), lower case, every run of whitespace made one space,
+/// trimmed: "Mu\u{308}ller" (decomposed), "ＭÜＬＬＥＲ" (full width) and "Müller" are all
+/// "müller", and the ligature "ﬁ" is "fi" (#2539 review). `None` when it would grow past
+/// [`MAX_GROWTH`] times `s`.
+fn normalize(s: &str) -> Option<String> {
+    let cap = s.len().saturating_mul(MAX_GROWTH).saturating_add(64);
+    let mut out = String::new();
+    let mut space = false;
+    for c in s.nfkc().flat_map(char::to_lowercase).nfkc() {
+        if c.is_whitespace() {
+            space = !out.is_empty();
+            continue;
+        }
+        if space {
+            out.push(' ');
+            space = false;
+        }
+        out.push(c);
+        if out.len() > cap {
+            return None;
+        }
+    }
+    Some(out)
 }
 
 fn significant(s: &str, min: usize) -> bool {
@@ -90,13 +115,14 @@ impl Run {
 /// The terms to look for: each removed run (at least two letters or digits), and each of its
 /// words with at least three, so "Smith, John" in `/Author` is caught when "John Smith" was
 /// redacted. Shorter pieces would match nearly any text. `None` when a run is longer than
-/// [`MAX_TERM_CHARS`] or there are more than [`MAX_TERMS`] terms: the caller then can't search
+/// [`MAX_TERM_CHARS`] (or grows past [`MAX_GROWTH`] when normalized) or there are more than
+/// [`MAX_TERMS`] terms: the caller then can't search
 /// for all of it and must clear the metadata instead.
 pub(crate) fn terms(removed: &[String]) -> Option<Vec<String>> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for run in removed {
-        let run = normalize(run);
+        let run = normalize(run)?;
         if run.chars().nth(MAX_TERM_CHARS).is_some() {
             return None;
         }
@@ -148,7 +174,7 @@ impl Work {
 
 /// Does `text` hold a term, as written or, for `squeezed` terms, by its letters and digits alone?
 fn mentions(text: &str, terms: &[String], squeezed: &[String], work: &Work) -> bool {
-    let text = normalize(text);
+    let Some(text) = normalize(text) else { return true };
     let letters = squeeze(&text);
     !work.spend(text.len().saturating_mul(terms.len().saturating_add(squeezed.len())))
         || terms.iter().any(|t| text.contains(t.as_str()))
@@ -161,7 +187,7 @@ fn mentions(text: &str, terms: &[String], squeezed: &[String], work: &Work) -> b
 /// edges, so an XMP value "True" doesn't go with "untrue". Too much text to search counts as
 /// part (fail-closed).
 fn within(value: &str, runs: &[Run], work: &Work) -> bool {
-    let value = normalize(value);
+    let Some(value) = normalize(value) else { return true };
     if !significant(&value, 3) {
         return false;
     }
@@ -368,16 +394,17 @@ impl Search {
     /// tests). `complete` is false when the collection of removed text was cut short; then, as
     /// when the terms exceed their limits, everything matches.
     pub(crate) fn new(removed: &[String], complete: bool, limit: usize) -> Self {
-        let lookup = match terms(removed).filter(|_| complete) {
-            Some(t) if t.is_empty() => Lookup::Nothing,
-            Some(t) => {
+        let runs: Option<Vec<String>> = removed.iter().map(|r| normalize(r)).collect();
+        let lookup = match (terms(removed).filter(|_| complete), runs) {
+            (Some(t), _) if t.is_empty() => Lookup::Nothing,
+            (Some(t), Some(runs)) => {
                 // The same run removed many times is searched for once.
                 let mut seen = HashSet::new();
-                let runs: Vec<Run> = removed.iter().map(|r| normalize(r)).filter(|r| seen.insert(r.clone())).map(Run::new).collect();
+                let runs: Vec<Run> = runs.into_iter().filter(|r| seen.insert(r.clone())).map(Run::new).collect();
                 let squeezed = squeezed_terms(&t);
                 Lookup::Terms(t, squeezed, runs)
             }
-            None => Lookup::Everything,
+            _ => Lookup::Everything,
         };
         Self { lookup, work: Work::new(limit) }
     }

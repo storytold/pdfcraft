@@ -48,8 +48,10 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   "B L U E F I N", since a `TJ` gap can't be told from a word space). A value is wholly part of
   a run when its letters and digits are, starting and ending where the run's words do, so
   "True" isn't part of "untrue". This over-matches only towards removal: "is a" also holds
-  "Lisa". A value that shares
-  only words of one or two letters with the removed text, and isn't wholly part of it, stays:
+  "Lisa". Both sides are compared in Unicode compatibility form (NFKC) and lower case, so a
+  decomposed "Müller" (u and U+0308), full-width letters and a "ﬁ" ligature from a
+  `ToUnicode` map match their plain forms. A value that shares only words of one or two
+  letters with the removed text, and isn't wholly part of it, stays:
   Sanitize's metadata category removes the rest. `Report::metadata` counts what went.
   - **Fail-closed.** When the check can't know what the removed text was, every `/Info`
     string and every catalog and page XMP stream goes: more than 100,000 runs or a run over
@@ -60,7 +62,8 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
     search's work limit (2^28 steps) runs out, every entry and packet not yet checked goes
     too. An XMP packet that isn't valid UTF-8 or UTF-16, can't be decoded strictly (damaged or
     cut-short filter data, or more than one filter), or decodes to more than
-    16 MiB goes without being read.
+    16 MiB goes without being read, and a value whose normalized form would be more than four
+    times as long (U+FDFA alone is 18 letters) counts as holding the text.
   - **Not scrubbed, but reported** (Remove hidden information's categories remove them): bookmark
     titles, attachments (names in the document's list of embedded files, file names and
     descriptions, and the files of file attachment comments), the comments that remain (their
