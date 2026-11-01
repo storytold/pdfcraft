@@ -2515,6 +2515,12 @@ animation effects	Off	ఆఫ్
 	Extract the selected pages…	ఎంచుకున్న పేజీలను సంగ్రహించు…
 	Delete the selected pages	ఎంచుకున్న పేజీలను తొలగించు
 
+# Duplicate pages with new field names (#2228) (AI-assisted, not separately native-reviewed)
+	Duplicate pages with new field names	కొత్త ఫీల్డ్ పేర్లతో పేజీలను నకలు చేయి
+	Duplicate pages — 1 field renamed	పేజీలను నకలు చేయి — 1 ఫీల్డ్ పేరు మార్చబడింది
+	Duplicate pages — fields renamed	పేజీలను నకలు చేయి — ఫీల్డ్‌ల పేర్లు మార్చబడ్డాయి
+	{batch} — 1 field renamed	{batch} — 1 ఫీల్డ్ పేరు మార్చబడింది
+	{batch} — fields renamed	{batch} — ఫీల్డ్‌ల పేర్లు మార్చబడ్డాయి
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	ఈ ప్రత్యుత్తరం ఎంపికలు
 	Export value	ఎగుమతి విలువ

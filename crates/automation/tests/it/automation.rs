@@ -2758,6 +2758,38 @@ fn page_duplicate_at_inserts_the_copies_there() {
     assert!(matches!(a.call("page_duplicate", &json!({ "doc": doc, "pages": [1], "at": 6 })), Err(ToolError::InvalidArgs(_))), "past the end");
 }
 
+/// #2228: page_duplicate keeps the copies' field names by default (one field, filled in on both
+/// pages); field_conflicts "rename" gives the copy a field of its own, filled in alone, and
+/// doc_info's repairs say what was renamed. It survives a save and reopen.
+#[test]
+fn page_duplicate_can_give_the_copies_fields_of_their_own() {
+    let dir = workdir("duplicate-rename-fields");
+    std::fs::write(dir.join("form.pdf"), form_pdf("Text1")).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    let names = |a: &mut pdfcraft_automation::Automation, doc: u64| -> Vec<String> {
+        let list = ok(a, "form_fields", json!({ "doc": doc }));
+        list["fields"].as_array().unwrap().iter().map(|f| f["name"].as_str().unwrap().to_string()).collect()
+    };
+    ok(&mut a, "page_duplicate", json!({ "doc": doc, "pages": [1] }));
+    assert_eq!(names(&mut a, doc), ["Text1", "Text1"], "merge by default: both copies keep the name, so they are one field");
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    let r = ok(&mut a, "page_duplicate", json!({ "doc": doc, "pages": [1], "field_conflicts": "rename" }));
+    assert_eq!(r["pages"], 2);
+    assert_eq!(names(&mut a, doc), ["Text1", "Text1-1"]);
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    assert!(info["repairs"].as_array().unwrap().iter().any(|l| l.as_str().unwrap().contains("Text1 → Text1-1")), "{info}");
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "Text1-1": "copy" } }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "renamed.pdf" }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "renamed.pdf" }))["doc"].as_u64().unwrap();
+    let list = ok(&mut a, "form_fields", json!({ "doc": reopened }));
+    let value = |name: &str| list["fields"].as_array().unwrap().iter().find(|f| f["name"] == name).map(|f| f["value"].clone());
+    assert_eq!(value("Text1-1"), Some(json!("copy")), "{list}");
+    assert_ne!(value("Text1"), Some(json!("copy")), "the original keeps its value: {list}");
+    let bad = a.call("page_duplicate", &json!({ "doc": doc, "pages": [1], "field_conflicts": "keep" }));
+    assert!(matches!(bad, Err(ToolError::InvalidArgs(_))), "{bad:?}");
+}
+
 #[test]
 fn duplicating_and_cropping_through_tools() {
     let dir = workdir("boxes");

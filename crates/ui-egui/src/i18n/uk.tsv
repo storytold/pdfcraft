@@ -2628,6 +2628,12 @@ animation effects	Off	Вимкнено
 	Extract the selected pages…	Витягнути вибрані сторінки…
 	Delete the selected pages	Видалити вибрані сторінки
 
+# Duplicate pages with new field names (#2228) (AI-assisted, not separately native-reviewed)
+	Duplicate pages with new field names	Дублювати сторінки з новими назвами полів
+	Duplicate pages — 1 field renamed	Дублювати сторінки — 1 поле перейменовано
+	Duplicate pages — fields renamed	Дублювати сторінки — поля перейменовано
+	{batch} — 1 field renamed	{batch} — 1 поле перейменовано
+	{batch} — fields renamed	{batch} — поля перейменовано
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Параметри цієї відповіді
 	Export value	Значення експорту

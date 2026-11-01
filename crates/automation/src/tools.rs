@@ -950,9 +950,12 @@ pub fn tools() -> Vec<ToolDef> {
         t("page_replace", "Replace pages", "Replace the content of pages with pages of another PDF (same count). Links, comments, form fields and bookmarks on the original pages stay, as in Acrobat. Undoable.")
             .cmd("page.replace")
             .with(schema(json!({ "doc": doc(), "pages": pages("to replace"), "path": path_arg(), "from_pages": pages("of the other file, in order (default: its first pages)") }), &["doc", "pages", "path"])),
-        t("page_duplicate", "Duplicate pages", "Insert copies of pages so the first copy becomes page `at`, or after the last of them when `at` is left out (fonts and images are shared, not copied). Undoable.")
+        t("page_duplicate", "Duplicate pages", "Insert copies of pages so the first copy becomes page `at`, or after the last of them when `at` is left out (fonts and images are shared, not copied). field_conflicts says what happens to the copies' form fields: \"merge\" (the default) keeps their names, so each copy is one field with its original and filling in one fills in both; \"rename\" gives each copied field the first free name (Text1 becomes Text1-1), so the copies are filled in on their own, and doc_info's repairs list what was renamed (scripts that refer to the old names are not rewritten). Undoable.")
             .cmd("page.duplicate")
-            .with(schema(json!({ "doc": doc(), "pages": pages("to duplicate"), "at": { "type": "integer", "minimum": 1 } }), &["doc", "pages"])),
+            .with(schema(
+                json!({ "doc": doc(), "pages": pages("to duplicate"), "at": { "type": "integer", "minimum": 1 }, "field_conflicts": { "type": "string", "enum": ["merge", "rename"] } }),
+                &["doc", "pages"],
+            )),
         t(
             "page_transition_set",
             "Set page transitions",

@@ -2877,6 +2877,12 @@ theme	Appearance	Teema
 	Extract the selected pages…	Pura valitut sivut…
 	Delete the selected pages	Poista valitut sivut
 
+# Duplicate pages with new field names (#2228) (AI-assisted, not separately native-reviewed)
+	Duplicate pages with new field names	Monista sivut uusin kenttänimin
+	Duplicate pages — 1 field renamed	Monista sivut — 1 kenttä nimetty uudelleen
+	Duplicate pages — fields renamed	Monista sivut — kenttiä nimetty uudelleen
+	{batch} — 1 field renamed	{batch} — 1 kenttä nimetty uudelleen
+	{batch} — fields renamed	{batch} — kenttiä nimetty uudelleen
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tämän vastauksen asetukset
 

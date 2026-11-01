@@ -2881,6 +2881,12 @@ certificate	Version	الإصدار
 	Extract the selected pages…	استخراج الصفحات المحددة…
 	Delete the selected pages	حذف الصفحات المحددة
 
+# Duplicate pages with new field names (#2228) (AI-assisted, not separately native-reviewed)
+	Duplicate pages with new field names	تكرار الصفحات بأسماء حقول جديدة
+	Duplicate pages — 1 field renamed	تكرار الصفحات — تمت إعادة تسمية حقل واحد
+	Duplicate pages — fields renamed	تكرار الصفحات — تمت إعادة تسمية حقول
+	{batch} — 1 field renamed	{batch} — تمت إعادة تسمية حقل واحد
+	{batch} — fields renamed	{batch} — تمت إعادة تسمية حقول
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	خيارات هذا الرد
 	Export value	قيمة التصدير

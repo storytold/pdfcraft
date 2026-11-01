@@ -2606,6 +2606,12 @@ animation effects	Off	オフ
 	Extract the selected pages…	選択したページを抽出…
 	Delete the selected pages	選択したページを削除
 
+# Duplicate pages with new field names (#2228) (AI-assisted, not separately native-reviewed)
+	Duplicate pages with new field names	新しいフィールド名でページを複製
+	Duplicate pages — 1 field renamed	ページを複製 — 1 個のフィールド名を変更
+	Duplicate pages — fields renamed	ページを複製 — フィールド名を変更
+	{batch} — 1 field renamed	{batch} — 1 個のフィールド名を変更
+	{batch} — fields renamed	{batch} — フィールド名を変更
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	この返信のオプション
 	Export value	書き出し値

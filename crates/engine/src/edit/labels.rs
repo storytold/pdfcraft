@@ -2,7 +2,8 @@ use super::{Edit, FillMark, ImageEdit, Label, LineEnding, MarkKind, Markup, Page
 
 /// Every wording [`Edit::label`] can produce, for an interface to translate. `Edit::Batch` is not
 /// here: its wording is only the hole, because a batch carries its name as text (see
-/// [`BATCH_LABELS`]).
+/// [`BATCH_LABELS`]). The wordings of a batch that renamed form fields ("{batch} — fields
+/// renamed") are, as the duplications' and insertions' are.
 pub const EDIT_LABELS: &[&str] = &[
     "Rotate page",
     "Change tag properties",
@@ -29,6 +30,10 @@ pub const EDIT_LABELS: &[&str] = &[
     "Insert pages from {name}",
     "Insert pages from {name} — 1 field renamed",
     "Insert pages from {name} — fields renamed",
+    "Duplicate pages — 1 field renamed",
+    "Duplicate pages — fields renamed",
+    "{batch} — 1 field renamed",
+    "{batch} — fields renamed",
     "Attach {name}",
     "Delete attachment {key}",
     "Add bookmark",

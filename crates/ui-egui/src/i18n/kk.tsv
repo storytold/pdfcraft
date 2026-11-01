@@ -2604,6 +2604,12 @@ animation effects	Off	Өшірулі
 	Extract the selected pages…	Таңдалған беттерді шығарып алу…
 	Delete the selected pages	Таңдалған беттерді жою
 
+# Duplicate pages with new field names (#2228) (AI-assisted, not separately native-reviewed)
+	Duplicate pages with new field names	Беттерді жаңа өріс атауларымен көшірмелеу
+	Duplicate pages — 1 field renamed	Беттерді көшірмелеу — 1 өріс қайта аталды
+	Duplicate pages — fields renamed	Беттерді көшірмелеу — өрістер қайта аталды
+	{batch} — 1 field renamed	{batch} — 1 өріс қайта аталды
+	{batch} — fields renamed	{batch} — өрістер қайта аталды
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Осы жауаптың параметрлері
 	Export value	Экспорт мәні

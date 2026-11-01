@@ -1576,3 +1576,41 @@ fn a_form_button_shows_and_hides_the_attachments_panel() {
     h.run_steps(2);
     assert_eq!(h.state().right, None);
 }
+
+/// #2228: Pages ▸ Duplicate pages with new field names gives every field on the copied page a
+/// name of its own (Name becomes Name-1), so the copy is filled in on its own. Plain Duplicate
+/// pages still keeps the names. Both are one undo step.
+#[test]
+fn duplicating_a_page_with_new_field_names_from_the_pages_menu() {
+    let mut h = harness();
+    let names = |h: &Harness<'static, PdfCraftApp>| -> Vec<String> {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().form.iter().map(|f| f.name.clone()).collect()
+    };
+    let before = names(&h);
+    assert!(!before.is_empty());
+    assert!(h.state_mut().execute("page.duplicate_renaming_fields"));
+    h.run_steps(2);
+    let after = names(&h);
+    let expected: Vec<String> = before.iter().cloned().chain(before.iter().map(|n| format!("{n}-1"))).collect();
+    let mut sorted = after.clone();
+    sorted.sort();
+    let mut expected_sorted = expected.clone();
+    expected_sorted.sort();
+    assert_eq!(sorted, expected_sorted, "every field copied under a new name");
+    let id = h.state().views[0].id;
+    assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), 2);
+    let label = if before.len() == 1 { "Duplicate pages — 1 field renamed" } else { "Duplicate pages — fields renamed" };
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some(label));
+    h.state_mut().execute("edit.undo");
+    h.run_steps(2);
+    assert_eq!(names(&h), before, "one undo step takes the copy away");
+    assert!(h.state_mut().execute("page.duplicate"));
+    h.run_steps(2);
+    let mut merged = names(&h);
+    merged.sort();
+    merged.dedup();
+    let mut original = before.clone();
+    original.sort();
+    assert_eq!(merged, original, "plain Duplicate pages keeps the names");
+}

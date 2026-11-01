@@ -2871,6 +2871,12 @@ certificate	Version	Version
 	Extract the selected pages…	Extraire les pages sélectionnées…
 	Delete the selected pages	Supprimer les pages sélectionnées
 
+# Duplicate pages with new field names (#2228) (AI-assisted, not separately native-reviewed)
+	Duplicate pages with new field names	Dupliquer des pages avec de nouveaux noms de champ
+	Duplicate pages — 1 field renamed	Dupliquer des pages — 1 champ renommé
+	Duplicate pages — fields renamed	Dupliquer des pages — champs renommés
+	{batch} — 1 field renamed	{batch} — 1 champ renommé
+	{batch} — fields renamed	{batch} — champs renommés
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Options de cette réponse
 	Export value	Valeur d’exportation

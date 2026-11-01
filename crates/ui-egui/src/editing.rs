@@ -42,7 +42,7 @@ fn select_after_edit(
             let to = (*to).min(info.pages.len() - n);
             view.select_pages(&(to..to + n).collect::<Vec<_>>());
         }
-        Edit::DuplicatePages { pages, at: Some(at) } => {
+        Edit::DuplicatePages { pages, at: Some(at), .. } => {
             let n = pages.iter().collect::<std::collections::BTreeSet<_>>().len();
             let at = (*at).min(info.pages.len().saturating_sub(n));
             view.select_pages(&(at..at + n).collect::<Vec<_>>());

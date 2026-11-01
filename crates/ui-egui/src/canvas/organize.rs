@@ -505,7 +505,11 @@ pub(super) fn organize_grid(
                 if let Some(gap) = drop_gap(&cells, p) {
                     if copying {
                         // The copies land at the gap as it is: nothing leaves its place.
-                        view.pending_edit = Some(Edit::DuplicatePages { pages: pages.clone(), at: Some(gap) });
+                        view.pending_edit = Some(Edit::DuplicatePages {
+                            pages: pages.clone(),
+                            at: Some(gap),
+                            field_conflicts: pdfcraft_engine::FieldConflicts::Merge,
+                        });
                         view.selected = (gap..gap + pages.len()).collect();
                     } else {
                         // `to` counts positions without the moving pages.

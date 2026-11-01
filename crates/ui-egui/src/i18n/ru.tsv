@@ -2519,6 +2519,12 @@ animation effects	Off	Выкл
 	Extract the selected pages…	Извлечь выбранные страницы…
 	Delete the selected pages	Удалить выбранные страницы
 
+# Duplicate pages with new field names (#2228) (AI-assisted, not separately native-reviewed)
+	Duplicate pages with new field names	Дублировать страницы с новыми именами полей
+	Duplicate pages — 1 field renamed	Дублировать страницы — 1 поле переименовано
+	Duplicate pages — fields renamed	Дублировать страницы — поля переименованы
+	{batch} — 1 field renamed	{batch} — 1 поле переименовано
+	{batch} — fields renamed	{batch} — поля переименованы
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Параметры этого ответа
 	Export value	Значение экспорта

@@ -2867,6 +2867,12 @@ theme	Appearance	Aspect
 	Extract the selected pages…	Extrage paginile selectate…
 	Delete the selected pages	Șterge paginile selectate
 
+# Duplicate pages with new field names (#2228) (AI-assisted, not separately native-reviewed)
+	Duplicate pages with new field names	Duplicare pagini cu nume noi de câmpuri
+	Duplicate pages — 1 field renamed	Duplicare pagini: 1 câmp redenumit
+	Duplicate pages — fields renamed	Duplicare pagini: câmpuri redenumite
+	{batch} — 1 field renamed	{batch}: 1 câmp redenumit
+	{batch} — fields renamed	{batch}: câmpuri redenumite
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opțiuni pentru acest răspuns
 

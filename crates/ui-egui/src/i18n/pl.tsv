@@ -2702,6 +2702,12 @@ animation effects	Off	Wyłączone
 	Extract the selected pages…	Wyodrębnij zaznaczone strony…
 	Delete the selected pages	Usuń zaznaczone strony
 
+# Duplicate pages with new field names (#2228) (AI-assisted, not separately native-reviewed)
+	Duplicate pages with new field names	Powiel strony z nowymi nazwami pól
+	Duplicate pages — 1 field renamed	Powiel strony — zmieniono nazwę 1 pola
+	Duplicate pages — fields renamed	Powiel strony — zmieniono nazwy pól
+	{batch} — 1 field renamed	{batch} — zmieniono nazwę 1 pola
+	{batch} — fields renamed	{batch} — zmieniono nazwy pól
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opcje tej odpowiedzi
 	Export value	Wartość eksportowa

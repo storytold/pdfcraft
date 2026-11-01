@@ -2607,6 +2607,12 @@ animation effects	Off	Aus
 	Extract the selected pages…	Ausgewählte Seiten extrahieren…
 	Delete the selected pages	Ausgewählte Seiten löschen
 
+# Duplicate pages with new field names (#2228) (AI-assisted, not separately native-reviewed)
+	Duplicate pages with new field names	Seiten mit neuen Feldnamen duplizieren
+	Duplicate pages — 1 field renamed	Seiten duplizieren — 1 Feld umbenannt
+	Duplicate pages — fields renamed	Seiten duplizieren — Felder umbenannt
+	{batch} — 1 field renamed	{batch} — 1 Feld umbenannt
+	{batch} — fields renamed	{batch} — Felder umbenannt
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Optionen für diese Antwort
 	Export value	Exportwert
