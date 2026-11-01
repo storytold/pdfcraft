@@ -177,9 +177,17 @@ impl Session {
         let doc = self.get(id)?;
         let all = doc.info.pages.len();
         let pages: Vec<usize> = if pages.is_empty() { (0..all).collect() } else { pages.iter().copied().filter(|p| *p < all).collect() };
-        let native = (0..all)
-            .map(|p| {
-                if !pages.contains(&p) {
+        let mut selected = vec![false; all];
+        for &p in &pages {
+            if let Some(slot) = selected.get_mut(p) {
+                *slot = true;
+            }
+        }
+        let native = selected
+            .into_iter()
+            .enumerate()
+            .map(|(p, want)| {
+                if !want {
                     return None;
                 }
                 doc.page_images(p)
@@ -316,5 +324,16 @@ mod tests {
         let broken = [[f32::NAN; 4], [f32::NEG_INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::INFINITY]];
         let c = covered([0.0, 0.0, 10.0, 10.0], &broken);
         assert!((0.0..=1.0).contains(&c), "{c}");
+    }
+
+    #[test]
+    fn ocr_job_populates_native_scales_only_for_selected_in_range_pages() {
+        let mut s = Session::new();
+        let page = |w: u32, h: u32| export::encode_png(w, h, &vec![255; (w * h * 4) as usize]).unwrap();
+        let bytes = s.create_from_images(&[("p1.png".into(), page(300, 300)), ("p2.png".into(), page(600, 600))]).unwrap();
+        let id = s.open("scan.pdf", None, bytes, None).unwrap();
+        let job = s.ocr_job(id, &[1, 99], OcrSettings::default()).unwrap();
+        assert_eq!(job.pages, vec![1]);
+        assert!(job.native[0].is_none() && job.native[1].is_some(), "{:?}", job.native);
     }
 }

@@ -204,6 +204,8 @@ pub struct SearchDraft {
     pub pattern: RedactPattern,
     /// The result of the last search (matches marked), shown in the dialog.
     pub found: Option<usize>,
+    /// Whether the last search stopped at the match limit.
+    pub capped: bool,
 }
 
 impl Default for SearchDraft {
@@ -216,12 +218,101 @@ impl Default for SearchDraft {
             whole_words: false,
             pattern: RedactPattern::Phone,
             found: None,
+            capped: false,
         }
     }
 }
 
 /// The largest word list file Import list accepts.
 pub(crate) const MAX_WORD_LIST_BYTES: usize = 1 << 20;
+
+/// The most matches Find text and redact marks in one search.
+pub const MAX_SEARCH_MATCHES: usize = 10_000;
+
+#[cfg(test)]
+thread_local! {
+    static HITS_MATERIALISED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Record how many literal-search hits were built, so a test can see a capped search stop.
+#[cfg(test)]
+fn note_materialised_hits(n: usize) {
+    HITS_MATERIALISED.with(|c| c.set(c.get().saturating_add(n)));
+}
+
+#[cfg(test)]
+fn take_materialised_hits() -> usize {
+    HITS_MATERIALISED.with(|c| c.replace(0))
+}
+
+/// One search hit becomes a redaction mark when it covers glyphs. Returns whether a mark was added.
+///
+/// A hit with no geometry does not take a slot toward the match cap.
+fn mark_search_hit(
+    edits: &mut Vec<Edit>,
+    prefs: &RedactPrefs,
+    page: usize,
+    page_info: &pdfcraft_render::PageInfo,
+    text: &pdfcraft_render::PageText,
+    author: &str,
+    hit: std::ops::Range<usize>,
+) -> bool {
+    let quads: Vec<[f64; 8]> = text.line_rects(hit).into_iter().map(|rect| page_info.view_rect_to_quad(rect)).collect();
+    if quads.is_empty() {
+        return false;
+    }
+    edits.push(prefs.mark(page, quads, author));
+    true
+}
+
+/// Phrase and word-list hits, in needle order, stopping once `room` of them have been marked.
+///
+/// Each needle is searched only for the marks still needed. A hit with no geometry does not use a
+/// slot; that needle is read further until it ends or the room fills. Returns whether the room filled.
+fn consume_literal_hits(
+    text: &pdfcraft_render::PageText,
+    needles: &[String],
+    case_sensitive: bool,
+    whole_words: bool,
+    mut room: usize,
+    mut on_hit: impl FnMut(std::ops::Range<usize>) -> bool,
+) -> bool {
+    if room == 0 {
+        return true;
+    }
+    for needle in needles {
+        let mut skip = 0usize;
+        loop {
+            let ask = skip.saturating_add(room);
+            let found = text.find_opts_limited(needle, case_sensitive, whole_words, ask);
+            if found.len() <= skip {
+                break;
+            }
+            let end = found.len();
+            #[cfg(test)]
+            note_materialised_hits(end.saturating_sub(skip));
+            let exhausted = end < ask;
+            let mut blanks = 0usize;
+            for hit in found.into_iter().skip(skip) {
+                if on_hit(hit) {
+                    room = room.saturating_sub(1);
+                    if room == 0 {
+                        return true;
+                    }
+                } else {
+                    blanks = blanks.saturating_add(1);
+                }
+            }
+            skip = end;
+            // Every hit in this window became a mark, or the needle has no further hits.
+            // The next needle (or the next page) is next. Blanks leave slots open, so ask again.
+            if exhausted || blanks == 0 {
+                break;
+            }
+        }
+    }
+    false
+}
 
 /// A box being drawn with the Redact tool: (page, start).
 pub type AreaDrag = Option<(usize, Pos2)>;
@@ -290,8 +381,18 @@ pub(crate) fn paint(painter: &egui::Painter, page: usize, view: &DocView, pointe
 }
 
 impl PdfCraftApp {
-    /// Mark every match of the search draft on every page; returns how many were marked.
+    /// Mark every match of the search draft on every page, up to [`MAX_SEARCH_MATCHES`]; returns
+    /// how many were marked.
     pub fn redact_search(&mut self) -> usize {
+        self.redact_search_up_to(MAX_SEARCH_MATCHES)
+    }
+
+    /// Mark every match of the search draft across pages, stopping once `max_matches` are marked.
+    ///
+    /// Phrase and word-list searches ask only for the hits still needed for that cap. Pattern
+    /// search still walks `find_with` and stops once the cap is filled.
+    pub fn redact_search_up_to(&mut self, max_matches: usize) -> usize {
+        self.redact_search.capped = false;
         let Some((_, id)) = self.active_ids() else { return 0 };
         let Some(doc) = self.session.get(id) else { return 0 };
         let d = self.redact_search.clone();
@@ -300,28 +401,39 @@ impl PdfCraftApp {
             SearchMode::Words => pdfcraft_engine::redact_word_list(&d.words),
             SearchMode::Phrase | SearchMode::Patterns => Vec::new(),
         };
-        if d.mode != SearchMode::Patterns && needles.is_empty() {
+        if (d.mode != SearchMode::Patterns && needles.is_empty()) || max_matches == 0 {
+            self.redact_search.found = Some(0);
             return 0;
         }
         let config = pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..Default::default() };
         let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
         let mut edits = Vec::new();
+        let mut capped = false;
         let author = self.comment_prefs.author.clone();
-        for (page, page_info) in doc.info.pages.iter().enumerate() {
+        let prefs = &self.redact_prefs;
+        'pages: for (page, page_info) in doc.info.pages.iter().enumerate() {
             let out = r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
             let Some(text) = out.text else { continue };
-            let hits = match d.mode {
-                SearchMode::Patterns => text.find_with(|c| pdfcraft_engine::find_pattern(d.pattern, c)),
-                _ => needles.iter().flat_map(|w| text.find_opts(w, d.case_sensitive, d.whole_words)).collect(),
-            };
-            for h in hits {
-                let quads: Vec<[f64; 8]> = text.line_rects(h).into_iter().map(|r| page_info.view_rect_to_quad(r)).collect();
-                if !quads.is_empty() {
-                    edits.push(self.redact_prefs.mark(page, quads, &author));
+            if d.mode == SearchMode::Patterns {
+                for h in text.find_with(|c| pdfcraft_engine::find_pattern(d.pattern, c)) {
+                    if mark_search_hit(&mut edits, prefs, page, page_info, &text, &author, h) && edits.len() >= max_matches {
+                        capped = true;
+                        break 'pages;
+                    }
+                }
+            } else {
+                let room = max_matches.saturating_sub(edits.len());
+                if consume_literal_hits(&text, &needles, d.case_sensitive, d.whole_words, room, |hit| {
+                    mark_search_hit(&mut edits, prefs, page, page_info, &text, &author, hit)
+                }) {
+                    capped = true;
+                    break 'pages;
                 }
             }
         }
         let n = edits.len();
+        self.redact_search.found = Some(n);
+        self.redact_search.capped = capped;
         if n > 0 {
             self.apply_edit(Edit::Batch { label: "Mark for redaction".into(), edits });
         }
@@ -416,6 +528,8 @@ pub(crate) fn search_body(ui: &mut egui::Ui, d: &mut SearchDraft, t: &Tokens) ->
         ui.label(
             egui::RichText::new(if n == 0 {
                 tl!("No matches.").to_string()
+            } else if d.capped {
+                crate::i18n::fmt(tl!("First {n} matches marked for redaction (limit reached)."), &[("n", &n.to_string())])
             } else {
                 crate::i18n::fmt(tl!("{n} match(es) marked for redaction."), &[("n", &n.to_string())])
             })
@@ -674,4 +788,139 @@ pub(crate) fn sanitize_body(ui: &mut egui::Ui, t: &Tokens) -> (bool, bool) {
     );
     ui.add_space(12.0);
     buttons(ui, "Sanitize", true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app_with_text(body: &str) -> PdfCraftApp {
+        let pdf = pdfcraft_engine::Session::new().create_from_text("memo", body).unwrap().to_vec();
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("memo.pdf", None, pdf).unwrap();
+        app
+    }
+
+    /// How many literal hits the open document holds, with the same options the search uses.
+    fn available_hits(app: &PdfCraftApp, needles: &[String], case_sensitive: bool, whole_words: bool) -> usize {
+        let Some((_, id)) = app.active_ids() else { return 0 };
+        let Some(doc) = app.session.get(id) else { return 0 };
+        let config = pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..Default::default() };
+        let mut renderer = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
+        let mut n = 0usize;
+        for page in 0..doc.info.pages.len() {
+            let out =
+                renderer.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
+            let Some(text) = out.text else { continue };
+            for needle in needles {
+                n = n.saturating_add(text.find_opts(needle, case_sensitive, whole_words).len());
+            }
+        }
+        n
+    }
+
+    fn redact_xs(app: &PdfCraftApp) -> Vec<f32> {
+        let Some((_, id)) = app.active_ids() else { return Vec::new() };
+        let Some(doc) = app.session.get(id) else { return Vec::new() };
+        doc.info.annotations.iter().filter(|a| a.subtype == "Redact").map(|a| a.rect[0]).collect()
+    }
+
+    #[test]
+    fn literal_phrase_search_materialises_only_the_capped_hits() {
+        let mut app = app_with_text(&"Ada ".repeat(40));
+        app.redact_search.text = "Ada".into();
+        let available = available_hits(&app, &["Ada".into()], false, false);
+        let cap = 5;
+        assert!(available > cap, "fixture has {available} hits, cap is {cap}");
+        take_materialised_hits();
+        let marked = app.redact_search_up_to(cap);
+        let produced = take_materialised_hits();
+        assert_eq!((marked, app.redact_search.found, app.redact_search.capped), (cap, Some(cap), true));
+        assert_eq!(produced, cap, "search materialised {produced} hits after {cap} marks were already available ({available} on the page)");
+    }
+
+    #[test]
+    fn word_list_search_materialises_only_the_capped_hits() {
+        let n = 40;
+        let words: Vec<String> = (0..n).map(|i| format!("w{i:02}x")).collect();
+        let mut app = app_with_text(&words.join(" "));
+        app.redact_search.mode = SearchMode::Words;
+        app.redact_search.words = words.join("\n");
+        app.redact_search.whole_words = true;
+        let available = available_hits(&app, &words, false, true);
+        let cap = 4;
+        assert!(available > cap, "fixture has {available} hits, cap is {cap}");
+        take_materialised_hits();
+        let marked = app.redact_search_up_to(cap);
+        let produced = take_materialised_hits();
+        assert_eq!((marked, app.redact_search.found, app.redact_search.capped), (cap, Some(cap), true));
+        assert_eq!(produced, cap, "search materialised {produced} hits from a {available}-hit word list capped at {cap}");
+    }
+
+    #[test]
+    fn search_below_the_cap_marks_every_literal_hit() {
+        let mut app = app_with_text("one two three");
+        app.redact_search.mode = SearchMode::Words;
+        app.redact_search.words = "one\ntwo\nthree".into();
+        app.redact_search.whole_words = true;
+        take_materialised_hits();
+        let marked = app.redact_search_up_to(10);
+        let produced = take_materialised_hits();
+        assert_eq!((marked, produced, app.redact_search.found, app.redact_search.capped), (3, 3, Some(3), false));
+    }
+
+    #[test]
+    fn word_list_marks_follow_needle_order() {
+        let mut app = app_with_text("left middle right");
+        app.redact_search.mode = SearchMode::Words;
+        app.redact_search.words = "right\nleft\nmiddle".into();
+        app.redact_search.whole_words = true;
+        let marked = app.redact_search_up_to(2);
+        assert_eq!((marked, app.redact_search.capped), (2, true));
+        let xs = redact_xs(&app);
+        assert_eq!(xs.len(), 2);
+        assert!(xs[0] > xs[1], "first mark is the first needle (right), then left; x was {xs:?}");
+    }
+
+    #[test]
+    fn a_hit_without_geometry_does_not_consume_a_slot() {
+        let app = app_with_text(&"Ada ".repeat(8));
+        let (_, id) = app.active_ids().unwrap();
+        let doc = app.session.get(id).unwrap();
+        let config = pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..Default::default() };
+        let mut renderer = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
+        let out =
+            renderer.render(pdfcraft_render::RenderRequest { page: 0, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
+        let text = out.text.as_ref().unwrap();
+        let mut seen = 0usize;
+        let mut accepted = Vec::new();
+        take_materialised_hits();
+        let filled = consume_literal_hits(text, &["Ada".into()], false, false, 1, |hit| {
+            seen = seen.saturating_add(1);
+            if seen == 1 {
+                return false;
+            }
+            accepted.push(hit.start);
+            true
+        });
+        let produced = take_materialised_hits();
+        assert!(filled, "the second hit filled the one open slot");
+        assert_eq!(accepted.len(), 1);
+        assert!(accepted[0] > 0, "the first hit was not marked; accepted {accepted:?}");
+        assert!(produced > 1, "a blank hit made the search ask for another, produced {produced}");
+    }
+
+    #[test]
+    fn case_and_whole_words_still_bind_literal_search() {
+        let mut sensitive = app_with_text("Ada ada Ada");
+        sensitive.redact_search.text = "Ada".into();
+        sensitive.redact_search.case_sensitive = true;
+        assert_eq!(sensitive.redact_search_up_to(10), 2);
+
+        let mut whole = app_with_text("cat catalog");
+        whole.redact_search.text = "cat".into();
+        whole.redact_search.whole_words = true;
+        assert_eq!(whole.redact_search_up_to(10), 1);
+        assert!(!whole.redact_search.capped);
+    }
 }
