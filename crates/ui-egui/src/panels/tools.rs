@@ -17,7 +17,7 @@ pub fn left_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     if app.left == LeftPanel::Tool("organize") && app.active.and_then(|i| app.views.get(i)).is_some_and(|v| !v.organize) {
         app.left = crate::organize_panel::workspace_panel(app.mode);
     }
-    egui::Frame::NONE.fill(t.panel).inner_margin(egui::Margin { left: 14, right: 10, top: 12, bottom: 10 }).stroke(Stroke::new(1.0, t.divider)).show(
+    egui::Frame::NONE.fill(t.panel).inner_margin(egui::Margin { left: 14, right: 14, top: 12, bottom: 10 }).stroke(Stroke::new(1.0, t.divider)).show(
         ui,
         |ui| match app.left {
             // Organize pages has its own panel whenever the grid shows (with a document open).
@@ -58,8 +58,14 @@ pub(crate) fn panel_header(ui: &mut egui::Ui, t: &Tokens, title: &str, lead: Opt
     (go_back, close)
 }
 
-/// Width kept free at the right of the tool list for the floating scrollbar.
+/// Width kept free at the right of a scrolling list for the floating scrollbar.
 const SCROLLBAR_GUTTER: f32 = 18.0;
+
+/// The scrollbar floats over the right edge: keeps the rows of the scroll area `ui` is in (and
+/// their rounded hover wash) clear of it.
+pub(super) fn clear_of_scrollbar(ui: &mut egui::Ui) {
+    ui.set_max_width((ui.available_width() - SCROLLBAR_GUTTER).max(0.0));
+}
 
 /// The All tools sidebar: Expand (the full view) and Close, then the tool list, the first few
 /// tools until View more shows them all.
@@ -73,8 +79,7 @@ fn all_tools(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         app.left_open = false;
     }
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        // The scrollbar floats over the right edge: keep the rows (and their rounded hover wash) clear of it.
-        ui.set_max_width((ui.available_width() - SCROLLBAR_GUTTER).max(0.0));
+        clear_of_scrollbar(ui);
         ui.add_space(2.0);
         let shown = if app.all_tools_expanded { TOOL_GROUPS.len() } else { COLLAPSED_TOOLS.min(TOOL_GROUPS.len()) };
         for g in &TOOL_GROUPS[..shown] {
@@ -210,6 +215,7 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
     let marks = if footer { app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks()) } else { 0 };
     let list_h = if footer { (ui.available_height() - 52.0).max(80.0) } else { ui.available_height() };
     egui::ScrollArea::vertical().auto_shrink([false, false]).max_height(list_h).show(ui, |ui| {
+        clear_of_scrollbar(ui);
         ui.add_space(2.0);
         for s in g.sections {
             widgets::section_title(ui, tl!(s.title));

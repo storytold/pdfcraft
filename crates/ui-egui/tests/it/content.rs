@@ -721,6 +721,34 @@ fn format_text_rows_line_up_and_fit_the_panel() {
     }
 }
 
+/// The Tools pane can't be dragged narrower than Format text needs: at its smallest width no
+/// control reaches past the font list, which spans the panel.
+#[test]
+fn format_text_fits_the_tools_pane_at_its_narrowest() {
+    use egui::accesskit::Role;
+    let mut h = harness();
+    h.state_mut().side_panels.tools_width = 0.0;
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    let font = h.query_all_by_role(Role::ComboBox).find(|n| n.value().as_deref() == Some("Helvetica")).map(|n| n.rect()).expect("the font list");
+    let rects = ["Alignment", "Colour", "Font size", "Character spacing", "Horizontal scale", "Line spacing", "Paragraph spacing"]
+        .into_iter()
+        .flat_map(|l| h.query_all_by_label(l).map(move |n| (l, n.rect())))
+        .chain(h.query_all_by_role(Role::ComboBox).map(|n| ("list", n.rect())))
+        .collect::<Vec<_>>();
+    for (label, r) in rects {
+        assert!(r.right() <= font.right() + 0.5, "{label} {r:?} reaches past the font list ({font:?})");
+    }
+    // The rows below scroll, and the scrollbar floats over their right edge: they stop short of it.
+    let image = h.get_by_label("Image").rect();
+    assert!(image.right() <= font.right() - 17.0, "the Image row {image:?} runs under the scrollbar ({font:?})");
+    // The right-hand column ends where the font list does, as the left one starts where it does.
+    for label in ["Paragraph spacing", "Character spacing"] {
+        let right = h.query_all_by_label(label).map(|n| n.rect().right()).fold(f32::MIN, f32::max);
+        assert!((right - font.right()).abs() < 1.5, "{label} ends at {right}, the font list at {}", font.right());
+    }
+}
+
 #[test]
 fn format_text_panel_sets_alignment_and_lists_planned_controls_disabled() {
     use egui_kittest::kittest::NodeT;
