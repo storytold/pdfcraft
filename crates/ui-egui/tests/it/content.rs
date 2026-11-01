@@ -1428,3 +1428,23 @@ fn typing_in_one_tab_never_reaches_another_tabs_added_text() {
     h.run_steps(3);
     assert_eq!(h.state().views[1].content.draft.as_ref().map(|d| d.text.as_str()), Some("Reviewed"), "the other tab's typing stays out");
 }
+
+/// The rail's page and zoom fields are the same size, and each sits wholly inside the rail, so
+/// neither box is cut off at the edge (the page box lost its right side once the rail's contents
+/// changed width).
+#[test]
+fn rail_page_and_zoom_fields_match_and_fit_the_rail() {
+    let mut h = harness();
+    h.run_steps(3);
+    // The rail is 49 pt wide at the window's right edge (1400 pt wide), inside a 1 pt border.
+    let (rail_left, rail_right) = (1400.0 - 49.0 + 1.0, 1400.0 - 1.0);
+    let rail = h.get_by_label("Bookmarks").rect();
+    let (page, zoom) = (h.get_by_label("Current page").rect(), h.get_by_label("Zoom").rect());
+    assert_eq!((page.width(), page.height()), (zoom.width(), zoom.height()), "{page:?} vs {zoom:?}");
+    // The size `RAIL_FIELD_SIZE` sets: wide enough for "6400%", the largest zoom.
+    assert_eq!((page.width(), page.height()), (42.0, 22.0), "{page:?}");
+    for r in [page, zoom] {
+        assert!(r.left() >= rail_left && r.right() <= rail_right, "{r:?} is cut off by the rail ({rail_left}..{rail_right})");
+        assert!((r.center().x - rail.center().x).abs() < 1.0, "{r:?} is off the rail's centre ({rail:?})");
+    }
+}
