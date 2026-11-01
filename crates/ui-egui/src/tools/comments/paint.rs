@@ -8,6 +8,19 @@ use super::{
 /// Paint comment selection, hover and gesture previews on a page.
 pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
     let cv = &view.comments;
+    // All commented text markup, including imported markup, gets a viewer-only
+    // marker. Plain markup has none; comment_marker_rect owns that distinction.
+    for a in cx.comments() {
+        if let Some(marker) = cx.comment_marker_rect(a)
+            && let Some(target) = cx.screen_rects(a).last()
+        {
+            painter.line_segment(
+                [marker.left_bottom(), pos2(target.right(), target.top())],
+                Stroke::new(1.0, Color32::from_rgba_unmultiplied(0xD4, 0x8A, 0x00, 150)),
+            );
+            icons::paint(ui, marker, "message-square", 12.0, Color32::from_rgb(0xD4, 0x8A, 0x00));
+        }
+    }
     let pointer = cx.ptr.pos;
     // A redaction mark shows its fill while the pointer is over it, as Acrobat's does, so the
     // marked area reads before anything is applied.

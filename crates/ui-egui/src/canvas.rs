@@ -3072,6 +3072,164 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     view.viewport_screen = avail;
     let (auto_delta, edge_delta) = auto_scroll_deltas(ui, view, avail, unobstructed);
 
+            // Form-field highlight (Acrobat's "Highlight existing fields"); required fields get a
+            // red border. Radio buttons and round XFA check boxes are round, and so is theirs (as
+            // in Acrobat). Only what can be filled is marked: a read-only widget (its field's, or a
+            // radio button's own) is left as it is drawn.
+            if view.highlight_fields {
+                for f in form.iter() {
+                    let required = f.has(pdfcraft_engine::field_flags::REQUIRED);
+                    for w in f.widgets.iter().filter(|w| w.page == Some(i) && !w.hidden && !w.read_only) {
+                        let r = w.rect;
+                        let sr = xf.user_rect(info, i, [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32]);
+                        let tint = Color32::from_rgba_unmultiplied(0x6E, 0x8E, 0xF5, 48);
+                        let (width, color) =
+                            if required { (2.0, Color32::from_rgb(0xE3, 0x22, 0x22)) } else { (1.0, Color32::from_rgb(0x6E, 0x8E, 0xF5)) };
+                        if w.round {
+                            let radius = sr.width().min(sr.height()) / 2.0;
+                            painter.circle_filled(sr.center(), radius, tint);
+                            painter.circle_stroke(sr.center(), radius - width / 2.0, Stroke::new(width, color));
+                        } else {
+                            painter.rect_filled(sr, CornerRadius::same(1), tint);
+                            painter.rect_stroke(sr, CornerRadius::same(1), Stroke::new(width, color), egui::StrokeKind::Inside);
+                        }
+                    }
+                }
+            }
+            // Fill & Sign keeps its placement cursor clear of link/comment hover feedback. Tips
+            // draw above the palette, so none shows while it is open, even beside it.
+            if !matches!(tool, QuickTool::Fill(_))
+                && unobstructed
+                && let Some(p) = pointer
+            {
+                for l in info.links.iter().filter(|l| l.page == i) {
+                    let sr = xf.user_rect(info, i, l.rect);
+                    if sr.contains(p) {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        let label = match &l.target {
+                            LinkTarget::Page(n, _) => {
+                                crate::i18n::fmt(tl!("Go to page {p}"), &[("p", info.pages.get(*n).map(|p| p.label.as_str()).unwrap_or("?"))])
+                            }
+                            LinkTarget::Uri(u) => u.clone(),
+                            LinkTarget::SetLayers { .. } => tl!("Set layer visibility").to_string(),
+                            LinkTarget::RemoteGoTo { file, .. } => file.clone(),
+                            LinkTarget::Other(s) => crate::i18n::fmt(tl!("{s} action"), &[("s", s)]),
+                        };
+                        hover_text = Some((p, label));
+                        if resp.clicked() && tool == QuickTool::Select && !consumed {
+                            clicked_link = Some(l.target.clone());
+                        }
+                    }
+                }
+                // Annotation hover shows the comment, as Acrobat's popups do; not while drawing
+                // freehand, where it would cover the next stroke (#429).
+                let freehand = matches!(tool, QuickTool::Comment(comments::CommentTool::Ink | comments::CommentTool::Eraser));
+                let gesturing = view.comments.gesture.is_some() || freehand;
+                // Inspection sorts annotations spatially, but the renderer paints in /Annots
+                // order. Keep the shared list intact and choose the last eligible raw index.
+                if hover_text.is_none()
+                    && !gesturing
+                    && let Some((_, text)) = info
+                        .annotations
+                        .iter()
+                        .filter(|a| a.page == i)
+                        .filter(|a| {
+                            !(prefs.hide_empty_highlight_hover && a.subtype == "Highlight" && a.contents.as_deref().is_none_or(str::is_empty))
+                        })
+                        .filter(|a| pcx.screen_rects(a).any(|r| r.contains(p)) || pcx.comment_marker_rect(a).is_some_and(|r| r.contains(p)))
+                        .filter_map(|a| annotation_hover_text(a).map(|text| (a.index, text)))
+                        .max_by_key(|(index, _)| *index)
+                {
+                    hover_text = Some((p, text));
+                }
+            }
+            for (mp, mr, mc) in &view.compare_marks {
+                if *mp == i {
+                    let sr = xf.user_rect(info, i, *mr).expand(1.5);
+                    painter.rect_filled(sr, CornerRadius::same(2), mc.gamma_multiply(0.28));
+                }
+            }
+            if let Some((fp, fr, t0)) = view.flash
+                && fp == i
+            {
+                let now = ui.input(|inp| inp.time);
+                let t0 = if t0 == 0.0 { now } else { t0 };
+                view.flash = Some((fp, fr, t0));
+                let age = (now - t0) as f32;
+                if age < 1.6 {
+                    let a = ((1.6 - age) / 1.6 * 255.0) as u8;
+                    let sr = xf.user_rect(info, i, fr).expand(4.0);
+                    painter.rect_stroke(
+                        sr,
+                        CornerRadius::same(3),
+                        Stroke::new(2.5, Color32::from_rgba_unmultiplied(0x1B, 0x63, 0xE0, a)),
+                        egui::StrokeKind::Outside,
+                    );
+                    ui.ctx().request_repaint();
+                } else {
+                    view.flash = None;
+                }
+            }
+            // Validation is viewer chrome over the signer's original artwork, which
+            // may still say "Signature Not Verified". These badges never enter document
+            // streams, image/text exports, vector printing or Print as Image.
+            for badge in signature_badges(&doc.signatures, i) {
+                let [x0, y0, x1, y1] = badge.rect;
+                let sr = xf.user_rect(info, i, [x0 as f32, y0 as f32, x1 as f32, y1 as f32]);
+                let (icon, color) = crate::sign_ui::signature_status_style(badge.status);
+                painter.rect_stroke(sr, CornerRadius::same(2), Stroke::new(1.5, color), egui::StrokeKind::Outside);
+                // A widget too small for the mark keeps its outline: the verdict still shows.
+                if sr.width() < 4.0 || sr.height() < 4.0 {
+                    continue;
+                }
+                // Big enough to read at a glance, small enough to leave the signer's own
+                // text visible around it.
+                let side = (sr.width().min(sr.height()) * 0.8).clamp(24.0, 192.0);
+                let mark = Rect::from_center_size(sr.center(), vec2(side, side));
+                icons::paint(ui, mark, icon, side * 0.64, color);
+                if let Some(p) = pointer.filter(|p| mark.expand(2.0).contains(*p)) {
+                    badge_hover = Some((p, badge.summary.to_string()));
+                }
+            }
+            // Overlapping widgets paint in order, so the topmost badge owns the hover; an
+            // earlier link or annotation hover still wins over any badge.
+            if hover_text.is_none() {
+                hover_text = badge_hover.take();
+            }
+        }
+        if calc_order {
+            view.calc_order.set_hover_page(calc_hover);
+            let selected = view.prepare.selected.as_ref().map(|(name, _)| name.as_str());
+            crate::calc_order_ui::paint_trace(ui, painter, visible, &view.calc_order, generation, selected);
+        }
+        // ScrollArea ignores the wheel while any widget is dragged, so a text-selection drag
+        // scrolls the page itself (#721). After the page loop, so it keeps scrolling once the
+        // pointer leaves the selection's page for the gap or the next page; over the whole
+        // document area, like #759. Combine direct and smoothed motion in one request so mixed
+        // Point and Line events retain their full contribution.
+        if selection_wheel {
+            let smooth =
+                if view.precise_scroll_until == 0.0 { ui.input_mut(|input| std::mem::take(&mut input.smooth_scroll_delta)) } else { Vec2::ZERO };
+            let delta = precise_scroll + boost_extra + smooth;
+            if delta != Vec2::ZERO && delta.is_finite() {
+                ui.scroll_with_delta_animation(delta, egui::style::ScrollAnimation::none());
+            }
+        }
+        // Held at the top or bottom edge, or dragged past it, a text selection scrolls the view
+        // so it can reach text off screen (#1670); the selection follows the pointer on its page.
+        if view.selection_drag
+            && navigation_enabled
+            && unobstructed
+            && !single_paging
+            && let Some(p) = ptr.pos
+        {
+            let dy = crate::autoscroll::edge_delta(p.y, avail, ui.input(|i| i.stable_dt));
+            if dy != 0.0 {
+                view.end_find_following();
+                ui.scroll_with_delta_animation(vec2(0.0, dy), egui::style::ScrollAnimation::none());
+                // Keep scrolling while the pointer rests there and sends no events.
+                ui.ctx().request_repaint();
+            }
     let content_w = view.content_width(info, avail.width());
     let rects = view.layout(info, content_w, ui.ctx().pixels_per_point());
     // When not scrolling continuously, only one row is shown at a time: the current page, or the

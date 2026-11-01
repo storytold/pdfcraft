@@ -2002,3 +2002,15 @@ fn a_moved_picture_is_drawn_from_the_fresh_raster_while_a_tile_is_still_stale() 
     h.state_mut().views[0].stale_tiles.clear();
     h.state_mut().views[0].tiles.clear();
 }
+
+#[test]
+fn markup_hover_keeps_the_author_like_other_comments() {
+    for subtype in ["Highlight", "Underline", "StrikeOut", "Squiggly", "Text", "FreeText"] {
+        let mut a = annotation(false);
+        a.subtype = subtype.into();
+        a.author = Some("Ada".into());
+        assert_eq!(annotation_hover_text(&a).as_deref(), Some("Ada\nHello"), "{subtype}");
+        a.contents = None;
+        assert_eq!(annotation_hover_text(&a).as_deref(), Some("Ada"), "{subtype}");
+    }
+}
