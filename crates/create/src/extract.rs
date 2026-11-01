@@ -236,12 +236,16 @@ fn image(doc: &Document, s: &Stream) -> Result<(&'static str, Vec<u8>), String> 
     let mut alpha = if mask { None } else { soft_mask(doc, s, w, h).or_else(|| stencil_mask(doc, s, w, h)) };
     let key = if mask { None } else { colour_key(doc, s) };
     // Keep the existing JPEG and stencil-mask Decode handling separate from lossless colour images.
-    let endpoint = |value: Option<&Object>| value.map(|v| doc.resolve(v)).and_then(|v| v.as_f64());
+    let endpoint = |value: Option<&Object>| value.map(|v| doc.resolve(v)).and_then(|v| v.as_f64()).filter(|v| v.is_finite());
     let inverted = (jpeg || mask)
         && s.dict
             .get(b"Decode")
             .map(|d| doc.resolve(d))
-            .and_then(|d| d.as_array().map(|a| endpoint(a.first()) > endpoint(a.get(1))))
+            // Both ends have to be finite numbers, as for lossless images, or the default mapping stands.
+            .and_then(|d| {
+                let a = d.as_array()?;
+                Some(endpoint(a.first())? > endpoint(a.get(1))?)
+            })
             .unwrap_or(false);
     // In a PDF a CMYK JPEG's samples are ink amounts unless /Decode inverts them, while image
     // viewers read a CMYK JPEG file as inverted (Adobe's convention): as is, it would show as

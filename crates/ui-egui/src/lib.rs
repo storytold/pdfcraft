@@ -119,6 +119,7 @@ use panels::search_ui;
 pub use panels::side_panels;
 pub use persist::last_session;
 pub use persist::last_view;
+pub use persist::paper;
 use persist::recovery;
 pub use persist::units;
 #[cfg(not(target_arch = "wasm32"))]
@@ -264,6 +265,8 @@ pub struct PdfCraftApp {
     pub view_defaults: canvas::ViewDefaults,
     /// The unit page sizes and margins are shown in (Preferences ▸ Documents and view).
     pub units: units::Unit,
+    /// The paper Create ▸ Blank page makes (#5644): the system region's.
+    pub blank_paper: paper::Paper,
     /// The Preferences ▸ Date format box while it's being edited, or while it holds an invalid
     /// pattern (the session keeps the last valid one).
     pub date_format_draft: Option<String>,

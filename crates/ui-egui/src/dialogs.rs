@@ -1086,6 +1086,7 @@ fn dialog_rotate_pages(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pendi
     use pdfcraft_engine::{PageOrientation as O, PageParity as P};
     let n = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(1, |d| d.info.pages.len());
     let d = &mut app.rotate_draft;
+    let mut typing_to = false;
     ui.label(egui::RichText::new(tl!("Rotate Pages")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
     egui::Grid::new("rotate-pages").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
@@ -1107,10 +1108,11 @@ fn dialog_rotate_pages(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pendi
             widgets::radio_value(ui, &mut d.which, 0, tl!("All"));
             widgets::radio_value(ui, &mut d.which, 1, tl!("Selection"));
             ui.horizontal(|ui| {
-                widgets::radio_value(ui, &mut d.which, 2, tl!("From"));
-                ui.add_enabled(d.which == 2, egui::DragValue::new(&mut d.from).range(1..=n));
-                ui.label(tl!("to"));
-                ui.add_enabled(d.which == 2, egui::DragValue::new(&mut d.to).range(1..=n));
+                let from_label = widgets::radio_value(ui, &mut d.which, 2, tl!("From"));
+                ui.add_enabled(d.which == 2, egui::DragValue::new(&mut d.from).range(1..=n)).labelled_by(from_label.id);
+                let to_label = ui.label(tl!("to"));
+                typing_to =
+                    widgets::typing_into(&ui.add_enabled(d.which == 2, egui::DragValue::new(&mut d.to).range(1..=n)).labelled_by(to_label.id));
                 ui.label(crate::i18n::fmt(tl!("of {name}"), &[("name", &n.to_string())]));
             });
         });
@@ -1142,10 +1144,12 @@ fn dialog_rotate_pages(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pendi
             });
         ui.end_row();
     });
-    d.to = d.to.max(d.from);
+    widgets::keep_range_ordered(d.from, &mut d.to, typing_to);
     ui.add_space(12.0);
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
         if widgets::pill_button(ui, tl!("OK"), true).clicked() {
+            // OK while the end is still being typed (a screen reader can press it).
+            widgets::keep_range_ordered(d.from, &mut d.to, false);
             req.rotate_now = true;
             req.close = true;
         }
@@ -1167,17 +1171,21 @@ fn dialog_duplicate_field(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pe
     ui.add_space(8.0);
     ui.label(crate::i18n::fmt(tl!("Duplicate \"{name}\" onto:"), &[("name", &d.name)]));
     widgets::radio_value(ui, &mut d.all, true, tl!("All pages"));
-    ui.horizontal(|ui| {
-        widgets::radio_value(ui, &mut d.all, false, tl!("From"));
-        ui.add_enabled(!d.all, egui::DragValue::new(&mut d.from).range(1..=n));
-        ui.label(tl!("to"));
-        ui.add_enabled(!d.all, egui::DragValue::new(&mut d.to).range(1..=n));
-        ui.label(crate::i18n::fmt(tl!("of {name}"), &[("name", &n.to_string())]));
-    });
-    d.to = d.to.max(d.from);
+    let typing_to = ui
+        .horizontal(|ui| {
+            widgets::radio_value(ui, &mut d.all, false, tl!("From"));
+            ui.add_enabled(!d.all, egui::DragValue::new(&mut d.from).range(1..=n));
+            ui.label(tl!("to"));
+            let typing_to = widgets::typing_into(&ui.add_enabled(!d.all, egui::DragValue::new(&mut d.to).range(1..=n)));
+            ui.label(crate::i18n::fmt(tl!("of {name}"), &[("name", &n.to_string())]));
+            typing_to
+        })
+        .inner;
+    widgets::keep_range_ordered(d.from, &mut d.to, typing_to);
     ui.add_space(12.0);
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
         if widgets::pill_button(ui, tl!("OK"), true).clicked() {
+            widgets::keep_range_ordered(d.from, &mut d.to, false);
             let pages: Vec<usize> = if d.all { (0..n).collect() } else { (d.from - 1..d.to.min(n)).collect() };
             req.duplicate_now = Some(Edit::DuplicateField { name: d.name.clone(), pages });
             req.close = true;
@@ -1376,13 +1384,14 @@ fn dialog_number_pages(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pendi
     let n = app.session.get(id).map(|d| d.info.pages.len()).unwrap_or(1).max(1);
     let d = &mut app.number_draft;
     d.to = d.to.clamp(1, n);
-    d.from = d.from.clamp(1, d.to);
+    d.from = d.from.clamp(1, n);
+    let mut typing_to = false;
     egui::Grid::new("number_pages").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
         ui.label(tl!("Pages"));
         ui.horizontal(|ui| {
             ui.add(egui::DragValue::new(&mut d.from).range(1..=n));
             ui.label(tl!("to"));
-            ui.add(egui::DragValue::new(&mut d.to).range(1..=n));
+            typing_to = widgets::typing_into(&ui.add(egui::DragValue::new(&mut d.to).range(1..=n)));
             ui.label(egui::RichText::new(crate::i18n::fmt(tl!("of {name}"), &[("name", &n.to_string())])).color(t.text_muted));
         });
         ui.end_row();
@@ -1409,18 +1418,20 @@ fn dialog_number_pages(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pendi
         ui.add(egui::DragValue::new(&mut d.start).range(1..=99_999));
         ui.end_row();
     });
-    d.to = d.to.max(d.from);
+    widgets::keep_range_ordered(d.from, &mut d.to, typing_to);
     let label = |k: u32| format!("{}{}", d.prefix, d.style.format(k));
     ui.add_space(8.0);
-    let preview = if d.from == d.to {
+    // `to` can be below `from` while it is being typed.
+    let preview = if d.to <= d.from {
         label(d.start)
     } else {
-        format!("{}, {} … {}", label(d.start), label(d.start + 1), label(d.start + (d.to - d.from) as u32))
+        format!("{}, {} … {}", label(d.start), label(d.start + 1), label(d.start.saturating_add(u32::try_from(d.to - d.from).unwrap_or(u32::MAX))))
     };
     ui.label(
         egui::RichText::new(crate::i18n::fmt(tl!("Labels: {preview}. Later pages keep their labels."), &[("preview", &preview)])).color(t.text_muted),
     );
-    req.number_now = Some(Edit::NumberPages { from: d.from - 1, to: d.to - 1, style: d.style, prefix: d.prefix.clone(), first: d.start });
+    // Ordered here too: the footer's OK can be pressed while the end is still being typed.
+    req.number_now = Some(Edit::NumberPages { from: d.from - 1, to: d.to.max(d.from) - 1, style: d.style, prefix: d.prefix.clone(), first: d.start });
     true
 }
 
