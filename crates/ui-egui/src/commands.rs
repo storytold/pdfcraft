@@ -119,6 +119,9 @@ impl PdfCraftApp {
 
     /// Why the command can't run right now, for the user.
     fn disabled_reason(&self, spec: &CommandSpec) -> String {
+        if spec.id == "page.reverse" && self.active.and_then(|i| self.views.get(i)).is_some_and(|v| v.page_count() < 2) {
+            return tl!("Reversing pages requires at least two pages").to_string();
+        }
         match spec.needs {
             commands::Needs::Undo => tl!("Nothing to undo").to_string(),
             commands::Needs::Redo => tl!("Nothing to redo").to_string(),

@@ -375,6 +375,7 @@ fn reverse_pages_command_disabled_on_single_page_document() {
     let spec = pdfcraft_engine::commands::command("page.reverse").unwrap();
     assert!(!h.state().command_enabled(spec));
     assert!(!h.state_mut().execute("page.reverse"));
+    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("Reversing pages requires at least two pages"));
 }
 
 #[test]
