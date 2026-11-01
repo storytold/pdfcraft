@@ -11769,3 +11769,5 @@ fn a_to_unicode_cmap_reads_its_mappings_past_a_token_it_cannot_parse() {
     let unclosed = format!("{body}{}{}", "(".repeat(4096), "x".repeat(1 << 16));
     assert!(CMap::parse(unclosed.as_bytes(), |_| None).is_some_and(|c| c.lookup_bf_string(0x48).is_some()));
 }
+#[cfg(test)]
+mod jxl_images;
