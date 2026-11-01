@@ -15,6 +15,9 @@
 > **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** patch (M2, PR #4172: print preview excludes installed CJK fonts and isolates its font cache from the viewer; estimates unchanged)
 > **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** patch (M2, PR #4172: reconcile current main while retaining display-only CJK fallback and upstream Japanese font selection; estimates unchanged)
 > **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M2, PR #4172: extend on-screen CJK fallback to Combine thumbnails and figure previews; recognise FangSong and subset-prefixed Founder names; estimates unchanged)
+
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** minor (M12, #4461 review follow-up: date-pattern tokenization capped at 4 KiB with raw-value fallback; estimates unchanged)
+
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (typed small Edit font sizes and Fill & Sign text/date colour, #2444/#2496; estimates unchanged)
 
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
@@ -240,6 +243,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-27 (M10, OCR models):** Model staging downloads and verifies the ONNX pair after the upstream RTEN URL brownout; runtime discovery prefers complete ONNX pairs per directory, retains complete RTEN fallback and preserves directory precedence.
 
 - **2026-10-26 (M2, PR #4172):** Reconciled current main, preserving its Japanese serif/weight selection and both branches' progress records. Installed CJK viewer and preview fallback remains display-only; estimates unchanged.
+
+- **2026-10-30 (M12):** impossible Gregorian dates remain unchanged and valid date conversions survive incremental save/reopen. Rebased onto current main; scope and estimates unchanged.
 
 - **2026-10-29 (M7, #2517):** Widening a paragraph rejoins a wrap with the number of spaces that wrap consumed, including a typed run and none for a Chinese or Japanese word split. The count survives an incremental save and a full rewrite, and a width-only `text_edit` uses it. Estimates unchanged.
 - **2026-10-26 (M11, JBIG2 symbols):** Lossless JBIG2 now stores each distinct mark of a black-and-white image once, as a symbol, and places its exact copies, when that is smaller than the generic region: on six pages of rendered 300 dpi text 28% of the generic region's size and 17% of Group 4's, and the same bits back through two independent decoders (hayro-jbig2 and Poppler). Scans, whose letters are seldom identical, gain little until refinement coding; a dictionary shared between pages (`/JBIG2Globals`) is next. Estimates unchanged.
@@ -823,3 +828,7 @@ PR #2133 retains document-local Pages sidebar focus for Ctrl/Cmd+A and Escape af
 PR #1952 retains per-widget checkbox/radio export-value editing in the split form-authoring and Prepare modules. Caption editing remains supported. Tests cover preserved appearances and selection, invalid/locked refusals, data-format round trips, and Apply/Cancel/Undo. Current-head hosted validation is pending; feature estimates are unchanged.
 
 - **2026-10-31 (#1577):** Reconciled the page-shadow preference with split viewer, organizer, settings and control modules, preserving upstream page-gap shadow suppression. CI validation pending.
+
+## XFA date-pattern resource budget (2026-11-01)
+
+Review follow-up for #4461: date-pattern tokenization refuses more than 4096 UTF-8 bytes before allocating character/token lists. Boundary, multibyte and incremental save/reopen regressions preserve raw data. This application budget does not claim complete picture parsing or bound total form memory. XFA remains partial; estimates unchanged.

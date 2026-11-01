@@ -1,3 +1,5 @@
+use chrono::{Datelike, NaiveDate};
+
 use super::path::template_field;
 use super::{Field, Template};
 
@@ -24,7 +26,7 @@ pub(crate) fn date_letters(picture: &str) -> Option<String> {
 /// ISO dates.
 pub(crate) fn data_date_letters(f: &Field) -> Option<String> {
     let letters = f.data_picture.as_deref().and_then(date_letters)?;
-    let tokens = date_tokens(&letters);
+    let tokens = date_tokens(&letters)?;
     let has = |any: &[&str]| tokens.iter().any(|t| any.contains(&t.as_str()));
     (has(&["yyyy", "yy"]) && has(&["mm", "m"]) && has(&["dd", "d"])).then_some(letters)
 }
@@ -57,14 +59,6 @@ const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "Jun
 
 const WEEKDAYS: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
-/// The weekday (0 = Sunday) of a proleptic Gregorian date.
-fn weekday(y: u32, m: u32, d: u32) -> usize {
-    const T: [i64; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
-    let y = i64::from(y) - i64::from(m < 3);
-    let t = T.get((m as usize).wrapping_sub(1)).copied().unwrap_or(0);
-    ((y + y / 4 - y / 100 + y / 400 + t + i64::from(d)).rem_euclid(7)) as usize
-}
-
 /// The index and length of the name in `names` that `text` starts with (ignoring case),
 /// cut to `abbr` letters when that is set.
 fn name_at(text: &str, names: &[&str], abbr: bool) -> Option<(usize, usize)> {
@@ -79,9 +73,17 @@ fn is_date_run(token: &str) -> bool {
     token.starts_with(['y', 'm', 'd'])
 }
 
+// Application resource budget, not a limit specified by XFA. A 4 KiB pattern can produce
+// at most 4096 tokens; reject before the character vector or per-token strings allocate.
+const MAX_DATE_PATTERN_BYTES: usize = 4096;
+
 /// The tokens of a date pattern: runs of `y`, `m` and `d` (`yyyy`, `yy`, `mmmm`, `mmm`, `mm`,
 /// `m`, `dddd`, `ddd`, `dd`, `d` are understood), or a literal character.
-pub(crate) fn date_tokens(pattern: &str) -> Vec<String> {
+/// `None` when the UTF-8 pattern exceeds the 4 KiB tokenization budget.
+pub(crate) fn date_tokens(pattern: &str) -> Option<Vec<String>> {
+    if pattern.len() > MAX_DATE_PATTERN_BYTES {
+        return None;
+    }
     let mut out = Vec::new();
     let chars: Vec<char> = pattern.chars().collect();
     let mut i = 0;
@@ -99,17 +101,19 @@ pub(crate) fn date_tokens(pattern: &str) -> Vec<String> {
             i += 1;
         }
     }
-    out
+    Some(out)
 }
 
 /// `2001-02-03` shown in `pattern` (`mm/dd/yyyy` → `02/03/2001`, `mmm d, yyyy` →
-/// `Feb 3, 2001`). Patterns with a token this doesn't know and non-dates come back as they are.
+/// `Feb 3, 2001`). Unknown or oversized patterns and invalid or out-of-range Gregorian dates stay as written.
 pub fn iso_to_pattern(iso: &str, pattern: &str) -> String {
     let parts: Vec<&str> = iso.trim().splitn(3, '-').collect();
     let [y, m, d] = parts[..] else { return iso.to_string() };
     let (Ok(y), Ok(m), Ok(d)) = (y.parse::<u32>(), m.parse::<u32>(), d.parse::<u32>()) else { return iso.to_string() };
+    let Some(date) = i32::try_from(y).ok().and_then(|y| NaiveDate::from_ymd_opt(y, m, d)) else { return iso.to_string() };
     let mut out = String::new();
-    for t in date_tokens(pattern) {
+    let Some(tokens) = date_tokens(pattern) else { return iso.to_string() };
+    for t in tokens {
         match t.as_str() {
             "yyyy" => out.push_str(&format!("{y:04}")),
             "yy" => out.push_str(&format!("{:02}", y % 100)),
@@ -125,7 +129,7 @@ pub fn iso_to_pattern(iso: &str, pattern: &str) -> String {
                 }
             }
             "ddd" | "dddd" => {
-                let name = WEEKDAYS.get(weekday(y, m, d)).copied().unwrap_or_default();
+                let name = WEEKDAYS.get(date.weekday().num_days_from_sunday() as usize).copied().unwrap_or_default();
                 match t.len() {
                     3 => out.push_str(name.get(..3).unwrap_or(name)),
                     _ => out.push_str(name),
@@ -138,13 +142,13 @@ pub fn iso_to_pattern(iso: &str, pattern: &str) -> String {
     out
 }
 
-/// A date typed as `pattern` back to `yyyy-mm-dd`. `None` when it doesn't match.
+/// A date typed as `pattern` back to `yyyy-mm-dd`; oversized patterns and invalid or out-of-range dates do not convert.
 pub fn pattern_to_iso(text: &str, pattern: &str) -> Option<String> {
     let text = text.trim();
     let (mut y, mut m, mut d) = (None, None, None);
     let mut day_name = None;
     let mut rest = text;
-    let tokens = date_tokens(pattern);
+    let tokens = date_tokens(pattern)?;
     for (i, t) in tokens.iter().enumerate() {
         match t.as_str() {
             "yyyy" | "yy" | "mm" | "m" | "dd" | "d" => {
@@ -186,8 +190,42 @@ pub fn pattern_to_iso(text: &str, pattern: &str) -> Option<String> {
         return None;
     }
     let (y, m, d) = (y?, m?, d?);
-    if day_name.is_some_and(|w| w != weekday(y, m, d)) {
+    let date = NaiveDate::from_ymd_opt(i32::try_from(y).ok()?, m, d)?;
+    if day_name.is_some_and(|w| w != date.weekday().num_days_from_sunday() as usize) {
         return None;
     }
-    (1..=12).contains(&m).then(|| format!("{y:04}-{m:02}-{d:02}")).filter(|_| (1..=31).contains(&d))
+    Some(format!("{y:04}-{m:02}-{d:02}"))
+}
+
+#[cfg(test)]
+mod bounds_tests {
+    use super::*;
+
+    #[test]
+    fn date_pattern_budget_preserves_raw_values_in_both_directions() {
+        let iso = "2024-02-29";
+        let pattern = format!("mm/dd/yyyy{}", "-".repeat(4096 - 10));
+        let shown = format!("02/29/2024{}", "-".repeat(4096 - 10));
+        assert_eq!(iso_to_pattern(iso, &pattern), shown);
+        assert_eq!(pattern_to_iso(&shown, &pattern).as_deref(), Some(iso));
+        let over = format!("{pattern}-");
+        assert_eq!(iso_to_pattern(iso, &over), iso);
+        assert_eq!(pattern_to_iso(&format!("{shown}-"), &over), None);
+        assert_eq!(data_to_iso("unchanged", Some(&over)), "unchanged");
+        assert_eq!(iso_to_data(iso.into(), Some(&over)), iso);
+        assert_eq!(crate::formatted_value(&format!("date{{{}}}", over.to_ascii_uppercase()), iso), None);
+    }
+
+    #[test]
+    fn date_pattern_budget_counts_utf8_bytes() {
+        let iso = "2024-02-29";
+        let pattern = format!("mm/dd/yyyy{}", "►".repeat(1362));
+        let shown = format!("02/29/2024{}", "►".repeat(1362));
+        assert_eq!(pattern.len(), 4096);
+        assert_eq!(iso_to_pattern(iso, &pattern), shown);
+        assert_eq!(pattern_to_iso(&shown, &pattern).as_deref(), Some(iso));
+        let over = format!("{pattern}►");
+        assert_eq!(iso_to_pattern(iso, &over), iso);
+        assert_eq!(pattern_to_iso(&format!("{shown}►"), &over), None);
+    }
 }
