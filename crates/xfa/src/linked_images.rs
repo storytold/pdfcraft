@@ -13,10 +13,20 @@ use crate::model::{Field, Node, Subform, Template, Value};
 /// Most nodes of the name tree visited, and most names kept from it.
 const MAX_TREE_NODES: usize = 4096;
 const MAX_NAMES: usize = 4096;
+/// Most name-and-value pairs looked at, a name repeated counted each time (only a new name is
+/// kept, so [`MAX_NAMES`] alone doesn't end a `Names` array that repeats one).
+const MAX_PAIRS: usize = 4 * MAX_NAMES;
+/// Longest name kept, in bytes: a template's link is a short path or URI, and a longer name
+/// could only be matched by an equally long link.
+const MAX_NAME_LEN: usize = 4096;
 /// Deepest the name tree is followed.
 const MAX_DEPTH: usize = 32;
-/// Largest picture taken from the file, as for a picture written into the template.
+/// Largest picture taken from the file, as for a picture written into the template. Small in
+/// tests, so a test can pass it.
+#[cfg(not(test))]
 const MAX_IMAGE: usize = 32 << 20;
+#[cfg(test)]
+const MAX_IMAGE: usize = 512;
 /// Most bytes of pictures taken from the file in all, each place a picture is used counted (a
 /// picture is held once per place). Small in tests, so a test can reach it.
 #[cfg(not(test))]
@@ -37,7 +47,7 @@ fn with_resolved<R>(doc: &Document, o: &Object, f: impl FnOnce(&Object) -> R) ->
 
 /// The `XFAImages` name tree: each name, as text, and the object it names.
 fn names(doc: &Document) -> HashMap<String, Object> {
-    let mut walk = Walk { doc, out: HashMap::new(), seen: HashSet::new(), visited: 0 };
+    let mut walk = Walk { doc, out: HashMap::new(), seen: HashSet::new(), visited: 0, pairs: 0 };
     let Some(root) = doc.root() else { return walk.out };
     let catalog = doc.get(root);
     if let Some(names) = catalog.as_dict().and_then(|c| c.get(b"Names")) {
@@ -57,11 +67,13 @@ struct Walk<'a> {
     out: HashMap<String, Object>,
     seen: HashSet<ObjRef>,
     visited: usize,
+    /// Pairs looked at so far, repeats included.
+    pairs: usize,
 }
 
 impl Walk<'_> {
     fn full(&self) -> bool {
-        self.visited >= MAX_TREE_NODES || self.out.len() >= MAX_NAMES
+        self.visited >= MAX_TREE_NODES || self.out.len() >= MAX_NAMES || self.pairs >= MAX_PAIRS
     }
 
     fn node(&mut self, node: &Object, depth: usize) {
@@ -97,11 +109,15 @@ impl Walk<'_> {
     fn pairs(&mut self, pairs: &Object) {
         let doc = self.doc;
         for pair in pairs.as_array().map(Vec::as_slice).unwrap_or_default().chunks(2) {
-            if self.out.len() >= MAX_NAMES {
+            // The names and pairs limits only: the node limit ends the walk at the next node, not
+            // the names of the node it has just come to.
+            if self.out.len() >= MAX_NAMES || self.pairs >= MAX_PAIRS {
                 break;
             }
+            self.pairs += 1;
+            // An over-long name is left before it is turned into text.
             if let [key, value] = pair
-                && let Some(key) = with_resolved(doc, key, |k| k.as_string().map(|s| s.to_text()))
+                && let Some(key) = with_resolved(doc, key, |k| k.as_string().filter(|s| s.bytes.len() <= MAX_NAME_LEN).map(|s| s.to_text()))
             {
                 self.out.entry(key).or_insert_with(|| value.clone());
             }

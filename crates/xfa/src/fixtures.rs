@@ -750,6 +750,11 @@ pub fn linked_image_shell() -> Vec<u8> {
 /// [`linked_image_shell`] with its own name tree: `root` is object 6 (the tree the catalog names),
 /// `kid` object 7, and object 8 the PNG.
 pub fn linked_image_shell_with(root: &[u8], kid: &[u8]) -> Vec<u8> {
+    linked_image_shell_holding(root, kid, TINY_PNG)
+}
+
+/// [`linked_image_shell_with`], object 8 a stream holding `picture` (a [`tiny_png`] there).
+pub fn linked_image_shell_holding(root: &[u8], kid: &[u8], picture: &[u8]) -> Vec<u8> {
     let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
 <xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
 <template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
@@ -763,8 +768,8 @@ pub fn linked_image_shell_with(root: &[u8], kid: &[u8]) -> Vec<u8> {
 </template>
 </xdp:xdp>
 "##;
-    let mut png = format!("<< /Length {} >>\nstream\n", TINY_PNG.len()).into_bytes();
-    png.extend_from_slice(TINY_PNG);
+    let mut png = format!("<< /Length {} >>\nstream\n", picture.len()).into_bytes();
+    png.extend_from_slice(picture);
     png.extend_from_slice(b"\nendstream");
     let objs: Vec<Vec<u8>> = vec![
         b"<< /Type /Catalog /Pages 2 0 R /NeedsRendering true /AcroForm << /XFA 5 0 R /Fields [] >> /Names << /XFAImages 6 0 R >> >>".to_vec(),

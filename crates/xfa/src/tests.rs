@@ -4203,6 +4203,108 @@ fn a_hostile_xfa_images_tree_is_walked_once_and_gives_nothing() {
     }
 }
 
+/// The picture data a draw named `name` ends up with, in the template's first subform.
+fn linked_picture(tpl: &crate::model::Template, name: &str) -> Option<Vec<u8>> {
+    tpl.root.children.iter().find_map(|n| match n {
+        Node::Subform(s) => s.children.iter().find_map(|c| match c {
+            Node::Draw(d) if d.common.name.as_deref() == Some(name) => match &d.value {
+                Value::Image { data, .. } => Some(data.clone()),
+                _ => None,
+            },
+            _ => None,
+        }),
+        _ => None,
+    })
+}
+
+/// #5393 review: a `Names` array that repeats one name counts every pair it holds, not only the
+/// names kept: the walk stops at its limit however often the name repeats, so the name listed
+/// after twenty thousand repeats is never reached.
+#[test]
+fn a_repeated_xfa_images_name_counts_against_the_walk() {
+    let kid = format!(r"<< /Names [{}(.\\logo.png) 8 0 R] >>", r"(.\\dup.png) 8 0 R ".repeat(20_000));
+    let doc = Document::open(Arc::new(crate::fixtures::linked_image_shell_with(b"<< /Kids [7 0 R] >>", kid.as_bytes()))).unwrap();
+    let mut tpl = crate::script::template_of(&doc).unwrap();
+    crate::linked_images::resolve(&mut tpl, &doc);
+    assert_eq!(linked_picture(&tpl, "logo"), Some(Vec::new()), "past the limit the logo's name isn't reached");
+}
+
+/// The last node the walk reaches, the 4,096th, still gives its names: the node limit stops
+/// the walk from going on, not the node it has just come to.
+#[test]
+fn the_last_xfa_images_node_the_walk_reaches_gives_its_names() {
+    // The root, 4,094 empty kids, and the kid holding the logo: 4,096 nodes in all.
+    let root = format!("<< /Kids [{}7 0 R] >>", "<< >> ".repeat(4_094));
+    let doc = Document::open(Arc::new(crate::fixtures::linked_image_shell_with(root.as_bytes(), br"<< /Names [(.\\logo.png) 8 0 R] >>"))).unwrap();
+    let mut tpl = crate::script::template_of(&doc).unwrap();
+    crate::linked_images::resolve(&mut tpl, &doc);
+    assert_eq!(linked_picture(&tpl, "logo"), Some(crate::fixtures::tiny_png()), "the 4,096th node's name is read");
+}
+
+/// #5393 review: a name longer than any link is left before it is turned into text; the names
+/// beside it are still read.
+#[test]
+fn an_over_long_xfa_images_name_is_left() {
+    let long = "L".repeat(5_000);
+    let kid = format!(r"<< /Names [({long}) 8 0 R (.\\logo.png) 8 0 R] >>");
+    let doc = Document::open(Arc::new(crate::fixtures::linked_image_shell_with(b"<< /Kids [7 0 R] >>", kid.as_bytes()))).unwrap();
+    let xml = format!(
+        r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page1" layout="tb">
+  <draw name="long" w="1in" h="1in"><value><image contentType="image/png" href="{long}"/></value></draw>
+  <draw name="logo" w="1in" h="1in"><value><image contentType="image/png" href=".\logo.png"/></value></draw>
+ </subform></subform></template>"#
+    );
+    let (mut tpl, _) = crate::parse(&xml).unwrap();
+    crate::linked_images::resolve(&mut tpl, &doc);
+    assert_eq!(linked_picture(&tpl, "long"), Some(Vec::new()), "the over-long name isn't kept");
+    assert_eq!(linked_picture(&tpl, "logo"), Some(crate::fixtures::tiny_png()), "the name beside it is");
+}
+
+/// #5393 review: a name the tree holds whose stream isn't a picture is taken as it is, and
+/// drawing it draws nothing and warns, as a picture the template holds that isn't one does.
+#[test]
+fn a_linked_stream_that_is_not_a_picture_draws_nothing_and_warns() {
+    let mut doc = Document::open(Arc::new(crate::fixtures::linked_image_shell_holding(
+        b"<< /Kids [7 0 R] >>",
+        br"<< /Names [(.\\logo.png) 8 0 R] >>",
+        b"this is not a picture",
+    )))
+    .unwrap();
+    // The stream is found and taken as the logo's data.
+    let mut tpl = crate::script::template_of(&doc).unwrap();
+    assert!(crate::linked_images::resolve(&mut tpl, &doc).is_empty());
+    assert_eq!(linked_picture(&tpl, "logo"), Some(b"this is not a picture".to_vec()));
+    let report = render_into(&mut doc).unwrap();
+    // One warning for the logo and the missing picture alike (warnings are said once).
+    assert!(report.warnings.iter().any(|w| w.contains("not a JPEG, PNG")), "{:?}", report.warnings);
+    let images = doc
+        .object_numbers()
+        .into_iter()
+        .filter(
+            |n| matches!(&*doc.get(pdfcraft_cos::ObjRef { num: *n, generation: 0 }), Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image")),
+        )
+        .count();
+    assert_eq!(images, 0, "no picture drawn");
+}
+
+/// #5393 review: a picture larger than the limit (small in tests) is left out with a warning,
+/// not read whole.
+#[test]
+fn an_over_large_linked_picture_is_left_with_a_warning() {
+    let doc = Document::open(Arc::new(crate::fixtures::linked_image_shell_holding(
+        b"<< /Kids [7 0 R] >>",
+        br"<< /Names [(.\\logo.png) 8 0 R] >>",
+        &[7u8; 600],
+    )))
+    .unwrap();
+    let mut tpl = crate::script::template_of(&doc).unwrap();
+    let warnings = crate::linked_images::resolve(&mut tpl, &doc);
+    assert!(warnings.iter().any(|w| w.contains("could not be read")), "{warnings:?}");
+    assert_eq!(linked_picture(&tpl, "logo"), Some(Vec::new()));
+}
+
 /// An over-deep branch of the `XFAImages` tree is left on its own: the walk goes on to the
 /// branches beside it, and the picture one of them holds is found.
 #[test]
