@@ -2810,3 +2810,9 @@ certificate	Version	وەشان
 	Export this PDF	هەناردەکردنی ئەم PDF ـە
 	Find text or tools	دۆزینەوەی دەق یان ئامراز
 	Crop image	بڕینەوەی وێنە
+# Fill & Sign text: the border around it (M5).
+	Border:	سنوور:
+
+# A text border's own colour (M5).
+	Border colour	ڕەنگی سنوور
+	Same as text	وەک دەق

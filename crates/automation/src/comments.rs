@@ -514,6 +514,18 @@ impl Automation {
         if !(4.0..=300.0).contains(&size) {
             return Err(ToolError::InvalidArgs("font_size must be 4–300 pt".into()));
         }
+        let requested_border = a.opt_num("border")?;
+        if requested_border.is_some() && !matches!(kind, "text" | "date") {
+            return Err(ToolError::InvalidArgs("border is only for type text or date".into()));
+        }
+        let border = requested_border.unwrap_or(0.0);
+        if !(0.0..=12.0).contains(&border) {
+            return Err(ToolError::InvalidArgs("border must be 0–12 pt".into()));
+        }
+        let border_color = a.opt_str("border_color")?.map(parse_color).transpose()?;
+        if border_color.is_some() && border <= 0.0 {
+            return Err(ToolError::InvalidArgs("border_color needs a border".into()));
+        }
         if let Some(path) = a.opt_str("path")? {
             if !matches!(kind, "signature" | "initials") || a.opt_str("text")?.is_some() {
                 return Err(ToolError::InvalidArgs("path is only for an image signature or initials; pass either path or text".into()));
@@ -540,8 +552,9 @@ impl Automation {
         let text_at = |t: &str| {
             let w = (pdfcraft_engine::annot_text::text_width(t, size) + 8.0).clamp(20.0, 600.0);
             let h = size * 1.2 + 6.0;
-            let rect = pdfcraft_engine::text_box_at(i64::from(info.rotation), at, w, h).unwrap_or([at[0], at[1] - h, at[0] + w, at[1]]);
-            Shape::Typewriter { rect, font_size: size }
+            let [x0, y0, x1, y1] = pdfcraft_engine::text_box_at(i64::from(info.rotation), at, w, h).unwrap_or([at[0], at[1] - h, at[0] + w, at[1]]);
+            // A border goes around the box, so the text sits where it would without one.
+            Shape::Typewriter { rect: [x0 - border, y0 - border, x1 + border, y1 + border], font_size: size }
         };
         let (shape, contents) = match kind {
             "text" => {
@@ -586,6 +599,10 @@ impl Automation {
         let mut style = Style::default_for(&shape);
         if let Some(color) = requested_color {
             style.color = color;
+        }
+        if matches!(shape, Shape::Typewriter { .. }) {
+            style.width = border;
+            style.border_color = border_color;
         }
         self.apply(a, Edit::AddAnnotation(NewAnnotation { page, shape, style, contents, author }))
     }
@@ -653,6 +670,10 @@ impl Automation {
             let fill = if f.eq_ignore_ascii_case("none") { None } else { Some(parse_color(f)?) };
             edits.push(Edit::FillAnnotation { page, index, fill });
         }
+        if let Some(c) = a.opt_str("border_color")? {
+            let color = if c.eq_ignore_ascii_case("text") { None } else { Some(parse_color(c)?) };
+            edits.push(Edit::BorderColorAnnotation { page, index, color });
+        }
         if let Some(size) = a.opt_num("font_size")? {
             if !(1.0..=400.0).contains(&size) {
                 return Err(ToolError::InvalidArgs("font_size must be 1–400 pt".into()));
@@ -686,7 +707,7 @@ impl Automation {
         }
         if edits.is_empty() {
             return Err(ToolError::InvalidArgs(
-                "nothing to change: pass contents, color, opacity, width, fill, font_size, rect, move or points".into(),
+                "nothing to change: pass contents, color, opacity, width, fill, border_color, font_size, rect, move or points".into(),
             ));
         }
         let edit = if edits.len() == 1 { edits.remove(0) } else { Edit::Batch { label: "Edit comment".into(), edits } };

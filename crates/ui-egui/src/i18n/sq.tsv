@@ -2601,3 +2601,9 @@ animation effects	Off	Joaktiv
 	No image on clipboard to paste	Nuk ka imazh në kujtesën e përkohshme për të ngjitur
 	Pinned {tool} to Home	{tool} u fiksua te Kreu
 	Unpinned {tool} from Home	{tool} u hoq nga fiksimi te Kreu
+# Fill & Sign text: the border around it (M5).
+	Border:	Korniza:
+
+# A text border's own colour (M5).
+	Border colour	Ngjyra e kornizës
+	Same as text	Si teksti

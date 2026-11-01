@@ -2567,3 +2567,9 @@ animation effects	Off	關
 	No image on clipboard to paste	剪貼簿中沒有可貼上的影像
 	Pinned {tool} to Home	已將 {tool} 釘選至首頁
 	Unpinned {tool} from Home	已從首頁取消釘選 {tool}
+# Fill & Sign text: the border around it (M5).
+	Border:	邊框：
+
+# A text border's own colour (M5).
+	Border colour	邊框顏色
+	Same as text	與文字相同

@@ -249,6 +249,13 @@ pub enum Edit {
         index: usize,
         size: f64,
     },
+    /// Give a text box, typewriter text or callout a border colour of its own (`None`: the
+    /// text's again).
+    BorderColorAnnotation {
+        page: usize,
+        index: usize,
+        color: Option<Rgb>,
+    },
     /// Comment properties ▸ General / note icon.
     SetAnnotationInfo {
         page: usize,

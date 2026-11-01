@@ -2886,3 +2886,9 @@ theme	Appearance	Teema
 	No image on clipboard to paste	Leikepöydällä ei ole liitettävää kuvaa
 	Pinned {tool} to Home	{tool} kiinnitetty aloitussivulle
 	Unpinned {tool} from Home	{tool} irrotettu aloitussivulta
+# Fill & Sign text: the border around it (M5).
+	Border:	Reuna:
+
+# A text border's own colour (M5).
+	Border colour	Reunan väri
+	Same as text	Sama kuin teksti

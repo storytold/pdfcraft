@@ -213,6 +213,8 @@ pub struct Props {
     pub fill: Option<Rgb>,
     /// Text boxes, typewriter text and callouts: the `/DA` font size in points.
     pub font_size: Option<f64>,
+    /// Text boxes, typewriter text and callouts: the border's own colour (`None`: the text's).
+    pub border_color: Option<Rgb>,
 }
 
 /// The current properties of the comment at `(page, index)`.
@@ -244,6 +246,7 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
         fillable: fillable(&subtype),
         fill: fill_of(d),
         font_size: (subtype == "FreeText").then(|| appearance::parse_da(d).1),
+        border_color: (subtype == "FreeText").then(|| appearance::da_border(d)).flatten(),
         subtype,
         endings: line_endings_of(d),
     })

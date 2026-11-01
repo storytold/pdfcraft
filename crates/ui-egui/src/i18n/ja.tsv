@@ -2617,3 +2617,9 @@ animation effects	Off	オフ
 	No image on clipboard to paste	貼り付ける画像がクリップボードにありません
 	Pinned {tool} to Home	{tool} をホームにピン留めしました
 	Unpinned {tool} from Home	{tool} のホームへのピン留めを解除しました
+# Fill & Sign text: the border around it (M5).
+	Border:	境界線:
+
+# A text border's own colour (M5).
+	Border colour	境界線の色
+	Same as text	テキストと同じ

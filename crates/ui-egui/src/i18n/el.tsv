@@ -2624,3 +2624,9 @@ animation effects	Off	Ανενεργά
 	No image on clipboard to paste	Δεν υπάρχει εικόνα στο πρόχειρο για επικόλληση
 	Pinned {tool} to Home	Το {tool} καρφιτσώθηκε στην Αρχική
 	Unpinned {tool} from Home	Το {tool} ξεκαρφιτσώθηκε από την Αρχική
+# Fill & Sign text: the border around it (M5).
+	Border:	Περίγραμμα:
+
+# A text border's own colour (M5).
+	Border colour	Χρώμα περιγράμματος
+	Same as text	Ίδιο με το κείμενο

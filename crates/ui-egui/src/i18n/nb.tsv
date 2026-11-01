@@ -2794,3 +2794,9 @@ key	Space	Mellomrom
 	Export this PDF	Eksporter denne PDF-en
 	Find text or tools	Finn tekst eller verktøy
 	Crop image	Beskjær bilde
+# Fill & Sign text: the border around it (M5).
+	Border:	Kantlinje:
+
+# A text border's own colour (M5).
+	Border colour	Kantlinjefarge
+	Same as text	Samme som teksten

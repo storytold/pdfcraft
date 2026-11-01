@@ -2617,3 +2617,9 @@ animation effects	Off	Ki
 	No image on clipboard to paste	Nincs beilleszthető kép a vágólapon
 	Pinned {tool} to Home	{tool} rögzítve a kezdőlapra
 	Unpinned {tool} from Home	{tool} leválasztva a kezdőlapról
+# Fill & Sign text: the border around it (M5).
+	Border:	Szegély:
+
+# A text border's own colour (M5).
+	Border colour	Szegély színe
+	Same as text	Mint a szöveg

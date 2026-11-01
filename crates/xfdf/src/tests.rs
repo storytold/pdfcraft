@@ -149,7 +149,7 @@ fn values(doc: &Document) -> Vec<(String, Vec<String>)> {
 fn a_replace_text_pair_survives_an_xfdf_round_trip() {
     let mut src = blank();
     let quads = [[100.0, 720.0, 200.0, 720.0, 100.0, 706.0, 200.0, 706.0]];
-    let style = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None };
+    let style = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None, border_color: None };
     let meta = |id: &str| Meta { date: Some("D:20261001120000Z".into()), id: id.into() };
     add_text_replacement(
         &mut src,

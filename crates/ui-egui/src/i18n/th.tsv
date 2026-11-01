@@ -2776,3 +2776,9 @@ theme	Appearance	ลักษณะที่ปรากฏ
 	Export this PDF	ส่งออก PDF นี้
 	Find text or tools	ค้นหาข้อความหรือเครื่องมือ
 	Crop image	ครอบตัดรูปภาพ
+# Fill & Sign text: the border around it (M5).
+	Border:	เส้นขอบ:
+
+# A text border's own colour (M5).
+	Border colour	สีเส้นขอบ
+	Same as text	เหมือนข้อความ

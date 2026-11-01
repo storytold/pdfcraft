@@ -2876,3 +2876,9 @@ theme	Appearance	Aspect
 	No image on clipboard to paste	Nicio imagine în clipboard de lipit
 	Pinned {tool} to Home	{tool} fixat pe pagina principală
 	Unpinned {tool} from Home	{tool} desprins de pe pagina principală
+# Fill & Sign text: the border around it (M5).
+	Border:	Chenar:
+
+# A text border's own colour (M5).
+	Border colour	Culoare chenar
+	Same as text	Ca textul
