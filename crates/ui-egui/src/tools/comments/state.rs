@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use super::geometry::{corner_ratio, is_markup, resized};
 use super::{Annotation, CommentPrefs, CommentTool, DocInfo, Edit, PagePointer, PageXform, Pos2, QuickTool, Rect};
 
@@ -216,6 +218,78 @@ impl CommentView {
             self.editor_focus = None;
         }
     }
+
+    /// The annotation at `gone` was just deleted; `before` and `after` are the document's
+    /// annotations until then and now. The selection and the inline editor stay on what they
+    /// were on, where it now is (deleting a reply keeps its comment selected), and close when it
+    /// went too.
+    pub(crate) fn annotation_deleted(&mut self, before: &[Annotation], after: &[Annotation], gone: (usize, usize)) {
+        self.selected = self.selected.and_then(|k| after_delete(before, after, gone, k));
+        self.editing = self.editing.take().and_then(|(p, i, text)| after_delete(before, after, gone, (p, i)).map(|(p, i)| (p, i, text)));
+        if self.editing.is_none() {
+            self.editor_focus = None;
+        }
+    }
+
+    /// Undo or Redo just ran. Either may have put annotations back or taken them away, on any
+    /// page, so a (page, index) held here may now name another one. The selection and the inline
+    /// editor close, its unsaved text with it, rather than Save writing that text over whatever
+    /// took its place.
+    pub(crate) fn history_stepped(&mut self) {
+        self.selected = None;
+        self.editing = None;
+        self.editor_focus = None;
+    }
+}
+
+/// Where the annotation at `keep` is once the one at `gone` was deleted, or `None` when it went
+/// with it. Deleting takes the annotation's replies (at any depth) and pop-ups out of its page's
+/// `/Annots` (`pdfcraft_annot::delete_annotation`), and everything after them moves up, so `keep`
+/// is found by its place among the page's annotations that stay. When the page lost other
+/// annotations than those, or the one in that place reads differently, it is not guessed at.
+pub(super) fn after_delete(before: &[Annotation], after: &[Annotation], gone: (usize, usize), keep: (usize, usize)) -> Option<(usize, usize)> {
+    if keep == gone {
+        return None;
+    }
+    if keep.0 != gone.0 {
+        return Some(keep);
+    }
+    let (old, new) = (on_page(before, gone.0), on_page(after, gone.0));
+    let goes = in_thread(&old, gone);
+    let stays: Vec<&Annotation> = old.iter().copied().filter(|a| !goes(a.index)).collect();
+    if stays.len() != new.len() {
+        return None;
+    }
+    let rank = stays.iter().position(|a| a.index == keep.1)?;
+    let (was, now) = (stays.get(rank)?, new.get(rank)?);
+    let same = (&was.subtype, &was.name, &was.author, &was.contents, was.rect) == (&now.subtype, &now.name, &now.author, &now.contents, now.rect);
+    same.then_some((now.page, now.index))
+}
+
+/// Whether the annotation at an index on `top`'s page is `top` or a reply to it at any depth:
+/// what deleting `top` takes along. `page` is that page's listed annotations. Only replies on the
+/// page go with it (`pdfcraft_annot::delete_annotation` follows `/IRT` through the page's
+/// `/Annots`).
+fn in_thread(page: &[&Annotation], top: (usize, usize)) -> impl Fn(usize) -> bool {
+    let parents: HashMap<usize, usize> = page.iter().filter_map(|a| a.parent.filter(|p| p.0 == top.0).map(|p| (a.index, p.1))).collect();
+    move |mut i: usize| {
+        // `link_replies` settles every chain within 64 steps.
+        for _ in 0..=64 {
+            if i == top.1 {
+                return true;
+            }
+            let Some(&up) = parents.get(&i) else { return false };
+            i = up;
+        }
+        false
+    }
+}
+
+/// The annotations listed on `page`, in `/Annots` order.
+fn on_page(list: &[Annotation], page: usize) -> Vec<&Annotation> {
+    let mut v: Vec<&Annotation> = list.iter().filter(|a| a.page == page).collect();
+    v.sort_by_key(|a| a.index);
+    v
 }
 
 /// Comments panel order (Acrobat: Sort by page, author, date, type, colour).
@@ -307,9 +381,10 @@ impl PageCx<'_> {
             .collect()
     }
 
-    /// The topmost comment under `p`.
+    /// The topmost comment under `p`: the one drawn last, in `/Annots` order (inspection lists
+    /// comments by position, not in paint order).
     pub(super) fn hit(&self, p: Pos2) -> Option<&Annotation> {
-        self.comments().filter(|a| self.screen_rects(a).any(|r| r.expand(3.0).contains(p))).last()
+        self.comments().filter(|a| self.screen_rects(a).any(|r| r.expand(3.0).contains(p))).max_by_key(|a| a.index)
     }
 
     pub(crate) fn get(&self, index: usize) -> Option<&Annotation> {

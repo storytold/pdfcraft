@@ -35,7 +35,9 @@ use geometry::handle_pos;
 pub(crate) use geometry::{caret_snap, snapped_caret};
 pub(crate) use geometry::{corner_ratio, page_rotation, resized};
 pub use geometry::{drawn_text_box_rect, text_box_rect};
-pub(crate) use input::{fill_grabs, keys, nudge_keys, page_after_text, page_input, select_grabs};
+#[cfg(test)]
+use input::hover_tip;
+pub(crate) use input::{describe, fill_grabs, hit, keys, nudge_keys, page_after_text, page_input};
 pub use menu::{CanvasAction, fill_picker, recent_custom_colours, remember_custom_colour, status_badge, swatch_grid};
 #[cfg(test)]
 use menu::{RECENT_CUSTOM, same_colour};
@@ -43,6 +45,8 @@ pub(crate) use menu::{attachment_items, context_menu, quick_bar_controls};
 pub(crate) use paint::paint_page;
 #[cfg(test)]
 use paint::{changing_points, drawn_shape, edited_in_view};
+#[cfg(test)]
+use state::after_delete;
 use state::login_name;
 pub use state::{CommentView, Composer, ComposerKind, Gesture, SortBy};
 pub(crate) use state::{EditorFocus, PageCx};

@@ -139,9 +139,11 @@ impl PdfCraftApp {
         });
         // Set apart: one more key inside the macro above passes serde_json's recursion limit.
         v["default_page_gaps"] = serde_json::Value::Bool(self.view_defaults.show_page_gaps);
+        v["fill_text_color"] = serde_json::json!(self.fill_text_color);
         v["redact_prefs"] = self.redact_defaults.to_json();
         // Set outside json! above, which is at serde_json's macro recursion limit.
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
+        v["show_page_edge_shadows"] = self.show_page_edge_shadows.into();
         v["hidden_tools"] = self.hidden_tools.to_json();
         v["comment_tool_pinned"] = serde_json::Value::Bool(self.comment_prefs.pinned);
         v["show_secured_notice"] = serde_json::Value::Bool(self.show_secured_notice);
@@ -261,6 +263,14 @@ impl PdfCraftApp {
         }
         if let Some(size) = v["fill_text_size"].as_f64().and_then(fill_sign::valid_text_size) {
             self.fill_text_size = size;
+        }
+        if let Ok(color) = serde_json::from_value::<[f64; 3]>(v["fill_text_color"].clone())
+            && let Some(color) = fill_sign::valid_text_color(color)
+        {
+            self.fill_text_color = color;
+        }
+        if let Some(show) = v["show_page_edge_shadows"].as_bool() {
+            self.show_page_edge_shadows = show;
         }
         // Settings are untrusted: unknown tool ids are dropped, and a value that isn't a list hides nothing.
         self.hidden_tools = tool_visibility::HiddenTools::from_json(&v["hidden_tools"]).unwrap_or_default();

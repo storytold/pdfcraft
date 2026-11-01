@@ -109,8 +109,12 @@ pub enum Dialog {
     Split,
     /// Pages ▸ Number pages… (page labels).
     NumberPages,
+    /// Organize pages ▸ Page properties (the tab order of the selected pages).
+    PageProps,
     /// Protect Using Password.
     Protect,
+    /// Bookmarks ▸ New bookmarks from text styles (#1693).
+    BookmarksFromTextStyles,
     /// Set Page Boxes (crop, trim, bleed, art, media).
     PageBoxes,
     /// Add / Update Header and Footer, Watermark, Background.
@@ -213,6 +217,18 @@ pub struct DuplicateDraft {
     pub to: usize,
 }
 
+/// Page Properties: the document and pages it applies to (0-based), the document's edit
+/// generation when the dialog opened, and the pages' tab order as they have it (`None` when they
+/// differ) and as chosen (`None` until one is chosen).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PagePropsDraft {
+    pub doc: DocId,
+    pub generation: u64,
+    pub pages: Vec<usize>,
+    pub before: Option<pdfcraft_engine::TabOrder>,
+    pub tab_order: Option<pdfcraft_engine::TabOrder>,
+}
+
 /// Copied pages: their document's name and bytes (as it was when copied) and the pages.
 #[derive(Clone, Debug)]
 pub struct PageClip {
@@ -313,6 +329,8 @@ pub struct PasswordPrompt {
     pub(crate) then: Option<&'static str>,
     /// A link destination to apply after the linked PDF is unlocked.
     pub(crate) after_open: Option<pdfcraft_render::RemoteDestination>,
+    /// A launch-time display override, applied only after this PDF is unlocked.
+    pub(crate) display_override: Option<(canvas::PageLayout, bool)>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]

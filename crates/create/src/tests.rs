@@ -186,7 +186,7 @@ fn bmp_gif_and_multi_page_tiff_images() {
         let mut enc = image::codecs::gif::GifEncoder::new(&mut gif);
         enc.encode(img.as_raw(), 2, 2, image::ExtendedColorType::Rgba8).unwrap();
     }
-    // TIFF: two pages, an 8-bit gray one at 144 dpi and a 1-bit one.
+    // TIFF: two 8-bit gray pages, one at 144 dpi and one of only black and white.
     let mut tif = std::io::Cursor::new(Vec::new());
     {
         let mut enc = tiff::encoder::TiffEncoder::new(&mut tif).unwrap();
@@ -204,6 +204,26 @@ fn bmp_gif_and_multi_page_tiff_images() {
     assert_eq!(media(&pages(&doc)[2]), [0.0, 0.0, 2.0, 1.0], "4×2 px at 144 dpi");
     assert_eq!(image_of(&doc, 2).name(b"ColorSpace"), Some(&b"DeviceGray"[..]));
     assert!(matches!(from_images(&[("x.webp".into(), b"RIFF0000WEBP".to_vec())]), Err(CreateError::Image(..))));
+}
+
+/// #4937: a BMP whose header gives the pixel data's offset as 0 is placed as the same image as
+/// the intact file, not shifted by the header bytes.
+#[test]
+fn a_bmp_with_a_zero_pixel_offset_is_placed_like_the_intact_file() {
+    use image::ImageEncoder;
+    let mut bmp = Vec::new();
+    let pixels: Vec<u8> = (0..18).map(|i| i * 13).collect();
+    image::codecs::bmp::BmpEncoder::new(&mut bmp).write_image(&pixels, 3, 2, image::ExtendedColorType::Rgb8).unwrap();
+    let mut zero = bmp.clone();
+    zero[10..14].copy_from_slice(&0u32.to_le_bytes());
+    let samples = |data: Vec<u8>| {
+        let doc = reopen(&from_images(&[("a.bmp".into(), data)]).unwrap());
+        let res = doc.resolve(pages(&doc)[0].get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+        let xo = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+        let Object::Stream(s) = &*doc.resolve(xo.get(b"Im0").unwrap()) else { panic!("not an image") };
+        s.decoded().unwrap()
+    };
+    assert_eq!(samples(zero), samples(bmp));
 }
 
 /// #665 lifted the tiff crate's 256 MiB decode limit; a few bytes claiming a 60000x60000 page
@@ -1275,6 +1295,48 @@ fn a_cyclic_indexed_colour_space_is_refused() {
     assert_eq!(out.skipped.len(), 1, "{:?}", out.skipped);
 }
 
+/// A baseline TIFF of one uncompressed strip of 1-bit samples, `packed` rows each starting on a
+/// byte, 0 for black (BlackIsZero; TIFF 6.0, section 3): the `tiff` crate writes no 1-bit images.
+fn one_bit_tiff(w: u32, h: u32, packed: &[u8]) -> Vec<u8> {
+    // Tag, type (3 SHORT, 4 LONG), value; the strip follows the IFD.
+    let entries: [(u16, u16, u32); 8] =
+        [(256, 4, w), (257, 4, h), (258, 3, 1), (259, 3, 1), (262, 3, 1), (273, 4, 0), (278, 4, h), (279, 4, packed.len() as u32)];
+    let strip = 8 + 2 + entries.len() as u32 * 12 + 4;
+    let mut out = b"II*\0".to_vec();
+    out.extend(8u32.to_le_bytes());
+    out.extend((entries.len() as u16).to_le_bytes());
+    for (tag, kind, value) in entries {
+        let value = if tag == 273 { strip } else { value };
+        out.extend(tag.to_le_bytes());
+        out.extend(kind.to_le_bytes());
+        out.extend(1u32.to_le_bytes());
+        match kind {
+            3 => out.extend((value as u16).to_le_bytes().into_iter().chain([0, 0])),
+            _ => out.extend(value.to_le_bytes()),
+        }
+    }
+    out.extend(0u32.to_le_bytes());
+    out.extend_from_slice(packed);
+    out
+}
+
+/// A bilevel TIFF (one bit a sample) stays one bit, stored as Group 4 when that is smaller, and
+/// exports as its picture.
+#[test]
+fn a_one_bit_tiff_is_stored_as_group_4() {
+    let (w, h) = (1200u32, 240u32);
+    let bits = strokes(w, h);
+    let stride = (w as usize).div_ceil(8);
+    let picture: Vec<bool> =
+        (0..(w * h) as usize).map(|i| bits[i / w as usize * stride + i % w as usize / 8] & (0x80 >> (i % w as usize % 8)) != 0).collect();
+    let doc = from_images(&[("scan.tif".into(), one_bit_tiff(w, h, &bits))]).unwrap();
+    let im = image_of(&doc, 0);
+    assert_eq!((im.int(b"BitsPerComponent"), im.name(b"Filter")), (Some(1), Some(&b"CCITTFaxDecode"[..])));
+    let out = extract_images(&doc, &[0], 0);
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    assert_eq!(exported_white(&out.images[0].data), picture);
+}
+
 /// A TIFF of `pages` 64×64 gray pages, then (with `unreadable`) one whose samples Create can't read.
 fn gray_tiff(pages: usize, unreadable: bool) -> Vec<u8> {
     let mut tif = std::io::Cursor::new(Vec::new());
@@ -1317,4 +1379,833 @@ fn a_tiny_gif_on_a_huge_screen_is_refused() {
     assert!(matches!(from_images(&[("big.gif".into(), gif_on_screen(4200, 4100))]), Err(CreateError::Image(..))));
     let doc = reopen(&from_images(&[("small.gif".into(), gif_on_screen(40, 30))]).unwrap());
     assert_eq!(media(&pages(&doc)[0]), [0.0, 0.0, 40.0, 30.0]);
+}
+
+/// A PNG of `w` × `h` samples `data` in `color` at `depth`, with a palette or an ICC profile.
+fn png_of(w: u32, h: u32, color: png::ColorType, depth: png::BitDepth, data: &[u8], palette: Option<Vec<u8>>, icc: Option<Vec<u8>>) -> Vec<u8> {
+    let mut out = Vec::new();
+    {
+        let mut info = png::Info::with_size(w, h);
+        info.color_type = color;
+        info.bit_depth = depth;
+        info.palette = palette.map(Into::into);
+        info.icc_profile = icc.map(Into::into);
+        let mut writer = png::Encoder::with_info(&mut out, info).unwrap().write_header().unwrap();
+        writer.write_image_data(data).unwrap();
+    }
+    out
+}
+
+/// Rows of `w` one-bit samples (1 white), each on a new byte: lines of glyphs drawn from a few
+/// shapes at uneven spacing, whose edges move a pixel now and then, as a scan of text has them.
+/// (Clean, evenly spaced strokes favour Flate over Group 4.)
+fn strokes(w: u32, h: u32) -> Vec<u8> {
+    let stride = (w as usize).div_ceil(8);
+    let mut data = vec![0xFF; stride * h as usize];
+    let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    let (w, h) = (w as usize, h as usize);
+    for line in (4..h.saturating_sub(18)).step_by(24) {
+        let mut x = 8;
+        while x + 16 < w {
+            let wide = 5 + (next() % 4) as usize;
+            let shape = next() % 4;
+            let mut fill = |x0: usize, x1: usize, y0: usize, y1: usize| {
+                for y in line + y0..line + y1 {
+                    let ragged = |r: u64| match r % 8 {
+                        0 => 0,
+                        1 => 2,
+                        _ => 1,
+                    };
+                    let (left, right) = ((x + x0 + 1).saturating_sub(ragged(next())), x + x1 + ragged(next()));
+                    for xx in left..right.saturating_sub(1).min(w) {
+                        data[y * stride + xx / 8] &= !(0x80 >> (xx % 8));
+                    }
+                }
+            };
+            match shape {
+                0 => fill(0, 2, 0, 14),
+                1 => {
+                    fill(0, wide, 4, 6);
+                    fill(0, wide, 12, 14);
+                    fill(0, 2, 4, 14);
+                    fill(wide - 2, wide, 4, 14);
+                }
+                2 => {
+                    fill(0, 2, 4, 14);
+                    fill(wide - 2, wide, 6, 14);
+                    fill(0, wide - 1, 4, 6);
+                }
+                _ => {
+                    fill(0, 2, 7, 14);
+                    fill(0, 2, 2, 4);
+                }
+            }
+            x += wide + 2 + (next() % 2) as usize + if next() % 6 == 0 { 7 } else { 0 };
+        }
+    }
+    data
+}
+
+/// The one-bit samples (true for white) a Group 4 image stream decodes to, through an
+/// independent decoder.
+fn g4_rows(s: &Stream) -> Vec<Vec<bool>> {
+    struct Rows(Vec<Vec<bool>>, Vec<bool>, usize);
+    impl hayro_ccitt::Decoder for Rows {
+        fn push_pixel(&mut self, white: bool) {
+            self.1.push(white);
+        }
+        fn push_pixel_chunk(&mut self, white: bool, chunks: u32) {
+            self.1.extend(std::iter::repeat_n(white, chunks as usize * 8));
+        }
+        fn next_line(&mut self) {
+            let mut row = std::mem::take(&mut self.1);
+            row.truncate(self.2);
+            self.0.push(row);
+        }
+    }
+    let (w, h) = (s.dict.int(b"Width").unwrap() as u32, s.dict.int(b"Height").unwrap() as u32);
+    let settings = hayro_ccitt::DecodeSettings {
+        columns: w,
+        rows: h,
+        end_of_block: true,
+        end_of_line: false,
+        rows_are_byte_aligned: false,
+        encoding: hayro_ccitt::EncodingMode::Group4,
+        invert_black: false,
+    };
+    let mut out = Rows(Vec::new(), Vec::new(), w as usize);
+    hayro_ccitt::decode(&s.raw, &mut out, &mut hayro_ccitt::DecoderContext::new(settings)).unwrap();
+    out.0
+}
+
+fn image_stream(doc: &Document, page: usize) -> Stream {
+    let p = &pages(doc)[page];
+    let res = doc.resolve(p.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let xo = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+    match &*doc.resolve(xo.get(b"Im0").unwrap()) {
+        Object::Stream(s) => s.clone(),
+        _ => panic!("not an image"),
+    }
+}
+
+/// Black-and-white pictures are stored at one bit per pixel, as CCITT Group 4 when that is
+/// smaller, whichever way the file holds them: a 1-bit PNG (which decodes to eight bits), eight-bit
+/// grey of only black and white, a two-colour palette, black-and-white RGB. The bits are the
+/// picture's. A grey profile stays; a picture with any other shade, colour, or an RGB profile is
+/// stored as before.
+#[test]
+fn black_and_white_images_are_stored_at_one_bit() {
+    use png::{BitDepth, ColorType};
+    let (w, h) = (1200u32, 240u32);
+    let bits = strokes(w, h);
+    let stride = (w as usize).div_ceil(8);
+    let white = |x: usize, y: usize| bits[y * stride + x / 8] & (0x80 >> (x % 8)) != 0;
+    let expected: Vec<Vec<bool>> = (0..h as usize).map(|y| (0..w as usize).map(|x| white(x, y)).collect()).collect();
+    let grey: Vec<u8> = expected.iter().flatten().map(|&wh| if wh { 255 } else { 0 }).collect();
+    let rgb: Vec<u8> = grey.iter().flat_map(|&v| [v, v, v]).collect();
+    let pictures = [
+        png_of(w, h, ColorType::Grayscale, BitDepth::One, &bits, None, None),
+        png_of(w, h, ColorType::Grayscale, BitDepth::Eight, &grey, None, None),
+        png_of(w, h, ColorType::Indexed, BitDepth::One, &bits.iter().map(|b| !b).collect::<Vec<_>>(), Some(vec![255, 255, 255, 0, 0, 0]), None),
+        png_of(w, h, ColorType::Rgb, BitDepth::Eight, &rgb, None, None),
+        png_of(w, h, ColorType::Grayscale, BitDepth::One, &bits, None, Some(icc_profile(b"GRAY"))),
+    ];
+    let files: Vec<(String, Vec<u8>)> = pictures.into_iter().enumerate().map(|(i, p)| (format!("{i}.png"), p)).collect();
+    let doc = reopen(&from_images(&files).unwrap());
+    for page in 0..5 {
+        let s = image_stream(&doc, page);
+        assert_eq!((s.dict.int(b"BitsPerComponent"), s.dict.name(b"Filter")), (Some(1), Some(&b"CCITTFaxDecode"[..])), "page {page}");
+        assert_eq!(g4_rows(&s), expected, "page {page}");
+        assert!(s.raw.len() < bits.len(), "page {page}: {} bytes, smaller than its one-bit samples", s.raw.len());
+    }
+    assert_eq!(image_of(&doc, 3).name(b"ColorSpace"), Some(&b"DeviceGray"[..]), "black-and-white RGB becomes grey");
+    assert_eq!(icc_of(&doc, &image_of(&doc, 4)).map(|(n, ..)| n), Some(1), "the grey profile stays");
+
+    // Another shade, colour, an RGB profile: as before. A tiny picture: one bit, but Flate.
+    let mut shaded = grey.clone();
+    shaded[5] = 128;
+    let mut coloured = rgb.clone();
+    coloured[0] = 200;
+    let others = [
+        png_of(w, h, ColorType::Grayscale, BitDepth::Eight, &shaded, None, None),
+        png_of(w, h, ColorType::Rgb, BitDepth::Eight, &coloured, None, None),
+        png_of(w, h, ColorType::Rgb, BitDepth::Eight, &rgb, None, Some(icc_profile(b"RGB "))),
+        png_of(2, 2, ColorType::Grayscale, BitDepth::Eight, &[0, 255, 255, 0], None, None),
+    ];
+    let files: Vec<(String, Vec<u8>)> = others.into_iter().enumerate().map(|(i, p)| (format!("o{i}.png"), p)).collect();
+    let doc = reopen(&from_images(&files).unwrap());
+    let kept: Vec<(Option<i64>, Option<Vec<u8>>)> =
+        (0..4).map(|p| (image_of(&doc, p).int(b"BitsPerComponent"), image_of(&doc, p).name(b"Filter").map(<[u8]>::to_vec))).collect();
+    assert_eq!(
+        kept[..3],
+        [(Some(8), Some(b"FlateDecode".to_vec())), (Some(8), Some(b"FlateDecode".to_vec())), (Some(8), Some(b"FlateDecode".to_vec()))]
+    );
+    assert_eq!(kept[3], (Some(1), Some(b"FlateDecode".to_vec())), "Group 4 isn't smaller for 2 × 2");
+}
+
+/// The pixels of an exported PNG (RGB), as true for white.
+fn exported_white(png_data: &[u8]) -> Vec<bool> {
+    let mut reader = png::Decoder::new(std::io::Cursor::new(png_data.to_vec())).read_info().unwrap();
+    let mut buf = vec![0; reader.output_buffer_size().unwrap()];
+    let frame = reader.next_frame(&mut buf).unwrap();
+    assert_eq!(frame.color_type, png::ColorType::Rgb);
+    buf[..frame.buffer_size()].as_chunks::<3>().0.iter().map(|p| *p == [255, 255, 255]).collect()
+}
+
+/// Export ▸ Images reads CCITT fax images: a page created from a 1-bit PNG (Group 4 now) exports as
+/// the picture, as does the picture coded the other way round with /BlackIs1, the picture with its
+/// filter and parameters in arrays, with /K and /Columns given by reference, with a /Rows below its
+/// height, and behind another filter (its parameters by reference too). One whose /Columns aren't
+/// its width is skipped, not misread.
+#[test]
+fn ccitt_fax_images_export_as_their_picture() {
+    use png::{BitDepth, ColorType};
+    let (w, h) = (1200u32, 240u32);
+    let bits = strokes(w, h);
+    let stride = (w as usize).div_ceil(8);
+    let picture: Vec<bool> =
+        (0..h as usize).flat_map(|y| (0..w as usize).map(move |x| (y, x))).map(|(y, x)| bits[y * stride + x / 8] & (0x80 >> (x % 8)) != 0).collect();
+    let mut doc = from_images(&[("scan.png".into(), png_of(w, h, ColorType::Grayscale, BitDepth::One, &bits, None, None))]).unwrap();
+    assert_eq!(image_of(&doc, 0).name(b"Filter"), Some(&b"CCITTFaxDecode"[..]));
+    let out = extract_images(&doc, &[0], 0);
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    assert_eq!(exported_white(&out.images[0].data), picture);
+
+    // The same picture coded with 1 for black, which /BlackIs1 says.
+    let r = {
+        let page = pdfcraft_model::pages(&doc)[0].clone();
+        let res = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+        let xo = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+        xo.get(b"Im0").and_then(Object::as_ref).unwrap()
+    };
+    let base = image_of(&doc, 0);
+    let with = |black_is_1: bool, columns: i64, data: Vec<u8>| {
+        let mut d = base.clone();
+        let mut parms = Dict::new();
+        parms.set(b"K".to_vec(), Object::Int(-1));
+        parms.set(b"Columns".to_vec(), Object::Int(columns));
+        parms.set(b"Rows".to_vec(), Object::Int(i64::from(h)));
+        parms.set(b"BlackIs1".to_vec(), Object::Bool(black_is_1));
+        d.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+        d.remove(b"Length");
+        Stream::from_raw(d, data)
+    };
+    let inverted: Vec<u8> = bits.iter().map(|b| !b).collect();
+    let stream = with(true, i64::from(w), pdfcraft_filters::encode_g4(&inverted, w, h).unwrap());
+    doc.set(r, Object::Stream(stream));
+    let out = extract_images(&doc, &[0], 0);
+    assert_eq!(exported_white(&out.images[0].data), picture, "BlackIs1");
+
+    let mut stream = with(false, i64::from(w), pdfcraft_filters::encode_g4(&bits, w, h).unwrap());
+    let parms = stream.dict.get(b"DecodeParms").cloned().unwrap();
+    stream.dict.set(b"DecodeParms".to_vec(), Object::Array(vec![parms]));
+    stream.dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("CCITTFaxDecode")]));
+    doc.set(r, Object::Stream(stream));
+    let out = extract_images(&doc, &[0], 0);
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    assert_eq!(exported_white(&out.images[0].data), picture, "in arrays");
+
+    let mut stream = with(false, i64::from(w), pdfcraft_filters::encode_g4(&bits, w, h).unwrap());
+    let mut parms = stream.dict.get(b"DecodeParms").and_then(Object::as_dict).cloned().unwrap();
+    parms.set(b"K".to_vec(), Object::Ref(doc.add(Object::Int(-1))));
+    parms.set(b"Columns".to_vec(), Object::Ref(doc.add(Object::Int(i64::from(w)))));
+    parms.set(b"Rows".to_vec(), Object::Int(1));
+    stream.dict.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+    doc.set(r, Object::Stream(stream));
+    let out = extract_images(&doc, &[0], 0);
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    assert_eq!(exported_white(&out.images[0].data), picture, "/K and /Columns by reference, /Rows 1");
+
+    // Behind another filter, with its parameters second in the array, as 7.4.1 pairs them.
+    let g4 = pdfcraft_filters::encode_g4(&bits, w, h).unwrap();
+    let hex = g4.iter().map(|b| format!("{b:02x}")).chain([">".to_string()]).collect::<String>().into_bytes();
+    for (outer, data) in [("ASCIIHexDecode", hex), ("FlateDecode", pdfcraft_filters::encode_flate(&g4))] {
+        let mut stream = with(false, i64::from(w), data);
+        let parms = stream.dict.get(b"DecodeParms").cloned().unwrap();
+        stream.dict.set(b"DecodeParms".to_vec(), Object::Array(vec![Object::Null, parms]));
+        stream.dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name(outer), Object::name("CCITTFaxDecode")]));
+        doc.set(r, Object::Stream(stream));
+        let out = extract_images(&doc, &[0], 0);
+        assert!(out.skipped.is_empty(), "{outer}: {:?}", out.skipped);
+        assert_eq!(exported_white(&out.images[0].data), picture, "behind {outer}");
+    }
+    // Behind Flate with a PNG predictor, whose parameters are given by reference.
+    let padded: Vec<u8> = g4.iter().copied().chain(std::iter::repeat_n(0, 16 - g4.len() % 16)).collect();
+    let params = pdfcraft_filters::Params { predictor: 12, colors: 1, bits_per_component: 8, columns: 16, early_change: 1 };
+    let predicted = pdfcraft_filters::encode(&pdfcraft_filters::Filter::Flate, &params, &padded).unwrap();
+    let mut flate_parms = Dict::new();
+    flate_parms.set(b"Predictor".to_vec(), Object::Int(12));
+    flate_parms.set(b"Columns".to_vec(), Object::Int(16));
+    let flate_parms = doc.add(Object::Dict(flate_parms));
+    let mut stream = with(false, i64::from(w), predicted);
+    let parms = stream.dict.get(b"DecodeParms").cloned().unwrap();
+    stream.dict.set(b"DecodeParms".to_vec(), Object::Array(vec![Object::Ref(flate_parms), parms]));
+    stream.dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("FlateDecode"), Object::name("CCITTFaxDecode")]));
+    doc.set(r, Object::Stream(stream));
+    let out = extract_images(&doc, &[0], 0);
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    assert_eq!(exported_white(&out.images[0].data), picture, "behind Flate with a predictor given by reference");
+    // CCITT before another filter isn't a picture yet.
+    let mut stream = with(false, i64::from(w), pdfcraft_filters::encode_flate(&g4));
+    stream.dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("CCITTFaxDecode"), Object::name("FlateDecode")]));
+    doc.set(r, Object::Stream(stream));
+    let out = extract_images(&doc, &[0], 0);
+    assert!(out.images.is_empty() && out.skipped.len() == 1, "CCITT, then Flate: skipped");
+
+    let stream = with(false, i64::from(w) + 8, pdfcraft_filters::encode_g4(&bits, w, h).unwrap());
+    doc.set(r, Object::Stream(stream));
+    let out = extract_images(&doc, &[0], 0);
+    assert!(out.images.is_empty() && out.skipped.len() == 1, "columns other than the width: skipped");
+}
+
+/// Group 3 data: rows of run lengths below 64, white first, coded one-dimensionally with T.4's
+/// terminating codes (ITU-T T.4 Tables 2 and 3). Each row starts with an end-of-line code with
+/// `eol`, then with `tag` a 1 bit (the next row one-dimensional, as `/K` above 0 has it). Fill bits
+/// (0s) go where `fill` says.
+fn group_3(rows: &[impl AsRef<[u32]>], eol: bool, tag: bool, fill: Fill) -> Vec<u8> {
+    // The codes for runs 0 to 63, in order.
+    const WHITE: &str = concat!(
+        "00110101 000111 0111 1000 1011 1100 1110 1111 10011 10100 00111 01000 001000 000011 110100 110101 101010 101011 ",
+        "0100111 0001100 0001000 0010111 0000011 0000100 0101000 0101011 0010011 0100100 0011000 00000010 00000011 00011010 ",
+        "00011011 00010010 00010011 00010100 00010101 00010110 00010111 00101000 00101001 00101010 00101011 00101100 00101101 ",
+        "00000100 00000101 00001010 00001011 01010010 01010011 01010100 01010101 00100100 00100101 01011000 01011001 01011010 ",
+        "01011011 01001010 01001011 00110010 00110011 00110100",
+    );
+    const BLACK: &str = concat!(
+        "0000110111 010 11 10 011 0011 0010 00011 000101 000100 0000100 0000101 0000111 00000100 00000111 000011000 0000010111 ",
+        "0000011000 0000001000 00001100111 00001101000 00001101100 00000110111 00000101000 00000010111 00000011000 ",
+        "000011001010 000011001011 000011001100 000011001101 000001101000 000001101001 000001101010 000001101011 000011010010 ",
+        "000011010011 000011010100 000011010101 000011010110 000011010111 000001101100 000001101101 000011011010 000011011011 ",
+        "000001010100 000001010101 000001010110 000001010111 000001100100 000001100101 000001010010 000001010011 000000100100 ",
+        "000000110111 000000111000 000000100111 000000101000 000001011000 000001011001 000000101011 000000101100 000001011010 ",
+        "000001100110 000001100111",
+    );
+    let code = |white: bool, run: u32| (if white { WHITE } else { BLACK }).split(' ').nth(run as usize).expect("a run below 64");
+    let mut bits = String::new();
+    for row in rows {
+        // The end-of-line code is 12 bits.
+        let ends_code = if fill == Fill::CodeEnd && eol { 12 } else { 0 };
+        while fill != Fill::None && !(bits.len() + ends_code).is_multiple_of(8) {
+            bits.push('0');
+        }
+        if eol {
+            bits.push_str("000000000001");
+        }
+        if tag {
+            bits.push('1');
+        }
+        row.as_ref().iter().enumerate().for_each(|(i, run)| bits.push_str(code(i % 2 == 0, *run)));
+    }
+    bits.as_bytes().chunks(8).map(|c| c.iter().enumerate().fold(0u8, |b, (i, d)| b | (u8::from(*d == b'1') << (7 - i)))).collect()
+}
+
+/// `count` text-like pictures `w` by `h` for [`group_3`], from a fixed seed: rows of random runs,
+/// long white ones and short black ones, and a row may start black.
+fn random_pictures(w: u32, h: u32, count: usize) -> Vec<Vec<Vec<u32>>> {
+    let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+    let mut random = |n: u64| {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed % n) as u32
+    };
+    let mut row = || {
+        let (mut runs, mut left) = (Vec::new(), w);
+        while left > 0 {
+            let run = match runs.len() % 2 {
+                0 if runs.is_empty() => random(31),
+                0 => 1 + random(30),
+                _ => 1 + random(5),
+            };
+            runs.push(run.min(left));
+            left -= run.min(left);
+        }
+        runs
+    };
+    (0..count).map(|_| (0..h).map(|_| row()).collect()).collect()
+}
+
+/// The picture `rows` of runs (white first) make, `w` by `h`, true where white.
+fn white_of(rows: &[Vec<u32>], w: u32, h: u32) -> Vec<bool> {
+    let mut white = vec![false; (w * h) as usize];
+    for (y, row) in rows.iter().enumerate() {
+        let mut x = y * w as usize;
+        for (i, run) in row.iter().enumerate() {
+            white[x..x + *run as usize].fill(i % 2 == 0);
+            x += *run as usize;
+        }
+    }
+    white
+}
+
+/// Where [`group_3`] puts fill bits: none; so each row, its end-of-line code first, starts on a
+/// byte; or so each end-of-line code ends on one (T.4's fill, as TIFF writes it).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Fill {
+    None,
+    RowStart,
+    CodeEnd,
+}
+
+/// What Export ▸ Images claims for CCITT and for parameters given by reference, each checked
+/// against the same picture stored another way: Group 3 one-dimensional data (`/K 0`) exports as
+/// its picture; a CCITT soft mask and a CCITT stencil `/Mask` export as the same masks in Flate;
+/// and a Flate image's PNG predictor, and an indexed image's lookup table stream with one, read
+/// the same with their `/DecodeParms` given by reference as direct.
+#[test]
+fn group_3_ccitt_masks_and_parameters_by_reference_export_as_their_picture() {
+    use png::{BitDepth, ColorType};
+    let (w, h) = (64u32, 16u32);
+    let rows: Vec<&[u32]> = (0..h).map(|y| if y % 2 == 0 { &[32u32, 32][..] } else { &[16, 16, 32][..] }).collect();
+    let mut bits = vec![0u8; 8 * h as usize];
+    for (y, runs) in rows.iter().enumerate() {
+        let mut x = 0;
+        for (i, run) in runs.iter().enumerate() {
+            if i % 2 == 0 {
+                (x..x + *run as usize).for_each(|xx| bits[y * 8 + xx / 8] |= 0x80 >> (xx % 8));
+            }
+            x += *run as usize;
+        }
+    }
+    let picture: Vec<bool> = (0..(w * h) as usize).map(|i| bits[i / 8] & (0x80 >> (i % 8)) != 0).collect();
+    let mut doc = from_images(&[("scan.png".into(), png_of(w, h, ColorType::Grayscale, BitDepth::One, &bits, None, None))]).unwrap();
+    let r = {
+        let page = pdfcraft_model::pages(&doc)[0].clone();
+        let res = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+        let xo = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+        xo.get(b"Im0").and_then(Object::as_ref).unwrap()
+    };
+    let image = |entries: &[(&str, Object)]| {
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("XObject"));
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(w.into()));
+        d.set(b"Height".to_vec(), Object::Int(h.into()));
+        for (k, v) in entries {
+            d.set(k.as_bytes().to_vec(), v.clone());
+        }
+        d
+    };
+    let fax = |k: i64| {
+        let mut parms = Dict::new();
+        parms.set(b"K".to_vec(), Object::Int(k));
+        parms.set(b"Columns".to_vec(), Object::Int(w.into()));
+        parms.set(b"Rows".to_vec(), Object::Int(h.into()));
+        [("Filter", Object::name("CCITTFaxDecode")), ("DecodeParms", Object::Dict(parms))]
+    };
+    let grey = |bits: i64| [("BitsPerComponent", Object::Int(bits)), ("ColorSpace", Object::name("DeviceGray"))];
+
+    // One-dimensional (/K 0) plain, with end-of-line codes, with each row on a byte, and with
+    // both; mixed (/K 1, each row tagged one-dimensional) with end-of-line codes and without.
+    // Byte-aligned with end-of-line codes either way: each code starting on a byte, or ending on
+    // one (T.4's fill, as TIFF writes it). /EncodedByteAlign is given by reference once, and so is
+    // a /BlackIs1 that inverts the picture.
+    let inverted: Vec<bool> = picture.iter().map(|white| !white).collect();
+    for (k, eol, fill, align_by_reference, black_is_1) in [
+        (0, false, Fill::None, false, false),
+        (0, true, Fill::None, false, false),
+        (0, false, Fill::RowStart, true, false),
+        (0, true, Fill::RowStart, false, false),
+        (0, true, Fill::CodeEnd, false, false),
+        (1, true, Fill::None, false, false),
+        (1, false, Fill::None, false, false),
+        (1, true, Fill::CodeEnd, false, false),
+        (0, false, Fill::None, false, true),
+    ] {
+        let mut d = image(&[&grey(1)[..], &fax(k)].concat());
+        let align = Object::Bool(fill != Fill::None);
+        let align = if align_by_reference { Object::Ref(doc.add(align)) } else { align };
+        let inverts = Object::Ref(doc.add(Object::Bool(black_is_1)));
+        if let Some(Object::Dict(parms)) = d.get_mut(b"DecodeParms") {
+            parms.set(b"EndOfLine".to_vec(), Object::Bool(eol));
+            parms.set(b"EncodedByteAlign".to_vec(), align);
+            parms.set(b"BlackIs1".to_vec(), inverts);
+        }
+        doc.set(r, Object::Stream(Stream::from_raw(d, group_3(&rows, eol, k > 0, fill))));
+        let case = format!("/K {k}, EndOfLine {eol}, fill {fill:?}, BlackIs1 {black_is_1}");
+        let out = extract_images(&doc, &[0], 0);
+        assert!(out.skipped.is_empty(), "{case}: {:?}", out.skipped);
+        assert_eq!(exported_white(&out.images[0].data), if black_is_1 { inverted.clone() } else { picture.clone() }, "{case}");
+    }
+    // Byte-aligned rows against /EndOfLine, over several pictures, as how a misreading comes out
+    // depends on the picture: no codes (as TIFF's Modified Huffman has it), and /EndOfLine without
+    // them; codes, each starting on a byte or ending on one, /EndOfLine or not. Each exports as its
+    // picture, and a byte short is reported. The first picture is stripes, every row 32 white then
+    // 32 black; the others are text-like rows of random runs.
+    let image_with = |doc: &mut Document, k: i64, eol: bool, data: Vec<u8>| {
+        let mut d = image(&[&grey(1)[..], &fax(k)].concat());
+        if let Some(Object::Dict(parms)) = d.get_mut(b"DecodeParms") {
+            parms.set(b"EndOfLine".to_vec(), Object::Bool(eol));
+            parms.set(b"EncodedByteAlign".to_vec(), Object::Bool(true));
+        }
+        doc.set(r, Object::Stream(Stream::from_raw(d, data)));
+        extract_images(doc, &[0], 0)
+    };
+    let mut pictures = vec![vec![vec![32u32, 32]; h as usize]];
+    pictures.extend(random_pictures(w, h, 8));
+    for (n, runs) in pictures.iter().enumerate() {
+        let white = white_of(runs, w, h);
+        for k in [0, 1] {
+            for (codes, fill, eol) in [
+                (false, Fill::RowStart, false),
+                (false, Fill::RowStart, true),
+                (true, Fill::RowStart, false),
+                (true, Fill::RowStart, true),
+                (true, Fill::CodeEnd, false),
+                (true, Fill::CodeEnd, true),
+            ] {
+                let out = image_with(&mut doc, k, eol, group_3(runs, codes, k > 0, fill));
+                let case = format!("picture {n}, /K {k}, codes {codes}, fill {fill:?}, /EndOfLine {eol}");
+                assert!(out.skipped.is_empty(), "{case}: {:?}", out.skipped);
+                assert_eq!(exported_white(&out.images[0].data), white, "{case}");
+                // A byte short, it is reported, not read the other way into other rows.
+                let mut short = group_3(runs, codes, k > 0, fill);
+                short.pop();
+                let out = image_with(&mut doc, k, eol, short);
+                assert!(out.images.is_empty() && out.skipped.len() == 1, "{case}, a byte short: {:?}", out.skipped);
+                // At /K 1, codes with none before the first row (the first code and its fill are 2
+                // bytes here) are read on bytes: the picture or reported, never another picture.
+                if k == 1 && fill == Fill::CodeEnd {
+                    let out = image_with(&mut doc, k, eol, group_3(runs, codes, true, fill).split_off(2));
+                    assert!(out.images.iter().all(|i| exported_white(&i.data) == white), "{case}, no code first");
+                }
+            }
+        }
+    }
+    // Group 4 rows on bytes keep their aligned read, /EndOfLine or not: here white rows, each the
+    // one code 1 (vertical, no change) and its fill.
+    for eol in [false, true] {
+        let out = image_with(&mut doc, -1, eol, vec![0x80; h as usize]);
+        assert!(out.skipped.is_empty(), "byte-aligned Group 4, /EndOfLine {eol}: {:?}", out.skipped);
+        assert!(exported_white(&out.images[0].data).iter().all(|white| *white), "byte-aligned Group 4, /EndOfLine {eol}");
+    }
+
+    // A grey picture under the same bits as a soft mask, then as a stencil mask: CCITT against Flate.
+    let g4 = pdfcraft_filters::encode_g4(&bits, w, h).unwrap();
+    for (key, mask) in [("SMask", grey(1).to_vec()), ("Mask", vec![("ImageMask", Object::Bool(true))])] {
+        let mut exported = Vec::new();
+        for coded in [true, false] {
+            let m = if coded { Stream::from_raw(image(&[&mask[..], &fax(-1)].concat()), g4.clone()) } else { Stream::flate(image(&mask), &bits) };
+            let m = doc.add(Object::Stream(m));
+            let d = image(&[&grey(8)[..], &[(key, Object::Ref(m))]].concat());
+            doc.set(r, Object::Stream(Stream::flate(d, &vec![100u8; (w * h) as usize])));
+            exported.push(exported_rgba(&doc));
+        }
+        assert!(exported[0].1.chunks(4).any(|p| p[3] == 0), "{key}: masked somewhere");
+        assert_eq!(exported[0], exported[1], "{key}: CCITT as Flate");
+    }
+
+    // A PNG predictor given by reference, for the samples and for a lookup table.
+    let predicted = |rows: &[u8], columns: i64| {
+        let params = pdfcraft_filters::Params { predictor: 12, colors: 1, bits_per_component: 8, columns, early_change: 1 };
+        let mut parms = Dict::new();
+        parms.set(b"Predictor".to_vec(), Object::Int(12));
+        parms.set(b"Columns".to_vec(), Object::Int(columns));
+        (pdfcraft_filters::encode(&pdfcraft_filters::Filter::Flate, &params, rows).unwrap(), parms)
+    };
+    let shades: Vec<u8> = (0..w * h).map(|i| (i * 7 % 256) as u8).collect();
+    let (table, table_parms) = predicted(&[255, 0, 0, 0, 0, 255], 3);
+    let indices: Vec<u8> = (0..w * h).map(|i| (i % 3 % 2) as u8).collect();
+    let mut exported = Vec::new();
+    for by_reference in [false, true] {
+        let parms = |doc: &mut Document, p: &Dict| if by_reference { Object::Ref(doc.add(Object::Dict(p.clone()))) } else { Object::Dict(p.clone()) };
+        let (samples, sample_parms) = predicted(&shades, w.into());
+        let sample_parms = parms(&mut doc, &sample_parms);
+        let d = image(&[&grey(8)[..], &[("Filter", Object::name("FlateDecode")), ("DecodeParms", sample_parms)]].concat());
+        doc.set(r, Object::Stream(Stream::from_raw(d, samples)));
+        let plain = exported_rgba(&doc);
+
+        let mut lookup = Dict::new();
+        lookup.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+        lookup.set(b"DecodeParms".to_vec(), parms(&mut doc, &table_parms));
+        let lookup = doc.add(Object::Stream(Stream::from_raw(lookup, table.clone())));
+        let cs = Object::Array(vec![Object::name("Indexed"), Object::name("DeviceRGB"), 1.into(), Object::Ref(lookup)]);
+        let d = image(&[("BitsPerComponent", Object::Int(8)), ("ColorSpace", cs)]);
+        doc.set(r, Object::Stream(Stream::flate(d, &indices)));
+        exported.push((plain, exported_rgba(&doc)));
+    }
+    assert_eq!(exported[0].0.1.chunks(4).map(|p| p[0]).collect::<Vec<_>>(), shades, "the samples, direct");
+    assert_eq!(exported[0].1.1.get(..8), Some(&[255, 0, 0, 255, 0, 0, 255, 255][..]), "red, then blue");
+    assert_eq!(exported[1], exported[0], "by reference as direct");
+}
+
+/// An image whose PNG predictor is given by reference exports as its picture: its `/DecodeParms`
+/// dictionary given by reference, as an array's entry, or direct with its numbers by reference. So
+/// do an indexed image whose lookup table is a stream with its `/DecodeParms` given by reference,
+/// and a JBIG2 image whose `/JBIG2Globals` stream has them so. `Stream::decoded` reads only a
+/// direct `/DecodeParms` with direct numbers: the row tags stayed in the samples, and the picture
+/// came out shifted.
+#[test]
+fn images_whose_predictor_is_given_by_reference_export_as_their_picture() {
+    // PNG predictor parameters for `columns` one-byte samples a row.
+    let parms = |columns: i64| {
+        let mut p = Dict::new();
+        p.set(b"Predictor".to_vec(), Object::Int(15));
+        p.set(b"Colors".to_vec(), Object::Int(1));
+        p.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        p.set(b"Columns".to_vec(), Object::Int(columns));
+        p
+    };
+    // Two rows of four grey samples, each behind a PNG "None" row tag.
+    let predicted = pdfcraft_filters::encode_flate(&[0, 10, 20, 30, 40, 0, 50, 60, 70, 80]);
+    let grey: Vec<u8> = [10u8, 20, 30, 40, 50, 60, 70, 80].iter().flat_map(|v| [*v, *v, *v, 255]).collect();
+    for form in ["a reference", "an array of a reference", "numbers by reference"] {
+        let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+        with_image(&mut doc, |doc| {
+            let mut d = image_dict(4, 2, "DeviceGray", 8);
+            d.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+            let decode_parms = match form {
+                "numbers by reference" => {
+                    let mut p = parms(4);
+                    for key in [&b"Predictor"[..], b"Columns"] {
+                        let v = p.get(key).cloned().unwrap();
+                        p.set(key.to_vec(), Object::Ref(doc.add(v)));
+                    }
+                    Object::Dict(p)
+                }
+                "a reference" => Object::Ref(doc.add(Object::Dict(parms(4)))),
+                _ => Object::Array(vec![Object::Ref(doc.add(Object::Dict(parms(4))))]),
+            };
+            d.set(b"DecodeParms".to_vec(), decode_parms);
+            Stream::from_raw(d, predicted.clone())
+        });
+        assert_eq!(exported_rgba(&doc), ("png", grey.clone()), "/DecodeParms as {form}");
+    }
+    // An indexed image's lookup table, red then blue, as a stream behind a "None" row tag.
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    with_image(&mut doc, |doc| {
+        let mut t = Dict::new();
+        t.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+        t.set(b"DecodeParms".to_vec(), Object::Ref(doc.add(Object::Dict(parms(6)))));
+        let table = doc.add(Object::Stream(Stream::from_raw(t, pdfcraft_filters::encode_flate(&[0, 255, 0, 0, 0, 0, 255]))));
+        let mut d = image_dict(4, 1, "DeviceGray", 8);
+        d.set(b"ColorSpace".to_vec(), Object::Array(vec![Object::name("Indexed"), Object::name("DeviceRGB"), Object::Int(1), Object::Ref(table)]));
+        Stream::from_raw(d, vec![0, 1, 0, 1])
+    });
+    let (red, blue) = ([255, 0, 0, 255], [0, 0, 255, 255]);
+    assert_eq!(exported_rgba(&doc), ("png", [red, blue, red, blue].concat()), "the lookup table's /DecodeParms by reference");
+    // A JBIG2 image whose globals hold one extension segment (ISO/IEC 14492 7.4.14) a decoder
+    // ignores, behind a "None" row tag. With the tag left in, the globals can't be read and the
+    // image is skipped.
+    let segment = [0, 0, 0, 0, 0x3E, 0, 0, 0, 0, 0, 4, 0, 0, 0, 1];
+    let bits = [0xF0u8, 0x0F, 0xAA, 0x55];
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    with_image(&mut doc, |doc| {
+        let mut g = Dict::new();
+        g.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+        g.set(b"DecodeParms".to_vec(), Object::Ref(doc.add(Object::Dict(parms(segment.len() as i64)))));
+        let tagged: Vec<u8> = [0].iter().chain(&segment).copied().collect();
+        let globals = doc.add(Object::Stream(Stream::from_raw(g, pdfcraft_filters::encode_flate(&tagged))));
+        let mut decode_parms = Dict::new();
+        decode_parms.set(b"JBIG2Globals".to_vec(), Object::Ref(globals));
+        let mut d = image_dict(16, 2, "DeviceGray", 1);
+        d.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
+        d.set(b"DecodeParms".to_vec(), Object::Dict(decode_parms));
+        Stream::from_raw(d, pdfcraft_filters::encode_jbig2_generic(&bits, 16, 2).unwrap())
+    });
+    let picture: Vec<u8> = (0..32).flat_map(|i| if bits[i / 8] & (0x80 >> (i % 8)) != 0 { [255, 255, 255, 255] } else { [0, 0, 0, 255] }).collect();
+    assert_eq!(exported_rgba(&doc), ("png", picture), "the JBIG2 globals' /DecodeParms by reference");
+}
+
+/// An image the optimizer stored as JBIG2 symbols (a symbol dictionary and text regions, rather
+/// than one generic region) exports as its picture.
+#[test]
+fn symbol_coded_jbig2_images_export_as_their_picture() {
+    const LETTERS: [[&str; 7]; 3] = [
+        ["#####", "#....", "####.", "#....", "#....", "#....", "#####"],
+        [".###.", "#...#", "#....", "#....", "#....", "#...#", ".###."],
+        ["#...#", "#...#", "#####", "#...#", "#...#", "#...#", "#...#"],
+    ];
+    let (w, h) = (400usize, 40usize);
+    let stride = w.div_ceil(8);
+    // 1 samples white, as a grey image's are; the letters' pixels 0.
+    let mut bits = vec![0xFFu8; stride * h];
+    for (line, top) in [2usize, 12, 22, 32].into_iter().enumerate() {
+        for (k, x) in (3..w - 6).step_by(7).enumerate() {
+            for (dy, row) in LETTERS[(k + line) % 3].iter().enumerate() {
+                for (dx, c) in row.bytes().enumerate() {
+                    if c == b'#' {
+                        bits[(top + dy) * stride + (x + dx) / 8] &= !(0x80 >> ((x + dx) % 8));
+                    }
+                }
+            }
+        }
+    }
+    let jbig2 = pdfcraft_filters::encode_jbig2(&bits, w as u32, h as u32).unwrap();
+    let generic = pdfcraft_filters::encode_jbig2_generic(&bits, w as u32, h as u32).unwrap();
+    assert!(jbig2.len() < generic.len(), "symbol coded: {} bytes, generic {}", jbig2.len(), generic.len());
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    with_image(&mut doc, |_| {
+        let mut d = image_dict(w as i64, h as i64, "DeviceGray", 1);
+        d.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
+        Stream::from_raw(d, jbig2)
+    });
+    let picture: Vec<u8> = (0..w * h)
+        .flat_map(|i| if bits[i / w * stride + i % w / 8] & (0x80 >> (i % w % 8)) != 0 { [255, 255, 255, 255] } else { [0, 0, 0, 255] })
+        .collect();
+    assert_eq!(exported_rgba(&doc), ("png", picture));
+}
+
+/// Export ▸ Images reads JBIG2 images (ISO 32000-2 §7.4.7), JBIG2 black as 0: as the image, and as
+/// a stencil `/Mask` of another. Their `/JBIG2Globals` are read, from a dictionary or the one in
+/// an array, so globals that can't be read skip the image rather than being ignored. Rows past the
+/// image's height are left out; a JBIG2 page of another width, or with fewer rows than the image,
+/// or larger than an exported image may be (however small the image's `/Height`), or data that
+/// isn't JBIG2, skips the image.
+#[test]
+fn jbig2_images_export_as_their_picture() {
+    let (w, h) = (203i64, 41i64);
+    let stride = 26;
+    let mut seed = 0x2545_F491_4F6C_DD1Du64;
+    let bits: Vec<u8> = (0..stride * h as usize)
+        .map(|_| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed as u8
+        })
+        .collect();
+    // The first `rows` rows as RGBA: a 1 sample white, a 0 black.
+    let picture = |rows: i64| -> Vec<u8> {
+        (0..rows as usize)
+            .flat_map(|y| (0..w as usize).map(move |x| (x, y)))
+            .flat_map(|(x, y)| {
+                let v = if bits[y * stride + x / 8] & (0x80 >> (x % 8)) != 0 { 255 } else { 0 };
+                [v, v, v, 255]
+            })
+            .collect()
+    };
+    let jbig2 = pdfcraft_filters::encode_jbig2_generic(&bits, w as u32, h as u32).unwrap();
+    // A page whose image is `data` as JBIG2, `width` × `height`. With `globals`, its /DecodeParms
+    // (an array when `.1`) name a globals stream; with `mask`, it is the stencil /Mask of a grey
+    // image.
+    let page = |width: i64, height: i64, data: &[u8], globals: Option<(&[u8], bool)>, mask: bool| {
+        let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+        with_image(&mut doc, |doc| {
+            let mut d = image_dict(width, height, "DeviceGray", 1);
+            d.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
+            if let Some((g, in_array)) = globals {
+                let g = doc.add(Object::Stream(Stream::from_raw(Dict::new(), g.to_vec())));
+                let mut parms = Dict::new();
+                parms.set(b"JBIG2Globals".to_vec(), Object::Ref(g));
+                d.set(b"DecodeParms".to_vec(), if in_array { Object::Array(vec![Object::Dict(parms)]) } else { Object::Dict(parms) });
+            }
+            if !mask {
+                return Stream::from_raw(d, data.to_vec());
+            }
+            d.remove(b"ColorSpace");
+            d.set(b"ImageMask".to_vec(), Object::Bool(true));
+            let m = doc.add(Object::Stream(Stream::from_raw(d, data.to_vec())));
+            let mut image = image_dict(width, height, "DeviceGray", 8);
+            image.set(b"Mask".to_vec(), Object::Ref(m));
+            Stream::from_raw(image, vec![128; (width * height) as usize])
+        });
+        doc
+    };
+    let skipped = |doc: &Document| {
+        let out = extract_images(doc, &[0], 0);
+        out.images.is_empty() && out.skipped.len() == 1
+    };
+
+    assert_eq!(exported_rgba(&page(w, h, &jbig2, None, false)), ("png", picture(h)));
+    assert_eq!(exported_rgba(&page(w, h, &jbig2, Some((&[][..], false)), false)).1, picture(h), "empty globals");
+    for in_array in [false, true] {
+        assert!(skipped(&page(w, h, &jbig2, Some((&b"not JBIG2"[..], in_array)), false)), "unreadable globals, in an array: {in_array}");
+    }
+    assert_eq!(exported_rgba(&page(w, h - 5, &jbig2, None, false)).1, picture(h - 5), "rows past the height");
+    for (width, height, data) in [(w + 8, h, &jbig2[..]), (w - 1, h, &jbig2[..]), (w, h + 1, &jbig2[..]), (w, h, &b"not JBIG2"[..])] {
+        assert!(skipped(&page(width, height, data, None, false)), "{width} × {height}, {} bytes", data.len());
+    }
+    // The same stream with its page information (the first segment's data, after its 11-byte
+    // header: width, then height) claiming a 20,000 × 10,000 page: 200 million pixels, over the
+    // export's 100 million, behind an image of 20,000 × 4. The decoder would decode the whole page
+    // (it takes pages of up to about 2^28 pixels), so it is refused first.
+    let mut large = jbig2.clone();
+    large[11..15].copy_from_slice(&20_000u32.to_be_bytes());
+    large[15..19].copy_from_slice(&10_000u32.to_be_bytes());
+    assert!(skipped(&page(20_000, 4, &large, None, false)), "a page over the export's size");
+    // Refused the same ways as a stencil /Mask, it is left out: the image exports opaque.
+    for (width, height, mask) in [(w + 8, h, &jbig2), (20_000, 4, &large)] {
+        let rgba = exported_rgba(&page(width, height, mask, None, true)).1;
+        assert_eq!(rgba.len() as i64, width * height * 4, "a {width}-wide mask");
+        assert!(alphas(&rgba).iter().all(|a| *a == 255), "a refused {width}-wide mask is left out");
+    }
+    // A page of exactly the budget, 20,000 × 5,000, is decoded; one row more is refused.
+    for (rows, refused) in [(5_000u32, false), (5_001, true)] {
+        large[15..19].copy_from_slice(&rows.to_be_bytes());
+        let doc = page(20_000, 4, &large, None, false);
+        assert_eq!(skipped(&doc), refused, "a page of 20,000 × {rows}");
+        if !refused {
+            assert_eq!(exported_rgba(&doc).1.len(), 20_000 * 4 * 4);
+        }
+    }
+    // Damaged data never panics.
+    for end in [0, 1, 10, 20, 30, jbig2.len() / 2] {
+        let _ = extract_images(&page(w, h, &jbig2[..end], None, false), &[0], 0);
+    }
+
+    // As a stencil /Mask, its 1 samples (JBIG2 white) hide the image.
+    let alpha: Vec<u8> = picture(h).as_chunks::<4>().0.iter().map(|p| 255 - p[0]).collect();
+    assert_eq!(alphas(&exported_rgba(&page(w, h, &jbig2, None, true)).1), alpha);
+}
+
+/// A JBIG2 image's `/JBIG2Globals` are decoded before its JBIG2 page's size is known, so they have
+/// a limit of their own, 32 MiB, far below the 1 GiB of any stream: globals that Flate-decode to
+/// one byte more skip the image, with the limit in the reason, though they take a few kilobytes
+/// in the file. Globals of exactly the limit are read, and the limit is the same through an
+/// indirect `/DecodeParms`, in an array or not.
+#[test]
+fn jbig2_globals_are_decoded_within_a_limit_of_their_own() {
+    const LIMIT: usize = 32 << 20;
+    let bits = [0xF0u8, 0x0F, 0xAA, 0x55];
+    let jbig2 = pdfcraft_filters::encode_jbig2_generic(&bits, 16, 2).unwrap();
+    let picture: Vec<u8> = (0..32).flat_map(|i| if bits[i / 8] & (0x80 >> (i % 8)) != 0 { [255; 4] } else { [0, 0, 0, 255] }).collect();
+    // Globals of `len` bytes, Flate-encoded: one extension segment (ISO/IEC 14492 7.4.14), which a
+    // decoder skips; its 11-byte header gives the length of the data after it.
+    let globals = |len: usize| {
+        let mut g = vec![0, 0, 0, 0, 0x3E, 0, 0];
+        g.extend_from_slice(&u32::try_from(len - 11).unwrap().to_be_bytes());
+        g.extend_from_slice(&[0, 0, 0, 1]);
+        g.resize(len, 0);
+        pdfcraft_filters::encode_flate(&g)
+    };
+    // The image, its /DecodeParms naming `flated` as its globals: direct (0), by reference (1), or
+    // by reference in an array (2).
+    let page = |flated: &[u8], form: usize| {
+        let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+        with_image(&mut doc, |doc| {
+            let mut g = Dict::new();
+            g.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+            let g = doc.add(Object::Stream(Stream::from_raw(g, flated.to_vec())));
+            let mut parms = Dict::new();
+            parms.set(b"JBIG2Globals".to_vec(), Object::Ref(g));
+            let parms = match form {
+                0 => Object::Dict(parms),
+                1 => Object::Ref(doc.add(Object::Dict(parms))),
+                _ => Object::Array(vec![Object::Ref(doc.add(Object::Dict(parms)))]),
+            };
+            let mut d = image_dict(16, 2, "DeviceGray", 1);
+            d.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
+            d.set(b"DecodeParms".to_vec(), parms);
+            Stream::from_raw(d, jbig2.clone())
+        });
+        doc
+    };
+
+    let (small, full, over) = (globals(15), globals(LIMIT), globals(LIMIT + 1));
+    assert!(over.len() < 64 << 10, "the oversized globals take {} bytes in the file", over.len());
+    assert_eq!(exported_rgba(&page(&full, 0)).1, picture, "globals of exactly the limit");
+    for form in 0..3 {
+        assert_eq!(exported_rgba(&page(&small, form)).1, picture, "small globals, form {form}");
+        let out = extract_images(&page(&over, form), &[0], 0);
+        assert!(out.images.is_empty(), "globals over the limit, form {form}");
+        let why = &out.skipped.first().expect("the image is skipped").2;
+        assert!(why.starts_with("the JBIG2 globals can't be read") && why.contains(&format!("limit of {LIMIT} bytes")), "{why}");
+    }
 }
