@@ -260,6 +260,93 @@ fn a_survivor_in_an_annotation_string() {
     assert!(!proof.passed());
 }
 
+// ── Every place a reader could recover the removed text from ────────────────────────────────
+// Each test plants the removed text in one location and expects the sweep to report it there.
+
+#[test]
+fn a_survivor_in_a_compressed_object_stream_is_found() {
+    // A full save packs non-stream objects into compressed object streams: a copy of the
+    // removed text left in one (an annotation away from the region) is neither in the stored
+    // bytes nor on any page, only inside the /ObjStm. The sweep reads the saved file like any
+    // reader, objects in object streams included, and reports the copy.
+    let annot = b"<< /Type /Annot /Subtype /Text /Rect [200 200 220 220] /Contents (note: SECRETVALUE) >>".to_vec();
+    let mut doc = marked(Spec { page: "/Annots [7 0 R]", extra: vec![annot], ..Spec::default() });
+    let mut snap = Snapshot::capture(&doc, None).unwrap();
+    applied(&mut doc, &mut snap).unwrap();
+    let saved = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(saved.windows(b"/ObjStm".len()).any(|w| w == b"/ObjStm"), "the output packs objects into object streams");
+    assert!(!saved.windows(SECRET.len()).any(|w| w == SECRET.as_bytes()), "the plaintext is compressed away");
+    let proof = snap.prove_saved(&saved, None, &ProofOptions::default());
+    let s = surface(&proof, Surface::ObjectStrings);
+    assert_eq!(s.verdict, Verdict::Survivor, "{}", proof.to_text());
+    assert_eq!(surface(&proof, Surface::RawBytes).verdict, Verdict::Clean, "the copy sits in the object stream, not the stored bytes");
+    assert!(!proof.passed(), "{}", proof.to_text());
+}
+
+#[test]
+fn a_survivor_in_a_page_thumbnail_is_found() {
+    // The page's /Thumb holds a picture of the page as it was, secret included (uncompressed
+    // pixels, so the stored bytes are the pixels). A thumbnail is not page content, so only
+    // the object sweep can find it.
+    let thumb = stream("/Type /XObject /Subtype /Image /Width 7 /Height 3 /ColorSpace /DeviceGray /BitsPerComponent 8", b"junk SECRETVALUE junk");
+    let mut doc = marked(Spec { page: "/Thumb 7 0 R", extra: vec![thumb], ..Spec::default() });
+    let (_, proof) = run(&mut doc);
+    let s = surface(&proof, Surface::DecodedStreams);
+    assert_eq!(s.verdict, Verdict::Survivor, "{}", proof.to_text());
+    assert!(s.locations.iter().any(|l| l.contains("(raw)")), "{:?}", s.locations);
+    assert!(!proof.passed(), "{}", proof.to_text());
+}
+
+#[test]
+fn a_survivor_in_a_form_field_value_is_found() {
+    // The redacted text also sits in the form: a text field whose /V holds it. The field
+    // dictionary is an object like any other, and its strings are swept wherever the field
+    // hangs (AcroForm and the page's annotations both point at it).
+    let field = b"<< /Type /Annot /Subtype /Widget /Rect [200 20 280 40] /FT /Tx /T (form) /V (note: SECRETVALUE) >>".to_vec();
+    let spec = Spec { catalog: "/AcroForm << /Fields [7 0 R] >>", page: "/Annots [7 0 R]", extra: vec![field], ..Spec::default() };
+    let mut doc = marked(spec);
+    let (_, proof) = run(&mut doc);
+    let s = surface(&proof, Surface::ObjectStrings);
+    assert_eq!(s.verdict, Verdict::Survivor, "{}", proof.to_text());
+    // The field's copy is the only place left (the save renumbers objects, so the place is
+    // named, not numbered from the input file; both views of the string count as survivors).
+    assert!(s.survivors >= 1, "{}", proof.to_text());
+    assert_eq!(s.locations.len(), 1, "{:?}", s.locations);
+    assert!(!proof.passed(), "{}", proof.to_text());
+}
+
+#[test]
+fn a_survivor_in_an_xfa_packet_is_found() {
+    // An XFA form mirrors its field values in the /XFA packets, XML of their own. Redaction
+    // strips an XFA form outright (crates/xfa does that, not this machinery); the proof must
+    // not take the stripper on trust: whatever it left (a shape it refused, a leftover
+    // packet) is swept like any stream, and what the packet holds is reported.
+    let xfa = stream("", b"<xdp:xdp><xfa:datasets><form>SECRETVALUE</form></xfa:datasets></xdp:xdp>");
+    let spec = Spec { catalog: "/AcroForm << /XFA 7 0 R /Fields [] >>", extra: vec![xfa], ..Spec::default() };
+    let doc = marked(spec);
+    let snap = Snapshot::capture(&doc, None).unwrap();
+    let proof = snap.prove_saved(doc.bytes(), None, &ProofOptions::default());
+    let s = surface(&proof, Surface::DecodedStreams);
+    assert_eq!(s.verdict, Verdict::Survivor, "{}", proof.to_text());
+    assert!(s.locations.iter().any(|l| l == "object 7 (decoded)"), "{:?}", s.locations);
+    assert!(!proof.passed(), "{}", proof.to_text());
+}
+
+#[test]
+fn a_survivor_in_an_unused_object_is_found() {
+    // Object 7 is reachable from nothing: no catalog entry, no page resource. A reader that
+    // only walks the document tree misses it; the sweep walks every object the
+    // cross-reference table knows, orphans included, and names the object it sits in.
+    let orphan = format!("<< /Type /Annot /Subtype /Text /Contents (note: {SECRET}) >>").into_bytes();
+    let doc = marked(Spec { extra: vec![orphan], ..Spec::default() });
+    let snap = Snapshot::capture(&doc, None).unwrap();
+    let proof = snap.prove_saved(doc.bytes(), None, &ProofOptions::default());
+    let s = surface(&proof, Surface::ObjectStrings);
+    assert_eq!(s.verdict, Verdict::Survivor, "{}", proof.to_text());
+    assert!(s.locations.iter().any(|l| l == "object 7"), "{:?}", s.locations);
+    assert!(!proof.passed(), "{}", proof.to_text());
+}
+
 fn attachment_spec(payload: &[u8]) -> Spec<'static> {
     Spec {
         catalog: "/Names << /EmbeddedFiles << /Names [(a.bin) 7 0 R] >> >>",
@@ -922,6 +1009,32 @@ fn survivors_seen_before_the_work_limit_are_still_reported() {
     let (reported, unswept) = tests_support::page_sweep_survivors_survive_the_limit();
     assert!(reported, "a survivor counted before the limit is reported");
     assert!(unswept, "the page the limit stopped on is unswept");
+}
+
+#[test]
+fn a_file_past_the_proof_budget_is_unverified_never_clean() {
+    // A page whose content is bigger than the proof may decode for one stream: the budget
+    // stops the sweep, and the result must say so. The surfaces read unswept (a page content
+    // stream is never excused as raw-only), the region reads unverifiable, the proof fails.
+    // Work that stopped is "not verified", never a pass.
+    let big = vec![0u8; crate::verify::limits::MAX_STREAM + (6 << 20)];
+    let content = Stream::flate(Dict::new(), &big);
+    drop(big);
+    let mut doc = open(build_with(b"BT /F1 10 Tf 10 200 Td (Public) Tj ET", Spec::default()));
+    let page = pdfcraft_model::pages(&doc).swap_remove(0);
+    let new = doc.add(Object::Stream(content));
+    doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), Object::Ref(new))).unwrap();
+    doc.require_full_save();
+    let snap = Snapshot::capture(&marked(Spec::default()), None).unwrap();
+    let proof = snap.prove(&doc, None, &ProofOptions::default());
+    assert!(!proof.passed(), "{}", proof.to_text());
+    assert!(!proof.failures.is_empty(), "{}", proof.to_text());
+    for s in [Surface::ExtractedText, Surface::DecodedStreams] {
+        let r = surface(&proof, s);
+        assert_eq!(r.verdict, Verdict::Unswept, "{s:?}: {}", proof.to_text());
+        assert_eq!((r.survivors, r.raw_only), (0, 0), "{s:?}: {}", proof.to_text());
+    }
+    assert!(matches!(proof.entries[0].status, Status::Unverifiable | Status::Failed), "the region is not verified: {}", proof.to_text());
 }
 
 #[test]
