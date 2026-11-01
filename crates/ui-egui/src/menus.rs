@@ -540,6 +540,10 @@ impl PdfCraftApp {
             }
             "edit.copy" => self.menu_input.push(egui::Event::Copy),
             CUT => self.menu_input.push(egui::Event::Cut),
+            // Copied pages are on PdfCraft's own page clipboard, not the system's. Asking the
+            // system for a paste comes back as a Paste event only when it holds text, so with a
+            // picture or nothing on it the item did nothing (#5406).
+            PASTE if !ctx.text_edit_focused() && self.active.and_then(|i| self.views.get(i)).is_some_and(|v| v.organize) => self.paste_pages(),
             PASTE => ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste),
             SELECT_ALL => self.menu_input.extend(key(egui::Key::A, egui::Modifiers::COMMAND)),
             DELETE => self.menu_input.extend(key(egui::Key::Delete, egui::Modifiers::NONE)),
