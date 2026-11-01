@@ -106,6 +106,27 @@ fn small_text_set_solid_keeps_the_line_below() {
     assert!(c.contains("(SECRET) Tj") && c.contains("(ABOVE123) Tj"), "{c}");
 }
 
+/// The edge of the em box (#5255): a mark that stops half a point above the em box of the line
+/// "ABOVE123" (baseline 120, em box 118–128 for a 1000 / −250 font at 10 pt) keeps its glyphs and
+/// counts them as left beside the mark; the same mark three points lower, past the fifth of the box a
+/// glyph needs covered, takes them. The mark is one em (10 pt) tall in both.
+#[test]
+fn a_mark_just_outside_the_em_box_keeps_the_line_and_one_just_inside_takes_it() {
+    let text: &[u8] = b"BT /F1 10 Tf 10 120 Td (ABOVE123) Tj 0 -10 Td (AB1234CD) Tj 0 -10 Td (SECRET) Tj ET";
+    // O, V, E and 1 of "ABOVE123" span x 20-40.
+    let mut doc = page_with_metrics(text, 1000, -250);
+    mark(&mut doc, 0, &[[20.0, 128.5, 40.0, 138.5]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.glyphs, r.glyphs_beside_marks), (0, 4), "half a point above the em box: kept and counted, {r:?}");
+    assert!(content(&doc, 0).contains("(ABOVE123) Tj"), "{}", content(&doc, 0));
+    let mut doc = page_with_metrics(text, 1000, -250);
+    mark(&mut doc, 0, &[[20.0, 125.0, 40.0, 135.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.glyphs, 4, "three points inside the em box: removed, {r:?}");
+    let c = content(&doc, 0);
+    assert!(!c.contains("ABOVE123") && c.contains("(AB1234CD) Tj") && c.contains("(SECRET) Tj"), "{c}");
+}
+
 /// A mark over the bottom of large letters still removes them: a glyph left in the file under a
 /// partial black box stays extractable. 24 pt "SECRET", a mark over the lower 3.8 pt of "SE".
 #[test]
