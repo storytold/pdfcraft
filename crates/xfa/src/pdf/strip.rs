@@ -1,8 +1,33 @@
-use super::{CLICK_KEY, Dict, Document, IMAGE_FIELD_KEY, LAYOUT_KEY, NODE_KEY, ObjRef, Object, SOM_KEY, XfaError};
+use super::{CLICK_KEY, Dict, Document, GROUPS, IMAGE_FIELD_KEY, LAYOUT_KEY, NODE_KEY, ObjRef, Object, RELEVANT_KEY, SOM_KEY, XfaError};
 
 /// What laying a form out says when it took the usage rights off (see [`drop_usage_rights`]).
 pub(crate) const USAGE_RIGHTS_REMOVED: &str =
     "the form's usage rights were removed: laying it out voids them, and a form with void usage rights can open with every field locked";
+
+/// The screen-only and print-only groups an earlier layout of the form made ([`RELEVANT_KEY`]),
+/// found among the document's optional content groups.
+pub(super) fn earlier_groups(doc: &Document, catalog: &Dict) -> [Option<ObjRef>; 2] {
+    let mut out = [None; 2];
+    let ocgs = catalog
+        .get(b"OCProperties")
+        .map(|p| doc.resolve(p))
+        .and_then(|p| p.as_dict().and_then(|p| p.get(b"OCGs").map(|o| doc.resolve(o))))
+        .and_then(|o| o.as_array().cloned())
+        .unwrap_or_default();
+    for r in ocgs.iter().filter_map(Object::as_ref).take(MAX_GROUPS_SEARCHED) {
+        let key = doc.get(r).as_dict().and_then(|d| d.name(RELEVANT_KEY).map(<[u8]>::to_vec));
+        if let Some(g) = key.and_then(|k| GROUPS.iter().position(|(name, ..)| name.as_bytes() == k.as_slice()))
+            && let Some(slot) = out.get_mut(g)
+            && slot.is_none()
+        {
+            *slot = Some(r);
+        }
+    }
+    out
+}
+
+/// Most optional content groups looked at for an earlier layout's.
+const MAX_GROUPS_SEARCHED: usize = 10_000;
 
 /// What [`strip`] took out, for the user to be told (the packets held more than the fields).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -187,6 +212,12 @@ pub fn strip(doc: &mut Document) -> Result<Stripped, XfaError> {
         None => catalog.set(b"AcroForm".to_vec(), Object::Dict(acro)),
     }
     catalog.remove(b"NeedsRendering");
+    // The screen-only and print-only layers stay, as the pages use them; only their key goes.
+    for r in earlier_groups(doc, &catalog).into_iter().flatten() {
+        doc.update_dict(r, |d| {
+            d.remove(RELEVANT_KEY);
+        })?;
+    }
     out.usage_rights = drop_usage_rights(doc, &mut catalog);
     doc.set(root, Object::Dict(catalog));
     // The packet streams are referenced from nowhere else: freed, so an incremental save

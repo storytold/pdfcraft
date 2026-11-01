@@ -198,6 +198,25 @@ fn parse_para(n: Option<XmlNode>) -> ParaSpec {
     }
 }
 
+/// `relevant`: a space-separated list of views, each `+name` (or `name`) or `-name`. What it says
+/// about printing (`Some(true)` for `+print`, `Some(false)` for `-print`; the last one counts), and
+/// the first token about any other view, which is left aside.
+fn parse_relevant(s: Option<&str>) -> (Option<bool>, Option<String>) {
+    let (mut print, mut other) = (None, None);
+    for token in s.unwrap_or_default().split_whitespace().take(64) {
+        match token {
+            "+print" | "print" => print = Some(true),
+            "-print" => print = Some(false),
+            _ => {
+                if other.is_none() {
+                    other = Some(token.chars().take(64).collect());
+                }
+            }
+        }
+    }
+    (print, other)
+}
+
 /// `rotate` as quarter turns (XFA 3.3: degrees counter-clockwise, a multiple of 90, `deg` optional):
 /// anything else leaves the object as it stands.
 fn quarter_turns(rotate: Option<&str>) -> u8 {
@@ -208,7 +227,9 @@ fn quarter_turns(rotate: Option<&str>) -> u8 {
     turns.filter(|t| t.fract() == 0.0).map_or(0, |t| t as u8 % 4)
 }
 
+/// What element `n` shares with every container and leaf ([`Common`]).
 fn parse_common(n: XmlNode) -> Common {
+    let (relevant, relevant_other) = parse_relevant(n.attribute("relevant"));
     Common {
         name: n.attribute("name").map(str::to_string).filter(|s| !s.is_empty()),
         id: n.attribute("id").map(str::to_string),
@@ -223,6 +244,8 @@ fn parse_common(n: XmlNode) -> Common {
         min_h: attr_measure(n, "minH"),
         max_h: attr_measure(n, "maxH"),
         presence: Presence::parse(n.attribute("presence")),
+        relevant,
+        relevant_other,
         margin: parse_margin(child(n, "margin")),
         border: parse_border(child(n, "border")),
         font: parse_font(child(n, "font")),

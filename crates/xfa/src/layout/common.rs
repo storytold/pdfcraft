@@ -53,12 +53,19 @@ pub(super) fn solid_extent(item: &Item) -> Option<(f64, f64)> {
         Item::Widget(w) => Some((w.rect.y, w.rect.bottom())),
         Item::Turned(t) => Some(t.extent),
         Item::Fill { .. } | Item::Line { .. } | Item::Rounded(_) => None,
+        Item::Only { item, .. } => solid_extent(item),
     }
 }
 
 /// `item` as the part above `cut` and the part below: solid items go whole to the side their
 /// top is on, fills and lines crossing the cut are cut in two.
 pub(super) fn divide(item: Item, cut: f64) -> (Option<Item>, Option<Item>) {
+    if let Item::Only { views, item } = item {
+        // Each part shows where the whole did.
+        let wrap = |i: Item| Item::Only { views, item: Box::new(i) };
+        let (a, b) = divide(*item, cut);
+        return (a.map(wrap), b.map(wrap));
+    }
     if let Some((top, _)) = solid_extent(&item) {
         return if top < cut - 0.01 { (Some(item), None) } else { (None, Some(item)) };
     }
@@ -110,6 +117,9 @@ pub(super) fn divide(item: Item, cut: f64) -> (Option<Item>, Option<Item>) {
 
 /// `item` moved by (`dx`, `dy`).
 pub(super) fn moved(mut item: Item, dx: f64, dy: f64) -> Item {
+    if let Item::Only { views, item: inner } = item {
+        return Item::Only { views, item: Box::new(moved(*inner, dx, dy)) };
+    }
     match &mut item {
         Item::Fill { rect, .. } | Item::Image { rect, .. } => {
             rect.x += dx;
@@ -136,6 +146,8 @@ pub(super) fn moved(mut item: Item, dx: f64, dy: f64) -> Item {
             t.extent = (t.extent.0 + dy, t.extent.1 + dy);
             t.items = std::mem::take(&mut t.items).into_iter().map(|i| moved(i, dx, dy)).collect();
         }
+        // Taken apart above.
+        Item::Only { .. } => {}
     }
     item
 }

@@ -1,8 +1,8 @@
 use super::common::{button_action, date_pattern};
 use super::items::{BorderShape, Item, Widget, WidgetBorder, WidgetKind};
 use super::{
-    Access, Border, Ctx, Engine, Face, Field, HAlign, Layouter, MAX_DATA_IMAGE, Margin, Para, Placement, Presence, Rect, Ui, VAlign, Value, XfaError,
-    data_date_letters, data_path, data_to_iso, is_on, iso_to_pattern, text,
+    Access, Border, Ctx, Engine, Face, Field, HAlign, Layouter, MAX_DATA_IMAGE, Margin, Para, Placement, Presence, Rect, Ui, VAlign, Value, Views,
+    XfaError, data_date_letters, data_path, data_to_iso, is_on, iso_to_pattern, text,
 };
 
 impl Layouter<'_> {
@@ -263,6 +263,8 @@ impl Layouter<'_> {
             action,
             items,
             no_scroll: f.no_scroll,
+            // `push` sets where it shows.
+            views: Views::ALL,
         })))
     }
 }
