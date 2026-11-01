@@ -144,8 +144,9 @@ use state::CopyPage;
 #[cfg(not(target_arch = "wasm32"))]
 use state::OpenRequest;
 pub use state::{
-    CustomDraft, Dialog, DuplicateDraft, LeftPanel, LinkOrigin, Mode, NumberDraft, OpenOutcome, PageClip, PagePropsDraft, PasswordPrompt,
-    PendingLink, PendingRemoteLink, PropsTab, QuickTool, RECENT_FILES_DEFAULT, RECENT_FILES_MAX, RecentFile, RightPanel, UnlockPrompt,
+    CommentClip, CustomDraft, Dialog, DuplicateDraft, LeftPanel, LinkOrigin, Mode, NumberDraft, OpenOutcome, PageClip, PagePropsDraft,
+    PasswordPrompt, PendingLink, PendingRemoteLink, PropsTab, QuickTool, RECENT_FILES_DEFAULT, RECENT_FILES_MAX, RecentFile, RightPanel,
+    UnlockPrompt,
 };
 use state::{DocumentCopyJob, GridFile};
 pub use tools::bulk_fields;
@@ -542,6 +543,8 @@ pub struct PdfCraftApp {
     pub progress_notice: Option<widgets::ProgressNotice>,
     /// Pages copied or cut in Organize Pages, ready to paste (into any document).
     pub page_clipboard: Option<PageClip>,
+    /// Copied comments (XFDF), to paste into this or another document (M14).
+    pub comment_clipboard: Option<CommentClip>,
     /// Files dropped on the page grid, waiting for the pointer to say which gap they go to.
     grid_drop: Option<GridDrop>,
     /// The last snapshot (width, height, RGBA); `system_clipboard` also puts it on the

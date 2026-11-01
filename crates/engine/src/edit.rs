@@ -534,6 +534,15 @@ pub enum Edit {
         name: String,
         bytes: Arc<Vec<u8>>,
     },
+    /// Paste copied comments (XFDF from [`Session::export_comments`]) onto `page` as new
+    /// comments: copies under names of their own, so nothing is replaced and pasting twice
+    /// gives two sets; replies keep their copied parent.
+    PasteComments {
+        xfdf: String,
+        page: usize,
+        /// Where the copies go: moved by (dx, dy) in user space, or at their own positions.
+        offset: Option<[f64; 2]>,
+    },
     /// Remove Hidden Information: the chosen categories.
     RemoveHidden {
         which: Vec<Hidden>,

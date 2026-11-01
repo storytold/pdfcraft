@@ -2618,3 +2618,19 @@ animation effects	Off	Aus
 	No image on clipboard to paste	Kein Bild in der Zwischenablage zum Einfügen
 	Pinned {tool} to Home	{tool} an Start angeheftet
 	Unpinned {tool} from Home	{tool} von Start gelöst
+# Comments copied between documents and selected several at once; finishing connected lines from the menu (M14).
+	Copy comment	Kommentar kopieren
+	Copy comments	Kommentare kopieren
+	Paste comments	Kommentare einfügen
+	Delete comments	Kommentare löschen
+	Move comments	Kommentare verschieben
+	Complete	Fertigstellen
+	Undo last point	Letzten Punkt zurücknehmen
+	Cancel drawing	Zeichnen abbrechen
+	Copy comments first	Zuerst Kommentare kopieren
+	Click where the copied comments go; Escape lets them go	Klicke dorthin, wo die kopierten Kommentare hin sollen; Escape lässt sie los
+	The copied comments are larger than this page; they were placed as they are	Die kopierten Kommentare sind größer als diese Seite; sie wurden unverändert platziert
+	The clipboard holds no comments	Die Zwischenablage enthält keine Kommentare
+	Comments: {n}	Kommentare: {n}
+# Comment Properties and the Colour menu act on every selected comment (M5).
+	Changes here apply to all {n} selected comments	Änderungen hier gelten für alle {n} ausgewählten Kommentare

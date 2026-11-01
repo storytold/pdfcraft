@@ -2613,3 +2613,19 @@ animation effects	Off	Kapalı
 	No image on clipboard to paste	Panoda yapıştırılacak görüntü yok
 	Pinned {tool} to Home	{tool} Ana Sayfaya sabitlendi
 	Unpinned {tool} from Home	{tool} Ana Sayfadan kaldırıldı
+# Comments copied between documents and selected several at once; finishing connected lines from the menu (M14).
+	Copy comment	Yorumu kopyala
+	Copy comments	Yorumları kopyala
+	Paste comments	Yorumları yapıştır
+	Delete comments	Yorumları sil
+	Move comments	Yorumları taşı
+	Complete	Tamamla
+	Undo last point	Son noktayı geri al
+	Cancel drawing	Çizimi iptal et
+	Copy comments first	Önce yorumları kopyalayın
+	Click where the copied comments go; Escape lets them go	Kopyalanan yorumların gideceği yere tıklayın; Escape bırakır
+	The copied comments are larger than this page; they were placed as they are	Kopyalanan yorumlar bu sayfadan büyük; oldukları gibi yerleştirildi
+	The clipboard holds no comments	Panoda yorum yok
+	Comments: {n}	Yorumlar: {n}
+# Comment Properties and the Colour menu act on every selected comment (M5).
+	Changes here apply to all {n} selected comments	Buradaki değişiklikler seçili {n} yorumun tümüne uygulanır

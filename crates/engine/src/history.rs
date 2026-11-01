@@ -53,6 +53,7 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         Edit::AddAnnotation(a) if matches!(a.shape, Shape::Attachment { .. }) => Scope::Full,
         Edit::AddMeasurement(_)
         | Edit::AddAnnotation(_)
+        | Edit::PasteComments { .. }
         | Edit::AddCustomStamp { .. }
         | Edit::DeleteAnnotation { .. }
         | Edit::SetAnnotationContents { .. }

@@ -100,6 +100,22 @@ fn every_registered_command_is_implemented() {
         if spec.id == "edit.redo" {
             app.undo();
         }
+        // Copying comments needs a selected comment; pasting needs copied ones.
+        if matches!(spec.id, "comment.copy" | "comment.paste") {
+            let shape = pdfcraft_engine::Shape::Rectangle { rect: [10.0, 10.0, 50.0, 50.0] };
+            let style = pdfcraft_engine::Style::default_for(&shape);
+            assert!(app.apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+                page: 0,
+                shape,
+                style,
+                contents: String::new(),
+                author: String::new(),
+            })));
+            app.views[0].comments.select_only((0, 0));
+            if spec.id == "comment.paste" {
+                assert!(app.copy_selected_comments(0));
+            }
+        }
         if spec.id.starts_with("edit.") && (spec.id.ends_with(".update") || spec.id.ends_with(".remove")) {
             use pdfcraft_engine::{Background, Edit, HeaderFooter, Watermark};
             let mut hf = HeaderFooter::default();

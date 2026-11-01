@@ -239,6 +239,9 @@ pub(crate) fn show(
     {
         view.comments.collapsed_pages.retain(|&c| c != p);
     }
+    // The cards in the order shown, for a ⇧-click range (folded pages' cards aren't shown).
+    let order: Vec<(usize, usize)> =
+        roots.iter().filter(|a| !(sort == SortBy::Page && view.comments.collapsed_pages.contains(&a.page))).map(|a| (a.page, a.index)).collect();
     let mut page = usize::MAX;
     let mut group: Option<String> = None;
     for a in roots {
@@ -287,7 +290,7 @@ pub(crate) fn show(
         }
         let thread = replies_of(a);
         let rotation = info.pages.get(a.page).map_or(0, |p| p.rotation);
-        if let Some(e) = card(ui, view, CardContext { theme: t, annotation: a, rotation, thread, doc, prefs, allowed, nav }) {
+        if let Some(e) = card(ui, view, CardContext { theme: t, annotation: a, rotation, thread, order: &order, doc, prefs, allowed, nav }) {
             edit = Some(e);
         }
     }
@@ -302,6 +305,8 @@ struct CardContext<'a> {
     // The clockwise `/Rotate` of the comment's page.
     rotation: u16,
     thread: &'a [&'a Annotation],
+    /// The cards in the order shown, for a ⇧-click range.
+    order: &'a [(usize, usize)],
     doc: &'a pdfcraft_engine::Document,
     prefs: &'a CommentPrefs,
     allowed: bool,
@@ -309,11 +314,14 @@ struct CardContext<'a> {
 }
 
 fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Option<Edit> {
-    let CardContext { theme: t, annotation: a, rotation, thread, doc, prefs, allowed, nav } = context;
+    let CardContext { theme: t, annotation: a, rotation, thread, order, doc, prefs, allowed, nav } = context;
     let info = &doc.info;
     let mut edit = None;
     let key = (a.page, a.index);
-    let selected = view.comments.selected == Some(key);
+    let selected = view.comments.is_selected(key);
+    // Several comments may be selected; the reply field (one draft) belongs to the one with
+    // the handles.
+    let primary = view.comments.selected == Some(key);
     let color = a.color.map(|c| color32(c.map(f64::from))).unwrap_or(t.accent);
     let status = thread.iter().rev().filter(|r| !r.is_mark()).find_map(|r| r.state.as_deref());
     let marked = is_marked(thread);
@@ -430,7 +438,7 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
                 }
                 above = me;
             }
-            if selected && allowed {
+            if primary && allowed {
                 ui.add_space(8.0);
                 egui::Frame::NONE.inner_margin(egui::Margin { left: 34, right: 0, top: 0, bottom: 0 }).show(ui, |ui| {
                     // The field fills its line and Post sits right-aligned under it: a field sized
@@ -477,7 +485,16 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(crate::i18n::fmt(tl!("{kind} — click to show it on the page"), &[("kind", tl!(kind_label(a)))]));
     if click.clicked() {
-        view.comments.selected = Some(key);
+        // ⌘/Ctrl-click adds the comment to the selection, as on the page; ⇧-click selects the
+        // cards from the one with the handles to this one, as lists do.
+        let modifiers = ui.input(|i| i.modifiers);
+        if modifiers.shift && !modifiers.command {
+            view.comments.select_range(order, key);
+        } else if modifiers.command {
+            view.comments.toggle(key);
+        } else {
+            view.comments.select_only(key);
+        }
         view.comments.reply.clear();
         *nav = Some(Nav::Flash(a.page, a.shown_rect(rotation)));
     }
@@ -525,10 +542,16 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
                 view.comments.default_request = Some((a.page, a.index));
                 ui.close();
             }
+            if ui.button(tl!("Copy comment")).clicked() {
+                // The card's comment alone (the page's menu copies the whole selection).
+                view.comments.select_only(key);
+                view.comments.copy_request = true;
+                ui.close();
+            }
             ui.separator();
             // A locked reply can't be deleted, so it keeps the comment it answers too.
             if ui.add_enabled(doc.annotation_deletable(a.page, a.index), egui::Button::new(tl!("Delete"))).clicked() {
-                view.comments.selected = None;
+                view.comments.clear_selection();
                 edit = Some(Edit::DeleteAnnotation { page: a.page, index: a.index });
                 ui.close();
             }

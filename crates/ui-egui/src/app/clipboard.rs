@@ -11,7 +11,7 @@ pub(crate) fn print_refused() -> &'static str {
 }
 
 enum ClipboardPaste {
-    Text,
+    Text(String),
     Image(std::sync::Arc<egui::ColorImage>),
 }
 
@@ -27,7 +27,8 @@ impl PdfCraftApp {
         false
     }
 
-    /// ⌘C / ⌘X / ⌘V copy, cut and paste text or images on canvas (unless a text field has focus).
+    /// ⌘C / ⌘X / ⌘V copy, cut and paste text, images or comments on canvas (unless a text field
+    /// has focus). With no text selected, ⌘C copies the selected comments, each with its replies.
     pub(super) fn clipboard_keys(&mut self, i: usize, ctx: &egui::Context) {
         use egui::{Key, KeyboardShortcut, Modifiers};
         let pastes: Vec<_> = ctx.input(|input| {
@@ -35,7 +36,7 @@ impl PdfCraftApp {
                 .events
                 .iter()
                 .filter_map(|event| match event {
-                    egui::Event::Paste(_) => Some(ClipboardPaste::Text),
+                    egui::Event::Paste(text) => Some(ClipboardPaste::Text(text.clone())),
                     egui::Event::PasteImage(image) => Some(ClipboardPaste::Image(image.clone())),
                     _ => None,
                 })
@@ -52,7 +53,9 @@ impl PdfCraftApp {
             || ctx.input_mut(|input| input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::X)));
         let paste = ctx.input_mut(|input| input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::V)));
 
+        let text_selected = copy && self.views.get(i).and_then(|v| v.selected_text()).is_some_and(|t| !t.is_empty());
         if copy
+            && (text_selected || !self.copy_selected_comments(i))
             && !self.copy_selected_text(i, ctx)
             && let Some(sel) = self.views.get(i).and_then(|v| v.image_selection.clone())
             && let Some(id) = self.views.get(i).map(|v| v.id)
@@ -89,19 +92,100 @@ impl PdfCraftApp {
         }
     }
 
-    fn receive_pastes(&mut self, view: usize, pastes: Vec<ClipboardPaste>, images_allowed: bool) {
+    /// `on_canvas`: the paste is the canvas's (no text field, dialog or page grid has it), so
+    /// pictures and copied comments land on the page.
+    fn receive_pastes(&mut self, view: usize, pastes: Vec<ClipboardPaste>, on_canvas: bool) {
         let page = self.views.get(view).map_or(0, |view| view.current);
         for paste in pastes {
             match paste {
-                ClipboardPaste::Text => {
+                ClipboardPaste::Text(text) => {
                     // Text fields may own the paste; the canvas cache still observes its contents.
                     self.last_copied_image = None;
                     self.last_copied_file = None;
+                    if on_canvas {
+                        self.paste_comment_text(view, text);
+                    }
                 }
-                ClipboardPaste::Image(image) if images_allowed => {
+                ClipboardPaste::Image(image) if on_canvas => {
                     self.paste_received_image(page, &image);
                 }
                 ClipboardPaste::Image(_) => {}
+            }
+        }
+    }
+
+    /// A text pasted onto the canvas: XFDF with comments is pasted as comments. Copied comments
+    /// come from the system clipboard when it holds them, from the app's own only when it holds
+    /// nothing legible (a word copied in another app since is that word, not the comments copied
+    /// before it).
+    fn paste_comment_text(&mut self, i: usize, text: String) {
+        if pdfcraft_engine::is_xfdf_comments(&text) {
+            self.paste_comments(i, Some(text), None);
+        } else if text.trim().is_empty() && self.comment_clipboard.is_some() {
+            self.paste_comments(i, None, None);
+        }
+    }
+
+    /// Copy the selected comments of tab `i` as XFDF, each with its replies: into the app's
+    /// clipboard (for ⌘V in any tab or window) and onto the system clipboard as text. False
+    /// when nothing is selected.
+    pub fn copy_selected_comments(&mut self, i: usize) -> bool {
+        let Some(view) = self.views.get(i) else { return false };
+        let keys = view.comments.selection();
+        if keys.is_empty() {
+            return false;
+        }
+        let id = view.id;
+        match self.session.export_comments(id, &keys) {
+            Ok(xfdf) => {
+                if let Some(ctx) = &self.ctx {
+                    ctx.copy_text(xfdf.clone());
+                }
+                self.comment_clipboard = Some(CommentClip { xfdf, count: keys.len() });
+                true
+            }
+            Err(e) => {
+                self.notify_error(e);
+                false
+            }
+        }
+    }
+
+    /// Paste copied comments (`text`, XFDF from the system clipboard, or else the app's
+    /// clipboard) into tab `i`. With `at` (a page and a user-space point, from the page's menu)
+    /// the bundle is placed at once, centred there; otherwise it hangs on the pointer as one
+    /// bundle until a click places it (`Gesture::Place`), so a copy never lands on its original
+    /// and a bundle from a large page goes where it fits on a small one. The copies are selected
+    /// once placed (see `apply_edit`).
+    pub fn paste_comments(&mut self, i: usize, text: Option<String>, at: Option<(usize, [f64; 2])>) -> bool {
+        let Some(xfdf) = text.or_else(|| self.comment_clipboard.as_ref().map(|c| c.xfdf.clone())) else {
+            self.notify_tr("Copy comments first");
+            return false;
+        };
+        let Some(view) = self.views.get(i) else { return false };
+        let id = view.id;
+        let Some(doc) = self.session.get(id) else { return false };
+        if !doc.allows_annotation() {
+            self.notify_tr("The document's security settings don't allow this change");
+            return false;
+        }
+        let count = pdfcraft_engine::comment_count(&xfdf);
+        let Some(bounds) = pdfcraft_engine::comments_bounds(&xfdf).filter(|_| count > 0) else {
+            self.notify_tr("The clipboard holds no comments");
+            return false;
+        };
+        match at {
+            Some((page, [x, y])) => {
+                let offset = [x - (bounds[0] + bounds[2]) / 2.0, y - (bounds[1] + bounds[3]) / 2.0];
+                self.apply_edit(pdfcraft_engine::Edit::PasteComments { xfdf, page, offset: Some(offset) })
+            }
+            None => {
+                let Some(view) = self.views.get_mut(i) else { return false };
+                view.comments.clear_selection();
+                let outlines = pdfcraft_engine::comment_outlines(&xfdf);
+                view.comments.gesture = Some(comments::Gesture::Place { xfdf, bounds, count, outlines });
+                self.notify_tr("Click where the copied comments go; Escape lets them go");
+                true
             }
         }
     }
