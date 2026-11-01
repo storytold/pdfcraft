@@ -161,9 +161,10 @@ pub enum InterpreterWarning {
     /// read, or a Separation or DeviceN tint transform that cannot be evaluated) and was painted
     /// in a fallback colour. Reported at most once per content stream.
     ColorFallback,
-    /// PdfCraft patch (60): an image was not drawn because its `/Indexed` colour space is
-    /// malformed (ISO 32000-2 §8.6.6.3): `hival` not an integer in 0..=255, or a lookup table
-    /// shorter than its entries need.
+    /// PdfCraft patch (60): an image's `/Indexed` colour space is malformed (ISO 32000-2
+    /// §8.6.6.3) and the image was drawn recovered: a lookup table shorter than its entries need
+    /// padded with zero bytes, a `hival` past 255 taken as 255, or a real one truncated. A `hival`
+    /// below zero or not a number cannot be recovered, and the image falls back to DeviceGray.
     MalformedIndexedImage,
 }
 
@@ -660,6 +661,11 @@ fn interpret_window<'a>(
                         crate::color::note_color_fallback();
                         ColorSpace::device_gray()
                     });
+                // PdfCraft patch (60): so is an Indexed space drawn recovered (a short lookup
+                // table padded, a `hival` clamped or truncated; see `Indexed::new`).
+                if cs.is_recovered_indexed() {
+                    crate::color::note_color_fallback();
+                }
 
                 if !cs.is_pattern() {
                     context.get_mut().graphics_state.stroke_pattern = None;
@@ -676,6 +682,11 @@ fn interpret_window<'a>(
                         crate::color::note_color_fallback();
                         ColorSpace::device_gray()
                     });
+                // PdfCraft patch (60): so is an Indexed space drawn recovered (a short lookup
+                // table padded, a `hival` clamped or truncated; see `Indexed::new`).
+                if cs.is_recovered_indexed() {
+                    crate::color::note_color_fallback();
+                }
 
                 if !cs.is_pattern() {
                     context.get_mut().graphics_state.non_stroke_pattern = None;
@@ -931,21 +942,23 @@ fn interpret_window<'a>(
                 let warning_sink = context.settings.warning_sink.clone();
                 let transfer_function = context.get().graphics_state.transfer_function.clone();
                 let cache = context.interpreter_cache.object_cache.clone();
-                // PdfCraft patch (60): an inline image naming a resource colour space that is a
-                // malformed Indexed space is skipped with a warning, as `ImageXObject::new` does
-                // for one given in place. A device space name (or its inline abbreviation) never
-                // refers to a resource (ISO 32000-2 §8.6.8), and `ImageXObject::new` takes it
-                // first, so a resource of that name is not consulted.
+                // PdfCraft patch (60): an inline image naming a resource colour space that is an
+                // Indexed space whose `hival` has no reading is reported, as `ImageXObject::new`
+                // reports one given in place; the image falls back as upstream. Only the array's
+                // name and `hival` are read here, never its lookup table: a recovered space is
+                // reported by `ImageXObject::new` from the space it builds through the resource
+                // cache. A device space name (or its inline abbreviation) never refers to a
+                // resource (ISO 32000-2 §8.6.8), and `ImageXObject::new` takes it first, so a
+                // resource of that name is not consulted.
                 let inline_dict = i.0.dict();
                 if inline_dict
                     .get::<hayro_syntax::object::Name<'_>>(hayro_syntax::object::dict::keys::CS)
                     .or_else(|| inline_dict.get::<hayro_syntax::object::Name<'_>>(hayro_syntax::object::dict::keys::COLORSPACE))
                     .filter(|name| ColorSpace::new_from_name(name).is_none())
                     .and_then(|name| resources.get_color_space(&name))
-                    .is_some_and(|cs| crate::color::is_malformed_indexed(&cs, &cache))
+                    .is_some_and(|cs| crate::color::has_unusable_hival(&cs))
                 {
                     warning_sink(InterpreterWarning::MalformedIndexedImage);
-                    continue;
                 }
                 // PdfCraft patch: inline images are not cached (see `DecodedImageKey`).
                 // PdfCraft patch (38): an inline image in a device space, named directly or by a

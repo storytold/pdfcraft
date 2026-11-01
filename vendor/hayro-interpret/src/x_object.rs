@@ -508,6 +508,7 @@ impl<'a> ImageXObject<'a> {
         is_mask |= is_stencil_mask;
 
         let mut default_space = None;
+        let mut malformed_indexed = false;
         let image_cs = if is_mask {
             // Masks are always single-channel.
             Some(ColorSpace::device_gray())
@@ -524,17 +525,12 @@ impl<'a> ImageXObject<'a> {
             if let Some((space, key)) = default {
                 default_space = Some(key);
                 Some(space)
-            } else if cs_obj
-                .as_ref()
-                .is_some_and(|c| crate::color::is_malformed_indexed(c, cache))
-            {
-                // PdfCraft patch (60): an Indexed space that ISO 32000-2 §8.6.6.3 rules out
-                // (a short lookup table, an unusable `hival`) leaves no colour for some or all
-                // samples. The image is not drawn, and the caller is told, rather than falling
-                // back to DeviceGray and painting its indices as near-black.
-                warning_sink(InterpreterWarning::MalformedIndexedImage);
-                return None;
             } else {
+                // PdfCraft patch (60): an Indexed space given in place whose `hival` has no
+                // reading cannot be built and falls back below, as upstream; it is reported.
+                malformed_indexed = cs_obj
+                    .as_ref()
+                    .is_some_and(crate::color::has_unusable_hival);
                 cs_obj
                     .clone()
                     .and_then(|c| ColorSpace::new(c, cache))
@@ -546,6 +542,14 @@ impl<'a> ImageXObject<'a> {
                     })
             }
         };
+        // PdfCraft patch (60): an Indexed space that ISO 32000-2 §8.6.6.3 rules out (a short
+        // lookup table, a `hival` past 255 or with a fraction) is drawn recovered (see
+        // `Indexed::new`), and reported. The check asks the space that was built, so it reads
+        // no lookup table of its own (an inline image naming a resource builds it once, through
+        // the resource cache).
+        malformed_indexed |= image_cs
+            .as_ref()
+            .is_some_and(ColorSpace::is_recovered_indexed);
 
         let interpolate = dict
             .get::<bool>(I)
@@ -557,6 +561,10 @@ impl<'a> ImageXObject<'a> {
 
         if width == 0 || height == 0 {
             return None;
+        }
+
+        if malformed_indexed {
+            warning_sink(InterpreterWarning::MalformedIndexedImage);
         }
 
         Some(Self {

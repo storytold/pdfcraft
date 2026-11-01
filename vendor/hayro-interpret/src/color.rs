@@ -336,6 +336,12 @@ impl ColorSpace {
         matches!(self.0.as_ref(), ColorSpaceType::Indexed(_))
     }
 
+    /// PdfCraft patch (60): whether this is an indexed colour space that broke ISO 32000-2
+    /// §8.6.6.3 and was recovered (see `Indexed::new`).
+    pub(crate) fn is_recovered_indexed(&self) -> bool {
+        matches!(self.0.as_ref(), ColorSpaceType::Indexed(i) if i.recovered)
+    }
+
     /// Get the default decode array for the color space.
     pub(crate) fn default_decode_arr(&self, n: f32) -> SmallVec<[(f32, f32); 4]> {
         match self.0.as_ref() {
@@ -985,106 +991,112 @@ impl ToRgb for Lab {
 
 #[derive(Debug, Clone)]
 pub(crate) struct Indexed {
+    /// `hival + 1` entries of the base's component count each.
     values: Vec<Vec<f32>>,
     hival: u8,
     base: Box<ColorSpace>,
+    /// PdfCraft patch (60): the space broke ISO 32000-2 §8.6.6.3 and was recovered (see
+    /// `Indexed::new`).
+    recovered: bool,
 }
 
 impl Indexed {
+    /// PdfCraft patch (60): ISO 32000-2 §8.6.6.3 says `hival` "shall be an integer" no greater
+    /// than 255 and the lookup table "shall be m × (hival + 1) bytes long", but not how a reader
+    /// recovers when a file breaks this. Other readers draw such a space, and so does this:
+    /// - a real `hival` is truncated toward zero (upstream read it so too);
+    /// - a `hival` past 255 is taken as 255;
+    /// - a lookup table that is short, missing, or not a string or decodable stream is padded
+    ///   with zero bytes to m × (hival + 1), so the entries it has keep their colours.
+    ///
+    /// Any of these sets `recovered`, which the image path reports. A `hival` below zero (once
+    /// truncated), or not a number, has no reading: the space cannot be read, as upstream, and
+    /// `has_unusable_hival` lets the image path report it.
+    ///
+    /// Upstream treated a short table or a `hival` past `u32` as unreadable, and an image that
+    /// named the space fell back to DeviceGray: its indices were drawn as near-black grey
+    /// levels, even indices whose entries were present.
     fn new(array: &Array<'_>, cache: &Cache) -> Option<Self> {
         let mut iter = array.flex_iter();
         // Skip name
         let _ = iter.next::<Name<'_>>()?;
         let base_color_space = ColorSpace::new(iter.next::<Object<'_>>()?, cache)?;
-        let hival = iter.next::<u32>()?.min(u8::MAX as u32) as u8;
+        let (hival, hival_recovered) = indexed_hival(iter.next::<object::Number>()?)?;
 
-        let values = {
-            // PdfCraft patch (60): read once and then by type, so a string lookup given by an
-            // indirect reference is found (a failed stream read had already consumed the
-            // reference).
-            let data = iter.next::<Object<'_>>().and_then(indexed_lookup)?;
+        let num_components = usize::from(base_color_space.num_components());
+        // At most 256 entries of at most 255 components: 65 280 values whatever the input.
+        let entries = usize::from(hival) + 1;
 
-            let num_components = base_color_space.num_components();
-
-            let mut byte_iter = data.iter().copied();
-
-            let mut vals = vec![];
-            for _ in 0..=hival {
-                let mut temp = vec![];
-
-                for _ in 0..num_components {
-                    temp.push(byte_iter.next()? as f32 / 255.0);
-                }
-
-                vals.push(temp);
-            }
-
-            vals
-        };
+        // PdfCraft patch (60): read once and then by type, so a string lookup given by an
+        // indirect reference is found (a failed stream read had already consumed the
+        // reference).
+        let data = iter
+            .next::<Object<'_>>()
+            .and_then(|o| indexed_lookup(o, cache));
+        let data: &[u8] = data.as_deref().unwrap_or_default();
+        let mut bytes = data.iter().copied();
+        let values: Vec<Vec<f32>> = (0..entries)
+            .map(|_| {
+                (0..num_components)
+                    .map(|_| f32::from(bytes.next().unwrap_or(0)) / 255.0)
+                    .collect()
+            })
+            .collect();
+        // `entries × num_components` cannot overflow (see above); a product that somehow did
+        // not fit counts as short, and the table is padded all the same.
+        let short = entries
+            .checked_mul(num_components)
+            .is_none_or(|needed| data.len() < needed);
 
         Some(Self {
             values,
             hival,
             base: Box::new(base_color_space),
+            recovered: hival_recovered || short,
         })
     }
 }
 
-/// PdfCraft patch (60): whether `object` is an `/Indexed` colour space that ISO 32000-2
-/// §8.6.6.3 rules out: `hival` is not an integer in 0..=255, or the lookup table is missing or
-/// shorter than m × (hival + 1) bytes for a base space of m components. A longer table is fine
-/// (its first bytes are used). The lookup may be a string or a stream, given in place or by
-/// reference. An Indexed space whose base cannot be read is judged only by its `hival` (the
-/// table's size depends on the base), so with a usable `hival` its existing handling is
-/// unchanged.
-///
-/// Upstream treated such a space as unreadable, and an image that named it then fell back to
-/// DeviceGray: its indices were drawn as near-black grey levels, even indices whose entries
-/// were present. The image path uses this to skip the image with a warning instead.
-pub(crate) fn is_malformed_indexed(object: &Object<'_>, cache: &Cache) -> bool {
+/// PdfCraft patch (60): an Indexed space's `hival` (ISO 32000-2 §8.6.6.3) as drawn, and whether
+/// it had to be recovered: a real is truncated toward zero and a value past 255 is taken as 255.
+/// `None` for a value below zero once truncated, or one that is not finite.
+fn indexed_hival(number: object::Number) -> Option<(u8, bool)> {
+    let value = number.as_f64();
+    let whole = value.trunc();
+    // NaN fails this test too.
+    if !(whole >= 0.0 && whole.is_finite()) {
+        return None;
+    }
+    let clamped = whole.min(f64::from(u8::MAX));
+    // `clamped` is a whole number in 0..=255, so the cast is exact.
+    Some((clamped as u8, clamped != value))
+}
+
+/// PdfCraft patch (60): whether `object` is an `/Indexed` colour space array whose `hival` has no
+/// reading (below zero, or not a number), which `Indexed::new` cannot recover. Reads the array's
+/// first and third entries only; the lookup table is not touched.
+pub(crate) fn has_unusable_hival(object: &Object<'_>) -> bool {
     let Object::Array(array) = object else {
         return false;
     };
     let mut iter = array.flex_iter();
-    let Some(family) = iter.next::<Name<'_>>() else {
-        return false;
-    };
-    if !matches!(family.deref(), INDEXED | I) {
+    if !iter
+        .next::<Name<'_>>()
+        .is_some_and(|family| matches!(family.deref(), INDEXED | I))
+    {
         return false;
     }
-    let base = iter.next::<Object<'_>>();
-    let Some(hival) = iter.next::<object::Number>().and_then(|n| {
-        let value = n.as_f64();
-        // A real with a fraction, a negative number or one past 255 is not a usable `hival`
-        // (NaN and the infinities fail the range test too).
-        (value.fract() == 0.0 && (0.0..=255.0).contains(&value)).then(|| n.as_i64())
-    }) else {
-        // Judged before the base: an unusable `hival` rules the space out whatever the base.
-        return true;
-    };
-    let Some(base) = base.and_then(|o| ColorSpace::new(o, cache)) else {
-        return false;
-    };
-    // `hival` is at most 255 here, so this cannot overflow; it is checked all the same, and a
-    // size that did not fit would rule the space out rather than wrap.
-    let Some(needed) = usize::try_from(hival)
-        .ok()
-        .and_then(|h| h.checked_add(1))
-        .and_then(|entries| entries.checked_mul(usize::from(base.num_components())))
-    else {
-        return true;
-    };
-    let lookup_len = iter
-        .next::<Object<'_>>()
-        .and_then(indexed_lookup)
-        .map(|d| d.len());
-    lookup_len.is_none_or(|len| len < needed)
+    let _base = iter.next::<Object<'_>>();
+    iter.next::<object::Number>()
+        .and_then(indexed_hival)
+        .is_none()
 }
 
 /// PdfCraft patch (60): an Indexed space's lookup table, a byte string or a stream (ISO 32000-2
 /// §8.6.6.3), with a stream's filters applied. `None` for any other object or a stream that
-/// cannot be decoded.
-fn indexed_lookup(lookup: Object<'_>) -> Option<Cow<'_, [u8]>> {
+/// cannot be decoded. Each call is counted on `cache` (`Cache::indexed_lookup_reads`).
+fn indexed_lookup<'a>(lookup: Object<'a>, cache: &Cache) -> Option<Cow<'a, [u8]>> {
+    cache.count_indexed_lookup_read();
     match lookup {
         Object::Stream(s) => s.decoded().ok(),
         Object::String(s) => Some(Cow::Owned(s.to_vec())),

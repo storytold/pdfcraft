@@ -96,10 +96,10 @@ fn a_clean_page_renders_to_the_png_alone() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// An image whose Indexed lookup table is too short (ISO 32000-2 §8.6.6.3) is skipped, and
+/// An image whose Indexed lookup table is too short (ISO 32000-2 §8.6.6.3) is drawn padded, and
 /// `page_render` says so in the words `pdfcraft-cli render` prints.
 #[test]
-fn page_render_reports_a_skipped_malformed_indexed_image() {
+fn page_render_reports_a_recovered_malformed_indexed_image() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-render-warnings-indexed-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -119,7 +119,7 @@ fn page_render_reports_a_skipped_malformed_indexed_image() {
     let doc = open(&mut a, "indexed.pdf");
     let out = a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72 })).unwrap();
     let Some(Content::Json(report)) = out.get(1) else { panic!("expected the warnings as JSON: {out:?}") };
-    assert_eq!(report["warnings"], json!(["an image with a malformed Indexed colour table was not drawn"]));
+    assert_eq!(report["warnings"], json!(["an image with a malformed Indexed colour table was drawn, and its colours may be wrong"]));
     let _ = std::fs::remove_dir_all(dir);
 }
 

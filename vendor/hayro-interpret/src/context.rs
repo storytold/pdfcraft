@@ -153,6 +153,13 @@ impl<'a> InterpreterCache<'a> {
     pub fn icc_profile_reads(&self) -> usize {
         self.object_cache.icc_profile_reads()
     }
+
+    /// PdfCraft patch (60): how many `/Indexed` lookup tables were read through this cache, for
+    /// diagnostics and tests. A colour space named by a resource is built, and its table read,
+    /// once however many images or colours use it.
+    pub fn indexed_lookup_reads(&self) -> usize {
+        self.object_cache.indexed_lookup_reads()
+    }
 }
 
 /// A per-page interpretation context that borrows shared data from an [`InterpreterCache`].
