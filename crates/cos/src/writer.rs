@@ -166,11 +166,17 @@ pub struct SaveOptions {
     /// before adding it, with [`Document::free_unlinked_additions`]. Full saves always leave
     /// these out.
     pub drop_unlinked: bool,
+    /// Entropy for the file identifier of a rewrite that asks for a new one (see
+    /// [`Document::require_full_save_with_new_id`]). Given, the identifier depends only on this and
+    /// on the written bytes, so the same save gives the same file; tests use it to pin output.
+    /// Without it, fresh entropy from the host (the operating system on native targets, the
+    /// browser on WebAssembly) is mixed in.
+    pub id_entropy: Option<[u8; 16]>,
 }
 
 impl Default for SaveOptions {
     fn default() -> Self {
-        Self { mod_date: None, id_seed: 0x5052_494E_5443_5241, object_streams: true, drop_unlinked: false }
+        Self { mod_date: None, id_seed: 0x5052_494E_5443_5241, object_streams: true, drop_unlinked: false, id_entropy: None }
     }
 }
 
@@ -381,6 +387,9 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     }
     if reader.document.output_security().0.is_none() {
         ensure_id(&mut trailer, opts, reader.document.bytes());
+    }
+    if doc.new_id_required() {
+        regenerate_id(&mut trailer, opts, &out, reader.document.output_security().0.is_some());
     }
     if opts.object_streams {
         write_xref_stream(&mut out, 0, &mut trailer, rows, next);
@@ -632,6 +641,136 @@ fn ensure_id(trailer: &mut Dict, opts: &SaveOptions, content: &[u8]) {
     trailer.set(b"ID".to_vec(), Object::Array(vec![s.clone(), s]));
 }
 
+/// Give a rewritten file a new identifier (§14.4), so that a redacted or sanitized copy does not
+/// claim to be its source. An encrypted file keeps the first string, which its key is derived from,
+/// and gets a new second one. When there is no such string (no `/ID`, one entry, or a first entry
+/// that is not a string) the reader takes the empty string as the key input (`Document::first_id`),
+/// so the empty string is written first and the key stays valid.
+fn regenerate_id(trailer: &mut Dict, opts: &SaveOptions, written: &[u8], encrypted: bool) {
+    let fresh = Object::String(PdfString { bytes: new_id_bytes(opts, written), hex: true });
+    let pair = if encrypted {
+        let first = match trailer.get(b"ID") {
+            Some(Object::Array(a)) => match a.first() {
+                Some(Object::String(s)) => Object::String(s.clone()),
+                _ => Object::String(PdfString { bytes: Vec::new(), hex: true }),
+            },
+            _ => Object::String(PdfString { bytes: Vec::new(), hex: true }),
+        };
+        vec![first, fresh]
+    } else {
+        vec![fresh.clone(), fresh]
+    };
+    trailer.set(b"ID".to_vec(), Object::Array(pair));
+}
+
+/// FNV-1a over 64 bits, with its published offset basis and prime. The identifier is built from it
+/// rather than from `std`'s `DefaultHasher`, whose algorithm the standard library does not specify.
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+fn fnv1a(state: u64, bytes: &[u8]) -> u64 {
+    bytes.iter().fold(state, |h, b| (h ^ u64::from(*b)).wrapping_mul(FNV_PRIME))
+}
+
+/// Sixteen bytes for a file identifier, one 8-byte half per lane. The bytes are a pure function of
+/// `SaveOptions::id_entropy`, `id_seed` and the written file: the hash is FNV-1a (above) and every
+/// integer is written as a fixed-width big-endian value, so the same input gives the same identifier
+/// on every platform and toolchain. Without entropy only the salt changes (see `id_salt`). FNV is
+/// not collision-resistant against chosen content; the identifier only has to be unique, not secret.
+/// Every written byte is hashed, once, in a single traversal of the output.
+fn new_id_bytes(opts: &SaveOptions, written: &[u8]) -> Vec<u8> {
+    let salt = id_salt(opts);
+    let length = u64::try_from(written.len()).unwrap_or(u64::MAX);
+    let mut halves = [0u8, 1].map(|lane| {
+        let mut h = fnv1a(FNV_OFFSET, &salt.to_be_bytes());
+        h = fnv1a(h, &[lane]);
+        h = fnv1a(h, &opts.id_seed.to_be_bytes());
+        fnv1a(h, &length.to_be_bytes())
+    });
+    for chunk in written.chunks(4096) {
+        for h in &mut halves {
+            *h = fnv1a(*h, chunk);
+        }
+    }
+    halves.iter().flat_map(|h| h.to_be_bytes()).collect()
+}
+
+/// The salt of an identifier. With caller entropy it is a fixed hash of that entropy (deterministic,
+/// for tests and callers who pin output). Without it the salt is fresh: on WebAssembly from the
+/// browser ([`browser_salt`], so two fresh web apps that write the same bytes cannot share an
+/// identifier), and elsewhere from the standard library's random hash keys — seeded by the operating
+/// system, so separate processes differ — mixed with a process-wide counter, which separates
+/// successive calls in one process.
+fn id_salt(opts: &SaveOptions) -> u64 {
+    use std::hash::BuildHasher;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    match &opts.id_entropy {
+        Some(entropy) => fnv1a(FNV_OFFSET, entropy),
+        None => {
+            #[cfg(target_arch = "wasm32")]
+            if let Some(salt) = browser_salt() {
+                return salt;
+            }
+            std::collections::hash_map::RandomState::new().hash_one(COUNTER.fetch_add(1, Ordering::Relaxed))
+        }
+    }
+}
+
+/// One byte from one `Math.random` draw: the draw (in [0, 1)) scaled to [0, 256), integer part
+/// taken. The quotient is in [0, 256), so a saturating cast never wraps; a NaN or infinite draw
+/// (which a conforming engine never returns) folds in as 0. No input can panic here.
+#[cfg(any(target_arch = "wasm32", test))]
+fn draw_byte(random: f64) -> u8 {
+    (random * 256.0).floor().rem_euclid(256.0) as u8
+}
+
+/// The `Math.random` fallback's mixing: one salt byte per draw (see [`draw_byte`]), folded through
+/// FNV-1a exactly like the Web Crypto bytes, so all sixteen bytes of the fold carry entropy from
+/// the draws. Pure and platform-independent, so the native test target can exercise it; on wasm
+/// each draw comes from `Math.random`.
+#[cfg(any(target_arch = "wasm32", test))]
+fn salt_from_draws(draws: &[f64; 16]) -> u64 {
+    let mut bytes = [0u8; 16];
+    for (byte, draw) in bytes.iter_mut().zip(draws) {
+        *byte = draw_byte(*draw);
+    }
+    fnv1a(FNV_OFFSET, &bytes)
+}
+
+/// Fresh salt entropy from the browser, on WebAssembly. `crypto.getRandomValues` (Web Crypto, the
+/// browser's secure generator, available in windows and workers alike) gives sixteen bytes, folded
+/// into one salt. When that API is missing or refuses the call, `Math.random` is mixed instead
+/// ([`salt_from_draws`]: sixteen draws, so the salt's full width carries entropy) — browsers seed
+/// it afresh for every document, so a fresh instance still cannot reproduce another's salt. Only
+/// where neither is reachable does the caller fall back to its `RandomState` salt, whose keys are
+/// fixed at compile time on `wasm32-unknown-unknown` — the state before browser entropy was wired
+/// in.
+#[cfg(target_arch = "wasm32")]
+fn browser_salt() -> Option<u64> {
+    use wasm_bindgen::JsCast;
+    let crypto = js_sys::Reflect::get(&js_sys::global(), &wasm_bindgen::JsValue::from_str("crypto"))
+        .ok()
+        .filter(|crypto| !crypto.is_undefined() && !crypto.is_null());
+    if let Some(crypto) = crypto {
+        let fill = js_sys::Reflect::get(&crypto, &wasm_bindgen::JsValue::from_str("getRandomValues"))
+            .ok()
+            .and_then(|fill| fill.dyn_into::<js_sys::Function>().ok());
+        if let Some(fill) = fill {
+            let bytes = js_sys::Uint8Array::new_with_length(16);
+            if fill.call1(&crypto, &bytes).is_ok() {
+                return Some(fnv1a(FNV_OFFSET, &bytes.to_vec()));
+            }
+        }
+    }
+    // Web Crypto is missing or refused the call: degrade to `Math.random` rather than giving up.
+    let mut draws = [0.0; 16];
+    for draw in &mut draws {
+        *draw = js_sys::Math::random();
+    }
+    Some(salt_from_draws(&draws))
+}
+
 /// A PDF date string for "now" given seconds since the Unix epoch (UTC).
 pub fn pdf_date(unix_secs: i64) -> String {
     let (days, secs) = (unix_secs.div_euclid(86_400), unix_secs.rem_euclid(86_400));
@@ -664,6 +803,48 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
+
+    #[test]
+    fn fnv1a_is_the_published_64_bit_algorithm() {
+        // Published FNV-1a (64 bit) test vectors, so the identifier can be reproduced outside this crate.
+        assert_eq!(super::fnv1a(super::FNV_OFFSET, b""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(super::fnv1a(super::FNV_OFFSET, b"a"), 0xaf63_dc4c_8601_ec8c);
+        assert_eq!(super::fnv1a(super::FNV_OFFSET, b"foobar"), 0x8594_4171_f739_67e8);
+    }
+
+    #[test]
+    fn math_random_draws_fill_the_whole_salt_width() {
+        // Draw i = (i + 1/2)/256 scales to the integer i, so the fold's byte i proves draw i landed
+        // there: all sixteen bytes carry their own draw's entropy (the fallback once shifted four
+        // draws into one word, leaving the other four bytes of the fold constant).
+        let draws: [f64; 16] = std::array::from_fn(|i| (i as f64 + 0.5) / 256.0);
+        let bytes: Vec<u8> = (0..16).collect();
+        assert_eq!(super::salt_from_draws(&draws), super::fnv1a(super::FNV_OFFSET, &bytes));
+    }
+
+    #[test]
+    fn every_math_random_draw_reaches_the_salt() {
+        let base = [0.5; 16];
+        let baseline = super::salt_from_draws(&base);
+        for i in 0..16 {
+            let mut draws = base;
+            draws[i] = 0.75;
+            assert_ne!(super::salt_from_draws(&draws), baseline, "draw {i} did not reach the salt");
+        }
+    }
+
+    #[test]
+    fn a_math_random_draw_outside_its_range_still_mixes_without_panicking() {
+        // A conforming `Math.random` stays in [0, 1), but the mixing must not panic outside it.
+        assert_eq!(super::draw_byte(0.0), 0);
+        assert_eq!(super::draw_byte(0.5), 128);
+        assert_eq!(super::draw_byte(255.5 / 256.0), 255);
+        assert_eq!(super::draw_byte(-0.5 / 256.0), 255);
+        assert_eq!(super::draw_byte(-1.0), 0);
+        assert_eq!(super::draw_byte(2.0), 0);
+        assert_eq!(super::draw_byte(f64::NAN), 0);
+        assert_eq!(super::draw_byte(f64::INFINITY), 0);
+    }
 
     use super::*;
     use crate::Lexer;

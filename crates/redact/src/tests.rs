@@ -1687,6 +1687,87 @@ fn inline_outline_children_count_towards_the_total_budget() {
     assert_eq!(scan(&doc).iter().find(|c| c.0 == Hidden::Bookmarks), Some(&(Hidden::Bookmarks, 100_000)));
 }
 
+/// A redacted copy and a sanitized copy are different files from their source: neither may keep
+/// the source's file identifier (ISO 32000-2 §14.4). A save without the rewrite keeps it.
+#[test]
+fn a_redacted_or_sanitized_copy_gets_a_new_identifier() {
+    fn with_id(mut doc: Document) -> Document {
+        let id = Object::Array(vec![
+            Object::String(pdfcraft_cos::PdfString::literal(vec![0x11; 16])),
+            Object::String(pdfcraft_cos::PdfString::literal(vec![0x22; 16])),
+        ]);
+        doc.trailer_mut().set(b"ID".to_vec(), id);
+        doc
+    }
+    fn saved_ids(doc: &Document) -> Vec<Vec<u8>> {
+        let saved = Document::open(Arc::new(write_full(doc, &SaveOptions::default()).unwrap())).unwrap();
+        match saved.trailer().get(b"ID") {
+            Some(Object::Array(a)) => a.iter().map(|s| s.as_string().map(|s| s.bytes.clone()).unwrap_or_default()).collect(),
+            _ => Vec::new(),
+        }
+    }
+    let source = vec![vec![0x11; 16], vec![0x22; 16]];
+    let assert_new = |ids: &[Vec<u8>], what: &str| {
+        assert_eq!(ids.len(), 2, "{what}");
+        for (new, old) in ids.iter().zip(&source) {
+            assert_eq!(new.len(), 16, "{what}");
+            assert_ne!(new, old, "{what}: the copy keeps the source's identifier");
+        }
+    };
+
+    // Redaction: the same save keeps the identifier until the redaction asks for a new one.
+    let mut doc = with_id(one_page(b"BT /F1 10 Tf 10 100 Td (Secret) Tj ET", "", vec![]));
+    mark(&mut doc, 0, &[[0.0, 95.0, 300.0, 110.0]], "");
+    assert_eq!(saved_ids(&doc), source, "before the redaction");
+    apply(&mut doc, None).unwrap();
+    assert!(doc.new_id_required());
+    assert_new(&saved_ids(&doc), "redaction");
+
+    // Sanitizing with hidden information to remove.
+    let mut doc = with_id(hidden_fixture());
+    crate::sanitize::sanitize(&mut doc).unwrap();
+    assert!(doc.new_id_required());
+    assert_new(&saved_ids(&doc), "sanitizing");
+
+    // Sanitizing a file with nothing hidden still rewrites it, so it gets a new identifier too.
+    let mut doc = with_id(one_page(b"BT ET", "", vec![]));
+    assert!(crate::sanitize::sanitize(&mut doc).unwrap().is_empty());
+    assert_new(&saved_ids(&doc), "sanitizing without hidden information");
+}
+
+/// A copy that lost hidden information through `remove_hidden` itself is a different file from its
+/// source, so it does not keep the source's identifier either: the remove-hidden edit and the
+/// optimizer's discard option call `remove_hidden` directly, not through `sanitize`.
+#[test]
+fn a_remove_hidden_copy_gets_a_new_identifier() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    let with_id = |mut doc: Document| {
+        doc.trailer_mut().set(
+            b"ID".to_vec(),
+            Object::Array(vec![
+                Object::String(pdfcraft_cos::PdfString::literal(vec![0x11; 16])),
+                Object::String(pdfcraft_cos::PdfString::literal(vec![0x22; 16])),
+            ]),
+        );
+        doc
+    };
+    let saved_ids = |doc: &Document| {
+        let saved = Document::open(Arc::new(write_full(doc, &SaveOptions::default()).unwrap())).unwrap();
+        match saved.trailer().get(b"ID") {
+            Some(Object::Array(a)) => a.iter().map(|s| s.as_string().map(|s| s.bytes.clone()).unwrap_or_default()).collect::<Vec<_>>(),
+            _ => Vec::new(),
+        }
+    };
+
+    let mut doc = with_id(hidden_fixture());
+    assert_eq!(remove_hidden(&mut doc, &[Hidden::Metadata]).unwrap().len(), 1, "the fixture has metadata to remove");
+    assert!(doc.new_id_required());
+    let ids = saved_ids(&doc);
+    assert_eq!(ids.len(), 2);
+    assert_ne!(ids[0], vec![0x11; 16], "the copy keeps the source's first identifier string");
+    assert_ne!(ids[1], vec![0x22; 16], "the copy keeps the source's second identifier string");
+}
+
 /// Issue #2447: in a tagged PDF the structure tree points at the link and the comment it tags
 /// (`/OBJR`). Removing them must drop those references too, or the full rewrite keeps the
 /// annotations, the URL and the comment text included, while the page no longer lists them.
