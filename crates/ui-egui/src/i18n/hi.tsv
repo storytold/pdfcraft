@@ -2816,6 +2816,11 @@ theme	Appearance	स्वरूप
 	Remove crop	क्रॉप हटाएँ
 	Send backward	पीछे भेजें
 	Send to back	सबसे पीछे भेजें
+	Print area…	प्रिंट क्षेत्र…
+	Save as image	छवि के रूप में सहेजें
+	Save as image…	छवि के रूप में सहेजें…
+	Selected area (page {page}, {size})	चयनित क्षेत्र (पृष्ठ {page}, {size})
+	The selected area is no longer on a page of this document.	चयनित क्षेत्र अब इस दस्तावेज़ के किसी पृष्ठ पर नहीं है।
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	आज

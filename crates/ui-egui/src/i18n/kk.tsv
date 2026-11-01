@@ -2537,6 +2537,11 @@ animation effects	Off	Өшірулі
 	Edit this PDF	Осы PDF файлын түзету
 	Export this PDF	Осы PDF файлын экспорттау
 	Find text or tools	Мәтінді немесе құралдарды табу
+	Print area…	Аймақты басып шығару…
+	Save as image…	Кескін ретінде сақтау…
+	Save as image	Кескін ретінде сақтау
+	Selected area (page {page}, {size})	Таңдалған аймақ ({page}-бет, {size})
+	The selected area is no longer on a page of this document.	Таңдалған аймақ енді осы құжаттың ешбір бетінде жоқ.
 	Create & Edit	Жасау және өңдеу
 	Review & Compare	Шолу және салыстыру
 	Forms & Signatures	Пішіндер және қолтаңбалар

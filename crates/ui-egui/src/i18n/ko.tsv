@@ -2816,6 +2816,11 @@ theme	Appearance	모양
 	Remove crop	자르기 제거
 	Send backward	뒤로 보내기
 	Send to back	맨 뒤로 보내기
+	Print area…	인쇄 영역…
+	Save as image	이미지로 저장
+	Save as image…	이미지로 저장…
+	Selected area (page {page}, {size})	선택 영역 ({page}페이지, {size})
+	The selected area is no longer on a page of this document.	선택한 영역이 더 이상 이 문서의 페이지에 없습니다.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	오늘

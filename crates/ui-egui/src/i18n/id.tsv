@@ -2817,6 +2817,11 @@ theme	Appearance	Tampilan
 	Remove crop	Hapus pangkasan
 	Send backward	Mundur Selangkah
 	Send to back	Kirim ke Belakang
+	Print area…	Area cetak…
+	Save as image	Simpan sebagai gambar
+	Save as image…	Simpan sebagai gambar…
+	Selected area (page {page}, {size})	Area terpilih (halaman {page}, {size})
+	The selected area is no longer on a page of this document.	Area terpilih tidak lagi berada di halaman dokumen ini.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hari ini

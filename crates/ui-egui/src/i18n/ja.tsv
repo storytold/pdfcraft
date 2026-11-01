@@ -2539,6 +2539,11 @@ animation effects	Off	オフ
 	Edit this PDF	この PDF を編集
 	Export this PDF	この PDF を書き出す
 	Find text or tools	テキストまたはツールを検索
+	Print area…	範囲を印刷…
+	Save as image…	画像として保存…
+	Save as image	画像として保存
+	Selected area (page {page}, {size})	選択範囲（{page} ページ、{size}）
+	The selected area is no longer on a page of this document.	選択範囲はもうこの文書のページ上にありません。
 	Create & Edit	作成と編集
 	Review & Compare	レビューと比較
 	Forms & Signatures	フォームと署名

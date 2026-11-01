@@ -212,7 +212,7 @@ pub(crate) fn body(
                 .response
                 .labelled_by(paper_label.id);
                 // Label stock gets the label layout (cut, turned upright, fitted).
-                if d.paper != before && d.paper == print::LABEL_PAPER {
+                if d.paper != before && d.paper == print::LABEL_PAPER && d.which != Which::Area {
                     d.paper_before_label = Some(before);
                     d.handling = Handling::Label;
                     d.sheet = 0;
@@ -270,6 +270,17 @@ pub(crate) fn body(
                     d.which = Which::Range;
                 }
             });
+            // Offered only when an area was chosen with Snapshot (its menu's Print area…).
+            if let Some((page, a)) = d.area {
+                let label = crate::i18n::fmt(
+                    tl!("Selected area (page {page}, {size})"),
+                    &[("page", &(page + 1).to_string()), ("size", &d.units.size(a[2] - a[0], a[3] - a[1]))],
+                );
+                if widgets::radio_value(ui, &mut d.which, Which::Area, label).clicked() {
+                    // Leaving Label this way gives back the paper it replaced, as its tabs do.
+                    d.set_handling(Handling::Size);
+                }
+            }
             // Offered only when pages were picked before the dialog opened.
             if !d.selected.is_empty() {
                 let label = format!("{} ({})", tl!("Selected pages"), d.selected.len());
@@ -297,7 +308,9 @@ pub(crate) fn body(
                     (Handling::Booklet, tl!("Booklet")),
                     (Handling::Label, tl!("Label")),
                 ] {
-                    if widgets::mode_tab(ui, label, d.handling == h).clicked() {
+                    // A selected area prints only with Size.
+                    let offered = d.which != Which::Area || h == Handling::Size;
+                    if ui.add_enabled_ui(offered, |ui| widgets::mode_tab(ui, label, d.handling == h)).inner.clicked() {
                         d.set_handling(h);
                     }
                 }
