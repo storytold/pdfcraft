@@ -375,6 +375,11 @@ pub(crate) fn text_string(s: &pdfcraft_cos::PdfString) -> String {
 
 /// The text values of an XMP stream, or `None` when it can't be read.
 fn xmp_values(doc: &Document, o: &Object) -> Option<Vec<String>> {
+    xmp_text(doc, o).map(|t| xml_values(&t))
+}
+
+/// The decoded text of an XMP stream, or `None` when it can't be read.
+pub(crate) fn xmp_text(doc: &Document, o: &Object) -> Option<String> {
     let Object::Stream(s) = &*doc.resolve(o) else { return None };
     // Decoded strictly: a tolerant decode returns whatever came before the damage, and the part
     // after it would go unsearched. A chain of more than one filter has no strict decoder here,
@@ -384,7 +389,7 @@ fn xmp_values(doc: &Document, o: &Object) -> Option<Vec<String>> {
         return None;
     }
     let bytes = s.decoded_first_filter_strict(MAX_XMP_BYTES).ok()?;
-    decode_xmp(&bytes).map(|t| xml_values(&t))
+    decode_xmp(&bytes)
 }
 
 /// What the removed text is looked for with, and the searching left to do it.
@@ -461,19 +466,30 @@ impl Search {
     }
 }
 
+/// What [`scrub`] did.
+#[derive(Debug, Default)]
+pub(crate) struct Scrubbed {
+    /// `/Info` entries and XMP streams removed.
+    pub(crate) removed: usize,
+    /// What became of the PDF/A and PDF/UA identification of a removed catalog packet.
+    pub(crate) identification: crate::Identification,
+}
+
 /// Remove the metadata that still holds `removed` text: matching `/Info` entries, and the
 /// catalog's and pages' XMP streams that mention it. `complete` is false when the collection of
 /// removed text was cut short; then, as when the terms themselves exceed their limits, every
-/// `/Info` string and every XMP stream goes. Returns how many entries and streams went.
-pub(crate) fn scrub(doc: &mut Document, removed: &[String], complete: bool) -> Result<usize, pdfcraft_cos::CosError> {
+/// `/Info` string and every XMP stream goes. A removed catalog packet's PDF/A and PDF/UA
+/// identification is written back in a packet of its own ([`crate::identification`]).
+pub(crate) fn scrub(doc: &mut Document, removed: &[String], complete: bool) -> Result<Scrubbed, pdfcraft_cos::CosError> {
     scrub_within(doc, removed, complete, MAX_WORK)
 }
 
 /// [`scrub`] with the searching it may do given, so tests can run out of it.
-pub(crate) fn scrub_within(doc: &mut Document, removed: &[String], complete: bool, limit: usize) -> Result<usize, pdfcraft_cos::CosError> {
+pub(crate) fn scrub_within(doc: &mut Document, removed: &[String], complete: bool, limit: usize) -> Result<Scrubbed, pdfcraft_cos::CosError> {
     let search = Search::new(removed, complete, limit);
+    let mut out = Scrubbed::default();
     if search.is_nothing() {
-        return Ok(0);
+        return Ok(out);
     }
     let mut n = 0;
 
@@ -496,16 +512,30 @@ pub(crate) fn scrub_within(doc: &mut Document, removed: &[String], complete: boo
     }
 
     // XMP on the catalog and on every page.
+    let root = doc.root();
     for holder in catalog_and_pages(doc) {
         let Some(xmp) = doc.get(holder).as_dict().and_then(|d| d.get(b"Metadata").cloned()) else { continue };
         if search.xmp(doc, &xmp) {
-            doc.update_dict(holder, |d| {
-                d.remove(b"Metadata");
+            // The catalog's packet says whether the file conforms to PDF/A or PDF/UA: that much
+            // is written back, in a packet of its own.
+            let replacement = if Some(holder) == root {
+                let (id, packet) = crate::identification::keep(doc, &xmp, &search);
+                out.identification = id;
+                packet.map(|p| doc.add(Object::Stream(p)))
+            } else {
+                None
+            };
+            doc.update_dict(holder, |d| match replacement {
+                Some(r) => d.set(b"Metadata".to_vec(), Object::Ref(r)),
+                None => {
+                    d.remove(b"Metadata");
+                }
             })?;
             n += 1;
         }
     }
-    Ok(n)
+    out.removed = n;
+    Ok(out)
 }
 
 /// The catalog and the pages: the objects whose XMP [`scrub`] checks.

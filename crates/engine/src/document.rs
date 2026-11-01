@@ -82,6 +82,16 @@ pub enum EditNotice {
     /// [`RedactionElsewhere`](crate::RedactionElsewhere)). Only when one is counted, or the text
     /// couldn't be searched for.
     RedactionElsewhere(pdfcraft_redact::Elsewhere),
+    /// Applying redactions removed the document's XMP packet, which held the removed text and
+    /// said the file conforms to PDF/A or PDF/UA: each claim was written back in a packet of its
+    /// own, or lost (see [`RedactionIdentification`](crate::RedactionIdentification)).
+    RedactionIdentification(pdfcraft_redact::Identification),
+}
+
+/// The standards whose identification `id` has as `claim`: "PDF/A", "PDF/UA" or both, joined.
+pub(crate) fn standards_with(id: &pdfcraft_redact::Identification, claim: pdfcraft_redact::Claim) -> Option<String> {
+    let names: Vec<&str> = [("PDF/A", id.pdfa), ("PDF/UA", id.pdfua)].into_iter().filter(|(_, c)| *c == claim).map(|(n, _)| n).collect();
+    (!names.is_empty()).then(|| names.join(" and "))
 }
 
 impl std::fmt::Display for EditNotice {
@@ -97,6 +107,17 @@ impl std::fmt::Display for EditNotice {
                 )
             }
             EditNotice::RedactionElsewhere(e) => elsewhere_text(e, f),
+            EditNotice::RedactionIdentification(id) => {
+                use pdfcraft_redact::Claim;
+                write!(f, "the document's XMP metadata held the redacted text and was removed")?;
+                if let Some(kept) = standards_with(id, Claim::Kept) {
+                    write!(f, "; its {kept} identification was written back on its own")?;
+                }
+                match standards_with(id, Claim::Lost) {
+                    Some(lost) => write!(f, "; its {lost} identification couldn't be kept, so the file no longer says it conforms to {lost}"),
+                    None => Ok(()),
+                }
+            }
         }
     }
 }
@@ -221,6 +242,16 @@ impl Document {
     pub fn redaction_elsewhere(&self) -> Option<pdfcraft_redact::Elsewhere> {
         self.edit_notices.iter().find_map(|n| match n {
             EditNotice::RedactionElsewhere(e) => Some(*e),
+            _ => None,
+        })
+    }
+
+    /// What became of the PDF/A and PDF/UA identification when the last edit's applied
+    /// redactions removed the document's XMP packet ([`EditNotice::RedactionIdentification`]),
+    /// or `None` when no packet that made such a claim was removed.
+    pub fn redaction_identification(&self) -> Option<pdfcraft_redact::Identification> {
+        self.edit_notices.iter().find_map(|n| match n {
+            EditNotice::RedactionIdentification(id) => Some(*id),
             _ => None,
         })
     }

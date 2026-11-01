@@ -4381,6 +4381,40 @@ fn redact_apply_reports_places_that_still_hold_the_removed_text() {
         .map(|b| b["title"].as_str().unwrap().to_string())
         .collect();
     assert_eq!(titles, ["Bluefin plans", "Annual figures"], "reported, not changed");
+    assert_eq!(r["identification"], json!({ "pdfa": "none", "pdfua": "none" }), "{r}");
+}
+
+/// #2539 review: when `redact_apply` removes the document's XMP packet because it names the
+/// redacted word, `identification` says the PDF/A-2b and PDF/UA-1 identification it held was
+/// written back, and the warnings say it too.
+#[test]
+fn redact_apply_reports_the_identification_written_back() {
+    let dir = workdir("redact-identification");
+    let xmp = r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/" xmlns:pdfuaid="http://www.aiim.org/pdfua/ns/id/" pdfaid:part="2" pdfaid:conformance="B" pdfuaid:part="1"/><rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Bluefin report</dc:title></rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="w"?>"#;
+    let body = "BT /F1 18 Tf 20 150 Td (Codename BLUEFIN report) Tj ET";
+    let content = format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len());
+    let metadata = format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{xmp}\nendstream", xmp.len());
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /Metadata 6 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        &content,
+        &metadata,
+    ];
+    std::fs::write(dir.join("pdfa.pdf"), pdf_of(&objs)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "pdfa.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "redact_mark", json!({ "doc": doc, "find": "BLUEFIN" }));
+    let r = ok(&mut a, "redact_apply", json!({ "doc": doc }));
+    assert_eq!(r["identification"], json!({ "pdfa": "kept", "pdfua": "kept" }), "{r}");
+    assert_eq!(
+        r["warnings"],
+        json!([
+            "the document's XMP metadata held the redacted text and was removed; its PDF/A and PDF/UA identification was written back on its own"
+        ]),
+        "{r}"
+    );
 }
 
 #[test]

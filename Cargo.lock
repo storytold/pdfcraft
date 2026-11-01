@@ -4585,6 +4585,7 @@ dependencies = [
  "pdfcraft-model",
  "pdfcraft-testkit",
  "pdfcraft-xfa",
+ "roxmltree 0.21.2",
  "thiserror 2.0.21",
  "unicode-normalization",
 ]

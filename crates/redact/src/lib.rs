@@ -23,6 +23,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 
 pub mod codes;
 mod elsewhere;
+mod identification;
 mod image;
 mod interp;
 mod metadata;
@@ -36,6 +37,7 @@ pub(crate) mod type3;
 pub(crate) mod type3_tables;
 
 pub use elsewhere::Elsewhere;
+pub use identification::{Claim, Identification};
 use interp::{Mode, Scope, process};
 
 pub type Rgb = [f64; 3];
@@ -157,6 +159,9 @@ pub struct Report {
     pub overlays: Vec<ObjRef>,
     /// Document information entries and XMP streams removed because they held redacted text.
     pub metadata: usize,
+    /// What became of the PDF/A and PDF/UA identification when the catalog's XMP packet was
+    /// removed: written back in a packet of its own, or lost (see [`Identification`]).
+    pub identification: Identification,
     /// Places this apply leaves as they are that still hold the removed text (bookmark titles,
     /// attachments, the comments that remain, XMP on other objects), counted so the user can be
     /// told; Remove hidden information removes them. See [`Elsewhere`] for when the counts are
@@ -544,7 +549,9 @@ fn apply_to(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Redac
         return Err(RedactError::Residue(residue));
     }
     // 6. The document's metadata must not keep what the pages no longer show (#2448).
-    report.metadata = metadata::scrub(doc, &removed_text, !removed_cut)?;
+    let scrubbed = metadata::scrub(doc, &removed_text, !removed_cut)?;
+    report.metadata = scrubbed.removed;
+    report.identification = scrubbed.identification;
     // What it doesn't scrub is counted, never changed.
     report.still_holding = elsewhere::find(doc, &removed_text, !removed_cut);
     // The previous revision still holds the removed content: the next save must rewrite.

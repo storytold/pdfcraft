@@ -39,7 +39,17 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   part of it as whole words (three letters or digits at least), and the catalog's and pages'
   XMP streams whose text (element content, attribute values other than `xmlns` declarations,
   comments and processing instructions, entities decoded) contains it or has a value wholly
-  part of it, removed whole, together with any PDF/A identification in that packet. The removed
+  part of it, removed whole. When the catalog's packet goes, its PDF/A (`pdfaid`) and PDF/UA
+  (`pdfuaid`) identification, read by namespace, is written back in a packet holding nothing
+  else: the part number, the PDF/A conformance letter, amendment and revision, and PDF/UA's
+  part and revision, each kept only if it is the short code it must be and doesn't itself hold
+  the removed text (a one-character code can't, so it is kept even when the text couldn't be
+  searched for), plus a fixed extension schema for `pdfuaid` under PDF/A-1 to -3, left out
+  with the PDF/UA claim if the redacted words are among its words. `Report::identification`
+  says, for each, whether the claim was kept or lost (a value that isn't a valid code or holds
+  the text, or a packet that can't be read); the notification and `redact_apply` say it too.
+  `/Info` entries that remain aren't mirrored into the new packet, so a PDF/A validator may
+  still report them. The removed
   glyphs' text is collected in runs by position (character and word spacing included, so
   letter-spaced text stays one word), and each run (two or more letters or digits) and each of
   its words of three or more are matched without regard to case or spacing, and also by their

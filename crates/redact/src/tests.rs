@@ -299,10 +299,10 @@ fn metadata_search_has_one_budget_for_every_value() {
     let info = format!("<< {entries}/Producer (Test) >>");
     let fresh = || with_metadata(b"BT /F1 10 Tf 10 100 Td (Bluefin) Tj ET", &info, "");
     let mut doc = fresh();
-    assert_eq!(metadata::scrub_within(&mut doc, &["Bluefin".into()], true, 1 << 28).unwrap(), 0, "room to search: nothing goes");
+    assert_eq!(metadata::scrub_within(&mut doc, &["Bluefin".into()], true, 1 << 28).unwrap().removed, 0, "room to search: nothing goes");
     let mut doc = fresh();
     // Each value costs about 40; fifty of them don't fit in 1000.
-    let n = metadata::scrub_within(&mut doc, &["Bluefin".into()], true, 1000).unwrap();
+    let n = metadata::scrub_within(&mut doc, &["Bluefin".into()], true, 1000).unwrap().removed;
     assert!(n > 20, "past the budget the rest goes ({n} went)");
 }
 
@@ -3226,6 +3226,7 @@ fn unused_descriptions_in_shared_or_inherited_resources_are_retired() {
 
 mod descriptions;
 mod elsewhere;
+mod identification;
 mod inline_images;
 mod limits;
 mod metadata_fail_closed;

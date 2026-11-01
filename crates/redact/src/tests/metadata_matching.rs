@@ -54,7 +54,7 @@ fn unicode_forms_of_the_removed_text_match() {
     );
     let mut doc = with_metadata(b"BT /F1 10 Tf 10 100 Td (x) Tj ET", &info, "");
     let removed = ["M\u{FC}ller".to_string(), "\u{FB01}nance".to_string(), "Bluefin".to_string()];
-    let n = metadata::scrub_within(&mut doc, &removed, true, 1 << 28).unwrap();
+    let n = metadata::scrub_within(&mut doc, &removed, true, 1 << 28).unwrap().removed;
     assert_eq!(info_keys(&doc), ["Author", "Producer"]);
     assert_eq!(n, 3);
 }
@@ -65,7 +65,7 @@ fn unicode_forms_of_the_removed_text_match() {
 fn a_value_that_normalizes_to_far_more_text_counts_as_holding_it() {
     let info = format!("<< /Subject {} /Producer (Test) >>", utf16be(&"\u{FDFA}".repeat(50)));
     let mut doc = with_metadata(b"BT /F1 10 Tf 10 100 Td (x) Tj ET", &info, "");
-    assert_eq!(metadata::scrub_within(&mut doc, &["Bluefin".into()], true, 1 << 28).unwrap(), 1);
+    assert_eq!(metadata::scrub_within(&mut doc, &["Bluefin".into()], true, 1 << 28).unwrap().removed, 1);
     assert_eq!(info_keys(&doc), ["Producer"]);
 }
 
@@ -82,7 +82,7 @@ fn utf16le(s: &str) -> String {
 fn a_utf16le_string_is_searched_as_utf16le() {
     let info = format!("<< /Title {} /Subject {} /Producer (Test) >>", utf16le("Синий план"), utf16le("Годовой отчёт"));
     let mut doc = with_metadata(b"BT /F1 10 Tf 10 100 Td (x) Tj ET", &info, "");
-    assert_eq!(metadata::scrub_within(&mut doc, &["СИНИЙ".into()], true, 1 << 28).unwrap(), 1);
+    assert_eq!(metadata::scrub_within(&mut doc, &["СИНИЙ".into()], true, 1 << 28).unwrap().removed, 1);
     assert_eq!(info_keys(&doc), ["Subject", "Producer"]);
 
     // A bookmark titled the same way is counted as still holding it.

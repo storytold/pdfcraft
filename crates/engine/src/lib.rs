@@ -119,6 +119,7 @@ pub use pdfcraft_redact::patterns::{
     MAX_WORDS as REDACT_MAX_WORDS, PATTERNS as REDACT_PATTERNS, Pattern as RedactPattern, find as find_pattern, word_list as redact_word_list,
 };
 pub use pdfcraft_redact::sanitize::{HIDDEN, Hidden};
+pub use pdfcraft_redact::{Claim as RedactionClaim, Identification as RedactionIdentification};
 pub use pdfcraft_sign as sign;
 pub use pdfcraft_sign::{SignOptions, SignatureInfo, Status as SignatureStatus, TrustStore};
 pub use pdfcraft_xfdf::Format as DataFormat;
