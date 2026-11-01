@@ -7,9 +7,8 @@ First-page thumbnails of PDF files for the operating system's file manager.
   or drawn is an error, and the file manager then shows the file's icon.
 - On Windows the crate also builds `pdfcraft_thumbnails.dll`, an `IThumbnailProvider` that File
   Explorer loads (in its isolated thumbnail process) for files whose type is `PdfCraft.Document`,
-  so PDFs show their first page while PdfCraft is the default PDF app. The MSI registers it
-  The MSI registers it under HKMU (per-user or per-machine), consistent with other handler
-  keys (`packaging/windows/pdfcraft.wxs`):
+  so PDFs show their first page while PdfCraft is the default PDF app. The MSI registers it under HKMU
+  (per-user or per-machine), consistent with other handler keys (`packaging/windows/pdfcraft.wxs`):
 
   ```
   HKMU\Software\Classes\CLSID\{68E114F4-EB01-42A6-BD92-1695F3711CD1}\InprocServer32

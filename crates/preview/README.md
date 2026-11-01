@@ -16,8 +16,11 @@ First-page preview of PDF files in the Windows File Explorer preview pane (#3207
   HKMU\Software\Classes\PdfCraft.Document\ShellEx\{8895b1c6-b41f-4c1c-a562-0d564250836f}
       (default) = {C31A5F44-7E02-4D9A-A1B3-8F2E6D4C0A91}
   HKMU\Software\Microsoft\Windows\CurrentVersion\PreviewHandlers\{C31A5F44-7E02-4D9A-A1B3-8F2E6D4C0A91}
-      (default) = PdfCraft PDF preview, AppId = {C31A5F44-7E02-4D9A-A1B3-8F2E6D4C0A91}
+      (default) = PdfCraft PDF preview
+      AppId = {C31A5F44-7E02-4D9A-A1B3-8F2E6D4C0A91}   (same CLSID; no separate prevhost/AppID registration)
   ```
+
+  Windows loads the handler from `InprocServer32` inside its preview surrogate process; the MSI does not add extra prevhost keys beyond these handler entries.
 
 macOS Quick Look and Linux file managers use their own preview mechanisms; there the crate is only
 linked for shared tests of the rendering helper.

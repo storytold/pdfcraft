@@ -82,6 +82,18 @@ impl IObjectWithSite_Impl for Handler_Impl {
     }
 }
 
+impl Handler_Impl {
+    /// Renders the loaded document into the current host window and rectangle.
+    fn paint_loaded_preview(&self) -> windows_core::Result<()> {
+        let bytes = self.bytes.lock().unwrap_or_else(|p| p.into_inner()).clone().ok_or(windows_core::Error::from(E_INVALIDARG))?;
+        let hwnd = self.hwnd.lock().unwrap_or_else(|p| p.into_inner()).ok_or(windows_core::Error::from(E_FAIL))?;
+        let rect = *self.rect.lock().unwrap_or_else(|p| p.into_inner());
+        let (max_w, max_h) = rect_size(&rect)?;
+        let thumbnail = render_page_fit(bytes, max_w, max_h).map_err(|_| windows_core::Error::from(E_FAIL))?;
+        paint(hwnd, &rect, &thumbnail)
+    }
+}
+
 impl IPreviewHandler_Impl for Handler_Impl {
     fn SetWindow(&self, hwnd: HWND, prc: *const RECT) -> windows_core::Result<()> {
         if prc.is_null() {
@@ -100,19 +112,15 @@ impl IPreviewHandler_Impl for Handler_Impl {
         }
         guarded(|| {
             *self.rect.lock().unwrap_or_else(|p| p.into_inner()) = unsafe { *prc };
+            if self.bytes.lock().unwrap_or_else(|p| p.into_inner()).is_some() && self.hwnd.lock().unwrap_or_else(|p| p.into_inner()).is_some() {
+                self.paint_loaded_preview()?;
+            }
             Ok(())
         })
     }
 
     fn DoPreview(&self) -> windows_core::Result<()> {
-        guarded(|| {
-            let bytes = self.bytes.lock().unwrap_or_else(|p| p.into_inner()).clone().ok_or(windows_core::Error::from(E_INVALIDARG))?;
-            let hwnd = self.hwnd.lock().unwrap_or_else(|p| p.into_inner()).ok_or(windows_core::Error::from(E_FAIL))?;
-            let rect = *self.rect.lock().unwrap_or_else(|p| p.into_inner());
-            let (max_w, max_h) = rect_size(&rect)?;
-            let thumbnail = render_page_fit(bytes, max_w, max_h).map_err(|_| windows_core::Error::from(E_FAIL))?;
-            paint(hwnd, &rect, &thumbnail)
-        })
+        guarded(|| self.paint_loaded_preview())
     }
 
     fn Unload(&self) -> windows_core::Result<()> {
@@ -355,6 +363,8 @@ mod tests {
             let rect = RECT { left: 0, top: 0, right: 320, bottom: 240 };
             preview.SetWindow(hwnd, &rect).unwrap();
             preview.DoPreview().unwrap();
+            let smaller = RECT { left: 0, top: 0, right: 160, bottom: 120 };
+            preview.SetRect(&smaller).unwrap();
             DestroyWindow(hwnd).unwrap();
         }
     }
