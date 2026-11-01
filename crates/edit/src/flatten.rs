@@ -20,14 +20,19 @@ const HIDDEN: i64 = 2;
 const NO_ROTATE: i64 = 16;
 const NO_VIEW: i64 = 32;
 
-/// A reply of type R: an `/IRT` to the annotation it answers, with no `/RT` or `/RT /R`. It is
-/// shown in its comment's thread, never on the page ("Interactive PDF processors shall not
-/// display replies to an annotation individually", ISO 32000-2 Table 172), so flattening neither
-/// draws it nor builds it an appearance; it goes with its comment. A `/RT /Group` member is
-/// part of its group's look and is flattened as any other annotation.
+/// A reply of type R: a markup annotation with an `/IRT` to the annotation it answers and an
+/// `/RT` other than `/Group` (R is the default, so a missing, unknown or malformed `/RT` reads as
+/// R, as the comment list reads it). It is shown in its comment's thread, never on the page
+/// ("Interactive PDF processors shall not display replies to an annotation individually", ISO
+/// 32000-2 Table 172), so flattening neither draws it nor builds it an appearance; it goes with
+/// its comment. A `/RT /Group` member is part of its group's look and is flattened as any other
+/// annotation. `/IRT` is a markup annotation's entry: a widget, link or pop-up with one is no
+/// reply, and is flattened (or kept) as it would be without. Keep in step with hayro-interpret's
+/// PdfCraft patch (71).
 fn is_reply(doc: &Document, d: &Dict) -> bool {
-    d.get(b"IRT").is_some_and(|o| doc.resolve(o).as_dict().is_some())
-        && d.get(b"RT").map(|o| doc.resolve(o)).is_none_or(|rt| rt.as_name() == Some(b"R"))
+    !matches!(d.name(b"Subtype"), Some(b"Widget" | b"Link" | b"Popup"))
+        && d.get(b"IRT").is_some_and(|o| doc.resolve(o).as_dict().is_some())
+        && d.get(b"RT").map(|o| doc.resolve(o)).as_deref().and_then(Object::as_name) != Some(b"Group")
 }
 
 fn nums(doc: &Document, o: Option<&Object>) -> Option<Vec<f64>> {

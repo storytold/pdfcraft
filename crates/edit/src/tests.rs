@@ -877,6 +877,39 @@ fn flattening_ends_on_replies_whose_irt_loops() {
     assert_eq!(left, [7, 8, 9, 10, 11], "the comment's reply went with it; the looping replies stay");
 }
 
+/// #5632 review: an `/RT` that isn't `/Group` reads as the default R, as the comment list and the
+/// page read it, so replies with an unknown name or a string there are neither drawn nor kept
+/// once their comment is flattened. A form field with a stray `/IRT` is no reply: it is flattened
+/// as a field.
+#[test]
+fn flattening_reads_an_unknown_or_malformed_rt_as_a_reply_and_a_widget_with_irt_as_a_field() {
+    let page = stream("", " ");
+    let form = |rgb: &str| stream("/Type /XObject /Subtype /Form /BBox [0 0 20 18]", &format!("{rgb} rg 0 0 20 18 re f"));
+    let (blue, red, green) = (form("0 0 1"), form("1 0 0"), form("0 1 0"));
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [100 500 120 518] /Contents (Comment) /AP << /N 9 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [105 495 125 513] /Contents (Reply) /IRT 5 0 R /RT /Answer /AP << /N 10 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [110 490 130 508] /Contents (Reply) /IRT 5 0 R /RT (Group) /AP << /N 10 0 R >> >>",
+        "<< /Type /Annot /Subtype /Widget /F 4 /Rect [200 500 220 518] /IRT 5 0 R /AP << /N 11 0 R >> >>",
+        &blue,
+        &red,
+        &green,
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], true, true).unwrap(), 2, "the comment and the field are drawn; neither reply is");
+    let doc = reopen(&doc);
+    let p = &pdfcraft_model::pages(&doc)[0];
+    assert!(!p.dict.contains(b"Annots"), "both replies went with the comment, and the field was flattened");
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+    let xo = doc.resolve(res.as_dict().unwrap().get(b"XObject").unwrap());
+    let mut drawn: Vec<u32> = xo.as_dict().unwrap().iter().filter_map(|(_, v)| v.as_ref()).map(|r| r.num).collect();
+    drawn.sort_unstable();
+    assert_eq!(drawn, [9, 11], "the comment's and the field's appearances, not the replies'");
+}
+
 /// Flattening never makes a `?` permanent: it refuses, changing nothing, a text box without an
 /// appearance whose text Helvetica can't draw (another program's), and a comment or form field
 /// whose appearance PdfCraft drew with `?` (marked `PCUndrawn`). A comment another program drew

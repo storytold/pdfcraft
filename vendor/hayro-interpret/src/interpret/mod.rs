@@ -199,13 +199,16 @@ pub fn interpret_page<'a>(
             {
                 continue;
             }
-            // PdfCraft patch (71): a reply of type R (an `/IRT` to the annotation it answers, with
-            // no `/RT` or `/RT /R`) is not drawn, whatever its appearance or flags: "Interactive
-            // PDF processors shall not display replies to an annotation individually but together
-            // in the form of threaded comments" (ISO 32000-2 Table 172). A `/RT /Group` member is
-            // part of its group's look and still draws.
-            if annot.get::<Dict<'_>>(IRT).is_some()
-                && annot.get::<hayro_syntax::object::Name<'_>>(RT).as_deref().is_none_or(|rt| rt == b"R")
+            // PdfCraft patch (71): a reply of type R (a markup annotation with an `/IRT` to the
+            // annotation it answers and an `/RT` other than `/Group`; R is the default, so a
+            // missing, unknown or malformed `/RT` reads as R) is not drawn, whatever its
+            // appearance or flags: "Interactive PDF processors shall not display replies to an
+            // annotation individually but together in the form of threaded comments" (ISO 32000-2
+            // Table 172). A `/RT /Group` member is part of its group's look and still draws.
+            // `/IRT` is a markup annotation's entry: a widget, link or pop-up with one still draws.
+            if !matches!(annot.get::<hayro_syntax::object::Name<'_>>(SUBTYPE).as_deref(), Some(b"Widget" | b"Link" | b"Popup"))
+                && annot.get::<Dict<'_>>(IRT).is_some()
+                && annot.get::<hayro_syntax::object::Name<'_>>(RT).as_deref() != Some(b"Group")
             {
                 continue;
             }
