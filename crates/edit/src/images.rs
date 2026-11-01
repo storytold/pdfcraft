@@ -476,7 +476,10 @@ fn clip_matrix(draw: Matrix, cm: Matrix, t: Matrix) -> Option<Matrix> {
 /// Change image `index` (from [`page_images`]) on `page`.
 pub fn change_image(doc: &mut Document, page: usize, index: usize, change: &ImageChange) -> Result<(), EditError> {
     let images = page_images(doc, page)?;
-    let img = images.get(index).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no image {}", page + 1, index + 1)))?;
+    let img = images
+        .get(index)
+        .cloned()
+        .ok_or_else(|| EditError::Invalid(format!("page {} has no image {}", page.saturating_add(1), index.saturating_add(1))))?;
     let p = page_of(doc, page)?;
     let all = content_streams(doc, &p.dict)?;
     let pieces = joined(&all);

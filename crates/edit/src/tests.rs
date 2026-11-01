@@ -993,6 +993,49 @@ fn combined_marker_scan_matches_the_independent_scans() {
     assert_eq!(text.size, 24.0);
 }
 
+/// Missing-item errors keep ordinary numbering and saturate hostile extreme indices.
+fn assert_missing_added_content(operation: impl Fn(&mut Document, usize, usize) -> Result<(), EditError>) {
+    for (page, index) in [(0, 0), (3, 0), (0, usize::MAX), (usize::MAX, 0), (usize::MAX, usize::MAX)] {
+        let mut doc = fixture();
+        let before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+        let expected = EditError::Invalid(format!("page {} has no added item {}", page.saturating_add(1), index.saturating_add(1)));
+        assert_eq!(operation(&mut doc, page, index), Err(expected));
+        assert!(!doc.is_modified(), "a refused content operation changes nothing");
+        assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before);
+    }
+}
+
+#[test]
+fn missing_added_content_indices_return_errors_without_panicking() {
+    let text = Content::Text(AddedText { text: "replacement".into(), ..AddedText::default() });
+    assert_missing_added_content(|doc, page, index| update_content(doc, page, index, &text));
+}
+
+#[test]
+fn missing_added_content_delete_indices_do_not_panic() {
+    assert_missing_added_content(delete_content);
+}
+
+#[test]
+fn missing_added_content_isolate_indices_do_not_panic() {
+    assert_missing_added_content(isolate_content);
+}
+
+#[test]
+fn missing_page_image_indices_return_errors_without_panicking() {
+    let mut doc = fixture();
+    let before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    for index in [0, usize::MAX] {
+        assert_eq!(
+            change_image(&mut doc, 0, index, &ImageChange::Delete),
+            Err(EditError::Invalid(format!("page 1 has no image {}", index.saturating_add(1))))
+        );
+    }
+    assert_eq!(change_image(&mut doc, usize::MAX, 0, &ImageChange::Delete), Err(EditError::NoSuchPage(usize::MAX)));
+    assert!(!doc.is_modified());
+    assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before);
+}
+
 #[test]
 fn added_text_and_images_are_page_content_that_stays_editable() {
     let mut doc = fixture();

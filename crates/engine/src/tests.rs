@@ -3969,6 +3969,91 @@ fn exported_pages_record_the_resolution_they_were_drawn_at() {
     assert!(unit == 2 && (x - used).abs() < 0.01 && (y - used).abs() < 0.01, "{x} × {y}, drawn at {used}");
 }
 
+/// The other page-indexed edits reject invalid pages below the session panic guard.
+#[test]
+fn add_text_and_rotate_validate_page_bounds_before_indexing() {
+    for (count, page) in [(0, 0), (1, 1), (2, 2), (1, usize::MAX)] {
+        let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(count))).unwrap();
+        let text = AddedText { rect: [20.0, 20.0, 120.0, 50.0], text: "valid text".into(), ..AddedText::default() };
+        let result = run_edit(&mut doc, &Edit::AddText { page, text }, &mut EditCtx::new(None, 0));
+        assert!(matches!(result, Err(EditError::Edit(pdfcraft_edit::EditError::NoSuchPage(p))) if p == page), "{result:?}");
+        let result = run_edit(
+            &mut doc,
+            &Edit::RotatePages { pages: if count == 0 { vec![page] } else { vec![0, page] }, degrees: 90 },
+            &mut EditCtx::new(None, 0),
+        );
+        if count == 0 {
+            assert!(matches!(result, Err(EditError::Organize(pdfcraft_organize::OrganizeError::Invalid(_)))), "{result:?}");
+        } else {
+            assert!(matches!(result, Err(EditError::Organize(pdfcraft_organize::OrganizeError::NoSuchPage(p))) if p == page), "{result:?}");
+        }
+        assert!(!doc.is_modified(), "refused edits do not change the document");
+    }
+}
+
+/// A missing native image keeps its precise error even for the largest image index.
+#[test]
+fn missing_page_image_indices_return_errors_below_the_panic_guard() {
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(1))).unwrap();
+    for index in [0, usize::MAX] {
+        let result = run_edit(&mut doc, &Edit::EditPageImage { page: 0, index, change: ImageEdit::Delete }, &mut EditCtx::new(None, 0));
+        assert_eq!(result, Err(EditError::Edit(pdfcraft_edit::EditError::Invalid(format!("page 1 has no image {}", index.saturating_add(1))))));
+        assert!(!doc.is_modified());
+    }
+}
+
+/// Generates a synthetic one-pixel RGB PNG for image page-validation tests.
+fn add_image_page_test_png() -> Arc<Vec<u8>> {
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut bytes, 1, 1);
+        encoder.set_color(png::ColorType::Rgb);
+        encoder.write_header().unwrap().write_image_data(&[20, 40, 60]).unwrap();
+    }
+    Arc::new(bytes)
+}
+
+/// #4735: exercise the edit below the last-resort Session panic guard, including no pages.
+#[test]
+fn add_image_without_box_rejects_missing_page_without_panicking() {
+    let bytes = add_image_page_test_png();
+    for (count, page) in [(0, 0), (1, 1), (2, 2), (1, usize::MAX)] {
+        let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(count))).unwrap();
+        let edit = Edit::AddImage { page, rect: None, name: "pixel.png".into(), bytes: bytes.clone() };
+        let result = run_edit(&mut doc, &edit, &mut EditCtx::new(None, 0));
+        assert!(matches!(result, Err(EditError::Edit(pdfcraft_edit::EditError::NoSuchPage(p))) if p == page), "{result:?}");
+    }
+}
+
+/// The typed page error, rather than the panic guard's generic error, preserves both history branches.
+#[test]
+fn add_image_missing_page_preserves_document_and_history() {
+    let bytes = add_image_page_test_png();
+    for rect in [None, Some([20.0, 20.0, 21.0, 21.0])] {
+        for page in [2, usize::MAX] {
+            let (mut s, id) = session_with(2);
+            s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+            s.apply(id, Edit::RotatePages { pages: vec![1], degrees: 180 }).unwrap();
+            let after_second = s.get(id).unwrap().bytes.clone();
+            s.undo(id).unwrap();
+            let doc = s.get(id).unwrap();
+            let before = doc.bytes.clone();
+            let display = doc.display.clone();
+            let state = (doc.edit_generation(), doc.dirty, doc.can_undo().map(str::to_owned), doc.can_redo().map(str::to_owned));
+            let result = s.apply(id, Edit::AddImage { page, rect, name: "pixel.png".into(), bytes: bytes.clone() });
+            assert!(matches!(result, Err(EditError::Edit(pdfcraft_edit::EditError::NoSuchPage(p))) if p == page), "{result:?}");
+            let doc = s.get(id).unwrap();
+            assert_eq!(doc.bytes, before);
+            assert_eq!(doc.display, display);
+            assert_eq!((doc.edit_generation(), doc.dirty, doc.can_undo().map(str::to_owned), doc.can_redo().map(str::to_owned)), state);
+            s.redo(id).unwrap();
+            assert_eq!(s.get(id).unwrap().bytes, after_second, "the existing redo still works");
+            s.undo(id).unwrap();
+            assert_eq!(s.get(id).unwrap().bytes, before);
+        }
+    }
+}
+
 #[test]
 fn added_text_and_images_render_and_stay_editable() {
     let (mut s, id) = session_with(1);

@@ -526,10 +526,13 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_edit::stamp(doc, *page, "OCR", pdfcraft_ocr::text_layer(words))?;
         }
         Edit::EditPageImage { page, index, change } => {
-            let img = pdfcraft_edit::page_images(doc, *page)?
-                .into_iter()
-                .nth(*index)
-                .ok_or_else(|| EditError::Edit(pdfcraft_edit::EditError::Invalid(format!("page {} has no image {}", page + 1, index + 1))))?;
+            let img = pdfcraft_edit::page_images(doc, *page)?.into_iter().nth(*index).ok_or_else(|| {
+                EditError::Edit(pdfcraft_edit::EditError::Invalid(format!(
+                    "page {} has no image {}",
+                    page.saturating_add(1),
+                    index.saturating_add(1)
+                )))
+            })?;
             let c = match change {
                 ImageEdit::Move(to) => pdfcraft_edit::ImageChange::Transform(pdfcraft_edit::rect_to_rect(img.rect, *to)),
                 ImageEdit::Rotate(q) => {
@@ -605,7 +608,8 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             let rect = match rect {
                 Some(r) => *r,
                 None => {
-                    let p = pdfcraft_model::pages(doc).swap_remove(*page);
+                    let pages = pdfcraft_model::pages(doc);
+                    let p = pages.get(*page).ok_or(pdfcraft_edit::EditError::NoSuchPage(*page))?;
                     let (pw, ph) = p.display_size(doc);
                     let k = ((pw * 0.8) / natural.0).min((ph * 0.8) / natural.1).min(1.0);
                     let (w, h) = (natural.0 * k, natural.1 * k);
