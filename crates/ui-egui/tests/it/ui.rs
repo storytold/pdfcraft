@@ -2392,6 +2392,172 @@ fn save_in_detached_window_saves_changes_and_closes_tab() {
     assert!(h.state().close_request.is_none());
 }
 
+#[test]
+fn root_window_close_with_dirty_detached_window_cancels_close_and_prompts_on_main_window() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    // Detach middle.pdf (index 1) and make it dirty
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(3);
+    h.state_mut().session.apply(ids[1], pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+
+    // Request OS close on the primary root window
+    h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+    h.step();
+
+    // Root close must be cancelled via CancelClose
+    let cancel_close_sent =
+        h.output().viewport_output.values().flat_map(|v| v.commands.iter()).any(|c| matches!(c, egui::ViewportCommand::CancelClose));
+    assert!(cancel_close_sent, "CancelClose command must be sent to cancel immediate exit");
+
+    // Close request is flagged for application quit, and quit is not allowed yet
+    assert_eq!(h.state().close_request, Some(pdfcraft_ui_egui::CloseRequest::Quit));
+    assert!(!h.state().allow_quit);
+
+    h.run_steps(2);
+
+    // Save prompt is displayed on the main window for the dirty detached document
+    h.get_by_label_contains("Save changes to “middle.pdf” before closing?");
+    h.get_by_label("Save");
+    h.get_by_label("Don't save");
+    h.get_by_label("Cancel");
+
+    // Cancelling leaves the application alive, middle.pdf still detached and dirty
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+
+    assert!(h.state().close_request.is_none());
+    assert!(!h.state().allow_quit);
+    assert_eq!(h.state().views.len(), 3);
+    let view = h.state().views.iter().find(|v| v.id == ids[1]).unwrap();
+    assert!(view.detached);
+    assert!(h.state().session.get(ids[1]).unwrap().dirty);
+}
+
+#[test]
+fn root_window_close_sequence_prompts_sequentially_across_docked_and_detached_and_quits() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    // Make first.pdf dirty (docked)
+    h.state_mut().session.apply(ids[0], pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    // Detach middle.pdf (index 1) and make it dirty (detached)
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(3);
+    h.state_mut().session.apply(ids[1], pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    // Detach last.pdf (clean detached tab to test teardown with floating clean windows)
+    h.state_mut().detach_tab(ids[2]);
+    h.run_steps(3);
+
+    // Trigger application exit via root window close
+    h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+    h.step();
+
+    assert_eq!(h.state().close_request, Some(pdfcraft_ui_egui::CloseRequest::Quit));
+    assert!(!h.state().allow_quit);
+
+    h.run_steps(2);
+
+    // First prompt asks about docked first.pdf
+    h.get_by_label_contains("Save changes to “first.pdf” before closing?");
+    h.get_by_label("Don't save").click();
+    h.run_steps(3);
+
+    // After discarding first.pdf, next prompt sequentially asks about dirty detached middle.pdf on main window
+    h.get_by_label_contains("Save changes to “middle.pdf” before closing?");
+    h.get_by_label("Don't save").click();
+    h.run_steps(3);
+
+    // Once all dirty documents are resolved, quit completes: allow_quit is true, no prompts remain
+    assert!(h.state().close_request.is_none());
+    assert!(h.state().allow_quit);
+
+    // Root viewport (and detached viewports) receive Close command
+    let close_sent =
+        h.output().viewport_output.values().flat_map(|v| v.commands.iter()).any(|c| matches!(c, egui::ViewportCommand::Close));
+    assert!(close_sent, "Close command must be sent when application shutdown completes");
+}
+
+#[test]
+fn root_window_close_when_all_tabs_clean_quits_immediately_without_prompt() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    // Detach middle.pdf; all tabs remain clean
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(3);
+
+    // Trigger application exit via root window close
+    h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+    h.step();
+
+    // No CancelClose sent
+    let cancel_close_sent =
+        h.output().viewport_output.values().flat_map(|v| v.commands.iter()).any(|c| matches!(c, egui::ViewportCommand::CancelClose));
+    assert!(!cancel_close_sent, "Clean exit must not cancel window close");
+
+    // No save prompt modal is shown
+    assert!(h.query_by_label_contains("Save changes to").is_none());
+    assert!(h.state().close_request.is_none());
+    assert!(h.state().allow_quit);
+}
+
+#[test]
+fn root_window_request_quit_shortcut_prompts_and_saving_detached_tab_quits() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-ui-test-quit-save-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let save_path = dir.join("middle_saved_quit.pdf");
+
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    h.state_mut().save_override = Some(save_path.to_string_lossy().into_owned());
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(3);
+    h.state_mut().session.apply(ids[1], pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+
+    // Trigger quit via Command+Q shortcut event
+    h.event(egui::Event::Key {
+        key: egui::Key::Q,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::COMMAND,
+    });
+    h.step();
+
+    assert_eq!(h.state().close_request, Some(pdfcraft_ui_egui::CloseRequest::Quit));
+    assert!(!h.state().allow_quit);
+
+    h.run_steps(2);
+    h.get_by_label_contains("Save changes to “middle.pdf” before closing?");
+    h.get_by_label("Save").click();
+    h.run_steps(5);
+
+    // Saved to disk and quit completed
+    assert!(save_path.exists());
+    assert!(h.state().close_request.is_none());
+    assert!(h.state().allow_quit);
+}
+
+#[test]
+fn clean_detached_and_docked_tabs_request_quit_returns_true_and_allows_quit() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(3);
+
+    // Direct call to request_quit on clean state
+    let ctx = egui::Context::default();
+    let quit_allowed = h.state_mut().request_quit(&ctx);
+    assert!(quit_allowed, "request_quit must return true when all tabs are clean");
+    assert!(h.state().allow_quit, "allow_quit must be true");
+    assert!(h.state().close_request.is_none());
+}
+
+
 /// The Edit tab turns on Edit text & images at once, as Acrobat does, so every paragraph and image
 /// is boxed and editable with one click; another tab puts the tool down again.
 #[test]
