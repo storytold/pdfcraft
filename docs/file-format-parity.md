@@ -1,6 +1,6 @@
 # File format parity
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-19 · **Change:** patch (`.p7b`/`.p7c` bundles read for trust import) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-11-01 · **Change:** minor (Word export keeps a form's rules, boxes, text placement and fields) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Every format Acrobat Pro reads or writes, and PdfCraft's support for it. Acrobat's list comes from
 its bundle's `Info.plist` `CFBundleDocumentTypes` (what it opens) and its public documentation
@@ -80,7 +80,7 @@ features total).
 
 | Target | Acrobat | PdfCraft | Fidelity | Tests and evidence |
 |---|---|---|---|---|
-| Word (`.docx`) | yes, layout-preserving | flowing paragraphs and borderless inferred tables; positioned text/artwork only for pages with rotated text or text overlapping an image/watermark, with per-page sizes | **basic** (#773 synthetic invoice regression covered; exact fonts, vector rules and general layout fidelity remain incomplete) | `create.export-docx` partial |
+| Word (`.docx`) | yes, layout-preserving | flowing paragraphs and borderless inferred tables; positioned pages (rotated or overlapping text, form fields, text framed by rules, or most of a document's pages) keep vector rules and boxes, place text line by line and turn AcroForm fields into Word form fields (`/MaxLen` kept, document protected for filling in forms) and content controls; runs carry the PDF font's family; per-page sizes | **basic** (form and #773 invoice regressions covered; holes in fills, clipping, shadings, transparency and radio groups remain) | `create.export-docx` partial |
 | Word 97–2003 (`.doc`) | yes | no | none | |
 | Excel (`.xlsx`), XML Spreadsheet 2003 | yes | no | none | `create.export-xlsx` planned |
 | PowerPoint (`.pptx`) | yes | slides per page: title from largest text, body text, images, tables (no slide overflow reflow / normAutofit; first page sets presentation dimensions) | basic | `create.export-pptx` partial |
@@ -110,6 +110,7 @@ features total).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | minor | Word: a form keeps its layout. Vector rules and boxes as shapes behind the text, text placed line by line, PDF font families, AcroForm fields as Word form fields with `/MaxLen` (protected for filling in forms) and content controls; a document most of whose pages keep their layout keeps it on every page. |
 | 2026-10-19 | patch | Certificates row: `.p7b`/`.p7c` bundles (DER or PEM `PKCS7`/`CMS`) are read for trust import. |
 | 2026-10-12 | minor | XDP split into data (read and write for XFA forms, already shipped under `form.xfa-data`) and opening `.xdp` as a document (none). Create PDF reads BigTIFF; malformed GIF headers are no longer detected as images. |
 | 2026-10-11 | minor | #773: inferred tables have no invented borders; rotated or overlapping invoice pages use floating shapes and page sections. Full Office layout fidelity remains partial. |

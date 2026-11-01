@@ -330,6 +330,14 @@ pub fn reading_blocks_checked(doc: &Document, page: usize) -> Result<ReadingBloc
     Ok(ReadingBlocks { blocks: regions::group_reading_blocks(&lines), truncated })
 }
 
+/// [`reading_blocks_checked`], and the same text as one block per line, each placed by the words
+/// it draws (Export ▸ Word puts them where the page shows them on a page whose layout it keeps).
+/// Lines are read once for both.
+pub fn reading_blocks_and_lines_checked(doc: &Document, page: usize) -> Result<(ReadingBlocks, Vec<TextBlock>), EditError> {
+    let (lines, truncated) = reading_lines(doc, page)?;
+    Ok((ReadingBlocks { blocks: regions::group_reading_blocks(&lines), truncated }, regions::line_blocks(&lines)))
+}
+
 // An ideographic space carries intentional Japanese spacing, including paragraph indentation.
 // Keep other whitespace normalization unchanged.
 pub(crate) fn paragraph_separator(c: char) -> bool {

@@ -234,6 +234,50 @@ fn starts_list_item(row: &[usize], lines: &[TextLine]) -> bool {
     row.iter().filter_map(|i| lines.get(*i)).map(|l| l.text.trim_start()).find(|t| !t.is_empty()).is_some_and(opens_with_marker)
 }
 
+/// Each line as a block of its own, for placing rather than editing (only the text, box and
+/// style are meaningful). An upright line's box is narrowed to the words it draws: the spaces
+/// and `TJ` gaps a line starts or ends with draw nothing. A gap between two words wider than
+/// [`PIECE_GAP`] times the size (a tab stop, a column) splits the line into pieces, each placed
+/// at its own words, since a reader sets the words of one piece a single space apart.
+pub(crate) fn line_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
+    let mut out = Vec::new();
+    for line in lines.iter().filter(|l| !l.text.trim().is_empty()) {
+        let ink: Vec<[f64; 4]> = line.ink.iter().copied().filter(|r| r.iter().all(|v| v.is_finite())).collect();
+        for block in group_layout(std::slice::from_ref(line), false) {
+            if block.rotation.abs() >= 0.1 || ink.is_empty() {
+                out.push(block);
+                continue;
+            }
+            let words: Vec<&str> = line.text.split_whitespace().collect();
+            if words.len() != ink.len() {
+                // The words can't be matched to their boxes: one piece over all of them.
+                let all = ink.iter().copied().reduce(union).unwrap_or(block.rect);
+                out.push(TextBlock { rect: [all[0], block.rect[1], all[2], block.rect[3]], ..block });
+                continue;
+            }
+            let mut start = 0;
+            for end in 1..=words.len() {
+                let split =
+                    end == words.len() || ink.get(end).zip(ink.get(end - 1)).is_some_and(|(next, prev)| next[0] - prev[2] > PIECE_GAP * line.size);
+                if !split {
+                    continue;
+                }
+                let text = words.get(start..end).unwrap_or_default().join(" ");
+                let r = ink.get(start..end).unwrap_or_default().iter().copied().reduce(union).unwrap_or(block.rect);
+                // A piece of a split line has no spaces of its own around it.
+                let editor_text = if end - start == words.len() { block.editor_text.clone() } else { text.clone() };
+                out.push(TextBlock { text, editor_text, rect: [r[0], block.rect[1], r[2], block.rect[3]], ..block.clone() });
+                start = end;
+            }
+        }
+    }
+    out
+}
+
+/// A gap between words wider than this many times the text size splits a line into pieces
+/// ([`line_blocks`]): a word space is about a quarter of the size, two of them half.
+const PIECE_GAP: f64 = 0.8;
+
 fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
     let mut rows: Vec<Vec<usize>> = Vec::new();
     for (i, line) in lines.iter().enumerate() {
