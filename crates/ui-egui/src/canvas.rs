@@ -1524,9 +1524,11 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
         images: &images,
         clip: ui.clip_rect(),
     };
-    if let Some(o) = ptr.pressed().filter(|o| xf.rect.contains(*o)) {
+    if let Some(o) = ptr.pressed().filter(|o| xf.rect.expand(12.0).contains(*o)) {
         let at = hits.at(view, o);
-        view.router.press(i, at, tool);
+        if xf.rect.contains(o) || !at.is_empty() {
+            view.router.press(i, at, tool);
+        }
     }
     if let QuickTool::Measure(measure_tool) = tool {
         crate::measure_ui::page_input(ui, resp, doc, view, &pcx, measure_tool, units);
