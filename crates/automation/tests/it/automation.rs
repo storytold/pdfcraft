@@ -14880,3 +14880,30 @@ fn grouped_existing_thai_body_edits_saves_reopens_and_undo_restores_original_gly
     assert_eq!(page_text(&mut a, reopened), [new, old]);
     assert_eq!(ok(&mut a, "content_list", json!({"doc":reopened}))["count"], 0, "editing existing text must not create Add Text objects");
 }
+
+/// Multi-line Arabic and Hebrew Fill & Sign text: the box is as wide as its widest shaped line,
+/// not the whole text set as one row, and as tall as all its rows, blank ones included.
+#[test]
+fn multiline_arabic_and_hebrew_fill_sign_text_sizes_its_box_by_its_shaped_lines() {
+    if pdfcraft_fonts::document_arabic_font().is_none() || pdfcraft_fonts::document_hebrew_font(false).is_none() {
+        eprintln!("set CRAFT_FONTS_DIR to exercise multi-line Arabic and Hebrew Fill & Sign text");
+        return;
+    }
+    let dir = workdir("fill-sign-multiline-rtl");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    let (size, lines) = (14.0, ["سَلَامٌ عَلَيْكُمْ", "", "שָׁלוֹם עולם PDF 123"]);
+    let text = lines.join("\n");
+    ok(&mut a, "fill_sign_add", json!({"doc":doc,"page":1,"type":"text","at":[20,20],"text":text,"font_size":size}));
+    let annot = &a.session().get(pdfcraft_engine::DocId(doc)).unwrap().info.annotations[0];
+    assert_eq!(annot.contents.as_deref(), Some(text.as_str()), "logical text with its breaks");
+    let (w, h) = (f64::from(annot.rect[2] - annot.rect[0]), f64::from(annot.rect[3] - annot.rect[1]));
+    let widest = lines.iter().map(|line| pdfcraft_engine::annot_text::text_width(line, size)).fold(0.0, f64::max);
+    assert!((w - (widest + 8.0)).abs() < 0.01, "box width {w} follows the widest shaped line {widest}");
+    assert!(w < pdfcraft_engine::annot_text::text_width(&lines.concat(), size), "not the width of the lines set as one row");
+    // `/Rect` is stored as f32.
+    assert!(h + 0.01 >= lines.len() as f64 * size * 1.2 + 6.0, "three rows, the blank one included: {h}");
+    let ink = pdfcraft_engine::annot_text::text_height(&text, size, w - 4.0);
+    assert!(h + 0.01 >= ink + 6.0, "box height {h} holds the shaped rows and their marks ({ink})");
+    std::fs::remove_dir_all(dir).unwrap();
+}

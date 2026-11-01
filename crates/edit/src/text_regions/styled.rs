@@ -380,11 +380,17 @@ type StyledRows = Vec<Vec<StyledChar>>;
 type RowRanges = Vec<std::ops::Range<usize>>;
 enum ShapedFont {
     Existing(Vec<(String, Vec<u8>)>),
-    Program { bytes: Vec<u8>, family: String },
+    Program {
+        bytes: Vec<u8>,
+        family: String,
+    },
     ThaiOutlines,
     /// A contextual row (Arabic, Hebrew) shaped in its paragraph's complete source face: the
     /// paragraph's rows share the face, and so its embedded program (`embed_shaped_resources`).
-    Shared { bytes: std::sync::Arc<Vec<u8>>, family: String },
+    Shared {
+        bytes: std::sync::Arc<Vec<u8>>,
+        family: String,
+    },
 }
 struct ShapedText {
     run: pdfcraft_fonts::source_shaping::ShapedRun,
@@ -428,6 +434,10 @@ fn prepare_shaped_rows(
 
 type ShapedResources = HashMap<(usize, usize), Vec<(String, Vec<u8>)>>;
 
+/// A run shaped in a shared face (its [`ShapedRunCache`] key) and, for each glyph, the
+/// [`GlyphGroup`] that embeds it and its code there; resolved to resources once all are known.
+type SharedFace = ((usize, usize), Vec<(usize, u16)>);
+
 /// Each shaped run's glyphs as (font resource, code). A paragraph shaped in one complete face
 /// (`ShapedFont::Shared`) embeds it once per CID-map chunk, shared across its wrapped rows:
 /// embedding an entire font for every short row amplifies a narrow paragraph into hundreds of
@@ -436,7 +446,7 @@ fn embed_shaped_resources(doc: &mut Document, fonts: &mut Dict, runs: &ShapedRun
     let mut resources = HashMap::new();
     let mut groups: Vec<GlyphGroup> = Vec::new();
     let mut active_groups = HashMap::new();
-    let mut shared: Vec<((usize, usize), Vec<(usize, u16)>)> = Vec::new();
+    let mut shared: Vec<SharedFace> = Vec::new();
     let mut keys: Vec<_> = runs.keys().copied().collect();
     keys.sort_unstable();
     for key in keys {
@@ -1546,7 +1556,10 @@ fn contextual_paragraphs<'p, K: PartialEq>(
     let mut contexts = Vec::new();
     for (range, paragraph) in paragraphs {
         // Thai is shaped span by span in its source face (`shape_source`), not in a paragraph context.
-        if !pdfcraft_fonts::source_shaping::required(paragraph) || range.is_empty() || paragraph.chars().any(|c| matches!(u32::from(c), 0x0e00..=0x0e7f)) {
+        if !pdfcraft_fonts::source_shaping::required(paragraph)
+            || range.is_empty()
+            || paragraph.chars().any(|c| matches!(u32::from(c), 0x0e00..=0x0e7f))
+        {
             continue;
         }
         let Some(seed) = chars.get(range.start).cloned() else { continue };
@@ -2334,6 +2347,37 @@ fn rewrite_styled_block_inner(
 #[cfg(test)]
 mod range_tests {
     use super::ContextualParagraph;
+
+    /// Contextual wrapping adds visual rows without changing the typed paragraph's index.
+    /// CRLF consumes one break, and its carriage return must not become a separate empty row.
+    #[test]
+    fn contextual_wraps_keep_crlf_paragraph_indices_and_soft_break_metadata() {
+        let chars: Vec<super::StyledChar> = "اب ج\r\nTail\nده ز".chars().map(|ch| (ch, 0, String::new())).collect();
+        let paragraphs = super::paragraph_texts(&chars);
+        let contexts: Vec<_> = paragraphs
+            .iter()
+            .filter(|(_, text)| pdfcraft_fonts::source_shaping::required(text))
+            .map(|(range, text)| {
+                let mut bytes: Vec<_> = text.char_indices().map(|(at, _)| at).collect();
+                bytes.push(text.len());
+                ContextualParagraph {
+                    chars: range.clone(),
+                    bytes,
+                    layout: pdfcraft_fonts::source_shaping::Paragraph::new(text).unwrap(),
+                    face: std::sync::Arc::new(Vec::new()),
+                    family: String::new(),
+                }
+            })
+            .collect();
+        let measure = |range: std::ops::Range<usize>| Ok(range.len() as f64);
+        let (rows, ranges, logical_lines, soft, gaps) = super::wrap_styled_rows(&chars, &contexts, 3.0, &measure).unwrap();
+        let text: Vec<String> = rows.iter().map(|row| row.iter().map(|c| c.0).collect()).collect();
+        assert_eq!(text, ["اب ", "ج", "Tail", "ده ", "ز"]);
+        assert_eq!(ranges, [0..3, 3..4, 6..10, 11..14, 14..15]);
+        assert_eq!(logical_lines, [0, 0, 1, 2, 2], "soft wraps retain their typed paragraph's alignment index");
+        assert_eq!(soft, [false, true, false, false, true]);
+        assert_eq!(gaps, [0, 0, 0, 0, 0], "contextual ranges keep spaces, so rejoining adds none");
+    }
 
     #[test]
     fn contextual_byte_ranges_reject_outside_or_reversed_input() {

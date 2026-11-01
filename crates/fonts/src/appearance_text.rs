@@ -263,7 +263,8 @@ pub fn display_line(text: &str, continued: bool) -> Cow<'_, str> {
     }
 }
 
-fn soft_space(c: char) -> bool {
+/// A space a line may wrap at and hang past its end (not a no-break space or a line break).
+pub fn soft_space(c: char) -> bool {
     c.is_whitespace()
         && !matches!(c, '\u{00a0}' | '\u{2007}' | '\u{202f}' | '\n' | '\r' | '\u{000b}' | '\u{000c}' | '\u{0085}' | '\u{2028}' | '\u{2029}')
 }
@@ -532,6 +533,24 @@ fn n(value: f64) -> String {
 /// Content plus a Font dictionary template. No document IDs are stored, so a cached appearance
 /// can safely be installed into separate display copies of the same document.
 pub fn draw(lines: &[Line], size: f64, rect: [f64; 4], align: i64, color: [f64; 3]) -> Result<(Vec<u8>, Dict), GlyphError> {
+    draw_aligned(lines, size, rect, align, color, false)
+}
+
+/// [`draw`] with direction-aware default quadding: at `align = 0`, each right-to-left paragraph
+/// starts at the right edge. Explicit centered and right-aligned quadding still apply to every
+/// paragraph. Callers requiring explicit left alignment use [`draw`] instead.
+pub fn draw_directional(lines: &[Line], size: f64, rect: [f64; 4], align: i64, color: [f64; 3]) -> Result<(Vec<u8>, Dict), GlyphError> {
+    draw_aligned(lines, size, rect, align, color, true)
+}
+
+fn draw_aligned(
+    lines: &[Line],
+    size: f64,
+    rect: [f64; 4],
+    align: i64,
+    color: [f64; 3],
+    direction_aware: bool,
+) -> Result<(Vec<u8>, Dict), GlyphError> {
     if rect.iter().any(|v| !v.is_finite()) {
         return Err(GlyphError::TooComplex);
     }
@@ -545,6 +564,7 @@ pub fn draw(lines: &[Line], size: f64, rect: [f64; 4], align: i64, color: [f64; 
         let x = match align {
             1 => rect[0] + (rect[2] - rect[0] - line.width) / 2.0,
             2 => rect[2] - line.width,
+            0 if direction_aware && line.rtl => rect[2] - line.width,
             _ => rect[0],
         };
         positions.push([x, y]);
