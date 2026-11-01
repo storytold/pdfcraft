@@ -72,6 +72,7 @@ impl CalcOp {
         }
     }
 
+    /// How the operation is named in a list of them (`sum (+)`, `average`).
     pub fn label(self) -> &'static str {
         match self {
             CalcOp::Sum => "sum (+)",
@@ -106,6 +107,9 @@ pub struct Actions {
     pub unsupported: Vec<&'static str>,
     /// Those scripts' JavaScript, run through [`crate::Scripts`].
     pub scripts: Scripts,
+    /// A date field PdfCraft laid out for an XFA form (`/PCXfaDate true`): text its format doesn't
+    /// read is kept and shown as typed rather than refused, as an XFA form keeps it.
+    pub xfa_date: bool,
 }
 
 /// Field scripts that aren't AF calls, by event.
@@ -118,9 +122,47 @@ pub struct Scripts {
 }
 
 impl Actions {
+    /// Whether the field has no format, validation or calculation PdfCraft recognises.
     pub fn is_empty(&self) -> bool {
         self.format == Format::None && self.validate == Validate::None && self.calculate == Calculate::None
     }
+
+    /// The Keystroke event on commit ([`keystroke`]); an XFA date field keeps text its format
+    /// doesn't read, as typed.
+    pub fn keystroke(&self, field: &str, value: &str) -> Result<String, String> {
+        match keystroke(&self.format, field, value) {
+            Err(_) if self.xfa_date => Ok(value.to_string()),
+            checked => checked,
+        }
+    }
+
+    /// What the Format event shows for `value` ([`format_value`]). An XFA date field shows a date
+    /// only for a value that is one, in its format already or as an ISO date (`2026-10-18` or
+    /// `20261018`); anything else, which its format would read loosely, shows as typed.
+    pub fn format_value(&self, value: &str) -> String {
+        match &self.format {
+            Format::Date(fmt) if self.xfa_date => {
+                let t = value.trim();
+                let in_format = parse_date(t, fmt).is_some_and(|dt| format_date(dt, fmt).eq_ignore_ascii_case(t));
+                match iso_date(t) {
+                    Some(dt) if !in_format => format_date(dt, fmt),
+                    _ => value.to_string(),
+                }
+            }
+            f => format_value(f, value),
+        }
+    }
+}
+
+/// `text` as an ISO 8601 calendar date, `yyyy-mm-dd` or `yyyymmdd` (digits only, a real day).
+fn iso_date(text: &str) -> Option<DateTime> {
+    let b = text.as_bytes();
+    let fmt = match b.len() {
+        10 if b.iter().enumerate().all(|(i, c)| if i == 4 || i == 7 { *c == b'-' } else { c.is_ascii_digit() }) => "yyyy-mm-dd",
+        8 if b.iter().all(u8::is_ascii_digit) => "yyyymmdd",
+        _ => return None,
+    };
+    parse_date(text, fmt).filter(|dt| format_date(*dt, fmt) == text)
 }
 
 #[cfg(test)]

@@ -748,7 +748,7 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
         && values.len() == 1
         && f.actions.format != crate::af::Format::None
     {
-        formatted = vec![crate::af::format_value(&f.actions.format, &values[0])];
+        formatted = vec![f.actions.format_value(&values[0])];
         &formatted[..]
     } else {
         values
