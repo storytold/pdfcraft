@@ -4645,7 +4645,12 @@ fn printing_through_tools() {
     let none = ok(&mut a, "printer_options", json!({ "printer": "No_Such_Queue_PdfCraft" }));
     assert_eq!((none["count"].as_u64(), none["options"].as_array().map(Vec::len)), (Some(0), Some(0)));
     #[cfg(all(unix, not(target_arch = "wasm32")))]
-    assert!(none["diagnostic"].as_str().is_some_and(|m| !m.is_empty()), "an unknown queue is not a successfully empty settings list");
+    {
+        let diagnostic = none["diagnostic"].as_str().expect("an unknown queue is not a successfully empty settings list");
+        assert!(diagnostic.contains("PPD"));
+        assert!(!diagnostic.contains("No_Such_Queue_PdfCraft"), "diagnostics omit queue identifiers");
+        assert!(!diagnostic.contains("/etc/cups"), "diagnostics omit local spooler paths");
+    }
     assert!(matches!(a.call("printer_options", &json!({})), Err(ToolError::InvalidArgs(_))));
     assert!(matches!(
         a.call("doc_print", &json!({ "doc": doc, "printer": "default", "options": ["InputSlot"] })),

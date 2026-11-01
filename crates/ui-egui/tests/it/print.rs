@@ -762,6 +762,33 @@ fn printer_options_are_read_off_the_gui_thread_and_a_dead_read_reports_failure()
     h.get_by_label("This printer offers no settings of its own.");
 }
 
+/// The actual retrieval diagnostic reaches Properties without revealing spooler paths.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+#[test]
+fn printer_properties_show_a_private_retrieval_diagnostic() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(2);
+    let printer = "No_Such_Queue_PdfCraft";
+    let d = &mut h.state_mut().print_draft;
+    d.printer = Some(printer.into());
+    d.driver_options_loading = Some(printer.into());
+    d.read_options_for = Some(printer.into());
+    d.show_driver_options = true;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while h.state().print_draft.driver_options_loading.is_some() && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(h.state().print_draft.driver_options_loading.is_none());
+    let diagnostic = h.state().print_draft.driver_options_diagnostic.clone().expect("the unknown queue reports a failure");
+    assert!(diagnostic.contains("PPD"));
+    assert!(!diagnostic.contains(printer));
+    assert!(!diagnostic.contains("/etc/cups"));
+    h.get_by_label(&diagnostic);
+    assert!(h.query_by_label("This printer offers no settings of its own.").is_none());
+}
+
 /// A read of the printer's options that dies still asks for a frame, so an idle dialog stops
 /// saying it is reading without waiting for the mouse to move (#2108 review).
 #[cfg(not(target_arch = "wasm32"))]

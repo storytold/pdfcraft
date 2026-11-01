@@ -39,6 +39,8 @@ spool::submit(&pdf, &spool::Job { printer: None, copies: 2, ..Default::default()
   recognizable `*OpenUI` declaration reports a discovery diagnostic. Valid declarations for
   options already handled by the dialog (or installable hardware) may yield an empty list
   without a diagnostic. This is not a full PPD validator.
+  Retrieval diagnostics name the operation and a bounded failure category, without local
+  filesystem paths, queue identifiers or raw operating-system error text.
 
 Each source page becomes a Form XObject (its content wrapped in q/Q, plus the printable
 annotations); sheets place them with a clip. The result is a fresh, unencrypted,

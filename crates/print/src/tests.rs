@@ -560,12 +560,12 @@ mod cups_options {
         let dir = folder();
         let missing = spool::load_printer_options_via_within("Office", &dir, command(&dir, ""), LIMIT, "en");
         assert!(missing.options.is_empty());
-        assert!(missing.diagnostic.as_deref().is_some_and(|d| d.contains("Office.ppd")), "{missing:?}");
+        assert!(missing.diagnostic.as_deref().is_some_and(|d| d.contains("PPD") && d.contains("not found")), "{missing:?}");
         // A regular file used as the parent produces ENOTDIR even when tests run as root.
         let blocker = dir.join("not-a-directory");
         std::fs::write(&blocker, "").unwrap();
         let unreadable = spool::load_printer_options_via_within("Office", &blocker, command(&dir, ""), LIMIT, "en");
-        assert!(unreadable.diagnostic.as_deref().is_some_and(|d| d.contains("not-a-directory")), "{unreadable:?}");
+        assert!(unreadable.diagnostic.as_deref().is_some_and(|d| d.contains("directory")), "{unreadable:?}");
         std::fs::write(
             dir.join("Office.ppd"),
             "*PPD-Adobe: \"4.3\"\n*OpenUI *PageSize/Paper size: PickOne\n*PageSize A4/A4: \"\"\n*CloseUI: *PageSize\n",
@@ -575,6 +575,46 @@ mod cups_options {
         assert!(empty.options.is_empty());
         assert_eq!(empty.diagnostic, None);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Diagnostics can be forwarded to agents without exposing local paths or queue names.
+    #[test]
+    fn option_diagnostics_omit_private_paths_and_queue_names() {
+        let dir = folder();
+        let private = dir.join("private-user");
+        std::fs::create_dir(&private).unwrap();
+        let queue = "private-user-office";
+        let missing = spool::load_printer_options_via_within(queue, &private, command(&dir, ""), LIMIT, "en");
+        let diagnostic = missing.diagnostic.as_deref().unwrap();
+        assert!(!diagnostic.contains("private-user"), "queue names and usernames stay out of diagnostics: {diagnostic}");
+        assert!(!diagnostic.contains(&dir.to_string_lossy().to_string()), "local paths stay out of diagnostics: {diagnostic}");
+        assert!(diagnostic.contains("PPD"));
+        std::fs::write(private.join(format!("{queue}.ppd")), "not a PPD").unwrap();
+        let malformed = spool::load_printer_options_via_within(queue, &private, command(&dir, ""), LIMIT, "en");
+        let diagnostic = malformed.diagnostic.as_deref().unwrap();
+        assert!(!diagnostic.contains("private-user"));
+        assert!(!diagnostic.contains(&dir.to_string_lossy().to_string()));
+        assert!(diagnostic.contains("*OpenUI"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Unknown failures remain honest, and even custom errors cannot inject private details.
+    #[test]
+    fn diagnostic_causes_never_forward_raw_error_text() {
+        use std::io::{Error, ErrorKind};
+        for (kind, expected) in [
+            (ErrorKind::NotFound, "required file or helper not found"),
+            (ErrorKind::PermissionDenied, "permission denied"),
+            (ErrorKind::NotADirectory, "a required directory is unavailable"),
+            (ErrorKind::FileTooLarge, "read limit exceeded"),
+            (ErrorKind::TimedOut, "operation timed out"),
+            (ErrorKind::InvalidData, "invalid data"),
+            (ErrorKind::Other, "I/O operation failed"),
+            (ErrorKind::BrokenPipe, "I/O operation failed"),
+        ] {
+            let error = Error::new(kind, "/home/private-user/private-queue: secret helper details");
+            assert_eq!(spool::diagnostic_io_reason(&error), expected);
+        }
     }
 
     /// Header-only files and lookalike markers must not claim the printer has no settings.
@@ -595,7 +635,7 @@ mod cups_options {
             let result = spool::load_printer_options_via_within("Office", &dir, command(&dir, ""), LIMIT, "en");
             assert!(result.options.is_empty());
             let diagnostic = result.diagnostic.as_deref().unwrap_or_default();
-            assert!(diagnostic.contains("Office.ppd") && diagnostic.contains("*OpenUI"), "{ppd:?}: {result:?}");
+            assert!(diagnostic.contains("PPD") && diagnostic.contains("*OpenUI"), "{ppd:?}: {result:?}");
         }
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -638,8 +678,8 @@ mod cups_options {
         .unwrap();
         for (helper, limit, expected) in [
             (std::process::Command::new(dir.join("missing-lpoptions")), LIMIT, "lpoptions"),
-            (command(&dir, "FAIL"), LIMIT, "7"),
-            (command(&dir, "HANG"), std::time::Duration::from_millis(100), "within"),
+            (command(&dir, "FAIL"), LIMIT, "failed"),
+            (command(&dir, "HANG"), std::time::Duration::from_millis(100), "timed out"),
         ] {
             let result = spool::load_printer_options_via_within("Office", &dir, helper, limit, "en");
             assert_eq!(result.options.len(), 1);

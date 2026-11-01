@@ -25,7 +25,9 @@ its undo/redo history.
 
 `printer_options` returns `printer`, `count` and `options`. Failed or partial reads also
 include a `diagnostic` string; available options are retained. Only an empty list without
-a diagnostic means the read succeeded with no settings. No printer job is submitted.
+a diagnostic means the read succeeded with no settings. Diagnostics retain the operation and
+a bounded failure category, not local paths, queue identifiers or raw OS error text.
+No printer job is submitted.
 
 ## Conventions
 

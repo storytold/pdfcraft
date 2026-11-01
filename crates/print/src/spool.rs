@@ -156,6 +156,21 @@ fn has_ppd_option_declaration(ppd: &str) -> bool {
     })
 }
 
+/// A bounded cause for user/agent diagnostics: never forward a path, username or raw error.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub(crate) fn diagnostic_io_reason(error: &std::io::Error) -> &'static str {
+    use std::io::ErrorKind;
+    match error.kind() {
+        ErrorKind::NotFound => "required file or helper not found",
+        ErrorKind::PermissionDenied => "permission denied",
+        ErrorKind::NotADirectory => "a required directory is unavailable",
+        ErrorKind::FileTooLarge => "read limit exceeded",
+        ErrorKind::TimedOut => "operation timed out",
+        ErrorKind::InvalidData => "invalid data",
+        _ => "I/O operation failed",
+    }
+}
+
 /// Read options without hiding file or helper failures; retain any usable PPD defaults.
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 pub(crate) fn load_printer_options_via_within(
@@ -189,19 +204,22 @@ pub(crate) fn load_printer_options_via_within(
             let mut bytes = Vec::new();
             f.take(PPD_CAP + 1).read_to_end(&mut bytes)?;
             if bytes.len() as u64 > PPD_CAP {
-                return Err(std::io::Error::other("PPD exceeds the 16 MiB read limit"));
+                return Err(std::io::Error::new(std::io::ErrorKind::FileTooLarge, "PPD exceeds the 16 MiB read limit"));
             }
             Ok(bytes)
         })
         .map_err(|e| {
-            diagnostics.push(format!("Could not read printer settings from {}: {e}. Check the queue's PPD file and its permissions.", path.display()))
+            diagnostics.push(format!(
+                "Could not read the printer's PPD settings: {}. Check the queue's PPD file and permissions (maximum 16 MiB).",
+                diagnostic_io_reason(&e)
+            ))
         })
         .ok();
     let mut options = ppd.as_deref().map(|b| {
         let text = ppd_text(b);
         let options = parse_ppd(&text);
         if options.is_empty() && !has_ppd_option_declaration(&text) {
-            diagnostics.push(format!("No recognizable *OpenUI option declarations were found in {}. Check the queue's PPD file; printer-specific settings could not be discovered.", path.display()));
+            diagnostics.push("No recognizable *OpenUI option declarations were found in the printer's PPD. Check the queue's PPD file; printer-specific settings could not be discovered.".into());
         }
         options
     }).unwrap_or_default();
@@ -211,7 +229,7 @@ pub(crate) fn load_printer_options_via_within(
     let current = match output_within(lpoptions.args(["-p", printer, "-l"]), limit) {
         Ok(out) => parse_lpoptions(&String::from_utf8_lossy(&out)),
         Err(e) => {
-            diagnostics.push(format!("Could not read queue defaults with lpoptions: {e}. Check that CUPS and lpoptions are available; any listed settings use the PPD defaults."));
+            diagnostics.push(format!("Could not read queue defaults with lpoptions: {}. Check that CUPS and lpoptions are available; any listed settings use the PPD defaults.", diagnostic_io_reason(&e)));
             Default::default()
         }
     };
