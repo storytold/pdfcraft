@@ -108,14 +108,15 @@ fn title_format(item: &OutlineItem, depth: usize, t: &Tokens) -> egui::TextForma
 /// The inline bookmark rename field. It takes focus on its first frame with all of its text
 /// selected, so typing replaces the old title instead of landing at a random caret position.
 fn rename_field(ui: &mut egui::Ui, text: &mut String, id: egui::Id) -> egui::Response {
-    let first_frame = !ui.memory(|m| m.has_focus(id));
-    if first_frame {
+    let resp = ui.add(crate::widgets::line(text).desired_width(ui.available_width() - 8.0).id(id));
+    // Select the whole title once the field has focus: a selection stored before that is
+    // collapsed to the cursor, because an unfocused field doesn't own the IME events.
+    if resp.gained_focus() {
         let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
         let end = egui::text::CCursor::new(text.chars().count());
         state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), end)));
         state.store(ui.ctx(), id);
     }
-    let resp = ui.add(crate::widgets::line(text).desired_width(ui.available_width() - 8.0).id(id));
     if !resp.has_focus() && !resp.lost_focus() {
         resp.request_focus();
     }
@@ -384,7 +385,7 @@ mod rename_field_tests {
         let ctx = egui::Context::default();
         let id = egui::Id::unique("bm_rename_test");
         let mut text = String::from("Untitled");
-        for _ in 0..2 {
+        for _ in 0..3 {
             let output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 rename_field(ui, &mut text, id);
             });
