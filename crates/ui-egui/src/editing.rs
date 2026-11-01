@@ -850,9 +850,11 @@ impl PdfCraftApp {
                 let (page, [left, top]) =
                     self.session.get(id).and_then(|d| self.views.get(i)?.bookmark_position(&d.info)).unwrap_or((current, [None, None]));
                 let (left, top) = (left.map(f64::from), top.map(f64::from));
-                self.apply_edit(Edit::AddBookmark { parent: vec![], index: n, title: "Untitled".into(), page, left, top });
+                // Named after the words selected, as in Acrobat (#5577); else "Untitled".
+                let title = self.views.get(i).and_then(|v| v.bookmark_title()).unwrap_or_else(|| "Untitled".into());
+                self.apply_edit(Edit::AddBookmark { parent: vec![], index: n, title: title.clone(), page, left, top });
                 // Like Acrobat: the new bookmark starts in rename mode.
-                self.bookmark_rename = Some((vec![n], "Untitled".into()));
+                self.bookmark_rename = Some((vec![n], title));
                 self.right = Some(crate::RightPanel::Bookmarks);
                 return;
             }

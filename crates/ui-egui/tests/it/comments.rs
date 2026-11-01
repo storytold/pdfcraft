@@ -3022,3 +3022,21 @@ fn an_upright_comment_on_a_turned_page_is_drawn_where_it_goes_before_release() {
     h.drop_at(from + delta);
     h.run_steps(3);
 }
+
+/// #5577: the selection bar's Add bookmark adds one named after the selected words and pointing
+/// at them, opened for renaming in the Bookmarks panel, as a bookmark made with words selected is
+/// in Acrobat.
+#[test]
+fn selected_text_bookmark_action_names_the_bookmark_after_the_words() {
+    let mut h = harness(|_| {});
+    h.state_mut().views[0].select_text(0, 4, 15);
+    h.run_steps(3);
+    h.get_by_label("Add bookmark").click();
+    h.run_steps(3);
+    let s = h.state();
+    let outline = &s.session.get(s.views[0].id).unwrap().info.outline;
+    assert_eq!(outline.len(), 1, "{outline:?}");
+    assert_eq!((outline[0].title.as_str(), outline[0].page), ("quick brown", Some(0)));
+    assert_eq!(s.bookmark_rename, Some((vec![0], "quick brown".to_string())), "opened for renaming");
+    assert_eq!(s.right, Some(pdfcraft_ui_egui::RightPanel::Bookmarks));
+}
