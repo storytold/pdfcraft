@@ -23,6 +23,14 @@ pub(crate) struct HNode {
     pub(crate) gone: bool,
     /// See [`XfaNode::formatted`]; dropped when a script sets the value, which it no longer shows.
     pub(crate) formatted: Option<String>,
+    /// See [`XfaNode::props`]; instances a script adds share their first instance's.
+    pub(crate) props: std::sync::Arc<super::XfaProps>,
+    /// A choice list's entries as a script's list methods leave them, one list per `<items>`;
+    /// `None` while they are as the template lists them. The hook for PdfCraft's choice-list
+    /// methods (`addItem`, `clearItems`; the Series 1 work, not on main yet), which will set it so
+    /// that the `items` property reads (see [`super::props::list_entries`]) agree with them.
+    /// Nothing sets it yet, so reads follow the template.
+    pub(crate) items: Option<Vec<super::props::ItemList>>,
 }
 
 /// The form as a script sees and changes it, with the effects it records.
@@ -48,6 +56,14 @@ pub(crate) struct XHost {
     /// Bytes of text kept in effects, console lines and values written, against [`MAX_PAYLOAD`].
     kept: usize,
     dropped_bytes: usize,
+    /// What the script wrote to property objects, by (node, property path): read back later in
+    /// the run, applied nowhere yet. Charged against [`MAX_PAYLOAD`].
+    pub(crate) prop_writes: super::props::PropWrites,
+    /// Attributes written to a property past [`super::props::MAX_WRITTEN_ATTRS`], left out.
+    pub(super) dropped_prop_writes: usize,
+    /// Bytes of edges and corners copied when a script reached sides a border doesn't list,
+    /// against [`super::props::MAX_COPIED`].
+    pub(super) copied: usize,
 }
 
 impl XHost {
@@ -74,11 +90,14 @@ impl XHost {
             dropped_console: 0,
             kept: 0,
             dropped_bytes: 0,
+            prop_writes: super::props::PropWrites::new(),
+            dropped_prop_writes: 0,
+            copied: 0,
         }
     }
 
     /// Room for `bytes` more bytes of kept text: charged when there is, a drop counted when not.
-    fn room(&mut self, bytes: usize) -> bool {
+    pub(super) fn room(&mut self, bytes: usize) -> bool {
         match self.kept.checked_add(bytes).filter(|k| *k <= MAX_PAYLOAD) {
             Some(k) => {
                 self.kept = k;
@@ -209,6 +228,13 @@ impl XHost {
         if self.clipped_values > 0 {
             out.push(format!("the script set {} value(s) longer than {MAX_VALUE} characters; they were cut", self.clipped_values));
         }
+        if self.dropped_prop_writes > 0 {
+            out.push(format!(
+                "the script wrote more than {} attributes to one property; {} more were left out",
+                super::props::MAX_WRITTEN_ATTRS,
+                self.dropped_prop_writes
+            ));
+        }
         out
     }
 
@@ -272,6 +298,8 @@ fn flatten(n: &XfaNode, parent: Option<usize>, out: &mut Vec<HNode>, depth: usiz
         children: Vec::new(),
         gone: false,
         formatted: n.formatted.clone(),
+        props: std::sync::Arc::clone(&n.props),
+        items: None,
     });
     let mut kids = Vec::new();
     for c in &n.children {

@@ -7,8 +7,8 @@ use roxmltree::Node as XmlNode;
 use crate::XfaError;
 use crate::model::{
     Access, Anchor, Area, Border, Caption, ChoiceList, Color, Common, Corner, Draw, Edge, ExclGroup, Field, FontSpec, HAlign, Layout, Margin, Node,
-    Occur, PageArea, PageRole, PageSet, ParaSpec, Paragraph, Placement, Presence, Rect, RichText, Run, Script, Stroke, Subform, Template, Ui, VAlign,
-    Value,
+    Occur, PageArea, PageRole, PageSet, ParaSpec, Paragraph, Placement, Presence, Prop, Props, Rect, RichText, Run, Script, Stroke, Subform,
+    Template, Ui, VAlign, Value,
 };
 
 /// Deepest element nesting followed (templates are shallow; hostile ones are not).
@@ -136,26 +136,36 @@ fn parse_fill(n: Option<XmlNode>) -> Option<Color> {
     Some(parse_color(child(n, "color")).unwrap_or(Color::WHITE))
 }
 
-/// `<border>`: edges in XFA order. One edge applies to all four; two: top/bottom then
-/// left/right; three: top, left/right, bottom; four: top, right, bottom, left.
+/// `<border>`: edges top, right, bottom, left (XFA 3.3 p. 38), the sides not listed drawn as
+/// readers draw them ([`drawn_side`]), not as p. 38's text says.
 fn parse_border(n: Option<XmlNode>) -> Option<Border> {
     let n = n?;
-    let edges: Vec<Edge> = children(n, "edge").map(parse_edge).collect();
-    let d = Edge::default();
-    let e = |i: usize| edges.get(i).copied().unwrap_or(d);
-    let four = match edges.len() {
-        0 => [d; 4],
-        1 => [e(0); 4],
-        2 => [e(0), e(1), e(0), e(1)],
-        3 => [e(0), e(1), e(2), e(1)],
-        _ => [e(0), e(1), e(2), e(3)],
-    };
+    let edges: Vec<Edge> = children(n, "edge").take(4).map(parse_edge).collect();
+    let four = std::array::from_fn(|i| drawn_side(edges.len(), i).and_then(|k| edges.get(k).copied()).unwrap_or_default());
     Some(Border { presence: Presence::parse(n.attribute("presence")), edges: four, corners: parse_corners(n), fill: parse_fill(child(n, "fill")) })
 }
 
+/// Which of the `listed` edges (or corners) of a border is drawn on side `index`: edges go
+/// top, right, bottom, left and corners top-left, top-right, bottom-right, bottom-left (XFA 3.3
+/// p. 38). For a border that lists fewer than four, p. 38 says the last one listed is reused
+/// for the rest; readers draw a side not listed from the edge or corner on the same side
+/// instead, and so does this: one serves every side, two alternate (0, 1, 0, 1), three reuse
+/// the second for the fourth (0, 1, 2, 1). Edges already followed the readers; corners now do
+/// too. The scripting host's reads mirror the same pattern so a script reads what is drawn.
+/// `None` when none is listed.
+pub(crate) fn drawn_side(listed: usize, index: usize) -> Option<usize> {
+    match listed {
+        0 => None,
+        _ if index < listed => Some(index),
+        1 => Some(0),
+        2 => Some(index % 2),
+        _ => Some(1),
+    }
+}
+
 /// The `<corner>` children of a border or rectangle, top-left, top-right, bottom-right then
-/// bottom-left: one applies to all four, and a corner not given is the last one given. Without
-/// any, the corners are square.
+/// bottom-left, the ones not listed drawn as [`drawn_side`] picks, as edges are. Without any,
+/// the corners are square.
 fn parse_corners(n: XmlNode) -> [Corner; 4] {
     let given: Vec<Corner> = children(n, "corner")
         .take(4)
@@ -165,8 +175,7 @@ fn parse_corners(n: XmlNode) -> [Corner; 4] {
             inverted: c.attribute("inverted") == Some("1"),
         })
         .collect();
-    let Some(last) = given.last().copied() else { return [Corner::default(); 4] };
-    std::array::from_fn(|i| given.get(i).copied().unwrap_or(last))
+    std::array::from_fn(|i| drawn_side(given.len(), i).and_then(|k| given.get(k).copied()).unwrap_or_default())
 }
 
 /// `<font>`: typeface, size, weight, posture, underline, fill color and horizontal scale.
@@ -198,8 +207,9 @@ fn parse_para(n: Option<XmlNode>) -> ParaSpec {
     }
 }
 
-fn parse_common(n: XmlNode) -> Common {
+fn parse_common(n: XmlNode, warnings: &mut Vec<String>) -> Common {
     Common {
+        props: std::sync::Arc::new(parse_props(n, warnings)),
         name: n.attribute("name").map(str::to_string).filter(|s| !s.is_empty()),
         id: n.attribute("id").map(str::to_string),
         x: attr_measure(n, "x"),
@@ -218,6 +228,247 @@ fn parse_common(n: XmlNode) -> Common {
         para: parse_para(child(n, "para")),
         col_span: n.attribute("colSpan").and_then(|c| c.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 64),
     }
+}
+
+/// The property elements of an object that scripts read through the object model (XFA 3.3
+/// ch. 17: border p. 629, font p. 741, para p. 800, margin p. 776, ui p. 877, validate p. 880,
+/// occur p. 786, break p. 632, breakBefore p. 637, breakAfter p. 635, assist p. 609, format
+/// p. 745, value p. 882, bind p. 623, desc p. 674, extras p. 724, keep p. 762, caption p. 643,
+/// items p. 758, calculate p. 641).
+const PROP_TAGS: &[&str] = &[
+    "border",
+    "font",
+    "para",
+    "margin",
+    "ui",
+    "validate",
+    "occur",
+    "break",
+    "breakBefore",
+    "breakAfter",
+    "assist",
+    "format",
+    "value",
+    "bind",
+    "desc",
+    "extras",
+    "keep",
+    "caption",
+    "items",
+    "calculate",
+];
+/// Most property elements kept for one object, all levels together. A field written by a form
+/// designer holds about 40 (four edges and corners with their colours, a fill, a font, a widget
+/// with its own border); past this the rest are left out and a warning says so.
+pub const MAX_OBJECT_PROPS: usize = 256;
+/// Most bytes of tags, attribute names, values and text kept for one object's properties: a
+/// designer's field holds well under 2 KiB.
+pub const MAX_OBJECT_PROP_BYTES: usize = 16 << 10;
+/// Deepest property element kept below an object (`ui > textEdit > border > edge > color` is 5).
+const MAX_PROP_DEPTH: usize = 8;
+/// Most attributes kept on one element.
+const MAX_PROP_ATTRS: usize = 64;
+/// Longest validation or calculation script kept for scripts to read, in bytes: the script
+/// engine's own limit on a script (`pdfcraft_js`'s `MAX_SCRIPT_BYTES`), past which it would not run anyway.
+const MAX_VALIDATE_SCRIPT_BYTES: usize = 256 * 1024;
+/// The warning when an object's properties passed a limit.
+pub const PROPS_CUT_WARNING: &str = "an object has more property elements, attributes or text than scripts are given; the rest are left out";
+
+/// What is left of one object's property budget.
+struct PropBudget {
+    elements: usize,
+    bytes: usize,
+    cut: bool,
+}
+
+impl PropBudget {
+    /// `s` when the bytes are left for it (charged), else `None` and the cut noted.
+    fn text(&mut self, s: &str) -> Option<String> {
+        match self.bytes.checked_sub(s.len()) {
+            Some(left) => {
+                self.bytes = left;
+                Some(s.to_string())
+            }
+            None => {
+                self.cut = true;
+                None
+            }
+        }
+    }
+
+    /// The attributes of `n`, to [`MAX_PROP_ATTRS`] and while the bytes last.
+    fn attrs(&mut self, n: XmlNode) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for a in n.attributes() {
+            if out.len() >= MAX_PROP_ATTRS {
+                self.cut = true;
+                break;
+            }
+            let Some(name) = self.text(a.name()) else { break };
+            let Some(value) = self.text(a.value()) else { break };
+            out.push((name, value));
+        }
+        out
+    }
+}
+
+/// Most `<items>` of one object kept as lists ([`items_prop`]): a field has two at most, the
+/// shown list and the saved values (XFA 3.3 p. 726, `<items/> [0..2]`), the two the field's own
+/// lists are read from. Forms do carry more (one public form has a third, empty, saved list);
+/// any further one is kept as an ordinary property, every entry charged to the object's budget.
+const MAX_ITEM_LISTS: usize = 2;
+
+/// An `<items>` element (XFA 3.3 p. 758) as scripts read it: its attributes and its entries,
+/// each with its tag and text, as the choice list or check button shows them ([`parse_items`]:
+/// the same [`MAX_ITEMS`] and the same text), so a script reads what the list holds. The
+/// element and its attributes are charged to the object's budget like any property; its
+/// entries are not (a list of a few hundred countries would otherwise crowd out every other
+/// property), so they are bounded by the list's own limits instead: [`MAX_ITEMS`] entries of
+/// at most [`MAX_TEXT`] each, in at most [`MAX_ITEM_LISTS`] lists, no more than the field's
+/// own lists hold. An entry's attributes are not kept: scripts read an entry's value.
+fn items_prop(n: XmlNode, b: &mut PropBudget) -> Option<Prop> {
+    if b.elements == 0 {
+        b.cut = true;
+        return None;
+    }
+    b.elements -= 1;
+    let tag = b.text(n.tag_name().name())?;
+    let attrs = b.attrs(n);
+    let children = n
+        .children()
+        .filter(|c| c.is_element())
+        .take(MAX_ITEMS)
+        .map(|c| Prop { tag: c.tag_name().name().to_string(), attrs: Vec::new(), text: Some(std::sync::Arc::from(text_of(c))), children: Vec::new() })
+        .collect();
+    Some(Prop { tag, attrs, text: None, children })
+}
+
+/// The property elements of `n` scripts read: its own attributes and the [`PROP_TAGS`]
+/// elements with what they hold, within [`MAX_OBJECT_PROPS`] elements,
+/// [`MAX_OBJECT_PROP_BYTES`] of text, [`MAX_PROP_DEPTH`] levels and [`MAX_PROP_ATTRS`]
+/// attributes an element; past them the rest is left out and [`PROPS_CUT_WARNING`] is added
+/// once. Only elements in the object's namespace are properties (XFA 3.3 p. 598); a `script` is
+/// read only in a `validate` or a `calculate`, and only its first (forms read its text, which
+/// is not charged to the budget but kept within [`MAX_VALIDATE_SCRIPT_BYTES`]), the first
+/// [`MAX_ITEM_LISTS`] `items` as lists (see [`items_prop`]), `extras` only as the object's own, the XHTML
+/// of `exData` not at all, and of `value` only its content element's tag and attributes (the
+/// data is the object's value, read elsewhere).
+fn parse_props(n: XmlNode, warnings: &mut Vec<String>) -> Props {
+    /// The property elements under `n`, whose tag is `within` (empty for the object itself):
+    /// `extras` in the object and inside one (forms keep named values there), `script` in a
+    /// `validate` or a `calculate` (XFA 3.3 p. 880, p. 641, p. 827).
+    fn elements<'a, 'd>(n: XmlNode<'a, 'd>, within: &str) -> impl Iterator<Item = XmlNode<'a, 'd>> + use<'a, 'd> {
+        let (extras, script) = (within.is_empty() || within == "extras", matches!(within, "validate" | "calculate"));
+        let ns = n.tag_name().namespace();
+        n.children().filter(move |c| {
+            c.is_element()
+                && c.tag_name().namespace() == ns
+                && match c.tag_name().name() {
+                    "script" => script,
+                    "extras" => extras,
+                    _ => true,
+                }
+        })
+    }
+    /// `n` as a property, `depth` below the object; `bare`: its tag and attributes only.
+    fn prop(n: XmlNode, depth: usize, bare: bool, b: &mut PropBudget) -> Option<Prop> {
+        if depth > MAX_PROP_DEPTH || b.elements == 0 {
+            b.cut = true;
+            return None;
+        }
+        b.elements -= 1;
+        let tag = b.text(n.tag_name().name())?;
+        let mut p = Prop { attrs: b.attrs(n), tag, text: None, children: Vec::new() };
+        if bare {
+            return Some(p);
+        }
+        if p.tag == "exData" {
+            // Rich text: its words, as scripts read a caption's rich text (`exData.value`), not
+            // its XHTML elements.
+            let t = text_of(n);
+            let t = t.trim();
+            if !t.is_empty() {
+                p.text = b.text(t).map(std::sync::Arc::from);
+            }
+            return Some(p);
+        }
+        if p.tag == "script" {
+            // A validation's or calculation's script: its text is not charged to the budget, so a long script
+            // leaves the other properties their room, but it is kept only within the script
+            // engine's own limit on a script, past which it would not run anyway.
+            let t = text_of(n);
+            let t = t.trim();
+            if t.len() > MAX_VALIDATE_SCRIPT_BYTES {
+                b.cut = true;
+            } else if !t.is_empty() {
+                p.text = Some(std::sync::Arc::from(t));
+            }
+            return Some(p);
+        }
+        let mut kids = elements(n, p.tag.as_str()).peekable();
+        if kids.peek().is_none() {
+            // The element's own text only: not that of children left out (an `extras`, a
+            // `script`), and no more than the budget holds.
+            let mut own = String::new();
+            for t in n.children().filter(|c| c.is_text()).filter_map(|c| c.text()) {
+                if own.len().saturating_add(t.len()) > b.bytes {
+                    b.cut = true;
+                    own.clear();
+                    break;
+                }
+                own.push_str(t);
+            }
+            let t = own.trim();
+            if !t.is_empty() {
+                p.text = b.text(t).map(std::sync::Arc::from);
+            }
+            return Some(p);
+        }
+        // The object's own value holds its data, read elsewhere: of it only the content
+        // element's tag. A caption's value is its label, and is read whole.
+        let content_only = p.tag == "value" && depth == 1;
+        // A validation or a calculation has one script (XFA 3.3 p. 880, p. 641: [0..1]); any
+        // more are not read.
+        let mut scripts = 0usize;
+        for k in kids {
+            if k.tag_name().name() == "script" {
+                scripts = scripts.saturating_add(1);
+                if scripts > 1 {
+                    continue;
+                }
+            }
+            match prop(k, depth + 1, content_only, b) {
+                Some(c) => p.children.push(c),
+                None => break,
+            }
+        }
+        Some(p)
+    }
+    let mut b = PropBudget { elements: MAX_OBJECT_PROPS, bytes: MAX_OBJECT_PROP_BYTES, cut: false };
+    let attrs = b.attrs(n);
+    let mut out = Vec::new();
+    // `desc` and `extras` last: they can hold the most (forms keep data there), so a cut falls
+    // on them before the appearance and validation properties (their order means nothing,
+    // XFA 3.3 p. 78).
+    let bulky = |c: &XmlNode| matches!(c.tag_name().name(), "desc" | "extras");
+    let first = elements(n, "").filter(|c| PROP_TAGS.contains(&c.tag_name().name()) && !bulky(c));
+    let mut lists = 0usize;
+    for c in first.chain(elements(n, "").filter(bulky)) {
+        let p = if c.tag_name().name() == "items" && lists < MAX_ITEM_LISTS {
+            lists += 1;
+            items_prop(c, &mut b)
+        } else {
+            prop(c, 1, false, &mut b)
+        };
+        match p {
+            Some(p) => out.push(p),
+            None => break,
+        }
+    }
+    if b.cut && !warnings.iter().any(|w| w == PROPS_CUT_WARNING) {
+        warnings.push(PROPS_CUT_WARNING.into());
+    }
+    Props { attrs, elements: out }
 }
 
 /// Rich text: XHTML `body > p > span…`. `br` starts a new paragraph; `xfa:embed` spans become
@@ -520,7 +771,7 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         .map(|t| t.trim().to_string())
         .filter(|t| !t.is_empty());
     Field {
-        common: parse_common(n),
+        common: parse_common(n, warnings),
         ui: kind,
         ui_border: ui_el.and_then(|e| parse_border(child(e, "border"))),
         ui_margin: parse_margin(ui_el.and_then(|e| child(e, "margin"))),
@@ -619,7 +870,7 @@ fn parse_page_set(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> PageS
 }
 
 fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Subform {
-    let common = parse_common(n);
+    let common = parse_common(n, warnings);
     let mut children_out = Vec::new();
     let mut page_set = None;
     for c in n.children().filter(|c| c.is_element()) {
@@ -663,13 +914,13 @@ fn parse_node(c: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Option<No
             Node::Subform(Box::new(sf))
         }
         "area" => Node::Area(Box::new(Area {
-            common: parse_common(c),
+            common: parse_common(c, warnings),
             children: c.children().filter(|k| k.is_element()).filter_map(|k| parse_node(k, warnings, depth + 1)).collect(),
         })),
         "field" => Node::Field(Box::new(parse_field(c, warnings))),
-        "draw" => Node::Draw(Box::new(Draw { common: parse_common(c), value: parse_value(child(c, "value"), warnings) })),
+        "draw" => Node::Draw(Box::new(Draw { common: parse_common(c, warnings), value: parse_value(child(c, "value"), warnings) })),
         "exclGroup" => Node::ExclGroup(Box::new(ExclGroup {
-            common: parse_common(c),
+            common: parse_common(c, warnings),
             layout: Layout::parse(c.attribute("layout")),
             fields: children(c, "field").map(|f| parse_field(f, warnings)).collect(),
             tooltip: child(c, "assist").and_then(|a| child(a, "toolTip")).map(text_of).map(|t| t.trim().to_string()).filter(|t| !t.is_empty()),
@@ -718,6 +969,13 @@ fn collect_page_roles(nodes: &[Node], out: &mut Vec<(String, PageRole)>, depth: 
 
 /// Parse a template packet. Returns the template and the warnings met on the way.
 pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
+    // No bigger than a packet the reader accepts can come to as text ([`crate::read_packets`]), so
+    // what parsing keeps of it (item lists are held by the field and its properties) stays within
+    // a few times that, whoever calls it.
+    let limit = crate::packets::MAX_TEMPLATE_TEXT;
+    if xml.len() > limit {
+        return Err(XfaError::TooLarge(format!("the template is {} bytes, past the {limit} bytes the reader accepts", xml.len())));
+    }
     let depth = crate::xml_nesting_depth(xml);
     if depth > crate::MAX_XML_DEPTH {
         return Err(XfaError::Malformed(format!(
@@ -759,7 +1017,7 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
     }
     let mut page_roles = Vec::new();
     collect_page_roles(&[Node::Subform(Box::new(root_sf.clone()))], &mut page_roles, 0);
-    Ok((Template { root: root_sf, page_roles }, warnings))
+    Ok((Template { root: root_sf, page_roles, cache: Default::default() }, warnings))
 }
 
 fn parse_access(a: Option<&str>) -> Option<Access> {
@@ -835,3 +1093,7 @@ fn apply_saved_state(nodes: &mut [Node], saved: XmlNode, depth: usize) {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "props_tests.rs"]
+mod props_tests;

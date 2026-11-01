@@ -2,8 +2,9 @@ use super::globals::{recalculate, relayout};
 use super::host::{HNode, XHost, host};
 use super::instances::{instance_manager, list_object};
 use super::model::{MAX_DEPTH, XfaEffect};
+use super::props;
 use super::{
-    Attribute, Context, JsObject, JsProxy, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, arg, as_number, error, function,
+    Attribute, Context, JsObject, JsProxy, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, arg, as_number, clip, error, function,
     js_string, s, text,
 };
 
@@ -208,6 +209,12 @@ fn node_get(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
         (n.name.clone(), n.som.clone(), n.kind, n.value.clone(), n.presence.clone(), n.access.clone(), n.index, n.parent, n.children.clone())
     };
     let (name, som, kind, value, presence, access, index, parent, children) = snapshot;
+    // A child named like one of the members read from the properties comes first, as for the
+    // properties themselves (XFA 3.3 p. 99).
+    let shadowing = if props::NODE_MEMBERS.contains(&key.as_str()) { child_named(&host(ctx)?.borrow(), idx, &key) } else { None };
+    if let Some(c) = shadowing {
+        return node_object(ctx, c);
+    }
     Ok(match key.as_str() {
         IDX => JsValue::from(idx as f64),
         "rawValue" | "value" => host(ctx)?.borrow().nodes.get(idx).map_or(JsValue::null(), value_js),
@@ -219,7 +226,15 @@ fn node_get(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
         "presence" => s(&presence),
         "access" => s(&access),
         "isNull" => JsValue::from(value.is_empty()),
-        "mandatory" => s("disabled"),
+        "mandatory" => s(&props::node_mandatory(&host(ctx)?.borrow(), idx)),
+        "fillColor" | "fontColor" | "borderColor" => {
+            let path = props::shorthand_color(&key).unwrap_or_default();
+            s(&props::node_color(&host(ctx)?.borrow(), idx, path))
+        }
+        "validationMessage" | "formatMessage" | "mandatoryMessage" => {
+            let test = props::message_test(&key).unwrap_or_default();
+            s(&props::node_message(&host(ctx)?.borrow(), idx, test))
+        }
         "parent" => match parent {
             Some(p) => node_object(ctx, p)?,
             None => JsValue::null(),
@@ -246,32 +261,33 @@ fn node_get(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
         "resolveNodes" => resolver(ctx, idx, true)?,
         "recalculate" => function(ctx, NativeFunction::from_fn_ptr(recalculate)).into(),
         "remerge" => function(ctx, NativeFunction::from_fn_ptr(relayout)).into(),
-        "getAttribute"
-        | "setAttribute"
-        | "execEvent"
-        | "execInitialize"
-        | "execCalculate"
-        | "execValidate"
-        | "getElement"
-        | "setElement"
-        | "isPropertySpecified"
-        | "loadXML"
-        | "saveXML"
-        | "clone" => function(ctx, NativeFunction::from_fn_ptr(noop)).into(),
+        "getAttribute" => node_method(ctx, idx, props::get_attribute),
+        "getElement" => node_method(ctx, idx, props::get_element),
+        "isPropertySpecified" => node_method(ctx, idx, props::is_property_specified),
+        "setAttribute" | "execEvent" | "execInitialize" | "execCalculate" | "execValidate" | "setElement" | "loadXML" | "saveXML" | "clone" => {
+            function(ctx, NativeFunction::from_fn_ptr(noop)).into()
+        }
         "toString" | "valueOf" | "toJSON" => function(ctx, NativeFunction::from_fn_ptr(node_to_string)).into(),
         "length" => JsValue::undefined(),
-        "border" | "ui" | "font" | "caption" | "fillColor" | "borderColor" | "fontColor" | "margin" | "para" | "assist" | "validate" | "format"
-        | "items" | "bind" | "keep" | "h" | "w" | "x" | "y" | "minH" | "maxH" | "minW" | "maxW" | "layout" | "model" | "oneOfChild" | "locale"
-        | "relevant" | "colSpan" | "dataNode" | "defaultValue" | "editValue" | "selectedIndex" | "event" | "calculate" | "traversal" | "extras"
-        | "desc" => sink(ctx)?,
         other => {
             if let Some(child) = other.strip_prefix('_') {
                 let exists = child_named(&host(ctx)?.borrow(), idx, child).is_some();
                 return if exists { instance_manager(ctx, idx, child) } else { Ok(JsValue::undefined()) };
             }
+            // `#border`: the property, whatever the children are called.
+            if let Some(prop) = other.strip_prefix('#').filter(|p| props::NODE_PROPS.contains(p)) {
+                return props::prop_object(ctx, idx, &props::node_prop_path(prop));
+            }
             let found = child_named(&host(ctx)?.borrow(), idx, other);
             match found {
                 Some(c) => node_object(ctx, c)?,
+                // A child of the name comes first, for every name below: "XFA SOM resolves the
+                // name clash in favor of the explicit naming" (XFA 3.3 p. 99).
+                // Property objects (p. 78): read with the spec's defaults, written for this run
+                // only.
+                None if props::NODE_PROPS.contains(&other) => props::prop_object(ctx, idx, &props::node_prop_path(other))?,
+                // Members not modelled yet take any read or write without complaint.
+                None if SINK_MEMBERS.contains(&other) => sink(ctx)?,
                 None => JsValue::undefined(),
             }
         }
@@ -309,6 +325,12 @@ fn node_set(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
             };
             h.set_state(idx, XfaEffect::SetAccess { som, access: a });
         }
+        // A child of the same name is what a read of the member gives (see `node_get`), so a
+        // write names that child too, and doesn't reach the property; writes to a child by name
+        // are not modelled, as for every other child name.
+        k if props::NODE_MEMBERS.contains(&k) && child_named(&h, idx, k).is_some() => {}
+        "mandatory" | "validationMessage" | "formatMessage" | "mandatoryMessage" => h.set_validation(idx, &key, clip(value)),
+        "fillColor" | "fontColor" | "borderColor" => h.set_color(idx, &key, clip(value)),
         _ => {}
     }
     Ok(JsValue::from(true))
@@ -317,6 +339,37 @@ fn node_set(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
 fn node_to_string(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let idx = node_index(this, ctx)?;
     Ok(s(&host(ctx)?.borrow().nodes.get(idx).map(|n| n.value.clone()).unwrap_or_default()))
+}
+
+/// Node members not modelled yet: a read gives an object that takes any read or write
+/// ([`sink`]) unless a child has the name.
+const SINK_MEMBERS: &[&str] = &[
+    "h",
+    "w",
+    "x",
+    "y",
+    "minH",
+    "maxH",
+    "minW",
+    "maxW",
+    "layout",
+    "model",
+    "oneOfChild",
+    "locale",
+    "relevant",
+    "colSpan",
+    "dataNode",
+    "defaultValue",
+    "editValue",
+    "selectedIndex",
+    "event",
+    "traversal",
+];
+
+/// The node method `f` bound to node `idx`.
+fn node_method(ctx: &mut Context, idx: usize, f: fn(&JsValue, &[JsValue], &JsObject, &mut Context) -> JsResult<JsValue>) -> JsValue {
+    let r = props::node_ref(ctx, idx);
+    function(ctx, NativeFunction::from_copy_closure_with_captures(f, r)).into()
 }
 
 pub(super) fn noop(_: &JsValue, _: &[JsValue], _: &mut Context) -> JsResult<JsValue> {
@@ -334,6 +387,23 @@ pub(super) fn resolver(ctx: &mut Context, from: usize, many: bool) -> JsResult<J
         let many = key.get(js_string!("many"), ctx)?.to_boolean();
         let expr = text(&arg(args, 0), ctx)?;
         let found = resolve_som(&host(ctx)?.borrow(), from, &expr);
+        // An expression that runs into an object's properties (`ui.#textEdit`, `border.edge[1]`),
+        // for some of the objects it names at least: a child named as the property comes first
+        // for each object on its own, in place ((child, "")).
+        let props = props::resolve_into_props(&host(ctx)?.borrow(), from, &expr);
+        if let Some((node, path)) = props.first().cloned() {
+            {
+                // Edges and corners reached past those a border lists come into being.
+                let mut h = host(ctx)?.borrow_mut();
+                let reached = if many { props.as_slice() } else { props.get(..1).unwrap_or_default() };
+                reached.iter().filter(|(_, p)| !p.is_empty()).for_each(|(n, p)| h.instantiate(*n, p));
+            }
+            return match (many, path.is_empty()) {
+                (true, _) => props::list_object(ctx, props),
+                (false, true) => node_object(ctx, node),
+                (false, false) => props::prop_object(ctx, node, &path),
+            };
+        }
         if many {
             return list_object(ctx, &found);
         }
