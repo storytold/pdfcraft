@@ -5279,6 +5279,67 @@ fn alt_arrows_navigate_instead_of_nudging_a_selected_image() {
     assert!((moved[0] - before[0] - 1.0).abs() < 0.01, "a plain → nudged a point: {before:?} → {moved:?}");
 }
 
+/// A paragraph's edge and an open paragraph's frame are caught a few pixels either side of
+/// their hairline, and the cursor shows exactly where a press takes hold (#2203).
+#[test]
+fn paragraph_edges_and_frames_are_caught_without_aiming_for_the_hairline() {
+    let start = |h: &mut Harness<'static, PdfCraftApp>| {
+        assert!(h.state_mut().execute("edit.edit_text"));
+        h.run_steps(2);
+        let id = h.state().views[0].id;
+        let b = h.state().session.get(id).unwrap().text_blocks(0)[0].clone();
+        let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+        let k = r.width() / 200.0;
+        // The drawn box: the text on screen, 2 px larger each side.
+        let bx = egui::Rect::from_min_max(
+            egui::pos2(r.left() + b.rect[0] as f32 * k, r.top() + (300.0 - b.rect[3] as f32) * k),
+            egui::pos2(r.left() + b.rect[2] as f32 * k, r.top() + (300.0 - b.rect[1] as f32) * k),
+        )
+        .expand(2.0);
+        (id, bx)
+    };
+    // A closed paragraph's right edge, 7 px inside and 7 px outside: the rewrap arrow, and a
+    // drag from there changes the width rather than moving the box.
+    for dx in [-7.0f32, 7.0] {
+        let mut h = harness(1, |_| {});
+        let (id, bx) = start(&mut h);
+        let p = egui::pos2(bx.right() + dx, bx.center().y);
+        h.hover_at(p);
+        h.run_steps(2);
+        assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::ResizeHorizontal, "{dx} px from the edge");
+        drag(&mut h, p, p + egui::vec2(40.0, 0.0));
+        assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Edit text"), "{dx} px from the edge rewraps");
+    }
+    // An open paragraph's frame, 7 px beyond its drawn line: the move arrow, and a press there
+    // selects the box instead of closing the paragraph.
+    let mut h = harness(1, |_| {});
+    let (_, bx) = start(&mut h);
+    click_at(&mut h, bx.center());
+    assert!(h.state().views[0].line_editor.is_some(), "a click on the text opens it for typing");
+    let p = egui::pos2(bx.center().x, bx.top() - 7.0);
+    h.hover_at(p);
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Move, "the pointer shows the frame takes hold");
+    click_at(&mut h, p);
+    assert!(h.state().views[0].line_editor.is_none());
+    h.get_by_label("1 object selected");
+    // Once the text is changed, a press on the frame doesn't take the box (selecting it would
+    // drop the typing): it applies the typing like any click off the text, so the pointer doesn't
+    // offer the move arrow there either.
+    let mut h = harness(1, |_| {});
+    let (_, bx) = start(&mut h);
+    click_at(&mut h, bx.center());
+    h.state_mut().views[0].line_editor.as_mut().expect("open for typing").text = "Page one".into();
+    h.run_steps(2);
+    h.hover_at(p);
+    h.run_steps(2);
+    assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::Move, "no move arrow where a press can't take the box");
+    click_at(&mut h, p);
+    let id = h.state().views[0].id;
+    assert_eq!(h.state().session.get(id).unwrap().text_blocks(0)[0].text, "Page one", "the click applies the typing, as any click off the text does");
+    assert!(h.query_all_by_label_contains("object selected").next().is_none(), "and doesn't take the box");
+}
+
 #[test]
 fn an_open_paragraph_moves_by_its_frame_and_by_the_arrow_keys() {
     let mut h = harness(2, |_| {});

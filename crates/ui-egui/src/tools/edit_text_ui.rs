@@ -534,11 +534,12 @@ pub struct BlockDrag {
     grip: Grip,
 }
 
-/// How far an edge grip reaches either side of a box's edge (screen pixels).
-const EDGE_REACH: f32 = 6.0;
+/// How far an edge grip reaches either side of a box's edge (screen pixels). Wide enough to
+/// catch without aiming for the hairline (#2203); a narrow box still keeps its middle for moving.
+const EDGE_REACH: f32 = 8.0;
 /// How far outside an open paragraph's frame the pointer still means the frame (screen pixels):
 /// the frame's Move cursor shows, and a press there takes hold of the box (`object_ui`).
-pub(crate) const FRAME_REACH: f32 = 6.0;
+pub(crate) const FRAME_REACH: f32 = 8.0;
 
 /// The rewrap handles drawn on a paragraph box's left and right edges (screen).
 fn width_handles(b: Rect) -> [Rect; 2] {
@@ -891,8 +892,12 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
             let live = draft_rect.map_or(visible, |bounds| bounds.union(visible));
             ui.painter().rect_stroke(live.expand(2.0), CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
             // On the frame, a press takes hold of the box (a click selects it, a drag moves it):
-            // the pointer says so there, and reads as text inside.
-            if let Some(p) = ui.input(|i| i.pointer.hover_pos())
+            // the pointer says so there, and reads as text inside. Once the text is changed, a
+            // press there applies the typing like any click off the text instead of taking the
+            // box (`object_ui` would drop the typing), so the pointer doesn't offer it then
+            // (review on #4624).
+            if !ed.has_changes()
+                && let Some(p) = ui.input(|i| i.pointer.hover_pos())
                 && ui.clip_rect().contains(p)
                 && live.expand(2.0 + FRAME_REACH).contains(p)
                 && !live.expand(2.0).contains(p)
