@@ -504,7 +504,10 @@ fn appearance_context(d: &Dict) -> Option<AppearanceContext<'_>> {
         return None;
     }
     let subtype = d.name(b"Subtype")?;
-    let rect = nums(d, b"Rect").filter(|r| r.len() == 4)?;
+    // A number too long for a double reads as infinite, and two near its limit are an infinite
+    // width apart: nothing is drawn rather than "inf" written into the appearance (review on #4195).
+    let rect =
+        nums(d, b"Rect").filter(|r| r.len() == 4 && r.iter().all(|x| x.is_finite()) && (r[2] - r[0]).is_finite() && (r[3] - r[1]).is_finite())?;
     let rect = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
     // Cloudy borders (§12.5.4, Table 169) apply to squares, circles, polygons and text boxes.
     let cloud = cloud_intensity(d);

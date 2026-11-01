@@ -2393,3 +2393,107 @@ fn a_reshaped_intensity_two_cloud_stays_inside_its_rect() {
     assert!(lowest - 1.0 >= bbox[1], "the bottom bumps ({lowest}) and the line fit in /Rect {bbox:?}");
     assert!(leftmost - 1.0 >= bbox[0], "the left bumps ({leftmost}) and the line fit in /Rect {bbox:?}");
 }
+
+/// Every number a drawing writes, which must all be finite.
+fn drawn_numbers(ops: &str) -> Vec<f64> {
+    ops.split_whitespace().filter(|t| t.starts_with(|c: char| c.is_ascii_digit() || c == '-' || c == '.')).filter_map(|t| t.parse().ok()).collect()
+}
+
+/// Review on #4195: a cloud around a zero-size, inverted, sliver or huge `/Rect`, at any border
+/// width and any `/BE /I` (tiny, negative, far above Table 169's 2), is either drawn inside
+/// `/Rect` with finite numbers and a bounded number of bumps, or not built at all, never a
+/// panic, a division by zero or a NaN.
+#[test]
+fn hostile_cloud_sizes_widths_and_intensities_draw_inside_rect_or_not_at_all() {
+    let rects = [
+        "0 0 0 0",
+        "100 100 100 100",
+        "100 100 100.5 300",
+        "100 100 101 101",
+        "300 250 100 100",
+        "100 100 300 250",
+        "100 100 110 110",
+        "-1000000000000000 -1000000000000000 1000000000000000 1000000000000000",
+        "0 0 99999999999999999999999 1",
+        &format!("0 0 {} 100", "9".repeat(400)),
+        &format!("-{n} -{n} {n} {n}", n = "9".repeat(308)),
+    ];
+    let (mut drawn, mut refused) = (0, 0);
+    for rect in rects {
+        let r: Vec<f64> = rect.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+        let bounds = [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])];
+        for width in ["0", "0.001", "2", "1000000", "-3"] {
+            for intensity in ["0.0000001", "2", "1000000000000000000000000000000", "-1"] {
+                for kind in ["Square", "Circle", "FreeText"] {
+                    let body = format!(
+                        "<< /Type /Annot /Subtype /{kind} /Rect [{rect}] /C [1 0 0] /BS << /W {width} >> /BE << /S /C /I {intensity} >> /DA (0 g /Helv 10 Tf) /Contents (x) >>"
+                    );
+                    let Some(ops) = built(&body) else {
+                        refused += 1;
+                        continue;
+                    };
+                    drawn += 1;
+                    assert!(!ops.contains("NaN") && !ops.contains("inf"), "{body}: {ops}");
+                    assert!(drawn_numbers(&ops).iter().all(|v| v.is_finite()), "{body}");
+                    assert!(ops.matches(" c\n").count() <= crate::appearance::MAX_CLOUD_BUMPS + 8, "{body}: bumps are capped");
+                    // A cloud (intensity above 0); a negative one is a plain border (Table 169).
+                    if !intensity.starts_with('-') && ops.contains(" c\n") {
+                        let e = extent(&ops);
+                        let slack = 0.5 + 1e-9 * (bounds[2] - bounds[0]).abs().max((bounds[3] - bounds[1]).abs());
+                        assert!(
+                            e[0] >= bounds[0] - slack && e[1] >= bounds[1] - slack && e[2] <= bounds[2] + slack && e[3] <= bounds[3] + slack,
+                            "{body}: the cloud {e:?} stays in /Rect"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    assert!(drawn > 0 && refused > 0, "both outcomes are exercised: {drawn} drawn, {refused} refused");
+}
+
+/// Review on #4195: a cloud around a rotated rectangle (a polygon turned 45°, its corners in
+/// either order) bulges outwards the same way and stays inside its `/Rect`, and `cloud_path`
+/// itself takes a zero, negative, infinite or NaN bump size and repeated corners without
+/// dividing by zero.
+#[test]
+fn a_cloud_around_a_rotated_rectangle_bulges_outwards_either_way_round() {
+    let ccw = "150 100 200 150 150 200 100 150";
+    let cw = "150 100 100 150 150 200 200 150";
+    let extents: Vec<[f64; 4]> = [ccw, cw]
+        .iter()
+        .map(|v| {
+            let ops = built(&format!("<< /Type /Annot /Subtype /Polygon /Rect [80 80 220 220] /C [1 0 0] /Vertices [{v}] /BE << /S /C /I 1 >> >>"))
+                .unwrap();
+            assert!(ops.contains(" c\n"), "{ops}");
+            let e = extent(&ops);
+            assert!(e[0] >= 80.0 && e[1] >= 80.0 && e[2] <= 220.0 && e[3] <= 220.0, "inside /Rect: {e:?}");
+            // Each bump's middle lies outside the turned square |x − 150| + |y − 150| = 50.
+            let mut at = (0.0, 0.0);
+            for line in ops.lines() {
+                let v: Vec<f64> = line.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+                if line.ends_with(" m") && v.len() == 2 {
+                    at = (v[0], v[1]);
+                } else if line.ends_with(" c") && v.len() == 6 {
+                    let mid = ((at.0 + 3.0 * v[0] + 3.0 * v[2] + v[4]) / 8.0, (at.1 + 3.0 * v[1] + 3.0 * v[3] + v[5]) / 8.0);
+                    assert!((mid.0 - 150.0).abs() + (mid.1 - 150.0).abs() > 50.0 + 1.0, "the bump at {mid:?} bulges outwards");
+                    at = (v[4], v[5]);
+                }
+            }
+            e
+        })
+        .collect();
+    for k in 0..4 {
+        assert!((extents[0][k] - extents[1][k]).abs() < 0.5, "the same cloud either way round: {extents:?}");
+    }
+    let square = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
+    for r in [0.0, -1.0, f64::INFINITY, f64::NAN, 1e-300, 1e300] {
+        let path = crate::appearance::cloud_path(&square, r);
+        assert!(!path.contains("NaN") && !path.contains("inf"), "r {r}: {path}");
+        assert!(path.ends_with("h\n"));
+    }
+    for pts in [vec![], vec![(5.0, 5.0)], vec![(5.0, 5.0); 4], vec![(0.0, 0.0), (10.0, 0.0), (10.0, 0.0), (0.0, 0.0)]] {
+        let path = crate::appearance::cloud_path(&pts, 2.0);
+        assert!(!path.contains("NaN") && !path.contains("inf"), "{pts:?}: {path}");
+    }
+}
