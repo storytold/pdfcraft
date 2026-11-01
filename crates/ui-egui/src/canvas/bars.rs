@@ -254,8 +254,25 @@ pub(super) fn notices(
 fn notice_bar(ui: &mut egui::Ui, t: &Tokens, icon: &str, icon_color: Color32, text: String, buttons: impl FnOnce(&mut egui::Ui)) {
     const ROW: f32 = 28.0;
     const ICON: f32 = 16.0;
+    /// Content width below which the buttons stack under the message.
+    const STACK_BELOW: f32 = 200.0;
     egui::Frame::NONE.fill(t.accent_soft).inner_margin(egui::Margin::symmetric(14, 7)).show(ui, |ui| {
         let width = ui.available_width();
+        if width < STACK_BELOW {
+            // A narrow document area (a half-width window): the message takes the full width and
+            // the buttons sit on a row of their own below it, rather than squeezing it to nothing.
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                let (slot, _) = ui.allocate_exact_size(vec2(ICON, ICON), Sense::hover());
+                icons::paint(ui, Rect::from_center_size(slot.center(), vec2(ICON, ICON)), icon, ICON, icon_color);
+                ui.add(egui::Label::new(egui::RichText::new(text).color(t.text)).wrap());
+            });
+            // The buttons wrap onto further rows when even the full width is too narrow for them all.
+            ui.allocate_ui_with_layout(vec2(width, ROW), egui::Layout::right_to_left(egui::Align::Center).with_main_wrap(true), |ui| {
+                ui.set_min_height(ROW);
+                buttons(ui);
+            });
+            return;
+        }
         ui.allocate_ui_with_layout(vec2(width, ROW), egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.set_min_height(ROW);
             buttons(ui);
