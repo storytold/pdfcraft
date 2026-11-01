@@ -32,6 +32,7 @@
 	Auto follows the system's text size. Pages always render at the display's full resolution.	Автоматичний режим використовує розмір тексту із системних налаштувань. Сторінки завжди відображаються в повній роздільній здатності екрана.
 	Identity	Особисті дані
 	Name on new comments	Ім’я в нових коментарях
+	Hide hover previews for highlights without comment text	Приховувати спливний перегляд для виділень без тексту коментаря
 	Open…	Відкрити…
 	Open Recent	Відкрити нещодавні
 	Pin folder to Home…	Закріпити теку на головній…
@@ -78,6 +79,8 @@
 	Column select	Виділення стовпця
 	Full screen mode	Повноекранний режим
 	Read mode	Режим читання
+	Next tab	Наступна вкладка
+	Previous tab	Попередня вкладка
 	Switch light / dark theme	Перемкнути світлу / темну тему
 	Comments panel	Панель коментарів
 	Form fields panel	Панель полів форми
@@ -133,6 +136,8 @@
 	Next view	Наступний вигляд
 	Page display	Відображення сторінок
 	Continuous scrolling	Безперервне прокручування
+	Show gaps between pages	Показувати проміжки між сторінками
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Приховайте проміжки, щоб з’єднати краї сторінок. Поля всередині PDF залишаться без змін.
 	Two-page view	Дві сторінки
 	Single page	Одна сторінка
 	Show cover page in two-page view	Показувати обкладинку в режимі двох сторінок
@@ -157,6 +162,7 @@
 	Next page	Наступна сторінка
 	Previous page	Попередня сторінка
 	Current page — type a page number or label (such as iv) and press Enter	Поточна сторінка — введіть номер або позначку сторінки (наприклад iv) і натисніть Enter
+	Zoom — type a percentage and press Enter	Масштаб — введіть відсоток і натисніть Enter
 	Welcome to PdfCraft	Вітаємо в PdfCraft
 	An open-source PDF workbench — local, private, and scriptable.	Відкритий інструментарій для PDF — локальний, приватний і з підтримкою сценаріїв.
 	Join the ArtCraft community	Приєднатися до спільноти ArtCraft
@@ -176,6 +182,15 @@
 	Available	Доступно
 	Ready	Готово
 	Search tools and commands…	Пошук інструментів і команд…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Доданий текст
+	Link URL	URL-адреса посилання
+	Search tools and commands	Пошук інструментів і команд
+	Text editing line	Рядок редагування тексту
+	Text to place	Текст для розміщення
+	Tooltip	Підказка
+	Words or phrases to redact	Слова або фрази для вилучення
 	No matching tools	Відповідних інструментів немає
 	Tool	Інструмент
 	Command	Команда
@@ -366,6 +381,7 @@
 	Split	Розділити
 	More	Більше
 	Set page boxes	Задати межі сторінок
+	Set page transitions	Задати переходи між сторінками
 	Page labels	Позначки сторінок
 	Page transitions	Переходи між сторінками
 	Add comments	Додати коментарі
@@ -512,6 +528,42 @@
 	Could not save: {e}	Не вдалося зберегти: {e}
 	Earlier in tab order	Раніше в порядку табуляції
 	Later in tab order	Пізніше в порядку табуляції
+	Calculation order	Порядок обчислень
+	Fix order	Виправити порядок
+	Move only what must move, so every field calculates after the fields it reads.	Переміщує лише те, що потрібно, щоб кожне поле обчислювалося після полів, які воно читає.
+	Earlier in calculation order	Раніше в порядку обчислень
+	Later in calculation order	Пізніше в порядку обчислень
+	Too early	Зарано
+	Reads {name}, which calculates later, so it shows an old value.	Читає {name}, яке обчислюється пізніше, тому показує старе значення.
+	Loop	Цикл
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Читає {names}, які своєю чергою читають його. Жоден порядок не виправить цикл: змініть одну з формул.
+	Not in order	Поза порядком
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Відсутнє в порядку обчислень, збереженому в PDF: інші переглядачі PDF можуть його не обчислювати.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Читає {name}, якого немає у формі, тому не отримує звідти значення.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Його сценарій також читає поля, імена яких складає під час виконання, тому ці читання неможливо перевірити.
+	Missing field	Немає поля
+	Unchecked reads	Неперевірені читання
+	{field} reads fields named as it runs	{field} читає поля, імена яких задаються під час виконання
+	Some names are built as it runs	Деякі імена складаються під час виконання
+	Back to Prepare a form	Назад до «Підготувати форму»
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Жодне поле цієї форми поки не обчислює своє значення. Задайте полю обчислення на вкладці «Обчислення» його властивостей, і воно з’явиться тут.
+	{names} and {last}	{names} і {last}
+	{field} reads no other field	{field} не читає інших полів
+	{field} reads {fields}	{field} читає {fields}
+	No field reads it	Жодне поле його не читає
+	The order saved in the PDF needs tidying	Порядок, збережений у PDF, потребує впорядкування
+	Moves only what must move	Переміщує лише те, що треба
+	Every field calculates after the fields it reads.	Кожне поле обчислюється після полів, які воно читає.
+	Every field outside a loop calculates after the fields it reads.	Кожне поле поза циклом обчислюється після полів, які воно читає.
+	{field} reads its own value	{field} читає власне значення
+	{fields} read each other	{fields} читають одне одного
+	No order can fix a loop. Change one of the formulas.	Жоден порядок не виправить цикл. Змініть одну з формул.
+	Edit {field}'s formula	Змінити формулу {field}
+	Order · top calculates first	Порядок · верхнє обчислюється першим
+	Script	Скрипт
+	Links on page	Зв’язки на сторінці
+	Show on the page which fields each field reads	Показувати на сторінці, які поля читає кожне поле
+	Drag a field to move it, or select it and press {up} or {down}.	Перетягніть поле, щоб перемістити його, або виберіть його й натисніть {up} чи {down}.
 	From:	Від:
 	To:	До:
 	High Resolution	Висока роздільна здатність
@@ -549,6 +601,9 @@
 	Clean Up	Очищення
 	Color Images	Кольорові зображення
 	Grayscale Images	Зображення у відтінках сірого
+	Monochrome Images	Монохромні зображення
+	CCITT Group 4	CCITT група 4
+	JBIG2 (lossless)	JBIG2 (без втрат)
 	Bicubic downsampling to	Бікубічне зниження роздільної здатності до
 	for images above	для зображень із роздільною здатністю понад
 	Compression	Стиснення
@@ -572,12 +627,14 @@
 	Discard private data of other applications	Видалити приватні дані інших застосунків
 	Discard hidden text	Видалити прихований текст
 	Use Flate to encode streams that are not encoded	Кодувати незакодовані потоки за допомогою Flate
+	In streams that use LZW encoding, use Flate instead	Використовувати Flate замість LZW у потоках із кодуванням LZW
 	Remove invalid links and bookmarks	Видалити недійсні посилання й закладки
 	Remove unreferenced named destinations	Видалити іменовані призначення без посилань
 	Compress document structure (object streams)	Стиснути структуру документа (потоки об’єктів)
 	Remove unused objects and merge identical ones	Видалити невикористані об’єкти й об’єднати однакові
 	Audit space usage…	Аналіз використання місця…
 	Space Audit	Аналіз місця
+	What takes up the space in this file, by kind of content.	Що займає місце в цьому файлі, за типом вмісту.
 	Bytes	Байти
 	Content Streams	Потоки вмісту
 	X Object Forms	Форми XObject
@@ -764,14 +821,9 @@
 	Copy Image in Original Format	Копіювати зображення в оригінальному форматі
 	The image has been copied as a {ext} file	Зображення скопійовано як файл {ext}
 	The page has changed; select the image again	Сторінка змінилася; виберіть зображення ще раз
-	Check for updates	Перевірити оновлення
 	No check has run yet.	Перевірку ще не виконано.
-	Checking for a newer version…	Перевірка наявності новішої версії…
 	PdfCraft {v} is available.	Доступна версія PdfCraft {v}.
 	You have version {c}. Download the new version from its release page.	У вас версія {c}. Завантажте нову версію зі сторінки випуску.
-	PdfCraft {c} is up to date.	Ваша версія PdfCraft {c} актуальна.
-	Couldn't check for updates: {e}	Не вдалося перевірити оновлення: {e}
-	You have version {c}. All releases are listed at {page}.	У вас версія {c}. Усі випуски наведено на {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Запитує в GitHub найновіший випуск. Нічого не завантажується й не встановлюється автоматично.
 	Download	Завантажити
 	Later	Пізніше
@@ -803,6 +855,7 @@
 	Insert Page Number	Вставити номер сторінки
 	Insert Date	Вставити дату
 	Start page number	Початковий номер сторінки
+	Shrink the page content to make room for the header and footer	Зменшити вміст сторінки, щоб звільнити місце для колонтитулів
 	Source	Джерело
 	Fit to page	За розміром сторінки
 	Rotation	Поворот
@@ -815,6 +868,14 @@
 	Applies to 1 page	Застосовується до 1 сторінки
 	Applies to {n} pages	Застосовується до {n} сторінок
 	Replaces the existing one on those pages.	Замінює наявний елемент на цих сторінках.
+	Checking pages…	Перевірка сторінок…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Сторінка з власною білою заливкою, яка приховає тло: {pages}. Замінити
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Сторінки з власною білою заливкою, яка приховає тло: {pages}. Замінити
+	Removing the background puts the page's own backdrop back.	Вилучення тла повертає власну білу заливку сторінки.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Сторінка, закрита зображенням (скан?): {pages}; тло там не буде видно.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Сторінки, закриті зображеннями (скани?): {pages}; тло там не буде видно.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Сторінка змінена після додавання тла, тому її власна біла заливка залишається вимкненою: {pages}. На білому папері вона виглядає так само.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Сторінки змінені після додавання тла, тому їхні власні білі заливки залишаються вимкненими: {pages}. На білому папері вони виглядають так само.
 	PDF or image	PDF або зображення
 	No file chosen	Файл не вибрано
 	Page number	Номер сторінки
@@ -851,6 +912,12 @@
 	Windows store  ·  	Сховище Windows  ·  
 	Issued by: 	Видавець: 
 	, Expires: 	, Дійсний до: 
+	Digitally signed by	Цифровий підпис
+	DN: 	DN: 
+	Reason: 	Причина: 
+	Location: 	Місце: 
+	Date: 	Дата: 
+	The labels are in English: the signature's font can't draw them in this language.	Мітки англійською: шрифт підпису не може відобразити їх цією мовою.
 	No digital IDs yet.	Ще немає цифрових посвідчень.
 	Configure New Digital ID	Налаштувати нове цифрове посвідчення
 	Remove "{name}" from this list? The file itself is not deleted.	Прибрати «{name}» з цього списку? Сам файл не видаляється.
@@ -1142,6 +1209,7 @@
 	Redaction code:	Код вилучення:
 	Font:	Шрифт:
 	Font size:	Розмір шрифту:
+	Font size	Розмір шрифту
 	Auto-size text to fit redaction region	Автоматично добирати розмір тексту до області вилучення
 	Font colour:	Колір шрифту:
 	Repeat overlay text	Повторювати накладений текст
@@ -1174,6 +1242,7 @@
 	Off	Вимкнено
 	Flip on long edge	Перевертати за довгим краєм
 	Flip on short edge	Перевертати за коротким краєм
+	Printer default	За замовчуванням принтера
 	Paper:	Папір:
 	Pages to Print	Сторінки для друку
 	More options:	Додаткові параметри:
@@ -1282,6 +1351,7 @@
 	Copy text	Копіювати текст
 	Properties…	Властивості…
 	Make Current Properties Default	Зробити поточні властивості типовими
+	Make Properties Default	Зробити властивості типовими
 	More options	Додаткові параметри
 	Sort by	Сортувати за
 	Author	Автор
@@ -1316,6 +1386,8 @@
 	This document has no layers.	Цей документ не має шарів.
 	This document has no attachments.	Цей документ не має вкладень.
 	Hide layer	Приховати шар
+	Layer options	Параметри шарів
+	Reset to Initial Visibility	Відновити початкову видимість
 	Show layer	Показати шар
 	Set layer visibility	Задати видимість шару
 	on page {label}	на сторінці {label}
@@ -1403,6 +1475,9 @@
 	Sort comments by:	Сортувати коментарі за:
 	Create PDF Comment Summary	Створити PDF зі зведенням коментарів
 	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	Повернутися до попередньої збереженої версії «{name}»? Після цього зміни, внесені відтоді, неможливо буде повернути.
+	Save over the changed file?	Зберегти поверх зміненого файлу?
+	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	«{name}» змінено на диску після відкриття або останнього збереження. Збереження зараз замінить ту новішу версію цією.
+	Save anyway	Усе одно зберегти
 	Number pages	Пронумерувати сторінки
 	Style	Стиль
 	None (prefix only)	Немає (лише префікс)
@@ -1599,6 +1674,9 @@
 	Sent to {printer}	Надіслано на {printer}
 	Sent to {printer}: {msg}	Надіслано на {printer}: {msg}
 	Looking for printers…	Пошук принтерів…
+	Sending sheet {s} of {n} to {printer}…	Надсилання аркуша {s} із {n} на {printer}…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Принтери не знайдено. Перевірте, що принтер установлено, а диспетчер друку працює, і знову відкрийте «Друк».
+	Reading the printer's settings…	Читання налаштувань принтера…
 	Sending to {printer}…	Надсилання на {printer}…
 	Choose a folder for the searchable files	Виберіть теку для файлів із пошуком
 	Files are combined from top to bottom. Leave Pages empty to take every page.	Файли об’єднуються згори донизу. Залиште «Сторінки» порожнім, щоб узяти всі сторінки.
@@ -1683,6 +1761,7 @@
 	Couldn't use {name}: {e}	Не вдалося використати {name}: {e}
 	Couldn't extract pages: {e}	Не вдалося видобути сторінки: {e}
 	Couldn't write {name}: {e}	Не вдалося записати {name}: {e}
+	the name is not a plain file name	назва не є простою назвою файлу
 	Wrote 1 file to {dir}	Записано 1 файл у {dir}
 	Wrote {n} files to {dir}	Записано файлів ({n}) у {dir}
 	No pages match those choices	Жодна сторінка не відповідає вибраним параметрам
@@ -1742,6 +1821,7 @@
 	This document has no restrictions to lift	Цей документ не має обмежень, які можна зняти
 	The document's security settings don't allow this change	Налаштування захисту документа не дозволяють цю зміну
 	The document's security settings don't allow copying text and images	Налаштування захисту документа не дозволяють копіювати текст і зображення
+	The document's security settings don't allow printing	Налаштування захисту документа не дозволяють друк
 	Open a document first	Спочатку відкрийте документ
 	Security will be removed when you save	Захист буде знято під час збереження
 	Click text or an image to edit it	Клацніть текст або зображення для редагування
@@ -1905,6 +1985,7 @@
 	Delete field	Видалити поле
 	Duplicate field	Дублювати поле
 	Set tab order	Задати порядок табуляції
+	Set calculation order	Задати порядок обчислень
 	Change initial view	Змінити початковий вигляд
 	Set alternate text	Задати альтернативний текст
 	Mark figure as decorative	Позначити рисунок як декоративний
@@ -1979,6 +2060,10 @@
 	Perimeter	Периметр
 	Area	Площа
 	Drawing scale	Масштаб креслення
+	Scale	Масштаб
+	Common scales	Поширені масштаби
+	Enter a scale such as 1:50.	Введіть масштаб, наприклад 1:50.
+	Applying a scale switches units to m / mm.	Застосування масштабу перемикає одиниці на м / мм.
 	Snapping	Прив’язування
 	Export measurements	Експортувати вимірювання
 	Open a PDF to measure it.	Відкрийте PDF для вимірювання.
@@ -2132,6 +2217,7 @@ calendar date	October	жовтня
 calendar date	November	листопада
 calendar date	December	грудня
 	Reopen the files that were open when PdfCraft last closed	Знову відкривати файли, які були відкриті під час останнього закриття PdfCraft
+	Restore the last view (page, zoom and page display) when a document is opened again	Відновлювати останній вигляд (сторінку, масштаб і показ сторінок) під час повторного відкриття документа
 	Clear Recent Files	Очистити список нещодавніх файлів
 	Remove from Recent	Вилучити з нещодавніх
 	Remove {name} from Recent	Вилучити {name} з нещодавніх
@@ -2262,6 +2348,8 @@ key	Space	Пробіл
 	Switch to List view to change the pages it takes.	Перейдіть до вигляду списком, щоб змінити, які сторінки взяти.
 	Expand all	Розгорнути всі
 	Collapse all	Згорнути всі
+	Collapse all pages	Згорнути всі сторінки
+	Expand all pages	Розгорнути всі сторінки
 	Remove page	Видалити сторінку
 	Remove {n} pages	Видалити сторінки: {n}
 
@@ -2280,14 +2368,17 @@ key	Space	Пробіл
 	Printer paper and scaling may differ. Check driver settings.	Папір і масштаб принтера можуть відрізнятися. Перевірте налаштування драйвера.
 	Drawing scale changes. Use Actual size for full-scale plans.	Масштаб креслення змінюється. Для друку в початковому масштабі виберіть Фактичний розмір.
 	Reload documents when their files change on disk	Перезавантажувати документи, коли їхні файли змінюються на диску
-	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Цей файл змінено на диску. Перезавантажте його, щоб побачити нову версію; незбережені зміни буде втрачено.
+	Don't show again	Більше не показувати
+	Show a notice when a document is secured	Показувати сповіщення, коли документ захищено
+	Always use my default zoom and page layout	Завжди використовувати мій типовий масштаб і макет сторінок
+	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Цей файл змінено на диску. «Перезавантажити» покаже нову версію й відкине незбережені зміни; «Зберегти» замінить її цією версією.
 	Reload	Перезавантажити
 	Couldn't reload {name}: {e}	Не вдалося перезавантажити {name}: {e}
 	Select page {label}	Вибрати сторінку {label}
 	Rotate page {label} counterclockwise	Повернути сторінку {label} проти годинникової стрілки
 	Rotate page {label} clockwise	Повернути сторінку {label} за годинниковою стрілкою
 	Delete page {label}	Видалити сторінку {label}
-	Mouse wheel scroll speed	Швидкість прокручування коліщатком миші
+	Scroll speed (mouse wheel and arrow keys)	Швидкість прокручування (коліщатко миші та клавіші зі стрілками)
 scroll speed	Slow	Повільна
 scroll speed	Normal	Звичайна
 scroll speed	Fast	Швидка
@@ -2341,6 +2432,18 @@ animation effects	Off	Вимкнено
 	no unused output name	немає вільної назви для вихідного файлу
 	no output folder was chosen	не вибрано теку для виводу
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	Завантажено {n} PDF-файл|Завантажено {n} PDF-файли|Завантажено {n} PDF-файлів
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} обчислення тепер використовує нову назву.|{n} обчислення тепер використовують нову назву.|{n} обчислень тепер використовують нову назву.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	У порядку обчислень є {n} запис, який нічого не обчислює. «Виправити порядок» його видалить.|У порядку обчислень є {n} записи, які нічого не обчислюють. «Виправити порядок» їх видалить.|У порядку обчислень є {n} записів, які нічого не обчислюють. «Виправити порядок» їх видалить.
+@plural	{fields} reads it|{fields} read it	{fields} читає його|{fields} читають його|{fields} читають його
+@plural	{n} field shows an old value|{n} fields show old values	{n} поле показує старе значення|{n} поля показують старі значення|{n} полів показують старі значення
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} обчислюється раніше за {fields}, яке воно читає.|{field} обчислюється раніше за {fields}, які воно читає.|{field} обчислюється раніше за {fields}, які воно читає.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	Ще {n} поле обчислюється зарано.|Ще {n} поля обчислюються зарано.|Ще {n} полів обчислюються зарано.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} немає в порядку, збереженому в PDF, тож інші переглядачі PDF можуть його не обчислити.|{fields} немає в порядку, збереженому в PDF, тож інші переглядачі PDF можуть їх не обчислити.|{fields} немає в порядку, збереженому в PDF, тож інші переглядачі PDF можуть їх не обчислити.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} формула читає поле, якого немає у формі|{n} формули читають поля, яких немає у формі|{n} формул читають поля, яких немає у формі
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} читає {fields}, якого немає у формі.|{field} читає {fields}, яких немає у формі.|{field} читає {fields}, яких немає у формі.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	Ще {n} формула читає відсутнє поле.|Ще {n} формули читають відсутні поля.|Ще {n} формул читають відсутні поля.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} складає деякі імена полів під час виконання, тому ці читання не перевіряються.|{fields} складають деякі імена полів під час виконання, тому ці читання не перевіряються.|{fields} складають деякі імена полів під час виконання, тому ці читання не перевіряються.
+@plural	{fields} is missing|{fields} are missing	Немає {fields}|Немає {fields}|Немає {fields}
 	Scan	Сканувати
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Розпишіться на аркуші білого паперу та сфотографуйте його за яскравого рівномірного освітлення (зі спалахом). Виберіть фото або перетягніть його сюди: PdfCraft знайде підпис і прибере папір.
 	Choose photo…	Вибрати фото…
@@ -2361,6 +2464,10 @@ animation effects	Off	Вимкнено
 	The linked PDF opened, but its named destination was not applied.	Пов’язаний PDF відкрито, але його іменоване призначення не застосовано.
 	The linked PDF opened, but its page destination was out of range.	Пов’язаний PDF відкрито, але сторінка призначення поза межами діапазону.
 	Local cross-PDF links require the desktop app	Локальні посилання між PDF працюють лише в настільному застосунку
+	Cut Image	Вирізати зображення
+	Redact Image	Вилучити вміст зображення
+	Create Link…	Створити посилання…
+	Recognize Text…	Розпізнати текст…
 	Minimize	Згорнути
 	Maximize	Розгорнути
 	Restore	Відновити
@@ -2370,7 +2477,127 @@ animation effects	Off	Вимкнено
 # Absolute local GoToR confirmation (#1364).
 	Allow	Дозволити
 	Only allow this if you trust the source document.	Дозволяйте це лише тоді, коли довіряєте вихідному документу.
+	Open in Full Screen mode?	Відкрити в повноекранному режимі?
+	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Цей документ просить відкрити його в повноекранному режимі: сторінка заповнює екран, і більше нічого не показано. Натисніть Esc будь-коли, щоб вийти.
+	Full Screen	Повний екран
+	Not now	Не зараз
 	Open this local PDF?	Відкрити цей локальний PDF?
 	This document is trying to open a local file:	Цей документ намагається відкрити локальний файл:
 	Move tag earlier	Перемістити тег раніше
 	Move tag later	Перемістити тег пізніше
+
+# Historical snapshot notice bar (View signed version / View revision).
+	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Ви переглядаєте підписану версію документа «{from}» (редакція {rev}). Це знімок: зміни тут не вплинуть на оригінал.
+	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Ви переглядаєте редакцію {rev} документа «{from}». Це знімок: зміни тут не вплинуть на оригінал.
+	Turn upside down (180°)	Перевернути (180°)
+	4 x 6 in label (101.6 x 152.4 mm)	Етикетка 4 × 6 дюйма (101,6 × 152,4 мм)
+	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Обрізає кожну сторінку за надрукованою областю, розвертає її прямо та вписує в аркуш без спотворень. Одна етикетка на аркуш.
+	Find untagged content	Знайти нетегований вміст
+	No untagged content was found.	Нетегованого вмісту не знайдено.
+	Found {n} untagged content problems.	Знайдено проблем із нетегованим вмістом: {n}.
+	Tag form fields	Позначити поля форми
+	Mark as artifact	Позначити як артефакт
+	Remove this leaf tag from reading order and mark its direct content as an artifact	Вилучіть цей кінцевий тег із порядку читання та позначте його безпосередній вміст як артефакт
+	Mark content as artifact	Позначити вміст як артефакт
+	Word count	Кількість слів
+	Current page only	Лише поточна сторінка
+	Exclude tagged tables	Виключити таблиці з тегами
+	Exclude tagged code blocks	Виключити блоки коду з тегами
+	Exclude image/OCR text	Виключити текст зображень та OCR
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	Виключення використовують теги PDF. Таблиці й код без тегів залишаються в підрахунку. Виключення зображень також видаляє невидимий текст.
+	Words	Слова
+	Characters	Символи
+	Characters without spaces	Символи без пробілів
+	Pages counted	Пораховані сторінки
+	Some pages contain no countable text. Scanned images need OCR first.	Деякі сторінки не містять тексту для підрахунку. Для відсканованих зображень спочатку потрібне OCR.
+	Some content could not be classified safely and was kept in the count.	Частину вмісту не вдалося надійно класифікувати, тому вона залишилася в підрахунку.
+	Counting words… {n} pages read	Підрахунок слів… прочитано сторінок: {n}
+	Word counting stopped unexpectedly.	Підрахунок слів несподівано зупинився.
+	Word count…	Кількість слів…
+@id	file.word_count	Кількість слів…
+	Standard	Стандартні
+	Mobile	Мобільні пристрої
+	Merge image fragments	Об’єднувати фрагменти зображень
+	Optimizing… merging image fragments	Оптимізація… об’єднання фрагментів зображень
+	Side by side	Поруч
+	New file only	Лише новий файл
+	Old file: {name}	Старий файл: {name}
+	New file: {name}	Новий файл: {name}
+	Print as image	Друкувати як зображення
+	Resolution:	Роздільність:
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Використовуйте, коли принтер пропускає текст, заливки або прозорість. Відбиток більше не текст із пошуком; під час друку у відтінках сірого зображення сірі.
+	Crop Image	Обрізати зображення
+	Remove Crop	Прибрати обрізання
+	Trim the picture with its handles; Enter or Done applies	Обріжте зображення за маркери; Enter або «Готово» застосовує
+	Redaction mark appearance	Вигляд позначки приховування
+	Outline colour:	Колір контуру:
+	Fill colour:	Колір заливки:
+	Shown while the pointer is over a mark.	Показується, поки вказівник над позначкою.
+	Opacity:	Непрозорість:
+	Make properties default	Зробити властивості типовими
+	Pages selected	Вибрані сторінки
+	Page properties	Властивості сторінки
+	Create & Edit	Створення й редагування
+	Review & Compare	Рецензування й порівняння
+	Forms & Signatures	Форми й підписи
+	Protect & Standardize	Захист і стандартизація
+	Customize & Automate	Налаштування й автоматизація
+	No tools match your search.	Немає інструментів, що відповідають пошуку.
+	Expand all tools	Розгорнути всі інструменти
+	Collapse all tools	Згорнути всі інструменти
+	Attach a file…	Прикріпити файл…
+	Delete attachment	Видалити вкладення
+	Attaching files is not available on the web yet	Прикріплення файлів у веб-версії поки недоступне
+	Attach {name}	Прикріпити {name}
+	Delete attachment {key}	Видалити вкладення {key}
+	Font	Шрифт
+	Bulleted list	Маркований список
+	Numbered list	Нумерований список
+	Alignment	Вирівнювання
+	Superscript	Надрядковий
+	Subscript	Підрядковий
+	Paragraph spacing	Інтервал між абзацами
+	Less	Менше
+	Other options	Інші параметри
+	Thumbnail size	Розмір мініатюр
+	Smaller thumbnails	Зменшити мініатюри
+	Larger thumbnails	Збільшити мініатюри
+# Lines, connected lines and polygons reshaped by their ends and corners (M5).
+	Reshape comment	Змінити форму коментаря
+
+# Prepare a form ▸ Text field table
+	Add text field table	Додати таблицю текстових полів
+	Text field table	Таблиця текстових полів
+	Text Field Table	Таблиця текстових полів
+	Columns	Стовпці
+	Row spacing	Інтервал між рядками
+	Column spacing	Інтервал між стовпцями
+	First row number	Номер першого рядка
+	Column widths	Ширина стовпців
+	Distribute evenly	Розподілити рівномірно
+	Field names	Імена полів
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N або {row} — номер рядка, {col} — номер стовпця, {seq} — номер клітинки. Якщо їх немає, номер рядка додається в кінці.
+	Column {n}	Стовпець {n}
+	Add fields	Додати поля
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	рядки занадто низькі: збільште висоту області, зменште кількість рядків або інтервал між ними
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	стовпець занадто вузький: розширте область, дайте стовпцю більше ширини, зменште кількість стовпців або інтервал між ними
+	field names can't contain a period: {name}	імена полів не можуть містити крапку: {name}
+	two cells would both be named {name}	дві клітинки мали б однакове ім'я {name}
+	a field named {name} already exists	поле з іменем {name} уже існує
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Сьогодні
+@plural	{n} reply|{n} replies	{n} відповідь|{n} відповіді|{n} відповідей
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Інструменти сторінок
+	Insert pages from a file after the selection…	Вставити сторінки з файлу після виділення…
+	Rotate the selected pages counterclockwise	Повернути вибрані сторінки проти годинникової стрілки
+	Rotate the selected pages clockwise	Повернути вибрані сторінки за годинниковою стрілкою
+	Extract the selected pages…	Витягнути вибрані сторінки…
+	Delete the selected pages	Видалити вибрані сторінки
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Параметри цієї відповіді
+	Export value	Значення експорту
+	Show Page Edge Shadows	Показувати тіні на краях сторінок
