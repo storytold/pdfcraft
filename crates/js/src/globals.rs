@@ -1,6 +1,6 @@
 use super::document::{field_object, get_field, get_nth_field_name, noop, num_fields, page_num_get, page_num_set, print, reset_form, submit_form};
 use super::format::{printd, printf, printx, scand};
-use super::host::{arg, function, host, s, text, text_line};
+use super::host::{arg, error, function, host, s, text, text_line};
 use super::model::{DISPLAY_HIDDEN, DISPLAY_NO_PRINT, DISPLAY_NO_VIEW, DISPLAY_VISIBLE, Event, Panel, Request};
 use super::{
     Attribute, Context, JsArray, JsObject, JsResult, JsString, JsValue, Message, MessageButtons, MessageIcon, NativeFunction, ObjectInitializer,
@@ -125,6 +125,52 @@ fn exec_menu_item(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<
     Ok(JsValue::undefined())
 }
 
+/// Return a page box in Acrobat's rotated-user-space order: left, top, right, bottom.
+fn get_page_box(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let name = arg(args, 0);
+    let name = if name.is_undefined() {
+        "Crop".to_string()
+    } else {
+        name.as_string().ok_or_else(|| error("getPageBox box name must be a string"))?.to_std_string_escaped()
+    };
+    let which = match name.as_str() {
+        "Media" | "MediaBox" => 0,
+        "Crop" | "CropBox" => 1,
+        "Bleed" | "BleedBox" => 2,
+        "Trim" | "TrimBox" => 3,
+        "Art" | "ArtBox" => 4,
+        _ => return Err(error("getPageBox box name must be Media, Crop, Trim, Bleed, or Art")),
+    };
+    let page_value = arg(args, 1);
+    let page = if page_value.is_undefined() {
+        0
+    } else {
+        let page = page_value.to_number(ctx)?;
+        if !page.is_finite() || page < 0.0 || page.fract() != 0.0 || page >= usize::MAX as f64 {
+            return Err(error("getPageBox page must be a non-negative in-range integer"));
+        }
+        page as usize
+    };
+    let (rect, rotation, crop) = {
+        let h = host(ctx)?.borrow();
+        let boxes = h.doc.page_boxes.get(page).ok_or_else(|| error("getPageBox page is outside the document"))?;
+        let rotation = h.doc.page_rotations.get(page).copied().unwrap_or(0);
+        (boxes[which], rotation, boxes[1])
+    };
+    let [x0, y0, x1, y1] = rect;
+    let [cx0, cy0, cx1, cy1] = crop;
+    let rotated = match rotation {
+        90 => [y0 - cy0, cx1 - x0, y1 - cy0, cx1 - x1],
+        180 => [cx1 - x1, cy1 - y0, cx1 - x0, cy1 - y1],
+        270 => [cy1 - y1, x1 - cx0, cy1 - y0, x0 - cx0],
+        _ => [x0, y1, x1, y0],
+    };
+    if !rotated.iter().all(|value| value.is_finite()) {
+        return Err(error("getPageBox returned non-finite coordinates"));
+    }
+    Ok(JsArray::from_iter(rotated.into_iter().map(JsValue::from), ctx).into())
+}
+
 /// `app.response(…)`: always `null`, the answer for a canceled dialog, since no one is there to
 /// type one.
 fn response(_: &JsValue, _: &[JsValue], _: &mut Context) -> JsResult<JsValue> {
@@ -181,7 +227,7 @@ const XFA_VERSION: f64 = 3.5;
 /// `documentFileName`, `info`, the XFA version), and the `app`, `util`, `console`, `display` and
 /// `color` objects.
 pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
-    let globals: [(&str, usize, NativeFunction); 9] = [
+    let globals: [(&str, usize, NativeFunction); 10] = [
         ("getField", 1, NativeFunction::from_fn_ptr(get_field)),
         ("getNthFieldName", 1, NativeFunction::from_fn_ptr(get_nth_field_name)),
         ("resetForm", 1, NativeFunction::from_fn_ptr(reset_form)),
@@ -189,6 +235,7 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         ("submitForm", 1, NativeFunction::from_fn_ptr(submit_form)),
         ("mailDoc", 1, NativeFunction::from_fn_ptr(noop)),
         ("calculateNow", 0, NativeFunction::from_fn_ptr(noop)),
+        ("getPageBox", 2, NativeFunction::from_fn_ptr(get_page_box)),
         ("syncAnnotScan", 0, NativeFunction::from_fn_ptr(noop)),
         ("dirty", 0, NativeFunction::from_fn_ptr(noop)),
     ];

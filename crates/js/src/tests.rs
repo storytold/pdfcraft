@@ -16,7 +16,7 @@ fn fields() -> Vec<FieldState> {
 }
 
 fn doc() -> DocInfo {
-    DocInfo { file_name: "order.pdf".into(), num_pages: 3, page: 0, info: vec![("title".into(), "Order".into())], xfa: false }
+    DocInfo { file_name: "order.pdf".into(), num_pages: 3, page: 0, info: vec![("title".into(), "Order".into())], ..Default::default() }
 }
 
 fn go(script: &str, event: &Event) -> Outcome {
@@ -29,6 +29,42 @@ fn calculate_scripts_read_fields_and_set_the_value() {
     assert_eq!(o.error, None);
     assert_eq!(o.value, "50");
     assert!(o.rc);
+}
+
+#[test]
+fn get_page_box_returns_supported_boxes_in_rotated_user_space() {
+    let mut document = doc();
+    document.page_boxes = vec![
+        [
+            [10.0, 20.0, 210.0, 320.0],
+            [20.0, 30.0, 200.0, 310.0],
+            [25.0, 35.0, 195.0, 305.0],
+            [30.0, 40.0, 190.0, 300.0],
+            [35.0, 45.0, 185.0, 295.0]
+        ];
+        3
+    ];
+    document.page_rotations = vec![0, 90, 270];
+    let out = run(
+        "JSON.stringify([this.getPageBox(), this.getPageBox('Media', 1), this.getPageBox('Art', 2)])",
+        &Event::doc("Console"),
+        &document,
+        &[],
+        &[],
+        Limits::default(),
+    );
+    assert_eq!(out.error, None);
+    assert_eq!(out.result.as_deref(), Some("[[20,310,200,30],[-10,190,290,-10],[15,165,265,15]]"));
+}
+
+#[test]
+fn get_page_box_rejects_unknown_boxes_and_invalid_pages() {
+    for script in
+        ["this.getPageBox('BBox')", "this.getPageBox(1)", "this.getPageBox('Crop', -1)", "this.getPageBox('Crop', 1.5)", "this.getPageBox('Crop', 3)"]
+    {
+        let out = go(script, &Event::doc("Console"));
+        assert!(out.error.is_some(), "{script}");
+    }
 }
 
 #[test]

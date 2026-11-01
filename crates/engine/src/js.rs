@@ -172,8 +172,16 @@ impl JsRunner {
     /// an XFA form) and its document-level scripts, read once.
     pub fn new(cos: &pdfcraft_cos::Document, file_name: &str) -> JsRunner {
         let xfa = pdfcraft_xfa::xfa_shape(cos).is_some();
-        let doc =
-            pdfcraft_js::DocInfo { file_name: file_name.to_string(), num_pages: pdfcraft_model::pages(cos).len(), page: 0, info: info(cos), xfa };
+        let pages = pdfcraft_model::pages(cos);
+        let doc = pdfcraft_js::DocInfo {
+            file_name: file_name.to_string(),
+            num_pages: pages.len(),
+            page: 0,
+            info: info(cos),
+            page_boxes: pdfcraft_organize::page_boxes(cos).unwrap_or_default(),
+            page_rotations: pages.iter().map(|page| page.rotation(cos)).collect(),
+            xfa,
+        };
         // Once XFA owns the form, the PDF container's scripts belong to its fallback view.
         // Keep them in the file and in Document JavaScripts, but do not initialize an
         // AcroForm context with them: a viewer-compatibility alert would be misleading.
