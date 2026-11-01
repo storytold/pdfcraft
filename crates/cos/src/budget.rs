@@ -46,8 +46,10 @@ type Decoder = fn(&Stream, usize) -> Result<(Vec<u8>, usize), (FilterError, usiz
 /// aren't decoded. A caller then treats them as it does an image it can't read, and
 /// [`ImageBudget::refused`] says how many there were.
 ///
-/// An image also pays for its pixels, as what reads it goes through them one by one however few
-/// bytes hold them: blank rows of fax or Flate take almost none. A JPEG pays for its samples when
+/// An image also pays for its pixels once decoded, as what reads it goes through them one by one
+/// however few bytes coded them: blank rows of fax or Flate take almost none. It pays for no more
+/// than its data holds, a bit a pixel at least, so an image declaring a size its data doesn't fill
+/// costs what a smaller one would, not the run's allowance. A JPEG pays for its samples when
 /// it is decoded ([`ImageBudget::pay_jpeg`]), and is otherwise not charged, as JPEG 2000 isn't:
 /// their decoders don't run here.
 #[derive(Debug)]
@@ -70,22 +72,19 @@ impl ImageBudget {
 
     /// Image `s` decoded like [`Document::decoded_image_within`], charged to the allowance.
     pub fn decode(&mut self, doc: &Document, s: &Stream, max: usize) -> Result<Vec<u8>, CosError> {
-        self.pay_size(s)?;
         let decoded = doc.decoded_image_spending(s, max, &mut self.work);
         self.count_refused(s, &decoded);
-        decoded
+        self.pay_size(s, decoded?)
     }
 
     /// Image `s` through its filters alone, charged to the allowance: [`Stream::decoded_within`]
     /// with its `/DecodeParms` given by reference read too ([`Document::with_direct_parms`]), for an
     /// image that has no fax or JBIG2 decoder to go through.
     pub fn decode_filters(&mut self, doc: &Document, s: &Stream, max: usize) -> Result<Vec<u8>, CosError> {
-        if s.filters().iter().all(|(f, _)| f.is_decodable()) {
-            self.pay_size(s)?;
-        }
         let decoded = doc.with_direct_parms(s).decoded_spending(max, &mut self.work);
         self.count_refused(s, &decoded);
-        decoded
+        let decoded = decoded?;
+        if s.filters().iter().all(|(f, _)| f.is_decodable()) { self.pay_size(s, decoded) } else { Ok(decoded) }
     }
 
     /// `data` through `chain`, any corruption being an error ([`pdfcraft_filters::decode_within`]),
@@ -121,14 +120,20 @@ impl ImageBudget {
         self.pay_pixels(samples.saturating_mul(JPEG_WORK).saturating_add(reading))
     }
 
-    /// Pays for the pixels of image `s`, unless it is JBIG2, whose decoder pays for its page, or
-    /// isn't decoded here.
-    fn pay_size(&mut self, s: &Stream) -> Result<(), CosError> {
+    /// Pays for the pixels of image `s` that its `decoded` data holds, those of its `/Width` and
+    /// `/Height` but no more than a bit of the data each, unless it is JBIG2, whose decoder pays for
+    /// its page, or isn't decoded here. What can't be paid for refuses the image.
+    fn pay_size(&mut self, s: &Stream, decoded: Vec<u8>) -> Result<Vec<u8>, CosError> {
         if !charged(s) || matches!(s.filters().last(), Some((pdfcraft_filters::Filter::Jbig2, _))) {
-            return Ok(());
+            return Ok(decoded);
         }
         let side = |key: &[u8]| s.dict.int(key).and_then(|v| u64::try_from(v).ok()).unwrap_or(0);
-        if self.pay_pixels(side(b"Width").saturating_mul(side(b"Height"))) { Ok(()) } else { Err(CosError::Filter(FilterError::Spent.to_string())) }
+        let held = u64::try_from(decoded.len()).unwrap_or(u64::MAX).saturating_mul(8);
+        if self.pay_pixels(side(b"Width").saturating_mul(side(b"Height")).min(held)) {
+            Ok(decoded)
+        } else {
+            Err(CosError::Filter(FilterError::Spent.to_string()))
+        }
     }
 
     /// An image that failed with nothing left was refused, unless it has a filter that costs
@@ -498,7 +503,7 @@ mod image_tests {
         let mut budget = ImageBudget::with_work(cost);
         assert_eq!(budget.decode_filters(&doc, &flate, 1 << 24).unwrap(), rows);
         assert_eq!(budget.work_left(), 0);
-        // Short of its pixels it isn't read: this much would have paid for the filters.
+        // Short of its pixels it is refused, having paid for its filters.
         let mut budget = ImageBudget::with_work(4096 * 1024 - 1);
         assert!(budget.decode(&doc, &flate, 1 << 24).unwrap_err().to_string().contains("more image decoding than"));
         assert_eq!((budget.work_left(), budget.refused()), (0, 1));
@@ -525,6 +530,35 @@ mod image_tests {
         assert_eq!((budget.work_left(), budget.refused()), (4, 0));
         assert!(!budget.pay_jpeg(0, b"ab"));
         assert_eq!((budget.work_left(), budget.refused()), (0, 1));
+    }
+
+    /// An image pays for the pixels its data holds, not those its size declares: one claiming
+    /// 131072 by 131072 pixels with a few bytes of Flate costs what those bytes give, and the
+    /// images after it are decoded as they would be without it.
+    #[test]
+    fn an_image_pays_for_no_more_pixels_than_its_data_holds() {
+        let doc = Document::new_empty();
+        let sized = |side: i64, data: &[u8]| {
+            let mut dict = Dict::new();
+            dict.set(b"Width".to_vec(), Object::Int(side));
+            dict.set(b"Height".to_vec(), Object::Int(side));
+            Stream::flate(dict, data)
+        };
+        let claims = sized(131_072, &[0; 16]);
+        let image = sized(64, &[7; 64 * 64]);
+        let cost = |s: &Stream| {
+            let mut budget = ImageBudget::with_work(u64::MAX);
+            budget.decode(&doc, s, 1 << 24).unwrap();
+            u64::MAX - budget.work_left()
+        };
+        assert_eq!(cost(&claims), (claims.raw.len() + 16 + 16 * 8) as u64, "its bytes, and a pixel a bit of them");
+        assert_eq!(cost(&image), (image.raw.len() + 64 * 64) as u64 + 64 * 64, "its bytes, and its pixels");
+        for decode in [ImageBudget::decode, ImageBudget::decode_filters] {
+            let mut budget = ImageBudget::with_work(cost(&claims) + cost(&image));
+            assert_eq!(decode(&mut budget, &doc, &claims, 1 << 24).unwrap(), [0; 16]);
+            assert_eq!(decode(&mut budget, &doc, &image, 1 << 24).unwrap(), [7; 64 * 64], "the image after it is decoded");
+            assert_eq!((budget.work_left(), budget.refused()), (0, 0));
+        }
     }
 
     /// A stream a run rewrites is read strictly and charged, and what the caller does with it after
