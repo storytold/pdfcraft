@@ -145,7 +145,12 @@ pub fn move_tag(doc: &mut Document, object: ObjRef, anchor: ObjRef, placement: T
         return Err(TagError::NotSiblings);
     }
     let owner = doc.get(parent);
-    let Some(children) = owner.as_dict().and_then(|d| d.get(b"K")).map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()) else {
+    let mut k_obj = owner.as_dict().and_then(|d| d.get(b"K")).cloned();
+    for _ in 0..16 {
+        let Some(Object::Ref(r)) = k_obj else { break };
+        k_obj = Some((*doc.get(r)).clone());
+    }
+    let Some(children) = k_obj.and_then(|k| k.as_array().cloned()) else {
         return Err(TagError::AmbiguousChildren);
     };
     let one_position = |child| {
@@ -198,8 +203,8 @@ pub fn tags(doc: &Document) -> Vec<TagInfo> {
 }
 
 /// List marked-content references directly owned by an indirect tag.
-/// Returns `ContentLimit` rather than a partial list beyond 65,536 marks, one million graph steps,
-/// or 512 child/reference levels. Child structure elements do not count as direct marks.
+/// Returns `ContentLimit` rather than a partial list beyond 65,536 marks or 512 child/reference
+/// levels. Child structure elements do not count as direct marks.
 pub fn tag_content(doc: &Document, object: ObjRef) -> Result<Vec<TagContentItem>, TagError> {
     let Some(element) = alt::elements(doc).into_iter().find(|e| e.object == object) else { return Err(TagError::NotATag(object)) };
     let pages = pdfcraft_model::pages(doc);
@@ -242,7 +247,8 @@ fn direct_marks(
 ) -> Result<(), TagError> {
     const MAX_DEPTH: usize = 512;
     const MAX_MARKS: usize = 65_536;
-    let mut remaining = 1_000_000usize;
+    // Account for the root `/K` container separately so an array of 65,536 entries passes.
+    let mut remaining = MAX_MARKS + 1;
     let mut stack = vec![(std::sync::Arc::new(item.clone()), 0usize)];
     while let Some((item, depth)) = stack.pop() {
         remaining = remaining.checked_sub(1).ok_or(TagError::ContentLimit)?;
@@ -270,7 +276,19 @@ fn direct_marks(
                     out.push((dict.get(b"Pg").and_then(Object::as_ref).or(page), mcid));
                 }
             }
-            Object::Ref(reference) if seen.insert(*reference) => stack.push((doc.get(*reference), depth + 1)),
+            Object::Ref(reference) if seen.insert(*reference) => {
+                let target = doc.get(*reference);
+                // Resolved non-MCR dictionaries are child structure elements, not direct content,
+                // so do not push them onto the stack or charge them a second time.
+                let is_non_mcr_dict = matches!(
+                    &*target,
+                    Object::Dict(dict)
+                        if dict.get(b"Type").map(|t| doc.resolve(t)).as_deref().and_then(Object::as_name) != Some(b"MCR")
+                );
+                if !is_non_mcr_dict {
+                    stack.push((target, depth + 1));
+                }
+            }
             _ => {}
         }
     }
@@ -477,10 +495,11 @@ mod tests {
         let mut doc = pdf(&[
             "<< /Type /Catalog /StructTreeRoot 2 0 R >>".into(),
             "<< /Type /StructTreeRoot /K 3 0 R >>".into(),
-            "<< /S /Document /P 2 0 R /K 6 0 R >>".into(),
+            "<< /S /Document /P 2 0 R /K 7 0 R >>".into(),
             "<< /S /P /P 3 0 R >>".into(),
             "<< /S /P /P 3 0 R >>".into(),
             "[4 0 R 6 0 R 5 0 R]".into(),
+            "6 0 R".into(),
         ]);
         let first = ObjRef::new(4, 7);
         let second = ObjRef::new(5, 9);
