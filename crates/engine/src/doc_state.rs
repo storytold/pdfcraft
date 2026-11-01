@@ -14,6 +14,8 @@ pub enum ImageEdit {
     },
     /// Show only this box of it (user space), the pixels staying where they are.
     Crop([f64; 4]),
+    /// Grouped Form artwork only: put its content on the page as separate objects (Ungroup).
+    Ungroup,
     /// Draw this image file (PNG, JPEG, TIFF, GIF, BMP, JPEG 2000) in its place.
     Replace {
         name: String,

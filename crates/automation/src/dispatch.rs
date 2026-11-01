@@ -461,6 +461,7 @@ impl Automation {
                         "bring_forward" => ImageEdit::Arrange(pdfcraft_engine::ArrangeOrder::BringForward),
                         "send_backward" => ImageEdit::Arrange(pdfcraft_engine::ArrangeOrder::SendBackward),
                         "remove_crop" => ImageEdit::RemoveCrop,
+                        "ungroup" => ImageEdit::Ungroup,
                         "replace" => {
                             let path = self.resolve(a.str("path")?, false)?;
                             let bytes = read_input(&path)?;

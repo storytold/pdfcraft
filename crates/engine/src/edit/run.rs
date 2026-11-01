@@ -299,6 +299,8 @@ fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usi
         ImageEdit::Delete => pdfcraft_edit::ImageChange::Delete,
         ImageEdit::Arrange(order) => pdfcraft_edit::ImageChange::Arrange(*order),
         ImageEdit::RemoveCrop => pdfcraft_edit::ImageChange::RemoveCrop,
+        // Grouped Form artwork: its content goes onto the page in place of the group.
+        ImageEdit::Ungroup => return Ok(pdfcraft_edit::ungroup_form(doc, page, index)?),
     };
     let page_model = pdfcraft_model::pages(doc)
         .into_iter()
@@ -404,7 +406,8 @@ fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usi
                 ai.image = new_image;
                 pdfcraft_edit::update_content(doc, page, added_idx, &AddedContent::Image(ai))?;
             }
-            ImageEdit::Crop(_) | ImageEdit::RemoveCrop | ImageEdit::RotateBy(_) | ImageEdit::Arrange(_) | ImageEdit::Delete => {
+            // Ungroup returned above, with the form's content on the page.
+            ImageEdit::Crop(_) | ImageEdit::RemoveCrop | ImageEdit::RotateBy(_) | ImageEdit::Arrange(_) | ImageEdit::Delete | ImageEdit::Ungroup => {
                 pdfcraft_edit::change_image(doc, page, index, &c)?;
             }
         }

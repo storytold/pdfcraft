@@ -655,6 +655,34 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
         }
     }
 
+    // A double-click on grouped artwork ungroups it, whether or not it was selected first. Presses
+    // are counted here, with egui's own limits, as the text selection counts them (#1024): on a
+    // selected group the second press starts a drag, and a press and release that arrive in one
+    // pass are not reported as a double-click. Only presses the router gives the picture count:
+    // a menu over the group is not the group, so a double-click on a menu item over it must not
+    // ungroup it, and the button going down for anything else ends the count.
+    if ptr.primary_down && ptr.origin.is_none() {
+        view.group_press = None;
+    }
+    if allow_interaction
+        && let Some(p) = ptr.pressed()
+        && let Some(Owner::Picture { index: hit, .. }) = view.router.owner(page)
+        && images.get(hit).is_some_and(|image| image.is_form)
+    {
+        let (now, (max_delay, max_dist)) =
+            (ui.input(|i| i.time), ui.ctx().options(|o| (o.input_options.max_double_click_delay, o.input_options.max_click_dist)));
+        // The same picture of the same page: one page at a time, the next page's group can sit
+        // where this one was (CodeRabbit on #3222).
+        let second =
+            view.group_press.is_some_and(|(t, at, on, index)| on == page && index == hit && now - t <= max_delay && at.distance(p) <= max_dist);
+        if second {
+            view.group_press = None;
+            view.image_selection = None;
+            view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: pdfcraft_engine::ImageEdit::Ungroup });
+            return true;
+        }
+        view.group_press = Some((now, p, page, hit));
+    }
     // The selected image: frame, corner handles, dragging.
     if let Some(i) = selected.filter(|i| boxes.get(*i).is_some_and(|b| b.is_positive())) {
         let Some(b) = boxes.get(i).copied() else { return false };
@@ -1096,6 +1124,12 @@ pub(crate) fn image_context_menu(
 
     ui.separator();
 
+    // Grouped artwork (a CAD export often draws a whole page as one group): its text, images and
+    // nested groups become separate objects. A double-click on the group does the same.
+    if img.is_form && item(ui, true, tl!("Ungroup")) {
+        view.image_selection = None;
+        view.pending_edit = edit(E::Ungroup);
+    }
     if item(ui, true, tl!("Delete")) {
         view.image_selection = None;
         view.pending_edit = edit(E::Delete);
