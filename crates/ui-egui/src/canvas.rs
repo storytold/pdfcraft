@@ -45,7 +45,7 @@ pub(crate) use area::signature_badges;
 use area::{drawing_edge_pointer, glide_interrupted, page_scroll, presentation_click, run_button, set_layers, zoom_anchor};
 #[cfg(test)]
 use bars::in_size_hint_zone;
-use bars::{Notice, notices, page_size_hint, quick_bar};
+use bars::{Notice, notices, page_size_hint, picked_image_bar, quick_bar};
 pub use cache::RasterMemory;
 pub(crate) use cache::{BASE_SIDE, TILE_THRESHOLD, texture_image, thumbnail_rows};
 #[cfg(test)]
@@ -1957,6 +1957,10 @@ fn draw_pages(
                 }
             };
             if let Some(image) = hit {
+                if ui.button(tl!("Replace Image…")).clicked() {
+                    copy_image = Some(comments::CanvasAction::ReplaceImage(page, image));
+                    ui.close();
+                }
                 if ui.button(tl!("Copy Image")).clicked() {
                     copy_image = Some(comments::CanvasAction::CopyImage(page, image));
                     ui.close();
@@ -3163,6 +3167,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         Some(comments::CanvasAction::Properties(p, i)) => open_props = Some((p, i)),
         Some(comments::CanvasAction::CopyImage(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::Copy(p, i)),
         Some(comments::CanvasAction::CopyImageFile(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::CopyFile(p, i)),
+        Some(comments::CanvasAction::ReplaceImage(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::Replace(p, i)),
         None => {}
     }
     schedule_presentation_turn(ui, view, present, clicked_link.is_some());
@@ -3428,6 +3433,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
     if app.mode != crate::Mode::Read && !app.full_screen {
         // The page nearest the left edge, whose margin the bar sits in.
         let page_left = app.views[index].screen_rects.iter().map(|(_, r)| r.left()).reduce(f32::min);
+        picked_image_bar(app, ui);
         quick_bar(app, avail, page_left, ui);
     }
     if let Some((source, file, destination)) = remote_open {
