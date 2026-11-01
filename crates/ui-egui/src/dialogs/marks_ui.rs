@@ -566,7 +566,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                     ui.horizontal(|ui| {
                         ui.add_enabled_ui(!d.use_file, |ui| {
                             ui.label(tl!("Font"));
-                            egui::ComboBox::from_id_salt("wm-font").selected_text(d.wm.font.label()).width(100.0).show_ui(ui, |ui| {
+                            craft_ui::ComboBox::from_id_salt("wm-font").selected_text(d.wm.font.label()).width(100.0).show_ui(ui, |ui| {
                                 for f in [FontFamily::Helvetica, FontFamily::Times, FontFamily::Courier] {
                                     ui.selectable_value(&mut d.wm.font, f, f.label());
                                 }
