@@ -6,6 +6,7 @@ use super::paint::{drawn_shape, edit_anchor, erase, new_comment};
 use super::state::{Composer, ComposerKind, Gesture, PageCx};
 use super::{Annotation, CommentPrefs, CommentTool, DocInfo, DocView, Edit, Pos2, QuickTool, Rect, Shape, vec2};
 use crate::page_cursor::{Layer, Subject};
+use crate::page_router::{CommentPart, Hit, Owner};
 
 /// Comment input on one page, before text selection runs. Returns `true` when the pointer
 /// gesture belongs to commenting (text selection must ignore it).
@@ -34,79 +35,99 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
     }
     let gestures = Gestures { ui, resp, cx, pointer, origin, page_rect, pressed_here, over_page };
     match cx.tool {
-        QuickTool::Comment(_) if draw_grab => select_input(ui, resp, cx, view, pointer, origin, pressed_here),
+        QuickTool::Comment(_) if draw_grab => select_input(ui, resp, cx, view, pointer, origin),
         QuickTool::Comment(tool) if tool.draws() => gestures.draw_shape(view, tool),
         QuickTool::Comment(tool) if tool.clicks_points() => gestures.click_points(view, tool),
         QuickTool::Comment(CommentTool::Callout) => gestures.callout(view),
         QuickTool::Comment(CommentTool::Attach) => gestures.attach(view),
         QuickTool::Comment(CommentTool::Caret) => gestures.caret(view, caret_text.as_deref()),
         QuickTool::Comment(tool @ (CommentTool::Note | CommentTool::TextBox)) => gestures.note_or_box(view, tool),
-        QuickTool::Select => select_input(ui, resp, cx, view, pointer, origin, pressed_here),
-        QuickTool::Fill(_) if fill_grab => select_input(ui, resp, cx, view, pointer, origin, pressed_here),
+        QuickTool::Select => select_input(ui, resp, cx, view, pointer, origin),
+        QuickTool::Fill(_) if fill_grab => select_input(ui, resp, cx, view, pointer, origin),
         _ => false,
     }
 }
 
-/// With a Fill & Sign tool, the Fill & Sign marks already on the page are picked up as with the
-/// Select tool, as in Acrobat: hovering one shows the move cursor, a click selects it, a drag
-/// moves it and the selected one's handles resize it. Elsewhere the tool places its mark. While
-/// the button is down the press decides; otherwise the pointer (egui clears the press origin on
-/// release, so a click is located by the pointer).
-pub(crate) fn fill_grabs(cx: &PageCx<'_>, view: &DocView) -> bool {
-    matches!(cx.tool, QuickTool::Fill(_)) && grabs(cx, view, |a| a.fill_sign)
+/// What of the comments lies under `p`, for the cursor, the tip and the press: the one hit test
+/// of this module. With the Select tool, the selected comment's point handles, then its resize
+/// handles, then the topmost comment. With a Fill & Sign tool, the same over Fill & Sign's marks
+/// only, as Acrobat picks them up: a press anywhere else places the tool's mark. With a shape
+/// tool (rectangle, oval, line, polygon…), only the selected comment's handles, so the shape just
+/// drawn can be resized straight away (#2338); a press anywhere else, the shape itself included,
+/// draws. `None` with other tools, off the page, or with comments hidden.
+pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2) -> Option<Hit> {
+    if cx.hidden || !cx.xf.rect.contains(p) {
+        return None;
+    }
+    let pick: fn(&Annotation) -> bool = match cx.tool {
+        QuickTool::Select => |_| true,
+        QuickTool::Fill(_) => |a| a.fill_sign,
+        QuickTool::Comment(tool) if (tool.draws() || tool.clicks_points()) && tool != CommentTool::Eraser => {
+            // A polygon being clicked out keeps its clicks, even near an old shape's handle.
+            if view.comments.gesture.is_some() {
+                return None;
+            }
+            |_| true
+        }
+        _ => return None,
+    };
+    let bodies = matches!(cx.tool, QuickTool::Select | QuickTool::Fill(_));
+    if let Some(a) = view.comments.selected.filter(|(page, _)| *page == cx.page).and_then(|(_, i)| cx.get(i)).filter(|a| pick(a) && cx.allowed) {
+        if grabs_points(cx.tool)
+            && reshapable(a)
+            && let Some(point) = point_handle(cx, a, p)
+        {
+            return Some(Hit::new(Owner::Comment { index: a.index, part: CommentPart::Point(point) }, Layer::Handle, egui::CursorIcon::Crosshair));
+        }
+        if resizable(a)
+            && let Some((x, y)) = HANDLES.into_iter().find(|h| handle_pos(cx.screen_rect(a), *h).distance(p) <= 7.0)
+        {
+            let icon = match (x, y) {
+                (0, _) => egui::CursorIcon::ResizeVertical,
+                (_, 0) => egui::CursorIcon::ResizeHorizontal,
+                (-1, -1) | (1, 1) => egui::CursorIcon::ResizeNwSe,
+                _ => egui::CursorIcon::ResizeNeSw,
+            };
+            return Some(Hit::new(Owner::Comment { index: a.index, part: CommentPart::Handle(x, y) }, Layer::Handle, icon));
+        }
+    }
+    let a = cx.hit(p).filter(|a| bodies && pick(a))?;
+    // A click on a highlight over a link follows the link, so the link's hand and tip show there.
+    if cx.tool == QuickTool::Select && a.subtype == "Highlight" && on_link(cx, p) {
+        return None;
+    }
+    let markup = is_markup(&a.subtype);
+    let icon = if cx.allowed && !markup { egui::CursorIcon::Move } else { egui::CursorIcon::PointingHand };
+    // What a drag moves whole (a note, a shape, a signature, a Fill & Sign mark) is placed on the
+    // page, over a form field; text markup lies on the text, under one.
+    let layer = if a.fill_sign || !markup { Layer::Placed } else { Layer::Comment };
+    // Text markup does not move: a click selects it, a drag across it selects the text.
+    Some(Hit { declines_drag: markup, ..Hit::new(Owner::Comment { index: a.index, part: CommentPart::Body }, layer, icon) })
 }
 
-/// With the Select tool, a comment that would move (not text markup) is picked up before a form
-/// field under it, so a signature placed over a field can still be dragged off it.
-pub(crate) fn select_grabs(cx: &PageCx<'_>, view: &DocView) -> bool {
-    cx.tool == QuickTool::Select && grabs(cx, view, |a| !is_markup(&a.subtype))
-}
-
-/// With a shape tool (rectangle, oval, line, polygon…), the selected comment's resize handles
-/// are picked up as with the Select tool, so the shape just drawn can be resized straight away
-/// (#2338). Only the handles: a press anywhere else, the shape itself included, still draws.
-pub(crate) fn draw_grabs(cx: &PageCx<'_>, view: &DocView) -> bool {
-    let QuickTool::Comment(tool) = cx.tool else { return false };
-    if !(tool.draws() || tool.clicks_points()) || tool == CommentTool::Eraser || cx.hidden {
-        return false;
-    }
-    let cv = &view.comments;
-    if matches!(cv.gesture, Some(Gesture::Resize { page, .. } | Gesture::Reshape { page, .. }) if page == cx.page) {
-        return true;
-    }
-    // A polygon being clicked out keeps its clicks, even near an old shape's handle.
-    if cv.gesture.is_some() {
-        return false;
-    }
-    press_point(cx).is_some_and(|p| on_handle(cx, view, p, |_| true))
-}
-
-/// Whether the press (or, with no button down, the pointer) is on a `pick` comment or on the
-/// selected one's resize handles.
-fn grabs(cx: &PageCx<'_>, view: &DocView, pick: impl Fn(&Annotation) -> bool) -> bool {
-    if cx.hidden {
-        return false;
-    }
+/// Whether the comments take the press on this page (or, with no button down, would take one
+/// under the pointer), so the tools beneath leave it: a live move, resize or reshape, or a press
+/// held by a comment that keeps its drag.
+fn grabs(cx: &PageCx<'_>, view: &DocView) -> bool {
     if matches!(view.comments.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. }) if page == cx.page)
     {
         return true;
     }
-    let Some(p) = press_point(cx) else { return false };
-    on_handle(cx, view, p, &pick) || cx.hit(p).is_some_and(pick)
+    if cx.ptr.any_down {
+        return matches!(view.router.owner(cx.page), Some(Owner::Comment { .. })) && view.router.keeps_drag();
+    }
+    cx.ptr.pos.and_then(|p| hit(cx, view, p)).is_some_and(|h| !h.declines_drag)
 }
 
-/// Where a gesture on this page is decided: the press while the button is down, otherwise the
-/// pointer (egui clears the press origin on release). `None` off the page.
-fn press_point(cx: &PageCx<'_>) -> Option<Pos2> {
-    (if cx.ptr.any_down { cx.ptr.origin } else { cx.ptr.pos }).filter(|p| cx.xf.rect.contains(*p))
+/// With a Fill & Sign tool, a Fill & Sign mark already on the page is picked up as with the Select
+/// tool ([`hit`]), so the tool does not place a mark there.
+pub(crate) fn fill_grabs(cx: &PageCx<'_>, view: &DocView) -> bool {
+    matches!(cx.tool, QuickTool::Fill(_)) && grabs(cx, view)
 }
 
-/// Whether `p` is on a resize handle of the selected comment, when it is a resizable `pick`.
-fn on_handle(cx: &PageCx<'_>, view: &DocView, p: Pos2, pick: impl Fn(&Annotation) -> bool) -> bool {
-    view.comments.selected.filter(|(page, _)| *page == cx.page).and_then(|(_, i)| cx.get(i)).filter(|a| pick(a) && cx.allowed).is_some_and(|a| {
-        (resizable(a) && HANDLES.into_iter().any(|h| handle_pos(cx.screen_rect(a), h).distance(p) <= 7.0))
-            || (grabs_points(cx.tool) && reshapable(a) && point_handle(cx, a, p).is_some())
-    })
+/// With a shape tool, the selected comment's handles are picked up ([`hit`]).
+fn draw_grabs(cx: &PageCx<'_>, view: &DocView) -> bool {
+    matches!(cx.tool, QuickTool::Comment(_)) && grabs(cx, view)
 }
 
 /// Whether `p` is on one of this page's links.
@@ -149,80 +170,45 @@ pub(super) fn hover_tip(a: &Annotation, prefs: &CommentPrefs) -> Option<String> 
     Some(if body.is_empty() { who } else { format!("{who}\n{body}") })
 }
 
-/// The Select tool: hover, select, move, resize, edit, delete.
-fn select_input(
-    ui: &egui::Ui,
-    resp: &egui::Response,
-    cx: &PageCx<'_>,
-    view: &mut DocView,
-    pointer: Option<Pos2>,
-    origin: Option<Pos2>,
-    pressed_here: bool,
-) -> bool {
-    let cv = &mut view.comments;
-    let selected = cv.selected.filter(|(p, _)| *p == cx.page).and_then(|(_, i)| cx.get(i));
-    // Handles of a selected, resizable comment.
-    let handle_at = |p: Pos2| -> Option<(i8, i8)> {
-        let a = selected.filter(|a| cx.allowed && resizable(a))?;
-        let r = cx.screen_rect(a);
-        HANDLES.into_iter().find(|h| handle_pos(r, *h).distance(p) <= 7.0)
+/// The Select tool: select, move, resize, edit, delete, on the comment the press was on (its
+/// owner, from [`hit`]). The cursor comes from [`hit`] too.
+fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mut DocView, pointer: Option<Pos2>, origin: Option<Pos2>) -> bool {
+    let owner = match view.router.owner(cx.page) {
+        Some(Owner::Comment { index, part }) => cx.get(index).map(|a| (a, part)),
+        _ => None,
     };
-    // Ends and corners of a selected line, connected lines, polygon or cloud.
-    let point_at =
-        |p: Pos2| -> Option<usize> { selected.filter(|a| cx.allowed && grabs_points(cx.tool) && reshapable(a)).and_then(|a| point_handle(cx, a, p)) };
+    let cv = &mut view.comments;
     let mut consumed = false;
-    if let Some(p) = pointer {
-        if point_at(p).is_some() {
-            view.cursor.claim(Layer::Handle, egui::CursorIcon::Crosshair);
-        } else if let Some(h) = handle_at(p) {
-            view.cursor.claim(
-                Layer::Handle,
-                match h {
-                    (0, _) => egui::CursorIcon::ResizeVertical,
-                    (_, 0) => egui::CursorIcon::ResizeHorizontal,
-                    (-1, -1) | (1, 1) => egui::CursorIcon::ResizeNwSe,
-                    _ => egui::CursorIcon::ResizeNeSw,
-                },
-            );
-        } else if let Some(a) = cx.hit(p)
-            // A click on a highlight over a link follows the link, so the link's hand and tip
-            // show there.
-            && !(a.subtype == "Highlight" && on_link(cx, p))
-        {
-            let movable = cx.allowed && !is_markup(&a.subtype);
-            let icon = if movable { egui::CursorIcon::Move } else { egui::CursorIcon::PointingHand };
-            // Signatures and Fill & Sign's marks are placed on the page rather than comments on it.
-            view.cursor.claim(if a.fill_sign { Layer::Placed } else { Layer::Comment }, icon);
-        }
-    }
     if resp.drag_started()
-        && pressed_here
-        && let Some(o) = origin
+        && let (Some((a, part)), Some(o)) = (owner, origin)
     {
-        if let (Some(point), Some(a)) = (point_at(o), selected) {
-            let points = a.points.iter().map(|q| [f64::from(q[0]), f64::from(q[1])]).collect();
-            cv.gesture = Some(Gesture::Reshape { page: cx.page, index: a.index, point, points });
-            consumed = true;
-        } else if let (Some(h), Some(a)) = (handle_at(o), selected) {
-            // On screen, the image is also turned by the view's rotation.
-            let turned = !cx.xf.rot.is_multiple_of(180);
-            let aspect_ratio = view.signature_drag.aspect_ratio(cx.page, a.index).map(|ratio| if turned { ratio.recip() } else { ratio });
-            // A drawn signature keeps its shape from the corners, as image signatures do.
-            let aspect_ratio = aspect_ratio.or_else(|| {
-                let r = cx.screen_rect(a);
-                (a.fill_sign && a.subtype == "Ink" && r.height() > 0.0).then(|| r.width() / r.height())
-            });
-            cv.gesture = Some(Gesture::Resize { page: cx.page, index: a.index, handle: h, from: o, aspect_ratio });
-            consumed = true;
-        } else if let Some(a) = cx.hit(o)
-            && !is_markup(&a.subtype)
-        {
-            cv.selected = Some((cx.page, a.index));
-            cv.reveal = true;
-            if cx.allowed {
-                cv.gesture = Some(Gesture::Move { page: cx.page, index: a.index, from: o });
+        match part {
+            CommentPart::Point(point) => {
+                let points = a.points.iter().map(|q| [f64::from(q[0]), f64::from(q[1])]).collect();
+                cv.gesture = Some(Gesture::Reshape { page: cx.page, index: a.index, point, points });
+                consumed = true;
             }
-            consumed = true;
+            CommentPart::Handle(x, y) => {
+                // On screen, the image is also turned by the view's rotation.
+                let turned = !cx.xf.rot.is_multiple_of(180);
+                let aspect_ratio = view.signature_drag.aspect_ratio(cx.page, a.index).map(|ratio| if turned { ratio.recip() } else { ratio });
+                // A drawn signature keeps its shape from the corners, as image signatures do.
+                let aspect_ratio = aspect_ratio.or_else(|| {
+                    let r = cx.screen_rect(a);
+                    (a.fill_sign && a.subtype == "Ink" && r.height() > 0.0).then(|| r.width() / r.height())
+                });
+                cv.gesture = Some(Gesture::Resize { page: cx.page, index: a.index, handle: (x, y), from: o, aspect_ratio });
+                consumed = true;
+            }
+            CommentPart::Body if !is_markup(&a.subtype) => {
+                cv.selected = Some((cx.page, a.index));
+                cv.reveal = true;
+                if cx.allowed {
+                    cv.gesture = Some(Gesture::Move { page: cx.page, index: a.index, from: o });
+                }
+                consumed = true;
+            }
+            CommentPart::Body => {}
         }
     }
     if matches!(cv.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. }) if page == cx.page) {
@@ -266,15 +252,10 @@ fn select_input(
     // (egui clears the press origin on release, so clicks are located by the pointer.)
     let on_page = pointer.is_some_and(|p| cx.xf.rect.contains(p));
     if resp.clicked() && on_page {
-        let follow_link =
-            cx.tool == QuickTool::Select && !consumed && cv.gesture.is_none() && !resp.double_clicked() && pointer.is_some_and(|p| on_link(cx, p));
-        match pointer.and_then(|p| cx.hit(p)) {
-            Some(a) if a.subtype == "Highlight" && follow_link => {
-                // A plain click follows the link beneath text highlighting. Keep other
-                // annotations and active gestures in control of their own input.
-                cv.selected = None;
-            }
-            Some(a) => {
+        // A click elsewhere (a link beneath text highlighting included: it follows the link)
+        // leaves comments unselected.
+        match owner {
+            Some((a, _)) => {
                 cv.selected = Some((cx.page, a.index));
                 cv.reveal = true;
                 consumed = true;
@@ -285,7 +266,7 @@ fn select_input(
     if resp.double_clicked()
         && on_page
         && cx.allowed
-        && let Some(a) = pointer.and_then(|p| cx.hit(p))
+        && let Some((a, _)) = owner
     {
         cv.selected = Some((cx.page, a.index));
         cv.composer = Some(Composer {
@@ -637,19 +618,28 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, info: &DocInfo
     if !movable {
         return;
     }
-    use egui::{Key, Modifiers};
+    use egui::Key;
     let mut step = egui::Vec2::ZERO;
     ctx.input_mut(|i| {
-        for (key, direction) in
-            [(Key::ArrowLeft, vec2(-1.0, 0.0)), (Key::ArrowRight, vec2(1.0, 0.0)), (Key::ArrowUp, vec2(0.0, -1.0)), (Key::ArrowDown, vec2(0.0, 1.0))]
-        {
-            // The modified patterns first: a plain one also matches a Shift press.
-            if i.consume_key(Modifiers::COMMAND, key) || i.consume_key(Modifiers::SHIFT, key) {
-                step += direction * 10.0;
-            } else if i.consume_key(Modifiers::NONE, key) {
-                step += direction;
+        // Only an arrow pressed alone or with ⌘/Ctrl or Shift, judged by each press's own
+        // modifiers. Alt+← / Alt+→ go back and forward through the view history in
+        // `canvas::shortcuts` (#3632), and egui's key patterns would let an extra Alt through.
+        // A Ctrl that isn't the command key (macOS) is left alone, as the patterns left it.
+        i.events.retain(|e| {
+            let egui::Event::Key { key, pressed: true, modifiers, .. } = e else { return true };
+            if modifiers.alt || (modifiers.ctrl && !modifiers.command) {
+                return true;
             }
-        }
+            let direction = match key {
+                Key::ArrowLeft => vec2(-1.0, 0.0),
+                Key::ArrowRight => vec2(1.0, 0.0),
+                Key::ArrowUp => vec2(0.0, -1.0),
+                Key::ArrowDown => vec2(0.0, 1.0),
+                _ => return true,
+            };
+            step += direction * if modifiers.command || modifiers.shift { 10.0 } else { 1.0 };
+            false
+        });
     });
     if step == egui::Vec2::ZERO {
         return;
