@@ -1,6 +1,8 @@
 //! Custom stamps (Add a stamp ▸ Custom stamps ▸ Create): a PDF page or an image saved in the
 //! user's stamp library under a category and a name, then placed like any stamp.
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::file_filter::AddFilterAnyCase as _;
 use std::sync::Arc;
 
 use egui::{Align, Layout};
@@ -145,7 +147,7 @@ impl PdfCraftApp {
                 Some(_) => {}
                 None => {
                     let dialog = rfd::AsyncFileDialog::new()
-                        .add_filter(tl!("PDF or image"), &["pdf", "png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
+                        .add_filter_any_case(tl!("PDF or image"), &["pdf", "png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
                         .set_title(tl!("Select a file for the stamp"));
                     self.ask_one(crate::pickers::Ask::File(dialog), None, read);
                 }

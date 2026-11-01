@@ -1,4 +1,6 @@
 //! Measure objects: page-space clicks, live readings and persistent drawing scales.
+#[cfg(not(target_arch = "wasm32"))]
+use crate::file_filter::AddFilterAnyCase as _;
 use crate::{LeftPanel, PdfCraftApp, QuickTool, canvas::DocView, page_cursor::Layer, theme::Tokens, widgets};
 use egui::{Color32, Pos2, Stroke};
 use pdfcraft_engine::{
@@ -613,7 +615,7 @@ fn export_csv(app: &mut PdfCraftApp) {
                 match app.export_dir_override.as_ref().map(|d| std::path::PathBuf::from(d).join("measurements.csv")) {
                     Some(path) => write(app, path),
                     None => {
-                        let dialog = rfd::AsyncFileDialog::new().set_file_name("measurements.csv").add_filter("CSV", &["csv"]);
+                        let dialog = rfd::AsyncFileDialog::new().set_file_name("measurements.csv").add_filter_any_case("CSV", &["csv"]);
                         app.ask_one(crate::pickers::Ask::Save(dialog), None, write);
                     }
                 }

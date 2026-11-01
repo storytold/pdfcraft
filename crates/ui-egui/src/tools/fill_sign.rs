@@ -3,6 +3,7 @@
 //! signature. Everything is an annotation (typewriter text, PdfCraft-drawn stamps, ink), so it
 //! can be moved, deleted and undone like any comment.
 
+use crate::file_filter::AddFilterAnyCase as _;
 use egui::{Color32, CornerRadius, Pos2, Sense, Stroke, pos2, vec2};
 use pdfcraft_engine::signature_scan::{DEFAULT_SENSITIVITY, PREVIEW_MAX_SIDE, SCAN_MAX_SIDE, ScanError};
 use pdfcraft_engine::{Edit, FillMark, NewAnnotation, PhotoRect, Shape, SignatureImage, SignaturePhoto, Style, Turn};
@@ -780,7 +781,7 @@ impl crate::PdfCraftApp {
         let epoch = self.dialog_epoch();
         let initials = self.signature_draft.initials;
         let scan = self.signature_draft.scan_mode;
-        let dialog = rfd::AsyncFileDialog::new().add_filter(tl!(if scan { "Photo" } else { "Image" }), &["png", "jpg", "jpeg"]);
+        let dialog = rfd::AsyncFileDialog::new().add_filter_any_case(tl!(if scan { "Photo" } else { "Image" }), &["png", "jpg", "jpeg"]);
         #[cfg(not(target_arch = "wasm32"))]
         self.ask_one(crate::pickers::Ask::File(dialog), None, move |app, path| {
             if app.dialog_epoch() != epoch

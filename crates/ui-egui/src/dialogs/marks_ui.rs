@@ -3,6 +3,8 @@
 //! page the range selects, with the marks laid out on it. "Update" opens the same dialog in
 //! replace mode.
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::file_filter::AddFilterAnyCase as _;
 use std::collections::{HashMap, HashSet};
 
 use egui::{Align, Color32, CornerRadius, Layout, Rect, Stroke, pos2, vec2};
@@ -777,7 +779,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
     #[cfg(not(target_arch = "wasm32"))]
     if browse {
         let dialog = rfd::AsyncFileDialog::new()
-            .add_filter(tl!("PDF or image"), &["pdf", "png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"]);
+            .add_filter_any_case(tl!("PDF or image"), &["pdf", "png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"]);
         let epoch = app.dialog_epoch();
         app.ask_one(crate::pickers::Ask::File(dialog), None, move |app, p| {
             // Only into the dialog that asked: not one closed meanwhile, or opened again since.
