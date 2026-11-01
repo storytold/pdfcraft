@@ -4440,6 +4440,9 @@ fn redact_mark_respects_single_page_and_rejects_conflicting_selectors() {
     assert!(text[1].contains("Private"));
 }
 
+/// Marks by pattern, with an overlay and by text remove nothing until redact_apply, which removes
+/// exactly what they cover; the saved file keeps no trace of it, and a second apply or a mark
+/// that finds nothing fails.
 #[test]
 fn redacting_through_tools() {
     let dir = workdir("redact");
@@ -4464,8 +4467,29 @@ fn redacting_through_tools() {
     assert!(matches!(a.call("redact_mark", &json!({ "doc": doc })), Err(ToolError::InvalidArgs(_))));
 }
 
+/// doc_save says when redaction marks aren't applied (#4741): saved as marks, they leave what
+/// they cover in the file. Once applied, the save says nothing.
 #[test]
+fn saving_with_redaction_marks_not_applied_says_so() {
+    let dir = workdir("redact-save-pending");
+    std::fs::write(dir.join("memo.txt"), "Call 555-123-4567 today").unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "text", "path": "memo.txt" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "redact_mark", json!({ "doc": doc, "pattern": "phone" }));
+    let r = ok(&mut a, "doc_save", json!({ "doc": doc, "path": "marked.pdf" }));
+    assert_eq!(r["redaction_marks_pending"], 1, "{r}");
+    let warning = r["warnings"][0].as_str().unwrap_or_default();
+    assert!(warning.starts_with("1 redaction mark isn't applied") && warning.contains("redact_apply"), "{r}");
+    let marked = ok(&mut a, "doc_open", json!({ "path": "marked.pdf" }))["doc"].as_u64().unwrap();
+    assert!(page_text(&mut a, marked)[0].contains("555-123-4567"), "the number is still in the saved file");
+    ok(&mut a, "redact_apply", json!({ "doc": doc }));
+    let r = ok(&mut a, "doc_save", json!({ "doc": doc, "path": "redacted.pdf" }));
+    assert!(r.get("redaction_marks_pending").is_none() && r.get("warnings").is_none(), "{r}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// Mark, apply and save remove the complete international number while retaining labels and controls.
+#[test]
 fn redacting_italian_international_slash_numbers_through_tools() {
     let dir = workdir("redact-italian-international-slash");
     std::fs::write(dir.join("phones.txt"), "A tel. +39 0426/123456\nB tel. 0426/123456\nC protocol 2024/123456\nD on 01/10/2026").unwrap();

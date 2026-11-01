@@ -50,6 +50,8 @@ struct Pending {
     revert_now: bool,
     overwrite_now: bool,
     overwrite_elsewhere: bool,
+    /// Redact all and save (true) or Save with marks (false).
+    redact_save: Option<bool>,
     summarize_now: bool,
     optimize_now: bool,
     duplicate_now: Option<Edit>,
@@ -282,6 +284,11 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
         }
         Dialog::OverwriteChanged => {
             if !dialog_overwrite_changed(ui, app, req) {
+                return false;
+            }
+        }
+        Dialog::RedactBeforeSave => {
+            if !dialog_redact_before_save(ui, app, req) {
                 return false;
             }
         }
@@ -1289,6 +1296,49 @@ fn dialog_overwrite_changed(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut 
     false
 }
 
+/// `Dialog::RedactBeforeSave` content: the save asked for waits while marks aren't applied.
+/// Returns `false`: it has its own buttons and no footer is wanted.
+fn dialog_redact_before_save(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let (name, marks) =
+        app.pending_redact_save.as_ref().and_then(|p| app.session.get(p.id)).map(|d| (d.name.clone(), d.redaction_marks())).unwrap_or_default();
+    ui.label(egui::RichText::new(tl!("Apply the redaction marks before saving?")).font(theme::semibold(18.0)));
+    ui.add_space(8.0);
+    let said = if marks == 1 {
+        crate::i18n::fmt(
+            tl!(
+                "“{name}” has a redaction mark that isn't applied yet. Until it is, the text and images under it stay in the file, where anyone can read or copy them."
+            ),
+            &[("name", &name)],
+        )
+    } else {
+        crate::i18n::fmt(
+            tl!(
+                "“{name}” has {n} redaction marks that aren't applied yet. Until they are, the text and images under them stay in the file, where anyone can read or copy them."
+            ),
+            &[("name", &name), ("n", &marks.to_string())],
+        )
+    };
+    ui.label(said);
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new(tl!("Redact all removes that content for good. Save with marks keeps them to apply later.")).color(t.text_muted));
+    ui.add_space(12.0);
+    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        if widgets::pill_button(ui, tl!("Redact all and save"), true).clicked() {
+            req.redact_save = Some(true);
+            req.close = true;
+        }
+        if widgets::pill_button(ui, tl!("Save with marks"), false).clicked() {
+            req.redact_save = Some(false);
+            req.close = true;
+        }
+        if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+            req.close = true;
+        }
+    });
+    false
+}
+
 /// `Dialog::Print` content. Returns `false` when it has its own buttons and no footer is wanted.
 fn dialog_print(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> bool {
     let t = Tokens::get(ui.ctx());
@@ -1941,6 +1991,14 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
         app.unmarked_page = Default::default();
     } else {
         app.dialog = Some(req.next.unwrap_or(dialog));
+    }
+    // Once the question is gone, so the save can ask its own (where to, overwrite a changed
+    // file). Dismissed, the save is dropped.
+    match req.redact_save {
+        Some(true) => app.redact_then_save(),
+        Some(false) => app.save_keeping_redaction_marks(),
+        None if dialog == Dialog::RedactBeforeSave && app.dialog != Some(Dialog::RedactBeforeSave) => app.pending_redact_save = None,
+        None => {}
     }
     if let Some(cmd) = req.link_command {
         app.execute(cmd);

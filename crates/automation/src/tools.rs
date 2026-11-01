@@ -152,7 +152,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "doc_save",
             "Save a document",
-            "Save to its own file (an incremental update, which keeps signatures valid) or to a new path (a full rewrite). The write is atomic. flatten_fill_sign bakes Fill & Sign text, marks and signatures into the page first and removes those annotations; other comments and form fields stay. Omit it, or pass false, to leave them editable.",
+            "Save to its own file (an incremental update, which keeps signatures valid) or to a new path (a full rewrite). The write is atomic. flatten_fill_sign bakes Fill & Sign text, marks and signatures into the page first and removes those annotations; other comments and form fields stay. Omit it, or pass false, to leave them editable. Redaction marks are saved as marks: when any aren't applied, the result's warnings say so and redaction_marks_pending counts them, as what they cover is still in the file (redact_apply removes it).",
         )
         .destructive()
         .cmd("file.save")
