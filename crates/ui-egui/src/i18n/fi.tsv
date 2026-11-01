@@ -218,6 +218,7 @@
 	Import form data…	Tuo lomaketietoja…
 	Export form data…	Vie lomaketietoja…
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	Action Wizard…	Toimintoavustaja…
 	Prepare for distribution…	Valmistele jakelua varten…
 	Optimize scanned documents…	Optimoi skannatut asiakirjat…
@@ -470,6 +471,18 @@
 	Standards	Standardit
 	Save as PDF/A	Tallenna PDF/A-muodossa
 	Save as PDF/X	Tallenna PDF/X-muodossa
+	Verify PDF/X	Tarkista PDF/X
+	Choose ICC profile…	Valitse ICC-profiili…
+	ICC profile: {name}	ICC-profiili: {name}
+	Can't save as {level}; nothing was changed:	Ei voi tallentaa muotoon {level}; mitään ei muutettu:
+	Saved {name} and verified it: it conforms to {level}.	{name} tallennettiin ja tarkistettiin: se on {level}-yhdenmukainen.
+	Saved {name}, but verifying it found {n} problems.	{name} tallennettiin, mutta tarkistus löysi {n} ongelmaa.
+	Converted to {level} ({n} changes)	Muunnettu muotoon {level} ({n} muutosta)
+	Output intent profile:	Tulostustarkoituksen profiili:
+	None: sRGB for RGB and gray documents	Ei mitään: sRGB RGB- ja harmaasävyasiakirjoille
+	Printing condition:	Painoehto:
+	Flatten comments and form fields	Litistä kommentit ja lomakekentät
+	Couldn't read the ICC profile {name}: {e}	ICC-profiilia {name} ei voitu lukea: {e}
 	Save as PDF/UA	Tallenna PDF/UA-muodossa
 	Add search index	Lisää hakuhakemisto
 	Index	Hakemisto
@@ -1877,6 +1890,85 @@
 	PostScript XObjects aren't allowed	PostScript-XObjecteja ei sallita
 	Embedded files must be PDF/A files themselves (use PDF/A-3 for others)	Upotettujen tiedostojen on oltava itsekin PDF/A-tiedostoja (käytä muille PDF/A-3:a)
 	An embedded file has no AFRelationship	Upotetulla tiedostolla ei ole AFRelationship-arvoa
+	The document information doesn't identify the file as {}	Asiakirjan tiedot eivät tunnista tiedostoa muotoon {}
+	The metadata has no {}	Metatiedoissa ei ole kohdetta {}
+	The document information and the metadata name different PDF/X versions	Asiakirjan tiedot ja metatiedot nimeävät eri PDF/X-versiot
+	The file trailer has no document ID	Tiedoston trailerissa ei ole asiakirjan tunnistetta
+	The document doesn't say whether it is trapped (Trapped)	Asiakirja ei kerro, onko se trapattu (Trapped)
+	Trapped is {}, but it must be /True or /False	Trapped on {}, mutta sen on oltava /True tai /False
+	The Trapped key and the metadata's pdf:Trapped disagree	Trapped-avain ja metatietojen pdf:Trapped ovat ristiriidassa
+	There is no PDF/X output intent (GTS_PDFX)	PDF/X-tulostustarkoitusta ei ole (GTS_PDFX)
+	There is more than one PDF/X output intent	PDF/X-tulostustarkoituksia on useampi kuin yksi
+	The PDF/X output intent has no OutputConditionIdentifier	PDF/X-tulostustarkoituksella ei ole OutputConditionIdentifieria
+	The PDF/X output intent has no embedded profile (DestOutputProfile)	PDF/X-tulostustarkoituksella ei ole upotettua profiilia (DestOutputProfile)
+	The PDF/X output intent has neither an embedded profile nor a characterization in the ICC registry	PDF/X-tulostustarkoituksella ei ole upotettua profiilia eikä ICC-rekisterin karakterisointia
+	The output intent's profile isn't a valid ICC profile	Tulostustarkoituksen profiili ei ole kelvollinen ICC-profiili
+	The output intent's profile isn't an output (printer) profile	Tulostustarkoituksen profiili ei ole tulostus- (tulostin)profiili
+	The output intent's profile describes {} colour, but PDF/X-1a needs a CMYK printing condition	Tulostustarkoituksen profiili kuvaa väriä {}, mutta PDF/X-1a tarvitsee CMYK-painoehdon
+	The output intent's profile describes {} colour; it must be gray, RGB or CMYK	Tulostustarkoituksen profiili kuvaa väriä {}; sen on oltava harmaa, RGB tai CMYK
+	The output intent's profile has /N {}, which doesn't match its colour space	Tulostustarkoituksen profiilin /N on {}, mikä ei vastaa sen väriavaruutta
+	The output intent's profile has no device-to-PCS transform (AToB1 or grayTRC)	Tulostustarkoituksen profiilissa ei ole laitteesta PCS:ään -muunnosta (AToB1 tai grayTRC)
+	The page has no valid MediaBox	Sivulla ei ole kelvollista MediaBoxia
+	The page has neither a TrimBox nor an ArtBox	Sivulla ei ole TrimBoxia eikä ArtBoxia
+	The page has both a TrimBox and an ArtBox	Sivulla on sekä TrimBox että ArtBox
+	The {} extends beyond the BleedBox	{} ulottuu BleedBoxin ulkopuolelle
+	The {} extends beyond the CropBox	{} ulottuu CropBoxin ulkopuolelle
+	The {} extends beyond the MediaBox	{} ulottuu MediaBoxin ulkopuolelle
+	A {} annotation lies within the BleedBox	{}-merkintä on BleedBoxin sisällä
+	A PrinterMark annotation overlaps the TrimBox or ArtBox	PrinterMark-merkintä menee TrimBoxin tai ArtBoxin päälle
+	A stream uses JBIG2 compression	Virta käyttää JBIG2-pakkausta
+	A form XObject refers to a page of another file (reference XObject)	Lomake-XObject viittaa toisen tiedoston sivuun (viittaus-XObject)
+	An image or form has OPI information	Kuvassa tai lomakkeessa on OPI-tietoja
+	A graphics state uses a soft mask	Grafiikkatila käyttää pehmeää maskia
+	A graphics state sets an opacity below 1	Grafiikkatila asettaa peittävyyden alle 1:n
+	A graphics state uses the {} blend mode	Grafiikkatila käyttää sekoitustilaa {}
+	An image has a soft mask	Kuvalla on pehmeä maski
+	The {} colour space isn't allowed: PDF/X-1a allows only CMYK, gray and spot colour	Väriavaruus {} ei ole sallittu: PDF/X-1a sallii vain CMYK-, harmaa- ja spottivärit
+	Content uses DeviceRGB colour: PDF/X-1a allows only CMYK, gray and spot colour	Sisältö käyttää DeviceRGB-väriä: PDF/X-1a sallii vain CMYK-, harmaa- ja spottivärit
+	{} colour doesn't match the output intent's colour space	Väri {} ei vastaa tulostustarkoituksen väriavaruutta
+	Content uses {} colour, which doesn't match the output intent's colour space	Sisältö käyttää väriä {}, joka ei vastaa tulostustarkoituksen väriavaruutta
+	Device-independent colour is used, so the output intent needs an embedded profile	Käytössä on laitteesta riippumaton väri, joten tulostustarkoitus tarvitsee upotetun profiilin
+	Output intents with profiles don't all share one profile	Profiilin sisältävät tulostustarkoitukset eivät kaikki jaa samaa profiilia
+	The font {} has characters with no Unicode value	Fontissa {} on merkkejä, joilla ei ole Unicode-arvoa
+	The font {} maps characters to U+0000, U+FEFF or U+FFFE	Fontti {} yhdistää merkkejä arvoihin U+0000, U+FEFF tai U+FFFE
+	Text in the font {} uses the Private Use Area without ActualText	Fontin {} teksti käyttää yksityiskäyttöaluetta ilman ActualTextiä
+	The document isn't marked as tagged (MarkInfo /Marked true)	Asiakirjaa ei ole merkitty tagatuksi (MarkInfo /Marked true)
+	The language {} isn't a valid language tag	Kieli {} ei ole kelvollinen kielitunniste
+	The document has no structure tree: it isn't tagged	Asiakirjassa ei ole rakennepuuta: sitä ei ole tagattu
+	The standard structure type {} is mapped to a type that isn't standard	Vakiorakennetyyppi {} on yhdistetty tyyppiin, joka ei ole vakiotyyppi
+	The role map maps {} in a circle	Roolikartta yhdistää tyypin {} kehään
+	The structure type {} isn't standard and isn't mapped to a standard type	Rakennetyyppi {} ei ole vakiotyyppi eikä sitä ole yhdistetty vakiotyyppiin
+	The document is encrypted: open it with its permissions password to remove the security	Asiakirja on salattu: avaa se käyttöoikeussalasanalla poistaaksesi suojauksen
+	The document can't be converted: {}	Asiakirjaa ei voi muuntaa: {}
+	PDF/X-4 embeds the printing condition's ICC profile: choose a profile file	PDF/X-4 upottaa painoehdon ICC-profiilin: valitse profiilitiedosto
+	PDF/A embeds the output intent's ICC profile: choose a profile file	PDF/A upottaa tulostustarkoituksen ICC-profiilin: valitse profiilitiedosto
+	The ICC profile {} isn't an output (printer) profile	ICC-profiili {} ei ole tulostus- (tulostin)profiili
+	The ICC profile {} isn't an output or display profile	ICC-profiili {} ei ole tulostus- eikä näyttöprofiili
+	The ICC profile {} isn't a CMYK profile, which PDF/X-1a needs	ICC-profiili {} ei ole CMYK-profiili, jota PDF/X-1a tarvitsee
+	The ICC profile {} isn't a gray, RGB or CMYK profile	ICC-profiili {} ei ole harmaa-, RGB- eikä CMYK-profiili
+	Converting colour to CMYK needs the printing condition's ICC profile: choose a profile file	Värin muuntaminen CMYK:ksi tarvitsee painoehdon ICC-profiilin: valitse profiilitiedosto
+	{} needs the printing condition's ICC profile embedded for RGB or device-independent colour: choose a profile file	{} tarvitsee painoehdon ICC-profiilin upotettuna RGB- tai laitteesta riippumatonta väriä varten: valitse profiilitiedosto
+	CMYK colour needs a CMYK printing condition	CMYK-väri tarvitsee CMYK-painoehdon
+	The document uses CMYK colour: choose the ICC profile of a CMYK printing condition for its output intent	Asiakirja käyttää CMYK-väriä: valitse sen tulostustarkoitukselle CMYK-painoehdon ICC-profiili
+	JPEG 2000 pictures need PDF 1.5, newer than {} allows	JPEG 2000 -kuvat tarvitsevat PDF 1.5:n, joka on uudempi kuin {} sallii
+	Layers (optional content) need PDF 1.5, newer than {} allows	Tasot (valinnainen sisältö) tarvitsevat PDF 1.5:n, joka on uudempi kuin {} sallii
+	OpenType font programs need PDF 1.6, newer than {} allows	OpenType-fonttiohjelmat tarvitsevat PDF 1.6:n, joka on uudempi kuin {} sallii
+	Page {}'s TrimBox, BleedBox and CropBox don't overlap	Sivun {} TrimBox, BleedBox ja CropBox eivät mene päällekkäin
+	The output profile can't convert colour to CMYK ({})	Tulostusprofiili ei voi muuntaa väriä CMYK:ksi ({})
+	A colour space's ICC profile can't be used to convert its colour	Väriavaruuden ICC-profiilia ei voi käyttää sen värin muuntamiseen
+	A colour space is nested too deeply to convert	Väriavaruus on sisäkkäin liian syvällä muunnettavaksi
+	The spot colour {} has an alternate that can't be converted to CMYK yet	Spottivärillä {} on vaihtoehtoinen väri, jota ei vielä voi muuntaa CMYK:ksi
+	A pattern over RGB or device-independent colour can't be converted to CMYK yet	RGB- tai laitteesta riippumattoman värin päällä olevaa kuviota ei vielä voi muuntaa CMYK:ksi
+	{} colour can't be converted to CMYK yet	Väriä {} ei vielä voi muuntaa CMYK:ksi
+	A content stream can't be read, so its colour can't be converted	Sisältövirtaa ei voi lukea, joten sen väriä ei voi muuntaa
+	A colour operator's operands don't match its colour space	Värioperaattorin operandit eivät vastaa sen väriavaruutta
+	A content stream is drawn with different resources in different places, so its colour can't be converted	Sisältövirta piirretään eri paikoissa eri resursseilla, joten sen väriä ei voi muuntaa
+	A shading in RGB or device-independent colour can't be converted to CMYK yet	RGB- tai laitteesta riippumattoman värin sävytystä ei vielä voi muuntaa CMYK:ksi
+	A picture with other than 8 bits per component can't be converted to CMYK yet	Kuvaa, jossa on muu kuin 8 bittiä komponenttia kohden, ei vielä voi muuntaa CMYK:ksi
+	A picture with a decode array or a colour-key mask can't be converted to CMYK yet	Kuvaa, jossa on dekoodaustaulukko tai väriavainmaski, ei vielä voi muuntaa CMYK:ksi
+	A picture's data can't be read, so it can't be converted to CMYK	Kuvan tietoja ei voi lukea, joten sitä ei voi muuntaa CMYK:ksi
+	A JPEG picture in CMYK can't be converted yet	CMYK-JPEG-kuvaa ei vielä voi muuntaa
+	An indexed colour space's table is too short to convert	Indeksoidun väriavaruuden taulukko on liian lyhyt muunnettavaksi
 	Select Icon	Valitse kuvake
 	Choose images	Valitse kuvat
 	{dpi} pixels/inch	{dpi} pikseliä/tuuma

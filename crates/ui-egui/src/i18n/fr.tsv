@@ -197,6 +197,7 @@
 	Import form data…	Importer des données de formulaire…
 	Export form data…	Exporter des données de formulaire…
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	Action Wizard…	Assistant d'actions…
 	Prepare for distribution…	Préparer pour la distribution…
 	Optimize scanned documents…	Optimiser les documents numérisés…
@@ -450,6 +451,18 @@
 	Standards	Normes
 	Save as PDF/A	Enregistrer comme PDF/A
 	Save as PDF/X	Enregistrer comme PDF/X
+	Verify PDF/X	Vérifier PDF/X
+	Choose ICC profile…	Choisir un profil ICC…
+	ICC profile: {name}	Profil ICC : {name}
+	Can't save as {level}; nothing was changed:	Impossible d'enregistrer comme {level} ; rien n'a été modifié :
+	Saved {name} and verified it: it conforms to {level}.	{name} enregistré et vérifié : il est conforme à {level}.
+	Saved {name}, but verifying it found {n} problems.	{name} enregistré, mais la vérification a trouvé {n} problèmes.
+	Converted to {level} ({n} changes)	Converti en {level} ({n} modifications)
+	Output intent profile:	Profil de l'intention de sortie :
+	None: sRGB for RGB and gray documents	Aucun : sRGB pour les documents RGB et en niveaux de gris
+	Printing condition:	Condition d'impression :
+	Flatten comments and form fields	Aplatir les commentaires et les champs de formulaire
+	Couldn't read the ICC profile {name}: {e}	Impossible de lire le profil ICC {name} : {e}
 	Save as PDF/UA	Enregistrer comme PDF/UA
 	Add search index	Ajouter un index de recherche
 	Index	Index

@@ -1,6 +1,8 @@
-//! A small sRGB ICC profile (version 2, display class, matrix/TRC), written from the published
-//! sRGB primaries (IEC 61966-2-1) adapted to D50, with the sRGB tone curve sampled at 1024
-//! points. Used as the PDF/A output intent's destination profile.
+//! Small ICC profiles (version 2, display class) written here rather than shipped: sRGB
+//! (matrix/TRC), from the published sRGB primaries (IEC 61966-2-1) adapted to D50, and a gray
+//! profile with the same tone curve, both sampled at 1024 points. sRGB is the PDF/A output
+//! intent's destination profile and what untagged RGB is taken to be; the gray profile maps
+//! device gray (`DefaultGray`) under an RGB printing condition.
 
 fn s15f16(v: f64) -> [u8; 4] {
     ((v * 65536.0).round() as i32).to_be_bytes()
@@ -44,7 +46,7 @@ fn curve() -> Vec<u8> {
     t
 }
 
-/// The profile's bytes.
+/// The sRGB profile's bytes.
 pub fn srgb() -> Vec<u8> {
     // sRGB primaries, Bradford-adapted to the D50 profile connection space.
     let tags: Vec<(&[u8; 4], Vec<u8>)> = vec![
@@ -57,30 +59,46 @@ pub fn srgb() -> Vec<u8> {
         (b"rTRC", curve()),
     ];
     // gTRC and bTRC share rTRC's data.
-    let count = tags.len() + 2;
+    build(b"RGB ", &tags, &[(b"gTRC", b"rTRC"), (b"bTRC", b"rTRC")])
+}
+
+/// The gray profile's bytes: the D50 white and the sRGB tone curve.
+pub fn gray() -> Vec<u8> {
+    let tags: Vec<(&[u8; 4], Vec<u8>)> = vec![
+        (b"desc", desc("Gray, sRGB tone curve (PdfCraft)")),
+        (b"cprt", text("No copyright, use freely")),
+        (b"wtpt", xyz(0.9642, 1.0, 0.8249)),
+        (b"kTRC", curve()),
+    ];
+    build(b"GRAY", &tags, &[])
+}
+
+/// A display profile of colour space `space` holding `tags`, then `aliases`: tags that share an
+/// earlier tag's data.
+fn build(space: &[u8; 4], tags: &[(&[u8; 4], Vec<u8>)], aliases: &[(&[u8; 4], &[u8; 4])]) -> Vec<u8> {
+    let count = tags.len() + aliases.len();
     let table_len = 4 + count * 12;
     let mut offset = 128 + table_len;
     let mut table = (count as u32).to_be_bytes().to_vec();
     let mut data = Vec::new();
-    let mut trc = (0, 0);
-    for (sig, body) in &tags {
+    let mut placed: Vec<(&[u8; 4], usize, usize)> = Vec::new();
+    for (sig, body) in tags {
         let len = body.len();
         table.extend(*sig);
         table.extend((offset as u32).to_be_bytes());
         table.extend((len as u32).to_be_bytes());
-        if *sig == b"rTRC" {
-            trc = (offset, len);
-        }
+        placed.push((sig, offset, len));
         data.extend(body);
         // Tags start on 4-byte boundaries.
         let pad = (4 - len % 4) % 4;
         data.extend(std::iter::repeat_n(0u8, pad));
         offset += len + pad;
     }
-    for sig in [b"gTRC", b"bTRC"] {
-        table.extend(sig);
-        table.extend((trc.0 as u32).to_be_bytes());
-        table.extend((trc.1 as u32).to_be_bytes());
+    for (alias, of) in aliases {
+        let (at, len) = placed.iter().find(|(sig, _, _)| sig == of).map_or((0, 0), |(_, at, len)| (*at, *len));
+        table.extend(*alias);
+        table.extend((at as u32).to_be_bytes());
+        table.extend((len as u32).to_be_bytes());
     }
     let size = 128 + table.len() + data.len();
     let mut h = Vec::with_capacity(size);
@@ -88,7 +106,7 @@ pub fn srgb() -> Vec<u8> {
     h.extend(b"\0\0\0\0"); // preferred CMM
     h.extend([2, 0x10, 0, 0]); // version 2.1
     h.extend(b"mntr");
-    h.extend(b"RGB ");
+    h.extend(space);
     h.extend(b"XYZ ");
     h.extend([0u8; 12]); // date
     h.extend(b"acsp");
@@ -110,6 +128,16 @@ pub fn srgb() -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn gray_profile_is_well_formed() {
+        let p = super::gray();
+        assert_eq!(u32::from_be_bytes(p[0..4].try_into().unwrap()) as usize, p.len());
+        assert_eq!(&p[12..20], b"mntrGRAY");
+        assert_eq!(u32::from_be_bytes(p[128..132].try_into().unwrap()), 4);
+        let tag = |i: usize| &p[132 + i * 12..132 + i * 12 + 4];
+        assert_eq!(tag(3), b"kTRC");
+    }
+
     #[test]
     fn profile_is_well_formed() {
         let p = super::srgb();

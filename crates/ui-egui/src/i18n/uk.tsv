@@ -222,6 +222,7 @@
 	Import form data…	Імпортувати дані форми…
 	Export form data…	Експортувати дані форми…
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	Action Wizard…	Майстер дій…
 	Prepare for distribution…	Підготувати до розповсюдження…
 	Optimize scanned documents…	Оптимізувати відскановані документи…
@@ -475,6 +476,18 @@
 	Standards	Стандарти
 	Save as PDF/A	Зберегти як PDF/A
 	Save as PDF/X	Зберегти як PDF/X
+	Verify PDF/X	Перевірити PDF/X
+	Choose ICC profile…	Вибрати профіль ICC…
+	ICC profile: {name}	Профіль ICC: {name}
+	Can't save as {level}; nothing was changed:	Не вдається зберегти як {level}; нічого не змінено:
+	Saved {name} and verified it: it conforms to {level}.	{name} збережено й перевірено: відповідає {level}.
+	Saved {name}, but verifying it found {n} problems.	{name} збережено, але перевірка виявила проблем: {n}.
+	Converted to {level} ({n} changes)	Перетворено на {level} (змін: {n})
+	Output intent profile:	Профіль виводу (ICC):
+	None: sRGB for RGB and gray documents	Немає: sRGB для документів RGB і у відтінках сірого
+	Printing condition:	Умови друку:
+	Flatten comments and form fields	Звести коментарі й поля форм
+	Couldn't read the ICC profile {name}: {e}	Не вдалося прочитати профіль ICC {name}: {e}
 	Save as PDF/UA	Зберегти як PDF/UA
 	Add search index	Додати пошуковий індекс
 	Index	Індекс

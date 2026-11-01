@@ -2087,6 +2087,7 @@
 	open to see what it will include	打开以查看计划包含的功能
 	Page {p} of {n}	第 {p} 页，共 {n} 页
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	Planned	计划中
 	Planned for milestone	计划推出的里程碑
 	PostScript / EPS	PostScript / EPS
@@ -2107,6 +2108,18 @@
 	Save as PDF/A-3b	另存为 PDF/A-3b
 	Save as PDF/UA	另存为 PDF/UA
 	Save as PDF/X	另存为 PDF/X
+	Verify PDF/X	验证 PDF/X
+	Choose ICC profile…	选择 ICC 配置文件…
+	ICC profile: {name}	ICC 配置文件：{name}
+	Can't save as {level}; nothing was changed:	无法另存为 {level}；未做任何更改：
+	Saved {name} and verified it: it conforms to {level}.	已保存 {name} 并完成验证：符合 {level}。
+	Saved {name}, but verifying it found {n} problems.	已保存 {name}，但验证发现 {n} 个问题。
+	Converted to {level} ({n} changes)	已转换为 {level}（{n} 处更改）
+	Output intent profile:	输出意图配置文件：
+	None: sRGB for RGB and gray documents	无：RGB 和灰度文档使用 sRGB
+	Printing condition:	印刷条件：
+	Flatten comments and form fields	拼合注释和表单域
+	Couldn't read the ICC profile {name}: {e}	无法读取 ICC 配置文件 {name}：{e}
 	Select a file for the stamp	选择图章文件
 	Select Icon	选择图标
 	Set bookmark destination	设置书签目标

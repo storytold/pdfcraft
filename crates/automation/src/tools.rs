@@ -1197,16 +1197,47 @@ pub fn tools() -> Vec<ToolDef> {
         t("doc_export_office", "Export to Word, PowerPoint, HTML, RTF or Markdown", "Export a PDF ▸ Word (.docx), PowerPoint (.pptx, one slide per page), HTML (.html, one file with images inline), RTF (.rtf) or Markdown (.md or .markdown: pipe tables, images left out), chosen by path's extension: text, headings, bold and italic. Word uses borderless inferred tables and positioned editable shapes on pages with artwork, rotated or large text; each source page retains its size. Font matching and vector graphics remain limited. Export reads forms 50 deep and up to 50 000 a page, counting forms the page draws itself. Pages that go past either limit are listed in truncated_pages, with a warning; the text and images of the forms left out are missing.")
             .cmd("export.docx")
             .with(schema(json!({ "doc": doc(), "path": { "type": "string" } }), &["doc", "path"])),
-        t("pdfa_verify", "Verify PDF/A", "Standards ▸ Verify PDF/A compliance: the PDF/A-2b or 3b rules the document breaks (ISO 19005 clause, message, page, whether Save as PDF/A can fix it), plus what it declares.")
+        t("pdfa_verify", "Verify PDF/A", "Standards ▸ Verify PDF/A compliance: the PDF/A-2 or PDF/A-3 rules of level b, u (every character maps to Unicode) or a (and tagged) the document breaks (ISO 19005 clause, message, page, whether Save as PDF/A can fix it), plus what it declares.")
             .ro()
             .cmd("standards.pdfa")
-            .with(schema(json!({ "doc": doc(), "level": { "type": "string", "enum": ["2b", "3b"], "description": "Default 2b." } }), &["doc"])),
+            .with(schema(json!({ "doc": doc(), "level": { "type": "string", "enum": ["2b", "2u", "2a", "3b", "3u", "3a"], "description": "Default 2b." } }), &["doc"])),
+        t("pdfx_verify", "Verify PDF/X", "Standards ▸ Verify PDF/X compliance: the PDF/X-1a:2001, PDF/X-1a:2003, PDF/X-3:2002, PDF/X-3:2003 or PDF/X-4 (ISO 15930) rules the document breaks: rule id, where the rule is described, message, page and object, plus what the document declares. Without level, the level the document declares, else PDF/X-4. Verification only; nothing is changed or fixed.")
+            .ro()
+            .cmd("standards.pdfx")
+            .with(schema(
+                json!({ "doc": doc(), "level": { "type": "string", "enum": ["x1a:2001", "x1a:2003", "x3:2002", "x3:2003", "x4"], "description": "Default: the declared level, else x4." } }),
+                &["doc"],
+            )),
         t("print_readiness", "Print readiness", "Verification only. Reports effective image resolution where each image is drawn (not against the page size), page boxes and bleed past the trim, output intents, fonts that are not embedded, and the PDF/A-2b structural result. Does not modify the document, embed fonts, invent a press profile, or check PDF/X.")
             .ro()
             .with(schema(json!({ "doc": doc() }), &["doc"])),
-        t("pdfa_convert", "Save as PDF/A", "Standards ▸ Save as PDF/A: fix what can be fixed for PDF/A-2b or 3b (XMP identification and metadata, an sRGB output intent, forbidden actions and JavaScript, annotation print flags, image interpolation, encryption). Returns what was fixed and what remains (e.g. fonts that aren't embedded). Undoable; save the document to keep it.")
+        t("pdfa_convert", "Save as PDF/A", "Standards ▸ Save as PDF/A: convert to PDF/A-2 or PDF/A-3 level b, u or a (XMP identification and metadata, the output intent, forbidden actions and JavaScript, annotation print flags, image interpolation, encryption opened with the owner password, MarkInfo for a tagged document), then verify. Only a document that then verifies is changed: otherwise converted is false, blockers says what stands in the way (fonts that aren't embedded, characters with no Unicode value, a document that isn't tagged, CMYK colour without a CMYK profile) and the document is unchanged. icc: an ICC profile file for the output intent (how a document with CMYK device colour gets one; RGB under a CMYK profile is described as sRGB); condition: its name. Returns converted, fixed, blockers and the verification. Undoable; save the document to keep it.")
             .cmd("standards.pdfa")
-            .with(schema(json!({ "doc": doc(), "level": { "type": "string", "enum": ["2b", "3b"] } }), &["doc"])),
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "level": { "type": "string", "enum": ["2b", "2u", "2a", "3b", "3u", "3a"], "description": "Default 2b." },
+                    "icc": { "type": "string", "description": "An ICC profile file (output or display class; gray, RGB or CMYK) for the output intent." },
+                    "condition": { "type": "string", "description": "The output condition's name (OutputConditionIdentifier) for the icc profile." }
+                }),
+                &["doc"],
+            )),
+        t("pdfx_convert", "Save as PDF/X", "Standards ▸ Save as PDF/X: convert to PDF/X-1a:2001, PDF/X-1a:2003, PDF/X-3:2002, PDF/X-3:2003 or PDF/X-4, then verify. Sets the GTS_PDFX output intent, GTS_PDFXVersion, Trapped, XMP metadata, the document ID, TrimBox and BleedBox (from the CropBox when missing), removes JavaScript and additional actions, re-encodes LZW, and writes the file as the level's PDF version. PDF/X-1a converts RGB and ICC-based colour (operators, 8-bit and JPEG pictures, indexed tables) to CMYK through the icc profile; PDF/X-3 and -4 keep device-independent colour and describe RGB under a CMYK condition as sRGB. Only a document that then verifies is changed: otherwise converted is false and blockers says what stands in the way (fonts that aren't embedded, transparency before PDF/X-4, shadings or Lab colour to convert, annotations in the bleed, a missing profile) and the document is unchanged. Without icc, PDF/X-1a and -3 name a registered characterization (condition, default FOGRA39; see output_conditions); PDF/X-4 needs icc. flatten: flatten comments and form fields first and remove links and annotations that print nothing from the bleed. Returns converted, fixed, blockers and the verification. Undoable; save the document to keep it.")
+            .cmd("standards.pdfx")
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "level": { "type": "string", "enum": ["x1a:2001", "x1a:2003", "x3:2002", "x3:2003", "x4"], "description": "Default x4." },
+                    "icc": { "type": "string", "description": "The printing condition's ICC profile file (output class: CMYK for PDF/X-1a; gray, RGB or CMYK otherwise), embedded as the output intent's profile." },
+                    "condition": { "type": "string", "description": "Without icc: an ICC registry characterization (FOGRA39, FOGRA51, FOGRA52, FOGRA47, CGATS TR 006, CGATS TR 001, JC200103, IFRA26). With icc: the condition's name (OutputConditionIdentifier)." },
+                    "flatten": { "type": "boolean", "description": "Flatten comments and form fields, and remove links and annotations that print nothing from the bleed. Default false." }
+                }),
+                &["doc"],
+            )),
+        t("output_conditions", "Printing conditions", "Standards ▸ Save as PDF/X: the ICC registry characterizations PdfCraft can name as a PDF/X-1a or PDF/X-3 output intent without a profile (reference name and what it characterizes), and the default. No printer profile ships with PdfCraft: PDF/X-4, converting colour and PDF/A need an ICC profile file of your own.")
+            .ro()
+            .cmd("standards.pdfx")
+            .with(schema(json!({}), &[])),
         t("standards_remove_id", "Remove PDF/A or PDF/X identification", "Remove what identifies the document as PDF/A (its pdfaid: XMP properties) or PDF/X (GTS_PDFXVersion and GTS_PDFXConformance, in the document information and as pdfxid: XMP properties), e.g. after edits it no longer meets. Output intents and other metadata stay. Fails when the document declares nothing of the kind. Undoable.")
             .with(schema(json!({ "doc": doc(), "standard": { "type": "string", "enum": ["pdfa", "pdfx"] } }), &["doc", "standard"])),
         t("action_list", "List actions", "Action Wizard: the built-in actions (name, description, steps) and every step an action can use (id, label, whether it takes a text argument).")
