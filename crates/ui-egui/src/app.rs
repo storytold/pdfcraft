@@ -1031,7 +1031,7 @@ impl PdfCraftApp {
                                 ui.label(
                                     egui::RichText::new(format!(
                                         "Page {} of {} • {:.0}%",
-                                        view.page.saturating_add(1),
+                                        view.current.saturating_add(1),
                                         doc.info.pages.len(),
                                         view.zoom * 100.0,
                                     ))

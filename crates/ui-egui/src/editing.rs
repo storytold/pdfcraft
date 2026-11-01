@@ -991,7 +991,7 @@ impl PdfCraftApp {
     ///
     /// Each tab of the document holds typing of its own (split view). The tab in use stays active
     /// when the others have been committed.
-    pub(crate) fn commit_typing_in(&mut self, id: pdfcraft_engine::DocId) -> bool {
+    pub fn commit_typing_in(&mut self, id: pdfcraft_engine::DocId) -> bool {
         let keep = self.active_ids().filter(|(_, active)| *active == id).and_then(|(i, _)| self.views.get(i)).map(|v| v.pane.key);
         let tabs: Vec<u64> = self.views.iter().filter(|v| v.id == id).map(|v| v.pane.key).collect();
         for key in tabs {
