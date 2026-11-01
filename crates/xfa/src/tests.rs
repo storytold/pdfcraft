@@ -4617,3 +4617,46 @@ fn bind_items_are_capped() {
     assert_eq!(options.first().map(|(_, o)| o.len()), Some(1000), "{:?}", options.first().map(|(n, o)| (n, o.len())));
     assert!(form.warnings.iter().any(|w| w.contains("many")), "{:?}", form.warnings);
 }
+
+/// The item cap counts final matches only: a `[*]` step in the middle of a ref is followed past
+/// 1,000 nodes, so an item under row 1,502 is still listed when the rows before it are empty.
+#[test]
+fn bind_items_cap_counts_only_the_final_matches() {
+    let rows = format!("{}<r><c>last</c></r>", "<r/>".repeat(1501));
+    let xdp = format!(
+        r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+<pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium stock="letter" short="8.5in" long="11in"/></pageArea></pageSet>
+<field name="deep" w="2in" h="0.3in"><ui><choiceList/></ui><bindItems ref="!big.r[*].c[*]"/><items><text>Own</text></items></field></subform></template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data/><big>{rows}</big></xfa:datasets></xdp:xdp>"#
+    );
+    let form = layout_xml(&xdp).unwrap();
+    let options = choice_options(&form);
+    assert_eq!(options.first().map(|(_, o)| o.clone()), Some(vec![("last".to_string(), "last".to_string())]), "{options:?}");
+    assert!(!form.warnings.iter().any(|w| w.contains("deep")), "{:?}", form.warnings);
+}
+
+/// Edge cases of a `<bindItems>` list: a ref naming no data node lists nothing (the data is the
+/// binding, so the template's placeholder items do not come back), duplicate values are listed
+/// as the data has them, and a flat list of 100,000 nodes keeps the first 1,000 with a warning.
+#[test]
+fn bind_items_empty_duplicate_and_huge_lists() {
+    let huge: String = (0..100_000).map(|i| format!("<h>{i}</h>")).collect();
+    let xdp = format!(
+        r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+<pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium stock="letter" short="8.5in" long="11in"/></pageArea></pageSet>
+<field name="empty" w="2in" h="0.3in"><ui><choiceList/></ui><bindItems ref="!lists.none[*]"/><items><text>Own</text></items></field>
+<field name="dup" w="2in" h="0.3in"><ui><choiceList/></ui><bindItems ref="!lists.d[*]" labelRef="$" valueRef="v"/></field>
+<field name="huge" w="2in" h="0.3in"><ui><choiceList/></ui><bindItems ref="!lists.h[*]"/></field></subform></template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data/><lists><d v="a">One</d><d v="a">One</d><d v="b">Two</d>{huge}</lists></xfa:datasets></xdp:xdp>"#
+    );
+    let form = layout_xml(&xdp).unwrap();
+    let options = choice_options(&form);
+    let of = |name: &str| options.iter().find(|(n, _)| n.starts_with(name)).map(|(_, o)| o.clone()).unwrap_or_default();
+    assert_eq!(of("empty"), Vec::new(), "{options:?}");
+    let pairs = |p: &[(&str, &str)]| p.iter().map(|(v, l)| (v.to_string(), l.to_string())).collect::<Vec<_>>();
+    assert_eq!(of("dup"), pairs(&[("a", "One"), ("a", "One"), ("b", "Two")]), "{options:?}");
+    let huge = of("huge");
+    assert_eq!(huge.len(), 1000);
+    assert_eq!(huge.last().map(|(v, _)| v.as_str()), Some("999"));
+    assert!(form.warnings.iter().any(|w| w.contains("huge") && w.contains("1000")), "{:?}", form.warnings);
+}

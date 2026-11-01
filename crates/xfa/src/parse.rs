@@ -540,7 +540,13 @@ fn bound_nodes<'a, 'd>(n: XmlNode<'a, 'd>, reference: &'a str) -> Option<Vec<Xml
     ];
     let (start, path) = prefixes.into_iter().find_map(|(prefix, start)| reference.strip_prefix(prefix).map(|path| (start, path)))?;
     let mut nodes = vec![start?];
-    for seg in path.split('.') {
+    let mut segments = path.split('.').peekable();
+    while let Some(seg) = segments.next() {
+        // Only the final step is capped. Capping a middle step would drop later matches (the
+        // items of row 1,002 in `row[*].item[*]`) without the over-cap warning. A middle step
+        // needs no cap: each node has one parent, so it holds at most the parsed document's
+        // own nodes.
+        let cap = if segments.peek().is_none() { MAX_ITEMS + 1 } else { usize::MAX };
         let (name, index) = match seg.split_once('[') {
             Some((name, rest)) => (name, Some(rest.strip_suffix(']')?.trim())),
             None => (seg, None),
@@ -559,10 +565,10 @@ fn bound_nodes<'a, 'd>(n: XmlNode<'a, 'd>, reference: &'a str) -> Option<Vec<Xml
         for node in &nodes {
             let mut same = children(*node, name);
             match index {
-                None => next.extend(same.take((MAX_ITEMS + 1).saturating_sub(next.len()))),
+                None => next.extend(same.take(cap.saturating_sub(next.len()))),
                 Some(i) => next.extend(same.nth(i)),
             }
-            if next.len() > MAX_ITEMS {
+            if next.len() >= cap {
                 break;
             }
         }
