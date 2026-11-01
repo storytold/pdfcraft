@@ -178,7 +178,32 @@ pub(crate) fn get_nth_field_name(_: &JsValue, args: &[JsValue], ctx: &mut Contex
 }
 
 pub(crate) fn reset_form(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    let names = strings(&arg(args, 0), ctx)?;
+    let v = arg(args, 0);
+    if let Some(o) = v.as_object()
+        && o.is_array()
+    {
+        let a = JsArray::from_object(o.clone())?;
+        let n = a.length(ctx)?;
+        if n > super::run::MAX_ARRAY_LENGTH {
+            return Err(error(format!("array length exceeds {}", super::run::MAX_ARRAY_LENGTH)));
+        }
+        let mut names = Vec::new();
+        let mut bytes = 0usize;
+        for i in 0..n {
+            let x = a.get(i, ctx)?;
+            let item = xfa::clip(text(&x, ctx)?);
+            bytes = bytes.saturating_add(item.len()).saturating_add(std::mem::size_of::<String>());
+            if bytes > xfa::MAX_PAYLOAD {
+                let mut h = host(ctx)?.borrow_mut();
+                h.dropped = h.dropped.saturating_add(1);
+                return Ok(JsValue::undefined());
+            }
+            names.push(item);
+        }
+        host(ctx)?.borrow_mut().request(Request::Reset(names));
+        return Ok(JsValue::undefined());
+    }
+    let names = strings(&v, ctx)?;
     host(ctx)?.borrow_mut().request(Request::Reset(names));
     Ok(JsValue::undefined())
 }

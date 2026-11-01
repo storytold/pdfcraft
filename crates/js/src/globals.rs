@@ -139,7 +139,7 @@ fn println(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue
 }
 
 fn console_clear(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    host(ctx)?.borrow_mut().console.clear();
+    host(ctx)?.borrow_mut().clear_console();
     Ok(JsValue::undefined())
 }
 

@@ -51,6 +51,12 @@ impl Host {
         }
     }
 
+    pub(crate) fn clear_console(&mut self) {
+        let cleared: usize = self.console.iter().map(String::len).sum();
+        self.kept = self.kept.saturating_sub(cleared);
+        self.console.clear();
+    }
+
     /// Record `r`, its names and URLs cut to a message's length, up to [`xfa::MAX_EFFECTS`]
     /// requests and the run's byte budget.
     pub(crate) fn request(&mut self, r: Request) {
@@ -91,7 +97,11 @@ pub(crate) fn text(v: &JsValue, ctx: &mut Context) -> JsResult<String> {
     if v.is_undefined() || v.is_null() {
         return Ok(String::new());
     }
-    Ok(v.to_string(ctx)?.to_std_string_escaped())
+    let s = v.to_string(ctx)?;
+    if s.len() > MAX_STRING_UNITS {
+        return Err(error(format!("string length exceeds {MAX_STRING_UNITS}")));
+    }
+    Ok(s.to_std_string_escaped())
 }
 
 /// [`text`] cut to a message's length ([`xfa::clip`]), without first copying all of a longer
@@ -138,13 +148,26 @@ pub(crate) fn strings(v: &JsValue, ctx: &mut Context) -> JsResult<Vec<String>> {
             return Err(error(format!("array length exceeds {MAX_ARRAY_LENGTH}")));
         }
         let mut out = Vec::new();
+        let mut bytes = 0usize;
         for i in 0..n {
             let x = a.get(i, ctx)?;
-            out.push(text(&x, ctx)?);
+            let item = text(&x, ctx)?;
+            bytes = bytes.saturating_add(item.len());
+            if bytes > MAX_HOST_BYTES {
+                return Err(error(format!("array string bytes exceed {MAX_HOST_BYTES}")));
+            }
+            out.push(item);
         }
         return Ok(out);
     }
-    Ok(if v.is_undefined() || v.is_null() { Vec::new() } else { vec![text(v, ctx)?] })
+    if v.is_undefined() || v.is_null() {
+        return Ok(Vec::new());
+    }
+    let item = text(v, ctx)?;
+    if item.len() > MAX_HOST_BYTES {
+        return Err(error(format!("array string bytes exceed {MAX_HOST_BYTES}")));
+    }
+    Ok(vec![item])
 }
 
 pub(crate) fn colour(c: &Option<Vec<String>>, ctx: &mut Context) -> JsValue {
