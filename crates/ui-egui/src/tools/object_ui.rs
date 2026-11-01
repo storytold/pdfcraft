@@ -493,6 +493,53 @@ pub(crate) fn move_error(error: &pdfcraft_engine::EditError) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn layer_visibility_invalidates_warm_object_inventory_and_selection() {
+        for marked in [false, true] {
+            for initially_visible in [false, true] {
+                let state = if initially_visible { "ON" } else { "OFF" };
+                let content = if marked { "/OC /L BDC q 20 0 0 20 10 10 cm /Im Do Q EMC" } else { "q 20 0 0 20 10 10 cm /Im Do Q" };
+                let oc = if marked { "" } else { "/OC 5 0 R" };
+                let bytes = pdfcraft_testkit::Pdf::new()
+                    .obj(format!("<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R] /D << /{state} [5 0 R] /Order [5 0 R] >> >> >>"))
+                    .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+                    .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << /Properties << /L 5 0 R >> /XObject << /Im 6 0 R >> >> >>")
+                    .stream("", content)
+                    .obj("<< /Type /OCG /Name (Switchable) >>")
+                    .stream(&format!("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 {oc}"), "x")
+                    .build();
+                let mut session = pdfcraft_engine::Session::new();
+                let id = session.open("layers.pdf", None, std::sync::Arc::new(bytes), None).unwrap();
+                let ctx = egui::Context::default();
+                let mut selection = ObjectSelection::default();
+                let doc = session.get(id).unwrap();
+                selection.prepare(doc, true, &ctx);
+                assert_eq!(selection.inventory(doc, 0).unwrap().len(), usize::from(initially_visible));
+                // Prime a cached empty inventory, then reveal the image through the real session.
+                if initially_visible {
+                    assert!(session.set_layer_visible(id, 0, false));
+                    selection.prepare(session.get(id).unwrap(), true, &ctx);
+                    assert!(selection.inventory(session.get(id).unwrap(), 0).unwrap().is_empty());
+                }
+                assert!(session.set_layer_visible(id, 0, true));
+                selection.prepare(session.get(id).unwrap(), true, &ctx);
+                let visible = selection.inventory(session.get(id).unwrap(), 0).unwrap();
+                assert_eq!(visible.len(), 1);
+                selection.page = Some(0);
+                selection.selected = visible;
+                assert_eq!(selection.count(), 1);
+                assert!(session.set_layer_visible(id, 0, false));
+                selection.prepare(session.get(id).unwrap(), true, &ctx);
+                assert_eq!(selection.count(), 0, "hidden image must lose its selectable frame");
+                assert!(selection.page.is_none());
+                assert!(selection.inventory(session.get(id).unwrap(), 0).unwrap().is_empty());
+                session.reset_layers(id);
+                selection.prepare(session.get(id).unwrap(), true, &ctx);
+                assert_eq!(selection.inventory(session.get(id).unwrap(), 0).unwrap().len(), usize::from(initially_visible));
+            }
+        }
+    }
+
     fn t(kind: ObjectKind, index: usize) -> ObjectTarget {
         ObjectTarget { kind, index }
     }
