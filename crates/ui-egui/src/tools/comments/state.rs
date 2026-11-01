@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::geometry::{corner_ratio, is_markup, resized};
+use super::geometry::{corner_ratio, frame, is_markup, resized};
 use super::{Annotation, CommentPrefs, CommentTool, DocInfo, Edit, PagePointer, PageXform, Pos2, QuickTool, Rect};
 
 /// The user's login name, which Acrobat uses as the default comment author.
@@ -343,6 +343,11 @@ impl PageCx<'_> {
         self.xf.user_rect(self.info, self.page, a.shown_rect(self.rotation()))
     }
 
+    /// Where a comment's selection frame and resize handles go on screen ([`frame`]).
+    pub(super) fn frame_rect(&self, a: &Annotation) -> Rect {
+        self.xf.user_rect(self.info, self.page, frame(a, self.rotation()))
+    }
+
     /// Top-level comments on this page, in paint order.
     pub(super) fn comments(&self) -> impl Iterator<Item = &Annotation> {
         self.info.annotations.iter().filter(move |a| !self.hidden && a.page == self.page && a.is_comment() && a.subtype != "Popup")
@@ -406,7 +411,7 @@ impl PageCx<'_> {
         shift: bool,
         pending: Option<&Edit>,
     ) -> Rect {
-        let r = self.screen_rect(a);
+        let r = self.frame_rect(a);
         if let Some(Edit::ResizeAnnotation { page, index, rect }) = pending
             && (*page, *index) == (self.page, a.index)
         {
@@ -415,8 +420,8 @@ impl PageCx<'_> {
         if let Some(Edit::MoveAnnotation { page, index, dx, dy }) = pending
             && (*page, *index) == (self.page, a.index)
         {
-            let r = a.shown_rect(self.rotation());
-            return self.xf.user_rect(self.info, self.page, [r[0] + *dx as f32, r[1] + *dy as f32, r[2] + *dx as f32, r[3] + *dy as f32]);
+            let f = frame(a, self.rotation());
+            return self.xf.user_rect(self.info, self.page, [f[0] + *dx as f32, f[1] + *dy as f32, f[2] + *dx as f32, f[3] + *dy as f32]);
         }
         match (gesture, pointer) {
             (Some(Gesture::Move { page, index, from }), Some(p)) if (*page, *index) == (self.page, a.index) => r.translate(p - *from),

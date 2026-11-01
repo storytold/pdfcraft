@@ -132,14 +132,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
             view.comments.tool_done = true;
             // A callout's leader and box stay in user-space axes (its appearance isn't turned).
             let rect = text_box_rect(c.at, &text, 10.0, 0);
-            let side = if point[0] < rect[0] {
-                rect[0]
-            } else if point[0] > rect[2] {
-                rect[2]
-            } else {
-                (rect[0] + rect[2]) / 2.0
-            };
-            let knee = [(point[0] + side) / 2.0, (rect[1] + rect[3]) / 2.0];
+            let knee = pdfcraft_engine::callout_knee(rect, point);
             Some(new_comment(&cx, CommentTool::Callout, Shape::Callout { rect, knee, point, font_size: 10.0, ending: LineEnding::OpenArrow }, text))
         }
         ComposerKind::Replace => {

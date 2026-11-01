@@ -1,5 +1,6 @@
 use super::create::{
-    add_annotation, base_dict, bounds, callout_attach, ending_draws, ending_pair, finite, grow, normalize, num_array, rect_for, rgb,
+    CALLOUT_SLACK, add_annotation, base_dict, bounds, callout_attach, callout_knee, callout_side, ending_draws, ending_pair, finite, grow, normalize,
+    num_array, on_side, rect_for, rgb,
 };
 use super::draw::{draw_appearance, redraw_or_restore, set_appearance};
 use super::info::{line_endings_of, text_value};
@@ -394,10 +395,12 @@ pub fn set_rect(doc: &mut Document, page: usize, index: usize, rect: [f64; 4], m
 /// At most this many points reshape a comment (a drawn polygon has a handful).
 const MAX_POINTS: usize = 100_000;
 
-/// Reshape a line, connected lines, a polygon or a cloud: its points in user space (a line's two
-/// ends, the others' corners), as dragging the comment's handles sets them. `/Rect` follows the
-/// points with room for the line's width and endings, as when the comment was drawn, and the
-/// appearance is redrawn. A measurement keeps the points it measured.
+/// Reshape a line, connected lines, a polygon, a cloud or a callout: its points in user space (a
+/// line's two ends, the others' corners; a callout's arrow point and, if it has one, its knee), as
+/// dragging the comment's handles sets them. `/Rect` follows the points with room for the line's
+/// width and endings, as when the comment was drawn, and the appearance is redrawn. A callout's
+/// text box stays where it is and its leader line re-attaches. A measurement keeps the points it
+/// measured.
 pub fn set_points(doc: &mut Document, page: usize, index: usize, points: &[[f64; 2]], meta: &Meta) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     unlocked(doc, r)?;
@@ -407,6 +410,15 @@ pub fn set_points(doc: &mut Document, page: usize, index: usize, points: &[[f64;
     }
     if points.len() > MAX_POINTS {
         return Err(AnnotError::Invalid(format!("at most {MAX_POINTS} points")));
+    }
+    if d.name(b"Subtype") == Some(b"FreeText") && callout_line(doc, &d).is_some() {
+        // A callout's points: its arrow point, then optionally its knee (a four-number `/CL`
+        // gains one; ISO 32000-2 Table 177 allows both forms). The arrow point alone keeps a knee.
+        if !matches!(points.len(), 1 | 2) || !finite(&points.concat()) {
+            return Err(AnnotError::Invalid("a callout has an arrow point and, optionally, a knee".into()));
+        }
+        let text_box = callout_text_box(doc, &d).ok_or_else(|| AnnotError::Invalid("the callout's text box (/RD) can't be read".into()))?;
+        return place_text_box(doc, r, text_box, Some(points), meta, false);
     }
     let style = Style { width: border_width_of(&d), ..Style::default() };
     let ends = line_endings_of(&d).unwrap_or_default();
@@ -483,6 +495,43 @@ fn resize_ink(doc: &mut Document, r: ObjRef, rect: [f64; 4], meta: &Meta) -> Res
 /// leader line re-attaches and `/Rect` grows to hold it, and the appearance is redrawn
 /// (`new_text`: for changed contents, see [`set_appearance`] and `draw_appearance`).
 fn apply_text_box(doc: &mut Document, r: ObjRef, rect: [f64; 4], meta: &Meta, new_text: bool) -> Result<(), AnnotError> {
+    place_text_box(doc, r, rect, None, meta, new_text)
+}
+
+/// A callout's leader line (`/CL`, ISO 32000-2 Table 177): four numbers (start, end) or six
+/// (start, knee, end), as points in user space. `None` when the annotation has no usable `/CL`.
+pub(crate) fn callout_line(doc: &Document, d: &Dict) -> Option<Vec<[f64; 2]>> {
+    // All or nothing: a non-number would shift every later number into the wrong point.
+    let l: Vec<f64> = doc.resolve(d.get(b"CL")?).as_array()?.iter().map(|x| doc.resolve(x).as_f64()).collect::<Option<_>>()?;
+    (matches!(l.len(), 4 | 6) && finite(&l)).then(|| l.as_chunks::<2>().0.to_vec())
+}
+
+/// A callout's text box: `/Rect` inset by `/RD` (ISO 32000-2 Table 177). `None` without both.
+pub(crate) fn callout_text_box(doc: &Document, d: &Dict) -> Option<[f64; 4]> {
+    let nums = |key: &[u8]| -> Option<Vec<f64>> { doc.resolve(d.get(key)?).as_array()?.iter().map(|o| doc.resolve(o).as_f64()).collect() };
+    let r = nums(b"Rect").filter(|v| v.len() == 4 && finite(v))?;
+    let rd = nums(b"RD").filter(|v| v.len() == 4 && finite(v) && v.iter().all(|x| *x >= 0.0))?;
+    let r = normalize([r[0], r[1], r[2], r[3]]);
+    let tb = [r[0] + rd[0], r[1] + rd[1], r[2] - rd[2], r[3] - rd[3]];
+    (tb[2] - tb[0] >= 1.0 && tb[3] - tb[1] >= 1.0).then_some(tb)
+}
+
+/// As [`apply_text_box`]. For a callout, `lead` (its arrow point and optional knee, dragged by
+/// their handles) replaces the leader line's own points. The arrow point never moves with the box
+/// ("The text box moves around a stationary anchor point—the arrow on the end-point line",
+/// Acrobat DC Help, 11/28/2019, p. 357), and the line follows the box as Acrobat Pro DC (a 2021
+/// Continuous release) was seen to:
+/// - the box moved without changing size: the knee and the end move with it (also seen in
+///   Acrobat Pro 2026.002.22031);
+/// - the box resized with the side the line meets left where it was (the end still on it): the
+///   line doesn't change;
+/// - otherwise (that side moved): the line meets the middle of that side, the knee
+///   [`CALLOUT_KNEE_LINE`] out from it ([`callout_knee_on`]). Acrobat also moves the box next to
+///   the arrow point then; PdfCraft leaves the box where it was put.
+///
+/// With `lead`, the end stays where it is while it is on the side facing the knee (dragging the
+/// knee or the arrow point leaves it in Acrobat), and otherwise meets the middle of that side.
+fn place_text_box(doc: &mut Document, r: ObjRef, rect: [f64; 4], lead: Option<&[[f64; 2]]>, meta: &Meta, new_text: bool) -> Result<(), AnnotError> {
     let rect = normalize(rect);
     if !finite(&rect) || rect[2] - rect[0] < 1.0 || rect[3] - rect[1] < 1.0 {
         return Err(AnnotError::Invalid("invalid rectangle (too small)".into()));
@@ -491,17 +540,62 @@ fn apply_text_box(doc: &mut Document, r: ObjRef, rect: [f64; 4], meta: &Meta, ne
     if !new_text {
         refuse_foreign_text(doc, &d)?;
     }
-    // A callout's rectangle is its text box: the leader line re-attaches and `/Rect` grows to hold it.
-    let callout = d.get(b"CL").and_then(|o| o.as_array()).map(|a| a.iter().filter_map(|x| x.as_f64()).collect::<Vec<f64>>()).filter(|l| l.len() == 6);
-    let (outer, cl) = match callout {
-        Some(mut l) => {
-            let attach = callout_attach(rect, [l[2], l[3]]);
-            (l[4], l[5]) = (attach[0], attach[1]);
-            let pad = border_width_of(&d) / 2.0 + appearance::arrow_size(border_width_of(&d)) + 1.0;
-            let lead = grow(bounds([[l[0], l[1]], [l[2], l[3]]].into_iter()).unwrap_or_default(), pad);
-            ([rect[0].min(lead[0]), rect[1].min(lead[1]), rect[2].max(lead[2]), rect[3].max(lead[3])], Some(l))
+    // A callout's rectangle is its text box: `/Rect` grows to hold the leader line. A four-number
+    // `/CL` (no knee) stays four numbers unless `lead` adds a knee.
+    let old_line = callout_line(doc, &d);
+    let old_box = callout_text_box(doc, &d);
+    let old_end = old_line.as_deref().and_then(<[[f64; 2]]>::last).copied();
+    // An arrow point alone moves the arrow: a knee the line has stays where it is.
+    let kept: [[f64; 2]; 2];
+    let lead = match (lead, old_line.as_deref()) {
+        (Some([point]), Some([_, knee, _])) => {
+            kept = [*point, *knee];
+            Some(&kept[..])
         }
-        None => (rect, None),
+        _ => lead,
+    };
+    let line: Option<Vec<[f64; 2]>> = match (lead, old_line.as_deref()) {
+        (Some(lead @ [.., toward]), _) => {
+            let side = callout_side(rect, *toward);
+            let end = old_end.filter(|e| on_side(rect, side, *e)).unwrap_or_else(|| callout_attach(rect, *toward));
+            Some(lead.iter().copied().chain([end]).collect())
+        }
+        (Some(_), _) => None,
+        (None, Some(old @ [start, .., end])) => {
+            let (start, end) = (*start, *end);
+            let knee = old.get(1).filter(|_| old.len() == 3).copied();
+            let toward = knee.unwrap_or(start);
+            Some(match old_box {
+                // Moved, not resized: the knee and the end come along.
+                Some(b)
+                    if ((rect[2] - rect[0]) - (b[2] - b[0])).abs() < CALLOUT_SLACK && ((rect[3] - rect[1]) - (b[3] - b[1])).abs() < CALLOUT_SLACK =>
+                {
+                    let (dx, dy) = (rect[0] - b[0], rect[1] - b[1]);
+                    let shift = |p: [f64; 2]| [p[0] + dx, p[1] + dy];
+                    [start].into_iter().chain(knee.map(shift)).chain([shift(end)]).collect()
+                }
+                // Resized, the side the line meets still under its end: nothing changes.
+                Some(b) if on_side(rect, callout_side(b, toward), end) => old.to_vec(),
+                // That side moved: laid out again as a new callout is, from the side facing the
+                // arrow point (the box may now be on the knee's other side).
+                Some(_) => {
+                    let new_knee = callout_knee(rect, start);
+                    let end = callout_attach(rect, new_knee);
+                    [start].into_iter().chain(knee.map(|_| new_knee)).chain([end]).collect()
+                }
+                None => [start].into_iter().chain(knee).chain([callout_attach(rect, toward)]).collect(),
+            })
+        }
+        (None, _) => None,
+    };
+    let (outer, cl) = match line.as_deref() {
+        Some(line @ [lead @ .., _]) => {
+            // The end is on the box, so only the arrow point and the knee need room around them.
+            let pad = border_width_of(&d) / 2.0 + appearance::arrow_size(border_width_of(&d)) + 1.0;
+            let lead_box = grow(bounds(lead.iter().copied()).unwrap_or_default(), pad);
+            ([rect[0].min(lead_box[0]), rect[1].min(lead_box[1]), rect[2].max(lead_box[2]), rect[3].max(lead_box[3])], Some(line.concat()))
+        }
+        _ => (rect, None),
     };
     doc.update_dict(r, |d| {
         d.set(b"Rect".to_vec(), num_array(&outer));

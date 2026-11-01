@@ -338,9 +338,12 @@ pub struct Annotation {
     /// appearance stays upright, turned about the upper-left corner of `rect`
     /// ([`Self::shown_rect`]).
     pub no_rotate: bool,
-    /// The points that shape a line (its two ends, `/L`) or connected lines, a polygon or a
-    /// cloud (their corners, `/Vertices`), in user space; empty for other comments.
+    /// The points that shape a line (its two ends, `/L`), connected lines, a polygon or a cloud
+    /// (their corners, `/Vertices`), or a callout (its arrow point and knee: `/CL` without its
+    /// end, which follows the text box), in user space; empty for other comments.
     pub points: Vec<[f32; 2]>,
+    /// A callout's text box (`/Rect` inset by `/RD`), in user space; `None` for other comments.
+    pub text_box: Option<[f32; 4]>,
 }
 
 impl Annotation {

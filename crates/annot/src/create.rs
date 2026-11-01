@@ -190,14 +190,106 @@ fn subject(shape: &Shape) -> &'static str {
 pub fn callout_attach(rect: [f64; 4], knee: [f64; 2]) -> [f64; 2] {
     let [x0, y0, x1, y1] = normalize(rect);
     let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
-    if knee[0] < x0 {
-        [x0, cy]
-    } else if knee[0] > x1 {
-        [x1, cy]
-    } else if knee[1] > y1 {
-        [cx, y1]
+    match callout_side(rect, knee) {
+        Side::Left => [x0, cy],
+        Side::Right => [x1, cy],
+        Side::Top => [cx, y1],
+        Side::Bottom => [cx, y0],
+    }
+}
+
+/// A side of a callout's text box.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+impl Side {
+    /// Whether a knee line on this side is horizontal (it meets the left or right side). Acrobat
+    /// lets a knee line be resized along its own direction only (Acrobat DC Help, 11/28/2019,
+    /// p. 357).
+    pub fn horizontal(self) -> bool {
+        matches!(self, Side::Left | Side::Right)
+    }
+}
+
+/// The side of the text box `rect` that faces `knee`: the one [`callout_attach`] attaches to.
+///
+/// Every position has one side (review on #4094):
+/// - left or right of the box (`x < x0`, `x > x1`): that side, whatever `y` is, so a knee off a
+///   corner diagonally, or on the line of the top or bottom edge past the box, is beside it;
+/// - otherwise above or below it (`y > y1`, `y < y0`): that side, so a knee on the line of the
+///   left or right edge past the box is above or below it;
+/// - on the box's outline, or within `CALLOUT_SLACK` (0.01 pt) inside it, since the page hands
+///   positions back as `f32` values: the side whose edge it lies on, the left or right edge
+///   first, so a corner takes the left or right side as a knee beside the box does. The line
+///   stays out of the box (it was sent across the box to the bottom side);
+/// - inside the box, or with a coordinate that isn't a number: the bottom side.
+pub fn callout_side(rect: [f64; 4], knee: [f64; 2]) -> Side {
+    let [x0, y0, x1, y1] = normalize(rect);
+    let [x, y] = knee;
+    if x < x0 {
+        Side::Left
+    } else if x > x1 {
+        Side::Right
+    } else if y > y1 {
+        Side::Top
+    } else if y < y0 {
+        Side::Bottom
+    } else if x - x0 < CALLOUT_SLACK {
+        Side::Left
+    } else if x1 - x < CALLOUT_SLACK {
+        Side::Right
+    } else if y1 - y < CALLOUT_SLACK {
+        Side::Top
     } else {
-        [cx, y0]
+        Side::Bottom
+    }
+}
+
+/// A callout's knee line when Acrobat lays it out: 12 pt, out from the middle of the side. Seen in
+/// Acrobat Pro DC, a 2021 Continuous release: a new callout's knee line, and one laid out again
+/// after its knee was dragged into the box or the side it meets was moved, are all 12 pt, and the
+/// knee can't come nearer the box than that.
+pub const CALLOUT_KNEE_LINE: f64 = 12.0;
+
+/// Where a knee goes on `side` of the text box `rect`: [`CALLOUT_KNEE_LINE`] out from the middle
+/// of that side, so the knee line is level (left, right) or upright (top, bottom).
+pub fn callout_knee_on(rect: [f64; 4], side: Side) -> [f64; 2] {
+    let [x0, y0, x1, y1] = normalize(rect);
+    let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+    match side {
+        Side::Left => [x0 - CALLOUT_KNEE_LINE, cy],
+        Side::Right => [x1 + CALLOUT_KNEE_LINE, cy],
+        Side::Top => [cx, y1 + CALLOUT_KNEE_LINE],
+        Side::Bottom => [cx, y0 - CALLOUT_KNEE_LINE],
+    }
+}
+
+/// A new callout's knee: on the side of its text box `rect` that faces the arrow `point`
+/// ([`callout_knee_on`]).
+pub fn callout_knee(rect: [f64; 4], point: [f64; 2]) -> [f64; 2] {
+    callout_knee_on(rect, callout_side(rect, point))
+}
+
+/// How far apart, in points, two positions of a callout's box or line may be and still count as the
+/// same. The page hands a box back as `f32` values, which moves a coordinate such as 323.05 by a few
+/// hundred-thousandths of a point (review on #4094).
+pub(crate) const CALLOUT_SLACK: f64 = 0.01;
+
+/// Whether `end` lies on `side` of the text box `rect`: the leader line can stay where it meets it.
+pub(crate) fn on_side(rect: [f64; 4], side: Side, end: [f64; 2]) -> bool {
+    let [x0, y0, x1, y1] = normalize(rect);
+    let near = |a: f64, b: f64| (a - b).abs() < CALLOUT_SLACK;
+    let within = |v: f64, lo: f64, hi: f64| v > lo - CALLOUT_SLACK && v < hi + CALLOUT_SLACK;
+    match side {
+        Side::Left => near(end[0], x0) && within(end[1], y0, y1),
+        Side::Right => near(end[0], x1) && within(end[1], y0, y1),
+        Side::Top => near(end[1], y1) && within(end[0], x0, x1),
+        Side::Bottom => near(end[1], y0) && within(end[0], x0, x1),
     }
 }
 

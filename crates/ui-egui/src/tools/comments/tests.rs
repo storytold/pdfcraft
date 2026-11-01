@@ -1,4 +1,10 @@
+use super::geometry::reshaped;
 use super::*;
+
+/// [`reshaped`] without Shift, as `changing_points` takes it.
+fn straight(points: &[[f64; 2]], i: usize, to: [f64; 2]) -> Vec<[f64; 2]> {
+    reshaped(points, i, to, false)
+}
 
 /// A selected line is drawn where it is going: moved by its body (both ends follow the
 /// pointer), with an end dragged (that end alone), and as released until the page is drawn.
@@ -8,14 +14,28 @@ fn a_moved_or_reshaped_line_is_drawn_at_its_new_points() {
     let to_user = |p: Pos2| [f64::from(p.x), f64::from(p.y)];
     let moving = Gesture::Move { page: 0, index: 3, from: pos2(20.0, 10.0) };
     let at = Some(pos2(25.0, 30.0));
-    assert_eq!(changing_points(Some(&moving), None, (0, 3), &line, to_user, at, false), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
-    assert_eq!(changing_points(Some(&moving), None, (0, 4), &line, to_user, at, false), None, "another comment's move");
+    assert_eq!(changing_points(Some(&moving), None, (0, 3), &line, to_user, at, straight), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
+    assert_eq!(changing_points(Some(&moving), None, (0, 4), &line, to_user, at, straight), None, "another comment's move");
     let released = Edit::MoveAnnotation { page: 0, index: 3, dx: 5.0, dy: 20.0 };
-    assert_eq!(changing_points(None, Some(&released), (0, 3), &line, to_user, None, false), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
+    assert_eq!(changing_points(None, Some(&released), (0, 3), &line, to_user, None, straight), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
     let dragging = Gesture::Reshape { page: 0, index: 3, point: 1, points: line.to_vec() };
     let to = Some(pos2(60.0, 10.0));
-    assert_eq!(changing_points(Some(&dragging), None, (0, 3), &line, to_user, to, false), Some(vec![[10.0, 10.0], [60.0, 10.0]]));
-    assert_eq!(changing_points(None, None, (0, 3), &line, to_user, to, false), None, "not changing");
+    assert_eq!(changing_points(Some(&dragging), None, (0, 3), &line, to_user, to, straight), Some(vec![[10.0, 10.0], [60.0, 10.0]]));
+    assert_eq!(changing_points(None, None, (0, 3), &line, to_user, to, straight), None, "not changing");
+}
+
+/// Review on #4094: a callout's text box being resized, and the resize just released, draw its
+/// leader line too (to the box where it is going): its points are changing, though they stay.
+#[test]
+fn a_callout_being_resized_draws_its_leader_line() {
+    let lead = [[10.0, 10.0], [40.0, 30.0]];
+    let to_user = |p: Pos2| [f64::from(p.x), f64::from(p.y)];
+    let resizing = Gesture::Resize { page: 0, index: 3, handle: (1, 1), from: pos2(80.0, 60.0), aspect_ratio: None };
+    let at = Some(pos2(95.0, 70.0));
+    assert_eq!(changing_points(Some(&resizing), None, (0, 3), &lead, to_user, at, straight), Some(lead.to_vec()));
+    assert_eq!(changing_points(Some(&resizing), None, (0, 4), &lead, to_user, at, straight), None, "another comment's resize");
+    let released = Edit::ResizeAnnotation { page: 0, index: 3, rect: [50.0, 20.0, 110.0, 70.0] };
+    assert_eq!(changing_points(None, Some(&released), (0, 3), &lead, to_user, None, straight), Some(lead.to_vec()));
 }
 
 /// A sticky note on a page turned a quarter is drawn upright beside its `/Rect`: an edit
@@ -42,6 +62,7 @@ fn an_upright_note_on_a_turned_page_is_in_view_where_it_is_drawn() {
         fill_sign: false,
         no_rotate,
         points: Vec::new(),
+        text_box: None,
     };
     let page = PageInfo { width: 140.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 200.0, 140.0], rotation: 90 };
     let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(140.0, 200.0)), rot: 0, pw: 140.0, ph: 200.0 };
@@ -87,6 +108,7 @@ fn listed(page: usize, index: usize, contents: &str, parent: Option<(usize, usiz
         fill_sign: false,
         no_rotate: false,
         points: Vec::new(),
+        text_box: None,
     }
 }
 
@@ -176,6 +198,7 @@ fn annotation(subtype: &str, contents: Option<&str>, fill_sign: bool) -> Annotat
         fill_sign,
         no_rotate: false,
         points: Vec::new(),
+        text_box: None,
     }
 }
 
@@ -380,6 +403,7 @@ fn context_menu_colour_submenu_keeps_its_picker_open_and_a_swatch_closes_the_men
             intent: None,
             fill_sign: false,
             points: Vec::new(),
+            text_box: None,
             no_rotate: false,
         }],
         ..Default::default()
