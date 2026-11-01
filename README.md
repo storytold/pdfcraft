@@ -445,6 +445,8 @@ The summary is in **[ROADMAP.md](ROADMAP.md)**; the full assessment by dimension
 
 **New to PdfCraft?** Download it from the [PdfCraft page on getartcraft.com](https://getartcraft.com/apps/pdfcraft). That's the easiest way to install it.
 
+**Prefer a container?** A **community-maintained Dockerfile** (`Dockerfile`, `.dockerignore`, `packaging/web/nginx.conf`) builds a small image that serves the web build in a browser — see `packaging/web/README.md#docker`.
+
 **Want a specific build or format?** On GitHub, the [latest release](https://github.com/storytold/pdfcraft/releases/latest) has every build listed below, and [all releases](https://github.com/storytold/pdfcraft/releases) has earlier versions and their notes. `<ver>` in the file names is the version number, and `SHA256SUMS.txt` lists a checksum for every file.
 
 ### Windows
