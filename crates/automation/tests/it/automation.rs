@@ -10190,3 +10190,45 @@ fn simple_rule_scan_drawn(content: &[u8]) -> Vec<u8> {
     }
     write_full(&doc, &SaveOptions::default()).unwrap()
 }
+
+/// #1152: comment_list gives a callout's arrow point, knee and text box; comment_edit's `points`
+/// moves the arrow point and knee, and `rect` resizes the text box with the arrow left where it is.
+#[test]
+fn a_callouts_parts_are_listed_and_changed_through_the_tools() {
+    let dir = workdir("callout-parts");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(
+        &mut a,
+        "comment_add",
+        json!({ "doc": doc, "page": 1, "type": "callout", "rect": [110, 200, 190, 240], "to": [40, 160], "knee": [80, 220], "contents": "Look" }),
+    );
+    let first = |a: &mut Automation| ok(a, "comment_list", json!({ "doc": doc }))["comments"][0].clone();
+    let near = |v: &Value, want: &[f64]| v.as_array().unwrap().iter().zip(want).all(|(x, w)| (x.as_f64().unwrap() - w).abs() < 0.6);
+    let c = first(&mut a);
+    assert!(near(&c["points"][0], &[40.0, 160.0]) && near(&c["points"][1], &[80.0, 220.0]), "{c}");
+    assert!(near(&c["text_box"], &[110.0, 200.0, 190.0, 240.0]), "{c}");
+    let (page, index) = (c["page"].clone(), c["index"].clone());
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": page, "index": index, "points": [[30, 150], [80, 220]] }));
+    let c = first(&mut a);
+    assert!(near(&c["points"][0], &[30.0, 150.0]) && near(&c["text_box"], &[110.0, 200.0, 190.0, 240.0]), "{c}");
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": page, "index": index, "rect": [110, 200, 230, 260] }));
+    let c = first(&mut a);
+    assert!(near(&c["text_box"], &[110.0, 200.0, 230.0, 260.0]) && near(&c["points"][0], &[30.0, 150.0]), "{c}");
+    assert!(matches!(
+        a.call("comment_edit", &json!({ "doc": doc, "page": page, "index": index, "points": [[1, 1], [2, 2], [3, 3]] })),
+        Err(ToolError::Failed(_) | ToolError::InvalidArgs(_))
+    ));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "callout.pdf" }));
+    let saved = ok(&mut a, "doc_open", json!({ "path": "callout.pdf" }))["doc"].as_u64().unwrap();
+    let c = ok(&mut a, "comment_list", json!({ "doc": saved }))["comments"][0].clone();
+    assert!(near(&c["points"][0], &[30.0, 150.0]) && near(&c["text_box"], &[110.0, 200.0, 230.0, 260.0]), "after reopening: {c}");
+    ok(
+        &mut a,
+        "comment_add",
+        json!({ "doc": saved, "page": 1, "type": "callout", "rect": [300, 200, 380, 240], "to": [250, 160], "contents": "Auto" }),
+    );
+    let list = ok(&mut a, "comment_list", json!({ "doc": saved }))["comments"].clone();
+    let auto_knee = list.as_array().unwrap().iter().find(|c| c["contents"] == "Auto").unwrap();
+    assert!(near(&auto_knee["points"][1], &[288.0, 220.0]), "{auto_knee}");
+}

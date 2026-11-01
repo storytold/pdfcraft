@@ -1919,6 +1919,12 @@ fn polygons_clouds_connected_lines_callouts_and_inserted_text() {
     let callout = comments(&h).into_iter().find(|a| a.subtype == "FreeText").expect("a callout");
     assert_eq!(callout.contents.as_deref(), Some("Why?"));
     assert!(callout.rect[0] <= 60.0 && callout.rect[1] <= 160.0, "holds the leader: {:?}", callout.rect);
+    // Its knee line is Acrobat's: 12 pt out from the middle of the side facing the arrow.
+    let (tb, knee) = (callout.text_box.expect("a text box"), callout.points[1]);
+    assert!((knee[0] - (tb[0] - 12.0)).abs() < 0.01 && (knee[1] - (tb[1] + tb[3]) / 2.0).abs() < 0.01, "{tb:?} {knee:?}");
+    // Its knee line is Acrobat's: level, 12 pt out from the middle of the box's left side.
+    let (tb, knee) = (callout.text_box.expect("a text box"), callout.points[1]);
+    assert!((knee[0] - (tb[0] - 12.0)).abs() < 0.01 && (knee[1] - (tb[1] + tb[3]) / 2.0).abs() < 0.01, "{tb:?} {knee:?}");
 
     // Insert text at a click.
     h.state_mut().set_option("quick", "caret").unwrap();
@@ -3021,4 +3027,72 @@ fn an_upright_comment_on_a_turned_page_is_drawn_where_it_goes_before_release() {
     assert_eq!(h.state().session.get(id).unwrap().edit_generation(), generation, "pointer frames never edit the document");
     h.drop_at(from + delta);
     h.run_steps(3);
+}
+
+/// One 300×200 page with a callout: text box [150 100 250 140], knee (120, 120) on the box's
+/// left, arrow point (60, 60).
+const CALLOUT_FIXTURE: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /FreeText /IT /FreeTextCallout /Rect [50 50 250 140] /RD [100 50 0 0]
+  /CL [60 60 120 120 150 120] /LE /OpenArrow /DA (/Helv 10 Tf 0 g) /Contents (Note) /F 4 >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+fn callout_of(h: &Harness<'static, PdfCraftApp>) -> Annotation {
+    comments(h).into_iter().find(|a| a.subtype == "FreeText").expect("the callout")
+}
+
+fn near_pt(p: [f32; 2], x: f32, y: f32) -> bool {
+    (p[0] - x).abs() < 1.5 && (p[1] - y).abs() < 1.5
+}
+
+fn last_edit(h: &Harness<'static, PdfCraftApp>) -> Option<String> {
+    h.state().session.get(h.state().views[0].id).unwrap().can_undo().map(str::to_owned)
+}
+
+/// #1152: a selected callout's three parts change on their own.
+#[test]
+fn a_callouts_arrow_knee_and_text_box_are_dragged_on_their_own() {
+    let mut h = harness_with_bytes(CALLOUT_FIXTURE.to_vec(), |app| app.set_option("quick", "select").unwrap());
+    let c = callout_of(&h);
+    assert_eq!((c.points.clone(), c.text_box), (vec![[60.0, 60.0], [120.0, 120.0]], Some([150.0, 100.0, 250.0, 140.0])));
+    click_pt(&mut h, (200.0, 120.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, c.index)));
+
+    drag_pt(&mut h, (120.0, 120.0), (95.0, 160.0));
+    let c = callout_of(&h);
+    assert!(near_pt(c.points[1], 95.0, 120.0) && near_pt(c.points[0], 60.0, 60.0), "{:?}", c.points);
+    assert_eq!(last_edit(&h).as_deref(), Some("Reshape comment"));
+    drag_pt(&mut h, (95.0, 120.0), (200.0, 120.0));
+    assert!(near_pt(callout_of(&h).points[1], 138.0, 120.0), "stopped 12 pt short of the box: {:?}", callout_of(&h).points);
+    drag_pt(&mut h, (138.0, 120.0), (110.0, 120.0));
+
+    drag_pt(&mut h, (60.0, 60.0), (40.0, 30.0));
+    let c = callout_of(&h);
+    assert!(near_pt(c.points[0], 40.0, 30.0) && near_pt(c.points[1], 110.0, 120.0), "{:?}", c.points);
+    assert_eq!(c.text_box, Some([150.0, 100.0, 250.0, 140.0]));
+
+    drag_pt(&mut h, (250.0, 100.0), (270.0, 80.0));
+    let c = callout_of(&h);
+    let tb = c.text_box.expect("a text box");
+    assert!((tb[0] - 150.0).abs() < 1.5 && (tb[1] - 80.0).abs() < 1.5 && (tb[2] - 270.0).abs() < 1.5 && (tb[3] - 140.0).abs() < 1.5, "{tb:?}");
+    assert!(near_pt(c.points[0], 40.0, 30.0) && near_pt(c.points[1], 110.0, 120.0), "{:?}", c.points);
+    assert_eq!(last_edit(&h).as_deref(), Some("Resize comment"));
+
+    drag_pt(&mut h, (200.0, 120.0), (220.0, 130.0));
+    let c = callout_of(&h);
+    let tb = c.text_box.expect("a text box");
+    assert!((tb[0] - 170.0).abs() < 1.5 && (tb[3] - 150.0).abs() < 1.5, "{tb:?}");
+    assert!(near_pt(c.points[0], 40.0, 30.0) && near_pt(c.points[1], 130.0, 130.0), "{:?}", c.points);
+
+    drag_pt(&mut h, (85.0, 75.0), (95.0, 75.0));
+    let c = callout_of(&h);
+    assert!(near_pt(c.points[0], 50.0, 30.0) && near_pt(c.points[1], 140.0, 130.0), "{:?}", c.points);
+    assert_eq!(last_edit(&h).as_deref(), Some("Move comment"));
+
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert!(near_pt(callout_of(&h).points[0], 40.0, 30.0));
 }

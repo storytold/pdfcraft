@@ -304,6 +304,7 @@ fn no_rotate_comments_are_shown_upright_from_their_corner_and_back() {
         fill_sign: false,
         no_rotate: true,
         points: Vec::new(),
+        text_box: None,
     };
     let rect = note.rect.map(f64::from);
     for rotation in [0u16, 90, 180, 270, 45] {

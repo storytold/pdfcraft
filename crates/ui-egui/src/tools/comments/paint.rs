@@ -1,4 +1,4 @@
-use super::geometry::{HANDLES, grabs_points, handle_pos, is_markup, reshapable, reshaped, resizable};
+use super::geometry::{HANDLES, grabs_points, handle_pos, is_callout, is_markup, reshapable, reshape_for, resizable};
 use super::state::{Gesture, PageCx, SETTLE_SECS};
 use super::{
     Annotation, Color32, CommentTool, CornerRadius, DocInfo, DocView, Edit, LineEnding, NewAnnotation, Pos2, QuickTool, Rect, SELECT_BLUE, Shape,
@@ -45,7 +45,8 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
             return paint_gesture(painter, cx, view);
         }
         let shift = ui.input(|i| i.modifiers.shift);
-        if cx.allowed && grabs_points(cx.tool) && reshapable(a) {
+        let points = cx.allowed && grabs_points(cx.tool) && reshapable(a);
+        if points && !is_callout(a) {
             return paint_points(painter, cx, view, a, pointer, shift);
         }
         let r = cx.adjusted_rect(a, cv.gesture.as_ref(), pointer, shift, view.pending_edit.as_ref()).expand(2.0);
@@ -56,15 +57,18 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
                 painter.circle(c, 4.5, Color32::WHITE, Stroke::new(1.0, SELECT_BLUE));
             }
         }
+        // A callout's arrow point and knee, over its text box's frame.
+        if points {
+            return paint_points(painter, cx, view, a, pointer, shift);
+        }
     }
     paint_gesture(painter, cx, view);
 }
 
-/// A selected line, connected lines, polygon or cloud: a handle on each end or corner and, while
-/// one is dragged (or its edit is on its way), the new shape over the old.
-/// The points a selected line, polygon or cloud is drawn with while it changes: an end or corner
-/// being dragged, the whole comment being moved by its body, or the edit just released (until the
-/// page is drawn again). `None` while it isn't changing.
+/// A selected line, connected lines, polygon, cloud or callout: a handle on each end, corner,
+/// arrow point or knee and, while one is dragged (or its edit is on its way), the new shape over
+/// the old. `reshape` is how a dragged handle moves (`reshaped`, or a callout's `callout_reshaped`).
+/// `None` while it isn't changing.
 pub(super) fn changing_points(
     gesture: Option<&Gesture>,
     pending: Option<&Edit>,
@@ -72,12 +76,12 @@ pub(super) fn changing_points(
     points: &[[f64; 2]],
     to_user: impl Fn(Pos2) -> [f64; 2],
     pointer: Option<Pos2>,
-    shift: bool,
+    reshape: impl Fn(&[[f64; 2]], usize, [f64; 2]) -> Vec<[f64; 2]>,
 ) -> Option<Vec<[f64; 2]>> {
     let shifted = |dx: f64, dy: f64| points.iter().map(|q| [q[0] + dx, q[1] + dy]).collect();
     match (gesture, pending) {
         (Some(Gesture::Reshape { page: p, index: i, point, points: from }), _) if (*p, *i) == (page, index) => {
-            pointer.map(|at| reshaped(from, *point, to_user(at), shift))
+            pointer.map(|at| reshape(from, *point, to_user(at)))
         }
         (Some(Gesture::Move { page: p, index: i, from }), _) if (*p, *i) == (page, index) => pointer.map(|at| {
             let (a, b) = (to_user(*from), to_user(at));
@@ -92,17 +96,31 @@ pub(super) fn changing_points(
 fn paint_points(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, a: &Annotation, pointer: Option<Pos2>, shift: bool) {
     let cv = &view.comments;
     let points: Vec<[f64; 2]> = a.points.iter().map(|q| [f64::from(q[0]), f64::from(q[1])]).collect();
-    let changing = changing_points(cv.gesture.as_ref(), view.pending_edit.as_ref(), (cx.page, a.index), &points, |p| cx.to_user(p), pointer, shift);
+    let reshape = |from: &[[f64; 2]], i: usize, to: [f64; 2]| reshape_for(a, from, i, to, shift);
+    let changing = changing_points(cv.gesture.as_ref(), view.pending_edit.as_ref(), (cx.page, a.index), &points, |p| cx.to_user(p), pointer, reshape);
     let changed = changing.is_some();
-    let points = changing.unwrap_or(points);
+    let mut points = changing.unwrap_or(points);
+    // A callout's box moved alone leaves its arrow point where it is.
+    if let (Some(Gesture::Move { page, index, from }), Some(first)) = (cv.gesture.as_ref(), a.points.first())
+        && (*page, *index) == (cx.page, a.index)
+        && is_callout(a)
+        && cx.frame_rect(a).contains(*from)
+        && let Some(p) = points.first_mut()
+    {
+        *p = [f64::from(first[0]), f64::from(first[1])];
+    }
     let screen: Vec<Pos2> = points.iter().map(|q| cx.to_screen(*q)).collect();
     if changed {
         let stroke = Stroke::new(1.5, SELECT_BLUE);
-        painter.add(if a.subtype == "Polygon" {
-            egui::Shape::closed_line(screen.clone(), stroke)
-        } else {
-            egui::Shape::line(screen.clone(), stroke)
-        });
+        // A callout's line ends where it meets the (possibly moving) text box.
+        let mut line = screen.clone();
+        if is_callout(a)
+            && let Some(toward) = points.last()
+        {
+            let tb = cx.rect_to_user(cx.adjusted_rect(a, cv.gesture.as_ref(), pointer, shift, view.pending_edit.as_ref()));
+            line.push(cx.to_screen(pdfcraft_engine::callout_attach(tb, *toward)));
+        }
+        painter.add(if a.subtype == "Polygon" { egui::Shape::closed_line(line, stroke) } else { egui::Shape::line(line, stroke) });
     }
     for c in screen {
         painter.circle(c, 4.5, Color32::WHITE, Stroke::new(1.0, SELECT_BLUE));

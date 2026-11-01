@@ -1,3 +1,4 @@
+use super::callout::callout_attach;
 use super::draw::draw_appearance;
 use super::lookup::{annot_dict, annot_ref, annots, fill_sign_shape, page_ref, set_annots};
 use super::modify::{n, rich_text};
@@ -183,21 +184,6 @@ fn subject(shape: &Shape) -> &'static str {
         Shape::Callout { .. } => "Callout",
         Shape::Caret { .. } => "Inserted Text",
         Shape::Attachment { .. } => "File Attachment",
-    }
-}
-
-/// Where a callout's leader line meets its text box: the middle of the side facing `knee`.
-pub fn callout_attach(rect: [f64; 4], knee: [f64; 2]) -> [f64; 2] {
-    let [x0, y0, x1, y1] = normalize(rect);
-    let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
-    if knee[0] < x0 {
-        [x0, cy]
-    } else if knee[0] > x1 {
-        [x1, cy]
-    } else if knee[1] > y1 {
-        [cx, y1]
-    } else {
-        [cx, y0]
     }
 }
 
