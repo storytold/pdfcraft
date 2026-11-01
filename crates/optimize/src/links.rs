@@ -5,16 +5,19 @@ use std::collections::{HashSet, VecDeque};
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString};
 
-/// Named destinations: the `/Names /Dests` tree (entries) and the old `/Dests` dictionary.
-fn named_dests(doc: &Document) -> HashSet<Vec<u8>> {
+/// Named destinations whose target page exists: the `/Names /Dests` tree and the old `/Dests`
+/// dictionary.
+fn named_dests(doc: &Document, pages: &HashSet<ObjRef>, count: usize) -> HashSet<Vec<u8>> {
     let mut out = HashSet::new();
     let Some(cat) = doc.root().and_then(|r| doc.get(r).as_dict().cloned()) else { return out };
     if let Some(d) = cat.get(b"Dests").map(|d| doc.resolve(d)).and_then(|d| d.as_dict().cloned()) {
-        out.extend(d.iter().map(|(k, _)| k.clone()));
+        out.extend(d.iter().filter(|(_, v)| valid_explicit(doc, v, pages, count)).map(|(k, _)| k.clone()));
     }
     if let Some(tree) = names_tree(doc, &cat) {
-        for (k, _) in tree_entries(doc, &tree) {
-            out.insert(k);
+        for (k, v) in tree_entries(doc, &tree) {
+            if valid_explicit(doc, &v, pages, count) {
+                out.insert(k);
+            }
         }
     }
     out
@@ -74,22 +77,33 @@ fn dest_name(o: &Object) -> Option<Vec<u8>> {
     }
 }
 
-fn valid(o: &Object, pages: &HashSet<ObjRef>, count: usize, names: &HashSet<Vec<u8>>) -> bool {
-    match o {
-        Object::Array(a) => match a.first() {
-            Some(Object::Ref(r)) => pages.contains(r),
-            Some(Object::Int(i)) => *i >= 0 && (*i as usize) < count,
-            _ => false,
-        },
-        other => dest_name(other).is_some_and(|n| names.contains(&n)),
+/// The `[page /Fit …]` array of an explicit destination (an array or a `<< /D […] >>` dictionary).
+fn explicit_array(doc: &Document, o: &Object) -> Option<Vec<Object>> {
+    match doc.resolve(o).as_ref() {
+        Object::Array(a) => Some(a.clone()),
+        Object::Dict(d) => d.get(b"D").and_then(|x| doc.resolve(x).as_array().cloned()),
+        _ => None,
     }
+}
+
+/// Whether an explicit destination targets one of the document's pages.
+fn valid_explicit(doc: &Document, o: &Object, pages: &HashSet<ObjRef>, count: usize) -> bool {
+    explicit_array(doc, o).is_some_and(|a| match a.first() {
+        Some(Object::Ref(r)) => pages.contains(r),
+        Some(Object::Int(i)) => usize::try_from(*i).is_ok_and(|i| i < count),
+        _ => false,
+    })
+}
+
+fn valid(doc: &Document, o: &Object, pages: &HashSet<ObjRef>, count: usize, names: &HashSet<Vec<u8>>) -> bool {
+    valid_explicit(doc, o, pages, count) || dest_name(o).is_some_and(|n| names.contains(&n))
 }
 
 /// Remove links whose destination is missing, and clear the destination of such bookmarks
 /// (they stay, so their children do too). Returns (links, bookmarks).
 pub(crate) fn remove_invalid(doc: &mut Document, pages: &[ObjRef]) -> Result<(usize, usize), pdfcraft_cos::CosError> {
     let set: HashSet<ObjRef> = pages.iter().copied().collect();
-    let names = named_dests(doc);
+    let names = named_dests(doc, &set, pages.len());
     let mut links = 0;
     for p in pages {
         let Some(pd) = doc.get(*p).as_dict().cloned() else { continue };
@@ -101,7 +115,7 @@ pub(crate) fn remove_invalid(doc: &mut Document, pages: &[ObjRef]) -> Result<(us
                 if d.name(b"Subtype") != Some(b"Link") {
                     return true;
                 }
-                destination(doc, &d).is_none_or(|dest| valid(&dest, &set, pages.len(), &names))
+                destination(doc, &d).is_none_or(|dest| valid(doc, &dest, &set, pages.len(), &names))
             })
             .cloned()
             .collect();
@@ -130,7 +144,7 @@ pub(crate) fn remove_invalid(doc: &mut Document, pages: &[ObjRef]) -> Result<(us
             stack.push(f);
         }
         if let Some(dest) = destination(doc, &d)
-            && !valid(&dest, &set, pages.len(), &names)
+            && !valid(doc, &dest, &set, pages.len(), &names)
         {
             doc.update_dict(r, |d| {
                 d.remove(b"Dest");
@@ -142,39 +156,40 @@ pub(crate) fn remove_invalid(doc: &mut Document, pages: &[ObjRef]) -> Result<(us
     Ok((links, bookmarks))
 }
 
-/// Every named destination some object refers to (links, bookmarks, actions, open action).
+/// Every named destination some reachable object refers to (links, bookmarks, actions, open action).
 fn referenced_names(doc: &Document) -> HashSet<Vec<u8>> {
     let mut out = HashSet::new();
-    let mut visit = |o: &Object| {
-        let mut stack = vec![o.clone()];
-        while let Some(o) = stack.pop() {
-            match o {
-                Object::Dict(d) => {
-                    // Resolve first: /Dest and a GoTo's /D may be an indirect reference to the name
-                    // string, and an unresolved ref has no name, so the destination it uses would
-                    // look unreferenced and be removed. A GoToR or GoToE /D names a destination in
-                    // another document, so it does not count as a use of this one's.
-                    if let Some(n) = d.get(b"Dest").and_then(|x| dest_name(doc.resolve(x).as_ref())) {
-                        out.insert(n);
-                    }
-                    if d.name(b"S") == Some(b"GoTo")
-                        && let Some(n) = d.get(b"D").and_then(|x| dest_name(doc.resolve(x).as_ref()))
-                    {
-                        out.insert(n);
-                    }
-                    stack.extend(d.iter().map(|(_, v)| v.clone()));
-                }
-                Object::Array(a) => stack.extend(a),
-                Object::Stream(s) => stack.push(Object::Dict(s.dict.clone())),
-                _ => {}
-            }
-        }
-    };
-    for num in doc.object_numbers() {
-        visit(&doc.get(ObjRef::new(num, doc.generation(num))));
-    }
+    let mut seen = HashSet::new();
+    let mut stack = vec![Object::Dict(doc.trailer().clone())];
     if let Some(r) = doc.root() {
-        visit(&doc.get(r));
+        stack.push(Object::Ref(r));
+    }
+    while let Some(o) = stack.pop() {
+        match o {
+            Object::Ref(r) => {
+                if seen.insert(r) {
+                    stack.push(doc.get(r).as_ref().clone());
+                }
+            }
+            Object::Dict(d) => {
+                // Resolve first: /Dest and a GoTo's /D may be an indirect reference to the name
+                // string, and an unresolved ref has no name, so the destination it uses would
+                // look unreferenced and be removed. A GoToR or GoToE /D names a destination in
+                // another document, so it does not count as a use of this one's.
+                if let Some(n) = d.get(b"Dest").and_then(|x| dest_name(doc.resolve(x).as_ref())) {
+                    out.insert(n);
+                }
+                if d.name(b"S") == Some(b"GoTo")
+                    && let Some(n) = d.get(b"D").and_then(|x| dest_name(doc.resolve(x).as_ref()))
+                {
+                    out.insert(n);
+                }
+                stack.extend(d.iter().map(|(_, v)| v.clone()));
+            }
+            Object::Array(a) => stack.extend(a),
+            Object::Stream(s) => stack.push(Object::Dict(s.dict)),
+            _ => {}
+        }
     }
     out
 }
