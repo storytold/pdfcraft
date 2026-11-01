@@ -3022,3 +3022,62 @@ fn an_upright_comment_on_a_turned_page_is_drawn_where_it_goes_before_release() {
     h.drop_at(from + delta);
     h.run_steps(3);
 }
+
+/// #5577: the selection bar's Add bookmark adds one named after the selected words and pointing
+/// at them, opened for renaming in the Bookmarks panel, as a bookmark made with words selected is
+/// in Acrobat.
+#[test]
+fn selected_text_bookmark_action_names_the_bookmark_after_the_words() {
+    let mut h = harness(|_| {});
+    h.state_mut().views[0].select_text(0, 4, 15);
+    h.run_steps(3);
+    h.get_by_label("Add bookmark").click();
+    h.run_steps(3);
+    let s = h.state();
+    let outline = &s.session.get(s.views[0].id).unwrap().info.outline;
+    assert_eq!(outline.len(), 1, "{outline:?}");
+    assert_eq!((outline[0].title.as_str(), outline[0].page), ("quick brown", Some(0)));
+    assert_eq!(s.bookmark_rename, Some((vec![0], "quick brown".to_string())), "opened for renaming");
+    assert_eq!(s.right, Some(pdfcraft_ui_egui::RightPanel::Bookmarks));
+}
+
+/// CodeRabbit on #5615: the words stay selected after Add bookmark, which leaves the page's text
+/// as it was.
+#[test]
+fn the_words_stay_selected_after_add_bookmark() {
+    let mut h = harness(|_| {});
+    h.state_mut().views[0].select_text(0, 4, 15);
+    h.run_steps(3);
+    h.get_by_label("Add bookmark").click();
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].selected_text().as_deref().map(str::trim), Some("quick brown"));
+}
+
+/// CodeRabbit on #5615: where the document forbids copying its text, a bookmark made with words
+/// selected is "Untitled": its title would be a copy of them.
+#[test]
+fn a_bookmark_is_not_named_after_words_the_document_forbids_copying() {
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(TEXT_FIXTURE.to_vec())).expect("fixture parses");
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        // Print, modify and assemble; no copying.
+        permissions: 4 | 8 | 1024,
+        encrypt_metadata: true,
+        seed: [7; 32],
+    })
+    .expect("encrypts");
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).expect("writes");
+    let mut h = harness_with_bytes(bytes, |_| {});
+    let id = h.state().views[0].id;
+    let d = h.state().session.get(id).unwrap();
+    assert!(!d.allows_copying() && d.allows_assembly(), "copying forbidden, assembly allowed");
+    h.state_mut().views[0].select_text(0, 4, 15);
+    h.run_steps(3);
+    h.get_by_label("Add bookmark").click();
+    h.run_steps(3);
+    let s = h.state();
+    let outline = &s.session.get(id).unwrap().info.outline;
+    assert_eq!(outline.iter().map(|b| b.title.as_str()).collect::<Vec<_>>(), ["Untitled"]);
+}
