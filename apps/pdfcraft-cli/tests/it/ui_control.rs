@@ -91,7 +91,7 @@ fn write_private(path: &Path, text: &str) {
     #[cfg(windows)]
     {
         use pdfcraft_platform::owner_only;
-        owner_only::restrict_to_owner(path).unwrap();
+        owner_only::restrict_to_owner(path, &owner_only::current_user_sid().unwrap()).unwrap();
         // The file the CLI is handed must already pass its check, or a refusal below would be
         // the helper's fault, not the CLI's.
         let sddl = owner_only::sddl_of(path).unwrap();

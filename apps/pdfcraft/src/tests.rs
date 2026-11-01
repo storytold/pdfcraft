@@ -676,6 +676,20 @@ fn the_control_file_is_owner_only_in_a_folder_other_users_can_read() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Review on #3956: writing the control file reads the user's SID once, for both the private
+/// folder and the file in it, rather than starting `whoami` for each.
+#[cfg(windows)]
+#[test]
+fn writing_the_control_file_looks_up_the_users_sid_once() {
+    use pdfcraft_platform::owner_only::sid_lookups_on_this_thread;
+    let dir = scratch();
+    let before = sid_lookups_on_this_thread();
+    super::write_control_file(&dir.join("ctl.json").to_string_lossy(), 4242, "t0ken").unwrap();
+    assert_eq!(sid_lookups_on_this_thread().saturating_sub(before), 1, "whoami runs once per control file");
+    assert_eq!(written(&dir).0["token"].as_str(), Some("t0ken"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// X11 startup notification and docks match a window to its launcher by `StartupWMClass`,
 /// so it has to be the class the window carries: the app id, on Wayland and X11 alike.
 #[test]

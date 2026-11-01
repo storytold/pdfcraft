@@ -534,6 +534,14 @@ fn write_control_file(path: &str, port: u16, token: &str) -> std::io::Result<()>
     let json = serde_json::json!({ "port": port, "token": token, "pid": std::process::id() }).to_string();
     let path = std::path::Path::new(path);
     let name = path.file_name().ok_or_else(|| std::io::Error::new(ErrorKind::InvalidInput, "not a file name"))?;
+    // Windows: the user's SID, read once for the private folder and for the file in it, since each
+    // lookup starts `whoami` (review on #3956).
+    #[cfg(windows)]
+    let me = pdfcraft_platform::owner_only::current_user_sid()?;
+    #[cfg(windows)]
+    let restrict = |file: &std::path::Path| pdfcraft_platform::owner_only::restrict_to_owner(file, &me);
+    #[cfg(not(windows))]
+    let restrict = |_: &std::path::Path| Ok::<(), std::io::Error>(());
     // Unpredictable suffixes, so the name can't be planted in advance. `RandomState` is keyed from
     // the operating system's random source.
     let random = std::hash::RandomState::new();
@@ -549,7 +557,7 @@ fn write_control_file(path: &str, port: u16, token: &str) -> std::io::Result<()>
         // and that folder is removed once the file has left it.
         #[cfg(windows)]
         let (staging, staged) = {
-            match pdfcraft_platform::owner_only::create_private_dir(&staged) {
+            match pdfcraft_platform::owner_only::create_private_dir(&staged, &me) {
                 Ok(()) => {}
                 Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
                 // As for a file below: something at the name we may not open still takes it.
@@ -559,7 +567,7 @@ fn write_control_file(path: &str, port: u16, token: &str) -> std::io::Result<()>
             let file = staged.join(name);
             (staged, file)
         };
-        let done = stage_control_file(&staged, path, &json);
+        let done = stage_control_file(&staged, path, &json, &restrict);
         #[cfg(windows)]
         let _ = std::fs::remove_dir(&staging);
         match done {
@@ -570,10 +578,15 @@ fn write_control_file(path: &str, port: u16, token: &str) -> std::io::Result<()>
     Err(std::io::Error::new(ErrorKind::AlreadyExists, "no free name for the control file's temporary copy"))
 }
 
-/// Create `staged` fresh and owner-only, write `json` to it and rename it to `path`. `None` when
-/// something already has the name, so the caller tries another. On any other failure the new file
-/// is removed and nothing is left at `path`'s side.
-fn stage_control_file(staged: &std::path::Path, path: &std::path::Path, json: &str) -> Option<std::io::Result<()>> {
+/// Create `staged` fresh and owner-only, `restrict` it, write `json` to it and rename it to `path`.
+/// `None` when something already has the name, so the caller tries another. On any other failure
+/// the new file is removed and nothing is left at `path`'s side.
+fn stage_control_file(
+    staged: &std::path::Path,
+    path: &std::path::Path,
+    json: &str,
+    restrict: &dyn Fn(&std::path::Path) -> std::io::Result<()>,
+) -> Option<std::io::Result<()>> {
     use std::io::{ErrorKind, Write};
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create_new(true);
@@ -592,9 +605,8 @@ fn stage_control_file(staged: &std::path::Path, path: &std::path::Path, json: &s
     };
     // Windows: the file inherited the private folder's list. It also gets a list of its own, so it
     // stays private wherever the rename puts it, and that is checked before the token is written;
-    // nothing is written if that fails (#3922). Unix has mode 0600 above.
-    #[cfg(windows)]
-    if let Err(e) = pdfcraft_platform::owner_only::restrict_to_owner(staged) {
+    // nothing is written if that fails (#3922). Unix has mode 0600 above, and `restrict` does nothing.
+    if let Err(e) = restrict(staged) {
         drop(file);
         let _ = std::fs::remove_file(staged);
         return Some(Err(e));

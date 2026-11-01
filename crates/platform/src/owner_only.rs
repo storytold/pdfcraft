@@ -26,7 +26,7 @@ pub fn foreign_access(sddl: &str, me: &str) -> Option<String> {
     let owner = section(sddl, "O:");
     match owner {
         Some(o) if same_account(o, me) => {}
-        Some(o) => return Some(format!("it is owned by another account ({o})")),
+        Some(o) => return Some(format!("it is owned by {}", another_account(o, ""))),
         None => return Some("its owner can't be read".into()),
     }
     let Some(dacl) = section(sddl, "D:") else {
@@ -50,10 +50,43 @@ pub fn foreign_access(sddl: &str, me: &str) -> Option<String> {
             return Some(format!("its access list has an entry that can't be read ({ace})"));
         };
         if !(same_account(sid, me) || matches!(*sid, "SY" | "S-1-5-18" | "OW" | "S-1-3-4")) {
-            return Some(format!("another account ({sid}) has access to it"));
+            return Some(another_account(sid, "has access to it"));
         }
     }
     None
+}
+
+/// `another account (<sid>) <rest>`, with the account's name before its SID when it is one of the
+/// well-known accounts a control file can carry, such as `another account, Administrators
+/// (S-1-5-32-544), has access to it` (review on #3956). The SID stays, so the message reads the
+/// same in every Windows language and can still be looked up.
+fn another_account(sid: &str, rest: &str) -> String {
+    match (well_known_name(sid), rest.is_empty()) {
+        (Some(name), true) => format!("another account, {name} ({sid})"),
+        (Some(name), false) => format!("another account, {name} ({sid}), {rest}"),
+        (None, true) => format!("another account ({sid})"),
+        (None, false) => format!("another account ({sid}) {rest}"),
+    }
+}
+
+/// The English name Windows gives a well-known SID that can be on a file's access list or own it:
+/// those a folder hands down at a drive root, in `C:\Users\Public` and in a user's profile, and
+/// Everyone. The SIDs and names are Microsoft's public list of well-known SIDs
+/// (<https://learn.microsoft.com/en-us/windows/win32/secauthz/well-known-sids>); the names are
+/// the ones `icacls` shows, without the `BUILTIN\` or `NT AUTHORITY\` prefix. Any other SID,
+/// a user's or a domain group's, has no fixed name and gets `None`.
+fn well_known_name(sid: &str) -> Option<&'static str> {
+    const NAMES: [(&str, &str); 8] = [
+        ("S-1-1-0", "Everyone"),
+        ("S-1-5-3", "BATCH"),
+        ("S-1-5-4", "INTERACTIVE"),
+        ("S-1-5-6", "SERVICE"),
+        ("S-1-5-11", "Authenticated Users"),
+        ("S-1-5-18", "SYSTEM"),
+        ("S-1-5-32-544", "Administrators"),
+        ("S-1-5-32-545", "Users"),
+    ];
+    NAMES.iter().find(|(known, _)| known.eq_ignore_ascii_case(sid)).map(|&(_, name)| name)
 }
 
 /// `section(sddl, "O:")` is the owner, `"D:"` the access list: the text after the tag up to the
@@ -105,9 +138,26 @@ fn system_tool(relative: &str) -> std::process::Command {
     std::process::Command::new(root.join("System32").join(relative))
 }
 
-/// The current user's SID (`whoami /user`).
+#[cfg(windows)]
+thread_local! {
+    /// How many times [`current_user_sid`] ran on this thread, for [`sid_lookups_on_this_thread`].
+    static SID_LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times [`current_user_sid`] has started `whoami` on the calling thread. Each lookup
+/// starts a process, so a test can check that a caller reads the SID once and passes it on
+/// (review on #3956). Per thread, so tests running in parallel don't count each other's.
+#[cfg(windows)]
+#[doc(hidden)]
+pub fn sid_lookups_on_this_thread() -> usize {
+    SID_LOOKUPS.with(std::cell::Cell::get)
+}
+
+/// The current user's SID (`whoami /user`). It starts a process, so a caller that needs it for
+/// several steps reads it once and passes it to each.
 #[cfg(windows)]
 pub fn current_user_sid() -> std::io::Result<String> {
+    SID_LOOKUPS.with(|n| n.set(n.get().saturating_add(1)));
     let out = system_tool(WHOAMI).args(["/user", "/fo", "csv", "/nh"]).output()?;
     if !out.status.success() {
         return Err(std::io::Error::other("whoami /user failed"));
@@ -125,7 +175,8 @@ fn sid_from_whoami(text: &str) -> Option<String> {
     digits.split('-').all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit())).then(|| last.to_string())
 }
 
-/// Replace `path`'s access list with one that only the current user and SYSTEM are on, then make
+/// Replace `path`'s access list with one that only user `me` (the current user's SID, from
+/// [`current_user_sid`], which the caller reads once for every step) and SYSTEM are on, then make
 /// that user its owner (`icacls /setowner`), then read the file's descriptor back and check it with
 /// [`foreign_access`]. The whole list is replaced, not just what was inherited: on the
 /// windows-latest runner a new file in the temp folder carries an Administrators entry that `icacls
@@ -133,29 +184,29 @@ fn sid_from_whoami(text: &str) -> Option<String> {
 /// is owned by the Administrators group, not by the user. The list comes first: its owner may always
 /// replace it, while setting the owner needs the Full control it grants (a folder may give Modify).
 #[cfg(windows)]
-pub fn restrict_to_owner(path: &std::path::Path) -> std::io::Result<()> {
-    let me = current_user_sid()?;
-    set_access_list(path, &me, Kind::File)?;
+pub fn restrict_to_owner(path: &std::path::Path, me: &str) -> std::io::Result<()> {
+    set_access_list(path, me, Kind::File)?;
     icacls(path, &["/setowner".into(), format!("*{me}")])?;
-    still_foreign(&sddl_of(path)?, &me)
+    still_foreign(&sddl_of(path)?, me)
 }
 
-/// Create the folder `dir`, which must not exist yet, and give it an access list of the current
-/// user and SYSTEM only, which every file created in it inherits; then make that user its owner
-/// and check the result as [`restrict_to_owner`] does. A file created in it is private from the
-/// moment it exists. Restricting a file after creating it leaves a window in which another user
+/// Create the folder `dir`, which must not exist yet, and give it an access list of user `me` (as
+/// for [`restrict_to_owner`]) and SYSTEM only, which every file created in it inherits; then make
+/// that user its owner and check the result as [`restrict_to_owner`] does. A file created in it is
+/// private from the moment it exists. Restricting a file after creating it leaves a window in which another user
 /// whom the parent folder lets read it can open a handle, and Windows checks access only when a
 /// handle is opened, so a later change of the list doesn't revoke it (review on #3956). A handle
 /// on the folder itself, opened during the folder's own window, gives no access to the files
 /// created in it later. The folder is removed again when it can't be restricted.
 #[cfg(windows)]
-pub fn create_private_dir(dir: &std::path::Path) -> std::io::Result<()> {
+pub fn create_private_dir(dir: &std::path::Path, me: &str) -> std::io::Result<()> {
     std::fs::create_dir(dir)?;
-    let restricted = current_user_sid().and_then(|me| {
-        set_access_list(dir, &me, Kind::Folder)?;
+    fn restrict(dir: &std::path::Path, me: &str) -> std::io::Result<()> {
+        set_access_list(dir, me, Kind::Folder)?;
         icacls(dir, &["/setowner".into(), format!("*{me}")])?;
-        still_foreign(&sddl_of(dir)?, &me)
-    });
+        still_foreign(&sddl_of(dir)?, me)
+    }
+    let restricted = restrict(dir, me);
     if restricted.is_err() {
         let _ = std::fs::remove_dir(dir);
     }
@@ -301,6 +352,12 @@ mod tests {
 
     const ME: &str = "S-1-5-21-1-2-3-1001";
 
+    /// The SID of the user running the tests, as `write_control_file` reads it once and passes on.
+    #[cfg(windows)]
+    fn user() -> String {
+        current_user_sid().unwrap()
+    }
+
     #[test]
     fn the_users_own_file_with_system_is_trusted_and_administrators_are_not() {
         assert_eq!(foreign_access(&format!("O:{ME}G:{ME}D:P(A;;FA;;;{ME})(A;;FA;;;SY)"), ME), None);
@@ -393,7 +450,7 @@ mod tests {
         let before = sddl_of(&file).unwrap();
         assert!(before.contains(";BU)") || before.contains(";S-1-5-32-545)"), "Users inherit read access: {before}");
         assert!(foreign_access(&before, &me).is_some(), "{before}");
-        restrict_to_owner(&file).unwrap();
+        restrict_to_owner(&file, &user()).unwrap();
         let sddl = sddl_of(&file).unwrap();
         assert_eq!(section(&sddl, "O:"), Some(me.as_str()), "{sddl}");
         assert_eq!(foreign_access(&sddl, &me), None, "{sddl}");
@@ -411,7 +468,7 @@ mod tests {
         let ok = std::process::Command::new("icacls").arg(&dir).arg("/grant").arg("*S-1-5-32-545:(OI)(CI)R").output().unwrap();
         assert!(ok.status.success(), "{}", String::from_utf8_lossy(&ok.stderr));
         let private = dir.join("staging");
-        create_private_dir(&private).unwrap();
+        create_private_dir(&private, &user()).unwrap();
         let me = current_user_sid().unwrap();
         let folder = sddl_of(&private).unwrap();
         assert_eq!((section(&folder, "O:"), foreign_access(&folder, &me)), (Some(me.as_str()), None), "{folder}");
@@ -421,7 +478,7 @@ mod tests {
         assert!(!sddl.contains(";BU)") && !sddl.contains(";S-1-5-32-545)"), "Users must not inherit read access: {sddl}");
         assert_eq!(foreign_access(&sddl, &me), None, "{sddl}");
         // The name is taken: the folder isn't reused.
-        assert!(create_private_dir(&private).is_err());
+        assert!(create_private_dir(&private, &user()).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -445,7 +502,7 @@ mod tests {
         assert!(modify.status.success(), "{}", String::from_utf8_lossy(&modify.stderr));
         let file = dir.join("ctl.json");
         std::fs::write(&file, b"{}").unwrap();
-        restrict_to_owner(&file).unwrap();
+        restrict_to_owner(&file, &user()).unwrap();
         let sddl = sddl_of(&file).unwrap();
         assert_eq!((section(&sddl, "O:"), foreign_access(&sddl, &me)), (Some(me.as_str()), None), "{sddl}");
         let _ = std::fs::remove_dir_all(&dir);
@@ -460,7 +517,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("ctl.json");
         std::fs::write(&file, b"{}").unwrap();
-        restrict_to_owner(&file).unwrap();
+        restrict_to_owner(&file, &user()).unwrap();
         // A null access list lets everyone in; the user, as owner, may set one.
         let null = std::process::Command::new("powershell")
             .args([
@@ -509,7 +566,7 @@ mod tests {
         // Nothing but the two entries: no Administrators entry for the elevated runner to use.
         let sddl = sddl_of(&file).unwrap();
         assert_eq!(section(&sddl, "D:"), Some(format!("(A;;524288;;;S-1-3-4)(A;;1179785;;;{me})").as_str()), "{sddl}");
-        assert!(restrict_to_owner(&file).is_err(), "the access list could not be replaced");
+        assert!(restrict_to_owner(&file, &user()).is_err(), "the access list could not be replaced");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -518,7 +575,7 @@ mod tests {
     #[test]
     fn tool_failures_are_errors() {
         let missing = std::env::temp_dir().join(format!("pdfcraft-owner-only-missing-{}", std::process::id())).join("none.json");
-        assert!(restrict_to_owner(&missing).is_err(), "icacls on a missing file");
+        assert!(restrict_to_owner(&missing, &user()).is_err(), "icacls on a missing file");
         assert!(sddl_of(&missing).is_err(), "Get-Acl on a missing file");
         let me = current_user_sid().unwrap();
         assert!(me.starts_with("S-1-5-") && me.split('-').count() >= 4, "{me}");
@@ -552,7 +609,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("ctl.json");
         std::fs::write(&file, br#"{"port":1}"#).unwrap();
-        restrict_to_owner(&file).unwrap();
+        restrict_to_owner(&file, &user()).unwrap();
         let me = current_user_sid().unwrap();
         let (sddl, bytes) = read_with_sddl(&file, 64).unwrap();
         assert_eq!(section(&sddl, "O:"), Some(me.as_str()), "{sddl}");
@@ -573,7 +630,7 @@ mod tests {
         assert!(read_with_sddl(&file, 64).is_err(), "a file open for writing is not read");
         // Restricting reads the descriptor alone, so it works on the file the app holds open to
         // write the token through.
-        restrict_to_owner(&file).unwrap();
+        restrict_to_owner(&file, &user()).unwrap();
         assert_eq!(foreign_access(&sddl_of(&file).unwrap(), &me), None);
         drop(writer);
         assert!(read_with_sddl(&file, 64).is_ok());
@@ -601,7 +658,7 @@ mod tests {
             let own = std::process::Command::new("icacls").arg(&file).arg("/inheritance:r").args(entries).args(["/grant", &mine]).output().unwrap();
             assert!(own.status.success(), "{}", String::from_utf8_lossy(&own.stderr));
             assert!(foreign_access(&sddl_of(&file).unwrap(), &me).is_some(), "{name}");
-            restrict_to_owner(&file).unwrap();
+            restrict_to_owner(&file, &user()).unwrap();
             let sddl = sddl_of(&file).unwrap();
             assert_eq!((section(&sddl, "O:"), foreign_access(&sddl, &me)), (Some(me.as_str()), None), "{name}: {sddl}");
             assert!(!sddl.contains("(D;"), "{name}: the deny is gone: {sddl}");
@@ -635,6 +692,39 @@ mod tests {
             assert!(foreign_access("O:LGD:P(A;;FA;;;LG)", me).is_some(), "{me}");
         }
         assert!(foreign_access(&format!("O:{admin}D:P(A;;FA;;;{admin})(A;;FR;;;LA)"), admin).is_some_and(|p| p.contains("LA")));
+    }
+
+    /// Review on #3956: a refusal names a well-known account as well as giving its SID, so
+    /// `S-1-5-32-544` reads as Administrators without a lookup; any other SID is given alone.
+    #[test]
+    fn refusals_name_well_known_accounts_and_keep_their_sid() {
+        for (sid, name) in [
+            ("S-1-5-32-544", "Administrators"),
+            ("S-1-5-32-545", "Users"),
+            ("S-1-5-11", "Authenticated Users"),
+            ("S-1-5-4", "INTERACTIVE"),
+            ("S-1-1-0", "Everyone"),
+            ("S-1-5-6", "SERVICE"),
+            ("S-1-5-3", "BATCH"),
+        ] {
+            let sddl = format!("O:{ME}D:PAI(A;;FA;;;{ME})(A;ID;1179817;;;{sid})");
+            assert_eq!(foreign_access(&sddl, ME), Some(format!("another account, {name} ({sid}), has access to it")), "{sddl}");
+        }
+        // SYSTEM may have access, but a file it owns isn't the user's.
+        assert_eq!(foreign_access(&format!("O:S-1-5-18D:P(A;;FA;;;{ME})"), ME).as_deref(), Some("it is owned by another account, SYSTEM (S-1-5-18)"));
+        assert_eq!(
+            foreign_access(&format!("O:S-1-5-32-544D:P(A;;FA;;;{ME})"), ME).as_deref(),
+            Some("it is owned by another account, Administrators (S-1-5-32-544)")
+        );
+        // Another user, a lookalike and an alias have no fixed name: the account is given as it was.
+        for sid in ["S-1-5-21-1-2-3-1002", "S-1-5-32-5440", "S-1-5-1", "BA"] {
+            let sddl = format!("O:{ME}D:(A;;FA;;;{ME})(A;;FR;;;{sid})");
+            assert_eq!(foreign_access(&sddl, ME), Some(format!("another account ({sid}) has access to it")), "{sddl}");
+        }
+        assert_eq!(
+            foreign_access("O:S-1-5-21-1-2-3-1002D:(A;;FA;;;SY)", ME).as_deref(),
+            Some("it is owned by another account (S-1-5-21-1-2-3-1002)")
+        );
     }
 
     #[test]

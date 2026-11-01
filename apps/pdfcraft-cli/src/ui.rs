@@ -152,7 +152,7 @@ mod tests {
         let path = file.to_string_lossy().into_owned();
         let refused = super::read_control_file(&path).unwrap_err();
         assert!(refused.contains("another account") && refused.contains("%USERPROFILE%"), "{refused}");
-        pdfcraft_platform::owner_only::restrict_to_owner(&file).unwrap();
+        pdfcraft_platform::owner_only::restrict_to_owner(&file, &pdfcraft_platform::owner_only::current_user_sid().unwrap()).unwrap();
         assert_eq!(super::read_control_file(&path).unwrap()["token"].as_str(), Some("t0ken"));
         // The contents come with the check, capped: exactly the limit is read, one byte more is refused.
         let padded = |len: usize| {
