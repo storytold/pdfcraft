@@ -1,6 +1,7 @@
 # Arabic decimal and grouping separators in edit-text recovery
 
-Status: focused regression fix, 2026-10-31. Base: upstream main
+Status: focused regression fix, refreshed against upstream `47f42ba0` on 2026-11-01.
+Original base: upstream main
 `13655d09922038ab62d93b84ba9cd2eae474abd7`. Estimates and readiness claims are unchanged.
 
 ## Reproduced behavior and correction
@@ -42,6 +43,13 @@ cargo xtask assets
 
 ## Boundaries and coordination
 
+The 2026-11-01 refresh retains both roadmap histories and changes no production logic
+relative to the original fix. The old-classifier mutation fails the numeric-order
+regression; the restored source passes all **359 editor tests**, with no failures or
+ignores. Scoped Clippy with warnings denied passes. Remaining final gate results are
+recorded in the PR description for the submitted head; historical results above are
+identified separately from this refresh. No engine/GUI/workspace sweep is implied.
+
 This corrects the numeric classifier in the existing bounded recovery algorithm. It does not
 promise universal inverse bidi, repair missing Unicode mappings, fix the separate Office
 reader/export direction metadata, or qualify all source-PDF producers. The branch is
@@ -53,5 +61,7 @@ the old digit classifier and its additional cluster helper is separate from this
 
 ## Revision history
 
+- 2026-11-01: integrate current upstream, retain both roadmap records, repeat classifier
+  sensitivity proof and editor qualification, and keep publication evidence head-specific.
 - 2026-10-31: isolate the EN/AN numeric-separator correction and its regression from the
   broader Arabic investigation, with no new dependency or font requirement for the regression.
