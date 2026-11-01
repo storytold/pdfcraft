@@ -20,12 +20,32 @@ const MAC_LIGHT: f32 = 12.0;
 const MAC_LIGHT_PITCH: f32 = 20.0;
 const MAC_LIGHTS_LEFT: f32 = 10.0;
 /// Where the strip's content starts to the right of the traffic lights: the end of the three
-/// lights plus the same gap the lights keep from the top of the window.
+/// lights plus the same gap the lights keep from the top of the window. Mirrored, it is where the
+/// content ends when the lights are at the right.
 pub const MAC_CONTENT_LEFT: f32 = MAC_LIGHTS_LEFT + 2.0 * MAC_LIGHT_PITCH + MAC_LIGHT + (MAC_TITLE_BAR - MAC_LIGHT) / 2.0;
+
 /// The strip and its controls everywhere else.
 const TAB_STRIP: f32 = 38.0;
 const TAB_HEIGHT: f32 = 30.0;
 const STRIP_BUTTON: f32 = 28.0;
+
+/// Whether AppKit lays the traffic lights out from the right end of the title bar, or `None` when
+/// no window can say yet. It does when the system language is right-to-left, whatever PdfCraft's
+/// own interface language is, so the window is asked rather than the interface language
+/// (Apple: `NSWindow.windowTitlebarLayoutDirection`, for apps with controls under the title bar).
+#[cfg(target_os = "macos")]
+fn mac_lights_on_right() -> Option<bool> {
+    use objc2_app_kit::{NSApplication, NSUserInterfaceLayoutDirection};
+    // AppKit's window list is only for the main thread (where egui runs).
+    let mtm = objc2::MainThreadMarker::new()?;
+    let window = NSApplication::sharedApplication(mtm).windows().firstObject()?;
+    Some(window.windowTitlebarLayoutDirection() == NSUserInterfaceLayoutDirection::RightToLeft)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn mac_lights_on_right() -> Option<bool> {
+    None
+}
 
 /// Draw the window's tab strip: home and open controls, shrinkable and scrollable document tabs with drag
 /// reordering, and platform window controls.
@@ -34,11 +54,27 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     // macOS: the strip is the 28 pt title bar, so the traffic lights are centred in it; tabs and
     // buttons shrink to keep a margin above and below.
     let mac = cfg!(target_os = "macos") && app.integrated_titlebar;
-    let left = if mac { MAC_CONTENT_LEFT as i8 } else { 8 };
+    if mac && app.titlebar_lights_right.is_none() {
+        app.titlebar_lights_right = mac_lights_on_right();
+    }
+    // With the lights at the right (a right-to-left system language), the strip is the mirror
+    // image of the usual one: Home beside the lights, the tabs and Open after it, and the
+    // Discord, shortcuts and theme buttons at the far end.
+    let mirrored = mac && app.titlebar_lights_right == Some(true);
+    let (left, right) = match (mac, mirrored) {
+        (true, false) => (MAC_CONTENT_LEFT as i8, 10),
+        (true, true) => (10, MAC_CONTENT_LEFT as i8),
+        (false, _) => (8, 10),
+    };
+    let (row, far_end) = if mirrored {
+        (Layout::right_to_left(Align::Center), Layout::left_to_right(Align::Center))
+    } else {
+        (Layout::left_to_right(Align::Center), Layout::right_to_left(Align::Center))
+    };
     let (tab_h, button) = if mac { (MAC_TITLE_BAR - 2.0, 24.0) } else { (TAB_HEIGHT, STRIP_BUTTON) };
     egui::Panel::top("tab_strip")
         .exact_size(if mac { MAC_TITLE_BAR } else { TAB_STRIP })
-        .frame(egui::Frame::NONE.fill(t.titlebar).inner_margin(egui::Margin { left, right: 10, top: 0, bottom: 0 }))
+        .frame(egui::Frame::NONE.fill(t.titlebar).inner_margin(egui::Margin { left, right, top: 0, bottom: 0 }))
         .show(ui, |ui| {
             let full = ui.max_rect();
             let drag = ui.interact(full, ui.scope_id().with("titledrag"), Sense::click_and_drag());
@@ -56,7 +92,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 .clone()
                 .filter(|_| app.draws_window_frame() && !fullscreen)
                 .unwrap_or_else(|| window_controls::Layout { left: Vec::new(), right: Vec::new() });
-            ui.horizontal_centered(|ui| {
+            ui.allocate_ui_with_layout(ui.available_size_before_wrap(), row, |ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 if !controls.left.is_empty() {
                     ui.scope(|ui| {
@@ -97,9 +133,14 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 // Where the tabs were scrolled to last frame, and how far they can go.
                 let scroll_id = ui.scope_id().with("tab_scroll");
                 let (offset, max_offset) = ui.data(|d| d.get_temp::<(f32, f32)>(scroll_id)).unwrap_or((0.0, 0.0));
-                let mut scroll_to = None;
-                if overflow && arrow(ui, "chevron-left", offset > 0.5, tl!("Scroll tabs left")) {
-                    scroll_to = Some((offset - (TAB_MIN_WIDTH + gap)).max(0.0));
+                let scroll_left = |ui: &mut egui::Ui| overflow && arrow(ui, "chevron-left", offset > 0.5, tl!("Scroll tabs left"));
+                let scroll_right = |ui: &mut egui::Ui| overflow && arrow(ui, "chevron-right", offset < max_offset - 0.5, tl!("Scroll tabs right"));
+                // The arrows keep their sides: the one laid out first is at the row's start.
+                let (mut left_clicked, mut right_clicked) = (false, false);
+                if mirrored {
+                    right_clicked = scroll_right(ui);
+                } else {
+                    left_clicked = scroll_left(ui);
                 }
                 // Keyed by document, not index: a tab dragged past the active one moves it without
                 // the strip jumping to it.
@@ -110,14 +151,20 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     data.insert_temp(id, state);
                     changed
                 });
+                // Mirrored, the tabs' reading start is the scroll area's far end: the strip goes
+                // there once when it starts to scroll, and the active tab is brought back in view.
+                let start_id = scroll_id.with("reading_start");
+                let (start, started) = mirrored_start(mirrored, max_offset, ui.data(|d| d.get_temp::<bool>(start_id)).unwrap_or(false));
+                ui.data_mut(|d| d.insert_temp(start_id, started));
+                let changed = changed || start.is_some();
                 let mut action = None;
                 let mut close = None;
                 // The pointer's x while a tab is dragged, for scrolling at the strip's edges.
                 let mut drag_x = None;
-                ui.scope(|ui| {
+                let show_tabs = |ui: &mut egui::Ui| {
                     ui.style_mut().always_scroll_the_only_direction = true;
                     let mut area = egui::ScrollArea::horizontal().id_salt("document_tabs").max_width(tabs_width).auto_shrink([true, true]);
-                    if let Some(x) = ui.data_mut(|d| d.remove_temp::<f32>(scroll_id.with("to"))) {
+                    if let Some(x) = ui.data_mut(|d| d.remove_temp::<f32>(scroll_id.with("to"))).or(start) {
                         area = area.horizontal_scroll_offset(x);
                     }
                     let out = area.show(ui, |ui| {
@@ -126,7 +173,12 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             // (with whether it was just released).
                             let mut slots = Vec::with_capacity(app.views.len());
                             let mut dragged = None;
-                            for i in 0..app.views.len() {
+                            // Mirrored, the tabs read from the right: the first is beside Home.
+                            let order: Vec<usize> = if mirrored { (0..app.views.len()).rev().collect() } else { (0..app.views.len()).collect() };
+                            if mirrored {
+                                combine_tab(app, ui, &t, cap, tab_h, changed);
+                            }
+                            for i in order {
                                 let Some(doc) = app.session.get(app.views[i].id) else { continue };
                                 let Some(name) = crate::canvas::tab_label(app, i) else { continue };
                                 let dirty = doc.dirty;
@@ -187,7 +239,10 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             if let Some((from, released)) = dragged
                                 && let Some(x) = ui.ctx().pointer_latest_pos().map(|p| p.x)
                             {
-                                let to = drop_index(&slots, from, x);
+                                // Reading order, with x flipped when the tabs read from the right.
+                                let slots = reading_order(&slots, mirrored);
+                                let flip = |x: f32| if mirrored { -x } else { x };
+                                let to = drop_index(&slots, from, flip(x));
                                 if released {
                                     if close.is_none() && action.is_none() {
                                         app.move_tab(from, to);
@@ -195,7 +250,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 } else {
                                     drag_x = Some(x);
                                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                                    if let Some(marker) = drop_marker(&slots, from, to, ui.spacing().item_spacing.x) {
+                                    if let Some(marker) = drop_marker(&slots, from, to, ui.spacing().item_spacing.x).map(flip) {
                                         let span = slots.first().map_or(ui.max_rect().y_range(), |(_, r)| r.y_range());
                                         // In front of the first tab the gap lies outside the scroll area's
                                         // clip rect (#2225): keep the whole line inside it.
@@ -213,40 +268,17 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             if let Some(action) = action {
                                 app.tab_action(action);
                             }
-                            if app.combine_tab.open {
-                                // After the document tabs; its index can't clash with theirs.
-                                let mut close = None;
-                                let response = tab(
-                                    ui,
-                                    TabSpec {
-                                        id: ui.scope_id().with("combine-tab"),
-                                        theme: &t,
-                                        icon: "files",
-                                        name: tl!("Combine files"),
-                                        file: None,
-                                        dirty: false,
-                                        active: app.combine_showing(),
-                                        index: usize::MAX,
-                                        cap,
-                                        height: tab_h,
-                                        draggable: false,
-                                    },
-                                    &mut close,
-                                );
-                                if changed && app.combine_showing() {
-                                    response.scroll_to_me(Some(Align::Center));
-                                }
-                                if response.clicked() {
-                                    app.open_combine_tab();
-                                }
-                                if close.is_some() || response.middle_clicked() {
-                                    app.close_combine_tab();
-                                }
+                            if !mirrored {
+                                combine_tab(app, ui, &t, cap, tab_h, changed);
                             }
                         });
                     });
                     let max = (out.content_size.x - out.inner_rect.width()).max(0.0);
                     ui.data_mut(|d| d.insert_temp(scroll_id, (out.state.clamped_offset().x, max)));
+                    // The strip just started to scroll: the next frame takes it to its reading start.
+                    if mirrored_start(mirrored, max, started).0.is_some() {
+                        ui.ctx().request_repaint();
+                    }
                     // A tab dragged to either edge of a strip that scrolls brings the hidden tabs in.
                     if let Some(x) = drag_x
                         && max > 0.0
@@ -263,8 +295,25 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             ui.ctx().request_repaint();
                         }
                     }
-                });
-                if overflow && arrow(ui, "chevron-right", offset < max_offset - 0.5, tl!("Scroll tabs right")) {
+                };
+                if mirrored {
+                    // egui scrolls only content that runs left to right, so mirrored the tabs sit in
+                    // a box that runs that way, exactly as wide as they are, beside Home.
+                    let width = tabs_shown_width(&natural, cap, gap).min(tabs_width);
+                    ui.allocate_ui_with_layout(vec2(width, ui.available_height()), Layout::left_to_right(Align::Center), show_tabs);
+                } else {
+                    ui.scope(show_tabs);
+                }
+                if mirrored {
+                    left_clicked = scroll_left(ui);
+                } else {
+                    right_clicked = scroll_right(ui);
+                }
+                let mut scroll_to = None;
+                if left_clicked {
+                    scroll_to = Some((offset - (TAB_MIN_WIDTH + gap)).max(0.0));
+                }
+                if right_clicked {
                     scroll_to = Some((offset + TAB_MIN_WIDTH + gap).min(max_offset));
                 }
                 if let Some(x) = scroll_to {
@@ -276,7 +325,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 if widgets::ghost_button_sized(ui, "plus", tl!("Open"), tab_h).on_hover_text(tip).clicked() {
                     app.open_dialog();
                 }
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.with_layout(far_end, |ui| {
                     if !controls.right.is_empty() {
                         // Laid out left to right inside the right-to-left run, so they read in
                         // the desktop's order.
@@ -316,6 +365,42 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 });
             });
         });
+}
+
+/// The Combine files tab, when it is open: after the document tabs in reading order (drawn first
+/// when they read from the right). Its index can't clash with theirs.
+fn combine_tab(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, cap: Option<f32>, height: f32, changed: bool) {
+    if !app.combine_tab.open {
+        return;
+    }
+    let mut close = None;
+    let response = tab(
+        ui,
+        TabSpec {
+            id: ui.scope_id().with("combine-tab"),
+            theme: t,
+            icon: "files",
+            name: tl!("Combine files"),
+            file: None,
+            dirty: false,
+            active: app.combine_showing(),
+            index: usize::MAX,
+            cap,
+            height,
+            draggable: false,
+        },
+        &mut close,
+    );
+    if changed && app.combine_showing() {
+        response.scroll_to_me(Some(Align::Center));
+    }
+    if response.clicked() {
+        app.open_combine_tab();
+    }
+    // A middle click closes it too, as it does a document tab (#1853).
+    if close.is_some() || response.middle_clicked() {
+        app.close_combine_tab();
+    }
 }
 
 /// The right-click menu on the title bar's theme button.
@@ -360,6 +445,32 @@ fn drop_marker(slots: &[(usize, Rect)], from: usize, to: usize, gap: f32) -> Opt
         None => others.next().map(|r| r.left() - gap / 2.0),
         Some(before) => others.nth(before).map(|r| r.right() + gap / 2.0),
     }
+}
+
+/// The tabs' slots in reading order, in a space where reading runs left to right: when the tabs
+/// read from the right (`mirrored`), their order is reversed and x flipped, so `drop_index` and
+/// `drop_marker` serve both directions.
+fn reading_order(slots: &[(usize, Rect)], mirrored: bool) -> Vec<(usize, Rect)> {
+    if !mirrored {
+        return slots.to_vec();
+    }
+    slots.iter().rev().map(|(i, r)| (*i, Rect::from_x_y_ranges(-r.right()..=-r.left(), r.y_range()))).collect()
+}
+
+/// Where a mirrored strip that has just started to scroll goes (`max_offset`, the far end of a
+/// scroll area that runs left to right, is where its tabs start to read), and whether it has gone
+/// there. Once only, so the user's own scrolling stands; a strip that stops scrolling starts again.
+fn mirrored_start(mirrored: bool, max_offset: f32, started: bool) -> (Option<f32>, bool) {
+    if !mirrored || max_offset.is_nan() || max_offset <= 0.5 {
+        return (None, false);
+    }
+    if started { (None, true) } else { (Some(max_offset), true) }
+}
+
+/// How wide tabs of `natural` widths, each at most `cap`, are laid out `gap` apart.
+fn tabs_shown_width(natural: &[f32], cap: Option<f32>, gap: f32) -> f32 {
+    let tabs: f32 = natural.iter().map(|w| cap.map_or(*w, |cap| w.min(cap))).sum();
+    tabs + gap * natural.len().saturating_sub(1) as f32
 }
 
 /// A scroll arrow beside the tabs; dimmed (and inert) at its end. True when clicked.
@@ -869,6 +980,45 @@ mod tab_widths {
         // The last tab dropped at the start: before the first tab.
         assert_eq!(drop_marker(&slots, 2, 0, 4.0), Some(-2.0));
         assert_eq!(drop_marker(&[], 0, 1, 4.0), None);
+    }
+
+    /// Mirrored, the slots come back in reading order with x flipped, so the drop helpers read
+    /// the tabs from the right.
+    #[test]
+    fn mirrored_tabs_drop_in_their_reading_order() {
+        use super::{drop_index, drop_marker, reading_order};
+        // Drawn right to left: tab 0 at the right, tab 2 at the left.
+        let drawn: Vec<_> = three_slots().into_iter().map(|(k, r)| (2 - k, r)).collect();
+        let slots = reading_order(&drawn, true);
+        assert_eq!(slots.iter().map(|(i, _)| *i).collect::<Vec<_>>(), [0, 1, 2]);
+        // Tab 0 (drawn at 208..308, beside Home) dragged to the far left lands at the end.
+        assert_eq!(drop_index(&slots, 0, -10.0), 2);
+        // Its drop line, flipped back, sits left of the leftmost tab.
+        assert_eq!(drop_marker(&slots, 0, 2, 4.0).map(|x| -x), Some(-2.0));
+        // Unmirrored, nothing changes.
+        assert_eq!(reading_order(&three_slots(), false), three_slots());
+        assert!(reading_order(&[], true).is_empty());
+    }
+
+    /// A mirrored strip goes to its reading start (the far end) once when it starts to scroll,
+    /// then leaves the offset to the user until it no longer scrolls.
+    #[test]
+    fn a_mirrored_strip_starts_at_its_reading_start_once() {
+        use super::mirrored_start;
+        assert_eq!(mirrored_start(true, 0.0, false), (None, false), "nothing to scroll");
+        assert_eq!(mirrored_start(true, 240.0, false), (Some(240.0), true), "it just started to scroll");
+        assert_eq!(mirrored_start(true, 240.0, true), (None, true), "once only");
+        assert_eq!(mirrored_start(true, 0.0, true), (None, false), "it stopped scrolling: next time starts again");
+        assert_eq!(mirrored_start(false, 240.0, false), (None, false), "unmirrored, the start is offset 0");
+        assert_eq!(mirrored_start(true, f32::NAN, false), (None, false));
+    }
+
+    #[test]
+    fn shown_tabs_take_their_capped_widths_and_the_gaps() {
+        use super::tabs_shown_width;
+        assert_eq!(tabs_shown_width(&[100.0, 200.0], None, 4.0), 304.0);
+        assert_eq!(tabs_shown_width(&[100.0, 200.0], Some(150.0), 4.0), 254.0);
+        assert_eq!(tabs_shown_width(&[], None, 4.0), 0.0);
     }
 
     #[test]
