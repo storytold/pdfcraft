@@ -843,6 +843,7 @@ fn decode_mask(
             width: ctx.width,
             height,
             interpolate: obj.interpolate,
+            one_bit: ctx.bits_per_component == 1,
             scale_factors: ctx.scale_factors,
         },
     })
@@ -894,6 +895,7 @@ fn decode_raster(
                 width: ctx.width,
                 height,
                 interpolate: obj.interpolate,
+                one_bit: false,
                 scale_factors: ctx.scale_factors,
             }))
         } else {
@@ -906,6 +908,7 @@ fn decode_raster(
                 width: ctx.width,
                 height,
                 interpolate: obj.interpolate,
+                one_bit: false,
                 scale_factors: ctx.scale_factors,
             }))
         }
@@ -948,6 +951,8 @@ fn decode_raster(
                 ctx.scale_factors,
                 &ctx.color_space,
                 obj.interpolate,
+                // PdfCraft patch (#1700): 1 bit per component, so a minified draw averages it.
+                ctx.bits_per_component == 1,
             )
         };
 
@@ -1088,6 +1093,7 @@ fn resolve_alpha(
                 width,
                 height: *height,
                 interpolate: obj.interpolate,
+                one_bit: false,
                 scale_factors,
             })
         } else {
@@ -1131,6 +1137,7 @@ fn resolve_alpha(
             width,
             height: *height,
             interpolate: obj.interpolate,
+            one_bit: false,
             scale_factors,
         })
     } else {
@@ -1198,6 +1205,7 @@ fn get_rgb_data(
     scale_factors: (f32, f32),
     cs: &ColorSpace,
     interpolate: bool,
+    one_bit: bool,
 ) -> Option<RgbData> {
     // To prevent a panic when calling the `chunks` method.
     if cs.num_components() == 0 {
@@ -1212,6 +1220,7 @@ fn get_rgb_data(
         width,
         height,
         interpolate,
+        one_bit,
         scale_factors,
     })
 }
@@ -1412,6 +1421,9 @@ fn rgb_via_lookup(
         width,
         height,
         interpolate,
+        // PdfCraft patch (#1700): the lookup yields RGB, but a 1-bit source stays 1 bit, so a
+        // minified draw averages it as line art rather than picking samples.
+        one_bit: bits_per_component == 1,
         scale_factors,
     })
 }
