@@ -739,6 +739,9 @@ fn format_text_fits_the_tools_pane_at_its_narrowest() {
     for (label, r) in rects {
         assert!(r.right() <= font.right() + 0.5, "{label} {r:?} reaches past the font list ({font:?})");
     }
+    // The font list ends where the pane's own content does: the header's Close button is its right edge.
+    let close = h.get_by_label("Close panel").rect();
+    assert!((font.right() - close.right()).abs() < 1.5, "the font list {font:?} is not at the pane's content edge ({close:?})");
     // The rows below scroll, and the scrollbar floats over their right edge: they stop short of it.
     let image = h.get_by_label("Image").rect();
     assert!(image.right() <= font.right() - 17.0, "the Image row {image:?} runs under the scrollbar ({font:?})");
