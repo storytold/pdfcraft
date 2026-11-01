@@ -4152,6 +4152,28 @@ fn flattened_arabic_and_hebrew_fill_sign_text_and_comments_extract_in_logical_or
 }
 
 #[test]
+fn check_4153_hebrew_fill_sign_text_is_searchable_before_and_after_flattening() {
+    if pdfcraft_fonts::document_hebrew_font(false).is_none() {
+        return;
+    }
+    let dir = workdir("check-4153-hebrew-fill-sign");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path": "a.pdf"}))["doc"].as_u64().unwrap();
+    let text = "שם: שרה כהן";
+    ok(&mut a, "fill_sign_add", json!({"doc": doc, "page": 1, "type": "text", "at": [20, 40], "text": text}));
+    assert_eq!(ok(&mut a, "comment_list", json!({"doc": doc}))["comments"][0]["contents"], text);
+    assert!(page_text(&mut a, doc)[0].contains(text), "{:?}", page_text(&mut a, doc));
+    ok(&mut a, "doc_save", json!({"doc": doc, "path": "flat.pdf", "flatten_fill_sign": true}));
+    let flat = ok(&mut a, "doc_open", json!({"path": "flat.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "comment_list", json!({"doc": flat}))["count"], 0);
+    assert!(page_text(&mut a, flat)[0].contains(text), "{:?}", page_text(&mut a, flat));
+    let found = ok(&mut a, "text_find", json!({"doc": flat, "query": "כהן"}));
+    assert_eq!(found["matches"].as_array().map(Vec::len), Some(1), "{found}");
+    let rendered = a.call("page_render", &json!({"doc": flat, "page": 1, "dpi": 144})).unwrap();
+    assert!(rendered.iter().any(|c| matches!(c, Content::Png { data, width, height } if !data.is_empty() && *width > 0 && *height > 0)));
+}
+
+#[test]
 fn flattening_through_tools() {
     let dir = workdir("flatten");
     let mut a = auto(&dir);

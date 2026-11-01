@@ -2403,3 +2403,72 @@ fn degenerate_and_absurd_leader_and_caption_values_do_not_panic() {
     assert!(long.contains(&format!("({}) Tj", "w".repeat(256))), "cut to 256");
     assert!(!long.contains(&"w".repeat(257)));
 }
+
+// Checks from #4153 (Hebrew in Fill & Sign text, text boxes and callouts), run against #3465.
+
+/// The `x y` of every `… x y Tm` in an appearance.
+fn tm_positions(ap: &str) -> Vec<(f64, f64)> {
+    ap.lines()
+        .filter_map(|l| {
+            let before = &l[..l.find(" Tm")?];
+            let mut it = before.rsplit(' ');
+            let y = it.next()?.parse().ok()?;
+            let x = it.next()?.parse().ok()?;
+            Some((x, y))
+        })
+        .collect()
+}
+
+/// The rows an appearance draws text on.
+fn rows(ap: &str) -> usize {
+    tm_positions(ap).iter().map(|p| (p.1 * 100.0).round() as i64).collect::<std::collections::BTreeSet<_>>().len()
+}
+
+/// A text box retyped from English into Hebrew is drawn like one created with the Hebrew: the
+/// right-to-left line ends at the box's right edge, not at its left.
+#[test]
+fn check_4153_hebrew_retyped_into_an_english_text_box_is_aligned_like_a_new_one() {
+    if pdfcraft_fonts::document_hebrew_font(false).is_none() {
+        return;
+    }
+    let mut doc = fixture();
+    let rect = [100.0, 500.0, 400.0, 600.0];
+    let mut created = new(0, Shape::TextBox { rect, font_size: 12.0 });
+    created.contents = "שלום עולם".into();
+    let c = add_annotation(&mut doc, &created, &meta("c")).unwrap();
+    let mut english = new(0, Shape::TextBox { rect, font_size: 12.0 });
+    english.contents = "Hello".into();
+    let r = add_annotation(&mut doc, &english, &meta("r")).unwrap();
+    set_contents(&mut doc, 0, r, "שלום עולם", &meta("")).unwrap();
+    let right_end = |i: usize| tm_positions(&ap_content(&doc, &list(&doc, 0)[i])).iter().map(|p| p.0).fold(f64::MIN, f64::max);
+    let (c, r) = (right_end(c), right_end(r));
+    assert!(r > 250.0, "the box spans x 100–400; created with the Hebrew, its last glyph is at x {c}; retyped into Hebrew, at x {r}");
+}
+
+/// Fill & Sign sizes a typed-text box from `text_width`: the width plus 8 pt (`text_box_rect` in
+/// ui-egui, `text_at` in automation). The Hebrew it was sized for must fit on one line.
+#[test]
+fn check_4153_hebrew_fill_sign_text_fits_the_box_sized_for_it() {
+    if pdfcraft_fonts::document_hebrew_font(false).is_none() {
+        return;
+    }
+    let mut failures = Vec::new();
+    for (typed, size) in [("שם: שרה כהן", 10.0), ("ישראל ישראלי, רחוב הרצל 12, תל אביב", 10.0), ("שם: שרה כהן", 18.0), ("שם: שרה כהן", 24.0)]
+    {
+        let mut doc = fixture();
+        let w = appearance::text_width(typed, size) + 8.0;
+        let h = size * 1.2 + 6.0;
+        let shape = Shape::Typewriter { rect: [100.0, 600.0 - h, 100.0 + w, 600.0], font_size: size };
+        // Fill & Sign's own style: no border.
+        let mut a = NewAnnotation { style: Style::default_for(&shape), ..new(0, shape) };
+        a.contents = typed.into();
+        let i = add_annotation(&mut doc, &a, &meta("t")).unwrap();
+        let ap = ap_content(&doc, &list(&doc, 0)[i]);
+        let hex: String = typed.encode_utf16().map(|u| format!("{u:04X}")).collect();
+        let shaped = pdfcraft_fonts::appearance_text::wrap(typed, size, 1.0e6).unwrap()[0].width;
+        if rows(&ap) != 1 || !ap.contains(&format!("/ActualText <FEFF{hex}>")) {
+            failures.push(format!("{typed:?} at {size} pt: box {w:.1} pt wide for {shaped:.1} pt of text, drawn on {} row(s)", rows(&ap)));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
