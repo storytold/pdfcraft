@@ -1,5 +1,38 @@
 use super::{Host, Reply, Value, json};
 
+/// Programmatic control and inspection of window viewports and tab detachment.
+pub trait PdfCraftControl {
+    /// Return the list of document IDs that are currently detached in separate window viewports.
+    fn detached_viewports(&self) -> Vec<pdfcraft_engine::DocId>;
+
+    /// Check whether a tab is currently detached.
+    fn is_tab_detached(&self, id: pdfcraft_engine::DocId) -> bool;
+
+    /// Detach a tab into a separate window viewport by `DocId`.
+    fn detach_tab(&mut self, id: pdfcraft_engine::DocId);
+
+    /// Re-attach a detached tab back into the primary window tab strip by `DocId`.
+    fn attach_tab(&mut self, id: pdfcraft_engine::DocId);
+}
+
+impl PdfCraftControl for crate::PdfCraftApp {
+    fn detached_viewports(&self) -> Vec<pdfcraft_engine::DocId> {
+        self.detached_viewports()
+    }
+
+    fn is_tab_detached(&self, id: pdfcraft_engine::DocId) -> bool {
+        self.is_tab_detached(id)
+    }
+
+    fn detach_tab(&mut self, id: pdfcraft_engine::DocId) {
+        self.detach_tab(id);
+    }
+
+    fn attach_tab(&mut self, id: pdfcraft_engine::DocId) {
+        self.attach_tab(id);
+    }
+}
+
 impl Host for crate::PdfCraftApp {
     /// Cancel any in-progress pointer gesture in every open view.
     fn cancel_pointer_gestures(&mut self) {
@@ -63,7 +96,7 @@ impl Host for crate::PdfCraftApp {
             .enumerate()
             .filter_map(|(i, v)| {
                 let d = self.session.get(v.id)?;
-                Some(json!({ "tab": i, "doc": v.id.0, "name": d.name, "path": d.path, "pages": d.info.pages.len(), "dirty": d.dirty, "active": self.active == Some(i) }))
+                Some(json!({ "tab": i, "doc": v.id.0, "name": d.name, "path": d.path, "pages": d.info.pages.len(), "dirty": d.dirty, "active": self.active == Some(i), "detached": v.detached }))
             })
             .collect();
         #[cfg(not(target_arch = "wasm32"))]
@@ -71,9 +104,11 @@ impl Host for crate::PdfCraftApp {
             self.pending_opens.iter().map(|pending| json!({ "token": pending.token, "name": pending.name, "path": pending.path })).collect();
         #[cfg(target_arch = "wasm32")]
         let pending_opens: Vec<Value> = Vec::new();
+        let detached_viewports: Vec<u64> = self.views.iter().filter(|v| v.detached).map(|v| v.id.0).collect();
         json!({
             "side_panels": crate::side_panels::state(self),
             "documents": docs,
+            "detached_viewports": detached_viewports,
             "pending_opens": pending_opens,
             "active": active.map(|v| json!({
                 "doc": v.id.0,
@@ -165,6 +200,8 @@ impl Host for crate::PdfCraftApp {
             .map(|c| json!({ "id": c.id, "label": c.label, "menu": c.menu, "enabled": self.command_enabled(c), "shortcut": c.shortcut.map(|s| s.label(cfg!(target_os = "macos"))) }))
             .collect();
         list.push(json!({"id": "ui.panel", "label": "Side panel", "enabled": true, "params": "panel: tools or side; open: boolean; width: number (clamped to the panel's limits)"}));
+        list.push(json!({"id": "ui.detach", "label": "Detach tab to new window", "enabled": self.views.len() > 1, "params": "doc: document id, or tab: tab index"}));
+        list.push(json!({"id": "ui.attach", "label": "Re-attach tab to main window", "enabled": self.views.iter().any(|v| v.detached), "params": "doc: document id, or tab: tab index"}));
         json!({ "commands": list })
     }
 
@@ -185,5 +222,36 @@ impl Host for crate::PdfCraftApp {
     #[cfg(target_arch = "wasm32")]
     fn open(&mut self, _path: &str) -> Reply {
         Err("ui.open needs a file system; on the web, drop the file on the page".into())
+    }
+
+    fn detach(&mut self, id: pdfcraft_engine::DocId) -> Reply {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = id;
+            return Err("ui.detach needs native window viewports".into());
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.views.len() <= 1 {
+                return Err("cannot detach the only open document".into());
+            }
+            if !self.views.iter().any(|v| v.id == id) {
+                return Err(format!("document with id {} not found", id.0));
+            }
+            PdfCraftControl::detach_tab(self, id);
+            Ok(json!({ "detached": id.0 }))
+        }
+    }
+
+    fn attach(&mut self, id: pdfcraft_engine::DocId) -> Reply {
+        if !self.views.iter().any(|v| v.id == id) {
+            return Err(format!("document with id {} not found", id.0));
+        }
+        PdfCraftControl::attach_tab(self, id);
+        Ok(json!({ "attached": id.0 }))
+    }
+
+    fn doc_id_from_tab(&self, tab: usize) -> Option<pdfcraft_engine::DocId> {
+        self.views.get(tab).map(|v| v.id)
     }
 }

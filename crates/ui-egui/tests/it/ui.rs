@@ -1633,6 +1633,618 @@ fn the_combine_tab_does_not_move_and_documents_stay_in_order() {
     assert_eq!(h.state().views.iter().map(|view| view.id).collect::<Vec<_>>(), ids);
 }
 
+#[test]
+fn dragging_a_tab_to_open_space_detaches_it_into_its_own_window() {
+    use egui::accesskit::Role;
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+    let tab = |h: &Harness<'static, PdfCraftApp>, name: &str| h.get_by_role_and_label(Role::Tab, name).rect();
+
+    // Drag "middle.pdf" downwards into open space (60px below the tab strip)
+    let from = tab(&h, "middle.pdf").center();
+    let to = from + egui::vec2(0.0, 60.0);
+    drag_named_tab(&mut h, "middle.pdf", to, true);
+    h.run_steps(3);
+
+    // middle.pdf is detached
+    assert!(h.state().views[1].detached, "middle.pdf tab should be detached");
+    // Tab strip only retains the remaining non-detached tabs
+    assert!(h.query_by_role_and_label(Role::Tab, "middle.pdf").is_none());
+    assert!(h.query_by_role_and_label(Role::Tab, "first.pdf").is_some());
+    assert!(h.query_by_role_and_label(Role::Tab, "last.pdf").is_some());
+
+    // Re-attaching brings it back to the tab strip
+    h.state_mut().attach_tab(ids[1]);
+    h.run_steps(3);
+    assert!(!h.state().views[1].detached, "middle.pdf should be attached");
+    assert!(h.query_by_role_and_label(Role::Tab, "middle.pdf").is_some());
+}
+
+#[test]
+fn tab_context_menu_can_detach_tab_to_new_window() {
+    use egui::accesskit::Role;
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    // Right-click first.pdf tab and click "Move to New Window"
+    h.get_by_role_and_label(Role::Tab, "first.pdf").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Move to New Window").click();
+    h.run_steps(3);
+
+    assert!(h.state().views[0].detached, "first.pdf should be detached");
+    assert!(h.query_by_role_and_label(Role::Tab, "first.pdf").is_none());
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[2]));
+}
+
+#[test]
+fn dragging_sole_tab_to_open_space_does_not_detach_it() {
+    use egui::accesskit::Role;
+    let mut h = harness(|app| {
+        app.open_bytes("sole.pdf", None, FIXTURE.to_vec()).unwrap();
+    });
+    let id = h.state().views[0].id;
+    let tab_rect = h.get_by_role_and_label(Role::Tab, "sole.pdf").rect();
+
+    // Drag "sole.pdf" downwards into open space (60px below the tab strip)
+    let from = tab_rect.center();
+    let to = from + egui::vec2(0.0, 60.0);
+    drag_named_tab(&mut h, "sole.pdf", to, true);
+    h.run_steps(3);
+
+    // sole.pdf must NOT be detached and must remain the active tab
+    assert!(!h.state().views[0].detached, "sole tab must not be detached");
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(id));
+    assert!(h.query_by_role_and_label(Role::Tab, "sole.pdf").is_some());
+}
+
+#[test]
+fn sole_tab_context_menu_disables_move_to_new_window() {
+    use egui::accesskit::Role;
+    let mut h = harness(|app| {
+        app.open_bytes("sole.pdf", None, FIXTURE.to_vec()).unwrap();
+    });
+
+    // Right-click sole.pdf tab
+    h.get_by_role_and_label(Role::Tab, "sole.pdf").click_secondary();
+    h.run_steps(2);
+
+    let move_node = h.get_by_label("Move to New Window");
+    assert!(move_node.accesskit_node().is_disabled(), "Move to New Window should be disabled when only one tab is open");
+    move_node.hover();
+    h.run_steps(30);
+    h.get_by_label_contains("Cannot detach the only open document");
+}
+
+#[test]
+fn detached_window_views_retain_render_demand_and_are_not_suspended() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    // Detach middle.pdf
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(4);
+
+    // middle.pdf is detached and treated as visible by finish_render_frame
+    assert!(h.state().views[1].detached, "middle.pdf is detached");
+    // It rendered in its detached window viewport
+    assert!(h.state().session.get(ids[1]).is_some());
+}
+
+#[test]
+fn dragging_tab_with_prior_detached_tab_translates_slot_to_views_index() {
+    use egui::accesskit::Role;
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+    let tab = |h: &Harness<'static, PdfCraftApp>, name: &str| h.get_by_role_and_label(Role::Tab, name).rect();
+
+    // Detach first tab (first.pdf, ids[0])
+    h.state_mut().detach_tab(ids[0]);
+    h.run_steps(3);
+    assert!(h.state().views[0].detached, "first.pdf should be detached");
+
+    // Drag middle.pdf past last.pdf to the right
+    let to = tab(&h, "last.pdf").right_center() + egui::vec2(20.0, 0.0);
+    drag_named_tab(&mut h, "middle.pdf", to, true);
+    h.run_steps(3);
+
+    // Verify views order: [first.pdf (detached), last.pdf, middle.pdf]
+    assert_eq!(
+        h.state().views.iter().map(|view| view.id).collect::<Vec<_>>(),
+        [ids[0], ids[2], ids[1]],
+        "middle.pdf should have moved after last.pdf"
+    );
+    // Tab strip renders the new visual order
+    assert!(tab(&h, "middle.pdf").left() > tab(&h, "last.pdf").right(), "middle.pdf should be right of last.pdf");
+}
+
+#[test]
+fn closing_docked_tab_with_earlier_detached_tab_updates_active_to_docked_tab() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    // 3 tabs: first.pdf (ids[0]), middle.pdf (ids[1]), last.pdf (ids[2]).
+    // Detach first.pdf (ids[0]).
+    h.state_mut().detach_tab(ids[0]);
+    h.run_steps(3);
+    assert!(h.state().views[0].detached, "first.pdf should be detached");
+
+    // Activate middle.pdf (ids[1])
+    h.get_by_role_and_label(egui::accesskit::Role::Tab, "middle.pdf").click();
+    h.run_steps(3);
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[1]));
+
+    // Close middle.pdf (the active docked tab).
+    close_named_tab(&mut h, "middle.pdf");
+    h.run_steps(3);
+
+    // Active tab must now be last.pdf (docked, ids[2]), never detached first.pdf (ids[0])!
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[2]));
+    assert!(!h.state().views[h.state().active.unwrap()].detached);
+
+    // Now close last.pdf. Since first.pdf is detached, no docked tabs remain.
+    // Active must become None (Home screen), never first.pdf!
+    close_named_tab(&mut h, "last.pdf");
+    h.run_steps(3);
+    assert_eq!(h.state().active, None, "active must be None when no docked tabs remain");
+}
+
+#[test]
+fn detaching_active_tab_predictably_transfers_active_to_adjacent_docked_tab() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+    // Initially last.pdf (ids[2], index 2) is active.
+    assert_eq!(h.state().active, Some(2));
+
+    // Detach the active tab (last.pdf).
+    // Nearest docked tab is adjacent middle.pdf (index 1), not first.pdf (index 0).
+    h.state_mut().detach_tab(ids[2]);
+    h.run_steps(3);
+
+    assert!(h.state().views[2].detached);
+    assert_eq!(h.state().active, Some(1), "detaching last tab transfers to adjacent middle.pdf");
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[1]));
+
+    // Now middle.pdf is active (index 1). Detach middle.pdf.
+    // Remaining docked tab is first.pdf (index 0).
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(3);
+
+    assert!(h.state().views[1].detached);
+    assert_eq!(h.state().active, Some(0), "detaching middle tab transfers to remaining docked first.pdf");
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[0]));
+}
+
+#[test]
+fn detaching_all_tabs_sets_active_to_none_and_shows_home() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    // Detach all three tabs
+    h.state_mut().detach_tab(ids[0]);
+    h.state_mut().detach_tab(ids[1]);
+    h.state_mut().detach_tab(ids[2]);
+    h.run_steps(4);
+
+    assert!(h.state().views.iter().all(|v| v.detached));
+    assert_eq!(h.state().active, None, "active must be None when all tabs are detached");
+
+    // Home screen is shown in the main window
+    assert!(h.query_by_label("Welcome to PdfCraft").is_some() || h.query_by_label("Open file").is_some());
+    // No tabs in the main window tab strip
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Tab, "first.pdf").is_none());
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Tab, "middle.pdf").is_none());
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Tab, "last.pdf").is_none());
+}
+
+#[test]
+fn keyboard_tab_navigation_cycles_exclusively_through_docked_tabs() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    // Detach the middle tab (ids[1])
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(3);
+    assert!(h.state().views[1].detached);
+
+    // Focus first tab (ids[0], index 0)
+    h.get_by_role_and_label(egui::accesskit::Role::Tab, "first.pdf").click();
+    h.run_steps(3);
+    assert_eq!(h.state().active, Some(0));
+
+    // Next tab shortcut (Ctrl+Tab / view.next_tab) should skip detached middle.pdf (index 1)
+    // and go directly to last.pdf (index 2)!
+    let ctrl = egui::Modifiers::CTRL | egui::Modifiers::COMMAND;
+    h.key_press_modifiers(ctrl, egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(h.state().active, Some(2), "next tab should skip detached tab and jump to last.pdf");
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[2]));
+
+    // Next tab again should wrap around directly to first.pdf (index 0)
+    h.key_press_modifiers(ctrl, egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(h.state().active, Some(0), "next tab should wrap back to first.pdf");
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[0]));
+
+    // Previous tab shortcut (Ctrl+Shift+Tab / view.previous_tab) should go to last.pdf (index 2)
+    h.key_press_modifiers(ctrl | egui::Modifiers::SHIFT, egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(h.state().active, Some(2), "previous tab should wrap to last.pdf, skipping middle");
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[2]));
+}
+
+#[test]
+fn resolve_close_saving_detached_tab_preserves_main_window_active_tab() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    // Detach middle.pdf (index 1)
+    h.state_mut().detach_tab(ids[1]);
+    // Set active tab to first.pdf (index 0)
+    h.state_mut().active = Some(0);
+    h.run_steps(3);
+
+    // Make middle.pdf dirty so close requests a save
+    h.state_mut().session.apply(ids[1], pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    h.state_mut().request_close_tab(1);
+    assert!(h.state().close_request.is_some());
+
+    // Resolve save with Save (choice = Some(true))
+    let ctx = h.ctx.clone();
+    h.state_mut().resolve_close(&ctx, Some(true));
+    h.run_steps(3);
+
+    // Active tab in main window must still be first.pdf (index 0), NOT detached middle.pdf!
+    assert_eq!(h.state().active, Some(0));
+}
+
+#[test]
+fn closing_clean_detached_window_immediately_closes_tab() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    // Detach middle.pdf (index 1)
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(3);
+    assert!(h.state().views[1].detached);
+
+    // Request OS close on detached child viewport
+    let child_viewport_id = egui::ViewportId::from_hash_of(("detached-doc", ids[1]));
+    h.input_mut().viewports.entry(child_viewport_id).or_default().events.push(egui::ViewportEvent::Close);
+    h.run_steps(3);
+
+    // Clean detached window immediately closes and removes tab from self.views
+    assert_eq!(h.state().views.len(), 2);
+    assert!(h.state().views.iter().all(|v| v.id != ids[1]));
+    assert!(h.state().session.get(ids[1]).is_none());
+    assert!(h.state().close_request.is_none());
+}
+
+#[test]
+fn closing_dirty_detached_window_intercepts_close_and_prompts_inside_child_viewport() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    // Detach middle.pdf (index 1) and make it dirty
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(3);
+    h.state_mut().session.apply(ids[1], pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+
+    // Request OS close on detached child viewport
+    let child_viewport_id = egui::ViewportId::from_hash_of(("detached-doc", ids[1]));
+    h.input_mut().viewports.entry(child_viewport_id).or_default().events.push(egui::ViewportEvent::Close);
+    h.step();
+
+    // CancelClose command must be sent to abort premature OS destruction
+    let cancel_close_sent =
+        h.output().viewport_output.values().flat_map(|v| v.commands.iter()).any(|c| matches!(c, egui::ViewportCommand::CancelClose));
+    assert!(cancel_close_sent, "CancelClose command must be sent to child viewport");
+
+    // Close request is flagged for this detached document
+    assert_eq!(h.state().close_request, Some(pdfcraft_ui_egui::CloseRequest::Tab(ids[1])));
+
+    h.run_steps(2);
+
+    // Save confirmation prompt is displayed inside the detached window
+    h.get_by_label_contains("Save changes to “middle.pdf”");
+    h.get_by_label("Save");
+    h.get_by_label("Don't save");
+    h.get_by_label("Cancel");
+
+    // Middle tab still exists, is dirty, and remains detached
+    assert_eq!(h.state().views.len(), 3);
+    let view = h.state().views.iter().find(|v| v.id == ids[1]).unwrap();
+    assert!(view.detached);
+    assert!(h.state().session.get(ids[1]).unwrap().dirty);
+}
+
+#[test]
+fn cancelling_save_prompt_in_detached_window_leaves_tab_open_detached_and_dirty() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(3);
+    h.state_mut().session.apply(ids[1], pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+
+    let child_viewport_id = egui::ViewportId::from_hash_of(("detached-doc", ids[1]));
+    h.input_mut().viewports.entry(child_viewport_id).or_default().events.push(egui::ViewportEvent::Close);
+    h.run_steps(3);
+
+    // Clicking "Cancel" in detached save prompt leaves tab open, detached, and dirty
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+
+    assert_eq!(h.state().views.len(), 3);
+    let view = h.state().views.iter().find(|v| v.id == ids[1]).unwrap();
+    assert!(view.detached);
+    assert!(h.state().session.get(ids[1]).unwrap().dirty);
+    assert!(h.state().close_request.is_none());
+}
+
+#[test]
+fn dont_save_in_detached_window_discards_changes_and_closes_tab() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(3);
+    h.state_mut().session.apply(ids[1], pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+
+    let child_viewport_id = egui::ViewportId::from_hash_of(("detached-doc", ids[1]));
+    h.input_mut().viewports.entry(child_viewport_id).or_default().events.push(egui::ViewportEvent::Close);
+    h.run_steps(3);
+
+    // Clicking "Don't save" discards changes and closes the detached tab
+    h.get_by_label("Don't save").click();
+    h.run_steps(3);
+
+    assert_eq!(h.state().views.len(), 2);
+    assert!(h.state().views.iter().all(|v| v.id != ids[1]));
+    assert!(h.state().session.get(ids[1]).is_none());
+    assert!(h.state().close_request.is_none());
+}
+
+#[test]
+fn save_in_detached_window_saves_changes_and_closes_tab() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-ui-test-save-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let save_path = dir.join("middle_saved.pdf");
+
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    h.state_mut().save_override = Some(save_path.to_string_lossy().into_owned());
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(3);
+    h.state_mut().session.apply(ids[1], pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+
+    let child_viewport_id = egui::ViewportId::from_hash_of(("detached-doc", ids[1]));
+    h.input_mut().viewports.entry(child_viewport_id).or_default().events.push(egui::ViewportEvent::Close);
+    h.run_steps(3);
+
+    // Clicking "Save" saves changes and closes the detached tab once written
+    h.get_by_label("Save").click();
+    h.run_steps(5);
+
+    assert!(save_path.exists());
+    assert_eq!(h.state().views.len(), 2);
+    assert!(h.state().views.iter().all(|v| v.id != ids[1]));
+    assert!(h.state().session.get(ids[1]).is_none());
+    assert!(h.state().close_request.is_none());
+}
+
+#[test]
+fn root_window_close_with_dirty_detached_window_cancels_close_and_prompts_on_main_window() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    // Detach middle.pdf (index 1) and make it dirty
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(3);
+    h.state_mut().session.apply(ids[1], pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+
+    // Request OS close on the primary root window
+    h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+    h.step();
+
+    // Root close must be cancelled via CancelClose
+    let cancel_close_sent =
+        h.output().viewport_output.values().flat_map(|v| v.commands.iter()).any(|c| matches!(c, egui::ViewportCommand::CancelClose));
+    assert!(cancel_close_sent, "CancelClose command must be sent to cancel immediate exit");
+
+    // Close request is flagged for application quit, and quit is not allowed yet
+    assert_eq!(h.state().close_request, Some(pdfcraft_ui_egui::CloseRequest::Quit));
+    assert!(!h.state().allow_quit);
+
+    h.run_steps(2);
+
+    // Save prompt is displayed on the main window for the dirty detached document
+    h.get_by_label_contains("Save changes to “middle.pdf” before closing?");
+    h.get_by_label("Save");
+    h.get_by_label("Don't save");
+    h.get_by_label("Cancel");
+
+    // Cancelling leaves the application alive, middle.pdf still detached and dirty
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+
+    assert!(h.state().close_request.is_none());
+    assert!(!h.state().allow_quit);
+    assert_eq!(h.state().views.len(), 3);
+    let view = h.state().views.iter().find(|v| v.id == ids[1]).unwrap();
+    assert!(view.detached);
+    assert!(h.state().session.get(ids[1]).unwrap().dirty);
+}
+
+#[test]
+fn root_window_close_sequence_prompts_sequentially_across_docked_and_detached_and_quits() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    // Make first.pdf dirty (docked)
+    h.state_mut().session.apply(ids[0], pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    // Detach middle.pdf (index 1) and make it dirty (detached)
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(3);
+    h.state_mut().session.apply(ids[1], pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    // Detach last.pdf (clean detached tab to test teardown with floating clean windows)
+    h.state_mut().detach_tab(ids[2]);
+    h.run_steps(3);
+
+    // Trigger application exit via root window close
+    h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+    h.step();
+
+    assert_eq!(h.state().close_request, Some(pdfcraft_ui_egui::CloseRequest::Quit));
+    assert!(!h.state().allow_quit);
+
+    h.run_steps(2);
+
+    // First prompt asks about docked first.pdf
+    h.get_by_label_contains("Save changes to “first.pdf” before closing?");
+    h.get_by_label("Don't save").click();
+    h.run_steps(3);
+
+    // After discarding first.pdf, next prompt sequentially asks about dirty detached middle.pdf on main window
+    h.get_by_label_contains("Save changes to “middle.pdf” before closing?");
+    h.get_by_label("Don't save").click();
+    h.step();
+
+    // Once all dirty documents are resolved, quit completes: allow_quit is true, no prompts remain
+    assert!(h.state().close_request.is_none());
+    assert!(h.state().allow_quit);
+
+    // Root viewport (and detached viewports) receive Close command
+    let close_sent = h.output().viewport_output.values().flat_map(|v| v.commands.iter()).any(|c| matches!(c, egui::ViewportCommand::Close));
+    assert!(close_sent, "Close command must be sent when application shutdown completes");
+}
+
+#[test]
+fn root_window_close_when_all_tabs_clean_quits_immediately_without_prompt() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    // Detach middle.pdf; all tabs remain clean
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(3);
+
+    // Trigger application exit via root window close
+    h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+    h.step();
+
+    // No CancelClose sent
+    let cancel_close_sent =
+        h.output().viewport_output.values().flat_map(|v| v.commands.iter()).any(|c| matches!(c, egui::ViewportCommand::CancelClose));
+    assert!(!cancel_close_sent, "Clean exit must not cancel window close");
+
+    // No save prompt modal is shown
+    assert!(h.query_by_label_contains("Save changes to").is_none());
+    assert!(h.state().close_request.is_none());
+    assert!(h.state().allow_quit);
+}
+
+#[test]
+fn root_window_request_quit_shortcut_prompts_and_saving_detached_tab_quits() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-ui-test-quit-save-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let save_path = dir.join("middle_saved_quit.pdf");
+
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    h.state_mut().save_override = Some(save_path.to_string_lossy().into_owned());
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(3);
+    h.state_mut().session.apply(ids[1], pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+
+    // Trigger quit via Command+Q shortcut event
+    h.event(egui::Event::Key { key: egui::Key::Q, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND });
+    h.step();
+
+    assert_eq!(h.state().close_request, Some(pdfcraft_ui_egui::CloseRequest::Quit));
+    assert!(!h.state().allow_quit);
+
+    h.run_steps(2);
+    h.get_by_label_contains("Save changes to “middle.pdf” before closing?");
+    h.get_by_label("Save").click();
+    h.run_steps(5);
+
+    // Saved to disk and quit completed
+    assert!(save_path.exists());
+    assert!(h.state().close_request.is_none());
+    assert!(h.state().allow_quit);
+}
+
+#[test]
+fn clean_detached_and_docked_tabs_request_quit_returns_true_and_allows_quit() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(3);
+
+    // Direct call to request_quit on clean state
+    let ctx = egui::Context::default();
+    let quit_allowed = h.state_mut().request_quit(&ctx);
+    assert!(quit_allowed, "request_quit must return true when all tabs are clean");
+    assert!(h.state().allow_quit, "allow_quit must be true");
+    assert!(h.state().close_request.is_none());
+}
+
+#[test]
+fn reopening_detached_file_reattaches_tab_and_commit_typing_preserves_active_invariants() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-ui-test-reattach-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let p1 = dir.join("first.pdf").to_string_lossy().into_owned();
+    let p2 = dir.join("middle.pdf").to_string_lossy().into_owned();
+    let p3 = dir.join("last.pdf").to_string_lossy().into_owned();
+
+    let p1_c = p1.clone();
+    let p2_c = p2.clone();
+    let p3_c = p3.clone();
+    let mut h = harness(move |app| {
+        app.open_bytes("first.pdf", Some(p1_c), FIXTURE.to_vec()).unwrap();
+        app.open_bytes("middle.pdf", Some(p2_c), FIXTURE.to_vec()).unwrap();
+        app.open_bytes("last.pdf", Some(p3_c), FIXTURE.to_vec()).unwrap();
+    });
+
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    // Detach middle.pdf (index 1)
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(3);
+    assert!(h.state().views[1].detached, "middle.pdf should be detached");
+    let active_before = h.state().active;
+    assert_ne!(active_before, Some(1), "active tab must not be detached tab");
+
+    // 1. commit_typing_in preserves active tab invariants when tab is detached
+    h.state_mut().views[1].pending_edit = Some(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+    let committed = h.state_mut().commit_typing_in(ids[1]);
+    assert!(committed, "commit_typing_in should succeed");
+    assert_eq!(h.state().active, active_before, "commit_typing_in must not make detached tab active");
+    assert!(h.state().views[1].detached, "middle.pdf must remain detached");
+
+    // 2. Reopening via open_recent re-attaches middle.pdf and makes it active
+    h.state_mut().open_recent(&p2);
+    h.run_steps(3);
+    assert!(!h.state().views[1].detached, "open_recent must re-attach detached tab");
+    assert_eq!(h.state().active, Some(1), "open_recent must make re-attached tab active");
+
+    // Detach middle.pdf again
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(3);
+    assert!(h.state().views[1].detached);
+    assert_ne!(h.state().active, Some(1));
+
+    // 3. Reopening via open_path re-attaches middle.pdf and makes it active
+    let outcome = h.state_mut().open_path(&p2);
+    h.run_steps(3);
+    assert_eq!(outcome, pdfcraft_ui_egui::OpenOutcome::Focused);
+    assert!(!h.state().views[1].detached, "open_path must re-attach detached tab");
+    assert_eq!(h.state().active, Some(1), "open_path must make re-attached tab active");
+}
+
 /// The Edit tab turns on Edit text & images at once, as Acrobat does, so every paragraph and image
 /// is boxed and editable with one click; another tab puts the tool down again.
 #[test]

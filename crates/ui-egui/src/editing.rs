@@ -666,7 +666,7 @@ impl PdfCraftApp {
     /// [`Self::commit_form_typing`] for document `id`, which may not be the active tab (a save
     /// panel answering later, Close All). If its tab has typing or a queued edit, the tab is
     /// brought forward first, so the commit and any field scripts act on that document.
-    pub(crate) fn commit_typing_in(&mut self, id: pdfcraft_engine::DocId) -> bool {
+    pub fn commit_typing_in(&mut self, id: pdfcraft_engine::DocId) -> bool {
         let Some(i) = self.views.iter().position(|v| v.id == id) else { return true };
         // Added text the standard fonts can't draw can't be saved: show it rather than drop it.
         // Its page is brought into view, so the text, the warning and Discard are on screen.
@@ -679,7 +679,9 @@ impl PdfCraftApp {
             Some(c)
         });
         if let Some(c) = blocked {
-            self.active = Some(i);
+            if !self.views.get(i).is_some_and(|v| v.detached) {
+                self.active = Some(i);
+            }
             self.notify(crate::content_ui::undrawable_message(c));
             return false;
         }
@@ -694,7 +696,9 @@ impl PdfCraftApp {
             if !typing {
                 return true;
             }
-            self.active = Some(i);
+            if !self.views.get(i).is_some_and(|v| v.detached) {
+                self.active = Some(i);
+            }
         }
         self.commit_form_typing() && self.commit_open_fill_text(id) && self.commit_open_text_edits(id)
     }

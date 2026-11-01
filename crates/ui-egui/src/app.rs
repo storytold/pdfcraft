@@ -317,6 +317,54 @@ impl PdfCraftApp {
         self.active.and_then(|i| self.views.get(i).map(|v| (i, v.id)))
     }
 
+    /// Returns the index of the nearest docked (non-detached) view to `target`.
+    /// Searches at or after `target` first, then before `target`.
+    pub(crate) fn nearest_docked_tab(&self, target: usize) -> Option<usize> {
+        if let Some(idx) = (target..self.views.len()).find(|&i| self.views.get(i).is_some_and(|v| !v.detached)) {
+            return Some(idx);
+        }
+        let limit = target.min(self.views.len());
+        (0..limit).rfind(|&i| self.views.get(i).is_some_and(|v| !v.detached))
+    }
+
+    /// Detaches a document tab into its own window (view.multiple-windows).
+    pub fn detach_tab(&mut self, id: DocId) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = id;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.views.len() <= 1 {
+                return;
+            }
+            if let Some(i) = self.views.iter().position(|v| v.id == id) {
+                self.views[i].detached = true;
+                if self.active == Some(i) || self.active.is_some_and(|a| self.views.get(a).is_some_and(|v| v.detached)) {
+                    self.active = self.nearest_docked_tab(i);
+                }
+            }
+        }
+    }
+
+    /// Re-attaches a detached document tab back to the main window's tab strip.
+    pub fn attach_tab(&mut self, id: DocId) {
+        if let Some(i) = self.views.iter().position(|v| v.id == id) {
+            self.views[i].detached = false;
+            self.active = Some(i);
+        }
+    }
+
+    /// Returns the list of document IDs that are currently detached in separate window viewports.
+    pub fn detached_viewports(&self) -> Vec<DocId> {
+        self.views.iter().filter(|v| v.detached).map(|v| v.id).collect()
+    }
+
+    /// Returns whether the specified document tab is currently detached.
+    pub fn is_tab_detached(&self, id: DocId) -> bool {
+        self.views.iter().find(|v| v.id == id).is_some_and(|v| v.detached)
+    }
+
     /// A dialog or prompt is open over the window: the keyboard is its own, and nothing may act
     /// on the document underneath it.
     pub(crate) fn modal_open(&self) -> bool {
@@ -604,6 +652,7 @@ impl eframe::App for PdfCraftApp {
             // Notices too: a refused field value or a failed save must be seen in full screen.
             self.show_progress(&ctx);
             widgets::toast(self, &ctx);
+            self.show_detached_windows(&ctx);
             self.finish_render_frame(&ctx);
             if let Some(mut control) = self.control.take() {
                 control.finish_frame(&ctx, self);
@@ -642,6 +691,7 @@ impl eframe::App for PdfCraftApp {
         dialogs::show(self, &ctx);
         self.show_progress(&ctx);
         widgets::toast(self, &ctx);
+        self.show_detached_windows(&ctx);
         self.finish_render_frame(&ctx);
         // Screenshots are issued only after a settled pass that really drew the window.
         if let Some(mut control) = self.control.take() {
@@ -649,4 +699,97 @@ impl eframe::App for PdfCraftApp {
             self.control = Some(control);
         }
     }
+}
+
+impl PdfCraftApp {
+    /// Shows any detached document windows in their own viewports (view.multiple-windows).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn show_detached_windows(&mut self, ctx: &egui::Context) {
+        let detached_ids: Vec<pdfcraft_engine::DocId> = self.views.iter().filter(|v| v.detached).map(|v| v.id).collect();
+        if detached_ids.is_empty() {
+            return;
+        }
+        for doc_id in detached_ids {
+            let Some(idx) = self.views.iter().position(|v| v.id == doc_id) else { continue };
+            let is_dirty = self.session.get(doc_id).is_some_and(|d| d.dirty);
+            let display_name = self.session.get(doc_id).map(|d| d.display_name()).unwrap_or_default();
+            let title = crate::canvas::tab_label(self, idx).unwrap_or(display_name);
+            let viewport_id = egui::ViewportId::from_hash_of(("detached-doc", doc_id));
+            let builder = egui::ViewportBuilder::default()
+                .with_title(format!("{title} — PdfCraft"))
+                .with_inner_size([900.0, 700.0])
+                .with_min_inner_size([400.0, 300.0]);
+
+            let mut reattach = false;
+            let mut close_clean = false;
+
+            ctx.show_viewport_immediate(viewport_id, builder, |child_ui, _class| {
+                let close_requested =
+                    child_ui.input(|i| i.viewport().close_requested() || i.raw.viewports.get(&viewport_id).is_some_and(|v| v.close_requested()));
+                if close_requested && !self.allow_quit {
+                    if self.has_unsaved_work(idx) {
+                        child_ui.ctx().send_viewport_cmd_to(viewport_id, egui::ViewportCommand::CancelClose);
+                        child_ui.ctx().send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                        if self.close_request.is_none() {
+                            self.close_request = Some(crate::CloseRequest::Tab(doc_id));
+                        }
+                    } else {
+                        close_clean = true;
+                        return;
+                    }
+                }
+                let t = theme::Tokens::get(child_ui.ctx());
+                egui::Panel::top("detached_header").frame(egui::Frame::NONE.fill(t.panel).inner_margin(egui::Margin::symmetric(8, 4))).show(
+                    child_ui,
+                    |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(&title).font(theme::semibold(13.0)));
+                            if is_dirty {
+                                ui.label(egui::RichText::new("(edited)").font(theme::regular(11.0)).color(t.text_muted));
+                            }
+                            if let (Some(view), Some(doc)) = (self.views.get(idx), self.session.get(doc_id)) {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "Page {} of {} • {:.0}%",
+                                        view.current.saturating_add(1),
+                                        doc.info.pages.len(),
+                                        view.zoom * 100.0,
+                                    ))
+                                    .font(theme::regular(11.0))
+                                    .color(t.text_muted),
+                                );
+                            }
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.button(tl!("Re-attach Tab")).clicked() {
+                                    reattach = true;
+                                }
+                            });
+                        });
+                    },
+                );
+
+                egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.pasteboard)).show(child_ui, |ui| {
+                    crate::canvas::document_area(self, idx, ui);
+                });
+
+                if self.close_request == Some(crate::CloseRequest::Tab(doc_id)) {
+                    if let Some(choice) = crate::dialogs::save_prompt_key(child_ui.ctx(), &mut self.save_prompt_button) {
+                        self.resolve_close(child_ui.ctx(), choice);
+                    }
+                    if self.close_request == Some(crate::CloseRequest::Tab(doc_id)) {
+                        crate::dialogs::show_save_prompt_modal(self, child_ui.ctx(), idx);
+                    }
+                }
+            });
+
+            if reattach {
+                self.attach_tab(doc_id);
+            } else if close_clean {
+                self.close_tab(idx);
+            }
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn show_detached_windows(&mut self, _ctx: &egui::Context) {}
 }

@@ -29,7 +29,7 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | Quick-action toolbar, customisable | yes | fixed | partial (`view.customize-quick-tools` planned) |
 | Command search | "Search tools" | command palette (⌘K), matches translated and English labels | shipped |
 | Document tabs | yes | yes, with unsaved marker | shipped |
-| Multiple windows, drag a tab out | yes | no | planned |
+| Multiple windows, drag a tab out | yes | yes; drag tab to open space or context menu (#5348) | shipped |
 | Split window, spreadsheet split | yes | no | planned |
 | Read mode, full screen | yes | yes; full screen is one fitted page at a time on black, click/keys turn pages (#1459) | shipped; auto-advance, loop and transitions planned |
 | Light, dark, system theme | yes | yes | shipped |

@@ -43,6 +43,9 @@
 //! - `ui.open {path}`: open a file. A file whose tab is already open focuses it
 //!   (`"focused": true`) instead of adding a tab; native opens report `pending: true` until
 //!   they complete and are listed in `ui.state.pending_opens`; only a failed open replies `Err`.
+//! - `ui.detach {doc? | tab?}`: detach a document tab into an independent window viewport
+//!   by `doc` (DocId) or `tab` (index). Fails if the document is the only open tab or on WASM.
+//! - `ui.attach {doc? | tab?}`: re-attach a detached tab back to the primary window's tab strip.
 //! - `ui.screenshot {region?}`: PNG of the window (base64), optionally cropped to a rect.
 
 use std::collections::{HashMap, VecDeque};
@@ -60,6 +63,7 @@ mod screenshot;
 #[cfg(not(target_arch = "wasm32"))]
 mod transport;
 
+pub use host::PdfCraftControl;
 pub use plugin::ControlPlugin;
 use plugin::expire_input;
 use requests::Handled;
@@ -238,6 +242,21 @@ pub(crate) trait Host {
     fn open(&mut self, path: &str) -> Reply;
     /// Request application exit; returns whether it closed without asking for confirmation.
     fn quit(&mut self, ctx: &egui::Context) -> bool;
+    /// Detach a tab into a separate window viewport.
+    fn detach(&mut self, id: pdfcraft_engine::DocId) -> Reply {
+        let _ = id;
+        Err("detach is not supported on this host".into())
+    }
+    /// Re-attach a detached tab back to the primary window tab strip.
+    fn attach(&mut self, id: pdfcraft_engine::DocId) -> Reply {
+        let _ = id;
+        Err("attach is not supported on this host".into())
+    }
+    /// Resolve a tab index to a document ID.
+    fn doc_id_from_tab(&self, tab: usize) -> Option<pdfcraft_engine::DocId> {
+        let _ = tab;
+        None
+    }
 
     /// A generation that changes when the input target (document, dialog, focus) does.
     ///

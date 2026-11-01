@@ -96,19 +96,36 @@ impl PdfCraftApp {
         self.finish_document_copy(ctx);
         // The Combine grid's thumbnails, whichever tab shows (renders under way still finish).
         self.combine_thumbs_frame(ctx);
-        // Retire hidden documents before admitting the visible document's textures, so the
-        // three cache limits apply to the application, regardless of how many tabs are open.
+        // Retire hidden documents before admitting the visible documents' textures, so the
+        // cache limits apply to the application, regardless of how many tabs are open.
         // Side by side: the comparison's old file renders alongside the active one.
+        // Multiple windows: detached tabs are drawn in their own viewports and treated as visible.
         let partner = self.active.and_then(|i| compare_ui::side_by_side(self, i)).map(|(old, _)| old);
+        let detached: Vec<usize> = self.views.iter().enumerate().filter_map(|(i, v)| if v.detached { Some(i) } else { None }).collect();
+
         for (i, view) in self.views.iter_mut().enumerate() {
-            if Some(i) != self.active
-                && Some(i) != partner
-                && let Some(doc) = self.session.get(view.id)
-            {
+            let is_visible = Some(i) == self.active || Some(i) == partner || detached.contains(&i);
+            if !is_visible && let Some(doc) = self.session.get(view.id) {
                 view.suspend_rendering(&doc.renderer);
             }
         }
-        for i in self.active.into_iter().chain(partner) {
+
+        let mut visible_indices = Vec::with_capacity(2 + detached.len());
+        if let Some(i) = self.active {
+            visible_indices.push(i);
+        }
+        if let Some(p) = partner
+            && !visible_indices.contains(&p)
+        {
+            visible_indices.push(p);
+        }
+        for d in detached {
+            if !visible_indices.contains(&d) {
+                visible_indices.push(d);
+            }
+        }
+
+        for i in visible_indices {
             if let Some(view) = self.views.get_mut(i)
                 && let Some(doc) = self.session.get(view.id)
             {

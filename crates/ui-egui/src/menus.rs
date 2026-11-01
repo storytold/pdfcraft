@@ -451,6 +451,7 @@ impl PdfCraftApp {
     /// The open documents, in tab order, for the Window menu.
     fn menu_documents(&self) -> Vec<Document> {
         (0..self.views.len())
+            .filter(|&index| self.views.get(index).is_some_and(|v| !v.detached))
             .filter_map(|index| {
                 let name = crate::canvas::tab_label(self, index)?;
                 Some(Document::new(CommandRef::with_params(DOCUMENT, serde_json::json!({ "index": index })), name).active(self.active == Some(index)))
@@ -534,7 +535,9 @@ impl PdfCraftApp {
                 }
             }
             DOCUMENT => {
-                if let Some(i) = index.filter(|&i| i < self.views.len()) {
+                if let Some(i) = index
+                    && self.views.get(i).is_some_and(|v| !v.detached)
+                {
                     self.active = Some(i);
                 }
             }

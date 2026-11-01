@@ -775,12 +775,20 @@ impl PdfCraftApp {
     }
 
     /// Shows the next tab (or the previous one) in the strip's order, wrapping around at either
-    /// end (#1542). The Combine files tab, when open, comes after the documents. From Home the
-    /// next tab is the first and the previous one the last.
+    /// end (#1542). The Combine files tab, when open, comes after the documents. Detached tabs
+    /// are skipped. From Home the next tab is the first and the previous one the last.
     fn step_tab(&mut self, forward: bool) {
-        let count = self.views.len() + usize::from(self.combine_tab.open);
-        let current = if self.combine_showing() { Some(self.views.len()) } else { self.active };
-        let Some(next) = tab_after(current, count, forward) else { return };
+        let mut cycle: Vec<usize> = self.views.iter().enumerate().filter_map(|(i, v)| if !v.detached { Some(i) } else { None }).collect();
+        if self.combine_tab.open {
+            cycle.push(self.views.len());
+        }
+        if cycle.is_empty() {
+            return;
+        }
+        let current_target = if self.combine_showing() { Some(self.views.len()) } else { self.active };
+        let current_pos = current_target.and_then(|t| cycle.iter().position(|&x| x == t));
+        let Some(next_pos) = tab_after(current_pos, cycle.len(), forward) else { return };
+        let Some(next) = cycle.get(next_pos).copied() else { return };
         if next < self.views.len() {
             self.active = Some(next);
         } else {

@@ -7,19 +7,25 @@ impl PdfCraftApp {
         // "Save changes?" is modal: its keys are its own (⌘D is Don't save there, not Document
         // properties; Escape cancels it rather than clearing a selection), and nothing may run
         // underneath it. They are read here, before the canvas can consume them.
-        if self.close_request.is_some() {
-            // These dialogs are drawn after the save prompt and own the keyboard while open.
-            // Don't let Escape or Return resolve unsaved work underneath one.
-            let covered = self.pending_link.is_some()
-                || self.pending_remote_link.is_some()
-                || self.pending_full_screen.is_some()
-                || self.updates.open
-                || self.dialog.is_some()
-                || self.unlock_prompt.is_some();
-            if !covered && let Some(choice) = dialogs::save_prompt_key(ctx, &mut self.save_prompt_button) {
-                self.resolve_close(ctx, choice);
+        if let Some(req) = self.close_request {
+            let is_detached_tab = match req {
+                CloseRequest::Tab(id) => self.views.iter().find(|v| v.id == id).is_some_and(|v| v.detached),
+                CloseRequest::Quit | CloseRequest::All => false,
+            };
+            if !is_detached_tab {
+                // These dialogs are drawn after the save prompt and own the keyboard while open.
+                // Don't let Escape or Return resolve unsaved work underneath one.
+                let covered = self.pending_link.is_some()
+                    || self.pending_remote_link.is_some()
+                    || self.pending_full_screen.is_some()
+                    || self.updates.open
+                    || self.dialog.is_some()
+                    || self.unlock_prompt.is_some();
+                if !covered && let Some(choice) = dialogs::save_prompt_key(ctx, &mut self.save_prompt_button) {
+                    self.resolve_close(ctx, choice);
+                }
+                return;
             }
-            return;
         }
         // The other dialogs and prompts are modal too (⌘W closed the file behind Preferences,
         // #870).

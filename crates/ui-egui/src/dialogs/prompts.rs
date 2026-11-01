@@ -75,11 +75,30 @@ pub(crate) fn save_prompt_key(ctx: &egui::Context, chosen: &mut PromptButton) ->
 pub(super) fn save_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let Some(req) = app.close_request else { return };
     let index = match req {
-        CloseRequest::Tab(id) => app.views.iter().position(|v| v.id == id),
+        CloseRequest::Tab(id) => {
+            let Some(idx) = app.views.iter().position(|v| v.id == id) else {
+                app.resolve_close(ctx, Some(false));
+                return;
+            };
+            // Detached windows render their own save prompt inside their child viewport pass.
+            if app.views.get(idx).is_some_and(|v| v.detached) {
+                return;
+            }
+            Some(idx)
+        }
         CloseRequest::Quit | CloseRequest::All => app.first_dirty(),
     };
-    let Some(name) = index.and_then(|i| app.views.get(i)).and_then(|v| app.session.get(v.id)).map(|d| d.name.clone()) else {
+    let Some(idx) = index else {
         // Nothing left to ask about (tab already gone or no dirty documents).
+        app.resolve_close(ctx, Some(false));
+        return;
+    };
+    show_save_prompt_modal(app, ctx, idx);
+}
+
+/// Render the "Save changes?" modal dialog card for document at `index`.
+pub(crate) fn show_save_prompt_modal(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize) {
+    let Some(name) = app.views.get(index).and_then(|v| app.session.get(v.id)).map(|d| d.name.clone()) else {
         app.resolve_close(ctx, Some(false));
         return;
     };

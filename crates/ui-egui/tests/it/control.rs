@@ -2089,3 +2089,105 @@ fn routine_continuous_scrolling_does_not_add_navigation_history() {
     assert!(h.state().views[0].back.is_empty());
     assert!(h.state().views[0].forward.is_empty());
 }
+
+#[test]
+fn headless_control_channel_tab_detach_and_reattach() {
+    let (mut h, c) = harness();
+
+    // Open two more documents.
+    h.state_mut().open_bytes("second.pdf", None, fixture(3)).unwrap();
+    settle(&mut h);
+    h.state_mut().open_bytes("third.pdf", None, fixture(2)).unwrap();
+    settle(&mut h);
+
+    let second_doc_id = h.state().views[1].id;
+
+    // Initially all 3 documents are attached.
+    let initial_state = ok(&mut h, &c, "ui.state", json!({}));
+    assert_eq!(initial_state["documents"].as_array().unwrap().len(), 3);
+    assert_eq!(initial_state["documents"][0]["detached"], false);
+    assert_eq!(initial_state["documents"][1]["detached"], false);
+    assert_eq!(initial_state["documents"][2]["detached"], false);
+    assert_eq!(initial_state["detached_viewports"], json!([]));
+
+    // Detach second tab by index via ui.detach.
+    let res = ok(&mut h, &c, "ui.detach", json!({"tab": 1}));
+    assert_eq!(res["detached"], second_doc_id.0);
+    settle(&mut h);
+
+    // Verify state updates: second tab is detached, detached_viewports reflects it.
+    let state_after_detach = ok(&mut h, &c, "ui.state", json!({}));
+    assert_eq!(state_after_detach["documents"][1]["detached"], true);
+    assert_eq!(state_after_detach["documents"][0]["detached"], false);
+    assert_eq!(state_after_detach["documents"][2]["detached"], false);
+    assert_eq!(state_after_detach["detached_viewports"], json!([second_doc_id.0]));
+
+    // Inspect tabs: only docked tabs (doc.pdf, third.pdf) appear in main tab strip.
+    let tabs = ok(&mut h, &c, "ui.inspect", json!({"role": "tab"}));
+    let tab_labels: Vec<String> =
+        tabs["widgets"].as_array().unwrap().iter().filter_map(|w| w.get("label").and_then(|l| l.as_str()).map(str::to_string)).collect();
+    assert!(tab_labels.contains(&"doc.pdf".to_string()), "{tab_labels:?}");
+    assert!(tab_labels.contains(&"third.pdf".to_string()), "{tab_labels:?}");
+    assert!(!tab_labels.contains(&"second.pdf".to_string()), "{tab_labels:?}");
+
+    // Re-attach second tab by doc id via ui.attach.
+    let res = ok(&mut h, &c, "ui.attach", json!({"doc": second_doc_id.0}));
+    assert_eq!(res["attached"], second_doc_id.0);
+    settle(&mut h);
+
+    // Verify state updates: all tabs attached, active tab is now second_doc.
+    let state_after_attach = ok(&mut h, &c, "ui.state", json!({}));
+    assert_eq!(state_after_attach["documents"][1]["detached"], false);
+    assert_eq!(state_after_attach["detached_viewports"], json!([]));
+    assert_eq!(state_after_attach["active"]["doc"], second_doc_id.0);
+}
+
+#[test]
+fn headless_control_channel_tab_detach_errors_and_trait() {
+    use pdfcraft_ui_egui::PdfCraftControl;
+
+    let (mut h, c) = harness();
+    let first_doc_id = h.state().views[0].id;
+
+    // 1. With only one document open, detaching must fail with a clear error.
+    let err = call(&mut h, &c, "ui.detach", json!({"tab": 0})).unwrap_err();
+    assert!(err.contains("cannot detach the only open document"), "{err}");
+
+    // 2. Open two more documents.
+    h.state_mut().open_bytes("second.pdf", None, fixture(3)).unwrap();
+    settle(&mut h);
+    h.state_mut().open_bytes("third.pdf", None, fixture(2)).unwrap();
+    settle(&mut h);
+
+    let third_doc_id = h.state().views[2].id;
+
+    // 3. Test ui.command routing with ui.detach and ui.attach.
+    ok(&mut h, &c, "ui.command", json!({"id": "ui.detach", "params": {"tab": 2}}));
+    settle(&mut h);
+    assert_eq!(PdfCraftControl::detached_viewports(h.state()), vec![third_doc_id]);
+
+    ok(&mut h, &c, "ui.command", json!({"id": "ui.attach", "params": {"tab": 2}}));
+    settle(&mut h);
+    assert_eq!(PdfCraftControl::detached_viewports(h.state()), Vec::<pdfcraft_engine::DocId>::new());
+
+    // 4. Test direct PdfCraftControl trait methods.
+    PdfCraftControl::detach_tab(&mut *h.state_mut(), first_doc_id);
+    settle(&mut h);
+    assert_eq!(PdfCraftControl::detached_viewports(h.state()), vec![first_doc_id]);
+    assert!(PdfCraftControl::is_tab_detached(h.state(), first_doc_id));
+
+    PdfCraftControl::attach_tab(&mut *h.state_mut(), first_doc_id);
+    settle(&mut h);
+    assert_eq!(PdfCraftControl::detached_viewports(h.state()), Vec::<pdfcraft_engine::DocId>::new());
+    assert!(!PdfCraftControl::is_tab_detached(h.state(), first_doc_id));
+
+    // 5. Error handling.
+    let err = call(&mut h, &c, "ui.detach", json!({"doc": 999999})).unwrap_err();
+    assert!(err.contains("not found"), "{err}");
+
+    let err = call(&mut h, &c, "ui.detach", json!({"tab": 50})).unwrap_err();
+    assert!(err.contains("out of range"), "{err}");
+
+    let err = call(&mut h, &c, "ui.detach", json!({})).unwrap_err();
+    assert!(err.contains("pass doc id"), "{err}");
+}

@@ -5,6 +5,8 @@ pub(crate) enum Action {
     Close(DocId),
     Reopen,
     Reveal(DocId),
+    #[cfg(not(target_arch = "wasm32"))]
+    Detach(DocId),
 }
 
 impl crate::PdfCraftApp {
@@ -42,6 +44,10 @@ impl crate::PdfCraftApp {
                 }
                 #[cfg(target_arch = "wasm32")]
                 let _ = id;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Action::Detach(id) => {
+                self.detach_tab(id);
             }
         }
     }

@@ -1442,6 +1442,35 @@ fn many_open_documents_share_one_raster_allowance_and_close_releases_handles() {
 }
 
 #[test]
+fn all_detached_views_retain_render_demand_without_count_limit() {
+    let ctx = egui::Context::default();
+    let mut app = PdfCraftApp::new();
+    let bytes = app.session.create_blank(612.0, 792.0, 1).unwrap();
+    for index in 0..10 {
+        app.open_bytes(&format!("synthetic-{index}.pdf"), None, bytes.as_ref().clone()).unwrap();
+        let info = app.session.get(app.views.last().unwrap().id).unwrap().info.clone();
+        let view = app.views.last_mut().unwrap();
+        view.detached = true;
+        view.begin_render_frame();
+        view.need_thumbnail(0, true);
+        let request = view.thumbnail_requests(&info, ctx.pixels_per_point()).into_iter().next().unwrap();
+        let page = info.pages.get(request.page).unwrap();
+        let dimensions = (device_pixels(page.width, request.scale), device_pixels(page.height, request.scale));
+        view.last_queue = vec![request];
+        view.receive_result(&ctx, solid_result(request, dimensions.0, dimensions.1));
+    }
+    assert_eq!(app.views.len(), 10);
+    app.active = None;
+
+    app.finish_render_frame(&ctx);
+
+    for (i, view) in app.views.iter().enumerate() {
+        assert!(view.detached, "view {i} is detached");
+        assert_eq!(view.thumbs.len(), 1, "detached view {i} must retain its thumbnail");
+    }
+}
+
+#[test]
 fn suspended_signature_preview_releases_layers_and_rebuilds_without_editing() {
     let ctx = egui::Context::default();
     let mut png = std::io::Cursor::new(Vec::new());
