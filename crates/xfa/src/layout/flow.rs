@@ -232,6 +232,11 @@ impl Layouter<'_> {
                     && let Some(s) = &mut self.splitting
                 {
                     s.pieces.push((page, at, Rect::new(f.x + dx, from - shift, f.w, to - from)));
+                    // The flowed subforms round it hold this piece here, even if it draws nothing.
+                    let here: Vec<bool> = self.frames.iter().map(|fr| self.on_area(&fr.part)).collect();
+                    for (fr, here) in self.frames.iter_mut().zip(here) {
+                        fr.held |= here;
+                    }
                 }
             }
             if let Some(p) = self.pages.last_mut() {
@@ -309,7 +314,7 @@ impl Layouter<'_> {
             // Its border and fill go round what it takes from here, a part on each content area.
             let framed = match self.flow_mark() {
                 Some(part) => {
-                    self.frames.push(Frame { x, w, margin: m, border: sf.common.border.clone(), part, parts: Vec::new(), lost: false });
+                    self.frames.push(Frame { x, w, margin: m, border: sf.common.border.clone(), part, parts: Vec::new(), lost: false, held: false });
                     true
                 }
                 None => false,

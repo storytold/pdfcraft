@@ -116,6 +116,10 @@ struct Frame {
     /// the area's bottom (a table row taller than an area, an overflow leader and the row after it
     /// that don't fit together). The border is left out ([`Layouter::finish_frame`]).
     lost: bool,
+    /// A piece of a field being split sits in the part on this content area, whether or not it
+    /// drew anything there (a widget with no border or fill draws nothing below the break): the
+    /// part counts as holding something, as one that got items does.
+    held: bool,
 }
 
 struct Cursor {

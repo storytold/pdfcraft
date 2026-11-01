@@ -5025,3 +5025,39 @@ fn a_widget_border_split_over_three_pages_is_closed_round_every_piece() {
     assert!(near_all(&middle, &[36.25, 755.75]), "the middle piece, closed at the bottom of the page: {middle:?}");
     assert!(near_all(&last, &[36.25, 107.75]), "the last piece, closed at its top: {last:?}");
 }
+
+/// #5525 review: a bordered section round an empty field split over three pages keeps its
+/// border on every page, even when what is left of the field draws nothing there (no widget
+/// border or fill): the middle page and the last still hold a part of the section. With or
+/// without the field's own border, the section is closed on page one under its bottom margin,
+/// runs the whole content area on page two, and closes under the field's last 144 points on
+/// page three.
+#[test]
+fn a_bordered_section_round_a_field_split_over_three_pages_is_closed_on_every_page() {
+    for field_border in ["", "<border><edge/></border>"] {
+        let body = format!(
+            r#"<subform name="sec" layout="tb" w="7.5in">
+ <margin topInset="0.25in" bottomInset="0.25in"/>
+ <border><edge/></border>
+ <draw name="filler" w="7.5in" h="8in"><value><text>above</text></value></draw>
+ <field name="notes" w="7in" minH="13in">{field_border}
+  <ui><textEdit multiLine="1"><border><edge presence="hidden"/></border></textEdit></ui>
+ </field>
+</subform>"#
+        );
+        let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+        assert_eq!(form.pages.len(), 3, "{field_border:?}");
+        let sec: Vec<Vec<f64>> = form.pages.iter().map(|p| level_lines(p, 540.0)).collect();
+        // The field starts at 36 + 18 + 576 = 630 and is 936 tall: 108 on page one (down to
+        // 738), 684 on page two (54 to 738), and the last 144 on page three (54 to 198).
+        assert!(near_all(&sec[0], &[36.0, 756.0]), "{field_border:?}: page one: {sec:?}");
+        assert!(near_all(&sec[1], &[36.0, 756.0]), "{field_border:?}: page two, a whole content area: {sec:?}");
+        assert!(near_all(&sec[2], &[36.0, 216.0]), "{field_border:?}: page three, under the field's last piece: {sec:?}");
+        if !field_border.is_empty() {
+            let field: Vec<Vec<f64>> = form.pages.iter().map(|p| level_lines(p, 504.0)).collect();
+            assert!(near_all(&field[0], &[630.0, 738.0]), "{field:?}");
+            assert!(near_all(&field[1], &[54.0, 738.0]), "{field:?}");
+            assert!(near_all(&field[2], &[54.0, 198.0]), "{field:?}");
+        }
+    }
+}
