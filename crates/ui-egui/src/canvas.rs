@@ -3508,9 +3508,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     view.auto_scroll.paint(ui, avail);
     if unobstructed && matches!(tool, QuickTool::Select | QuickTool::ColumnSelect) {
         copy_selected |= selection_actions(ui, avail, view, info, prefs, allowed && !comments_hidden, can_copy);
-        if let Some(page) = no_text_bar(ui, avail, view, can_modify, keys) {
-            image_action = Some(crate::edit_text_ui::ImageAction::Recognize(page));
-        }
+        // A combinator rather than an `if let`: this function is at clippy's cognitive-complexity limit.
+        image_action = no_text_bar(ui, avail, view, can_modify, keys).map(crate::edit_text_ui::ImageAction::Recognize).or(image_action);
     } else {
         view.no_text = None;
     }
