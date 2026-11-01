@@ -194,6 +194,11 @@ impl PdfCraftApp {
             ocr_run: None,
             ocr_batch: None,
             run_inline: false,
+            panicking_frames: 0,
+            frame_panicked: false,
+            logic_without_ui: false,
+            #[cfg(test)]
+            panic_next: None,
             custom_actions: Vec::new(),
             wizard: Default::default(),
             action_run: None,
@@ -436,7 +441,28 @@ impl eframe::App for PdfCraftApp {
 
     /// Each frame's work before drawing: opens, operating-system and control-channel requests,
     /// the quit guard, shortcuts, and the background jobs' results.
+    ///
+    /// Last-resort guard (AGENTS.md §4, #3914): a panic in a frame is reported and the app, with
+    /// every open tab, keeps running; see `frame_guard`.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.begin_logic();
+        self.guarded_frame(|app| app.logic_unguarded(ctx));
+        if self.frame_panicked {
+            self.close_after_panic(ctx);
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.begin_ui();
+        self.guarded_frame(|app| app.ui_unguarded(ui));
+        self.end_ui();
+    }
+}
+
+impl PdfCraftApp {
+    fn logic_unguarded(&mut self, ctx: &egui::Context) {
+        #[cfg(test)]
+        self.injected_panic(crate::frame_guard::FramePart::Logic);
         self.ctx = Some(ctx.clone());
         #[cfg(not(target_arch = "wasm32"))]
         self.window_state.repair(ctx);
@@ -615,7 +641,9 @@ impl eframe::App for PdfCraftApp {
         self.sync_titles(ctx);
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui_unguarded(&mut self, ui: &mut egui::Ui) {
+        #[cfg(test)]
+        self.injected_panic(crate::frame_guard::FramePart::Ui);
         let ctx = ui.ctx().clone();
         i18n::set_current(i18n::Lang::from_pref(&self.language));
         // A language change switches stock chrome between LTR and RTL before anything is drawn.
