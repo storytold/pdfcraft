@@ -9668,10 +9668,9 @@ fn delete_key_removes_selected_items_in_edit_pdf() {
 
         // Focus a toolbar button: egui_wants_keyboard_input() becomes true, but text_edit_focused()
         // remains false, so Delete still removes the selected item (#4915).
-        if let Some(undo_btn) = h.query_by_label("Undo") {
-            undo_btn.focus();
-            h.run_steps(1);
-        }
+        let btn = h.get_by_label("Edit text & images");
+        btn.focus();
+        h.run_steps(1);
 
         press(&mut h, Modifiers::NONE, key);
         assert!(blocks(&h).is_empty(), "{key:?} deletes the selected item");
