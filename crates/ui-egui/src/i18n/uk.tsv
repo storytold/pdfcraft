@@ -2639,3 +2639,10 @@ animation effects	Off	Вимкнено
 	No image on clipboard to paste	У буфері обміну немає зображення для вставлення
 	Pinned {tool} to Home	{tool} закріплено на головній
 	Unpinned {tool} from Home	{tool} відкріплено від головної
+# Fill & Sign text: the border around it (M5).
+	Border:	Рамка:
+
+# A text border's own colour (M5).
+	Border colour	Колір рамки
+	Same as text	Як у тексту
+	Border shape	Форма рамки

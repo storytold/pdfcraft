@@ -2581,3 +2581,10 @@ animation effects	Off	关
 	No image on clipboard to paste	剪贴板中没有可粘贴的图像
 	Pinned {tool} to Home	已将 {tool} 固定到主页
 	Unpinned {tool} from Home	已从主页取消固定 {tool}
+# Fill & Sign text: the border around it (M5).
+	Border:	边框：
+
+# A text border's own colour (M5).
+	Border colour	边框颜色
+	Same as text	与文字相同
+	Border shape	边框形状

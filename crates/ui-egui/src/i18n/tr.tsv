@@ -2613,3 +2613,10 @@ animation effects	Off	Kapalı
 	No image on clipboard to paste	Panoda yapıştırılacak görüntü yok
 	Pinned {tool} to Home	{tool} Ana Sayfaya sabitlendi
 	Unpinned {tool} from Home	{tool} Ana Sayfadan kaldırıldı
+# Fill & Sign text: the border around it (M5).
+	Border:	Kenarlık:
+
+# A text border's own colour (M5).
+	Border colour	Kenarlık rengi
+	Same as text	Metinle aynı
+	Border shape	Kenarlık şekli

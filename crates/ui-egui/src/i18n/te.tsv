@@ -2526,3 +2526,10 @@ animation effects	Off	ఆఫ్
 	No image on clipboard to paste	అతికించడానికి క్లిప్‌బోర్డ్‌లో చిత్రం లేదు
 	Pinned {tool} to Home	{tool} హోమ్‌కు పిన్ చేయబడింది
 	Unpinned {tool} from Home	{tool} హోమ్ నుండి అన్‌పిన్ చేయబడింది
+# Fill & Sign text: the border around it (M5).
+	Border:	అంచు:
+
+# A text border's own colour (M5).
+	Border colour	అంచు రంగు
+	Same as text	వచనం లాగే
+	Border shape	అంచు ఆకారం

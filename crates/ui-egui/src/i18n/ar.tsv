@@ -2892,3 +2892,10 @@ certificate	Version	الإصدار
 	No image on clipboard to paste	لا توجد صورة في الحافظة للصقها
 	Pinned {tool} to Home	تم تثبيت {tool} في الرئيسية
 	Unpinned {tool} from Home	تم إلغاء تثبيت {tool} من الرئيسية
+# Fill & Sign text: the border around it (M5).
+	Border:	الحد:
+
+# A text border's own colour (M5).
+	Border colour	لون الحد
+	Same as text	مثل النص
+	Border shape	شكل الحد

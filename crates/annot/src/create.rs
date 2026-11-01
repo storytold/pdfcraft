@@ -1,6 +1,6 @@
 use super::draw::draw_appearance;
 use super::lookup::{annot_dict, annot_ref, annots, fill_sign_shape, page_ref, set_annots};
-use super::modify::{n, rich_text};
+use super::modify::{free_text_da, n, rich_text, shape_text_box};
 use super::types::{
     FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, OverlayLook, Rgb, Shape, StampGroup, Style,
 };
@@ -372,20 +372,22 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
                 d.set(b"IT".to_vec(), Object::name("FreeTextTypeWriter"));
             }
             let size = if font_size.is_finite() && *font_size > 0.0 { font_size.clamp(1.0, 400.0) } else { 12.0 };
-            let [r, g, b] = style.color.map(|x| x.clamp(0.0, 1.0));
-            d.set(b"DA".to_vec(), PdfString::literal(format!("{} {} {} rg /Helv {} Tf", n(r), n(g), n(b), n(size)).into_bytes()));
+            d.set(b"DA".to_vec(), free_text_da(style.color, style.border_color, size));
             d.set(b"Q".to_vec(), Object::Int(0));
             if let Some(f) = style.fill {
                 d.set(b"C".to_vec(), rgb(f));
             }
             border(&mut d);
             rich_text(&mut d);
-            // The text is laid out for the page as displayed, like a stamp's label.
             if !matches!(new.shape, Shape::Callout { .. }) {
+                // The text is laid out for the page as displayed, like a stamp's label.
                 let turn = pdfcraft_model::pages(doc).get(new.page).map_or(0, |p| p.rotation(doc));
                 if matches!(turn, 90 | 180 | 270) {
                     d.set(b"PCTextRotate".to_vec(), Object::Int(turn));
                 }
+                // An oval or a circle goes around the text box, its text wrapped as displayed:
+                // after `/PCTextRotate`, which swaps the box's sides on a quarter-turned page.
+                shape_text_box(&mut d, rect, style.border_shape, style.width);
             }
         }
         _ => {}
@@ -413,7 +415,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
 }
 
 fn validate_style(style: &Style) -> Result<(), AnnotError> {
-    if !finite(&style.color) || !style.opacity.is_finite() || !style.width.is_finite() {
+    if !finite(&style.color) || style.border_color.is_some_and(|c| !finite(&c)) || !style.opacity.is_finite() || !style.width.is_finite() {
         return Err(AnnotError::Invalid("invalid style".into()));
     }
     Ok(())

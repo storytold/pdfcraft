@@ -2885,3 +2885,10 @@ key	Space	Space
 	No image on clipboard to paste	Không có hình ảnh trong bảng nhớ tạm để dán
 	Pinned {tool} to Home	Đã ghim {tool} vào Trang chủ
 	Unpinned {tool} from Home	Đã bỏ ghim {tool} khỏi Trang chủ
+# Fill & Sign text: the border around it (M5).
+	Border:	Viền:
+
+# A text border's own colour (M5).
+	Border colour	Màu viền
+	Same as text	Giống chữ
+	Border shape	Hình dạng viền

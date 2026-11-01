@@ -2877,3 +2877,10 @@ theme	Appearance	Išvaizda
 	No image on clipboard to paste	Iškarpinėje nėra paveikslėlio įklijuoti
 	Pinned {tool} to Home	{tool} prisegtas pradžios puslapyje
 	Unpinned {tool} from Home	{tool} atsegtas nuo pradžios puslapio
+# Fill & Sign text: the border around it (M5).
+	Border:	Rėmelis:
+
+# A text border's own colour (M5).
+	Border colour	Rėmelio spalva
+	Same as text	Kaip tekstas
+	Border shape	Rėmelio forma

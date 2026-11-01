@@ -2846,3 +2846,10 @@ theme	Appearance	स्वरूप
 	No image on clipboard to paste	चिपकाने के लिए क्लिपबोर्ड में कोई छवि नहीं है
 	Pinned {tool} to Home	{tool} को होम पर पिन किया गया
 	Unpinned {tool} from Home	{tool} को होम से अनपिन किया गया
+# Fill & Sign text: the border around it (M5).
+	Border:	बॉर्डर:
+
+# A text border's own colour (M5).
+	Border colour	बॉर्डर का रंग
+	Same as text	पाठ जैसा
+	Border shape	बॉर्डर का आकार

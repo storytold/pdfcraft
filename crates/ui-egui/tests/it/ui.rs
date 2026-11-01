@@ -865,6 +865,24 @@ fn a_saved_no_fill_clears_a_comment_tool_default_fill() {
     assert_eq!(c.comment_prefs.style(CommentTool::Rectangle).fill, None);
 }
 
+/// A tool's saved "Same as text" border colour (`"border_color": null`) clears an own border
+/// colour it had; a missing or malformed one keeps it.
+#[test]
+fn a_saved_same_as_text_clears_a_comment_tool_border_colour() {
+    use pdfcraft_ui_egui::comments::CommentTool;
+    let red = Some([0.89, 0.13, 0.13]);
+    let mut a = PdfCraftApp::new();
+    a.comment_prefs.set_border_color(CommentTool::TextBox, red);
+    a.restore(r#"{"comment_styles":[{"tool":"comment.freetext","border_color":"red"}]}"#);
+    assert_eq!(a.comment_prefs.style(CommentTool::TextBox).border_color, red, "malformed keeps it");
+    a.restore(r#"{"comment_styles":[{"tool":"comment.freetext","border_color":null}]}"#);
+    assert_eq!(a.comment_prefs.style(CommentTool::TextBox).border_color, None, "null clears it");
+    let mut b = PdfCraftApp::new();
+    b.comment_prefs.set_border_color(CommentTool::TextBox, red);
+    b.restore(&a.persist());
+    assert_eq!(b.comment_prefs.style(CommentTool::TextBox).border_color, None, "a round trip keeps it cleared");
+}
+
 /// Persisted per-tool comment styles go through their clamping setters: hostile or malformed
 /// values are clamped or ignored, never trusted (#340).
 #[test]

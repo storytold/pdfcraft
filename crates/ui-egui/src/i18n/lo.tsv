@@ -2522,3 +2522,10 @@ animation effects	Off	ປິດ
 	Export this PDF	ສົ່ງອອກ PDF ນີ້
 	Find text or tools	ຊອກຫາຂໍ້ຄວາມ ຫຼື ເຄື່ອງມື
 	Crop image	ຕັດຂອບຮູບພາບ
+# Fill & Sign text: the border around it (M5).
+	Border:	ເສັ້ນຂອບ:
+
+# A text border's own colour (M5).
+	Border colour	ສີເສັ້ນຂອບ
+	Same as text	ຄືກັບຂໍ້ຄວາມ
+	Border shape	ຮູບຮ່າງເສັ້ນຂອບ

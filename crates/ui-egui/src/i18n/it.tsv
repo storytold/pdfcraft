@@ -2849,3 +2849,10 @@ certificate	SHA-256 digest	Impronta SHA-256
 	No image on clipboard to paste	Nessuna immagine negli appunti da incollare
 	Pinned {tool} to Home	{tool} fissato alla Home
 	Unpinned {tool} from Home	{tool} rimosso dai preferiti della Home
+# Fill & Sign text: the border around it (M5).
+	Border:	Bordo:
+
+# A text border's own colour (M5).
+	Border colour	Colore bordo
+	Same as text	Come il testo
+	Border shape	Forma bordo

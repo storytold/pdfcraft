@@ -2713,3 +2713,10 @@ animation effects	Off	Wyłączone
 	No image on clipboard to paste	Brak obrazu do wklejenia w schowku
 	Pinned {tool} to Home	Przypięto {tool} do strony głównej
 	Unpinned {tool} from Home	Odpięto {tool} od strony głównej
+# Fill & Sign text: the border around it (M5).
+	Border:	Obramowanie:
+
+# A text border's own colour (M5).
+	Border colour	Kolor obramowania
+	Same as text	Jak tekst
+	Border shape	Kształt obramowania
