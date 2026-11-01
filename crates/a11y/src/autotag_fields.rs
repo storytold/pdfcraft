@@ -73,70 +73,69 @@ pub fn tag_form_fields(doc: &mut Document) -> Result<usize, String> {
     if widgets.is_empty() {
         return Err("the AcroForm has no untagged page widgets".into());
     }
-    let count_delta = i64::try_from(widgets.len().saturating_sub(1)).map_err(|_| "too many form widgets")?;
+    let count = i64::try_from(widgets.len()).map_err(|_| "too many form widgets")?;
 
-    let (struct_root, document_ref, mut existing_kids, parent_tree, mut parent_nums, first_key, has_next_key, new_tree) =
-        if let Some(existing_root) = existing_root {
-            let struct_root = reference(Some(&existing_root), "structure tree root")?;
-            let structure_object = doc.get(struct_root);
-            let structure = structure_object.as_dict().ok_or("the structure tree root is invalid")?;
-            let document_ref = root_document_ref(doc, structure.get(b"K"))?;
-            let document_obj = doc.get(document_ref);
-            let Some(document_dict) = document_obj.as_dict() else {
-                return Err("the structure tree root must point directly to a Document element".into());
-            };
-            if document_dict.get(b"S").map(|s| doc.resolve(s)).as_deref().and_then(Object::as_name) != Some(b"Document") {
-                return Err("the structure tree root must point directly to a Document element".into());
-            }
-            let existing_kids = match document_dict.get(b"K") {
-                None => Vec::new(),
-                Some(k) => match &*doc.resolve(k) {
-                    Object::Null => Vec::new(),
-                    Object::Array(items) => items.clone(),
-                    _ => vec![k.clone()],
-                },
-            };
-            let parent_tree = reference(structure.get(b"ParentTree"), "structure parent tree")?;
-            let parent_nums = nums(doc, parent_tree)?;
-            if parent_nums.len() % 2 != 0 {
-                return Err("the structure parent tree has an odd number of entries".into());
-            }
-            let mut greatest = -1_i64;
-            for pair in parent_nums.as_chunks::<2>().0 {
-                let Some(key) = doc.resolve(&pair[0]).as_int() else {
-                    return Err("the structure parent tree has a non-integer key".into());
-                };
-                if key < 0 {
-                    return Err("the structure parent tree has a negative key".into());
-                }
-                greatest = greatest.max(key);
-            }
-            let mut first_key = greatest.checked_add(1).ok_or("the structure parent tree has no available key")?;
-            let mut has_next_key = false;
-            if let Some(next_obj) = structure.get(b"ParentTreeNextKey") {
-                let resolved_next = doc.resolve(next_obj);
-                if !matches!(*resolved_next, Object::Null) {
-                    let next_key = resolved_next.as_int().ok_or("the structure parent tree next key is invalid")?;
-                    if next_key < 0 {
-                        return Err("the structure parent tree next key is negative".into());
-                    }
-                    first_key = first_key.max(next_key);
-                    has_next_key = true;
-                }
-            }
-            first_key.checked_add(count_delta).ok_or("too many form widgets")?;
-            (struct_root, document_ref, existing_kids, parent_tree, parent_nums, first_key, has_next_key, false)
-        } else {
-            let mut root_dict = Dict::new();
-            root_dict.set(b"Type".to_vec(), Object::Name(b"StructTreeRoot".to_vec()));
-            let struct_root = doc.add(Object::Dict(root_dict));
-            let mut document = Dict::new();
-            document.set(b"S".to_vec(), Object::Name(b"Document".to_vec()));
-            document.set(b"P".to_vec(), Object::Ref(struct_root));
-            let document_ref = doc.add(Object::Dict(document));
-            let parent_tree = doc.add(Object::Dict(Dict::new()));
-            (struct_root, document_ref, Vec::new(), parent_tree, Vec::new(), 0, false, true)
+    let (struct_root, document_ref, mut existing_kids, parent_tree, mut parent_nums, first_key, new_tree) = if let Some(existing_root) = existing_root
+    {
+        let struct_root = reference(Some(&existing_root), "structure tree root")?;
+        let structure_object = doc.get(struct_root);
+        let structure = structure_object.as_dict().ok_or("the structure tree root is invalid")?;
+        let document_ref = root_document_ref(doc, structure.get(b"K"))?;
+        let document_obj = doc.get(document_ref);
+        let Some(document_dict) = document_obj.as_dict() else {
+            return Err("the structure tree root must point directly to a Document element".into());
         };
+        if document_dict.get(b"S").map(|s| doc.resolve(s)).as_deref().and_then(Object::as_name) != Some(b"Document") {
+            return Err("the structure tree root must point directly to a Document element".into());
+        }
+        let existing_kids = match document_dict.get(b"K") {
+            None => Vec::new(),
+            Some(k) => match &*doc.resolve(k) {
+                Object::Null => Vec::new(),
+                Object::Array(items) => items.clone(),
+                _ => vec![k.clone()],
+            },
+        };
+        let parent_tree = reference(structure.get(b"ParentTree"), "structure parent tree")?;
+        let parent_nums = nums(doc, parent_tree)?;
+        if parent_nums.len() % 2 != 0 {
+            return Err("the structure parent tree has an odd number of entries".into());
+        }
+        let mut greatest = -1_i64;
+        for pair in parent_nums.as_chunks::<2>().0 {
+            let Some(key) = doc.resolve(&pair[0]).as_int() else {
+                return Err("the structure parent tree has a non-integer key".into());
+            };
+            if key < 0 {
+                return Err("the structure parent tree has a negative key".into());
+            }
+            greatest = greatest.max(key);
+        }
+        let mut first_key = greatest.checked_add(1).ok_or("the structure parent tree has no available key")?;
+        if let Some(next_obj) = structure.get(b"ParentTreeNextKey") {
+            let resolved_next = doc.resolve(next_obj);
+            if !matches!(*resolved_next, Object::Null) {
+                let next_key = resolved_next.as_int().ok_or("the structure parent tree next key is invalid")?;
+                if next_key < 0 {
+                    return Err("the structure parent tree next key is negative".into());
+                }
+                first_key = first_key.max(next_key);
+            }
+        }
+        (struct_root, document_ref, existing_kids, parent_tree, parent_nums, first_key, false)
+    } else {
+        let mut root_dict = Dict::new();
+        root_dict.set(b"Type".to_vec(), Object::Name(b"StructTreeRoot".to_vec()));
+        let struct_root = doc.add(Object::Dict(root_dict));
+        let mut document = Dict::new();
+        document.set(b"S".to_vec(), Object::Name(b"Document".to_vec()));
+        document.set(b"P".to_vec(), Object::Ref(struct_root));
+        let document_ref = doc.add(Object::Dict(document));
+        let parent_tree = doc.add(Object::Dict(Dict::new()));
+        (struct_root, document_ref, Vec::new(), parent_tree, Vec::new(), 0, true)
+    };
+    // ISO 32000-1 14.7.4.4: reserve the next unused key before adding any parent-tree entries.
+    let next_key = first_key.checked_add(count).ok_or("the structure parent tree has no available next key")?;
     for (offset, (page, widget)) in widgets.iter().copied().enumerate() {
         let key = first_key.checked_add(i64::try_from(offset).map_err(|_| "too many form widgets")?).ok_or("too many form widgets")?;
         let mut objr = Dict::new();
@@ -158,17 +157,14 @@ pub fn tag_form_fields(doc: &mut Document) -> Result<usize, String> {
     })
     .map_err(|e| e.to_string())?;
     doc.update_dict(parent_tree, |d| d.set(b"Nums".to_vec(), Object::Array(parent_nums))).map_err(|e| e.to_string())?;
-    let next_key = first_key.checked_add(count_delta).and_then(|last| last.checked_add(1));
     if new_tree {
         doc.update_dict(struct_root, |d| {
             d.set(b"K".to_vec(), Object::Ref(document_ref));
             d.set(b"ParentTree".to_vec(), Object::Ref(parent_tree));
-            if let Some(next_key) = next_key {
-                d.set(b"ParentTreeNextKey".to_vec(), Object::Int(next_key));
-            }
+            d.set(b"ParentTreeNextKey".to_vec(), Object::Int(next_key));
         })
         .map_err(|e| e.to_string())?;
-    } else if has_next_key && let Some(next_key) = next_key {
+    } else {
         doc.update_dict(struct_root, |d| {
             d.set(b"ParentTreeNextKey".to_vec(), Object::Int(next_key));
         })
@@ -207,6 +203,39 @@ mod tests {
         }
         out.extend_from_slice(format!("trailer << /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", bodies.len() + 1).as_bytes());
         Document::open(Arc::new(out)).unwrap()
+    }
+
+    fn existing_tree(next: &str) -> Document {
+        pdf(&[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> /StructTreeRoot 5 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R] >>".into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Rect [20 60 120 80] >>".into(),
+            format!("<< /Type /StructTreeRoot /K 6 0 R /ParentTree 7 0 R {next} >>"),
+            "<< /S /Document /P 5 0 R /K [] >>".into(),
+            "<< /Nums [7 []] >>".into(),
+            "null".into(),
+        ])
+    }
+
+    #[test]
+    fn extending_tree_creates_missing_next_key() {
+        for next in ["", "/ParentTreeNextKey null", "/ParentTreeNextKey 8 0 R"] {
+            let mut doc = existing_tree(next);
+            assert_eq!(tag_form_fields(&mut doc).unwrap(), 1);
+            assert_eq!(doc.get(ObjRef::new(4, 0)).as_dict().unwrap().int(b"StructParent"), Some(8));
+            assert_eq!(doc.get(ObjRef::new(5, 0)).as_dict().unwrap().int(b"ParentTreeNextKey"), Some(9));
+        }
+    }
+
+    #[test]
+    fn exhausted_next_key_rejects_before_mutation() {
+        let mut doc = existing_tree(&format!("/ParentTreeNextKey {}", i64::MAX));
+        let before = doc.get(ObjRef::new(4, 0));
+        let objects = doc.object_numbers().len();
+        assert!(tag_form_fields(&mut doc).is_err());
+        assert_eq!(doc.get(ObjRef::new(4, 0)), before);
+        assert_eq!(doc.object_numbers().len(), objects);
     }
 
     #[test]

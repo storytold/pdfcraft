@@ -1,5 +1,6 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M12, PR #5611: separate mark/work limits and reserve the next parent-tree key; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: integrate main fa5f9f8c; retain CJK viewer and upstream raster regressions, restore explicit display_config imports; estimates unchanged)
 > **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** patch (M2, PR #4172: integrate main 5af10276; retain both roadmap histories and viewer-only CJK font policy; estimates unchanged)
@@ -212,6 +213,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-01 (M12, PR #5611 follow-up):** Direct-mark limits count actual marks separately from bounded graph work, retaining large child-tag lists and the exact mark limit. Extending an existing form-tag tree writes its next key even when previously absent/null, and key exhaustion is rejected before editing. Estimates unchanged.
 
 - **2026-11-01 (M12, PR #5611):** Reachable tags include indirect child arrays for sibling reordering; marked-content traversal is iterative and reports excessive depth/work instead of overflowing or returning a partial list. Cycle, order, generation and limit regressions cover the repair. Estimates unchanged.
 

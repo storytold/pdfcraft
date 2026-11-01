@@ -198,7 +198,8 @@ pub fn tags(doc: &Document) -> Vec<TagInfo> {
 }
 
 /// List marked-content references directly owned by an indirect tag.
-/// Returns `ContentLimit` rather than a partial list beyond 65,536 entries or 512 child/reference levels.
+/// Returns `ContentLimit` rather than a partial list beyond 65,536 marks, one million graph steps,
+/// or 512 child/reference levels. Child structure elements do not count as direct marks.
 pub fn tag_content(doc: &Document, object: ObjRef) -> Result<Vec<TagContentItem>, TagError> {
     let Some(element) = alt::elements(doc).into_iter().find(|e| e.object == object) else { return Err(TagError::NotATag(object)) };
     let pages = pdfcraft_model::pages(doc);
@@ -240,7 +241,8 @@ fn direct_marks(
     out: &mut Vec<(Option<ObjRef>, i64)>,
 ) -> Result<(), TagError> {
     const MAX_DEPTH: usize = 512;
-    let mut remaining = 65_536usize;
+    const MAX_MARKS: usize = 65_536;
+    let mut remaining = 1_000_000usize;
     let mut stack = vec![(std::sync::Arc::new(item.clone()), 0usize)];
     while let Some((item, depth)) = stack.pop() {
         remaining = remaining.checked_sub(1).ok_or(TagError::ContentLimit)?;
@@ -248,7 +250,12 @@ fn direct_marks(
             return Err(TagError::ContentLimit);
         }
         match &*item {
-            Object::Int(mcid) => out.push((page, *mcid)),
+            Object::Int(mcid) => {
+                if out.len() >= MAX_MARKS {
+                    return Err(TagError::ContentLimit);
+                }
+                out.push((page, *mcid));
+            }
             Object::Array(items) => {
                 if items.len() > remaining.saturating_sub(stack.len()) {
                     return Err(TagError::ContentLimit);
@@ -257,6 +264,9 @@ fn direct_marks(
             }
             Object::Dict(dict) if dict.get(b"Type").map(|t| doc.resolve(t)).as_deref().and_then(Object::as_name) == Some(b"MCR") => {
                 if let Some(mcid) = dict.get(b"MCID").map(|m| doc.resolve(m)).and_then(|m| m.as_int()) {
+                    if out.len() >= MAX_MARKS {
+                        return Err(TagError::ContentLimit);
+                    }
                     out.push((dict.get(b"Pg").and_then(Object::as_ref).or(page), mcid));
                 }
             }
@@ -500,11 +510,34 @@ mod tests {
     }
 
     #[test]
-    fn tag_content_rejects_excessive_array_work() {
+    fn tag_content_rejects_excessive_mark_count() {
         let mut doc =
             pdf(&["<< /Type /Catalog /StructTreeRoot 2 0 R >>".into(), "<< /Type /StructTreeRoot /K 3 0 R >>".into(), "<< /S /P /P 2 0 R >>".into()]);
         doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"K".to_vec(), Object::Array(vec![Object::Int(1); 65_537]))).unwrap();
         assert_eq!(tag_content(&doc, ObjRef::new(3, 0)), Err(TagError::ContentLimit));
+    }
+
+    #[test]
+    fn tag_content_accepts_full_mark_limit() {
+        let mut doc =
+            pdf(&["<< /Type /Catalog /StructTreeRoot 2 0 R >>".into(), "<< /Type /StructTreeRoot /K 3 0 R >>".into(), "<< /S /P /P 2 0 R >>".into()]);
+        doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"K".to_vec(), Object::Array(vec![Object::Int(1); 65_536]))).unwrap();
+        assert_eq!(tag_content(&doc, ObjRef::new(3, 0)).unwrap().len(), 65_536);
+    }
+
+    #[test]
+    fn tag_content_skips_many_child_elements_without_spending_mark_budget() {
+        let mut doc =
+            pdf(&["<< /Type /Catalog /StructTreeRoot 2 0 R >>".into(), "<< /Type /StructTreeRoot /K 3 0 R >>".into(), "<< /S /P /P 2 0 R >>".into()]);
+        let mut kids = Vec::new();
+        for _ in 0..33_000 {
+            let mut child = Dict::new();
+            child.set(b"S".to_vec(), Object::name("P"));
+            kids.push(Object::Ref(doc.add(Object::Dict(child))));
+        }
+        kids.push(Object::Int(42));
+        doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"K".to_vec(), Object::Array(kids))).unwrap();
+        assert_eq!(tag_content(&doc, ObjRef::new(3, 0)).unwrap().iter().map(|m| m.mcid).collect::<Vec<_>>(), [42]);
     }
 
     #[test]
