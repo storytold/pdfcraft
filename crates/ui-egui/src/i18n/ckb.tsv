@@ -594,6 +594,8 @@
 	Discard hidden text	فڕێدانی دەقی شاراوە
 	Use Flate to encode streams that are not encoded	بەکارهێنانی Flate بۆ کۆدکردنی ئەو لێشاوانەی کۆد نەکراون
 	In streams that use LZW encoding, use Flate instead	بەکارهێنانی Flate لە جیاتی LZW بۆ ئەو لێشاوانەی بە LZW کۆد کراون
+	Store JPEG images as JPEG XL (smaller, can be undone; needs a reader that supports JPEG XL)	وێنەکانی JPEG وەک JPEG XL هەڵبگرە (بچووکتر، دەتوانرێت پاشگەز بکرێتەوە؛ پێویستی بە خوێنەرێک هەیە کە JPEG XL پشتگیری بکات)
+	Turn JPEG XL images back into the JPEGs they were made from	وێنەکانی JPEG XL بگەڕێنەوە بۆ ئەو JPEGانەی لێیان دروست کراون
 	Remove invalid links and bookmarks	لابردنی بەستەر و دڵخوازە نادروستەکان
 	Remove unreferenced named destinations	لابردنی مەبەستە ناونراوەکانی ئاماژەپێنەکراو
 	Compress document structure (object streams)	پەستاندنی پێکهاتەی بەڵگەنامە (لێشاوەکانی تەن)

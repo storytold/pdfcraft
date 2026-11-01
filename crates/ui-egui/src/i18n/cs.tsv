@@ -714,6 +714,8 @@ key	Space	Mezerník
 	Discard hidden text	Zahodit skrytý text
 	Use Flate to encode streams that are not encoded	Kódovat nekódované proudy metodou Flate
 	In streams that use LZW encoding, use Flate instead	Proudy kódované LZW kódovat metodou Flate
+	Store JPEG images as JPEG XL (smaller, can be undone; needs a reader that supports JPEG XL)	Ukládat obrázky JPEG jako JPEG XL (menší, lze vrátit zpět; vyžaduje čtečku s podporou JPEG XL)
+	Turn JPEG XL images back into the JPEGs they were made from	Převést obrázky JPEG XL zpět na JPEG, ze kterých vznikly
 	Remove invalid links and bookmarks	Odebrat neplatné odkazy a záložky
 	Remove unreferenced named destinations	Odebrat nepoužívané pojmenované cíle
 	Compress document structure (object streams)	Komprimovat strukturu dokumentu (proudy objektů)

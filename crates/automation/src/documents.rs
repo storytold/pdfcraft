@@ -359,6 +359,8 @@ impl Automation {
             ("flate_unencoded", &mut settings.flate_unencoded),
             ("object_streams", &mut settings.object_streams),
             ("lzw_to_flate", &mut settings.lzw_to_flate),
+            ("jpeg_to_jxl", &mut settings.jpeg_to_jxl),
+            ("jxl_to_jpeg", &mut settings.jxl_to_jpeg),
             ("remove_invalid_links", &mut settings.remove_invalid_links),
             ("remove_unreferenced_dests", &mut settings.remove_unreferenced_dests),
         ] {
@@ -417,6 +419,8 @@ impl Automation {
             "tags_removed": o.tags_removed,
             "streams_compressed": o.streams_compressed,
             "lzw_streams": o.lzw_streams,
+            "jpeg_to_jxl": o.jpeg_to_jxl,
+            "jxl_to_jpeg": o.jxl_to_jpeg,
             "invalid_links": o.invalid_links,
             "invalid_bookmarks": o.invalid_bookmarks,
             "unreferenced_dests": o.unreferenced_dests,

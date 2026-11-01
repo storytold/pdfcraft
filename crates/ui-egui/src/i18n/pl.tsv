@@ -625,6 +625,8 @@
 	Discard hidden text	Usuń ukryty tekst
 	Use Flate to encode streams that are not encoded	Zakoduj nieskompresowane strumienie metodą Flate
 	In streams that use LZW encoding, use Flate instead	Zakoduj strumienie LZW metodą Flate
+	Store JPEG images as JPEG XL (smaller, can be undone; needs a reader that supports JPEG XL)	Zapisuj obrazy JPEG jako JPEG XL (mniejsze, odwracalne; wymaga czytnika obsługującego JPEG XL)
+	Turn JPEG XL images back into the JPEGs they were made from	Przywróć obrazy JPEG XL do JPEG, z których powstały
 	Remove invalid links and bookmarks	Usuń nieprawidłowe łącza i zakładki
 	Remove unreferenced named destinations	Usuń nieużywane nazwane miejsca docelowe
 	Compress document structure (object streams)	Kompresuj strukturę dokumentu (strumienie obiektów)

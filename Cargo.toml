@@ -42,6 +42,7 @@ pdfcraft-print = { path = "crates/print", version = "0.16.1" }
 pdfcraft-xfdf = { path = "crates/xfdf", version = "0.16.1" }
 pdfcraft-sign = { path = "crates/sign", version = "0.16.1" }
 pdfcraft-optimize = { path = "crates/optimize", version = "0.16.1" }
+pdfcraft-jxl = { path = "crates/jxl", version = "0.16.1" }
 pdfcraft-a11y = { path = "crates/a11y", version = "0.16.1" }
 pdfcraft-oracle = { path = "crates/oracle", version = "0.16.1" }
 pdfcraft-testkit = { path = "crates/testkit", version = "0.16.1" }

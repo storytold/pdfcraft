@@ -915,6 +915,7 @@ pub mod keys {
     key!(JBIG2_DECODE, b"JBIG2Decode");
     key!(JBIG2_GLOBALS, b"JBIG2Globals");
     key!(JPX_DECODE, b"JPXDecode");
+    key!(JXL_DECODE, b"JXLDecode");
     key!(JS, b"JS");
 
     // K

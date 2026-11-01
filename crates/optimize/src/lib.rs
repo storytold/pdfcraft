@@ -30,6 +30,7 @@
 mod audit;
 pub mod fragments;
 mod images;
+mod jxl_images;
 mod links;
 mod unused;
 
@@ -196,6 +197,12 @@ pub struct Settings {
     pub object_streams: bool,
     /// Clean Up: decode LZW-compressed streams and store them with Flate instead.
     pub lzw_to_flate: bool,
+    /// Clean Up: store JPEG images as JPEG XL, which the JPEG can be rebuilt from byte for byte and which is about
+    /// 20% smaller on photographs. Off by default: ISO 32000-2 has no JPEG XL filter yet, so the images carry a
+    /// placeholder name and readers without JPEG XL show nothing for them.
+    pub jpeg_to_jxl: bool,
+    /// Clean Up: turn images stored as JPEG XL (by `jpeg_to_jxl`) back into the JPEG they were made from.
+    pub jxl_to_jpeg: bool,
     /// Clean Up: remove links (and bookmark destinations) that point nowhere.
     pub remove_invalid_links: bool,
     /// Clean Up: remove named destinations nothing refers to.
@@ -226,6 +233,8 @@ impl Default for Settings {
             flate_unencoded: true,
             object_streams: true,
             lzw_to_flate: true,
+            jpeg_to_jxl: false,
+            jxl_to_jpeg: false,
             remove_invalid_links: true,
             remove_unreferenced_dests: true,
         }
@@ -288,6 +297,9 @@ pub struct Report {
     pub streams_compressed: usize,
     /// Streams whose LZW compression was replaced with Flate (Clean Up).
     pub lzw_streams: usize,
+    /// JPEG images stored as JPEG XL, and JPEG XL images turned back into JPEGs (Clean Up).
+    pub jpeg_to_jxl: usize,
+    pub jxl_to_jpeg: usize,
     /// Links removed and bookmarks whose destination was cleared (Clean Up).
     pub invalid_links: usize,
     pub invalid_bookmarks: usize,
@@ -433,6 +445,7 @@ pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress:
             }
         }
     }
+    jxl_images::convert(doc, settings, &mut report);
     if settings.flate_unencoded {
         for num in doc.object_numbers() {
             let r = ObjRef { num, generation: doc.generation(num) };

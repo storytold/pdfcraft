@@ -1931,6 +1931,8 @@
 	Use 72 DPI (one point per pixel)	Përdor 72 DPI (një pikë për piksel)
 	Use Flate to encode streams that are not encoded	Përdor Flate për të koduar rrjedhat që nuk janë të koduara
 	In streams that use LZW encoding, use Flate instead	Në rrjedhat që përdorin kodimin LZW, përdor Flate në vend të tij
+	Store JPEG images as JPEG XL (smaller, can be undone; needs a reader that supports JPEG XL)	Ruaji imazhet JPEG si JPEG XL (më të vogla, mund të zhbëhet; kërkon lexues që mbështet JPEG XL)
+	Turn JPEG XL images back into the JPEGs they were made from	Kthe imazhet JPEG XL përsëri në JPEG-et nga të cilat u krijuan
 	Use JavaScript	Përdor JavaScript
 	Use a Digital ID from a file	Përdor një ID dixhitale nga një skedar
 	Use a certificate	Përdor një certifikatë

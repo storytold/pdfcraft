@@ -571,6 +571,8 @@
 	Discard hidden text	숨겨진 텍스트 삭제
 	Use Flate to encode streams that are not encoded	인코딩되지 않은 스트림을 Flate로 인코딩
 	In streams that use LZW encoding, use Flate instead	LZW 인코딩 스트림을 Flate로 인코딩
+	Store JPEG images as JPEG XL (smaller, can be undone; needs a reader that supports JPEG XL)	JPEG 이미지를 JPEG XL로 저장(더 작고 되돌릴 수 있음, JPEG XL을 지원하는 뷰어 필요)
+	Turn JPEG XL images back into the JPEGs they were made from	JPEG XL 이미지를 원래의 JPEG로 되돌리기
 	Remove invalid links and bookmarks	잘못된 링크 및 책갈피 제거
 	Remove unreferenced named destinations	참조되지 않은 이름이 지정된 대상 제거
 	Compress document structure (object streams)	문서 구조 압축(개체 스트림)

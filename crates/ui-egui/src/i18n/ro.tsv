@@ -1244,6 +1244,8 @@
 	Use 72 DPI (one point per pixel)	Folosire 72 DPI (un punct pe pixel)
 	Use Flate to encode streams that are not encoded	Folosire Flate pentru codarea fluxurilor necodate
 	In streams that use LZW encoding, use Flate instead	Folosire Flate în locul LZW pentru fluxurile codate LZW
+	Store JPEG images as JPEG XL (smaller, can be undone; needs a reader that supports JPEG XL)	Stochează imaginile JPEG ca JPEG XL (mai mici, reversibil; necesită un cititor care acceptă JPEG XL)
+	Turn JPEG XL images back into the JPEGs they were made from	Convertește imaginile JPEG XL înapoi în JPEG-urile din care au fost create
 	Use a Digital ID from a file	Folosire ID digital dintr-un fișier
 	Use custom DPI	Folosire DPI personalizat
 	Use each image's embedded DPI; use 72 DPI when it is absent.	Folosește DPI-ul încorporat al fiecărei imagini; 72 DPI când lipsește.

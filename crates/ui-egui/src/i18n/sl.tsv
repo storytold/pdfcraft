@@ -1992,6 +1992,8 @@
 	Use 72 DPI (one point per pixel)	Uporabi 72 DPI (ena točka na slikovno piko)
 	Use Flate to encode streams that are not encoded	Za kodiranje nekodiranih tokov uporabi Flate
 	In streams that use LZW encoding, use Flate instead	V tokovih s kodiranjem LZW uporabi Flate
+	Store JPEG images as JPEG XL (smaller, can be undone; needs a reader that supports JPEG XL)	Shrani slike JPEG kot JPEG XL (manjše, razveljavljivo; zahteva bralnik s podporo za JPEG XL)
+	Turn JPEG XL images back into the JPEGs they were made from	Pretvori slike JPEG XL nazaj v JPEG, iz katerih so nastale
 	Use JavaScript	Uporabi JavaScript
 	Use a Digital ID from a file	Uporabi digitalno identiteto iz datoteke
 	Use a certificate	Uporabi potrdilo

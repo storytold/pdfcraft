@@ -607,6 +607,8 @@ comment menu	Edit	సవరించు
 	Discard hidden text	దాచిన టెక్స్ట్‌ను విస్మరించు
 	Use Flate to encode streams that are not encoded	ఎన్‌కోడ్ చేయని స్ట్రీమ్‌లను Flateతో ఎన్‌కోడ్ చేయి
 	In streams that use LZW encoding, use Flate instead	LZW ఎన్‌కోడింగ్ ఉన్న స్ట్రీమ్‌లలో బదులుగా Flate ఉపయోగించు
+	Store JPEG images as JPEG XL (smaller, can be undone; needs a reader that supports JPEG XL)	JPEG చిత్రాలను JPEG XLగా నిల్వ చేయండి (చిన్నవి, రద్దు చేయవచ్చు; JPEG XLకు మద్దతు ఉన్న రీడర్ అవసరం)
+	Turn JPEG XL images back into the JPEGs they were made from	JPEG XL చిత్రాలను అవి తయారైన JPEGలుగా తిరిగి మార్చండి
 	Remove invalid links and bookmarks	చెల్లని లింక్‌లు, బుక్‌మార్క్‌లను తీసివేయి
 	Remove unreferenced named destinations	ఎక్కడా సూచించని పేరున్న గమ్యాలను తీసివేయి
 	Compress document structure (object streams)	పత్రం నిర్మాణాన్ని కుదించు (ఆబ్జెక్ట్ స్ట్రీమ్‌లు)

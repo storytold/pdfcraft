@@ -1301,6 +1301,8 @@
 	Use 72 DPI (one point per pixel)	Naudoti 72 DPI (vienas taškas vienam pikseliui)
 	Use Flate to encode streams that are not encoded	Nekoduotiems srautams koduoti naudoti „Flate“
 	In streams that use LZW encoding, use Flate instead	LZW koduotiems srautams naudoti „Flate“
+	Store JPEG images as JPEG XL (smaller, can be undone; needs a reader that supports JPEG XL)	Saugoti JPEG paveikslus kaip JPEG XL (mažesni, galima atšaukti; reikia JPEG XL palaikančios skaitymo programos)
+	Turn JPEG XL images back into the JPEGs they were made from	Paversti JPEG XL paveikslus atgal į JPEG, iš kurių jie sukurti
 	Use a Digital ID from a file	Naudoti faile esantį skaitmeninį ID
 	Use custom DPI	Naudoti pasirinktinį DPI
 	Use each image's embedded DPI; use 72 DPI when it is absent.	Naudoti paveikslėlyje įrašytą DPI; jei jo nėra, naudoti 72 DPI.
