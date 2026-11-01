@@ -17,6 +17,24 @@ use crate::{DocId, Edit, EditError, Markup, NewAnnotation, NoteIcon, Session, Sh
 /// (the Word and PowerPoint writers keep at most 512 MiB of them as well).
 pub const MAX_EXPORT_IMAGE_BYTES: usize = 512 << 20;
 
+/// What a visual difference is, see [`Session::visual_kind`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VisualKind {
+    Annotation,
+    Image,
+    Other,
+}
+
+impl VisualKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            VisualKind::Annotation => "annotation",
+            VisualKind::Image => "image",
+            VisualKind::Other => "other",
+        }
+    }
+}
+
 /// Acrobat's compare colours: replaced blue, inserted green, deleted red.
 pub fn colour(kind: Kind) -> crate::Rgb {
     match kind {
@@ -91,6 +109,20 @@ impl Session {
             }
         }
         Ok(out)
+    }
+
+    /// What a visual difference at `rect` on `page` (user space, as `compare_visual` returns it)
+    /// is: a comment or form mark drawn there in either file, else a picture drawn there in
+    /// either file, else some other drawing (Acrobat's finer kinds of change).
+    pub fn visual_kind(&self, old: DocId, new: DocId, page: usize, rect: [f64; 4]) -> Result<VisualKind, EditError> {
+        let docs = [self.get(old).ok_or(EditError::NoDocument)?, self.get(new).ok_or(EditError::NoDocument)?];
+        let hits = |r: [f64; 4]| r[0] <= rect[2] && rect[0] <= r[2] && r[1] <= rect[3] && rect[1] <= r[3];
+        let annotated = docs.iter().any(|d| d.info.annotations.iter().any(|a| a.page == page && a.subtype != "Link" && hits(a.rect.map(f64::from))));
+        if annotated {
+            return Ok(VisualKind::Annotation);
+        }
+        let pictured = docs.iter().any(|d| d.page_images(page).iter().any(|i| hits(i.visible_rect.unwrap_or(i.rect))));
+        Ok(if pictured { VisualKind::Image } else { VisualKind::Other })
     }
 
     /// The compare report as a new PDF (not opened).

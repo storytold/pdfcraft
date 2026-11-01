@@ -381,8 +381,10 @@ update the numbers.
 - **Done:** the synchronised side-by-side view; the Compare panel's Show: Text / Visual filter
   (Text hides the text changes from the list and the shading, Visual hides the visual differences
   from the shading; they are counted, not listed).
-- **Missing:** telling images, annotations, formatting and background/header-footer changes apart
-  (all of them are Visual today), scrolling the two halves by matching content rather than by
+- **Done (headless):** `doc_compare` with `visual` names each visual difference's kind: annotation, image
+  or other (`Session::visual_kind`).
+- **Missing:** the Compare panel's filter by those kinds, telling formatting and background/header-footer
+  changes apart (both are "other"), scrolling the two halves by matching content rather than by
   offset, page ranges, scanned documents.
 - **Estimate:** 8–16 h. **Doc:** [target-app-parity.md](target-app-parity.md).
 
