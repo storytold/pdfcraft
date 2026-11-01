@@ -1711,10 +1711,17 @@ fn finish_redactions_and_fields(app: &mut PdfCraftApp, req: &mut Pending) {
         Some(Dialog::RedactApply) => {
             let marks = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks());
             if app.apply_edit(Edit::ApplyRedactions { pages: None }) {
-                if marks == 1 {
-                    app.notify_tr("Applied 1 redaction mark. Save to remove the content from the file.");
+                let applied = if marks == 1 {
+                    tl!("Applied 1 redaction mark. Save to remove the content from the file.").to_string()
                 } else {
-                    app.notify_fmt("Applied {n} redaction marks. Save to remove the content from the file.", &[("n", &marks.to_string())]);
+                    crate::i18n::fmt(tl!("Applied {n} redaction marks. Save to remove the content from the file."), &[("n", &marks.to_string())])
+                };
+                // Where the removed text is still held that applying leaves as it is: said in the
+                // same notification, so it can't replace the first sentence.
+                let left = app.active_ids().and_then(|(_, id)| app.session.get(id)).and_then(|d| d.redaction_elsewhere);
+                match left.and_then(|e| still_holding_note(&e)) {
+                    Some(note) => app.notify(format!("{applied} {note}")),
+                    None => app.notify(applied),
                 }
             }
         }
@@ -1758,6 +1765,34 @@ fn finish_redactions_and_fields(app: &mut PdfCraftApp, req: &mut Pending) {
             app.views[i].prepare.selected = Some((name, index));
         }
     }
+}
+
+/// The sentence telling the user where the removed text is still held that applying redactions
+/// leaves as it is, or `None` when it is nowhere else. When the text couldn't be searched for,
+/// the places are those holding any text, and the sentence says they may hold it.
+fn still_holding_note(e: &pdfcraft_engine::RedactionElsewhere) -> Option<String> {
+    let count = |n: usize, one: &str, many: &str| match n {
+        0 => None,
+        1 => Some(tl!(one).to_string()),
+        n => Some(crate::i18n::fmt(tl!(many), &[("n", &n.to_string())])),
+    };
+    let places: Vec<String> = [
+        count(e.bookmarks, "1 bookmark title", "{n} bookmark titles"),
+        count(e.attachments, "1 attachment", "{n} attachments"),
+        count(e.comments, "1 comment", "{n} comments"),
+        count(e.xmp, "1 other metadata stream", "{n} other metadata streams"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let (last, rest) = places.split_last()?;
+    let list = if rest.is_empty() { last.clone() } else { crate::i18n::fmt(tl!("{list} and {last}"), &[("list", &rest.join(", ")), ("last", last)]) };
+    let template = if e.unsearched {
+        "The redacted text couldn't be searched for, so {places} may still hold it. Remove hidden information removes them."
+    } else {
+        "The redacted text also appears in {places}, which redaction doesn't change. Remove hidden information removes them."
+    };
+    Some(crate::i18n::fmt(tl!(template), &[("places", &list)]))
 }
 
 /// Edits built from the dialog's drafts.

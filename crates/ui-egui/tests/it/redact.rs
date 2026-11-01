@@ -265,3 +265,63 @@ fn removing_hidden_information_and_sanitizing() {
     let s = h.state();
     assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), Some("Sanitize document"));
 }
+
+/// A one-page PDF showing "Codename BLUEFIN report", with bookmarks "Bluefin plans" and
+/// "Annual figures".
+fn bookmarked_pdf() -> Vec<u8> {
+    let content = "BT /F1 18 Tf 20 150 Td (Codename BLUEFIN report) Tj ET";
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /Outlines 6 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>".to_string(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_string(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Outlines /First 7 0 R /Last 8 0 R /Count 2 >>".to_string(),
+        "<< /Title (Bluefin plans) /Parent 6 0 R /Next 8 0 R /Dest [3 0 R /Fit] >>".to_string(),
+        "<< /Title (Annual figures) /Parent 6 0 R /Prev 7 0 R /Dest [3 0 R /Fit] >>".to_string(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// #2539 review: applying redactions says when the removed text is still in a place it leaves
+/// as it is (here a bookmark title), in the same notification as the count of marks applied.
+#[test]
+fn applying_says_where_the_removed_text_is_still_held() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("bluefin.pdf", None, bookmarked_pdf()).unwrap();
+        app
+    });
+    crate::support::settle(&mut h);
+    assert!(h.state_mut().execute("redact.mark"));
+    h.run_steps(2);
+    // Redact pages ▸ current page, then Redact all ▸ Apply.
+    h.state_mut().execute("redact.pages");
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(marks(&h), 1);
+    h.get_by_label("Redact all").click();
+    h.run_steps(3);
+    h.get_by_label("Apply").click();
+    h.run_steps(4);
+    assert_eq!(marks(&h), 0);
+    let toast = h.state().toast.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+    assert_eq!(
+        toast,
+        "Applied 1 redaction mark. Save to remove the content from the file. The redacted text also appears in 1 bookmark title, which redaction doesn't change. Remove hidden information removes them."
+    );
+}
