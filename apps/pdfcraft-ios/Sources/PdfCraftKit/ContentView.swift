@@ -1,24 +1,72 @@
 import CoreGraphics
+import PdfCraftFFI
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The app's whole UI for Milestone 1. A thin Xcode app target's `@main App` just shows this.
+/// The app's whole UI. A thin Xcode app target's `@main App` just shows this.
 public struct PdfCraftRootView: View {
     @StateObject private var viewModel = PdfViewModel()
     @State private var isPickerPresented = false
+    @State private var isFindBarVisible = false
+    @State private var isOutlineVisible = false
+    @State private var query = ""
 
     public init() {}
 
     public var body: some View {
         NavigationStack {
-            content
-                .navigationTitle("PdfCraft")
-                .fileImporter(isPresented: $isPickerPresented, allowedContentTypes: [.pdf]) { result in
-                    if case .success(let url) = result {
-                        loadDocument(at: url)
+            VStack(spacing: 0) {
+                if isFindBarVisible, isDocumentLoaded {
+                    findBar
+                }
+                content
+            }
+            .navigationTitle(viewModel.title ?? "PdfCraft")
+            .toolbar {
+                if isDocumentLoaded {
+                    ToolbarItemGroup(placement: .navigationBarTrailing) {
+                        if !viewModel.outline.isEmpty {
+                            Button(action: { isOutlineVisible = true }) { Image(systemName: "list.bullet") }
+                        }
+                        Button(action: { isFindBarVisible.toggle() }) { Image(systemName: "magnifyingglass") }
                     }
                 }
+            }
+            .fileImporter(isPresented: $isPickerPresented, allowedContentTypes: [.pdf]) { result in
+                if case .success(let url) = result {
+                    loadDocument(at: url)
+                }
+            }
+            .sheet(isPresented: $isOutlineVisible) {
+                OutlineView(entries: viewModel.outline) { page in
+                    viewModel.goToPage(page)
+                    isOutlineVisible = false
+                }
+            }
         }
+    }
+
+    private var isDocumentLoaded: Bool {
+        if case .loaded = viewModel.state { return true }
+        return false
+    }
+
+    private var findBar: some View {
+        HStack {
+            TextField("Find in document", text: $query)
+                .textFieldStyle(.roundedBorder)
+                .onChange(of: query) { newValue in viewModel.search(newValue) }
+            if !query.isEmpty {
+                Text(viewModel.matches.isEmpty ? "0/0" : "\((viewModel.matchIndex ?? 0) + 1)/\(viewModel.matches.count)")
+                    .foregroundStyle(.secondary)
+                Button(action: viewModel.previousMatch) { Image(systemName: "chevron.up") }
+                    .disabled(viewModel.matches.isEmpty)
+                Button(action: viewModel.nextMatch) { Image(systemName: "chevron.down") }
+                    .disabled(viewModel.matches.isEmpty)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
     }
 
     @ViewBuilder
@@ -34,13 +82,13 @@ public struct PdfCraftRootView: View {
                 Button("Try another file") { isPickerPresented = true }
             }
             .padding()
-        case .loaded(_, let page, let pageCount):
+        case .loaded:
             PageView(
-                page: page,
-                pageCount: pageCount,
+                page: viewModel.page,
+                pageCount: viewModel.pageCount,
                 image: viewModel.currentPageImage,
-                onPrev: { viewModel.goToPage(page - 1) },
-                onNext: { viewModel.goToPage(page + 1) },
+                onPrev: { viewModel.goToPage(viewModel.page - 1) },
+                onNext: { viewModel.goToPage(viewModel.page + 1) },
                 onGoToPage: { viewModel.goToPage($0) }
             )
         }
@@ -54,7 +102,27 @@ public struct PdfCraftRootView: View {
     }
 }
 
-/// The current page, full-bleed, with pinch-to-zoom, a prev/next bar and a jump slider.
+/// The table of contents (`MobileDocument.outline()`), presented as a sheet.
+private struct OutlineView: View {
+    let entries: [OutlineEntry]
+    let onSelect: (Int) -> Void
+
+    var body: some View {
+        NavigationStack {
+            List(Array(entries.enumerated()), id: \.offset) { _, entry in
+                Button(action: { onSelect(Int(entry.page)) }) {
+                    Text(entry.title)
+                        .padding(.leading, CGFloat(entry.depth) * 16)
+                }
+            }
+            .navigationTitle("Contents")
+        }
+    }
+}
+
+/// The current page, full-bleed, with pinch-to-zoom, a prev/next bar and a jump slider. The
+/// active search match (if any), already baked into `image` by `PdfViewModel`, pans/zooms with
+/// the page for free.
 private struct PageView: View {
     let page: Int
     let pageCount: Int

@@ -1,8 +1,8 @@
 # PdfCraft for iOS
 
-Milestone 1: open a PDF, view its pages, page through it. No editing yet — that's
-`pdfcraft-engine`'s surface, out of scope for this crate until a later milestone (see
-`crates/mobile-ffi/src/lib.rs`).
+A reader: open a PDF, view its pages, page through it, pinch to zoom, find text and jump through
+the outline. No editing yet — that's `pdfcraft-engine`'s surface, out of scope for this crate
+until a later milestone (see `crates/mobile-ffi/src/lib.rs`).
 
 This directory is a Swift package (`PdfCraftKit`), not an app by itself — SwiftUI's view tree
 (`PdfCraftRootView`) lives here, but an `.xcodeproj` app target is what actually runs on a device
