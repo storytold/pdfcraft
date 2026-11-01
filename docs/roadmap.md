@@ -15,6 +15,8 @@
 > **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** patch (M2, PR #4172: print-preview font policy matches output, with isolated caches and GBK switching regressions; estimates unchanged)
 > **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** patch (M2, PR #4172: reconcile current main and retain Japanese serif/weight selection alongside display-only CJK fallback; estimates unchanged)
 
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** minor (M12, #4461 review follow-up: date-pattern tokenization capped at 4 KiB with raw-value fallback; estimates unchanged)
+
 > **Last reviewed:** 2026-10-30 | **Last updated:** 2026-10-30 | **Change:** minor (M12: impossible Gregorian dates remain unchanged and valid date conversions survive incremental save/reopen; estimates unchanged)
 > **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M7 #2517: a narrowed then widened paragraph keeps the typed spaces the wrap consumed, after save and reopen; estimates unchanged)
 > **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: OCR model downloads use verified ONNX pairs with legacy discovery fallback; estimates unchanged)
@@ -420,3 +422,7 @@ Estimates unchanged.
 ## Pages sidebar keyboard refresh (2026-10-30)
 
 PR #2133 retains document-local Pages sidebar focus for Ctrl/Cmd+A and Escape after the UI module split. The selection does not navigate. The focused regression is in `crates/ui-egui/tests/it/view.rs`; current-head hosted validation is pending. Feature counts and estimates are unchanged.
+
+## XFA date-pattern resource budget (2026-11-01)
+
+Review follow-up for #4461: date-pattern tokenization refuses more than 4096 UTF-8 bytes before allocating character/token lists. Boundary, multibyte and incremental save/reopen regressions preserve raw data. This application budget does not claim complete picture parsing or bound total form memory. XFA remains partial; estimates unchanged.

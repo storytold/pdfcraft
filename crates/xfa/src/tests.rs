@@ -4608,3 +4608,28 @@ fn a_container_is_as_wide_as_a_turned_draw_stands() {
         assert!((got - right).abs() < 0.01, "{rotate}: the neighbour stands {got} right of the anchor, not {right}");
     }
 }
+
+/// Oversized date pictures fall back without normalizing the stored data on an unrelated edit.
+#[test]
+fn date_pattern_budget_preserves_datasets_through_save() {
+    let suffix = "-".repeat(4097 - 8);
+    let stored = format!("20240229{suffix}");
+    let xml = bound_date_template(&format!("<form><page><due>{stored}</due><when>2026-10-18</when></page></form>"))
+        .replace("date{YYYYMMDD}", &format!("date{{YYYYMMDD{suffix}}}"));
+    let mut doc = Document::open(Arc::new(shell(&xml))).unwrap();
+    render_into(&mut doc).unwrap();
+    let mut fields = field_data(&doc);
+    assert!(fields.iter().any(|f| f.name == "due" && f.data == FieldData::Text(stored.clone())));
+    let when = fields.iter_mut().find(|f| f.name == "when").unwrap();
+    when.data = FieldData::Text("10/20/2026".into());
+    assert!(write_datasets(&mut doc, &fields).unwrap().written);
+    let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let reopened = Document::open(Arc::new(saved)).unwrap();
+    let packet = read_packets(&reopened).unwrap().unwrap();
+    let data = parse_datasets(&packet.xdp).unwrap();
+    assert_eq!(data.text_at(&som_to_path("form[0].page[0].due[0]")), Some(stored.as_str()));
+    assert_eq!(data.text_at(&som_to_path("form[0].page[0].when[0]")), Some("2026-10-20"));
+    let form = layout_xml(&packet.xdp).unwrap();
+    let due = form.pages.iter().flat_map(widgets).find(|w| w.name == "due").unwrap();
+    assert_eq!(due.value.as_deref(), Some(stored.as_str()));
+}
