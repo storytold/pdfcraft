@@ -1808,8 +1808,13 @@ evidence = [
   "crates/ui-egui/tests/it/pinned_tools.rs::home_shows_pinned_tools_section_and_placeholder",
   "crates/ui-egui/tests/it/pinned_tools.rs::pin_tool_dialog_workflow",
   "crates/ui-egui/tests/it/pinned_tools.rs::sidebar_pin_toggle_unpins_and_pins",
+  "crates/ui-egui/tests/it/comments.rs::hotbar_picker_adds_and_runs_freehand_highlight",
+  "crates/ui-egui/tests/it/comments.rs::hotbar_drag_moves_and_persists_position",
+  "crates/ui-egui/tests/it/comments.rs::hotbar_vertical_size_and_docking",
+  "crates/ui-egui/tests/it/comments.rs::hotbar_settings_reopen_even_with_remembered_collapsed_state",
+  "crates/ui-egui/tests/it/comments.rs::hotbar_full_side_strip_spans_each_edge_and_returns_to_float",
 ]
-notes = "Pin and unpin tools on the Home page via tool card hover button, All Tools row toggle, or 'Pin a tool' search dialog. Pinned tool order persists across sessions. Floating quick-action toolbar customisation remains planned."
+notes = "Pin and unpin tools on the Home page via tool card hover button, All Tools row toggle, or 'Pin a tool' search dialog. Pinned tool order persists across sessions. Customizable document hotbar searches the command registry, adds/removes tools, resizes buttons from 24 to 64 pixels, floats or docks on any side with an optional full-side chrome strip, and persists preferences (UI control: hotbar-tools, hotbar-size, hotbar-side, hotbar-full-side). Missing: hotbar shortcut reordering and full Acrobat customization-dialog parity."
 
 [[feature]]
 id = "view.restriction-notice"
@@ -5824,8 +5829,8 @@ milestone = "M8"
 status = "shipped"
 commands = ["redact.apply"]
 tools = ["redact_apply"]
-evidence = ["crates/redact/src/tests.rs::images_are_removed_or_have_their_pixels_cleared", "crates/redact/src/tests.rs::redaction_clears_pixels_intersected_without_covering_their_centres", "crates/redact/src/tests.rs::a_fax_image_has_its_covered_pixels_cleared_instead_of_being_removed", "crates/redact/src/tests.rs::group_3_on_bytes_is_removed_whole_and_other_fax_images_cleared", "crates/redact/src/tests.rs::an_image_whose_predictor_is_given_by_reference_has_the_covered_pixel_cleared", "crates/redact/src/tests.rs::a_jbig2_image_has_its_covered_pixels_cleared_instead_of_being_removed", "crates/redact/src/tests.rs::a_jbig2_image_that_cannot_be_cleared_for_certain_is_removed_whole", "crates/redact/src/tests.rs::a_redacted_jbig2_scan_keeps_neither_its_code_nor_its_globals"]
-notes = "intersected pixel footprints are cleared conservatively in a copy, CCITT fax and JBIG2 images (scans stored as Group 4 or JBIG2, with their /JBIG2Globals) included; DCT/JPX images, Group 3 on bytes (which the bootstrap renderer may draw as other rows than the decoder reads), and a JBIG2 image whose page isn't its size, removed whole. The copy is Flate (larger than a Group 4 or JBIG2 scan) and refers to no globals; globals another image still uses stay, and may hold the shapes of marks under the area (not where they were)"
+evidence = ["crates/redact/src/tests.rs::images_are_removed_or_have_their_pixels_cleared", "crates/redact/src/tests.rs::redaction_clears_pixels_intersected_without_covering_their_centres", "crates/redact/src/tests.rs::a_fax_image_has_its_covered_pixels_cleared_instead_of_being_removed", "crates/redact/src/tests.rs::group_3_on_bytes_is_removed_whole_and_other_fax_images_cleared", "crates/redact/src/tests.rs::an_image_whose_predictor_is_given_by_reference_has_the_covered_pixel_cleared", "crates/redact/src/tests.rs::a_jbig2_image_has_its_covered_pixels_cleared_instead_of_being_removed", "crates/redact/src/tests.rs::a_jbig2_image_that_cannot_be_cleared_for_certain_is_removed_whole", "crates/redact/src/tests.rs::a_redacted_jbig2_scan_keeps_neither_its_code_nor_its_globals", "crates/redact/src/tests.rs::a_cleared_black_and_white_scan_is_stored_as_group_4", "crates/redact/src/tests.rs::globals_a_redacted_jbig2_image_shares_with_another_page_leave_the_file"]
+notes = "intersected pixel footprints are cleared conservatively in a copy, CCITT fax and JBIG2 images (scans stored as Group 4 or JBIG2, with their /JBIG2Globals) included; DCT/JPX images, Group 3 on bytes (which the bootstrap renderer may draw as other rows than the decoder reads), and a JBIG2 image whose page isn't its size, removed whole. The copy is Flate, or for a one-bit image of one component Group 4, or JBIG2 when it was JBIG2, whichever is smallest as stored, and refers to no globals; every other image using a redacted image's globals is stored again without them (Flate, Group 4 or JBIG2, whichever is smallest), so they leave the file (one that can't be decoded refuses the redaction)"
 
 [[feature]]
 id = "protect.redact-vectors"

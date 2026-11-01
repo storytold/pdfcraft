@@ -52,8 +52,11 @@ fn select_after_edit(
         // A stroke drawn with the pen stays unselected, so the selection box and
         // author popup don't sit over the next stroke (#429).
         Edit::AddAnnotation(a)
-            if matches!(a.shape, pdfcraft_engine::Shape::Ink { .. })
-                && quick_tool == crate::QuickTool::Comment(crate::comments::CommentTool::Ink) =>
+            if matches!(a.shape, pdfcraft_engine::Shape::Ink { .. } | pdfcraft_engine::Shape::FreehandHighlight { .. })
+                && matches!(
+                    quick_tool,
+                    crate::QuickTool::Comment(crate::comments::CommentTool::Ink | crate::comments::CommentTool::FreehandHighlight)
+                ) =>
         {
             view.comments.selected = None;
         }

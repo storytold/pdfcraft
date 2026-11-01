@@ -21,9 +21,13 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   (8/16-bit and 1/2/4-bit images, image masks; Flate/LZW/RL/A85/AHx, and CCITT fax or JBIG2 as
   the last filter, decoded through `Document::decoded_image_within`, a JBIG2 image with its
   `/JBIG2Globals`; `/DecodeParms` given by reference, numbers inside included, count). The copy
-  is Flate, and refers to no globals: when no other image uses them, they leave the file with the
-  original on the full rewrite; when one does, they stay as they are, and may hold the shapes of
-  marks under the area (not where they were). Codecs redaction doesn't decode (DCT, JPX) are
+  is Flate, or for a one-bit image of one component (a scan as a rule) CCITT Group 4, or JBIG2
+  when it was JBIG2, whichever is smallest as stored, coded from the cleared samples; it refers to
+  no globals. Globals hold the shapes of every image that shares them (a scan's pages, often),
+  those of marks under the area included, so every other image that uses the globals of a removed
+  or replaced image is decoded and stored again in place without them, as a copy is (Flate,
+  Group 4 or JBIG2, whichever is smallest; `Report::images_restored`), and they leave the file on the full rewrite; one that can't be
+  decoded for certain refuses the redaction (`RedactError::SharedJbig2Globals`). Codecs redaction doesn't decode (DCT, JPX) are
   removed whole (fail-closed), and so is a JBIG2 image whose page isn't its size (the renderer
   draws the whole page into the image, so the rows cleared wouldn't be the ones shown) or of more
   than one bit or component, and Group 3 on bytes (`/K` 0 or more, `/EncodedByteAlign`): PdfCraft's
@@ -112,6 +116,5 @@ Patterns are heuristic: dates, protocol identifiers and longer number runs are r
 `CodeSet::from_id("foia")?.overlay(&["(b)(6)"])` gives the overlay text for the picked codes.
 Custom code sets aren't supported yet.
 
-Not yet: pattern locales, struct-tree/alt-text cleanup, metadata and hidden-information
-sanitising (M8.4), re-encoding of DCT images (they are removed instead), and storing a cleared black-and-white
-image as CCITT Group 4 or JBIG2 again (it is Flate, larger; the optimizer makes it smaller).
+Not yet: pattern locales, struct-tree/alt-text cleanup, re-encoding of DCT images (they are removed
+instead).

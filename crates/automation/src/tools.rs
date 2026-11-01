@@ -754,7 +754,7 @@ pub fn tools() -> Vec<ToolDef> {
             json!({
                 "doc": doc(),
                 "page": { "type": "integer", "minimum": 1 },
-                "type": { "type": "string", "enum": ["note", "highlight", "underline", "strikeout", "squiggly", "replace", "rectangle", "oval", "line", "arrow", "ink", "textbox", "stamp", "polygon", "cloud", "polyline", "callout", "caret", "attachment"] },
+                "type": { "type": "string", "enum": ["note", "highlight", "underline", "strikeout", "squiggly", "replace", "rectangle", "oval", "line", "arrow", "ink", "freehand_highlight", "textbox", "stamp", "polygon", "cloud", "polyline", "callout", "caret", "attachment"] },
                 "path": { "type": "string", "description": "attachment: the file to attach." },
                 "points": { "type": "array", "items": point(), "minItems": 2 },
                 "knee": point(),

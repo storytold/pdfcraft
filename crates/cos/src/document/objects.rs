@@ -337,6 +337,17 @@ impl Document {
         pdfcraft_filters::decode_ccitt_within(&data, &p, rows, work).map_err(filter)
     }
 
+    /// The `/JBIG2Globals` stream a JBIG2 image `s` names by reference in its last filter's
+    /// `/DecodeParms`: `None` for a stream whose last filter isn't `JBIG2Decode`, or one without
+    /// globals. Redaction finds with it the other images that share a redacted image's globals.
+    pub fn jbig2_globals_ref(&self, s: &Stream) -> Option<ObjRef> {
+        let chain = s.readable_filters().ok()?;
+        if !matches!(chain.last(), Some((pdfcraft_filters::Filter::Jbig2, _))) {
+            return None;
+        }
+        self.last_filter_parms(s).get(b"JBIG2Globals").and_then(Object::as_ref)
+    }
+
     /// What the `/JBIG2Globals` stream of JBIG2 image `s` (in its last filter's `/DecodeParms`)
     /// decodes to, within [`MAX_JBIG2_GLOBALS`]; `None` without one (a reference to no object is
     /// one to null, ISO 32000-2 §7.3.10, which is an absent entry, §7.3.7). The image is then read
