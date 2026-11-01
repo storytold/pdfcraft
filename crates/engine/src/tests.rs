@@ -934,9 +934,10 @@ fn revert_preserves_the_saved_pages_after_undo() {
 #[test]
 fn full_save_is_readable_and_smaller_after_deletes() {
     let (mut s, id) = session_with(5);
+    let original = s.save_bytes(id).unwrap();
     s.apply(id, Edit::DeletePages { pages: vec![0, 1, 2] }).unwrap();
     let full = s.save_full_bytes(id).unwrap();
-    assert!(full.len() < s.save_bytes(id).unwrap().len());
+    assert!(full.len() < original.len());
     let mut s2 = Session::new();
     let id2 = s2.open("full.pdf", None, full, None).unwrap();
     assert_eq!(page_texts(&s2, id2), ["Page 4", "Page 5"]);
@@ -9408,4 +9409,63 @@ fn repeated_backdrop_artwork_survives_background_undo_redo_and_both_save_modes()
     black(&s, rewritten);
     s.apply(rewritten, Edit::RemoveMarks { kind: MarkKind::Background }).unwrap();
     black(&s, rewritten);
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+#[test]
+fn saving_after_deleting_pages_rewrites_the_file_without_them() {
+    let (mut s, id) = session_with(6);
+    let original = s.save_bytes(id).unwrap();
+    s.apply(id, Edit::DeletePages { pages: vec![1, 2, 3, 4] }).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    assert!(saved.len() < original.len(), "the file shrank: {} -> {}", original.len(), saved.len());
+    assert!(!saved.starts_with(original.as_slice()), "a full rewrite, not an update appended to the old file");
+    assert!(!contains(&saved, b"Page 3"), "a deleted page's text is not left in an earlier revision");
+    let mut again = Session::new();
+    let id2 = again.open("saved.pdf", None, saved, None).unwrap();
+    assert_eq!(page_texts(&again, id2), ["Page 1", "Page 6"]);
+}
+
+#[test]
+fn saving_after_deleting_pages_from_a_signed_file_stays_incremental() {
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let digital_id = sign::pkcs12::open(&p12, "test").unwrap();
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    let id = s.open("fixture.pdf", None, Arc::new(fixture(3)), None).unwrap();
+    let opts = SignOptions { page: 0, rect: Some([20.0, 20.0, 160.0, 50.0]), ..SignOptions::default() };
+    let signed = s.sign(id, &digital_id, opts).unwrap();
+    s.mark_signed(id, signed.clone(), None).unwrap();
+    s.apply(id, Edit::DeletePages { pages: vec![2] }).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    assert!(saved.starts_with(signed.as_ref()), "the signed bytes stay an incremental update");
+    assert!(s.get(id).unwrap().is_signed());
+}
+
+#[test]
+fn saving_after_a_batch_that_deletes_pages_rewrites_the_file() {
+    let (mut s, id) = session_with(6);
+    let original = s.save_bytes(id).unwrap();
+    let batch = Edit::Batch {
+        label: "Delete and rotate".into(),
+        edits: vec![
+            Edit::Batch { label: "Delete pages".into(), edits: vec![Edit::DeletePages { pages: vec![1, 2, 3, 4] }] },
+            Edit::RotatePages { pages: vec![0], degrees: 90 },
+        ],
+    };
+    s.apply(id, batch).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    assert!(!saved.starts_with(original.as_slice()), "a full rewrite, not an update appended to the old file");
+    assert!(!contains(&saved, b"Page 3"), "a deleted page's text is not left in an earlier revision");
+}
+
+#[test]
+fn saving_without_deleting_pages_stays_incremental() {
+    let (mut s, id) = session_with(3);
+    let original = s.save_bytes(id).unwrap();
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    assert!(saved.starts_with(original.as_slice()), "an edit that deletes nothing is still appended");
 }

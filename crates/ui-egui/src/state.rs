@@ -329,6 +329,8 @@ pub struct PasswordPrompt {
     pub(crate) then: Option<&'static str>,
     /// A link destination to apply after the linked PDF is unlocked.
     pub(crate) after_open: Option<pdfcraft_render::RemoteDestination>,
+    /// A launch-time display override, applied only after this PDF is unlocked.
+    pub(crate) display_override: Option<(canvas::PageLayout, bool)>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
