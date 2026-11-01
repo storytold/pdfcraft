@@ -174,3 +174,29 @@ fn button_export_edit_is_one_undo_step_and_survives_save() {
     assert_eq!(check["value"], true);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// #5041 integration: upstream's export-value shortcut must not discard a display change.
+#[test]
+fn button_export_and_display_apply_together_and_survive_save() {
+    let (mut a, id, dir) = setup("button-export-display");
+    tool(&mut a, "form_add_field", json!({"doc": id, "page": 1, "type": "checkbox", "name": "agree", "rect": [20, 20, 40, 40]}));
+    tool(&mut a, "form_fill", json!({"doc": id, "values": {"agree": true}}));
+    let before = bytes(&a, id);
+    call(&mut a, json!({"doc": id, "field": "agree", "export_value": "Accepted", "widget": 1, "display": "hidden_printable"}));
+    let check = |a: &mut Automation, id| {
+        let fields = tool(a, "form_fields", json!({"doc": id}));
+        let check = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "agree").unwrap();
+        assert_eq!(check["export_values"], json!(["Accepted"]));
+        assert_eq!(check["field_display"], "hidden_printable", "the combined edit keeps its display change");
+        assert_eq!(check["value"], true, "the selected state survives");
+    };
+    check(&mut a, id);
+    tool(&mut a, "edit_undo", json!({"doc": id}));
+    assert_eq!(bytes(&a, id), before, "both properties undo together");
+    tool(&mut a, "edit_redo", json!({"doc": id}));
+    check(&mut a, id);
+    tool(&mut a, "doc_save", json!({"doc": id, "path": "saved.pdf"}));
+    let reopened = tool(&mut a, "doc_open", json!({"path": "saved.pdf"}))["doc"].as_u64().unwrap();
+    check(&mut a, reopened);
+    std::fs::remove_dir_all(dir).unwrap();
+}
