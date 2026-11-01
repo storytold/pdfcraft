@@ -56,18 +56,17 @@ impl PagePointer {
         // pointer is outside the window. With a dialog open only a drag counts, up to the frame
         // it stops: on the frame one opens egui still gives the pages a press that lands under
         // it, and its click.
-        let held = resp.dragged() || resp.drag_stopped() || (!modal && resp.interact_pointer_pos().is_some());
-        // `contains_pointer` alone also holds a few points under the edge of an Area over the
-        // pages (egui's interact radius), so the top layer there must be the pages' own. A
-        // dialog covers them from the frame it opens, before egui knows its layer.
         let layer = ui.layer_id();
         let on_top =
             |p: &Pos2| !modal && !dragged_elsewhere(ui, resp) && resp.contains_pointer() && ui.ctx().layer_id_at(*p).is_none_or(|l| l == layer);
+        let press_origin = origin.or_else(|| first_press(&edges));
+        let held =
+            resp.dragged() || resp.drag_stopped() || (!modal && (resp.interact_pointer_pos().is_some() || press_origin.is_some_and(|p| on_top(&p))));
         let pos = at.filter(|p| held || on_top(p));
         if !held {
             return Self { pos, origin: None, edges: Vec::new(), primary_down, any_down };
         }
-        Self { pos, origin: origin.or_else(|| first_press(&edges)), edges, primary_down, any_down }
+        Self { pos, origin: press_origin, edges, primary_down, any_down }
     }
 
     /// Where the pointer is, when it is inside `r`.
