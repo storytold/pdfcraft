@@ -320,6 +320,8 @@ impl Layouter<'_> {
     /// later ones get `_2`, `_3`, ….
     pub(super) fn unique_name(&mut self, base: &str) -> String {
         let base = clean_name(base);
+        // Remember the count from before this page, so discarding the page can put it back.
+        self.page_names.entry(base.clone()).or_insert_with(|| self.names.get(&base).copied());
         let n = self.names.entry(base.clone()).or_insert(0);
         *n += 1;
         if *n == 1 { base } else { format!("{base}_{n}") }
