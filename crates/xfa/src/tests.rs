@@ -1512,6 +1512,11 @@ fn top_fields(doc: &Document) -> Vec<(String, pdfcraft_cos::Dict)> {
 /// widget, and their AcroForm fields and image XObjects once written.
 #[test]
 fn choice_lists_signatures_passwords_and_pictures_become_fields_and_images() {
+    assert_choice_widget_layout();
+    assert_choice_fields_and_picture_streams();
+}
+
+fn assert_choice_widget_layout() {
     let form = layout_xml(&fields_template("")).unwrap();
     let p1 = &form.pages[0];
     let w = widgets(p1);
@@ -1546,7 +1551,9 @@ fn choice_lists_signatures_passwords_and_pictures_become_fields_and_images() {
     assert!(t.iter().any(|s| s == "12345"), "the barcode's value as text: {t:?}");
     assert!(form.warnings.iter().any(|w| w.contains("barcode")), "{:?}", form.warnings);
     assert!(!form.warnings.iter().any(|w| w.contains("can't be chosen")), "pictures can be chosen now: {:?}", form.warnings);
+}
 
+fn assert_choice_fields_and_picture_streams() {
     // Written into the PDF: /Ch fields with their options and flags, a /Sig field, a password
     // field, and Flate images (the PNG with a soft mask).
     let mut doc = Document::open(Arc::new(shell(&fields_template("")))).unwrap();
@@ -1792,6 +1799,62 @@ fn pictures_are_embedded_once_across_relayouts_and_bad_data_pictures_are_reporte
         })
     }
     assert!(find_image(&t.root.children).is_some_and(|n| n > 1_200_000));
+}
+
+/// #4937: LiveCycle wrote BMPs whose header gives the pixel data's offset as 0. Read literally,
+/// the pixels start at the file header, so the image is drawn shifted and wrapped around.
+#[test]
+fn a_bmp_whose_pixel_offset_points_into_its_headers_is_read_from_after_them() {
+    use crate::image::{bmp_with_pixel_offset, decode, size};
+    for palette in [false, true] {
+        let intact = tiny_bmp(palette);
+        assert!(matches!(bmp_with_pixel_offset(&intact), std::borrow::Cow::Borrowed(_)), "an intact file is not copied");
+        for bad in [0u32, 14, 53] {
+            let mut bmp = intact.clone();
+            bmp[10..14].copy_from_slice(&bad.to_le_bytes());
+            let d = decode(&bmp).unwrap();
+            assert_eq!(d.samples, vec![255, 0, 0, 0, 0, 255], "offset {bad}, palette: {palette}");
+            assert_eq!(size(&bmp), Some((2, 1)));
+            assert_eq!(bmp_with_pixel_offset(&bmp).as_ref(), &intact[..], "offset {bad}, palette: {palette}");
+        }
+    }
+    // Too short to hold the pixels after the headers: left alone, not grown.
+    let mut cut = tiny_bmp(true);
+    cut[10..14].copy_from_slice(&0u32.to_le_bytes());
+    cut.truncate(60);
+    assert_eq!(bmp_with_pixel_offset(&cut).as_ref(), &cut[..]);
+    // A truncated header, and bytes that are not a BMP: left alone.
+    assert_eq!(bmp_with_pixel_offset(b"BM  ").as_ref(), b"BM  ");
+    assert_eq!(bmp_with_pixel_offset(TINY_GIF).as_ref(), TINY_GIF);
+    // BI_BITFIELDS in a 40-byte header: three masks follow the header.
+    let mut fields = tiny_bmp(false);
+    fields[30..34].copy_from_slice(&3u32.to_le_bytes());
+    fields[10..14].copy_from_slice(&0u32.to_le_bytes());
+    fields.splice(54..54, [0u8; 12]);
+    assert_eq!(bmp_with_pixel_offset(&fields).get(10..14), Some(&66u32.to_le_bytes()[..]));
+    // Pointing at the end of the 40-byte header, before the masks.
+    fields[10..14].copy_from_slice(&54u32.to_le_bytes());
+    assert_eq!(bmp_with_pixel_offset(&fields).get(10..14), Some(&66u32.to_le_bytes()[..]));
+    // A colour count no file could hold: left alone.
+    let mut huge = tiny_bmp(true);
+    huge[46..50].copy_from_slice(&u32::MAX.to_le_bytes());
+    huge[10..14].copy_from_slice(&0u32.to_le_bytes());
+    assert_eq!(bmp_with_pixel_offset(&huge).as_ref(), &huge[..]);
+    // A 12-byte core header: 16-bit fields and 3-byte palette entries, `1 << bpp` of them.
+    let mut core = b"BM".to_vec();
+    core.extend_from_slice(&[0; 8]);
+    core.extend_from_slice(&0u32.to_le_bytes());
+    core.extend_from_slice(&12u32.to_le_bytes());
+    for v in [2u16, 1, 1, 1] {
+        core.extend_from_slice(&v.to_le_bytes());
+    }
+    core.extend_from_slice(&[0, 0, 255, 255, 0, 0, 0b0100_0000, 0, 0, 0]);
+    assert_eq!(bmp_with_pixel_offset(&core).get(10..14), Some(&32u32.to_le_bytes()[..]));
+    let mut at_table = core.clone();
+    at_table[10..14].copy_from_slice(&26u32.to_le_bytes());
+    assert_eq!(bmp_with_pixel_offset(&at_table).get(10..14), Some(&32u32.to_le_bytes()[..]), "before the colour table");
+    let d = decode(&bmp_with_pixel_offset(&core)).unwrap();
+    assert_eq!(d.samples, vec![255, 0, 0, 0, 0, 255], "core header");
 }
 
 /// Designer forms often carry BMP and TIFF pictures, declared as `image/bmp` and `image/tif`
@@ -3556,6 +3619,11 @@ fn laying_a_form_out_takes_off_the_usage_rights_it_voids() {
 
 #[test]
 fn stripping_takes_the_xfa_out_and_leaves_an_ordinary_document() {
+    assert_stripping_leaves_ordinary_document();
+    assert_stripping_handles_unbound_data_and_shared_field_tree();
+}
+
+fn assert_stripping_leaves_ordinary_document() {
     use crate::pdf::strip;
     let mut doc = Document::open(Arc::new(shell(&fields_template("<form><page1><country>JP</country></page1></form>")))).unwrap();
     render_into(&mut doc).unwrap();
@@ -3606,6 +3674,10 @@ fn stripping_takes_the_xfa_out_and_leaves_an_ordinary_document() {
     let r = strip(&mut doc).unwrap();
     assert_eq!(r, crate::Stripped::default());
     assert!(!doc.is_modified());
+}
+
+fn assert_stripping_handles_unbound_data_and_shared_field_tree() {
+    use crate::pdf::strip;
     // Data no field holds is counted; a form whose click buttons ran scripts too; the shape
     // check needs no packet decoded and tells a never-laid-out dynamic form from one to strip.
     let mut doc = Document::open(Arc::new(shell(&scripted_template().replace("</template>", "</template><xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data><form><page1><qty>3</qty><extra>kept nowhere</extra><more2>x</more2></page1></form></xfa:data></xfa:datasets>")))).unwrap();

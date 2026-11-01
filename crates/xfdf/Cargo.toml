@@ -13,5 +13,5 @@ pdfcraft-cos = { workspace = true }
 pdfcraft-annot = { workspace = true }
 pdfcraft-forms = { workspace = true }
 pdfcraft-model = { workspace = true }
-roxmltree = "0.20"
+roxmltree = "0.21"
 thiserror = { workspace = true }

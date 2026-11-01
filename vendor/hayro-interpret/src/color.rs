@@ -1399,6 +1399,29 @@ impl Color {
             .to_rgba(&self.components, self.opacity, false)
     }
 
+    /// PdfCraft patch (70): the colour as process ink tints `[C, M, Y, K]` (0 = no ink) and
+    /// its opacity, for blending in a `DeviceCMYK` transparency group (ISO 32000-2 §11.3.4).
+    ///
+    /// `DeviceCMYK` gives its components. `DeviceGray` is black ink alone, `K = 1 − gray`
+    /// (§10.4.2.2). `None` for every other space, ICCBased CMYK included: such a colour has no
+    /// tints without a colour conversion this crate does not make (an ICCBased colour keeps
+    /// its own profile), and the caller draws it as before.
+    pub fn ink_tints(&self) -> Option<([f32; 4], f32)> {
+        let c = |i: usize| {
+            self.components
+                .get(i)
+                .copied()
+                .unwrap_or(0.0)
+                .clamp(0.0, 1.0)
+        };
+        let tints = match self.color_space.0.as_ref() {
+            ColorSpaceType::DeviceCmyk => [c(0), c(1), c(2), c(3)],
+            ColorSpaceType::DeviceGray => [0.0, 0.0, 0.0, 1.0 - c(0)],
+            _ => return None,
+        };
+        Some((tints, self.opacity.clamp(0.0, 1.0)))
+    }
+
     /// Create a color from RGBA.
     pub fn from_rgba(rgba: AlphaColor) -> Self {
         let c = rgba.components();
@@ -1408,6 +1431,16 @@ impl Color {
             opacity: c[3],
         }
     }
+}
+
+/// PdfCraft patch (70): `input`, 8-bit `DeviceCMYK` pixels (four bytes each), converted to
+/// 8-bit sRGB in `output` (three bytes each) through the CMYK profile pages are drawn with,
+/// so a colour blended in CMYK lands where the same colour painted directly does.
+pub fn cmyk_to_srgb8(input: &[u8], output: &mut [u8]) -> Option<()> {
+    if input.len() % 4 != 0 || output.len() != input.len() / 4 * 3 {
+        return None;
+    }
+    CMYK_TRANSFORM.convert_u8(input, output)
 }
 
 static CMYK_TRANSFORM: LazyLock<ICCProfile> = LazyLock::new(|| {

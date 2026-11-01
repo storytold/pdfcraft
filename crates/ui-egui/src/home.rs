@@ -7,6 +7,8 @@ use pdfcraft_engine::catalog;
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, icons, panels::human_size, widgets};
 
+pub mod folders_ui;
+
 const RECOMMENDED: [&str; 5] = ["organize", "comment", "form", "edit", "protect"];
 
 /// A soft shadow that rises on hover and settles when the card is pressed.
