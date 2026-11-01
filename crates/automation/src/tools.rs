@@ -1461,6 +1461,8 @@ pub fn tools() -> Vec<ToolDef> {
                     "flate_unencoded": { "type": "boolean" },
                     "object_streams": { "type": "boolean" },
                     "lzw_to_flate": { "type": "boolean" },
+                    "jpeg_to_jxl": { "type": "boolean", "description": "Store JPEG images as JPEG XL (reversible, smaller; readers without JPEG XL show nothing for them; off by default)" },
+                    "jxl_to_jpeg": { "type": "boolean", "description": "Turn JPEG XL images made by jpeg_to_jxl back into the original JPEGs" },
                     "remove_invalid_links": { "type": "boolean" },
                     "remove_unreferenced_dests": { "type": "boolean" },
                     "discard": { "type": "array", "items": { "type": "string" } },
