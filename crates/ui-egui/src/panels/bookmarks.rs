@@ -105,6 +105,23 @@ fn title_format(item: &OutlineItem, depth: usize, t: &Tokens) -> egui::TextForma
     egui::TextFormat { font_id, color, italics: item.italic, ..Default::default() }
 }
 
+/// The inline bookmark rename field. It takes focus on its first frame with all of its text
+/// selected, so typing replaces the old title instead of landing at a random caret position.
+fn rename_field(ui: &mut egui::Ui, text: &mut String, id: egui::Id) -> egui::Response {
+    let resp = ui.add(crate::widgets::line(text).desired_width(ui.available_width() - 8.0).id(id));
+    if !resp.has_focus() && !resp.lost_focus() {
+        resp.request_focus();
+        // Store the selection after the field has drawn: drawn without focus, it collapses any
+        // stored selection to the cursor (it doesn't own the IME events), and from the next
+        // frame on it has focus and keeps this one.
+        let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
+        let end = egui::text::CCursor::new(text.chars().count());
+        state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), end)));
+        state.store(ui.ctx(), id);
+    }
+    resp
+}
+
 /// Draw one bookmark row with expansion, inline rename and the editable context menu.
 pub(super) fn outline_item(
     ui: &mut egui::Ui,
@@ -138,11 +155,7 @@ pub(super) fn outline_item(
         ui.horizontal(|ui| {
             ui.add_space(x_text);
             crate::widgets::begin_dialog(ui);
-            let edit = crate::widgets::line(text).desired_width(ui.available_width() - 8.0).id(id.with("rename"));
-            let resp = ui.add(edit);
-            if !resp.has_focus() && !resp.lost_focus() {
-                resp.request_focus();
-            }
+            let resp = rename_field(ui, text, id.with("rename"));
             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 cancel = true;
             } else if resp.lost_focus() {
@@ -358,5 +371,27 @@ mod bookmark_filter {
         // A child match keeps its parent: [0] and [0, 0].
         assert_eq!(outline_matches(&outline, &fold("KIŞ")).len(), 2);
         assert!(outline_matches(&outline, &fold("izmir")).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod rename_field_tests {
+    use super::rename_field;
+
+    /// The rename field opens with its whole title selected.
+    #[test]
+    fn rename_field_selects_all_text_on_first_focus() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::unique("bm_rename_test");
+        let mut text = String::from("Untitled");
+        for _ in 0..3 {
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                rename_field(ui, &mut text, id);
+            });
+            output.drop_without_applying_deltas();
+        }
+        let range = egui::TextEdit::load_state(&ctx, id).and_then(|s| s.cursor.char_range());
+        let span = range.map(|r| (r.primary.index.0.min(r.secondary.index.0), r.primary.index.0.max(r.secondary.index.0)));
+        assert_eq!(span, Some((0, 8)));
     }
 }
