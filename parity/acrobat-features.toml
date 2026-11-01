@@ -5712,6 +5712,18 @@ evidence = ["crates/redact/src/patterns.rs::labelled_italian_international_slash
 notes = "phone (North American, E.164 with + country code, national with trunk 0, a slash after a trunk-0 area code; labelled Italian +39 geographic numbers with one slash after the area code match with their complete country code (#3205 follow-up), with or without one space after +39; international slash numbers without a phone label, or with country codes other than +39, remain unsupported; numbers without separators only after a phone label such as Tel. or cell.), e-mail, credit card (Luhn), SSN, dates (English US forms); text drawn in a font whose built-in encoding we hold no table for (Symbol, ZapfDingbats, MacExpert) has no Unicode mapping, so a pattern search cannot see it -- it is skipped rather than mis-decoded"
 
 [[feature]]
+id = "protect.redact-regex"
+title = "Redact by caller-supplied regular expression"
+area = "G"
+tier = "P2"
+milestone = "M8"
+status = "shipped"
+commands = []
+tools = ["redact_mark"]
+evidence = ["crates/redact/src/user_regex.rs::hostile_expressions_are_refused_or_stay_linear", "crates/redact/src/user_regex.rs::validators_filter_matches", "crates/automation/tests/it/automation.rs::redacting_with_a_caller_regex_through_tools"]
+notes = "Headless only (redact_mark regex, optional validate luhn, mod97 or iban; issue #1886): no UI entry yet. Rust regex syntax, matched in linear time with no look-around or back-references; expression capped at 1024 bytes, compiled size and nesting capped, empty-matching expressions refused. Matches run on the page text as the pattern matchers see it (words and lines joined by one space), so a match cannot span a page break. Missing: a UI field, a mask for checksums that need more than the whole match (for example the French social security key), and a check against Acrobat's own custom-pattern syntax (not observed)."
+
+[[feature]]
 id = "protect.redact-pattern-locales"
 title = "Pattern sets per locale"
 area = "G"

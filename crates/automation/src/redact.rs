@@ -2,8 +2,8 @@
 //! (removing what they cover for good) or clear them.
 
 use pdfcraft_engine::{
-    Edit, Hidden, NewAnnotation, REDACT_MAX_WORDS, REDACTION_CODE_SETS, RedactPattern, RedactionCodeSet, Shape, Style, find_pattern, rect_quad,
-    redact_word_list,
+    Edit, Hidden, NewAnnotation, REDACT_MAX_WORDS, REDACT_VALIDATORS, REDACTION_CODE_SETS, RedactPattern, RedactRegex, RedactValidator,
+    RedactionCodeSet, Shape, Style, find_pattern, rect_quad, redact_word_list,
 };
 use serde_json::{Value, json};
 
@@ -59,15 +59,19 @@ impl Automation {
             a.get("find").is_some(),
             a.get("words").is_some(),
             a.get("pattern").is_some(),
+            a.get("regex").is_some(),
             a.opt_bool("whole_pages")?.unwrap_or(false),
         ];
         if chosen.iter().filter(|c| **c).count() != 1 {
-            return Err(ToolError::InvalidArgs("pass exactly one of rect (with page), find, words, pattern or whole_pages: true".into()));
+            return Err(ToolError::InvalidArgs("pass exactly one of rect (with page), find, words, pattern, regex or whole_pages: true".into()));
         }
         let case_sensitive = a.opt_bool("case_sensitive")?.unwrap_or(false);
         let whole_words = a.opt_bool("whole_words")?.unwrap_or(false);
         if (case_sensitive || whole_words) && a.get("find").is_none() && a.get("words").is_none() {
             return Err(ToolError::InvalidArgs("case_sensitive and whole_words apply only to find or words".into()));
+        }
+        if a.get("validate").is_some() && a.get("regex").is_none() {
+            return Err(ToolError::InvalidArgs("validate applies only to regex".into()));
         }
         // Per searched word or phrase: how many marks it made.
         let mut matched_words: Vec<(String, usize)> = Vec::new();
@@ -89,6 +93,19 @@ impl Automation {
                 Some(p) => Some(RedactPattern::from_id(p).ok_or_else(|| ToolError::InvalidArgs(format!("unknown pattern {p:?}")))?),
                 None => None,
             };
+            let user_re = match a.opt_str("regex")? {
+                Some(src) => {
+                    let validator = match a.opt_str("validate")? {
+                        Some(v) => Some(RedactValidator::from_id(v).ok_or_else(|| {
+                            let ids: Vec<_> = REDACT_VALIDATORS.iter().map(|v| v.id()).collect();
+                            ToolError::InvalidArgs(format!("unknown validate {v:?}; allowed: {}", ids.join(", ")))
+                        })?),
+                        None => None,
+                    };
+                    Some(RedactRegex::new(src, validator).map_err(|e| ToolError::InvalidArgs(e.to_string()))?)
+                }
+                None => None,
+            };
             let needles: Vec<String> = match (a.opt_str("find")?, a.get("words")) {
                 (Some(f), _) => vec![f.to_owned()],
                 (None, Some(_)) => {
@@ -108,9 +125,27 @@ impl Automation {
             let texts = self.page_texts(id, &pages)?;
             let info = self.doc(a)?.info.clone();
             for (&p, text) in pages.iter().zip(&texts) {
-                let hits: Vec<(Option<usize>, _)> = match pattern {
-                    Some(pat) => text.find_with(|chars| find_pattern(pat, chars)).into_iter().map(|h| (None, h)).collect(),
-                    None => needles
+                let hits: Vec<(Option<usize>, _)> = match (&user_re, pattern) {
+                    (Some(re), _) => {
+                        // A page with too many matches fails the call: marking only the first ones
+                        // would leave the rest readable after redact_apply.
+                        let too_many = std::cell::Cell::new(false);
+                        let found = text.find_with(|chars| {
+                            re.find(chars).unwrap_or_else(|_| {
+                                too_many.set(true);
+                                Vec::new()
+                            })
+                        });
+                        if too_many.get() {
+                            return Err(ToolError::InvalidArgs(format!(
+                                "regex has more than 10000 matches on page {}; nothing was marked. Narrow the expression so that every match can be marked",
+                                p + 1
+                            )));
+                        }
+                        found.into_iter().map(|h| (None, h)).collect()
+                    }
+                    (None, Some(pat)) => text.find_with(|chars| find_pattern(pat, chars)).into_iter().map(|h| (None, h)).collect(),
+                    (None, None) => needles
                         .iter()
                         .enumerate()
                         .flat_map(|(i, w)| text.find_opts(w, case_sensitive, whole_words).into_iter().map(move |h| (Some(i), h)))
