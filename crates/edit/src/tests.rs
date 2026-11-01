@@ -8686,6 +8686,20 @@ fn arabic_fallback_preserves_relative_text_siblings_and_quote_state() {
     }
 }
 
+#[test]
+fn arabic_fallback_keeps_the_selected_row_alignment_refusal() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let mut doc = text_page("BT /F1 12 Tf 300 700 Td (Target) Tj ET");
+    let before = page_content_bytes(&doc, 0);
+    let style = text::BlockStyle { aligns: vec![Some(added::Align::Right)], ..Default::default() };
+    let error = text::rewrite_block(&mut doc, 0, 0, Some("نص عربي"), &style).unwrap_err();
+    assert!(error.to_string().contains("selected-row alignment"), "{error}");
+    assert_eq!(page_content_bytes(&doc, 0), before);
+    assert_eq!(page_content_bytes(&reopen(&doc), 0), before);
+}
+
 /// Bold source text takes the Arabic face's bold instance (its weight axis at 700) and the bold
 /// Latin face; oblique source text keeps its Latin slant while Arabic, which has no italic,
 /// stays upright. Both survive a save and another edit. Without a bold instance, bold is refused

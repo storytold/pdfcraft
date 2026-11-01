@@ -23,6 +23,11 @@ Comments (annotations), ISO 32000-2 §12.5. Layer L3, depends on `pdfcraft-cos`,
   mark's overlay text, which becomes page content when applied; and a restyle or resize of a
   comment another program drew with a font that has those characters, whose appearance is kept
   rather than redrawn with `?` (new text for it is taken).
+  Fill & Sign sizes its text boxes from those shaped advances and ink heights, so large Arabic
+  marks and pointed Hebrew fit the appearance. With default quadding, each right-to-left
+  paragraph starts at the right edge, including text retyped into an English box; explicit
+  centered and right-aligned quadding remain unchanged. Rich text keeps the same paragraph
+  directions and CR, LF and CRLF breaks as the drawing.
 - **Edits:** reply (`/IRT`), set review status (a `/State` reply, as Acrobat's "Set status"
   does), change text, move, resize, restyle, delete (with pop-up and replies).
 

@@ -287,8 +287,8 @@ fn an_overwide_arabic_word_wraps_without_detaching_marks() {
     let t = AddedText { text: text.clone(), rect: [0.0, 0.0, 42.0, 100.0], ..item() };
     let wrapped = wrapped(&t);
     assert!(wrapped.len() > 1, "a long Arabic word must fit a narrow box");
-    assert_eq!(wrapped.iter().map(|(line, _)| line.as_str()).collect::<String>(), text);
-    for (line, rtl) in wrapped {
+    assert_eq!(wrapped.iter().map(|(line, _, _)| line.as_str()).collect::<String>(), text);
+    for (line, rtl, _) in wrapped {
         assert!(line.starts_with('ب') && line.ends_with('\u{064e}'), "{line:?}");
         assert!(shaped_width(&t, &line, rtl) <= 42.01, "line exceeds box: {line:?}");
     }
@@ -333,6 +333,29 @@ fn copied_invisible_controls_draw_without_placeholders_and_keep_their_actual_tex
         }
     }
     assert_eq!(first_undrawable(&AddedText { text: "نص 😀".into(), ..item() }), Some('😀'));
+}
+
+/// Replacing an existing item must retain the standard-font fallback when a script face is
+/// absent. A copied join control must not turn a move/restyle into a missing-font refusal.
+#[test]
+fn existing_contextual_text_with_join_controls_redraws_without_its_optional_face() {
+    for (has_face, text) in
+        [(pdfcraft_fonts::document_arabic_font().is_some(), "ب\u{200c}ب"), (pdfcraft_fonts::document_hebrew_font(false).is_some(), "ש\u{200c}ם")]
+    {
+        if has_face {
+            continue;
+        }
+        let t = AddedText { text: text.into(), ..item() };
+        assert!(first_undrawable(&t).is_some(), "a missing script face is still reported");
+        let mut doc = Document::new_empty();
+        let content = Content::Text(t);
+        let view = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+        let redrawn = draw(&mut doc, &content, view, &Dict::new(), true);
+        assert!(redrawn.is_ok(), "an existing item with {text:?} remains movable: {redrawn:?}");
+        let (out, _) = redrawn.unwrap();
+        assert!(pdfcraft_content::parse(&out).ops.iter().any(|op| op.is("Tj")), "the legacy fallback still draws");
+        assert!(draw(&mut doc, &content, view, &Dict::new(), false).is_err(), "new text still needs its script face");
+    }
 }
 
 #[test]
@@ -415,6 +438,32 @@ fn a_separator_after_an_exactly_fitting_word_does_not_add_a_blank_soft_line() {
         assert!(laid[0].4 <= width + 1e-6);
         let wide = AddedText { rect: [0.0, 0.0, 500.0, 200.0], ..t };
         assert_eq!(laid_lines(&wide).unwrap()[0].4, wide.family.width(text, wide.size, wide.bold, wide.italic));
+    }
+}
+
+/// A hanging wrap separator stays in ActualText, but only visible spaces take justification.
+/// Inject the shaped cluster so this checks the writer even without a craft-fonts build input.
+#[test]
+fn a_justified_shaped_row_stretches_only_the_spaces_it_draws() {
+    for rtl in [false, true] {
+        let t = AddedText { align: Align::Justify, ..item() };
+        let first_width = super::layout::latin_width(&t, "A ") + 0.5 * t.size;
+        let logical = if rtl { "ب A " } else { "A ب " };
+        let laid = vec![
+            (logical.into(), rtl, 0, vec![Piece::Latin("A ".into()), Piece::Shaped(vec![cluster(1, 0.5)])], first_width),
+            ("C".into(), rtl, 0, vec![Piece::Latin("C".into())], super::layout::latin_width(&t, "C")),
+        ];
+        let mut doc = Document::new_empty();
+        let (mut fonts, mut out) = (Dict::new(), Vec::new());
+        draw_laid_shaped(&mut doc, &t, &laid, &Dict::new(), &mut fonts, &mut out, |_, _| Ok(boxed(0.5))).unwrap();
+        let ops = pdfcraft_content::parse(&out).ops;
+        let spacing = ops.iter().find(|op| op.is("Tw")).unwrap().num(0).unwrap();
+        let width = t.rect[2] - t.rect[0];
+        assert!((first_width + spacing - width).abs() < 1e-5, "the one drawn space must fill the row: rtl={rtl}, spacing={spacing}");
+        let first_x = ops.iter().find(|op| op.is("Tm")).unwrap().num(4).unwrap();
+        assert!((first_x - t.rect[0]).abs() < 1e-5, "justified ink starts at the left edge: rtl={rtl}, x={first_x}");
+        let logical_hex: String = logical.encode_utf16().map(|u| format!("{u:04X}")).collect();
+        assert!(String::from_utf8(out).unwrap().contains(&format!("/ActualText <FEFF{logical_hex}>")), "copy retains the omitted wrap separator");
     }
 }
 

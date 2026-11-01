@@ -1,4 +1,6 @@
-use super::{Dict, Object, PdfString, Rgb, Stream, color, ext_gstate, form, literal, n, nums, rg, rg_stroke, text_width, win_ansi};
+use super::{Dict, Object, PdfString, Rgb, Stream, color, ext_gstate, form, literal, n, nums, rg, rg_stroke, win_ansi};
+// Captions and stamp labels draw standard Helvetica, including marked '?' placeholders.
+use pdfcraft_fonts::helvetica_width as text_width;
 
 /// The label and colour of a standard rubber stamp name (ISO 32000-2 Table 184), for a stamp
 /// another program wrote without an appearance. Names are matched byte for byte, as PDF names

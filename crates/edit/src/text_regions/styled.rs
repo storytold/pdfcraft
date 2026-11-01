@@ -1598,6 +1598,37 @@ fn rewrite_patches(placement: &RewritePlacement<'_>, mut block_ops: Vec<Op>) -> 
 mod range_tests {
     use super::ContextualParagraph;
 
+    /// Contextual wrapping adds visual rows without changing the typed paragraph's index.
+    /// CRLF consumes one break, and its carriage return must not become a separate empty row.
+    #[test]
+    fn contextual_wraps_keep_crlf_paragraph_indices_and_soft_break_metadata() {
+        let chars: Vec<super::StyledChar> = "اب ج\r\nTail\nده ز".chars().map(|ch| (ch, 0, String::new())).collect();
+        let paragraphs = super::paragraph_texts(&chars);
+        let contexts: Vec<_> = paragraphs
+            .iter()
+            .filter(|(_, text)| pdfcraft_fonts::source_shaping::required(text))
+            .map(|(range, text)| {
+                let mut bytes: Vec<_> = text.char_indices().map(|(at, _)| at).collect();
+                bytes.push(text.len());
+                ContextualParagraph {
+                    chars: range.clone(),
+                    bytes,
+                    layout: pdfcraft_fonts::source_shaping::Paragraph::new(text).unwrap(),
+                    face: std::sync::Arc::new(Vec::new()),
+                    family: String::new(),
+                }
+            })
+            .collect();
+        let measure = |range: std::ops::Range<usize>| Ok(range.len() as f64);
+        let (rows, ranges, logical_lines, soft, gaps) = super::wrap_styled_rows(&chars, &contexts, 3.0, &measure).unwrap();
+        let text: Vec<String> = rows.iter().map(|row| row.iter().map(|c| c.0).collect()).collect();
+        assert_eq!(text, ["اب ", "ج", "Tail", "ده ", "ز"]);
+        assert_eq!(ranges, [0..3, 3..4, 6..10, 11..14, 14..15]);
+        assert_eq!(logical_lines, [0, 0, 1, 2, 2], "soft wraps retain their typed paragraph's alignment index");
+        assert_eq!(soft, [false, true, false, false, true]);
+        assert_eq!(gaps, [0, 0, 0, 0, 0], "contextual ranges keep spaces, so rejoining adds none");
+    }
+
     #[test]
     fn contextual_byte_ranges_reject_outside_or_reversed_input() {
         let paragraph = ContextualParagraph {

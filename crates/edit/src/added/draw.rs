@@ -153,7 +153,15 @@ pub(super) fn draw_laid_shaped(
         // explicitly, including marks, ligatures, digits and mixed-script punctuation.
         let logical: String = line.encode_utf16().map(|u| format!("{u:04X}")).collect();
         out.extend(format!("/Span <</ActualText <FEFF{logical}>>> BDC\n").bytes());
-        let spaces = line.matches(' ').count();
+        // Logical text retains hanging separators that the displayed pieces omit. Only the
+        // spaces the writer actually advances may share the line's justification.
+        let spaces = pieces
+            .iter()
+            .map(|piece| match piece {
+                Piece::Latin(text) => text.matches(' ').count(),
+                Piece::Shaped(clusters) => clusters.iter().filter(|cluster| cluster.text == " ").count(),
+            })
+            .sum();
         let (x, tw) = placed(t, r, &paragraphs, i, *w, spaces, *rtl);
         let extents = line_extents(pieces, |cluster| {
             let mut bounds = [0.0f64; 4];
@@ -336,7 +344,7 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
             if t.text.chars().any(is_thai)
                 || face_or_new(is_arabic, pdfcraft_fonts::document_arabic_font().is_some())
                 || face_or_new(is_hebrew, pdfcraft_fonts::document_hebrew_font(false).is_some())
-                || t.text.chars().any(pdfcraft_fonts::embedding::default_ignorable)
+                || (t.text.chars().any(pdfcraft_fonts::embedding::default_ignorable) && pdfcraft_fonts::appearance_text::can_shape(&t.text))
             {
                 draw_shaped(doc, t, taken, &mut fonts, &mut out)?;
                 res.set(b"Font".to_vec(), Object::Dict(fonts));
