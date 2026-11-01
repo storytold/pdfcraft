@@ -18,7 +18,25 @@ impl Control {
             "ui.commands" => Ok(Handled::Now(Ok(host.commands()))),
             "ui.panel" | "ui.dock.reset" => Ok(Handled::Now(host.panel(method == "ui.dock.reset", p))),
             "ui.command" if str_param("id")? == "ui.panel" => Ok(Handled::Now(host.panel(false, p.get("params").unwrap_or(p)))),
+            "ui.command" if str_param("id")? == "ui.detach" => {
+                let sub = p.get("params").unwrap_or(p);
+                let id = parse_doc_or_tab(sub, host, "ui.detach")?;
+                Ok(Handled::Now(host.detach(id)))
+            }
+            "ui.command" if str_param("id")? == "ui.attach" => {
+                let sub = p.get("params").unwrap_or(p);
+                let id = parse_doc_or_tab(sub, host, "ui.attach")?;
+                Ok(Handled::Now(host.attach(id)))
+            }
             "ui.command" => Ok(Handled::Now(host.command(str_param("id")?))),
+            "ui.detach" | "ui.tab.detach" => {
+                let id = parse_doc_or_tab(p, host, method)?;
+                Ok(Handled::Now(host.detach(id)))
+            }
+            "ui.attach" | "ui.tab.attach" => {
+                let id = parse_doc_or_tab(p, host, method)?;
+                Ok(Handled::Now(host.attach(id)))
+            }
             "ui.set" => {
                 let value = match p.get("value") {
                     Some(Value::String(s)) => s.clone(),
@@ -88,7 +106,7 @@ impl Control {
                 Ok(Handled::Screenshot(region))
             }
             other => Err(format!(
-                "unknown method {other:?} (ui.state, ui.inspect, ui.click, ui.focus, ui.resize, ui.quit, ui.move, ui.drag, ui.type, ui.key, ui.command, ui.commands, ui.set, ui.open, ui.screenshot)"
+                "unknown method {other:?} (ui.state, ui.inspect, ui.click, ui.focus, ui.resize, ui.quit, ui.move, ui.drag, ui.type, ui.key, ui.command, ui.commands, ui.set, ui.open, ui.detach, ui.attach, ui.screenshot)"
             )),
         })();
         r.unwrap_or_else(|e| Handled::Now(Err(e)))
@@ -367,3 +385,28 @@ fn rect_param(v: &Value) -> Result<egui::Rect, String> {
         _ => Err("region must be [x0, y0, x1, y1] in points".into()),
     }
 }
+
+fn parse_doc_or_tab(p: &Value, host: &impl Host, method: &str) -> Result<pdfcraft_engine::DocId, String> {
+    only_params(p, method, &["doc", "id", "tab", "index", "params"])?;
+    if let Some(doc_val) = p.get("doc") {
+        let id_num = doc_val
+            .as_u64()
+            .or_else(|| doc_val.as_str().and_then(|s| s.parse::<u64>().ok()))
+            .ok_or_else(|| format!("{method}: doc id must be an integer"))?;
+        return Ok(pdfcraft_engine::DocId(id_num));
+    }
+    if let Some(tab_val) = p.get("tab").or_else(|| p.get("index")) {
+        let tab_idx = tab_val
+            .as_u64()
+            .or_else(|| tab_val.as_str().and_then(|s| s.parse::<u64>().ok()))
+            .ok_or_else(|| format!("{method}: tab index must be a non-negative integer"))? as usize;
+        return host.doc_id_from_tab(tab_idx).ok_or_else(|| format!("{method}: tab index {tab_idx} out of range"));
+    }
+    if let Some(id_val) = p.get("id")
+        && let Some(id_num) = id_val.as_u64().or_else(|| id_val.as_str().and_then(|s| s.parse::<u64>().ok()))
+    {
+        return Ok(pdfcraft_engine::DocId(id_num));
+    }
+    Err(format!("{method}: pass doc id (doc) or tab index (tab)"))
+}
+

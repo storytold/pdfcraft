@@ -403,13 +403,20 @@ impl PdfCraftApp {
 
     /// Detaches a document tab into its own window (view.multiple-windows).
     pub fn detach_tab(&mut self, id: DocId) {
-        if self.views.len() <= 1 {
-            return;
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = id;
         }
-        if let Some(i) = self.views.iter().position(|v| v.id == id) {
-            self.views[i].detached = true;
-            if self.active == Some(i) || self.active.is_some_and(|a| self.views.get(a).is_some_and(|v| v.detached)) {
-                self.active = self.nearest_docked_tab(i);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.views.len() <= 1 {
+                return;
+            }
+            if let Some(i) = self.views.iter().position(|v| v.id == id) {
+                self.views[i].detached = true;
+                if self.active == Some(i) || self.active.is_some_and(|a| self.views.get(a).is_some_and(|v| v.detached)) {
+                    self.active = self.nearest_docked_tab(i);
+                }
             }
         }
     }
@@ -420,6 +427,16 @@ impl PdfCraftApp {
             self.views[i].detached = false;
             self.active = Some(i);
         }
+    }
+
+    /// Returns the list of document IDs that are currently detached in separate window viewports.
+    pub fn detached_viewports(&self) -> Vec<DocId> {
+        self.views.iter().filter(|v| v.detached).map(|v| v.id).collect()
+    }
+
+    /// Returns whether the specified document tab is currently detached.
+    pub fn is_tab_detached(&self, id: DocId) -> bool {
+        self.views.iter().find(|v| v.id == id).is_some_and(|v| v.detached)
     }
 
     /// Whether something over the pages has the keyboard: what covers them

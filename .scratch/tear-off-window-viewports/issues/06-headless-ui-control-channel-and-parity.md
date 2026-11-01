@@ -7,8 +7,9 @@
 
 **Blocked by:** 03-active-tab-isolation-and-desync-prevention, 04-detached-child-viewport-close-and-unsaved-routing
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] `PdfCraftControl` in `crates/ui-egui/src/control/host.rs` exposes methods to query detached viewports and detach / attach tabs by `DocId`.
-- [ ] Control-channel test in `crates/ui-egui/tests/it/control.rs` verifies programmatic detachment and re-attachment.
-- [ ] `parity/acrobat-features.toml` entry for `view.multiple-windows` accurately reflects evidence and status.
+- [x] `PdfCraftControl` in `crates/ui-egui/src/control/host.rs` exposes methods to query detached viewports and detach / attach tabs by `DocId`.
+- [x] Control-channel test in `crates/ui-egui/tests/it/control.rs` verifies programmatic detachment and re-attachment.
+- [x] `parity/acrobat-features.toml` entry for `view.multiple-windows` accurately reflects evidence and status.
+
