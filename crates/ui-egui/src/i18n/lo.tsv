@@ -2483,6 +2483,9 @@ animation effects	Off	ປິດ
 	Extract the selected pages…	ແຍກໜ້າທີ່ເລືອກອອກ…
 	Delete the selected pages	ລຶບໜ້າທີ່ເລືອກ
 
+# Render warnings on the page in the viewer (#4340) (AI-assisted, not separately native-reviewed)
+	Part of this page isn't shown: its content goes past the most PdfCraft draws for one page.	ບາງສ່ວນຂອງໜ້ານີ້ບໍ່ໄດ້ສະແດງ: ເນື້ອຫາຂອງມັນເກີນຂີດສູງສຸດທີ່ PdfCraft ແຕ້ມສຳລັບໜຶ່ງໜ້າ.
+	A colour on this page couldn't be computed and is shown in a fallback colour.	ບໍ່ສາມາດຄຳນວນສີໜຶ່ງໃນໜ້ານີ້ໄດ້ ຈຶ່ງສະແດງດ້ວຍສີສຳຮອງ.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	ຕົວເລືອກຂອງການຕອບກັບນີ້
 # Untranslated: English text until a translator fills these in.

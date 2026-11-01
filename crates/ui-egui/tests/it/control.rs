@@ -924,6 +924,7 @@ fn state_and_view_options() {
     assert_eq!(s["documents"][0]["pages"], 5);
     assert_eq!(s["active"]["page"], 1);
     assert_eq!(s["active"]["page_errors"], json!([]));
+    assert_eq!(s["active"]["page_warnings"], json!([]), "the five plain pages draw as they are written");
     ok(&mut h, &c, "ui.set", json!({ "key": "page", "value": 4 }));
     h.run_steps(3);
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["page"], 4);
@@ -1799,6 +1800,38 @@ fn read_mode_retains_existing_rail_click_to_close_policy() {
     h.run_steps(3);
     assert_eq!(h.state().right, None);
     assert_eq!(h.state().mode, pdfcraft_ui_egui::Mode::Read);
+}
+
+/// #4340 (review on #4501): `ui.state` names a page drawn approximately, 1-based, with the
+/// renderer's warning, as an agent driving the app reads it.
+#[test]
+fn state_reports_a_page_drawn_with_a_fallback_colour() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-ui-warnings-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("warned.pdf").to_string_lossy().into_owned();
+    // The tint transform pops more than it is given, so the colour can't be computed.
+    std::fs::write(&path, crate::render_warnings::devicen_pdf("{ pop pop pop }")).unwrap();
+    let slot: Arc<Mutex<Option<ControlClient>>> = Arc::default();
+    let s = slot.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_eframe(move |cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.run_inline = true;
+        *s.lock().unwrap() = Some(app.attach_control(&cc.egui_ctx));
+        app
+    });
+    h.run_steps(4);
+    let c = slot.lock().unwrap().take().unwrap();
+    ok(&mut h, &c, "ui.open", json!({ "path": path }));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while h.state().render_pending() || h.state().views.first().is_none_or(|v| v.page_warnings().is_empty()) {
+        assert!(std::time::Instant::now() < deadline, "the page was not drawn in time");
+        h.run_steps(2);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let s = ok(&mut h, &c, "ui.state", json!({}));
+    assert_eq!(s["active"]["page_warnings"], json!([{ "page": 1, "warnings": ["ColourFallback"] }]), "{s}");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

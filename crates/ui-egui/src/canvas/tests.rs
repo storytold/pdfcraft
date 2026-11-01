@@ -21,6 +21,7 @@ fn page_size_hint_zone_is_the_bottom_left_quadrant() {
     assert!(!in_size_hint_zone(area, pos2(f32::NAN, 440.0)));
 }
 
+use super::bars::warning_note_rect;
 use super::*;
 
 #[test]
@@ -1149,6 +1150,92 @@ fn oversized_raster_results_do_not_replace_cached_textures() {
         assert_eq!(view.receive_result(&ctx, solid_result(request, 32, 64)), 32 * 64 * 4);
         assert_eq!(texture(&view)[0].1, [32, 64], "valid results still make progress");
     }
+}
+
+/// #4340: a page's raster or tile with render warnings marks the page, once per kind, until
+/// the page changes; thumbnails, grid cells and print previews don't.
+#[test]
+fn render_warnings_mark_the_page_until_it_changes() {
+    use pdfcraft_render::RenderWarning::{ColourFallback, ContentTruncated};
+    let ctx = egui::Context::default();
+    let mut view = DocView::new(DocId(1), &thumbnail_info(3), ViewDefaults::default());
+    let warned = |request: RenderRequest, warnings: Vec<pdfcraft_render::RenderWarning>| pdfcraft_render::RenderedPage {
+        warnings,
+        ..solid_result(request, 8, 8)
+    };
+    let page = |page: usize| RenderRequest { page, ..Default::default() };
+    let tile = RenderRequest { page: 1, tile: Some(Tile { x: 0, y: 0, w: 8, h: 8 }), ..Default::default() };
+    let others = [THUMB_TAG, GRID_TAG, PRINT_TAG].map(|tag| RenderRequest { page: 2, tag, ..Default::default() }).into_iter().collect::<Vec<_>>();
+    view.last_queue = [page(0), tile].into_iter().chain(others.iter().copied()).collect();
+
+    view.receive_result(&ctx, warned(page(0), vec![ColourFallback]));
+    view.receive_result(&ctx, warned(page(0), vec![ColourFallback, ContentTruncated]));
+    view.receive_result(&ctx, warned(tile, vec![ContentTruncated]));
+    for &request in &others {
+        view.receive_result(&ctx, warned(request, vec![ContentTruncated]));
+    }
+    assert_eq!(
+        view.page_warnings(),
+        vec![(0, &[ColourFallback, ContentTruncated][..]), (1, &[ContentTruncated][..])],
+        "each kind once; tiles count, other pictures of a page don't"
+    );
+    view.receive_result(&ctx, solid_result(page(0), 8, 8));
+    assert_eq!(view.page_warnings().len(), 2, "a later raster without warnings keeps what the content gave");
+
+    view.page_changed(0);
+    assert_eq!(view.page_warnings(), vec![(1, &[ContentTruncated][..])], "an edited page is drawn again before it is marked");
+    view.invalidate_content();
+    assert!(view.page_warnings().is_empty(), "nor are pages after an edit to the document");
+}
+
+/// #4340: the note is drawn whole or not at all: in a short or narrow part of a page on screen
+/// it would be cut off.
+#[test]
+fn the_warning_note_is_left_out_where_it_would_be_cut_off() {
+    let size = vec2(200.0, 60.0);
+    let shown = Rect::from_min_size(pos2(10.0, 20.0), vec2(400.0, 300.0));
+    assert_eq!(warning_note_rect(shown, size, 8.0), Some(Rect::from_min_size(pos2(202.0, 28.0), size)), "top-right corner");
+    assert_eq!(warning_note_rect(Rect::from_min_size(shown.min, vec2(400.0, 70.0)), size, 8.0), None, "too short");
+    assert_eq!(warning_note_rect(Rect::from_min_size(shown.min, vec2(210.0, 300.0)), size, 8.0), None, "too narrow");
+    assert!(warning_note_rect(Rect::from_min_size(shown.min, vec2(216.0, 76.0)), size, 8.0).is_some(), "just fits");
+}
+
+/// #4340: a raster the view refuses (here: no pixels) shows nothing, so its warnings don't mark
+/// the page either.
+#[test]
+fn a_refused_raster_does_not_mark_the_page() {
+    let ctx = egui::Context::default();
+    let mut view = DocView::new(DocId(1), &thumbnail_info(1), ViewDefaults::default());
+    let page = RenderRequest { page: 0, ..Default::default() };
+    view.last_queue = vec![page];
+    let refused = pdfcraft_render::RenderedPage { warnings: vec![pdfcraft_render::RenderWarning::ContentTruncated], ..solid_result(page, 0, 0) };
+    assert_eq!(view.receive_result(&ctx, refused), 0, "refused");
+    assert!(view.page_warnings().is_empty(), "{:?}", view.page_warnings());
+}
+
+/// #4340: closing a page's warning note hides the note only; the page is still reported as
+/// incomplete, and a change to the page brings the note back once it is drawn again.
+#[test]
+fn a_closed_warning_note_stays_closed_until_the_page_changes() {
+    use pdfcraft_render::RenderWarning::ContentTruncated;
+    let ctx = egui::Context::default();
+    let mut view = DocView::new(DocId(1), &thumbnail_info(2), ViewDefaults::default());
+    let page = RenderRequest { page: 0, ..Default::default() };
+    let warned = || pdfcraft_render::RenderedPage { warnings: vec![ContentTruncated], ..solid_result(page, 8, 8) };
+    view.last_queue = vec![page];
+    view.receive_result(&ctx, warned());
+    assert_eq!(view.render_warning_note(0), Some(&[ContentTruncated][..]));
+
+    view.dismiss_render_warning_note(0);
+    assert_eq!(view.render_warning_note(0), None, "closed");
+    view.receive_result(&ctx, warned());
+    assert_eq!(view.render_warning_note(0), None, "a later raster of the same page doesn't reopen it");
+    assert_eq!(view.page_warnings(), vec![(0, &[ContentTruncated][..])], "automation still sees the page as incomplete");
+
+    view.page_changed(0);
+    view.last_queue = vec![page];
+    view.receive_result(&ctx, warned());
+    assert_eq!(view.render_warning_note(0), Some(&[ContentTruncated][..]), "the changed page is noted again");
 }
 
 /// A print preview carries the renderer's print bit; the bit that asks for luminance is
