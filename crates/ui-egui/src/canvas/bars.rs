@@ -282,7 +282,8 @@ const QUICK_BAR_EDGE: f32 = 14.0;
 
 /// How far from the side panel the quick-action bar stands, given the width of the margin between
 /// the panel and the page and the bar's own width: centred in the margin when it holds the bar,
-/// else 14 pt in (a page filling the width).
+/// else 14 pt in (a page filling the width). With no page on screen the caller passes a margin of 0,
+/// which is 14 pt too.
 fn quick_bar_offset(margin: f32, width: f32) -> f32 {
     // shortcut: centred in at most 100 pt of margin, so a wide margin keeps the bar by the panel.
     // `f32::min` returns the other operand for NaN, which would pass the fit check below.
@@ -525,6 +526,14 @@ mod tests {
         assert_eq!(quick_bar_offset(62.0, 46.0), 8.0);
         // A wide margin centres in its first 100 pt, not all of it.
         assert_eq!(quick_bar_offset(400.0, 46.0), 27.0);
+    }
+
+    #[test]
+    fn the_margin_that_just_holds_the_bar_centres_and_a_point_less_does_not() {
+        // 46 pt of bar and 8 pt to spare each side: 62 pt.
+        assert_eq!(quick_bar_offset(62.0, 46.0), 8.0);
+        assert_eq!(quick_bar_offset(61.0, 46.0), 14.0);
+        assert_eq!(quick_bar_offset(1000.0, 46.0), 27.0);
     }
 
     #[test]
