@@ -816,14 +816,9 @@
 	Copy Image in Original Format	Kopiuj obraz w oryginalnym formacie
 	The image has been copied as a {ext} file	Obraz został skopiowany jako plik {ext}
 	The page has changed; select the image again	Strona się zmieniła; zaznacz obraz ponownie
-	Check for updates	Sprawdź aktualizacje
 	No check has run yet.	Nie sprawdzono jeszcze aktualizacji.
-	Checking for a newer version…	Sprawdzanie dostępności nowszej wersji…
 	PdfCraft {v} is available.	PdfCraft {v} jest dostępny.
 	You have version {c}. Download the new version from its release page.	Masz wersję {c}. Pobierz nową wersję ze strony wydania.
-	PdfCraft {c} is up to date.	PdfCraft {c} jest aktualny.
-	Couldn't check for updates: {e}	Nie można sprawdzić aktualizacji: {e}
-	You have version {c}. All releases are listed at {page}.	Masz wersję {c}. Wszystkie wydania są dostępne na {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Sprawdza najnowsze wydanie na GitHubie. Nic nie jest pobierane ani instalowane automatycznie.
 	Download	Pobierz
 	Later	Później
@@ -2496,6 +2491,26 @@ animation effects	Off	Wyłączone
 	Make properties default	Ustaw właściwości jako domyślne
 	Pages selected	Zaznaczone strony
 	Page properties	Właściwości strony
+	Clear search	Wyczyść wyszukiwanie
+	Pin	Przypnij
+	Pin a tool…	Przypnij narzędzie…
+	Pin to Home	Przypnij do strony głównej
+	Pin tools to Home	Przypnij narzędzia do strony głównej
+	Pin your favorite tools here for quick access.	Przypnij tutaj ulubione narzędzia, aby mieć do nich szybki dostęp.
+	Pinned	Przypięte
+	Pinned Tools	Przypięte narzędzia
+	Search tools…	Szukaj narzędzi…
+	Select tools to display on your Home page for quick access.	Wybierz narzędzia do wyświetlenia na stronie głównej, aby mieć do nich szybki dostęp.
+	Unpin from Home	Odepnij od strony głównej
+	Unpin tool	Odepnij narzędzie
+	Transform image	Przekształć obraz
+	Select Tool	Narzędzie Zaznaczanie
+	Hand Tool	Narzędzie Rączka
+	Marquee Zoom	Powiększ zaznaczony obszar
+	Paste	Wklej
+	Edit this PDF	Edytuj ten plik PDF
+	Export this PDF	Eksportuj ten plik PDF
+	Find text or tools	Znajdź tekst lub narzędzia
 	Create & Edit	Tworzenie i edycja
 	Review & Compare	Recenzja i porównanie
 	Forms & Signatures	Formularze i podpisy
@@ -2663,6 +2678,13 @@ animation effects	Off	Wyłączone
 	field names can't contain a period: {name}	nazwy pól nie mogą zawierać kropki: {name}
 	two cells would both be named {name}	dwie komórki miałyby nazwę {name}
 	a field named {name} already exists	pole o nazwie {name} już istnieje
+	Arrange image	Rozmieść obraz
+	Bring forward	Przesuń do przodu
+	Bring to front	Przesuń na wierzch
+	Crop	Przytnij
+	Remove crop	Usuń przycięcie
+	Send backward	Przesuń do tyłu
+	Send to back	Przesuń pod spód
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Dzisiaj
@@ -2679,3 +2701,11 @@ animation effects	Off	Wyłączone
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opcje tej odpowiedzi
 	Export value	Wartość eksportowa
+	Show Page Edge Shadows	Pokaż cienie krawędzi stron
+
+# Image paste and Home notifications (AI-assisted; not separately native-reviewed)
+	Search…	Szukaj…
+	Image pasted	Wklejono obraz
+	No image on clipboard to paste	Brak obrazu do wklejenia w schowku
+	Pinned {tool} to Home	Przypięto {tool} do strony głównej
+	Unpinned {tool} from Home	Odpięto {tool} od strony głównej

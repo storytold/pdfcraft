@@ -612,7 +612,23 @@ fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize) -> Option<Vec<u8>>
         return Some(px);
     }
     let img = image::GrayImage::from_raw(mw as u32, mh as u32, px)?;
-    Some(image::imageops::resize(&img, w as u32, h as u32, image::imageops::FilterType::Triangle).into_raw())
+    Some(scaled(&img, w as u32, h as u32).into_raw())
+}
+
+/// `img` scaled to `w` × `h`. Scaling goes down first, through a buffer of `img`'s width by `h` at
+/// 16 bytes a pixel, which a mask of other proportions than its image can make larger than any
+/// machine: 100,000 × 1 on an image of 1 × 100,000 asks for 160 GB, and that aborts the process.
+/// Such a mask is scaled across first, which holds no more pixels than one of the two has. Past a
+/// quarter over the larger of them, so that rounding leaves a mask of its image's shape as it was.
+pub(crate) fn scaled(img: &image::GrayImage, w: u32, h: u32) -> image::GrayImage {
+    use image::imageops::{FilterType, resize};
+    let (mw, mh) = (u64::from(img.width()), u64::from(img.height()));
+    let largest = (mw * mh).max(u64::from(w) * u64::from(h));
+    if (mw * u64::from(h)).saturating_mul(4) > largest.saturating_mul(5) {
+        resize(&resize(img, w, img.height(), FilterType::Triangle), w, h, FilterType::Triangle)
+    } else {
+        resize(img, w, h, FilterType::Triangle)
+    }
 }
 
 fn png(w: u32, h: u32, rgb: &[u8], alpha: Option<&[u8]>) -> Result<Vec<u8>, String> {
