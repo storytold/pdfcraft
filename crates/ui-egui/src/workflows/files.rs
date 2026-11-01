@@ -521,7 +521,7 @@ impl PdfCraftApp {
         if dropped.is_empty() {
             return;
         }
-        let dropped = dropped.to_vec();
+        let dropped = dropped[..dropped.len().min(MAX_DROPPED_FILES)].to_vec();
         let requests = self.requests.clone();
         let request = self.file_request(FilePurpose::Combine, Vec::new());
         let ctx = ctx.clone();
