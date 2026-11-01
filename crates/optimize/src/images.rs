@@ -1268,7 +1268,7 @@ pub(crate) fn run(
             doc.set(r, Object::Stream(new));
             continue;
         }
-        let Some((new, smask)) = processed else { continue };
+        let Some((mut new, smask)) = processed else { continue };
         let resized = new.dict.int(b"Width") != s.dict.int(b"Width") || new.dict.int(b"Height") != s.dict.int(b"Height");
         report.image_bytes_before += s.raw.len();
         report.image_bytes_after += new.raw.len();
@@ -1277,10 +1277,12 @@ pub(crate) fn run(
         } else {
             report.images_recompressed += 1;
         }
-        doc.set(r, Object::Stream(new));
-        if let Some((mr, m)) = smask {
-            doc.set(mr, Object::Stream(m));
+        // The resized mask is a new object: other images may share the original, which must stay as it was.
+        if let Some((_, m)) = smask {
+            let mr = doc.add(Object::Stream(m));
+            new.dict.set(b"SMask".to_vec(), Object::Ref(mr));
         }
+        doc.set(r, Object::Stream(new));
     }
     if !progress(Stage::Images { done: total, total }) {
         return Err(OptimizeError::Cancelled);
