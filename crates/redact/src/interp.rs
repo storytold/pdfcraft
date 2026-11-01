@@ -53,6 +53,19 @@ pub(crate) enum Mode {
     Verify,
 }
 
+/// A run of glyphs cut out under a region, kept for the redaction proof
+/// ([`Snapshot::capture`](crate::verify::Snapshot::capture)).
+pub(crate) struct Removed {
+    /// Index of the region (in `Scope::rects`) the run lay under.
+    pub(crate) rect: usize,
+    /// The character codes as they stood in the string.
+    pub(crate) raw: Vec<u8>,
+    /// What the font says they showed (codes without a known meaning are left out).
+    pub(crate) text: String,
+    /// How many character codes the run holds (a composite font's codes are several bytes).
+    pub(crate) codes: usize,
+}
+
 #[derive(Clone)]
 struct Gs {
     ctm: Matrix,
@@ -122,6 +135,10 @@ pub(crate) struct Scope<'a> {
     xobject_oc_cache: HashMap<ObjRef, bool>,
     /// Content removed from hidden layers (blocks and XObjects).
     pub layer_blocks: usize,
+    /// Collects the glyph runs removed under a region in apply mode (`None` = not collected).
+    /// The redaction proof's snapshot is what sets it: it must know what applying is about to
+    /// remove, by the interpreter's own judgement, without trusting anything else to it.
+    pub removed: Option<Vec<Removed>>,
     fonts: HashMap<Vec<u8>, Rc<Metrics>>,
     used_names: Vec<Vec<u8>>,
     depth: usize,
@@ -146,6 +163,7 @@ impl<'a> Scope<'a> {
             ocmd_cache: HashMap::new(),
             xobject_oc_cache: HashMap::new(),
             layer_blocks: 0,
+            removed: None,
             fonts: HashMap::new(),
             used_names: Vec::new(),
             depth: 0,
@@ -166,21 +184,33 @@ impl<'a> Scope<'a> {
         self.rects.iter().any(|r| contains(*r, b, 0.01))
     }
 
-    /// Does a glyph box count as under a region? Any real overlap does (more than a fifth of
+    /// Which regions a glyph box counts as under? Any real overlap does (more than a fifth of
     /// the glyph or a point, whichever is less, in both directions), so neighbours that only
     /// touch an edge survive while partly covered glyphs go. Degenerate boxes (zero-size text)
-    /// count when their origin is inside.
-    fn glyph_hit(&self, b: [f64; 4], origin: (f64, f64)) -> bool {
+    /// count when their origin is inside. Empty = under no region (a glyph kept). A glyph may
+    /// lie under several regions at once (overlapping marks); each is reported.
+    fn glyph_rects(&self, b: [f64; 4], origin: (f64, f64)) -> Vec<usize> {
         let (gw, gh) = (b[2] - b[0], b[3] - b[1]);
         if gw < 0.01 || gh < 0.01 {
-            return self.rects.iter().any(|r| origin.0 >= r[0] && origin.0 <= r[2] && origin.1 >= r[1] && origin.1 <= r[3]);
+            return self
+                .rects
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| origin.0 >= r[0] && origin.0 <= r[2] && origin.1 >= r[1] && origin.1 <= r[3])
+                .map(|(i, _)| i)
+                .collect();
         }
         let (mx, my) = ((gw * 0.2).min(1.0), (gh * 0.2).min(1.0));
-        self.rects.iter().any(|r| {
-            let ox = b[2].min(r[2]) - b[0].max(r[0]);
-            let oy = b[3].min(r[3]) - b[1].max(r[1]);
-            ox > mx && oy > my
-        })
+        self.rects
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| {
+                let ox = b[2].min(r[2]) - b[0].max(r[0]);
+                let oy = b[3].min(r[3]) - b[1].max(r[1]);
+                ox > mx && oy > my
+            })
+            .map(|(i, _)| i)
+            .collect()
     }
 }
 
@@ -220,6 +250,8 @@ struct Glyph {
     /// Advance in unscaled text space (before `Th`).
     advance: f64,
     hit: bool,
+    /// The regions it lies under (empty for hidden text).
+    rects: Vec<usize>,
 }
 
 /// Process a scope's content streams (state flows from one stream to the next).
@@ -641,7 +673,8 @@ fn clean_replacements(doc: &Document, resources: &Dict, original: &[Op], process
 
 /// Lay out a shown string (or `TJ` array) glyph by glyph, advancing `tm`. Returns the `TJ`
 /// items with the glyphs under a region replaced by displacements, and how many were removed.
-fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<Object>, usize) {
+/// In apply mode the runs removed under each region are also handed to `scope.removed`.
+fn show(scope: &mut Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<Object>, usize) {
     let f = &gs.font;
     let size = gs.size;
     let mut out: Vec<Object> = Vec::new();
@@ -671,17 +704,48 @@ fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<O
                     let b = trm.bbox([0.0, f.descent, w0, f.ascent]);
                     let origin = trm.apply(0.0, 0.0);
                     let advance = w0 * size + spacing;
+                    let mut rects = Vec::new();
                     let hit = match scope.hidden_text {
                         // Invisible (Tr 3) and clip-only (Tr 7) text, or text wholly off the page.
                         Some(page) => {
                             let degenerate = b[2] - b[0] < 0.01 && b[3] - b[1] < 0.01;
                             matches!(gs.render_mode, 3 | 7) || !(overlaps(page, b, 0.0) || degenerate)
                         }
-                        None => scope.glyph_hit(b, origin),
+                        None => {
+                            rects = scope.glyph_rects(b, origin);
+                            !rects.is_empty()
+                        }
                     };
-                    glyphs.push(Glyph { bytes: pos..pos + len, advance, hit });
+                    glyphs.push(Glyph { bytes: pos..pos + len, advance, hit, rects });
                     *tm = Matrix::translate(advance * gs.scale, 0.0).then(tm);
                     pos += len;
+                }
+                if scope.mode == Mode::Apply
+                    && let Some(sink) = scope.removed.as_mut()
+                {
+                    // Consecutive removed glyphs under one region are one run, recorded for
+                    // every region the glyphs lie under: overlapping marks each account for
+                    // their own share of what was cut.
+                    let mut under: Vec<usize> = glyphs.iter().flat_map(|g| g.rects.iter().copied()).collect();
+                    under.sort_unstable();
+                    under.dedup();
+                    for r in under {
+                        let mut k = 0;
+                        while let Some(g) = glyphs.get(k) {
+                            if !g.rects.contains(&r) {
+                                k += 1;
+                                continue;
+                            }
+                            let mut end = k;
+                            while glyphs.get(end + 1).is_some_and(|n| n.rects.contains(&r)) {
+                                end += 1;
+                            }
+                            let span = g.bytes.start..glyphs.get(end).map_or(g.bytes.end, |l| l.bytes.end);
+                            let raw = bytes.get(span).unwrap_or_default().to_vec();
+                            sink.push(Removed { rect: r, text: f.decode(&raw), raw, codes: end - k + 1 });
+                            k = end + 1;
+                        }
+                    }
                 }
                 let mut run: Vec<u8> = Vec::new();
                 for g in &glyphs {
