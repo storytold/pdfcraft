@@ -33,6 +33,39 @@ pub(crate) fn fixture(n: usize) -> Vec<u8> {
     out
 }
 
+fn fixture_with_rotation_and_user_unit(rotate: i64, user_unit: f64) -> Vec<u8> {
+    let mut objs: Vec<Vec<u8>> = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()];
+    objs.push(b"<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec());
+    objs.push(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec());
+    let mut page_dict = String::from("<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >>");
+    if rotate != 0 {
+        page_dict.push_str(&format!(" /Rotate {rotate}"));
+    }
+    if (user_unit - 1.0).abs() > 1e-6 {
+        page_dict.push_str(&format!(" /UserUnit {user_unit}"));
+    }
+    page_dict.push_str(" >>");
+    objs.push(page_dict.into_bytes());
+    let body = "BT /F1 24 Tf 20 150 Td (Page 1) Tj ET";
+    objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()).into_bytes());
+
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
 fn session_with(n: usize) -> (Session, DocId) {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let id = s.open("fixture.pdf", None, Arc::new(fixture(n)), None).expect("opens");
@@ -581,6 +614,80 @@ fn edits_update_view_data_and_mark_dirty() {
     assert_eq!(page_texts(&s, id), ["Page 1", "Page 3"], "renderer refreshed");
 }
 
+/// A font of an Adobe CJK collection that a PDF does not embed is drawn with an installed face on
+/// the viewer's pool only. An export of the same page, which can be saved, has nothing drawn with
+/// an installed font (AGENTS.md §1.2, §1.4). Skipped where no such face is installed.
+#[test]
+fn installed_cjk_fonts_draw_in_the_viewer_but_not_in_an_export() {
+    let content = "BT /F1 40 Tf 5 15 Td <7E419AD45B57> Tj ET";
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 60] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type0 /BaseFont /MSung-Light /Encoding /UniCNS-UCS2-H /DescendantFonts [6 0 R] >> endobj
+6 0 obj << /Type /Font /Subtype /CIDFontType0 /BaseFont /MSung-Light /CIDSystemInfo << /Registry (Adobe) /Ordering (CNS1) /Supplement 2 >> /FontDescriptor 7 0 R /DW 1000 >> endobj
+7 0 obj << /Type /FontDescriptor /FontName /MSung-Light /Flags 6 /FontBBox [0 -141 1000 859] /ItalicAngle 0 /Ascent 859 /Descent -141 /CapHeight 700 /StemV 80 >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        content.len()
+    );
+    let mut s = Session::new();
+    let id = s.open("cns1.pdf", None, Arc::new(pdf.into_bytes()), None).unwrap();
+    let doc = s.get(id).unwrap();
+    doc.renderer.set_queue(vec![pdfcraft_render::RenderRequest {
+        page: 0,
+        kind: pdfcraft_render::RequestKind::Pixels,
+        scale: 1.0,
+        ..Default::default()
+    }]);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let viewer = loop {
+        if let Some(page) = doc.renderer.try_recv() {
+            assert!(page.error.is_none(), "{:?}", page.error);
+            break page;
+        }
+        assert!(std::time::Instant::now() < deadline, "page render did not finish");
+        std::thread::yield_now();
+    };
+    let inked = |rgba: &[u8]| rgba.as_chunks::<4>().0.iter().filter(|c| c[0] < 128).count();
+    // Whether this machine has a face that can draw the page at all, asked of a renderer with the
+    // fallback switched on by hand, so a viewer pool that lost it fails below instead of skipping.
+    let probe = pdfcraft_render::PageRenderer::new(doc.display.clone(), pdfcraft_render::RenderConfig { system_fonts: true, ..Default::default() })
+        .render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+    assert!(probe.error.is_none(), "{:?}", probe.error);
+    if inked(&probe.rgba) < 300 {
+        eprintln!("no installed Traditional Chinese face (or PDFCRAFT_SYSTEM_FONTS=0): skipped");
+        return;
+    }
+    assert!(inked(&viewer.rgba) > 300, "the viewer's pool draws it with the installed face ({} dark pixels)", inked(&viewer.rgba));
+    let png = export::Exporter::new(doc).png(0, 72.0).unwrap();
+    let exported = image::load_from_memory(&png).unwrap().into_rgba8();
+    assert!(inked(exported.as_raw()) < 50, "an export draws nothing with an installed font ({} dark pixels)", inked(exported.as_raw()));
+
+    // Reload rebuilds the pool when retaining a view preference. That path must keep
+    // the display-only fallback too; otherwise Chinese disappears after a file refresh.
+    let bytes = doc.bytes.clone();
+    assert!(s.set_hide_comments(id, true));
+    s.reload(id, bytes).unwrap();
+    let doc = s.get(id).unwrap();
+    assert!(doc.comments_hidden());
+    doc.renderer.set_queue(vec![pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() }]);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let reloaded = loop {
+        if let Some(page) = doc.renderer.try_recv() {
+            assert!(page.error.is_none(), "{:?}", page.error);
+            break page;
+        }
+        assert!(std::time::Instant::now() < deadline, "reloaded page render did not finish");
+        std::thread::yield_now();
+    };
+    assert!(inked(&reloaded.rgba) > 300, "reload must retain visible Chinese text");
+}
+
 #[test]
 fn metadata_edit_keeps_the_renderer_without_changing_page_content() {
     let (mut s, id) = session_with(1);
@@ -860,9 +967,10 @@ fn revert_preserves_the_saved_pages_after_undo() {
 #[test]
 fn full_save_is_readable_and_smaller_after_deletes() {
     let (mut s, id) = session_with(5);
+    let original = s.save_bytes(id).unwrap();
     s.apply(id, Edit::DeletePages { pages: vec![0, 1, 2] }).unwrap();
     let full = s.save_full_bytes(id).unwrap();
-    assert!(full.len() < s.save_bytes(id).unwrap().len());
+    assert!(full.len() < original.len());
     let mut s2 = Session::new();
     let id2 = s2.open("full.pdf", None, full, None).unwrap();
     assert_eq!(page_texts(&s2, id2), ["Page 4", "Page 5"]);
@@ -8027,6 +8135,13 @@ fn copy_image_finds_the_image_under_a_point_and_decodes_it_at_full_size() {
     assert_eq!((w, h), (3, 2));
     assert_eq!(rgba, px.into_raw());
     assert!(d.page_image_rgba(0, 1).is_err());
+
+    // When the image is cropped, page_image_at only hit-tests the visible cropped region:
+    let crop_keep = [r[0] + (r[2] - r[0]) * 0.25, r[1] + (r[3] - r[1]) * 0.25, r[0] + (r[2] - r[0]) * 0.75, r[1] + (r[3] - r[1]) * 0.75];
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Crop(crop_keep) }).unwrap();
+    let d = s.get(id).unwrap();
+    assert_eq!(d.page_image_at(0, [(r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0]), Some(0));
+    assert_eq!(d.page_image_at(0, [r[0] + 0.1, r[1] + 0.1]), None, "cropped-away corner must not hit-test positive");
 }
 
 /// Copy Image: a JPEG drawn through grouped Form artwork (as Word, InDesign and scanners write
@@ -9050,6 +9165,474 @@ fn a_page_truncated_for_forms_and_pictures_is_listed_once() {
     assert_eq!(truncated, [0]);
 }
 
+/// Moving an added image, then rotating it, must keep the moved position.
+#[test]
+fn added_image_move_then_rotate_keeps_position() {
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 2, 2);
+        enc.set_color(png::ColorType::Rgb);
+        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
+    }
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
+    let rect = |s: &Session| s.get(id).unwrap().page_images(0)[0].rect;
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Move([120.0, 120.0, 160.0, 160.0]) }).unwrap();
+    let moved = rect(&s);
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Rotate(1) }).unwrap();
+    let rotated = rect(&s);
+    let c = |r: [f64; 4]| ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+    let (a, b) = (c(moved), c(rotated));
+    assert!((a.0 - b.0).abs() < 1.0 && (a.1 - b.1).abs() < 1.0, "rotate moved the centre from {a:?} to {b:?}");
+}
+
+/// Transforming an added image, then rotating it, must keep the moved position.
+#[test]
+fn added_image_transform_then_rotate_keeps_position() {
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 2, 2);
+        enc.set_color(png::ColorType::Rgb);
+        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
+    }
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
+    let rect = |s: &Session| s.get(id).unwrap().page_images(0)[0].rect;
+    // Translate by (100, 100): matrix [1, 0, 0, 1, 100, 100]
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Transform([1.0, 0.0, 0.0, 1.0, 100.0, 100.0]) }).unwrap();
+    let transformed = rect(&s);
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Rotate(1) }).unwrap();
+    let rotated = rect(&s);
+    let c = |r: [f64; 4]| ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+    let (a, b) = (c(transformed), c(rotated));
+    assert!((a.0 - b.0).abs() < 1.0 && (a.1 - b.1).abs() < 1.0, "rotate moved the centre from {a:?} to {b:?}");
+}
+
+/// Moving an added image, then rotating by degrees, must keep the moved position.
+#[test]
+fn added_image_move_then_rotate_by_keeps_position() {
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 2, 2);
+        enc.set_color(png::ColorType::Rgb);
+        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
+    }
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
+    let rect = |s: &Session| s.get(id).unwrap().page_images(0)[0].rect;
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Move([120.0, 120.0, 160.0, 160.0]) }).unwrap();
+    let moved = rect(&s);
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::RotateBy(90.0) }).unwrap();
+    let rotated = rect(&s);
+    let c = |r: [f64; 4]| ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+    let (a, b) = (c(moved), c(rotated));
+    assert!((a.0 - b.0).abs() < 1.0 && (a.1 - b.1).abs() < 1.0, "rotate_by moved the centre from {a:?} to {b:?}");
+}
+
+/// Arranging an added image moves it into the document stream and converts it to an ordinary
+/// page image (dropping the PCAdded marker), so no empty shell remains in list_added.
+#[test]
+fn added_image_arrange_converts_to_ordinary_image() {
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 2, 2);
+        enc.set_color(png::ColorType::Rgb);
+        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
+    }
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "p1.png".into(), bytes: Arc::new(png.clone()) }).unwrap();
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([100.0, 100.0, 200.0, 200.0]), name: "p2.png".into(), bytes: Arc::new(png) }).unwrap();
+    assert_eq!(s.get(id).unwrap().page_images(0).len(), 2);
+    assert_eq!(s.get(id).unwrap().added().len(), 2);
+    s.apply(id, Edit::EditPageImage { page: 0, index: 1, change: ImageEdit::Arrange(ArrangeOrder::SendToBack) }).unwrap();
+    assert_eq!(s.get(id).unwrap().page_images(0).len(), 2);
+    assert_eq!(s.get(id).unwrap().added().len(), 1, "arranged image is converted and no longer an added-item shell");
+}
+
+#[test]
+fn added_image_crop_then_move_keeps_crop() {
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 2, 2);
+        enc.set_color(png::ColorType::Rgb);
+        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
+    }
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 100.0, 100.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Crop([30.0, 30.0, 70.0, 70.0]) }).unwrap();
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Move([50.0, 50.0, 130.0, 130.0]) }).unwrap();
+    let img = s.get(id).unwrap().page_images(0)[0].clone();
+    assert_eq!(img.visible_rect, Some([60.0, 60.0, 100.0, 100.0]));
+}
+
+#[test]
+fn added_image_move_and_transform_on_rotated_and_user_unit_pages() {
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 2, 2);
+        enc.set_color(png::ColorType::Rgb);
+        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
+    }
+    let png_bytes = Arc::new(png);
+
+    let cases = [(90, 1.0), (180, 1.0), (270, 1.0), (0, 2.0), (90, 2.0)];
+
+    for (rotate, user_unit) in cases {
+        let pdf = fixture_with_rotation_and_user_unit(rotate, user_unit);
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let id = s.open("test.pdf", None, Arc::new(pdf), None).expect("opens");
+
+        s.apply(id, Edit::AddImage { page: 0, rect: Some([10.0, 10.0, 50.0, 50.0]), name: "img.png".into(), bytes: png_bytes.clone() }).unwrap();
+
+        // Target user-space rectangle R
+        let r = [30.0, 40.0, 80.0, 90.0];
+        s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Move(r) }).unwrap();
+
+        let painted = s.get(id).unwrap().page_images(0)[0].rect;
+        for i in 0..4 {
+            assert!(
+                (painted[i] - r[i]).abs() < 1e-3,
+                "Move: rotate={rotate}, user_unit={user_unit}: painted[{i}] = {}, expected {}",
+                painted[i],
+                r[i]
+            );
+        }
+
+        let cos = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+        let added = pdfcraft_edit::list_added(&cos);
+        assert_eq!(added.len(), 1);
+        let stream_obj = match &*cos.get(added[0].obj) {
+            pdfcraft_cos::Object::Stream(s) => s.clone(),
+            other => panic!("expected stream, got {other:?}"),
+        };
+        let pc_rect = stream_obj
+            .dict
+            .get(b"PCAdded")
+            .and_then(|o| cos.resolve(o).as_dict().cloned())
+            .and_then(|d| d.get(b"Rect").cloned())
+            .and_then(|o| cos.resolve(&o).as_array().cloned())
+            .unwrap();
+        let pc_box: [f64; 4] =
+            [pc_rect[0].as_f64().unwrap(), pc_rect[1].as_f64().unwrap(), pc_rect[2].as_f64().unwrap(), pc_rect[3].as_f64().unwrap()];
+        let content = String::from_utf8(stream_obj.decoded().unwrap()).unwrap();
+        let re_idx = content.find(" re W n").expect("re W n in content stream");
+        let prefix = &content[..re_idx];
+        let nums: Vec<f64> =
+            prefix.split_whitespace().rev().take(4).collect::<Vec<_>>().into_iter().rev().map(|val| val.parse::<f64>().unwrap()).collect();
+        assert_eq!(nums.len(), 4);
+        let (rx, ry, rw, rh) = (nums[0], nums[1], nums[2], nums[3]);
+        assert!((rx - pc_box[0]).abs() < 1e-3, "re x {rx} != pc_box[0] {}", pc_box[0]);
+        assert!((ry - pc_box[1]).abs() < 1e-3, "re y {ry} != pc_box[1] {}", pc_box[1]);
+        assert!((rw - (pc_box[2] - pc_box[0])).abs() < 1e-3, "re w {rw} != {}", pc_box[2] - pc_box[0]);
+        assert!((rh - (pc_box[3] - pc_box[1])).abs() < 1e-3, "re h {rh} != {}", pc_box[3] - pc_box[1]);
+
+        // Transform test: user-space translation by (10, 10)
+        s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Transform([1.0, 0.0, 0.0, 1.0, 10.0, 10.0]) }).unwrap();
+
+        let expected_transformed = [r[0] + 10.0, r[1] + 10.0, r[2] + 10.0, r[3] + 10.0];
+        let painted_transformed = s.get(id).unwrap().page_images(0)[0].rect;
+        for i in 0..4 {
+            assert!(
+                (painted_transformed[i] - expected_transformed[i]).abs() < 1e-3,
+                "Transform: rotate={rotate}, user_unit={user_unit}: painted[{i}] = {}, expected {}",
+                painted_transformed[i],
+                expected_transformed[i]
+            );
+        }
+    }
+}
+
+#[test]
+fn replace_on_added_image_replaces_xobject_and_undo_restores() {
+    let make_png = |rgb: [u8; 3]| {
+        let mut png = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut png, 2, 2);
+            enc.set_color(png::ColorType::Rgb);
+            let data = [rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2]];
+            enc.write_header().unwrap().write_image_data(&data).unwrap();
+        }
+        Arc::new(png)
+    };
+    let png1 = make_png([255, 0, 0]);
+    let png2 = make_png([0, 0, 255]);
+
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "img1.png".into(), bytes: png1 }).unwrap();
+
+    let old_obj = s.get(id).unwrap().page_images(0)[0].object.expect("initial image object ref");
+
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Replace { name: "img2.png".into(), bytes: png2 } }).unwrap();
+
+    let new_obj = s.get(id).unwrap().page_images(0)[0].object.expect("new image object ref");
+    assert_ne!(new_obj, old_obj, "after Replace the page references the new XObject");
+
+    s.undo(id).unwrap();
+
+    let restored_obj = s.get(id).unwrap().page_images(0)[0].object.expect("restored image object ref");
+    assert_eq!(restored_obj, old_obj, "undo restores the old XObject");
+
+    // Also test replacement on an image with active crop (promoted path)
+    let png3 = make_png([0, 255, 0]);
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Crop([25.0, 25.0, 55.0, 55.0]) }).unwrap();
+    let crop_obj = s.get(id).unwrap().page_images(0)[0].object.expect("crop image object ref");
+    assert_eq!(crop_obj, old_obj);
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Replace { name: "img3.png".into(), bytes: png3 } }).unwrap();
+    let promoted_new_obj = s.get(id).unwrap().page_images(0)[0].object.expect("promoted replace object ref");
+    assert_ne!(promoted_new_obj, crop_obj);
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().page_images(0)[0].object.expect("undo promoted replace"), crop_obj);
+}
+
+#[test]
+fn mirroring_transform_on_added_image_flips_and_non_finite_is_refused() {
+    let make_png = |rgb: [u8; 3]| {
+        let mut png = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut png, 2, 2);
+            enc.set_color(png::ColorType::Rgb);
+            let data = [rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2]];
+            enc.write_header().unwrap().write_image_data(&data).unwrap();
+        }
+        Arc::new(png)
+    };
+    let png1 = make_png([255, 0, 0]);
+
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([0.0, 0.0, 80.0, 40.0]), name: "img1.png".into(), bytes: png1 }).unwrap();
+
+    let initial_img = s.get(id).unwrap().page_images(0)[0].clone();
+    assert_eq!(initial_img.rect, [0.0, 0.0, 80.0, 40.0]);
+    assert!(initial_img.matrix[0] > 0.0, "initially unflipped");
+
+    // Mirroring transform: [-1.0, 0.0, 0.0, 1.0, 80.0, 0.0]
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Transform([-1.0, 0.0, 0.0, 1.0, 80.0, 0.0]) }).unwrap();
+
+    let flipped_img = s.get(id).unwrap().page_images(0)[0].clone();
+    assert!(flipped_img.matrix[0] < 0.0, "horizontal mirror flips matrix x-axis, got matrix: {:?}", flipped_img.matrix);
+
+    let cos = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+    let added = pdfcraft_edit::list_added(&cos);
+    assert_eq!(added.len(), 1);
+    let AddedContent::Image(ai) = &added[0].content else { panic!("expected added image") };
+    assert!(ai.flip_h, "PCAdded record must have flip_h = true");
+
+    // Mirroring horizontally again flips it back
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Transform([-1.0, 0.0, 0.0, 1.0, 80.0, 0.0]) }).unwrap();
+    let unflipped_img = s.get(id).unwrap().page_images(0)[0].clone();
+    assert!(unflipped_img.matrix[0] > 0.0, "double horizontal mirror restores positive x-axis");
+    let cos2 = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+    let AddedContent::Image(ai2) = &pdfcraft_edit::list_added(&cos2)[0].content else { panic!("expected added image") };
+    assert!(!ai2.flip_h, "PCAdded record must have flip_h = false");
+
+    // Mirroring vertically: [1.0, 0.0, 0.0, -1.0, 0.0, 40.0]
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Transform([1.0, 0.0, 0.0, -1.0, 0.0, 40.0]) }).unwrap();
+    let v_flipped_img = s.get(id).unwrap().page_images(0)[0].clone();
+    assert!(v_flipped_img.matrix[3] < 0.0, "vertical mirror flips matrix y-axis, got matrix: {:?}", v_flipped_img.matrix);
+    let cos3 = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+    let AddedContent::Image(ai3) = &pdfcraft_edit::list_added(&cos3)[0].content else { panic!("expected added image") };
+    assert!(ai3.flip_v, "PCAdded record must have flip_v = true");
+
+    // Non-finite transform must be refused with error
+    let res = s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Transform([f64::NAN, 0.0, 0.0, 1.0, 0.0, 0.0]) });
+    assert!(res.is_err(), "NaN transform must be refused");
+
+    let res_inf = s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Transform([1.0, 0.0, 0.0, f64::INFINITY, 0.0, 0.0]) });
+    assert!(res_inf.is_err(), "infinite transform must be refused");
+
+    let res_move = s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Move([f64::NAN, 20.0, 100.0, 60.0]) });
+    assert!(res_move.is_err(), "NaN position must be refused");
+}
+
+#[test]
+fn transform_on_added_image_folds_quarter_turns_and_promotes_non_axis_aligned() {
+    let make_png = |rgb: [u8; 3]| {
+        let mut png = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut png, 2, 2);
+            enc.set_color(png::ColorType::Rgb);
+            let data = [rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2]];
+            enc.write_header().unwrap().write_image_data(&data).unwrap();
+        }
+        Arc::new(png)
+    };
+    let png1 = make_png([0, 128, 255]);
+
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([100.0, 100.0, 200.0, 150.0]), name: "img.png".into(), bytes: png1 }).unwrap();
+
+    // 1. A pure 90° clockwise rotation matrix about the image centre:
+    let rot_90_cw = pdfcraft_edit::turn_about_centre([100.0, 100.0, 200.0, 150.0], 1, false, false);
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Transform(rot_90_cw) }).unwrap();
+
+    let cos = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+    let added = pdfcraft_edit::list_added(&cos);
+    assert_eq!(added.len(), 1, "stays as PCAdded image");
+    let AddedContent::Image(ai) = &added[0].content else { panic!("expected added image") };
+    assert_eq!(ai.rotation, 3, "quarter turn clockwise folds into ai.rotation = 3 (270° CCW)");
+    // Centre is (150, 125); rotated width=50, height=100 -> [125, 75, 175, 175]
+    assert!((ai.rect[0] - 125.0).abs() < 1e-4);
+    assert!((ai.rect[1] - 75.0).abs() < 1e-4);
+    assert!((ai.rect[2] - 175.0).abs() < 1e-4);
+    assert!((ai.rect[3] - 175.0).abs() < 1e-4);
+
+    // 2. A pure 90° counter-clockwise rotation matrix:
+    let rot_90_ccw = pdfcraft_edit::turn_about_centre(ai.rect, 3, false, false);
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Transform(rot_90_ccw) }).unwrap();
+
+    let cos2 = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+    let AddedContent::Image(ai2) = &pdfcraft_edit::list_added(&cos2)[0].content else { panic!("expected added image") };
+    assert_eq!(ai2.rotation, 0, "quarter turn counter-clockwise restores ai.rotation = 0");
+    assert!((ai2.rect[0] - 100.0).abs() < 1e-4);
+    assert!((ai2.rect[1] - 100.0).abs() < 1e-4);
+    assert!((ai2.rect[2] - 200.0).abs() < 1e-4);
+    assert!((ai2.rect[3] - 150.0).abs() < 1e-4);
+
+    // Arbitrary transforms promote the added image, just like RotateBy.
+    let initial_matrix = s.get(id).unwrap().page_images(0)[0].matrix;
+    let rot_45 = pdfcraft_edit::turn_by_degrees([100.0, 100.0, 200.0, 150.0], 45.0).unwrap();
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Transform(rot_45) }).unwrap();
+    let cos = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+    assert!(pdfcraft_edit::list_added(&cos).is_empty(), "arbitrary transform promotes the image");
+    assert_eq!(s.get(id).unwrap().page_images(0).len(), 1);
+    let expected = pdfcraft_content::Matrix(initial_matrix).then(&pdfcraft_content::Matrix(rot_45)).0;
+    let actual = s.get(id).unwrap().page_images(0)[0].matrix;
+    assert!(actual.into_iter().zip(expected).all(|(a, b)| (a - b).abs() < 1e-3), "{actual:?} != {expected:?}");
+    s.undo(id).unwrap();
+    let cos = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+    assert_eq!(pdfcraft_edit::list_added(&cos).len(), 1, "undo restores added-image editability");
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Transform([1.0, 0.5, 0.0, 1.0, 0.0, 0.0]) }).unwrap();
+    assert_eq!(s.get(id).unwrap().page_images(0).len(), 1);
+}
+
+#[test]
+fn test_added_image_transform_reflections_with_rotation() {
+    let make_asymmetric_png = || {
+        let mut px = Vec::with_capacity(20 * 20 * 3);
+        for y in 0..20 {
+            for x in 0..20 {
+                let color = match (x < 10, y < 10) {
+                    (true, true) => [255, 0, 0],     // TL: Red
+                    (false, true) => [0, 255, 0],    // TR: Green
+                    (true, false) => [0, 0, 255],    // BL: Blue
+                    (false, false) => [255, 255, 0], // BR: Yellow
+                };
+                px.extend_from_slice(&color);
+            }
+        }
+        let mut png = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut png, 20, 20);
+            enc.set_color(png::ColorType::Rgb);
+            enc.write_header().unwrap().write_image_data(&px).unwrap();
+        }
+        Arc::new(png)
+    };
+
+    let colour_at = |s: &Session, id: DocId, x: u32, y_from_top: u32| -> [u8; 3] {
+        let doc = s.get(id).unwrap();
+        let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), Default::default());
+        let out = r.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+        let i = ((y_from_top * out.width + x) * 4) as usize;
+        [out.rgba[i], out.rgba[i + 1], out.rgba[i + 2]]
+    };
+
+    let is_red = |c: [u8; 3]| c[0] > 200 && c[1] < 50 && c[2] < 50;
+    let is_green = |c: [u8; 3]| c[0] < 50 && c[1] > 200 && c[2] < 50;
+    let is_blue = |c: [u8; 3]| c[0] < 50 && c[1] < 50 && c[2] > 200;
+    let is_yellow = |c: [u8; 3]| c[0] > 200 && c[1] > 200 && c[2] < 50;
+
+    let check_quadrants =
+        |s: &Session, id: DocId, tl: fn([u8; 3]) -> bool, tr: fn([u8; 3]) -> bool, bl: fn([u8; 3]) -> bool, br: fn([u8; 3]) -> bool, label: &str| {
+            let c_tl = colour_at(s, id, 75, 125);
+            let c_tr = colour_at(s, id, 125, 125);
+            let c_bl = colour_at(s, id, 75, 175);
+            let c_br = colour_at(s, id, 125, 175);
+            assert!(tl(c_tl), "{label} TL mismatch: got {:?}", c_tl);
+            assert!(tr(c_tr), "{label} TR mismatch: got {:?}", c_tr);
+            assert!(bl(c_bl), "{label} BL mismatch: got {:?}", c_bl);
+            assert!(br(c_br), "{label} BR mismatch: got {:?}", c_br);
+        };
+
+    // --- CASE 1: 90° clockwise rotation (ImageEdit::Rotate(1), ai.rotation = 3) ---
+    // Unrotated: TL=Red, TR=Green, BL=Blue, BR=Yellow.
+    // After 90° CW: TL=Blue, TR=Red, BL=Yellow, BR=Green.
+    {
+        // 1a: Flip Horizontal after 90° rotation
+        let (mut s, id) = session_with(1);
+        s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 200.0]), name: "img.png".into(), bytes: make_asymmetric_png() })
+            .unwrap();
+        check_quadrants(&s, id, is_red, is_green, is_blue, is_yellow, "initial");
+
+        s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Rotate(1) }).unwrap();
+        check_quadrants(&s, id, is_blue, is_red, is_yellow, is_green, "90° CW");
+
+        s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Flip { horizontal: true } }).unwrap();
+        let cos = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+        let AddedContent::Image(ai) = &pdfcraft_edit::list_added(&cos)[0].content else { panic!() };
+        assert_eq!(ai.rotation, 3);
+        assert!(!ai.flip_h, "at 90° rotation, horizontal flip toggles flip_v, not flip_h");
+        assert!(ai.flip_v, "at 90° rotation, horizontal flip toggles flip_v");
+        // Flipping horizontally on screen swaps left & right columns: TL=Red, TR=Blue, BL=Green, BR=Yellow
+        check_quadrants(&s, id, is_red, is_blue, is_green, is_yellow, "90° CW + flip horizontal");
+    }
+
+    {
+        // 1b: Flip Vertical after 90° rotation
+        let (mut s, id) = session_with(1);
+        s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 200.0]), name: "img.png".into(), bytes: make_asymmetric_png() })
+            .unwrap();
+        s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Rotate(1) }).unwrap();
+
+        s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Flip { horizontal: false } }).unwrap();
+        let cos = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+        let AddedContent::Image(ai) = &pdfcraft_edit::list_added(&cos)[0].content else { panic!() };
+        assert_eq!(ai.rotation, 3);
+        assert!(ai.flip_h, "at 90° rotation, vertical flip toggles flip_h");
+        assert!(!ai.flip_v, "at 90° rotation, vertical flip toggles flip_h, not flip_v");
+        // Flipping vertically on screen swaps top & bottom rows: TL=Yellow, TR=Green, BL=Blue, BR=Red
+        check_quadrants(&s, id, is_yellow, is_green, is_blue, is_red, "90° CW + flip vertical");
+    }
+
+    // --- CASE 2: 270° clockwise rotation (ImageEdit::Rotate(3), ai.rotation = 1) ---
+    // Unrotated: TL=Red, TR=Green, BL=Blue, BR=Yellow.
+    // After 270° CW: TL=Green, TR=Yellow, BL=Red, BR=Blue.
+    {
+        // 2a: Flip Horizontal after 270° rotation
+        let (mut s, id) = session_with(1);
+        s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 200.0]), name: "img.png".into(), bytes: make_asymmetric_png() })
+            .unwrap();
+        s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Rotate(3) }).unwrap();
+        check_quadrants(&s, id, is_green, is_yellow, is_red, is_blue, "270° CW");
+
+        s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Flip { horizontal: true } }).unwrap();
+        let cos = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+        let AddedContent::Image(ai) = &pdfcraft_edit::list_added(&cos)[0].content else { panic!() };
+        assert_eq!(ai.rotation, 1);
+        assert!(!ai.flip_h, "at 270° rotation, horizontal flip toggles flip_v, not flip_h");
+        assert!(ai.flip_v, "at 270° rotation, horizontal flip toggles flip_v");
+        // Flipping horizontally on screen swaps left & right columns: TL=Yellow, TR=Green, BL=Blue, BR=Red
+        check_quadrants(&s, id, is_yellow, is_green, is_blue, is_red, "270° CW + flip horizontal");
+    }
+
+    {
+        // 2b: Flip Vertical after 270° rotation
+        let (mut s, id) = session_with(1);
+        s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 200.0]), name: "img.png".into(), bytes: make_asymmetric_png() })
+            .unwrap();
+        s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Rotate(3) }).unwrap();
+
+        s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Flip { horizontal: false } }).unwrap();
+        let cos = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+        let AddedContent::Image(ai) = &pdfcraft_edit::list_added(&cos)[0].content else { panic!() };
+        assert_eq!(ai.rotation, 1);
+        assert!(ai.flip_h, "at 270° rotation, vertical flip toggles flip_h");
+        assert!(!ai.flip_v, "at 270° rotation, vertical flip toggles flip_h, not flip_v");
+        // Flipping vertically on screen swaps top & bottom rows: TL=Red, TR=Blue, BL=Green, BR=Yellow
+        check_quadrants(&s, id, is_red, is_blue, is_green, is_yellow, "270° CW + flip vertical");
+    }
+}
+
 /// ISO 32000-2 Table 192, 12.7.5.2.3 and Table 228 (Comb): a check box, a push button, a comb
 /// field the file leaves to the viewer. The page as displayed and printed as an image shows the
 /// check box's caption symbol in its text colour, the button's grey face and the comb's cells in
@@ -9340,4 +9923,95 @@ fn repeated_backdrop_artwork_survives_background_undo_redo_and_both_save_modes()
     black(&s, rewritten);
     s.apply(rewritten, Edit::RemoveMarks { kind: MarkKind::Background }).unwrap();
     black(&s, rewritten);
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+#[test]
+fn saving_after_deleting_pages_rewrites_the_file_without_them() {
+    let (mut s, id) = session_with(6);
+    let original = s.save_bytes(id).unwrap();
+    s.apply(id, Edit::DeletePages { pages: vec![1, 2, 3, 4] }).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    assert!(saved.len() < original.len(), "the file shrank: {} -> {}", original.len(), saved.len());
+    assert!(!saved.starts_with(original.as_slice()), "a full rewrite, not an update appended to the old file");
+    assert!(!contains(&saved, b"Page 3"), "a deleted page's text is not left in an earlier revision");
+    let mut again = Session::new();
+    let id2 = again.open("saved.pdf", None, saved, None).unwrap();
+    assert_eq!(page_texts(&again, id2), ["Page 1", "Page 6"]);
+}
+
+#[test]
+fn saving_after_deleting_pages_from_a_signed_file_stays_incremental() {
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let digital_id = sign::pkcs12::open(&p12, "test").unwrap();
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    let id = s.open("fixture.pdf", None, Arc::new(fixture(3)), None).unwrap();
+    let opts = SignOptions { page: 0, rect: Some([20.0, 20.0, 160.0, 50.0]), ..SignOptions::default() };
+    let signed = s.sign(id, &digital_id, opts).unwrap();
+    s.mark_signed(id, signed.clone(), None).unwrap();
+    s.apply(id, Edit::DeletePages { pages: vec![2] }).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    assert!(saved.starts_with(signed.as_ref()), "the signed bytes stay an incremental update");
+    assert!(s.get(id).unwrap().is_signed());
+}
+
+#[test]
+fn saving_after_a_batch_that_deletes_pages_rewrites_the_file() {
+    let (mut s, id) = session_with(6);
+    let original = s.save_bytes(id).unwrap();
+    let batch = Edit::Batch {
+        label: "Delete and rotate".into(),
+        edits: vec![
+            Edit::Batch { label: "Delete pages".into(), edits: vec![Edit::DeletePages { pages: vec![1, 2, 3, 4] }] },
+            Edit::RotatePages { pages: vec![0], degrees: 90 },
+        ],
+    };
+    s.apply(id, batch).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    assert!(!saved.starts_with(original.as_slice()), "a full rewrite, not an update appended to the old file");
+    assert!(!contains(&saved, b"Page 3"), "a deleted page's text is not left in an earlier revision");
+}
+
+#[test]
+fn saving_without_deleting_pages_stays_incremental() {
+    let (mut s, id) = session_with(3);
+    let original = s.save_bytes(id).unwrap();
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    assert!(saved.starts_with(original.as_slice()), "an edit that deletes nothing is still appended");
+}
+
+#[test]
+fn original_image_edit_does_not_match_an_added_sibling_of_the_same_xobject() {
+    let mut document = pdfcraft_cos::Document::open(Arc::new(jpeg_cover_pdf(650))).unwrap();
+    let original = pdfcraft_edit::page_images(&document, 0).unwrap()[0].clone();
+    let added = AddedImage::new([20.0, 30.0, 80.0, 90.0], original.object.unwrap());
+    pdfcraft_edit::add_content(&mut document, 0, &AddedContent::Image(added.clone())).unwrap();
+    let bytes = pdfcraft_cos::write_full(&document, &pdfcraft_cos::SaveOptions::default()).unwrap();
+    let mut session = Session::new();
+    let id = session.open("shared-image.pdf", None, Arc::new(bytes), None).unwrap();
+    let before_added = session.get(id).unwrap().added()[0].content.clone();
+    session.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Move([40.0, 50.0, 140.0, 150.0]) }).unwrap();
+    let doc = session.get(id).unwrap();
+    assert_eq!(doc.added()[0].content, before_added, "matching an original Do must not select the added sibling's metadata");
+    assert_eq!(doc.page_images(0)[0].rect, [40.0, 50.0, 140.0, 150.0]);
+}
+
+#[test]
+fn image_transform_engine_refuses_singular_matrices_without_mutation() {
+    let mut png = Vec::new();
+    let mut enc = png::Encoder::new(&mut png, 1, 1);
+    enc.set_color(png::ColorType::Rgb);
+    enc.write_header().unwrap().write_image_data(&[100, 150, 200]).unwrap();
+    let mut s = Session::new();
+    let bytes = s.create_from_images(&[("pixel.png".into(), png)]).unwrap();
+    let id = s.open("image.pdf", None, bytes, None).unwrap();
+    for matrix in [[0.0, 0.0, 0.0, 1.0, 0.0, 0.0], [1.0, 1.0, 1.0, 1.0 + 1e-12, 0.0, 0.0], [1e308, 0.0, 0.0, 1e308, 0.0, 0.0]] {
+        let before = s.get(id).unwrap().bytes.clone();
+        assert!(s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Transform(matrix) }).is_err());
+        assert_eq!(s.get(id).unwrap().bytes, before);
+    }
 }

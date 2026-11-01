@@ -32,7 +32,10 @@ that warning and keeps the existing layout and accepted widget values.
   page masters chosen by occurrence; a table's header row repeats after a break; presence
   `hidden` takes no space, `invisible` takes space; repeating subforms get their initial
   instances, in flowed content and in a top-to-bottom container inside positioned content (a
-  table in an area) alike; fields that compute the page number or count on layout show the numbers.
+  table in an area) alike; fields that compute the page number or count on layout show the numbers;
+  a draw placed by position turns about its anchor (`rotate`: degrees counter-clockwise, a multiple
+  of 90), as one item a page break doesn't cut, and its container grows to the box it stands in. A
+  field, a subform or a draw in a flow doesn't turn.
 - **PDF** (`pdf::write_form`): pages with content streams in the standard 14 fonts (Arial and
   friends → Helvetica, Courier New → Courier, serif faces → Times; nothing is embedded), JPEG
   XObjects, and widgets: text (multi-line, max length, alignment), date (Acrobat's `AFDate`
