@@ -302,8 +302,8 @@ impl PageText {
     /// newspaper columns) share a row and are separated by a tab, so a pasted table lands in
     /// spreadsheet cells. Rows of right-to-left text put their pieces right to left. When any
     /// selected glyph does not run horizontally (CJK vertical writing, turned text, a page shown
-    /// turned by `/Rotate`) rows mean nothing, and the lines come out one per row in reading order
-    /// instead.
+    /// turned by `/Rotate`), or sits in a column of upright CJK glyphs placed one per baseline,
+    /// rows mean nothing, and the lines come out one per row in reading order instead.
     pub fn column_text(&self, glyphs: &[usize]) -> String {
         // The selected glyphs of each line, with their box: (glyphs, bbox).
         let mut lines: Vec<(Vec<usize>, [f32; 4])> = Vec::new();
@@ -321,8 +321,40 @@ impl PageText {
                 }
             }
         }
+        // Whether glyphs `range` of the page stack down a column, as the layout reads an upright
+        // CJK column written one glyph per baseline (#3712). Such a glyph runs horizontally, so
+        // its direction does not give the column away.
+        let stacked = |range: std::ops::Range<usize>| {
+            let mut column = range.filter_map(|i| self.glyphs.get(i));
+            let Some(mut upper) = column.next() else { return false };
+            let Some(mut lower) = column.next() else { return false };
+            loop {
+                if !stacks_vertically(upper, lower) {
+                    return false;
+                }
+                let Some(next) = column.next() else { return true };
+                (upper, lower) = (lower, next);
+            }
+        };
+        // The whole line decides, not only the glyphs the rectangle caught: a shallow selection
+        // takes one glyph from each column, and those must still read as columns, not as the row
+        // they happen to share. A line's glyphs are one contiguous run of the page.
+        let line_range = |line: u32, at: usize| {
+            let same = |i: usize| self.line_of.get(i) == Some(&line);
+            let mut start = at;
+            while start > 0 && same(start - 1) {
+                start -= 1;
+            }
+            let mut end = at + 1;
+            while same(end) {
+                end += 1;
+            }
+            start..end
+        };
         // Within the layout's own tolerance for reading a glyph as unturned.
-        let vertical = glyphs.iter().any(|&i| self.glyphs.get(i).is_some_and(|g| g.direction[1].abs() > WORD_GAP));
+        let turned = glyphs.iter().any(|&i| self.glyphs.get(i).is_some_and(|g| g.direction[1].abs() > WORD_GAP));
+        let vertical =
+            turned || lines.iter().zip(&line_ids).any(|((members, _), &line)| members.first().is_some_and(|&at| stacked(line_range(line, at))));
         let piece = |members: &[usize]| {
             let mut s = String::new();
             let mut prev: Option<usize> = None;
@@ -383,7 +415,7 @@ pub(crate) use device::{extract_page, extract_page_filtered};
 pub use layout::layout;
 #[cfg(test)]
 use layout::{from_upright, to_upright};
-use layout::{is_rtl, union};
+use layout::{is_rtl, stacks_vertically, union};
 #[cfg(test)]
 use order::{Run, Scratch, Seg, collide, restarts_run};
 
