@@ -1102,10 +1102,10 @@ fn dialog_rotate_pages(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pendi
             widgets::radio_value(ui, &mut d.which, 0, tl!("All"));
             widgets::radio_value(ui, &mut d.which, 1, tl!("Selection"));
             ui.horizontal(|ui| {
-                widgets::radio_value(ui, &mut d.which, 2, tl!("From"));
-                ui.add_enabled(d.which == 2, egui::DragValue::new(&mut d.from).range(1..=n));
-                ui.label(tl!("to"));
-                typing_to = ui.add_enabled(d.which == 2, egui::DragValue::new(&mut d.to).range(1..=n)).has_focus();
+                let from_label = widgets::radio_value(ui, &mut d.which, 2, tl!("From"));
+                ui.add_enabled(d.which == 2, egui::DragValue::new(&mut d.from).range(1..=n)).labelled_by(from_label.id);
+                let to_label = ui.label(tl!("to"));
+                typing_to = ui.add_enabled(d.which == 2, egui::DragValue::new(&mut d.to).range(1..=n)).labelled_by(to_label.id).has_focus();
                 ui.label(crate::i18n::fmt(tl!("of {name}"), &[("name", &n.to_string())]));
             });
         });

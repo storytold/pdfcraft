@@ -3010,6 +3010,37 @@ fn extract_options_and_rotate_pages_dialog() {
     assert_eq!(d.info.pages.iter().map(|p| p.rotation).collect::<Vec<_>>(), [90, 0]);
 }
 
+/// #5579: typing the last page of Rotate Pages' range keeps what is typed (croquete1): "12" after
+/// a first page of 5 rotates pages 5–12, not page 5 alone. An end typed below the start and left
+/// by clicking OK is raised to the start as the field lets go: page 5, not nothing.
+#[test]
+fn rotate_pages_keeps_a_typed_last_page() {
+    use egui::accesskit::Role;
+    for (typed, rotated) in [("12", 5..13), ("3", 5..6)] {
+        let mut h = organize(20);
+        h.state_mut().run_command("page.rotate_dialog");
+        h.run_steps(2);
+        let d = &mut h.state_mut().rotate_draft;
+        (d.which, d.from, d.to) = (2, 5, 5);
+        h.run_steps(1);
+        h.get_by_role_and_label(Role::SpinButton, "to").click();
+        h.run_steps(2);
+        // As events, not `key_press`: its `run` checks the dialog's unnamed combo boxes.
+        h.event(egui::Event::Key { key: egui::Key::A, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND });
+        for c in typed.chars() {
+            h.event(egui::Event::Text(c.to_string()));
+            h.run_steps(2);
+        }
+        // OK at once, the end still being typed.
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        let s = h.state();
+        let d = s.session.get(s.views[0].id).unwrap();
+        let turned: Vec<usize> = d.info.pages.iter().enumerate().filter(|(_, p)| p.rotation != 0).map(|(i, _)| i + 1).collect();
+        assert_eq!(turned, rotated.collect::<Vec<usize>>(), "typed {typed:?}");
+    }
+}
+
 #[test]
 fn dragging_thumbnails_reorders_pages() {
     let mut h = organize(4);
