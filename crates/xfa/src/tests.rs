@@ -279,6 +279,8 @@ fn layout_places_captions_fields_and_sizes_containers_to_their_content() {
     );
 }
 
+/// A table taller than its page continues on the next pages, its header row repeated at the top of
+/// each one.
 #[test]
 fn tables_break_across_pages_and_repeat_their_header_row() {
     let form = layout_xml(&template(40)).unwrap();
@@ -297,6 +299,58 @@ fn tables_break_across_pages_and_repeat_their_header_row() {
     let all: Vec<&str> = form.pages.iter().flat_map(|p| widgets(p).into_iter().map(|w| w.name.as_str()).collect::<Vec<_>>()).collect();
     assert_eq!(all.iter().filter(|n| n.starts_with("from")).count(), 40);
     assert_eq!(all.len(), all.iter().collect::<std::collections::HashSet<_>>().len(), "field names are unique");
+}
+
+/// A form a viewer saved with its pages drawn, holding only its signature box, is laid out from
+/// its template when its configuration says it must be rendered dynamically: its other fields
+/// live there. Signed, it is left as saved (laying it out would change what was signed), as it is
+/// without that configuration or with `forbidden`.
+#[test]
+fn a_form_saved_with_its_pages_is_laid_out_when_it_requires_dynamic_rendering() {
+    let open = |render: &str, signed: bool| Document::open(Arc::new(crate::fixtures::saved_with_pages_shell(render, signed))).unwrap();
+    let mut doc = open("required", false);
+    assert!(is_dynamic(&doc));
+    let report = render_into(&mut doc).unwrap();
+    assert_eq!(report.fields, 2, "the text field from the template, and the signature box");
+    assert!(!is_dynamic(&open("required", true)), "signed: left as saved");
+    assert!(!is_dynamic(&open("", false)), "no configuration: the fields it has are the form's");
+    assert!(!is_dynamic(&open("forbidden", false)));
+    // A box under nested fields is found; past the 32 levels looked at, the form counts as signed.
+    let deep = |depth: usize| Document::open(Arc::new(crate::fixtures::deep_saved_with_pages_shell(depth))).unwrap();
+    assert!(is_dynamic(&deep(5)), "nested, unsigned");
+    assert!(!is_dynamic(&deep(40)), "too deep to tell: as if signed");
+    // The page lists the box under its new number, and the box knows its parent.
+    let doc = deep(5);
+    let page = doc.get(pdfcraft_cos::ObjRef::new(3, 0));
+    let annot = page.as_dict().and_then(|d| d.get(b"Annots")).and_then(|a| a.as_array().and_then(|a| a.first().cloned())).and_then(|a| a.as_ref());
+    let widget = annot.map(|r| doc.get(r));
+    assert_eq!(widget.as_ref().and_then(|w| w.as_dict().and_then(|d| d.name(b"FT")).map(<[u8]>::to_vec)), Some(b"Sig".to_vec()));
+    assert!(widget.as_ref().and_then(|w| w.as_dict().map(|d| d.contains(b"Parent"))).unwrap_or(false));
+}
+
+/// Only the configuration packet's `acrobat/acrobat7/dynamicRender` asks for dynamic rendering:
+/// not the same element elsewhere, another element that starts with `config`, or another value.
+#[test]
+fn dynamic_rendering_is_read_from_the_configuration_only() {
+    let required = crate::packets::requires_dynamic_render;
+    let config = |inner: &str| {
+        format!(
+            r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><config xmlns="http://www.xfa.org/schema/xci/3.1/">{inner}</config><template/></xdp:xdp>"#
+        )
+    };
+    assert!(required(&config("<acrobat><acrobat7><dynamicRender> required </dynamicRender></acrobat7></acrobat>")));
+    assert!(!required(&config("<acrobat><acrobat7><dynamicRender>forbidden</dynamicRender></acrobat7></acrobat>")));
+    assert!(!required(&config("<acrobat><dynamicRender>required</dynamicRender></acrobat>")), "not under acrobat7");
+    assert!(!required(&config("")));
+    assert!(!required("<configuration><acrobat><acrobat7><dynamicRender>required</dynamicRender></acrobat7></acrobat></configuration>"));
+    assert!(!required("<template><acrobat><acrobat7><dynamicRender>required</dynamicRender></acrobat7></acrobat></template>"));
+    assert!(!required("<config><acrobat><acrobat7><dynamicRender>required"), "no end tag");
+    // A data node named `config` before the configuration packet is not the configuration.
+    let data_first = r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><config>x</config></form></xfa:data></xfa:datasets><config xmlns="http://www.xfa.org/schema/xci/3.1/"><acrobat><acrobat7><dynamicRender>required</dynamicRender></acrobat7></acrobat></config><template/></xdp:xdp>"#;
+    assert!(required(data_first), "the configuration packet after a data node named config");
+    let only_data = r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><config><acrobat><acrobat7><dynamicRender>required</dynamicRender></acrobat7></acrobat></config></xfa:data></xfa:datasets><template/></xdp:xdp>"#;
+    assert!(!required(only_data), "a data node shaped like a configuration");
+    assert!(required("<config><acrobat><acrobat7><dynamicRender>required</dynamicRender></acrobat7></acrobat></config>"), "a bare config packet");
 }
 
 #[test]
