@@ -41,6 +41,15 @@ fn fixture(n: usize) -> Vec<u8> {
     fixture_with(n, false)
 }
 
+/// The file at `path` with its header's version changed: another version of the same length, so
+/// only its bytes tell it apart.
+fn another_version_of_the_same_length(path: &str) -> Vec<u8> {
+    let mut bytes = std::fs::read(path).unwrap();
+    assert!(bytes.starts_with(b"%PDF-1."));
+    bytes[7] = if bytes[7] == b'7' { b'6' } else { b'7' };
+    bytes
+}
+
 /// A PDF in a fresh temp folder, removed when the test ends.
 struct TempPdf {
     dir: PathBuf,
@@ -61,6 +70,14 @@ impl TempPdf {
     /// Rewrite it as a build does: new contents, and a later modification time every time.
     fn rebuild(&self, bytes: &[u8]) {
         std::fs::write(&self.path, bytes).unwrap();
+        self.builds.set(self.builds.get() + 1);
+        let file = std::fs::File::options().write(true).open(&self.path).unwrap();
+        file.set_modified(SystemTime::now() + Duration::from_secs(60 * self.builds.get())).unwrap();
+    }
+
+    /// Stamp it anew without changing a byte, as a sync client does after uploading a file:
+    /// one of them sets the modification time again, to the whole second.
+    fn touch(&self) {
         self.builds.set(self.builds.get() + 1);
         let file = std::fs::File::options().write(true).open(&self.path).unwrap();
         file.set_modified(SystemTime::now() + Duration::from_secs(60 * self.builds.get())).unwrap();
@@ -365,4 +382,63 @@ fn opening_a_file_that_is_open_focuses_its_tab() {
     h.run_steps(2);
     let app = h.state();
     assert_eq!((app.views.len(), app.active, app.views[0].id), (2, Some(0), id), "focused, not opened again");
+}
+
+/// A sync client that stamps a saved file anew without changing it (by setting the modification
+/// time again after uploading) leaves the document's version on disk: nothing reloads, so the
+/// undo history stays; unsaved changes get no notice; and Save doesn't ask about it.
+#[test]
+fn a_file_stamped_anew_with_the_same_bytes_is_still_the_documents_version() {
+    let file = TempPdf::new("touched", &fixture(2));
+    let mut h = harness(&file.path);
+    rotate_first_page(&mut h);
+    assert!(h.state_mut().save_active(SaveTarget::InPlace));
+    h.run_steps(2);
+    file.touch();
+    h.run_steps(4);
+    let app = h.state();
+    assert!(app.session.get(app.views[0].id).unwrap().can_undo().is_some(), "not reloaded: the undo history is there");
+    // Changes made since, then the file is stamped again: no notice, and Save writes at once.
+    rotate_first_page(&mut h);
+    file.touch();
+    h.run_steps(4);
+    assert!(dirty(&h));
+    assert!(h.query_by_label_contains("This file changed on disk").is_none(), "nothing changed on disk");
+    assert!(h.state_mut().save_active(SaveTarget::InPlace), "written at once, without asking");
+    h.run_steps(2);
+    assert!(!dirty(&h));
+    // Bytes that do change are still a new version, after all that, even at the same length.
+    rotate_first_page(&mut h);
+    let other = another_version_of_the_same_length(&file.path);
+    assert_eq!(other.len() as u64, std::fs::metadata(&file.path).unwrap().len());
+    file.rebuild(&other);
+    h.run_steps(3);
+    h.get_by_label_contains("This file changed on disk");
+}
+
+/// With the watcher off, Save compares the bytes itself when the stamp is new.
+#[test]
+fn saving_over_a_file_stamped_anew_does_not_ask_with_the_watcher_off() {
+    let file = TempPdf::new("touched-unwatched", &fixture(2));
+    let path = file.path.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.run_inline = true;
+        app.reload_changed_files = false;
+        app.open_path(&path);
+        app
+    });
+    h.run_steps(4);
+    rotate_first_page(&mut h);
+    file.touch();
+    assert!(h.state_mut().save_active(SaveTarget::InPlace), "the same bytes: written at once");
+    h.run_steps(2);
+    rotate_first_page(&mut h);
+    let other = another_version_of_the_same_length(&file.path);
+    assert_eq!(other.len() as u64, std::fs::metadata(&file.path).unwrap().len());
+    file.rebuild(&other);
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "one byte other at the same length: asks first");
+    h.run_steps(2);
+    h.get_by_label("Save over the changed file?");
 }

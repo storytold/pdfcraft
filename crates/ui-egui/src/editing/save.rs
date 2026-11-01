@@ -118,7 +118,8 @@ impl PdfCraftApp {
 
     /// [`Self::save_doc_to`], then `after`. When `dest` is the document's own file and it is
     /// another version on disk than the one the document came from (something else wrote it
-    /// since the open or the last save, #2166), it asks first: the save waits in
+    /// since the open or the last save, #2166; the same bytes stamped anew by a sync client are
+    /// not another version), it asks first: the save waits in
     /// `pending_overwrite` behind [`Dialog::OverwriteChanged`](crate::Dialog::OverwriteChanged).
     /// Returns `true` if written now.
     #[cfg(not(target_arch = "wasm32"))]
