@@ -29,6 +29,10 @@ pub enum Gesture {
     /// Dragging point `point` of a line, connected lines, a polygon or a cloud (its `points`
     /// before the drag, in user space) to where the pointer is.
     Reshape { page: usize, index: usize, point: usize, points: Vec<[f64; 2]> },
+    /// Copied comments hanging on the pointer as one bundle (their box `bounds` in user space,
+    /// `count` of them, their `outlines` drawn along so the drop can be aimed): a click puts
+    /// their centre there, on the page clicked; Escape or a right-click lets them go.
+    Place { xfdf: String, bounds: [f64; 4], count: usize, outlines: Vec<pdfcraft_engine::CommentOutline> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -124,8 +128,21 @@ impl CommentView {
 /// Per-document commenting state.
 #[derive(Clone, Debug, Default)]
 pub struct CommentView {
-    /// The selected comment: (page, index in `/Annots`).
+    /// The selected comment: (page, index in `/Annots`). With several selected (`also`), the one
+    /// the handles, the properties and the context menu act on.
     pub selected: Option<(usize, usize)>,
+    /// The other selected comments (⌘/Ctrl-click or ⇧-click on the page adds one, ⇧-click in the
+    /// Comments panel a range): Delete, Copy, Properties and a drag act on them with `selected`.
+    pub also: Vec<(usize, usize)>,
+    /// Copy the selected comments (set by the menus; the app has the clipboard).
+    pub copy_request: bool,
+    /// Paste the copied comments onto this page, centred at this user-space point (set by the
+    /// page's menu, which knows where it was opened).
+    pub paste_request: Option<(usize, [f64; 2])>,
+    /// A notice for the app to show (the page input has no app).
+    pub notice: Option<&'static str>,
+    /// Finish the connected lines, polygon or cloud being drawn (the context menu's Complete).
+    pub finish_request: bool,
     pub gesture: Option<Gesture>,
     /// Drawings just released: shown from their points until the page raster that includes the
     /// committed annotation arrives, so the stroke never vanishes in between (#1858).
@@ -186,6 +203,55 @@ pub(crate) enum EditorFocus {
 }
 
 impl CommentView {
+    /// Every selected comment, the one the handles belong to first.
+    pub fn selection(&self) -> Vec<(usize, usize)> {
+        let mut all: Vec<(usize, usize)> = self.selected.into_iter().collect();
+        all.extend(self.also.iter().copied().filter(|k| Some(*k) != self.selected));
+        all
+    }
+
+    /// Whether `key` (page, index) is among the selected comments.
+    pub fn is_selected(&self, key: (usize, usize)) -> bool {
+        self.selected == Some(key) || self.also.contains(&key)
+    }
+
+    /// Select `key` alone.
+    pub fn select_only(&mut self, key: (usize, usize)) {
+        self.selected = Some(key);
+        self.also.clear();
+    }
+
+    /// ⇧-click in a list (`order`, as shown): every comment from the one with the handles to
+    /// `key` is selected, and only those, so another ⇧-click from the same comment changes the
+    /// range. Without a comment with the handles, or with either end not in the list, `key` is
+    /// added as by ⌘/Ctrl-click.
+    pub fn select_range(&mut self, order: &[(usize, usize)], key: (usize, usize)) {
+        let ends = self.selected.and_then(|anchor| Some((order.iter().position(|k| *k == anchor)?, order.iter().position(|k| *k == key)?)));
+        let Some((a, b)) = ends else { return self.toggle(key) };
+        let anchor = self.selected;
+        self.also = order.get(a.min(b)..=a.max(b)).unwrap_or_default().iter().copied().filter(|k| Some(*k) != anchor).collect();
+    }
+
+    /// ⌘/Ctrl-click: add `key` to the selection, or take it out again. The handles go to the
+    /// comment clicked last.
+    pub fn toggle(&mut self, key: (usize, usize)) {
+        if self.selected == Some(key) {
+            self.selected = self.also.pop();
+        } else if let Some(at) = self.also.iter().position(|k| *k == key) {
+            self.also.remove(at);
+        } else {
+            if let Some(previous) = self.selected.replace(key) {
+                self.also.push(previous);
+            }
+        }
+    }
+
+    /// Nothing selected.
+    pub fn clear_selection(&mut self) {
+        self.selected = None;
+        self.also.clear();
+    }
+
     /// Takes back the last point of a polygon, cloud or connected lines being drawn; the first
     /// point's removal cancels the drawing. Returns whether there was such a drawing.
     pub fn undo_point(&mut self) -> bool {
@@ -225,6 +291,7 @@ impl CommentView {
     /// went too.
     pub(crate) fn annotation_deleted(&mut self, before: &[Annotation], after: &[Annotation], gone: (usize, usize)) {
         self.selected = self.selected.and_then(|k| after_delete(before, after, gone, k));
+        self.also = std::mem::take(&mut self.also).into_iter().filter_map(|k| after_delete(before, after, gone, k)).collect();
         self.editing = self.editing.take().and_then(|(p, i, text)| after_delete(before, after, gone, (p, i)).map(|(p, i)| (p, i, text)));
         if self.editing.is_none() {
             self.editor_focus = None;
@@ -236,7 +303,7 @@ impl CommentView {
     /// editor close, its unsaved text with it, rather than Save writing that text over whatever
     /// took its place.
     pub(crate) fn history_stepped(&mut self) {
-        self.selected = None;
+        self.clear_selection();
         self.editing = None;
         self.editor_focus = None;
     }

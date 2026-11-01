@@ -4,7 +4,7 @@ use super::geometry::{
 };
 use super::paint::{drawn_shape, edit_anchor, erase, new_comment};
 use super::state::{Composer, ComposerKind, Gesture, PageCx};
-use super::{Annotation, CommentPrefs, CommentTool, DocInfo, DocView, Edit, Pos2, QuickTool, Rect, Shape, vec2};
+use super::{Annotation, CommentPrefs, CommentTool, CommentView, DocInfo, DocView, Edit, Pos2, QuickTool, Rect, Shape, vec2};
 use crate::page_cursor::{Layer, Subject};
 use crate::page_router::{CommentPart, Hit, Owner};
 
@@ -25,6 +25,39 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
         return true;
     }
     if cv.cancelled_drag {
+        return true;
+    }
+    // Copied comments on the pointer: a click places the bundle, centred where it is clicked,
+    // on this page; a right-click lets it go. Nothing else on the page takes the click.
+    if let Some(Gesture::Place { xfdf, bounds, .. }) = cv.gesture.clone() {
+        if over_page {
+            view.cursor.claim(Layer::Drag, egui::CursorIcon::Grabbing);
+        }
+        let cv = &mut view.comments;
+        if resp.secondary_clicked() {
+            cv.gesture = None;
+            return true;
+        }
+        if resp.clicked()
+            && over_page
+            && cx.allowed
+            && let Some(p) = pointer
+        {
+            let [x, y] = cx.to_user(p);
+            let offset = [x - (bounds[0] + bounds[2]) / 2.0, y - (bounds[1] + bounds[3]) / 2.0];
+            // Larger than the page it lands on (an A0 bundle on an A4 page): placed as it is,
+            // and said so.
+            if let Some(page) = cx.info.pages.get(cx.page) {
+                let a = page.user_to_view((bounds[0] + offset[0]) as f32, (bounds[1] + offset[1]) as f32);
+                let b = page.user_to_view((bounds[2] + offset[0]) as f32, (bounds[3] + offset[1]) as f32);
+                let (w, h) = ((a[0] - b[0]).abs(), (a[1] - b[1]).abs());
+                if w > page.width + 1.0 || h > page.height + 1.0 {
+                    cv.notice = Some("The copied comments are larger than this page; they were placed as they are");
+                }
+            }
+            cv.gesture = None;
+            view.pending_edit = Some(Edit::PasteComments { xfdf, page: cx.page, offset: Some(offset) });
+        }
         return true;
     }
     if resp.secondary_clicked()
@@ -201,7 +234,20 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
                 consumed = true;
             }
             CommentPart::Body if !is_markup(&a.subtype) => {
-                cv.selected = Some((cx.page, a.index));
+                // Dragging one of several selected comments moves them all; any other drag starts
+                // a selection of its own.
+                let grabbed = (cx.page, a.index);
+                if !cv.is_selected(grabbed) {
+                    cv.select_only(grabbed);
+                } else {
+                    // The grabbed one takes the handles; the one that had them stays selected.
+                    if let Some(previous) = cv.selected.replace(grabbed)
+                        && previous != grabbed
+                    {
+                        cv.also.push(previous);
+                    }
+                    cv.also.retain(|k| *k != grabbed);
+                }
                 cv.reveal = true;
                 if cx.allowed {
                     cv.gesture = Some(Gesture::Move { page: cx.page, index: a.index, from: o });
@@ -217,38 +263,9 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
     if resp.drag_stopped()
         && let Some(p) = pointer
     {
-        match cv.gesture.clone() {
-            Some(Gesture::Move { page, index, from }) if page == cx.page => {
-                cv.gesture = None;
-                let (a, b) = (cx.to_user(from), cx.to_user(p));
-                let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-                if from.distance(p) >= 2.0 {
-                    view.pending_edit = Some(Edit::MoveAnnotation { page, index, dx, dy });
-                }
-            }
-            Some(Gesture::Resize { page, index, handle, from, aspect_ratio }) if page == cx.page => {
-                cv.gesture = None;
-                if let Some(a) = cx.get(index) {
-                    let from_rect = cx.screen_rect(a);
-                    let shift = ui.input(|i| i.modifiers.shift);
-                    let r = resized(from_rect, handle, p - from, corner_ratio(from_rect, aspect_ratio, shift));
-                    let rect = a.rect_for_shown(cx.rect_to_user(r), cx.rotation());
-                    if r.width() >= 4.0 && r.height() >= 4.0 {
-                        view.pending_edit = Some(Edit::ResizeAnnotation { page, index, rect });
-                    }
-                }
-            }
-            Some(Gesture::Reshape { page, index, point, points }) if page == cx.page => {
-                cv.gesture = None;
-                let shift = ui.input(|i| i.modifiers.shift);
-                let moved = points.get(point).is_some_and(|q| cx.to_screen(*q).distance(p) >= 2.0);
-                if moved {
-                    view.pending_edit = Some(Edit::ReshapeAnnotation { page, index, points: reshaped(&points, point, cx.to_user(p), shift) });
-                }
-            }
-            _ => {}
-        }
+        finish_select_gesture(ui, cx, view, p);
     }
+    let cv = &mut view.comments;
     // (egui clears the press origin on release, so clicks are located by the pointer.)
     let on_page = pointer.is_some_and(|p| cx.xf.rect.contains(p));
     if resp.clicked() && on_page {
@@ -256,11 +273,16 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
         // leaves comments unselected.
         match owner {
             Some((a, _)) => {
-                cv.selected = Some((cx.page, a.index));
+                // ⌘/Ctrl-click (or ⇧-click) adds the comment to the selection, as in Acrobat.
+                if ui.input(|i| i.modifiers.command || i.modifiers.shift) {
+                    cv.toggle((cx.page, a.index));
+                } else {
+                    cv.select_only((cx.page, a.index));
+                }
                 cv.reveal = true;
                 consumed = true;
             }
-            None => cv.selected = None,
+            None => cv.clear_selection(),
         }
     }
     if resp.double_clicked()
@@ -268,7 +290,7 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
         && cx.allowed
         && let Some((a, _)) = owner
     {
-        cv.selected = Some((cx.page, a.index));
+        cv.select_only((cx.page, a.index));
         cv.composer = Some(Composer {
             page: cx.page,
             at: edit_anchor(cx.info, a),
@@ -279,6 +301,57 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
         consumed = true;
     }
     consumed
+}
+
+/// The end of a move, resize or reshape the Select tool began on this page: the edit it makes,
+/// for the pointer released at `p`.
+fn finish_select_gesture(ui: &egui::Ui, cx: &PageCx<'_>, view: &mut DocView, p: Pos2) {
+    match view.comments.gesture.clone() {
+        Some(Gesture::Move { page, index, from }) if page == cx.page => {
+            view.comments.gesture = None;
+            let (a, b) = (cx.to_user(from), cx.to_user(p));
+            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+            if from.distance(p) >= 2.0 {
+                // The other selected comments on this page (not text markup, which is where
+                // its text is, nor a locked one, which would refuse the whole step) move with
+                // the dragged one, as one undo step.
+                let others: Vec<usize> = view
+                    .comments
+                    .also
+                    .iter()
+                    .filter(|(p, i)| *p == page && *i != index && cx.get(*i).is_some_and(|a| !is_markup(&a.subtype) && !a.locked))
+                    .map(|(_, i)| *i)
+                    .collect();
+                view.pending_edit = Some(if others.is_empty() {
+                    Edit::MoveAnnotation { page, index, dx, dy }
+                } else {
+                    let edits = std::iter::once(index).chain(others).map(|index| Edit::MoveAnnotation { page, index, dx, dy }).collect();
+                    Edit::Batch { label: tl!("Move comments").to_owned(), edits }
+                });
+            }
+        }
+        Some(Gesture::Resize { page, index, handle, from, aspect_ratio }) if page == cx.page => {
+            view.comments.gesture = None;
+            if let Some(a) = cx.get(index) {
+                let from_rect = cx.screen_rect(a);
+                let shift = ui.input(|i| i.modifiers.shift);
+                let r = resized(from_rect, handle, p - from, corner_ratio(from_rect, aspect_ratio, shift));
+                let rect = a.rect_for_shown(cx.rect_to_user(r), cx.rotation());
+                if r.width() >= 4.0 && r.height() >= 4.0 {
+                    view.pending_edit = Some(Edit::ResizeAnnotation { page, index, rect });
+                }
+            }
+        }
+        Some(Gesture::Reshape { page, index, point, points }) if page == cx.page => {
+            view.comments.gesture = None;
+            let shift = ui.input(|i| i.modifiers.shift);
+            let moved = points.get(point).is_some_and(|q| cx.to_screen(*q).distance(p) >= 2.0);
+            if moved {
+                view.pending_edit = Some(Edit::ReshapeAnnotation { page, index, points: reshaped(&points, point, cx.to_user(p), shift) });
+            }
+        }
+        _ => {}
+    }
 }
 
 /// After text selection ran: a markup tool turns a finished selection into a comment; Replace
@@ -392,7 +465,18 @@ impl Gestures<'_> {
         if over_page {
             view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
         }
-        let finish = resp.double_clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter));
+        // The menu's Complete is taken by the page the drawing is on: every page on screen
+        // passes here in a frame, and an earlier one must not swallow it. With no drawing
+        // left, a request is stale.
+        let drawing_here = match &cv.gesture {
+            Some(Gesture::Draw { page, .. }) => *page == cx.page,
+            _ => {
+                cv.finish_request = false;
+                false
+            }
+        };
+        let finish =
+            resp.double_clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) || (drawing_here && std::mem::take(&mut cv.finish_request));
         // Backspace (or Delete) takes back the last point, e.g. after a wrong click; Undo does too.
         // Only while a drawing is in progress: otherwise Delete belongs to the selected comment.
         if matches!(cv.gesture, Some(Gesture::Draw { page, .. }) if page == cx.page)
@@ -586,17 +670,36 @@ pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, tool: &mut QuickTool
     let cv = &mut view.comments;
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         // One step back per press: cancel the gesture, then deselect, then drop the tool.
-        let cancelled = cv.gesture.take().is_some() || cv.selected.take().is_some();
+        let had_selection = cv.selected.is_some();
+        cv.clear_selection();
+        let cancelled = cv.gesture.take().is_some() || had_selection;
         if !cancelled && matches!(tool, QuickTool::Comment(_)) {
             *tool = QuickTool::Select;
         }
     }
     if allowed
-        && let Some((page, index)) = cv.selected
+        && cv.selected.is_some()
         && ctx.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
+        && let Some(edit) = delete_selected(cv)
     {
-        cv.selected = None;
-        view.pending_edit = Some(Edit::DeleteAnnotation { page, index });
+        view.pending_edit = Some(edit);
+    }
+}
+
+/// The edit that deletes every selected comment (one undo step for several), and clears the
+/// selection. Later positions go first, so each deletion leaves the earlier ones where they are.
+pub(crate) fn delete_selected(cv: &mut CommentView) -> Option<Edit> {
+    let mut keys = cv.selection();
+    cv.clear_selection();
+    keys.sort_unstable_by(|a, b| b.cmp(a));
+    keys.dedup();
+    match keys.as_slice() {
+        [] => None,
+        [(page, index)] => Some(Edit::DeleteAnnotation { page: *page, index: *index }),
+        _ => Some(Edit::Batch {
+            label: tl!("Delete comments").to_owned(),
+            edits: keys.into_iter().map(|(page, index)| Edit::DeleteAnnotation { page, index }).collect(),
+        }),
     }
 }
 
