@@ -26,7 +26,7 @@ use pdfcraft_cos::{Document, ObjRef, Object};
 const MAX_TERM_CHARS: usize = 4096;
 const MAX_TERMS: usize = 20_000;
 /// XMP packets larger than this, decoded, are removed without reading them.
-const MAX_XMP_BYTES: usize = 16 * 1024 * 1024;
+pub(crate) const MAX_XMP_BYTES: usize = 16 * 1024 * 1024;
 /// The searching (text length times terms, or value length times removed text) one scrub may
 /// do in all; past it every entry and packet counts as matching (fail-closed), so a page of
 /// removed text against a large packet, or against very many small values, stays quick.
@@ -285,6 +285,77 @@ fn xmp_values(doc: &Document, o: &Object) -> Option<Vec<String>> {
     decode_xmp(&bytes).map(|t| xml_values(&t))
 }
 
+/// What the removed text is looked for with, and the searching left to do it.
+pub(crate) struct Search {
+    lookup: Lookup,
+    work: Work,
+}
+
+enum Lookup {
+    /// Nothing with text was removed: nothing can hold it.
+    Nothing,
+    /// The removed text couldn't be collected or searched for in full: everything counts as
+    /// holding it (fail-closed).
+    Everything,
+    /// The terms ([`terms`]) and the distinct runs, normalized.
+    Terms(Vec<String>, Vec<String>),
+}
+
+impl Search {
+    /// The search for `removed` text, with `limit` steps of searching ([`MAX_WORK`] outside
+    /// tests). `complete` is false when the collection of removed text was cut short; then, as
+    /// when the terms exceed their limits, everything matches.
+    pub(crate) fn new(removed: &[String], complete: bool, limit: usize) -> Self {
+        let lookup = match terms(removed).filter(|_| complete) {
+            Some(t) if t.is_empty() => Lookup::Nothing,
+            Some(t) => {
+                // The same run removed many times is searched for once.
+                let mut seen = HashSet::new();
+                let runs: Vec<String> = removed.iter().map(|r| normalize(r)).filter(|r| seen.insert(r.clone())).collect();
+                Lookup::Terms(t, runs)
+            }
+            None => Lookup::Everything,
+        };
+        Self { lookup, work: Work::new(limit) }
+    }
+
+    /// [`Search::new`] with the whole work limit.
+    pub(crate) fn of(removed: &[String], complete: bool) -> Self {
+        Self::new(removed, complete, MAX_WORK)
+    }
+
+    /// Nothing with text was removed.
+    pub(crate) fn is_nothing(&self) -> bool {
+        matches!(self.lookup, Lookup::Nothing)
+    }
+
+    /// The removed text couldn't be searched for: everything matches.
+    pub(crate) fn is_everything(&self) -> bool {
+        matches!(self.lookup, Lookup::Everything)
+    }
+
+    /// Does `text` hold the removed text: a term, or wholly part of a removed run? Past the
+    /// work limit, yes (fail-closed).
+    pub(crate) fn text(&self, text: &str) -> bool {
+        match &self.lookup {
+            Lookup::Nothing => false,
+            Lookup::Everything => true,
+            Lookup::Terms(terms, runs) => mentions(text, terms, &self.work) || within(text, runs, &self.work),
+        }
+    }
+
+    /// Does the XMP stream `o` hold the removed text? A stream that can't be read does
+    /// (fail-closed), unless nothing with text was removed.
+    pub(crate) fn xmp(&self, doc: &Document, o: &Object) -> bool {
+        match &self.lookup {
+            Lookup::Nothing => false,
+            Lookup::Everything => true,
+            Lookup::Terms(terms, runs) => xmp_values(doc, o)
+                .is_none_or(|values| mentions(&values.join(" "), terms, &self.work) || values.iter().any(|v| within(v, runs, &self.work))),
+        }
+    }
+}
+
 /// Remove the metadata that still holds `removed` text: matching `/Info` entries, and the
 /// catalog's and pages' XMP streams that mention it. `complete` is false when the collection of
 /// removed text was cut short; then, as when the terms themselves exceed their limits, every
@@ -295,26 +366,17 @@ pub(crate) fn scrub(doc: &mut Document, removed: &[String], complete: bool) -> R
 
 /// [`scrub`] with the searching it may do given, so tests can run out of it.
 pub(crate) fn scrub_within(doc: &mut Document, removed: &[String], complete: bool, limit: usize) -> Result<usize, pdfcraft_cos::CosError> {
-    // `None` matches everything (fail-closed).
-    let search = match terms(removed).filter(|_| complete) {
-        Some(t) if t.is_empty() => return Ok(0),
-        Some(t) => {
-            // The same run removed many times is searched for once.
-            let mut seen = HashSet::new();
-            let runs: Vec<String> = removed.iter().map(|r| normalize(r)).filter(|r| seen.insert(r.clone())).collect();
-            Some((t, runs))
-        }
-        None => None,
-    };
-    let work = Work::new(limit);
-    let hit = |text: &str| search.as_ref().is_none_or(|(terms, runs)| mentions(text, terms, &work) || within(text, runs, &work));
+    let search = Search::new(removed, complete, limit);
+    if search.is_nothing() {
+        return Ok(0);
+    }
     let mut n = 0;
 
     // The information dictionary, direct in the trailer or an object of its own.
     let info_obj = doc.trailer().get(b"Info").cloned();
     if let Some(info) = info_obj.as_ref().and_then(|i| doc.resolve(i).as_dict().cloned()) {
         let doomed: Vec<Vec<u8>> =
-            info.iter().filter(|(_, v)| doc.resolve(v).as_string().is_some_and(|s| hit(&s.to_text()))).map(|(k, _)| k.to_vec()).collect();
+            info.iter().filter(|(_, v)| doc.resolve(v).as_string().is_some_and(|s| search.text(&s.to_text()))).map(|(k, _)| k.to_vec()).collect();
         if !doomed.is_empty() {
             n += doomed.len();
             let mut kept = info.clone();
@@ -329,19 +391,9 @@ pub(crate) fn scrub_within(doc: &mut Document, removed: &[String], complete: boo
     }
 
     // XMP on the catalog and on every page.
-    let mut holders: Vec<ObjRef> = doc.root().into_iter().collect();
-    holders.extend(pdfcraft_model::pages(doc).iter().map(|p| p.obj));
-    for holder in holders {
+    for holder in catalog_and_pages(doc) {
         let Some(xmp) = doc.get(holder).as_dict().and_then(|d| d.get(b"Metadata").cloned()) else { continue };
-        let doomed = match xmp_values(doc, &xmp) {
-            None => true,
-            Some(values) => {
-                let words = |(terms, _): &(Vec<String>, Vec<String>)| mentions(&values.join(" "), terms, &work);
-                let part = |(_, runs): &(Vec<String>, Vec<String>)| values.iter().any(|v| within(v, runs, &work));
-                search.as_ref().is_none_or(|s| words(s) || part(s))
-            }
-        };
-        if doomed {
+        if search.xmp(doc, &xmp) {
             doc.update_dict(holder, |d| {
                 d.remove(b"Metadata");
             })?;
@@ -349,4 +401,11 @@ pub(crate) fn scrub_within(doc: &mut Document, removed: &[String], complete: boo
         }
     }
     Ok(n)
+}
+
+/// The catalog and the pages: the objects whose XMP [`scrub`] checks.
+pub(crate) fn catalog_and_pages(doc: &Document) -> Vec<ObjRef> {
+    let mut holders: Vec<ObjRef> = doc.root().into_iter().collect();
+    holders.extend(pdfcraft_model::pages(doc).iter().map(|p| p.obj));
+    holders
 }

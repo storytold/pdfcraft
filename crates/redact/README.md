@@ -50,9 +50,19 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
     too. An XMP packet that isn't valid UTF-8 or UTF-16, can't be decoded strictly (damaged or
     cut-short filter data, or more than one filter), or decodes to more than
     16 MiB goes without being read.
-  - **Not scrubbed** (Sanitize's categories cover them): XMP streams on anything but the
-    catalog and the pages (images, fonts, form XObjects, annotations and other objects),
-    bookmark titles, and attachments (embedded files, their names and descriptions).
+  - **Not scrubbed, but reported** (Remove hidden information's categories remove them): bookmark
+    titles, attachments (names in the document's list of embedded files, file names and
+    descriptions, and the files of file attachment comments), the comments that remain (their
+    text, rich text, subject and author; not form fields or pop-ups), and XMP streams on anything
+    but the catalog and the pages (images, fonts, form XObjects, annotations and other objects).
+    `apply` changes none of them, but counts those that still hold the removed text, matched as
+    above, in `Report::still_holding` (`Elsewhere`), so the interface and the `redact_apply` tool
+    can say where it is; this search has a work limit of its own, past which every place counts.
+    When the removed text couldn't be searched for (the cases above in which every `/Info`
+    string goes), every one of them that holds any text is counted and `unsearched` is set; an XMP
+    stream or rich text stream that can't be read counts as holding it. The walks are bounded: at
+    most 100,000 bookmarks and 100,000 name-tree nodes (32 deep) are read, each once, and a walk
+    cut short counts one more place.
 
 A verification pass re-reads each redacted page and fails the operation if any glyph or inline
 image is still under an area. It checks every content stream the page had, whatever its

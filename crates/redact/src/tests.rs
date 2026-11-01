@@ -3038,6 +3038,7 @@ fn unused_descriptions_in_shared_or_inherited_resources_are_retired() {
 }
 
 mod descriptions;
+mod elsewhere;
 mod inline_images;
 mod limits;
 mod metadata_fail_closed;

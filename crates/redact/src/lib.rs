@@ -12,6 +12,8 @@
 //! A verification pass then re-reads every redacted page; if any glyph or inline image is still
 //! under a region the whole operation fails (callers keep the previous document: fail-closed).
 //! Finally, document metadata (`/Info` entries, XMP) that repeats the removed text is removed.
+//! Places it leaves as they are (bookmark titles, attachments, remaining comments, other XMP)
+//! are only counted when they still hold that text ([`Report::still_holding`]).
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -20,6 +22,7 @@ use std::collections::{HashMap, HashSet};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 
 pub mod codes;
+mod elsewhere;
 mod image;
 mod interp;
 mod metadata;
@@ -32,6 +35,7 @@ mod tests;
 pub(crate) mod type3;
 pub(crate) mod type3_tables;
 
+pub use elsewhere::Elsewhere;
 use interp::{Mode, Scope, process};
 
 pub type Rgb = [f64; 3];
@@ -153,6 +157,11 @@ pub struct Report {
     pub overlays: Vec<ObjRef>,
     /// Document information entries and XMP streams removed because they held redacted text.
     pub metadata: usize,
+    /// Places this apply leaves as they are that still hold the removed text (bookmark titles,
+    /// attachments, the comments that remain, XMP on other objects), counted so the user can be
+    /// told; Remove hidden information removes them. See [`Elsewhere`] for when the counts are
+    /// of every place holding any text.
+    pub still_holding: Elsewhere,
 }
 
 fn rect_of(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
@@ -536,6 +545,8 @@ fn apply_to(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Redac
     }
     // 6. The document's metadata must not keep what the pages no longer show (#2448).
     report.metadata = metadata::scrub(doc, &removed_text, !removed_cut)?;
+    // What it doesn't scrub is counted, never changed.
+    report.still_holding = elsewhere::find(doc, &removed_text, !removed_cut);
     // The previous revision still holds the removed content: the next save must rewrite.
     doc.require_full_save();
     Ok(report)
