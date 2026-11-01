@@ -74,6 +74,7 @@ mod hooks;
 mod persist;
 mod platform;
 mod state;
+mod structure_ui;
 mod tools;
 mod workflows;
 
@@ -485,6 +486,9 @@ pub struct PdfCraftApp {
     /// Compare files: the chosen older document and the last result.
     pub compare_old: Option<DocId>,
     pub compare: Option<compare_ui::CompareState>,
+    /// Standards ▸ Validate structure: the last check, the one running, and which findings the
+    /// list shows.
+    pub structure: structure_ui::StructureState,
     /// The JavaScript console and the Document JavaScripts draft.
     pub js_console: js_ui::JsConsole,
     pub doc_js: js_ui::DocJsDraft,

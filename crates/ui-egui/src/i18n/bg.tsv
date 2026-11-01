@@ -1206,6 +1206,19 @@
 	Check for accessibility	Провери за достъпност
 	Clear redaction marks	Изчисти маркировките за заличаване
 	Compare files…	Сравни файлове…
+	Validate structure…	Проверка на структурата…
+	Validate structure	Проверка на структурата
+	Checked {objects} objects against the Arlington PDF Model for PDF {version}.	Проверени обекти: {objects} спрямо Arlington PDF Model за PDF {version}.
+	No errors: the structure follows the Arlington PDF Model.	Няма грешки: структурата следва Arlington PDF Model.
+	No errors in the rules that were evaluated.	Няма грешки в оценените правила.
+	Errors	Грешки
+	Information	Информация
+	Not evaluated: {list}	Неоценени: {list}
+	Only the first {n} of each kind are listed.	Показани са само първите {n} от всеки вид.
+	The document has more objects than one check covers; the rest was not checked.	Документът има повече обекти, отколкото обхваща една проверка; останалото не е проверено.
+	Checking the structure… {n} objects so far	Проверка на структурата… досега {n} обекта
+	The check was cancelled.	Проверката е отменена.
+	The check stopped unexpectedly.	Проверката спря неочаквано.
 	Create links from URLs	Създай връзки от URL адреси
 	Detect form fields	Открий полета на формуляр
 	Draw a cloud	Нарисувай облак

@@ -1439,6 +1439,37 @@
 	Compare	Palyginti
 	Compare files	Palyginti failus
 	Compare files…	Palyginti failus…
+	Validate structure…	Tikrinti struktūrą…
+	Validate structure	Tikrinti struktūrą
+	Checked {objects} objects against the Arlington PDF Model for PDF {version}.	Patikrinta objektų: {objects} pagal Arlington PDF Model, skirtą PDF {version}.
+	No errors: the structure follows the Arlington PDF Model.	Klaidų nėra: struktūra atitinka Arlington PDF Model.
+	No errors in the rules that were evaluated.	Įvertintose taisyklėse klaidų nėra.
+	Errors	Klaidos
+	Not evaluated: {list}	Neįvertinta: {list}
+	Only the first {n} of each kind are listed.	Rodomi tik pirmieji {n} kiekvienos rūšies.
+	The document has more objects than one check covers; the rest was not checked.	Dokumente yra daugiau objektų, nei aprėpia vienas patikrinimas; likusi dalis nepatikrinta.
+	Checking the structure… {n} objects so far	Tikrinama struktūra… kol kas {n} objektų
+	The check was cancelled.	Patikrinimas atšauktas.
+	The check stopped unexpectedly.	Patikrinimas netikėtai sustojo.
+# What Validate structure reports (arlington::WORDINGS).
+	{type} lacks the required entry {key}	{type} trūksta privalomo įrašo {key}
+	{key} in {type} is {found}, but must be {expected}	{key} objekte {type} yra {found}, bet turi būti {expected}
+	{key} in {type} is {value}, which is not one of {allowed}	{key} objekte {type} yra {value}, o tai nėra viena iš reikšmių {allowed}
+	{key} in {type} is {value}, which breaks the rule {rule}	{key} objekte {type} yra {value}, o tai pažeidžia taisyklę {rule}
+	{key} in {type} must be {expected} when {rule}	{key} objekte {type} turi būti {expected}, kai {rule}
+	{key} in {type} must be an indirect reference	{key} objekte {type} turi būti netiesioginė nuoroda
+	{key} in {type} must be a direct object, not a reference	{key} objekte {type} turi būti tiesioginis objektas, o ne nuoroda
+	{key} in {type} is from PDF {since}, later than the file's PDF {version}	{key} objekte {type} atsirado PDF {since}, vėliau nei failo PDF {version}
+	{key} in {type} is deprecated since PDF {since}	{key} objekte {type} nebenaudojamas nuo PDF {since}
+	The value {value} of {key} in {type} is from PDF {since}, later than the file's PDF {version}	{key} reikšmė {value} objekte {type} atsirado PDF {since}, vėliau nei failo PDF {version}
+	The value {value} of {key} in {type} is deprecated since PDF {since}	{key} reikšmė {value} objekte {type} nebenaudojama nuo PDF {since}
+	{key} in {type} is a {found}, which is from PDF {since}, later than the file's PDF {version}	{key} objekte {type} yra {found}, kuris atsirado PDF {since}, vėliau nei failo PDF {version}
+	{key} in {type} breaks the rule {rule}	{key} objekte {type} pažeidžia taisyklę {rule}
+	{type} has {count} elements, more than the {max} it allows	{type} turi {count} elementų, daugiau nei leidžiami {max}
+	{type} has {count} elements, but they come in sets of {n}	{type} turi {count} elementų, bet jie turi būti grupėmis po {n}
+	{key} in {type} refers to object {object}, which doesn't exist	{key} objekte {type} nurodo objektą {object}, kurio nėra
+	{key} in {type} matches none of the types it may have ({candidates})	{key} objekte {type} neatitinka nė vieno galimo tipo ({candidates})
+	{key} is not an entry of {type} in the model	{key} nėra {type} įrašas modelyje
 	Compress a PDF	Suglaudinti PDF
 	Console	Konsolė
 	Convert colors	Konvertuoti spalvas

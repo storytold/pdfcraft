@@ -1151,6 +1151,37 @@
 	Check for accessibility	Verificar acessibilidade
 	Clear redaction marks	Limpar marcas de ocultação
 	Compare files…	Comparar arquivos…
+	Validate structure…	Validar estrutura…
+	Validate structure	Validar estrutura
+	Checked {objects} objects against the Arlington PDF Model for PDF {version}.	{objects} objetos verificados em relação ao Arlington PDF Model para PDF {version}.
+	No errors: the structure follows the Arlington PDF Model.	Nenhum erro: a estrutura segue o Arlington PDF Model.
+	No errors in the rules that were evaluated.	Nenhum erro nas regras avaliadas.
+	Errors	Erros
+	Information	Informações
+	Not evaluated: {list}	Não avaliado: {list}
+	Only the first {n} of each kind are listed.	Apenas os primeiros {n} de cada tipo são listados.
+	The document has more objects than one check covers; the rest was not checked.	O documento tem mais objetos do que uma verificação cobre; o restante não foi verificado.
+	{type} lacks the required entry {key}	Falta em {type} a entrada obrigatória {key}
+	{key} in {type} is {found}, but must be {expected}	{key} em {type} é {found}, mas deve ser {expected}
+	{key} in {type} is {value}, which is not one of {allowed}	{key} em {type} é {value}, que não é um de {allowed}
+	{key} in {type} is {value}, which breaks the rule {rule}	{key} em {type} é {value}, o que viola a regra {rule}
+	{key} in {type} must be {expected} when {rule}	{key} em {type} deve ser {expected} quando {rule}
+	{key} in {type} must be an indirect reference	{key} em {type} deve ser uma referência indireta
+	{key} in {type} must be a direct object, not a reference	{key} em {type} deve ser um objeto direto, não uma referência
+	{key} in {type} is from PDF {since}, later than the file's PDF {version}	{key} em {type} é do PDF {since}, posterior ao PDF {version} do arquivo
+	{key} in {type} is deprecated since PDF {since}	{key} em {type} está obsoleto desde o PDF {since}
+	The value {value} of {key} in {type} is from PDF {since}, later than the file's PDF {version}	O valor {value} de {key} em {type} é do PDF {since}, posterior ao PDF {version} do arquivo
+	The value {value} of {key} in {type} is deprecated since PDF {since}	O valor {value} de {key} em {type} está obsoleto desde o PDF {since}
+	{key} in {type} is a {found}, which is from PDF {since}, later than the file's PDF {version}	{key} em {type} é um {found}, que é do PDF {since}, posterior ao PDF {version} do arquivo
+	{key} in {type} breaks the rule {rule}	{key} em {type} viola a regra {rule}
+	{type} has {count} elements, more than the {max} it allows	{type} tem {count} elementos, mais que os {max} permitidos
+	{type} has {count} elements, but they come in sets of {n}	{type} tem {count} elementos, mas eles vêm em grupos de {n}
+	{key} in {type} refers to object {object}, which doesn't exist	{key} em {type} faz referência ao objeto {object}, que não existe
+	{key} in {type} matches none of the types it may have ({candidates})	{key} em {type} não corresponde a nenhum dos tipos que pode ter ({candidates})
+	{key} is not an entry of {type} in the model	{key} não é uma entrada de {type} no modelo
+	Checking the structure… {n} objects so far	Verificando a estrutura… {n} objetos até agora
+	The check was cancelled.	A verificação foi cancelada.
+	The check stopped unexpectedly.	A verificação parou inesperadamente.
 	Create links from URLs	Criar links a partir de URLs
 	Detect form fields	Detectar campos de formulário
 	Draw a cloud	Desenhar uma nuvem
@@ -2618,7 +2649,6 @@ animation effects	Off	Desativados
 	Help…	Ajuda…
 	H{n} follows an H{d}; headings should not skip levels	H{n} vem depois de H{d}; os títulos não devem pular níveis
 	Import	Importar
-	Information	Informações
 	Key Agreement	Acordo de chaves
 	Key Encipherment	Cifragem de chaves
 	Loading…	Carregando…

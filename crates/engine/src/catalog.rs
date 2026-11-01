@@ -500,6 +500,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                 item("Save as PDF/X", "file-check", "standards.pdfx", Planned("M11")),
                 item("Save as PDF/UA", "accessibility", "standards.pdfua", Planned("M11")),
                 item("Preflight", "file-check", "preflight.run", Planned("M11")),
+                item("Validate structure", "file-code", "standards.structure", Ready),
             ],
         }],
     },

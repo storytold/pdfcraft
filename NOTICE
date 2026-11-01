@@ -36,12 +36,23 @@ list (author, source, license) is in ATTRIBUTION.md.
 - egui default fonts (epaint_default_fonts, via eframe) — Ubuntu Light (Ubuntu Font Licence 1.0),
   Hack (MIT / Bitstream Vera licence), Noto Emoji (SIL OFL 1.1), emoji-icon-font (MIT).
 - Colour profile in hayro-interpret — CGATS001Compat-v2-micro.icc (CC0-1.0, Clinton Ingram).
+- Arlington PDF Model (crates/arlington/data/arlington.tsv), the model's tsv/latest files joined
+  into one table — Apache-2.0 (LICENSE-APACHE), Copyright 2020 PDF Association, Inc. Its notice
+  is reproduced below.
 
 Required notices:
 
   Foxit standard-14 substitute fonts (vendor/hayro-interpret/assets/*.pfb):
     Copyright 2014 PDFium Authors. All rights reserved. Original code copyright 2014 Foxit Software Inc.
     Redistributed under the BSD-3-Clause licence in vendor/hayro-interpret/assets/LICENSE_FOXIT.
+
+  Arlington PDF Model (https://github.com/pdf-association/arlington-pdf-model, NOTICE.txt):
+    Copyright 2020 PDF Association, Inc. https://www.pdfa.org
+    This material is based upon work supported by the Defense Advanced Research Projects Agency
+    (DARPA) under Contract No. HR001119C0079. Any opinions, findings and conclusions or
+    recommendations expressed in this material are those of the author(s) and do not necessarily
+    reflect the views of the Defense Advanced Research Projects Agency (DARPA). Approved for
+    public release.
 
   CMap resources (bundled by hayro-cmap; character-mapping data, not visual assets):
     Copyright 1990-2023 Adobe. All rights reserved. Redistributed under the BSD-3-Clause licence

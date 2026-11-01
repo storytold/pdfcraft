@@ -59,7 +59,7 @@ mod options;
 mod run;
 mod ui;
 
-use check::{audit, check, check_one};
+use check::{audit, check, check_one, validate};
 use commands::{combine, edit, extract, info, render, split, text};
 use options::{OptionSpec, flag, validate_options};
 #[cfg(feature = "mcp")]
@@ -82,6 +82,8 @@ pdfcraft-cli extract <in.pdf> --pages 1,3,5-8 --out out.pdf    (pages and ranges
 pdfcraft-cli split   <in.pdf> (--every N | --before 3,7) [--out-dir DIR]
 pdfcraft-cli check  <files or dirs…> [--timeout 20] [--dpi 36] [--json out.json]
 pdfcraft-cli audit  <file.pdf> [--password PW]            find faux redactions (fails when found)
+pdfcraft-cli validate <file.pdf> [--password PW] [--severity error|warning|info]
+                      structure against the Arlington PDF Model as JSON (fails on errors)
 pdfcraft-cli batch <files or dirs...> --steps convert,ocr,optimize --out-dir DIR
                       [--recursive] [--root DIR] [--stop-on-error]
                       [--ppi 150] [--quality 60] [--dpi 300] [--language en] [--ocr-all-pages]
@@ -134,6 +136,7 @@ fn main() -> ExitCode {
         Some("check") => check(&args[1..]),
         Some("check-one") => check_one(&args[1..]),
         Some("audit") => audit(&args[1..]),
+        Some("validate") => validate(&args[1..]),
         Some("tools") => tools(),
         Some("run") => run(&args[1..]),
         Some("batch") => batch::run(&args[1..]),

@@ -349,6 +349,37 @@ key	Space	Mezerník
 	Prepare for distribution…	Připravit k distribuci…
 	Optimize scanned documents…	Optimalizovat skenované dokumenty…
 	Compare files…	Porovnat soubory…
+	Validate structure…	Ověřit strukturu…
+	Validate structure	Ověřit strukturu
+	Checked {objects} objects against the Arlington PDF Model for PDF {version}.	Zkontrolováno {objects} objektů podle modelu Arlington PDF Model pro PDF {version}.
+	No errors: the structure follows the Arlington PDF Model.	Žádné chyby: struktura odpovídá modelu Arlington PDF Model.
+	No errors in the rules that were evaluated.	V posouzených pravidlech nejsou žádné chyby.
+	Errors	Chyby
+	Information	Informace
+	Not evaluated: {list}	Nevyhodnoceno: {list}
+	Only the first {n} of each kind are listed.	Uvedeno je jen prvních {n} od každého druhu.
+	The document has more objects than one check covers; the rest was not checked.	Dokument má víc objektů, než pokryje jedna kontrola; zbytek nebyl zkontrolován.
+	{type} lacks the required entry {key}	{type} chybí povinná položka {key}
+	{key} in {type} is {found}, but must be {expected}	{key} v {type} je {found}, ale musí být {expected}
+	{key} in {type} is {value}, which is not one of {allowed}	{key} v {type} je {value}, což není žádná z hodnot {allowed}
+	{key} in {type} is {value}, which breaks the rule {rule}	{key} v {type} je {value}, což porušuje pravidlo {rule}
+	{key} in {type} must be {expected} when {rule}	{key} v {type} musí být {expected}, když {rule}
+	{key} in {type} must be an indirect reference	{key} v {type} musí být nepřímý odkaz
+	{key} in {type} must be a direct object, not a reference	{key} v {type} musí být přímý objekt, ne odkaz
+	{key} in {type} is from PDF {since}, later than the file's PDF {version}	{key} v {type} je z PDF {since}, novějšího než PDF {version} souboru
+	{key} in {type} is deprecated since PDF {since}	{key} v {type} je zastaralý od PDF {since}
+	The value {value} of {key} in {type} is from PDF {since}, later than the file's PDF {version}	Hodnota {value} klíče {key} v {type} je z PDF {since}, novějšího než PDF {version} souboru
+	The value {value} of {key} in {type} is deprecated since PDF {since}	Hodnota {value} klíče {key} v {type} je zastaralá od PDF {since}
+	{key} in {type} is a {found}, which is from PDF {since}, later than the file's PDF {version}	{key} v {type} je {found}, což je z PDF {since}, novějšího než PDF {version} souboru
+	{key} in {type} breaks the rule {rule}	{key} v {type} porušuje pravidlo {rule}
+	{type} has {count} elements, more than the {max} it allows	{type} má {count} prvků, víc než povolených {max}
+	{type} has {count} elements, but they come in sets of {n}	{type} má {count} prvků, ale ty jsou ve skupinách po {n}
+	{key} in {type} refers to object {object}, which doesn't exist	{key} v {type} odkazuje na objekt {object}, který neexistuje
+	{key} in {type} matches none of the types it may have ({candidates})	{key} v {type} neodpovídá žádnému z typů, které může mít ({candidates})
+	{key} is not an entry of {type} in the model	{key} není v modelu položkou {type}
+	Checking the structure… {n} objects so far	Kontrola struktury… zatím {n} objektů
+	The check was cancelled.	Kontrola byla zrušena.
+	The check stopped unexpectedly.	Kontrola se neočekávaně zastavila.
 	Detect form fields	Rozpoznat formulářová pole
 	Merge data files into spreadsheet…	Sloučit datové soubory do tabulky…
 	Flatten form fields	Sloučit formulářová pole se stránkou
@@ -2777,7 +2808,6 @@ animation effects	Off	Vypnuto
 	Folder	Složka
 	Help…	Nápověda…
 	Import	Importovat
-	Information	Informace
 	Loading…	Načítání…
 	Mouse wheel scroll speed	Rychlost posouvání kolečkem myši
 	Move	Přesunout

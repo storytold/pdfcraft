@@ -1228,6 +1228,18 @@ pub fn tools() -> Vec<ToolDef> {
             .ro()
             .cmd("doc.compare")
             .with(schema(json!({ "doc": doc(), "other": { "type": "integer", "description": "The older document (from doc_open)." }, "limit": { "type": "integer", "minimum": 1, "description": "List at most this many changes (default 500)." }, "visual": { "type": "boolean", "description": "Also compare how pages look (page n with page n): regions that differ visually." } }), &["doc", "other"])),
+        t("structure_validate", "Validate structure", "Standards ▸ Validate structure: check the document's object graph, as it is now, against the Arlington PDF Model (ISO 32000-2). Each finding has a severity (error: breaks a rule; warning: newer than the file's PDF version, deprecated, or of no known type; info: a key the model doesn't define), a rule id (required, type, value, indirect, direct, version, deprecated, condition, array-length, missing-object, unknown-type, unknown-key), a message, the model type and key, the path from the trailer, the object (\"12 0 R\") and the 1-based page. not_checked counts the model rules written as predicates the validator does not evaluate; they are neither passed nor failed. Reads only; the document is not changed.")
+            .ro()
+            .cmd("standards.structure")
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "severity": { "type": "string", "enum": ["error", "warning", "info"], "description": "List findings at least this severe (default info: all). The counts always cover all." },
+                    "unknown_keys": { "type": "boolean", "description": "Report keys the model doesn't define (default true)." },
+                    "max_findings": { "type": "integer", "minimum": 1, "maximum": 5000, "description": "Findings kept per severity (default 1000)." },
+                }),
+                &["doc"],
+            )),
         t("doc_compare_report", "Compare report", "Write the compare summary report (a PDF listing every change) to path.")
             .cmd("doc.compare")
             .with(schema(json!({ "doc": doc(), "other": { "type": "integer" }, "path": { "type": "string" } }), &["doc", "other", "path"])),

@@ -416,6 +416,18 @@
 	Compare Files	Krahaso skedarët
 	Compare files	Krahaso skedarët
 	Compare files…	Krahaso skedarët…
+	Validate structure…	Vlerëso strukturën…
+	Validate structure	Vlerëso strukturën
+	Checked {objects} objects against the Arlington PDF Model for PDF {version}.	U kontrolluan {objects} objekte kundrejt modelit PDF Arlington për PDF {version}.
+	No errors: the structure follows the Arlington PDF Model.	Asnjë gabim: struktura ndjek modelin PDF Arlington.
+	No errors in the rules that were evaluated.	Nuk ka gabime në rregullat që u vlerësuan.
+	Errors	Gabimet
+	Not evaluated: {list}	Të pavlerësuara: {list}
+	Only the first {n} of each kind are listed.	Listohen vetëm {n} të parat e secilit lloj.
+	The document has more objects than one check covers; the rest was not checked.	Dokumenti ka më shumë objekte sesa mbulon një kontroll; pjesa tjetër nuk u kontrollua.
+	Checking the structure… {n} objects so far	Po kontrollohet struktura… {n} objekte deri tani
+	The check was cancelled.	Kontrolli u anulua.
+	The check stopped unexpectedly.	Kontrolli u ndal papritur.
 	Compare this file with an older version: Compare files… in All tools.	Krahaso këtë skedar me një version më të vjetër: Krahaso skedarët… te Të gjitha mjetet.
 	Compatibility	Përputhshmëria
 	Completed	Përfunduar
@@ -2402,6 +2414,7 @@ animation effects	Off	Joaktiv
 	Fill colour:	Fill colour:
 	Fix order	Fix order
 	Font	Font
+	Information	Informacion
 	Font size	Font size
 	Found {n} untagged content problems.	Found {n} untagged content problems.
 	Full Screen	Full Screen

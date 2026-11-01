@@ -228,6 +228,19 @@
 	Prepare for distribution…	配布の準備…
 	Optimize scanned documents…	スキャンした文書を最適化…
 	Compare files…	ファイルを比較…
+	Validate structure…	構造を検証…
+	Validate structure	構造を検証
+	Checked {objects} objects against the Arlington PDF Model for PDF {version}.	{objects} 個のオブジェクトを PDF {version} の Arlington PDF Model に照らして検査しました。
+	No errors: the structure follows the Arlington PDF Model.	エラーはありません。構造は Arlington PDF Model に従っています。
+	No errors in the rules that were evaluated.	評価できた規則にはエラーはありません。
+	Errors	エラー
+	Information	情報
+	Not evaluated: {list}	未評価: {list}
+	Only the first {n} of each kind are listed.	種類ごとに最初の {n} 件のみ表示しています。
+	The document has more objects than one check covers; the rest was not checked.	文書のオブジェクトが 1 回の検査の上限を超えているため、残りは検査されていません。
+	Checking the structure… {n} objects so far	構造を検査しています… これまでに {n} 個のオブジェクト
+	The check was cancelled.	検査はキャンセルされました。
+	The check stopped unexpectedly.	検査が予期せず停止しました。
 	Detect form fields	フォームフィールドを検出
 	Merge data files into spreadsheet…	データファイルをスプレッドシートに結合…
 	Flatten form fields	フォームフィールドを統合

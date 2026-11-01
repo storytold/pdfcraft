@@ -201,6 +201,19 @@
 	Prepare for distribution…	Préparer pour la distribution…
 	Optimize scanned documents…	Optimiser les documents numérisés…
 	Compare files…	Comparer des fichiers…
+	Validate structure…	Valider la structure…
+	Validate structure	Valider la structure
+	Checked {objects} objects against the Arlington PDF Model for PDF {version}.	{objects} objets vérifiés par rapport à l'Arlington PDF Model pour PDF {version}.
+	No errors: the structure follows the Arlington PDF Model.	Aucune erreur : la structure suit l'Arlington PDF Model.
+	No errors in the rules that were evaluated.	Aucune erreur dans les règles évaluées.
+	Errors	Erreurs
+	Information	Informations
+	Not evaluated: {list}	Non évalué : {list}
+	Only the first {n} of each kind are listed.	Seuls les {n} premiers de chaque type sont listés.
+	The document has more objects than one check covers; the rest was not checked.	Le document contient plus d'objets qu'une vérification n'en couvre ; le reste n'a pas été vérifié.
+	Checking the structure… {n} objects so far	Vérification de la structure… {n} objets pour l'instant
+	The check was cancelled.	La vérification a été annulée.
+	The check stopped unexpectedly.	La vérification s'est arrêtée de manière inattendue.
 	Detect form fields	Détecter les champs de formulaire
 	Merge data files into spreadsheet…	Fusionner des fichiers de données dans une feuille de calcul…
 	Flatten form fields	Aplatir les champs de formulaire
@@ -2604,7 +2617,6 @@ animation effects	Off	Désactivés
 	Help…	Aide…
 	H{n} follows an H{d}; headings should not skip levels	H{n} suit H{d} ; les niveaux de titre ne doivent pas être sautés
 	Import	Importer
-	Information	Information
 	Key Agreement	Accord de clé
 	Key Encipherment	Chiffrement de clé
 	Loading…	Chargement…
