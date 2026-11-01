@@ -245,6 +245,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 - **2026-11-02 (M14, #5737, #5460):** Preferences can turn off the update check at start. It stays on by default, and Help ▸ Check for updates still asks.
 
+- **2026-11-01 (M7, #5114):** Myanmar text is shaped when its paragraph is rewritten, so a medial ra, a vowel sign e and stacked consonants land where the font puts them instead of in typing order, and stay right after deselecting and in other readers. It takes the full face: a font subset without GSUB, as browsers embed, is refused and the error names the face to load. Replacing one line (`text_edit` with `line`) is refused for Myanmar, since that path can't shape. Add text still can't draw Myanmar, and there is no fallback Myanmar face. Estimates unchanged.
+
 - **2026-11-01 (M7, #5657):** Header/footer, watermark and background additions and replacements stage the complete call before committing. Synthetic later-page failures preserve exact incremental bytes, object count, dirty state and allocation cursor; success controls retain other marks and shared/inherited resources. Estimates unchanged.
 
 - **2026-11-01 (M14, #5572):** Preferences ▸ Documents and view sets how many recent files to keep, from 0 to 50 with 12 by default. At 0 Home has no Recent section and File ▸ Open Recent is disabled. The list is cut when Preferences closes, so the number can pass through 0 on its way to another.
