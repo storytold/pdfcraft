@@ -808,6 +808,75 @@ fn flattening_skips_replies_in_the_question_mark_check_and_keeps_skipped_group_m
     assert_eq!(left, [7], "the reply went with the square; the hidden group member stays");
 }
 
+/// #5632 review: a thread three replies deep, listed in `/Annots` in reverse (the deepest reply
+/// first, the comment last), goes whole with its comment, none of the replies drawn; a reply to a
+/// `/RT /Group` member goes with that member, which is drawn.
+#[test]
+fn flattening_takes_a_thread_three_deep_in_reverse_order_and_a_group_members_reply() {
+    let page = stream("", " ");
+    let form = |rgb: &str| stream("/Type /XObject /Subtype /Form /BBox [0 0 20 18]", &format!("{rgb} rg 0 0 20 18 re f"));
+    let (blue, red, green) = (form("0 0 1"), form("1 0 0"), form("0 1 0"));
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << >> /Contents 4 0 R /Annots [8 0 R 7 0 R 6 0 R 5 0 R 9 0 R 10 0 R] >>",
+        &page,
+        // The comment (blue), and three replies, each to the one before, all with appearances (red).
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [100 500 120 518] /Contents (Comment) /AP << /N 11 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [105 495 125 513] /Contents (Reply 1) /IRT 5 0 R /AP << /N 12 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [110 490 130 508] /Contents (Reply 2) /IRT 6 0 R /RT /R /AP << /N 12 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [115 485 135 503] /Contents (Reply 3) /IRT 7 0 R /AP << /N 12 0 R >> >>",
+        // A member of the comment's group (green), and a reply to the member.
+        "<< /Type /Annot /Subtype /Square /F 4 /Rect [200 500 220 518] /IRT 5 0 R /RT /Group /AP << /N 13 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [205 495 225 513] /Contents (Reply to the member) /IRT 9 0 R /AP << /N 12 0 R >> >>",
+        &blue,
+        &red,
+        &green,
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), 2, "the comment and the group member are drawn; no reply is");
+    let doc = reopen(&doc);
+    let p = &pdfcraft_model::pages(&doc)[0];
+    assert!(!p.dict.contains(b"Annots"), "the three replies and the member's reply go with what they answer");
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+    let xo = doc.resolve(res.as_dict().unwrap().get(b"XObject").unwrap());
+    let mut drawn: Vec<u32> = xo.as_dict().unwrap().iter().filter_map(|(_, v)| v.as_ref()).map(|r| r.num).collect();
+    drawn.sort_unstable();
+    assert_eq!(drawn, [11, 13], "the comment's and the member's appearances, not the replies'");
+}
+
+/// #5632 review: replies whose `/IRT` runs in a loop (two replying to each other, one replying to
+/// itself, and a square and a note each answering the other) end the flattening. None of them is
+/// drawn: each is a reply. Those that answer nothing flattened stay; the comment beside them is
+/// flattened and its reply goes with it.
+#[test]
+fn flattening_ends_on_replies_whose_irt_loops() {
+    let page = stream("", " ");
+    let blue = stream("/Type /XObject /Subtype /Form /BBox [0 0 20 18]", "0 0 1 rg 0 0 20 18 re f");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R 9 0 R 10 0 R 11 0 R] >>",
+        &page,
+        // A comment and its reply.
+        "<< /Type /Annot /Subtype /Square /F 4 /Rect [100 500 120 518] /AP << /N 12 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [105 495 125 513] /IRT 5 0 R /AP << /N 12 0 R >> >>",
+        // Two replies to each other.
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [200 500 220 518] /IRT 8 0 R /AP << /N 12 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [205 495 225 513] /IRT 7 0 R /AP << /N 12 0 R >> >>",
+        // A reply to itself.
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [300 500 320 518] /IRT 9 0 R /AP << /N 12 0 R >> >>",
+        // A square and a note each answering the other: both are replies.
+        "<< /Type /Annot /Subtype /Square /F 4 /Rect [400 500 420 518] /IRT 11 0 R /AP << /N 12 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /F 28 /Rect [405 495 425 513] /IRT 10 0 R /AP << /N 12 0 R >> >>",
+        &blue,
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), 1, "only the comment is drawn");
+    let doc = reopen(&doc);
+    let p = &pdfcraft_model::pages(&doc)[0];
+    let left: Vec<u32> = doc.resolve(p.dict.get(b"Annots").unwrap()).as_array().unwrap().iter().filter_map(|f| f.as_ref()).map(|r| r.num).collect();
+    assert_eq!(left, [7, 8, 9, 10, 11], "the comment's reply went with it; the looping replies stay");
+}
+
 /// Flattening never makes a `?` permanent: it refuses, changing nothing, a text box without an
 /// appearance whose text Helvetica can't draw (another program's), and a comment or form field
 /// whose appearance PdfCraft drew with `?` (marked `PCUndrawn`). A comment another program drew
