@@ -4687,3 +4687,300 @@ fn a_sliver_field_moves_on_as_a_field_kept_intact_does() {
     assert_eq!((pages, at), form(r#"<keep intact="contentArea"/>"#), "the sliver field and one kept intact");
     assert_eq!(at.map(|(page, _)| page), Some(1), "on the second page");
 }
+
+/// #5525 review: the level lines about `len` long on `page` (a border's top and bottom edges),
+/// top to bottom.
+fn level_lines(page: &Page, len: f64) -> Vec<f64> {
+    let mut ys: Vec<f64> = page
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            Item::Line { from, to, .. } if (from.1 - to.1).abs() < 0.01 && ((to.0 - from.0).abs() - len).abs() < 1.0 => Some(from.1),
+            _ => None,
+        })
+        .collect();
+    ys.sort_by(f64::total_cmp);
+    ys
+}
+
+/// #5525 review: whether `got` holds the values of `want`, each within a point.
+fn near_all(got: &[f64], want: &[f64]) -> bool {
+    got.len() == want.len() && got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1.0)
+}
+
+/// #5525 review: the pages (by index) holding the widget at SOM path `som`, with its box on each.
+/// A repeated field's PDF name is made up, so the widget is found by its SOM path.
+fn widget_pieces(form: &Form, som: &str) -> Vec<(usize, Rect)> {
+    form.pages.iter().enumerate().flat_map(|(i, p)| widgets(p).into_iter().filter(|w| w.som == som).map(move |w| (i, w.rect))).collect()
+}
+
+/// #5525 review: the baseline of the first text span `text` on `page`.
+fn baseline_of(page: &Page, text: &str) -> Option<f64> {
+    page.items.iter().find_map(|i| match i {
+        Item::Text(s) if s.text == text => Some(s.baseline),
+        _ => None,
+    })
+}
+
+/// #5525 review: an empty growing field `name` with its own border all round and no widget
+/// border, `min_h` tall, `extra` inside it.
+fn bordered_notes(name: &str, min_h: &str, extra: &str) -> String {
+    format!(
+        r#"<field name="{name}" w="7.5in" minH="{min_h}">{extra}
+ <border><edge/></border>
+ <ui><textEdit multiLine="1"><border><edge presence="hidden"/></border></textEdit></ui>
+</field>"#
+    )
+}
+
+/// #5525 review: a field split over two pages. With 144 points left on the first page, a 216
+/// point field runs to the bottom of it and its other 72 points go on at the top of the next,
+/// its border closed round each piece; what follows the field starts under that rest, not
+/// under a whole field moved to the next page.
+#[test]
+fn a_field_split_over_two_pages_has_what_follows_start_under_its_rest() {
+    let body = format!(
+        r#"<draw name="filler" w="7.5in" h="8in"><value><text>above</text></value></draw>
+{}
+<draw name="after" w="7.5in" h="0.5in"><value><text>after</text></value></draw>"#,
+        bordered_notes("notes", "3in", "")
+    );
+    let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+    assert_eq!(form.pages.len(), 2);
+    let pieces = widget_pieces(&form, "form[0].notes[0]");
+    assert!(
+        matches!(pieces.as_slice(), [(0, r)] if (r.y - 612.0).abs() < 0.5 && (r.bottom() - 756.0).abs() < 0.5),
+        "one widget, on the first page: {pieces:?}"
+    );
+    let (first, next) = (level_lines(&form.pages[0], 540.0), level_lines(&form.pages[1], 540.0));
+    assert!(near_all(&first, &[612.0, 756.0]), "first piece, closed: {first:?}");
+    assert!(near_all(&next, &[36.0, 108.0]), "the other 72 points, closed: {next:?}");
+    let after = baseline_of(&form.pages[1], "after").expect("what follows is on the second page");
+    assert!(after > 108.0 && after < 144.0, "under the rest of the field: {after}");
+}
+
+/// #5525 review: a field split over three pages. A 936 point field with 144 points left on the
+/// first page fills that, the whole of the second page's content area, and 72 points of the
+/// third; its border is closed round each of the three pieces, and what follows starts under
+/// the last.
+#[test]
+fn a_field_split_over_three_pages_closes_its_border_round_every_piece() {
+    let body = format!(
+        r#"<draw name="filler" w="7.5in" h="8in"><value><text>above</text></value></draw>
+{}
+<draw name="after" w="7.5in" h="0.5in"><value><text>after</text></value></draw>"#,
+        bordered_notes("notes", "13in", "")
+    );
+    let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+    assert_eq!(form.pages.len(), 3);
+    let pieces = widget_pieces(&form, "form[0].notes[0]");
+    assert!(
+        matches!(pieces.as_slice(), [(0, r)] if (r.y - 612.0).abs() < 0.5 && (r.bottom() - 756.0).abs() < 0.5),
+        "one widget, on the first page: {pieces:?}"
+    );
+    let levels: Vec<Vec<f64>> = form.pages.iter().map(|p| level_lines(p, 540.0)).collect();
+    assert!(near_all(&levels[0], &[612.0, 756.0]), "first piece: {levels:?}");
+    assert!(near_all(&levels[1], &[36.0, 756.0]), "a whole content area: {levels:?}");
+    assert!(near_all(&levels[2], &[36.0, 108.0]), "the last 72 points: {levels:?}");
+    let after = baseline_of(&form.pages[2], "after").expect("what follows is on the third page");
+    assert!(after > 108.0 && after < 144.0, "under the last piece: {after}");
+}
+
+/// #5525 review: a field taller than a page that starts at the top of one (the page break is
+/// right above it) splits at the bottom of that content area rather than running off the page:
+/// 864 points become 720 here and 144 on the next page.
+#[test]
+fn a_field_taller_than_a_page_starting_at_its_top_splits_at_its_bottom() {
+    let form = layout_xml(&one_area_form(r#"layout="tb""#, &bordered_notes("notes", "12in", ""))).unwrap();
+    assert_eq!(form.pages.len(), 2);
+    let pieces = widget_pieces(&form, "form[0].notes[0]");
+    assert!(
+        matches!(pieces.as_slice(), [(0, r)] if (r.y - 36.0).abs() < 0.5 && (r.bottom() - 756.0).abs() < 0.5),
+        "the widget fills the first content area, no more: {pieces:?}"
+    );
+    assert!(near_all(&level_lines(&form.pages[0], 540.0), &[36.0, 756.0]), "{:?}", level_lines(&form.pages[0], 540.0));
+    assert!(near_all(&level_lines(&form.pages[1], 540.0), &[36.0, 180.0]), "{:?}", level_lines(&form.pages[1], 540.0));
+}
+
+/// #5525 review: a field that starts exactly at a page break (what is above it fills the content
+/// area) has no room at all on that page: it moves to the next page whole, its border with it,
+/// and nothing of it is left behind.
+#[test]
+fn a_field_starting_exactly_at_a_page_break_moves_on_whole() {
+    let body = format!(
+        r#"<draw name="filler" w="7.5in" h="10in"><value><text>above</text></value></draw>
+{}"#,
+        bordered_notes("notes", "3in", "")
+    );
+    let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+    assert_eq!(form.pages.len(), 2);
+    assert!(level_lines(&form.pages[0], 540.0).is_empty(), "no border left behind: {:?}", level_lines(&form.pages[0], 540.0));
+    let pieces = widget_pieces(&form, "form[0].notes[0]");
+    assert!(
+        matches!(pieces.as_slice(), [(1, r)] if (r.y - 36.0).abs() < 0.5 && (r.bottom() - 252.0).abs() < 0.5),
+        "whole at the top of the next page: {pieces:?}"
+    );
+    assert!(near_all(&level_lines(&form.pages[1], 540.0), &[36.0, 252.0]), "{:?}", level_lines(&form.pages[1], 540.0));
+}
+
+/// #5525 review: the room a field needs above a page break to split there is one line of its
+/// text (10 point Courier, 12 points). With exactly 12 points left the field splits, its widget
+/// on the last 12 points of the page; with 11 it has no room and moves to the next page whole.
+#[test]
+fn a_field_splits_with_one_line_of_room_and_moves_on_whole_with_less() {
+    let form = |filler: &str| {
+        let body = format!(
+            r#"<draw name="filler" w="7.5in" h="{filler}"><value><text>above</text></value></draw>
+{}"#,
+            bordered_notes("notes", "3in", "")
+        );
+        layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap()
+    };
+    let line = form("708pt");
+    let pieces = widget_pieces(&line, "form[0].notes[0]");
+    assert!(
+        matches!(pieces.as_slice(), [(0, r)] if (r.y - 744.0).abs() < 0.5 && (r.bottom() - 756.0).abs() < 0.5),
+        "one line on the first page: {pieces:?}"
+    );
+    assert!(near_all(&level_lines(&line.pages[1], 540.0), &[36.0, 240.0]), "the other 204 points: {:?}", level_lines(&line.pages[1], 540.0));
+    let less = form("709pt");
+    let pieces = widget_pieces(&less, "form[0].notes[0]");
+    assert!(matches!(pieces.as_slice(), [(1, r)] if (r.y - 36.0).abs() < 0.5 && (r.h - 216.0).abs() < 0.5), "whole on the next page: {pieces:?}");
+    assert!(level_lines(&less.pages[0], 540.0).is_empty(), "nothing of it left on the first page");
+}
+
+/// #5525 review: two such fields in a row are split by their own page breaks, and the second
+/// starts from nothing of the first: the first (216 points) splits over pages one and two, the
+/// second (792 points) starts under the first's rest and splits over pages two and three, and
+/// each page holds only the borders of its own pieces. A second field that fits after a split
+/// one is drawn whole, once.
+#[test]
+fn two_fields_in_a_row_are_each_split_by_their_own_page_break() {
+    let form = |second: &str| {
+        let body = format!(
+            r#"<draw name="filler" w="7.5in" h="8in"><value><text>above</text></value></draw>
+{}
+{}"#,
+            bordered_notes("a", "3in", ""),
+            bordered_notes("b", second, "")
+        );
+        layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap()
+    };
+    let both = form("11in");
+    assert_eq!(both.pages.len(), 3);
+    let a = widget_pieces(&both, "form[0].a[0]");
+    let b = widget_pieces(&both, "form[0].b[0]");
+    assert!(matches!(a.as_slice(), [(0, r)] if (r.y - 612.0).abs() < 0.5 && (r.bottom() - 756.0).abs() < 0.5), "a: {a:?}");
+    assert!(matches!(b.as_slice(), [(1, r)] if (r.y - 108.0).abs() < 0.5 && (r.bottom() - 756.0).abs() < 0.5), "b: {b:?}");
+    let levels: Vec<Vec<f64>> = both.pages.iter().map(|p| level_lines(p, 540.0)).collect();
+    assert!(near_all(&levels[0], &[612.0, 756.0]), "a's first piece: {levels:?}");
+    assert!(near_all(&levels[1], &[36.0, 108.0, 108.0, 756.0]), "a's rest and b's first piece: {levels:?}");
+    assert!(near_all(&levels[2], &[36.0, 180.0]), "b's other 144 points: {levels:?}");
+    let fits = form("1in");
+    assert_eq!(fits.pages.len(), 2);
+    let b = widget_pieces(&fits, "form[0].b[0]");
+    assert!(matches!(b.as_slice(), [(1, r)] if (r.y - 108.0).abs() < 0.5 && (r.h - 72.0).abs() < 0.5), "b whole: {b:?}");
+    let levels = level_lines(&fits.pages[1], 540.0);
+    assert!(near_all(&levels, &[36.0, 108.0, 108.0, 180.0]), "a's rest, and b once: {levels:?}");
+}
+
+/// #5525 review: the field of the second instance of a repeated subform splits like any other,
+/// found by its SOM path (its PDF name is made up), while the first instance's field, which
+/// fits, stays whole.
+#[test]
+fn a_field_in_a_repeated_subform_splits_in_the_instance_that_reaches_the_break() {
+    let body = format!(
+        r#"<draw name="filler" w="7.5in" h="6in"><value><text>above</text></value></draw>
+<subform name="row" layout="tb" w="7.5in"><occur min="2" initial="2"/>
+{}
+</subform>"#,
+        bordered_notes("notes", "3in", "")
+    );
+    let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+    assert_eq!(form.pages.len(), 2);
+    let first = widget_pieces(&form, "form[0].row[0].notes[0]");
+    let second = widget_pieces(&form, "form[0].row[1].notes[0]");
+    assert!(matches!(first.as_slice(), [(0, r)] if (r.y - 468.0).abs() < 0.5 && (r.h - 216.0).abs() < 0.5), "first whole: {first:?}");
+    assert!(matches!(second.as_slice(), [(0, r)] if (r.y - 684.0).abs() < 0.5 && (r.bottom() - 756.0).abs() < 0.5), "second split: {second:?}");
+    let (page0, page1) = (level_lines(&form.pages[0], 540.0), level_lines(&form.pages[1], 540.0));
+    assert!(near_all(&page0, &[468.0, 684.0, 684.0, 756.0]), "{page0:?}");
+    assert!(near_all(&page1, &[36.0, 180.0]), "{page1:?}");
+}
+
+/// #5525 review: a field split inside two nested sections, each with a quarter-inch bottom and
+/// top margin, leaves both bottom margins free under its first piece (it ends 36 points above
+/// the bottom of the content area) and goes on under both top margins on the next page.
+#[test]
+fn a_field_split_inside_nested_sections_leaves_room_for_both_margins() {
+    let body = r#"<subform name="outer" layout="tb" w="7.5in">
+ <margin topInset="0.25in" bottomInset="0.25in"/>
+ <subform name="inner" layout="tb" w="7.5in">
+  <margin topInset="0.25in" bottomInset="0.25in"/>
+  <draw name="filler" w="7.5in" h="8in"><value><text>above</text></value></draw>
+  <field name="notes" w="7in" minH="3in">
+   <border><edge/></border>
+   <ui><textEdit multiLine="1"><border><edge presence="hidden"/></border></textEdit></ui>
+  </field>
+ </subform>
+</subform>"#;
+    let form = layout_xml(&one_area_form(r#"layout="tb""#, body)).unwrap();
+    assert_eq!(form.pages.len(), 2);
+    // The filler starts under both top margins, at 72, so the field starts at 648.
+    let (first, next) = (level_lines(&form.pages[0], 504.0), level_lines(&form.pages[1], 504.0));
+    assert!(near_all(&first, &[648.0, 720.0]), "first piece ends above both bottom margins: {first:?}");
+    assert!(near_all(&next, &[72.0, 216.0]), "the other 144 points under both top margins: {next:?}");
+}
+
+/// #5525 review: `<keep intact>` decides whether a page break may split the field (XFA 3.3
+/// p. 292): `contentArea` and `pageArea` keep it whole, moving it to the next page, while
+/// `none` and a value XFA doesn't define leave a field's default, `none`, and it splits.
+#[test]
+fn keep_intact_values_decide_whether_the_field_splits() {
+    let at = |keep: &str| {
+        let body = format!(
+            r#"<draw name="filler" w="7.5in" h="8in"><value><text>above</text></value></draw>
+{}"#,
+            bordered_notes("notes", "3in", &format!(r#"<keep intact="{keep}"/>"#))
+        );
+        let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+        widget_pieces(&form, "form[0].notes[0]")
+    };
+    for keep in ["contentArea", "pageArea"] {
+        let pieces = at(keep);
+        assert!(matches!(pieces.as_slice(), [(1, r)] if (r.y - 36.0).abs() < 0.5 && (r.h - 216.0).abs() < 0.5), "{keep}: whole: {pieces:?}");
+    }
+    for keep in ["none", "sideways", ""] {
+        let pieces = at(keep);
+        assert!(
+            matches!(pieces.as_slice(), [(0, r)] if (r.y - 612.0).abs() < 0.5 && (r.bottom() - 756.0).abs() < 0.5),
+            "{keep:?}: split: {pieces:?}"
+        );
+    }
+}
+
+/// #5525 review: extreme and malformed sizes. A 1000 inch empty field splits over exactly 100
+/// pages, its widget on the first only and its border closed on each; a `minH` past the largest
+/// length a measurement may have (100,000 points) splits over 139 pages; fields that would need
+/// more pages than a form may have (500) are refused with an error rather than a panic or a
+/// hang; and a negative, NaN or non-numeric `minH`, or a content area too short for a line,
+/// lays out without panicking.
+#[test]
+fn a_split_field_survives_huge_and_malformed_sizes() {
+    let huge = layout_xml(&one_area_form(r#"layout="tb""#, &bordered_notes("notes", "1000in", ""))).unwrap();
+    assert_eq!(huge.pages.len(), 100);
+    assert!(matches!(widget_pieces(&huge, "form[0].notes[0]").as_slice(), [(0, _)]), "one widget, on the first page");
+    for (i, p) in huge.pages.iter().enumerate() {
+        assert!(near_all(&level_lines(p, 540.0), &[36.0, 756.0]), "page {i}: {:?}", level_lines(p, 540.0));
+    }
+    let capped = layout_xml(&one_area_form(r#"layout="tb""#, &bordered_notes("notes", "100000in", ""))).unwrap();
+    assert_eq!(capped.pages.len(), 139, "100,000 points over 720 point content areas");
+    let four: String = (0..4).map(|i| bordered_notes(&format!("n{i}"), "100000in", "")).collect();
+    let too_many = layout_xml(&one_area_form(r#"layout="tb""#, &four));
+    assert!(matches!(too_many, Err(XfaError::TooLarge(_))), "{:?}", too_many.map(|f| f.pages.len()));
+    for min_h in ["-3in", "NaNin", "abc", "0"] {
+        let form = layout_xml(&one_area_form(r#"layout="tb""#, &bordered_notes("notes", min_h, ""))).unwrap();
+        assert!(!form.pages.is_empty(), "{min_h}");
+    }
+    let tiny = one_area_form(r#"layout="tb""#, &bordered_notes("notes", "3in", "")).replace(r#"h="10in""#, r#"h="0.5pt""#);
+    let _ = layout_xml(&tiny);
+}
