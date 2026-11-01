@@ -1,4 +1,4 @@
-use super::common::{clamp_opt, divide, is_row, moved, solid_extent, split_line, split_widget, splittable};
+use super::common::{WidgetRest, clamp_opt, divide, is_row, moved, solid_extent, split_line, split_widget, splittable, widget_box};
 use super::items::Item;
 use super::{Ctx, Frame, Layout, Layouter, MAX_DEPTH, Node, Rect, SomIndices, Splitting, Subform, XfaError, data_path, instance_count};
 
@@ -146,6 +146,7 @@ impl Layouter<'_> {
         let (mut dx, mut shift) = (0.0, 0.0);
         let mut seg_top = top;
         let mut first_segment = true;
+        let mut widget_rest: Option<WidgetRest> = None;
         loop {
             let (rect, _, placed) = self.cursor();
             // A field being split leaves room for the bottom margins of the flowed subforms round it.
@@ -179,11 +180,26 @@ impl Layouter<'_> {
             }
             let mut here = Vec::new();
             let mut below = Vec::new();
+            // The rest of the split widget's box: a piece down to this break, closed on every
+            // side, and what is left of it goes on.
+            if let Some((r, border)) = widget_rest.take() {
+                let bottom = r.bottom().min(cut);
+                if bottom - r.y > 0.01 {
+                    here.extend(widget_box(Rect::new(r.x, r.y, r.w, bottom - r.y), &border));
+                }
+                if r.bottom() > cut + 0.01 {
+                    let y = cut.max(r.y);
+                    widget_rest = Some((Rect::new(r.x, y, r.w, r.bottom() - y), border));
+                }
+            }
             for (item, kept) in rest {
                 if loose(&item) {
-                    let (upper, lower) = split_widget(item, cut);
+                    let (upper, whole, rest_box) = split_widget(item, cut);
                     here.extend(upper);
-                    below.extend(lower.into_iter().map(|it| (it, None)));
+                    below.extend(whole.map(|it| (it, None)));
+                    if rest_box.is_some() {
+                        widget_rest = rest_box;
+                    }
                     continue;
                 }
                 if let Some((top, _)) = kept {
@@ -220,7 +236,7 @@ impl Layouter<'_> {
             }
             // A field being split goes on to its own bottom, even when what is left of it draws
             // nothing (no fill, no border).
-            if below.is_empty() && !field.is_some_and(|f| f.bottom() > cut + 0.01) {
+            if below.is_empty() && widget_rest.is_none() && !field.is_some_and(|f| f.bottom() > cut + 0.01) {
                 if let Some(c) = &mut self.cur {
                     c.y = (end - shift).min(c.rect.bottom()).max(c.y);
                     c.placed = true;

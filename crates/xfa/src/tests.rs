@@ -4984,3 +4984,19 @@ fn a_split_field_survives_huge_and_malformed_sizes() {
     let tiny = one_area_form(r#"layout="tb""#, &bordered_notes("notes", "3in", "")).replace(r#"h="10in""#, r#"h="0.5pt""#);
     let _ = layout_xml(&tiny);
 }
+
+/// #5525 review: the widget's own border (the text edit's) of a field split over three pages is
+/// closed round every piece below the widget, not only the first: the middle page gets a box
+/// from the top of its content area to the bottom, and the last page one round the last 72
+/// points, each with its top and bottom edge.
+#[test]
+fn a_widget_border_split_over_three_pages_is_closed_round_every_piece() {
+    let body = r#"<draw name="filler" w="7.5in" h="8in"><value><text>above</text></value></draw>
+<field name="notes" w="7.5in" minH="13in"><ui><textEdit multiLine="1"><border><edge/></border></textEdit></ui></field>"#;
+    let form = layout_xml(&one_area_form(r#"layout="tb""#, body)).unwrap();
+    assert_eq!(form.pages.len(), 3);
+    // The edges are half a point wide, drawn a quarter of a point inside the box.
+    let (middle, last) = (level_lines(&form.pages[1], 539.5), level_lines(&form.pages[2], 539.5));
+    assert!(near_all(&middle, &[36.25, 755.75]), "the middle piece, closed at the bottom of the page: {middle:?}");
+    assert!(near_all(&last, &[36.25, 107.75]), "the last piece, closed at its top: {last:?}");
+}
