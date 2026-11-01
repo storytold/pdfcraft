@@ -93,6 +93,14 @@ impl Seg {
         self.h = self.h.max(h);
     }
 
+    /// The x-overlap of each glyph of `self` with `x0..x1`, summed over the glyphs. Overlapping glyphs are counted
+    /// each time, so this is not the covered width and can exceed `x1 - x0`; callers only compare it against a
+    /// fraction of the width. A sub- or superscript sits beside its host's glyphs, not across them, so its sum is
+    /// near zero. `glyphs` is the list the segment's runs index into. Scans every glyph of `self`.
+    pub(super) fn covered(&self, glyphs: &[&TextGlyph], x0: f32, x1: f32) -> f32 {
+        self.runs().filter_map(|r| glyphs.get(r.range())).flatten().map(|g| (g.rect[2].min(x1) - g.rect[0].max(x0)).max(0.0)).sum()
+    }
+
     pub(super) fn merge(&mut self, other: Seg) {
         self.extend_box(&other.bbox, other.h);
         let extra = self.extra.get_or_insert_with(Default::default);
