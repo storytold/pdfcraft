@@ -29,7 +29,6 @@ mod paint;
 mod state;
 
 pub(crate) use composer::{composer, submit_key};
-pub(crate) use geometry::HANDLE_HIT_RADIUS;
 #[cfg(test)]
 use geometry::handle_pos;
 #[cfg(test)]

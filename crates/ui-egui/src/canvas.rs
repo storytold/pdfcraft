@@ -1462,8 +1462,7 @@ pub(crate) struct PageToolContext<'a> {
 }
 
 fn maybe_route_press(view: &mut DocView, hits: &PageHits<'_>, ptr: &PagePointer, xf_rect: Rect, page: usize, tool: QuickTool) {
-    let handle_reach = crate::tools::comments::HANDLE_HIT_RADIUS + 2.0;
-    if let Some(o) = ptr.pressed().filter(|o| xf_rect.expand(handle_reach).contains(*o)) {
+    if let Some(o) = ptr.pressed() {
         let at = hits.at(view, o);
         let on_handle = at.iter().any(|h| matches!(h.layer, crate::page_cursor::Layer::Handle));
         if xf_rect.contains(o) || on_handle {

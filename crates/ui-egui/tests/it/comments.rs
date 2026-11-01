@@ -3091,6 +3091,8 @@ fn a_card_with_an_editor_open_out_of_view_is_drawn_at_its_size() {
     h.run_steps(4);
     let after = h.get_by_label("Card 61").rect().top();
     assert!(after > before + 20.0, "the cards below make room for card 1's editor: {before} → {after}");
+}
+
 /// #4825: A comment or text box placed near the edge of a page can have its resize handles
 /// extend slightly outside the page boundary. Dragging an off-page handle must be recognized,
 /// entering `Gesture::Resize` and updating the comment's size, while starting a new drawing off-page remains blocked.
