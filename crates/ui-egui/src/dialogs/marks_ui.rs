@@ -6,8 +6,7 @@
 use std::collections::{HashMap, HashSet};
 
 use egui::{Align, Color32, CornerRadius, Layout, Rect, Stroke, pos2, vec2};
-use pdfcraft_engine::{Backdrop, Background, DocId, Edit, FontFamily, HeaderFooter, MarkKind, Watermark};
-use unicode_normalization::UnicodeNormalization;
+use pdfcraft_engine::{Backdrop, Background, DocId, Edit, FontFamily, HeaderFooter, MarkKind, Watermark, sanitize_mark_text};
 
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, icons, widgets};
@@ -864,13 +863,13 @@ fn backdrop_options(ui: &mut egui::Ui, t: &Tokens, d: &mut MarksDraft, doc: &pdf
 
 /// Calculates the auto font size for a watermark to fit diagonally across the page.
 ///
-/// Normalizes to Unicode NFC first so decomposed combining marks (e.g. Telex-typed Vietnamese)
-/// are measured identically to precomposed characters. The `0.55` factor is the upstream UI
-/// preview heuristic for average glyph advance width, kept to preserve UI preview performance
+/// Runs text through [`sanitize_mark_text`] (NFC composition and whitespace normalization) so
+/// the preview and engine apply see the exact same characters. The `0.55` factor is the upstream
+/// UI preview heuristic for average glyph advance width, kept to preserve UI preview performance
 /// and avoid layering violations between `ui-egui` and PDF font engines.
 pub fn watermark_auto_size(text: &str, w: f32, h: f32) -> f32 {
-    let normalized: String = text.nfc().collect();
-    let chars = normalized.lines().map(|l| l.chars().count()).max().unwrap_or(1).max(1);
+    let sanitized = sanitize_mark_text(text);
+    let chars = sanitized.lines().map(|l| l.chars().count()).max().unwrap_or(1).max(1);
     (w.hypot(h) * 0.5 / (chars as f32 * 0.55)).clamp(6.0, 80.0)
 }
 
