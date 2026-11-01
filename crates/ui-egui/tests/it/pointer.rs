@@ -14,7 +14,9 @@ use pdfcraft_ui_egui::comments::CommentTool;
 use pdfcraft_ui_egui::fill_sign::FillTool;
 use pdfcraft_ui_egui::{Dialog, PdfCraftApp, QuickTool, UnlockPrompt};
 
-use crate::support::input::{coalesced_click, double_click, one_frame, pen_drag, touch_double_tap, touch_drag, touch_tap};
+use crate::support::input::{
+    coalesced_click, default_pressure_touch_drag, double_click, one_frame, pen_drag, touch_double_tap, touch_drag, touch_tap,
+};
 
 /// A PDF of `objects`, numbered from 1 with the catalog first.
 fn pdf(objects: &[&str]) -> Vec<u8> {
@@ -839,6 +841,21 @@ fn a_finger_drag_scrolls_the_page_and_selects_nothing() {
         assert!((moved - 120.0).abs() < 1.0, "the page follows the finger 120 points up, not {moved}");
         assert_eq!(h.state().views[0].selected_text(), None, "a finger selects no text");
     }
+}
+
+/// A Windows touch screen without a pressure sensor gives every contact Windows' default pressure
+/// (512 of 1024): such a finger scrolls too, as one that reports none.
+#[test]
+fn a_finger_with_the_windows_default_pressure_scrolls_too() {
+    let mut h = open(text_pdf(), "400", false);
+    let p = at(&h, 200.0, 303.0);
+    let plain = at(&h, 230.0, 303.0);
+    assert_eq!(wait_for_cursor(&mut h, plain, |c| c == egui::CursorIcon::Text), egui::CursorIcon::Text, "the page's text has arrived");
+    let before = page(&h).top();
+    default_pressure_touch_drag(&mut h, p, p - egui::vec2(0.0, 120.0));
+    let moved = before - page(&h).top();
+    assert!((moved - 120.0).abs() < 1.0, "the page follows the finger 120 points up, not {moved}");
+    assert_eq!(h.state().views[0].selected_text(), None, "a finger selects no text");
 }
 
 /// A Windows pen comes as touch too, but with its pressure: it selects text as a mouse does, and

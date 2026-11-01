@@ -47,8 +47,9 @@ pub(crate) struct PagePointer {
     /// Some button is down, wherever it was pressed.
     pub any_down: bool,
     /// The press the pages hold came from a finger on a touch screen: a touch that began without
-    /// a pressure. winit reports a Windows pen as touch too, but a pen reports its pressure, so it
-    /// stays a pen and draws or selects as a mouse does.
+    /// a pressure reading (none, or Windows' default for a screen that senses none). winit reports
+    /// a Windows pen as touch too, but a pen reports its pressure, so it stays a pen and draws or
+    /// selects as a mouse does.
     pub finger: bool,
 }
 
@@ -130,10 +131,19 @@ fn last_release(events: &[Event]) -> Option<Pos2> {
     })
 }
 
+/// The force a Windows touch screen without a pressure sensor reports: Windows fills
+/// `POINTER_TOUCH_INFO::pressure` with its default, 512 of 1024, and winit passes that on without
+/// looking at `touchMask`, which says whether the reading is real.
+const WINDOWS_DEFAULT_TOUCH_FORCE: f32 = 0.5;
+
 /// Whether a finger touched down among `events`: egui-winit presses the primary button for the
-/// first touch, in the same frame.
+/// first touch, in the same frame. A finger reports no pressure, or Windows' default for a screen
+/// that senses none; a pen's first reading is its own.
 fn finger_down(events: &[Event]) -> bool {
-    events.iter().any(|e| matches!(e, Event::Touch { phase: egui::TouchPhase::Start, force: None, .. }))
+    events.iter().any(|e| match e {
+        Event::Touch { phase: egui::TouchPhase::Start, force, .. } => force.is_none_or(|f| f == WINDOWS_DEFAULT_TOUCH_FORCE),
+        _ => false,
+    })
 }
 
 /// The first [`MAX_EDGES`] primary presses and releases among `events`, in order.

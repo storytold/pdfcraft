@@ -47,6 +47,12 @@ pub fn touch_drag<S>(h: &mut Harness<'_, S>, a: Pos2, b: Pos2) {
 /// A Windows pen drag from `a` to `b`, which winit reports as touch with the pen's pressure: as
 /// [`touch_drag`] otherwise.
 pub fn pen_drag<S>(h: &mut Harness<'_, S>, a: Pos2, b: Pos2) {
+    contact_drag(h, a, b, Some(0.3));
+}
+
+/// A finger drag on a Windows touch screen without a pressure sensor, which reports Windows'
+/// default pressure (512 of 1024, a force of 0.5) for every contact: as [`touch_drag`] otherwise.
+pub fn default_pressure_touch_drag<S>(h: &mut Harness<'_, S>, a: Pos2, b: Pos2) {
     contact_drag(h, a, b, Some(0.5));
 }
 
