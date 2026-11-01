@@ -158,8 +158,17 @@ fn plural_sl(n: u64) -> usize {
     }
 }
 
+/// Hebrew (CLDR `he`, integer counts): one (1), two (2), other (0, 3+).
+fn plural_hebrew(n: u64) -> usize {
+    match n {
+        1 => 0,
+        2 => 1,
+        _ => 2,
+    }
+}
+
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 35] = [
+pub static LANGUAGES: [LangInfo; 36] = [
     LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, rtl: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: include_str!("i18n/ja.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new() },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` locales resolve here (see `candidates`).
@@ -289,6 +298,9 @@ pub static LANGUAGES: [LangInfo; 35] = [
         rtl: false,
         catalog: OnceLock::new(),
     },
+    // Hebrew; every `he-*` and legacy `iw-*` locale (`he-IL`, `iw_IL.UTF-8`) resolves here.
+    // Right to left: see `LangInfo::rtl`. Three plural forms (one, two, other).
+    LangInfo { code: "he", name: "עברית", source: include_str!("i18n/he.tsv"), plural: plural_hebrew, rtl: true, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
@@ -415,6 +427,7 @@ impl Lang {
             "lo" => "Lao",
             "hi" => "Hindi",
             "ko" => "Korean",
+            "he" => "Hebrew",
             // Only reached if a language is added to `LANGUAGES` without an English name; the
             // code still tells the reader which entry it is.
             _ => self.0.code,
@@ -472,6 +485,10 @@ fn candidates(tag: &str) -> Vec<String> {
         // The only Norwegian catalog is Bokmål. `no` (Norwegian in general) and Nynorsk readers use
         // it rather than English; last, so a catalog of their own would win.
         out.push("nb".to_string());
+    }
+    if primary == "iw" {
+        // Legacy ISO 639-1 Hebrew tag (`iw`, `iw_IL.UTF-8`) maps to `he`.
+        out.push("he".to_string());
     }
     out
 }
