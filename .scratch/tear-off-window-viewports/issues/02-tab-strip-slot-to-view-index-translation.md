@@ -7,7 +7,8 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** closed
 
-- [ ] In `crates/ui-egui/src/chrome.rs`, the drop target index `to` calculated from `drop_index(&slots, from, pos.x)` is mapped back to the underlying `app.views` index using `slots`.
-- [ ] Integration test in `crates/ui-egui/tests/it/ui.rs` where a tab prior to the drop target is detached, and another tab is dragged across other docked tabs, verifying that the tab is moved to the exact desired index in `self.views`.
+- [x] In `crates/ui-egui/src/chrome.rs`, the drop target index `to` calculated from `drop_index(&slots, from, pos.x)` is mapped back to the underlying `app.views` index using `slots`.
+- [x] Integration test in `crates/ui-egui/tests/it/ui.rs` where a tab prior to the drop target is detached, and another tab is dragged across other docked tabs, verifying that the tab is moved to the exact desired index in `self.views`.
+
