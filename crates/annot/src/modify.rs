@@ -460,9 +460,15 @@ pub fn set_quads(doc: &mut Document, page: usize, index: usize, quads: &[[f64; 8
             return Err(bad_area());
         }
     }
-    let (_, r) = annot_ref(doc, page, index)?;
-    unlocked(doc, r)?;
-    let d = annot_dict(doc, r);
+    // Read without promotion: even valid geometry must leave an inline entry untouched when
+    // its lock or subtype refuses the edit.
+    let d = annots(doc, page_ref(doc, page)?)
+        .get(index)
+        .and_then(|entry| doc.resolve(entry).as_dict().cloned())
+        .ok_or(AnnotError::NoSuchAnnotation { page, index })?;
+    if annotation_flags(doc, &d) & FLAG_LOCKED != 0 {
+        return Err(AnnotError::Invalid("the comment is locked".into()));
+    }
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
     let kind = match subtype.as_str() {
         "Highlight" => Markup::Highlight,
@@ -473,6 +479,7 @@ pub fn set_quads(doc: &mut Document, page: usize, index: usize, quads: &[[f64; 8
     };
     // Derive the bounds from the validated quadrilaterals.
     let rect = rect_for(&Shape::TextMarkup { kind, quads: quads.to_vec() }, &Style::default())?;
+    let (_, r) = annot_ref(doc, page, index)?;
     let before = d;
     doc.update_dict(r, |d| {
         d.set(b"QuadPoints".to_vec(), num_array(&quads.concat()));

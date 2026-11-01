@@ -88,6 +88,7 @@
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M12 #2570: Dynamic XFA rich-text fields carry exData/maxLength into AcroForm MaxLen for reported and enforced Unicode character limits, retained after save/reopen. Estimates unchanged)
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M4 #3309: bounded iterative named-destination pruning on page deletion; estimates unchanged)
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M1 #2658: macOS atomic saves retain destination extended attributes, including Finder tags, and reject partial resource-fork reads after size changes. Metadata failures retain the original PDF and unsaved edit. Estimates unchanged)
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (Markup range edits check locks and subtypes before promoting inline annotations; refusals preserve exact bytes, page entries, object count and dirty state. The regression fails on all three inline cases without the fix; 876 scoped tests pass, 4 existing ignored, with strict Clippy, repository gates and annotation wasm checks)
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M5 #4824: reject empty or collinear markup quadrilaterals before annotation lookup; preserve inline dictionaries and compound-edit document bytes and history on refusal; both regressions fail with the fix reverted, 875 scoped tests pass (4 existing ignored), formatting, strict Clippy, layers/assets/parity and annotation wasm checks pass; estimates unchanged)
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M5 #4824: rebase PR #5100 onto main b36bdaea; 2917 scoped tests pass (9 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged)
 
@@ -242,9 +243,13 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 - **2026-10-27 (M5, #4824):** A highlight, underline, strikethrough or squiggly underline can be given another text range: select the text and choose Mark the selected text instead in its context menu, or `comment_edit` with `find`/`quads` (`Edit::SetMarkupRange`, `pdfcraft_annot::set_quads`). Colour, note and replies stay; one undo step. Estimates unchanged.
 
+- **2026-11-01 (M5, #4824 review):** Markup range edits check locks and subtypes before promoting inline annotations; refusals preserve exact bytes, page entries, object count and dirty state. The regression fails on all three inline cases without the fix; 876 scoped tests pass, 4 existing ignored, with strict Clippy, repository gates and annotation wasm checks.
+
 - **2026-11-01 (M5, #4824 review):** M5 #4824: reject empty or collinear markup quadrilaterals before annotation lookup; preserve inline dictionaries and compound-edit document bytes and history on refusal; both regressions fail with the fix reverted, 875 scoped tests pass (4 existing ignored), formatting, strict Clippy, layers/assets/parity and annotation wasm checks pass; estimates unchanged.
 
 - **2026-11-01 (M5, #4824 rebase):** PR #5100 rebased onto main `b36bdaea`; resolved and auto-merged hunks reviewed. 2917 scoped tests passed, 9 existing ignored; formatting, strict Clippy, layers/assets/parity and wasm checks passed. Behavior and estimates unchanged.
+
+
 
 
 
@@ -753,6 +758,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | patch | Markup range edits check locks and subtypes before promoting inline annotations; refusals preserve exact bytes, page entries, object count and dirty state. The regression fails on all three inline cases without the fix; 876 scoped tests pass, 4 existing ignored, with strict Clippy, repository gates and annotation wasm checks. |
 | 2026-11-01 | patch | M5 #4824: reject empty or collinear markup quadrilaterals before annotation lookup; preserve inline dictionaries and compound-edit document bytes and history on refusal; both regressions fail with the fix reverted, 875 scoped tests pass (4 existing ignored), formatting, strict Clippy, layers/assets/parity and annotation wasm checks pass; estimates unchanged. |
 | 2026-11-01 | patch | M5 #4824: rebase PR #5100 onto main b36bdaea; 2917 scoped tests pass (9 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged. |
 | 2026-10-28 | patch | M2, PR #4172: integrate main 5af10276 and retain both roadmap histories; viewer-only CJK and print/output font policies and estimates unchanged. |

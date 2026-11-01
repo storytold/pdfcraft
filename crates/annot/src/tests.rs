@@ -406,6 +406,49 @@ fn set_quads_rejects_zero_area_quads_without_changing_the_markup() {
     }
 }
 
+/// Valid geometry must not promote an inline annotation before a lock or subtype refusal.
+#[test]
+fn set_quads_refuses_inline_locked_or_non_markup_annotations_without_promotion() {
+    let q = [72.0, 712.0, 200.0, 712.0, 72.0, 700.0, 200.0, 700.0];
+    let mut changed = Vec::new();
+    for inline in [false, true] {
+        for (shape, locked) in [
+            (Shape::TextMarkup { kind: Markup::Highlight, quads: vec![q] }, true),
+            (Shape::Ink { strokes: vec![vec![[10.0, 10.0], [20.0, 20.0]]] }, false),
+            (Shape::Redact { quads: vec![q], overlay: String::new(), look: Default::default() }, false),
+        ] {
+            let mut doc = fixture();
+            let index = add_annotation(&mut doc, &new(0, shape), &meta("source")).unwrap();
+            let page = page_refs(&doc).unwrap()[0];
+            let mut dict = list(&doc, 0)[index].clone();
+            let subtype = String::from_utf8_lossy(dict.name(b"Subtype").unwrap()).into_owned();
+            if locked {
+                // Indirect flags must be checked before promotion too.
+                let flags = doc.add(Object::Int(crate::types::FLAG_LOCKED));
+                dict.set(b"F".to_vec(), Object::Ref(flags));
+            }
+            let mut entries = annots(&doc, page);
+            entries[index] = if inline { Object::Dict(dict) } else { Object::Ref(doc.add(Object::Dict(dict))) };
+            set_annots(&mut doc, page, entries).unwrap();
+            let snapshot = |doc: &Document| {
+                (
+                    pdfcraft_cos::write_full(doc, &Default::default()).unwrap(),
+                    format!("{:?}", doc.get(page)),
+                    doc.object_numbers().len(),
+                    doc.is_modified(),
+                )
+            };
+            let before = snapshot(&doc);
+            let error = set_quads(&mut doc, 0, index, &[q], &meta("refused")).unwrap_err().to_string();
+            assert!(error.contains(if locked { "locked" } else { "no text range" }), "{error}");
+            if snapshot(&doc) != before {
+                changed.push(format!("inline={inline}, subtype={subtype}, locked={locked}"));
+            }
+        }
+    }
+    assert!(changed.is_empty(), "refusal changed objects or page entries: {changed:?}");
+}
+
 /// #4824: what is refused changes nothing.
 #[test]
 fn set_quads_refuses_other_comments_locked_markup_and_bad_areas() {
