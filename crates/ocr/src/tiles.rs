@@ -148,6 +148,17 @@ mod tests {
         }
     }
 
+    /// Each axis is cut at most once, so no page costs more than four detector runs: A0 at
+    /// 300 dpi, a long receipt and the largest page the types allow are cut like A4.
+    #[test]
+    fn no_page_is_cut_into_more_than_four_tiles() {
+        for (w, h, expect) in [(9933, 14043, 4), (14043, 9933, 4), (800, 60_000, 2), (u32::MAX, u32::MAX, 4)] {
+            let t = tiles(w, h, INPUT);
+            assert_eq!(t.len(), expect, "{w}x{h}: {t:?}");
+            assert!(t.iter().all(|t| t.width() > 0 && t.height() > 0 && t.crop[2] <= w && t.crop[3] <= h), "{w}x{h}: {t:?}");
+        }
+    }
+
     /// A word in an overlap is seen by two tiles; exactly one keeps it. Every point of the page,
     /// on the cuts and on the edges included, belongs to exactly one tile.
     #[test]
