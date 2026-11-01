@@ -28,10 +28,10 @@ use crate::event_loop::{ActiveEventLoop, AsyncRequestSerial};
 use crate::window::{ActivationToken, Window, WindowAttributes};
 
 /// The variable which is used mostly on X11.
-const X11_VAR: &str = "DESKTOP_STARTUP_ID";
+pub(crate) const X11_VAR: &str = "DESKTOP_STARTUP_ID";
 
 /// The variable which is used mostly on Wayland.
-const WAYLAND_VAR: &str = "XDG_ACTIVATION_TOKEN";
+pub(crate) const WAYLAND_VAR: &str = "XDG_ACTIVATION_TOKEN";
 
 pub trait EventLoopExtStartupNotify {
     /// Read the token from the environment.
