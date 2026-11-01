@@ -135,8 +135,8 @@ fn click_at(h: &mut Harness<'static, PdfCraftApp>, pos: egui::Pos2) {
 /// 200-point list it lay outside the list, and a click there closed it with nothing picked.
 #[test]
 fn the_interface_language_list_shows_every_language_the_window_has_room_for() {
-    // 1335 points leaves the list little more than its rows below the box.
-    for height in [1600.0, 1335.0] {
+    // 1400 points leaves the list little more than its rows below the box.
+    for height in [1600.0, 1400.0] {
         let (mut h, rows) = open_language_list(height);
         let (lowest, rect) = rows.iter().copied().max_by(|a, b| a.1.top().total_cmp(&b.1.top())).unwrap();
         assert!(rect.bottom() <= height, "{} is in the window: {rect:?}", lowest.code());
@@ -157,4 +157,36 @@ fn a_click_in_the_language_list_that_picks_nothing_keeps_it_open() {
     h.run_steps(3);
     assert_eq!(h.state().language, "en");
     assert!(h.query_all_by_label("Lietuvių").next().is_some(), "the list is still open");
+}
+
+/// #1842: keeping stray clicks inside the list must not disable dismissing or choosing by key.
+#[test]
+fn the_language_list_keeps_escape_and_keyboard_selection() {
+    let (mut h, _) = open_language_list(560.0);
+    assert!(h.query_all_by_label("Lietuvių").next().is_some());
+    if let Ok(path) = std::env::var("PDFCRAFT_LANGUAGE_SHOT") {
+        let _gpu = crate::gpu();
+        h.render().unwrap().save(path).unwrap();
+    }
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.query_all_by_label("Lietuvių").next().is_none(), "Escape closes the list");
+    assert!(h.state().dialog.is_some(), "Escape leaves Preferences open");
+    assert_eq!(h.state().language, "en", "Escape keeps the language");
+
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Interface language").focus();
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert!(h.query_all_by_label("Lietuvių").next().is_some(), "Enter opens the focused picker");
+    // Keyboard focus starts at the picker: Down visits Auto, English, then Indonesian.
+    for label in ["Auto", "English", "Bahasa Indonesia"] {
+        h.key_press(egui::Key::ArrowDown);
+        h.run_steps(2);
+        assert!(h.query_all_by_label(label).any(|node| node.is_focused()), "Down focuses {label}");
+    }
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    assert_eq!(h.state().language, "id", "Enter picks the keyboard-focused language");
+    assert!(h.query_all_by_label("Lietuvių").next().is_none(), "picking closes the list");
 }
