@@ -202,24 +202,27 @@ impl Automation {
         };
         // Every reply under the comment its thread starts from, at any depth, in document order:
         // a reply to a reply keeps its `/IRT` on the direct parent, so following one level would
-        // drop it. Parents are found by reference, as `/NM` need not be unique. A status or
-        // checkmark belongs to the annotation its `/IRT` names (ISO 32000-2 §12.5.6.2), as in the
-        // Comments panel: one set on a reply is not the comment's.
+        // drop it. Parents are found by reference, as `/NM` need not be unique. Status and
+        // checkmark replies are read through `review` instead.
         let tops = pdfcraft_render::thread_tops(&all);
         let mut threads: HashMap<(usize, usize), Vec<&Annotation>> = HashMap::new();
-        for r in &all {
+        for r in all.iter().filter(|r| r.state.is_none()) {
             let Some(&top) = tops.get(&(r.page, r.index)) else { continue };
-            let key = match r.parent {
-                Some(parent) if r.state.is_some() => parent,
-                _ => top,
-            };
-            threads.entry(key).or_default().push(r);
+            threads.entry(top).or_default().push(r);
         }
-        // An annotation's review status and checkmark: the latest of each set on it.
+        // An annotation's review states. A state reply's `/IRT` refers to the annotation whose
+        // state it sets, and a reviewer's later change replies to their previous one (ISO 32000-2
+        // §12.5.6.3), so a status on a reply is that reply's, as in the Comments panel. `status`
+        // is the latest set by anyone; `statuses` has each reviewer's latest (a state is "for the
+        // specified user"). Checkmarks are each reviewer's own too: `marked_by` names who has one
+        // on, and `marked` whether anyone has.
+        let review = pdfcraft_render::ReviewStates::new(&all);
         let states = |c: &Annotation, v: &mut Value| {
-            let set = threads.get(&(c.page, c.index)).map(Vec::as_slice).unwrap_or(&[]);
-            v["status"] = json!(set.iter().rev().filter(|r| !r.is_mark()).find_map(|r| r.state.clone()));
-            v["marked"] = json!(set.iter().rev().find(|r| r.is_mark()).is_some_and(|r| r.state.as_deref() == Some("Marked")));
+            v["status"] = json!(review.latest_status(c));
+            v["statuses"] = json!(review.statuses(c).iter().map(|(who, state)| json!({ "author": who, "status": state })).collect::<Vec<_>>());
+            let marked_by = review.marked(c);
+            v["marked"] = json!(!marked_by.is_empty());
+            v["marked_by"] = json!(marked_by);
         };
         let roots: Vec<Value> = all
             .iter()
@@ -231,7 +234,6 @@ impl Automation {
                 let thread = threads.get(&(c.page, c.index)).map(Vec::as_slice).unwrap_or(&[]);
                 v["replies"] = thread
                     .iter()
-                    .filter(|r| r.state.is_none())
                     .map(|r| {
                         let mut reply = view(r);
                         states(r, &mut reply);

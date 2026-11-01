@@ -138,7 +138,13 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 grouped: d.name(b"RT") == Some(b"Group"),
                 rect,
                 color,
-                state: text_value(doc, d, b"State"),
+                // A reply that gives only `/StateModel` has the model's default state (ISO 32000-2
+                // Table 175), as `last_state_reply` and the inspector read it.
+                state: text_value(doc, d, b"State").or_else(|| match text_value(doc, d, b"StateModel").as_deref() {
+                    Some("Marked") => Some("Unmarked".into()),
+                    Some("Review") => Some("None".into()),
+                    _ => None,
+                }),
                 quads,
                 locked: annotation_flags(doc, d) & FLAG_LOCKED != 0,
                 intent: d.get(b"IT").and_then(|o| doc.resolve(o).as_name().map(|n| String::from_utf8_lossy(n).into_owned())),

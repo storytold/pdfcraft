@@ -1,5 +1,7 @@
 use super::core::{limited_pdf_string, pretty_date, spend};
-use super::model::{Annotation, AttachmentSource, DestView, Field, FieldKind, LayerOp, Link, LinkTarget, RemoteDestination, link_replies};
+use super::model::{
+    Annotation, AttachmentSource, DestView, Field, FieldKind, LayerOp, Link, LinkTarget, RemoteDestination, link_replies, state_or_default,
+};
 use super::navigation::text_string;
 use super::{Dictionary, DocInfo, Entry, HashMap, HashSet, Inspector, Object, ObjectId};
 
@@ -173,7 +175,7 @@ impl<'a> Inspector<'a> {
                 rect,
                 color,
                 index,
-                state: self.text(d, b"State"),
+                state: state_or_default(self.text(d, b"State"), self.text(d, b"StateModel").as_deref()),
                 quads,
                 locked: d.get(b"F").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0) & 128 != 0,
                 intent: self.name(d, b"IT"),
