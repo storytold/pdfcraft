@@ -6291,9 +6291,9 @@ fn xfa_calculations_rerun_only_where_what_they_read_changed() {
     assert_eq!(value(&s, "shared"), ["A"]);
 }
 
-/// A chain of calculations settles one link after another, as another viewer does (black-box,
-/// on a form shaped like this fixture): `top` reads `mid`, `mid` reads `base`, and they come in
-/// that order in the document, so one pass in document order would leave `top` a step behind.
+/// A chain of calculations settles one link after another: `top` reads `mid`, `mid` reads `base`,
+/// and they come in that order in the document, so one pass in document order would leave `top`
+/// a step behind.
 /// Changing `base` reruns `mid`, whose new value reruns `top`, which ends with the right value.
 /// Changing a field none of them reads reruns nothing.
 #[test]
