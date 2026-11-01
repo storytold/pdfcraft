@@ -890,8 +890,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["view.layout.two_up"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/view.rs::two_up_layout_places_pages_side_by_side", "crates/ui-egui/tests/it/viewer.rs::two_page_view_steps_a_spread_at_a_time"]
-notes = "next/previous page step a spread at a time"
+evidence = ["crates/ui-egui/tests/it/view.rs::two_up_layout_places_pages_side_by_side", "crates/ui-egui/tests/it/viewer.rs::two_page_view_steps_a_spread_at_a_time", "apps/pdfcraft/src/startup.rs::startup_override_is_per_file_and_does_not_persist", "crates/ui-egui/src/platform/open_worker/tests.rs::flagged_startup_opens_wait_for_password_ownership_before_the_first_frame"]
+notes = "Next/previous page step a spread at a time. Optional desktop --two-paged launches named PDFs in noncontinuous two-page view without changing saved defaults or unrelated restored tabs. Explicit --layout wins after flagged opens settle, including password retries; repeated files reuse their tab. This is a launch override, not a declarative configuration module."
 
 [[feature]]
 id = "view.layout-two-up-scrolling"
@@ -1287,7 +1287,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/ui-egui/tests/it/view.rs::pages_sidebar_select_all_keeps_current_page_and_keyboard_scope", "crates/ui-egui/tests/it/editing.rs::dragging_pages_panel_thumbnails_reorders_pages", "crates/ui-egui/tests/it/viewer.rs::pages_panel_thumbnails_have_a_context_menu", "crates/ui-egui/tests/it/editing.rs::split_from_pages_panel_context_menu", "crates/ui-egui/tests/it/editing.rs::deleting_pages_from_the_pages_panel_menu", "crates/ui-egui/tests/it/editing.rs::the_delete_key_deletes_pages_picked_in_the_pages_panel_but_never_every_page"]
-notes = "Ctrl/Cmd+A selects every page while the Pages sidebar owns the keyboard, without navigation; Escape clears that selection. Viewer and text-field shortcuts keep their own scope. Drag the selection (or the page grabbed) to reorder, with a drop bar and edge scrolling; right-click offers Split document…, Extract pages, Cut, Copy, Paste after and Delete pages (also the Delete key over the panel). Not yet: Rotate, Insert and Page labels in the menu, dragging pages between documents, or dropping files onto the panel."
+notes = "Ctrl/Cmd+A selects every page while the Pages sidebar owns the keyboard, without navigation; Escape clears that selection. Viewer and text-field shortcuts keep their own scope. Drag the selection (or the page grabbed) to reorder, with a drop bar and edge scrolling; right-click offers Split document…, Extract pages, Cut, Copy, Paste after and Delete pages (also the Delete key over the panel). Deleting pages makes the next Save a full rewrite (unsigned files), so the deleted pages leave the file; signed files stay incremental. Not yet: Rotate, Insert and Page labels in the menu, dragging pages between documents, or dropping files onto the panel."
 
 [[feature]]
 id = "view.bookmarks-panel"
@@ -9928,8 +9928,8 @@ milestone = "M14"
 status = "partial"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/view.rs::default_page_display_is_used_for_new_documents", "crates/ui-egui/tests/it/view.rs::default_zoom_is_used_for_new_documents", "crates/ui-egui/tests/it/view.rs::preferences_set_the_default_zoom", "crates/ui-egui/tests/it/view.rs::always_use_my_default_zoom_and_page_layout_ignores_what_the_pdf_asks_for"]
-notes = "Preferences ▸ Documents and view: Default page display and Default zoom (Fit to width, Zoom to page level or a percentage) for every new tab; a PDF that asks for a layout or zoom gets it, unless Always use my default zoom and page layout is on. Missing: Acrobat's resolution, rendering and page-content options"
+evidence = ["crates/ui-egui/tests/page_shadows.rs::viewport_fades_follow_the_preference_and_keep_other_scroll_areas_styled", "crates/ui-egui/tests/page_shadows.rs::rendered_page_content_is_identical_with_and_without_decoration", "crates/ui-egui/tests/page_shadows.rs::page_shadow_preference_round_trips_and_ignores_invalid_settings", "crates/ui-egui/tests/page_shadows.rs::viewer_shadows_follow_the_preference_without_moving_pages", "crates/ui-egui/tests/page_shadows.rs::organize_shadows_follow_the_preference", "crates/ui-egui/tests/it/control.rs::page_shadows_are_an_observable_app_wide_preference", "crates/ui-egui/tests/it/view.rs::default_page_display_is_used_for_new_documents", "crates/ui-egui/tests/it/view.rs::default_zoom_is_used_for_new_documents", "crates/ui-egui/tests/it/view.rs::preferences_set_the_default_zoom", "crates/ui-egui/tests/it/view.rs::always_use_my_default_zoom_and_page_layout_ignores_what_the_pdf_asks_for"]
+notes = "Preferences ▸ Documents and view: Default page display and Default zoom (Fit to width, Zoom to page level or a percentage) for every new tab; a PDF that asks for a layout or zoom gets it, unless Always use my default zoom and page layout is on. Preferences ▸ Appearance also has an app-wide, persistent Show Page Edge Shadows checkbox (on by default), exposed through ui.set and ui.state; it affects viewer and Organize decorations, including the viewport-edge gradients painted over pages, only. Missing: Acrobat's resolution, rendering and page-content options"
 
 [[feature]]
 id = "misc.prefs-documents"

@@ -862,6 +862,7 @@ struct PageEnv<'a> {
     modal: bool,
     navigation_enabled: bool,
     paper: Color32,
+    show_page_edge_shadows: bool,
     ppp: f32,
     precise_scroll: Vec2,
     prefs: &'a comments::CommentPrefs,
@@ -952,7 +953,7 @@ fn paint_page_surface(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFra
     let info = frame.env.info;
     let painter = ui.painter();
     // Shadows would darken the preceding page when pages touch.
-    if view.show_page_gaps {
+    if view.show_page_gaps && frame.env.show_page_edge_shadows {
         painter.add(egui::epaint::Shadow { offset: [0, 3], blur: 14, spread: 0, color: t.page_shadow }.as_shape(r, CornerRadius::ZERO));
     }
     painter.rect_filled(r, CornerRadius::ZERO, paper);
@@ -3049,7 +3050,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     if view.organize {
         // One remembered grid size for every document, kept in the settings.
         view.set_grid_zoom(organize_zoom);
-        organize_grid(view, info, doc.allows_assembly(), doc.dirty, unobstructed, ui, &t);
+        organize_grid(view, doc, unobstructed, app.show_page_edge_shadows, ui, &t);
         app.organize_zoom = view.grid_zoom();
         return;
     }
@@ -3204,6 +3205,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         modal,
         navigation_enabled,
         paper,
+        show_page_edge_shadows: app.show_page_edge_shadows,
         ppp,
         precise_scroll,
         prefs,
@@ -3229,9 +3231,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         today,
     };
     let mut page_out = PageOut::default();
+    let fade_strength = ui.spacing().scroll.fade.strength;
+    if !app.show_page_edge_shadows {
+        ui.spacing_mut().scroll.fade.strength = 0.0;
+    }
     let out = page_scroll(ui, scroll, egui::Id::unique(("page-view-scope", view.id)), |ui, viewport| {
         draw_pages(ui, viewport, view, &env, &mut page_out, &mut app.signature_preview)
     });
+    ui.spacing_mut().scroll.fade.strength = fade_strength;
     let PageOut {
         canvas_action,
         clicked_link,
