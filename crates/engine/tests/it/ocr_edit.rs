@@ -146,6 +146,101 @@ fn a_rewritten_ocr_phrase_keeps_its_word_widths() {
     }
 }
 
+/// Recognize text sizes each word from its box and a guess at how much of the em its letters fill,
+/// so one phrase's words come out several points apart (#3313). Here the first word is the
+/// largest and the middle one the smallest; the phrase is set in 11 pt.
+fn uneven_phrase() -> (Session, pdfcraft_engine::DocId) {
+    scanned_with(vec![
+        scanned_word("John", 20.0, 45.0, 70.0, 15.0),
+        scanned_word("Smith", 49.0, 78.0, 70.0, 9.0),
+        scanned_word("Example", 82.0, 124.0, 70.0, 11.0),
+    ])
+}
+
+/// An edited OCR phrase is redrawn in one size, the median of its words', and each word keeps
+/// the width the scan shows it at (#3313).
+#[test]
+fn an_edited_ocr_phrase_is_drawn_at_one_size() {
+    let (mut s, id) = uneven_phrase();
+    let block = s.get(id).unwrap().text_blocks(0).remove(0);
+    assert!((block.size - 11.0).abs() < 0.05, "the phrase's size is its words' median: {}", block.size);
+
+    s.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: "John Example".into(), style: Default::default() }).unwrap();
+    let lines = s.get(id).unwrap().text_lines(0);
+    assert_eq!(lines.iter().map(|l| l.text.trim()).collect::<Vec<_>>(), ["John", "Example"]);
+    for line in &lines {
+        assert!((line.size - 11.0).abs() < 0.05, "{:?} is drawn at {} pt, not the phrase's 11", line.text, line.size);
+    }
+    // Each word keeps its width; the rest of the phrase closes up where Smith was.
+    assert!((lines[0].rect[2] - lines[0].rect[0] - 25.0).abs() < 0.5, "John keeps its width: {:?}", lines[0].rect);
+    assert!((lines[1].rect[2] - lines[1].rect[0] - 42.0).abs() < 0.5, "Example keeps its width: {:?}", lines[1].rect);
+    assert!(lines[1].rect[0] >= lines[0].rect[2] - 0.5, "Example runs into John");
+}
+
+/// Choosing a font sends the phrase through the single-style rewrite, which takes its size from
+/// the first run: that is the phrase's size too, not the first word's guess.
+#[test]
+fn a_new_font_for_an_ocr_phrase_keeps_its_one_size() {
+    let (mut s, id) = uneven_phrase();
+    let style = pdfcraft_engine::BlockStyle { family: Some((pdfcraft_engine::FontFamily::Times, false, false)), ..Default::default() };
+    s.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: "John Smith Example".into(), style }).unwrap();
+    let lines = s.get(id).unwrap().text_lines(0);
+    assert!(!lines.is_empty());
+    for line in &lines {
+        assert!((line.size - 11.0).abs() < 0.05, "{:?} is drawn at {} pt, not the phrase's 11", line.text, line.size);
+    }
+}
+
+/// Two neighbouring words OCR sized alike join into one run; the median still counts each word,
+/// so 15, 9 and 9 pt make a 9 pt phrase, not the 12 pt of its two runs.
+#[test]
+fn words_joined_into_one_run_each_count_toward_the_phrase_size() {
+    let (s, id) = scanned_with(vec![
+        scanned_word("John", 20.0, 45.0, 70.0, 15.0),
+        scanned_word("SMITH", 49.0, 78.0, 70.0, 9.0),
+        scanned_word("JONES", 82.0, 112.0, 70.0, 9.0),
+    ]);
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.text_lines(0).len(), 2, "the two 9 pt words share a run");
+    let size = doc.text_blocks(0)[0].size;
+    assert!((size - 9.0).abs() < 0.05, "the phrase is set in its words' median, 9 pt: {size}");
+}
+
+/// A word OCR sized at more than twice the phrase's size still keeps the width it has on the scan.
+#[test]
+fn a_word_far_larger_than_its_phrase_keeps_its_width() {
+    let (mut s, id) = scanned_with(vec![
+        scanned_word("John", 20.0, 45.0, 70.0, 25.0),
+        scanned_word("Smith", 49.0, 78.0, 70.0, 10.0),
+        scanned_word("Example", 82.0, 124.0, 70.0, 10.5),
+    ]);
+    s.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: "John Smith Exam".into(), style: Default::default() }).unwrap();
+    let lines = s.get(id).unwrap().text_lines(0);
+    assert_eq!(lines[0].text.trim(), "John");
+    assert!((lines[0].rect[2] - lines[0].rect[0] - 25.0).abs() < 0.5, "John keeps its width: {:?}", lines[0].rect);
+}
+
+/// With a new font the phrase is one run in its first word's text state. How wide it is must not
+/// depend on how far OCR misjudged that word's size: the same boxes give the same line.
+#[test]
+fn a_new_font_for_an_ocr_phrase_is_as_wide_whatever_its_first_word_was_sized() {
+    let width = |first: f64| {
+        let (mut s, id) = scanned_with(vec![
+            scanned_word("John", 20.0, 45.0, 70.0, first),
+            scanned_word("Smith", 49.0, 78.0, 70.0, 11.0),
+            scanned_word("Example", 82.0, 124.0, 70.0, 11.0),
+        ]);
+        let style = pdfcraft_engine::BlockStyle { family: Some((pdfcraft_engine::FontFamily::Helvetica, false, false)), ..Default::default() };
+        // Short enough not to wrap in the phrase's box either way.
+        s.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: "John Smith".into(), style }).unwrap();
+        let lines = s.get(id).unwrap().text_lines(0);
+        assert_eq!(lines.len(), 1, "one line: {lines:?}");
+        lines.iter().map(|l| l.rect[2]).fold(f64::MIN, f64::max) - lines.iter().map(|l| l.rect[0]).fold(f64::MAX, f64::min)
+    };
+    let (guessed, right) = (width(15.0), width(11.0));
+    assert!((guessed - right).abs() < 0.5, "a 15 pt guess for John makes the line {guessed} wide, an 11 pt one {right}");
+}
+
 /// Visible text set with a horizontally stretched text matrix (3 × 1), as some generators write.
 fn stretched_visible() -> std::sync::Arc<Vec<u8>> {
     use pdfcraft_cos::{Dict, Document, Object, SaveOptions, Stream};

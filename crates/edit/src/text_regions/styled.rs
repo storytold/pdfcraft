@@ -320,6 +320,23 @@ fn calibration_factors(
     calibration
 }
 
+/// The calibration factors fit each word to its box at its own size (its `Tf` in its text space,
+/// which a range's size doesn't change). An OCR phrase drawn at one size needs the inverse ratio
+/// too, so every word still spans the box the scan shows it in. The ratio is not clamped again:
+/// a word OCR sized at three times the phrase's needs three times the calibration.
+fn fit_to_phrase(calibration: &mut HashMap<usize, f64>, lines: &[TextLine], phrase: Option<f64>) {
+    let Some(phrase) = phrase else { return };
+    for (index, factor) in calibration.iter_mut() {
+        let own = lines.get(*index).and_then(|source| Some(source.origin.state.font.as_ref()?.1 * source.origin.k));
+        if let Some(own) = own.filter(|own| own.is_finite() && *own > 0.0) {
+            let fitted = *factor * own / phrase;
+            if fitted.is_finite() {
+                *factor = fitted;
+            }
+        }
+    }
+}
+
 fn validated_ranges<'a>(draft: &str, style: &'a BlockStyle) -> Result<Vec<&'a RangeStyle>, EditError> {
     let mut ranges: Vec<_> = style.ranges.iter().collect();
     ranges.sort_by_key(|range| range.range.start);
@@ -880,8 +897,9 @@ pub(crate) fn rewrite_styled_block(
     .prepare()?;
     let chars = prepared.values;
     let substituted = prepared.substituted;
+    let phrase_size = block.phrase_size();
     let size_of = |source: &TextLine, index: usize| {
-        overrides.get(&index).and_then(|r| r.size).or(style.size).unwrap_or(source.size).max(0.1) / source.origin.k.max(1e-6)
+        overrides.get(&index).and_then(|r| r.size).or(style.size).or(phrase_size).unwrap_or(source.size).max(0.1) / source.origin.k.max(1e-6)
     };
     // A source run may carry TJ kerning/justification that is absent from its text state.
     // Keep its measured advance when rebuilding the run instead of making it wrap on entry.
@@ -899,7 +917,8 @@ pub(crate) fn rewrite_styled_block(
         spaces.borrow_mut().insert(name.to_owned(), w);
         w
     };
-    let calibration = calibration_factors(lines, &metrics, style, &overrides, space_of);
+    let mut calibration = calibration_factors(lines, &metrics, style, &overrides, space_of);
+    fit_to_phrase(&mut calibration, lines, phrase_size);
     let advance = |item: &(char, usize, String)| -> f64 {
         let source = lines.get(item.1).unwrap_or(first);
         let Some(m) = metrics.get(&item.2) else { return 0.0 };
