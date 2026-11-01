@@ -24,7 +24,7 @@ fn nfc(text: &str) -> String {
 /// Every mark path runs its text through this before deciding on a face or measuring it, so the
 /// preview and applying see the same characters. A lone `\r` is left alone: it is still refused
 /// (it would be drawn as `?`), as it always was.
-pub(crate) fn sanitize_text(text: &str) -> String {
+pub fn sanitize_text(text: &str) -> String {
     nfc(text).replace("\r\n", "\n").replace('\t', "    ").replace('\u{00a0}', " ")
 }
 
@@ -43,7 +43,11 @@ fn inter() -> Option<&'static pdfcraft_fonts::CraftFont> {
 }
 
 fn drawn_in_inter(c: char) -> bool {
-    c != '\r' && pdfcraft_fonts::embedding::covers(pdfcraft_fonts::INTER_REGULAR, &c.to_string())
+    if c == '\r' {
+        return false;
+    }
+    let Some(face) = inter() else { return false };
+    type3_glyph(face, c).ok().flatten().is_some()
 }
 
 /// The character of a whole mark's `lines` to name when its text is refused: the first one the
