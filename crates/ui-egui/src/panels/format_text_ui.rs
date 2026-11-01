@@ -102,6 +102,18 @@ const LABEL_ICON: f32 = 22.0;
 /// The button beside a number field that opens its list of common values: just an arrow, so the
 /// field keeps the room its value needs.
 const PRESET_LIST: f32 = 22.0;
+/// The room a number field keeps for its value ("-5.0 pt"), beside the arrow in its box.
+const NUMBER_MIN: f32 = 52.0;
+/// The least width the panel's widest rows need, which sets how narrow the Tools pane may be
+/// dragged. Size and alignment: the size field and its arrow (in their box), the swatch, the
+/// divider, three 30 pt buttons, and the gaps between those six. The spacing rows: two icons and
+/// two number fields with their arrows (in a box each), the space between the columns, and four
+/// gaps.
+pub(crate) const MIN_ROW: f32 = {
+    let size_row = (40.0 + PRESET_LIST + 2.0) + 28.0 + 9.0 + 3.0 * 30.0 + 5.0 * GAP;
+    let spacing_row = 2.0 * LABEL_ICON + 2.0 * (NUMBER_MIN + PRESET_LIST + 2.0) + 8.0 + 4.0 * GAP;
+    if size_row > spacing_row { size_row } else { spacing_row }
+};
 /// What can be typed: horizontal scale in percent, character spacing in points.
 const SCALE_RANGE: std::ops::RangeInclusive<f64> = 10.0..=400.0;
 const CHAR_SPACING_RANGE: std::ops::RangeInclusive<f64> = -5.0..=50.0;
@@ -126,52 +138,54 @@ pub(crate) fn panel(
 
     // The font, across the panel.
     let width = ui.available_width();
-    craft_ui::ComboBox::from_id_salt("format-font")
-        .selected_text(fonts.shown.as_str())
-        .width(width)
-        .show_ui(ui, |ui| {
-            if let Some(sources) = fonts.sources {
-                if ui.selectable_label(false, tl!("Keep source fonts")).clicked() {
-                    out.font = Some(FontChoice::KeepSource);
-                }
-                for (resource, face) in sources.iter().filter(|(r, _)| !r.starts_with("PCApproved")) {
-                    if ui.selectable_label(false, face).clicked() {
-                        out.font = Some(FontChoice::Resource(resource.clone()));
+    outlined(ui, |ui| {
+        craft_ui::ComboBox::from_id_salt("format-font")
+            .selected_text(fonts.shown.as_str())
+            .width(width)
+            .show_ui(ui, |ui| {
+                if let Some(sources) = fonts.sources {
+                    if ui.selectable_label(false, tl!("Keep source fonts")).clicked() {
+                        out.font = Some(FontChoice::KeepSource);
                     }
-                }
-                ui.separator();
-            }
-            for f in [FontFamily::Helvetica, FontFamily::Times, FontFamily::Courier] {
-                if ui.selectable_label(fonts.sources.is_none() && look.family == f, f.label()).clicked() {
-                    out.font = Some(FontChoice::Family(f));
-                }
-            }
-            if fonts.sources.is_some() {
-                ui.separator();
-                if ui.selectable_label(false, tl!("Load font…")).clicked() {
-                    out.font = Some(FontChoice::Load);
-                }
-                #[cfg(not(target_arch = "wasm32"))]
-                ui.menu_button(tl!("Installed fonts…"), |ui| match crate::files::installed_font_files(ui.ctx()) {
-                    Some(list) if list.is_empty() => {
-                        ui.label(tl!("No openly licensed document fonts found. Load a font file."));
-                    }
-                    Some(list) => {
-                        for font in list {
-                            if ui.button(&font.face).clicked() {
-                                out.font = Some(FontChoice::Installed(font.path));
-                                ui.close();
-                            }
+                    for (resource, face) in sources.iter().filter(|(r, _)| !r.starts_with("PCApproved")) {
+                        if ui.selectable_label(false, face).clicked() {
+                            out.font = Some(FontChoice::Resource(resource.clone()));
                         }
                     }
-                    None => {
-                        ui.label(tl!("Finding document fonts…"));
+                    ui.separator();
+                }
+                for f in [FontFamily::Helvetica, FontFamily::Times, FontFamily::Courier] {
+                    if ui.selectable_label(fonts.sources.is_none() && look.family == f, f.label()).clicked() {
+                        out.font = Some(FontChoice::Family(f));
                     }
-                });
-            }
-        })
-        .response
-        .on_hover_text(format!("{}\n{}", tl!("Font"), tl!("Thai and Arabic use regular fallback fonts when available.")));
+                }
+                if fonts.sources.is_some() {
+                    ui.separator();
+                    if ui.selectable_label(false, tl!("Load font…")).clicked() {
+                        out.font = Some(FontChoice::Load);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    ui.menu_button(tl!("Installed fonts…"), |ui| match crate::files::installed_font_files(ui.ctx()) {
+                        Some(list) if list.is_empty() => {
+                            ui.label(tl!("No openly licensed document fonts found. Load a font file."));
+                        }
+                        Some(list) => {
+                            for font in list {
+                                if ui.button(&font.face).clicked() {
+                                    out.font = Some(FontChoice::Installed(font.path));
+                                    ui.close();
+                                }
+                            }
+                        }
+                        None => {
+                            ui.label(tl!("Finding document fonts…"));
+                        }
+                    });
+                }
+            })
+            .response
+            .on_hover_text(format!("{}\n{}", tl!("Font"), tl!("Thai and Arabic use regular fallback fonts when available.")))
+    });
     ui.add_space(4.0);
 
     // Size and colour | bullets, numbering and alignment.
@@ -253,25 +267,38 @@ pub(crate) fn panel(
     let e = extras.as_deref_mut().unwrap_or(&mut fallback);
     ui.add_enabled_ui(editing, |ui| {
         row(ui, |ui| {
-            labelled_icon(ui, t, "arrow-up-down", tl!("Line spacing"));
+            let label = labelled_icon(ui, t, "arrow-up-down", tl!("Line spacing"));
             let own = tl!("Auto").to_string();
             let shown = if e.line_spacing == 0.0 { own.clone() } else { number(e.line_spacing) };
-            craft_ui::ComboBox::from_id_salt("format-line-spacing").selected_text(shown).width(half).show_ui(ui, |ui| {
-                ui.selectable_value(&mut e.line_spacing, 0.0, own.as_str());
-                for v in LINE_SPACINGS {
-                    ui.selectable_value(&mut e.line_spacing, v, number(v));
-                }
+            outlined(ui, |ui| {
+                // The column is `half` wide in every language: a longer "Auto" is cut short (the
+                // menu and the tooltip have it whole).
+                ui.set_max_width(half);
+                let list = craft_ui::ComboBox::from_id_salt("format-line-spacing")
+                    .selected_text(centred(ui, &shown))
+                    .width(half)
+                    .wrap_mode(egui::TextWrapMode::Truncate)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut e.line_spacing, 0.0, own.as_str());
+                        for v in LINE_SPACINGS {
+                            ui.selectable_value(&mut e.line_spacing, v, number(v));
+                        }
+                    });
+                list.response.labelled_by(label.id).on_hover_text(&shown);
             });
             ui.add_space(8.0);
             ui.add_enabled_ui(false, |ui| {
-                labelled_icon(ui, t, "pilcrow", tl!("Paragraph spacing"));
+                let label = labelled_icon(ui, t, "pilcrow", tl!("Paragraph spacing"));
                 let tip = format!("{} — {}", tl!("Paragraph spacing"), tl!("Planned"));
-                let _ = craft_ui::ComboBox::from_id_salt("format-paragraph-spacing")
-                    .selected_text("0")
-                    .width(half)
-                    .show_ui(ui, |_| {})
-                    .response
-                    .on_disabled_hover_text(tip);
+                let _ = outlined(ui, |ui| {
+                    craft_ui::ComboBox::from_id_salt("format-paragraph-spacing")
+                        .selected_text(centred(ui, "0"))
+                        .width(half)
+                        .show_ui(ui, |_| {})
+                        .response
+                        .labelled_by(label.id)
+                        .on_disabled_hover_text(tip)
+                });
             });
         });
     });
@@ -294,6 +321,22 @@ pub(crate) fn panel(
     ui.add_space(6.0);
     ui.separator();
     out
+}
+
+/// Runs `add` with the panel's fields outlined and filled, so a list or number field reads as one
+/// beside the plain icon buttons around it.
+fn outlined<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    ui.scope(|ui| {
+        let t = Tokens::get(ui.ctx());
+        let w = &mut ui.visuals_mut().widgets;
+        w.inactive.weak_bg_fill = t.field;
+        w.inactive.bg_stroke = Stroke::new(1.0, t.border);
+        w.hovered.bg_stroke = Stroke::new(1.0, t.text_muted);
+        // A list's text, pad and arrow touch: its gaps would widen it past the column it is given.
+        ui.spacing_mut().icon_spacing = 0.0;
+        add(ui)
+    })
+    .inner
 }
 
 /// One row of the panel, [`ROW`] high, its controls [`GAP`] apart and centred on it.
@@ -344,15 +387,47 @@ struct Number<'a> {
     suffix: &'static str,
 }
 
+/// A combo box's selected text, centred in its button. The button lays out the text and then its
+/// arrow, and every growing atom takes an equal share of the room left: a pad as wide as the arrow
+/// before the text balances the arrow after it, and the text centres itself in its own share. Text
+/// longer than the list is wide (a translated "Auto") is cut short rather than widening it.
+fn centred<'a>(ui: &egui::Ui, text: &str) -> egui::Atoms<'a> {
+    use egui::AtomExt as _;
+    let pad = egui::Atom::custom(egui::IdSalt::new("combo-pad"), vec2(ui.spacing().icon_width, 0.0)).atom_grow(true);
+    let text = egui::Atom::from(text.to_string()).atom_grow(true).atom_shrink(true).atom_align(egui::Align2::CENTER_CENTER);
+    egui::Atoms::new((pad, text))
+}
+
+/// The arrow that lists a field's common values, centred on the 26-point field beside it.
+fn preset_arrow(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    let (slot, _) = ui.allocate_exact_size(vec2(PRESET_LIST, 26.0), Sense::hover());
+    let at = Rect::from_center_size(slot.center(), vec2(PRESET_LIST, PRESET_LIST));
+    ui.scope_builder(egui::UiBuilder::new().max_rect(at), |ui| icons::button(ui, "chevron-down", PRESET_LIST, false, label)).inner
+}
+
+/// One box round a value and its arrow, like a list's, so the pair reads as a single control.
+fn boxed(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    let t = Tokens::get(ui.ctx());
+    let edge = if ui.is_enabled() { t.border } else { t.border.gamma_multiply(0.5) };
+    egui::Frame::new().fill(t.field).stroke(Stroke::new(1.0, edge)).corner_radius(CornerRadius::same(4)).show(ui, |ui| {
+        let w = &mut ui.visuals_mut().widgets;
+        for state in [&mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
+            state.bg_stroke = Stroke::NONE;
+        }
+        w.inactive.weak_bg_fill = Color32::TRANSPARENT;
+        ui.spacing_mut().item_spacing.x = 0.0;
+        ui.spacing_mut().button_padding.x = 2.0;
+        add(ui);
+    });
+}
+
 /// A number field with an arrow beside it that lists common values, in `width` all told: type any
 /// value in its range, or pick one. Both are named by `label`: the icon before them and its text.
 fn number_with_presets(ui: &mut egui::Ui, n: Number<'_>, presets: &[f64], width: f32, label: (egui::Id, &str)) {
-    ui.scope(|ui| {
-        ui.spacing_mut().item_spacing.x = 2.0;
+    boxed(ui, |ui| {
         let field = egui::DragValue::new(&mut *n.value).range(n.range).speed(n.speed).max_decimals(2).suffix(n.suffix);
-        let height = ui.spacing().interact_size.y;
-        ui.add_sized([(width - PRESET_LIST - 2.0).max(30.0), height], field).labelled_by(label.0);
-        let list = icons::button(ui, "chevron-down", PRESET_LIST, false, label.1);
+        ui.add_sized([(width - PRESET_LIST - 2.0).max(30.0), 26.0], field).labelled_by(label.0);
+        let list = preset_arrow(ui, label.1);
         egui::Popup::menu(&list).show(|ui| {
             for &v in presets {
                 if ui.selectable_label(*n.value == v, number(v)).clicked() {
@@ -379,15 +454,14 @@ fn colour_button(ui: &mut egui::Ui, t: &Tokens, color: [f64; 3]) -> egui::Respon
 /// Commit a typed size once (Enter or leaving the field), rather than one undo step per key.
 /// The bounds match AddedText validation, so the panel also accepts coloured text below 8 pt.
 fn font_size_input(ui: &mut egui::Ui, size: &mut f64) {
-    ui.scope(|ui| {
-        ui.spacing_mut().item_spacing.x = 2.0;
+    boxed(ui, |ui| {
         let id = ui.make_persistent_id("font-size-input");
         let (previous, mut text) = ui.data(|d| d.get_temp::<(u64, String)>(id)).unwrap_or_else(|| (size.to_bits(), size.to_string()));
         if previous != size.to_bits() {
             text = size.to_string();
         }
-        let field = egui::TextEdit::singleline(&mut text).id(id).desired_width(40.0);
-        let response = ui.add_sized([40.0, ui.spacing().interact_size.y], field).accessible_name(tl!("Font size:"));
+        let field = egui::TextEdit::singleline(&mut text).id(id).desired_width(40.0).frame(egui::Frame::NONE).align(egui::Align2::CENTER_CENTER);
+        let response = ui.add_sized([40.0, 26.0], field).accessible_name(tl!("Font size:"));
         let cancel = (response.has_focus() || response.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Escape));
         if cancel {
             text = size.to_string();
@@ -399,7 +473,7 @@ fn font_size_input(ui: &mut egui::Ui, size: &mut f64) {
             text = size.to_string();
         }
         let before = *size;
-        let list = icons::button(ui, "chevron-down", PRESET_LIST, false, tl!("Font size"));
+        let list = preset_arrow(ui, tl!("Font size"));
         egui::Popup::menu(&list).show(|ui| {
             for value in SIZES {
                 if ui.selectable_label(*size == value, format!("{value} pt")).clicked() {

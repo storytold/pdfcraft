@@ -17,7 +17,10 @@ use crate::{Mode, PdfCraftApp};
 pub const TOOLS_WIDTH: f32 = 272.0;
 /// Default width of the side panel.
 pub const SIDE_WIDTH: f32 = 330.0;
-const TOOLS_RANGE: RangeInclusive<f32> = 240.0..=520.0;
+/// The Tools pane's own margins, left and right (14 pt each, and a pt of border), around what a panel lays out.
+const TOOLS_GUTTERS: f32 = 30.0;
+/// No narrower than Format text's widest row, so nothing in it is cut off.
+const TOOLS_RANGE: RangeInclusive<f32> = (crate::format_text_ui::MIN_ROW + TOOLS_GUTTERS)..=520.0;
 const SIDE_RANGE: RangeInclusive<f32> = 260.0..=520.0;
 /// Version of the saved `side_panels` value.
 const VERSION: u64 = 1;
@@ -481,11 +484,11 @@ mod tests {
             json!([]),
             json!([
                 ["inspector", {"floating": null, "anchor": "canvas", "placement": {"Split": "Right"}, "size": {"FixedSecond": 380.0}, "stack": null, "sibling": ["canvas"]}],
-                ["tools", {"floating": null, "anchor": "canvas", "placement": {"Split": "Right"}, "size": {"FixedSecond": 250.0}, "stack": null, "sibling": ["canvas"]}]
+                ["tools", {"floating": null, "anchor": "canvas", "placement": {"Split": "Right"}, "size": {"FixedSecond": 300.0}, "stack": null, "sibling": ["canvas"]}]
             ]),
         );
         let restored = restore(&old);
-        assert_eq!(restored.panels, SidePanels { tools_side: ToolsSide::Right, tools_width: 250.0, side_width: 380.0 });
+        assert_eq!(restored.panels, SidePanels { tools_side: ToolsSide::Right, tools_width: 300.0, side_width: 380.0 });
         assert_eq!((restored.tools_open, restored.side_closed), (Some(false), true));
     }
 
