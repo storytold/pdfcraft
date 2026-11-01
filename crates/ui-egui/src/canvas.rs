@@ -404,6 +404,8 @@ pub struct DocView {
     /// Per-axis line-wheel state; horizontal input cannot extend a vertical burst.
     wheel_boost_x: crate::wheel_boost::WheelBoost,
     wheel_boost_y: crate::wheel_boost::WheelBoost,
+    /// The accelerated surplus still to scroll, eased like egui's base (#5371).
+    wheel_surplus: crate::wheel_boost::Surplus,
     /// Touchpad momentum after the fingers lift (#531).
     fling: crate::fling::Fling,
     pub(crate) auto_scroll: crate::autoscroll::AutoScroll,
@@ -678,6 +680,7 @@ impl DocView {
             precise_scroll_until: 0.0,
             wheel_boost_x: Default::default(),
             wheel_boost_y: Default::default(),
+            wheel_surplus: Default::default(),
             fling: Default::default(),
             auto_scroll: Default::default(),
             selected: BTreeSet::new(),
@@ -821,6 +824,7 @@ impl DocView {
         self.wheel.clear_motion();
         self.wheel_boost_x.reset();
         self.wheel_boost_y.reset();
+        self.wheel_surplus.reset();
     }
 }
 
@@ -1984,8 +1988,8 @@ fn draw_pages(
         ui.set_opacity(opacity);
     }
     // Middle-button auto-scroll, the keyboard, precise touchpad input (#759) and its glide
-    // (#531), accelerated wheel surplus (#1072), and a drawing's edge scroll; positive y
-    // moves the content down. All scroll without easing, unlike egui's wheel default.
+    // (#531), accelerated wheel surplus (#1072, already eased in `read_wheel`), and a drawing's
+    // edge scroll; positive y moves the content down. egui adds no easing of its own to these.
     // ScrollArea ignores wheel input during a widget drag. Defer the wheel contribution
     // until after the text widgets when a selection owns that drag.
     let wheel_delta = if selection_wheel { Vec2::ZERO } else { precise_scroll + boost_extra };
@@ -2020,6 +2024,8 @@ fn draw_pages(
     // its owner; in the gap between pages it has none).
     if ptr.pressed().is_some() {
         view.router.cancel();
+        // Nor does the rest of a fast spin move the page under it (#5371).
+        view.wheel_surplus.reset();
         // The page widget is not focusable. Explicitly return keyboard ownership from Pages
         // when the user presses the document, without stealing focus through a modal.
         if let Some(id) = view.pages_focus_id {
@@ -2336,9 +2342,10 @@ struct Wheel {
 }
 
 /// Point input bypasses egui smoothing for 1:1 motion. Line input keeps egui's configured, smoothed
-/// base and adds only the accelerated surplus. While point suppression is active, line and page
-/// input are reconstructed so current coarse events survive without exposing an older eased tail.
-fn read_wheel(ui: &mut egui::Ui, view: &mut DocView, avail: Rect, single_paging: bool, edge_turned: bool) -> Wheel {
+/// base and adds the accelerated surplus, eased the same way when the window `animates`. While
+/// point suppression is active, line and page input are reconstructed so current coarse events
+/// survive without exposing an older eased tail.
+fn read_wheel(ui: &mut egui::Ui, view: &mut DocView, avail: Rect, single_paging: bool, edge_turned: bool, animates: bool) -> Wheel {
     let now = ui.input(|i| i.time);
     let input = if ui.rect_contains_pointer(avail) {
         // Match the line distance used by egui's other scroll areas.
@@ -2350,7 +2357,12 @@ fn read_wheel(ui: &mut egui::Ui, view: &mut DocView, avail: Rect, single_paging:
     };
     let mut precise_scroll = input.precise;
     let mut line_base = input.line;
-    let mut boost_extra = crate::wheel_boost::boost_extra(input, &mut view.wheel_boost_x, &mut view.wheel_boost_y, now);
+    let surplus = crate::wheel_boost::boost_extra(input, &mut view.wheel_boost_x, &mut view.wheel_boost_y, now);
+    // Not all in the frame of its notch, which made a fast spin jump at every notch (#5371).
+    let mut boost_extra = view.wheel_surplus.step(surplus, input.line, now, ui.input(|i| i.stable_dt), animates);
+    if view.wheel_surplus.pending() {
+        ui.ctx().request_repaint();
+    }
     let has_page = input.page != Vec2::ZERO;
     if now.is_finite() && precise_scroll != Vec2::ZERO && !has_page {
         view.precise_scroll_until = now + SUPPRESS_SECS;
@@ -2368,6 +2380,7 @@ fn read_wheel(ui: &mut egui::Ui, view: &mut DocView, avail: Rect, single_paging:
         precise_scroll.y = 0.0;
         line_base.y = 0.0;
         boost_extra.y = 0.0;
+        view.wheel_surplus.stop_vertical();
     }
     // egui smooths a Point event that moved at least 8 points, keeping part of it for later
     // passes. Suppression must outlive that whole action: once it expired after a fixed 0.25 s,
@@ -3086,12 +3099,13 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // keys. Runs before `visible_pages` so the frame that turns the page draws it.
     let (single_paging, edge_turned) = single_page_paging(ui, view, &PagingCx { row: &row, rects: &rects, avail, middle_gesture, unobstructed });
     // Point input bypasses egui smoothing for 1:1 motion. Line input keeps egui's configured,
-    // smoothed base and adds only the accelerated surplus. While point suppression is active,
+    // smoothed base and adds the accelerated surplus, eased alike. While point suppression is active,
     // reconstruct line and page input here so current coarse events survive without exposing an
     // older eased tail.
     let now = ui.input(|i| i.time);
-    let Wheel { precise_scroll, line_base, boost_extra, has_page, paging_owns_vertical } = read_wheel(ui, view, avail, single_paging, edge_turned);
     let animates = app.animation_effects.animates(app.motion.reduced);
+    let Wheel { precise_scroll, line_base, boost_extra, has_page, paging_owns_vertical } =
+        read_wheel(ui, view, avail, single_paging, edge_turned, animates);
     let may_glide = !paging_owns_vertical && !middle_gesture && navigation_enabled && unobstructed && animates;
     let wheel_scrolled = precise_scroll != Vec2::ZERO || line_base != Vec2::ZERO || boost_extra != Vec2::ZERO || has_page;
     let motion = GlideCx { now, may_glide, key_scroll, auto_delta, zoom_delta, edge_delta, wheel_scrolled };

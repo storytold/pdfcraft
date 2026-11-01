@@ -162,6 +162,74 @@ pub(crate) fn boost_extra(input: FrameInput, boost_x: &mut WheelBoost, boost_y: 
     cap_frame(extra)
 }
 
+/// The accelerated surplus still to scroll. egui eases a notch's base distance over the frames
+/// after it (90% within 0.1 s); the surplus follows the same curve, so a fast spin moves as
+/// smoothly as single notches rather than jumping each time one arrives (#5371).
+#[derive(Debug, Default)]
+pub(crate) struct Surplus {
+    pending: Vec2,
+    /// When it last stepped, in egui's input time.
+    at: f64,
+}
+
+impl Surplus {
+    /// Adds the surplus of the frame at `now` and returns the part to scroll now: all of it when
+    /// the window doesn't `animate` (egui's notches then move at once too), else egui's eased
+    /// share for a frame of `dt` seconds. `line` is the frame's line-wheel motion.
+    pub(crate) fn step(&mut self, added: Vec2, line: Vec2, now: f64, dt: f32, animate: bool) -> Vec2 {
+        // Drawn every frame while some is left, a view would have scrolled it all by now: one
+        // that wasn't (another tab was in front) doesn't jump on its return.
+        let gap = now - self.at;
+        if !gap.is_finite() || !(0.0..=RESET_GAP_SECS).contains(&gap) {
+            self.pending = Vec2::ZERO;
+        }
+        self.at = now;
+        // Turning the wheel back drops what the old direction still owed. The first notch back
+        // adds no surplus of its own (its burst starts again at 1×), so its direction is read
+        // from the notch itself.
+        if line.x * self.pending.x < 0.0 {
+            self.pending.x = 0.0;
+        }
+        if line.y * self.pending.y < 0.0 {
+            self.pending.y = 0.0;
+        }
+        let dt = if dt.is_finite() && dt > 0.0 { dt.min(0.1) } else { 1.0 / 60.0 };
+        let share = if animate { egui::emath::exponential_smooth_factor(0.90, 0.1, dt) } else { 1.0 };
+        let (x, pending_x) = ease_axis(self.pending.x, added.x, share);
+        let (y, pending_y) = ease_axis(self.pending.y, added.y, share);
+        self.pending = Vec2::new(pending_x, pending_y);
+        Vec2::new(x, y)
+    }
+
+    /// Whether some surplus is still to scroll, so the next frames must be drawn.
+    pub(crate) fn pending(&self) -> bool {
+        self.pending != Vec2::ZERO
+    }
+
+    /// Drops what is still to scroll vertically: the pager owns that axis.
+    pub(crate) fn stop_vertical(&mut self) {
+        self.pending.y = 0.0;
+    }
+
+    /// Drops what is still to scroll. Call after a programmatic scroll jump.
+    pub(crate) fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
+/// One axis of [`Surplus::step`]: (scroll now, still to scroll). What is still to scroll is held
+/// to one frame's cap of wheel input, so a free-spinning wheel can't build up a backlog that goes
+/// on scrolling long after it stops. Under a point, the rest goes at once, as egui's does.
+fn ease_axis(pending: f32, added: f32, share: f32) -> (f32, f32) {
+    let added = if added.is_finite() { added } else { 0.0 };
+    let total = (pending + added).clamp(-MAX_FRAME_POINTS, MAX_FRAME_POINTS);
+    if total.abs() < 1.0 {
+        return (total, 0.0);
+    }
+    let now = total * share;
+    (now, total - now)
+}
+
 /// Maps a non-finite or non-positive points-per-unit scale to zero.
 fn sanitize_scale(points: f32) -> f32 {
     if points.is_finite() && points > 0.0 { points } else { 0.0 }
@@ -409,5 +477,141 @@ mod tests {
         let key = egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
         let input = accumulate(&[zoom, key, wheel(Line, 0.0, f32::NAN)], 100.0, false);
         assert_eq!(input, FrameInput::default());
+    }
+
+    /// A notch down, as `accumulate` gives it, and no notch.
+    const DOWN: egui::Vec2 = egui::vec2(0.0, -100.0);
+    const NONE: egui::Vec2 = egui::Vec2::ZERO;
+
+    #[test]
+    fn a_surplus_eases_like_egui_and_all_of_it_arrives() {
+        let dt = 1.0 / 60.0;
+        let mut s = Surplus::default();
+        let first = s.step(egui::vec2(0.0, -500.0), DOWN, 0.0, dt, true);
+        let share = egui::emath::exponential_smooth_factor(0.90, 0.1, dt);
+        assert!((first.y - -500.0 * share).abs() < 0.01, "the first frame takes egui's share: {first:?}");
+        let mut moved = first.y;
+        for frame in 1..60 {
+            moved += s.step(NONE, NONE, f64::from(frame) * f64::from(dt), dt, true).y;
+        }
+        assert!((moved + 500.0).abs() < 0.01, "the whole surplus arrives: {moved}");
+        assert!(!s.pending());
+        // Without animation it all goes at once, like egui's notches then.
+        assert_eq!(s.step(egui::vec2(0.0, -500.0), DOWN, 1.0, dt, false), egui::vec2(0.0, -500.0));
+        assert!(!s.pending());
+    }
+
+    #[test]
+    fn a_surplus_is_dropped_on_reversal_reset_paging_and_a_long_gap() {
+        let dt = 1.0 / 60.0;
+        let mut s = Surplus::default();
+        s.step(egui::vec2(0.0, -500.0), DOWN, 0.0, dt, true);
+        // The first notch back adds no surplus (its burst starts at 1×), yet it drops what the
+        // old direction still owed.
+        assert_eq!(s.step(NONE, -DOWN, 0.02, dt, true), NONE, "nothing more scrolls down");
+        assert!(!s.pending());
+        let mut s = Surplus::default();
+        s.step(egui::vec2(-300.0, -500.0), egui::vec2(-100.0, -100.0), 0.0, dt, true);
+        s.stop_vertical();
+        let rest = s.step(NONE, NONE, 0.02, dt, true);
+        assert!(rest.x < 0.0 && rest.y == 0.0, "only the horizontal surplus is left: {rest:?}");
+        s.reset();
+        assert!(!s.pending());
+        assert_eq!(s.step(NONE, NONE, 0.04, dt, true), NONE);
+        // A view not drawn for a while (another tab in front) doesn't scroll on its return, and
+        // neither does one whose clock went back.
+        for later in [5.0, 4.0, f64::NAN] {
+            let mut s = Surplus::default();
+            s.step(egui::vec2(0.0, -500.0), DOWN, 4.5, dt, true);
+            assert_eq!(s.step(NONE, NONE, later, dt, true), NONE, "back at {later}");
+            assert!(!s.pending());
+        }
+    }
+
+    #[test]
+    fn a_surplus_survives_bad_input() {
+        let mut s = Surplus::default();
+        let inputs = [(f32::NAN, 0.016), (f32::INFINITY, 0.016), (-500.0, f32::NAN), (-500.0, 0.0), (-500.0, -1.0), (-500.0, f32::INFINITY)];
+        for (frame, (added, dt)) in (0_u8..).zip(inputs) {
+            let now = s.step(egui::vec2(0.0, added), egui::vec2(f32::NAN, 0.0), f64::from(frame) * 0.016, dt, true);
+            assert!(now.is_finite(), "{added} at {dt}: {now:?}");
+        }
+        // The backlog stays within one frame's cap of wheel input.
+        s.step(egui::vec2(0.0, -1.0e9), DOWN, 0.1, 0.016, true);
+        assert!(s.step(NONE, NONE, 0.11, 0.1, false).y >= -MAX_FRAME_POINTS, "capped like every frame of wheel input");
+    }
+
+    /// A spin at `hz` frames a second: a notch down at each time in `notches` (seconds), then
+    /// frames until `until`. Returns the surplus added, the surplus scrolled by the end of each
+    /// frame (time, total), and the surplus left.
+    fn spin(hz: f64, notches: &[f64], until: f64) -> (f32, Vec<(f64, f32)>, bool) {
+        let (mut boost_x, mut boost_y, mut s) = (WheelBoost::default(), WheelBoost::default(), Surplus::default());
+        let dt = 1.0 / hz;
+        let (mut added, mut moved, mut trace) = (0.0, 0.0, Vec::new());
+        let mut next = notches.iter().peekable();
+        for frame in 0.. {
+            let now = f64::from(frame) * dt;
+            if now > until {
+                break;
+            }
+            let mut line = NONE;
+            while next.next_if(|t| **t <= now).is_some() {
+                line += DOWN;
+            }
+            let extra = boost_extra(FrameInput { line, ..Default::default() }, &mut boost_x, &mut boost_y, now);
+            added += extra.y;
+            moved += s.step(extra, line, now, dt as f32, true).y;
+            trace.push((now, moved));
+        }
+        (added, trace, s.pending())
+    }
+
+    #[test]
+    fn one_notch_leaves_no_surplus() {
+        let (added, trace, left) = spin(60.0, &[0.0], 1.0);
+        assert_eq!(added, 0.0, "a single notch is egui's alone");
+        assert!(trace.iter().all(|(_, moved)| *moved == 0.0) && !left);
+    }
+
+    #[test]
+    fn a_burst_of_ten_scrolls_its_surplus_once_and_stops() {
+        // Ten notches 20 ms apart, frames at 60 Hz.
+        let notches: Vec<f64> = (0..10).map(|i| f64::from(i) * 0.02).collect();
+        let (added, trace, left) = spin(60.0, &notches, 2.0);
+        assert!(added < -100.0, "precondition: the burst is boosted: {added}");
+        let (_, moved) = *trace.last().expect("frames");
+        assert!((moved - added).abs() < 0.01, "all of it, and no more: {moved} of {added}");
+        assert!(trace.iter().all(|(_, m)| *m >= added - 0.01), "never past the total on the way: {trace:?}");
+        assert!(!left);
+        // Done within half a second of the last notch.
+        let done = trace.iter().find(|(_, m)| (m - added).abs() < 0.01).map(|(t, _)| *t).expect("done");
+        assert!(done < 0.18 + 0.5, "the surplus stopped at {done} s");
+    }
+
+    #[test]
+    fn a_surplus_decays_alike_at_30_60_and_144_hz() {
+        // The same surplus, then frames at each rate: all of it arrives, along egui's curve.
+        let curve = |hz: f64| {
+            let dt = 1.0 / hz;
+            let mut s = Surplus::default();
+            let mut moved = s.step(egui::vec2(0.0, -500.0), DOWN, 0.0, dt as f32, true).y;
+            let mut trace = vec![(0.0, moved)];
+            for frame in 1..(hz as u32) {
+                let now = f64::from(frame) * dt;
+                moved += s.step(NONE, NONE, now, dt as f32, true).y;
+                trace.push((now, moved));
+            }
+            assert!((moved + 500.0).abs() < 0.01, "{hz} Hz: all of it arrives: {moved}");
+            assert!(trace.iter().all(|(_, m)| *m >= -500.01), "{hz} Hz: never more: {trace:?}");
+            assert!(!s.pending(), "{hz} Hz: done within a second");
+            trace
+        };
+        let at = |trace: &[(f64, f32)], t: f64| trace.iter().rev().find(|(now, _)| *now <= t).map_or(0.0, |(_, m)| *m);
+        let (slow, mid, fast) = (curve(30.0), curve(60.0), curve(144.0));
+        // Discrete frames differ by at most a frame's share: 0.2 s in, all within 2%.
+        for t in [0.2, 0.3, 0.5] {
+            let (a, b, c) = (at(&slow, t), at(&mid, t), at(&fast, t));
+            assert!((a - b).abs() < 10.0 && (a - c).abs() < 10.0, "{t} s: {a} at 30 Hz, {b} at 60 Hz, {c} at 144 Hz");
+        }
     }
 }
