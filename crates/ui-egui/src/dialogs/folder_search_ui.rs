@@ -347,6 +347,29 @@ mod tests {
     }
 
     #[test]
+    fn the_search_stops_the_moment_the_dialog_closes() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.dialog = Some(crate::Dialog::FolderSearch);
+        let (_sender, cancel) = running(&mut app.folder_search);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| app);
+        h.run_steps(3);
+        assert!(!cancel.load(Ordering::Relaxed));
+        h.query_all_by_role_and_label(Role::Button, "Close").last().unwrap().click();
+        for _ in 0..8 {
+            h.step();
+            if h.state().dialog.is_none() {
+                break;
+            }
+        }
+        assert_eq!(h.state().dialog, None);
+        assert!(cancel.load(Ordering::Relaxed), "not on a later frame, which a reopened dialog could beat");
+    }
+
+    #[test]
     fn results_arrive_while_the_search_runs() {
         let mut state = State::default();
         let (sender, _cancel) = running(&mut state);
