@@ -263,6 +263,58 @@ fn shortcuts_run_registered_commands() {
 }
 
 #[test]
+fn ctrl_m_opens_the_comments_panel_and_keeps_it_open() {
+    for os in [OperatingSystem::Windows, OperatingSystem::Nix] {
+        let mut h = harness();
+        // Real Windows/Linux Ctrl events set both ctrl and command.
+        h.ctx.set_os(os);
+        h.state_mut().right = None;
+        h.run_steps(2);
+        for _ in 0..2 {
+            h.key_press_modifiers(Modifiers::CTRL | Modifiers::COMMAND, Key::M);
+            h.run_steps(2);
+            assert_eq!(h.state().right, Some(pdfcraft_ui_egui::RightPanel::Comments), "{os:?}: opens rather than toggles");
+        }
+        h.state_mut().execute("help.shortcuts");
+        h.run_steps(3);
+        h.get_by_label("Ctrl+M");
+    }
+}
+
+#[test]
+fn mac_command_m_stays_available_for_minimize() {
+    let mut h = harness();
+    h.ctx.set_os(OperatingSystem::Mac);
+    h.state_mut().right = None;
+    h.run_steps(2);
+    let command_m = Modifiers { mac_cmd: true, command: true, ..Modifiers::NONE };
+    h.input_mut().events.push(egui::Event::Key { key: Key::M, physical_key: None, pressed: true, repeat: false, modifiers: command_m });
+    h.step();
+    let available = h.ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { key: Key::M, pressed: true, .. })));
+    assert_eq!((h.state().right, available), (None, true), "Comments must leave Command+M unconsumed for Minimize");
+
+    let bar = h.state().menu_bar(&h.ctx);
+    assert!(bar.find(&craft_menu::CommandRef::new("comment.list")).unwrap().shortcut.is_none());
+    let layout = craft_menu::mac_layout(&bar, &craft_menu::LayoutOptions::new("PdfCraft"));
+    assert!(!layout.clashes.iter().any(|clash| clash.system == "Minimize"));
+    assert!(
+        layout
+            .bar
+            .menu(craft_menu::MenuRole::Window)
+            .unwrap()
+            .children
+            .iter()
+            .any(|node| { matches!(node, craft_menu::Node::Standard { kind: craft_menu::Standard::Minimize, .. }) }),
+        "the native layout keeps AppKit's standard Minimize item"
+    );
+    h.state_mut().execute("help.shortcuts");
+    h.run_steps(3);
+    h.get_by_label("⌘S"); // Positive control: the macOS shortcut rows really rendered.
+    assert!(h.query_by_label("⌘M").is_none());
+    assert!(h.query_by_label("Comments panel").is_none(), "an unbound command has no shortcuts-help row");
+}
+
+#[test]
 fn the_palette_lists_commands_with_shortcuts_and_runs_them() {
     let mut h = harness();
     h.state_mut().set_option("palette", "rotate pages clockwise").unwrap();

@@ -122,12 +122,20 @@ pub struct CommandSpec {
     pub label: &'static str,
     /// Top-level menu it appears in (`File`, `Edit`, `View`, `Pages`, `Help`), if any.
     pub menu: Option<&'static str>,
-    pub shortcut: Option<Shortcut>,
+    shortcut: Option<Shortcut>,
+    shortcut_on_mac: bool,
     pub needs: Needs,
     /// The shortcut also works while a text field has focus.
     pub in_text: bool,
     /// Lucide icon name for palettes and toolbars.
     pub icon: &'static str,
+}
+
+impl CommandSpec {
+    /// The binding for this platform. A command can leave a macOS system shortcut unbound.
+    pub const fn shortcut_for(&self, mac: bool) -> Option<Shortcut> {
+        if mac && !self.shortcut_on_mac { None } else { self.shortcut }
+    }
 }
 
 const fn c(
@@ -138,7 +146,7 @@ const fn c(
     needs: Needs,
     icon: &'static str,
 ) -> CommandSpec {
-    CommandSpec { id, label, menu, shortcut, needs, in_text: true, icon }
+    CommandSpec { id, label, menu, shortcut, shortcut_on_mac: true, needs, in_text: true, icon }
 }
 
 /// Like `c`, but the shortcut is left to text fields while one has focus (⌘Z, ⌘A…).
@@ -150,7 +158,7 @@ const fn ct(
     needs: Needs,
     icon: &'static str,
 ) -> CommandSpec {
-    CommandSpec { id, label, menu, shortcut, needs, in_text: false, icon }
+    CommandSpec { id, label, menu, shortcut, shortcut_on_mac: true, needs, in_text: false, icon }
 }
 
 use Needs::*;
@@ -252,7 +260,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("view.theme.system", "Use system setting", None, None, Nothing, "settings"),
     c("view.theme.light", "Light gray", None, None, Nothing, "sun"),
     c("view.theme.dark", "Dark gray", None, None, Nothing, "moon"),
-    c("comment.list", "Comments panel", VIEW, None, Document, "message-square-text"),
+    // Command+M belongs to Minimize on macOS; Ctrl+M opens Comments elsewhere (#3741).
+    CommandSpec { shortcut_on_mac: false, ..c("comment.list", "Comments panel", VIEW, Some(Shortcut::cmd("M")), Document, "message-square-text") },
     c("comment.note", "Add a sticky note", None, None, Annotate, "sticky-note"),
     c("comment.freetext", "Add a text box", None, None, Annotate, "type"),
     c("comment.highlight", "Highlight text", None, None, Annotate, "highlighter"),
@@ -463,11 +472,15 @@ mod tests {
     #[test]
     fn ids_and_shortcuts_are_unique() {
         let mut ids = std::collections::HashSet::new();
-        let mut keys = std::collections::HashSet::new();
         for c in COMMANDS {
             assert!(ids.insert(c.id), "duplicate id {}", c.id);
-            if let Some(s) = c.shortcut {
-                assert!(keys.insert(s), "duplicate shortcut {} ({})", s.label(true), c.id);
+        }
+        for mac in [false, true] {
+            let mut keys = std::collections::HashSet::new();
+            for c in COMMANDS {
+                if let Some(s) = c.shortcut_for(mac) {
+                    assert!(keys.insert(s.label(mac)), "duplicate shortcut {} ({})", s.label(mac), c.id);
+                }
             }
         }
     }
@@ -491,11 +504,20 @@ mod tests {
         assert_eq!(s.label(true), "⇧⌘S");
         assert_eq!(s.label(false), "Ctrl+Shift+S");
         assert_eq!(command("view.read_mode").unwrap().shortcut.unwrap().label(true), "⌃⌘H");
+        assert_eq!(command("comment.list").unwrap().shortcut_for(false).unwrap().label(false), "Ctrl+M");
         assert_eq!(Shortcut::cmd("+").label(false), "Ctrl++");
         assert_eq!(Shortcut::cmd_shift("−").label(true), "⇧⌘−");
         assert_eq!(Shortcut::cmd_shift("−").label(false), "Ctrl+Shift+−");
         assert_eq!(Shortcut::command_name(true), "⌘");
         assert_eq!(Shortcut::command_name(false), "Ctrl");
+    }
+
+    #[test]
+    fn comments_shortcut_preserves_macos_minimize() {
+        let comments = command("comment.list").unwrap();
+        assert_eq!(comments.shortcut_for(false), Some(Shortcut::cmd("M")));
+        assert_eq!(comments.shortcut_for(true), None, "macOS Command+M is reserved for Minimize");
+        assert_eq!(command("file.save_as").unwrap().shortcut_for(true), Some(Shortcut::cmd_shift("S")));
     }
 
     #[test]
