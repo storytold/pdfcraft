@@ -664,6 +664,44 @@ fn tool_table_is_well_formed() {
     }
 }
 
+fn assert_homogeneous_enums(schema: &Value, path: &str) {
+    fn json_kind(value: &Value) -> &'static str {
+        match value {
+            Value::Null => "null",
+            Value::Bool(_) => "boolean",
+            Value::Number(_) => "number",
+            Value::String(_) => "string",
+            Value::Array(_) => "array",
+            Value::Object(_) => "object",
+        }
+    }
+
+    if let Some(values) = schema.get("enum").and_then(Value::as_array) {
+        let first = values.first().map(json_kind);
+        assert!(values.iter().map(json_kind).all(|kind| Some(kind) == first), "mixed enum types at {path}: {values:?}");
+    }
+    match schema {
+        Value::Object(object) => {
+            for (key, child) in object {
+                assert_homogeneous_enums(child, &format!("{path}.{key}"));
+            }
+        }
+        Value::Array(array) => {
+            for (index, child) in array.iter().enumerate() {
+                assert_homogeneous_enums(child, &format!("{path}[{index}]"));
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn tool_schema_enums_have_one_json_type() {
+    for tool in tools() {
+        assert_homogeneous_enums(&tool.input_schema, tool.name);
+    }
+}
+
 #[test]
 fn explicit_font_and_disjoint_ranges_save_reopen_through_tools() {
     let dir = workdir("font-ranges");
@@ -3286,6 +3324,39 @@ fn editing_existing_text_through_tools() {
     assert_eq!(p["lines"].as_array().map(Vec::len), Some(2), "{p}");
 }
 
+/// Format text ▸ Superscript and Subscript without the GUI: a range, then back again over a space
+/// (which has no superscript form), each one undo step; refusals change nothing.
+#[test]
+fn superscript_and_subscript_through_tools() {
+    let dir = workdir("text-script");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let paragraph =
+        |a: &mut Automation| ok(a, "text_paragraphs", json!({ "doc": doc, "page": 2 }))["paragraphs"][0]["text"].as_str().unwrap().to_string();
+    let script = |script: &str, range: Value| json!({ "doc": doc, "page": 2, "paragraph": 1, "script": script, "range": range });
+    // "Page 2": the 2 is byte 5.
+    let r = ok(&mut a, "text_script", script("superscript", json!([5, 6])));
+    assert_eq!((r["script"].as_str(), r["paragraph"]["text"].as_str()), (Some("superscript"), Some("Page ²")), "{r}");
+    assert_eq!(page_text(&mut a, doc)[1], "Page ²");
+    // " ²": the space has no superscript form, and the range still toggles back.
+    ok(&mut a, "text_script", script("superscript", json!([4, 7])));
+    assert_eq!(paragraph(&mut a), "Page 2");
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Edit text");
+    assert_eq!(paragraph(&mut a), "Page ²");
+    // Refused, changing nothing: a range that splits ², one past the end, an empty one, a range
+    // with nothing that has a subscript form, an unknown script.
+    for (name, range) in [
+        ("superscript", json!([5, 6])),
+        ("superscript", json!([0, 99])),
+        ("superscript", json!([3, 3])),
+        ("subscript", json!([4, 5])),
+        ("italic", json!([0, 1])),
+    ] {
+        assert!(matches!(a.call("text_script", &script(name, range.clone())), Err(ToolError::InvalidArgs(_))), "{name} {range}");
+    }
+    assert_eq!(paragraph(&mut a), "Page ²");
+}
+
 #[test]
 fn styled_cyrillic_fallback_is_batched_through_tools_and_reopen() {
     if pdfcraft_fonts::document_japanese_font().is_none() {
@@ -3453,6 +3524,13 @@ fn editing_page_images_through_tools() {
     assert_eq!(cropped["visible_rect"], json!([10.0, 10.0, 25.0, 30.0]));
     ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "rotate" }));
     ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "flip_horizontal" }));
+    // A single image is already in front and at the back; no-op arrange is refused without dirtying undo.
+    assert!(a.call("image_edit", &json!({ "doc": made, "page": 1, "image": 1, "action": "bring_to_front" })).is_err());
+    assert!(a.call("image_edit", &json!({ "doc": made, "page": 1, "image": 1, "action": "send_to_back" })).is_err());
+    assert!(a.call("image_edit", &json!({ "doc": made, "page": 1, "image": 1, "action": "bring_forward" })).is_err());
+    assert!(a.call("image_edit", &json!({ "doc": made, "page": 1, "image": 1, "action": "send_backward" })).is_err());
+    let r = ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "remove_crop" }));
+    assert_eq!(r["undo"], "Remove crop");
     // Any angle: the box grows to the turned picture's bounds, and it undoes like a quarter turn.
     let before = ok(&mut a, "page_images", json!({ "doc": made, "page": 1 }))["images"][0]["rect"].clone();
     let r = ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "rotate_by", "degrees": 30.5 }));
@@ -3470,6 +3548,80 @@ fn editing_page_images_through_tools() {
     ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "delete" }));
     assert_eq!(ok(&mut a, "page_images", json!({ "doc": made, "page": 1 }))["count"], 0);
     assert!(matches!(a.call("image_edit", &json!({ "doc": made, "page": 1, "image": 1, "action": "delete" })), Err(ToolError::InvalidArgs(_))));
+}
+
+#[test]
+fn arranging_page_images_through_tools() {
+    let dir = workdir("arrange-page-images");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_images", json!({ "doc": doc, "folder": "src", "dpi": 18, "pages": [1, 2] }));
+    let made = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["src/a_page_1.png"] }))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_add_image", json!({ "doc": made, "page": 1, "path": "src/a_page_2.png", "rect": [50, 50, 100, 100] }));
+    assert_eq!(ok(&mut a, "page_images", json!({ "doc": made, "page": 1 }))["count"], 2);
+    let r = ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "bring_to_front" }));
+    assert_eq!(r["undo"], "Bring to front");
+    let r = ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 2, "action": "send_to_back" }));
+    assert_eq!(r["undo"], "Send to back");
+    ok(&mut a, "doc_save", json!({ "doc": made, "path": "arranged.pdf" }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "arranged.pdf" }))["doc"].as_u64().unwrap();
+    let after_reopen = ok(&mut a, "page_images", json!({ "doc": reopened, "page": 1 }));
+    assert_eq!(after_reopen["count"], 2);
+    assert_eq!(after_reopen["images"][0]["rect"], json!([0.0, 0.0, 50.0, 75.0]));
+    assert_eq!(after_reopen["images"][1]["rect"], json!([50.0, 50.0, 100.0, 100.0]));
+}
+
+/// The transform a rotated-image resize sends (`ImageEdit::Transform`) is reachable headlessly,
+/// in the same top-left-origin points as the other image tools, also on a turned page.
+#[test]
+fn transforming_page_images_through_tools() {
+    let dir = workdir("transform-page-images");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_images", json!({ "doc": doc, "folder": "src", "dpi": 18, "pages": [1] }));
+    let made = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["src/a_page_1.png"] }))["doc"].as_u64().unwrap();
+    let rect = |a: &mut Automation| ok(a, "page_images", json!({ "doc": made, "page": 1 }))["images"][0]["rect"].clone();
+    let transform =
+        |a: &mut Automation, m: Value| ok(a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "transform", "matrix": m }));
+    ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "move", "rect": [5, 5, 25, 35] }));
+
+    // Right 10, down 20.
+    assert_eq!(transform(&mut a, json!([1, 0, 0, 1, 10, 20]))["undo"], "Transform image");
+    assert_eq!(rect(&mut a), json!([15.0, 25.0, 35.0, 55.0]));
+    // Twice the size about the top-left corner of the page.
+    transform(&mut a, json!([2, 0, 0, 2, 0, 0]));
+    assert_eq!(rect(&mut a), json!([30.0, 50.0, 70.0, 110.0]));
+    // A quarter turn, (x, y) → (200 − y, x): the box turns with it, and it undoes in one step.
+    transform(&mut a, json!([0, 1, -1, 0, 200, 0]));
+    assert_eq!(rect(&mut a), json!([90.0, 30.0, 150.0, 70.0]));
+    ok(&mut a, "edit_undo", json!({ "doc": made }));
+    assert_eq!(rect(&mut a), json!([30.0, 50.0, 70.0, 110.0]));
+
+    // On a turned page "right" is still right on screen.
+    ok(&mut a, "page_rotate", json!({ "doc": made, "pages": [1], "degrees": 90 }));
+    let numbers = |v: Value| [0, 1, 2, 3].map(|i| v[i].as_f64().unwrap());
+    let [x0, y0, x1, y1] = numbers(rect(&mut a));
+    transform(&mut a, json!([1, 0, 0, 1, 10, 0]));
+    let after = numbers(rect(&mut a));
+    for (got, want) in after.into_iter().zip([x0 + 10.0, y0, x1 + 10.0, y1]) {
+        assert!((got - want).abs() < 0.015, "{after:?} is not ({x0}, {y0}, {x1}, {y1}) moved right by 10");
+    }
+
+    // Flat, non-finite, short and missing matrices are refused before anything changes.
+    let before = rect(&mut a);
+    for bad in [
+        json!([1, 2, 2, 4, 0, 0]),
+        json!([0, 0, 0, 0, 0, 0]),
+        json!([1e300, 0, 0, 1e300, 0, 0]),
+        json!([1, 0, 0, 1]),
+        json!([1, 0, "invalid", 0, 1, 10, 0]),
+        json!([1, 0, null, 0, 1, 10, 0]),
+    ] {
+        let r = a.call("image_edit", &json!({ "doc": made, "page": 1, "image": 1, "action": "transform", "matrix": bad }));
+        assert!(matches!(r, Err(ToolError::InvalidArgs(_))), "{bad}: {r:?}");
+    }
+    assert!(matches!(a.call("image_edit", &json!({ "doc": made, "page": 1, "image": 1, "action": "transform" })), Err(ToolError::InvalidArgs(_))));
+    assert_eq!(rect(&mut a), before);
 }
 
 #[test]
@@ -9766,7 +9918,11 @@ fn added_text_lines_take_their_own_alignments() {
     let dir = workdir("paragraph-aligns");
     let mut a = auto(&dir);
     let id = ok(&mut a, "doc_create", json!({"from":"blank","width":600,"height":400}))["doc"].as_u64().unwrap();
-    ok(&mut a, "page_add_text", json!({"doc":id,"page":1,"text":"Left line\nRight line","at":[40,50],"width":500,"size":12,"aligns":[null,"right"]}));
+    ok(
+        &mut a,
+        "page_add_text",
+        json!({"doc":id,"page":1,"text":"Left line\nRight line\nInherited line","at":[40,50],"width":500,"size":12,"aligns":[null,"right","inherit"]}),
+    );
     let rect = |a: &mut Automation, text: &str| -> Vec<f64> {
         let lines = ok(a, "text_lines", json!({"doc":id,"page":1}));
         let line = lines["lines"].as_array().unwrap().iter().find(|l| l["text"] == text).cloned().unwrap();
@@ -9774,10 +9930,13 @@ fn added_text_lines_take_their_own_alignments() {
     };
     assert!((rect(&mut a, "Left line")[0] - 40.0).abs() < 1.0);
     assert!((rect(&mut a, "Right line")[2] - 540.0).abs() < 1.0, "{:?}", rect(&mut a, "Right line"));
+    assert!((rect(&mut a, "Inherited line")[0] - 40.0).abs() < 1.0);
     // The whole box centred: the right-aligned line goes with it.
     ok(&mut a, "content_update", json!({"doc":id,"page":1,"index":1,"align":"center"}));
     let right = rect(&mut a, "Right line");
     assert!(((right[0] + right[2]) / 2.0 - 290.0).abs() < 1.0, "{right:?}");
+    let inherited = rect(&mut a, "Inherited line");
+    assert!(((inherited[0] + inherited[2]) / 2.0 - 290.0).abs() < 1.0, "{inherited:?}");
     assert!(a.call("content_update", &json!({"doc":id,"page":1,"index":1,"aligns":["sideways"]})).is_err());
     assert!(a.call("content_update", &json!({"doc":id,"page":1,"index":1,"aligns":"right"})).is_err());
 }
@@ -10191,4 +10350,155 @@ fn simple_rule_scan_drawn(content: &[u8]) -> Vec<u8> {
         doc.set(reference, Object::Stream(Stream::flate(image.dict.clone(), &data)));
     }
     write_full(&doc, &SaveOptions::default()).unwrap()
+}
+
+#[test]
+fn editor_crop_group_move_and_arrange_survive_added_item_deletion_through_tools() {
+    let dir = workdir("editor-crop-group-arrange");
+    let mut a = auto(&dir);
+    let source = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_images", json!({"doc":source,"folder":"src","dpi":18,"pages":[1]}));
+    let doc = ok(&mut a, "doc_create", json!({"from":"images","paths":["src/a_page_1.png"]}))["doc"].as_u64().unwrap();
+    ok(&mut a, "image_edit", json!({"doc":doc,"page":1,"image":1,"action":"move","rect":[5,5,25,35]}));
+    ok(&mut a, "image_edit", json!({"doc":doc,"page":1,"image":1,"action":"crop","rect":[10,10,20,30]}));
+    ok(&mut a, "page_add_text", json!({"doc":doc,"page":1,"text":"Movable label","rect":[2,40,45,55],"size":6}));
+    let inventory = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    let objects: Vec<_> = inventory["objects"].as_array().unwrap().iter().map(|o| json!({"kind":o["kind"],"index":o["index"]})).collect();
+    assert_eq!(objects.len(), 2);
+    let moved = ok(&mut a, "object_move", json!({"doc":doc,"page":1,"objects":objects,"offset":[3,4]}));
+    assert_eq!(moved["moved"], 2);
+    let picture = ok(&mut a, "page_images", json!({"doc":doc,"page":1}))["images"][0].clone();
+    assert_eq!(picture["rect"], json!([8.0, 9.0, 28.0, 39.0]));
+    assert_eq!(picture["visible_rect"], json!([13.0, 14.0, 23.0, 34.0]));
+    assert!(page_text(&mut a, doc)[0].contains("Movable label"));
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(ok(&mut a, "page_images", json!({"doc":doc,"page":1}))["images"][0]["visible_rect"], json!([10.0, 10.0, 20.0, 30.0]));
+    ok(&mut a, "edit_redo", json!({"doc":doc}));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"grouped.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"grouped.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "page_images", json!({"doc":reopened,"page":1}))["images"][0]["visible_rect"], picture["visible_rect"]);
+    ok(&mut a, "image_edit", json!({"doc":reopened,"page":1,"image":1,"action":"bring_to_front"}));
+    assert_eq!(ok(&mut a, "content_list", json!({"doc":reopened}))["count"], 1);
+    ok(&mut a, "content_delete", json!({"doc":reopened,"page":1,"index":1}));
+    ok(&mut a, "doc_save", json!({"doc":reopened,"path":"independent.pdf"}));
+    let saved = ok(&mut a, "doc_open", json!({"path":"independent.pdf"}))["doc"].as_u64().unwrap();
+    let after = ok(&mut a, "page_images", json!({"doc":saved,"page":1}));
+    assert_eq!(after["count"], 1);
+    assert_eq!(after["images"][0]["rect"], picture["rect"]);
+    assert_eq!(after["images"][0]["visible_rect"], picture["visible_rect"]);
+    let rendered = a.call("page_render", &json!({"doc":saved,"page":1,"dpi":72})).unwrap();
+    assert!(rendered.iter().any(|c| matches!(c, Content::Png {data,width,height} if !data.is_empty() && *width > 0 && *height > 0)));
+}
+
+#[test]
+fn image_flip_tools_follow_displayed_axes_on_every_page_rotation() {
+    fn corners(a: &Automation, id: u64) -> [[f64; 2]; 4] {
+        let doc = a.session().get(pdfcraft_engine::DocId(id)).unwrap();
+        let [aa, b, c, d, e, f] = doc.page_images(0)[0].matrix;
+        [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)]
+            .map(|(x, y)| doc.info.pages[0].user_to_view((aa * x + c * y + e) as f32, (b * x + d * y + f) as f32).map(f64::from))
+    }
+    fn raster(a: &mut Automation, id: u64) -> (usize, usize, Vec<u8>) {
+        let rendered = a.call("page_render", &json!({"doc":id,"page":1,"dpi":72})).unwrap();
+        let Content::Png { data, .. } = &rendered[0] else { panic!("expected PNG") };
+        let mut reader = png::Decoder::new(std::io::Cursor::new(data)).read_info().unwrap();
+        let mut bytes = vec![0; reader.output_buffer_size().unwrap()];
+        let frame = reader.next_frame(&mut bytes).unwrap();
+        bytes.truncate(frame.buffer_size());
+        if frame.color_type == png::ColorType::Rgb {
+            bytes = bytes.as_chunks::<3>().0.iter().flat_map(|&[r, g, b]| [r, g, b, 255]).collect();
+        } else {
+            assert_eq!(frame.color_type, png::ColorType::Rgba);
+        }
+        (frame.width as usize, frame.height as usize, bytes)
+    }
+    let dir = workdir("displayed-image-flip");
+    let mut png_bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png_bytes, 8, 4);
+        encoder.set_color(png::ColorType::Rgb);
+        let colors = [[240, 20, 30], [20, 230, 40], [30, 40, 220], [220, 210, 20]];
+        let pixels: Vec<u8> = (0..4).flat_map(|y| (0..8).flat_map(move |x| colors[usize::from(x >= 4) + 2 * usize::from(y >= 2)])).collect();
+        encoder.write_header().unwrap().write_image_data(&pixels).unwrap();
+    }
+    std::fs::write(dir.join("quadrants.png"), png_bytes).unwrap();
+    let mut a = auto(&dir);
+    let mut failures = Vec::new();
+    for rotation in [0, 90, 180, 270] {
+        let doc = ok(&mut a, "doc_create", json!({"from":"images","paths":["quadrants.png"]}))["doc"].as_u64().unwrap();
+        if rotation != 0 {
+            ok(&mut a, "page_rotate", json!({"doc":doc,"pages":[1],"degrees":rotation}));
+        }
+        let before = corners(&a, doc);
+        let (width, height, pixels) = raster(&mut a, doc);
+        let xmin = before.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min);
+        let xmax = before.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max);
+        let ymin = before.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min);
+        let ymax = before.iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max);
+        for (action, horizontal) in [("flip_horizontal", true), ("flip_vertical", false)] {
+            ok(&mut a, "image_edit", json!({"doc":doc,"page":1,"image":1,"action":action}));
+            let after = corners(&a, doc);
+            for (old, new) in before.into_iter().zip(after) {
+                let expected = if horizontal { [xmin + xmax - old[0], old[1]] } else { [old[0], ymin + ymax - old[1]] };
+                if new.into_iter().zip(expected).any(|(actual, want)| (actual - want).abs() > 0.001) {
+                    failures.push(format!("rotation {rotation} {action}: corner {old:?} became {new:?}, expected {expected:?}"));
+                    break;
+                }
+            }
+            let (new_width, new_height, actual_pixels) = raster(&mut a, doc);
+            assert_eq!((new_width, new_height), (width, height));
+            let mut expected_pixels = Vec::new();
+            for y in 0..height {
+                for x in 0..width {
+                    let source = if horizontal { (y * width + width - 1 - x) * 4 } else { ((height - 1 - y) * width + x) * 4 };
+                    expected_pixels.extend_from_slice(&pixels[source..source + 4]);
+                }
+            }
+            if actual_pixels.iter().zip(&expected_pixels).any(|(actual, want)| actual.abs_diff(*want) > 1) {
+                failures.push(format!("rotation {rotation} {action}: raster flipped the wrong displayed axis"));
+            }
+            assert_ne!(actual_pixels, pixels, "the asymmetric image makes both flip axes observable");
+            ok(&mut a, "edit_undo", json!({"doc":doc}));
+            assert_eq!(corners(&a, doc), before, "one undo restores the original placement");
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn mixed_script_tools_normalize_but_undo_restores_the_exact_mixture() {
+    let dir = workdir("mixed-script-policy");
+    let mut a = auto(&dir);
+    for (script, mixed, uniform, plain) in [("superscript", "Q²2", "Q²²", "Q22"), ("subscript", "H₂2", "H₂₂", "H22")] {
+        let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+        ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"text":mixed,"size":14,"width":160}));
+        let paragraph =
+            |a: &mut Automation| ok(a, "text_paragraphs", json!({"doc":doc,"page":1}))["paragraphs"][0]["editor_text"].as_str().unwrap().to_owned();
+        assert_eq!(paragraph(&mut a), mixed);
+        let before = a.session().get(pdfcraft_engine::DocId(doc)).unwrap().bytes.clone();
+        let args = json!({"doc":doc,"page":1,"paragraph":1,"script":script});
+        let once = ok(&mut a, "text_script", args.clone());
+        assert_eq!(once["paragraph"]["text"], uniform);
+        assert_eq!(paragraph(&mut a), uniform);
+        ok(&mut a, "text_script", args);
+        assert_eq!(paragraph(&mut a), plain);
+        assert_ne!(plain, mixed, "normalization does not promise to recreate the original mixture");
+        ok(&mut a, "edit_undo", json!({"doc":doc}));
+        assert_eq!(paragraph(&mut a), uniform, "one Undo restores the preceding scripted text");
+        ok(&mut a, "edit_undo", json!({"doc":doc}));
+        assert_eq!(paragraph(&mut a), mixed, "Undo restores the exact initial Unicode mixture");
+        assert_eq!(
+            a.session().get(pdfcraft_engine::DocId(doc)).unwrap().bytes.as_ref(),
+            before.as_ref(),
+            "Undo also restores the exact prior document bytes"
+        );
+        ok(&mut a, "edit_redo", json!({"doc":doc}));
+        assert_eq!(paragraph(&mut a), uniform);
+        ok(&mut a, "edit_redo", json!({"doc":doc}));
+        assert_eq!(paragraph(&mut a), plain);
+        let path = format!("mixed-{script}.pdf");
+        ok(&mut a, "doc_save", json!({"doc":doc,"path":path}));
+        let reopened = ok(&mut a, "doc_open", json!({"path":path}))["doc"].as_u64().unwrap();
+        assert_eq!(page_text(&mut a, reopened)[0], plain);
+    }
 }

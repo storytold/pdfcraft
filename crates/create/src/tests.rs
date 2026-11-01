@@ -2487,3 +2487,115 @@ fn an_export_may_hold_twice_a_large_file() {
     assert_eq!(crate::extract::export_bytes(fixed / 2 + 1), fixed + 2);
     assert_eq!(crate::extract::export_bytes(usize::MAX), usize::MAX);
 }
+
+/// `/Decode` says which way round a stencil mask is, and its numbers can be given by reference. Read
+/// as absent, they gave the wrong answer, so the file came out a negative of what the page draws.
+#[test]
+fn a_stencil_masks_decode_array_can_hold_references() {
+    use pdfcraft_cos::Document;
+    let export = |decode: &str| {
+        let pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /XObject << /Im 4 0 R >> >> >> endobj\n\
+             4 0 obj << /Subtype /Image /ImageMask true /Width 8 /Height 1 /BitsPerComponent 1 /Decode {decode} /Filter /ASCIIHexDecode /Length 3 >> stream\nF0>\nendstream endobj\n\
+             5 0 obj 1 endobj\n6 0 obj 0 endobj\n7 0 obj 7 0 R endobj\n8 0 obj 9 0 R endobj\n9 0 obj 8 0 R endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF"
+        );
+        let doc = Document::open(std::sync::Arc::new(pdf.into_bytes())).unwrap();
+        let mut export = crate::extract::extract_images(&doc, &[0], 1);
+        assert_eq!(export.images.len(), 1, "{decode}: {:?}", export.skipped);
+        export.images.remove(0).data
+    };
+    let (inverted, identity) = (export("[1 0]"), export("[0 1]"));
+    assert_ne!(inverted, identity, "the two ways round differ");
+    for decode in ["[5 0 R 0]", "[1 6 0 R]", "[5 0 R 6 0 R]"] {
+        assert_eq!(export(decode), inverted, "{decode}");
+    }
+    for decode in ["[0 5 0 R]", "[6 0 R 1]", "[6 0 R 5 0 R]"] {
+        assert_eq!(export(decode), identity, "{decode}");
+    }
+    // A reference that only leads back to itself holds no number, and an end that is missing or isn't
+    // a number leaves the default mapping, whichever end it is.
+    for decode in ["[7 0 R 0]", "[1 7 0 R]", "[8 0 R 0]", "[1 8 0 R]", "[7 0 R 8 0 R]", "[1]", "[1 /Name]", "[/Name 0]"] {
+        assert_eq!(export(decode), identity, "{decode}");
+    }
+    // Equal ends aren't the two ways round either, and a number too long to hold reads as infinite.
+    assert_eq!(export("[1 1]"), identity);
+    assert_eq!(export(&format!("[{} 0]", "9".repeat(400))), identity);
+}
+
+/// A mask of other proportions than its image is scaled to it, however far apart they are: the
+/// first two shapes asked for 160 GB on the way, in a file of a kilobyte, and that aborted the
+/// process. The third would ask for 10 GB if it went across first, which is why the way round
+/// depends on the shapes. The value comes through, and masks of ordinary proportions, of the
+/// image's size and larger than it, are scaled as they always were.
+#[test]
+fn a_mask_of_other_proportions_than_its_image_is_scaled_without_the_memory_of_both() {
+    use pdfcraft_cos::{Dict, Document, Object, Stream};
+    let gray = |w: i64, h: i64, data: &[u8]| {
+        let mut d = Dict::new();
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(w));
+        d.set(b"Height".to_vec(), Object::Int(h));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        d.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+        Stream::from_raw(d, pdfcraft_filters::encode_flate(data))
+    };
+    let shapes = [
+        (100_000usize, 1usize, 1usize, 100_000usize),
+        (100_000, 64, 64, 100_000),
+        (1, 100_000, 100_000, 1),
+        (64, 1, 1, 64),
+        (3, 2, 6, 4),
+        (3, 2, 3, 2),
+        (6, 4, 3, 2),
+    ];
+    for (mask_w, mask_h, w, h) in shapes {
+        let mut doc = Document::new_empty();
+        let mask = doc.add(Object::Stream(gray(mask_w as i64, mask_h as i64, &vec![0x80; mask_w * mask_h])));
+        let mut image = gray(w as i64, h as i64, &vec![0x40; w * h]);
+        image.dict.set(b"SMask".to_vec(), Object::Ref(mask));
+        let image = doc.add(Object::Stream(image));
+        let (name, png) = crate::image_file(&doc, image).unwrap_or_else(|e| panic!("{mask_w} × {mask_h} on {w} × {h}: {e}"));
+        assert_eq!(name, "png");
+        let mut reader = ::png::Decoder::new(std::io::Cursor::new(&png)).read_info().unwrap();
+        let mut rgba = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut rgba).unwrap();
+        assert_eq!((info.width as usize, info.height as usize, info.color_type), (w, h, ::png::ColorType::Rgba));
+        assert!(rgba.as_chunks::<4>().0.iter().all(|p| p[3].abs_diff(0x80) <= 1), "{mask_w} × {mask_h} on {w} × {h}");
+    }
+}
+
+/// The long way round is for proportions far apart: up to a quarter over the larger image the
+/// buffer is no danger, and such a mask scales as it always did, to the byte. Noise, as a flat mask comes
+/// out the same either way.
+#[test]
+fn proportions_up_to_the_limit_scale_as_they_did() {
+    let noise = |w: u32, h: u32| {
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let px = (0..w * h)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                seed as u8
+            })
+            .collect();
+        image::GrayImage::from_raw(w, h, px).unwrap()
+    };
+    // Each exactly a quarter over the larger: the source's size, then the target's.
+    for (mw, mh, w, h) in [(25, 16, 10, 20), (20, 5, 16, 25)] {
+        let mask = noise(mw, mh);
+        let direct = image::imageops::resize(&mask, w, h, image::imageops::FilterType::Triangle);
+        assert_eq!(crate::extract::scaled(&mask, w, h), direct, "{mw} × {mh} to {w} × {h}");
+    }
+    // A step past it goes the long way, which is how to tell.
+    let mask = noise(25, 15);
+    let direct = image::imageops::resize(&mask, 10, 20, image::imageops::FilterType::Triangle);
+    assert_ne!(crate::extract::scaled(&mask, 10, 20), direct);
+    // A mask of its image's size comes through as it is.
+    let mask = noise(20, 10);
+    assert_eq!(crate::extract::scaled(&mask, 20, 10), mask);
+}

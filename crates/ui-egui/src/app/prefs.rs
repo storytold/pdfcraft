@@ -78,7 +78,7 @@ impl PdfCraftApp {
         let mut v = serde_json::json!({
             "side_panels": self.side_panels.to_json(self.left_open),
             "docking_right": self.right,
-            "recent": self.recent,
+            "recent": self.recent.iter().take(self.recent_limit).collect::<Vec<_>>(),
             "reopen_last_session": self.reopen_last_session,
             "restore_last_view": self.restore_last_view,
             "last_views": self.last_views_to_save(),
@@ -139,10 +139,13 @@ impl PdfCraftApp {
         });
         // Set apart: one more key inside the macro above passes serde_json's recursion limit.
         v["default_page_gaps"] = serde_json::Value::Bool(self.view_defaults.show_page_gaps);
+        v["recent_limit"] = serde_json::json!(self.recent_limit);
         v["fill_text_color"] = serde_json::json!(self.fill_text_color);
         v["redact_prefs"] = self.redact_defaults.to_json();
+        v["pinned_tools"] = serde_json::json!(self.pinned_tools);
         // Set outside json! above, which is at serde_json's macro recursion limit.
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
+        v["show_page_edge_shadows"] = self.show_page_edge_shadows.into();
         v["comment_tool_pinned"] = serde_json::Value::Bool(self.comment_prefs.pinned);
         v["show_secured_notice"] = serde_json::Value::Bool(self.show_secured_notice);
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
@@ -179,6 +182,11 @@ impl PdfCraftApp {
             let r: Vec<RecentFile> = r.into_iter().filter(|f| std::path::Path::new(&f.path).exists()).collect();
             self.recent = r;
         }
+        // Nonsense keeps the limit it had; settings from before the limit have none.
+        if let Some(limit) = v["recent_limit"].as_u64() {
+            self.recent_limit = usize::try_from(limit).map_or(crate::RECENT_FILES_MAX, |n| n.min(crate::RECENT_FILES_MAX));
+        }
+        self.recent.truncate(self.recent_limit);
         self.restore_layout_prefs(&v);
         self.restore_behavior_prefs(&v);
         self.restore_view_prefs(&v);
@@ -206,6 +214,18 @@ impl PdfCraftApp {
             self.show_secured_notice = on;
         }
         self.pinned.restore(&v["pinned_folders"]);
+        if let Some(items) = v.get("pinned_tools").and_then(serde_json::Value::as_array) {
+            let mut tools = Vec::new();
+            for item in items {
+                if let Some(id) = item.as_str()
+                    && pdfcraft_engine::catalog::group(id).is_some()
+                    && !tools.iter().any(|t| t == id)
+                {
+                    tools.push(id.to_string());
+                }
+            }
+            self.pinned_tools = tools;
+        }
         if let Ok(preference) = serde_json::from_value::<ThemePreference>(v["theme"].clone()) {
             self.set_theme_preference(preference);
         }
@@ -266,6 +286,9 @@ impl PdfCraftApp {
             && let Some(color) = fill_sign::valid_text_color(color)
         {
             self.fill_text_color = color;
+        }
+        if let Some(show) = v["show_page_edge_shadows"].as_bool() {
+            self.show_page_edge_shadows = show;
         }
         if let Some(prefs) = RedactPrefs::from_json(&v["redact_prefs"]) {
             self.redact_prefs = prefs.clone();

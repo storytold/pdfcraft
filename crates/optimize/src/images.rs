@@ -635,11 +635,27 @@ fn jpeg_samples(data: &[u8], w: usize, h: usize, n: usize, ycc: bool) -> Option<
 }
 
 pub(crate) fn resample(px: &[u8], n: usize, w: u32, h: u32, nw: u32, nh: u32) -> Option<Vec<u8>> {
-    use image::imageops::{FilterType, resize};
     Some(match n {
-        1 => resize(&image::GrayImage::from_raw(w, h, px.to_vec())?, nw, nh, FilterType::CatmullRom).into_raw(),
-        _ => resize(&image::RgbImage::from_raw(w, h, px.to_vec())?, nw, nh, FilterType::CatmullRom).into_raw(),
+        1 => scaled(&image::GrayImage::from_raw(w, h, px.to_vec())?, nw, nh).into_raw(),
+        _ => scaled(&image::RgbImage::from_raw(w, h, px.to_vec())?, nw, nh).into_raw(),
     })
+}
+
+/// `img` scaled to `w` × `h`. Scaling goes down first, through a buffer of `img`'s width by `h` at
+/// 16 bytes a pixel, which a soft mask of other proportions than its image can make larger than
+/// any machine: 1,000,000 × 1 resampled to 4 × 100,000 asks for 1.6 TB, and that aborts the
+/// process. Such a one is scaled across first, which holds no more pixels than one of the two has.
+/// Past a quarter over the larger of them, so that rounding leaves a picture of the same shape as
+/// it was.
+fn scaled<P: image::Pixel<Subpixel = u8> + 'static>(img: &image::ImageBuffer<P, Vec<u8>>, w: u32, h: u32) -> image::ImageBuffer<P, Vec<u8>> {
+    use image::imageops::{FilterType, resize};
+    let (iw, ih) = (u64::from(img.width()), u64::from(img.height()));
+    let largest = (iw * ih).max(u64::from(w) * u64::from(h));
+    if (iw * u64::from(h)).saturating_mul(4) > largest.saturating_mul(5) {
+        resize(&resize(img, w, img.height(), FilterType::CatmullRom), w, h, FilterType::CatmullRom)
+    } else {
+        resize(img, w, h, FilterType::CatmullRom)
+    }
 }
 
 fn jpeg(px: &[u8], n: usize, w: u32, h: u32, quality: u8) -> Option<Vec<u8>> {
@@ -1653,6 +1669,66 @@ mod dimension_tests {
         assert!(pixels(&Document::new_empty(), &stream(10, 10), 1, &mut ImageBudget::with_work(u64::MAX)).is_none());
         assert_eq!(DECODED_PIXELS.with(|c| c.get()), 0, "pixels decoded");
         assert_eq!(pixels(&Document::new_empty(), &stream(1000, 1000), 1, &mut ImageBudget::with_work(u64::MAX)).map(|p| p.len()), Some(1000 * 1000));
+    }
+
+    /// Resampling goes through no more than one of the two sizes holds, whatever their proportions:
+    /// the first three shapes asked for 160 GB and more on the way, and that aborted the process.
+    /// The last two would ask for 10 GB and 30 GB if they went across first, which is why the way
+    /// round depends on the shapes. A flat picture stays flat, and pictures of ordinary proportions
+    /// resample as they always did.
+    #[test]
+    fn resampling_across_proportions_takes_the_memory_of_neither_product() {
+        let shapes = [
+            (100_000u32, 1u32, 1u32, 100_000u32, 1usize),
+            (1_000_000, 1, 4, 100_000, 1),
+            (100_000, 1, 1, 100_000, 3),
+            (1, 100_000, 100_000, 1, 1),
+            (1, 100_000, 100_000, 1, 3),
+        ];
+        for (w, h, nw, nh, n) in shapes {
+            let px = vec![0x60; (w * h) as usize * n];
+            let out = resample(&px, n, w, h, nw, nh).unwrap();
+            assert_eq!(out.len(), (nw * nh) as usize * n);
+            assert!(out.iter().all(|v| v.abs_diff(0x60) <= 1), "{w} × {h} to {nw} × {nh}");
+        }
+        let (w, h, nw, nh) = (40u32, 30u32, 20u32, 15u32);
+        let px: Vec<u8> = (0..w * h).map(|i| (i * 7 % 251) as u8).collect();
+        let image = image::GrayImage::from_raw(w, h, px.clone()).unwrap();
+        let direct = image::imageops::resize(&image, nw, nh, image::imageops::FilterType::CatmullRom).into_raw();
+        assert_eq!(resample(&px, 1, w, h, nw, nh).unwrap(), direct, "as it was");
+    }
+
+    /// The long way round is for proportions far apart: up to a quarter over the larger picture the
+    /// buffer is no danger, and that scales as it always did, to the byte. Noise, as a flat picture comes
+    /// out the same either way.
+    #[test]
+    fn proportions_up_to_the_limit_resample_as_they_did() {
+        let noise = |w: u32, h: u32| -> Vec<u8> {
+            let mut seed = 0x2545_F491_4F6C_DD1Du64;
+            (0..w * h)
+                .map(|_| {
+                    seed ^= seed << 13;
+                    seed ^= seed >> 7;
+                    seed ^= seed << 17;
+                    seed as u8
+                })
+                .collect()
+        };
+        let direct = |px: &[u8], w, h, nw, nh| {
+            let image = image::GrayImage::from_raw(w, h, px.to_vec()).unwrap();
+            image::imageops::resize(&image, nw, nh, image::imageops::FilterType::CatmullRom).into_raw()
+        };
+        // Each exactly a quarter over the larger: the source's size, then the target's.
+        for (w, h, nw, nh) in [(25, 16, 10, 20), (20, 5, 16, 25)] {
+            let px = noise(w, h);
+            assert_eq!(resample(&px, 1, w, h, nw, nh).unwrap(), direct(&px, w, h, nw, nh), "{w} × {h} to {nw} × {nh}");
+        }
+        // A step past it goes the long way, which is how to tell.
+        let px = noise(25, 15);
+        assert_ne!(resample(&px, 1, 25, 15, 10, 20).unwrap(), direct(&px, 25, 15, 10, 20));
+        // A picture of the size asked for comes through as it is.
+        let px = noise(20, 10);
+        assert_eq!(resample(&px, 1, 20, 10, 20, 10).unwrap(), px);
     }
 }
 

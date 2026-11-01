@@ -802,6 +802,472 @@ fn indexed_palettes_over_lab_keep_their_colours() {
     }
     assert!(indexed[0] > 180, "the palette red must not render near black: {indexed:?}");
 }
+
+/// A Pattern space's underlying space is any other, named or by reference as well as a direct array
+/// (ISO 32000-2 §8.7.3.3). It was skipped when it was a name or a reference, so an uncoloured tiling
+/// pattern took its components as RGB: a CMYK cyan drew red, and a grey of 0.5 dark red. Each is
+/// compared with the same colour painted without the pattern.
+#[test]
+fn an_uncoloured_pattern_uses_its_underlying_space_in_every_form() {
+    use super::*;
+    let render = |space: &str, content: &str| -> [u8; 4] {
+        let pattern = "0 0 10 10 re f";
+        let bytes = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /ColorSpace << /C {space} >> /Pattern << /P 5 0 R >> >> /Contents 4 0 R >> endobj\n\
+                 4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+                 5 0 obj << /Type /Pattern /PatternType 1 /PaintType 2 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources << >> /Length {} >> stream\n{pattern}\nendstream endobj\n\
+                 6 0 obj /DeviceCMYK endobj\n\
+                 7 0 obj /DeviceGray endobj\n\
+                 8 0 obj [/Indexed /DeviceRGB 1 <00FF00FF0000>] endobj\n\
+                 9 0 obj [/Pattern /DeviceCMYK] endobj\n\
+                 trailer << /Root 1 0 R >>\n%%EOF",
+            content.len(),
+            pattern.len()
+        )
+        .into_bytes();
+        let page = PageRenderer::new(Arc::new(bytes), RenderConfig::default()).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+        });
+        assert!(page.error.is_none(), "{space}: {:?}", page.error);
+        let start = (100 * page.width as usize + 100) * 4;
+        let mut pixel = [0; 4];
+        pixel.copy_from_slice(page.rgba.get(start..start + 4).expect("centre pixel"));
+        pixel
+    };
+    let fill = "0 0 200 200 re f";
+    let cyan = render("/DeviceCMYK", &format!("/DeviceCMYK cs 1 0 0 0 sc {fill}"));
+    let grey = render("/DeviceGray", &format!("/DeviceGray cs 0.5 sc {fill}"));
+    let green = render("8 0 R", &format!("/C cs 0 sc {fill}"));
+    assert_ne!(cyan[0], 255, "cyan has no red");
+    for (space, colour, want) in [
+        ("[/Pattern /DeviceCMYK]", "1 0 0 0", cyan),
+        ("[/Pattern 6 0 R]", "1 0 0 0", cyan),
+        ("9 0 R", "1 0 0 0", cyan),
+        ("[/Pattern /DeviceGray]", ".5", grey),
+        ("[/Pattern 7 0 R]", ".5", grey),
+        ("[/Pattern 8 0 R]", "0", green),
+        ("[/Pattern [/Indexed /DeviceRGB 1 <00FF00FF0000>]]", "0", green),
+    ] {
+        assert_eq!(render(space, &format!("/C cs {colour} /P scn {fill}")), want, "{space}");
+    }
+}
+
+/// A colour space's parts can refer back to the space, now that a Pattern's underlying space is
+/// followed as an Indexed space's base always was. A file made so ends as a space that can't be
+/// read, and the page draws what it can.
+#[test]
+fn a_colour_space_that_refers_to_itself_ends() {
+    use super::*;
+    let content = "1 0 0 rg 0 0 100 100 re f /C cs 0 sc 100 100 100 100 re f";
+    for (space, objects) in [
+        ("5 0 R", "5 0 obj [/Pattern 5 0 R] endobj"),
+        ("5 0 R", "5 0 obj [/Pattern 6 0 R] endobj 6 0 obj [/Pattern 5 0 R] endobj"),
+        ("5 0 R", "5 0 obj [/Pattern 6 0 R] endobj 6 0 obj [/Indexed 5 0 R 1 <0011>] endobj"),
+        ("5 0 R", "5 0 obj [/Indexed 5 0 R 1 <0011>] endobj"),
+    ] {
+        let bytes = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /ColorSpace << /C {space} >> >> /Contents 4 0 R >> endobj\n\
+                 4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+                 {objects}\n\
+                 trailer << /Root 1 0 R >>\n%%EOF",
+            content.len()
+        )
+        .into_bytes();
+        let page = PageRenderer::new(Arc::new(bytes), RenderConfig::default()).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+        });
+        assert!(page.error.is_none(), "{objects}: {:?}", page.error);
+        let start = ((150 * page.width as usize) + 50) * 4;
+        assert_eq!(page.rgba.get(start..start + 4), Some(&[255, 0, 0, 255][..]), "{objects}: what comes before it drew");
+    }
+}
+
+/// A chain of colour spaces repeats no object, so what ends a cycle lets it through. Each way one
+/// space names another ends, at a depth that leaves room on the stack, and the page draws what it
+/// can.
+#[test]
+fn a_chain_of_colour_spaces_ends() {
+    use super::*;
+    const LINKS: u32 = 20_000;
+    let content = "1 0 0 rg 0 0 100 100 re f /C cs 0 sc 100 100 100 100 re f";
+    let link: [(&str, &dyn Fn(u32) -> String); 5] = [
+        ("[/Pattern 10 0 R]", &|next| format!("[/Pattern {next} 0 R]")),
+        ("10 0 R", &|next| format!("[/Indexed {next} 0 R 1 <0011>]")),
+        ("10 0 R", &|next| format!("[/Separation /A {next} 0 R 5 0 R]")),
+        ("10 0 R", &|next| format!("[/DeviceN [/A] {next} 0 R 5 0 R]")),
+        ("[/ICCBased 10 0 R]", &|next| format!("<< /N 1 /Alternate [/ICCBased {next} 0 R] /Length 1 >> stream\nx\nendstream")),
+    ];
+    for (space, link) in link {
+        let objects: String = (0..LINKS).map(|i| format!("{} 0 obj {} endobj\n", 10 + i, link(11 + i))).collect();
+        let bytes = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /ColorSpace << /C {space} >> >> /Contents 4 0 R >> endobj\n\
+                 4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+                 5 0 obj << /FunctionType 2 /Domain [0 1] /N 1 /C0 [0] /C1 [1] >> endobj\n\
+                 {objects}{} 0 obj /DeviceGray endobj\n\
+                 trailer << /Root 1 0 R >>\n%%EOF",
+            content.len(),
+            10 + LINKS
+        )
+        .into_bytes();
+        let page = PageRenderer::new(Arc::new(bytes), RenderConfig::default()).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+        });
+        assert!(page.error.is_none(), "{}: {:?}", link(11), page.error);
+        let start = ((150 * page.width as usize) + 50) * 4;
+        assert_eq!(page.rgba.get(start..start + 4), Some(&[255, 0, 0, 255][..]), "{}: what comes before it drew", link(11));
+    }
+}
+
+/// A file nests colour spaces five levels at most, and the limit is well past that: 31 spaces over
+/// a device space are read and draw their colour, and with one more the space isn't read.
+#[test]
+fn colour_spaces_are_read_to_the_limit_of_their_nesting() {
+    use super::*;
+    let content = "/C cs 1 scn 0 0 200 200 re f";
+    let green = |levels: u32| {
+        let objects: String = (0..levels - 1).map(|i| format!("{} 0 obj [/Separation /A {} 0 R 5 0 R] endobj\n", 10 + i, 11 + i)).collect();
+        let bytes = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /ColorSpace << /C 10 0 R >> >> /Contents 4 0 R >> endobj\n\
+                 4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+                 5 0 obj << /FunctionType 2 /Domain [0 1] /N 1 /C0 [0] /C1 [1] >> endobj\n\
+                 6 0 obj << /FunctionType 2 /Domain [0 1] /N 1 /C0 [1 1 1] /C1 [0 1 0] >> endobj\n\
+                 {objects}{} 0 obj [/Separation /A /DeviceRGB 6 0 R] endobj\n\
+                 trailer << /Root 1 0 R >>\n%%EOF",
+            content.len(),
+            10 + levels - 1
+        )
+        .into_bytes();
+        let page = PageRenderer::new(Arc::new(bytes), RenderConfig::default()).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+        });
+        assert!(page.error.is_none(), "{levels}: {:?}", page.error);
+        page.rgba.get(..4) == Some(&[0, 255, 0, 255][..])
+    };
+    assert!(green(1), "a space on its own");
+    assert!(green(5), "as deep as a legal file goes");
+    assert!(green(31), "the deepest that is read");
+    assert!(!green(32), "one past it");
+}
+
+/// A page with the colour space resources `spaces` and the other objects `objects`, drawn with
+/// `content`. Objects 5 and 6 are tint transforms: the tint itself, and paper to green.
+fn page_with_colour_spaces(spaces: &str, objects: &str, content: &str) -> super::RenderedPage {
+    use super::*;
+    let bytes = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /ColorSpace << {spaces} >> >> /Contents 4 0 R >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+             5 0 obj << /FunctionType 2 /Domain [0 1] /N 1 /C0 [0] /C1 [1] >> endobj\n\
+             6 0 obj << /FunctionType 2 /Domain [0 1] /N 1 /C0 [1 1 1] /C1 [0 1 0] >> endobj\n\
+             {objects}\n\
+             trailer << /Root 1 0 R >>\n%%EOF",
+        content.len()
+    )
+    .into_bytes();
+    PageRenderer::new(Arc::new(bytes), RenderConfig::default()).render(RenderRequest {
+        page: 0,
+        kind: RequestKind::Pixels,
+        tile: None,
+        scale: 1.0,
+        tag: 0,
+        preview: false,
+    })
+}
+
+/// What an ICC profile reads as is kept. If what it falls back to were kept with it, a page
+/// selecting the last of a chain first would build each space on the one before, and no read
+/// would be deep: 20,000 levels past the limit, for whatever walks the space to paint with it.
+#[test]
+fn a_chain_built_on_spaces_already_read_ends() {
+    const LINKS: u32 = 20_000;
+    let selected: String = (0..LINKS).rev().map(|i| format!("/C{i} cs\n")).collect();
+    let content = format!("1 0 0 rg 0 0 100 100 re f\n{selected}0 sc 100 100 100 100 re f");
+    let spaces: String = (0..LINKS).map(|i| format!("/C{i} [/ICCBased {} 0 R] ", 10 + i)).collect();
+    let around: [&dyn Fn(&str) -> String; 4] = [
+        &|next| format!("[/Pattern {next}]"),
+        &|next| format!("[/Indexed {next} 1 <0011>]"),
+        &|next| format!("[/Separation /A {next} 5 0 R]"),
+        &|next| format!("[/DeviceN [/A] {next} 5 0 R]"),
+    ];
+    for around in around {
+        let mut objects: String = (0..LINKS)
+            .map(|i| {
+                let alternate = around(&format!("[/ICCBased {} 0 R]", 11 + i));
+                format!("{} 0 obj << /N 1 /Alternate {alternate} /Length 1 >> stream\nx\nendstream endobj\n", 10 + i)
+            })
+            .collect();
+        objects.push_str(&format!("{} 0 obj << /N 1 /Length 1 >> stream\nx\nendstream endobj\n", 10 + LINKS));
+        let page = page_with_colour_spaces(&spaces, &objects, &content);
+        assert!(page.error.is_none(), "{}: {:?}", around("next"), page.error);
+        let start = ((150 * page.width as usize) + 50) * 4;
+        assert_eq!(page.rgba.get(start..start + 4), Some(&[255, 0, 0, 255][..]), "{}: what comes before it drew", around("next"));
+    }
+}
+
+/// A profile met at the limit can't read its alternate there, which says nothing of a read nearer
+/// the top: the space kept from the first read isn't what the second gets.
+#[test]
+fn a_profile_read_at_the_limit_keeps_its_alternate_for_a_read_nearer_the_top() {
+    let chain: String = (0..31).map(|i| format!("{} 0 obj [/Separation /A {} 0 R 5 0 R] endobj\n", 10 + i, 11 + i)).collect();
+    let objects = format!(
+        "{chain}41 0 obj [/ICCBased 7 0 R] endobj\n\
+         7 0 obj << /N 1 /Alternate [/Separation /A /DeviceRGB 6 0 R] /Length 1 >> stream\nx\nendstream endobj\n"
+    );
+    let page = page_with_colour_spaces("/Deep 10 0 R /Near 41 0 R", &objects, "/Deep cs /Near cs 1 scn 0 0 200 200 re f");
+    assert!(page.error.is_none(), "{:?}", page.error);
+    assert_eq!(page.rgba.get(..4), Some(&[0, 255, 0, 255][..]));
+}
+
+/// An image's `/Decode` pairs can have a reference at the start of a pair. Its read took that for
+/// the whole pair, found no pair there, and ended the array, so the image didn't draw at all.
+#[test]
+fn a_decode_array_with_references_in_it_is_read() {
+    use super::*;
+    let render = |width_of: &str, decode: &str, space: &str, data: &str| -> [u8; 4] {
+        let content = "1 0 0 rg 0 0 200 200 re f q 200 0 0 200 0 0 cm /Im Do Q";
+        let bytes = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /XObject << /Im 5 0 R >> >> /Contents 4 0 R >> endobj\n\
+                 4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+                 5 0 obj << /Type /XObject /Subtype /Image /Width {width_of} /Height 1 /BitsPerComponent 8 /ColorSpace {space} /Decode {decode} /Filter /ASCIIHexDecode /Length {} >> stream\n{data}\nendstream endobj\n\
+                 6 0 obj 1 endobj\n\
+                 7 0 obj 0 endobj\n\
+                 8 0 obj 8 0 R endobj\n\
+                 9 0 obj 10 0 R endobj\n\
+                 10 0 obj 9 0 R endobj\n\
+                 trailer << /Root 1 0 R >>\n%%EOF",
+            content.len(),
+            data.len()
+        )
+        .into_bytes();
+        let page = PageRenderer::new(Arc::new(bytes), RenderConfig::default()).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+        });
+        assert!(page.error.is_none(), "{decode}: {:?}", page.error);
+        let start = (100 * page.width as usize + 100) * 4;
+        let mut pixel = [0; 4];
+        pixel.copy_from_slice(page.rgba.get(start..start + 4).expect("centre pixel"));
+        pixel
+    };
+    let grey = render("1", "[1 0]", "/DeviceGray", "40>");
+    assert_eq!(grey, [191, 191, 191, 255], "the direct form inverts the sample");
+    for decode in ["[6 0 R 0]", "[1 7 0 R]", "[6 0 R 7 0 R]"] {
+        assert_eq!(render("1", decode, "/DeviceGray", "40>"), grey, "{decode}");
+    }
+    let rgb = render("1", "[1 0 1 0 1 0]", "/DeviceRGB", "204060>");
+    for decode in ["[6 0 R 0 1 0 1 0]", "[1 0 6 0 R 0 1 0]", "[1 0 1 0 6 0 R 0]", "[6 0 R 7 0 R 6 0 R 7 0 R 6 0 R 7 0 R]"] {
+        assert_eq!(render("1", decode, "/DeviceRGB", "204060>"), rgb, "{decode}");
+    }
+    // A reference that only leads back to itself holds no number, and reads as one that names
+    // nothing does.
+    let missing = render("1", "[99 0 R 0]", "/DeviceGray", "40>");
+    for decode in ["[8 0 R 0]", "[1 8 0 R]", "[9 0 R 0]", "[1 9 0 R]", "[8 0 R 9 0 R]"] {
+        assert_eq!(render("1", decode, "/DeviceGray", "40>"), missing, "{decode}");
+    }
+}
+
+/// An object that holds only a reference stands for what that names, stored on its own or in an
+/// object stream. Read as a number it was the reference's own object number: here 8 names 7, 7
+/// names 6 and 6 holds 1, and that read as 7, which drew white. A chain past the limit, and so a
+/// cycle, reads as a missing object does.
+#[test]
+fn a_reference_to_a_reference_is_what_it_names() {
+    use super::*;
+    let file = |decode: &str, objects: &str| -> Vec<u8> {
+        let content = "1 0 0 rg 0 0 200 200 re f q 200 0 0 200 0 0 cm /Im Do Q";
+        format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /XObject << /Im 5 0 R >> >> /Contents 4 0 R >> endobj\n\
+                 4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+                 5 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceGray /Decode {decode} /Filter /ASCIIHexDecode /Length 3 >> stream\n40>\nendstream endobj\n\
+                 {objects}\n\
+                 trailer << /Root 1 0 R >>\n%%EOF",
+            content.len()
+        )
+        .into_bytes()
+    };
+    let draw = |bytes: Vec<u8>| -> [u8; 4] {
+        let page = PageRenderer::new(Arc::new(bytes), RenderConfig::default()).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+        });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        let start = (100 * page.width as usize + 100) * 4;
+        let mut pixel = [0; 4];
+        pixel.copy_from_slice(page.rgba.get(start..start + 4).expect("centre pixel"));
+        pixel
+    };
+    let grey = draw(file("[1 0]", ""));
+    assert_eq!(grey, [191, 191, 191, 255]);
+
+    let chain = "6 0 obj 1 endobj 7 0 obj 6 0 R endobj 8 0 obj 7 0 R endobj";
+    assert_eq!(draw(file("[8 0 R 0]", chain)), grey, "stored on their own");
+    let doc = pdfcraft_cos::Document::open(Arc::new(file("[8 0 R 0]", chain))).unwrap();
+    let packed = pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap();
+    assert!(packed.windows(7).any(|w| w == b"/ObjStm"), "the save packs them");
+    assert_eq!(draw(packed), grey, "stored in an object stream");
+    assert_eq!(draw(file("9 0 R", "9 0 obj 10 0 R endobj 10 0 obj [1 0] endobj")), grey, "not only numbers");
+    let commented = "6 0 obj 1 endobj 7 0 obj 6 %c\n0 R endobj 8 0 obj 7 0 %c\nR endobj";
+    assert_eq!(draw(file("[8 %c\n0 R 0]", commented)), grey, "a comment counts as white space");
+
+    let links = |n: usize| -> String {
+        let links: String = (0..n).map(|i| format!("{} 0 obj {} 0 R endobj\n", 10 + i, 11 + i)).collect();
+        format!("{links}{} 0 obj 1 endobj", 10 + n)
+    };
+    let missing = draw(file("[99 0 R 0]", ""));
+    assert_ne!(missing, grey);
+    assert_eq!(draw(file("[10 0 R 0]", &links(32))), grey, "32 references are followed");
+    assert_eq!(draw(file("[10 0 R 0]", &links(33))), missing, "33 aren't");
+    assert_eq!(draw(file("[6 0 R 0]", "6 0 obj 6 0 R endobj")), missing, "nor is a cycle");
+}
+
+/// A function's `/Encode`, `/Decode`, `/Domain` and `/Range` are read a pair at a time too, so they
+/// lost a reference at the start of a pair the same way, and the array with it. Each form is compared
+/// with the direct one, which differs from the identity so the array is shown to count.
+#[test]
+fn a_functions_arrays_can_start_with_a_reference() {
+    use super::*;
+    let render = |function: String| -> [u8; 4] {
+        let content = "/C cs 0.25 sc 0 0 200 200 re f";
+        let bytes = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /ColorSpace << /C [/Separation /X /DeviceRGB 9 0 R] >> >> /Contents 4 0 R >> endobj\n\
+                 4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+                 5 0 obj 1 endobj\n6 0 obj 0 endobj\n\
+                 7 0 obj << /FunctionType 2 /Domain [0 1] /C0 [0 0 0] /C1 [1 0 0] /N 1 >> endobj\n\
+                 8 0 obj << /FunctionType 2 /Domain [0 1] /C0 [0 1 0] /C1 [0 0 1] /N 1 >> endobj\n\
+                 9 0 obj {function} endobj\n\
+                 trailer << /Root 1 0 R >>\n%%EOF",
+            content.len()
+        )
+        .into_bytes();
+        let page = PageRenderer::new(Arc::new(bytes), RenderConfig::default()).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+        });
+        assert!(page.error.is_none(), "{function}: {:?}", page.error);
+        let start = (100 * page.width as usize + 100) * 4;
+        let mut pixel = [0; 4];
+        pixel.copy_from_slice(page.rgba.get(start..start + 4).expect("centre pixel"));
+        pixel
+    };
+    let sampled = |encode: &str| {
+        format!(
+            "<< /FunctionType 0 /Size [2] /BitsPerSample 8 /Domain [0 1] /Range [0 1 0 1 0 1] /Encode {encode} /Filter /ASCIIHexDecode /Length 13 >> stream\n000000FF8040>\nendstream"
+        )
+    };
+    let stitched = |encode: &str| format!("<< /FunctionType 3 /Domain [0 1] /Functions [7 0 R 8 0 R] /Bounds [.5] /Encode {encode} >>");
+    assert_ne!(render(sampled("[1 0]")), render(sampled("[0 1]")), "/Encode counts");
+    assert_eq!(render(sampled("[5 0 R 0]")), render(sampled("[1 0]")), "a sampled function");
+    assert_ne!(render(stitched("[1 0 0 1]")), render(stitched("[0 1 0 1]")), "/Encode counts");
+    assert_eq!(render(stitched("[5 0 R 0 0 1]")), render(stitched("[1 0 0 1]")), "a stitching function");
+}
+
+/// The lookup table of an `/Indexed` space is a string or a stream, and any part of the space can
+/// be indirect (ISO 32000-2 §8.6.6.3, §7.3.10). A table in an indirect string was lost: reading it
+/// as a stream used up the reference, so the space couldn't be read and drew in grey.
+#[test]
+fn an_indexed_lookup_table_is_read_in_every_legal_form() {
+    use super::*;
+    let render = |space: &str, content: &str, extra: &str| -> [u8; 4] {
+        let bytes = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /ColorSpace << /I {space} >> /XObject << /Im 9 0 R >> >> /Contents 4 0 R >> endobj\n\
+                 4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+                 5 0 obj <000000FF0000> endobj\n\
+                 6 0 obj << /Filter /ASCIIHexDecode /Length 13 >> stream\n000000FF0000>\nendstream endobj\n\
+                 7 0 obj /DeviceRGB endobj\n\
+                 8 0 obj 1 endobj\n\
+                 {extra}\n\
+                 trailer << /Root 1 0 R >>\n%%EOF",
+            content.len()
+        )
+        .into_bytes();
+        let page = PageRenderer::new(Arc::new(bytes), RenderConfig::default()).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+        });
+        assert!(page.error.is_none(), "{space}: {:?}", page.error);
+        let start = (100 * page.width as usize + 100) * 4;
+        let mut pixel = [0; 4];
+        pixel.copy_from_slice(page.rgba.get(start..start + 4).expect("centre pixel"));
+        pixel
+    };
+    let paint = "/I cs 1 sc 0 0 200 200 re f";
+    // One byte of index 1, as an image in the same space: the image path reads it too.
+    let image = "9 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace [/Indexed /DeviceRGB 1 5 0 R] /Filter /ASCIIHexDecode /Length 3 >> stream\n01>\nendstream endobj";
+    for space in [
+        "[/Indexed /DeviceRGB 1 <000000FF0000>]",
+        "[/Indexed /DeviceRGB 1 5 0 R]",
+        "[/Indexed /DeviceRGB 1 6 0 R]",
+        "[/Indexed 7 0 R 8 0 R 5 0 R]",
+        "[/I /DeviceRGB 1 5 0 R]",
+    ] {
+        assert_eq!(render(space, paint, ""), [255, 0, 0, 255], "{space}");
+    }
+    let indirect = "10 0 obj [/Indexed /DeviceRGB 1 5 0 R] endobj";
+    assert_eq!(render("10 0 R", paint, indirect), [255, 0, 0, 255], "the whole space by reference");
+    assert_eq!(render("/DeviceRGB", "q 200 0 0 200 0 0 cm /Im Do Q", image), [255, 0, 0, 255], "an image's table by reference");
+    // What's neither table form leaves the space unreadable, as a missing table does.
+    for space in ["[/Indexed /DeviceRGB 1 8 0 R]", "[/Indexed /DeviceRGB 1 99 0 R]", "[/Indexed /DeviceRGB 1]"] {
+        let _ = render(space, paint, "");
+    }
+    // So does a table that only leads back to itself, and the read of it ends.
+    let cycle = "11 0 obj 11 0 R endobj 12 0 obj 13 0 R endobj 13 0 obj 12 0 R endobj";
+    for space in ["[/Indexed /DeviceRGB 1 11 0 R]", "[/Indexed /DeviceRGB 1 12 0 R]"] {
+        let _ = render(space, paint, cycle);
+    }
+}
 #[test]
 fn watchdog_skips_a_stuck_page_and_keeps_rendering() {
     use super::*;
@@ -4669,6 +5135,86 @@ fn jbig2_symbol_dictionaries_that_never_advance_terminate() {
         assert!(page.error.is_none(), "{what}: {:?}", page.error);
         assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "{what}: the rest of the page draws");
     }
+}
+
+/// A JBIG2 stream can put a region, a reference or a symbol at the very end of what an `i32` holds,
+/// where adding to it overflowed: a panic wherever overflow is checked, a build's own tests included.
+/// A region or a symbol out there is off the page, so nothing draws. Vendored hayro-jbig2 patch: the arithmetic wraps, as
+/// a release build's did, or in `Bitmap::combine` saturates, which comes to the same. Three of the text
+/// streams are arithmetic-coded: one symbol on a strip of -2^31 + 1, with its bottom left as the corner
+/// placed, one on a strip of -2^31, and one refined by an offset of `i32::MIN`, which reads nothing of
+/// the old symbol and still draws. Two are Huffman-coded, each with its first S at an offset of
+/// 0x7FFFFFFF on a table's 32-bit range line, past what an `i32` holds, and are refused further on.
+#[test]
+fn jbig2_placements_at_the_end_of_an_i32_draw_nothing() {
+    const FAR_CORNER: &str = "0000000030000100000013000000100000000c0000000000000000420000000000010000010000001e000003fffdff02fefefe00000001000000014fdc3ce0205df55c36bfffac00000002062001010000001f000000100000000c000000000000000004000000000001969747cbe88bffac";
+    const STRIP: &str = "0000000030000100000013000000100000000c0000000000000000420000000000010000010000001e000003fffdff02fefefe00000001000000014fdda25e46956d3e0d3fffac00000002062001010000001f000000100000000c000000000000000004001000000001969747cbe5dbffac";
+    const UPPER_LINE: &str = "0000000030000100000013000000100000000c0000000000000000420000000000010000010000001d000003fffdff02fefefe00000001000000014fdaea38c99641e0c8ffac000000020620010100000038000000100000000c00000000000000000400110000000000010100000000000000000000000000000000003f7fffffff0000000000000000";
+    const LOWER_LINE: &str = "0000000030000100000013000000100000000c0000000000000000420000000000010000010000001d000003fffdff02fefefe00000001000000014fdaea38c99641e0c8ffac000000020620010100000038000000100000000c00000000000000000400110000000000010100000000000000000000000000000000003e7fffffff0000000000000000";
+    const OFFSET: &str = "0000000030000100000013000000100000000c0000000000000000420000000000010000010000001e000003fffdff02fefefe00000001000000014fdda9172f614a037ddfffac0000000206200101000000260000000800000006000000000000000004801200000001a9695690b3e5f44a2f105e30d3ffac";
+    let segment = |number: u32, kind: u8, data: &[u8]| {
+        let mut out = number.to_be_bytes().to_vec();
+        out.extend_from_slice(&[kind, 0, 1]);
+        out.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
+        out.extend_from_slice(data);
+        out
+    };
+    let side = 8u32.to_be_bytes();
+    let page = |width: u32| {
+        let mut page = [width.to_be_bytes(), side].concat();
+        page.extend_from_slice(&[0; 8]); // resolution
+        page.extend_from_slice(&[0, 0, 0]); // flags, striping
+        segment(0, 48, &page)
+    };
+    let region = |width: u32, kind: u8, x: u32, y: u32, header: &[u8]| {
+        let mut region = [width.to_be_bytes(), side, x.to_be_bytes(), y.to_be_bytes()].concat();
+        region.push(0); // combination operator
+        region.extend_from_slice(header);
+        region.extend_from_slice(&[0x5a; 64]);
+        [page(width), segment(1, kind, &region)].concat()
+    };
+    let generic = |x, y| region(8, 38, x, y, &[0, 3, 0xff, 0xfd, 0xff, 2, 0xfe, 0xfe, 0xfe]); // template 0, AT pixels
+    // Immediate refinements of the page: template 0 with its usual AT pixels, with others, with typical
+    // prediction, and template 1.
+    let refined = |width, x, y, form: usize| {
+        region(width, 42, x, y, [&[0, 0xff, 0xff, 0xff, 0xff][..], &[0, 0xff, 0xff, 127, 127], &[2, 0xff, 0xff, 0xff, 0xff], &[1]][form])
+    };
+    let hex = |text: &str| (0..text.len() / 2).map(|i| u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).unwrap()).collect::<Vec<u8>>();
+    let ink = |jbig2: Vec<u8>, width: u32, height: u32| {
+        let content = b"q 20 0 0 20 5 5 cm /Im1 Do Q";
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n".to_vec();
+        pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n", content.len()).as_bytes());
+        pdf.extend_from_slice(content);
+        pdf.extend_from_slice(b"\nendstream endobj\n");
+        pdf.extend_from_slice(
+            format!("5 0 obj << /Type /XObject /Subtype /Image /Width {width} /Height {height} /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode /Length {} >> stream\n", jbig2.len())
+                .as_bytes(),
+        );
+        pdf.extend_from_slice(&jbig2);
+        pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+        let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        page.rgba.as_chunks::<4>().0.iter().filter(|p| p[0] < 128).count()
+    };
+    assert!(ink(generic(2, 0), 8, 8) > 0, "a region on the page draws");
+    for form in 0..4 {
+        assert!(ink(refined(8, 0, 0, form), 8, 8) > 0, "a refinement on the page draws: {form}");
+    }
+    let end = 0x7FFF_FFFFu32;
+    for (x, y) in [(end, 0), (0, end), (end - 7, 0), (0, end - 7), (end - 129, 0), (0, end - 129)] {
+        assert_eq!(ink(generic(x, y), 8, 8), 0, "generic at {x:#x}, {y:#x}");
+        for form in 0..4 {
+            assert_eq!(ink(refined(8, x, y, form), 8, 8), 0, "refinement {form} at {x:#x}, {y:#x}");
+        }
+    }
+    // Past a 32-bit word of the row, where the reference is read again.
+    assert_eq!(ink(refined(64, 0, end, 0), 64, 8), 0, "a wide refinement");
+    assert_eq!(ink(hex(FAR_CORNER), 16, 12), 0, "a symbol's far side past the end");
+    assert_eq!(ink(hex(STRIP), 16, 12), 0, "a strip of -2^31");
+    assert!(ink(hex(OFFSET), 16, 12) > 0, "a symbol refined by an offset of i32::MIN");
+    assert_eq!(ink(hex(UPPER_LINE), 16, 12), 0, "an upper range line past an i32");
+    assert_eq!(ink(hex(LOWER_LINE), 16, 12), 0, "a lower range line past an i32");
 }
 
 /// Item 1 of storytold/pdfcraft#623: a page's content used to be cut at `MAX_DECODED_STREAM`,

@@ -182,23 +182,26 @@ pub(crate) fn decode_with(
             }
 
             let symbol_s = current_s;
+            // From the corner a symbol is placed by to its far side. The strip and the offset can
+            // be anywhere an `i32` reaches, and wrapped, the symbol is off the region.
+            let back = |corner: i32, size: i32| corner.wrapping_sub(size).wrapping_add(1);
 
             let (x, y) = if !header.flags.transposed {
                 match header.flags.reference_corner {
                     ReferenceCorner::TopLeft => (symbol_s, symbol_t),
-                    ReferenceCorner::TopRight => (symbol_s - symbol_width + 1, symbol_t),
-                    ReferenceCorner::BottomLeft => (symbol_s, symbol_t - symbol_height + 1),
+                    ReferenceCorner::TopRight => (back(symbol_s, symbol_width), symbol_t),
+                    ReferenceCorner::BottomLeft => (symbol_s, back(symbol_t, symbol_height)),
                     ReferenceCorner::BottomRight => {
-                        (symbol_s - symbol_width + 1, symbol_t - symbol_height + 1)
+                        (back(symbol_s, symbol_width), back(symbol_t, symbol_height))
                     }
                 }
             } else {
                 match header.flags.reference_corner {
                     ReferenceCorner::TopLeft => (symbol_t, symbol_s),
-                    ReferenceCorner::TopRight => (symbol_t - symbol_width + 1, symbol_s),
-                    ReferenceCorner::BottomLeft => (symbol_t, symbol_s - symbol_height + 1),
+                    ReferenceCorner::TopRight => (back(symbol_t, symbol_width), symbol_s),
+                    ReferenceCorner::BottomLeft => (symbol_t, back(symbol_s, symbol_height)),
                     ReferenceCorner::BottomRight => {
-                        (symbol_t - symbol_width + 1, symbol_s - symbol_height + 1)
+                        (back(symbol_t, symbol_width), back(symbol_s, symbol_height))
                     }
                 }
             };
