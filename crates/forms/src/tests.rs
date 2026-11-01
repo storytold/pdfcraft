@@ -5485,3 +5485,276 @@ fn locked_button_export_edits_leave_the_document_unchanged() {
         assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before);
     }
 }
+
+/// A one-page form with list box `dup` (single select unless `ff` says otherwise) whose first two
+/// options share the export value `1`, plus `extra` entries (`/V`, `/I`) on the field.
+fn duplicate_exports(ff: u32, extra: &str) -> Document {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>".into(),
+        "<< /Fields [6 0 R] /NeedAppearances true /DA (/Helv 10 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        format!(
+            "<< /Type /Annot /Subtype /Widget /FT /Ch /T (dup) /Ff {ff} /Opt [[(1) (One-A)] [(1) (One-B)] [(2) (Two)]] {extra} /Rect [50 700 200 746] /P 3 0 R >>"
+        ),
+    ];
+    document(&objs)
+}
+
+/// The bottom edges of the highlighted rows in a list box appearance, top row first.
+fn highlighted_rows(appearance: &str) -> Vec<String> {
+    let lines: Vec<&str> = appearance.lines().collect();
+    lines.windows(2).filter(|w| w[0] == "0.6 0.75 0.86 rg").map(|w| w[1].split(' ').nth(1).unwrap_or_default().to_string()).collect()
+}
+
+/// The rows the display copy (`/NeedAppearances`) highlights in `dup`.
+fn shown_rows(doc: &Document) -> Vec<String> {
+    let copy = with_field_appearances(doc).expect("the form leaves its appearances to the viewer");
+    highlighted_rows(&ap(&copy, &field(&fields(&copy), "dup").widgets[0]))
+}
+
+/// ISO 32000-2 Table 234: `/I` "shall be used when two or more elements in the Opt array have
+/// different names but the same export value". `/V (1)` with `/I [1]` selects One-B alone, not
+/// every option exporting `1`.
+#[test]
+fn a_list_box_with_duplicate_export_values_selects_the_option_i_names() {
+    let doc = duplicate_exports(0, "/V (1) /I [1]");
+    let dup = field(&fields(&doc), "dup").clone();
+    assert_eq!(dup.selected, [1]);
+    assert_eq!(dup.display_value(), "One-B");
+    let one_b = shown_rows(&doc);
+    assert_eq!(one_b.len(), 1, "one highlighted row");
+    // The same field with /I [0] highlights the row above it.
+    let one_a = shown_rows(&duplicate_exports(0, "/V (1) /I [0]"));
+    assert_eq!(one_a.len(), 1);
+    assert_ne!(one_a, one_b, "One-A and One-B are different rows");
+    let row = |s: &[String]| s.first().and_then(|y| y.parse::<f64>().ok()).unwrap();
+    assert!(row(&one_b) < row(&one_a), "One-B is drawn below One-A");
+}
+
+/// Without a usable `/I`, `/V` decides (Table 234: "If the items identified by this entry differ
+/// from those in the V entry …, the V entry shall be used"), and an export value two options
+/// share selects the first of them. A malformed `/I` never panics.
+#[test]
+fn an_unusable_i_falls_back_to_the_first_option_with_the_value() {
+    for (extra, multi, want) in [
+        ("/V (1)", 0, vec![0]),                           // no /I: the first option exporting 1
+        ("/V (1) /I [5]", 0, vec![0]),                    // out of range
+        ("/V (1) /I [-1]", 0, vec![0]),                   // negative
+        ("/V (1) /I [(1)]", 0, vec![0]),                  // not an integer
+        ("/V (1) /I [1.5]", 0, vec![0]),                  // not a whole number
+        ("/V (1) /I 1", 0, vec![0]),                      // not an array
+        ("/V (1) /I [2]", 0, vec![0]),                    // names Two, which /V doesn't
+        ("/V (1) /I []", 0, vec![0]),                     // names nothing
+        ("/V [(1) (2)] /I [2 1]", 1 << 21, vec![0, 2]),   // not ascending
+        ("/V [(1) (2)] /I [1 1 2]", 1 << 21, vec![0, 2]), // repeated
+        ("/V [(1) (2)] /I [1 2]", 1 << 21, vec![1, 2]),   // usable: One-B and Two
+        ("/V [(1) (1)] /I [0 1]", 1 << 21, vec![0, 1]),   // usable: both options exporting 1
+        ("/V [(1) (1)] /I [1]", 1 << 21, vec![0]),        // names one item where /V names two
+        ("/V [] /I [1]", 0, vec![]),                      // an empty value selects nothing
+        ("/V (9)", 0, vec![]),                            // no option exports 9
+    ] {
+        let doc = duplicate_exports(multi, extra);
+        assert_eq!(field(&fields(&doc), "dup").selected, want, "{extra}");
+        assert_eq!(shown_rows(&doc).len(), want.len(), "{extra}");
+    }
+    // Pure: positions past the options or unlike the values are ignored.
+    let options = [("1".to_string(), "One-A".to_string()), ("1".to_string(), "One-B".to_string())];
+    assert_eq!(selected_options(&options, &["1".into()], Some(&[1])), [1]);
+    assert_eq!(selected_options(&options, &["1".into()], Some(&[7])), [0]);
+    assert_eq!(selected_options(&options, &[], Some(&[])), Vec::<usize>::new());
+}
+
+/// Picking an option by position writes its export value to `/V` and its position to `/I`, so a
+/// pick of One-A or One-B survives a save and reopen; picking by display text does the same.
+#[test]
+fn picking_one_of_two_options_with_the_same_export_value_round_trips() {
+    for (value, want) in [
+        (FieldValue::ChoiceIndices(vec![0]), 0),
+        (FieldValue::ChoiceIndices(vec![1]), 1),
+        (FieldValue::Text("One-B".into()), 1),
+        (FieldValue::Text("One-A".into()), 0),
+        (FieldValue::Choice(vec!["1".into()]), 0),
+    ] {
+        let mut doc = duplicate_exports(0, "/V (1) /I [1]");
+        set_value(&mut doc, "dup", &value).unwrap();
+        let doc = reopen(&doc);
+        let dup = field(&fields(&doc), "dup").clone();
+        let d = doc.get(dup.obj).as_dict().cloned().unwrap();
+        assert_eq!(d.get(b"V").and_then(|v| v.as_string()).map(|s| s.to_text()).as_deref(), Some("1"), "{value:?}: /V is one string");
+        let i: Vec<i64> = d.get(b"I").and_then(|i| i.as_array()).unwrap().iter().filter_map(Object::as_int).collect();
+        assert_eq!(i, [want as i64], "{value:?}");
+        assert_eq!(dup.selected, [want], "{value:?}");
+        assert_eq!(highlighted_rows(&ap(&doc, &dup.widgets[0])).len(), 1, "{value:?}: its saved look highlights one row");
+    }
+    // The saved look highlights the row picked, not the first with its value.
+    let saved = |pick: usize| {
+        let mut doc = duplicate_exports(0, "");
+        set_value(&mut doc, "dup", &FieldValue::ChoiceIndices(vec![pick])).unwrap();
+        highlighted_rows(&ap(&doc, &field(&fields(&doc), "dup").widgets[0]))
+    };
+    assert_ne!(saved(0), saved(1));
+    // Positions are checked: out of range, or several in a single-select list.
+    let mut doc = duplicate_exports(0, "");
+    assert!(matches!(set_value(&mut doc, "dup", &FieldValue::ChoiceIndices(vec![3])), Err(FormError::Invalid(_))));
+    assert!(matches!(set_value(&mut doc, "dup", &FieldValue::ChoiceIndices(vec![usize::MAX])), Err(FormError::Invalid(_))));
+    assert!(matches!(set_value(&mut doc, "dup", &FieldValue::ChoiceIndices(vec![0, 1])), Err(FormError::Invalid(_))));
+    // A multi-select list takes both options that share the value, in ascending /I.
+    let mut doc = duplicate_exports(1 << 21, "");
+    set_value(&mut doc, "dup", &FieldValue::ChoiceIndices(vec![1, 0])).unwrap();
+    let doc = reopen(&doc);
+    let dup = field(&fields(&doc), "dup").clone();
+    assert_eq!(dup.value, ["1", "1"]);
+    assert_eq!(dup.selected, [0, 1]);
+    assert_eq!(dup.picked_in_order(), [0, 1]);
+    // A check box can't take positions.
+    let mut doc = fixture();
+    assert!(matches!(set_value(&mut doc, "agree", &FieldValue::ChoiceIndices(vec![0])), Err(FormError::Invalid(_))));
+}
+
+/// A file can hold a list box with very many options and values. Matching values to options
+/// takes one lookup per value, not a scan of the options (or of the selection) for each, so
+/// reading and showing such a field stays fast. Two options share each export value, and every
+/// result still names the first option exporting a value, or the next one selected.
+#[test]
+fn many_options_and_values_match_in_linear_time() {
+    const N: usize = 100_000;
+    let options: Vec<(String, String)> = (0..2 * N).map(|i| (format!("e{}", i / 2), format!("d{i}"))).collect();
+    let values: Vec<String> = (0..N).rev().map(|k| format!("e{k}")).collect();
+    let started = std::time::Instant::now();
+    let selected = selected_options(&options, &values, None);
+    assert_eq!(selected, (0..N).map(|k| 2 * k).collect::<Vec<_>>(), "the first option exporting each value");
+    let took = started.elapsed();
+    assert!(took < std::time::Duration::from_secs(2), "selected_options took {took:?}");
+
+    let mut list = field(&fields(&fixture()), "toppings").clone();
+    list.options = options;
+    list.value = values;
+    list.selected = (0..2 * N).collect();
+    let started = std::time::Instant::now();
+    let order = list.picked_in_order();
+    let shown = list.display_value();
+    let took = started.elapsed();
+    assert!(took < std::time::Duration::from_secs(2), "picked_in_order and display_value took {took:?}");
+    // The values name e{N-1} first: its first option, then down to e0; the second option of
+    // each value is selected without a value naming it, so it follows in ascending order.
+    assert_eq!(order.first(), Some(&(2 * (N - 1))));
+    assert_eq!(order.get(N - 1), Some(&0));
+    assert_eq!(order.get(N..), Some(&(0..N).map(|k| 2 * k + 1).collect::<Vec<_>>()[..]));
+    assert!(shown.starts_with(&format!("d{}, d{}", 2 * (N - 1), 2 * (N - 2))), "{}", shown.get(..40).unwrap_or(&shown));
+}
+
+/// A one-page form with list box `pair` (single select unless `ff` says otherwise) of three
+/// countries, plus `extra` entries (`/V`, `/DV`, `/I`) on the field.
+fn countries(ff: u32, extra: &str) -> Document {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>".into(),
+        "<< /Fields [6 0 R] /NeedAppearances true /DA (/Helv 10 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        format!(
+            "<< /Type /Annot /Subtype /Widget /FT /Ch /T (pair) /Ff {ff} /Opt [[(TW) (Taiwan)] [(JP) (Japan)] [(US) (United States)]] {extra} /Rect [50 700 200 746] /P 3 0 R >>"
+        ),
+    ];
+    document(&objs)
+}
+
+/// ISO 32000-2 Table 233, MultiSelect: "if clear, at most one item shall be selected". A list box
+/// without it given `/V [(TW) (JP)]` holds and shows Taiwan alone, and opening it changes nothing
+/// in the file.
+#[test]
+fn a_single_select_list_given_several_values_shows_the_first() {
+    for (extra, multi, value, want) in [
+        ("/V [(TW) (JP)]", 0, vec!["TW"], vec![0]),
+        ("/V [(JP) (TW)]", 0, vec!["JP"], vec![1]),
+        ("/V [(TW) (JP)] /I [0 1]", 0, vec!["TW"], vec![0]), // /I names more than the one value
+        ("/V [(XX) (JP)]", 0, vec!["XX"], vec![]),           // the first value is no option
+        ("/V []", 0, vec![], vec![]),
+        ("/V [(TW) (JP)]", 1 << 21, vec!["TW", "JP"], vec![0, 1]), // multi-select keeps both
+    ] {
+        let doc = countries(multi, extra);
+        let pair = field(&fields(&doc), "pair").clone();
+        assert_eq!(pair.value, value, "{extra}");
+        assert_eq!(pair.selected, want, "{extra}");
+        let copy = with_field_appearances(&doc).expect("left to the viewer");
+        assert_eq!(highlighted_rows(&ap(&copy, &field(&fields(&copy), "pair").widgets[0])).len(), want.len(), "{extra}");
+        // Reading and drawing the display copy leaves the field's own /V as it was.
+        let v = doc.get(pair.obj).as_dict().and_then(|d| d.get(b"V").cloned()).unwrap();
+        assert!(matches!(v, Object::Array(_)), "{extra}: {v:?}");
+    }
+    // Two options selected by /I alone in a single-select list: the first.
+    let doc = duplicate_exports(0, "/V (1) /I [0 1]");
+    assert_eq!(field(&fields(&doc), "dup").selected, [0]);
+}
+
+/// Picking a row in such a list writes one string to `/V` and that option's position to `/I`,
+/// and Clear form goes back to the first value of an array `/DV` instead of refusing it.
+#[test]
+fn picking_in_a_single_select_list_given_several_values_writes_one() {
+    for (pick, export, index) in [(FieldValue::ChoiceIndices(vec![2]), "US", 2), (FieldValue::Choice(vec!["JP".into()]), "JP", 1)] {
+        let mut doc = countries(0, "/V [(TW) (JP)] /I [0 1]");
+        set_value(&mut doc, "pair", &pick).unwrap();
+        let doc = reopen(&doc);
+        let pair = field(&fields(&doc), "pair").clone();
+        let d = doc.get(pair.obj).as_dict().cloned().unwrap();
+        assert_eq!(d.get(b"V").and_then(|v| v.as_string()).map(|s| s.to_text()).as_deref(), Some(export), "{pick:?}: /V is one string");
+        let i: Vec<i64> = d.get(b"I").and_then(|i| i.as_array()).unwrap().iter().filter_map(Object::as_int).collect();
+        assert_eq!(i, [index], "{pick:?}");
+        assert_eq!((pair.value, pair.selected), (vec![export.to_string()], vec![index as usize]));
+    }
+    let mut doc = countries(0, "/V (US) /DV [(JP) (TW)]");
+    assert_eq!(reset(&mut doc, None).unwrap(), 1);
+    let pair = field(&fields(&doc), "pair").clone();
+    assert_eq!((pair.value, pair.selected), (vec!["JP".to_string()], vec![1]));
+}
+
+/// A position picked twice is written once in both `/V` and `/I`, so they still match item for
+/// item and the option picked (the second of two sharing an export value) comes back on reopen.
+#[test]
+fn a_position_picked_twice_is_written_once_in_v_and_i() {
+    let mut doc = duplicate_exports(1 << 21, "");
+    set_value(&mut doc, "dup", &FieldValue::ChoiceIndices(vec![1, 1])).unwrap();
+    let dup = field(&fields(&doc), "dup").clone();
+    let d = doc.get(dup.obj).as_dict().cloned().unwrap();
+    let v: Vec<String> = match d.get(b"V") {
+        Some(Object::Array(a)) => a.iter().filter_map(|o| o.as_string().map(|s| s.to_text())).collect(),
+        Some(o) => o.as_string().map(|s| vec![s.to_text()]).unwrap_or_default(),
+        None => Vec::new(),
+    };
+    let i: Vec<i64> = d.get(b"I").and_then(|i| i.as_array()).map(|a| a.iter().filter_map(Object::as_int).collect()).unwrap_or_default();
+    assert_eq!((v, i), (vec!["1".to_string()], vec![1]), "one entry each");
+    assert_eq!(dup.selected, [1], "One-B, not One-A");
+}
+
+/// A same-name twin listing the options sharing an export value in another order is given the
+/// option picked, not the one at the same position: `/I` is mapped to the twin's own options.
+#[test]
+fn a_twin_with_options_in_another_order_gets_the_option_picked() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>".into(),
+        "<< /Fields [6 0 R 7 0 R] /NeedAppearances true /DA (/Helv 10 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /T (dup) /Ff 0 /Opt [[(1) (One-A)] [(1) (One-B)] [(2) (Two)]] /Rect [50 700 200 746] /P 3 0 R >>"
+            .into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /T (dup) /Ff 0 /Opt [[(1) (One-B)] [(1) (One-A)] [(2) (Two)]] /Rect [50 600 200 646] /P 3 0 R >>"
+            .into(),
+    ];
+    let mut doc = document(&objs);
+    set_value(&mut doc, "dup", &FieldValue::ChoiceIndices(vec![1])).unwrap();
+    let all = fields(&doc);
+    let twin = all.iter().find(|f| f.obj == pdfcraft_cos::ObjRef::new(7, 0)).unwrap();
+    let i: Vec<i64> = doc
+        .get(twin.obj)
+        .as_dict()
+        .and_then(|d| d.get(b"I").and_then(|i| i.as_array().cloned()))
+        .unwrap_or_default()
+        .iter()
+        .filter_map(Object::as_int)
+        .collect();
+    assert_eq!(i, [0], "One-B is first in the twin's options");
+    assert_eq!(twin.selected, [0]);
+}
