@@ -1901,6 +1901,9 @@
 	Lock comment	Megjegyzés zárolása
 	Unlock comment	Megjegyzés feloldása
 	Move comment	Megjegyzés áthelyezése
+	Open comment pop-up	Megjegyzés előugró ablakának megnyitása
+	Close comment pop-up	Megjegyzés előugró ablakának bezárása
+	Move comment pop-up	Megjegyzés előugró ablakának áthelyezése
 	Resize comment	Megjegyzés méretezése
 	Change comment properties	Megjegyzés tulajdonságainak módosítása
 	Add field	Mező hozzáadása

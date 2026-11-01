@@ -1916,6 +1916,9 @@
 	Lock comment	Kommentar sperren
 	Unlock comment	Kommentar entsperren
 	Move comment	Kommentar verschieben
+	Open comment pop-up	Kommentar-Pop-up öffnen
+	Close comment pop-up	Kommentar-Pop-up schließen
+	Move comment pop-up	Kommentar-Pop-up verschieben
 	Resize comment	Kommentargröße ändern
 	Change comment properties	Kommentareigenschaften ändern
 	Add field	Feld hinzufügen

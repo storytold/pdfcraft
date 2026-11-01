@@ -150,7 +150,7 @@ fn edges_are_primary_finite_in_order_and_capped() {
 }
 
 /// The page modules: the per-page chain in `canvas::document_area` and what it calls.
-const PAGE_MODULES: [&str; 35] = [
+const PAGE_MODULES: [&str; 36] = [
     "canvas.rs",
     "canvas/area.rs",
     "canvas/bars.rs",
@@ -167,6 +167,7 @@ const PAGE_MODULES: [&str; 35] = [
     "tools/comments/input.rs",
     "tools/comments/menu.rs",
     "tools/comments/paint.rs",
+    "tools/comments/popups.rs",
     "tools/comments/state.rs",
     "tools/forms_ui.rs",
     "tools/prepare.rs",
@@ -216,7 +217,7 @@ const RAW_READS: [&str; 21] = [
 
 /// Functions in the page modules that are not page input and read egui's pointer state
 /// themselves: (file, function, why).
-const NOT_PAGE_INPUT: [(&str, &str, &str); 11] = [
+const NOT_PAGE_INPUT: [(&str, &str, &str); 12] = [
     ("canvas/area.rs", "zoom_anchor", "a pinch zooms the whole view, and is read before the pages' widget exists"),
     ("canvas/area.rs", "drawing_edge_pointer", "scrolls the view at its edges, read before the pages' widget exists"),
     ("canvas/area.rs", "glide_interrupted", "a press anywhere stops the touchpad's glide"),
@@ -224,6 +225,7 @@ const NOT_PAGE_INPUT: [(&str, &str, &str); 11] = [
     ("canvas/bars.rs", "page_size_hint", "the page size hint sits in the view's corner, not on a page"),
     ("canvas/organize.rs", "organize_grid", "Organize Pages shows thumbnails, not pages"),
     ("tools/comments/input.rs", "keys", "keyboard handling after the pages: a drag cancelled with Escape ends once no button is down"),
+    ("tools/comments/popups.rs", "popups", "the comment pop-up windows are Areas of their own over the page"),
     ("tools/forms_ui.rs", "overlay", "the field editor is an Area of its own over the page"),
     ("tools/content_ui.rs", "editor", "the added-text editor is an Area of its own over the page"),
     ("tools/edit_text_ui.rs", "overlay", "the paragraph editor is an Area of its own over the page"),
@@ -251,10 +253,15 @@ fn declares(line: &str) -> Option<&str> {
 const CURSOR_WRITES: [&str; 4] = ["set_cursor_icon(", ".cursor_icon = ", "on_hover_cursor(", "on_hover_and_drag_cursor("];
 
 /// Functions in the page modules that set a cursor other than the pages': (file, function, why).
-const NOT_PAGE_CURSOR: [(&str, &str, &str); 3] = [
+const NOT_PAGE_CURSOR: [(&str, &str, &str); 4] = [
     ("tools/fill_sign/scan.rs", "scan_tab", "the signature dialog's Scan tab"),
     ("tools/edit_text_ui.rs", "overlay", "the paragraph editor is an Area of its own over the page, drawn after the pages' cursor is set"),
     ("tools/calc_order_ui.rs", "panel", "the Calculation order panel, whose rows are dragged to reorder them"),
+    (
+        "tools/comments/popups.rs",
+        "popups",
+        "the comment pop-up windows are Areas of their own over the page; their title bars are dragged to move them",
+    ),
 ];
 
 /// Whether `line` uses `name`, and not a longer name that ends in it (a field, after its `.`, is

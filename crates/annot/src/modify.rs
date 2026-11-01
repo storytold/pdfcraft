@@ -2,8 +2,8 @@ use super::create::{
     add_annotation, base_dict, bounds, callout_attach, ending_draws, ending_pair, finite, grow, normalize, num_array, rect_for, rgb,
 };
 use super::draw::{draw_appearance, redraw_or_restore, set_appearance};
-use super::info::{line_endings_of, text_value};
-use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, page_ref, set_annots};
+use super::info::{is_comment_subtype, line_endings_of, own_popup, popup_info, text_value};
+use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, is_fill_sign, page_ref, set_annots};
 use super::types::{
     FLAG_HIDDEN, FLAG_LOCKED, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NewAnnotation, ReviewState, Rgb, Shape, Style,
     StyleChange, TextReplacement,
@@ -284,6 +284,83 @@ fn flags(doc: &Document, r: ObjRef) -> i64 {
 /// Refuse to change a locked comment (Acrobat: Properties ▸ Locked).
 pub(crate) fn unlocked(doc: &Document, r: ObjRef) -> Result<(), AnnotError> {
     if flags(doc, r) & FLAG_LOCKED != 0 { Err(AnnotError::Invalid("the comment is locked".into())) } else { Ok(()) }
+}
+
+/// Open, close or move a comment's pop-up window (Acrobat: double-click a comment to open it,
+/// drag its title bar to move it). `rect` is the pop-up's new `/Rect` in user space; `open` its
+/// `/Open`. A comment without a `/Popup` gets one, placed to the right of the comment as new
+/// notes get theirs. A text box, a Fill & Sign mark or a reply has no pop-up of its own (a reply
+/// shows in its parent's). The lock does not apply: the window's place and state are not the
+/// comment. The modification date is left alone: nothing of the comment changed.
+pub fn set_popup(doc: &mut Document, page: usize, index: usize, rect: Option<[f64; 4]>, open: Option<bool>, meta: &Meta) -> Result<(), AnnotError> {
+    let (p, r) = annot_ref(doc, page, index)?;
+    let d = annot_dict(doc, r);
+    let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
+    if !is_comment_subtype(&subtype) || subtype == "FreeText" || is_fill_sign(doc, &d) || d.contains(b"IRT") {
+        return Err(AnnotError::Invalid(format!("{subtype} comments have no pop-up of their own")));
+    }
+    let rect = match rect {
+        Some(rect) => {
+            let rect = normalize(rect);
+            if !finite(&rect) || rect[2] - rect[0] < 1.0 || rect[3] - rect[1] < 1.0 {
+                return Err(AnnotError::Invalid("invalid pop-up rectangle".into()));
+            }
+            Some(rect)
+        }
+        None => None,
+    };
+    let _ = meta;
+    // Where a new pop-up goes: to the right of the comment, as new notes' do.
+    let own: Vec<f64> = d
+        .get(b"Rect")
+        .map(|o| doc.resolve(o))
+        .and_then(|o| o.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|v| doc.resolve(v).as_f64())
+        .collect();
+    let beside = match own[..] {
+        [_, _, x1, y1] if finite(&own) => [x1 + 10.0, y1 - 120.0, x1 + 210.0, y1],
+        _ => [0.0, 0.0, 200.0, 120.0],
+    };
+    // Only a pop-up that is this comment's: `/Popup` naming another annotation (or a pop-up
+    // whose `/Parent` is another comment) would move or open that one, so it gets its own.
+    match own_popup(doc, Some(r), &d) {
+        Some(pr) => {
+            // One without a `/Rect` of four numbers reads as no pop-up (`summaries`), so it gets
+            // the new pop-up's place: opening it then shows it.
+            let rect = rect.or_else(|| popup_info(doc, Some(r), &d).is_none().then_some(beside));
+            doc.update_dict(pr, |p| {
+                if let Some(rect) = rect {
+                    p.set(b"Rect".to_vec(), num_array(&rect));
+                }
+                if let Some(open) = open {
+                    p.set(b"Open".to_vec(), Object::Bool(open));
+                }
+            })?
+        }
+        None => {
+            let mut pd = Dict::new();
+            pd.set(b"Type".to_vec(), Object::name("Annot"));
+            pd.set(b"Subtype".to_vec(), Object::name("Popup"));
+            pd.set(b"Rect".to_vec(), num_array(&rect.unwrap_or(beside)));
+            pd.set(b"Parent".to_vec(), Object::Ref(r));
+            pd.set(b"Open".to_vec(), Object::Bool(open.unwrap_or(false)));
+            pd.set(b"F".to_vec(), Object::Int(FLAG_PRINT | FLAG_NO_ZOOM | FLAG_NO_ROTATE));
+            let pref = doc.add(Object::Dict(pd));
+            doc.update_dict(r, |d| d.set(b"Popup".to_vec(), Object::Ref(pref)))?;
+            let mut list = annots(doc, p);
+            list.push(Object::Ref(pref));
+            set_annots(doc, p, list)?;
+        }
+    }
+    // A note's own `/Open` says the same thing to viewers that read it there (§12.5.6.4).
+    if let Some(open) = open
+        && (subtype == "Text" || d.contains(b"Open"))
+    {
+        doc.update_dict(r, |d| d.set(b"Open".to_vec(), Object::Bool(open)))?;
+    }
+    Ok(())
 }
 
 /// Lock or unlock a comment (the Locked flag). A locked comment can't be moved, resized,

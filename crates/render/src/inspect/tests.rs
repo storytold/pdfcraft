@@ -304,6 +304,7 @@ fn no_rotate_comments_are_shown_upright_from_their_corner_and_back() {
         fill_sign: false,
         no_rotate: true,
         points: Vec::new(),
+        popup: None,
     };
     let rect = note.rect.map(f64::from);
     for rotation in [0u16, 90, 180, 270, 45] {
@@ -1850,6 +1851,39 @@ fn carriage_returns_in_comment_text_become_line_breaks() {
     assert_eq!(info.annotations[0].contents.as_deref(), Some("one\n\ntwo\nthree"));
 }
 
+/// A comment's pop-up (`/Popup`) is read with its place and state; one without reads none.
+#[test]
+fn a_comments_pop_up_is_read_with_its_place_and_state() {
+    let bytes = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Annots [4 0 R 5 0 R 6 0 R] >> endobj\n4 0 obj << /Type /Annot /Subtype /Text /Rect [20 260 40 280] /Contents (Hi) /Popup 5 0 R /Open true >> endobj\n5 0 obj << /Type /Annot /Subtype /Popup /Rect [190 160 50 280] /Parent 4 0 R /Open true >> endobj\n6 0 obj << /Type /Annot /Subtype /Square /Rect [10 10 60 60] >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n";
+    let info = inspect(Arc::new(bytes.to_vec()), None).expect("opens");
+    let note = info.annotations.iter().find(|a| a.subtype == "Text").expect("the note");
+    assert_eq!(note.popup, Some(Popup { rect: [50.0, 160.0, 190.0, 280.0], open: true }), "normalised, and open");
+    let square = info.annotations.iter().find(|a| a.subtype == "Square").expect("the square");
+    assert_eq!(square.popup, None);
+    assert!(info.annotations.iter().all(|a| a.subtype != "Popup"), "the pop-up is not a comment of its own");
+
+    // #2137 review: a /Popup naming another annotation, a pop-up of another comment, or one
+    // whose /Parent isn't a reference isn't this comment's pop-up; one without /Parent is.
+    for (target, extra, own) in [
+        ("6 0 R", "", false),
+        ("7 0 R", "7 0 obj << /Type /Annot /Subtype /Popup /Rect [0 0 50 50] /Parent 6 0 R >> endobj\n", false),
+        ("7 0 R", "7 0 obj << /Type /Annot /Subtype /Popup /Rect [0 0 50 50] /Parent << >> >> endobj\n", false),
+        ("7 0 R", "7 0 obj << /Type /Annot /Subtype /Popup /Rect [0 0 50 50] >> endobj\n", true),
+    ] {
+        let text = String::from_utf8_lossy(bytes).replace("/Popup 5 0 R", &format!("/Popup {target}")).replace("trailer", &format!("{extra}trailer"));
+        let info = inspect(Arc::new(text.into_bytes()), None).expect("opens");
+        let note = info.annotations.iter().find(|a| a.subtype == "Text").expect("the note");
+        assert_eq!(note.popup.is_some(), own, "/Popup {target} {extra}");
+    }
+
+    // #2137 review: /Annots may list the note through an object that is only a reference to
+    // it; its pop-up's /Parent names the note itself, and is still its own.
+    let text = String::from_utf8_lossy(bytes).replace("/Annots [4 0 R", "/Annots [8 0 R").replace("trailer", "8 0 obj 4 0 R endobj\ntrailer");
+    let info = inspect(Arc::new(text.into_bytes()), None).expect("opens");
+    let note = info.annotations.iter().find(|a| a.subtype == "Text").expect("the note");
+    assert_eq!(note.popup, Some(Popup { rect: [50.0, 160.0, 190.0, 280.0], open: true }), "listed through 8 0 R");
+}
+
 #[test]
 fn dates_are_prettified() {
     assert_eq!(pretty_date("D:20260930104512-04'00'"), "2026-09-30 10:45");
@@ -1869,4 +1903,32 @@ trailer << /Root 1 0 R >>
     let p = &info.pages[0];
     assert!((p.width - 3874.96).abs() < 0.1, "width expected ~3874.96, got {}", p.width);
     assert!((p.height - 5493.54).abs() < 0.1, "height expected ~5493.54, got {}", p.height);
+}
+
+/// #2137 review: a pop-up without a `/Rect` of four numbers reads as no pop-up, as
+/// `pdfcraft_annot::summaries` reads it, so the two lists of comments agree.
+#[test]
+fn a_pop_up_without_a_four_number_rect_is_none() {
+    let bytes = "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Annots [4 0 R 5 0 R] >> endobj\n4 0 obj << /Type /Annot /Subtype /Text /Rect [20 260 40 280] /Contents (Hi) /Popup 5 0 R >> endobj\n5 0 obj << /Type /Annot /Subtype /Popup RECT /Parent 4 0 R /Open true >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n";
+    for (rect, read) in [("", false), ("/Rect [0 0 50]", false), ("/Rect (box)", false), ("/Rect [0 0 50 /x]", false), ("/Rect [0 0 50 60]", true)] {
+        let info = inspect(Arc::new(bytes.replace("RECT", rect).into_bytes()), None).expect("opens");
+        let note = info.annotations.iter().find(|a| a.subtype == "Text").expect("the note");
+        assert_eq!(note.popup.is_some(), read, "{rect:?}");
+    }
+}
+
+/// #2137 review: a pop-up `/Rect` with its corners reversed reads with them in order (ISO
+/// 32000-2 §7.9.5), and one with a number too large for `f32` reads as no pop-up, as
+/// `pdfcraft_annot::summaries` reads both.
+#[test]
+fn a_pop_up_rect_with_reversed_corners_is_put_in_order_and_a_huge_one_is_none() {
+    let bytes = "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Annots [4 0 R 5 0 R] >> endobj\n4 0 obj << /Type /Annot /Subtype /Text /Rect [20 260 40 280] /Contents (Hi) /Popup 5 0 R >> endobj\n5 0 obj << /Type /Annot /Subtype /Popup /Rect RECT /Parent 4 0 R /Open true >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n";
+    let popup = |rect: &str| {
+        let info = inspect(Arc::new(bytes.replace("RECT", rect).into_bytes()), None).expect("opens");
+        info.annotations.iter().find(|a| a.subtype == "Text").expect("the note").popup.map(|p| p.rect)
+    };
+    assert_eq!(popup("[150 200 50 100]"), Some([50.0, 100.0, 150.0, 200.0]), "reversed");
+    let huge = format!("1{}", "0".repeat(40));
+    assert_eq!(popup(&format!("[0 0 {huge} 100]")), None, "a number past f32");
+    assert_eq!(popup(&format!("[0 0 {huge}.0 100]")), None, "a real past f32");
 }

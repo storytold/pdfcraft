@@ -2194,3 +2194,160 @@ fn degenerate_and_absurd_leader_and_caption_values_do_not_panic() {
     assert!(long.contains(&format!("({}) Tj", "w".repeat(256))), "cut to 256");
     assert!(!long.contains(&"w".repeat(257)));
 }
+
+/// A pop-up is opened, closed and moved through `set_popup` (#comment.popups): a note's own
+/// pop-up follows, a comment without one gets one beside it, and the comment itself (its text,
+/// its date) is left alone. Summaries report the pop-up. Text boxes, Fill & Sign marks and
+/// replies have none of their own; a bad rectangle is refused.
+#[test]
+fn pop_ups_open_close_and_move_and_are_reported() {
+    let mut doc = fixture();
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [20.0, 280.0], icon: NoteIcon::Comment }), &meta("n1")).unwrap();
+    let before = summaries(&doc).into_iter().find(|s| s.index == note).unwrap();
+    assert_eq!(before.popup.map(|p| p.open), Some(false), "new notes have a closed pop-up");
+    set_popup(&mut doc, 0, note, None, Some(true), &meta("n1")).unwrap();
+    let after = summaries(&doc).into_iter().find(|s| s.index == note).unwrap();
+    assert_eq!(after.popup.map(|p| p.open), Some(true));
+    assert_eq!(after.popup.map(|p| p.rect), before.popup.map(|p| p.rect), "opening does not move it");
+    assert_eq!((after.modified, after.contents.as_deref()), (before.modified, Some("hello")), "the comment is untouched");
+    let (_, r) = annot_ref(&mut doc, 0, note).unwrap();
+    assert_eq!(annot_dict(&doc, r).get(b"Open"), Some(&Object::Bool(true)), "the note's own /Open follows");
+    set_popup(&mut doc, 0, note, Some([150.0, 100.0, 290.0, 200.0]), Some(false), &meta("n1")).unwrap();
+    let moved = summaries(&doc).into_iter().find(|s| s.index == note).unwrap();
+    assert_eq!(moved.popup, Some(PopupInfo { rect: [150.0, 100.0, 290.0, 200.0], open: false }));
+    assert_eq!(annot_dict(&doc, r).get(b"Open"), Some(&Object::Bool(false)));
+
+    // A highlight is created without a pop-up: the first open gives it one, beside it.
+    let mark = add_annotation(
+        &mut doc,
+        &new(0, Shape::TextMarkup { kind: Markup::Highlight, quads: vec![[20.0, 200.0, 120.0, 200.0, 20.0, 190.0, 120.0, 190.0]] }),
+        &meta("h1"),
+    )
+    .unwrap();
+    assert_eq!(summaries(&doc).into_iter().find(|s| s.index == mark).unwrap().popup, None);
+    set_popup(&mut doc, 0, mark, None, Some(true), &meta("h1")).unwrap();
+    let given = summaries(&doc).into_iter().find(|s| s.index == mark).unwrap().popup.expect("a pop-up now");
+    assert!(given.open);
+    assert!((given.rect[0] - 130.0).abs() < 0.01 && (given.rect[2] - 330.0).abs() < 0.01, "beside the mark: {:?}", given.rect);
+
+    // #2137 review: a /Popup naming another annotation (here the note) isn't this comment's: the
+    // note is left alone and the mark gets a pop-up of its own.
+    let (_, mr) = annot_ref(&mut doc, 0, mark).unwrap();
+    doc.update_dict(mr, |m| m.set(b"Popup".to_vec(), Object::Ref(r))).unwrap();
+    let note_before = annot_dict(&doc, r);
+    set_popup(&mut doc, 0, mark, Some([10.0, 10.0, 110.0, 60.0]), Some(true), &meta("h1")).unwrap();
+    assert_eq!(annot_dict(&doc, r), note_before, "the note isn't moved or opened");
+    let own = annot_dict(&doc, mr).reference(b"Popup").expect("a pop-up of its own");
+    assert_ne!(own, r);
+    assert_eq!(doc.get(own).as_dict().and_then(|p| p.reference(b"Parent")), Some(mr));
+    // Its own pop-up, with /Parent naming it, is the one moved next time.
+    set_popup(&mut doc, 0, mark, Some([12.0, 10.0, 112.0, 60.0]), None, &meta("h1")).unwrap();
+    assert_eq!(annot_dict(&doc, mr).reference(b"Popup"), Some(own), "the same pop-up");
+
+    // #2137 review: nor is it reported as the comment's (see the helper).
+    foreign_pop_ups_are_not_the_marks(&mut doc, r, mark, mr);
+
+    // None of their own.
+    let text_box = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: [10.0, 10.0, 110.0, 40.0], font_size: 12.0 }), &meta("t1")).unwrap();
+    assert!(matches!(set_popup(&mut doc, 0, text_box, None, Some(true), &meta("t1")), Err(AnnotError::Invalid(_))));
+    let reply = add_reply(&mut doc, 0, note, "Agreed", "Ada", &meta("r1")).unwrap();
+    assert!(matches!(set_popup(&mut doc, 0, reply, None, Some(true), &meta("r1")), Err(AnnotError::Invalid(_))));
+    assert!(matches!(set_popup(&mut doc, 0, note, Some([0.0, 0.0, 0.5, 0.5]), None, &meta("n1")), Err(AnnotError::Invalid(_))));
+    assert!(matches!(set_popup(&mut doc, 0, note, Some([f64::NAN, 0.0, 10.0, 10.0]), None, &meta("n1")), Err(AnnotError::Invalid(_))));
+    assert!(matches!(set_popup(&mut doc, 0, 99, None, Some(true), &meta("n1")), Err(AnnotError::NoSuchAnnotation { .. })));
+
+    // #2137 review: /Annots may list the note through an object that is only a reference to it.
+    // Its pop-up's /Parent names the note itself, so the pop-up is still the note's.
+    let p = page_ref(&doc, 0).unwrap();
+    let via = doc.add(Object::Ref(r));
+    let list: Vec<Object> = annots(&doc, p).into_iter().map(|o| if o.as_ref() == Some(r) { Object::Ref(via) } else { o }).collect();
+    set_annots(&mut doc, p, list).unwrap();
+    let listed = summaries(&doc).into_iter().find(|s| s.index == note).unwrap();
+    assert_eq!(listed.popup, Some(PopupInfo { rect: [150.0, 100.0, 290.0, 200.0], open: false }), "listed through {via:?}");
+}
+
+/// #2137 review: a pop-up that is not the mark's own is neither reported as its pop-up nor
+/// changed through it (part of `pop_ups_open_close_and_move_and_are_reported`).
+fn foreign_pop_ups_are_not_the_marks(doc: &mut Document, note: ObjRef, mark: usize, mr: ObjRef) {
+    // #2137 review: nor is it reported as the comment's. A /Popup naming the note, or the note's
+    // own pop-up (its /Parent is the note), gives the mark no pop-up in the summaries.
+    let popup_of_mark = |doc: &Document| summaries(doc).into_iter().find(|s| s.index == mark).unwrap().popup;
+    let notes_popup = annot_dict(doc, note).reference(b"Popup").expect("the note's pop-up");
+    for foreign in [note, notes_popup] {
+        doc.update_dict(mr, |m| m.set(b"Popup".to_vec(), Object::Ref(foreign))).unwrap();
+        assert_eq!(popup_of_mark(doc), None, "{foreign:?} isn't the mark's");
+    }
+    // A pop-up whose /Parent isn't a reference (it must be one) isn't the mark's either: it is
+    // neither reported nor changed, and the mark gets one of its own.
+    let mut bad = Dict::new();
+    bad.set(b"Type".to_vec(), Object::name("Annot"));
+    bad.set(b"Subtype".to_vec(), Object::name("Popup"));
+    bad.set(b"Rect".to_vec(), Object::Array([0.0, 0.0, 50.0, 50.0].iter().map(|v| Object::Real(*v)).collect()));
+    bad.set(b"Parent".to_vec(), Object::Dict(Dict::new()));
+    let bad = doc.add(Object::Dict(bad));
+    doc.update_dict(mr, |m| m.set(b"Popup".to_vec(), Object::Ref(bad))).unwrap();
+    assert_eq!(popup_of_mark(doc), None, "a direct /Parent");
+    let bad_before = doc.get(bad).as_dict().cloned();
+    set_popup(doc, 0, mark, None, Some(true), &meta("h1")).unwrap();
+    assert_eq!(doc.get(bad).as_dict().cloned(), bad_before, "left alone");
+    assert_ne!(annot_dict(doc, mr).reference(b"Popup"), Some(bad));
+    // A pop-up with no /Parent at all is taken as the comment's.
+    let mut orphan = Dict::new();
+    orphan.set(b"Type".to_vec(), Object::name("Annot"));
+    orphan.set(b"Subtype".to_vec(), Object::name("Popup"));
+    orphan.set(b"Rect".to_vec(), Object::Array([0.0, 0.0, 50.0, 50.0].iter().map(|v| Object::Real(*v)).collect()));
+    let orphan = doc.add(Object::Dict(orphan));
+    doc.update_dict(mr, |m| m.set(b"Popup".to_vec(), Object::Ref(orphan))).unwrap();
+    assert_eq!(popup_of_mark(doc), Some(PopupInfo { rect: [0.0, 0.0, 50.0, 50.0], open: false }), "no /Parent");
+}
+
+/// #2137 review: a comment's own pop-up without a `/Rect` of four numbers reads as none; opening
+/// it gives it the place a new pop-up gets, so the window shows again.
+#[test]
+fn opening_a_pop_up_without_a_rect_gives_it_one() {
+    let mut doc = fixture();
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [20.0, 280.0], icon: NoteIcon::Comment }), &meta("n1")).unwrap();
+    let (_, r) = annot_ref(&mut doc, 0, note).unwrap();
+    let pr = annot_dict(&doc, r).reference(b"Popup").expect("new notes have a pop-up");
+    doc.update_dict(pr, |p| {
+        p.remove(b"Rect");
+    })
+    .unwrap();
+    assert_eq!(summaries(&doc).into_iter().find(|s| s.index == note).unwrap().popup, None, "no /Rect reads as no pop-up");
+    set_popup(&mut doc, 0, note, None, Some(true), &meta("n1")).unwrap();
+    let popup = summaries(&doc).into_iter().find(|s| s.index == note).unwrap().popup.expect("the pop-up reads again");
+    assert!(popup.open);
+    assert!(popup.rect[2] - popup.rect[0] >= 100.0 && popup.rect[3] - popup.rect[1] >= 100.0, "a window's size: {:?}", popup.rect);
+    assert_eq!(annot_dict(&doc, r).reference(b"Popup"), Some(pr), "the same pop-up, not a new one");
+}
+
+/// #2137 review: a pop-up rectangle with its corners reversed is read, and saved, with them in
+/// order (ISO 32000-2 §7.9.5: a reader normalises a rectangle). One whose numbers aren't finite
+/// as `f32` (a file's huge number) reads as no pop-up, and opening it gives it a new place.
+#[test]
+fn a_pop_up_rect_with_reversed_corners_is_put_in_order_and_a_huge_one_is_none() {
+    let mut doc = fixture();
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [20.0, 280.0], icon: NoteIcon::Comment }), &meta("n1")).unwrap();
+    let (_, r) = annot_ref(&mut doc, 0, note).unwrap();
+    let pr = annot_dict(&doc, r).reference(b"Popup").expect("new notes have a pop-up");
+    let popup = |doc: &Document| summaries(doc).into_iter().find(|s| s.index == note).unwrap().popup;
+    let set_rect = |doc: &mut Document, rect: [f64; 4]| doc.update_dict(pr, |p| p.set(b"Rect".to_vec(), num_array(&rect))).unwrap();
+
+    // Reversed in the file: read in order.
+    set_rect(&mut doc, [290.0, 200.0, 150.0, 100.0]);
+    assert_eq!(popup(&doc), Some(PopupInfo { rect: [150.0, 100.0, 290.0, 200.0], open: false }));
+    // Reversed through `set_popup`: saved in order.
+    set_popup(&mut doc, 0, note, Some([300.0, 220.0, 160.0, 120.0]), None, &meta("n1")).unwrap();
+    let saved: Vec<f64> =
+        doc.get(pr).as_dict().and_then(|p| p.get(b"Rect")).and_then(Object::as_array).unwrap().iter().filter_map(Object::as_f64).collect();
+    assert_eq!(saved, [160.0, 120.0, 300.0, 220.0]);
+
+    // A number too large for `f32` (or infinite): no pop-up, and opening it gives it a place.
+    for huge in [1e300, f64::INFINITY] {
+        set_rect(&mut doc, [0.0, 0.0, huge, 100.0]);
+        assert_eq!(popup(&doc), None, "{huge}");
+    }
+    set_popup(&mut doc, 0, note, None, Some(true), &meta("n1")).unwrap();
+    let given = popup(&doc).expect("the pop-up reads again");
+    assert!(given.open && given.rect.iter().all(|v| v.is_finite()), "{given:?}");
+}

@@ -84,6 +84,9 @@ pub const EDIT_LABELS: &[&str] = &[
     "Unlock comment",
     "Move comment",
     "Reshape comment",
+    "Open comment pop-up",
+    "Close comment pop-up",
+    "Move comment pop-up",
     "Resize comment",
     "Change comment properties",
     "Fill in {name}",
@@ -217,6 +220,9 @@ impl Edit {
             Edit::LockAnnotation { .. } => Label::of("Unlock comment"),
             Edit::MoveAnnotation { .. } => Label::of("Move comment"),
             Edit::ReshapeAnnotation { .. } => Label::of("Reshape comment"),
+            Edit::SetAnnotationPopup { rect: Some(_), .. } => Label::of("Move comment pop-up"),
+            Edit::SetAnnotationPopup { open: Some(true), .. } => Label::of("Open comment pop-up"),
+            Edit::SetAnnotationPopup { .. } => Label::of("Close comment pop-up"),
             Edit::ResizeAnnotation { .. } => Label::of("Resize comment"),
             Edit::StyleAnnotation { .. } | Edit::FillAnnotation { .. } | Edit::FontSizeAnnotation { .. } | Edit::SetAnnotationInfo { .. } => {
                 Label::of("Change comment properties")

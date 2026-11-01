@@ -64,6 +64,7 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         | Edit::EraseInk { .. }
         | Edit::MoveAnnotation { .. }
         | Edit::ReshapeAnnotation { .. }
+        | Edit::SetAnnotationPopup { .. }
         | Edit::ResizeAnnotation { .. }
         | Edit::StyleAnnotation { .. }
         | Edit::FillAnnotation { .. }

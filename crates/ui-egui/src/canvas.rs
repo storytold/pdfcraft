@@ -2712,7 +2712,8 @@ fn track_scroll<T>(ui: &egui::Ui, view: &mut DocView, out: &egui::containers::sc
 /// The hover tip, find bar, size hint and the in-place editors drawn over the pages. Whether the
 /// text editor was finished.
 fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, primary_down: bool, hover_text: Option<(Pos2, String)>) -> bool {
-    let PageEnv { added, author, avail, can_modify, doc, form, info, prefs, t, today, tool, units, unobstructed, .. } = *env;
+    let PageEnv { added, allowed, author, avail, can_modify, comments_hidden, doc, form, info, prefs, t, today, tool, units, unobstructed, .. } =
+        *env;
     if let Some((pos, text)) = hover_text {
         // Click-through, as a tooltip is: the pages lose the pointer under anything that isn't.
         let tip = egui::Area::new(egui::Id::unique("canvas-hover")).order(egui::Order::Tooltip).interactable(false);
@@ -2730,6 +2731,14 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
     }
     if let Some(e) = comments::composer(ui.ctx(), view, info, prefs) {
         view.pending_edit = Some(e);
+    }
+    if let Some(e) = comments::popups(ui.ctx(), view, info, prefs, comments_hidden, allowed) {
+        // A click on the composer's Post also takes the focus from a pop-up's box, saving what
+        // was typed there: both edits land in this frame, so both are kept, in one batch.
+        view.pending_edit = Some(match view.pending_edit.take() {
+            Some(first) => Edit::Batch { label: "Edit comment".into(), edits: vec![first, e] },
+            None => e,
+        });
     }
     if let Some(e) = crate::edit_text_ui::overlay(ui.ctx(), view, info) {
         view.pending_edit = Some(e);

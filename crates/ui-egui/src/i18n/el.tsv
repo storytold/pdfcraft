@@ -1345,6 +1345,9 @@
 	Lock comment	Κλείδωμα σχολίου
 	Unlock comment	Ξεκλείδωμα σχολίου
 	Move comment	Μετακίνηση σχολίου
+	Open comment pop-up	Άνοιγμα αναδυόμενου παραθύρου σχολίου
+	Close comment pop-up	Κλείσιμο αναδυόμενου παραθύρου σχολίου
+	Move comment pop-up	Μετακίνηση αναδυόμενου παραθύρου σχολίου
 	Resize comment	Αλλαγή μεγέθους σχολίου
 	Change comment properties	Αλλαγή ιδιοτήτων σχολίου
 	Add field	Προσθήκη πεδίου

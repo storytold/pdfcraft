@@ -2838,3 +2838,8 @@ theme	Appearance	Aspecte
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opcions d'aquesta resposta
+
+# AI-assisted additions for comment pop-up windows (#2137); not reviewed by a native speaker.
+	Open comment pop-up	Obre la finestra emergent del comentari
+	Close comment pop-up	Tanca la finestra emergent del comentari
+	Move comment pop-up	Mou la finestra emergent del comentari

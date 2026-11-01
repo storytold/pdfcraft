@@ -1902,6 +1902,9 @@
 	Lock comment	Түсініктемені құлыптау
 	Unlock comment	Түсініктеменің құлпын ашу
 	Move comment	Түсініктемені жылжыту
+	Open comment pop-up	Пікірдің қалқымалы терезесін ашу
+	Close comment pop-up	Пікірдің қалқымалы терезесін жабу
+	Move comment pop-up	Пікірдің қалқымалы терезесін жылжыту
 	Resize comment	Түсініктеме өлшемін өзгерту
 	Change comment properties	Түсініктеме сипаттарын өзгерту
 	Add field	Өріс қосу

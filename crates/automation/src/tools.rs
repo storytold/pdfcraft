@@ -923,6 +923,11 @@ pub fn tools() -> Vec<ToolDef> {
         t("comment_image_preview", "Preview image signature layers", "Return a PNG of the page without the selected image signature/initials (layer=background, default), or its embedded image with alpha (layer=image). Includes the displayed rectangle, document rotation, image_rotation (how far clockwise the image is shown turned) and annotation opacity. Cache these layers for live placement/resizing; commit once with comment_edit. Does not change the document or undo history.")
             .ro().with(schema(comment_ref(json!({ "layer": { "type": "string", "enum": ["background", "image"], "default": "background" }, "dpi": { "type": "number", "minimum": 1, "maximum": 600, "default": 96 } })), &["doc"])),
         t("comment_delete", "Delete a comment", "Delete a comment with its pop-up and replies, or one reply (its id, or page and index, from comment_list) with its pop-up and the replies to it; the comment and its other replies stay. Undoable.").destructive().with(schema(comment_ref(json!({})), &["doc"])),
+        t("comment_popup", "Open, close or move a comment's pop-up", "Open or close a comment's pop-up window (open), or move it (rect, in page view coordinates as comment_list reports). A comment without a pop-up gets one beside it. Text boxes, Fill & Sign marks and replies have none of their own. Undoable.")
+            .with(schema(comment_ref(json!({
+                "open": { "type": "boolean" },
+                "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
+            })), &["doc"])),
         t(
             "doc_protect",
             "Protect with passwords",

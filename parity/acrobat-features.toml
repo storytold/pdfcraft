@@ -4132,11 +4132,11 @@ title = "Open and reposition comment pop-ups"
 area = "E"
 tier = "P1"
 milestone = "M5"
-status = "planned"
+status = "shipped"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["comment_popup", "comment_list"]
+evidence = ["crates/ui-egui/tests/it/comments.rs::a_double_click_opens_a_notes_pop_up_which_drags_and_closes", "crates/ui-egui/tests/it/comments.rs::a_pop_up_threads_its_replies_and_takes_a_new_one", "crates/ui-egui/tests/it/comments.rs::a_long_thread_scrolls_inside_its_pop_up", "crates/ui-egui/tests/it/comments.rs::a_pop_ups_corner_resizes_it", "crates/ui-egui/tests/it/comments.rs::a_pop_up_resized_on_a_turned_page_stays_in_place", "crates/annot/src/tests.rs::pop_ups_open_close_and_move_and_are_reported", "crates/automation/tests/it/automation.rs::comment_popups_are_opened_moved_and_listed", "crates/render/src/inspect/tests.rs::a_comments_pop_up_is_read_with_its_place_and_state"]
+notes = "double-click a comment to open its pop-up window on the page (its /Popup /Open and /Rect, so other viewers show it the same), at the size its /Rect gives in points whatever the zoom; a title bar with the comment's kind, author and date; its text typed in place; its replies as panels, each inside the one it answers (/IRT), their text typed in place too; a Reply button under the comment and under each reply opens a box that answers it (Enter starts a new line, Post or Ctrl+Enter posts); the text and replies scroll inside the window; the title bar drags it, its lower right corner resizes it, × closes it; each is an undo step. Not yet: the window's options menu (status, mark, lock, delete from the window), collapsing a reply's answers, resizing from the other corners and sides, Preferences ▸ Commenting pop-up behaviours (open on roll-over, hide when the Comments list opens)"
 
 [[feature]]
 id = "comment.connector-lines"
@@ -4144,11 +4144,11 @@ title = "Connector lines between markups and pop-ups"
 area = "E"
 tier = "P2"
 milestone = "M5"
-status = "planned"
+status = "shipped"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/it/comments.rs::a_connector_line_joins_a_comment_to_its_open_pop_up_while_the_pointer_is_on_either"]
+notes = "a faint wedge in the comment's colour from the comment's edge nearest its open pop-up, widening to the window's side that faces it, while the pointer is on either or the comment is selected (Acrobat's roll-over lines). Not yet: the preference to turn them off"
 
 [[feature]]
 id = "comment.review-history"
