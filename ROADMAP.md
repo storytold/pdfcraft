@@ -1,5 +1,6 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (Grouped document tabs expose their visual selection to assistive technology, preserving the active Combine tab; regression fails before the fix; 1912 UI tests and stable scoped gates pass (5 existing ignored))
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M3 #4590: rebase PR #5159 onto main 47f42ba0; 1912 scoped tests pass (5 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: integrate main fa5f9f8c; retain CJK viewer and upstream raster regressions, restore explicit display_config imports; estimates unchanged)
@@ -213,6 +214,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-01 (M3, #4590 review):** Grouped document tabs expose their visual selection to assistive technology, preserving the active Combine tab; regression fails before the fix; 1912 UI tests and stable scoped gates pass (5 existing ignored).
 
 - **2026-11-01 (M3, #4590 rebase):** PR #5159 rebased onto main `47f42ba0`; resolved and auto-merged hunks reviewed. 1912 scoped tests passed, 5 existing ignored; formatting, strict Clippy, layers/assets/parity and wasm checks passed. Behavior and estimates unchanged.
 
@@ -732,6 +735,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | patch | Grouped document tabs expose their visual selection to assistive technology, preserving the active Combine tab; regression fails before the fix; 1912 UI tests and stable scoped gates pass (5 existing ignored). |
 | 2026-11-01 | patch | M3 #4590: rebase PR #5159 onto main 47f42ba0; 1912 scoped tests pass (5 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged. |
 | 2026-10-28 | patch | M2, PR #4172: integrate main 5af10276 and retain both roadmap histories; viewer-only CJK and print/output font policies and estimates unchanged. |
 | 2026-10-27 | minor | M10: OCR stages SHA-256-verified ONNX models after the upstream RTEN URL brownout; discovery prefers a complete ONNX pair per directory, falls back to a complete RTEN pair, and never mixes formats or directories; language/web limits and estimates unchanged. |

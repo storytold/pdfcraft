@@ -1636,7 +1636,8 @@ fn five_tab_harness() -> Harness<'static, PdfCraftApp> {
 }
 
 /// #4590: Ctrl/⌘-click adds a tab to the selection or takes it out, Shift-click selects the run
-/// from the last tab clicked without Shift, and a plain click selects that tab alone.
+/// from the last tab clicked without Shift, and a plain click selects that tab alone. Each
+/// document tab exposes the same selection to assistive technology, including inactive members.
 #[test]
 fn command_and_shift_clicks_select_several_tabs() {
     use egui::Modifiers;
@@ -1646,6 +1647,15 @@ fn command_and_shift_clicks_select_several_tabs() {
     let click = |h: &mut Harness<'static, PdfCraftApp>, name: &str, modifiers: Modifiers| {
         h.get_by_role_and_label(Role::Tab, name).click_modifiers(modifiers);
         h.run_steps(3);
+        let selected = h.state().selected_tabs();
+        for (index, label) in ["a.pdf", "b.pdf", "c.pdf", "d.pdf", "e.pdf"].into_iter().enumerate() {
+            let expected = selected.contains(&h.state().views[index].id);
+            assert_eq!(
+                h.get_by_role_and_label(Role::Tab, label).accesskit_node().is_selected(),
+                Some(expected),
+                "{label}: accessibility selection matches the selected group"
+            );
+        }
     };
     assert_eq!(h.state().selected_tabs(), [ids[4]]);
     click(&mut h, "b.pdf", Modifiers::NONE);
