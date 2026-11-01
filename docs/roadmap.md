@@ -276,6 +276,8 @@ M2 (renderer), M7 (content editing), M10 (OCR and Office), M11 (Preflight and st
 
 ## Revision history
 
+**2026-11-01 · patch:** M10, PR #4759: printer-option diagnostics omit local paths, queue identifiers and raw OS errors while retaining bounded failure categories. Synthetic retrieval, tool and UI privacy coverage; response shapes and estimates unchanged.
+
 **2026-10-26 · patch:** M2/PR #4172: reconcile current main and preserve upstream Japanese serif/weight selection alongside the installed CJK viewer and preview fallback. Estimates unchanged.
 
 **2026-10-25 · minor:** M14 localization current state: Arabic catalogs stay logical, Arabic/Kurdish labels take an explicit RTL direction, and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native Simplified Chinese uses LXGW WenKai Lite; the web build has no Hans face. Estimates unchanged.
@@ -292,7 +294,6 @@ Estimates unchanged.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-01 | patch | M10, PR #4759: printer-option diagnostics omit local paths, queue identifiers and raw OS errors while retaining bounded failure categories. Synthetic retrieval, tool and UI privacy coverage; response shapes and estimates unchanged. |
 | 2026-10-31 | patch | M2, PR #4172: eight GBK font/alias cases compare exact pixels with independent installed-face and explicit-Unicode references; wrong-glyph and wrong-family negative controls fail. Estimates unchanged. |
 | 2026-10-31 | patch | M2, PR #4172: integrate main fa5f9f8c, preserve both raster test groups and restore explicit display_config imports; display-only CJK policy and estimates unchanged. |
 | 2026-10-28 | patch | M2, PR #4172: integrate main 5af10276 and retain both roadmap histories; viewer-only CJK and print/output font policies and estimates unchanged. |
