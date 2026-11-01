@@ -9196,6 +9196,62 @@ fn a_fields_own_script_may_not_save_as_or_show_a_panel() {
     assert_eq!(o.requests, [js::Request::SaveAs]);
 }
 
+/// A page of `count` pictures of one flat grey, `side` pixels square, each an object of its own.
+fn page_of_pictures(count: usize, side: usize) -> Vec<u8> {
+    let data = pdfcraft_filters::encode_flate(&vec![0x80; side * side]);
+    let names: String = (0..count).map(|i| format!("/Im{i} {} 0 R ", 5 + i)).collect();
+    let content: String = (0..count).map(|i| format!("q 10 0 0 10 0 0 cm /Im{i} Do Q\n")).collect();
+    let mut pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << {names}>> >> >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n",
+        content.len()
+    )
+    .into_bytes();
+    for i in 0..count {
+        let dict = format!(
+            "{} 0 obj << /Type /XObject /Subtype /Image /Width {side} /Height {side} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /Length {} >> stream\n",
+            5 + i,
+            data.len()
+        );
+        pdf.extend_from_slice(dict.as_bytes());
+        pdf.extend_from_slice(&data);
+        pdf.extend_from_slice(b"\nendstream endobj\n");
+    }
+    pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF");
+    pdf
+}
+
+/// The allowance is the export's, not each picture's: a page of many small pictures stops where it
+/// runs out, the rest are left out and counted, and the page is listed, which is what the export's
+/// warning goes by. A few large pictures are well within it, and all come through. 2,000 are enough
+/// to show it: 10,000 behave the same, and take half a minute to read in a test build.
+#[test]
+fn a_page_of_many_pictures_stops_at_the_exports_allowance() {
+    let export = |pdf: Vec<u8>, work: &mut pdfcraft_cos::ImageBudget| {
+        let mut s = Session::new();
+        let id = s.open("pictures.pdf", None, Arc::new(pdf), None).unwrap();
+        s.get(id).unwrap().export_pages_within(true, 1 << 30, work)
+    };
+    let mut one = pdfcraft_cos::ImageBudget::with_work(u64::MAX);
+    export(page_of_pictures(1, 2), &mut one);
+    let cost = u64::MAX - one.work_left();
+    assert!(cost > 0);
+
+    let mut work = pdfcraft_cos::ImageBudget::with_work(100 * cost);
+    let (pages, truncated) = export(page_of_pictures(2_000, 2), &mut work);
+    assert_eq!(pages[0].images.len(), 100);
+    assert_eq!(truncated, vec![0]);
+    assert_eq!(work.refused(), 1_900);
+
+    let mut s = Session::new();
+    let id = s.open("large.pdf", None, Arc::new(page_of_pictures(3, 1_000)), None).unwrap();
+    let (pages, truncated) = s.get(id).unwrap().export_pages_checked(true, 1 << 30);
+    assert_eq!(pages[0].images.len(), 3);
+    assert_eq!(truncated, Vec::<usize>::new());
+}
+
 /// A page whose forms go past the reading limit and whose picture goes past the image budget is
 /// listed once among the truncated pages.
 #[test]

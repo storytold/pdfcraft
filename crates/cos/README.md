@@ -95,5 +95,6 @@ recognisable in a diff and byte-stable when re-serialized.
   their filters undone once a document for the images that share them, up to 64 MiB kept, while
   their segments are decoded for every image, and `ImageBudget` for an operation over many images,
   which share one allowance of decoding, filters, decoders and pixels alike, and are refused past
-  it);
+  it: `IMAGE_WORK`, 2^34 steps, or 2 to 5 minutes of JBIG2 and about 1,000 pages scanned at
+  300 dpi, plus `IMAGE_WORK_PER_BYTE`, 2^13 steps for each byte of the file);
   DCT and JPX are still decoded through the bootstrap renderer (`core.image-filters`, M2.6).
