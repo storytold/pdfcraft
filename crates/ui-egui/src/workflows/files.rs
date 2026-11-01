@@ -460,9 +460,16 @@ impl PdfCraftApp {
         if dropped.is_empty() {
             return;
         }
+        let total_dropped = dropped.len();
         let dropped = if dropped.len() > MAX_DROPPED_FILES { &dropped[..MAX_DROPPED_FILES] } else { dropped };
         let mut incoming = Vec::new();
+        let mut hit_limit = total_dropped > MAX_DROPPED_FILES;
+        let mut omitted_count = total_dropped.saturating_sub(MAX_DROPPED_FILES);
         for f in dropped {
+            if incoming.len() >= MAX_DROPPED_FILES {
+                hit_limit = true;
+                break;
+            }
             if let Some(clean_path) = clean_dropped_path(f.path()) {
                 if clean_path.is_dir() {
                     let (folder_paths, more) = crate::workflows::combine_ui::combinable_in(&clean_path, true);
@@ -471,11 +478,17 @@ impl PdfCraftApp {
                     if folder_paths.is_empty() {
                         self.notify_fmt("No PDFs, images or text files found in {folder}", &[("folder", &folder)]);
                     } else {
-                        for p in folder_paths {
+                        let remaining = MAX_DROPPED_FILES.saturating_sub(incoming.len());
+                        let to_take = folder_paths.len().min(remaining);
+                        if to_take < folder_paths.len() {
+                            hit_limit = true;
+                            omitted_count += folder_paths.len() - to_take;
+                        }
+                        for p in &folder_paths[..to_take] {
                             let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file.pdf".into());
-                            match std::fs::read(&p) {
+                            match std::fs::read(p) {
                                 Ok(bytes) => {
-                                    let modified = std::fs::metadata(&p).and_then(|m| m.modified()).ok();
+                                    let modified = std::fs::metadata(p).and_then(|m| m.modified()).ok();
                                     incoming.push(crate::combine_ui::Incoming { name, bytes: Arc::new(bytes), modified, note: None, open_doc: None });
                                 }
                                 Err(e) => {
@@ -483,7 +496,7 @@ impl PdfCraftApp {
                                 }
                             }
                         }
-                        if more {
+                        if more && to_take == folder_paths.len() {
                             self.notify_fmt(
                                 "Added the first {n} files in {folder}",
                                 &[("n", &crate::workflows::combine_ui::MAX_FOLDER_FILES.to_string()), ("folder", &folder)],
@@ -510,6 +523,12 @@ impl PdfCraftApp {
                 Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e.to_string())]),
             }
         }
+        if hit_limit {
+            self.notify_fmt(
+                "Added the first {n} files ({omitted} omitted)",
+                &[("n", &MAX_DROPPED_FILES.to_string()), ("omitted", &omitted_count.to_string())],
+            );
+        }
         if !incoming.is_empty() {
             self.stage_combine_with(incoming);
         }
@@ -521,7 +540,16 @@ impl PdfCraftApp {
         if dropped.is_empty() {
             return;
         }
+        let total_dropped = dropped.len();
+        let hit_limit = total_dropped > MAX_DROPPED_FILES;
         let dropped = dropped[..dropped.len().min(MAX_DROPPED_FILES)].to_vec();
+        if hit_limit {
+            let omitted = total_dropped - MAX_DROPPED_FILES;
+            self.notify_fmt(
+                "Added the first {n} files ({omitted} omitted)",
+                &[("n", &MAX_DROPPED_FILES.to_string()), ("omitted", &omitted.to_string())],
+            );
+        }
         let requests = self.requests.clone();
         let request = self.file_request(FilePurpose::Combine, Vec::new());
         let ctx = ctx.clone();
