@@ -64,6 +64,12 @@ fn driver_options_panel(ui: &mut egui::Ui, d: &mut PrintDraft, t: &Tokens) {
     });
 }
 
+/// How tall the printer list grows before it scrolls (#4399): three fifths of the window, and
+/// never less than `min` (egui's default, about six rows). A shorter list still fits its rows.
+fn printer_list_height(window: f32, min: f32) -> f32 {
+    (window * 0.6).max(min)
+}
+
 /// Draw a combo box whose accessible name does not depend on the selected value.
 fn combo<T: PartialEq + Copy>(ui: &mut egui::Ui, id: &str, name: &str, value: &mut T, choices: &[(T, &str)], width: f32) {
     let shown = choices.iter().find(|c| c.0 == *value).map_or("", |c| c.1);
@@ -110,7 +116,8 @@ pub(crate) fn body(
                         None if still_looking(d) => tl!("Looking for printers…").to_string(),
                         None => tl!("Save as PDF").to_string(),
                     };
-                    craft_ui::ComboBox::from_id_salt("printer").selected_text(shown).width(260.0).show_ui(ui, |ui| {
+                    let list = printer_list_height(ui.ctx().content_rect().height(), ui.spacing().combo_height);
+                    craft_ui::ComboBox::from_id_salt("printer").selected_text(shown).width(260.0).height(list).show_ui(ui, |ui| {
                         if d.printers_loading {
                             ui.add_enabled(false, egui::Label::new(tl!("Looking for printers…")));
                         }
@@ -545,4 +552,20 @@ pub(crate) fn body(
         }
     });
     (go, cancel)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A long printer list may fill three fifths of the window before it scrolls, not egui's
+    /// 200-point default (#4399).
+    #[test]
+    fn the_printer_list_grows_with_the_window() {
+        assert_eq!(printer_list_height(900.0, 200.0), 540.0);
+        // A tiny window keeps egui's default.
+        assert_eq!(printer_list_height(100.0, 200.0), 200.0);
+        // A window size that isn't known yet doesn't collapse the list.
+        assert_eq!(printer_list_height(f32::NAN, 200.0), 200.0);
+    }
 }
