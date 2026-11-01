@@ -105,6 +105,7 @@ impl PdfCraftApp {
             ui_scale_applied: None,
             flatten_fill_sign_on_save: false,
             fill_text_size: fill_sign::TEXT_SIZE,
+            fill_tool: fill_sign::FillTool::Signature,
             fill_text_color: [0.0; 3],
             dialog: None,
             updates: updates::Updates::default(),

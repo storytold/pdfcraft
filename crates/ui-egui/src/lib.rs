@@ -323,6 +323,7 @@ pub struct PdfCraftApp {
     pub flatten_fill_sign_on_save: bool,
     /// Point size for new Fill & Sign text and dates, kept across launches.
     pub fill_text_size: f64,
+    pub fill_tool: fill_sign::FillTool,
     /// Colour for new Fill & Sign text and dates, kept across launches.
     pub fill_text_color: [f64; 3],
     pub dialog: Option<Dialog>,
