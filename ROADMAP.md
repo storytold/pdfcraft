@@ -88,6 +88,7 @@
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M12 #2570: Dynamic XFA rich-text fields carry exData/maxLength into AcroForm MaxLen for reported and enforced Unicode character limits, retained after save/reopen. Estimates unchanged)
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M4 #3309: bounded iterative named-destination pruning on page deletion; estimates unchanged)
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M1 #2658: macOS atomic saves retain destination extended attributes, including Finder tags, and reject partial resource-fork reads after size changes. Metadata failures retain the original PDF and unsaved edit. Estimates unchanged)
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7 #4957: rebase PR #4984 onto main 61140ed8; 3246 scoped tests pass (9 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged)
 
 PdfCraft's one-page summary: how close it is to Adobe Acrobat Pro's offline feature set, and what
 comes next. Adobe's cloud services (Document Cloud, Acrobat Sign requests, shared review, the AI
@@ -237,6 +238,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 - **2026-10-27 (M2, PR #4172 module-split conflicts):** Integrated main 1dd2737b, retaining viewer-only CJK fallback in split session modules and Combine thumbnail workers, and moving renderer regressions to the new test module. Validation: 798 scoped tests passed (371 engine, 412 renderer, 15 Combine; two existing engine tests ignored); scoped all-target Clippy with -D warnings, formatting, layers, assets, parity and renderer/engine WASM checks passed. Estimates unchanged.
 
+- **2026-10-30 (M7, #4957):** Foreign-watermark scans enforce the operator budget while streaming, rather than first collecting every operator on a page. Over-budget pages are reported and left unchanged; a small synthetic regression checks early stopping, with parser-uncertainty controls. Estimates unchanged.
 - **2026-10-27 (M10, OCR models):** Model staging downloads and verifies the ONNX pair after the upstream RTEN URL brownout; runtime discovery prefers complete ONNX pairs per directory, retains complete RTEN fallback and preserves directory precedence.
 
 - **2026-10-26 (M2, PR #4172):** Reconciled current main, preserving its Japanese serif/weight selection and both branches' progress records. Installed CJK viewer and preview fallback remains display-only; estimates unchanged.
@@ -742,6 +744,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | patch | M7 #4957: rebase PR #4984 onto main 61140ed8; 3246 scoped tests pass (9 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged. |
 | 2026-10-28 | patch | M2, PR #4172: integrate main 5af10276 and retain both roadmap histories; viewer-only CJK and print/output font policies and estimates unchanged. |
 | 2026-10-27 | minor | M10: OCR stages SHA-256-verified ONNX models after the upstream RTEN URL brownout; discovery prefers a complete ONNX pair per directory, falls back to a complete RTEN pair, and never mixes formats or directories; language/web limits and estimates unchanged. |
 | 2026-10-23 | minor | M8, #3205 follow-up: phone-pattern redaction includes the +39 country code on labelled Italian geographic numbers with a slash; dates, protocol identifiers and whole-run guards remain. Estimates unchanged. |
@@ -823,3 +826,6 @@ PR #2133 retains document-local Pages sidebar focus for Ctrl/Cmd+A and Escape af
 PR #1952 retains per-widget checkbox/radio export-value editing in the split form-authoring and Prepare modules. Caption editing remains supported. Tests cover preserved appearances and selection, invalid/locked refusals, data-format round trips, and Apply/Cancel/Undo. Current-head hosted validation is pending; feature estimates are unchanged.
 
 - **2026-10-31 (#1577):** Reconciled the page-shadow preference with split viewer, organizer, settings and control modules, preserving upstream page-gap shadow suppression. CI validation pending.
+- **2026-10-27 (M7, #4957):** Remove watermark also removes watermarks another editor wrote as artifacts (`/Artifact <</Subtype /Watermark>> BDC … EMC`, inline or through `/Properties`): the marked content is cut out byte for byte, anything unbalanced or unreadable is left. `doc_remove_marks` and the Edit menu command both go through it. A watermark whose drawing changes state that later content inherits, or a page that can't be read, stops the removal with the page and the reason, and the command is offered for a document that has only such a watermark. Update and reading a foreign watermark's settings into the dialog are not done.
+
+- **2026-11-01 (M7, #4957 rebase):** PR #4984 rebased onto main `61140ed8`; resolved and auto-merged hunks reviewed. 3246 scoped tests passed, 9 existing ignored; formatting, strict Clippy, layers/assets/parity and wasm checks passed. Behavior and estimates unchanged.

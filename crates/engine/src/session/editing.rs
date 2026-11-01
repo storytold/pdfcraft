@@ -442,6 +442,7 @@ impl Session {
         let (touches_added, touches_marks) = Self::content_refresh_lists(edit);
         if touches_added || touches_marks {
             doc.marker_scan = OnceLock::new();
+            doc.foreign_watermark_scan = OnceLock::new();
         }
         doc.info.file_size = bytes.len();
         let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
@@ -524,6 +525,7 @@ impl Session {
         doc.form = Arc::new(form);
         if invalidate_markers {
             doc.marker_scan = OnceLock::new();
+            doc.foreign_watermark_scan = OnceLock::new();
         }
         if invalidate_links {
             doc.links = OnceLock::new();
