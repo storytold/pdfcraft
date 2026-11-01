@@ -108,6 +108,20 @@ pub fn run(script: &str, event: &Event, doc: &DocInfo, fields: &[FieldState], do
 /// context; the first field write copies the snapshot, so neither the caller nor another
 /// script can observe uncommitted writes. Read-only calculations avoid copying the whole form.
 pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<FieldState>>, doc_scripts: &[String], limits: Limits) -> Outcome {
+    run_shared_calculations(script, event, doc, fields, doc_scripts, &[], limits)
+}
+
+/// Like [`run_shared`], with the document's ordered calculated fields available to
+/// `calculateNow()` while this context is running.
+pub fn run_shared_calculations(
+    script: &str,
+    event: &Event,
+    doc: &DocInfo,
+    fields: Arc<Vec<FieldState>>,
+    doc_scripts: &[String],
+    calculations: &[(String, String)],
+    limits: Limits,
+) -> Outcome {
     let failed = |why: String| Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), error: Some(why), ..Default::default() };
     if let Some(why) = refuse(script) {
         return failed(why);
@@ -133,7 +147,7 @@ pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<Fi
             let spawned = std::thread::Builder::new()
                 .name("pdfcraft-js".into())
                 .stack_size(SCRIPT_STACK)
-                .spawn_scoped(scope, || run_here(script, event, doc, fields, kept, skipped, limits));
+                .spawn_scoped(scope, || run_here(script, event, doc, fields, ScriptSetup { doc_scripts: kept, skipped, calculations }, limits));
             match spawned {
                 Ok(thread) => thread.join().unwrap_or_else(|_| failed("the script stopped with an internal error".into())),
                 Err(e) => failed(format!("the script engine could not start: {e}")),
@@ -141,7 +155,7 @@ pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<Fi
         })
     }
     #[cfg(target_arch = "wasm32")]
-    run_here(script, event, doc, fields, kept, skipped, limits)
+    run_here(script, event, doc, fields, ScriptSetup { doc_scripts: kept, skipped, calculations }, limits)
 }
 
 /// Host hooks that refuse to compile code from strings (`eval`, `Function` and its generator
@@ -183,15 +197,13 @@ fn doc_error(index: usize, error: &dyn std::fmt::Display) -> String {
 
 /// `doc_scripts` are the document scripts to run with their places among all of them;
 /// `skipped` the ones refused before running, with the reason.
-fn run_here(
-    script: &str,
-    event: &Event,
-    doc: &DocInfo,
-    fields: Arc<Vec<FieldState>>,
-    doc_scripts: &[(usize, &str)],
-    skipped: &[(usize, String)],
-    limits: Limits,
-) -> Outcome {
+struct ScriptSetup<'a> {
+    doc_scripts: &'a [(usize, &'a str)],
+    skipped: &'a [(usize, String)],
+    calculations: &'a [(String, String)],
+}
+
+fn run_here(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<FieldState>>, setup: ScriptSetup<'_>, limits: Limits) -> Outcome {
     let mut ctx = match Context::builder().host_hooks(std::rc::Rc::new(NoCodeFromStrings)).build() {
         Ok(ctx) => ctx,
         Err(e) => {
@@ -208,11 +220,13 @@ fn run_here(
         console: Vec::new(),
         requests: Vec::new(),
         doc: doc.clone(),
+        calculations: setup.calculations.to_vec(),
+        calculate_depth: 0,
         kept: 0,
         dropped: 0,
     }));
     let mut out = Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), ..Default::default() };
-    let mut doc_errors: Vec<(usize, String)> = skipped.iter().map(|(i, why)| (*i, doc_error(*i, why))).collect();
+    let mut doc_errors: Vec<(usize, String)> = setup.skipped.iter().map(|(i, why)| (*i, doc_error(*i, why))).collect();
     let result = (|| -> JsResult<()> {
         install(&mut ctx)?;
         let ev = event_object(&mut ctx, event);
@@ -220,7 +234,7 @@ fn run_here(
         // One document script that throws (calling a method PdfCraft lacks, say) must not keep
         // every field script in the form from running: what it defined before the error, and
         // the other scripts, stay available (#3940).
-        for &(i, d) in doc_scripts {
+        for &(i, d) in setup.doc_scripts {
             if let Err(e) = ctx.eval(Source::from_bytes(d)) {
                 doc_errors.push((i, doc_error(i, &e)));
             }

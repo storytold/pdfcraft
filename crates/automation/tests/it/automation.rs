@@ -7299,6 +7299,14 @@ fn javascript_through_tools() {
     let f = ok(&mut a, "form_fields", json!({ "doc": doc }));
     let total = f["fields"].as_array().unwrap().iter().find(|x| x["name"] == "Total").unwrap().clone();
     assert_eq!(total["value"], "3750");
+    let calculated = ok(
+        &mut a,
+        "js_run",
+        json!({ "doc": doc, "script": "getField('Price').value = 3; getField('Qty').value = 2; calculateNow(); console.println(getField('Total').value);" }),
+    );
+    assert!(calculated["console"].as_array().unwrap().iter().any(|line| line == "6"), "{calculated}");
+    let f = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    assert_eq!(f["fields"].as_array().unwrap().iter().find(|x| x["name"] == "Total").unwrap()["value"], "6");
     let r = ok(&mut a, "js_run", json!({ "doc": doc, "script": "nope()" }));
     assert!(r["error"].as_str().unwrap().contains("nope"));
     assert_eq!(r["document_errors"], json!([]));

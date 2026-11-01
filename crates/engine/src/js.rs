@@ -184,6 +184,24 @@ impl JsRunner {
     }
 }
 
+fn calculation_scripts(cos: &pdfcraft_cos::Document, fields: &[Field]) -> Vec<(String, String)> {
+    pdfcraft_forms::calculation_order(cos, fields)
+        .fields
+        .iter()
+        .filter_map(|ordered| {
+            let field = fields.iter().find(|f| f.name == ordered.name)?;
+            let script = field.actions.scripts.calculate.clone().or_else(|| {
+                let source = pdfcraft_forms::af::calculate_js(&field.actions.calculate)?;
+                Some(match &field.actions.calculate {
+                    pdfcraft_forms::af::Calculate::Simple { .. } => format!("event.value = {source}"),
+                    _ => source,
+                })
+            })?;
+            Some((field.name.clone(), script))
+        })
+        .collect()
+}
+
 /// The Info dictionary as `this.info` keys (lower-case).
 fn info(cos: &pdfcraft_cos::Document) -> Vec<(String, String)> {
     let Some(d) = cos.trailer().get(b"Info").map(|i| cos.resolve(i)).and_then(|i| i.as_dict().cloned()) else { return Vec::new() };
@@ -211,7 +229,16 @@ impl Scripts for JsRunner {
             .collect();
         let states = std::sync::Arc::new(states);
         let ev = pdfcraft_js::Event::field(event.name(), &target.name, value);
-        let o = pdfcraft_js::run_shared(script, &ev, &self.doc, std::sync::Arc::clone(&states), &self.doc_scripts, Limits::default());
+        let calculations = calculation_scripts(&self.cos, fields);
+        let o = pdfcraft_js::run_shared_calculations(
+            script,
+            &ev,
+            &self.doc,
+            std::sync::Arc::clone(&states),
+            &self.doc_scripts,
+            &calculations,
+            Limits::default(),
+        );
         self.output.absorb(&o);
         if o.error.is_some() {
             // As in Acrobat, a failing script leaves the value alone (the error goes to the console).
@@ -291,12 +318,21 @@ impl Session {
         }
         let runner = JsRunner::new(&cos, &doc.name);
         let fields = pdfcraft_forms::fields(&cos);
-        let states: Vec<_> = fields.iter().map(|f| field_state(&cos, f)).collect();
+        let states = std::sync::Arc::new(fields.iter().map(|f| field_state(&cos, f)).collect::<Vec<_>>());
         let event = match target {
             Some(t) => pdfcraft_js::Event { will_commit: false, ..pdfcraft_js::Event::field("Mouse Up", t, "") },
             None => pdfcraft_js::Event::doc("Console"),
         };
-        let mut o = pdfcraft_js::run(script, &event, &runner.doc, &states, &runner.doc_scripts, Limits::default());
+        let calculations = calculation_scripts(&cos, &fields);
+        let mut o = pdfcraft_js::run_shared_calculations(
+            script,
+            &event,
+            &runner.doc,
+            std::sync::Arc::clone(&states),
+            &runner.doc_scripts,
+            &calculations,
+            Limits::default(),
+        );
         let changes = changes(&states, &o.changed);
         let resets: Vec<Vec<String>> = o
             .requests
