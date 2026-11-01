@@ -267,7 +267,17 @@ fn request_sharper(
     }
 }
 
-pub(super) fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool, unobstructed: bool, ui: &mut egui::Ui, t: &Tokens) {
+pub(super) fn organize_grid(
+    view: &mut DocView,
+    doc: &pdfcraft_engine::Document,
+    unobstructed: bool,
+    show_page_edge_shadows: bool,
+    ui: &mut egui::Ui,
+    t: &Tokens,
+) {
+    let info = &doc.info;
+    let editable = doc.allows_assembly();
+    let dirty = doc.dirty;
     let ppp = ui.ctx().pixels_per_point();
     // The page image scales with the zoom; the padding and the page number don't.
     let cell = vec2(146.0 * view.grid_zoom + 44.0, 194.0 * view.grid_zoom + 88.0);
@@ -290,6 +300,10 @@ pub(super) fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, 
     let (mut in_view, mut sharper): (Vec<(usize, f32)>, Vec<RenderRequest>) = (Vec::new(), Vec::new());
     // The source cell can scroll out of the virtualized rows during a drag.
     let mut drop = view.org_drag.is_some() && ui.input(|i| i.pointer.primary_released());
+    let fade_strength = ui.spacing().scroll.fade.strength;
+    if !show_page_edge_shadows {
+        ui.spacing_mut().scroll.fade.strength = 0.0;
+    }
     egui::ScrollArea::vertical().auto_shrink([false, false]).show_viewport(ui, |ui, clip| {
         apply_auto_scroll(ui, middle_gesture, auto_delta);
         ui.add_space(20.0);
@@ -329,7 +343,9 @@ pub(super) fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, 
                 if view.selected.contains(&i) {
                     ui.painter().rect_stroke(c.shrink(6.0), CornerRadius::same(8), Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
                 }
-                ui.painter().rect_filled(pr.translate(vec2(0.0, 1.5)), CornerRadius::same(1), t.page_shadow);
+                if show_page_edge_shadows {
+                    ui.painter().rect_filled(pr.translate(vec2(0.0, 1.5)), CornerRadius::same(1), t.page_shadow);
+                }
                 ui.painter().rect_filled(pr, CornerRadius::ZERO, Color32::WHITE);
                 // A page drawn larger than its thumbnail gets a render at the size drawn, while
                 // it is in view; until that arrives the thumbnail stands in.
@@ -507,6 +523,7 @@ pub(super) fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, 
             view.org_drag = None;
         }
     });
+    ui.spacing_mut().scroll.fade.strength = fade_strength;
     // Files dragged in from outside go to the gap under the pointer. Some platforms don't say
     // where the pointer is until the files are dropped; then the whole grid is the target.
     let pointer = ui.input(|i| i.pointer.hover_pos()).filter(|p| viewport.contains(*p));
