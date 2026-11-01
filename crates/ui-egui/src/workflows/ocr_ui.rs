@@ -170,6 +170,15 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
 }
 
 impl PdfCraftApp {
+    /// Start a recognition worker thread; `fail_spawn` (tests) makes it fail as under resource pressure.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn spawn_ocr_worker(&self, name: &str, work: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
+        if self.fail_spawn {
+            return Err(std::io::Error::other("could not start a background thread"));
+        }
+        std::thread::Builder::new().name(name.into()).spawn(work).map(drop)
+    }
+
     /// Recognize text on the pages chosen in the dialog, in the background.
     pub fn start_ocr(&mut self) {
         let Some((vi, id)) = self.active_ids() else { return };
@@ -291,8 +300,10 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         if self.run_inline {
             work();
-        } else {
-            std::thread::Builder::new().name("pdfcraft-ocr".into()).spawn(work).ok();
+        } else if let Err(e) = self.spawn_ocr_worker("pdfcraft-ocr", work) {
+            // No worker: report the failure instead of waiting for a result that never comes.
+            self.notify_error(e);
+            return;
         }
         #[cfg(target_arch = "wasm32")]
         work();
@@ -348,8 +359,10 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         if self.run_inline {
             work();
-        } else {
-            std::thread::Builder::new().name("pdfcraft-ocr-files".into()).spawn(work).ok();
+        } else if let Err(e) = self.spawn_ocr_worker("pdfcraft-ocr-files", work) {
+            // No worker: report the failure instead of waiting for a result that never comes.
+            self.notify_error(e);
+            return;
         }
         #[cfg(target_arch = "wasm32")]
         work();
