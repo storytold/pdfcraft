@@ -73,17 +73,17 @@ pub(super) fn divide(item: Item, cut: f64) -> (Option<Item>, Option<Item>) {
                 (Some(Item::Fill { rect: above, color }), Some(Item::Fill { rect: below, color }))
             }
         }
-        Item::Line { from, to, width, color, dashed } => {
+        Item::Line { from, to, width, color, stroke } => {
             let (lo, hi) = if from.1 <= to.1 { (from, to) } else { (to, from) };
             if lo.1 >= cut {
-                (None, Some(Item::Line { from, to, width, color, dashed }))
+                (None, Some(Item::Line { from, to, width, color, stroke }))
             } else if hi.1 <= cut {
-                (Some(Item::Line { from, to, width, color, dashed }), None)
+                (Some(Item::Line { from, to, width, color, stroke }), None)
             } else {
                 // lo.1 < cut < hi.1, so the divisor is positive.
                 let t = (cut - lo.1) / (hi.1 - lo.1);
                 let mid = (lo.0 + (hi.0 - lo.0) * t, cut);
-                (Some(Item::Line { from: lo, to: mid, width, color, dashed }), Some(Item::Line { from: mid, to: hi, width, color, dashed }))
+                (Some(Item::Line { from: lo, to: mid, width, color, stroke }), Some(Item::Line { from: mid, to: hi, width, color, stroke }))
             }
         }
         Item::Rounded(r) => {

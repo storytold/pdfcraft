@@ -2411,7 +2411,7 @@ fn rounded_corners_make_a_border_one_rounded_shape() {
     let at = |y: f64| shapes.iter().copied().find(|r| (r.rect.y - 36.0 - y * 72.0).abs() < 0.01);
     let round = at(0.0).expect("the rounded border is one shape");
     assert_eq!((round.rect.w, round.rect.h, round.radii), (144.0, 72.0, [18.0; 4]));
-    assert_eq!((round.fill, round.edge), (Some([230.0 / 255.0; 3]), Some((1.0, [1.0, 0.0, 0.0], false))));
+    assert_eq!((round.fill, round.edge), (Some([230.0 / 255.0; 3]), Some((1.0, [1.0, 0.0, 0.0], Stroke::Solid))));
     let mixed = at(1.2).expect("the box with two corners given");
     assert_eq!((mixed.radii, mixed.inverted), ([7.2, 14.4, 14.4, 14.4], [false, true, true, true]));
     assert_eq!(at(2.4).expect("the huge radius").radii, [36.0; 4], "at most half the shorter side");
@@ -2458,7 +2458,7 @@ fn rounded_boxes_are_written_as_curved_paths() {
         radii: [18.0; 4],
         inverted,
         fill: Some([0.9, 0.9, 0.9]),
-        edge: edge.then_some((2.0, [1.0, 0.0, 0.0], false)),
+        edge: edge.then_some((2.0, [1.0, 0.0, 0.0], Stroke::Solid)),
         open_top: open.0,
         open_bottom: open.1,
     };
@@ -2477,6 +2477,113 @@ fn rounded_boxes_are_written_as_curved_paths() {
     let cut = content(Rounded { radii: [18.0, 18.0, 0.0, 0.0], ..shape([false; 4], true, (false, true)) });
     let edge = cut.lines().find(|l| l.contains(" RG ")).unwrap_or_default();
     assert!(edge.starts_with("q 1 0 0 RG 2 w 37 685 m 37 738 l ") && edge.ends_with(" 179 685 l S Q") && !edge.contains(" h "), "{edge}");
+}
+
+/// Each edge stroke keeps its own dash pattern, in multiples of the edge's width and with
+/// projecting caps, on a `<line>` and on a border alike: a 3pt edge draws dashed `[12 6]`,
+/// dotted `[3 6]` (not solid), dash-dot `[9 6 3 6]` and dash-dot-dot `[9 6 3 6 3 6]` (not
+/// dashed), and a solid or 3-D edge draws solid (#5561).
+#[test]
+fn edge_strokes_keep_their_own_dash_patterns() {
+    let strokes = [
+        ("solid", Stroke::Solid, ""),
+        ("dashed", Stroke::Dashed, "[12 6] 0 d 2 J "),
+        ("dotted", Stroke::Dotted, "[3 6] 0 d 2 J "),
+        ("dashDot", Stroke::DashDot, "[9 6 3 6] 0 d 2 J "),
+        ("dashDotDot", Stroke::DashDotDot, "[9 6 3 6 3 6] 0 d 2 J "),
+        ("lowered", Stroke::Relief, ""),
+        ("raised", Stroke::Relief, ""),
+        ("embossed", Stroke::Relief, ""),
+        ("etched", Stroke::Relief, ""),
+    ];
+    let body: String = strokes
+        .iter()
+        .enumerate()
+        .map(|(i, (name, ..))| {
+            format!(
+                r#"<draw name="line{i}" x="0in" y="{i}in" w="3in" h="0.1in"><value><line><edge thickness="3pt" stroke="{name}"/></line></value></draw><draw name="box{i}" x="4in" y="{i}in" w="2in" h="0.5in"><value><text>box</text></value><border><edge thickness="3pt" stroke="{name}"/></border></draw>"#
+            )
+        })
+        .collect();
+    let form = layout_xml(&one_area_form(r#"layout="tb""#, &format!(r#"<subform name="body" layout="position" w="7.5in" h="9in">{body}</subform>"#)))
+        .unwrap();
+    for (i, (name, stroke, dash)) in strokes.iter().enumerate() {
+        // The draws in row `i` start an inch apart, 0.5in below the page's top.
+        let top = 36.0 + i as f64 * 72.0;
+        let lines: Vec<String> = form.pages[0]
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Item::Line { from, to, width, color, stroke: s } if from.1 >= top - 2.0 && from.1 <= top + 40.0 => {
+                    assert_eq!(s, stroke, "{name}: the item keeps the edge's stroke");
+                    Some(crate::pdf::line(*from, *to, *width, *color, *s, 792.0))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lines.len(), 5, "{name}: the line and the box's four edges: {lines:?}");
+        for ops in &lines {
+            assert!(ops.starts_with("q ") && ops.contains(&format!(" 3 w {dash}")), "{name}: {ops}");
+            assert_eq!(ops.contains(" d "), !dash.is_empty(), "{name}: {ops}");
+        }
+    }
+}
+
+/// A square border a page break cuts keeps its edges' stroke on both pages: each side edge is
+/// divided at the cut and both halves stay dashed, as do the top and bottom edges (#5561).
+#[test]
+fn a_dashed_border_cut_by_a_page_break_stays_dashed_on_each_page() {
+    // A 12-inch box in a 10-inch content area: it is cut at the area's bottom.
+    let body = r#"<subform name="body" layout="tb" w="7.5in"><subform name="tall" layout="position" w="7.5in" h="12in"><border><edge thickness="2pt" stroke="dashed"/></border><draw name="note" x="0in" y="0in" w="2in" h="0.3in"><value><text>Note</text></value></draw></subform></subform>"#;
+    let form = layout_xml(&one_area_form(r#"layout="tb""#, body)).unwrap();
+    assert_eq!(form.pages.len(), 2);
+    let mut side_length = 0.0;
+    for (n, page) in form.pages.iter().enumerate() {
+        let lines: Vec<_> = page
+            .items
+            .iter()
+            .filter_map(|it| if let Item::Line { from, to, width, color, stroke } = it { Some((*from, *to, *width, *color, *stroke)) } else { None })
+            .collect();
+        assert!(!lines.is_empty(), "page {n} has the box's edges");
+        for (from, to, width, color, stroke) in &lines {
+            assert_eq!(*stroke, Stroke::Dashed, "page {n}: {from:?}-{to:?}");
+            assert!(crate::pdf::line(*from, *to, *width, *color, *stroke, 792.0).contains("[8 4] 0 d 2 J "), "page {n}");
+        }
+        // The left edge's part on this page.
+        side_length += lines.iter().filter(|(f, t, ..)| (f.0 - t.0).abs() < 0.01 && f.0 < 100.0).map(|(f, t, ..)| (t.1 - f.1).abs()).sum::<f64>();
+    }
+    assert!((side_length - 12.0 * 72.0).abs() < 4.0, "the two parts of the left edge make the whole side: {side_length}");
+}
+
+/// A dash pattern scales with the edge's width, a dashed line's ink stays between its ends (its
+/// path shortened for the projecting caps), a rounded box's edge is dashed like a square one, and
+/// a width that would round every dash to zero, or isn't a number, still gives a valid pattern.
+#[test]
+fn dash_patterns_scale_with_width_and_stay_valid() {
+    use crate::layout::Rounded;
+    use crate::pdf::line;
+    // The path is shortened by half the width at each end, so the projecting caps end at the
+    // line's own ends; a solid line keeps its ends and butt caps.
+    assert_eq!(line((0.0, 0.0), (10.0, 0.0), 0.5, [0.0; 3], Stroke::Dashed, 100.0), "q 0 0 0 RG 0.5 w [2 1] 0 d 2 J 0.25 100 m 9.75 100 l S Q\n");
+    assert_eq!(line((0.0, 0.0), (10.0, 0.0), 0.5, [0.0; 3], Stroke::Solid, 100.0), "q 0 0 0 RG 0.5 w 0 100 m 10 100 l S Q\n");
+    // A vertical (border) edge is shortened along its own direction.
+    assert!(line((5.0, 0.0), (5.0, 20.0), 2.0, [0.0; 3], Stroke::Dotted, 100.0).contains(" 5 99 m 5 81 l "));
+    // A dashed line no longer than its width keeps its ends, with butt caps.
+    let short = line((0.0, 0.0), (2.0, 0.0), 3.0, [0.0; 3], Stroke::Dashed, 100.0);
+    assert!(short.contains("[12 6] 0 d 0 100 m 2 100 l ") && !short.contains(" J "), "{short}");
+    assert!(line((0.0, 0.0), (10.0, 0.0), 0.0001, [0.0; 3], Stroke::Dotted, 100.0).contains("[0.01 0.02] 0 d "));
+    let nan = line((0.0, 0.0), (10.0, 0.0), f64::NAN, [0.0; 3], Stroke::DashDot, 100.0);
+    assert!(nan.contains("[3 2 1 2] 0 d 0 100 m 10 100 l "), "{nan}");
+    let rounded = Rounded {
+        rect: Rect::new(36.0, 36.0, 144.0, 72.0),
+        radii: [18.0; 4],
+        inverted: [false; 4],
+        fill: None,
+        edge: Some((2.0, [0.0; 3], Stroke::DashDotDot)),
+        open_top: false,
+        open_bottom: false,
+    };
+    assert!(crate::pdf::rounded(&rounded, 792.0).starts_with("q 0 0 0 RG 2 w [6 4 2 4 2 4] 0 d 2 J "));
 }
 
 /// A flowed subform without a fixed height gets its border and fill round all it takes, margins

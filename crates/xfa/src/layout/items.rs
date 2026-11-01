@@ -1,4 +1,4 @@
-use super::{Arc, Face, HAlign, Rect, Span};
+use super::{Arc, Face, HAlign, Rect, Span, Stroke};
 
 /// How far below its baseline an underline is drawn, in the text's size: an underline is the
 /// level line pushed just before its span, this far below it (the PDF writer tells it apart from
@@ -16,7 +16,8 @@ pub enum Item {
         to: (f64, f64),
         width: f64,
         color: [f64; 3],
-        dashed: bool,
+        /// Its stroke, which sets its dash pattern ([`Stroke::Relief`] draws solid).
+        stroke: Stroke,
     },
     /// A box with rounded (or inverted) corners: its fill, and its edge drawn inside it.
     Rounded(Box<Rounded>),
@@ -39,8 +40,8 @@ pub struct Rounded {
     /// Corners whose curve goes into the box rather than around it, in the same order.
     pub inverted: [bool; 4],
     pub fill: Option<[f64; 3]>,
-    /// The edge: its width, colour and whether it is dashed.
-    pub edge: Option<(f64, [f64; 3], bool)>,
+    /// The edge: its width, colour and stroke (which sets its dash pattern).
+    pub edge: Option<(f64, [f64; 3], Stroke)>,
     /// A page break cut the box here: that side has no edge, and its corners are square.
     pub open_top: bool,
     pub open_bottom: bool,

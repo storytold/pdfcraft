@@ -100,6 +100,10 @@ pub enum Stroke {
     Solid,
     Dashed,
     Dotted,
+    /// A dash, then a dot.
+    DashDot,
+    /// A dash, then two dots.
+    DashDotDot,
     /// Raised, lowered, etched and embossed: drawn as a solid grey line.
     Relief,
 }

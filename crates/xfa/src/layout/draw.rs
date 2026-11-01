@@ -159,7 +159,7 @@ impl Layouter<'_> {
             let e = b.edges[0];
             let edge = vis[0].then(|| {
                 let color = if e.stroke == Stroke::Relief { [0.55, 0.55, 0.55] } else { e.color.0 };
-                (e.thickness.clamp(0.1, 20.0), color, matches!(e.stroke, Stroke::Dashed | Stroke::Dotted))
+                (e.thickness.clamp(0.1, 20.0), color, e.stroke)
             });
             let shape = Rounded {
                 rect,
@@ -191,13 +191,7 @@ impl Layouter<'_> {
                 _ => (t / 2.0, 0.0),
             };
             let color = if e.stroke == Stroke::Relief { [0.55, 0.55, 0.55] } else { e.color.0 };
-            self.push(Item::Line {
-                from: (seg.0.0 + dx, seg.0.1 + dy),
-                to: (seg.1.0 + dx, seg.1.1 + dy),
-                width: t,
-                color,
-                dashed: matches!(e.stroke, Stroke::Dashed | Stroke::Dotted),
-            })?;
+            self.push(Item::Line { from: (seg.0.0 + dx, seg.0.1 + dy), to: (seg.1.0 + dx, seg.1.1 + dy), width: t, color, stroke: e.stroke })?;
         }
         Ok(())
     }
@@ -243,7 +237,7 @@ impl Layouter<'_> {
                 } else {
                     ((inner.x, inner.y), (inner.right(), inner.bottom()))
                 };
-                self.push(Item::Line { from, to, width: edge.thickness.clamp(0.1, 20.0), color: edge.color.0, dashed: edge.stroke == Stroke::Dashed })
+                self.push(Item::Line { from, to, width: edge.thickness.clamp(0.1, 20.0), color: edge.color.0, stroke: edge.stroke })
             }
             Value::Rectangle(b) => self.draw_border(b, inner),
             Value::Empty => Ok(()),

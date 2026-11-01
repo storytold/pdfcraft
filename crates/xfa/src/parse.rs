@@ -119,8 +119,10 @@ fn parse_edge(n: XmlNode) -> Edge {
         thickness: attr_measure(n, "thickness").unwrap_or(0.5).max(0.0),
         color: parse_color(child(n, "color")).unwrap_or(Color::BLACK),
         stroke: match n.attribute("stroke") {
-            Some("dashed" | "dashDot" | "dashDotDot") => Stroke::Dashed,
+            Some("dashed") => Stroke::Dashed,
             Some("dotted") => Stroke::Dotted,
+            Some("dashDot") => Stroke::DashDot,
+            Some("dashDotDot") => Stroke::DashDotDot,
             Some("raised" | "lowered" | "etched" | "embossed") => Stroke::Relief,
             _ => Stroke::Solid,
         },
