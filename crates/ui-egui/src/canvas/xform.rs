@@ -17,7 +17,7 @@ impl DocView {
     }
 
     /// Where `page` is drawn this frame, with its coordinate mapping.
-    pub(crate) fn page_xform(&self, page: usize) -> Option<PageXform> {
+    pub fn page_xform(&self, page: usize) -> Option<PageXform> {
         self.screen_xforms.iter().find(|(p, _)| *p == page).map(|(_, xf)| *xf)
     }
 }
@@ -128,6 +128,10 @@ impl PageXform {
         Rect::from_two_pos(self.norm_to_screen(a.0, a.1), self.norm_to_screen(b.0, b.1))
     }
 
+    pub fn user_rect_f64(&self, info: &DocInfo, page: usize, r: [f64; 4]) -> Rect {
+        self.user_rect(info, page, r.map(|v| v as f32))
+    }
+
     /// This transform resized to a raster of `px` device pixels (width, height before the view
     /// rotation), so each of its texels covers one screen pixel. The rectangle's corner must
     /// already be on a whole pixel ([`snap_to_pixels`]).
@@ -147,5 +151,35 @@ impl PageXform {
         mesh.add_triangle(0, 1, 2);
         mesh.add_triangle(0, 2, 3);
         painter.add(egui::Shape::mesh(mesh));
+    }
+
+    /// Draw a sub-rectangle of a whole-page raster texture with specific texture UVs covering the normalised page region.
+    #[allow(clippy::too_many_arguments)]
+    pub fn paint_image_region(
+        &self,
+        painter: &egui::Painter,
+        tex: egui::TextureId,
+        pu0: f32,
+        pv0: f32,
+        pu1: f32,
+        pv1: f32,
+        tu0: f32,
+        tv0: f32,
+        tu1: f32,
+        tv1: f32,
+    ) {
+        let mut mesh = egui::Mesh::with_texture(tex);
+        let corners = [(pu0, pv0, tu0, tv0), (pu1, pv0, tu1, tv0), (pu1, pv1, tu1, tv1), (pu0, pv1, tu0, tv1)];
+        for (u, v, tu, tv) in corners {
+            mesh.vertices.push(egui::epaint::Vertex { pos: self.norm_to_screen(u, v), uv: pos2(tu, tv), color: Color32::WHITE });
+        }
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(0, 2, 3);
+        painter.add(egui::Shape::mesh(mesh));
+    }
+
+    /// Draw a sub-rectangle of a whole-page raster texture, where UV space matches page normalized space.
+    pub fn paint_page_texture_rect(&self, painter: &egui::Painter, tex: egui::TextureId, u0: f32, v0: f32, u1: f32, v1: f32) {
+        self.paint_image_region(painter, tex, u0, v0, u1, v1, u0, v0, u1, v1);
     }
 }

@@ -12,7 +12,7 @@ use crate::object::dict::keys::{
 };
 use crate::object::dict::{DictCache, probe_dict};
 use crate::object::indirect::IndirectObject;
-use crate::object::{Array, MaybeRef};
+use crate::object::{Array, MaybeRef, ObjRef};
 use crate::object::{DateTime, Dict};
 use crate::object::{Object, ObjectLike};
 use crate::pdf::PdfVersion;
@@ -30,6 +30,17 @@ use core::iter;
 use core::ops::Deref;
 
 pub(crate) const XREF_ENTRY_LEN: usize = 20;
+
+/// PdfCraft patch: (hayro-syntax (33)) how many references a read follows through objects that hold
+/// nothing else. Past it, as any cycle goes, the object reads as a missing one.
+const MAX_REFERENCE_HOPS: usize = 32;
+
+/// PdfCraft patch: (hayro-syntax (33)) what [`XRef::fetch`] found at an object's place.
+enum Fetched<T> {
+    Object(T),
+    /// All the object holds is a reference to this one.
+    Reference(ObjectIdentifier),
+}
 
 #[derive(Debug, Copy, Clone)]
 pub(crate) enum XRefError {
@@ -492,7 +503,11 @@ impl XRef {
 
                 iter::from_fn(move || {
                     for next in iter.by_ref() {
-                        if let Some(obj) = self.get_with(next.0, &ReaderContext::new(self, false)) {
+                        // PdfCraft patch: (hayro-syntax (33)) an object that only refers to another
+                        // isn't one of its own: followed, that one came out once more for each.
+                        if let Some(Fetched::Object(obj)) =
+                            self.fetch(next.0, &ReaderContext::new(self, false))
+                        {
                             return Some(obj);
                         } else {
                             // Skip invalid objects.
@@ -563,12 +578,48 @@ impl XRef {
     }
 
     /// Return the object with the given identifier.
+    ///
+    /// PdfCraft patch: (hayro-syntax (33)) an object that holds only a reference stands for what
+    /// that names. Read as a number it was the reference's own object number, and as anything else
+    /// it was lost. This is a loop, so a long chain takes no stack.
     #[allow(private_bounds)]
     pub(crate) fn get_with<'a, T>(
         &'a self,
         id: ObjectIdentifier,
         ctx: &ReaderContext<'a>,
     ) -> Option<T>
+    where
+        T: ObjectLike<'a>,
+    {
+        let mut id = id;
+        for _ in 0..=MAX_REFERENCE_HOPS {
+            match self.fetch::<T>(id, ctx)? {
+                Fetched::Object(object) => return Some(object),
+                Fetched::Reference(next) => id = next,
+            }
+        }
+        warn!("references lead on past the limit, or in a cycle: {id:?}");
+
+        None
+    }
+
+    /// PdfCraft patch: (hayro-syntax (33)) the object stream `id`. It has to be a stream stored as
+    /// that object (ISO 32000-2 7.5.7), so this follows no reference: the check of where it is stored
+    /// is of that object, and one reached through a reference could be a stream stored inside
+    /// another.
+    pub(crate) fn object_stream<'a>(
+        &'a self,
+        id: ObjectIdentifier,
+        ctx: &ReaderContext<'a>,
+    ) -> Option<Stream<'a>> {
+        match self.fetch::<Stream<'a>>(id, ctx)? {
+            Fetched::Object(stream) => Some(stream),
+            Fetched::Reference(_) => None,
+        }
+    }
+
+    /// What is stored at the object with the given identifier.
+    fn fetch<'a, T>(&'a self, id: ObjectIdentifier, ctx: &ReaderContext<'a>) -> Option<Fetched<T>>
     where
         T: ObjectLike<'a>,
     {
@@ -597,9 +648,13 @@ impl XRef {
                 ctx.set_in_object_stream(false);
                 r.jump(offset);
 
+                if let Some(next) = held_reference(r.clone(), id) {
+                    return Some(Fetched::Reference(next));
+                }
+
                 if let Some(object) = r.read_with_context::<IndirectObject<T>>(&ctx) {
                     if object.id() == &id {
-                        return Some(object.get());
+                        return Some(Fetched::Object(object.get()));
                     }
                 } else {
                     // There is a valid object at the offset, it's just not of the type the caller
@@ -622,7 +677,7 @@ impl XRef {
                     self.repair();
 
                     // Now try reading again.
-                    self.get_with::<T>(id, &ctx)
+                    self.fetch::<T>(id, &ctx)
                 }
             }
             EntryType::ObjStream(obj_stram_gen_num, index) => {
@@ -657,11 +712,20 @@ impl XRef {
                     // A stream whose pairs don't parse stays unreadable, as it was.
                     Some(offsets) => offsets?,
                     None => {
-                        let stream = self.get_with::<Stream<'_>>(obj_stream_id, &ctx)?;
+                        // PdfCraft patch: (hayro-syntax (33)) this read can reach another object
+                        // stream, whose `/N` or `/First` can be a member of the next: the gate's
+                        // limit holds here too, or a chain of them ran out of stack. It reads the
+                        // dictionary, which is all it needs: parsing the stream reads `/Length`
+                        // too, a second way to the next stream's index, which doubled at each.
+                        let _loading = repr.data.enter_loading(obj_stream_id)?;
+                        let Fetched::Object(dict) = self.fetch::<Dict<'_>>(obj_stream_id, &ctx)?
+                        else {
+                            return None;
+                        };
                         // `/N` and `/First` may be references that can't be followed while
                         // another stream loads: reading them fails without being remembered.
-                        let num_objects = stream.dict().get::<usize>(N)?;
-                        let first_offset = stream.dict().get::<usize>(FIRST)?;
+                        let num_objects = dict.get::<usize>(N)?;
+                        let first_offset = dict.get::<usize>(FIRST)?;
                         let parsed =
                             read_object_stream_index(num_objects, first_offset, data).map(Arc::new);
                         self.with_object_stream_indexes(|indexes| {
@@ -673,7 +737,12 @@ impl XRef {
                         .unwrap_or(parsed)?
                     }
                 };
-                ObjectStream::with_offsets(data, &ctx, offsets).get(index)
+                let stream = ObjectStream::with_offsets(data, &ctx, offsets);
+                if let Some(next) = stream.reference(index) {
+                    return Some(Fetched::Reference(next));
+                }
+
+                stream.get(index).map(Fetched::Object)
             }
         }
     }
@@ -1232,6 +1301,28 @@ impl<'a> ObjectStream<'a> {
 
         r.read_with_context::<T>(&self.ctx)
     }
+
+    /// PdfCraft patch: (hayro-syntax (33)) what the object at `index` refers to, when a reference is
+    /// all it holds.
+    fn reference(&self, index: u32) -> Option<ObjectIdentifier> {
+        let offset = self.offsets.get(index as usize)?.1;
+        let mut r = Reader::new(self.data);
+        r.jump(offset);
+        r.skip_white_spaces_and_comments();
+
+        Some(r.read_without_context::<ObjRef>()?.into())
+    }
+}
+
+/// PdfCraft patch: (hayro-syntax (33)) what the indirect object `id` at `r` refers to, when a
+/// reference is all it holds.
+fn held_reference(mut r: Reader<'_>, id: ObjectIdentifier) -> Option<ObjectIdentifier> {
+    if r.read_without_context::<ObjectIdentifier>()? != id {
+        return None;
+    }
+    r.skip_white_spaces_and_comments();
+
+    Some(r.read_without_context::<ObjRef>()?.into())
 }
 
 fn parse_metadata(info_dict: &Dict<'_>) -> Metadata {
@@ -1266,6 +1357,203 @@ fn parse_metadata(info_dict: &Dict<'_>) -> Metadata {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Pdf;
+
+    /// A file with an xref stream: `stored` are objects on their own, as they would follow
+    /// `n 0 obj`, and `packed` says of each object in an object stream which stream and place.
+    fn with_xref_stream(stored: &[(u32, Vec<u8>)], packed: &[(u32, u32, u16)]) -> Vec<u8> {
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = alloc::collections::BTreeMap::new();
+        for (num, body) in stored {
+            offsets.insert(*num, out.len());
+            out.extend_from_slice(alloc::format!("{num} 0 obj ").as_bytes());
+            out.extend_from_slice(body);
+            out.extend_from_slice(b"\nendobj\n");
+        }
+        let last = stored.iter().map(|o| o.0).chain(packed.iter().map(|o| o.0)).max().unwrap_or(0);
+        let (xref, size) = (last + 1, last + 2);
+        let at = out.len();
+        offsets.insert(xref, at);
+        let packed: alloc::collections::BTreeMap<u32, (u32, u16)> = packed.iter().map(|o| (o.0, (o.1, o.2))).collect();
+        let mut rows = Vec::new();
+        for num in 0..size {
+            if let Some(offset) = offsets.get(&num) {
+                rows.push(1);
+                rows.extend_from_slice(&(*offset as u32).to_be_bytes());
+                rows.extend_from_slice(&[0, 0]);
+            } else if let Some((stream, index)) = packed.get(&num) {
+                rows.push(2);
+                rows.extend_from_slice(&stream.to_be_bytes());
+                rows.extend_from_slice(&index.to_be_bytes());
+            } else {
+                rows.extend_from_slice(&[0; 7]);
+            }
+        }
+        out.extend_from_slice(
+            alloc::format!(
+                "{xref} 0 obj << /Type /XRef /Size {size} /W [1 4 2] /Root 1 0 R /Length {} >> stream\n",
+                rows.len()
+            )
+            .as_bytes(),
+        );
+        out.extend_from_slice(&rows);
+        out.extend_from_slice(alloc::format!("\nendstream endobj\nstartxref\n{at}\n%%EOF\n").as_bytes());
+        out
+    }
+
+    /// `/Type /ObjStm` around `members`, each stored at its offset, and `entries` of its own.
+    fn object_stream_of(members: &[(u32, &[u8])], entries: &str) -> Vec<u8> {
+        let (mut head, mut body) = (alloc::string::String::new(), Vec::new());
+        for (num, member) in members {
+            head.push_str(&alloc::format!("{num} {} ", body.len()));
+            body.extend_from_slice(member);
+            body.push(b'\n');
+        }
+        head.push('\n');
+        let dict = alloc::format!(
+            "<< /Type /ObjStm /N {} /First {} /Length {} {entries} >> stream\n",
+            members.len(),
+            head.len(),
+            head.len() + body.len()
+        );
+        let mut out = dict.into_bytes();
+        out.extend_from_slice(head.as_bytes());
+        out.extend_from_slice(&body);
+        out.extend_from_slice(b"\nendstream");
+        out
+    }
+
+    fn page_objects() -> Vec<(u32, Vec<u8>)> {
+        vec![
+            (1, b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()),
+            (2, b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec()),
+            (3, b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >>".to_vec()),
+        ]
+    }
+
+    /// An object stream is a stream stored as that object, however many references lead to one.
+    /// Object 10 holds a reference to 11, a stream stored inside object stream 12, and 31 claims to
+    /// be in 10, with 11's `/N`, `/First` or `/Length` being 31: reading it recursed until the
+    /// stack ran out. It reads as missing, and so does a member of such a stream.
+    #[test]
+    fn an_object_stream_isnt_reached_through_a_reference() {
+        for key in ["N", "First", "Length"] {
+            let inner = alloc::format!("<< /Type /ObjStm /{key} 31 0 R >> stream\n31 0 1\n\nendstream");
+            let mut stored = page_objects();
+            stored.push((10, b"11 0 R".to_vec()));
+            stored.push((12, object_stream_of(&[(11, inner.as_bytes())], "")));
+            let pdf = Pdf::new(with_xref_stream(&stored, &[(11, 12, 0), (31, 10, 0)])).unwrap();
+            assert_eq!(pdf.xref().get::<i32>(ObjectIdentifier::new(31, 0)), None, "{key}");
+        }
+        let inner = b"<< /Type /ObjStm /N 1 /First 5 /Length 8 >> stream\n20 0 7\n\nendstream";
+        let mut stored = page_objects();
+        stored.push((10, b"11 0 R".to_vec()));
+        stored.push((12, object_stream_of(&[(11, inner)], "")));
+        let pdf = Pdf::new(with_xref_stream(&stored, &[(11, 12, 0), (20, 10, 0)])).unwrap();
+        assert_eq!(pdf.xref().get::<i32>(ObjectIdentifier::new(20, 0)), None);
+    }
+
+    /// `count` object streams stored as themselves, the `keys` of each a member of the next, or
+    /// with `ring` of the first after the last. Reading the first member reads them all, and it is
+    /// `count + 100` to tell.
+    #[cfg(feature = "std")]
+    fn chain_of_object_streams(count: u32, keys: &[&str], ring: bool) -> Vec<u8> {
+        let mut stored = page_objects();
+        let mut packed = Vec::new();
+        for i in 0..count {
+            let (stream, member) = (100 + 2 * i, 101 + 2 * i);
+            let value = if i == 0 { count + 100 } else { 1 };
+            let data = alloc::format!("{member} 0 \n{value}\n");
+            let (first, length) = (alloc::format!("{}", alloc::format!("{member} 0 \n").len()), alloc::format!("{}", data.len()));
+            let next = match (i + 1 == count, ring) {
+                (true, true) => "101 0 R".into(),
+                (true, false) => "1".into(),
+                _ => alloc::format!("{} 0 R", member + 2),
+            };
+            let entry = |key, own: &'_ str| if keys.contains(&key) { next.clone() } else { own.into() };
+            let (n, first, length): (alloc::string::String, alloc::string::String, alloc::string::String) =
+                (entry("N", "1"), entry("First", &first), entry("Length", &length));
+            let body = alloc::format!("<< /Type /ObjStm /N {n} /First {first} /Length {length} >> stream\n{data}\nendstream");
+            stored.push((stream, body.into_bytes()));
+            packed.push((member, stream, 0));
+        }
+        with_xref_stream(&stored, &packed)
+    }
+
+    /// A chain of object streams, each with a member of the next for its `/N`, `/First` or
+    /// `/Length`, had no limit: one read recursed through all of them, holding a copy of the chain
+    /// at each, and 50,000 ran out of an 8 MiB stack. It stops at the gate's limit, on half the stack
+    /// of a render worker. Past that `/N` and `/First` can't be read, so the member reads as missing,
+    /// and a `/Length` that can't be read falls back on `endstream`, so it reads. A short chain reads.
+    #[cfg(feature = "std")]
+    #[test]
+    fn a_chain_of_object_streams_ends_at_the_limit_of_nested_loads() {
+        for key in ["N", "First", "Length"] {
+            let pdf = chain_of_object_streams(50_000, &[key], false);
+            std::thread::Builder::new()
+                .stack_size(1 << 20)
+                .spawn(move || {
+                    let pdf = Pdf::new(pdf).unwrap();
+                    let read = pdf.xref().get::<i32>(ObjectIdentifier::new(101, 0));
+                    assert_eq!(read, (key == "Length").then_some(50_100), "{key}");
+                })
+                .unwrap()
+                .join()
+                .unwrap();
+        }
+        let pdf = Pdf::new(chain_of_object_streams(10, &["N"], false)).unwrap();
+        assert_eq!(pdf.xref().get::<i32>(ObjectIdentifier::new(101, 0)), Some(110));
+    }
+
+    /// `/Length` and `/N` or `/First` both by reference were two ways to the next stream's index,
+    /// and an index that fails isn't remembered, so the work doubled at each stream: 65 streams, one
+    /// past the limit, in 8 KB, didn't finish, and other threads waited at the gate. The index reads
+    /// the dictionary alone now. Without that this doesn't end, so the time allowed can't fail it.
+    #[cfg(feature = "std")]
+    #[test]
+    fn a_chain_of_object_streams_takes_no_more_work_for_two_ways_on() {
+        for (count, ring) in [(65, false), (20, true), (5_000, false)] {
+            for keys in [&["Length", "N"][..], &["Length", "First"]] {
+                let pdf = chain_of_object_streams(count, keys, ring);
+                let (done, finished) = std::sync::mpsc::channel();
+                std::thread::Builder::new()
+                    .stack_size(1 << 20)
+                    .spawn(move || {
+                        let pdf = Pdf::new(pdf).unwrap();
+                        let _ = pdf.xref().get::<i32>(ObjectIdentifier::new(101, 0));
+                        let _ = done.send(());
+                    })
+                    .unwrap();
+                assert!(finished.recv_timeout(std::time::Duration::from_secs(120)).is_ok(), "{keys:?} of {count}");
+            }
+        }
+    }
+
+    /// Object 5, a member of a real object stream, holds a reference to object 6 stored on its own,
+    /// and 7, stored on its own, to 8, a member: each reads as what it names.
+    #[test]
+    fn a_reference_held_in_either_storage_is_followed() {
+        let mut stored = page_objects();
+        stored.push((6, b"42".to_vec()));
+        stored.push((7, b"8 0 R".to_vec()));
+        stored.push((9, object_stream_of(&[(5, b"6 0 R"), (8, b"43")], "")));
+        let pdf = Pdf::new(with_xref_stream(&stored, &[(5, 9, 0), (8, 9, 1)])).unwrap();
+        assert_eq!(pdf.xref().get::<i32>(ObjectIdentifier::new(5, 0)), Some(42));
+        assert_eq!(pdf.xref().get::<i32>(ObjectIdentifier::new(7, 0)), Some(43));
+    }
+
+    /// With no page tree, every page object is a page, and one that another object only refers to
+    /// is one page, not two.
+    #[test]
+    fn a_page_a_reference_is_held_to_is_found_once() {
+        let mut stored = page_objects();
+        stored[0].1 = b"<< /Type /Catalog /Pages 99 0 R >>".to_vec();
+        stored[2].1 = b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] /Contents 4 0 R >>".to_vec();
+        stored.push((4, b"<< /Length 0 >> stream\n\nendstream".to_vec()));
+        stored.push((12, b"3 0 R".to_vec()));
+        let pdf = Pdf::new(with_xref_stream(&stored, &[])).unwrap();
+        assert_eq!(pdf.pages().len(), 1);
+    }
 
     // PdfCraft patch tests (ported from craft-libs): xref stream entries are bounded by the
     // decoded data, and the type field is read at its full width.
