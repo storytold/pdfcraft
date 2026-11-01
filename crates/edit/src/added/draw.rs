@@ -1,5 +1,6 @@
 use super::layout::{
-    Piece, arabic_error, hebrew_error, is_arabic, is_hebrew, is_thai, latin_width, norm, shaped_layout, text_rect, thai_error, wrapped,
+    Piece, arabic_error, hebrew_error, is_arabic, is_hebrew, is_japanese_fallback, is_thai, japanese_error, japanese_face, latin_width, norm,
+    shaped_layout, text_rect, thai_error, wrapped,
 };
 use super::types::{AddedText, Align, Family};
 use super::{
@@ -45,7 +46,13 @@ fn draw_shaped(doc: &mut Document, t: &AddedText, taken: &Dict, fonts: &mut Dict
         .into_iter()
         .map(|(line, rtl, paragraph)| shaped_layout(t, &line, rtl).map(|(pieces, w)| (line, rtl, paragraph, pieces, w)))
         .collect::<Result<Vec<_>, _>>()?;
-    draw_laid_shaped(doc, t, &laid, taken, fonts, out, shaped_glyph)
+    // Japanese outlines come from the same style face the clusters were shaped with, so the glyph
+    // ids and the paths they are drawn from belong to one face.
+    let japanese = japanese_face(t);
+    draw_laid_shaped(doc, t, &laid, taken, fonts, out, |script, id| match script {
+        ShapedScript::Japanese => japanese.ok_or(GlyphError::NoFont).and_then(|face| pdfcraft_fonts::glyph_outline_from(face, id)),
+        other => shaped_glyph(other, id),
+    })
 }
 
 /// [`draw_shaped`] for lines that are already laid out. `outline` is the source of glyph outlines
@@ -60,6 +67,8 @@ pub(super) fn draw_laid_shaped(
     outline: impl Fn(ShapedScript, u32) -> Result<GlyphOutline, GlyphError>,
 ) -> Result<(), EditError> {
     let r = text_rect(t);
+    // The style face the Japanese clusters were shaped with names their Type 3 font too.
+    let japanese = japanese_face(t);
     let latin = font_name(t.family.base_font(t.bold, t.italic));
     // Every distinct cluster (a letter with its dots and the text it stands for) is one glyph of
     // one of the fonts, so copy and search get each character exactly once.
@@ -84,6 +93,7 @@ pub(super) fn draw_laid_shaped(
                     ShapedScript::Arabic => arabic_error(e, &c.text),
                     ShapedScript::Hebrew => hebrew_error(e, &c.text),
                     ShapedScript::Thai => thai_error(e, &c.text),
+                    ShapedScript::Japanese => japanese_error(e, &c.text),
                 })?);
             }
         }
@@ -92,7 +102,7 @@ pub(super) fn draw_laid_shaped(
     let mut taken_names: HashSet<Vec<u8>> = taken.iter().chain(fonts.iter()).map(|(name, _)| name.clone()).collect();
     let mut names = Vec::new();
     for chunk in keys.chunks(GLYPHS_PER_FONT) {
-        let font = type3_shaped(doc, chunk, &outlines);
+        let font = type3_shaped(doc, chunk, &outlines, japanese);
         // A name no font on the page has, so items never replace each other's fonts (object
         // numbers alone don't do: a full save renumbers objects but keeps resource names).
         let mut name = format!("PCAr{}", font.num);
@@ -163,7 +173,14 @@ fn cluster_key(c: &ShapedCluster) -> ClusterKey<'_> {
 }
 
 /// A Type 3 font with `clusters` as codes 1…, each drawn from its script face's glyph `outlines`.
-fn type3_shaped(doc: &mut Document, clusters: &[&ShapedCluster], outlines: &HashMap<(ShapedScript, u32), GlyphOutline>) -> ObjRef {
+/// `japanese` is the style face the Japanese clusters were shaped with (the script's fixed face is
+/// only the fallback for stand-in outlines).
+fn type3_shaped(
+    doc: &mut Document,
+    clusters: &[&ShapedCluster],
+    outlines: &HashMap<(ShapedScript, u32), GlyphOutline>,
+    japanese: Option<&'static pdfcraft_fonts::CraftFont>,
+) -> ObjRef {
     let mut charprocs = Dict::new();
     let mut differences = vec![Object::Int(1)];
     let mut widths = Vec::with_capacity(clusters.len());
@@ -212,14 +229,16 @@ fn type3_shaped(doc: &mut Document, clusters: &[&ShapedCluster], outlines: &Hash
     }
     cmap.push_str("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
     let cmap = doc.add(Object::Stream(Stream::flate(Dict::new(), cmap.as_bytes())));
-    // The face's family when every glyph comes from one script; without the face, the script's
-    // name (as Arabic items were always named).
+    // The face's family when every glyph comes from one script (the item's own Japanese face, whose
+    // outlines these are); without the face, the script's name (as Arabic items were always named).
     let family = match clusters.first().map(|c| c.script).filter(|s| clusters.iter().all(|c| c.script == *s)) {
+        Some(ShapedScript::Japanese) => japanese.or_else(|| ShapedScript::Japanese.font()).map_or("Japanese", |f| f.family),
         Some(script) => script.font().map_or(
             match script {
                 ShapedScript::Arabic => "Arabic",
                 ShapedScript::Hebrew => "Hebrew",
                 ShapedScript::Thai => "Thai",
+                ShapedScript::Japanese => "Japanese",
             },
             |f| f.family,
         ),
@@ -285,6 +304,7 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
             if t.text.chars().any(is_thai)
                 || face_or_new(is_arabic, pdfcraft_fonts::document_arabic_font().is_some())
                 || face_or_new(is_hebrew, pdfcraft_fonts::document_hebrew_font(false).is_some())
+                || face_or_new(is_japanese_fallback, japanese_face(t).is_some())
             {
                 draw_shaped(doc, t, taken, &mut fonts, &mut out)?;
                 res.set(b"Font".to_vec(), Object::Dict(fonts));
