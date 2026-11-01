@@ -9,6 +9,11 @@ impl DocView {
     /// zoom are kept). `None` before the first frame has laid pages out, when the bookmark just
     /// goes to the current page.
     pub(crate) fn bookmark_position(&self, info: &DocInfo) -> Option<(usize, [Option<f32>; 2])> {
+        // The page grid moves the viewport without refreshing where the pages are on screen, so
+        // there is no position to read: the bookmark goes to the current page.
+        if self.organize {
+            return None;
+        }
         if let Some(sel) = self.selection
             && let Some(text) = self.texts.get(&sel.page)
             && let Some(p) = info.pages.get(sel.page)
