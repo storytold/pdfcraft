@@ -339,12 +339,7 @@ fn han_candidates(traditional: bool) -> Vec<PathBuf> {
             if traditional { &["msjh.ttc", "msyh.ttc", "mingliu.ttc", "simsun.ttc"] } else { &["msyh.ttc", "msjh.ttc", "simsun.ttc", "mingliu.ttc"] };
         files.iter().map(|f| windows_fonts().join(f)).collect()
     } else if cfg!(target_os = "macos") {
-        let files: &[&str] = if traditional {
-            &["PingFang.ttc", "STHeiti Light.ttc", "STHeiti Medium.ttc", "Hiragino Sans GB.ttc"]
-        } else {
-            &["PingFang.ttc", "Hiragino Sans GB.ttc", "STHeiti Light.ttc", "STHeiti Medium.ttc"]
-        };
-        files.iter().map(|f| Path::new("/System/Library/Fonts").join(f)).collect()
+        macos_han_candidates(traditional)
     } else {
         unix_fonts(&[
             "truetype/wqy/wqy-microhei.ttc",
@@ -360,6 +355,26 @@ fn han_candidates(traditional: bool) -> Vec<PathBuf> {
             "arphic-uming/uming.ttc",
         ])
     }
+}
+
+/// macOS 26 moved PingFang out of `/System/Library/Fonts` into the reserved system-font directory;
+/// face 0 of that collection is the SC UI face. Older systems still have `PingFang.ttc`, which wins.
+const MACOS_PINGFANG_UI: &str = "/System/Library/PrivateFrameworks/FontServices.framework/Resources/Reserved/PingFangUI.ttc";
+
+fn macos_han_candidates(traditional: bool) -> Vec<PathBuf> {
+    let dir = Path::new("/System/Library/Fonts");
+    let pingfang_ui = PathBuf::from(MACOS_PINGFANG_UI);
+    let mut list = vec![dir.join("PingFang.ttc")];
+    if traditional {
+        // Face 0 of PingFangUI.ttc is Simplified Chinese, so STHeiti stays ahead of it.
+        list.extend(["STHeiti Light.ttc", "STHeiti Medium.ttc"].iter().map(|f| dir.join(f)));
+        list.push(pingfang_ui);
+        list.push(dir.join("Hiragino Sans GB.ttc"));
+    } else {
+        list.push(pingfang_ui);
+        list.extend(["Hiragino Sans GB.ttc", "STHeiti Light.ttc", "STHeiti Medium.ttc"].iter().map(|f| dir.join(f)));
+    }
+    list
 }
 
 /// Well-known locations of Korean faces, best first.
@@ -693,5 +708,22 @@ mod tests {
         } else {
             eprintln!("{last_resort:?} is not installed on this machine — optional to the loader, so nothing to check");
         }
+    }
+
+    #[test]
+    fn macos_simplified_prefers_pingfang_ui_over_hiragino() {
+        let list = macos_han_candidates(false);
+        let pos = |name: &str| list.iter().position(|p| p.ends_with(name));
+        assert_eq!(pos("PingFang.ttc"), Some(0));
+        assert_eq!(list[1], PathBuf::from(MACOS_PINGFANG_UI));
+        assert!(pos("PingFangUI.ttc") < pos("Hiragino Sans GB.ttc"));
+    }
+
+    #[test]
+    fn macos_traditional_keeps_stheiti_ahead_of_pingfang_ui() {
+        let list = macos_han_candidates(true);
+        let pos = |name: &str| list.iter().position(|p| p.ends_with(name));
+        assert!(pos("STHeiti Medium.ttc") < pos("PingFangUI.ttc"));
+        assert!(pos("PingFangUI.ttc").is_some());
     }
 }
