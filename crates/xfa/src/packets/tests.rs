@@ -54,6 +54,190 @@ fn fixture() -> Vec<(&'static str, Vec<u8>)> {
     ]
 }
 
+/// Store a whole synthetic XDP in one indirect stream, using the same storage as array fixtures.
+fn whole_document(bytes: Vec<u8>) -> (Document, Vec<ObjRef>) {
+    let (mut doc, refs) = array_document(&[("xdp", bytes)]);
+    doc.update_dict(doc.root().unwrap(), |catalog| {
+        let acro = catalog.get_mut(b"AcroForm").unwrap().as_dict_mut().unwrap();
+        acro.set(b"XFA".to_vec(), Object::Ref(refs[0]));
+    })
+    .unwrap();
+    (doc, refs)
+}
+
+/// An encoding mismatch must fail without rewriting stream bytes, dictionaries or XFA references.
+/// Check preservation before the refusal assertion so it also runs on the unfixed reader.
+fn assert_encoding_mismatch_refused(doc: &Document, refs: &[ObjRef]) {
+    let before: Vec<_> = refs.iter().map(|r| doc.get(*r)).collect();
+    let saved_before = write_incremental(doc, &SaveOptions::default()).unwrap();
+    let result = read_packets(doc);
+    assert_eq!(refs.iter().map(|r| doc.get(*r)).collect::<Vec<_>>(), before);
+    assert_eq!(write_incremental(doc, &SaveOptions::default()).unwrap(), saved_before);
+    assert!(matches!(result, Err(XfaError::Malformed(_))), "UTF-8 bytes declaring UTF-16 must be rejected: {result:?}");
+}
+
+/// The retained declaration in the first array packet must agree with its actual UTF-8 bytes.
+#[test]
+fn utf8_declaring_utf16_in_first_packet_is_rejected() {
+    let mut packets = fixture();
+    packets[0].1 = format!("{}{OPEN}", DECL.replace("UTF-8", "UTF-16")).into_bytes();
+    let (doc, refs) = array_document(&packets);
+    assert_encoding_mismatch_refused(&doc, &refs);
+}
+
+/// Validate a later named packet before stripping its declaration during XDP assembly.
+#[test]
+fn utf8_declaring_utf16_in_later_named_packet_is_rejected() {
+    let mut packets = fixture();
+    packets[2].1 = format!("{}{DATA}", DECL.replace("UTF-8", "UTF-16")).into_bytes();
+    let (doc, refs) = array_document(&packets);
+    assert_encoding_mismatch_refused(&doc, &refs);
+}
+
+/// The whole-stream path must apply the same byte/declaration check as named packet arrays.
+#[test]
+fn utf8_declaring_utf16_in_whole_xdp_is_rejected() {
+    let xml = format!("{}{OPEN}{TEMPLATE}{DATA}{CLOSE}", DECL.replace("UTF-8", "UTF-16"));
+    let (doc, refs) = whole_document(xml.into_bytes());
+    assert_encoding_mismatch_refused(&doc, &refs);
+}
+
+/// Matching UTF-8 and both UTF-16 byte orders, with and without BOMs, remain readable in arrays
+/// and whole streams. Reading must preserve every original compressed stream and XFA reference.
+#[test]
+fn matching_encoding_declarations_keep_array_and_whole_xdp_streams() {
+    for encoding in [
+        Encoding::Utf8 { bom: false },
+        Encoding::Utf8 { bom: true },
+        Encoding::Utf16Le { bom: false },
+        Encoding::Utf16Le { bom: true },
+        Encoding::Utf16Be { bom: false },
+        Encoding::Utf16Be { bom: true },
+    ] {
+        let label = if matches!(encoding, Encoding::Utf8 { .. }) { "UTF-8" } else { "UTF-16" };
+        let packets: Vec<_> =
+            fixture().into_iter().map(|(name, bytes)| (name, encode(&String::from_utf8(bytes).unwrap().replace("UTF-8", label), encoding))).collect();
+        let whole = format!("{}{OPEN}{TEMPLATE}{DATA}{CLOSE}", DECL.replace("UTF-8", label));
+        for (doc, refs) in [array_document(&packets), whole_document(encode(&whole, encoding))] {
+            let before: Vec<_> = refs.iter().map(|r| doc.get(*r)).collect();
+            let saved_before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+            let assembled = read_packets(&doc).unwrap().unwrap();
+            assert_layout(&assembled.xdp);
+            assert_eq!(refs.iter().map(|r| doc.get(*r)).collect::<Vec<_>>(), before, "{encoding:?}");
+            assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), saved_before, "{encoding:?}");
+        }
+    }
+}
+
+/// Exercise explicit endian labels and case-insensitive UTF labels against every supported
+/// byte order/BOM combination. Every read, including a rejected one, preserves stored objects.
+#[test]
+fn encoding_labels_match_byte_order_with_and_without_boms() {
+    for encoding in [
+        Encoding::Utf8 { bom: false },
+        Encoding::Utf8 { bom: true },
+        Encoding::Utf16Le { bom: false },
+        Encoding::Utf16Le { bom: true },
+        Encoding::Utf16Be { bom: false },
+        Encoding::Utf16Be { bom: true },
+    ] {
+        let (valid, invalid): (&[&str], &[&str]) = match encoding {
+            Encoding::Utf8 { .. } => (&["UTF-8", "utf-8"], &["UTF-16", "UTF-16LE", "UTF-16BE"]),
+            Encoding::Utf16Le { .. } => (&["UTF-16", "utf-16le"], &["UTF-8", "UTF-16BE"]),
+            Encoding::Utf16Be { .. } => (&["UTF-16", "utf-16be"], &["UTF-8", "UTF-16LE"]),
+        };
+        for (labels, accepted) in [(valid, true), (invalid, false)] {
+            for label in labels {
+                let xml = format!("{}{OPEN}{TEMPLATE}{DATA}{CLOSE}", DECL.replace("UTF-8", label));
+                let (doc, refs) = whole_document(encode(&xml, encoding));
+                let before = doc.get(refs[0]);
+                let result = read_packets(&doc);
+                assert_eq!(doc.get(refs[0]), before);
+                if accepted {
+                    assert_layout(&result.unwrap().unwrap().xdp);
+                } else {
+                    assert!(matches!(result, Err(XfaError::Malformed(_))), "{encoding:?}, {label}: {result:?}");
+                }
+            }
+        }
+    }
+}
+
+/// A BOM cannot override an opposing XML opening code unit or a UTF-8 declaration prefix.
+#[test]
+fn contradictory_boms_and_xml_byte_order_are_rejected_without_rewriting() {
+    let xml = format!("{DECL}{OPEN}{TEMPLATE}{DATA}{CLOSE}");
+    for (bom, body) in [
+        (vec![0xFF, 0xFE], encode(&xml, Encoding::Utf16Be { bom: false })),
+        (vec![0xFE, 0xFF], encode(&xml, Encoding::Utf16Le { bom: false })),
+        (vec![0xFF, 0xFE], xml.as_bytes().to_vec()),
+        (vec![0xFE, 0xFF], xml.as_bytes().to_vec()),
+        (vec![0xEF, 0xBB, 0xBF], encode(&xml, Encoding::Utf16Le { bom: false })),
+        (vec![0xEF, 0xBB, 0xBF], encode(&xml, Encoding::Utf16Be { bom: false })),
+    ] {
+        let bytes = [bom, body].concat();
+        for (doc, refs) in [whole_document(bytes.clone()), array_document(&[("template", bytes)])] {
+            assert_encoding_mismatch_refused(&doc, &refs);
+        }
+    }
+}
+
+/// A false UTF label inside a continued lexical section is literal content, including an
+/// attribute that the downstream XML parser must still reject for its literal less-than sign.
+#[test]
+fn encoding_checks_respect_continued_lexical_sections() {
+    let literal = DECL.replace("UTF-8", "UTF-16");
+    for (start, end, well_formed) in
+        [("<!--", "-->", true), ("<note><![CDATA[", "]]></note>", true), ("<?observer", "", true), ("<note attr='", "'>text</note>", false)]
+    {
+        let (doc, refs) = array_document(&[
+            ("preamble", format!("{DECL}{OPEN}{start}").into_bytes()),
+            ("continued", format!("{literal}{end}").into_bytes()),
+            ("template", TEMPLATE.as_bytes().to_vec()),
+            ("datasets", DATA.as_bytes().to_vec()),
+            ("postamble", CLOSE.as_bytes().to_vec()),
+        ]);
+        let before: Vec<_> = refs.iter().map(|r| doc.get(*r)).collect();
+        let xml = read_packets(&doc).unwrap().unwrap().xdp;
+        assert!(xml.contains(&literal));
+        assert_eq!(roxmltree::Document::parse(&xml).is_ok(), well_formed);
+        assert_eq!(refs.iter().map(|r| doc.get(*r)).collect::<Vec<_>>(), before);
+    }
+}
+
+/// Preserve unknown legacy labels and existing lossy input decoding outside UTF contradictions.
+#[test]
+fn legacy_labels_and_lossy_reading_remain_tolerated() {
+    let xml = format!("{}{OPEN}{TEMPLATE}{DATA}{CLOSE}", DECL.replace("UTF-8", "ISO-8859-1"));
+    let mut bytes = xml.into_bytes();
+    let at = bytes.iter().position(|b| *b == b'Z').unwrap();
+    bytes[at] = 0xE9;
+    let (doc, refs) = whole_document(bytes);
+    let before = doc.get(refs[0]);
+    let xml = read_packets(&doc).unwrap().unwrap().xdp;
+    assert!(xml.contains('\u{FFFD}'));
+    assert!(roxmltree::Document::parse(&xml).is_ok());
+    assert_eq!(doc.get(refs[0]), before);
+}
+
+/// Encoded byte estimates include UTF-8 BOMs and UTF-16 surrogate pairs without allocating
+/// a candidate. Compare against actual encoding for small Latin, CJK and non-BMP strings.
+#[test]
+fn encoded_lengths_include_boms_and_surrogate_pairs() {
+    for text in ["", "ascii", "é日本", "\u{1F600}"] {
+        for encoding in [
+            Encoding::Utf8 { bom: false },
+            Encoding::Utf8 { bom: true },
+            Encoding::Utf16Le { bom: false },
+            Encoding::Utf16Le { bom: true },
+            Encoding::Utf16Be { bom: false },
+            Encoding::Utf16Be { bom: true },
+        ] {
+            assert_eq!(encoded_len(text, encoding), Some(encode(text, encoding).len()));
+        }
+    }
+}
+
 /// Exercise all marker combinations so the shared PDF marker rule cannot drift between callers.
 #[test]
 fn layout_marker_rule_covers_all_boolean_combinations() {
@@ -303,6 +487,69 @@ fn inner_declarations_and_unrelated_xml_errors_are_not_repaired() {
         if !extra.starts_with(DECL) {
             assert!(xml.contains(&extra), "interior syntax must stay intact");
         }
+    }
+}
+
+/// Preserve legal-prolog DTD text during packet assembly, then require the template parser to
+/// reject it before layout can change the PDF's original XFA packet storage.
+#[test]
+fn legal_prolog_dtds_are_rejected_without_mutating_packet_storage() {
+    let dtd_cases = [
+        ("internal entity", "<!DOCTYPE xdp:xdp [<!ENTITY xfa_test 'small'>]>", Some("&xfa_test;")),
+        ("external subset", "<!DOCTYPE xdp:xdp SYSTEM 'file:///__pdfcraft_xfa_missing_subset__.dtd'>", None),
+        (
+            "external general entity",
+            "<!DOCTYPE xdp:xdp [<!ENTITY xfa_test SYSTEM 'file:///__pdfcraft_xfa_missing_entity__.txt'>]>",
+            Some("&xfa_test;"),
+        ),
+        ("small nested entity graph", "<!DOCTYPE xdp:xdp [<!ENTITY xfa_leaf 'small'><!ENTITY xfa_pair '&xfa_leaf;&xfa_leaf;'>]>", Some("&xfa_pair;")),
+    ];
+
+    for whole in [false, true] {
+        for (label, doctype, entity) in dtd_cases {
+            let data = entity.map_or_else(|| DATA.to_owned(), |value| DATA.replace("Zoë &amp; Co", value));
+            let xml = format!("{DECL}{doctype}{OPEN}{TEMPLATE}{data}{CLOSE}");
+            let (mut doc, refs) = if whole {
+                whole_document(xml.as_bytes().to_vec())
+            } else {
+                array_document(&[
+                    ("preamble", format!("{DECL}{doctype}{OPEN}").into_bytes()),
+                    ("template", format!("{DECL}{TEMPLATE}").into_bytes()),
+                    ("datasets", format!("{DECL}{data}").into_bytes()),
+                    ("postamble", CLOSE.as_bytes().to_vec()),
+                ])
+            };
+            let assembled = read_packets(&doc).expect("packet decoding succeeds").expect("XFA packets exist");
+            let expected = if whole { xml } else { format!("{DECL}{doctype}{OPEN}\n{TEMPLATE}\n{data}\n{CLOSE}\n") };
+            assert_eq!(assembled.xdp, expected, "packet reader preserves the legal prolog for {label}");
+            if let Some(reference) = entity {
+                assert!(assembled.xdp.contains(reference), "the {label} entity reference must be present in assembled XML");
+            }
+
+            let parse = crate::parse(&assembled.xdp);
+            assert!(
+                matches!(&parse, Err(XfaError::Malformed(message)) if message.contains("XML with DTD detected")),
+                "template parser must reject the legal-prolog {label} DTD with allow_dtd=false: {parse:?}"
+            );
+
+            let original_streams: Vec<_> = refs.iter().map(|reference| doc.get(*reference).clone()).collect();
+            let original_pdf = write_incremental(&doc, &SaveOptions::default()).expect("synthetic PDF serializes");
+            let layout = crate::render_into(&mut doc);
+            assert!(
+                matches!(&layout, Err(XfaError::Malformed(message)) if message.contains("XML with DTD detected")),
+                "layout must fail at DTD parsing for {label}: {layout:?}"
+            );
+            assert_eq!(refs.iter().map(|reference| doc.get(*reference).clone()).collect::<Vec<_>>(), original_streams);
+            assert_eq!(write_incremental(&doc, &SaveOptions::default()).expect("PDF still serializes"), original_pdf);
+        }
+    }
+
+    for whole in [false, true] {
+        let (mut doc, _) =
+            if whole { whole_document(format!("{DECL}{OPEN}{TEMPLATE}{DATA}{CLOSE}").into_bytes()) } else { array_document(&fixture()) };
+        let assembled = read_packets(&doc).expect("DTD-free packet decoding succeeds").expect("XFA packets exist");
+        assert_layout(&assembled.xdp);
+        assert!(crate::render_into(&mut doc).is_ok(), "valid DTD-free XDP lays out");
     }
 }
 

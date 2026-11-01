@@ -520,6 +520,7 @@ mod tests {
     /// Refuse oversized output before allocating a namespace wrapper or parsing it.
     #[test]
     fn dataset_declaration_writer_rejects_oversized_output() {
+        let _large = crate::packets::LARGE_PACKET_TEST.lock().unwrap_or_else(|e| e.into_inner());
         let text = " ".repeat(MAX_PACKET_WRITE + 1);
         let mut warnings = Vec::new();
         assert!(!readable(&text, Within::Packet, &mut warnings));
