@@ -114,10 +114,15 @@ impl PdfCraftApp {
         self.document_copy = None;
         let Some(v) = self.views.get(i) else { return false };
         let id = v.id;
-        // A page the file couldn't give is read again (`DocumentCopyJob::of`).
-        if v.all_text && (!v.text_unread.is_empty() || !v.pages_without_text().is_empty()) {
+        // Left out, a page the file couldn't give would make a copy that looks complete.
+        let unread = !v.text_unread.is_empty();
+        if v.all_text && (unread || !v.pages_without_text().is_empty()) {
             // Checked before any page is read: a document that refuses copying reads nothing.
             if !self.may_copy(id) {
+                return false;
+            }
+            if unread {
+                self.notify_copy_failed(id, pdfcraft_render::PART_UNREAD);
                 return false;
             }
             let Some(job) = self.views.get(i).and_then(|v| Some(DocumentCopyJob::of(v, self.session.get(id)?))) else { return false };
@@ -130,6 +135,11 @@ impl PdfCraftApp {
         }
         ctx.copy_text(text);
         true
+    }
+
+    fn notify_copy_failed(&mut self, doc: DocId, e: &str) {
+        let name = self.session.get(doc).map(|d| d.name.clone()).unwrap_or_default();
+        self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", e)]);
     }
 
     /// The clipboard text of a whole-document copy, once its pages are read; dropped with the
@@ -149,10 +159,7 @@ impl PdfCraftApp {
                 match text {
                     Ok(text) if text.is_empty() => {}
                     Ok(text) => ctx.copy_text(text),
-                    Err(e) => {
-                        let name = self.session.get(doc).map(|d| d.name.clone()).unwrap_or_default();
-                        self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", e)]);
-                    }
+                    Err(e) => self.notify_copy_failed(doc, e),
                 }
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(50)),

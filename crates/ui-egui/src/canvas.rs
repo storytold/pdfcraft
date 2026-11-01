@@ -521,7 +521,7 @@ pub struct DocView {
     /// Text layers, extracted in the background on demand (selection, find, copy).
     pub(crate) texts: HashMap<usize, Arc<PageText>>,
     pub(crate) text_failed: HashSet<usize>,
-    /// The failed pages that failed because the file couldn't give them, which a new read can tell.
+    /// Failed pages the file couldn't give: a copy of all the text refuses them.
     pub(crate) text_unread: HashSet<usize>,
     pub find: Option<Find>,
     selection: Option<Selection>,

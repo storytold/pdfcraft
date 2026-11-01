@@ -262,8 +262,7 @@ impl DocumentCopyJob {
         let pages = (0..v.page_count())
             .map(|p| match v.texts.get(&p) {
                 Some(t) => CopyPage::Read(t.clone()),
-                // Any other failure (the watchdog's) would run here without its time limit.
-                None if v.text_failed.contains(&p) && !v.text_unread.contains(&p) => CopyPage::Skip,
+                None if v.text_failed.contains(&p) => CopyPage::Skip,
                 None => CopyPage::ToRead,
             })
             .collect();
