@@ -1,5 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (gap 9: Verify PDF/X ships as partial for PDF/X-1a, -3 and -4; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (gap 3: #2517 a blank line stays a paragraph break; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
@@ -44,7 +45,7 @@ update the numbers.
 | 6 | Open-issue backlog of wrong results in shipped features | stability | 45–80 | this file |
 | 7 | OCR reads only unaccented Latin | feature | 40–75 | [file-format-parity.md](file-format-parity.md) |
 | 8 | Office export weak, Office import absent | file format | 55–100 | [file-format-parity.md](file-format-parity.md) |
-| 9 | No Preflight; PDF/A partial; PDF/X and PDF/UA absent | standards | 65–115 | [pdf-spec-parity.md](pdf-spec-parity.md) |
+| 9 | No Preflight; PDF/A and PDF/X verification partial; PDF/X convert and PDF/UA absent | standards | 65–115 | [pdf-spec-parity.md](pdf-spec-parity.md) |
 | 10 | Signatures: no PKCS #11, timestamp servers or online revocation | feature, hardware | 40–70 | [pdf-spec-parity.md](pdf-spec-parity.md) |
 | 11 | Accessibility: checker only, no tagging tools | feature | 40–70 | [target-app-parity.md](target-app-parity.md) |
 | 12 | No measured fidelity harness against Acrobat | quality | (in 2) | [target-app-parity.md](target-app-parity.md) |
@@ -197,14 +198,17 @@ update the numbers.
   keeps layout (20–35 h).
 - **Estimate:** 55–100 h. **Doc:** [file-format-parity.md](file-format-parity.md).
 
-### 9. No Preflight; PDF/A partial; PDF/X and PDF/UA absent
+### 9. No Preflight; PDF/A and PDF/X verification partial; PDF/X convert and PDF/UA absent
 
 - **Missing:** Preflight (profiles, single checks and fixups, results tree, reports, droplets);
-  PDF/A-1, PDF/A-4 and conformance levels a/u; PDF/X verify and convert; PDF/UA-1/2 verify; PDF/E,
-  PDF/VT; output-intent choice; transparency flattening.
-- **Evidence:** 12 Preflight features and 9 standards features planned; `optimize.pdfa-validate`,
-  `optimize.pdfa-convert` partial (2b/3b structural rules; CMYK documents get no output intent).
-  Acrobat ships hundreds of built-in Preflight profiles.
+  PDF/A-1, PDF/A-4 and conformance levels a/u; Save as PDF/X, PDF/X-4p/-5/-6 and PDF/X content
+  checks beyond device colour; PDF/UA-1/2 verify; PDF/E, PDF/VT; output-intent choice;
+  transparency flattening.
+- **Evidence:** 12 Preflight features and 8 standards features planned; `optimize.pdfa-validate`,
+  `optimize.pdfa-convert` partial (2b/3b structural rules; CMYK documents get no output intent);
+  `optimize.pdfx-validate` partial (PDF/X-1a:2001/2003, PDF/X-3:2002/2003 and PDF/X-4 structural
+  rules from the CGATS PDF/X application notes, verification only). Acrobat ships hundreds of
+  built-in Preflight profiles.
 - **Impact:** blocks print shops, archives and accessibility compliance work.
 - **Estimate:** 65–115 h. **Doc:** [pdf-spec-parity.md](pdf-spec-parity.md).
 
@@ -419,6 +423,7 @@ update the numbers.
 | 2026-10-15 | minor | Gap 21: the side-by-side view had already shipped; the Compare panel filters text changes and visual differences. Estimate 10–20 h → 8–16 h |
 | 2026-10-20 | minor | Gap 6 #3673: Character encoding accepts Identity-H/V with Adobe CJK collections, or a predefined non-Identity CMap; negative and indirect-reference regressions and a read-only automation test passed after failing before the fix. Per-glyph validation and embedded-font extraction remain separate. Scores and estimates unchanged. |
 | 2026-10-17 | minor | Gap 6: the redaction audit counts a cover over one word of a long line instead of a clean bill (#2662, fixed by #2698). Estimates unchanged. |
+| 2026-10-15 | minor | Gap 9: Verify PDF/X (PDF/X-1a, -3 and -4 structural rules, engine, tool and dialog) is partial; Save as PDF/X and PDF/UA remain. Estimates unchanged. |
 | 2026-10-15 | minor | Gap 12: the text oracle scores reading order as well as word F1, which is a bag of words and cannot see order; the first measurement separated 18 improvements from 6 regressions in a change F1 called unchanged on 26 of 29 files. Estimates unchanged. |
 | 2026-10-14 | minor | M1: raw-deflate fallback preserves decoding-limit errors in strict and tolerant decoding; synthetic filter and COS stream regressions. Estimates unchanged. |
 | 2026-10-15 | patch | Gap 24: record localization and installers as partial (unusable Chinese, Telugu and Arabic; unsigned Linux packages) |

@@ -220,6 +220,7 @@
 	Import form data…	Importar datos de formulario…
 	Export form data…	Exportar datos de formulario…
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	Action Wizard…	Asistente de acciones…
 	Prepare for distribution…	Preparar para distribución…
 	Optimize scanned documents…	Optimizar documentos escaneados…
@@ -473,6 +474,7 @@
 	Standards	Estándares
 	Save as PDF/A	Guardar como PDF/A
 	Save as PDF/X	Guardar como PDF/X
+	Verify PDF/X	Verificar PDF/X
 	Save as PDF/UA	Guardar como PDF/UA
 	Add search index	Añadir índice de búsqueda
 	Index	Índice
@@ -1959,6 +1961,45 @@ action wizard	Start	Iniciar
 	PostScript XObjects aren't allowed	No se permiten XObjects PostScript
 	Embedded files must be PDF/A files themselves (use PDF/A-3 for others)	Los archivos incrustados deben ser a su vez archivos PDF/A (usa PDF/A-3 para otros)
 	An embedded file has no AFRelationship	Un archivo incrustado no tiene AFRelationship
+	The document information doesn't identify the file as {}	La información del documento no identifica el archivo como {}
+	The metadata has no {}	Los metadatos no tienen {}
+	The document information and the metadata name different PDF/X versions	La información del documento y los metadatos indican versiones de PDF/X distintas
+	The file trailer has no document ID	El trailer del archivo no tiene ID de documento
+	The document doesn't say whether it is trapped (Trapped)	El documento no indica si se le ha aplicado reventado (Trapped)
+	Trapped is {}, but it must be /True or /False	Trapped es {}, pero debe ser /True o /False
+	The Trapped key and the metadata's pdf:Trapped disagree	La clave Trapped y el pdf:Trapped de los metadatos no coinciden
+	There is no PDF/X output intent (GTS_PDFX)	No hay propósito de salida PDF/X (GTS_PDFX)
+	There is more than one PDF/X output intent	Hay más de un propósito de salida PDF/X
+	The PDF/X output intent has no OutputConditionIdentifier	El propósito de salida PDF/X no tiene OutputConditionIdentifier
+	The PDF/X output intent has no embedded profile (DestOutputProfile)	El propósito de salida PDF/X no tiene un perfil incrustado (DestOutputProfile)
+	The PDF/X output intent has neither an embedded profile nor a characterization in the ICC registry	El propósito de salida PDF/X no tiene ni un perfil incrustado ni una caracterización del registro ICC
+	The output intent's profile isn't a valid ICC profile	El perfil del propósito de salida no es un perfil ICC válido
+	The output intent's profile isn't an output (printer) profile	El perfil del propósito de salida no es un perfil de salida (de impresora)
+	The output intent's profile describes {} colour, but PDF/X-1a needs a CMYK printing condition	El perfil del propósito de salida describe color {}, pero PDF/X-1a necesita una condición de impresión CMYK
+	The output intent's profile describes {} colour; it must be gray, RGB or CMYK	El perfil del propósito de salida describe color {}; debe ser gris, RGB o CMYK
+	The output intent's profile has /N {}, which doesn't match its colour space	El perfil del propósito de salida tiene /N {}, que no coincide con su espacio de color
+	The output intent's profile has no device-to-PCS transform (AToB1 or grayTRC)	El perfil del propósito de salida no tiene transformación de dispositivo a PCS (AToB1 o grayTRC)
+	The page has no valid MediaBox	La página no tiene un MediaBox válido
+	The page has neither a TrimBox nor an ArtBox	La página no tiene ni TrimBox ni ArtBox
+	The page has both a TrimBox and an ArtBox	La página tiene a la vez TrimBox y ArtBox
+	The {} extends beyond the BleedBox	El {} sobresale del BleedBox
+	The {} extends beyond the CropBox	El {} sobresale del CropBox
+	The {} extends beyond the MediaBox	El {} sobresale del MediaBox
+	A {} annotation lies within the BleedBox	Una anotación {} está dentro del BleedBox
+	A PrinterMark annotation overlaps the TrimBox or ArtBox	Una anotación PrinterMark se superpone al TrimBox o al ArtBox
+	A stream uses JBIG2 compression	Una secuencia usa compresión JBIG2
+	A form XObject refers to a page of another file (reference XObject)	Un XObject de formulario hace referencia a una página de otro archivo (XObject de referencia)
+	An image or form has OPI information	Una imagen o un formulario tiene información OPI
+	A graphics state uses a soft mask	Un estado gráfico usa una máscara suave
+	A graphics state sets an opacity below 1	Un estado gráfico fija una opacidad inferior a 1
+	A graphics state uses the {} blend mode	Un estado gráfico usa el modo de fusión {}
+	An image has a soft mask	Una imagen tiene una máscara suave
+	The {} colour space isn't allowed: PDF/X-1a allows only CMYK, gray and spot colour	El espacio de color {} no está permitido: PDF/X-1a solo admite CMYK, gris y tintas planas
+	A colour space is nested too deeply for the spaces under it to be checked	Un espacio de color está anidado a demasiada profundidad para comprobar los espacios que tiene debajo
+	Content uses DeviceRGB colour: PDF/X-1a allows only CMYK, gray and spot colour	El contenido usa color DeviceRGB: PDF/X-1a solo admite CMYK, gris y tintas planas
+	{} colour doesn't match the output intent's colour space	El color {} no coincide con el espacio de color del propósito de salida
+	Content uses {} colour, which doesn't match the output intent's colour space	El contenido usa color {}, que no coincide con el espacio de color del propósito de salida
+	Device-independent colour is used, so the output intent needs an embedded profile	Se usa color independiente del dispositivo, así que el propósito de salida necesita un perfil incrustado
 	Select Icon	Seleccionar icono
 	Choose images	Elegir imágenes
 	{dpi} pixels/inch	{dpi} píxeles/pulgada

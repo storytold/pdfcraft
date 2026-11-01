@@ -110,6 +110,11 @@ impl PdfCraftApp {
                     "compare-files" => Some(Dialog::CompareFiles),
                     "action-wizard" => Some(Dialog::ActionWizard),
                     "pdfa" => Some(Dialog::PdfA),
+                    "pdfx" => {
+                        // Same path as the menu, so the dialog starts on the declared level.
+                        self.open_pdfx();
+                        self.dialog
+                    }
                     "signature" => Some(Dialog::Signature),
                     "optimize" => Some(Dialog::Optimize),
                     "sign" | "certify" => {
