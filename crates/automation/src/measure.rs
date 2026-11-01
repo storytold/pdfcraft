@@ -2,7 +2,7 @@
 use crate::{Args, Automation, Result, ToolError, failed};
 use pdfcraft_engine::{
     Edit, Style,
-    measure::{self, Kind, NewMeasurement, Scale},
+    measure::{self, Kind, NewMeasurement, PageUnit, Scale},
 };
 use serde_json::{Value, json};
 
@@ -78,16 +78,30 @@ impl Automation {
         let info = self.doc(a)?.info.pages.get(page).ok_or_else(|| failed("no such page"))?.clone();
         let precision = u8::try_from(a.opt_int("precision")?.unwrap_or(2)).map_err(|_| failed("precision must be between 0 and 6"))?;
         let unit = a.opt_str("unit")?.unwrap_or("in");
+        if ["points", "units_per_point", "page_distance"].iter().filter(|k| a.get(k).is_some()).count() > 1 {
+            return Err(failed("pass one of calibration points, units_per_point or page_distance"));
+        }
+        if a.get("page_unit").is_some() && a.get("page_distance").is_none() {
+            return Err(failed("page_unit is the unit of page_distance; pass page_distance too"));
+        }
         let scale = if a.get("points").is_some() {
-            if a.get("units_per_point").is_some() {
-                return Err(failed("pass calibration points or units_per_point, not both"));
-            }
             let (_, points) = self.measurement_points(a)?;
             let [from, to] = points.as_slice() else {
                 return Err(failed("scale calibration needs exactly two points"));
             };
             let length = a.opt_num("distance")?.ok_or_else(|| failed("calibration needs a real-world distance"))?;
             Scale::calibrate(*from, *to, length, unit, precision).map_err(failed)?
+        } else if let Some(page_distance) = a.opt_num("page_distance")? {
+            // A ratio, "page_distance page_unit on the page = distance unit"; the page unit
+            // defaults to the real-world one, as "1:50" means 1 mm = 50 mm.
+            let page_unit = match a.opt_str("page_unit")? {
+                Some(u) => PageUnit::from_label(u).ok_or_else(|| failed("page_unit must be pt, in, mm or cm"))?,
+                None => PageUnit::from_label(unit).ok_or_else(|| failed("pass page_unit (pt, in, mm or cm) when unit is not one of them"))?,
+            };
+            let length = a.opt_num("distance")?.ok_or_else(|| failed("a scale ratio needs the real-world distance"))?;
+            let from = self.doc(a)?.measurement_to_user(page, [0.0, 0.0]).map_err(failed)?;
+            let to = self.doc(a)?.measurement_to_user(page, [1.0, 0.0]).map_err(failed)?;
+            Scale::ratio(from, to, page_distance, page_unit, length, unit, precision).map_err(failed)?
         } else if let Some(factor) = a.opt_num("units_per_point")? {
             {
                 let from = self.doc(a)?.measurement_to_user(page, [0.0, 0.0]).map_err(failed)?;

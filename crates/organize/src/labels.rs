@@ -385,13 +385,40 @@ pub fn set_page_label_ranges(doc: &mut Document, ranges: &[LabelRange]) -> Resul
             spec.set(b"St".to_vec(), Object::Int(i64::from(r.first)));
         }
         nums.push(Object::Int(r.start as i64));
-        nums.push(Object::Dict(spec));
+        // Indirect, as Acrobat writes them: a direct dictionary is valid too, but some readers
+        // (pdfannots2json, through unipdf) skip it and show physical page numbers (#1763).
+        nums.push(Object::Ref(doc.add(Object::Dict(spec))));
     }
     let mut tree = Dict::new();
     tree.set(b"Nums".to_vec(), Object::Array(nums));
     let tree = doc.add(Object::Dict(tree));
     doc.update_dict(root, |c| c.set(b"PageLabels".to_vec(), Object::Ref(tree)))?;
     Ok(())
+}
+
+/// After `deleted` pages (0-based, as they were numbered before the delete) are gone, move the label
+/// ranges with the pages they label: a range starts as many pages earlier as were deleted before
+/// it, and keeps its first number, so numbering continues over the gap as in Acrobat. A range whose
+/// first page went starts on the next page left; one left with no pages gives way to the next.
+/// A tree that can't be read is left as it is: the delete still goes ahead.
+pub(crate) fn drop_deleted_pages(doc: &mut Document, deleted: &[usize]) -> Result<(), OrganizeError> {
+    let Ok(old) = checked_ranges(doc) else { return Ok(()) };
+    let mut deleted = deleted.to_vec();
+    deleted.sort_unstable();
+    deleted.dedup();
+    let mut ranges: Vec<LabelRange> = Vec::with_capacity(old.len());
+    for r in &old {
+        let start = r.start.saturating_sub(deleted.partition_point(|d| *d < r.start));
+        match ranges.last_mut() {
+            // The later range is the one on the first page left; ranges stay sorted by start.
+            Some(last) if last.start == start => *last = LabelRange { start, ..r.clone() },
+            _ => ranges.push(LabelRange { start, ..r.clone() }),
+        }
+    }
+    if ranges == old {
+        return Ok(());
+    }
+    set_page_label_ranges(doc, &ranges)
 }
 
 /// Acrobat's "Number pages": label pages `from..=to` (0-based) with `style`, `prefix` and
