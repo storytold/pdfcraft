@@ -326,8 +326,28 @@ fn appearance_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
 }
 
-/// A tab's chrome around its name: the icon on the left, the close button on the right.
-const TAB_CHROME: f32 = 64.0;
+/// Mantém o ícone e o botão de fecho afastados dos cantos arredondados ao passar o rato (#2657).
+const TAB_EDGE_PADDING: f32 = 10.0;
+/// Tamanho do ícone à esquerda do nome.
+const TAB_ICON: f32 = 16.0;
+/// Espaço entre o ícone e o nome.
+const TAB_ICON_TEXT_GAP: f32 = 6.0;
+/// Espaço entre o nome e o botão de fecho.
+const TAB_TEXT_CLOSE_GAP: f32 = 10.0;
+/// Tamanho do botão de fecho.
+const TAB_CLOSE: f32 = 20.0;
+/// Tudo o que um separador reserva além do nome, com a mesma margem nas duas extremidades.
+const TAB_CHROME: f32 = 2.0 * TAB_EDGE_PADDING + TAB_ICON + TAB_ICON_TEXT_GAP + TAB_TEXT_CLOSE_GAP + TAB_CLOSE;
+
+/// Onde ficam o ícone, o início do nome e o botão de fecho dentro de `tab`. O desenho e o
+/// cálculo da largura usam estas medidas, para que não divirjam.
+fn tab_slots(tab: Rect) -> (Rect, f32, Rect) {
+    let icon = Rect::from_min_size(tab.min + vec2(TAB_EDGE_PADDING, (tab.height() - TAB_ICON) / 2.0), vec2(TAB_ICON, TAB_ICON));
+    let text_x = tab.left() + TAB_EDGE_PADDING + TAB_ICON + TAB_ICON_TEXT_GAP;
+    let close =
+        Rect::from_min_size(egui::pos2(tab.right() - TAB_EDGE_PADDING - TAB_CLOSE, tab.center().y - TAB_CLOSE / 2.0), vec2(TAB_CLOSE, TAB_CLOSE));
+    (icon, text_x, close)
+}
 /// The narrowest a tab shrinks to before the strip scrolls: room for most of a name.
 const TAB_MIN_WIDTH: f32 = 180.0;
 /// The arrows either side of tabs that don't fit.
@@ -448,16 +468,11 @@ fn tab(ui: &mut egui::Ui, spec: TabSpec<'_>, close: &mut Option<usize>) -> egui:
         if bg.a() > 0 {
             ui.painter().rect_filled(rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, bg);
         }
-        icons::paint(
-            ui,
-            Rect::from_min_size(rect.min + vec2(6.0, (height - 16.0) / 2.0), vec2(16.0, 16.0)),
-            icon,
-            15.0,
-            if active { t.accent } else { t.text_muted },
-        );
-        ui.painter().galley(rect.min + vec2(28.0, (rect.height() - label_galley.size().y) / 2.0), label_galley.clone(), label_color);
+        let (icon_rect, text_x, _) = tab_slots(rect);
+        icons::paint(ui, icon_rect, icon, 15.0, if active { t.accent } else { t.text_muted });
+        ui.painter().galley(egui::pos2(text_x, rect.min.y + (rect.height() - label_galley.size().y) / 2.0), label_galley.clone(), label_color);
     });
-    let x_rect = Rect::from_center_size(rect.right_center() - vec2(16.0, 0.0), vec2(20.0, 20.0));
+    let (_, _, x_rect) = tab_slots(rect);
     let x = ui.interact(x_rect, id.with("close"), Sense::click());
     let x_press = theme::Press::track(ui, &x);
     x_press.wash(ui, x_rect, 4, false);
@@ -799,7 +814,25 @@ mod page_position_tests {
 
 #[cfg(test)]
 mod tab_widths {
-    use super::{MAC_CONTENT_LEFT, MAC_LIGHT, MAC_LIGHT_PITCH, MAC_LIGHTS_LEFT, MAC_TITLE_BAR, tab_cap};
+    use super::{
+        MAC_CONTENT_LEFT, MAC_LIGHT, MAC_LIGHT_PITCH, MAC_LIGHTS_LEFT, MAC_TITLE_BAR, TAB_CHROME, TAB_EDGE_PADDING, TAB_ICON_TEXT_GAP,
+        TAB_TEXT_CLOSE_GAP, tab_cap, tab_slots,
+    };
+
+    /// O ícone e o botão de fecho respeitam as margens do fundo realçado, e o espaço reservado
+    /// para o nome (a largura menos `TAB_CHROME`) fica entre o ícone e o botão (#2657).
+    #[test]
+    fn tab_content_keeps_symmetric_edge_padding() {
+        let tab = egui::Rect::from_min_size(egui::pos2(37.0, 0.0), egui::vec2(200.0, 32.0));
+        let (icon, text_x, close) = tab_slots(tab);
+        assert_eq!(icon.left() - tab.left(), TAB_EDGE_PADDING, "icon inset from the left end");
+        assert_eq!(tab.right() - close.right(), TAB_EDGE_PADDING, "close button inset from the right end");
+        assert_eq!(icon.right() + TAB_ICON_TEXT_GAP, text_x, "name starts one gap after the icon");
+        let name_room = close.left() - TAB_TEXT_CLOSE_GAP - text_x;
+        assert!((name_room - (tab.width() - TAB_CHROME)).abs() < 1e-4, "name room {name_room} must match the width reserved");
+        assert_eq!(icon.center().y, tab.center().y, "icon is centred vertically");
+        assert_eq!(close.center().y, tab.center().y, "close button is centred vertically");
+    }
 
     /// Tabs that fit keep their own widths.
     #[test]
