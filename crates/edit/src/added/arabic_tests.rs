@@ -24,7 +24,7 @@ fn cluster(id: u32, advance: f64) -> ShapedCluster {
 fn line(clusters: Vec<ShapedCluster>, rtl: bool) -> LaidLine {
     let text = clusters.iter().map(|c| c.text.as_str()).collect();
     let width = clusters.iter().map(|c| c.advance).sum::<f64>() * item().size;
-    (text, rtl, vec![Piece::Shaped(clusters)], width)
+    (text, rtl, 0, vec![Piece::Shaped(clusters)], width)
 }
 
 /// A glyph outline: a box on the baseline, `advance` em wide.
@@ -147,7 +147,7 @@ fn an_item_below_the_old_limit_is_drawn_exactly_as_before() {
     let space = ShapedCluster { script: ShapedScript::Arabic, glyphs: vec![(6, [0.0, 0.0])], advance: 0.25, text: " ".into() };
     let ligature = ShapedCluster { script: ShapedScript::Arabic, glyphs: vec![(4, [0.0, 0.0]), (5, [-0.1, 0.2])], advance: 0.6, text: "لا".into() };
     let mixed: LaidLine =
-        ("Hi ب".into(), false, vec![Piece::Latin("Hi ".into()), Piece::Shaped(vec![cluster(1, 0.5), cluster(2, 0.5), space, ligature])], 4.0);
+        ("Hi ب".into(), false, 0, vec![Piece::Latin("Hi ".into()), Piece::Shaped(vec![cluster(1, 0.5), cluster(2, 0.5), space, ligature])], 4.0);
     let rtl = line(vec![cluster(2, 0.5), cluster(9, 0.75)], true);
     let laid = vec![mixed, rtl];
     let mut doc = Document::new_empty();
