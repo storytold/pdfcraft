@@ -141,6 +141,25 @@ fn thumbnail_size_is_settable_and_inspectable_through_the_control_channel() {
 }
 
 #[test]
+fn page_shadows_are_an_observable_app_wide_preference() {
+    let (mut h, c) = harness();
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["show_page_edge_shadows"], true);
+    for value in ["false", "true"] {
+        ok(&mut h, &c, "ui.set", json!({ "key": "show_page_edge_shadows", "value": value }));
+        assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["show_page_edge_shadows"], value == "true");
+    }
+    for value in ["off", "1", "False", ""] {
+        assert!(call(&mut h, &c, "ui.set", json!({ "key": "show_page_edge_shadows", "value": value })).is_err());
+        assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["show_page_edge_shadows"], true);
+    }
+    ok(&mut h, &c, "ui.set", json!({ "key": "show_page_edge_shadows", "value": false }));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["show_page_edge_shadows"], false);
+    h.state_mut().active = None;
+    ok(&mut h, &c, "ui.set", json!({ "key": "show_page_edge_shadows", "value": "false" }));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["show_page_edge_shadows"], false);
+}
+
+#[test]
 fn control_resize_reports_observed_dimensions_and_rejects_invalid_sizes() {
     let (mut h, c) = harness();
     for params in [

@@ -2603,6 +2603,131 @@ fn encrypted(bytes: Vec<u8>, algorithm: pdfcraft_cos::Algorithm, user: &str, own
 }
 
 #[test]
+fn launch_display_override_survives_password_retry_without_changing_defaults() {
+    use pdfcraft_ui_egui::canvas::PageLayout;
+    use std::io::Write as _;
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let path = temp_path(&format!("startup-layout-{nonce}.pdf"));
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
+    file.write_all(&protected("reader", "owner", -4)).unwrap();
+    drop(file);
+    let mut app = PdfCraftApp::new();
+    app.set_option("default-layout", "continuous").unwrap();
+    app.open_path_with_display(path.to_str().unwrap(), PageLayout::TwoUp, false);
+    assert!(app.views.is_empty() && app.password_prompt.is_some());
+    app.submit_password(Some("wrong".into()));
+    assert!(app.views.is_empty() && app.password_prompt.is_some());
+    app.submit_password(Some("reader".into()));
+    assert_eq!(app.views.len(), 1);
+    assert_eq!(app.views[0].layout, PageLayout::TwoUp);
+    assert!(!app.views[0].continuous());
+    let persisted: serde_json::Value = serde_json::from_str(&app.persist()).unwrap();
+    assert_eq!(persisted["default_layout"], "continuous");
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn asynchronous_launch_display_override_survives_retries_and_cancel() {
+    asynchronous_launch_display(false);
+}
+
+#[test]
+fn asynchronous_launch_display_explicit_layout_survives_retries_and_cancel() {
+    asynchronous_launch_display(true);
+}
+
+fn asynchronous_launch_display(explicit: bool) {
+    use pdfcraft_ui_egui::canvas::PageLayout;
+    fn wait(h: &mut Harness<'static, PdfCraftApp>, stage: &str, ready: impl Fn(&PdfCraftApp) -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !ready(h.state()) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{stage}: views={}, prompt={}, error={}, notice={}",
+                h.state().views.len(),
+                h.state().password_prompt.is_some(),
+                h.state().password_prompt.as_ref().is_some_and(|p| p.error.is_some()),
+                h.state().toast.is_some()
+            );
+            h.run_steps(2);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+    let path = temp_path(&format!("async-startup-layout-{explicit}.pdf"));
+    std::fs::write(&path, protected("reader", "owner", -4)).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.set_option("default-layout", "continuous").unwrap();
+        app.open_bytes("other.pdf", None, fixture(2)).unwrap();
+        app
+    });
+    h.run_steps(2);
+    assert!(!h.state().run_inline, "exercise upstream's actual background-opening path");
+    let other = h.state().views[0].id;
+    h.state_mut().open_path_with_display(path.to_str().unwrap(), PageLayout::TwoUp, false);
+    if explicit {
+        h.state_mut().set_launch_layout("single").unwrap();
+    }
+    wait(&mut h, "password prompt", |app| app.password_prompt.is_some());
+    // The existing document keeps its default view while this request is pending.
+    h.state_mut().submit_password(Some("wrong".into()));
+    wait(&mut h, "wrong-password result", |app| app.password_prompt.as_ref().is_some_and(|p| p.error.is_some()));
+    assert_eq!(h.state().views.len(), 1);
+    h.state_mut().submit_password(Some("reader".into()));
+    wait(&mut h, "first unlock", |app| app.views.len() == 2);
+    assert_eq!(h.state().views[0].id, other);
+    assert_eq!(h.state().views[0].layout, PageLayout::Single);
+    assert!(h.state().views[0].continuous());
+    assert_eq!(h.state().views[1].layout, if explicit { PageLayout::Single } else { PageLayout::TwoUp });
+    assert!(!h.state().views[1].continuous());
+    let second_path = path.with_extension("second.pdf");
+    std::fs::copy(&path, &second_path).unwrap();
+    h.state_mut().open_path_with_display(second_path.to_str().unwrap(), PageLayout::TwoUp, false);
+    wait(&mut h, "password prompt", |app| app.password_prompt.is_some());
+    h.state_mut().submit_password(None);
+    h.state_mut().open_path(second_path.to_str().unwrap());
+    wait(&mut h, "password prompt", |app| app.password_prompt.is_some());
+    h.state_mut().submit_password(Some("reader".into()));
+    wait(&mut h, "normal unlock after cancel", |app| app.views.len() == 3);
+    assert_eq!(h.state().views[2].layout, PageLayout::Single);
+    assert!(h.state().views[2].continuous());
+    let persisted: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_eq!(persisted["default_layout"], "continuous");
+    std::fs::remove_file(path).unwrap();
+    std::fs::remove_file(second_path).unwrap();
+}
+
+#[test]
+fn canceling_launch_display_override_does_not_affect_later_documents() {
+    use pdfcraft_ui_egui::canvas::PageLayout;
+    use std::io::Write as _;
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let path = temp_path(&format!("startup-cancel-layout-{nonce}.pdf"));
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
+    file.write_all(&protected("reader", "owner", -4)).unwrap();
+    drop(file);
+    let mut app = PdfCraftApp::new();
+    app.set_option("default-layout", "continuous").unwrap();
+    app.open_path_with_display(path.to_str().unwrap(), PageLayout::TwoUp, false);
+    assert!(app.views.is_empty() && app.password_prompt.is_some());
+    app.submit_password(None);
+    assert!(app.views.is_empty() && app.password_prompt.is_none());
+    app.open_bytes("next.pdf", None, fixture(2)).unwrap();
+    assert_eq!(app.views[0].layout, PageLayout::Single);
+    assert!(app.views[0].continuous());
+    // Reopening the same protected file normally must not resurrect the canceled override.
+    app.open_path(path.to_str().unwrap());
+    app.submit_password(Some("reader".into()));
+    assert_eq!(app.views.len(), 2);
+    assert_eq!(app.views[1].layout, PageLayout::Single);
+    assert!(app.views[1].continuous());
+    let persisted: serde_json::Value = serde_json::from_str(&app.persist()).unwrap();
+    assert_eq!(persisted["default_layout"], "continuous");
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn password_prompt_opens_and_security_tab_reports_the_details() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();

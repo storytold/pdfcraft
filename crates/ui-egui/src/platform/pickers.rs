@@ -376,6 +376,7 @@ mod tests {
             after_open: None,
             recovered: None,
             then: None,
+            display_override: None,
         });
         let got = Arc::new(Mutex::new(Vec::new()));
         app.pickers.showing.store(true, Ordering::SeqCst);
