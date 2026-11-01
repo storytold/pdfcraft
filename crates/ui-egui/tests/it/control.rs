@@ -2108,6 +2108,78 @@ fn page_size_tracks_the_pressed_page_without_moving_its_two_page_spread() {
     }
 }
 
+/// A tall middle spread at an edge, with its second page selected by a real control click.
+fn selected_second_page_at_spread_edge(cover: bool, forward: bool) -> (Harness<'static, PdfCraftApp>, usize) {
+    let boxes: Vec<_> = (0..8).map(|p| Some((if p % 2 == 0 { 200 } else { 400 }, 1400))).collect();
+    let (mut h, c) = harness_bytes_at(fixture_boxes(&boxes), 1400.0, 1.0);
+    for (key, value) in [("layout", "two-page"), ("zoom", "100"), ("always-show-page-size", "on")] {
+        h.state_mut().set_option(key, value).unwrap();
+    }
+    let first = if cover { 3 } else { 2 };
+    {
+        let view = &mut h.state_mut().views[0];
+        view.cover = cover;
+        view.go_to_page(first);
+        view.goto = Some((first, if forward { 1.0 } else { 0.0 }));
+    }
+    h.run_steps(6);
+    let viewport = h.state().views[0].viewport_rect();
+    let page = h.state().views[0].page_screen_rect(first + 1).unwrap();
+    assert!(page.height() > viewport.height() + 300.0, "the spread has room to pan");
+    let point = page.intersect(viewport).center();
+    ok(&mut h, &c, "ui.click", json!({ "x": point.x, "y": point.y }));
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].current, first + 1, "the second page is selected");
+    assert!(h.state().views[0].goto.is_none(), "the jump has settled");
+    let page = h.state().views[0].page_screen_rect(first + 1).unwrap();
+    let edge = if forward { viewport.bottom() - page.bottom() } else { page.top() - viewport.top() };
+    assert!((-40.0..=80.0).contains(&edge), "the requested edge is visible: {edge}");
+    (h, first)
+}
+
+/// Up/Down turn a tall spread at its edges even when the selected page is its second page.
+#[test]
+fn a_selected_spread_second_page_keeps_arrow_edge_navigation() {
+    let mut stuck = Vec::new();
+    for cover in [false, true] {
+        for forward in [false, true] {
+            let (mut h, first) = selected_second_page_at_spread_edge(cover, forward);
+            h.key_press(if forward { egui::Key::ArrowDown } else { egui::Key::ArrowUp });
+            h.run_steps(6);
+            let expected = if forward { first + 2 } else { first - 2 };
+            if h.state().views[0].current != expected {
+                stuck.push((cover, forward, h.state().views[0].current, expected));
+            }
+        }
+    }
+    assert!(stuck.is_empty(), "arrow edge navigation stayed on the selected second page: {stuck:?}");
+}
+
+/// A wheel notch at either edge still turns a tall spread with its second page selected.
+#[test]
+fn a_selected_spread_second_page_keeps_wheel_edge_navigation() {
+    let mut stuck = Vec::new();
+    for cover in [false, true] {
+        for forward in [false, true] {
+            let (mut h, first) = selected_second_page_at_spread_edge(cover, forward);
+            h.input_mut().events.push(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: egui::vec2(0.0, if forward { -1.0 } else { 1.0 }),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+                source: egui::MouseWheelSource::Unknown,
+            });
+            h.step();
+            h.run_steps(8);
+            let expected = if forward { first + 2 } else { first - 2 };
+            if h.state().views[0].current != expected {
+                stuck.push((cover, forward, h.state().views[0].current, expected));
+            }
+        }
+    }
+    assert!(stuck.is_empty(), "wheel edge navigation stayed on the selected second page: {stuck:?}");
+}
+
 /// The label stays under a dialog: ticking the preference in an open dialog does not bring it up.
 #[test]
 fn page_size_stays_hidden_under_a_dialog_even_when_always_show_is_on() {

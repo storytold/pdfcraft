@@ -257,6 +257,15 @@ impl DocView {
         true
     }
 
+    /// The row an edge record must belong to, regardless of which page of a spread is selected.
+    fn current_row_first(&self) -> Option<usize> {
+        if self.current >= self.page_count {
+            return None;
+        }
+        // A valid page is below page_count, so spread_first's c + 1 cannot overflow.
+        Some(if self.layout == PageLayout::TwoUp { self.spread_first(self.current) } else { self.current })
+    }
+
     /// One wheel event in a non-continuous view, where the wheel turns pages or spreads (the
     /// rules are in `wheel_pager`): `dy` is its vertical delta (negative scrolls down) and `now`
     /// is egui time. With `can_turn` false the gesture is followed but the page stays. Returns
@@ -283,7 +292,7 @@ impl DocView {
         // Only an up-to-date view counts: the page drawn is the shown one, with no jump pending.
         let edge = self.goto.is_none()
             && self.goto_point.is_none()
-            && self.single_edges.is_some_and(|(page, top, bottom)| page == self.current && if dy < 0.0 { bottom } else { top });
+            && self.single_edges.is_some_and(|(page, top, bottom)| Some(page) == self.current_row_first() && if dy < 0.0 { bottom } else { top });
         let Some(forward) = self.wheel.feed_edge(unit, dy, phase, now, can_turn && edge) else { return false };
         let before = self.current;
         self.step_page(forward);
@@ -435,7 +444,7 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
             // Only an up-to-date view counts: the page drawn is the current one, with no jump pending.
             let at_end = !scrolls
                 && view.goto.is_none()
-                && view.single_edges.is_some_and(|(page, top, bottom)| page == view.current && if forward { bottom } else { top });
+                && view.single_edges.is_some_and(|(page, top, bottom)| Some(page) == view.current_row_first() && if forward { bottom } else { top });
             if at_end {
                 let before = view.current;
                 view.step_page(forward);

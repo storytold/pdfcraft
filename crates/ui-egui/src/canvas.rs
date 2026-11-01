@@ -481,8 +481,8 @@ pub struct DocView {
     /// Pending keyboard scrolling, in points down (negative: up): ↓ / ↑, and Page Down /
     /// Page Up where the pages scroll.
     pub key_scroll: f32,
-    /// Single-page view, as last drawn: the page shown and whether the view was at its top and
-    /// at its bottom, so ↑ / ↓ turn the page there instead of doing nothing (#273).
+    /// Noncontinuous view, as last drawn: the first page of the shown row and whether the view
+    /// was at its top and bottom, so ↑ / ↓ turn the page or spread at an edge (#273).
     single_edges: Option<(usize, bool, bool)>,
     /// Briefly outline an annotation after navigating to it from a panel.
     pub flash: Option<(usize, [f32; 4], f64)>,
