@@ -2,6 +2,7 @@ allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-panic-in-tests = true
 allow-indexing-slicing-in-tests = true
+doc-valid-idents = ["PdfCraft", ".."]
 
 # With the theme's widget visuals egui draws a checkbox's box as a circle, like a radio button,
 # and on the light theme neither has an outline or a fill that shows on a white panel.

@@ -46,7 +46,7 @@ pub(crate) fn take_color_fallback() -> bool {
     COLOR_FALLBACK.with(|fell_back| fell_back.replace(false))
 }
 
-/// PdfCraft patch (34): how many colours this thread has run through a Separation or DeviceN
+/// PdfCraft patch (34): how many colours this thread has run through a Separation or `DeviceN`
 /// tint transform, for diagnostics and tests. An image converted through patch (28)'s lookup
 /// table runs it once per possible sample value, not once per pixel. Per thread, so a caller
 /// counting its own render is not disturbed by renders on other threads.
@@ -503,7 +503,7 @@ impl DeviceFamily {
 /// PdfCraft patch (38): the default colour spaces (`/DefaultGray`, `/DefaultRGB` and
 /// `/DefaultCMYK`, ISO 32000-2 §8.6.5.6) of the resources content is drawn with, each read the
 /// first time the content selects its device space. Like any named resource, a default comes
-/// from those resources' `/ColorSpace` or from the resources they inherit: a form XObject
+/// from those resources' `/ColorSpace` or from the resources they inherit: a form `XObject`
 /// without one of its own draws in its page's.
 pub(crate) struct DefaultColorSpaces<'r, 'a> {
     resources: &'r Resources<'a>,
@@ -573,7 +573,7 @@ impl ToRgb for ColorSpace {
                 }
             }
             ColorSpaceType::DeviceGray => {
-                for (gray, output) in input.iter().zip(output.chunks_exact_mut(3)) {
+                for (gray, output) in input.iter().zip(output.as_chunks_mut::<3>().0) {
                     let gray = f32_to_u8(*gray);
                     output.copy_from_slice(&[gray, gray, gray]);
                 }
@@ -618,7 +618,7 @@ impl ToRgb for ColorSpace {
         match self.0.as_ref() {
             ColorSpaceType::DeviceCmyk => CMYK_TRANSFORM.convert_u8(input, output),
             ColorSpaceType::DeviceGray => {
-                for (input, output) in input.iter().zip(output.chunks_exact_mut(3)) {
+                for (input, output) in input.iter().zip(output.as_chunks_mut::<3>().0) {
                     output.copy_from_slice(&[*input, *input, *input]);
                 }
 
@@ -675,7 +675,7 @@ impl CalGray {
 
 impl ToRgb for CalGray {
     fn convert_f32(&self, input: &[f32], output: &mut [u8], _: bool) -> Option<()> {
-        for (input, output) in input.iter().copied().zip(output.chunks_exact_mut(3)) {
+        for (input, output) in input.iter().copied().zip(output.as_chunks_mut::<3>().0) {
             let g = self.gamma;
             let (_xw, yw, _zw) = {
                 let wp = self.white_point;
@@ -832,7 +832,7 @@ impl CalRgb {
 
 impl ToRgb for CalRgb {
     fn convert_f32(&self, input: &[f32], output: &mut [u8], _: bool) -> Option<()> {
-        for (input, output) in input.chunks_exact(3).zip(output.chunks_exact_mut(3)) {
+        for (input, output) in input.as_chunks::<3>().0.iter().zip(output.as_chunks_mut::<3>().0) {
             let input = [
                 input[0].clamp(0.0, 1.0),
                 input[1].clamp(0.0, 1.0),
@@ -901,7 +901,7 @@ impl Lab {
     }
 
     /// Bradford adaptation scales cone responses, so both white points must
-    /// be expressed in LMS before taking their ratios. CalRGB's separate
+    /// be expressed in LMS before taking their ratios. `CalRGB`'s separate
     /// flat-white/black-point pipeline retains its existing normalization.
     fn adapt_to_d65(white_point: &[f32; 3], xyz: &[f32; 3]) -> [f32; 3] {
         let source_lms = CalRgb::matrix_product(&CalRgb::BRADFORD_SCALE_MATRIX, white_point);
@@ -939,7 +939,7 @@ impl ToRgb for Lab {
         let white_point = self.usable_white_point();
         let [xw, yw, zw] = white_point;
 
-        for (input, output) in input.chunks_exact(3).zip(output.chunks_exact_mut(3)) {
+        for (input, output) in input.as_chunks::<3>().0.iter().zip(output.as_chunks_mut::<3>().0) {
             // PdfCraft patch: `manual_scale` means the components arrive
             // normalised to [0, 1] (an `/Indexed` palette over Lab looks its
             // bytes up as `byte / 255`). Map them linearly onto L* 0..100 and
@@ -1065,7 +1065,7 @@ pub(crate) struct Separation {
 /// read or evaluated, the initial colour of `alternate_space` (black in every device space), with
 /// the fallback recorded. hayro already fell back this way when evaluation failed, silently; a
 /// transform it could not read made the whole colour space unreadable, and the space's
-/// paints were drawn in DeviceGray from their first tint instead (white for a full tint).
+/// paints were drawn in `DeviceGray` from their first tint instead (white for a full tint).
 fn eval_tint_transform(
     tint_transform: Option<&Function>,
     alternate_space: &ColorSpace,
@@ -1109,7 +1109,7 @@ impl ToRgb for Separation {
             // PdfCraft patch (66): §8.6.6.4: the tint applies to every colourant, and on an
             // additive device it is complemented first, so tint t is the gray 1 − t on each of
             // R, G and B whatever the alternate space and tint transform say.
-            for (tint, rgb) in input.iter().zip(output.chunks_exact_mut(3)) {
+            for (tint, rgb) in input.iter().zip(output.as_chunks_mut::<3>().0) {
                 // `clamp` keeps NaN, and `f32_to_u8`'s cast saturates it to 0.
                 let gray = f32_to_u8(1.0 - tint.clamp(0.0, 1.0));
                 rgb.copy_from_slice(&[gray, gray, gray]);
@@ -1308,7 +1308,9 @@ impl ToRgb for ICCProfile {
         if self.is_lab() {
             // moxcms expects normalized values.
             let scaled = input
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .flat_map(|i| {
                     [
                         i[0] * (1.0 / 100.0),
@@ -1403,8 +1405,8 @@ impl Color {
     /// its opacity, for blending in a `DeviceCMYK` transparency group (ISO 32000-2 §11.3.4).
     ///
     /// `DeviceCMYK` gives its components. `DeviceGray` is black ink alone, `K = 1 − gray`
-    /// (§10.4.2.2). `None` for every other space, ICCBased CMYK included: such a colour has no
-    /// tints without a colour conversion this crate does not make (an ICCBased colour keeps
+    /// (§10.4.2.2). `None` for every other space, `ICCBased` CMYK included: such a colour has no
+    /// tints without a colour conversion this crate does not make (an `ICCBased` colour keeps
     /// its own profile), and the caller draws it as before.
     pub fn ink_tints(&self) -> Option<([f32; 4], f32)> {
         let c = |i: usize| {
@@ -1437,7 +1439,7 @@ impl Color {
 /// 8-bit sRGB in `output` (three bytes each) through the CMYK profile pages are drawn with,
 /// so a colour blended in CMYK lands where the same colour painted directly does.
 pub fn cmyk_to_srgb8(input: &[u8], output: &mut [u8]) -> Option<()> {
-    if input.len() % 4 != 0 || output.len() != input.len() / 4 * 3 {
+    if !input.len().is_multiple_of(4) || output.len() != input.len() / 4 * 3 {
         return None;
     }
     CMYK_TRANSFORM.convert_u8(input, output)
