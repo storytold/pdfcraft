@@ -217,15 +217,29 @@ struct FieldInfo {
     on_state: String,
     /// List boxes that take several values (one per line in the data).
     multi: bool,
+    /// Radio groups: each button's on state and SOM path (each button of an XFA radio group is a
+    /// field of its own, with scripts of its own).
+    buttons: Vec<(String, String)>,
 }
 
+/// The generated fields of `doc`, by name, as the runner tracks them.
 fn field_infos(doc: &pdfcraft_cos::Document) -> HashMap<String, FieldInfo> {
+    // The SOM path a widget or field records for its XFA object.
+    let som_of = |obj: pdfcraft_cos::ObjRef| {
+        let object = doc.get(obj);
+        object.as_dict()?.get(pdfcraft_xfa::SOM_KEY).map(|s| doc.resolve(s))?.as_string().map(|s| s.to_text())
+    };
     pdfcraft_forms::fields(doc)
         .into_iter()
         .map(|f| {
             let on_state = f.widgets.first().and_then(|w| w.on_state.clone()).unwrap_or_else(|| "1".into());
             let multi = f.kind == pdfcraft_forms::FieldKind::List && f.has(pdfcraft_forms::flags::MULTI_SELECT);
-            (f.name, FieldInfo { kind: f.kind, value: f.value, on_state, multi })
+            let buttons = if f.kind == pdfcraft_forms::FieldKind::Radio {
+                f.widgets.iter().filter_map(|w| Some((w.on_state.clone()?, som_of(w.obj)?))).collect()
+            } else {
+                Vec::new()
+            };
+            (f.name, FieldInfo { kind: f.kind, value: f.value, on_state, multi, buttons })
         })
         .collect()
 }
@@ -710,6 +724,27 @@ impl<'a, 'b> Runner<'a, 'b> {
         Ok(())
     }
 
+    /// The SOM path of what a click on field `name` (at `som`) turned on or off, when it is a
+    /// check box or a radio group: the check box itself, or the group's radio button now on.
+    /// `None` for other fields, for a group left with no button on, and when the value is still
+    /// `before` (set again, not clicked).
+    fn clicked(&mut self, name: &str, som: &str, before: Option<&Vec<String>>) -> Option<String> {
+        use pdfcraft_forms::FieldKind as K;
+        let f = self.fields().get(name)?;
+        if before.is_some_and(|b| *b == f.value) {
+            return None;
+        }
+        match f.kind {
+            K::CheckBox => Some(som.to_string()),
+            K::Radio => {
+                let on = f.value.first()?;
+                f.buttons.iter().find(|(state, _)| state == on).map(|(_, button)| button.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// The `activity` scripts of the object at `som` in the live form.
     fn events_of(&mut self, som: &str, activity: &str) -> Vec<ScriptEvent> {
         self.live().events.iter().filter(|e| e.som == som && e.activity == activity).cloned().collect()
     }
@@ -833,24 +868,85 @@ pub(crate) fn on_open(doc: &mut pdfcraft_cos::Document, tpl: &Template, run: &mu
     r.finish()
 }
 
+/// What a click on a check box or radio button runs once it has set the value, in order: the
+/// change scripts, then the click scripts, each reading the new value. A radio group runs each
+/// activity's scripts, then the radio button now on runs its own; the button it turned off runs
+/// none. Exit scripts follow, as after any change: the button's, then the group's. This is the
+/// order another viewer showed on a synthetic form.
+const TOGGLE_ORDER: [&str; 2] = ["change", "click"];
+
 /// After fields `names` took new values: each one's change, exit and validate scripts, then
-/// the calculations once (or only those, after a reset). A validate script that answers false,
-/// or fails, shows its message; the value stays, as Acrobat marks the field invalid rather
-/// than reverting it.
-pub(crate) fn on_changes(doc: &mut pdfcraft_cos::Document, tpl: &Template, names: &[String], run: &mut XfaRun) -> Result<(), String> {
+/// the calculations once (or only those, after a reset). A check box or radio button runs its
+/// click scripts too ([`TOGGLE_ORDER`]): it changes only when it is clicked, and a click script
+/// reads the new value. A validate script that answers false, or fails, shows its message; the
+/// value stays, as Acrobat marks the field invalid rather than reverting it. `before` holds each
+/// field's value before the edit: a check box or radio group set to the value it had runs no
+/// click scripts, since nothing was clicked. A field named twice (a batch that sets it twice)
+/// is compared the second time with what the first left, so it is clicked once at most. A check
+/// box or radio group that has the focus (`focus`, the SOM path of its widget or of one of the
+/// group's buttons) runs no exit scripts here: it keeps the focus as it changes, and runs them
+/// once, when it loses it ([`crate::Session::field_focus`]), as another viewer does. The SOM
+/// paths whose exit scripts ran go into `exited`.
+pub(crate) fn on_changes(
+    doc: &mut pdfcraft_cos::Document,
+    tpl: &Template,
+    names: &[String],
+    before: &HashMap<String, Vec<String>>,
+    focus: Option<&str>,
+    run: &mut XfaRun,
+    exited: &mut Vec<String>,
+) -> Result<(), String> {
     let mut r = Runner::new(doc, tpl, run, OPEN_BUDGET_MS);
+    // Each field's value once its scripts have run, for a later mention of the same field.
+    let mut done: HashMap<String, Vec<String>> = HashMap::new();
     for name in names {
         let som = r.by_som().iter().find(|(_, f)| *f == name).map(|(s, _)| s.clone());
         let Some(som) = som else { continue };
         let value = r.fields().get(name).map(|f| f.value.join("\n")).unwrap_or_default();
-        for ev in r.events_of(&som, "change").into_iter().chain(r.events_of(&som, "exit")) {
-            r.run(&ev, &value)?;
+        let clicked = r.clicked(name, &som, done.get(name).or_else(|| before.get(name)));
+        let steps: &[&str] = if clicked.is_some() { &TOGGLE_ORDER } else { &["change"] };
+        // A radio group's button now on runs each activity's scripts after the group's, and
+        // its exit scripts before the group's, as when leaving it.
+        let button = clicked.as_deref().filter(|b| *b != som);
+        for activity in steps.iter().copied() {
+            for at in [Some(som.as_str()), button].into_iter().flatten() {
+                for ev in r.events_of(at, activity) {
+                    r.run(&ev, &value)?;
+                }
+            }
+        }
+        // A text field's value is committed as it loses the focus, and a value set without the
+        // focus on the field (form_fill, a script) has no focus to lose: their exit follows.
+        let keeps_focus = focus.is_some_and(|at| {
+            use pdfcraft_forms::FieldKind as K;
+            r.fields().get(name).is_some_and(|f| match f.kind {
+                K::CheckBox => at == som,
+                K::Radio => at == som || f.buttons.iter().any(|(_, b)| b == at),
+                _ => false,
+            })
+        });
+        // Each object's exit is noted only when one of its scripts ran, whether it succeeded or
+        // failed: it has run for this focus loss, and a failed script keeps what it changed
+        // before its error, so running it again would repeat that and the error. One the event's
+        // budget skipped, or one never reached because an earlier script stopped the run, is
+        // still to run when it loses focus.
+        for at in [button, Some(som.as_str())].into_iter().flatten().filter(|_| !keeps_focus) {
+            let mut ran_exit = false;
+            for ev in r.events_of(at, "exit") {
+                ran_exit |= r.run(&ev, &value)?.is_some();
+            }
+            if ran_exit {
+                exited.push(at.to_string());
+            }
         }
         for ev in r.events_of(&som, "validate") {
             let Some(o) = r.run(&ev, &value)? else { continue };
             if (o.result_bool == Some(false) || o.error.is_some()) && !value.trim().is_empty() {
                 r.alert(crate::js::Message::plain(ev.message.clone().unwrap_or_else(|| format!("{name}: the value is not valid"))));
             }
+        }
+        if let Some(f) = r.fields().get(name) {
+            done.insert(name.clone(), f.value.clone());
         }
     }
     r.calculates()?;
@@ -904,6 +1000,65 @@ pub(crate) fn on_event(doc: &mut pdfcraft_cos::Document, tpl: &Template, som: &s
     r.clock = Clock::start(OPEN_BUDGET_MS.saturating_mul(u64::from(r.run.time_scale)));
     r.calculates()?;
     r.finish().map(|_| ())
+}
+
+/// A field gaining (`enter`) or losing (`exit`) focus: its scripts for that activity, then, when
+/// they changed something, the calculations. Returns what changed; nothing (and no error) when
+/// the field has no such script, so a focus change with nothing to run leaves the form alone.
+pub(crate) fn on_focus(doc: &mut pdfcraft_cos::Document, tpl: &Template, som: &str, activity: &str, run: &mut XfaRun) -> Result<Changes, String> {
+    let mut r = Runner::new(doc, tpl, run, EVENT_BUDGET_MS);
+    let events = r.events_of(som, activity);
+    if events.is_empty() {
+        return Ok(Changes::default());
+    }
+    // The field's value, as the script's event sees it (`xfa.event.prevText`, `newText`).
+    let value = r.by_som().get(som).cloned().and_then(|name| r.fields().get(&name).map(|f| f.value.join("\n"))).unwrap_or_default();
+    for ev in events {
+        r.run(&ev, &value)?;
+    }
+    if !r.changes.is_empty() {
+        // The calculations that follow get a budget of their own.
+        r.clock = Clock::start(OPEN_BUDGET_MS);
+        r.calculates()?;
+    }
+    r.finish()
+}
+
+/// The SOM path of widget `widget` of field `field`: each radio button of a group has its own,
+/// and a field's copies on several pages share one. `None` when the field has no widget
+/// `widget`: the field's own path is only for a widget that records none, so a widget index
+/// out of range never reaches the field (for a radio field, the group).
+pub(crate) fn widget_som(doc: &pdfcraft_cos::Document, field: &pdfcraft_forms::Field, widget: usize) -> Option<String> {
+    let som_of = |obj: pdfcraft_cos::ObjRef| {
+        let object = doc.get(obj);
+        object.as_dict()?.get(pdfcraft_xfa::SOM_KEY).map(|s| doc.resolve(s))?.as_string().map(|s| s.to_text())
+    };
+    let w = field.widgets.get(widget)?;
+    som_of(w.obj).or_else(|| som_of(field.obj))
+}
+
+/// The objects whose `activity` scripts (`enter` or `exit`) run as the focus reaches or leaves the
+/// field at `som`, in that order, read from one build of the live form. With `crossing`, the
+/// radio group `som` is a button of comes first on enter and last on exit. Each comes with
+/// whether the live form gives it such a script.
+pub(crate) fn focus_targets(doc: &pdfcraft_cos::Document, tpl: &Template, som: &str, activity: &str, crossing: bool) -> Vec<(String, bool)> {
+    let live = pdfcraft_xfa::form_tree(tpl, pdfcraft_xfa::data_of(doc).as_ref(), &pdfcraft_xfa::overrides(doc));
+    let group = som
+        .rsplit_once('.')
+        .filter(|_| crossing)
+        .and_then(|(parent, _)| find_container(&live.root, parent, 0))
+        .filter(|n| n.kind == Some(NodeKind::ExclGroup))
+        .map(|n| n.som.clone());
+    let field = Some(som.to_string());
+    let order = if activity == "enter" { [group, field] } else { [field, group] };
+    order
+        .into_iter()
+        .flatten()
+        .map(|at| {
+            let has = live.events.iter().any(|e| e.som == at && e.activity == activity);
+            (at, has)
+        })
+        .collect()
 }
 
 /// The SOM path of a generated field whose template has a click script.
