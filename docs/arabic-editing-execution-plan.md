@@ -3,6 +3,12 @@
 Status: A6 local core qualification passed, 2026-11-01; checkpoint kept local.
 This qualifies the supported fixtures, not complete Arabic support or UI/IME readiness.
 
+Post-sprint publication scope (2026-11-01): the contributor subsequently authorized
+synchronizing with upstream main, merging and pushing the verified core checkpoint and
+feature/test documentation to the fork. The original no-push rule below records the A6
+sprint boundary. Unfinished direction controls are preserved locally and excluded from
+publication; desktop launch and Batch B interaction qualification remain follow-up work.
+
 ## 1. Objective and working rules
 
 Deliver a dependable workflow for supported Arabic PDFs:

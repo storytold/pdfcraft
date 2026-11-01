@@ -1775,7 +1775,8 @@ fn monochrome_images_keep_what_they_should() {
     optimize(&mut doc, &Settings::default()).unwrap();
     assert_eq!([alone, deep].map(|r| raw(&doc, r)), before, "a Group 4 halftone alone, and sixteen-bit grey");
     assert_eq!(filters(&doc, wrapped), 1, "a wrapped Group 4 halftone is stored again alone by default");
-    assert_eq!(stream(&doc, scan).dict.name(b"Filter"), Some(&b"CCITTFaxDecode"[..]), "the scan: Group 4 is smaller");
+    assert!(matches!(stream(&doc, scan).filters().as_slice(), [(Filter::CcittFax | Filter::Flate, _)]), "the scan: Group 4 or Flate");
+    assert_eq!(doc.decoded_image(&stream(&doc, scan)).unwrap(), ragged, "the scan preserves every sample");
     assert_eq!((stream(&doc, fax).dict.name(b"Filter"), filters(&doc, fax)), (Some(&b"CCITTFaxDecode"[..]), 1), "the busy fax image");
 
     let (mut doc, [_, wrapped, scan, _, _]) = build();

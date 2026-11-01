@@ -1,6 +1,9 @@
 # Arabic editing milestone: complete embedded source faces
 
-Status: first source-editing increment validated; leading-mark positioning remains unresolved, 2026-10-31. Base:
+Status: historical first-increment record, 2026-10-31. The leading-mark and transition
+regressions described below were resolved in verified core checkpoint `a8a1e696`.
+See [current feature record](arabic-features.md) and [execution plan](arabic-editing-execution-plan.md).
+Original base:
 `13655d09922038ab62d93b84ba9cd2eae474abd7`. Overall Arabic readiness and estimates are unchanged.
 
 ## Supported milestone and contribution boundary
@@ -51,7 +54,10 @@ These are engine paragraph replacements, not simulated keyboard events. Full-spa
 is checked; precise word/caret selection inside ActualText remains separate work. Pixel
 identity after history/serialization proves stability, not external typography conformance.
 
-## Newly isolated layout limitation
+## Historical layout limitation (resolved in the current core checkpoint)
+
+The following describes the original failure. Its regression is now active and passing;
+do not use the historical ignored-test instructions as the current qualification procedure.
 
 A separate regression remains explicitly ignored:
 `leading_arabic_marks_retain_position_when_an_inserted_suffix_is_deleted`. Starting from
