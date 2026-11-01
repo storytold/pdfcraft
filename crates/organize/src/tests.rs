@@ -3873,3 +3873,21 @@ fn split_pages_refuse_what_they_cannot_do_and_change_nothing() {
     assert_eq!(split_pages(&mut doc, &[], 2, 1), Ok(()), "no pages, nothing to do");
     assert_eq!(page_boxes(&doc).unwrap(), before);
 }
+
+/// CodeRabbit on #5587: page 1 can't be copied (an object nested deeper than a copy follows), and
+/// pages are split from the last, so page 2 is already split when page 1 fails. The document is
+/// left as it was, not half split.
+#[test]
+fn split_pages_that_fail_partway_change_nothing() {
+    let mut doc = open(fixture());
+    let first = walk(&doc).unwrap()[0].0;
+    let mut deep = Object::Array(Vec::new());
+    for _ in 0..400 {
+        deep = Object::Array(vec![deep]);
+    }
+    doc.update_dict(first, |d| d.set(b"PCDeep".to_vec(), deep)).unwrap();
+    let before = page_boxes(&doc).unwrap();
+    assert!(matches!(split_pages(&mut doc, &[0, 1], 2, 1), Err(OrganizeError::Invalid(_))));
+    assert_eq!(walk(&doc).unwrap().len(), 3, "no page was added");
+    assert_eq!(page_boxes(&doc).unwrap(), before, "no crop box was set");
+}

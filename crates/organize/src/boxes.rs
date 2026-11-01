@@ -138,7 +138,7 @@ pub const MAX_SPLIT_PAGES: usize = 10_000;
 /// with `/Rotate` taken into account. Each part is a copy of the page (as Duplicate Pages makes
 /// it, with its own comments and widgets) whose crop box is its cell, so nothing is resampled and
 /// the content outside the cell stays in the file. Nothing changes when any page would split into
-/// parts smaller than a point.
+/// parts smaller than a point, or when one can't be copied.
 pub fn split_pages(doc: &mut Document, pages: &[usize], columns: u32, rows: u32) -> Result<(), OrganizeError> {
     if !(1..=MAX_SPLIT).contains(&columns) || !(1..=MAX_SPLIT).contains(&rows) {
         return Err(OrganizeError::Invalid(format!("columns and rows must be from 1 to {MAX_SPLIT}")));
@@ -171,13 +171,17 @@ pub fn split_pages(doc: &mut Document, pages: &[usize], columns: u32, rows: u32)
         plan.push((i, *page, parts));
     }
     let src = doc.clone();
+    // Split a copy and keep it only when every page is done, so a page that can't be copied
+    // (objects nested too deep, say) leaves the document as it was (CodeRabbit on #5587).
+    let mut out = src.clone();
     // The last page first, so the earlier ones keep their places in `src`'s order.
     for (i, page, parts) in plan.into_iter().rev() {
-        let copies = crate::import_pages(doc, &src, &vec![i; cells - 1], i + 1)?;
+        let copies = crate::import_pages(&mut out, &src, &vec![i; cells - 1], i + 1)?;
         for (r, part) in std::iter::once(page).chain(copies).zip(parts) {
-            doc.update_dict(r, |d| d.set(b"CropBox".to_vec(), Object::Array(part.iter().map(|v| Object::Real(*v)).collect())))?;
+            out.update_dict(r, |d| d.set(b"CropBox".to_vec(), Object::Array(part.iter().map(|v| Object::Real(*v)).collect())))?;
         }
     }
+    *doc = out;
     Ok(())
 }
 
