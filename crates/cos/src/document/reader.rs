@@ -319,10 +319,25 @@ impl Document {
         Ok(Some((section, stream.dict.clone(), true)))
     }
 
+    /// Read the cross-reference chain from `startxref` into one map of entries, newer sections
+    /// winning, with the trailer, the revisions oldest first and the set-aside entries. A chain
+    /// that lists more than [`MAX_XREF_OBJECTS`] rows in all is refused with
+    /// [`CosError::Syntax`], and the caller rebuilds the file from object headers (#5082).
     #[allow(clippy::type_complexity)]
     pub(super) fn read_xref_chain_materialized(
         &self,
         log: &mut Vec<String>,
+    ) -> Result<(BTreeMap<u32, XrefEntry>, Dict, Vec<Revision>, Vec<(u64, u32)>), CosError> {
+        self.read_xref_chain_materialized_with_limit(log, MAX_XREF_OBJECTS)
+    }
+
+    /// [`Self::read_xref_chain_materialized`] refusing a chain past `row_limit` rows in all
+    /// instead of [`MAX_XREF_OBJECTS`], so tests can reach the limit with a few rows.
+    #[allow(clippy::type_complexity)]
+    pub(super) fn read_xref_chain_materialized_with_limit(
+        &self,
+        log: &mut Vec<String>,
+        row_limit: usize,
     ) -> Result<(BTreeMap<u32, XrefEntry>, Dict, Vec<Revision>, Vec<(u64, u32)>), CosError> {
         let data = &self.data;
         let tail_start = data.len().saturating_sub(4096);
@@ -343,6 +358,7 @@ impl Document {
         // At most MAX_XREF_OBJECTS entries are kept in all; a stream past that is read again.
         let mut hybrids: HashMap<i64, Option<BTreeMap<u32, XrefEntry>>> = HashMap::new();
         let (mut hybrid_rows, mut noted) = (0usize, HashSet::new());
+        let mut merged_rows = 0usize;
         let mut next = Some(first);
         while let Some(off) = next.take() {
             if !visited.insert(off) || visited.len() > 10_000 {
@@ -413,6 +429,22 @@ impl Document {
                     hybrids.insert(x, read);
                 }
             }
+            // Each section's rows are capped, so the chain is too: at most `row_limit` rows
+            // (MAX_XREF_OBJECTS outside tests) merged in all, or the file is rebuilt from object
+            // headers, as when one section's stream decodes past that. This counts rows merged,
+            // not the map's size, since a chain that relists the same objects costs as much to
+            // merge. Rows set aside count too: they are kept for the whole chain, and a section can
+            // set aside nearly all it lists. A section's rows (its hybrid stream's included) never
+            // outnumber the rows the compact reader counts for it, and that reader stops at about
+            // a quarter of MAX_XREF_OBJECTS: no chain within its limit is refused.
+            let rows = sect.len().saturating_add(odd.len());
+            let Some(total) = merged_rows.checked_add(rows).filter(|total| *total <= row_limit) else {
+                return Err(CosError::Syntax {
+                    offset: usize::try_from(off).unwrap_or(usize::MAX),
+                    detail: format!("cross-reference chain lists more than {row_limit} entries"),
+                });
+            };
+            merged_rows = total;
             oddities.extend(odd.into_iter().map(|num| (off, num)));
             for (num, e) in sect {
                 entries.entry(num).or_insert(e);
