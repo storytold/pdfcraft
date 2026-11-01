@@ -638,6 +638,8 @@ pub struct DocView {
     /// Marquee Zoom / Snapshot: the rectangle being dragged (page, start), and a finished one.
     pub marquee: Option<(usize, Pos2)>,
     pub marquee_done: Option<crate::zoom_snap::Marquee>,
+    /// Dynamic Zoom: (page under initial press, press origin on screen, initial zoom level when drag started, initial fit mode).
+    pub dynamic_zoom: Option<(usize, Pos2, f32, Fit)>,
     /// Fill & Sign text being typed.
     pub fill_text: Option<crate::fill_sign::TypeBox>,
     /// A queued Fill & Sign signature: select it after its edit succeeds, then leave placement.
@@ -853,6 +855,10 @@ impl DocView {
     pub(crate) fn cancel_pointer_gestures(&mut self) {
         self.marquee = None;
         self.marquee_done = None;
+        if let Some((_, start_pos, start_zoom, start_fit)) = self.dynamic_zoom.take() {
+            self.fit = start_fit;
+            self.zoom_at(start_zoom, start_pos);
+        }
         self.comments.gesture = None;
         self.links.drag = None;
         self.sign.drag = None;
@@ -999,6 +1005,7 @@ impl DocView {
             pages_focus_id: None,
             marquee: None,
             marquee_done: None,
+            dynamic_zoom: None,
             fill_text: None,
             fill_signature_page: None,
             signature_drag: Default::default(),
@@ -1461,6 +1468,14 @@ pub(crate) struct PageToolContext<'a> {
     pub info: &'a DocInfo,
 }
 
+fn handle_zoom_tools(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, ptr: &PagePointer, page: usize, view: &mut DocView, tool: QuickTool) {
+    if matches!(tool, QuickTool::MarqueeZoom | QuickTool::Snapshot) {
+        crate::zoom_snap::page_input(ui, resp, xf, ptr, page, view);
+    } else if tool == QuickTool::DynamicZoom {
+        crate::zoom_snap::dynamic_zoom_input(ui, resp, xf, ptr, page, view);
+    }
+}
+
 /// Comments: tools, selection, moving and resizing come before text selection. Form fields take
 /// clicks first with the Select tool (as Acrobat fills fields in every viewing mode); then
 /// comments; then text selection.
@@ -1613,9 +1628,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
     if matches!(tool, QuickTool::SignArea { .. }) {
         crate::sign_ui::page_input(ui, resp, &xf, ptr, i, info, view);
     }
-    if matches!(tool, QuickTool::MarqueeZoom | QuickTool::Snapshot) {
-        crate::zoom_snap::page_input(ui, resp, &xf, ptr, i, view);
-    }
+    handle_zoom_tools(ui, resp, &xf, ptr, i, view, tool);
     if tool == QuickTool::EnhanceCamera {
         crate::camera_ui::page_input(resp, &xf, ptr, i, view, can_modify);
     }
@@ -2406,6 +2419,9 @@ fn draw_pages(
     // or a press they hold. The page modules read it rather than egui's raw pointer state.
     let ptr = PagePointer::read(ui, &resp, modal);
     cancel_on_escape(ui.ctx(), view, &ptr);
+    if tool != QuickTool::DynamicZoom && !ptr.primary_down {
+        view.dynamic_zoom = None;
+    }
     view.router.settle(ptr.any_down, !ptr.edges.is_empty());
     // A new press is no longer the last one's, wherever it lands (the page it is on gives it
     // its owner; in the gap between pages it has none).
@@ -3411,6 +3427,7 @@ fn tool_selects_text(tool: QuickTool, preparing: bool) -> bool {
         | QuickTool::Link
         | QuickTool::SignArea { .. }
         | QuickTool::MarqueeZoom
+        | QuickTool::DynamicZoom
         | QuickTool::Snapshot => false,
     }
 }

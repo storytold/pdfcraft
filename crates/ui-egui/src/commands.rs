@@ -342,6 +342,7 @@ impl PdfCraftApp {
                 }
             }
             "view.marquee_zoom" => self.quick_tool = crate::QuickTool::MarqueeZoom,
+            "view.dynamic_zoom" => self.quick_tool = crate::QuickTool::DynamicZoom,
             _ => return None,
         }
         Some(true)
