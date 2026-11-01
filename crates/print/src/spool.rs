@@ -51,6 +51,10 @@ const OUTPUT_GRACE: std::time::Duration = std::time::Duration::from_millis(100);
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 const PPD_CAP: u64 = 16 << 20;
 
+/// Longest PPD line [`localize`] will look at. Directives and translations are short; anything
+/// longer is junk or hostile and is skipped rather than parsed.
+const PPD_LINE_CAP: usize = 64 << 10;
+
 /// Run `command` and collect its standard output, giving it `limit`: a command still running
 /// then is killed and reaped, and the error is `TimedOut`. Standard input and error are not
 /// connected. The exit status is not checked, as `Command::output` leaves it to the caller.
@@ -64,6 +68,10 @@ pub(crate) fn output_within(command: &mut std::process::Command, limit: std::tim
     use std::io::Read as _;
     use std::process::Stdio;
 
+    // `Instant + Duration` panics on overflow; a limit that cannot be a deadline is refused.
+    let Some(deadline) = std::time::Instant::now().checked_add(limit) else {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "the time limit is too large"));
+    };
     let mut child = command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;
     let stop = |child: &mut std::process::Child| {
         let _ = child.kill();
@@ -100,7 +108,6 @@ pub(crate) fn output_within(command: &mut std::process::Command, limit: std::tim
             format!("{:?} finished but its output was not closed within {OUTPUT_GRACE:?}", command.get_program()),
         )
     };
-    let deadline = std::time::Instant::now() + limit;
 
     loop {
         match child.try_wait() {
@@ -201,16 +208,23 @@ pub fn open_printer_preferences(printer: &str) -> Result<(), crate::PrintError> 
 
 /// The PPD language codes (`*cupsLanguages`, the `ll` of `*ll.Translation`) to try for a UI
 /// language code, most specific first: `pt-br` → `pt_BR`, `pt`; `zh-hans` → `zh_CN`, `zh`.
+///
+/// The code is only ever matched against `*{code}.` line prefixes, but it comes from outside, so
+/// anything other than ASCII letters and digits between separators (`/`, `\`, `.`, whitespace,
+/// newlines) yields no codes at all.
 // Read only by the CUPS path; the tests exercise it everywhere.
 #[cfg_attr(not(all(unix, not(target_arch = "wasm32"))), allow(dead_code))]
 fn ppd_languages(lang: &str) -> Vec<String> {
     let lang = lang.to_ascii_lowercase();
-    let mut parts = lang.split(['-', '_']).filter(|part| !part.is_empty());
-    let Some(primary) = parts.next() else {
+    let parts: Vec<&str> = lang.split(['-', '_']).filter(|part| !part.is_empty()).collect();
+    if parts.iter().any(|part| !part.bytes().all(|byte| byte.is_ascii_alphanumeric())) {
+        return Vec::new();
+    }
+    let Some(&primary) = parts.first() else {
         return Vec::new();
     };
 
-    let region = match (primary, parts.next()) {
+    let region = match (primary, parts.get(1).copied()) {
         ("zh", Some("hans")) => Some("CN".to_string()),
         ("zh", Some("hant")) => Some("TW".to_string()),
         (_, Some(region)) if region.len() == 2 => Some(region.to_ascii_uppercase()),
@@ -225,13 +239,18 @@ fn ppd_languages(lang: &str) -> Vec<String> {
     languages
 }
 
-/// Parse the `keyword/label: value` part of an `OpenGroup` line into `(label, keyword)`. The
-/// final colon separates the directive header from its value; `rsplit_once` also permits colons
-/// inside the label.
+/// Parse the `Key/Label` value of an `OpenGroup` line into `(label, key)`.
+///
+/// The colon after `*OpenGroup` already separates the keyword from its value, and unlike
+/// `*xx.Translation` there is no further `: ""` in the PPD grouping syntax, so colons inside the
+/// label are kept (`Finishing/Finishing: options` has the label `Finishing: options`, exactly as
+/// `parse_ppd` reports it). Only a trailing `: ""`, which some localized entries and the test
+/// fixtures carry, is dropped.
 #[cfg_attr(not(all(unix, not(target_arch = "wasm32"))), allow(dead_code))]
 fn parse_open_group(spec: &str) -> Option<(String, String)> {
-    let head = spec.rsplit_once(':').map_or(spec, |(head, _)| head).trim();
-    let (key, label) = head.split_once('/')?;
+    let value = spec.trim();
+    let value = value.strip_suffix(": \"\"").unwrap_or(value).trim_end();
+    let (key, label) = value.split_once('/')?;
     Some((label.trim().to_string(), key.trim().to_string()))
 }
 
@@ -239,7 +258,8 @@ fn parse_open_group(spec: &str) -> Option<(String, String)> {
 /// (`*ll.Translation Key/Label: ""` for options and groups, `*ll.Key choice/Label: ""` for
 /// choices). Both default `*OpenGroup` and localized `*ll.OpenGroup` entries are supported.
 /// Each line is read as UTF-8 on its own: drivers write translations this way even when other
-/// PPD text is Latin-1. Names with no translation, or an empty one, stay as they are.
+/// PPD text is Latin-1. Lines longer than `PPD_LINE_CAP` are skipped. Names with no translation,
+/// or an empty one, stay as they are.
 // Read only by the CUPS path; the tests exercise it everywhere.
 #[cfg_attr(not(all(unix, not(target_arch = "wasm32"))), allow(dead_code))]
 pub(crate) fn localize(options: &mut [PrinterOption], ppd: &[u8], lang: &str) {
@@ -264,6 +284,9 @@ pub(crate) fn localize(options: &mut [PrinterOption], ppd: &[u8], lang: &str) {
     let mut groups = HashMap::<String, String>::new();
 
     for line in ppd.split(|byte| *byte == b'\n') {
+        if line.len() > PPD_LINE_CAP {
+            continue;
+        }
         let Ok(text) = std::str::from_utf8(line) else {
             continue;
         };
@@ -336,6 +359,16 @@ mod tests {
     use super::{localize, ppd_languages, valid_destination};
     use craft_print::PrinterOption;
 
+    fn option(key: &str, label: &str) -> PrinterOption {
+        PrinterOption {
+            key: key.into(),
+            label: label.into(),
+            group: "General".into(),
+            choices: vec![("A4".into(), "A4".into())],
+            default: "A4".into(),
+        }
+    }
+
     #[test]
     fn destination_names_are_conservative() {
         for valid in ["Printer", "queue_1", "queue-1", "queue.name", "queue+name"] {
@@ -358,14 +391,27 @@ mod tests {
     }
 
     #[test]
+    fn language_codes_reject_path_characters() {
+        for bad in ["../x", "a/b", "a\\b", "bg\n*en", "x y", "bg.", "..", "pt-br/../x"] {
+            assert!(ppd_languages(bad).is_empty(), "expected {bad:?} to yield no codes");
+        }
+        // Valid input is unchanged.
+        assert_eq!(ppd_languages("pt-br"), vec!["pt_BR", "pt"]);
+    }
+
+    #[test]
+    fn localize_ignores_a_lang_with_path_characters() {
+        let mut options = vec![option("PageSize", "Paper size")];
+        let ppd = "*bg.Translation PageSize/Размер на хартията: \"\"\n".as_bytes();
+
+        localize(&mut options, ppd, "../x");
+
+        assert_eq!(options[0].label, "Paper size");
+    }
+
+    #[test]
     fn localize_translates_default_open_group_options_and_choices() {
-        let mut options = vec![PrinterOption {
-            key: "PageSize".into(),
-            label: "Paper size".into(),
-            group: "General".into(),
-            choices: vec![("A4".into(), "A4".into())],
-            default: "A4".into(),
-        }];
+        let mut options = vec![option("PageSize", "Paper size")];
         let ppd = r#"
 *OpenGroup: General/General: ""
 *bg.Translation General/Общи: ""
@@ -383,13 +429,7 @@ mod tests {
 
     #[test]
     fn localize_accepts_language_specific_open_group_entries() {
-        let mut options = vec![PrinterOption {
-            key: "PageSize".into(),
-            label: "Paper size".into(),
-            group: "General".into(),
-            choices: vec![("A4".into(), "A4".into())],
-            default: "A4".into(),
-        }];
+        let mut options = vec![option("PageSize", "Paper size")];
         let ppd = r#"
 *bg.OpenGroup: General/Общи: ""
 *bg.Translation PageSize/Размер на хартията: ""
@@ -406,13 +446,7 @@ mod tests {
 
     #[test]
     fn localize_keeps_group_name_for_empty_localized_open_group_label() {
-        let mut options = vec![PrinterOption {
-            key: "PageSize".into(),
-            label: "Paper size".into(),
-            group: "General".into(),
-            choices: vec![("A4".into(), "A4".into())],
-            default: "A4".into(),
-        }];
+        let mut options = vec![option("PageSize", "Paper size")];
         let ppd = r#"
 *bg.OpenGroup: General/: ""
 *bg.Translation PageSize/Размер на хартията: ""
@@ -427,6 +461,71 @@ mod tests {
         assert_eq!(options[0].choices[0].1, "А4");
     }
 
+    /// A PPD with one option in a group whose label is `group`, translated through
+    /// `*bg.Translation Finishing/…`.
+    fn finishing_ppd(group: &str) -> Vec<u8> {
+        format!(
+            "*OpenGroup: Finishing/{group}\n\
+             *OpenUI *Staple/Staple: PickOne\n\
+             *DefaultStaple: None\n\
+             *Staple None/Off: \"\"\n\
+             *CloseUI: *Staple\n\
+             *CloseGroup: Finishing\n\
+             *bg.Translation Finishing/Завършване: \"\"\n"
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn open_group_value_keeps_colons() {
+        assert_eq!(super::parse_open_group(" Finishing/Finishing: options"), Some(("Finishing: options".into(), "Finishing".into())));
+        assert_eq!(super::parse_open_group(" General/General: \"\""), Some(("General".into(), "General".into())));
+        assert_eq!(super::parse_open_group(" General/: \"\""), Some((String::new(), "General".into())));
+        assert_eq!(super::parse_open_group(" no-slash"), None);
+    }
+
+    // parse_ppd → localize regression: the group label carries a colon, as parse_ppd reports it.
+    #[test]
+    fn localize_group_label_with_colon() {
+        let ppd = finishing_ppd("Finishing: options");
+        let mut options = super::parse_ppd(&super::ppd_text(&ppd));
+        assert!(!options.is_empty(), "fixture should parse to at least one option");
+        assert_eq!(options[0].group, "Finishing: options");
+
+        localize(&mut options, &ppd, "bg");
+
+        assert_eq!(options[0].group, "Завършване");
+    }
+
+    #[test]
+    fn localize_group_label_without_colon_control() {
+        let ppd = finishing_ppd("Finishing");
+        let mut options = super::parse_ppd(&super::ppd_text(&ppd));
+        assert!(!options.is_empty(), "fixture should parse to at least one option");
+        assert_eq!(options[0].group, "Finishing");
+
+        localize(&mut options, &ppd, "bg");
+
+        assert_eq!(options[0].group, "Завършване");
+    }
+
+    #[test]
+    fn localize_skips_an_overlong_line_and_keeps_going() {
+        let mut options = vec![option("PageSize", "Paper size"), option("Copies", "Copies"), option("Duplex", "Duplex")];
+
+        let mut ppd = "*bg.Translation PageSize/Размер: \"\"\n".as_bytes().to_vec();
+        ppd.extend_from_slice(b"*bg.Translation Copies/");
+        ppd.extend(std::iter::repeat_n(b'x', 2 << 20)); // 2 MiB label, far past the line cap
+        ppd.extend_from_slice(b": \"\"\n");
+        ppd.extend_from_slice("*bg.Translation Duplex/Двустранно: \"\"\n".as_bytes());
+
+        localize(&mut options, &ppd, "bg");
+
+        assert_eq!(options[0].label, "Размер");
+        assert_eq!(options[1].label, "Copies", "the overlong line must be skipped");
+        assert_eq!(options[2].label, "Двустранно");
+    }
+
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     #[test]
     fn output_within_returns_stdout() {
@@ -437,6 +536,32 @@ mod tests {
         let mut cmd = Command::new("printf");
         cmd.arg("hello");
         assert_eq!(output_within(&mut cmd, Duration::from_secs(1)).unwrap(), b"hello");
+    }
+
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    #[test]
+    fn output_within_caps_large_output_without_deadlock() {
+        use super::{OUTPUT_CAP, output_within};
+        use std::process::Command;
+        use std::time::Duration;
+
+        // Twice the cap: the pipe fills, the reader keeps draining, the command still exits.
+        let mut cmd = Command::new("head");
+        cmd.args(["-c", "8388608", "/dev/zero"]);
+        let out = output_within(&mut cmd, Duration::from_secs(10)).unwrap();
+        assert_eq!(out.len() as u64, OUTPUT_CAP);
+    }
+
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    #[test]
+    fn output_within_refuses_a_limit_that_overflows() {
+        use super::output_within;
+        use std::process::Command;
+        use std::time::Duration;
+
+        let mut cmd = Command::new("true");
+        let err = output_within(&mut cmd, Duration::MAX).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
 
     #[cfg(all(unix, not(target_arch = "wasm32")))]
