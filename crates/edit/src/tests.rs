@@ -8576,3 +8576,35 @@ fn styled_existing_justification_is_refused_instead_of_silently_left_aligning() 
     assert_eq!(page_content_bytes(&doc, 0), before);
     assert_eq!(page_content_bytes(&reopen(&doc), 0), before);
 }
+
+/// Two table cells side by side on one baseline, each in its own clipping path, are two
+/// paragraphs: one rewritten at the first cell's `BT` would be clipped away.
+#[test]
+fn text_in_different_clips_is_not_one_block() {
+    let cells = "q 50 700 m 110 700 l 110 740 l 50 740 l h W* n BT /F1 12 Tf 0 0 1 rg 1 0 0 1 70 712 Tm (Note1) Tj ET Q\n\
+                 q 115 700 m 540 700 l 540 740 l 115 740 l h W* n BT /F1 22 Tf 0 g 1 0 0 1 120 712 Tm (Heading FAQ) Tj ET Q";
+    let texts = |doc: &Document| text::text_blocks(doc, 0).unwrap().into_iter().map(|b| b.text).collect::<Vec<_>>();
+    let mut doc = text_page(cells);
+    assert_eq!(texts(&doc), ["Note1", "Heading FAQ"]);
+    // Editing the heading rewrites it in its own cell, where its clip still shows it.
+    text::replace_block(&mut doc, 0, 1, "Changed FAQ").unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(texts(&doc), ["Note1", "Changed FAQ"]);
+    let heading = text::text_blocks(&doc, 0).unwrap()[1].rect;
+    assert!(heading[0] > 115.0 && heading[2] < 540.0, "{heading:?}");
+    // The same two runs under one clip still read as one paragraph.
+    let one = "q 50 700 490 40 re W n BT /F1 12 Tf 1 0 0 1 70 712 Tm (Note1) Tj ET BT /F1 12 Tf 1 0 0 1 110 712 Tm (Heading FAQ) Tj ET Q";
+    assert_eq!(texts(&text_page(one)), ["Note1 Heading FAQ"]);
+}
+
+/// A signature row from a real report: a ":" between two clipped cells is not merged into either
+/// of them, so neither cell loses a letter at the join.
+#[test]
+fn a_mark_between_two_clipped_cells_joins_neither() {
+    let row = "q 92.9 700 66.9 20 re W n BT /F1 10 Tf 1 0 0 1 93 705 Tm (Approved by) Tj ET Q\n\
+               BT /F1 9 Tf 1 0 0 1 157.3 705 Tm (:) Tj ET\n\
+               q 163.4 700 123.5 20 re W n BT /F1 9 Tf 1 0 0 1 163.4 705 Tm (Dr. Smith) Tj ET Q";
+    let texts = text::text_blocks(&text_page(row), 0).unwrap().into_iter().map(|b| b.text).collect::<Vec<_>>();
+    assert!(texts.iter().any(|t| t == "Approved by"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "Dr. Smith"), "{texts:?}");
+}
