@@ -1986,6 +1986,29 @@ fn a_widget_marked_as_no_tab_stop_has_no_place_in_the_tab_order() {
     assert_eq!(tabs(&doc)[2], ("C".into(), 2));
 }
 
+/// A widget that is on no page (its annotation is in no page's `/Annots`) has no place in the tab
+/// order (`usize::MAX`), and the widgets on the page keep their places without it.
+#[test]
+fn a_widget_on_no_page_has_no_place_in_the_tab_order() {
+    let mut doc = one_page();
+    let text = NewField::Text { multiline: false };
+    for (name, y) in [("A", 700.0), ("B", 650.0), ("C", 600.0)] {
+        add_field(&mut doc, 0, [50.0, y, 250.0, y + 20.0], &text, Some(name)).unwrap();
+    }
+    let tabs = |doc: &Document| -> Vec<(String, usize)> { fields(doc).into_iter().map(|f| (f.name, f.widgets[0].tab)).collect() };
+    assert_eq!(tabs(&doc), [("A".into(), 0), ("B".into(), 1), ("C".into(), 2)]);
+    // Take B's annotation off the page, leaving the field in the form.
+    let b = fields(&doc).into_iter().find(|f| f.name == "B").unwrap().widgets[0].obj;
+    let page = page_refs(&doc)[0];
+    doc.update_dict(page, |d| {
+        d.set(b"Annots".to_vec(), Object::Array(Vec::new()));
+    })
+    .unwrap();
+    let found = fields(&doc).into_iter().find(|f| f.name == "B").map(|f| (f.widgets[0].obj, f.widgets[0].page));
+    assert_eq!(found, Some((b, None)), "B is still a field, on no page");
+    assert!(tabs(&doc).iter().all(|(_, t)| *t == usize::MAX), "the page lists no widget now");
+}
+
 /// The Options flags, alignment and defaults: a comb needs a limit, a reset restores the default,
 /// sorting orders a combo box's items, and a check box can be checked by default.
 #[test]

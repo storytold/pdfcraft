@@ -5325,6 +5325,19 @@ fn the_reported_tab_order_leaves_out_protected_xfa_fields() {
     assert_eq!(r["tab_order"], json!(["first", "locked", "pick", "last"]));
 }
 
+/// An ordinary AcroForm field added beside a laid-out XFA form's fields is in the reported tab
+/// order with the read-only XFA field, and the protected XFA field and button are still left out.
+#[test]
+fn the_reported_tab_order_of_a_mixed_xfa_and_acroform_form_leaves_out_only_the_protected_fields() {
+    let dir = workdir("xfamixedtaborder");
+    std::fs::write(dir.join("access.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::access_template())).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "access.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "text", "rect": [36, 700, 200, 720], "name": "extra" }));
+    let r = ok(&mut a, "form_tab_order", json!({ "doc": doc, "order": "row" }));
+    assert_eq!(r["tab_order"], json!(["first", "locked", "pick", "last", "extra"]), "{r}");
+}
+
 /// Comments and field values export as XFDF and text, and importing the XFDF puts back a deleted
 /// comment and a reset field.
 #[test]
