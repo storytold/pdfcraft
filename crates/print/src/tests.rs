@@ -509,6 +509,61 @@ fn printer_option_defaults_and_job_arguments() {
     assert!(spool::printer_options("../../etc/passwd").is_empty(), "not a queue name");
 }
 
+/// A label printer's PPD: `*PageSize` labels, `*PaperDimension` sizes, and the lines that
+/// must not become papers (custom placeholders, repeats, translations, nonsense, malformed).
+const LABEL_PPD: &str = "*PPD-Adobe: \"4.3\"\n\
+*OpenUI *PageSize/Media Size: PickOne\n\
+*DefaultPageSize: Letter\n\
+*PageSize Letter/US Letter: \"<</PageSize[612 792]>>setpagedevice\"\n\
+*PageSize w288h432/4 x 6 in: \"\"\n\
+*PageSize Env10/#10 Envelope: \"\"\n\
+*PageSize Wide/Wide: \"\"\n\
+*PageSize Custom.WIDTHxHEIGHT/Custom: \"\"\n\
+*fr.PageSize Letter/Lettre US: \"\"\n\
+*CloseUI: *PageSize\n\
+*PaperDimension Letter: \"612.0000 792.0000\"\r\n\
+*PaperDimension w288h432: \"288 432\"\n\
+*PaperDimension Env10/Envelope #10: \"297 684\"\n\
+*PaperDimension Wide: \"1224 792\"\n\
+*PaperDimension Custom: \"0 0\"\n\
+*PaperDimension Letter: \"1 1\"\n\
+*fr.PaperDimension Letter/Lettre: \"612 792\"\n\
+*PaperDimension Huge: \"20000 300\"\n\
+*PaperDimension Tiny: \"0.5 300\"\n\
+*PaperDimension Broken: \"abc 300\"\n\
+*PaperDimension Short: \"300\"\n\
+*PaperDimension NoColon \"1 2\"\n\
+*PaperDimension Bad/Key: \"300 300\"\n";
+
+#[test]
+fn printer_papers_come_from_the_ppd() {
+    let papers = spool::parse_ppd_papers(LABEL_PPD);
+    let listed: Vec<(&str, &str, (f64, f64))> = papers.iter().map(|p| (p.key.as_str(), p.label.as_str(), p.size)).collect();
+    assert_eq!(
+        listed,
+        [
+            ("Letter", "US Letter", (612.0, 792.0)),
+            ("w288h432", "4 x 6 in", (288.0, 432.0)),
+            ("Env10", "Envelope #10", (297.0, 684.0)),
+            ("Wide", "Wide", (1224.0, 792.0)),
+            ("Bad", "Key", (300.0, 300.0)),
+        ],
+        "a *PageSize label names a size, its own label wins, sizes stay as the driver feeds them; placeholders, repeats, translations, impossible sizes and malformed lines are left out"
+    );
+    assert_eq!(papers.iter().map(|p| p.default).collect::<Vec<_>>(), [true, false, false, false, false], "the *DefaultPageSize one is the default");
+    assert_eq!(spool::paper_of_size(&papers, (432.0, 288.0)), Some(1), "the other way round too");
+    assert_eq!(spool::paper_of_size(&papers, (612.4, 792.4)), Some(0), "within half a point");
+    // A label fed either way is different stock: the exact way round wins when both exist.
+    let labels = spool::parse_ppd_papers("*PaperDimension w90h162/1.25x2.25: \"90 162\"\n*PaperDimension w162h90/2.25x1.25: \"162 90\"\n");
+    assert_eq!((spool::paper_of_size(&labels, (162.0, 90.0)), spool::paper_of_size(&labels, (90.0, 162.0))), (Some(1), Some(0)));
+    assert_eq!(spool::paper_of_size(&papers, (613.0, 792.0)), None);
+    assert_eq!(spool::paper_of_size(&papers, (f64::NAN, 792.0)), None);
+    assert!(spool::parse_ppd_papers("").is_empty());
+    assert!(spool::parse_ppd_papers("*PaperDimension").is_empty());
+    let many: String = (0..500).map(|i| format!("*PaperDimension P{i}: \"100 200\"\n")).collect();
+    assert_eq!(spool::parse_ppd_papers(&many).len(), 400, "capped");
+}
+
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 mod cups_options {
     use crate::spool;
@@ -607,6 +662,20 @@ mod cups_options {
         }
         let job = spool::Job { printer: Some("Office/duplex".into()), ..Default::default() };
         assert_eq!(&spool::lp_args(&job)[..2], ["-d", "Office/duplex"]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn printer_papers_are_read_from_the_queue_ppd() {
+        let dir = folder();
+        std::fs::write(dir.join("Label.ppd"), super::LABEL_PPD).unwrap();
+        for destination in ["Label", "Label/draft"] {
+            let papers = spool::printer_papers_in(destination, &dir);
+            assert_eq!(papers.iter().map(|p| p.key.as_str()).collect::<Vec<_>>(), ["Letter", "w288h432", "Env10", "Wide", "Bad"], "{destination}");
+        }
+        for destination in ["Missing", "../Label", "Label/a/b", "Label\\draft", "", "."] {
+            assert!(spool::printer_papers_in(destination, &dir).is_empty(), "{destination:?}");
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 
