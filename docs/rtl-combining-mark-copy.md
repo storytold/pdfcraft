@@ -1,6 +1,7 @@
 # RTL copy: separately mapped combining marks
 
-Status: focused regression fix, 2026-10-31. Base: upstream main
+Status: focused regression fix, refreshed against upstream `47f42ba0` on 2026-11-01.
+Original base: upstream main
 `13655d09922038ab62d93b84ba9cd2eae474abd7`. Estimates and readiness claims are unchanged.
 
 ## Reproduced behavior
@@ -37,7 +38,7 @@ The production ordering module is temporarily restored from upstream while retai
 new tests: both Arabic regressions must fail on the original misplaced-mark strings. The
 fixed file is restored byte-for-byte before the full passing run.
 
-Results on this isolated branch: 423 unit and 63 integration tests pass; one pre-existing
+Historical results at the original isolated head: 423 unit and 63 integration tests pass; one pre-existing
 integration test remains ignored. Both new Arabic regressions fail with upstream production
 ordering restored, then pass after the fixed file is restored. Formatting, native all-target
 Clippy with warnings denied, layers and assets pass. The renderer WASM library check passes
@@ -57,6 +58,14 @@ cargo xtask assets
 
 ## Boundaries and coordination
 
+The 2026-11-01 upstream refresh retains both roadmap histories and the original
+production correction unchanged. Restoring upstream ordering makes the Arabic
+regressions fail; the corrected module is restored byte-for-byte before qualification.
+Fresh results: **425 unit and 63 integration tests passed**, with one existing corpus
+ignore. Scoped Clippy with warnings denied passes. Final gate results and current CI
+status are recorded in the submitted PR description. No engine/GUI/workspace sweep
+or full application/clipboard qualification is implied.
+
 This does not infer a base across a word gap, solve arbitrarily shifted marks, or reconstruct
 all missing logical direction information. Full paragraph ActualText can remain atomic for
 selection. Real-font appearance, OS clipboard integration and arbitrary producer-specific
@@ -68,5 +77,7 @@ is a supplement, not a replacement or a claim to resolve those broader issues.
 
 ## Revision history
 
+- 2026-11-01: integrate current upstream, preserve both roadmap histories, repeat
+  ordering sensitivity proof and scoped renderer qualification with fresh counts.
 - 2026-10-31: isolate the mapped-mark renderer fix from the broader Arabic investigation,
   retaining independent regressions and explicit scope limits.
