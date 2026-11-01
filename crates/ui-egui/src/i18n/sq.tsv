@@ -337,7 +337,6 @@
 	Check box is checked by default	Kutia e zgjedhjes është e zgjedhur si parazgjedhje
 	Check for accessibility	Kontrollo qasshmërinë
 	Check for accessibility…	Kontrollo qasshmërinë…
-	Check for updates	Kontrollo për përditësime
 	Check for updates…	Kontrollo për përditësime…
 	Check spelling	Kontrollo drejtshkrimin
 	Check that the tags read in the order a sighted reader would. Use the Reading Order tool or the Tags panel to correct it.	Kontrolloni që etiketat lexohen në radhën që do t'i lexonte një lexues që sheh. Përdorni mjetin e radhës së leximit ose panelin e etiketave për ta korrigjuar.
@@ -346,7 +345,6 @@
 	Checkbox	Kuti zgjedhjeje
 	Checked	E zgjedhur
 	Checking Options ({on} of 32 in all categories)	Opsionet e kontrollit ({on} nga 32 në të gjitha kategoritë)
-	Checking for a newer version…	Duke kontrolluar për një version më të ri…
 	Checkmark	Shenjë vlefshmërie
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Zgjidhni një imazh PNG ose JPEG (deri në 4 MiB). Transparenca ruhet.
 	Choose a folder for the exported files	Zgjidhni një dosje për skedarët e eksportuar
@@ -450,7 +448,6 @@
 	Correct recognized text	Korrigjo tekstin e njohur
 	Could not save: {e}	Nuk u ruajt: {e}
 	Couldn't add {name}: {e}	Nuk u shtua {name}: {e}
-	Couldn't check for updates: {e}	Nuk u kontrollua për përditësime: {e}
 	Couldn't combine files: {e}	Nuk u bashkuan skedarët: {e}
 	Couldn't create a PDF: {e}	Nuk u krijua dot një PDF: {e}
 	Couldn't download {name}: {e}	Nuk u shkarkua {name}: {e}
@@ -880,6 +877,9 @@
 	Grab bag	Të ndryshme
 	Gray	Gri
 	Grayscale Images	Imazhe në nuanca gri
+	Monochrome Images	Imazhe bardhezi
+	CCITT Group 4	CCITT grupi 4
+	JBIG2 (lossless)	JBIG2 (pa humbje)
 	Green	Jeshile
 	H / Space (hold)	H / Hapësira (mbaje shtypur)
 	HTML web page	Faqe interneti HTML
@@ -1314,7 +1314,6 @@
 	PdfCraft on GitHub	PdfCraft në GitHub
 	PdfCraft web page	Faqja ueb e PdfCraft
 	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft funksionon pa internet. Pa telemetri, pa llogari dhe pa përpunim në re, përveçse nëse shton një ofrues.
-	PdfCraft {c} is up to date.	PdfCraft {c} është i përditësuar.
 	PdfCraft {v} is available.	PdfCraft {v} është i disponueshëm.
 	People may need more time to respond. Check that nothing has a time limit.	Njerëzit mund të kenë nevojë për më shumë kohë për të përgjigjur. Kontrollo që asgjë të mos ketë kufi kohe.
 	Percentage	Përqindja
@@ -1479,6 +1478,14 @@
 	Replacement text	Teksti zëvendësues
 	Replacement: pages of {name}	Zëvendësimi: faqet e {name}
 	Replaces the existing one on those pages.	Zëvendëson atë ekzistues në ato faqe.
+	Checking pages…	Po kontrollohen faqet…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Faqja {pages} ka mbushjen e vet të bardhë, e cila do ta fshihte sfondin. Zëvendësoje
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Faqet {pages} kanë mbushjen e tyre të bardhë, e cila do ta fshihte sfondin. Zëvendësoje
+	Removing the background puts the page's own backdrop back.	Heqja e sfondit e rikthen mbushjen e bardhë të faqes.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Një imazh e mbulon faqen {pages} (skanim?), prandaj sfondi nuk do të duket aty.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Imazhe mbulojnë faqet {pages} (skanime?), prandaj sfondi nuk do të duket aty.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Faqja {pages} ndryshoi pasi u shtua sfondi, ndaj mbushja e saj e bardhë mbetet e fikur. Në letër të bardhë duket njësoj.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Faqet {pages} ndryshuan pasi u shtua sfondi, ndaj mbushjet e tyre të bardha mbeten të fikura. Në letër të bardhë duken njësoj.
 	Replacing images arrives on the web with image file pickers	Zëvendësimi i imazheve vjen në ueb me zgjedhësit e skedarëve të imazhit
 	Replacing images on page {p} arrives on the web with image pickers ({i})	Zëvendësimi i imazheve në faqen {p} vjen në ueb me zgjedhësit e imazhit ({i})
 	Reply	Përgjigju
@@ -1991,7 +1998,6 @@
 	You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Jeni gati të zbatoni 1 shenjë redaktimi. Teksti, imazhet dhe vizatimet nën shenjat, si dhe komentet dhe fushat e formularit që mbivendosen me to, hiqen përgjithmonë.
 	You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Jeni gati të zbatoni {n} shenja redaktimi. Teksti, imazhet dhe vizatimet nën shenjat, si dhe komentet dhe fushat e formularit që mbivendosen me to, hiqen përgjithmonë.
 	You can pin up to {n} folders. Unpin one first.	Mund të fiksoni deri në {n} dosje. Hiqni fiksimin e njërës më parë.
-	You have version {c}. All releases are listed at {page}.	Keni versionin {c}. Të gjitha botimet janë të listuara te {page}.
 	You have version {c}. Download the new version from its release page.	Keni versionin {c}. Shkarkoni versionin e ri nga faqja e botimit.
 	Your changes will be lost if you don't save them.	Ndryshimet tuaja do të humbasin nëse nuk i ruani.
 	Your name	Emri juaj
@@ -2409,6 +2415,17 @@ animation effects	Off	Joaktiv
 	Mark as artifact	Mark as artifact
 	Merge image fragments	Merge image fragments
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Reads {name}, which the form doesn't have, so it gets no value there.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.
+	Missing field	Missing field
+	Unchecked reads	Unchecked reads
+	{field} reads fields named as it runs	{field} reads fields named as it runs
+	Some names are built as it runs	Some names are built as it runs
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	{n} more formula reads a missing field.|{n} more formulas read missing fields.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.
+@plural	{fields} is missing|{fields} are missing	{fields} is missing|{fields} are missing
 	Mobile	Mobile
 	Move only what must move, so every field calculates after the fields it reads.	Move only what must move, so every field calculates after the fields it reads.
 	Moves only what must move	Moves only what must move
@@ -2544,3 +2561,6 @@ animation effects	Off	Joaktiv
 	Rotate the selected pages clockwise	Rrotullo faqet e përzgjedhura në drejtim të orës
 	Extract the selected pages…	Nxirr faqet e përzgjedhura…
 	Delete the selected pages	Fshi faqet e përzgjedhura
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Opsionet për këtë përgjigje

@@ -19,19 +19,22 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, p
     if pointer.is_some_and(|p| xf.rect.contains(p)) {
         view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
     }
-    if resp.drag_started()
+    // The tool's own press, of the primary button: nothing drawn over the page here holds it.
+    if resp.drag_started_by(egui::PointerButton::Primary)
+        && view.router.owner(page).is_none()
         && let Some(o) = origin.filter(|o| xf.rect.contains(*o))
     {
         view.marquee = Some((page, o));
     }
     if let Some((p, start)) = view.marquee
         && p == page
-        && let Some(end) = pointer
     {
+        // Where the pointer is, or where it went down when it is off the window.
+        let end = pointer.unwrap_or(start);
         let end = Pos2::new(end.x.clamp(xf.rect.left(), xf.rect.right()), end.y.clamp(xf.rect.top(), xf.rect.bottom()));
         let r = Rect::from_two_pos(start, end);
         ui.painter().rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, Color32::from_rgb(0x14, 0x73, 0xE6)), egui::StrokeKind::Middle);
-        if resp.drag_stopped() {
+        if resp.drag_stopped() || !ptr.primary_down {
             view.marquee = None;
             let (a, b) = (xf.screen_to_view(r.left_top()), xf.screen_to_view(r.right_bottom()));
             view.marquee_done = Some((page, r, [a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1)]));

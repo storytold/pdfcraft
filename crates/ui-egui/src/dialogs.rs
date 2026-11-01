@@ -1463,6 +1463,13 @@ fn dialog_shortcuts(ui: &mut egui::Ui) -> bool {
     let pair = |a, b| format!("{} / {}", key(a), key(b));
     // Key names, translated where a catalog has them (not scanned as UI literals).
     let named = |k: &str| tl!(k).to_string();
+    // Alt+← / Alt+→ (`canvas::shortcuts`): not a registered command, which has no Alt.
+    let alt_arrows = if crate::commands::mac_shortcuts(ui.ctx()) {
+        "⌥← / ⌥→".to_owned()
+    } else {
+        let alt = crate::i18n::key_name("Alt");
+        format!("{alt}+← / {alt}+→")
+    };
     let scroll = crate::i18n::fmt(tl!("Zoom in / out (also pinch or {key}-scroll)"), &[("key", crate::commands::command_modifier_label(ui.ctx()))]);
     for (k, v) in [
         (pair(FIND_NEXT, FIND_PREV), tl!("Next / previous match").to_string()),
@@ -1476,6 +1483,7 @@ fn dialog_shortcuts(ui: &mut egui::Ui) -> bool {
         (pair(ROTATE_CW, ROTATE_CCW), tl!("Rotate view").to_string()),
         (format!("{} / {}", crate::i18n::key_name("Home"), crate::i18n::key_name("End")), tl!("First / last page").to_string()),
         (format!("← / →, {}", pair(PAGE_PREV, PAGE_NEXT)), tl!("Previous / next page").to_string()),
+        (alt_arrows, format!("{} / {}", tl!("Previous view"), tl!("Next view"))),
         (named("V"), tl!("Select (V)").to_string()),
         (named("H / Space (hold)"), tl!("Hand (H)").to_string()),
         (crate::i18n::key_name("Delete").to_string(), tl!("Delete selected pages (Organize)").to_string()),
@@ -1498,7 +1506,7 @@ fn dialog_shortcuts(ui: &mut egui::Ui) -> bool {
 /// `Dialog::About` content. Returns `false` when it has its own buttons and no footer is wanted.
 fn dialog_about(ui: &mut egui::Ui, req: &mut Pending) -> bool {
     let t = Tokens::get(ui.ctx());
-    // Tabs About · Contributors · Models (craftrules standards/contributors.md).
+    // Tabs About · Contributors · Models.
     let tab_id = egui::Id::unique("about_tab");
     let mut tab = ui.data_mut(|d| d.get_temp::<u8>(tab_id)).unwrap_or(0);
     ui.horizontal_wrapped(|ui| {
@@ -1733,9 +1741,13 @@ fn finish_redactions_and_fields(app: &mut PdfCraftApp, req: &mut Pending) {
         // The widget being edited, by object: a radio button that joins a group by its new name
         // is appended after the group's own buttons, so its index changes.
         let widget = before.as_ref().and_then(|all| all.iter().find(|f| f.name == d.field)?.widgets.get(d.widget).map(|w| w.obj));
-        if app.apply_edit(Edit::SetFieldProps { name: d.field.clone(), props: Box::new(props) })
-            && let Some(i) = app.active
-        {
+        let applied = app.apply_edit(Edit::SetFieldProps { name: d.field.clone(), props: Box::new(props) });
+        if !applied && app.active_ids().is_some() {
+            // A refused edit (its reason is in the notice) leaves the dialog open with what was
+            // typed into it, as the several-fields dialog does, so nothing is lost meanwhile.
+            app.field_props = Some(d);
+            req.close = false;
+        } else if applied && let Some(i) = app.active {
             // Keep the (possibly renamed) field selected.
             // A dotted name is the full name; a plain one renames the field within its parent.
             let typed = d.name.trim();

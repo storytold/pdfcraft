@@ -229,6 +229,34 @@ fn delete_takes_popup_and_reply_chain() {
     assert_eq!(delete_annotation(&mut doc, 0, 9), Err(AnnotError::NoSuchAnnotation { page: 0, index: 9 }));
 }
 
+/// A locked reply can't be deleted, so it doesn't go with what it answers either: deleting the
+/// reply above it, or the comment, is refused and changes nothing; once it is unlocked they go.
+#[test]
+fn a_locked_reply_keeps_what_it_answers() {
+    let mut doc = fixture();
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [100.0, 100.0], icon: NoteIcon::Comment }), &meta("n")).unwrap();
+    let reply = add_reply(&mut doc, 0, note, "first", "Bob", &meta("r1")).unwrap();
+    let answer = add_reply(&mut doc, 0, reply, "locked answer", "Ada", &meta("r2")).unwrap();
+    set_locked(&mut doc, 0, answer, true).unwrap();
+    let before = list(&doc, 0).len();
+    assert_eq!(delete_annotation(&mut doc, 0, reply), Err(AnnotError::Invalid("a reply to it is locked".into())));
+    assert_eq!(delete_annotation(&mut doc, 0, note), Err(AnnotError::Invalid("a reply to it is locked".into())));
+    assert_eq!(list(&doc, 0).len(), before, "nothing went");
+    // Asked first, read-only, as a Delete command does: the same answer, and the answer's own
+    // lock is its own.
+    assert_eq!(deletable(&doc, 0, note), Err(AnnotError::Invalid("a reply to it is locked".into())));
+    assert_eq!(deletable(&doc, 0, answer), Err(AnnotError::Invalid("the comment is locked".into())));
+    // Lifted on a copy, to draw the page beneath, the locks don't count.
+    let mut copy = doc.clone();
+    lift_annotation(&mut copy, 0, note).unwrap();
+    assert!(list(&copy, 0).len() < before, "the thread is lifted off the copy");
+    set_locked(&mut doc, 0, answer, false).unwrap();
+    assert_eq!(deletable(&doc, 0, reply), Ok(()));
+    delete_annotation(&mut doc, 0, reply).unwrap();
+    let left: Vec<String> = list(&doc, 0).iter().map(|d| text(d, b"Contents")).collect();
+    assert!(!left.iter().any(|t| t == "first" || t == "locked answer"), "the reply and its answer went: {left:?}");
+}
+
 /// A reply or pop-up written inline in `/Annots` (a file can, though the standard asks for
 /// references) goes with the comment it points at, and so does a pop-up an inline reply or an
 /// inline comment names. An unrelated inline comment stays until it is deleted itself.
