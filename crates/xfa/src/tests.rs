@@ -4224,3 +4224,122 @@ fn a_subform_set_in_a_table_or_a_row_puts_its_members_one_under_another() {
         assert!((x1 - x2).abs() < 0.5 && y2 > y1 + 20.0, "{second} under {first}: ({x1}, {y1}) then ({x2}, {y2})");
     }
 }
+
+/// The SOM path and place of each widget of the template's field `name`, in layout order, found
+/// by its SOM path (a repeated field's PDF name is made up: `x_2`).
+fn widgets_named(form: &Form, name: &str) -> Vec<(String, f64, f64)> {
+    let tail = format!(".{name}[0]");
+    widgets(&form.pages[0]).iter().filter(|w| w.som.ends_with(&tail)).map(|w| (w.som.clone(), w.rect.x, w.rect.y)).collect()
+}
+
+/// #5369 review: a `subformSet` inside a `subformSet` is transparent too: in an `lr-tb` row the
+/// inner set's member goes on beside the field before the outer set, the outer set's own member
+/// wraps, and the field after the sets follows it. Each member keeps both sets in its SOM path.
+#[test]
+fn nested_subform_sets_in_an_lr_tb_subform_flow_their_members_with_their_siblings() {
+    let body = r#"<subform name="row" layout="lr-tb" w="2in">
+ <field name="a" w="1in" h="0.3in"><ui><textEdit/></ui></field>
+ <subformSet name="outer">
+  <subformSet name="inner">
+   <subform name="m1" w="0.6in" h="0.3in"><field name="x" w="0.6in" h="0.3in"><ui><textEdit/></ui></field></subform>
+  </subformSet>
+  <subform name="m2" w="0.6in" h="0.3in"><field name="y" w="0.6in" h="0.3in"><ui><textEdit/></ui></field></subform>
+ </subformSet>
+ <field name="b" w="0.6in" h="0.3in"><ui><textEdit/></ui></field>
+</subform>"#;
+    let form = layout_xml(&one_area_form(r#"layout="tb""#, body)).unwrap();
+    let at = |name: &str| widgets_named(&form, name).into_iter().next().unwrap();
+    let ((_, ax, ay), (xsom, xx, xy), (ysom, yx, yy), (_, bx, by)) = (at("a"), at("x"), at("y"), at("b"));
+    assert!((xy - ay).abs() < 0.5 && (xx - (ax + 72.0)).abs() < 0.5, "x goes on beside a: a ({ax}, {ay}), x ({xx}, {xy})");
+    assert!(yy > ay + 1.0 && (yx - ax).abs() < 0.5, "y wraps: ({yx}, {yy})");
+    assert!((by - yy).abs() < 0.5 && (bx - (yx + 43.2)).abs() < 0.5, "b follows y: ({bx}, {by})");
+    assert!(xsom.ends_with("row[0].outer[0].inner[0].m1[0].x[0]") && ysom.ends_with("row[0].outer[0].m2[0].y[0]"), "{xsom} {ysom}");
+}
+
+/// #5369 review: in a positioned subform, the members of a `subformSet` nested in another sit at
+/// their own positions, side by side, as the members of one set do.
+#[test]
+fn nested_subform_sets_in_a_positioned_subform_place_their_members_where_they_are() {
+    let body = r#"<subform name="box" w="7in" h="3in">
+ <subformSet name="outer">
+  <subformSet name="inner">
+   <subform name="l" x="0in" y="0.5in" w="3in" h="1in"><field name="p" w="1in" h="0.3in"><ui><textEdit/></ui></field></subform>
+  </subformSet>
+  <subform name="r" x="4in" y="0.5in" w="3in" h="1in"><field name="q" w="1in" h="0.3in"><ui><textEdit/></ui></field></subform>
+ </subformSet>
+</subform>"#;
+    let form = layout_xml(&one_area_form(r#"layout="tb""#, body)).unwrap();
+    let at = |name: &str| widgets_named(&form, name).into_iter().next().unwrap();
+    let ((psom, px, py), (_, qx, qy)) = (at("p"), at("q"));
+    assert!((py - qy).abs() < 0.5 && (qx - px - 288.0).abs() < 0.5, "side by side, 4in apart: p ({px}, {py}), q ({qx}, {qy})");
+    assert!(psom.ends_with("box[0].outer[0].inner[0].l[0].p[0]"), "{psom}");
+}
+
+/// #5369 review: an empty `subformSet`, and one holding only an empty one, takes no room: in an
+/// `lr-tb` row the field after it goes on beside the field before it, and in a positioned or a
+/// `tb` subform the layout goes on as if it weren't there.
+#[test]
+fn an_empty_subform_set_takes_no_room() {
+    for (attrs, after_a) in [(r#"layout="lr-tb" w="2in""#, (72.0, 0.0)), (r#"w="7in" h="2in""#, (0.0, 0.0)), (r#"layout="tb" w="7in""#, (0.0, 21.6))]
+    {
+        let body = format!(
+            r#"<subform name="row" {attrs}>
+ <field name="a" w="1in" h="0.3in"><ui><textEdit/></ui></field>
+ <subformSet name="none"/>
+ <subformSet name="outer"><subformSet name="inner"/></subformSet>
+ <field name="b" w="0.6in" h="0.3in"><ui><textEdit/></ui></field>
+</subform>"#
+        );
+        let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+        let at = |name: &str| widgets_named(&form, name).into_iter().next().unwrap();
+        let ((_, ax, ay), (_, bx, by)) = (at("a"), at("b"));
+        assert!((bx - ax - after_a.0).abs() < 0.5 && (by - ay - after_a.1).abs() < 0.5, "{attrs}: a ({ax}, {ay}), b ({bx}, {by})");
+    }
+}
+
+/// #5369 review: a repeating member of a `subformSet` flows instance by instance among its
+/// parent's other children in an `lr-tb` row, as a repeating child of the row would: the first
+/// instance beside the field before the set, the others wrapping, each with its own index.
+#[test]
+fn a_repeating_member_of_a_subform_set_flows_instance_by_instance() {
+    let body = r#"<subform name="row" layout="lr-tb" w="2in">
+ <field name="a" w="1in" h="0.3in"><ui><textEdit/></ui></field>
+ <subformSet name="grp">
+  <subform name="m" w="0.6in" h="0.3in"><occur initial="3" max="5"/><field name="x" w="0.6in" h="0.3in"><ui><textEdit/></ui></field></subform>
+ </subformSet>
+</subform>"#;
+    let form = layout_xml(&one_area_form(r#"layout="tb""#, body)).unwrap();
+    let (_, ax, ay) = widgets_named(&form, "a").into_iter().next().unwrap();
+    let x = widgets_named(&form, "x");
+    assert_eq!(x.len(), 3, "{x:?}");
+    let places: Vec<(f64, f64)> = x.iter().map(|(_, px, py)| (px - ax, py - ay)).collect();
+    for ((got_x, got_y), (want_x, want_y)) in places.iter().zip([(72.0, 0.0), (0.0, 21.6), (43.2, 21.6)]) {
+        assert!((got_x - want_x).abs() < 0.5 && (got_y - want_y).abs() < 0.5, "{places:?}");
+    }
+    for (i, (som, _, _)) in x.iter().enumerate() {
+        assert!(som.ends_with(&format!("row[0].grp[0].m[{i}].x[0]")), "{som}");
+    }
+}
+
+/// #5369 review: a repeating `subformSet` lays its members out once per instance, each instance
+/// flowing on from the last in an `lr-tb` row, and each member taking its set's instance index.
+#[test]
+fn a_repeating_subform_set_flows_each_instance_of_its_members() {
+    let body = r#"<subform name="row" layout="lr-tb" w="2in">
+ <field name="a" w="1in" h="0.3in"><ui><textEdit/></ui></field>
+ <subformSet name="grp"><occur initial="2" max="3"/>
+  <subform name="m" w="0.6in" h="0.3in"><field name="x" w="0.6in" h="0.3in"><ui><textEdit/></ui></field></subform>
+ </subformSet>
+</subform>"#;
+    let form = layout_xml(&one_area_form(r#"layout="tb""#, body)).unwrap();
+    let (_, ax, ay) = widgets_named(&form, "a").into_iter().next().unwrap();
+    let x = widgets_named(&form, "x");
+    assert_eq!(x.len(), 2, "{x:?}");
+    let places: Vec<(f64, f64)> = x.iter().map(|(_, px, py)| (px - ax, py - ay)).collect();
+    for ((got_x, got_y), (want_x, want_y)) in places.iter().zip([(72.0, 0.0), (0.0, 21.6)]) {
+        assert!((got_x - want_x).abs() < 0.5 && (got_y - want_y).abs() < 0.5, "{places:?}");
+    }
+    for (i, (som, _, _)) in x.iter().enumerate() {
+        assert!(som.ends_with(&format!("row[0].grp[{i}].m[0].x[0]")), "{som}");
+    }
+}
