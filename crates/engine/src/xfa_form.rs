@@ -120,6 +120,18 @@ pub(crate) fn decode_data_file(bytes: &[u8]) -> Option<Result<String, String>> {
     }
 }
 
+/// The on state a radio group's XFA data `item` selects: the button saving writes `item` for
+/// (`/PCOn`, else its `/Opt` entry, else its state; `pdfcraft_xfa::radio_state_for_item`), so a
+/// saved selection reopens on the same button; else `item` read as an export value, then as an
+/// on-state name ([`pdfcraft_forms::Field::state_for_export`]), as data from elsewhere is; else
+/// `item` itself.
+fn radio_button(doc: &pdfcraft_cos::Document, f: &pdfcraft_forms::Field, datum: Option<&pdfcraft_xfa::FieldDatum>, item: &str) -> String {
+    datum
+        .and_then(|d| pdfcraft_xfa::radio_state_for_item(doc, d, item))
+        .or_else(|| f.state_for_export(item).map(str::to_owned))
+        .unwrap_or_else(|| item.to_owned())
+}
+
 /// Take the XFA out of `doc` and note what went with it: the packets, data no field showed,
 /// buttons that did nothing but run scripts, and fields whose value differs from the form's
 /// data (data PdfCraft could not read into them, now lost).
@@ -135,11 +147,12 @@ pub(crate) fn strip_xfa(doc: &mut pdfcraft_cos::Document, cx: &mut EditCtx) -> R
                 pdfcraft_xfa::FieldData::Check(on) => f.value.is_empty() == *on,
                 // The field holds an on-state name; the data names a button by its item. They agree
                 // when the data holds what saving writes (`/PCOn`, the `/Opt` entry or the state
-                // name), or an export value or state that selects the same button.
+                // name), or names the same button as opening reads it ([`radio_button`]).
                 pdfcraft_xfa::FieldData::Radio(sel) => {
                     let state = f.value.first().map(String::as_str);
-                    let same_button = sel.as_deref().map(|s| f.state_for_export(s).unwrap_or(s)) == state;
-                    let written = data.iter().find(|d| d.name == *name).map(|d| pdfcraft_xfa::radio_dataset_value(doc, d, &f.value.first().cloned()));
+                    let datum = data.iter().find(|d| d.name == *name);
+                    let same_button = sel.as_deref().map(|s| radio_button(doc, f, datum, s)).as_deref() == state;
+                    let written = datum.map(|d| pdfcraft_xfa::radio_dataset_value(doc, d, &f.value.first().cloned()));
                     !same_button && written.as_deref() != Some(sel.as_deref().unwrap_or_default())
                 }
                 pdfcraft_xfa::FieldData::None => false,
@@ -291,10 +304,11 @@ pub(crate) fn xfa_values_from_datasets(doc: &mut pdfcraft_cos::Document) -> Resu
             }
             pdfcraft_xfa::FieldData::Text(t) => (f.value.join("\n") != t).then_some(FieldValue::Text(t)),
             pdfcraft_xfa::FieldData::Check(on) => (f.value.is_empty() == on).then_some(FieldValue::Check(on)),
-            // The data holds the item (the export value); the field takes the on state that
-            // exports it, which with `/Opt` may be a position (`1` is the state `/0`).
+            // The data holds the item; the field takes the on state of the button saving writes it
+            // for ([`radio_button`]), which with `/Opt` may be a position (`1` is the state `/0`).
             pdfcraft_xfa::FieldData::Radio(sel) => {
-                let state = sel.map(|v| f.state_for_export(&v).map_or(v.clone(), str::to_owned));
+                let datum = data.iter().find(|d| d.name == name);
+                let state = sel.map(|v| radio_button(doc, f, datum, &v));
                 (f.value.first() != state.as_ref()).then_some(FieldValue::Radio(state))
             }
             pdfcraft_xfa::FieldData::None => None,

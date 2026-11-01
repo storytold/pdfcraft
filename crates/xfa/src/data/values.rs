@@ -34,16 +34,10 @@ fn som_of(doc: &Document, f: &FieldDatum) -> String {
     doc.get(f.obj).as_dict().and_then(|d| text_of(doc, d, crate::pdf::SOM_KEY)).unwrap_or_else(|| f.name.clone())
 }
 
-/// The datasets text for a radio group. The AcroForm value is an appearance-state name
-/// (`New York` is stored as `New_York`); `/PCOn` on the selected widget is the original item.
-/// Without it, a group with one `/Opt` entry per widget exports that entry: its state names may
-/// be positions (`/0`, `/1`; ISO 32000-2 Table 230), and the data holds the item (`1`, `2`).
-/// `sel` is the selected on-state name; with none selected the text is empty.
-pub fn radio_dataset_value(doc: &Document, f: &FieldDatum, sel: &Option<String>) -> String {
-    let Some(selected) = sel.as_deref().filter(|s| !s.is_empty() && *s != "Off") else {
-        return String::new();
-    };
-    let Some(group) = doc.get(f.obj).as_dict().cloned() else { return selected.to_string() };
+/// Each button of a radio group, in `/Kids` order: its (`/PCOn` item, on-state name, `/Opt`
+/// entry). A group without `/Kids` is its own one widget.
+fn radio_widgets(doc: &Document, f: &FieldDatum) -> Vec<(Option<String>, Option<String>, Option<String>)> {
+    let Some(group) = doc.get(f.obj).as_dict().cloned() else { return Vec::new() };
     let kids = group.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_else(|| vec![Object::Ref(f.obj)]);
     // One export value per widget, as the field's `/Opt` lists them (an entry may be an
     // `[export display]` pair, as a choice field's are).
@@ -60,9 +54,7 @@ pub fn radio_dataset_value(doc: &Document, f: &FieldDatum, sel: &Option<String>)
                 .collect()
         })
         .filter(|opt: &Vec<Option<String>>| opt.len() == kids.len());
-    // Each widget's (`/PCOn` item, on-state name, `/Opt` entry).
-    let widgets: Vec<(Option<String>, Option<String>, Option<String>)> = kids
-        .iter()
+    kids.iter()
         .enumerate()
         .filter_map(|(i, kid)| {
             let widget = doc.resolve(kid).as_dict().cloned()?;
@@ -76,7 +68,20 @@ pub fn radio_dataset_value(doc: &Document, f: &FieldDatum, sel: &Option<String>)
             let export = exports.as_ref().and_then(|e| e.get(i).cloned().flatten());
             Some((original, state, export))
         })
-        .collect();
+        .collect()
+}
+
+/// The datasets text for a radio group. The AcroForm value is an appearance-state name
+/// (`New York` is stored as `New_York`); `/PCOn` on the selected widget is the original item.
+/// Without it, a group with one `/Opt` entry per widget exports that entry: its state names may
+/// be positions (`/0`, `/1`; ISO 32000-2 Table 230), and the data holds the item (`1`, `2`).
+/// `sel` is the selected on-state name; with none selected the text is empty.
+/// [`radio_state_for_item`] reads it back.
+pub fn radio_dataset_value(doc: &Document, f: &FieldDatum, sel: &Option<String>) -> String {
+    let Some(selected) = sel.as_deref().filter(|s| !s.is_empty() && *s != "Off") else {
+        return String::new();
+    };
+    let widgets = radio_widgets(doc, f);
     // `sel` is an on-state name, so every widget's state is compared before any `/PCOn`: with
     // states `/0` `/1` and items `1` `2`, the state `1` is the second widget, not the first
     // one's item.
@@ -86,6 +91,19 @@ pub fn radio_dataset_value(doc: &Document, f: &FieldDatum, sel: &Option<String>)
         Some((original, _, export)) => original.clone().or_else(|| export.clone()).unwrap_or_else(|| selected.to_string()),
         None => selected.to_string(),
     }
+}
+
+/// The on-state name of the radio button whose item is `item` in the datasets, as
+/// [`radio_dataset_value`] writes it: the first button whose `/PCOn`, else its `/Opt` entry,
+/// else its on-state name, equals `item`. So a saved selection reopens on the same button even
+/// when one button's `/PCOn` equals another's `/Opt` entry. `None` when no button writes `item`
+/// (data from elsewhere); the caller then reads it as an export value or state name.
+pub fn radio_state_for_item(doc: &Document, f: &FieldDatum, item: &str) -> Option<String> {
+    radio_widgets(doc, f).into_iter().find_map(|(original, state, export)| {
+        let state = state?;
+        let written = original.or(export).unwrap_or_else(|| state.clone());
+        (written == item).then_some(state)
+    })
 }
 
 /// The on and off item values of a check box (`/PCItems`), or the widget's on state.

@@ -6170,6 +6170,52 @@ fn stripping_xfa_takes_a_radio_items_pcon_as_the_fields_value() {
     assert_eq!(lost(&s, id), Vec::<String>::new());
 }
 
+/// Opening reads a radio group's data as saving writes it: with `/PCOn` items `4` `1` next to
+/// `/Opt [(1) (2)]` and states `/0` `/1`, a click on the second button saves its item `1`, and
+/// reopening turns the second button on again, not the first one whose `/Opt` entry is `1`; the
+/// first button saves `4` and comes back too. Taking the XFA out then notes no lost data.
+#[test]
+fn a_radio_item_that_is_another_buttons_export_reopens_on_its_own_button() {
+    let lang = "form1[0].page1[0].lang[0]";
+    let data_of = |bytes: Arc<Vec<u8>>| {
+        let cos = pdfcraft_cos::Document::open(bytes).unwrap();
+        let data = pdfcraft_xfa::parse_datasets(&pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp).unwrap();
+        data.text_at(&pdfcraft_xfa::som_to_path(lang)).map(str::to_owned)
+    };
+    let value = |s: &Session, id: DocId| s.get(id).unwrap().form.iter().find(|f| f.name == lang).unwrap().value.clone();
+    let form = Arc::new(pdfcraft_xfa::fixtures::static_radio_shell_with_pcon("<form1><page1><lang/></page1></form1>", ["4", "1"]));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    for (state, item) in [("1", "1"), ("0", "4")] {
+        let id = s.open("blank.pdf", None, form.clone(), None).unwrap();
+        s.apply(id, Edit::SetFieldValue { name: lang.into(), value: FieldValue::Radio(Some(state.into())) }).unwrap();
+        let saved = s.save_bytes(id).unwrap();
+        assert_eq!(data_of(saved.clone()).as_deref(), Some(item), "clicked {state}");
+        let again = s.open("again.pdf", None, saved, None).unwrap();
+        assert_eq!(value(&s, again), [state], "clicked {state}");
+        s.apply(again, Edit::XfaToStatic).unwrap();
+        assert!(!s.get(again).unwrap().info.warnings.iter().any(|w| w.contains("held a value other than the form's XFA data")), "clicked {state}");
+    }
+    // Data from elsewhere that no button saves is still read as an export value, then a state.
+    let id = s
+        .open(
+            "two.pdf",
+            None,
+            Arc::new(pdfcraft_xfa::fixtures::static_radio_shell_with_pcon("<form1><page1><lang>2</lang></page1></form1>", ["4", "1"])),
+            None,
+        )
+        .unwrap();
+    assert_eq!(value(&s, id), ["1"]);
+    let id = s
+        .open(
+            "zero.pdf",
+            None,
+            Arc::new(pdfcraft_xfa::fixtures::static_radio_shell_with_pcon("<form1><page1><lang>0</lang></page1></form1>", ["4", "1"])),
+            None,
+        )
+        .unwrap();
+    assert_eq!(value(&s, id), ["0"]);
+}
+
 /// A radio group whose buttons carry `/PCOn` items `1` `2` next to `/Opt [(1) (2)]` and on
 /// states named by position (`/0`, `/1`): a click on either button saves that button's own item
 /// to the datasets, reopening turns the same button on with nothing rewritten, and taking the XFA
