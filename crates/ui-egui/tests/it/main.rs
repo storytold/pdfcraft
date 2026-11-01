@@ -27,6 +27,7 @@ mod bookmarks;
 mod bulk_fields;
 mod buttons;
 mod camera;
+mod canvas;
 mod column_select;
 mod combine_grid;
 mod commands;
