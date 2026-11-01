@@ -2,7 +2,7 @@ use super::create::finite;
 use super::draw::set_appearance;
 use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, drawn_upright, is_fill_sign, page_ref, page_refs};
 use super::modify::{fillable, touch, unlocked};
-use super::types::{FLAG_LOCKED, LineEnding, Meta, NoteIcon, Rgb};
+use super::types::{FLAG_LOCKED, FLAG_LOCKED_CONTENTS, LineEnding, Meta, NoteIcon, Rgb};
 use super::{AnnotError, Dict, Document, ObjRef, Object, PdfString, appearance};
 
 // ── reading ─────────────────────────────────────────────────────────────────────────────────
@@ -30,6 +30,8 @@ pub struct Summary {
     pub state: Option<String>,
     pub quads: Vec<[f32; 8]>,
     pub locked: bool,
+    /// The LockedContents flag (`/F` bit 10, value 512): the comment's text and appearance cannot be changed.
+    pub locked_contents: bool,
     pub intent: Option<String>,
     /// A Fill & Sign mark ([`is_fill_sign`]).
     pub fill_sign: bool,
@@ -141,6 +143,7 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 state: text_value(doc, d, b"State"),
                 quads,
                 locked: annotation_flags(doc, d) & FLAG_LOCKED != 0,
+                locked_contents: annotation_flags(doc, d) & FLAG_LOCKED_CONTENTS != 0,
                 intent: d.get(b"IT").and_then(|o| doc.resolve(o).as_name().map(|n| String::from_utf8_lossy(n).into_owned())),
                 fill_sign: is_fill_sign(doc, d),
                 no_rotate: drawn_upright(doc, d),
@@ -205,6 +208,8 @@ pub struct Props {
     pub restylable: bool,
     /// The Locked flag.
     pub locked: bool,
+    /// The LockedContents flag (`/F` bit 10, value 512): the comment's text and appearance cannot be changed.
+    pub locked_contents: bool,
     /// `/LE`: two names for a line or polyline (`None` when unset), one for a callout.
     pub endings: Option<Vec<LineEnding>>,
     /// Whether the comment has a fill control (see [`fillable`]).
@@ -241,6 +246,7 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
         modified: text_value(doc, d, b"M"),
         restylable: appearance::build(d).is_some(),
         locked: annotation_flags(doc, d) & FLAG_LOCKED != 0,
+        locked_contents: annotation_flags(doc, d) & FLAG_LOCKED_CONTENTS != 0,
         fillable: fillable(&subtype),
         fill: fill_of(d),
         font_size: (subtype == "FreeText").then(|| appearance::parse_da(d).1),

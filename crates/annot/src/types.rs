@@ -686,5 +686,7 @@ pub(crate) const FLAG_NO_VIEW: i64 = 32;
 
 pub(crate) const FLAG_LOCKED: i64 = 128;
 
+pub(crate) const FLAG_LOCKED_CONTENTS: i64 = 512;
+
 /// Size of a note icon (points, unscaled by zoom).
 pub const NOTE_SIZE: f64 = 20.0;

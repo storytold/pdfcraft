@@ -41,7 +41,7 @@ pub(crate) fn context_menu(
         Some(a) => {
             let (page, index) = (a.page, a.index);
             attachment_items(ui, view, info, a);
-            if ui.add_enabled(allowed, egui::Button::new(tl!("Edit text…"))).clicked() {
+            if ui.add_enabled(allowed && !a.locked_contents, egui::Button::new(tl!("Edit text…"))).clicked() {
                 view.comments.composer = Some(Composer {
                     page,
                     at: edit_anchor(info, a),
@@ -67,18 +67,20 @@ pub(crate) fn context_menu(
                     }
                 });
                 let keep_open = egui::containers::menu::MenuConfig::new().close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
-                let _ = egui::containers::menu::SubMenuButton::new(tl!("Colour")).config(keep_open).ui(ui, |ui| {
-                    if let Some(c) = swatch_grid(ui, a.color.map(|c| c.map(f64::from))) {
-                        action = Some(CanvasAction::Edit(Box::new(Edit::StyleAnnotation {
-                            page,
-                            index,
-                            color: Some(c),
-                            opacity: None,
-                            width: None,
-                            endings: None,
-                        })));
-                        ui.close();
-                    }
+                ui.add_enabled_ui(allowed && !a.locked && !a.locked_contents, |ui| {
+                    let _ = egui::containers::menu::SubMenuButton::new(tl!("Colour")).config(keep_open).ui(ui, |ui| {
+                        if let Some(c) = swatch_grid(ui, a.color.map(|c| c.map(f64::from))) {
+                            action = Some(CanvasAction::Edit(Box::new(Edit::StyleAnnotation {
+                                page,
+                                index,
+                                color: Some(c),
+                                opacity: None,
+                                width: None,
+                                endings: None,
+                            })));
+                            ui.close();
+                        }
+                    });
                 });
             });
             let thread: Vec<&pdfcraft_render::Annotation> = info.annotations.iter().filter(|r| r.replies_to(a)).collect();

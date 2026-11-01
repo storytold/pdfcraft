@@ -3931,8 +3931,13 @@ milestone = "M5"
 status = "shipped"
 commands = []
 tools = ["comment_lock"]
-evidence = ["crates/engine/src/tests.rs::comments_lock_take_checkmarks_hide_and_summarize", "crates/ui-egui/tests/it/comments.rs::comments_take_checkmarks_lock_hide_and_summarize", "crates/automation/tests/it/automation.rs::comment_checkmarks_locks_hiding_and_summaries_through_tools"]
-notes = "Comment Properties ▸ Locked; locked comments refuse move, resize, restyle and delete; text stays editable"
+evidence = [
+    "crates/engine/src/tests.rs::comments_lock_take_checkmarks_hide_and_summarize",
+    "crates/engine/src/tests.rs::locked_contents_annotation_refuses_editing_contents_in_engine",
+    "crates/ui-egui/tests/it/comments.rs::comments_take_checkmarks_lock_hide_and_summarize",
+    "crates/automation/tests/it/automation.rs::comment_checkmarks_locks_hiding_and_summaries_through_tools",
+]
+notes = "Comment Properties ▸ Locked; locked comments refuse move, resize, restyle and delete; text stays editable; LockedContents (/F bit 10) prevents modifying contents (#5216)"
 
 [[feature]]
 id = "comment.default-properties"

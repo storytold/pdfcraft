@@ -300,6 +300,7 @@ fn no_rotate_comments_are_shown_upright_from_their_corner_and_back() {
         state: None,
         quads: Vec::new(),
         locked: false,
+        locked_contents: false,
         intent: None,
         fill_sign: false,
         no_rotate: true,

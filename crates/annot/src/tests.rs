@@ -519,18 +519,120 @@ fn carriage_returns_in_comment_text_become_line_breaks() {
 }
 
 #[test]
-fn a_locked_text_box_still_refits_its_text() {
+fn a_locked_text_box_edits_text_without_resizing_rect() {
     let mut doc = fixture();
-    let t = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: [100.0, 680.0, 304.0, 692.0], font_size: 12.0 }), &meta("t")).unwrap();
+    let initial_rect = [100.0, 680.0, 304.0, 692.0];
+    let t = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: initial_rect, font_size: 12.0 }), &meta("t")).unwrap();
     set_locked(&mut doc, 0, t, true).unwrap();
-    // Resizing is refused, but the text (and its re-fit) stays editable, as in Acrobat.
+    // Resizing is refused (ISO 32000-2 Table 167 forbids size changes).
     assert!(matches!(set_rect(&mut doc, 0, t, [0.0, 0.0, 50.0, 50.0], &meta("")), Err(AnnotError::Invalid(_))));
     let long = "the quick brown fox jumps over the lazy dog";
     set_contents(&mut doc, 0, t, long, &meta("")).unwrap();
     let r = rect(&list(&doc, 0)[t]);
-    assert_eq!(r[3], 692.0);
-    let want = expected_box(692.0, 204.0, long, 12.0, 2.0);
-    assert_eq!(r[1], want[1], "the box grew to fit the wrapped lines");
+    assert_eq!(r, initial_rect, "the locked box keeps its original rectangle unchanged");
+}
+
+#[test]
+fn a_locked_text_box_rolls_back_contents_if_draw_appearance_fails() {
+    let mut doc = fixture();
+    let initial_rect = [100.0, 100.0, 105.0, 105.0];
+    let t = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: initial_rect, font_size: 12.0 }), &meta("t")).unwrap();
+    set_locked(&mut doc, 0, t, true).unwrap();
+    let (_, r) = annot_ref(&mut doc, 0, t).unwrap();
+    // Add callout line /CL and /RD larger than the rectangle so inner dimensions are negative and draw_appearance fails
+    doc.update_dict(r, |d| {
+        d.set(b"RC".to_vec(), PdfString::text("<body><p style=\"font-weight:bold\">original rich text</p></body>"));
+        d.set(
+            b"CL".to_vec(),
+            Object::Array(vec![
+                Object::Real(10.0),
+                Object::Real(10.0),
+                Object::Real(20.0),
+                Object::Real(20.0),
+                Object::Real(30.0),
+                Object::Real(30.0),
+            ]),
+        );
+        d.set(b"RD".to_vec(), Object::Array(vec![Object::Real(10.0), Object::Real(10.0), Object::Real(10.0), Object::Real(10.0)]));
+    })
+    .unwrap();
+    let original = annot_dict(&doc, r).get(b"Contents").cloned();
+    let original_rc = annot_dict(&doc, r).get(b"RC").cloned();
+    let res = set_contents(&mut doc, 0, t, "cannot redraw", &meta(""));
+    assert!(res.is_err(), "draw_appearance fails on invalid inner dimensions");
+    assert_eq!(annot_dict(&doc, r).get(b"Contents").cloned(), original, "original contents are restored on failure");
+    assert_eq!(annot_dict(&doc, r).get(b"RC").cloned(), original_rc, "original rich text is restored on failure");
+}
+
+/// Matrix test of ISO 32000-2 Table 167 annotation flags: Locked (bit 8) and LockedContents (bit 10).
+#[test]
+fn annotation_lock_flags_matrix() {
+    let mut doc = fixture();
+    let initial_rect = [100.0, 680.0, 304.0, 692.0];
+
+    // Case 1: Neither flag set (unlocked). Everything permitted, text box refits.
+    let t0 = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: initial_rect, font_size: 12.0 }), &meta("t0")).unwrap();
+    let p0 = props(&doc, 0, t0).unwrap();
+    assert_eq!((p0.locked, p0.locked_contents), (false, false));
+    set_contents(&mut doc, 0, t0, "new text", &meta("")).unwrap();
+    move_annotation(&mut doc, 0, t0, 5.0, 5.0, &meta("")).unwrap();
+
+    // Case 2: Locked only (bit 8). Contents editable without resizing /Rect; moving and deletion refused.
+    let t1 = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: initial_rect, font_size: 12.0 }), &meta("t1")).unwrap();
+    set_locked(&mut doc, 0, t1, true).unwrap();
+    let p1 = props(&doc, 0, t1).unwrap();
+    assert_eq!((p1.locked, p1.locked_contents), (true, false));
+    set_contents(&mut doc, 0, t1, "more text", &meta("")).unwrap();
+    assert_eq!(rect(&list(&doc, 0)[t1]), initial_rect);
+    assert!(move_annotation(&mut doc, 0, t1, 5.0, 5.0, &meta("")).is_err());
+    assert!(delete_annotation(&mut doc, 0, t1).is_err());
+
+    // Case 3: LockedContents only (bit 10). Contents and appearance changes refused; moving and deletion permitted.
+    let t2 = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: initial_rect, font_size: 12.0 }), &meta("t2")).unwrap();
+    set_locked_contents(&mut doc, 0, t2, true).unwrap();
+    let p2 = props(&doc, 0, t2).unwrap();
+    assert_eq!((p2.locked, p2.locked_contents), (false, true));
+    assert!(set_contents(&mut doc, 0, t2, "new text", &meta("")).is_err());
+    assert!(set_style(&mut doc, 0, t2, StyleChange { color: Some([1.0, 0.0, 0.0]), opacity: None, width: None, endings: None }, &meta("")).is_err());
+    assert!(set_font_size(&mut doc, 0, t2, 14.0, &meta("")).is_err());
+    assert!(move_annotation(&mut doc, 0, t2, 5.0, 5.0, &meta("")).is_ok());
+    assert!(delete_annotation(&mut doc, 0, t2).is_ok());
+
+    // Case 4: Both flags set. Nothing editable, cannot move or delete.
+    let t3 = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: initial_rect, font_size: 12.0 }), &meta("t3")).unwrap();
+    set_locked(&mut doc, 0, t3, true).unwrap();
+    set_locked_contents(&mut doc, 0, t3, true).unwrap();
+    let p3 = props(&doc, 0, t3).unwrap();
+    assert_eq!((p3.locked, p3.locked_contents), (true, true));
+    assert!(set_contents(&mut doc, 0, t3, "new text", &meta("")).is_err());
+    assert!(move_annotation(&mut doc, 0, t3, 5.0, 5.0, &meta("")).is_err());
+    assert!(delete_annotation(&mut doc, 0, t3).is_err());
+}
+
+/// #5216: LockedContents (bit 10, value 512) forbids modifying comment text, while
+/// position and size can still change (ISO 32000-2 Table 167).
+#[test]
+fn a_locked_contents_comment_refuses_text_edits_but_permits_moving() {
+    let mut doc = fixture();
+    let t = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: [100.0, 680.0, 304.0, 692.0], font_size: 12.0 }), &meta("t")).unwrap();
+    set_locked_contents(&mut doc, 0, t, true).unwrap();
+    assert!(summaries(&doc)[0].locked_contents);
+    assert!(props(&doc, 0, t).unwrap().locked_contents);
+
+    let err = set_contents(&mut doc, 0, t, "new text", &meta("")).unwrap_err();
+    assert_eq!(err, AnnotError::Invalid("the comment's contents are locked".into()));
+
+    let style_err =
+        set_style(&mut doc, 0, t, StyleChange { color: Some([1.0, 0.0, 0.0]), opacity: None, width: None, endings: None }, &meta("")).unwrap_err();
+    assert_eq!(style_err, AnnotError::Invalid("the comment's contents are locked".into()));
+
+    let size_err = set_font_size(&mut doc, 0, t, 16.0, &meta("")).unwrap_err();
+    assert_eq!(size_err, AnnotError::Invalid("the comment's contents are locked".into()));
+
+    let fill_err = set_fill(&mut doc, 0, t, Some([0.0, 1.0, 0.0]), &meta("")).unwrap_err();
+    assert_eq!(fill_err, AnnotError::Invalid("the comment's contents are locked".into()));
+
+    move_annotation(&mut doc, 0, t, 10.0, 10.0, &meta("")).unwrap();
 }
 
 #[test]
@@ -978,6 +1080,25 @@ fn the_eraser_cuts_strokes_and_removes_empty_drawings() {
     erase_ink(&mut doc, 0, i, &all[..21], 8.0, &meta("e")).unwrap();
     erase_ink(&mut doc, 0, i, &all[21..], 8.0, &meta("e")).unwrap();
     assert!(!list(&doc, 0).iter().any(|d| d.name(b"Subtype") == Some(b"Ink")));
+}
+
+#[test]
+fn ink_drawing_lock_flags_and_eraser() {
+    let mut doc = fixture();
+    let line = |y: f64| (0..=10).map(|k| [100.0 + k as f64 * 20.0, y]).collect::<Vec<_>>();
+    let shape = Shape::Ink { strokes: vec![line(500.0), line(400.0)] };
+    let i = add_annotation(&mut doc, &new(0, shape), &meta("i")).unwrap();
+
+    // LockedContents: erasing ink strokes is refused because it alters drawn contents and appearance.
+    set_locked_contents(&mut doc, 0, i, true).unwrap();
+    assert!(erase_ink(&mut doc, 0, i, &[[200.0, 550.0], [200.0, 350.0]], 5.0, &meta("e")).is_err());
+
+    // Locked without LockedContents: erasing ink strokes is permitted, keeping original Rect unchanged.
+    set_locked_contents(&mut doc, 0, i, false).unwrap();
+    set_locked(&mut doc, 0, i, true).unwrap();
+    let initial_rect = rect(&list(&doc, 0)[i]);
+    assert!(erase_ink(&mut doc, 0, i, &[[200.0, 550.0], [200.0, 350.0]], 5.0, &meta("e")).unwrap());
+    assert_eq!(rect(&list(&doc, 0)[i]), initial_rect, "locked ink drawing keeps original rect");
 }
 
 /// A one-page document from object bodies (object 1 is the catalog, 3 the page).
