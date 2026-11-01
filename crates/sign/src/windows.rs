@@ -178,23 +178,60 @@ fn entries() -> Result<Entries, SignError> {
 
 /// Whether the store's key is what the certificate needs (RSA; ECDSA on its curve).
 fn matches_key(key: &NCryptKey, want: StoreKey) -> Result<(), String> {
-    let group = key.algorithm_group().map_err(|e| format!("its private key's algorithm couldn't be read: {}", describe(&e)))?;
+    matches_key_properties(key.algorithm_group(), || key.bits(), want)
+}
+
+/// Check the algorithm group and bit size reported by a CNG key against `want`.
+///
+/// Separated from [`matches_key`] so unit tests can exercise providers that report a
+/// truncated or unsupported `NCRYPT_ALGORITHM_GROUP_PROPERTY` without hardware tokens.
+///
+/// This check serves as an early pre-flight sanity check only; the signature produced
+/// during signing is verified against the certificate afterwards, which provides the
+/// authoritative protection against signing with a mismatched or wrong key.
+fn matches_key_properties(
+    group: Result<AlgorithmGroup, CngError>,
+    bits: impl FnOnce() -> Result<u32, CngError>,
+    want: StoreKey,
+) -> Result<(), String> {
     let name = |g: &AlgorithmGroup| match g {
         AlgorithmGroup::Rsa => "an RSA".to_string(),
         AlgorithmGroup::Ecdsa => "an ECDSA".to_string(),
-        other => format!("a {other:?}"),
+        AlgorithmGroup::Ecdh => "an ECDH".to_string(),
     };
     let expected = match want {
         StoreKey::Rsa => AlgorithmGroup::Rsa,
         StoreKey::Ecdsa(_) => AlgorithmGroup::Ecdsa,
     };
-    if group != expected {
-        return Err(format!("its certificate holds {} key but the store's private key is {} key", name(&expected), name(&group)));
-    }
-    if let StoreKey::Ecdsa(bits) = want {
-        let actual = key.bits().map_err(|e| format!("its private key's size couldn't be read: {}", describe(&e)))?;
-        if actual != bits {
-            return Err(format!("its certificate holds a P-{bits} key but the store's private key has {actual} bits"));
+    let check_bits = match group {
+        Ok(group) => {
+            if group != expected {
+                return Err(format!("its certificate holds {} key but the store's private key is {} key", name(&expected), name(&group)));
+            }
+            matches!(want, StoreKey::Ecdsa(_))
+        }
+        // #3715: Certisign's desktopID KSP (ICP-Brasil A3) writes "RSA\0" in UTF-16LE for
+        // NCRYPT_ALGORITHM_GROUP_PROPERTY but sets *pcbResult = 3 (character count instead of
+        // byte count), which rustls-cng truncates to "" and reports as
+        // UnsupportedKeyAlgorithmGroup; other providers omit the property (NTE_NOT_SUPPORTED).
+        // Trust the certificate's SubjectPublicKeyInfo (`want`) and still query
+        // `NCRYPT_LENGTH_PROPERTY` below so a key handle whose provider fails on property reads
+        // or holds a different key size is still caught.
+        Err(CngError::UnsupportedKeyAlgorithmGroup | CngError::WindowsError(NTE_NOT_SUPPORTED)) => true,
+        Err(e) => return Err(format!("its private key's algorithm couldn't be read: {}", describe(&e))),
+    };
+    if check_bits {
+        match (want, bits()) {
+            (StoreKey::Ecdsa(want_bits), Ok(actual)) if actual != want_bits => {
+                return Err(format!("its certificate holds a P-{want_bits} key but the store's private key has {actual} bits"));
+            }
+            // CNG's minimum RSA key size is 512 bits (in 8-bit increments), whereas NIST ECDSA
+            // keys report 256, 384 or 521 bits.
+            (StoreKey::Rsa, Ok(actual)) if actual < 512 || actual == 521 => {
+                return Err(format!("its certificate holds an RSA key but the store's private key has {actual} bits"));
+            }
+            (_, Ok(_) | Err(CngError::WindowsError(NTE_NOT_SUPPORTED))) => {}
+            (_, Err(e)) => return Err(format!("its private key's size couldn't be read: {}", describe(&e))),
         }
     }
     Ok(())
@@ -252,6 +289,7 @@ fn describe(e: &CngError) -> String {
 mod tests {
     use super::*;
 
+    /// Known Windows CNG and Smart Card error codes include a human-readable explanation.
     #[test]
     fn errors_are_explained_with_their_code() {
         assert_eq!(
@@ -271,5 +309,73 @@ mod tests {
         );
         assert_eq!(describe(&CngError::WindowsError(0x57)), "Windows error 0x00000057");
         assert_eq!(describe(&CngError::InvalidHashLength), "Invalid hash length");
+    }
+
+    /// Regression test for #3715: when a KSP truncates `NCRYPT_ALGORITHM_GROUP_PROPERTY`
+    /// (`UnsupportedKeyAlgorithmGroup`, as Certisign's `desktopID_Provider.dll` does by reporting
+    /// character count `3` instead of byte count `8` for `"RSA\0"`) or omits the property
+    /// (`NTE_NOT_SUPPORTED`), `matches_key_properties` falls back to the certificate's
+    /// `SubjectPublicKeyInfo` and checks `NCRYPT_LENGTH_PROPERTY` (`bits`).
+    #[test]
+    fn matches_key_falls_back_when_algorithm_group_is_truncated_or_unsupported() {
+        // Normal RSA key: `bits` is not even queried when the provider reports `AlgorithmGroup::Rsa`.
+        assert_eq!(matches_key_properties(Ok(AlgorithmGroup::Rsa), || Err(CngError::WindowsError(NTE_PROVIDER_DLL_FAIL)), StoreKey::Rsa), Ok(()));
+        // #3715: Certisign desktopID KSP reports *pcbResult = 3 for "RSA\0" -> UnsupportedKeyAlgorithmGroup,
+        // while NCRYPT_LENGTH_PROPERTY returns 2048.
+        assert_eq!(matches_key_properties(Err(CngError::UnsupportedKeyAlgorithmGroup), || Ok(2048), StoreKey::Rsa), Ok(()));
+        // Provider omits NCRYPT_ALGORITHM_GROUP_PROPERTY (NTE_NOT_SUPPORTED).
+        assert_eq!(matches_key_properties(Err(CngError::WindowsError(NTE_NOT_SUPPORTED)), || Ok(2048), StoreKey::Rsa), Ok(()));
+        // Provider omits both properties.
+        assert_eq!(
+            matches_key_properties(Err(CngError::WindowsError(NTE_NOT_SUPPORTED)), || Err(CngError::WindowsError(NTE_NOT_SUPPORTED)), StoreKey::Rsa,),
+            Ok(())
+        );
+        // ECDSA P-256 and P-384 with truncated Algorithm Group still verify curve bit length.
+        assert_eq!(matches_key_properties(Err(CngError::UnsupportedKeyAlgorithmGroup), || Ok(256), StoreKey::Ecdsa(256)), Ok(()));
+        assert_eq!(matches_key_properties(Err(CngError::UnsupportedKeyAlgorithmGroup), || Ok(384), StoreKey::Ecdsa(384)), Ok(()));
+    }
+
+    /// Real algorithm-group mismatches, bit-length mismatches, and provider failures on
+    /// `algorithm_group` or `bits` are still rejected with an explanation.
+    #[test]
+    fn matches_key_still_rejects_mismatched_or_broken_keys() {
+        assert_eq!(
+            matches_key_properties(Ok(AlgorithmGroup::Ecdsa), || Ok(256), StoreKey::Rsa),
+            Err("its certificate holds an RSA key but the store's private key is an ECDSA key".to_string())
+        );
+        assert_eq!(
+            matches_key_properties(Ok(AlgorithmGroup::Ecdh), || Ok(256), StoreKey::Ecdsa(256)),
+            Err("its certificate holds an ECDSA key but the store's private key is an ECDH key".to_string())
+        );
+        assert_eq!(
+            matches_key_properties(Err(CngError::UnsupportedKeyAlgorithmGroup), || Ok(384), StoreKey::Ecdsa(256)),
+            Err("its certificate holds a P-256 key but the store's private key has 384 bits".to_string())
+        );
+        assert_eq!(
+            matches_key_properties(Err(CngError::UnsupportedKeyAlgorithmGroup), || Ok(256), StoreKey::Rsa),
+            Err("its certificate holds an RSA key but the store's private key has 256 bits".to_string())
+        );
+        assert_eq!(
+            matches_key_properties(Err(CngError::UnsupportedKeyAlgorithmGroup), || Ok(521), StoreKey::Rsa),
+            Err("its certificate holds an RSA key but the store's private key has 521 bits".to_string())
+        );
+        assert_eq!(
+            matches_key_properties(Err(CngError::WindowsError(NTE_PROVIDER_DLL_FAIL)), || Ok(2048), StoreKey::Rsa),
+            Err(
+                "its private key's algorithm couldn't be read: its key provider's software failed to load (a smart card or token driver that is missing or broken, or a 32-bit-only provider) (Windows error 0x8009001D)"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            matches_key_properties(
+                Err(CngError::WindowsError(NTE_NOT_SUPPORTED)),
+                || Err(CngError::WindowsError(STATUS_NOT_FOUND)),
+                StoreKey::Rsa,
+            ),
+            Err(
+                "its private key's size couldn't be read: its key provider can't find the key (the smart card or token holding it isn't connected, or its driver doesn't see the key) (Windows error 0xC0000225)"
+                    .to_string()
+            )
+        );
     }
 }
