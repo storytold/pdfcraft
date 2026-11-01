@@ -155,3 +155,26 @@ fn an_xmp_stream_behind_two_filters_goes() {
     let Stream { raw, .. } = Stream::flate(Dict::new(), hex.as_bytes());
     assert_only_the_catalog_packet_went(stream("/Type /Metadata /Subtype /XML /Filter [/FlateDecode /ASCIIHexDecode]", &raw));
 }
+
+/// A form XObject under a mark whose content can't be decoded is removed without being read, so
+/// what it showed is unknown (the deep-form case is `a_form_removed_unread_clears_the_metadata`).
+#[test]
+fn a_form_whose_content_cant_be_read_clears_the_metadata() {
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /Metadata 7 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Fm 9 0 R >> >> /Metadata 8 0 R >>".to_vec(),
+        stream("", b"q 1 0 0 1 0 0 cm /Fm Do Q"),
+        FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        widths(),
+        clean_xmp(),
+        clean_xmp(),
+        // 9: a form whose data no filter here decodes.
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Filter /NoSuchDecode", b"BT /F1 10 Tf 10 100 Td (Bluefin) Tj ET"),
+        b"<< /Title (Annual figures) /Producer (Test) /Trapped /False >>".to_vec(),
+    ];
+    let mut doc = Document::open(Arc::new(Pdf::new().objs(objs).trailer_entry("/Info 10 0 R").build())).unwrap();
+    let r = redact_line(&mut doc);
+    assert_eq!(r.forms_removed, 1, "{r:?}");
+    assert_cleared(&doc, &r);
+}
