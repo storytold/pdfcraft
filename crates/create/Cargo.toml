@@ -10,10 +10,13 @@ workspace = true
 
 [dependencies]
 pdfcraft-cos = { workspace = true }
+pdfcraft-filters = { workspace = true }
 pdfcraft-model = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 # For `image::bmp_with_pixel_offset`, shared with XFA pictures.
 pdfcraft-xfa = { workspace = true }
+# Already in the graph through hayro: decodes JBIG2 images for Export ▸ Images.
+hayro-jbig2.workspace = true
 png = "0.18"
 tiff = "0.11"
 image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg"] }
@@ -24,5 +27,8 @@ thiserror = { workspace = true }
 encoding_rs = "0.8"
 
 [dev-dependencies]
+# An independent CCITT decoder, to check Create PDF's Group 4 images.
+hayro-ccitt.workspace = true
 image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg"] }
 hayro-syntax = { workspace = true }
+pdfcraft-filters = { workspace = true }

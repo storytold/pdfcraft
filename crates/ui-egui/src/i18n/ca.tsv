@@ -560,6 +560,9 @@
 	Clean Up	Neteja
 	Color Images	Imatges en color
 	Grayscale Images	Imatges en escala de grisos
+	Monochrome Images	Imatges monocromes
+	CCITT Group 4	CCITT grup 4
+	JBIG2 (lossless)	JBIG2 (sense pèrdua)
 	Bicubic downsampling to	Reducció bicúbica de resolució a
 	for images above	per a imatges de més de
 	Compression	Compressió
@@ -774,14 +777,9 @@
 	Copy Image in Original Format	Copia la imatge en el format original
 	The image has been copied as a {ext} file	S'ha copiat la imatge com a fitxer {ext}
 	The page has changed; select the image again	La pàgina ha canviat; torna a seleccionar la imatge
-	Check for updates	Cerca actualitzacions
 	No check has run yet.	Encara no s'ha fet cap comprovació.
-	Checking for a newer version…	S'està cercant una versió més recent…
 	PdfCraft {v} is available.	PdfCraft {v} està disponible.
 	You have version {c}. Download the new version from its release page.	Tens la versió {c}. Baixa la versió nova des de la seva pàgina de publicació.
-	PdfCraft {c} is up to date.	PdfCraft {c} està actualitzat.
-	Couldn't check for updates: {e}	No s'han pogut cercar actualitzacions: {e}
-	You have version {c}. All releases are listed at {page}.	Tens la versió {c}. Totes les versions es llisten a {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Consulta a GitHub la darrera versió. No es baixa ni s'instal·la res automàticament.
 	Download	Baixa
 	Later	Més tard
@@ -825,6 +823,14 @@
 	Applies to 1 page	S'aplica a 1 pàgina
 	Applies to {n} pages	S'aplica a {n} pàgines
 	Replaces the existing one on those pages.	Substitueix l'existent en aquestes pàgines.
+	Checking pages…	S'estan comprovant les pàgines…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	La pàgina {pages} té el seu propi farciment blanc, que amagaria el fons. Substitueix-lo
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Les pàgines {pages} tenen el seu propi farciment blanc, que amagaria el fons. Substitueix-lo
+	Removing the background puts the page's own backdrop back.	En eliminar el fons, es restaura el farciment blanc propi de la pàgina.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Una imatge cobreix la pàgina {pages} (un escaneig?), així que el fons no s'hi veurà.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Hi ha imatges que cobreixen les pàgines {pages} (escanejos?), així que el fons no s'hi veurà.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	La pàgina {pages} ha canviat després d'afegir el fons, així que el seu propi farciment blanc continua desactivat. Es veu igual sobre paper blanc.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Les pàgines {pages} han canviat després d'afegir el fons, així que el seu propi farciment blanc continua desactivat. Es veuen igual sobre paper blanc.
 	PDF or image	PDF o imatge
 	No file chosen	Cap fitxer triat
 	Page number	Número de pàgina
@@ -2720,6 +2726,12 @@ theme	Appearance	Aspecte
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.
 	Not in order	Not in order
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Reads {name}, which the form doesn't have, so it gets no value there.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.
+	Missing field	Missing field
+	Unchecked reads	Unchecked reads
+	{field} reads fields named as it runs	{field} reads fields named as it runs
+	Some names are built as it runs	Some names are built as it runs
 	Back to Prepare a form	Back to Prepare a form
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.
 	{names} and {last}	{names} and {last}
@@ -2748,6 +2760,11 @@ theme	Appearance	Aspecte
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	{n} more field calculates too early.|{n} more fields calculate too early.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	{n} more formula reads a missing field.|{n} more formulas read missing fields.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.
+@plural	{fields} is missing|{fields} are missing	{fields} is missing|{fields} are missing
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.
 	Bulleted list	Bulleted list
@@ -2818,3 +2835,6 @@ theme	Appearance	Aspecte
 	Rotate the selected pages clockwise	Gira les pàgines seleccionades en sentit horari
 	Extract the selected pages…	Extreu les pàgines seleccionades…
 	Delete the selected pages	Suprimeix les pàgines seleccionades
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Opcions d'aquesta resposta

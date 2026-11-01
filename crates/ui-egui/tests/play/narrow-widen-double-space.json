@@ -1,0 +1,15 @@
+{
+  "name": "narrow then widen keeps two typed spaces",
+  "content": "BT /F1 24 Tf 72 700 Td (One  Two) Tj ET",
+  "steps": [
+    {"command": {"id": "edit.edit_text"}},
+    {"click_page": {"x": 100, "y": 700}},
+    {"expect_editor": {"contains": "One", "text": "One  Two"}},
+    {"key": {"key": "Enter", "modifiers": ["command"]}},
+    {"drag_edge": {"contains": "One", "dx": -220}},
+    {"expect_editor": {"contains": "One", "text": "One\nTwo"}},
+    {"drag_edge": {"contains": "One", "dx": 360}},
+    {"expect_editor": {"contains": "One", "text": "One  Two"}},
+    {"shot": {"name": "narrow-widen-double-space"}}
+  ]
+}

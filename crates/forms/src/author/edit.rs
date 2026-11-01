@@ -77,6 +77,35 @@ fn write_sorted_opt(d: &mut Dict, items: &[(String, String)], old: &[usize]) -> 
     (sorted.into_iter().map(|(e, _)| e.clone()).collect(), carried)
 }
 
+/// Build /Opt before modifying the document, preserving appearance states and selection.
+fn button_export_options(f: &Field, index: usize, value: &str) -> Result<Vec<Object>, FormError> {
+    if !matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) {
+        return invalid("only check boxes and radio buttons have an export value");
+    }
+    if value.is_empty() || value == "Off" || value.len() > 4096 {
+        return invalid("export value must be non-empty, at most 4096 bytes, and not Off");
+    }
+    let widget = f.widgets.get(index).ok_or_else(|| FormError::Invalid("button widget index is out of range".into()))?;
+    let state = widget.on_state.as_deref().ok_or_else(|| FormError::Invalid("button has no on appearance state".into()))?;
+    if !f.options.is_empty() && f.options.len() != f.widgets.len() {
+        return invalid("button export options do not match its widgets");
+    }
+    let previous = f.export_of(index);
+    let mut out = Vec::with_capacity(f.widgets.len());
+    for (i, w) in f.widgets.iter().enumerate() {
+        let export = f.export_of(i).ok_or_else(|| FormError::Invalid("button has no on appearance state".into()))?;
+        let same_state = w.on_state.as_deref() == Some(state);
+        if !same_state && (export == value || w.on_state.as_deref() == Some(value)) {
+            return invalid("export value conflicts with another button choice");
+        }
+        if same_state && Some(export) != previous {
+            return invalid("widgets with the same appearance state have conflicting export values");
+        }
+        out.push(Object::String(PdfString::text(if same_state { value } else { export })));
+    }
+    Ok(out)
+}
+
 /// Change a field's properties (General and Options tabs) and redraw it.
 pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<String, FormError> {
     if props.font_size.is_some_and(|size| !size.is_finite() || size < 0.0) {
@@ -88,8 +117,18 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
         }
         patch.validate()?;
     }
+    // Refused here, before anything is written, rather than stored as a different formula.
+    if let Some(crate::af::Calculate::Notation(n)) = &props.calculate
+        && !crate::af::notation_storable(n)
+    {
+        return invalid(crate::af::NOTATION_NOT_STORABLE);
+    }
     let all = fields(doc);
     let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?.clone();
+    let export_options = props.export_value.as_ref().map(|(index, value)| button_export_options(&f, *index, value)).transpose()?;
+    if props.export_value.is_some() && props.options.is_some() {
+        return invalid("give export_value or options, not both");
+    }
     // Refuse a wrong type/index before any other requested property is written.
     if let Some((wi, _)) = &props.caption {
         if f.kind != FieldKind::PushButton {
@@ -119,6 +158,12 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
     // A locked field only takes unlocking (Acrobat greys its properties out).
     if f.locked() && props.locked != Some(false) && *props != (FieldProps { locked: props.locked, ..FieldProps::default() }) {
         return invalid(format!("{name} is locked: unlock it first"));
+    }
+    if let Some(options) = export_options.as_ref()
+        && *props == (FieldProps { export_value: props.export_value.clone(), ..FieldProps::default() })
+    {
+        doc.update_dict(f.obj, |d| d.set(b"Opt".to_vec(), Object::Array(options.clone())))?;
+        return Ok(name.to_string());
     }
     if let Some(lock) = props.locked {
         for w in &f.widgets {
@@ -209,6 +254,9 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
         // The export values in `/Opt` order once it is rewritten, for re-pointing `/I`.
         let mut new_exports: Option<Vec<String>> = None;
         let mut kept = Vec::new();
+        if let Some(options) = &export_options {
+            d.set(b"Opt".to_vec(), Object::Array(options.clone()));
+        }
         if let Some(opts) = &props.options {
             d.set(b"Opt".to_vec(), Object::Array(opts.iter().map(|o| Object::String(PdfString::text(o))).collect()));
             new_exports = Some(opts.clone());
