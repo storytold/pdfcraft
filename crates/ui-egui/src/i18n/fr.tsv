@@ -2832,6 +2832,8 @@ certificate	Version	Version
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Aujourd'hui
 @plural	{n} reply|{n} replies	{n} réponse|{n} réponses
+	Downloading the text recognition models…	Téléchargement des modèles de reconnaissance de texte…
+	Couldn't download the text recognition models: {e}	Impossible de télécharger les modèles de reconnaissance de texte : {e}
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
 	Page tools	Outils de page

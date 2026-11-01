@@ -5040,6 +5040,57 @@ fn backgrounds_and_watermarks_from_files() {
     assert!(s.apply(id, Edit::AddBackground { pages: vec![0], settings: Background::default(), replace: true, file: Some(junk) }).is_err());
 }
 
+/// The web build installs a recogniser loaded from downloaded model bytes; recognition then uses
+/// it rather than looking for model files.
+#[test]
+fn an_installed_recogniser_is_the_one_used() {
+    let Some(models) = ocr::Models::find() else {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    };
+    let loaded = ocr::Ocr::from_bytes(std::fs::read(&models.detection).unwrap(), std::fs::read(&models.recognition).unwrap()).unwrap();
+    let installed = ocr::install(loaded);
+    assert!(ocr::available());
+    assert!(Arc::ptr_eq(&ocr::engine().unwrap(), &installed));
+}
+
+/// The web build reads a page at a time (rendered on the page, recognised in a worker, the lines
+/// sent back as JSON); that finds the same words as reading in one go, and skips the same pages.
+#[test]
+fn reading_a_page_at_a_time_finds_the_same_words() {
+    let Ok(engine) = ocr::engine() else {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    };
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let text = s.create_from_text("t", "Invoice 42: pay by Friday").unwrap();
+    let typed = s.open("text.pdf", None, text, None).unwrap();
+    let png = export::Exporter::new(s.get(typed).unwrap()).png(0, 150.0).unwrap();
+    let scan = s.create_from_images(&[("scan.png".into(), png.clone()), ("scan2.png".into(), png)]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    let settings = ocr::OcrSettings::default();
+    let at_once = s.ocr_job(id, &[], settings.clone()).unwrap().run(&engine, |_, _| true);
+    let mut steps = s.ocr_job(id, &[], settings.clone()).unwrap().steps();
+    assert_eq!(steps.total(), 2);
+    let mut one_by_one = Vec::new();
+    while let Some(next) = steps.next_page() {
+        let shot = next.unwrap();
+        let lines = engine.recognize(&shot.rgba, shot.width, shot.height).unwrap();
+        let sent = ocr::lines_from_json(&pdfcraft_ocr::lines_to_json(&lines)).map_err(|e| e.to_string());
+        one_by_one.push(shot.place(sent));
+    }
+    assert_eq!(steps.done(), 2);
+    assert_eq!(one_by_one, at_once);
+    assert!(at_once.iter().all(|p| p.skipped.is_none() && !p.words.is_empty()), "{at_once:?}");
+    // A page that already has text is skipped either way, and a failed read skips its page.
+    let mut steps = s.ocr_job(typed, &[], settings).unwrap().steps();
+    assert!(matches!(steps.next_page(), Some(Err(ocr::OcrPage { skipped: Some(_), .. }))));
+    assert!(steps.next_page().is_none());
+    let mut steps = s.ocr_job(id, &[0], ocr::OcrSettings::default()).unwrap().steps();
+    let shot = steps.next_page().unwrap().unwrap();
+    assert_eq!(shot.place(Err("the worker stopped".into())).skipped.as_deref(), Some("the worker stopped"));
+}
+
 /// Scan & OCR ▸ Recognize text on a page that is only a picture of text (needs the models:
 /// `cargo xtask models`; skipped without them).
 #[test]

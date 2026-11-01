@@ -2562,6 +2562,8 @@ animation effects	Off	Kapalı
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Bugün
 @plural	{n} reply|{n} replies	{n} yanıt
+	Downloading the text recognition models…	Metin tanıma modelleri indiriliyor…
+	Couldn't download the text recognition models: {e}	Metin tanıma modelleri indirilemedi: {e}
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
 	Page tools	Sayfa araçları

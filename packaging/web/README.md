@@ -8,7 +8,9 @@ static site in `pdfcraft-web-<version>/`:
 | `index.html` | The page. It loads everything through relative URLs. |
 | `pdfcraft-web-<hash>.js` | wasm-bindgen glue (generated, ES module) |
 | `pdfcraft-web-<hash>_bg.wasm` | The app, about 13 MB, or 5 MB with compression |
+| `pdfcraft-ocr-worker-<hash>.js`, `_bg.wasm`, `_loader.js` | The text recognition worker (about 3 MB), started only when OCR runs |
 | `_headers`, `.htaccess` | Sample header rules for Netlify/Cloudflare Pages and Apache |
+| `models/` | The text recognition (OCR) models, about 12 MB, with their licences (CC-BY-SA-4.0) |
 
 There is no server-side code. Upload the folder's contents anywhere that serves static files.
 
@@ -55,6 +57,26 @@ location /pdfcraft/ {
 
 Local test: `python3 -m http.server 8765` inside the folder, then open http://localhost:8765/.
 
+## Text recognition (OCR)
+
+Scan & OCR ▸ Recognize Text downloads `models/text-detection.onnx` and
+`models/text-recognition.onnx`, relative to the page, the first time it is opened in a visit.
+Keep `models/` beside `index.html`. The app loads only the files whose SHA-256 matches
+`ATTRIBUTION.toml`, so a wrong file fails like a missing one. Their file names carry no content
+hash, so the app asks the server before using a cached copy (`no-cache`): the server must answer
+that check correctly (an ETag, or a `Last-Modified` that changes whenever the file does). Without
+the models, everything else works and the Recognize Text dialog says the download failed.
+
+Pages are read in Web Workers (`pdfcraft-ocr-worker-<hash>_loader.js`, a module worker), so the
+app keeps responding, and two pages are read at once on a machine with three or more cores. Each
+worker needs about 600 MB while it reads; idle workers close after a minute. The workers need no
+special headers, but a `Content-Security-Policy` must allow them (`worker-src 'self'`, or
+`script-src 'self'`). Where they can't start, the app reads the pages itself, a page at a time,
+and doesn't respond while each page is read.
+
+From a source build, `trunk build --release` doesn't fetch the models. Add them with
+`cargo xtask models dist/web/models` (after the build, which replaces `dist/web`).
+
 ## Embedding in a page (iframe)
 
 ```html
@@ -92,3 +114,7 @@ PdfCraft renders with wgpu. It uses **WebGPU** when the browser has it and falls
 For example: `<iframe src="https://example.com/pdfcraft/?webgl" ...>`.
 
 A browser with neither WebGPU nor WebGL2 gets a message in place of the app.
+
+The build uses WebAssembly SIMD (`.cargo/config.toml`), which reads a scanned page about 2.4
+times faster. Every current browser has it (Chrome and Edge 91, Firefox 89, Safari 16.4 and
+later). Older browsers can't load the app.

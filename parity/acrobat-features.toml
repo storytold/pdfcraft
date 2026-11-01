@@ -6569,7 +6569,7 @@ status = "shipped"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize", "ocr_status"]
 evidence = ["crates/ocr/src/lib.rs::model_discovery_prefers_the_complete_onnx_pair", "crates/ocr/src/lib.rs::model_discovery_falls_back_to_legacy_when_the_onnx_pair_is_incomplete", "crates/ocr/src/lib.rs::model_discovery_refuses_mixed_format_pairs", "crates/ocr/src/lib.rs::model_discovery_keeps_legacy_only_installations", "crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable", "crates/automation/tests/it/automation.rs::ocr_tools_make_a_scan_searchable", "crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text"]
-notes = "ocrs engine (MIT/Apache) with CC-BY-SA ONNX models fetched and SHA-256 checked by `cargo xtask models`; within each search directory, a complete ONNX pair takes precedence over a complete legacy RTEN pair, incomplete and mixed-format pairs are not combined, and directory precedence is unchanged; the desktop release packages ship them (#103; packaging/env.sh stage_models), the web build does not yet; runs on a worker thread with progress; one undoable step; pages with text are skipped unless asked (ocr.skip-renderable-text)."
+notes = "ocrs engine (MIT/Apache) with CC-BY-SA ONNX models fetched and SHA-256 checked by `cargo xtask models`; within each search directory, a complete ONNX pair takes precedence over a complete legacy RTEN pair, incomplete and mixed-format pairs are not combined, and directory precedence is unchanged; the desktop release packages ship them (#103; packaging/env.sh stage_models), and the web zip serves them for download (ocr.ocr-web); runs on a worker thread with progress; one undoable step; pages with text are skipped unless asked (ocr.skip-renderable-text)."
 
 [[feature]]
 id = "ocr.recognize-range"
@@ -6829,11 +6829,11 @@ title = "OCR in the browser"
 area = "I"
 tier = "P1"
 milestone = "M10"
-status = "planned"
-commands = []
+status = "shipped"
+commands = ["ocr.recognize"]
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ocr/src/lib.rs::reads_rendered_text_with_models_from_bytes", "crates/ocr/src/lib.rs::models_from_bad_bytes_are_an_error", "crates/ocr/src/lib.rs::lines_survive_json", "crates/ocr/src/lib.rs::malformed_json_lines_are_an_error", "crates/engine/src/tests.rs::an_installed_recogniser_is_the_one_used", "crates/engine/src/tests.rs::reading_a_page_at_a_time_finds_the_same_words", "xtask/src/web.rs::worker_files_get_content_hashed_names_that_point_at_each_other", "crates/ui-egui/src/workflows/ocr_route.rs::answers_go_to_the_run_that_sent_the_page_in_either_start_order", "crates/ui-egui/src/workflows/ocr_route.rs::a_cancelled_run_lets_the_other_and_the_next_run_finish"]
+notes = "The web zip carries the models in models/ beside index.html (packaging/web/package.sh); Recognize Text downloads them on first use (about 12 MB, with a spinner, an error and a retry button). Pages are rendered on the page and read in Web Workers (apps/pdfcraft-ocr-worker; up to two, one core left to the page; idle workers close after a minute), so the page keeps responding; where workers can't start the page reads them itself. Recognize Text and Recognize Text in Multiple Files can run at once: each worker's answer goes back to the run that sent the page (crates/ui-egui/src/workflows/ocr_route.rs). Checked by hand in a browser on a 4-page synthetic scan (2026-10-12). Built with WebAssembly SIMD (2.4× faster than scalar in wasmtime). Missing: no automated browser test yet; a wasm page reads about 17× slower than native; each worker holds about 600 MB while reading; no download progress or offline cache beyond the browser's HTTP cache."
 
 [[feature]]
 id = "ocr.scanner-acquire"

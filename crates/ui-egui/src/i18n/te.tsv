@@ -2475,6 +2475,8 @@ animation effects	Off	ఆఫ్
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	ఈరోజు
 @plural	{n} reply|{n} replies	{n} ప్రత్యుత్తరం|{n} ప్రత్యుత్తరాలు
+	Downloading the text recognition models…	టెక్స్ట్ గుర్తింపు మోడల్‌లు డౌన్‌లోడ్ అవుతున్నాయి…
+	Couldn't download the text recognition models: {e}	టెక్స్ట్ గుర్తింపు మోడల్‌లను డౌన్‌లోడ్ చేయడం సాధ్యం కాలేదు: {e}
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
 	Page tools	పేజీ సాధనాలు
