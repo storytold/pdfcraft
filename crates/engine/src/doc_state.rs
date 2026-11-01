@@ -60,6 +60,8 @@ pub struct RecoverySnapshot {
     pub bytes: Arc<Vec<u8>>,
     /// The snapshot is encrypted (recovering it asks for the password again).
     pub encrypted: bool,
+    /// The document generation this snapshot captured; pass it to [`crate::Session::autosave_failed`] if writing it fails.
+    pub generation: u64,
 }
 
 /// The recovered user password of an R2–R4 file as text for the renderer, which tries a password
