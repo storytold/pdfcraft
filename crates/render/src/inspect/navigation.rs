@@ -457,13 +457,19 @@ fn label_work(left: &mut usize, count: usize) -> Result<(), &'static str> {
 /// The (0-based page, view) of the named destination `name` (ISO 32000-2 §12.3.2.4): a key of
 /// the `/Names /Dests` name tree or of the PDF 1.1 catalog `/Dests` dictionary, as a link's or
 /// `/OpenAction`'s name resolves. `None` when the document can't be read, has no such name, or
-/// the name leads to no page of it. A key matches as written (UTF-8), or as a text string
-/// (UTF-16 or PDFDocEncoding) that reads as `name`, the way a link's string destination is read.
+/// the name leads to no page of it. A key matches `name` written in UTF-8 or in PDFDocEncoding,
+/// or as a text string (UTF-16 or PDFDocEncoding) that reads as `name`, the way a link's string
+/// destination is read.
 /// Read like [`inspect`]: the lazy reader first, lopdf's tolerant one when the lazy reader fails.
 pub fn named_destination(bytes: Arc<Vec<u8>>, password: Option<&str>, name: &str) -> Option<(usize, DestView)> {
+    // PDFDocEncoding bytes that are also UTF-8 read as UTF-8, so only this finds "Ã©" written C3 A9.
+    let pdfdoc: Option<Vec<u8>> = name.chars().map(pdfcraft_cos::pdfdoc_byte).collect();
     let find = |doc: &dyn Structure| {
         let insp = Inspector::new(doc);
-        let dest = insp.named_dest(name.as_bytes()).or_else(|| insp.named_dest_by_text(name))?;
+        let dest = insp
+            .named_dest(name.as_bytes())
+            .or_else(|| pdfdoc.as_deref().and_then(|key| insp.named_dest(key)))
+            .or_else(|| insp.named_dest_by_text(name))?;
         insp.dest(dest, 1).filter(|(page, _)| *page < insp.page_ids.len())
     };
     let lazy = catch_unwind(AssertUnwindSafe(|| {
@@ -561,6 +567,10 @@ mod open_dest_tests {
         // a name written as UTF-8 comes first.
         assert_eq!(named("/Dests << /th#E9 [4 0 R /Fit] >>", &[], "thé"), Some((1, DestView::Fit)));
         assert_eq!(named("/Dests << /th#E9 [4 0 R /Fit] /th#C3#A9 [5 0 R /Fit] >>", &[], "thé"), Some((2, DestView::Fit)));
+        // A key whose PDFDocEncoding bytes are also UTF-8 reads as UTF-8 ("é"), yet is found by
+        // the text it holds in PDFDocEncoding ("Ã©") too.
+        assert_eq!(named("/Dests << /#C3#A9 [4 0 R /Fit] >>", &[], "Ã©"), Some((1, DestView::Fit)));
+        assert_eq!(named("/Names << /Dests << /Names [(\\303\\251) [5 0 R /Fit]] >> >>", &[], "Ã©"), Some((2, DestView::Fit)));
         // A name that isn't there, one past the last page, one that names itself, no names at
         // all, and bytes that aren't a PDF.
         assert_eq!(named(tree, &nodes, "missing"), None);
