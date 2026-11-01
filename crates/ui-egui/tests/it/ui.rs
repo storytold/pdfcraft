@@ -1576,32 +1576,49 @@ fn the_home_tab_has_the_document_tabs_height_and_gap() {
     }
 }
 
-/// The active tab runs into the mode bar: no line between them, for a document tab, Home and
-/// the Combine files tab alike.
+/// The active tab runs into the mode bar without a line in either theme. On macOS, cover
+/// both the regular and integrated title bars for document, Home and Combine files tabs.
 #[test]
 fn the_active_tab_runs_into_the_mode_bar_without_a_line() {
     use egui::accesskit::Role;
-    let mut h = three_tab_harness();
-    for (name, open) in [("last.pdf", None), ("Home", Some("Home")), ("Combine files", None)] {
-        if let Some(label) = open {
-            h.get_by_role_and_label(Role::Tab, label).click();
-        } else if name == "Combine files" {
-            h.state_mut().execute("page.combine");
-        }
-        // Off the tabs, so none shows its hover wash.
-        h.event(egui::Event::PointerGone);
-        h.run_steps(30);
-        let tab = h.get_by_role_and_label(Role::Tab, name).rect();
-        let pixels = h.render().unwrap();
-        let scale = pixels.width() as f32 / 1400.0;
-        let at = |x: f32, y: f32| pixels.get_pixel((x * scale) as u32, (y * scale) as u32).0;
-        // A column near the tab's left edge, clear of its icon and text, from inside the tab
-        // down into the mode bar.
-        let x = tab.left() + 3.0;
-        let inside = at(x, tab.bottom() - 4.0);
-        for dy in -4..=4 {
-            let y = tab.bottom() + dy as f32;
-            assert_eq!(at(x, y), inside, "{name}: one colour from the tab into the mode bar, but not at y = {y}");
+    #[cfg(target_os = "macos")]
+    let titlebars = [false, true].as_slice();
+    #[cfg(not(target_os = "macos"))]
+    let titlebars = [false].as_slice();
+    for theme in ["light", "dark"] {
+        for &integrated in titlebars {
+            let mut h = three_tab_harness();
+            h.state_mut().set_option("theme", theme).unwrap();
+            #[cfg(target_os = "macos")]
+            {
+                h.state_mut().integrated_titlebar = integrated;
+            }
+            for (name, open) in [("last.pdf", None), ("Home", Some("Home")), ("Combine files", None)] {
+                if let Some(label) = open {
+                    h.get_by_role_and_label(Role::Tab, label).click();
+                } else if name == "Combine files" {
+                    h.state_mut().execute("page.combine");
+                }
+                // Off the tabs, so none shows its hover wash.
+                h.event(egui::Event::PointerGone);
+                h.run_steps(30);
+                let tab = h.get_by_role_and_label(Role::Tab, name).rect();
+                let pixels = h.render().unwrap();
+                let scale = pixels.width() as f32 / 1400.0;
+                let at = |x: f32, y: f32| pixels.get_pixel((x * scale) as u32, (y * scale) as u32).0;
+                // A column near the tab's left edge, clear of its icon and text, from inside
+                // the tab down into the mode bar.
+                let x = tab.left() + 3.0;
+                let inside = at(x, tab.bottom() - 4.0);
+                for dy in -4..=4 {
+                    let y = tab.bottom() + dy as f32;
+                    assert_eq!(
+                        at(x, y),
+                        inside,
+                        "{theme}, integrated={integrated}, {name}: one colour from the tab into the mode bar, but not at y = {y}"
+                    );
+                }
+            }
         }
     }
 }
