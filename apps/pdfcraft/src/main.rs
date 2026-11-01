@@ -460,22 +460,18 @@ fn app_creator<'a>(
             );
         }
         let defer_layout = two_paged && !files.is_empty() && !create_images;
-        if create_images {
-            if let Err(e) = app.begin_image_import_paths(&files) {
-                app.notify(e);
+        startup::with_options(&mut app, options, defer_layout, |app| {
+            if create_images {
+                if let Err(e) = app.begin_image_import_paths(&files) {
+                    app.notify(e);
+                }
+            } else {
+                // With the preference on, last session's files come back first; files named on
+                // the command line open after them, in front (#442).
+                app.reopen_last_files(&files);
+                startup::open_files(app, &files, two_paged);
             }
-        } else {
-            // With the preference on, last session's files come back first; files named on
-            // the command line open after them, in front (#442).
-            app.reopen_last_files(&files);
-            startup::open_files(&mut app, &files, two_paged);
-        }
-        for (k, v) in options {
-            let result = if defer_layout && k == "layout" { app.set_launch_layout(&v) } else { app.set_option(&k, &v) };
-            if let Err(e) = result {
-                log::warn!("--{k} {v}: {e}");
-            }
-        }
+        });
         Ok(Box::new(app))
     })
 }

@@ -50,6 +50,33 @@ impl Arguments {
     }
 }
 
+/// Whether option `key` (`--key value`) is a preference for documents opened from now on
+/// (`--default-panel`, `--default-zoom`, `--always-default-view`…), which must be set before the
+/// startup files open for them to get it.
+pub(super) fn sets_a_default(key: &str) -> bool {
+    key.starts_with("default-") || key == "always-default-view"
+}
+
+/// Sets the command line's `options` around `open`, which opens the startup files: preferences
+/// for documents opened from now on ([`sets_a_default`]) before, so those files get them too
+/// (CodeRabbit on #5599), and the rest, which act on the open document, after. With
+/// `defer_layout`, `--layout` is this launch's layout rather than the saved default.
+pub(super) fn with_options(app: &mut PdfCraftApp, options: Vec<(String, String)>, defer_layout: bool, open: impl FnOnce(&mut PdfCraftApp)) {
+    let (defaults, rest): (Vec<_>, Vec<_>) = options.into_iter().partition(|(k, _)| sets_a_default(k));
+    for (k, v) in defaults {
+        if let Err(e) = app.set_option(&k, &v) {
+            log::warn!("--{k} {v}: {e}");
+        }
+    }
+    open(app);
+    for (k, v) in rest {
+        let result = if defer_layout && k == "layout" { app.set_launch_layout(&v) } else { app.set_option(&k, &v) };
+        if let Err(e) = result {
+            log::warn!("--{k} {v}: {e}");
+        }
+    }
+}
+
 pub(super) fn open_files(app: &mut PdfCraftApp, files: &[String], two_paged: bool) {
     for path in files {
         if two_paged {
@@ -220,6 +247,26 @@ mod tests {
 #[cfg(test)]
 mod repeated_file_tests {
     use super::*;
+
+    /// CodeRabbit on #5599: `--default-panel` was set after the startup files opened, so they
+    /// didn't get it. Defaults are set first; options for the open document still come after.
+    #[test]
+    fn startup_files_open_with_the_default_panel_given_on_the_command_line() {
+        for (key, default) in
+            [("default-panel", true), ("default-zoom", true), ("always-default-view", true), ("panel", false), ("page", false), ("layout", false)]
+        {
+            assert_eq!(sets_a_default(key), default, "{key}");
+        }
+        let path = std::env::temp_dir().join(format!("pdfcraft-default-panel-startup-{}.pdf", std::process::id()));
+        std::fs::write(&path, include_bytes!("../../../crates/ui-egui/tests/data/form.pdf")).unwrap();
+        let file = path.to_str().unwrap().to_string();
+        let mut app = PdfCraftApp::new();
+        let options = vec![("zoom".to_string(), "150".to_string()), ("default-panel".to_string(), "pages".to_string())];
+        with_options(&mut app, options, false, |app| open_files(app, &[file], false));
+        assert_eq!(app.right, Some(pdfcraft_ui_egui::RightPanel::Pages), "the startup file opened with the default panel");
+        assert!((app.views[0].zoom - 1.5).abs() < 1e-3, "--zoom still acts on the open document");
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn a_repeated_file_reuses_its_tab_and_receives_the_launch_override() {

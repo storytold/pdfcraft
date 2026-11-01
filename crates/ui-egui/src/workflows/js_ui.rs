@@ -493,7 +493,7 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     });
     ui.label(
         egui::RichText::new(tl!(
-            "Shown when a PDF opens. Automatic keeps the panel that is open, or shows Comments when the PDF has comments, else its Bookmarks. A PDF that names a panel opens with that one."
+            "Shown when a PDF opens. Automatic keeps the panel that is open, or shows Comments when the PDF has comments, else its Bookmarks. A PDF that names a panel opens with that one, and a side panel you closed stays closed until you open it again."
         ))
         .small()
         .color(t.text_muted),

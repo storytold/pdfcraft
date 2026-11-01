@@ -288,10 +288,17 @@ impl PdfCraftApp {
                 // `/NonFullScreenPageMode /UseNone` (the default) no outline is visible (Table 147).
                 DefaultPanel::Auto if !doc.info.outline.is_empty() && !initial.full_screen => Some(RightPanel::Bookmarks),
                 DefaultPanel::Auto | DefaultPanel::None => None,
+                // Nor a chosen one (CodeRabbit on #5599): the document's panel for outside full
+                // screen, if it names one, is set from its Initial View below.
+                _ if initial.full_screen => None,
                 DefaultPanel::Pages => Some(RightPanel::Pages),
                 DefaultPanel::Bookmarks => Some(RightPanel::Bookmarks),
                 DefaultPanel::Comments => Some(RightPanel::Comments),
             };
+            // F4 reopens the panel shown last: this one (CodeRabbit on #5599).
+            if let Some(panel) = self.right {
+                self.last_right = panel;
+            }
         }
         let view = DocView::new(id, &doc.info, self.view_defaults);
         self.views.push(view);
