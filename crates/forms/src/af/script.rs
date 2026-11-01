@@ -99,6 +99,26 @@ impl Parser<'_> {
                             let mut encoded = [0u8; 4];
                             out.extend_from_slice(ch.encode_utf8(&mut encoded).as_bytes());
                         }
+                        b'u' if self.s.get(self.i) == Some(&b'{') => {
+                            self.i += 1;
+                            let start = self.i;
+                            let mut code = 0u32;
+                            while let Some(&digit) = self.s.get(self.i).filter(|&&b| b != b'}') {
+                                code = code.checked_mul(16)?.checked_add(char::from(digit).to_digit(16)?)?;
+                                if code > 0x10FFFF {
+                                    return None;
+                                }
+                                self.i += 1;
+                            }
+                            if self.i == start || self.s.get(self.i) != Some(&b'}') {
+                                return None;
+                            }
+                            self.i += 1;
+                            // Match the existing handling of unpaired UTF-16 surrogates.
+                            let ch = char::from_u32(code).unwrap_or('\u{FFFD}');
+                            let mut encoded = [0u8; 4];
+                            out.extend_from_slice(ch.encode_utf8(&mut encoded).as_bytes());
+                        }
                         b'u' => {
                             let code = hex4(self.s.get(self.i..self.i.checked_add(4)?)?)?;
                             self.i += 4;
@@ -260,7 +280,8 @@ pub fn parse_validate(js: &str) -> Option<Validate> {
     let args = call(js, "AFRange_Validate")?;
     let flag = |i: usize| args.get(i).is_some_and(Arg::truthy);
     let num = |i: usize| args.get(i).and_then(Arg::num);
-    Some(Validate::Range { min: if flag(0) { num(1) } else { None }, max: if flag(2) { num(3) } else { None } })
+    // An enabled but unparseable bound is unsupported, not an absent bound.
+    Some(Validate::Range { min: if flag(0) { Some(num(1)?) } else { None }, max: if flag(2) { Some(num(3)?) } else { None } })
 }
 
 pub fn parse_calculate(js: &str) -> Option<Calculate> {
@@ -392,5 +413,47 @@ mod tests {
         assert_eq!(parse_format(js), Some(Format::Percent { decimals: 2, sep: 1 }));
 
         assert_eq!(parse_validate("AFRange_Validate(true, 1e500, false, 0);"), None);
+    }
+    #[test]
+    fn review_enabled_nonfinite_bound_is_unsupported() {
+        for script in [r#"AFRange_Validate(true, "1e500", false, 0)"#, r#"AFRange_Validate(false, 0, true, "-1e500")"#] {
+            assert_eq!(parse_validate(script), None);
+        }
+        assert_eq!(parse_validate(r#"AFRange_Validate(false, "1e500", false, "NaN")"#), Some(Validate::Range { min: None, max: None }));
+    }
+
+    #[test]
+    fn review_format_after_postfix_division() {
+        for op in ["++", "--"] {
+            let js = format!("var y = x{op} / 2; AFPercent_Format(2, 1); var z = 1 / 2;");
+            assert_eq!(parse_format(&js), Some(Format::Percent { decimals: 2, sep: 1 }));
+            let commented = format!("var y = x/* comment */{op} / 2; AFPercent_Format(2, 1); var z = 1 / 2;");
+            assert_eq!(parse_format(&commented), Some(Format::Percent { decimals: 2, sep: 1 }));
+        }
+        // A newline makes ++ a prefix operator; the following regex must remain opaque.
+        for js in ["x\n++/AFPercent_Format(2, 1)/.lastIndex;", "x/*\n*/++/AFPercent_Format(2, 1)/.lastIndex;"] {
+            assert_eq!(parse_format(js), None);
+        }
+    }
+
+    #[test]
+    fn review_format_after_brace_unicode() {
+        assert_eq!(parse_format(r#"var s = "\u{1F600}"; AFPercent_Format(2, 1);"#), Some(Format::Percent { decimals: 2, sep: 1 }));
+        assert_eq!(parse_format(r#"AFDate_FormatEx("\u{1F600}")"#), Some(Format::Date("😀".to_owned())));
+        assert_eq!(parse_format(r#"AFDate_FormatEx("\u{00000041}\u0042\uD83D\uDE00")"#), Some(Format::Date("AB😀".to_owned())));
+        for escape in ["\\u{}", "\\u{110000}", "\\u{xyz}", "\\u{41"] {
+            assert_eq!(parse_format(&format!("AFDate_FormatEx(\"{escape}\")")), None);
+        }
+    }
+
+    #[test]
+    fn review_notation_separates_adjacent_operators() {
+        let field = |name| format!("AFMakeNumber(this.getField(\"{name}\").value)");
+        for (expr, operators) in [("a++b", "+ +"), ("a--b", "- -"), ("a+++b", "+ + +")] {
+            let js = calculate_js(&Calculate::Notation(expr.to_owned())).unwrap();
+            let executable = js.split("event.value = ").nth(1).unwrap();
+            assert_eq!(executable, format!("{}{operators}{};", field("a"), field("b")));
+            assert_eq!(super::super::calc::calculate(&Calculate::Notation(expr.to_owned()), &|_| vec!["2".to_owned()]), Some("4".to_owned()));
+        }
     }
 }

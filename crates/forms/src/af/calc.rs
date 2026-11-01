@@ -145,6 +145,16 @@ pub(super) fn js_tokens(js: &str) -> (Vec<Token>, Vec<Range<usize>>) {
                     }
                 }
             }
+            b'+' | b'-'
+                if s.get(i + 1) == Some(&c)
+                    && !regex_may_follow(js, &out, after_condition)
+                    && out.last().is_some_and(|(range, _)| !(range.end..i).any(|j| line_ends_at(s, j))) =>
+            {
+                // Postfix update ends an expression: a following slash divides. A line
+                // terminator forbids postfix syntax, including one inside a comment.
+                i += 2;
+                Js::Other
+            }
             _ if c.is_ascii_digit() => {
                 while word(i) || s.get(i) == Some(&b'.') {
                     i += 1;
@@ -467,10 +477,12 @@ fn splice(src: &str, edits: impl IntoIterator<Item = (Range<usize>, String)>) ->
 }
 
 /// Simplified field notation as the JavaScript Acrobat writes after its `BVCALC` comment:
-/// each field name becomes `AFMakeNumber(this.getField("name").value)`, the rest stays.
+/// Each field name becomes `AFMakeNumber(this.getField("name").value)`; adjacent signs
+/// are separated so binary plus/minus followed by a unary sign cannot become an update.
 pub fn notation_js(expr: &str) -> String {
     let names = notation_tokens(expr).into_iter().filter_map(|(range, t)| match t {
         Notation::Name(name) => Some((range, format!("AFMakeNumber(this.getField({}).value)", js_str(&name)))),
+        Notation::Op(sign @ ('+' | '-')) if expr.get(range.end..).is_some_and(|rest| rest.starts_with(sign)) => Some((range, format!("{sign} "))),
         _ => None,
     });
     splice(expr, names)
