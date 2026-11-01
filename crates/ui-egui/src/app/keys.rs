@@ -6,7 +6,6 @@ impl PdfCraftApp {
         // Every frame, modal or not: a tab shown by a click or a newly opened file is the most
         // recent one, and a Ctrl+Tab cycle ends when Ctrl is let go.
         self.note_shown_tab(ctx);
-        let pasted = self.paste_key_released(ctx);
         // "Save changes?" is modal: its keys are its own (⌘D is Don't save there, not Document
         // properties; Escape cancels it rather than clearing a selection), and nothing may run
         // underneath it. They are read here, before the canvas can consume them.
@@ -81,8 +80,7 @@ impl PdfCraftApp {
                 prepare::nudge_keys(ctx, &mut self.views[i], doc);
             }
             canvas::shortcuts(&mut self.views[i], ctx, self.scroll_speed);
-            self.copy_key(i, ctx);
-            self.paste_image_key(i, ctx, pasted);
+            self.clipboard_keys(i, ctx);
             self.image_pick_keys(i, ctx);
         }
     }

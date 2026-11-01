@@ -3591,6 +3591,86 @@ fn jbig2_symbol_dictionaries_that_never_advance_terminate() {
     }
 }
 
+/// A JBIG2 stream can put a region, a reference or a symbol at the very end of what an `i32` holds,
+/// where adding to it overflowed: a panic wherever overflow is checked, a build's own tests included.
+/// A region or a symbol out there is off the page, so nothing draws. Vendored hayro-jbig2 patch: the arithmetic wraps, as
+/// a release build's did, or in `Bitmap::combine` saturates, which comes to the same. Three of the text
+/// streams are arithmetic-coded: one symbol on a strip of -2^31 + 1, with its bottom left as the corner
+/// placed, one on a strip of -2^31, and one refined by an offset of `i32::MIN`, which reads nothing of
+/// the old symbol and still draws. Two are Huffman-coded, each with its first S at an offset of
+/// 0x7FFFFFFF on a table's 32-bit range line, past what an `i32` holds, and are refused further on.
+#[test]
+fn jbig2_placements_at_the_end_of_an_i32_draw_nothing() {
+    const FAR_CORNER: &str = "0000000030000100000013000000100000000c0000000000000000420000000000010000010000001e000003fffdff02fefefe00000001000000014fdc3ce0205df55c36bfffac00000002062001010000001f000000100000000c000000000000000004000000000001969747cbe88bffac";
+    const STRIP: &str = "0000000030000100000013000000100000000c0000000000000000420000000000010000010000001e000003fffdff02fefefe00000001000000014fdda25e46956d3e0d3fffac00000002062001010000001f000000100000000c000000000000000004001000000001969747cbe5dbffac";
+    const UPPER_LINE: &str = "0000000030000100000013000000100000000c0000000000000000420000000000010000010000001d000003fffdff02fefefe00000001000000014fdaea38c99641e0c8ffac000000020620010100000038000000100000000c00000000000000000400110000000000010100000000000000000000000000000000003f7fffffff0000000000000000";
+    const LOWER_LINE: &str = "0000000030000100000013000000100000000c0000000000000000420000000000010000010000001d000003fffdff02fefefe00000001000000014fdaea38c99641e0c8ffac000000020620010100000038000000100000000c00000000000000000400110000000000010100000000000000000000000000000000003e7fffffff0000000000000000";
+    const OFFSET: &str = "0000000030000100000013000000100000000c0000000000000000420000000000010000010000001e000003fffdff02fefefe00000001000000014fdda9172f614a037ddfffac0000000206200101000000260000000800000006000000000000000004801200000001a9695690b3e5f44a2f105e30d3ffac";
+    let segment = |number: u32, kind: u8, data: &[u8]| {
+        let mut out = number.to_be_bytes().to_vec();
+        out.extend_from_slice(&[kind, 0, 1]);
+        out.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
+        out.extend_from_slice(data);
+        out
+    };
+    let side = 8u32.to_be_bytes();
+    let page = |width: u32| {
+        let mut page = [width.to_be_bytes(), side].concat();
+        page.extend_from_slice(&[0; 8]); // resolution
+        page.extend_from_slice(&[0, 0, 0]); // flags, striping
+        segment(0, 48, &page)
+    };
+    let region = |width: u32, kind: u8, x: u32, y: u32, header: &[u8]| {
+        let mut region = [width.to_be_bytes(), side, x.to_be_bytes(), y.to_be_bytes()].concat();
+        region.push(0); // combination operator
+        region.extend_from_slice(header);
+        region.extend_from_slice(&[0x5a; 64]);
+        [page(width), segment(1, kind, &region)].concat()
+    };
+    let generic = |x, y| region(8, 38, x, y, &[0, 3, 0xff, 0xfd, 0xff, 2, 0xfe, 0xfe, 0xfe]); // template 0, AT pixels
+    // Immediate refinements of the page: template 0 with its usual AT pixels, with others, with typical
+    // prediction, and template 1.
+    let refined = |width, x, y, form: usize| {
+        region(width, 42, x, y, [&[0, 0xff, 0xff, 0xff, 0xff][..], &[0, 0xff, 0xff, 127, 127], &[2, 0xff, 0xff, 0xff, 0xff], &[1]][form])
+    };
+    let hex = |text: &str| (0..text.len() / 2).map(|i| u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).unwrap()).collect::<Vec<u8>>();
+    let ink = |jbig2: Vec<u8>, width: u32, height: u32| {
+        let content = b"q 20 0 0 20 5 5 cm /Im1 Do Q";
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n".to_vec();
+        pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n", content.len()).as_bytes());
+        pdf.extend_from_slice(content);
+        pdf.extend_from_slice(b"\nendstream endobj\n");
+        pdf.extend_from_slice(
+            format!("5 0 obj << /Type /XObject /Subtype /Image /Width {width} /Height {height} /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode /Length {} >> stream\n", jbig2.len())
+                .as_bytes(),
+        );
+        pdf.extend_from_slice(&jbig2);
+        pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+        let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        page.rgba.as_chunks::<4>().0.iter().filter(|p| p[0] < 128).count()
+    };
+    assert!(ink(generic(2, 0), 8, 8) > 0, "a region on the page draws");
+    for form in 0..4 {
+        assert!(ink(refined(8, 0, 0, form), 8, 8) > 0, "a refinement on the page draws: {form}");
+    }
+    let end = 0x7FFF_FFFFu32;
+    for (x, y) in [(end, 0), (0, end), (end - 7, 0), (0, end - 7), (end - 129, 0), (0, end - 129)] {
+        assert_eq!(ink(generic(x, y), 8, 8), 0, "generic at {x:#x}, {y:#x}");
+        for form in 0..4 {
+            assert_eq!(ink(refined(8, x, y, form), 8, 8), 0, "refinement {form} at {x:#x}, {y:#x}");
+        }
+    }
+    // Past a 32-bit word of the row, where the reference is read again.
+    assert_eq!(ink(refined(64, 0, end, 0), 64, 8), 0, "a wide refinement");
+    assert_eq!(ink(hex(FAR_CORNER), 16, 12), 0, "a symbol's far side past the end");
+    assert_eq!(ink(hex(STRIP), 16, 12), 0, "a strip of -2^31");
+    assert!(ink(hex(OFFSET), 16, 12) > 0, "a symbol refined by an offset of i32::MIN");
+    assert_eq!(ink(hex(UPPER_LINE), 16, 12), 0, "an upper range line past an i32");
+    assert_eq!(ink(hex(LOWER_LINE), 16, 12), 0, "a lower range line past an i32");
+}
+
 /// Item 1 of storytold/pdfcraft#623: a page's content used to be cut at `MAX_DECODED_STREAM`,
 /// so everything after the cut was lost (the text and the title block of the A1 sample). Content
 /// that expands by a few times over is read to its end, however large it is.
@@ -7038,6 +7118,146 @@ fn test_clip_only_text_raster_preserves_clipping_without_painting() {
     let pixels = p.rgba.as_chunks::<4>().0;
     assert!(pixels.contains(&[0, 0, 255, 255]), "fill shows through the 7 Tr clip");
     assert!(pixels.contains(&white), "the clip is text-shaped, not the whole page");
+}
+
+#[cfg(target_os = "windows")]
+mod gbk_glyphs;
+
+/// Chinese and Korean CID fonts that aren't embedded (Adobe-CNS1 `MSung-Light`, Adobe-GB1
+/// `STSong-Light`, Adobe-Korea1 `HYGoThic-Medium`; Acrobat also writes Japanese `KozGoPr6N`
+/// text boxes without the font) drew nothing, because craft-fonts has only Japanese faces.
+/// They now draw in a face already installed on the machine, read at runtime. A machine
+/// without such a face draws nothing, as before, so each check is skipped there.
+#[test]
+fn non_embedded_chinese_and_korean_cid_fonts_draw_with_an_installed_face() {
+    use hayro::hayro_interpret::font::FallbackFontQuery;
+    use hayro::hayro_interpret::hayro_cmap::CharacterCollection;
+    // (base font, collection, ordering, encoding, encoded text, descendant subtype)
+    let cases = [
+        ("MSung-Light", CidFamily::AdobeCNS1, "CNS1", "UniCNS-UCS2-H", "7E419AD45B57", "CIDFontType0"), // 繁體字
+        ("STSong-Light", CidFamily::AdobeGB1, "GB1", "UniGB-UCS2-H", "72698D448DF7", "CIDFontType0"),   // 物资跷
+        ("HYGoThic-Medium", CidFamily::AdobeKorea1, "Korea1", "UniKS-UCS2-H", "D55CAE00", "CIDFontType0"), // 한글
+        // The real Windows book uses non-embedded TrueType CID fonts and a legacy GBK CMap,
+        // without ToUnicode. These bytes encode 中文; they are not Unicode code points.
+        ("SimSun", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
+        ("SimHei", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
+        ("KaiTi", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
+        ("FangSong", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
+        ("ABCDEF+FZSSK--GBK1-0", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
+        ("ABCDEF+FZHTK--GBK1-0", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
+        ("ABCDEF+FZKTK--GBK1-0", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
+        ("ABCDEF+FZFSK--GBK1-0", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
+    ];
+    for (base_font, family, ordering, encoding, code, subtype) in cases {
+        let query = FontQuery::Fallback(FallbackFontQuery {
+            post_script_name: Some(base_font.into()),
+            character_collection: Some(CharacterCollection { family, supplement: 2 }),
+            ..FallbackFontQuery::default()
+        });
+        if super::system_fallback(&query).is_none() {
+            eprintln!("no installed face for {base_font} (or PDFCRAFT_SYSTEM_FONTS=0): skipped");
+            continue;
+        }
+        let content = format!("BT /F1 40 Tf 5 15 Td <{code}> Tj ET");
+        let pdf = format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 60] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type0 /BaseFont /{base_font} /Encoding /{encoding} /DescendantFonts [6 0 R] >> endobj
+6 0 obj << /Type /Font /Subtype /{subtype} /BaseFont /{base_font} /CIDSystemInfo << /Registry (Adobe) /Ordering ({ordering}) /Supplement 2 >>
+  /FontDescriptor 7 0 R /DW 1000 >> endobj
+7 0 obj << /Type /FontDescriptor /FontName /{base_font} /Flags 6 /FontBBox [0 -141 1000 859] /ItalicAngle 0 /Ascent 859 /Descent -141 /CapHeight 700 /StemV 80 >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+            content.len()
+        );
+        let pdf = Arc::new(pdf.into_bytes());
+        let ink = |config: RenderConfig| {
+            let mut r = PageRenderer::new(pdf.clone(), config);
+            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+            assert!(p.error.is_none(), "{base_font}: {:?}", p.error);
+            p.rgba.as_chunks::<4>().0.iter().filter(|c| c[0] < 128).count()
+        };
+        // Two to four glyphs at 40 pt cover several hundred dark pixels; a blank run has none.
+        let shown = ink(RenderConfig { system_fonts: true, ..RenderConfig::default() });
+        assert!(shown > 300, "{base_font}: the text is drawn ({shown} dark pixels)");
+        // Off by default: exports, printing and OCR render without an installed font, so
+        // nothing drawn with one can be saved (AGENTS.md §1.2, §1.4).
+        let saved = ink(RenderConfig::default());
+        assert!(saved < 50, "{base_font}: not drawn without system_fonts ({saved} dark pixels)");
+        if encoding == "GBK-EUC-H" {
+            #[cfg(target_os = "windows")]
+            gbk_glyphs::assert_expected_glyphs(&pdf, base_font);
+            let mut renderer = PageRenderer::new(pdf, RenderConfig { system_fonts: true, ..Default::default() });
+            let text = renderer.render(RenderRequest { page: 0, kind: RequestKind::Text, ..Default::default() });
+            assert!(text.error.is_none(), "{base_font}: {:?}", text.error);
+            assert_eq!(text.text.unwrap().plain_text().trim(), "中文", "the fallback preserves GBK text mapping");
+        }
+    }
+}
+
+/// Print preview must match output even after the same worker cached an installed face.
+/// Switching back to the viewer must not retain the print resolver's missing-font result.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn print_preview_excludes_installed_fonts_without_poisoning_viewer_cache() {
+    use hayro::hayro_interpret::font::FallbackFontQuery;
+    use hayro::hayro_interpret::hayro_cmap::CharacterCollection;
+    let query = FontQuery::Fallback(FallbackFontQuery {
+        post_script_name: Some("SimSun".into()),
+        character_collection: Some(CharacterCollection { family: CidFamily::AdobeGB1, supplement: 2 }),
+        ..Default::default()
+    });
+    if super::system_fallback(&query).is_none() {
+        eprintln!("no installed GB1 face (or PDFCRAFT_SYSTEM_FONTS=0): skipped");
+        return;
+    }
+    let content = "BT /F1 40 Tf 5 15 Td <D6D0CEC4> Tj ET";
+    let bytes = Arc::new(format!(
+        "%PDF-1.7\n\
+         1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 120 60] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         5 0 obj << /Type /Font /Subtype /Type0 /BaseFont /SimSun /Encoding /GBK-EUC-H /DescendantFonts [6 0 R] >> endobj\n\
+         6 0 obj << /Type /Font /Subtype /CIDFontType2 /BaseFont /SimSun /CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 2 >> /FontDescriptor 7 0 R /DW 1000 >> endobj\n\
+         7 0 obj << /Type /FontDescriptor /FontName /SimSun /Flags 6 /FontBBox [0 -141 1000 859] /ItalicAngle 0 /Ascent 859 /Descent -141 /CapHeight 700 /StemV 80 >> endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF", content.len()
+    ).into_bytes());
+    let config = RenderConfig::default().on_screen();
+    let mut inline = PageRenderer::new(bytes.clone(), config.clone());
+    let mut output = PageRenderer::new(bytes.clone(), RenderConfig::default());
+    let pool = RenderPool::new(bytes, 1, config);
+    for tile in [None, Some(Tile { x: 0, y: 0, w: 120, h: 60 })] {
+        // Cover both directions with a warm worker cache, including other caller tag bits.
+        for tag in [PRINT_TAG | 1, 2, PRINT_TAG | 3, 4] {
+            let req = RenderRequest { page: 0, scale: 1.0, tile, tag, ..Default::default() };
+            let truth = output.render(req);
+            assert!(truth.error.is_none(), "{:?}", truth.error);
+            pool.set_queue(vec![req]);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let worker = loop {
+                if let Some(page) = pool.try_recv() {
+                    break page;
+                }
+                assert!(std::time::Instant::now() < deadline, "print-preview worker timed out");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            };
+            for page in [inline.render(req), worker] {
+                assert!(page.error.is_none(), "{:?}", page.error);
+                if tag & PRINT_TAG != 0 {
+                    assert_eq!(page.rgba, truth.rgba, "print preview must match output, tile={tile:?}");
+                } else {
+                    let ink = page.rgba.as_chunks::<4>().0.iter().filter(|c| c[0] < 128).count();
+                    assert!(ink > 300, "viewer still draws installed Chinese glyphs: {ink}");
+                }
+            }
+        }
+    }
 }
 
 /// A malformed token in a content stream used to end the stream there, so the renderer, text

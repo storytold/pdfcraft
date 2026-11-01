@@ -1,5 +1,5 @@
 use super::common::clean_name;
-use super::items::{Item, Rounded};
+use super::items::{Item, Rounded, Turned};
 use super::{
     Arc, Border, Ctx, Draw, ExclGroup, Face, Font, Layout, Layouter, MAX_DEPTH, MAX_IMAGE_BYTES, Node, Para, Presence, Rect, SomIndices, Stroke,
     Subform, Value, XfaError, data_path, text,
@@ -35,7 +35,27 @@ impl Layouter<'_> {
         }
         let (w, h) = self.size_of(k, (inner.w - c.x.unwrap_or(0.0)).max(1.0), ctx, depth + 1);
         let (x, y) = c.top_left(w, h);
-        self.draw_node(k, Rect::new(inner.x + x, inner.y + y, w, h), ctx, depth + 1, sib)
+        let rect = Rect::new(inner.x + x, inner.y + y, w, h);
+        let start = self.item_count();
+        self.draw_node(k, rect, ctx, depth + 1, sib)?;
+        if c.rotate != 0 && matches!(k, Node::Draw(_)) {
+            let stands = k.standing_box(w, h);
+            let extent = (inner.y + stands.y, inner.y + stands.bottom());
+            self.turn(start, (inner.x + c.x.unwrap_or(0.0), inner.y + c.y.unwrap_or(0.0)), c.rotate, extent);
+        }
+        Ok(())
+    }
+
+    /// Turn the items the last page got since `start`, a draw, about `about`.
+    fn turn(&mut self, start: usize, about: (f64, f64), quarters: u8, extent: (f64, f64)) {
+        let Some(page) = self.pages.last_mut().filter(|p| start < p.items.len()) else { return };
+        let items = page.items.split_off(start);
+        page.items.push(Item::Turned(Box::new(Turned { about, quarters, extent, items })));
+        // One item now, kept whole by what it is: the record of its items, the last one kept,
+        // would fall on the next.
+        if self.leaves.last().is_some_and(|leaf| leaf.0 == start) {
+            self.leaves.pop();
+        }
     }
 
     pub(super) fn draw_node(&mut self, node: &Node, rect: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
