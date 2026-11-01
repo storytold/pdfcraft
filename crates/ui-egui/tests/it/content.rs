@@ -727,6 +727,8 @@ fn format_text_rows_line_up_and_fit_the_panel() {
 fn format_text_fits_the_tools_pane_at_its_narrowest() {
     use egui::accesskit::Role;
     let mut h = harness();
+    // At the largest interface size too: it scales points to pixels, and the layout is in points.
+    h.state_mut().set_option("ui-scale", "300").unwrap();
     h.state_mut().side_panels.tools_width = 0.0;
     assert!(h.state_mut().execute("edit.text"));
     h.run_steps(3);
@@ -749,6 +751,32 @@ fn format_text_fits_the_tools_pane_at_its_narrowest() {
     for label in ["Paragraph spacing", "Character spacing"] {
         let right = h.query_all_by_label(label).map(|n| n.rect().right()).fold(f32::MIN, f32::max);
         assert!((right - font.right()).abs() < 1.5, "{label} ends at {right}, the font list at {}", font.right());
+    }
+}
+
+/// The lists in Format text fit the narrowest Tools pane in every interface language: "Auto" in
+/// the line spacing list is the one word in them that is translated, and in German, Ukrainian or
+/// Lao it is twice as long. The font list spans the pane, so nothing may end past it.
+#[test]
+fn format_text_lists_fit_the_narrowest_tools_pane_in_every_language() {
+    use egui::accesskit::Role;
+    for lang in pdfcraft_ui_egui::i18n::Lang::all() {
+        let mut h = harness();
+        // A script with no face on this machine (Lao without system fonts) can't be drawn at all.
+        if !h.ctx.fonts_mut(|f| f.has_glyphs(&egui::FontId::proportional(13.0), lang.name())) {
+            continue;
+        }
+        h.state_mut().set_option("language", lang.code()).unwrap();
+        h.state_mut().side_panels.tools_width = 0.0;
+        assert!(h.state_mut().execute("edit.text"));
+        h.run_steps(3);
+        let lists: Vec<egui::Rect> = h.query_all_by_role(Role::ComboBox).map(|n| n.rect()).collect();
+        // Found by its value (a font name, never translated), not as the widest list: an overrun
+        // could make another list the widest.
+        let font = h.query_all_by_role(Role::ComboBox).find(|n| n.value().as_deref() == Some("Helvetica")).map(|n| n.rect()).expect("the font list");
+        for r in &lists {
+            assert!(r.right() <= font.right() + 0.5, "{}: {r:?} reaches past the font list ({font:?})", lang.code());
+        }
     }
 }
 

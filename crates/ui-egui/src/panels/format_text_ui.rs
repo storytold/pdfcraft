@@ -271,13 +271,20 @@ pub(crate) fn panel(
             let own = tl!("Auto").to_string();
             let shown = if e.line_spacing == 0.0 { own.clone() } else { number(e.line_spacing) };
             outlined(ui, |ui| {
-                let list = craft_ui::ComboBox::from_id_salt("format-line-spacing").selected_text(centred(ui, &shown)).width(half).show_ui(ui, |ui| {
-                    ui.selectable_value(&mut e.line_spacing, 0.0, own.as_str());
-                    for v in LINE_SPACINGS {
-                        ui.selectable_value(&mut e.line_spacing, v, number(v));
-                    }
-                });
-                list.response.labelled_by(label.id);
+                // The column is `half` wide in every language: a longer "Auto" is cut short (the
+                // menu and the tooltip have it whole).
+                ui.set_max_width(half);
+                let list = craft_ui::ComboBox::from_id_salt("format-line-spacing")
+                    .selected_text(centred(ui, &shown))
+                    .width(half)
+                    .wrap_mode(egui::TextWrapMode::Truncate)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut e.line_spacing, 0.0, own.as_str());
+                        for v in LINE_SPACINGS {
+                            ui.selectable_value(&mut e.line_spacing, v, number(v));
+                        }
+                    });
+                list.response.labelled_by(label.id).on_hover_text(&shown);
             });
             ui.add_space(8.0);
             ui.add_enabled_ui(false, |ui| {
@@ -382,11 +389,13 @@ struct Number<'a> {
 
 /// A combo box's selected text, centred in its button. The button lays out the text and then its
 /// arrow, and every growing atom takes an equal share of the room left: a pad as wide as the arrow
-/// before the text balances the arrow after it, and the text centres itself in its own share.
+/// before the text balances the arrow after it, and the text centres itself in its own share. Text
+/// longer than the list is wide (a translated "Auto") is cut short rather than widening it.
 fn centred<'a>(ui: &egui::Ui, text: &str) -> egui::Atoms<'a> {
     use egui::AtomExt as _;
     let pad = egui::Atom::custom(egui::IdSalt::new("combo-pad"), vec2(ui.spacing().icon_width, 0.0)).atom_grow(true);
-    egui::Atoms::new((pad, egui::Atom::from(text.to_string()).atom_grow(true).atom_align(egui::Align2::CENTER_CENTER)))
+    let text = egui::Atom::from(text.to_string()).atom_grow(true).atom_shrink(true).atom_align(egui::Align2::CENTER_CENTER);
+    egui::Atoms::new((pad, text))
 }
 
 /// The arrow that lists a field's common values, centred on the 26-point field beside it.
