@@ -142,8 +142,12 @@ pub struct CommentView {
     /// A pop-up window's title bar being dragged: the comment, and where the window's top-left
     /// corner is now on screen.
     pub popup_drag: Option<(usize, usize, Pos2)>,
+    /// A pop-up window's corner being dragged: the comment, and the window's size on screen now.
+    pub popup_resize: Option<(usize, usize, egui::Vec2)>,
     /// Text being typed in a pop-up window: (page, index, text).
     pub popup_text: Option<(usize, usize, String)>,
+    /// A reply being typed in a pop-up window: the comment or reply it answers (page, index), and its text.
+    pub popup_reply: Option<(usize, usize, String)>,
     /// Where each open pop-up was drawn last frame, for the connector lines and hit-testing.
     pub popup_rects: Vec<((usize, usize), Rect)>,
     /// The pop-up the pointer was over last frame.

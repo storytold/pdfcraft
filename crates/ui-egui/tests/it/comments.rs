@@ -3085,7 +3085,7 @@ trailer << /Root 1 0 R >>
     });
     h.run_steps(6);
     let (_, window) = h.state().views[0].comments.popup_rects.first().copied().expect("the open pop-up shows");
-    let in_window = |label: &str| h.query_all_by_label(label).any(|n| window.contains(n.rect().center()));
+    let in_window = |text: &str| h.query_all_by(|n| shows_text(n, text)).any(|n| window.contains(n.rect().center()));
     assert!(in_window("Agreed with this"), "the text reply");
     assert!(!in_window("Accepted set by Bob"), "not the review status");
     assert!(!in_window("Marked set by Ada"), "not the checkmark");
@@ -3134,7 +3134,8 @@ fn a_double_click_opens_a_notes_pop_up_which_drags_and_closes() {
     assert_eq!(note.popup.map(|p| p.open), Some(true), "the pop-up opened");
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Open comment pop-up"));
     let (_, window) = h.state().views[0].comments.popup_rects.first().copied().expect("the pop-up is on screen");
-    h.get_by_label("Tester");
+    // Its title names the kind of comment and its author.
+    h.get_by_label("Note – Tester");
 
     // Drag the title bar 80 px right and 40 px down: the pop-up's place on the page moves.
     let before = note.popup.unwrap().rect;
@@ -3165,7 +3166,7 @@ const POPUPS_SHARING_A_NAME: &[u8] = b"%PDF-1.7
 4 0 obj << /Type /Annot /Subtype /Text /Rect [20 160 40 180] /NM (fitz-A0) /T (Alpha) /Contents (First note) /Popup 5 0 R /Open true >> endobj
 5 0 obj << /Type /Annot /Subtype /Popup /Rect [60 110 160 190] /Parent 4 0 R /Open true >> endobj
 6 0 obj << /Type /Annot /Subtype /Text /Rect [20 40 40 60] /NM (fitz-A0) /T (Beta) /Contents (Second note) /Popup 7 0 R /Open true >> endobj
-7 0 obj << /Type /Annot /Subtype /Popup /Rect [180 10 290 90] /Parent 6 0 R /Open true >> endobj
+7 0 obj << /Type /Annot /Subtype /Popup /Rect [180 -250 290 90] /Parent 6 0 R /Open true >> endobj
 8 0 obj << /Type /Annot /Subtype /Text /Rect [20 40 40 60] /NM (fitz-A1) /IRT 6 0 R /T (Gamma) /Contents (Reply by reference) >> endobj
 9 0 obj << /Type /Annot /Subtype /Text /Rect [20 40 40 60] /IRT 8 0 R /T (Delta) /Contents (Reply to the reply) >> endobj
 trailer << /Root 1 0 R >>
@@ -3183,7 +3184,7 @@ fn a_pop_up_lists_its_replies_by_reference_when_names_repeat() {
     for text in ["Reply by reference", "Reply to the reply"] {
         // The Comments panel lists the thread too; count only what the windows show.
         let shown: Vec<Pos2> =
-            h.query_all_by_label(text).map(|n| n.rect().center()).filter(|c| windows.iter().any(|(_, w)| w.contains(*c))).collect();
+            h.query_all_by(|n| shows_text(n, text)).map(|n| n.rect().center()).filter(|c| windows.iter().any(|(_, w)| w.contains(*c))).collect();
         assert_eq!(shown.len(), 1, "{text:?} shows in one window: {shown:?}");
         assert!(shown.iter().all(|c| second.contains(*c)), "{text:?} is in the second note's window");
     }
@@ -3268,4 +3269,173 @@ fn a_connector_line_joins_a_comment_to_its_open_pop_up_while_the_pointer_is_on_e
     h.hover_at(at(&h, 280.0, 190.0));
     h.run_steps(2);
     assert_eq!(connectors(&h, blue).len(), 1, "a selected comment shows its connector");
+}
+
+/// A note with an open pop-up and a thread of replies: "Second" and "Third" answer the note,
+/// "Second, first answer" answers "Second" (`/IRT` to a reply).
+const NOTE_WITH_A_THREAD: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [20 160 40 180] /C [1 0.85 0.2] /T (Alpha) /Contents (First) /Popup 5 0 R /Open true >> endobj
+5 0 obj << /Type /Annot /Subtype /Popup /Rect [60 -250 280 150] /Parent 4 0 R /Open true >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [20 160 40 180] /T (Beta) /Contents (Second) /IRT 4 0 R /F 30 >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [20 160 40 180] /T (Beta) /Contents (Second, first answer) /IRT 6 0 R /F 30 >> endobj
+8 0 obj << /Type /Annot /Subtype /Text /Rect [20 160 40 180] /T (Beta) /Contents (Third) /IRT 4 0 R /F 30 >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// A pop-up window (comment.popup-windows) is laid out as the readers' are: a title bar with the
+/// comment's kind and author; the comment's text; its replies as panels in thread order, an
+/// answer to a reply inside that reply's panel; and a Reply button under each, which opens a box
+/// that posts an answer to that comment or reply.
+#[test]
+fn a_pop_up_threads_its_replies_and_takes_a_new_one() {
+    let mut h = harness_with_bytes(NOTE_WITH_A_THREAD.to_vec(), |_| {});
+    let (_, window) = h.state().views[0].comments.popup_rects.first().copied().expect("the pop-up is open");
+    h.get_by_label("Note – Alpha");
+    // Each reply's text box, inside the window.
+    let rect = |h: &Harness<'static, PdfCraftApp>, text: &str| {
+        let found: Vec<egui::Rect> = h.query_all_by(|n| shows_text(n, text)).map(|n| n.rect()).filter(|r| window.contains_rect(*r)).collect();
+        assert_eq!(found.len(), 1, "{text:?} once in the window: {found:?}");
+        found[0]
+    };
+    let (second, answer, third) = (rect(&h, "Second"), rect(&h, "Second, first answer"), rect(&h, "Third"));
+    assert!(second.bottom() < answer.top() && answer.bottom() < third.top(), "thread order: {second:?} {answer:?} {third:?}");
+    assert!(
+        answer.left() > second.left() + 4.0 && answer.right() < second.right() - 4.0,
+        "the answer sits inside its reply's panel: {second:?} {answer:?}"
+    );
+    assert!((third.left() - second.left()).abs() < 1.0, "replies to the note line up: {second:?} {third:?}");
+    // The Reply buttons, top to bottom: the note's, then each reply's.
+    let replies = |h: &Harness<'static, PdfCraftApp>| {
+        let mut b: Vec<egui::Rect> =
+            h.query_all_by(|n| n.role() == Role::Button && n.label().as_deref() == Some("Reply")).map(|n| n.rect()).collect();
+        b.sort_by(|x, y| x.top().total_cmp(&y.top()));
+        b
+    };
+    assert_eq!(replies(&h).len(), 4, "one under the note and each reply");
+
+    // The note's Reply: Enter starts a new line in the box, as in the readers' pop-ups; Post posts.
+    let before = comments(&h).len();
+    let at = replies(&h)[0].center();
+    click(&mut h, at);
+    field(&h, "Add a reply").type_text("Fourth");
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert_eq!(comments(&h).len(), before, "Enter does not post");
+    h.event(egui::Event::Text("line two".into()));
+    h.run_steps(2);
+    h.get_by_label("Post").click();
+    h.run_steps(3);
+    let all = comments(&h);
+    let note = all.iter().find(|a| a.contents.as_deref() == Some("First")).expect("the note");
+    let reply = all.iter().find(|a| a.contents.as_deref() == Some("Fourth\nline two")).expect("the reply was added, on two lines");
+    assert_eq!(reply.parent, Some((note.page, note.index)));
+    assert_eq!(reply.author.as_deref(), Some("Tester"));
+    assert!(h.state().views[0].comments.popup_reply.is_none(), "the box closes");
+
+    // A reply's own Reply answers that reply; Ctrl+Enter posts too, as in the comment composer.
+    let second_key = all.iter().find(|a| a.contents.as_deref() == Some("Second")).map(|a| (a.page, a.index)).expect("the reply");
+    let at = replies(&h)[1].center();
+    click(&mut h, at);
+    field(&h, "Add a reply").type_text("Fifth");
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::CTRL, egui::Key::Enter);
+    h.run_steps(3);
+    let fifth = comments(&h).into_iter().find(|a| a.contents.as_deref() == Some("Fifth")).expect("Ctrl+Enter posts");
+    assert_eq!(fifth.parent, Some(second_key), "it answers the reply");
+
+    // Cancel closes the box without posting.
+    let before = comments(&h).len();
+    let at = replies(&h)[0].center();
+    click(&mut h, at);
+    field(&h, "Add a reply").type_text("Never mind");
+    h.run_steps(2);
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert_eq!(comments(&h).len(), before);
+    assert!(h.state().views[0].comments.popup_reply.is_none());
+}
+
+/// A note with an open pop-up and `replies` replies to it.
+fn note_with_replies(replies: usize) -> Vec<u8> {
+    let annots: String = (0..replies + 2).map(|i| format!("{} 0 R ", i + 4)).collect();
+    let mut pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [{annots}] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [20 160 40 180] /T (Alpha) /Contents (First) /Popup 5 0 R /Open true >> endobj
+5 0 obj << /Type /Annot /Subtype /Popup /Rect [60 10 280 150] /Parent 4 0 R /Open true >> endobj
+"
+    );
+    for i in 0..replies {
+        pdf.push_str(&format!(
+            "{} 0 obj << /Type /Annot /Subtype /Text /Rect [20 160 40 180] /T (Beta) /Contents (Reply {i}) /IRT 4 0 R /F 30 >> endobj\n",
+            i + 6
+        ));
+    }
+    pdf.push_str("trailer << /Root 1 0 R >>\n%%EOF");
+    pdf.into_bytes()
+}
+
+/// A pop-up window keeps its height however long its thread grows: the text and replies scroll
+/// inside it, as in the readers' pop-ups, rather than the window growing down the screen.
+#[test]
+fn a_long_thread_scrolls_inside_its_pop_up() {
+    let height = |replies: usize| {
+        let h = harness_with_bytes(note_with_replies(replies), |_| {});
+        let (_, window) = h.state().views[0].comments.popup_rects.first().copied().expect("the pop-up is open");
+        window.height()
+    };
+    let (short, long) = (height(1), height(25));
+    assert!((short - long).abs() < 2.0, "the same height with 1 reply and with 25: {short} {long}");
+    assert!(long < 600.0, "within the screen: {long}");
+}
+
+/// Dragging a pop-up window's lower right corner resizes it, and the new size is saved with the
+/// comment (the pop-up's `/Rect`) at the same place, in one undo step; the window shows it.
+#[test]
+fn a_pop_ups_corner_resizes_it() {
+    let mut h = harness_with_bytes(BLUE_NOTE_WITH_OPEN_POP_UP.to_vec(), |_| {});
+    let (_, window) = h.state().views[0].comments.popup_rects.first().copied().expect("the pop-up is open");
+    let before = comments(&h).into_iter().find(|a| a.subtype == "Text").and_then(|a| a.popup).expect("its pop-up").rect;
+    let corner = window.right_bottom() - egui::vec2(3.0, 3.0);
+    drag(&mut h, corner, corner + egui::vec2(80.0, 60.0));
+    h.run_steps(3);
+    let after = comments(&h).into_iter().find(|a| a.subtype == "Text").and_then(|a| a.popup).expect("its pop-up").rect;
+    // Wider and taller on the page, its upper left corner where it was.
+    assert!(after[2] - after[0] > before[2] - before[0] + 5.0, "wider: {before:?} -> {after:?}");
+    assert!(after[3] - after[1] > before[3] - before[1] + 5.0, "taller: {before:?} -> {after:?}");
+    assert!((after[0] - before[0]).abs() < 0.5 && (after[3] - before[3]).abs() < 0.5, "the same place: {before:?} -> {after:?}");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Move comment pop-up"));
+    let (_, resized) = h.state().views[0].comments.popup_rects.first().copied().expect("still open");
+    // The window shows the saved size, in points on screen whatever the zoom.
+    assert!((resized.width() - (after[2] - after[0])).abs() < 3.0, "as wide as saved: {after:?} {resized:?}");
+    assert!((resized.height() - (after[3] - after[1])).abs() < 3.0, "as tall as saved: {after:?} {resized:?}");
+    assert!(resized.width() > window.width() + 60.0 && resized.height() > window.height() + 40.0, "bigger on screen: {window:?} -> {resized:?}");
+    assert!((resized.left_top() - window.left_top()).length() < 1.0, "in the same place on screen");
+}
+
+/// A pop-up window's box holding `text` (a comment's or a reply's).
+fn shows_text(n: &egui_kittest::kittest::AccessKitNode<'_>, text: &str) -> bool {
+    n.role() == Role::MultilineTextInput && n.value().as_deref() == Some(text)
+}
+
+/// On a page turned a quarter (View ▸ Rotate View), a resized pop-up window stays where it is on
+/// screen and shows the size it was dragged to.
+#[test]
+fn a_pop_up_resized_on_a_turned_page_stays_in_place() {
+    let mut h = harness_with_bytes(BLUE_NOTE_WITH_OPEN_POP_UP.to_vec(), |app| app.views[0].rotation = 90);
+    let (_, window) = h.state().views[0].comments.popup_rects.first().copied().expect("the pop-up is open");
+    let corner = window.right_bottom() - egui::vec2(3.0, 3.0);
+    drag(&mut h, corner, corner + egui::vec2(80.0, 60.0));
+    h.run_steps(3);
+    let (_, resized) = h.state().views[0].comments.popup_rects.first().copied().expect("still open");
+    assert!((resized.left_top() - window.left_top()).length() < 1.0, "in the same place on screen: {window:?} -> {resized:?}");
+    assert!((resized.width() - window.width() - 80.0).abs() < 3.0, "80 px wider: {window:?} -> {resized:?}");
+    // Taller by the drag, less what its text had already stretched it.
+    assert!(resized.height() > window.height() + 50.0, "taller: {window:?} -> {resized:?}");
 }
