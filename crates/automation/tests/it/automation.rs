@@ -1679,6 +1679,25 @@ fn mcp_default_lists_every_tool_and_has_no_meta_tools() {
 
 #[cfg(feature = "mcp")]
 #[test]
+/// `tools/list` advertises exactly the Search & Redact patterns the registry supports, in `pattern`
+/// and by name in the description, so a schema-obeying client can select every one of them.
+fn the_advertised_redact_mark_schema_offers_every_pattern() {
+    use pdfcraft_engine::REDACT_PATTERNS;
+    let registry: Vec<&str> = REDACT_PATTERNS.iter().map(|p| p.id()).collect();
+    let mut s = McpServer::new(Automation::new());
+    let list = rpc(&mut s, 1, "tools/list", json!({}));
+    let mark = list["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == "redact_mark").expect("redact_mark is listed");
+    let advertised: Vec<&str> =
+        mark["inputSchema"]["properties"]["pattern"]["enum"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+    assert_eq!(advertised, registry, "the advertised pattern enum must be the registry's ids");
+    let description = mark["description"].as_str().unwrap();
+    for id in &registry {
+        assert!(description.contains(id), "the description must name {id}: {description}");
+    }
+}
+
+#[cfg(feature = "mcp")]
+#[test]
 fn mcp_compact_lists_the_core_tools_and_two_meta_tools() {
     let mut s = McpServer::new(Automation::new()).with_compact(true);
     let list = rpc(&mut s, 1, "tools/list", json!({}));
@@ -4483,6 +4502,35 @@ fn redacting_italian_international_slash_numbers_through_tools() {
         assert!(text.lines().any(|line| line.trim() == label), "only the surrounding label remains: {text}");
     }
     assert!(text.contains("protocol 2024/123456") && text.contains("on 01/10/2026"), "unrelated digit runs remain: {text}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+/// A client obeying the advertised schema can select iban, and the mark made through the tool
+/// covers the spaced number and nothing else.
+fn redacting_an_iban_through_tools() {
+    let table = tools();
+    let advertised: Vec<&str> = table.iter().find(|t| t.name == "redact_mark").unwrap().input_schema["properties"]["pattern"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert!(advertised.contains(&"iban"), "the advertised redact_mark schema must offer iban: {advertised:?}");
+    let dir = workdir("redact-iban");
+    std::fs::write(dir.join("invoice.txt"), "Pay DE89 3704 0044 0532 0130 00 today\nAccount 12345678 is ours\nTotal due").unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "text", "path": "invoice.txt" }))["doc"].as_u64().unwrap();
+    let marked = ok(&mut a, "redact_mark", json!({ "doc": doc, "pattern": "iban" }));
+    assert_eq!(marked["marked"], 1, "the spaced German sample IBAN needs one mark");
+    assert!(page_text(&mut a, doc)[0].contains("DE89 3704 0044 0532 0130 00"), "marks alone remove nothing");
+    assert_eq!(ok(&mut a, "redact_apply", json!({ "doc": doc }))["applied"], 1);
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "redacted.pdf" }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "redacted.pdf" }))["doc"].as_u64().unwrap();
+    let text = &page_text(&mut a, reopened)[0];
+    assert!(!text.contains("DE89") && !text.contains("0532"), "{text}");
+    assert!(text.lines().any(|line| line.trim() == "Pay"), "only the label before the number remains: {text}");
+    assert!(text.contains("Account 12345678") && text.contains("Total due"), "text without an IBAN remains: {text}");
     std::fs::remove_dir_all(dir).unwrap();
 }
 
