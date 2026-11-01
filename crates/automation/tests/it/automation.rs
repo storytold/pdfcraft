@@ -7529,6 +7529,22 @@ fn action_run_keeps_outputs_with_duplicate_input_basenames() {
     assert_eq!(std::fs::read(first_path).unwrap(), first_bytes, "an earlier output must not be replaced");
 }
 
+#[cfg(unix)]
+#[test]
+fn action_run_never_replaces_an_entry_that_exists_check_misses() {
+    let dir = workdir("action-noclobber");
+    std::fs::create_dir_all(dir.join("results")).unwrap();
+    std::fs::write(dir.join("report.pdf"), fixture(1)).unwrap();
+    // A dangling link is invisible to `exists()` but is still an occupied name.
+    std::os::unix::fs::symlink(dir.join("nowhere.pdf"), dir.join("results/report.pdf")).unwrap();
+    let mut a = auto(&dir);
+    let args = json!({ "steps": [{ "step": "set_title", "arg": "Processed" }], "paths": ["report.pdf"], "folder": "results" });
+    let result = ok(&mut a, "action_run", args);
+    let output = result["files"][0]["output"].as_str().unwrap();
+    assert!(output.ends_with("report (2).pdf"), "{output}");
+    assert!(dir.join("results/report.pdf").symlink_metadata().unwrap().file_type().is_symlink(), "the existing entry must stay");
+}
+
 #[test]
 fn pdfa_through_tools() {
     let dir = workdir("pdfa");
