@@ -548,7 +548,7 @@ impl PdfCraftApp {
                 let Some(v) = self.active.and_then(|i| self.views.get_mut(i)) else { return };
                 match command.id.as_str() {
                     ACTUAL_SIZE => v.set_zoom(1.0),
-                    PAGE_LEVEL => v.fit = Fit::Page,
+                    PAGE_LEVEL => v.set_fit(Fit::Page),
                     FIT_WIDTH => v.fit = Fit::Width,
                     FIT_HEIGHT => {
                         v.fit = Fit::Height;
