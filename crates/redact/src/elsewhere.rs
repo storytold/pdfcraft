@@ -64,8 +64,9 @@ pub(crate) fn find(doc: &Document, removed: &[String], complete: bool) -> Elsewh
         return Elsewhere::default();
     }
     // A blank value holds nothing, even when everything counts.
-    let hit =
-        |o: Option<&Object>| o.and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).is_some_and(|t| !t.trim().is_empty() && search.text(&t));
+    let hit = |o: Option<&Object>| {
+        o.and_then(|o| doc.resolve(o).as_string().map(crate::metadata::text_string)).is_some_and(|t| !t.trim().is_empty() && search.text(&t))
+    };
     Elsewhere {
         bookmarks: bookmarks(doc, &hit),
         attachments: attachments(doc, &hit),
@@ -182,7 +183,7 @@ fn comments(doc: &Document, search: &Search, hit: &dyn Fn(Option<&Object>) -> bo
 /// can't be read (strictly, as UTF-8, within the XMP limit).
 fn rich_text(doc: &Document, o: &Object) -> Option<String> {
     let xml = match &*doc.resolve(o) {
-        Object::String(s) => s.to_text(),
+        Object::String(s) => crate::metadata::text_string(s),
         Object::Stream(s) if s.filters().len() <= 1 => String::from_utf8(s.decoded_first_filter_strict(crate::metadata::MAX_XMP_BYTES).ok()?).ok()?,
         Object::Stream(_) => return None,
         _ => return Some(String::new()),

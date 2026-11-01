@@ -358,6 +358,21 @@ pub(crate) fn decode_xmp(bytes: &[u8]) -> Option<String> {
     }
 }
 
+/// The text of a text string, as searched for the removed text. ISO 32000-2 §7.9.2.2.1 defines
+/// PDFDocEncoding, UTF-16BE (`FE FF`) and UTF-8 (`EF BB BF`) only, but a string behind an `FF FE`
+/// mark is UTF-16LE to any reader that takes it as such, and read through PDFDocEncoding it
+/// could never match: it is read as UTF-16LE (an odd last byte is left out, a lone surrogate
+/// becomes U+FFFD), so the search stays fail-closed (#2539 review).
+pub(crate) fn text_string(s: &pdfcraft_cos::PdfString) -> String {
+    match s.bytes.as_slice() {
+        [0xFF, 0xFE, rest @ ..] => {
+            let units = rest.as_chunks::<2>().0.iter().map(|&p| u16::from_le_bytes(p));
+            char::decode_utf16(units).map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER)).collect()
+        }
+        _ => s.to_text(),
+    }
+}
+
 /// The text values of an XMP stream, or `None` when it can't be read.
 fn xmp_values(doc: &Document, o: &Object) -> Option<Vec<String>> {
     let Object::Stream(s) = &*doc.resolve(o) else { return None };
@@ -466,7 +481,7 @@ pub(crate) fn scrub_within(doc: &mut Document, removed: &[String], complete: boo
     let info_obj = doc.trailer().get(b"Info").cloned();
     if let Some(info) = info_obj.as_ref().and_then(|i| doc.resolve(i).as_dict().cloned()) {
         let doomed: Vec<Vec<u8>> =
-            info.iter().filter(|(_, v)| doc.resolve(v).as_string().is_some_and(|s| search.text(&s.to_text()))).map(|(k, _)| k.to_vec()).collect();
+            info.iter().filter(|(_, v)| doc.resolve(v).as_string().is_some_and(|s| search.text(&text_string(s)))).map(|(k, _)| k.to_vec()).collect();
         if !doomed.is_empty() {
             n += doomed.len();
             let mut kept = info.clone();

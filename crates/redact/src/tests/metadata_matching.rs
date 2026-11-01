@@ -68,3 +68,31 @@ fn a_value_that_normalizes_to_far_more_text_counts_as_holding_it() {
     assert_eq!(metadata::scrub_within(&mut doc, &["Bluefin".into()], true, 1 << 28).unwrap(), 1);
     assert_eq!(info_keys(&doc), ["Producer"]);
 }
+
+/// `s` as UTF-16LE bytes in hex, behind an `FF FE` byte order mark.
+fn utf16le(s: &str) -> String {
+    format!("<FFFE{}>", s.encode_utf16().map(|u| format!("{:02X}{:02X}", u & 0xFF, u >> 8)).collect::<String>())
+}
+
+/// ISO 32000-2 §7.9.2.2.1 defines text strings in PDFDocEncoding, UTF-16BE (`FE FF`) and UTF-8
+/// (`EF BB BF`) only, but a string behind an `FF FE` mark is UTF-16LE to anyone who reads it as
+/// such; read through PDFDocEncoding, Cyrillic or CJK text in it could never match. It is
+/// searched as UTF-16LE in `/Info` and in the places applying leaves (here a bookmark title).
+#[test]
+fn a_utf16le_string_is_searched_as_utf16le() {
+    let info = format!("<< /Title {} /Subject {} /Producer (Test) >>", utf16le("Синий план"), utf16le("Годовой отчёт"));
+    let mut doc = with_metadata(b"BT /F1 10 Tf 10 100 Td (x) Tj ET", &info, "");
+    assert_eq!(metadata::scrub_within(&mut doc, &["СИНИЙ".into()], true, 1 << 28).unwrap(), 1);
+    assert_eq!(info_keys(&doc), ["Subject", "Producer"]);
+
+    // A bookmark titled the same way is counted as still holding it.
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /Outlines 4 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] >>".to_vec(),
+        b"<< /Type /Outlines /First 5 0 R /Last 5 0 R /Count 1 >>".to_vec(),
+        format!("<< /Title {} /Parent 4 0 R /Dest [3 0 R /Fit] >>", utf16le("Синий план")).into_bytes(),
+    ];
+    let doc = Document::open(Arc::new(Pdf::new().objs(objs).build())).unwrap();
+    assert_eq!(crate::elsewhere::find(&doc, &["СИНИЙ".into()], true), Elsewhere { bookmarks: 1, ..Default::default() });
+}

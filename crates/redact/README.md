@@ -50,7 +50,9 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   "True" isn't part of "untrue". This over-matches only towards removal: "is a" also holds
   "Lisa". Both sides are compared in Unicode compatibility form (NFKC) and lower case, so a
   decomposed "Müller" (u and U+0308), full-width letters and a "ﬁ" ligature from a
-  `ToUnicode` map match their plain forms. A value that shares only words of one or two
+  `ToUnicode` map match their plain forms. A string behind an `FF FE` mark, which ISO 32000-2
+  §7.9.2.2.1 doesn't define, is read as UTF-16LE, here and in the places reported below, rather
+  than through PDFDocEncoding, in which it could never match. A value that shares only words of one or two
   letters with the removed text, and isn't wholly part of it, stays:
   Sanitize's metadata category removes the rest. `Report::metadata` counts what went.
   - **Fail-closed.** When the check can't know what the removed text was, every `/Info`
