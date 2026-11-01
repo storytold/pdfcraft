@@ -144,7 +144,12 @@ using the image area's reference-grid offset (`XOsiz`, `YOsiz`) unscaled: rows a
 or a row is sliced past its end (a panic). So `hayro-syntax` `filter::jpx::decode` drops the
 hint unless both offsets are 0 (`image_area_offset` reads them from the SIZ segment of a raw
 codestream or a JP2 `jp2c` box). Covered by
-`filter::jpx::tests::jpx_size_hint_is_dropped_only_for_an_offset_image_area`.
+`filter::jpx::tests::jpx_size_hint_is_dropped_only_for_an_offset_image_area`. A colour-key
+`/Mask` array is matched against the decoded samples, and a reduced JPX decode has averaged
+ones, so `hayro-interpret` `ImageXObject::decoded_raster` drops the hint when that key is the
+image's mask (no `/SMask` stream, no `/SMaskInData 1`): it is decoded at full size and
+resampled with its mask like any other image. Covered by
+`raster::tests::jpx_with_a_colour_key_mask_is_decoded_at_full_size`.
 
 ## KenM76 integration patches
 

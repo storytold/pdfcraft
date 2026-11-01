@@ -589,6 +589,10 @@ impl<'a> ImageXObject<'a> {
         if self.is_mask {
             return None;
         }
+        // PdfCraft patch (review on #3884): a colour key is matched against the decoded samples
+        // (`resolve_alpha`), and a JPX decode at a reduced resolution has averaged ones, so an
+        // image it masks is decoded at full size and resampled with its mask like any other.
+        let target_dimension = target_dimension.filter(|_| !self.has_colour_key_mask());
 
         // PdfCraft patch: decode once per `DecodedImageKey`; tiles and scales share it.
         let Some(cache) = &self.decoded_cache else {
@@ -659,6 +663,15 @@ impl<'a> ImageXObject<'a> {
 
     pub(crate) fn stream(&self) -> &Stream<'a> {
         &self.stream
+    }
+
+    /// PdfCraft patch (review on #3884): whether `resolve_alpha` takes this image's alpha from
+    /// a colour-key `/Mask` array: no `/SMaskInData 1` and no `/SMask` stream before it.
+    fn has_colour_key_mask(&self) -> bool {
+        let dict = self.stream.dict();
+        dict.get::<u8>(SMASK_IN_DATA) != Some(1)
+            && dict.get::<Stream<'_>>(SMASK).is_none()
+            && dict.get::<SmallVec<[u16; 4]>>(MASK).is_some()
     }
 
     fn has_mask(&self) -> bool {
