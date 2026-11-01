@@ -1982,6 +1982,33 @@ fn detached_window_views_retain_render_demand_and_are_not_suspended() {
     assert!(h.state().session.get(ids[1]).is_some());
 }
 
+#[test]
+fn dragging_tab_with_prior_detached_tab_translates_slot_to_views_index() {
+    use egui::accesskit::Role;
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+    let tab = |h: &Harness<'static, PdfCraftApp>, name: &str| h.get_by_role_and_label(Role::Tab, name).rect();
+
+    // Detach first tab (first.pdf, ids[0])
+    h.state_mut().detach_tab(ids[0]);
+    h.run_steps(3);
+    assert!(h.state().views[0].detached, "first.pdf should be detached");
+
+    // Drag middle.pdf past last.pdf to the right
+    let to = tab(&h, "last.pdf").right_center() + egui::vec2(20.0, 0.0);
+    drag_named_tab(&mut h, "middle.pdf", to, true);
+    h.run_steps(3);
+
+    // Verify views order: [first.pdf (detached), last.pdf, middle.pdf]
+    assert_eq!(
+        h.state().views.iter().map(|view| view.id).collect::<Vec<_>>(),
+        [ids[0], ids[2], ids[1]],
+        "middle.pdf should have moved after last.pdf"
+    );
+    // Tab strip renders the new visual order
+    assert!(tab(&h, "middle.pdf").left() > tab(&h, "last.pdf").right(), "middle.pdf should be right of last.pdf");
+}
+
 /// The Edit tab turns on Edit text & images at once, as Acrobat does, so every paragraph and image
 /// is boxed and editable with one click; another tab puts the tool down again.
 #[test]
