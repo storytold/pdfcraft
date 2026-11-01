@@ -9334,7 +9334,6 @@ fn escape_in_an_open_paragraph_selects_its_box_for_delete() {
     }
 }
 
-<<<<<<< HEAD
 #[test]
 fn outward_image_grip_drags_grow_on_rotated_pages() {
     for rotation in [0, 90, 180, 270] {
