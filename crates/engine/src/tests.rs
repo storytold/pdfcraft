@@ -6170,6 +6170,35 @@ fn stripping_xfa_takes_a_radio_items_pcon_as_the_fields_value() {
     assert_eq!(lost(&s, id), Vec::<String>::new());
 }
 
+/// A radio group whose buttons carry `/PCOn` items `1` `2` next to `/Opt [(1) (2)]` and on
+/// states named by position (`/0`, `/1`): a click on either button saves that button's own item
+/// to the datasets, reopening turns the same button on with nothing rewritten, and taking the XFA
+/// out notes no lost data. The state `/1` used to match the first button's item `1`, so the
+/// second button saved `1` and came back as the first.
+#[test]
+fn a_radio_group_with_pcon_items_saves_and_reopens_the_clicked_button() {
+    let lang = "form1[0].page1[0].lang[0]";
+    let data_of = |bytes: Arc<Vec<u8>>| {
+        let cos = pdfcraft_cos::Document::open(bytes).unwrap();
+        let data = pdfcraft_xfa::parse_datasets(&pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp).unwrap();
+        data.text_at(&pdfcraft_xfa::som_to_path(lang)).map(str::to_owned)
+    };
+    let value = |s: &Session, id: DocId| s.get(id).unwrap().form.iter().find(|f| f.name == lang).unwrap().value.clone();
+    let form = Arc::new(pdfcraft_xfa::fixtures::static_radio_shell_with_pcon("<form1><page1><lang/></page1></form1>", ["1", "2"]));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    for (state, item) in [("0", "1"), ("1", "2")] {
+        let id = s.open("blank.pdf", None, form.clone(), None).unwrap();
+        s.apply(id, Edit::SetFieldValue { name: lang.into(), value: FieldValue::Radio(Some(state.into())) }).unwrap();
+        let saved = s.save_bytes(id).unwrap();
+        assert_eq!(data_of(saved.clone()).as_deref(), Some(item), "clicked {state}");
+        let again = s.open("again.pdf", None, saved, None).unwrap();
+        assert_eq!(value(&s, again), [state], "clicked {state}");
+        assert!(!s.get(again).unwrap().info.warnings.iter().any(|w| w.contains("taken from this form's XFA data")), "clicked {state}");
+        s.apply(again, Edit::XfaToStatic).unwrap();
+        assert!(!s.get(again).unwrap().info.warnings.iter().any(|w| w.contains("held a value other than the form's XFA data")), "clicked {state}");
+    }
+}
+
 /// A static XFA form whose values are only in its datasets takes every one on opening, as
 /// filling the fields one at a time would leave it: values, appearances and the note; a
 /// read-only field keeps its own value.
