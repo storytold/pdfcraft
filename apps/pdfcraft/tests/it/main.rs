@@ -7,6 +7,7 @@ mod event {
     pub use winit::event::TouchPhase;
 }
 
+mod vendor_graph;
 mod winit_macos_emoji_picker;
 mod winit_macos_ime_commit;
 mod winit_macos_ime_discard;

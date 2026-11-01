@@ -173,6 +173,8 @@ fn encrypted(bytes: Vec<u8>, password: &str) -> Vec<u8> {
     pdfcraft_cos::write_full(&doc, &Default::default()).unwrap()
 }
 
+/// Check that an encrypted document is autosaved without plaintext and recovered only after the password is
+/// entered.
 #[test]
 fn encrypted_documents_are_autosaved_encrypted_and_recovered_with_the_password() {
     let bytes = encrypted(fixture(2), "pw");
@@ -186,6 +188,13 @@ fn encrypted_documents_are_autosaved_encrypted_and_recovered_with_the_password()
     h.get_by_label_contains("password-protected");
     h.get_by_label("Recover").click();
     support::wait_until(&mut h, "recovery password prompt", |app| app.password_prompt.is_some());
+    // The prompt is laid out in the pass after the one that set it.
+    for _ in 0..10 {
+        if h.query_by_role(Role::PasswordInput).is_some() {
+            break;
+        }
+        h.run_steps(1);
+    }
     let field = h.get_by_role(Role::PasswordInput);
     field.focus();
     field.type_text("pw");
@@ -320,6 +329,8 @@ fn missing_corrupt_or_mismatched_metadata_recovers_the_snapshot_without_an_origi
     }
 }
 
+/// Check that an encrypted snapshot without metadata still asks for its password and is recovered without
+/// rewriting its bytes.
 #[test]
 fn an_encrypted_snapshot_without_metadata_still_requires_its_password() {
     let s = store("encrypted-orphan");
@@ -330,6 +341,12 @@ fn an_encrypted_snapshot_without_metadata_still_requires_its_password() {
     let mut h = harness(s.clone());
     h.get_by_label("Recover").click();
     support::wait_until(&mut h, "orphan recovery password prompt", |app| app.password_prompt.is_some());
+    for _ in 0..10 {
+        if h.query_by_role(Role::PasswordInput).is_some() {
+            break;
+        }
+        h.run_steps(1);
+    }
     assert!(h.state().views.is_empty());
     let field = h.get_by_role(Role::PasswordInput);
     field.focus();

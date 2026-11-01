@@ -69,13 +69,20 @@ pinned in `release.yml` and builds with `CRAFT_FONTS_DIR` and `CRAFT_FONTS_REQUI
 embed its Japanese fonts and fail rather than ship without them (`AGENTS.md` §1.4). Bump the pin
 deliberately.
 
-**OCR models:** every desktop package ships the Scan & OCR models (#103). The packaging scripts call
-`stage_models` (`packaging/env.sh`; `package.ps1` on Windows), which runs `cargo xtask models` to
-fetch every `kind = "model"` file in `ATTRIBUTION.toml` (verified by SHA-256) with its licence text
-and an `ATTRIBUTION.txt`, straight into the package, so packaging needs the network. They go where
-`pdfcraft_ocr::Models::dirs_beside_exe` looks: `models\` beside `pdfcraft.exe` (MSI, portable zip),
-`PdfCraft.app/Contents/Resources/models` (macOS), and `share/pdfcraft/models` beside `bin/`
-(deb, rpm, tar.gz, AppImage, Flatpak, FreeBSD). The web build doesn't include them yet.
+**OCR models:** desktop packaging stages the Scan & OCR models (#103).
+The packaging scripts call `stage_models` (`packaging/env.sh`; `package.ps1` on Windows), which runs `cargo xtask models` to fetch every `kind = "model"` file in `ATTRIBUTION.toml` and verify its SHA-256.
+The current detection and recognition files are `text-detection.onnx` and `text-recognition.onnx`.
+Each model ships with its licence text and the directory's `ATTRIBUTION.txt`, so packaging needs the network.
+Upstream announced the legacy RTEN download URLs' brownout in [ocrs #282](https://github.com/robertknight/ocrs/issues/282) on 2026-10-27 and directs consumers to the ONNX models.
+
+Runtime discovery prefers a complete ONNX detection/recognition pair within each directory, then a complete legacy `text-detection.rten` / `text-recognition.rten` pair.
+An incomplete ONNX update can therefore use an intact RTEN pair in the same directory.
+Discovery never combines model formats or files from different directories.
+Directory precedence stays the same: `$PDFCRAFT_MODELS`, the release-package locations beside the executable, then the source tree's `assets/models/`.
+The first directory with a complete supported pair wins, even if an earlier legacy pair precedes a later ONNX pair.
+
+The release-package locations are `models\` beside `pdfcraft.exe` (MSI, portable zip), `PdfCraft.app/Contents/Resources/models` (macOS), and `share/pdfcraft/models` beside `bin/` (deb, rpm, tar.gz, AppImage, Flatpak, FreeBSD).
+The web build does not include these models, and OCR remains limited to the Latin alphabet without accents.
 
 ### macOS
 
@@ -111,7 +118,9 @@ neither the MSI nor the portable zip needs the Visual C++ redistributable.
 - Before packaging, it reads both executables' PE headers: the machine type must match `-Arch`, and
   `pdfcraft.exe` must be a GUI-subsystem program (no console window, #57) while `pdfcraft-cli.exe`
   stays a console program.
-- `pdfcraft.wxs` (WiX v5) installs per machine into Program Files with a Start Menu shortcut, a
+- `pdfcraft.wxs` (WiX v5) is a dual-scope package (per-user by default into
+  `%LOCALAPPDATA%\Programs\ArtCraft\PdfCraft`, per-machine into `Program Files\ArtCraft\PdfCraft` (`Program Files (x86)` for the 32-bit build),
+  see `packaging/windows/INSTALLATION.md`) with a Start Menu shortcut, a
   desktop shortcut (on by default) and an App Paths entry. Both shortcuts are plain links to
   `pdfcraft.exe`, not advertised MSI shortcuts (#107, #143). The MSI version is the numeric `X.Y.Z`
   (MSI has no pre-release field), and same-version upgrades are allowed so release candidates replace
@@ -148,7 +157,18 @@ neither the MSI nor the portable zip needs the Visual C++ redistributable.
 - The portable zip holds both executables, the README, the licences, the OFL licence of each
   embedded craft-fonts family, and `portable.txt`. That marker beside `pdfcraft.exe` keeps the
   settings, logs, crash recovery and new digital IDs in `PdfCraftData\` next to the exe instead of
-  `%APPDATA%` and `%LOCALAPPDATA%` (`crates/ui-egui/src/portable.rs`).
+  `%APPDATA%` and `%LOCALAPPDATA%` (`crates/ui-egui/src/platform/portable.rs`). The MSI carries the same
+  OFL notices; `-SkipBuild` requires `CRAFT_FONTS_DIR` so they can be staged, or
+  `-BuiltWithoutCraftFonts` for binaries built without that input, and `test-msi.ps1` checks that
+  the compiled MSI has OFL notice rows when expected (and none for a no-font build).
+  Before either package is created, `font-notices.ps1` validates every declared OFL notice in
+  `fonts/manifest.txt` and the native `fonts/simplified-chinese-manifest.txt` when present
+  (required when `CRAFT_FONTS_REQUIRED` is set). Missing or empty family notices fail packaging;
+  one family's notice cannot cover another. The check conservatively includes declared faces
+  omitted by build-time size caps. `test-font-notices.ps1` exercises these failures in CI.
+  The supplied checkout must match the existing binaries when using `-SkipBuild`.
+  That presence check does not establish byte-for-byte payload or installation coverage;
+  final package qualification still checks all notices against the staged files.
 - **Signing:** `packaging/windows/sign.ps1` signs both executables and the MSI with `signtool`
   (SHA-256, RFC 3161 timestamp), from a `.pfx` (`WINDOWS_CERTIFICATE`) or Azure Trusted Signing
   (`AZURE_*`), whichever is configured. It is the one place to change when signing changes.

@@ -41,6 +41,62 @@ fn is_bmp(data: &[u8]) -> bool {
         && data.get(14..18).is_some_and(|b| matches!(u32::from_le_bytes([b[0], b[1], b[2], b[3]]), 12 | 16 | 40 | 52 | 56 | 64 | 108 | 124))
 }
 
+/// `data` with a BMP's pixel-data offset (`bfOffBits`) corrected when it points into the file or
+/// info header or at its end with masks or a colour table still to come, as some writers leave it at 0: the rows then start after the headers, the colour
+/// masks and the colour table. The `image` decoder seeks to the declared offset unchecked, so
+/// such a picture would be read from the wrong place, shifted and wrapped. Anything else,
+/// including a header too short to measure, is returned as it is.
+pub fn bmp_with_pixel_offset(data: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    match bmp_pixel_offset_repair(data) {
+        Some(offset) => {
+            let mut fixed = data.to_vec();
+            if let Some(field) = fixed.get_mut(10..14) {
+                field.copy_from_slice(&offset.to_le_bytes());
+            }
+            std::borrow::Cow::Owned(fixed)
+        }
+        None => std::borrow::Cow::Borrowed(data),
+    }
+}
+
+/// Where a BMP's rows start when its declared offset lies inside its headers, else `None`.
+fn bmp_pixel_offset_repair(data: &[u8]) -> Option<u32> {
+    let le16 = |at: usize| data.get(at..at + 2).map(|b| u32::from(u16::from_le_bytes([b[0], b[1]])));
+    let le32 = |at: usize| data.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+    if !is_bmp(data) {
+        return None;
+    }
+    let (declared, info_size) = (le32(10)?, le32(14)?);
+    let headers_end = info_size.checked_add(14)?;
+    // At the end of the headers is right only when no masks or colour table follow.
+    if declared > headers_end {
+        return None;
+    }
+    let (bpp, masks, used, entry) = if info_size == 12 {
+        // BITMAPCOREHEADER: 16-bit fields, no colour count, 3-byte table entries.
+        (le16(24)?, 0, 0, 3)
+    } else if info_size < 40 {
+        // OS/2's 16-byte header ends before the colour count; leave it to the decoder.
+        return None;
+    } else {
+        // BI_BITFIELDS and BI_ALPHABITFIELDS put their masks after a 40-byte header; the larger
+        // headers hold them inside.
+        let masks = match (info_size, le32(30)?) {
+            (40, 3) => 12,
+            (40, 6) => 16,
+            _ => 0,
+        };
+        (le16(28)?, masks, le32(46)?, 4)
+    };
+    let entries = match (used, bpp) {
+        (0, 1..=8) => 1 << bpp,
+        (0, _) => 0,
+        (n, _) => n,
+    };
+    let offset = entries.checked_mul(entry)?.checked_add(masks)?.checked_add(headers_end)?;
+    (offset != declared && usize::try_from(offset).ok()? <= data.len()).then_some(offset)
+}
+
 /// The pixel size, from the header alone; `None` when it can't be read or the image is bigger
 /// than can be decoded (so layout gives such a picture its box, not a page-high strip).
 pub fn size(data: &[u8]) -> Option<(u32, u32)> {
@@ -70,7 +126,7 @@ fn header_size(data: &[u8]) -> Option<(u32, u32)> {
             (w > 0 && h > 0).then_some((w, h))
         }
         // The decoders read only the headers (TIFF: the first IFD) until asked for pixels.
-        Kind::Bmp => reader(data, image::ImageFormat::Bmp).into_dimensions().ok().filter(|&(w, h)| w > 0 && h > 0),
+        Kind::Bmp => reader(&bmp_with_pixel_offset(data), image::ImageFormat::Bmp).into_dimensions().ok().filter(|&(w, h)| w > 0 && h > 0),
         Kind::Tiff => {
             use image::{ImageDecoder, metadata::Orientation};
             let mut decoder = reader(data, image::ImageFormat::Tiff).into_decoder().ok()?;
@@ -174,7 +230,8 @@ pub fn decode(data: &[u8]) -> Result<Decoded, String> {
                 Kind::Bmp => image::ImageFormat::Bmp,
                 _ => image::ImageFormat::Tiff,
             };
-            let img = if k == Kind::Tiff { decode_tiff(data) } else { reader(data, format).decode() }
+            let data = if k == Kind::Bmp { bmp_with_pixel_offset(data) } else { std::borrow::Cow::Borrowed(data) };
+            let img = if k == Kind::Tiff { decode_tiff(&data) } else { reader(&data, format).decode() }
                 .map_err(|e| if matches!(e, image::ImageError::Limits(_)) { too_big() } else { bad(e.to_string()) })?;
             let rgba = img.into_rgba8();
             let (width, height) = rgba.dimensions();

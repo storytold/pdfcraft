@@ -26,13 +26,14 @@ use vello_cpu::{
 /// PdfCraft patch: largest image drawn, in pixels (2^28 ≈ 268 MP, well above real page images).
 const MAX_IMAGE_PIXELS: u64 = 1 << 28;
 
+/// PdfCraft patch: below this device-pixels-per-source-pixel scale (shrunk by more than 2:1) an
+/// image that didn't ask for interpolation is still resampled smoothly.
+const MIN_NEAREST_SCALE: f32 = 0.5;
+
 /// PdfCraft patch: source axes allowed into CatmullRom planning. Unlike the final pixmap,
 /// sources need not fit u16: a 65536-pixel strip can safely shrink to a 16-pixel image.
 /// This resource cap follows the existing CCITT column limit; the filter-work estimate below
 /// additionally bounds tables/scratch before entering the opaque PicScale planner.
-/// PdfCraft patch: below this device-pixels-per-source-pixel scale (shrunk by more than 2:1) an
-/// image that didn't ask for interpolation is still resampled smoothly.
-const MIN_NEAREST_SCALE: f32 = 0.5;
 const MAX_RESAMPLING_SOURCE_SIDE: u32 = 1 << 20;
 const MAX_RESAMPLING_PLAN_BYTES: usize = 128 << 20;
 
@@ -433,30 +434,55 @@ fn may_paint_rect(rect: Rect, transform: Affine, width: u16, height: u16) -> boo
     paints_canvas(device, width, height)
 }
 
-/// PdfCraft patch: the whole-pixel device rectangle of a shrunk, axis-aligned image, as
-/// `(width, height, x0, y0)`. `transform` maps source pixels to device pixels and `planned` is the
-/// size [`image_resampling_size`] chose; `None` (draw as before) for rotated, skewed or flipped
-/// images, non-finite geometry, or a snapped size that strays more than a pixel from `planned`
-/// (so the memory budget that size passed still holds).
+/// PdfCraft patch: how far, in device pixels, the terms [`snap_minified_image`] drops may move an
+/// image's far edges: a hundredth of a pixel, which no edge shows. Rounding noise in a turned or
+/// scaled matrix stays far below it.
+const SNAP_SKEW: f64 = 0.01;
+
+/// PdfCraft patch: the whole-pixel device rectangle of a shrunk image whose axes lie along the
+/// device's, as `(width, height, transform)`: the size to shrink it to (along its own axes) and
+/// the transform that draws that raster 1:1, one source-axis step a whole device pixel. Upright,
+/// mirrored and quarter-turned images all qualify, so a page under `/Rotate` (or an image placed
+/// turned) is drawn as sharply as upright (#5530). `transform` maps source pixels to device
+/// pixels and `planned` is the size [`image_resampling_size`] chose; `None` (draw as before) for
+/// skewed or freely rotated images, non-finite geometry, or a snapped size that strays more than
+/// a pixel from `planned` (so the memory budget that size passed still holds). An image counts
+/// as axis-aligned when the terms the snap drops move its far edges by at most [`SNAP_SKEW`]: a
+/// tolerance on the coefficients alone let a slight skew of a very wide image through, though it
+/// moved the far edge by more than a pixel.
 fn snap_minified_image(
     transform: &Affine,
     source: (u32, u32),
     planned: (u32, u32),
-) -> Option<(u32, u32, f64, f64)> {
+) -> Option<(u32, u32, Affine)> {
     let [a, b, c, d, e, f] = transform.as_coeffs();
-    let tiny = 1e-4 * a.abs().max(d.abs());
-    if !(a > 0.0 && d > 0.0 && b.abs() <= tiny && c.abs() <= tiny) {
-        return None;
-    }
+    // The device span of a source edge from `origin` across `side` samples of `scale`, rounded.
     let edge = |origin: f64, scale: f64, side: u32| {
-        let (lo, hi) = (origin.round(), (origin + scale * f64::from(side)).round());
+        let (p, q) = (origin.round(), (origin + scale * f64::from(side)).round());
+        let (lo, hi) = (p.min(q), p.max(q));
         (hi - lo >= 1.0 && lo.abs() < 1e6 && hi.abs() < 1e6).then_some((lo, hi))
     };
-    let (x0, x1) = edge(e, a, source.0)?;
-    let (y0, y1) = edge(f, d, source.1)?;
-    // Bounded by the 1e6 check above, so the casts cannot saturate.
-    let (w, h) = ((x1 - x0) as u32, (y1 - y0) as u32);
-    (w.abs_diff(planned.0) <= 1 && h.abs_diff(planned.1) <= 1).then_some((w, h, x0, y0))
+    // Along an axis drawn backwards (negative scale), the raster starts at the span's far end.
+    let start = |scale: f64, (lo, hi): (f64, f64)| if scale > 0.0 { lo } else { hi };
+    let step = |scale: f64| if scale > 0.0 { 1.0 } else { -1.0 };
+    // How far a dropped term moves the image's far edge: `scale` across `side` source samples.
+    let negligible = |scale: f64, side: u32| (scale * f64::from(side)).abs() <= SNAP_SKEW;
+    let (width, height) = source;
+    // Source x along device x, source y along device y (upright or mirrored), or a quarter turn:
+    // source x along device y, source y along device x.
+    let (w, h, draw) = if negligible(b, width) && negligible(c, height) {
+        let (x, y) = (edge(e, a, source.0)?, edge(f, d, source.1)?);
+        // Bounded by the 1e6 check above, so the casts cannot saturate.
+        let (w, h) = ((x.1 - x.0) as u32, (y.1 - y.0) as u32);
+        (w, h, Affine::new([step(a), 0.0, 0.0, step(d), start(a, x), start(d, y)]))
+    } else if negligible(a, width) && negligible(d, height) {
+        let (x, y) = (edge(e, c, source.1)?, edge(f, b, source.0)?);
+        let (w, h) = ((y.1 - y.0) as u32, (x.1 - x.0) as u32);
+        (w, h, Affine::new([0.0, step(b), step(c), 0.0, start(c, x), start(b, y)]))
+    } else {
+        return None;
+    };
+    (w.abs_diff(planned.0) <= 1 && h.abs_diff(planned.1) <= 1).then_some((w, h, draw))
 }
 
 /// PdfCraft patch (19): what `Renderer::set_paint` found out: the clip path to apply while
@@ -467,6 +493,11 @@ enum PaintSetup {
     Clip(Option<BezPath>),
     Nothing,
 }
+
+/// PdfCraft patch (27): the largest group, in device pixels, blended in CMYK (2^24, a 4096 ×
+/// 4096 square). Each pixel costs about 20 bytes more than drawing the group as before (two
+/// pass canvases, its tints, their RGB and the result); a larger group is drawn as before.
+const MAX_CMYK_GROUP_PIXELS: u64 = 1 << 24;
 
 pub(crate) struct Renderer {
     pub(crate) ctx: RenderContext,
@@ -483,6 +514,9 @@ pub(crate) struct Renderer {
     /// how many transparency groups were skipped in it (nothing is layered while erasing).
     erasing: bool,
     erase_groups: usize,
+    /// PdfCraft patch (26): the knockout groups drawn in blend-mode passes
+    /// (`Device::begin_knockout_pass`), innermost last.
+    knockout_passes: Vec<KnockoutPass>,
     pub(crate) inside_pattern: bool,
     /// Soft masks drawn during this render. PdfCraft note: it belongs to one `Renderer` (one
     /// render, every nested renderer starting empty) and so to one `preview` setting: a mask
@@ -496,6 +530,50 @@ pub(crate) struct Renderer {
     pub(crate) preview: bool,
     // TODO: Remove this once vello_cpu bug with non-transparent images is fixed
     image_transparency_stack: Vec<bool>,
+    /// PdfCraft patch (27): set while this renderer draws one ink pass of a group blending
+    /// in `DeviceCMYK` (see [`Renderer::draw_isolated_cmyk_group`]).
+    ink: InkState,
+}
+
+/// PdfCraft patch (27): which inks a pass of a `DeviceCMYK` group draws, and whether the
+/// group asked for something a pass can't draw.
+///
+/// A pass paints the complement of ink tints as colour — no ink is white — so the RGB blend
+/// functions compute ISO 32000-2 §11.3.4's subtractive blend, `1 − B(1 − cb, 1 − cs)`, and
+/// complementing the pixels back gives the tints. The cyan, magenta and yellow pass paints
+/// them as red, green and blue, which is also how §11.3.5.3 has the nonseparable modes treat
+/// them. The black pass paints black ink as a grey, so a separable mode blends it like any
+/// tint, and of the nonseparable modes Hue, Saturation and Color keep the backdrop's grey
+/// while Luminosity takes the source's: §11.3.5.3's rule for the K component.
+#[derive(Clone, Copy, Default)]
+struct InkState {
+    pass: Option<InkPass>,
+    /// Something in the group has no ink tints (an RGB colour, a pattern, an image): the
+    /// group is drawn as before instead.
+    unsupported: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InkPass {
+    /// Cyan, magenta and yellow as red, green and blue.
+    Cmy,
+    /// Black as grey.
+    K,
+}
+
+impl InkState {
+    /// The colour a pass paints for `color`; transparent, with the group marked unsupported,
+    /// when the colour has no ink tints.
+    fn paint(&mut self, pass: InkPass, color: &Color) -> AlphaColor<Srgb> {
+        let Some(([c, m, y, k], alpha)) = color.ink_tints() else {
+            self.unsupported = true;
+            return AlphaColor::TRANSPARENT;
+        };
+        match pass {
+            InkPass::Cmy => AlphaColor::new([1.0 - c, 1.0 - m, 1.0 - y, alpha]),
+            InkPass::K => AlphaColor::new([1.0 - k, 1.0 - k, 1.0 - k, alpha]),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -509,6 +587,32 @@ impl Renderer {
     /// PdfCraft patch (22): whether the innermost transparency group is a knockout group.
     fn in_knockout(&self) -> bool {
         self.knockout.last().copied().unwrap_or(false)
+    }
+
+    /// PdfCraft patch (26): the blend-mode pass of the innermost group, when that group is a
+    /// knockout group drawn in passes, so the element now drawn is one of its own elements.
+    fn knockout_pass(&mut self) -> Option<&mut KnockoutPass> {
+        let depth = self.knockout.len();
+        if !self.in_knockout() {
+            return None;
+        }
+        self.knockout_passes.last_mut().filter(|pass| pass.depth == depth)
+    }
+
+    /// PdfCraft patch (26): whether an element of blend mode `mode` belongs to another pass than
+    /// the current one, so here it clears what is under its shape instead of painting. Records
+    /// the mode for its own pass.
+    fn knockout_pass_skips(&mut self, mode: BlendMode) -> bool {
+        let Some(pass) = self.knockout_pass() else {
+            return false;
+        };
+        if mode == pass.mode {
+            return false;
+        }
+        if !pass.other_modes.contains(&mode) {
+            pass.other_modes.push(mode);
+        }
+        true
     }
 
     pub(crate) fn new(
@@ -525,6 +629,7 @@ impl Renderer {
             in_annotations: false,
             knockout: Vec::new(),
             erasing: false,
+            knockout_passes: Vec::new(),
             erase_groups: 0,
             inside_pattern: false,
             soft_mask_cache: HashMap::default(),
@@ -534,6 +639,7 @@ impl Renderer {
             scaler: Scaler::new(ResamplingFunction::CatmullRom),
             preview,
             image_transparency_stack: Vec::new(),
+            ink: InkState::default(),
         }
     }
 
@@ -629,6 +735,7 @@ impl Renderer {
                 in_annotations: false,
                 knockout: Vec::new(),
                 erasing: false,
+                knockout_passes: Vec::new(),
                 erase_groups: 0,
                 inside_pattern: false,
                 soft_mask_cache: HashMap::default(),
@@ -638,6 +745,7 @@ impl Renderer {
                 scaler: self.scaler,
                 preview: self.preview,
                 image_transparency_stack: Vec::new(),
+                ink: InkState::default(),
             };
             let mut mask_pix = Pixmap::new(self.ctx.width(), self.ctx.height());
             let rgb_data = ImageData::Rgb(RgbData {
@@ -938,10 +1046,11 @@ impl Renderer {
         if requested_resize && self.in_type3_glyph && interpolate {
             quality = ImageQuality::High;
         }
-        // PdfCraft patch: an axis-aligned, interpolated image that is shrunk lands on whole device
-        // pixels. It is shrunk once to exactly its snapped device rectangle and drawn 1:1 at the
-        // snapped corner. Otherwise the shrunk raster (rounded up to a whole size) is sampled a
-        // second time at a fractional scale and offset, which blurs scans and photos.
+        // PdfCraft patch: an interpolated image that is shrunk, with its axes along the device's
+        // (upright, mirrored or a quarter turn), lands on whole device pixels. It is shrunk once to
+        // exactly its snapped device rectangle and drawn 1:1 from the snapped corner. Otherwise the
+        // shrunk raster (rounded up to a whole size) is sampled a second time at a fractional scale
+        // and offset, which blurs scans and photos.
         let snapped = if interpolate
             && requested_resize
             && !self.in_type3_glyph
@@ -1103,9 +1212,12 @@ impl Renderer {
             img_height as u16,
             may_have_transparency,
         );
+        // The snapped transform draws the raster 1:1, so it holds only if the shrink produced the
+        // snapped size. A failed resize hands back the source raster: drawn 1:1 it would come out
+        // at its source size, so it keeps the full transform instead.
         let draw_transform = match snapped {
-            Some((_, _, x0, y0)) => Affine::translate((x0, y0)),
-            None => cur_transform * additional_transform,
+            Some((w, h, draw)) if (img_width, img_height) == (w, h) => draw,
+            _ => cur_transform * additional_transform,
         };
         self.draw_pixmap(Arc::new(pixmap), quality, draw_transform);
     }
@@ -1138,6 +1250,54 @@ impl Renderer {
             .fill_rect(&Rect::new(0.0, 0.0, width as f64, height as f64));
     }
 
+    /// PdfCraft patch (27): one ink pass of `group` (see [`InkState`]) on a `width` × `height`
+    /// canvas whose corner is device point `offset`; `None` when the group holds something the
+    /// pass has no tints for.
+    fn ink_pass(
+        &self,
+        group: &hayro_interpret::CmykGroup<'_, '_>,
+        pass: InkPass,
+        offset: (f64, f64),
+        width: u16,
+        height: u16,
+    ) -> Option<Pixmap> {
+        let mut renderer = Self {
+            ctx: RenderContext::new_with(width, height, derive_settings(self.ctx.render_settings())),
+            color_replacement: None,
+            in_annotations: self.in_annotations,
+            inside_pattern: self.inside_pattern,
+            soft_mask_cache: HashMap::default(),
+            outline_cache: self.outline_cache.clone(),
+            cur_mask: None,
+            in_type3_glyph: false,
+            scaler: Scaler::new(ResamplingFunction::CatmullRom),
+            preview: self.preview,
+            image_transparency_stack: Vec::new(),
+            ink: InkState {
+                pass: Some(pass),
+                unsupported: false,
+            },
+            knockout: Vec::new(),
+            erasing: false,
+            erase_groups: 0,
+            knockout_passes: Vec::new(),
+        };
+        // The pass draws inside a layer of its own. On the bare canvas, vello_cpu fills a tile
+        // that a paint covers completely without the blend mode, so the middle of a group wider
+        // than about two tiles lost its blend (#3777).
+        renderer.ctx.push_layer(None, None, None, None, None);
+        group.interpret(&mut renderer, offset);
+        renderer.ctx.pop_layer();
+        if renderer.ink.unsupported {
+            return None;
+        }
+        let mut pix = Pixmap::new(width, height);
+        renderer.ctx.flush();
+        let mut resources = vello_cpu::Resources::default();
+        renderer.ctx.render_to_pixmap(&mut resources, &mut pix);
+        Some(pix)
+    }
+
     /// PdfCraft patch: remaps a solid paint colour through `color_replacement`, if one is
     /// set. `Paint::Pattern` (images, shadings, tiling patterns) always passes through
     /// untouched.
@@ -1162,27 +1322,100 @@ impl Renderer {
         }
     }
 
+    /// The device-space area a shading painted on `path` covers: the path's bounding box, with
+    /// the stroke width around it for a stroke, on the canvas.
+    fn shading_bbox(&self, path: &BezPath, is_stroke: bool) -> Rect {
+        let path_transform = self.ctx.transform();
+        let mut bbox = (*path_transform * path.clone()).bounding_box();
+        if is_stroke {
+            // Try to account for stroke in bbox.
+            let (a1, a2) = x_y_advances(path_transform);
+            let factor = a1.length().max(a2.length()) * self.ctx.stroke().width;
+            bbox = bbox.inflate(factor, factor);
+        }
+        bbox.intersect(Rect::new(
+            0.0,
+            0.0,
+            self.ctx.width() as f64,
+            self.ctx.height() as f64,
+        ))
+    }
+
     #[must_use]
     fn set_paint(&mut self, paint: &Paint<'_>, path: &BezPath, is_stroke: bool) -> PaintSetup {
         // PdfCraft patch (22): in a knockout erase pass every paint clears what is under its
         // shape (a transparent fill with `Compose::Copy`, weighted by coverage).
-        if self.erasing {
+        let element_mode = self.knockout_pass().map(|pass| pass.element_mode);
+        let other_pass =
+            !self.erasing && element_mode.is_some_and(|mode| self.knockout_pass_skips(mode));
+        if self.erasing || other_pass {
+            if is_shading(paint) {
+                self.knockout_shading(paint, path, is_stroke, false);
+                return PaintSetup::Nothing;
+            }
             self.ctx.set_blend_mode(knockout_blend_mode());
             self.ctx.set_paint(AlphaColor::<Srgb>::new([0.0, 0.0, 0.0, 0.0]));
-            // A shading's `/BBox` clips what it paints, so it clips what it clears too.
-            return PaintSetup::Clip(match paint {
-                Paint::Pattern(p) => match p.as_ref() {
-                    Pattern::Shading(s) => s.shading.clip_path.clone(),
-                    _ => None,
-                },
-                _ => None,
-            });
+            return PaintSetup::Clip(None);
         }
+        if self.in_knockout() && is_shading(paint) {
+            self.knockout_shading(paint, path, is_stroke, true);
+            return PaintSetup::Nothing;
+        }
+        self.paint_setup(paint, path, is_stroke)
+    }
+
+    /// PdfCraft patch (26): a shading in a knockout group replaces what is under it where it
+    /// paints, which a mesh's triangles or the shading's `/BBox` may make less than the path,
+    /// so it can't be copied over the path like other paints. The shading at full opacity,
+    /// composited with `Compose::DestOut`, clears its shape; then, when `paint_it`, the shading
+    /// is painted over the cleared area. A shading that paints nothing clears nothing. The
+    /// caller paints nothing more.
+    fn knockout_shading(&mut self, paint: &Paint<'_>, path: &BezPath, is_stroke: bool, paint_it: bool) {
+        let PaintSetup::Clip(clip) = self.paint_setup(&shape_of(paint), path, is_stroke) else { return };
+        if let Some(clip) = clip.as_ref() {
+            self.push_clip_path_inner(clip, FillRule::NonZero);
+        }
+        self.ctx.set_blend_mode(peniko::BlendMode::new(Mix::Normal, Compose::DestOut));
+        self.draw_shape(path, is_stroke);
+        if paint_it && let PaintSetup::Clip(_) = self.paint_setup(paint, path, is_stroke) {
+            self.ctx.set_blend_mode(peniko::BlendMode::new(Mix::Normal, Compose::SrcOver));
+            self.draw_shape(path, is_stroke);
+        }
+        if clip.is_some() {
+            self.ctx.pop_clip_path();
+        }
+        self.ctx.set_blend_mode(knockout_blend_mode());
+    }
+
+    fn draw_shape(&mut self, path: &BezPath, is_stroke: bool) {
+        if is_stroke {
+            self.ctx.stroke_path(path);
+        } else {
+            self.ctx.fill_path(path);
+        }
+    }
+
+    /// The paint `paint` draws on `path` with, set on the context (see [`PaintSetup`]).
+    fn paint_setup(&mut self, paint: &Paint<'_>, path: &BezPath, is_stroke: bool) -> PaintSetup {
         let mut paint_transform = Affine::IDENTITY;
         let mut clip_path = None;
         // PdfCraft patch (19): `Extend::Repeat` tiles the texture over the path; a mesh texture
         // covers its triangles alone and must not repeat outside them.
         let mut extend = peniko::Extend::Repeat;
+
+        // PdfCraft patch (27): an ink pass paints tints, and has none for a pattern.
+        if let Some(pass) = self.ink.pass {
+            let color = match paint {
+                Paint::Color(c) => self.ink.paint(pass, c),
+                Paint::Pattern(_) => {
+                    self.ink.unsupported = true;
+                    AlphaColor::TRANSPARENT
+                }
+            };
+            self.ctx.set_paint_transform(Affine::IDENTITY);
+            self.ctx.set_paint(color);
+            return PaintSetup::Clip(None);
+        }
 
         let paint: PaintType = match paint.clone() {
             Paint::Color(c) => {
@@ -1195,21 +1428,7 @@ impl Renderer {
                 match *p {
                     Pattern::Shading(s) => {
                         clip_path = s.shading.clip_path.clone();
-                        let mut bbox = (*path_transform * path.clone()).bounding_box();
-
-                        if is_stroke {
-                            // Try to account for stroke in bbox.
-                            let (a1, a2) = x_y_advances(path_transform);
-                            let factor = a1.length().max(a2.length()) * self.ctx.stroke().width;
-                            bbox = bbox.inflate(factor, factor);
-                        }
-
-                        bbox = bbox.intersect(Rect::new(
-                            0.0,
-                            0.0,
-                            self.ctx.width() as f64,
-                            self.ctx.height() as f64,
-                        ));
+                        let mut bbox = self.shading_bbox(path, is_stroke);
 
                         // PdfCraft patch: mesh shadings are sampled only inside `bbox` (and a
                         // pixel around it: texels at a fractional edge look one pixel further).
@@ -1222,18 +1441,11 @@ impl Renderer {
                         // now covers the triangles alone (a pixel around them, which stays
                         // transparent and is what `Extend::Pad` repeats), and a mesh with no
                         // triangle on the canvas paints nothing at all.
-                        if let Some(extent) = encoded.extent {
-                            // An empty extent (no triangle in the area) is `Rect::ZERO`, which
-                            // sits at the canvas origin: test it before intersecting, or a
-                            // 1 × 1 transparent texture would still be painted over the whole
-                            // path (310 of them cost 230 ms per tile).
-                            if extent.width() <= 0.0 || extent.height() <= 0.0 {
+                        if encoded.extent.is_some() {
+                            let Some(area) = mesh_area(bbox, &encoded) else {
                                 return PaintSetup::Nothing;
-                            }
-                            bbox = bbox.intersect(extent.inflate(1.0, 1.0));
-                            if bbox.width() <= 0.0 || bbox.height() <= 0.0 {
-                                return PaintSetup::Nothing;
-                            }
+                            };
+                            bbox = area;
                             extend = peniko::Extend::Pad;
                         }
 
@@ -1328,6 +1540,7 @@ impl Renderer {
                                 in_annotations: false,
                                 knockout: Vec::new(),
                                 erasing: false,
+                                knockout_passes: Vec::new(),
                                 erase_groups: 0,
                                 cur_mask: None,
                                 inside_pattern: true,
@@ -1337,6 +1550,7 @@ impl Renderer {
                                 scaler: self.scaler,
                                 preview: self.preview,
                                 image_transparency_stack: Vec::new(),
+                                ink: InkState::default(),
                             };
                             let initial_transform = Affine::translate((BORDER, BORDER))
                                 * Affine::scale_non_uniform(xs as f64, ys as f64)
@@ -1390,6 +1604,7 @@ impl Renderer {
                             in_annotations: false,
                             knockout: Vec::new(),
                             erasing: false,
+                            knockout_passes: Vec::new(),
                             erase_groups: 0,
                             cur_mask: None,
                             inside_pattern: true,
@@ -1399,6 +1614,7 @@ impl Renderer {
                             scaler: self.scaler,
                             preview: self.preview,
                             image_transparency_stack: Vec::new(),
+                            ink: InkState::default(),
                         };
                         let mut initial_transform = Affine::scale_non_uniform(xs, ys)
                             * Affine::translate((-bbox.x0, -bbox.y0));
@@ -1584,6 +1800,12 @@ impl Renderer {
 
 impl<'a> Device<'a> for Renderer {
     fn draw_image(&mut self, image: hayro_interpret::Image<'a, '_>, mut transform: Affine) {
+        // PdfCraft patch (27): an image's pixels are converted to RGB before they reach the
+        // device, so an ink pass has no tints for them; the group is drawn as before.
+        if self.ink.pass.is_some() {
+            self.ink.unsupported = true;
+            return;
+        }
         // PdfCraft patch (22): an erase pass paints nothing; an unmasked image's rectangle was
         // cleared by `knockout_shape`, and a masked image's shape is left alone.
         if self.erasing {
@@ -1688,6 +1910,7 @@ impl<'a> Device<'a> for Renderer {
                                         in_annotations: false,
                                         knockout: Vec::new(),
                                         erasing: false,
+                                        knockout_passes: Vec::new(),
                                         erase_groups: 0,
                                         inside_pattern: false,
                                         soft_mask_cache: HashMap::default(),
@@ -1697,6 +1920,7 @@ impl<'a> Device<'a> for Renderer {
                                         scaler: self.scaler,
                                         preview: self.preview,
                                         image_transparency_stack: Vec::new(),
+                                        ink: InkState::default(),
                                     };
                                     let mut sub_pix = Pixmap::new(width, height);
                                     sub_renderer.ctx.set_transform(transform);
@@ -1760,6 +1984,87 @@ impl<'a> Device<'a> for Renderer {
         self.push_clip_path_inner(&clip_path.path, clip_path.fill);
     }
 
+    /// PdfCraft patch (27): a nested group blending in another space can't be drawn in a pass.
+    fn group_blends_outside_device_cmyk(&mut self) {
+        if self.ink.pass.is_some() {
+            self.ink.unsupported = true;
+        }
+    }
+
+    /// PdfCraft patch (27), with hayro-interpret patch (70): an isolated group that blends in
+    /// `DeviceCMYK` (ISO 32000-2 §11.3.4). Its contents are drawn twice on canvases of their own,
+    /// as cyan-magenta-yellow and as black (see [`InkState`]), and the tints those passes leave
+    /// are converted to RGB through the CMYK profile solid CMYK colour is drawn with. The
+    /// result goes into the layer the interpreter pushed for the group, which composites it
+    /// with the group's opacity, soft mask and blend mode as before. Declined (and so drawn as
+    /// before) under reading colours, inside a pass (a nested group then blends in the pass's
+    /// own CMYK), while erasing for a knockout group (the contents must clear, not paint), and
+    /// for contents a pass has no tints for.
+    fn draw_isolated_cmyk_group(&mut self, group: &hayro_interpret::CmykGroup<'a, '_>) -> bool {
+        if self.color_replacement.is_some() || self.ink.pass.is_some() || self.erasing {
+            return false;
+        }
+        let canvas = Rect::new(0.0, 0.0, f64::from(self.ctx.width()), f64::from(self.ctx.height()));
+        let area = group.device_bbox().intersect(canvas);
+        if !(area.width() > 0.0 && area.height() > 0.0) {
+            // Nothing of the group is on the canvas (a NaN box lands here too).
+            return true;
+        }
+        let (x0, y0) = (area.x0.floor(), area.y0.floor());
+        // Within the canvas, so the sides fit its u16 ones.
+        let width = (area.x1.ceil() - x0) as u16;
+        let height = (area.y1.ceil() - y0) as u16;
+        if width == 0 || height == 0 {
+            return true;
+        }
+        if u64::from(width) * u64::from(height) > MAX_CMYK_GROUP_PIXELS {
+            return false;
+        }
+
+        let Some(cmy) = self.ink_pass(group, InkPass::Cmy, (x0, y0), width, height) else {
+            return false;
+        };
+        let Some(k) = self.ink_pass(group, InkPass::K, (x0, y0), width, height) else {
+            return false;
+        };
+
+        // A tint is a pass's premultiplied colour un-premultiplied and complemented.
+        let ink = |premul: u8, alpha: u8| {
+            if alpha == 0 {
+                return 0;
+            }
+            let straight = (u32::from(premul) * 255 + u32::from(alpha) / 2) / u32::from(alpha);
+            255 - straight.min(255) as u8
+        };
+        let pixels = usize::from(width) * usize::from(height);
+        let mut tints = Vec::with_capacity(pixels * 4);
+        for (p, q) in cmy.data().iter().zip(k.data()) {
+            // Both passes draw the same shapes at the same opacities, so they cover the same
+            // pixels by the same amounts; each pass's own alpha un-premultiplies its colour.
+            tints.extend_from_slice(&[ink(p.r, p.a), ink(p.g, p.a), ink(p.b, p.a), ink(q.r, q.a)]);
+        }
+        let mut rgb = vec![0u8; pixels * 3];
+        if hayro_interpret::color::cmyk_to_srgb8(&tints, &mut rgb).is_none() {
+            return false;
+        }
+
+        let mut result = Pixmap::new(width, height);
+        for ((px, rgb), coverage) in result.data_mut().iter_mut().zip(rgb.chunks_exact(3)).zip(cmy.data()) {
+            let a = u32::from(coverage.a);
+            let premul = |v: u8| ((u32::from(v) * a + 127) / 255) as u8;
+            *px = PremulRgba8 { r: premul(rgb[0]), g: premul(rgb[1]), b: premul(rgb[2]), a: coverage.a };
+        }
+
+        // The group's own soft mask and blend mode are on its layer; what the contents set
+        // must not apply to the finished pixels a second time.
+        self.set_soft_mask(None);
+        self.set_blend_mode(BlendMode::Normal);
+        // A pattern painted earlier leaves its paint transform on the context.
+        self.ctx.set_paint_transform(Affine::IDENTITY);
+        self.draw_pixmap(Arc::new(result), ImageQuality::Low, Affine::translate((x0, y0)));
+        true
+    }
+
     fn push_transparency_group(
         &mut self,
         opacity: f32,
@@ -1771,6 +2076,15 @@ impl<'a> Device<'a> for Renderer {
             self.erase_groups += 1;
             return;
         }
+        // PdfCraft patch (26): an image or group of another pass than the current one clears
+        // what is under its shape instead of painting: its layer, drawn at full opacity with no
+        // soft mask, composites with `Compose::DestOut`. That clears the coverage of a masked
+        // image's or a stencil's mask too, which `knockout_image` leaves alone.
+        let (opacity, mask, layer_blend) = if self.knockout_pass_skips(blend_mode) {
+            (1.0, None, peniko::BlendMode::new(Mix::Normal, Compose::DestOut))
+        } else {
+            (opacity, mask, convert_blend_mode(blend_mode))
+        };
         let settings = *self.ctx.render_settings();
         let force_images_may_have_transparency = mask.is_some()
             || blend_mode != BlendMode::Normal
@@ -1781,7 +2095,7 @@ impl<'a> Device<'a> for Renderer {
                 .unwrap_or(false);
         self.ctx.push_layer(
             None,
-            Some(convert_blend_mode(blend_mode)),
+            Some(layer_blend),
             Some(opacity),
             // TODO: Deduplicate
             mask.map(|m| {
@@ -1847,6 +2161,32 @@ impl<'a> Device<'a> for Renderer {
         self.erasing = false;
         self.erase_groups = 0;
         self.ctx.set_blend_mode(knockout_blend_mode());
+    }
+
+    fn begin_knockout_pass(&mut self, mode: BlendMode) {
+        if self.in_knockout() && !self.erasing {
+            self.knockout_passes.push(KnockoutPass {
+                depth: self.knockout.len(),
+                mode,
+                element_mode: BlendMode::Normal,
+                other_modes: Vec::new(),
+            });
+        }
+    }
+
+    fn end_knockout_pass(&mut self) -> Vec<BlendMode> {
+        // In an erase pass `begin_knockout_pass` started nothing; the pass at this depth belongs
+        // to the knockout group being erased into, and stays.
+        if self.erasing {
+            return Vec::new();
+        }
+        let depth = self.knockout.len();
+        match self.knockout_passes.last() {
+            Some(pass) if pass.depth == depth => {
+                self.knockout_passes.pop().map(|pass| pass.other_modes).unwrap_or_default()
+            }
+            _ => Vec::new(),
+        }
     }
 
     fn in_knockout_group(&mut self) -> bool {
@@ -1988,6 +2328,13 @@ impl<'a> Device<'a> for Renderer {
     }
 
     fn set_blend_mode(&mut self, blend_mode: BlendMode) {
+        // PdfCraft patch (26): the blend mode of the element about to paint, for its pass (an
+        // erase pass paints nothing, and its content's modes are not the element's).
+        if !self.erasing
+            && let Some(pass) = self.knockout_pass()
+        {
+            pass.element_mode = blend_mode;
+        }
         // PdfCraft patch (22): inside a knockout group every element replaces what it covers.
         let mode = if self.in_knockout() {
             knockout_blend_mode()
@@ -2080,6 +2427,7 @@ fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, hei
         in_annotations: false,
         knockout: Vec::new(),
         erasing: false,
+        knockout_passes: Vec::new(),
         erase_groups: 0,
         inside_pattern: false,
         cur_mask: None,
@@ -2089,6 +2437,7 @@ fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, hei
         scaler: Scaler::new(ResamplingFunction::CatmullRom),
         preview,
         image_transparency_stack: Vec::new(),
+        ink: InkState::default(),
     };
 
     let bg_color = mask.background_color().to_rgba();
@@ -2175,9 +2524,57 @@ fn convert_fill_rule(fill_rule: FillRule) -> Fill {
     }
 }
 
+/// PdfCraft patch (26): one blend-mode pass over a knockout group (`Device::begin_knockout_pass`).
+struct KnockoutPass {
+    /// `knockout.len()` with the group pushed: its own elements are drawn at this depth.
+    depth: usize,
+    /// The blend mode whose elements paint in this pass.
+    mode: BlendMode,
+    /// The blend mode of the element painting now (`set_blend_mode`).
+    element_mode: BlendMode,
+    /// The other blend modes this pass's elements used, each once (at most one per mode).
+    other_modes: Vec<BlendMode>,
+}
+
+/// PdfCraft patch (26): `paint` at full opacity, for the shape it covers.
+fn shape_of<'a>(paint: &Paint<'a>) -> Paint<'a> {
+    match paint {
+        Paint::Pattern(p) => match p.as_ref() {
+            Pattern::Shading(s) => {
+                let mut s = s.clone();
+                s.opacity = 1.0;
+                Paint::Pattern(Box::new(Pattern::Shading(s)))
+            }
+            Pattern::Tiling(_) => paint.clone(),
+        },
+        Paint::Color(_) => paint.clone(),
+    }
+}
+
+/// PdfCraft patch (26): whether `paint` is a shading.
+fn is_shading(paint: &Paint<'_>) -> bool {
+    matches!(paint, Paint::Pattern(p) if matches!(p.as_ref(), Pattern::Shading(_)))
+}
+
 /// PdfCraft patch (22): how an element of a knockout group is drawn (see `set_knockout`).
 fn knockout_blend_mode() -> peniko::BlendMode {
     peniko::BlendMode::new(Mix::Normal, Compose::Copy)
+}
+
+/// PdfCraft patch (19): the part of `bbox` a shading encoded within it paints. A mesh paints
+/// only around its triangles, and nothing (`None`) when none is in `bbox`; its empty extent is
+/// `Rect::ZERO`, at the canvas origin, so it is tested before intersecting, or a 1 × 1
+/// transparent texture would still be painted over the whole path (310 of them cost 230 ms per
+/// tile). Any other shading paints all of `bbox`.
+fn mesh_area(bbox: Rect, encoded: &EncodedShadingPattern) -> Option<Rect> {
+    let Some(extent) = encoded.extent else {
+        return Some(bbox);
+    };
+    if extent.width() <= 0.0 || extent.height() <= 0.0 {
+        return None;
+    }
+    let area = bbox.intersect(extent.inflate(1.0, 1.0));
+    (area.width() > 0.0 && area.height() > 0.0).then_some(area)
 }
 
 fn convert_blend_mode(blend_mode: BlendMode) -> peniko::BlendMode {
@@ -2276,4 +2673,29 @@ pub fn tiling_cell_pixels(scale: f32, step: f32, max_pixels: f32) -> (u16, f64) 
     // `pixels` is in 1..=u16::MAX, so the cast is exact; `step` is positive and finite here
     // (`exact` is), so the division is too.
     (pixels as u16, pixels / step)
+}
+
+#[cfg(test)]
+mod snap_tests {
+    use super::{snap_minified_image, Affine};
+
+    /// The skew a snap drops is measured as the distance it moves the image's far edge, not as a
+    /// coefficient against the scale: a 40 000 sample wide image skewed by 4e-5 per sample moves
+    /// its far edge 1.6 device pixels, and must keep its full transform (#5640 review).
+    #[test]
+    fn a_skew_that_moves_a_far_edge_is_not_snapped() {
+        let source = (40_000, 400);
+        let planned = (20_000, 200);
+        // Upright, shrunk to half, sheared so the far end sits 1.6 pixels lower: not snapped.
+        let skewed = Affine::new([0.5, 4e-5, 0.0, 0.5, 0.3, 0.3]);
+        assert!(snap_minified_image(&skewed, source, planned).is_none());
+        // A quarter turn with the same stray term along device x: not snapped either.
+        let turned = Affine::new([4e-5, 0.5, -0.5, 0.0, 200.3, 0.3]);
+        assert!(snap_minified_image(&turned, source, (20_000, 200)).is_none());
+        // Rounding noise far below a hundredth of a pixel at the far edge still snaps.
+        let noisy = Affine::new([0.5, 1e-9, 0.0, 0.5, 0.3, 0.3]);
+        assert!(snap_minified_image(&noisy, source, planned).is_some());
+        let turned_noisy = Affine::new([1e-9, 0.5, -0.5, 0.0, 200.3, 0.3]);
+        assert!(snap_minified_image(&turned_noisy, source, (20_000, 200)).is_some());
+    }
 }
