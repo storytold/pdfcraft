@@ -391,7 +391,7 @@ mod rename_field_tests {
             output.drop_without_applying_deltas();
         }
         let range = egui::TextEdit::load_state(&ctx, id).and_then(|s| s.cursor.char_range());
-        let span = range.map(|r| (r.primary.index.min(r.secondary.index), r.primary.index.max(r.secondary.index)));
+        let span = range.map(|r| (r.primary.index.0.min(r.secondary.index.0), r.primary.index.0.max(r.secondary.index.0)));
         assert_eq!(span, Some((0, 8)));
     }
 }
