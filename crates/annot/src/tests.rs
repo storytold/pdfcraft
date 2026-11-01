@@ -2472,3 +2472,99 @@ fn check_4153_hebrew_fill_sign_text_fits_the_box_sized_for_it() {
     }
     assert!(failures.is_empty(), "{failures:#?}");
 }
+
+#[test]
+fn mixed_text_box_paragraphs_align_their_own_direction_in_drawing_and_rich_text() {
+    if pdfcraft_fonts::document_hebrew_font(false).is_none() {
+        return;
+    }
+    let mut doc = fixture();
+    let mut annotation = new(0, Shape::TextBox { rect: [100.0, 500.0, 400.0, 600.0], font_size: 12.0 });
+    annotation.contents = "Hello\nשלום".into();
+    let index = add_annotation(&mut doc, &annotation, &meta("mixed-directions")).unwrap();
+    let annotation = &list(&doc, 0)[index];
+    assert_eq!(annotation.int(b"Q"), Some(0), "the annotation keeps its default quadding");
+    let positions = tm_positions(&ap_content(&doc, annotation));
+    assert!(positions.first().unwrap().0 < 110.0, "the English paragraph stays at the left: {positions:?}");
+    assert!(positions.last().unwrap().0 > 350.0, "the Hebrew paragraph ends at the right: {positions:?}");
+    let rc = text(annotation, b"RC");
+    assert!(rc.contains("<p dir=\"ltr\">Hello</p>"), "{rc}");
+    assert!(rc.contains("<p dir=\"rtl\" style=\"text-align:right\">שלום</p>"), "{rc}");
+}
+
+#[test]
+fn retyping_right_to_left_keeps_explicit_centered_quadding() {
+    if pdfcraft_fonts::document_hebrew_font(false).is_none() {
+        return;
+    }
+    let mut doc = fixture();
+    let annotation = new(0, Shape::TextBox { rect: [100.0, 500.0, 400.0, 600.0], font_size: 12.0 });
+    let index = add_annotation(&mut doc, &annotation, &meta("centered")).unwrap();
+    let (_, reference) = annot_ref(&mut doc, 0, index).unwrap();
+    doc.update_dict(reference, |d| d.set(b"Q".to_vec(), Object::Int(1))).unwrap();
+    set_contents(&mut doc, 0, index, "שלום", &meta("")).unwrap();
+    let annotation = &list(&doc, 0)[index];
+    assert_eq!(annotation.int(b"Q"), Some(1));
+    let width = pdfcraft_fonts::appearance_text::wrap("שלום", 12.0, 300.0).unwrap()[0].width;
+    let start = tm_positions(&ap_content(&doc, annotation)).iter().map(|p| p.0).fold(f64::MAX, f64::min);
+    assert!((start - (250.0 - width / 2.0)).abs() < 0.01, "the Hebrew stays centered: {start}");
+    let rc = text(annotation, b"RC");
+    assert!(rc.contains("text-align:center") && !rc.contains("text-align:right"), "{rc}");
+}
+
+#[test]
+fn rich_text_cr_crlf_and_lf_break_paragraphs_once_and_keep_empty_paragraphs() {
+    let mut annotation = Dict::new();
+    annotation.set(b"Contents".to_vec(), PdfString::text("One\rTwo\r\nThree\n\nFour\r"));
+    super::modify::rich_text(&mut annotation);
+    let rc = text(&annotation, b"RC");
+    let paragraphs =
+        "<p dir=\"ltr\">One</p><p dir=\"ltr\">Two</p><p dir=\"ltr\">Three</p><p dir=\"ltr\"></p><p dir=\"ltr\">Four</p><p dir=\"ltr\"></p>";
+    assert!(rc.contains(paragraphs), "{rc}");
+    assert_eq!(rc.matches("<p ").count(), 6, "a CRLF pair breaks once, while empty paragraphs remain");
+    assert!(!rc.contains('\r'), "rich text must not contain an unconverted carriage return: {rc}");
+}
+
+#[test]
+fn marked_hebrew_and_arabic_text_boxes_use_shaped_width_and_wrap_count() {
+    if pdfcraft_fonts::document_hebrew_font(false).is_none() || pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    for typed in ["שָׁלוֹם", "السَّلَامُ"] {
+        for size in [10.0, 18.0, 24.0] {
+            let measured = appearance::text_width(typed, size);
+            let shaped = pdfcraft_fonts::appearance_text::wrap(typed, size, 1.0e6).unwrap()[0].width;
+            assert!((measured - shaped).abs() < 1.0e-6, "{typed:?} at {size} pt: measured {measured} for {shaped} pt of text");
+            let wrapped = appearance::wrap(typed, size, shaped + 1.0);
+            assert_eq!(wrapped, [typed], "marks must not become extra Helvetica placeholders or wrapped rows");
+        }
+    }
+    let plain = "Cafe 123";
+    assert_eq!(appearance::text_width(plain, 12.0), pdfcraft_fonts::helvetica_width(plain, 12.0));
+    assert_eq!(appearance::wrap(plain, 12.0, 35.0), pdfcraft_fonts::wrap(plain, 12.0, 35.0));
+}
+
+/// Line captions still draw Helvetica placeholders for unsupported script characters. Their
+/// origin and stroke gap must measure those placeholders, even when a script face is available.
+#[test]
+fn a_hebrew_line_caption_measures_the_helvetica_placeholders_it_draws() {
+    if pdfcraft_fonts::document_hebrew_font(false).is_none() {
+        return;
+    }
+    let typed = "שָׁלוֹם";
+    let annotation =
+        table_178_line([72.0, 380.0, 272.0, 380.0], &[("Cap", Object::Bool(true)), ("Contents", Object::String(PdfString::text(typed)))]);
+    let content = line_drawing(&annotation);
+    let placeholders = "?".repeat(typed.chars().count());
+    assert!(
+        content.contains(&format!("({placeholders}) Tj")) && content.contains("/Helv 10 Tf"),
+        "caption uses its reported Helvetica fallback: {content}"
+    );
+    assert!(appearance::undrawable_text(&annotation).is_some(), "the unsupported caption remains marked");
+    let width = pdfcraft_fonts::Std14::Helvetica.text_width(&placeholders, 10.0);
+    let matrix = caption_matrix(&content).unwrap();
+    assert!((matrix[4] - (172.0 - width / 2.0)).abs() < 0.01, "the drawn placeholders stay centered on the line: {matrix:?}, width={width}");
+    let strokes = segments(&content);
+    assert!(has(&strokes, [72.0, 380.0, 172.0 - width / 2.0 - 2.0, 380.0]), "the left stroke ends before the drawn caption: {strokes:?}");
+    assert!(has(&strokes, [172.0 + width / 2.0 + 2.0, 380.0, 272.0, 380.0]), "the right stroke starts after the drawn caption: {strokes:?}");
+}

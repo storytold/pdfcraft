@@ -4151,6 +4151,8 @@ fn flattened_arabic_and_hebrew_fill_sign_text_and_comments_extract_in_logical_or
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// From #4153: Hebrew typed with Fill & Sign can be found before and after a flattening save,
+/// and the flattened page renders.
 #[test]
 fn check_4153_hebrew_fill_sign_text_is_searchable_before_and_after_flattening() {
     if pdfcraft_fonts::document_hebrew_font(false).is_none() {
@@ -10282,4 +10284,27 @@ fn simple_rule_scan_drawn(content: &[u8]) -> Vec<u8> {
         doc.set(reference, Object::Stream(Stream::flate(image.dict.clone(), &data)));
     }
     write_full(&doc, &SaveOptions::default()).unwrap()
+}
+
+#[test]
+fn fill_sign_boxes_fit_the_ink_height_of_large_arabic_marks() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let dir = workdir("fill-sign-arabic-mark-height");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path": "a.pdf"}))["doc"].as_u64().unwrap();
+    let text = "السَّلَامُ";
+    let size = 40.0;
+    ok(&mut a, "fill_sign_add", json!({"doc": doc, "page": 1, "type": "text", "at": [20, 40], "text": text, "font_size": size}));
+    let comments = ok(&mut a, "comment_list", json!({"doc": doc}));
+    assert_eq!(comments["comments"][0]["contents"], text);
+    let rect: Vec<f64> = comments["comments"][0]["rect"].as_array().unwrap().iter().map(|n| n.as_f64().unwrap()).collect();
+    let inner_width = (rect[2] - rect[0]).abs() - 4.0;
+    let inner_height = (rect[3] - rect[1]).abs() - 4.0;
+    let lines = pdfcraft_fonts::appearance_text::wrap(text, size, inner_width).unwrap();
+    let ink_height = pdfcraft_fonts::appearance_text::height(&lines, size);
+    assert!(inner_height + 0.001 >= ink_height, "Arabic marks need {ink_height:.3} pt, but Fill & Sign leaves {inner_height:.3} pt");
+    assert!(page_text(&mut a, doc)[0].contains(text), "the marks remain in the typed text");
+    std::fs::remove_dir_all(dir).unwrap();
 }
