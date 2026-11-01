@@ -4213,7 +4213,7 @@ fn table_rows_of_minimum_height_cells_fill_the_page_at_that_height() {
     // A table that fits keeps all its rows on the page, each at the minimum.
     let (per_page, h) = pages(r#"minH="0.4in""#, 10);
     assert_eq!(per_page, [10]);
-    assert!(h <= 28.8 + 0.01, "a row starts at its minimum: {h}");
+    assert!((h - 28.8).abs() < 0.01, "a row starts at its minimum: {h}");
     // Cells with a height: 0.5in rows, 20 to a page.
     assert_eq!(pages(r#"h="0.5in""#, 30).0, [20, 10]);
 }
