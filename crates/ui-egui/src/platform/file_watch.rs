@@ -55,19 +55,6 @@ impl Stamp {
         Self { len: meta.len(), modified: meta.modified().ok(), extra }
     }
 
-    /// Only Unix change-time differs: metadata may have changed without a content edit.
-    fn metadata_only_candidate(self, other: Self) -> bool {
-        #[cfg(unix)]
-        {
-            self.len == other.len && self.modified == other.modified && self.extra.get(..2) == other.extra.get(..2)
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = other;
-            false
-        }
-    }
-
     /// The file at `path` now; `None` when it is missing, not a file or can't be read.
     pub fn at(path: &str) -> Option<Self> {
         std::fs::metadata(path).ok().filter(Metadata::is_file).map(|m| Self::of(&m))
@@ -171,8 +158,9 @@ impl Watcher {
     }
 }
 
-/// Verify a metadata-only candidate without allocating a second PDF. The stamp must stay
-/// fixed throughout; changed bytes, a replacement or any read failure still count as a change.
+/// Whether the file at `path`, still at `stamp`, holds exactly `expected`, compared a block at a
+/// time without a second copy of the PDF (at most one byte past `expected` is read). The stamp
+/// must stay fixed throughout; changed bytes, a replacement or any read failure count as a change.
 fn contents_match(path: &str, stamp: Stamp, expected: &[u8]) -> bool {
     let Ok(mut file) = File::open(path) else { return false };
     if !file.metadata().is_ok_and(|m| Stamp::of(&m) == stamp) {
@@ -310,11 +298,17 @@ impl FileWatch {
     /// else wrote it since the document was opened, reloaded or last saved (#2166). A file
     /// that is missing or can't be looked at, or a document whose version was never recorded,
     /// is not a difference.
+    ///
+    /// A new stamp at the same length is compared byte for byte with `saved`: the same bytes are
+    /// the same version, whether only the change time moved (Finder and LaunchServices metadata)
+    /// or the modification time too (a sync client such as Nextcloud or Dropbox sets it again
+    /// after uploading the file). The watcher finds the same when it reads a changed file; this
+    /// covers a Save with the watcher off, or before it has looked. The comparison runs on the
+    /// calling (UI) thread: it reads at most the file's length plus one byte, only when the stamp
+    /// moved and the length did not, and Save then writes as many bytes on the same thread.
     pub fn disk_differs(&self, doc: DocId, path: &str, saved: Option<Arc<Vec<u8>>>) -> bool {
         match (Stamp::at(path), self.basis.get(&doc)) {
-            (Some(now), Some(basis)) => {
-                now != *basis && !(now.metadata_only_candidate(*basis) && saved.is_some_and(|bytes| contents_match(path, now, &bytes)))
-            }
+            (Some(now), Some(basis)) => now != *basis && !(now.len == basis.len && saved.is_some_and(|bytes| contents_match(path, now, &bytes))),
             _ => false,
         }
     }
