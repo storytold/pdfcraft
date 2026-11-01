@@ -896,6 +896,8 @@ struct PageOut {
     copy_selected: bool,
     field_menu: Option<FieldMenu>,
     field_placed: bool,
+    /// The picture whose menu the canvas's context menu shows instead of the page's (page, image).
+    image_menu: Option<(usize, usize)>,
     field_props: bool,
     hover_text: Option<(Pos2, String)>,
     image_action: Option<crate::edit_text_ui::ImageAction>,
@@ -1327,7 +1329,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
             info,
             allow_interaction: !others_own_pointer && (matches!(view.router.owner(i), Some(crate::page_router::Owner::Picture { .. })) || !text_used),
         };
-        let image_used = crate::edit_text_ui::image_input(&image_cx, &images, view, &mut frame.out.image_action);
+        let image_used = crate::edit_text_ui::image_input(&image_cx, &images, view, &mut frame.out.image_menu);
         !others_own_pointer && (text_used || image_used)
     };
     let on_link = tool == QuickTool::Link && can_modify && crate::link_ui::page_input(cx, doc_links, view);
@@ -2067,8 +2069,9 @@ fn draw_pages(
         mut field_menu,
         field_placed,
         field_props,
+        image_menu,
         hover_text: _,
-        image_action,
+        mut image_action,
         open_boxes,
         open_initials,
         open_signature,
@@ -2127,7 +2130,17 @@ fn draw_pages(
     if view.continuous {
         view.current = current;
     }
+    // A picture's menu stands in for the page's own menu (#5598). The page response is one for the
+    // whole canvas, so a second menu drawn on it lands over the first, and the two flicker.
+    let mut picture_action = None;
     resp.context_menu(|ui| {
+        if let Some((page, hit)) = image_menu
+            && let Some(images) = view.edit_images.get(&page).map(|(_, l)| l.clone())
+            && images.get(hit).is_some()
+        {
+            crate::edit_text_ui::image_menu(ui, page, hit, &images, view, &mut picture_action);
+            return;
+        }
         // Preparing a form: the selected field's menu.
         if preparing && let Some((name, wi)) = view.prepare.selected.clone() {
             // Several fields: Align, Center, Distribute, Set Fields to Same Size.
@@ -2236,6 +2249,9 @@ fn draw_pages(
         canvas_action =
             comments::context_menu(ui, view, info, &|page, index| doc.annotation_deletable(page, index), prefs, allowed, can_modify).or(copy_image);
     });
+    if picture_action.is_some() {
+        image_action = picture_action;
+    }
     *out = PageOut {
         canvas_action,
         clicked_link,
@@ -2245,6 +2261,7 @@ fn draw_pages(
         field_props,
         hover_text,
         image_action,
+        image_menu: None,
         open_boxes,
         open_initials,
         open_signature,
@@ -3248,6 +3265,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         mut field_props,
         hover_text,
         mut image_action,
+        image_menu: _,
         open_boxes,
         open_initials,
         open_signature,
