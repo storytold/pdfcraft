@@ -8061,7 +8061,7 @@ status = "shipped"
 commands = ["print.dialog"]
 tools = ["doc_print"]
 evidence = ["crates/print/src/tests.rs::page_selection", "crates/print/src/tests.rs::a_number_in_parentheses_names_the_page_at_that_position", "crates/automation/tests/it/automation.rs::printing_through_tools"]
-notes = "all, current, ranges with labels and open ends; (n) names the nth page whatever its label (ISO 32000-2 §12.4.2: labels and page indices need not coincide), alone or as a range end. The same parser serves Combine files ranges. Organize Pages range selection still takes positions only, without labels or (n)."
+notes = "all, current, ranges with labels and open ends; (n) names the nth page whatever its label (ISO 32000-2 §12.4.2: labels and page indices need not coincide), alone or as a range end; labels are looked up first, so a page labelled exactly \"(n)\" keeps that name. The same parser serves Combine files ranges. Organize Pages range selection still takes positions only, without labels or (n)."
 
 [[feature]]
 id = "print.odd-even-reverse"
