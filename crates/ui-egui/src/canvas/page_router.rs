@@ -138,6 +138,11 @@ impl PageRouter {
         self.capture.as_ref().is_some_and(|c| !c.declines_drag)
     }
 
+    /// Whether the press is on a link, which follows a click and does nothing with a drag.
+    pub(crate) fn on_link(&self) -> bool {
+        self.capture.as_ref().is_some_and(|c| matches!(c.owner, Owner::Link { .. }))
+    }
+
     /// The press is over once the button is up and its release has been seen.
     pub(crate) fn settle(&mut self, any_down: bool, edges: bool) {
         if !any_down && !edges {
