@@ -3509,3 +3509,26 @@ fn a_pop_ups_unsaved_work_follows_its_comment_or_is_dropped() {
     h.run_steps(2);
     assert_eq!(h.state().views[0].comments.popup_text, None);
 }
+
+/// #2137 review: text typed into a pop-up and not yet saved is saved when × closes the window:
+/// the click takes the focus from the box and closes it in one frame, one undo step for both.
+#[test]
+fn closing_a_pop_up_saves_its_typed_text() {
+    let mut h = harness_with_bytes(BLUE_NOTE_WITH_OPEN_POP_UP.to_vec(), |_| {});
+    let box_at = h.query_all_by(|n| shows_text(n, "A note")).next().expect("the pop-up's box").rect().right_center() - egui::vec2(4.0, 0.0);
+    click(&mut h, box_at);
+    h.event(egui::Event::Text(" for you".into()));
+    h.run_steps(2);
+    let (_, window) = h.state().views[0].comments.popup_rects.first().copied().expect("the pop-up is open");
+    let close = h.query_all_by_label("Close").map(|n| n.rect().center()).find(|c| window.contains(*c)).expect("the window's ×");
+    click(&mut h, close);
+    h.run_steps(3);
+    let note = comments(&h).into_iter().find(|a| a.subtype == "Text").expect("the note");
+    assert_eq!(note.contents.as_deref(), Some("A note for you"), "the typed text is saved");
+    assert_eq!(note.popup.map(|p| p.open), Some(false), "and the window closed");
+    assert!(h.state().views[0].comments.popup_text.is_none());
+    h.state_mut().undo();
+    h.run_steps(2);
+    let note = comments(&h).into_iter().find(|a| a.subtype == "Text").expect("the note");
+    assert_eq!((note.contents.as_deref(), note.popup.map(|p| p.open)), (Some("A note"), Some(true)), "one undo step for both");
+}
