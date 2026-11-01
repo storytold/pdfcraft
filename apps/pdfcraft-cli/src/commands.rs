@@ -298,6 +298,8 @@ pub(crate) fn export(args: &[String]) -> Result<(), CliError> {
     validate_options("export", args, super::options::EXPORT_OPTIONS)?;
     let path = *positional(args, super::options::EXPORT_OPTIONS).first().ok_or("export: missing file")?;
     let out = flag_in_order(args, "--out", super::options::EXPORT_OPTIONS).ok_or("export: missing --out (.docx, .pptx, .html or .rtf)")?;
+    let force = super::options::has_flag_in_order(args, "--force", super::options::EXPORT_OPTIONS);
+    check_export_destination(Path::new(out), force)?;
     let password = flag_in_order(args, "--password", super::options::EXPORT_OPTIONS);
     let bytes = read(path)?;
     let mut session = pdfcraft_engine::Session::new();
@@ -326,6 +328,24 @@ pub(crate) fn export(args: &[String]) -> Result<(), CliError> {
         let _ = writeln!(std::io::stderr().lock(), "warning: export skipped some content on pages {}", pages.join(", "));
     }
     write_pdf(Path::new(out), &exported.bytes)
+}
+
+fn check_export_destination(out: &Path, force: bool) -> Result<(), CliError> {
+    let metadata = match std::fs::symlink_metadata(out) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("{}: {error}", out.display()).into()),
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(format!("{}: export output cannot be a symbolic link", out.display()).into());
+    }
+    if !metadata.is_file() {
+        return Err(format!("{}: export output is not a regular file", out.display()).into());
+    }
+    if !force {
+        return Err(format!("{}: output file already exists; pass --force to overwrite it", out.display()).into());
+    }
+    Ok(())
 }
 
 pub(crate) fn extract(args: &[String]) -> Result<(), CliError> {

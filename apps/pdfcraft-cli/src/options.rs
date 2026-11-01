@@ -23,6 +23,23 @@ pub(crate) fn flag_in_order<'a>(args: &'a [String], name: &str, specs: &[OptionS
     None
 }
 
+pub(crate) fn has_flag_in_order(args: &[String], name: &str, specs: &[OptionSpec]) -> bool {
+    let mut i = 0;
+    while let Some(arg) = args.get(i).map(String::as_str) {
+        if arg == name {
+            return true;
+        }
+        if let Some(spec) = specs.iter().find(|spec| spec.name == arg) {
+            if spec.takes_value {
+                i += 2;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct OptionSpec {
     pub(crate) name: &'static str,
@@ -122,8 +139,11 @@ pub(crate) const RENDER_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--password", takes_value: true },
 ];
 
-pub(crate) const EXPORT_OPTIONS: &[OptionSpec] =
-    &[OptionSpec { name: "--out", takes_value: true }, OptionSpec { name: "--password", takes_value: true }];
+pub(crate) const EXPORT_OPTIONS: &[OptionSpec] = &[
+    OptionSpec { name: "--out", takes_value: true },
+    OptionSpec { name: "--password", takes_value: true },
+    OptionSpec { name: "--force", takes_value: false },
+];
 
 pub(crate) const CHECK_ONE_OPTIONS: &[OptionSpec] =
     &[OptionSpec { name: "--dpi", takes_value: true }, OptionSpec { name: "--edit", takes_value: false }];

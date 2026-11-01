@@ -73,7 +73,7 @@ const USAGE: &str = concat!(
 pdfcraft-cli info   <file.pdf> [--password PW]            document summary as JSON
                                                           (includes any declared PDF/A or PDF/UA level)
 pdfcraft-cli render <file.pdf> --page N [--dpi 96] --out x.png   (.png, .jpg, .tif or .pam)
-pdfcraft-cli export <file.pdf> --out report.docx [--password PW]
+pdfcraft-cli export <file.pdf> --out report.docx [--password PW] [--force]
                       (.docx, .pptx, .html or .rtf; format from the output name)
 pdfcraft-cli text   <file.pdf> [--page N]                  extracted text (pages separated by form feeds)
 pdfcraft-cli edit   <in.pdf> --out out.pdf [--rotate 1,3:90] [--delete 2,4] [--move 5:1]
