@@ -771,14 +771,9 @@
 	Copy Image in Original Format	คัดลอกรูปภาพในรูปแบบเดิม
 	The image has been copied as a {ext} file	คัดลอกรูปภาพเป็นไฟล์ {ext} แล้ว
 	The page has changed; select the image again	หน้ามีการเปลี่ยนแปลง โปรดเลือกรูปภาพอีกครั้ง
-	Check for updates	ตรวจหาการอัปเดต
 	No check has run yet.	ยังไม่ได้ตรวจสอบ
-	Checking for a newer version…	กำลังตรวจหารุ่นที่ใหม่กว่า…
 	PdfCraft {v} is available.	มี PdfCraft {v} ให้ใช้งานแล้ว
 	You have version {c}. Download the new version from its release page.	คุณใช้รุ่น {c} ดาวน์โหลดรุ่นใหม่ได้จากหน้ารุ่นที่เผยแพร่
-	PdfCraft {c} is up to date.	PdfCraft {c} เป็นรุ่นล่าสุดแล้ว
-	Couldn't check for updates: {e}	ตรวจหาการอัปเดตไม่ได้: {e}
-	You have version {c}. All releases are listed at {page}.	คุณใช้รุ่น {c} รายการรุ่นทั้งหมดอยู่ที่ {page}
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	ถาม GitHub ว่ามีรุ่นล่าสุดหรือไม่ จะไม่มีการดาวน์โหลดหรือติดตั้งโดยอัตโนมัติ
 	Download	ดาวน์โหลด
 	Later	ภายหลัง

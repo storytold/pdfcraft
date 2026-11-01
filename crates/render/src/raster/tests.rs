@@ -7040,6 +7040,146 @@ fn test_clip_only_text_raster_preserves_clipping_without_painting() {
     assert!(pixels.contains(&white), "the clip is text-shaped, not the whole page");
 }
 
+#[cfg(target_os = "windows")]
+mod gbk_glyphs;
+
+/// Chinese and Korean CID fonts that aren't embedded (Adobe-CNS1 `MSung-Light`, Adobe-GB1
+/// `STSong-Light`, Adobe-Korea1 `HYGoThic-Medium`; Acrobat also writes Japanese `KozGoPr6N`
+/// text boxes without the font) drew nothing, because craft-fonts has only Japanese faces.
+/// They now draw in a face already installed on the machine, read at runtime. A machine
+/// without such a face draws nothing, as before, so each check is skipped there.
+#[test]
+fn non_embedded_chinese_and_korean_cid_fonts_draw_with_an_installed_face() {
+    use hayro::hayro_interpret::font::FallbackFontQuery;
+    use hayro::hayro_interpret::hayro_cmap::CharacterCollection;
+    // (base font, collection, ordering, encoding, encoded text, descendant subtype)
+    let cases = [
+        ("MSung-Light", CidFamily::AdobeCNS1, "CNS1", "UniCNS-UCS2-H", "7E419AD45B57", "CIDFontType0"), // 繁體字
+        ("STSong-Light", CidFamily::AdobeGB1, "GB1", "UniGB-UCS2-H", "72698D448DF7", "CIDFontType0"),   // 物资跷
+        ("HYGoThic-Medium", CidFamily::AdobeKorea1, "Korea1", "UniKS-UCS2-H", "D55CAE00", "CIDFontType0"), // 한글
+        // The real Windows book uses non-embedded TrueType CID fonts and a legacy GBK CMap,
+        // without ToUnicode. These bytes encode 中文; they are not Unicode code points.
+        ("SimSun", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
+        ("SimHei", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
+        ("KaiTi", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
+        ("FangSong", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
+        ("ABCDEF+FZSSK--GBK1-0", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
+        ("ABCDEF+FZHTK--GBK1-0", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
+        ("ABCDEF+FZKTK--GBK1-0", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
+        ("ABCDEF+FZFSK--GBK1-0", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
+    ];
+    for (base_font, family, ordering, encoding, code, subtype) in cases {
+        let query = FontQuery::Fallback(FallbackFontQuery {
+            post_script_name: Some(base_font.into()),
+            character_collection: Some(CharacterCollection { family, supplement: 2 }),
+            ..FallbackFontQuery::default()
+        });
+        if super::system_fallback(&query).is_none() {
+            eprintln!("no installed face for {base_font} (or PDFCRAFT_SYSTEM_FONTS=0): skipped");
+            continue;
+        }
+        let content = format!("BT /F1 40 Tf 5 15 Td <{code}> Tj ET");
+        let pdf = format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 60] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type0 /BaseFont /{base_font} /Encoding /{encoding} /DescendantFonts [6 0 R] >> endobj
+6 0 obj << /Type /Font /Subtype /{subtype} /BaseFont /{base_font} /CIDSystemInfo << /Registry (Adobe) /Ordering ({ordering}) /Supplement 2 >>
+  /FontDescriptor 7 0 R /DW 1000 >> endobj
+7 0 obj << /Type /FontDescriptor /FontName /{base_font} /Flags 6 /FontBBox [0 -141 1000 859] /ItalicAngle 0 /Ascent 859 /Descent -141 /CapHeight 700 /StemV 80 >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+            content.len()
+        );
+        let pdf = Arc::new(pdf.into_bytes());
+        let ink = |config: RenderConfig| {
+            let mut r = PageRenderer::new(pdf.clone(), config);
+            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+            assert!(p.error.is_none(), "{base_font}: {:?}", p.error);
+            p.rgba.as_chunks::<4>().0.iter().filter(|c| c[0] < 128).count()
+        };
+        // Two to four glyphs at 40 pt cover several hundred dark pixels; a blank run has none.
+        let shown = ink(RenderConfig { system_fonts: true, ..RenderConfig::default() });
+        assert!(shown > 300, "{base_font}: the text is drawn ({shown} dark pixels)");
+        // Off by default: exports, printing and OCR render without an installed font, so
+        // nothing drawn with one can be saved (AGENTS.md §1.2, §1.4).
+        let saved = ink(RenderConfig::default());
+        assert!(saved < 50, "{base_font}: not drawn without system_fonts ({saved} dark pixels)");
+        if encoding == "GBK-EUC-H" {
+            #[cfg(target_os = "windows")]
+            gbk_glyphs::assert_expected_glyphs(&pdf, base_font);
+            let mut renderer = PageRenderer::new(pdf, RenderConfig { system_fonts: true, ..Default::default() });
+            let text = renderer.render(RenderRequest { page: 0, kind: RequestKind::Text, ..Default::default() });
+            assert!(text.error.is_none(), "{base_font}: {:?}", text.error);
+            assert_eq!(text.text.unwrap().plain_text().trim(), "中文", "the fallback preserves GBK text mapping");
+        }
+    }
+}
+
+/// Print preview must match output even after the same worker cached an installed face.
+/// Switching back to the viewer must not retain the print resolver's missing-font result.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn print_preview_excludes_installed_fonts_without_poisoning_viewer_cache() {
+    use hayro::hayro_interpret::font::FallbackFontQuery;
+    use hayro::hayro_interpret::hayro_cmap::CharacterCollection;
+    let query = FontQuery::Fallback(FallbackFontQuery {
+        post_script_name: Some("SimSun".into()),
+        character_collection: Some(CharacterCollection { family: CidFamily::AdobeGB1, supplement: 2 }),
+        ..Default::default()
+    });
+    if super::system_fallback(&query).is_none() {
+        eprintln!("no installed GB1 face (or PDFCRAFT_SYSTEM_FONTS=0): skipped");
+        return;
+    }
+    let content = "BT /F1 40 Tf 5 15 Td <D6D0CEC4> Tj ET";
+    let bytes = Arc::new(format!(
+        "%PDF-1.7\n\
+         1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 120 60] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         5 0 obj << /Type /Font /Subtype /Type0 /BaseFont /SimSun /Encoding /GBK-EUC-H /DescendantFonts [6 0 R] >> endobj\n\
+         6 0 obj << /Type /Font /Subtype /CIDFontType2 /BaseFont /SimSun /CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 2 >> /FontDescriptor 7 0 R /DW 1000 >> endobj\n\
+         7 0 obj << /Type /FontDescriptor /FontName /SimSun /Flags 6 /FontBBox [0 -141 1000 859] /ItalicAngle 0 /Ascent 859 /Descent -141 /CapHeight 700 /StemV 80 >> endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF", content.len()
+    ).into_bytes());
+    let config = RenderConfig::default().on_screen();
+    let mut inline = PageRenderer::new(bytes.clone(), config.clone());
+    let mut output = PageRenderer::new(bytes.clone(), RenderConfig::default());
+    let pool = RenderPool::new(bytes, 1, config);
+    for tile in [None, Some(Tile { x: 0, y: 0, w: 120, h: 60 })] {
+        // Cover both directions with a warm worker cache, including other caller tag bits.
+        for tag in [PRINT_TAG | 1, 2, PRINT_TAG | 3, 4] {
+            let req = RenderRequest { page: 0, scale: 1.0, tile, tag, ..Default::default() };
+            let truth = output.render(req);
+            assert!(truth.error.is_none(), "{:?}", truth.error);
+            pool.set_queue(vec![req]);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let worker = loop {
+                if let Some(page) = pool.try_recv() {
+                    break page;
+                }
+                assert!(std::time::Instant::now() < deadline, "print-preview worker timed out");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            };
+            for page in [inline.render(req), worker] {
+                assert!(page.error.is_none(), "{:?}", page.error);
+                if tag & PRINT_TAG != 0 {
+                    assert_eq!(page.rgba, truth.rgba, "print preview must match output, tile={tile:?}");
+                } else {
+                    let ink = page.rgba.as_chunks::<4>().0.iter().filter(|c| c[0] < 128).count();
+                    assert!(ink > 300, "viewer still draws installed Chinese glyphs: {ink}");
+                }
+            }
+        }
+    }
+}
+
 /// A malformed token in a content stream used to end the stream there, so the renderer, text
 /// extraction, Find and search-based redaction lost the rest of the page while the edit
 /// reader, MuPDF and pdftotext read it (#3565, #3568). Each token below is now stepped over.

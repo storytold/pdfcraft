@@ -583,6 +583,80 @@ fn edits_update_view_data_and_mark_dirty() {
     assert_eq!(page_texts(&s, id), ["Page 1", "Page 3"], "renderer refreshed");
 }
 
+/// A font of an Adobe CJK collection that a PDF does not embed is drawn with an installed face on
+/// the viewer's pool only. An export of the same page, which can be saved, has nothing drawn with
+/// an installed font (AGENTS.md §1.2, §1.4). Skipped where no such face is installed.
+#[test]
+fn installed_cjk_fonts_draw_in_the_viewer_but_not_in_an_export() {
+    let content = "BT /F1 40 Tf 5 15 Td <7E419AD45B57> Tj ET";
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 60] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type0 /BaseFont /MSung-Light /Encoding /UniCNS-UCS2-H /DescendantFonts [6 0 R] >> endobj
+6 0 obj << /Type /Font /Subtype /CIDFontType0 /BaseFont /MSung-Light /CIDSystemInfo << /Registry (Adobe) /Ordering (CNS1) /Supplement 2 >> /FontDescriptor 7 0 R /DW 1000 >> endobj
+7 0 obj << /Type /FontDescriptor /FontName /MSung-Light /Flags 6 /FontBBox [0 -141 1000 859] /ItalicAngle 0 /Ascent 859 /Descent -141 /CapHeight 700 /StemV 80 >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        content.len()
+    );
+    let mut s = Session::new();
+    let id = s.open("cns1.pdf", None, Arc::new(pdf.into_bytes()), None).unwrap();
+    let doc = s.get(id).unwrap();
+    doc.renderer.set_queue(vec![pdfcraft_render::RenderRequest {
+        page: 0,
+        kind: pdfcraft_render::RequestKind::Pixels,
+        scale: 1.0,
+        ..Default::default()
+    }]);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let viewer = loop {
+        if let Some(page) = doc.renderer.try_recv() {
+            assert!(page.error.is_none(), "{:?}", page.error);
+            break page;
+        }
+        assert!(std::time::Instant::now() < deadline, "page render did not finish");
+        std::thread::yield_now();
+    };
+    let inked = |rgba: &[u8]| rgba.as_chunks::<4>().0.iter().filter(|c| c[0] < 128).count();
+    // Whether this machine has a face that can draw the page at all, asked of a renderer with the
+    // fallback switched on by hand, so a viewer pool that lost it fails below instead of skipping.
+    let probe = pdfcraft_render::PageRenderer::new(doc.display.clone(), pdfcraft_render::RenderConfig { system_fonts: true, ..Default::default() })
+        .render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+    assert!(probe.error.is_none(), "{:?}", probe.error);
+    if inked(&probe.rgba) < 300 {
+        eprintln!("no installed Traditional Chinese face (or PDFCRAFT_SYSTEM_FONTS=0): skipped");
+        return;
+    }
+    assert!(inked(&viewer.rgba) > 300, "the viewer's pool draws it with the installed face ({} dark pixels)", inked(&viewer.rgba));
+    let png = export::Exporter::new(doc).png(0, 72.0).unwrap();
+    let exported = image::load_from_memory(&png).unwrap().into_rgba8();
+    assert!(inked(exported.as_raw()) < 50, "an export draws nothing with an installed font ({} dark pixels)", inked(exported.as_raw()));
+
+    // Reload rebuilds the pool when retaining a view preference. That path must keep
+    // the display-only fallback too; otherwise Chinese disappears after a file refresh.
+    let bytes = doc.bytes.clone();
+    assert!(s.set_hide_comments(id, true));
+    s.reload(id, bytes).unwrap();
+    let doc = s.get(id).unwrap();
+    assert!(doc.comments_hidden());
+    doc.renderer.set_queue(vec![pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() }]);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let reloaded = loop {
+        if let Some(page) = doc.renderer.try_recv() {
+            assert!(page.error.is_none(), "{:?}", page.error);
+            break page;
+        }
+        assert!(std::time::Instant::now() < deadline, "reloaded page render did not finish");
+        std::thread::yield_now();
+    };
+    assert!(inked(&reloaded.rgba) > 300, "reload must retain visible Chinese text");
+}
+
 #[test]
 fn metadata_edit_keeps_the_renderer_without_changing_page_content() {
     let (mut s, id) = session_with(1);
@@ -862,9 +936,10 @@ fn revert_preserves_the_saved_pages_after_undo() {
 #[test]
 fn full_save_is_readable_and_smaller_after_deletes() {
     let (mut s, id) = session_with(5);
+    let original = s.save_bytes(id).unwrap();
     s.apply(id, Edit::DeletePages { pages: vec![0, 1, 2] }).unwrap();
     let full = s.save_full_bytes(id).unwrap();
-    assert!(full.len() < s.save_bytes(id).unwrap().len());
+    assert!(full.len() < original.len());
     let mut s2 = Session::new();
     let id2 = s2.open("full.pdf", None, full, None).unwrap();
     assert_eq!(page_texts(&s2, id2), ["Page 4", "Page 5"]);
@@ -9336,4 +9411,63 @@ fn repeated_backdrop_artwork_survives_background_undo_redo_and_both_save_modes()
     black(&s, rewritten);
     s.apply(rewritten, Edit::RemoveMarks { kind: MarkKind::Background }).unwrap();
     black(&s, rewritten);
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+#[test]
+fn saving_after_deleting_pages_rewrites_the_file_without_them() {
+    let (mut s, id) = session_with(6);
+    let original = s.save_bytes(id).unwrap();
+    s.apply(id, Edit::DeletePages { pages: vec![1, 2, 3, 4] }).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    assert!(saved.len() < original.len(), "the file shrank: {} -> {}", original.len(), saved.len());
+    assert!(!saved.starts_with(original.as_slice()), "a full rewrite, not an update appended to the old file");
+    assert!(!contains(&saved, b"Page 3"), "a deleted page's text is not left in an earlier revision");
+    let mut again = Session::new();
+    let id2 = again.open("saved.pdf", None, saved, None).unwrap();
+    assert_eq!(page_texts(&again, id2), ["Page 1", "Page 6"]);
+}
+
+#[test]
+fn saving_after_deleting_pages_from_a_signed_file_stays_incremental() {
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let digital_id = sign::pkcs12::open(&p12, "test").unwrap();
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    let id = s.open("fixture.pdf", None, Arc::new(fixture(3)), None).unwrap();
+    let opts = SignOptions { page: 0, rect: Some([20.0, 20.0, 160.0, 50.0]), ..SignOptions::default() };
+    let signed = s.sign(id, &digital_id, opts).unwrap();
+    s.mark_signed(id, signed.clone(), None).unwrap();
+    s.apply(id, Edit::DeletePages { pages: vec![2] }).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    assert!(saved.starts_with(signed.as_ref()), "the signed bytes stay an incremental update");
+    assert!(s.get(id).unwrap().is_signed());
+}
+
+#[test]
+fn saving_after_a_batch_that_deletes_pages_rewrites_the_file() {
+    let (mut s, id) = session_with(6);
+    let original = s.save_bytes(id).unwrap();
+    let batch = Edit::Batch {
+        label: "Delete and rotate".into(),
+        edits: vec![
+            Edit::Batch { label: "Delete pages".into(), edits: vec![Edit::DeletePages { pages: vec![1, 2, 3, 4] }] },
+            Edit::RotatePages { pages: vec![0], degrees: 90 },
+        ],
+    };
+    s.apply(id, batch).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    assert!(!saved.starts_with(original.as_slice()), "a full rewrite, not an update appended to the old file");
+    assert!(!contains(&saved, b"Page 3"), "a deleted page's text is not left in an earlier revision");
+}
+
+#[test]
+fn saving_without_deleting_pages_stays_incremental() {
+    let (mut s, id) = session_with(3);
+    let original = s.save_bytes(id).unwrap();
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    assert!(saved.starts_with(original.as_slice()), "an edit that deletes nothing is still appended");
 }
