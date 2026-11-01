@@ -1,4 +1,5 @@
 use super::TextGlyph;
+use super::device::WORD_GAP;
 use super::layout::is_rtl;
 
 /// Glyphs `start..end` of the glyph list [`arrange`] lays out, drawn one after another.
@@ -528,4 +529,20 @@ pub(super) fn reverse_rtl(glyphs: &[&TextGlyph], idx: &mut [usize], spaces: &mut
             }
         }
     }
+}
+
+/// Most space between two runs on one baseline that still reads as one line, in heights of the
+/// taller run: a label and its value or table cells, and not two column lines that happen to share
+/// a baseline (a single-line paragraph in each column), whose gap spans most of a column.
+pub(super) const SAME_LINE_GAP: f32 = 8.0;
+
+/// Whether segment `s` continues the line of segment `p` to its right: their baselines (a fifth of
+/// the em box above its bottom, as `draw_glyph` builds it) lie within a fifth of the smaller
+/// height, whatever their sizes, and `s` starts no earlier than `p` ends and less than
+/// [`SAME_LINE_GAP`] heights after it.
+pub(super) fn same_line(p: &Seg, s: &Seg) -> bool {
+    let h = p.h.min(s.h);
+    let baseline = |seg: &Seg| seg.bbox[3] - 0.2 * seg.h;
+    let gap = s.bbox[0] - p.bbox[2];
+    (baseline(p) - baseline(s)).abs() < 0.2 * h && gap > -WORD_GAP * h && gap < SAME_LINE_GAP * p.h.max(s.h)
 }
