@@ -4145,3 +4145,21 @@ fn clear_password_values_clears_static_xfa_password_fields() {
     let packets = read_packets(&doc).unwrap().unwrap();
     assert!(!packets.xdp.contains("hunter2"), "{}", packets.xdp);
 }
+
+/// The data a radio group writes for its selected on state compares every button's state before
+/// any `/PCOn`: with states `/0` `/1` and `/PCOn` items `1` `2`, the state `1` is the second
+/// button, whose item is `2` (it used to match the first button's `/PCOn` `1` and write `1`).
+/// A selection that is only an item still finds its button.
+#[test]
+fn a_radio_state_is_matched_before_any_pcon_item() {
+    let doc = Document::open(Arc::new(crate::fixtures::static_radio_shell_with_pcon("<form1/>", ["1", "2"]))).unwrap();
+    let group = FieldDatum { obj: pdfcraft_cos::ObjRef::new(8, 0), name: "form1[0].page1[0].lang[0]".into(), data: FieldData::None };
+    let write = |sel: &str| crate::data::radio_dataset_value(&doc, &group, &Some(sel.to_string()));
+    assert_eq!(write("0"), "1");
+    assert_eq!(write("1"), "2");
+    // `2` is no state: it is the second button's item.
+    assert_eq!(write("2"), "2");
+    // Neither: written as given; nothing selected: empty.
+    assert_eq!(write("9"), "9");
+    assert_eq!(crate::data::radio_dataset_value(&doc, &group, &None), "");
+}

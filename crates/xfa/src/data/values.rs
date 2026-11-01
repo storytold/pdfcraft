@@ -60,21 +60,32 @@ pub fn radio_dataset_value(doc: &Document, f: &FieldDatum, sel: &Option<String>)
                 .collect()
         })
         .filter(|opt: &Vec<Option<String>>| opt.len() == kids.len());
-    for (i, kid) in kids.iter().enumerate() {
-        let Some(widget) = doc.resolve(kid).as_dict().cloned() else { continue };
-        let original = text_of(doc, &widget, b"PCOn");
-        let state = widget
-            .get(b"AP")
-            .map(|ap| doc.resolve(ap))
-            .and_then(|ap| ap.as_dict().and_then(|a| a.get(b"N").cloned()))
-            .and_then(|n| doc.resolve(&n).as_dict().cloned())
-            .and_then(|n| n.iter().map(|(k, _)| String::from_utf8_lossy(k).into_owned()).find(|k| k != "Off"));
-        if state.as_deref() == Some(selected) || original.as_deref() == Some(selected) {
+    // Each widget's (`/PCOn` item, on-state name, `/Opt` entry).
+    let widgets: Vec<(Option<String>, Option<String>, Option<String>)> = kids
+        .iter()
+        .enumerate()
+        .filter_map(|(i, kid)| {
+            let widget = doc.resolve(kid).as_dict().cloned()?;
+            let original = text_of(doc, &widget, b"PCOn");
+            let state = widget
+                .get(b"AP")
+                .map(|ap| doc.resolve(ap))
+                .and_then(|ap| ap.as_dict().and_then(|a| a.get(b"N").cloned()))
+                .and_then(|n| doc.resolve(&n).as_dict().cloned())
+                .and_then(|n| n.iter().map(|(k, _)| String::from_utf8_lossy(k).into_owned()).find(|k| k != "Off"));
             let export = exports.as_ref().and_then(|e| e.get(i).cloned().flatten());
-            return original.or(export).unwrap_or_else(|| selected.to_string());
-        }
+            Some((original, state, export))
+        })
+        .collect();
+    // `sel` is an on-state name, so every widget's state is compared before any `/PCOn`: with
+    // states `/0` `/1` and items `1` `2`, the state `1` is the second widget, not the first
+    // one's item.
+    let by_state = widgets.iter().find(|(_, state, _)| state.as_deref() == Some(selected));
+    let by_item = || widgets.iter().find(|(original, _, _)| original.as_deref() == Some(selected));
+    match by_state.or_else(by_item) {
+        Some((original, _, export)) => original.clone().or_else(|| export.clone()).unwrap_or_else(|| selected.to_string()),
+        None => selected.to_string(),
     }
-    selected.to_string()
 }
 
 /// The on and off item values of a check box (`/PCItems`), or the widget's on state.
