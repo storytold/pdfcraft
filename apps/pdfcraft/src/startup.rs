@@ -7,6 +7,7 @@ pub(super) struct Arguments {
     pub options: Vec<(String, String)>,
     pub control_file: Option<String>,
     pub create_images: bool,
+    pub combine: bool,
     pub new_window: bool,
     pub two_paged: bool,
     pub version: bool,
@@ -33,6 +34,7 @@ impl Arguments {
                 }
                 "--control" => parsed.control_file = args.next(),
                 "--create-images" => parsed.create_images = true,
+                "--combine" => parsed.combine = true,
                 "--new-window" => parsed.new_window = true,
                 "--two-paged" => parsed.two_paged = true,
                 flag if flag.starts_with("--two-paged=") => {
