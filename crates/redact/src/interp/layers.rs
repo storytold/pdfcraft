@@ -1,12 +1,52 @@
 use super::{Dict, Document, HashSet, ObjRef, Object, Op, Scope};
 
+fn resolve(doc: &Document, obj: &Object) -> Object {
+    let mut cur = obj.clone();
+    for _ in 0..16 {
+        let Object::Ref(r) = cur else { break };
+        cur = (*doc.get(r)).clone();
+    }
+    cur
+}
+
+fn target_ref(doc: &Document, obj: &Object) -> Option<ObjRef> {
+    let mut cur = obj.as_ref()?;
+    for _ in 0..16 {
+        match &*doc.get(cur) {
+            Object::Ref(next) => cur = *next,
+            _ => return Some(cur),
+        }
+    }
+    None
+}
+
+fn dict_name(doc: &Document, d: &Dict, key: &[u8]) -> Option<Vec<u8>> {
+    d.get(key).and_then(|v| resolve(doc, v).as_name().map(<[u8]>::to_vec))
+}
+
+fn is_ocmd(doc: &Document, d: &Dict) -> bool {
+    match dict_name(doc, d, b"Type").as_deref() {
+        Some(b"OCMD") => true,
+        Some(_) => false,
+        None => d.contains(b"OCGs") || d.contains(b"P") || d.contains(b"VE"),
+    }
+}
+
+fn is_ocg(doc: &Document, d: &Dict) -> bool {
+    match dict_name(doc, d, b"Type").as_deref() {
+        Some(b"OCG") => true,
+        Some(_) => false,
+        None => !is_ocmd(doc, d),
+    }
+}
+
 impl<'a> Scope<'a> {
     /// Is this optional-content reference (an OCG or OCMD) hidden?
     fn layer_hidden(&mut self, doc: &Document, o: &Object) -> bool {
         if !self.layers_enabled {
             return false;
         }
-        let reference = o.as_ref();
+        let reference = target_ref(doc, o);
         if let Some(r) = reference {
             if let Some(hidden) = self.ocmd_cache.get(&r) {
                 return *hidden;
@@ -18,16 +58,18 @@ impl<'a> Scope<'a> {
         }
         // Evaluate the policy against the same default configuration used to select hidden
         // groups. A membership dictionary's default policy is AnyOn.
-        let d = doc.resolve(o);
+        let d = resolve(doc, o);
         let Some(d) = d.as_dict() else { return false };
-        if d.name(b"Type") != Some(b"OCMD") {
+        if !is_ocmd(doc, d) {
             return false;
         }
-        let groups: Vec<ObjRef> = match d.get(b"OCGs").map(|g| (*doc.resolve(g)).clone()) {
-            Some(Object::Array(a)) => a.iter().filter_map(Object::as_ref).collect(),
-            Some(_) => d.get(b"OCGs").and_then(Object::as_ref).into_iter().collect(),
+        let raw_groups: Vec<ObjRef> = match d.get(b"OCGs").map(|g| resolve(doc, g)) {
+            Some(Object::Array(a)) => a.iter().filter_map(|item| target_ref(doc, item)).collect(),
+            Some(_) => d.get(b"OCGs").and_then(|g| target_ref(doc, g)).into_iter().collect(),
             None => Vec::new(),
         };
+        let groups: Vec<ObjRef> =
+            raw_groups.into_iter().filter(|r| self.hidden_layers.contains(r) || doc.get(*r).as_dict().is_some_and(|g| is_ocg(doc, g))).collect();
         let fail_closed = || groups.iter().any(|g| self.hidden_layers.contains(g));
         let hidden = if let Some(expression) = d.get(b"VE") {
             let visible = self.visibility_expression(doc, expression, 0, &mut HashSet::new(), &mut 4096);
@@ -40,7 +82,7 @@ impl<'a> Scope<'a> {
         } else {
             let any_on = groups.iter().any(|g| !self.hidden_layers.contains(g));
             let all_on = groups.iter().all(|g| !self.hidden_layers.contains(g));
-            let policy = d.get(b"P").map(|p| doc.resolve(p)).and_then(|p| p.as_name().map(|name| name.to_vec()));
+            let policy = dict_name(doc, d, b"P");
             match (d.get(b"P"), policy.as_deref()) {
                 (None, _) | (Some(_), Some(b"AnyOn")) => !any_on,
                 (Some(_), Some(b"AllOn")) => !all_on,
@@ -94,15 +136,20 @@ impl<'a> Scope<'a> {
             return false;
         }
         *budget -= 1;
-        let reference = expression.as_ref();
-        if let Some(r) = reference
-            && !path.insert(r)
-        {
-            return false;
-        }
-        let resolved = doc.resolve(expression);
-        let complete = match &*resolved {
-            Object::Dict(d) if d.name(b"Type") == Some(b"OCG") => {
+        let reference = if expression.as_ref().is_some() {
+            let Some(r) = target_ref(doc, expression) else {
+                return false;
+            };
+            if !path.insert(r) {
+                return false;
+            }
+            Some(r)
+        } else {
+            None
+        };
+        let resolved = resolve(doc, expression);
+        let complete = match &resolved {
+            Object::Dict(d) if dict_name(doc, d, b"Type").as_deref() == Some(b"OCG") || reference.is_some_and(|r| hidden_layers.contains(&r)) => {
                 if let Some(r) = reference
                     && hidden_layers.contains(&r)
                 {
@@ -111,7 +158,7 @@ impl<'a> Scope<'a> {
                 reference.is_some()
             }
             Object::Array(items) => {
-                let Some(Object::Name(operator)) = items.first() else { return false };
+                let Some(operator) = items.first().and_then(|op| resolve(doc, op).as_name().map(<[u8]>::to_vec)) else { return false };
                 let operands = match operator.as_slice() {
                     b"And" | b"Or" if (2..=4097).contains(&items.len()) => items.get(1..),
                     b"Not" if items.len() == 2 => items.get(1..),
@@ -143,21 +190,25 @@ impl<'a> Scope<'a> {
             return None;
         }
         *budget -= 1;
-        let reference = expression.as_ref();
-        if let Some(r) = reference
-            && !path.insert(r)
-        {
-            return None;
-        }
-        let resolved = doc.resolve(expression);
-        let result = match &*resolved {
-            Object::Dict(d) if d.name(b"Type") == Some(b"OCG") => reference.map(|r| !self.hidden_layers.contains(&r)),
+        let reference = if expression.as_ref().is_some() {
+            let r = target_ref(doc, expression)?;
+            if !path.insert(r) {
+                return None;
+            }
+            Some(r)
+        } else {
+            None
+        };
+        let resolved = resolve(doc, expression);
+        let result = match &resolved {
+            Object::Dict(d)
+                if dict_name(doc, d, b"Type").as_deref() == Some(b"OCG") || reference.is_some_and(|r| self.hidden_layers.contains(&r)) =>
+            {
+                reference.map(|r| !self.hidden_layers.contains(&r))
+            }
             Object::Array(items) if (2..=4097).contains(&items.len()) => {
-                let operator = match items.first() {
-                    Some(Object::Name(n)) => n.as_slice(),
-                    _ => return None,
-                };
-                match operator {
+                let operator = items.first().and_then(|op| resolve(doc, op).as_name().map(<[u8]>::to_vec))?;
+                match operator.as_slice() {
                     b"And" if items.len() >= 2 => {
                         let mut visible = true;
                         for item in items.iter().skip(1) {
@@ -172,7 +223,7 @@ impl<'a> Scope<'a> {
                         }
                         Some(visible)
                     }
-                    b"Not" if items.len() == 2 => Some(!self.visibility_expression(doc, &items[1], depth + 1, path, budget)?),
+                    b"Not" if items.len() == 2 => Some(!self.visibility_expression(doc, items.get(1)?, depth + 1, path, budget)?),
                     _ => None,
                 }
             }
@@ -191,22 +242,28 @@ impl<'a> Scope<'a> {
             return true;
         }
         *budget -= 1;
-        if let Some(r) = expression.as_ref() {
+        let reference = if expression.as_ref().is_some() {
+            let Some(r) = target_ref(doc, expression) else {
+                return true;
+            };
             if self.hidden_layers.contains(&r) {
                 return true;
             }
             if !path.insert(r) {
                 return true;
             }
-        }
-        let resolved = doc.resolve(expression);
-        let found = match &*resolved {
+            Some(r)
+        } else {
+            None
+        };
+        let resolved = resolve(doc, expression);
+        let found = match &resolved {
             Object::Array(items) => items.iter().any(|item| self.expression_mentions_hidden(doc, item, depth + 1, path, budget)),
-            Object::Dict(d) if d.name(b"Type") == Some(b"OCG") => expression.as_ref().is_none_or(|r| self.hidden_layers.contains(&r)),
+            Object::Dict(d) if dict_name(doc, d, b"Type").as_deref() == Some(b"OCG") => reference.is_none_or(|r| self.hidden_layers.contains(&r)),
             Object::Dict(_) => true,
             _ => false,
         };
-        if let Some(r) = expression.as_ref() {
+        if let Some(r) = reference {
             path.remove(&r);
         }
         found
@@ -253,4 +310,127 @@ pub(super) fn strip_hidden_layers(doc: &Document, scope: &mut Scope<'_>, ops: Ve
         }
     }
     (out, removed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Report;
+    use crate::interp::Mode;
+    use pdfcraft_cos::DecodeBudget;
+
+    fn test_doc() -> Document {
+        Document::new_empty()
+    }
+
+    #[test]
+    fn ocmd_without_explicit_type_or_with_indirect_type_hides_off_layer() {
+        let mut doc = test_doc();
+        let mut ocg = Dict::new();
+        ocg.set(b"Type".to_vec(), Object::Name(b"OCG".to_vec()));
+        let ocg_ref = doc.add(Object::Dict(ocg));
+
+        // OCMD 1 omits optional /Type (valid per ISO 32000-2 Table 97).
+        let mut ocmd_no_type = Dict::new();
+        ocmd_no_type.set(b"OCGs".to_vec(), Object::Array(vec![Object::Ref(ocg_ref)]));
+        let ocmd1_ref = doc.add(Object::Dict(ocmd_no_type));
+
+        // OCMD 2 uses an indirect /Type /OCMD and a 2-hop reference to the OCG.
+        let type_ref = doc.add(Object::Name(b"OCMD".to_vec()));
+        let ocg_hop = doc.add(Object::Ref(ocg_ref));
+        let mut ocmd_ind_type = Dict::new();
+        ocmd_ind_type.set(b"Type".to_vec(), Object::Ref(type_ref));
+        ocmd_ind_type.set(b"OCGs".to_vec(), Object::Ref(ocg_hop));
+        let ocmd2_ref = doc.add(Object::Dict(ocmd_ind_type));
+
+        let mut props = Dict::new();
+        props.set(b"M1".to_vec(), Object::Ref(ocmd1_ref));
+        props.set(b"M2".to_vec(), Object::Ref(ocmd2_ref));
+
+        let mut report = Report::default();
+        let mut scope = Scope::new(&[], Mode::Apply, &mut report, DecodeBudget::page());
+        scope.layers_enabled = true;
+        scope.hidden_layers.insert(ocg_ref);
+
+        let ops = pdfcraft_content::parse(b"/OC /M1 BDC (secret1) Tj EMC /OC /M2 BDC (secret2) Tj EMC (kept) Tj").ops;
+        let (remaining, removed) = strip_hidden_layers(&doc, &mut scope, ops, &props);
+        assert_eq!(removed, 2);
+        assert_eq!(remaining.len(), 1);
+    }
+
+    #[test]
+    fn ocmd_ignores_deleted_or_non_dict_ocg_entries_under_any_on() {
+        let mut doc = test_doc();
+        let mut ocg = Dict::new();
+        ocg.set(b"Type".to_vec(), Object::Name(b"OCG".to_vec()));
+        let ocg_ref = doc.add(Object::Dict(ocg));
+        let null_ref = doc.add(Object::Null);
+        let int_ref = doc.add(Object::Int(42));
+
+        let mut ocmd = Dict::new();
+        ocmd.set(b"Type".to_vec(), Object::Name(b"OCMD".to_vec()));
+        ocmd.set(b"P".to_vec(), Object::Name(b"AnyOn".to_vec()));
+        ocmd.set(b"OCGs".to_vec(), Object::Array(vec![Object::Ref(ocg_ref), Object::Ref(null_ref), Object::Ref(int_ref)]));
+        let ocmd_ref = doc.add(Object::Dict(ocmd));
+
+        let mut report = Report::default();
+        let mut scope = Scope::new(&[], Mode::Apply, &mut report, DecodeBudget::page());
+        scope.layers_enabled = true;
+        scope.hidden_layers.insert(ocg_ref);
+
+        assert!(
+            scope.layer_hidden(&doc, &Object::Ref(ocmd_ref)),
+            "deleted/null and non-dictionary entries in /OCGs must be ignored per ISO 32000-2 Table 97"
+        );
+    }
+
+    #[test]
+    fn visibility_expression_resolves_indirect_operators_and_chained_ocg_refs() {
+        let mut doc = test_doc();
+        let ocg_type_ref = doc.add(Object::Name(b"OCG".to_vec()));
+        let mut ocg_on = Dict::new();
+        ocg_on.set(b"Type".to_vec(), Object::Ref(ocg_type_ref));
+        let ocg_on_ref = doc.add(Object::Dict(ocg_on));
+        let ocg_on_hop = doc.add(Object::Ref(ocg_on_ref));
+
+        let not_op_ref = doc.add(Object::Name(b"Not".to_vec()));
+        let ve_ref = doc.add(Object::Array(vec![Object::Ref(not_op_ref), Object::Ref(ocg_on_hop)]));
+
+        let mut ocmd = Dict::new();
+        ocmd.set(b"VE".to_vec(), Object::Ref(ve_ref));
+        let ocmd_ref = doc.add(Object::Dict(ocmd));
+
+        let mut report = Report::default();
+        let mut scope = Scope::new(&[], Mode::Apply, &mut report, DecodeBudget::page());
+        scope.layers_enabled = true;
+
+        assert!(
+            scope.layer_hidden(&doc, &Object::Ref(ocmd_ref)),
+            "/VE [/Not <on-ocg>] with indirect operator and chained OCG ref must evaluate to hidden"
+        );
+    }
+
+    #[test]
+    fn cyclic_ocmd_and_ve_ref_chains_fail_closed_and_terminate() {
+        let mut doc = test_doc();
+        let mut ocg = Dict::new();
+        ocg.set(b"Type".to_vec(), Object::Name(b"OCG".to_vec()));
+        let ocg_ref = doc.add(Object::Dict(ocg));
+
+        let cycle_a = doc.add(Object::Null);
+        let cycle_b = doc.add(Object::Ref(cycle_a));
+        doc.set(cycle_a, Object::Ref(cycle_b));
+
+        let mut ocmd = Dict::new();
+        ocmd.set(b"OCGs".to_vec(), Object::Array(vec![Object::Ref(ocg_ref), Object::Ref(cycle_a)]));
+        ocmd.set(b"VE".to_vec(), Object::Ref(cycle_a));
+        let ocmd_ref = doc.add(Object::Dict(ocmd));
+
+        let mut report = Report::default();
+        let mut scope = Scope::new(&[], Mode::Apply, &mut report, DecodeBudget::page());
+        scope.layers_enabled = true;
+        scope.hidden_layers.insert(ocg_ref);
+
+        assert!(scope.layer_hidden(&doc, &Object::Ref(ocmd_ref)));
+    }
 }

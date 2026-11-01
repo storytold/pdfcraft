@@ -3,6 +3,34 @@ use super::{
     overlaps, page_streams, res_dict,
 };
 
+fn resolve(doc: &Document, obj: &Object) -> Object {
+    let mut cur = obj.clone();
+    for _ in 0..16 {
+        let Object::Ref(r) = cur else { break };
+        cur = (*doc.get(r)).clone();
+    }
+    cur
+}
+
+fn target_ref(doc: &Document, obj: &Object) -> Option<ObjRef> {
+    let mut cur = obj.as_ref()?;
+    for _ in 0..16 {
+        match &*doc.get(cur) {
+            Object::Ref(next) => cur = *next,
+            _ => return Some(cur),
+        }
+    }
+    None
+}
+
+fn dict_name(doc: &Document, d: &Dict, key: &[u8]) -> Option<Vec<u8>> {
+    d.get(key).and_then(|v| resolve(doc, v).as_name().map(<[u8]>::to_vec))
+}
+
+fn matches_retired(doc: &Document, value: &Object, retired: &[Object]) -> bool {
+    retired.contains(value) || target_ref(doc, value).is_some_and(|r| retired.iter().any(|item| target_ref(doc, item) == Some(r)))
+}
+
 /// Drop every `replaced` resource name whose `Do` no longer appears in the rewritten `content`,
 /// so a full-rewrite save stops reaching the original image or form it named. A name that some
 /// surviving `Do` still draws (the same image shown again outside a mark) is kept.
@@ -31,10 +59,10 @@ fn content_draws(doc: &Document, content: &[Vec<u8>], xo: &Dict, name: &[u8], de
         if n == name {
             return Some(true);
         }
-        let Some(r) = xo.get(n).and_then(Object::as_ref) else { continue };
+        let Some(r) = xo.get(n).and_then(|v| target_ref(doc, v)) else { continue };
         let obj = doc.get(r);
         let Object::Stream(s) = &*obj else { continue };
-        if s.dict.name(b"Subtype") != Some(b"Form") || s.dict.contains(b"Resources") || !seen.insert(r) {
+        if dict_name(doc, &s.dict, b"Subtype").as_deref() != Some(b"Form") || s.dict.contains(b"Resources") || !seen.insert(r) {
             continue;
         }
         if depth >= MAX_DEPTH {
@@ -67,7 +95,11 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
         return Ok(());
     }
     let doomed: HashSet<ObjRef> = doomed.iter().copied().collect();
-    let Some(top) = doc.root().and_then(|root| doc.get(root).as_dict().and_then(|d| d.reference(b"Pages"))) else { return Ok(()) };
+    let Some(top) =
+        doc.root().and_then(|root| resolve(doc, &Object::Ref(root)).as_dict().and_then(|d| d.get(b"Pages")).and_then(|p| target_ref(doc, p)))
+    else {
+        return Ok(());
+    };
     // Every page-tree node with a /Resources of its own, and the pages that draw through it
     // (the nearest such node above a page, or the page itself). Cycles are cut as in
     // `pdfcraft_model::pages`.
@@ -84,10 +116,11 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
             holders.push((node, Vec::new()));
             holder = Some(holders.len() - 1);
         }
-        let is_pages = d.name(b"Type") == Some(b"Pages") || (d.contains(b"Kids") && d.name(b"Type") != Some(b"Page"));
+        let kind = dict_name(doc, d, b"Type");
+        let is_pages = kind.as_deref() == Some(b"Pages") || (d.contains(b"Kids") && kind.as_deref() != Some(b"Page"));
         if is_pages {
-            let kids = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
-            stack.extend(kids.iter().filter_map(Object::as_ref).map(|k| (k, holder)));
+            let kids = d.get(b"Kids").and_then(|k| resolve(doc, k).as_array().cloned()).unwrap_or_default();
+            stack.extend(kids.iter().filter_map(|k| target_ref(doc, k)).map(|k| (k, holder)));
         } else if let Some(h) = holder.and_then(|i| holders.get_mut(i)) {
             h.1.push(node);
         }
@@ -95,13 +128,15 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
     let index: HashMap<ObjRef, usize> = pdfcraft_model::pages(doc).iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
     let holder_nodes: Vec<ObjRef> = holders.iter().map(|(node, _)| *node).collect();
     for (node, users) in holders {
-        let Some(mut res) = doc.get(node).as_dict().and_then(|d| d.get(b"Resources")).and_then(|r| doc.resolve(r).as_dict().cloned()) else {
+        let Some(mut res) = doc.get(node).as_dict().and_then(|d| d.get(b"Resources")).and_then(|r| resolve(doc, r).as_dict().cloned()) else {
             continue;
         };
         let mut xo = res_dict(doc, &res, b"XObject");
-        let names: Vec<Vec<u8>> = xo.iter().filter(|(_, v)| v.as_ref().is_some_and(|r| doomed.contains(&r))).map(|(n, _)| n.to_vec()).collect();
+        let names: Vec<Vec<u8>> =
+            xo.iter().filter(|(_, v)| target_ref(doc, v).is_some_and(|r| doomed.contains(&r))).map(|(n, _)| n.to_vec()).collect();
         let properties = res_dict(doc, &res, b"Properties");
-        let property_names: Vec<Vec<u8>> = properties.iter().filter(|(_, v)| retired_properties.contains(v)).map(|(n, _)| n.to_vec()).collect();
+        let property_names: Vec<Vec<u8>> =
+            properties.iter().filter(|(_, v)| matches_retired(doc, v, retired_properties)).map(|(n, _)| n.to_vec()).collect();
         if names.is_empty() && property_names.is_empty() {
             continue;
         }
@@ -186,12 +221,12 @@ fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<Ob
     }
     let mut pending: Vec<Dict> = holders
         .iter()
-        .filter_map(|r| doc.get(*r).as_dict().and_then(|d| d.get(b"Resources")).and_then(|r| doc.resolve(r).as_dict().cloned()))
+        .filter_map(|r| doc.get(*r).as_dict().and_then(|d| d.get(b"Resources")).and_then(|r| resolve(doc, r).as_dict().cloned()))
         .collect();
     let mut seen = HashSet::new();
     while let Some(resources) = pending.pop() {
         for (_, value) in res_dict(doc, &resources, b"XObject").iter() {
-            let Some(reference) = value.as_ref() else { continue };
+            let Some(reference) = target_ref(doc, value) else { continue };
             if !seen.insert(reference) {
                 continue;
             }
@@ -200,15 +235,18 @@ fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<Ob
             }
             let object = doc.get(reference);
             let Object::Stream(form) = &*object else { continue };
-            if form.dict.name(b"Subtype") != Some(b"Form") {
+            if dict_name(doc, &form.dict, b"Subtype").as_deref() != Some(b"Form") {
                 continue;
             }
-            let Some(mut res) = form.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()) else { continue };
-            let names: Vec<Vec<u8>> =
-                res_dict(doc, &res, b"Properties").iter().filter(|(_, value)| retired.contains(value)).map(|(name, _)| name.to_vec()).collect();
+            let Some(mut res) = form.dict.get(b"Resources").and_then(|r| resolve(doc, r).as_dict().cloned()) else { continue };
+            let names: Vec<Vec<u8>> = res_dict(doc, &res, b"Properties")
+                .iter()
+                .filter(|(_, value)| matches_retired(doc, value, retired))
+                .map(|(name, _)| name.to_vec())
+                .collect();
             let mut xo = res_dict(doc, &res, b"XObject");
             let doomed_names: Vec<Vec<u8>> =
-                xo.iter().filter(|(_, v)| v.as_ref().is_some_and(|r| doomed.contains(&r))).map(|(n, _)| n.to_vec()).collect();
+                xo.iter().filter(|(_, v)| target_ref(doc, v).is_some_and(|r| doomed.contains(&r))).map(|(n, _)| n.to_vec()).collect();
             if names.is_empty() && doomed_names.is_empty() {
                 pending.push(res);
                 continue;
@@ -272,14 +310,13 @@ pub(crate) fn resource_ops(doc: &Document, res: &Dict, content: &[Vec<u8>]) -> R
     let xobjects = res_dict(doc, res, b"XObject");
     let mut seen = HashSet::new();
     let mut cursor = 0;
-    while cursor < ops.len() {
-        let op = &ops[cursor];
+    while let Some(op) = ops.get(cursor) {
         if op.is("Do")
-            && let Some(r) = op.last_name().and_then(|n| xobjects.get(n)).and_then(Object::as_ref)
+            && let Some(r) = op.last_name().and_then(|n| xobjects.get(n)).and_then(|v| target_ref(doc, v))
             && seen.insert(r)
             && let Object::Stream(s) = &*doc.get(r)
-            && s.dict.name(b"Subtype") == Some(b"Form")
-            && s.dict.get(b"Resources").is_none_or(|r| doc.resolve(r).as_dict().is_none())
+            && dict_name(doc, &s.dict, b"Subtype").as_deref() == Some(b"Form")
+            && s.dict.get(b"Resources").is_none_or(|r| resolve(doc, r).as_dict().is_none())
         {
             let parsed = pdfcraft_content::parse(&s.decoded()?);
             if seen.len() > 2_000_000 || ops.len().saturating_add(parsed.ops.len()) > 2_000_000 || parsed.skipped > 0 {
@@ -354,4 +391,118 @@ pub(super) fn extgstate_font(
         }
     };
     Some((metrics, vertical, size))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pdfcraft_cos::Stream;
+
+    fn test_doc() -> Document {
+        Document::new_empty()
+    }
+
+    #[test]
+    fn unlink_doomed_prunes_chained_xobject_refs_and_indirect_types() {
+        let mut doc = test_doc();
+        let doomed_img = doc.add(Object::Stream(Stream::from_raw(Dict::new(), Vec::new())));
+        let doomed_hop = doc.add(Object::Ref(doomed_img));
+
+        let retired_prop = doc.add(Object::Dict(Dict::new()));
+        let retired_hop = doc.add(Object::Ref(retired_prop));
+
+        let form_subtype_ref = doc.add(Object::Name(b"Form".to_vec()));
+        let mut form_xo = Dict::new();
+        form_xo.set(b"ImDoomed".to_vec(), Object::Ref(doomed_hop));
+        let mut form_props = Dict::new();
+        form_props.set(b"PrRetired".to_vec(), Object::Ref(retired_hop));
+        let mut form_res = Dict::new();
+        form_res.set(b"XObject".to_vec(), Object::Dict(form_xo));
+        form_res.set(b"Properties".to_vec(), Object::Dict(form_props));
+        let mut form_dict = Dict::new();
+        form_dict.set(b"Subtype".to_vec(), Object::Ref(form_subtype_ref));
+        form_dict.set(b"Resources".to_vec(), Object::Dict(form_res));
+        let form_ref = doc.add(Object::Stream(Stream::from_raw(form_dict, b"q Q".to_vec())));
+        let form_hop = doc.add(Object::Ref(form_ref));
+
+        let mut page_xo = Dict::new();
+        page_xo.set(b"ImDoomed".to_vec(), Object::Ref(doomed_hop));
+        page_xo.set(b"FmKeep".to_vec(), Object::Ref(form_hop));
+        let mut page_props = Dict::new();
+        page_props.set(b"PrRetired".to_vec(), Object::Ref(retired_hop));
+        let mut page_res = Dict::new();
+        page_res.set(b"XObject".to_vec(), Object::Dict(page_xo));
+        page_res.set(b"Properties".to_vec(), Object::Dict(page_props));
+
+        let page_type_ref = doc.add(Object::Name(b"Page".to_vec()));
+        let contents_ref = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"/FmKeep Do".to_vec())));
+        let pages_ref = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages"))).expect("pages ref");
+        let mut page_dict = Dict::new();
+        page_dict.set(b"Type".to_vec(), Object::Ref(page_type_ref));
+        page_dict.set(b"Parent".to_vec(), Object::Ref(pages_ref));
+        page_dict.set(b"Resources".to_vec(), Object::Dict(page_res));
+        page_dict.set(b"Contents".to_vec(), Object::Ref(contents_ref));
+        let page_ref = doc.add(Object::Dict(page_dict));
+        let page_hop = doc.add(Object::Ref(page_ref));
+
+        let pages_type_ref = doc.add(Object::Name(b"Pages".to_vec()));
+        doc.update_dict(pages_ref, |d| {
+            d.set(b"Type".to_vec(), Object::Ref(pages_type_ref));
+            d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page_hop)]));
+            d.set(b"Count".to_vec(), Object::Int(1));
+        })
+        .expect("update pages");
+
+        unlink_doomed(&mut doc, &[doomed_img], &[Object::Ref(retired_prop)]).expect("unlink doomed");
+
+        let updated_page = doc.get(page_ref);
+        let updated_page_res = updated_page.as_dict().and_then(|d| d.get(b"Resources")).and_then(Object::as_dict).expect("page res");
+        let updated_page_xo = updated_page_res.get(b"XObject").and_then(Object::as_dict).expect("page xo");
+        assert!(!updated_page_xo.contains(b"ImDoomed"), "chained ref to doomed XObject must be unlinked from page");
+        assert!(updated_page_xo.contains(b"FmKeep"));
+        assert!(!updated_page_res.contains(b"Properties"), "chained ref to retired property must be unlinked from page");
+
+        let updated_form = doc.get(form_ref);
+        let updated_form_res = updated_form.as_dict().and_then(|d| d.get(b"Resources")).and_then(Object::as_dict).expect("form res");
+        let updated_form_xo = updated_form_res.get(b"XObject").and_then(Object::as_dict).expect("form xo");
+        assert!(!updated_form_xo.contains(b"ImDoomed"), "chained ref to doomed XObject must be unlinked from surviving form");
+        assert!(!updated_form_res.contains(b"Properties"), "chained ref to retired property must be unlinked from surviving form");
+    }
+
+    #[test]
+    fn resource_ops_follows_inheriting_form_with_indirect_subtype_and_chained_ref() {
+        let mut doc = test_doc();
+        let form_subtype_ref = doc.add(Object::Name(b"Form".to_vec()));
+        let mut form_dict = Dict::new();
+        form_dict.set(b"Subtype".to_vec(), Object::Ref(form_subtype_ref));
+        let form_ref = doc.add(Object::Stream(Stream::from_raw(form_dict, b"/OC /P1 BDC (inside) Tj EMC".to_vec())));
+        let form_hop = doc.add(Object::Ref(form_ref));
+
+        let mut xo = Dict::new();
+        xo.set(b"Fm1".to_vec(), Object::Ref(form_hop));
+        let mut props = Dict::new();
+        props.set(b"P1".to_vec(), Object::Dict(Dict::new()));
+        props.set(b"P2".to_vec(), Object::Dict(Dict::new()));
+        let mut res = Dict::new();
+        res.set(b"XObject".to_vec(), Object::Dict(xo));
+        res.set(b"Properties".to_vec(), Object::Dict(props));
+
+        let retired = prune_properties(&doc, &mut res, &[b"/Fm1 Do".to_vec()]).expect("prune properties");
+        assert_eq!(retired.len(), 1);
+        let kept_props = res.get(b"Properties").and_then(Object::as_dict).expect("kept properties");
+        assert!(kept_props.contains(b"P1"), "property used inside inheriting form must be kept");
+        assert!(!kept_props.contains(b"P2"), "unused property must be retired");
+    }
+
+    #[test]
+    fn unlink_doomed_terminates_on_cyclic_page_tree_and_form_resources() {
+        let mut doc = test_doc();
+        let doomed_img = doc.add(Object::Stream(Stream::from_raw(Dict::new(), Vec::new())));
+        let pages_ref = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages"))).expect("pages ref");
+        doc.update_dict(pages_ref, |d| {
+            d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(pages_ref)]));
+        })
+        .expect("update cyclic kids");
+        assert!(unlink_doomed(&mut doc, &[doomed_img], &[]).is_ok());
+    }
 }
