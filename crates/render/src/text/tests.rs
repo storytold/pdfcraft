@@ -1965,3 +1965,55 @@ fn text_outside_the_crop_box_is_clipped() {
         assert!(text.is_empty(), "expected no glyphs on {crop:?}, got {:?}", text.plain_text());
     }
 }
+
+/// An embedded TrueType font as a Type 0 font (`Identity-H`, CID = glyph index), `to_unicode`
+/// being the font's `/ToUnicode` value if any, drawing "Zażółć gęślą jaźń, Grüße".
+fn identity_h_text(to_unicode: Option<lopdf::Object>) -> String {
+    use lopdf::{Document, Object, Stream, dictionary};
+    use skrifa::MetadataProvider;
+    let ttf = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+    let face = skrifa::FontRef::new(ttf).unwrap();
+    let mut doc = Document::with_version("1.7");
+    let program = doc.add_object(Stream::new(dictionary! {}, ttf.to_vec()));
+    let descriptor = doc.add_object(dictionary! {
+        "Type" => "FontDescriptor", "FontName" => "Inter-Regular", "Flags" => 4, "FontFile2" => program,
+    });
+    let cid_font = doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "CIDFontType2", "BaseFont" => "Inter-Regular", "FontDescriptor" => descriptor,
+        "CIDSystemInfo" => dictionary! {
+            "Registry" => Object::string_literal("Adobe"), "Ordering" => Object::string_literal("Identity"), "Supplement" => 0,
+        },
+        "CIDToGIDMap" => "Identity",
+    });
+    let mut font = dictionary! {
+        "Type" => "Font", "Subtype" => "Type0", "BaseFont" => "Inter-Regular", "Encoding" => "Identity-H",
+        "DescendantFonts" => vec![Object::Reference(cid_font)],
+    };
+    if let Some(value) = to_unicode {
+        font.set("ToUnicode", value);
+    }
+    let font = doc.add_object(font);
+    let mut hex = String::new();
+    for c in "Zażółć gęślą jaźń, Grüße".chars() {
+        hex.push_str(&format!("{:04X}", face.charmap().map(c).unwrap().to_u32()));
+    }
+    let content = doc.add_object(Stream::new(dictionary! {}, format!("BT /F1 14 Tf 1 0 0 1 20 200 Tm <{hex}> Tj ET").into_bytes()));
+    let pages = doc.new_object_id();
+    let page = doc.add_object(dictionary! {
+        "Type" => "Page", "Parent" => pages,
+        "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(400), Object::Integer(400)],
+        "Resources" => dictionary! {"Font" => dictionary! {"F1" => font}}, "Contents" => content,
+    });
+    doc.objects.insert(pages, dictionary! {"Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1}.into());
+    let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+    extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap().plain_text()
+}
+
+#[test]
+fn embedded_identity_h_font_without_a_usable_to_unicode_reads_text_from_its_cmap() {
+    assert_eq!(identity_h_text(None), "Zażółć gęślą jaźń, Grüße", "no /ToUnicode");
+}

@@ -90,7 +90,7 @@ impl Glyph<'_> {
     ///
     /// **For CID Fonts (Type0):**
     /// 1. `ToUnicode` cmap
-    ///
+    /// 2. For an embedded TrueType font, the glyph the code draws, looked up in the font's own `cmap`
     ///
     /// **For Type3 Fonts:**
     /// 1. `ToUnicode` cmap
