@@ -18,7 +18,7 @@ use windows::Win32::Foundation::{
     CLASS_E_CLASSNOTAVAILABLE, CLASS_E_NOAGGREGATION, E_INVALIDARG, E_OUTOFMEMORY, E_POINTER, ERROR_ALREADY_INITIALIZED, S_FALSE,
 };
 use windows::Win32::Graphics::Gdi::{BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateDIBSection, DIB_RGB_COLORS, HBITMAP};
-use windows::Win32::System::Com::{IClassFactory, IClassFactory_Impl, IStream, STATFLAG_NONAME, STATSTG};
+use windows::Win32::System::Com::{IClassFactory, IClassFactory_Impl, IStream, STATFLAG, STATFLAG_NONAME, STATSTG};
 use windows::Win32::UI::Shell::PropertiesSystem::{IInitializeWithStream, IInitializeWithStream_Impl};
 use windows::Win32::UI::Shell::{IThumbnailProvider, IThumbnailProvider_Impl, WTS_ALPHATYPE, WTS_E_FAILEDEXTRACTION, WTSAT_RGB, WTSAT_UNKNOWN};
 use windows_core::{BOOL, GUID, HRESULT, IUnknown, Interface, Ref, implement};
@@ -81,15 +81,18 @@ impl IThumbnailProvider_Impl for Provider_Impl {
 
 /// Reads the whole stream (up to [`MAX_FILE_BYTES`]).
 fn read_all(stream: &IStream) -> windows_core::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
     let mut stat = STATSTG::default();
     // SAFETY: `stat` is a valid, writable STATSTG; with STATFLAG_NONAME no name is allocated.
-    unsafe { stream.Stat(&mut stat, STATFLAG_NONAME)? };
-    if stat.cbSize > MAX_FILE_BYTES {
-        return Err(WTS_E_FAILEDEXTRACTION.into());
+    match unsafe { stream.Stat(&mut stat, STATFLAG_NONAME) } {
+        Ok(()) if stat.cbSize > MAX_FILE_BYTES => return Err(WTS_E_FAILEDEXTRACTION.into()),
+        Ok(()) => {
+            if let Ok(size) = usize::try_from(stat.cbSize) {
+                bytes.try_reserve_exact(size).map_err(|_| windows_core::Error::from(E_OUTOFMEMORY))?;
+            }
+        }
+        Err(_) => {}
     }
-    let size = usize::try_from(stat.cbSize).map_err(|_| windows_core::Error::from(E_OUTOFMEMORY))?;
-    let mut bytes = Vec::new();
-    bytes.try_reserve_exact(size).map_err(|_| windows_core::Error::from(E_OUTOFMEMORY))?;
     let mut chunk = vec![0u8; 1 << 20];
     loop {
         let mut read = 0u32;
@@ -273,5 +276,78 @@ mod tests {
     #[test]
     fn com_guard_turns_an_escaped_panic_into_an_extraction_error() {
         assert_eq!(guarded(|| panic!("synthetic COM failure")).unwrap_err().code(), WTS_E_FAILEDEXTRACTION);
+    }
+
+    #[test]
+    fn read_all_still_reads_when_stat_fails() {
+        use windows::Win32::Foundation::E_FAIL;
+        use windows::Win32::System::Com::{ISequentialStream_Impl, IStream_Impl, LOCKTYPE, STGC, STREAM_SEEK};
+
+        #[implement(IStream)]
+        struct StatFailsStream {
+            inner: IStream,
+        }
+
+        impl ISequentialStream_Impl for StatFailsStream_Impl {
+            fn Read(&self, pv: *mut core::ffi::c_void, cb: u32, pcbread: *mut u32) -> HRESULT {
+                unsafe { self.inner.Read(pv, cb, if pcbread.is_null() { None } else { Some(pcbread) }) }.into()
+            }
+
+            fn Write(&self, pv: *const core::ffi::c_void, cb: u32, pcbwritten: *mut u32) -> HRESULT {
+                unsafe { self.inner.Write(pv, cb, if pcbwritten.is_null() { None } else { Some(pcbwritten) }) }.into()
+            }
+        }
+
+        impl IStream_Impl for StatFailsStream_Impl {
+            fn Seek(&self, dlibmove: i64, dworigin: STREAM_SEEK, plibnewposition: *mut u64) -> windows_core::Result<()> {
+                unsafe { self.inner.Seek(dlibmove, dworigin, if plibnewposition.is_null() { None } else { Some(plibnewposition) }) }
+            }
+
+            fn SetSize(&self, libnewsize: u64) -> windows_core::Result<()> {
+                unsafe { self.inner.SetSize(libnewsize) }
+            }
+
+            fn CopyTo(&self, pstm: windows_core::Ref<IStream>, cb: u64, pcbread: *mut u64, pcbwritten: *mut u64) -> windows_core::Result<()> {
+                unsafe {
+                    self.inner.CopyTo(
+                        pstm.as_ref(),
+                        cb,
+                        if pcbread.is_null() { None } else { Some(pcbread) },
+                        if pcbwritten.is_null() { None } else { Some(pcbwritten) },
+                    )
+                }
+            }
+
+            fn Commit(&self, grfcommitflags: &STGC) -> windows_core::Result<()> {
+                unsafe { self.inner.Commit(*grfcommitflags) }
+            }
+
+            fn Revert(&self) -> windows_core::Result<()> {
+                unsafe { self.inner.Revert() }
+            }
+
+            fn LockRegion(&self, liboffset: u64, cb: u64, dwlocktype: &LOCKTYPE) -> windows_core::Result<()> {
+                unsafe { self.inner.LockRegion(liboffset, cb, *dwlocktype) }
+            }
+
+            fn UnlockRegion(&self, liboffset: u64, cb: u64, dwlocktype: u32) -> windows_core::Result<()> {
+                unsafe { self.inner.UnlockRegion(liboffset, cb, dwlocktype) }
+            }
+
+            fn Stat(&self, _pstatstg: *mut STATSTG, _grfstatflag: &STATFLAG) -> windows_core::Result<()> {
+                Err(E_FAIL.into())
+            }
+
+            fn Clone(&self) -> windows_core::Result<IStream> {
+                unsafe { self.inner.Clone() }
+            }
+        }
+
+        let pdf = crate::tests::pdf(10, 10, "");
+        unsafe {
+            let inner = SHCreateMemStream(Some(&pdf)).unwrap();
+            let stream: IStream = StatFailsStream { inner }.into();
+            assert_eq!(read_all(&stream).unwrap(), pdf);
+        }
     }
 }
