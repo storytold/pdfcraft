@@ -418,17 +418,17 @@ fn added_text_format(
         crate::format_text_ui::Fonts { sources: Some(&sources), shown, mixed_size: false },
         paragraphs,
     );
-    match out.font {
+    match &out.font {
         Some(crate::format_text_ui::FontChoice::KeepSource) => {
             style.font_resource = None;
         }
         Some(crate::format_text_ui::FontChoice::Resource(resource)) => {
-            style.font_resource = Some(resource);
+            style.font_resource = Some(resource.clone());
             style.bold = false;
             style.italic = false;
         }
         Some(crate::format_text_ui::FontChoice::Family(family)) => {
-            style.family = family;
+            style.family = *family;
             style.font_resource = None;
         }
         Some(crate::format_text_ui::FontChoice::Load) => {
@@ -436,7 +436,7 @@ fn added_text_format(
         }
         #[cfg(not(target_arch = "wasm32"))]
         Some(crate::format_text_ui::FontChoice::Installed(path)) => {
-            app.use_paths(crate::files::FilePurpose::TextFont { page }, &[path]);
+            app.use_paths(crate::files::FilePurpose::TextFont { page }, std::slice::from_ref(path));
             if let Some(r) = &app.text_style.font_resource {
                 style.font_resource = Some(r.clone());
                 style.bold = false;
