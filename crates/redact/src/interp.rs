@@ -884,7 +884,9 @@ fn xobject(
                     out.error = Some(error);
                     return None;
                 }
-                if let Err(error) = crate::type3::prune_type3_from_resources(doc, &mut cleaned_res, content) {
+                // No page: annotation appearances draw through a page's resources, never through a
+                // form's. The form's own patterns and soft masks are still counted.
+                if let Err(error) = crate::type3::prune_type3_from_resources(doc, &mut cleaned_res, content, None) {
                     out.error = Some(error);
                     return None;
                 }
