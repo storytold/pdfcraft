@@ -6,7 +6,9 @@
 //! calculation order, Format when the appearance is drawn — and applies what the script asks
 //! for: the event's value, `rc`, and changes to other fields.
 
-use pdfcraft_cos::{Document, Object, PdfString};
+use std::collections::HashSet;
+
+use pdfcraft_cos::{Document, ObjRef, Object, PdfString};
 
 use crate::{Field, FieldKind, FieldValue, FormError, fields, flags};
 
@@ -172,18 +174,28 @@ pub fn document_scripts_named(doc: &Document) -> Vec<(String, String)> {
     let Some(root) = doc.root() else { return Vec::new() };
     let cat = doc.get(root);
     let Some(names) = cat.as_dict().and_then(|c| c.get(b"Names")).map(|n| doc.resolve(n)) else { return Vec::new() };
-    let Some(tree) = names.as_dict().and_then(|n| n.get(b"JavaScript")).map(|t| doc.resolve(t)) else { return Vec::new() };
+    let Some(tree) = names.as_dict().and_then(|n| n.get(b"JavaScript")).cloned() else { return Vec::new() };
     let mut out: Vec<(String, String)> = Vec::new();
-    let mut stack = vec![(*tree).clone()];
-    let mut seen = 0;
-    while let Some(node) = stack.pop() {
-        seen += 1;
-        if seen > 10_000 {
+    let mut scripts = crate::script_budget();
+    // Kids stay unresolved on the stack, and each node is read once: a node listed many times,
+    // or among its own kids, must not multiply the work.
+    let mut stack = vec![tree];
+    let mut seen: HashSet<ObjRef> = HashSet::new();
+    let mut visited = 0;
+    while let Some(raw) = stack.pop() {
+        if let Object::Ref(r) = raw
+            && !seen.insert(r)
+        {
+            continue;
+        }
+        visited += 1;
+        if visited > 10_000 {
             break;
         }
+        let node = doc.resolve(&raw);
         let Some(d) = node.as_dict() else { continue };
         if let Some(kids) = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()) {
-            stack.extend(kids.iter().map(|k| (*doc.resolve(k)).clone()));
+            stack.extend(kids);
         }
         if let Some(pairs) = d.get(b"Names").map(|n| doc.resolve(n)).and_then(|n| n.as_array().cloned()) {
             for pair in pairs.chunks(2) {
@@ -192,7 +204,7 @@ pub fn document_scripts_named(doc: &Document) -> Vec<(String, String)> {
                     Object::String(s) => s.to_text(),
                     _ => continue,
                 };
-                if let Some(js) = crate::script(doc, v) {
+                if let Some(js) = crate::script(doc, v, &mut scripts) {
                     out.push((key, js));
                 }
             }
@@ -289,25 +301,7 @@ pub fn set_field_script(doc: &mut Document, name: &str, event: &str, js: Option<
         }
     })?;
     if key == b"C" {
-        let af_ref = crate::author::ensure_form(doc)?;
-        let mut co: Vec<Object> = doc
-            .get(af_ref)
-            .as_dict()
-            .and_then(|d| d.get(b"CO").cloned())
-            .map(|c| doc.resolve(&c))
-            .and_then(|c| c.as_array().cloned())
-            .unwrap_or_default();
-        co.retain(|o| o.as_ref() != Some(f.obj));
-        if js.is_some() {
-            co.push(Object::Ref(f.obj));
-        }
-        doc.update_dict(af_ref, |d| {
-            if co.is_empty() {
-                d.remove(b"CO");
-            } else {
-                d.set(b"CO".to_vec(), Object::Array(co));
-            }
-        })?;
+        crate::calc_order::keep_listed(doc, f.obj, js.is_some())?;
     }
     Ok(())
 }

@@ -14,9 +14,19 @@ impl Automation {
     pub(crate) fn redact_mark(&mut self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let (id, n) = (doc.id, doc.info.pages.len());
-        let pages: Vec<usize> = match a.opt_ints("pages")? {
-            Some(_) => self.pages(a, "pages")?,
-            None => (0..n).collect(),
+        if a.get("page").is_some() && a.get("pages").is_some() {
+            return Err(ToolError::InvalidArgs("pass page or pages, not both".into()));
+        }
+        if a.get("rect").is_some() && a.get("pages").is_some() {
+            return Err(ToolError::InvalidArgs("rect requires page, not pages".into()));
+        }
+        let pages: Vec<usize> = if a.get("page").is_some() {
+            vec![self.page(a)?]
+        } else {
+            match a.opt_ints("pages")? {
+                Some(_) => self.pages(a, "pages")?,
+                None => (0..n).collect(),
+            }
         };
         let overlay = match (a.opt_str("overlay")?, a.opt_str("code_set")?) {
             (Some(_), Some(_)) => return Err(ToolError::InvalidArgs("pass overlay or code_set with codes, not both".into())),
@@ -173,14 +183,16 @@ impl Automation {
     }
 
     pub(crate) fn doc_audit_redactions(&self, a: &Args) -> Result<Value> {
-        let findings = self.doc(a)?.audit_redactions().map_err(ToolError::Failed)?;
+        let d = self.doc(a)?;
+        let findings = d.audit_redactions().map_err(ToolError::Failed)?;
         let items: Vec<Value> = findings
             .into_iter()
             .map(|f| {
                 json!({
                     "page": f.page + 1,
                     "kind": f.kind.id(),
-                    "rect": f.rect,
+                    // Points from the top-left of the displayed page, like `comment_list` and `doc_info`.
+                    "rect": crate::view_rect(&d.info, f.page, f.rect.map(|v| v as f32)),
                     "covered_text": f.covered_text,
                 })
             })
