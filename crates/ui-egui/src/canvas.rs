@@ -3770,8 +3770,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     if stamp_placed {
         tool = QuickTool::Select;
     }
-    // Text: each click on the page starts a box (#74); Done in the editor goes back to selecting.
-    if text_done && tool == QuickTool::AddText {
+    // Text: each click on the page starts a box (#74); Done in the editor goes back to selecting,
+    // unless the quick bar's pin keeps the tool (#4863).
+    if text_done && tool == QuickTool::AddText && !app.comment_prefs.pinned {
         tool = QuickTool::Select;
     }
     // One field, then back to selecting (Acrobat's default without "Keep tools pinned").
