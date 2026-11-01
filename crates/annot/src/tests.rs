@@ -358,6 +358,11 @@ fn restyle_and_resize_redraw_the_appearance() {
 
 #[test]
 fn shapes_can_be_filled_and_unfilled() {
+    let rectangle = Shape::Rectangle { rect: [10.0, 10.0, 110.0, 60.0] };
+    let default = Style::default_for(&rectangle);
+    assert_eq!(default.fill, Some([1.0, 1.0, 1.0]));
+    assert_eq!(default.opacity, 1.0);
+
     let mut doc = fixture();
     let r = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [10.0, 10.0, 110.0, 60.0] }), &meta("r")).unwrap();
     let p = props(&doc, 0, r).unwrap();
