@@ -4652,7 +4652,9 @@ fn bind_items_empty_duplicate_and_huge_lists() {
     let form = layout_xml(&xdp).unwrap();
     let options = choice_options(&form);
     let of = |name: &str| options.iter().find(|(n, _)| n.starts_with(name)).map(|(_, o)| o.clone()).unwrap_or_default();
-    assert_eq!(of("empty"), Vec::new(), "{options:?}");
+    // Present and empty: `of` would also give an empty list for a field that is missing.
+    let empty = options.iter().find(|(n, _)| n.starts_with("empty")).map(|(_, o)| o.clone());
+    assert_eq!(empty, Some(Vec::new()), "{options:?}");
     let pairs = |p: &[(&str, &str)]| p.iter().map(|(v, l)| (v.to_string(), l.to_string())).collect::<Vec<_>>();
     assert_eq!(of("dup"), pairs(&[("a", "One"), ("a", "One"), ("b", "Two")]), "{options:?}");
     let huge = of("huge");
@@ -4722,4 +4724,27 @@ fn bind_items_searches_share_the_budget() {
     assert_eq!(bound + kept, 60, "{options:?}");
     assert!((45..=50).contains(&bound), "{bound} fields bound");
     assert!(form.warnings.iter().any(|w| w.contains("reads for one form")), "{:?}", form.warnings);
+}
+
+/// `valueRef` and `labelRef` are paths under each item (`meta.code`, `meta.@name`). One the
+/// reader cannot follow (an index) keeps the template's items, with a warning naming it, rather
+/// than listing blanks; so does a list from a data connection (a web service's reply), even when
+/// its ref also matches a path in the local data.
+#[test]
+fn bind_items_follow_item_paths_and_skip_connections() {
+    let xdp = r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+<pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium stock="letter" short="8.5in" long="11in"/></pageArea></pageSet>
+<field name="nested" w="2in" h="0.3in"><ui><choiceList/></ui><bindItems ref="!lists.c[*]" valueRef="meta.code" labelRef="$.meta.@name"/></field>
+<field name="indexed" w="2in" h="0.3in"><ui><choiceList/></ui><bindItems ref="!lists.c[*]" valueRef="meta.code[0]"/><items><text>Own</text></items></field>
+<field name="remote" w="2in" h="0.3in"><ui><choiceList/></ui><bindItems connection="ws" ref="!lists.c[*]" valueRef="meta.code"/><items><text>Own</text></items></field></subform></template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data/><lists><c><meta name="Canada"><code>CA</code></meta></c><c><meta name="Japan"><code>JP</code></meta></c></lists></xfa:datasets></xdp:xdp>"#;
+    let form = layout_xml(xdp).unwrap();
+    let options = choice_options(&form);
+    let of = |name: &str| options.iter().find(|(n, _)| n.starts_with(name)).map(|(_, o)| o.clone());
+    let pairs = |p: &[(&str, &str)]| Some(p.iter().map(|(v, l)| (v.to_string(), l.to_string())).collect::<Vec<_>>());
+    assert_eq!(of("nested"), pairs(&[("CA", "Canada"), ("JP", "Japan")]), "{options:?}");
+    assert_eq!(of("indexed"), pairs(&[("Own", "Own")]), "{options:?}");
+    assert_eq!(of("remote"), pairs(&[("Own", "Own")]), "{options:?}");
+    assert!(form.warnings.iter().any(|w| w.contains("indexed") && w.contains("meta.code[0]")), "{:?}", form.warnings);
+    assert!(form.warnings.iter().any(|w| w.contains("remote") && w.contains("connection ws")), "{:?}", form.warnings);
 }

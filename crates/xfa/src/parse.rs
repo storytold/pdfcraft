@@ -50,8 +50,10 @@ impl BindBudget {
 
 /// Why a `<bindItems>` list was not bound, and the field keeps its template items.
 enum Unbound {
-    /// A ref this reader does not follow.
-    Unfollowable,
+    /// A `ref`, `valueRef` or `labelRef` this reader does not follow (the expression).
+    Unfollowable(String),
+    /// A list from a data connection (its name), a web service this reader does not call.
+    Connection(String),
     /// The form's [`BindBudget`] has not enough left for the list.
     OverBudget,
 }
@@ -574,8 +576,11 @@ fn bind_items(n: XmlNode, b: XmlNode, warnings: &mut Vec<String>, budget: &mut B
     let mut unbound = |why: Unbound| {
         if warnings.len() < 100 {
             warnings.push(match why {
-                Unbound::Unfollowable => {
-                    format!("{} takes its items from data PdfCraft cannot follow ({reference}); it lists the template's items instead", field())
+                Unbound::Unfollowable(expression) => {
+                    format!("{} takes its items from data PdfCraft cannot follow ({expression}); it lists the template's items instead", field())
+                }
+                Unbound::Connection(connection) => {
+                    format!("{} takes its items from the data connection {connection}, which PdfCraft does not read; it lists the template's items instead", field())
                 }
                 Unbound::OverBudget => {
                     format!("{} needs more of the data than PdfCraft reads for one form; it lists the template's items instead", field())
@@ -600,27 +605,26 @@ fn bind_items(n: XmlNode, b: XmlNode, warnings: &mut Vec<String>, budget: &mut B
 /// item cap. The budget is taken only when the whole list fits; it is checked as the list
 /// grows, so one that will not fit stops visiting and allocating at once.
 fn bound_list(b: XmlNode, reference: &str, n: XmlNode, budget: &mut BindBudget) -> Result<(Vec<String>, Vec<String>, bool), Unbound> {
+    // A ref in a connection's data names nodes of a web service's reply, not of this XDP.
+    if let Some(connection) = b.attribute("connection").map(str::trim).filter(|c| !c.is_empty()) {
+        return Err(Unbound::Connection(connection.to_string()));
+    }
+    // Both expressions are checked before any data is read, so one that cannot be followed
+    // keeps the template's items rather than listing blanks.
+    fn item_ref(r: Option<&str>) -> Result<Vec<&str>, Unbound> {
+        let r = r.unwrap_or_default();
+        item_path(r).ok_or_else(|| Unbound::Unfollowable(r.trim().to_string()))
+    }
+    let value_path = item_ref(b.attribute("valueRef"))?;
+    let label_path = b.attribute("labelRef").filter(|r| !r.trim().is_empty()).map(|r| item_ref(Some(r))).transpose()?;
     let nodes = bound_nodes(n, reference, budget)?;
-    // `$` (or nothing) is the node's own value; a name is its attribute or else its child.
-    let read = |node: XmlNode, r: Option<&str>, budget: &mut BindBudget| -> Result<String, Unbound> {
-        let r = r.map(str::trim).map(|r| r.strip_prefix("$.").unwrap_or(r)).unwrap_or("$");
-        let r = r.strip_prefix('@').unwrap_or(r);
-        if r == "$" || r.is_empty() {
-            return bound_text(node, budget);
-        }
-        if let Some(a) = node.attribute(r) {
-            return Ok(a.to_string());
-        }
-        first_child(node, Some(r), budget)?.map_or_else(|| Ok(String::new()), |c| bound_text(c, budget))
-    };
-    let label_ref = b.attribute("labelRef").filter(|r| !r.trim().is_empty());
     let over_cap = nodes.len() > MAX_ITEMS;
     let (mut labels, mut values) = (Vec::new(), Vec::new());
     let mut bytes = 0usize;
     for node in nodes.into_iter().take(MAX_ITEMS) {
-        let value = read(node, b.attribute("valueRef"), budget)?;
-        let label = match label_ref {
-            Some(r) => read(node, Some(r), budget)?,
+        let value = read_item(node, &value_path, budget)?;
+        let label = match &label_path {
+            Some(path) => read_item(node, path, budget)?,
             None => value.clone(),
         };
         bytes = bytes.saturating_add(label.len()).saturating_add(value.len());
@@ -635,6 +639,45 @@ fn bound_list(b: XmlNode, reference: &str, n: XmlNode, budget: &mut BindBudget) 
     Ok((labels, values, over_cap))
 }
 
+/// A `valueRef` or `labelRef` as the steps it takes under each bound item (XFA 3.3: a SOM
+/// expression relative to the item): none for the item's own value (`$`, `$.` or nothing),
+/// else names, the last perhaps an attribute (`@lic`). `None` for anything more (an index, a
+/// class, a predicate, a wildcard), or past [`MAX_DEPTH`] steps.
+fn item_path(r: &str) -> Option<Vec<&str>> {
+    let r = r.trim();
+    let r = r.strip_prefix("$.").unwrap_or(r);
+    if r.is_empty() || r == "$" {
+        return Some(Vec::new());
+    }
+    let steps: Vec<&str> = r.split('.').take(MAX_DEPTH + 1).collect();
+    if steps.len() > MAX_DEPTH {
+        return None;
+    }
+    let last = steps.len().saturating_sub(1);
+    let plain = |name: &str| !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | ':'));
+    steps.iter().enumerate().all(|(i, step)| plain(if i == last { step.strip_prefix('@').unwrap_or(step) } else { step })).then_some(steps)
+}
+
+/// What `path` (see [`item_path`]) names under the bound item `node`: its own text for no steps,
+/// else the last step's attribute or, failing that, child text. Empty when a step is missing.
+fn read_item(node: XmlNode, path: &[&str], budget: &mut BindBudget) -> Result<String, Unbound> {
+    let Some((last, middle)) = path.split_last() else {
+        return bound_text(node, budget);
+    };
+    let mut at = node;
+    for step in middle {
+        match first_child(at, Some(step), budget)? {
+            Some(c) => at = c,
+            None => return Ok(String::new()),
+        }
+    }
+    let last = last.strip_prefix('@').unwrap_or(last);
+    if let Some(a) = at.attribute(last) {
+        return Ok(a.to_string());
+    }
+    first_child(at, Some(last), budget)?.map_or_else(|| Ok(String::new()), |c| bound_text(c, budget))
+}
+
 /// The data nodes a `<bindItems>` ref names (see [`bind_items`]), at most one past the item cap,
 /// every node visited finding them out of `budget`.
 fn bound_nodes<'a, 'd>(n: XmlNode<'a, 'd>, reference: &str, budget: &mut BindBudget) -> Result<Vec<XmlNode<'a, 'd>>, Unbound> {
@@ -647,12 +690,14 @@ fn bound_nodes<'a, 'd>(n: XmlNode<'a, 'd>, reference: &str, budget: &mut BindBud
         // The record is the first element in `xfa:data`.
         ("$record.", &[Some("datasets"), Some("data"), None]),
     ];
-    let (steps, path) =
-        STARTS.into_iter().find_map(|(prefix, steps)| reference.strip_prefix(prefix).map(|path| (steps, path))).ok_or(Unbound::Unfollowable)?;
+    let (steps, path) = STARTS
+        .into_iter()
+        .find_map(|(prefix, steps)| reference.strip_prefix(prefix).map(|path| (steps, path)))
+        .ok_or_else(|| Unbound::Unfollowable(reference.to_string()))?;
     // A missing packet, `xfa:data` or record is a ref with nothing to follow.
     let mut start = n.document().root_element();
     for step in steps {
-        start = first_child(start, *step, budget)?.ok_or(Unbound::Unfollowable)?;
+        start = first_child(start, *step, budget)?.ok_or_else(|| Unbound::Unfollowable(reference.to_string()))?;
     }
     let mut nodes = vec![start];
     let mut segments = path.split('.').peekable();
@@ -663,16 +708,16 @@ fn bound_nodes<'a, 'd>(n: XmlNode<'a, 'd>, reference: &str, budget: &mut BindBud
         // own nodes.
         let cap = if segments.peek().is_none() { MAX_ITEMS + 1 } else { usize::MAX };
         let (name, index) = match seg.split_once('[') {
-            Some((name, rest)) => (name, Some(rest.strip_suffix(']').ok_or(Unbound::Unfollowable)?.trim())),
+            Some((name, rest)) => (name, Some(rest.strip_suffix(']').ok_or_else(|| Unbound::Unfollowable(reference.to_string()))?.trim())),
             None => (seg, None),
         };
         // A class name (`#dataGroup`) or an empty step is not followed.
         if name.is_empty() || name.starts_with('#') {
-            return Err(Unbound::Unfollowable);
+            return Err(Unbound::Unfollowable(reference.to_string()));
         }
         let index = match index {
             Some("*") => None,
-            Some(i) => Some(i.parse::<usize>().map_err(|_| Unbound::Unfollowable)?),
+            Some(i) => Some(i.parse::<usize>().map_err(|_| Unbound::Unfollowable(reference.to_string()))?),
             // No index is the first of the name.
             None => Some(0),
         };
