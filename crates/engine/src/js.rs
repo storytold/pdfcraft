@@ -347,6 +347,11 @@ impl Scripts for JsRunner {
             message: (!o.rc).then(|| o.alerts.last().map(|m| m.text.clone())).flatten(),
         }
     }
+
+    /// On the console, as a script error: the field kept its value.
+    fn refused(&mut self, why: &str) {
+        self.output.errors.push(format!("A script set a value the field does not take, so the field keeps its own: {why}"));
+    }
 }
 
 /// A document-level JavaScript: its name and source.

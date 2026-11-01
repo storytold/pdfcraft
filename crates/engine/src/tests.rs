@@ -5225,6 +5225,42 @@ fn a_failing_calculation_keeps_what_it_wrote_before_failing() {
     assert_eq!(value("note"), Some(vec!["seen".to_string()]), "what it wrote before failing stays");
 }
 
+/// A value a script sets that is longer than the text field's `/MaxLen` (ISO 32000-2 §12.7.5.3,
+/// Table 232) is not stored, as typing it is refused: the field keeps its value and the console
+/// says why. The script's other changes still apply, from a document script on opening and from
+/// a calculation that fails after writing it, and the opening still commits them.
+#[test]
+fn a_script_value_over_max_len_is_refused_and_the_other_changes_apply() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /Names << /JavaScript << /Names [(init) 9 0 R] >> >> /AcroForm << /Fields [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R] /CO [5 0 R] >> >>"
+            .to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 220] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R] >>".to_string(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (price) /V (1) /Rect [0 180 100 200] /P 3 0 R /F 4 >>".to_string(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (total) /V (2) /Rect [0 140 100 160] /P 3 0 R /F 4 /AA << /C 10 0 R >> >>".to_string(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (code) /MaxLen 3 /V (abc) /Rect [0 100 100 120] /P 3 0 R /F 4 >>".to_string(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (note) /MaxLen 3 /V (no) /Rect [0 60 100 80] /P 3 0 R /F 4 >>".to_string(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (flag) /V (off) /Rect [0 20 100 40] /P 3 0 R /F 4 >>".to_string(),
+        r"<< /S /JavaScript /JS (this.getField\('code'\).value = 'ABCDEF'; this.getField\('price'\).value = 5;) >>".to_string(),
+        r"<< /S /JavaScript /JS (this.getField\('note'\).value = 'too long'; this.getField\('flag'\).value = 'on'; throw new Error\('boom'\);) >>"
+            .to_string(),
+    ];
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("form.pdf", None, Arc::new(pdf_of(&objs)), None).unwrap();
+    let doc = s.get(id).unwrap();
+    let value = |name: &str| doc.form.iter().find(|f| f.name == name).map(|f| f.value.clone());
+    assert_eq!(value("price"), Some(vec!["5".to_string()]), "the document script's other change applies");
+    assert_eq!(value("flag"), Some(vec!["on".to_string()]), "the calculation's other write stays");
+    assert_eq!(value("code"), Some(vec!["abc".to_string()]), "the over-long value is not stored");
+    assert_eq!(value("note"), Some(vec!["no".to_string()]), "nor the failing calculation's");
+    assert_eq!(value("total"), Some(vec!["2".to_string()]), "the failing calculation leaves its own value");
+    let out = s.take_js_output(id);
+    for name in ["code", "note"] {
+        assert!(out.errors.iter().any(|e| e.contains(&format!("{name:?} takes at most 3 characters"))), "{name}: {out:?}");
+    }
+    assert!(!out.errors.iter().any(|e| e.contains("could not")), "the opening applied the changes: {out:?}");
+}
+
 /// When a document script changes a field on opening, the warnings earlier steps of opening gave
 /// stay: here, that the dynamic XFA form (it has no template) could not be laid out.
 #[test]
