@@ -598,6 +598,9 @@ pub enum Value {
     Image {
         content_type: String,
         data: Vec<u8>,
+        /// Where the template links the picture from (`href`), when it does: its data is then
+        /// found in the PDF ([`crate::linked_images`]).
+        href: Option<String>,
     },
     /// A diagonal line through the box: `\` (top-left to bottom-right) or `/`.
     Line {

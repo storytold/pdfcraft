@@ -95,7 +95,7 @@ impl Layouter<'_> {
                 let box_ = ui.inset(&f.ui_margin);
                 match (&from_data, &f.value) {
                     (Some(d), _) => self.draw_image(d, "", box_)?,
-                    (None, Value::Image { content_type, data }) => self.draw_image(data, content_type, box_)?,
+                    (None, Value::Image { content_type, data, .. }) => self.draw_image(data, content_type, box_)?,
                     _ => {}
                 }
                 // Then the field itself, which clicking gives a new picture.
