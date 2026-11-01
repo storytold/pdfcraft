@@ -3,6 +3,9 @@
 The façade every frontend talks to. It holds the open documents, their edit history and the tool
 catalogue; frontends never reach past it into the parsing, rendering or editing crates.
 
+`word_count::count` provides cancellable, page-at-a-time Unicode word and character statistics
+with optional semantic exclusions; see [word-count behavior and limits](../../docs/word-count.md).
+
 - **Layer:** L6. It depends on most of L1–L4 and on nothing above itself. **No UI toolkit** —
   `egui`, `winit`, `eframe` and `rfd` are forbidden below L7, and `xtask layers` enforces it.
 - The crate denies `unwrap`/`expect`/`panic!`/`todo!`. Entry points that run untrusted-document
@@ -12,6 +15,14 @@ catalogue; frontends never reach past it into the parsing, rendering or editing 
 Two frontends exist on top of it today: `pdfcraft-ui-egui` (desktop and web) and
 `pdfcraft-automation` (headless tools, the CLI and MCP). Anything one can do, the other must be
 able to do — see AGENTS.md §3.
+
+When dynamic XFA layout is active, `JsRunner` does not initialize Acrobat JavaScript with
+scripts from the PDF container's `/Names /JavaScript` tree. Those scripts belong to the
+fallback PDF view and can otherwise show a misleading viewer-compatibility warning.
+They remain in the document and in `Document::document_scripts`. Requested console scripts,
+field actions and XFA events can still show messages; ordinary PDFs, static XFA and shells
+without an active layout keep their document scripts. Converting XFA to a static form and
+undoing that conversion switches the context with the document state.
 
 ## The editing model
 
