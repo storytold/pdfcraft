@@ -2613,3 +2613,20 @@ animation effects	Off	Kapalı
 	No image on clipboard to paste	Panoda yapıştırılacak görüntü yok
 	Pinned {tool} to Home	{tool} Ana Sayfaya sabitlendi
 	Unpinned {tool} from Home	{tool} Ana Sayfadan kaldırıldı
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	Çizime yapıştır: açık
+	Snap to drawing: off	Çizime yapıştır: kapalı
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	Yakalama noktaları
+	Centre points	Merkezler
+	Centre point	Merkez
+	Tab: the next target under the pointer	Tab: işaretçinin altındaki sonraki nokta
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	Sol alt
+	Top left	Sol üst
+	Top right	Sağ üst
+	Bottom right	Sağ alt
+	Middle	Orta
+	Vertex	Köşe
+	Reference point: {point} (Tab: next)	Referans noktası: {point} (Tab: sonraki)

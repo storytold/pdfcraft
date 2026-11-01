@@ -4,13 +4,15 @@
 use std::sync::Arc;
 
 use pdfcraft_cos::Document;
-use pdfcraft_measure::snap::{self, Geometry, SnapOptions};
+use pdfcraft_measure::snap::{self, Geometry, Limits, SnapOptions};
 
 const CASES: usize = 1_000;
 const SEED: u64 = 1;
 const MAX_CONTENT_BYTES: usize = 16 * 1024;
+/// The caps the checks run under (the defaults have room for a CAD plan).
 const MAX_GEOMETRY_SEGMENTS: usize = 20_000;
-const MAX_SNAP_TARGETS: usize = 2 * MAX_GEOMETRY_SEGMENTS + 12;
+const MAX_SNAP_TARGETS: usize = 3 * MAX_GEOMETRY_SEGMENTS + 12;
+const LIMITS: Limits = Limits { segments: MAX_GEOMETRY_SEGMENTS, bytes: 16 * 1024 * 1024 };
 
 const SEEDS: &[&[u8]] = &[
     b"0 0 m 100 100 l S",
@@ -131,7 +133,7 @@ fn finite(point: [f64; 2]) -> bool {
 
 fn geometry_of(content: &[u8]) -> Geometry {
     let doc = Document::open(Arc::new(one_page_pdf(content))).unwrap();
-    snap::geometry(&doc, 0).unwrap()
+    snap::geometry_within(&doc, 0, LIMITS).unwrap()
 }
 
 /// Checks the bounds and finiteness that snapping relies on, and returns the extracted geometry.

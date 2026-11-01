@@ -2615,3 +2615,20 @@ animation effects	Off	Өшірулі
 	No image on clipboard to paste	Алмасу буферінде қоятын сурет жоқ
 	Pinned {tool} to Home	{tool} басты бетке бекітілді
 	Unpinned {tool} from Home	{tool} басты беттен ажыратылды
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	Сызбаға бекіту: қосулы
+	Snap to drawing: off	Сызбаға бекіту: өшірулі
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	Тарту нүктелері
+	Centre points	Орталықтар
+	Centre point	Орталық
+	Tab: the next target under the pointer	Tab: меңзер астындағы келесі нүкте
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	Төменгі сол жақ
+	Top left	Жоғарғы сол жақ
+	Top right	Жоғарғы оң жақ
+	Bottom right	Төменгі оң жақ
+	Middle	Ортасы
+	Vertex	Төбе
+	Reference point: {point} (Tab: next)	Тірек нүкте: {point} (Tab: келесі)

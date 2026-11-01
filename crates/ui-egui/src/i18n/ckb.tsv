@@ -2810,3 +2810,21 @@ certificate	Version	وەشان
 	Export this PDF	هەناردەکردنی ئەم PDF ـە
 	Find text or tools	دۆزینەوەی دەق یان ئامراز
 	Crop image	بڕینەوەی وێنە
+
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	لکاندن بە وێنەکێشانەوە: چالاک
+	Snap to drawing: off	لکاندن بە وێنەکێشانەوە: کوژاوە
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	ئامانجەکانی لکاندن
+	Centre points	خاڵەکانی ناوەند
+	Centre point	خاڵی ناوەند
+	Tab: the next target under the pointer	Tab: ئامانجی دواتر لەژێر نیشاندەر
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	خوارەوەی چەپ
+	Top left	سەرەوەی چەپ
+	Top right	سەرەوەی ڕاست
+	Bottom right	خوارەوەی ڕاست
+	Middle	ناوەڕاست
+	Vertex	لووتکە
+	Reference point: {point} (Tab: next)	خاڵی سەرچاوە: {point} (Tab: دواتر)

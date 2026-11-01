@@ -2924,3 +2924,20 @@ certificate	Version	Verze
 	No image on clipboard to paste	Ve schránce není obrázek k vložení
 	Pinned {tool} to Home	{tool} připnuto na úvodní stránku
 	Unpinned {tool} from Home	{tool} odepnuto z úvodní stránky
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	Přichytávání ke kresbě: zapnuto
+	Snap to drawing: off	Přichytávání ke kresbě: vypnuto
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	Cíle přichytávání
+	Centre points	Středy
+	Centre point	Střed
+	Tab: the next target under the pointer	Tab: další cíl pod ukazatelem
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	Vlevo dole
+	Top left	Vlevo nahoře
+	Top right	Vpravo nahoře
+	Bottom right	Vpravo dole
+	Middle	Střed
+	Vertex	Vrchol
+	Reference point: {point} (Tab: next)	Referenční bod: {point} (Tab: další)

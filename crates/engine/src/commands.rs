@@ -175,6 +175,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("measure.scale", "Set measurement scale", None, None, Annotate, "ruler"),
     c("measure.info", "Measurement information", None, None, Document, "ruler"),
     c("measure.snap", "Measurement snapping", None, None, Document, "ruler"),
+    // Snap to drawing for the drawing tools (M5): F3, as CAD's object snap. On the drawing
+    // tools' quick bar; the palette runs it too.
+    c("comment.snap", "Snap to drawing", None, Some(Shortcut { command: false, shift: false, mac_ctrl: false, key: "F3" }), Document, "circle-dot"),
     c("measure.export", "Export measurements as CSV", None, None, Document, "file-output"),
     c("page.copy", "Copy pages", None, None, Document, "copy"),
     c("page.cut", "Cut pages", None, None, Assembly, "scissors"),

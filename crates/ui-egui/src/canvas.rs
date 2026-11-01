@@ -1161,6 +1161,7 @@ struct PageEnv<'a> {
 struct PageOut {
     canvas_action: Option<comments::CanvasAction>,
     clicked_link: Option<LinkTarget>,
+    comment_notice: Option<&'static str>,
     copy_selected: bool,
     field_menu: Option<FieldMenu>,
     field_placed: bool,
@@ -1198,6 +1199,10 @@ struct PageFrame<'a> {
     current_height: f32,
     pressed_page: Option<usize>,
     calc_hover: Option<crate::calc_order_ui::Focus>,
+    /// Snap to drawing (M5): the paths of the page being drawn, when its tool snaps.
+    snap: Option<std::sync::Arc<pdfcraft_engine::measure::snap::Geometry>>,
+    /// The comments already drawn on that page, as snap targets.
+    snap_comments: Option<std::sync::Arc<pdfcraft_engine::measure::snap::Geometry>>,
 }
 
 /// Visible heights (points) closer than this are equal: one page size can meet the viewport a
@@ -1497,7 +1502,20 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
     let PageSlot { i, xf, .. } = *slot;
     let PageFrame { resp, ptr, pointer, .. } = *frame;
     let cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info };
-    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
+    let pcx = comments::PageCx {
+        page: i,
+        xf: &xf,
+        ptr,
+        info,
+        tool,
+        prefs,
+        allowed,
+        hidden: comments_hidden,
+        redact_mark,
+        snap: frame.snap.clone(),
+        snap_comments: frame.snap_comments.clone(),
+        snap_cycle: view.comments.snap_cycle,
+    };
     let (lines, images) =
         if matches!(tool, QuickTool::AddText | QuickTool::EditText) && can_modify { edit_inventory(view, doc, i) } else { Default::default() };
     let field_tool = match tool {
@@ -1596,6 +1614,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
                 preview: frame.signature_preview,
                 author,
                 date_text,
+                comments: &pcx,
             },
             view,
         ) {
@@ -2085,7 +2104,20 @@ fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_
     let PageFrame { resp, ptr, pointer, .. } = *frame;
     let painter = ui.painter();
     let tool_cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info };
-    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
+    let pcx = comments::PageCx {
+        page: i,
+        xf: &xf,
+        ptr,
+        info,
+        tool,
+        prefs,
+        allowed,
+        hidden: comments_hidden,
+        redact_mark,
+        snap: frame.snap.clone(),
+        snap_comments: frame.snap_comments.clone(),
+        snap_cycle: view.comments.snap_cycle,
+    };
     if tool == QuickTool::Select && !input.consumed {
         crate::image_pick::page_input(resp, &xf, i, info, doc, pointer, view);
     }
@@ -2262,11 +2294,73 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
         painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(0.5, t.border.gamma_multiply(0.8)), egui::StrokeKind::Outside);
     }
 
+    // Snap to drawing (M5): the page's paths, for the drawing tools that set points and the
+    // tools that place text or a Fill & Sign mark, on the page the pointer is over or a gesture
+    // runs on (extracting a plan's paths takes up to a second). `resp` covers every page, so it
+    // can't tell which one that is.
+    let gesture_page = match &view.comments.gesture {
+        Some(
+            comments::Gesture::Draw { page, .. }
+            | comments::Gesture::Move { page, .. }
+            | comments::Gesture::Resize { page, .. }
+            | comments::Gesture::Reshape { page, .. },
+        ) => Some(*page),
+        _ => None,
+    };
+    let here = pointer.is_some_and(|p| r.contains(p)) || gesture_page == Some(i);
+    // The Select tool too: a comment moved or resized snaps by its corners.
+    let snaps = match tool {
+        QuickTool::Comment(t) => t.snaps(),
+        QuickTool::Fill(t) => t.snaps(),
+        QuickTool::Select => true,
+        _ => false,
+    };
+    let snapping = prefs.snap && snaps && here;
+    frame.snap = if snapping {
+        let mut notice = None;
+        let geometry = view.comments.snap_cache.geometry(doc, i, &mut notice);
+        if notice.is_some() {
+            view.comments.notice = notice;
+        }
+        geometry
+    } else {
+        None
+    };
+    // The comments already drawn snap too (lines join at their ends), but not the one being
+    // moved or reshaped, which would hold on to where it was.
+    frame.snap_comments = if snapping && !comments_hidden {
+        let except: Vec<usize> = match &view.comments.gesture {
+            Some(
+                comments::Gesture::Move { page, index, .. }
+                | comments::Gesture::Resize { page, index, .. }
+                | comments::Gesture::Reshape { page, index, .. },
+            ) if *page == i => {
+                vec![*index]
+            }
+            _ => Vec::new(),
+        };
+        view.comments.snap_cache.comments(doc, i, &except)
+    } else {
+        None
+    };
     let slot = PageSlot { i, r, xf };
     // A cancelled press takes nothing until the button is up.
     let input = if view.press_cancelled { PageInput { consumed: true, area_tool: false } } else { page_tool_input(ui, view, frame, &slot) };
     let painter = ui.painter();
-    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
+    let pcx = comments::PageCx {
+        page: i,
+        xf: &xf,
+        ptr,
+        info,
+        tool,
+        prefs,
+        allowed,
+        hidden: comments_hidden,
+        redact_mark,
+        snap: frame.snap.clone(),
+        snap_comments: frame.snap_comments.clone(),
+        snap_cycle: view.comments.snap_cycle,
+    };
     let preview_target = (matches!(tool, QuickTool::Select | QuickTool::Fill(_)) && !comments_hidden).then_some(view.comments.selected).flatten();
     view.signature_drag.prepare(ui.ctx(), doc, preview_target, scale);
     view.signature_drag.paint(painter, &pcx, &view.comments, view.pending_edit.as_ref());
@@ -2476,6 +2570,8 @@ fn draw_pages(
         current_height: f32::INFINITY,
         pressed_page: None,
         calc_hover: None,
+        snap: None,
+        snap_comments: None,
     };
     for &i in visible_pages {
         draw_page(ui, view, &mut frame, i);
@@ -2500,6 +2596,7 @@ fn draw_pages(
         primary_down: _,
         refused,
         stamp_placed,
+        ..
     } = page_out;
     let mut page_action: Option<PageMenuAction> = None;
     let painter = ui.painter();
@@ -2693,9 +2790,11 @@ fn draw_pages(
     if !resp.context_menu_opened() {
         ui.ctx().data_mut(|d| d.insert_temp(crate::edit_text_ui::image_menu_id(), false));
     }
+    let comment_notice = view.comments.notice.take();
     *out = PageOut {
         canvas_action,
         clicked_link,
+        comment_notice,
         copy_selected,
         field_menu,
         field_placed,
@@ -3705,6 +3804,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let PageOut {
         canvas_action,
         clicked_link,
+        comment_notice,
         mut copy_selected,
         field_menu,
         field_placed,
@@ -3814,6 +3914,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         open_table,
         form_notice,
         copy_selected,
+        comment_notice,
         remote_open,
         form,
         generation,
@@ -3836,6 +3937,8 @@ struct FrameRequests {
     open_table: Option<(usize, [f64; 4])>,
     form_notice: Option<crate::forms_ui::FormNotice>,
     copy_selected: bool,
+    /// What the comment tools have to say (Snap to drawing's limits).
+    comment_notice: Option<&'static str>,
     remote_open: Option<(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination)>,
     form: Arc<Vec<pdfcraft_engine::FormField>>,
     generation: u64,
@@ -3858,6 +3961,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
         open_table,
         form_notice,
         copy_selected,
+        comment_notice,
         remote_open,
         form,
         generation,
@@ -4051,6 +4155,9 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
     }
     if copy_selected {
         app.execute("edit.copy");
+    }
+    if let Some(notice) = comment_notice {
+        app.notify_tr(notice);
     }
     // Read mode hides the tools (#2646), and full screen is the page and nothing else (#1459);
     // the quick tools come back with the window.

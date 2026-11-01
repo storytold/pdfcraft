@@ -2885,3 +2885,20 @@ key	Space	Space
 	No image on clipboard to paste	Không có hình ảnh trong bảng nhớ tạm để dán
 	Pinned {tool} to Home	Đã ghim {tool} vào Trang chủ
 	Unpinned {tool} from Home	Đã bỏ ghim {tool} khỏi Trang chủ
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	Bắt dính vào bản vẽ: bật
+	Snap to drawing: off	Bắt dính vào bản vẽ: tắt
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	Điểm bắt dính
+	Centre points	Các tâm
+	Centre point	Tâm
+	Tab: the next target under the pointer	Tab: điểm tiếp theo dưới con trỏ
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	Dưới bên trái
+	Top left	Trên bên trái
+	Top right	Trên bên phải
+	Bottom right	Dưới bên phải
+	Middle	Giữa
+	Vertex	Đỉnh
+	Reference point: {point} (Tab: next)	Điểm tham chiếu: {point} (Tab: tiếp theo)

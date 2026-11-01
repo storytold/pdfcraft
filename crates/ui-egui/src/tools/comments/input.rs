@@ -3,8 +3,8 @@ use super::geometry::{
     resized, snapped_caret,
 };
 use super::paint::{drawn_shape, edit_anchor, erase, new_comment};
-use super::state::{Composer, ComposerKind, Gesture, PageCx};
-use super::{Annotation, CommentPrefs, CommentTool, DocInfo, DocView, Edit, Pos2, QuickTool, Rect, Shape, vec2};
+use super::state::{Composer, ComposerKind, Gesture, PageCx, nearest_corner};
+use super::{Annotation, CommentPrefs, CommentTool, CommentView, DocInfo, DocView, Edit, Pos2, QuickTool, Rect, Shape, SnapHit, vec2};
 use crate::page_cursor::{Layer, Subject};
 use crate::page_router::{CommentPart, Hit, Owner};
 
@@ -19,6 +19,16 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
     let draw_grab = draw_grabs(cx, view);
     let caret_text = if cx.tool == QuickTool::Comment(CommentTool::Caret) { view.page_text(cx.page) } else { None };
     let cv = &mut view.comments;
+    // (The Fill & Sign tools set their own, before this runs.)
+    if !matches!(cx.tool, QuickTool::Fill(_)) && cv.snap_hover.is_some_and(|(page, _, _)| page == cx.page) {
+        cv.snap_hover = None;
+    }
+    // The nearest target under the pointer, which Tab cycles from.
+    match pointer.filter(|_| over_page && cx.snapping()) {
+        Some(p) => cv.snap_first = cx.snap_candidates(cx.to_user(p)).first().map(|s| (cx.page, s.point)),
+        None if cv.snap_first.is_some_and(|(page, _)| page == cx.page) => cv.snap_first = None,
+        None => {}
+    }
     if cv.gesture.is_some() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
         cv.gesture = None;
         cv.cancelled_drag = true;
@@ -205,6 +215,7 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
                 cv.reveal = true;
                 if cx.allowed {
                     cv.gesture = Some(Gesture::Move { page: cx.page, index: a.index, from: o });
+                    cv.move_anchor = None;
                 }
                 consumed = true;
             }
@@ -214,41 +225,13 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
     if matches!(cv.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. }) if page == cx.page) {
         consumed = true;
     }
+    let dragged = snap_select_gesture(ui, cx, cv, pointer);
     if resp.drag_stopped()
-        && let Some(p) = pointer
+        && let Some(p) = pointer.map(|p| dragged.map_or(p, |(p, _)| p))
     {
-        match cv.gesture.clone() {
-            Some(Gesture::Move { page, index, from }) if page == cx.page => {
-                cv.gesture = None;
-                let (a, b) = (cx.to_user(from), cx.to_user(p));
-                let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-                if from.distance(p) >= 2.0 {
-                    view.pending_edit = Some(Edit::MoveAnnotation { page, index, dx, dy });
-                }
-            }
-            Some(Gesture::Resize { page, index, handle, from, aspect_ratio }) if page == cx.page => {
-                cv.gesture = None;
-                if let Some(a) = cx.get(index) {
-                    let from_rect = cx.screen_rect(a);
-                    let shift = ui.input(|i| i.modifiers.shift);
-                    let r = resized(from_rect, handle, p - from, corner_ratio(from_rect, aspect_ratio, shift));
-                    let rect = a.rect_for_shown(cx.rect_to_user(r), cx.rotation());
-                    if r.width() >= 4.0 && r.height() >= 4.0 {
-                        view.pending_edit = Some(Edit::ResizeAnnotation { page, index, rect });
-                    }
-                }
-            }
-            Some(Gesture::Reshape { page, index, point, points }) if page == cx.page => {
-                cv.gesture = None;
-                let shift = ui.input(|i| i.modifiers.shift);
-                let moved = points.get(point).is_some_and(|q| cx.to_screen(*q).distance(p) >= 2.0);
-                if moved {
-                    view.pending_edit = Some(Edit::ReshapeAnnotation { page, index, points: reshaped(&points, point, cx.to_user(p), shift) });
-                }
-            }
-            _ => {}
-        }
+        finish_select_gesture(ui, cx, view, p, dragged);
     }
+    let cv = &mut view.comments;
     // (egui clears the press origin on release, so clicks are located by the pointer.)
     let on_page = pointer.is_some_and(|p| cx.xf.rect.contains(p));
     if resp.clicked() && on_page {
@@ -279,6 +262,113 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
         consumed = true;
     }
     consumed
+}
+
+/// Snapping while the Select tool moves, resizes or reshapes a comment on this page: Tab's next
+/// anchor, the marker where it lands and the anchor's name. Returns the pointer as it snapped,
+/// and the target, for the gesture's end.
+fn snap_select_gesture(ui: &egui::Ui, cx: &PageCx<'_>, cv: &mut CommentView, pointer: Option<Pos2>) -> Option<(Pos2, Option<SnapHit>)> {
+    // Tab while a comment is moved: its next anchor goes where this one is now (on its target,
+    // when it has one), so the target stays and the comment turns about it.
+    if cv.anchor_steps != 0
+        && cx.snapping()
+        && let Some(Gesture::Move { page, index, from }) = cv.gesture.as_mut()
+        && *page == cx.page
+        && let (Some(a), Some(p)) = (cx.get(*index), pointer)
+    {
+        // The anchor in use: Tab's, else the corner on a target, else the one nearest the grab.
+        let (moved, _, used) = cx.snap_move(a, *from, p, cv.move_anchor);
+        let (anchors, _) = cx.move_anchors(a);
+        let i = used.unwrap_or_else(|| nearest_corner(&anchors, *from));
+        if let Some(now) = anchors.get(i) {
+            let spot = now.at + (moved - *from);
+            let j = usize::try_from((i as isize).saturating_add(cv.anchor_steps).rem_euclid(anchors.len() as isize)).unwrap_or(0);
+            *from = anchors[j].at + (p - spot);
+            cv.move_anchor = Some(j);
+        }
+    }
+    if cv.gesture.as_ref().is_none_or(|g| matches!(g, Gesture::Move { page, .. } if *page == cx.page)) {
+        cv.anchor_steps = 0;
+    }
+    // Snapping while a comment is moved or resized: a corner (the anchor Tab chose, see
+    // [`PageCx::snap_move`]) or the resize handle lands on a target in reach, and the marker
+    // shows where.
+    let dragged = match (&cv.gesture, pointer) {
+        (Some(Gesture::Move { page, index, from }), Some(p)) if *page == cx.page => cx.get(*index).map(|a| {
+            let (p, hit, _) = cx.snap_move(a, *from, p, cv.move_anchor);
+            (p, hit)
+        }),
+        (Some(Gesture::Resize { page, index, handle, from, .. }), Some(p)) if *page == cx.page => {
+            cx.get(*index).map(|a| cx.snap_drag(&[handle_pos(cx.screen_rect(a), *handle)], None, *from, p))
+        }
+        // A line's end or a corner dragged: onto a target (Shift holds the angle instead).
+        (Some(Gesture::Reshape { page, .. }), Some(p)) if *page == cx.page && !ui.input(|i| i.modifiers.shift) => {
+            let (u, kind) = cx.snapped(p);
+            Some((cx.to_screen(u), kind.map(|k| (u, k))))
+        }
+        _ => None,
+    };
+    if let Some((_, Some((at, kind)))) = dragged {
+        cv.snap_hover = Some((cx.page, at, kind));
+    }
+    // The moved comment's anchor, named: the one on a target, or the one Tab chose.
+    if cv.anchor_shown.is_some_and(|(page, ..)| page == cx.page) {
+        cv.anchor_shown = None;
+    }
+    if let (Some(Gesture::Move { page, index, from }), Some(p)) = (&cv.gesture, pointer)
+        && *page == cx.page
+        && cx.snapping()
+        && let Some(a) = cx.get(*index)
+        && let (moved, _, Some(i)) = cx.snap_move(a, *from, p, cv.move_anchor)
+        && let Some(anchor) = cx.move_anchors(a).0.get(i)
+    {
+        cv.anchor_shown = Some((cx.page, cx.to_user(anchor.at + (moved - *from)), anchor.name));
+    }
+    dragged
+}
+
+/// The end of a gesture the Select tool began on this page (a move, a resize, a reshape, …): the
+/// edit it makes, for the pointer released at `p`, and where it snapped (`dragged`, see
+/// `select_input`).
+fn finish_select_gesture(ui: &egui::Ui, cx: &PageCx<'_>, view: &mut DocView, p: Pos2, dragged: Option<(Pos2, Option<SnapHit>)>) {
+    match view.comments.gesture.clone() {
+        Some(Gesture::Move { page, index, from }) if page == cx.page => {
+            view.comments.gesture = None;
+            view.comments.move_anchor = None;
+            view.comments.anchor_shown = None;
+            let (a, b) = (cx.to_user(from), cx.to_user(p));
+            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+            if from.distance(p) >= 2.0 {
+                view.pending_edit = Some(Edit::MoveAnnotation { page, index, dx, dy });
+            }
+        }
+        Some(Gesture::Resize { page, index, handle, from, aspect_ratio }) if page == cx.page => {
+            view.comments.gesture = None;
+            if let Some(a) = cx.get(index) {
+                let from_rect = cx.screen_rect(a);
+                let shift = ui.input(|i| i.modifiers.shift);
+                let r = resized(from_rect, handle, p - from, corner_ratio(from_rect, aspect_ratio, shift));
+                let rect = a.rect_for_shown(cx.rect_to_user(r), cx.rotation());
+                if r.width() >= 4.0 && r.height() >= 4.0 {
+                    view.pending_edit = Some(Edit::ResizeAnnotation { page, index, rect });
+                }
+            }
+        }
+        Some(Gesture::Reshape { page, index, point, points }) if page == cx.page => {
+            view.comments.gesture = None;
+            let shift = ui.input(|i| i.modifiers.shift);
+            let moved = points.get(point).is_some_and(|q| cx.to_screen(*q).distance(p) >= 2.0);
+            // The target itself when it snapped, not its round trip through the screen.
+            let to = match dragged {
+                Some((_, Some((u, _)))) => u,
+                _ => cx.to_user(p),
+            };
+            if moved {
+                view.pending_edit = Some(Edit::ReshapeAnnotation { page, index, points: reshaped(&points, point, to, shift) });
+            }
+        }
+        _ => {}
+    }
 }
 
 /// After text selection ran: a markup tool turns a finished selection into a comment; Replace
@@ -330,11 +420,20 @@ impl Gestures<'_> {
         if over_page {
             view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
         }
+        // Snapping (shapes and lines, not freehand): the marker shows where a point would
+        // land.
+        if tool.snaps()
+            && let Some(p) = pointer.filter(|_| over_page)
+            && let (u, Some(kind)) = cx.snapped(p)
+        {
+            cv.snap_hover = Some((cx.page, u, kind));
+        }
         if resp.drag_started()
             && pressed_here
             && let Some(o) = origin
         {
-            cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![cx.to_user(o)] });
+            let first = if tool.snaps() { cx.snapped(o).0 } else { cx.to_user(o) };
+            cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![first] });
             cv.selected = None;
         }
         if let Some(Gesture::Draw { page, tool, points }) = cv.gesture.as_mut()
@@ -342,13 +441,14 @@ impl Gestures<'_> {
             && let Some(p) = pointer
         {
             let p = clamp_to(page_rect, p);
-            let u = cx.to_user(p);
             if matches!(*tool, CommentTool::Ink | CommentTool::Eraser) {
+                let u = cx.to_user(p);
                 let last = points.last().map(|l| cx.to_screen(*l)).unwrap_or(p);
                 if last.distance(p) >= 1.5 {
                     points.push(u);
                 }
             } else {
+                let u = cx.snapped(p).0;
                 points.truncate(1);
                 points.push(u);
             }
@@ -392,6 +492,11 @@ impl Gestures<'_> {
         if over_page {
             view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
         }
+        if let Some(p) = pointer.filter(|_| over_page)
+            && let (u, Some(kind)) = cx.snapped(p)
+        {
+            cv.snap_hover = Some((cx.page, u, kind));
+        }
         let finish = resp.double_clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter));
         // Backspace (or Delete) takes back the last point, e.g. after a wrong click; Undo does too.
         // Only while a drawing is in progress: otherwise Delete belongs to the selected comment.
@@ -406,7 +511,7 @@ impl Gestures<'_> {
             && over_page
             && let Some(p) = pointer
         {
-            let u = cx.to_user(p);
+            let u = cx.snapped(p).0;
             match cv.gesture.as_mut() {
                 Some(Gesture::Draw { page, tool: t, points }) if *page == cx.page && *t == tool => {
                     // Clicking the first point again closes a polygon.
@@ -453,11 +558,18 @@ impl Gestures<'_> {
         if over_page {
             view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
         }
+        // Snapping: what the callout points at goes onto the drawing.
+        if cv.gesture.is_none()
+            && let Some(p) = pointer.filter(|_| over_page)
+            && let (u, Some(kind)) = cx.snapped(p)
+        {
+            cv.snap_hover = Some((cx.page, u, kind));
+        }
         if resp.drag_started()
             && pressed_here
             && let Some(o) = origin
         {
-            cv.gesture = Some(Gesture::Draw { page: cx.page, tool: CommentTool::Callout, points: vec![cx.to_user(o)] });
+            cv.gesture = Some(Gesture::Draw { page: cx.page, tool: CommentTool::Callout, points: vec![cx.snapped(o).0] });
             cv.selected = None;
         }
         if let Some(Gesture::Draw { page, points, .. }) = cv.gesture.as_mut()
@@ -538,7 +650,7 @@ impl Gestures<'_> {
                 && pressed_here
                 && let Some(o) = origin
             {
-                cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![cx.to_user(o)] });
+                cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![cx.snapped(o).0] });
                 cv.selected = None;
             }
             if let Some(Gesture::Draw { page, points, .. }) = cv.gesture.as_mut()
@@ -546,7 +658,7 @@ impl Gestures<'_> {
                 && let Some(p) = pointer
             {
                 points.truncate(1);
-                points.push(cx.to_user(clamp_to(page_rect, p)));
+                points.push(cx.snapped(clamp_to(page_rect, p)).0);
             }
             if resp.drag_stopped()
                 && let Some(Gesture::Draw { page, points, .. }) = cv.gesture.clone()
@@ -563,12 +675,19 @@ impl Gestures<'_> {
                 }
             }
         }
+        // Snapping: the note's or text box's corner goes onto the drawing, as a drawing
+        // tool's point does.
+        if let Some(p) = pointer.filter(|_| over_page)
+            && let (u, Some(kind)) = cx.snapped(p)
+        {
+            cv.snap_hover = Some((cx.page, u, kind));
+        }
         if resp.clicked()
             && over_page
             && let Some(p) = pointer
         {
             let kind = if tool == CommentTool::Note { ComposerKind::Note } else { ComposerKind::TextBox { size: None } };
-            cv.composer = Some(Composer { page: cx.page, at: cx.to_user(p), kind, text: String::new(), focus: true });
+            cv.composer = Some(Composer { page: cx.page, at: cx.snapped(p).0, kind, text: String::new(), focus: true });
             cv.selected = None;
         }
         true

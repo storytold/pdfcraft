@@ -2794,3 +2794,21 @@ key	Space	Mellomrom
 	Export this PDF	Eksporter denne PDF-en
 	Find text or tools	Finn tekst eller verktøy
 	Crop image	Beskjær bilde
+
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	Fest til tegning: på
+	Snap to drawing: off	Fest til tegning: av
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	Festepunkter
+	Centre points	Sentrumspunkter
+	Centre point	Sentrumspunkt
+	Tab: the next target under the pointer	Tab: neste festepunkt under pekeren
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	Nede til venstre
+	Top left	Oppe til venstre
+	Top right	Oppe til høyre
+	Bottom right	Nede til høyre
+	Middle	Midten
+	Vertex	Hjørnepunkt
+	Reference point: {point} (Tab: next)	Referansepunkt: {point} (Tab: neste)

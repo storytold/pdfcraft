@@ -2713,3 +2713,20 @@ animation effects	Off	Wyłączone
 	No image on clipboard to paste	Brak obrazu do wklejenia w schowku
 	Pinned {tool} to Home	Przypięto {tool} do strony głównej
 	Unpinned {tool} from Home	Odpięto {tool} od strony głównej
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	Przyciąganie do rysunku: wł.
+	Snap to drawing: off	Przyciąganie do rysunku: wył.
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	Punkty przyciągania
+	Centre points	Środki
+	Centre point	Środek
+	Tab: the next target under the pointer	Tab: następny punkt pod wskaźnikiem
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	Lewy dolny
+	Top left	Lewy górny
+	Top right	Prawy górny
+	Bottom right	Prawy dolny
+	Middle	Środek
+	Vertex	Wierzchołek
+	Reference point: {point} (Tab: next)	Punkt odniesienia: {point} (Tab: następny)

@@ -2639,3 +2639,20 @@ animation effects	Off	Вимкнено
 	No image on clipboard to paste	У буфері обміну немає зображення для вставлення
 	Pinned {tool} to Home	{tool} закріплено на головній
 	Unpinned {tool} from Home	{tool} відкріплено від головної
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	Прив’язка до креслення: увімкнено
+	Snap to drawing: off	Прив’язка до креслення: вимкнено
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	Точки прив’язки
+	Centre points	Центри
+	Centre point	Центр
+	Tab: the next target under the pointer	Tab: наступна точка під вказівником
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	Внизу ліворуч
+	Top left	Угорі ліворуч
+	Top right	Угорі праворуч
+	Bottom right	Внизу праворуч
+	Middle	Середина
+	Vertex	Вершина
+	Reference point: {point} (Tab: next)	Опорна точка: {point} (Tab: наступна)

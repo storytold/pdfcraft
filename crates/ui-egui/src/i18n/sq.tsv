@@ -2601,3 +2601,17 @@ animation effects	Off	Joaktiv
 	No image on clipboard to paste	Nuk ka imazh në kujtesën e përkohshme për të ngjitur
 	Pinned {tool} to Home	{tool} u fiksua te Kreu
 	Unpinned {tool} from Home	{tool} u hoq nga fiksimi te Kreu
+# Snap to drawing for commenting (M5).
+	Snap to drawing: on	Ngjit te vizatimi: aktiv
+	Snap to drawing: off	Ngjit te vizatimi: joaktiv
+	Snap targets	Objektivat e ngjitjes
+	Centre points	Pikat qendrore
+	Centre point	Pika qendrore
+	Tab: the next target under the pointer	Tab: objektivi tjetër nën tregues
+	Bottom left	Poshtë majtas
+	Top left	Lart majtas
+	Top right	Lart djathtas
+	Bottom right	Poshtë djathtas
+	Middle	Mesi
+	Vertex	Kulm
+	Reference point: {point} (Tab: next)	Pika e referencës: {point} (Tab: tjetra)

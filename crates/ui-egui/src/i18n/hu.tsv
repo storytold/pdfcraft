@@ -2617,3 +2617,20 @@ animation effects	Off	Ki
 	No image on clipboard to paste	Nincs beilleszthető kép a vágólapon
 	Pinned {tool} to Home	{tool} rögzítve a kezdőlapra
 	Unpinned {tool} from Home	{tool} leválasztva a kezdőlapról
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	Igazítás a rajzhoz: be
+	Snap to drawing: off	Igazítás a rajzhoz: ki
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	Illesztési pontok
+	Centre points	Középpontok
+	Centre point	Középpont
+	Tab: the next target under the pointer	Tab: a következő pont a mutató alatt
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	Bal alsó
+	Top left	Bal felső
+	Top right	Jobb felső
+	Bottom right	Jobb alsó
+	Middle	Közép
+	Vertex	Csúcs
+	Reference point: {point} (Tab: next)	Referenciapont: {point} (Tab: következő)

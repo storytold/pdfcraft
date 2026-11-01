@@ -60,6 +60,9 @@ fn an_upright_note_on_a_turned_page_is_in_view_where_it_is_drawn() {
             allowed: true,
             hidden: false,
             redact_mark: ([0.0; 3], 1.0),
+            snap: None,
+            snap_comments: None,
+            snap_cycle: None,
         };
         assert_eq!(edited_in_view(&cx, 0, viewport), in_view, "no_rotate: {no_rotate}");
     }
@@ -471,6 +474,30 @@ fn drawn_shapes_ignore_slips() {
         drawn_shape(CommentTool::Arrow, &[[0.0, 0.0], [5.0, 0.0]]),
         Some(Shape::Line { start: LineEnding::None, end: LineEnding::OpenArrow, .. })
     ));
+}
+
+#[test]
+fn tab_presses_are_taken_for_cycling_snap_targets() {
+    let key = |key, pressed, modifiers| egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers };
+    let mut events = vec![
+        key(egui::Key::Tab, true, egui::Modifiers::NONE),
+        key(egui::Key::Tab, false, egui::Modifiers::NONE),
+        key(egui::Key::A, true, egui::Modifiers::NONE),
+        key(egui::Key::Tab, true, egui::Modifiers::NONE),
+        key(egui::Key::Tab, true, egui::Modifiers::SHIFT),
+        key(egui::Key::Tab, true, egui::Modifiers::COMMAND),
+    ];
+    assert_eq!(take_snap_tabs(&mut events), 1, "two forward, one back");
+    assert_eq!(events.len(), 2, "the A and the ⌘Tab stay: {events:?}");
+    let mut cv = CommentView::default();
+    assert!(!cv.cycle_snap(1), "no marker: nothing to cycle");
+    cv.snap_first = Some((0, [1.0, 2.0]));
+    assert!(cv.cycle_snap(1) && cv.cycle_snap(1));
+    assert_eq!(cv.snap_cycle, Some(([1.0, 2.0], 2)));
+    // Elsewhere, another set of targets: counting starts again.
+    cv.snap_first = Some((0, [5.0, 5.0]));
+    cv.cycle_snap(-1);
+    assert_eq!(cv.snap_cycle, Some(([5.0, 5.0], -1)));
 }
 
 #[test]

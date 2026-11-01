@@ -2846,3 +2846,17 @@ theme	Appearance	स्वरूप
 	No image on clipboard to paste	चिपकाने के लिए क्लिपबोर्ड में कोई छवि नहीं है
 	Pinned {tool} to Home	{tool} को होम पर पिन किया गया
 	Unpinned {tool} from Home	{tool} को होम से अनपिन किया गया
+# Snap to drawing for commenting (M5).
+	Snap to drawing: on	रेखाचित्र से स्नैप करें: चालू
+	Snap to drawing: off	रेखाचित्र से स्नैप करें: बंद
+	Snap targets	स्नैप लक्ष्य
+	Centre points	केंद्र बिंदु
+	Centre point	केंद्र बिंदु
+	Tab: the next target under the pointer	Tab: पॉइंटर के नीचे अगला लक्ष्य
+	Bottom left	नीचे बाएँ
+	Top left	ऊपर बाएँ
+	Top right	ऊपर दाएँ
+	Bottom right	नीचे दाएँ
+	Middle	बीच
+	Vertex	शीर्ष बिंदु
+	Reference point: {point} (Tab: next)	संदर्भ बिंदु: {point} (Tab: अगला)
