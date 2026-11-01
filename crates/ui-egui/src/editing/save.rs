@@ -91,13 +91,15 @@ impl PdfCraftApp {
             };
             match delivered {
                 Ok(()) => {
-                    let _ = self.session.mark_saved(id, bytes, None);
+                    let marked_saved = self.session.mark_saved(id, bytes, None).is_ok();
                     if let Some(doc) = self.session.get(id)
                         && let Some(view) = self.views.get_mut(index)
                     {
                         view.document_changed(&doc.info);
-                        view.imported_image_baseline = None;
-                        view.imported_image_dirty.set(None);
+                        if marked_saved {
+                            view.imported_image_baseline = None;
+                            view.imported_image_dirty.set(None);
+                        }
                     }
                     // The host reports where the file went (and any failure) itself.
                     if !to_host {
