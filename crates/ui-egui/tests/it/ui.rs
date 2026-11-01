@@ -2367,8 +2367,7 @@ fn root_window_close_sequence_prompts_sequentially_across_docked_and_detached_an
     assert!(h.state().allow_quit);
 
     // Root viewport (and detached viewports) receive Close command
-    let close_sent =
-        h.output().viewport_output.values().flat_map(|v| v.commands.iter()).any(|c| matches!(c, egui::ViewportCommand::Close));
+    let close_sent = h.output().viewport_output.values().flat_map(|v| v.commands.iter()).any(|c| matches!(c, egui::ViewportCommand::Close));
     assert!(close_sent, "Close command must be sent when application shutdown completes");
 }
 
@@ -2411,13 +2410,7 @@ fn root_window_request_quit_shortcut_prompts_and_saving_detached_tab_quits() {
     h.state_mut().session.apply(ids[1], pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
 
     // Trigger quit via Command+Q shortcut event
-    h.event(egui::Event::Key {
-        key: egui::Key::Q,
-        physical_key: None,
-        pressed: true,
-        repeat: false,
-        modifiers: egui::Modifiers::COMMAND,
-    });
+    h.event(egui::Event::Key { key: egui::Key::Q, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND });
     h.step();
 
     assert_eq!(h.state().close_request, Some(pdfcraft_ui_egui::CloseRequest::Quit));
@@ -2449,7 +2442,6 @@ fn clean_detached_and_docked_tabs_request_quit_returns_true_and_allows_quit() {
     assert!(h.state().allow_quit, "allow_quit must be true");
     assert!(h.state().close_request.is_none());
 }
-
 
 /// The Edit tab turns on Edit text & images at once, as Acrobat does, so every paragraph and image
 /// is boxed and editable with one click; another tab puts the tool down again.
