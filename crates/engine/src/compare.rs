@@ -26,6 +26,12 @@ pub fn colour(kind: Kind) -> crate::Rgb {
     }
 }
 
+/// How many reads of the two files have failed so far: a page that could not be read is left
+/// out of a comparison, and would show as removed.
+fn failed_reads(a: &crate::Document, b: &crate::Document) -> [u64; 2] {
+    [a, b].map(|d| d.source().failed_reads())
+}
+
 impl crate::Document {
     /// Standards ▸ Verify PDF/A: the rules the document breaks for `level`.
     pub fn pdfa_verify(&self, level: pdfcraft_preflight::Level) -> Vec<pdfcraft_preflight::Issue> {
@@ -60,7 +66,12 @@ impl Session {
         let b = self.get(new).ok_or(EditError::NoDocument)?;
         a.check_copying()?;
         b.check_copying()?;
-        Ok(pdfcraft_compare::compare(&a.words(), &b.words()))
+        let failed = failed_reads(a, b);
+        let comparison = pdfcraft_compare::compare(&a.words(), &b.words());
+        if failed_reads(a, b) != failed {
+            return Err(EditError::PartUnread);
+        }
+        Ok(comparison)
     }
 
     /// Visual compare: regions where page n of `new` looks different from page n of `old`
@@ -68,6 +79,7 @@ impl Session {
     pub fn compare_visual(&self, old: DocId, new: DocId, dpi: f32) -> Result<Vec<(usize, [f64; 4])>, EditError> {
         let a = self.get(old).ok_or(EditError::NoDocument)?;
         let b = self.get(new).ok_or(EditError::NoDocument)?;
+        let failed = failed_reads(a, b);
         let renderer = |d: &crate::Document| {
             pdfcraft_render::PageRenderer::new(
                 d.source(),
@@ -89,6 +101,9 @@ impl Session {
                 let q = info.view_to_user(r[2] as f32 / s, r[3] as f32 / s);
                 out.push((page, [p[0].min(q[0]) as f64, p[1].min(q[1]) as f64, p[0].max(q[0]) as f64, p[1].max(q[1]) as f64]));
             }
+        }
+        if failed_reads(a, b) != failed {
+            return Err(EditError::PartUnread);
         }
         Ok(out)
     }

@@ -550,12 +550,15 @@ fn parse(source: &PdfSource, password: Option<&str>) -> Option<Pdf> {
     catch_unwind(AssertUnwindSafe(|| Pdf::new_with_password(source.data(), password.unwrap_or("")).ok())).ok().flatten()
 }
 
+/// What a reader of a file on disk says when part of the file could not be read.
+pub const PART_UNREAD: &str = "part of the file could not be read: it may have changed or gone away";
+
 /// `result`, unless a read of the file failed since there were `failed_reads`: a page drawn
 /// without a stream it needs would look complete. Reads of the same file by another page count too,
 /// and that page's error then says the same.
 fn all_read<T>(result: Result<T, (String, bool)>, source: &PdfSource, failed_reads: u64) -> Result<T, (String, bool)> {
     if result.is_ok() && source.failed_reads() != failed_reads {
-        return Err(("part of the file could not be read: it may have changed or gone away".into(), false));
+        return Err((PART_UNREAD.into(), false));
     }
     result
 }

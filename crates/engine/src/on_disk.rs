@@ -225,6 +225,33 @@ mod tests {
         assert!(page.error.is_some_and(|e| e.contains("could not be read")));
     }
 
+    /// A page of text whose content stream stays on disk.
+    fn written() -> Vec<u8> {
+        Pdf::new()
+            .obj("<</Type/Catalog/Pages 2 0 R>>")
+            .obj("<</Type/Pages/Kids[3 0 R]/Count 1/MediaBox[0 0 200 300]>>")
+            .obj("<</Type/Page/Parent 2 0 R/Contents 4 0 R/Resources<</Font<</F 5 0 R>>>>>>")
+            .stream("", format!("BT /F 24 Tf 20 150 Td (Hello) Tj ET % {}", "x".repeat(30_000)))
+            .obj("<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>")
+            .build()
+    }
+
+    #[test]
+    fn a_comparison_refuses_a_file_it_could_not_read_all_of() {
+        let (old, new) = (Temp::new(&written()), Temp::new(&written()));
+        let mut session = Session::default().with_on_disk_from(0);
+        let mut open = |path: &Path| {
+            let prepared = session.open_context().prepare_on_disk("large.pdf", path).expect("stays on disk");
+            session.commit_open(prepared)
+        };
+        let (a, b) = (open(&old.path), open(&new.path));
+        assert!(session.compare(a, b).is_ok());
+        assert!(session.compare_visual(a, b, 72.0).is_ok());
+        std::fs::File::options().write(true).open(&new.path).unwrap().set_len(1_000).unwrap();
+        assert_eq!(session.compare(a, b).err(), Some(crate::EditError::PartUnread));
+        assert_eq!(session.compare_visual(a, b, 72.0).err(), Some(crate::EditError::PartUnread));
+    }
+
     #[test]
     fn a_file_replaced_under_its_name_keeps_reading_as_it_was() {
         let pdf = scanned();

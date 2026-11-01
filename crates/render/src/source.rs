@@ -34,8 +34,8 @@ impl PdfSource {
     }
 
     /// How many reads from disk have failed so far: a stream that couldn't be read draws as
-    /// nothing, and this is how a renderer finds out.
-    pub(crate) fn failed_reads(&self) -> u64 {
+    /// nothing, and this is how whatever read it finds out.
+    pub fn failed_reads(&self) -> u64 {
         match self {
             Self::Whole(_) => 0,
             Self::OnDisk(file) => file.failed_reads(),

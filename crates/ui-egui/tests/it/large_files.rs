@@ -23,6 +23,22 @@ fn large() -> Vec<u8> {
         .build()
 }
 
+/// A file with more pages than fit on screen, so that a copy of all of it has pages to read.
+fn long() -> Vec<u8> {
+    let pages = 40;
+    let kids: String = (0..pages).map(|page| format!("{} 0 R ", 4 + 2 * page)).collect();
+    let mut pdf = pdfcraft_testkit::Pdf::new()
+        .obj("<</Type/Catalog/Pages 2 0 R>>")
+        .obj(format!("<</Type/Pages/Kids[{kids}]/Count {pages}/MediaBox[0 0 200 300]>>"))
+        .obj("<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>");
+    for page in 0..pages {
+        pdf = pdf
+            .obj(format!("<</Type/Page/Parent 2 0 R/Contents {} 0 R/Resources<</Font<</F 3 0 R>>>>>>", 5 + 2 * page))
+            .stream("", format!("BT /F 24 Tf 20 150 Td (Page {page}) Tj ET % {}", "x".repeat(30_000)));
+    }
+    pdf.build()
+}
+
 /// A file in its own folder, gone when the test ends.
 struct Temp {
     dir: PathBuf,
@@ -181,6 +197,40 @@ fn a_search_marks_nothing_it_can_not_apply() {
     assert!(on_disk(h.state()));
     h.state_mut().redact_search.text = "Page".into();
     assert_eq!(h.state_mut().redact_search(), 0);
+}
+
+#[test]
+fn copying_all_of_a_file_cut_short_says_so_and_copies_nothing() {
+    let file = Temp::new("copy", &long());
+    let mut h = harness(true);
+    h.state_mut().open_path(&file.path);
+    h.run_steps(4);
+    assert!(on_disk(h.state()));
+    let mut selected = false;
+    for _ in 0..200 {
+        h.run_steps(2);
+        selected = h.state_mut().views[0].select_all();
+        if selected {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(selected, "the pages shown have their text");
+    std::fs::File::options().write(true).open(&file.path).unwrap().set_len(1_000).unwrap();
+    h.state_mut().toast = None;
+    h.event(egui::Event::Copy);
+    let (mut copied, mut said) = (false, None);
+    for _ in 0..200 {
+        h.step();
+        copied |= h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(_)));
+        said = h.state().toast.as_ref().map(|toast| toast.0.clone());
+        if copied || said.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(!copied, "the text would be short of the pages left unread");
+    assert!(said.as_ref().is_some_and(|s| s.contains(pdfcraft_render::PART_UNREAD)), "{said:?}");
 }
 
 #[test]

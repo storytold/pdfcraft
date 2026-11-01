@@ -158,20 +158,33 @@ fn inspecting_does_not_read_the_images() {
     assert_eq!(source.1.load(Ordering::Relaxed), 0, "only what is held was read");
 }
 
-#[test]
-fn a_big_attachment_on_disk_reads_and_keeps_its_size() {
-    let body: Vec<u8> = (0..3_000_000u32).map(|i| (i % 253) as u8).collect();
-    let pdf = Pdf::new()
+/// One page and `body` attached to the document, stored as it is.
+fn attached(body: &[u8]) -> Vec<u8> {
+    Pdf::new()
         .obj("<</Type/Catalog/Pages 2 0 R/Names<</EmbeddedFiles<</Names[(a.bin)6 0 R]>>>>>>")
         .obj("<</Type/Pages/Kids[3 0 R]/Count 1>>")
         .obj("<</Type/Page/Parent 2 0 R/MediaBox[0 0 10 10]>>")
         .obj("<<>>")
-        .stream("/Type/EmbeddedFile", &body)
+        .stream("/Type/EmbeddedFile", body)
         .obj("<</Type/Filespec/F(a.bin)/EF<</F 5 0 R>>>>")
-        .build();
-    let (file, _) = on_disk(pdf);
+        .build()
+}
+
+#[test]
+fn a_big_attachment_on_disk_reads_and_keeps_its_size() {
+    let body: Vec<u8> = (0..3_000_000u32).map(|i| (i % 253) as u8).collect();
+    let (file, _) = on_disk(attached(&body));
     let info = crate::inspect_on_disk(&file).unwrap().expect("read");
     let attachment = info.attachments.first().expect("listed");
     assert_eq!(attachment.size, Some(body.len()), "from its /Length, without reading it");
     assert_eq!(crate::attachment_on_disk(&file, attachment).unwrap(), body);
+}
+
+#[test]
+fn an_attachment_the_file_can_not_give_is_an_error_and_not_an_empty_file() {
+    let (file, source) = on_disk(attached(&[7; 20_000]));
+    let info = crate::inspect_on_disk(&file).unwrap().expect("read");
+    let attachment = info.attachments.first().expect("listed");
+    source.gone.store(true, Ordering::Relaxed);
+    assert_eq!(crate::attachment_on_disk(&file, attachment), Err(crate::PART_UNREAD.to_string()));
 }

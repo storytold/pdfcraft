@@ -250,7 +250,12 @@ pub fn attachment_data(bytes: &[u8], password: Option<&str>, att: &Attachment) -
 
 /// [`attachment_data`] for a file kept on disk.
 pub fn attachment_on_disk(file: &Arc<OnDiskFile>, att: &Attachment) -> Result<Vec<u8>, String> {
-    let run = || read_attachment(&LazyStructure::on_disk(file.clone(), usize::MAX)?, att);
+    let run = || -> Result<Vec<u8>, String> {
+        let failed_reads = file.failed_reads();
+        let data = read_attachment(&LazyStructure::on_disk(file.clone(), usize::MAX)?, att)?;
+        // A body that can't be read reads as empty, and would save as an empty file.
+        if file.failed_reads() == failed_reads { Ok(data) } else { Err(crate::PART_UNREAD.into()) }
+    };
     catch_unwind(AssertUnwindSafe(run)).unwrap_or_else(|p| Err(format!("reading the attachment crashed: {}", crate::raster::panic_message(&p))))
 }
 

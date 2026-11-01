@@ -271,8 +271,10 @@ impl DocumentCopyJob {
 
     /// The document's text in page order, a page per line run. Each page read here is let go
     /// once its text is taken, so a large document never holds every page's text layer at once.
-    /// `None` when `cancel` was set.
-    pub(crate) fn text(self, cancel: &std::sync::atomic::AtomicBool) -> Option<String> {
+    /// `None` when `cancel` was set, and an error when part of a file kept on disk could not be
+    /// read: the text would be short of those pages.
+    pub(crate) fn text(self, cancel: &std::sync::atomic::AtomicBool) -> Option<Result<String, &'static str>> {
+        let failed_reads = self.source.failed_reads();
         let mut renderer: Option<pdfcraft_render::PageRenderer> = None;
         let mut out = String::new();
         let mut push = |text: String| {
@@ -305,11 +307,14 @@ impl DocumentCopyJob {
                     if let Some(t) = r.render(req).text {
                         push(t.text_of(0..t.glyphs.len()));
                     }
+                    if self.source.failed_reads() != failed_reads {
+                        return Some(Err(pdfcraft_render::PART_UNREAD));
+                    }
                 }
                 CopyPage::Skip => {}
             }
         }
-        Some(out)
+        Some(Ok(out))
     }
 }
 

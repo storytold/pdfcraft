@@ -143,9 +143,15 @@ impl PdfCraftApp {
         }
         match c.rx.try_recv() {
             Ok(text) => {
+                let doc = c.doc;
                 self.document_copy = None;
-                if !text.is_empty() {
-                    ctx.copy_text(text);
+                match text {
+                    Ok(text) if text.is_empty() => {}
+                    Ok(text) => ctx.copy_text(text),
+                    Err(e) => {
+                        let name = self.session.get(doc).map(|d| d.name.clone()).unwrap_or_default();
+                        self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", e)]);
+                    }
                 }
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(50)),

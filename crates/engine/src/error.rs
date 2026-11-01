@@ -27,6 +27,9 @@ pub enum EditError {
     /// The file at the path of a file kept on disk is no longer that file.
     #[error("the file there has changed or gone; save to a new name to keep this one")]
     ChangedOnDisk,
+    /// A file kept on disk could not give all that was read from it.
+    #[error("{}", pdfcraft_render::PART_UNREAD)]
+    PartUnread,
     #[error("the document's security settings don't allow {0}; open it with the owner password to make this change")]
     NotPermitted(&'static str),
     #[error("{0}")]

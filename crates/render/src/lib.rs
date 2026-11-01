@@ -25,8 +25,8 @@ pub use inspect::{
 };
 pub use pixels::Pixels;
 pub use raster::{
-    MAX_PIXELS, MAX_SIDE, PRINT_TAG, PageRenderer, RenderConfig, RenderPool, RenderRequest, RenderStats, RenderWarning, RenderedPage, RequestKind,
-    Retiring, Tile, device_pixels, effective_scale,
+    MAX_PIXELS, MAX_SIDE, PART_UNREAD, PRINT_TAG, PageRenderer, RenderConfig, RenderPool, RenderRequest, RenderStats, RenderWarning, RenderedPage,
+    RequestKind, Retiring, Tile, device_pixels, effective_scale,
 };
 pub use reading::{ReadingColors, ReadingParams};
 pub use source::PdfSource;

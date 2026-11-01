@@ -197,7 +197,7 @@ struct GridDrop {
 /// threads). Dropping it (a new copy, the document closed) stops the reading.
 struct DocumentCopy {
     doc: DocId,
-    rx: std::sync::mpsc::Receiver<String>,
+    rx: std::sync::mpsc::Receiver<Result<String, &'static str>>,
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
