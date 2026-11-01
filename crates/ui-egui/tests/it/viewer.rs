@@ -1984,6 +1984,17 @@ fn right_click_and_floating_bar_offer_replace_image() {
         change: pdfcraft_engine::ImageEdit::Replace { name: "green.png".into(), bytes: std::sync::Arc::new(png) },
     };
     assert!(h.state_mut().apply_edit(replace));
+
+    // 4. Verify replacement persists across save and reopen.
+    let id = h.state().views[i].id;
+    let saved = h.state().session.save_bytes(id).expect("saves replaced image document");
+    let mut reopened = pdfcraft_engine::Session::new();
+    let rid = reopened.open("reopened.pdf", None, saved, None).expect("opens saved document");
+    let doc = reopened.get(rid).unwrap();
+    let images = doc.page_images(0);
+    assert_eq!(images.len(), 1, "exactly one image remains on the page");
+    assert_eq!(images[0].width, 10, "replaced image dimensions persist upon reload");
+    assert_eq!(images[0].height, 10);
 }
 
 /// A picture drawn through grouped Form artwork with a caption over it (as Word, InDesign and
