@@ -5241,6 +5241,53 @@ fn dragging_a_picture_past_the_page_edge_keeps_it_on_the_page() {
     );
 }
 
+#[test]
+fn dragging_a_turned_picture_past_the_page_edge_keeps_it_on_the_page() {
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("picture.png", None, png.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    // A smaller picture in the middle of the page, turned so it takes the rotated move path.
+    let full = h.state().session.get(id).unwrap().page_images(0)[0].rect;
+    let (qw, qh) = ((full[2] - full[0]) / 4.0, (full[3] - full[1]) / 4.0);
+    let (mx, my) = ((full[0] + full[2]) / 2.0, (full[1] + full[3]) / 2.0);
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::EditPageImage {
+        page: 0,
+        index: 0,
+        change: pdfcraft_engine::ImageEdit::Move([mx - qw, my - qh, mx + qw, my + qh]),
+    });
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::EditPageImage { page: 0, index: 0, change: pdfcraft_engine::ImageEdit::RotateBy(30.0) });
+    h.run_steps(4);
+    let before = h.state().session.get(id).unwrap().page_images(0)[0].clone();
+    assert!(before.matrix[1].abs() > 1.0 || before.matrix[2].abs() > 1.0, "turned: {:?}", before.matrix);
+    let before = before.rect;
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let c = r.center();
+    h.hover_at(c);
+    h.run_steps(1);
+    h.drag_at(c);
+    h.run_steps(1);
+    h.drop_at(c);
+    h.run_steps(2);
+    assert!(h.state().views[0].image_selection.is_some(), "selected");
+    // Far past the page's bottom right corner.
+    drag(&mut h, c, c + r.size());
+    let moved = h.state().session.get(id).unwrap().page_images(0)[0].rect;
+    assert!(moved[2] > before[2] + 1.0, "it moved: {before:?} -> {moved:?}");
+    assert!(
+        moved[0] >= full[0] - 0.5 && moved[1] >= full[1] - 0.5 && moved[2] <= full[2] + 0.5 && moved[3] <= full[3] + 0.5,
+        "still on its page {full:?}: {moved:?}"
+    );
+}
+
 /// Press and release at `at` without moving.
 fn click_at(h: &mut Harness<'static, PdfCraftApp>, at: egui::Pos2) {
     h.hover_at(at);

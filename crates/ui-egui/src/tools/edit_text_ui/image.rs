@@ -872,6 +872,11 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
             let m_init = Matrix(drag.initial_matrix);
             let [a0, b0, c0, d0, e0, f0] = drag.initial_matrix;
             let (sx, sy) = screen_to_user(xf, info, page, drag.start);
+            // A move keeps the turned picture on its page too (#5264).
+            let p = match drag.target {
+                DragTarget::Move => drag.start + super::super::object_ui::keep_on_page(Rect::from_points(&obb.corners()), xf.rect, p - drag.start),
+                _ => p,
+            };
             let (px, py) = screen_to_user(xf, info, page, p);
 
             let (m_new, cursor_icon) = match drag.target {
