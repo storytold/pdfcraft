@@ -2787,7 +2787,10 @@ fn follow_link(
         LinkTarget::Page(p, dest) => {
             let view = &mut app.views[index];
             if let Some(doc) = app.session.get(view.id) {
+                // Read before the jump: a null coordinate keeps the reader's place.
+                let landing = view.resolve_dest(dest, &doc.info);
                 view.go_to_dest(p, dest, &doc.info);
+                view.flash_dest(p, landing, &doc.info);
             }
         }
         LinkTarget::Uri(u) => app.request_document_url(&u, crate::LinkOrigin::Link),
