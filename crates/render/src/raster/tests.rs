@@ -3505,6 +3505,27 @@ fn a_value_nested_past_the_cap_leaves_its_dictionary_readable() {
     assert!(!dict.contains_key("Deep"));
 }
 
+/// Many values nested past the cap cost one pass each, not more: a page dictionary with 10,000
+/// entries 129 arrays or dictionaries deep is read, its other entries kept and every deep one left
+/// out, without overflowing the stack (#5320 review).
+#[test]
+fn ten_thousand_values_nested_past_the_cap_leave_the_page_readable() {
+    use hayro_syntax::object::{Dict, FromBytes};
+    let mut page = String::new();
+    for i in 0..10_000 {
+        page.push_str(&format!("/D{i} {} ", nested(129, if i % 2 == 0 { "array" } else { "dict" })));
+    }
+    page.push_str("/Rotate 0");
+    let bytes = nesting_pdf_with_page("", "", &page, "1 0 0 rg 0 0 4 4 re f");
+    let info = crate::inspect(Arc::new(bytes.clone()), None).expect("the page is read");
+    assert_eq!(info.pages.len(), 1);
+    assert_eq!(px40(&nesting_render(bytes), 1, 38), &[255, 0, 0, 255]);
+    let text = format!("<< /Type /Page {page} >>");
+    let dict = Dict::from_bytes(text.as_bytes()).expect("the page is read");
+    assert_eq!(dict.get::<i32>("Rotate"), Some(0));
+    assert!((0..10_000).all(|i| !dict.contains_key(format!("D{i}").as_str())));
+}
+
 /// A value nested past the cap inside a dictionary of the page, here its `/Resources`, takes
 /// out the page's entry holding it, the whole `/Resources`, so no resource dictionary is read
 /// with an entry of it missing (#5320 review). When the resources are an object of their own,
