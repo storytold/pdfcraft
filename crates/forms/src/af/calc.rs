@@ -26,6 +26,14 @@ const BEFORE_REGEX: [&str; 12] = ["return", "typeof", "case", "do", "else", "in"
 /// a `/` after it starts the next statement, and can't divide.
 const BEFORE_CONDITION: [&str; 4] = ["if", "while", "for", "with"];
 
+/// Context of an open delimiter. Only the left side of a for header can introduce `of`.
+#[derive(Clone, Copy)]
+enum Delimiter {
+    Group,
+    Condition,
+    For { left: bool },
+}
+
 /// Whether a line ends at `s[j]`: JavaScript ends one at `\n`, `\r`, U+2028 and U+2029.
 fn line_ends_at(s: &[u8], j: usize) -> bool {
     matches!(s.get(j..), Some([b'\n' | b'\r', ..] | [0xE2, 0x80, 0xA8 | 0xA9, ..]))
@@ -46,10 +54,11 @@ pub(super) fn js_tokens(js: &str) -> (Vec<Token>, Vec<Range<usize>>) {
     // Where a regular expression that never ended stopped being read: every `/` before it
     // divides, so a line of them is read once, not once for each.
     let mut divides_until = 0;
-    // For each `(` still open, whether it opened the condition of `if`, `while`, `for` or
-    // `with`; and whether the last token is the `)` that closed one.
-    let mut conditions: Vec<bool> = Vec::new();
+    // Nested groups hide the surrounding for header: an `of` in a destructuring default
+    // or nested expression is an identifier, not the for-of separator.
+    let mut delimiters: Vec<(char, Delimiter)> = Vec::new();
     let mut after_condition = false;
+    let mut after_for_of = false;
     'scan: while let Some(&c) = s.get(i) {
         let start = i;
         let token = match c {
@@ -103,7 +112,7 @@ pub(super) fn js_tokens(js: &str) -> (Vec<Token>, Vec<Range<usize>>) {
                 i = j + 1;
                 Js::Other
             }
-            b'/' if i >= divides_until && regex_may_follow(js, &out, after_condition, conditions.last().copied().unwrap_or(false)) => {
+            b'/' if i >= divides_until && regex_may_follow(js, &out, after_condition, after_for_of) => {
                 // A regular expression ends at a `/` outside a class; a line break first means it
                 // was a division after all.
                 let (mut j, mut class) = (i + 1, false);
@@ -147,7 +156,7 @@ pub(super) fn js_tokens(js: &str) -> (Vec<Token>, Vec<Range<usize>>) {
             }
             b'+' | b'-'
                 if s.get(i + 1) == Some(&c)
-                    && !regex_may_follow(js, &out, after_condition, conditions.last().copied().unwrap_or(false))
+                    && !regex_may_follow(js, &out, after_condition, after_for_of)
                     && out.last().is_some_and(|(range, _)| !(range.end..i).any(|j| line_ends_at(s, j))) =>
             {
                 // Postfix update ends an expression: a following slash divides. A line
@@ -172,28 +181,49 @@ pub(super) fn js_tokens(js: &str) -> (Vec<Token>, Vec<Range<usize>>) {
                 Js::Punct(char::from(c))
             }
         };
-        after_condition = match token {
-            Js::Punct('(') => {
-                conditions.push(opens_condition(js, &out));
-                false
-            }
-            Js::Punct(')') => conditions.pop().unwrap_or(false),
-            _ => false,
-        };
-        out.push((start..i, token));
+        let token = (start..i, token);
+        (after_condition, after_for_of) = advance_context(js, &token, &out, &mut delimiters);
+        out.push(token);
     }
     (out, comments)
+}
+
+/// Advance only the delimiter/for-header context after a token has been classified.
+/// Returns whether it closes a statement's condition or is the for-of separator.
+fn advance_context(js: &str, token: &Token, tokens: &[Token], delimiters: &mut Vec<(char, Delimiter)>) -> (bool, bool) {
+    let mut after_for_of = false;
+    if let Some((_, Delimiter::For { left })) = delimiters.last_mut() {
+        if matches!(token.1, Js::Ident) && js.get(token.0.clone()) == Some("of") && *left && for_target_ends(js, tokens) {
+            *left = false;
+            after_for_of = true;
+        } else if matches!(token.1, Js::Punct(';' | '='))
+            || (matches!(token.1, Js::Ident) && js.get(token.0.clone()) == Some("in") && !matches!(tokens.last(), Some((_, Js::Punct('.')))))
+        {
+            *left = false;
+        }
+    }
+    let mut after_condition = false;
+    match token.1 {
+        Js::Punct('(') => delimiters.push((')', opens_condition(js, tokens))),
+        Js::Punct('[') => delimiters.push((']', Delimiter::Group)),
+        Js::Punct('{') => delimiters.push(('}', Delimiter::Group)),
+        Js::Punct(close @ (')' | ']' | '}')) if delimiters.last().is_some_and(|(end, _)| *end == close) => {
+            after_condition = matches!(delimiters.pop(), Some((_, Delimiter::Condition | Delimiter::For { .. })));
+        }
+        _ => {}
+    }
+    (after_condition, after_for_of)
 }
 
 /// Whether a `/` after `tokens` starts a regular expression: after an operator, an opening
 /// bracket, a keyword such as `return` or the condition of `if`, `while`, `for` or `with`, not
 /// after a value. `after_condition` says the last token is the `)` that ends such a condition.
-fn regex_may_follow(js: &str, tokens: &[Token], after_condition: bool, in_condition: bool) -> bool {
+fn regex_may_follow(js: &str, tokens: &[Token], after_condition: bool, after_for_of: bool) -> bool {
     match tokens.last() {
         None => true,
         Some((range, Js::Ident)) => {
             !matches!(tokens.get(tokens.len().wrapping_sub(2)), Some((_, Js::Punct('.'))))
-                && js.get(range.clone()).is_some_and(|w| BEFORE_REGEX.contains(&w) || (w == "of" && in_condition))
+                && js.get(range.clone()).is_some_and(|w| BEFORE_REGEX.contains(&w) || (w == "of" && after_for_of))
         }
         Some((_, Js::Punct(')'))) => after_condition,
         Some((_, Js::Punct(c))) => !matches!(c, ']' | '}'),
@@ -201,12 +231,38 @@ fn regex_may_follow(js: &str, tokens: &[Token], after_condition: bool, in_condit
     }
 }
 
-/// Whether a `(` after `tokens` opens the condition of `if`, `while`, `for` or `with`, and not
+/// Whether a `(` after `tokens` opens the condition of `if`, `while`, `for` (including
+/// `for await`) or `with`, and not
 /// the arguments of a method that has one of those names (`o.if(x)`).
-fn opens_condition(js: &str, tokens: &[Token]) -> bool {
+fn opens_condition(js: &str, tokens: &[Token]) -> Delimiter {
     let mut back = tokens.iter().rev();
-    let Some((range, Js::Ident)) = back.next() else { return false };
-    js.get(range.clone()).is_some_and(|w| BEFORE_CONDITION.contains(&w)) && !matches!(back.next(), Some((_, Js::Punct('.'))))
+    let Some((range, Js::Ident)) = back.next() else { return Delimiter::Group };
+    let mut keyword = js.get(range.clone());
+    if keyword == Some("await") {
+        let Some((range, Js::Ident)) = back.next() else { return Delimiter::Group };
+        keyword = js.get(range.clone());
+        if keyword != Some("for") {
+            return Delimiter::Group;
+        }
+    }
+    if matches!(back.next(), Some((_, Js::Punct('.')))) {
+        return Delimiter::Group;
+    }
+    match keyword {
+        Some("for") => Delimiter::For { left: true },
+        Some(w) if BEFORE_CONDITION.contains(&w) => Delimiter::Condition,
+        _ => Delimiter::Group,
+    }
+}
+
+/// A binding/assignment target before the for-of separator, not a declaration keyword,
+/// expression-opening operator, or the start of the header itself.
+fn for_target_ends(js: &str, tokens: &[Token]) -> bool {
+    match tokens.last() {
+        Some((range, Js::Ident)) => !matches!(js.get(range.clone()), Some("var" | "let" | "const")),
+        Some((_, Js::Punct(']' | '}' | ')'))) => true,
+        _ => false,
+    }
 }
 
 /// Where a Calculate script keeps its simplified field notation: between `BVCALC` and the

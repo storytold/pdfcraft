@@ -319,6 +319,14 @@ pub(super) fn inherited(doc: &Document, field: ObjRef) -> Dict {
         }
         parent = d.reference(b"Parent");
     }
+    // /Opt is inheritable for check boxes and radio buttons (Table 230), not choice
+    // fields (Table 234). Classify by effective /FT and /Ff before materializing it.
+    let effective = |key: &[u8]| if dict_has(doc, &own, key) { own.get(key) } else { add.get(key) };
+    let button = effective(b"FT").is_some_and(|v| doc.resolve(v).as_name() == Some(b"Btn"));
+    let flags = effective(b"Ff").and_then(|v| doc.resolve(v).as_int()).and_then(|v| u32::try_from(v).ok()).unwrap_or(0);
+    if !button || flags & crate::flags::PUSH_BUTTON != 0 {
+        add.remove(b"Opt");
+    }
     add
 }
 
@@ -406,6 +414,111 @@ pub(super) fn top_names(doc: &Document) -> Vec<String> {
 mod tests {
     use super::*;
 
+    /// /Opt is inheritable only for check boxes and radio buttons, using effective FT/Ff.
+    #[test]
+    fn inherited_options_are_limited_to_checkboxes_and_radios() {
+        for (ft, flags, expected) in
+            [("Btn", 0, true), ("Btn", crate::flags::RADIO, true), ("Btn", crate::flags::PUSH_BUTTON, false), ("Ch", 0, false), ("Tx", 0, false)]
+        {
+            for own_type in [false, true] {
+                let mut doc = Document::new_empty();
+                let mut parent = Dict::new();
+                parent.set(b"FT".to_vec(), Object::name(ft));
+                parent.set(b"Ff".to_vec(), Object::Int(i64::from(flags)));
+                parent.set(b"Opt".to_vec(), Object::Array(vec![Object::String(PdfString::text("export"))]));
+                parent.set(b"DA".to_vec(), PdfString::text("/Helv 10 Tf 0 g"));
+                let p = doc.add(parent);
+                let mut child = Dict::new();
+                child.set(b"Parent".to_vec(), Object::Ref(p));
+                if own_type {
+                    child.set(b"FT".to_vec(), Object::name(ft));
+                    child.set(b"Ff".to_vec(), Object::Int(i64::from(flags)));
+                }
+                let c = doc.add(child);
+                let inherited = inherited(&doc, c);
+                assert_eq!(inherited.contains(b"Opt"), expected, "{ft}, flags {flags}, own {own_type}");
+                assert!(inherited.contains(b"DA"));
+            }
+        }
+    }
+
+    fn one_page() -> Document {
+        let mut doc = Document::new_empty();
+        let pages = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
+        let mut page = Dict::new();
+        page.set(b"Type".to_vec(), Object::name("Page"));
+        page.set(b"Parent".to_vec(), Object::Ref(pages));
+        page.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 600.into(), 800.into()]));
+        let page = doc.add(page);
+        doc.update_dict(pages, |d| {
+            d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)]));
+            d.set(b"Count".to_vec(), Object::Int(1));
+        })
+        .unwrap();
+        doc
+    }
+
+    fn reopen(doc: &Document) -> Document {
+        let bytes = pdfcraft_cos::write_incremental(doc, &pdfcraft_cos::SaveOptions::default()).unwrap();
+        hayro_syntax::Pdf::new(bytes.clone()).unwrap();
+        Document::open(std::sync::Arc::new(bytes)).unwrap()
+    }
+
+    /// Moving a choice field must not turn its ancestor's unrelated /Opt into local choices.
+    #[test]
+    fn moving_choice_fields_does_not_copy_ancestor_options() {
+        for combo in [false, true] {
+            for own_options in [false, true] {
+                let mut doc = one_page();
+                let options = if own_options { vec!["local".into()] } else { Vec::new() };
+                let kind = if combo { crate::NewField::Combo { options, editable: false } } else { crate::NewField::List { options, multi: false } };
+                crate::add_field(&mut doc, 0, [50.0, 700.0, 250.0, 720.0], &kind, Some("old.pick")).unwrap();
+                let f = crate::fields(&doc).into_iter().find(|f| f.name == "old.pick").unwrap();
+                let parent = doc.get(f.obj).as_dict().unwrap().reference(b"Parent").unwrap();
+                if !own_options {
+                    doc.update_dict(f.obj, |d| {
+                        d.remove(b"Opt");
+                    })
+                    .unwrap();
+                }
+                doc.update_dict(parent, |d| d.set(b"Opt".to_vec(), Object::Array(vec![Object::String(PdfString::text("borrowed"))]))).unwrap();
+                let before = crate::fields(&doc).into_iter().find(|f| f.name == "old.pick").unwrap().options;
+                crate::set_props(&mut doc, "old.pick", &crate::FieldProps { name: Some("new.pick".into()), ..Default::default() }).unwrap();
+                let after = crate::fields(&doc).into_iter().find(|f| f.name == "new.pick").unwrap();
+                assert_eq!(after.options, before);
+                assert_eq!(doc.get(after.obj).as_dict().unwrap().contains(b"Opt"), own_options);
+                let reopened = reopen(&doc);
+                let after = crate::fields(&reopened).into_iter().find(|f| f.name == "new.pick").unwrap();
+                assert_eq!(after.options, before);
+                assert_eq!(reopened.get(after.obj).as_dict().unwrap().contains(b"Opt"), own_options);
+            }
+        }
+    }
+
+    #[test]
+    fn moving_buttons_preserves_inherited_export_mapping() {
+        for kind in [crate::NewField::CheckBox, crate::NewField::Radio { group: None, export: "0".into() }] {
+            let mut doc = one_page();
+            crate::add_field(&mut doc, 0, [50.0, 700.0, 70.0, 720.0], &kind, Some("old.button")).unwrap();
+            let field = crate::fields(&doc).into_iter().find(|f| f.name == "old.button").unwrap();
+            let state = field.widgets.first().unwrap().on_state.clone().unwrap();
+            let parent = doc.get(field.obj).as_dict().unwrap().reference(b"Parent").unwrap();
+            let opt = Object::Array(vec![Object::String(PdfString::text("exported"))]);
+            doc.update_dict(parent, |d| d.set(b"Opt".to_vec(), opt.clone())).unwrap();
+            doc.update_dict(field.obj, |d| {
+                d.remove(b"Opt");
+            })
+            .unwrap();
+            crate::set_props(&mut doc, "old.button", &crate::FieldProps { name: Some("new.button".into()), ..Default::default() }).unwrap();
+            for doc in [&doc, &reopen(&doc)] {
+                let after = crate::fields(doc).into_iter().find(|f| f.name == "new.button").unwrap();
+                assert_eq!(doc.get(after.obj).as_dict().unwrap().get(b"Opt"), Some(&opt));
+                assert_eq!(after.export_of(0), Some("exported"));
+                assert_eq!(after.state_for("exported"), Some(state.as_str()));
+            }
+        }
+    }
+
     #[test]
     fn null_entries_on_parents_and_unsigned_signatures_are_treated_as_absent() {
         let mut doc = Document::new_empty();
@@ -439,7 +552,7 @@ mod tests {
         assert!(!ancestor_sets(&doc, child_ref, b"V"));
         assert!(ancestor_sets(&doc, child_ref, b"MaxLen"));
 
-        // Inherited /Opt is preserved, null kids in /Kids are ignored, and /Parent cycles terminate.
+        // Button /Opt is inherited, text /Opt is not; null kids and /Parent cycles are handled.
         let opt_val = Object::Array(vec![Object::String(PdfString::text("Choice1"))]);
         doc.update_dict(grand_ref, |d| {
             d.set(b"Opt".to_vec(), opt_val.clone());
@@ -447,6 +560,8 @@ mod tests {
             d.set(b"Kids".to_vec(), Object::Array(vec![Object::Null, Object::Ref(parent_ref)]));
         })
         .unwrap();
+        assert!(!inherited(&doc, child_ref).contains(b"Opt"));
+        doc.update_dict(grand_ref, |d| d.set(b"FT".to_vec(), Object::name("Btn"))).unwrap();
         let inh_cycle = inherited(&doc, child_ref);
         assert_eq!(inh_cycle.get(b"Opt"), Some(&opt_val));
         assert!(!holds_value(&doc, child_ref));

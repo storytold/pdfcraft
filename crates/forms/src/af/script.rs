@@ -215,7 +215,9 @@ impl Parser<'_> {
     }
 }
 
-/// The first call to `name(` in `js` and its arguments.
+/// The first genuine call to `name(` in `js` and its arguments.
+/// An unsupported first call returns `None`, preserving the custom-script fallback; later calls
+/// must not substitute a different native rule. Comments, strings and unrelated identifiers are skipped.
 pub(super) fn call(js: &str, name: &str) -> Option<Vec<Arg>> {
     let (tokens, _) = js_tokens(js);
     for (k, (range, tok)) in tokens.iter().enumerate() {
@@ -234,9 +236,7 @@ pub(super) fn call(js: &str, name: &str) -> Option<Vec<Arg>> {
         };
         let Some((open, super::calc::Js::Punct('('))) = tokens.get(end_k + 1) else { continue };
         let mut p = Parser { s: js.as_bytes(), i: open.end, depth: 0 };
-        if let Some(args) = p.list(b')') {
-            return Some(args);
-        }
+        return p.list(b')');
     }
     None
 }
@@ -400,6 +400,26 @@ pub fn calculate_js(c: &Calculate) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unsupported_first_validation_call_does_not_select_a_later_rule() {
+        let js = "if (event.value < 50) AFRange_Validate(true, 10 + 5, false, 0); else AFRange_Validate(false, 0, true, 100);";
+        assert_eq!(parse_validate(js), None);
+        assert_eq!(
+            parse_validate("AFRange_Validate(true, 15, false, 0); AFRange_Validate(false, 0, true, 100);"),
+            Some(Validate::Range { min: Some(15.0), max: None })
+        );
+    }
+
+    #[test]
+    fn validation_call_still_skips_non_calls_before_literal_arguments() {
+        let js = r#"// AFRange_Validate(true, 10 + 5, false, 0)
+            "AFRange_Validate(true, 10 + 5, false, 0)";
+            my_AFRange_Validate(true, 10 + 5, false, 0);
+            other.AFRange_Validate(true, 10 + 5, false, 0);
+            AFRange_Validate(false, 0, true, 100);"#;
+        assert_eq!(parse_validate(js), Some(Validate::Range { min: None, max: Some(100.0) }));
+    }
 
     #[test]
     fn unpaired_high_surrogate_at_end_of_string_does_not_abort_parsing() {
