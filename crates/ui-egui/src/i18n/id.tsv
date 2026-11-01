@@ -2847,3 +2847,14 @@ theme	Appearance	Tampilan
 	No image on clipboard to paste	Tidak ada gambar di papan klip untuk ditempel
 	Pinned {tool} to Home	{tool} disematkan ke Beranda
 	Unpinned {tool} from Home	{tool} dilepas dari Beranda
+
+# Saved signature list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add another saved signature	Isi & Tanda Tangani: tambahkan tanda tangan tersimpan lainnya
+	Signature {n}	Tanda tangan {n}
+	Work, Personal, a name…	Kantor, Pribadi, sebuah nama…
+	You can keep up to {n} signatures. Remove one to add another.	Anda dapat menyimpan hingga {n} tanda tangan. Hapus satu untuk menambahkan yang lain.
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Isi & Tanda Tangani: tambahkan inisial tersimpan lainnya
+	Initials {n}	Inisial {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	Anda dapat menyimpan hingga {n} set inisial. Hapus satu untuk menambahkan yang lain.

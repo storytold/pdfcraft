@@ -2846,3 +2846,14 @@ theme	Appearance	모양
 	No image on clipboard to paste	클립보드에 붙여넣을 이미지가 없습니다
 	Pinned {tool} to Home	{tool}을 홈에 고정했습니다
 	Unpinned {tool} from Home	{tool}의 홈 고정을 해제했습니다
+
+# Saved signature list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add another saved signature	채우기 및 서명: 저장된 서명 추가
+	Signature {n}	서명 {n}
+	Work, Personal, a name…	업무, 개인, 이름…
+	You can keep up to {n} signatures. Remove one to add another.	서명은 최대 {n}개까지 저장할 수 있습니다. 다른 서명을 추가하려면 하나를 제거하세요.
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	채우기 및 서명: 저장된 이니셜 추가
+	Initials {n}	이니셜 {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	이니셜은 최대 {n}개까지 저장할 수 있습니다. 다른 이니셜을 추가하려면 하나를 제거하세요.

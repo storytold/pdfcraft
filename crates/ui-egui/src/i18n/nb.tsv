@@ -2724,6 +2724,11 @@ key	Esc	Esc
 key	Home	Home
 key	End	End
 key	Space	Mellomrom
+# Saved signature list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add another saved signature	Fyll ut og signer: legg til enda en lagret signatur
+	Signature {n}	Signatur {n}
+	Work, Personal, a name…	Jobb, Privat, et navn…
+	You can keep up to {n} signatures. Remove one to add another.	Du kan beholde opptil {n} signaturer. Fjern én for å legge til en ny.
 
 # Page gaps (AI-assisted, not separately native-reviewed)
 	Show gaps between pages	Vis mellomrom mellom sidene
@@ -2794,3 +2799,8 @@ key	Space	Mellomrom
 	Export this PDF	Eksporter denne PDF-en
 	Find text or tools	Finn tekst eller verktøy
 	Crop image	Beskjær bilde
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Fyll ut og signer: legg til flere lagrede initialer
+	Initials {n}	Initialer {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	Du kan beholde opptil {n} sett med initialer. Fjern ett for å legge til et nytt.

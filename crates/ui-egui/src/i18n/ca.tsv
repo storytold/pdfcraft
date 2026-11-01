@@ -2876,3 +2876,14 @@ theme	Appearance	Aspecte
 	No image on clipboard to paste	No hi ha cap imatge al porta-retalls per enganxar
 	Pinned {tool} to Home	{tool} fixat a Inici
 	Unpinned {tool} from Home	{tool} desfixat d’Inici
+
+# Saved signature list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add another saved signature	Emplena i signa: afegeix una altra signatura desada
+	Signature {n}	Signatura {n}
+	Work, Personal, a name…	Feina, Personal, un nom…
+	You can keep up to {n} signatures. Remove one to add another.	Es poden desar fins a {n} signatures. Elimina'n una per afegir-ne una altra.
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Emplena i signa: afegeix unes altres inicials desades
+	Initials {n}	Inicials {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	Es poden desar fins a {n} conjunts d'inicials. Elimina'n un per afegir-ne un altre.

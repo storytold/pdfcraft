@@ -1411,6 +1411,10 @@
 	Fill & Sign: change signature	Συμπλήρωση και υπογραφή: αλλαγή υπογραφής
 	Fill & Sign: change initials	Συμπλήρωση και υπογραφή: αλλαγή μονογραφής
 	Fill & Sign: remove saved signature	Συμπλήρωση και υπογραφή: αφαίρεση αποθηκευμένης υπογραφής
+	Fill & Sign: add another saved signature	Συμπλήρωση και υπογραφή: προσθήκη άλλης αποθηκευμένης υπογραφής
+	Signature {n}	Υπογραφή {n}
+	Work, Personal, a name…	Εργασία, Προσωπική, ένα όνομα…
+	You can keep up to {n} signatures. Remove one to add another.	Μπορείτε να κρατήσετε έως {n} υπογραφές. Αφαιρέστε μία για να προσθέσετε άλλη.
 	Fill & Sign: remove saved initials	Συμπλήρωση και υπογραφή: αφαίρεση αποθηκευμένης μονογραφής
 	Change signature	Αλλαγή υπογραφής
 	Change initials	Αλλαγή μονογραφής
@@ -2624,3 +2628,8 @@ animation effects	Off	Ανενεργά
 	No image on clipboard to paste	Δεν υπάρχει εικόνα στο πρόχειρο για επικόλληση
 	Pinned {tool} to Home	Το {tool} καρφιτσώθηκε στην Αρχική
 	Unpinned {tool} from Home	Το {tool} ξεκαρφιτσώθηκε από την Αρχική
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Συμπλήρωση και υπογραφή: προσθήκη άλλης αποθηκευμένης μονογραφής
+	Initials {n}	Μονογραφή {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	Μπορείτε να κρατήσετε έως {n} μονογραφές. Αφαιρέστε μία για να προσθέσετε άλλη.

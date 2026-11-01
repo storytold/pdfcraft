@@ -473,7 +473,7 @@ fn the_fill_and_sign_signature_or_an_image_shows_in_a_digital_signature() {
     h.run_steps(2);
 
     // The saved signature (typed here) takes the name's place.
-    h.state_mut().signature = Some(SavedSig::Typed("Grace Hopper".into()));
+    h.state_mut().signatures.set_active(Some(SavedSig::Typed("Grace Hopper".into())));
     sign_as(&mut h, [20.0, 110.0, 280.0, 140.0]);
     h.get_by_label("Fill & Sign signature").click();
     h.run_steps(2);
