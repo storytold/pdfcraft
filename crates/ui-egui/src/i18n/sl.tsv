@@ -1315,6 +1315,7 @@
 	PDF version	Različica PDF
 	PDF, images and text	PDF, slike in besedilo
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	PRs	PR-ji
 	Page	Stran
 	Page Content	Vsebina strani
@@ -1619,6 +1620,7 @@
 	Save as PDF/A-3b	Shrani kot PDF/A-3b
 	Save as PDF/UA	Shrani kot PDF/UA
 	Save as PDF/X	Shrani kot PDF/X
+	Verify PDF/X	Preveri PDF/X
 	Save as…	Shrani kot…
 	Save attachment…	Shrani priponko…
 	Save changes to “{name}” before closing?	Ali želite shraniti spremembe v „{name}“?

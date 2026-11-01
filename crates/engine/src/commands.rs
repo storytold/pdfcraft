@@ -283,6 +283,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("form.import_data", "Import form data…", None, None, HasFields, "file-input"),
     c("form.export_data", "Export form data…", None, None, HasFields, "file-output"),
     c("standards.pdfa", "PDF/A…", None, None, Document, "file-check"),
+    c("standards.pdfx", "PDF/X…", None, None, Document, "file-check"),
     c("actions.wizard", "Action Wizard…", None, None, Nothing, "list-checks"),
     c("actions.distribution", "Prepare for distribution…", None, None, Nothing, "send"),
     c("actions.optimize_scans", "Optimize scanned documents…", None, None, Nothing, "scan-text"),

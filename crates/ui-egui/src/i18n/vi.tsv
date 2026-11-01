@@ -1559,6 +1559,7 @@ theme	Appearance	Giao diện
 	Output preview	Xem trước đầu ra
 	Oval	Hình bầu dục
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	Page grid	Lưới trang
 	Page labels	Nhãn trang
 	Page options	Tùy chọn trang
@@ -1608,6 +1609,7 @@ theme	Appearance	Giao diện
 	Save as PDF/A	Lưu thành PDF/A
 	Save as PDF/UA	Lưu thành PDF/UA
 	Save as PDF/X	Lưu thành PDF/X
+	Verify PDF/X	Xác minh PDF/X
 	Scan & OCR	Quét & OCR
 	Security properties	Thuộc tính bảo mật
 	Select files to compare	Chọn các tệp để so sánh
@@ -1925,6 +1927,44 @@ comment menu	Edit	Sửa
 	Alternate text that will never be read	Văn bản thay thế sẽ không bao giờ được đọc
 	An action is already running	Một hành động đang chạy
 	An embedded file has no AFRelationship	Một tệp nhúng không có AFRelationship
+	The document information doesn't identify the file as {}	Thông tin tài liệu không xác định tệp là {}
+	The metadata has no {}	Siêu dữ liệu không có {}
+	The document information and the metadata name different PDF/X versions	Thông tin tài liệu và siêu dữ liệu ghi các phiên bản PDF/X khác nhau
+	The file trailer has no document ID	Phần trailer của tệp không có ID tài liệu
+	The document doesn't say whether it is trapped (Trapped)	Tài liệu không cho biết đã được bẫy màu hay chưa (Trapped)
+	Trapped is {}, but it must be /True or /False	Trapped là {}, nhưng phải là /True hoặc /False
+	The Trapped key and the metadata's pdf:Trapped disagree	Khóa Trapped và pdf:Trapped trong siêu dữ liệu không khớp nhau
+	There is no PDF/X output intent (GTS_PDFX)	Không có mục đích đầu ra PDF/X (GTS_PDFX)
+	There is more than one PDF/X output intent	Có nhiều hơn một mục đích đầu ra PDF/X
+	The PDF/X output intent has no OutputConditionIdentifier	Mục đích đầu ra PDF/X không có OutputConditionIdentifier
+	The PDF/X output intent has no embedded profile (DestOutputProfile)	Mục đích đầu ra PDF/X không có hồ sơ nhúng (DestOutputProfile)
+	The PDF/X output intent has neither an embedded profile nor a characterization in the ICC registry	Mục đích đầu ra PDF/X không có hồ sơ nhúng cũng không có đặc tính trong sổ đăng ký ICC
+	The output intent's profile isn't a valid ICC profile	Hồ sơ của mục đích đầu ra không phải là hồ sơ ICC hợp lệ
+	The output intent's profile isn't an output (printer) profile	Hồ sơ của mục đích đầu ra không phải là hồ sơ đầu ra (máy in)
+	The output intent's profile describes {} colour, but PDF/X-1a needs a CMYK printing condition	Hồ sơ của mục đích đầu ra mô tả màu {}, nhưng PDF/X-1a cần điều kiện in CMYK
+	The output intent's profile describes {} colour; it must be gray, RGB or CMYK	Hồ sơ của mục đích đầu ra mô tả màu {}; màu phải là xám, RGB hoặc CMYK
+	The output intent's profile has /N {}, which doesn't match its colour space	Hồ sơ của mục đích đầu ra có /N {}, không khớp với không gian màu của nó
+	The output intent's profile has no device-to-PCS transform (AToB1 or grayTRC)	Hồ sơ của mục đích đầu ra không có phép biến đổi từ thiết bị sang PCS (AToB1 hoặc grayTRC)
+	The page has no valid MediaBox	Trang không có MediaBox hợp lệ
+	The page has neither a TrimBox nor an ArtBox	Trang không có TrimBox cũng không có ArtBox
+	The page has both a TrimBox and an ArtBox	Trang có cả TrimBox lẫn ArtBox
+	The {} extends beyond the BleedBox	{} vượt ra ngoài BleedBox
+	The {} extends beyond the CropBox	{} vượt ra ngoài CropBox
+	The {} extends beyond the MediaBox	{} vượt ra ngoài MediaBox
+	A {} annotation lies within the BleedBox	Chú thích {} nằm trong BleedBox
+	A PrinterMark annotation overlaps the TrimBox or ArtBox	Chú thích PrinterMark chồng lên TrimBox hoặc ArtBox
+	A stream uses JBIG2 compression	Một luồng dùng nén JBIG2
+	A form XObject refers to a page of another file (reference XObject)	Một XObject biểu mẫu tham chiếu đến một trang của tệp khác (XObject tham chiếu)
+	An image or form has OPI information	Một hình ảnh hoặc biểu mẫu có thông tin OPI
+	A graphics state uses a soft mask	Một trạng thái đồ họa dùng mặt nạ mềm
+	A graphics state sets an opacity below 1	Một trạng thái đồ họa đặt độ mờ đục dưới 1
+	A graphics state uses the {} blend mode	Một trạng thái đồ họa dùng chế độ hòa trộn {}
+	An image has a soft mask	Một hình ảnh có mặt nạ mềm
+	The {} colour space isn't allowed: PDF/X-1a allows only CMYK, gray and spot colour	Không gian màu {} không được phép: PDF/X-1a chỉ cho phép CMYK, xám và màu pha (spot)
+	Content uses DeviceRGB colour: PDF/X-1a allows only CMYK, gray and spot colour	Nội dung dùng màu DeviceRGB: PDF/X-1a chỉ cho phép CMYK, xám và màu pha (spot)
+	{} colour doesn't match the output intent's colour space	Màu {} không khớp với không gian màu của mục đích đầu ra
+	Content uses {} colour, which doesn't match the output intent's colour space	Nội dung dùng màu {}, không khớp với không gian màu của mục đích đầu ra
+	Device-independent colour is used, so the output intent needs an embedded profile	Màu độc lập với thiết bị được dùng, nên mục đích đầu ra cần một hồ sơ nhúng
 	An image asks to be interpolated	Một hình ảnh yêu cầu được nội suy
 	An image has alternates or OPI information	Một hình ảnh có bản thay thế hoặc thông tin OPI
 	Animation that flashes can cause seizures. Check scripts and media for flicker.	Hoạt ảnh nhấp nháy có thể gây co giật. Hãy kiểm tra script và phương tiện xem có nhấp nháy không.

@@ -1570,6 +1570,7 @@
 	Output preview	Išvesties peržiūra
 	Oval	Ovalas
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	Page grid	Puslapių tinklelis
 	Page labels	Puslapių žymos
 	Page options	Puslapio parinktys
@@ -1619,6 +1620,7 @@
 	Save as PDF/A	Įrašyti kaip PDF/A
 	Save as PDF/UA	Įrašyti kaip PDF/UA
 	Save as PDF/X	Įrašyti kaip PDF/X
+	Verify PDF/X	Patikrinti PDF/X
 	Scan & OCR	Nuskaityti ir atpažinti tekstą
 	Security properties	Apsaugos savybės
 	Select files to compare	Pasirinkti lyginamus failus
@@ -1937,6 +1939,44 @@ comment menu	Edit	Redaguoti
 	Alternate text that will never be read	Alternatyvusis tekstas, kuris nebus perskaitytas
 	An action is already running	Veiksmas jau vykdomas
 	An embedded file has no AFRelationship	Įdėtasis failas neturi atributo „AFRelationship“
+	The document information doesn't identify the file as {}	Dokumento informacija nenurodo, kad failas atitinka {}
+	The metadata has no {}	Metaduomenyse nėra {}
+	The document information and the metadata name different PDF/X versions	Dokumento informacijoje ir metaduomenyse nurodytos skirtingos PDF/X versijos
+	The file trailer has no document ID	Failo pabaigos įraše (trailer) nėra dokumento ID
+	The document doesn't say whether it is trapped (Trapped)	Dokumente nenurodyta, ar jam paruoštos spalvų užlaidos (Trapped)
+	Trapped is {}, but it must be /True or /False	Trapped reikšmė yra {}, bet turi būti /True arba /False
+	The Trapped key and the metadata's pdf:Trapped disagree	Rakto Trapped ir metaduomenų pdf:Trapped reikšmės nesutampa
+	There is no PDF/X output intent (GTS_PDFX)	Nėra PDF/X išvesties paskirties (GTS_PDFX)
+	There is more than one PDF/X output intent	Yra daugiau nei viena PDF/X išvesties paskirtis
+	The PDF/X output intent has no OutputConditionIdentifier	PDF/X išvesties paskirtis neturi OutputConditionIdentifier
+	The PDF/X output intent has no embedded profile (DestOutputProfile)	PDF/X išvesties paskirtis neturi įdėto profilio (DestOutputProfile)
+	The PDF/X output intent has neither an embedded profile nor a characterization in the ICC registry	PDF/X išvesties paskirtis neturi nei įdėto profilio, nei charakterizacijos iš ICC registro
+	The output intent's profile isn't a valid ICC profile	Išvesties paskirties profilis nėra galiojantis ICC profilis
+	The output intent's profile isn't an output (printer) profile	Išvesties paskirties profilis nėra išvesties (spausdintuvo) profilis
+	The output intent's profile describes {} colour, but PDF/X-1a needs a CMYK printing condition	Išvesties paskirties profilis aprašo {} spalvas, bet PDF/X-1a reikia CMYK spausdinimo sąlygų
+	The output intent's profile describes {} colour; it must be gray, RGB or CMYK	Išvesties paskirties profilis aprašo {} spalvas; jos turi būti pilkos, RGB arba CMYK
+	The output intent's profile has /N {}, which doesn't match its colour space	Išvesties paskirties profilio /N yra {}, o tai neatitinka jo spalvų erdvės
+	The output intent's profile has no device-to-PCS transform (AToB1 or grayTRC)	Išvesties paskirties profilis neturi įrenginio į PCS transformacijos (AToB1 arba grayTRC)
+	The page has no valid MediaBox	Puslapis neturi tinkamo MediaBox
+	The page has neither a TrimBox nor an ArtBox	Puslapis neturi nei TrimBox, nei ArtBox
+	The page has both a TrimBox and an ArtBox	Puslapis turi ir TrimBox, ir ArtBox
+	The {} extends beyond the BleedBox	{} išsikiša už BleedBox ribų
+	The {} extends beyond the CropBox	{} išsikiša už CropBox ribų
+	The {} extends beyond the MediaBox	{} išsikiša už MediaBox ribų
+	A {} annotation lies within the BleedBox	Anotacija {} yra BleedBox viduje
+	A PrinterMark annotation overlaps the TrimBox or ArtBox	PrinterMark anotacija persidengia su TrimBox arba ArtBox
+	A stream uses JBIG2 compression	Srautas suglaudintas naudojant JBIG2
+	A form XObject refers to a page of another file (reference XObject)	Formos XObject nurodo kito failo puslapį (nuorodos XObject)
+	An image or form has OPI information	Paveikslėlis arba forma turi OPI informacijos
+	A graphics state uses a soft mask	Grafikos būsena naudoja minkštąją kaukę
+	A graphics state sets an opacity below 1	Grafikos būsena nustato mažesnį nei 1 nepermatomumą
+	A graphics state uses the {} blend mode	Grafikos būsena naudoja maišymo režimą {}
+	An image has a soft mask	Paveikslėlis turi minkštąją kaukę
+	The {} colour space isn't allowed: PDF/X-1a allows only CMYK, gray and spot colour	Spalvų erdvė {} neleidžiama: PDF/X-1a leidžia tik CMYK, pilkas ir taškines (spot) spalvas
+	Content uses DeviceRGB colour: PDF/X-1a allows only CMYK, gray and spot colour	Turinys naudoja DeviceRGB spalvas: PDF/X-1a leidžia tik CMYK, pilkas ir taškines (spot) spalvas
+	{} colour doesn't match the output intent's colour space	{} spalvos neatitinka išvesties paskirties spalvų erdvės
+	Content uses {} colour, which doesn't match the output intent's colour space	Turinys naudoja {} spalvas, kurios neatitinka išvesties paskirties spalvų erdvės
+	Device-independent colour is used, so the output intent needs an embedded profile	Naudojamos nuo įrenginio nepriklausomos spalvos, todėl išvesties paskirčiai reikia įdėto profilio
 	An image asks to be interpolated	Paveikslėliui nurodyta taikyti interpoliaciją
 	An image has alternates or OPI information	Paveikslėlis turi alternatyvių versijų arba OPI informacijos
 	Animation that flashes can cause seizures. Check scripts and media for flicker.	Mirganti animacija gali sukelti priepuolius. Patikrinkite, ar scenarijai ir medija nesukelia mirgėjimo.
