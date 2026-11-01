@@ -3612,10 +3612,12 @@ fn many_overlapping_subpaths_around_the_page_fill_by_their_winding() {
     let (forward, reversed) = ("-10 -10 60 60 re\n", "-10 50 60 -60 re\n");
     let black = [0, 0, 0, 255];
     let white = [255, 255, 255, 255];
-    let cases: [(String, &str, [u8; 4]); 9] = [
+    let cases: [(String, &str, [u8; 4]); 10] = [
         (forward.repeat(127), "f", black),
         (forward.repeat(128), "f", black),
         (forward.repeat(129), "f", black),
+        // With unchecked i8 arithmetic, 256 wraps to zero and wrongly leaves the page white.
+        (forward.repeat(256), "f", black),
         (forward.repeat(1000), "f", black),
         (reversed.repeat(129), "f", black),
         // Equal and opposite: the winding is zero, nothing is filled.
