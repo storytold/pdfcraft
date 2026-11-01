@@ -4145,3 +4145,84 @@ fn clear_password_values_clears_static_xfa_password_fields() {
     let packets = read_packets(&doc).unwrap().unwrap();
     assert!(!packets.xdp.contains("hunter2"), "{}", packets.xdp);
 }
+
+/// Two PDF fields never share a name: a made-up `_2`, `_3` name skips one the template gives
+/// another field. Whichever comes first in layout order, the field the template names `Cell4_2`
+/// keeps that name and the second `Cell4` takes the next free one. Before, the second `Cell4`
+/// became `Cell4_2` as well, so a script writing by that name hit the wrong cell.
+#[test]
+fn a_made_up_field_name_never_takes_one_the_template_uses() {
+    for rows in [["Cell4", "Cell4_2", "Cell4"], ["Cell4", "Cell4", "Cell4_2"]] {
+        let body: String = rows
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                format!(r#"<subform name="row{i}" layout="tb"><field name="{name}" w="2in" h="0.3in"><ui><textEdit/></ui></field></subform>"#)
+            })
+            .collect();
+        let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+        let all = widgets(&form.pages[0]);
+        let names: Vec<&str> = all.iter().map(|w| w.name.as_str()).collect();
+        let mut unique = names.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), names.len(), "{rows:?}: {names:?}");
+        let template_named = rows.iter().position(|n| *n == "Cell4_2").unwrap();
+        let som = format!("form[0].row{template_named}[0].Cell4_2[0]");
+        let got = all.iter().find(|w| w.som == som).map(|w| w.name.as_str());
+        assert_eq!(got, Some("Cell4_2"), "{rows:?}: the template's own name is kept ({names:?})");
+    }
+}
+
+/// #5225 review: a member of an exclusion group keeps the name the template gives it, whatever
+/// is drawn before it: a repeated field drawn first doesn't take it as its made-up name.
+#[test]
+fn a_made_up_field_name_never_takes_an_exclusion_group_members_name() {
+    let field = |name: &str| format!(r#"<field name="{name}" w="2in" h="0.3in"><ui><textEdit/></ui></field>"#);
+    let group = r#"<exclGroup name="Choice" layout="tb"><field name="Cell4_2" w="1in" h="0.3in"><ui><checkButton shape="round"/></ui><items><text>A</text></items></field><field name="Other" w="1in" h="0.3in"><ui><checkButton shape="round"/></ui><items><text>B</text></items></field></exclGroup>"#;
+    // The repeated field first, then the group; and the other way round.
+    for body in [format!("{}{}{group}", field("Cell4"), field("Cell4")), format!("{group}{}{}", field("Cell4"), field("Cell4"))] {
+        let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+        let all = widgets(&form.pages[0]);
+        let shown: Vec<(String, String)> = all.iter().map(|w| (w.som.clone(), w.name.clone())).collect();
+        let member = all.iter().find(|w| w.som.ends_with(".Choice[0].Cell4_2[0]")).map(|w| w.name.as_str());
+        assert_eq!(member, Some("Cell4_2"), "the member keeps its name: {shown:?}");
+        let mut names: Vec<&str> = all.iter().map(|w| w.name.as_str()).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), all.len(), "no two widgets share a name: {shown:?}");
+    }
+}
+
+/// #5225 review: a form whose fields don't repeat keeps every template name as it is, a name
+/// that looks like a made-up one (`Total_2`) included, in every subform. Reserving the template's
+/// names must not push a field off its own.
+#[test]
+fn a_form_without_repeats_keeps_every_template_name() {
+    let names = ["Name", "Total", "Total_2", "Date"];
+    let body: String = names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            format!(r#"<subform name="part{i}" layout="tb"><field name="{name}" w="2in" h="0.3in"><ui><textEdit/></ui></field></subform>"#)
+        })
+        .collect();
+    let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+    let got: Vec<String> = widgets(&form.pages[0]).iter().map(|w| w.name.clone()).collect();
+    assert_eq!(got, names, "the template's names, unchanged");
+}
+
+/// An unnamed field's made-up name (`field`) doesn't take the name a later field has in the
+/// template: the field the template names `field` keeps it, and the unnamed one before it takes
+/// the next free name.
+#[test]
+fn an_unnamed_field_never_takes_a_name_the_template_uses() {
+    let body = r#"<field w="2in" h="0.3in"><ui><textEdit/></ui></field>
+<field name="field" w="2in" h="0.3in"><ui><textEdit/></ui></field>"#;
+    let form = layout_xml(&one_area_form(r#"layout="tb""#, body)).unwrap();
+    let all = widgets(&form.pages[0]);
+    // In layout order: the unnamed field, then the one the template names `field`.
+    let names: Vec<&str> = all.iter().map(|w| w.name.as_str()).collect();
+    assert_eq!(names.get(1), Some(&"field"), "{names:?}");
+    assert_ne!(names.first(), Some(&"field"), "{names:?}");
+}

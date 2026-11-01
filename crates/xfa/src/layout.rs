@@ -28,9 +28,9 @@ mod items;
 mod measure;
 mod pages;
 
-use common::collect_values;
 pub(crate) use common::date_pattern;
 pub use common::formatted_value;
+use common::{collect_names, collect_values};
 pub(crate) use items::UNDERLINE_DROP;
 pub use items::{Action, BorderShape, Form, Item, Page, Rounded, Widget, WidgetBorder, WidgetKind};
 
@@ -136,6 +136,11 @@ struct Layouter<'t> {
     pages: Vec<Page>,
     cur: Option<Cursor>,
     names: HashMap<String, usize>,
+    /// Every PDF field name handed out so far.
+    taken: HashSet<String>,
+    /// The names the template's fields, groups and groups' members take as written
+    /// ([`common::collect_names`]), which a made-up `_2`, `_3` name must not take.
+    template_names: HashSet<String>,
     /// Field values by `id`, for embedded fields in rich text.
     values: HashMap<String, String>,
     warnings: Vec<String>,
@@ -183,6 +188,8 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
     // One copy of the root for the whole layout: measurements are cached by node address.
     let root_node = Node::Subform(Box::new(tpl.root.clone()));
     collect_values(std::slice::from_ref(&root_node), &mut values, 0);
+    let mut template_names = HashSet::new();
+    collect_names(std::slice::from_ref(&root_node), &mut template_names, 0);
     let mut l = Layouter {
         tpl,
         data,
@@ -191,6 +198,8 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
         pages: Vec::new(),
         cur: None,
         names: HashMap::new(),
+        taken: HashSet::new(),
+        template_names,
         values,
         warnings: Vec::new(),
         warned: HashSet::new(),

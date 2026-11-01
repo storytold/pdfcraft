@@ -152,7 +152,7 @@ impl Layouter<'_> {
             (Ui::Button, Some(cap)) => ctx.para.apply(&cap.para).h_align,
             _ => fctx.para.h_align,
         };
-        let name = self.unique_name(f.common.name.as_deref().unwrap_or("field"));
+        let name = self.unique_name(f.common.name.as_deref().unwrap_or("field"), f.common.name.is_none());
         let som = som_path();
         let read_only = matches!(f.access, Access::ReadOnly | Access::Protected);
         // The data's value wins over the template's default.
