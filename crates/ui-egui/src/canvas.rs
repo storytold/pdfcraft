@@ -1549,7 +1549,7 @@ fn text_pointer_input(ui: &mut egui::Ui, view: &mut DocView, text: &PageText, po
     let TextPointer { page, xf, rect, info, tool, resp, ptr, pointer: screen_pointer } = pointer;
     let (vx, vy) = xf.screen_to_view(screen_pointer);
     let over_text = text.glyphs.iter().any(|glyph| vx >= glyph.rect[0] && vx <= glyph.rect[2] && vy >= glyph.rect[1] && vy <= glyph.rect[3]);
-    let over_link = info.links.iter().any(|link| link.page == page && xf.user_rect(info, page, link.rect).contains(screen_pointer));
+    let over_link = info.links.iter().any(|link| link.page == page && xf.link_contains(info, page, link, screen_pointer));
     let column = tool == QuickTool::ColumnSelect || ui.input(|input| input.modifiers.alt);
     let gesture = TextGesture { page, xf, rect, tool, ptr, resp, pointer: screen_pointer, vx, vy, over_text, over_link, column };
     update_text_cursor(view, &gesture);
@@ -1901,7 +1901,7 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
 /// The link under `p` on `page`: the hand, and where a click goes. Only the Select tool follows
 /// links and the Link tool edits them (`Layer::reached_by`).
 fn link_hit(info: &DocInfo, xf: &PageXform, page: usize, p: Pos2) -> Option<crate::page_router::Hit> {
-    let (index, l) = info.links.iter().enumerate().rfind(|(_, l)| l.page == page && xf.user_rect(info, page, l.rect).contains(p))?;
+    let (index, l) = info.links.iter().enumerate().rfind(|(_, l)| l.page == page && xf.link_contains(info, page, l, p))?;
     let label = match &l.target {
         LinkTarget::Page(n, _) => crate::i18n::fmt(tl!("Go to page {p}"), &[("p", info.pages.get(*n).map(|p| p.label.as_str()).unwrap_or("?"))]),
         LinkTarget::Uri(u) => u.clone(),

@@ -132,7 +132,7 @@ fn draw_grabs(cx: &PageCx<'_>, view: &DocView) -> bool {
 
 /// Whether `p` is on one of this page's links.
 fn on_link(cx: &PageCx<'_>, p: Pos2) -> bool {
-    cx.info.links.iter().any(|link| link.page == cx.page && cx.xf.user_rect(cx.info, cx.page, link.rect).contains(p))
+    cx.info.links.iter().any(|link| link.page == cx.page && cx.xf.link_contains(cx.info, cx.page, link, p))
 }
 
 /// The tip for the comment under the pointer, with any tool, beside that tool's own cursor: Acrobat
