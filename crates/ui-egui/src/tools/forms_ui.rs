@@ -15,6 +15,7 @@ use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::page_cursor::Layer;
+use crate::page_pointer::PagePointer;
 use crate::page_router::{Hit, Owner};
 use crate::theme::Tokens;
 
@@ -89,6 +90,147 @@ pub enum FormNotice {
 
 fn widget_rect(xf: &PageXform, info: &DocInfo, page: usize, r: [f64; 4]) -> Rect {
     xf.user_rect(info, page, [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32])
+}
+
+/// Where a field's text sits on screen. It is laid out upright in `upright`, the field's screen
+/// rectangle with its sides swapped when the text runs up or down the screen, and turned onto
+/// the field about its centre. The field's `/MK /R` turns its content counterclockwise on the
+/// page (ISO 32000-2 Table 192), as its page appearance draws it; the page's `/Rotate` and the
+/// view's rotation turn the page clockwise.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TextFrame {
+    pub upright: Rect,
+    /// Clockwise on screen: 0, 90, 180 or 270 degrees.
+    pub turn: i64,
+}
+
+impl TextFrame {
+    pub(crate) fn new(field: Rect, mk_r: i64, page_rotate: u16, view_rotation: u16) -> Self {
+        // Each term is reduced first, so the sum cannot overflow.
+        let turn = (i64::from(page_rotate % 360) + i64::from(view_rotation % 360) - mk_r.rem_euclid(360)).rem_euclid(360) / 90 * 90;
+        let upright = if turn % 180 == 90 { Rect::from_center_size(field.center(), vec2(field.height(), field.width())) } else { field };
+        Self { upright, turn }
+    }
+
+    fn of(xf: &PageXform, info: &DocInfo, page: usize, w: &FormWidget, field: Rect) -> Self {
+        Self::new(field, w.rotation, info.pages.get(page).map_or(0, |p| p.rotation), xf.rot)
+    }
+
+    fn angle(self) -> f32 {
+        (self.turn as f32).to_radians()
+    }
+
+    /// A point of the upright box, on screen.
+    pub(crate) fn on_screen(self, p: egui::Pos2) -> egui::Pos2 {
+        let c = self.upright.center();
+        c + egui::emath::Rot2::from_angle(self.angle()) * (p - c)
+    }
+
+    /// A screen point, in the upright box.
+    pub(crate) fn in_box(self, p: egui::Pos2) -> egui::Pos2 {
+        let c = self.upright.center();
+        c + egui::emath::Rot2::from_angle(-self.angle()) * (p - c)
+    }
+
+    /// Paint `galley` with its top-left corner at `pos` in the upright box.
+    fn paint_galley(self, painter: &egui::Painter, pos: egui::Pos2, galley: std::sync::Arc<egui::Galley>, color: Color32) {
+        painter.add(egui::epaint::TextShape::new(self.on_screen(pos), galley, color).with_angle(self.angle()));
+    }
+
+    /// Where a field editor's upright text starts: inside its margins.
+    fn text_origin(self) -> egui::Pos2 {
+        self.upright.min + vec2(3.0, 1.0)
+    }
+
+    /// A screen point `p` as a position in `galley`, which the editor drew at `pos`; a turned
+    /// field's text is laid out upright in the frame's box.
+    fn in_galley(self, galley: &egui::Galley, pos: egui::Pos2, p: egui::Pos2) -> egui::Vec2 {
+        if self.turn != 0 { self.in_box(p) - self.text_origin() + vec2(galley.rect.left(), 0.0) } else { p - pos + vec2(galley.rect.left(), 0.0) }
+    }
+}
+
+/// A field editor's laid-out text and where the editor drew it.
+type Laid = (std::sync::Arc<egui::Galley>, egui::Pos2);
+
+/// How a turned field's editor lays its text out: at the upright box's width (`wrap`, for a
+/// multi-line field), not the field's on screen.
+fn turned_layouter(
+    font: f32,
+    wrap: Option<f32>,
+    password: bool,
+) -> impl FnMut(&egui::Ui, &dyn egui::TextBuffer, f32) -> std::sync::Arc<egui::Galley> {
+    move |ui, text, _| {
+        let shown = if password { "•".repeat(text.as_str().chars().count()) } else { text.as_str().to_owned() };
+        let font = egui::FontId::proportional(font);
+        let mut job = match wrap {
+            Some(wrap) => egui::text::LayoutJob::simple(shown, font, Color32::BLACK, wrap),
+            None => egui::text::LayoutJob::simple_singleline(shown, font, Color32::BLACK),
+        };
+        job.keep_trailing_whitespace = true;
+        ui.fonts_mut(|f| f.layout_job(job))
+    }
+}
+
+/// Show a field's editor over `rect`. A turned field's editor takes the keys and the pointer
+/// over the field but draws nothing: [`turned_caret_and_paint`] paints its text turned (#4296).
+fn show_field_editor(ui: &mut egui::Ui, te: egui::TextEdit<'_>, rect: Rect, turned: bool) -> (egui::Response, Option<Laid>) {
+    let mut laid_out = None;
+    let r = ui.add_sized(rect.size(), |ui: &mut egui::Ui| {
+        if turned {
+            ui.set_opacity(0.0);
+        }
+        let out = te.show(ui);
+        laid_out = Some((out.galley, out.galley_pos));
+        out.response.response
+    });
+    (r, laid_out)
+}
+
+/// Unless the caret was just placed under the press that opened the editor (`caret_placed`, by
+/// [`settle_text_editor`]), place it under the pointer in a turned field's text, and paint a
+/// turned field's text, selection and caret as the page will show them.
+fn turned_caret_and_paint(ui: &egui::Ui, r: &egui::Response, rect: Rect, frame: TextFrame, laid_out: Option<&Laid>, caret_placed: bool, font: f32) {
+    let turned = frame.turn != 0;
+    // The pointer as the editor sees it. The editor is an Area over the page, so a press on it
+    // is its own and the pages' pointer does not reach it: read for the editor's response, it
+    // holds the pointer from a press on the editor until the frame of its release, a touch's
+    // lift included. A dialog over the editor takes the presses before they reach it.
+    let ptr = PagePointer::read(ui, r, false);
+    if !caret_placed
+        && turned
+        && r.is_pointer_button_down_on()
+        && let Some(p) = ptr.pos
+        && let Some((galley, pos)) = laid_out
+        && let Some(mut st) = egui::TextEdit::load_state(ui.ctx(), r.id)
+    {
+        // The editor placed the caret as if its text were upright: place it under the pointer
+        // in the turned text instead, a press at the point and a drag from where the press
+        // left it.
+        let at = galley.cursor_from_pos(frame.in_galley(galley, *pos, p));
+        let range = match st.cursor.char_range() {
+            Some(was) if ptr.pressed().is_none() => egui::text::CCursorRange::two(was.secondary, at),
+            _ => egui::text::CCursorRange::one(at),
+        };
+        st.cursor.set_char_range(Some(range));
+        st.store(ui.ctx(), r.id);
+    }
+    if turned && let Some((galley, _)) = laid_out {
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, CornerRadius::ZERO, FIELD_FILL);
+        let range = r.has_focus().then(|| egui::TextEdit::load_state(ui.ctx(), r.id).and_then(|st| st.cursor.char_range())).flatten();
+        let mut shown = galley.clone();
+        if let Some(range) = &range {
+            egui::text_selection::visuals::paint_text_selection(&mut shown, ui.visuals(), range, None);
+        }
+        let start = frame.text_origin() - vec2(galley.rect.left(), 0.0);
+        frame.paint_galley(&painter, start, shown, Color32::BLACK);
+        if let Some(range) = range {
+            let mut caret = galley.pos_from_cursor(range.primary);
+            caret.max.y = caret.max.y.max(caret.min.y + font);
+            let (top, bottom) = (start + caret.center_top().to_vec2(), start + caret.center_bottom().to_vec2());
+            painter.line_segment([frame.on_screen(top), frame.on_screen(bottom)], ui.visuals().text_cursor.stroke);
+        }
+    }
 }
 
 fn fillable(f: &FormField) -> bool {
@@ -317,18 +459,20 @@ pub(crate) fn commit(view: &mut DocView, form: &[FormField]) {
 }
 
 /// The text box of an editable combo box, over the field. What is typed becomes the value when
-/// Enter, Tab or a click away commits it; a pick from the list still sets an option.
+/// Enter, Tab or a click away commits it; a pick from the list still sets an option. A turned
+/// field is typed into as a turned text field is: its text runs along the turn (#4296).
 struct ComboEditor<'a> {
     form: &'a [FormField],
     field: &'a FormField,
     widget: &'a FormWidget,
     rect: Rect,
+    frame: TextFrame,
     zoom: f32,
     index: usize,
 }
 
 fn combo_editor(ctx: &egui::Context, view: &mut DocView, editor: ComboEditor<'_>) {
-    let ComboEditor { form, field: f, widget: w, rect, zoom, index: widget } = editor;
+    let ComboEditor { form, field: f, widget: w, rect, frame, zoom, index: widget } = editor;
     let mut enter = false;
     egui::Area::new(egui::Id::unique(("form-editor", view.id.0)))
         .fade_in(false)
@@ -342,15 +486,22 @@ fn combo_editor(ctx: &egui::Context, view: &mut DocView, editor: ComboEditor<'_>
             let font = field_screen_font(ui.painter(), f, w, &fx.text, zoom);
             // The box is pale yellow in every theme, as a text field's is (#655).
             ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(FIELD_FILL);
-            let te = egui::TextEdit::singleline(&mut fx.text)
-                .desired_width((rect.width() - 6.0 * zoom + 6.0).max(1.0))
+            let turned = frame.turn != 0;
+            let mut layouter = turned_layouter(font, None, false);
+            let mut te = egui::TextEdit::singleline(&mut fx.text)
+                .desired_width((frame.upright.width() - 6.0 * zoom + 6.0).max(1.0))
                 .font(egui::FontId::proportional(font))
                 .background_color(FIELD_FILL)
                 .text_color(Color32::BLACK)
                 .margin(egui::Margin::symmetric(3, 1))
                 .id(egui::Id::unique(("form-field", view.id.0, &f.name, widget)));
+            if turned {
+                te = te.layouter(&mut layouter);
+            }
+            let (r, laid_out) = show_field_editor(ui, te, rect, turned);
             // The form field's own logical name; not a visual/preordered label.
-            let r = ui.add_sized(rect.size(), te).accessible_name(f.name.clone());
+            let r = r.accessible_name(f.name.clone());
+            turned_caret_and_paint(ui, &r, rect, frame, laid_out.as_ref(), false, font);
             if std::mem::take(&mut fx.request_focus) {
                 r.request_focus();
                 // Entered with Tab: typing replaces the value.
@@ -507,7 +658,7 @@ pub(crate) fn paint_page(
                 painter.rect_stroke(r.expand(1.0), CornerRadius::same(2), Stroke::new(2.0, FOCUS_BLUE), egui::StrokeKind::Outside);
             }
             if view.forms.unbaked.contains(&(f.name.clone(), page)) {
-                paint_unbaked_widget(painter, xf, f, w, r);
+                paint_unbaked_widget(painter, xf, TextFrame::of(xf, info, page, w, r), f, w, r);
             } else if fillable(f) && pointer.is_some_and(|p| r.contains(p)) {
                 painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, FOCUS_BLUE.gamma_multiply(0.8)), egui::StrokeKind::Outside);
             }
@@ -530,7 +681,10 @@ pub fn field_text_size(painter: &egui::Painter, f: &FormField, w: &FormWidget, t
     let size = fixed.unwrap_or_else(|| {
         // The appearance's padding: 2 pt inside a 1 pt border.
         let pad = 3.0;
-        let (width, height) = ((w.rect[2] - w.rect[0]).abs() - 2.0 * pad, (w.rect[3] - w.rect[1]).abs() - 2.0 * pad);
+        let (across, up) = ((w.rect[2] - w.rect[0]).abs(), (w.rect[3] - w.rect[1]).abs());
+        // A field turned a quarter lays its text out along its height, as its appearance does.
+        let (across, up) = if matches!(w.rotation, 90 | 270) { (up, across) } else { (across, up) };
+        let (width, height) = (across - 2.0 * pad, up - 2.0 * pad);
         // Comb cells hold one character each, so only the height limits them, as on the page.
         if f.is_comb() {
             return pdfcraft_engine::field_comb_auto_text_size(height);
@@ -566,7 +720,7 @@ pub fn field_screen_font(painter: &egui::Painter, f: &FormField, w: &FormWidget,
     if font.is_nan() { 3.0 } else { font.clamp(3.0, MAX_SCREEN_FONT) }
 }
 
-fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, w: &FormWidget, r: Rect) {
+fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, frame: TextFrame, f: &FormField, w: &FormWidget, r: Rect) {
     match f.kind {
         FormFieldKind::Text | FormFieldKind::Combo => {
             let text = f.value.first().map(String::as_str).unwrap_or("");
@@ -578,16 +732,18 @@ fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, 
                 let font_size = field_screen_font(painter, f, w, text, zoom);
                 let display_text = if f.has(field_flags::PASSWORD) { "•".repeat(text.chars().count()) } else { text.to_string() };
                 let p = painter.with_clip_rect(r);
+                // Laid out upright in the frame's box, then turned onto the field (#4296).
+                let b = frame.upright;
                 let (align, pos) = match f.quadding {
-                    1 => (egui::Align2::CENTER_TOP, egui::pos2(r.center().x, r.min.y + 1.0)),
-                    2 => (egui::Align2::RIGHT_TOP, egui::pos2(r.max.x - 3.0, r.min.y + 1.0)),
-                    _ => (egui::Align2::LEFT_TOP, egui::pos2(r.min.x + 3.0, r.min.y + 1.0)),
+                    1 => (egui::Align2::CENTER_TOP, egui::pos2(b.center().x, b.min.y + 1.0)),
+                    2 => (egui::Align2::RIGHT_TOP, egui::pos2(b.max.x - 3.0, b.min.y + 1.0)),
+                    _ => (egui::Align2::LEFT_TOP, egui::pos2(b.min.x + 3.0, b.min.y + 1.0)),
                 };
                 // Multiline fields wrap at the box, as their page appearance does.
                 // At the width the size was fitted to: the box less 3 pt each side, scaled.
-                let wrap = if f.has(field_flags::MULTILINE) { (r.width() - 6.0 * zoom).max(1.0) } else { f32::INFINITY };
+                let wrap = if f.has(field_flags::MULTILINE) { (b.width() - 6.0 * zoom).max(1.0) } else { f32::INFINITY };
                 let galley = p.layout(display_text, egui::FontId::proportional(font_size), Color32::BLACK, wrap);
-                p.galley(align.anchor_size(pos, galley.size()).min, galley, Color32::BLACK);
+                frame.paint_galley(&p, align.anchor_size(pos, galley.size()).min, galley, Color32::BLACK);
             }
         }
         FormFieldKind::List => {
@@ -654,7 +810,8 @@ pub(crate) fn text_box(doc: &pdfcraft_engine::Document, view: &DocView, form: &[
 }
 
 /// After the text editor is drawn: keeps a field that doesn't scroll within what fits, puts the
-/// caret where the press that opened the editor landed, and takes focus when asked.
+/// caret where the press that opened the editor landed (in the upright text of a turned field,
+/// through `frame`, #4296), and takes focus when asked. Returns whether it placed the caret.
 fn settle_text_editor(
     ui: &mut egui::Ui,
     fx: &mut Focus,
@@ -662,7 +819,9 @@ fn settle_text_editor(
     primary_down: bool,
     laid_out: Option<(std::sync::Arc<egui::Galley>, Pos2)>,
     fitted: Option<(&form_appearance::TextBox, String)>,
-) {
+    frame: TextFrame,
+) -> bool {
+    let mut pressed = false;
     if let Some((tb, before)) = fitted
         && fx.text != before
     {
@@ -681,12 +840,13 @@ fn settle_text_editor(
         && let Some(mut st) = egui::TextEdit::load_state(ui.ctx(), r.id)
     {
         // The press went to the page, not to this editor, which did not exist yet.
-        let at = galley.cursor_from_pos(press - pos + vec2(galley.rect.left(), 0.0));
+        let at = galley.cursor_from_pos(frame.in_galley(&galley, pos, press));
         st.cursor.set_char_range(Some(egui::text::CCursorRange::one(at)));
         st.store(ui.ctx(), r.id);
         if primary_down {
             ui.ctx().set_dragged_id(r.id);
         }
+        pressed = true;
     }
     if fx.request_focus {
         r.request_focus();
@@ -699,6 +859,7 @@ fn settle_text_editor(
             st.store(ui.ctx(), r.id);
         }
     }
+    pressed
 }
 
 /// Tab / Shift+Tab: commits the field and moves to the next fillable widget in the document's tab
@@ -814,33 +975,41 @@ pub(crate) fn overlay(
                     ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(FIELD_FILL);
                     // A field that doesn't scroll takes no more than fits (ISO 32000-2 Table 228).
                     let before = text_box.map(|_| fx.text.clone());
+                    // A turned field (/MK /R, or a turned page or view) is typed into where it is:
+                    // the editor takes the keys and the pointer over the field, but draws nothing,
+                    // and its text is painted turned below, as the page will show it (#4296).
+                    let frame = TextFrame::of(&xf, info, page, w, rect);
+                    let turned = frame.turn != 0;
+                    let upright = frame.upright;
+                    let password = f.has(field_flags::PASSWORD);
+                    // Wraps (inside the 3 px side margins) at the width the size was fitted to:
+                    // the box less 3 pt each side, scaled.
+                    let wrap = (upright.width() - 6.0 * zoom).max(1.0);
+                    let mut layouter = turned_layouter(font, multiline.then_some(wrap), password);
                     let mut te = if multiline { egui::TextEdit::multiline(&mut fx.text) } else { egui::TextEdit::singleline(&mut fx.text) };
                     te = te
-                        // Wraps (inside the 3 px side margins) at the width the size was fitted to:
-                        // the box less 3 pt each side, scaled.
-                        .desired_width((rect.width() - 6.0 * zoom + 6.0).max(1.0))
+                        .desired_width((upright.width() - 6.0 * zoom + 6.0).max(1.0))
                         .font(egui::FontId::proportional(font))
                         .background_color(FIELD_FILL)
                         .text_color(Color32::BLACK)
                         .margin(egui::Margin::symmetric(3, 1))
-                        .password(f.has(field_flags::PASSWORD))
+                        .password(password)
                         .id(egui::Id::unique(("form-field", view.id.0, &f.name, focus.widget)));
                     if let Some(max) = f.max_len {
                         te = te.char_limit(max);
                     }
                     if multiline {
-                        te = te.desired_rows(((rect.height() / (font * 1.3)).floor() as usize).max(1));
+                        te = te.desired_rows(((upright.height() / (font * 1.3)).floor() as usize).max(1));
                     }
-                    let mut laid_out = None;
-                    let r = ui
-                        .add_sized(rect.size(), |ui: &mut egui::Ui| {
-                            let out = te.show(ui);
-                            laid_out = Some((out.galley, out.galley_pos));
-                            out.response.response
-                        })
-                        // The form field's own logical name; not a visual/preordered label.
-                        .accessible_name(f.name.clone());
-                    settle_text_editor(ui, fx, &r, primary_down, laid_out, text_box.zip(before));
+                    if turned {
+                        // Laid out at the upright box's width, not the field's on screen.
+                        te = te.layouter(&mut layouter);
+                    }
+                    let (r, laid_out) = show_field_editor(ui, te, rect, turned);
+                    // The form field's own logical name; not a visual/preordered label.
+                    let r = r.accessible_name(f.name.clone());
+                    let caret_placed = settle_text_editor(ui, fx, &r, primary_down, laid_out.clone(), text_box.zip(before), frame);
+                    turned_caret_and_paint(ui, &r, rect, frame, laid_out.as_ref(), caret_placed, font);
                     let lost = crate::edit_text_ui::lost_focus_once(&r, &mut fx.had_focus);
                     let (enter, esc, tab, shift) = ui.input(|i| {
                         (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape), i.key_pressed(egui::Key::Tab), i.modifiers.shift)
@@ -877,7 +1046,11 @@ pub(crate) fn overlay(
             // An editable combo box has a text box over the field as well as its list (ISO
             // 32000-2 Table 233, Edit).
             if editable_combo(f) {
-                combo_editor(ctx, view, ComboEditor { form, field: f, widget: w, rect, zoom, index: focus.widget });
+                combo_editor(
+                    ctx,
+                    view,
+                    ComboEditor { form, field: f, widget: w, rect, frame: TextFrame::of(&xf, info, page, w, rect), zoom, index: focus.widget },
+                );
             }
             let resp = egui::Area::new(egui::Id::unique(("form-choices", view.id.0)))
                 .order(egui::Order::Foreground)
@@ -1005,7 +1178,8 @@ pub fn field_screen_rect(view: &DocView, info: &DocInfo, f: &FormField, widget: 
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_SCREEN_FONT, bounded_line_width};
+    use super::{MAX_SCREEN_FONT, TextFrame, bounded_line_width};
+    use egui::{Rect, pos2};
     use std::cell::Cell;
 
     #[test]
@@ -1019,5 +1193,43 @@ mod tests {
         assert_eq!(largest.get(), MAX_SCREEN_FONT, "laid out at the bound");
         assert_eq!(bounded_line_width(10.0, measure), 30.0, "below it, at the size itself");
         assert_eq!(largest.get(), MAX_SCREEN_FONT);
+    }
+
+    fn near(a: egui::Pos2, b: egui::Pos2) -> bool {
+        (a - b).length() < 1e-3
+    }
+
+    /// #4296: a tall field turned 90 degrees counterclockwise lays its text out in a box as wide
+    /// as the field is tall, and that box's top-left corner lands on the field's bottom-left, so
+    /// the text runs up the screen.
+    #[test]
+    fn a_quarter_turned_field_runs_its_text_up_the_screen() {
+        let field = Rect::from_min_max(pos2(100.0, 100.0), pos2(120.0, 260.0));
+        let frame = TextFrame::new(field, 90, 0, 0);
+        assert_eq!(frame.turn, 270);
+        assert_eq!(frame.upright.size(), egui::vec2(160.0, 20.0));
+        assert!(near(frame.on_screen(frame.upright.left_top()), field.left_bottom()), "{:?}", frame.on_screen(frame.upright.left_top()));
+        assert!(near(frame.on_screen(frame.upright.right_top()), field.left_top()));
+        for p in [pos2(105.0, 110.0), pos2(119.0, 250.0)] {
+            assert!(near(frame.on_screen(frame.in_box(p)), p));
+        }
+        // 270 runs down the screen, from the top-right corner.
+        let down = TextFrame::new(field, 270, 0, 0);
+        assert_eq!(down.turn, 90);
+        assert!(near(down.on_screen(down.upright.left_top()), field.right_top()));
+    }
+
+    /// The page's /Rotate and the view's rotation turn the page clockwise, against /MK /R: a field
+    /// turned 90 on a page shown a quarter clockwise reads upright, in its own rectangle.
+    #[test]
+    fn page_and_view_rotation_turn_against_the_field() {
+        let field = Rect::from_min_max(pos2(0.0, 0.0), pos2(80.0, 20.0));
+        assert_eq!(TextFrame::new(field, 90, 90, 0), TextFrame { upright: field, turn: 0 });
+        assert_eq!(TextFrame::new(field, 90, 0, 90), TextFrame { upright: field, turn: 0 });
+        assert_eq!(TextFrame::new(field, 0, 0, 0), TextFrame { upright: field, turn: 0 });
+        assert_eq!(TextFrame::new(field, 180, 270, 270).turn, 0);
+        assert_eq!(TextFrame::new(field, 0, 180, 0).turn, 180);
+        // Out-of-range input stays a quarter turn.
+        assert_eq!(TextFrame::new(field, i64::MIN, u16::MAX, u16::MAX).turn % 90, 0);
     }
 }

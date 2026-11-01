@@ -168,6 +168,34 @@ fn a_multi_line_auto_sized_field_that_doesnt_scroll_stops_when_full() {
     assert!(tb.fits(&kept) && !tb.fits(&format!("{kept}\nline")), "as many lines as fit at 4 pt: {lines}");
 }
 
+/// #4296: a field turned a quarter (`/MK /R` 90) is typed into where it is, with its text running
+/// up the field as the page draws it: a click near the field's top puts the caret at the end of
+/// the text, where the turned text ends, not at its start.
+#[test]
+fn a_turned_field_places_the_caret_along_its_turned_text() {
+    let mut h = harness();
+    // Tall and narrow, with room up it for the text.
+    let props = pdfcraft_engine::FieldProps { rect: Some((0, [240.0, 20.0, 260.0, 170.0])), font_size: Some(10.0), ..Default::default() };
+    set_city(&mut h, props);
+    set_city(&mut h, pdfcraft_engine::FieldProps { rotation: Some((0, 90)), ..Default::default() });
+    click_field(&mut h, "city", 0);
+    assert_eq!(h.state().views[0].forms.focus.as_ref().map(|f| f.name.as_str()), Some("city"));
+    h.event(egui::Event::Text("Paris".into()));
+    h.run_steps(2);
+    let field = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let f = doc.form.iter().find(|f| f.name == "city").unwrap();
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen")
+    };
+    click_at(&mut h, field.left_top() + egui::vec2(3.0, 2.0));
+    h.event(egui::Event::Text("X".into()));
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    assert_eq!(value(&h, "city"), ["ParisX"]);
+}
+
 #[test]
 fn typing_into_a_text_field_and_tabbing_on() {
     let mut h = harness();
@@ -1535,6 +1563,45 @@ fn an_editable_combo_box_takes_a_typed_value() {
     h.run_steps(2);
     assert_eq!(value(&h, "fruit"), ["Banana"]);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #4296: an editable combo box turned a quarter (`/MK /R` 90, ISO 32000-2 Table 192) is typed
+/// into as a turned text field is: a click near the field's top puts the caret at the end of the
+/// text, where the text running up the field ends, not at its start.
+#[test]
+fn a_turned_editable_combo_box_places_the_caret_along_its_turned_text() {
+    let pdf = pdf_from_objects(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DA (/Helv 10 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /T (fruit) /Ff 393216 /Opt [(Apple) (Banana)] /Rect [240 20 260 170] /MK << /R 90 >> /P 3 0 R /F 4 >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ]);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("turned-combo.pdf", None, pdf.clone()).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    crate::support::settle(&mut h);
+    click_field(&mut h, "fruit", 0);
+    assert_eq!(focused(&h), Some(("fruit".into(), 0)));
+    h.event(egui::Event::Text("Paris".into()));
+    h.run_steps(2);
+    let field = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let f = doc.form.iter().find(|f| f.name == "fruit").unwrap();
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen")
+    };
+    click_at(&mut h, field.left_top() + egui::vec2(3.0, 2.0));
+    h.event(egui::Event::Text("X".into()));
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    assert_eq!(value(&h, "fruit"), ["ParisX"]);
 }
 
 /// A combo box without the Edit flag is a drop-down list only: typing changes nothing.
