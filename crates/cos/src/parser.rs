@@ -351,8 +351,13 @@ impl<'a> Lexer<'a> {
         match cleaned.parse::<i64>() {
             Ok(v) => Ok(Object::Int(v)),
             Err(_) => {
-                // Out-of-range integers are treated as reals (§7.3.3 allows implementation limits).
-                cleaned.parse::<f64>().map(Object::Real).map_err(|_| CosError::Syntax { offset: start, detail: format!("bad number {s:?}") })
+                // Out-of-range integers and scientific-notation reals are treated as reals (§7.3.3 allows implementation limits).
+                if cleaned.bytes().any(|b| b.is_ascii_digit())
+                    && let Ok(v) = cleaned.parse::<f64>()
+                {
+                    return Ok(Object::Real(v));
+                }
+                Err(CosError::Syntax { offset: start, detail: format!("bad number {s:?}") })
             }
         }
     }
@@ -603,6 +608,14 @@ mod tests {
         assert_eq!(obj("-.5"), Object::Real(-0.5));
         assert_eq!(obj("4."), Object::Real(4.0));
         assert_eq!(obj("99999999999999999999"), Object::Real(1e20));
+        assert_eq!(obj("1e30"), Object::Real(1e30));
+        assert_eq!(obj("1.5E-3"), Object::Real(1.5e-3));
+        assert_eq!(obj("1e400"), Object::Real(f64::INFINITY));
+        assert_eq!(obj("1.5e400"), Object::Real(f64::INFINITY));
+        assert_eq!(obj("-1.0e400"), Object::Real(f64::NEG_INFINITY));
+        for bad in ["+inf", "-inf", "+nan", "-nan", "+Infinity", "-NaN"] {
+            assert!(Lexer::new(bad.as_bytes(), 0).object().is_err(), "{bad} must be rejected");
+        }
         assert_eq!(obj("12 0 R"), Object::Ref(ObjRef::new(12, 0)));
         assert_eq!(obj("12 0 obj").as_int(), Some(12), "12 followed by 0 obj is not a reference");
     }
