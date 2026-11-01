@@ -2780,6 +2780,80 @@ fn text_box_properties_change_the_font_size() {
     assert_eq!(doc.can_undo(), Some("Change comment properties"));
 }
 
+/// Changing font in the comment properties dialog updates the appearance, warns on unsupported characters, and undoes cleanly.
+#[test]
+fn text_box_properties_change_the_font() {
+    use pdfcraft_engine::{AnnotFont, Edit, NewAnnotation, Shape};
+    let mut h = harness(|_| {});
+    let tb = NewAnnotation {
+        page: 0,
+        shape: Shape::TextBox { rect: [40.0, 600.0, 240.0, 640.0], font_size: 12.0 },
+        style: Default::default(),
+        contents: "Hello".into(),
+        author: "Ada".into(),
+    };
+    h.state_mut().apply_edit(Edit::AddAnnotation(tb));
+    h.run_steps(2);
+    h.state_mut().open_comment_props(0, 0);
+    h.run_steps(2);
+    h.get_by_label("Font:");
+    {
+        let d = h.state_mut().comment_props.as_mut().expect("open");
+        assert_eq!(d.original.font, Some(AnnotFont::Helvetica));
+        d.edited.font = Some(AnnotFont::Times);
+    }
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert_eq!(doc.comment_props(0, 0).unwrap().font, Some(AnnotFont::Times));
+    assert_eq!(doc.can_undo(), Some("Change comment properties"));
+
+    // Changing to Inter works
+    h.state_mut().open_comment_props(0, 0);
+    h.run_steps(2);
+    {
+        let d = h.state_mut().comment_props.as_mut().expect("open");
+        assert_eq!(d.original.font, Some(AnnotFont::Times));
+        d.edited.font = Some(AnnotFont::Inter);
+    }
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert_eq!(doc.comment_props(0, 0).unwrap().font, Some(AnnotFont::Inter));
+
+    // A text box with Polish characters is created with Inter font by default
+    let pl = NewAnnotation {
+        page: 0,
+        shape: Shape::TextBox { rect: [40.0, 500.0, 240.0, 540.0], font_size: 12.0 },
+        style: Default::default(),
+        contents: "Płock".into(),
+        author: "Marek".into(),
+    };
+    h.state_mut().apply_edit(Edit::AddAnnotation(pl));
+    h.run_steps(2);
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert_eq!(doc.comment_props(0, 1).unwrap().font, Some(AnnotFont::Inter));
+
+    // Changing font of "Płock" to Courier triggers warning toast and marks undrawn char
+    h.state_mut().open_comment_props(0, 1);
+    h.run_steps(2);
+    {
+        let d = h.state_mut().comment_props.as_mut().expect("open");
+        assert_eq!(d.original.font, Some(AnnotFont::Inter));
+        d.edited.font = Some(AnnotFont::Courier);
+    }
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert_eq!(doc.comment_props(0, 1).unwrap().font, Some(AnnotFont::Courier));
+    let toast = s.toast.as_ref().map(|(msg, _)| msg.as_str()).unwrap_or_default();
+    assert!(toast.contains('ł') || toast.contains("U+0142"), "toast notifies about unsupported character: {toast}");
+}
+
 #[test]
 fn text_box_and_callout_properties_include_fill_and_thickness() {
     use pdfcraft_engine::{Edit, LineEnding, NewAnnotation, Shape};

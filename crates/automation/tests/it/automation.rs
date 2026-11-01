@@ -6075,6 +6075,29 @@ fn text_box_font_size_through_the_tool() {
     assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Change comment properties");
 }
 
+/// Editing a comment's font family through the headless comment_edit tool updates the /DA resource and appearance.
+#[test]
+fn text_box_font_through_the_tool() {
+    let dir = workdir("boxfont");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "textbox", "rect": [20, 40, 200, 80], "contents": "Hello" }));
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": 1, "index": 1, "font": "Times" }));
+    assert!(matches!(a.call("comment_edit", &json!({ "doc": doc, "page": 1, "index": 1, "font": "UnknownFont" })), Err(ToolError::InvalidArgs(_))));
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": 1, "index": 1, "font": "Inter" }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "font_inter.pdf" }));
+    let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("font_inter.pdf")).unwrap())).unwrap();
+    let das: Vec<String> = saved
+        .object_numbers()
+        .iter()
+        .filter_map(|n| saved.try_get(*n).ok())
+        .filter_map(|o| o.as_dict().and_then(|d| d.get(b"DA")?.as_string().map(|s| String::from_utf8_lossy(&s.bytes).into_owned())))
+        .collect();
+    assert_eq!(das.len(), 1, "{das:?}");
+    assert!(das[0].contains("/PCFallback 12 Tf"), "{das:?}");
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Change comment properties");
+}
+
 #[test]
 fn line_endings_through_the_tool() {
     let dir = workdir("endings");
