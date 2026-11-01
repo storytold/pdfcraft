@@ -1655,7 +1655,12 @@ mod encoding_tests {
 
     /// A simple TrueType font with Inter embedded as its program, WinAnsi-encoded.
     fn inter_font(doc: &mut Document) -> Dict {
-        let program = doc.add(pdfcraft_cos::Stream::flate(Dict::new(), crate::INTER_REGULAR));
+        embedded_font(doc, crate::INTER_REGULAR)
+    }
+
+    /// A simple TrueType font with `program` embedded as its `FontFile2`, WinAnsi-encoded.
+    fn embedded_font(doc: &mut Document, program: &[u8]) -> Dict {
+        let program = doc.add(pdfcraft_cos::Stream::flate(Dict::new(), program));
         let mut descriptor = Dict::new();
         descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
         descriptor.set(b"Ascent".to_vec(), Object::Int(969));
@@ -1754,6 +1759,76 @@ mod encoding_tests {
         font.set(b"Subtype".to_vec(), Object::name("Type1"));
         let descriptor = doc.add(Dict::new());
         font.set(b"FontDescriptor".to_vec(), Object::Ref(descriptor));
+        let metrics = Metrics::from_dict(&doc, &font);
+        assert!(GlyphInk::from_dict(&doc, &font, &metrics, &mut DecodeBudget::page()).is_none());
+    }
+
+    /// A script face whose letters lean: ink runs past the advance on both sides.
+    const SCRIPT: &[u8] = include_bytes!("../../../assets/fonts/DancingScript.ttf");
+
+    /// Each printable ASCII code of `program` that draws, as a simple font: the code, its ink box
+    /// and its advance, both in em.
+    fn ascii_ink(program: &'static [u8]) -> Vec<(char, [f64; 4], f64)> {
+        use skrifa::{
+            MetadataProvider as _,
+            instance::{LocationRef, Size},
+        };
+        let mut doc = Document::new_empty();
+        let font = embedded_font(&mut doc, program);
+        let metrics = Metrics::from_dict(&doc, &font);
+        let ink = GlyphInk::from_dict(&doc, &font, &metrics, &mut DecodeBudget::page()).expect("the program is readable");
+        let face = skrifa::FontRef::new(program).expect("the fixture parses");
+        let upem = f64::from(skrifa::raw::TableProvider::head(&face).expect("head").units_per_em());
+        let advances = face.glyph_metrics(Size::unscaled(), LocationRef::default());
+        (b'!'..=b'~')
+            .filter_map(|code| {
+                let gid = face.charmap().map(char::from(code))?;
+                let advance = f64::from(advances.advance_width(gid)?) / upem;
+                let Ink::Box(ink_box) = ink.ink(&metrics, u32::from(code)) else { return None };
+                Some((char::from(code), ink_box, advance))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn ink_that_runs_past_the_advance_is_in_the_box() {
+        // Italic overhang: the box is the outline's, not the advance's.
+        let rows = ascii_ink(SCRIPT);
+        let over: Vec<_> = rows.iter().filter(|(_, b, advance)| b[2] > advance + 0.01).map(|(c, ..)| *c).collect();
+        assert!(!over.is_empty(), "no glyph of the script face overhangs its advance: {rows:?}");
+        // Upright Inter: ink stays within a glyph's advance, so the overhang above is the font's.
+        let upright = ascii_ink(crate::INTER_REGULAR);
+        assert!(upright.iter().all(|(_, b, advance)| b[2] <= advance + 0.01), "Inter overhangs: {upright:?}");
+    }
+
+    #[test]
+    fn a_negative_left_side_bearing_gives_a_box_left_of_the_origin() {
+        let rows = ascii_ink(SCRIPT);
+        let left: Vec<_> = rows.iter().filter(|(_, b, _)| b[0] < -0.01).map(|(c, ..)| *c).collect();
+        assert!(!left.is_empty(), "no glyph of the script face starts left of its origin: {rows:?}");
+    }
+
+    #[test]
+    fn a_broken_program_gives_no_ink() {
+        // Bytes that are not a font, and a real font cut off inside its table directory: never a box.
+        for bytes in [&b"this is not a font program"[..], &crate::INTER_REGULAR[..200], &[][..]] {
+            let mut doc = Document::new_empty();
+            let font = embedded_font(&mut doc, bytes);
+            let metrics = Metrics::from_dict(&doc, &font);
+            let ink = GlyphInk::from_dict(&doc, &font, &metrics, &mut DecodeBudget::page());
+            assert!(ink.is_none_or(|i| matches!(i.ink(&metrics, u32::from(b'E')), Ink::Unknown)), "{} bytes gave a box", bytes.len());
+        }
+    }
+
+    #[test]
+    fn a_type3_font_has_no_glyph_ink() {
+        let doc = Document::new_empty();
+        let mut font = Dict::new();
+        font.set(b"Type".to_vec(), Object::name("Font"));
+        font.set(b"Subtype".to_vec(), Object::name("Type3"));
+        font.set(b"FontBBox".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(1000), Object::Int(1000)]));
+        font.set(b"FontMatrix".to_vec(), Object::Array([0.001, 0.0, 0.0, 0.001, 0.0, 0.0].map(Object::Real).to_vec()));
+        font.set(b"CharProcs".to_vec(), Object::Dict(Dict::new()));
         let metrics = Metrics::from_dict(&doc, &font);
         assert!(GlyphInk::from_dict(&doc, &font, &metrics, &mut DecodeBudget::page()).is_none());
     }
