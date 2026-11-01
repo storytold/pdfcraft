@@ -3376,7 +3376,6 @@ struct GlideCx {
     zoom_delta: f32,
     edge_delta: Vec2,
     wheel_scrolled: bool,
-    has_discrete_wheel: bool,
 }
 
 /// Touchpad momentum (#531): a swipe over the page lifted at speed glides on and slows to a stop,
@@ -3386,13 +3385,15 @@ struct GlideCx {
 /// automatic flash uses `goto`, not these deltas, so its programmatic scroll is never mistaken for
 /// a reader action. Returns this frame's glide.
 fn step_glide(ui: &egui::Ui, view: &mut DocView, avail: Rect, cx: &GlideCx) -> Vec2 {
-    let GlideCx { now, may_glide, key_scroll, auto_delta, zoom_delta, edge_delta, wheel_scrolled, has_discrete_wheel } = *cx;
+    let GlideCx { now, may_glide, key_scroll, auto_delta, zoom_delta, edge_delta, wheel_scrolled } = *cx;
     let over_page = ui.rect_contains_pointer(avail);
     ui.input(|i| view.fling.read(&i.events, now, may_glide && over_page));
     let interrupted = glide_interrupted(ui);
-    if !may_glide || interrupted || key_scroll != 0.0 || auto_delta != Vec2::ZERO || zoom_delta != 1.0 || has_discrete_wheel {
+    if !may_glide || interrupted || key_scroll != 0.0 || auto_delta != Vec2::ZERO || zoom_delta != 1.0 {
         view.fling.stop();
-        view.fling.reset_gesture();
+        if interrupted || key_scroll != 0.0 || auto_delta != Vec2::ZERO || zoom_delta != 1.0 {
+            view.fling.reset_gesture();
+        }
     }
     let glide = view.fling.step(now);
     if view.fling.gliding() {
@@ -3574,7 +3575,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let has_discrete_wheel = wheel.has_discrete();
     let may_glide = !wheel.paging_owns_vertical && !middle_gesture && navigation_enabled && unobstructed && animates && !has_discrete_wheel;
     let wheel_scrolled = wheel.precise_scroll != Vec2::ZERO || has_discrete_wheel;
-    let motion = GlideCx { now, may_glide, key_scroll, auto_delta, zoom_delta, edge_delta, wheel_scrolled, has_discrete_wheel };
+    let motion = GlideCx { now, may_glide, key_scroll, auto_delta, zoom_delta, edge_delta, wheel_scrolled };
     let glide = step_glide(ui, view, avail, &motion);
     let Wheel { precise_scroll, boost_extra, .. } = wheel;
     // The wheel may have turned the page above: draw the row it turned to. Measured from the old
