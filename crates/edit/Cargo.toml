@@ -15,6 +15,8 @@ pdfcraft-content = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 pdfcraft-model = { workspace = true }
 thiserror = { workspace = true }
+# A backdrop copy's tag records a hash of the operators before the fill it turned off (backdrop.rs).
+sha2 = "0.11"
 kurbo = { workspace = true }
 # Display order of right-to-left lines in added text, and reading and writing order in Edit text;
 # already in the tree via the interface.

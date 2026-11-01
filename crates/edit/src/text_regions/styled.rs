@@ -401,13 +401,26 @@ fn paragraph_geometry(doc: &Document, page: &pdfcraft_model::Page, block: &TextB
     Ok((dx, dy, style.width.unwrap_or(natural).clamp(1.0, 14_400.0)))
 }
 
+type WrappedStyledRows = (StyledRows, RowRanges, Vec<usize>, Vec<bool>, Vec<usize>);
+
 fn wrap_styled_rows(
     chars: &[StyledChar],
     width: f64,
     measure: impl Fn(&[StyledChar]) -> Result<f64, EditError>,
-) -> Result<(StyledRows, RowRanges), EditError> {
+) -> Result<WrappedStyledRows, EditError> {
     let mut rows: Vec<Vec<StyledChar>> = Vec::new();
     let mut row_ranges = Vec::new();
+    // True when this row starts because the previous word did not fit, not because of a newline.
+    let mut row_soft = Vec::new();
+    let mut next_soft = false;
+    // How many separator characters a wrap trimmed off the row that just ended, for the row
+    // about to start (0 for a Chinese/Japanese word split, which trims none; meaningless unless
+    // the row it belongs to is soft). Mirrors `next_soft`.
+    let mut row_gap = Vec::new();
+    let mut next_gap = 0usize;
+    // Logical draft rows drive per-paragraph alignment independently of soft wraps.
+    let mut row_lines: Vec<usize> = Vec::new();
+    let mut draft_line = 0usize;
     let mut row_start = 0;
     let mut row = Vec::new();
     let mut row_width = 0.0;
@@ -419,7 +432,13 @@ fn wrap_styled_rows(
             continue;
         }
         if item.0 == '\n' {
+            row_soft.push(next_soft);
+            next_soft = false;
+            row_gap.push(next_gap);
+            next_gap = 0;
             row_ranges.push(row_start..row_start + row.len());
+            row_lines.push(draft_line);
+            draft_line = draft_line.saturating_add(1);
             rows.push(std::mem::take(&mut row));
             row_width = 0.0;
             at += 1;
@@ -439,10 +458,17 @@ fn wrap_styled_rows(
         let word = chars.get(at..end).unwrap_or_default();
         let word_width = measure(word)?;
         if !row.is_empty() && !item.0.is_whitespace() && row_width + word_width > width + 0.5 {
+            let mut trimmed = 0usize;
             while row.last().is_some_and(|c: &StyledChar| c.0.is_whitespace()) {
                 row.pop();
+                trimmed += 1;
             }
+            row_soft.push(next_soft);
+            next_soft = true;
+            row_gap.push(next_gap);
+            next_gap = trimmed;
             row_ranges.push(row_start..row_start + row.len());
+            row_lines.push(draft_line);
             rows.push(std::mem::take(&mut row));
             row_width = 0.0;
             row_start = at;
@@ -452,10 +478,13 @@ fn wrap_styled_rows(
         at = end;
     }
     if !row.is_empty() {
+        row_soft.push(next_soft);
+        row_gap.push(next_gap);
         row_ranges.push(row_start..row_start + row.len());
+        row_lines.push(draft_line);
         rows.push(row);
     }
-    Ok((rows, row_ranges))
+    Ok((rows, row_ranges, row_lines, row_soft, row_gap))
 }
 
 fn apply_range_styles<'a>(
@@ -609,6 +638,92 @@ fn untouched_rows(block: &TextBlock, draft: &str, rows: &[std::ops::Range<usize>
         .collect()
 }
 
+/// Operator index of the paragraph's first text object, and of the next line's text object
+/// when one follows.
+fn paragraph_span(block: &TextBlock, lines: &[TextLine]) -> Option<(usize, Option<usize>)> {
+    let belongs: std::collections::HashSet<usize> = block.lines.iter().copied().collect();
+    let start = block.lines.iter().filter_map(|i| lines.get(*i)).map(|line| line.origin.bt_op).min()?;
+    let end =
+        block.lines.iter().filter_map(|i| lines.get(*i)).flat_map(|line| line.ops.iter().copied().chain(std::iter::once(line.origin.bt_op))).max()?;
+    let next = lines
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !belongs.contains(index))
+        .filter_map(|(_, line)| (line.origin.bt_op > end).then_some(line.origin.bt_op))
+        .min();
+    Some((start, next))
+}
+
+/// The scope shared by every line of the paragraph, when each one is in the same marked region.
+fn shared_scope(block: &TextBlock, lines: &[TextLine]) -> Option<usize> {
+    let mut scopes = block.lines.iter().filter_map(|i| lines.get(*i)).map(|line| line.scope);
+    let first = scopes.next().flatten()?;
+    scopes.all(|scope| scope == Some(first)).then_some(first)
+}
+
+/// Where an extra `/P` marker belongs.
+///
+/// The marker is omitted when the paragraph is already one marked region and the next line is
+/// in a different one. Otherwise it closes after the paragraph's last `ET` (`ops.len()` means
+/// append it after the stream). Closing at the next line's `BT` is too late when that line's
+/// region opened with `BDC` before the `BT`: the `EMC` would end the neighbour's region. Closing
+/// inside the rewritten operators leaves a kept source row outside the marker.
+///
+/// A neighbour in the same text object has no `BT` of its own. Closing after the shared `ET`
+/// would take that neighbour into the marker. The marker then opens after `BT` and closes
+/// before the neighbour's text, so `BT` and `ET` stay matched.
+fn paragraph_marker(block: &TextBlock, lines: &[TextLine], ops: &[Op]) -> Option<(usize, Option<usize>, usize)> {
+    let (start, next) = paragraph_span(block, lines)?;
+    if let Some(region) = shared_scope(block, lines)
+        && let Some(at) = next
+    {
+        let next_scope = lines.iter().find(|line| line.origin.bt_op == at).map(|line| line.scope);
+        if next_scope != Some(Some(region)) {
+            return None;
+        }
+    }
+    let belongs: std::collections::HashSet<usize> = block.lines.iter().copied().collect();
+    let end =
+        block.lines.iter().filter_map(|i| lines.get(*i)).flat_map(|line| line.ops.iter().copied().chain(std::iter::once(line.origin.bt_op))).max()?;
+    let after_text = ops
+        .iter()
+        .enumerate()
+        .skip(end.saturating_add(1))
+        .find(|(_, op)| op.op.as_slice() == b"ET")
+        .map(|(index, _)| index.saturating_add(1))
+        .unwrap_or(ops.len());
+    let neighbour = lines
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !belongs.contains(index))
+        .filter_map(|(_, line)| line.ops.iter().copied().filter(|op| *op > end).min())
+        .min();
+    let open = block.lines.iter().filter_map(|i| lines.get(*i)).flat_map(|line| line.ops.iter().copied()).min()?;
+    if let Some(op) = neighbour.filter(|op| *op < after_text) {
+        // `BT` stays outside the marker. Both ends are inside the one text object.
+        if open > start {
+            return Some((open, None, op));
+        }
+    }
+    // The last paragraph of a shared text object has no neighbour after it. Opening at the
+    // shared `BT` would take the preceding paragraph into the marker. Open at this paragraph's
+    // first operator instead, and close before the shared `ET`, so both ends stay inside it.
+    let preceding =
+        lines.iter().enumerate().filter(|(index, _)| !belongs.contains(index)).any(|(_, line)| line.ops.iter().any(|op| *op > start && *op < open));
+    if preceding {
+        if let Some(et) = after_text.checked_sub(1).filter(|index| ops.get(*index).is_some_and(|op| op.op.as_slice() == b"ET"))
+            && open > start
+            && open < et
+        {
+            return Some((open, None, et));
+        }
+        return None;
+    }
+    // `None` is the next-line index: the close is after this paragraph's `ET`, not at the
+    // following line's `BT`.
+    Some((start, None, after_text))
+}
+
 struct RewriteAnchor<'a> {
     lead: &'a TextLine,
     drop: std::collections::HashSet<usize>,
@@ -649,6 +764,78 @@ fn rewrite_anchor<'a>(
         .enumerate()
         .any(|(index, op)| matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"") && !drop.contains(&(origin.bt_op + index)));
     RewriteAnchor { lead, drop, start, split }
+}
+
+/// Open (`op` is `"BMC"`) or close (`"EMC"`) the `/P` marker that wraps the whole rewrite when
+/// `marked` (every row is in this rewrite, see [`rewrite_styled_block`]), so the paragraph
+/// cannot be mistaken for a neighbour by geometry alone (#2517).
+fn push_whole_paragraph_marker(block_ops: &mut Vec<Op>, marked: bool, op: &str) {
+    if !marked {
+        return;
+    }
+    let operands = if op == "BMC" { vec![Object::name("P")] } else { Vec::new() };
+    block_ops.push(Op::new(op, operands));
+}
+
+/// An empty marker between two rows of one rewrite. `/PCHard` is a newline that was already in
+/// the text. `/PCSoft` is a wrap and rejoins when the box widens, with `/N` the exact number of
+/// separator characters it consumed (0 for a Chinese/Japanese word split), so a rejoin restores
+/// what was actually there instead of guessing a single space (#2529). Neither is a paragraph
+/// region, so the lines stay in one scope.
+fn push_row_break_marker(block_ops: &mut Vec<Op>, row_soft: &[bool], row_gap: &[usize], row_index: usize) {
+    if row_soft.get(row_index).copied().unwrap_or(false) {
+        let mut properties = Dict::new();
+        let gap = row_gap.get(row_index).copied().unwrap_or(1);
+        properties.set(b"N".to_vec(), Object::Int(i64::try_from(gap).unwrap_or(i64::MAX)));
+        block_ops.push(Op::new("BDC", vec![Object::name("PCSoft"), Object::Dict(properties)]));
+    } else {
+        block_ops.push(Op::new("BMC", vec![Object::name("PCHard")]));
+    }
+    block_ops.push(Op::new("EMC", vec![]));
+}
+
+/// [`splice`] with the rewritten rows spliced in at `at`, and (when `marker` names one) a `/P`
+/// marker opened at its start and closed at its `next` line or, when nothing follows, after the
+/// paragraph's own last `ET` (appended past the stream's last operator when that close is at or
+/// beyond `ops.len()`, since `splice`'s callback never visits that index).
+fn splice_with_marker(
+    pieces: &Pieces,
+    ops: &[Op],
+    marker: Option<(usize, Option<usize>, usize)>,
+    at: usize,
+    mut block_ops: Vec<Op>,
+    drop: &std::collections::HashSet<usize>,
+) -> Vec<Vec<u8>> {
+    let data = splice(pieces, ops, |i| {
+        let mut insert = Vec::new();
+        if let Some((start_at, next, close)) = marker {
+            if i == start_at {
+                insert.push(Op::new("BMC", vec![Object::name("P")]));
+            }
+            if next.is_none() && i == close {
+                insert.push(Op::new("EMC", vec![]));
+            }
+            if next == Some(i) {
+                insert.push(Op::new("EMC", vec![]));
+            }
+        }
+        if i == at {
+            insert.append(&mut block_ops);
+        }
+        (insert, !drop.contains(&i))
+    });
+    if !marker.is_some_and(|(_, next, close)| next.is_none() && close >= ops.len()) {
+        return data;
+    }
+    let mut data = data;
+    if let Some(last) = data.last_mut() {
+        if last.last().is_some_and(|byte| !byte.is_ascii_whitespace()) {
+            last.push(b'\n');
+        }
+        // `splice` never visits `ops.len()`, so a close after the final operator is appended.
+        last.extend_from_slice(&pdfcraft_content::serialize_ops(&[Op::new("EMC", vec![])]));
+    }
+    data
 }
 
 /// Rewrite visual rows while keeping the source style on each surviving character. Resource
@@ -762,15 +949,21 @@ pub(crate) fn rewrite_styled_block(
         }
         Ok(width)
     };
-    let (rows, row_ranges) = wrap_styled_rows(&chars, width, measure)?;
+    let (rows, row_ranges, row_lines, row_soft, row_gap) = wrap_styled_rows(&chars, width, measure)?;
     let streams = content_streams(doc, &p.dict)?;
     let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
     // A row the edit doesn't reach keeps its source operators, so its kerning, TJ word gaps and
-    // glyph widths stay exactly as they were instead of being rebuilt from the text state.
-    let plain = BlockStyle { ranges: Vec::new(), ..style.clone() } == BlockStyle::default();
+    // glyph widths stay exactly as they were instead of being rebuilt from the text state. A row
+    // aligned on its own is reached; the rows around it are not.
+    let plain = BlockStyle { ranges: Vec::new(), aligns: Vec::new(), ..style.clone() } == BlockStyle::default();
     let mut kept = if plain {
-        untouched_rows(block, draft, &row_ranges).into_iter().zip(&rows).map(|(same, row)| same && row.iter().all(|c| c.1 < source_count)).collect()
+        untouched_rows(block, draft, &row_ranges)
+            .into_iter()
+            .zip(&rows)
+            .zip(&row_lines)
+            .map(|((same, row), line)| same && row.iter().all(|c| c.1 < source_count) && style.aligns.get(*line).copied().flatten().is_none())
+            .collect()
     } else {
         vec![false; rows.len()]
     };
@@ -796,6 +989,12 @@ pub(crate) fn rewrite_styled_block(
         .ok_or_else(|| EditError::Invalid("the paragraph is drawn in a space it cannot be edited in".into()))?;
     let (tx, ty) = back.apply(dx, dy);
     block_ops.push(Op::new("cm", vec![n(1.0), n(0.0), n(0.0), n(1.0), n(tx), n(ty)]));
+    // A new row can land one leading above the next paragraph and look like the same
+    // paragraph. When every row is in this rewrite, a paragraph marker keeps them in one
+    // scope so the neighbour stays out (#2517). A row left in the source stream cannot share
+    // that marker, so it is omitted and geometry groups those rows as before.
+    let marked = kept.iter().all(|row| !*row);
+    push_whole_paragraph_marker(&mut block_ops, marked, "BMC");
     let crop = p.crop(doc);
     let centered = is_centred(block, lines, (crop[0] + crop[2]) / 2.0, first.size);
     let source_leading = block
@@ -823,11 +1022,16 @@ pub(crate) fn rewrite_styled_block(
             baseline -= source_leading;
             continue;
         }
+        if !row.is_empty() && row_index > 0 {
+            push_row_break_marker(&mut block_ops, &row_soft, &row_gap, row_index);
+        }
         let w = measured.get(row_index).copied().unwrap_or(0.0);
-        let align = style.align.unwrap_or(if centered { crate::added::Align::Center } else { crate::added::Align::Left });
+        // The row's own alignment, or the paragraph's.
+        let asked = row_lines.get(row_index).and_then(|l| style.aligns.get(*l)).copied().flatten().or(style.align);
+        let align = asked.unwrap_or(if centered { crate::added::Align::Center } else { crate::added::Align::Left });
         let original_rect = block.rows.get(row_index).and_then(|row| row_rect(row, lines)).unwrap_or(block.rect);
-        let left = if style.width.is_none() && style.align.is_none() { original_rect[0] } else { block.rect[0] };
-        let available = if style.width.is_none() && style.align.is_none() { original_rect[2] - original_rect[0] } else { width };
+        let left = if style.width.is_none() && asked.is_none() { original_rect[0] } else { block.rect[0] };
+        let available = if style.width.is_none() && asked.is_none() { original_rect[2] - original_rect[0] } else { width };
         let mut x = left
             + match align {
                 crate::added::Align::Center => (available - w) / 2.0,
@@ -966,6 +1170,7 @@ pub(crate) fn rewrite_styled_block(
             style.line_spacing.unwrap_or(1.5).clamp(0.5, 5.0) * style.size.unwrap_or(anchor.size)
         };
     }
+    push_whole_paragraph_marker(&mut block_ops, marked, "EMC");
     block_ops.push(Op::new("Q", vec![]));
     block_ops.extend(after.ops());
     if split {
@@ -974,7 +1179,11 @@ pub(crate) fn rewrite_styled_block(
         block_ops.push(Op::new("Tm", o.tlm.iter().map(|v| n(*v)).collect()));
     }
     let at = if split { start } else { o.bt_op };
-    let data = splice(&pieces, &ops, |i| (if i == at { std::mem::take(&mut block_ops) } else { Vec::new() }, !drop.contains(&i)));
+    // A kept source row sits outside `block_ops`. Bound the whole paragraph when a marker is
+    // safe. The close is not part of `block_ops`: that vector can end inside a text object
+    // when the rewrite splits one, and a kept row's operators come later in the stream.
+    let marker = if marked { None } else { paragraph_marker(block, lines, &ops) };
+    let data = splice_with_marker(&pieces, &ops, marker, at, block_ops, &drop);
     let contents = rewritten_contents(doc, &streams, data);
     res.set(b"Font".to_vec(), Object::Dict(fonts));
     doc.update_dict(p.obj, |d| {

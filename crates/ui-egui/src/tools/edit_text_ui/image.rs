@@ -1,5 +1,6 @@
 use super::{ACCENT, Color32, CornerRadius, DocInfo, DocView, Edit, MAX_OUTLINES, PagePointer, PageXform, Pos2, Rect, Stroke, user_box};
 use crate::page_cursor::Layer;
+use crate::page_router::{Hit, Owner, PicturePart};
 
 /// A selected page image, and what the pointer is doing to it.
 #[derive(Clone, Debug, PartialEq)]
@@ -229,19 +230,45 @@ fn stretched_picture(painter: &egui::Painter, xf: &PageXform, tex: egui::Texture
     clipped.add(egui::Shape::mesh(mesh));
 }
 
-/// Once a selected corner or the rotate knob is grabbed, text under it cannot take over the gesture. The same
-/// applies after the pointer leaves the image/page while dragging.
-pub(crate) fn image_owns_pointer(ui: &egui::Ui, xf: &PageXform, ptr: &PagePointer, page: usize, info: &DocInfo, view: &DocView) -> bool {
-    let Some(selection) = view.image_selection.as_ref().filter(|s| s.page == page) else { return false };
-    if selection.drag.is_some() {
-        return true;
+/// The selected picture's grips under `p`: its corners and its rotate knob. They are asked after
+/// the paragraphs, so text on top of a picture cannot take them; `clip` is the pages' visible
+/// area, which the knob stays inside.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn handle_hit(
+    clip: Rect,
+    xf: &PageXform,
+    page: usize,
+    info: &DocInfo,
+    images: &[pdfcraft_engine::PageImage],
+    view: &DocView,
+    p: Pos2,
+) -> Option<Hit> {
+    let s = view.image_selection.as_ref().filter(|s| s.page == page && s.crop.is_none())?;
+    let b = images.get(s.index)?.visible_rect.map(|r| xf.user_rect(info, page, r.map(|v| v as f32)))?;
+    let picture = |part| Owner::Picture { index: s.index, part };
+    if rotate_knob(b, clip).0.distance(p) < 8.0 {
+        return Some(Hit::new(picture(PicturePart::Knob), Layer::Handle, egui::CursorIcon::Grab));
     }
-    let Some(image) = view.edit_images.get(&page).and_then(|(_, images)| images.get(selection.index)) else { return false };
-    let Some(rect) = image.visible_rect else { return false };
-    let b = xf.user_rect(info, page, rect.map(|v| v as f32));
-    let p = if ptr.primary_down { ptr.origin } else { ptr.pos };
-    let knob = rotate_knob(b, ui.clip_rect()).0;
-    p.is_some_and(|p| [b.left_top(), b.right_top(), b.left_bottom(), b.right_bottom(), knob].iter().any(|c| c.distance(p) < 8.0))
+    let corner = [b.left_top(), b.right_top(), b.left_bottom(), b.right_bottom()].iter().position(|c| c.distance(p) < 8.0)?;
+    let icon = if matches!(corner, 0 | 3) { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw };
+    Some(Hit::new(picture(PicturePart::Corner(corner)), Layer::Handle, icon))
+}
+
+/// The picture under `p` (its shape, not only its box): a click selects it, a drag moves the
+/// selected one. On the text layer, asked before the paragraphs: editable text on top of a
+/// picture takes the press.
+pub(crate) fn body_hit(xf: &PageXform, page: usize, info: &DocInfo, images: &[pdfcraft_engine::PageImage], view: &DocView, p: Pos2) -> Option<Hit> {
+    if !xf.rect.contains(p) {
+        return None;
+    }
+    let (x, y) = xf.screen_to_view(p);
+    let user = info.pages.get(page)?.view_to_user(x, y).map(f64::from);
+    let index = images
+        .iter()
+        .rposition(|im| im.visible_rect.is_some_and(|r| xf.user_rect(info, page, r.map(|v| v as f32)).contains(p)) && im.contains(user))?;
+    let selected = view.image_selection.as_ref().is_some_and(|s| s.page == page && s.index == index);
+    let icon = if selected { egui::CursorIcon::Move } else { egui::CursorIcon::PointingHand };
+    Some(Hit::new(Owner::Picture { index, part: PicturePart::Body }, Layer::Text, icon))
 }
 
 /// What a right-click on a selected image asks for.
@@ -508,37 +535,28 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
             painter.rect_stroke(b, CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
             draw_handles(painter, b);
         }
-        if allow_interaction && let Some(corner) = hover_pos.and_then(|p| corners.iter().position(|c| c.distance(p) < 8.0)) {
-            view.cursor.claim(Layer::Handle, if matches!(corner, 0 | 3) { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw });
-        }
         // The rotate handle: a knob above the top edge, joined to it by a short stem.
         let (knob, stem) = rotate_knob(b, ui.clip_rect());
         if view.image_selection.as_ref().is_some_and(|s| s.drag.is_none()) {
             painter.line_segment([stem, knob], Stroke::new(1.0, ACCENT));
             painter.circle(knob, 5.0, Color32::WHITE, Stroke::new(1.0, ACCENT));
-            if allow_interaction && hover_pos.is_some_and(|p| p.distance(knob) < 8.0) {
-                view.cursor.claim(Layer::Handle, egui::CursorIcon::Grab);
-            }
         }
+        // A drag on what the press was on ([`handle_hit`], [`body_hit`]): the knob turns the
+        // picture, a corner resizes it from the opposite one, the picture itself moves.
         if allow_interaction
             && resp.drag_started()
             && let Some(o) = ptr.origin
-            && o.distance(knob) < 8.0
+            && let Some(Owner::Picture { index, part }) = view.router.owner(page)
+            && index == i
+            && let Some(s) = view.image_selection.as_mut()
         {
-            if let Some(s) = view.image_selection.as_mut() {
-                s.drag = Some((o, None));
-                s.turning = true;
-            }
-        } else if allow_interaction
-            && resp.drag_started()
-            && let Some(o) = ptr.origin
-        {
-            let corner = corners.iter().position(|c| c.distance(o) < 8.0);
-            if corner.is_some() || image_contains(i, o) {
-                let opposite = corner.map(|k| corners[3 - k]);
-                if let Some(s) = view.image_selection.as_mut() {
-                    s.drag = Some((o, opposite));
+            match part {
+                PicturePart::Knob => {
+                    s.drag = Some((o, None));
+                    s.turning = true;
                 }
+                PicturePart::Corner(k) => s.drag = Some((o, 3usize.checked_sub(k).and_then(|opposite| corners.get(opposite)).copied())),
+                PicturePart::Body => s.drag = Some((o, None)),
             }
         }
         if view.image_selection.as_ref().is_some_and(|s| s.turning) {
@@ -584,17 +602,13 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
     if selected != Some(hit) {
         painter.rect_stroke(boxes[hit], CornerRadius::ZERO, Stroke::new(1.5, ACCENT.gamma_multiply(0.7)), egui::StrokeKind::Outside);
     }
-    let Some(b) = boxes.get(hit).copied() else { return false };
-    let corner = [b.left_top(), b.right_top(), b.left_bottom(), b.right_bottom()].iter().position(|c| c.distance(p) < 8.0);
-    match (selected == Some(hit), corner) {
-        (true, Some(0 | 3)) => view.cursor.claim(Layer::Handle, egui::CursorIcon::ResizeNwSe),
-        (true, Some(_)) => view.cursor.claim(Layer::Handle, egui::CursorIcon::ResizeNeSw),
-        (true, None) => view.cursor.claim(Layer::Placed, egui::CursorIcon::Move),
-        // A click selects it.
-        _ => view.cursor.claim(Layer::Placed, egui::CursorIcon::PointingHand),
-    }
-    if resp.clicked() || resp.secondary_clicked() {
-        view.image_selection = Some(ImageSelection { page, index: hit, drag: None, crop: None, turning: false, settled: None });
+    // A click selects the picture the press was on; a right-click the one under the pointer.
+    let clicked = match view.router.owner(page) {
+        Some(Owner::Picture { index, .. }) if resp.clicked() => Some(index),
+        _ => resp.secondary_clicked().then_some(hit),
+    };
+    if let Some(index) = clicked {
+        view.image_selection = Some(ImageSelection { page, index, drag: None, crop: None, turning: false, settled: None });
     }
     if resp.secondary_clicked() {
         ui.ctx().data_mut(|d| d.insert_temp(menu_key, true));

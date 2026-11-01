@@ -332,6 +332,8 @@ pub struct PasswordPrompt {
     /// The document and attached file this one was opened from: its tab keeps that origin once
     /// it opens, after the password ([`crate::canvas::DocView::from_attachment`]).
     pub(crate) from_attachment: Option<(DocId, pdfcraft_render::AttachmentSource, String)>,
+    /// A launch-time display override, applied only after this PDF is unlocked.
+    pub(crate) display_override: Option<(canvas::PageLayout, bool)>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
