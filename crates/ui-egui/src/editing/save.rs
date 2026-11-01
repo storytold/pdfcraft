@@ -21,6 +21,14 @@ pub enum SaveTarget {
 }
 
 impl PdfCraftApp {
+    /// Whether Save has anything to do for tab `index`: work not saved yet, or a document with no
+    /// file of its own to keep it in (opened from bytes, or an email attachment's temporary copy).
+    /// The top bar's Save button is greyed out otherwise, as Organize's Save pages is (#5307).
+    pub(crate) fn save_has_work(&self, index: usize) -> bool {
+        let Some(doc) = self.views.get(index).and_then(|v| self.session.get(v.id)) else { return false };
+        self.has_unsaved_work(index) || doc.path.as_deref().is_none_or(is_mail_temp_copy)
+    }
+
     /// Save the active document. Returns `true` if it was written.
     pub fn save_active(&mut self, target: SaveTarget) -> bool {
         match self.active {
