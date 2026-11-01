@@ -5,7 +5,8 @@
 //! The held buffer is the file with the bodies cut out, every other byte unchanged and in order.
 //! The parsers read it as they read any file: they take a file offset through
 //! [`OnDiskFile::held_offset`], and when they reach the start of a body that was cut out,
-//! [`OnDiskFile::body_at`] says which one it is.
+//! [`OnDiskFile::body_at`] says which one it is. The last bytes of a body can stay held as well,
+//! when a search for its end took them for the line end before `endstream`.
 //!
 //! A region is cut only when it is proven to be a stream body. Anything else stays held, so what
 //! the walk doesn't understand costs memory and never changes what the parsers read.
@@ -54,6 +55,21 @@ pub struct DiskBody {
 struct Cut {
     body: DiskBody,
     held: usize,
+    /// Where the held bytes go on in the file: the end of the body, or just before it when a
+    /// search took the body's last bytes for a line end.
+    resume: u64,
+}
+
+/// A body whose end came from a search, which `/Length` has yet to settle.
+struct Searched {
+    /// The cut it became, when it was cut.
+    cut: Option<usize>,
+    /// Its length as the search found it, and to the word `endstream`: the line end between them
+    /// may be data.
+    len: u64,
+    to_word: u64,
+    /// The object its `/Length` refers to.
+    length_object: u32,
 }
 
 /// A PDF whose large stream bodies stay on disk. See the module documentation.
@@ -105,7 +121,7 @@ impl OnDiskFile {
     pub fn held_offset(&self, offset: u64) -> Option<usize> {
         let after = self.cuts.partition_point(|c| c.body.start <= offset);
         let Some(cut) = after.checked_sub(1).and_then(|i| self.cuts.get(i)) else { return usize::try_from(offset).ok() };
-        let past = offset.checked_sub(cut.body.start)?.checked_sub(cut.body.len)?;
+        let past = offset.checked_sub(cut.resume)?;
         cut.held.checked_add(usize::try_from(past).ok()?)
     }
 
@@ -167,8 +183,7 @@ struct Walk<'a> {
     done: u64,
     /// Integer objects seen, to check the `/Length` of streams that ended by searching.
     integers: HashMap<u32, i64>,
-    /// Cuts whose end came from a search, with the object their `/Length` refers to.
-    searched: Vec<(usize, u32)>,
+    searched: Vec<Searched>,
     /// What the walk may still read before giving up.
     budget: u64,
 }
@@ -269,17 +284,30 @@ impl<'a> Walk<'a> {
                 Next::GiveUp => return Ok(false),
             }
         }
-        Ok(self.hold_to(self.size)? && self.searches_agree())
+        Ok(self.hold_to(self.size)? && self.settle_searches())
     }
 
-    /// A body whose end came from a search must be what its `/Length` says: a stream can hold the
-    /// word `endstream` (a PDF attached uncompressed), which ends a search early. A `/Length` the
-    /// walk didn't see is in an object stream, and the search stands.
-    fn searches_agree(&self) -> bool {
-        self.searched.iter().all(|(cut, num)| {
-            let length = self.integers.get(num).and_then(|n| u64::try_from(*n).ok());
-            length.is_none_or(|length| self.cuts.get(*cut).is_some_and(|c| c.body.len == length))
-        })
+    /// A body whose end came from a search must end where its `/Length` says, cut or not: a stream
+    /// can hold the word `endstream` (a PDF attached uncompressed), which ends a search early and
+    /// sends the walk on inside it. Only `/Length` knows whether a line end before the word is
+    /// data, so a cut body takes its length from it. One the walk didn't see is in an object
+    /// stream, and the search stands unless it dropped a whole `\r\n`, which may hide a byte of data.
+    fn settle_searches(&mut self) -> bool {
+        for searched in &self.searched {
+            let Some(length) = self.integers.get(&searched.length_object).and_then(|n| u64::try_from(*n).ok()) else {
+                if searched.to_word.saturating_sub(searched.len) > 1 {
+                    return false;
+                }
+                continue;
+            };
+            if !(searched.len..=searched.to_word).contains(&length) {
+                return false;
+            }
+            if let Some(cut) = searched.cut.and_then(|cut| self.cuts.get_mut(cut)) {
+                cut.body.len = length;
+            }
+        }
+        true
     }
 
     /// Go through the window's objects, cutting the bodies it proves.
@@ -329,8 +357,8 @@ impl<'a> Walk<'a> {
                         Some(n) => self.endstream_at(start.saturating_add(n))?.then_some(n),
                         None => None,
                     };
-                    let Some(len) = (match proven {
-                        Some(n) => Some(n),
+                    let Some((len, to_word)) = (match proven {
+                        Some(n) => Some((n, n)),
                         None => self.search_end(start)?,
                     }) else {
                         continue;
@@ -341,11 +369,14 @@ impl<'a> Walk<'a> {
                     if !self.hold_to(if keep { end } else { start })? {
                         return Ok(Next::GiveUp);
                     }
-                    if !keep {
-                        if let (None, Some(num)) = (proven, refers_to) {
-                            self.searched.push((self.cuts.len(), num));
+                    if let (None, Some(length_object)) = (proven, refers_to) {
+                        if self.searched.len() >= MAX_INTEGERS {
+                            return Ok(Next::GiveUp);
                         }
-                        self.cuts.push(Cut { body: DiskBody { start, len }, held: self.held.len() });
+                        self.searched.push(Searched { cut: (!keep).then_some(self.cuts.len()), len, to_word, length_object });
+                    }
+                    if !keep {
+                        self.cuts.push(Cut { body: DiskBody { start, len }, held: self.held.len(), resume: end });
                         self.done = end;
                     }
                     // Still in this window: loading it again per small stream would use up the budget.
@@ -370,33 +401,46 @@ impl<'a> Walk<'a> {
         Ok(self.read(at, word)? && Lexer::new(word, 0).eat_keyword(b"endstream"))
     }
 
-    /// The length of the stream body at `start`, as a parser finds it when `/Length` won't do.
-    fn search_end(&mut self, start: u64) -> std::io::Result<Option<u64>> {
+    /// The length of the stream body at `start`, as a parser finds it when `/Length` won't do, and
+    /// the length to the word `endstream`. What it reads grows with the body, so that many bodies
+    /// don't use up the budget.
+    fn search_end(&mut self, start: u64) -> std::io::Result<Option<(u64, u64)>> {
         const WORD: &[u8] = b"endstream";
-        let mut chunk = vec![0; SEARCH_CHUNK];
+        let in_window = start.checked_sub(self.base).and_then(|at| usize::try_from(at).ok()).and_then(|at| find(&self.window, WORD, at));
+        if let Some(found) = in_window {
+            return self.body_up_to(start, self.base + found as u64).map(Some);
+        }
+        let mut chunk = Vec::new();
+        let mut want = WINDOW;
         let mut at = start;
         while at < self.size {
-            let n = chunk.len().min(usize::try_from(self.size - at).unwrap_or(usize::MAX));
-            let Some(piece) = chunk.get_mut(..n) else { return Ok(None) };
-            if !self.read(at, piece)? {
+            let n = want.min(usize::try_from(self.size - at).unwrap_or(usize::MAX));
+            chunk.resize(n, 0);
+            if !self.read(at, &mut chunk)? {
                 return Ok(None);
             }
-            if let Some(found) = piece.windows(WORD.len()).position(|w| w == WORD) {
-                // The end-of-line before `endstream` is not data.
-                let mut end = at + found as u64;
-                for eol in b"\n\r" {
-                    if end > start && self.byte_at(end - 1)? == Some(*eol) {
-                        end -= 1;
-                    }
-                }
-                return Ok(Some(end - start));
+            if let Some(found) = find(&chunk, WORD, 0) {
+                return self.body_up_to(start, at + found as u64).map(Some);
             }
-            if n < chunk.len() {
+            if n < want {
                 break;
             }
             at += (n - WORD.len() + 1) as u64;
+            want = want.saturating_mul(2).min(SEARCH_CHUNK);
         }
         Ok(None)
+    }
+
+    /// The lengths of a body from `start` to the word `endstream` at `word`, without and with the
+    /// end-of-line before the word, which is not data as far as a search can tell.
+    fn body_up_to(&mut self, start: u64, word: u64) -> std::io::Result<(u64, u64)> {
+        let mut end = word;
+        for eol in b"\n\r" {
+            if end > start && self.byte_at(end - 1)? == Some(*eol) {
+                end -= 1;
+            }
+        }
+        Ok((end - start, word - start))
     }
 
     fn byte_at(&mut self, at: u64) -> std::io::Result<Option<u8>> {
@@ -486,7 +530,7 @@ mod tests {
         for cut in &file.cuts {
             out.extend_from_slice(&file.held[held..cut.held]);
             out.extend_from_slice(&file.read_body(cut.body).expect("readable"));
-            held = cut.held;
+            held = cut.held + (cut.body.start + cut.body.len - cut.resume) as usize;
         }
         out.extend_from_slice(&file.held[held..]);
         out
@@ -598,18 +642,56 @@ mod tests {
 
     #[test]
     fn a_body_holding_the_word_endstream_with_an_indirect_length_is_not_cut_short() {
-        // The search stops at the word inside the body; its /Length says otherwise.
-        let mut body = vec![b'x'; 5_000];
-        body.extend_from_slice(b"\nendstream\nendobj\n99 0 obj\n<</Length 6000>>\nstream\n");
-        body.extend_from_slice(&vec![b'y'; 6_000]);
-        let length = body.len();
-        let pdf = Pdf::new()
-            .obj("<</Type/Catalog/Pages 2 0 R>>")
-            .obj("<</Type/Pages/Kids[]/Count 0>>")
-            .obj([b"<</Length 4 0 R>>\nstream\n".as_slice(), &body, b"\nendstream"].concat())
-            .obj(length.to_string())
-            .build();
-        assert!(OnDiskFile::read(Arc::new(Memory(pdf))).unwrap().is_none(), "read whole instead");
+        // The search stops at the word inside the body; its /Length says otherwise. What it found
+        // may be too small to cut, and the walk would still go on inside the body.
+        for before in [100, 5_000] {
+            let mut body = vec![b'x'; before];
+            body.extend_from_slice(b"\nendstream\nendobj\n99 0 obj\n<</Length 6000>>\nstream\n");
+            body.extend_from_slice(&vec![b'y'; 6_000]);
+            let length = body.len();
+            let pdf = Pdf::new()
+                .obj("<</Type/Catalog/Pages 2 0 R>>")
+                .obj("<</Type/Pages/Kids[]/Count 0>>")
+                .obj([b"<</Length 4 0 R>>\nstream\n".as_slice(), &body, b"\nendstream"].concat())
+                .obj(length.to_string())
+                .build();
+            assert!(OnDiskFile::read(Arc::new(Memory(pdf))).unwrap().is_none(), "read whole instead");
+        }
+    }
+
+    /// A stream of `data` whose `/Length`, object 4, comes after it when `length` is given, and a
+    /// large stream, so that the file has something to leave on disk.
+    fn with_length_object(data: &[u8], end_of_line: &str, length: Option<usize>) -> Vec<u8> {
+        let stream = [b"<</Length 4 0 R>>\nstream\n".as_slice(), data, end_of_line.as_bytes(), b"endstream"].concat();
+        let pdf = Pdf::new().obj("<</Type/Catalog/Pages 2 0 R>>").obj("<</Type/Pages/Kids[]/Count 0>>").obj(stream);
+        let pdf = length.map_or(pdf.clone(), |length| pdf.obj(length.to_string()));
+        pdf.stream("", noise(0, 20_000)).build()
+    }
+
+    #[test]
+    fn a_length_settles_whether_a_line_end_is_data() {
+        // About one compressed stream in 256 ends in a byte that looks like a line end.
+        for (ending, end_of_line) in [("\r", "\n"), ("\n", ""), ("\r\n", ""), ("", "\r\n")] {
+            for len in [100, 9_000] {
+                let mut data = vec![b'x'; len];
+                data.extend_from_slice(ending.as_bytes());
+                let pdf = with_length_object(&data, end_of_line, Some(data.len()));
+                let file = walked(&pdf);
+                assert_eq!(file.body_count(), if len == 9_000 { 2 } else { 1 });
+                if len == 9_000 {
+                    assert_eq!(file.cuts[0].body.len, data.len() as u64);
+                }
+                assert_eq!(joined(&file), pdf);
+                assert_reads_the_same(&pdf, Arc::new(file));
+            }
+        }
+    }
+
+    #[test]
+    fn a_length_the_walk_never_sees_leaves_only_a_line_end_it_can_tell() {
+        let data = vec![b'x'; 9_000];
+        assert!(OnDiskFile::read(Arc::new(Memory(with_length_object(&data, "\n", None)))).unwrap().is_some());
+        assert!(OnDiskFile::read(Arc::new(Memory(with_length_object(&data, "\r\n", None)))).unwrap().is_none(), "read whole instead");
     }
 
     #[test]
@@ -724,8 +806,8 @@ mod tests {
         assert_reads_the_same(&pdf, Arc::new(walked(&pdf)));
     }
 
-    #[test]
-    fn small_streams_do_not_read_a_window_each() {
+    /// What a walk of `pdf` reads, and the size of `pdf`.
+    fn read_by_a_walk(pdf: Vec<u8>) -> (u64, u64) {
         struct Counted(Vec<u8>, AtomicU64);
         impl ByteSource for Counted {
             fn size(&self) -> u64 {
@@ -738,16 +820,34 @@ mod tests {
                 Ok(())
             }
         }
+        let size = pdf.len() as u64;
+        let source = Arc::new(Counted(pdf, AtomicU64::new(0)));
+        assert!(OnDiskFile::read(source.clone()).unwrap().is_some());
+        (source.1.load(Ordering::Relaxed), size)
+    }
+
+    #[test]
+    fn small_streams_do_not_read_a_window_each() {
         let mut pdf = Pdf::new().obj("<</Type/Catalog/Pages 2 0 R>>").obj("<</Type/Pages/Kids[]/Count 0>>");
         for i in 0..2_000 {
             pdf = pdf.stream("", noise(i as u8, 100));
         }
-        let pdf = pdf.stream("", noise(0, 2_000_000)).build();
-        let size = pdf.len() as u64;
-        let source = Arc::new(Counted(pdf, AtomicU64::new(0)));
-        assert!(OnDiskFile::read(source.clone()).unwrap().is_some());
-        let read = source.1.load(Ordering::Relaxed);
+        let (read, size) = read_by_a_walk(pdf.stream("", noise(0, 2_000_000)).build());
         assert!(read < size * 2, "read {read} bytes of a file of {size}");
+    }
+
+    #[test]
+    fn searching_for_the_end_of_a_body_reads_about_its_size() {
+        // Many writers give /Length as an indirect object after the stream, as here.
+        for (streams, len) in [(2_000, 100), (200, 100_000)] {
+            let mut pdf = Pdf::new().obj("<</Type/Catalog/Pages 2 0 R>>").obj("<</Type/Pages/Kids[]/Count 0>>");
+            for i in 0..streams {
+                let dict = format!("<</Length {} 0 R>>\nstream\n", pdf.next_obj() + 1);
+                pdf = pdf.obj([dict.as_bytes(), &noise(i as u8, len), b"\nendstream"].concat()).obj(len.to_string());
+            }
+            let (read, size) = read_by_a_walk(pdf.stream("", noise(0, 2_000_000)).build());
+            assert!(read < size * 3, "{streams} streams of {len}: read {read} bytes of a file of {size}");
+        }
     }
 
     #[test]

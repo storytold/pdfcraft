@@ -85,6 +85,30 @@ fn a_cross_reference_entry_inside_a_body_draws_as_in_the_whole_file() {
 }
 
 #[test]
+fn an_image_ending_in_a_line_end_byte_draws_as_in_the_whole_file() {
+    // Its /Length comes after it, so the walk has to settle where it ends.
+    let mut data: Vec<u8> = (0..39_999).map(|i| (i / 7 % 251) as u8).collect();
+    data.push(b'\r');
+    let image = b"<</Type/XObject/Subtype/Image/Width 200/Height 200/BitsPerComponent 8/ColorSpace/DeviceGray/Length 6 0 R>>\nstream\n";
+    let pdf = Pdf::new()
+        .obj("<</Type/Catalog/Pages 2 0 R>>")
+        .obj("<</Type/Pages/Kids[3 0 R]/Count 1>>")
+        .obj("<</Type/Page/Parent 2 0 R/MediaBox[0 0 100 100]/Contents 4 0 R/Resources<</XObject<</I 5 0 R>>>>>>")
+        .stream("", "q 100 0 0 100 0 0 cm /I Do Q")
+        .obj([image.as_slice(), &data, b"\nendstream"].concat())
+        .obj("40000")
+        .build();
+    let (file, _) = on_disk(pdf.clone());
+    assert_eq!(file.body_count(), 1);
+    let mut whole = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+    let mut held = PageRenderer::new(file, RenderConfig::default());
+    let request = RenderRequest { page: 0, scale: 2.0, ..Default::default() };
+    let (a, b) = (whole.render(request), held.render(request));
+    assert_eq!(b.error, None);
+    assert!(a.rgba == b.rgba);
+}
+
+#[test]
 fn the_pool_draws_pages_on_disk() {
     let (file, _) = on_disk(scanned());
     let pool = RenderPool::new_inline(file, RenderConfig::default());
