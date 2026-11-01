@@ -444,6 +444,29 @@ impl Encoding {
             Self::BuiltIn => None,
         }
     }
+
+    /// PdfCraft patch: the glyph name an Annex D.2 *alias code* reads as when the glyph is taken
+    /// as text rather than looked up in a font program; `None` for every other code.
+    ///
+    /// Annex D.2 gives WinAnsiEncoding codes 0xA0 and 0xAD the glyph names `space` and `hyphen`,
+    /// the same names it gives 0x20 and 0x2D, and MacRomanEncoding 0xCA `space`. The tables above
+    /// call them `nbspace` and `sfthyphen`, whose Adobe Glyph List values U+00A0 and U+00AD are
+    /// *formatting* characters, so extraction hid ink the reader can see: a soft hyphen is
+    /// invisible, and text that drew one matched no search and no redaction pattern -- one corpus
+    /// file alone produced 104 of them -- while a non-breaking space did not match the space a
+    /// reader typed. pdftotext reads both codes as the ordinary character.
+    ///
+    /// Only the base table is aliased, in the text direction only. A `/Differences` entry naming
+    /// `sfthyphen` or `nbspace` is a deliberate statement and keeps its glyph list value, which
+    /// is what pdftotext does too; and glyph *lookup* is untouched, so a font program's own
+    /// `sfthyphen` program is still found first.
+    fn text_alias(&self, code: u8) -> Option<&'static str> {
+        match (self, code) {
+            (Self::WinAnsi, 0xA0) | (Self::MacRoman, 0xCA) => Some("space"),
+            (Self::WinAnsi, 0xAD) => Some("hyphen"),
+            _ => None,
+        }
+    }
 }
 
 /// The font stretch.
@@ -541,6 +564,13 @@ pub struct FallbackFontQuery {
 
 impl FallbackFontQuery {
     pub(crate) fn new(dict: &Dict<'_>) -> Self {
+        Self::with_descriptor(dict, dict.get::<Dict<'_>>(FONT_DESC))
+    }
+
+    /// PdfCraft patch: the query for the font `dict` names, with its style read from
+    /// `descriptor`. A Type 0 font has no font descriptor of its own; its descendant CIDFont
+    /// has it (ISO 32000-2 §9.7.4.1, §9.7.6.1).
+    pub(crate) fn with_descriptor(dict: &Dict<'_>, descriptor: Option<Dict<'_>>) -> Self {
         let post_script_name = dict
             .get::<Name<'_>>(BASE_FONT)
             .map(|n| strip_subset_prefix(n.as_str()).to_string());
@@ -550,7 +580,7 @@ impl FallbackFontQuery {
             ..Default::default()
         };
 
-        if let Some(descriptor) = dict.get::<Dict<'_>>(FONT_DESC) {
+        if let Some(descriptor) = descriptor {
             data.font_name = dict
                 .get::<Name<'_>>(FONT_NAME)
                 .map(|n| strip_subset_prefix(n.as_str()).to_string());
@@ -644,6 +674,49 @@ pub(crate) fn glyph_name_to_unicode(name: &str) -> Option<char> {
 
         None
     })
+}
+
+/// PdfCraft patch: the text of a glyph name `glyph_name_to_unicode` doesn't know, by the
+/// Adobe Glyph List Specification's full mapping: drop everything from the first `.`
+/// (`hyphen.case`, `a.sc`), split the rest on `_` into components (`f_i`, `f_f_l`), and map each
+/// one through the glyph list, as `uniXXXX[XXXX…]` (BMP values, four hex digits each) or as
+/// `uXXXX` to `uXXXXXX`. A component it can't map, or a `uni` component with any group that
+/// isn't a character, adds nothing; `None` when nothing is left.
+pub(crate) fn glyph_name_to_text(name: &str) -> Option<BfString> {
+    let hex = |h: &str| u32::from_str_radix(h, 16).ok().and_then(char::from_u32);
+    // The specification's digits are uppercase only (`uni20ac` maps to nothing, review on
+    // #3239).
+    let upper_hex = |d: &str| d.bytes().all(|b| matches!(b, b'0'..=b'9' | b'A'..=b'F'));
+    let base = name.split('.').next().unwrap_or_default();
+    let mut text = String::new();
+    for part in base.split('_') {
+        if let Some(s) = glyph_names::get(part) {
+            text.push_str(s);
+        } else if let Some(digits) = part
+            .strip_prefix("uni")
+            .filter(|d| !d.is_empty() && d.len() % 4 == 0 && upper_hex(d))
+        {
+            // All ASCII, so every fourth byte is a char boundary. A group that isn't a
+            // character (a surrogate) makes the whole component map to nothing.
+            let chars: Option<String> = (0..digits.len())
+                .step_by(4)
+                .map(|at| digits.get(at..at + 4).and_then(hex))
+                .collect();
+            text.extend(chars);
+        } else if let Some(c) = part
+            .strip_prefix('u')
+            .filter(|d| (4..=6).contains(&d.len()) && upper_hex(d))
+            .and_then(hex)
+        {
+            text.push(c);
+        }
+    }
+    let mut chars = text.chars();
+    match (chars.next(), chars.next()) {
+        (None, _) => None,
+        (Some(c), None) => Some(BfString::Char(c)),
+        _ => Some(BfString::String(text)),
+    }
 }
 
 pub(crate) fn unicode_from_name(name: &str) -> Option<char> {

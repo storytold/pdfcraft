@@ -54,21 +54,164 @@ fn property(key: &str) -> Option<(&'static str, &'static str, Shape)> {
 /// that can't be edited safely.
 pub(crate) fn sync_info(doc: &mut Document, key: &str, value: &str) -> Result<(), OrganizeError> {
     let Some((name, ns, shape)) = property(key) else { return Ok(()) };
-    let Some(root) = doc.root() else { return Ok(()) };
+    edit_packet(doc, |xmp| set_property(xmp, name, ns, shape, value)).map(|_| ())
+}
+
+/// Remove every occurrence of the properties `names` from the catalog's XMP packet; whether any
+/// was there.
+pub(crate) fn remove_properties(doc: &mut Document, names: &[&str]) -> Result<bool, OrganizeError> {
+    edit_packet(doc, |xmp| {
+        let mut out: Option<String> = None;
+        for name in names {
+            // Each removal shortens the packet, so this ends.
+            while let Some(next) = set_property(out.as_deref().unwrap_or(xmp), name, "", Shape::Text, "") {
+                out = Some(next);
+            }
+        }
+        out
+    })
+}
+
+/// Rewrite the catalog's XMP packet with `edit` (`None`: unchanged); whether it changed. Files
+/// without XMP and packets that can't be edited safely are left alone.
+fn edit_packet(doc: &mut Document, edit: impl FnOnce(&str) -> Option<String>) -> Result<bool, OrganizeError> {
+    let Some(root) = doc.root() else { return Ok(false) };
     // A metadata stream is always indirect (§7.3.8); anything else is left alone.
-    let Some(r) = doc.get(root).as_dict().and_then(|c| c.reference(b"Metadata")) else { return Ok(()) };
+    let Some(r) = doc.get(root).as_dict().and_then(|c| c.reference(b"Metadata")) else { return Ok(false) };
     let obj = doc.get(r);
-    let Object::Stream(stream) = &*obj else { return Ok(()) };
-    let Ok(bytes) = stream.decoded_within(MAX_XMP) else { return Ok(()) };
-    let Ok(xmp) = String::from_utf8(bytes) else { return Ok(()) };
-    let Some(updated) = set_property(&xmp, name, ns, shape, value) else { return Ok(()) };
+    let Object::Stream(stream) = &*obj else { return Ok(false) };
+    let Ok(bytes) = stream.decoded_within(MAX_XMP) else { return Ok(false) };
+    let Ok(xmp) = String::from_utf8(bytes) else { return Ok(false) };
+    let Some(updated) = edit(&xmp) else { return Ok(false) };
     // Written unfiltered, as PDF/A asks of metadata streams, so other tools can read it.
     let mut dict = stream.dict.clone();
     for k in [&b"Filter"[..], b"DecodeParms", b"DL", b"Length"] {
         dict.remove(k);
     }
     doc.set(r, Object::Stream(Stream::from_raw(dict, updated.into_bytes())));
-    Ok(())
+    Ok(true)
+}
+
+/// The value the catalog's XMP packet gives the document information key `key`, for files that
+/// state their title, author and so on only there (`/Info` is deprecated in PDF 2.0, and some
+/// writers leave it out). A language alternative gives its `x-default` item (else the first),
+/// several authors are joined with "; ". `None` for keys XMP doesn't mirror, files without XMP,
+/// packets that can't be read safely, and empty values.
+pub(crate) fn info_value(doc: &Document, key: &str) -> Option<String> {
+    let (name, _, shape) = property(key)?;
+    let root = doc.root()?;
+    let r = doc.get(root).as_dict()?.reference(b"Metadata")?;
+    let obj = doc.get(r);
+    let Object::Stream(stream) = &*obj else { return None };
+    let xmp = String::from_utf8(stream.decoded_within(MAX_XMP).ok()?).ok()?;
+    get_property(&xmp, name, shape)
+}
+
+/// The text of the property `name` in `xmp`, element or attribute form (see [`info_value`]).
+fn get_property(xmp: &str, name: &str, shape: Shape) -> Option<String> {
+    let value = if let Some((start, end)) = element_span(xmp, name) {
+        let element = xmp.get(start..end)?;
+        let open_end = element.find('>')?;
+        // `<dc:title/>`: no value.
+        if element.get(..open_end)?.ends_with('/') {
+            return None;
+        }
+        let inner = element.get(open_end + 1..)?.strip_suffix(&format!("</{name}>"))?;
+        let items = list_items(inner);
+        if items.is_empty() {
+            // An empty `<rdf:Alt/>` or `<rdf:Seq></rdf:Seq>` has no value, not its markup.
+            text_value(inner)?
+        } else if shape == Shape::LangAlt {
+            let (_, text) = items.iter().find(|(lang, _)| lang.as_deref() == Some("x-default")).or(items.first())?;
+            text_value(text)?
+        } else {
+            items.iter().filter_map(|(_, text)| text_value(text)).filter(|t| !t.is_empty()).collect::<Vec<_>>().join("; ")
+        }
+    } else {
+        let (_, value_start, value_end, _) = attribute_span(xmp, name)?;
+        unescape(xmp.get(value_start..value_end)?.trim())
+    };
+    Some(value).filter(|v| !v.trim().is_empty())
+}
+
+/// Character data `text` as a value, unescaped; `None` when it still holds markup (a `<`, which
+/// a value escapes as `&lt;`), so a structure the reader doesn't take apart never shows as text.
+fn text_value(text: &str) -> Option<String> {
+    let text = text.trim();
+    (!text.contains('<')).then(|| unescape(text))
+}
+
+/// The `rdf:li` items of a property's content: each one's `xml:lang` (if any) and its text.
+fn list_items(inner: &str) -> Vec<(Option<String>, &str)> {
+    let mut items = Vec::new();
+    let mut rest = inner;
+    while let Some(i) = rest.find("<rdf:li") {
+        let Some(after) = rest.get(i + "<rdf:li".len()..) else { break };
+        // `<rdf:li` must end there: not `<rdf:link`.
+        if !after.starts_with(|c: char| c == '>' || c == '/' || c.is_whitespace()) {
+            rest = after;
+            continue;
+        }
+        let Some(tag_end) = after.find('>') else { break };
+        let tag = after.get(..tag_end).unwrap_or_default();
+        let lang = tag.find("xml:lang=").and_then(|at| {
+            let v = tag.get(at + "xml:lang=".len()..)?;
+            let quote = v.chars().next().filter(|c| matches!(c, '"' | '\''))?;
+            let v = v.get(1..)?;
+            Some(v.get(..v.find(quote)?)?.to_string())
+        });
+        let Some(body) = after.get(tag_end + 1..) else { break };
+        if tag.ends_with('/') {
+            items.push((lang, ""));
+            rest = body;
+            continue;
+        }
+        let Some(close) = body.find("</rdf:li>") else { break };
+        items.push((lang, body.get(..close).unwrap_or_default()));
+        rest = body.get(close..).unwrap_or_default();
+    }
+    items
+}
+
+/// XML text with its character and entity references resolved (an unknown one is kept as is).
+fn unescape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find('&') {
+        out.push_str(rest.get(..i).unwrap_or_default());
+        let after = rest.get(i..).unwrap_or_default();
+        let Some(semi) = after.find(';').filter(|&n| n <= 12) else {
+            out.push('&');
+            rest = after.get(1..).unwrap_or_default();
+            continue;
+        };
+        let entity = after.get(1..semi).unwrap_or_default();
+        let c = match entity {
+            "amp" => Some('&'),
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            _ => entity
+                .strip_prefix("#x")
+                .or_else(|| entity.strip_prefix("#X"))
+                .and_then(|h| u32::from_str_radix(h, 16).ok())
+                .or_else(|| entity.strip_prefix('#').and_then(|d| d.parse().ok()))
+                .and_then(char::from_u32),
+        };
+        match c {
+            Some(c) => {
+                out.push(c);
+                rest = after.get(semi + 1..).unwrap_or_default();
+            }
+            None => {
+                out.push('&');
+                rest = after.get(1..).unwrap_or_default();
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// `xmp` with the property `name` (namespace `ns`) set to `value`, or removed when `value` is
@@ -151,11 +294,24 @@ fn element_span(xmp: &str, name: &str) -> Option<(usize, usize)> {
 /// start and end of its value, and its quote character. Only matches inside a start tag.
 fn attribute_span(xmp: &str, name: &str) -> Option<(usize, usize, usize, char)> {
     let mut from = 0;
+    // The last `<` and `>` before the match, found by one pass over the packet rather than by
+    // searching back from every match.
+    let (mut scanned, mut last_open, mut last_close) = (0, None, None);
     while let Some(i) = xmp.get(from..).and_then(|s| s.find(name)).map(|i| i + from) {
         from = i + name.len();
         let before = xmp.get(..i)?;
+        let gap = xmp.get(scanned..i)?;
+        #[cfg(test)]
+        crate::work(gap.len());
+        if let Some(at) = gap.rfind('<') {
+            last_open = Some(scanned + at);
+        }
+        if let Some(at) = gap.rfind('>') {
+            last_close = Some(scanned + at);
+        }
+        scanned = i;
         // Preceded by whitespace, and inside a tag (the last `<` comes after the last `>`).
-        if !before.ends_with(char::is_whitespace) || before.rfind('<') < before.rfind('>') || before.rfind('<').is_none() {
+        if !before.ends_with(char::is_whitespace) || last_open < last_close || last_open.is_none() {
             continue;
         }
         let rest = xmp.get(from..)?;
@@ -184,6 +340,28 @@ mod tests {
    <dc:creator><rdf:Seq><rdf:li>Old Author</rdf:li></rdf:Seq></dc:creator>\n\
    <dc:description><rdf:Alt><rdf:li xml:lang=\"x-default\">Old subject</rdf:li></rdf:Alt></dc:description>\n\
   </rdf:Description>\n </rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>";
+
+    #[test]
+    fn values_are_read_back_unescaped() {
+        assert_eq!(unescape("a &amp; b &lt;c&gt; &#65;&#x42; &bogus; &#xD800; & end"), "a & b <c> AB &bogus; &#xD800; & end");
+        assert_eq!(get_property(PACKET, "dc:title", Shape::LangAlt).as_deref(), Some("Untitled 1"));
+        assert_eq!(get_property(PACKET, "dc:creator", Shape::Seq).as_deref(), Some("Old Author"));
+        assert_eq!(get_property(PACKET, "pdf:Producer", Shape::Text).as_deref(), Some("Writer 1.0"));
+        assert_eq!(get_property(PACKET, "pdf:Keywords", Shape::Text), None);
+        // No x-default: the first language; empty and self-closed items are skipped.
+        let alt = "<dc:title><rdf:Alt><rdf:li xml:lang='fr'>Rapport</rdf:li><rdf:li xml:lang='en'>Report</rdf:li></rdf:Alt></dc:title>";
+        assert_eq!(get_property(alt, "dc:title", Shape::LangAlt).as_deref(), Some("Rapport"));
+        let seq = "<dc:creator><rdf:Seq><rdf:li/><rdf:li> </rdf:li><rdf:li>Ada</rdf:li></rdf:Seq></dc:creator>";
+        assert_eq!(get_property(seq, "dc:creator", Shape::Seq).as_deref(), Some("Ada"));
+        // Unfinished markup reads as nothing rather than as a wrong value.
+        assert_eq!(get_property("<dc:title><rdf:Alt><rdf:li>Cut", "dc:title", Shape::LangAlt), None);
+        // An empty alternative or list, or an item holding markup, has no value: never the markup.
+        assert_eq!(get_property("<dc:title><rdf:Alt/></dc:title>", "dc:title", Shape::LangAlt), None);
+        assert_eq!(get_property("<dc:title><rdf:Alt></rdf:Alt></dc:title>", "dc:title", Shape::LangAlt), None);
+        assert_eq!(get_property("<dc:creator><rdf:Seq/></dc:creator>", "dc:creator", Shape::Seq), None);
+        let nested = "<dc:creator><rdf:Seq><rdf:li><rdf:Description/></rdf:li><rdf:li>Ada</rdf:li></rdf:Seq></dc:creator>";
+        assert_eq!(get_property(nested, "dc:creator", Shape::Seq).as_deref(), Some("Ada"));
+    }
 
     #[test]
     fn element_values_are_replaced_in_place() {
@@ -247,5 +425,19 @@ mod tests {
                 let _ = set_property(packet, "pdf:Keywords", PDF, Shape::Text, value);
             }
         }
+    }
+
+    #[test]
+    fn attribute_search_scans_the_packet_once() {
+        // Thousands of attribute-like words in one text node: none is inside a tag.
+        let packet = format!("<x:xmpmeta><rdf:RDF><rdf:Description>{}</rdf:Description></rdf:RDF></x:xmpmeta>", " rdf:about".repeat(5_000));
+        crate::take_work();
+        assert_eq!(attribute_span(&packet, "rdf:about"), None);
+        let work = crate::take_work();
+        assert!(work <= 2 * packet.len(), "{work} bytes scanned in a {}-byte packet", packet.len());
+        // A real attribute after them is still found.
+        let packet = packet.replace("</rdf:Description>", "</rdf:Description><rdf:Description rdf:about='u'/>");
+        let (_, s, e, q) = attribute_span(&packet, "rdf:about").unwrap();
+        assert_eq!((packet.get(s..e), q), (Some("u"), '\''));
     }
 }

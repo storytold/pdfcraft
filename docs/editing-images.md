@@ -6,6 +6,10 @@ that placement. The context menu also rotates or flips it. Changes support undo 
 survive saving/reopening. For single-figure transforms, a clipping path exclusive to one image moves and resizes
 together with its pixels, including nested graphics states, intervening state operators
 and paths split across content streams. A clip shared with other content stays where it is.
+When the figure already sits alone in a `q … cm … Q` (its own placement, or the one an
+earlier edit added), moving or resizing it again changes that `cm`, so repeated edits don't
+nest one more graphics state each time. Moving a privately cropped figure again likewise
+changes the `cm` before its clip instead of adding another.
 
 PDF figures are not always bitmap images. Imported diagrams often use a **Form XObject**,
 which packages text, vector paths, and nested images into one object. PdfCraft selects
@@ -34,7 +38,9 @@ the full placement by the same change; resizing keeps the opposite corner fixed,
 horizontal-only or vertical-only corner drags, and grabbing a grip slightly off-centre does not
 jump. A selected corner keeps control of its drag even over a text label; the drag previews one
 frame and applies one undoable edit on release. Exclusive crops and their holes move
-with the selected image; shared clips stay fixed without moving neighbouring text or artwork.
+with the selected image, also when the picture sits inside a clip it shares with its section
+(a report drawing each picture as `q re W n cm Do Q` within a table's clip): the picture's own
+clip scales with it, and shared clips stay fixed without moving neighbouring text or artwork.
 
 `image_hit` applies the same path and hole checks headlessly. `page_images` retains `rect` as
 the full placement rectangle used by `image_edit` and adds `visible_rect` for selection (null

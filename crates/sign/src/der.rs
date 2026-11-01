@@ -285,6 +285,9 @@ fn contents_len(input: &[u8], form: Form, depth: usize) -> Result<usize, SignErr
     }
 }
 
+/// `NaiveDate::num_days_from_ce` of 1970-01-01, so the count can be rebased onto the Unix epoch.
+const UNIX_EPOCH_DAYS_FROM_CE: i64 = 719_163;
+
 /// A UTC time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Time {
@@ -327,27 +330,37 @@ impl Time {
 
     /// Seconds since 1970-01-01 (proleptic Gregorian).
     pub fn unix(&self) -> i64 {
-        let (y, m) = if self.month <= 2 { (self.year as i64 - 1, self.month as i64 + 9) } else { (self.year as i64, self.month as i64 - 3) };
-        let era = y.div_euclid(400);
-        let yoe = y - era * 400;
-        let doy = (153 * m + 2) / 5 + self.day as i64 - 1;
-        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-        let days = era * 146_097 + doe - 719_468;
+        use chrono::Datelike;
+        // The calendar date goes through chrono; the time of day is a plain second count, as
+        // before. A date chrono cannot represent (an out-of-range field) reads as the epoch day,
+        // which no well-formed UTCTime/GeneralizedTime produces.
+        let days = i32::try_from(self.year)
+            .ok()
+            .and_then(|y| chrono::NaiveDate::from_ymd_opt(y, self.month, self.day))
+            .map_or(0, |d| i64::from(d.num_days_from_ce()) - UNIX_EPOCH_DAYS_FROM_CE);
         days * 86_400 + self.hour as i64 * 3600 + self.minute as i64 * 60 + self.second as i64
     }
 
+    /// The UTC time at `t` seconds since 1970-01-01.
+    ///
+    /// The calendar date goes through chrono's 400-year Gregorian cycle (146_097 days) so a `t`
+    /// past `NaiveDate`'s ±262143-year range keeps the proleptic Gregorian date the old hand-rolled
+    /// converter produced instead of falling back to the epoch. The `year` field is a `u32`, so the
+    /// year is cast exactly as the old code did (`as u32`, wrapping) — no well-formed signing time
+    /// is anywhere near that range, and this preserves byte-for-byte the old output everywhere.
     pub fn from_unix(t: i64) -> Time {
-        let days = t.div_euclid(86_400);
-        let secs = t.rem_euclid(86_400);
-        let z = days + 719_468;
-        let era = z.div_euclid(146_097);
-        let doe = z - era * 146_097;
-        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-        let mp = (5 * doy + 2) / 153;
-        let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
-        let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-        let year = (yoe + era * 400 + if month <= 2 { 1 } else { 0 }) as u32;
+        use chrono::Datelike;
+        let (days, secs) = (t.div_euclid(86_400), t.rem_euclid(86_400));
+        let (cycles, rest) = (days.div_euclid(146_097), days.rem_euclid(146_097));
+        // `rest + 719_163` is 719_163..865_259, always a valid CE day.
+        let (year, month, day) = match i32::try_from(rest + 719_163).ok().and_then(chrono::NaiveDate::from_num_days_from_ce_opt) {
+            Some(d) => {
+                let y = i128::from(d.year()) + i128::from(cycles) * 400;
+                // Match the old `as u32` cast: saturate i128→i64 first (the old year was i64), then wrap into u32.
+                (i64::try_from(y).unwrap_or(if y < 0 { i64::MIN } else { i64::MAX }) as u32, d.month(), d.day())
+            }
+            None => (1970, 1, 1), // unreachable
+        };
         Time { year, month, day, hour: (secs / 3600) as u32, minute: (secs % 3600 / 60) as u32, second: (secs % 60) as u32 }
     }
 
@@ -591,5 +604,13 @@ mod tests {
         assert_eq!(Tlv::parse_all(&far.encode()).unwrap().tag, tag::GENERALIZED_TIME);
         assert_eq!(Time::from_pdf("D:20261002113005+02'00'"), Some(Time { year: 2026, month: 10, day: 2, hour: 9, minute: 30, second: 5 }));
         assert_eq!(Time::from_unix(0), Time { year: 1970, month: 1, day: 1, hour: 0, minute: 0, second: 0 });
+        // Past chrono's ±262143-year range `from_unix` keeps the proleptic Gregorian date the old
+        // hand-rolled converter gave, not the epoch. No real signing time is near this; the `year`
+        // field is a `u32`, so the year wraps exactly as the old `as u32` cast did (values pinned
+        // from the old formula). This also covers both i64 extremes so neither div_euclid panics.
+        assert_eq!(Time::from_unix(10_000_000_000_000), Time { year: 318857, month: 5, day: 20, hour: 17, minute: 46, second: 40 });
+        assert_eq!(Time::from_unix(-10_000_000_000_000), Time { year: 4_294_652_378, month: 8, day: 13, hour: 6, minute: 13, second: 20 });
+        assert_eq!(Time::from_unix(i64::MAX), Time { year: 219_250_468, month: 12, day: 4, hour: 15, minute: 30, second: 7 });
+        assert_eq!(Time::from_unix(i64::MIN), Time { year: 4_075_720_767, month: 1, day: 27, hour: 8, minute: 29, second: 52 });
     }
 }

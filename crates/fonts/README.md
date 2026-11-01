@@ -4,9 +4,11 @@ Layer L2. Font helpers for the appearance streams PdfCraft generates (comments, 
 
 Today it holds what generated appearances need without a font program:
 
-- `helvetica_width`: an approximation of Helvetica's proportions by character class. No metrics
-  file or font program from any vendor is bundled; widths are PdfCraft's own estimates, good
-  enough for line breaking and alignment, not for typesetting.
+- `helvetica_width`: the **exact** standard-14 advance widths, via `Std14::Helvetica`. It was an
+  estimate by character class until the generated tables landed; those tables are Adobe-authored
+  non-visual technical data, the item `AGENTS.md` §1.1 permits, carried in `std14_metrics.rs` with
+  `adobe_data = true` in `ATTRIBUTION.toml`. **No font program or typeface from any vendor is
+  bundled** — widths and encodings only. Reach for `Std14` directly for any other face.
 - `wrap`: greedy line breaking with that measure (paragraphs on newlines, long words split).
 - `win_ansi`: Unicode → WinAnsiEncoding bytes (`?` for characters it can't represent), and
   `literal` to write bytes as a PDF literal string. Nothing writes that `?` silently. Callers
@@ -35,6 +37,9 @@ set). Without that variable `CRAFT_FONTS` is empty and everything below copes:
   Hebrew interface text, and the face whose outlines become the Type 3 fallback for Hebrew text
   written by Edit text (Bold when asked for and present, else Regular). `None` without a
   craft-fonts input that has one; the editor then reports a clear error.
+- `shape_hebrew` / `hebrew_has`: the Regular `Hebr` face shaped with harfrust for Hebrew Add
+  Text content, one cluster per letter with its points and cantillation marks (positioned by the
+  face), drawn by the same Type 3 writer as Arabic and Thai. `GlyphError::NoFont` without the face.
 - `document_japanese_font` / `japanese_glyph`: the face (Shippori Mincho, then BIZ UDMincho) whose
   outlines become the Type 3 fallback font for Japanese text written into PDFs. Without it,
   `japanese_glyph` returns `GlyphError::NoFont` and the editor reports a clear error.
@@ -67,7 +72,7 @@ needed.
 wasm32 builds embed only BIZ UDPGothic Regular and any `Arab`, `Telu`, `Hebr` or `Thai` face, to keep the web build small: the web build
 currently has no Chinese face, so Chinese there still shows the replacement glyph.
 Font files are never
-committed here (`AGENTS.md` §1.4; team members: [craftrules `standards/fonts.md`](https://github.com/storytold/craftrules/blob/main/standards/fonts.md), internal).
+committed here (`AGENTS.md` §1.4).
 
 The full font subsystem (parsing, shaping, subsetting and embedding) arrives with M2.2/M7.
 

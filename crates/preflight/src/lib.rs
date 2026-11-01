@@ -24,7 +24,7 @@
 pub mod icc;
 mod xmp;
 
-use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream, is_whitespace};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
 /// The PDF/A part and conformance level.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -165,7 +165,7 @@ fn metadata(doc: &Document) -> Option<String> {
     let cat = catalog(doc);
     let m = doc.resolve(cat.get(b"Metadata")?);
     match &*m {
-        Object::Stream(s) => s.decoded().ok().map(|b| String::from_utf8_lossy(&b).into_owned()),
+        Object::Stream(s) => s.decoded_within(xmp::MAX_XMP_BYTES).ok().map(|b| String::from_utf8_lossy(&b).into_owned()),
         _ => None,
     }
 }
@@ -174,10 +174,10 @@ fn metadata(doc: &Document) -> Option<String> {
 pub fn declared(doc: &Document) -> Declared {
     let mut d = Declared::default();
     if let Some(x) = metadata(doc) {
-        let part = xmp::value(&x, "pdfaid:part").and_then(|p| p.parse().ok());
-        let conf = xmp::value(&x, "pdfaid:conformance").unwrap_or_default();
+        let part = xmp::identifier(&x, xmp::PDFA_ID, "part").and_then(|p| p.parse().ok());
+        let conf = xmp::identifier(&x, xmp::PDFA_ID, "conformance").unwrap_or_default();
         d.pdfa = part.map(|p| (p, conf.to_uppercase()));
-        d.pdfua = xmp::value(&x, "pdfuaid:part").and_then(|p| p.parse().ok());
+        d.pdfua = xmp::identifier(&x, xmp::PDFUA_ID, "part").and_then(|p| p.parse().ok());
     }
     let cat = catalog(doc);
     if let Some(list) = cat.get(b"OutputIntents").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()) {
@@ -214,6 +214,9 @@ fn has_pdfa_intent(doc: &Document) -> bool {
     pdfa_intent_profile(doc).is_some()
 }
 
+/// Largest output-intent profile decoded to read its header; real ICC profiles stay well under it.
+const MAX_ICC_PROFILE: usize = 16 << 20;
+
 /// The PDF/A output intent's destination profile: `Some(n)` with the profile's number of colour
 /// components (`/N`, else the ICC header's data colour space; `None` when neither says), or
 /// `None` when the document has no PDF/A output intent.
@@ -229,7 +232,7 @@ fn pdfa_intent_profile(doc: &Document) -> Option<Option<i64>> {
         let Object::Stream(s) = &*profile else { return Some(None) };
         Some(s.dict.int(b"N").or_else(|| {
             // ICC.1 header: the data colour space is bytes 16–19.
-            match s.decoded().ok()?.get(16..20)? {
+            match s.decoded_within(MAX_ICC_PROFILE).ok()?.get(16..20)? {
                 b"GRAY" => Some(1),
                 b"RGB " => Some(3),
                 b"CMYK" => Some(4),
@@ -255,12 +258,134 @@ impl DeviceColour {
     fn any(self) -> bool {
         self.gray || self.rgb || self.cmyk
     }
+
+    /// Note the device colour space `name`, if it is one. Inline images may also use the
+    /// abbreviations (`G`, `RGB`, `CMYK`); anywhere else those are resource names.
+    fn mark(&mut self, name: &[u8], inline: bool) {
+        match name {
+            b"DeviceGray" => self.gray = true,
+            b"DeviceRGB" => self.rgb = true,
+            b"DeviceCMYK" => self.cmyk = true,
+            b"G" if inline => self.gray = true,
+            b"RGB" if inline => self.rgb = true,
+            b"CMYK" if inline => self.cmyk = true,
+            _ => {}
+        }
+    }
+}
+
+/// How deep [`type3_procs`] looks into an object's direct dictionaries and arrays.
+const MAX_DIRECT_DEPTH: u8 = 8;
+
+/// The glyph procedures of every Type 3 font in `d`: `d` itself, or a font held directly inside
+/// it (a font can sit inline in a resource dictionary).
+fn type3_procs(doc: &Document, d: &Dict, depth: u8, out: &mut std::collections::HashSet<ObjRef>) {
+    if d.name(b"Subtype") == Some(b"Type3")
+        && let Some(procs) = d.get(b"CharProcs").map(|c| doc.resolve(c))
+        && let Some(procs) = procs.as_dict()
+    {
+        out.extend(procs.iter().filter_map(|(_, p)| p.as_ref()));
+    }
+    for (_, v) in d.iter() {
+        type3_procs_within(doc, v, depth.saturating_add(1), out);
+    }
+}
+
+fn type3_procs_within(doc: &Document, o: &Object, depth: u8, out: &mut std::collections::HashSet<ObjRef>) {
+    if depth > MAX_DIRECT_DEPTH {
+        return;
+    }
+    match o {
+        Object::Dict(d) => type3_procs(doc, d, depth, out),
+        Object::Array(a) => {
+            for v in a {
+                type3_procs_within(doc, v, depth.saturating_add(1), out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The content streams that only a reference identifies, their dictionaries saying nothing: the
+/// pages' `/Contents` and Type 3 glyph procedures.
+fn referenced_content(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> std::collections::HashSet<ObjRef> {
+    let mut out = std::collections::HashSet::new();
+    for p in pdfcraft_model::pages(doc) {
+        let contents = match p.dict.get(b"Contents") {
+            Some(Object::Ref(r)) => match &*doc.get(*r) {
+                Object::Array(a) => a.clone(),
+                _ => vec![Object::Ref(*r)],
+            },
+            Some(Object::Array(a)) => a.clone(),
+            _ => Vec::new(),
+        };
+        out.extend(contents.iter().filter_map(Object::as_ref));
+    }
+    for (_, o) in objs {
+        if let Some(d) = dict_of(o) {
+            type3_procs(doc, d, 0, &mut out);
+        }
+    }
+    out
+}
+
+/// Whether a stream's own dictionary says it holds content: a form XObject, or a stream with a
+/// `/BBox` and no `/Subtype` (a tiling pattern, or an appearance stream that leaves out
+/// `/Subtype /Form`). Mesh shadings may carry a `/BBox` too, but their data isn't content.
+fn is_content(d: &Dict) -> bool {
+    match d.name(b"Subtype") {
+        Some(t) => t == b"Form",
+        None => d.get(b"BBox").is_some() && d.get(b"ShadingType").is_none(),
+    }
+}
+
+/// The device colour a content stream sets. It is read operator by operator, so the bytes of a
+/// string, a comment or an inline image are never taken for an operator, and an operator right
+/// before a delimiter (`1 k/GS0 gs`) is still found.
+///
+/// Operators are read one at a time and dropped, so a stream of millions of tiny operators never
+/// becomes millions of parsed ones in memory, and reading stops once all three spaces are set.
+/// Returns how many operators it read.
+fn content_colour(data: &[u8], used: &mut DeviceColour) -> usize {
+    let mut read = 0;
+    for op in pdfcraft_content::ops(data) {
+        if used.gray && used.rgb && used.cmyk {
+            break;
+        }
+        read += 1;
+        match op.op.as_slice() {
+            b"g" | b"G" => used.gray = true,
+            b"rg" | b"RG" => used.rgb = true,
+            b"k" | b"K" => used.cmyk = true,
+            b"cs" | b"CS" => {
+                if let Some(name) = op.name(0) {
+                    used.mark(name, false);
+                }
+            }
+            b"BI" => {
+                let Some((image, _)) = &op.inline else { continue };
+                match image.get(b"CS").or_else(|| image.get(b"ColorSpace")) {
+                    Some(Object::Name(n)) => used.mark(n, true),
+                    // An indexed space draws in its base: `[/I /DeviceRGB 1 <…>]`.
+                    Some(Object::Array(a)) if a.first().and_then(Object::as_name).is_some_and(|n| n == b"I" || n == b"Indexed") => {
+                        if let Some(base) = a.get(1).and_then(Object::as_name) {
+                            used.mark(base, true);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    read
 }
 
 /// Whether any content or object uses a device colour space.
 fn uses_device_colour(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> DeviceColour {
     let mut used = DeviceColour::default();
-    for (_, o) in objs {
+    let referenced = referenced_content(doc, objs);
+    for (r, o) in objs {
         let Some(d) = dict_of(o) else { continue };
         // A resource dictionary's /ColorSpace, whether it is this object or the page's inline
         // /Resources.
@@ -281,23 +406,23 @@ fn uses_device_colour(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)])
                 _ => {}
             }
         }
-        if let Object::Stream(s) = &**o
-            && d.get(b"Type").is_none()
-            && d.get(b"Subtype").is_none_or(|t| t.as_name() == Some(b"Form"))
+        // Content streams only: a font program or an ICC profile is data, whatever bytes it holds.
+        // Parsing is the expensive part, so once content has used all three spaces no more is read.
+        if !(used.gray && used.rgb && used.cmyk)
+            && let Object::Stream(s) = &**o
+            && (referenced.contains(r) || is_content(&s.dict))
             && let Ok(data) = s.decoded()
         {
-            // Content streams: rg/RG/g/G/k/K operators.
-            for token in data.split(|b| is_whitespace(*b)) {
-                match token {
-                    b"g" | b"G" => used.gray = true,
-                    b"rg" | b"RG" => used.rgb = true,
-                    b"k" | b"K" => used.cmyk = true,
-                    _ => {}
-                }
-            }
+            let _ = content_colour(&data, &mut used);
         }
     }
     used
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Page `/Annots` entries read while matching annotations to their pages.
+    static ANNOT_ENTRIES_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Check `doc` against `level`.
@@ -317,8 +442,8 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     match metadata(doc) {
         None => issue("6.6.2.1", "The document has no XMP metadata", None, None, true),
         Some(x) => {
-            let part = xmp::value(&x, "pdfaid:part");
-            let conf = xmp::value(&x, "pdfaid:conformance");
+            let part = xmp::identifier(&x, xmp::PDFA_ID, "part");
+            let conf = xmp::identifier(&x, xmp::PDFA_ID, "conformance");
             if part.as_deref() != Some(&level.part().to_string()) || conf.as_deref().map(str::to_uppercase).as_deref() != Some("B") {
                 issue("6.6.4", "The metadata doesn't identify the file as {}", Some(level.label().to_owned()), None, true);
             }
@@ -370,111 +495,180 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     }
     // Pages: annotations and page actions.
     let pages = pdfcraft_model::pages(doc);
-    let page_of = |r: ObjRef| {
-        pages.iter().position(|p| {
-            p.dict
-                .get(b"Annots")
-                .map(|a| doc.resolve(a))
-                .and_then(|a| a.as_array().cloned())
-                .unwrap_or_default()
-                .iter()
-                .any(|x| x.as_ref() == Some(r))
-        })
-    };
+    // Each annotation's page: the first page that lists it.
+    let mut annot_pages: std::collections::HashMap<ObjRef, usize> = std::collections::HashMap::new();
+    for (i, p) in pages.iter().enumerate() {
+        if let Some(a) = p.dict.get(b"Annots").map(|a| doc.resolve(a))
+            && let Some(a) = a.as_array()
+        {
+            #[cfg(test)]
+            ANNOT_ENTRIES_READ.with(|n| n.set(n.get() + a.len()));
+            for r in a.iter().filter_map(Object::as_ref) {
+                annot_pages.entry(r).or_insert(i);
+            }
+        }
+    }
+    let page_of = |r: ObjRef| annot_pages.get(&r).copied();
     for (i, p) in pages.iter().enumerate() {
         if p.dict.get(b"AA").is_some() {
             issue("6.5.2", "Page {} has additional actions", Some((i + 1).to_string()), Some(i), true);
         }
     }
-    for (r, o) in &objs {
-        let Some(d) = dict_of(o) else { continue };
-        let ty = d.name(b"Type");
-        let sub = d.name(b"Subtype");
-        // Actions anywhere (structure elements also have /S: their role).
-        if let Some(s) = d.name(b"S")
-            && FORBIDDEN_ACTIONS.contains(&s)
-            && is_action(d)
-        {
-            issue("6.5.1", "A {} action isn't allowed", Some(String::from_utf8_lossy(s).into_owned()), None, true);
-        }
-        // Annotations.
-        if ty == Some(b"Annot") || (sub.is_some() && d.get(b"Rect").is_some() && d.get(b"P").is_some()) {
-            let page = page_of(*r);
-            let name = sub.map(|s| String::from_utf8_lossy(s).into_owned()).unwrap_or_default();
-            if sub.is_some_and(|s| FORBIDDEN_ANNOTS.contains(&s)) {
-                issue("6.3.1", "{} annotations aren't allowed", Some(name), page, true);
-                continue;
-            }
-            let f = d.int(b"F").unwrap_or(0);
-            if sub != Some(b"Popup") && (f & 4 == 0 || f & (1 | 2 | 32) != 0) {
-                issue("6.3.2", "A {} annotation isn't set to print, or is hidden", Some(name.clone()), page, true);
-            }
-            let has_ap = d.get(b"AP").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned()).is_some_and(|a| a.get(b"N").is_some());
-            if !has_ap && !matches!(sub, Some(b"Popup") | Some(b"Link")) {
-                let zero = d.get(b"Rect").map(|x| doc.resolve(x)).and_then(|x| x.as_array().cloned()).is_some_and(|a| {
-                    let v: Vec<f64> = a.iter().filter_map(|n| doc.resolve(n).as_f64()).collect();
-                    v.len() == 4 && (v[2] - v[0]).abs() < 1e-6 && (v[3] - v[1]).abs() < 1e-6
-                });
-                if !zero {
-                    issue("6.3.3", "A {} annotation has no appearance stream", Some(name.clone()), page, false);
-                }
-            }
-            if d.get(b"AA").is_some() {
-                issue("6.5.2", "A {} annotation has additional actions", Some(name), page, true);
-            }
-        }
-        // Form fields with additional actions (non-widget fields).
-        if d.get(b"FT").is_some() && d.get(b"AA").is_some() && ty != Some(b"Annot") {
-            issue("6.5.2", "A form field has additional actions", None, None, true);
-        }
-        // Fonts.
-        if ty == Some(b"Font") || d.get(b"BaseFont").is_some() && sub.is_some() {
-            check_font(doc, d, &mut issue);
-        }
-        // Streams.
-        if let Object::Stream(s) = &**o {
-            let filters: Vec<Vec<u8>> = match s.dict.get(b"Filter").map(|f| doc.resolve(f)) {
-                Some(f) => match &*f {
-                    Object::Name(n) => vec![n.clone()],
-                    Object::Array(a) => a.iter().filter_map(|x| x.as_name().map(<[u8]>::to_vec)).collect(),
-                    _ => Vec::new(),
-                },
-                None => Vec::new(),
-            };
-            if filters.iter().any(|f| f == b"LZWDecode") {
-                issue("6.1.7.2", "A stream uses LZW compression", None, None, false);
-            }
-            if s.dict.get(b"F").is_some() || s.dict.get(b"FFilter").is_some() {
-                issue("6.1.7.1", "A stream refers to an external file", None, None, false);
-            }
-            if sub == Some(b"Image") {
-                if matches!(s.dict.get(b"Interpolate"), Some(Object::Bool(true))) {
-                    issue("6.2.8", "An image asks to be interpolated", None, None, true);
-                }
-                if s.dict.get(b"Alternates").is_some() || s.dict.get(b"OPI").is_some() {
-                    issue("6.2.8", "An image has alternates or OPI information", None, None, true);
-                }
-            }
-            if sub == Some(b"PS") {
-                issue("6.2.9", "PostScript XObjects aren't allowed", None, None, false);
-            }
-        }
-        // Embedded files.
-        if ty == Some(b"Filespec") && d.get(b"EF").is_some() {
-            match level {
-                Level::A2b => issue("6.8", "Embedded files must be PDF/A files themselves (use PDF/A-3 for others)", None, None, false),
-                Level::A3b => {
-                    if d.get(b"AFRelationship").is_none() {
-                        issue("6.8", "An embedded file has no AFRelationship", None, None, true);
-                    }
-                }
-            }
-        }
-    }
+    check_objects(doc, level, &objs, &page_of, &mut issue);
     // One message per kind of problem is enough for repeated ones (as preflight summaries do).
     let mut seen = std::collections::HashSet::new();
     out.retain(|i| seen.insert((i.clause, i.message.clone(), i.page)));
     out
+}
+
+fn check_objects(
+    doc: &Document,
+    level: Level,
+    objects: &[(ObjRef, std::sync::Arc<Object>)],
+    page_of: &impl Fn(ObjRef) -> Option<usize>,
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
+    for (r, o) in objects {
+        let Some(d) = dict_of(o) else { continue };
+        check_one_object(doc, level, *r, d, o, page_of, issue);
+    }
+}
+
+fn check_one_object(
+    doc: &Document,
+    level: Level,
+    reference: ObjRef,
+    dict: &Dict,
+    object: &Object,
+    page_of: &impl Fn(ObjRef) -> Option<usize>,
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
+    let ty = dict.name(b"Type");
+    let subtype = dict.name(b"Subtype");
+    check_actions(doc, dict, issue);
+    if is_annotation(dict, ty, subtype) && check_annotation(doc, dict, subtype, page_of(reference), issue) {
+        // A forbidden annotation stops every later check for its object, as the scan did before
+        // it was split into helpers: the rest of its own checks and the form field, font, stream
+        // and embedded file below all came after that `continue`.
+        return;
+    }
+    if dict.get(b"FT").is_some() && dict.get(b"AA").is_some() && ty != Some(b"Annot") {
+        issue("6.5.2", "A form field has additional actions", None, None, true);
+    }
+    if ty == Some(b"Font") || dict.get(b"BaseFont").is_some() && subtype.is_some() {
+        check_font(doc, dict, issue);
+    }
+    if let Object::Stream(stream) = object {
+        check_stream(doc, stream, subtype, issue);
+    }
+    if ty == Some(b"Filespec") && dict.get(b"EF").is_some() {
+        check_embedded_file(level, dict, issue);
+    }
+}
+
+fn check_actions(doc: &Document, dict: &Dict, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
+    let own = (dict.get(b"S").is_some() && is_action(dict)).then_some(dict);
+    let direct = [b"A".as_slice(), b"OpenAction"].map(|key| dict.get(key).and_then(|action| action.as_dict()));
+    for action in [own].into_iter().chain(direct).flatten() {
+        if let Some(name) = chain_forbidden(doc, action) {
+            issue("6.5.1", "A {} action isn't allowed", Some(name), None, true);
+        }
+    }
+}
+
+fn is_annotation(dict: &Dict, ty: Option<&[u8]>, subtype: Option<&[u8]>) -> bool {
+    ty == Some(b"Annot") || (subtype.is_some() && dict.get(b"Rect").is_some() && dict.get(b"P").is_some())
+}
+
+fn check_annotation(
+    doc: &Document,
+    dict: &Dict,
+    subtype: Option<&[u8]>,
+    page: Option<usize>,
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) -> bool {
+    let name = subtype.map(|bytes| String::from_utf8_lossy(bytes).into_owned()).unwrap_or_default();
+    if subtype.is_some_and(|value| FORBIDDEN_ANNOTS.contains(&value)) {
+        issue("6.3.1", "{} annotations aren't allowed", Some(name), page, true);
+        return true;
+    }
+    let flags = dict.int(b"F").unwrap_or(0);
+    if subtype != Some(b"Popup") && (flags & 4 == 0 || flags & (1 | 2 | 32) != 0) {
+        issue("6.3.2", "A {} annotation isn't set to print, or is hidden", Some(name.clone()), page, true);
+    }
+    check_annotation_appearance(doc, dict, subtype, &name, page, issue);
+    if dict.get(b"AA").is_some() {
+        issue("6.5.2", "A {} annotation has additional actions", Some(name), page, true);
+    }
+    false
+}
+
+fn check_annotation_appearance(
+    doc: &Document,
+    dict: &Dict,
+    subtype: Option<&[u8]>,
+    name: &str,
+    page: Option<usize>,
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
+    let has_appearance = dict
+        .get(b"AP")
+        .map(|appearance| doc.resolve(appearance))
+        .and_then(|appearance| appearance.as_dict().cloned())
+        .is_some_and(|appearance| appearance.get(b"N").is_some());
+    if has_appearance || matches!(subtype, Some(b"Popup") | Some(b"Link")) {
+        return;
+    }
+    let zero_area = dict.get(b"Rect").map(|rect| doc.resolve(rect)).and_then(|rect| rect.as_array().cloned()).is_some_and(|values| {
+        let values: Vec<f64> = values.iter().filter_map(|value| doc.resolve(value).as_f64()).collect();
+        values.len() == 4 && (values[2] - values[0]).abs() < 1e-6 && (values[3] - values[1]).abs() < 1e-6
+    });
+    if !zero_area {
+        issue("6.3.3", "A {} annotation has no appearance stream", Some(name.to_owned()), page, false);
+    }
+}
+
+fn check_stream(
+    doc: &Document,
+    stream: &pdfcraft_cos::Stream,
+    subtype: Option<&[u8]>,
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
+    let filters: Vec<Vec<u8>> = match stream.dict.get(b"Filter").map(|filter| doc.resolve(filter)) {
+        Some(filter) => match &*filter {
+            Object::Name(name) => vec![name.clone()],
+            Object::Array(filters) => filters.iter().filter_map(|filter| filter.as_name().map(<[u8]>::to_vec)).collect(),
+            _ => Vec::new(),
+        },
+        None => Vec::new(),
+    };
+    if filters.iter().any(|filter| filter == b"LZWDecode") {
+        issue("6.1.7.2", "A stream uses LZW compression", None, None, false);
+    }
+    if stream.dict.get(b"F").is_some() || stream.dict.get(b"FFilter").is_some() {
+        issue("6.1.7.1", "A stream refers to an external file", None, None, false);
+    }
+    if subtype == Some(b"Image") {
+        if matches!(stream.dict.get(b"Interpolate"), Some(Object::Bool(true))) {
+            issue("6.2.8", "An image asks to be interpolated", None, None, true);
+        }
+        if stream.dict.get(b"Alternates").is_some() || stream.dict.get(b"OPI").is_some() {
+            issue("6.2.8", "An image has alternates or OPI information", None, None, true);
+        }
+    }
+    if subtype == Some(b"PS") {
+        issue("6.2.9", "PostScript XObjects aren't allowed", None, None, false);
+    }
+}
+
+fn check_embedded_file(level: Level, dict: &Dict, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
+    match level {
+        Level::A2b => issue("6.8", "Embedded files must be PDF/A files themselves (use PDF/A-3 for others)", None, None, false),
+        Level::A3b if dict.get(b"AFRelationship").is_none() => {
+            issue("6.8", "An embedded file has no AFRelationship", None, None, true);
+        }
+        Level::A3b => {}
+    }
 }
 
 fn check_font(doc: &Document, d: &Dict, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
@@ -527,10 +721,62 @@ fn is_action(d: &Dict) -> bool {
     }
 }
 
-/// Whether `o` is (or refers to) a forbidden action, or to nothing.
+/// How many actions one action and the `/Next` actions written inside it may hold before the
+/// whole chain counts as forbidden, since it can't be checked.
+const MAX_ACTION_CHAIN: usize = 1024;
+
+/// The first forbidden action type in the action `a` or in the actions written directly in its
+/// `/Next` (ISO 32000-2 12.6.2: a dictionary or an array of them, which may be an object of its
+/// own). An action `/Next` refers to is an object of its own, checked and removed as one.
+fn chain_forbidden(doc: &Document, a: &Dict) -> Option<String> {
+    let mut read = 0;
+    let mut seen = std::collections::HashSet::new();
+    // Actions written in an indirect `/Next` array, copied out of it.
+    let mut held: Vec<Dict> = Vec::new();
+    if let Some(s) = walk_chain(doc, a, &mut read, &mut seen, &mut held) {
+        return Some(s);
+    }
+    while let Some(d) = held.pop() {
+        if let Some(s) = walk_chain(doc, &d, &mut read, &mut seen, &mut held) {
+            return Some(s);
+        }
+    }
+    None
+}
+
+/// [`chain_forbidden`] for the actions reachable from `a` through direct `/Next` entries. The
+/// actions of each indirect `/Next` array (each read once) go to `held`.
+fn walk_chain(doc: &Document, a: &Dict, read: &mut usize, seen: &mut std::collections::HashSet<ObjRef>, held: &mut Vec<Dict>) -> Option<String> {
+    let mut stack = vec![a];
+    while let Some(d) = stack.pop() {
+        *read += 1;
+        if *read > MAX_ACTION_CHAIN {
+            return Some("too deeply chained".into());
+        }
+        if let Some(s) = d.name(b"S")
+            && FORBIDDEN_ACTIONS.contains(&s)
+        {
+            return Some(String::from_utf8_lossy(s).into_owned());
+        }
+        match d.get(b"Next") {
+            Some(Object::Dict(next)) => stack.push(next),
+            Some(Object::Array(list)) => stack.extend(list.iter().filter_map(Object::as_dict)),
+            Some(Object::Ref(r)) if seen.insert(*r) => {
+                if let Object::Array(list) = &*doc.get(*r) {
+                    // More than the chain limit can't be read anyway.
+                    held.extend(list.iter().filter_map(Object::as_dict).take(MAX_ACTION_CHAIN).cloned());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Whether `o` is (or refers to) a forbidden action or one chaining to it, or to nothing.
 fn forbidden(doc: &Document, o: &Object) -> bool {
     match &*doc.resolve(o) {
-        Object::Dict(a) => a.name(b"S").is_some_and(|s| FORBIDDEN_ACTIONS.contains(&s)),
+        Object::Dict(a) => chain_forbidden(doc, a).is_some(),
         Object::Null => true,
         _ => false,
     }
@@ -676,13 +922,19 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
             files += 1;
         }
     }
-    // Forbidden actions left as objects of their own (nothing refers to them any more).
+    // Forbidden actions left as objects of their own, or chained to by one, and those written
+    // directly in an /A elsewhere (an outline item's, say).
     for (r, o) in objects(doc) {
-        if let Object::Dict(d) = &*o
-            && d.name(b"S").is_some_and(|s| FORBIDDEN_ACTIONS.contains(&s))
-            && is_action(d)
-        {
+        let Object::Dict(d) = &*o else { continue };
+        if d.get(b"S").is_some() && is_action(d) && chain_forbidden(doc, d).is_some() {
             doc.set(r, Object::Null);
+            actions += 1;
+        } else if let Some(Object::Dict(a)) = d.get(b"A")
+            && chain_forbidden(doc, a).is_some()
+        {
+            let mut nd = d.clone();
+            nd.remove(b"A");
+            doc.set(r, Object::Dict(nd));
             actions += 1;
         }
     }

@@ -1,8 +1,10 @@
 //! PDF Optimizer ▸ Audit space usage: how many bytes each kind of content takes.
 //!
-//! Every object is sized as it would be written (dictionary plus stream data) and put in the
-//! first category that reaches it; what remains (the catalog, page tree, info, metadata,
-//! cross-reference data and anything unreachable) is document overhead.
+//! Every object is sized as it would be written (dictionary plus stream data). Resources go by
+//! kind first, wherever they are used: a font or image a form field or comment draws with is
+//! still a font or image. Every other object goes to the first category that reaches it; what
+//! remains (the catalog, page tree, info, metadata, cross-reference data and anything
+//! unreachable) is document overhead.
 
 use std::collections::{HashMap, HashSet};
 
@@ -80,6 +82,11 @@ pub struct SpaceUse {
     pub percent: f64,
 }
 
+/// How deep form XObjects nested in each other's resources are sorted by kind. Deeper forms
+/// (and what they use) are still counted, as X Object Forms; the limit keeps a crafted chain
+/// of nested forms from overflowing the stack.
+const MAX_FORM_DEPTH: usize = 64;
+
 struct Audit<'a> {
     doc: &'a Document,
     owner: HashMap<u32, SpaceCategory>,
@@ -116,24 +123,22 @@ impl Audit<'_> {
         o.map(|x| self.doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default()
     }
 
-    /// A page's resources, by kind.
-    fn resources(&mut self, res: &Dict) {
+    /// A resource dictionary, by kind; `depth` counts the form XObjects it is nested in.
+    fn resources(&mut self, res: &Dict, depth: usize) {
         let xobjects = self.resolve_dict(res.get(b"XObject"));
         for (_, x) in xobjects.iter() {
             let Some(r) = x.as_ref() else { continue };
-            let is_image = matches!(&*self.doc.get(r), Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image"));
-            if is_image {
-                self.claim(x, SpaceCategory::Images);
-            } else {
-                // A form: its own resources first, by kind, then the form itself.
-                if let Object::Stream(s) = &*self.doc.get(r) {
+            match &*self.doc.get(r) {
+                Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image") => self.claim(x, SpaceCategory::Images),
+                Object::Stream(s) if depth < MAX_FORM_DEPTH && !self.owner.contains_key(&r.num) => {
+                    // A form: its own resources first, by kind, then the rest of it. Owning it
+                    // first stops a form that draws itself.
+                    self.owner.insert(r.num, SpaceCategory::XObjectForms);
                     let inner = self.resolve_dict(s.dict.get(b"Resources"));
-                    if let std::collections::hash_map::Entry::Vacant(e) = self.owner.entry(r.num) {
-                        e.insert(SpaceCategory::XObjectForms);
-                        self.resources(&inner);
-                    }
+                    self.resources(&inner, depth + 1);
+                    self.claim(&Object::Dict(s.dict.clone()), SpaceCategory::XObjectForms);
                 }
-                self.claim(x, SpaceCategory::XObjectForms);
+                _ => self.claim(x, SpaceCategory::XObjectForms),
             }
         }
         for (key, cat) in [
@@ -148,6 +153,40 @@ impl Audit<'_> {
             }
         }
     }
+
+    /// The resources an annotation's appearances draw with, by kind. Each of /N, /R and /D is
+    /// one appearance stream or a dictionary of them, one per state.
+    fn appearance_resources(&mut self, annot: &Object) {
+        let ap = self.resolve_dict(self.resolve_dict(Some(annot)).get(b"AP"));
+        for (_, v) in ap.iter() {
+            let streams = match &*self.doc.resolve(v) {
+                Object::Stream(s) => vec![s.dict.clone()],
+                Object::Dict(states) => states
+                    .iter()
+                    .filter_map(|(_, s)| match &*self.doc.resolve(s) {
+                        Object::Stream(s) => Some(s.dict.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            for dict in streams {
+                let res = self.resolve_dict(dict.get(b"Resources"));
+                self.resources(&res, 1);
+            }
+        }
+    }
+}
+
+/// A page's annotations.
+fn annotations(doc: &Document, page: &Dict) -> Vec<Object> {
+    page.get(b"Annots").and_then(|a| doc.resolve(a).as_array().cloned()).unwrap_or_default()
+}
+
+/// Form fields' widgets belong to the form; every other annotation is a comment.
+fn annotation_category(doc: &Document, annot: &Object) -> SpaceCategory {
+    let widget = annot.as_ref().is_some_and(|r| doc.get(r).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Widget")));
+    if widget { SpaceCategory::Forms } else { SpaceCategory::Comments }
 }
 
 fn size(doc: &Document, num: u32) -> u64 {
@@ -164,16 +203,27 @@ pub fn audit_space(doc: &Document, file_len: u64) -> Vec<SpaceUse> {
     let mut a = Audit { doc, owner: HashMap::new() };
     let cat = doc.root().and_then(|r| doc.get(r).as_dict().cloned()).unwrap_or_default();
     let pages = pdfcraft_model::pages(doc);
-    // Order matters: the most specific owners first.
+    // Order matters: the most specific owners first. Resources by kind before anything that
+    // uses them: a content stream's dictionary may point at what it draws (PdfCraft's /PCAdded
+    // records an added image), and form fields and comments draw with fonts and images too.
+    for p in &pages {
+        let res = a.resolve_dict(p.dict.get(b"Resources"));
+        a.resources(&res, 0);
+    }
+    let form = a.resolve_dict(cat.get(b"AcroForm"));
+    let form_resources = a.resolve_dict(form.get(b"DR"));
+    a.resources(&form_resources, 0);
+    for p in &pages {
+        for x in annotations(doc, &p.dict) {
+            a.appearance_resources(&x);
+        }
+    }
     if let Some(s) = cat.get(b"StructTreeRoot") {
         // Structure elements point at pages and annotations; those stay out (claim skips pages,
-        // and annotations are claimed first below).
+        // and annotations are claimed first).
         for p in &pages {
-            if let Some(annots) = p.dict.get(b"Annots") {
-                for x in doc.resolve(annots).as_array().cloned().unwrap_or_default() {
-                    let widget = x.as_ref().and_then(|r| doc.get(r).as_dict().map(|d| d.name(b"Subtype") == Some(b"Widget"))).unwrap_or(false);
-                    a.claim(&x, if widget { SpaceCategory::Forms } else { SpaceCategory::Comments });
-                }
+            for x in annotations(doc, &p.dict) {
+                a.claim(&x, annotation_category(doc, &x));
             }
         }
         a.claim(s, SpaceCategory::StructureInfo);
@@ -182,16 +232,9 @@ pub fn audit_space(doc: &Document, file_len: u64) -> Vec<SpaceUse> {
         a.claim(f, SpaceCategory::Forms);
     }
     for p in &pages {
-        if let Some(annots) = p.dict.get(b"Annots") {
-            for x in doc.resolve(annots).as_array().cloned().unwrap_or_default() {
-                let widget = x.as_ref().and_then(|r| doc.get(r).as_dict().map(|d| d.name(b"Subtype") == Some(b"Widget"))).unwrap_or(false);
-                a.claim(&x, if widget { SpaceCategory::Forms } else { SpaceCategory::Comments });
-            }
+        for x in annotations(doc, &p.dict) {
+            a.claim(&x, annotation_category(doc, &x));
         }
-        // Resources before the content: a content stream's dictionary may point at what it
-        // draws (PdfCraft's /PCAdded records an added image), which stays an image or font.
-        let res = a.resolve_dict(p.dict.get(b"Resources"));
-        a.resources(&res);
         if let Some(c) = p.dict.get(b"Contents") {
             a.claim(c, SpaceCategory::ContentStreams);
         }
