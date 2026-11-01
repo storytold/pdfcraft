@@ -37,6 +37,9 @@ const MAX_LAYERS: usize = 32;
 const MAX_OUTPUT: usize = 64 << 20;
 const MIN_OUTPUT: usize = 1 << 20;
 const GROWTH: usize = 4;
+/// Longest SOM expression evaluated, in bytes. Designer writes some tens of bytes
+/// (`$template.#subform.designer__stylesheet.Heading[1]`); a longer one names nothing.
+const MAX_SOM: usize = 1_024;
 /// Most elements looked at to resolve all SOM references together.
 const MAX_SEARCH: usize = 2_000_000;
 /// Most children, attributes and namespaces looked at to merge all the layers together. Each
@@ -67,6 +70,7 @@ pub(crate) fn expand(template: Node) -> (Option<String>, Vec<String>) {
         limit,
         failed: None,
         ids: None,
+        refs: HashMap::new(),
         soms: HashMap::new(),
         search: MAX_SEARCH,
         work: MAX_WORK,
@@ -111,6 +115,9 @@ struct Writer<'a, 'd> {
     failed: Option<String>,
     /// The template's elements by `id`, built on the first `#id` reference.
     ids: Option<HashMap<&'a str, Node<'a, 'd>>>,
+    /// The prototype each element names, once resolved: a prototype shared by many elements
+    /// is reached again from each of them, and its reference (of any length) is read once.
+    refs: HashMap<NodeId, Option<Node<'a, 'd>>>,
     /// SOM references already resolved, by their text.
     soms: HashMap<&'a str, Option<Node<'a, 'd>>>,
     /// Elements left to look at for SOM references.
@@ -158,6 +165,18 @@ fn alternative(tag: &str, c: &Node) -> bool {
 impl<'a, 'd> Writer<'a, 'd> {
     /// The element `n` names as its prototype. `usehref` wins over `use` when both are set.
     fn reference(&mut self, n: Node<'a, 'd>) -> Option<Node<'a, 'd>> {
+        if let Some(found) = self.refs.get(&n.id()) {
+            return *found;
+        }
+        let found = self.find_reference(n);
+        // A look-up a budget cut short is not kept: expanding has failed.
+        if self.failed.is_none() {
+            self.refs.insert(n.id(), found);
+        }
+        found
+    }
+
+    fn find_reference(&mut self, n: Node<'a, 'd>) -> Option<Node<'a, 'd>> {
         let set = |name: &str| n.attribute(name).map(str::trim).filter(|v| !v.is_empty());
         let found = if let Some(href) = set("usehref") {
             match href.split_once('#') {
@@ -212,6 +231,9 @@ impl<'a, 'd> Writer<'a, 'd> {
 
     /// A SOM expression from the template down, such as `$template.#subform.styles.Heading[1]`.
     fn som(&mut self, expr: &'a str) -> Option<Node<'a, 'd>> {
+        if expr.len() > MAX_SOM {
+            return None;
+        }
         if let Some(found) = self.soms.get(expr) {
             return *found;
         }

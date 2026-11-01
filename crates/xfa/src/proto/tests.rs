@@ -315,3 +315,87 @@ fn inherited_attributes_keep_their_namespace_where_the_prefix_is_bound_again() {
     assert_eq!(f.attribute(("http://www.w3.org/XML/1998/namespace", "lang")), Some("en"), "{out}");
     assert_eq!(f.attribute("w"), Some("1in"), "{out}");
 }
+
+/// `expand` on the template of `xml`, timed.
+fn expand_timed(xml: &str) -> (Option<String>, Vec<String>, std::time::Duration) {
+    let doc = roxmltree::Document::parse(xml).unwrap();
+    let template = doc.descendants().find(|n| n.tag_name().name() == "template").unwrap();
+    let started = std::time::Instant::now();
+    let (out, warnings) = crate::proto::expand(template);
+    (out, warnings, started.elapsed())
+}
+
+#[test]
+fn billion_laughs_prototypes_fail_whole_within_the_output_cap() {
+    // Ten levels of prototypes, each holding ten references to the level below: a template of
+    // under 3 kB that would write 10^10 fields. Expanding fails as a whole, quickly, and
+    // nothing of it is used (no truncated template): the form is read as written.
+    let mut styles = String::from(r#"<subform id="L10"><field w="1mm"/></subform>"#);
+    for level in (1..10).rev() {
+        let refs = format!(r##"<subform use="#L{}"/>"##, level + 1).repeat(10);
+        styles.push_str(&format!(r#"<subform id="L{level}">{refs}</subform>"#));
+    }
+    let xml = form(&styles, r##"<subform name="bomb" use="#L1"/><field name="plain" w="1in"/>"##);
+    assert!(xml.len() < 3_000, "{}", xml.len());
+    let (out, warnings, took) = expand_timed(&xml);
+    assert!(took.as_secs() < 5, "{took:?}");
+    assert!(out.is_none(), "a failed expansion writes nothing for the parser to read");
+    assert!(warnings.iter().any(|w| w.contains("larger than 1 MB") && w.contains("read without resolving")), "{warnings:?}");
+    let (t, _) = parse(&xml).unwrap();
+    let Some(Node::Subform(bomb)) = nodes(&t).first() else { panic!() };
+    assert!(bomb.children.is_empty(), "read as written: {bomb:?}");
+    assert!(close(field(&t, "plain").common.w, 72.0));
+}
+
+#[test]
+fn a_designer_style_sheet_on_a_long_form_resolves_in_full() {
+    // 3,000 fields and draws on Designer's style sheet, each through `#som(…)`: well inside
+    // every budget, so all of them take their style and nothing is warned about.
+    let styles: String = (0..40).map(|i| format!(r#"<field name="S{i}" h="{}mm"><font typeface="Arial" size="9pt"/></field>"#, i + 1)).collect();
+    let body: String = (0..3_000)
+        .map(|i| format!(r##"<field name="f{i}" w="20mm" usehref=".#som($template.#subform.designer__stylesheet.S{})"/>"##, i % 40))
+        .collect();
+    let xml = form(&styles, &body);
+    let (out, warnings, took) = expand_timed(&xml);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(out.is_some() && took.as_secs() < 5, "{took:?}");
+    let (t, warnings) = parse(&xml).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    for i in [0usize, 39, 1_234, 2_999] {
+        let f = field(&t, &format!("f{i}"));
+        assert!(close(f.common.h, (i % 40 + 1) as f64 * MM), "f{i}: {:?}", f.common);
+        assert_eq!(f.common.font.size, Some(9.0), "f{i}");
+    }
+}
+
+#[test]
+fn a_long_reference_shared_by_many_elements_is_resolved_once() {
+    // One prototype whose own reference is a 1 MB `use` id, used by 60,000 fields: the output
+    // stays small, so only reading that reference again for every field (60 GB of text) could
+    // make this slow. A reference is resolved once per element.
+    let long = "x".repeat(1 << 20);
+    let styles = format!(r#"<field id="P" w="1mm" use="{long}"/><field id="{long}" h="2mm"/>"#);
+    let body = r##"<field use="#P"/>"##.repeat(60_000).replacen("<field ", r#"<field name="first" "#, 1);
+    let xml = form(&styles, &body);
+    let (out, warnings, took) = expand_timed(&xml);
+    assert!(took.as_secs() < 3, "{took:?}");
+    assert!(out.is_some(), "{warnings:?}");
+    let (t, _) = parse(&xml).unwrap();
+    let first = field(&t, "first");
+    assert!(close(first.common.w, MM) && close(first.common.h, 2.0 * MM), "{:?}", first.common);
+}
+
+#[test]
+fn a_som_expression_past_its_length_limit_is_not_followed() {
+    // A SOM expression longer than any Designer writes is not evaluated: it is warned about as
+    // a reference naming nothing, and the rest of the template resolves.
+    let padded = format!("$template.{}#subform.designer__stylesheet.Q", " ".repeat(5_000));
+    let styles = r#"<field name="Q" h="2mm"/>"#;
+    let body = format!(
+        r##"<field name="long" w="1in" usehref="#som({padded})"/><field name="short" w="1in" usehref="#som($template.#subform.designer__stylesheet.Q)"/>"##
+    );
+    let (t, warnings) = parse(&form(styles, &body)).unwrap();
+    assert!(warnings.iter().any(|w| w.contains("names nothing")), "{warnings:?}");
+    assert_eq!(field(&t, "long").common.h, None);
+    assert!(close(field(&t, "short").common.h, 2.0 * MM));
+}
