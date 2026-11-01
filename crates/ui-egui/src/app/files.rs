@@ -428,7 +428,7 @@ impl PdfCraftApp {
         };
         match self.schedule_open(request) {
             Ok(_) => self.notify_fmt("Loading {name}…", &[("name", &name)]),
-            Err(e) => self.notify_fmt("Couldn't open {name}: {reason}", &[("name", &name), ("reason", &e)]),
+            Err(e) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &e)]),
         }
     }
 
