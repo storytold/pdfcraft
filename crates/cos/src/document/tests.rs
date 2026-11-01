@@ -1,3 +1,4 @@
+use super::reader::may_be_object_stream;
 use super::*;
 
 /// /DecodeParms given by reference, whole, as array entries or as the numbers inside, are read
@@ -1392,6 +1393,81 @@ fn a_prev_reference_to_an_object_holding_the_offset_reads_that_offset() {
 /// cross-reference data, as in #2365), is rebuilt from its object headers. The rebuild used
 /// to look only for the `trailer` keyword, so /Info and /ID were lost, and a full save after
 /// editing one Info field dropped every other.
+/// Whether parsing `body` as an object gives a stream whose /Type is /ObjStm.
+fn parses_as_object_stream(file: &[u8]) -> bool {
+    matches!(parse_indirect(file, 0, &|_| None), Ok((_, Object::Stream(s))) if s.dict.name(b"Type") == Some(b"ObjStm"))
+}
+
+#[test]
+fn the_object_stream_pre_check_never_rejects_what_parses_as_one() {
+    // Two inputs from review: header-shaped text, and `>>` + `stream` + newline, inside a
+    // string that comes before the /Type.
+    for dict in [
+        "<< /Note (9 0 obj\n) /Type /ObjStm /N 0 /First 0 >>",
+        "<< /Note (>>stream\n) /Type /ObjStm /N 0 /First 0 >>",
+        "<< /Note (a (nested\n9 0 obj\nstream) \\) )) /Type /ObjStm >>",
+        "<< /Note <3e3e> /Other << /A (>>\nstream\n) >> /Type /ObjStm >>",
+    ] {
+        let file = format!("1 0 obj\n{dict}\nstream\nxx\nendstream\nendobj\n").into_bytes();
+        assert!(parses_as_object_stream(&file), "test input must be an object stream: {dict}");
+        assert!(may_be_object_stream(&file, 7), "{dict}");
+    }
+    // Ordinary streams stay out; their data is never read.
+    let plain = b"1 0 obj\n<< /Length 9 >>\nstream\nObjStm # \nendstream\nendobj\n";
+    assert!(!may_be_object_stream(plain, 7));
+    assert!(!may_be_object_stream(b"1 0 obj\n[ /ObjStm ]\nendobj\n", 7));
+    // Unterminated: not certain, so a candidate.
+    assert!(may_be_object_stream(b"1 0 obj\n<< /Note (open ", 7));
+    // Random dictionaries built from tricky pieces: whatever parses as an object stream is
+    // a candidate.
+    let pieces: [&str; 22] = [
+        "/Type /ObjStm",
+        "/Type/ObjStm",
+        "/Type /Obj#53tm",
+        "/T#79pe /ObjStm",
+        "(",
+        ")",
+        "\\",
+        "(>>stream\n)",
+        "(9 0 obj\n)",
+        "<3e3e>",
+        "<",
+        ">",
+        ">>",
+        "<<",
+        "[",
+        "]",
+        "% c\n",
+        "% >>\n",
+        "/N 0",
+        " ",
+        "\n",
+        "<zz>",
+    ];
+    let mut seed = 0x2545_F491_4F6C_DD1Du64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    let mut hits = 0;
+    for _ in 0..200_000 {
+        let mut dict = String::from("<<");
+        for _ in 0..(next() % 9) {
+            dict.push_str(pieces[(next() % pieces.len() as u64) as usize]);
+            dict.push(' ');
+        }
+        dict.push_str(if next() % 8 == 0 { "" } else { ">>" });
+        let file = format!("1 0 obj\n{dict}\nstream\nxx\nendstream\nendobj\n").into_bytes();
+        if parses_as_object_stream(&file) {
+            hits += 1;
+            assert!(may_be_object_stream(&file, 7), "rejected an object stream: {dict:?}");
+        }
+    }
+    assert!(hits > 1000, "the generator must produce object streams ({hits})");
+}
+
 #[test]
 fn reconstruction_takes_the_trailer_from_a_cross_reference_stream() {
     let table = build(
