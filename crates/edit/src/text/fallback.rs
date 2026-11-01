@@ -1,4 +1,4 @@
-use super::interp::Ts;
+use super::interp::{Shown, Ts};
 use super::lines::page_dict;
 use super::{
     CraftFont, Dict, Document, EditError, GlyphError, HashMap, Metrics, Object, Op, PdfString, Stream, TextLine, japanese_glyph_from, parse,
@@ -126,6 +126,23 @@ fn fonts_shown(doc: &Document, page: &Dict, resources: &Dict) -> Option<std::col
         }
     }
     Some(shown)
+}
+
+/// Whether run `s` may continue `line` font-wise: the same font, or both inside the `/PCEdLine`
+/// sequence of a replacement that set the words its font can't show in a substitute (#2378),
+/// which reads back as the one line it replaced, so the next edit replaces all of it.
+pub(super) fn continues_font(line: &TextLine, s: &Shown) -> bool {
+    same_font(line, &s.font, &s.base_font, s.face.as_deref()) || (s.edited.is_some() && line.edited == s.edited)
+}
+
+/// A line that began with a substitute run takes the source font of a later run, so the next
+/// replacement starts from the line's own font again.
+pub(super) fn adopt_source_font(line: &mut TextLine, s: &Shown) {
+    if line.edited.is_some() && line.font.starts_with("PCEd") && !s.font.starts_with(b"PCEd") {
+        line.font = String::from_utf8_lossy(&s.font).into_owned();
+        line.base_font = s.base_font.clone();
+        line.face = s.face.clone();
+    }
 }
 
 /// Whether a run shown in `font` (a resource name), with `/BaseFont` `base_font` and the Japanese
@@ -598,4 +615,28 @@ pub(crate) fn source_show(metrics: &Metrics, text: &str, size: f64, space: f64, 
         }
     }
     Ok(out)
+}
+
+/// `text` split into runs of words `metrics` can show (`true`) and words it can't (`false`), in
+/// order. A word is shown in one font, so a word with any character the font lacks goes to the
+/// substitute whole rather than switching fonts letter by letter. Spaces join the run they are
+/// in, since [`source_show`] draws spaces the font lacks with a displacement.
+pub(super) fn source_runs(metrics: &Metrics, text: &str) -> Vec<(bool, String)> {
+    let mut runs: Vec<(bool, String)> = Vec::new();
+    // Spaces before the first word go with it: on their own they would make a run of the line's
+    // font with nothing to show (review on #2955).
+    let mut lead = String::new();
+    for (i, word) in text.split(' ').enumerate() {
+        let piece = if i == 0 { word.to_string() } else { format!(" {word}") };
+        if runs.is_empty() && word.is_empty() {
+            lead.push_str(&piece);
+            continue;
+        }
+        let own = word.is_empty() || metrics.encode(word).is_some();
+        match runs.last_mut() {
+            Some((last, run)) if *last == own || word.is_empty() => run.push_str(&piece),
+            _ => runs.push((own, std::mem::take(&mut lead) + &piece)),
+        }
+    }
+    runs
 }
