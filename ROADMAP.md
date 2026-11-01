@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-01 · **Change:** patch (M7: supported Arabic core source-edit batch passes scoped local qualification; UI/input qualification remains open; estimates unchanged)
+
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: integrate main fa5f9f8c; retain CJK viewer and upstream raster regressions, restore explicit display_config imports; estimates unchanged)
 > **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** patch (M2, PR #4172: integrate main 5af10276; retain both roadmap histories and viewer-only CJK font policy; estimates unchanged)
@@ -212,6 +214,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-01 (M7, Arabic source-editing sprint):** Source-space metrics and uniform span completion prevent Latin → Arabic → Latin drift; tracking stays between complete clusters, with leading-mark origins and empty Unicode auxiliaries preserved. Focused controls and correction-only revert proofs pass. Local qualification: 945 native tests passed (1 existing corpus ignore), engine 20 passed (2 existing private-input ignores), four-package all-target Clippy with `-D warnings`, four-package WASM (5 unchanged renderer configuration warnings), formatting, layers and assets pass. Rebuilt CLI: 34 steps, 8 exact Unicode states and 5 strict PNG pairs, including incremental save, reopen, search/history and visual inspection. A local-only Boa optimization override carries no JavaScript performance claim. Local core checkpoint; no feature push or PR. Next: bounded UI/input qualification; overall RTL support remains partial and estimates unchanged.
 
 - **2026-10-31 (M7, Arabic source-font editing increment):** Contextual edits choose one validated complete embedded source resource before character resolution, including repeated edits after reopen. Engine acceptance covers preview/apply, exact text, font reuse, undo/redo, incremental save and unknown page data; a bundled-font unit regression keeps the core path exercised without optional Arabic inputs. A leading-mark position-drift regression remains explicitly unresolved. See `docs/arabic-editor-milestone.md`; no readiness/estimate change.
 

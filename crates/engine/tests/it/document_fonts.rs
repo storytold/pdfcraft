@@ -180,6 +180,13 @@ fn complete_arabic_source_edit_history_and_incremental_reopen_keep_unicode_and_p
             "{case}: preview {draft_rect:?}, applied {applied_rect:?}"
         );
         let edited_pixels = arabic_edit_state(&session, id, replacement, &font);
+        let original_geometry = session
+            .get(id)
+            .unwrap()
+            .text_lines(0)
+            .into_iter()
+            .map(|line| (line.font.clone(), line.size, line.baseline(), line.rect))
+            .collect::<Vec<_>>();
         assert!(edited_pixels != original_pixels, "{case}: editing changes the page");
         session.undo(id).unwrap();
         assert_eq!(arabic_edit_state(&session, id, "سسس", &font), original_pixels);
@@ -200,6 +207,19 @@ fn complete_arabic_source_edit_history_and_incremental_reopen_keep_unicode_and_p
         arabic_edit_state(&session, reopened, &inserted, &font);
         session.apply(reopened, Edit::EditTextBlock { page: 0, block: 0, text: replacement.into(), style }).unwrap();
         let deleted_pixels = arabic_edit_state(&session, reopened, replacement, &font);
+        let deleted_geometry = session
+            .get(reopened)
+            .unwrap()
+            .text_lines(0)
+            .into_iter()
+            .map(|line| (line.font.clone(), line.size, line.baseline(), line.rect))
+            .collect::<Vec<_>>();
+        if deleted_pixels != edited_pixels
+            && let Some(dir) = &artifact_dir
+        {
+            std::fs::write(dir.join(format!("deleted-{case}.pdf")), session.save_bytes(reopened).unwrap().as_slice()).unwrap();
+        }
+        assert!(deleted_pixels == edited_pixels, "{case}: original {original_geometry:?}; deleted {deleted_geometry:?}");
         session.undo(reopened).unwrap();
         arabic_edit_state(&session, reopened, &inserted, &font);
         session.redo(reopened).unwrap();
@@ -237,22 +257,96 @@ fn unsupported_mixed_style_arabic_edit_preserves_source_and_history() {
 }
 
 #[test]
-#[ignore = "known leading-mark rise/anchor drift across repeated rewrites; coordinate #3465"]
 fn leading_arabic_marks_retain_position_when_an_inserted_suffix_is_deleted() {
     let Some((font, _)) = complete_arabic_source() else { return };
-    let mut session = Session::new();
-    let id = session.open("source.pdf", None, document(), None).unwrap();
-    // Explicit registration bypasses source completion, isolating the pre-existing
-    // layout issue from the font-selection changes in this contribution.
-    session.apply(id, Edit::RegisterTextFont { page: 0, bytes: Arc::new(font.clone()) }).unwrap();
-    let resource = session.get(id).unwrap().text_editor_fonts(0).into_iter().find(|face| face.bytes == font).unwrap().resource;
-    let style = BlockStyle { resource: Some(resource), size: Some(16.0), width: Some(240.0), ..Default::default() };
-    session.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: "سَسَ".into(), style: style.clone() }).unwrap();
-    let before = arabic_edit_state(&session, id, "سَسَ", &font);
-    let position = session.get(id).unwrap().text_lines(0)[0].baseline();
-    session.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: "سَسَ س".into(), style: style.clone() }).unwrap();
-    session.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: "سَسَ".into(), style }).unwrap();
-    let after = arabic_edit_state(&session, id, "سَسَ", &font);
-    let next_position = session.get(id).unwrap().text_lines(0)[0].baseline();
-    assert!(before == after, "same logical text must keep its page position; before {position:?}, after {next_position:?}");
+    for logical in ["سَسَ", "السَّلَامُ عَلَيْكُمْ", "مرحباً بكم في جنيف", "لا لأ لإ لآ سلام", "سَلَام 123", "مرحبا Bonjour Genève Hello PDF", "المبلغ ١٢٣٫٤٥ و 123.45"]
+    {
+        for rise in [0.0, 5.0, -4.0] {
+            let mut source = Document::open(document()).unwrap();
+            let content = format!("BT /F1 18 Tf 30 160 Td {rise} Ts (Source) Tj ET");
+            let stream = source.add(Object::Stream(Stream::flate(Dict::new(), content.as_bytes())));
+            let page = pdfcraft_model::pages(&source)[0].obj;
+            source
+                .update_dict(page, |page| {
+                    page.set(b"Contents".to_vec(), Object::Ref(stream));
+                    page.set(b"MediaBox".to_vec(), Object::Array([0, 0, 600, 240].map(Object::Int).to_vec()));
+                })
+                .unwrap();
+            let mut session = Session::new();
+            let mut id =
+                session.open("source.pdf", None, Arc::new(pdfcraft_cos::write_full(&source, &SaveOptions::default()).unwrap()), None).unwrap();
+            // Explicit registration isolates positioning from source-font completion.
+            session.apply(id, Edit::RegisterTextFont { page: 0, bytes: Arc::new(font.clone()) }).unwrap();
+            let resource = session.get(id).unwrap().text_editor_fonts(0).into_iter().find(|face| face.bytes == font).unwrap().resource;
+            let style = BlockStyle { resource: Some(resource), size: Some(16.0), width: Some(540.0), ..Default::default() };
+            session.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: logical.into(), style: style.clone() }).unwrap();
+            let before = arabic_edit_state(&session, id, logical, &font);
+            let position = session.get(id).unwrap().text_lines(0)[0].baseline();
+            assert!((position[1] - (160.0 + rise)).abs() < 0.01, "{logical:?}, rise {rise}: {position:?}");
+            for suffix in [" س", " 123", " Hello"] {
+                let inserted = format!("{logical}{suffix}");
+                session.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: inserted.clone(), style: style.clone() }).unwrap();
+                arabic_edit_state(&session, id, &inserted, &font);
+                session.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: logical.into(), style: style.clone() }).unwrap();
+                let after = arabic_edit_state(&session, id, logical, &font);
+                let next_position = session.get(id).unwrap().text_lines(0)[0].baseline();
+                assert!(before == after, "{logical:?}, rise {rise}: before {position:?}, after {next_position:?}");
+                session.undo(id).unwrap();
+                arabic_edit_state(&session, id, &inserted, &font);
+                session.redo(id).unwrap();
+                assert!(arabic_edit_state(&session, id, logical, &font) == before);
+                let saved = session.save_bytes(id).unwrap();
+                let reopened = session.open("reopened.pdf", None, saved, None).unwrap();
+                assert!(arabic_edit_state(&session, reopened, logical, &font) == before);
+                session.close(id);
+                id = reopened;
+            }
+        }
+    }
+}
+
+#[test]
+fn source_glyph_unicode_without_actual_text_preserves_arabic_word_copy() {
+    let Some((font, seed)) = complete_arabic_source() else { return };
+    for logical in ["اللغة العربية جميلة", "مرحباً بكم في جنيف", "السَّلَامُ عَلَيْكُمْ"] {
+        let mut doc = Document::open(seed.clone()).unwrap();
+        let shaped = pdfcraft_fonts::source_shaping::shape(&font, logical).unwrap();
+        let mut fonts = Dict::new();
+        let (_, postscript) = pdfcraft_fonts::embedding::names(&font).unwrap();
+        let mappings = shaped.pdf_mappings(&font).unwrap();
+        let resource = pdfcraft_fonts::embedding::embed_mapping(&mut doc, &mut fonts, &font, &postscript, &mappings).unwrap();
+        let mut content = format!("BT /{resource} 16 Tf\n");
+        for (i, glyph) in shaped.glyphs.iter().enumerate() {
+            content.push_str(&format!("1 0 0 1 {} {} Tm <{:04X}> Tj\n", 30.0 + 16.0 * glyph.position[0], 160.0 + 16.0 * glyph.position[1], i + 1));
+        }
+        content.push_str("ET");
+        let contents = doc.add(Object::Stream(Stream::flate(Dict::new(), content.as_bytes())));
+        let page = pdfcraft_model::pages(&doc)[0].obj;
+        doc.update_dict(page, |page| {
+            let mut resources = Dict::new();
+            resources.set(b"Font".to_vec(), Object::Dict(fonts));
+            page.set(b"Resources".to_vec(), Object::Dict(resources));
+            page.set(b"Contents".to_vec(), Object::Ref(contents));
+        })
+        .unwrap();
+        let initial = Arc::new(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap());
+        let mut session = Session::new();
+        let id = session.open("mapped-source.pdf", None, initial.clone(), None).unwrap();
+        let original = arabic_edit_state(&session, id, logical, &font);
+        let mut renderer = PageRenderer::new(initial.clone(), Default::default());
+        let text = renderer.filtered_text(0, Default::default()).unwrap();
+        for word in logical.split_whitespace() {
+            let matches = text.find(word);
+            assert!(!matches.is_empty(), "{word}");
+            for range in matches {
+                assert_eq!(text.text_of(range.clone()), word);
+                let (start, last) = text.word_at(range.start).unwrap();
+                assert_eq!(text.text_of(start..last + 1), word);
+            }
+        }
+        let reopened = Document::open(initial).unwrap();
+        let saved = Arc::new(pdfcraft_cos::write_full(&reopened, &SaveOptions::default()).unwrap());
+        let next = session.open("reserialized.pdf", None, saved, None).unwrap();
+        assert!(arabic_edit_state(&session, next, logical, &font) == original);
+    }
 }

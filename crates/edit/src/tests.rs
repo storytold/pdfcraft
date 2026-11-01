@@ -5225,6 +5225,79 @@ fn arabic_actual_text_keeps_typing_order_when_opened_for_editing() {
 }
 
 #[test]
+fn empty_unicode_auxiliaries_do_not_invent_word_spaces() {
+    for auxiliary_x in [54.0, 37.0] {
+        let mut doc =
+            text_page(&format!("BT /F1 12 Tf 1 0 0 1 40 700 Tm (A) Tj 1 0 0 1 {auxiliary_x} 700 Tm (B) Tj 1 0 0 1 48.004 700 Tm (C) Tj ET"));
+        let cmap = doc.add(Object::Stream(Stream::flate(
+            Dict::new(),
+            b"begincmap 1 begincodespacerange <00> <FF> endcodespacerange 3 beginbfchar <41> <0061> <42> <> <43> <0062> endbfchar endcmap",
+        )));
+        // text_page's F1 is object 5. B stands for a separately painted auxiliary
+        // with explicitly empty Unicode; only A and C contribute semantic text.
+        doc.update_dict(pdfcraft_cos::ObjRef::new(5, 0), |f| f.set(b"ToUnicode".to_vec(), Object::Ref(cmap))).unwrap();
+        let lines = text_lines(&doc, 0).unwrap();
+        assert_eq!(lines[0].text, "ab");
+        assert_eq!(reading_blocks_checked(&doc, 0).unwrap().blocks[0].text, "ab");
+        clear_block(&mut doc, 0, 0).unwrap();
+        assert!(!streams(&doc, 0).join("\n").contains("(B)"), "an edit still removes the auxiliary drawing");
+    }
+}
+
+#[test]
+fn leading_empty_unicode_auxiliaries_stay_with_their_new_line() {
+    let mut doc = text_page("BT /F1 12 Tf 1 0 0 1 40 700 Tm (A) Tj 1 0 0 1 40 670 Tm (B) Tj 1 0 0 1 48.004 670 Tm (C) Tj ET");
+    let cmap = doc.add(Object::Stream(Stream::flate(
+        Dict::new(),
+        b"begincmap 1 begincodespacerange <00> <FF> endcodespacerange 3 beginbfchar <41> <0061> <42> <> <43> <0062> endbfchar endcmap",
+    )));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(5, 0), |f| f.set(b"ToUnicode".to_vec(), Object::Ref(cmap))).unwrap();
+    let lines = text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.iter().map(|line| line.text.as_str()).collect::<Vec<_>>(), ["a", "b"]);
+    let block = text::text_blocks(&doc, 0).unwrap().iter().position(|block| block.text.contains('b')).unwrap();
+    clear_block(&mut doc, 0, block).unwrap();
+    assert!(!streams(&doc, 0).join("\n").contains("(B)"), "the new line retains its leading auxiliary operator");
+}
+
+#[test]
+fn self_contained_actual_text_uses_the_advancing_body_rise() {
+    for (content, baseline, _rise) in [
+        ("/Span <</ActualText <FEFF0628064E>>> BDC BT /F1 12 Tf 1 0 0 1 40 700 Tm 3 Ts (A) Tj 0 Ts (B) Tj ET EMC", 700.0, 0.0),
+        ("/Span <</ActualText <FEFF0628064E>>> BDC BT /F1 12 Tf 1 0 0 1 40 700 Tm 8 Ts (A) Tj 5 Ts (B) Tj ET EMC", 705.0, 5.0),
+        // A TJ adjustment is positioning, not a mark's font advance.
+        ("/Span <</ActualText <FEFF0628064E>>> BDC BT /F1 12 Tf 1 0 0 1 40 700 Tm 3 Ts [(A) -200] TJ 0 Ts (B) Tj ET EMC", 700.0, 0.0),
+        // Intentional subscript rise is preserved too.
+        ("/Span <</ActualText <FEFF0628064E>>> BDC BT /F1 12 Tf 1 0 0 1 40 700 Tm -1 Ts (A) Tj -4 Ts (B) Tj ET EMC", 696.0, -4.0),
+        // Nonzero leading bodies, skewed text and changed text-line matrices are not normalized.
+        ("/Span <</ActualText <FEFF0628064E>>> BDC BT /F1 12 Tf 1 0 0 1 40 700 Tm 3 Ts (B) Tj 0 Ts (C) Tj ET EMC", 703.0, 3.0),
+        ("/Span <</ActualText <FEFF0628064E>>> BDC BT /F1 12 Tf 1 0.2 0 1 40 700 Tm 3 Ts (A) Tj 0 Ts (B) Tj ET EMC", 703.0, 3.0),
+        ("/Span <</ActualText <FEFF0628064E>>> BDC BT /F1 12 Tf 1 0 0 1 40 700 Tm 3 Ts (A) Tj 1 0 0 1 60 700 Tm 0 Ts (B) Tj ET EMC", 703.0, 3.0),
+        // All-zero-advance, inline, multiple-object and mixed-body-rise spans retain their origin.
+        ("/Span <</ActualText <FEFF064E>>> BDC BT /F1 12 Tf 1 0 0 1 40 700 Tm 3 Ts (A) Tj ET EMC", 703.0, 3.0),
+        ("BT /F1 12 Tf 1 0 0 1 40 700 Tm /Span <</ActualText <FEFF0628064E>>> BDC 3 Ts (A) Tj 0 Ts (B) Tj EMC ET", 703.0, 3.0),
+        (
+            "/Span <</ActualText <FEFF0628064E>>> BDC BT /F1 12 Tf 1 0 0 1 40 700 Tm 3 Ts (A) Tj ET BT /F1 12 Tf 1 0 0 1 40 700 Tm 0 Ts (B) Tj ET EMC",
+            703.0,
+            3.0,
+        ),
+        ("/Span <</ActualText <FEFF0628064E>>> BDC BT /F1 12 Tf 1 0 0 1 40 700 Tm 3 Ts (A) Tj 0 Ts (B) Tj 5 Ts (C) Tj ET EMC", 703.0, 3.0),
+    ] {
+        let mut doc = text_page(content);
+        // Synthetic semantic mappings: Helvetica A represents a zero-advance mark,
+        // B/C advancing bodies. This tests origin state, not Arabic outline appearance.
+        doc.update_dict(pdfcraft_cos::ObjRef::new(5, 0), |font| {
+            font.set(b"FirstChar".to_vec(), Object::Int(65));
+            font.set(b"LastChar".to_vec(), Object::Int(67));
+            font.set(b"Widths".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(600), Object::Int(600)]));
+        })
+        .unwrap();
+        let lines = text_lines(&doc, 0).unwrap();
+        assert_eq!(lines.len(), 1, "{content}");
+        assert_eq!(lines[0].baseline(), [40.0, baseline], "{content}");
+    }
+}
+
+#[test]
 fn latin_ligature_actual_text_stays_on_its_line() {
     // Word and Chrome wrap ligatures in ActualText spans mid-word ("ﬁ" drawn, "fi" meant).
     let hex: String = "fi".encode_utf16().map(|u| format!("{u:04X}")).collect();
@@ -6450,6 +6523,98 @@ fn a_shaped_run_is_one_text_object_with_each_glyph_where_shaping_put_it() {
         assert!((glyph.position[0] * size - x).abs() < 1e-3 && (glyph.position[1] * size - y).abs() < 1e-3, "{glyph:?} at {x}, {y}");
     }
     assert_eq!(rise, 0.0, "the rise is reset after the run");
+}
+
+#[test]
+fn shaped_cluster_tracking_preserves_mark_offsets_and_horizontal_scale() {
+    let mut cases = vec![(include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec(), vec!["q\u{301}x\u{323} n\u{303}\u{304} Cafe\u{301}"])];
+    if let Some(path) = std::env::var_os("PDFCRAFT_TEST_ARABIC_FONT") {
+        let font = std::fs::read(path).unwrap();
+        pdfcraft_fonts::embedding::validate_document_input(&font).unwrap();
+        cases.push((font, vec!["سَسَ", "جَفِي 123", "مرحبا Hello 123"]));
+    } else {
+        assert!(std::env::var_os("PDFCRAFT_ARABIC_CORPUS_REQUIRED").is_none(), "set PDFCRAFT_TEST_ARABIC_FONT for required tracking qualification");
+        eprintln!("Arabic tracking not exercised; bundled Inter controls still run");
+    }
+    for (bytes, phrases) in cases {
+        for typed in phrases {
+            let shaped = pdfcraft_fonts::source_shaping::shape(&bytes, typed).unwrap();
+            for spacing in [0.0, 1.25, -0.2] {
+                for scale in [65.0, 100.0, 135.0] {
+                    let mut doc = text_page("BT /F1 16 Tf 0.75 Tw 5 Ts 72 700 Td (Source) Tj ET");
+                    let resource = text::register_text_font(&mut doc, 0, &bytes).unwrap();
+                    let style = text::BlockStyle {
+                        resource: Some(resource),
+                        size: Some(16.0),
+                        width: Some(500.0),
+                        char_spacing: Some(spacing),
+                        scale: Some(scale),
+                        ..Default::default()
+                    };
+                    let layout = text::text_edit_layout(&doc, 0, 0, typed, &style).unwrap();
+                    text::rewrite_block(&mut doc, 0, 0, Some(typed), &style).unwrap();
+                    let reopened = reopen(&doc);
+                    let block = text::text_blocks(&reopened, 0).unwrap().remove(0);
+                    assert_eq!(block.editor_text, typed);
+                    assert!(layout.draft_rect.unwrap().iter().zip(block.rect).all(|(a, b)| (a - b).abs() < 0.002));
+                    let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+                    let start = ops.iter().position(|o| o.is("BDC")).unwrap();
+                    let end = start + ops[start..].iter().position(|o| o.is("EMC")).unwrap();
+                    let run = &ops[start..end];
+                    let tf = run.iter().find(|o| o.is("Tf")).unwrap();
+                    let resource = tf.operands[0].as_name().unwrap();
+                    let page = pdfcraft_model::pages(&doc).remove(0);
+                    let resources = doc.dict(page.dict.get(b"Resources").unwrap()).unwrap();
+                    let fonts = doc.dict(resources.get(b"Font").unwrap()).unwrap();
+                    let metrics = pdfcraft_fonts::pdf::Metrics::from_dict(&doc, &doc.dict(fonts.get(resource).unwrap()).unwrap());
+                    let (mut x, mut rise, mut horizontal) = (0.0, 0.0, 1.0);
+                    let mut drawn = Vec::new();
+                    for op in run {
+                        match op.op.as_slice() {
+                            b"Ts" => rise = op.operands[0].as_f64().unwrap(),
+                            b"Tz" => horizontal = op.operands[0].as_f64().unwrap() / 100.0,
+                            b"Tc" | b"Tw" => assert_eq!(op.operands[0].as_f64(), Some(0.0)),
+                            b"TJ" => {
+                                for item in op.operands[0].as_array().unwrap() {
+                                    if let Some(s) = item.as_string() {
+                                        for code in s.bytes.as_chunks::<2>().0 {
+                                            drawn.push((x * horizontal, rise));
+                                            x += metrics.width(u32::from(u16::from_be_bytes(*code))) * 16.0;
+                                        }
+                                    } else {
+                                        x -= item.as_f64().unwrap() / 1000.0 * 16.0;
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    assert_eq!(drawn.len(), shaped.glyphs.len());
+                    assert!((horizontal - scale / 100.0).abs() < 1e-9);
+                    // Tracking is inserted between complete clusters. Every dot/mark in a
+                    // cluster must keep the shaper's displacement from its own base.
+                    let (mut at, mut tracking) = (0, 0.0);
+                    while at < shaped.glyphs.len() {
+                        let mut end = at + 1;
+                        while shaped.glyphs.get(end).is_some_and(|g| g.text.is_empty()) {
+                            end += 1;
+                        }
+                        for (offset, (glyph, actual)) in shaped.glyphs[at..end].iter().zip(&drawn[at..end]).enumerate() {
+                            let i = at + offset;
+                            let expected = ((glyph.position[0] * 16.0 + tracking) * scale / 100.0, glyph.position[1] * 16.0 + 5.0);
+                            assert!(
+                                (actual.0 - expected.0).abs() < 0.002 && (actual.1 - expected.1).abs() < 0.002,
+                                "{typed:?}, spacing {spacing}, scale {scale}, glyph {i}: {actual:?} != {expected:?}"
+                            );
+                        }
+                        tracking +=
+                            shaped.glyphs[at].text.chars().count() as f64 * spacing + shaped.glyphs[at].text.matches(' ').count() as f64 * 0.75;
+                        at = end;
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[test]

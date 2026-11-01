@@ -142,10 +142,11 @@ impl CharacterPreparation<'_> {
             let start = range.start;
             let span = draft.get(range).unwrap_or_default();
             let requested = overrides.get(&index).and_then(|range| range.resource.as_deref()).or(style.resource.as_deref());
-            // Choose one encoding for the contextual source span before resolving characters.
-            // After reopen, old partial resources can encode different pieces of the same
-            // cluster; selecting them character by character would split an otherwise uniform row.
-            let complete = if contextual
+            // Choose one encoding before completing a contextual span or a Latin span
+            // whose unencoded spaces would split the completed run. Separate text matrices
+            // round positions differently from the same text in one full-font resource.
+            let unencoded_spaces = span.contains(' ') && resolver.metrics.get(&source.font).is_some_and(|metrics| metrics.encode(" ").is_none());
+            let complete = if (contextual || unencoded_spaces)
                 && requested.is_none()
                 && span
                     .chars()
@@ -295,7 +296,7 @@ fn prepare_shaped_rows(
 fn embed_shaped_resources(doc: &mut Document, fonts: &mut Dict, runs: &ShapedRunCache) -> Result<HashMap<(usize, usize), String>, EditError> {
     let mut resources = HashMap::new();
     for (key, (bytes, shaped, family)) in runs {
-        let mappings: Vec<_> = shaped.glyphs.iter().map(|glyph| (glyph.text.clone(), glyph.id)).collect();
+        let mappings = shaped.pdf_mappings(bytes).map_err(EditError::Invalid)?;
         let resource = pdfcraft_fonts::embedding::embed_mapping(doc, fonts, bytes, family, &mappings).map_err(EditError::Invalid)?;
         resources.insert(*key, resource);
     }
@@ -863,6 +864,15 @@ fn splice_with_marker(
     data
 }
 
+/// Advance tracking only when a new shaped cluster begins.
+fn advance_cluster_spacing(text: &str, char_spacing: f64, word_spacing: f64, extra: &mut f64, pending: &mut f64) {
+    // The first glyph owns the cluster text; following dots/marks share its offset.
+    if !text.is_empty() {
+        *extra += *pending;
+        *pending = char_spacing * text.chars().count() as f64 + word_spacing * text.matches(' ').count() as f64;
+    }
+}
+
 /// Rewrite visual rows while keeping the source style on each surviving character. Resource
 /// names may differ between Unicode subsets of the same face; encoding searches those subsets.
 pub(crate) fn rewrite_styled_block(
@@ -920,7 +930,7 @@ pub(crate) fn rewrite_styled_block(
         if let Some(w) = spaces.borrow().get(name) {
             return *w;
         }
-        let w = source_space(doc, &fonts, m);
+        let w = source_space(doc, &fonts, name, m);
         spaces.borrow_mut().insert(name.to_owned(), w);
         w
     };
@@ -1128,9 +1138,10 @@ pub(crate) fn rewrite_styled_block(
                 block_ops.extend(state.ops());
                 block_ops.push(Op::new("Tm", tm.iter().map(|v| n(*v)).collect()));
                 // `pen`: where the next glyph would start, in thousandths of the font size.
-                let (mut pen, mut extra, mut raised) = (0.0, 0.0, rise);
+                let (mut pen, mut extra, mut pending, mut raised) = (0.0, 0.0, 0.0, rise);
                 let mut shown_glyphs: Vec<Object> = Vec::new();
                 for (i, glyph) in shaped.glyphs.iter().enumerate() {
+                    advance_cluster_spacing(&glyph.text, char_spacing, word_spacing, &mut extra, &mut pending);
                     let target = (glyph.position[0] * size + extra) * per_unit;
                     let glyph_rise = rise + glyph.position[1] * size;
                     if (glyph_rise - raised).abs() > 1e-9 || shown_glyphs.len() >= 4096 {
@@ -1148,8 +1159,9 @@ pub(crate) fn rewrite_styled_block(
                     let code = u16::try_from(i + 1).map_err(|_| EditError::Invalid("shaped glyph limit".into()))?;
                     shown_glyphs.push(Object::String(PdfString::literal(code.to_be_bytes().to_vec())));
                     pen = target + shown.width(u32::from(code)) * 1000.0;
-                    extra += char_spacing * glyph.text.chars().count() as f64 + word_spacing * glyph.text.matches(' ').count() as f64;
                 }
+                // Retain the final cluster's trailing advance for layout/following runs.
+                extra += pending;
                 if !shown_glyphs.is_empty() {
                     block_ops.push(Op::new("TJ", vec![Object::Array(shown_glyphs)]));
                 }
@@ -1168,7 +1180,7 @@ pub(crate) fn rewrite_styled_block(
                     m,
                     &string,
                     size_of(source, item.1),
-                    spaces.borrow().get(&item.2).copied().unwrap_or_else(|| source_space(doc, &fonts, m)),
+                    spaces.borrow().get(&item.2).copied().unwrap_or_else(|| source_space(doc, &fonts, &item.2, m)),
                     state.char_spacing,
                     state.word_spacing,
                 )?);
