@@ -209,8 +209,8 @@ impl Edit {
             Edit::AddCustomStamp { .. } => Label::of("Add stamp"),
             Edit::DeleteAnnotation { .. } => Label::of("Delete comment"),
             Edit::DeleteAnnotations { pages } => match pages {
-                Some(ps) if ps.len() == 1 => Label::of("Delete page comments"),
-                _ => Label::of("Delete all comments"),
+                Some(_) => Label::of("Delete page comments"),
+                None => Label::of("Delete all comments"),
             },
             Edit::SetAnnotationContents { .. } => Label::of("Edit comment"),
             Edit::ReplyToAnnotation { .. } => Label::of("Reply"),
