@@ -117,6 +117,7 @@ impl PdfCraftApp {
             after_open: request.after_open,
             recovered: request.recovered,
             then: request.then,
+            display_override: None,
         });
         Ok(token)
     }
@@ -147,6 +148,7 @@ impl PdfCraftApp {
         // earlier waiting replies, without consuming a blocked receiver's result.
         waiting.append(&mut self.pending_opens);
         self.pending_opens = waiting;
+        self.settle_launch_layout();
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -182,6 +184,12 @@ impl PdfCraftApp {
                         if let Some(destination) = pending.after_open {
                             self.apply_remote_destination(destination);
                         }
+                        if let Some((layout, continuous)) = pending.display_override
+                            && let Some(view) = self.views.iter_mut().find(|view| view.id == id)
+                        {
+                            view.set_display(layout, continuous);
+                            self.launch_display_target = Some(id);
+                        }
                         if let Some(meta) = &pending.recovered {
                             self.finish_recovery(meta);
                         }
@@ -205,6 +213,7 @@ impl PdfCraftApp {
                         recovered: pending.recovered,
                         then: pending.then,
                         after_open: pending.after_open,
+                        display_override: pending.display_override,
                     });
                 }
                 Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error.to_string())]),
@@ -239,6 +248,7 @@ impl PdfCraftApp {
                     recovered: None,
                     then: None,
                     after_open: None,
+                    display_override: None,
                 });
                 return Ok(());
             }
@@ -416,6 +426,8 @@ impl PdfCraftApp {
             if let Some(meta) = p.recovered {
                 self.recoverable.push(meta);
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            self.settle_launch_layout();
             return;
         };
         #[cfg(not(target_arch = "wasm32"))]
@@ -431,6 +443,11 @@ impl PdfCraftApp {
                 recovered: p.recovered.clone(),
                 then: p.then,
             });
+            if let Ok(token) = &result
+                && let Some(pending) = self.pending_opens.iter_mut().find(|pending| pending.token == *token)
+            {
+                pending.display_override = p.display_override;
+            }
             if let Err(error) = result {
                 let mut prompt = p;
                 prompt.error = Some(error);
@@ -458,6 +475,15 @@ impl PdfCraftApp {
                 if let Some(destination) = after_open {
                     self.apply_remote_destination(destination);
                 }
+                if let Some((layout, continuous)) = p.display_override
+                    && let Some(view) = self.views.last_mut()
+                {
+                    view.set_display(layout, continuous);
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        self.launch_display_target = Some(view.id);
+                    }
+                }
                 if let Some(meta) = &p.recovered {
                     self.finish_recovery(meta);
                 }
@@ -472,9 +498,12 @@ impl PdfCraftApp {
                     prompt.recovered = p.recovered;
                     prompt.then = p.then;
                     prompt.after_open = after_open;
+                    prompt.display_override = p.display_override;
                 }
             }
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.settle_launch_layout();
     }
 
     /// Ask for the active document's permissions password, then run `then` (if any).
@@ -533,17 +562,37 @@ impl PdfCraftApp {
     /// the file opened, focused its tab, was handed to the background worker, or failed.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn open_path_then(&mut self, path: &str, then: Option<&'static str>) -> OpenOutcome {
+        self.open_path_request(path, then, None)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open_path_request(&mut self, path: &str, then: Option<&'static str>, display_override: Option<(canvas::PageLayout, bool)>) -> OpenOutcome {
         // One file, one tab (#2166): a file that is open already comes to the front instead,
         // and the tool it was opened for runs on it. One still being opened is left to that.
         if let Some(i) = self.tab_showing(path) {
             self.startup_superseded = true;
             self.active = Some(i);
+            if let Some((layout, continuous)) = display_override
+                && let Some(view) = self.views.get_mut(i)
+            {
+                view.set_display(layout, continuous);
+                self.launch_display_target = Some(view.id);
+            }
             if let Some(command) = then {
                 self.execute(command);
             }
             return OpenOutcome::Focused;
         }
-        if self.pending_opens.iter().any(|p| p.path.as_deref().is_some_and(|p| same_file(p, path))) {
+        if let Some(pending) = self.pending_opens.iter_mut().find(|p| p.path.as_deref().is_some_and(|p| same_file(p, path))) {
+            if display_override.is_some() {
+                pending.display_override = display_override;
+            }
+            return OpenOutcome::Pending;
+        }
+        if display_override.is_some()
+            && let Some(prompt) = self.password_prompt.as_mut().filter(|p| p.path.as_deref().is_some_and(|p| same_file(p, path)))
+        {
+            prompt.display_override = display_override;
             return OpenOutcome::Pending;
         }
         let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
@@ -552,18 +601,29 @@ impl PdfCraftApp {
         // Before the first frame there is no interaction to keep responsive; this also preserves
         // deterministic inline startup and test flows. Once live, reading and preparation use
         // the bounded worker and commit on the UI thread.
-        if self.ctx.is_none() || self.run_inline {
+        // Keep flagged launch files behind an existing password prompt or picker.
+        if (self.ctx.is_none() || self.run_inline) && !(display_override.is_some() && (self.modal_open() || self.pickers.pending())) {
             match std::fs::read(path) {
                 Ok(bytes) => {
                     let before = self.views.len();
+                    let previous_prompt = self.password_prompt.as_ref().map(|p| p.bytes.clone());
                     if let Err(error) = self.open_bytes(&name, Some(path.to_string()), bytes) {
                         self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &error)]);
                         return OpenOutcome::Failed;
                     }
-                    if let Some(prompt) = self.password_prompt.as_mut().filter(|p| p.path.as_deref() == Some(path)) {
+                    if let Some(prompt) = self.password_prompt.as_mut().filter(|p| {
+                        p.path.as_deref() == Some(path) && previous_prompt.as_ref().is_none_or(|bytes| !std::sync::Arc::ptr_eq(bytes, &p.bytes))
+                    }) {
                         // Encrypted: the tool runs once the password is in.
                         prompt.then = then;
+                        prompt.display_override = display_override;
                     } else if self.views.len() > before {
+                        if let Some((layout, continuous)) = display_override
+                            && let Some(view) = self.views.last_mut()
+                        {
+                            view.set_display(layout, continuous);
+                            self.launch_display_target = Some(view.id);
+                        }
                         if let Some(doc) = self.views.last().map(|view| view.id) {
                             self.watch.known_as(doc, stamp);
                         }
@@ -595,13 +655,50 @@ impl PdfCraftApp {
                 recovered: None,
                 then,
             }) {
-                Ok(_) => OpenOutcome::Pending,
+                Ok(token) => {
+                    if let Some(pending) = self.pending_opens.iter_mut().find(|pending| pending.token == token) {
+                        pending.display_override = display_override;
+                    }
+                    OpenOutcome::Pending
+                }
                 Err(error) => {
                     self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &error)]);
                     OpenOutcome::Failed
                 }
             }
         }
+    }
+
+    /// Apply an explicit launch layout after the command-line display overrides settle.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_launch_layout(&mut self, value: &str) -> Result<(), String> {
+        let (layout, continuous) = canvas::parse_display_token(value).ok_or("layout must be single, continuous, two-up or two-page")?;
+        self.launch_layout = Some((layout, continuous));
+        self.settle_launch_layout();
+        Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn settle_launch_layout(&mut self) {
+        if self.pending_opens.iter().any(|open| open.display_override.is_some())
+            || self.password_prompt.as_ref().is_some_and(|prompt| prompt.display_override.is_some())
+        {
+            return;
+        }
+        // Follow the existing completion/activation order, not a guessed tab index or path.
+        // Failed or cancelled opens cannot cause the layout to land on a restored document.
+        if let Some((layout, continuous)) = self.launch_layout.take()
+            && let Some(id) = self.launch_display_target
+            && let Some(view) = self.views.iter_mut().find(|view| view.id == id)
+        {
+            view.set_display(layout, continuous);
+        }
+    }
+
+    /// Open one native file with a transient display override, including after a password prompt.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn open_path_with_display(&mut self, path: &str, layout: canvas::PageLayout, continuous: bool) {
+        self.open_path_request(path, None, Some((layout, continuous)));
     }
 
     /// The File ▸ Open picker: PDFs, and images and text that become PDFs.

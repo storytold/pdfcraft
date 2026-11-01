@@ -776,14 +776,9 @@
 	Copy Image in Original Format	Kopioi kuva alkuperäisessä muodossa
 	The image has been copied as a {ext} file	Kuva on kopioitu {ext}-tiedostona
 	The page has changed; select the image again	Sivu on muuttunut; valitse kuva uudelleen
-	Check for updates	Tarkista päivitykset
 	No check has run yet.	Tarkistusta ei ole vielä tehty.
-	Checking for a newer version…	Tarkistetaan uudempaa versiota…
 	PdfCraft {v} is available.	PdfCraft {v} on saatavilla.
 	You have version {c}. Download the new version from its release page.	Käytössä on versio {c}. Lataa uusi versio sen julkaisusivulta.
-	PdfCraft {c} is up to date.	PdfCraft {c} on ajan tasalla.
-	Couldn't check for updates: {e}	Päivitysten tarkistus epäonnistui: {e}
-	You have version {c}. All releases are listed at {page}.	Käytössä on versio {c}. Kaikki julkaisut on lueteltu sivulla {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Kysyy uusinta julkaisua GitHubista. Mitään ei ladata tai asenneta automaattisesti.
 	Download	Lataa
 	Later	Myöhemmin
