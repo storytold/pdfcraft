@@ -802,6 +802,22 @@ impl Automation {
                 let (ids, unusable): (Vec<Value>, Vec<Value>) = (Vec::new(), Vec::new());
                 json!({ "count": ids.len(), "ids": ids, "unusable": unusable })
             }
+            "sign_token_ids" => {
+                #[cfg(target_os = "linux")]
+                let ids: Vec<Value> = match pdfcraft_engine::sign::pkcs11::list() {
+                    Ok(ids) => ids
+                        .iter()
+                        .map(|id| json!({ "id": pdfcraft_engine::sign::pkcs11::reference(&id.certificate), "certificate": super::signing::cert_json(&id.certificate) }))
+                        .collect(),
+                    // No module (no p11-kit, no PDFCRAFT_PKCS11_MODULE): most Linux machines
+                    // have no token — an empty listing, not an error.
+                    Err(pdfcraft_engine::sign::SignError::Crypto(e)) if e.contains("no PKCS #11 module") => Vec::new(),
+                    Err(e) => return Err(failed(e)),
+                };
+                #[cfg(not(target_os = "linux"))]
+                let ids: Vec<Value> = Vec::new();
+                json!({ "count": ids.len(), "ids": ids })
+            }
             "sign_trust" => self.sign_trust(&a)?,
             "comment_mark" => self.comment_mark(&a)?,
             "comment_lock" => self.comment_lock(&a)?,
