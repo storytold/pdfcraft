@@ -74,6 +74,8 @@ struct ScanToRead {
 pub struct OcrRun {
     pub doc: DocId,
     pub progress: Arc<Mutex<OcrProgress>>,
+    /// The document's edit generation when the pages were captured; the result only fits that state.
+    pub generation: u64,
     /// Set for a run Edit started on a scanned page, not asked for: it shows no progress, says nothing
     /// when it found no words (a page with text of its own is skipped, and Edit must not make noise),
     /// and its result waits for Read mode and dialogs and is dropped if the document changed.
@@ -268,6 +270,7 @@ impl PdfCraftApp {
             None
         };
         let Some(job) = self.session.ocr_job(id, pages, settings) else { return };
+        let generation = self.session.get(id).map_or(0, |d| d.edit_generation());
         let progress = Arc::new(Mutex::new(OcrProgress { total: job.pages.len(), ..Default::default() }));
         let p = progress.clone();
         // A failure is written on the worker thread: in the UI's language.
@@ -296,7 +299,7 @@ impl PdfCraftApp {
         }
         #[cfg(target_arch = "wasm32")]
         work();
-        self.ocr_run = Some(OcrRun { doc: id, progress, automatic: auto });
+        self.ocr_run = Some(OcrRun { doc: id, generation, progress, automatic: auto });
         self.poll_ocr();
     }
 
@@ -442,7 +445,7 @@ impl PdfCraftApp {
             }
         }
         let Some(run) = self.ocr_run.as_ref() else { return };
-        let (doc, progress, auto) = (run.doc, run.progress.clone(), run.automatic);
+        let (doc, generation, progress, auto) = (run.doc, run.generation, run.progress.clone(), run.automatic);
         let automatic = auto.is_some();
         let mut s = match progress.lock() {
             Ok(s) => s,
@@ -489,6 +492,12 @@ impl PdfCraftApp {
             if let Some(view) = self.views.iter_mut().find(|v| v.id == doc) {
                 view.auto_ocr_tried.remove(&a.page);
             }
+            return;
+        }
+        // A run the user asked for: after any edit, undo or reload the page numbers and positions no
+        // longer match, so the words would land on the wrong pages (or bring back removed text).
+        if auto.is_none() && self.session.get(doc).is_some_and(|d| d.edit_generation() != generation) {
+            self.notify_tr("The document changed while text was being recognized, so the result was discarded. Run Recognize text again.");
             return;
         }
         let found = match result {
@@ -634,7 +643,7 @@ mod tests {
             let generation = app.session.get(app.active_ids().unwrap().1).unwrap().edit_generation();
             let page = pdfcraft_engine::ocr::OcrPage { page: 0, words: vec![word()], already_on_page: 0, skipped: None };
             let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
-            OcrRun { doc: app.active_ids().unwrap().1, progress, automatic: automatic.then_some(AutoOcr { page: 0, generation }) }
+            OcrRun { doc: app.active_ids().unwrap().1, generation, progress, automatic: automatic.then_some(AutoOcr { page: 0, generation }) }
         };
         let label = |app: &PdfCraftApp| app.session.get(app.active_ids().unwrap().1).unwrap().can_undo().map(String::from);
 
@@ -674,7 +683,7 @@ mod tests {
             skipped: None,
         };
         let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
-        app.ocr_run = Some(OcrRun { doc: id, progress, automatic: Some(AutoOcr { page: 0, generation }) });
+        app.ocr_run = Some(OcrRun { doc: id, generation, progress, automatic: Some(AutoOcr { page: 0, generation }) });
         app.views[0].auto_ocr_tried.insert(0);
         // The document changes while the run is out.
         let mut png = std::io::Cursor::new(Vec::new());
@@ -688,6 +697,35 @@ mod tests {
         assert!(app.ocr_run.is_none(), "the run is over");
         assert_eq!(app.session.get(id).unwrap().can_undo(), Some("Add image"), "its result was not applied");
         assert!(!app.views[0].auto_ocr_tried.contains(&0), "the page may be judged again");
+    }
+
+    /// A run the user asked for is refused too once the document has changed: the old page numbers
+    /// no longer fit, so nothing is applied and the user is told to run it again.
+    #[test]
+    fn the_result_of_a_manual_run_is_refused_once_the_document_has_changed() {
+        let mut app = app_with(scan());
+        let id = app.active_ids().unwrap().1;
+        let generation = app.session.get(id).unwrap().edit_generation();
+        let page = pdfcraft_engine::ocr::OcrPage {
+            page: 0,
+            words: vec![pdfcraft_engine::ocr::PlacedWord { text: "scanned".into(), origin: [72.0, 700.0], across: [60.0, 0.0], up: [0.0, 12.0] }],
+            already_on_page: 0,
+            skipped: None,
+        };
+        let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
+        app.ocr_run = Some(OcrRun { doc: id, generation, progress, automatic: None });
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(8, 8, image::Rgba([250, 250, 250, 255])))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        app.session
+            .apply(id, Edit::AddImage { page: 0, rect: Some([10.0, 10.0, 50.0, 50.0]), name: "p.png".into(), bytes: Arc::new(png.into_inner()) })
+            .unwrap();
+        app.poll_ocr();
+        assert!(app.ocr_run.is_none(), "the run is over");
+        assert_eq!(app.session.get(id).unwrap().can_undo(), Some("Add image"), "its result was not applied");
+        let toast = app.toast.clone().expect("toast").0;
+        assert!(toast.contains("changed while text was being recognized"), "{toast}");
     }
 
     #[test]
@@ -714,7 +752,7 @@ mod tests {
         app.set_option("language", "en").unwrap();
         let progress = Arc::new(Mutex::new(OcrProgress { total: 3, ..Default::default() }));
         poison(&progress);
-        app.ocr_run = Some(OcrRun { doc: DocId(1), progress, automatic: None });
+        app.ocr_run = Some(OcrRun { doc: DocId(1), generation: 0, progress, automatic: None });
         app.poll_ocr();
         assert!(app.ocr_run.is_none(), "the next run isn't refused as already running");
         let toast = app.toast.take().map(|t| t.0).unwrap_or_default();
