@@ -1,6 +1,6 @@
 use super::options::{
-    COMBINE_OPTIONS, EXTRACT_OPTIONS, INFO_OPTIONS, RENDER_OPTIONS, SPLIT_OPTIONS, TEXT_OPTIONS, can_be_path_value, flag, needs_value, positional,
-    validate_options,
+    COMBINE_OPTIONS, EXTRACT_OPTIONS, INFO_OPTIONS, RENDER_OPTIONS, SPLIT_OPTIONS, TEXT_OPTIONS, can_be_path_value, flag, flag_in_order, needs_value,
+    positional, validate_options,
 };
 use super::{Arc, CliError, ImageFormat, PageRenderer, Path, PathBuf, RenderConfig, RenderRequest, RequestKind, Write, inspect, stdout_line};
 
@@ -291,6 +291,61 @@ pub(crate) fn combine(args: &[String]) -> Result<(), CliError> {
     let sources = inputs.iter().map(|p| Ok((file_stem(p), read(p)?))).collect::<Result<Vec<_>, String>>()?;
     let bytes = pdfcraft_engine::Session::new().combine(&sources).map_err(|e| e.to_string())?;
     write_pdf(Path::new(out), &bytes)
+}
+
+pub(crate) fn export(args: &[String]) -> Result<(), CliError> {
+    use pdfcraft_engine::compare::OfficeFormat;
+    validate_options("export", args, super::options::EXPORT_OPTIONS)?;
+    let path = *positional(args, super::options::EXPORT_OPTIONS).first().ok_or("export: missing file")?;
+    let out = flag_in_order(args, "--out", super::options::EXPORT_OPTIONS).ok_or("export: missing --out (.docx, .pptx, .html or .rtf)")?;
+    let force = super::options::has_flag_in_order(args, "--force", super::options::EXPORT_OPTIONS);
+    check_export_destination(Path::new(out), force)?;
+    let password = flag_in_order(args, "--password", super::options::EXPORT_OPTIONS);
+    let bytes = read(path)?;
+    let mut session = pdfcraft_engine::Session::new();
+    let id = session.open(path, None, bytes, password).map_err(|e| e.to_string())?;
+    let doc = session.get(id).ok_or("export: the document could not be opened")?;
+    if !doc.editable() {
+        let reason = doc.read_only_reason.clone().unwrap_or_else(|| "the document is read-only".to_string());
+        return Err(format!("export: {reason}").into());
+    }
+    // Copying text and images out of a PDF is disallowed by the permissions bit even when the
+    // user password opens it. Ask the same permission gate as the text command and automation.
+    doc.check_copying().map_err(
+        |_| "export: the document's permissions don't allow copying its text and images; pass the owner password with --password to export it",
+    )?;
+    let ext = Path::new(out).extension().and_then(std::ffi::OsStr::to_str).map(str::to_ascii_lowercase);
+    let format = match ext.as_deref() {
+        Some("docx") => OfficeFormat::Docx,
+        Some("pptx") => OfficeFormat::Pptx,
+        Some("html") | Some("htm") => OfficeFormat::Html,
+        Some("rtf") => OfficeFormat::Rtf,
+        _ => return Err(format!("export: --out {out}: use a .docx, .pptx, .html or .rtf name").into()),
+    };
+    let exported = doc.export_office_checked(format);
+    if !exported.truncated_pages.is_empty() {
+        let pages = exported.truncated_pages.iter().map(|p| (p + 1).to_string()).collect::<Vec<_>>();
+        let _ = writeln!(std::io::stderr().lock(), "warning: export skipped some content on pages {}", pages.join(", "));
+    }
+    write_pdf(Path::new(out), &exported.bytes)
+}
+
+fn check_export_destination(out: &Path, force: bool) -> Result<(), CliError> {
+    let metadata = match std::fs::symlink_metadata(out) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("{}: {error}", out.display()).into()),
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(format!("{}: export output cannot be a symbolic link", out.display()).into());
+    }
+    if !metadata.is_file() {
+        return Err(format!("{}: export output is not a regular file", out.display()).into());
+    }
+    if !force {
+        return Err(format!("{}: output file already exists; pass --force to overwrite it", out.display()).into());
+    }
+    Ok(())
 }
 
 pub(crate) fn extract(args: &[String]) -> Result<(), CliError> {
