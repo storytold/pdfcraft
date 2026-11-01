@@ -1,7 +1,9 @@
 //! PdfCraft patch (29): `JXLDecode`, JPEG XL image data (ISO/IEC 18181) in an image XObject.
 //!
-//! ISO 32000-2 defines no JPEG XL filter yet (the PDF Association has announced one), so this
-//! reads the name `JXLDecode`, the placeholder other implementations use. Only the first frame
+//! ISO 32000-2 defines no JPEG XL filter yet (the PDF Association has announced it as the
+//! preferred new image format for HDR in PDF and invites implementers to join:
+//! <https://pdfa.org/pdf-errata-makeover/>, 17 December 2025), so this reads the name
+//! `JXLDecode`, the placeholder other implementations use (for example the PDFium design doc). Only the first frame
 //! is drawn (a PDF image is static), as 8-bit grey or RGB with an optional alpha channel;
 //! CMYK, spot colours and other layouts are refused (the image is then not drawn).
 
