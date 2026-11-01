@@ -15,8 +15,11 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   same advance, so the rest of the line keeps its exact position. Widths come from `/Widths`,
   `/W`/`/DW` (composite fonts, embedded CMaps with codespace and CID ranges), Type 3 font
   matrices, and approximations for the standard 14. A glyph goes when it overlaps an area by
-  more than a fifth of its size (or a point) both ways; zero-size text goes when its origin is
-  inside;
+  more than a fifth of its size (or a point) both ways, its height taken from descent to ascent
+  but at most one em: lines set solid in fonts whose one-em boxes don't overlap keep the glyphs
+  next to a mark (mixed fonts can still overlap within one em). Glyphs kept although their full
+  box reaches a mark are counted in `Report::glyphs_beside_marks`, since any ink they draw
+  outside one em stays in the file; zero-size text goes when its origin is inside;
 - **images**: fully covered → removed; partly covered → a copy with the covered pixels cleared
   (8/16-bit and 1/2/4-bit images, image masks; Flate/LZW/RL/A85/AHx, and CCITT fax as the last
   filter, decoded through `Document::decoded_image_within`; `/DecodeParms` given by reference,
