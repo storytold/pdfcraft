@@ -244,7 +244,9 @@ impl<'a> Tlv<'a> {
     pub fn time(&self) -> Result<Time, SignError> {
         let s = std::str::from_utf8(self.value).map_err(|_| bad("time"))?;
         let s = s.strip_suffix('Z').ok_or_else(|| bad("times must be in UTC (Z)"))?;
-        let num = |r: std::ops::Range<usize>| s.get(r).and_then(|x| x.parse::<u32>().ok()).ok_or_else(|| bad("time"));
+        let num = |r: std::ops::Range<usize>| {
+            s.get(r).filter(|x| x.bytes().all(|b| b.is_ascii_digit())).and_then(|x| x.parse::<u32>().ok()).ok_or_else(|| bad("time"))
+        };
         let (year, rest) = match self.tag {
             tag::UTC_TIME => {
                 let y = num(0..2)?;
@@ -560,6 +562,13 @@ mod tests {
             assert!(try_oid(bad).is_err(), "accepted {bad}");
         }
         assert_eq!(try_oid("1.2.840.113549").unwrap(), oid("1.2.840.113549"));
+    }
+
+    #[test]
+    fn time_rejects_signs_in_digit_fields() {
+        let mut v = vec![tag::UTC_TIME, 13];
+        v.extend_from_slice(b"2501011200+0Z");
+        assert!(Tlv::parse_all(&v).unwrap().time().is_err());
     }
 
     #[test]
