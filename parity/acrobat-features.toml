@@ -6968,8 +6968,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["create.blank"]
 tools = ["doc_create"]
-evidence = ["crates/ui-egui/tests/it/create.rs::opening_images_and_text_converts_them_to_new_pdfs", "crates/create/src/tests.rs::blank_documents", "crates/automation/tests/it/automation.rs::creating_and_reducing_through_tools"]
-notes = ""
+evidence = ["crates/ui-egui/tests/it/create.rs::opening_images_and_text_converts_them_to_new_pdfs", "crates/ui-egui/tests/it/create.rs::a_blank_page_is_on_the_system_regions_paper", "crates/ui-egui/src/persist/paper.rs::region_decides_the_paper", "crates/create/src/tests.rs::blank_documents", "crates/automation/tests/it/automation.rs::creating_and_reducing_through_tools"]
+notes = "The page is the system region's paper (#5644): US Letter in the US, Canada, Mexico, the Philippines and the other CLDR Letter regions, A4 elsewhere; Windows' own Region paper size (iPaperSize) first, then the system locale (macOS) or LC_ALL/LC_PAPER/LANG; Letter when the region is unknown (web). The doc_create tool keeps Letter unless given width and height. Missing: a page size or count chooser like Acrobat's New Document dialog."
 
 [[feature]]
 id = "create.from-html"

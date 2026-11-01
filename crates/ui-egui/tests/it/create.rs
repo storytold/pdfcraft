@@ -380,3 +380,14 @@ fn multiple_files_past_a_thousand_are_all_used() {
     let doc = app.session.get(app.views[0].id).unwrap();
     assert_eq!(doc.info.pages.len(), 1001, "every picked file is used, in order");
 }
+
+/// Create ▸ Blank page uses the system region's paper, not always US Letter (#5644).
+#[test]
+fn a_blank_page_is_on_the_system_regions_paper() {
+    let mut app = PdfCraftApp::new();
+    assert!(app.execute("create.blank"));
+    let docs = app.session.docs();
+    let crop = docs.last().and_then(|d| d.info.pages.first()).map(|p| p.crop).unwrap();
+    let (w, h) = pdfcraft_ui_egui::paper::Paper::system().points();
+    assert!(((crop[2] - crop[0]) as f64 - w).abs() < 0.01 && ((crop[3] - crop[1]) as f64 - h).abs() < 0.01, "{crop:?} is not {w} × {h}");
+}
