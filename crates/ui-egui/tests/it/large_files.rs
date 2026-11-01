@@ -196,7 +196,24 @@ fn a_search_marks_nothing_it_can_not_apply() {
     h.run_steps(4);
     assert!(on_disk(h.state()));
     h.state_mut().redact_search.text = "Page".into();
-    assert_eq!(h.state_mut().redact_search(), 0);
+    assert_eq!(h.state_mut().redact_search(), None);
+}
+
+#[test]
+fn a_search_says_how_many_it_marked() {
+    let file = Temp::new("marked", &large());
+    let mut h = harness(true);
+    h.state_mut().session = pdfcraft_engine::Session::default();
+    h.state_mut().open_path(&file.path);
+    h.run_steps(4);
+    assert!(!on_disk(h.state()));
+    h.state_mut().redact_search.text = "nothing like it".into();
+    assert_eq!(h.state_mut().redact_search(), Some(0));
+    let id = h.state().views[0].id;
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), None, "no matches leave no undo step");
+    h.state_mut().redact_search.text = "Page".into();
+    assert_eq!(h.state_mut().redact_search(), Some(2));
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Mark for redaction"));
 }
 
 #[test]

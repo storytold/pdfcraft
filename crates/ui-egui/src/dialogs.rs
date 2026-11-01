@@ -1806,8 +1806,7 @@ fn finish_redactions_and_fields(app: &mut PdfCraftApp, req: &mut Pending) {
     match req.redact_now.take() {
         Some(Dialog::RedactPages) => app.redact_pages(),
         Some(Dialog::RedactSearch) => {
-            let n = app.redact_search();
-            app.redact_search.found = Some(n);
+            app.redact_search.found = app.redact_search();
         }
         Some(Dialog::RemoveHidden) => {
             let which: Vec<pdfcraft_engine::Hidden> = app.hidden_draft.found.iter().filter(|f| f.2 && f.1 > 0).map(|f| f.0).collect();

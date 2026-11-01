@@ -290,10 +290,11 @@ pub(crate) fn paint(painter: &egui::Painter, page: usize, view: &DocView, pointe
 }
 
 impl PdfCraftApp {
-    /// Mark every match of the search draft on every page; returns how many were marked.
-    pub fn redact_search(&mut self) -> usize {
-        let Some((_, id)) = self.active_ids() else { return 0 };
-        let Some(doc) = self.session.get(id) else { return 0 };
+    /// Mark every match of the search draft on every page; returns how many were marked, or
+    /// `None` when marking them was refused, which `apply_edit` has already said.
+    pub fn redact_search(&mut self) -> Option<usize> {
+        let (_, id) = self.active_ids()?;
+        let doc = self.session.get(id)?;
         let d = self.redact_search.clone();
         let needles = match d.mode {
             SearchMode::Phrase if !d.text.trim().is_empty() => vec![d.text.clone()],
@@ -301,7 +302,7 @@ impl PdfCraftApp {
             SearchMode::Phrase | SearchMode::Patterns => Vec::new(),
         };
         if d.mode != SearchMode::Patterns && needles.is_empty() {
-            return 0;
+            return Some(0);
         }
         let config = pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..Default::default() };
         let mut r = pdfcraft_render::PageRenderer::new(doc.source(), config);
@@ -322,7 +323,7 @@ impl PdfCraftApp {
             }
         }
         let n = edits.len();
-        if n > 0 && self.apply_edit(Edit::Batch { label: "Mark for redaction".into(), edits }) { n } else { 0 }
+        (n == 0 || self.apply_edit(Edit::Batch { label: "Mark for redaction".into(), edits })).then_some(n)
     }
 
     /// Mark the pages of the Redact pages draft.
