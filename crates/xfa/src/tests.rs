@@ -4140,3 +4140,22 @@ fn clear_password_values_clears_static_xfa_password_fields() {
     let packets = read_packets(&doc).unwrap().unwrap();
     assert!(!packets.xdp.contains("hunter2"), "{}", packets.xdp);
 }
+
+/// #5153 review: a row outside a table keeps its `minH`, as a table row does (XFA 3.3 p. 847):
+/// one holding a 0.2in cell with `minH="3in"` is 3in tall, in a top-to-bottom and in a
+/// left-to-right parent, and the field after it starts 2.8in lower than after a row without one.
+#[test]
+fn a_row_outside_a_table_keeps_its_minimum_height() {
+    let inch = 72.0;
+    for parent in ["tb", "lr-tb"] {
+        let after = |row_min_h: &str| {
+            let body = format!(
+                r#"<subform name="body" layout="{parent}" w="7.5in"><subform name="row" layout="row" w="7.5in" {row_min_h}><draw w="2in" h="0.2in"><value><text>One</text></value></draw></subform><field name="who" w="3in" h="0.4in"><ui><textEdit/></ui></field></subform>"#
+            );
+            let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+            widgets(&form.pages[0])[0].rect.y
+        };
+        let grown = after(r#"minH="3in""#) - after("");
+        assert!((grown - 2.8 * inch).abs() < 0.01, "{parent}: the row grew by {grown}pt");
+    }
+}
