@@ -83,7 +83,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/cos/tests/it/writer.rs::incremental_saves_stack_on_an_xref_stream_file", "crates/cos/tests/it/writer.rs::page_tree_loops_in_object_streams_do_not_crash_readers"]
-notes = ""
+notes = "Reads classic tables, cross-reference streams, hybrid /XRefStm files and objects inside object streams (crates/cos/src/document.rs), and rebuilds a damaged table with a note in the repair log. The cited tests read files our own writer produced (plus a hand-built looping page tree); no third-party xref-stream sample is cited here."
 
 [[feature]]
 id = "core.hybrid-xref"
@@ -143,7 +143,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/filters/src/flate.rs::bomb_is_bounded", "crates/filters/src/lib.rs::limit_applies_to_intermediate_buffers"]
-notes = ""
+notes = "Every filter decode is capped (1 GiB per stream, MAX_DECODED), and a DecodeBudget caps one page walk at 256 MiB decoded and 50,000 form entries, so a repeated bomb is inflated once. The cited tests cover Flate and chained ASCII filters only; image codecs (DCT, JPX, CCITT) and the budget itself are not covered by the cited tests, and the limits are fixed, not user settings."
 
 [[feature]]
 id = "core.open-rc4"
@@ -155,7 +155,7 @@ status = "shipped"
 commands = ["file.open"]
 tools = ["doc_open"]
 evidence = ["crates/crypt/src/tests.rs::rc4_reference_vectors", "crates/cos/tests/it/encryption.rs::every_algorithm_round_trips_and_hides_the_content"]
-notes = ""
+notes = "Opens R2 (40-bit) and R3/R4 (128-bit) RC4 files with the user or owner password, asks for one when needed, and also tries a UTF-8 form of the password for characters PDFDocEncoding lacks. Tests cover RC4 reference vectors and files our own writer encrypts (checked against hayro and qpdf); no RC4 file made by another producer is cited, and Acrobat behaviour was not observed."
 
 [[feature]]
 id = "core.open-aes"
@@ -167,7 +167,7 @@ status = "shipped"
 commands = ["file.open"]
 tools = ["doc_open"]
 evidence = ["crates/crypt/src/tests.rs::aes_cbc_nist_sp800_38a_vectors", "crates/cos/tests/it/encryption.rs::every_algorithm_round_trips_and_hides_the_content"]
-notes = ""
+notes = "Opens AES-128 (R4, AESV2) and AES-256 (R6, AESV3) files; the code also accepts R5, which the cited tests do not generate. Tests use NIST CBC vectors and files our own writer encrypts (checked against hayro and qpdf), not files from other producers; docs/file-format-parity.md says Acrobat DC opened our AES-256 output by hand, with no automated interop suite."
 
 [[feature]]
 id = "core.password-prompt"
@@ -191,7 +191,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/crypt/src/tests.rs::r6_passwords_are_saslprepped"]
-notes = ""
+notes = "R5/R6 passwords go through SASLprep (RFC 4013, NFKC, soft hyphens dropped) as UTF-8 capped at 127 bytes, using the raw password if SASLprep refuses it; R2-R4 use PDFDocEncoding padded or cut to 32 bytes. The cited test checks only the R6 case; the R2-R4 rules are covered by effective_password tests that are not cited here, and no other application's output was compared."
 
 [[feature]]
 id = "core.owner-password-unlock"
@@ -215,7 +215,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/ui-egui/tests/it/editing.rs::restricted_documents_show_a_notice_and_block_page_changes", "crates/crypt/src/tests.rs::permission_bits_follow_table_22", "crates/crypt/src/tests.rs::perms_limits_what_an_edited_p_grants", "crates/engine/src/tests.rs::combining_protected_files_is_refused_clearly", "crates/engine/src/tests.rs::print_restricted_documents_disable_print_unless_opened_by_the_owner", "crates/ui-egui/tests/it/print.rs::print_restricted_documents_say_so_before_the_dialog", "crates/engine/src/tests.rs::convert_to_pdfa_needs_the_owners_rights_on_an_encrypted_document"]
-notes = ""
+notes = "Session gates print, modify, assemble, copy, annotate and fill-forms on the /P bits for non-owners, with an owner-password unlock, and a low-resolution-only print limit makes the print file pictures of at most 150 dpi. Reading for assistive technology is never blocked, and this is software enforcement only: other readers can ignore the bits, and Acrobat's own per-bit behaviour was not observed."
 
 [[feature]]
 id = "core.crypt-filters"
@@ -227,7 +227,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/crypt/src/tests.rs::identity_crypt_filters_leave_data_alone"]
-notes = ""
+notes = "Reads /CF, /StmF, /StrF and /EFF, so Identity strings or streams and embedded-file-only encryption work, and named crypt filters on streams are honoured. An unrecognised /CFM is treated as Identity (data left as is) and custom crypt-filter handlers are not supported; the cited test covers one embedded-file-only case built by our own writer."
 
 [[feature]]
 id = "core.attachment-only-encryption"
@@ -251,7 +251,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/cos/tests/it/encryption.rs::unencrypted_metadata_is_left_readable"]
-notes = ""
+notes = "With /EncryptMetadata false the XMP metadata stream stays readable in the saved file, and a Metadata stream is left alone on read when that flag says so (crates/cos/src/security.rs). Only AES-256 written by our own writer is cited; reading such a file from another producer and the R2-R4 variants are not covered by the cited test."
 
 [[feature]]
 id = "core.unsupported-handlers"
@@ -263,7 +263,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/crypt/src/tests.rs::unsupported_handlers_are_reported"]
-notes = ""
+notes = "A non-Standard /Filter (such as Adobe.PubSec certificate security) or a revision other than 2-6 stops opening with an unsupported security handler error. The cited test checks the crypt-level error only, not the dialog wording, and public-key (certificate) encryption itself is not supported."
 
 [[feature]]
 id = "core.open-public-key"
@@ -299,7 +299,7 @@ status = "shipped"
 commands = ["file.save_as"]
 tools = ["doc_save"]
 evidence = ["crates/organize/src/tests.rs::full_save_drops_unreachable_objects", "crates/engine/src/tests.rs::full_save_is_readable_and_smaller_after_deletes"]
-notes = ""
+notes = "Save As to another path rewrites the file in full and drops unreachable objects, while Save to the same path stays incremental and a signed document is never rewritten; doc_save takes a full flag. The cited tests check that deleted pages' objects go and the file reopens smaller; unused fonts or images are only dropped when nothing references them, with no further optimisation here (see the optimize.* entries)."
 
 [[feature]]
 id = "core.object-stream-compression"
@@ -311,7 +311,7 @@ status = "shipped"
 commands = ["file.save_as"]
 tools = ["doc_save"]
 evidence = ["crates/cos/tests/it/writer.rs::full_save_packs_objects_into_object_streams", "crates/cos/tests/it/writer.rs::qpdf_accepts_object_stream_output", "crates/cos/tests/it/writer.rs::objects_referenced_by_the_encrypt_dictionary_stay_outside_object_streams"]
-notes = ""
+notes = "A full save packs non-stream objects into object streams (100 per stream, 8 MiB batches) behind an xref stream, keeping the catalog and encryption objects outside them. It is on by default in SaveOptions (the engine's save paths never turn it off) and is not a user setting; qpdf_accepts_object_stream_output uses qpdf as an outside check, and old-reader compatibility was not tested."
 
 [[feature]]
 id = "core.encrypted-save"
@@ -323,7 +323,7 @@ status = "shipped"
 commands = ["file.save"]
 tools = ["doc_save"]
 evidence = ["crates/cos/tests/it/encryption.rs::incremental_edits_of_encrypted_documents_stay_encrypted", "crates/engine/src/tests.rs::encrypted_documents_open_edit_and_save_encrypted"]
-notes = ""
+notes = "An incremental save appends to the encrypted file and encrypts only the new objects with the existing handler; a full rewrite re-encrypts all content subject to the encryption policy (metadata stays unencrypted when /EncryptMetadata is false), and changing or removing security forces a full rewrite. Cited tests cover all four algorithms through our own writer and a hayro reopen; docs/file-format-parity.md says Acrobat DC opened AES-256 and RC4-128 output by hand."
 
 [[feature]]
 id = "core.copy-on-write-fidelity"
@@ -335,7 +335,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/cos/src/document/tests.rs::reads_classic_revision_and_edits_are_copy_on_write"]
-notes = ""
+notes = "Edits live in an overlay over the original bytes, so a clone is an independent snapshot and an incremental save appends without changing the original bytes (checked by the incremental-save tests in crates/cos and crates/engine). A full rewrite re-serialises objects, so byte identity holds for incremental saves only, and the cited test is a single small in-memory case."
 
 [[feature]]
 id = "core.write-validity"
@@ -479,7 +479,7 @@ status = "shipped"
 commands = ["edit.undo", "edit.redo"]
 tools = ["edit_undo", "edit_redo"]
 evidence = ["crates/engine/src/tests.rs::undo_and_redo_restore_exact_states", "crates/ui-egui/tests/it/editing.rs::organize_delete_then_undo_and_redo_with_keys"]
-notes = ""
+notes = "Every edit goes through the session's snapshot history (100 steps, MAX_UNDO) with redo cleared by a new edit, and undo back to the opened bytes restores them exactly. Missing: the history is per open document and is not saved with the file, and the depth limit is fixed; the cited UI test covers organize delete only."
 
 [[feature]]
 id = "core.undo-labels"
@@ -491,7 +491,7 @@ status = "shipped"
 commands = ["edit.undo", "edit.redo"]
 tools = []
 evidence = ["crates/ui-egui/tests/it/editing.rs::edit_menu_names_the_step_to_undo", "crates/engine/src/commands.rs::enablement_follows_the_document_state"]
-notes = ""
+notes = "The Edit menu shows Undo and Redo with the name of the step (Delete page, Rotate page and so on) taken from the history labels, and the command is disabled when nothing is left. The cited UI test checks one label (organize), not every edit's wording or its translations."
 
 [[feature]]
 id = "core.undo-after-save"
@@ -503,7 +503,7 @@ status = "shipped"
 commands = ["edit.undo"]
 tools = ["edit_undo"]
 evidence = ["crates/engine/src/tests.rs::undo_still_works_after_save"]
-notes = ""
+notes = "Saving rebases the history rather than clearing it, so undo still steps back past a save, and undoing to the saved file clears the dirty flag while undoing past it sets it again. The cited engine test covers an incremental save only, not Save As or encrypted files."
 
 [[feature]]
 id = "core.atomic-batch-edits"
@@ -515,7 +515,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/engine/src/tests.rs::batch_is_one_undo_step_and_all_or_nothing", "crates/engine/src/tests.rs::failed_edit_changes_nothing"]
-notes = ""
+notes = "Edit::Batch applies several edits as one undo step under one label, and if any member fails the document is left as it was; a single failing edit also changes nothing. Missing: no cited test for batches inside signed or encrypted documents, and the cited cases are small."
 
 [[feature]]
 id = "core.history-panel"
@@ -539,7 +539,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/engine/src/tests.rs::autosave_snapshots_only_changed_documents", "crates/ui-egui/tests/it/recovery.rs::saving_or_closing_clears_the_entry_and_nothing_is_written_for_clean_documents"]
-notes = ""
+notes = "Every 60 seconds the app writes a snapshot of each changed document to a recovery folder (the desktop app turns it on in apps/pdfcraft/src/main.rs), offers recovery after a crash, and removes the entry on save or close. Missing: it is a recovery copy, never the user's own file, and the browser build was not checked."
 
 [[feature]]
 id = "core.crash-recovery"
@@ -563,7 +563,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/ui-egui/tests/it/recovery.rs::encrypted_documents_are_autosaved_encrypted_and_recovered_with_the_password"]
-notes = ""
+notes = "Snapshots of encrypted documents are written with the document's encryption policy, so document content stays encrypted (metadata stays unencrypted when /EncryptMetadata is false), and recovery asks for the password. The cited UI test covers one AES case; whether other methods and owner-only restricted files recover the same way is not tested."
 
 [[feature]]
 id = "core.web-recovery"
@@ -599,7 +599,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/ui-egui/tests/it/editing.rs::organize_delete_then_undo_and_redo_with_keys", "crates/engine/src/tests.rs::edits_update_view_data_and_mark_dirty"]
-notes = ""
+notes = "The tab strip reads each document's dirty flag (crates/ui-egui/src/chrome.rs) and the flag follows edits, undo to the saved state and saves. The cited tests check the flag, not the drawn marker; the marker itself was not checked by a test or screenshot for this note."
 
 [[feature]]
 id = "core.close-document"
@@ -611,7 +611,7 @@ status = "shipped"
 commands = ["file.close"]
 tools = ["doc_close"]
 evidence = ["crates/ui-egui/tests/it/editing.rs::clean_tabs_close_without_asking"]
-notes = ""
+notes = "File Close and Cmd/Ctrl+W close a clean tab at once, and a document with unsaved changes asks to save first; doc_close fails unless discard_changes is set. The cited test covers only a clean tab; the prompt is covered by other tests (quitting_with_unsaved_changes_asks_for_each_document) not cited here."
 
 [[feature]]
 id = "core.close-all"
@@ -831,7 +831,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/render/src/raster/tests.rs::missing_page_and_garbage_input_fail_gracefully", "crates/render/src/raster/tests.rs::scale_is_clamped_for_huge_pages", "crates/render/src/raster/tests.rs::watchdog_skips_a_stuck_page_and_keeps_rendering"]
-notes = ""
+notes = "Each page render runs under catch_unwind and a 20 second watchdog (STUCK_AFTER) that answers with an error and keeps a replacement worker rendering, and failed requests are remembered so they are not retried each frame. The cited tests cover garbage input, scale clamping and the watchdog; a page that overruns shows an error, but no screenshot of what the user sees was checked."
 
 [[feature]]
 id = "view.render-priority"
@@ -843,7 +843,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/render/src/raster/tests.rs::inline_pool_renders_in_priority_order"]
-notes = ""
+notes = "The canvas builds the request queue with visible pages and thumbnails first and text/search work last, and the pool answers in queue order. The cited test checks only the pool's order for two queued requests; the canvas ordering itself (prepare_render_queue) is not covered by a cited test, and no timing was measured."
 
 [[feature]]
 id = "view.deep-zoom-tiles"
@@ -1095,7 +1095,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/ui-egui/tests/it/ui.rs::selection_works_in_every_view_rotation"]
-notes = ""
+notes = "View menu rotate clockwise and counter-clockwise turn the view in 90 degree steps per open tab, and the page is not changed (the /Rotate entries are untouched). The cited test checks text selection under rotation; the view rotation is not remembered after closing and has no headless tool."
 
 [[feature]]
 id = "view.read-mode"
@@ -1395,7 +1395,7 @@ status = "shipped"
 commands = []
 tools = ["doc_info"]
 evidence = ["crates/render/src/inspect/tests.rs::roman_and_alpha_labels", "crates/automation/tests/it/automation.rs::open_inspect_render_and_find"]
-notes = ""
+notes = "Page labels from /PageLabels (decimal, roman, letters, prefixes) show in the page box and thumbnails (long labels are cut to the column), and doc_info lists them. The cited tests cover roman and alpha numbering and the tool listing; labels in a nested number tree and in the page-input box are not covered by them."
 
 [[feature]]
 id = "view.find"
