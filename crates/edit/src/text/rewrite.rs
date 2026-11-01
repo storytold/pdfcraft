@@ -46,6 +46,11 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
     let lines = text_lines(doc, page)?;
     let target = lines.get(line).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no line {}", page + 1, line + 1)))?;
     target.ensure_editable()?;
+    // This path writes one glyph per character in typing order, which puts Myanmar's pre-base signs
+    // beside the wrong letter (#5114). Only the paragraph rewrite shapes text.
+    if text.chars().any(pdfcraft_fonts::source_shaping::is_myanmar) {
+        return Err(EditError::Invalid("Myanmar text has to be shaped, which replacing one line can't do; edit its paragraph instead".into()));
+    }
     // Copies of the line drawn on the same baseline go with it, so the replacement is all that
     // shows. Which operators go is settled here, before any font is generated, so that a refusal
     // leaves the document untouched.

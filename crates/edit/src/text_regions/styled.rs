@@ -3,7 +3,7 @@ use super::{
     BlockStyle, CraftFont, Dict, Document, EditError, HashMap, LineEdit, MAX_TYPE3_GLYPHS, Matrix, Metrics, Object, Op, PdfString, Pieces,
     RangeStyle, TextBlock, TextLine, Type3Glyph, coincident_ops, content_streams, fallback_face, japanese_glyph_from, needs_type3, no_fallback_font,
     no_glyph_for, page_dict, reveal_ops, rewritten_contents, source_encodes, source_family, source_program, source_show, source_space, source_width,
-    splice, type3_faces, type3_glyph, write_type3_glyphs,
+    splice, strip_subset_tag, type3_faces, type3_glyph, write_type3_glyphs,
 };
 
 // The draft is capped at 4 MiB; also bound the outline data prepared across all fallback faces.
@@ -595,7 +595,10 @@ fn shape_source(
             return Ok(Some((bytes, shaped, family)));
         }
     }
-    Err(EditError::Invalid("complex text needs the complete source TrueType/OpenType face; load that font before editing".into()))
+    Err(EditError::Invalid(format!(
+        "complex text needs the complete {} TrueType/OpenType face; load that font before editing",
+        strip_subset_tag(&family)
+    )))
 }
 
 /// For each output row (a range of the draft's characters), whether it is exactly the source row
