@@ -107,7 +107,38 @@ pub(crate) fn body(
         .max_height(max_h)
         .min_scrolled_height(max_h)
         .show(ui, |ui| {
-            ui.horizontal_top(|ui| {
+            settings_and_preview(ui, d, t, sizes, &settings, &sheets, thumb);
+            if let Some(r) = ui.ctx().memory(|m| m.focused()).and_then(|id| ui.ctx().read_response(id))
+                && r.gained_focus()
+            {
+                r.scroll_to_me(None);
+            }
+        });
+    ui.add_space(12.0);
+    let (mut go, mut cancel) = (false, false);
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let looking = still_looking(d);
+        let label = if d.printer.is_some() || looking { tl!("Print") } else { tl!("Save as PDF") };
+        if ui.add_enabled_ui(settings.is_ok() && !sheets.is_empty() && !looking, |ui| widgets::pill_button(ui, label, true)).inner.clicked() {
+            go = true;
+        }
+        if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+            cancel = true;
+        }
+    });
+    (go, cancel)
+}
+
+fn settings_and_preview(
+    ui: &mut egui::Ui,
+    d: &mut PrintDraft,
+    t: &Tokens,
+    sizes: &[(f64, f64)],
+    settings: &Result<print::Settings, String>,
+    sheets: &[print::Sheet],
+    thumb: &mut dyn FnMut(usize) -> Option<egui::TextureId>,
+) {
+    ui.horizontal_top(|ui| {
         // Settings.
         ui.vertical(|ui| {
             ui.set_width(470.0);
@@ -544,23 +575,4 @@ pub(crate) fn body(
             }
         });
     });
-    if let Some(r) = ui.ctx().memory(|m| m.focused()).and_then(|id| ui.ctx().read_response(id))
-        && r.gained_focus()
-    {
-        r.scroll_to_me(None);
-    }
-});
-    ui.add_space(12.0);
-    let (mut go, mut cancel) = (false, false);
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        let looking = still_looking(d);
-        let label = if d.printer.is_some() || looking { tl!("Print") } else { tl!("Save as PDF") };
-        if ui.add_enabled_ui(settings.is_ok() && !sheets.is_empty() && !looking, |ui| widgets::pill_button(ui, label, true)).inner.clicked() {
-            go = true;
-        }
-        if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
-            cancel = true;
-        }
-    });
-    (go, cancel)
 }

@@ -58,6 +58,37 @@ fn print_dialog_buttons_remain_accessible_on_small_screens() {
     assert_eq!(h.state().dialog, None, "Cancel button clicked and closed the dialog");
 }
 
+/// Tabbing down to controls below the fold automatically scrolls them into view (#4973).
+#[test]
+fn print_dialog_tab_navigation_scrolls_focused_controls_into_view() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 500.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(4);
+    assert_eq!(h.state().dialog, Some(Dialog::Print));
+
+    let cancel = h.get_by_role_and_label(Role::Button, "Cancel").rect();
+    let mut found_portrait = false;
+    for _ in 0..40 {
+        h.key_press(egui::Key::Tab);
+        h.run_steps(1);
+        if let Some(portrait) = h.query_by_label("Portrait")
+            && portrait.is_focused()
+        {
+            let rect = portrait.rect();
+            assert!(rect.max.y < cancel.min.y, "Focused Portrait control rect ({rect:?}) must end above Cancel button top ({:?})", cancel.min.y);
+            found_portrait = true;
+            break;
+        }
+    }
+    assert!(found_portrait, "Tab navigation reached and focused the Portrait control");
+}
+
 /// On very short viewports (<300pt), the dialog still fits without fixed minimum height overflow (#4973).
 #[test]
 fn print_dialog_buttons_remain_accessible_on_short_viewports() {
