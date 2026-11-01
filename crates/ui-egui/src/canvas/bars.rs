@@ -63,7 +63,11 @@ pub(super) fn page_indicator(view: &DocView, total: usize, area: Rect, ui: &mut 
                 .corner_radius(CornerRadius::same(99))
                 .inner_margin(egui::Margin::symmetric(10, 4))
                 .show(ui, |ui| {
-                    ui.add(egui::Label::new(egui::RichText::new(text).font(theme::medium(12.0)).color(t.text)).selectable(false));
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(text).font(theme::medium(12.0)).color(t.text))
+                            .selectable(false)
+                            .wrap_mode(egui::TextWrapMode::Extend),
+                    );
                 });
         });
 }
