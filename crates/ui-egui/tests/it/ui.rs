@@ -696,7 +696,8 @@ fn the_integrated_title_bar_is_the_traffic_light_band() {
 
 /// macOS with a right-to-left system language: AppKit mirrors the traffic lights to the right end
 /// of the title bar, and the strip mirrors with them. Home sits beside the lights, the tabs read
-/// from the right after it, then Open; Discord, shortcuts and theme move to the far left end.
+/// from the right after it, then Open; Discord, shortcuts, theme and Preferences move to the far
+/// left end.
 #[cfg(target_os = "macos")]
 fn mirrored_title_bar(names: &[&'static str]) -> Harness<'static, PdfCraftApp> {
     let names = names.to_vec();
@@ -716,9 +717,14 @@ fn the_integrated_title_bar_mirrors_with_traffic_lights_at_the_right() {
     let h = mirrored_title_bar(&["first.pdf", "last.pdf"]);
     let rect = |label: &str| h.get_by_label(label).rect();
     let theme = h.get_by_label_contains("Display theme:").rect();
-    for (label, r) in
-        [("Home", rect("Home")), ("first.pdf", rect("first.pdf")), ("Open", rect("Open")), ("Discord", rect("Discord")), ("Display theme", theme)]
-    {
+    for (label, r) in [
+        ("Home", rect("Home")),
+        ("first.pdf", rect("first.pdf")),
+        ("Open", rect("Open")),
+        ("Discord", rect("Discord")),
+        ("Display theme", theme),
+        ("Preferences", rect("Preferences")),
+    ] {
         assert!(r.top() >= 0.0 && r.bottom() <= band, "{label}: {r:?} inside the {band} pt title bar");
         assert!(r.right() <= width - lights - 4.0, "{label}: {r:?} clears the traffic lights");
     }
@@ -730,10 +736,13 @@ fn the_integrated_title_bar_mirrors_with_traffic_lights_at_the_right() {
     assert!(rect("last.pdf").right() <= rect("first.pdf").left(), "the tabs read from the right");
     assert!(rect("first.pdf").right() >= home.left() - 12.0, "the tabs stay beside Home");
     assert!(rect("Open").right() <= rect("last.pdf").left(), "Open follows the tabs");
-    // The other end: theme, shortcuts and Discord, mirroring their order at the right.
-    let (help, discord) = (rect("Keyboard shortcuts"), rect("Discord"));
-    assert!(theme.left() < 20.0, "Display theme {theme:?} at the far end");
-    assert!(theme.right() <= help.left() && help.right() <= discord.left(), "theme, shortcuts, Discord");
+    // The other end: Preferences, theme, shortcuts and Discord, mirroring their order at the right.
+    let (preferences, help, discord) = (rect("Preferences"), rect("Keyboard shortcuts"), rect("Discord"));
+    assert!(preferences.left() < 20.0, "Preferences {preferences:?} at the far end");
+    assert!(
+        preferences.right() <= theme.left() && theme.right() <= help.left() && help.right() <= discord.left(),
+        "Preferences, theme, shortcuts, Discord"
+    );
     assert!(discord.right() < rect("Open").left(), "Discord stays clear of Open");
 }
 
