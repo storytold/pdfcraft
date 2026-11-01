@@ -82,7 +82,8 @@ impl PdfCraftApp {
         if let Some(control) = &self.control {
             control.set_epoch(self.input_epoch());
         }
-        // Before egui reads this frame's wheel input.
+        // Before egui reads this frame's wheel input, and before the scroll speed scales it.
+        self.hand_wheel_zooms(ctx, raw);
         self.scroll_speed.apply(ctx, raw);
         // The native menu's key equivalents.
         if let Some(native) = self.native_menu.as_mut() {
@@ -92,6 +93,61 @@ impl PdfCraftApp {
 }
 
 impl PdfCraftApp {
+    /// Convert eligible wheel events over the document view (its pages and surrounding space),
+    /// including either comparison half, with the Hand preference on and no dialog open.
+    /// Page grids and expanded All tools do not qualify; a covering menu or popup keeps the
+    /// wheel. Each event uses its own pointer position against the last frame's viewports/layers.
+    /// Only uniformly eligible batches convert, because egui combines wheel deltas per frame.
+    fn hand_wheel_zooms(&self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        if !self.hand_wheel_zoom || self.quick_tool != QuickTool::Hand || self.modal_open() {
+            return;
+        }
+        // The expanded All tools view is shown in the document's place; its list scrolls.
+        if self.mode == Mode::AllTools && self.all_tools_full {
+            return;
+        }
+        let Some(active) = self.active else { return };
+        let partner = compare_ui::side_by_side(self, active).map(|(old, _)| old);
+        let mut pointer = ctx.input(|i| i.pointer.latest_pos());
+        let mut batch_zoom = None;
+        for event in &raw.events {
+            match event {
+                egui::Event::PointerMoved(at) => pointer = Some(*at),
+                egui::Event::PointerGone => pointer = None,
+                egui::Event::MouseWheel { modifiers, .. } => {
+                    let converts = pointer.is_some_and(|pointer| {
+                        if ctx.layer_id_at(pointer).is_some_and(|layer| layer.order != egui::Order::Background) {
+                            return false;
+                        }
+                        if !std::iter::once(active)
+                            .chain(partner)
+                            .filter_map(|i| self.views.get(i))
+                            .any(|view| !view.organize && view.viewport_rect().contains(pointer))
+                        {
+                            return false;
+                        }
+                        // Use the converter itself to keep unit/modifier eligibility in one place.
+                        let mut converted = event.clone();
+                        scroll_speed::wheel_zooms(&mut converted);
+                        matches!(converted, egui::Event::MouseWheel { modifiers: changed, .. } if changed != *modifiers)
+                    });
+                    // Egui aggregates wheel deltas and uses one modifier state per frame.
+                    // A partial conversion would change another notch's zoom/scroll action.
+                    if batch_zoom.is_some_and(|first| first != converts) {
+                        return;
+                    }
+                    batch_zoom = Some(converts);
+                }
+                _ => {}
+            }
+        }
+        if batch_zoom == Some(true) {
+            for event in &mut raw.events {
+                scroll_speed::wheel_zooms(event);
+            }
+        }
+    }
+
     pub(crate) fn finish_render_frame(&mut self, ctx: &egui::Context) {
         self.finish_document_copy(ctx);
         // The Combine grid's thumbnails, whichever tab shows (renders under way still finish).

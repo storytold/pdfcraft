@@ -279,3 +279,63 @@ fn export_to_word_html_and_rtf() {
     }
     assert!(std::fs::read_to_string(dir.join("e.html")).unwrap().contains("Exported words"));
 }
+
+/// #1399: with the Hand tool zooming with the wheel, a notch over either half of a side-by-side
+/// comparison zooms that half and keeps its follower at the same zoom and vertical offset.
+/// The old half belongs to another tab. Frames run with the production raw input hook first.
+#[test]
+fn the_hand_tool_wheel_zooms_over_either_half_of_a_comparison() {
+    for half in 0..2 {
+        let mut h = side_by_side();
+        h.state_mut().set_option("hand-wheel-zoom", "true").unwrap();
+        h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Hand;
+        h.state_mut().animation_effects = pdfcraft_ui_egui::motion::AnimationEffects::Off;
+        // Give both pages a real scroll range so vertical synchronization cannot pass at zero.
+        for view in &mut h.state_mut().views {
+            view.zoom = 1.0;
+            view.fit = pdfcraft_ui_egui::canvas::Fit::None;
+        }
+        let step = |h: &mut Harness<'static, PdfCraftApp>| {
+            let ctx = h.ctx.clone();
+            let mut raw = std::mem::take(h.input_mut());
+            h.state_mut().prepare_raw_input(&ctx, &mut raw);
+            *h.input_mut() = raw;
+            h.step();
+        };
+        for _ in 0..4 {
+            step(&mut h);
+        }
+        let halves: Vec<egui::Rect> = h.state().views.iter().map(|v| v.viewport_rect()).collect();
+        assert!(halves[0].right() <= halves[1].left() + 1.0, "side by side: {halves:?}");
+        let width = |h: &Harness<'static, PdfCraftApp>| h.state().views[half].page_screen_rect(0).unwrap().width();
+        let before = width(&h);
+        let before_page = h.state().views[half].page_screen_rect(0).unwrap();
+        assert!(before_page.height() > halves[half].height() + 1.0, "the fixture must be vertically scrollable");
+        let before_top = before_page.top() - halves[half].top();
+        h.input_mut().events.push(egui::Event::PointerMoved(halves[half].center()));
+        step(&mut h);
+        h.input_mut().events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, 1.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
+        });
+        for _ in 0..10 {
+            step(&mut h);
+        }
+        let after = width(&h);
+        assert!(after > before * 1.05, "half {half} zoomed in: {before} -> {after}");
+        let state = h.state();
+        let leader = &state.views[half];
+        let follower = &state.views[1 - half];
+        assert!((leader.zoom - follower.zoom).abs() < 1e-6, "half {half}: follower zoom {} differs from leader {}", follower.zoom, leader.zoom);
+        let leader_page = leader.page_screen_rect(0).unwrap();
+        let follower_page = follower.page_screen_rect(0).unwrap();
+        assert!((leader_page.width() - follower_page.width()).abs() < 1.0, "half {half}: rendered page widths must match");
+        let leader_top = leader_page.top() - leader.viewport_rect().top();
+        let follower_top = follower_page.top() - follower.viewport_rect().top();
+        assert!((leader_top - before_top).abs() > 1.0, "pointer-anchored zoom must move the leader vertically");
+        assert!((leader_top - follower_top).abs() < 1.0, "half {half}: follower top {follower_top} differs from leader {leader_top}");
+    }
+}
