@@ -99,7 +99,7 @@ fn system_clipboard_text(ctx: &egui::Context) -> String {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        arboard::Clipboard::new().and_then(|mut c| c.get_text()).unwrap_or_default()
+        crate::os_clipboard::with(|cb| cb.get_text()).unwrap_or_default()
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -115,14 +115,14 @@ pub(crate) fn text_edit_context_menu(resp: &Response, text: &mut String, clipboa
         let has_text = !text.is_empty();
         let total_chars = text.chars().count();
         let state = egui::text_edit::TextEditState::load(ui.ctx(), resp.id);
-        let selection = state
+        let raw_range = state
             .as_ref()
             .and_then(|s| s.cursor.char_range())
             .map(|r| {
                 let [min, max] = r.sorted_cursors();
                 (usize::from(min.index).min(total_chars), usize::from(max.index).min(total_chars))
-            })
-            .filter(|(min, max)| min < max);
+            });
+        let selection = raw_range.filter(|(min, max)| min < max);
 
         if ui.add_enabled(has_text, egui::Button::new(tl!("Cut"))).clicked() {
             let (copied, next_caret) = if let Some((start_char, end_char)) = selection {
