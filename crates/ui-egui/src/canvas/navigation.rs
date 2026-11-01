@@ -91,8 +91,10 @@ impl DocView {
             }
             self.forward.clear();
         }
-        // Partial wheel motion belongs to the old place.
+        // Partial wheel motion belongs to the old place, and so does a find step's match.
         self.reset_coarse_state();
+        self.find_hold = None;
+        self.goto_point = None;
         self.goto = Some((page, 0.0));
         self.current = page;
     }
@@ -254,6 +256,8 @@ impl DocView {
         self.goto = Some((page, 0.0));
         self.current = page;
         self.reset_coarse_state();
+        // A find step's match belongs to the place left, as for any other jump.
+        self.find_hold = None;
         true
     }
 

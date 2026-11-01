@@ -72,6 +72,7 @@ mod recovery;
 mod redact;
 mod reload;
 mod script_noop;
+mod search_position;
 mod side_panels;
 mod signing;
 mod stamps;

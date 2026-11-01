@@ -266,13 +266,14 @@ fn explicit_search_jumps_record_history_and_keep_match_destination() {
             v.go_to_match(0);
         }
         assert_eq!(v.back, vec![0], "explicit search jump must remember its origin");
-        assert_eq!(v.goto, Some((3, 0.5)), "keep the match offset instead of the page top");
+        assert_eq!(v.goto, None, "the match's point alone: a zoom that frame cannot put a page-top offset off to the next");
         assert_eq!(v.current, 3);
         assert_eq!(v.current_page_label(None), "4");
         // Chrome refreshes the idle page box; navigation must not overwrite a draft
         // that may still be focused. DocView does not own the editor's focus state.
         assert_eq!(v.page_input, "draft in progress");
-        assert!(v.goto_point.is_none(), "an earlier link destination cannot override the search offset");
+        let middle = vec2(v.viewport_w, v.viewport_h) / 2.0;
+        assert_eq!(v.goto_point, Some((3, Some(40.0 / 300.0), Some(0.675), middle)), "the match centre goes to the middle of the viewport");
         v.go_to_match(1);
         assert_eq!(v.back, vec![0], "same-page matches do not duplicate history");
         assert!(v.view_history(false));
@@ -287,13 +288,75 @@ fn explicit_search_jumps_record_history_and_keep_match_destination() {
 }
 
 #[test]
+fn search_centres_the_match_on_a_rotated_view() {
+    // The match's centre is 40 pt from the left and 270 pt down a 300 × 400 page.
+    for (rotation, fx, fy) in [(90, 1.0 - 0.675, 40.0 / 300.0), (180, 1.0 - 40.0 / 300.0, 1.0 - 0.675), (270, 0.675, 1.0 - 40.0 / 300.0)] {
+        let mut v = history_search_view();
+        v.rotation = rotation;
+        v.find_step(true);
+        let middle = vec2(v.viewport_w, v.viewport_h) / 2.0;
+        assert_eq!(v.goto_point, Some((3, Some(fx), Some(fy), middle)), "view rotated {rotation}°");
+    }
+}
+
+#[test]
+fn a_zoom_just_after_a_find_step_keeps_the_match_in_the_middle() {
+    let mut v = history_search_view();
+    v.screen_rects = vec![(0, Rect::from_min_size(pos2(100.0, 20.0), vec2(300.0, 400.0)))];
+    // A zoom anchored at the pointer was pending when the step came: the step drops it.
+    v.zoom_at(2.0, pos2(150.0, 50.0));
+    assert!(v.zoom_anchor.is_some());
+    v.find_step(true);
+    assert_eq!((v.goto, v.zoom_anchor), (None, None), "the step alone decides where the view goes");
+    let middle = vec2(v.viewport_w, v.viewport_h) / 2.0;
+    let target = Some((3, Some(40.0 / 300.0), Some(0.675), middle));
+    assert_eq!(v.goto_point, target);
+    // The rest of an eased wheel zoom, or a zoom in the same frame, anchors on the match
+    // at the window's centre, not on the pointer.
+    v.zoom_at(3.0, pos2(150.0, 50.0));
+    assert_eq!(v.zoom_anchor, Some((3, 40.0 / 300.0, 0.675, middle)));
+    // Another jump lets go of the match: the next zoom is at the pointer again.
+    v.go_to_page(1);
+    v.zoom_at(4.0, pos2(150.0, 50.0));
+    assert_eq!(v.zoom_anchor.map(|a| a.0), Some(0), "anchored on the page under the pointer");
+}
+
+#[test]
+fn previous_view_after_a_find_step_lets_go_of_the_match() {
+    let mut v = history_search_view();
+    v.screen_rects = vec![(0, Rect::from_min_size(pos2(100.0, 20.0), vec2(300.0, 400.0)))];
+    v.find_step(true);
+    // Previous view while a wheel zoom is still easing: the zoom must not hold the old match
+    // and put the history jump off until it stops.
+    assert!(v.view_history(false));
+    assert_eq!(v.goto, Some((0, 0.0)));
+    v.zoom_at(2.0, pos2(150.0, 50.0));
+    assert_eq!(v.zoom_anchor.map(|a| a.0), Some(0), "anchored on the page under the pointer");
+}
+
+#[test]
+fn a_match_with_unbounded_glyphs_falls_back_to_its_page() {
+    let mut v = history_search_view();
+    // A hostile page: a glyph from -inf to inf, whose centre is NaN.
+    if let Some(text) = v.texts.get_mut(&3).and_then(Arc::get_mut) {
+        text.glyphs[0].rect = [f32::NEG_INFINITY, 260.0, f32::INFINITY, 280.0];
+    }
+    v.zoom_at(2.0, pos2(150.0, 50.0));
+    v.find_step(true);
+    assert!(v.goto_point.is_none(), "no NaN scroll target");
+    assert_eq!(v.goto.map(|g| g.0), Some(3), "the match's page instead");
+    v.zoom_at(3.0, pos2(150.0, 50.0));
+    assert!(v.zoom_anchor.is_none_or(|a| a.1.is_finite() && a.2.is_finite()), "no NaN zoom anchor");
+}
+
+#[test]
 fn automatic_search_updates_do_not_record_history_or_discard_forward() {
     let mut v = history_search_view();
     v.forward = vec![4];
     v.find = Some(Find { query: "match".into(), ..Default::default() });
     v.rerun_find();
     assert_eq!(v.current, 3);
-    assert_eq!(v.goto, Some((3, 0.5)));
+    assert_eq!((v.goto, v.goto_point.map(|g| g.0)), (None, Some(3)), "the match's point on its page");
     assert!(v.back.is_empty());
     assert_eq!(v.forward, vec![4]);
     v.find.as_mut().unwrap().current = None;
