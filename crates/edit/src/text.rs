@@ -61,6 +61,9 @@ use rewrite::{coincident_ops, rewrite_block_from};
 pub(crate) use rewrite::{replace_line_with_limit, rewrite_block_with_limit};
 pub(crate) use rewrite::{reveal_ops, selectable_blocks, translate_blocks};
 
+#[path = "text_shaped.rs"]
+mod shaped;
+
 /// One line of existing text.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextLine {

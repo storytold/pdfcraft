@@ -427,10 +427,16 @@ fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Sc
     let in_place = f.kind == FieldKind::Text && f.has(flags::PASSWORD);
     let mut undrawn = false;
     for w in &f.widgets {
-        let (stream, missing) = match &shown {
+        let (mut stream, missing) = match &shown {
             Some(s) => appearance::field_appearance_drawn(doc, f, w, std::slice::from_ref(s), false),
             None => appearance::field_appearance_drawn(doc, f, w, values, true),
         };
+        if let Some(Object::Dict(resources)) = stream.dict.get_mut(b"Resources")
+            && let Some(Object::Dict(fonts)) = resources.get(b"Font")
+        {
+            let fonts = pdfcraft_fonts::appearance_text::materialize_fonts(doc, fonts);
+            resources.set(b"Font".to_vec(), Object::Dict(fonts));
+        }
         undrawn |= missing.is_some();
         let existing_ap = in_place
             .then(|| {

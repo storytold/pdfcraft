@@ -6,13 +6,12 @@
 //! It returns `None` for anything it cannot draw faithfully (cloudy borders, unknown line
 //! endings, indirect geometry), so callers never replace an appearance with a worse one.
 //!
-//! The note icons are PdfCraft's own drawings (AGENTS.md §1). Text boxes use the standard
-//! Helvetica font with WinAnsi encoding; line breaking uses [`text_width`], an approximation of
-//! Helvetica's proportions by character class (no font program or metrics file is bundled).
+//! The note icons are PdfCraft's own drawings (AGENTS.md §1). Text boxes use standard Helvetica
+//! for WinAnsi text, and their optional script faces for shaped text. [`text_width`] and [`wrap`]
+//! use the same metrics and shaping as the appearance they size.
 
 use pdfcraft_cos::{Dict, Object, PdfString, Stream};
-use pdfcraft_fonts::{first_undrawable, literal, win_ansi};
-pub use pdfcraft_fonts::{helvetica_width as text_width, wrap};
+use pdfcraft_fonts::{appearance_text, first_undrawable, literal, win_ansi};
 
 use crate::{NOTE_SIZE, Rgb, n};
 
@@ -20,6 +19,33 @@ mod symbols;
 
 pub(crate) use symbols::display_stamp;
 use symbols::{CAPTION_SIZE, attach_icon, ellipse, line_caption, line_layout, note_icon, stamp};
+
+/// The width of a text line in its generated appearance, including contextual shaping and marks.
+/// Plain WinAnsi text, or a build without the required script face, keeps its Helvetica measure.
+pub fn text_width(text: &str, size: f64) -> f64 {
+    shaped_lines(text, size, f64::MAX)
+        .map(|lines| lines.iter().map(|line| line.width).fold(0.0, f64::max))
+        .unwrap_or_else(|| pdfcraft_fonts::helvetica_width(text, size))
+}
+
+/// Wrap using the same shaped widths and paragraph boundaries as the generated appearance.
+pub fn wrap(text: &str, size: f64, width: f64) -> Vec<String> {
+    shaped_lines(text, size, width)
+        .map(|lines| lines.into_iter().map(|line| line.text).collect())
+        .unwrap_or_else(|| pdfcraft_fonts::wrap(text, size, width))
+}
+
+/// Height needed by the generated text at `width`, including positioned script marks.
+/// Shaping has the same input/work limits as the appearance; otherwise keep Helvetica spacing.
+pub fn text_height(text: &str, size: f64, width: f64) -> f64 {
+    shaped_lines(text, size, width)
+        .map(|lines| appearance_text::height(&lines, size))
+        .unwrap_or_else(|| pdfcraft_fonts::wrap(text, size, width).len().max(1) as f64 * size * 1.2)
+}
+
+fn shaped_lines(text: &str, size: f64, width: f64) -> Option<Vec<appearance_text::Line>> {
+    if appearance_text::has_shaped_text(text) && appearance_text::can_shape(text) { appearance_text::wrap(text, size, width).ok() } else { None }
+}
 
 /// Length of an arrowhead for a line of width `w`.
 pub fn arrow_size(w: f64) -> f64 {
@@ -313,7 +339,10 @@ fn text_turn(d: &Dict) -> i64 {
 pub fn undrawable_text(d: &Dict) -> Option<(&'static str, char)> {
     let text = |key: &[u8]| d.get(key).and_then(Object::as_string).map(PdfString::to_text);
     let (what, text) = match d.name(b"Subtype")? {
-        b"FreeText" => ("the comment's text", text(b"Contents")?),
+        b"FreeText" => {
+            let text = text(b"Contents")?;
+            return Some(("the comment's text", pdfcraft_fonts::appearance_text::first_undrawable(&text)?));
+        }
         b"Line" if !d.contains(b"PCMeasureValue") => ("the line's caption", line_caption(d)?),
         b"Line" | b"PolyLine" | b"Polygon" => ("the measurement label", text(b"PCMeasureValue")?),
         b"Stamp" if matches!(d.get(b"PCStamp"), Some(Object::Bool(true))) => ("the stamp's \"By\" line", text(b"PCByLine")?),
@@ -964,6 +993,37 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     let pad = 2.0 + bw;
     let width = (rect[2] - rect[0] - 2.0 * pad).max(1.0);
     let q = d.int(b"Q").unwrap_or(0);
+    // Keep this self-contained until it is installed: the appearance cache must never
+    // keep font references allocated only in one temporary display document.
+    if pdfcraft_fonts::appearance_text::has_shaped_text(&text) && pdfcraft_fonts::appearance_text::can_shape(&text) {
+        // A shaping/outline-budget failure must refuse the redraw, rather than create
+        // unmarked '?' that flattening could make permanent.
+        let lines = pdfcraft_fonts::appearance_text::wrap(&text, size, width).ok()?;
+        let (text_content, fonts) = pdfcraft_fonts::appearance_text::draw_directional(
+            &lines,
+            size,
+            [rect[0] + pad, rect[1] + pad, rect[2] - pad, rect[3] - pad],
+            q,
+            text_color,
+        )
+        .ok()?;
+        c.push_str(&format!(
+            "{} {} {} {} re W n
+",
+            n(rect[0]),
+            n(rect[1]),
+            n(rect[2] - rect[0]),
+            n(rect[3] - rect[1])
+        ));
+        let mut content = c.into_bytes();
+        content.extend(text_content);
+        res.set(b"Font".to_vec(), Object::Dict(fonts));
+        let mut stream = form(full, &content, res);
+        if let Some(m) = matrix {
+            stream.dict.set(b"Matrix".to_vec(), Object::Array(m.iter().copied().map(Object::Real).collect()));
+        }
+        return Some(stream);
+    }
     c.push_str(&format!(
         "{} {} {} {} re W n\nBT\n/Helv {} Tf\n{}",
         n(rect[0]),

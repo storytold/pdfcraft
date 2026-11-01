@@ -22,9 +22,20 @@ pub fn matching_faces(name: &str) -> Vec<&'static crate::CraftFont> {
     crate::CRAFT_FONTS.iter().filter(|f| face_key(f.family) == key || face_key(&f.name()) == key).collect()
 }
 
-/// Whether a complete font program can show every non-newline character.
+/// Unicode default-ignorable characters steer shaping or have no independent ink. They do not
+/// require a cmap entry (in particular Arabic joining and bidirectional controls).
+pub fn default_ignorable(c: char) -> bool {
+    matches!(u32::from(c),
+        0x00ad | 0x034f | 0x061c | 0x115f..=0x1160 | 0x17b4..=0x17b5 |
+        0x180b..=0x180f | 0x200b..=0x200f | 0x202a..=0x202e | 0x2060..=0x206f |
+        0x3164 | 0xfe00..=0xfe0f | 0xfeff | 0xffa0 | 0xfff0..=0xfff8 |
+        0x1bca0..=0x1bca3 | 0x1d173..=0x1d17a | 0xe0000..=0xe0fff)
+}
+
+/// Whether a complete font program can show every character that requires a glyph.
 pub fn covers(bytes: &[u8], text: &str) -> bool {
-    FontRef::new(bytes).is_ok_and(|f| text.chars().all(|c| matches!(c, '\n' | '\r') || f.charmap().map(c).is_some_and(|g| g.to_u32() != 0)))
+    FontRef::new(bytes)
+        .is_ok_and(|f| text.chars().all(|c| matches!(c, '\n' | '\r') || default_ignorable(c) || f.charmap().map(c).is_some_and(|g| g.to_u32() != 0)))
 }
 
 /// Names come from the program, never a caller's guessed family.
@@ -145,7 +156,12 @@ pub fn embed_mapping(
         "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapName /PCUnicode def\n/CMapType 2 def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n",
     );
     for (chunk_index, chunk) in mappings.chunks(100).enumerate() {
-        let _ = writeln!(cmap, "{} beginbfchar", chunk.len());
+        // Auxiliary outlines have no independent Unicode. An empty bfchar destination makes
+        // some readers reject the whole CMap; leave those CIDs unmapped without changing them.
+        let unicode_count = chunk.iter().filter(|(text, _)| !text.is_empty()).count();
+        if unicode_count > 0 {
+            let _ = writeln!(cmap, "{unicode_count} beginbfchar");
+        }
         let _ = writeln!(cid_encoding, "{} begincidchar", chunk.len());
         for (offset, (unicode, gid)) in chunk.iter().enumerate() {
             let cid = u16::try_from(chunk_index.saturating_mul(100).saturating_add(offset).saturating_add(1)).map_err(|_| "font mapping limit")?;
@@ -161,10 +177,14 @@ pub fn embed_mapping(
             widths.push(Object::Real(width));
             cff_widths.insert(glyph, width);
             let _ = writeln!(cid_encoding, "<{cid:04X}> {glyph}");
-            let hex: String = unicode.encode_utf16().map(|u| format!("{u:04X}")).collect();
-            let _ = writeln!(cmap, "<{cid:04X}> <{hex}>");
+            if !unicode.is_empty() {
+                let hex: String = unicode.encode_utf16().map(|u| format!("{u:04X}")).collect();
+                let _ = writeln!(cmap, "<{cid:04X}> <{hex}>");
+            }
         }
-        cmap.push_str("endbfchar\n");
+        if unicode_count > 0 {
+            cmap.push_str("endbfchar\n");
+        }
         cid_encoding.push_str("endcidchar\n");
     }
     cmap.push_str("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
@@ -341,6 +361,52 @@ fn same_resource(doc: &Document, fonts: &Dict, name: &str, programs: &mut Progra
 mod tests {
     use super::*;
     use crate::pdf::Metrics;
+
+    fn stream_data(doc: &Document, object: Option<&Object>) -> Option<Vec<u8>> {
+        match doc.resolve(object?).as_ref() {
+            Object::Stream(s) => s.decoded().ok(),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn empty_shaped_auxiliaries_do_not_invalidate_the_unicode_cmap_or_change_glyphs() {
+        let bytes = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+        let face = FontRef::new(bytes).unwrap();
+        let gid = face.charmap().map('A').unwrap();
+        // Exercise an entirely empty 100-entry block, a mixed block and the final short block.
+        let mut mappings = vec![(String::new(), gid); 203];
+        mappings[100].0 = "A".into();
+        mappings[150].0 = "fi".into();
+        mappings[202].0 = "Z".into();
+        let mut doc = Document::new_empty();
+        let mut fonts = Dict::new();
+        let name = embed_mapping(&mut doc, &mut fonts, bytes, "Inter", &mappings).unwrap();
+        let top = doc.dict(fonts.get(name.as_bytes()).unwrap()).unwrap();
+        let unicode = String::from_utf8(stream_data(&doc, top.get(b"ToUnicode")).unwrap()).unwrap();
+        assert!(!unicode.contains("<>"), "an empty bfchar destination must not invalidate the complete CMap in readers");
+        assert!(!unicode.contains("0 beginbfchar"));
+        assert!(unicode.contains("2 beginbfchar\n<0065> <0041>\n<0097> <00660069>\nendbfchar"));
+        assert!(unicode.contains("1 beginbfchar\n<00CB> <005A>\nendbfchar"));
+        let cid = doc.dict(top.get(b"DescendantFonts").unwrap().as_array().unwrap().first().unwrap()).unwrap();
+        let gids = stream_data(&doc, cid.get(b"CIDToGIDMap")).unwrap();
+        assert_eq!(gids.len(), (mappings.len() + 1) * 2);
+        assert_eq!(&gids[..2], &[0, 0]);
+        for word in gids[2..].as_chunks::<2>().0 {
+            assert_eq!(u16::from_be_bytes(*word), u16::try_from(gid.to_u32()).unwrap());
+        }
+        assert_eq!(crate::pdf::embedded_sfnt(&doc, &top).unwrap(), bytes, "the complete supplied program stays byte-identical");
+        let metrics = Metrics::from_dict(&doc, &top);
+        assert_eq!(metrics.decode(&[0, 101, 0, 151, 0, 203]), "AfiZ");
+        assert!(metrics.text_of(1).is_none(), "auxiliary CIDs have no guessed replacement text");
+        assert!(metrics.text_of(102).is_none());
+        for code in 1..=203 {
+            assert_eq!(metrics.width(code), metrics.width(101), "every original CID keeps its full source advance");
+        }
+        let objects = doc.scan_objects().count();
+        assert_eq!(embed_mapping(&mut doc, &mut fonts, bytes, "Inter", &mappings).unwrap(), name);
+        assert_eq!(doc.scan_objects().count(), objects, "the same complete mapping still reuses its resource");
+    }
 
     #[test]
     fn full_unicode_embedding_keeps_outlines_advances_and_roundtrip_codes() {

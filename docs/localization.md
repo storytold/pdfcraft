@@ -48,6 +48,19 @@ egui 0.37's epaint shapes every line with the Unicode bidirectional algorithm (U
 
 Wrapped paragraphs break between words in logical order and epaint reorders each resulting line, so a wrapped label reads in the right direction from the first line down. Text typed into a field is shaped and reordered while editing, and the stored value stays logical.
 
+Existing Arabic document text prefers a validated complete source font. Uniform full-face
+paragraphs retain their bidi context across wrapped rows, break overwide words at grapheme
+boundaries and keep logical spaces and `/ActualText` through save/reopen. A saved paragraph's
+different CID maps for the same full program remain editable as one source face. Mixed
+contextual font/style ranges in one full-face paragraph still require a uniform paragraph.
+When the source faces cannot draw the edit, the reported Noto Sans Arabic Type3 fallback redraws
+upright source text run by run: every run keeps its size, colour and weight (bold from the
+variable face's `wght` 700 instance; Latin in the matching standard Helvetica face, oblique
+kept, Arabic upright), and unchanged rows keep their baselines and shared edge. Annotation and
+form appearances still use the Regular face. A validated complete source face retains its
+actual outlines and available weight. Shaped style ranges, keeping mixed styles inside one row
+across a second edit, and arbitrary producer grouping remain incomplete.
+
 Central Kurdish (Sorani, `ckb`) takes the same path: its catalog is written in logical order and `rtl: true` selects the explicit right-to-left direction; epaint reorders it, so it behaves as Arabic does above. Counts use the two [CLDR ckb forms](https://www.unicode.org/cldr/charts/48/supplemental/language_plural_rules.html#ckb) (`one`, `other`); Sorani keeps the noun singular after a numeral, so the two `@plural` forms usually read the same. Dates use the Kurdish names of the Gregorian months. The `Arab` face (Noto Sans Arabic) covers the Kurdish-only letters (`ێ ڵ ڕ ۆ ە ڤ ژ چ گ پ`).
 
 The Persian catalog (`fa.tsv`, interface name **فارسی**) has 2,785 entries, covering 2,785 of the current 2,798-key union; the 13 keys added after it was written still show English. It is written in contemporary software Persian from the meaning of the English labels. Counts use the two [CLDR `fa`](https://www.unicode.org/cldr/charts/48/supplemental/language_plural_rules.html#fa) forms (`one` for 0 and 1, `other` for every other count), so `@plural` entries list two forms. It is right to left like Arabic and Kurdish: `rtl: true` selects the explicit right-to-left direction, the entries stay in logical order and epaint reorders each line, and the stock chrome is mirrored as it is for Arabic. Compound words use the zero-width non-joiner (نیم‌فاصله, U+200C), the Persian comma `،` and question mark `؟`, and Persian `ی`/`ک` rather than the Arabic `ي`/`ك`. Dates use the Persian names of the Gregorian months. The `Arab` face (Noto Sans Arabic) covers Persian letters, so it needs no Japanese face. The translation is AI-assisted and has not yet been proofread line by line by a native speaker; status `partial`: no translated help, and engine/OS error details stay English inside a translated frame.
