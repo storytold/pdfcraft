@@ -2856,6 +2856,7 @@ theme	Appearance	Išvaizda
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Šiandien
+	Automatic AcroForm scripts are disabled until safe execution isolation is available; saved field values were preserved. Explicit button and console scripts are still available.	Automatiniai AcroForm scenarijai išjungti, kol nėra saugios vykdymo izoliacijos; įrašytos laukų reikšmės išsaugotos. Mygtukų ir konsolės scenarijai tebėra prieinami.
 @plural	{n} reply|{n} replies	{n} atsakymas|{n} atsakymai|{n} atsakymų
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

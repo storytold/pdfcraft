@@ -2603,6 +2603,7 @@ animation effects	Off	Ανενεργά
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Σήμερα
+	Automatic AcroForm scripts are disabled until safe execution isolation is available; saved field values were preserved. Explicit button and console scripts are still available.	Τα αυτόματα σενάρια AcroForm είναι απενεργοποιημένα μέχρι να υπάρχει ασφαλής απομόνωση εκτέλεσης· οι αποθηκευμένες τιμές πεδίων διατηρήθηκαν. Τα σενάρια κουμπιών και κονσόλας παραμένουν διαθέσιμα.
 @plural	{n} reply|{n} replies	{n} απάντηση|{n} απαντήσεις
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

@@ -8,7 +8,7 @@
 
 use std::collections::HashSet;
 
-use pdfcraft_cos::{Document, ObjRef, Object, PdfString};
+use pdfcraft_cos::{DecodeBudget, Document, ObjRef, Object, PdfString};
 
 use crate::{Field, FieldKind, FieldValue, FormError, fields, flags};
 
@@ -212,6 +212,145 @@ pub fn document_scripts_named(doc: &Document) -> Vec<(String, String)> {
     }
     out.sort();
     out
+}
+
+/// Document-open JavaScripts: the catalog's `/OpenAction` (and its `/Next` chain) followed by the
+/// opening page's `/AA /O` action (and its `/Next` chain), in execution order (ISO 32000-2
+/// §7.7.2, §12.6.2, §12.6.3). Both action chains share one script-stream decode budget.
+pub fn open_scripts(doc: &Document) -> Vec<String> {
+    let Some(root) = doc.root() else { return Vec::new() };
+    let cat = doc.get(root);
+    let Some(c) = cat.as_dict() else { return Vec::new() };
+    let mut out = Vec::new();
+    let mut scripts = crate::script_budget();
+    let open = c.get(b"OpenAction");
+    if let Some(a) = open {
+        collect_action_scripts(doc, a, &mut out, &mut scripts);
+    }
+    let pages = crate::page_refs(doc);
+    let page_idx = opening_page_index(doc, open, &pages);
+    if let Some(&page) = pages.get(page_idx)
+        && let Some(page_open) =
+            doc.get(page).as_dict().and_then(|d| d.get(b"AA")).map(|a| doc.resolve(a)).and_then(|a| a.as_dict().and_then(|aa| aa.get(b"O").cloned()))
+    {
+        collect_action_scripts(doc, &page_open, &mut out, &mut scripts);
+    }
+    out
+}
+
+/// The page whose `/AA /O` runs at open: the `/OpenAction` destination, or page 0 when that
+/// action is not a local destination. A named `/D` is resolved through `/Names /Dests` and the
+/// legacy `/Dests` dictionary (ISO 32000-2 §12.3.2.2).
+fn opening_page_index(doc: &Document, open: Option<&Object>, pages: &[ObjRef]) -> usize {
+    open.and_then(|action| destination_page(doc, action, pages, 0)).unwrap_or(0)
+}
+
+/// Page index of a destination array, a `/GoTo` action, a destination dictionary, or a name.
+/// `None` when it is not a local destination. Depth bounds a destination that names itself.
+fn destination_page(doc: &Document, dest: &Object, pages: &[ObjRef], depth: u32) -> Option<usize> {
+    if depth > 8 {
+        return None;
+    }
+    let dest = doc.resolve(dest);
+    match dest.as_ref() {
+        Object::Array(items) => page_index(doc, items.first()?, pages),
+        Object::Dict(d) => match d.name(b"S") {
+            Some(b"GoTo") => d.get(b"D").and_then(|inner| destination_page(doc, inner, pages, depth + 1)),
+            Some(_) => None,
+            None => d.get(b"D").and_then(|inner| destination_page(doc, inner, pages, depth + 1)),
+        },
+        Object::String(s) => named_destination(doc, &s.bytes).as_ref().and_then(|found| destination_page(doc, found, pages, depth + 1)),
+        Object::Name(n) => named_destination(doc, n).as_ref().and_then(|found| destination_page(doc, found, pages, depth + 1)),
+        _ => None,
+    }
+}
+
+fn page_index(doc: &Document, p: &Object, pages: &[ObjRef]) -> Option<usize> {
+    if let Object::Ref(r) = p {
+        return pages.iter().position(|pr| pr == r);
+    }
+    doc.resolve(p).as_int().and_then(|i| usize::try_from(i).ok())
+}
+
+/// The destination named `key` in the catalog name tree, or in the PDF 1.1 `/Dests` dictionary.
+fn named_destination(doc: &Document, key: &[u8]) -> Option<Object> {
+    let root = doc.root()?;
+    let cat = doc.get(root);
+    let cat = cat.as_dict()?;
+    if let Some(tree) = cat.get(b"Names").map(|n| doc.resolve(n)).and_then(|n| n.as_dict().and_then(|d| d.get(b"Dests").cloned()))
+        && let Some(value) = name_tree_value(doc, &tree, key)
+    {
+        return Some(value);
+    }
+    cat.get(b"Dests").map(|d| doc.resolve(d)).and_then(|d| d.as_dict().and_then(|d| d.get(key).cloned()))
+}
+
+fn name_tree_value(doc: &Document, root: &Object, key: &[u8]) -> Option<Object> {
+    let mut stack = vec![root.clone()];
+    let mut seen: HashSet<ObjRef> = HashSet::new();
+    let mut visited = 0u32;
+    while let Some(raw) = stack.pop() {
+        if let Object::Ref(r) = raw
+            && !seen.insert(r)
+        {
+            continue;
+        }
+        visited += 1;
+        if visited > 10_000 {
+            break;
+        }
+        let node = doc.resolve(&raw);
+        let Some(d) = node.as_dict() else { continue };
+        if let Some(pairs) = d.get(b"Names").map(|n| doc.resolve(n)).and_then(|n| n.as_array().cloned()) {
+            for pair in pairs.chunks(2) {
+                let [k, v] = pair else { continue };
+                let matches = match &*doc.resolve(k) {
+                    Object::String(s) => s.bytes.as_slice() == key,
+                    Object::Name(n) => n.as_slice() == key,
+                    _ => false,
+                };
+                if matches {
+                    return Some(v.clone());
+                }
+            }
+        }
+        if let Some(kids) = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()) {
+            stack.extend(kids);
+        }
+    }
+    None
+}
+
+fn collect_action_scripts(doc: &Document, root: &Object, out: &mut Vec<String>, scripts: &mut DecodeBudget) {
+    let mut stack = vec![root.clone()];
+    let mut seen: HashSet<ObjRef> = HashSet::new();
+    let mut visited = 0;
+    while let Some(raw) = stack.pop() {
+        if let Object::Ref(r) = raw
+            && !seen.insert(r)
+        {
+            continue;
+        }
+        visited += 1;
+        if visited > 1_000 {
+            break;
+        }
+        let node = doc.resolve(&raw);
+        if let Some(items) = node.as_array() {
+            stack.extend(items.iter().rev().cloned());
+            continue;
+        }
+        let Some(d) = node.as_dict() else { continue };
+        if d.name(b"S") == Some(b"JavaScript")
+            && let Some(js) = crate::script(doc, &raw, scripts)
+            && !js.trim().is_empty()
+        {
+            out.push(js);
+        }
+        if let Some(next) = d.get(b"Next") {
+            stack.push(next.clone());
+        }
+    }
 }
 
 /// Add (or replace) a document-level JavaScript named `name`.

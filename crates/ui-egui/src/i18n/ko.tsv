@@ -2827,6 +2827,7 @@ theme	Appearance	모양
 	Attaching files is not available on the web yet	웹에서는 아직 파일을 첨부할 수 없습니다
 	Delete attachment	첨부 파일 삭제
 	Delete attachment {key}	첨부 파일 {key} 삭제
+	Automatic AcroForm scripts are disabled until safe execution isolation is available; saved field values were preserved. Explicit button and console scripts are still available.	안전한 실행 격리가 가능해질 때까지 AcroForm 자동 스크립트는 꺼져 있습니다. 저장된 필드 값은 그대로입니다. 단추와 콘솔 스크립트는 여전히 직접 실행할 수 있습니다.
 @plural	{n} reply|{n} replies	답글 {n}개
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

@@ -2857,6 +2857,7 @@ theme	Appearance	Aspect
 	Attaching files is not available on the web yet	Atașarea fișierelor nu este încă disponibilă pe web
 	Delete attachment	Ștergere atașament
 	Delete attachment {key}	Ștergere atașament {key}
+	Automatic AcroForm scripts are disabled until safe execution isolation is available; saved field values were preserved. Explicit button and console scripts are still available.	Scripturile automate AcroForm sunt dezactivate până când este disponibilă o izolare sigură a execuției; valorile salvate ale câmpurilor au fost păstrate. Scripturile butoanelor și ale consolei rămân disponibile.
 @plural	{n} reply|{n} replies	{n} răspuns|{n} răspunsuri|{n} de răspunsuri
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

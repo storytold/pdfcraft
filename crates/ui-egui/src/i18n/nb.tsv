@@ -2741,6 +2741,7 @@ key	Space	Mellomrom
 
 # AI-assisted additions for restoring the last view (#1767) (2026-10-22); not reviewed by a native speaker.
 	Restore the last view (page, zoom and page display) when a document is opened again	Gjenopprett den siste visningen (side, zoom og sidevisning) når et dokument åpnes igjen
+	Automatic AcroForm scripts are disabled until safe execution isolation is available; saved field values were preserved. Explicit button and console scripts are still available.	Automatiske AcroForm-skript er slått av til sikker kjøreisolering er tilgjengelig; lagrede feltverdier er beholdt. Skript for knapper og konsollen er fortsatt tilgjengelige.
 @plural	{n} reply|{n} replies	{n} svar|{n} svar
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

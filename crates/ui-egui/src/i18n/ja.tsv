@@ -2596,6 +2596,7 @@ animation effects	Off	オフ
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	今日
+	Automatic AcroForm scripts are disabled until safe execution isolation is available; saved field values were preserved. Explicit button and console scripts are still available.	安全な実行の分離ができるまで、AcroForm の自動スクリプトは無効です。保存済みのフィールド値はそのままです。ボタンとコンソールのスクリプトは、明示的に実行できます。
 @plural	{n} reply|{n} replies	{n} 件の返信
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

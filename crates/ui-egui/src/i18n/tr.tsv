@@ -2592,6 +2592,7 @@ animation effects	Off	Kapalı
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Bugün
+	Automatic AcroForm scripts are disabled until safe execution isolation is available; saved field values were preserved. Explicit button and console scripts are still available.	Güvenli yürütme yalıtımı kullanılabilir olana kadar otomatik AcroForm komut dosyaları devre dışıdır; kaydedilmiş alan değerleri korunmuştur. Düğme ve konsol komut dosyaları kullanılmaya devam eder.
 @plural	{n} reply|{n} replies	{n} yanıt
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

@@ -2546,6 +2546,7 @@ animation effects	Off	關
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	今天
+	Automatic AcroForm scripts are disabled until safe execution isolation is available; saved field values were preserved. Explicit button and console scripts are still available.	在具備安全的執行隔離之前，AcroForm 的自動指令碼已停用；已儲存的欄位值保持不變。按鈕指令碼與主控台指令碼仍可手動執行。
 @plural	{n} reply|{n} replies	{n} 則回覆
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

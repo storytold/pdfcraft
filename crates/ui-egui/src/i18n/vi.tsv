@@ -2864,6 +2864,7 @@ key	Space	Space
 
 # AI-assisted additions for restoring the last view (#1767) (2026-10-16); not reviewed by a native speaker.
 	Restore the last view (page, zoom and page display) when a document is opened again	Khôi phục chế độ xem gần nhất (trang, thu phóng và hiển thị trang) khi mở lại tài liệu
+	Automatic AcroForm scripts are disabled until safe execution isolation is available; saved field values were preserved. Explicit button and console scripts are still available.	Script AcroForm tự động bị tắt cho đến khi có cách ly thực thi an toàn; giá trị trường đã lưu được giữ nguyên. Script của nút và bảng điều khiển vẫn dùng được.
 @plural	{n} reply|{n} replies	{n} câu trả lời
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)

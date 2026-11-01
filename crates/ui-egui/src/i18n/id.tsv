@@ -2828,6 +2828,7 @@ theme	Appearance	Tampilan
 	Attaching files is not available on the web yet	Melampirkan file belum tersedia di web
 	Delete attachment	Hapus lampiran
 	Delete attachment {key}	Hapus lampiran {key}
+	Automatic AcroForm scripts are disabled until safe execution isolation is available; saved field values were preserved. Explicit button and console scripts are still available.	Skrip AcroForm otomatis dinonaktifkan sampai isolasi eksekusi yang aman tersedia; nilai bidang yang tersimpan tetap dipertahankan. Skrip tombol dan konsol tetap tersedia.
 @plural	{n} reply|{n} replies	{n} balasan
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
