@@ -610,8 +610,13 @@ impl PdfCraftApp {
     }
 
     /// Show the certificates a finished read found, or say why it failed. Called every frame.
+    /// While another dialog or prompt is open the result waits in the channel: opening the
+    /// import over it would take away that dialog's own way to close.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn poll_certificate_import(&mut self) {
+        if self.modal_open() {
+            return;
+        }
         let Some(rx) = self.cert_import_job.as_ref() else { return };
         let read = match rx.try_recv() {
             Ok(read) => read,
@@ -958,6 +963,28 @@ mod tests {
     }
 
     #[test]
+    fn a_finished_read_waits_while_another_dialog_or_prompt_is_open() {
+        let pem = sign::x509::to_pem(&test_cert("Waits"));
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(CertImport::read("one.cer", pem.as_bytes())).unwrap();
+        let mut app = PdfCraftApp::new();
+        app.cert_import_job = Some(rx);
+        app.dialog = Some(crate::Dialog::About);
+        app.poll_certificate_import();
+        assert_eq!(app.dialog, Some(crate::Dialog::About), "the open dialog keeps the window");
+        assert!(app.cert_import.is_none() && app.cert_import_job.is_some(), "the result stays pending");
+        app.dialog = None;
+        app.updates.open = true;
+        app.poll_certificate_import();
+        assert!(app.dialog.is_none() && app.cert_import_job.is_some(), "a prompt holds it too");
+        app.updates.open = false;
+        app.poll_certificate_import();
+        assert_eq!(app.dialog, Some(crate::Dialog::ImportCertificates));
+        assert_eq!(app.cert_import.map(|v| v.certs.len()), Some(1));
+        assert!(app.cert_import_job.is_none());
+    }
+
+    #[test]
     fn a_file_that_is_not_a_certificate_or_too_large_opens_no_import() {
         let dir = scratch();
         let junk = dir.join("junk.cer");
@@ -982,6 +1009,7 @@ mod tests {
         let mut v = CertImport::read("bundle.pem", pem.as_bytes()).unwrap();
         v.chosen = vec![true; v.certs.len()];
         assert_eq!(v.picked(std::slice::from_ref(&a)).iter().map(Certificate::display_name).collect::<Vec<_>>(), ["B"]);
+        assert_eq!((v.picked_count(std::slice::from_ref(&a)), v.picked_count(&[])), (1, 2));
         let mut app = PdfCraftApp::new();
         assert_eq!(app.trust_certificates(v.picked(&[])), 2);
         assert_eq!(app.trust_certificates(v.picked(&[])), 0, "trusting again adds nothing");

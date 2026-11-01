@@ -473,12 +473,16 @@ impl CertImport {
 
     /// The ticked certificates that `trusted` doesn't already hold.
     pub fn picked(&self, trusted: &[Certificate]) -> Vec<Certificate> {
-        self.certs
-            .iter()
-            .zip(&self.chosen)
-            .filter(|(c, chosen)| **chosen && !trusted.iter().any(|t| t.raw == c.raw))
-            .map(|(c, _)| c.clone())
-            .collect()
+        self.picked_iter(trusted).cloned().collect()
+    }
+
+    /// How many [`Self::picked`] would return, without cloning them (the dialog asks every frame).
+    pub fn picked_count(&self, trusted: &[Certificate]) -> usize {
+        self.picked_iter(trusted).count()
+    }
+
+    fn picked_iter<'a>(&'a self, trusted: &'a [Certificate]) -> impl Iterator<Item = &'a Certificate> + 'a {
+        self.certs.iter().zip(&self.chosen).filter(|(c, chosen)| **chosen && !trusted.iter().any(|t| t.raw == c.raw)).map(|(c, _)| c)
     }
 }
 
@@ -521,13 +525,13 @@ pub(crate) fn import_dialog(ui: &mut egui::Ui, v: &mut CertImport, trusted: &[Ce
         }
     });
     ui.add_space(10.0);
-    let picked = v.picked(trusted);
+    let picked = v.picked_count(trusted);
     let mut action = None;
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let label = crate::i18n::fmt(tl!("Trust selected ({n})"), &[("n", &picked.len().to_string())]);
-            if ui.add_enabled_ui(!picked.is_empty(), |ui| widgets::pill_button(ui, &label, true)).inner.clicked() {
-                action = Some(ImportAction::Trust(picked.clone()));
+            let label = crate::i18n::fmt(tl!("Trust selected ({n})"), &[("n", &picked.to_string())]);
+            if ui.add_enabled_ui(picked > 0, |ui| widgets::pill_button(ui, &label, true)).inner.clicked() {
+                action = Some(ImportAction::Trust(v.picked(trusted)));
             }
             if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
                 action = Some(ImportAction::Cancel);
