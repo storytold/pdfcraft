@@ -256,7 +256,8 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, over_text: impl Fn(Pos2) -> bo
     if !over_text(p) {
         view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
     }
-    if resp.drag_started() {
+    // The tool's own press, of the primary button: nothing drawn over the page here holds it.
+    if resp.drag_started_by(egui::PointerButton::Primary) && view.router.owner(page).is_none() {
         let origin = ptr.origin.unwrap_or(p);
         if !over_text(origin) {
             view.redact_drag = Some((page, origin));

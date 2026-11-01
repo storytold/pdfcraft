@@ -34,7 +34,7 @@ fn parsed_identifier(xmp: &str, namespace: &str, local: &str) -> Result<Option<S
     if !xml_limits_ok(xmp) {
         return Err(());
     }
-    let options = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: 100_000 };
+    let options = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: 100_000, ..Default::default() };
     let doc = roxmltree::Document::parse_with_options(xmp, options).map_err(|_| ())?;
     for node in doc.descendants().filter(roxmltree::Node::is_element) {
         if let Some(value) = node.attribute((namespace, local)) {

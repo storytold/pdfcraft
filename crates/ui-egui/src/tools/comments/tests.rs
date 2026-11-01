@@ -65,6 +65,66 @@ fn an_upright_note_on_a_turned_page_is_in_view_where_it_is_drawn() {
     }
 }
 
+/// A listed comment or reply at `index` on `page`, replying to `parent`.
+fn listed(page: usize, index: usize, contents: &str, parent: Option<(usize, usize)>) -> Annotation {
+    Annotation {
+        page,
+        subtype: "Text".into(),
+        author: None,
+        contents: Some(contents.into()),
+        modified: None,
+        name: None,
+        in_reply_to: None,
+        parent,
+        grouped: false,
+        rect: [0.0, 0.0, 20.0, 20.0],
+        color: None,
+        index,
+        state: None,
+        quads: Vec::new(),
+        locked: false,
+        intent: None,
+        fill_sign: false,
+        no_rotate: false,
+        points: Vec::new(),
+    }
+}
+
+/// What stays selected or open in the editor after a delete is found where it moved to: the
+/// reply's own replies go with it (pop-ups, unlisted, are gone too), and a page that lost
+/// something else, or whose annotation in that place reads differently, keeps nothing.
+#[test]
+fn a_kept_comment_is_found_where_a_delete_moved_it() {
+    // Page 0's `/Annots`: reply A, its pop-up (unlisted), the comment, reply B, a reply to A.
+    let before = vec![
+        listed(0, 0, "A", Some((0, 2))),
+        listed(0, 2, "comment", None),
+        listed(0, 3, "B", Some((0, 2))),
+        listed(0, 4, "to A", Some((0, 0))),
+        listed(1, 0, "other page", None),
+    ];
+    // Deleting A takes its pop-up and the reply to it: the comment and B move up two places.
+    let after = vec![listed(0, 0, "comment", None), listed(0, 1, "B", Some((0, 0))), listed(1, 0, "other page", None)];
+    let gone = (0, 0);
+    assert_eq!(after_delete(&before, &after, gone, (0, 2)), Some((0, 0)), "the comment");
+    assert_eq!(after_delete(&before, &after, gone, (0, 3)), Some((0, 1)), "the other reply");
+    assert_eq!(after_delete(&before, &after, gone, (0, 4)), None, "the reply to A went with it");
+    assert_eq!(after_delete(&before, &after, gone, gone), None, "the deleted one");
+    assert_eq!(after_delete(&before, &after, gone, (1, 0)), Some((1, 0)), "another page keeps its places");
+    // The page lost more than A and its replies: nothing is guessed.
+    assert_eq!(after_delete(&before, &after[..1], gone, (0, 2)), None);
+    // Another annotation in the comment's place.
+    let changed = vec![listed(0, 0, "something else", None), listed(0, 1, "B", Some((0, 0)))];
+    assert_eq!(after_delete(&before, &changed, gone, (0, 2)), None);
+
+    let mut view = CommentView { selected: Some((0, 2)), editing: Some((0, 3, "typed".into())), ..Default::default() };
+    view.annotation_deleted(&before, &after, gone);
+    assert_eq!((view.selected, view.editing), (Some((0, 0)), Some((0, 1, "typed".into()))), "both follow");
+    let mut view = CommentView { editing: Some((0, 4, "typed".into())), editor_focus: Some(EditorFocus::Take), ..Default::default() };
+    view.annotation_deleted(&before, &after, gone);
+    assert_eq!((view.editing, view.editor_focus), (None, None), "the editor closes with the reply it was open on");
+}
+
 use pdfcraft_render::TextGlyph;
 
 /// One glyph per character, `w` points wide, on a line of `em`-point text whose baseline is at `y`, drawn
@@ -330,7 +390,7 @@ fn context_menu_colour_submenu_keeps_its_picker_open_and_a_swatch_closes_the_men
     let mut h = egui_kittest::Harness::new_ui_state(
         |ui, (view, actions): &mut (DocView, Vec<CanvasAction>)| {
             ui.button("Page").context_menu(|ui| {
-                if let Some(a) = context_menu(ui, view, &info, &prefs, true, true) {
+                if let Some(a) = context_menu(ui, view, &info, &|_, _| true, &prefs, true, true) {
                     actions.push(a);
                 }
             });
