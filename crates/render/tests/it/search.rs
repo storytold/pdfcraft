@@ -9,30 +9,83 @@ fn page(parts: &[&str]) -> PageText {
     }
 }
 
-/// Scripts written without spaces between words (Han, kana, bopomofo, Thai, Lao, Myanmar, Khmer,
-/// Tibetan): a neighbouring letter of theirs doesn't bound a whole word.
+/// The letters of the property test's alphabet that come from scripts written without spaces
+/// between words: 界 (CJK Unified Ideographs, U+4E00..U+9FFF) and ก (Thai, U+0E00..U+0E7F).
+/// 한 (Hangul Syllables) is written with spaces and bounds a word. The reference knows only
+/// these three letters, so it does not share the block table in `text/search.rs`; that table is
+/// checked against `UNSPACED_BLOCK_SAMPLES` instead.
 fn unspaced(c: char) -> bool {
-    matches!(
-        u32::from(c),
-        0x0E00..=0x0EFF
-            | 0x0F00..=0x0FFF
-            | 0x1000..=0x109F
-            | 0x1780..=0x17FF
-            | 0x2E80..=0x2FDF
-            | 0x3005..=0x3007
-            | 0x3040..=0x30FF
-            | 0x3100..=0x312F
-            | 0x31A0..=0x31BF
-            | 0x31F0..=0x31FF
-            | 0x3400..=0x4DBF
-            | 0x4E00..=0x9FFF
-            | 0xA9E0..=0xA9FF
-            | 0xAA60..=0xAA7F
-            | 0xF900..=0xFAFF
-            | 0xFF66..=0xFF9F
-            | 0x20000..=0x3FFFF
-    )
+    matches!(c, '界' | 'ก')
 }
+
+/// Letters at the edges of each block of a script written without spaces (`true`), and letters
+/// just outside them (`false`), named by their block as Unicode's Blocks.txt gives it. Each one is
+/// alphabetic and not a digit, so whether it bounds a whole word depends on the table alone.
+const UNSPACED_BLOCK_SAMPLES: &[(char, bool, &str)] = &[
+    ('\u{0DC6}', false, "Sinhala (0D80..0DFF), before Thai"),
+    ('\u{0E01}', true, "Thai (0E00..0E7F), first letter"),
+    ('\u{0E46}', true, "Thai, MAIYAMOK"),
+    ('\u{0E81}', true, "Lao (0E80..0EFF), first letter"),
+    ('\u{0EDF}', true, "Lao, last letter"),
+    ('\u{0F00}', true, "Tibetan (0F00..0FFF), first letter"),
+    ('\u{0F8C}', true, "Tibetan, last letter"),
+    ('\u{1000}', true, "Myanmar (1000..109F), first letter"),
+    ('\u{108E}', true, "Myanmar, last letter"),
+    ('\u{10A0}', false, "Georgian (10A0..10FF), after Myanmar"),
+    ('\u{1770}', false, "Tagbanwa (1760..177F), before Khmer"),
+    ('\u{1780}', true, "Khmer (1780..17FF), first letter"),
+    ('\u{17DC}', true, "Khmer, last letter"),
+    ('\u{1820}', false, "Mongolian (1800..18AF), after Khmer"),
+    ('\u{3005}', true, "CJK Symbols and Punctuation (3000..303F), ideographic iteration mark"),
+    ('\u{3006}', true, "CJK Symbols and Punctuation, ideographic closing mark"),
+    ('\u{3031}', true, "CJK Symbols and Punctuation, vertical kana repeat mark"),
+    ('\u{3035}', true, "CJK Symbols and Punctuation, vertical kana repeat mark lower half"),
+    ('\u{303B}', true, "CJK Symbols and Punctuation, vertical ideographic iteration mark"),
+    ('\u{303C}', true, "CJK Symbols and Punctuation, masu mark"),
+    ('\u{3041}', true, "Hiragana (3040..309F), first letter"),
+    ('\u{309F}', true, "Hiragana, last letter"),
+    ('\u{30A1}', true, "Katakana (30A0..30FF), first letter"),
+    ('\u{30FF}', true, "Katakana, last letter"),
+    ('\u{3105}', true, "Bopomofo (3100..312F), first letter"),
+    ('\u{312F}', true, "Bopomofo, last letter"),
+    ('\u{3131}', false, "Hangul Compatibility Jamo (3130..318F), after Bopomofo"),
+    ('\u{318E}', false, "Hangul Compatibility Jamo, last letter, before Bopomofo Extended"),
+    ('\u{31A0}', true, "Bopomofo Extended (31A0..31BF), first letter"),
+    ('\u{31BF}', true, "Bopomofo Extended, last letter"),
+    ('\u{31F0}', true, "Katakana Phonetic Extensions (31F0..31FF), first letter"),
+    ('\u{31FF}', true, "Katakana Phonetic Extensions, last letter"),
+    ('\u{3400}', true, "CJK Unified Ideographs Extension A (3400..4DBF), first"),
+    ('\u{4DBF}', true, "CJK Unified Ideographs Extension A, last"),
+    ('\u{4E00}', true, "CJK Unified Ideographs (4E00..9FFF), first"),
+    ('\u{9FFF}', true, "CJK Unified Ideographs, last"),
+    ('\u{A000}', false, "Yi Syllables (A000..A48F), after CJK Unified Ideographs"),
+    ('\u{A9CF}', false, "Javanese (A980..A9DF), before Myanmar Extended-B"),
+    ('\u{A9E0}', true, "Myanmar Extended-B (A9E0..A9FF), first letter"),
+    ('\u{A9FE}', true, "Myanmar Extended-B, last letter"),
+    ('\u{AA00}', false, "Cham (AA00..AA5F), after Myanmar Extended-B"),
+    ('\u{AA4B}', false, "Cham, before Myanmar Extended-A"),
+    ('\u{AA60}', true, "Myanmar Extended-A (AA60..AA7F), first letter"),
+    ('\u{AA7F}', true, "Myanmar Extended-A, last letter"),
+    ('\u{AA80}', false, "Tai Viet (AA80..AADF), after Myanmar Extended-A"),
+    ('\u{D7FB}', false, "Hangul Jamo Extended-B (D7B0..D7FF), before CJK Compatibility Ideographs"),
+    ('\u{F900}', true, "CJK Compatibility Ideographs (F900..FAFF), first"),
+    ('\u{FAD9}', true, "CJK Compatibility Ideographs, last"),
+    ('\u{FB00}', false, "Alphabetic Presentation Forms (FB00..FB4F), after CJK Compatibility Ideographs"),
+    ('\u{FF5A}', false, "Halfwidth and Fullwidth Forms (FF00..FFEF), fullwidth z, before halfwidth katakana"),
+    ('\u{FF66}', true, "Halfwidth and Fullwidth Forms, first halfwidth katakana"),
+    ('\u{FF9F}', true, "Halfwidth and Fullwidth Forms, last halfwidth katakana"),
+    ('\u{FFA1}', false, "Halfwidth and Fullwidth Forms, halfwidth Hangul, after halfwidth katakana"),
+    ('\u{1AFF0}', true, "Kana Extended-B (1AFF0..1AFFF), first letter"),
+    ('\u{1B000}', true, "Kana Supplement (1B000..1B0FF), first letter"),
+    ('\u{1B122}', true, "Kana Extended-A (1B100..1B12F), last letter"),
+    ('\u{1B132}', true, "Small Kana Extension (1B130..1B16F), first letter"),
+    ('\u{1B167}', true, "Small Kana Extension, last letter"),
+    ('\u{1B170}', false, "Nushu (1B170..1B2FF), after Small Kana Extension"),
+    ('\u{20000}', true, "CJK Unified Ideographs Extension B (20000..2A6DF), first"),
+    ('\u{2A6DF}', true, "CJK Unified Ideographs Extension B, last"),
+    ('\u{2F800}', true, "CJK Compatibility Ideographs Supplement (2F800..2FA1F), first"),
+    ('\u{323AF}', true, "CJK Unified Ideographs Extension H (31350..323AF), last"),
+];
 
 // The original straightforward search is an independent oracle for valid page metadata.
 fn reference(page: &PageText, query: &str, sensitive: bool, whole: bool, limit: usize) -> Vec<Range<usize>> {
@@ -94,9 +147,24 @@ fn whole_word_rejection_keeps_overlapping_candidates() {
     assert_eq!(page(&["aaaaa"]).find("aa"), vec![0..1, 0..1]);
 }
 
+/// A letter from a block in `UNSPACED_BLOCK_SAMPLES` next to a whole-word match leaves it standing
+/// when the block's script is written without spaces, and bounds it otherwise, on either side.
+#[test]
+fn whole_words_follow_the_unicode_blocks_of_unspaced_scripts() {
+    for &(c, unspaced, block) in UNSPACED_BLOCK_SAMPLES {
+        let (neighbour, cp) = (c.to_string(), u32::from(c));
+        assert!(c.is_alphanumeric() && !c.is_numeric(), "U+{cp:04X} ({block}) is a letter, so the sample tests the table");
+        // Case-sensitive, so that case folding does not move a neighbour into another block
+        // (Georgian U+10A0 folds to U+2D00).
+        let (before, after) = if unspaced { (Some(1..2), Some(0..1)) } else { (None, None) };
+        assert_eq!(page(&[&neighbour, "PDF"]).find_opts("PDF", true, true), Vec::from_iter(before), "U+{cp:04X} ({block}) before the match");
+        assert_eq!(page(&["PDF", &neighbour]).find_opts("PDF", true, true), Vec::from_iter(after), "U+{cp:04X} ({block}) after the match");
+    }
+}
+
 #[test]
 fn search_matches_reference_for_unicode_gaps_limits_and_word_boundaries() {
-    let alphabet = ["a", "b", " ", "-", "İ", "ı", "ς", "Σ", "\t", "\n", "ffi", "", "界", "e\u{301}", "العربية"];
+    let alphabet = ["a", "b", " ", "-", "İ", "ı", "ς", "Σ", "\t", "\n", "ffi", "", "界", "ก", "한", "e\u{301}", "العربية"];
     let mut seed = 1234567u64;
     let mut next = || {
         seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);

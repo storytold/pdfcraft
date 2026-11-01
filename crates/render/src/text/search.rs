@@ -92,6 +92,8 @@ fn unspaced_script(c: char) -> bool {
         | 0x1780..=0x17FF    // Khmer
         | 0x2E80..=0x2FDF    // CJK and Kangxi radicals
         | 0x3005..=0x3007    // 々 〆 〇
+        | 0x3031..=0x3035    // vertical kana repeat marks
+        | 0x303B..=0x303C    // 〻 〼
         | 0x3040..=0x30FF    // hiragana, katakana
         | 0x3100..=0x312F    // bopomofo
         | 0x31A0..=0x31BF    // bopomofo extended
@@ -102,6 +104,7 @@ fn unspaced_script(c: char) -> bool {
         | 0xAA60..=0xAA7F    // Myanmar extended-A
         | 0xF900..=0xFAFF    // CJK compatibility ideographs
         | 0xFF66..=0xFF9F    // halfwidth katakana
+        | 0x1AFF0..=0x1B16F  // kana extended-B, kana supplement, kana extended-A, small kana
         // The supplementary and tertiary ideographic planes, all CJK ideographs (extensions B
         // to J, compatibility supplement).
         | 0x20000..=0x3FFFF
