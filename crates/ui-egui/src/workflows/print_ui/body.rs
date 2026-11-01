@@ -67,7 +67,7 @@ fn driver_options_panel(ui: &mut egui::Ui, d: &mut PrintDraft, t: &Tokens) {
 /// Draw a combo box whose accessible name does not depend on the selected value.
 fn combo<T: PartialEq + Copy>(ui: &mut egui::Ui, id: &str, name: &str, value: &mut T, choices: &[(T, &str)], width: f32) {
     let shown = choices.iter().find(|c| c.0 == *value).map_or("", |c| c.1);
-    let response = craft_ui::ComboBox::from_id_salt(id)
+    craft_ui::ComboBox::from_id_salt(id)
         .selected_text(shown)
         .width(width)
         .show_ui(ui, |ui| {
@@ -75,11 +75,8 @@ fn combo<T: PartialEq + Copy>(ui: &mut egui::Ui, id: &str, name: &str, value: &m
                 ui.selectable_value(value, *v, *label);
             }
         })
-        .response;
-    if response.gained_focus() {
-        response.scroll_to_me(Some(egui::Align::Center));
-    }
-    response.accessible_name(name);
+        .response
+        .accessible_name(name);
 }
 
 /// Draw the dialog. `thumb` gives a page's thumbnail texture when there is one. Returns
@@ -102,6 +99,7 @@ pub(crate) fn body(
     // allowing the scroll area to shrink cleanly even on very short viewports (<300pt)
     // without enforcing an arbitrary minimum floor.
     let max_h = (ui.ctx().content_rect().height() - 130.0).max(40.0);
+    ui.spacing_mut().scroll.dormant_handle_opacity = 0.6;
     egui::ScrollArea::vertical()
         .id_salt("print-body-scroll")
         .auto_shrink([false, true])
@@ -546,7 +544,12 @@ pub(crate) fn body(
             }
         });
     });
-    });
+    if let Some(r) = ui.ctx().memory(|m| m.focused()).and_then(|id| ui.ctx().read_response(id))
+        && r.gained_focus()
+    {
+        r.scroll_to_me(None);
+    }
+});
     ui.add_space(12.0);
     let (mut go, mut cancel) = (false, false);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
