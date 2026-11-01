@@ -1884,6 +1884,29 @@ fn a_clicked_picture_is_selected_and_copied_in_its_original_format() {
     assert_eq!(h.state().views[i].picked_image, None);
 }
 
+/// #5542: ⌘C with a picture selected in Edit text & images copies the picture, as its menu's Copy
+/// Image does. Before, only the Select tool's picked picture was copied.
+#[test]
+fn ctrl_c_copies_the_picture_selected_in_edit_mode() {
+    let (px, mut h) = picture_harness();
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let i = h.state().active.unwrap();
+    let at = h.state().views[i].page_screen_rect(0).expect("on screen").center();
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(1);
+    h.drop_at(at);
+    h.run_steps(2);
+    assert!(h.state().views[i].image_selection.is_some(), "selected in Edit text & images");
+    h.event(egui::Event::Copy);
+    h.run_steps(2);
+    let (w, hgt, rgba) = h.state().last_copied_image.clone().expect("the picture was copied");
+    assert_eq!((w, hgt), (40, 30));
+    assert_eq!(rgba, px.into_raw(), "the picture's own pixels");
+}
+
 /// A picture picked with the Select tool, then deleted in Edit text & images, leaves no highlight
 /// behind on the empty spot where it was.
 #[test]

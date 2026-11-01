@@ -123,7 +123,12 @@ impl PdfCraftApp {
             self.document_copy = Some(DocumentCopy::start(id, job, ctx));
             return true;
         }
-        let Some(text) = v.selected_text().filter(|text| !text.is_empty()) else { return false };
+        let Some(text) = v.selected_text().filter(|text| !text.is_empty()) else {
+            // No text selected: a picture selected in Edit text & images is copied, as its menu's Copy Image
+            // copies it (#5542).
+            let picture = v.image_selection.as_ref().map(|s| (s.page, s.index));
+            return picture.is_some_and(|(page, index)| self.copy_page_image(page, index));
+        };
         if !self.may_copy(id) {
             return false;
         }
