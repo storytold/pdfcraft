@@ -914,3 +914,68 @@ fn exact_spacing_soft_wrap_preserves_consumed_spaces_after_reopen() {
     assert_eq!(blocks[0].reflow_text, "Alpha  beta delta");
     assert_no_graphics_stack_inside_text(&saved);
 }
+
+/// A following font-resource switch must survive an edit of mixed-spacing text in the same BT.
+#[test]
+fn mixed_spacing_keeps_following_font_resource_after_save() {
+    use pdfcraft_cos::{Dict, ObjRef, Object};
+    let mut doc = fixture("BT /F1 24 Tf 72 700 Td (A ) Tj 3 Tc 60 Tz (tail) Tj /F2 30 Tf ( NEXT) Tj ET");
+    let second_font = doc.add(Object::Dict(Dict::from_iter([
+        (b"Type".to_vec(), Object::name("Font")),
+        (b"Subtype".to_vec(), Object::name("Type1")),
+        (b"BaseFont".to_vec(), Object::name("Courier")),
+        (b"Encoding".to_vec(), Object::name("WinAnsiEncoding")),
+    ])));
+    doc.update_dict(ObjRef::new(3, 0), |page| {
+        page.set(
+            b"Resources".to_vec(),
+            Object::Dict(Dict::from_iter([(
+                b"Font".to_vec(),
+                Object::Dict(Dict::from_iter([(b"F1".to_vec(), Object::Ref(ObjRef::new(5, 0))), (b"F2".to_vec(), Object::Ref(second_font))])),
+            )])),
+        );
+    })
+    .unwrap();
+    let before = text_lines(&doc, 0).unwrap();
+    assert_eq!(before.len(), 2);
+    assert_eq!((before[1].font.as_str(), before[1].base_font.as_str()), ("F2", "Courier"));
+    let states = character_states(&doc);
+    replace_line(&mut doc, 0, 0, "B longer tail").unwrap();
+    let saved = reopen(&doc);
+    let after = text_lines(&saved, 0).unwrap();
+    assert_eq!(after.len(), 2);
+    assert_eq!(after[0].text, "B longer tail");
+    assert_eq!((after[1].text.as_str(), after[1].font.as_str(), after[1].base_font.as_str()), (" NEXT", "F2", "Courier"));
+    assert_eq!(after[1].size, 30.0);
+    assert_eq!(after[1].baseline()[1], before[1].baseline()[1]);
+    let advance = after[0].rect[2] - before[0].rect[2];
+    assert!((after[1].rect[0] - before[1].rect[0] - advance).abs() < 0.001);
+    assert!(((after[1].rect[2] - after[1].rect[0]) - (before[1].rect[2] - before[1].rect[0])).abs() < 0.001);
+    assert_eq!(character_states(&saved).into_iter().rev().take(5).collect::<Vec<_>>(), states.into_iter().rev().take(5).collect::<Vec<_>>());
+}
+
+/// A synthetic restricted subset has only a/b; mixed-spacing line edits cannot substitute c.
+#[test]
+fn mixed_spacing_subset_missing_glyph_refuses_without_mutation() {
+    use pdfcraft_cos::{ObjRef, Object};
+    let mut doc = fixture("BT /F1 24 Tf 72 700 Td (a) Tj 3 Tc (b) Tj ET");
+    doc.update_dict(ObjRef::new(5, 0), |font| {
+        font.set(b"Subtype".to_vec(), Object::name("TrueType"));
+        font.set(b"BaseFont".to_vec(), Object::name("ABCDEF+SyntheticSans"));
+        font.set(b"FirstChar".to_vec(), Object::Int(97));
+        font.set(b"LastChar".to_vec(), Object::Int(99));
+        font.set(b"Widths".to_vec(), Object::Array(vec![Object::Int(500), Object::Int(520), Object::Int(0)]));
+    })
+    .unwrap();
+    let lines = text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].text, "ab");
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    let mut control = doc.clone();
+    replace_line(&mut control, 0, 0, "bb").unwrap();
+    assert_eq!(text_lines(&reopen(&control), 0).unwrap()[0].text, "bb");
+    let error = replace_line(&mut doc, 0, 0, "ac").unwrap_err();
+    assert!(error.to_string().contains("source font that can encode"), "{error}");
+    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before);
+    assert_eq!(text_lines(&reopen(&doc), 0).unwrap()[0].text, "ab");
+}
