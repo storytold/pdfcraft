@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
-use crate::{Args, Automation, Result, ToolError, child, failed, unused, write_atomic};
+use crate::{Args, Automation, Result, ToolError, child, failed, write_atomic};
 
 mod documents;
 mod form_tools;
