@@ -213,6 +213,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-01 (M2, PR #5649 review):** The JPEG 2000 wavelet transform's extra per-thread buffers share one process-wide budget of 256 MiB: a tile whose threads would pass it gets fewer, or transforms on one thread as before, so a large image cannot multiply its memory by the thread count. A 3320 × 4676 scan keeps three threads (page hashes and timings unchanged). The new test failed with the budget lifted; 488 renderer tests, the crate's tests, scoped Clippy with -D warnings, formatting, layers, assets and the no-`std` and wasm checks pass.
+
 - **2026-11-01 (M2, PR #5649 review):** JPEG 2000 sYCC and CIELab images whose channels differ in depth (palette columns or components) convert correctly: Cb/Cr are brought to Y's scale, CIELab default offsets use each channel's own depth, and converted channels take the first one's depth. Images of equal depths are bit-identical (page hashes unchanged). The palette test adds 8/16/38 and 38/8/24-bit columns; it failed with either conversion reverted. 488 renderer tests, the crate's tests, scoped Clippy with -D warnings, formatting, layers, assets and the no-`std` and wasm checks pass.
 
 - **2026-11-01 (M2, PR #5649 review):** JPEG 2000 palette columns of up to 38 bits are applied, as ISO 15444-1 allows, instead of set aside past 31: the 8-bit rescale and the sYCC and CIELab conversions compute in 64 bits. The new test covers greyscale, sRGB, sYCC and CIELab at 8, 31, 32, 33 and 38 bits, and fails both with the old cap and with 32-bit shifts; 488 renderer tests, the crate's tests, scoped Clippy with -D warnings, formatting, layers, assets and the no-`std` and wasm checks pass, and page hashes are unchanged.

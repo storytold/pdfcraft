@@ -7,6 +7,10 @@
 //! place, so the samples are the same bit for bit. Whatever this module cannot prove is safe to
 //! split (a layout it does not expect, a tile too small to be worth it, a single core) it declines,
 //! and the caller decodes on its own thread as before.
+//!
+//! Every decode in the process draws on two shared budgets: helper threads ([`helper_budget`]) and
+//! the memory of the extra wavelet-transform buffers ([`IDWT_BUDGET`]). What one decode holds,
+//! another cannot take, so render workers decoding at once do not multiply either.
 
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -15,7 +19,7 @@ use std::thread;
 use std::vec::Vec;
 
 use super::super::bitplane::{self, BitPlaneDecodeBuffers, BitPlaneDecodeContext};
-use super::super::build::{CodeBlock, SubBand};
+use super::super::build::{CodeBlock, Decomposition, SubBand};
 use super::super::codestream::{CodeBlockStyle, Header};
 use super::super::tile::Tile;
 use super::{
@@ -52,6 +56,15 @@ fn threads() -> usize {
 /// images (or tiles of one) at once; together their helpers stay within [`helper_budget`].
 static HELPERS: AtomicUsize = AtomicUsize::new(0);
 
+/// The most bytes the wavelet-transform buffers of all decodes that run the transform on several
+/// threads hold together. Each of those threads needs buffers of its own (about 5 bytes a pixel of
+/// the tile), where a decode on one thread reuses one set, so a large tile runs on fewer threads,
+/// or on its calling thread as before, rather than past this.
+const IDWT_BUDGET: usize = 256 << 20;
+
+/// The bytes of [`IDWT_BUDGET`] taken.
+static IDWT_BYTES: AtomicUsize = AtomicUsize::new(0);
+
 /// The most helper threads all decodes together run: one fewer than the machine has, since every
 /// decode also works on its calling thread.
 fn helper_budget() -> usize {
@@ -60,32 +73,56 @@ fn helper_budget() -> usize {
         .saturating_sub(1)
 }
 
-/// Helper slots taken from the shared budget, given back when dropped.
-struct Helpers(usize);
+/// Part of a process-wide budget, given back when dropped.
+struct Reservation {
+    pool: &'static AtomicUsize,
+    /// What is held, in the pool's measure.
+    amount: usize,
+    /// How many of the units asked for that is.
+    units: usize,
+}
 
-impl Helpers {
-    /// Up to `wanted` slots: fewer, or none, while other decodes hold the rest of the budget.
-    fn reserve(wanted: usize) -> Self {
-        let budget = helper_budget();
-        let mut active = HELPERS.load(Ordering::Acquire);
+impl Reservation {
+    /// Up to `wanted` units of `unit` each from `pool`, which holds at most `budget`: fewer, or
+    /// none, while other decodes hold the rest.
+    fn take(pool: &'static AtomicUsize, budget: usize, unit: usize, wanted: usize) -> Self {
+        let unit = unit.max(1);
+        let mut active = pool.load(Ordering::Acquire);
         loop {
-            let granted = wanted.min(budget.saturating_sub(active));
-            match HELPERS.compare_exchange_weak(
+            let units = wanted.min(budget.saturating_sub(active) / unit);
+            let amount = units.saturating_mul(unit);
+            match pool.compare_exchange_weak(
                 active,
-                active.saturating_add(granted),
+                active.saturating_add(amount),
                 Ordering::AcqRel,
                 Ordering::Acquire,
             ) {
-                Ok(_) => return Self(granted),
+                Ok(_) => {
+                    return Self {
+                        pool,
+                        amount,
+                        units,
+                    };
+                }
                 Err(now) => active = now,
             }
         }
     }
+
+    /// Up to `wanted` helper threads.
+    fn helpers(wanted: usize) -> Self {
+        Self::take(&HELPERS, helper_budget(), 1, wanted)
+    }
+
+    /// The wavelet-transform buffers of up to `wanted` threads, `per_thread` bytes each.
+    fn idwt_memory(per_thread: usize, wanted: usize) -> Self {
+        Self::take(&IDWT_BYTES, IDWT_BUDGET, per_thread, wanted)
+    }
 }
 
-impl Drop for Helpers {
+impl Drop for Reservation {
     fn drop(&mut self) {
-        HELPERS.fetch_sub(self.0, Ordering::AcqRel);
+        self.pool.fetch_sub(self.amount, Ordering::AcqRel);
     }
 }
 
@@ -94,9 +131,9 @@ impl Drop for Helpers {
 /// does the work that thread would have done.
 fn run_on_threads(threads: usize, work: &(impl Fn() + Sync)) {
     // Held until every helper has joined at the end of the scope, panics included.
-    let helpers = Helpers::reserve(threads.saturating_sub(1));
+    let helpers = Reservation::helpers(threads.saturating_sub(1));
     thread::scope(|scope| {
-        for _ in 0..helpers.0 {
+        for _ in 0..helpers.units {
             if thread::Builder::new().spawn_scoped(scope, work).is_err() {
                 break;
             }
@@ -351,6 +388,41 @@ fn decode_stripe(
     Ok(())
 }
 
+/// The bytes of the wavelet-transform buffers one thread holds for component `idx`: the output at
+/// the size of the last decomposition decoded and the scratch buffer at the one before, as
+/// `idwt::apply` reserves them. `None` if the decompositions are not where the storage says.
+fn idwt_bytes(
+    storage: &DecompositionStorage<'_>,
+    header: &Header<'_>,
+    idx: usize,
+) -> Option<usize> {
+    let tile_decompositions = storage.tile_decompositions.get(idx)?;
+    let decompositions = storage
+        .decompositions
+        .get(tile_decompositions.decompositions.clone())?;
+    let decompositions = decompositions.get(
+        ..decompositions
+            .len()
+            .saturating_sub(header.skipped_resolution_levels as usize),
+    )?;
+    // Sub-bands can be shifted by one, so `idwt::apply` pads each side by one.
+    let size = |d: &Decomposition| {
+        (d.rect.width() as usize)
+            .checked_add(1)?
+            .checked_mul((d.rect.height() as usize).checked_add(1)?)
+    };
+    let samples = match decompositions {
+        [] => storage
+            .sub_bands
+            .get(tile_decompositions.first_ll_sub_band)?
+            .coefficients
+            .len(),
+        [last] => size(last)?,
+        [.., before, last] => size(last)?.checked_add(size(before)?)?,
+    };
+    samples.checked_mul(size_of::<f32>())
+}
+
 /// The inverse wavelet transform and the store of each component of `tile`, one component per
 /// thread, as `decode_tile` runs them one after another. `false` declines: nothing was written.
 pub(super) fn idwt_and_store(
@@ -367,6 +439,18 @@ pub(super) fn idwt_and_store(
         || channel_data.len() != components
         || storage.tile_decompositions.len() < components
     {
+        return false;
+    }
+
+    // A thread keeps its buffers for every component it takes, at the size of the largest.
+    let Some(per_thread) = (0..components).try_fold(0, |most: usize, idx| {
+        Some(most.max(idwt_bytes(storage, header, idx)?))
+    }) else {
+        return false;
+    };
+    let memory = Reservation::idwt_memory(per_thread, threads);
+    let threads = memory.units;
+    if threads < 2 {
         return false;
     }
 
@@ -393,22 +477,42 @@ pub(super) fn idwt_and_store(
             store(tile, header, &mut tile_ctx, channel, component_info);
         }
     });
+    drop(memory);
     true
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Helpers, helper_budget};
+    use super::{IDWT_BUDGET, Reservation, helper_budget};
 
     /// Concurrent decodes share one budget of helper threads: what one holds, another cannot
     /// take, and it is free again once dropped.
     #[test]
     fn decodes_share_one_helper_budget() {
         let budget = helper_budget();
-        let first = Helpers::reserve(budget + 5);
-        assert_eq!(first.0, budget);
-        assert_eq!(Helpers::reserve(3).0, 0);
+        let first = Reservation::helpers(budget + 5);
+        assert_eq!(first.units, budget);
+        assert_eq!(Reservation::helpers(3).units, 0);
         drop(first);
-        assert_eq!(Helpers::reserve(3).0, 3.min(budget));
+        assert_eq!(Reservation::helpers(3).units, 3.min(budget));
+    }
+
+    /// The transform buffers of all decodes share one memory budget: a tile whose threads would
+    /// pass it gets fewer, and what one decode holds, another cannot take until it is dropped.
+    #[test]
+    fn decodes_share_one_idwt_memory_budget() {
+        // A 3320 x 4676 tile (about 78 MB a thread) keeps three threads for three components.
+        let scan = (3321 * 4677 + 1661 * 2339) * size_of::<f32>();
+        assert_eq!(Reservation::idwt_memory(scan, 3).units, 3);
+
+        // A 7016 x 9933 tile (about 350 MB a thread) gets none: it decodes on one thread.
+        let poster = (7017 * 9934 + 3509 * 4968) * size_of::<f32>();
+        assert_eq!(Reservation::idwt_memory(poster, 3).units, 0);
+
+        let first = Reservation::idwt_memory(IDWT_BUDGET / 4, 8);
+        assert_eq!(first.units, 4);
+        assert_eq!(Reservation::idwt_memory(1, 8).units, 0);
+        drop(first);
+        assert_eq!(Reservation::idwt_memory(IDWT_BUDGET / 4, 2).units, 2);
     }
 }
