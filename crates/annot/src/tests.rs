@@ -369,6 +369,19 @@ fn delete_all_annotations_keeps_a_thread_with_a_locked_reply() {
     assert!(summaries(&doc).iter().any(|s| s.contents.as_deref() == Some("locked reply")));
 }
 
+/// Links are not comments: deleting all comments leaves them on the page.
+#[test]
+fn delete_all_annotations_keeps_links() {
+    use crate::links::{self, LinkAction, LinkStyle};
+    let mut doc = fixture();
+    links::add(&mut doc, 0, [10.0, 10.0, 110.0, 30.0], &LinkAction::Uri("https://example.org".into()), &LinkStyle::default()).unwrap();
+    let before = links::list(&doc).len();
+    assert!(before > 0);
+    delete_all_annotations(&mut doc, None).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(links::list(&doc).len(), before);
+}
+
 /// Two pages whose `/Annots` are `page0` and `page1`, with `objects` numbered from 5 on.
 fn two_pages(page0: &str, page1: &str, objects: &[String]) -> Document {
     let mut objs = vec![
