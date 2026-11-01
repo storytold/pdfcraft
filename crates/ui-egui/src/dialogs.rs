@@ -1296,6 +1296,14 @@ fn dialog_print(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> 
         req.close = true;
         return false;
     };
+    if !app.print_draft.current_view_captured {
+        let current = app.print_draft.current_page;
+        app.print_draft.current_view = app.views[i].visible_print_crop(current).map(|crop| (current, crop));
+        app.print_draft.current_view_captured = true;
+        if app.print_draft.current_view.is_none() && app.print_draft.which == crate::print_ui::Which::CurrentView {
+            app.print_draft.which = crate::print_ui::Which::All;
+        }
+    }
     if app.print_draft.handling == crate::print_ui::Handling::Label {
         app.read_label_crops(id);
     }

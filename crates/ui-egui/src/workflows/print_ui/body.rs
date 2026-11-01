@@ -261,6 +261,9 @@ pub(crate) fn body(
             ui.horizontal(|ui| {
                 widgets::radio_value(ui, &mut d.which, Which::All, tl!("All"));
                 widgets::radio_value(ui, &mut d.which, Which::Current, tl!("Current page"));
+                if d.current_view.is_some() {
+                    widgets::radio_value(ui, &mut d.which, Which::CurrentView, tl!("Current view"));
+                }
                 let pages = widgets::radio_value(ui, &mut d.which, Which::Range, tl!("Pages"));
                 let r = ui.add_enabled(
                     d.which == Which::Range,
@@ -277,19 +280,21 @@ pub(crate) fn body(
             }
             ui.horizontal(|ui| {
                 ui.label(tl!("More options:"));
-                combo(
-                    ui,
-                    "subset",
-                    tl!("More options:"),
-                    &mut d.subset,
-                    &[(Subset::All, tl!("All pages in range")), (Subset::Odd, tl!("Odd pages only")), (Subset::Even, tl!("Even pages only"))],
-                    150.0,
-                );
-                ui.add(widgets::checkbox(&mut d.reverse, tl!("Reverse pages")));
+                ui.add_enabled_ui(d.which != Which::CurrentView, |ui| {
+                    combo(
+                        ui,
+                        "subset",
+                        tl!("More options:"),
+                        &mut d.subset,
+                        &[(Subset::All, tl!("All pages in range")), (Subset::Odd, tl!("Odd pages only")), (Subset::Even, tl!("Even pages only"))],
+                        150.0,
+                    );
+                    ui.add(widgets::checkbox(&mut d.reverse, tl!("Reverse pages")));
+                });
             });
             ui.add_space(6.0);
             widgets::section_title(ui, tl!("Page Sizing & Handling"));
-            ui.horizontal_wrapped(|ui| {
+            ui.add_enabled_ui(d.which != Which::CurrentView, |ui| ui.horizontal_wrapped(|ui| {
                 for (h, label) in [
                     (Handling::Size, tl!("Size")),
                     (Handling::Poster, tl!("Poster")),
@@ -301,9 +306,9 @@ pub(crate) fn body(
                         d.set_handling(h);
                     }
                 }
-            });
+            }));
             ui.add_space(4.0);
-            match d.handling {
+            ui.add_enabled_ui(d.which != Which::CurrentView, |ui| match d.handling {
                 Handling::Size => {
                     ui.horizontal(|ui| {
                         widgets::radio_value(ui, &mut d.size, SizeMode::Fit, tl!("Fit"));
@@ -385,7 +390,7 @@ pub(crate) fn body(
                         combo(ui, "binding", tl!("Binding:"), &mut d.binding, &[(Binding::Left, tl!("Left")), (Binding::Right, tl!("Right"))], 80.0);
                     });
                 }
-            }
+            });
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 ui.label(tl!("Orientation:"));

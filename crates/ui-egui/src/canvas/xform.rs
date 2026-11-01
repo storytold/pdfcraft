@@ -20,6 +20,23 @@ impl DocView {
     pub fn page_xform(&self, page: usize) -> Option<PageXform> {
         self.screen_xforms.iter().find(|(p, _)| *p == page).map(|(_, xf)| *xf)
     }
+
+    /// The visible part of a page in displayed points, excluding the surrounding viewer chrome.
+    pub(crate) fn visible_print_crop(&self, page: usize) -> Option<pdfcraft_engine::print::Crop> {
+        let xf = self.page_xform(page)?;
+        let visible = xf.rect.intersect(self.viewport_rect());
+        if !visible.is_positive() {
+            return None;
+        }
+        let points = [visible.left_top(), visible.right_top(), visible.right_bottom(), visible.left_bottom()].map(|p| xf.screen_to_view(p));
+        let (x0, x1) = points.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), p| (a.min(p.0), b.max(p.0)));
+        let (y0, y1) = points.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), p| (a.min(p.1), b.max(p.1)));
+        let rect = [x0.max(0.0), y0.max(0.0), x1.min(xf.pw), y1.min(xf.ph)];
+        if rect[2] - rect[0] <= 1.0 || rect[3] - rect[1] <= 1.0 {
+            return None;
+        }
+        Some(pdfcraft_engine::print::Crop { rect: rect.map(f64::from), text_up: false })
+    }
 }
 
 /// `r` moved so its corner lies on a whole physical pixel, so that a raster drawn from there
