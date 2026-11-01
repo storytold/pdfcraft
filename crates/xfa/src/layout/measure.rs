@@ -105,8 +105,9 @@ impl Layouter<'_> {
                 content + c.margin.vertical()
             }
         };
-        // A subform without a height is as tall as what it holds: other viewers do not stretch
-        // one, flowed or positioned, to the `minH` a designer left on it.
+        // A subform without a height is as tall as what it holds, flowed or positioned. XFA 3.3
+        // p. 847 makes `minH` its minimum; Adobe Acrobat doesn't stretch one to it (IRCC's
+        // IMM 5257: section 10 at `minH="58.274mm"`), and this follows Acrobat.
         let min_h = match node {
             Node::Subform(_) if c.h.is_none() => None,
             _ => c.min_h,
