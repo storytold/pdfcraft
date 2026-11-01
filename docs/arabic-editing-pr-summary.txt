@@ -87,6 +87,21 @@ Windows desktop launch qualification also remains pending. The first desktop bui
 was interrupted to prioritize publication; no runnable Windows GUI binary is claimed.
 Core counts do not qualify these follow-ups.
 
+PR #5623 REVIEW FOLLOW-UP / 2026-11-01
+Upstream 47f42ba0 integrated; no Rust production changes in the review follow-up.
+Fresh native: editor 365 + fonts 95 + renderer 485 = 945 passed, one corpus ignore.
+Fresh engine: 393 unit + 20 integration passed; two manual and two private-input ignores.
+The formerly ignored leading-mark position test is active and passing.
+Fresh formatting, scoped all-target Clippy (-D warnings), scoped WASM, layers,
+assets and parity passed. Five existing renderer WASM warnings remain.
+Required Arabic font gates and pinned source/static font hashes were verified.
+Old local Boa opt-level=0 caused two serial engine attempts to report 391/2/2 and
+392/1/2 (passed/failed/ignored). Both affected XFA tests passed isolated unchanged.
+The final full engine run above uses the repository dependency opt-level=2, with
+the local override removed. No test/assertion/timeout was weakened. Earlier CLI
+results remain historical; local tests do not replace exact-head GitHub CI or
+independent native Arabic reader review.
+
 NOT A COMPLETE ARABIC SUPPORT CLAIM
 Precise caret/selection, native/browser IME, rich mixed formatting, arbitrary PDF
 compatibility, Arabic form appearance coverage, OCR and export require further work.

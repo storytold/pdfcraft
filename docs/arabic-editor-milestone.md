@@ -1,7 +1,8 @@
 # Arabic editing milestone: complete embedded source faces
 
-Status: historical first-increment record, 2026-10-31. The leading-mark and transition
-regressions described below were resolved in verified core checkpoint `a8a1e696`.
+Status: historical first-increment record, 2026-10-31; clarified 2026-11-01. Complete-source
+encoding, leading-mark baseline drift and transition regressions were resolved in verified
+core checkpoint `a8a1e696`. The historical ignored position test is now active and passing.
 See [current feature record](arabic-features.md) and [execution plan](arabic-editing-execution-plan.md).
 Original base:
 `13655d09922038ab62d93b84ba9cd2eae474abd7`. Overall Arabic readiness and estimates are unchanged.
@@ -21,7 +22,7 @@ before resolving individual characters. This also avoids choosing older partial 
 save/reopen. Source subset rejection, variable-font/embedding validation, explicit resource choices,
 and the existing refusal of genuinely mixed contextual styles remain intact.
 
-This branch does not include the mapped-mark or numeric fixes submitted as #5603/#5602,
+The first increment did not include the mapped-mark or numeric fixes submitted as #5603/#5602,
 export-reader recovery, empty CMap/auxiliary corrections, or new shaped-glyph mappings.
 It is independently based on upstream main rather than stacked on the broad Arabic branch.
 
@@ -47,34 +48,30 @@ The target acceptance checks include four Arabic replacement cases plus a Latin-
 | Copy/search | Full-phrase selection and search return exact code points without normalization. |
 | Undo/redo | Original and edited Unicode/pixels are restored through the real Session history API. |
 | Save/reopen | Incremental bytes retain the complete original prefix, unknown page data, text and rendered pixels. |
-| Repeat editing | Insert/delete a suffix after reopen; retain exact text and source program. Each resulting state is stable through history and serialization. A separate position-drift regression remains below. |
+| Repeat editing | Insert/delete a suffix after reopen; retain exact text and source program. Each resulting state is stable through history and serialization. The position-drift regression described below was resolved in the subsequent core checkpoint. |
 | Unsupported contextual style split | Return the existing explicit refusal and preserve bytes, dirty state and history atomically. |
 
 These are engine paragraph replacements, not simulated keyboard events. Full-span selection
 is checked; precise word/caret selection inside ActualText remains separate work. Pixel
 identity after history/serialization proves stability, not external typography conformance.
 
-## Historical layout limitation (resolved in the current core checkpoint)
+## Historical source-encoding and position limitations (both resolved in the core checkpoint)
 
-The following describes the original failure. Its regression is now active and passing;
-do not use the historical ignored-test instructions as the current qualification procedure.
+The first increment fixed source-encoding selection but left a separate position regression
+ignored: `leading_arabic_marks_retain_position_when_an_inserted_suffix_is_deleted`.
+Starting from `سَسَ`, inserting and deleting a suffix retained logical text but changed
+page pixels; the observed baseline moved from `[30.0, 157.984]` to `[30.0, 155.968]`.
+Explicit static-font registration isolated that layout defect from source completion.
 
-A separate regression remains explicitly ignored:
-`leading_arabic_marks_retain_position_when_an_inserted_suffix_is_deleted`. Starting from
-`سَسَ`, inserting a suffix and deleting it again can retain the same logical text but change
-its page pixels/position. The isolated test uses explicit static-font registration to bypass
-source completion, so the layout failure is independent of this change. The observed baseline
-moves from `[30.0, 157.984]` to `[30.0, 155.968]` in the 16-point fixture. The changed encoding
-is now accepted; anchoring/rise preservation
-across repeated rewrites is a separate unresolved defect. Do not count this test as a pass.
-Run it deliberately with `--ignored` to inspect the failing assertion. This is the next
-layout task to coordinate with #3465 before claiming complete Arabic editing. Investigate
-`text/interp.rs` baseline/rise capture, `text/lines.rs` source origins and the shaped rewrite
-in `text_regions/styled.rs`; do not suppress overflow warnings or alter unrelated scripts.
+The subsequent core checkpoint corrected baseline capture for a leading zero-advance mark,
+while preserving genuine raised/lowered text. It also corrected source-space metrics and
+uniform span completion for transition drift. The position test has no `#[ignore]` now:
+it checks seven phrases, three rise values and three suffixes, with strict pixels, history
+and reopen. On 2026-11-01 it passed again in the six-test `document_fonts::` group with
+mandatory Arabic font inputs. Run that group normally, without `--ignored`.
 
-The active tests distinguish state stability across undo/redo/save from identical appearance
-after a sequence of new rewrite operations. They assert the former and preserve the latter's
-known failure explicitly; neither is silently normalized away.
+Source-encoding acceptance and position preservation are distinct assertions; both are
+active in the current core. Neither establishes complete Arabic or UI/IME readiness.
 
 ## Inputs and reproduction
 
@@ -104,7 +101,7 @@ The required-input gate makes missing static-font inputs fail rather than silent
 optional early return. Artifacts are optional and outside the checkout. Native CLI validation
 must use the branch's rebuilt binary, not the earlier combined-branch binary.
 
-## Validation results
+## Historical first-increment validation results
 
 - All 359 editor unit tests pass, including the always-run bundled-font regression. Restoring
   per-character-only selection makes that new unit test fail on the contextual encoding guard;
@@ -128,10 +125,10 @@ must use the branch's rebuilt binary, not the earlier combined-branch binary.
   is never counted as successful position preservation. Its explicit font selection bypasses
   the source-completion change and isolates the existing layout issue.
 
-The CLI script/report and OFL license are in `/tmp/pdfcraft-arabic-edit-milestone`, outside the
+The original CLI script/report and OFL license were in `/tmp/pdfcraft-arabic-edit-milestone`, outside the
 checkout. No PDF or font is committed. History/save pixel identity does not establish identical
 appearance after arbitrary new rewrite sequences; the explicit position regression records
-that remaining boundary.
+that first-increment boundary. Current results supersede it in the linked feature record.
 
 ## Coordination and next increments
 
@@ -140,7 +137,7 @@ Unicode mappings. The inspected #3465 head is `f83f6375ec5824fd3d944156ad5c0e26e
 it retains the original source-face selection logic. Offer this small correction and its
 regression evidence as a supplement; do not create a competing broad RTL rewrite.
 
-Next: fix the isolated leading-mark rise/anchor drift, then qualify RTL cursor/hit selection in
+The isolated leading-mark rise/anchor drift is now fixed. Next: qualify RTL cursor/hit selection in
 `crates/ui-egui/src/tools/edit_text_ui.rs` and `tools/edit_text_ui/background.rs`, using the
 engine's `text_edit_layout`/preview APIs and the existing egui text infrastructure. Test native
 and browser keyboard/IME, cluster deletion and mixed-direction boundaries independently.
@@ -149,5 +146,7 @@ RTL metadata. Arabic OCR is a separate later capability.
 
 ## Revision history
 
+- 2026-11-01: distinguish the historical source-encoding and position defects; record that
+  both are resolved and the formerly ignored position test is active and passing.
 - 2026-10-31: define a bounded complete-source editing milestone, independent real-font
   history/save regressions, input provenance and explicit UI/selection limitations.

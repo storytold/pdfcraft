@@ -1,7 +1,7 @@
 # Arabic PDF editing: execution plan
 
-Status: A6 local core qualification passed, 2026-11-01; checkpoint kept local.
-This qualifies the supported fixtures, not complete Arabic support or UI/IME readiness.
+Status: Batch A core checkpoint published as PR #5623; review follow-up in progress,
+2026-11-01. This qualifies supported fixtures, not complete Arabic support or UI/IME readiness.
 
 Post-sprint publication scope (2026-11-01): the contributor subsequently authorized
 synchronizing with upstream main, merging and pushing the verified core checkpoint and
@@ -26,7 +26,11 @@ export and OCR follow as separate batches when their own acceptance criteria pas
 Use the existing checkout. No additional worktree, new shaping engine, default OCR runtime,
 font asset, CI change or readiness-percentage increase is part of the core batch.
 
-## 2. Current state: evidence, not assumptions
+## 2. Historical A6 sprint state (before publication)
+
+The table records the original no-push sprint boundary. Publication superseded that
+boundary; the current source/test review map and remaining gates are in
+[arabic-features.md](arabic-features.md). Historical test counts are not new-head CI results.
 
 | Item | Actual state |
 | --- | --- |
@@ -210,7 +214,10 @@ Use the rebuilt batch CLI for edit, preview, search, undo/redo, save/reopen and 
 an earlier branch's binary does not qualify the current code. Re-run affected gates after
 production changes. Historical passing counts are not a release stamp for new WIP.
 
-## 7. Contribution and review protocol
+## 7. Historical sprint contribution protocol
+
+These were the original local-only sprint instructions. The later publication and
+PR #5623 review update are authorized; the direction-control WIP remains excluded.
 
 1. Keep #5602/#5603 separate; do not modify their branches as part of this sprint.
 2. Prepare only local review notes with verified results. Do not publish private handoff material,
@@ -232,7 +239,9 @@ production changes. Historical passing counts are not a release stamp for new WI
   from `Sader-IT-Solutions/pdfcraft` when its gates pass.
 - **Upstream maintainers:** workflow approval, technical review and merge decisions.
 
-Immediate order: **review and commit the green local Batch A checkpoint, then end this sprint**.
+Current immediate order: **address PR #5623 review feedback, validate the bounded core,
+update its feature branch and description, then obtain native-reader and maintainer review
+with passing exact-head CI before merge**. Do not expand this contribution to Batch B.
 The next bounded checkpoint is Batch B UI qualification: caret/hit testing, selection/deletion
 and actual native/browser Arabic input and IME behavior. It requires its own evidence; the
 engine/CLI results do not qualify those interactions. Rich mixed formatting, export and OCR
@@ -240,6 +249,8 @@ remain separate work. No feature push or PR is authorized by completion of these
 
 ## Revision history
 
+- 2026-11-01: identify the published PR #5623 review phase; label the earlier local-only
+  boundary as historical and keep interaction/direction work outside this contribution.
 - 2026-11-01: record reproduced A4/A5 causes, correction-only sensitivity checks and completed
   scoped local A6 qualification with exact ignores/warnings and CLI evidence; keep UI/IME and
   later milestones separate, and use machine-independent dependency examples.

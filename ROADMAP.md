@@ -1,7 +1,6 @@
 # PdfCraft roadmap
 
-> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-01 · **Change:** patch (M7: supported Arabic core source-edit batch passes scoped local qualification; UI/input qualification remains open; estimates unchanged)
-
+> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-01 · **Change:** patch (M7: PR #5623 review cleanup and source/test map; core qualification retained; native-reader and UI/input qualification remain open; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: integrate main fa5f9f8c; retain CJK viewer and upstream raster regressions, restore explicit display_config imports; estimates unchanged)
 > **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** patch (M2, PR #4172: integrate main 5af10276; retain both roadmap histories and viewer-only CJK font policy; estimates unchanged)
@@ -214,6 +213,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-01 (M7, PR #5623 review):** Removed author-local ignore patterns, added the source/test review map and corrected stale ignored-position-test wording. The six document-font integration cases passed with mandatory Arabic inputs. Core editing remains a bounded contribution; native-reader review, direction controls and UI/IME qualification remain open. No readiness estimate changes.
 
 - **2026-11-01 (M7, core publication integration):** Integrated upstream `eea00a61` (35 commits), preserving both roadmap histories. Combined-code engine tests pass serially (393 unit, 20 integration; four existing ignores), as do scoped Clippy/WASM, formatting, layers, source licensing/assets and the rebuilt 34-step CLI journey. Two initial parallel XFA timing failures passed unchanged serially under the local Boa override; no JavaScript performance claim. Feature details and exact results: `docs/arabic-features.md`, `docs/arabic-editing-pr-summary.txt`. Unfinished direction controls and desktop launch qualification remain follow-up work; estimates unchanged.
 

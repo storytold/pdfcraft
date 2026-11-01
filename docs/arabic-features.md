@@ -53,6 +53,65 @@ Four-package all-target Clippy with `-D warnings`, four-package WASM, formatting
 the upstream source licensing/asset check passed again. The CLI was rebuilt from the combined
 code and its **34 steps / 8 exact Unicode states / 5 strict image pairs** passed again.
 
+## PR #5623 review follow-up qualification
+
+On 2026-11-01, the review update integrated upstream `47f42ba0` without production
+Rust changes. Fresh native tests passed: editor **365**, fonts **95**, renderer **485**
+(**945** total; one existing corpus ignore). Engine tests passed **393 unit** and
+**20 integration**, with two existing manual probes and two private-input ignores.
+The formerly ignored leading-mark position regression is active and passed.
+
+The first two serial engine attempts with the old local Boa `opt-level=0` override
+reported **391 passed / 2 failed / 2 ignored**, then **392 / 1 / 2**. Both affected
+XFA tests passed unchanged in isolation. Removing that local override and using the
+repository's dependency `opt-level=2` produced the full passing engine result above.
+No test, assertion or timeout changed; the final result supersedes the old-profile runs.
+
+Formatting, four-package all-target Clippy with warnings denied, four-package WASM,
+layers, assets and parity passed. The five existing WASM renderer warnings remain.
+Mandatory Arabic inputs were enabled; both font hashes and the pinned craft-fonts
+revision were rechecked. Historical CLI evidence above remains identified separately.
+These are local checks, not GitHub CI or native-reader approval.
+
+## Review map
+
+This batch fixes the existing complete-source editing path; it does not introduce a
+new Arabic shaping engine. Review these dependent parts in order:
+
+1. **Unicode and source geometry:** `crates/fonts/src/pdf.rs` and
+   `source_shaping.rs`, then `crates/edit/src/text/interp.rs` and `lines.rs`.
+   Empty mappings remain empty, advancing bodies carry cluster Unicode, and auxiliary
+   marks retain their drawn positions. See `arabic_cluster_unicode_is_carried_by_its_advancing_body`
+   and the empty-Unicode and leading-mark editor regressions.
+2. **Source-face completion and spacing:** `crates/edit/src/text/fallback.rs`,
+   `rewrite.rs` and `text_regions/styled.rs`. Review uniform resource selection,
+   source-space metrics and cluster tracking together with
+   `contextual_source_completion_uses_one_encoding_for_the_whole_span` and
+   `shaped_cluster_tracking_preserves_mark_offsets_and_horizontal_scale`.
+3. **Engine acceptance:** `crates/engine/tests/it/document_fonts.rs`.
+   `complete_arabic_source_edit_history_and_incremental_reopen_keep_unicode_and_pixels`
+   exercises `مرحبا Hello 123`, marked and joined Arabic, insertion/deletion,
+   exact Unicode, history and save/reopen pixels.
+   `leading_arabic_marks_retain_position_when_an_inserted_suffix_is_deleted`
+   checks seven phrases, three rises and three suffixes. These are engine replacement
+   tests, not caret, selection or keyboard/IME tests.
+
+`source_shaping::shape` uses `harfrust` with the selected font's OpenType tables and
+rejects Arabic source programs without GSUB. `unicode_bidi::ParagraphBidiInfo` supplies
+visual runs and their directions before shaping. A code-point range check selects the
+shaping path; it does not supply joining forms. This is an implementation description,
+not a claim of exhaustive UAX #9 conformance testing. `pdf_mappings` supplies logical
+ToUnicode ownership independently of positioned glyph emission.
+
+The external Noto Sans Arabic input comes from the pinned OFL craft-fonts source
+recorded in `arabic-editor-milestone.md`; no font binary is added here. Required-input
+qualification sets `CRAFT_FONTS_REQUIRED=1` and `PDFCRAFT_ARABIC_CORPUS_REQUIRED=1`,
+because ordinary test runs may otherwise skip optional Arabic inputs.
+
+This review order is not a split into separate PRs. A maintainer-requested split still
+requires separating and qualifying dependent commits. Independent native Arabic reader
+review has not been recorded and remains required for linguistic rendering judgment.
+
 ## Remaining qualification
 
 Explicit direction controls, precise caret/hit testing, selection/deletion, native/browser IME,
@@ -65,5 +124,7 @@ See [execution plan](arabic-editing-execution-plan.md) for acceptance gates and
 
 ## Revision history
 
+- 2026-11-01: add a source/test review map in response to PR #5623 feedback;
+  distinguish existing shaping infrastructure, optional font gates and native-reader review.
 - 2026-11-01: consolidate verified core features and results, integrate upstream `eea00a61`,
   record combined-code checks, and retain explicit direction controls as deferred work.
