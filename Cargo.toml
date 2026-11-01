@@ -1,7 +1,10 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
-exclude = ["vendor"]
+
+# `apps/*` is a cargo workspace glob; these two are Swift/Kotlin projects (Milestone 1's native
+# mobile apps, built by `cargo xtask mobile ios`/`android`), not Rust crates.
+exclude = ["vendor", "apps/pdfcraft-ios", "apps/pdfcraft-android"]
 default-members = ["crates/*", "apps/pdfcraft", "apps/pdfcraft-cli", "xtask"]
 
 [workspace.package]
@@ -59,6 +62,7 @@ pdfcraft-engine = { path = "crates/engine", version = "0.16.1" }
 pdfcraft-platform = { path = "crates/platform", version = "0.16.1" }
 pdfcraft-ui-egui = { path = "crates/ui-egui", version = "0.16.1" }
 pdfcraft-automation = { path = "crates/automation", version = "0.16.1", default-features = false }
+pdfcraft-mobile-ffi = { path = "crates/mobile-ffi", version = "0.16.1" }
 
 # pdf
 hayro = "0.7.1"
@@ -92,6 +96,11 @@ egui_kittest = "0.37"
 rfd = "0.17"
 # Monotonic time for logic-only work on native and web (`App::logic` runs without a UI pass).
 web-time = "1.1"
+
+# mobile FFI
+# Generates the Swift/Kotlin bindings for pdfcraft-mobile-ffi; not a UI toolkit, so it stays out
+# of xtask/src/layers.rs's UI_CRATES list and the crate using it is `Class::Exempt`.
+uniffi = "0.32"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

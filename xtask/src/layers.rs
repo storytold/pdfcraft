@@ -89,6 +89,11 @@ pub const TABLE: &[(&str, Class)] = &[
     ("cli", Class::Exempt),
     ("web", Class::Exempt),
     ("xtask", Class::Exempt),
+    // The UniFFI bridge for the iOS/Android apps: an FFI app boundary (depends on `render`
+    // directly, not `engine`, for Milestone 1's reader-only surface), not a reusable library
+    // layer, so it's exempt the same way the other app crates are. This also keeps it out of
+    // `cargo xtask wasm`'s wasm32 sweep, which only covers `Class::Layer`/`Class::Standalone`.
+    ("mobile-ffi", Class::Exempt),
 ];
 
 /// Workspace crates a standalone crate may use (architecture §3 rule 3: `cos → filters, crypt, geom`).

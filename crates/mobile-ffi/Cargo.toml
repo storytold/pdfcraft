@@ -1,0 +1,28 @@
+[package]
+name = "pdfcraft-mobile-ffi"
+description = "UniFFI bridge exposing pdfcraft-render's read path to native iOS and Android apps"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["lib", "cdylib", "staticlib"]
+
+# `cargo xtask mobile` builds this with `--features cli` to get the `uniffi-bindgen` binary
+# (src/bin/uniffi-bindgen.rs), which reads the compiled library's own metadata to emit the Swift
+# and Kotlin bindings — no separate .udl file to keep in sync.
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
+[features]
+cli = ["uniffi/cli"]
+
+[dependencies]
+pdfcraft-render = { workspace = true }
+thiserror = { workspace = true }
+uniffi = { workspace = true }

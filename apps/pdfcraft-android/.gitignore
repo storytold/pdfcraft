@@ -1,0 +1,9 @@
+build/
+.gradle/
+local.properties
+.idea/
+*.iml
+
+# Written by `cargo xtask mobile android` (xtask/src/mobile.rs); never hand-edited, never committed.
+app/src/main/jniLibs/
+app/src/main/java/uniffi/

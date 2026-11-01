@@ -1,0 +1,7 @@
+.build/
+.swiftpm/
+DerivedData/
+
+# Written by `cargo xtask mobile ios` (xtask/src/mobile.rs); never hand-edited, never committed.
+Frameworks/
+Sources/PdfCraftFFI/

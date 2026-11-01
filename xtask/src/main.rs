@@ -10,6 +10,7 @@ mod gates;
 mod layers;
 mod license_check;
 mod macos_integration;
+mod mobile;
 mod parity;
 mod screenshots;
 mod version;
@@ -49,6 +50,16 @@ const COMMANDS: &[(&str, &str, Command)] = &[
     ("screenshots", "Regenerate the README screenshots in docs/images/ and their ATTRIBUTION entries", screenshots::run),
     ("models", "Fetch the OCR models (ATTRIBUTION.toml kind = \"model\") into assets/models/, verified by SHA-256", assets::models),
     ("demo-pdf", "Build dist/demo/pdfcraft-showcase.pdf (needs Google Chrome or Chromium)", demo_pdf::run),
+    (
+        "mobile-ios",
+        "Cross-compile pdfcraft-mobile-ffi, generate its Swift bindings and assemble apps/pdfcraft-ios's xcframework (needs Xcode; macOS only)",
+        mobile::ios,
+    ),
+    (
+        "mobile-android",
+        "Cross-compile pdfcraft-mobile-ffi for Android (needs cargo-ndk and $ANDROID_NDK_HOME) and generate its Kotlin bindings into apps/pdfcraft-android",
+        mobile::android,
+    ),
 ];
 
 fn version_cmd(args: &[String]) -> anyhow::Result<()> {
