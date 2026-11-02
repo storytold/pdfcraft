@@ -222,8 +222,6 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
-- **2026-11-01 (M7, PR #4750 review):** Missing added-content and native-image diagnostics now saturate one-based numbering for extreme indices instead of overflowing. Five direct regressions reproduced the panic before the fix; AddText and Rotate receive explicit invalid-page coverage. Existing error variants and validation order remain unchanged; no new feature or parity-score change.
-
 - **2026-11-01 (M14, #5572):** Preferences ▸ Documents and view sets how many recent files to keep, from 0 to 50 with 12 by default. At 0 Home has no Recent section and File ▸ Open Recent is disabled. The list is cut when Preferences closes, so the number can pass through 0 on its way to another.
 
 - **2026-11-01 (M5/M14, customizable hotbar, freehand highlight, and moveable navigation rail):** Added Freehand-Highlight (`/Subtype /Ink`, `/IT /FreehandHighlight`, Multiply blending, 100 pt max line width) inside the standard Highlight flyout and headless `comment_add`; added a customizable floating or side-docked hotbar with a full-side chrome strip mode, settings gear icon anchored at the bar end, and 24–64 px sizing; and added Left/Right docking for the navigation rail (`rail_side`). Focused unit and integration tests pass across `annot`, `automation`, and `ui-egui`. Estimates unchanged.
@@ -250,6 +248,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-29 (M7, #2517):** Widening a paragraph rejoins a wrap with the number of spaces that wrap consumed, including a typed run and none for a Chinese or Japanese word split. The count survives an incremental save and a full rewrite, and a width-only `text_edit` uses it. Estimates unchanged.
 - **2026-10-26 (M11, JBIG2 symbols):** Lossless JBIG2 now stores each distinct mark of a black-and-white image once, as a symbol, and places its exact copies, when that is smaller than the generic region: on six pages of rendered 300 dpi text 28% of the generic region's size and 17% of Group 4's, and the same bits back through two independent decoders (hayro-jbig2 and Poppler). Scans, whose letters are seldom identical, gain little until refinement coding; a dictionary shared between pages (`/JBIG2Globals`) is next. Estimates unchanged.
 - **2026-10-26 (M7, #4735):** Adding an image without an explicit box rejects a missing page with `NoSuchPage` instead of invoking the panic guard. Synthetic boundary/empty-page and session history regressions cover the refusal; valid image placement is unchanged. Estimates unchanged.
+- **2026-11-01 (M7, PR #4750 review):** Missing added-content and native-image diagnostics now saturate one-based numbering for extreme indices instead of overflowing. Five direct regressions reproduced the panic before the fix; AddText and Rotate receive explicit invalid-page coverage. Existing error variants and validation order remain unchanged; no new feature or parity-score change.
 - **2026-10-25 (M5, comment replies):** One reply can be deleted from the Comments panel without its thread. On the selected card each reply has its own "…" menu (Edit, Copy text, Delete); Delete takes that reply with its pop-up and the replies to it, as `comment_delete` already did headlessly, and the comment and its other replies stay. The card stays selected, and the panel's editor stays open, on what they were on though the delete moved it in `/Annots`. Undo and Redo close the editor, since either can move what it was open on. A locked reply can't be deleted. Estimates unchanged.
 - **2026-10-24 (M10, #4158 partial):** Word, HTML, RTF and PowerPoint export keep a block that continues another on its line (an italic case name, a link, a superscript) as a run in its own style inside that paragraph, with the source's word space, instead of a paragraph of its own. Style changes that wrap onto the next line still split paragraphs (the reading blocks keep style boundaries). Estimates unchanged.
 - **2026-10-24 (M3, window move on Wayland, #3970 follow-up):** After a move or resize by PdfCraft's own title bar or edges, the button release given back to egui goes before the pointer leaving the window, so hover no longer sticks at the old place until the pointer moves. Found by CodeRabbit in review of #3970; a unit test covers it. Estimates unchanged.
@@ -743,6 +742,8 @@ Newest first: the date, what moved, and the new overall estimate.
 
 ## Revision history
 
+**2026-11-01 · patch:** M7, PR #4750 review: saturate missing-content/image diagnostic numbering; AddText and Rotate bounds regressions; estimates unchanged.
+
 **2026-10-26 · minor:** M7, #4735: default-box image insertion checks the page index and reports the existing typed page error. Synthetic tests cover empty and out-of-range page indices below the panic guard and unchanged public-session bytes, display, dirty/generation state and undo/redo history. Estimates unchanged.
 
 **2026-10-25 · minor:** M14 localization current state: Arabic catalogs stay logical, Arabic/Kurdish labels take an explicit RTL direction, and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native Simplified Chinese uses LXGW WenKai Lite; the web build has no Hans face. Estimates unchanged.
@@ -751,7 +752,6 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-01 | patch | M7, PR #4750 review: saturate missing-content/image diagnostic numbering; AddText and Rotate bounds regressions; estimates unchanged. |
 | 2026-10-28 | patch | M2, PR #4172: integrate main 5af10276 and retain both roadmap histories; viewer-only CJK and print/output font policies and estimates unchanged. |
 | 2026-10-27 | minor | M10: OCR stages SHA-256-verified ONNX models after the upstream RTEN URL brownout; discovery prefers a complete ONNX pair per directory, falls back to a complete RTEN pair, and never mixes formats or directories; language/web limits and estimates unchanged. |
 | 2026-10-23 | minor | M8, #3205 follow-up: phone-pattern redaction includes the +39 country code on labelled Italian geographic numbers with a slash; dates, protocol identifiers and whole-run guards remain. Estimates unchanged. |
