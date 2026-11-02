@@ -1,5 +1,8 @@
 use super::draft::{Handling, PrintDraft, Which};
-use super::*;
+use super::{
+    Binding, BookletSubset, Color32, Content, Orientation, PAPERS, PREVIEW_BOX, PREVIEW_H, PREVIEW_W, PageOrder, Pos2, Rect, SizeMode, Stroke,
+    Subset, Tokens, pos2, print, printer_label, spool, still_looking, theme, vec2, widgets,
+};
 
 /// Properties… on CUPS: the driver's options for this print, grouped as the driver groups them.
 /// Only choices away from the printer's defaults are kept, and sent with the job.
@@ -36,7 +39,7 @@ fn driver_options_panel(ui: &mut egui::Ui, d: &mut PrintDraft, t: &Tokens) {
                         let label_of = |c: &str| o.choices.iter().find(|(k, _)| k == c).map_or_else(|| c.to_string(), |(_, l)| l.clone());
                         let mut pick = current.clone();
                         let option_label = ui.label(&o.label);
-                        egui::ComboBox::from_id_salt(("driver-option", &o.key))
+                        craft_ui::ComboBox::from_id_salt(("driver-option", &o.key))
                             .selected_text(label_of(&current))
                             .width(200.0)
                             .show_ui(ui, |ui| {
@@ -64,7 +67,7 @@ fn driver_options_panel(ui: &mut egui::Ui, d: &mut PrintDraft, t: &Tokens) {
 /// Draw a combo box whose accessible name does not depend on the selected value.
 fn combo<T: PartialEq + Copy>(ui: &mut egui::Ui, id: &str, name: &str, value: &mut T, choices: &[(T, &str)], width: f32) {
     let shown = choices.iter().find(|c| c.0 == *value).map_or("", |c| c.1);
-    egui::ComboBox::from_id_salt(id)
+    craft_ui::ComboBox::from_id_salt(id)
         .selected_text(shown)
         .width(width)
         .show_ui(ui, |ui| {
@@ -107,7 +110,7 @@ pub(crate) fn body(
                         None if still_looking(d) => tl!("Looking for printers…").to_string(),
                         None => tl!("Save as PDF").to_string(),
                     };
-                    egui::ComboBox::from_id_salt("printer").selected_text(shown).width(260.0).show_ui(ui, |ui| {
+                    craft_ui::ComboBox::from_id_salt("printer").selected_text(shown).width(260.0).show_ui(ui, |ui| {
                         if d.printers_loading {
                             ui.add_enabled(false, egui::Label::new(tl!("Looking for printers…")));
                         }
@@ -201,7 +204,7 @@ pub(crate) fn body(
                 let paper_label = ui.label(tl!("Paper:"));
                 let paper_name = PAPERS.get(d.paper).map_or("US Letter", |p| p.0);
                 let before = d.paper;
-                egui::ComboBox::from_id_salt("paper").selected_text(tl!(paper_name)).width(260.0).show_ui(ui, |ui| {
+                craft_ui::ComboBox::from_id_salt("paper").selected_text(tl!(paper_name)).width(260.0).show_ui(ui, |ui| {
                     for (i, (name, _)) in PAPERS.iter().enumerate() {
                         ui.selectable_value(&mut d.paper, i, tl!(name));
                     }

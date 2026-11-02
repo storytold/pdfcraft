@@ -207,7 +207,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                 egui::Grid::new("comment-props").num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
                     if let Some(icon) = e.icon.as_mut() {
                         ui.label(tl!("Icon"));
-                        egui::ComboBox::from_id_salt("note-icon").selected_text(icon.name()).show_ui(ui, |ui| {
+                        craft_ui::ComboBox::from_id_salt("note-icon").selected_text(icon.name()).show_ui(ui, |ui| {
                             for i in ICONS {
                                 ui.selectable_value(icon, i, i.name());
                             }
@@ -240,14 +240,14 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                     let min_width = if e.font_size.is_some() { 0.0 } else { 0.5 };
                     if let Some(w) = e.width.as_mut() {
                         ui.label(tl!("Thickness"));
-                        ui.add(egui::Slider::new(w, min_width..=12.0).step_by(0.5).suffix(" pt"));
+                        ui.add(egui::Slider::new(w, min_width..=crate::comments::MAX_LINE_WIDTH).step_by(0.5).suffix(" pt"));
                         ui.end_row();
                     }
                     if let Some(ends) = e.endings.as_mut() {
                         ui.label(tl!("Line ending"));
                         ui.horizontal(|ui| {
                             for (i, ending) in ends.iter_mut().enumerate() {
-                                egui::ComboBox::from_id_salt(("line-ending", i)).selected_text(ending_label(*ending)).width(188.0).show_ui(
+                                craft_ui::ComboBox::from_id_salt(("line-ending", i)).selected_text(ending_label(*ending)).width(188.0).show_ui(
                                     ui,
                                     |ui| {
                                         for style in LineEnding::ALL {

@@ -1,6 +1,6 @@
 use super::host::{arg, colour, error, function, host, read, s, set_value, strings, text, value_of, write};
 use super::model::{DISPLAY_HIDDEN, DISPLAY_VISIBLE, FieldType, Request};
-use super::*;
+use super::{Attribute, Context, JsArray, JsObject, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, js_string};
 
 macro_rules! getter {
     ($ctx:expr, $name:expr, |$f:ident, $c:ident| $body:expr) => {{

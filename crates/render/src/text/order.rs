@@ -1,5 +1,5 @@
-use super::layout::{is_rtl, union};
-use super::*;
+use super::TextGlyph;
+use super::layout::is_rtl;
 
 /// Glyphs `start..end` of the glyph list [`arrange`] lays out, drawn one after another.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,6 +37,32 @@ struct SegExtra {
     more: Vec<Run>,
 }
 
+/// Whether `(script_bbox, script_h)` is a superscript or subscript on `(host_bbox, host_h)`.
+pub(super) fn is_script_on(host_bbox: &[f32; 4], host_h: f32, script_bbox: &[f32; 4], script_h: f32) -> bool {
+    let host_cy = (host_bbox[1] + host_bbox[3]) / 2.0;
+    let script_cy = (script_bbox[1] + script_bbox[3]) / 2.0;
+    let script_w = script_bbox[2] - script_bbox[0];
+    let host_w = host_bbox[2] - host_bbox[0];
+    let smaller = script_h >= host_h * 0.45 && script_w < host_h * 3.0 && (script_h < host_h * 0.9 || (script_h <= host_h && host_w > script_w));
+    if !smaller {
+        return false;
+    }
+    if script_cy < host_cy {
+        // Superscript: raised above the host baseline, with its bottom inside the host line.
+        host_cy - script_cy >= host_h * 0.12
+            && host_cy - script_cy < host_h * 0.7
+            && host_bbox[3] - script_bbox[3] >= host_h * 0.15
+            && script_bbox[3] > host_bbox[1] + host_h * 0.25
+    } else {
+        // Subscript: lowered below the host baseline, with its centre still inside the host line.
+        script_cy - host_cy >= host_h * 0.12
+            && script_cy - host_cy < host_h * 0.5
+            && script_bbox[3] > host_bbox[3]
+            && host_bbox[3] > script_bbox[1] + script_h * 0.5
+            && script_bbox[1] >= host_bbox[1] - script_h * 0.2
+    }
+}
+
 impl Seg {
     pub(super) fn new(first: Run, bbox: [f32; 4], h: f32) -> Self {
         Seg { first, extra: None, bbox, h }
@@ -50,9 +76,25 @@ impl Seg {
         std::iter::once(self.first).chain(self.extra.iter().flat_map(|e| e.more.iter().copied()))
     }
 
+    /// Extend `self`'s box and height with `(bbox, h)`. A smaller script (superscript or
+    /// subscript) widens the line horizontally without pulling its vertical baseline band up or
+    /// down; when a line begins with a script and continues with taller body text, the body text's
+    /// vertical band becomes the line's.
+    pub(super) fn extend_box(&mut self, bbox: &[f32; 4], h: f32) {
+        if h > self.h * 1.15 || is_script_on(bbox, h, &self.bbox, self.h) {
+            self.bbox[1] = bbox[1];
+            self.bbox[3] = bbox[3];
+        } else if !(self.h > h * 1.15 || is_script_on(&self.bbox, self.h, bbox, h)) {
+            self.bbox[1] = self.bbox[1].min(bbox[1]);
+            self.bbox[3] = self.bbox[3].max(bbox[3]);
+        }
+        self.bbox[0] = self.bbox[0].min(bbox[0]);
+        self.bbox[2] = self.bbox[2].max(bbox[2]);
+        self.h = self.h.max(h);
+    }
+
     pub(super) fn merge(&mut self, other: Seg) {
-        union(&mut self.bbox, &other.bbox);
-        self.h = self.h.max(other.h);
+        self.extend_box(&other.bbox, other.h);
         let extra = self.extra.get_or_insert_with(Default::default);
         extra.more.push(other.first);
         if let Some(o) = other.extra {
@@ -274,8 +316,10 @@ pub(super) fn collide(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32, h: f
             }
             budget -= 1;
             let (ra, rb) = (union_find(&mut sc.parent, ri), union_find(&mut sc.parent, rj));
+            let hj = height(j);
+            let script = is_script_on(&glyphs[i].rect, hi, &glyphs[j].rect, hj) || is_script_on(&glyphs[j].rect, hj, &glyphs[i].rect, hi);
             let overlap = x1.min(glyphs[j].rect[2]) - x0(j);
-            if ra != rb && overlap > RUN_COLLISION * hi.min(height(j)) {
+            if ra != rb && !script && overlap > RUN_COLLISION * hi.min(hj) {
                 sc.parent[ra] = rb;
                 collided = true;
             }

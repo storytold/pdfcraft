@@ -1,6 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Original, text-only native MSI dialogs. No third-party UI artwork or custom-action DLLs.
-     Full UI gets welcome (with the desktop-shortcut and PDF context-menu checkboxes)/progress/outcome screens; /qn and /qb stay unattended. -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Fragment>
     <UI Id="PdfcraftInstallerUI">
@@ -10,13 +8,14 @@
 
       <Dialog Id="InstallWelcome" Width="370" Height="180" Title="[ProductName] Setup">
         <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" Text="{\InstallerTitle}Install [ProductName]" />
-        <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="40"
-            Text="Setup will install [ProductName] for all users and add it to the Start menu. Click Install to continue." />
-        <Control Id="DesktopShortcut" Type="CheckBox" X="20" Y="105" Width="330" Height="17"
-            Property="INSTALLDESKTOPSHORTCUT" CheckBoxValue="1" Text="Create a &amp;desktop shortcut" />
-        <Control Id="PdfContextMenu" Type="CheckBox" X="20" Y="123" Width="330" Height="17"
-            Property="INSTALLPDFCONTEXTMENU" CheckBoxValue="1" Text="Add &quot;&amp;Edit with PdfCraft&quot; to the right-click menu of PDF files" />
-        <Control Id="Install" Type="PushButton" X="195" Y="145" Width="75" Height="23" Default="yes" ElevationShield="yes" Text="&amp;Install">
+        <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="40" Text="Setup will install [ProductName] for all users and add it to the Start menu. Click Install to continue." HideCondition="ALLUSERS &lt;&gt; 1" ShowCondition="ALLUSERS = 1" />
+        <Control Id="DescriptionUser" Type="Text" X="20" Y="55" Width="330" Height="40" Text="Setup will install [ProductName] only for your account and add it to the Start menu. Click Install to continue." HideCondition="ALLUSERS = 1" ShowCondition="ALLUSERS &lt;&gt; 1" />
+        <Control Id="DesktopShortcut" Type="CheckBox" X="20" Y="105" Width="330" Height="17" Property="INSTALLDESKTOPSHORTCUT" CheckBoxValue="1" Text="Create a &amp;desktop shortcut" />
+        <Control Id="PdfContextMenu" Type="CheckBox" X="20" Y="123" Width="330" Height="17" Property="INSTALLPDFCONTEXTMENU" CheckBoxValue="1" Text="Add &quot;&amp;Edit with PdfCraft&quot; to the right-click menu of PDF files" />
+        <Control Id="Install" Type="PushButton" X="195" Y="145" Width="75" Height="23" Default="yes" DefaultCondition="ALLUSERS = 1" ElevationShield="yes" HideCondition="ALLUSERS &lt;&gt; 1" ShowCondition="ALLUSERS = 1" Text="&amp;Install">
+          <Publish Event="EndDialog" Value="Return" />
+        </Control>
+        <Control Id="InstallUser" Type="PushButton" DefaultCondition="ALLUSERS &lt;&gt; 1" HideCondition="ALLUSERS = 1" ShowCondition="ALLUSERS &lt;&gt; 1" X="195" Y="145" Width="75" Height="23" Text="&amp;Install">
           <Publish Event="EndDialog" Value="Return" />
         </Control>
         <Control Id="Cancel" Type="PushButton" X="280" Y="145" Width="70" Height="23" Cancel="yes" Text="Cancel">
@@ -26,14 +25,22 @@
 
       <Dialog Id="InstallMaintenance" Width="370" Height="180" Title="[ProductName] Setup">
         <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" Text="{\InstallerTitle}Maintain [ProductName]" />
-        <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="70"
-            Text="[ProductName] is already installed. Choose Repair to restore missing files and shortcuts, or Remove to uninstall it." />
-        <Control Id="Repair" Type="PushButton" X="110" Y="145" Width="75" Height="23" Default="yes" ElevationShield="yes" Text="&amp;Repair">
+        <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="70" Text="[ProductName] is already installed. Choose Repair to restore missing files and shortcuts, or Remove to uninstall it." />
+        <Control Id="Repair" Type="PushButton" X="110" Y="145" Width="75" Height="23" Default="yes" DefaultCondition="ALLUSERS = 1" ElevationShield="yes" HideCondition="ALLUSERS &lt;&gt; 1" ShowCondition="ALLUSERS = 1" Text="&amp;Repair">
           <Publish Property="REINSTALL" Value="ALL" Order="1" />
           <Publish Property="REINSTALLMODE" Value="amus" Order="2" />
           <Publish Event="EndDialog" Value="Return" Order="3" />
         </Control>
-        <Control Id="Remove" Type="PushButton" X="195" Y="145" Width="75" Height="23" ElevationShield="yes" Text="R&amp;emove">
+        <Control Id="RepairUser" Type="PushButton" DefaultCondition="ALLUSERS &lt;&gt; 1" HideCondition="ALLUSERS = 1" ShowCondition="ALLUSERS &lt;&gt; 1" X="110" Y="145" Width="75" Height="23" Text="&amp;Repair">
+          <Publish Property="REINSTALL" Value="ALL" Order="1" />
+          <Publish Property="REINSTALLMODE" Value="amus" Order="2" />
+          <Publish Event="EndDialog" Value="Return" Order="3" />
+        </Control>
+        <Control Id="Remove" Type="PushButton" X="195" Y="145" Width="75" Height="23" ElevationShield="yes" HideCondition="ALLUSERS &lt;&gt; 1" ShowCondition="ALLUSERS = 1" Text="R&amp;emove">
+          <Publish Property="REMOVE" Value="ALL" Order="1" />
+          <Publish Event="EndDialog" Value="Return" Order="2" />
+        </Control>
+        <Control Id="RemoveUser" Type="PushButton" HideCondition="ALLUSERS = 1" ShowCondition="ALLUSERS &lt;&gt; 1" X="195" Y="145" Width="75" Height="23" Text="R&amp;emove">
           <Publish Property="REMOVE" Value="ALL" Order="1" />
           <Publish Event="EndDialog" Value="Return" Order="2" />
         </Control>
@@ -66,8 +73,7 @@
 
       <Dialog Id="InstallComplete" Width="370" Height="180" Title="[ProductName] Setup">
         <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" Text="{\InstallerTitle}Setup completed successfully" />
-        <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="70"
-            Text="[ProductName] setup has completed successfully. Click Finish to close this window." />
+        <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="70" Text="[ProductName] setup has completed successfully. Click Finish to close this window." />
         <Control Id="Finish" Type="PushButton" X="280" Y="145" Width="70" Height="23" Default="yes" Cancel="yes" Text="&amp;Finish">
           <Publish Event="EndDialog" Value="Return" />
         </Control>
@@ -75,8 +81,7 @@
 
       <Dialog Id="InstallFailed" Width="370" Height="180" Title="[ProductName] Setup">
         <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" Text="{\InstallerTitle}Setup failed" />
-        <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="70"
-            Text="[ProductName] setup could not be completed. Resolve the reported error and run setup again." />
+        <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="70" Text="[ProductName] setup could not be completed. Resolve the reported error and run setup again." />
         <Control Id="Finish" Type="PushButton" X="280" Y="145" Width="70" Height="23" Default="yes" Cancel="yes" Text="&amp;Finish">
           <Publish Event="EndDialog" Value="Return" />
         </Control>
@@ -84,8 +89,7 @@
 
       <Dialog Id="InstallCancelled" Width="370" Height="180" Title="[ProductName] Setup">
         <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" Text="{\InstallerTitle}Setup cancelled" />
-        <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="70"
-            Text="[ProductName] setup was cancelled. Run setup again when you are ready." />
+        <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="70" Text="[ProductName] setup was cancelled. Run setup again when you are ready." />
         <Control Id="Finish" Type="PushButton" X="280" Y="145" Width="70" Height="23" Default="yes" Cancel="yes" Text="&amp;Finish">
           <Publish Event="EndDialog" Value="Return" />
         </Control>
@@ -96,8 +100,7 @@
            continues; Cancel ends setup. -->
       <Dialog Id="MsiRMFilesInUse" Width="370" Height="200" Title="[ProductName] Setup" KeepModeless="yes">
         <Control Id="Title" Type="Text" X="20" Y="15" Width="330" Height="25" Text="{\InstallerTitle}Files in use" />
-        <Control Id="Description" Type="Text" X="20" Y="45" Width="330" Height="30"
-            Text="These programs are using files that setup needs to update. Click OK to close them and continue, or Cancel to stop setup." />
+        <Control Id="Description" Type="Text" X="20" Y="45" Width="330" Height="30" Text="These programs are using files that setup needs to update. Click OK to close them and continue, or Cancel to stop setup." />
         <Control Id="List" Type="ListBox" X="20" Y="80" Width="330" Height="55" Property="FileInUseProcess" Sunken="yes" TabSkip="yes" />
         <Control Id="OK" Type="PushButton" X="195" Y="165" Width="75" Height="23" Default="yes" Text="OK">
           <Publish Property="MSIRMSHUTDOWN" Value="2" Order="1" />

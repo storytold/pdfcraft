@@ -1,6 +1,9 @@
 use super::geometry::{HANDLES, grabs_points, handle_pos, is_markup, reshapable, reshaped, resizable};
 use super::state::{Gesture, PageCx, SETTLE_SECS};
-use super::*;
+use super::{
+    Annotation, Color32, CommentTool, CornerRadius, DocInfo, DocView, Edit, LineEnding, NewAnnotation, Pos2, QuickTool, Rect, SELECT_BLUE, Shape,
+    Stroke, color32, vec2,
+};
 
 /// Paint comment selection, hover and gesture previews on a page.
 pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
@@ -124,10 +127,10 @@ fn paint_draw(painter: &egui::Painter, cx: &PageCx<'_>, tool: &CommentTool, poin
     {
         let style = cx.prefs.style(*tool);
         let zoom = cx.xf.zoom();
-        let stroke = Stroke::new((style.width as f32 * zoom).max(1.0), color32(style.color));
+        let stroke = Stroke::new((style.width as f32 * zoom).max(1.0), color32(style.color).gamma_multiply(style.opacity as f32));
         let pts: Vec<Pos2> = points.iter().map(|p| cx.to_screen(*p)).collect();
         match tool {
-            CommentTool::Ink => {
+            CommentTool::Ink | CommentTool::FreehandHighlight => {
                 painter.add(egui::Shape::line(pts, stroke));
             }
             CommentTool::Eraser => {
@@ -183,6 +186,7 @@ pub(super) fn drawn_shape(tool: CommentTool, points: &[[f64; 2]]) -> Option<Shap
     let rect = [first[0].min(last[0]), first[1].min(last[1]), first[0].max(last[0]), first[1].max(last[1])];
     let big = rect[2] - rect[0] >= 2.0 && rect[3] - rect[1] >= 2.0;
     match tool {
+        CommentTool::FreehandHighlight if !points.is_empty() => Some(Shape::FreehandHighlight { strokes: vec![points.to_vec()] }),
         CommentTool::Ink if !points.is_empty() => Some(Shape::Ink { strokes: vec![points.to_vec()] }),
         CommentTool::Line | CommentTool::Arrow if far => Some(Shape::Line {
             from: first,
@@ -206,7 +210,7 @@ pub(super) fn drawn_shape(tool: CommentTool, points: &[[f64; 2]]) -> Option<Shap
 /// per point, so the default 2 pt keeps the 12-pixel eraser it always had, and the thickness
 /// slider's 0.5–12 pt gives 3 to 72 pixels across. A setting that isn't a number is the default.
 fn eraser_radius_px(width: f64) -> f64 {
-    3.0 * if width.is_finite() { width.clamp(0.5, 12.0) } else { 2.0 }
+    3.0 * if width.is_finite() { width.clamp(0.5, super::MAX_LINE_WIDTH) } else { 2.0 }
 }
 
 /// Eraser: rub out drawings along `path` (user space); one undo step for all of them. It rubs

@@ -607,14 +607,13 @@ impl TimestampAuthority for TestTsa {
     fn timestamp(&self, request: &[u8]) -> Result<Vec<u8>, SignError> {
         let q = pdfcraft_sign::timestamp::parse_request(request)?;
         pdfcraft_sign::timestamp::respond(
-            &self.id.key,
-            &self.id.certificate,
-            &self.id.chain,
-            pdfcraft_sign::DigestAlg::Sha256,
-            &q,
-            "1.2.3.4",
-            self.time,
-            7,
+            pdfcraft_sign::timestamp::TimestampSigner {
+                key: &self.id.key,
+                certificate: &self.id.certificate,
+                chain: &self.id.chain,
+                digest: pdfcraft_sign::DigestAlg::Sha256,
+            },
+            pdfcraft_sign::timestamp::TimestampIssuance { query: &q, policy: "1.2.3.4", generation_time: self.time, serial: 7 },
         )
     }
 }
@@ -1918,8 +1917,16 @@ fn a_timestamp_token_may_sign_with_a_different_digest_than_its_imprint() {
     let imprint = pdfcraft_sign::DigestAlg::Sha1.digest(&[b"document"]);
     let q = pdfcraft_sign::timestamp::TimestampQuery::new(pdfcraft_sign::DigestAlg::Sha1, imprint.clone()).unwrap();
     let time = Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 };
-    let resp =
-        pdfcraft_sign::timestamp::respond(&tsa.key, &tsa.certificate, &tsa.chain, pdfcraft_sign::DigestAlg::Sha256, &q, "1.2.3.4", time, 9).unwrap();
+    let resp = pdfcraft_sign::timestamp::respond(
+        pdfcraft_sign::timestamp::TimestampSigner {
+            key: &tsa.key,
+            certificate: &tsa.certificate,
+            chain: &tsa.chain,
+            digest: pdfcraft_sign::DigestAlg::Sha256,
+        },
+        pdfcraft_sign::timestamp::TimestampIssuance { query: &q, policy: "1.2.3.4", generation_time: time, serial: 9 },
+    )
+    .unwrap();
     let token = pdfcraft_sign::timestamp::parse_response(&resp, &q).unwrap();
     assert_eq!((token.digest, token.imprint, token.gen_time), (pdfcraft_sign::DigestAlg::Sha1, imprint, time));
 }
@@ -1927,7 +1934,7 @@ fn a_timestamp_token_may_sign_with_a_different_digest_than_its_imprint() {
 /// A token answers the request that asked for it: a requested nonce or policy must come back.
 #[test]
 fn a_timestamp_response_must_carry_the_requested_nonce_and_policy() {
-    use pdfcraft_sign::timestamp::{TimestampQuery, parse_response, respond};
+    use pdfcraft_sign::timestamp::{TimestampIssuance, TimestampQuery, TimestampSigner, parse_response, respond};
     let tsa = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
     let alg = pdfcraft_sign::DigestAlg::Sha256;
     let time = Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 };
@@ -1936,7 +1943,13 @@ fn a_timestamp_response_must_carry_the_requested_nonce_and_policy() {
         (q.nonce, q.policy) = (nonce, policy.map(str::to_string));
         q
     };
-    let answer = |q: &TimestampQuery| respond(&tsa.key, &tsa.certificate, &tsa.chain, alg, q, "1.2.3.4", time, 9).unwrap();
+    let answer = |q: &TimestampQuery| {
+        respond(
+            TimestampSigner { key: &tsa.key, certificate: &tsa.certificate, chain: &tsa.chain, digest: alg },
+            TimestampIssuance { query: q, policy: "1.2.3.4", generation_time: time, serial: 9 },
+        )
+        .unwrap()
+    };
     let with_nonce = answer(&query(Some(42), None));
     assert!(parse_response(&with_nonce, &query(Some(42), Some("1.2.3.4"))).is_ok());
     assert!(parse_response(&with_nonce, &query(None, None)).is_ok());

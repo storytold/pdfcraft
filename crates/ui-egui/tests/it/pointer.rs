@@ -3,12 +3,14 @@
 //! dialog, the palette, the quick bar, the chrome over a page scrolled under it) lets the page's
 //! cursor, tips or presses through.
 //!
-//! The ignored tests pin live bugs that later steps of the page pointer router fix: one cursor
-//! writer (step 2), one hit test (step 3), and press-time capture with cancel (step 4).
+//! The ignored tests pin live bugs that later steps of the page pointer router fix: one hit test
+//! (step 3), and press-time capture with cancel (step 4).
 
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 use pdfcraft_engine::StampKind;
 use pdfcraft_ui_egui::comments::CommentTool;
+use pdfcraft_ui_egui::fill_sign::FillTool;
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool, UnlockPrompt};
 
 use crate::support::input::{coalesced_click, double_click, one_frame, touch_drag, touch_tap};
@@ -76,6 +78,18 @@ fn comment_on_text_pdf() -> Vec<u8> {
     ])
 }
 
+/// A 300×400 page with two rectangle comments overlapping at x 100..150, y 200..250: "Bottom
+/// note" first in `/Annots`, then "Top note" over it.
+fn stacked_comments_pdf() -> Vec<u8> {
+    pdf(&[
+        CATALOG,
+        PAGES,
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        "<< /Type /Annot /Subtype /Square /Rect [50 150 150 250] /C [1 0 0] /F 4 /T (Ana) /Contents (Bottom note) >>",
+        "<< /Type /Annot /Subtype /Square /Rect [100 200 200 300] /C [0 0 1] /F 4 /T (Ben) /Contents (Top note) >>",
+    ])
+}
+
 /// A 300×400 page with one line of text at x 40, y 300.
 fn text_pdf() -> Vec<u8> {
     let text = stream(LINE);
@@ -90,6 +104,41 @@ fn checkbox_pdf() -> Vec<u8> {
         "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
         "<< /Type /Annot /Subtype /Widget /FT /Btn /T (agree) /V /Off /AS /Off /Rect [100 200 120 220] /P 3 0 R /F 4 /MK << /CA (4) >> /DA (/ZaDb 11 Tf 0 g) >>",
         "<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats >>",
+    ])
+}
+
+/// A 300×400 page with two unchecked check boxes side by side: `agree` at x 100..120 and
+/// `other` at x 120..140, both at y 200..220.
+fn two_checkboxes_pdf() -> Vec<u8> {
+    pdf(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] /DA (/ZaDb 0 Tf 0 g) /DR << /Font << /ZaDb 6 0 R >> >> >> >>",
+        PAGES,
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (agree) /V /Off /AS /Off /Rect [100 200 120 220] /P 3 0 R /F 4 /MK << /CA (4) >> /DA (/ZaDb 11 Tf 0 g) >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (other) /V /Off /AS /Off /Rect [120 200 140 220] /P 3 0 R /F 4 /MK << /CA (4) >> /DA (/ZaDb 11 Tf 0 g) >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats >>",
+    ])
+}
+
+/// The check box `agree` of [`checkbox_pdf`], with a highlight drawn over it.
+fn highlighted_checkbox_pdf() -> Vec<u8> {
+    pdf(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DA (/ZaDb 0 Tf 0 g) /DR << /Font << /ZaDb 5 0 R >> >> >> >>",
+        PAGES,
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 6 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (agree) /V /Off /AS /Off /Rect [100 200 120 220] /P 3 0 R /F 4 /MK << /CA (4) >> /DA (/ZaDb 11 Tf 0 g) >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats >>",
+        "<< /Type /Annot /Subtype /Highlight /Rect [95 195 125 225] /QuadPoints [95 225 125 225 95 195 125 195] /C [1 1 0] /F 4 /T (Ana) >>",
+    ])
+}
+
+/// A 300×400 page with a push button at x 100..200, y 200..220 whose action opens a web address.
+fn button_pdf() -> Vec<u8> {
+    pdf(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DA (/Helv 0 Tf 0 g) >> >>",
+        PAGES,
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (web) /Rect [100 200 200 220] /P 3 0 R /A << /S /URI /URI (https://example.org/) >> >>",
     ])
 }
 
@@ -173,6 +222,12 @@ fn agree(h: &Harness<'_, PdfCraftApp>) -> Vec<String> {
     s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "agree").unwrap().value.clone()
 }
 
+/// Whether the page's hover tip shows and says `text`.
+fn tip_says(h: &Harness<'_, PdfCraftApp>, text: &str) -> bool {
+    let Some(tip) = h.ctx.memory(|m| m.area_rect(egui::Id::unique("canvas-hover"))).filter(|_| tip_shown(h)) else { return false };
+    h.query_all_by_label_contains(text).any(|n| tip.contains(n.rect().center()))
+}
+
 /// Hovers `p` until `want` accepts the cursor there (text layers and paragraph boxes arrive from
 /// worker threads), and returns the last cursor seen.
 fn wait_for_cursor(h: &mut Harness<'_, PdfCraftApp>, p: egui::Pos2, want: impl Fn(egui::CursorIcon) -> bool) -> egui::CursorIcon {
@@ -191,7 +246,6 @@ fn wait_for_cursor(h: &mut Harness<'_, PdfCraftApp>, p: egui::Pos2, want: impl F
 // The cursor promises one thing and a press does another.
 
 #[test]
-#[ignore = "step 2 of the page pointer router: one cursor writer"]
 fn stamp_tool_over_a_link_shows_its_crosshair() {
     let mut h = open(link_pdf(), "150", false);
     stamp_tool(&mut h);
@@ -205,7 +259,6 @@ fn stamp_tool_over_a_link_shows_its_crosshair() {
 }
 
 #[test]
-#[ignore = "step 2 of the page pointer router: one cursor writer"]
 fn rectangle_tool_over_a_link_shows_its_crosshair() {
     let mut h = open(link_pdf(), "150", false);
     h.state_mut().quick_tool = QuickTool::Comment(CommentTool::Rectangle);
@@ -218,7 +271,6 @@ fn rectangle_tool_over_a_link_shows_its_crosshair() {
 }
 
 #[test]
-#[ignore = "step 2 of the page pointer router: one cursor writer"]
 fn edit_text_over_a_linked_word_offers_the_move_arrow() {
     let mut h = open(linked_text_pdf(), "150", false);
     h.state_mut().quick_tool = QuickTool::EditText;
@@ -242,7 +294,6 @@ fn edit_text_over_a_linked_word_offers_the_move_arrow() {
 }
 
 #[test]
-#[ignore = "step 2 of the page pointer router: one cursor writer"]
 fn select_tool_over_a_comment_on_text_offers_the_move_arrow() {
     let mut h = open(comment_on_text_pdf(), "150", false);
     // Inside the rectangle where there is no text, and inside it over a word.
@@ -257,6 +308,83 @@ fn select_tool_over_a_comment_on_text_offers_the_move_arrow() {
     assert_eq!(over_blank, egui::CursorIcon::Move, "a movable comment offers the four-way arrow");
     assert!((after[0] - before[0] - 20.0).abs() < 1.5, "a drag from the text moves the rectangle: {before:?} → {after:?}");
     assert_eq!(over_text, egui::CursorIcon::Move, "so it offers the arrow where text lies under it too");
+}
+
+#[test]
+fn a_links_tip_shows_only_with_its_hand() {
+    let mut h = open(link_pdf(), "150", false);
+    let on_link = at(&h, 150.0, 325.0);
+    let hover = |h: &mut Harness<'_, PdfCraftApp>, tool: QuickTool, nudge: f32| {
+        h.state_mut().quick_tool = tool;
+        h.run_steps(4);
+        // A new position each time, so the hover is fresh.
+        let cursor = cursor_at(h, on_link + egui::vec2(nudge, 0.0));
+        h.run_steps(2);
+        (cursor, tip_says(h, "https://example.org/"))
+    };
+    use egui::CursorIcon::{Crosshair, PointingHand};
+    assert_eq!(hover(&mut h, QuickTool::Select, 0.0), (PointingHand, true), "the Select tool follows the link, and the tip says where to");
+    assert_eq!(hover(&mut h, QuickTool::Link, 1.0), (PointingHand, true), "the Link tool edits it");
+    let stamp = QuickTool::Stamp(StampKind::DynApproved);
+    assert_eq!(hover(&mut h, stamp, 2.0), (Crosshair, false), "a click places a stamp, so neither hand nor tip offers the link");
+    let rectangle = QuickTool::Comment(CommentTool::Rectangle);
+    assert_eq!(hover(&mut h, rectangle, 3.0), (Crosshair, false), "a drag draws a rectangle");
+}
+
+/// A drag from plain text onto a link still selects the text: the press decides, not where the
+/// pointer has got to once egui calls it a drag.
+#[test]
+fn a_drag_from_text_onto_a_link_selects_the_text() {
+    let mut h = open(linked_text_pdf(), "150", false);
+    // "before you start." lies right of the link, which covers x 40..160.
+    let (plain, linked) = (at(&h, 200.0, 303.0), at(&h, 100.0, 303.0));
+    assert_eq!(wait_for_cursor(&mut h, plain, |c| c == egui::CursorIcon::Text), egui::CursorIcon::Text, "the page's text has arrived");
+    mouse_drag(&mut h, plain, linked - plain);
+    let selected = h.state().views[0].selected_text().unwrap_or_default();
+    assert!(selected.contains("example.org"), "the drag selected across the link: {selected:?}");
+}
+
+/// Over two comments the tip names the one drawn on top (#3620), and a click should select that
+/// one too. The renderer paints in `/Annots` order, but the hit test takes the last comment in
+/// inspection's order, which is by top edge, and selects the one underneath.
+#[test]
+fn a_click_on_stacked_comments_selects_the_one_drawn_on_top() {
+    let mut h = open(stacked_comments_pdf(), "150", false);
+    let overlap = at(&h, 125.0, 225.0);
+    assert_eq!(cursor_at(&mut h, overlap), egui::CursorIcon::Move);
+    h.run_steps(2);
+    assert!(tip_says(&h, "Top note") && !tip_says(&h, "Bottom note"), "the tip names the comment drawn on top");
+    mouse_click(&mut h, overlap);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 1)), "a click selects it too");
+}
+
+#[test]
+fn a_comments_tip_shows_with_every_tool_beside_its_cursor() {
+    let mut h = open(comment_on_text_pdf(), "150", false);
+    // Inside the rectangle comment by "Reviewer": where there is no text, and over a word.
+    let (blank, on_text) = (at(&h, 120.0, 315.0), at(&h, 60.0, 303.0));
+    let hover = |h: &mut Harness<'_, PdfCraftApp>, tool: QuickTool, p: egui::Pos2, want: egui::CursorIcon| {
+        h.state_mut().quick_tool = tool;
+        h.run_steps(4);
+        let cursor = wait_for_cursor(h, p, |c| c == want);
+        h.run_steps(2);
+        (cursor, tip_says(h, "Reviewer"))
+    };
+    use egui::CursorIcon::{Crosshair, Move, Text};
+    // A new position each time, so the hover is fresh.
+    let nudge = |n: f32| blank + egui::vec2(n, 0.0);
+    assert_eq!(hover(&mut h, QuickTool::Select, blank, Move), (Move, true), "the Select tool picks the comment up");
+    let stamp = QuickTool::Stamp(StampKind::DynApproved);
+    assert_eq!(hover(&mut h, stamp, nudge(1.0), Crosshair), (Crosshair, true), "a stamp keeps its crosshair, and the comment still says whose it is");
+    let rectangle = QuickTool::Comment(CommentTool::Rectangle);
+    assert_eq!(hover(&mut h, rectangle, nudge(2.0), Crosshair), (Crosshair, true), "so does a drawing tool");
+    let highlight = QuickTool::Comment(CommentTool::Highlight);
+    assert_eq!(hover(&mut h, highlight, on_text, Text), (Text, true), "and the highlighter its I-beam");
+    // Not while drawing freehand, where it would cover the next stroke (#429), nor with Fill & Sign.
+    let ink = QuickTool::Comment(CommentTool::Ink);
+    assert_eq!(hover(&mut h, ink, nudge(3.0), Crosshair), (Crosshair, false), "freehand");
+    let fill = QuickTool::Fill(FillTool::Check);
+    assert_eq!(hover(&mut h, fill, nudge(4.0), Crosshair), (Crosshair, false), "Fill & Sign");
 }
 
 /// Narrows the paragraph by dragging its left edge 100 pt inward, starting `dx` screen points
@@ -287,7 +415,6 @@ fn narrow_from_left(dx: f32) -> (egui::CursorIcon, usize) {
 }
 
 #[test]
-#[ignore = "step 3 of the page pointer router: one hit test"]
 fn a_paragraph_edge_resizes_wherever_it_shows_the_resize_cursor() {
     let (inside_cursor, inside_lines) = narrow_from_left(1.0);
     assert_eq!(inside_cursor, egui::CursorIcon::ResizeHorizontal);
@@ -595,6 +722,73 @@ fn coalesced_click_places_a_stamp() {
     assert_eq!(stamps(&h), 1, "a click whose press and release share a frame places the stamp");
 }
 
+/// The value of the field named `name` on the first view's document.
+fn field_value(h: &Harness<'_, PdfCraftApp>, name: &str) -> Vec<String> {
+    let s = h.state();
+    s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == name).unwrap().value.clone()
+}
+
+/// A press belongs to the field it lands on: pressed at the right edge of `agree` and released just
+/// over the edge of `other` beside it (a click still, to egui), it ticks neither, as a button
+/// pressed and released off itself does nothing. The release used to tick `other`.
+#[test]
+fn a_press_on_one_check_box_released_over_another_ticks_neither() {
+    let mut h = open(two_checkboxes_pdf(), "150", false);
+    let (press, release) = (at(&h, 119.0, 210.0), at(&h, 121.0, 210.0));
+    slipping_click(&mut h, press, release);
+    assert_eq!((field_value(&h, "agree"), field_value(&h, "other")), (Vec::<String>::new(), Vec::new()), "neither box is ticked");
+}
+
+/// A click whose pointer slips from `press` to `release` before the button comes up (a click
+/// still, to egui, while they are close), in frames of their own as [`mouse_click`] sends them.
+fn slipping_click(h: &mut Harness<'_, PdfCraftApp>, press: egui::Pos2, release: egui::Pos2) {
+    h.hover_at(press);
+    h.run_steps(1);
+    h.drag_at(press);
+    h.run_steps(1);
+    h.drop_at(release);
+    h.run_steps(4);
+}
+
+/// A click follows the link its press was on only when released over it: pressed just inside the
+/// link's edge and released just past it, it follows nothing, as a button pressed and released off
+/// itself does nothing. The press used to be enough.
+#[test]
+fn a_press_on_a_link_released_off_it_follows_nothing() {
+    let mut h = open(link_pdf(), "150", false);
+    // The link ends at x 250.
+    let press = at(&h, 249.0, 325.0);
+    slipping_click(&mut h, press, press + egui::vec2(5.0, 0.0));
+    assert_eq!(h.state().pending_link, None, "nothing asks to open the link");
+    mouse_click(&mut h, press);
+    assert!(h.state().pending_link.is_some(), "a click there asks to open it");
+}
+
+/// The same for a push button: pressed just inside its edge and released just past it, it runs no
+/// action. The press used to be enough.
+#[test]
+fn a_press_on_a_button_released_off_it_runs_nothing() {
+    let mut h = open(button_pdf(), "150", false);
+    // The button ends at x 200.
+    let press = at(&h, 199.0, 210.0);
+    slipping_click(&mut h, press, press + egui::vec2(5.0, 0.0));
+    assert_eq!(h.state().pending_link, None, "the button's action does not run");
+    mouse_click(&mut h, press);
+    assert!(h.state().pending_link.is_some(), "a click there runs it");
+}
+
+/// Text markup lies on the text, under a form field: a click on a check box under a highlight
+/// ticks the box, and the field's hand shows there.
+#[test]
+fn a_check_box_under_a_highlight_takes_the_click() {
+    let mut h = open(highlighted_checkbox_pdf(), "150", false);
+    let p = at(&h, 110.0, 210.0);
+    assert_eq!(cursor_at(&mut h, p), egui::CursorIcon::PointingHand);
+    mouse_click(&mut h, p);
+    assert_eq!(field_value(&h, "agree"), ["Yes"], "the box is ticked");
+    assert_eq!(h.state().views[0].comments.selected, None, "and the highlight is not selected");
+}
+
 #[test]
 fn mouse_click_ticks_a_check_box() {
     // Control for the tap below.
@@ -632,7 +826,6 @@ fn touch_drag_moves_a_comment_and_leaves_no_gesture_behind() {
 // Ending a gesture.
 
 #[test]
-#[ignore = "step 4 of the page pointer router: press-time capture and cancel"]
 fn escape_cancels_a_signature_rectangle() {
     let mut h = open(link_pdf(), "150", false);
     h.state_mut().quick_tool = QuickTool::SignArea { certify: false };
@@ -650,4 +843,117 @@ fn escape_cancels_a_signature_rectangle() {
     let s = h.state();
     assert_eq!(s.quick_tool, QuickTool::SignArea { certify: false }, "Escape abandons the rectangle; the tool stays");
     assert!(s.dialog.is_none(), "and no signing dialog opens: {:?}", s.dialog);
+}
+
+/// A highlight dragged over the line of [`text_pdf`] at 150 %, from x 45 to x 150, with Escape
+/// before the release when `escape`; the comments then on the page.
+fn drag_a_highlight(escape: bool) -> usize {
+    let mut h = open(text_pdf(), "150", false);
+    h.state_mut().quick_tool = QuickTool::Comment(CommentTool::Highlight);
+    h.run_steps(4);
+    let (a, b) = (at(&h, 45.0, 303.0), at(&h, 150.0, 303.0));
+    assert_eq!(wait_for_cursor(&mut h, a, |c| c == egui::CursorIcon::Text), egui::CursorIcon::Text, "the page's text has arrived");
+    h.drag_at(a);
+    h.run_steps(1);
+    h.hover_at(b);
+    h.run_steps(2);
+    if escape {
+        h.key_press(egui::Key::Escape);
+        h.run_steps(1);
+    }
+    h.drop_at(b);
+    h.run_steps(4);
+    let s = h.state();
+    s.session.get(s.views[0].id).unwrap().info.annotations.len()
+}
+
+/// Escape mid-drag abandons a highlight being drawn over text: the release makes no highlight.
+#[test]
+fn escape_cancels_a_highlight_being_dragged_over_text() {
+    assert_eq!(drag_a_highlight(false), 1, "control: the drag highlights the text");
+    assert_eq!(drag_a_highlight(true), 0, "with Escape before the release, no highlight is made");
+}
+
+/// A click on a comment, and in the frame of its release a press beside the page, then a drag
+/// from there: the drag is not the comment's, so it does not move it.
+#[test]
+fn a_drag_from_beside_the_page_right_after_a_click_leaves_the_comment_alone() {
+    let mut h = open(comment_on_text_pdf(), "150", false);
+    let on_comment = at(&h, 120.0, 315.0);
+    let beside = page(&h).left_center() - egui::vec2(20.0, 0.0);
+    let before = square(&h).expect("the rectangle");
+    h.hover_at(on_comment);
+    h.run_steps(1);
+    h.drag_at(on_comment);
+    h.run_steps(1);
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    one_frame(&mut h, [button(on_comment, false), egui::Event::PointerMoved(beside), button(beside, true)]);
+    h.run_steps(1);
+    h.hover_at(beside + egui::vec2(0.0, 60.0));
+    h.run_steps(2);
+    h.drop_at(beside + egui::vec2(0.0, 60.0));
+    h.run_steps(4);
+    assert_eq!(square(&h), Some(before), "the comment stays where it was");
+}
+
+/// Only the primary button draws a signature rectangle: a right-drag opens no signing dialog.
+#[test]
+fn a_right_drag_draws_no_signature_rectangle() {
+    let mut h = open(link_pdf(), "150", false);
+    h.state_mut().quick_tool = QuickTool::SignArea { certify: false };
+    h.run_steps(4);
+    let (a, b) = (at(&h, 60.0, 200.0), at(&h, 200.0, 120.0));
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE };
+    h.hover_at(a);
+    h.run_steps(1);
+    h.event(button(a, true));
+    h.run_steps(1);
+    h.hover_at(b);
+    h.run_steps(2);
+    h.event(button(b, false));
+    h.run_steps(4);
+    let s = h.state();
+    assert_eq!(s.quick_tool, QuickTool::SignArea { certify: false }, "the tool stays: no rectangle was drawn");
+    assert!(s.dialog.is_none(), "and no signing dialog opens: {:?}", s.dialog);
+}
+
+/// Escape with the button down drops the press: its release places no stamp, and the next click
+/// places one.
+#[test]
+fn escape_mid_press_keeps_its_release_from_placing_a_stamp() {
+    let mut h = open(link_pdf(), "150", false);
+    stamp_tool(&mut h);
+    let p = at(&h, 150.0, 150.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(4);
+    assert_eq!(stamps(&h), 0, "the cancelled press places nothing on release");
+    mouse_click(&mut h, p);
+    assert_eq!(stamps(&h), 1, "the next click places a stamp");
+}
+
+/// Escape mid-drag abandons a crop rectangle: the page keeps its boxes.
+#[test]
+fn escape_cancels_a_crop_rectangle() {
+    let mut h = open(text_pdf(), "150", false);
+    h.state_mut().quick_tool = QuickTool::Crop;
+    h.run_steps(4);
+    let (a, b) = (at(&h, 40.0, 360.0), at(&h, 260.0, 60.0));
+    h.hover_at(a);
+    h.run_steps(1);
+    h.drag_at(a);
+    h.run_steps(1);
+    h.hover_at(b);
+    h.run_steps(2);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(1);
+    h.drop_at(b);
+    h.run_steps(4);
+    let s = h.state();
+    assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), None, "no page box was set");
 }

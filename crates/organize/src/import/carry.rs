@@ -1,5 +1,5 @@
 use super::copy::Copier;
-use super::*;
+use super::{Dict, Document, HashMap, HashSet, ObjRef, Object, OrganizeError, name_tree_entries};
 
 /// Copy a source's document-level attachments (`/Names /EmbeddedFiles`) into `dst`.
 pub(super) fn collect_attachments(dst: &mut Document, src: &Document, out: &mut Vec<(Vec<u8>, Object)>) -> Result<(), OrganizeError> {

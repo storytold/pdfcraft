@@ -1,7 +1,25 @@
 use super::changes::classify_changes;
 use super::listing::{DigestCache, list, nums, sig_fields, text};
 use super::types::{Detail, Fill, Modification, Status, TrustStore};
-use super::*;
+use super::{
+    Certificate, Dict, DigestAlg, Document, HashSet, ObjRef, Object, SignError, SignatureInfo, SignedData, Time, build_chain, build_chain_noted,
+};
+
+struct SignatureValidation<'a> {
+    doc: &'a Document,
+    bytes: &'a [u8],
+    trust: &'a TrustStore,
+    info: &'a mut SignatureInfo,
+    cache: &'a DigestCache,
+}
+
+struct VerifiedSignature<'a> {
+    covered: usize,
+    certificate: Certificate,
+    embedded: &'a [Certificate],
+    cms_time: Option<Time>,
+    unverified_time: Option<Time>,
+}
 
 /// Validate one signature dictionary.
 pub fn validate(doc: &Document, bytes: &[u8], trust: &TrustStore, field: &str) -> Option<SignatureInfo> {
@@ -80,7 +98,7 @@ pub(super) fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v:
         info.details.push(Detail::of("PdfCraft can't check this signature yet: {}.", Fill::Reason(why.to_owned())));
     };
     if info.sub_filter.as_deref() == Some("adbe.x509.rsa_sha1") {
-        return validate_x509_rsa_sha1(doc, bytes, trust, v, info, cache, (l0, o1, covered), &contents);
+        return validate_x509_rsa_sha1(SignatureValidation { doc, bytes, trust, info, cache }, v, (l0, o1, covered), &contents);
     }
     let sd = match SignedData::parse(&contents) {
         Ok(sd) => sd,
@@ -190,24 +208,17 @@ pub(super) fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v:
             return invalid(info, Detail::of("The signature could not be checked ({}).", Fill::Reason(e.to_string())));
         }
     }
-    finish_validation(doc, bytes, trust, info, cache, covered, cert, &sd.certificates, s.signing_time, unverified_time);
+    finish_validation(
+        SignatureValidation { doc, bytes, trust, info, cache },
+        VerifiedSignature { covered, certificate: cert, embedded: &sd.certificates, cms_time: s.signing_time, unverified_time },
+    );
 }
 
 /// The verdict once the signature value has been checked: chain and trust, the signing time
 /// against the certificate's validity, and what later revisions changed.
-#[allow(clippy::too_many_arguments)]
-fn finish_validation(
-    doc: &Document,
-    bytes: &[u8],
-    trust: &TrustStore,
-    info: &mut SignatureInfo,
-    cache: &DigestCache,
-    covered: usize,
-    cert: Certificate,
-    embedded: &[Certificate],
-    cms_time: Option<Time>,
-    unverified_time: Option<Time>,
-) {
+fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignature<'_>) {
+    let SignatureValidation { doc, bytes, trust, info, cache } = context;
+    let VerifiedSignature { covered, certificate: cert, embedded, cms_time, unverified_time } = verified;
     info.signing_time = cms_time.or_else(|| info.date.as_deref().and_then(Time::from_pdf));
     let mut pool = embedded.to_vec();
     pool.extend(trust.certs.iter().cloned());
@@ -588,17 +599,8 @@ pub(crate) fn signature_contents(doc: &Document) -> Vec<Vec<u8>> {
 /// `adbe.x509.rsa_sha1` (ISO 32000-2 §12.8.3.2, deprecated): `/Contents` is the PKCS #1
 /// signature as a DER OCTET STRING over the SHA-1 digest of the byte ranges, and `/Cert` holds the
 /// signer's certificate (then any others) as DER byte strings.
-#[allow(clippy::too_many_arguments)]
-fn validate_x509_rsa_sha1(
-    doc: &Document,
-    bytes: &[u8],
-    trust: &TrustStore,
-    v: &Dict,
-    info: &mut SignatureInfo,
-    cache: &DigestCache,
-    (l0, o1, covered): (usize, usize, usize),
-    contents: &[u8],
-) {
+fn validate_x509_rsa_sha1(context: SignatureValidation<'_>, v: &Dict, (l0, o1, covered): (usize, usize, usize), contents: &[u8]) {
+    let SignatureValidation { doc, bytes, trust, info, cache } = context;
     let fail = |info: &mut SignatureInfo, why: Detail| {
         info.status = Status::Invalid;
         info.details.push(why);
@@ -645,5 +647,8 @@ fn validate_x509_rsa_sha1(
     }
     info.details.push(Detail::plain("The signature uses the legacy adbe.x509.rsa_sha1 format."));
     info.details.extend(DigestAlg::Sha1.weakness().map(Detail::plain));
-    finish_validation(doc, bytes, trust, info, cache, covered, cert, &certs, None, None);
+    finish_validation(
+        SignatureValidation { doc, bytes, trust, info, cache },
+        VerifiedSignature { covered, certificate: cert, embedded: &certs, cms_time: None, unverified_time: None },
+    );
 }

@@ -3,7 +3,7 @@ use super::merge::Op;
 use super::path::{data_path, parse_datasets};
 use super::values::{Want, path_of, text_of, with_template};
 use super::write::{datasets_stream_ref, rewrite};
-use super::*;
+use super::{DataNode, DataPath, Document, MAX_DEPTH, Node, ObjRef, Object, SomIndices, Template, Ui, XfaError};
 
 /// The SOM path and default value of every AcroForm text field with the Password flag (bit 14,
 /// `1 << 13`) in `doc`, for static XFA forms whose password fields set the flag in the AcroForm
