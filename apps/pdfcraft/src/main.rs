@@ -5,12 +5,16 @@
 //! An explicit `--layout` takes precedence for the active document, regardless of argument order.
 //! `--create-images [images…]` stages the images in one PDF and asks for the page DPI.
 //!
+//! Preferences for documents opened from now on (set before the files open, so they get them too;
+//! `startup::with_options`):
+//! `--default-layout single|continuous|two-up|two-page  --default-continuous on|off  --default-zoom fit-width|fit-page|<percent>
+//!  --always-default-view on|off  --default-panel auto|none|pages|bookmarks|comments  --default-page-gaps on|off  --default-mode all|read|edit|convert|sign`
+//!
 //! View options (applied after the files open; also the seed of the UI control channel):
 //! `--page N  --zoom 150  --layout single|continuous|two-up|two-page  --continuous on|off  --panel comments|bookmarks|pages|fields|layers|attachments|none
 //!  --theme light|dark|system  --language auto|<code>  --mode all|read|edit|convert|sign  --tool <catalogue id>  --left open|closed
 //!  --organize on  --fields on  --dialog properties|shortcuts|about  --palette <query>  --home on
-//!  --cover on|off  --default-layout single|continuous|two-up|two-page  --default-continuous on|off  --default-zoom fit-width|fit-page|<percent>  --always-default-view on|off  --default-panel auto|none|pages|bookmarks|comments
-//!  --page-gaps on|off  --default-page-gaps on|off  --recent-files 0..50
+//!  --cover on|off  --page-gaps on|off  --recent-files 0..50
 //!  --combine-view grid|list  --combine-zoom 60..200`
 //!
 //! `--new-window` opens a window of its own. Without it, on Windows, a launch that only names files
@@ -70,6 +74,8 @@ Options:
   --new-window                open a window of its own instead of passing the files to a running PdfCraft
   --create-images [images…]   put the images in one PDF and ask for the page DPI
   --control <file>            enable the UI control channel (pdfcraft-cli ui --control <file> …)
+  --default-panel pages, --default-zoom fit-width, --default-layout continuous, …
+                              preferences for new documents, set before the files open
   --page N, --zoom 150, --layout continuous, --theme dark, …
                               view settings applied once the files are open
   -h, --help                  print this and exit
