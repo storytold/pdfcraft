@@ -2816,6 +2816,10 @@ theme	Appearance	모양
 	Remove crop	자르기 제거
 	Send backward	뒤로 보내기
 	Send to back	맨 뒤로 보내기
+	Add a paper size of your own to the list	목록에 사용자 지정 용지 크기 추가
+	Custom…	사용자 지정…
+	Remember this paper for {printer}	{printer}에 이 용지 기억
+	Take this paper size off the list	목록에서 이 용지 크기 제거
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	오늘

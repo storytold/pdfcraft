@@ -886,6 +886,98 @@ fn restored_paper_keeps_preview_and_saved_sheet_dimensions() {
     std::fs::remove_file(out).unwrap();
 }
 
+/// After the Print dialog opens: frames until its printer list has loaded (its arrival changes
+/// the dialog's rows, even an empty list, which adds the "no printers" line), then a few more so
+/// the dialog has settled where it stays. A click before then can land where a control was
+/// (windows-latest CI).
+fn settle(h: &mut Harness<'static, PdfCraftApp>) {
+    for _ in 0..500 {
+        h.run_steps(1);
+        if !h.state().print_draft.printers_loading {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert!(!h.state().print_draft.printers_loading, "the printer list loaded");
+    h.run_steps(8);
+}
+
+/// Page setup: a paper size of one's own joins the Paper list (Custom…), the paper is kept for
+/// the printer when "Remember this paper for …" is ticked at Print time, starts the dialog next
+/// time, survives a restart with the settings, and is forgotten when unticked; Remove takes a
+/// custom size off the list.
+#[test]
+fn custom_papers_and_the_paper_remembered_for_a_printer() {
+    let mut h = harness();
+    // No printers here: Save as PDF is the dialog's printer, now and when it opens again.
+    h.state_mut().printer_source = Some(std::sync::Arc::new(Vec::new));
+    assert!(h.state_mut().execute("print.dialog"));
+    settle(&mut h);
+    assert_eq!(h.state().print_draft.printer, None);
+    h.get_by_label("Custom…").click();
+    h.run_steps(2);
+    // Typed in the preferences' unit: 4 × 6 inches.
+    let per_point = h.state().print_draft.units.per_point();
+    h.state_mut().print_draft.custom_new = Some(("Label 4×6".into(), format!("{}", 432.0 * per_point), format!("{}", 288.0 * per_point)));
+    h.run_steps(2);
+    h.get_by_label("Add").click();
+    h.run_steps(2);
+    {
+        let d = &h.state().print_draft;
+        assert!(d.paper_is_custom() && d.paper_name() == "Label 4×6", "{}", d.paper_name());
+        let (w, l) = d.paper_size();
+        assert!((w - 288.0).abs() < 0.01 && (l - 432.0).abs() < 0.01, "portrait: {w}×{l}");
+    }
+    // The custom row has closed: let the dialog settle at its new height before clicking.
+    h.run_steps(8);
+    h.get_by_label("Remember this paper for Save as PDF").click();
+    h.run_steps(1);
+    assert!(h.state().print_draft.remember_paper, "ticked");
+    let out = std::env::temp_dir().join(format!("pdfcraft-print-paper-test-{}.pdf", std::process::id()));
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.run_steps(8);
+    h.get_by_label("Save as PDF").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None);
+    let bytes = std::fs::read(&out).expect("saved");
+    let _ = std::fs::remove_file(&out);
+    let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(bytes)).unwrap();
+    let sheet = pdfcraft_model::pages(&saved)[0].display_size(&saved);
+    assert!((sheet.0.min(sheet.1) - 288.0).abs() < 0.5 && (sheet.0.max(sheet.1) - 432.0).abs() < 0.5, "the label paper: {sheet:?}");
+    assert_eq!(h.state().print_draft.remembered_paper.get("").map(String::as_str), Some("Label 4×6"));
+    // Next time the dialog starts with it.
+    h.state_mut().print_draft.paper = 0;
+    assert!(h.state_mut().execute("print.dialog"));
+    settle(&mut h);
+    assert_eq!((h.state().print_draft.paper_name().as_str(), h.state().print_draft.remember_paper), ("Label 4×6", true));
+    // And after a restart.
+    let settings = h.state().persist();
+    let mut fresh = PdfCraftApp::new();
+    fresh.restore(&settings);
+    assert_eq!(fresh.print_draft.paper_count(), h.state().print_draft.paper_count());
+    assert_eq!(fresh.print_draft.remembered_paper, h.state().print_draft.remembered_paper);
+    // Unticked at Print time, the paper is forgotten for Save as PDF.
+    h.get_by_label("Remember this paper for Save as PDF").click();
+    h.run_steps(1);
+    assert!(!h.state().print_draft.remember_paper, "unticked");
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.run_steps(8);
+    h.get_by_label("Save as PDF").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None, "saved");
+    let _ = std::fs::remove_file(&out);
+    assert!(h.state().print_draft.remembered_paper.is_empty());
+    // Remove takes the custom size off the list.
+    assert!(h.state_mut().execute("print.dialog"));
+    settle(&mut h);
+    let custom = h.state().print_draft.paper_count() - 1;
+    h.state_mut().print_draft.paper = custom;
+    h.run_steps(2);
+    h.get_by_label("Remove").click();
+    h.run_steps(2);
+    assert_eq!((h.state().print_draft.paper_count(), h.state().print_draft.paper), (custom, 0));
+}
+
 /// #2707: a booklet decides two-sided itself, as Acrobat does (its Print dialog hides Two-sided
 /// while Booklet is chosen): the job flips on the short edge for both sides and prints
 /// one-sided for the front or back only, and the Two-sided choice is kept for other layouts.

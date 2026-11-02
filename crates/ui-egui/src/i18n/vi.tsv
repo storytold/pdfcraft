@@ -2819,6 +2819,10 @@ key	Space	Space
 	Edit this PDF	Chỉnh sửa PDF này
 	Export this PDF	Xuất PDF này
 	Find text or tools	Tìm văn bản hoặc công cụ
+	Custom…	Tùy chỉnh…
+	Add a paper size of your own to the list	Thêm khổ giấy của riêng bạn vào danh sách
+	Take this paper size off the list	Gỡ khổ giấy này khỏi danh sách
+	Remember this paper for {printer}	Nhớ khổ giấy này cho {printer}
 	Attach a file…	Đính kèm tệp…
 	Delete attachment	Xóa tệp đính kèm
 	Attaching files is not available on the web yet	Chưa thể đính kèm tệp trên web
