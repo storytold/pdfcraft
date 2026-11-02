@@ -51,6 +51,7 @@ pub(super) fn solid_extent(item: &Item) -> Option<(f64, f64)> {
         Item::Text(s) => Some((s.baseline - s.face.size * 0.8, s.baseline + s.face.size * 0.2)),
         Item::Image { rect, .. } => Some((rect.y, rect.bottom())),
         Item::Widget(w) => Some((w.rect.y, w.rect.bottom())),
+        Item::Turned(t) => Some(t.extent),
         Item::Fill { .. } | Item::Line { .. } | Item::Rounded(_) => None,
     }
 }
@@ -129,6 +130,11 @@ pub(super) fn moved(mut item: Item, dx: f64, dy: f64) -> Item {
         Item::Widget(w) => {
             w.rect.x += dx;
             w.rect.y += dy;
+        }
+        Item::Turned(t) => {
+            t.about = (t.about.0 + dx, t.about.1 + dy);
+            t.extent = (t.extent.0 + dy, t.extent.1 + dy);
+            t.items = std::mem::take(&mut t.items).into_iter().map(|i| moved(i, dx, dy)).collect();
         }
     }
     item
