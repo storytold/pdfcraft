@@ -82,6 +82,7 @@ impl Host for crate::PdfCraftApp {
                 "fit": format!("{:?}", v.fit),
                 "layout": format!("{:?}", v.layout),
                 "continuous": v.continuous(),
+                "rtl_pages": v.rtl_pages,
                 "page_gaps": v.show_page_gaps,
                 "organize": v.organize,
                 "grid_zoom": v.grid_zoom(),

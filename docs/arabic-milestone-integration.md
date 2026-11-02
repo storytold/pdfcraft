@@ -50,7 +50,7 @@ their replacement. Preserve original author metadata and link every source PR;
 do not import unrelated old upstream merge, CI or asset changes. A shared branch
 does not require collapsing the five parts into an opaque commit.
 
-The integration branch includes upstream main `d7dd1de647ee` (2026-11-02),
+An earlier integration snapshot included upstream main `d7dd1de647ee` (2026-11-02),
 with both roadmap histories retained. Before merging, complete Chrome input and
 broader copy/search acceptance, and record precise provider/native-reader limitations. Local checks do not replace exact-head CI
 and maintainer review. Historical source-PR test results
@@ -124,3 +124,36 @@ the candidate, cancellation retains the accepted draft, and ordinary switching w
 after cancellation. It runs the real host hook because kittest otherwise skips it.
 ASCII preedit isolates ownership from font support. This is component evidence,
 not new Windows/Chrome/provider or independent native-reader qualification.
+
+### Reading surfaces and Find consolidation (#3347 / #3342)
+
+The contributor's older [#5605](https://github.com/storytold/pdfcraft/pull/5605)
+source-span encoding increment is superseded by the later #5623 contribution
+already included here: complete-source font priority, whole-context span completion
+and their later regressions. It does not need a second implementation import.
+
+The #3347 contribution from `@ihsanmokhlisse` is integrated from pinned source head
+`e3942c8f3f178ce77d61139925ebcf63d7440251`, preserving its author and history.
+It adds opt-in right-to-left two-page reading order, Arabic/mixed-script comment
+hover layout and logical-order RTL bookmark titles. Page indices and the PDF's
+stored page order stay unchanged. Arrow keys follow the chosen spread order;
+Page Up/Down retain document order. Agents can use `ui.command view.layout.rtl`
+or `ui.set` with `rtl-pages=on|off`; `ui.state.active.rtl_pages` reports the state.
+The extra catalog labels retain their original attribution and native-review limits.
+
+The #3342 contribution from `@ihsanmokhlisse`, source head
+`6f9c540a63a9c0249825c38f784e441dfa7af495`, is retained
+as contribution history, with its seven public Find regressions. All seven pass
+against this branch's native egui 0.37 editor, including paint, undo, deletion and
+Search-panel typing. Its older custom visual-order editor is deliberately not
+adopted: native egui already provides the tested behavior, and importing a second
+editor would add incompatible visual/caret and snapshot-memory ownership. The
+source PR's failing custom-editor paint test is not represented as passing here.
+The source PRs remain open pending maintainer acceptance of this consolidation.
+
+Review 5738954531 also corrects a pure-Latin regression: explicit LTR paragraphs
+can use range formatting, including after save/reopen. RTL-base or RTL-content
+mixed-style rows retain the existing uniform-full-face restriction. A focused
+public-tool regression reproduced the rejection before the fix and passes with it.
+The `d7dd1de647ee` reference above is explicitly an earlier integration snapshot;
+the integrated main baseline remains `e2615187279bd5a916c4fe56abc0a135156e005d`.

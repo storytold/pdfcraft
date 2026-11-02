@@ -126,6 +126,15 @@ impl DocView {
         self.set_continuous(continuous);
     }
 
+    /// Put the earlier page of each two-page pair on the right. A no-op unless it changed.
+    pub fn set_rtl_pages(&mut self, rtl_pages: bool) {
+        if self.rtl_pages != rtl_pages {
+            self.rtl_pages = rtl_pages;
+            self.goto = Some((self.current, 0.0));
+            self.reset_coarse_state();
+        }
+    }
+
     /// Set the cover page in two-page view. A no-op unless something changed.
     pub fn set_cover(&mut self, cover: bool) {
         if self.cover != cover {
@@ -337,10 +346,21 @@ impl DocView {
                     let sizes: Vec<Vec2> = pair.iter().map(page_size).collect();
                     let row_w: f32 = sizes.iter().map(|v| v.x).sum::<f32>() + gap * (sizes.len() as f32 - 1.0);
                     let row_h = sizes.iter().map(|v| v.y).fold(0.0, f32::max);
-                    let mut x = if self.cover && ri == 0 { (content_w / 2.0 + gap / 2.0).max(SIDE) } else { ((content_w - row_w) / 2.0).max(SIDE) };
-                    for size in sizes {
-                        rects.push(Rect::from_min_size(pos2(x, y + (row_h - size.y) / 2.0), size));
-                        x += size.x + gap;
+                    let lone_on_the_right = (self.cover && ri == 0) || (self.rtl_pages && sizes.len() == 1);
+                    let row_left = if lone_on_the_right { (content_w / 2.0 + gap / 2.0).max(SIDE) } else { ((content_w - row_w) / 2.0).max(SIDE) };
+                    if self.rtl_pages && sizes.len() == 2 {
+                        // The earlier page is the one a right-to-left reader meets first, so it
+                        // sits on the right. Widths can differ, so this is not a swap of origins.
+                        let right = sizes.first().copied().unwrap_or(Vec2::ZERO);
+                        let left = sizes.get(1).copied().unwrap_or(Vec2::ZERO);
+                        rects.push(Rect::from_min_size(pos2(row_left + left.x + gap, y + (row_h - right.y) / 2.0), right));
+                        rects.push(Rect::from_min_size(pos2(row_left, y + (row_h - left.y) / 2.0), left));
+                    } else {
+                        let mut x = row_left;
+                        for size in sizes {
+                            rects.push(Rect::from_min_size(pos2(x, y + (row_h - size.y) / 2.0), size));
+                            x += size.x + gap;
+                        }
                     }
                     y += row_h + gap;
                 }

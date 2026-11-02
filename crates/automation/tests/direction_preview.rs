@@ -111,3 +111,31 @@ fn direction_only_preserves_soft_and_hard_breaks_after_reopen() {
     let after = call(&mut auto, "text_paragraphs", json!({"doc":reopened,"page":1}));
     assert_eq!(after["paragraphs"][0]["editor_text"], source.reflow_text, "widening rejoins only soft wraps after reopen");
 }
+
+#[test]
+fn explicit_ltr_latin_allows_range_styles_after_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("latin.pdf"), fixture("BT /F1 12 Tf 1 0 0 1 72 700 Tm (Alpha beta) Tj ET")).unwrap();
+    let mut auto = Automation::new().with_root(dir.path()).unwrap();
+    let doc = call(&mut auto, "doc_open", json!({"path":"latin.pdf"}))["doc"].clone();
+    let styled = json!({"doc":doc,"page":1,"paragraph":1,"direction":"ltr","ranges":[{"range":[0,5],"color":"#cc0000"}]});
+    call(&mut auto, "text_edit_layout", styled.clone());
+    call(&mut auto, "text_edit", styled);
+    call(&mut auto, "doc_save", json!({"doc":doc,"path":"ltr.pdf"}));
+    let reopened = call(&mut auto, "doc_open", json!({"path":"ltr.pdf"}))["doc"].clone();
+    // Direction is now stored in the PDF. A later style-only edit must also work.
+    call(&mut auto, "text_edit", json!({"doc":reopened,"page":1,"paragraph":1,"ranges":[{"range":[6,10],"size":16}]}));
+    let lines = call(&mut auto, "text_lines", json!({"doc":reopened,"page":1}));
+    assert!(
+        lines["lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|line| line["text"].as_str().is_some_and(|text| text.trim() == "beta") && line["size"].as_f64() == Some(16.0)),
+        "{lines}"
+    );
+    assert!(
+        auto.call("text_edit", &json!({"doc":reopened,"page":1,"paragraph":1,"direction":"rtl","ranges":[{"range":[0,5],"size":18}]})).is_err(),
+        "RTL-base mixed styles still need a uniform full-face row"
+    );
+}

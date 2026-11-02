@@ -97,6 +97,18 @@ fn settle(h: &mut Harness<'static, PdfCraftApp>) {
 }
 
 #[test]
+fn right_to_left_page_order_is_reachable_and_observable_headlessly() {
+    let (mut h, c) = harness();
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["rtl_pages"], false);
+    assert!(call(&mut h, &c, "ui.set", json!({"key":"rtl-pages","value":"on"})).is_err());
+    ok(&mut h, &c, "ui.set", json!({"key":"layout","value":"two-up"}));
+    ok(&mut h, &c, "ui.set", json!({"key":"rtl-pages","value":"on"}));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["rtl_pages"], true);
+    ok(&mut h, &c, "ui.command", json!({"id":"view.layout.rtl"}));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["rtl_pages"], false);
+}
+
+#[test]
 fn comment_pin_is_reported_and_persistent() {
     let (mut h, c) = harness();
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["comment_tool_pinned"], false);

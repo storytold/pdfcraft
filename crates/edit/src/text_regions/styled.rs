@@ -322,10 +322,10 @@ fn embed_shaped_resources(doc: &mut Document, fonts: &mut Dict, runs: &ShapedRun
     Ok(resources)
 }
 
-fn validate_contextual_rows(rows: &[Vec<StyledChar>], kept: &[bool], directional: impl Fn(usize) -> bool) -> Result<(), EditError> {
+fn validate_contextual_rows(rows: &[Vec<StyledChar>], kept: &[bool], directional: impl Fn(usize, &str) -> bool) -> Result<(), EditError> {
     for ((index, row), _) in rows.iter().enumerate().zip(kept).filter(|(_, retained)| !**retained) {
         let text: String = row.iter().map(|character| character.0).collect();
-        if (pdfcraft_fonts::source_shaping::required(&text) || directional(index))
+        if (pdfcraft_fonts::source_shaping::required(&text) || directional(index, &text))
             && row.first().is_some_and(|first| row.iter().any(|character| character.1 != first.1 || character.2 != first.2))
         {
             return Err(EditError::Invalid(
@@ -897,8 +897,10 @@ fn paragraph_bases(draft: &str, direction: pdfcraft_fonts::TextDirection) -> Vec
         .collect()
 }
 
-fn direction_needs_uniform_row(direction: pdfcraft_fonts::TextDirection, base: pdfcraft_fonts::TextDirection) -> bool {
-    direction != pdfcraft_fonts::TextDirection::Auto || base == pdfcraft_fonts::TextDirection::RightToLeft
+fn direction_needs_uniform_row(base: pdfcraft_fonts::TextDirection, text: &str) -> bool {
+    // Explicit LTR alone does not make a Latin row contextual. RTL content still
+    // needs a uniform face even when its paragraph base is forced left to right.
+    base == pdfcraft_fonts::TextDirection::RightToLeft || text.chars().any(crate::bidi::is_rtl)
 }
 
 type SourceBreaks = Vec<Option<usize>>;
@@ -1138,7 +1140,7 @@ pub(crate) fn rewrite_styled_block(
     let o = &lead.origin;
     // What is in force where the rewrite is drawn, and what the text after it expects.
     let after = if split { &o.state } else { &o.bt_state };
-    validate_contextual_rows(&rows, &kept, |index| direction_needs_uniform_row(direction, row_direction(index)))?;
+    validate_contextual_rows(&rows, &kept, |index, text| direction_needs_uniform_row(row_direction(index), text))?;
     let measured: Vec<_> = rows.iter().enumerate().map(|(index, row)| measure(row, row_direction(index))).collect::<Result<_, _>>()?;
     let shaped = prepare_shaped_rows(doc, &fonts, &rows, &kept, advance, row_direction)?;
     let ShapedRows { runs: shaped_runs, advances: segment_advances } = shaped;
