@@ -187,6 +187,85 @@ fn a_replace_text_pair_survives_an_xfdf_round_trip() {
     assert!(summaries(&dst).iter().all(|s| s.subtype != "Caret"), "the caret goes with the strikeout");
 }
 
+/// Review on #5689 (CodeRabbit): XFDF links a reply to its target by the target's `name`, so a
+/// group whose primary has no `/NM` lost its `inreplyto` on export and came back as two loose
+/// comments. Both layouts: the caret primary (this PR) and the strikeout primary (older files).
+#[test]
+fn an_unnamed_group_primary_gets_an_export_only_name() {
+    for caret_primary in [true, false] {
+        let mut src = blank();
+        let quads = [[100.0, 720.0, 200.0, 720.0, 100.0, 706.0, 200.0, 706.0]];
+        let style = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None };
+        let unnamed = Meta { date: None, id: String::new() };
+        add_text_replacement(
+            &mut src,
+            TextReplacement {
+                page: 0,
+                quads: &quads,
+                replacement: "new words",
+                author: "Ada",
+                strike: &style,
+                caret: &style,
+                strike_meta: &unnamed,
+                caret_meta: &unnamed,
+            },
+        )
+        .unwrap();
+        let page = pdfcraft_model::pages(&src)[0].obj;
+        let annots = src.get(page).as_dict().unwrap().get(b"Annots").and_then(|a| src.resolve(a).as_array().cloned()).unwrap();
+        let refs: Vec<ObjRef> = annots.iter().filter_map(Object::as_ref).collect();
+        let is = |doc: &Document, r: ObjRef, s: &[u8]| doc.get(r).as_dict().and_then(|d| d.name(b"Subtype")) == Some(s);
+        let strike = *refs.iter().find(|r| is(&src, **r, b"StrikeOut")).unwrap();
+        let caret = *refs.iter().find(|r| is(&src, **r, b"Caret")).unwrap();
+        let (primary, sub) = if caret_primary { (caret, strike) } else { (strike, caret) };
+        if !caret_primary {
+            src.update_dict(strike, |d| {
+                d.remove(b"IRT");
+                d.remove(b"RT");
+            })
+            .unwrap();
+            src.update_dict(caret, |d| {
+                d.set(b"IRT".to_vec(), Object::Ref(strike));
+                d.set(b"RT".to_vec(), Object::name("Group"));
+            })
+            .unwrap();
+        }
+        // A comment already named what the made-up name would be: the two must not collide.
+        let clash = format!("pdfcraft-export-{}-{}", primary.num, primary.generation);
+        let note = NewAnnotation {
+            page: 0,
+            shape: Shape::Note { at: [300.0, 300.0], icon: Default::default() },
+            style: style.clone(),
+            contents: "note".into(),
+            author: "Ada".into(),
+        };
+        add_annotation(&mut src, &note, &Meta { date: None, id: clash.clone() }).unwrap();
+
+        let xfdf = export_xfdf(&src, true, false, "a.pdf");
+        let doc = roxmltree::Document::parse(&xfdf).unwrap();
+        let el = |t: &str| doc.descendants().find(|n| n.has_tag_name(t)).unwrap_or_else(|| panic!("no <{t}>: {xfdf}"));
+        let (tag, sub_tag) = if caret_primary { ("caret", "strikeout") } else { ("strikeout", "caret") };
+        let name = el(tag).attribute("name").unwrap_or_else(|| panic!("the unnamed primary gets a name ({caret_primary}): {xfdf}"));
+        assert_eq!(el(sub_tag).attribute("inreplyto"), Some(name), "{xfdf}");
+        assert_ne!(name, clash, "a made-up name never repeats a real /NM");
+        assert_eq!(doc.descendants().filter(|n| n.attribute("name") == Some(name)).count(), 1, "{xfdf}");
+        assert!(src.get(primary).as_dict().unwrap().get(b"NM").is_none(), "the name is for the export only");
+        assert!(src.get(sub).as_dict().unwrap().get(b"NM").is_none());
+
+        let mut dst = blank();
+        import(&mut dst, xfdf.as_bytes()).unwrap();
+        // The imported subordinate is grouped under the imported primary again.
+        let dpage = pdfcraft_model::pages(&dst)[0].obj;
+        let dannots = dst.get(dpage).as_dict().unwrap().get(b"Annots").and_then(|a| dst.resolve(a).as_array().cloned()).unwrap();
+        let drefs: Vec<ObjRef> = dannots.iter().filter_map(Object::as_ref).collect();
+        let (p_sub, s_sub): (&[u8], &[u8]) = if caret_primary { (b"Caret", b"StrikeOut") } else { (b"StrikeOut", b"Caret") };
+        let dprimary = *drefs.iter().find(|r| is(&dst, **r, p_sub)).unwrap();
+        let dsub = *drefs.iter().find(|r| is(&dst, **r, s_sub)).unwrap();
+        let irt = dst.get(dsub).as_dict().unwrap().get(b"IRT").and_then(Object::as_ref);
+        assert_eq!(irt, Some(dprimary), "the group survives the round trip ({caret_primary})");
+    }
+}
+
 #[test]
 fn xml_exports_drop_xml_noncharacters() {
     let mut src = filled();

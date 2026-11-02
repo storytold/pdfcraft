@@ -6,20 +6,54 @@ use super::*;
 
 // ── export ──────────────────────────────────────────────────────────────────────────────────
 
-/// Every comment as an XFDF element (one line per comment, replies included).
-fn xfdf_annots(doc: &Document, out: &mut String) {
-    let pages = pdfcraft_model::pages(doc);
-    // NM of every annotation, for inreplyto.
+/// The XFDF `name` of every annotation, which `inreplyto` refers to: its `/NM`, or, for an
+/// unnamed annotation that another one replies to or is grouped under (`/IRT`, ISO 32000-2
+/// §12.5.6.2), an export-only name, so the link survives the round trip. A Replace Text pair is
+/// such a group. Made-up names never repeat one of the document's own `/NM`s, and they are
+/// never written into the PDF.
+fn export_names(doc: &Document, pages: &[pdfcraft_model::Page]) -> HashMap<ObjRef, String> {
     let mut names: HashMap<ObjRef, String> = HashMap::new();
-    for p in &pages {
+    let mut listed: HashSet<ObjRef> = HashSet::new();
+    let mut targets: Vec<ObjRef> = Vec::new();
+    for p in pages {
         for a in p.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default() {
-            if let Some(r) = a.as_ref()
-                && let Some(nm) = doc.get(r).as_dict().and_then(|d| text_of(doc, d, b"NM"))
-            {
-                names.insert(r, nm);
+            let Some(d) = doc.resolve(&a).as_dict().cloned() else { continue };
+            if let Some(r) = a.as_ref() {
+                listed.insert(r);
+                if let Some(nm) = text_of(doc, &d, b"NM").filter(|nm| !nm.is_empty()) {
+                    names.insert(r, nm);
+                }
+            }
+            if let Some(t) = d.get(b"IRT").and_then(Object::as_ref) {
+                targets.push(t);
             }
         }
     }
+    let taken: HashSet<String> = names.values().cloned().collect();
+    let mut made: HashSet<String> = HashSet::new();
+    for t in targets {
+        // Only a target on a page is exported, so only it can carry the name.
+        if names.contains_key(&t) || !listed.contains(&t) {
+            continue;
+        }
+        let base = format!("pdfcraft-export-{}-{}", t.num, t.generation);
+        // `taken` and `made` are finite, so a free suffix turns up within `len + 1` tries.
+        let mut nm = base.clone();
+        let mut k: usize = 0;
+        while taken.contains(&nm) || made.contains(&nm) {
+            k = k.saturating_add(1);
+            nm = format!("{base}-{k}");
+        }
+        made.insert(nm.clone());
+        names.insert(t, nm);
+    }
+    names
+}
+
+/// Every comment as an XFDF element (one line per comment, replies included).
+fn xfdf_annots(doc: &Document, out: &mut String) {
+    let pages = pdfcraft_model::pages(doc);
+    let names = export_names(doc, &pages);
     for (pi, p) in pages.iter().enumerate() {
         for a in p.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default() {
             let Some(d) = doc.resolve(&a).as_dict().cloned() else { continue };
@@ -37,9 +71,12 @@ fn xfdf_annots(doc: &Document, out: &mut String) {
                     n(rect[1].max(rect[3]))
                 );
             }
+            // Its `/NM`, or the export-only name of an unnamed reply target.
+            if let Some(nm) = a.as_ref().and_then(|r| names.get(&r)).cloned().or_else(|| text_of(doc, &d, b"NM")) {
+                let _ = write!(attrs, " name=\"{}\"", esc(&nm));
+            }
             for (key, attr) in [
-                (&b"NM"[..], "name"),
-                (b"T", "title"),
+                (&b"T"[..], "title"),
                 (b"Subj", "subject"),
                 (b"M", "date"),
                 (b"CreationDate", "creationdate"),
