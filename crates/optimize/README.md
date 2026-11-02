@@ -109,6 +109,13 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
   streams that use LZW encoding, use Flate instead"): a predictor carries over to Flate without
   `EarlyChange`, filters applied before the LZW one go with it and those after it keep their
   bytes. A stream whose LZW data doesn't decode cleanly is left as it is. Not yet: inline images.
+- **Discard external cross-references** (off by default): `GoToR`, `GoToE`, `Launch` and
+  `ImportData` actions, and `Thread` actions with an `/F`, are taken out of link annotations and
+  bookmarks, and the actions chained after one through `/Next` take its place. Other annotations,
+  such as form fields, keep their actions. A link left with no action and no `/Dest` is removed
+  from its page, and its object, when something else refers to it, keeps the link without the
+  action; a bookmark keeps its title and children. Links within the document and web links
+  (`URI`) stay. An outline of more than 100,000 bookmarks stops the optimization with an error.
 
 The engine runs Remove Hidden Information (`pdfcraft-redact`) for the user-data categories,
 then this, then merges identical objects and writes a full, compressed save
