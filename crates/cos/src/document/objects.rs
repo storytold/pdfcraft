@@ -1,7 +1,13 @@
 use super::reader::find;
 use super::state::{LENGTHS, LoadGuard, ObjStm, ObjectReader, ReadState, Slot, SourceIdentity, objstm_member, owned_bytes};
 use super::xref::{Revision, XrefEntry};
-use super::{Arc, CosError, Dict, Document, Lexer, ObjRef, Object, is_whitespace, parse_indirect_shared};
+use super::{
+    Arc, CosError, Cow, Dict, Document, Lexer, MAX_DECODED, MAX_JBIG2_GLOBALS, ObjRef, Object, Stream, is_whitespace, parse_indirect_shared,
+};
+
+/// The most decoded `/JBIG2Globals` a document keeps for its images to share (see
+/// `Document::jbig2_globals`): two streams at [`MAX_JBIG2_GLOBALS`].
+const JBIG2_GLOBALS_HELD: usize = 2 * MAX_JBIG2_GLOBALS;
 
 impl Document {
     pub fn bytes(&self) -> &Arc<Vec<u8>> {
@@ -158,9 +164,221 @@ impl Document {
         }
     }
 
+    /// `s` with the `/DecodeParms` its filters use made direct, so [`Stream::decoded`] reads them:
+    /// an indirect dictionary resolved, and of an array (itself perhaps indirect), the entries at
+    /// the filters' places (`/Crypt` counts, ISO 32000-2 §7.4.1) resolved, the rest dropped. Of
+    /// each dictionary only the entries the decoders read are kept, numbers and flags given by
+    /// reference (`/Predictor 7 0 R`) resolved; `/JBIG2Globals` stays a reference. A `/Crypt`
+    /// entry, which no decoder reads ([`Stream::filters`] leaves it out), is null. `s` itself
+    /// when none of those is indirect, or when the other filters are more than any decoder takes
+    /// ([`pdfcraft_filters::MAX_CHAIN`]). Only small values are copied, so a file can't have a
+    /// large object copied once for each key and filter.
+    pub fn with_direct_parms<'s>(&self, s: &'s Stream) -> Cow<'s, Stream> {
+        let Some(p) = s.dict.get(b"DecodeParms") else { return Cow::Borrowed(s) };
+        let crypt = |f: &Object| matches!(f.as_name(), Some(b"Crypt"));
+        let filters: Vec<bool> = match s.dict.get(b"Filter") {
+            Some(Object::Array(a)) => a.iter().map(crypt).collect(),
+            Some(f) => vec![crypt(f)],
+            None => Vec::new(),
+        };
+        if filters.iter().filter(|c| !**c).count() > pdfcraft_filters::MAX_CHAIN {
+            return Cow::Borrowed(s);
+        }
+        let mut changed = matches!(p, Object::Ref(_));
+        // Its numbers and flags kept, resolved; anything else is no filter's parameters (null).
+        let one = |e: &Object, changed: &mut bool| -> Object {
+            *changed |= matches!(e, Object::Ref(_));
+            let Object::Dict(d) = &*self.held(e) else { return Object::Null };
+            let mut made = Dict::new();
+            for key in DECODE_PARMS_KEYS {
+                let Some(v) = d.get(key) else { continue };
+                *changed |= matches!(v, Object::Ref(_));
+                let v = self.held(v);
+                if matches!(*v, Object::Int(_) | Object::Real(_) | Object::Bool(_)) {
+                    made.set(key.to_vec(), (*v).clone());
+                }
+            }
+            if let Some(g @ Object::Ref(_)) = d.get(b"JBIG2Globals") {
+                made.set(b"JBIG2Globals".to_vec(), g.clone());
+            }
+            Object::Dict(made)
+        };
+        let made = match &*self.held(p) {
+            Object::Array(a) => {
+                Object::Array(a.iter().zip(&filters).map(|(e, crypt)| if *crypt { Object::Null } else { one(e, &mut changed) }).collect())
+            }
+            _ => one(p, &mut changed),
+        };
+        if !changed {
+            return Cow::Borrowed(s);
+        }
+        let mut s = s.clone();
+        s.dict.set(b"DecodeParms".to_vec(), made);
+        Cow::Owned(s)
+    }
+
+    /// `o`, or the object it refers to, without copying either.
+    fn held<'o>(&self, o: &'o Object) -> Held<'o> {
+        match o {
+            Object::Ref(_) => Held::Resolved(self.resolve(o)),
+            o => Held::Direct(o),
+        }
+    }
+
     /// Resolve and return a dictionary (a stream's dictionary counts).
     pub fn dict(&self, o: &Object) -> Option<Dict> {
         self.resolve(o).as_dict().cloned()
+    }
+
+    /// The CCITT parameters of image `s` when its last filter is `CCITTFaxDecode`: its
+    /// `/DecodeParms` (resolved; the dictionary of a lone filter, or its entry in an array), with the
+    /// defaults of ISO 32000-2 Table 11 for what that leaves out. `None` for another image, and for
+    /// one whose `/Filter` isn't a name or an array of names.
+    pub fn fax_params(&self, s: &Stream) -> Option<pdfcraft_filters::CcittParams> {
+        let chain = s.readable_filters().ok()?;
+        if !matches!(chain.last(), Some((pdfcraft_filters::Filter::CcittFax, _))) {
+            return None;
+        }
+        let parms = self.last_filter_parms(s);
+        let int = |key: &[u8], default: i64| parms.get(key).and_then(|v| self.resolve(v).as_int()).unwrap_or(default);
+        let flag = |key: &[u8], default: bool| match parms.get(key).map(|v| self.resolve(v)).as_deref() {
+            Some(Object::Bool(b)) => *b,
+            _ => default,
+        };
+        let d = pdfcraft_filters::CcittParams::default();
+        Some(pdfcraft_filters::CcittParams {
+            k: int(b"K", d.k),
+            columns: int(b"Columns", d.columns),
+            rows: int(b"Rows", d.rows),
+            end_of_line: flag(b"EndOfLine", d.end_of_line),
+            encoded_byte_align: flag(b"EncodedByteAlign", d.encoded_byte_align),
+            end_of_block: flag(b"EndOfBlock", d.end_of_block),
+            black_is_1: flag(b"BlackIs1", d.black_is_1),
+        })
+    }
+
+    /// The `/DecodeParms` dictionary of stream `s`'s last filter, resolved: that of a lone filter,
+    /// or its entry in an array. Empty when there is none.
+    fn last_filter_parms(&self, s: &Stream) -> Dict {
+        // Its place in /Filter, /Crypt included, pairs it with its /DecodeParms entry (§7.4.1): the
+        // last filter but a /Crypt, which `filters` leaves out wherever it stands.
+        let index = match s.dict.get(b"Filter") {
+            Some(Object::Array(a)) => a.iter().rposition(|f| f.as_name() != Some(b"Crypt".as_slice())).unwrap_or(0),
+            _ => 0,
+        };
+        match s.dict.get(b"DecodeParms").map(|p| self.resolve(p)).as_deref() {
+            Some(Object::Array(a)) => a.get(index).and_then(|p| self.dict(p)),
+            Some(p) if index == 0 => p.as_dict().cloned(),
+            _ => None,
+        }
+        .unwrap_or_default()
+    }
+
+    /// The samples of image `s`, decoded: through its filters ([`Stream::decoded`]), or, for a
+    /// CCITT fax or JBIG2 image (its last filter), through the filters before it and then
+    /// [`pdfcraft_filters::decode_ccitt`] with its [`Document::fax_params`], or
+    /// [`pdfcraft_filters::decode_jbig2`] with its `/JBIG2Globals`, as `CCITTFaxDecode` and
+    /// `JBIG2Decode` give them (ISO 32000-2 §7.4.6, §7.4.7). Parameters given by reference count,
+    /// for every filter ([`Document::with_direct_parms`]). A fax image's `/Columns` has to be its
+    /// `/Width`, and a JBIG2 image's page its `/Width` × `/Height`: PdfCraft's renderer draws the
+    /// whole page into the image. Up to its `/Height` rows are decoded, whatever a fax image's `/Rows` says,
+    /// within [`MAX_DECODED`] bytes; damaged fax data gives fewer, so a caller checks it has the
+    /// rows it needs. Damaged JBIG2 data, and globals that can't be read (within
+    /// [`MAX_JBIG2_GLOBALS`]), are an error.
+    pub fn decoded_image(&self, s: &Stream) -> Result<Vec<u8>, CosError> {
+        self.decoded_image_within(s, MAX_DECODED)
+    }
+
+    /// [`Document::decoded_image`] for an image whose decoding has a tighter bound than
+    /// [`MAX_DECODED`]: no stage, the filters before a fax or JBIG2 decoder included, may produce
+    /// more than `max` bytes. A JBIG2 image's `/JBIG2Globals` are another stream, shared between
+    /// images, and are decoded within [`MAX_JBIG2_GLOBALS`] whatever `max` is.
+    pub fn decoded_image_within(&self, s: &Stream, max: usize) -> Result<Vec<u8>, CosError> {
+        let max = max.min(MAX_DECODED);
+        let s = &*self.with_direct_parms(s);
+        let filter = |e: pdfcraft_filters::FilterError| CosError::Filter(e.to_string());
+        let chain = s.readable_filters().map_err(filter)?;
+        // The filters before the image codec, such as ASCII85Decode, are undone first.
+        let undo = |before: &[(pdfcraft_filters::Filter, pdfcraft_filters::Params)]| match before {
+            [] => Ok(Cow::Borrowed(&s.raw[..])),
+            _ => pdfcraft_filters::decode_tolerant(before, &s.raw, max).map(|(data, _)| Cow::Owned(data)).map_err(filter),
+        };
+        // `/Width` and `/Height` are read as given directly, as every caller reads them first: one
+        // given by reference has the image refused there, before it gets here.
+        let height = s.dict.int(b"Height").and_then(|h| u32::try_from(h).ok());
+        if let Some(((pdfcraft_filters::Filter::Jbig2, _), before)) = chain.split_last() {
+            let (Some(columns), Some(height)) = (s.dict.int(b"Width").and_then(|w| u32::try_from(w).ok()), height) else {
+                return Err(CosError::Filter("a JBIG2 image's /Width or /Height isn't a size".into()));
+            };
+            let globals = self.jbig2_globals(s)?;
+            return pdfcraft_filters::decode_jbig2(&undo(before)?, globals.as_deref().map(Vec::as_slice), columns, height, max).map_err(filter);
+        }
+        let Some(p) = self.fax_params(s) else { return s.decoded_within(max) };
+        // As many rows as the image has: a /Rows below /Height would cut the picture short, and
+        // rows past /Height aren't drawn.
+        let p = pdfcraft_filters::CcittParams { rows: 0, ..p };
+        if s.dict.int(b"Width") != Some(p.columns) {
+            return Err(CosError::Filter("a fax image's /Columns aren't its /Width".into()));
+        }
+        let stride = usize::try_from(p.columns).unwrap_or(usize::MAX).div_ceil(8).max(1);
+        let rows = u32::try_from(max / stride).unwrap_or(u32::MAX).min(height.unwrap_or(0));
+        let data = undo(chain.split_last().map_or(&[][..], |(_, before)| before))?;
+        pdfcraft_filters::decode_ccitt(&data, &p, rows).map_err(filter)
+    }
+
+    /// The `/JBIG2Globals` stream a JBIG2 image `s` names by reference in its last filter's
+    /// `/DecodeParms`: `None` for a stream whose last filter isn't `JBIG2Decode`, or one without
+    /// globals. Redaction finds with it the other images that share a redacted image's globals.
+    pub fn jbig2_globals_ref(&self, s: &Stream) -> Option<ObjRef> {
+        let chain = s.readable_filters().ok()?;
+        if !matches!(chain.last(), Some((pdfcraft_filters::Filter::Jbig2, _))) {
+            return None;
+        }
+        self.last_filter_parms(s).get(b"JBIG2Globals").and_then(Object::as_ref)
+    }
+
+    /// What the `/JBIG2Globals` stream of JBIG2 image `s` (in its last filter's `/DecodeParms`)
+    /// decodes to, within [`MAX_JBIG2_GLOBALS`]; `None` without one (a reference to no object is
+    /// one to null, ISO 32000-2 §7.3.10, which is an absent entry, §7.3.7). The image is then read
+    /// without them, as the renderer draws it, so an image that needed them mostly fails to decode
+    /// and can decode to other pixels. A stream that is there and can't be read is an error, rather
+    /// than the image decoded without it.
+    ///
+    /// The images of a scan share one globals stream, so a stream of the file, not edited since
+    /// it was read (the same in every clone) and with its `/DecodeParms` direct (by reference they
+    /// are another object, which can change while this one doesn't), has its filters undone once a
+    /// document and is kept, up to [`JBIG2_GLOBALS_HELD`] in all; others are read each time. That
+    /// saves the filters only: the segments it holds are decoded again for every image.
+    fn jbig2_globals(&self, s: &Stream) -> Result<Option<Arc<Vec<u8>>>, CosError> {
+        let Some(entry) = self.last_filter_parms(s).get(b"JBIG2Globals").cloned() else { return Ok(None) };
+        let held = match entry {
+            Object::Ref(r) if !self.overlay.contains_key(&r.num) => Some(r.num),
+            _ => None,
+        };
+        if let Some(hit) = held.and_then(|num| self.jbig2_globals.lock().ok()?.get(&num).cloned()) {
+            return Ok(Some(hit));
+        }
+        let Object::Stream(g) = &*self.resolve(&entry) else { return Ok(None) };
+        let readable = self.with_direct_parms(g);
+        let held = held.filter(|_| matches!(readable, Cow::Borrowed(_)));
+        let mut data = readable.decoded_within(MAX_JBIG2_GLOBALS).map_err(|e| {
+            let detail = match e {
+                CosError::Filter(detail) => detail,
+                e => e.to_string(),
+            };
+            CosError::Filter(format!("the JBIG2 globals can't be read: {detail}"))
+        })?;
+        // What is kept counts by its length, so that's all it may hold on to.
+        data.shrink_to_fit();
+        let data = Arc::new(data);
+        // A poisoned lock only means nothing is kept.
+        if let (Some(num), Ok(mut kept)) = (held, self.jbig2_globals.lock()) {
+            let total = kept.values().map(|g| g.len()).fold(data.len(), usize::saturating_add);
+            if total <= JBIG2_GLOBALS_HELD {
+                kept.insert(num, data.clone());
+            }
+        }
+        Ok(Some(data))
     }
 
     pub fn try_get(&self, num: u32) -> Result<Arc<Object>, CosError> {
@@ -568,5 +786,42 @@ impl Document {
     pub(super) fn root_is_catalog(&self) -> bool {
         let Some(r) = self.root() else { return false };
         matches!(self.try_get(r.num).as_deref(), Ok(Object::Dict(d)) if d.name(b"Type") == Some(b"Catalog") || d.contains(b"Pages"))
+    }
+}
+
+/// The `/DecodeParms` entries the decoders read (ISO 32000-2 Tables 8, 11 and 13: the Flate and
+/// LZW predictors, CCITT, DCT's colour transform): numbers and flags a file may give by
+/// reference, which [`Dict::int`] doesn't follow.
+const DECODE_PARMS_KEYS: [&[u8]; 13] = [
+    b"Predictor",
+    b"Colors",
+    b"BitsPerComponent",
+    b"Columns",
+    b"EarlyChange",
+    b"K",
+    b"Rows",
+    b"EndOfLine",
+    b"EncodedByteAlign",
+    b"EndOfBlock",
+    b"BlackIs1",
+    b"DamagedRowsBeforeError",
+    b"ColorTransform",
+];
+
+/// An object read in place, or the object a reference names as the document holds it: either way
+/// nothing is copied ([`Document::held`]).
+enum Held<'o> {
+    Direct(&'o Object),
+    Resolved(Arc<Object>),
+}
+
+impl std::ops::Deref for Held<'_> {
+    type Target = Object;
+
+    fn deref(&self) -> &Object {
+        match self {
+            Held::Direct(o) => o,
+            Held::Resolved(o) => o,
+        }
     }
 }

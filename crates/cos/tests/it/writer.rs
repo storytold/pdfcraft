@@ -228,6 +228,16 @@ fn incremental_save_keeps_a_trailer_only_edit() {
     assert_qpdf_clean(&saved);
 }
 
+#[test]
+fn incremental_save_ignores_a_negative_trailer_size() {
+    let mut doc = Document::open(Arc::new(classic_table())).unwrap();
+    doc.trailer_mut().set(b"Size".to_vec(), Object::Int(-1));
+    let next = doc.add(Object::Int(5)).num + 1;
+    let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let back = Document::open(Arc::new(saved)).unwrap();
+    assert_eq!(back.trailer().int(b"Size"), Some(i64::from(next)));
+}
+
 /// What one edit added and a later one unlinked (a deleted comment, a cleared redaction mark) is
 /// not written: the file never held it, and writing it would keep what was removed. Additions the
 /// update still refers to, from the trailer or a changed object and through other additions, are.

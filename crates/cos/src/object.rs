@@ -213,6 +213,12 @@ pub struct Stream {
 /// Upper bound for a single decoded stream (decompression-bomb defence).
 pub const MAX_DECODED: usize = 1 << 30;
 
+/// The most an image's `/JBIG2Globals` stream may decode to: the symbol and pattern dictionaries an
+/// encoder shares between pages, themselves coded, so far less than any stream may decode to
+/// ([`MAX_DECODED`]). They are decoded before the image's JBIG2 page is read, so the page's size
+/// can't bound them: they have a limit of their own.
+pub const MAX_JBIG2_GLOBALS: usize = 32 << 20;
+
 impl Stream {
     /// A new stream from already-encoded bytes (`/Length` is set at write time).
     pub fn from_raw(dict: Dict, raw: Vec<u8>) -> Self {
@@ -261,7 +267,7 @@ impl Stream {
     /// [`Stream::filters`], or an error when `/Filter` is present but is not a name or an
     /// array of names (an indirect reference, say): the data is not unfiltered, so it must not
     /// read as decoded.
-    fn readable_filters(&self) -> Result<Vec<(Filter, Params)>, pdfcraft_filters::FilterError> {
+    pub(crate) fn readable_filters(&self) -> Result<Vec<(Filter, Params)>, pdfcraft_filters::FilterError> {
         let readable = match self.dict.get(b"Filter") {
             None | Some(Object::Null | Object::Name(_)) => true,
             Some(Object::Array(a)) => a.iter().all(|f| f.as_name().is_some()),
