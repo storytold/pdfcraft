@@ -25,6 +25,9 @@ pub struct TextBlock {
     pub rows: Vec<Vec<usize>>,
     /// Text for the inline editor, with a newline only between visual rows.
     pub editor_text: String,
+    /// What a width change reflows. A wrap rejoins with a space; a break that was typed, or a
+    /// short line that still had room for the next word, stays a newline.
+    pub reflow_text: String,
     /// Byte ranges in `editor_text` and their source line indexes.
     pub spans: Vec<(std::ops::Range<usize>, usize)>,
     /// Every line is invisible text (rendering mode 3): an OCR layer over a scanned image, whose
@@ -337,11 +340,18 @@ pub(crate) fn paragraph_separator(c: char) -> bool {
 /// new line. A row may also end inside a word of Chinese or Japanese text ([`crate::linebreak`]);
 /// those pieces join without a space. Every white-space character is written as one space, so
 /// a run of spaces typed between, before or after words stays (#4199); only the spaces where a
-/// row wraps are dropped.
-pub(super) fn wrap(text: &str, width: f64, advance: impl Fn(&str) -> f64) -> Vec<String> {
+/// row wraps are dropped (recorded as the third value, so a later rejoin can restore the exact
+/// count instead of guessing one, #2529). The bool is true when the line continues the previous
+/// one because the next word did not fit, rather than because of a newline; the number is how
+/// many separator characters stood where that wrap fell (0 for a Chinese/Japanese word split,
+/// which has no space of its own; meaningless when the bool is false).
+pub(super) fn wrap(text: &str, width: f64, advance: impl Fn(&str) -> f64) -> Vec<(String, bool, usize)> {
     let mut out = Vec::new();
     for row in text.split('\n') {
         let mut line = String::new();
+        let mut soft = false;
+        // The gap consumed right before `line` started: 0 until a wrap sets it.
+        let mut wrap_gap = 0usize;
         let start = out.len();
         // The separators read since the last word: each one boundary between `split` pieces.
         let mut gap = 0usize;
@@ -352,12 +362,17 @@ pub(super) fn wrap(text: &str, width: f64, advance: impl Fn(&str) -> f64) -> Vec
             if word.is_empty() {
                 continue;
             }
-            let spaces = " ".repeat(std::mem::take(&mut gap));
+            let gap_here = std::mem::take(&mut gap);
+            let spaces = " ".repeat(gap_here);
             for (i, piece) in crate::linebreak::pieces(word).into_iter().enumerate() {
                 let candidate = if i == 0 { format!("{line}{spaces}{piece}") } else { format!("{line}{piece}") };
                 // A row holding only the spaces that indent it doesn't wrap before its first word.
                 if line.chars().any(|c| c != ' ') && advance(&candidate) > width {
-                    out.push(std::mem::take(&mut line));
+                    out.push((std::mem::take(&mut line), soft, wrap_gap));
+                    soft = true;
+                    // A mid-word piece (i > 0) had no separator of its own; the first piece of a
+                    // word had exactly the separators just taken.
+                    wrap_gap = if i == 0 { gap_here } else { 0 };
                     line = piece.to_string();
                 } else {
                     line = candidate;
@@ -366,7 +381,7 @@ pub(super) fn wrap(text: &str, width: f64, advance: impl Fn(&str) -> f64) -> Vec
         }
         line.push_str(&" ".repeat(gap));
         if !line.is_empty() || out.len() == start {
-            out.push(line);
+            out.push((line, soft, wrap_gap));
         }
     }
     out
@@ -395,6 +410,9 @@ pub struct BlockStyle {
     /// Fill colour (RGB 0–1).
     pub color: Option<[f64; 3]>,
     pub align: Option<crate::added::Align>,
+    /// Rows (the text's lines between `\n`s) aligned other than the paragraph, by index; `None`
+    /// and rows past the end follow `align` ([`crate::paragraph_align`]).
+    pub aligns: Vec<Option<crate::added::Align>>,
     /// Draw a line under each line of text.
     pub underline: Option<bool>,
     /// Line spacing as a multiple of the font size (1.2 is ordinary).

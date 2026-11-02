@@ -78,15 +78,36 @@ pub struct RenderConfig {
     /// The page clears to transparent instead of white (or the reading background): for a page
     /// holding only what is laid over another raster, such as a comment while it is dragged.
     pub transparent: bool,
+    /// Draw a CID font of an Adobe CJK collection that the PDF does not embed with one face already
+    /// installed on this machine (see `system_font`). Off by default and on only for on-screen
+    /// viewer and preview rasters: exports, printing and OCR render without it, so nothing drawn with an
+    /// installed font is saved or printed (AGENTS.md §1.2, §1.4).
+    pub system_fonts: bool,
 }
 
 impl RenderConfig {
+    /// This configuration for a raster that is only shown on screen (the viewer, Combine
+    /// thumbnails, figure previews): installed CJK faces may draw fonts the PDF doesn't embed.
+    /// Never use it for anything that can be saved, printed, recognised or returned to an agent
+    /// (AGENTS.md §1.2, §1.4).
+    #[must_use]
+    pub fn on_screen(self) -> Self {
+        Self { system_fonts: true, ..self }
+    }
+
+    /// Build interpreter settings with layer and comment preferences and a font resolver that
+    /// tries bundled Japanese faces, then opt-in installed CJK faces, then standard substitutes.
+    /// Passwords belong to parser construction; request-specific preview overrides are applied
+    /// by `render_page`, which also preserves the caller's warning and cancellation hooks.
     fn settings(&self) -> InterpreterSettings {
         let standard = InterpreterSettings::default().font_resolver;
+        let system_fonts = self.system_fonts;
         InterpreterSettings {
             ocg_overrides: self.layers.clone(),
             hide_comments: self.hide_comments,
-            font_resolver: Arc::new(move |query| japanese_fallback(query).or_else(|| standard(query))),
+            font_resolver: Arc::new(move |query| {
+                japanese_fallback(query).or_else(|| system_fonts.then(|| system_fallback(query)).flatten()).or_else(|| standard(query))
+            }),
             ..InterpreterSettings::default()
         }
     }
@@ -117,6 +138,14 @@ fn japanese_fallback(query: &FontQuery) -> Option<(FontData, u32)> {
         }
     }?;
     Some((Arc::new(face.bytes), 0))
+}
+
+/// An installed face for a CID font of an Adobe CJK collection that the PDF doesn't embed and
+/// craft-fonts has no face for (Traditional and Simplified Chinese, Korean, and Japanese in a
+/// build without craft-fonts). `None` for every other font.
+fn system_fallback(query: &FontQuery) -> Option<(FontData, u32)> {
+    let FontQuery::Fallback(f) = query else { return None };
+    crate::system_font::fallback(f)
 }
 
 #[derive(Debug, PartialEq)]
@@ -182,6 +211,7 @@ pub struct RenderRequest {
 /// The tag bit of a print-preview raster. Such requests always render the document's true
 /// colours, ignoring `RenderConfig::reading_colors`: a preview's job is fidelity to the
 /// printout, and the print itself — imposed from the document — is never recoloured.
+/// Installed-font fallback is also disabled, matching the output's font policy.
 pub const PRINT_TAG: u64 = 1 << 60;
 
 /// The reading colours a request renders with: print previews ([`PRINT_TAG`]) ignore the
@@ -319,6 +349,23 @@ fn render_page<'a>(
     config: &RenderConfig,
     req: RenderRequest,
 ) -> Result<Output, (String, bool)> {
+    // Print previews share the viewer pool, but must use the output font policy. Keep the
+    // caller's cancellation/warning hooks, layers and annotation settings. A fresh cache is
+    // essential: hayro keys cached fonts by PDF dictionary, not by the font resolver, so the
+    // viewer cache could supply an installed face even after changing the resolver (and a
+    // cached missing font from print preview could blank the viewer on switching back).
+    let print_settings;
+    let print_cache;
+    let (settings, cache) = if config.system_fonts && req.tag & PRINT_TAG != 0 {
+        print_settings = InterpreterSettings {
+            font_resolver: RenderConfig { system_fonts: false, ..config.clone() }.settings().font_resolver,
+            ..settings.clone()
+        };
+        print_cache = RenderCache::new();
+        (&print_settings, &print_cache)
+    } else {
+        (settings, cache)
+    };
     let reading = request_reading(config, &req);
     if req.kind == RequestKind::Text {
         return match catch_unwind(AssertUnwindSafe(|| crate::text::extract_page(pdf, req.page, settings))) {

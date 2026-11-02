@@ -4,7 +4,7 @@
 use egui::accesskit::Role;
 use egui::{Pos2, pos2};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_render::Annotation;
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
 
@@ -1004,6 +1004,38 @@ fn arrow_keys_nudge_the_selected_comment() {
     assert_eq!(h.state().views[0].current, 1, "and the view goes to the next page");
 }
 
+/// #3632: with a comment selected, Alt+← / Alt+→ still go back and forward through the view
+/// history instead of nudging it (egui's key patterns let an extra Alt through).
+#[test]
+fn alt_arrows_navigate_instead_of_nudging_the_selected_comment() {
+    use egui::{Key, Modifiers};
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    h.state_mut().set_option("quick", "select").unwrap();
+    click_pt(&mut h, (90.0, 70.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
+    let before = comments(&h)[0].rect;
+    // A followed link's jump to page 2 and back, as `go_to_dest` makes it.
+    h.state_mut().views[0].go_to_page(1);
+    h.run_steps(2);
+    h.state_mut().views[0].go_to_page(0);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "still selected, so a nudge could take the keys");
+    h.key_press_modifiers(Modifiers::ALT, Key::ArrowLeft);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].current, 1, "Alt+← went back");
+    h.key_press_modifiers(Modifiers::ALT, Key::ArrowRight);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].current, 0, "Alt+→ went forward");
+    assert_eq!(comments(&h)[0].rect, before, "the comment didn't move");
+    let id = h.state().views[0].id;
+    assert_ne!(h.state().session.get(id).unwrap().can_undo(), Some("Move comment"), "nothing was nudged");
+    // A plain arrow still nudges it.
+    h.key_press(Key::ArrowRight);
+    h.run_steps(3);
+    assert!(comments(&h)[0].rect[0] > before[0], "→ nudged it");
+}
+
 #[test]
 fn a_shape_just_drawn_resizes_from_its_handles_without_the_select_tool() {
     // #2338: the new shape showed its handles, but only the Select tool answered them.
@@ -1325,6 +1357,170 @@ fn replies_follow_irt_references_when_names_repeat_on_every_page() {
     // the replies in small text under it.
     assert_eq!(h.query_all_by_label("4").count(), 0);
     h.get_by_label("2 replies");
+}
+
+// Contributor-original PDF: a comment whose wrong reply (with a pop-up) comes before it in
+// `/Annots` and has an answer of its own, a locked right reply and an Accepted status. `/F 128`
+// is the Locked flag.
+const REPLY_THREAD: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R 9 0 R 4 0 R 6 0 R 7 0 R 8 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (note) /T (Ben) /Contents (The comment) >> endobj
+5 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (wrong) /IRT 4 0 R /T (Cat) /Contents (Wrong reply) /Popup 9 0 R >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (right) /IRT 4 0 R /T (Dan) /Contents (Right reply) /F 128 >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (answer) /IRT 5 0 R /T (Eve) /Contents (Answer to the wrong reply) >> endobj
+8 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /IRT 4 0 R /StateModel /Review /State /Accepted /T (Ben) /Contents (Accepted set by Ben) >> endobj
+9 0 obj << /Type /Annot /Subtype /Popup /Rect [60 100 160 160] /Parent 5 0 R >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// The "…" of the reply row that shows `text`: the last one above it (it sits on the row's
+/// author line).
+fn reply_options<'a>(h: &'a Harness<'static, PdfCraftApp>, text: &str) -> egui_kittest::Node<'a> {
+    let y = h.get_by_label(text).rect().top();
+    h.query_all_by_label("Options for this reply")
+        .filter(|b| b.rect().top() <= y)
+        .max_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+        .expect("a reply menu")
+}
+
+/// One reply is deleted from its own "…" menu, with the answer to it and its pop-up: the comment,
+/// its other reply and its status stay, and the card stays selected though the comment moved up
+/// in `/Annots`. One undo brings the reply back. A locked reply can't be deleted, and Edit
+/// changes the reply's text, not the comment's.
+#[test]
+fn one_reply_is_deleted_from_its_menu_and_the_thread_stays() {
+    let mut h = harness_with_bytes(REPLY_THREAD.to_vec(), |app| {
+        app.set_option("panel", "comments").unwrap();
+        app.views[0].comments.selected = Some((0, 2));
+    });
+    let texts = |h: &Harness<'static, PdfCraftApp>| -> Vec<String> { comments(h).iter().filter_map(|a| a.contents.clone()).collect() };
+    let all = ["Wrong reply", "The comment", "Right reply", "Answer to the wrong reply", "Accepted set by Ben"];
+    assert_eq!(texts(&h), all);
+    assert_eq!(h.query_all_by_label("Options for this reply").count(), 3, "each reply has one; the status is a badge");
+
+    reply_options(&h, "Wrong reply").click();
+    h.run_steps(2);
+    h.get_by_label("Delete").click();
+    h.run_steps(3);
+    assert_eq!(texts(&h), ["The comment", "Right reply", "Accepted set by Ben"], "the reply took its answer along");
+    let id = h.state().views[0].id;
+    assert_eq!(h.state().session.get(id).unwrap().info.annotations[0].index, 0, "its pop-up went too");
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the card stays selected where the comment now is");
+    assert_eq!(h.query_all_by_label("Wrong reply").count(), 0);
+    assert_eq!(h.query_all_by_label("Answer to the wrong reply").count(), 0);
+    h.get_by_label("Right reply");
+    h.get_by_label("Accepted");
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Delete comment"), "one undo step");
+
+    // Copy text copies the reply's text.
+    reply_options(&h, "Right reply").click();
+    h.run_steps(2);
+    h.get_by_label("Copy text").click();
+    let mut copied = false;
+    for _ in 0..4 {
+        h.step();
+        copied |= h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t == "Right reply"));
+    }
+    assert!(copied, "the reply's text is copied");
+    h.run_steps(2);
+
+    // The locked reply's Delete is greyed out; its text can still be edited (ISO 32000-2
+    // Table 167: Locked doesn't restrict the contents).
+    reply_options(&h, "Right reply").click();
+    h.run_steps(2);
+    assert!(h.get_by_label("Delete").accesskit_node().is_disabled(), "a locked reply isn't deleted");
+    h.query_all_by_label("Edit").last().expect("the reply menu's Edit, after the toolbar tab").click();
+    h.run_steps(2);
+    let editor = h.query_all_by(|n| n.role() == Role::MultilineTextInput && n.placeholder() != Some("Add a reply")).next().expect("reply editor");
+    editor.click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("Right reply, reworded".into()));
+    h.run_steps(2);
+    h.get_by_label("Save").click();
+    h.run_steps(3);
+    assert_eq!(texts(&h), ["The comment", "Right reply, reworded", "Accepted set by Ben"]);
+
+    // The locked reply keeps its comment too: deleting the comment would take it along.
+    h.get_by_label("More").click();
+    h.run_steps(2);
+    assert!(h.get_by_label("Delete").accesskit_node().is_disabled(), "the comment of a locked reply isn't deleted");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+
+    h.state_mut().undo();
+    h.run_steps(2);
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert_eq!(texts(&h), all, "undo brings the reply and its answer back");
+    h.get_by_label("Wrong reply");
+}
+
+// Contributor-original PDF: a comment and its replies A, B and C, in that `/Annots` order.
+const THREE_REPLIES: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R 5 0 R 6 0 R 7 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (note) /T (Ben) /Contents (The comment) >> endobj
+5 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (a) /IRT 4 0 R /T (Cat) /Contents (Reply A) >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (b) /IRT 4 0 R /T (Dan) /Contents (Reply B) >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (c) /IRT 4 0 R /T (Eve) /Contents (Reply C) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// Opens the inline editor on the reply that shows `text`, from its "…" menu, and types `draft`
+/// into it without saving.
+fn draft_reply(h: &mut Harness<'static, PdfCraftApp>, text: &str, draft: &str) {
+    reply_options(h, text).click();
+    h.run_steps(2);
+    h.query_all_by_label("Edit").last().expect("the reply menu's Edit, after the toolbar tab").click();
+    h.run_steps(2);
+    let editor = h.query_all_by(|n| n.role() == Role::MultilineTextInput && n.placeholder() != Some("Add a reply")).next().expect("reply editor");
+    editor.click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text(draft.into()));
+    h.run_steps(2);
+}
+
+/// A reply's inline editor, left open with a draft, closes on Undo and on Redo. Either can put
+/// a reply back in its place or take one away, and the editor would have saved the draft over
+/// whichever reply took that place: reply A after delete → Undo, reply C after Redo.
+#[test]
+fn undo_and_redo_close_a_reply_editor_left_open() {
+    let mut h = harness_with_bytes(THREE_REPLIES.to_vec(), |app| {
+        app.set_option("panel", "comments").unwrap();
+        app.views[0].comments.selected = Some((0, 0));
+    });
+    let texts = |h: &Harness<'static, PdfCraftApp>| -> Vec<String> { comments(h).iter().filter_map(|a| a.contents.clone()).collect() };
+    let all = ["The comment", "Reply A", "Reply B", "Reply C"];
+    assert_eq!(texts(&h), all);
+
+    draft_reply(&mut h, "Reply B", "B's draft");
+    reply_options(&h, "Reply A").click();
+    h.run_steps(2);
+    h.get_by_label("Delete").click();
+    h.run_steps(3);
+    assert_eq!(texts(&h), ["The comment", "Reply B", "Reply C"]);
+    assert_eq!(h.state().views[0].comments.editing, Some((0, 1, "B's draft".to_string())), "the editor follows B up");
+
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert_eq!(texts(&h), all, "undo puts A back where B's editor now points");
+    assert_eq!(h.state().views[0].comments.editing, None, "the editor closes on undo");
+    assert_eq!(h.query_all_by_label("Save").count(), 0, "no draft is left to save over A");
+
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.run_steps(2);
+    draft_reply(&mut h, "Reply B", "B's draft");
+    assert_eq!(h.state().views[0].comments.editing, Some((0, 2, "B's draft".to_string())));
+    h.state_mut().redo();
+    h.run_steps(3);
+    assert_eq!(texts(&h), ["The comment", "Reply B", "Reply C"], "redo deletes A again, and C takes B's place");
+    assert_eq!(h.state().views[0].comments.editing, None, "the editor closes on redo");
+    assert_eq!(h.query_all_by_label("Save").count(), 0, "no draft is left to save over C");
 }
 
 #[test]
@@ -2656,4 +2852,399 @@ fn text_comments_can_save_a_zero_width_default() {
     restored.restore(&h.state().persist());
     assert_eq!(restored.comment_prefs.style(CommentTool::TextBox).width, 0.0);
     assert_eq!(restored.comment_prefs.style(CommentTool::Callout).width, 0.0);
+}
+
+/// Moving a rectangle or an oval showed only its blue frame going while the shape stayed where
+/// it was until release. Now the comment itself is drawn where it goes (the page beneath shows it
+/// where it was until the move is applied), and the pointer frames change nothing.
+#[test]
+fn a_moved_comment_is_drawn_where_it_goes_before_release() {
+    let _gpu = crate::gpu();
+    let mut h = harness(|_| {});
+    let id = h.state().views[0].id;
+    for shape in
+        [pdfcraft_engine::Shape::Rectangle { rect: [30.0, 30.0, 70.0, 70.0] }, pdfcraft_engine::Shape::Oval { rect: [230.0, 30.0, 270.0, 70.0] }]
+    {
+        let style = pdfcraft_engine::Style { color: [1.0, 0.0, 0.0], opacity: 1.0, width: 2.0, fill: Some([1.0, 0.0, 0.0]) };
+        assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+            page: 0,
+            shape,
+            style,
+            contents: String::new(),
+            author: "Tester".into(),
+        })));
+    }
+    h.state_mut().views[0].comments.selected = None;
+    crate::support::settle(&mut h);
+    let red = |v: [u8; 4]| v[0] > 200 && v[1] < 80 && v[2] < 80;
+    for ((x, y), (tx, ty)) in [((50.0, 50.0), (150.0, 120.0)), ((250.0, 50.0), (200.0, 150.0))] {
+        let generation = h.state().session.get(id).unwrap().edit_generation();
+        let (from, to) = (at(&h, x, y), at(&h, tx, ty));
+        // Beside the pointer, whose arrow is drawn over the page.
+        let (was, goes) = (at(&h, x - 10.0, y - 10.0), at(&h, tx - 10.0, ty - 10.0));
+        let px = |pixels: &image::RgbaImage, p: Pos2| pixels.get_pixel(p.x.round() as u32, p.y.round() as u32).0;
+        h.hover_at(from);
+        h.run_steps(1);
+        h.drag_at(from);
+        h.run_steps(1);
+        for k in 1..=4 {
+            h.hover_at(from + (to - from) * (k as f32 / 4.0));
+            h.run_steps(1);
+        }
+        let mut shown = false;
+        for _ in 0..100 {
+            h.run_steps(2);
+            let pixels = h.render().unwrap();
+            if red(px(&pixels, goes)) {
+                shown = true;
+                assert!(red(px(&pixels, was)), "the page still shows it where it was");
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(shown, "the comment at ({x}, {y}) is drawn under the pointer before release");
+        assert_eq!(h.state().session.get(id).unwrap().edit_generation(), generation, "pointer frames never edit the document");
+        h.drop_at(to);
+        h.run_steps(3);
+        let doc = h.state().session.get(id).unwrap();
+        assert_eq!(doc.can_undo(), Some("Move comment"));
+        crate::support::settle(&mut h);
+        let pixels = h.render().unwrap();
+        assert!(!red(px(&pixels, was)), "once applied it is gone from where it was");
+        assert!(red(px(&pixels, goes)), "and shown where it went");
+    }
+}
+
+/// Fill & Sign's typed text (a Typewriter FreeText) is drawn where it goes while it is dragged
+/// too, not only its frame (#4619).
+#[test]
+fn moved_fill_and_sign_text_is_drawn_where_it_goes_before_release() {
+    let _gpu = crate::gpu();
+    let mut h = harness(|_| {});
+    h.state_mut().execute("sign.fill.text");
+    click_pt(&mut h, (40.0, 150.0));
+    h.event(egui::Event::Text("WWWWWW".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let a = comments(&h).into_iter().find(|a| a.contents.as_deref() == Some("WWWWWW")).expect("the typed text");
+    assert!(a.fill_sign && a.subtype == "FreeText", "{a:?}");
+    h.state_mut().quick_tool = QuickTool::Select;
+    h.state_mut().views[0].comments.selected = None;
+    crate::support::settle(&mut h);
+    let (x, y) = ((a.rect[0] + a.rect[2]) / 2.0, (a.rect[1] + a.rect[3]) / 2.0);
+    let (dx, dy) = (120.0, -60.0);
+    let (from, to) = (at(&h, x, y), at(&h, x + dx, y + dy));
+    // Ink in the left of the box where it goes, inside its frame and away from the pointer, which
+    // is drawn over the page.
+    let goes = egui::Rect::from_two_pos(at(&h, a.rect[0] + dx, a.rect[1] + dy), at(&h, a.rect[2] + dx, a.rect[3] + dy)).shrink(3.0);
+    let inked = |pixels: &image::RgbaImage| {
+        (goes.left() as u32..(to.x - 12.0) as u32)
+            .any(|px| (goes.top() as u32..goes.bottom() as u32).any(|py| pixels.get_pixel(px, py).0[..3].iter().all(|c| *c < 100)))
+    };
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(from + (to - from) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    let mut shown = false;
+    for _ in 0..100 {
+        h.run_steps(2);
+        if inked(&h.render().unwrap()) {
+            shown = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(shown, "the typed text is drawn under the pointer before release");
+    h.drop_at(to);
+    h.run_steps(3);
+}
+
+/// A comment kept upright on a turned page (NoRotate on a /Rotate 90 page) is drawn where it goes
+/// while it is dragged too: its layer is cut from the box it is drawn in, not from its /Rect.
+#[test]
+fn an_upright_comment_on_a_turned_page_is_drawn_where_it_goes_before_release() {
+    let _gpu = crate::gpu();
+    let pdf = String::from_utf8_lossy(TEXT_FIXTURE)
+        .replace("/Contents 5 0 R /Resources", "/Contents 5 0 R /Rotate 90 /Annots [8 0 R] /Resources")
+        .replace(
+            "trailer",
+            "8 0 obj << /Type /Annot /Subtype /Square /Rect [40 60 160 90] /F 20 /C [1 0 0] /IC [1 0 0] /BS << /W 2 >> >> endobj\ntrailer",
+        )
+        .into_bytes();
+    let mut h = harness_with_bytes(pdf, |_| {});
+    crate::support::settle(&mut h);
+    let id = h.state().views[0].id;
+    let drawn = {
+        let app = h.state();
+        let v = &app.views[0];
+        let info = &app.session.get(v.id).unwrap().info;
+        let a = info.annotations.iter().find(|a| a.subtype == "Square").expect("the square");
+        assert!(a.no_rotate, "kept upright");
+        let page = &info.pages[0];
+        let xf =
+            pdfcraft_ui_egui::canvas::PageXform { rect: v.page_screen_rect(0).expect("on screen"), rot: v.rotation, pw: page.width, ph: page.height };
+        xf.user_rect(info, 0, a.shown_rect(page.rotation))
+    };
+    let red = |v: [u8; 4]| v[0] > 200 && v[1] < 80 && v[2] < 80;
+    let px = |pixels: &image::RgbaImage, p: Pos2| pixels.get_pixel(p.x.round() as u32, p.y.round() as u32).0;
+    // Beside the pointer, which is drawn over the page.
+    let (from, delta) = (drawn.center(), egui::vec2(160.0, 120.0));
+    let was = pos2(drawn.left() + 6.0, drawn.center().y);
+    let goes = was + delta;
+    assert!(red(px(&h.render().unwrap(), was)), "drawn in its upright box");
+    let generation = h.state().session.get(id).unwrap().edit_generation();
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(from + delta * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    let mut shown = false;
+    for _ in 0..100 {
+        h.run_steps(2);
+        let pixels = h.render().unwrap();
+        if red(px(&pixels, goes)) {
+            shown = true;
+            assert!(red(px(&pixels, was)), "the page still shows it where it was");
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(shown, "the upright comment is drawn under the pointer before release");
+    assert_eq!(h.state().session.get(id).unwrap().edit_generation(), generation, "pointer frames never edit the document");
+    h.drop_at(from + delta);
+    h.run_steps(3);
+}
+
+/// `n` pages with one comment each, "Card 1" to "Card n".
+fn one_comment_per_page(n: usize) -> Vec<u8> {
+    let mut objs = vec!["<< /Type /Catalog /Pages 2 0 R >>".to_string()];
+    let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 3 + 2 * i)).collect();
+    objs.push(format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 300 200] >>", kids.join(" ")));
+    for i in 0..n {
+        objs.push(format!("<< /Type /Page /Parent 2 0 R /Annots [{} 0 R] >>", 4 + 2 * i));
+        objs.push(format!("<< /Type /Annot /Subtype /Square /Rect [20 20 80 80] /C [1 0 0] /T (Ada) /Contents (Card {}) >>", i + 1));
+    }
+    let mut out = b"%PDF-1.7\n".to_vec();
+    for (i, o) in objs.iter().enumerate() {
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    out.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
+    out
+}
+
+/// #5488: the panel laid out every card on every frame, which put a few hundred comments over the
+/// frame budget. Cards out of view now only take up their height, and the selected one is still
+/// drawn wherever it is, so it can scroll into view.
+#[test]
+fn the_comments_panel_lays_out_only_the_cards_in_view() {
+    let mut h = harness_with_bytes(one_comment_per_page(120), |app| app.set_option("panel", "comments").unwrap());
+    h.run_steps(4);
+    let drawn = h.query_all_by_label_contains("Card ").count();
+    assert!((1..40).contains(&drawn), "{drawn} of 120 cards laid out");
+    h.state_mut().views[0].comments.selected = Some((100, 0));
+    h.state_mut().views[0].comments.reveal = true;
+    h.run_steps(4);
+    assert!(h.query_by_label("Card 101").is_some(), "the selected card is drawn and scrolled to");
+    assert!(h.query_by_label("Card 1").is_none(), "the top of the list scrolled out of view");
+}
+
+/// CodeRabbit on #5583: a card's measured height belongs to what it showed. Card 1, far above the
+/// cards in view, grows by two replies; the cards in view move down by its growth, not stay where
+/// card 1's old height would put them.
+#[test]
+fn a_card_out_of_view_that_grows_moves_the_cards_below_it() {
+    let mut h = harness_with_bytes(one_comment_per_page(120), |app| app.set_option("panel", "comments").unwrap());
+    h.run_steps(4);
+    h.state_mut().views[0].comments.selected = Some((60, 0));
+    h.state_mut().views[0].comments.reveal = true;
+    h.run_steps(4);
+    assert!(h.query_by_label("Card 1").is_none(), "card 1 is out of view");
+    let before = h.get_by_label("Card 61").rect().top();
+    for text in ["A first reply", "A second reply"] {
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::ReplyToAnnotation { page: 0, index: 0, text: text.into(), author: "Bo".into() });
+    }
+    h.run_steps(4);
+    let after = h.get_by_label("Card 61").rect().top();
+    assert!(after > before + 40.0, "the cards below a grown card move down: {before} → {after}");
+}
+
+/// CodeRabbit on #5583: a card with an editor open on it is drawn wherever it is, so the cards
+/// below it make room for the editor rather than keep the card's height from before it opened.
+#[test]
+fn a_card_with_an_editor_open_out_of_view_is_drawn_at_its_size() {
+    let mut h = harness_with_bytes(one_comment_per_page(120), |app| app.set_option("panel", "comments").unwrap());
+    h.run_steps(4);
+    h.state_mut().views[0].comments.selected = Some((60, 0));
+    h.state_mut().views[0].comments.reveal = true;
+    h.run_steps(4);
+    assert!(h.query_by_label("Card 1").is_none(), "card 1 is out of view");
+    let before = h.get_by_label("Card 61").rect().top();
+    h.state_mut().views[0].comments.editing = Some((0, 0, "Card 1".into()));
+    h.run_steps(4);
+    let after = h.get_by_label("Card 61").rect().top();
+    assert!(after > before + 20.0, "the cards below make room for card 1's editor: {before} → {after}");
+}
+
+#[test]
+fn freehand_highlighter_draws_translucent_yellow_ink() {
+    let mut h = harness(|app| app.set_option("quick", "freehand_highlight").unwrap());
+    drag_pt(&mut h, (40.0, 100.0), (240.0, 100.0));
+
+    let c = comments(&h);
+    assert_eq!(c.len(), 1, "{c:?}");
+    assert_eq!(c[0].subtype, "Ink");
+    assert_eq!(c[0].intent.as_deref(), Some("FreehandHighlight"));
+    let props = h.state().session.get(h.state().views[0].id).unwrap().comment_props(0, c[0].index).expect("ink properties");
+    assert_eq!(props.color, Some([1.0, 0.94, 0.0]));
+    assert!((props.opacity - 0.35).abs() < 0.001);
+    assert_eq!(props.width, Some(14.0));
+    assert_eq!(h.state().quick_tool, QuickTool::Comment(pdfcraft_ui_egui::comments::CommentTool::FreehandHighlight));
+    h.state_mut().comment_prefs.set_width(pdfcraft_ui_egui::comments::CommentTool::FreehandHighlight, 100.0);
+    drag_pt(&mut h, (40.0, 160.0), (240.0, 160.0));
+    let c = comments(&h);
+    assert_eq!(c.len(), 2);
+    let props = h.state().session.get(h.state().views[0].id).unwrap().comment_props(0, c.iter().map(|a| a.index).max().unwrap()).unwrap();
+    assert_eq!(props.width, Some(100.0));
+    assert_eq!(h.state().views[0].comments.selected, None);
+}
+
+#[test]
+fn hotbar_picker_adds_and_runs_freehand_highlight() {
+    let mut h = harness(|_| {});
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    field(&h, "Search all tools…").click();
+    h.run_steps(2);
+    field(&h, "Search all tools…").type_text("freehand");
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::CheckBox, "Freehand-Highlight").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some(), "picker stays open after adding a tool");
+    h.get_by_role_and_label(Role::CheckBox, "Draw freehand").click();
+    h.run_steps(3);
+    h.get_by_label("Close menu").click();
+    h.run_steps(3);
+    let saved: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_eq!(saved["hotbar"]["tools"], serde_json::json!(["comment.freehand_highlight", "comment.ink"]));
+    h.state_mut().set_option("hotbar-side", "bottom").unwrap();
+    h.run_steps(3);
+    // The new tool is available directly from its custom shortcut.
+    h.query_all_by_role_and_label(Role::Button, "Freehand-Highlight").last().unwrap().click();
+    h.run_steps(3);
+    assert_eq!(h.state().quick_tool, QuickTool::Comment(pdfcraft_ui_egui::comments::CommentTool::FreehandHighlight));
+}
+
+#[test]
+fn hotbar_picker_searches_translated_tool_labels() {
+    let mut h = harness(|app| {
+        app.set_option("language", "fr").unwrap();
+    });
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    field(&h, "Search all tools…").click();
+    h.run_steps(2);
+    field(&h, "Search all tools…").type_text("Dessiner");
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::CheckBox, "Dessiner à main levée").click();
+    h.run_steps(3);
+    let saved: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_eq!(saved["hotbar"]["tools"], serde_json::json!(["comment.ink"]));
+}
+
+#[test]
+fn hotbar_drag_moves_and_persists_position() {
+    let mut h = harness(|_| {});
+    let before: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    let from = h.get_by_label("Drag hotbar").rect().center();
+    drag(&mut h, from, from + egui::vec2(90.0, 90.0));
+    let after: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_ne!(before["hotbar"]["position"], after["hotbar"]["position"]);
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&h.state().persist());
+    let saved: serde_json::Value = serde_json::from_str(&restored.persist()).unwrap();
+    assert_eq!(saved["hotbar"], after["hotbar"]);
+}
+
+#[test]
+fn hotbar_vertical_size_and_docking() {
+    let mut h = harness(|app| {
+        app.set_option("hotbar-tools", "comment.ink,comment.freehand_highlight").unwrap();
+        app.set_option("hotbar-side", "right").unwrap();
+    });
+    for size in [24, 48, 64] {
+        h.state_mut().set_option("hotbar-size", &size.to_string()).unwrap();
+        h.run_steps(5);
+        let measured = h.ctx.data_mut(|d| d.get_temp::<egui::Vec2>(egui::Id::unique("custom-hotbar"))).unwrap();
+        assert!(measured.x <= size as f32 + 24.0, "vertical bar too wide: {measured:?}");
+        assert!(measured.x >= size as f32);
+    }
+    let from = h.get_by_label("Drag hotbar").rect().center();
+    drag(&mut h, from, from - egui::vec2(90.0, 90.0));
+    let saved: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_eq!(saved["hotbar"]["position"], serde_json::json!([1.0, 0.5]));
+    assert_eq!(saved["hotbar"]["dock"], "right");
+    h.state_mut().set_option("hotbar-side", "float").unwrap();
+    h.run_steps(3);
+    let from = h.get_by_label("Drag hotbar").rect().center();
+    drag(&mut h, from, from - egui::vec2(90.0, 90.0));
+    let moved: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_ne!(saved["hotbar"]["position"], moved["hotbar"]["position"]);
+}
+
+#[test]
+fn hotbar_settings_reopen_even_with_remembered_collapsed_state() {
+    let mut h = harness(|_| {});
+    let mut collapsed =
+        egui::collapsing_header::CollapsingState::load_with_default_open(&h.ctx, egui::Id::unique("hotbar-picker").with("collapsing"), false);
+    collapsed.set_open(false);
+    collapsed.store(&h.ctx);
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(5);
+    assert!(h.query_by_label("Close menu").is_some());
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some(), "Hotbar settings always shows settings");
+    h.get_by_label("Close menu").click();
+    h.run_steps(3);
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some());
+}
+
+#[test]
+fn hotbar_full_side_strip_spans_each_edge_and_returns_to_float() {
+    let mut h = harness(|app| {
+        app.set_option("hotbar-side", "right").unwrap();
+        app.set_option("hotbar-size", "48").unwrap();
+    });
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(5);
+    h.get_by_label("Full-side strip").click();
+    h.run_steps(3);
+    let enabled: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_eq!(enabled["hotbar"]["full_side"], true, "settings checkbox enables strip");
+    h.get_by_label("Close menu").click();
+    for side in ["right", "left", "top", "bottom"] {
+        h.state_mut().set_option("hotbar-side", side).unwrap();
+        h.run_steps(5);
+        let size = h.ctx.data_mut(|d| d.get_temp::<egui::Vec2>(egui::Id::unique("custom-hotbar"))).unwrap();
+        let (length, thickness) = if matches!(side, "left" | "right") { (size.y, size.x) } else { (size.x, size.y) };
+        assert!(length > 300.0, "strip must fill the edge: {side} {size:?}");
+        assert!(thickness <= 64.0, "strip must stay narrow: {size:?}");
+        h.get_by_label("Hotbar settings");
+    }
+    let saved: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_eq!(saved["hotbar"]["full_side"], true);
+    h.state_mut().set_option("hotbar-side", "float").unwrap();
+    h.run_steps(5);
+    let size = h.ctx.data_mut(|d| d.get_temp::<egui::Vec2>(egui::Id::unique("custom-hotbar"))).unwrap();
+    assert!(size.x < 150.0 && size.y < 150.0, "floating toolbar is compact: {size:?}");
 }

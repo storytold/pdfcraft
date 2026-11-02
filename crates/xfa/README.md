@@ -32,7 +32,10 @@ that warning and keeps the existing layout and accepted widget values.
   page masters chosen by occurrence; a table's header row repeats after a break; presence
   `hidden` takes no space, `invisible` takes space; repeating subforms get their initial
   instances, in flowed content and in a top-to-bottom container inside positioned content (a
-  table in an area) alike; fields that compute the page number or count on layout show the numbers. A
+  table in an area) alike; fields that compute the page number or count on layout show the numbers;
+  a draw placed by position turns about its anchor (`rotate`: degrees counter-clockwise, a multiple
+  of 90), as one item a page break doesn't cut, and its container grows to the box it stands in. A
+  field, a subform or a draw in a flow doesn't turn. A
   caption without a font of its own is drawn in its field's font, and one naming only
   some font properties takes the rest from it (XFA 3.3, "Formatting Text That Appears as Fixed
   or Variable Content", p. 43); a field caption's paragraph
