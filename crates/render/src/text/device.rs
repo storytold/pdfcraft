@@ -518,7 +518,14 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
         rank = vec![usize::MAX; glyphs.len()];
         let mut nearest: [Vec<usize>; 4] = Default::default();
         for (i, g) in glyphs.iter().enumerate() {
-            if let Some(q) = nearest.get_mut(g.0) {
+            // The quarter the first grouping used, not the glyph's own. A number set across a
+            // column keeps `g.0 == 0`, and its box in `placed` is in the column's frame -- the
+            // quarter it was moved to above. Grouping it here by `g.0` put a quarter-1 box in the
+            // quarter-0 flow, so one `arrange_flow` laid out two coordinate frames together and
+            // the ranks it produced put turned or curved text in the wrong place in the reading
+            // order (noted in review).
+            let quarter = if placed.contains_key(&i) { 1 } else { g.0 };
+            if let Some(q) = nearest.get_mut(quarter) {
                 q.push(i);
             }
         }

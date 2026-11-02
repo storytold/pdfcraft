@@ -1917,6 +1917,8 @@ fn one_degenerate_glyph_does_not_hide_the_column_a_short_run_lines_up_with() {
     let got = stacked_down(&glyphs, &all(glyphs.len()));
     assert_eq!(&got[..6], [true; 6], "the speck must not change how the columns read: {got:?}");
     assert!(!got[6], "and the speck is not itself a column: {got:?}");
+}
+
 /// #3711: a number set across a vertical column (縱中橫, tate-chu-yoko), as in
 /// 「2026年10月21日」. The digits are horizontal glyphs among vertical ones, so the split by
 /// writing direction made them a flow of their own, written out before or after all the
