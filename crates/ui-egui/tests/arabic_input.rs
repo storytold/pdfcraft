@@ -9,6 +9,10 @@ use serde_json::{Value, json};
 
 fn fixture() -> Vec<u8> {
     let body = "BT /F1 24 Tf 20 150 Td (Page 1) Tj ET";
+    fixture_with_body(body)
+}
+
+fn fixture_with_body(body: &str) -> Vec<u8> {
     let objects = [
         "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_owned(),
@@ -32,6 +36,10 @@ fn fixture() -> Vec<u8> {
 }
 
 fn harness(source: bool) -> (Harness<'static, PdfCraftApp>, ControlClient) {
+    harness_with_pdf(source, fixture(), false)
+}
+
+fn harness_with_pdf(source: bool, bytes: Vec<u8>, fit_page: bool) -> (Harness<'static, PdfCraftApp>, ControlClient) {
     let slot = Arc::new(Mutex::new(None));
     let capture = Arc::clone(&slot);
     let mut builder = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(0.25);
@@ -41,8 +49,11 @@ fn harness(source: bool) -> (Harness<'static, PdfCraftApp>, ControlClient) {
     let mut h = builder.build_eframe(move |cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
+        if fit_page {
+            app.set_option("default-zoom", "fit-page").unwrap();
+        }
         *capture.lock().unwrap() = Some(app.attach_control(&cc.egui_ctx));
-        app.open_bytes("input.pdf", None, fixture()).unwrap();
+        app.open_bytes("input.pdf", None, bytes).unwrap();
         app
     });
     h.run_steps(4);
@@ -190,6 +201,51 @@ fn composition_enter_tab_and_save_cannot_publish_a_candidate() {
         call(&mut h, &c, "ui.ime", json!({"phase":"commit","text":"مرحبا"})).unwrap();
         assert_eq!(text(&h, source), "ABCمرحبا");
     }
+}
+
+#[test]
+fn composition_blocks_switching_to_another_paragraph() {
+    let bytes = fixture_with_body("BT /F1 24 Tf 20 150 Td (Page 1) Tj ET BT /F1 24 Tf 20 70 Td (Second) Tj ET");
+    let other_point = |h: &Harness<'static, PdfCraftApp>| {
+        let doc = &h.state().session.docs()[0];
+        let rect = doc.text_blocks(0)[1].rect;
+        let [x, y] = doc.info.pages[0].user_to_view(((rect[0] + rect[2]) / 2.0) as f32, ((rect[1] + rect[3]) / 2.0) as f32);
+        let page = h.state().views[0].page_screen_rect(0).unwrap();
+        let point = egui::pos2(page.left() + page.width() * x / 200.0, page.top() + page.height() * y / 300.0);
+        assert!(h.state().views[0].viewport_rect().contains(point), "the other paragraph must be visible");
+        point
+    };
+    let host_click = |h: &mut Harness<'static, PdfCraftApp>, at| {
+        h.hover_at(at);
+        h.run_steps(1);
+        let events = [true, false]
+            .into_iter()
+            .map(|pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE })
+            .collect();
+        // Like real eframe hosts, run raw_input_hook before egui processes focus.
+        native_input(h, events);
+    };
+    // Positive control proves the real router can switch to this visible paragraph.
+    let (mut ordinary, _) = harness_with_pdf(true, bytes.clone(), true);
+    replace(&mut ordinary, true, "ABC");
+    let at = other_point(&ordinary);
+    host_click(&mut ordinary, at);
+    assert_eq!(ordinary.state().views[0].line_editor.as_ref().unwrap().block, 1, "inactive composition must permit switching");
+    let (mut h, c) = harness_with_pdf(true, bytes, true);
+    replace(&mut h, true, "ABC");
+    select(&mut h, 3, 3);
+    // ASCII preedit isolates composition ownership from font fallback behavior.
+    call(&mut h, &c, "ui.ime", json!({"phase":"preedit","text":"candidate"})).unwrap();
+    let before = h.state().session.docs()[0].text_blocks(0);
+    let other = other_point(&h);
+    host_click(&mut h, other);
+    assert_eq!(h.state().session.docs()[0].text_blocks(0), before, "switching paragraphs must not publish a live preedit");
+    assert_eq!(text(&h, true), "ABCcandidate", "the composition draft stays open");
+    assert_eq!(h.state().views[0].line_editor.as_ref().unwrap().block, 0);
+    call(&mut h, &c, "ui.ime", json!({"phase":"cancel"})).unwrap();
+    host_click(&mut h, other);
+    assert_eq!(h.state().views[0].line_editor.as_ref().unwrap().block, 1, "switching resumes after composition ends");
+    assert_eq!(h.state().session.docs()[0].text_blocks(0)[0].editor_text, "ABC");
 }
 
 #[test]

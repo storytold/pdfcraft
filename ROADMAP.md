@@ -225,6 +225,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-02 (M7, #5731 current main):** Integrated main `e2615187`, retaining decode-budget/resource-reading updates alongside Arabic numeric, mark and source-font fixes. Host composition ownership defers paragraph switches before native focus changes; the source-break policy leaves effective formatting and untouched operators alone. Existing engine undo bookkeeping and wider browser/provider qualification remain unchanged.
+
 - **2026-11-02 (M7, #5731 break semantics):** Explicit paragraph drafts remain literal when equal to flat source text; direction-only edits preserve source visual rows and soft/hard markers through save/reopen and later widening. Three new public-tool regressions failed before the corrections and now pass alongside the preview regression. Wider Arabic qualification and estimates unchanged.
 
 - **2026-11-02 (M7, #5731 preview):** Preview and Apply share implicit paragraph text selection; the public-tool regression failed before the correction and passes for width-plus-Auto-direction with soft and hard breaks. Integrated upstream main `f47618f5` cleanly. Browser/provider/native-reader qualification and estimates remain unchanged.

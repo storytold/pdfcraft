@@ -5606,6 +5606,41 @@ fn reading_follows_form_xobjects() {
     assert!(own[0].is_form && own[0].object == Some(pdfcraft_cos::ObjRef::new(6, 0)), "{own:?}");
 }
 
+/// A page's `/XObject` and a form's `/Resources` are read wherever they are stored, and a form with
+/// none of its own, or with something else there, uses the ones it was drawn with (PDF 1.1 files).
+/// Each of these pages shows one line of text and one picture through one form.
+#[test]
+fn reading_follows_forms_however_their_resources_are_stored() {
+    let body = "BT /F1 12 Tf 72 700 Td (In the form) Tj ET q 20 0 0 10 5 5 cm /Im Do Q";
+    let (font, direct) = ("/Font << /F1 5 0 R >>", "/XObject << /Fm 6 0 R /Im 7 0 R >>");
+    for (page, form) in [
+        (format!("<< {font} {direct} >>"), ""),
+        (format!("<< {font} /XObject 9 0 R >>"), ""),
+        (format!("<< /Font 10 0 R {direct} >>"), ""),
+        (format!("<< {font} {direct} >>"), "/Resources 99 0 R"),
+        (format!("<< {font} {direct} >>"), "/Resources 12"),
+        ("<< /XObject << /Fm 6 0 R >> >>".to_string(), "/Resources 8 0 R"),
+        ("<< /XObject 9 0 R >>".to_string(), "/Resources << /Font << /F1 5 0 R >> /XObject 9 0 R >>"),
+    ] {
+        let doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            &format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources {page} /Contents 4 0 R >>"),
+            &stream("", "/Fm Do"),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>",
+            &stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 600 800] {form}"), body),
+            &stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", "A"),
+            "<< /Font << /F1 5 0 R >> /XObject 9 0 R >>",
+            "<< /Fm 6 0 R /Im 7 0 R >>",
+            "<< /F1 5 0 R >>",
+        ]);
+        let blocks = text::reading_blocks(&doc, 0).unwrap();
+        let texts: Vec<(&str, &str)> = blocks.iter().map(|b| (b.text.as_str(), b.base_font.as_str())).collect();
+        assert_eq!(texts, [("In the form", "Courier")], "{page} {form}");
+        assert_eq!(images::reading_images(&doc, 0).unwrap().len(), 1, "{page} {form}");
+    }
+}
+
 /// A chain of forms, each drawing the next twenty times, twelve deep: within the depth cap but
 /// 20^11 visits without a budget. Reading stops at the page's visit budget instead of hanging.
 #[test]
@@ -7378,6 +7413,43 @@ fn rows_the_edit_does_not_reach_keep_their_source_operators() {
     assert!(bytes.contains("1 0 0 rg"), "{bytes}");
     // The coloured word is its own run now, so only the rows above compare whole.
     assert_eq!(row_texts(&reopen(&doc))[..2], source[..2]);
+}
+
+#[test]
+fn preserved_source_breaks_alone_do_not_rewrite_content() {
+    let mut doc = text_page("BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm [(First) -400 ( row)] TJ T* (Second row) Tj ET");
+    let before = page_content_bytes(&doc, 0);
+    let source = text::text_blocks(&doc, 0).unwrap().remove(0);
+    let style = text::BlockStyle { preserve_source_breaks: true, ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some(&source.editor_text), &style).unwrap();
+    assert_eq!(page_content_bytes(&doc, 0), before, "a row policy is not an effective formatting change");
+}
+
+#[test]
+fn preserved_source_breaks_keep_unedited_rows_operators() {
+    let row = "[(justified) -400 ( text) -400 ( uses) -400 ( wide) -400 ( gaps)] TJ";
+    let mut doc = text_page(&format!("BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm {row} T* (last line.) Tj ET"));
+    let source = text::text_blocks(&doc, 0).unwrap().remove(0);
+    let at = source.editor_text.find("last").unwrap();
+    let style = text::BlockStyle {
+        preserve_source_breaks: true,
+        ranges: vec![text::RangeStyle {
+            range: at..at + 4,
+            family: None,
+            resource: None,
+            size: None,
+            color: Some([1.0, 0.0, 0.0]),
+            underline: None,
+            char_spacing: None,
+            scale: None,
+        }],
+        ..Default::default()
+    };
+    text::rewrite_block(&mut doc, 0, 0, Some(&source.editor_text), &style).unwrap();
+    let saved = reopen(&doc);
+    let bytes = page_content_bytes(&saved, 0);
+    assert!(String::from_utf8_lossy(&bytes).contains(row), "the untouched row must retain its exact TJ operator");
+    assert!(String::from_utf8_lossy(&bytes).contains("1 0 0 rg"), "the selected word's colour change must apply");
 }
 
 #[test]

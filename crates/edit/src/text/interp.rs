@@ -515,15 +515,16 @@ impl MarkedContent {
             _ => None,
         });
         // Direction metadata is needed even by callers that deliberately disable ActualText.
+        // Keep named properties borrowed, as the current-main interpreter does for
+        // fonts and graphics states; repeated markers must not copy the dictionary.
+        let (mut held_properties, mut held_direction) = (None, None);
         let direction_list = match op.operands.get(1) {
-            Some(Object::Name(name)) => resources
-                .get(b"Properties")
-                .and_then(|object| doc.dict(object))
-                .and_then(|properties| properties.get(name).and_then(|object| doc.dict(object))),
-            other => other.and_then(Object::as_dict).cloned(),
+            Some(Object::Name(name)) => super::resource_dict(doc, resources, b"Properties", &mut held_properties)
+                .and_then(|properties| properties.get(name))
+                .and_then(|object| super::dict_in_place(doc, object, &mut held_direction)),
+            other => other.and_then(Object::as_dict),
         };
         let direction = direction_list
-            .as_ref()
             .and_then(|d| d.name(b"PCTextDirection"))
             .map(pdfcraft_fonts::TextDirection::from_name)
             .unwrap_or_else(|| self.directions.last().copied().unwrap_or_default());
@@ -827,8 +828,9 @@ pub(super) fn interpret(
     // `Some(properties)`: read `/ActualText`, looking named property lists up in `properties`.
     logical_text: Option<&Dict>,
 ) -> Result<Vec<Shown>, EditError> {
-    let fonts_res = resources.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
-    let states = resources.get(b"ExtGState").map(|g| doc.resolve(g)).and_then(|g| g.as_dict().cloned()).unwrap_or_default();
+    let (mut held_fonts, mut held_states, none) = (None, None, Dict::new());
+    let fonts_res = super::resource_dict(doc, resources, b"Font", &mut held_fonts).unwrap_or(&none);
+    let states = super::resource_dict(doc, resources, b"ExtGState", &mut held_states).unwrap_or(&none);
     let mut out: Vec<Shown> = Vec::new();
     let mut ts = carry.ts.clone();
     let mut at_bt = (0usize, ts.clone());
@@ -939,8 +941,12 @@ pub(super) fn interpret(
                 if let Some(name) = op.name(0) {
                     select_gs(&mut ts.ext_gstate, name);
                 }
-                let params = op.name(0).and_then(|name| states.get(name)).map(|p| doc.resolve(p));
-                if let Some(params) = params.as_deref().and_then(Object::as_dict) {
+                let mut held = None;
+                let params = match op.name(0).and_then(|name| states.get(name)) {
+                    Some(p) => super::dict_in_place(doc, p, &mut held),
+                    None => None,
+                };
+                if let Some(params) = params {
                     ts.gs.apply(doc, params);
                     // `/LW` sets the line width as `w` does (ISO 32000-2 §8.4.5).
                     let lw = params.get(b"LW").and_then(|w| doc.resolve(w).as_f64()).filter(|w| w.is_finite());

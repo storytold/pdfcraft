@@ -94,3 +94,33 @@ text equal to the flat source text, and direction-only visual-row/break-type
 preservation through save/reopen and later widening. The earlier preview/Apply
 regression also passes. This fixes data semantics within the supported editing
 scope; the font, provider/browser and native-reader limits above remain.
+
+
+### Current-main integration and review 5737544499
+
+This update incorporates upstream main `e2615187279bd5a916c4fe56abc0a135156e005d`.
+The automatic overlaps in resource reading, text interpretation, image handling,
+automation telemetry, formatting controls and parity were reviewed. Named direction
+properties now use main's in-place dictionary helpers rather than copying the full
+property dictionary for each marker. Existing numeric/mark/source-font fixes remain.
+
+The source-break preservation policy is excluded from effective-formatting checks.
+A policy-only edit leaves the original stream intact; partial formatting retains
+untouched rows' original TJ operators. The core regression tests cover both. This
+does not change the engine's pre-existing undo bookkeeping for no-op requests.
+Selected-row alignment remains refused as previously documented; it is not enabled
+by this correction.
+
+While an inline paragraph owns an unfinished composition, its host raw-input hook
+defers primary document clicks outside that editor before egui can move IME focus.
+The matching release is consumed too, including across a composition-ending frame.
+Caret clicks inside the editor and application controls outside the document stay
+available. The page-input path also refuses to take/publish the live editor while
+composition is active.
+
+The focused shell regression uses two visible synthetic paragraphs and an inactive
+switch positive control. It checks that an outside paragraph click does not publish
+the candidate, cancellation retains the accepted draft, and ordinary switching works
+after cancellation. It runs the real host hook because kittest otherwise skips it.
+ASCII preedit isolates ownership from font support. This is component evidence,
+not new Windows/Chrome/provider or independent native-reader qualification.

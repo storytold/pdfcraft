@@ -54,7 +54,9 @@ rejoin soft wraps, including when the reflow text equals the space-joined source
 text. A direction-only request preserves editor rows and their original soft/hard
 break types. Saving and reopening retains those types, so later widening rejoins
 only the soft wraps. Supplying `text` uses that text literally, even when it equals
-the source text.
+the source text. The internal source-break policy is not an effective formatting
+change: it does not itself rewrite the paragraph's PDF operators. Existing engine
+undo bookkeeping is unchanged.
 
 Logical Unicode remains the stored text. PdfCraft records explicit overrides in
 its own PDF metadata, so another viewer need not expose the same controls. Complex

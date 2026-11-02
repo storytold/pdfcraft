@@ -9,6 +9,7 @@ use egui::{Context, Event, Id, ImeEvent, Key};
 struct Composition {
     owner: Option<Id>,
     active: bool,
+    blocked_primary: bool,
 }
 
 impl Composition {
@@ -31,7 +32,10 @@ impl Composition {
                     owns_keys |= self.active || !text.is_empty();
                     self.active = false;
                 }
-                Event::WindowFocused(false) => self.active = false,
+                Event::WindowFocused(false) => {
+                    self.active = false;
+                    self.blocked_primary = false;
+                }
                 // Enabled/Disabled are obsolete in egui; empty idle preedit is not
                 // an active composition. Do not guess state from either of those.
                 _ => {}
@@ -68,12 +72,28 @@ fn focused_editor(ctx: &Context) -> Option<Id> {
 }
 
 /// Before egui interprets Tab, and before any document shortcuts read the keys.
-pub(crate) fn protect_raw(ctx: &Context, events: &mut Vec<Event>) {
+pub(crate) fn protect_raw(ctx: &Context, events: &mut Vec<Event>, inline: Option<(Id, egui::Rect)>) {
     let owner = focused_editor(ctx);
     let mut composition = ctx.data(|d| d.get_temp::<Composition>(state_id())).unwrap_or_default();
-    if composition.observe(owner, events) {
-        events.retain(|event| !command_key(event));
-    }
+    let owns_keys = composition.observe(owner, events);
+    // Filter a document click before egui can move native IME ownership. App
+    // controls remain available, as do caret clicks inside the current editor.
+    let paragraph = inline.filter(|(id, _)| owner == Some(*id)).and_then(|(id, document)| ctx.read_response(id).map(|r| (r.rect, document)));
+    events.retain(|event| match event {
+        Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, .. }
+            if owns_keys && paragraph.is_some_and(|(editor, document)| document.contains(*pos) && !editor.contains(*pos)) =>
+        {
+            composition.blocked_primary = true;
+            false
+        }
+        Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, .. } if composition.blocked_primary => {
+            // Also consume its release after an IME commit/cancel or owner change,
+            // so an ignored press cannot become a later click or drag.
+            composition.blocked_primary = false;
+            false
+        }
+        _ => !owns_keys || !command_key(event),
+    });
     ctx.data_mut(|d| d.insert_temp(state_id(), composition));
 }
 
@@ -140,7 +160,7 @@ mod tests {
         }
         let key = |key| Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
         let mut events = vec![preedit("لاَ"), key(Key::Enter), key(Key::Escape), key(Key::Tab), key(Key::ArrowLeft), key(Key::Backspace)];
-        protect_raw(&ctx, &mut events);
+        protect_raw(&ctx, &mut events, None);
         assert!(matches!(events.first(), Some(Event::Ime(ImeEvent::Preedit { text, .. })) if text == "لاَ"));
         assert!(!events.iter().any(command_key));
         assert!(events.iter().any(|e| matches!(e, Event::Key { key: Key::ArrowLeft, .. })));
@@ -154,7 +174,7 @@ mod tests {
             let owner = Id::unique("non-page-editor");
             let mut value = "ABC".to_owned();
             let frame = |value: &mut String, mut events: Vec<Event>, focus: bool| {
-                protect_raw(&ctx, &mut events);
+                protect_raw(&ctx, &mut events, None);
                 let mut rect = egui::Rect::NOTHING;
                 let mut output = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
                     let editor = if multiline { egui::TextEdit::multiline(value) } else { egui::TextEdit::singleline(value) };
@@ -193,7 +213,7 @@ mod tests {
                 .into_iter()
                 .map(|key| Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE })
                 .collect();
-            protect_raw(&ctx, &mut events);
+            protect_raw(&ctx, &mut events, None);
             assert_eq!(events.len(), 3, "ordinary commands must resume after a non-page editor click");
         }
     }

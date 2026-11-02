@@ -788,6 +788,10 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
         // typed text is not dropped with the switched-away editor (#2022). A click on the open
         // box's own frame, which the editor's overlay does not cover, keeps it open instead.
         if let Some(open) = view.line_editor.as_ref().filter(|e| e.has_changes()) {
+            // A host preedit is a draft, not accepted document text.
+            if crate::text_input::composing_for(ui.ctx(), input_id()) {
+                return true;
+            }
             if open.page == page && open.block == hit {
                 return true;
             }

@@ -1,5 +1,7 @@
 # PdfCraft roadmap: milestones and what's next
 
+> **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (M7/PR #5731: current-main resource integration, paragraph-switch composition protection and source-operator preservation; estimates unchanged)
+>
 > **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (M7/PR #5731: literal paragraph drafts and saved soft/hard break intent; focused red/green regressions; wider qualification and estimates unchanged)
 >
 > **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** minor (M7/M14 input candidate: eight native shell cases cover Arabic caret, selection, marks, multiline drafts and composition lifecycle; user-confirmed Windows typing observed; combined source-font/browser acceptance pending; estimates unchanged)
@@ -290,6 +292,8 @@ M2 (renderer), M7 (content editing), M10 (OCR and Office), M11 (Preflight and st
 - Unmeasured fidelity: without an Acrobat comparison harness, quality gaps surface as user reports.
 
 ## Revision history
+
+**2026-11-02 · patch:** M7/PR #5731 integrates main e2615187. Scoped composition switching and effective-formatting corrections preserve drafts and source operators. No broader provider/reader acceptance or estimate change.
 
 **2026-11-02 · patch:** M7/PR #5731 review 5737152311: explicit drafts no longer become source visual text; direction-only edits retain soft/hard metadata through save/reopen and later width edits. Three additional public-tool red/green regressions. Estimates unchanged.
 
