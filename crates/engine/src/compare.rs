@@ -116,13 +116,29 @@ impl Session {
     /// either file, else some other drawing (Acrobat's finer kinds of change).
     pub fn visual_kind(&self, old: DocId, new: DocId, page: usize, rect: [f64; 4]) -> Result<VisualKind, EditError> {
         let docs = [self.get(old).ok_or(EditError::NoDocument)?, self.get(new).ok_or(EditError::NoDocument)?];
-        let hits = |r: [f64; 4]| r[0] <= rect[2] && rect[0] <= r[2] && r[1] <= rect[3] && rect[1] <= r[3];
-        let annotated = docs.iter().any(|d| d.info.annotations.iter().any(|a| a.page == page && a.subtype != "Link" && hits(a.rect.map(f64::from))));
-        if annotated {
-            return Ok(VisualKind::Annotation);
+        let images = [raster_image_rects(docs[0], page)?, raster_image_rects(docs[1], page)?];
+        let old_rect = map_rect_to_page(rect, docs[1].info.pages.get(page), docs[0].info.pages.get(page)).unwrap_or(rect);
+        Ok(classify_visual_kind(docs, page, rect, old_rect, [&images[0], &images[1]]))
+    }
+
+    /// Classify many visual regions while reading each page's drawn-image inventory once.
+    pub fn visual_kinds(&self, old: DocId, new: DocId, regions: &[(usize, [f64; 4])]) -> Result<Vec<VisualKind>, EditError> {
+        let docs = [self.get(old).ok_or(EditError::NoDocument)?, self.get(new).ok_or(EditError::NoDocument)?];
+        let mut image_rects: HashMap<usize, [Vec<[f64; 4]>; 2]> = HashMap::new();
+        for (page, _) in regions {
+            if !image_rects.contains_key(page) {
+                image_rects.insert(*page, [raster_image_rects(docs[0], *page)?, raster_image_rects(docs[1], *page)?]);
+            }
         }
-        let pictured = docs.iter().any(|d| d.page_images(page).iter().any(|i| hits(i.visible_rect.unwrap_or(i.rect))));
-        Ok(if pictured { VisualKind::Image } else { VisualKind::Other })
+        regions
+            .iter()
+            .map(|(page, rect)| {
+                let old_rect = map_rect_to_page(*rect, docs[1].info.pages.get(*page), docs[0].info.pages.get(*page)).unwrap_or(*rect);
+                let empty: [Vec<[f64; 4]>; 2] = [Vec::new(), Vec::new()];
+                let images = image_rects.get(page).unwrap_or(&empty);
+                Ok(classify_visual_kind(docs, *page, *rect, old_rect, [&images[0], &images[1]]))
+            })
+            .collect()
     }
 
     /// The compare report as a new PDF (not opened).
@@ -163,6 +179,58 @@ impl Session {
             self.apply(new, Edit::Batch { label: "Mark differences".into(), edits })?;
         }
         Ok(n)
+    }
+}
+
+fn raster_image_rects(doc: &crate::Document, page: usize) -> Result<Vec<[f64; 4]>, EditError> {
+    let Some(editor) = doc.editor.as_ref() else { return Ok(Vec::new()) };
+    Ok(pdfcraft_edit::reading_images(&editor.cos, page)?.into_iter().filter_map(|image| image.visible_rect).collect())
+}
+
+fn classify_visual_kind(docs: [&crate::Document; 2], page: usize, new_rect: [f64; 4], old_rect: [f64; 4], images: [&[[f64; 4]]; 2]) -> VisualKind {
+    let hits = |a: [f64; 4], b: [f64; 4]| a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3];
+    let annotation_hits = |doc: &crate::Document, rect: [f64; 4]| {
+        let rotation = doc.info.pages.get(page).map_or(0, |p| p.rotation);
+        let comments =
+            doc.info.annotations.iter().any(|a| a.page == page && a.subtype != "Link" && hits(a.shown_rect(rotation).map(f64::from), rect));
+        let widgets = doc.form.iter().flat_map(|field| &field.widgets).any(|w| w.page == Some(page) && !w.hidden && hits(w.rect, rect));
+        comments || widgets
+    };
+    if annotation_hits(docs[0], old_rect) || annotation_hits(docs[1], new_rect) {
+        return VisualKind::Annotation;
+    }
+    let pictured = images[0].iter().any(|image| hits(*image, old_rect)) || images[1].iter().any(|image| hits(*image, new_rect));
+    if pictured { VisualKind::Image } else { VisualKind::Other }
+}
+
+/// Map a rectangle through the relative displayed-page coordinates used by `visual_regions`.
+fn map_rect_to_page(rect: [f64; 4], from: Option<&pdfcraft_render::PageInfo>, to: Option<&pdfcraft_render::PageInfo>) -> Option<[f64; 4]> {
+    let (from, to) = (from?, to?);
+    let [x0, y0, x1, y1] = rect;
+    let corners = [[x0, y0], [x0, y1], [x1, y0], [x1, y1]];
+    let points = corners.map(|[x, y]| {
+        let view = from.user_to_view(x as f32, y as f32);
+        to.view_to_user(view[0] * to.width / from.width.max(1e-3), view[1] * to.height / from.height.max(1e-3))
+    });
+    Some([
+        points.iter().map(|p| p[0] as f64).fold(f64::INFINITY, f64::min),
+        points.iter().map(|p| p[1] as f64).fold(f64::INFINITY, f64::min),
+        points.iter().map(|p| p[0] as f64).fold(f64::NEG_INFINITY, f64::max),
+        points.iter().map(|p| p[1] as f64).fold(f64::NEG_INFINITY, f64::max),
+    ])
+}
+
+#[cfg(test)]
+mod visual_kind_tests {
+    use super::*;
+
+    #[test]
+    fn maps_regions_between_cropped_and_rotated_pages() {
+        let new = pdfcraft_render::PageInfo { width: 300.0, height: 200.0, label: "1".into(), crop: [0.0, 0.0, 200.0, 300.0], rotation: 90 };
+        let old = pdfcraft_render::PageInfo { width: 200.0, height: 300.0, label: "1".into(), crop: [10.0, 20.0, 210.0, 320.0], rotation: 0 };
+        let mapped = map_rect_to_page([40.0, 220.0, 60.0, 230.0], Some(&new), Some(&old)).expect("both pages exist");
+        assert!((mapped[0] - 156.67).abs() < 0.02 && (mapped[1] - 230.0).abs() < 0.02, "{mapped:?}");
+        assert!((mapped[2] - 163.33).abs() < 0.02 && (mapped[3] - 260.0).abs() < 0.02, "{mapped:?}");
     }
 }
 

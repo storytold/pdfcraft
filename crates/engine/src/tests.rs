@@ -5714,6 +5714,7 @@ fn comparing_two_versions_of_a_document() {
     assert!(s.compare_visual(old, old, 72.0).unwrap().is_empty());
     // Plain text drawing is neither a comment nor a picture, until a comment sits on it.
     assert!(vis.iter().all(|(p, r)| s.visual_kind(old, new, *p, *r).unwrap() == compare::VisualKind::Other));
+    assert_eq!(s.visual_kinds(old, new, &vis).unwrap(), vec![compare::VisualKind::Other; vis.len()]);
 
     assert_eq!(s.mark_differences(old, new).unwrap(), 2);
     assert!(vis.iter().any(|(p, r)| s.visual_kind(old, new, *p, *r).unwrap() == compare::VisualKind::Annotation));
@@ -5722,6 +5723,30 @@ fn comparing_two_versions_of_a_document() {
     let marks: Vec<_> = d.info.annotations.iter().filter(|a| a.author.as_deref() == Some("Compare")).collect();
     assert_eq!(marks.len(), 2);
     assert!(marks[0].contents.as_deref().unwrap().starts_with("Replaced: \"Monday.\""));
+}
+
+#[test]
+fn visual_difference_kind_includes_raster_images_and_widgets() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let blank = s.create_blank(200.0, 300.0, 1).unwrap();
+    let old = s.open("old.pdf", None, blank.clone(), None).unwrap();
+    let new = s.open("new.pdf", None, blank, None).unwrap();
+    let image = image::RgbImage::from_pixel(12, 8, image::Rgb([240, 20, 20]));
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    s.apply(new, Edit::AddImage { page: 0, rect: Some([40.0, 40.0, 80.0, 70.0]), name: "red.png".into(), bytes: Arc::new(png.into_inner()) })
+        .unwrap();
+    let regions = s.compare_visual(old, new, 72.0).unwrap();
+    assert!(!regions.is_empty());
+    let kinds = s.visual_kinds(old, new, &regions).unwrap();
+    assert!(kinds.iter().all(|kind| *kind == compare::VisualKind::Image), "{kinds:?}");
+    assert_eq!(kinds, regions.iter().map(|(page, rect)| s.visual_kind(old, new, *page, *rect).unwrap()).collect::<Vec<_>>());
+
+    let widget = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm 5 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /Annots [4 0 R] >> endobj\n4 0 obj << /Type /Annot /Subtype /Widget /FT /Tx /T (Field) /Rect [40 40 80 80] /F 4 /P 3 0 R >> endobj\n5 0 obj << /Fields [4 0 R] /NeedAppearances true >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF";
+    let with_widget = s.open("widget.pdf", None, Arc::new(widget.to_vec()), None).unwrap();
+    assert!(!s.get(with_widget).unwrap().info.annotations.iter().any(|a| a.subtype == "Widget"));
+    assert_eq!(s.visual_kind(old, with_widget, 0, [40.0, 40.0, 80.0, 80.0]).unwrap(), compare::VisualKind::Annotation);
+    assert_eq!(s.visual_kind(with_widget, old, 0, [40.0, 40.0, 80.0, 80.0]).unwrap(), compare::VisualKind::Annotation);
 }
 
 #[test]
