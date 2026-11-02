@@ -1,4 +1,4 @@
-use super::*;
+use super::{Dict, Document, Family, Object, PdfString, Rect, Rounded, Stream};
 
 /// Width and height of a JPEG from its first frame header (SOF0–SOF15, not the DNL/JPG/DAC/DHT
 /// markers). `None` for anything else.

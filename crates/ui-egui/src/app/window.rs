@@ -1,4 +1,4 @@
-use super::*;
+use super::{PdfCraftApp, QuickTool};
 
 impl PdfCraftApp {
     /// Whether the app draws the window's title bar, buttons and resize edges: the desktop leaves

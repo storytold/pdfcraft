@@ -1,5 +1,5 @@
 use super::carry::{Mark, add_outline, collect_attachments, kept_bookmarks, set_attachments, source_outline, write_outline_level};
-use super::*;
+use super::{Dict, Document, FieldConflicts, HashMap, ObjRef, Object, OrganizeError, import_pages_mapped, rebuild};
 
 /// A new document containing copies of `pages` from `src` (Extract Pages / Split).
 /// Document information (title, author…) is carried over, and so is the print standard the

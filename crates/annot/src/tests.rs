@@ -229,6 +229,34 @@ fn delete_takes_popup_and_reply_chain() {
     assert_eq!(delete_annotation(&mut doc, 0, 9), Err(AnnotError::NoSuchAnnotation { page: 0, index: 9 }));
 }
 
+/// A locked reply can't be deleted, so it doesn't go with what it answers either: deleting the
+/// reply above it, or the comment, is refused and changes nothing; once it is unlocked they go.
+#[test]
+fn a_locked_reply_keeps_what_it_answers() {
+    let mut doc = fixture();
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [100.0, 100.0], icon: NoteIcon::Comment }), &meta("n")).unwrap();
+    let reply = add_reply(&mut doc, 0, note, "first", "Bob", &meta("r1")).unwrap();
+    let answer = add_reply(&mut doc, 0, reply, "locked answer", "Ada", &meta("r2")).unwrap();
+    set_locked(&mut doc, 0, answer, true).unwrap();
+    let before = list(&doc, 0).len();
+    assert_eq!(delete_annotation(&mut doc, 0, reply), Err(AnnotError::Invalid("a reply to it is locked".into())));
+    assert_eq!(delete_annotation(&mut doc, 0, note), Err(AnnotError::Invalid("a reply to it is locked".into())));
+    assert_eq!(list(&doc, 0).len(), before, "nothing went");
+    // Asked first, read-only, as a Delete command does: the same answer, and the answer's own
+    // lock is its own.
+    assert_eq!(deletable(&doc, 0, note), Err(AnnotError::Invalid("a reply to it is locked".into())));
+    assert_eq!(deletable(&doc, 0, answer), Err(AnnotError::Invalid("the comment is locked".into())));
+    // Lifted on a copy, to draw the page beneath, the locks don't count.
+    let mut copy = doc.clone();
+    lift_annotation(&mut copy, 0, note).unwrap();
+    assert!(list(&copy, 0).len() < before, "the thread is lifted off the copy");
+    set_locked(&mut doc, 0, answer, false).unwrap();
+    assert_eq!(deletable(&doc, 0, reply), Ok(()));
+    delete_annotation(&mut doc, 0, reply).unwrap();
+    let left: Vec<String> = list(&doc, 0).iter().map(|d| text(d, b"Contents")).collect();
+    assert!(!left.iter().any(|t| t == "first" || t == "locked answer"), "the reply and its answer went: {left:?}");
+}
+
 /// A reply or pop-up written inline in `/Annots` (a file can, though the standard asks for
 /// references) goes with the comment it points at, and so does a pop-up an inline reply or an
 /// inline comment names. An unrelated inline comment stays until it is deleted itself.
@@ -303,7 +331,7 @@ fn move_shifts_all_geometry_and_the_popup() {
 fn restyle_and_resize_redraw_the_appearance() {
     let mut doc = fixture();
     let r = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [10.0, 10.0, 110.0, 60.0] }), &meta("r")).unwrap();
-    set_style(&mut doc, 0, r, Some([1.0, 0.0, 0.0]), Some(0.5), Some(4.0), None, &meta("")).unwrap();
+    set_style(&mut doc, 0, r, StyleChange::new(Some([1.0, 0.0, 0.0]), Some(0.5), Some(4.0), None), &meta("")).unwrap();
     set_rect(&mut doc, 0, r, [0.0, 0.0, 200.0, 100.0], &meta("")).unwrap();
     let doc2 = reopen(&doc);
     let d = &list(&doc2, 0)[r];
@@ -313,7 +341,10 @@ fn restyle_and_resize_redraw_the_appearance() {
     assert_eq!(d.get(b"CA").and_then(|o| o.as_f64()), Some(0.5));
     // A stamp's appearance can't be regenerated, so restyling it changes nothing.
     let before = list(&doc, 1)[0].clone();
-    assert_eq!(set_style(&mut doc, 1, 0, Some([0.0; 3]), None, None, None, &meta("")), Err(AnnotError::Unsupported("Stamp".into())));
+    assert_eq!(
+        set_style(&mut doc, 1, 0, StyleChange::new(Some([0.0; 3]), None, None, None), &meta("")),
+        Err(AnnotError::Unsupported("Stamp".into()))
+    );
     assert_eq!(list(&doc, 1)[0], before);
     // Lines can't be resized as rectangles.
     let l = add_annotation(
@@ -374,7 +405,7 @@ fn text_box_text_and_colour_changes_are_drawn() {
     let mut doc = fixture();
     let t = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: [0.0, 0.0, 300.0, 100.0], font_size: 12.0 }), &meta("t")).unwrap();
     set_contents(&mut doc, 0, t, "Caf\u{e9} (draft) \u{2014} 100%", &meta("")).unwrap();
-    set_style(&mut doc, 0, t, Some([1.0, 0.0, 0.0]), None, None, None, &meta("")).unwrap();
+    set_style(&mut doc, 0, t, StyleChange::new(Some([1.0, 0.0, 0.0]), None, None, None), &meta("")).unwrap();
     let doc = reopen(&doc);
     let d = &list(&doc, 0)[t];
     assert_eq!(text(d, b"Contents"), "Caf\u{e9} (draft) \u{2014} 100%");
@@ -556,8 +587,8 @@ fn fill_and_sign_items_are_drawn() {
     assert_eq!(text(&all[s], b"Subj"), "Signature");
     // Other stamps still can't be restyled; ours can.
     let mut doc = doc;
-    set_style(&mut doc, 1, marks[0], Some([0.0, 0.0, 1.0]), None, None, None, &meta("")).unwrap();
-    assert!(set_style(&mut doc, 1, 0, Some([0.0; 3]), None, None, None, &meta("")).is_err());
+    set_style(&mut doc, 1, marks[0], StyleChange::new(Some([0.0, 0.0, 1.0]), None, None, None), &meta("")).unwrap();
+    assert!(set_style(&mut doc, 1, 0, StyleChange::new(Some([0.0; 3]), None, None, None), &meta("")).is_err());
 }
 
 #[test]
@@ -844,7 +875,20 @@ fn replace_text_groups_a_strikeout_and_a_caret() {
     let quads = [[100.0, 720.0, 200.0, 720.0, 100.0, 706.0, 200.0, 706.0]];
     let red = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None };
     let blue = Style { color: [0.0, 0.47, 0.84], opacity: 1.0, width: 1.0, fill: None };
-    let i = add_text_replacement(&mut doc, 0, &quads, "new words", "Ada", &red, &blue, &meta("r"), &meta("r-caret")).unwrap();
+    let i = add_text_replacement(
+        &mut doc,
+        TextReplacement {
+            page: 0,
+            quads: &quads,
+            replacement: "new words",
+            author: "Ada",
+            strike: &red,
+            caret: &blue,
+            strike_meta: &meta("r"),
+            caret_meta: &meta("r-caret"),
+        },
+    )
+    .unwrap();
     let doc = reopen(&doc);
     let a = list(&doc, 0);
     let strike = &a[i];
@@ -866,7 +910,22 @@ fn replace_text_groups_a_strikeout_and_a_caret() {
     let mut doc = doc;
     delete_annotation(&mut doc, 0, i).unwrap();
     assert!(!list(&doc, 0).iter().any(|d| d.name(b"Subtype") == Some(b"Caret")));
-    assert!(add_text_replacement(&mut doc, 0, &[], "x", "Ada", &red, &blue, &meta("r"), &meta("r-caret")).is_err());
+    assert!(
+        add_text_replacement(
+            &mut doc,
+            TextReplacement {
+                page: 0,
+                quads: &[],
+                replacement: "x",
+                author: "Ada",
+                strike: &red,
+                caret: &blue,
+                strike_meta: &meta("r"),
+                caret_meta: &meta("r-caret")
+            }
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -1177,7 +1236,7 @@ fn every_line_ending_is_drawn() {
     )
     .unwrap();
     let before = rect(&list(&doc, 0).into_iter().find(|d| d.name(b"Subtype") == Some(b"Line")).expect("line"));
-    set_style(&mut doc, 0, index, None, None, None, Some(&[LineEnding::None, LineEnding::Square]), &meta("style")).unwrap();
+    set_style(&mut doc, 0, index, StyleChange::new(None, None, None, Some(vec![LineEnding::None, LineEnding::Square])), &meta("style")).unwrap();
     let mut doc = reopen(&doc);
     let line = list(&doc, 0).into_iter().find(|d| d.name(b"Subtype") == Some(b"Line")).expect("line");
     let after = rect(&line);
@@ -1245,7 +1304,7 @@ fn redraw_keeps_shared_annotation_appearances_and_drops_stale_alternates() {
         let other_dict = list(&doc, 0)[other].clone();
         let source = other_dict.get(b"AP").unwrap();
         let before = doc.resolve(source);
-        set_style(&mut doc, 0, first, Some([1.0, 0.0, 0.0]), None, None, None, &meta("")).unwrap();
+        set_style(&mut doc, 0, first, StyleChange::new(Some([1.0, 0.0, 0.0]), None, None, None), &meta("")).unwrap();
         assert_eq!(doc.resolve(source), before, "a shared AP must not change");
         for full in [false, true] {
             let bytes = if full {
@@ -1367,7 +1426,7 @@ fn comment_text_the_standard_fonts_cannot_draw_is_kept_and_marked() {
     .unwrap();
     assert_eq!(mark(&doc, s), Some('张'));
     // Our own `?` appearance is redrawn on a restyle; Western European text clears the mark.
-    set_style(&mut doc, 0, t, Some([1.0, 0.0, 0.0]), None, None, None, &meta("")).unwrap();
+    set_style(&mut doc, 0, t, StyleChange::new(Some([1.0, 0.0, 0.0]), None, None, None), &meta("")).unwrap();
     assert_eq!(mark(&doc, t), Some('签'));
     set_contents(&mut doc, 0, t, "Zürich —\nGenève", &meta("")).unwrap();
     assert_eq!(mark(&doc, t), None);
@@ -1395,7 +1454,7 @@ fn comment_text_the_standard_fonts_cannot_draw_is_kept_and_marked() {
     set_annots(&mut doc, page, on_page).unwrap();
     let k = list(&doc, 0).len() - 1;
     let before = list(&doc, 0)[k].clone();
-    let err = set_style(&mut doc, 0, k, Some([1.0, 0.0, 0.0]), Some(0.4), Some(6.0), None, &meta("")).unwrap_err();
+    let err = set_style(&mut doc, 0, k, StyleChange::new(Some([1.0, 0.0, 0.0]), Some(0.4), Some(6.0), None), &meta("")).unwrap_err();
     assert!(matches!(&err, AnnotError::Undrawable(m) if m.contains("can't redraw") && m.contains("\"欢\" (U+6B22)")), "{err:?}");
     assert_eq!(list(&doc, 0)[k], before, "a refused restyle keeps the colour, opacity, width and appearance");
     let err = set_rect(&mut doc, 0, k, [40.0, 40.0, 180.0, 90.0], &meta("")).unwrap_err();
@@ -1476,7 +1535,7 @@ fn a_comment_listed_many_times_is_drawn_once_for_display() {
 fn text_box_font_size_changes_the_da_and_grows_the_box() {
     let mut doc = fixture();
     let t = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: [100.0, 680.0, 220.0, 692.0], font_size: 12.0 }), &meta("t")).unwrap();
-    set_style(&mut doc, 0, t, Some([1.0, 0.0, 0.0]), None, None, None, &meta("")).unwrap();
+    set_style(&mut doc, 0, t, StyleChange::new(Some([1.0, 0.0, 0.0]), None, None, None), &meta("")).unwrap();
     set_contents(&mut doc, 0, t, "one two three four five six seven eight nine ten eleven twelve", &meta("")).unwrap();
     let height = |doc: &Document| {
         let rect: Vec<f64> = list(doc, 0)[t].get(b"Rect").unwrap().as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
@@ -1522,7 +1581,7 @@ fn text_boxes_and_callouts_can_change_fill_and_border() {
         let index = add_annotation(&mut doc, &new(0, shape), &meta("test")).unwrap();
         assert!(props(&doc, 0, index).unwrap().fillable);
         set_fill(&mut doc, 0, index, Some([1.0, 1.0, 1.0]), &meta("test")).unwrap();
-        set_style(&mut doc, 0, index, None, None, Some(3.0), None, &meta("test")).unwrap();
+        set_style(&mut doc, 0, index, StyleChange::new(None, None, Some(3.0), None), &meta("test")).unwrap();
         let saved = reopen(&doc);
         let properties = props(&saved, 0, index).unwrap();
         assert_eq!(properties.fill, Some([1.0; 3]));
@@ -1791,7 +1850,7 @@ fn a_star_note_keeps_its_star_when_recoloured() {
         b"<< /Type /Annot /Subtype /Text /Rect [100 100 120 120] /Name /Star /C [1 0.82 0] /F 4 >>",
     ]);
     assert_eq!(props(&doc, 0, 0).and_then(|p| p.icon), Some(NoteIcon::Star));
-    set_style(&mut doc, 0, 0, Some([0.0, 0.0, 1.0]), None, None, None, &meta("")).unwrap();
+    set_style(&mut doc, 0, 0, StyleChange::new(Some([0.0, 0.0, 1.0]), None, None, None), &meta("")).unwrap();
     let doc = reopen(&doc);
     let d = &list(&doc, 0)[0];
     assert_eq!(d.name(b"Name"), Some(&b"Star"[..]));
@@ -2134,4 +2193,60 @@ fn degenerate_and_absurd_leader_and_caption_values_do_not_panic() {
     ));
     assert!(long.contains(&format!("({}) Tj", "w".repeat(256))), "cut to 256");
     assert!(!long.contains(&"w".repeat(257)));
+}
+
+#[test]
+fn freehand_highlight_is_compatible_ink_with_marker_blending() {
+    let shape = Shape::FreehandHighlight { strokes: vec![vec![[20.0, 100.0], [120.0, 100.0]]] };
+    let mut annotation = new(0, shape.clone());
+    annotation.style = Style::default_for(&shape);
+    let mut doc = fixture();
+    let index = add_annotation(&mut doc, &annotation, &meta("marker")).unwrap();
+    let doc = reopen(&doc);
+    let ink = &list(&doc, 0)[index];
+
+    assert_eq!(ink.name(b"Subtype"), Some(&b"Ink"[..]));
+    assert_eq!(ink.name(b"IT"), Some(&b"FreehandHighlight"[..]));
+    assert_eq!(ink.get(b"CA").and_then(Object::as_f64), Some(0.35));
+    let ap = ink.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+    let resources = doc.get(ap).as_dict().unwrap().get(b"Resources").cloned().unwrap();
+    let blend = resources.as_dict().unwrap().get(b"ExtGState").unwrap().as_dict().unwrap().get(b"GS0").unwrap().as_dict().unwrap();
+    assert_eq!(blend.name(b"BM"), Some(&b"Multiply"[..]));
+
+    let mut doc = doc;
+    let rect_of = |doc: &Document, idx: usize| -> Vec<f64> {
+        list(doc, 0)[idx].get(b"Rect").unwrap().as_array().unwrap().iter().filter_map(Object::as_f64).collect()
+    };
+    let rect_before = rect_of(&doc, index);
+    set_style(&mut doc, 0, index, StyleChange { color: None, opacity: None, width: Some(34.0), endings: None }, &meta("wider")).unwrap();
+    let rect_after = rect_of(&doc, index);
+    assert!((rect_after[0] - (rect_before[0] - 10.0)).abs() < 1e-4);
+    assert!((rect_after[2] - (rect_before[2] + 10.0)).abs() < 1e-4);
+
+    // Repeated increase/decrease cycles must keep bounds stable and never accumulate padding.
+    set_style(&mut doc, 0, index, StyleChange { color: None, opacity: None, width: Some(14.0), endings: None }, &meta("narrower")).unwrap();
+    let rect_restored = rect_of(&doc, index);
+    for (a, b) in rect_restored.iter().zip(rect_before.iter()) {
+        assert!((a - b).abs() < 1e-4, "expected {rect_before:?}, got {rect_restored:?}");
+    }
+    set_style(&mut doc, 0, index, StyleChange { color: None, opacity: None, width: Some(34.0), endings: None }, &meta("wider-again")).unwrap();
+    let rect_second_wide = rect_of(&doc, index);
+    for (a, b) in rect_second_wide.iter().zip(rect_after.iter()) {
+        assert!((a - b).abs() < 1e-4, "expected {rect_after:?}, got {rect_second_wide:?}");
+    }
+
+    // Imported ink whose width is specified only by `/Border [0 0 20]` must use 20 pt as its
+    // previous width (shrinking by 5 pt on a decrease to 10 pt rather than expanding as if 1 pt).
+    let (_, r) = lookup::annot_ref(&mut doc, 0, index).unwrap();
+    doc.update_dict(r, |d| {
+        d.remove(b"BS");
+        d.set(b"Border".to_vec(), Object::Array(vec![Object::Real(0.0), Object::Real(0.0), Object::Real(20.0)]));
+        d.set(b"Rect".to_vec(), create::num_array(&[5.0, 85.0, 135.0, 115.0]));
+    })
+    .unwrap();
+    set_style(&mut doc, 0, index, StyleChange { color: None, opacity: None, width: Some(10.0), endings: None }, &meta("border-shrink")).unwrap();
+    let rect_from_border = rect_of(&doc, index);
+    for (a, b) in rect_from_border.iter().zip([10.0, 90.0, 130.0, 110.0]) {
+        assert!((a - b).abs() < 1e-4, "expected [10, 90, 130, 110], got {rect_from_border:?}");
+    }
 }

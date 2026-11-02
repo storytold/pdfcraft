@@ -1,5 +1,5 @@
 use super::state::PageCx;
-use super::*;
+use super::{Annotation, DocInfo, PageInfo, PageText, Pos2, QuickTool, Rect, pos2, vec2};
 
 pub(super) fn is_markup(subtype: &str) -> bool {
     matches!(subtype, "Highlight" | "Underline" | "StrikeOut" | "Squiggly")

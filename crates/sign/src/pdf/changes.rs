@@ -1,5 +1,5 @@
 use super::types::{Modification, kind};
-use super::*;
+use super::{Arc, Dict, Document, HashMap, HashSet, ObjRef, Object};
 
 /// What later revisions changed, classified as Acrobat reports it, under DocMDP `p` (or none:
 /// an approval signature permits form fill, comments and further signatures).
@@ -72,6 +72,18 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
     if doc.root() != old.root() {
         disallowed.push(kind::STRUCTURE);
     }
+    let classifier = ChangedObjectClassifier {
+        doc,
+        old: &old,
+        old_content: &old_content,
+        old_metadata,
+        old_xfa_data: &old_xfa_data,
+        signed_pages: &signed_pages,
+        signed_annots: &signed_annots,
+        signed_resources: &signed_resources,
+        old_info,
+        dss: &dss,
+    };
     for num in doc.object_numbers() {
         if same_place(num) {
             continue;
@@ -93,75 +105,7 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
         // graphics state does not make that a form fill. A container (the resources dictionary,
         // a category dictionary) that kept every entry it had and only gained names changes
         // nothing the signed content draws, and is judged as before.
-        let kept_entries = |d: &Dict| before.as_deref().and_then(Object::as_dict).is_some_and(|b| b.iter().all(|(k, v)| d.get(k) == Some(v)));
-        let resource_kind = match (signed_resources.get(&r), &*new) {
-            (Some(false), _) => Some(kind::PAGE_CONTENT),
-            (Some(true), Object::Dict(d)) if kept_entries(d) => None,
-            (Some(true), _) => Some(kind::PAGE_CONTENT),
-            (None, _) => None,
-        };
-        let what = match (resource_kind, &*new) {
-            (Some(k), _) => k,
-            // The Document Security Store's own arrays and dictionaries, when they only grew.
-            (_, _) if dss.contains(&num) => kind::SECURITY_STORE,
-            // A signed page's indirect /Annots array, still an array: what it lost, then what it
-            // gained. Dropping a signed annotation is never hidden behind an added signature.
-            (_, Object::Array(now)) if signed_annots.contains(&r) && before.as_deref().is_some_and(|b| b.as_array().is_some()) => {
-                let was: HashSet<ObjRef> =
-                    before.as_deref().and_then(Object::as_array).map(|a| a.iter().filter_map(Object::as_ref).collect()).unwrap_or_default();
-                let kept: HashSet<ObjRef> = now.iter().filter_map(Object::as_ref).collect();
-                let removed: Vec<ObjRef> = was.iter().filter(|r| !kept.contains(r)).copied().collect();
-                if removed.is_empty() {
-                    let added: Vec<ObjRef> = now.iter().filter_map(Object::as_ref).filter(|r| !was.contains(r)).collect();
-                    added_annots(doc, &added)
-                } else if removed.iter().any(|r| old.get(*r).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Widget"))) {
-                    // A form field or signature widget taken off the page: no permission covers it.
-                    kind::OTHER
-                } else {
-                    // Deleting comments is a comment change (permitted at P 3 only).
-                    kind::COMMENTS
-                }
-            }
-            (_, Object::Dict(d)) => {
-                let was = before.as_deref().and_then(Object::as_dict);
-                if signed_pages.contains(&r) {
-                    // A signed page is always judged by what the page shows, whatever it is now
-                    // relabelled: a rewritten /Contents or /Resources is a page content change.
-                    page_change_kind(doc, &old, d, was)
-                } else if was.is_some() && Some(r) == old_info {
-                    // Only the signed revision's own /Info dictionary is a metadata change.
-                    kind::METADATA
-                } else {
-                    change_kind(doc, &old, d, was)
-                }
-            }
-            (_, Object::Stream(s)) => {
-                // File plumbing is what the stream was when signed: the /Type it has now is
-                // written by whoever changed it, and the renderer ignores /Type (a page's Form
-                // XObject relabelled /ObjStm still draws its new content).
-                let was_plumbing = matches!(before.as_deref(), Some(Object::Stream(b)) if matches!(b.dict.name(b"Type"), Some(b"XRef" | b"ObjStm")));
-                if old_content.contains(&r) {
-                    kind::PAGE_CONTENT
-                } else if before.is_none() || was_plumbing {
-                    continue;
-                } else if s.dict.name(b"Type") == Some(b"Metadata") && Some(r) == old_metadata {
-                    // Only the signed catalog's XMP stream. A /Type /Metadata label on anything
-                    // else, even one it already had when signed (a page's Form XObject: the
-                    // renderer ignores /Type), does not make rewriting it a metadata change.
-                    kind::METADATA
-                } else if old_xfa_data.contains(&r) {
-                    // The form's XFA data (`datasets`) or state (`form`) as the signed revision
-                    // named it: filling an XFA form rewrites these, as a Reader Extensions (UR3)
-                    // save of a certified form does (#2759). The role comes from the signed
-                    // revision, so a later one can't name page content as XFA data.
-                    kind::FORM_FILL
-                } else {
-                    kind::OTHER
-                }
-            }
-            _ if before.is_none() => continue,
-            _ => kind::OTHER,
-        };
+        let Some(what) = classifier.classify(r, &new, before.as_deref()) else { continue };
         let ok = match (what, p) {
             (kind::SIGNATURE | kind::SECURITY_STORE, _) => true,
             (kind::FORM_FILL, Some(2 | 3) | None) => true,
@@ -193,6 +137,102 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
         }
     }
     if disallowed.is_empty() { Modification::Allowed(allowed) } else { Modification::Disallowed(disallowed) }
+}
+
+struct ChangedObjectClassifier<'a> {
+    doc: &'a Document,
+    old: &'a Document,
+    old_content: &'a HashSet<ObjRef>,
+    old_metadata: Option<ObjRef>,
+    old_xfa_data: &'a HashSet<ObjRef>,
+    signed_pages: &'a HashSet<ObjRef>,
+    signed_annots: &'a HashSet<ObjRef>,
+    signed_resources: &'a HashMap<ObjRef, bool>,
+    old_info: Option<ObjRef>,
+    dss: &'a HashSet<u32>,
+}
+
+impl ChangedObjectClassifier<'_> {
+    fn classify(&self, r: ObjRef, new: &Object, before: Option<&Object>) -> Option<&'static str> {
+        if let Some(kind) = self.resource_kind(r, new, before) {
+            return Some(kind);
+        }
+        if self.dss.contains(&r.num) {
+            return Some(kind::SECURITY_STORE);
+        }
+        match new {
+            Object::Array(now) if self.is_signed_annotation_array(r, before) => Some(self.annotation_array_change(now, before)),
+            Object::Dict(dict) => Some(self.dictionary_change(r, dict, before)),
+            Object::Stream(stream) => self.stream_change(r, stream, before),
+            _ if before.is_none() => None,
+            _ => Some(kind::OTHER),
+        }
+    }
+
+    fn resource_kind(&self, r: ObjRef, new: &Object, before: Option<&Object>) -> Option<&'static str> {
+        match (self.signed_resources.get(&r), new) {
+            (Some(false), _) => Some(kind::PAGE_CONTENT),
+            (Some(true), Object::Dict(dict)) if self.keeps_previous_entries(dict, before) => None,
+            (Some(true), _) => Some(kind::PAGE_CONTENT),
+            (None, _) => None,
+        }
+    }
+
+    fn keeps_previous_entries(&self, dict: &Dict, before: Option<&Object>) -> bool {
+        before.and_then(Object::as_dict).is_some_and(|previous| previous.iter().all(|(key, value)| dict.get(key) == Some(value)))
+    }
+
+    fn is_signed_annotation_array(&self, r: ObjRef, before: Option<&Object>) -> bool {
+        self.signed_annots.contains(&r) && before.is_some_and(|object| object.as_array().is_some())
+    }
+
+    fn annotation_array_change(&self, now: &[Object], before: Option<&Object>) -> &'static str {
+        let was: HashSet<ObjRef> =
+            before.and_then(Object::as_array).map(|items| items.iter().filter_map(Object::as_ref).collect()).unwrap_or_default();
+        let kept: HashSet<ObjRef> = now.iter().filter_map(Object::as_ref).collect();
+        let removed: Vec<ObjRef> = was.iter().filter(|reference| !kept.contains(reference)).copied().collect();
+        if removed.is_empty() {
+            let added: Vec<ObjRef> = now.iter().filter_map(Object::as_ref).filter(|reference| !was.contains(reference)).collect();
+            added_annots(self.doc, &added)
+        } else if removed.iter().any(|reference| self.old.get(*reference).as_dict().is_some_and(|dict| dict.name(b"Subtype") == Some(b"Widget"))) {
+            // A form field or signature widget taken off the page: no permission covers it.
+            kind::OTHER
+        } else {
+            // Deleting comments is a comment change (permitted at P 3 only).
+            kind::COMMENTS
+        }
+    }
+
+    fn dictionary_change(&self, r: ObjRef, dict: &Dict, before: Option<&Object>) -> &'static str {
+        let previous = before.and_then(Object::as_dict);
+        if self.signed_pages.contains(&r) {
+            // A signed page is judged by what the page shows, whatever its new labels say.
+            page_change_kind(self.doc, self.old, dict, previous)
+        } else if previous.is_some() && Some(r) == self.old_info {
+            // Only the signed revision's own /Info dictionary is a metadata change.
+            kind::METADATA
+        } else {
+            change_kind(self.doc, self.old, dict, previous)
+        }
+    }
+
+    fn stream_change(&self, r: ObjRef, stream: &pdfcraft_cos::Stream, before: Option<&Object>) -> Option<&'static str> {
+        // File plumbing is the stream's role when signed; a later /Type label cannot change it.
+        let was_plumbing = matches!(before, Some(Object::Stream(previous)) if matches!(previous.dict.name(b"Type"), Some(b"XRef" | b"ObjStm")));
+        if self.old_content.contains(&r) {
+            Some(kind::PAGE_CONTENT)
+        } else if before.is_none() || was_plumbing {
+            None
+        } else if stream.dict.name(b"Type") == Some(b"Metadata") && Some(r) == self.old_metadata {
+            // Only the signed catalog's XMP stream is metadata.
+            Some(kind::METADATA)
+        } else if self.old_xfa_data.contains(&r) {
+            // Signed XFA data and state packets are changed by a form fill.
+            Some(kind::FORM_FILL)
+        } else {
+            Some(kind::OTHER)
+        }
+    }
 }
 
 /// The streams of `doc`'s XFA form that hold its data and state: the `datasets` and `form`

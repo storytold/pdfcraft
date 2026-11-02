@@ -1,5 +1,5 @@
 use super::values::{FieldDatum, Want, wanted, with_template};
-use super::*;
+use super::{Document, HashMap, MAX_DEPTH, XFA_DATA_NS};
 
 pub(super) fn xml_name(s: &str) -> String {
     let mut out: String = s.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' { c } else { '_' }).collect();

@@ -2,27 +2,85 @@ use super::document::{field_object, get_field, get_nth_field_name, noop, num_fie
 use super::format::{printd, printf, printx, scand};
 use super::host::{arg, function, host, s, text, text_line};
 use super::model::{DISPLAY_HIDDEN, DISPLAY_NO_PRINT, DISPLAY_NO_VIEW, DISPLAY_VISIBLE, Event, Panel, Request};
-use super::*;
+use super::{
+    Attribute, Context, JsArray, JsObject, JsResult, JsString, JsValue, Message, MessageButtons, MessageIcon, NativeFunction, ObjectInitializer,
+    js_string,
+};
 
 // ── app, util, console ──────────────────────────────────────────────────────────────────────
 
 /// A message argument: a string, or an object with `cMsg`, cut to a message's length.
 fn message(v: &JsValue, key: &str, ctx: &mut Context) -> JsResult<String> {
-    match v.as_object() {
-        Some(o) if !o.is_array() && !o.is_callable() => {
+    match named_params(v, key, ctx)? {
+        Some(o) => {
             let m = o.get(JsString::from(key), ctx)?;
             text_line(&m, ctx)
         }
-        _ => text_line(v, ctx),
+        None => text_line(v, ctx),
     }
 }
 
-/// `app.alert(cMsg)`: records the message, given as a string or as an object with `cMsg`, and
-/// returns 1 (the OK button).
+/// `v` as a method's single object of named parameters: an object (not an array or function)
+/// that has `key`, the parameter every such call names. Any other value, a `new String(…)` or a
+/// caught `Error` included, is the first positional argument, read as text.
+fn named_params(v: &JsValue, key: &str, ctx: &mut Context) -> JsResult<Option<JsObject>> {
+    match v.as_object() {
+        Some(o) if !o.is_array() && !o.is_callable() && o.has_property(JsString::from(key), ctx)? => Ok(Some(o.clone())),
+        _ => Ok(None),
+    }
+}
+
+/// A message's title: `v` as text cut to a message's length, `None` when it is missing or empty.
+fn title(v: &JsValue, ctx: &mut Context) -> JsResult<Option<String>> {
+    Ok(Some(text_line(v, ctx)?).filter(|t| !t.is_empty()))
+}
+
+/// An icon or buttons number: `v` as a number, `None` when it is missing or isn't one (a value
+/// that can't be converted counts as missing, so a bad argument never stops the message).
+fn code(v: &JsValue, ctx: &mut Context) -> Option<f64> {
+    if v.is_undefined() || v.is_null() {
+        return None;
+    }
+    v.to_number(ctx).ok()
+}
+
+/// `app.alert`'s message: `(cMsg, nIcon, nType, cTitle)`, or one object with those keys (as
+/// the JavaScript for Acrobat API Reference allows for every method with named parameters).
+pub(crate) fn alert_message(args: &[JsValue], ctx: &mut Context) -> JsResult<Message> {
+    let first = arg(args, 0);
+    let (text, icon, buttons, t) = match named_params(&first, "cMsg", ctx)? {
+        Some(o) => {
+            let get = |k: &str, ctx: &mut Context| o.get(JsString::from(k), ctx);
+            (get("cMsg", ctx)?, get("nIcon", ctx)?, get("nType", ctx)?, get("cTitle", ctx)?)
+        }
+        None => (first, arg(args, 1), arg(args, 2), arg(args, 3)),
+    };
+    Ok(Message {
+        text: text_line(&text, ctx)?,
+        title: title(&t, ctx)?,
+        icon: MessageIcon::from_code(code(&icon, ctx)),
+        buttons: MessageButtons::from_code(code(&buttons, ctx)),
+    })
+}
+
+/// `xfa.host.messageBox`'s message: `(message, title, icon, buttons)`, as the XFA
+/// specification orders them.
+pub(crate) fn message_box_message(args: &[JsValue], ctx: &mut Context) -> JsResult<Message> {
+    Ok(Message {
+        text: text_line(&arg(args, 0), ctx)?,
+        title: title(&arg(args, 1), ctx)?,
+        icon: MessageIcon::from_code(code(&arg(args, 2), ctx)),
+        buttons: MessageButtons::from_code(code(&arg(args, 3), ctx)),
+    })
+}
+
+/// `app.alert(cMsg, nIcon, nType, cTitle)`: records the message with its title, icon and buttons,
+/// given in that order or as one object with those keys, and returns 1 (the OK button).
 fn alert(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    let m = message(&arg(args, 0), "cMsg", ctx)?;
+    let m = alert_message(args, ctx)?;
     host(ctx)?.borrow_mut().alert(m);
-    // The OK button.
+    // Always the OK button for now: the viewer can't ask the user and run the script on with
+    // the answer yet (#4291).
     Ok(JsValue::from(1))
 }
 

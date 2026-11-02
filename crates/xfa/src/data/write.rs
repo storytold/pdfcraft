@@ -2,7 +2,7 @@ use super::build::{MAX_INDEX, build_children, fresh_datasets};
 use super::merge::{Op, Within, merge_all, readable};
 use super::path::path_som;
 use super::values::{FieldDatum, Want, wanted, with_template};
-use super::*;
+use super::{DataOp, DataPath, Dict, Document, Encoding, HashMap, ObjRef, Object, PdfString, Stream, Template, XfaError, encode};
 
 /// What [`write_datasets`] did.
 #[derive(Clone, Debug, Default, PartialEq)]
