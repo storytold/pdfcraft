@@ -1,7 +1,7 @@
 use super::create::{
     add_annotation, base_dict, bounds, callout_attach, ending_draws, ending_pair, finite, grow, ink_bounds, normalize, num_array, rect_for, rgb,
 };
-use super::draw::{draw_appearance, redraw_or_restore, set_appearance};
+use super::draw::{apply_appearance, build_appearance, draw_appearance, redraw_or_restore, set_appearance};
 use super::info::{line_endings_of, text_value};
 use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, page_ref, set_annots};
 use super::types::{
@@ -462,7 +462,7 @@ pub fn set_quads(doc: &mut Document, page: usize, index: usize, quads: &[[f64; 8
     }
     // Read without promotion: even valid geometry must leave an inline entry untouched when
     // its lock or subtype refuses the edit.
-    let d = annots(doc, page_ref(doc, page)?)
+    let mut d = annots(doc, page_ref(doc, page)?)
         .get(index)
         .and_then(|entry| doc.resolve(entry).as_dict().cloned())
         .ok_or(AnnotError::NoSuchAnnotation { page, index })?;
@@ -479,14 +479,17 @@ pub fn set_quads(doc: &mut Document, page: usize, index: usize, quads: &[[f64; 8
     };
     // Derive the bounds from the validated quadrilaterals.
     let rect = rect_for(&Shape::TextMarkup { kind, quads: quads.to_vec() }, &Style::default())?;
+    d.set(b"QuadPoints".to_vec(), num_array(&quads.concat()));
+    d.set(b"Rect".to_vec(), num_array(&rect));
+    touch(&mut d, meta);
+    // Build before promotion: a redraw refusal must not add an object or rewrite /Annots.
+    refuse_foreign_text(doc, &d)?;
+    let stream = build_appearance(doc, &d).ok_or(AnnotError::Unsupported(subtype))?;
     let (_, r) = annot_ref(doc, page, index)?;
-    let before = d;
-    doc.update_dict(r, |d| {
-        d.set(b"QuadPoints".to_vec(), num_array(&quads.concat()));
-        d.set(b"Rect".to_vec(), num_array(&rect));
-        touch(d, meta);
-    })?;
-    redraw_or_restore(doc, r, before)
+    doc.set(r, Object::Dict(d.clone()));
+    // r is now a dictionary, and adding the stream cannot replace an existing object, so
+    // apply_appearance's dictionary update cannot fail after promotion.
+    apply_appearance(doc, r, &d, stream)
 }
 
 /// Scale a drawing's strokes into `rect`. The margin between the strokes and the old `/Rect` (half

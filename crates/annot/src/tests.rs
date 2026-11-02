@@ -501,6 +501,46 @@ fn set_quads_refuses_inline_locked_or_non_markup_annotations_without_promotion()
     assert!(changed.is_empty(), "refusal changed objects or page entries: {changed:?}");
 }
 
+/// A cloudy imported markup cannot be redrawn. Refusal must not promote an inline dictionary,
+/// rewrite either form of /Annots, allocate objects, or replace the existing appearance.
+#[test]
+fn set_quads_redraw_failure_preserves_inline_and_indirect_annotations_byte_for_byte() {
+    let q = [72.0, 712.0, 200.0, 712.0, 72.0, 700.0, 200.0, 700.0];
+    let replacement = [72.0, 700.0, 150.0, 700.0, 72.0, 688.0, 150.0, 688.0];
+    for inline in [true, false] {
+        for indirect_annots in [false, true] {
+            let mut doc = fixture();
+            let h = add_annotation(&mut doc, &new(0, Shape::TextMarkup { kind: Markup::Highlight, quads: vec![q] }), &meta("source")).unwrap();
+            let page = page_refs(&doc).unwrap()[0];
+            let mut dict = list(&doc, 0)[h].clone();
+            dict.set(b"BE".to_vec(), Object::Dict(Dict::from_iter([(b"S".to_vec(), Object::name("C")), (b"I".to_vec(), Object::Int(2))])));
+            assert!(appearance::build(&dict).is_none(), "cloudy highlight appearances are unsupported");
+            let mut entries = annots(&doc, page);
+            entries[h] = if inline { Object::Dict(dict) } else { Object::Ref(doc.add(Object::Dict(dict))) };
+            if indirect_annots {
+                let array = doc.add(Object::Array(entries));
+                doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Ref(array))).unwrap();
+            } else {
+                set_annots(&mut doc, page, entries).unwrap();
+            }
+            let mut doc = reopen(&doc);
+            assert!(!doc.is_modified(), "the imported fixture starts clean");
+            let snapshot = |doc: &Document| {
+                (
+                    write_incremental(doc, &SaveOptions::default()).unwrap(),
+                    format!("{:?}", doc.get(page)),
+                    doc.object_numbers().len(),
+                    ap_content(doc, &list(doc, 0)[h]),
+                    doc.is_modified(),
+                )
+            };
+            let before = snapshot(&doc);
+            assert!(matches!(set_quads(&mut doc, 0, h, &[replacement], &meta("refused")), Err(AnnotError::Unsupported(kind)) if kind == "Highlight"));
+            assert_eq!(snapshot(&doc), before, "inline={inline}, indirect Annots={indirect_annots}");
+        }
+    }
+}
+
 /// #4824: what is refused changes nothing.
 #[test]
 fn set_quads_refuses_other_comments_locked_markup_and_bad_areas() {

@@ -39,7 +39,7 @@ pub(crate) fn draw_appearance(doc: &mut Document, r: ObjRef) -> Result<(), Annot
 
 /// Draw the appearance for an annotation dictionary: the expensive half of [`set_appearance`].
 /// Pure from the dictionary and the objects it points at, so [`AppearanceCache`] can reuse it.
-fn build_appearance(doc: &Document, d: &Dict) -> Option<Stream> {
+pub(crate) fn build_appearance(doc: &Document, d: &Dict) -> Option<Stream> {
     let drawn = resolved_for_drawing(doc, d);
     let mut stream = appearance::build(&drawn)?;
     // Picture-stamp restyling must retain the placement's page-axis correction.
@@ -75,7 +75,7 @@ fn resolved_for_drawing<'a>(doc: &Document, d: &'a Dict) -> std::borrow::Cow<'a,
 }
 
 /// Store a built appearance on the annotation: the cheap half of [`set_appearance`].
-fn apply_appearance(doc: &mut Document, r: ObjRef, d: &Dict, stream: Stream) -> Result<(), AnnotError> {
+pub(crate) fn apply_appearance(doc: &mut Document, r: ObjRef, d: &Dict, stream: Stream) -> Result<(), AnnotError> {
     // Characters the standard fonts can't draw came out as `?`: mark the annotation with the first.
     let missing = appearance::undrawable_text(d).map(|(_, c)| c);
     let ap = doc.add(Object::Stream(stream));
