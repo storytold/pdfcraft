@@ -380,7 +380,7 @@ fn partial_tj_cell_cover_is_not_diluted_by_another_cell() {
     let text = "BT /F1 11 Tf 72 742 Td [(123456789) -8000 (A much longer neighbouring table cell)] TJ ET\n";
     let doc = open(one_page(text.as_bytes(), ""));
     let lines = pdfcraft_edit::text_lines(&doc, 0).expect("extract synthetic cells");
-    assert_eq!(lines.len(), 2, "fixture must split into two TJ cells");
+    assert_eq!(lines.len(), 2, "fixture must split into two TJ cells: {lines:?}");
     let cell = lines.first().expect("first cell").rect;
     for fraction in [0.35, 0.45] {
         let width = (cell[2] - cell[0]) * fraction;
