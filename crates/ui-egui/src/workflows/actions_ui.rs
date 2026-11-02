@@ -193,10 +193,14 @@ impl PdfCraftApp {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            // The open document stands in for a file picker.
-            if let Some(doc) = self.active_ids().and_then(|(_, id)| self.session.get(id)) {
-                let files = vec![(doc.name.clone(), doc.bytes.to_vec())];
-                self.run_action_on(action, files);
+            // The open document stands in for a file picker. Its file, not `bytes`: a
+            // certificate-protected document's `bytes` are a decrypted copy, which must not be
+            // run on and downloaded in clear (the file itself is refused, as on the desktop).
+            let Some(doc) = self.active_ids().and_then(|(_, id)| self.session.get(id)) else { return };
+            let name = doc.name.clone();
+            match doc.file_bytes() {
+                Ok(bytes) => self.run_action_on(action, vec![(name, bytes.to_vec())]),
+                Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e.to_string())]),
             }
         }
     }

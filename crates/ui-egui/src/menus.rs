@@ -131,7 +131,7 @@ const FILE: &[&str] = &[
 ];
 const CREATE: &[&str] = &["create.file", "create.multiple", "create.multiple_separate", "create.images", "create.clipboard"];
 const EXPORT: &[&str] = &["export.docx", "export.pptx", "export.rtf", "export.html", "export.text", SEP, "export.image", "export.all_images"];
-const PROTECT: &[&str] = &["protect.password", "protect.remove", "protect.unlock", SEP, "protect.properties"];
+const PROTECT: &[&str] = &["protect.password", "protect.certificate", "protect.remove", "protect.unlock", SEP, "protect.properties"];
 const EDIT: &[&str] = &[
     "edit.undo",
     "edit.redo",
