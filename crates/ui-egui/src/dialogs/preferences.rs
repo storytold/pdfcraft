@@ -171,6 +171,20 @@ pub fn preference_card<R>(
         .inner
 }
 
+/// Folds a character for case-insensitive search, folding dotted/dotless i variants
+/// ('I', 'i', 'İ', 'ı') to 'i', Greek sigmas to 'σ', and otherwise following `char::to_lowercase`.
+fn fold_search_char(c: char, mut f: impl FnMut(char)) {
+    match c {
+        'I' | 'i' | '\u{130}' | '\u{131}' => f('i'),
+        'Σ' | 'σ' | 'ς' => f('σ'),
+        _ => {
+            for lc in c.to_lowercase() {
+                f(lc);
+            }
+        }
+    }
+}
+
 /// Finds non-overlapping (start_byte, end_byte) slices in `text` matching `query` case-insensitively.
 /// All byte indices are guaranteed to align to valid char boundaries.
 pub fn find_match_ranges(text: &str, query: &str) -> Vec<(usize, usize)> {
@@ -178,7 +192,10 @@ pub fn find_match_ranges(text: &str, query: &str) -> Vec<(usize, usize)> {
     if q.is_empty() {
         return Vec::new();
     }
-    let q_chars: Vec<char> = q.chars().flat_map(char::to_lowercase).collect();
+    let mut q_chars = Vec::new();
+    for c in q.chars() {
+        fold_search_char(c, |ch| q_chars.push(ch));
+    }
     if q_chars.is_empty() {
         return Vec::new();
     }
@@ -196,20 +213,19 @@ pub fn find_match_ranges(text: &str, query: &str) -> Vec<(usize, usize)> {
                 break;
             }
             let c = char_indices.get(i + text_char_count).map(|(_, ch)| *ch).unwrap_or('\0');
-            let mut c_matched = false;
-            for lc in c.to_lowercase() {
-                if q_idx < q_chars.len() && lc == q_chars.get(q_idx).copied().unwrap_or('\0') {
-                    q_idx += 1;
-                    c_matched = true;
-                } else {
-                    c_matched = false;
-                    break;
+            let mut c_folded = ['\0'; 4];
+            let mut len = 0;
+            fold_search_char(c, |lc| {
+                if len < c_folded.len() {
+                    c_folded[len] = lc;
+                    len += 1;
                 }
-            }
-            if !c_matched {
+            });
+            if len == 0 || q_idx + len > q_chars.len() || q_chars.get(q_idx..q_idx + len) != Some(&c_folded[..len]) {
                 matched = false;
                 break;
             }
+            q_idx += len;
             text_char_count += 1;
         }
 
@@ -985,5 +1001,26 @@ mod tests {
 
         let ranges4 = find_match_ranges(text, "");
         assert!(ranges4.is_empty());
+    }
+
+    #[test]
+    fn test_find_match_ranges_turkish_i() {
+        let text = "Doldur ve İmzala";
+        let ranges = find_match_ranges(text, "imzala");
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(text.get(ranges[0].0..ranges[0].1), Some("İmzala"));
+
+        let ranges2 = find_match_ranges(text, "İMZALA");
+        assert_eq!(ranges2.len(), 1);
+        assert_eq!(text.get(ranges2[0].0..ranges2[0].1), Some("İmzala"));
+
+        let text2 = "Doldur ve imzala";
+        let ranges3 = find_match_ranges(text2, "İmzala");
+        assert_eq!(ranges3.len(), 1);
+        assert_eq!(text2.get(ranges3[0].0..ranges3[0].1), Some("imzala"));
+
+        let ranges4 = find_match_ranges(text, "ımzala");
+        assert_eq!(ranges4.len(), 1);
+        assert_eq!(text.get(ranges4[0].0..ranges4[0].1), Some("İmzala"));
     }
 }
