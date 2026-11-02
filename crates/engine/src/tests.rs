@@ -6638,6 +6638,8 @@ fn xfa_resets_in_a_row_reset_every_named_subform_and_nothing_else() {
         r#"<event activity="initialize"><script contentType="application/x-javascript">{resets} keep.rawValue = "kept";</script></event></field>"#
     ));
     body.push_str(r#"<field name="keep" w="3in" h="0.3in"><ui><textEdit/></ui></field>"#);
+    // A field no script touches: the resets must leave what was typed in it.
+    body.push_str(r#"<field name="other" w="3in" h="0.3in"><ui><textEdit/></ui><value><text>default</text></value></field>"#);
     for n in 0..sections {
         body.push_str(&format!(
             r#"<subform name="extra{n}" layout="tb"><field name="note" w="3in" h="0.3in"><ui><textEdit/></ui><value><text>default</text></value></field></subform>"#
@@ -6653,7 +6655,7 @@ fn xfa_resets_in_a_row_reset_every_named_subform_and_nothing_else() {
  {body}
 </subform>
 </template>
-<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><keep>typed</keep>{notes}</form></xfa:data></xfa:datasets>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><keep>typed</keep><other>typed other</other>{notes}</form></xfa:data></xfa:datasets>
 </xdp:xdp>
 "#
     );
@@ -6673,6 +6675,8 @@ fn xfa_resets_in_a_row_reset_every_named_subform_and_nothing_else() {
     assert!(notes.iter().all(|v| v == &vec!["default".to_string()]), "every section is reset: {notes:?}");
     let keep = form.iter().find(|f| f.name.contains("keep")).map(|f| f.value.clone());
     assert_eq!(keep, Some(vec!["kept".to_string()]), "the script's later write stands");
+    let other = form.iter().find(|f| f.name.contains("other")).map(|f| f.value.clone());
+    assert_eq!(other, Some(vec!["typed other".to_string()]), "a field outside the named subforms keeps its value");
 }
 
 /// The scripts of one event share the form as the engine holds it: a failed script's
