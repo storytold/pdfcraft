@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (M7 #5763 wrapped-row review: continuations retain their logical source row inset and metrics; later source rows shift by the accumulated wrap leading; estimates unchanged)
+
 > **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (M7 #5763 review: position horizontal turned editors with the measured wrapped height so rows and caret remain visible near the page bottom; estimates unchanged)
 
 > **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (M7 #5763 review: unchanged turned text wraps within its horizontal field without a PDF edit and hides the source before typing; estimates unchanged)
@@ -224,6 +226,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-02 (M7, #5763 wrapped-row review):** Map horizontal editor rows to logical source rows, keeping wrapped continuations at the source inset and shifting later source baselines by the accumulated leading. A turned two-row paragraph with different indents and a wrapping first row checks order, spacing, field bounds and byte-identical unchanged Apply; regression fails on d579a9f4. Unwrapped upright geometry is unchanged. Estimates unchanged.
 
 - **2026-11-02 (M7, #5763 wrapped-field review):** Measure the draft before placing its horizontal turned editor, using the same context font view as TextEdit. Clamp with the measured height (capped to the visible page) so wrapped rows, caret, frame and cover move up together immediately. Real-input 90/180 degree bottom-edge regressions fail on c94424c3 and check the first painted frame, geometry/height agreement, unchanged data and no undo entry. Estimates unchanged.
 
@@ -757,6 +761,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | patch | M7 #5763 wrapped-row review: continuations retain their logical source row inset and metrics; later source rows shift by the accumulated wrap leading; estimates unchanged. |
 | 2026-11-02 | patch | M7 #5763 review: position horizontal turned editors with the measured wrapped height so rows and caret remain visible near the page bottom; estimates unchanged. |
 | 2026-11-02 | patch | M7 #5763 review: unchanged turned text wraps within its horizontal field without a PDF edit and hides the source before typing; estimates unchanged. |
 | 2026-11-02 | patch | M7 #5763: turned text uses a readable horizontal editor with baseline-space width, spacing and caret metrics; saved rotation was already correct and remains unchanged; no rotated in-place widget; estimates unchanged. |

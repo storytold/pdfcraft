@@ -244,18 +244,16 @@ pub(super) fn editor_galley(ctx: &egui::Context, ed: &LineEditor, text: &str, sc
     let mut line = 0usize;
     for (index, placed) in g.rows.iter_mut().enumerate() {
         let own = ed.look.aligns.get(line).copied().flatten();
-        if placed.ends_with_newline {
-            line = line.saturating_add(1);
-        }
         let (last_baseline, last_rect) = sources.last().copied().unwrap_or((first_baseline, first_rect));
-        let (baseline, source_rect) = sources
-            .get(index)
-            .copied()
-            .unwrap_or((last_baseline - index.saturating_add(1).saturating_sub(sources.len()) as f64 * leading, last_rect));
+        let (baseline, source_rect) =
+            sources.get(line).copied().unwrap_or((last_baseline - line.saturating_add(1).saturating_sub(sources.len()) as f64 * leading, last_rect));
+        // Soft wraps share their logical source row's metrics and inset. Every continuation
+        // adds one leading interval, also shifting all subsequent logical rows down.
+        let baseline = baseline - index.saturating_sub(line) as f64 * leading;
         let changed_size = ed.look.size != ed.look0.size;
         let ratio = if changed_size { ed.look.size / ed.look0.size.max(0.01) } else { 1.0 };
-        let ascent = (source_rect[3] - sources.get(index).map_or(last_baseline, |s| s.0)) as f32 * scale * ratio as f32;
-        let descent = (sources.get(index).map_or(last_baseline, |s| s.0) - source_rect[1]) as f32 * scale * ratio as f32;
+        let ascent = (source_rect[3] - sources.get(line).map_or(last_baseline, |s| s.0)) as f32 * scale * ratio as f32;
+        let descent = (sources.get(line).map_or(last_baseline, |s| s.0) - source_rect[1]) as f32 * scale * ratio as f32;
         let base_y = (block_rect[3] - baseline) as f32 * scale;
         let row = Arc::make_mut(&mut placed.row);
         placed.pos.y = base_y - ascent;
@@ -283,6 +281,9 @@ pub(super) fn editor_galley(ctx: &egui::Context, ed: &LineEditor, text: &str, sc
         row.visuals.mesh_bounds = row.visuals.mesh.vertices.iter().fold(Rect::NOTHING, |r, v| r.union(Rect::from_min_max(v.pos, v.pos)));
         bounds = bounds.union(Rect::from_min_size(placed.pos, row.size));
         meshes = meshes.union(row.visuals.mesh_bounds.translate(placed.pos.to_vec2()));
+        if placed.ends_with_newline {
+            line = line.saturating_add(1);
+        }
     }
     g.rect = Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(bounds.right().max(0.0), bounds.bottom().max(0.0)));
     g.mesh_bounds = meshes;

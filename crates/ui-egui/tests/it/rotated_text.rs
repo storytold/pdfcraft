@@ -311,3 +311,66 @@ fn unchanged_turned_text_hides_its_source_before_any_typing() {
 
 #[path = "rotated_text_bottom.rs"]
 mod bottom;
+
+#[test]
+fn wrapped_first_turned_row_keeps_source_indent_and_shifts_the_second_row() {
+    let shots = std::env::var_os("PDFCRAFT_ROTATED_TEXT_SHOTS").is_some();
+    let _gpu = shots.then(crate::gpu);
+    use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream, write_incremental};
+    let first = "Margin label ".repeat(9);
+    let text = format!("{first}\nSecond row");
+    let mut source = Document::open(std::sync::Arc::new(fixture(90, 100.0, false))).unwrap();
+    source
+        .update_dict(ObjRef::new(2, 0), |d| d.set(b"MediaBox".to_vec(), Object::Array(vec![0, 0, 300, 800].into_iter().map(Object::Int).collect())))
+        .unwrap();
+    source.set(
+        ObjRef::new(5, 0),
+        Object::Stream(Stream::from_raw(
+            Dict::new(),
+            format!("BT /F1 14 Tf 0 1 -1 0 100 60 Tm ({first}) Tj 12 -20 Td (Second row) Tj ET").into_bytes(),
+        )),
+    );
+    let bytes = write_incremental(&source, &Default::default()).unwrap();
+    let mut h = open_fixture_editor(bytes.clone(), "200");
+    let doc_id = h.state().views[0].id;
+    let doc = h.state().session.get(doc_id).unwrap();
+    assert_eq!(doc.text_blocks(0)[0].rows.len(), 2);
+    let scale = h.state().views[0].page_screen_rect(0).unwrap().width() / doc.info.pages[0].width;
+    let field = h.get_by_label("Text editing line").rect();
+    let shape = h
+        .output()
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.text() == text => Some(t),
+            _ => None,
+        })
+        .unwrap();
+    let rows = &shape.galley.rows;
+    assert!(rows.len() > 2, "first logical row must wrap");
+    let second = rows.iter().position(|r| r.glyphs.iter().map(|g| g.chr).collect::<String>() == "Second row").unwrap();
+    assert_eq!(second, rows.len() - 1, "second source row remains last");
+    assert_eq!(rows[..second].iter().flat_map(|r| r.glyphs.iter().map(|g| g.chr)).collect::<String>().trim_end_matches('\n'), first);
+    let baseline = |i: usize| rows[i].pos.y + rows[i].glyphs[0].pos.y;
+    for i in 1..rows.len() {
+        assert!((baseline(i) - baseline(i - 1) - 20.0 * scale).abs() < 1.5, "each continuation shifts later baselines by source leading");
+        assert!(rows[i].pos.y >= rows[i - 1].pos.y + rows[i - 1].size.y, "reading order never overlaps");
+    }
+    for row in &rows[..second] {
+        assert!((row.pos.x - rows[0].pos.x).abs() < 0.1, "continuations retain the first source inset");
+    }
+    assert!((rows[second].pos.x - rows[0].pos.x - 12.0 * scale).abs() < 1.0, "second source keeps its own inset");
+    for row in rows {
+        let rect = egui::Rect::from_min_size(shape.pos + row.pos.to_vec2(), row.size);
+        assert!(field.expand(1.0).contains_rect(rect), "every row stays inside the field: {rect:?} vs {field:?}");
+    }
+    if shots {
+        h.render().unwrap().save("/tmp/5771-wrapped-two-rows.png").unwrap();
+    }
+    assert!(!h.state().views[0].line_editor.as_ref().unwrap().has_unsaved_text());
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().views[0].line_editor.is_none());
+    assert!(h.state().session.get(doc_id).unwrap().can_undo().is_none());
+    assert_eq!(h.state().session.save_bytes(doc_id).unwrap().as_slice(), bytes.as_slice());
+}
