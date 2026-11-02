@@ -6214,16 +6214,17 @@ fn group_selection_refuses_incomplete_content_and_resource_budget_overruns() {
 }
 
 /// Invisible text moves on top only when something painted after it covers it: an XObject drawn
-/// over its box, or any inline image or shading.
+/// over its box (an image, or a form holding one), or any inline image or shading. An image
+/// clipped away entirely, or drawn elsewhere, does not move it.
 #[test]
 fn revealed_text_moves_on_top_only_when_painted_over() {
-    let on_top = |content: &str| {
-        let doc = image_page_with(content);
+    let on_top_of = |doc: Document| {
         let block = text::text_blocks(&doc, 0).unwrap().remove(0);
         let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
         let at = ops.iter().position(|o| o.is("BT")).unwrap();
         revealed_under_paint(&doc, 0, block.invisible, block.rect, &ops, at)
     };
+    let on_top = |content: &str| on_top_of(image_page_with(content));
     let scan = "q 200 0 0 100 100 100 cm /Im0 Do Q";
     assert!(on_top(&format!("BT /F1 12 Tf 3 Tr 110 150 Td (Under) Tj ET {scan}")), "the scan covers it");
     assert!(!on_top(&format!("BT /F1 12 Tf 3 Tr 400 600 Td (Away) Tj ET {scan}")), "an image elsewhere");
@@ -6232,6 +6233,29 @@ fn revealed_text_moves_on_top_only_when_painted_over() {
     assert!(!on_top("BT /F1 12 Tf 3 Tr 110 150 Td (Path) Tj ET 0 0 600 800 re f"), "a filled path does not move it");
     assert!(on_top("BT /F1 12 Tf 3 Tr 400 600 Td (Shade) Tj ET /Sh sh"), "a shading after it");
     assert!(on_top("BT /F1 12 Tf 3 Tr 400 600 Td (Inline) Tj ET BI /W 1 /H 1 /CS /G /BPC 8 ID x EI"), "an inline image after it");
+    let under = "BT /F1 12 Tf 3 Tr 110 150 Td (Under) Tj ET";
+    let elsewhere = "q 50 0 0 50 400 600 cm /Im0 Do Q";
+    assert!(!on_top(&format!("{under} q 0 0 10 10 re W n {scan} Q")), "the scan is clipped away entirely");
+    assert!(on_top(&format!("{under} {elsewhere} {scan}")), "two images, the second over it");
+    assert!(on_top(&format!("{under} {scan} {elsewhere}")), "two images, the first over it");
+    assert!(!on_top(&format!("{under} {elsewhere} {elsewhere}")), "two images, neither over it");
+    let in_form = |content: &str| {
+        let page = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Fm0 7 0 R >> >> >>";
+        let image = stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", "A");
+        let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /XObject << /Im0 6 0 R >> >>", "/Im0 Do");
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            page.into(),
+            stream("", content),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+            image,
+            form,
+        ];
+        on_top_of(build(&objs.iter().map(String::as_str).collect::<Vec<_>>()))
+    };
+    assert!(in_form(&format!("{under} q 200 0 0 100 100 100 cm /Fm0 Do Q")), "a form holding the scan, over it");
+    assert!(!in_form(&format!("{under} q 50 0 0 50 400 600 cm /Fm0 Do Q")), "a form holding an image elsewhere");
 }
 
 /// Revealed OCR text is checked where the rewrite lands, not only where it was: an image drawn
