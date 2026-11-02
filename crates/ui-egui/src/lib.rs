@@ -421,6 +421,10 @@ pub struct PdfCraftApp {
     pub password_prompt: Option<PasswordPrompt>,
     /// Copy of a whole document's text (#2639) whose pages are being read off the UI thread.
     document_copy: Option<DocumentCopy>,
+    /// Files the Print verb couldn't print unattended (`--print-file`, #1695), in the order asked,
+    /// with the document once it is open (also after its password is entered): each gets its
+    /// Print dialog in turn (`open_queued_print`).
+    pub(crate) print_requests: Vec<(String, Option<DocId>)>,
     pub unlock_prompt: Option<UnlockPrompt>,
     pub full_screen: bool,
     /// Files delivered asynchronously (web drag-and-drop, web file picker).

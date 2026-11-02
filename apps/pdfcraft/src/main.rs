@@ -4,6 +4,8 @@
 //! `--two-paged` opens each command-line PDF in noncontinuous two-page view, without changing defaults.
 //! An explicit `--layout` takes precedence for the active document, regardless of argument order.
 //! `--create-images [images…]` stages the images in one PDF and asks for the page DPI.
+//! `--print files…` prints each file on the default printer without a window (File Explorer's
+//! Print verb); one that can't be printed that way opens with the Print dialog (`print_verb`).
 //!
 //! View options (applied after the files open; also the seed of the UI control channel):
 //! `--page N  --zoom 150  --layout single|continuous|two-up|two-page  --continuous on|off  --panel comments|bookmarks|pages|fields|layers|attachments|none
@@ -39,6 +41,7 @@ mod decorations;
 mod logging;
 #[cfg(target_os = "windows")]
 mod motion;
+mod print_verb;
 mod reopen;
 mod settings;
 mod single_instance;
@@ -231,7 +234,7 @@ fn main() -> eframe::Result {
     }
     startup.files = rejoin_split_paths(startup.files, |p| std::path::Path::new(p).is_file());
     let may_hand_off = startup.may_hand_off();
-    let startup::Arguments { files, options, control_file, create_images, two_paged, .. } = startup;
+    let startup::Arguments { files, mut options, control_file, create_images, two_paged, print, .. } = startup;
     let integrated = cfg!(target_os = "macos");
     // GNOME on Wayland leaves the window frame to the app (src/decorations.rs).
     let window_controls = if cfg!(any(target_os = "macos", target_os = "windows")) { None } else { decorations::app_drawn() };
@@ -242,12 +245,28 @@ fn main() -> eframe::Result {
     if let (Some(logger), Some(dir)) =
         (logger, pdfcraft_ui_egui::portable::data_dir().map(std::path::Path::to_path_buf).or_else(|| eframe::storage_dir("PdfCraft")))
     {
-        match logger.attach_dir(&dir.join("logs")) {
+        // The Print verb runs once per selected file, all at once: add to the log, don't rotate.
+        let attached = if print { logger.append_dir(&dir.join("logs")) } else { logger.attach_dir(&dir.join("logs")) };
+        match attached {
             Ok(path) => log::info!("PdfCraft {}, log file {}", pdfcraft_engine::build_info::version(), path.display()),
             // Standard error only by now (`attach_dir` gave up on the file); unlike `eprintln!`, never panics.
             Err(e) => log::warn!("no log file: {e}"),
         }
     }
+    // File Explorer's Print verb (#1695): print without a window, and open only the files that
+    // couldn't be printed that way, with the Print dialog. When every file printed, no window.
+    let files = if print && !files.is_empty() {
+        let leftover = print_verb::run(&files);
+        if leftover.is_empty() {
+            return Ok(());
+        }
+        // Each file gets its own Print dialog once it is open (a file that asks for a password
+        // too, after it is entered), one after another.
+        options.extend(single_instance::absolute(&leftover).into_iter().map(|f| ("print-file".to_string(), f)));
+        leftover
+    } else {
+        files
+    };
     // Windows, Linux and the BSDs: a launch that only names files (an Outlook attachment, an
     // Explorer double-click, a file manager or `xdg-open`) hands them to the PdfCraft already
     // running and exits (#282, #317, #1726). Any option means the caller wants this launch's own

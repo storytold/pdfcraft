@@ -4221,6 +4221,7 @@ dependencies = [
  "pollster 1.0.1",
  "raw-window-handle",
  "serde_json",
+ "tempfile",
  "uds_windows",
  "wayland-client",
  "wayland-protocols",
