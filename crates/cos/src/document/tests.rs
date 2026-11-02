@@ -1736,6 +1736,17 @@ fn unreadable_objects_are_listed_with_the_reason() {
     assert!(sound.unreadable_objects().is_empty());
 }
 
+/// A file rebuilt from its object headers still lists an object the scan could not read.
+#[test]
+fn a_rebuilt_file_lists_the_objects_its_scan_could_not_read() {
+    let text = "%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n3 0 obj\n<< /A ) >>\nendobj\n%%EOF\n";
+    let doc = Document::open(Arc::new(text.as_bytes().to_vec())).unwrap();
+    assert!(doc.repair_log().iter().any(|l| l.starts_with("rebuilt cross-reference index")), "{:?}", doc.repair_log());
+    let lines = doc.unreadable_objects();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].starts_with("object 3 0 could not be read: syntax error"), "{lines:?}");
+}
+
 /// The list keeps at most 100 objects and then says there were more; an object whose
 /// cross-reference offset holds no object is listed with that as its reason.
 #[test]

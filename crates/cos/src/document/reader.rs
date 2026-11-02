@@ -651,8 +651,9 @@ impl Document {
         }
         let object_count = entries.len();
         self.entries = Arc::new(XrefIndex::Materialized(Arc::new(entries)));
+        // Failures from the scan stand: the members added change no scanned entry, and a
+        // `/Length` found only now cannot make a stream unreadable.
         self.cache.lock().map_err(|_| CosError::Poisoned)?.clear();
-        *self.unreadable.lock().map_err(|_| CosError::Poisoned)? = Unreadable::default();
         // Trailer: the last `trailer` dictionary or cross-reference stream dictionary with a
         // usable /Root (last in the file, whichever kind), else the catalog itself. One whose
         // /Root is a catalog (as `root_is_catalog` judges it) beats one whose /Root is another
