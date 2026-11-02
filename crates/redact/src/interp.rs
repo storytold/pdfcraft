@@ -8,7 +8,8 @@
 //!   `TJ` displacement of the same width so the remaining text stays exactly where it was;
 //! - images: fully covered → the `Do` is removed; partly covered → the covered pixels are
 //!   cleared in a copy of the image (or the image is removed when its codec can't be re-encoded);
-//!   inline images under a region are removed;
+//!   inline images under a region are removed; an image is measured by the part the current clip
+//!   shows, so a cropped image whose hidden part alone reaches a region is left alone;
 //! - vectors: fully covered paths are removed; partly covered ones are clipped so nothing shows
 //!   inside the regions; shadings are clipped the same way;
 //! - form XObjects under a region are rewritten recursively into new objects (copy-on-write, so
@@ -68,6 +69,16 @@ struct Gs {
     scale: f64,
     leading: f64,
     rise: f64,
+    /// The bounding box, in page space, of the clipping paths in force that the output keeps
+    /// (`None`: no clip). An image is measured by the part of it this leaves visible.
+    clip: Option<[f64; 4]>,
+}
+
+/// The part of `b` that `clip` leaves visible; `None` when none of it is.
+fn visible(b: [f64; 4], clip: Option<[f64; 4]>) -> Option<[f64; 4]> {
+    let Some(c) = clip else { return Some(b) };
+    let v = [b[0].max(c[0]), b[1].max(c[1]), b[2].min(c[2]), b[3].min(c[3])];
+    (v[0] <= v[2] && v[1] <= v[3]).then_some(v)
 }
 
 /// What processing a scope produced.
@@ -235,6 +246,7 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
         scale: 1.0,
         leading: 0.0,
         rise: 0.0,
+        clip: None,
     };
     process_from(doc, scope, streams, resources, gs)
 }
@@ -373,10 +385,9 @@ impl Walk {
             return;
         }
         if !self.path.is_empty() {
-            // A path not ended by a painting operator: pass it through.
+            // An operator inside a path: pass the path so far through. The renderer keeps
+            // building the same path, so its box and clip carry on to the painting operator.
             piece.ops.append(&mut self.path);
-            self.path_box = None;
-            self.clip = false;
         }
         let kept = match o {
             b"q" | b"Q" | b"cm" | b"Tf" | b"gs" => {
@@ -402,7 +413,16 @@ impl Walk {
         let pts: Vec<(f64, f64)> = match o {
             b"re" => op.nums::<4>().map(|[x, y, w, h]| vec![(x, y), (x + w, y), (x, y + h), (x + w, y + h)]).unwrap_or_default(),
             b"h" | b"W" | b"W*" => Vec::new(),
-            _ => op.operands.iter().filter_map(Object::as_f64).collect::<Vec<_>>().as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect(),
+            _ => {
+                // The renderer reads the last operands an operator takes, as `nums` does for `re`.
+                let n = match o {
+                    b"c" => 6,
+                    b"v" | b"y" => 4,
+                    _ => 2,
+                };
+                let all: Vec<f64> = op.operands.iter().filter_map(Object::as_f64).collect();
+                all[all.len().saturating_sub(n)..].as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect()
+            }
         };
         for (x, y) in pts {
             let (u, v) = self.gs.ctm.apply(x, y);
@@ -424,6 +444,9 @@ impl Walk {
         if !hit {
             piece.ops.extend(body);
             piece.ops.push(op);
+            if clips {
+                self.narrow_clip(bbox);
+            }
             return;
         }
         let b = bbox.unwrap_or_default();
@@ -433,9 +456,20 @@ impl Walk {
             // Keep the clipping, drop the painting.
             piece.ops.extend(body);
             piece.ops.push(Op::new("n", vec![]));
+            self.narrow_clip(bbox);
         }
         // Partial vector redaction must not retain underlying drawing commands
         // behind clipping (F-008). Refuse partial clip retention and remove the path.
+    }
+
+    /// A clipping path the output keeps narrows the clip to its box. One the redaction removes
+    /// clips nothing any more, so it leaves the clip as it was; so does a path with no points.
+    fn narrow_clip(&mut self, path: Option<[f64; 4]>) {
+        let Some(p) = path else { return };
+        self.gs.clip = Some(match self.gs.clip {
+            None => p,
+            Some(c) => [c[0].max(p[0]), c[1].max(p[1]), c[2].min(p[2]), c[3].min(p[3])],
+        });
     }
 
     fn graphics_state(&mut self, doc: &Document, scope: &mut Scope<'_>, op: &Op) {
@@ -566,7 +600,7 @@ impl Walk {
 
     /// An inline image under a region is removed (or counted, when verifying).
     fn inline_image(gs: &Gs, scope: &mut Scope<'_>, out: &mut Output, op: Op, piece: &mut Piece) -> Option<Op> {
-        if !scope.hits(gs.ctm.bbox([0.0, 0.0, 1.0, 1.0])) {
+        if !visible(gs.ctm.bbox([0.0, 0.0, 1.0, 1.0]), gs.clip).is_some_and(|b| scope.hits(b)) {
             return Some(op);
         }
         if scope.mode == Mode::Verify {
@@ -740,7 +774,9 @@ fn xobject(
             Some(None)
         }
         Some(b"Image") => {
-            let b = gs.ctm.bbox([0.0, 0.0, 1.0, 1.0]);
+            // Measured by the part the clip shows: a cropped image (placed larger than its crop,
+            // as office suites export them) is not under a mark that only its hidden part reaches.
+            let b = visible(gs.ctm.bbox([0.0, 0.0, 1.0, 1.0]), gs.clip)?;
             if !scope.hits(b) || scope.mode == Mode::Verify {
                 return None;
             }

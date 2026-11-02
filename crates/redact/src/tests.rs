@@ -275,6 +275,62 @@ fn images_are_removed_or_have_their_pixels_cleared() {
     assert_eq!(orig.decoded().unwrap(), [255; 4], "the shared original is untouched");
 }
 
+/// Office suites crop an image by placing it larger than the page and clipping it to the crop.
+/// A JPEG can't have pixels cleared, so before images were measured by what the clip shows, a
+/// mark anywhere on the page reached the hidden part and the whole logo was removed.
+#[test]
+fn a_cropped_image_is_kept_when_only_its_hidden_part_reaches_a_mark() {
+    let jpeg =
+        stream("/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode", b"not decoded");
+    // Shown through the clip only at 50–150; placed over 0–1000 (the whole page and beyond).
+    let src = b"q 50 50 100 100 re W n q 1000 0 0 1000 -400 -400 cm /Im1 Do Q Q 0 g 200 200 50 50 re f";
+    let mut doc = one_page(src, "/XObject << /Im1 7 0 R >>", vec![jpeg.clone()]);
+    mark(&mut doc, 0, &[[190.0, 190.0, 260.0, 260.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.images_removed, r.images_cleared, r.paths_removed), (0, 0, 1), "{r:?}");
+    assert!(content(&doc, 0).contains("/Im1 Do"), "the cropped image stays");
+
+    // The same image with its shown part under a mark still goes (DCT: removed whole).
+    let mut doc = one_page(src, "/XObject << /Im1 7 0 R >>", vec![jpeg.clone()]);
+    mark(&mut doc, 0, &[[60.0, 60.0, 90.0, 90.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().images_removed, 1);
+    assert!(!content(&doc, 0).contains("/Im1 Do"));
+
+    // The clip ends with its `Q`: after it, the image shows whole and the mark reaches it.
+    let after = b"q 50 50 100 100 re W n Q q 1000 0 0 1000 -400 -400 cm /Im1 Do Q";
+    let mut doc = one_page(after, "/XObject << /Im1 7 0 R >>", vec![jpeg]);
+    mark(&mut doc, 0, &[[190.0, 190.0, 260.0, 260.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().images_removed, 1);
+}
+
+/// The clip's box is the whole path the renderer clips with: one carried across an operator
+/// inside the path (`w`), and points read from an operator's last operands, as the renderer does.
+#[test]
+fn a_clip_is_measured_by_the_path_the_renderer_builds() {
+    let jpeg =
+        stream("/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode", b"not decoded");
+    // Both clips show the image at the mark (10–40); read from the front, `100 0 0 m` would
+    // start the triangle at x 100 and leave it no width.
+    for clip in [&b"0 0 100 100 re 1 w 200 0 100 100 re W n"[..], b"100 0 0 m 100 0 l 100 100 l h W n"] {
+        let src = [b"q ", clip, b" q 300 0 0 100 0 0 cm /Im1 Do Q Q"].concat();
+        let mut doc = one_page(&src, "/XObject << /Im1 7 0 R >>", vec![jpeg.clone()]);
+        mark(&mut doc, 0, &[[10.0, 10.0, 40.0, 40.0]], "");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!(r.images_removed, 1, "{}: {r:?}", String::from_utf8_lossy(clip));
+    }
+}
+
+/// Inline images are measured by what the clip shows too.
+#[test]
+fn a_cropped_inline_image_is_kept_when_only_its_hidden_part_reaches_a_mark() {
+    let src = b"q 50 50 100 100 re W n q 1000 0 0 1000 -400 -400 cm BI /W 1 /H 1 /CS /G /BPC 8 ID \x80 EI Q Q";
+    let mut doc = one_page(src, "", vec![]);
+    mark(&mut doc, 0, &[[190.0, 190.0, 260.0, 260.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().images_removed, 0);
+    mark(&mut doc, 0, &[[60.0, 60.0, 90.0, 90.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().images_removed, 1);
+}
+
 #[test]
 fn vectors_are_removed_or_clipped_and_inline_images_go() {
     let src = b"0 g 10 10 20 20 re f 0 0 300 300 re f q 10 0 0 10 50 50 cm BI /W 1 /H 1 /CS /G /BPC 8 ID \x80 EI Q 1 0 0 RG 150 150 m 160 160 l S";
