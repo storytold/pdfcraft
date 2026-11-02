@@ -301,16 +301,32 @@ fn calibration_factors(
 ) -> HashMap<usize, f64> {
     let mut calibration = HashMap::new();
     for (index, source) in lines.iter().enumerate() {
-        if let Some(metrics) = metrics.get(&source.font) {
-            let nominal = source_width(
-                metrics,
-                &source.text,
-                source.origin.state.font.as_ref().map_or(1.0, |(_, size)| *size),
-                space_of(&source.font, metrics),
-                source.origin.state.char_spacing,
-                source.origin.state.word_spacing,
-            ) * source.origin.state.scale
-                * across(source);
+        let measure = |font: &str, text: &str| {
+            metrics.get(font).map(|metrics| {
+                source_width(
+                    metrics,
+                    text,
+                    source.origin.state.font.as_ref().map_or(1.0, |(_, size)| *size),
+                    space_of(font, metrics),
+                    source.origin.state.char_spacing,
+                    source.origin.state.word_spacing,
+                )
+            })
+        };
+        // A line joined across several resources of one font (#3661) is measured run by run, in
+        // each one's own encoding and widths: the first resource alone may not encode the others'
+        // letters, which then measured nothing and stretched the rewrite up to `200 Tz` (#5769).
+        // A space joining put between two runs is measured in the line's font.
+        let width = if source.runs.iter().any(|run| run.3 != source.font) {
+            source.runs.iter().try_fold(0.0, |width, (text, _, spaced, font)| {
+                let gap = if *spaced { measure(&source.font, " ")? } else { 0.0 };
+                Some(width + gap + measure(font, text)?)
+            })
+        } else {
+            measure(&source.font, &source.text)
+        };
+        if let Some(width) = width {
+            let nominal = width * source.origin.state.scale * across(source);
             let changed_face =
                 style.resource.is_some() || overrides.get(&index).is_some_and(|range| range.family.is_some() || range.resource.is_some());
             let factor = if nominal > 0.0 && !changed_face { ((source.rect[2] - source.rect[0]) / nominal).clamp(0.5, 2.0) } else { 1.0 };

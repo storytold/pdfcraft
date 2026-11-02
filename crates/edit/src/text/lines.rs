@@ -26,7 +26,7 @@ impl TextLine {
     /// visual-order Indic text): then only the line's text as a whole says what it reads.
     pub fn runs(&self) -> impl Iterator<Item = (&str, &[[f64; 4]], bool)> {
         let mut start = 0;
-        self.runs.iter().map(move |(text, end, spaced)| {
+        self.runs.iter().map(move |(text, end, spaced, _)| {
             let ink = self.ink.get(start..*end).unwrap_or_default();
             start = *end;
             (text.as_str(), ink, *spaced)
@@ -248,7 +248,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
             l.rect = [l.rect[0].min(s.rect[0]), l.rect[1].min(s.rect[1]), l.rect[2].max(s.rect[2]), l.rect[3].max(s.rect[3])];
             l.frame = union(l.frame, s.frame);
             l.ink.extend(s.ink.iter().copied());
-            l.runs.push((s.text.clone(), l.ink.len(), spaced));
+            l.runs.push((s.text.clone(), l.ink.len(), spaced, String::from_utf8_lossy(&s.font).into_owned()));
             l.ops.push(s.op);
             l.ops.extend(s.extra_ops.iter().copied());
             l.decodable &= s.decodable;
@@ -281,7 +281,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
                 actual_text: s.actual_text,
                 clips: s.state.render_mode >= 4,
                 unreadable_mode: s.state.unreadable.as_deref().map(str::to_owned),
-                runs: vec![(s.text.clone(), s.ink.len(), false)],
+                runs: vec![(s.text.clone(), s.ink.len(), false, String::from_utf8_lossy(&s.font).into_owned())],
                 soft_break: s.soft_break,
                 hard_break: s.hard_break,
                 soft_gap: s.soft_gap,
@@ -366,7 +366,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
         l.rect = [l.rect[0].min(s.rect[0]), l.rect[1].min(s.rect[1]), l.rect[2].max(s.rect[2]), l.rect[3].max(s.rect[3])];
         l.frame = union(l.frame, s.frame);
         l.ink.extend(s.ink.iter().copied());
-        l.runs.push((s.text.clone(), l.ink.len(), spaced));
+        l.runs.push((s.text.clone(), l.ink.len(), spaced, String::from_utf8_lossy(&s.font).into_owned()));
         l.ops.push(s.op);
         l.ops.extend(s.extra_ops.iter().copied());
         l.decodable &= s.decodable;
@@ -398,7 +398,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             actual_text: s.actual_text,
             clips: s.state.render_mode >= 4,
             unreadable_mode: s.state.unreadable.as_deref().map(str::to_owned),
-            runs: vec![(s.text.clone(), s.ink.len(), false)],
+            runs: vec![(s.text.clone(), s.ink.len(), false, String::from_utf8_lossy(&s.font).into_owned())],
             soft_break: s.soft_break,
             hard_break: s.hard_break,
             soft_gap: s.soft_gap,

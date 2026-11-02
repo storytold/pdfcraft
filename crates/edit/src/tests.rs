@@ -2601,6 +2601,48 @@ fn a_five_letter_prefix_is_not_a_subset_tag() {
     assert_eq!(lines.len(), 3, "{:?}", lines.iter().map(|l| &l.text).collect::<Vec<_>>());
 }
 
+/// A line joined across two subsets of one font (#3661) is measured run by run, each in its own
+/// resource's widths. Measured in the first subset alone, the words only the second one can
+/// encode counted for nothing, the line seemed narrower than it is drawn, and a paragraph edit
+/// stretched every row to make up for it (`200 Tz` in the issue's file, #5769).
+#[test]
+fn a_paragraph_across_two_subsets_of_one_font_keeps_its_scale() {
+    let content = "BT /F1 20 Tf 72 700 Td (ab ) Tj /F2 20 Tf (cd) Tj /F1 20 Tf 0 -24 Td (ba ) Tj /F2 20 Tf (dc) Tj ET";
+    // Chromium's Type 3 subsets of one face: each encodes only its own glyphs, here the first
+    // the space, `a` and `b`, the second `c` and `d` (#5769).
+    let type3 = |glyphs: &[(u32, &str, u32)]| {
+        let (first, last) = (glyphs[0].0, glyphs[glyphs.len() - 1].0);
+        let widths: Vec<String> = (first..=last).map(|code| glyphs.iter().find(|g| g.0 == code).map_or(0, |g| g.2).to_string()).collect();
+        let names: Vec<String> = glyphs.iter().map(|(code, name, _)| format!("{code} /{name}")).collect();
+        let procs: Vec<String> = glyphs.iter().map(|(_, name, _)| format!("/{name} 8 0 R")).collect();
+        format!(
+            "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /FirstChar {first} /LastChar {last} \
+             /Widths [{}] /Encoding << /Type /Encoding /Differences [{}] >> /CharProcs << {} >> /Resources << >> /FontDescriptor 7 0 R >>",
+            widths.join(" "),
+            names.join(" "),
+            procs.join(" "),
+        )
+    };
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>",
+        &stream("", content),
+        &type3(&[(32, "space", 250), (97, "a", 500), (98, "b", 500)]),
+        &type3(&[(99, "c", 500), (100, "d", 500)]),
+        "<< /Type /FontDescriptor /FontName /AAAAAA+Inter /Flags 32 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 1000 /Descent 0 /CapHeight 700 /StemV 80 >>",
+        &stream("", "500 0 d0"),
+    ]);
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.len(), 1, "{blocks:?}");
+    let draft = blocks[0].editor_text.replacen("ab", "ba", 1);
+    assert!(draft.contains('\n'), "{draft:?}");
+    text::replace_block(&mut doc, 0, 0, &draft).unwrap();
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    let scales: Vec<&str> = content.lines().filter(|l| l.ends_with(" Tz")).collect();
+    assert!(scales.iter().all(|l| *l == "100 Tz"), "{scales:?}: {content}");
+}
+
 #[test]
 fn text_lines_are_found_and_replaced_in_place() {
     let mut doc =
