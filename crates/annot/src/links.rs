@@ -202,16 +202,11 @@ fn write_style(d: &mut Dict, s: &LinkStyle) {
 }
 
 /// Bytes of `u` as a 7-bit ASCII URI string (§12.6.4.8).
+/// Printable ASCII (`!` to `~`) is kept as written; control characters, the space and every
+/// byte of a non-ASCII character are written as `%XX`.
 fn uri_bytes(u: &str) -> Vec<u8> {
-    let mut out = Vec::with_capacity(u.len());
-    for &b in u.as_bytes() {
-        if (0x21..=0x7e).contains(&b) {
-            out.push(b);
-        } else {
-            out.extend_from_slice(format!("%{b:02X}").as_bytes());
-        }
-    }
-    out
+    const NOT_PRINTABLE: &percent_encoding::AsciiSet = &percent_encoding::CONTROLS.add(b' ');
+    percent_encoding::utf8_percent_encode(u, NOT_PRINTABLE).to_string().into_bytes()
 }
 
 fn write_action(doc: &Document, d: &mut Dict, a: &LinkAction) -> Result<(), AnnotError> {
@@ -478,4 +473,18 @@ pub fn add_many(doc: &mut Document, links: &[(usize, Vec<[f64; 4]>, String)], st
         set_annots(doc, p, list)?;
     }
     Ok(n)
+}
+
+#[cfg(test)]
+mod uri_tests {
+    use super::uri_bytes;
+
+    /// Printable ASCII stays as written (`%` included: the caller's escapes are kept); the space,
+    /// control characters and UTF-8 bytes become `%XX` in capitals.
+    #[test]
+    fn uri_bytes_escape_only_what_is_not_printable_ascii() {
+        assert_eq!(uri_bytes("a b/é%\u{7f}"), b"a%20b/%C3%A9%%7F");
+        assert_eq!(uri_bytes("https://x.org/?q=1&r=~!*'()#f"), b"https://x.org/?q=1&r=~!*'()#f");
+        assert_eq!(uri_bytes("\t\0"), b"%09%00");
+    }
 }
