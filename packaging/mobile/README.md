@@ -1,6 +1,6 @@
 # PdfCraft for Android and iPad/iPhone
 
-The mobile app embeds the existing Rust/egui WASM editor in a Tauri 2 host. It bundles the complete frontend and all 17 existing UI catalogs; no website or runtime CDN is loaded. Interface language follows the device locale, with English fallback, and remains selectable in the shared editor. Builds require the pinned craft-fonts checkout used by desktop releases. Tablet portrait, landscape and iPad Split View share the same editor; the web canvas reserves the device safe-area insets.
+The mobile app embeds the existing Rust/egui WASM editor in a Tauri 2 host. It bundles the complete frontend and all 35 existing UI languages; no website or runtime CDN is loaded. Interface language follows the device locale, with English fallback, and remains selectable in the shared editor. Builds require the pinned craft-fonts checkout used by desktop releases. Tablet portrait, landscape and iPad Split View share the same editor; the web canvas reserves the device safe-area insets.
 
 ## Dependency-policy review required
 

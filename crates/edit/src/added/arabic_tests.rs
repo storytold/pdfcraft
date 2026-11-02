@@ -6,20 +6,25 @@ use std::cell::Cell;
 
 use super::*;
 
-/// The fingerprint of an item below the old limit, from the code before the change: its content
-/// stream, its new fonts and every object of the document.
-const SMALL_ITEM_FINGERPRINT: u64 = 14_135_892_979_695_233_112;
+/// Regression fingerprint for the small-item fixture: drawing bytes, font map and document
+/// objects, with generated streams decoded so Flate backend selection cannot change the hash.
+// Re-pinned when the standard-14 metrics became exact (F1). The Latin run in the fingerprinted
+// item is "Hi " in Helvetica 12pt: the old character-class guess called H 680, i 260 and space
+// 260 (14.4pt), where the published metrics are 722, 222 and 278 (14.664pt). The Arabic clusters
+// that follow therefore start 0.264pt further right, which is the whole point of F1 -- the glyphs
+// now land where the font says they do. Nothing about the Arabic path changed.
+const SMALL_ITEM_FINGERPRINT: u64 = 9_200_256_185_091_160_371;
 
 /// A cluster that shows one character with the single glyph `id`, at `advance` em.
 fn cluster(id: u32, advance: f64) -> ShapedCluster {
-    ShapedCluster { glyphs: vec![(id, [0.0, 0.0])], advance, text: "ب".into() }
+    ShapedCluster { script: ShapedScript::Arabic, glyphs: vec![(id, [0.0, 0.0])], advance, text: "ب".into() }
 }
 
 /// One run of `clusters` as a line of an item at `item()`'s size.
 fn line(clusters: Vec<ShapedCluster>, rtl: bool) -> LaidLine {
     let text = clusters.iter().map(|c| c.text.as_str()).collect();
     let width = clusters.iter().map(|c| c.advance).sum::<f64>() * item().size;
-    (text, rtl, vec![Piece::Arabic(clusters)], width)
+    (text, rtl, 0, vec![Piece::Shaped(clusters)], width)
 }
 
 /// A glyph outline: a box on the baseline, `advance` em wide.
@@ -37,6 +42,25 @@ fn snapshot(doc: &Document) -> Vec<u8> {
     let mut bytes = Vec::new();
     for num in doc.object_numbers() {
         let obj = doc.get(ObjRef { num, generation: doc.generation(num) });
+        pdfcraft_cos::serialize(&obj, &mut bytes);
+        bytes.push(b'\n');
+    }
+    bytes
+}
+
+/// Serialize generated objects with decoded stream bytes so the golden does not depend on which
+/// Flate backend Cargo's unified dependency features select for the test binary. Only the raw
+/// bytes (and so `/Length`, which the writer takes from them) are normalised: `/Filter` and
+/// `/DecodeParms` stay in the hash, so a change that stops compressing generated streams, or
+/// switches filters, still fails the golden.
+fn golden_snapshot(doc: &Document) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for num in doc.object_numbers() {
+        let mut obj = (*doc.get(ObjRef { num, generation: doc.generation(num) })).clone();
+        if let Object::Stream(ref mut stream) = obj {
+            let decoded = stream.decoded_strict().expect("generated stream decodes");
+            stream.raw = decoded.into();
+        }
         pdfcraft_cos::serialize(&obj, &mut bytes);
         bytes.push(b'\n');
     }
@@ -85,7 +109,7 @@ fn an_item_past_the_old_glyph_limit_gets_a_font_per_240_glyphs() {
     let laid = vec![line((0..n).map(|i| cluster(i as u32 + 1, 0.5)).collect(), false)];
     let mut doc = Document::new_empty();
     let (mut fonts, mut out) = (Dict::new(), Vec::new());
-    let drawn = draw_laid_arabic(&mut doc, &item(), &laid, &Dict::new(), &mut fonts, &mut out, |_| Ok(boxed(0.5)));
+    let drawn = draw_laid_shaped(&mut doc, &item(), &laid, &Dict::new(), &mut fonts, &mut out, |_, _| Ok(boxed(0.5)));
     assert!(drawn.is_ok(), "{drawn:?}");
     let made = fonts_of(&doc, &fonts);
     let mut expected = vec![GLYPHS_PER_FONT; 16];
@@ -108,7 +132,7 @@ fn an_outline_missing_from_a_later_font_leaves_the_document_unchanged() {
     let before = snapshot(&doc);
     let missing = n as u32;
     let (mut fonts, mut out) = (Dict::new(), Vec::new());
-    let drawn = draw_laid_arabic(&mut doc, &item(), &laid, &Dict::new(), &mut fonts, &mut out, |id| {
+    let drawn = draw_laid_shaped(&mut doc, &item(), &laid, &Dict::new(), &mut fonts, &mut out, |_, id| {
         if id == missing { Err(GlyphError::Missing) } else { Ok(boxed(0.5)) }
     });
     assert!(matches!(&drawn, Err(EditError::Invalid(msg)) if msg.contains("can't show")), "{drawn:?}");
@@ -120,21 +144,45 @@ fn an_outline_missing_from_a_later_font_leaves_the_document_unchanged() {
 fn an_item_below_the_old_limit_is_drawn_exactly_as_before() {
     // A left-to-right line with a Latin run, a space and a two-glyph cluster, then a right-to-left
     // line. Glyphs repeat across the two lines and share one font.
-    let space = ShapedCluster { glyphs: vec![(6, [0.0, 0.0])], advance: 0.25, text: " ".into() };
-    let ligature = ShapedCluster { glyphs: vec![(4, [0.0, 0.0]), (5, [-0.1, 0.2])], advance: 0.6, text: "لا".into() };
+    let space = ShapedCluster { script: ShapedScript::Arabic, glyphs: vec![(6, [0.0, 0.0])], advance: 0.25, text: " ".into() };
+    let ligature = ShapedCluster { script: ShapedScript::Arabic, glyphs: vec![(4, [0.0, 0.0]), (5, [-0.1, 0.2])], advance: 0.6, text: "لا".into() };
     let mixed: LaidLine =
-        ("Hi ب".into(), false, vec![Piece::Latin("Hi ".into()), Piece::Arabic(vec![cluster(1, 0.5), cluster(2, 0.5), space, ligature])], 4.0);
+        ("Hi ب".into(), false, 0, vec![Piece::Latin("Hi ".into()), Piece::Shaped(vec![cluster(1, 0.5), cluster(2, 0.5), space, ligature])], 4.0);
     let rtl = line(vec![cluster(2, 0.5), cluster(9, 0.75)], true);
     let laid = vec![mixed, rtl];
     let mut doc = Document::new_empty();
     let (mut fonts, mut out) = (Dict::new(), Vec::new());
-    let drawn = draw_laid_arabic(&mut doc, &item(), &laid, &Dict::new(), &mut fonts, &mut out, |id| Ok(boxed(0.5 + f64::from(id) * 0.01)));
+    let drawn = draw_laid_shaped(&mut doc, &item(), &laid, &Dict::new(), &mut fonts, &mut out, |_, id| Ok(boxed(0.5 + f64::from(id) * 0.01)));
     assert!(drawn.is_ok(), "{drawn:?}");
     assert_eq!(fonts.len(), 1);
+    // The injected outlines are fixed; only the descriptor's family comes from craft-fonts.
+    // Check that metadata separately, then normalize those two fields to the original golden.
+    // ActualText is new metadata: check each line's value and remove only its added wrappers
+    // before hashing. Drawing bytes and font objects still match the original golden exactly.
+    let family = pdfcraft_fonts::document_arabic_font().map_or("Arabic", |face| face.family);
+    for (_, font) in fonts.iter() {
+        let descriptor = doc.dict(font).unwrap().get(b"FontDescriptor").and_then(Object::as_ref).unwrap();
+        let dict = doc.dict(&Object::Ref(descriptor)).unwrap();
+        assert_eq!(dict.name(b"FontName"), Some(family.replace(' ', "").as_bytes()));
+        assert_eq!(dict.get(b"FontFamily").and_then(Object::as_string).unwrap().bytes, family.as_bytes());
+        doc.update_dict(descriptor, |d| {
+            d.set(b"FontName".to_vec(), Object::name("Arabic"));
+            d.set(b"FontFamily".to_vec(), Object::String(PdfString::literal(b"Arabic".to_vec())));
+        })
+        .unwrap();
+    }
     let mut bytes = out.clone();
+    for (line, ..) in &laid {
+        let hex: String = line.encode_utf16().map(|u| format!("{u:04X}")).collect();
+        let header = format!("/Span <</ActualText <FEFF{hex}>>> BDC\n").into_bytes();
+        let start = bytes.windows(header.len()).position(|w| w == header).expect("each line has its logical text");
+        bytes.drain(start..start + header.len());
+        let end = bytes.windows(4).position(|w| w == b"EMC\n").expect("each ActualText span closes");
+        bytes.drain(end..end + 4);
+    }
     pdfcraft_cos::serialize(&Object::Dict(fonts.clone()), &mut bytes);
-    bytes.extend(snapshot(&doc));
-    assert_eq!(fnv1a(&bytes), SMALL_ITEM_FINGERPRINT, "output changed; the golden is the code before the sharding change");
+    bytes.extend(golden_snapshot(&doc));
+    assert_eq!(fnv1a(&bytes), SMALL_ITEM_FINGERPRINT, "small-item output changed");
 }
 
 #[test]
@@ -145,7 +193,7 @@ fn long_text_with_few_distinct_glyphs_needs_one_font() {
     let reads = Cell::new(0usize);
     let mut doc = Document::new_empty();
     let (mut fonts, mut out) = (Dict::new(), Vec::new());
-    let drawn = draw_laid_arabic(&mut doc, &item(), &laid, &Dict::new(), &mut fonts, &mut out, |_| {
+    let drawn = draw_laid_shaped(&mut doc, &item(), &laid, &Dict::new(), &mut fonts, &mut out, |_, _| {
         reads.set(reads.get() + 1);
         Ok(boxed(0.5))
     });
@@ -159,13 +207,18 @@ fn long_text_with_few_distinct_glyphs_needs_one_font() {
 fn distinct_clusters_past_the_old_limit_share_their_glyph_outlines() {
     // 3,841 different clusters (their advances differ) built from four glyphs: four outlines are read.
     let clusters: Vec<ShapedCluster> = (0..3_841u32)
-        .map(|i| ShapedCluster { glyphs: vec![(1 + i % 4, [0.0, 0.0])], advance: 0.5 + f64::from(i) * 1e-6, text: "ب".into() })
+        .map(|i| ShapedCluster {
+            script: ShapedScript::Arabic,
+            glyphs: vec![(1 + i % 4, [0.0, 0.0])],
+            advance: 0.5 + f64::from(i) * 1e-6,
+            text: "ب".into(),
+        })
         .collect();
     let laid = vec![line(clusters, false)];
     let reads = Cell::new(0usize);
     let mut doc = Document::new_empty();
     let (mut fonts, mut out) = (Dict::new(), Vec::new());
-    let drawn = draw_laid_arabic(&mut doc, &item(), &laid, &Dict::new(), &mut fonts, &mut out, |_| {
+    let drawn = draw_laid_shaped(&mut doc, &item(), &laid, &Dict::new(), &mut fonts, &mut out, |_, _| {
         reads.set(reads.get() + 1);
         Ok(boxed(0.5))
     });
@@ -178,18 +231,18 @@ fn distinct_clusters_past_the_old_limit_share_their_glyph_outlines() {
 #[test]
 fn hostile_clusters_draw_empty_or_fail_without_changing_the_document() {
     // A cluster with no glyphs and no text draws nothing, but it is still one glyph of a font.
-    let empty = ShapedCluster { glyphs: Vec::new(), advance: 0.0, text: String::new() };
+    let empty = ShapedCluster { script: ShapedScript::Arabic, glyphs: Vec::new(), advance: 0.0, text: String::new() };
     let laid = vec![line(vec![empty, cluster(1, 0.5)], false)];
     let mut doc = Document::new_empty();
     let (mut fonts, mut out) = (Dict::new(), Vec::new());
-    let drawn = draw_laid_arabic(&mut doc, &item(), &laid, &Dict::new(), &mut fonts, &mut out, |_| Ok(boxed(0.5)));
+    let drawn = draw_laid_shaped(&mut doc, &item(), &laid, &Dict::new(), &mut fonts, &mut out, |_, _| Ok(boxed(0.5)));
     assert!(drawn.is_ok(), "{drawn:?}");
     assert_eq!(glyphs_shown(&out).len(), 2);
     // A glyph id the face doesn't have fails the item before anything is written.
     let before = snapshot(&doc);
     let laid = vec![line(vec![cluster(1, 0.5), cluster(u32::MAX, 0.5)], false)];
     let (mut fonts, mut out) = (Dict::new(), Vec::new());
-    let drawn = draw_laid_arabic(&mut doc, &item(), &laid, &Dict::new(), &mut fonts, &mut out, |id| {
+    let drawn = draw_laid_shaped(&mut doc, &item(), &laid, &Dict::new(), &mut fonts, &mut out, |_, id| {
         if id == u32::MAX { Err(GlyphError::Missing) } else { Ok(boxed(0.5)) }
     });
     assert!(drawn.is_err());
@@ -202,7 +255,7 @@ fn a_font_name_the_page_already_uses_is_not_reused() {
     let laid = vec![line(vec![cluster(1, 0.5)], false)];
     let mut doc = Document::new_empty();
     let (mut fonts, mut out) = (Dict::new(), Vec::new());
-    let drawn = draw_laid_arabic(&mut doc, &item(), &laid, &Dict::new(), &mut fonts, &mut out, |_| Ok(boxed(0.5)));
+    let drawn = draw_laid_shaped(&mut doc, &item(), &laid, &Dict::new(), &mut fonts, &mut out, |_, _| Ok(boxed(0.5)));
     assert!(drawn.is_ok(), "{drawn:?}");
     let first = fonts_of(&doc, &fonts)[0].0.clone();
     // The same item on a page whose resources already use that name.
@@ -210,7 +263,7 @@ fn a_font_name_the_page_already_uses_is_not_reused() {
     taken.set(first.clone(), Object::Null);
     let mut doc = Document::new_empty();
     let (mut fonts, mut out) = (Dict::new(), Vec::new());
-    let drawn = draw_laid_arabic(&mut doc, &item(), &laid, &taken, &mut fonts, &mut out, |_| Ok(boxed(0.5)));
+    let drawn = draw_laid_shaped(&mut doc, &item(), &laid, &taken, &mut fonts, &mut out, |_, _| Ok(boxed(0.5)));
     assert!(drawn.is_ok(), "{drawn:?}");
     let second = fonts_of(&doc, &fonts)[0].0.clone();
     assert_ne!(second, first);

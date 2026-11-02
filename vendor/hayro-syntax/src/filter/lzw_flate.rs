@@ -534,23 +534,27 @@ pub(crate) mod flate {
 
             /// Copies `left` bytes from `distance` back in the output, up to the limit. Returns how
             /// many are still to copy. A copy whose source does not exist writes nothing.
-            fn copy_back(&mut self, valid: bool, distance: usize, mut left: usize) -> usize {
-                while left > 0 && self.output.len() < self.limit {
-                    if valid {
-                        let byte = self
-                            .output
-                            .len()
-                            .checked_sub(distance)
-                            .and_then(|index| self.output.get(index))
-                            .copied();
-                        if let Some(byte) = byte {
-                            self.output.push(byte);
-                        }
+            fn copy_back(&mut self, valid: bool, distance: usize, left: usize) -> usize {
+                let len = self.output.len();
+                // Without a source the copy writes nothing, and it runs out only at the limit.
+                let Some(mut start) = len.checked_sub(distance).filter(|_| valid && distance > 0) else {
+                    return if len < self.limit { 0 } else { left };
+                };
+                // PdfCraft patch: copy in runs of up to `distance` bytes. Each run reads only bytes
+                // already in the output, so the bytes are the ones a byte-at-a-time copy writes.
+                let copy = left.min(self.limit.saturating_sub(len));
+                let mut done = 0;
+                while done < copy {
+                    let end = start.saturating_add((copy - done).min(distance));
+                    if end > self.output.len() {
+                        break;
                     }
-                    left -= 1;
+                    self.output.extend_from_within(start..end);
+                    done += end - start;
+                    start = end;
                 }
 
-                left
+                left - done
             }
 
             fn read_dynamic_tables(&mut self) -> Option<(HuffmanTable, HuffmanTable)> {
@@ -1087,6 +1091,9 @@ fn apply_predictor(data: Vec<u8>, params: &PredictorParams) -> Option<Vec<u8>> {
                     return None;
                 }
 
+                // PdfCraft patch: packed TIFF samples can leave padding bits at the end
+                // of a row. split_off requires byte alignment or the next row overwrites it.
+                writer.align();
                 let (data, new_writer) = writer.split_off();
                 writer = new_writer;
                 prev_row = BitChunks::new(data, bit_size, chunk_len)?;
@@ -1287,6 +1294,52 @@ mod tests {
                 3, 67, 66, 59, 5, 254, 5, 0, 228, 255,
             ],
         );
+    }
+
+    /// PdfCraft patch: 300 zero bytes, zlib-compressed: one literal, then copies of distance 1 that
+    /// are longer than their distance.
+    const ZEROS_300: [u8; 13] = [0x78, 0xda, 0x63, 0x60, 0x18, 0x05, 0xc4, 0x02, 0x00, 0x01, 0x2c, 0x00, 0x01];
+
+    #[test]
+    fn back_reference_longer_than_its_distance_repeats_its_source() {
+        let mut state = flate::FlateState::new(&ZEROS_300);
+        let mut out = Vec::new();
+        state.decode_into(&ZEROS_300, &mut out, 1000);
+
+        assert_eq!(out, vec![0; 300]);
+    }
+
+    #[test]
+    fn back_reference_cut_by_the_limit_resumes_in_the_next_call() {
+        let mut state = flate::FlateState::new(&ZEROS_300);
+        let mut out = Vec::new();
+        state.decode_into(&ZEROS_300, &mut out, 100);
+        assert_eq!(out, vec![0; 100]);
+
+        state.decode_into(&ZEROS_300, &mut out, 1000);
+        assert_eq!(out, vec![0; 300]);
+    }
+
+    #[test]
+    fn back_reference_reads_bytes_written_by_an_earlier_call() {
+        // "abc" repeated 2000 times, zlib-compressed: copies reach 3 bytes back, and the calls below
+        // stop every 7 bytes, so most copies start in an earlier call's output.
+        const ABC_2000: [u8; 32] = [
+            0x78, 0xda, 0xed, 0xc2, 0x41, 0x11, 0x00, 0x00, 0x0c, 0x02, 0xa0, 0xac, 0x6a, 0xff, 0x0e, 0x0b,
+            0xb1, 0x2f, 0x1c, 0xe9, 0xa2, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xfe, 0x1e, 0x2f, 0x01, 0xf9, 0x59,
+        ];
+        let expected = b"abc".repeat(2000);
+        let mut state = flate::FlateState::new(&ABC_2000);
+        let mut out = Vec::new();
+        loop {
+            let before = out.len();
+            state.decode_into(&ABC_2000, &mut out, before + 7);
+            if out.len() == before || out.len() >= expected.len() {
+                break;
+            }
+        }
+
+        assert_eq!(out, expected);
     }
 
     #[test]

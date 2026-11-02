@@ -5,7 +5,12 @@ edition = "2024"
 publish = false
 license.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
+pdfcraft-oracle = { workspace = true }
+pdfcraft-cos = { workspace = true }
 anyhow = "1"
 lopdf = "0.45"
 png = "0.18"
@@ -14,4 +19,6 @@ serde = { version = "1", features = ["derive"] }
 sha2 = "0.11"
 toml = "1"
 flate2.workspace = true
-zip = { version = "=9.0.1", default-features = false, features = ["deflate-flate2"] }
+zip = { version = "9.1", default-features = false, features = ["deflate-flate2"] }
+# The demo-PDF time stamp goes through chrono (no hand-rolled calendar code).
+chrono = { workspace = true }

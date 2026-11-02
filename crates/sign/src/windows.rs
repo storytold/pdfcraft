@@ -2,7 +2,7 @@
 //! Private keys remain in CNG; Windows may ask permission to use a key.
 //!
 //! Certificates that can't sign through PdfCraft (no usable private key, a key type it doesn't
-//! sign with) are reported in [`Listing::unusable`] with the reason rather than left out
+//! sign with, a key usage or extended key usage that doesn't allow signing documents) are reported in [`Listing::unusable`] with the reason rather than left out
 //! silently, so a missing identity can be explained (issue #179).
 
 use std::sync::Arc;
@@ -161,6 +161,13 @@ fn entries() -> Result<Entries, SignError> {
                 continue;
             }
         }
+        // A smart card holds encryption and logon certificates beside the signing one, all under
+        // the same name; a signature made with them doesn't validate, so they aren't offered.
+        // Checked after the key, so a certificate without one stays out of the list entirely.
+        if let Some(reason) = certificate.signing_problem_clause() {
+            skip(certificate.display_name(), reason, false);
+            continue;
+        }
         let public = certificate.public_key.clone();
         let key = PrivateKey::external(public.clone(), Arc::new(WindowsKey { context: context.clone(), public }));
         let friendly_name = Some(certificate.display_name());
@@ -200,6 +207,7 @@ const NTE_NOT_FOUND: u32 = 0x8009_0011;
 const NTE_BAD_PROVIDER: u32 = 0x8009_0013;
 const NTE_BAD_PROV_TYPE: u32 = 0x8009_0014;
 const NTE_BAD_KEYSET: u32 = 0x8009_0016;
+const NTE_PROVIDER_DLL_FAIL: u32 = 0x8009_001D;
 const NTE_PROV_DLL_NOT_FOUND: u32 = 0x8009_001E;
 const NTE_SILENT_CONTEXT: u32 = 0x8009_0022;
 const NTE_NOT_SUPPORTED: u32 = 0x8009_0029;
@@ -208,6 +216,8 @@ const NTE_DEVICE_NOT_READY: u32 = 0x8009_0030;
 const NTE_DEVICE_NOT_FOUND: u32 = 0x8009_0035;
 const NTE_USER_CANCELLED: u32 = 0x8009_0036;
 const CRYPT_E_NO_KEY_PROPERTY: u32 = 0x8009_200B;
+// An NTSTATUS (ntstatus.h) that some key providers pass through unchanged.
+const STATUS_NOT_FOUND: u32 = 0xC000_0225;
 
 /// A CNG error with the Windows code and, for the usual ones, what it means.
 fn describe(e: &CngError) -> String {
@@ -217,6 +227,15 @@ fn describe(e: &CngError) -> String {
         NTE_PERM => "access to the key was denied",
         NTE_BAD_PROVIDER | NTE_BAD_PROV_TYPE | NTE_PROV_DLL_NOT_FOUND => {
             "its key provider isn't available to CNG (a legacy CryptoAPI-only provider, or its driver isn't installed)"
+        }
+        // #2207: a smart card or token's middleware that is missing or broken, or a provider
+        // that exists only as 32-bit code, which a 64-bit process can't load.
+        NTE_PROVIDER_DLL_FAIL => {
+            "its key provider's software failed to load (a smart card or token driver that is missing or broken, or a 32-bit-only provider)"
+        }
+        // #1535: an A3 certificate (key on a token) whose provider can't find the key.
+        STATUS_NOT_FOUND => {
+            "its key provider can't find the key (the smart card or token holding it isn't connected, or its driver doesn't see the key)"
         }
         NTE_NOT_SUPPORTED => "its key provider doesn't support the operation",
         NTE_DEVICE_NOT_READY | NTE_DEVICE_NOT_FOUND => "the smart card or token isn't available",
@@ -240,6 +259,16 @@ mod tests {
             "the key is missing from its key store (deleted, or imported under another Windows account) (Windows error 0x80090016)"
         );
         assert_eq!(describe(&CngError::WindowsError(0x8010_000C)), "the smart card isn't available (Windows error 0x8010000C)");
+        assert_eq!(
+            describe(&CngError::WindowsError(0x8009_001D)),
+            "its key provider's software failed to load (a smart card or token driver that is missing or broken, or a 32-bit-only provider) (Windows error 0x8009001D)",
+            "#2207"
+        );
+        assert_eq!(
+            describe(&CngError::WindowsError(0xC000_0225)),
+            "its key provider can't find the key (the smart card or token holding it isn't connected, or its driver doesn't see the key) (Windows error 0xC0000225)",
+            "#1535"
+        );
         assert_eq!(describe(&CngError::WindowsError(0x57)), "Windows error 0x00000057");
         assert_eq!(describe(&CngError::InvalidHashLength), "Invalid hash length");
     }

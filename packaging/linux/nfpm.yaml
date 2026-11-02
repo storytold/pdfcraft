@@ -1,6 +1,6 @@
 # .deb and .rpm packages (nfpm: https://nfpm.goreleaser.com). Run by package.sh, which stages
 # the file tree, substitutes its path for ${STAGE} (nfpm doesn't expand env vars in `src`) and
-# exports VERSION and NFPM_ARCH.
+# exports VERSION, RELEASE and NFPM_ARCH.
 #
 #   nfpm package -f packaging/linux/nfpm.yaml -p deb -t dist/release/
 name: pdfcraft
@@ -9,7 +9,9 @@ platform: linux
 version: ${VERSION}
 # semver: 0.2.0-rc.1 becomes 0.2.0~rc.1 in deb/rpm, so pre-releases sort before the release.
 version_schema: semver
-release: 1
+# 1 for releases; 1.<label> for a labelled local build (PDFCRAFT_BUILD_LABEL), which sorts after
+# the release of the same version and before the next one.
+release: ${RELEASE}
 section: graphics
 priority: optional
 maintainer: ${PDFCRAFT_MAINTAINER}
@@ -44,9 +46,16 @@ overrides:
       - mesa-vulkan-drivers
       - xdg-desktop-portal
   rpm:
+    # Library sonames rather than package names, so the same requirements resolve on Fedora/RHEL
+    # and openSUSE (which has no libxkbcommon, vulkan-loader or libglvnd-egl package). The glibc
+    # floor names libm because the binaries' GLIBC_2.35 symbols (hypot, hypotf) are libm's: RHEL 9's
+    # glibc 2.34 provides libc.so.6(GLIBC_2.35) through backports, but not this, so it refuses.
     depends:
-      - libxkbcommon
-      - (vulkan-loader or libglvnd-egl)
+      - libc.so.6()(64bit)
+      - libm.so.6(GLIBC_2.35)(64bit)
+      - libgcc_s.so.1()(64bit)
+      - libxkbcommon.so.0()(64bit)
+      - (libvulkan.so.1()(64bit) or libEGL.so.1()(64bit))
     recommends:
       - cups-client
       - libwayland-client
