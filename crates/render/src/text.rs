@@ -89,6 +89,65 @@ pub fn fold_case(s: &str) -> String {
     out
 }
 
+/// Whether `c` is a combining diacritical mark (the Unicode block U+0300–U+036F: grave, acute,
+/// circumflex, tilde, diaeresis, cedilla, comma below, and so on).
+fn is_accent_mark(c: char) -> bool {
+    ('\u{300}'..='\u{36F}').contains(&c)
+}
+
+/// `s` with the accents taken off Latin letters, so `café` and `cafe`, `ặ` and `a`, `ș` and `s`
+/// read the same: a precomposed letter whose canonical decomposition is an ASCII letter plus
+/// combining diacritical marks becomes that letter, and such marks written on their own after a
+/// Latin letter are dropped. Nothing else changes. Letters that have no decomposition (`ł`, `ø`,
+/// `đ`, so `Đặng` reads as `Đang`) are letters of their own and stay; so do the kana
+/// (`が` is not `か`), Cyrillic (`й` is not `и`) and Greek.
+///
+/// A mark's length varies, so the result can be shorter than `s`; callers that map matches back
+/// to glyphs fold each glyph's text separately.
+pub fn fold_accents(s: &str) -> String {
+    fold_accents_from(s, false)
+}
+
+/// [`fold_accents`] for text that continues one that ended on an ASCII letter (`after_latin`), so
+/// a mark at its start belongs to that letter however the text was split into glyphs.
+pub(crate) fn fold_accents_from(s: &str, mut after_latin: bool) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c.is_ascii() {
+            out.push(c);
+            after_latin = c.is_ascii_alphabetic();
+        } else if is_accent_mark(c) && after_latin {
+            // A mark written apart from its letter (decomposed text): drop it, and any more on it.
+        } else {
+            let mut parts = c.nfd();
+            match parts.next() {
+                Some(base) if base.is_ascii_alphabetic() && parts.clone().next().is_some() && parts.all(is_accent_mark) => {
+                    out.push(base);
+                    after_latin = true;
+                }
+                _ => {
+                    out.push(c);
+                    after_latin = false;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// What a search matches: Acrobat's find options, and whether accents must match. The default
+/// ignores case and accents and finds a match inside a longer word.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FindOptions {
+    /// `A` is not `a`.
+    pub case_sensitive: bool,
+    /// The match is not part of a longer word.
+    pub whole_words: bool,
+    /// `é` is not `e`. Off by default: Find ignores accents unless asked not to (#3460).
+    pub accent_sensitive: bool,
+}
+
 /// The text of one page, in content order, with line structure.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PageText {
@@ -138,9 +197,16 @@ impl PageText {
         self.find_opts_limited(needle, case_sensitive, whole_words, usize::MAX)
     }
 
-    /// Search with Acrobat's find options, returning at most `limit` glyph ranges.
+    /// Search with Acrobat's find options, returning at most `limit` glyph ranges. Accents must
+    /// match; [`Self::find_options`] can ignore them.
     pub fn find_opts_limited(&self, needle: &str, case_sensitive: bool, whole_words: bool, limit: usize) -> Vec<std::ops::Range<usize>> {
-        search::find(self, needle, case_sensitive, whole_words, limit)
+        self.find_options(needle, FindOptions { case_sensitive, whole_words, accent_sensitive: true }, limit)
+    }
+
+    /// Search with `options`, returning at most `limit` glyph ranges. With the default options
+    /// the match ignores case and accents: `cafe` finds `Café`.
+    pub fn find_options(&self, needle: &str, options: FindOptions, limit: usize) -> Vec<std::ops::Range<usize>> {
+        search::find(self, needle, options, limit)
     }
 
     /// Glyph ranges of the matches a character matcher finds in the page text (words and lines
