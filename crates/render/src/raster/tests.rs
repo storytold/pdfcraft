@@ -8797,9 +8797,9 @@ fn a_rebuilt_tables_generation_0_stand_in_is_not_a_second_object() {
                trailer << /Root 1 0 R >>\n\
                %%EOF\n";
     let mut r = PageRenderer::new(Arc::new(pdf.to_string().into_bytes()), RenderConfig::default());
-    let first = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    let first = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false, magnification: None });
     assert!(first.error.is_none(), "the page is recovered: {:?}", first.error);
-    let second = r.render(RenderRequest { page: 1, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    let second = r.render(RenderRequest { page: 1, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false, magnification: None });
     assert!(second.error.is_some(), "and it is one page, not two: page 2 must not exist");
 
     // Two headers for object 3, the second the one the exact key names: the stand-in follows it.
@@ -8813,7 +8813,7 @@ fn a_rebuilt_tables_generation_0_stand_in_is_not_a_second_object() {
                  trailer << /Root 1 0 R >>\n\
                  %%EOF\n";
     let mut r = PageRenderer::new(Arc::new(twice.to_string().into_bytes()), RenderConfig::default());
-    let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false, magnification: None });
     assert!(page.error.is_none(), "the page is found: {:?}", page.error);
     assert_eq!((page.width, page.height), (300, 150), "`3 0 R` reads the later body, as `3 1` does");
 }
@@ -8853,7 +8853,8 @@ fn a_rebuilt_table_finds_an_object_whose_header_names_another_generation() {
              %%EOF\n"
         );
         let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
-        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+        let page =
+            r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false, magnification: None });
         assert!(page.error.is_none(), "generation {generation}: the page is found: {:?}", page.error);
         assert_eq!((page.width, page.height), (200, 100), "generation {generation}: and it is the page's own size");
     }
@@ -8867,7 +8868,7 @@ fn a_rebuilt_table_finds_an_object_whose_header_names_another_generation() {
                trailer << /Root 1 0 R >>\n\
                %%EOF\n";
     let mut r = PageRenderer::new(Arc::new(pdf.to_string().into_bytes()), RenderConfig::default());
-    let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false, magnification: None });
     assert!(page.error.is_none(), "the header after a stray number is found: {:?}", page.error);
     assert_eq!((page.width, page.height), (200, 100));
 }
