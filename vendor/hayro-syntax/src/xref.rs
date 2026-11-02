@@ -148,6 +148,10 @@ fn fallback_xref_map_inner<'a>(
     password: &[u8],
 ) -> (XrefMap, Option<XRefInput<'a>>) {
     let mut xref_map = FxHashMap::default();
+    // PdfCraft patch: the generation-0 keys below that stand in for a header with another
+    // generation, so a later header can replace one while a real `N 0 obj` is never displaced
+    // (noted in review of #5580).
+    let mut aliases: rustc_hash::FxHashSet<ObjectIdentifier> = rustc_hash::FxHashSet::default();
     let mut trailer_dicts = vec![];
     let mut root_ref = None;
 
@@ -176,10 +180,17 @@ fn fallback_xref_map_inner<'a>(
                     // `3 18446744073709551616 obj` with a page tree pointing at `3 0 R`, so the
                     // page was lost and the file did not open at all (#5580). `or_insert`, so a
                     // real `N 0 obj` is never displaced by this alias.
-                    if obj_id.gen_number != 0 {
-                        xref_map
-                            .entry(ObjectIdentifier::new(obj_id.obj_number, 0))
-                            .or_insert(EntryType::Normal(cur_pos));
+                    let by_number = ObjectIdentifier::new(obj_id.obj_number, 0);
+                    if obj_id.gen_number == 0 {
+                        // A real `N 0 obj`: it owns the key from here on, and the last one wins
+                        // as every other entry does.
+                        aliases.remove(&by_number);
+                    } else if !xref_map.contains_key(&by_number) || aliases.contains(&by_number) {
+                        // Stand in for it, and let a later header for the same number replace the
+                        // stand-in -- the exact key moves on, so an alias left behind would send
+                        // `N 0 R` to a body the exact key no longer names (noted in review).
+                        xref_map.insert(by_number, EntryType::Normal(cur_pos));
+                        aliases.insert(by_number);
                     }
                     last_obj_num = Some(obj_id);
                     dummy_ctx.set_obj_number(obj_id);
@@ -568,6 +579,12 @@ impl XRef {
                 // Try to yield in the order the objects appeared in the
                 // PDF.
                 elements.sort_by(|e1, e2| e1.1.cmp(&e2.1));
+                // PdfCraft patch: one object per location. A rebuilt table can hold two keys for
+                // one object -- its own generation and the generation-0 stand-in (#5580) -- and
+                // enumeration yielded the object once for each, so a document recovered by
+                // `Pages::new_brute_force` reported the page twice (noted in review). Both keys
+                // stay for lookups; only this walk is deduplicated.
+                elements.dedup_by_key(|e| e.1);
 
                 let mut iter = elements.into_iter();
 

@@ -8491,6 +8491,45 @@ mod devicen_inks;
 // patch 27).
 mod isolated_cmyk_groups;
 
+/// The generation-0 stand-in a rebuilt table files an object under must not make the object a
+/// second object: enumeration yielded it once per key, so a document recovered without a readable
+/// page tree reported the page twice (noted in review of #5580).
+///
+/// And a later header for the same object number replaces the stand-in, so `N 0 R` cannot be left
+/// pointing at a body the exact key no longer names.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn a_rebuilt_tables_generation_0_stand_in_is_not_a_second_object() {
+    // No table, no `startxref`, and no readable page tree: the pages are recovered by looking for
+    // objects that are pages, which is where a doubled object shows up as a doubled page.
+    let pdf = "%PDF-1.4\n\
+               1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+               3 99999 obj << /Type /Page /MediaBox [0 0 200 100] /Contents 4 0 R >> endobj\n\
+               4 0 obj << /Length 0 >> stream\n\nendstream endobj\n\
+               trailer << /Root 1 0 R >>\n\
+               %%EOF\n";
+    let mut r = PageRenderer::new(Arc::new(pdf.to_string().into_bytes()), RenderConfig::default());
+    let first = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    assert!(first.error.is_none(), "the page is recovered: {:?}", first.error);
+    let second = r.render(RenderRequest { page: 1, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    assert!(second.error.is_some(), "and it is one page, not two: page 2 must not exist");
+
+    // Two headers for object 3, the second the one the exact key names: the stand-in follows it.
+    // `(B)` is drawn by the later body, so the page that comes back says which one was read.
+    let twice = "%PDF-1.4\n\
+                 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 1 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 5 0 R >> endobj\n\
+                 3 1 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 150] /Contents 5 0 R >> endobj\n\
+                 5 0 obj << /Length 0 >> stream\n\nendstream endobj\n\
+                 trailer << /Root 1 0 R >>\n\
+                 %%EOF\n";
+    let mut r = PageRenderer::new(Arc::new(twice.to_string().into_bytes()), RenderConfig::default());
+    let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    assert!(page.error.is_none(), "the page is found: {:?}", page.error);
+    assert_eq!((page.width, page.height), (300, 150), "`3 0 R` reads the later body, as `3 1` does");
+}
+
 /// A file whose cross-reference table has to be rebuilt keeps an object whose header names a
 /// generation the reference does not.
 ///
