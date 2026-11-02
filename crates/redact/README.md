@@ -37,8 +37,9 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   or a ring of references or a chain of more than 32, may be read again), and what it fetches, remembers and decodes (a decode that
   fails counting as much as it was allowed, and an image the dictionaries it names) counts against
   one budget for the run; past it the redaction is refused (`RedactError::SharedJbig2Budget`). The
-  images stored again are decoded within the run's image allowance, the JBIG2 decoder's own work
-  included, after what clearing spent: past it `apply` is refused as one clearing too many images is
+  images stored again, and the dictionaries read to know copies of them, are decoded within the
+  run's image allowance, every filter stage and the JBIG2 decoder's own work included, after what
+  clearing spent: past it `apply` is refused as one clearing too many images is
   (`RedactError::ImagesPastAllowance`), and `remove_hidden`, which chose no pages, as one past the
   run's budget. Codecs redaction doesn't decode (DCT, JPX) are
   removed whole (fail-closed), and so is a JBIG2 image whose page isn't its size (the renderer
