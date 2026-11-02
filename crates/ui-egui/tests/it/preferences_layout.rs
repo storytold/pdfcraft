@@ -102,3 +102,98 @@ fn a_very_tall_window_does_not_leave_a_blank_gap_above_ok() {
     assert!(on_screen(ok, 2600.0) && on_screen(last, 2600.0), "{last:?} {ok:?}");
     assert!(ok.min.y - last.max.y < 120.0, "a gap of {} pt between the last setting and OK", ok.min.y - last.max.y);
 }
+
+#[test]
+fn segmented_pill_controls_switch_modes_and_layouts() {
+    let mut h = harness(900.0);
+    // Switch workspace mode via segmented pill
+    h.get_by_role_and_label(egui::accesskit::Role::RadioButton, "Convert").scroll_to_me();
+    h.run_steps(3);
+    h.get_by_role_and_label(egui::accesskit::Role::RadioButton, "Convert").click();
+    h.run_steps(2);
+    assert_eq!(h.state().default_mode, pdfcraft_ui_egui::Mode::Convert);
+
+    // Switch page layout via segmented pill
+    h.get_by_label("Two-page view").scroll_to_me();
+    h.run_steps(3);
+    h.get_by_label("Two-page view").click();
+    h.run_steps(2);
+    assert_eq!(h.state().view_defaults.layout, pdfcraft_ui_egui::canvas::PageLayout::TwoUp);
+
+    // Switch continuous scrolling pill
+    let continuous_before = h.state().view_defaults.continuous;
+    h.get_by_label("Continuous scrolling").click();
+    h.run_steps(2);
+    assert_eq!(h.state().view_defaults.continuous, !continuous_before);
+
+    // Switch to single page mode
+    h.get_by_label("Single page").click();
+    h.run_steps(2);
+    assert_eq!(h.state().view_defaults.layout, pdfcraft_ui_egui::canvas::PageLayout::Single);
+    assert!(!h.state().view_defaults.continuous);
+
+    // Switch tools panel side via segmented pill
+    h.get_by_label("Left").scroll_to_me();
+    h.run_steps(3);
+    h.get_by_label("Left").click();
+    h.run_steps(2);
+    assert_eq!(h.state().side_panels.tools_side, pdfcraft_ui_egui::side_panels::ToolsSide::Left);
+
+    // Switch measurement units via segmented pill
+    h.get_by_label("pt").scroll_to_me();
+    h.run_steps(3);
+    h.get_by_label("pt").click();
+    h.run_steps(2);
+    assert_eq!(h.state().units, pdfcraft_ui_egui::units::Unit::Points);
+}
+
+#[test]
+fn cancel_button_closes_preferences_dialog() {
+    let mut h = harness(900.0);
+    assert!(h.state().dialog.is_some());
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none());
+}
+
+#[test]
+fn search_settings_filters_cards_in_real_time() {
+    let mut h = harness(900.0);
+    // Initially all card titles exist
+    assert!(h.query_by_label("General & Interface").is_some());
+    assert!(h.query_by_label("Comment").is_some());
+    assert!(h.query_by_label("JavaScript").is_some());
+
+    // Type in search box to filter to JavaScript card
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search settings…").click();
+    h.run_steps(1);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search settings…").type_text("javascript");
+    h.run_steps(3);
+
+    // JavaScript card is visible, General & Interface is filtered out
+    assert!(h.query_by_label("JavaScript").is_some());
+    assert!(h.query_by_label("General & Interface").is_none());
+
+    // Clearing search shows everything again
+    h.get_by_label("Clear search").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("General & Interface").is_some());
+    assert!(h.query_by_label("Comment").is_some());
+    assert!(h.query_by_label("JavaScript").is_some());
+}
+
+#[test]
+fn preferences_dialog_scrollbar_spacing_and_controls() {
+    let h = harness(600.0);
+    let title = h.get_by(|n| n.role() == egui::accesskit::Role::Label && n.value().as_deref() == Some("Preferences")).rect();
+    let search = h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search settings…").rect();
+    let ok = h.get_by_label("OK").rect();
+    let cancel = h.get_by_label("Cancel").rect();
+    assert!(cancel.min.x < ok.min.x);
+    assert!(on_screen(ok, 600.0));
+    assert!(on_screen(cancel, 600.0));
+    // Header title and search box are vertically aligned
+    assert!((title.center().y - search.center().y).abs() <= 2.0);
+    // Search box right edge is aligned within the dialog
+    assert!(search.max.x <= ok.max.x);
+}

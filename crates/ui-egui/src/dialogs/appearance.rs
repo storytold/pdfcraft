@@ -5,7 +5,6 @@ use egui::{Rect, RichText, pos2, vec2};
 
 use crate::PdfCraftApp;
 use crate::theme::{self, ThemeKind, ThemePreference, Tokens};
-use crate::widgets;
 
 /// The themes each card offers. One of each today; a new theme is one more row here.
 pub const LIGHT_THEMES: &[(ThemeKind, &str)] = &[(ThemeKind::Light, "Light gray")];
@@ -82,9 +81,10 @@ fn preview(ui: &mut egui::Ui, kind: ThemeKind, width: f32) {
     }
 }
 
-/// One theme card: its title, Active when it is what shows now, a preview of the chosen theme
-/// and a radio row per theme. Returns true when the card or one of its radio rows was clicked.
+/// One theme card: its title, Active when it is what shows now, and a preview of the chosen theme.
+/// Returns true when the card was clicked.
 fn card(ui: &mut egui::Ui, t: &Tokens, title: &str, active: bool, themes: &[(ThemeKind, &str)]) -> bool {
+    let mut title_clicked = false;
     let inner = egui::Frame::new()
         .fill(t.card)
         .stroke(egui::Stroke::new(1.0, if active { t.accent } else { t.border }))
@@ -93,7 +93,8 @@ fn card(ui: &mut egui::Ui, t: &Tokens, title: &str, active: bool, themes: &[(The
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                ui.label(RichText::new(title).font(theme::semibold(12.5)).color(t.text));
+                let resp = ui.label(RichText::new(title).font(theme::semibold(12.5)).color(t.text));
+                title_clicked = resp.interact(egui::Sense::click()).clicked();
                 if active {
                     ui.label(RichText::new(tl!("Active")).color(t.accent_text).small());
                 }
@@ -101,17 +102,10 @@ fn card(ui: &mut egui::Ui, t: &Tokens, title: &str, active: bool, themes: &[(The
             ui.add_space(4.0);
             let shown = themes.first().map_or(ThemeKind::Light, |(kind, _)| *kind);
             preview(ui, shown, ui.available_width());
-            ui.add_space(4.0);
-            let mut clicked = false;
-            for (kind, label) in themes {
-                // One theme per card today, so it is always the chosen one.
-                clicked |= ui.add(widgets::radio(*kind == shown, tl!(label))).clicked();
-            }
-            clicked
         });
-    // The whole card picks its theme, not just the radio row.
+    // The whole card picks its theme.
     let whole = inner.response.interact(egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
-    inner.inner || whole.clicked()
+    title_clicked || whole.clicked()
 }
 
 /// The Appearance section of Preferences.
@@ -175,7 +169,6 @@ mod tests {
         );
         h.run();
         assert!(h.query_by_label("Light theme").is_some() && h.query_by_label("Dark theme").is_some());
-        assert!(h.query_by_label("Light gray").is_some() && h.query_by_label("Dark gray").is_some());
         assert_eq!(h.query_all_by_label("Active").count(), 1);
         if let Ok(path) = std::env::var("PDFCRAFT_APPEARANCE_SHOT") {
             h.render().unwrap().save(path).unwrap();
@@ -200,7 +193,7 @@ mod tests {
         assert_eq!(h.state().theme_preference, ThemePreference::System);
     }
 
-    /// Clicking a theme card, or its radio row, picks that theme, not only the mode combo box.
+    /// Clicking a theme card picks that theme, not only the mode combo box.
     #[test]
     fn clicking_a_theme_card_picks_that_theme() {
         let mut app = PdfCraftApp::new();
@@ -219,10 +212,9 @@ mod tests {
             app,
         );
         h.run();
-        h.get_by_label("Dark gray").click();
+        h.get_by_label("Dark theme").click();
         h.run();
         assert_eq!((h.state().theme_preference, h.state().theme), (ThemePreference::Dark, ThemeKind::Dark));
-        // The card's title is not a widget of its own: the click lands on the card.
         h.get_by_label("Light theme").click();
         h.run();
         assert_eq!((h.state().theme_preference, h.state().theme), (ThemePreference::Light, ThemeKind::Light));
