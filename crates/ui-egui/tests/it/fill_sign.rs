@@ -164,7 +164,7 @@ fn fill_text_size_controls_new_text_and_survives_settings_restore() {
     let mut h = harness();
     h.state_mut().execute("sign.fill.text");
     h.run_steps(2);
-    h.get_by_label("Font size:");
+    h.get_by_label("Font size");
     h.state_mut().fill_text_size = 24.0;
     click(&mut h, 50.0, 250.0);
     assert_eq!(h.state().views[0].fill_text.as_ref().map(|t| t.size), Some(24.0));
@@ -201,6 +201,8 @@ fn fill_text_size_resizes_the_selected_text() {
     };
     let before = height(&h);
     let set_size = |h: &mut Harness<'static, PdfCraftApp>, value: &str| {
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Font size").click();
+        h.run_steps(2);
         h.query_all_by_role(egui::accesskit::Role::SpinButton)
             .find(|n| n.value().is_some_and(|v| v.ends_with(" pt")))
             .expect("the Font size control")
@@ -211,6 +213,8 @@ fn fill_text_size_resizes_the_selected_text() {
         h.run_steps(1);
         h.key_press(egui::Key::Enter);
         h.run_steps(4);
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Font size").click();
+        h.run_steps(2);
     };
     // Nothing selected: only the size for new text changes.
     h.state_mut().views[0].comments.selected = None;
@@ -1811,4 +1815,101 @@ fn mode_tabs_keep_the_hand_over_a_type_box_scrolled_under_them() {
     h.drop_at(convert);
     h.run_steps(3);
     assert_eq!(h.state().mode, pdfcraft_ui_egui::Mode::Convert, "the tab takes the click, not the text box");
+}
+
+fn place_selected_text(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
+    h.state_mut().execute("sign.fill.text");
+    click(h, 50.0, 250.0);
+    h.event(egui::Event::Text(text.into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let selected = {
+        let s = h.state();
+        s.session
+            .get(s.views[0].id)
+            .unwrap()
+            .info
+            .annotations
+            .iter()
+            .find(|a| a.contents.as_deref() == Some(text))
+            .map(|a| (a.page, a.index))
+            .unwrap()
+    };
+    h.state_mut().views[0].comments.selected = Some(selected);
+    h.run_steps(2);
+}
+
+fn placed_height(h: &Harness<'static, PdfCraftApp>, text: &str) -> f32 {
+    let s = h.state();
+    let a = s.session.get(s.views[0].id).unwrap().info.annotations.iter().find(|a| a.contents.as_deref() == Some(text)).unwrap();
+    a.rect[3] - a.rect[1]
+}
+
+fn placed_color(h: &Harness<'static, PdfCraftApp>, text: &str) -> Option<[f32; 3]> {
+    let s = h.state();
+    s.session.get(s.views[0].id).unwrap().info.annotations.iter().find(|a| a.contents.as_deref() == Some(text)).unwrap().color
+}
+
+#[test]
+fn the_fill_text_size_flyout_opens_from_an_icon_and_leaves_a_stored_size_alone() {
+    let mut h = harness();
+    h.state_mut().fill_text_size = 9.1;
+    place_selected_text(&mut h, "Keep me");
+    let height = placed_height(&h, "Keep me");
+    assert_eq!(h.query_all_by_role(egui::accesskit::Role::SpinButton).filter(|n| n.value().is_some_and(|v| v.ends_with(" pt"))).count(), 0);
+    h.get_by_label("Font size").click();
+    h.run_steps(4);
+    assert!(
+        h.query_all_by_role(egui::accesskit::Role::SpinButton).any(|n| n.value().is_some_and(|v| v.ends_with(" pt"))),
+        "the flyout holds the size"
+    );
+    assert_eq!(h.state().fill_text_size, 9.1, "opening the flyout does not round the size");
+    assert_eq!(placed_height(&h, "Keep me"), height, "opening the flyout does not resize the selected text");
+}
+
+#[test]
+fn dragging_the_fill_text_size_slider_is_one_undo_step() {
+    let mut h = harness();
+    place_selected_text(&mut h, "Drag me");
+    let height = placed_height(&h, "Drag me");
+    h.get_by_label("Font size").click();
+    h.run_steps(2);
+    let slider = h.get_by_role(egui::accesskit::Role::Slider).rect();
+    let y = (slider.min.y + slider.max.y) / 2.0;
+    let from = pos2(slider.min.x + 10.0, y);
+    let to = pos2(slider.max.x - 10.0, y);
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(from + (to - from) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    assert_eq!(placed_height(&h, "Drag me"), height, "nothing is applied before the release");
+    h.drop_at(to);
+    h.run_steps(3);
+    assert!(placed_height(&h, "Drag me") > height, "the release resizes the selected text");
+    h.state_mut().execute("edit.undo");
+    h.run_steps(3);
+    assert_eq!(placed_height(&h, "Drag me"), height, "one undo takes the whole drag back");
+}
+
+#[test]
+fn the_fill_colour_dot_recolours_the_selected_text() {
+    let mut h = harness();
+    place_selected_text(&mut h, "Paint me");
+    let before = placed_color(&h, "Paint me");
+    h.get_by_label("Colour").click();
+    h.run_steps(2);
+    h.get_by_label("Blue").click();
+    h.run_steps(3);
+    let color = h.state().fill_text_color.map(|v| v as f32);
+    assert!(color[2] > color[0], "blue was selected: {color:?}");
+    assert_ne!(before, Some(color));
+    assert_eq!(placed_color(&h, "Paint me"), Some(color));
+    h.state_mut().execute("edit.undo");
+    h.run_steps(3);
+    assert_eq!(placed_color(&h, "Paint me"), before, "one undo takes the colour back");
 }
