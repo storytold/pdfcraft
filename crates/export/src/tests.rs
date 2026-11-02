@@ -265,6 +265,8 @@ fn word_and_html_take_the_documents_language() {
     assert!(styles(Some(long)).contains(&format!("<w:lang w:val=\"{long}\"/>")), "{long}");
     assert!(html_with_language(&pages, "Report", Some(long)).contains(&format!("<html lang=\"{long}\">")), "{long}");
     let too_long = format!("en{}", "-abcdefgh".repeat(29));
+    // Private use takes one-character subtags.
+    assert!(html_with_language(&pages, "Report", Some("en-x-a-b")).contains("<html lang=\"en-x-a-b\">"));
     for lang in [
         None,
         Some(""),
@@ -274,6 +276,10 @@ fn word_and_html_take_the_documents_language() {
         Some("bulg-BG"),
         Some("bg--BG"),
         Some("bg-"),
+        Some("en-x"),
+        Some("en-a"),
+        Some("en-a-x-private"),
+        Some("en-US-u-ca-x"),
         Some("en-US-abcdefghi"),
         Some(too_long.as_str()),
         Some("en-\"x\""),

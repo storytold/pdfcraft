@@ -14,16 +14,33 @@ const LONGEST_TAG: usize = 255;
 
 /// `lang` when it is a well formed language tag (BCP 47, as a PDF's `/Lang` holds one): a primary
 /// language of two or three letters, then subtags of one to eight letters or digits, joined by
-/// hyphens, [`LONGEST_TAG`] characters at most. Anything else names no language.
+/// hyphens, [`LONGEST_TAG`] characters at most. A singleton (one letter or digit) starts an
+/// extension, or with `x` private use, and needs a subtag after it. Anything else names no
+/// language.
 pub(crate) fn language_tag(lang: Option<&str>) -> Option<&str> {
     let tag = lang?.trim();
     let mut subtags = tag.split('-');
     let primary = subtags.next()?;
-    let well_formed = tag.len() <= LONGEST_TAG
-        && (2..=3).contains(&primary.len())
-        && primary.bytes().all(|b| b.is_ascii_alphabetic())
-        && subtags.all(|s| (1..=8).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphanumeric()));
-    well_formed.then_some(tag)
+    if tag.len() > LONGEST_TAG || !(2..=3).contains(&primary.len()) || !primary.bytes().all(|b| b.is_ascii_alphabetic()) {
+        return None;
+    }
+    // In private use every subtag is data, one character long or not.
+    let (mut private, mut singleton) = (false, false);
+    for s in subtags {
+        if !(1..=8).contains(&s.len()) || !s.bytes().all(|b| b.is_ascii_alphanumeric()) {
+            return None;
+        }
+        if s.len() == 1 && !private {
+            if singleton {
+                return None;
+            }
+            private = s.eq_ignore_ascii_case("x");
+            singleton = true;
+        } else {
+            singleton = false;
+        }
+    }
+    (!singleton).then_some(tag)
 }
 
 pub(crate) fn esc(s: &str) -> String {
