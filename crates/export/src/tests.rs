@@ -998,11 +998,13 @@ fn word_keeps_a_forms_boxes_rules_and_labels_in_place() {
     assert!(!xml.contains("mso-wrap-style"), "{xml}");
 }
 
-/// A form's fields become fields a Word user can fill in, over their boxes, limited to the
-/// PDF's maximum length. The document is not protected, so it can still be edited, cut and
-/// copied; Word enforces the limits once its reader protects it for filling in forms.
+/// A form's fields become content controls a Word user fills in over their boxes, without
+/// protecting the document, so it can still be edited, cut and copied. A control's own run
+/// properties give the text typed over its placeholder the field's font, size and comb spacing
+/// (typed digits ran out of a comb's cells in Word); Word doesn't limit a control's length, so
+/// the PDF's maximum length is named in the control's title.
 #[test]
-fn word_makes_a_forms_fields_fillable_within_their_limits() {
+fn word_makes_a_forms_fields_content_controls_that_keep_their_look() {
     let xml = part(&docx(&[form_page()], "Claim"), "word/document.xml");
     // Fields: framed paragraphs over the fields' boxes, which Word places out of the text flow.
     assert_eq!(xml.matches("<w:framePr ").count(), 6, "{xml}");
@@ -1014,21 +1016,30 @@ fn word_makes_a_forms_fields_fillable_within_their_limits() {
     // The page places everything itself: a quarter-inch top margin, so that Word doesn't move
     // a field framed near the top of the page down to a one-inch margin.
     assert!(xml.contains("<w:pgMar w:top=\"360\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"180\""), "{xml}");
-    // Text fields are Word form fields named after the field; one with a maximum length in the
-    // PDF takes no more characters in Word either.
-    assert_eq!(xml.matches(" FORMTEXT ").count(), 3);
+    // Every field is a content control tagged with its name; none is a legacy form field.
+    assert_eq!(xml.matches("<w:sdt>").count(), 6, "{xml}");
+    assert!(!xml.contains("FORMTEXT") && !xml.contains("<w:ffData>"), "{xml}");
+    let arial = "<w:rFonts w:ascii=\"Arial\" w:hAnsi=\"Arial\" w:cs=\"Arial\"/>";
+    // An empty field shows a placeholder, and its typed text takes the control's run properties
+    // (auto size: 65% of the 12 pt box, 7.8 pt).
     assert!(
-        xml.contains(
-            "<w:name w:val=\"Name\"/><w:enabled/><w:calcOnExit w:val=\"0\"/><w:statusText w:type=\"text\" w:val=\"Name\"/><w:textInput></w:textInput>"
-        ),
+        xml.contains(&format!(
+            "<w:sdtPr><w:rPr>{arial}<w:sz w:val=\"16\"/></w:rPr><w:alias w:val=\"Name\"/><w:tag w:val=\"Name\"/><w:showingPlcHdr/><w:text/></w:sdtPr>"
+        )),
         "{xml}"
     );
-    assert!(xml.contains("<w:name w:val=\"Postcode\"/>") && xml.contains("<w:textInput><w:maxLength w:val=\"5\"/></w:textInput>"), "{xml}");
-    // A comb field spaces its characters one cell apart: 100 pt over 5 cells, 10 pt text.
-    assert!(xml.contains("<w:spacing w:val=\"290\"/><w:sz w:val=\"20\"/></w:rPr><w:t xml:space=\"preserve\">10115</w:t>"), "{xml}");
-    assert!(xml.contains(">a &amp; b</w:t>"), "{xml}");
-    // Check boxes and lists are content controls.
-    assert_eq!(xml.matches("<w:sdt>").count(), 3);
+    // A comb field spaces its characters one cell apart (100 pt over 5 cells, 10 pt text), in
+    // its value and in what is typed over it, and its title names its maximum length.
+    let comb = format!("<w:rPr>{arial}<w:spacing w:val=\"290\"/><w:sz w:val=\"20\"/></w:rPr>");
+    assert!(
+        xml.contains(&format!(
+            "<w:sdtPr>{comb}<w:alias w:val=\"Postcode (max. 5)\"/><w:tag w:val=\"Postcode\"/><w:text/></w:sdtPr><w:sdtContent><w:r>{comb}<w:t xml:space=\"preserve\">10115</w:t>"
+        )),
+        "{xml}"
+    );
+    assert!(xml.contains("<w:tag w:val=\"Notes\"/><w:text w:multiLine=\"1\"/>") && xml.contains(">a &amp; b</w:t>"), "{xml}");
+    // Check boxes and lists keep their look the same way.
+    assert!(xml.contains(&format!("<w:sdtPr><w:rPr>{arial}<w:sz w:val=\"16\"/></w:rPr><w:alias w:val=\"Yes\"/>")), "{xml}");
     assert!(xml.contains("<w14:checked w14:val=\"1\"/>") && xml.contains("<w14:checked w14:val=\"0\"/>"), "{xml}");
     assert!(xml.contains("<w:dropDownList><w:listItem w:displayText=\"Health\" w:value=\"Health\"/>"), "{xml}");
     // Word reads the check boxes through the Word 2010 namespace, which older readers may skip.
@@ -1044,38 +1055,34 @@ fn word_makes_a_forms_fields_fillable_within_their_limits() {
     assert!(part(&zip, "word/_rels/document.xml.rels").contains("Target=\"settings.xml\""));
 }
 
-/// Word's form field names name bookmarks: letters, digits and `_`, starting with a letter, at
-/// most 20 characters and unique; a PDF's dotted, numbered, accented or repeated names become such.
+/// A content control keeps its field's name as it is, as its title and tag (Word's legacy form
+/// fields had to turn a PDF's dotted, accented or repeated names into bookmark names), escaped,
+/// and a hostile name is cut to [`MAX_FIELD_NAME_CHARS`] characters.
 #[test]
-fn word_form_field_names_are_valid_and_unique() {
+fn word_content_controls_keep_their_fields_names() {
     let mut p = form_page();
-    let text = |name: &str| Field {
+    let text = |name: &str, max_len| Field {
         name: name.into(),
         rect: [60.0, 50.0, 200.0, 62.0],
         size: 0.0,
-        kind: FieldKind::Text { value: String::new(), multiline: false, comb: None, max_len: Some(8) },
+        kind: FieldKind::Text { value: String::new(), multiline: false, comb: None, max_len },
         border: None,
         background: None,
     };
-    p.fields =
-        vec![text("Arbeitnehmeranteil.Betrag.1"), text("Arbeitnehmeranteil.Betrag.2"), text("1. Betrag (€)"), text("Name"), text("Name"), text("")];
+    let long = "\u{e4}".repeat(MAX_FIELD_NAME_CHARS + 400);
+    p.fields = vec![
+        text("Arbeitnehmeranteil.Betrag.1", None),
+        text("1. Betrag (\u{20ac}) <\"&>", Some(8)),
+        text("Name", None),
+        text("Name", None),
+        text(&long, None),
+    ];
     let xml = part(&docx(&[p], "Names"), "word/document.xml");
-    let names: Vec<&str> = xml.split("<w:name w:val=\"").skip(1).map(|s| s.split('"').next().unwrap()).collect();
-    assert_eq!(names.len(), 6, "{xml}");
-    assert_eq!(names[0], "Arbeitnehmeranteil_B");
-    assert!(names[1].starts_with("Arbeitnehmeran") && names[1].len() <= 20 && names[1] != names[0], "{names:?}");
-    assert_eq!(names[2], "F1__Betrag____");
-    assert_eq!(names[3], "Name");
-    assert!(names[4].starts_with("Name_"));
-    assert_eq!(names[5], "F");
-    assert!(
-        names
-            .iter()
-            .all(|n| n.len() <= 20 && n.starts_with(|c: char| c.is_ascii_alphabetic()) && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
-    );
-    let unique: std::collections::HashSet<_> = names.iter().collect();
-    assert_eq!(unique.len(), names.len());
-    assert_eq!(xml.matches("<w:maxLength w:val=\"8\"/>").count(), 6);
+    let tags: Vec<&str> = xml.split("<w:tag w:val=\"").skip(1).map(|s| s.split('"').next().unwrap()).collect();
+    let cut = "\u{e4}".repeat(MAX_FIELD_NAME_CHARS);
+    assert_eq!(tags, ["Arbeitnehmeranteil.Betrag.1", "1. Betrag (\u{20ac}) &lt;&quot;&amp;&gt;", "Name", "Name", cut.as_str()]);
+    assert!(xml.contains("<w:alias w:val=\"1. Betrag (\u{20ac}) &lt;&quot;&amp;&gt; (max. 8)\"/>"), "{xml}");
+    assert!(xml.contains(&format!("<w:alias w:val=\"{cut}\"/>")) && !xml.contains(&long), "{xml}");
 }
 
 /// A page whose text is framed by boxes (a bordered table, a ruled form) keeps them even without
@@ -1346,38 +1353,6 @@ fn word_draws_a_fields_border_and_fill_over_the_pictures() {
     };
     assert!(height("name=\"Field box ") > height("name=\"Picture "), "{xml}");
     assert!(!xml.contains("behindDoc=\"0\""));
-}
-
-/// A repeated field name takes a suffix, and a suffixed name that another field already has
-/// takes another one: two Word fields of one name keep only the first as a bookmark.
-#[test]
-fn a_suffixed_field_name_never_repeats_one_already_used() {
-    let mut form = Form::default();
-    assert_eq!(form.name("Name", 7), "Name");
-    // A field is named exactly what the repeat would become.
-    assert_eq!(form.name("Name_7", 3), "Name_7");
-    let third = form.name("Name", 7);
-    assert_eq!(third, "Name_7_2");
-    assert_eq!(form.name("Name", 7), "Name_7_3");
-    // Long names keep within 20 characters with the longer suffix too.
-    let long = "A".repeat(30);
-    let names: Vec<String> = (0..4).map(|_| form.name(&long, 123)).collect();
-    assert!(names.iter().all(|n| n.len() <= 20), "{names:?}");
-    let unique: std::collections::HashSet<_> = names.iter().collect();
-    assert_eq!(unique.len(), names.len(), "{names:?}");
-}
-
-/// Word compares bookmark names without case, so field names that differ only in case are
-/// repeats: after `Name`, `Name_8` and `NAME_8_2`, another `Name` (id 8) is `Name_8_3`, not a
-/// second `Name_8_2`; and `NAME` after `Name` takes a suffix too.
-#[test]
-fn field_names_that_differ_only_in_case_are_repeats() {
-    let mut form = Form::default();
-    assert_eq!(form.name("Name", 8), "Name");
-    assert_eq!(form.name("Name_8", 1), "Name_8");
-    assert_eq!(form.name("NAME_8_2", 2), "NAME_8_2");
-    assert_eq!(form.name("Name", 8), "Name_8_3");
-    assert_eq!(form.name("NAME", 9), "NAME_9", "the emitted spelling is kept");
 }
 
 /// Paths the reader left unread make a page cut short only where Word keeps its layout: a

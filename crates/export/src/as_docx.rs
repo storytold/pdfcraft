@@ -421,45 +421,6 @@ fn field_rpr(size: f64, spacing: f64) -> String {
     rpr
 }
 
-/// How many suffixed names [`Form::name`] tries before it leaves a name repeated.
-const MAX_NAME_TRIES: usize = 64;
-
-/// The form fields a Word document has written, by name: Word's field names name their
-/// bookmarks, so they must be unique, and Word compares bookmark names without case. The names
-/// are kept in ASCII lower case (they are ASCII).
-#[derive(Default)]
-pub(crate) struct Form {
-    names: std::collections::HashSet<String>,
-}
-
-impl Form {
-    /// A Word form field name for `name`: letters, digits and `_`, starting with a letter, at
-    /// most 20 characters (Word's limit), and not one this document already uses in any case. A
-    /// repeated name
-    /// takes `_` and `id`, then `_2`, `_3` … after that as long as that is taken too (a field
-    /// may already be named so); past [`MAX_NAME_TRIES`] the name stays repeated, which Word
-    /// opens with only the first of the two as a bookmark.
-    pub(crate) fn name(&mut self, name: &str, id: usize) -> String {
-        let mut base: String = name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
-        if !base.starts_with(|c: char| c.is_ascii_alphabetic()) {
-            base.insert(0, 'F');
-        }
-        // ASCII only, so any byte length is a character boundary.
-        base.truncate(20);
-        let mut candidate = base.clone();
-        for k in 1..=MAX_NAME_TRIES {
-            if !self.names.contains(&candidate.to_ascii_lowercase()) {
-                break;
-            }
-            let suffix = if k == 1 { format!("_{id}") } else { format!("_{id}_{k}") };
-            let keep = 20usize.saturating_sub(suffix.len()).min(base.len());
-            candidate = format!("{}{suffix}", base.get(..keep).unwrap_or_default());
-        }
-        self.names.insert(candidate.to_ascii_lowercase());
-        candidate
-    }
-}
-
 /// A paragraph framed over `r` (y up) on a page `page_height` tall: Word places the frame
 /// exactly there, out of the text flow. `down` points move the frame's top down (and its height
 /// with it) so that a single line sits in the middle of the box, rather than a space before the
@@ -521,12 +482,17 @@ fn field_look_xml(f: &Field, page_height: f64, id: usize) -> Option<String> {
     ))
 }
 
-/// A form field as a framed paragraph over the field's box: a text field is a Word form field
-/// (filled in where it stands, or through Word's form protection), limited to the
-/// PDF field's maximum length when it has one (a comb field also spreads its characters over its
-/// cells); a check box is a content control that shows an X when checked (the PDF draws the box
-/// itself); a list is a drop-down content control.
-fn field_xml(f: &Field, page_height: f64, id: usize, form: &mut Form) -> Option<String> {
+/// How much of a field's name its content control's title and tag keep: enough for any real
+/// qualified name, and a hostile name can't make each field's paragraph grow without end.
+pub(crate) const MAX_FIELD_NAME_CHARS: usize = 128;
+
+/// A form field as a framed paragraph over the field's box, as a content control named and
+/// tagged after the field, which Word fills in without protecting the document: a text field is
+/// a plain-text control (a comb field spreads its characters over its cells, and the PDF
+/// field's maximum length is named in the control's title, since Word doesn't limit a control's
+/// length); a check box shows an X when checked (the PDF draws the box itself); a list is a
+/// drop-down.
+fn field_xml(f: &Field, page_height: f64) -> Option<String> {
     let r = f.rect;
     if !r.iter().all(|v| v.is_finite()) {
         return None;
@@ -536,7 +502,8 @@ fn field_xml(f: &Field, page_height: f64, id: usize, form: &mut Form) -> Option<
     let size = if f.size.is_finite() && f.size > 0.0 { f.size.clamp(2.0, 72.0) } else { (h * 0.65).clamp(4.0, 12.0) };
     // One line of `size` points sits in the middle of the box.
     let middle = |size: f64| ((h - 1.15 * size) / 2.0).max(0.0);
-    let name = esc(&f.name);
+    let label: String = f.name.chars().take(MAX_FIELD_NAME_CHARS).collect();
+    let name = esc(&label);
     let props = format!("<w:alias w:val=\"{name}\"/><w:tag w:val=\"{name}\"/>");
     // En spaces (half an em each) keep an empty field as wide as its box.
     let blank = |n: usize| "\u{2002}".repeat(n.clamp(1, 200));
@@ -555,8 +522,10 @@ fn field_xml(f: &Field, page_height: f64, id: usize, form: &mut Form) -> Option<
                 }
                 None => (0.0, 1.0, r),
             };
-            // An empty field shows Word's own placeholder of five en spaces, or one per comb cell.
-            let text = if value.is_empty() { blank(cells.unwrap_or(5)) } else { value.clone() };
+            // An empty field shows a placeholder of en spaces as wide as its box (one per comb
+            // cell), so a click anywhere in the box lands in it; typing replaces it.
+            let (text, placeholder) =
+                if value.is_empty() { (blank(cells.unwrap_or_else(|| fits(0.5 * size))), "<w:showingPlcHdr/>") } else { (value.clone(), "") };
             // A multi-line value keeps its lines: Word ends a line at a break element, not at a
             // newline character (CR LF, CR or LF each end one line).
             let text_xml = if *multiline {
@@ -568,25 +537,32 @@ fn field_xml(f: &Field, page_height: f64, id: usize, form: &mut Form) -> Option<
             } else {
                 format!("<w:t xml:space=\"preserve\">{}</w:t>", esc(&text))
             };
-            let limit = max_len.filter(|n| *n > 0).map_or_else(String::new, |n| format!("<w:maxLength w:val=\"{}\"/>", n.min(32767)));
-            let field_name = esc(&form.name(&f.name, id));
+            // A content control can be filled in without protecting the document, but Word has no
+            // length limit for one: the PDF's maximum length is named in the control's title,
+            // which Word shows on the control.
+            let title = match max_len.filter(|n| *n > 0) {
+                Some(n) => esc(&format!("{label} (max. {n})")),
+                None => name.clone(),
+            };
+            let multi = if *multiline { " w:multiLine=\"1\"" } else { "" };
             let indent = format!("<w:ind w:left=\"{}\"/>", (left * 20.0).round().clamp(0.0, 31680.0) as i64);
             let before = if *multiline { 0.0 } else { middle(size) };
+            // The control's own run properties are what Word gives the text typed over its
+            // placeholder: without them a typed value loses the font, size and comb spacing.
+            let rpr = field_rpr(size, spacing);
             format!(
-                "<w:p>{}<w:r><w:fldChar w:fldCharType=\"begin\"><w:ffData><w:name w:val=\"{field_name}\"/><w:enabled/><w:calcOnExit w:val=\"0\"/><w:statusText w:type=\"text\" w:val=\"{}\"/><w:textInput>{limit}</w:textInput></w:ffData></w:fldChar></w:r><w:r><w:instrText xml:space=\"preserve\"> FORMTEXT </w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r>{}{}</w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:p>",
+                "<w:p>{}<w:sdt><w:sdtPr>{rpr}<w:alias w:val=\"{title}\"/><w:tag w:val=\"{name}\"/>{placeholder}<w:text{multi}/></w:sdtPr><w:sdtContent><w:r>{rpr}{}</w:r></w:sdtContent></w:sdt></w:p>",
                 frame_ppr(frame, page_height, before, &indent),
-                esc(&f.name.chars().take(138).collect::<String>()),
-                field_rpr(size, spacing),
                 text_xml
             )
         }
         FieldKind::Check { checked } => {
             let size = (h.min(w) * 0.8).clamp(4.0, 24.0);
+            let rpr = field_rpr(size, 0.0);
             format!(
-                "<w:p>{}<w:sdt><w:sdtPr>{props}<w14:checkbox><w14:checked w14:val=\"{}\"/><w14:checkedState w14:val=\"0058\" w14:font=\"Arial\"/><w14:uncheckedState w14:val=\"2002\" w14:font=\"Arial\"/></w14:checkbox></w:sdtPr><w:sdtContent><w:r>{}<w:t xml:space=\"preserve\">{}</w:t></w:r></w:sdtContent></w:sdt></w:p>",
+                "<w:p>{}<w:sdt><w:sdtPr>{rpr}{props}<w14:checkbox><w14:checked w14:val=\"{}\"/><w14:checkedState w14:val=\"0058\" w14:font=\"Arial\"/><w14:uncheckedState w14:val=\"2002\" w14:font=\"Arial\"/></w14:checkbox></w:sdtPr><w:sdtContent><w:r>{rpr}<w:t xml:space=\"preserve\">{}</w:t></w:r></w:sdtContent></w:sdt></w:p>",
                 frame_ppr(r, page_height, middle(size), "<w:jc w:val=\"center\"/>"),
                 u8::from(*checked),
-                field_rpr(size, 0.0),
                 if *checked { "X" } else { "\u{2002}" }
             )
         }
@@ -597,10 +573,10 @@ fn field_xml(f: &Field, page_height: f64, id: usize, form: &mut Form) -> Option<
                 items.push_str(&format!("<w:listItem w:displayText=\"{o}\" w:value=\"{o}\"/>"));
             }
             let (text, placeholder) = if value.is_empty() { (blank(fits(0.5 * size)), "<w:showingPlcHdr/>") } else { (value.clone(), "") };
+            let rpr = field_rpr(size, 0.0);
             format!(
-                "<w:p>{}<w:sdt><w:sdtPr>{props}{placeholder}<w:dropDownList>{items}</w:dropDownList></w:sdtPr><w:sdtContent><w:r>{}<w:t xml:space=\"preserve\">{}</w:t></w:r></w:sdtContent></w:sdt></w:p>",
+                "<w:p>{}<w:sdt><w:sdtPr>{rpr}{props}{placeholder}<w:dropDownList>{items}</w:dropDownList></w:sdtPr><w:sdtContent><w:r>{rpr}<w:t xml:space=\"preserve\">{}</w:t></w:r></w:sdtContent></w:sdt></w:p>",
                 frame_ppr(r, page_height, middle(size), "<w:ind w:left=\"20\"/>"),
-                field_rpr(size, 0.0),
                 esc(&text)
             )
         }
@@ -637,7 +613,7 @@ fn rows(lines: &[Block]) -> Vec<Vec<&Block>> {
 
 /// A page that keeps its layout, and whether it had to leave shapes or fields out to stay within
 /// [`MAX_DOCX_PAGE_SHAPES`] and [`MAX_DOCX_PAGE_POINTS`].
-fn positioned_page<'a>(page: &'a Page, media: &mut Vec<(String, &'a Image)>, shape_id: &mut usize, form: &mut Form) -> (String, bool) {
+fn positioned_page<'a>(page: &'a Page, media: &mut Vec<(String, &'a Image)>, shape_id: &mut usize) -> (String, bool) {
     // One 1 pt paragraph anchors the whole page. Shapes never reserve body space, so even a
     // page-sized watermark cannot push the invoice footer onto another page.
     let mut s = String::from("<w:p><w:pPr><w:spacing w:before=\"0\" w:after=\"0\" w:line=\"20\" w:lineRule=\"exact\"/></w:pPr>");
@@ -746,12 +722,10 @@ fn positioned_page<'a>(page: &'a Page, media: &mut Vec<(String, &'a Image)>, sha
         }
     }
     s.push_str("</w:p>");
-    // Fields follow as framed paragraphs over their boxes (a form field in a text box can't be
-    // filled in once a reader protects the document for forms), in front of the shapes behind
-    // the text.
+    // Fields follow as framed paragraphs over their boxes, in front of the shapes behind the
+    // text.
     for f in page.fields.iter().take(MAX_DOCX_PAGE_SHAPES) {
-        *shape_id = shape_id.saturating_add(1);
-        if let Some(xml) = field_xml(f, page.height, *shape_id, form) {
+        if let Some(xml) = field_xml(f, page.height) {
             s.push_str(&xml);
         }
     }
@@ -804,7 +778,6 @@ pub fn docx_checked(pages: &[Page], title: &str) -> (Vec<u8>, Vec<usize>) {
     // Word needs a paragraph between adjacent tables and after the last one in the body.
     let mut after_table = false;
     let mut shape_id = 0usize;
-    let mut form = Form::default();
     let layouts: Vec<bool> = pages.iter().map(positioned).collect();
     // A document most of whose pages keep their layout (a form) keeps it on every page: its
     // pages of notes then sit where they did instead of flowing past the page's end.
@@ -814,7 +787,7 @@ pub fn docx_checked(pages: &[Page], title: &str) -> (Vec<u8>, Vec<usize>) {
         let text_w = (pw - 2 * (pw / 8).min(1440)) as f64 / 20.0;
         let kept = all_kept || layouts.get(page_index).copied().unwrap_or(false);
         if kept {
-            let (xml, left_out) = positioned_page(page, &mut media, &mut shape_id, &mut form);
+            let (xml, left_out) = positioned_page(page, &mut media, &mut shape_id);
             body.push_str(&xml);
             // Paths the reader left out are missing only where the page keeps its layout.
             if left_out || page.art_truncated {
@@ -879,9 +852,8 @@ pub fn docx_checked(pages: &[Page], title: &str) -> (Vec<u8>, Vec<usize>) {
     }
     // Word shows a document background only when its settings say so (`settings.xml` below).
     let page_colour = word_background(pages);
-    // A document with form fields is not protected: its reader can still edit, cut and copy the
-    // form. Word enforces the fields' maximum lengths once the reader protects it for filling in
-    // forms (Review ▸ Restrict Editing).
+    // A document with fields is not protected: its fields are content controls, which Word fills
+    // in as they stand, so its reader can still edit, cut and copy the form.
     let background = page_colour.as_deref().map(|c| format!("<w:background w:color=\"{c}\"/>")).unwrap_or_default();
     let doc = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n\
