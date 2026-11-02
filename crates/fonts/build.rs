@@ -109,7 +109,8 @@ fn manifest(dir: &std::path::Path, manifest: &std::path::Path, wasm: bool, stric
             || telugu
             || hebrew
             || scripts.split(',').any(|s| s.trim() == "Thai")
-            || devanagari;
+            || devanagari
+            || scripts.split(',').any(|s| s.trim() == "Syrc");
         if wasm && !web_face {
             continue;
         }

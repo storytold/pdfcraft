@@ -29,7 +29,6 @@ pub fn segmented_pill_choice<T: PartialEq + Copy>(ui: &mut egui::Ui, t: &Tokens,
 }
 
 /// A segmented pill selection bar with separate accessibility labels.
-#[expect(dead_code, reason = "convenience helpers for non-searched segmented pill controls")]
 pub fn segmented_pill_choice_a11y<T: PartialEq + Copy>(ui: &mut egui::Ui, t: &Tokens, current: &mut T, options: &[(T, &str, &str)]) -> bool {
     segmented_pill_choice_a11y_query(ui, t, current, options, "").0
 }

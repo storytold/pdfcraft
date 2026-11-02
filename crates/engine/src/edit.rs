@@ -236,6 +236,8 @@ pub enum Edit {
         width: Option<f64>,
         /// Line or polyline: two endings. Callout: one. `None` leaves `/LE` unchanged.
         endings: Option<Vec<pdfcraft_annot::LineEnding>>,
+        /// FreeText's document family; `None` preserves the stored choice.
+        syriac_family: Option<pdfcraft_fonts::SyriacFamily>,
     },
     /// Fill a rectangle, oval or polygon comment, or remove its fill (`None`).
     FillAnnotation {

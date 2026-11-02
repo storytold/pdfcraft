@@ -28,14 +28,33 @@ pub enum ShapedScript {
     Arabic,
     Hebrew,
     Thai,
+    Syriac,
+    SyriacEastern,
+    SyriacWestern,
 }
 
 impl ShapedScript {
+    pub fn for_syriac(family: crate::SyriacFamily) -> Self {
+        syriac_script(family)
+    }
+
+    pub fn syriac_family(self) -> Option<crate::SyriacFamily> {
+        match self {
+            Self::Syriac => Some(crate::SyriacFamily::Estrangela),
+            Self::SyriacEastern => Some(crate::SyriacFamily::Eastern),
+            Self::SyriacWestern => Some(crate::SyriacFamily::Western),
+            Self::Arabic | Self::Hebrew | Self::Thai => None,
+        }
+    }
+
     pub fn font(self) -> Option<&'static crate::CraftFont> {
         match self {
             Self::Arabic => crate::document_arabic_font(),
             Self::Hebrew => crate::document_hebrew_font(false),
             Self::Thai => crate::document_thai_font(),
+            Self::Syriac => crate::document_syriac_font(),
+            Self::SyriacEastern => crate::document_syriac_font_for_family(crate::SyriacFamily::Eastern),
+            Self::SyriacWestern => crate::document_syriac_font_for_family(crate::SyriacFamily::Western),
         }
     }
 }
@@ -44,10 +63,16 @@ fn face(script: ShapedScript) -> Option<&'static (FontRef<'static>, ShaperData)>
     static FACE: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
     static HEBREW: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
     static THAI: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
+    static SYRIAC: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
+    static SYRIAC_EASTERN: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
+    static SYRIAC_WESTERN: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
     let cache = match script {
         ShapedScript::Arabic => &FACE,
         ShapedScript::Hebrew => &HEBREW,
         ShapedScript::Thai => &THAI,
+        ShapedScript::Syriac => &SYRIAC,
+        ShapedScript::SyriacEastern => &SYRIAC_EASTERN,
+        ShapedScript::SyriacWestern => &SYRIAC_WESTERN,
     };
     cache
         .get_or_init(|| {
@@ -91,6 +116,36 @@ pub fn shape_thai(text: &str) -> Result<Vec<ShapedCluster>, GlyphError> {
     shape_script(text, false, ShapedScript::Thai)
 }
 
+/// Whether the Syriac document face can draw this character.
+pub fn syriac_has(c: char) -> bool {
+    syriac_has_for_family(c, crate::SyriacFamily::default())
+}
+
+pub fn syriac_has_for_family(c: char, family: crate::SyriacFamily) -> bool {
+    face(syriac_script(family)).is_some_and(|(font, _)| font.charmap().map(c).is_some())
+}
+
+fn syriac_script(family: crate::SyriacFamily) -> ShapedScript {
+    match family {
+        crate::SyriacFamily::Estrangela => ShapedScript::Syriac,
+        crate::SyriacFamily::Eastern => ShapedScript::SyriacEastern,
+        crate::SyriacFamily::Western => ShapedScript::SyriacWestern,
+    }
+}
+
+/// Shape a directional Syriac run with its own OpenType script rules. Vowel marks
+/// remain in the native grapheme cluster and never acquire duplicate Unicode text.
+pub fn shape_syriac(text: &str, rtl: bool) -> Result<Vec<ShapedCluster>, GlyphError> {
+    shape_syriac_for_family(text, rtl, crate::SyriacFamily::default())
+}
+
+pub fn shape_syriac_for_family(text: &str, rtl: bool, family: crate::SyriacFamily) -> Result<Vec<ShapedCluster>, GlyphError> {
+    if text.len() > 262_144 {
+        return Err(GlyphError::TooComplex);
+    }
+    shape_script(text, rtl, syriac_script(family))
+}
+
 fn shape_script(text: &str, rtl: bool, kind: ShapedScript) -> Result<Vec<ShapedCluster>, GlyphError> {
     let (font, data) = face(kind).ok_or(GlyphError::NoFont)?;
     let shaper = data.shaper(font).build();
@@ -98,15 +153,25 @@ fn shape_script(text: &str, rtl: bool, kind: ShapedScript) -> Result<Vec<ShapedC
     let mut buffer = UnicodeBuffer::new();
     buffer.push_str(text);
     buffer.set_direction(if rtl { Direction::RightToLeft } else { Direction::LeftToRight });
-    buffer.set_script(match kind {
+    let script = match kind {
         ShapedScript::Arabic => script::ARABIC,
         ShapedScript::Hebrew => script::HEBREW,
         ShapedScript::Thai => script::THAI,
-    });
+        ShapedScript::Syriac | ShapedScript::SyriacEastern | ShapedScript::SyriacWestern => script::SYRIAC,
+    };
+    if matches!(kind, ShapedScript::Syriac | ShapedScript::SyriacEastern | ShapedScript::SyriacWestern)
+        && !text.chars().any(crate::source_shaping::is_syriac)
+    {
+        buffer.guess_segment_properties();
+    } else {
+        buffer.set_script(script);
+    }
     // Preserve the historical Arabic per-character mapping; Hebrew and Thai marks stay with their base.
     buffer.set_cluster_level(match kind {
         ShapedScript::Arabic => BufferClusterLevel::Characters,
-        ShapedScript::Hebrew | ShapedScript::Thai => BufferClusterLevel::MonotoneGraphemes,
+        ShapedScript::Hebrew | ShapedScript::Thai | ShapedScript::Syriac | ShapedScript::SyriacEastern | ShapedScript::SyriacWestern => {
+            BufferClusterLevel::MonotoneGraphemes
+        }
     });
     let shaped = shaper.shape(buffer, ShapeOptions::new());
     // Clusters are byte offsets into `text`; a cluster shows the characters up to the next one.

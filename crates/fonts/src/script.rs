@@ -192,6 +192,21 @@ pub(crate) fn bounded_outline(font: &FontRef, gid: GlyphId, width: f64) -> Resul
 /// signatures nor its Inter fallback has a glyph for: [`script_outline`] would leave it out.
 /// `None` when they can draw all of them.
 pub fn script_missing(text: &str) -> Option<char> {
+    script_missing_for_family(text, crate::SyriacFamily::default())
+}
+
+/// Like [`script_missing`], with an explicit document face when the signature contains Syriac.
+/// Other scripts keep the bundled Dancing Script / Inter fallback policy.
+pub fn script_missing_for_family(text: &str, family: crate::SyriacFamily) -> Option<char> {
+    if crate::content_text::contains_syriac(text) {
+        if text.len() > crate::content_text::MAX_TEXT_BYTES {
+            return text.chars().find(|c| crate::source_shaping::is_syriac(*c));
+        }
+        let shown = text.replace(['\n', '\r'], " ");
+        return crate::content_text::wrap_for_family(&shown, 1.0, f64::MAX, family)
+            .err()
+            .and_then(|_| text.chars().find(|c| crate::source_shaping::is_syriac(*c)));
+    }
     let font = FontRef::new(FONT).ok()?;
     let charmap = font.charmap();
     let fallback = FontRef::new(INTER_REGULAR).ok();
@@ -204,8 +219,21 @@ pub fn script_missing(text: &str) -> Option<char> {
 /// skipped (check [`script_missing`] first where nobody sees a preview). Over-limit input returns
 /// an empty outline instead of a silently truncated signature.
 pub fn script_outline(text: &str) -> ScriptOutline {
+    script_outline_for_family(text, crate::SyriacFamily::default())
+}
+
+/// Like [`script_outline`], shaping Syriac with exactly the selected document family.
+/// A missing selected face or unsupported text returns an empty bounded outline.
+pub fn script_outline_for_family(text: &str, family: crate::SyriacFamily) -> ScriptOutline {
     if text.chars().take(MAX_SIGNATURE_CHARS + 1).count() > MAX_SIGNATURE_CHARS {
         return ScriptOutline::default();
+    }
+    if crate::content_text::contains_syriac(text) {
+        let shown = text.replace(['\n', '\r'], " ");
+        return crate::content_text::wrap_for_family(&shown, 1.0, f64::MAX, family)
+            .ok()
+            .and_then(|lines| lines.first().and_then(|line| line.outline().ok()))
+            .unwrap_or_default();
     }
     let Ok(font) = FontRef::new(FONT) else { return ScriptOutline::default() };
     let loc = LocationRef::default();

@@ -3,6 +3,11 @@
 Interactive forms (AcroForm, ISO 32000-2 §12.7). Layer L3; depends on `pdfcraft-cos` and
 `pdfcraft-fonts`.
 
+The document-backed appearance path also shapes Syriac text and choice values,
+comb cells and push-button captions with the optional craft-fonts Syrc faces.
+Password fields retain masking. The immutable legacy appearance helper cannot
+allocate those glyph resources. See [supported content and limits](../../docs/syriac-content.md).
+
 ## API
 
 ```rust

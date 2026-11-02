@@ -1,5 +1,7 @@
 # PdfCraft roadmap: milestones and what's next
 
+> **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** minor (M7 bounded Syriac content: focused font4/forms2/automation4, seven-crate strict lint and formatting pass; companion craft-fonts #61 published; remaining publication gates and release pin pending; no interface/IME qualification; estimates unchanged)
+
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7 #5657: header/footer, watermark and background operations commit all selected pages together; later-page errors preserve marks, content, shared/inherited resources and pending edits; estimates unchanged)
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 further review: inherited drawing/text state, affine image gestures, paste/selection ownership, no-op scripts and menu permissions; estimates unchanged)
@@ -281,6 +283,8 @@ M2 (renderer), M7 (content editing), M10 (OCR and Office), M11 (Preflight and st
 - Unmeasured fidelity: without an Acrobat comparison harness, quality gaps surface as user reports.
 
 ## Revision history
+
+**2026-11-02 · minor:** M7 bounded Syriac content has passing font4/forms2/automation4 cases across page edits and generated form/comment/mark/signature appearances, including the three selected families. Seven-crate strict lint and formatting pass; companion craft-fonts #61 is published. Remaining publication gates and release pin adoption are pending; native-reader and keyboard qualification remain separate. Estimates unchanged.
 
 **2026-10-26 · patch:** M2/PR #4172: reconcile current main and preserve upstream Japanese serif/weight selection alongside the installed CJK viewer and preview fallback. Estimates unchanged.
 

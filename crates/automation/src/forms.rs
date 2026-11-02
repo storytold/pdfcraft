@@ -256,6 +256,9 @@ impl Automation {
                 });
                 let mut more = serde_json::Map::new();
                 let o = &mut more;
+                if matches!(f.kind, FormFieldKind::Text | FormFieldKind::Combo | FormFieldKind::List | FormFieldKind::PushButton) {
+                    o.insert("syriac_family".into(), json!(doc.field_syriac_family(&f.name).map(|family| family.name())));
+                }
                 if let Some(t) = &f.tooltip {
                     o.insert("tooltip".into(), json!(t));
                 }
@@ -534,6 +537,11 @@ impl Automation {
     fn field_props_arg(&self, a: &Args, name: &str) -> Result<FieldProps> {
         let doc = self.doc(a)?;
         let f = doc.form.iter().find(|f| f.name == name).ok_or_else(|| failed(format!("there is no field named {name:?} (see form_fields)")))?;
+        let syriac_family = crate::content::opt_syriac_family(a)?;
+        if syriac_family.is_some() && !matches!(f.kind, FormFieldKind::Text | FormFieldKind::Combo | FormFieldKind::List | FormFieldKind::PushButton)
+        {
+            return Err(bad("syriac_family applies only to text fields, choice lists and push-button captions"));
+        }
         // Position: top-left-origin points on the displayed page → user space.
         let rect = match a.get("rect") {
             None => None,
@@ -547,6 +555,7 @@ impl Automation {
             }
         };
         Ok(FieldProps {
+            syriac_family,
             rect,
             export_value: a
                 .opt_str("export_value")?

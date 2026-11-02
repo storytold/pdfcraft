@@ -32,6 +32,9 @@ fn rect_arg(a: &Args, key: &str) -> Result<Option<[f64; 4]>> {
 
 /// Apply the style arguments to `t`.
 fn style(a: &Args, t: &mut AddedText) -> Result<()> {
+    if let Some(family) = opt_syriac_family(a)? {
+        t.syriac_family = family;
+    }
     if let Some(s) = a.opt_num("size")? {
         t.size = s;
     }
@@ -68,6 +71,12 @@ fn style(a: &Args, t: &mut AddedText) -> Result<()> {
         t.char_spacing = c;
     }
     Ok(())
+}
+
+pub(crate) fn opt_syriac_family(a: &Args) -> Result<Option<pdfcraft_engine::SyriacFamily>> {
+    a.opt_str("syriac_family")?
+        .map(|name| pdfcraft_engine::SyriacFamily::from_name(name).ok_or_else(|| bad("syriac_family must be estrangela, eastern or western")))
+        .transpose()
 }
 
 pub(crate) fn parse_align(al: &str) -> Result<TextAlign> {
@@ -120,6 +129,7 @@ impl Automation {
                         v["type"] = json!("text");
                         v["text"] = json!(t.text);
                         v["font"] = json!(t.family.label());
+                        v["syriac_family"] = json!(t.syriac_family.name());
                         v["size"] = json!(t.size);
                         v["bold"] = json!(t.bold);
                         v["italic"] = json!(t.italic);
@@ -205,8 +215,9 @@ impl Automation {
                 if a.get("text").is_some() {
                     return Err(bad("images have no text"));
                 }
-                if ["font", "size", "bold", "italic", "color", "align", "aligns", "char_spacing"].iter().any(|k| a.get(k).is_some()) {
-                    return Err(bad("font, size, bold, italic, color, align, aligns and char_spacing apply to text"));
+                if ["font", "syriac_family", "size", "bold", "italic", "color", "align", "aligns", "char_spacing"].iter().any(|k| a.get(k).is_some())
+                {
+                    return Err(bad("font, syriac_family, size, bold, italic, color, align, aligns and char_spacing apply to text"));
                 }
                 if let Some(deg) = a.opt_int("rotate")? {
                     if deg.rem_euclid(90) != 0 {

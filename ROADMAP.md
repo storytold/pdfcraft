@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** minor (M7 bounded Syriac content: focused font4/forms2/automation4, seven-crate strict lint and formatting pass; companion craft-fonts #61 published; remaining publication gates and release pin pending; no interface/IME qualification; estimates unchanged)
+
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 further review: inherited drawing/text state, affine image gestures, paste/selection ownership, no-op scripts and menu permissions; estimates unchanged)
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 latest comments: explicit image-paste events, mixed-size field refresh, and documented mixed-script normalization with Undo; estimates unchanged)
@@ -218,6 +220,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-02 (M7, bounded Syriac content):** Page edits and generated form/FreeText/mark/signature appearances have passing focused font4/forms2/automation4 results, including selected-family render/readback/save/reopen. Seven-crate all-target strict lint and formatting pass. Estrangela, Eastern and Western OFL inputs are published separately in craft-fonts #61. Remaining publication gates, font acceptance and release pin adoption stay pending; native-reader, interface and keyboard qualification are not claimed. Estimates unchanged.
 
 - **2026-11-01 (M7, #5657):** Header/footer, watermark and background additions and replacements stage the complete call before committing. Synthetic later-page failures preserve exact incremental bytes, object count, dirty state and allocation cursor; success controls retain other marks and shared/inherited resources. Estimates unchanged.
 

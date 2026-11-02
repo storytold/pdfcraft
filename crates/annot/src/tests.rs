@@ -40,7 +40,7 @@ fn new(page: usize, shape: Shape) -> NewAnnotation {
     NewAnnotation {
         page,
         shape,
-        style: Style { color: [0.0, 0.4, 1.0], opacity: 1.0, width: 2.0, fill: None },
+        style: Style { color: [0.0, 0.4, 1.0], opacity: 1.0, width: 2.0, fill: None, syriac_family: None },
         contents: "hello".into(),
         author: "Ada".into(),
     }
@@ -873,8 +873,8 @@ fn cloud_ys(path: &str) -> Vec<f64> {
 fn replace_text_groups_a_strikeout_and_a_caret() {
     let mut doc = fixture();
     let quads = [[100.0, 720.0, 200.0, 720.0, 100.0, 706.0, 200.0, 706.0]];
-    let red = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None };
-    let blue = Style { color: [0.0, 0.47, 0.84], opacity: 1.0, width: 1.0, fill: None };
+    let red = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None, syriac_family: None };
+    let blue = Style { color: [0.0, 0.47, 0.84], opacity: 1.0, width: 1.0, fill: None, syriac_family: None };
     let i = add_text_replacement(
         &mut doc,
         TextReplacement {
@@ -2218,18 +2218,33 @@ fn freehand_highlight_is_compatible_ink_with_marker_blending() {
         list(doc, 0)[idx].get(b"Rect").unwrap().as_array().unwrap().iter().filter_map(Object::as_f64).collect()
     };
     let rect_before = rect_of(&doc, index);
-    set_style(&mut doc, 0, index, StyleChange { color: None, opacity: None, width: Some(34.0), endings: None }, &meta("wider")).unwrap();
+    set_style(&mut doc, 0, index, StyleChange { color: None, opacity: None, width: Some(34.0), endings: None, syriac_family: None }, &meta("wider"))
+        .unwrap();
     let rect_after = rect_of(&doc, index);
     assert!((rect_after[0] - (rect_before[0] - 10.0)).abs() < 1e-4);
     assert!((rect_after[2] - (rect_before[2] + 10.0)).abs() < 1e-4);
 
     // Repeated increase/decrease cycles must keep bounds stable and never accumulate padding.
-    set_style(&mut doc, 0, index, StyleChange { color: None, opacity: None, width: Some(14.0), endings: None }, &meta("narrower")).unwrap();
+    set_style(
+        &mut doc,
+        0,
+        index,
+        StyleChange { color: None, opacity: None, width: Some(14.0), endings: None, syriac_family: None },
+        &meta("narrower"),
+    )
+    .unwrap();
     let rect_restored = rect_of(&doc, index);
     for (a, b) in rect_restored.iter().zip(rect_before.iter()) {
         assert!((a - b).abs() < 1e-4, "expected {rect_before:?}, got {rect_restored:?}");
     }
-    set_style(&mut doc, 0, index, StyleChange { color: None, opacity: None, width: Some(34.0), endings: None }, &meta("wider-again")).unwrap();
+    set_style(
+        &mut doc,
+        0,
+        index,
+        StyleChange { color: None, opacity: None, width: Some(34.0), endings: None, syriac_family: None },
+        &meta("wider-again"),
+    )
+    .unwrap();
     let rect_second_wide = rect_of(&doc, index);
     for (a, b) in rect_second_wide.iter().zip(rect_after.iter()) {
         assert!((a - b).abs() < 1e-4, "expected {rect_after:?}, got {rect_second_wide:?}");
@@ -2244,7 +2259,14 @@ fn freehand_highlight_is_compatible_ink_with_marker_blending() {
         d.set(b"Rect".to_vec(), create::num_array(&[5.0, 85.0, 135.0, 115.0]));
     })
     .unwrap();
-    set_style(&mut doc, 0, index, StyleChange { color: None, opacity: None, width: Some(10.0), endings: None }, &meta("border-shrink")).unwrap();
+    set_style(
+        &mut doc,
+        0,
+        index,
+        StyleChange { color: None, opacity: None, width: Some(10.0), endings: None, syriac_family: None },
+        &meta("border-shrink"),
+    )
+    .unwrap();
     let rect_from_border = rect_of(&doc, index);
     for (a, b) in rect_from_border.iter().zip([10.0, 90.0, 130.0, 110.0]) {
         assert!((a - b).abs() < 1e-4, "expected [10, 90, 130, 110], got {rect_from_border:?}");

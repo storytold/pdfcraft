@@ -2,6 +2,11 @@
 
 Layer L2. Font helpers for the appearance streams PdfCraft generates (comments, form fields).
 
+Syriac content uses `shape_syriac` and `content_text` with the optional craft-fonts
+Syrc faces. The shared bounded writer emits shaped cluster fonts with ToUnicode
+and ActualText for page marks, FreeText and form appearances; typed signatures
+use the same outlines. See [supported content and limits](../../docs/syriac-content.md).
+
 Today it holds what generated appearances need without a font program:
 
 - `helvetica_width`: the **exact** standard-14 advance widths, via `Std14::Helvetica`. It was an

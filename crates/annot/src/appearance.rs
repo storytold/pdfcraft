@@ -10,7 +10,7 @@
 //! Helvetica font with WinAnsi encoding; line breaking uses [`text_width`], an approximation of
 //! Helvetica's proportions by character class (no font program or metrics file is bundled).
 
-use pdfcraft_cos::{Dict, Object, PdfString, Stream};
+use pdfcraft_cos::{Dict, Document, Object, PdfString, Stream};
 use pdfcraft_fonts::{first_undrawable, literal, win_ansi};
 pub use pdfcraft_fonts::{helvetica_width as text_width, wrap};
 
@@ -20,6 +20,30 @@ mod symbols;
 
 pub(crate) use symbols::display_stamp;
 use symbols::{CAPTION_SIZE, attach_icon, ellipse, line_caption, line_layout, note_icon, stamp};
+
+/// Initial Fill & Sign text bounds, including the selected Syriac face's ink extents.
+/// Other text retains the established Helvetica sizing policy.
+pub fn text_box_size_for_family(text: &str, size: f64, family: pdfcraft_fonts::SyriacFamily) -> Result<[f64; 2], String> {
+    if !size.is_finite() || size <= 0.0 {
+        return Err("text size must be positive and finite".into());
+    }
+    if !pdfcraft_fonts::content_text::contains_syriac(text) {
+        return Ok([(text_width(text, size) + 8.0).clamp(20.0, 600.0), size * 1.2 + 6.0]);
+    }
+    let lines = pdfcraft_fonts::content_text::wrap_for_family(text, size, 592.0, family)?;
+    let (mut width, mut ascent, mut descent) = (0.0f64, 0.9f64, -0.2f64);
+    for line in &lines {
+        let (top, bottom) = line.vertical_extents()?;
+        width = width.max(line.width * size);
+        ascent = ascent.max(top);
+        descent = descent.min(bottom);
+    }
+    let height = lines.len().max(1) as f64 * (ascent - descent + 0.1).max(1.2) * size + 6.0;
+    if !width.is_finite() || width > 592.0 || !height.is_finite() || height > 14_400.0 {
+        return Err("Syriac Fill & Sign text is too large; use a smaller font size or shorter text".into());
+    }
+    Ok([(width + 8.0).clamp(20.0, 600.0), height])
+}
 
 /// Length of an arrowhead for a line of width `w`.
 pub fn arrow_size(w: f64) -> f64 {
@@ -321,6 +345,12 @@ pub fn undrawable_text(d: &Dict) -> Option<(&'static str, char)> {
         b"Redact" => ("the redaction's overlay text", text(b"OverlayText")?),
         _ => return None,
     };
+    if d.name(b"Subtype") == Some(b"FreeText")
+        && pdfcraft_fonts::content_text::contains_syriac(&text)
+        && pdfcraft_fonts::content_text::wrap_for_family(&text, 12.0, 1000.0, pdfcraft_fonts::SyriacFamily::from_dict(d)).is_ok()
+    {
+        return None;
+    }
     Some((what, first_undrawable(&text)?))
 }
 
@@ -410,13 +440,50 @@ impl AppearanceDrawing {
 /// Text the standard fonts can't draw comes out as `?`: [`undrawable_text`] says which, and
 /// [`crate::set_appearance`] marks the annotation with it (`pdfcraft_fonts::UNDRAWN_MARK`).
 pub fn build(d: &Dict) -> Option<Stream> {
+    build_with(d, None)
+}
+
+/// Whether the dictionary can be redrawn, including document-backed Syriac text.
+pub fn can_build(d: &Dict) -> bool {
+    if let Some(text) = syriac_contents(d) {
+        if pdfcraft_fonts::content_text::wrap_for_family(&text, 12.0, 1000.0, pdfcraft_fonts::SyriacFamily::from_dict(d)).is_err() {
+            return false;
+        }
+        let mut probe = d.clone();
+        probe.set(b"Contents".to_vec(), Object::String(PdfString::text("")));
+        build(&probe).is_some()
+    } else {
+        build(d).is_some()
+    }
+}
+
+pub(crate) fn syriac_contents(d: &Dict) -> Option<String> {
+    if d.name(b"Subtype") != Some(b"FreeText") {
+        return None;
+    }
+    let text = d.get(b"Contents")?.as_string()?.to_text();
+    pdfcraft_fonts::content_text::contains_syriac(&text).then_some(text)
+}
+
+/// Build a font-backed appearance atomically; glyph streams must be indirect objects.
+pub fn build_in(doc: &mut Document, d: &Dict) -> Option<Stream> {
+    if syriac_contents(d).is_none() {
+        return build(d);
+    }
+    let mut staged = doc.clone();
+    let appearance = build_with(d, Some(&mut staged))?;
+    *doc = staged;
+    Some(appearance)
+}
+
+fn build_with(d: &Dict, doc: Option<&mut Document>) -> Option<Stream> {
     let context = appearance_context(d)?;
     let drawing = AppearanceDrawing::new(&context);
     match context.subtype {
         b"Text" => return draw_icon(&context, "Note", [1.0, 0.82, 0.0], drawing),
         b"FileAttachment" => return draw_icon(&context, "PushPin", [0.0, 0.47, 0.84], drawing),
         b"Stamp" => return draw_stamp(&context, drawing),
-        b"FreeText" => return draw_free_text(&context, drawing),
+        b"FreeText" => return draw_free_text(&context, drawing, doc),
         _ => {}
     }
     let mut drawing = drawing;
@@ -893,7 +960,7 @@ fn draw_stamp(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -
     Some(form(rect, c.as_bytes(), res))
 }
 
-fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -> Option<Stream> {
+fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing, doc: Option<&mut Document>) -> Option<Stream> {
     let d = context.dict;
     let rect = context.rect;
     let stroke = context.stroke;
@@ -968,6 +1035,46 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     let pad = 2.0 + bw;
     let width = (rect[2] - rect[0] - 2.0 * pad).max(1.0);
     let q = d.int(b"Q").unwrap_or(0);
+    if pdfcraft_fonts::content_text::contains_syriac(&text) {
+        let doc = doc?;
+        let lines = pdfcraft_fonts::content_text::wrap_for_family(&text, size, width, pdfcraft_fonts::SyriacFamily::from_dict(d)).ok()?;
+        let mut ascent = 0.9f64;
+        let mut descent = -0.2f64;
+        for line in &lines {
+            let (top, bottom) = line.vertical_extents().ok()?;
+            ascent = ascent.max(top);
+            descent = descent.min(bottom);
+        }
+        c.push_str(&format!("{} {} {} {} re W n\n{}", n(rect[0]), n(rect[1]), n(rect[2] - rect[0]), n(rect[3] - rect[1]), rg(text_color)));
+        let mut out = c.into_bytes();
+        let mut fonts = Dict::new();
+        let mut y = rect[3] - pad - ascent * size;
+        for line in lines {
+            if y < rect[1] - size {
+                break;
+            }
+            let align = if d.contains(b"Q") {
+                q
+            } else if line.rtl {
+                2
+            } else {
+                0
+            };
+            let x = match align {
+                1 => rect[0] + pad + (width - line.width * size) / 2.0,
+                2 => rect[2] - pad - line.width * size,
+                _ => rect[0] + pad,
+            };
+            out.extend(line.write(doc, &mut fonts, [x, y], size).ok()?);
+            y -= (ascent - descent + 0.1).max(1.2) * size;
+        }
+        res.set(b"Font".to_vec(), Object::Dict(fonts));
+        let mut stream = form(full, &out, res);
+        if let Some(m) = matrix {
+            stream.dict.set(b"Matrix".to_vec(), Object::Array(m.iter().copied().map(Object::Real).collect()));
+        }
+        return Some(stream);
+    }
     c.push_str(&format!(
         "{} {} {} {} re W n\nBT\n/Helv {} Tf\n{}",
         n(rect[0]),

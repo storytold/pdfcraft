@@ -428,8 +428,8 @@ fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Sc
     let mut undrawn = false;
     for w in &f.widgets {
         let (stream, missing) = match &shown {
-            Some(s) => appearance::field_appearance_drawn(doc, f, w, std::slice::from_ref(s), false),
-            None => appearance::field_appearance_drawn(doc, f, w, values, true),
+            Some(s) => appearance::field_appearance_drawn_in(doc, f, w, std::slice::from_ref(s), false),
+            None => appearance::field_appearance_drawn_in(doc, f, w, values, true),
         };
         undrawn |= missing.is_some();
         let existing_ap = in_place

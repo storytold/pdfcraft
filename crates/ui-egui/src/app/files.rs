@@ -60,13 +60,9 @@ impl PdfCraftApp {
         let info = self.session.get(view.id).map(|d| &d.info);
         match info.and_then(|i| i.open_dest.filter(|(page, _)| *page < pages).map(|d| (i, d))) {
             Some((info, (page, dest))) if !self.always_default_view => view.go_to_dest(page, dest, info),
-            Some((_, (page, _))) => {
-                if page > 0 {
-                    view.go_to_page(page);
-                }
-            }
+            Some((_, (page, _))) if page > 0 => view.go_to_page(page),
             None if v.page > 0 && v.page < pages => view.go_to_page(v.page),
-            None => {}
+            _ => {}
         }
     }
 

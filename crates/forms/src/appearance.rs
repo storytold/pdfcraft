@@ -27,6 +27,57 @@ use pdfcraft_fonts::{UnicodeCMap, cjk_width, helvetica_width, literal, win_ansi,
 
 use crate::{Field, FieldKind, Widget, acroform, flags};
 
+mod syriac;
+
+/// The persisted Syriac content face, with a widget override before the field's choice.
+/// Older documents without private metadata use Estrangela.
+pub fn syriac_family(doc: &Document, f: &Field, w: &Widget) -> pdfcraft_fonts::SyriacFamily {
+    let widget = doc.get(w.obj);
+    if let Some(dict) = widget.as_dict()
+        && dict.contains(pdfcraft_fonts::SyriacFamily::PDF_KEY)
+    {
+        return pdfcraft_fonts::SyriacFamily::from_dict(dict);
+    }
+    doc.get(f.obj).as_dict().map(pdfcraft_fonts::SyriacFamily::from_dict).unwrap_or_default()
+}
+
+/// Widget-only caption regeneration also honours metadata on its owning field.
+pub(crate) fn widget_syriac_family(doc: &Document, w: &Widget) -> pdfcraft_fonts::SyriacFamily {
+    let mut object = doc.get(w.obj);
+    // A malformed /Parent cycle must never recurse or block appearance generation.
+    for _ in 0..64 {
+        let Some(dict) = object.as_dict() else { break };
+        if dict.contains(pdfcraft_fonts::SyriacFamily::PDF_KEY) {
+            return pdfcraft_fonts::SyriacFamily::from_dict(dict);
+        }
+        let Some(parent) = dict.get(b"Parent") else { break };
+        object = doc.resolve(parent);
+    }
+    pdfcraft_fonts::SyriacFamily::default()
+}
+
+pub(crate) fn needs_syriac(doc: &Document, f: &Field, w: &Widget, values: &[String]) -> bool {
+    syriac::requested(doc, f, w, values)
+}
+
+/// Font-backed field appearances, staged so a refused glyph never leaves resources behind.
+pub fn field_appearance_drawn_in(doc: &mut Document, f: &Field, w: &Widget, values: &[String], format: bool) -> (Stream, Option<char>) {
+    if !needs_syriac(doc, f, w, values) {
+        return field_appearance_drawn(doc, f, w, values, format);
+    }
+    if f.kind == FieldKind::PushButton {
+        return crate::author::button_appearance_in(doc, w, &f.da);
+    }
+    let mut staged = doc.clone();
+    match syriac::field(&mut staged, f, w, values, format) {
+        Ok(stream) => {
+            *doc = staged;
+            (stream, None)
+        }
+        Err(_) => field_appearance_drawn(doc, f, w, values, format),
+    }
+}
+
 /// Format a number for content streams.
 fn n(v: f64) -> String {
     let s = format!("{:.3}", if v.abs() < 5e-4 { 0.0 } else { v });
@@ -93,6 +144,7 @@ pub fn auto_text_size_by(width: f64, height: f64, multiline: bool, line_width: i
 /// multi-line field; the two must change together.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextBox {
+    syriac_family: pdfcraft_fonts::SyriacFamily,
     /// The `/DA` font from `/DR`, when it is one the appearance can draw with.
     font: Option<FontText>,
     /// Width and height inside the border and padding.
@@ -116,6 +168,7 @@ pub fn text_box(doc: &Document, f: &Field, w: &Widget) -> TextBox {
     let pad = 2.0 + border_width(doc, &wd);
     let multiline = f.has(flags::MULTILINE);
     TextBox {
+        syriac_family: syriac_family(doc, f, w),
         font: dr_font(doc, &da.font).map(|(_, enc)| enc),
         inner_w: (place.layout_w - 2.0 * pad).max(1.0),
         inner_h: place.layout_h - 2.0 * pad,
@@ -134,6 +187,9 @@ impl TextBox {
     pub fn fits(&self, text: &str) -> bool {
         if self.comb || text.is_empty() {
             return true;
+        }
+        if !self.password && pdfcraft_fonts::content_text::contains_syriac(text) {
+            return syriac::fits(self, text);
         }
         let shown: String = if self.password { "*".repeat(text.chars().count()) } else { text.to_string() };
         // The font the appearance would choose for this text.
@@ -683,7 +739,13 @@ pub fn list_rows(doc: &Document, f: &Field, w: &Widget) -> ListRows {
     let wobj = doc.get(w.obj);
     let wd = wobj.as_dict().cloned().unwrap_or_default();
     let fobj = doc.get(f.obj);
-    list_rows_of(doc, &f.da, fobj.as_dict(), &wd)
+    let mut rows = list_rows_of(doc, &f.da, fobj.as_dict(), &wd);
+    if f.options.iter().any(|(_, label)| pdfcraft_fonts::content_text::contains_syriac(label))
+        && let Ok((top, bottom)) = syriac::option_extents(f, syriac_family(doc, f, w))
+    {
+        rows.row = (top - bottom + 0.1).max(1.15) * rows.size;
+    }
+    rows
 }
 
 /// The appearance of a text or choice field's widget showing `values`. Characters its font can't
@@ -735,6 +797,12 @@ impl std::fmt::Display for Overflow {
 pub fn value_overflow(doc: &Document, f: &Field, w: &Widget) -> Option<Overflow> {
     if f.kind != FieldKind::Text {
         return None;
+    }
+    if !f.has(flags::PASSWORD)
+        && f.value.iter().any(|value| pdfcraft_fonts::content_text::contains_syriac(value))
+        && let Ok(overflow) = syriac::overflow(&text_box(doc, f, w), f)
+    {
+        return overflow;
     }
     field_appearance_fit(doc, f, w, &f.value, true).2
 }

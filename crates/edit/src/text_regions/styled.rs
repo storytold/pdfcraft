@@ -35,6 +35,49 @@ struct FontResolver<'a> {
 }
 
 impl FontResolver<'_> {
+    /// Keep one real font across a Syriac span before resolving its characters.
+    /// Prefer the document program, then a loaded face, then an approved matching/default face.
+    fn syriac_font(&mut self, source: &TextLine, span: &str) -> Result<Option<String>, EditError> {
+        use pdfcraft_fonts::{embedding, source_shaping};
+        if !span.chars().any(source_shaping::is_syriac) {
+            return Ok(None);
+        }
+        let usable = |bytes: &[u8]| embedding::covers(bytes, span) && span.split(['\n', '\r']).all(|row| source_shaping::shape(bytes, row).is_ok());
+        let program = self
+            .fonts
+            .get(source.font.as_bytes())
+            .and_then(|font| self.doc.dict(font))
+            .and_then(|font| pdfcraft_fonts::pdf::embedded_sfnt(self.doc, &font));
+        if program.as_deref().is_some_and(&usable)
+            && self.metrics.get(&source.font).is_some_and(|metrics| span.split(['\n', '\r']).all(|row| source_encodes(metrics, row)))
+        {
+            return Ok(Some(source.font.clone()));
+        }
+        if let Some(bytes) = source_program(self.doc, self.fonts, &source.font).filter(|bytes| usable(bytes)) {
+            let family = embedding::names(&bytes).map_err(EditError::Invalid)?.0;
+            return self.embed_face(format!("source {}", source.font), &bytes, &family, "the source Syriac font could not be loaded").map(Some);
+        }
+        for (name, metrics) in self.metrics.iter() {
+            if !span.split(['\n', '\r']).all(|row| source_encodes(metrics, row)) {
+                continue;
+            }
+            let bytes = self
+                .fonts
+                .get(name.as_bytes())
+                .and_then(|font| self.doc.dict(font))
+                .and_then(|font| pdfcraft_fonts::pdf::embedded_sfnt(self.doc, &font));
+            if bytes.as_deref().is_some_and(&usable) {
+                return Ok(Some(name.clone()));
+            }
+        }
+        let face = embedding::matching_faces(&source.base_font)
+            .into_iter()
+            .chain(pdfcraft_fonts::document_syriac_font())
+            .find(|face| usable(face.bytes))
+            .ok_or_else(|| EditError::Invalid("Syriac editing needs a complete source or loaded font, or a Syrc face in craft-fonts".into()))?;
+        self.embed_face(face.name(), face.bytes, face.family, "the Syriac font could not be loaded").map(Some)
+    }
+
     fn encodable_font(&mut self, source: &TextLine, text: &str, requested: Option<&str>) -> Result<Option<String>, EditError> {
         if let Some(resource) = requested {
             if !self.metrics.get(resource).is_some_and(|metrics| source_encodes(metrics, text)) {
@@ -131,7 +174,17 @@ impl CharacterPreparation<'_> {
         for (range, index) in spans {
             let source = lines.get(index).unwrap_or(first);
             let start = range.start;
-            for (offset, ch) in draft.get(range).unwrap_or_default().char_indices() {
+            let span = draft.get(range).unwrap_or_default();
+            let requested = overrides.get(&index).and_then(|range| range.resource.as_deref()).or(style.resource.as_deref());
+            let syriac = if requested.is_none() { resolver.syriac_font(source, span)? } else { None };
+            if let Some(name) = &syriac
+                && let Some(metrics) = resolver.metrics.get(name)
+                && pdfcraft_fonts::embedding::face_key(&metrics.base_font) != pdfcraft_fonts::embedding::face_key(&source.base_font)
+            {
+                substituted = Some(metrics.base_font.clone());
+            }
+            let requested = requested.or(syriac.as_deref());
+            for (offset, ch) in span.char_indices() {
                 if ch == '\n' {
                     chars.push((ch, index, source.font.clone()));
                     continue;
@@ -142,7 +195,6 @@ impl CharacterPreparation<'_> {
                     continue;
                 }
                 let text = ch.to_string();
-                let requested = overrides.get(&index).and_then(|range| range.resource.as_deref()).or(style.resource.as_deref());
                 let name = if let Some(name) = resolver.encodable_font(source, &text, requested)? {
                     name
                 } else if needs_type3(&text) {

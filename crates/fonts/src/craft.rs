@@ -75,6 +75,17 @@ pub fn document_thai_font() -> Option<&'static CraftFont> {
     ui_thai_fonts().into_iter().next()
 }
 
+/// The first approved Syriac document face (Estrangela in the shared manifest).
+/// No interface font selection is changed; absent input returns `None`.
+pub fn document_syriac_font() -> Option<&'static CraftFont> {
+    document_syriac_font_for_family(crate::SyriacFamily::default())
+}
+
+/// Select the requested approved family exactly, without silently changing its style.
+pub fn document_syriac_font_for_family(family: crate::SyriacFamily) -> Option<&'static CraftFont> {
+    CRAFT_FONTS.iter().find(|font| font.covers("Syrc") && font.family == family.font_family() && font.style == "Regular")
+}
+
 /// The `Deva` craft-fonts faces for Devanagari interface text (the Hindi catalog, file names,
 /// document titles), in manifest order. Empty when built without craft-fonts or when its revision
 /// has no Devanagari face; a desktop build then falls back to one font already installed on the

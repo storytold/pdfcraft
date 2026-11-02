@@ -76,6 +76,7 @@ pub(crate) fn context_menu(
                             opacity: None,
                             width: None,
                             endings: None,
+                            syriac_family: None,
                         })));
                         ui.close();
                     }

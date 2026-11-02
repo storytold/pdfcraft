@@ -33,12 +33,16 @@ pub(crate) fn redraw_or_restore(doc: &mut Document, r: ObjRef, before: Dict) -> 
 pub(crate) fn draw_appearance(doc: &mut Document, r: ObjRef) -> Result<(), AnnotError> {
     let d = annot_dict(doc, r);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
-    let Some(stream) = build_appearance(doc, &d) else { return Err(AnnotError::Unsupported(subtype)) };
+    let Some(stream) = build_appearance_in(doc, &d) else { return Err(AnnotError::Unsupported(subtype)) };
     apply_appearance(doc, r, &d, stream)
 }
 
 /// Draw the appearance for an annotation dictionary: the expensive half of [`set_appearance`].
 /// Pure from the dictionary and the objects it points at, so [`AppearanceCache`] can reuse it.
+fn build_appearance_in(doc: &mut Document, d: &Dict) -> Option<Stream> {
+    if appearance::syriac_contents(d).is_some() { appearance::build_in(doc, d) } else { build_appearance(doc, d) }
+}
+
 fn build_appearance(doc: &Document, d: &Dict) -> Option<Stream> {
     let mut stream = appearance::build(d)?;
     // Picture-stamp restyling must retain the placement's page-axis correction.
@@ -174,6 +178,13 @@ pub fn with_missing_appearances_cached(doc: &Document, cache: &mut AppearanceCac
             }
             let has_normal = d.get(b"AP").is_some_and(|ap| doc.resolve(ap).as_dict().is_some_and(|ap| ap.contains(b"N")));
             if has_normal {
+                continue;
+            }
+            // Font references allocated in a display copy cannot be cached in another copy.
+            if appearance::syriac_contents(&d).is_some() {
+                let current = copy.get_or_insert_with(|| doc.clone());
+                let stream = build_appearance_in(current, &d)?;
+                apply_appearance(current, r, &d, stream).ok()?;
                 continue;
             }
             if let Some(stream) = cache.get(r) {

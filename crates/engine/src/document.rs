@@ -502,6 +502,21 @@ impl Document {
         Some(form_appearance::text_box(cos, f, w))
     }
 
+    /// The Syriac content face of a text/choice field or push-button caption. The first
+    /// widget's override takes precedence; older fields without metadata use Estrangela.
+    /// `None` without an editable document, a matching field, or an editable text surface.
+    pub fn field_syriac_family(&self, name: &str) -> Option<crate::SyriacFamily> {
+        let cos = &self.editor.as_ref()?.cos;
+        let f = self.form.iter().find(|f| f.name == name)?;
+        if !matches!(f.kind, FormFieldKind::Text | FormFieldKind::Combo | FormFieldKind::List | FormFieldKind::PushButton) {
+            return None;
+        }
+        Some(match f.widgets.first() {
+            Some(w) => form_appearance::syriac_family(cos, f, w),
+            None => cos.get(f.obj).as_dict().map(crate::SyriacFamily::from_dict).unwrap_or_default(),
+        })
+    }
+
     /// Filling in form fields is allowed (Table 22, bits 6 and 9).
     pub fn allows_form_filling(&self) -> bool {
         self.editable() && self.permissions().is_none_or(|p| p.fill_forms())
