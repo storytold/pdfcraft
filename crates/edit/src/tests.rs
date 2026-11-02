@@ -1440,6 +1440,12 @@ fn a_gap_before_a_space_glyph_reads_as_one_space() {
     // Only the first space glyph after the gap is the gap's: two real spaces stay two.
     let doc = text_page("BT /F1 10 Tf 72 700 Td [(Word) -250 (  next)] TJ ET");
     assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "Word  next");
+    // The same line split over operators: the gap ends one run, its space glyph starts the next.
+    let doc = text_page("BT /F1 10 Tf 72 700 Td [(Word) -250] TJ [( next) -250] TJ ( last) Tj ET");
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "Word next last");
+    // Space glyphs on both sides of a break between runs, with no gap, are two spaces.
+    let doc = text_page("BT /F1 10 Tf 72 700 Td (Word ) Tj ( next) Tj ET");
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "Word  next");
     // Down a vertical column the same.
     let doc = vertical_page("BT /V1 20 Tf 500 720 Td [<0041> 300 <00200042> 300 <00200043>] TJ ET");
     assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "A B C");

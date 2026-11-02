@@ -442,6 +442,9 @@ pub(super) struct Carry {
     pub(super) layers: Vec<Option<Vec<u8>>>,
     /// Bytes of glyph text the rest of the page may still produce (see [`MAX_PAGE_TEXT`]).
     pub(super) text_left: usize,
+    /// Whether the last run ended in a space read from a gap, with the next operator a `Tj` or
+    /// `TJ` that may start with the space glyph that gap widened.
+    pub(super) gap_space: bool,
 }
 
 /// The most glyph text one page's extraction produces, in bytes. A ToUnicode destination is
@@ -472,7 +475,7 @@ impl Carry {
             dash: (Vec::new(), 0.0),
             line_cap: 0,
         };
-        Carry { ts, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: MAX_PAGE_TEXT }
+        Carry { ts, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: MAX_PAGE_TEXT, gap_space: false }
     }
 }
 
@@ -604,8 +607,9 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
     // the next glyph continues the last word.
     let mut words: Vec<(f64, f64)> = Vec::new();
     let mut in_word = false;
-    // Whether the text ends in a space read from a gap rather than from a glyph.
-    let mut gap_space = false;
+    // Whether the text ends in a space read from a gap rather than from a glyph. The run just
+    // before may have ended in one: a justified line can be split over `TJ` and `Tj`.
+    let mut gap_space = std::mem::take(&mut carry.gap_space);
     let mut glyph_count = 0_usize;
     for p in &pieces {
         match p {
@@ -768,6 +772,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         hard_break: state.hard_break,
         soft_gap: state.soft_gap,
     });
+    carry.gap_space = gap_space;
     Ok(())
 }
 
@@ -800,6 +805,10 @@ pub(super) fn interpret(
     // as 1, the single space a rejoin always used before #2529.
     let mut soft_gap = 1usize;
     for (i, op) in ops.iter().enumerate() {
+        // A gap's space carries only into a `Tj` or `TJ` right after it.
+        if !matches!(op.op.as_slice(), b"Tj" | b"TJ") {
+            carry.gap_space = false;
+        }
         match op.op.as_slice() {
             // No depth cap: every `EMC` pops, so a capped push would pair it with the enclosing
             // sequence (#3573). Both stacks stay bounded by the number of operators.
