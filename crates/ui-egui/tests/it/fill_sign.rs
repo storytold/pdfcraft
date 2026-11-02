@@ -1814,6 +1814,34 @@ fn the_first_save_after_placing_a_signature_asks_to_lock_it() {
     let _ = std::fs::remove_file(&out);
 }
 
+/// #2348 review (CodeRabbit): File ▸ Revert discards a signature just placed, so the save after it
+/// doesn't ask to lock one, even when the saved file holds an earlier Fill & Sign signature.
+#[test]
+fn reverting_forgets_a_signature_just_placed() {
+    let out = std::env::temp_dir().join(format!("pdfcraft-lock-revert-{}.pdf", std::process::id()));
+    let mut h = harness();
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
+    // An earlier signature, saved as a comment: the file keeps a Fill & Sign mark.
+    h.state_mut().execute("sign.fill.signature");
+    h.run_steps(2);
+    click(&mut h, 40.0, 300.0);
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "asks first");
+    h.run_steps(2);
+    h.get_by_label("Keep editable").click();
+    h.run_steps(3);
+    // A new signature, then Revert: the new one is gone, the saved one stays.
+    h.state_mut().execute("sign.fill.signature");
+    h.run_steps(2);
+    click(&mut h, 40.0, 200.0);
+    h.state_mut().revert_active();
+    h.run_steps(3);
+    let marks = h.state().session.get(h.state().views[0].id).unwrap().info.annotations.iter().filter(|a| a.fill_sign).count();
+    assert_eq!(marks, 1, "the saved signature is back, the new one is gone");
+    assert!(h.state_mut().save_active(SaveTarget::InPlace), "no signature was placed since the last save: no question");
+    let _ = std::fs::remove_file(&out);
+}
+
 /// #2348 review (benandez): right after a signature is placed, a notice offers to lock it into
 /// the page now. Lock now flattens it (undoable) without saving, so the save that follows doesn't
 /// ask; undoing the lock brings back both the notice and the question. Dismiss hides the notice
