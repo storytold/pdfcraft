@@ -137,8 +137,8 @@ pub(super) fn union(a: &mut [f32; 4], b: &[f32; 4]) {
 ///    text comes out in logical order. A block whose first line sits on the baseline of the line read
 ///    just before it, to its right and less than [`SAME_LINE_GAP`] heights away, continues that line
 ///    after a space (a label and its value, words drawn out of order or in another size). A block of
-///    several lines does so only after a line narrower than [`SAME_LINE_GAP`] heights (a label):
-///    beside a wider one it is the next column.
+///    several lines does so only after a one-line block narrower than [`SAME_LINE_GAP`] heights (a
+///    label): beside a wider one, or the last line of a column, it is the next column.
 pub fn layout(glyphs: Vec<TextGlyph>) -> PageText {
     let (order, line_of, space_before) = arrange(&glyphs);
     let mut slots: Vec<Option<TextGlyph>> = glyphs.into_iter().map(Some).collect();
@@ -402,8 +402,8 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
     // `spaces[w]`: a word gap left of the w-th glyph of the segment, by position on the line, not by drawing order
     // (#1062). Reused by every segment.
     let mut spaces: Vec<bool> = Vec::new();
-    // The segment emitted last, and whether it had right-to-left text.
-    let mut last: Option<(usize, bool)> = None;
+    // The segment emitted last, whether it had right-to-left text, and whether its block is that one line.
+    let mut last: Option<(usize, bool, bool)> = None;
     for b in block_order {
         for (k, &si) in blocks[b].0.iter().enumerate() {
             place_glyphs(&glyphs, &height, &segs[si], &mut sc);
@@ -459,7 +459,7 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
             space_before.extend(spaces.iter().take(idx.len()));
             space_before.resize(order.len(), false);
             line = put_on_line(&mut line_of, &mut space_before, start..order.len(), line, &segs[si], joined);
-            last = Some((si, has_rtl));
+            last = Some((si, has_rtl, blocks[b].0.len() == 1));
         }
     }
     (order.into_iter().map(|i| kept[i]).collect(), line_of, space_before)
@@ -486,16 +486,17 @@ fn put_on_line(line_of: &mut Vec<u32>, space_before: &mut [bool], glyphs: std::o
 /// Same-baseline segments are always in different blocks. A column of several lines is read after
 /// the column to its left ends, so their lines don't meet. A paragraph of several lines that starts
 /// beside a line as wide as [`SAME_LINE_GAP`] heights or more is the next column, not that line's
-/// value, so it starts a line of its own; only a narrower line (a label) takes it. One-line
+/// value, so it starts a line of its own; only a narrower line that is a block of its own (a label)
+/// takes it: the short last line of a column of several lines is no label (review on #4468). One-line
 /// paragraphs of two columns that share a baseline cannot be told from a table row, and are further
 /// apart than [`same_line`] allows unless the left one fills its column. Right-to-left lines are
 /// left alone: their blocks still read left first.
-fn joins_line(segs: &[Seg], last: Option<(usize, bool)>, si: usize, first: bool, paragraph: bool, has_rtl: bool) -> Option<&Seg> {
-    let (p, p_rtl) = last?;
+fn joins_line(segs: &[Seg], last: Option<(usize, bool, bool)>, si: usize, first: bool, paragraph: bool, has_rtl: bool) -> Option<&Seg> {
+    let (p, p_rtl, p_alone) = last?;
     if !first || p_rtl || has_rtl {
         return None;
     }
     let (p, s) = (segs.get(p)?, segs.get(si)?);
-    let label = p.bbox[2] - p.bbox[0] < SAME_LINE_GAP * p.h;
+    let label = p_alone && p.bbox[2] - p.bbox[0] < SAME_LINE_GAP * p.h;
     (same_line(p, s) && (!paragraph || label)).then_some(p)
 }

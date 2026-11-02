@@ -929,6 +929,15 @@ fn runs_on_one_baseline_read_as_one_line_in_any_drawing_order() {
     let t = layout(v).plain_text();
     assert!(t.lines().any(|l| l == "leftlastonelinexxxxxxxxxxxxxxxxxxxxxxxx"), "{t}");
     assert!(t.lines().any(|l| l == "rightsecondpara"), "{t}");
+    // Staggered columns (review on #4468): the left column's short last line shares its baseline with
+    // the right column's first line. That last line is no label, so the columns keep their lines.
+    let mut v = Vec::new();
+    sized(&mut v, "leftcol1", 10.0, 100.0, 10.0);
+    sized(&mut v, "leftcol2", 10.0, 112.0, 10.0);
+    sized(&mut v, "end", 10.0, 124.0, 10.0);
+    sized(&mut v, "rightone", 82.0, 124.0, 10.0);
+    sized(&mut v, "righttwo", 82.0, 136.0, 10.0);
+    assert_eq!(layout(v).plain_text(), "leftcol1\nleftcol2\nend\nrightone\nrighttwo");
     // Half a height lower is another line.
     let mut v = Vec::new();
     sized(&mut v, "first", 90.0, 100.0, 14.0);
