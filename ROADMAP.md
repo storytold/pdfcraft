@@ -227,6 +227,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-02 (M7, #5731 allocation review):** Reused one font tuple per styled text segment during plain-width measurement, removing per-character font-name copies without changing measured values or bidi ordering. Existing paragraph and subset-space checks pass; no new performance threshold or broader qualification is claimed.
+
 - **2026-11-02 (M7, #5731 review 5739601464):** Integrated main `168a3cb9`; directional text preselects one usable complete source encoding, and multiline bookmarks keep automatic paragraph direction. The public-tool font regression and three actual bookmark layout cases pass after witnessed failures of the reported old behaviors. Wider language/input qualification and estimates remain unchanged.
 
 - **2026-11-02 (M7, #5731 current main):** Integrated main `e2615187`, retaining decode-budget/resource-reading updates alongside Arabic numeric, mark and source-font fixes. Host composition ownership defers paragraph switches before native focus changes; the source-break policy leaves effective formatting and untouched operators alone. Existing engine undo bookkeeping and wider browser/provider qualification remain unchanged.

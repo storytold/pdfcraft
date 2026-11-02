@@ -348,7 +348,14 @@ fn plain_segment_width(
     let Some(first) = segment.first() else { return Ok(0.0) };
     let logical: String = segment.iter().map(|item| item.0).collect();
     let visual = direction.visual_plain(&logical).map_err(|message| EditError::Invalid(message.into()))?;
-    Ok(visual.chars().map(|ch| advance(&(ch, first.1, first.2.clone()))).sum())
+    let mut item = (first.0, first.1, first.2.clone());
+    Ok(visual
+        .chars()
+        .map(|ch| {
+            item.0 = ch;
+            advance(&item)
+        })
+        .sum())
 }
 
 fn prepare_shaped_rows(
