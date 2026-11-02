@@ -26,9 +26,9 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   no globals. Globals hold the shapes of every image that shares them (a scan's pages, often),
   those of marks under the area included, so whatever left the document, by any route, takes its
   globals with it on the full rewrite: anything else the save would keep that names them, or a
-  byte-for-byte copy of them, is stored again without them, as a copy is (Flate, Group 4 or JBIG2,
+  copy of them (the same bytes once decoded), is stored again without them, as a copy is (Flate, Group 4 or JBIG2,
   whichever is smallest; `Report::images_restored`). When one can't be (it isn't JBIG2, it's past
-  the size redaction clears, or it can't be decoded), or something else refers to them, `apply`
+  the size redaction clears, its data is in another file, or it can't be decoded), or something else refers to them, `apply`
   refuses and changes nothing (`RedactError::SharedJbig2Globals`). `remove_hidden` takes them out
   the same way. Another dictionary holding the same shapes in other bytes isn't found, nor is a copy
   nothing names, and an image that hasn't left keeps its globals with its pixels: one another page

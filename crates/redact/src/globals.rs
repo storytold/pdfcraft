@@ -49,7 +49,8 @@ fn named(doc: &Document, s: &Stream) -> Vec<u32> {
             }
         }
     };
-    for key in [b"DecodeParms".as_slice(), b"DP"] {
+    // `/FDecodeParms` too: those of data in another file, which a reader may draw instead.
+    for key in [b"DecodeParms".as_slice(), b"DP", b"FDecodeParms"] {
         let Some(parms) = s.dict.get(key).map(|p| followed(doc, p)) else { continue };
         match &*parms {
             Object::Array(entries) => entries.iter().for_each(&mut read),
@@ -94,8 +95,12 @@ fn content(doc: &Document, num: u32) -> Option<u64> {
 /// referred to. `None` for a stream that isn't JBIG2, whose decoder took no dictionary and whose
 /// samples another filter may give otherwise; for one past the size of an image redaction clears,
 /// or known to have more than one component, which JBIG2 is drawn as one of whatever the dictionary
-/// says; and for one that can't be decoded.
+/// says; for one whose data is in another file (`/F`), which readers draw instead of what is here;
+/// and for one that can't be decoded.
 fn without_dictionary(doc: &Document, s: &Stream) -> Option<Stream> {
+    if s.dict.contains(b"F") {
+        return None;
+    }
     let readable = readable(doc, s);
     let jbig2 = match readable.dict.get(b"Filter") {
         Some(Object::Array(a)) => a.iter().any(|f| f.as_name() == Some(b"JBIG2Decode".as_slice())),
@@ -168,12 +173,15 @@ pub(crate) fn unshare(doc: &mut Document, before: &HashSet<u32>) -> Result<usize
             users.push(r);
         }
     }
-    let mut stuck = 0;
+    let (mut stored_again, mut stuck) = (0, 0);
     for &r in &users {
         let object = doc.get(r);
         let Object::Stream(s) = &*object else { continue };
         match without_dictionary(doc, s) {
-            Some(stored) => doc.set(r, Object::Stream(stored)),
+            Some(stored) => {
+                doc.set(r, Object::Stream(stored));
+                stored_again += 1;
+            }
             None => stuck += 1,
         }
     }
@@ -181,5 +189,7 @@ pub(crate) fn unshare(doc: &mut Document, before: &HashSet<u32>) -> Result<usize
     if dictionaries.iter().any(|n| after.contains(n)) {
         return Err(crate::RedactError::SharedJbig2Globals(stuck));
     }
-    Ok(users.len())
+    // What couldn't be stored has left with the dictionaries, a dictionary that names itself say:
+    // it isn't counted.
+    Ok(stored_again)
 }

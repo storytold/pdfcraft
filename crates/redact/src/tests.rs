@@ -1402,6 +1402,23 @@ fn ways_out(scan: &SharedScan) -> Vec<(&'static str, [f64; 4], SharedPages)> {
             SharedPages { first: format!("{plain} /SMask 10 0 R"), extra: vec![stream(&shared_image(SHARED), scan.page.clone())], ..base() },
         ),
         (
+            "a stencil mask",
+            COVERS,
+            SharedPages {
+                first: format!("{plain} /Mask 10 0 R"),
+                extra: vec![stream(
+                    &shared_image(SHARED).replace("/BitsPerComponent 1 /ColorSpace /DeviceGray", "/ImageMask true"),
+                    scan.page.clone(),
+                )],
+                ..base()
+            },
+        ),
+        (
+            "parameters for data in another file",
+            COVERS,
+            SharedPages { first: shared_image("/F (scan.jb2) /FFilter /JBIG2Decode /FDecodeParms << /JBIG2Globals 9 0 R >>"), ..base() },
+        ),
+        (
             "an alternate",
             COVERS,
             SharedPages {
@@ -1686,6 +1703,30 @@ fn a_refused_redaction_counts_what_cant_be_stored() {
         assert_eq!(text.starts_with("something else in the file refers to JBIG2 symbol data"), stuck == 0, "{other}: {text}");
         assert_eq!(text.contains("can't be stored"), stuck > 0, "{other}: {text}");
     }
+    // An image whose data is in another file can't be stored here, though what is here decodes: readers
+    // draw the other file, with the dictionary its own parameters name.
+    let elsewhere = format!("{} /F (page2.jb2) /FFilter /JBIG2Decode /FDecodeParms << /JBIG2Globals 9 0 R >>", shared_image(SHARED));
+    let mut doc = SharedPages { other: elsewhere, ..SharedPages::new(&scan) }.build(&scan);
+    mark(&mut doc, 0, &[CLEARS], "");
+    assert!(matches!(apply(&mut doc, None), Err(RedactError::SharedJbig2Globals(1))));
+}
+
+/// A dictionary that names itself as its own globals (malformed) can't be stored without them, but
+/// leaves with what used it, so the run goes on; it isn't counted as stored.
+#[test]
+fn a_dictionary_that_names_itself_isnt_counted_as_stored() {
+    let scan = shared_scan();
+    let mut doc = SharedPages::new(&scan).build(&scan);
+    let dictionary = pdfcraft_cos::ObjRef::new(9, 0);
+    let Object::Stream(mut s) = (*doc.get(dictionary)).clone() else { panic!("object 9 is the dictionary") };
+    let mut parms = pdfcraft_cos::Dict::new();
+    parms.set(b"JBIG2Globals".to_vec(), Object::Ref(dictionary));
+    s.dict.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+    doc.set(dictionary, Object::Stream(s));
+    mark(&mut doc, 0, &[CLEARS], "");
+    assert_eq!(apply(&mut doc, None).unwrap().images_restored, 1);
+    assert_gone(&doc, b"LEAK_GLOBALS");
+    assert_eq!(drawn_samples(&reopen(&doc), 1), scan.bits);
 }
 
 /// An image that names the dictionary and another one is stored again without both, but the other
