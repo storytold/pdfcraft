@@ -74,11 +74,12 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let Some(ctx) = self.ctx.clone() else { return };
-            let at_start = self.update_check_at_start;
+            // Settled on the first frame: a preference turned on later waits for the next start.
+            let at_start = std::mem::take(&mut self.updates.startup_check) && self.update_check_at_start;
             let updates = &mut self.updates;
             if std::mem::take(&mut updates.check_requested) {
                 updates.updater.check_now(&ctx);
-            } else if updates.startup_check && at_start {
+            } else if at_start {
                 updates.updater.check_at_start(&ctx);
             }
             updates.updater.tick(&ctx);

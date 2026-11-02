@@ -155,6 +155,17 @@ fn the_preference_keeps_the_check_at_start_from_reaching_the_network() {
     h.get_by_label_contains("PdfCraft 99.0.0 is available");
 }
 
+/// The setting is about starting: turning it on asks nothing until the next start.
+#[test]
+fn turning_the_check_at_start_on_waits_for_the_next_start() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let (mut h, calls) = started_with(r#"{"update_check_at_start": false}"#);
+    h.run_steps(3);
+    h.state_mut().set_option("update_check_at_start", "true").unwrap();
+    run_until_asked(&mut h, &calls, std::time::Duration::from_millis(500));
+    assert_eq!(calls.load(SeqCst), 0, "nothing is asked this session");
+}
+
 #[test]
 fn preferences_turn_the_check_at_start_off() {
     let (mut h, _calls) = started_with(r#"{"update_check_at_start": true}"#);
