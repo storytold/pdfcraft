@@ -341,6 +341,14 @@ mod tests {
         w
     }
 
+    /// A schema program's tokens are charged against the reader's element allowance.
+    #[test]
+    fn program_tokens_are_charged_against_the_allowance() {
+        let bytes = schema(&[(172, &[1, 2, 3])]).bytes();
+        assert!(matches!(Schema::read(&mut BitReader::with_elements(&bytes, 2)), Err(PrcError::TooManyElements { .. })));
+        assert!(Schema::read(&mut BitReader::with_elements(&bytes, 3)).is_ok());
+    }
+
     fn run(entries: &[(u32, &[u32])], data: &W) -> (Result<(), PrcError>, usize) {
         let mut w = schema(entries);
         w.append(data);
@@ -522,5 +530,13 @@ mod tests {
     fn a_duplicated_entity_type_is_malformed() {
         let bytes = schema(&[(172, &[3]), (172, &[3])]).bytes();
         assert!(matches!(Schema::read(&mut BitReader::new(&bytes)), Err(PrcError::Malformed(_))));
+    }
+
+    #[test]
+    fn an_entry_count_past_the_data_is_refused_before_any_entry_is_read() {
+        let mut w = W::default();
+        w.uint(1_000).uint(172).uint(0);
+        let bytes = w.bytes();
+        assert_eq!(Schema::read(&mut BitReader::new(&bytes)).unwrap_err(), PrcError::Truncated("the schema"));
     }
 }

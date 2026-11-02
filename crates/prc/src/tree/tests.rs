@@ -398,6 +398,25 @@ fn a_prototype_cycle_is_an_error() {
     assert!(malformed(single(&[], &occs).model_tree()).contains("own prototype"));
 }
 
+/// One element allowance covers the whole walk: an allowance that fits one file structure does
+/// not fit two, and running short of it is reported as such.
+#[test]
+fn one_element_allowance_covers_the_whole_walk() {
+    // A part of 64 items, so each file structure's tree section, not its globals or the model
+    // file, decodes most of the elements.
+    let wide = || part(None, PLAIN, 64, |w| (0..64).for_each(|_| poly_item(w, 0, 0, 1, PLAIN)));
+    let fs = || Fs { globals: palette(), tree: tree(&[wide()], &[Occ { part: 1, ..Occ::default() }]), tess: two_face_square() };
+    let one = PrcFile::parse(&prc(&[fs()], &model(&[(0, 1)]))).unwrap();
+    let two = PrcFile::parse(&prc(&[fs(), fs()], &model(&[(0, 1), (1, 1)]))).unwrap();
+    let walk = |f: &PrcFile, n| f.walk_within(StyleAlpha::default(), EntityOverrides::default(), n);
+    let short = |f: &PrcFile, n| matches!(walk(f, n), Err(PrcError::TooManyElements { .. }));
+    // One structure decodes about 70 elements, two about 140.
+    assert!(short(&one, 32));
+    assert_eq!(walk(&one, 100).map(|w| w.0.len()), Ok(64));
+    assert!(short(&two, 100), "each structure fits in 100, both do not");
+    assert_eq!(walk(&two, 200).map(|w| w.0.len()), Ok(128));
+}
+
 #[test]
 fn an_exponential_walk_is_cut_off() {
     // Occurrence k has occurrence k + 1 twice as sons: 2^21 visits.
@@ -589,4 +608,33 @@ fn every_truncation_of_a_tree_or_globals_is_an_error_not_a_panic() {
             assert!(Ctx::new(r, &schema, 8137).globals().is_err(), "globals cut at {end}");
         }
     }
+}
+
+#[test]
+fn a_prototype_chain_past_the_ceiling_is_an_error() {
+    // Occurrence k (1-based) has occurrence k + 1 as its prototype; none has a part.
+    let n = u32::try_from(super::MAX_DEPTH).unwrap() + 3;
+    let occs: Vec<_> = (1..=n).map(|k| Occ { prototype: if k < n { k + 1 } else { 0 }, ..Occ::default() }).collect();
+    assert!(malformed(single(&[], &occs).model_tree()).contains("prototype chain too long"));
+}
+
+/// `depth` representation sets, each holding the next, around one poly-B-rep item.
+fn nested_sets(w: &mut W, depth: usize) {
+    if depth == 0 {
+        return poly_item(w, 0, 0, 1, PLAIN);
+    }
+    w.uint(super::RI_SET);
+    graphics(w, None, 0, PLAIN);
+    w.uint(0).uint(0).uint(1);
+    nested_sets(w, depth - 1);
+    w.uint(0); // user data
+}
+
+#[test]
+fn representation_sets_nested_past_the_ceiling_are_an_error() {
+    let deep = part(None, PLAIN, 1, |w| nested_sets(w, super::MAX_DEPTH + 1));
+    let occs = [Occ { part: 1, ..Occ::default() }];
+    assert!(malformed(single(&[deep], &occs).placements()).contains("representation sets nest too deep"));
+    let ok = part(None, PLAIN, 1, |w| nested_sets(w, super::MAX_DEPTH));
+    assert_eq!(single(&[ok], &occs).placements().unwrap().len(), 1);
 }

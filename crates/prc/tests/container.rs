@@ -4,7 +4,7 @@
 
 use std::io::Write;
 
-use pdfcraft_prc::{PrcError, PrcFile, SectionKind, UniqueId};
+use pdfcraft_prc::{MAX_FILE_STRUCTURES, PrcError, PrcFile, SectionKind, UniqueId};
 
 fn zlib(data: &[u8]) -> Vec<u8> {
     let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
@@ -111,4 +111,16 @@ fn an_offset_or_count_past_the_data_is_an_error_not_a_panic() {
     let mut bad = build(SECTIONS, b"m", 0);
     bad[67..71].copy_from_slice(&u32::MAX.to_le_bytes());
     assert!(matches!(PrcFile::parse(&bad), Err(PrcError::Truncated(_))));
+}
+
+#[test]
+fn no_file_structures_or_more_than_the_cap_is_refused_by_name() {
+    let good = build(SECTIONS, b"m", 0);
+    // The file-structure count follows the magic, two versions and two ids.
+    assert_eq!(good[43..47], 1u32.to_le_bytes());
+    for n in [0, u32::try_from(MAX_FILE_STRUCTURES).unwrap() + 1] {
+        let mut bad = good.clone();
+        bad[43..47].copy_from_slice(&n.to_le_bytes());
+        assert!(matches!(PrcFile::parse(&bad), Err(PrcError::Malformed(m)) if m == format!("{n} file structures")), "{n}");
+    }
 }

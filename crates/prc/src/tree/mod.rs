@@ -269,11 +269,21 @@ impl PrcFile {
     }
 
     fn walk(&self, rule: StyleAlpha, scope: EntityOverrides) -> Result<(Vec<Placement>, Vec<ModelNode>), PrcError> {
+        self.walk_within(rule, scope, MAX_DECODED_ELEMENTS)
+    }
+
+    /// [`Self::walk`] with `elements` decoded array elements allowed across all its readers.
+    pub(crate) fn walk_within(
+        &self,
+        rule: StyleAlpha,
+        scope: EntityOverrides,
+        elements: usize,
+    ) -> Result<(Vec<Placement>, Vec<ModelNode>), PrcError> {
         if !self.stores_tree() {
             return Ok((Vec::new(), Vec::new()));
         }
         // One element allowance for the whole walk, so many sections cannot each decode a full one.
-        let mut left = MAX_DECODED_ELEMENTS;
+        let mut left = elements;
         let mut trees = Vec::with_capacity(self.file_structures.len());
         for fs in &self.file_structures {
             let schema = fs.schema()?;

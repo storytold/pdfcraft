@@ -352,4 +352,53 @@ mod tests {
         assert_eq!(r.elements_left(), 1);
         assert!(matches!(bool_array(&mut BitReader::with_elements(&[0], 1), 2), Err(PrcError::TooManyElements { .. })));
     }
+
+    /// Uncompressed character and short arrays are charged against the allowance too, and a
+    /// character count past the data is refused by name before anything is read.
+    #[test]
+    fn uncompressed_arrays_are_charged_and_their_counts_checked() {
+        let mut w = W::default();
+        w.uint(3).put(0, 8).put(1, 8).put(2, 8);
+        let chars = w.bytes();
+        let read = |n| character_array(&mut BitReader::with_elements(&chars, n), 8, Some(false), false);
+        assert!(matches!(read(2), Err(PrcError::TooManyElements { .. })));
+        assert_eq!(read(3).unwrap(), [0, 1, 2]);
+        let mut w = W::default();
+        w.bit(false).uint(2).put(1, 8).put(0, 8).put(2, 8).put(0, 8);
+        let shorts = w.bytes();
+        assert!(matches!(short_array(&mut BitReader::with_elements(&shorts, 1), 8), Err(PrcError::TooManyElements { .. })));
+        assert_eq!(short_array(&mut BitReader::with_elements(&shorts, 2), 8).unwrap(), [1, 2]);
+        let mut w = W::default();
+        w.uint(1000).put(7, 8);
+        let short_of_data = w.bytes();
+        let res = character_array(&mut BitReader::new(&short_of_data), 8, Some(false), false);
+        assert!(matches!(res, Err(PrcError::Truncated("a character array"))), "{res:?}");
+    }
+
+    fn malformed_by(res: Result<Vec<i32>, PrcError>, what: &str) -> bool {
+        matches!(res, Err(PrcError::Malformed(m)) if m == what)
+    }
+
+    #[test]
+    fn a_zero_code_length_width_or_length_is_refused_by_name() {
+        let mut w = W::default();
+        w.huffman_raw(2, 0, &[(1, 0, 0)], &[]);
+        let bytes = w.bytes();
+        assert!(malformed_by(huffman(&mut BitReader::new(&bytes), 2, false), "Huffman code-length width"));
+        let mut w = W::default();
+        w.huffman_raw(2, 2, &[(1, 0, 0)], &[]);
+        let bytes = w.bytes();
+        assert!(malformed_by(huffman(&mut BitReader::new(&bytes), 2, false), "Huffman code length"));
+    }
+
+    #[test]
+    fn a_boolean_array_past_the_data_is_refused_before_it_is_read() {
+        let mut w = W::default();
+        w.put(0b1011, 4);
+        let bytes = w.bytes();
+        let mut r = BitReader::new(&bytes);
+        let n = r.remaining() + 1;
+        assert_eq!(bool_array(&mut r, n), Err(PrcError::Truncated("a boolean array")));
+        assert_eq!(r.position(), 0, "nothing read");
+    }
 }

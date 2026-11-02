@@ -216,7 +216,9 @@ fn too_many_texture_sets_are_refused_before_anything_is_allocated() {
     // An empty fan on a face claiming 2^32 - 1 texture sets: no slot bounds the count.
     let mut b = W::default();
     tess_3d(&mut b, 8137, &Mesh { indices: &[0], faces: &[(0x400, 0, &[1, 0])], textures: u32::MAX, ..Mesh::default() });
-    assert!(matches!(decode(&section(1, &b), &Schema::default(), 8137), Err(PrcError::Malformed(_))));
+    assert!(
+        matches!(decode(&section(1, &b), &Schema::default(), 8137), Err(PrcError::Malformed(m)) if m == format!("{} texture-coordinate sets on a face", u32::MAX))
+    );
     let sets = u32::try_from(MAX_TEXTURE_SETS).unwrap();
     let mut ok = W::default();
     tess_3d(&mut ok, 8137, &Mesh { indices: &[0], faces: &[(0x400, 0, &[1, 0])], textures: sets, ..Mesh::default() });
@@ -425,6 +427,11 @@ fn attributes_names_and_user_data_are_read_past() {
 /// A one-triangle TESS_3D_Compressed. `full` takes every optional branch: stored normals,
 /// colours, line attributes, texture, behaviours. Otherwise `three_t` picks the 3T edge form.
 fn compressed(w: &mut W, v: u32, full: bool, three_t: bool) {
+    compressed_with_angles(w, v, full, three_t, 10);
+}
+
+/// [`compressed`] whose `full` form stores `angle_bits`-bit normal angles.
+fn compressed_with_angles(w: &mut W, v: u32, full: bool, three_t: bool, angle_bits: u8) {
     w.uint(173).bit(false).bit(true).double(0.001);
     if v >= 7031 {
         w.put(0, 32).put(0, 32).put(0, 32);
@@ -456,7 +463,7 @@ fn compressed(w: &mut W, v: u32, full: bool, three_t: bool) {
         w.uint(3).put(0, 3).uint(0);
     }
     if full {
-        w.bit(false).put(10, 8).uint(3).put(0b101, 3);
+        w.bit(false).put(u64::from(angle_bits), 8).uint(3).put(0b101, 3);
         w.bit(true).huffman(10, 2, &[(5, 0b10, 2)], &[5, 5]);
         w.bit(true); // is_face_planar
         w.bit(true).bit(true).bit(false).uint(5);
@@ -585,4 +592,23 @@ fn a_prc_file_yields_its_tessellations() {
     let f = crate::PrcFile::parse(&prc_file(&textured_square().bytes())).unwrap();
     let t = f.file_structures[0].tessellations().unwrap();
     assert_eq!(mesh(&t[0]).triangles, [[0, 1, 2], [0, 2, 3]]);
+}
+
+#[test]
+fn normal_angles_wider_than_16_bits_are_refused_by_name() {
+    let mut b = W::default();
+    compressed_with_angles(&mut b, 8137, true, true, 17);
+    assert!(matches!(decode(&section(1, &b), &Schema::default(), 8137), Err(PrcError::Malformed(m)) if m == "17-bit normal angles"));
+}
+
+/// An entity's counted array is charged against the reader's element allowance.
+#[test]
+fn counted_entity_arrays_are_charged_against_the_allowance() {
+    let mut w = W::default();
+    w.uint(3).uint(1).uint(2).uint(3);
+    let bytes = w.bytes();
+    let schema = Schema::default();
+    let read = |n| Ctx::new(BitReader::with_elements(&bytes, n), &schema, 8137).uints("indices");
+    assert!(matches!(read(2), Err(PrcError::TooManyElements { .. })));
+    assert_eq!(read(3).unwrap(), [1, 2, 3]);
 }
