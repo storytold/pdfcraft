@@ -49,6 +49,11 @@ const _: () = assert!(MAX_DEPTH >= pdfcraft_edit::text::MAX_FORM_DEPTH);
 /// Bounds on the removed text collected for the metadata check (#2448).
 const MAX_RUNS: usize = 100_000;
 const MAX_RUN_BYTES: usize = 64 * 1024;
+/// The removed text kept for the whole document, in bytes. A glyph's `/ToUnicode` text has no
+/// length limit, so a short content stream can make many runs of nearly [`MAX_RUN_BYTES`] each,
+/// on every page; past this the rest is not kept and the metadata check fails closed, as for
+/// any other text it couldn't keep (review on #2539).
+pub(crate) const MAX_REMOVED_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Mode {
@@ -132,6 +137,9 @@ pub(crate) struct Scope<'a> {
     /// Some removed text was not kept (too many runs, or a run too long): the metadata check
     /// can't search for it and must fail closed.
     pub removed_cut: bool,
+    /// Bytes of removed text this scope may still keep: what is left of the document's
+    /// [`MAX_REMOVED_BYTES`] (see [`Scope::with_removed_room`]).
+    pub removed_room: usize,
     /// The run being collected, and where its last glyph ended (device space) with its height.
     run: String,
     run_end: Option<((f64, f64), f64)>,
@@ -161,6 +169,7 @@ impl<'a> Scope<'a> {
             layer_blocks: 0,
             removed_text: Vec::new(),
             removed_cut: false,
+            removed_room: MAX_REMOVED_BYTES,
             run: String::new(),
             run_end: None,
             fonts: HashMap::new(),
@@ -170,12 +179,20 @@ impl<'a> Scope<'a> {
         }
     }
 
+    /// Keep at most `room` bytes of removed text: what earlier pages left of the document's
+    /// [`MAX_REMOVED_BYTES`].
+    pub fn with_removed_room(mut self, room: usize) -> Self {
+        self.removed_room = room;
+        self
+    }
+
     /// Close the run of removed text being collected.
     pub fn flush(&mut self) {
         self.run_end = None;
         let run = std::mem::take(&mut self.run);
         if !run.trim().is_empty() {
-            if self.removed_text.len() < MAX_RUNS {
+            if self.removed_text.len() < MAX_RUNS && run.len() <= self.removed_room {
+                self.removed_room -= run.len();
                 self.removed_text.push(run);
             } else {
                 self.removed_cut = true;

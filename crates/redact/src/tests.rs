@@ -289,6 +289,55 @@ fn metadata_is_cleared_when_the_removed_text_was_cut_short() {
     assert!(!has_xmp(&doc));
 }
 
+/// #2539 review: the removed text kept for the metadata check is bounded for the whole document,
+/// not per page. One glyph code can stand for 256 UTF-16 units of `/ToUnicode` text (768 bytes of
+/// UTF-8), so here each page makes 150 runs of 80 such glyphs (9.2 MB, under the page's run and
+/// byte limits); two pages pass `MAX_REMOVED_BYTES`, so the rest isn't kept and the check fails
+/// closed.
+#[test]
+fn removed_text_kept_for_the_metadata_check_is_bounded_per_document() {
+    let long = "4E00".repeat(256);
+    let to_unicode = format!("/CIDInit /ProcSet findresource begin 1 beginbfchar <41> <{long}> endbfchar end");
+    let run = "A".repeat(80);
+    let mut content = b"BT /F1 1 Tf 10 100 Td".to_vec();
+    for _ in 0..75 {
+        content.extend_from_slice(format!(" ({run}) Tj 30 0 Td ({run}) Tj -30 0 Td").as_bytes());
+    }
+    content.extend_from_slice(b" ET");
+    let page = "/Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >>";
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 8 0 R] /Count 2 >>".to_vec(),
+        format!("<< {page} >>").into_bytes(),
+        stream("", &content),
+        FONT.replace("95 0 R", "6 0 R").replace(" /Widths", " /ToUnicode 7 0 R /Widths").into_bytes(),
+        widths(),
+        stream("", to_unicode.as_bytes()),
+        format!("<< {page} >>").into_bytes(),
+    ];
+    let mut doc = pdf(objs);
+    let mut applying = Applying {
+        report: Report::default(),
+        doomed_fields: Vec::new(),
+        doomed_xobjects: Vec::new(),
+        retired_properties: Vec::new(),
+        widget_owner: Vec::new(),
+        removed_text: Vec::new(),
+        removed_cut: false,
+        removed_room: interp::MAX_REMOVED_BYTES,
+        removed_everywhere: HashSet::new(),
+    };
+    let rects = [[5.0, 99.0, 200.0, 102.0]];
+    let kept = |a: &Applying| a.removed_text.iter().map(String::len).sum::<usize>();
+    let first = pdfcraft_model::pages(&doc).swap_remove(0);
+    redact_page_content(&mut doc, &mut applying, 0, &first, &rects).unwrap();
+    assert_eq!((kept(&applying), applying.removed_cut), (9_216_000, false), "one page fits");
+    let second = pdfcraft_model::pages(&doc).swap_remove(1);
+    redact_page_content(&mut doc, &mut applying, 1, &second, &rects).unwrap();
+    assert!(applying.removed_cut, "the second page passes the document's limit");
+    assert!(kept(&applying) <= interp::MAX_REMOVED_BYTES, "kept {} bytes", kept(&applying));
+}
+
 /// #2539 review: the searching a scrub may do is one budget for all of it, not a check per
 /// value: very many small `/Info` values each fit, but together they don't, and past the budget
 /// the rest counts as matching (fail-closed). With room to search, nothing that doesn't mention

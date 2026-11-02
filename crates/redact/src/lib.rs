@@ -438,6 +438,7 @@ fn apply_to(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Redac
         widget_owner,
         removed_text: Vec::new(),
         removed_cut: false,
+        removed_room: interp::MAX_REMOVED_BYTES,
         removed_everywhere: HashSet::new(),
     };
     for &(pi, page_marks) in &groups {
@@ -572,6 +573,9 @@ struct Applying {
     removed_text: Vec<String>,
     /// Some removed text was too long to keep whole for that check.
     removed_cut: bool,
+    /// Bytes of removed text later pages may still keep (`interp::MAX_REMOVED_BYTES` for the
+    /// document).
+    removed_room: usize,
 }
 
 /// Step 1 for one page: rewrites its content so nothing readable stays under a mark, and cleans the tags it no longer shows.
@@ -582,17 +586,18 @@ fn redact_page_content(
     page: &pdfcraft_model::Page,
     rects: &[[f64; 4]],
 ) -> Result<(), RedactError> {
-    let Applying { report, doomed_xobjects, retired_properties, removed_text, removed_cut, .. } = applying;
+    let Applying { report, doomed_xobjects, retired_properties, removed_text, removed_cut, removed_room, .. } = applying;
     // 1. Content.
     let mut budget = pdfcraft_cos::DecodeBudget::page();
     let (list, data) = page_streams_within(doc, &page.dict, pi, &mut budget)?;
     let resources = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     let out = {
-        let mut scope = Scope::new(rects, Mode::Apply, report, budget);
+        let mut scope = Scope::new(rects, Mode::Apply, report, budget).with_removed_room(*removed_room);
         let out = process(doc, &mut scope, &data, &resources, pdfcraft_content::Matrix::IDENTITY);
         scope.flush();
         removed_text.append(&mut scope.removed_text);
         *removed_cut |= scope.removed_cut;
+        *removed_room = scope.removed_room;
         out
     };
     // Fail closed: the interpreter lays vertical-writing text out horizontally, so it cannot
