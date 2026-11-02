@@ -9,6 +9,11 @@ impl DocView {
     /// zoom are kept). `None` before the first frame has laid pages out, when the bookmark just
     /// goes to the current page.
     pub(crate) fn bookmark_position(&self, info: &DocInfo) -> Option<(usize, [Option<f32>; 2])> {
+        // The page grid moves the viewport without refreshing where the pages are on screen, so
+        // there is no position to read: the bookmark goes to the current page.
+        if self.organize {
+            return None;
+        }
         if let Some(sel) = self.selection
             && let Some(text) = self.texts.get(&sel.page)
             && let Some(p) = info.pages.get(sel.page)
@@ -32,11 +37,17 @@ impl DocView {
         // of pages of different heights, whose shorter page can start below it), else the
         // nearest one below.
         let top = self.viewport_screen.top();
-        let showing = || self.screen_xforms.iter().filter(|(_, xf)| xf.rect.bottom() > top);
-        let (page, xf) = showing()
-            .filter(|(_, xf)| xf.rect.top() <= top)
-            .min_by_key(|(p, _)| *p)
-            .or_else(|| showing().min_by(|a, b| a.1.rect.top().total_cmp(&b.1.rect.top()).then(a.0.cmp(&b.0))))?;
+        // A page showing less than a pixel is rounding, not what the reader is looking at: a jump
+        // to the next page leaves the previous one's bottom edge within a pixel of the top. Such a
+        // sliver still counts when nothing else shows (the last page at the very end).
+        let pick = |slack: f32| {
+            let showing = || self.screen_xforms.iter().filter(move |(_, xf)| xf.rect.bottom() > top + slack);
+            showing()
+                .filter(|(_, xf)| xf.rect.top() <= top)
+                .min_by_key(|(p, _)| *p)
+                .or_else(|| showing().min_by(|a, b| a.1.rect.top().total_cmp(&b.1.rect.top()).then(a.0.cmp(&b.0))))
+        };
+        let (page, xf) = pick(sliver(self.screen_ppp)).or_else(|| pick(0.0))?;
         let p = info.pages.get(*page)?;
         // Above the page (in the gap before it) is the page's own top. The window's vertical is
         // the view's y, or its x when the view is turned a quarter.
@@ -454,3 +465,23 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
 /// How far ↓ / ↑ scroll at Normal speed (Scroll speed halves or doubles it). Page Down / Page Up
 /// keep this much of the previous screen in view.
 const KEY_SCROLL_LINE: f32 = 40.0;
+/// How much of a page must show at the window's top edge to count as the page there, in points: one
+/// physical pixel, since page rectangles snap to whole pixels and less is rounding.
+fn sliver(pixels_per_point: f32) -> f32 {
+    if pixels_per_point.is_finite() && pixels_per_point > 0.0 { 1.0 / pixels_per_point } else { 1.0 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sliver;
+
+    #[test]
+    fn a_sliver_is_one_physical_pixel() {
+        assert_eq!(sliver(1.0), 1.0);
+        assert_eq!(sliver(2.0), 0.5);
+        assert_eq!(sliver(0.5), 2.0);
+        for bad in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(sliver(bad), 1.0, "{bad}");
+        }
+    }
+}

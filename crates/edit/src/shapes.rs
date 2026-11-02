@@ -440,7 +440,7 @@ impl Walk<'_> {
                     if let Some(r) = form.obj {
                         self.forms.push(r);
                     }
-                    self.ops(&parse(&form.data).ops, &form.resources, &mut inner);
+                    self.ops(&parse(&form.data).ops, form.resources(resources), &mut inner);
                     if form.obj.is_some() {
                         self.forms.pop();
                     }
