@@ -533,7 +533,10 @@ const LABEL_PPD: &str = "*PPD-Adobe: \"4.3\"\n\
 *PaperDimension Broken: \"abc 300\"\n\
 *PaperDimension Short: \"300\"\n\
 *PaperDimension NoColon \"1 2\"\n\
-*PaperDimension Bad/Key: \"300 300\"\n";
+*PaperDimension Bad/Key: \"300 300\"\n\
+*PaperDimension Two Words: \"300 300\"\n\
+*PaperDimension media=x: \"300 300\"\n\
+*PaperDimension Quo\"te: \"300 300\"\n";
 
 #[test]
 fn printer_papers_come_from_the_ppd() {
@@ -548,7 +551,7 @@ fn printer_papers_come_from_the_ppd() {
             ("Wide", "Wide", (1224.0, 792.0)),
             ("Bad", "Key", (300.0, 300.0)),
         ],
-        "a *PageSize label names a size, its own label wins, sizes stay as the driver feeds them; placeholders, repeats, translations, impossible sizes and malformed lines are left out"
+        "a *PageSize label names a size, its own label wins, sizes stay as the driver feeds them; placeholders, repeats, translations, impossible sizes, malformed lines and keywords that would break a CUPS option (a space, `=`, a quote) are left out"
     );
     assert_eq!(papers.iter().map(|p| p.default).collect::<Vec<_>>(), [true, false, false, false, false], "the *DefaultPageSize one is the default");
     assert_eq!(spool::paper_of_size(&papers, (432.0, 288.0)), Some(1), "the other way round too");
