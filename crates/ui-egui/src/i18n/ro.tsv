@@ -2846,6 +2846,21 @@ theme	Appearance	Aspect
 	Unpin tool	Anulează fixarea instrumentului
 	Arrange image	Aranjează imaginea
 	Crop	Decupare
+	No matches to replace	Nimic de înlocuit
+	Not replaced: {why}	Neînlocuit: {why}
+	Nothing replaced	Nimic înlocuit
+	Replace ({key})	Înlocuire ({key})
+	Replace all	Înlocuire peste tot
+	Replace with	Înlocuire cu
+	Replaced {n} on {pages}	S-au înlocuit {n} pe {pages}
+	Replace…	Înlocuire…
+	not editable text	text needitabil
+	scanned text	text scanat
+	spans two paragraphs	se întinde pe două paragrafe
+	the font can't draw it	fontul nu îl poate desena
+	the paragraph can't be rewritten	paragraful nu poate fi rescris
+	{k} skipped: {why}	{k} omis: {why}
+	{why} ({n})	{why} ({n})
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Astăzi

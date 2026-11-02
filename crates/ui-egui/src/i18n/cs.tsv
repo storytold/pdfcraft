@@ -2613,6 +2613,21 @@ animation effects	Off	Vypnuto
 	Edit this PDF	Upravit toto PDF
 	Export this PDF	Exportovat toto PDF
 	Find text or tools	Hledat text nebo nástroje
+	Replace…	Nahradit…
+	Replace ({key})	Nahradit ({key})
+	Replace with	Nahradit čím
+	Replace all	Nahradit vše
+	No matches to replace	Žádné shody k nahrazení
+	{why} ({n})	{why} ({n})
+	Not replaced: {why}	Nenahrazeno: {why}
+	Nothing replaced	Nic nebylo nahrazeno
+	Replaced {n} on {pages}	Nahrazeno: {n} ({pages})
+	{k} skipped: {why}	Přeskočeno {k}: {why}
+	spans two paragraphs	zasahuje do dvou odstavců
+	scanned text	naskenovaný text
+	the font can't draw it	písmo ho nedokáže vykreslit
+	the paragraph can't be rewritten	odstavec nelze přepsat
+	not editable text	neupravitelný text
 	Create & Edit	Vytváření a úpravy
 	Review & Compare	Revize a porovnání
 	Forms & Signatures	Formuláře a podpisy

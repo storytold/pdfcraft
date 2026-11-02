@@ -736,6 +736,10 @@ pub enum ViewAction {
     CameraLevel,
     /// After Enhance page: leave the tool for this command (Crop pages, Organize pages).
     CameraNext(&'static str),
+    /// The find bar's Replace (the highlighted match) or Replace all.
+    Replace {
+        all: bool,
+    },
 }
 
 /// Default page right-click menu actions.
@@ -3182,7 +3186,7 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
             });
         });
     }
-    find_bar(view, info.pages.len(), avail, ui, t);
+    find_bar(view, info.pages.len(), avail, tool == QuickTool::EditText && can_modify, ui, t);
     page_size_hint(view, info, units, avail, unobstructed, ui, t);
     if tool == QuickTool::EnhanceCamera {
         crate::camera_ui::bar(ui.ctx(), view, avail, t, can_modify);
