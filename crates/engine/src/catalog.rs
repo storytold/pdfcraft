@@ -90,6 +90,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                 item("Export all images", "image", "export.all_images", Ready),
                 item("HTML web page", "file-symlink", "export.html", Ready),
                 item("Rich Text Format (.rtf)", "file-text", "export.rtf", Ready),
+                item("Markdown (.md)", "file-text", "export.markdown", Ready),
                 item("Text (plain)", "type", "export.text", Ready),
                 item("PostScript / EPS", "file-down", "export.ps", Planned("M10")),
             ],
