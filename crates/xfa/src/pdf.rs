@@ -8,7 +8,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 use pdfcraft_fonts::{literal, win_ansi};
 
 use crate::XfaError;
-use crate::layout::{Action, BorderShape, Form, Item, Page, Rounded, Widget, WidgetKind};
+use crate::layout::{Action, BorderShape, Form, Item, Page, Rounded, Turned, Widget, WidgetKind};
 use crate::model::Rect;
 use crate::text::{Face, Family, Span};
 
@@ -567,12 +567,30 @@ impl Emitter<'_> {
         let h = page.height;
         // The link the text before ended in, which a next piece of it on the line widens.
         let mut last_link: Option<LinkPiece> = None;
-        for (i, item) in page.items.iter().enumerate() {
+        let steps = steps(&page.items);
+        let mut turn = None;
+        for (i, step) in steps.iter().enumerate() {
+            let item = match step {
+                Step::Item(item) => *item,
+                Step::Turn(t) => {
+                    let matrix = turn_matrix(t, h);
+                    turn = Some(matrix);
+                    last_link = None;
+                    content.extend(format!("q {} cm\n", matrix.map(n).join(" ")).bytes());
+                    continue;
+                }
+                Step::EndTurn => {
+                    turn = None;
+                    last_link = None;
+                    content.extend_from_slice(b"Q\n");
+                    continue;
+                }
+            };
             // A link's pieces join only across text and the underline drawn just before it: a fill,
             // picture, field or any other line (a rule) between them ends the link there.
             let keeps_link = match item {
                 Item::Text(_) => true,
-                Item::Line { from, to, .. } => matches!(page.items.get(i + 1), Some(Item::Text(s))
+                Item::Line { from, to, .. } => matches!(steps.get(i + 1), Some(Step::Item(Item::Text(s)))
                     if (from.1 - to.1).abs() < 0.01
                         && (from.0 - s.x).abs() < 0.01
                         && (from.1 - (s.baseline + s.face.size * crate::layout::UNDERLINE_DROP)).abs() < 0.01),
@@ -627,7 +645,7 @@ impl Emitter<'_> {
                     );
                     content.extend(literal(&win_ansi(&s.text)));
                     content.extend_from_slice(format!(" Tj{close}\n").as_bytes());
-                    if let Some(r) = self.text_link(s, h, page_ref, &mut last_link)? {
+                    if let Some(r) = self.text_link(s, h, page_ref, &mut last_link, turn)? {
                         annots.push(Object::Ref(r));
                     }
                 }
@@ -637,6 +655,8 @@ impl Emitter<'_> {
                     xobjects.set(name.clone().into_bytes(), Object::Ref(r));
                     content.extend(format!("q {} 0 0 {} {} {} cm /{name} Do Q\n", n(rect.w), n(rect.h), n(rect.x), n(h - rect.bottom())).bytes());
                 }
+                // Opened out by `steps`.
+                Item::Turned(_) => {}
                 Item::Widget(w) => {
                     if let Some(r) = self.widget(w, page, page_ref)? {
                         annots.push(Object::Ref(r));
@@ -675,12 +695,25 @@ impl Emitter<'_> {
     /// A span that goes on the link `last` ended in, on the same line, widens that annotation
     /// instead (a link whose text changes style partway is one link). An address PdfCraft
     /// wouldn't open from a document leaves the text as plain text, with one warning for the form.
-    fn text_link(&mut self, s: &Span, page_height: f64, page_ref: ObjRef, last: &mut Option<LinkPiece>) -> Result<Option<ObjRef>, XfaError> {
+    fn text_link(
+        &mut self,
+        s: &Span,
+        page_height: f64,
+        page_ref: ObjRef,
+        last: &mut Option<LinkPiece>,
+        turn: Option<[f64; 6]>,
+    ) -> Result<Option<ObjRef>, XfaError> {
         let piece = self.link_piece(s, page_height);
-        let Some((target, rect)) = piece else {
+        let Some((target, mut rect)) = piece else {
             *last = None;
             return Ok(None);
         };
+        // Turned text is drawn by a matrix, and clicked where that puts it. Its pieces don't join:
+        // that goes by the line they stand on before turning.
+        if let Some(m) = turn {
+            rect = turned_rect(rect, m);
+            *last = None;
+        }
         if let Some(prev) = last.as_mut()
             && prev.uri == target
             && (prev.baseline - s.baseline).abs() < 0.01
@@ -763,6 +796,45 @@ fn write_button_action(action: Option<&Action>, d: &mut Dict) {
         }
         None => {}
     }
+}
+
+/// What a page's content is written from: its items, with a turned draw opened out.
+enum Step<'a> {
+    Item(&'a Item),
+    Turn(&'a Turned),
+    EndTurn,
+}
+
+fn steps(items: &[Item]) -> Vec<Step<'_>> {
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        if let Item::Turned(t) = item {
+            out.push(Step::Turn(t));
+            out.extend(t.items.iter().map(Step::Item));
+            out.push(Step::EndTurn);
+        } else {
+            out.push(Step::Item(item));
+        }
+    }
+    out
+}
+
+/// The matrix that turns `t` about its point, on a page `page_height` tall.
+fn turn_matrix(t: &Turned, page_height: f64) -> [f64; 6] {
+    let (cos, sin) = match t.quarters {
+        1 => (0.0, 1.0),
+        2 => (-1.0, 0.0),
+        _ => (0.0, -1.0),
+    };
+    let (x, y) = (t.about.0, page_height - t.about.1);
+    [cos, sin, -sin, cos, x - cos * x + sin * y, y - sin * x - cos * y]
+}
+
+/// Rectangle `r`, `[left, bottom, right, top]`, under quarter-turn matrix `m`.
+fn turned_rect(r: [f64; 4], m: [f64; 6]) -> [f64; 4] {
+    let at = |x: f64, y: f64| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]);
+    let (a, b) = (at(r[0], r[1]), at(r[2], r[3]));
+    [a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1)]
 }
 
 /// The link annotation a page's text last ended in: the next piece of the same link on the same
