@@ -52,6 +52,20 @@ pub struct FieldState {
     /// `textColor` / `fillColor` as Acrobat colour arrays (`["RGB", r, g, b]` etc.), when set.
     pub text_color: Option<Vec<String>>,
     pub fill_color: Option<Vec<String>>,
+    /// Normal push-button caption, when this is a button.
+    pub caption: Option<String>,
+    /// A setter ran, even if its text equals widget 0: other widgets may differ.
+    pub caption_written: bool,
+    pub rect: Option<[f64; 4]>,
+    pub page_rotation: i64,
+    pub page_crop: [f64; 4],
+    pub stroke_color: Option<Vec<String>>,
+    pub text_size: f64,
+    pub line_width: f64,
+    pub border_style: String,
+    pub user_name: String,
+    pub icon: Option<u64>,
+    pub caption_mixed: bool,
 }
 
 impl FieldState {
@@ -68,6 +82,18 @@ impl FieldState {
             char_limit: None,
             text_color: None,
             fill_color: None,
+            caption: None,
+            caption_written: false,
+            rect: None,
+            page_rotation: 0,
+            page_crop: [0.0; 4],
+            stroke_color: None,
+            text_size: 0.0,
+            line_width: 1.0,
+            border_style: "solid".into(),
+            user_name: String::new(),
+            icon: None,
+            caption_mixed: false,
         }
     }
 
@@ -111,8 +137,14 @@ pub struct DocInfo {
     pub page: usize,
     /// Document information (`this.info.title` etc.): lower-case key, value.
     pub info: Vec<(String, String)>,
+    /// Effective page boxes in PDF user space, ordered media, crop, bleed, trim, art.
+    pub page_boxes: Vec<[[f64; 4]; 5]>,
+    /// Clockwise page rotations, normalized to 0, 90, 180 or 270 degrees.
+    pub page_rotations: Vec<i64>,
     /// The document has an XFA form, so scripts see `xfa_installed`.
     pub xfa: bool,
+    pub zoom: f64,
+    pub runtime_highlight: bool,
 }
 
 /// The icon a script's message shows: `app.alert`'s `nIcon` and `xfa.host.messageBox`'s
@@ -234,6 +266,8 @@ pub enum Request {
     /// `field.setFocus()`.
     Focus(String),
     Beep,
+    Zoom(f64),
+    Highlight(bool),
     /// `app.execMenuItem("SaveAs")` (XFA forms' Save buttons).
     SaveAs,
     /// `app.execMenuItem("ShowHide…")`: show the side panel, or hide it when it is showing.

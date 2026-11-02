@@ -1178,7 +1178,7 @@ pub fn tools() -> Vec<ToolDef> {
         t("js_run", "Run JavaScript", "Run Acrobat JavaScript in the document, as the JavaScript console does (or as push button `field`'s Mouse Up script when field is given; on a laid-out XFA form, `field` runs that button's XFA click script instead, JavaScript or FormCalc, which can add and remove rows and show or hide subforms). The form object model is available: this/getField, event, app, util, console, display, color, and the document-level scripts (except the PDF container scripts when XFA layout is active; they remain available through js_document_scripts). Field changes and resetForm are applied as one undoable step; returns the script's alerts (each with its message, title, icon and buttons, in order; every question is still answered OK), console output, requests (print, page, url, submit), error, and the errors of document-level scripts that failed (the rest still ran).")
             .cmd("tools.js_console")
             .with(schema(
-                json!({ "doc": doc(), "script": { "type": "string" }, "field": { "type": "string", "description": "Run as this button's Mouse Up event." } }),
+                json!({ "doc": doc(), "script": { "type": "string" }, "field": { "type": "string", "description": "Run as this button's Mouse Up event." }, "answers": {"type":"array","maxItems":32,"items":{"type":["string","null"]},"description":"Ordered popup, response and alert answers; null cancels."} }),
                 &["doc", "script"],
             )),
         t("js_document_scripts", "Document JavaScripts", "List the document-level JavaScripts (name and source), which define functions field scripts use.")

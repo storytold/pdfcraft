@@ -8,14 +8,17 @@
 //! - `event`: `value`, `change`, `willCommit`, `rc`, `name`, `type`, `target`, `targetName`.
 //! - the document (`this`, also the global object): `getField`, `numFields`,
 //!   `getNthFieldName`, `numPages`, `pageNum`, `documentFileName`, `info`, `resetForm`,
-//!   `calculateNow`, `print`, `submitForm`, `mailDoc`.
+//!   `calculateNow`, `getPageBox`, `print`, `submitForm`, `mailDoc`.
 //! - Field objects: `name`, `type`, `value`, `valueAsString`, `defaultValue`, `readonly`,
 //!   `required`, `display`, `hidden`, `numItems`, `getItemAt`, `currentValueIndices`,
 //!   `isBoxChecked`, `checkThisBox`, `exportValues`, `charLimit`, `textColor`, `fillColor`,
-//!   `setFocus`.
+//!   `setFocus`, `rect`, appearance properties, and normal button caption/icon methods.
 //! - `app` (`alert`, `beep`, `response`, `launchURL`, `execMenuItem`, `viewerType`, `viewerVersion`,
 //!   `platform`, `setTimeOut`), `util` (`printf`, `printd`, `printx`, `scand`), `console` (`println`,
 //!   `show`, `clear`), `display` and `color`.
+//!
+//! The native engine uses [`session::ScriptSession`] to preserve document globals across events.
+//! Stateless runners remain available for callers that need isolation per invocation.
 //!
 //! The engine is a sandbox: no file, network or timer access exists, and loops and recursion
 //! are bounded. Side effects (alerts, field changes, resets, printing, navigation) are returned
@@ -55,7 +58,7 @@ pub use model::{
 use run::SCRIPT_STACK;
 use run::refuse;
 pub(crate) use run::{CheckedCodeFromStrings, MAX_SCRIPT_BYTES};
-pub use run::{run, run_shared};
+pub use run::{run, run_shared, run_shared_calculations};
 
 pub mod formcalc;
 pub mod xfa;
@@ -63,3 +66,11 @@ pub mod xfa_session;
 
 #[cfg(test)]
 mod tests;
+
+mod geometry;
+pub use geometry::{rotate_rect, unrotate_rect};
+
+mod icons;
+
+pub mod interaction;
+pub mod session;
