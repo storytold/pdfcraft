@@ -1432,6 +1432,7 @@ pub fn tools() -> Vec<ToolDef> {
                     "aligns": { "type": "array", "maxItems": 4096, "items": { "type": "string", "enum": ["left", "center", "right", "justify", "inherit"] }, "description": "Each paragraph's (line's) own alignment, by index; inherit (or legacy null) follows align." },
                     "underline": { "type": "boolean" },
                     "line_spacing": { "type": "number", "description": "Multiple of the font size (1.2 is ordinary)." },
+                    "paragraph_spacing": { "type": "number", "description": "Points between paragraphs (a line break in text starts one), beyond the line spacing; default none." },
                     "dx": { "type": "number", "description": "Paragraph only: move right by this many points (negative: left)." },
                     "dy": { "type": "number", "description": "Paragraph only: move up by this many points (negative: down)." },
                     "width": { "type": "number", "description": "Paragraph only: rewrap to this width in points (dragging the box's edge)." },

@@ -232,6 +232,8 @@ struct StyledLines<'a> {
 type StyledChar = (char, usize, String);
 type StyledRows = Vec<Vec<StyledChar>>;
 type RowRanges = Vec<std::ops::Range<usize>>;
+/// Which rows a line break in the draft started, as against wrapping.
+type ExplicitRows = Vec<bool>;
 type ShapedRunCache = HashMap<(usize, usize), (Vec<u8>, pdfcraft_fonts::source_shaping::ShapedRun, String)>;
 
 struct ShapedRows {
@@ -384,7 +386,10 @@ fn page_font_metrics(
 }
 
 fn paragraph_geometry(doc: &Document, page: &pdfcraft_model::Page, block: &TextBlock, style: &BlockStyle) -> Result<(f64, f64, f64), EditError> {
-    if [style.size, style.line_spacing, style.char_spacing, style.scale, style.width].iter().flatten().any(|value| !value.is_finite())
+    if [style.size, style.line_spacing, style.paragraph_spacing, style.char_spacing, style.scale, style.width]
+        .iter()
+        .flatten()
+        .any(|value| !value.is_finite())
         || style.color.is_some_and(|color| color.iter().any(|value| !value.is_finite()))
     {
         return Err(EditError::Invalid("the paragraph's formatting must use finite numbers".into()));
@@ -401,7 +406,7 @@ fn paragraph_geometry(doc: &Document, page: &pdfcraft_model::Page, block: &TextB
     Ok((dx, dy, style.width.unwrap_or(natural).clamp(1.0, 14_400.0)))
 }
 
-type WrappedStyledRows = (StyledRows, RowRanges, Vec<usize>, Vec<bool>, Vec<usize>);
+type WrappedStyledRows = (StyledRows, RowRanges, Vec<usize>, Vec<bool>, Vec<usize>, ExplicitRows);
 
 fn wrap_styled_rows(
     chars: &[StyledChar],
@@ -422,6 +427,9 @@ fn wrap_styled_rows(
     let mut row_lines: Vec<usize> = Vec::new();
     let mut draft_line = 0usize;
     let mut row_start = 0;
+    // Which rows a line break in the draft started, as against wrapping: the paragraph spacing,
+    // when one is set, goes before those.
+    let mut explicit: ExplicitRows = vec![false];
     let mut row = Vec::new();
     let mut row_width = 0.0;
     let mut at = 0;
@@ -440,6 +448,7 @@ fn wrap_styled_rows(
             row_lines.push(draft_line);
             draft_line = draft_line.saturating_add(1);
             rows.push(std::mem::take(&mut row));
+            explicit.push(true);
             row_width = 0.0;
             at += 1;
             row_start = at;
@@ -470,6 +479,7 @@ fn wrap_styled_rows(
             row_ranges.push(row_start..row_start + row.len());
             row_lines.push(draft_line);
             rows.push(std::mem::take(&mut row));
+            explicit.push(false);
             row_width = 0.0;
             row_start = at;
         }
@@ -484,7 +494,7 @@ fn wrap_styled_rows(
         row_lines.push(draft_line);
         rows.push(row);
     }
-    Ok((rows, row_ranges, row_lines, row_soft, row_gap))
+    Ok((rows, row_ranges, row_lines, row_soft, row_gap, explicit))
 }
 
 fn apply_range_styles<'a>(
@@ -598,23 +608,105 @@ fn shape_source(
     Err(EditError::Invalid("complex text needs the complete source TrueType/OpenType face; load that font before editing".into()))
 }
 
+/// Where a paragraph spacing puts each row. The space before a paragraph, when a paragraph
+/// spacing is set: the draft breaks every source row, so a break starts a paragraph only where
+/// the edit inserted it, or at a source break whose row was already set apart from the row above
+/// by more than the ordinary row step; there the set spacing replaces the space it had. A row
+/// that starts a source row keeps that row's step from the row drawn above it, so the rows below
+/// an inserted break or spacing move down with it instead of being drawn over it.
+struct RowSpacing<'a> {
+    block: &'a TextBlock,
+    lines: &'a [TextLine],
+    first: &'a TextLine,
+    gap: Option<f64>,
+    row_step: f64,
+    /// The source row each output row starts, if any.
+    sources: Vec<Option<usize>>,
+    explicit: ExplicitRows,
+    /// Rows keep their source baselines unless the size or the line spacing is changed.
+    follow_source: bool,
+    /// The baseline the row above was drawn on.
+    previous: Option<f64>,
+}
+
+impl<'a> RowSpacing<'a> {
+    fn new(
+        block: &'a TextBlock,
+        lines: &'a [TextLine],
+        first: &'a TextLine,
+        style: &BlockStyle,
+        row_ranges: &[std::ops::Range<usize>],
+        draft: &str,
+        explicit: ExplicitRows,
+    ) -> Result<Self, EditError> {
+        let gap = match style.paragraph_spacing {
+            Some(p) if p.is_finite() => Some(p.clamp(0.0, 14_400.0)),
+            Some(_) => return Err(EditError::Invalid("the paragraph spacing must be a number".into())),
+            None => None,
+        };
+        let baseline_of = |r: usize| block.rows.get(r).and_then(|r| r.first()).and_then(|i| lines.get(*i)).map(|l| l.origin.baseline);
+        let row_step = (1..block.rows.len())
+            .filter_map(|r| Some(baseline_of(r - 1)? - baseline_of(r)?))
+            .filter(|v| *v > 0.0)
+            .fold(None, |min: Option<f64>, v| Some(min.map_or(v, |m| m.min(v))))
+            .unwrap_or(first.size * 1.5);
+        let sources = row_sources(block, draft, row_ranges, &explicit);
+        Ok(Self {
+            block,
+            lines,
+            first,
+            gap,
+            row_step,
+            sources,
+            explicit,
+            follow_source: style.line_spacing.is_none() && style.size.is_none(),
+            previous: None,
+        })
+    }
+
+    fn run_of(&self, row: usize) -> Option<&'a TextLine> {
+        self.block.rows.get(row).and_then(|r| r.first()).and_then(|i| self.lines.get(*i))
+    }
+
+    /// The baseline of output row `row_index`, given the one the row above ended on (`baseline`),
+    /// and the source run the row is styled from.
+    fn place(&mut self, row_index: usize, mut baseline: f64) -> (f64, &'a TextLine) {
+        let source_row = self.sources.get(row_index).copied().flatten();
+        let anchor = source_row.and_then(|j| self.run_of(j));
+        // The baseline of the source row above the source row this row starts.
+        let above = source_row.and_then(|j| self.run_of(j.checked_sub(1)?)).map(|l| l.origin.baseline);
+        // The space this row already had above it, beyond the ordinary row step.
+        let existing = match (anchor, above) {
+            (Some(a), Some(above)) => (above - a.origin.baseline - self.row_step).max(0.0),
+            _ => 0.0,
+        };
+        let starts_paragraph = row_index > 0 && self.explicit.get(row_index).copied().unwrap_or(false) && (anchor.is_none() || existing > 0.5);
+        let paragraph = self.gap.filter(|_| starts_paragraph);
+        if self.follow_source {
+            match (anchor, above, self.previous) {
+                // The source's step down from the row above, kept from where that row was drawn;
+                // written `here - (above - previous)` so a row below unmoved rows lands exactly
+                // on its source baseline.
+                (Some(a), Some(above), Some(previous)) => {
+                    baseline = a.origin.baseline - (above - previous) - paragraph.map_or(0.0, |gap| gap - existing);
+                }
+                (Some(a), _, None) => baseline = a.origin.baseline,
+                _ => baseline -= paragraph.unwrap_or(0.0),
+            }
+        } else {
+            baseline -= paragraph.unwrap_or(0.0);
+        }
+        self.previous = Some(baseline);
+        (baseline, anchor.or_else(|| self.run_of(row_index)).unwrap_or(self.first))
+    }
+}
+
 /// For each output row (a range of the draft's characters), whether it is exactly the source row
 /// at the same position: the same characters, none of them inserted or changed by the edit.
 fn untouched_rows(block: &TextBlock, draft: &str, rows: &[std::ops::Range<usize>]) -> Vec<bool> {
     let old: Vec<char> = block.editor_text.chars().collect();
     let new: Vec<char> = draft.chars().collect();
-    let prefix = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
-    let suffix = old.iter().rev().zip(new.iter().rev()).take(old.len().min(new.len()).saturating_sub(prefix)).take_while(|(a, b)| a == b).count();
-    // The source character a draft character is, if the edit left it alone.
-    let origin = |i: usize| {
-        if i < prefix {
-            Some(i)
-        } else if i >= new.len().saturating_sub(suffix) {
-            (old.len() + i).checked_sub(new.len())
-        } else {
-            None
-        }
-    };
+    let origins = Origins::new(&old, &new);
     let mut source_rows = Vec::new();
     let mut start = 0;
     for (i, ch) in old.iter().enumerate() {
@@ -632,7 +724,7 @@ fn untouched_rows(block: &TextBlock, draft: &str, rows: &[std::ops::Range<usize>
         .enumerate()
         .map(|(r, range)| {
             source_rows.get(r).is_some_and(|source| {
-                !range.is_empty() && range.len() == source.len() && range.clone().zip(source.clone()).all(|(i, j)| origin(i) == Some(j))
+                !range.is_empty() && range.len() == source.len() && range.clone().zip(source.clone()).all(|(i, j)| origins.of(i) == Some(j))
             })
         })
         .collect()
@@ -764,6 +856,63 @@ fn rewrite_anchor<'a>(
         .enumerate()
         .any(|(index, op)| matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"") && !drop.contains(&(origin.bt_op + index)));
     RewriteAnchor { lead, drop, start, split }
+}
+
+/// Which source character each draft character is, where the edit left it alone: the
+/// characters of the common prefix and suffix of the source text and the draft.
+struct Origins {
+    prefix: usize,
+    suffix: usize,
+    old: usize,
+    new: usize,
+}
+
+impl Origins {
+    fn new(old: &[char], new: &[char]) -> Self {
+        let prefix = old.iter().zip(new).take_while(|(a, b)| a == b).count();
+        let suffix = old.iter().rev().zip(new.iter().rev()).take(old.len().min(new.len()).saturating_sub(prefix)).take_while(|(a, b)| a == b).count();
+        Self { prefix, suffix, old: old.len(), new: new.len() }
+    }
+
+    /// The source character the draft character `i` is, if the edit left it alone.
+    fn of(&self, i: usize) -> Option<usize> {
+        if i < self.prefix {
+            Some(i)
+        } else if i >= self.new.saturating_sub(self.suffix) {
+            (self.old + i).checked_sub(self.new)
+        } else {
+            None
+        }
+    }
+}
+
+/// For each output row (a range of the draft's characters), the source row it starts: row 0
+/// starts row 0, and a row the draft's line break started (`explicit`) starts the source row
+/// after that break when the break is one of the source's, left alone by the edit. A wrapped
+/// row, or one after a break the edit inserted, starts none. When the source rows can't be told
+/// apart by their line breaks, each row is paired with the source row at its own position.
+fn row_sources(block: &TextBlock, draft: &str, rows: &[std::ops::Range<usize>], explicit: &[bool]) -> Vec<Option<usize>> {
+    let old: Vec<char> = block.editor_text.chars().collect();
+    let breaks: Vec<usize> = old.iter().enumerate().filter(|(_, c)| **c == '\n').map(|(i, _)| i).collect();
+    if breaks.len().saturating_add(1) != block.rows.len() {
+        return (0..rows.len()).map(Some).collect();
+    }
+    let new: Vec<char> = draft.chars().collect();
+    let origins = Origins::new(&old, &new);
+    rows.iter()
+        .enumerate()
+        .map(|(r, range)| {
+            if r == 0 {
+                return Some(0);
+            }
+            if !explicit.get(r).copied().unwrap_or(false) {
+                return None;
+            }
+            // The draft's line break is the character just before the row.
+            let source = origins.of(range.start.checked_sub(1)?)?;
+            breaks.binary_search(&source).ok().map(|k| k + 1)
+        })
+        .collect()
 }
 
 /// Open (`op` is `"BMC"`) or close (`"EMC"`) the `/P` marker that wraps the whole rewrite when
@@ -949,7 +1098,7 @@ pub(crate) fn rewrite_styled_block(
         }
         Ok(width)
     };
-    let (rows, row_ranges, row_lines, row_soft, row_gap) = wrap_styled_rows(&chars, width, measure)?;
+    let (rows, row_ranges, row_lines, row_soft, row_gap, explicit) = wrap_styled_rows(&chars, width, measure)?;
     let streams = content_streams(doc, &p.dict)?;
     let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
@@ -1007,16 +1156,11 @@ pub(crate) fn rewrite_styled_block(
         })
         .rfind(|v| *v > 0.0)
         .unwrap_or(first.size * 1.5);
+    let mut spacing = RowSpacing::new(block, lines, first, style, &row_ranges, draft, explicit)?;
     let mut baseline = first.origin.baseline;
     for (row_index, row) in rows.iter().enumerate() {
-        let anchor = block.rows.get(row_index).and_then(|r| r.first()).and_then(|i| lines.get(*i));
-        if style.line_spacing.is_none()
-            && style.size.is_none()
-            && let Some(anchor) = anchor
-        {
-            baseline = anchor.origin.baseline;
-        }
-        let anchor = anchor.unwrap_or(first);
+        let anchor;
+        (baseline, anchor) = spacing.place(row_index, baseline);
         if kept.get(row_index).copied().unwrap_or(false) {
             // Kept rows only occur without spacing or size changes, so this is the step below.
             baseline -= source_leading;
