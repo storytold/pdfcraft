@@ -27,6 +27,10 @@ pub(crate) struct AutoOcr {
     /// again.
     stopped: bool,
     run: Option<Run>,
+    /// Workers of runs stopped before they finished: each still reads the page it is on. None
+    /// starts until they are done, so edits in a row (dragging a picture on a scan) never leave
+    /// several reading at once, each with a page rendered at 300 dpi; they ran out of memory.
+    retiring: Vec<Arc<Mutex<Shared>>>,
 }
 
 /// Pages looked at for pictures in one frame. Finding them parses each page's content, so a long
@@ -106,8 +110,26 @@ fn run_chunk(shared: &Arc<Mutex<Shared>>, read: impl FnOnce(&mut dyn FnMut(usize
 
 impl AutoOcr {
     /// Forget everything: the pages may have moved, so it starts again if a page is still empty.
+    /// Workers still reading are waited for all the same.
     pub(crate) fn reset(&mut self) {
-        *self = AutoOcr::default();
+        self.retire();
+        let retiring = std::mem::take(&mut self.retiring);
+        *self = AutoOcr { retiring, ..AutoOcr::default() };
+    }
+
+    /// End the run. Dropping its chunk asks the worker to stop; one still reading its page is
+    /// kept, to be waited for.
+    fn retire(&mut self) {
+        if let Some(chunk) = self.run.take().and_then(|run| run.chunk) {
+            self.retiring.push(chunk.shared.clone());
+        }
+    }
+
+    /// Whether a worker of a stopped run is still reading. Those that are done are forgotten.
+    fn still_reading(&mut self) -> bool {
+        // A worker that panicked marks its chunk finished all the same (`Finished`).
+        self.retiring.retain(|s| !s.lock().unwrap_or_else(std::sync::PoisonError::into_inner).finished);
+        !self.retiring.is_empty()
     }
 
     pub(crate) fn running(&self) -> bool {
@@ -124,7 +146,7 @@ impl AutoOcr {
 
     /// Stop, and don't start again for these pages.
     pub(crate) fn stop(&mut self) {
-        self.run = None;
+        self.retire();
         self.done = true;
         self.stopped = true;
     }
@@ -133,7 +155,7 @@ impl AutoOcr {
     /// the old content, so it stops, and what its worker read goes with it. Recognition starts
     /// again for the pages not recognised yet, the changed one among them, unless it was stopped.
     pub(crate) fn content_changed(&mut self) {
-        self.run = None;
+        self.retire();
         self.done = self.stopped;
     }
 }
@@ -170,12 +192,12 @@ impl PdfCraftApp {
     /// Hand finished pages to their views, keep a recognition going, and start one for a
     /// document that needs it.
     pub(crate) fn poll_auto_ocr(&mut self) {
-        let mut running = false;
+        let mut busy = false;
         for index in 0..self.views.len() {
             self.step_auto_ocr(index);
-            running |= self.views.get(index).is_some_and(|v| v.auto_ocr.running());
+            busy |= self.views.get_mut(index).is_some_and(|v| v.auto_ocr.running() || v.auto_ocr.still_reading());
         }
-        if running {
+        if busy {
             if let Some(ctx) = &self.ctx {
                 ctx.request_repaint_after(std::time::Duration::from_millis(200));
             }
@@ -264,12 +286,14 @@ impl PdfCraftApp {
                 }
             });
         };
-        run.chunk = Some(Chunk { shared, pages: pages.len() });
         if self.run_inline {
             work();
         } else if std::thread::Builder::new().name("pdfcraft-auto-ocr".into()).spawn(work).is_err() {
+            // No worker took the pages, so there is none to wait for.
             view.auto_ocr.stop();
+            return;
         }
+        run.chunk = Some(Chunk { shared, pages: pages.len() });
     }
 }
 
@@ -344,6 +368,28 @@ mod tests {
         assert!(view.ocr_texts.is_empty(), "kept as the page's recognised text");
         assert_eq!(view.page_plain_text(0), None, "made the page's text layer");
         assert!(!view.auto_ocr.done, "recognition starts again, for the page as it is now");
+    }
+
+    /// Edits in a row on a scan (dragging a picture across it) each stopped the running worker and
+    /// started another while the first still read its page: several read at once, each with a
+    /// page rendered at 300 dpi, until memory ran out. A worker still reading is waited for.
+    #[test]
+    fn a_page_edit_waits_for_the_worker_still_reading() {
+        let mut app = scan(1);
+        let shared = Arc::new(Mutex::new(Shared::default()));
+        let chunk = Chunk { shared: shared.clone(), pages: 1 };
+        let run = Run { queue: VecDeque::new(), pending: Vec::new(), total: 1, handled: 0, chunk: Some(chunk) };
+        app.views[0].auto_ocr = AutoOcr { wanted: true, run: Some(run), ..Default::default() };
+        let picture = Edit::AddImage { page: 0, rect: Some([1.0, 1.0, 4.0, 4.0]), name: "stamp.png".into(), bytes: Arc::new(png()) };
+        assert!(app.apply_edit(picture));
+        app.poll_auto_ocr();
+        assert!(shared.lock().unwrap().cancel, "the worker is asked to stop");
+        let ocr = &app.views[0].auto_ocr;
+        assert!(!ocr.running() && !ocr.done, "recognition started again beside the worker still reading");
+        shared.lock().unwrap().finished = true;
+        app.poll_auto_ocr();
+        let ocr = &app.views[0].auto_ocr;
+        assert!(ocr.running() || ocr.done, "recognition starts again once that worker is done");
     }
 
     /// Cancel holds through a content edit: recognition doesn't start again on its own.
