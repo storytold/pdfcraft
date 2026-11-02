@@ -85,3 +85,5 @@ rcgen = { version = "0.14", default-features = false, features = ["ring", "crypt
 
 [dev-dependencies]
 pdfcraft-testkit = { workspace = true }
+# JBIG2 fixtures (`encode_jbig2_generic`).
+pdfcraft-filters = { workspace = true }

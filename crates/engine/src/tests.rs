@@ -6238,24 +6238,27 @@ fn a_static_xfa_form_takes_many_data_values_as_one_by_one() {
 /// Opening a static XFA form whose datasets fill thousands of fields took minutes: each value
 /// read the whole form again (twice), so the time grew with the square of the fields. Eight
 /// times the fields now takes at most about eight times as long (it took about fifty).
+///
+/// Each round opens the small form and then the large one, so a busy spell on a shared machine
+/// slows both, and the best round's ratio is checked. Timing every small opening before the
+/// large ones let such a spell fall on the large ones alone.
 #[test]
 fn opening_a_static_xfa_form_grows_linearly_with_its_data_values() {
-    let time = |n: usize| {
-        let bytes = Arc::new(pdfcraft_xfa::fixtures::static_shell_many(n));
-        (0..3)
-            .map(|_| {
-                let mut s = Session::new();
-                let start = std::time::Instant::now();
-                s.open("many.pdf", None, bytes.clone(), None).expect("opens");
-                start.elapsed()
-            })
-            .min()
-            .unwrap_or_default()
+    let small = Arc::new(pdfcraft_xfa::fixtures::static_shell_many(100));
+    let large = Arc::new(pdfcraft_xfa::fixtures::static_shell_many(800));
+    let time = |bytes: &Arc<Vec<u8>>| {
+        let mut s = Session::new();
+        let start = std::time::Instant::now();
+        s.open("many.pdf", None, bytes.clone(), None).expect("opens");
+        start.elapsed()
     };
-    let small = time(100);
-    let large = time(800);
-    let ratio = large.as_secs_f64() / small.as_secs_f64().max(1e-6);
-    assert!(ratio < 16.0, "100 fields: {small:?}, 800 fields: {large:?} ({ratio:.1}x)");
+    // The first openings also pay for what the process sets up once.
+    time(&small);
+    time(&large);
+    let rounds: Vec<_> = (0..5).map(|_| (time(&small), time(&large))).collect();
+    let ratio = |(s, l): &(std::time::Duration, std::time::Duration)| l.as_secs_f64() / s.as_secs_f64().max(1e-6);
+    let best = rounds.iter().map(ratio).fold(f64::INFINITY, f64::min);
+    assert!(best < 16.0, "100 and 800 fields, by round: {rounds:?} (best {best:.1}x)");
 }
 
 /// A date goes into the XFA data in the field's data picture (`<bind><picture>`), as other
@@ -8238,6 +8241,105 @@ fn copy_image_finds_a_picture_inside_form_artwork_under_text() {
     // The largest picture in the group, as the JPEG stored in the PDF.
     assert_eq!(d.page_image_copy_file(0, 0).unwrap(), ("jpg", jpeg));
     assert!(d.page_image_copy_file(0, 1).is_err());
+}
+
+/// Copy Image reads a JBIG2 image's `/JBIG2Globals`: here they hold the page information, and the
+/// image's own stream only an extension segment decoders skip, so it has a picture only through
+/// them. Its default pixel is black.
+#[test]
+fn copy_image_reads_the_globals_of_a_jbig2_picture() {
+    let mut globals = vec![0, 0, 0, 0, 48, 0, 1, 0, 0, 0, 19];
+    globals.extend_from_slice(&16u32.to_be_bytes());
+    globals.extend_from_slice(&2u32.to_be_bytes());
+    globals.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0]); // resolution, flags, striping
+    let image = [0, 0, 0, 1, 62, 0, 1, 0, 0, 0, 0];
+    let stream = |dict: &str, data: &[u8]| {
+        let mut o = format!("<< {dict} /Length {} >>\nstream\n", data.len()).into_bytes();
+        o.extend_from_slice(data);
+        o.extend_from_slice(b"\nendstream");
+        o
+    };
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >>".to_vec(),
+        stream("", b"q 160 0 0 20 20 100 cm /Im1 Do Q"),
+        stream(
+            "/Type /XObject /Subtype /Image /Width 16 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /JBIG2Decode /DecodeParms << /JBIG2Globals 6 0 R >>",
+            &image,
+        ),
+        stream("", &globals),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let mut s = Session::new();
+    let id = s.open("scan.pdf", None, Arc::new(out), None).unwrap();
+    let d = s.get(id).unwrap();
+    let (w, h, rgba) = d.page_image_rgba(0, 0).unwrap();
+    assert_eq!((w, h), (16, 2));
+    assert!(rgba.chunks(4).all(|p| p == [0, 0, 0, 255]), "the page's default pixel, from the globals");
+}
+
+/// Copy Image takes a JBIG2 picture as its pixels and as a PNG file, behind another filter
+/// (ASCIIHexDecode) too: Export's decoding, through `Document::decoded_image`.
+#[test]
+fn copy_image_copies_a_jbig2_picture_behind_another_filter() {
+    // 16 × 2: the left half of the top row black, the rest white.
+    let bits = [0x00, 0xFF, 0xFF, 0xFF];
+    let coded = pdfcraft_filters::encode_jbig2_generic(&bits, 16, 2).unwrap();
+    let hex: Vec<u8> = coded.iter().flat_map(|b| format!("{b:02x}").into_bytes()).chain(*b">").collect();
+    let stream = |dict: &str, data: &[u8]| {
+        let mut o = format!("<< {dict} /Length {} >>\nstream\n", data.len()).into_bytes();
+        o.extend_from_slice(data);
+        o.extend_from_slice(b"\nendstream");
+        o
+    };
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >>".to_vec(),
+        stream("", b"q 160 0 0 20 20 100 cm /Im1 Do Q"),
+        stream(
+            "/Type /XObject /Subtype /Image /Width 16 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter [/ASCIIHexDecode /JBIG2Decode]",
+            &hex,
+        ),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let mut s = Session::new();
+    let id = s.open("scan.pdf", None, Arc::new(out), None).unwrap();
+    let d = s.get(id).unwrap();
+    assert_eq!(d.page_image_at(0, [30.0, 115.0]), Some(0));
+    assert_eq!(d.page_image_copy_file(0, 0).unwrap().0, "png");
+    let (w, h, rgba) = d.page_image_rgba(0, 0).unwrap();
+    assert_eq!((w, h), (16, 2));
+    let grey: Vec<u8> = rgba.chunks(4).map(|px| px[0]).collect();
+    let expected: Vec<u8> = (0..32).map(|i| if i < 8 { 0 } else { 255 }).collect();
+    assert_eq!(grey, expected, "the picture, black as 0");
 }
 
 /// `fixture(2)` with the catalog pointing at a page tree object the file does not have (#1656).

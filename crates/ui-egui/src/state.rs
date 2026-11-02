@@ -365,6 +365,11 @@ impl UnlockPrompt {
     }
 }
 
+/// How many recent files are kept until Preferences says otherwise.
+pub const RECENT_FILES_DEFAULT: usize = 12;
+/// The most Preferences can ask to keep.
+pub const RECENT_FILES_MAX: usize = 50;
+
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct RecentFile {
     pub name: String,
