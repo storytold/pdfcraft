@@ -428,7 +428,7 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
     // NSWindow appearance and prevents winit from delivering ThemeChanged.
     // Our saved choice owns the palette; both egui branches receive it below.
     ctx.set_theme(egui::ThemePreference::System);
-    let rtl = crate::i18n::current().rtl();
+    let mirror_chrome = crate::i18n::current().mirrors_chrome();
     let t = Tokens::for_kind(kind);
     ctx.data_mut(|d| d.insert_temp(egui::Id::unique("pdfcraft-theme"), t));
     let mut v = if t.dark() { Visuals::dark() } else { Visuals::light() };
@@ -472,9 +472,9 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
     }
     ctx.set_visuals(v);
     ctx.global_style_mut(|s| {
-        // RTL languages mirror stock chrome (menus, combo boxes, scroll bars, headers).
-        // Labels still get their paragraph direction explicitly from `bidi::ui_direction`.
-        s.right_to_left = rtl;
+        // Some RTL languages mirror stock chrome (menus, combo boxes, scroll bars, headers).
+        // Hebrew keeps the existing layout; text paragraphs still use `bidi::ui_direction`.
+        s.right_to_left = mirror_chrome;
         s.spacing.item_spacing = egui::vec2(8.0, 6.0);
         s.spacing.button_padding = egui::vec2(10.0, 5.0);
         s.spacing.menu_margin = egui::Margin::same(6);
@@ -491,7 +491,7 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
     let style = ctx.global_style();
     ctx.set_style_of(egui::Theme::Light, style.clone());
     ctx.set_style_of(egui::Theme::Dark, style);
-    ctx.data_mut(|d| d.insert_temp(direction_key(), rtl));
+    ctx.data_mut(|d| d.insert_temp(direction_key(), mirror_chrome));
 }
 
 /// Return the stable egui id holding the current right-to-left style flag.
@@ -499,21 +499,21 @@ fn direction_key() -> egui::Id {
     egui::Id::unique("pdfcraft-style-right-to-left")
 }
 
-/// Keep stock egui chrome's direction in step with the drawing language, after a language
+/// Keep stock egui chrome's mirroring in step with the UI language, after a language
 /// change as well as at startup. Setting a flag on both concrete themes is cheap; this avoids
 /// rebuilding the whole visuals and font state every frame.
 pub fn sync_direction(ctx: &egui::Context) {
-    let rtl = crate::i18n::current().rtl();
+    let mirror_chrome = crate::i18n::current().mirrors_chrome();
     let changed = ctx.data_mut(|d| {
-        if d.get_temp::<bool>(direction_key()) == Some(rtl) {
+        if d.get_temp::<bool>(direction_key()) == Some(mirror_chrome) {
             false
         } else {
-            d.insert_temp(direction_key(), rtl);
+            d.insert_temp(direction_key(), mirror_chrome);
             true
         }
     });
     if changed {
-        ctx.all_styles_mut(|s| s.right_to_left = rtl);
+        ctx.all_styles_mut(|s| s.right_to_left = mirror_chrome);
     }
 }
 
