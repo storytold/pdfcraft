@@ -770,6 +770,24 @@ fn urls_keep_their_written_scheme_and_paired_brackets() {
     assert_eq!(found(&deep), ["https://example.com/"]);
 }
 
+/// Review on #4472: brackets that never close in text without spaces (`https://a/(` again and
+/// again) made each address in it read the rest of the text, then start again one character on,
+/// a pass over the page per address. Each is read 2,048 characters at most now, and the
+/// addresses around them are still found. A run of address characters longer than that is no
+/// address.
+#[test]
+fn unclosed_brackets_in_text_without_spaces_are_read_once_per_address() {
+    let found = |s: &str| -> Vec<String> { crate::links::find_urls(&s.chars().collect::<Vec<_>>()).into_iter().map(|(_, u)| u).collect() };
+    let text = format!("www.before.org {} www.after.org", "https://a/(".repeat(60_000));
+    let started = std::time::Instant::now();
+    assert_eq!(found(&text), ["http://www.before.org", "http://www.after.org"]);
+    assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
+    let long = format!("https://example.com/{} www.after.org", "a".repeat(3000));
+    assert_eq!(found(&long), ["http://www.after.org"]);
+    let fits = format!("https://example.com/{}", "a".repeat(2000));
+    assert_eq!(found(&fits), std::slice::from_ref(&fits));
+}
+
 #[test]
 fn url_scheme_and_www_match_case_insensitively() {
     let t: Vec<char> = "HTTP://Example.COM".chars().collect();

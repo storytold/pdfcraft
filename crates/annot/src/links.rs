@@ -398,6 +398,12 @@ fn email_at(chars: &[char], start: usize) -> Option<(usize, String)> {
     Some((end, format!("mailto:{address}")))
 }
 
+/// The longest web address [`find_urls`] reads, in characters (browsers and servers commonly
+/// stop near 2,000). Each address it might be is read this far at most, so text whose brackets
+/// never close (`https://a/(https://a/(…`, without a space) costs this much per address in it,
+/// not a pass over the rest of the page each.
+const MAX_URL_CHARS: usize = 2048;
+
 /// Find web addresses in text: `http(s)://…`, `www.…` and bare e-mail addresses become
 /// `mailto:`. Returns character ranges and the URI for each.
 ///
@@ -425,7 +431,12 @@ pub fn find_urls(chars: &[char]) -> Vec<(std::ops::Range<usize>, String)> {
             let mut j = i;
             // Brackets pair up inside the address: `depth` are open, the outermost at `opened`.
             let (mut depth, mut opened) = (0usize, i);
+            let mut too_long = false;
             loop {
+                if j.saturating_sub(i) >= MAX_URL_CHARS {
+                    too_long = true;
+                    break;
+                }
                 match chars.get(j) {
                     Some('(') => {
                         if depth == 0 {
@@ -439,9 +450,13 @@ pub fn find_urls(chars: &[char]) -> Vec<(std::ops::Range<usize>, String)> {
                 }
                 j += 1;
             }
-            // A bracket left open isn't the address's: it ends before it.
+            // A bracket left open isn't the address's: it ends before it. A run of address
+            // characters longer than any address is none, and the search goes on after it.
             if depth > 0 {
                 j = opened;
+            } else if too_long {
+                i = j;
+                continue;
             }
             // Trailing punctuation belongs to the sentence.
             while j > i && chars.get(j - 1).is_some_and(|c| ".,;:!?".contains(*c)) {
