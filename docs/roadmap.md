@@ -32,8 +32,10 @@
 > **2026-11-03, M7 / #5835 review:** active image crops retain secondary clicks over overlapping images; crop controls share measured layout with hit detection. Rotation, handle and page-edge regressions added; focused tests, scoped Clippy, formatting, layering and asset checks passed locally. Estimates unchanged.
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** minor (M3/M4, #5330: Crop pages is directly available in the document quick toolbar; estimates unchanged)
 
-
 > **2026-11-02 (M6, PR #5699 second review):** Count active expression chains instead of whole-source tokens; align native button events and automation schemas, block document input under script prompts, and validate prompt dismissal and idle repaint scheduling.
+
+> **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** minor (M14: Dutch (`nl`) interface and date language, Netherlands vocabulary, full catalog. Estimates unchanged)
+
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7 #5657: header/footer, watermark and background operations commit all selected pages together; later-page errors preserve marks, content, shared/inherited resources and pending edits; estimates unchanged)
 > **2026-11-02 (M6, PR #5699 review):** Cache per-edit script geometry/calculation plans, expose live document metadata, and bound persistent worker stacks to 64 MiB; add operation-count, lifecycle and isolated hostile-input/address-space regressions.
 > **2026-11-02 (M6, #5211/#269):** Integrate persistent native AcroForm realms, synchronous calculation, page boxes, appearance/geometry/icon writeback and native button prompt continuation. Synthetic workflow and cancellation tests added; validation details accompany the PR. Remaining JavaScript parity stays partial.
@@ -379,6 +381,7 @@ Estimates unchanged.
 | 2026-11-03 | minor | M11: Optimize's JBIG2 images share a symbol dictionary (`/JBIG2Globals`), up to 16 at a time and when smaller (`pdfcraft_filters::encode_jbig2_shared`): 41–46% smaller on rendered text in proportional fonts, 10% in Courier |
 | 2026-11-03 | patch | M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged. |
+| 2026-11-02 | minor | M14: Dutch (nl) interface and date language, Netherlands vocabulary, full catalog. Estimates unchanged. |
 | 2026-11-02 | patch | M10 #5743: macOS print jobs carry the job name and owner some vendors' filters need; not yet checked on a physical printer |
 | 2026-11-02 | patch | M3 #5708: pages shorter than the window sit in its middle, on a whole physical pixel |
 | 2026-11-02 | patch | M3 #5716: a snapshot keeps its resolution when zoomed out; a choice of resolution remains |

@@ -23,6 +23,9 @@
 > **2026-11-02 (M6, PR #5699 second review):** Count active expression chains instead of whole-source tokens; align native button events and automation schemas, block document input under script prompts, and validate prompt dismissal and idle repaint scheduling.
 > **2026-11-02 (M6, PR #5699 review):** Cache per-edit script geometry/calculation plans, expose live document metadata, and bound persistent worker stacks to 64 MiB; add operation-count, lifecycle and isolated hostile-input/address-space regressions.
 > **2026-11-02 (M6, #5211/#269):** Integrate persistent native AcroForm realms, synchronous calculation, page boxes, appearance/geometry/icon writeback and native button prompt continuation. Synthetic workflow and cancellation tests added; validation details accompany the PR. Remaining JavaScript parity stays partial.
+
+> **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** minor (M14: Dutch (`nl`) interface and date language, Netherlands vocabulary, full catalog. Estimates unchanged)
+
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 further review: inherited drawing/text state, affine image gestures, paste/selection ownership, no-op scripts and menu permissions; estimates unchanged)
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 latest comments: explicit image-paste events, mixed-size field refresh, and documented mixed-script normalization with Undo; estimates unchanged)
@@ -308,6 +311,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-11-02 (M3, #5708):** Pages shorter than the window sit in its middle, one page or row at a time and when scrolling continuously with every page in view.
 - **2026-11-02 (M3, #5716):** A snapshot is drawn at 300 ppi, or at the zoom if that is finer, so one taken zoomed out stays readable; an area too large for one 4096-pixel tile comes out as fine as a tile allows (about 147 ppi for 2000 pt). A choice of resolution and a selection that stays active remain.
 - **2026-11-02 (M14, #5737, #5460):** Preferences can turn off the update check at start. It stays on by default, and Help ▸ Check for updates still asks.
+
+- **2026-11-02 (M14, Dutch):** Added Dutch (`nl`, Nederlands) as an interface and date language. The catalog covers the current key union in Netherlands vocabulary (informal "je", infinitive commands, one/other plurals). Any `nl-*` locale selects it, including Belgium. Month and weekday names are lowercase. AI-assisted; not yet reviewed line by line by a native speaker. Estimates unchanged.
 
 - **2026-11-01 (M7, #5657):** Header/footer, watermark and background additions and replacements stage the complete call before committing. Synthetic later-page failures preserve exact incremental bytes, object count, dirty state and allocation cursor; success controls retain other marks and shared/inherited resources. Estimates unchanged.
 
