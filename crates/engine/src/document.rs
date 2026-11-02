@@ -46,6 +46,10 @@ pub struct Document {
     pub(crate) config: RenderConfig,
     /// What field scripts printed or asked for (see [`Session::take_js_output`]).
     pub(crate) js_output: js::JsOutput,
+    pub(crate) js_runtime: js::Runtime,
+    pub(crate) js_zoom: f64,
+    pub(crate) js_highlight: bool,
+    pub(crate) js_page: usize,
     /// Dynamic XFA forms: what laying the template out produced (pages and fields are
     /// PdfCraft's; Adobe's viewers draw the form from the XFA packets themselves).
     pub xfa: Option<XfaLayout>,

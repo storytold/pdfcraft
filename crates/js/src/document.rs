@@ -13,6 +13,18 @@ macro_rules! getter {
 }
 
 pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
+    if let Some(object) = host(ctx).ok().and_then(|h| h.borrow().objects.iter().find(|(n, _)| n == name).map(|(_, o)| o.clone())) {
+        return object;
+    }
+    let object = field_object_new(ctx, name);
+    if let Ok(h) = host(ctx)
+        && h.borrow().objects.len() < 4096
+    {
+        h.borrow_mut().objects.push((name.into(), object.clone()));
+    }
+    object
+}
+fn field_object_new(ctx: &mut Context, name: &str) -> JsObject {
     let n = JsString::from(name);
     let value_get = getter!(ctx, n, |f, c| value_of(&f, c));
     let value_set = {
@@ -95,6 +107,116 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
         function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
     };
 
+    let text_size_get = getter!(ctx, n, |f, c| JsValue::from(f.text_size));
+    let text_size_set = {
+        fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+            let v = arg(args, 0).to_number(c)?;
+            if !v.is_finite() || !(0.0..=300.0).contains(&v) {
+                return Err(error("textSize must be between 0 and 300"));
+            }
+            write(c, name, |f| f.text_size = v)?;
+            Ok(JsValue::undefined())
+        }
+        function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
+    };
+    let line_width_get = getter!(ctx, n, |f, c| JsValue::from(f.line_width));
+    let line_width_set = {
+        fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+            let v = arg(args, 0).to_number(c)?;
+            if !v.is_finite() || !(0.0..=12.0).contains(&v) {
+                return Err(error("lineWidth must be between 0 and 12"));
+            }
+            write(c, name, |f| f.line_width = v)?;
+            Ok(JsValue::undefined())
+        }
+        function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
+    };
+    let border_style_get = getter!(ctx, n, |f, c| s(&f.border_style));
+    let border_style_set = {
+        fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+            let v = text(&arg(args, 0), c)?;
+            if !["solid", "dashed", "beveled", "inset", "underline"].contains(&v.as_str()) {
+                return Err(error("unsupported borderStyle"));
+            }
+            write(c, name, |f| f.border_style = v)?;
+            Ok(JsValue::undefined())
+        }
+        function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
+    };
+    let user_name_get = getter!(ctx, n, |f, c| s(&f.user_name));
+    let user_name_set = {
+        fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+            let v = text(&arg(args, 0), c)?;
+            if v.len() > 4096 {
+                return Err(error("userName is too long"));
+            }
+            write(c, name, |f| f.user_name = v)?;
+            Ok(JsValue::undefined())
+        }
+        function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
+    };
+    let stroke_color_get = getter!(ctx, n, |f, c| colour(&f.stroke_color, c));
+    let stroke_color_set = {
+        fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+            let v = Some(strings(&arg(args, 0), c)?);
+            write(c, name, |f| f.stroke_color = v)?;
+            Ok(JsValue::undefined())
+        }
+        function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
+    };
+    let rect_get = getter!(ctx, n, |f, c| f.rect.map_or_else(JsValue::undefined, |r| JsArray::from_iter(r.map(JsValue::from), c).into()));
+    let rect_set = {
+        fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+            let a = arg(args, 0).as_object().ok_or_else(|| error("rect needs an array"))?;
+            let a = JsArray::from_object(a)?;
+            if a.length(c)? != 4 {
+                return Err(error("rect needs four coordinates"));
+            }
+            let mut coords = [0.0; 4];
+            for (i, v) in coords.iter_mut().enumerate() {
+                *v = a.get(i as u32, c)?.to_number(c)?;
+                if !v.is_finite() || v.abs() > 1e7 {
+                    return Err(error("rect coordinates are out of range"));
+                }
+            }
+            if coords[2] < coords[0] || coords[1] < coords[3] {
+                return Err(error("rect must use left, top, right, bottom order"));
+            }
+            let v = Some(coords);
+            write(c, name, |f| f.rect = v)?;
+            Ok(JsValue::undefined())
+        }
+        function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
+    };
+
+    fn button_get_caption(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        let f = read(c, name)?;
+        if f.kind != FieldType::Button {
+            return Err(error(format!("{} is not a push button", f.name)));
+        }
+        let face = if args.is_empty() { 0.0 } else { arg(args, 0).to_number(c)? };
+        if !face.is_finite() || face != 0.0 {
+            return Err(error("only the normal button face (0) is supported"));
+        }
+        Ok(s(f.caption.as_deref().unwrap_or("")))
+    }
+    fn button_set_caption(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        let f = read(c, name)?;
+        if f.kind != FieldType::Button {
+            return Err(error("buttonSetCaption is only available on push buttons"));
+        }
+        let caption = text(&arg(args, 0), c)?;
+        let face = if args.get(1).is_none() { 0.0 } else { arg(args, 1).to_number(c)? };
+        if !face.is_finite() || face != 0.0 {
+            return Err(error("only the normal button face (0) is supported"));
+        }
+        write(c, name, |f| {
+            f.caption = Some(caption);
+            f.caption_written = true;
+        })?;
+        Ok(JsValue::undefined())
+    }
+
     fn get_item_at(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
         let f = read(c, name)?;
         let i = arg(args, 0).to_number(c)?;
@@ -134,6 +256,10 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
     let is_box_checked = NativeFunction::from_copy_closure_with_captures(is_box_checked, n.clone());
     let check_this_box = NativeFunction::from_copy_closure_with_captures(check_this_box, n.clone());
     let set_focus = NativeFunction::from_copy_closure_with_captures(set_focus, n.clone());
+    let button_get_caption = NativeFunction::from_copy_closure_with_captures(button_get_caption, n.clone());
+    let button_set_caption = NativeFunction::from_copy_closure_with_captures(button_set_caption, n.clone());
+    let button_get_icon = NativeFunction::from_copy_closure_with_captures(crate::icons::get, n.clone());
+    let button_set_icon = NativeFunction::from_copy_closure_with_captures(crate::icons::set, n.clone());
     ObjectInitializer::new(ctx)
         .accessor(js_string!("value"), Some(value_get), Some(value_set), rw)
         .accessor(js_string!("valueAsString"), Some(as_string), None, rw)
@@ -150,10 +276,20 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
         .accessor(js_string!("currentValueIndices"), Some(indices), None, rw)
         .accessor(js_string!("textColor"), Some(text_color_get), Some(text_color_set), rw)
         .accessor(js_string!("fillColor"), Some(fill_color_get), Some(fill_color_set), rw)
+        .accessor(js_string!("textSize"), Some(text_size_get), Some(text_size_set), rw)
+        .accessor(js_string!("lineWidth"), Some(line_width_get), Some(line_width_set), rw)
+        .accessor(js_string!("borderStyle"), Some(border_style_get), Some(border_style_set), rw)
+        .accessor(js_string!("userName"), Some(user_name_get), Some(user_name_set), rw)
+        .accessor(js_string!("strokeColor"), Some(stroke_color_get), Some(stroke_color_set), rw)
+        .accessor(js_string!("rect"), Some(rect_get), Some(rect_set), rw)
         .function(get_item_at, js_string!("getItemAt"), 2)
         .function(is_box_checked, js_string!("isBoxChecked"), 1)
         .function(check_this_box, js_string!("checkThisBox"), 2)
         .function(set_focus, js_string!("setFocus"), 0)
+        .function(button_get_icon, js_string!("buttonGetIcon"), 1)
+        .function(button_set_icon, js_string!("buttonSetIcon"), 2)
+        .function(button_get_caption, js_string!("buttonGetCaption"), 1)
+        .function(button_set_caption, js_string!("buttonSetCaption"), 2)
         .build()
 }
 

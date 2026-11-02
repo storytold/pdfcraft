@@ -270,3 +270,7 @@ navigation-history tool; use the opt-in UI control channel to navigate the displ
 (`#RRGGBB`, default black) for `text` and `date`. The colour is saved in the
 FreeText appearance and survives reopening. Other mark/signature types reject
 `color`; their appearance controls are separate.
+
+## AcroForm script interactions
+
+`js_run` accepts optional `answers` (strings or null, at most 32), consumed in popup, response and alert order. Missing responses cancel menus/input; explicit viewer requests remain data in automation. See [the runtime contract](../../docs/acroform-script-workflows.md).

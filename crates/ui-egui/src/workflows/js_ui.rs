@@ -93,7 +93,26 @@ impl PdfCraftApp {
                     // Show/Hide: a panel already showing closes.
                     self.right = (self.right != Some(panel)).then_some(panel);
                 }
-                Request::Focus(_) | Request::Beep | Request::Reset(_) => {}
+                Request::Zoom(z) => {
+                    if let Some(i) = view {
+                        self.views[i].zoom = (z / 100.0) as f32;
+                        self.views[i].fit = crate::canvas::Fit::None;
+                    }
+                }
+                Request::Highlight(h) => {
+                    if let Some(i) = view {
+                        self.views[i].highlight_fields = h;
+                    }
+                }
+                Request::Focus(name) => {
+                    if let Some(i) = view
+                        && let Some(f) = self.session.get(id).and_then(|d| d.form.iter().find(|f| f.name == name))
+                        && !f.read_only()
+                    {
+                        self.views[i].forms.focus = Some(crate::forms_ui::open_focus(f, 0));
+                    }
+                }
+                Request::Beep | Request::Reset(_) => {}
             }
         }
         self.show_script_messages(out.alerts);
@@ -141,6 +160,11 @@ impl PdfCraftApp {
     pub fn run_button_script(&mut self, id: DocId, field: &str, script: &str) {
         // A script reads the fields: include what's still being typed in one (#166).
         if !self.commit_form_typing() {
+            return;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.session.get(id).is_some_and(|d| d.info.xfa.is_none()) {
+            self.start_ui_script(id, script, Some(field));
             return;
         }
         match self.session.run_javascript(id, script, Some(field)) {

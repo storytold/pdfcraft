@@ -75,6 +75,27 @@ impl Session {
         let mut document = prepared.document;
         document.id = id;
         self.docs.push(document);
+        if !self.js_off && self.get(id).is_some_and(|d| d.info.xfa.is_none() && !d.document_scripts().is_empty()) {
+            match self.run_javascript(id, "", None) {
+                Ok(mut out) => {
+                    out.requests
+                        .retain(|r| matches!(r, js::Request::Highlight(_) | js::Request::Zoom(_) | js::Request::Focus(_) | js::Request::GoToPage(_)));
+                    if let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) {
+                        doc.js_output.requests.extend(out.requests);
+                        doc.js_output.alerts.extend(out.alerts);
+                        doc.js_output.console.extend(out.console);
+                        doc.js_output.errors.extend(out.error);
+                        doc.js_output.doc_errors.extend(out.doc_errors.iter().cloned());
+                        doc.js_output.errors.extend(out.doc_errors);
+                    }
+                }
+                Err(e) => {
+                    if let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) {
+                        doc.js_output.errors.push(e.to_string());
+                    }
+                }
+            }
+        }
         id
     }
 
@@ -346,6 +367,10 @@ impl Session {
             editor,
             config,
             js_output: Default::default(),
+            js_runtime: Default::default(),
+            js_zoom: 100.0,
+            js_highlight: true,
+            js_page: 0,
             xfa,
             xfa_template: None,
             xfa_scripts_off: false,

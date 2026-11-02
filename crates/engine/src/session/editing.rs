@@ -65,7 +65,12 @@ impl Session {
         }
         let mut next = editor.cos.clone();
         if !js_off && uses_scripts(&edit) {
-            cx.js = Some(js::JsRunner::new(&next, &name));
+            let mut runner = js::JsRunner::new(&next, &name);
+            runner.runtime = doc.js_runtime.clone();
+            runner.doc.zoom = doc.js_zoom;
+            runner.doc.runtime_highlight = doc.js_highlight;
+            runner.doc.page = doc.js_page;
+            cx.js = Some(runner);
         }
         cx.renamed_fields.clear();
         cx.redaction_overlays.clear();

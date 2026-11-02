@@ -203,6 +203,8 @@ impl PdfCraftApp {
             compare_old: None,
             compare: None,
             js_console: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            script_pending: None,
             doc_js: Default::default(),
             a11y: a11y_ui::A11yState::default(),
             tags_state: Default::default(),
@@ -439,6 +441,8 @@ impl eframe::App for PdfCraftApp {
     /// the quit guard, shortcuts, and the background jobs' results.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.ctx = Some(ctx.clone());
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_script_dialog(ctx);
         #[cfg(not(target_arch = "wasm32"))]
         self.window_state.repair(ctx);
         self.dialog_epoch();
