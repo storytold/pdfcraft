@@ -132,9 +132,10 @@ fn starts_with_end_of_line(data: &[u8]) -> bool {
 }
 
 /// Rows of 1-bit samples filled from a decoder's pixels: `columns` a row, each row on a new byte, at
-/// most `rows` rows. Pixels past a row's end and rows past the last are dropped.
-struct Rows {
-    out: Vec<u8>,
+/// most `rows` rows. Pixels past a row's end and rows past the last are dropped. The JBIG2 decoder
+/// ([`crate::decode_jbig2`]) fills them too.
+pub(crate) struct Rows {
+    pub(crate) out: Vec<u8>,
     row: Vec<u8>,
     x: usize,
     columns: usize,
@@ -144,12 +145,12 @@ struct Rows {
 }
 
 impl Rows {
-    fn new(columns: usize, rows: usize, black_is_1: bool) -> Self {
+    pub(crate) fn new(columns: usize, rows: usize, black_is_1: bool) -> Self {
         Rows { out: Vec::new(), row: vec![0; columns.div_ceil(8)], x: 0, columns, rows, done: 0, black_is_1 }
     }
 
     /// `count` pixels, white or black.
-    fn push(&mut self, white: bool, count: usize) {
+    pub(crate) fn push(&mut self, white: bool, count: usize) {
         let end = self.x.saturating_add(count);
         if white != self.black_is_1 {
             for x in self.x..end.min(self.columns) {
@@ -159,6 +160,16 @@ impl Rows {
             }
         }
         self.x = end;
+    }
+
+    /// The row filled so far kept, if fewer than `rows` are, and the next one begun.
+    pub(crate) fn end_row(&mut self) {
+        if self.done < self.rows {
+            self.out.extend_from_slice(&self.row);
+            self.done += 1;
+        }
+        self.row.fill(0);
+        self.x = 0;
     }
 }
 
@@ -170,12 +181,7 @@ impl hayro_ccitt::Decoder for Rows {
         self.push(white, (chunks as usize).saturating_mul(8));
     }
     fn next_line(&mut self) {
-        if self.done < self.rows {
-            self.out.extend_from_slice(&self.row);
-            self.done += 1;
-        }
-        self.row.fill(0);
-        self.x = 0;
+        self.end_row();
     }
 }
 

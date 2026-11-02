@@ -270,6 +270,12 @@ impl DocView {
         self.text_links.get(&page).and_then(|(_, links)| links.get(index)).map(|l| l.uri.clone())
     }
 
+    /// Whether `page`'s text layer has arrived from the renderer. Selecting text, the I-beam and
+    /// find matches on a page all wait for it (tests and automation).
+    pub fn has_page_text(&self, page: usize) -> bool {
+        self.texts.contains_key(&page)
+    }
+
     pub fn thumb(&self, page: usize) -> Option<&TextureHandle> {
         self.thumbs.get(&page).map(|t| &t.tex)
     }
