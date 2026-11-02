@@ -14,7 +14,7 @@ pdfcraft-fonts = { workspace = true }
 hayro = { workspace = true }
 hayro-syntax = { workspace = true }
 # Picks the face of an installed font collection (the version pdfcraft-fonts already uses).
-skrifa = "0.44"
+skrifa = "0.47"
 lopdf = { workspace = true }
 kurbo = { workspace = true }
 thiserror = { workspace = true }
