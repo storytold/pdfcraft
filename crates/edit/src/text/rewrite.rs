@@ -702,11 +702,13 @@ fn block_ops(plan: &BlockPlan<'_>, writer: &LineWriter<'_>, wrapped: &[(String, 
     let mut ops = vec![Op::new("q", vec![])];
     ops.extend(reveal_ops(plan.block, plan.lines, plan.style, plan.emit.ctm)?);
     // Moved: a translation inside that state.
+    let mut ctm = Matrix(plan.emit.ctm);
     if let Some((ax, ay)) = plan.movement {
         ops.push(Op::new("cm", vec![n(1.0), n(0.0), n(0.0), n(1.0), n(ax), n(ay)]));
+        ctm = Matrix([1.0, 0.0, 0.0, 1.0, ax, ay]).then(&ctm);
     }
     // Painted as the paragraph was, including what its text object set before the first show.
-    ops.extend(plan.state.paint_ops(plan.after));
+    ops.extend(plan.state.paint_ops(plan.after, ctm.0));
     ops.push(Op::new("BT", vec![]));
     let mut state = plan.state.clone();
     state.word_spacing = 0.0;

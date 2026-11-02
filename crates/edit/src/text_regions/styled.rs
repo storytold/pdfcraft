@@ -1001,6 +1001,7 @@ pub(crate) fn rewrite_styled_block(
         .ok_or_else(|| EditError::Invalid("the paragraph is drawn in a space it cannot be edited in".into()))?;
     let (tx, ty) = back.apply(dx, dy);
     block_ops.push(Op::new("cm", vec![n(1.0), n(0.0), n(0.0), n(1.0), n(tx), n(ty)]));
+    let run_ctm = Matrix([1.0, 0.0, 0.0, 1.0, tx, ty]).then(&Matrix(o.ctm)).0;
     // A new row can land one leading above the next paragraph and look like the same
     // paragraph. When every row is in this rewrite, a paragraph marker keeps them in one
     // scope so the neighbour stays out (#2517). A row left in the source stream cannot share
@@ -1098,7 +1099,7 @@ pub(crate) fn rewrite_styled_block(
             // object (`gs`, stroke, line width, `Tr`; #3508/#3509) from the state the rewrite is
             // drawn in: a `gs` has no inverse, so one run's ExtGState would stay for the next.
             block_ops.push(Op::new("q", vec![]));
-            block_ops.extend(state.paint_ops(drawn_from));
+            block_ops.extend(state.paint_ops(drawn_from, run_ctm));
             if let Some((_, shaped, _)) = shaped_runs.get(&(row_index, pos)) {
                 let resource = glyph_resources.get(&(row_index, pos)).ok_or_else(|| EditError::Invalid("shaped font is missing".into()))?;
                 let mut properties = Dict::new();

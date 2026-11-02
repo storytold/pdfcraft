@@ -216,6 +216,11 @@ fn ocr_under_scan(text: &str) -> std::sync::Arc<Vec<u8>> {
 
 /// A page whose `text` content is followed by the opaque 200 × 100 scan image.
 fn under_scan(text: &str) -> std::sync::Arc<Vec<u8>> {
+    under_scan_with(text, |_| pdfcraft_cos::Dict::new())
+}
+
+/// As [`under_scan`], with the page's ExtGState resources made by `ext_gstates`.
+fn under_scan_with(text: &str, ext_gstates: impl FnOnce(&mut pdfcraft_cos::Document) -> pdfcraft_cos::Dict) -> std::sync::Arc<Vec<u8>> {
     use pdfcraft_cos::{Dict, Document, Object, SaveOptions, Stream};
     let (w, h) = (200u32, 100u32);
     let mut rgb = Vec::new();
@@ -248,6 +253,7 @@ fn under_scan(text: &str) -> std::sync::Arc<Vec<u8>> {
     let mut res = Dict::new();
     res.set(b"Font".to_vec(), Object::Dict(fonts));
     res.set(b"XObject".to_vec(), Object::Dict(xobjects));
+    res.set(b"ExtGState".to_vec(), Object::Dict(ext_gstates(&mut d)));
     let mut p = Dict::new();
     p.set(b"Type".to_vec(), Object::name("Page"));
     p.set(b"Parent".to_vec(), Object::Ref(pages));
@@ -341,5 +347,52 @@ fn an_ocr_phrase_split_from_visible_text_under_the_scan_shows_its_edit() {
         want.sort();
         assert_eq!(after, want, "{edit:?}");
         assert_edit_shows(&s, id, &format!("{edit:?} split"));
+    }
+}
+
+/// `/SM`: a luminosity soft mask that is white over 30..110 × 30..70 in the space it is selected
+/// in, black elsewhere.
+fn soft_mask_state(d: &mut pdfcraft_cos::Document) -> pdfcraft_cos::Dict {
+    use pdfcraft_cos::{Dict, Object, Stream};
+    let mut group = Dict::new();
+    group.set(b"S".to_vec(), Object::name("Transparency"));
+    group.set(b"CS".to_vec(), Object::name("DeviceRGB"));
+    let mut form = Dict::new();
+    form.set(b"Type".to_vec(), Object::name("XObject"));
+    form.set(b"Subtype".to_vec(), Object::name("Form"));
+    form.set(b"BBox".to_vec(), Object::Array([0, 0, 200, 100].map(Object::Int).to_vec()));
+    form.set(b"Group".to_vec(), Object::Dict(group));
+    let mut mask = Dict::new();
+    mask.set(b"Type".to_vec(), Object::name("Mask"));
+    mask.set(b"S".to_vec(), Object::name("Luminosity"));
+    mask.set(b"G".to_vec(), Object::Ref(d.add(Object::Stream(Stream::flate(form, b"1 g 30 30 80 40 re f")))));
+    let mut state = Dict::new();
+    state.set(b"Type".to_vec(), Object::name("ExtGState"));
+    state.set(b"SMask".to_vec(), Object::Dict(mask));
+    let mut states = Dict::new();
+    states.set(b"SM".to_vec(), Object::Dict(state));
+    states
+}
+
+/// The soft mask is selected before a translation, so it is placed by the CTM before it. The
+/// paragraph lifted over the scan selects it again after its own `cm`: there it must be placed
+/// as it was, not 100 pt to the right where it would hide the new text, so the edit renders
+/// exactly as the same edit on the page without the mask. Both rewrite paths.
+#[test]
+fn a_soft_mask_selected_before_a_cm_stays_put_when_the_edit_is_lifted() {
+    for edit in ["Jane", "Jane\nDoe"] {
+        let mut plain = Session::new();
+        let page = under_scan("q 1 0 0 1 100 0 cm BT /F1 20 Tf 3 Tr -58 44 Td (John) Tj ET Q");
+        let plain_id = plain.open("plain.pdf", None, page, None).unwrap();
+        edit_block(&mut plain, plain_id, 0, edit);
+        let mut s = Session::new();
+        let page = under_scan_with("q /SM gs 1 0 0 1 100 0 cm BT /F1 20 Tf 3 Tr -58 44 Td (John) Tj ET Q", soft_mask_state);
+        let id = s.open("masked.pdf", None, page, None).unwrap();
+        assert_eq!(texts(&s, id), ["John"]);
+        edit_block(&mut s, id, 0, edit);
+        assert_eq!(texts(&s, id), [edit.replace('\n', " ")], "{edit:?}");
+        assert_edit_shows(&s, id, &format!("{edit:?} masked"));
+        let ink = |s: &Session, id| word_pixels(s, id).iter().filter(|p| near(**p, INK)).count();
+        assert_eq!(ink(&s, id), ink(&plain, plain_id), "{edit:?}: the mask does not hide the new text");
     }
 }
